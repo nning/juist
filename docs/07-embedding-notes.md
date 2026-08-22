@@ -88,6 +88,12 @@ ML-KEM public key regardless — reserving it costs nothing and keeps (1) and (2
 But the record schema freezes at M3, and the choice determines whether v1 can claim
 the PQ property at all, so it cannot be left open past that point.
 
+*Done in M1:* `types.NodeRecord` carries `MLKEM` (an ML-KEM-768 encapsulation key)
+alongside `X25519`. Both are consumed now as the two halves of the hybrid HPKE KEM
+that seals epoch group secrets, which gives the discovery layer the PQ hedge
+immediately; the data-plane PSK use is still the open decision above. See
+[08-trust-layer-notes.md](08-trust-layer-notes.md).
+
 ## Wiring requirements that nothing documents
 
 Each of these fails silently or confusingly; all three cost time in the spike.

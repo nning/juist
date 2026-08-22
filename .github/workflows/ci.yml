@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly, for the long fuzz gate only. Corpus growth is the point, so this
+    # wants wall-clock time rather than to be on the PR path.
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
 
 # Nothing here needs write access to the repository.
 permissions:
@@ -97,6 +102,53 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
       # A short run of every target on every PR, to catch targets that no
-      # longer build or that fail on their seed corpus. This is not the
-      # 72 CPU-hour milestone gate described in docs/06-verification.md.
+      # longer build or that fail on their seed corpus. The milestone gate is
+      # the fuzz-long job below.
       - run: make fuzz
+
+  tcb:
+    name: TCB size
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      # The audit scope's size is a tracked regression metric
+      # (docs/06-verification.md); this fails if it grows past the budget.
+      - run: make tcb
+
+  fuzz-long:
+    name: fuzz gate (long)
+    # The 72 CPU-hour gate each milestone must pass
+    # (docs/06-verification.md). Scheduled or dispatched only: it is measured
+    # in hours, so it must never sit on the PR path.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      # A hosted runner cannot hold 72 CPU-hours inside one job's limit, so the
+      # gate is reached across scheduled runs. The corpus has to survive
+      # between them or each run starts from the seeds again and the hours do
+      # not accumulate into coverage, which is the whole point of the gate.
+      - name: Restore the fuzz corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - run: make fuzz-long FUZZLONGTIME=80m FUZZLONGWORKERS=2
+      - name: Save the fuzz corpus
+        # Saved even on failure: the input that failed is in there.
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ github.run_id }}

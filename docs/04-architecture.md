@@ -63,7 +63,7 @@ connection manager over plain wireguard-go / kernel WireGuard.
 | Package | Responsibility | Reuses | New trust-critical code |
 |---|---|---|---|
 | `types` | Node identity (Ed25519), record schemas, deterministic CBOR wire encoding | — | ~500 LOC (schema validation) |
-| `trust/log` | Membership log: AUM chain, k-of-n quorum verification, checkpoints, fork choice, address-collision validation | `tailscale.com/tka` (adapted/vendored) | ~2–3 k LOC (P2P additions: fork choice, freshness, validation rules) |
+| `trust/log` | Membership log: AUM chain, k-of-n quorum verification, checkpoints, fork choice, address-collision validation | TKA's *design*, not its code — see [08-trust-layer-notes.md](08-trust-layer-notes.md) | ~2–3 k LOC (P2P additions: fork choice, freshness, validation rules) |
 | `trust/secrets` | Epoch group secret: HPKE fan-out, derivations (blinded topic IDs, discovery AEAD keys, ML-KEM per-pair PSKs) | stdlib `crypto/ecdh`, `crypto/mlkem`, HPKE lib | ~1 k LOC |
 | `trust/store` | Persisted log, highest-seen epoch (rollback protection), key material | — | ~1 k LOC |
 | `enroll` | Invite issue/redeem: QR full-entropy token path; wormhole-code + SPAKE2 path; join state machine → AddNode AUM | SPAKE2 impl (minimal, vetted) | ~1.5 k LOC |
@@ -85,10 +85,13 @@ Record types, all hash-chained, all carrying signer IDs + signatures:
 - `Genesis` — network name, ULA /48 (derived from genesis hash), initial admin keys +
   vote weights, quorum policy k, disablement-secret hashes, initial epoch secret
   (HPKE-wrapped).
-- `AddNode` / `RemoveNode` — node identity key, WG pubkey, ML-KEM pubkey, derived v6
-  (validated collision-free), optional explicit v4, roles (`relay-capable`, `admin`,
-  `exit-node`), advertised routes, expiry. RemoveNode **must** carry an epoch bump
-  (new HPKE-wrapped group secret for survivors).
+- `AddNode` / `RemoveNode` — node identity key, WG pubkey, X25519 + ML-KEM pubkeys,
+  derived v6 (validated collision-free), optional explicit v4, roles
+  (`relay-capable`, `admin`, `exit-node`), advertised routes, expiry. **Every**
+  record that changes the member set or a member's keys carries an epoch bump whose
+  wrap set covers exactly the resulting member set — stricter than "RemoveNode must",
+  and what makes a quiet lockout or a leak to a non-member detectable
+  ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
 - `SetNodeRoutes` — grants or withdraws a node's `exit-node` role and the set of
   prefixes it may forward for. Quorum-signed like any other authority change: a node
   can never self-assert a route, and route state is read only from the log, never from
@@ -101,10 +104,15 @@ Record types, all hash-chained, all carrying signer IDs + signatures:
     which exists to make a full-tunnel grant explicit and separately revocable;
   - overlapping advertisements from several nodes are legal (failover); the reconciler
     picks one, and that choice is local, not consensus.
-- `RotateNodeKey` — new WG/ML-KEM key, signed by the node's identity key **and**
-  admin policy; `RotateIdentity` requires quorum.
-- `AddAdminKey` / `RemoveAdminKey` / `Checkpoint` — as in TKA; checkpoints are
-  quorum-signed compactions that also settle ordering.
+- `RotateNodeKey` — new WG/X25519/ML-KEM keys, signed by the node's identity key
+  **and** admin policy; `RotateIdentity` requires quorum plus a signature by the new
+  key (proof some device holds it).
+- `AddAdminKey` / `RemoveAdminKey` / `SetQuorum` / `Checkpoint` — admin key ops as in
+  TKA, plus a policy change TKA has no equivalent for; checkpoints are quorum-signed
+  compactions that also settle ordering, and a checkpoint whose ancestry is known
+  must equal the state that ancestry produces.
+- `EpochBump` — rotates the group secret with no membership change: the routine tier
+  of the two-tier revocation response.
 - `FreshnessLease` — quorum-signed (or delegated-signer) statement "head H at time T";
   not chained into the log (high frequency), but references the head. TTL default
   48 h; acceptors fail closed.
@@ -114,6 +122,11 @@ AUM hash; **conflicting records never auto-resolve except revocations, where
 "revoked wins"** (safety bias); any true fork (two heads, neither an ancestor, with
 conflicting membership) raises a persistent alarm requiring admin action. Nodes never
 accept a chain that lowers their persisted epoch or drops a checkpoint they hold.
+
+Implemented in `trust/log`; see [08-trust-layer-notes.md](08-trust-layer-notes.md)
+for how "conflicting" is decided (an orphaned branch is replayed against the winning
+head; a revocation on a losing branch always alarms), and for the two node-local
+ratchets — the anchor and the epoch floor — that carry the last sentence.
 
 ## Gossip & sync
 
@@ -212,6 +225,9 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
 - Per-pair PSK: `HKDF(ML-KEM-768 encap between the pair's log-recorded static PQ keys,
   epoch)` — post-quantum harvest-now-decrypt-later hedge using stdlib `crypto/mlkem`.
   Rotated on epoch bump via WG reconfig (next handshake picks it up; tunnels stay up).
+  The key is reserved in the schema from M1; whether v1 can consume it is the open
+  question in [07-embedding-notes.md](07-embedding-notes.md), to be settled before the
+  M3 freeze.
 - Addressing: v6 ULA `fd<40 bits from genesis hash>::/48`, host bits =
   `truncate(SHA-256(identity pubkey))`; v4 100.64/10 assigned explicitly in AddNode.
   The log validator rejects collisions deterministically on every node.

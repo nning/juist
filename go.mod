@@ -3,16 +3,16 @@ module github.com/nning/wg-p2p
 go 1.26.5
 
 require (
+	filippo.io/edwards25519 v1.2.0
+	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/tailscale/wireguard-go v0.0.0-20260715223240-2e01ba5b00f0
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 	tailscale.com v1.102.2
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
-	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/gaissmai/bart v0.26.1 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect

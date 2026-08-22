@@ -31,9 +31,22 @@ CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
 TEST_FLAGS   ?= -count=1 -timeout 15m
 COVERPROFILE ?= coverage.out
 
-# Per-target fuzzing budget for the CI smoke run. The real 72 CPU-hour gates
-# described in docs/06-verification.md are a separate, longer-running job.
+# Per-target fuzzing budget for the CI smoke run. The milestone gate is
+# `fuzz-long`, which docs/06-verification.md sets at 72 clean CPU-hours per
+# input surface.
 FUZZTIME ?= 30s
+
+# Wall-clock budget per target for `fuzz-long`, and the number of workers each
+# target gets. The gate is stated in CPU-hours, so the two multiply: with the
+# current three targets, 6h x 4 workers each is 72 CPU-hours. CI spreads the
+# same budget over repeated scheduled runs instead; override either knob on the
+# command line.
+FUZZLONGTIME    ?= 6h
+FUZZLONGWORKERS ?= 4
+
+# The trusted computing base: the audit scope in docs/06-verification.md, whose
+# size is a tracked regression metric with a 10k-line budget.
+TCB_PKGS ?= ./types ./trust/...
 
 .DEFAULT_GOAL := help
 
@@ -90,6 +103,26 @@ fuzz: ## Smoke-run every fuzz target for FUZZTIME
 		echo "no fuzz targets yet; see docs/06-verification.md for the planned ones"; \
 	fi
 
+.PHONY: fuzz-long
+fuzz-long: ## Run the milestone fuzz gate (long; see docs/06-verification.md)
+	@for pkg in $$($(GO) list ./...); do \
+		for target in $$($(GO) test -list '^Fuzz' $$pkg 2>/dev/null | grep '^Fuzz' || true); do \
+			echo "==> $$pkg $$target ($(FUZZLONGTIME) x $(FUZZLONGWORKERS) workers)"; \
+			$(GO) test $$pkg -run '^$$' -fuzz "^$$target$$" \
+				-fuzztime $(FUZZLONGTIME) -parallel $(FUZZLONGWORKERS) || exit 1; \
+		done; \
+	done
+
+.PHONY: tcb
+tcb: ## Report the trusted computing base's size against its budget
+	@lines=$$($(GO) list -f '{{$$d := .Dir}}{{range .GoFiles}}{{$$d}}/{{.}} {{end}}' $(TCB_PKGS) \
+		| tr ' ' '\n' | grep -v '^$$' | xargs cat | wc -l); \
+	echo "TCB: $$lines lines across $(TCB_PKGS) (budget 10000, docs/06-verification.md)"; \
+	if [ "$$lines" -gt 10000 ]; then \
+		echo "over budget: the audit scope has grown past what docs/06-verification.md plans for"; \
+		exit 1; \
+	fi
+
 ## --- lint ----------------------------------------------------------------
 
 .PHONY: fmt
@@ -143,7 +176,7 @@ tidy-check: ## Fail if go.mod / go.sum are untidy (does not modify them)
 ## --- aggregate -----------------------------------------------------------
 
 .PHONY: check
-check: lint tidy-check build test-race ## Everything CI gates on; run before pushing
+check: lint tidy-check build test-race tcb ## Everything CI gates on; run before pushing
 
 .PHONY: clean
 clean: ## Remove build and test artifacts
