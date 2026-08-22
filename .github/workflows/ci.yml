@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing here needs write access to the repository.
+permissions:
+  contents: read
+
+# A new push to a PR makes the previous run's result irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Latest patch release of the 1.26 line; go.mod pins the minimum the module
+  # needs. Bump this when the go directive moves to a newer minor.
+  GO_VERSION: '1.26'
+
+jobs:
+  test:
+    name: test (race + coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      # Milestone exit criteria are cumulative: every criterion from M0 onward
+      # stays enforced here as an ordinary test. See docs/05-roadmap.md.
+      - run: make cover
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - run: make fmt-check
+      - run: make vet
+      - run: make staticcheck
+      - run: make actionlint
+
+  tidy:
+    name: go.mod tidy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - run: make tidy-check
+
+  cross:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      # The v1 platform set (docs/05-roadmap.md M5). Compiling for each keeps
+      # the embedded Tailscale stack's build tags honest between milestones.
+      - run: make cross
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - run: make govulncheck
+
+  fuzz:
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      # A short run of every target on every PR, to catch targets that no
+      # longer build or that fail on their seed corpus. This is not the
+      # 72 CPU-hour milestone gate described in docs/06-verification.md.
+      - run: make fuzz
