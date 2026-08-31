@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nning/wg-p2p/trust/log"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/types"
 )
 
 func cmdSign(h *home, args []string) error {
-	fs := flag.NewFlagSet("wgp2p sign", flag.ContinueOnError)
+	fs := flag.NewFlagSet("juist sign", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: wgp2p sign FILE...
+		fmt.Fprint(os.Stderr, `Usage: juist sign FILE...
 
 Adds signatures from the local keystore to each record, in place: every admin
 key in `+adminsDir+`/, and this device's identity key (live or staged) where the
@@ -20,7 +21,7 @@ record kind requires the subject's own signature.
 
 Signing is not applying. A record gathers signatures as it travels between
 admins — the whole point of k-of-n being that no machine holds k keys — and
-"wgp2p apply" is what commits one that has enough.
+"juist apply" is what commits one that has enough.
 `)
 	}
 	if err := fs.Parse(args); err != nil {
@@ -40,17 +41,17 @@ admins — the whole point of k-of-n being that no machine holds k keys — and
 	// to quietly do without: signing would go ahead and simply omit the
 	// signature the record needs, saying only that no local key could sign.
 	node, nodeErr := h.nodeKeys()
-	if nodeErr != nil && !keyFileMissing(nodeErr) {
+	if nodeErr != nil && !keys.Missing(nodeErr) {
 		return nodeErr
 	}
 	// A staged identity signs too: a rotate-identity record needs the new key,
 	// which by definition is not yet the one in the log.
 	staged, stagedErr := h.stagedNodeKeys()
-	if stagedErr != nil && !keyFileMissing(stagedErr) {
+	if stagedErr != nil && !keys.Missing(stagedErr) {
 		return stagedErr
 	}
 	if len(admins) == 0 && nodeErr != nil && stagedErr != nil {
-		return fmt.Errorf("this keystore holds no key that could sign anything; see: wgp2p key -h")
+		return fmt.Errorf("this keystore holds no key that could sign anything; see: juist key -h")
 	}
 
 	// A keystore with no network is the air-gapped signing machine, and it is
@@ -109,15 +110,15 @@ admins — the whole point of k-of-n being that no machine holds k keys — and
 		}
 		var added []types.Identity
 		for _, key := range admins {
-			if signIfWanted(&aum, key, auth) {
+			if signIfWanted(&aum, key, auth, adminKey) {
 				added = append(added, key.Public())
 			}
 		}
-		if nodeErr == nil && signIfWanted(&aum, node.identity, auth) {
-			added = append(added, node.identity.Public())
+		if nodeErr == nil && signIfWanted(&aum, node.Identity, auth, nodeKey) {
+			added = append(added, node.Identity.Public())
 		}
-		if stagedErr == nil && signIfWanted(&aum, staged.identity, auth) {
-			added = append(added, staged.identity.Public())
+		if stagedErr == nil && signIfWanted(&aum, staged.Identity, auth, nodeKey) {
+			added = append(added, staged.Identity.Public())
 		}
 		if len(added) == 0 {
 			fmt.Fprintf(os.Stderr, "%s: no local key can sign this %v record\n", path, aum.Kind)
@@ -144,24 +145,40 @@ admins — the whole point of k-of-n being that no machine holds k keys — and
 	return nil
 }
 
+// A keyRole says where a signing key came from, which decides what may be
+// assumed about it when there is no log to check against.
+type keyRole int
+
+const (
+	// adminKey is a key from admins/. Its whole purpose may be to sign for a
+	// network this machine does not hold — that is what an air-gapped signing
+	// machine is.
+	adminKey keyRole = iota
+
+	// nodeKey is this device's own identity, live or staged. It has exactly
+	// one role in any record: being the subject of one that requires the
+	// subject's own signature.
+	nodeKey
+)
+
 // signIfWanted adds a signature only if the key has a role in this record.
 //
 // Signing with a key the network does not trust for the record would not just
 // be useless, it would make the record invalid: an untrusted signature is
 // rejected outright rather than ignored, so that nobody can mint a second valid
 // encoding of an authorized record.
-func signIfWanted(aum *types.AUM, key types.PrivateIdentity, auth *log.Authority) bool {
+func signIfWanted(aum *types.AUM, key types.PrivateIdentity, auth *log.Authority, role keyRole) bool {
 	id := key.Public()
 	if aum.VerifySignature(id) {
 		return false
 	}
-	if !wanted(aum, id, auth) {
+	if !wanted(aum, id, auth, role) {
 		return false
 	}
 	return aum.Sign(key) == nil
 }
 
-func wanted(aum *types.AUM, id types.Identity, auth *log.Authority) bool {
+func wanted(aum *types.AUM, id types.Identity, auth *log.Authority, role keyRole) bool {
 	// Genesis is checked against the keys it declares, not against any earlier
 	// state, so an admin key inside it is a valid signer even if no local log
 	// lists it.
@@ -174,10 +191,18 @@ func wanted(aum *types.AUM, id types.Identity, auth *log.Authority) bool {
 		return true
 	}
 	if auth == nil {
-		// No log to check against, so there is no way to tell whether this key
-		// is trusted for this record. The warning printed above is the honest
-		// answer; refusing here would make an air-gapped admin key useless.
-		return true
+		// No log to check against. For an admin key that is genuinely
+		// unknowable — refusing would make an air-gapped admin key useless,
+		// and the warning printed above is the honest answer.
+		//
+		// A node key is not unknowable. [log.SelfSigner] depends only on the
+		// record, so the check above is complete: it just said this record
+		// does not want this device's signature, and adding one anyway makes
+		// the record invalid outright rather than merely over-signed. The
+		// case that matters is the ordinary one — a freshly created device,
+		// node keys and no network, whose operator runs "juist sign" on their
+		// own enrollment record and destroys the admins' finished ceremony.
+		return role == adminKey
 	}
 	_, isAdmin := auth.State().Admin(id)
 	return isAdmin
@@ -202,7 +227,7 @@ func reportGenesisStatus(path string, aum *types.AUM) {
 		fmt.Printf("%s: %d of %d vote weight; needs %d more before it creates a network\n",
 			path, st.Votes, st.Quorum, missing(st))
 	default:
-		fmt.Printf("%s: authorized — create the network with: wgp2p apply %s\n", path, path)
+		fmt.Printf("%s: authorized — create the network with: juist apply %s\n", path, path)
 	}
 }
 
@@ -221,6 +246,6 @@ func reportStatus(path string, aum *types.AUM, auth *log.Authority) {
 	case st.SelfSigner != nil && !st.SelfSigned:
 		fmt.Printf("%s: quorum reached, still needs the signature of %v\n", path, *st.SelfSigner)
 	default:
-		fmt.Printf("%s: authorized — apply it with: wgp2p apply %s\n", path, path)
+		fmt.Printf("%s: authorized — apply it with: juist apply %s\n", path, path)
 	}
 }

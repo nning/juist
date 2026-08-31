@@ -5,7 +5,7 @@ import (
 	"crypto/hpke"
 	"testing"
 
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/types"
 )
 
 func testNode(t *testing.T) (types.NodeRecord, *PrivateKeys) {

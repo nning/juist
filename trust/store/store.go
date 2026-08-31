@@ -26,8 +26,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nning/wg-p2p/trust/log"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/types"
 )
 
 // Layout inside the store directory.
@@ -41,7 +41,7 @@ const (
 	// formatVersion is written at creation and checked at open. A future
 	// layout change bumps it, so an older binary refuses a newer store
 	// instead of misreading it.
-	formatVersion = "wg-p2p-log-v1"
+	formatVersion = "juist-log-v1"
 
 	// Owner-only: the log is not secret — every member has it — but the
 	// epoch floor and anchor are integrity-critical, and a world-writable
@@ -147,7 +147,19 @@ func (d *Dir) loadIndex() error {
 			// build can hold either, and neither must be able to keep this
 			// one from opening.
 			if strings.HasPrefix(e.Name(), tempPrefix) || strings.HasPrefix(e.Name(), tmpPrefix) {
-				_ = os.Remove(filepath.Join(d.records, e.Name()))
+				// Skipped, not removed. Opening a store is not an exclusive
+				// operation — every juist command does it, including the
+				// read-only ones, while a daemon may be mid-Add on the same
+				// directory — and deleting a file another process is between
+				// writeSync and Rename on fails its publish. Because Inform
+				// is atomic, one deleted file rejects the whole batch it
+				// belonged to, so a "juist log" would silently cost a daemon
+				// an arriving revocation.
+				//
+				// What must not happen is a file like this making the store
+				// unopenable, and skipping it achieves that on its own. The
+				// sweep belongs to the writer instead ([Dir.Add]), which is
+				// the process entitled to decide a staged file is debris.
 				continue
 			}
 			return fmt.Errorf("store: %s contains an unexpected entry %q",
@@ -222,12 +234,20 @@ func (d *Dir) Children(h types.Hash) ([]types.Hash, error) {
 // Prefixes that name a file which is not a record: an in-progress write,
 // recognizable and removable rather than mistaken for a record. tempPrefix is
 // what Add stages under; tmpPrefix is what writeFileSync replaces through.
-// Both are swept by loadIndex, because a file left under either is the normal
-// residue of a crash and must not make the store unopenable.
+// Both are tolerated by loadIndex and swept by [Dir.Add], because a file left
+// under either is the normal residue of a crash and must not make the store
+// unopenable — while a file left by a *live* writer must not be removed at all.
 const (
 	tempPrefix = ".incoming-"
 	tmpPrefix  = ".tmp-"
 )
+
+// A staged record is one written under a temporary name and not yet renamed
+// into place.
+type staged struct {
+	hash types.Hash
+	temp string
+}
 
 // Add writes records durably.
 //
@@ -238,10 +258,6 @@ const (
 // from the anchor, so chain resolution never looks at it, and the sender will
 // offer it again.
 func (d *Dir) Add(aums ...types.AUM) error {
-	type staged struct {
-		hash types.Hash
-		temp string
-	}
 	var pending []staged
 	cleanup := func() {
 		for _, s := range pending {
@@ -275,6 +291,11 @@ func (d *Dir) Add(aums ...types.AUM) error {
 			return fmt.Errorf("store: publishing record %v: %w", s.hash, err)
 		}
 	}
+	// Debris from an interrupted write is swept here rather than at open:
+	// this process is the one writing, so a staged file it does not own is
+	// residue rather than somebody's write in flight. Failures are ignored —
+	// a file that cannot be removed is inert, since loadIndex skips it.
+	d.sweepStaged(pending)
 	// The renames are only durable once the directory entry is.
 	if len(pending) > 0 {
 		if err := fsyncDir(d.records); err != nil {
@@ -492,4 +513,31 @@ func fsyncDir(dir string) error {
 		return fmt.Errorf("store: syncing %s: %w", dir, err)
 	}
 	return nil
+}
+
+// sweepStaged removes staged files left by an interrupted write, skipping the
+// ones this call just published.
+//
+// Called from [Dir.Add], which is the only context entitled to make the
+// judgement: a process writing to this store is the store's writer, and a
+// second concurrent writer is a configuration error the CLI refuses to become
+// (it hands records to a running daemon rather than writing underneath it).
+func (d *Dir) sweepStaged(published []staged) {
+	entries, err := os.ReadDir(d.records)
+	if err != nil {
+		return
+	}
+	mine := make(map[string]bool, len(published))
+	for _, s := range published {
+		mine[filepath.Base(s.temp)] = true
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || mine[name] {
+			continue
+		}
+		if strings.HasPrefix(name, tempPrefix) || strings.HasPrefix(name, tmpPrefix) {
+			_ = os.Remove(filepath.Join(d.records, name))
+		}
+	}
 }

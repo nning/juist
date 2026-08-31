@@ -213,3 +213,42 @@ func TestNonMemberIsDenied(t *testing.T) {
 		t.Fatalf("non-member reached a member over the overlay: %+v", res)
 	}
 }
+
+// TestListenPortInUse asserts that a port the caller asked for and the engine
+// could not bind fails the manager, rather than moving the data plane
+// somewhere the caller was never told about.
+//
+// magicsock treats ListenPort as a preference: bindSocket's candidate list
+// always ends in 0, so a port already in use costs one log line and an
+// OS-assigned port. An operator who passes a port has usually opened it in a
+// firewall or forwarded it at a NAT, and the symptom of the silent move is
+// that nothing connects, with the cause far up a verbose log.
+func TestListenPortInUse(t *testing.T) {
+	// Held on udp4 because that is the socket magicsock.LocalPort reports,
+	// and the port the endpoint announcements are built from.
+	held, err := net.ListenPacket("udp4", ":0")
+	if err != nil {
+		t.Fatalf("holding a port: %v", err)
+	}
+	defer held.Close()
+	port := uint16(held.LocalAddr().(*net.UDPAddr).Port)
+
+	mgr, err := New(Options{
+		Self: Self{
+			ID:       1,
+			NodeKey:  key.NewNode(),
+			DiscoKey: key.NewDisco(),
+			Addrs:    []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		},
+		ListenPort: port,
+		Logf:       t.Logf,
+	})
+	if err == nil {
+		mgr.Close()
+		t.Fatalf("New took port %d while it was in use, and reported no error; "+
+			"it must refuse rather than bind somewhere else", port)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprint(port)) {
+		t.Errorf("the error does not name the port that could not be bound (%d): %v", port, err)
+	}
+}

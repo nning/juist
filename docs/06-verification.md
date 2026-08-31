@@ -14,7 +14,7 @@ Security claims are tested, not asserted. Every property in
 - Determinism check: two independent validation orders of the same AUM set produce
   byte-identical state (fork choice is deterministic).
 
-## 2. Fuzzing (native `go test -fuzz`, run in CI continuously)
+## 2. Fuzzing (native `go test -fuzz`, run off CI)
 
 Targets, added the milestone their input surface appears:
 
@@ -27,8 +27,13 @@ Targets, added the milestone their input surface appears:
 | Invite string / QR token parser | strings | M4 |
 | IPC request decoder | socket payloads | M2 |
 
-72 CPU-hour clean runs gate each milestone; corpus is preserved and grows. OSS-Fuzz
-application once public.
+72 CPU-hour clean runs gate each milestone; corpus is preserved and grows. This
+does not run on CI — hours per input surface is far more hosted-runner time than
+the project wants to spend — so the gate is run by hand before a milestone
+closes (`make fuzz-long`, or `make fuzz-one` per target to fan it out), against
+a corpus kept outside the repository. `make fuzz` smoke-runs every target in
+seconds and belongs in the pre-push routine. OSS-Fuzz application once public
+would move the long runs onto someone else's hardware.
 
 ## 3. Multi-node integration harness
 
@@ -85,4 +90,5 @@ Go test driver orchestrating **network namespaces** (Linux CI) with nftables/tc:
 
 Tracked per commit in CI: direct-connection rate per NAT class, revocation
 convergence time (connected case), sync time after 1-week offline, TCB LOC count
-(`trust/*` + `enroll` — budget alarm if it grows past 10 k), fuzz corpus coverage.
+(`trust/*` + `enroll` — budget alarm if it grows past 10 k). Fuzz corpus coverage
+is tracked per milestone instead, from the manual runs above.

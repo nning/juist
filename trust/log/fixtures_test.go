@@ -3,8 +3,8 @@ package log
 import (
 	"crypto/sha256"
 
-	"github.com/nning/wg-p2p/trust/secrets"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/trust/secrets"
+	"github.com/nning/juist/types"
 )
 
 // Deterministic fixtures. Fuzz targets and property tests need the same

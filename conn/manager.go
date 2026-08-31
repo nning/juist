@@ -11,9 +11,14 @@
 package conn
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"net/netip"
 	"time"
 
+	"go4.org/mem"
 	"tailscale.com/types/key"
 )
 
@@ -99,4 +104,67 @@ type PingResult struct {
 
 	// Latency is the round-trip time, zero if unknown.
 	Latency time.Duration
+}
+
+// Key conversions from the raw 32-byte form the membership log and the gossip
+// layer carry.
+//
+// They exist so that this package stays the only one that names Tailscale's
+// types, which is what docs/04-architecture.md promises about the adapter: the
+// reconciler holds a WireGuard key as the log records it and a disco key as an
+// endpoint announcement carries it, and hands both here without importing
+// anything from the connectivity stack.
+//
+// None of these can fail. A 32-byte string is a valid Curve25519 scalar or
+// point by construction; whether it is a key anyone holds the other half of is
+// a question only a handshake answers.
+//
+// The private one goes the long way round, through hex, because the direct
+// raw-bytes constructor is deprecated upstream and the untyped-hex one is not.
+// It runs once per daemon start.
+func NodeKeyFromRaw32(b [32]byte) key.NodePrivate {
+	k, err := key.ParseNodePrivateUntyped(mem.B([]byte(hex.EncodeToString(b[:]))))
+	if err != nil {
+		// Unreachable: 32 bytes always encode to 64 valid hex characters,
+		// which is exactly what the parser wants.
+		panic(fmt.Sprintf("conn: converting a 32-byte WireGuard key failed: %v", err))
+	}
+	return k
+}
+
+// DiscoKeyFromRaw32 converts a raw disco private key.
+func DiscoKeyFromRaw32(b [32]byte) key.DiscoPrivate { return key.DiscoPrivateFromRaw32(mem.B(b[:])) }
+
+// NodePublicFromRaw32 converts a peer's WireGuard public key, as the log
+// records it.
+func NodePublicFromRaw32(b [32]byte) key.NodePublic { return key.NodePublicFromRaw32(mem.B(b[:])) }
+
+// DiscoPublicFromRaw32 converts a peer's disco public key, as its endpoint
+// announcement carries it.
+func DiscoPublicFromRaw32(b [32]byte) key.DiscoPublic { return key.DiscoPublicFromRaw32(mem.B(b[:])) }
+
+// NewDiscoKey draws a fresh NAT-traversal keypair in the raw form the gossip
+// layer announces.
+//
+// Clamping matches what the connectivity stack's own generator does: a disco
+// key is used for NaCl box, so the scalar has to be clamped, and
+// [DiscoKeyFromRaw32] does not clamp what it is handed. Generating the key
+// here rather than in the daemon is what keeps the two halves guaranteed to
+// agree — a private key clamped after its public half was derived would
+// announce a key no peer could reach.
+func NewDiscoKey() (priv, pub [32]byte, err error) {
+	if _, err := rand.Read(priv[:]); err != nil {
+		return priv, pub, fmt.Errorf("conn: generating a disco key: %w", err)
+	}
+	priv[0] &= 248
+	priv[31] = (priv[31] & 127) | 64
+	// crypto/ecdh's X25519 public value is the scalar times the base point,
+	// which is exactly what the disco key type derives. TestDiscoKeyAgrees
+	// pins that equality.
+	k, err := ecdh.X25519().NewPrivateKey(priv[:])
+	if err != nil {
+		return priv, pub, fmt.Errorf("conn: deriving a disco public key: %w", err)
+	}
+	copy(pub[:], k.PublicKey().Bytes())
+	return priv, pub, nil
 }

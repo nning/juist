@@ -11,10 +11,10 @@ import (
 // external audit to. Everything else in the tree is glue around production-
 // tested imports and can be wrong without membership being wrong.
 var tcbPackages = []string{
-	"github.com/nning/wg-p2p/types",
-	"github.com/nning/wg-p2p/trust/log",
-	"github.com/nning/wg-p2p/trust/secrets",
-	"github.com/nning/wg-p2p/trust/store",
+	"github.com/nning/juist/types",
+	"github.com/nning/juist/trust/log",
+	"github.com/nning/juist/trust/secrets",
+	"github.com/nning/juist/trust/store",
 }
 
 // Third-party modules the TCB is allowed to depend on, and why.
@@ -54,12 +54,12 @@ var forbiddenAnywhere = map[string]string{
 // the state it is applied to. If it could depend on the time or on a file, two
 // nodes holding the same log could disagree about who is a member.
 var forbiddenDirect = map[string][]string{
-	"github.com/nning/wg-p2p/types":         {"os", "time", "math/rand", "math/rand/v2"},
-	"github.com/nning/wg-p2p/trust/log":     {"os", "time", "math/rand", "math/rand/v2"},
-	"github.com/nning/wg-p2p/trust/secrets": {"os", "time", "math/rand", "math/rand/v2"},
+	"github.com/nning/juist/types":         {"os", "time", "math/rand", "math/rand/v2"},
+	"github.com/nning/juist/trust/log":     {"os", "time", "math/rand", "math/rand/v2"},
+	"github.com/nning/juist/trust/secrets": {"os", "time", "math/rand", "math/rand/v2"},
 	// trust/store is the one that owns files, so os is its job; the clock and
 	// weak randomness still are not.
-	"github.com/nning/wg-p2p/trust/store": {"time", "math/rand", "math/rand/v2"},
+	"github.com/nning/juist/trust/store": {"time", "math/rand", "math/rand/v2"},
 }
 
 // TestTCBDependencies is the architectural invariant behind the audit scope in
@@ -111,7 +111,7 @@ func TestTCBHasNoTailscaleDependency(t *testing.T) {
 
 func modulePrefixes() []string {
 	out := make([]string, 0, len(allowedModules)+1)
-	out = append(out, "github.com/nning/wg-p2p")
+	out = append(out, "github.com/nning/juist")
 	for m := range allowedModules {
 		out = append(out, m)
 	}

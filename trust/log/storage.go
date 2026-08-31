@@ -6,7 +6,7 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/types"
 )
 
 // ErrNotFound is returned by [Storage.AUM] for a hash it does not hold.

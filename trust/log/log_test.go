@@ -4,8 +4,8 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/nning/wg-p2p/trust/secrets"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/trust/secrets"
+	"github.com/nning/juist/types"
 )
 
 func TestGenesisAndLifecycle(t *testing.T) {

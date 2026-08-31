@@ -4,6 +4,12 @@ Scoped for 1–2 experienced developers part-time. Each milestone has a **securi
 criterion** — the milestone is not done until it passes, and they are cumulative (CI
 keeps enforcing all previous criteria).
 
+*(demo-able)* marks a milestone that closes a loop an outsider can be shown end to
+end. It is not a claim about testability: every milestone here is testable by hand
+when it lands, and M3a in particular is the first one that is *useful* — it just
+leaves the enrollment ceremony as manual as M2 left it, which is why the label sits
+on M4 instead.
+
 ## M0 — Walking skeleton *(demo-able)*
 
 Two Linux nodes, statically configured, tunnel up via embedded Tailscale wgengine
@@ -20,7 +26,7 @@ admin keys + vote weights, k-of-n quorum verification, checkpoints, fork choice,
 epoch group secret records (HPKE fan-out), address derivation/collision rules, and
 node roles + advertised-route grants (`SetNodeRoutes`) with their validation rules —
 reserved here, unconsumed until M7, because the record schema freezes at M3.
-CLI: `wgp2p init / sign / verify / log show`. No networking.
+CLI: `juist init / sign / verify / log show`. No networking.
 
 - **Exit criterion:** an adversarial test suite — forged signatures, replayed AUMs,
   reordered chains, rollback to lower epoch, sub-quorum membership changes, colliding
@@ -38,11 +44,59 @@ Blinded mDNS discovery. Two-to-five nodes on one LAN, no internet.
   (2) revocation converges across a connected 5-node mesh in <5 s including WG peer
   removal and PSK/epoch rotation; (3) LAN-only operation with zero internet works.
 
-## M3 — NAT traversal, relays, DHT cold start
+## M3 — Off the local segment
+
+Two slices, in this order. **M3a** makes the overlay carry traffic at all; **M3b**
+makes it reach past the local segment. They are independent as code — neither needs
+the other's mechanism — but M3b's NAT harness is built on the real devices M3a
+introduces, and M3a is the slice that turns this from a thing you read
+`juist status` on into a thing you use.
+
+The record schema freezes at the end of M3. M3a defines no records, so the freeze
+gate is in practice M3b, and every "before the M3 freeze" note elsewhere in these
+docs means that point.
+
+### M3a — OS plumbing: a real device, a real router
+
+Everything between the tunnel and the host stack. The data plane has worked since
+M0 and the reconciler has rendered log state into its peer set since M2 — but both
+run against `tstun.NewFake` and `router.NewFake`, so the overlay exists and nothing
+on the host can reach it. That is the whole of what M3a removes.
+
+Scope: a real TUN device; a real `router.Router` wired at engine construction; a
+route set for the peers, derived on every reconfiguration rather than at startup;
+and the privilege story that comes with both. Explicitly *not* DNS — naming is
+deferred post-v1, so the DNS configurator stays the no-op one. The netns harness
+lands here rather than in M3b, because two nodes with real devices no longer fit
+in one network namespace; M3b then builds its NAT matrix on top of it.
+
+The wiring is spelled out in [07-embedding-notes.md](07-embedding-notes.md), under
+*What M3a has to wire* — including the one line of `conn` that has been written and
+dead since M0, and the one thing next to it that is missing outright.
+
+- **Exit criteria:** (1) two nodes on one LAN, each with a real device in its own
+  netns, exchange ICMP echo over *both* address families and carry a TCP stream,
+  driven by ordinary host tools rather than by the engine's internal ping;
+  (2) default-deny survives the router — a node holding valid WireGuard keys but
+  absent from (or removed from) the log gets no route, no filter entry and no
+  handshake, asserted against a real device rather than the fake one; (3) the
+  daemon's privilege footprint is exactly device creation plus `CAP_NET_ADMIN` on
+  a dedicated user, documented in a unit file, with no part of it running as root.
+
+### M3b — NAT traversal, relays, DHT cold start
 
 Full magicsock integration (disco, hole punching), member-run membership-authenticated
 DERP relays from log roles, BEP 44 announcements with blinded rotating topics + AEAD
-payloads, persistent endpoint cache. NAT simulation harness (netns) lands here.
+payloads, persistent endpoint cache. The NAT simulation matrix extends M3a's netns
+harness. Off-LAN endpoint exchange — the one thing M2 has no answer for — uses
+hand-sealed `disco.CallMeMaybe` frames sent over a relay with
+`magicsock.Conn.SendDERPPacketTo`, so the peer's stock magicsock processes them
+natively; see [07-embedding-notes.md](07-embedding-notes.md).
+
+Reflexive addresses learned through disco and relays are *added* to the local
+interface scan M2 announces from, rather than replacing it — and the scan's known
+weaknesses on a multi-homed host (09-mesh-layer-notes.md) are an input to that
+decision.
 
 - **Exit criteria:** (1) direct connections established across the simulated NAT
   matrix (full-cone, restricted, port-restricted, symmetric×easy, CGNAT double-NAT),
@@ -53,7 +107,7 @@ payloads, persistent endpoint cache. NAT simulation harness (netns) lands here.
 ## M4 — Enrollment + freshness + revocation UX *(demo-able — full product loop)*
 
 QR invites (full-entropy) and wormhole-style typed codes (SPAKE2, single-use,
-one-guess). `wgp2p invite / join / revoke / rotate`. Quorum freshness leases,
+one-guess). `juist invite / join / revoke / rotate`. Quorum freshness leases,
 fail-closed TTL enforcement (including the startup gate), two-tier revocation
 (routine vs. emergency epoch bump + forced re-handshake).
 

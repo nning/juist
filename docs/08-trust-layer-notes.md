@@ -7,7 +7,7 @@ for the connectivity layer.
 
 Packages: `types` (record schema, canonical encoding, addressing), `trust/log`
 (chain, quorum, fork choice, alarms), `trust/secrets` (epoch group secret),
-`trust/store` (on-disk log). CLI: `cmd/wgp2p`.
+`trust/store` (on-disk log). CLI: `cmd/juist`.
 
 ## Decision: the log is ours; `tka` is the design, not the dependency
 
@@ -231,7 +231,7 @@ cannot be lifted between epochs or re-addressed. It does *not* bind the network:
 that would be circular for the genesis record, whose own hash names the network.
 Network binding comes from the signatures over the record instead.
 
-`wgp2p propose rotate-key` therefore rotates *all* of a device's rotatable keys
+`juist propose rotate-key` therefore rotates *all* of a device's rotatable keys
 at once and generates them locally: a record naming a public key whose private
 half the device does not hold would be applied happily by the log and would
 leave the device unable to handshake or to read the group secret.
@@ -267,9 +267,9 @@ writing any of the three files a ceremony cannot simply be re-run over.
 k-of-n genesis cannot be authorized on the machine that builds it — that is what
 the threshold means — so `init` builds the record, signs it with whatever local
 key exists, and, if that does not reach k, writes it to `genesis.rec` and stops.
-The other admins sign it where their keys are (`wgp2p sign` works on a keystore
+The other admins sign it where their keys are (`juist sign` works on a keystore
 with no network, and reports a genesis against the policy the record itself
-declares, via `log.GenesisStatus`), and `wgp2p apply` on a home directory with
+declares, via `log.GenesisStatus`), and `juist apply` on a home directory with
 no network creates it. Previously the record was built in memory and discarded
 on failure, so the one artefact that had to travel was the one thing thrown
 away — while the admin key and break-glass secrets it commits to were already on
@@ -383,7 +383,8 @@ criterion (2) is where it gets proven.
 - Fuzz targets: `FuzzDecodeAUM` (asserts injectivity, not just absence of
   crashes), `FuzzValidateAUM`, `FuzzChainValidate` (asserts that a rejected
   batch changes nothing and that the epoch never regresses). `make fuzz` is the
-  per-PR smoke run; `make fuzz-long` is the gate.
+  seconds-long smoke run; `make fuzz-long` is the gate. Neither runs on CI —
+  see [06-verification.md](06-verification.md) §2.
 - `TestTCBDependencies` keeps the audit scope's dependency closure to the
   standard library plus two small modules, and keeps the clock and the
   filesystem out of the packages that decide validity.

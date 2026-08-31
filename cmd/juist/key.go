@@ -4,15 +4,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/nning/juist/internal/keys"
 )
 
 func cmdKey(h *home, args []string) error {
-	fs := flag.NewFlagSet("wgp2p key", flag.ContinueOnError)
+	fs := flag.NewFlagSet("juist key", flag.ContinueOnError)
 	create := fs.Bool("create", false, "generate this device's node keys if it has none")
 	name := fs.String("name", "", "member name for this device, with -create (default: the hostname)")
 	createAdmin := fs.String("create-admin", "", "generate an admin signing key under this name")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: wgp2p key [-create [-name NAME]] [-create-admin NAME]
+		fmt.Fprint(os.Stderr, `Usage: juist key [-create [-name NAME]] [-create-admin NAME]
 
 Prints this device's public keys and the local admin keys.
 
@@ -45,9 +47,9 @@ command to do it is printed ready to copy.
 	}
 
 	k, err := h.nodeKeys()
-	if err != nil && !keyFileMissing(err) {
+	if err != nil && !keys.Missing(err) {
 		// Reporting a broken key file as "no keys yet" would send the operator
-		// to "wgp2p key -create", which refuses to overwrite and leaves them
+		// to "juist key -create", which refuses to overwrite and leaves them
 		// no closer to the mode or the truncation that is the actual problem.
 		return err
 	}
@@ -58,34 +60,34 @@ command to do it is printed ready to copy.
 		}
 	}
 	if err == nil {
-		if n := k.displayName(); n != "" {
+		if n := displayName(k); n != "" {
 			fmt.Printf("node name      %s\n", n)
 		}
-		fmt.Printf("node identity  %v\n", k.identity.Public())
-		fmt.Printf("node wireguard %v\n", k.public.WireGuard)
-		fmt.Printf("node x25519    %v\n", k.public.X25519)
-		fmt.Printf("node mlkem     %v\n", k.public.MLKEM)
+		fmt.Printf("node identity  %v\n", k.Identity.Public())
+		fmt.Printf("node wireguard %v\n", k.Public.WireGuard)
+		fmt.Printf("node x25519    %v\n", k.Public.X25519)
+		fmt.Printf("node mlkem     %v\n", k.Public.MLKEM)
 		staged, serr := h.stagedNodeKeys()
-		if serr != nil && !keyFileMissing(serr) {
+		if serr != nil && !keys.Missing(serr) {
 			return serr
 		}
 		if serr == nil {
 			fmt.Printf("\nstaged for rotation (not live until the record is applied):\n")
-			fmt.Printf("  identity     %v\n", staged.identity.Public())
-			fmt.Printf("  wireguard    %v\n", staged.public.WireGuard)
+			fmt.Printf("  identity     %v\n", staged.Identity.Public())
+			fmt.Printf("  wireguard    %v\n", staged.Public.WireGuard)
 		}
 		fmt.Printf("\nto enroll this device, an admin runs:\n")
-		if n := k.displayName(); n != "" {
-			fmt.Printf("  wgp2p propose add-node -name %q \\\n", n)
+		if n := displayName(k); n != "" {
+			fmt.Printf("  juist propose add-node -name %q \\\n", n)
 		} else {
-			fmt.Printf("  wgp2p propose add-node -name NAME \\\n")
+			fmt.Printf("  juist propose add-node -name NAME \\\n")
 		}
-		fmt.Printf("    -identity %v \\\n", k.identity.Public())
-		fmt.Printf("    -wg %v \\\n", k.public.WireGuard)
-		fmt.Printf("    -x25519 %v \\\n", k.public.X25519)
-		fmt.Printf("    -mlkem %v -o add.rec\n", k.public.MLKEM)
+		fmt.Printf("    -identity %v \\\n", k.Identity.Public())
+		fmt.Printf("    -wg %v \\\n", k.Public.WireGuard)
+		fmt.Printf("    -x25519 %v \\\n", k.Public.X25519)
+		fmt.Printf("    -mlkem %v -o add.rec\n", k.Public.MLKEM)
 	} else {
-		fmt.Printf("this device has no keys yet; run: wgp2p key -create\n")
+		fmt.Printf("this device has no keys yet; run: juist key -create\n")
 	}
 
 	admins, aerr := h.adminKeys()

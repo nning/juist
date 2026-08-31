@@ -1,4 +1,4 @@
-# wg-p2p — developer and CI entry points.
+# juist — developer and CI entry points.
 #
 # CI (.github/workflows/ci.yml) invokes these same targets, so `make check`
 # passing locally means CI passes too. Keep it that way: put new gates here
@@ -21,6 +21,13 @@ ACTIONLINT_VERSION  ?= v1.7.7
 # scratch copies) are never formatted, linted, or tested.
 GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 
+# Where `make build` puts the binaries, and the commands it builds — each is
+# ./cmd/<name>, written to $(BUILDDIR)/<name>. A directory rather than the repo
+# root so the tree gains one ignorable path instead of one per command, and so
+# `clean` is a single rm that cannot reach a source file.
+BUILDDIR ?= build
+CMDS     ?= juist juistd
+
 # Platforms v1 commits to (docs/05-roadmap.md M5). Building for each catches
 # build-tag rot in the embedded Tailscale stack long before the platform work
 # starts.
@@ -31,16 +38,22 @@ CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
 TEST_FLAGS   ?= -count=1 -timeout 15m
 COVERPROFILE ?= coverage.out
 
-# Per-target fuzzing budget for the CI smoke run. The milestone gate is
+# Per-target fuzzing budget for the smoke run. The milestone gate is
 # `fuzz-long`, which docs/06-verification.md sets at 72 clean CPU-hours per
 # input surface.
 FUZZTIME ?= 30s
 
-# Wall-clock budget per target for `fuzz-long`, and the number of workers each
-# target gets. The gate is stated in CPU-hours, so the two multiply: with the
-# current three targets, 6h x 4 workers each is 72 CPU-hours. CI spreads the
-# same budget over repeated scheduled runs instead; override either knob on the
-# command line.
+# Wall-clock budget and worker count for one target's `fuzz-long` run. The gate
+# is 72 CPU-hours *per input surface*, and the two knobs multiply: 6h x 4
+# workers is 24 CPU-hours per target per run, so the corpus reaches the gate
+# over three preserved runs. Fuzzing does not run on CI at all — hours per input
+# surface is far more hosted-runner time than this project is willing to spend
+# — so the gate is run by hand before a milestone closes. Do not run every
+# target in one sequential pass on a machine you cannot leave alone for days:
+# a fixed iteration order starves the last targets (the trust-layer ones) of
+# any time at all, which is how this was found on CI. Prefer `fuzz-one` per
+# target, listed by `fuzz-matrix`, each with its own preserved corpus. Match
+# the worker count to real cores; more workers than cores buys no throughput.
 FUZZLONGTIME    ?= 6h
 FUZZLONGWORKERS ?= 4
 
@@ -58,8 +71,25 @@ help: ## Show this help
 
 ## --- build ---------------------------------------------------------------
 
+# .PHONY is load-bearing here: the target's name is also $(BUILDDIR)'s, and
+# without it make would call `build` up to date the moment the directory exists.
+# Deciding what is stale is left to the Go build cache, which knows the
+# dependency graph make would have to be told.
 .PHONY: build
-build: ## Compile all packages
+build: ## Build the binaries into build/
+	@mkdir -p $(BUILDDIR)
+	@for c in $(CMDS); do \
+		echo "==> $(BUILDDIR)/$$c"; \
+		$(GO) build $(GOFLAGS) -o $(BUILDDIR)/$$c ./cmd/$$c || exit 1; \
+	done
+
+# The compile gate, and only that: `go build` over more than one package
+# discards what it produces, so this writes no binaries — which is the point,
+# since `check` wants to know the tree compiles, not to leave artifacts behind.
+# It covers the packages `build` never links in: libraries with no command
+# above them, whose first sign of breakage would otherwise be a failing test.
+.PHONY: build-test
+build-test: ## Compile every package as a check, producing no binaries
 	$(GO) build $(GOFLAGS) ./...
 
 .PHONY: cross
@@ -104,14 +134,36 @@ fuzz: ## Smoke-run every fuzz target for FUZZTIME
 	fi
 
 .PHONY: fuzz-long
-fuzz-long: ## Run the milestone fuzz gate (long; see docs/06-verification.md)
+fuzz-long: ## Run the milestone fuzz gate over every target in turn (long; local use)
 	@for pkg in $$($(GO) list ./...); do \
 		for target in $$($(GO) test -list '^Fuzz' $$pkg 2>/dev/null | grep '^Fuzz' || true); do \
-			echo "==> $$pkg $$target ($(FUZZLONGTIME) x $(FUZZLONGWORKERS) workers)"; \
-			$(GO) test $$pkg -run '^$$' -fuzz "^$$target$$" \
-				-fuzztime $(FUZZLONGTIME) -parallel $(FUZZLONGWORKERS) || exit 1; \
+			$(MAKE) --no-print-directory fuzz-one FUZZPKG=$$pkg FUZZTARGET=$$target || exit 1; \
 		done; \
 	done
+
+.PHONY: fuzz-one
+fuzz-one: ## Fuzz one target: make fuzz-one FUZZPKG=<import path> FUZZTARGET=<FuzzName>
+	@test -n "$(FUZZPKG)" || { echo "fuzz-one: set FUZZPKG to a package import path"; exit 2; }
+	@test -n "$(FUZZTARGET)" || { echo "fuzz-one: set FUZZTARGET to a Fuzz function name"; exit 2; }
+	@echo "==> $(FUZZPKG) $(FUZZTARGET) ($(FUZZLONGTIME) x $(FUZZLONGWORKERS) workers)"
+	$(GO) test $(FUZZPKG) -run '^$$' -fuzz "^$(FUZZTARGET)$$" \
+		-fuzztime $(FUZZLONGTIME) -parallel $(FUZZLONGWORKERS)
+
+# fuzz-matrix emits the fuzz targets as a compact JSON array, one object per
+# target: {"pkg","target","name"}. Use it to drive the gate one target at a
+# time rather than the sequential pass `fuzz-long` makes; "name" is a
+# slash-free label suitable for a per-target corpus directory.
+.PHONY: fuzz-matrix
+fuzz-matrix: ## Emit the fuzz targets as a JSON matrix (one object per target)
+	@first=1; printf '['; \
+	for pkg in $$($(GO) list ./...); do \
+		for target in $$($(GO) test -list '^Fuzz' $$pkg 2>/dev/null | grep '^Fuzz' || true); do \
+			[ $$first -eq 1 ] || printf ','; first=0; \
+			printf '{"pkg":"%s","target":"%s","name":"%s-%s"}' \
+				"$$pkg" "$$target" "$$(basename $$pkg)" "$$target"; \
+		done; \
+	done; \
+	printf ']\n'
 
 .PHONY: tcb
 tcb: ## Report the trusted computing base's size against its budget
@@ -176,9 +228,10 @@ tidy-check: ## Fail if go.mod / go.sum are untidy (does not modify them)
 ## --- aggregate -----------------------------------------------------------
 
 .PHONY: check
-check: lint tidy-check build test-race tcb ## Everything CI gates on; run before pushing
+check: lint tidy-check build-test test-race tcb ## Everything CI gates on; run before pushing
 
 .PHONY: clean
 clean: ## Remove build and test artifacts
-	rm -f $(COVERPROFILE) wgp2p wgp2pd
+	rm -rf $(BUILDDIR)
+	rm -f $(COVERPROFILE)
 	$(GO) clean -testcache

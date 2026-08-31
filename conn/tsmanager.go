@@ -85,6 +85,11 @@ type tsManager struct {
 	apply  sync.Mutex
 	closed bool // guarded by apply: Close has run, the engine is gone
 
+	// done is closed by Close, and warm tracks the path warm-up goroutines
+	// so that none of them can touch the engine after it is torn down.
+	done chan struct{}
+	warm sync.WaitGroup
+
 	// state is the peer set the data plane answers from. It is read
 	// lock-free on the per-packet paths and replaced wholesale, under
 	// apply, by SetPeers. The maps inside a snapshot are never mutated
@@ -141,6 +146,7 @@ func New(opts Options) (Manager, error) {
 		logf: logf,
 		bus:  bus,
 		self: opts.Self,
+		done: make(chan struct{}),
 	}
 	m.state.Store(&peerState{})
 
@@ -170,6 +176,31 @@ func New(opts Options) (Manager, error) {
 		eng.Close()
 		bus.Close()
 		return nil, errors.New("conn: engine did not surface its magicsock conn or TUN wrapper")
+	}
+	// magicsock treats ListenPort as a preference rather than a requirement:
+	// bindSocket's candidate list always ends in 0, so a port it cannot bind
+	// costs one log line and an OS-assigned port instead. That is the right
+	// default for a client whose only job is to reach a control plane and
+	// whose endpoints are discovered reflexively through STUN. It is the
+	// wrong one here. An operator who passes a port has usually opened it in
+	// a firewall or forwarded it at a NAT, and this project's endpoints come
+	// from a local interface scan rather than from a reflexive address
+	// (daemon.underlayEndpoints), so nothing downstream repairs the mismatch.
+	// The symptom would be that nothing connects, with the cause a "unable to
+	// bind" line far up a verbose log. Refuse to start instead.
+	//
+	// Only the initial bind is checked. magicsock may rebind later — a link
+	// change, a ReSTUN — and move the port again; callers must keep reading
+	// LocalPort rather than assuming the requested port holds forever.
+	if opts.ListenPort != 0 {
+		if got := m.magic.LocalPort(); got != opts.ListenPort {
+			eng.Close()
+			bus.Close()
+			return nil, fmt.Errorf(
+				"conn: could not bind UDP port %d; the engine fell back to %d. "+
+					"Something else holds it, or pass 0 to let the OS choose",
+				opts.ListenPort, got)
+		}
 	}
 	m.eng = eng
 
@@ -250,6 +281,7 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 		nodes: make(map[key.NodePublic]tailcfg.NodeView, len(peers)),
 	}
 	byID := make(map[uint64]key.NodePublic, len(peers))
+	byDisco := make(map[key.DiscoPublic]key.NodePublic, len(peers))
 
 	// Validate everything before touching any state, so a rejected peer set
 	// leaves the data plane exactly as it was. These are all conditions the
@@ -293,6 +325,25 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 		if p.DiscoKey.IsZero() {
 			return fmt.Errorf("conn: peer %v has no disco key", p.NodeKey.ShortString())
 		}
+		// Disco keys must be distinct, for the reason node IDs must be: the
+		// NAT-traversal layer keys its path state by disco key, so two peers
+		// sharing one make each other's paths ambiguous. This one is worth
+		// more care than the others, because it is the only field here a
+		// *peer* chooses — it arrives in that peer's own signed endpoint
+		// announcement — so a member could otherwise copy another member's
+		// disco key and take away its connectivity. It cannot read anything
+		// that way, since traffic is still sealed to the logged node key, but
+		// "one member can silently unplug another" is not a property this
+		// layer should hand out.
+		if other, dup := byDisco[p.DiscoKey]; dup {
+			return fmt.Errorf("conn: peers %v and %v announce the same disco key %v",
+				other.ShortString(), p.NodeKey.ShortString(), p.DiscoKey.ShortString())
+		}
+		if p.DiscoKey == m.self.DiscoKey.Public() {
+			return fmt.Errorf("conn: peer %v announces this node's own disco key",
+				p.NodeKey.ShortString())
+		}
+		byDisco[p.DiscoKey] = p.NodeKey
 		if len(p.Addrs) == 0 {
 			return fmt.Errorf("conn: peer %v has no overlay address", p.NodeKey.ShortString())
 		}
@@ -328,7 +379,9 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 		return errors.New("conn: manager is closed")
 	}
 
-	resets := peerDelta(m.state.Load().peers, next.peers)
+	prev := m.state.Load().peers
+	resets := peerDelta(prev, next.peers)
+	fresh := newPaths(prev, next.peers)
 
 	// Order matters: the snapshot is swapped in before the data plane is
 	// told to resync, so a removed peer's lookup already fails by the time
@@ -357,7 +410,96 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 		m.eng.SyncDevicePeer(nk)
 	}
 	m.magic.SetNetworkMap(m.selfNV, nodeList)
-	return m.reconfig()
+	// Warm the new peers' paths whether or not the reconfiguration succeeded.
+	// Discovery is independent of the packet filter, and a reconfig error is
+	// exactly when warming matters most: the next SetPeers computes what is
+	// new by comparing against the snapshot already stored above, so a peer
+	// skipped here would never be warmed at all, and would pay the ten-second
+	// first-packet delay this exists to prevent.
+	err := m.reconfig()
+	m.warmPaths(fresh)
+	return err
+}
+
+// warmPaths starts NAT-traversal discovery towards peers that have just
+// appeared, before anything asks to send to them.
+//
+// Without it the first packet to a new peer is a WireGuard handshake with
+// nowhere to go: magicsock has no verified path yet, logs "Failed to send
+// handshake initiation: no UDP or DERP addr", and drops it. Disco then
+// completes in about a millisecond — but WireGuard has already armed its own
+// five-second retry, and the *response* is dropped the same way for the same
+// reason on the other side, so a LAN mesh takes ten seconds to pass its first
+// packet instead of a few.
+//
+// Tailscale does not hit this because a DERP home relay is always available as
+// an immediate path, and the direct one is an upgrade. A juist network at M2
+// has no relays at all (docs/05-roadmap.md puts them in M3), so the direct
+// path is the only path and it has to exist before it is needed. This stays
+// worth doing once relays arrive: it is the difference between a new peer
+// being reachable directly and being reachable through someone else's uplink
+// for the first few seconds.
+//
+// It is repeated on [warmSchedule] rather than sent once, because the first
+// probe is often dropped for a reason that fixes itself: two nodes meeting for
+// the first time install each other a moment apart, and a disco ping arriving
+// at a peer that has not yet been told about us is discarded. A node only
+// adopts a path on receiving a *pong*, so the side that pinged early gets
+// nothing out of the exchange and would otherwise wait for WireGuard's retry.
+//
+// Failures are ignored. This is a warm-up, not a health check — the callback
+// reports what disco found, and everything it could report is something the
+// data plane will rediscover on its own. The cost of the whole schedule is
+// four 124-byte datagrams per newly appeared peer.
+//
+// The caller must hold m.apply, which is what makes the WaitGroup handshake
+// with Close safe: Close cannot start draining between the Add here and the
+// goroutine starting.
+func (m *tsManager) warmPaths(fresh []key.NodePublic) {
+	if len(fresh) == 0 || m.closed {
+		return
+	}
+	m.warm.Add(1)
+	go func() {
+		defer m.warm.Done()
+		for i, delay := range warmSchedule {
+			if i > 0 {
+				select {
+				case <-m.done:
+					return
+				case <-time.After(delay):
+				}
+			}
+			// Re-read the snapshot each round: a peer removed in the
+			// meantime is gone from it, and must not be probed.
+			st := m.state.Load()
+			for _, nk := range fresh {
+				nv, ok := st.nodes[nk]
+				if !ok {
+					continue
+				}
+				m.magic.Ping(nv, new(ipnstate.PingResult), 0, func(*ipnstate.PingResult) {})
+			}
+		}
+	}()
+}
+
+// warmSchedule is when path warm-up probes are sent, measured from the
+// reconcile that introduced the peer. Front-loaded, and over within a few
+// seconds: past that, WireGuard's own retry has taken over and more probes
+// would only add traffic to a peer that is not answering.
+var warmSchedule = []time.Duration{0, 250 * time.Millisecond, 1 * time.Second, 3 * time.Second}
+
+// newPaths reports the peers that need a path established: those that were not
+// in the set before, and those whose disco key changed, which means the peer
+// restarted and whatever path was known to it is stale.
+func newPaths(prev, next map[key.NodePublic]Peer) (fresh []key.NodePublic) {
+	for nk, cur := range next {
+		if old, had := prev[nk]; !had || old.DiscoKey != cur.DiscoKey {
+			fresh = append(fresh, nk)
+		}
+	}
+	return fresh
 }
 
 // peerDelta compares two peer sets and reports which device peers must be
@@ -537,6 +679,10 @@ func (m *tsManager) Close() error {
 		return nil
 	}
 	m.closed = true
+	// Stop and drain the warm-up goroutines before the engine goes: they
+	// call into magicsock, which does not survive its engine.
+	close(m.done)
+	m.warm.Wait()
 	m.eng.Close()
 	m.bus.Close()
 	return nil

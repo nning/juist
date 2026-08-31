@@ -1,14 +1,21 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/nning/wg-p2p/trust/log"
-	"github.com/nning/wg-p2p/trust/store"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/conn"
+	"github.com/nning/juist/daemon"
+	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/trust/store"
+	"github.com/nning/juist/types"
 )
 
 // cli runs the tool in-process against a home directory, returning everything
@@ -56,7 +63,7 @@ func (c *cli) mustRun(args ...string) string {
 	c.t.Helper()
 	out, err := c.run(args...)
 	if err != nil {
-		c.t.Fatalf("wgp2p %s: %v\n%s", strings.Join(args, " "), err, out)
+		c.t.Fatalf("juist %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return out
 }
@@ -570,8 +577,8 @@ func TestFailedRotationProposalStagesNothing(t *testing.T) {
 // present but cannot be loaded is an error everywhere, rather than being
 // reported as "this device has no keys".
 //
-// Conflating the two is silent failure with consequences: "wgp2p key" sends
-// the operator to -create, which then refuses to overwrite, and "wgp2p sign"
+// Conflating the two is silent failure with consequences: "juist key" sends
+// the operator to -create, which then refuses to overwrite, and "juist sign"
 // omits the node signature a rotation needs while saying only that no local
 // key could sign it. The fault — here a mode that leaves private keys readable
 // by everyone — stays invisible in both.
@@ -589,11 +596,11 @@ func TestUnreadableKeyFileIsReportedNotIgnored(t *testing.T) {
 	for _, args := range [][]string{{"key"}, {"sign", recPath}} {
 		out, err := c.run(args...)
 		if err == nil {
-			t.Errorf("wgp2p %s ignored an unreadable %s\n%s", strings.Join(args, " "), keys, out)
+			t.Errorf("juist %s ignored an unreadable %s\n%s", strings.Join(args, " "), keys, out)
 			continue
 		}
 		if !strings.Contains(err.Error(), "mode 644") {
-			t.Errorf("wgp2p %s: error does not name the problem: %v", strings.Join(args, " "), err)
+			t.Errorf("juist %s: error does not name the problem: %v", strings.Join(args, " "), err)
 		}
 	}
 
@@ -601,12 +608,12 @@ func TestUnreadableKeyFileIsReportedNotIgnored(t *testing.T) {
 	// it has to say so: silently printing nothing is what it did before.
 	out := c.mustRun("verify")
 	if !strings.Contains(out, "mode 644") {
-		t.Errorf("wgp2p verify did not report an unreadable %s\n%s", keys, out)
+		t.Errorf("juist verify did not report an unreadable %s\n%s", keys, out)
 	}
 }
 
 // TestUnreadableStagedKeysAreReportedOnApply is the same rule for the staged
-// file. Swallowing its error meant "wgp2p apply" reported the rotation applied
+// file. Swallowing its error meant "juist apply" reported the rotation applied
 // while silently not promoting the keys the log had just started naming —
 // leaving the device unable to handshake, with nothing said about why.
 func TestUnreadableStagedKeysAreReportedOnApply(t *testing.T) {
@@ -632,7 +639,7 @@ func TestUnreadableStagedKeysAreReportedOnApply(t *testing.T) {
 // TestMemberNameIsCheckedWhereItIsChosen checks that a name the log will not
 // accept is refused at the machine that chooses it, rather than at the admin's.
 //
-// The failure it guards is quiet: "wgp2p key -create" stored any name it was
+// The failure it guards is quiet: "juist key -create" stored any name it was
 // given and printed an enrollment command built around it, so the limit was
 // discovered by whoever ran that command — on another machine, against a rule
 // the joining device never mentioned. Nothing was wrong with the keys, so
@@ -677,7 +684,7 @@ func TestMemberNameIsCheckedWhereItIsChosen(t *testing.T) {
 		if !strings.Contains(k, `-name "laptop"`) {
 			t.Fatalf("key did not print the chosen name in the enrollment command:\n%s", k)
 		}
-		// The command "wgp2p key" prints has to be one that runs.
+		// The command "juist key" prints has to be one that runs.
 		recPath := filepath.Join(t.TempDir(), "add.rec")
 		c.mustRun("propose", "add-node", "-name", "laptop",
 			"-identity", field(t, k, "node identity"),
@@ -862,4 +869,236 @@ func TestSharedWritableHomeRefused(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 	c.mustRun("key")
+}
+
+// TestStatusWithoutADaemon covers the answer an operator gets most often:
+// there is no daemon on this home directory. The distinction matters because
+// the underlying failure is a bare ENOENT from a connect(2), which reads like
+// a bug rather than like "nothing is running".
+func TestStatusWithoutADaemon(t *testing.T) {
+	c := newCLI(t)
+	c.mustRun("key", "-create", "-name", "laptop")
+	_, err := c.run("status")
+	if err == nil {
+		t.Fatal("status succeeded with no daemon running")
+	}
+	if !strings.Contains(err.Error(), "no daemon is running") {
+		t.Errorf("error %q does not say that no daemon is running", err)
+	}
+}
+
+// TestKeyRotationPromotesWhenADaemonOwnsTheLog is the same property as
+// TestKeyRotationPromotesStagedKeysOnlyOnApply, in the configuration a member
+// device is actually in: a daemon is running, so "apply" hands the record over
+// IPC instead of writing the log itself.
+//
+// Promotion is still this tool's job. The daemon has no idea a rotation is in
+// flight — staged keys live in the keystore, which it never reads — so an
+// apply that skipped promotion because the daemon did the writing would leave
+// the device holding old keys while the log names new ones: unable to
+// handshake, unable to open the group secret, and with nothing to point at.
+func TestKeyRotationPromotesWhenADaemonOwnsTheLog(t *testing.T) {
+	c := newCLI(t)
+	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
+	before := field(t, c.mustRun("key"), "node x25519")
+
+	recPath := filepath.Join(t.TempDir(), "rotate.rec")
+	c.mustRun("propose", "rotate-key", "-o", recPath)
+	c.mustRun("sign", recPath)
+
+	stopDaemon := startDaemonOn(t, c.home)
+	defer stopDaemon()
+
+	c.mustRun("apply", recPath)
+	if got := field(t, c.mustRun("key"), "node x25519"); got == before {
+		t.Fatal("applying through the daemon did not promote the staged keys")
+	}
+	if !strings.Contains(c.mustRun("verify"), "group secret readable by this device") {
+		t.Fatal("this device cannot open the group secret after rotating through the daemon")
+	}
+}
+
+// startDaemonOn runs a daemon over a CLI home directory, with a data plane
+// that records rather than connects and LAN discovery off: what is under test
+// is which process owns the log, not the mesh.
+func startDaemonOn(t *testing.T, home string) func() {
+	t.Helper()
+	k, err := keys.LoadNode(filepath.Join(home, keys.NodeKeysFile))
+	if err != nil {
+		t.Fatalf("loading node keys: %v", err)
+	}
+	st, err := store.Open(filepath.Join(home, keys.LogDir))
+	if err != nil {
+		t.Fatalf("opening the log: %v", err)
+	}
+	auth, err := log.Open(st)
+	if err != nil {
+		t.Fatalf("opening the authority: %v", err)
+	}
+	d, err := daemon.New(daemon.Options{
+		Authority: auth, Storage: st,
+		Identity: k.Identity, Recipient: k.Recipient, WireGuard: k.WireGuardPrivate(),
+		Connect:          func(conn.Options) (conn.Manager, error) { return stubManager{}, nil },
+		DisableDiscovery: true,
+		SocketPath:       daemon.SocketPath(home),
+		Logf:             func(string, ...any) {},
+	})
+	if err != nil {
+		t.Fatalf("starting the daemon: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go d.Run(ctx)
+	// Wait for the control socket to answer, so the CLI does not race the
+	// daemon's accept loop and quietly take the no-daemon path instead.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := daemon.Call(daemon.SocketPath(home), daemon.Request{Command: daemon.CmdStatus}); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			d.Close()
+			t.Fatal("the daemon never answered on its control socket")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return func() { cancel(); d.Close() }
+}
+
+// stubManager is a data plane that accepts everything and does nothing.
+type stubManager struct{}
+
+func (stubManager) SetPeers([]conn.Peer) error             { return nil }
+func (stubManager) LocalPort() uint16                      { return 41641 }
+func (stubManager) Ping(netip.Addr, func(conn.PingResult)) {}
+func (stubManager) Close() error                           { return nil }
+
+// TestSignOnAnUnenrolledDeviceDoesNotRuinTheRecord is the ordinary shape of a
+// destroyed ceremony: a device that has run "key -create" holds node keys and
+// no network, its operator is sent the fully-signed record admitting it, and
+// they run "sign" on it before "apply" out of reasonable caution.
+//
+// An untrusted signature does not merely fail to count — it makes the record
+// invalid outright, so the admins' finished ceremony would be ruined and the
+// only fix is another one. The device's own key has exactly one role in any
+// record, and log.SelfSigner decides it from the record alone, so no log is
+// needed to know an add-node record does not want it.
+func TestSignOnAnUnenrolledDeviceDoesNotRuinTheRecord(t *testing.T) {
+	admin := newCLI(t)
+	admin.mustRun("init", "-network", "demo")
+
+	device := newCLI(t)
+	out := device.mustRun("key", "-create")
+	recPath := filepath.Join(t.TempDir(), "add.rec")
+	admin.mustRun("propose", "add-node", "-name", "phone",
+		"-identity", field(t, out, "node identity"),
+		"-wg", field(t, out, "node wireguard"),
+		"-x25519", field(t, out, "node x25519"),
+		"-mlkem", field(t, out, "node mlkem"),
+		"-o", recPath)
+	admin.mustRun("sign", recPath)
+
+	// The device signs its own enrollment record: nothing may be added.
+	before, err := os.ReadFile(recPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device.run("sign", recPath)
+	after, err := os.ReadFile(recPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Error("signing on the enrolling device changed the record")
+	}
+
+	// The record must still be one the admin's log accepts.
+	if _, err := admin.run("apply", recPath); err != nil {
+		t.Fatalf("the record no longer applies after the device signed it: %v", err)
+	}
+}
+
+// TestStagedKeysPromoteWhenTheRotationArrivesElsewhere covers the flow the
+// CLI's own guidance produces: the machine that adds the final signature is
+// told "apply it with: juist apply", so a rotation is normally applied on an
+// admin's machine, not on the device rotating. The record then reaches the
+// device as log records over gossip, with no CLI run there at all.
+//
+// If promotion only ever happened inside "juist apply", the device would hold
+// old keys while the log named new ones — unable to handshake and unable to
+// open the group secret — and the daemon's advice to restart could never fix
+// it, because nothing a restart did would promote them. Opening the state
+// directory is what promotes, which is what makes that advice true.
+func TestStagedKeysPromoteWhenTheRotationArrivesElsewhere(t *testing.T) {
+	c := newCLI(t)
+	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
+	before := field(t, c.mustRun("key"), "node wireguard")
+
+	recPath := filepath.Join(t.TempDir(), "rotate.rec")
+	c.mustRun("propose", "rotate-key", "-o", recPath)
+	c.mustRun("sign", recPath)
+
+	// The record is applied to the log without this device's CLI promoting
+	// anything — what gossip delivering it to a running daemon looks like.
+	auth := openLog(t, c)
+	rec, err := readRecordFile(recPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.Inform(rec); err != nil {
+		t.Fatalf("applying the rotation to the log directly: %v", err)
+	}
+	if got := field(t, c.mustRun("key"), "node wireguard"); got != before {
+		t.Fatal("the keys were promoted by something other than opening the directory")
+	}
+
+	// Opening the state directory, as juistd does at startup.
+	fresh := openLog(t, c)
+	promoted, err := keys.MaybePromoteStaged(c.home, fresh.State().Node)
+	if err != nil {
+		t.Fatalf("promoting staged keys: %v", err)
+	}
+	if promoted == nil {
+		t.Fatal("the log names this device's staged keys and they were not promoted")
+	}
+	after := field(t, c.mustRun("key"), "node wireguard")
+	if after == before {
+		t.Fatal("the keystore still holds the old WireGuard key")
+	}
+	id, err := types.ParseIdentity(field(t, c.mustRun("key"), "node identity"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, ok := fresh.State().Node(id)
+	if !ok {
+		t.Fatal("this device is not a member after the rotation")
+	}
+	if member.WireGuard.String() != after {
+		t.Fatalf("the log names %v but the keystore holds %s", member.WireGuard, after)
+	}
+}
+
+// TestAWritableAdminsDirIsRefused: the mode check on the home directory does
+// not see a subdirectory restored from a backup or unpacked from an archive
+// with its stored mode. admins/ is where the signing keys are, and anyone who
+// can write there can replace an operator's key — making every record they
+// sign invalid rather than authorized — or delete it outright. Losing admin
+// keys below quorum is the one failure the threat model calls unrecoverable by
+// design, so the tool refuses to run rather than work in that state.
+func TestAWritableAdminsDirIsRefused(t *testing.T) {
+	c := newCLI(t)
+	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
+	admins := filepath.Join(c.home, adminsDir)
+	if err := os.Chmod(admins, 0o770); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(admins, 0o700) })
+
+	out, err := c.run("verify")
+	if err == nil {
+		t.Fatalf("ran with a group-writable admins directory; output was:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), adminsDir) {
+		t.Errorf("the error does not name the directory at fault: %v", err)
+	}
 }

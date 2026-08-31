@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/types"
 )
 
 // TestResolutionIsOrderIndependent is the determinism property from

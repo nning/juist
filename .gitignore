@@ -1,4 +1,3 @@
-/wgp2pd
-/wgp2p
+/build/
 *.test
 /coverage.out

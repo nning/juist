@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"slices"
 
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/types"
 )
 
 // A Sealer produces the epoch record that distributes a fresh group secret to

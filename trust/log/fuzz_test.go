@@ -3,7 +3,7 @@ package log
 import (
 	"testing"
 
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/types"
 )
 
 // FuzzChainValidate is the chain-validator target docs/06-verification.md

@@ -53,6 +53,19 @@ func TestSetPeersRejects(t *testing.T) {
 			want:  "overflows",
 		},
 		{
+			name: "two peers share a disco key",
+			peers: []Peer{
+				{ID: 2, NodeKey: k1, DiscoKey: d1, Addrs: addr("100.64.0.5/32")},
+				{ID: 3, NodeKey: k2, DiscoKey: d1, Addrs: addr("100.64.0.6/32")},
+			},
+			want: "same disco key",
+		},
+		{
+			name:  "peer claims our disco key",
+			peers: []Peer{{ID: 2, NodeKey: k1, DiscoKey: selfDisco.Public(), Addrs: addr("100.64.0.5/32")}},
+			want:  "own disco key",
+		},
+		{
 			name:  "peer shares our ID",
 			peers: []Peer{{ID: 1, NodeKey: k1, DiscoKey: d1, Addrs: addr("100.64.0.5/32")}},
 			want:  "shares our node ID",
@@ -239,5 +252,26 @@ func TestPeerDelta(t *testing.T) {
 	sortKeys(wantResets)
 	if !slices.Equal(resets, wantResets) {
 		t.Errorf("resets = %v, want removed + disco-rotated peers %v", resets, wantResets)
+	}
+}
+
+// TestDiscoKeyAgrees pins the property NewDiscoKey's comment claims: the
+// public half it derives through crypto/ecdh equals the one the connectivity
+// stack derives from the same private bytes. If the two ever disagreed — say,
+// over clamping — every announcement would carry a disco key its owner does
+// not answer to, and the only symptom would be a mesh where discovery works
+// and no tunnel ever comes up.
+func TestDiscoKeyAgrees(t *testing.T) {
+	for range 32 {
+		priv, pub, err := NewDiscoKey()
+		if err != nil {
+			t.Fatalf("NewDiscoKey: %v", err)
+		}
+		got := DiscoKeyFromRaw32(priv).Public()
+		want := DiscoPublicFromRaw32(pub)
+		if got != want {
+			t.Fatalf("stack derives %v from the private key, announcement would carry %v",
+				got.ShortString(), want.ShortString())
+		}
 	}
 }

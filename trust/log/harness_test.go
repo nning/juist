@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/nning/wg-p2p/trust/secrets"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/trust/secrets"
+	"github.com/nning/juist/types"
 )
 
 // harness builds real networks for the tests: real Ed25519 keys, real HPKE

@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nning/wg-p2p/trust/log"
-	"github.com/nning/wg-p2p/trust/secrets"
-	"github.com/nning/wg-p2p/trust/store"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/trust/secrets"
+	"github.com/nning/juist/trust/store"
+	"github.com/nning/juist/types"
 )
 
 // numDisablementSecrets is how many break-glass preimages the genesis ceremony
@@ -21,7 +21,7 @@ import (
 const numDisablementSecrets = 10
 
 func cmdInit(h *home, args []string) error {
-	fs := flag.NewFlagSet("wgp2p init", flag.ContinueOnError)
+	fs := flag.NewFlagSet("juist init", flag.ContinueOnError)
 	network := fs.String("network", "", "network name (required)")
 	quorum := fs.Uint("quorum", 1, "vote weight a change requires (k)")
 	adminName := fs.String("admin-name", "admin", "name for the admin key generated locally")
@@ -31,7 +31,7 @@ func cmdInit(h *home, args []string) error {
 	nodeName := fs.String("node-name", "", "enroll this device as a founding member under this name")
 	wgKey := fs.String("wg", "", "this device's WireGuard public key; generated if omitted")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: wgp2p init -network NAME [flags]
+		fmt.Fprint(os.Stderr, `Usage: juist init -network NAME [flags]
 
 Creates a network. This is the genesis ceremony: it fixes the admin keys, the
 vote threshold, and the break-glass commitments, none of which anything weaker
@@ -123,7 +123,7 @@ Flags:
 		commitments = append(commitments, types.DisablementCommit(s))
 	}
 	lines := []string{
-		"# wg-p2p break-glass secrets for network " + *network,
+		"# juist break-glass secrets for network " + *network,
 		"# Any one of these authorizes recovery if the admin quorum is lost.",
 		"# Move this file offline. Losing these AND the admin keys makes the",
 		"# network unrecoverable, which is the security property, not a bug.",
@@ -174,9 +174,9 @@ Flags:
 		fmt.Printf("  admin key    %v (%d vote(s))\n", localAdmin.Public(), *adminVotes)
 		fmt.Printf("  break-glass  %s\n", h.join(disablementFile))
 		fmt.Printf("\nThe remaining admins must sign it on the machines that hold their keys:\n")
-		fmt.Printf("  wgp2p sign %s\n", genesisPath)
+		fmt.Printf("  juist sign %s\n", genesisPath)
 		fmt.Printf("then bring it back here and create the network with:\n")
-		fmt.Printf("  wgp2p apply %s\n", genesisPath)
+		fmt.Printf("  juist apply %s\n", genesisPath)
 		return nil
 	}
 
@@ -200,27 +200,27 @@ Flags:
 // enrollLocalNode generates this device's keys and returns the record that
 // would admit it. An explicit WireGuard key overrides the generated one, for a
 // device whose data plane already holds a key. The name is persisted with the
-// keys so "wgp2p key" can reprint the enrollment command later.
+// keys so "juist key" can reprint the enrollment command later.
 func (h *home) enrollLocalNode(name, wgKeyText string) (types.NodeRecord, error) {
 	k, err := h.createNodeKeys(name)
 	if err != nil {
 		return types.NodeRecord{}, err
 	}
-	wg := k.public.WireGuard
+	wg := k.Public.WireGuard
 	if wgKeyText != "" {
 		// The operator says the data plane already holds this key. The record
 		// names it; this keystore's own WireGuard key is then unused, which is
-		// harmless and visible in `wgp2p key`.
+		// harmless and visible in `juist key`.
 		if wg, err = types.ParseWGKey(wgKeyText); err != nil {
 			return types.NodeRecord{}, err
 		}
 	}
 	return types.NodeRecord{
-		Identity:  k.identity.Public(),
+		Identity:  k.Identity.Public(),
 		Name:      name,
 		WireGuard: wg,
-		X25519:    k.public.X25519,
-		MLKEM:     k.public.MLKEM,
+		X25519:    k.Public.X25519,
+		MLKEM:     k.Public.MLKEM,
 	}, nil
 }
 

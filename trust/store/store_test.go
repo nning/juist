@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nning/wg-p2p/trust/log"
-	"github.com/nning/wg-p2p/trust/secrets"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/trust/secrets"
+	"github.com/nning/juist/types"
 )
 
 // network builds a real one-admin network in a fresh store directory.
@@ -292,7 +292,7 @@ func TestUnknownFormatVersionRefusesToOpen(t *testing.T) {
 	n := newNetwork(t)
 	n.addNode("alpha")
 	name := filepath.Join(n.dir, versionFile)
-	if err := os.WriteFile(name, []byte("wg-p2p-log-v99\n"), 0o600); err != nil {
+	if err := os.WriteFile(name, []byte("juist-log-v99\n"), 0o600); err != nil {
 		t.Fatalf("writing %s: %v", name, err)
 	}
 	if _, err := Open(n.dir); err == nil {
@@ -378,7 +378,9 @@ func TestStrayFileRefusesToOpen(t *testing.T) {
 }
 
 // TestInterruptedWriteIsCleanedUp checks that a leftover temporary file — what
-// a crash mid-Add leaves behind — does not make the store unopenable.
+// a crash mid-Add leaves behind — does not make the store unopenable, and is
+// swept once it is old enough to be debris rather than somebody's write in
+// flight.
 //
 // Every prefix is covered, because more than one can really be there. Add
 // stages under tempPrefix, but it once staged by way of writeFileSync, which
@@ -402,8 +404,39 @@ func TestInterruptedWriteIsCleanedUp(t *testing.T) {
 			if _, err := log.Open(st); err != nil {
 				t.Fatalf("Open: %v", err)
 			}
+			// The writer is what sweeps: opening tolerates the file, and the
+			// next record written through this store clears it.
+			n.addNode("beta")
 			if _, err := os.Stat(leftover); !os.IsNotExist(err) {
-				t.Error("the leftover temporary file was not removed")
+				t.Error("a write did not sweep the leftover temporary file")
+			}
+		})
+	}
+}
+
+// TestOpenLeavesAWriteInFlightAlone: opening a store is not exclusive — every
+// juist command does it, including read-only ones, while a daemon may be
+// mid-Add on the same directory. A sweep that removed a fresh staged file
+// would fail that daemon's rename, and because Inform is atomic, one deleted
+// file rejects the whole batch it belonged to.
+func TestOpenLeavesAWriteInFlightAlone(t *testing.T) {
+	for _, prefix := range tempNames {
+		t.Run(prefix, func(t *testing.T) {
+			n := newNetwork(t)
+			n.addNode("alpha")
+			inflight := filepath.Join(n.dir, recordsDir, prefix+"ABCDEF")
+			if err := os.WriteFile(inflight, []byte("staged"), 0o600); err != nil {
+				t.Fatalf("writing %s: %v", inflight, err)
+			}
+			st, err := Open(n.dir)
+			if err != nil {
+				t.Fatalf("a staged file made the store unopenable: %v", err)
+			}
+			if _, err := log.Open(st); err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			if _, err := os.Stat(inflight); err != nil {
+				t.Errorf("opening the store destroyed another process's write in flight: %v", err)
 			}
 		})
 	}

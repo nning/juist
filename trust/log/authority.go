@@ -57,7 +57,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/types"
 )
 
 // Bounds on how much work resolving a chain may cost. A store this large means

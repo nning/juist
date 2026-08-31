@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nning/wg-p2p/trust/log"
-	"github.com/nning/wg-p2p/trust/secrets"
+	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/trust/secrets"
 )
 
 func cmdVerify(h *home, args []string) error {
-	fs := flag.NewFlagSet("wgp2p verify", flag.ContinueOnError)
+	fs := flag.NewFlagSet("juist verify", flag.ContinueOnError)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: wgp2p verify [FILE...]
+		fmt.Fprint(os.Stderr, `Usage: juist verify [FILE...]
 
 With no arguments, re-verifies the stored log from the anchor: every record's
 signatures, every rule, the fork analysis, and — if this device is a member —
@@ -99,16 +100,16 @@ without applying anything.
 // this device is a member.
 func (h *home) checkGroupSecret(state *log.State) error {
 	k, err := h.nodeKeys()
-	if keyFileMissing(err) {
+	if keys.Missing(err) {
 		return nil // not a member device; nothing to check
 	}
 	if err != nil {
 		return fmt.Errorf("reading this device's keys: %w", err)
 	}
-	if !state.IsMember(k.identity.Public()) {
+	if !state.IsMember(k.Identity.Public()) {
 		return nil
 	}
-	if _, err := secrets.Open(state.EpochRecord(), k.identity.Public(), k.recipient); err != nil {
+	if _, err := secrets.Open(state.EpochRecord(), k.Identity.Public(), k.Recipient); err != nil {
 		return err
 	}
 	fmt.Printf("group secret readable by this device\n")

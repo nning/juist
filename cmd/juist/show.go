@@ -6,12 +6,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/types"
 )
 
 func cmdLog(h *home, args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprint(os.Stderr, "Usage: wgp2p log show [flags]\n")
+		fmt.Fprint(os.Stderr, "Usage: juist log show [flags]\n")
 		return errSilent
 	}
 	switch args[0] {
@@ -23,10 +23,10 @@ func cmdLog(h *home, args []string) error {
 }
 
 func cmdLogShow(h *home, args []string) error {
-	fs := flag.NewFlagSet("wgp2p log show", flag.ContinueOnError)
+	fs := flag.NewFlagSet("juist log show", flag.ContinueOnError)
 	records := fs.Bool("records", false, "list the chain's records instead of the state")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: wgp2p log show [-records]
+		fmt.Fprint(os.Stderr, `Usage: juist log show [-records]
 
 Prints the current membership state, or with -records the chain from the anchor
 to the head.

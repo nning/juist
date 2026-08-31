@@ -53,7 +53,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/types"
 )
 
 // The HPKE ciphersuite. Fixed, not negotiated: there is no peer to negotiate
@@ -301,10 +301,11 @@ func Open(rec *types.EpochRecord, self types.Identity, priv *PrivateKeys) (Secre
 // the discovery AEAD key and a topic ID can never come out equal, and neither
 // can ever equal the secret itself.
 const (
-	labelSealInfo     = "wg-p2p/epoch-seal/v1"
-	labelTopic        = "wg-p2p/dht-topic/v1"
-	labelDiscoveryKey = "wg-p2p/discovery-aead/v1"
-	labelMDNS         = "wg-p2p/mdns-beacon/v1"
+	labelSealInfo     = "juist/epoch-seal/v1"
+	labelTopic        = "juist/dht-topic/v1"
+	labelDiscoveryKey = "juist/discovery-aead/v1"
+	labelMDNS         = "juist/mdns-beacon/v1"
+	labelGossipKey    = "juist/gossip-aead/v1"
 )
 
 // derive expands the secret into keying material for one labelled use.
@@ -362,4 +363,20 @@ func (s Secret) DiscoveryKey(epoch uint64) [32]byte {
 // who is on it.
 func (s Secret) MDNSName(epoch uint64) []byte {
 	return s.derive(labelMDNS, epoch, nil, TopicIDSize)
+}
+
+// GossipKey returns the AEAD key protecting gossip frames on the underlay.
+//
+// Separate from [Secret.DiscoveryKey] by label, so that a frame and an
+// announcement can never be decrypted with one another's key even though both
+// are reached from the same epoch secret. What it buys is the same thing the
+// blinded topics buy: a LAN or on-path observer sees opaque bytes rather than
+// the member set, and a revoked device loses the ability to read them at the
+// next epoch. It buys nothing about *integrity* — every record inside a frame
+// carries its own signatures, which is why docs/04-architecture.md can call
+// the transport untrusted by construction.
+func (s Secret) GossipKey(epoch uint64) [32]byte {
+	var out [32]byte
+	copy(out[:], s.derive(labelGossipKey, epoch, nil, len(out)))
+	return out
 }

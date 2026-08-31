@@ -1,6 +1,6 @@
 # 04 — Architecture
 
-Daemon: `wgp2pd`. CLI: `wgp2p`. (Working names.)
+Daemon: `juistd`. CLI: `juist`.
 
 ## Layering — what is trusted for what
 
@@ -186,8 +186,8 @@ What changes, layer by layer:
   and DNS handling so queries do not leak to the local resolver while the full tunnel
   is up. This is the bulk of the work and it is per-platform (Linux nftables + ip
   rules, FreeBSD pf, Android `VpnService` route/`allowBypass` config).
-- **CLI.** `wgp2p exit-node list / use <node> / off` for members; admin-side
-  `wgp2p route grant|revoke`, which emits a quorum-signed `SetNodeRoutes`.
+- **CLI.** `juist exit-node list / use <node> / off` for members; admin-side
+  `juist route grant|revoke`, which emits a quorum-signed `SetNodeRoutes`.
 
 Excluded even in v1.1: automatic exit-node selection, per-destination split tunneling
 beyond the LAN bypass, and exit-node chaining.
@@ -199,7 +199,7 @@ localhost TCP LocalAPI → RCE; NetBird GHSA-qcpp-8vwj-hhwr: 0666 unix socket �
 are the same lesson: **the local API is the most-exploited surface.** Rules:
 
 - **No TCP listener, ever.** IPC is a unix socket, mode 0600, owner root or a
-  dedicated group, in `/run/wgp2p/`; peer identity verified via `SO_PEERCRED`
+  dedicated group, in `/run/juist/`; peer identity verified via `SO_PEERCRED`
   (Linux) / `LOCAL_PEERCRED` (FreeBSD). Admin operations additionally require the
   CLI to hold the admin key — the daemon never holds admin signing keys.
 - **Privilege separation:** TUN creation + route/config in a small privileged helper

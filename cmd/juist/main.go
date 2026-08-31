@@ -1,4 +1,4 @@
-// Command wgp2p administers a wg-p2p membership log.
+// Command juist administers a juist membership log.
 //
 // M1 is the trust layer as a library, with no networking
 // (docs/05-roadmap.md), so this tool does everything locally: it creates a
@@ -9,11 +9,16 @@
 //
 // The signing ceremony looks like this:
 //
-//	wgp2p propose add-node -identity nid:… -wg wg:… -x25519 x25519:… -mlkem mlkem:… > add.rec
+//	juist propose add-node -identity nid:… -wg wg:… -x25519 x25519:… -mlkem mlkem:… > add.rec
 //	# hand add.rec to each admin in turn
-//	wgp2p sign add.rec
-//	wgp2p verify add.rec        # says what is still missing
-//	wgp2p apply add.rec
+//	juist sign add.rec
+//	juist verify add.rec        # says what is still missing
+//	juist apply add.rec
+//
+// From M2 there is also a daemon, juistd, which owns the log on a member
+// device and runs the mesh. When one is running, "juist apply" hands its
+// records to it rather than writing underneath it, and "juist status" reports
+// what it is doing.
 package main
 
 import (
@@ -22,38 +27,39 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nning/wg-p2p/trust/log"
-	"github.com/nning/wg-p2p/trust/store"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/trust/store"
 )
 
-const usage = `wgp2p administers a wg-p2p membership log.
+const usage = `juist administers a juist membership log.
 
 Usage:
-  wgp2p [-home DIR] <command> [flags]
+  juist [-home DIR] <command> [flags]
 
 Commands:
   init      Create a network (the genesis ceremony)
   key       Show this device's public keys, for an admin to enroll
   propose   Build an unsigned record
   sign      Add signatures from the local keystore to a record
+  status    Ask the local daemon what state it is in
   verify    Verify the stored log, or a record against it
   apply     Apply an authorized record to the local log
   log show  Print the chain and the current state
 
-Run "wgp2p <command> -h" for a command's flags.
+Run "juist <command> -h" for a command's flags.
 
-The home directory defaults to $WGP2P_HOME, or ~/.config/wgp2p.
+The home directory defaults to $JUIST_HOME, or ~/.config/juist.
 `
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "wgp2p: %v\n", err)
+		fmt.Fprintf(os.Stderr, "juist: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
-	global := flag.NewFlagSet("wgp2p", flag.ContinueOnError)
+	global := flag.NewFlagSet("juist", flag.ContinueOnError)
 	global.SetOutput(os.Stderr)
 	global.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	homePath := global.String("home", defaultHome(), "state directory")
@@ -80,6 +86,8 @@ func run(args []string) error {
 		return cmdPropose(h, cmdArgs)
 	case "sign":
 		return cmdSign(h, cmdArgs)
+	case "status":
+		return cmdStatus(h, cmdArgs)
 	case "verify":
 		return cmdVerify(h, cmdArgs)
 	case "apply":
@@ -104,13 +112,13 @@ type silentError struct{}
 func (silentError) Error() string { return "" }
 
 func defaultHome() string {
-	if v := os.Getenv("WGP2P_HOME"); v != "" {
+	if v := os.Getenv("JUIST_HOME"); v != "" {
 		return v
 	}
 	if dir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(dir, "wgp2p")
+		return filepath.Join(dir, "juist")
 	}
-	return ".wgp2p"
+	return ".juist"
 }
 
 // openAuthority opens the local log. It is deliberately not created on demand:
@@ -122,7 +130,7 @@ func (h *home) openAuthority() (*store.Dir, *log.Authority, error) {
 		return nil, nil, err
 	}
 	if auth == nil {
-		return nil, nil, fmt.Errorf("%s holds no network; create one with \"wgp2p init\" or join one",
+		return nil, nil, fmt.Errorf("%s holds no network; create one with \"juist init\" or join one",
 			h.join(logDir))
 	}
 	return st, auth, nil

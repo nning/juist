@@ -7,16 +7,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nning/wg-p2p/trust/log"
-	"github.com/nning/wg-p2p/types"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/types"
 )
 
-const proposeUsage = `Usage: wgp2p propose <record> [flags]
+const proposeUsage = `Usage: juist propose <record> [flags]
 
 Builds an unsigned record against the current head and writes it to stdout (or
 -o FILE). The record is checked against the current state as it is built, so a
 record that could never apply is refused before a signing ceremony is spent on
-it. Nothing is applied: collect signatures with "wgp2p sign", then "wgp2p apply".
+it. Nothing is applied: collect signatures with "juist sign", then "juist apply".
 
 Records:
   add-node        Admit a member
@@ -48,7 +48,7 @@ func cmdPropose(h *home, args []string) error {
 	}
 	b := auth.Builder()
 
-	fs := flag.NewFlagSet("wgp2p propose "+kind, flag.ContinueOnError)
+	fs := flag.NewFlagSet("juist propose "+kind, flag.ContinueOnError)
 	out := fs.String("o", "", "write the record here instead of stdout")
 
 	var aum types.AUM
@@ -214,7 +214,7 @@ func (h *home) proposeRotateKey(b *log.Builder) (types.AUM, error) {
 	if err != nil {
 		return types.AUM{}, err
 	}
-	aum, err := b.RotateNodeKey(staged.identity.Public(), staged.public, sealer())
+	aum, err := b.RotateNodeKey(staged.Identity.Public(), staged.Public, sealer())
 	if err != nil {
 		return types.AUM{}, err
 	}
@@ -230,7 +230,7 @@ func (h *home) proposeRotateIdentity(b *log.Builder) (types.AUM, error) {
 	if err != nil {
 		return types.AUM{}, err
 	}
-	aum, err := b.RotateIdentity(cur.identity.Public(), staged.identity.Public(), sealer())
+	aum, err := b.RotateIdentity(cur.Identity.Public(), staged.Identity.Public(), sealer())
 	if err != nil {
 		return types.AUM{}, err
 	}

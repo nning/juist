@@ -75,12 +75,12 @@ func ParseHash(s string) (Hash, error) {
 // digest of a different kind. The labels are versioned: a change in what is
 // hashed under a label is a new label, never a redefinition of an old one.
 const (
-	labelAUM         = "wg-p2p/aum/v1"
-	labelAUMSig      = "wg-p2p/aum-sig/v1"
-	labelAddr6       = "wg-p2p/addr6/v1"
-	labelULA         = "wg-p2p/ula/v1"
-	labelDisablement = "wg-p2p/disablement/v1"
-	labelEpochCommit = "wg-p2p/epoch-commit/v1"
+	labelAUM         = "juist/aum/v1"
+	labelAUMSig      = "juist/aum-sig/v1"
+	labelAddr6       = "juist/addr6/v1"
+	labelULA         = "juist/ula/v1"
+	labelDisablement = "juist/disablement/v1"
+	labelEpochCommit = "juist/epoch-commit/v1"
 )
 
 // errNULInLabel guards the invariant hashLabeled relies on.
