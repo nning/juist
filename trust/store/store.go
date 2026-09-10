@@ -1,17 +1,11 @@
-// Package store persists the membership log on disk.
+// Package store persists the membership log on disk. Three rules shape it:
 //
-// Three rules from docs/04-architecture.md shape it:
-//
-//   - Records are content-addressed. A record's file is named by its hash, and
-//     every read checks that the bytes still hash to the name. Nothing else can
-//     serve as an integrity check here, because the file is the only copy.
-//   - State that a decision depends on is fsynced before the decision is
-//     acted on. That covers the anchor and the epoch floor, which are the
-//     ratchets protecting against being walked backwards, and the records
-//     themselves.
-//   - Corruption makes the store refuse to open, with an error naming the file,
-//     and never repairs itself. A node that has lost its log must be recovered
-//     or re-enrolled; silently starting over would turn a disk fault into a
+//   - Records are content-addressed: a file is named by its hash, and every
+//     read checks the bytes still hash to the name.
+//   - State a decision depends on is fsynced before the decision is acted on —
+//     the records, the anchor and the epoch floor.
+//   - Corruption makes the store refuse to open, naming the file, and never
+//     repairs itself: silently starting over would turn a disk fault into a
 //     network with two histories.
 package store
 
@@ -35,6 +29,7 @@ const (
 	versionFile = "version"
 	anchorFile  = "anchor"
 	floorFile   = "epoch-floor"
+	schemaFile  = "schema-floor"
 	recordsDir  = "records"
 	recordExt   = ".cbor"
 
@@ -50,11 +45,9 @@ const (
 	fileMode fs.FileMode = 0o600
 )
 
-// A Dir is a [log.Storage] backed by a directory.
-//
-// Record bodies are not cached: the index holds hashes and parent links, and
-// bodies are read and re-verified on demand. Rereading costs a syscall and
-// removes any question of whether memory and disk agree.
+// A Dir is a [log.Storage] backed by a directory. Record bodies are not
+// cached: the index holds hashes and parent links, and bodies are read and
+// re-verified on demand, so memory and disk cannot disagree.
 type Dir struct {
 	path    string
 	records string
@@ -63,15 +56,14 @@ type Dir struct {
 	children map[types.Hash][]types.Hash
 	anchor   *types.Hash
 	floor    uint64
+
+	schemaFloor types.SchemaVersion
 }
 
 var _ log.Storage = (*Dir)(nil)
 
-// Open opens or creates a store at path.
-//
-// Every record file is read and verified against its name, so opening is where
-// corruption is caught. On a fresh directory the store is empty and the caller
-// proceeds to [log.Create] or [log.Bootstrap].
+// Open opens or creates a store at path. Every record file is read and
+// verified against its name, so opening is where corruption is caught.
 func Open(path string) (*Dir, error) {
 	if err := os.MkdirAll(path, dirMode); err != nil {
 		return nil, fmt.Errorf("store: creating %s: %w", path, err)
@@ -95,6 +87,9 @@ func Open(path string) (*Dir, error) {
 		return nil, err
 	}
 	if err := d.loadAnchor(); err != nil {
+		return nil, err
+	}
+	if err := d.loadSchemaFloor(); err != nil {
 		return nil, err
 	}
 	if err := d.loadFloor(); err != nil {
@@ -139,27 +134,15 @@ func (d *Dir) loadIndex() error {
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), recordExt) {
-			// Leftover temporary files from an interrupted write are the
-			// expected case here; they are named with a distinct prefix and
-			// are safe to remove. Both prefixes are swept: tempPrefix is what
-			// Add stages under now, and tmpPrefix is what it staged under
-			// before, by way of writeFileSync. A store written by an older
-			// build can hold either, and neither must be able to keep this
-			// one from opening.
+			// Leftovers from an interrupted write. Both prefixes are swept:
+			// a store written by an older build can hold either, and neither
+			// must keep this one from opening.
 			if strings.HasPrefix(e.Name(), tempPrefix) || strings.HasPrefix(e.Name(), tmpPrefix) {
-				// Skipped, not removed. Opening a store is not an exclusive
-				// operation — every juist command does it, including the
-				// read-only ones, while a daemon may be mid-Add on the same
-				// directory — and deleting a file another process is between
-				// writeSync and Rename on fails its publish. Because Inform
-				// is atomic, one deleted file rejects the whole batch it
-				// belonged to, so a "juist log" would silently cost a daemon
-				// an arriving revocation.
-				//
-				// What must not happen is a file like this making the store
-				// unopenable, and skipping it achieves that on its own. The
-				// sweep belongs to the writer instead ([Dir.Add]), which is
-				// the process entitled to decide a staged file is debris.
+				// Skipped, not removed: opening is not exclusive, and
+				// deleting a file another process is between writeSync and
+				// Rename on fails its publish — which, Inform being atomic,
+				// costs it the whole batch. Skipping is enough to keep the
+				// store openable; sweeping belongs to the writer.
 				continue
 			}
 			return fmt.Errorf("store: %s contains an unexpected entry %q",
@@ -231,12 +214,9 @@ func (d *Dir) Children(h types.Hash) ([]types.Hash, error) {
 	return slices.Clone(d.children[h]), nil
 }
 
-// Prefixes that name a file which is not a record: an in-progress write,
-// recognizable and removable rather than mistaken for a record. tempPrefix is
-// what Add stages under; tmpPrefix is what writeFileSync replaces through.
-// Both are tolerated by loadIndex and swept by [Dir.Add], because a file left
-// under either is the normal residue of a crash and must not make the store
-// unopenable — while a file left by a *live* writer must not be removed at all.
+// Prefixes naming a file that is not a record: an in-progress write.
+// tempPrefix is what Add stages under, tmpPrefix what writeFileSync replaces
+// through. Both are tolerated by loadIndex and swept by [Dir.Add].
 const (
 	tempPrefix = ".incoming-"
 	tmpPrefix  = ".tmp-"
@@ -249,14 +229,11 @@ type staged struct {
 	temp string
 }
 
-// Add writes records durably.
-//
-// Every file is written and fsynced before any of them is renamed into place,
-// so a crash cannot leave a half-written record under a name that claims to
-// hash to it. A crash between renames can leave part of the batch stored, which
-// is safe by construction: a record whose parent is missing does not descend
-// from the anchor, so chain resolution never looks at it, and the sender will
-// offer it again.
+// Add writes records durably: every file is written and fsynced before any is
+// renamed into place, so a crash cannot leave a half-written record under a
+// name claiming to hash to it. A crash between renames can store part of a
+// batch, which is safe — a record whose parent is missing does not descend
+// from the anchor, so resolution never looks at it.
 func (d *Dir) Add(aums ...types.AUM) error {
 	var pending []staged
 	cleanup := func() {
@@ -291,10 +268,8 @@ func (d *Dir) Add(aums ...types.AUM) error {
 			return fmt.Errorf("store: publishing record %v: %w", s.hash, err)
 		}
 	}
-	// Debris from an interrupted write is swept here rather than at open:
-	// this process is the one writing, so a staged file it does not own is
-	// residue rather than somebody's write in flight. Failures are ignored —
-	// a file that cannot be removed is inert, since loadIndex skips it.
+	// Swept here rather than at open: this process is the writer, so a staged
+	// file it does not own is residue rather than a write in flight.
 	d.sweepStaged(pending)
 	// The renames are only durable once the directory entry is.
 	if len(pending) > 0 {
@@ -406,6 +381,39 @@ func (d *Dir) loadFloor() error {
 
 func (d *Dir) EpochFloor() (uint64, error) { return d.floor, nil }
 
+func (d *Dir) loadSchemaFloor() error {
+	name := filepath.Join(d.path, schemaFile)
+	b, err := os.ReadFile(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: reading %s: %w", name, err)
+	}
+	v, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 16)
+	if err != nil {
+		return fmt.Errorf("store: %s does not hold a schema version: %w", name, err)
+	}
+	d.schemaFloor = types.SchemaVersion(v)
+	return nil
+}
+
+func (d *Dir) SchemaFloor() (types.SchemaVersion, error) { return d.schemaFloor, nil }
+
+// SetSchemaFloor raises the schema floor and fsyncs, for the same reason
+// [Dir.SetEpochFloor] does: a ratchet that does not survive a crash is not one.
+func (d *Dir) SetSchemaFloor(v types.SchemaVersion) error {
+	if v <= d.schemaFloor {
+		return nil
+	}
+	name := filepath.Join(d.path, schemaFile)
+	if err := writeFileSync(name, []byte(strconv.FormatUint(uint64(v), 10)+"\n")); err != nil {
+		return err
+	}
+	d.schemaFloor = v
+	return nil
+}
+
 // SetEpochFloor raises the floor and fsyncs before returning. Its entire
 // purpose is to survive a crash, so an unsynced write would defeat it.
 func (d *Dir) SetEpochFloor(epoch uint64) error {
@@ -421,15 +429,9 @@ func (d *Dir) SetEpochFloor(epoch uint64) error {
 }
 
 // checkNotSharedWritable refuses a store directory that group or other can
-// write to.
-//
-// The log itself is not secret — every member holds it — so readability is not
-// the concern. Writability is: the anchor and the epoch floor are the ratchets
-// that stop this node being walked back past a checkpoint or an epoch it has
-// seen, and anyone who can write here can lower them. Directories this package
-// creates are 0700; one it inherits is checked rather than silently changed,
-// because a store path is caller-supplied and quietly tightening the mode of
-// somebody's home directory is worse than refusing.
+// write to. The log is not secret, but anyone who can write here can lower the
+// anchor or the epoch floor. An inherited directory is refused rather than
+// silently tightened.
 func checkNotSharedWritable(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -444,14 +446,9 @@ func checkNotSharedWritable(path string) error {
 }
 
 // writeSync writes a file and fsyncs its contents, without the intermediate
-// rename [writeFileSync] does.
-//
-// Add stages record bodies with it. Staging them through writeFileSync instead
-// would put a second temporary name in the records directory for every record
-// written, and a crash in that window leaves a file under a prefix that is not
-// the one Add's own cleanup is written around — which is how an interrupted
-// write turns into a store that will not open. The rename Add does afterwards
-// is what publishes the record, so there is nothing for a second one to add.
+// rename [writeFileSync] does. Add stages record bodies with it, so a crash
+// leaves debris under the one prefix Add's cleanup knows; Add's own rename is
+// what publishes the record.
 func writeSync(name string, body []byte) error {
 	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
 	if err != nil {
@@ -516,12 +513,8 @@ func fsyncDir(dir string) error {
 }
 
 // sweepStaged removes staged files left by an interrupted write, skipping the
-// ones this call just published.
-//
-// Called from [Dir.Add], which is the only context entitled to make the
-// judgement: a process writing to this store is the store's writer, and a
-// second concurrent writer is a configuration error the CLI refuses to become
-// (it hands records to a running daemon rather than writing underneath it).
+// ones this call just published. Called only from [Dir.Add]: a second
+// concurrent writer is a configuration error the CLI refuses to become.
 func (d *Dir) sweepStaged(published []staged) {
 	entries, err := os.ReadDir(d.records)
 	if err != nil {

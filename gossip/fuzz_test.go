@@ -50,15 +50,10 @@ func seedFrames(f *testing.F) {
 	f.Add([]byte{0})
 }
 
-// FuzzDecodeFrame is the gossip frame-parser target docs/06-verification.md
-// schedules for M2. It asserts injectivity rather than only the absence of
-// crashes: a frame that decodes must re-encode to the same bytes.
-//
-// Injectivity matters here for the same reason it does in the record decoder,
-// one level down. An endpoint announcement's signature covers its canonical
-// encoding, and announcements are nested inside frames — so if a frame had two
-// spellings, a relay could respell an announcement it forwards and the
-// signature would verify over bytes its author never produced.
+// FuzzDecodeFrame asserts injectivity rather than only the absence of crashes:
+// a frame that decodes must re-encode to the same bytes. Announcements nest
+// inside frames and their signatures cover their encoding, so a second
+// spelling would let a relay respell what it forwards.
 func FuzzDecodeFrame(f *testing.F) {
 	seedFrames(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -119,13 +114,10 @@ func FuzzDecodeEndpoint(f *testing.F) {
 	})
 }
 
-// FuzzOpenFrame drives the sealed-frame parser — the length, epoch and nonce
-// handling that runs before any key is applied, and the AEAD below it.
-//
-// The keyring is fixed and the fuzzer does not hold its secret, so essentially
-// everything is expected to be rejected. The assertion is that rejection is
-// what happens: nothing here may panic, and nothing may open without
-// authenticating.
+// FuzzOpenFrame drives the sealed-frame parser: the length, epoch and nonce
+// handling before any key is applied, and the AEAD below it. The fuzzer does
+// not hold the keyring's secret, so the assertion is that everything is
+// rejected without panicking.
 func FuzzOpenFrame(f *testing.F) {
 	var s secrets.Secret
 	for i := range s {

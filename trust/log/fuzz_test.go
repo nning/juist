@@ -6,19 +6,13 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// FuzzChainValidate is the chain-validator target docs/06-verification.md
-// schedules for M1. Raw bytes are decoded into records and offered to a real
-// authority, which models the only way records ever arrive: from an untrusted
-// transport, in whatever shape the sender chose.
+// FuzzChainValidate offers raw bytes, decoded into records, to a real
+// authority — the only way records ever arrive. The invariants:
 //
-// The assertions are the invariants that must hold no matter what arrives:
-//
-//   - no panic — a panic reachable from a gossiped record is a denial of
-//     service against every member;
-//   - a rejected batch changes nothing, so a hostile sender cannot move the
-//     head or the epoch by sending something that fails halfway;
+//   - no panic, which from a gossiped record would be a denial of service;
+//   - a rejected batch changes nothing;
 //   - the epoch never goes backwards;
-//   - whatever state is reached, reopening the store reproduces it.
+//   - reopening the store reproduces whatever state is reached.
 func FuzzChainValidate(f *testing.F) {
 	for _, seed := range chainSeeds(f) {
 		f.Add(seed)
@@ -61,10 +55,9 @@ func FuzzChainValidate(f *testing.F) {
 	})
 }
 
-// fuzzHarness is a minimal fixed network. It cannot use the main harness,
-// which needs *testing.T for its fatal paths and fresh keys per call; a fuzz
-// target needs the same network on every exec so that a failing input
-// reproduces.
+// fuzzHarness is a minimal fixed network: the main harness needs *testing.T
+// and draws fresh keys, while a fuzz target needs the same network on every
+// exec so a failing input reproduces.
 type fuzzHarness struct {
 	storage *MemStorage
 	auth    *Authority

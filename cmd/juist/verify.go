@@ -24,7 +24,7 @@ without applying anything.
 `)
 	}
 	if err := fs.Parse(args); err != nil {
-		return errSilent
+		return parseResult(err)
 	}
 
 	st, auth, err := h.openAuthority()

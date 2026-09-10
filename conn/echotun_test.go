@@ -14,19 +14,10 @@ import (
 )
 
 // echoTUN is a test-only tun.Device that answers ICMPv4 and ICMPv6 echo
-// requests and drops every other packet. It stands in for a host network
-// stack, which the engine's RespondToPing scaffolding cannot: that helper
-// (wgengine's echoRespondToAll) calls ICMP4Header unconditionally and panics
-// on an ICMPv6 echo, so v6 overlay reachability can only be asserted with a
-// device like this one.
-//
-// Unlike RespondToPing — which injects the reply directly into the engine,
-// after the inbound filter but before the TUN — this device sits below the
-// tstun.Wrapper, so the echo request traverses the full inbound path
-// (WireGuard decrypt, source check, packet filter, Wrapper.Write) and the
-// reply traverses the full outbound path (Wrapper.Read, outbound filter,
-// WireGuard encrypt). That makes it a slightly stronger reachability probe
-// than the scaffolding it replaces.
+// requests and drops everything else. The engine's RespondToPing scaffolding
+// cannot stand in for it: that helper panics on an ICMPv6 echo. Sitting below
+// the tstun.Wrapper also makes it a stronger probe, since the request and
+// reply traverse the full inbound and outbound paths.
 type echoTUN struct {
 	events  chan tun.Event
 	replies chan []byte // marshaled IP packets waiting to be Read
@@ -63,9 +54,8 @@ func (d *echoTUN) Close() error {
 }
 
 // Read blocks until an echo reply is queued or the device is closed. The
-// packet is written at bufs[i][offset:], per the tun.Device contract; the
-// caller (tstun.Wrapper.pollVector) reserves offset bytes of headroom for
-// WireGuard's transport header.
+// packet goes at bufs[i][offset:], per the tun.Device contract: the caller
+// reserves that headroom for WireGuard's transport header.
 func (d *echoTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	select {
 	case pkt := <-d.replies:
@@ -79,10 +69,9 @@ func (d *echoTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	}
 }
 
-// Write receives the packets the engine delivers to the "host": each begins
-// at bufs[i][offset:]. Echo requests of either family are answered with the
-// mirrored reply; everything else is silently dropped, like a host with no
-// listeners.
+// Write receives the packets the engine delivers to the "host", each at
+// bufs[i][offset:]. Echo requests of either family are mirrored back;
+// everything else is dropped, like a host with no listeners.
 func (d *echoTUN) Write(bufs [][]byte, offset int) (int, error) {
 	select {
 	case <-d.closed:
@@ -134,9 +123,8 @@ func newEchoNode(t *testing.T, id uint64, v4, v6 string) *node {
 }
 
 // TestTwoNodeOverlayPingBothFamilies asserts overlay reachability on both
-// address families: two nodes whose TUNs echo ICMP answer each other's pings
-// on the v4 and the v6 overlay address, direct-only. The v6 address goes
-// first so it is the one that primes disco and the WireGuard handshake.
+// families, direct-only. The v6 address goes first, so it is the one that
+// primes disco and the handshake.
 func TestTwoNodeOverlayPingBothFamilies(t *testing.T) {
 	a := newEchoNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newEchoNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")

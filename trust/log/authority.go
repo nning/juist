@@ -1,54 +1,18 @@
 // Package log implements the membership log: the hash-chained, admin-signed
 // record of who belongs to the network, fully replicated and independently
-// verified by every node.
+// verified by every node. It is the largest piece of the trusted computing
+// base. Everything below it can delay or deny connectivity but never change
+// who is a member, since records are self-certifying.
 //
-// It is the largest piece of the trusted computing base
-// (docs/04-architecture.md). Everything below it — gossip, the DHT, mDNS,
-// relays, magicsock — can delay or deny connectivity but can never change who
-// is a member: records are self-certifying, so the transport that moves them
-// is untrusted by construction.
+// The design generalizes Tailscale's tailnet key authority (see
+// docs/08-trust-layer-notes.md). With no coordination server to order the log,
+// this package also supplies deterministic fork choice, a fork alarm, and a
+// node-local anchor and epoch floor so a node cannot be walked backwards.
 //
-// # What is taken from tka, and what is not
-//
-// The design generalizes Tailscale's tailnet key authority, whose Go
-// implementation is production-tested and BSD-3 licensed
-// (docs/03-control-plane-options.md picks it as option E). Taken from it: the
-// hash-chained record with a fixed canonical encoding, keys carrying vote
-// weights with the policy checked at verification time rather than in
-// threshold crypto, checkpoints as quorum-signed compactions, pre-committed
-// break-glass preimages, and the discipline for evolving the schema.
-//
-// Not taken: the code. tka's record set describes a *key* authority — which
-// keys may vouch for node keys — and authorizes a change on a single trusted
-// signature, leaving ordering and distribution to the coordination server it
-// was built to distrust for everything else. This log instead holds the
-// members themselves, requires k-of-n on every change, and has to supply the
-// ordering and anti-fork machinery tka gets from a server:
-//
-//   - deterministic fork choice, so every node picks the same chain;
-//   - a fork alarm, so a fork that cannot be resolved deterministically is
-//     escalated to an operator rather than papered over;
-//   - a node-local anchor and epoch floor, so a node cannot be walked
-//     backwards past a checkpoint it holds or an epoch it has seen.
-//
-// That is the new security-critical code docs/03-control-plane-options.md
-// predicted would have to be written and audited.
-//
-// # Fork choice, and its limits
-//
-// Two records with the same parent are siblings; a linear chain can keep only
-// one. The choice is deterministic so that every honest node reaches the same
-// chain from the same records: a revocation beats a non-revocation ("revoked
-// wins", the safety bias), and otherwise the lower record hash wins.
-//
-// The loser is not lost, but it is not applied either: its author has to
-// reissue it against the new head. Where that reissue would fail — the two
-// branches disagree about the same member, or the orphaned branch contains a
-// revocation that would vanish — the fork is a genuine conflict, and this
-// package raises a persistent alarm instead of choosing. Nothing prevents a
-// colluding quorum from creating such a fork in the first place; cross-gossiped
-// heads expose it after the fact, and global consensus is the only thing that
-// would prevent it (docs/02-threat-model.md, residual weakness 3).
+// Fork choice: of two records with the same parent, a revocation wins, and
+// otherwise the lower hash. The loser is kept but not applied, and its author
+// reissues it against the new head; where that would fail, the fork is a
+// genuine conflict and this package alarms rather than choosing.
 package log
 
 import (
@@ -84,8 +48,7 @@ type Orphan struct {
 
 // An Alarm is a condition an operator has to resolve. While one is raised,
 // [Authority.TrustedState] refuses to hand out membership state: a node that
-// cannot tell who is a member must not guess, and the fail-closed direction is
-// the one that does not admit a revoked device.
+// cannot tell who is a member must not guess.
 type Alarm struct {
 	// Forks are the conflicting branches.
 	Forks []Orphan
@@ -104,14 +67,10 @@ func (a *Alarm) Error() string {
 	return b.String()
 }
 
-// A RollbackError reports a set of records that would have moved this node to
-// a chain with a lower group-secret epoch than one it has already adopted.
-//
-// Nothing is stored when this is returned. Reaching an older epoch through
-// records that are individually valid takes admin signatures, so this is what
-// a quorum rewriting history looks like from a node that saw the earlier
-// version — the case docs/02-threat-model.md accepts cannot be prevented, only
-// detected and refused.
+// A RollbackError reports records that would have moved this node to a chain
+// with a lower group-secret epoch than one it has adopted. Nothing is stored.
+// Reaching an older epoch through individually valid records takes admin
+// signatures, so this is what a quorum rewriting history looks like.
 type RollbackError struct {
 	// Floor is the highest epoch this node has adopted.
 	Floor uint64
@@ -131,32 +90,54 @@ func (e *RollbackError) Error() string {
 		e.Floor, e.Offered)
 }
 
-// An Authority is a node's view of the membership log.
+// A SchemaTooNewError reports that a quorum has moved the network to a record
+// schema this build does not implement. It is not a refusal of the record —
+// the record is authorized and the network really has moved — but a statement
+// that this node stops here. Nothing after it can be interpreted: a later
+// record may carry a kind or a field this build has never heard of, and acting
+// on the part it understands is the split view the closed record set exists to
+// prevent.
 //
-// Not safe for concurrent use; callers that share one serialize access. The
-// reconciler that will drive the data plane from it (M2) is a single loop by
-// design.
+// Unlike a fork alarm this does not withdraw membership state. The state the
+// node holds was correct up to the upgrade, and tearing every tunnel down the
+// moment an admin raises the schema would turn a planned change into an
+// outage. What bounds how long that state may be acted on is the freshness
+// TTL, which is M4's.
+type SchemaTooNewError struct {
+	// Version is the schema the network moved to, Implemented the newest this
+	// build can act on, and At the record that made the change.
+	Version     types.SchemaVersion
+	Implemented types.SchemaVersion
+	At          types.Hash
+}
+
+func (e *SchemaTooNewError) Error() string {
+	return fmt.Sprintf(
+		"log: the network moved to %v in record %v and this build implements %v; "+
+			"this device holds the state up to that record and can apply nothing after it — "+
+			"install a newer juist",
+		e.Version, e.At, e.Implemented)
+}
+
+// An Authority is a node's view of the membership log. Not safe for concurrent
+// use; callers that share one serialize access.
 type Authority struct {
 	storage Storage
 	anchor  types.Hash
 	state   *State
 	orphans []Orphan
 	alarm   *Alarm
+	tooNew  *SchemaTooNewError
 
 	// reachable is the set of records the last adopted resolution covered.
 	// Anything stored and absent from it is a leftover from an interrupted
-	// compaction: harmless, since resolution never looks at it, and removed
-	// by the next Compact.
+	// compaction, harmless and removed by the next Compact.
 	reachable map[types.Hash]bool
 }
 
 // Create initializes a new network from a genesis record and makes it the
-// anchor.
-//
-// The storage must be empty. Refusing to re-genesis over existing state is
-// deliberate (docs/04-architecture.md): a node that has lost its log must be
-// recovered or re-enrolled, never quietly promoted to the founder of a new
-// network that happens to share its name.
+// anchor. The storage must be empty: a node that has lost its log must be
+// recovered or re-enrolled, never promoted to the founder of a new network.
 func Create(st Storage, genesis types.AUM) (*Authority, error) {
 	if _, ok, err := st.Anchor(); err != nil {
 		return nil, err
@@ -186,13 +167,10 @@ func Create(st Storage, genesis types.AUM) (*Authority, error) {
 }
 
 // Bootstrap initializes a node from a quorum-signed checkpoint, for joining a
-// network whose history this node does not have.
-//
-// The checkpoint's signatures are checked against the admin keys it declares,
-// which is the one place this package takes history on the signers' word —
-// there is no ancestry to check it against. A node that later receives the
-// ancestry verifies the checkpoint against the state the chain produces, and a
-// checkpoint that does not match is rejected there.
+// network whose history this node does not have. Its signatures are checked
+// against the admin keys it declares — the one place this package takes
+// history on the signers' word, there being no ancestry to check. A node that
+// later receives the ancestry re-verifies it against what the chain produces.
 func Bootstrap(st Storage, checkpoint types.AUM) (*Authority, error) {
 	if _, ok, err := st.Anchor(); err != nil {
 		return nil, err
@@ -237,6 +215,9 @@ func Open(st Storage) (*Authority, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkFloors(st, res); err != nil {
+		return nil, err
+	}
 	floor, err := st.EpochFloor()
 	if err != nil {
 		return nil, err
@@ -253,19 +234,38 @@ func Open(st Storage) (*Authority, error) {
 	if err := st.SetEpochFloor(res.state.epoch); err != nil {
 		return nil, err
 	}
+	if err := st.SetSchemaFloor(res.state.schema); err != nil {
+		return nil, err
+	}
 	return a, nil
 }
 
-// Inform verifies records, stores them, and re-resolves the chain.
-//
-// Records are accepted from any transport: they carry their own proof, so
-// gossip, an enrollment channel or a DHT pointer are all equally (un)trusted
-// (docs/04-architecture.md). Order them oldest first — every record's parent
-// must already be stored or appear earlier in the batch.
-//
-// Either the whole batch is stored or none of it is. Nothing is stored unless
-// every record in it turned out to be a verified, reachable part of the
-// resulting chain or of a branch off it.
+// checkFloors refuses a resolution that sits below a ratchet this node has
+// already adopted. The schema floor is checked before the epoch one because a
+// build too old for the network resolves to whatever came before the upgrade,
+// and reporting that as a rollback would send an operator looking for a
+// compromised quorum instead of for a newer binary.
+func checkFloors(st Storage, res *resolution) error {
+	schemaFloor, err := st.SchemaFloor()
+	if err != nil {
+		return err
+	}
+	if res.state.schema < schemaFloor {
+		if res.tooNew != nil {
+			return res.tooNew
+		}
+		return fmt.Errorf(
+			"log: the chain resolves to %v but this node has adopted %v; "+
+				"a schema is raised by a quorum-signed record and never lowered, "+
+				"so treat this as a fork or a compromised quorum",
+			res.state.schema, schemaFloor)
+	}
+	return nil
+}
+
+// Inform verifies records, stores them, and re-resolves the chain. Records are
+// accepted from any transport, since they carry their own proof; order them
+// oldest first. Either the whole batch is stored or none of it is.
 func (a *Authority) Inform(aums ...types.AUM) error {
 	if len(aums) == 0 {
 		return nil
@@ -282,44 +282,71 @@ func (a *Authority) Inform(aums ...types.AUM) error {
 	if err != nil {
 		return err
 	}
-	// Every offered record has to have been verified during resolution.
-	// A record whose parent is unknown is unreachable from the anchor, and
-	// accepting it into storage would leave a dangling record that a later
-	// resolution would never look at — a quiet way to be told nothing.
-	for i := range pending {
-		h := pending[i].Hash()
-		if !res.reachable[h] {
-			return fmt.Errorf(
-				"log: record %v (%v) does not descend from this node's anchor %v; "+
-					"send its ancestors first", h, pending[i].Kind, a.anchor)
+	// Every offered record must have been verified during resolution: one
+	// whose parent is unknown is unreachable from the anchor, and storing it
+	// would leave a dangling record no later resolution looks at.
+	//
+	// A chain that stopped at an unreadable schema is the exception. Records
+	// past the stop point are unverifiable rather than dangling, so they are
+	// dropped from the batch instead of failing it: failing it would also
+	// discard the upgrade record, and the node would see nothing but sync
+	// going quiet.
+	if res.tooNew != nil {
+		kept := pending[:0]
+		for i := range pending {
+			if res.reachable[pending[i].Hash()] {
+				kept = append(kept, pending[i])
+			}
 		}
+		pending = kept
+		if len(pending) == 0 {
+			a.adopt(res)
+			return nil
+		}
+	} else {
+		for i := range pending {
+			h := pending[i].Hash()
+			if !res.reachable[h] {
+				return fmt.Errorf(
+					"log: record %v (%v) does not descend from this node's anchor %v; "+
+						"send its ancestors first", h, pending[i].Kind, a.anchor)
+			}
+		}
+	}
+	if err := checkFloors(a.storage, res); err != nil {
+		return err
 	}
 	floor, err := a.storage.EpochFloor()
 	if err != nil {
 		return err
 	}
-	if res.state.epoch < floor {
+	// A chain this build stopped early on resolves to whatever preceded the
+	// upgrade, which is legitimately below the floor: the records are
+	// authorized and storing them is right, since they are what a newer build
+	// will resume from and what peers still need relayed.
+	if res.state.epoch < floor && res.tooNew == nil {
 		return &RollbackError{Floor: floor, Offered: res.state.epoch, Records: pending}
 	}
 	if err := a.storage.Add(pending...); err != nil {
 		return err
 	}
-	// Re-resolve from storage rather than adopting the overlay's result. The
-	// overlay says what *would* happen if the records were stored; only this
-	// says what storage can actually reproduce. A store that dropped part of
-	// the batch — a crash mid-write, a full disk — must not leave the epoch
-	// floor raised above a chain it can no longer produce, because that is a
-	// node that refuses to start.
+	// Re-resolve from storage rather than adopting the overlay's result: only
+	// this says what storage can reproduce. A store that dropped part of the
+	// batch must not leave the epoch floor above a chain it cannot produce,
+	// which is a node that refuses to start.
 	committed, err := resolve(a.storage, a.anchor)
 	if err != nil {
 		return fmt.Errorf("log: re-reading the chain after storing records: %w", err)
 	}
-	if committed.state.epoch < floor {
+	if committed.state.epoch < floor && committed.tooNew == nil {
 		return fmt.Errorf(
 			"log: after storing records the chain resolves to epoch %d, below the adopted %d; "+
 				"storage did not durably accept the batch", committed.state.epoch, floor)
 	}
 	if err := a.storage.SetEpochFloor(committed.state.epoch); err != nil {
+		return err
+	}
+	if err := a.storage.SetSchemaFloor(committed.state.schema); err != nil {
 		return err
 	}
 	a.adopt(committed)
@@ -330,6 +357,7 @@ func (a *Authority) adopt(res *resolution) {
 	a.state = res.state
 	a.orphans = res.orphans
 	a.reachable = res.reachable
+	a.tooNew = res.tooNew
 	var conflicts []Orphan
 	for _, o := range res.orphans {
 		if o.Conflict != "" {
@@ -355,11 +383,7 @@ func (a *Authority) Anchor() types.Hash { return a.anchor }
 func (a *Authority) State() *State { return a.state }
 
 // TrustedState returns the authority state, or an error while an alarm is
-// raised.
-//
-// This is the accessor anything that grants access must use — building a peer
-// set, answering "is this node a member". Failing closed on an unresolved fork
-// is the same trade docs/02-threat-model.md makes for freshness: where
+// raised. This is the accessor anything that grants access must use: where
 // security and availability conflict, deny.
 func (a *Authority) TrustedState() (*State, error) {
 	if a.alarm != nil {
@@ -368,8 +392,13 @@ func (a *Authority) TrustedState() (*State, error) {
 	return a.state, nil
 }
 
-// Alarm returns the current alarm, or nil.
+// Alarm returns the current fork alarm, or nil.
 func (a *Authority) Alarm() *Alarm { return a.alarm }
+
+// SchemaAlarm reports that the network has moved to a record schema this build
+// does not implement, or nil. It does not gate [Authority.TrustedState]: see
+// [SchemaTooNewError] for why the state a node already holds stays usable.
+func (a *Authority) SchemaAlarm() *SchemaTooNewError { return a.tooNew }
 
 // Orphans returns every branch that lost fork choice, including the benign
 // ones whose records only need reissuing.
@@ -401,17 +430,18 @@ func (a *Authority) Chain() ([]types.Hash, error) {
 }
 
 // Compact advances the anchor to the newest checkpoint on the active chain and
-// deletes everything the new anchor cannot reach, returning the number of
-// records removed.
-//
-// Advancing the anchor is also a ratchet: a chain that does not descend from
-// it is not considered at all afterwards, which is what "never drop a
-// checkpoint you hold" means in practice. Compaction is refused while an alarm
-// is raised — discarding history is the last thing to do with an unresolved
-// fork.
+// deletes what the new anchor cannot reach, returning how many were removed.
+// The anchor is a ratchet: afterwards a chain that does not descend from it is
+// not considered at all. Refused while either alarm is raised: a schema this
+// build cannot read leaves records above the chain's end, and compaction
+// deletes what the anchor cannot reach — which is exactly the records a newer
+// build would need to resume from.
 func (a *Authority) Compact() (int, error) {
 	if a.alarm != nil {
 		return 0, a.alarm
+	}
+	if a.tooNew != nil {
+		return 0, a.tooNew
 	}
 	res, err := resolve(a.storage, a.anchor)
 	if err != nil {
@@ -466,15 +496,16 @@ type resolution struct {
 	state     *State
 	orphans   []Orphan
 	reachable map[types.Hash]bool
+
+	// tooNew is set when the walk stopped at an authorized schema upgrade
+	// this build cannot implement. The state is the one before it.
+	tooNew *SchemaTooNewError
 }
 
-// resolve computes the active chain and the branches off it.
-//
-// It is a pure function of the records reachable from the anchor: no clock, no
-// randomness, no dependence on the order records arrived or the order storage
-// returns children in. That is what makes two nodes holding the same records
-// reach the same state, which docs/06-verification.md asserts as a
-// determinism test.
+// resolve computes the active chain and the branches off it. It is a pure
+// function of the records reachable from the anchor — no clock, no randomness,
+// no dependence on arrival or storage order — which is what makes two nodes
+// holding the same records reach the same state.
 func resolve(r reader, anchor types.Hash) (*resolution, error) {
 	anchorAUM, err := r.AUM(anchor)
 	if err != nil {
@@ -551,6 +582,19 @@ func resolve(r reader, anchor types.Hash) (*resolution, error) {
 		}
 		next, err := state.apply(&primary.aum, primary.hash, applyChain)
 		if err != nil {
+			var tooNew *SchemaTooNewError
+			if errors.As(err, &tooNew) {
+				// The chain ends here for this build. The record itself is
+				// authorized and reachable, so it is kept and relayed — a
+				// node that cannot apply a record must still not swallow the
+				// one that explains why. What follows it is not: this build
+				// does not know the rules those records are judged by, and
+				// storing unverified records would let any member fill a
+				// stopped node's disk.
+				res.reachable[primary.hash] = true
+				res.tooNew = tooNew
+				break
+			}
 			return nil, fmt.Errorf("log: applying record %v (%v): %w",
 				primary.hash, primary.aum.Kind, err)
 		}
@@ -583,14 +627,10 @@ type candidate struct {
 	aum  types.AUM
 }
 
-// pickPrimary applies fork choice to a set of valid siblings.
-//
-// A revocation beats anything else, so a removal is never the branch that gets
-// orphaned; otherwise the lower hash wins, which is arbitrary but identical
-// everywhere. Deliberately *not* part of the rule: signature weight, which tka
-// uses. Every change here already needs quorum, so weight would only let one
-// quorum outbid another by collecting extra signatures — a tie-break that
-// invites grinding and explains nothing to an operator reading the log.
+// pickPrimary applies fork choice to a set of valid siblings: a revocation
+// beats anything else, otherwise the lower hash wins. Signature weight is
+// deliberately not part of the rule — every change already needs quorum, so
+// weight would only let one quorum outbid another by collecting extras.
 func pickPrimary(candidates []candidate) candidate {
 	best := candidates[0]
 	for _, c := range candidates[1:] {
@@ -608,14 +648,10 @@ func pickPrimary(candidates []candidate) candidate {
 }
 
 // walkOrphan verifies a branch that lost fork choice and decides whether it
-// merely needs reissuing or genuinely conflicts.
-//
-// Two states are carried down the branch. branch is the real state along it,
-// which every record must verify against — a branch full of unauthorized
-// records is a corrupt store, not a fork. probe is the state that results from
-// replaying the branch's substance onto the chain that won; where that fails,
-// the two branches disagree about something concrete and no deterministic rule
-// should be picking between them.
+// merely needs reissuing or genuinely conflicts. Two states are carried down
+// it: branch, which every record must verify against, since a branch of
+// unauthorized records is a corrupt store rather than a fork; and probe, the
+// result of replaying the branch's substance onto the chain that won.
 func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget *int, reachable map[types.Hash]bool) error {
 	if *budget <= 0 {
 		if o.Conflict == "" {
@@ -642,10 +678,8 @@ func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget 
 	var nextProbe *State
 	switch {
 	case aum.Kind.IsRevocation():
-		// A revocation on a branch that lost is the one outcome fork choice
-		// must never produce silently: the whole point of the bias is that a
-		// removal is not quietly dropped. It can only get here below a
-		// sibling that also won on that bias, i.e. in a genuine fork.
+		// A revocation on a losing branch is what the bias exists to prevent;
+		// it can only get here below a sibling that also won on that bias.
 		if o.Conflict == "" {
 			o.Conflict = fmt.Sprintf("record %v revokes %s and would be discarded", h, revocationSubject(&aum))
 		}

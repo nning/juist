@@ -10,14 +10,9 @@ import (
 )
 
 // TestFilterCarriesAllProtocols pins the v1 packet policy: any member may send
-// any traffic to any other member (per-port ACLs are a post-v1 item, see
-// docs/01-requirements.md).
-//
-// The trap this guards is specific. The filter is built from a
-// tailcfg.FilterRule, and an empty IPProto there does not mean "any" — it
-// defaults to TCP, UDP and ICMP only, and Match.IPProto is a membership test
-// that silently rejects anything absent. A mesh VPN that quietly drops ESP or
-// GRE is broken in a way no ping test would ever reveal.
+// any traffic to any other member. An empty IPProto does not mean "any" — it
+// defaults to TCP, UDP and ICMP — and a mesh VPN that quietly drops ESP or GRE
+// is broken in a way no ping test reveals.
 func TestFilterCarriesAllProtocols(t *testing.T) {
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
@@ -87,11 +82,9 @@ func TestFilterRejectsNonMembers(t *testing.T) {
 }
 
 // ipv4Packet builds a minimal IPv4 packet carrying the given protocol number.
-//
-// The payload is 20 bytes because the decoder rejects a truncated
-// transport header outright — SCTP needs 12, TCP 20 — and reports the packet
-// as an unknown protocol, which would make this test pass or fail for reasons
-// having nothing to do with the filter.
+// The payload is 20 bytes because the decoder reports a truncated transport
+// header as an unknown protocol, which the filter would then judge for the
+// wrong reason.
 func ipv4Packet(proto ipproto.Proto, src, dst netip.Addr) []byte {
 	payload := make([]byte, 20)
 	if proto == ipproto.TCP {

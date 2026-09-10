@@ -40,16 +40,10 @@ func (s SignatureStatus) Authorized() bool {
 }
 
 // selfSigner returns the non-admin key a record must additionally be signed
-// by, if any.
-//
-// Two kinds need one. A key rotation is signed by the node whose keys change:
-// quorum decides that the membership may re-key, and the node's signature is
-// what shows the new keys came from the device rather than from whoever asked.
-// An identity rotation is signed by the *new* key, proving some device holds
-// it — a membership slot bound to a key nobody has is a slot nobody can use
-// and a record nobody can undo except by removal. The old key is deliberately
-// not required: a planned rotation away from a key that is being retired is
-// exactly the case where it may already be gone.
+// by, if any. A key rotation is signed by the node whose keys change, which is
+// what shows they came from the device. An identity rotation is signed by the
+// new key, proving some device holds it; the old key is deliberately not
+// required, since a planned rotation is where it may already be gone.
 func selfSigner(a *types.AUM) *types.Identity {
 	switch a.Kind {
 	case types.KindRotateNodeKey:
@@ -79,11 +73,9 @@ func signatureStatus(a *types.AUM, admins map[types.Identity]types.AdminKey, quo
 		admin, isAdmin := admins[sig.KeyID]
 		isSelf := st.SelfSigner != nil && sig.KeyID == *st.SelfSigner
 		if !isAdmin && !isSelf {
-			// A signature from a key that has no role in this record is not
-			// ignored, it invalidates the record. Ignoring it would let
-			// anyone mint a second valid encoding of an authorized record —
-			// same content, extra signature, different hash — and forks are
-			// expensive enough without handing out a way to manufacture them.
+			// A signature from a key with no role invalidates the record
+			// rather than being ignored: otherwise anyone could mint a second
+			// valid encoding of it, with a different hash.
 			st.Untrusted = append(st.Untrusted, sig.KeyID)
 			continue
 		}
@@ -106,11 +98,8 @@ func signatureStatus(a *types.AUM, admins map[types.Identity]types.AdminKey, quo
 }
 
 // verifyAgainst checks that a record is authorized by the given authority
-// state and chains to it.
-//
-// It answers only the authorization question. Whether the record's substance
-// is acceptable — subject exists, no collisions, epoch covers the right
-// members — is [State.apply]'s job.
+// state and chains to it. Whether its substance is acceptable is
+// [State.apply]'s job.
 func verifyAgainst(a *types.AUM, parent *State) error {
 	if err := a.StaticValidate(); err != nil {
 		return fmt.Errorf("log: %w", err)
@@ -125,14 +114,9 @@ func verifyAgainst(a *types.AUM, parent *State) error {
 }
 
 // GenesisStatus reports how far a genesis record is from being authorized
-// under the policy it declares.
-//
-// It exists because a genesis is the one record whose progress cannot be
-// measured against a chain: there is no earlier state, and the node running the
-// ceremony has no network yet. Without it a tool can only attempt creation and
-// read failure, which cannot tell "this ceremony is still collecting
-// signatures" — the normal state of a k-of-n genesis, where no single machine
-// holds k keys — from "this record is broken".
+// under the policy it declares. A genesis is the one record whose progress
+// cannot be measured against a chain, so without this a tool cannot tell a
+// ceremony still collecting signatures from a broken record.
 func GenesisStatus(a *types.AUM) (SignatureStatus, error) {
 	if a.Kind != types.KindGenesis {
 		return SignatureStatus{}, fmt.Errorf("log: %v is not a genesis record", a.Kind)
@@ -154,12 +138,8 @@ func genesisAdmins(a *types.AUM) map[types.Identity]types.AdminKey {
 }
 
 // verifyGenesis checks a genesis record against the admin keys it declares.
-//
-// Self-referential by necessity: there is no earlier state to check against.
-// The consequence is that a genesis record is only as trustworthy as the way
-// it reached you — which is why the genesis hash is what names the network
-// everywhere afterwards, and why docs/02-threat-model.md treats the genesis
-// ceremony as the root of trust rather than something the log can defend.
+// Self-referential by necessity, so a genesis is only as trustworthy as the
+// way it reached you — which is why its hash names the network afterwards.
 func verifyGenesis(a *types.AUM) error {
 	if err := a.StaticValidate(); err != nil {
 		return fmt.Errorf("log: %w", err)
@@ -171,13 +151,9 @@ func verifyGenesis(a *types.AUM) error {
 }
 
 // verifyCheckpointSelfSigned checks a checkpoint against the admin keys it
-// itself declares, for the one case where there is no ancestry to check it
-// against: adopting a checkpoint as a bootstrap anchor.
-//
-// This is the weakest verification in the package and the only place history
-// is taken on the signers' word. A node that holds the ancestry instead
-// compares the checkpoint against the state the chain produces (see
-// [State.apply]), which a mismatched checkpoint cannot survive.
+// declares, for adopting one as a bootstrap anchor. The weakest verification
+// in the package and the only place history is taken on the signers' word; a
+// node holding the ancestry compares it against what the chain produces.
 func verifyCheckpointSelfSigned(a *types.AUM) error {
 	if err := a.StaticValidate(); err != nil {
 		return fmt.Errorf("log: %w", err)

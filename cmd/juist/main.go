@@ -1,13 +1,7 @@
-// Command juist administers a juist membership log.
-//
-// M1 is the trust layer as a library, with no networking
-// (docs/05-roadmap.md), so this tool does everything locally: it creates a
-// network, builds records, collects signatures, verifies what it is given, and
-// applies what is authorized. Moving records between machines is the operator's
-// job for now — which is exactly the shape a quorum ceremony has anyway, since
-// the point of k-of-n is that no single machine ever holds k keys.
-//
-// The signing ceremony looks like this:
+// Command juist administers a juist membership log: it creates a network,
+// builds records, collects signatures, verifies what it is given, and applies
+// what is authorized. Moving records between machines is the operator's job,
+// which is the shape a k-of-n ceremony has anyway.
 //
 //	juist propose add-node -identity nid:… -wg wg:… -x25519 x25519:… -mlkem mlkem:… > add.rec
 //	# hand add.rec to each admin in turn
@@ -15,18 +9,18 @@
 //	juist verify add.rec        # says what is still missing
 //	juist apply add.rec
 //
-// From M2 there is also a daemon, juistd, which owns the log on a member
-// device and runs the mesh. When one is running, "juist apply" hands its
-// records to it rather than writing underneath it, and "juist status" reports
-// what it is doing.
+// Where juistd is running it owns the log, so "apply" hands records to it
+// rather than writing underneath it, and "status" reports what it is doing.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/store"
 )
@@ -52,7 +46,13 @@ The home directory defaults to $JUIST_HOME, or ~/.config/juist.
 `
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	switch {
+	case err == nil, errors.Is(err, errHelp):
+		return
+	case errors.Is(err, errSilent):
+		os.Exit(1)
+	default:
 		fmt.Fprintf(os.Stderr, "juist: %v\n", err)
 		os.Exit(1)
 	}
@@ -64,7 +64,7 @@ func run(args []string) error {
 	global.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	homePath := global.String("home", defaultHome(), "state directory")
 	if err := global.Parse(args); err != nil {
-		return errSilent
+		return parseResult(err)
 	}
 	rest := global.Args()
 	if len(rest) == 0 {
@@ -104,12 +104,26 @@ func run(args []string) error {
 }
 
 // errSilent reports a failure whose message has already been printed, so the
-// exit code is set without repeating it.
-var errSilent = silentError{}
+// exit code is set without repeating it. errHelp reports that help was asked
+// for and given, which is what the caller wanted and so not a failure at all.
+var (
+	errSilent = silentError{}
+	errHelp   = silentError{help: true}
+)
 
-type silentError struct{}
+type silentError struct{ help bool }
 
 func (silentError) Error() string { return "" }
+
+// parseResult classifies a flag-parsing error. The flag package has already
+// printed the usage or the offending flag either way; what differs is whether
+// the run succeeded.
+func parseResult(err error) error {
+	if errors.Is(err, flag.ErrHelp) {
+		return errHelp
+	}
+	return errSilent
+}
 
 func defaultHome() string {
 	if v := os.Getenv("JUIST_HOME"); v != "" {
@@ -130,6 +144,12 @@ func (h *home) openAuthority() (*store.Dir, *log.Authority, error) {
 		return nil, nil, err
 	}
 	if auth == nil {
+		if keys.NestedLog(h.join(logDir)) {
+			return nil, nil, fmt.Errorf("%s holds no network, but %s does: a copied log landed "+
+				"inside the existing directory. Move its contents up one level, or copy with "+
+				"\"cp -r SRC/log/. %s/\"",
+				h.join(logDir), h.join(logDir, keys.LogDir), h.join(logDir))
+		}
 		return nil, nil, fmt.Errorf("%s holds no network; create one with \"juist init\" or join one",
 			h.join(logDir))
 	}
@@ -137,12 +157,8 @@ func (h *home) openAuthority() (*store.Dir, *log.Authority, error) {
 }
 
 // openAuthorityAllowingNone opens the log, treating "there is no network here"
-// as a result rather than an error.
-//
-// Only "no network" is tolerated. A store that fails to open — a corrupt
-// record, an unreadable file, a missing anchor — is an error, because treating
-// it as "no network" is how a damaged log turns into a device that behaves as
-// though it never had one.
+// as a result rather than an error. Only that: a store that fails to open is
+// an error, or a damaged log becomes a device that never had one.
 func (h *home) openAuthorityAllowingNone() (*store.Dir, *log.Authority, bool, error) {
 	st, err := store.Open(h.join(logDir))
 	if err != nil {

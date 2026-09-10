@@ -213,6 +213,7 @@ network is a ~120 KB record, and so is the checkpoint that carries the current
 epoch. Accepted at the target scale of 25–100 devices; it is the reason the
 schema's `MaxNodes` is 512 rather than something larger, and the reason
 checkpoint compaction is implemented in this milestone rather than deferred.
+What it forecloses above that range, and by when, is a section of its own below.
 
 A node's recipient key is recorded as **two fields** (`X25519`, `MLKEM`) rather
 than one opaque hybrid blob, so each half is validated as the key it is, and so
@@ -294,6 +295,158 @@ wrong file mode into "this device has no keys": `key` sent the operator to
 a rotation needed; `apply` reported success while silently declining to promote
 the keys the log had just started naming. The two cases are now told apart by
 `errors.Is(err, fs.ErrNotExist)` and only the first is treated as absence.
+
+## The schema is versioned, so the freeze is a price rather than a wall
+
+[05-roadmap.md](05-roadmap.md) froze the record schema at the end of M3. Taken
+literally that means a new record kind, a new role or a new field is
+unavailable for the life of the network — and the cost of being wrong is not a
+bad release but a network that has to be recreated. So M3b spends its last
+opportunity on the thing that makes every later opportunity possible.
+
+The state every genesis and checkpoint states carries a `Schema` version, and
+`KindSchemaUpgrade` raises it under the same k-of-n quorum as any other
+authority change. The version is `types.CurrentSchema`, which is 0 and
+`omitempty`, so it costs nothing to encode until there is a second one. Version
+numbers are numbers: there is no "schema v1", only schema 0 and schema 1, and
+they are unrelated to the project's release names.
+
+**What a build too old for the network does.** It stops, and says so. The chain
+resolves up to the upgrade record and no further; `Authority.SchemaAlarm`
+reports the version and the record, and `juist status` prints it. It does not
+ignore the record — a node acting on the subset of the log it understands holds
+a different view of who is a member, which is the split the closed record set
+exists to prevent — and it does not treat it as invalid, because it is not.
+
+Three consequences follow, and each is a rule:
+
+- **The upgrade record is stored and relayed; nothing after it is.** A stopped
+  node must not swallow the one record that explains why its peers have gone
+  quiet, so that record is kept and offered on. What comes after it cannot be
+  verified — this build does not know the rules those records are judged by —
+  and storing unverified records would let any member fill a stopped node's
+  disk. `Inform` therefore drops them from the batch rather than failing it,
+  and gossip applies the readable prefix of a frame rather than refusing the
+  whole. Both are the same rule: never discard the explanation along with the
+  thing it explains.
+- **A schema alarm does not withdraw membership state.** Unlike a fork alarm,
+  the state below the upgrade was correct, and taking every tunnel down the
+  moment an admin raises the schema would turn a planned change into an outage
+  on every device that has not been updated yet. The cost is that a stopped
+  node will not apply a revocation authored after the upgrade. What bounds how
+  long it may act on that state is the freshness TTL, which is M4's — the same
+  bound that already covers a partitioned node, arrived at from a new
+  direction.
+- **Fork choice is not taught to prefer the upgrade.** "No lower-version branch
+  may win" is enforced by a node-local ratchet — a schema floor beside the epoch
+  floor, persisted and never lowered — and not by a second bias in
+  `pickPrimary`. A preference there could let a schema upgrade orphan a
+  revocation, which is exactly the ordering "revoked wins" exists to prevent. A
+  node offered a branch below its floor refuses it and fails closed, which is
+  the answer this design gives everywhere else the same tension appears.
+
+Compaction is refused while the alarm is up, because it deletes what the anchor
+cannot reach and that is precisely the set a newer build resumes from. The
+checkpoint rule needs nothing new: a checkpoint must equal the state its
+ancestry produces, and the version is part of that state, so a checkpoint can
+never be the record that changes it.
+
+**What this buys, and what it does not.** New kinds, new roles and new optional
+fields become reachable after the freeze, at the price of a quorum-signed
+record and an upgrade window in which old devices are stopped and visible.
+It does not rescue the shape changes declined below: a Merkle root over the
+wrap set still costs a second transport for the record a member cannot read
+without, and an addition that does not bump the epoch stays foreclosed by
+admin-key custody, not by the schema. And it deliberately provides **no
+extension bucket and no ignorable-unknown-field path** — either would reintroduce
+the split view by letting two builds act on different subsets of the same
+record.
+
+What is still open, and belongs with M4's enrollment and M5's packaging: the
+gossip hello does not carry the versions a node supports, `juist status` cannot
+say which members would be stranded, and nothing stops an admin authoring an
+upgrade before the network is ready for it. Until those exist, raising the
+schema is an operation whose blast radius the operator has to know by other
+means.
+
+## The freeze: what the fan-out measurement decided
+
+The 1168 bytes per member per epoch above are accepted at 25–100 devices, but
+`MaxNodes` is 512, so the schema admits a network five times the target. The
+M3 freeze required measuring that before spending schema space on it rather
+than reasoning from the struct sizes, so `TestRecordSizeAtMaxNodes` encodes
+both records at the ceiling and `TestRecordsBatchIsBoundedByBytes` puts a
+gossip round against them. At 512 members:
+
+| | bytes | per member per change | network-wide per change |
+|---|---|---|---|
+| epoch bump | 618 682 | 604 KiB | 302 MiB |
+| checkpoint | 1 284 375 | 1254 KiB | — |
+
+Sealing, opening, encoding and decoding a frame carrying the epoch bump is
+about 2.6 ms in total, and decoding and validating the checkpoint 6.4 ms. So
+**the fan-out costs bandwidth and not CPU, and only at a scale the project does
+not target.** A member on a 512-device network pays 604 KiB for a change that
+happens when someone joins or leaves; at the 100-device target it is 118 KiB.
+Nothing in that range makes the inline wrap set the binding constraint.
+
+Four of the five candidate hedges are therefore **declined**, and the fifth
+taken. What each decision now binds:
+
+- **A Merkle root over the wrap set: declined.** It would take a node's cost
+  from O(n) to O(log n), which the measurement says the network is not short
+  of, and in exchange every member would need a second transport to fetch the
+  one record the trust layer cares most about — the wrap it cannot read
+  without. Recovering this later means a coordinated upgrade, and the number
+  that would force it is a member count around 2000, where a change costs each
+  member a megabyte. `MaxNodes` stays at 512 so that ceiling is stated in the
+  schema and not only here.
+- **Batched membership changes: declined.** `KindAddNode` and `KindRemoveNode`
+  keep carrying one node each. A set-valued record would amortise the fan-out
+  over an enrollment run, but it multiplies the cases fork choice has to decide
+  between — two batches that overlap in one member are neither identical nor
+  independent — and the ceremony it would save is not the expensive part: k
+  admins signing ten records in one sitting is ten invocations of `juist sign`,
+  not ten ceremonies. **M4 enrolls one device per record**, and that is now a
+  constraint on its design rather than a preference.
+- **An addition that does not bump the epoch: declined, and it could not have
+  been taken.** Appending one wrap for the current epoch would make an add
+  O(1), but whoever authors the record must hold the *current group secret* to
+  seal that wrap — and the design deliberately keeps group secrets off admin
+  devices, so that an admin can rekey the network holding only a signing key.
+  The only author who could produce such a record is a member, which would mean
+  a record kind that changes the member set without quorum. The trade in
+  [05-roadmap.md](05-roadmap.md) was stated as metadata against O(1); the real
+  trade is admin-key custody, and it is not one this design can make.
+- **Reserved space for logarithmic rekey: declined.** TreeKEM-style wrapping
+  removes the fan-out outright and costs the property that one wrap has one
+  recipient and is opaque to everyone else, which is what makes the epoch
+  record auditable. Reserving space for a shape nobody has designed reserves
+  the wrong shape. It is a v2 design and a coordinated upgrade.
+- **A ciphersuite identifier: taken.** `EpochRecord.Suite` and
+  `Snapshot.EpochSuite` name the HPKE suite the wraps are sealed under. It is
+  the one hedge that is a *value* rather than a field: `SuiteHybridX25519MLKEM768`
+  is zero and `omitempty`, so it costs nothing to encode today, and a future
+  suite is a number an existing decoder already understands. A node meeting one
+  it does not implement rejects the record — the pinned `SealedSecretSize` is a
+  per-suite rule, so accepting an unknown suite would mean accepting a length
+  rule that does not exist. 1088 of the 1168 bytes are the ML-KEM-768
+  ciphertext, and dropping the hybrid is not on the table
+  ([01-requirements.md](01-requirements.md)), so a more compact hybrid is the
+  change this exists for.
+
+**The size constraint that outlives the freeze.** A records frame is bounded by
+bytes, not only by record count, because at these sizes
+`MaxRecordsPerFrame`-many epoch records are several times `MaxFrameSize` — a
+batch that cannot be encoded, produced identically every round, which wedges
+that pair's sync rather than converging over more rounds. A batch is a
+parents-first prefix, so truncating it stays applicable, and the next round
+carries the rest. The same reasoning has not been carried through
+`MaxHashesPerFrame`: a node holding more than 4096 records sends a truncated
+`Have`, the peer re-offers records it already holds, and the two make no
+progress. That is unreachable until a network has authored 4096 records without
+a checkpoint, and closing it is part of deciding **when compaction runs without
+an admin asking** — undecided, and the decision this binds.
 
 ## Storage
 
@@ -389,4 +542,10 @@ criterion (2) is where it gets proven.
   standard library plus two small modules, and keeps the clock and the
   filesystem out of the packages that decide validity.
 - `make tcb` reports the audit scope's size against the 10k-line budget
-  [06-verification.md](06-verification.md) §6 sets. At M1 it is ~4.8 k lines.
+  [06-verification.md](06-verification.md) §6 sets. It is ~4.5 k lines.
+
+- Fork-choice tests that need one record to beat another on the hash tiebreak must
+  redraw *both* sides each attempt, or assign the roles after drawing. Redrawing
+  against a fixed target makes the per-attempt chance `target/2^256` — itself
+  uniform, and sometimes tiny — so a 65-attempt budget fails 1/66 of the time
+  rather than 2^-65.

@@ -27,9 +27,8 @@ const (
 )
 
 // Text prefixes. Identity, WireGuard and X25519 public keys are all 32 opaque
-// bytes, so their text forms are tagged: pasting a WireGuard key where an
-// identity key belongs is a mistake worth catching at parse time rather than
-// three records later.
+// bytes, so their text forms are tagged: pasting one where another belongs is
+// caught at parse time rather than three records later.
 const (
 	identityPrefix = "nid:"
 	wgPrefix       = "wg:"
@@ -40,13 +39,9 @@ const (
 var b64 = base64.RawURLEncoding
 
 // An Identity is an Ed25519 public key. It names both member nodes and admin
-// signing keys, and — being short enough — serves as its own key ID.
-//
-// A node's Identity is the one key that never changes while the node is a
-// member: its WireGuard, X25519 and ML-KEM keys are rotatable attributes of
-// the log record, and its overlay v6 address is derived from the Identity
-// (see [Addr6]). Changing it is [KindRotateIdentity], which is a membership
-// change requiring quorum.
+// signing keys and serves as its own key ID. A node's Identity is the one key
+// that never changes while it is a member — the others are rotatable
+// attributes — and its overlay v6 address derives from it.
 type Identity [IdentitySize]byte
 
 // A Sig is an Ed25519 signature over an [AUM]'s signing hash.
@@ -63,12 +58,9 @@ type X25519Key [X25519KeySize]byte
 // WireGuard preshared-key hedge (docs/07-embedding-notes.md).
 type MLKEMKey [MLKEMKeySize]byte
 
-// A Signature is one attributable signature over an AUM.
-//
-// Attributable by design: docs/02-threat-model.md prefers a signature set
-// naming its signers over an aggregated or threshold signature that hides
-// them, because the log doubles as the audit trail that identifies a
-// malicious admin.
+// A Signature is one attributable signature over an AUM. Attributable by
+// design: the log doubles as the audit trail that identifies a malicious
+// admin, which an aggregated or threshold signature would hide.
 type Signature struct {
 	// KeyID is the public key that produced Sig. Both node identity keys
 	// and admin keys sign records, so which of the two a KeyID must be is
@@ -81,27 +73,19 @@ type Signature struct {
 // IsZero reports whether i is the zero value.
 func (i Identity) IsZero() bool { return i == Identity{} }
 
-// Verify reports whether sig is a valid signature by i over msg.
-//
-// Verification uses crypto/ed25519, which rejects non-canonically encoded
-// points and unreduced signature scalars. That strictness is what makes the
-// log's validity judgement reproducible: every node must reach the same
-// verdict on the same bytes, and a malleable signature encoding would let one
-// node accept a record another rejects. See [Identity.Validate] for the
-// matching restriction on the key itself.
+// Verify reports whether sig is a valid signature by i over msg. crypto/ed25519
+// rejects non-canonical points and unreduced scalars, which is what makes the
+// log's verdict reproducible: a malleable encoding would let one node accept a
+// record another rejects.
 func (i Identity) Verify(msg []byte, sig Sig) bool {
 	return ed25519.Verify(ed25519.PublicKey(i[:]), msg, sig[:])
 }
 
-// Validate reports whether i is usable as a signing key.
-//
-// It rejects the zero value, non-canonical encodings, points off the curve,
-// and — the reason this is not just a length check — points of small order.
-// A small-order public key admits a signature for any message that anyone can
-// compute, so admitting one as an admin key would silently convert that key's
-// votes from "held by an admin" into "held by anybody". Quorum guards who gets
-// added to the log; it cannot notice that what was added is a key with no
-// owner.
+// Validate reports whether i is usable as a signing key: not the zero value,
+// canonically encoded, on the curve, and — the reason this is more than a
+// length check — not of small order. A small-order key admits a signature
+// anyone can compute, turning its votes from "held by an admin" into "held by
+// anybody", which quorum cannot notice.
 func (i Identity) Validate() error {
 	if i.IsZero() {
 		return errors.New("identity key is zero")
@@ -220,11 +204,8 @@ func (s *Sig) UnmarshalBinary(b []byte) error {
 }
 
 // A PrivateIdentity is the secret half of an [Identity]: a node's identity key
-// or an admin's signing key.
-//
-// docs/04-architecture.md keeps admin keys out of the daemon entirely — they
-// live in the operator's CLI keystore — so this type is expected to be
-// short-lived, held only for the duration of a signing operation.
+// or an admin's signing key. Admin keys live in the operator's CLI keystore,
+// never in the daemon, so this is held only for a signing operation.
 type PrivateIdentity struct {
 	priv ed25519.PrivateKey
 }

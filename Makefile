@@ -109,6 +109,21 @@ test: ## Run tests
 test-race: ## Run tests under the race detector
 	$(GO) test $(GOFLAGS) ./... $(TEST_FLAGS) -race
 
+# The privileged tests — M3a's real device and netns harness, and M3b's NAT
+# matrix on top of it (conn/osplumbing_test.go, conn/netns*_linux_test.go) —
+# need root, /dev/net/tun, iproute2 and iptables, and skip without them — which
+# `test` and `cover` do silently. This target runs them
+# alone, verbosely, with the skip turned into a failure, so a machine that
+# cannot create a device or a namespace reports red rather than green. Run it
+# under sudo; `go` is resolved before privileges change, and the module and
+# build caches stay with the invoking user. The netns harness re-executes the
+# test binary inside each namespace, so it must stay a real `go test` run
+# rather than a pre-built binary invoked by hand.
+.PHONY: test-os-plumbing
+test-os-plumbing: ## Run the privileged real-device and netns tests (use sudo)
+	JUIST_REQUIRE_OS_PLUMBING=1 $(GO) test $(GOFLAGS) ./conn $(TEST_FLAGS) -v \
+		-run '^(TestRealDevicePlumbsOverlayIntoHost|TestNetns.*)$$'
+
 .PHONY: cover
 cover: ## Run race tests with coverage, print a summary
 	$(GO) test $(GOFLAGS) ./... $(TEST_FLAGS) -race \
@@ -174,6 +189,51 @@ tcb: ## Report the trusted computing base's size against its budget
 		echo "over budget: the audit scope has grown past what docs/06-verification.md plans for"; \
 		exit 1; \
 	fi
+
+## --- packaging -----------------------------------------------------------
+
+# `make rpm` builds an installable package from binaries this Makefile
+# compiles, rather than from source inside the build root, so it needs no Go
+# toolchain and no network there. Version 0 is deliberate — the project has cut
+# no release — and the release field carries the date and commit, which sorts
+# correctly between builds so dnf will upgrade one test build over another.
+RPMBUILD    ?= rpmbuild
+RPM_NAME    ?= juist
+RPMTOP      ?= $(abspath $(BUILDDIR)/rpm)
+RPM_VERSION ?= 0
+RPM_COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+RPM_DIRTY   ?= $(shell git rev-parse --is-inside-work-tree >/dev/null 2>&1 && \
+                 ! git diff --quiet HEAD 2>/dev/null && echo .dirty)
+RPM_RELEASE ?= 0.$(shell date -u +%Y%m%d)git$(RPM_COMMIT)$(RPM_DIRTY)
+
+# The project states no license, and rpm requires the tag. Set this once it
+# does; the placeholder is a valid SPDX LicenseRef, so it builds and says so.
+RPM_LICENSE ?= LicenseRef-unspecified
+
+.PHONY: rpm
+rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
+	@command -v $(RPMBUILD) >/dev/null 2>&1 || { \
+		echo "$(RPMBUILD) not found. On Fedora:"; \
+		echo "  sudo dnf install rpm-build systemd-rpm-macros"; \
+		exit 1; }
+	@rm -rf $(RPMTOP)
+	@mkdir -p $(RPMTOP)/SOURCES $(RPMTOP)/SPECS $(RPMTOP)/BUILD $(RPMTOP)/RPMS
+	@set -e; stage=$(RPMTOP)/stage/$(RPM_NAME)-$(RPM_VERSION); mkdir -p $$stage; \
+	for c in $(CMDS); do \
+		echo "==> $$c"; \
+		CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $$stage/$$c ./cmd/$$c; \
+	done; \
+	cp packaging/systemd/juistd.service README.md $$stage/; \
+	tar -czf $(RPMTOP)/SOURCES/$(RPM_NAME)-$(RPM_VERSION).tar.gz \
+		-C $(RPMTOP)/stage $(RPM_NAME)-$(RPM_VERSION)
+	@cp packaging/rpm/juist.sysusers $(RPMTOP)/SOURCES/
+	@cp packaging/rpm/juist.spec $(RPMTOP)/SPECS/
+	$(RPMBUILD) --define "_topdir $(RPMTOP)" \
+		--define "ver $(RPM_VERSION)" \
+		--define "rel $(RPM_RELEASE)" \
+		--define "license_tag $(RPM_LICENSE)" \
+		-bb $(RPMTOP)/SPECS/juist.spec
+	@find $(RPMTOP)/RPMS -name '*.rpm'
 
 ## --- lint ----------------------------------------------------------------
 

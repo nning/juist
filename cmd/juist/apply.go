@@ -28,7 +28,7 @@ record has to travel to the other admins to be signed at all.
 `)
 	}
 	if err := fs.Parse(args); err != nil {
-		return errSilent
+		return parseResult(err)
 	}
 	if fs.NArg() == 0 {
 		fs.Usage()
@@ -49,11 +49,9 @@ record has to travel to the other admins to be signed at all.
 	if !haveNetwork {
 		return createFromGenesis(h, st, records)
 	}
-	// A running daemon owns the log: it holds an in-memory Authority, and a
-	// second writer would leave the two disagreeing about the head until the
-	// daemon restarted. Hand the records over instead, which also gets them
-	// gossiped to the rest of the network immediately rather than at whatever
-	// point somebody notices.
+	// A running daemon owns the log: a second writer would leave the two
+	// disagreeing about the head. Handing the records over also gets them
+	// gossiped immediately.
 	running, err := daemonState(h)
 	if err != nil {
 		return err
@@ -80,11 +78,8 @@ record has to travel to the other admins to be signed at all.
 }
 
 // applyThroughDaemon hands records to the running daemon, which applies them
-// to the log it owns and pushes them to every member it can reach.
-//
-// This is not a privileged call. The daemon holds no admin keys and cannot
-// make an unauthorized record apply; anything handed over here has already
-// been signed to quorum, and any member could equally have gossiped it.
+// to the log it owns and pushes them to every member it can reach. Not a
+// privileged call: the daemon cannot make an unauthorized record apply.
 func applyThroughDaemon(h *home, records []types.AUM) error {
 	bodies := make([][]byte, 0, len(records))
 	for i := range records {
@@ -98,25 +93,17 @@ func applyThroughDaemon(h *home, records []types.AUM) error {
 		daemon.Request{Command: daemon.CmdInform, Records: bodies})
 	if err != nil {
 		if resp.Err != "" {
-			// The daemon answered and refused: the log did not find the
-			// records authorized, or they do not fit the chain it holds.
-			// Nothing was applied and nothing was promoted, on either side.
-			// Reporting it as a transport failure would send the operator
-			// looking at the socket instead of at the record.
+			// The daemon answered and refused, so nothing was applied on
+			// either side. Reporting it as a transport failure would send the
+			// operator to the socket instead of to the record.
 			return fmt.Errorf("the daemon refused the records: %s", resp.Err)
 		}
 		return describeCallFailure(h, err)
 	}
-	// The staged-key promotion is this tool's job either way. The daemon has
-	// no idea a rotation is in flight — staged keys live in the keystore,
-	// which it never reads — so skipping this because the daemon applied the
-	// record would leave the device holding old keys while the log names new
-	// ones: unable to handshake and unable to open the group secret, with
-	// nothing to point at.
-	//
-	// Re-reading the log rather than reusing the copy opened before the call:
-	// the daemon has written and fsynced by the time it replies, and the
-	// copy from before it did says the rotation never happened.
+	// Promotion is this tool's job either way: the daemon never reads staged
+	// keys, so skipping it would leave the device holding old keys while the
+	// log names new ones. The log is re-read rather than reused, since the
+	// copy from before the call says the rotation never happened.
 	_, auth, haveNetwork, err := h.openAuthorityAllowingNone()
 	if err != nil {
 		return err
@@ -131,13 +118,9 @@ func applyThroughDaemon(h *home, records []types.AUM) error {
 	return nil
 }
 
-// createFromGenesis completes a genesis ceremony: the record left this machine
-// unsigned or under-signed, collected the rest of its quorum elsewhere, and has
-// come back.
-//
-// It is the only way a k-of-n network can be created at all. The whole point of
-// the threshold is that no single machine holds k keys, so the record cannot be
-// authorized where it is built.
+// createFromGenesis completes a genesis ceremony whose record collected the
+// rest of its quorum elsewhere. It is the only way a k-of-n network can be
+// created: no single machine holds k keys.
 func createFromGenesis(h *home, st *store.Dir, records []types.AUM) error {
 	if len(records) != 1 || records[0].Kind != types.KindGenesis {
 		return fmt.Errorf("%s holds no network; only a signed genesis record can create one. "+
@@ -172,10 +155,9 @@ func createFromGenesis(h *home, st *store.Dir, records []types.AUM) error {
 	return nil
 }
 
-// promoteIfAdopted makes staged key material live, but only once the log
-// actually names it; the decision lives in [keys.MaybePromoteStaged], shared
-// with juistd, which runs the same check at startup for rotations that arrive
-// over gossip with no CLI involved.
+// promoteIfAdopted makes staged key material live, but only once the log names
+// it. The decision is in [keys.MaybePromoteStaged], shared with juistd, which
+// runs it at startup for rotations that arrive over gossip.
 func (h *home) promoteIfAdopted(auth *log.Authority) error {
 	promoted, err := keys.MaybePromoteStaged(h.path, auth.State().Node)
 	if err != nil {

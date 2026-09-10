@@ -15,17 +15,12 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// This file is M2's exit criteria (docs/05-roadmap.md), run against the real
-// thing: real membership logs, one per node, each independently verified; real
-// group secrets opened from real HPKE wraps; the real gossip protocol over
-// real TCP; and the real embedded WireGuard data plane.
-//
-// The one substitution is the multicast group, replaced by a loopback fan-out
-// ([lanHub]) that delivers the same DNS-SD packets. A CI machine has no LAN
-// segment and Linux loopback carries no multicast, so the alternative is a
-// test that skips — and the parts of discovery worth asserting, the blinded
-// naming and the sealed payload, are in the packets rather than in the socket.
-// mdns's own tests cover the encoding against the same fan-out.
+// M2's exit criteria (docs/05-roadmap.md) against the real thing: a real
+// membership log per node, real group secrets from real HPKE wraps, the real
+// gossip protocol over TCP, and the real embedded data plane. The one
+// substitution is the multicast group, replaced by a loopback fan-out
+// ([lanHub]) carrying the same DNS-SD packets, since Linux loopback carries no
+// multicast and the alternative is a test that skips.
 
 // --- a fake LAN ------------------------------------------------------------
 
@@ -128,10 +123,9 @@ func (m *mesh) start(t *testing.T, i int, seed ...types.AUM) *meshNode {
 		Recipient: dev.recipient,
 		WireGuard: dev.wgPrivate,
 		Connect: func(o conn.Options) (conn.Manager, error) {
-			// The engine answers overlay ICMP itself, so reachability can be
-			// asserted without a TUN device or any privileges. It is IPv4
-			// only (docs/07-embedding-notes.md), which is why every member
-			// here carries an explicit v4 address and the pings use it.
+			// The engine answers overlay ICMP itself, so reachability needs
+			// no TUN device or privileges. It is IPv4 only, which is why
+			// every member here carries an explicit v4 address.
 			o.RespondToPing = true
 			return conn.New(o)
 		},
@@ -140,6 +134,9 @@ func (m *mesh) start(t *testing.T, i int, seed ...types.AUM) *meshNode {
 			Dst:      mdns.Group,
 			Interval: 100 * time.Millisecond,
 		},
+		// These nodes meet on the (simulated) LAN, and a test must not put
+		// traffic on the public DHT to find that out.
+		DisableDHT: true,
 		// Short enough that the periodic backstop cannot be what makes a
 		// timing assertion pass: convergence has to come from push.
 		SyncInterval:      30 * time.Second,
@@ -215,10 +212,9 @@ func pingUntil(from *meshNode, to netip.Addr, within time.Duration) bool {
 
 func (n *meshNode) overlayV4() netip.Addr { return *n.dev.record.V4 }
 
-// TestMeshFormsOnTheLanAlone is M2's third exit criterion: two to five nodes
-// on one LAN, no internet. Nothing is configured about where anyone is — no
-// bootstrap list, no relay, no DERP map, no STUN server — and the mesh forms
-// anyway, from blinded multicast plus a log every node verified for itself.
+// TestMeshFormsOnTheLanAlone is M2's third exit criterion: five nodes on one
+// LAN with no internet, nothing configured about where anyone is, and the mesh
+// forms from blinded multicast plus a log every node verified for itself.
 func TestMeshFormsOnTheLanAlone(t *testing.T) {
 	m := startMesh(t, 5)
 	took := waitFor(t, 30*time.Second, "every node to hold a full peer set", m.converged)
@@ -232,15 +228,11 @@ func TestMeshFormsOnTheLanAlone(t *testing.T) {
 	}
 }
 
-// TestRevocationConvergesWithinTheBudget is M2's second exit criterion:
-// revocation converges across a connected five-node mesh in under five
-// seconds, including WireGuard peer removal and the epoch rotation.
-//
-// The clock starts when the admin's signed removal reaches one member's
-// daemon and stops when every remaining member has both dropped the peer and
-// moved to the new epoch. Both halves matter: dropping the peer is what ends
-// data-plane access, and the epoch bump is what ends the revoked device's
-// ability to find or read the network at all.
+// TestRevocationConvergesWithinTheBudget is M2's second exit criterion: under
+// five seconds across a five-node mesh. The clock starts when the signed
+// removal reaches one daemon and stops when every remaining member has both
+// dropped the peer — which ends data-plane access — and moved to the new epoch
+// — which ends the device's ability to find the network.
 func TestRevocationConvergesWithinTheBudget(t *testing.T) {
 	m := startMesh(t, 5)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
@@ -274,11 +266,9 @@ func TestRevocationConvergesWithinTheBudget(t *testing.T) {
 }
 
 // TestRevokedDeviceLosesTheDataPlane is M2's first exit criterion from the
-// harder direction: the device still holds every key it ever had — its
-// WireGuard static key, its identity, its last group secret — and is on the
-// same LAN as the members it used to reach. What it no longer has is a peer
-// entry on any of them, and WireGuard's cryptokey routing is what turns that
-// into "cannot complete a handshake".
+// harder direction: the device still holds every key it ever had and is on the
+// same LAN. What it lacks is a peer entry anywhere, which cryptokey routing
+// turns into "cannot complete a handshake".
 func TestRevokedDeviceLosesTheDataPlane(t *testing.T) {
 	m := startMesh(t, 3)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
@@ -310,10 +300,9 @@ func TestRevokedDeviceLosesTheDataPlane(t *testing.T) {
 	}
 }
 
-// TestNonMemberIsNeverAPeer is the other half of default-deny: a device that
-// was never in the log, holding valid WireGuard and identity keys, announcing
-// itself on the same LAN. Nothing it can say makes any member configure it,
-// because the only input that creates a peer is the log.
+// TestNonMemberIsNeverAPeer is the other half of default-deny: a device never
+// in the log, with valid keys, announcing itself on the LAN. Nothing it says
+// makes any member configure it.
 func TestNonMemberIsNeverAPeer(t *testing.T) {
 	m := startMesh(t, 3)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)

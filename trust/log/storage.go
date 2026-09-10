@@ -12,19 +12,12 @@ import (
 // ErrNotFound is returned by [Storage.AUM] for a hash it does not hold.
 var ErrNotFound = errors.New("log: record not found")
 
-// Storage holds records and the two node-local ratchets that protect against
-// being walked backwards.
-//
-// Records are content-addressed, so a store cannot silently alter one: an
-// implementation is expected to check that what it reads back hashes to the
-// name it was filed under, and to report corruption rather than repair it
-// (docs/04-architecture.md: "state file corruption ⇒ refuse to start with
-// recovery instructions, never silently re-genesis").
-//
-// The anchor and the epoch floor are the ratchets. Both are deliberately
-// node-local: two nodes that have seen different histories will refuse
-// different things, and that divergence is what a fork alarm surfaces rather
-// than something to be averaged away.
+// Storage holds records and the two node-local ratchets — the anchor and the
+// epoch floor — that protect against being walked backwards. Records are
+// content-addressed: an implementation checks what it reads back hashes to the
+// name it was filed under, and reports corruption rather than repairing it.
+// The ratchets are node-local, so two nodes that have seen different histories
+// refuse different things, which a fork alarm surfaces.
 type Storage interface {
 	// AUM returns the record with the given hash, or [ErrNotFound].
 	AUM(h types.Hash) (types.AUM, error)
@@ -33,10 +26,9 @@ type Storage interface {
 	// any order.
 	Children(h types.Hash) ([]types.Hash, error)
 
-	// Add stores records durably. It must be atomic across the whole batch:
-	// a partially-applied batch would leave records whose parents are
-	// missing. Re-adding a record already held is not an error, since the
-	// name is its content.
+	// Add stores records durably, atomically across the whole batch.
+	// Re-adding a record already held is not an error: the name is its
+	// content.
 	Add(aums ...types.AUM) error
 
 	// Delete removes records. Used only by compaction, after the anchor has
@@ -49,9 +41,8 @@ type Storage interface {
 	Hashes() ([]types.Hash, error)
 
 	// Anchor returns the oldest record the active chain is computed from: the
-	// genesis record, or the newest checkpoint this node has adopted. A chain
-	// that does not descend from it is not considered at all, which is how
-	// "never drop a checkpoint you hold" is enforced.
+	// genesis record, or the newest checkpoint this node adopted. A chain that
+	// does not descend from it is not considered at all.
 	Anchor() (types.Hash, bool, error)
 
 	// SetAnchor records a new anchor. Callers only ever move it forward,
@@ -65,12 +56,18 @@ type Storage interface {
 	// SetEpochFloor raises the floor. Implementations must persist it before
 	// returning, since its whole purpose is to survive a restart.
 	SetEpochFloor(epoch uint64) error
+
+	// SchemaFloor returns the highest record schema this node has ever
+	// adopted. A chain resolving below it is a rollback of the schema, which
+	// is how a fork that never took the upgrade would otherwise be adopted.
+	SchemaFloor() (types.SchemaVersion, error)
+
+	// SetSchemaFloor raises the schema floor, persisted before returning.
+	SetSchemaFloor(v types.SchemaVersion) error
 }
 
-// reader is the read-only half of [Storage], which is all that chain
-// resolution needs. It exists so that resolution can run over a proposed set
-// of records layered on top of the store, verifying them before any of them is
-// written.
+// reader is the read-only half of [Storage], so resolution can run over a
+// proposed set of records layered on the store, before any is written.
 type reader interface {
 	AUM(h types.Hash) (types.AUM, error)
 	Children(h types.Hash) ([]types.Hash, error)
@@ -83,6 +80,8 @@ type MemStorage struct {
 	children map[types.Hash][]types.Hash
 	anchor   *types.Hash
 	floor    uint64
+
+	schemaFloor types.SchemaVersion
 }
 
 var _ Storage = (*MemStorage)(nil)
@@ -164,6 +163,15 @@ func (m *MemStorage) EpochFloor() (uint64, error) { return m.floor, nil }
 func (m *MemStorage) SetEpochFloor(epoch uint64) error {
 	if epoch > m.floor {
 		m.floor = epoch
+	}
+	return nil
+}
+
+func (m *MemStorage) SchemaFloor() (types.SchemaVersion, error) { return m.schemaFloor, nil }
+
+func (m *MemStorage) SetSchemaFloor(v types.SchemaVersion) error {
+	if v > m.schemaFloor {
+		m.schemaFloor = v
 	}
 	return nil
 }

@@ -1,47 +1,24 @@
 // Package gossip is the sync layer: it moves membership-log records and
 // connectivity announcements between members over transports it does not
-// trust.
-//
-// Nothing here is trust-critical. Log records carry their own signatures and
-// their own hash chain, and endpoint announcements carry a signature by the
-// node they describe, so a hostile transport — or a hostile peer — can delay,
-// drop, duplicate or reorder what it moves and can never change who is a
-// member. That is the property docs/04-architecture.md states as "AUMs are
-// self-certifying, so they may arrive over *any* transport", and it is why
-// this package sits outside the audit scope while still owning a parser that
-// faces attacker input (hence its fuzz targets, docs/06-verification.md §2).
-//
-// # The protocol
+// trust. Records and announcements are self-certifying, so a hostile transport
+// or peer can delay, drop, duplicate or reorder them and never change who is a
+// member.
 //
 // One TCP session per anti-entropy round, four frames, strictly alternating so
-// that neither side can block on a write the other is not reading:
+// neither side can block on a write the other is not reading:
 //
 //	initiator → hello    what network, where my chain is, what I hold
 //	responder → hello    the same, answered
 //	initiator → records  what the responder turned out to be missing
 //	responder → records  what the initiator turned out to be missing
 //
-// Every frame is a log-head beacon in the sense docs/04-architecture.md
-// describes: it carries the sender's `(epoch, head)` whether or not anything
-// needs to be transferred. Sync is symmetric — one round makes both sides
-// whole — because the alternative, each node pulling separately, doubles the
-// rounds a revocation needs to reach a five-node mesh.
+// Every frame carries the sender's (epoch, head) whether or not anything needs
+// transferring, and one round makes both sides whole. The "what I hold" set is
+// sent outright rather than walked back to a common ancestor, which keeps the
+// exchange stateless up to [MaxHashesPerFrame].
 //
-// The "what I hold" set is sent outright rather than walked back to a common
-// ancestor. At this milestone's scale a whole log is a few kilobytes of
-// hashes, and sending it makes the exchange stateless and immune to the branch
-// bookkeeping an ancestor walk needs. [MaxHashesPerFrame] is where that stops
-// being true, and a node past it falls back to converging over several rounds.
-//
-// # Why the underlay
-//
-// docs/04-architecture.md calls WireGuard tunnels the normal case for carrying
-// records and this package the exception. At M2 it is the other way round:
-// gossip runs on the underlay, because reaching a peer *over* the overlay
-// needs the tunnel that gossip is what brings up. The layering is unchanged —
-// records are self-certifying either way — and the cost is metadata, which
-// [seal] covers by encrypting every frame under the epoch group secret. See
-// docs/09-mesh-layer-notes.md.
+// Gossip runs on the underlay, since reaching a peer over the overlay needs
+// the tunnel gossip brings up; [seal] covers the metadata that costs.
 package gossip
 
 import (
@@ -53,6 +30,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -71,41 +49,30 @@ type View struct {
 	Head  types.Hash
 	Epoch uint64
 
-	// Anchor is the record this node's chain is resolved from: its genesis,
-	// or the newest checkpoint it has compacted to. Peers answer [Log.Missing]
-	// relative to it, because records below it are ones this node's log will
-	// refuse — see the field of the same name in the frame.
+	// Anchor is the record this node's chain is resolved from: its genesis, or
+	// the newest checkpoint it compacted to. Peers answer [Log.Missing]
+	// relative to it, since records below it are ones this log refuses.
 	Anchor types.Hash
 
-	// Have is every record hash this node holds, including branches that
-	// lost fork choice. Branches are included on purpose: a fork is
-	// something both sides need to see in full before either can alarm on
-	// it (docs/08-trust-layer-notes.md).
+	// Have is every record hash this node holds, including branches that lost
+	// fork choice: both sides must see a fork in full to alarm on it.
 	Have []types.Hash
 }
 
-// A Log is the membership log as gossip needs it.
-//
-// It is an interface so that this package depends on behaviour rather than on
-// trust/log's Authority, which keeps the sync layer out of the trust layer's
-// import graph in the direction that matters: the log must be usable without
-// a network, and it is the daemon that owns both and joins them.
+// A Log is the membership log as gossip needs it. An interface, so the trust
+// layer stays usable without a network and the daemon is what joins the two.
 type Log interface {
 	// View reports this node's beacon and the records it holds.
 	View() (View, error)
 
 	// Missing returns records this node holds that the peer lacks and can
-	// accept: descendants of the peer's anchor absent from have, ordered so
-	// that every record's parent precedes it, and no more than
-	// [MaxRecordsPerFrame] of them. A peer whose anchor this node does not
-	// hold gets nothing — that peer is the one with history to offer, and
-	// the other half of the same session is where it offers it.
+	// accept: descendants of the peer's anchor absent from have, parents
+	// first, at most [MaxRecordsPerFrame]. A peer whose anchor this node does
+	// not hold gets nothing.
 	Missing(have []types.Hash, anchor types.Hash) ([]types.AUM, error)
 
 	// Inform hands received records to the log, oldest first. An error is
-	// expected in normal operation — a peer on a forked chain, a rollback
-	// attempt, a record whose ancestors have not arrived yet — and is
-	// reported, not fatal.
+	// expected in normal operation and is reported, not fatal.
 	Inform(records []types.AUM) error
 }
 
@@ -139,6 +106,14 @@ type Options struct {
 	// Timeout bounds one session end to end. Zero uses [DefaultTimeout].
 	Timeout time.Duration
 
+	// OverlayAddrs returns addresses to try after the ones a peer announced —
+	// in practice its overlay addresses, which become reachable once the
+	// tunnel is up. It is what lets two members behind NAT sync directly:
+	// neither can open a TCP session to the other on the underlay, and the
+	// tunnel that carries it is brought up by the connectivity layer rather
+	// than by this one. Nil tries only what the announcement carries.
+	OverlayAddrs func(types.Identity) []netip.AddrPort
+
 	// OnRecords is called after a session accepted log records, so the
 	// daemon can reconcile without waiting for its next tick. It must not
 	// block for long; it runs on the session's goroutine.
@@ -153,18 +128,27 @@ type Options struct {
 // gives up on its own.
 const DefaultTimeout = 20 * time.Second
 
-// maxInboundSessions bounds concurrent inbound sessions, so that a peer
-// opening connections cannot make this node hold unbounded state. Excess
-// connections are closed immediately rather than queued: the peer retries on
-// its own timer, and a queue would only move the same limit somewhere less
-// visible.
+// maxInboundSessions bounds concurrent inbound sessions. Excess connections
+// are closed rather than queued: the peer retries on its own timer.
 const maxInboundSessions = 16
 
-// maxOutboundSessions bounds how many peers one [Node.Sync] call talks to at
-// once. A round with the whole member set is the normal case at this scale;
-// the limit is what stops a large network turning one local change into
-// hundreds of simultaneous dials.
+// maxOutboundSessions bounds how many peers one [Node.Sync] call dials at
+// once, so one local change cannot become hundreds of simultaneous dials.
 const maxOutboundSessions = 16
+
+// maxUnauthPerSource bounds how many connections from one address may be
+// waiting to say anything. Over it, that address's oldest silent connection is
+// closed rather than the new one refused: a peer that has authenticated is
+// off this budget, so what a busy address displaces is only its own
+// not-yet-authenticated connections. Refusing instead would punish members
+// who legitimately share an address — behind a NAT, or on one host — for the
+// behaviour of whoever else is on it.
+const maxUnauthPerSource = 4
+
+// helloTimeout bounds how long an unauthenticated connection may hold a slot
+// before it has said anything. The rest of the session gets the full timeout;
+// this covers only the part where the peer has proved nothing.
+const helloTimeout = 5 * time.Second
 
 // A Node runs anti-entropy for one member.
 type Node struct {
@@ -176,31 +160,28 @@ type Node struct {
 	// lifetime.
 	slots chan struct{}
 
-	// closing, and the wait set it guards, are the shutdown handshake.
-	// sync.WaitGroup forbids an Add that takes the counter off zero from
-	// racing a Wait, and that is exactly what an inbound session starting
-	// while Close is draining would be — so the flag is checked and the Add
-	// performed under one lock.
+	// closing and the wait set it guards are the shutdown handshake: an Add
+	// that takes the counter off zero must not race Wait, so the flag check
+	// and the Add happen under one lock.
 	closeOnce sync.Once
 	closed    chan struct{}
 	trackMu   sync.Mutex
 	closing   bool
 	wg        sync.WaitGroup
 
-	// peerEpoch remembers the epoch each peer last spoke, so that a frame
-	// pushed to a peer that has not yet caught up is sealed under an epoch
-	// it can still open. Without it, the very push that carries a
-	// revocation's epoch bump would be unreadable to every member that has
-	// not already applied it.
-	//
-	// The value stored is the *authenticated* seal epoch of a session with the
-	// peer — an epoch it demonstrably held, since it opened or sealed a frame
-	// under it — never the frame's plaintext Epoch beacon, which is
-	// attacker-chosen and decoupled from Self. Entry is gated by membership
-	// exactly as the announcement cache is, so a flood of minted identities
-	// cannot fill the map and lock every real peer out; see [Node.notePeer].
+	// peerEpoch remembers the epoch each peer last spoke, so a push to a peer
+	// that has not caught up is sealed under an epoch it can still open —
+	// without it, the push carrying a revocation's epoch bump is unreadable to
+	// everyone who has not applied it. The value is the authenticated seal
+	// epoch, never the frame's plaintext beacon, and entry is gated by
+	// membership so minted identities cannot fill the map.
 	mu        sync.Mutex
 	peerEpoch map[types.Identity]uint64
+
+	// unauth holds, per source address and oldest first, the inbound
+	// connections that have not yet opened a frame under the group secret.
+	// Guarded by mu.
+	unauth map[netip.Addr][]*unauthConn
 }
 
 // New starts a gossip node. The caller runs [Node.Serve] to accept sessions.
@@ -260,6 +241,74 @@ func (n *Node) track() bool {
 	return true
 }
 
+// unauthConn is one inbound connection that has not authenticated yet. It is
+// identified by pointer, so eviction and release cannot confuse two
+// connections from the same address.
+type unauthConn struct{ c net.Conn }
+
+// admitUnauth records a connection as not yet having said anything, evicting
+// the oldest such connection from the same address if that address is over
+// [maxUnauthPerSource]. Closing one unblocks its read, so its session ends and
+// its slot comes back.
+func (n *Node) admitUnauth(src netip.Addr, c net.Conn) *unauthConn {
+	e := &unauthConn{c: c}
+	n.mu.Lock()
+	if n.unauth == nil {
+		n.unauth = map[netip.Addr][]*unauthConn{}
+	}
+	q := n.unauth[src]
+	var evicted []*unauthConn
+	for len(q) >= maxUnauthPerSource {
+		evicted = append(evicted, q[0])
+		q = q[1:]
+	}
+	n.unauth[src] = append(q, e)
+	n.mu.Unlock()
+
+	// Closed outside the lock: Close and the logger are both other people's
+	// code, and neither belongs inside a mutex the session path takes.
+	for _, old := range evicted {
+		n.logf("gossip: closing a silent connection from %v: %d from that address are "+
+			"already waiting to speak", old.c.RemoteAddr(), maxUnauthPerSource)
+		old.c.Close()
+	}
+	return e
+}
+
+// releaseUnauth takes a connection off the silent budget. Safe to call twice
+// and safe on one already evicted: the session releases the moment its peer
+// authenticates, and the accept loop releases whatever is left afterwards.
+func (n *Node) releaseUnauth(src netip.Addr, e *unauthConn) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	q := n.unauth[src]
+	i := slices.Index(q, e)
+	if i < 0 {
+		return
+	}
+	q = slices.Delete(q, i, i+1)
+	if len(q) == 0 {
+		delete(n.unauth, src)
+		return
+	}
+	n.unauth[src] = q
+}
+
+// sourceAddr reduces a remote address to the host it came from. An address
+// that does not parse counts as one source, which is the safe direction: it
+// shares a budget rather than escaping one.
+func sourceAddr(a net.Addr) netip.Addr {
+	if t, ok := a.(*net.TCPAddr); ok {
+		if ip, ok := netip.AddrFromSlice(t.IP); ok {
+			return ip.Unmap()
+		}
+	}
+	if ap, err := netip.ParseAddrPort(a.String()); err == nil {
+		return ap.Addr().Unmap()
+	}
+	return netip.Addr{}
+}
+
 // Serve accepts inbound sessions until [Node.Close]. It blocks.
 func (n *Node) Serve() {
 	for {
@@ -270,10 +319,8 @@ func (n *Node) Serve() {
 				return
 			default:
 			}
-			// A transient accept error (fd exhaustion, a connection reset
-			// between accept and return) must not end the loop: this is the
-			// only way a member is reachable, and a node that stops
-			// accepting is a node that silently drops out of the mesh.
+			// A transient accept error must not end the loop: a node that
+			// stops accepting silently drops out of the mesh.
 			n.logf("gossip: accept: %v", err)
 			select {
 			case <-n.closed:
@@ -295,11 +342,15 @@ func (n *Node) Serve() {
 			c.Close()
 			return
 		}
+		src := sourceAddr(c.RemoteAddr())
+		silent := n.admitUnauth(src, c)
 		go func() {
 			defer n.wg.Done()
 			defer func() { <-n.slots }()
+			defer n.releaseUnauth(src, silent)
 			defer c.Close()
-			if err := n.session(c, false, types.Identity{}); err != nil {
+			authed := func() { n.releaseUnauth(src, silent) }
+			if err := n.session(c, false, types.Identity{}, authed); err != nil {
 				n.logf("gossip: inbound session from %v: %v", c.RemoteAddr(), err)
 			}
 		}()
@@ -319,12 +370,9 @@ func (n *Node) Close() error {
 	return nil
 }
 
-// SyncWith runs one anti-entropy session against a peer.
-//
-// peerID may be zero when the peer is not known yet, in which case the frame
-// is sealed under this node's own current epoch. Knowing it is what lets the
-// push after a locally authored change reach members that are one epoch
-// behind — which is every member, immediately after an epoch bump.
+// SyncWith runs one anti-entropy session against a peer. peerID may be zero
+// when the peer is not known yet, in which case the frame is sealed under this
+// node's own epoch.
 func (n *Node) SyncWith(ctx context.Context, addr netip.AddrPort, peerID types.Identity) error {
 	ctx, cancel := context.WithTimeout(ctx, n.timeout)
 	defer cancel()
@@ -338,19 +386,15 @@ func (n *Node) SyncWith(ctx context.Context, addr netip.AddrPort, peerID types.I
 	// this goroutine past the timeout.
 	stop := context.AfterFunc(ctx, func() { c.Close() })
 	defer stop()
-	if err := n.session(c, true, peerID); err != nil {
+	if err := n.session(c, true, peerID, nil); err != nil {
 		return fmt.Errorf("gossip: session with %v: %w", addr, err)
 	}
 	return nil
 }
 
 // Sync runs one round against every peer it can reach, concurrently, and
-// returns how many sessions succeeded.
-//
-// peers names who to talk to; the daemon supplies the current member set so
-// that a revoked device's cached announcement is not dialled. Failures are
-// logged rather than returned: on a LAN a peer being asleep is the common
-// case, not an error the caller can act on.
+// returns how many sessions succeeded. Failures are logged, not returned: a
+// peer being asleep is the common case.
 func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 	var (
 		wg    sync.WaitGroup
@@ -375,20 +419,24 @@ func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 			case <-ctx.Done():
 				return
 			}
-			// One peer gets one session's worth of time across all its
-			// addresses, however many it announced. Without the budget an
-			// announcement of [MaxEndpointAddrs] unreachable addresses costs
-			// every member that many full timeouts per round — and since the
-			// addresses are the announcer's to choose, that turns the member
-			// set into a sustained connection flood aimed wherever it likes.
-			// An announcement may cost its author reachability; it must not
-			// cost a third party.
+			// One session's worth of time across all a peer's addresses.
+			// Without the budget, an announcement of unreachable addresses
+			// costs every member a full timeout each — a connection flood
+			// aimed wherever the announcer likes.
 			pctx, cancel := context.WithTimeout(ctx, n.timeout)
 			defer cancel()
 			// Announced addresses are tried in order and the round stops at
 			// the first that completes: they are alternative paths to one
 			// peer, not several peers.
-			for _, addr := range e.GossipAddrs() {
+			addrs := e.GossipAddrs()
+			if n.opts.OverlayAddrs != nil {
+				// Last, not first: a peer's overlay address is only routable
+				// once the tunnel is up, and a TCP connect into a tunnel that
+				// is not would spend the whole per-peer budget waiting rather
+				// than failing.
+				addrs = append(addrs, n.opts.OverlayAddrs(id)...)
+			}
+			for _, addr := range addrs {
 				if pctx.Err() != nil {
 					return
 				}
@@ -409,7 +457,7 @@ func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 
 // session runs the four-frame exchange. See the package comment for the
 // ordering and why it is strictly alternating.
-func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity) error {
+func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity, authed func()) error {
 	if err := c.SetDeadline(time.Now().Add(n.timeout)); err != nil {
 		return err
 	}
@@ -435,7 +483,21 @@ func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity) error 
 			return err
 		}
 	} else {
+		// A connection that has said nothing has proved nothing, so it gets a
+		// short deadline; the full one starts once its hello is in.
+		if err := c.SetDeadline(time.Now().Add(min(helloTimeout, n.timeout))); err != nil {
+			return err
+		}
 		if peer, err = n.readFrame(c, &epoch); err != nil {
+			return err
+		}
+		// The frame opened, so the peer holds a group secret: it is a member
+		// or was recently one, and it stops counting against the budget for
+		// connections that have said nothing.
+		if authed != nil {
+			authed()
+		}
+		if err := c.SetDeadline(time.Now().Add(n.timeout)); err != nil {
 			return err
 		}
 		// The reply goes out under the epoch the request came in on, so a
@@ -453,14 +515,11 @@ func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity) error 
 		return fmt.Errorf("peer belongs to network %v, this node to %v", peer.Network, view.Network)
 	}
 	if peer.Self != nil && peer.Self.Identity == n.opts.Self && peer.Self.Verify() == nil {
-		// This node, reached through one of its own announced addresses. An
-		// address a node announces is not necessarily unique to it: a bridge
-		// address like 172.17.0.1 is identical on every host that has one, so
-		// dialling a peer there reaches the local listener instead. The
-		// session would then "succeed" against ourselves, and because
-		// [Node.Sync] stops a peer's address list at the first address that
-		// completes, the real peer would never be synced with — permanently,
-		// and with nothing in the logs that looks like a failure.
+		// This node, reached through one of its own announced addresses: a
+		// bridge address like 172.17.0.1 is identical on every host that has
+		// one. The session would "succeed" against ourselves and the real
+		// peer would never be synced with, with nothing that looks like a
+		// failure in the logs.
 		return errors.New("this session reached this node itself; the address is not unique to the peer")
 	}
 	n.notePeer(&peer, epoch)
@@ -480,11 +539,21 @@ func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity) error 
 		Anchor:  view.Anchor,
 		Records: make([][]byte, 0, len(records)),
 	}
+	// Bounded by bytes as well as by count. Records are parents-first, so a
+	// prefix is still applicable on its own, and the peer's next round asks
+	// for the rest — where an over-long frame would fail to encode, fail the
+	// same way every round, and wedge that pair's sync for good. A single
+	// record always fits: [types.MaxRecordSize] is below the budget.
+	budget := maxRecordBytesPerFrame
 	for i := range records {
 		b, err := records[i].Encode()
 		if err != nil {
 			return fmt.Errorf("encoding record %v: %w", records[i].Hash(), err)
 		}
+		if len(reply.Records) > 0 && len(b) > budget {
+			break
+		}
+		budget -= len(b)
 		reply.Records = append(reply.Records, b)
 	}
 
@@ -525,13 +594,9 @@ func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity) error 
 }
 
 // apply decodes and offers the peer's records to the log, reporting whether
-// anything was accepted.
-//
-// Decoding goes through types.DecodeAUM, which enforces the canonical encoding
-// the chain rests on; a frame is not a second way to build a record. A batch
-// the log rejects is reported and dropped: the peer may be on a fork, may be
-// replaying, or may simply have sent a record whose ancestors have not arrived
-// yet, and none of those are this layer's to resolve.
+// anything was accepted. Decoding goes through types.DecodeAUM: a frame is not
+// a second way to build a record. A rejected batch is reported and dropped —
+// a fork, a replay or a missing ancestor is not this layer's to resolve.
 func (n *Node) apply(raw [][]byte) (bool, error) {
 	if len(raw) == 0 {
 		return false, nil
@@ -539,28 +604,34 @@ func (n *Node) apply(raw [][]byte) (bool, error) {
 	if len(raw) > MaxRecordsPerFrame {
 		return false, fmt.Errorf("peer sent %d records, over the %d limit", len(raw), MaxRecordsPerFrame)
 	}
+	// Decoding stops at the first record this build cannot read, and the
+	// prefix is still offered. Records arrive parents-first, so a prefix
+	// applies on its own — and after a schema upgrade the record that explains
+	// why the rest is unreadable is the one immediately before them. Refusing
+	// the batch whole would leave a node that only saw sync stop.
 	records := make([]types.AUM, 0, len(raw))
+	var stopped error
 	for _, b := range raw {
 		aum, err := types.DecodeAUM(b)
 		if err != nil {
-			return false, fmt.Errorf("peer sent an undecodable record: %w", err)
+			stopped = fmt.Errorf("peer sent a record this build cannot read: %w", err)
+			break
 		}
 		records = append(records, aum)
+	}
+	if len(records) == 0 {
+		return false, stopped
 	}
 	if err := n.opts.Log.Inform(records); err != nil {
 		return false, fmt.Errorf("offering %d records to the log: %w", len(records), err)
 	}
-	return true, nil
+	return true, stopped
 }
 
 // takeEndpoints verifies and caches announcements, reporting whether any were
-// new.
-//
-// An announcement that does not verify is dropped, logged, and does not end
-// the session. The peer relaying it is not necessarily its author — relays
-// forward from their caches — and integrity never rested on the transport
-// anyway: a bad announcement admitted nothing, and the good ones in the same
-// frame are still good.
+// new. One that does not verify is dropped and logged without ending the
+// session: the relaying peer is not necessarily its author, and the good ones
+// in the same frame are still good.
 func (n *Node) takeEndpoints(self *Endpoint, relayed []Endpoint) bool {
 	eps := relayed
 	if self != nil {
@@ -596,14 +667,9 @@ func (n *Node) hello(view *View) frame {
 		Have:    view.Have,
 	}
 	if len(f.Have) > MaxHashesPerFrame {
-		// Which ones survive is arbitrary: the set arrives in whatever order
-		// the store reports, which is by hash and not by position in the
-		// chain. That costs bandwidth and never correctness — a peer that
-		// cannot see we hold a record simply sends it again, and the log
-		// discards what it already has. A log this long is well past the
-		// scale this milestone targets; ordering the set by chain position,
-		// so that truncation keeps recent history, is the fix if it ever
-		// matters, and it costs a chain resolution per beacon.
+		// Which ones survive is arbitrary — the store reports by hash, not by
+		// chain position — which costs bandwidth and never correctness: a
+		// peer that cannot see we hold a record sends it again.
 		f.Have = f.Have[:MaxHashesPerFrame]
 	}
 	if n.opts.Announce != nil {
@@ -623,26 +689,11 @@ func (n *Node) hello(view *View) frame {
 // authored the session's Self announcement, so the next push to it is sealed
 // under an epoch it can open.
 //
-// sealEpoch is the epoch the whole session was sealed under. It is
-// authenticated: to take part in the session the peer had to open a frame under
-// it (as responder) or reply under it (as initiator), which it can only do
-// holding that epoch's secret. The frame's plaintext Epoch beacon is used for
-// nothing here — it is not covered by any signature and is decoupled from Self,
-// so trusting it let a single crafted hello pin this value at 2^64-1 and defeat
-// the epoch-skew push accommodation for a targeted peer.
-//
-// Only the frame's own Self announcement names the peer: the relayed ones
-// describe other nodes, whose epochs this session says nothing about. Never
-// lowering a remembered epoch keeps a stale relayed view from undoing what a
-// live session established.
-//
-// Entry is gated by membership the same way [Cache.Add] gates the announcement
-// cache, and for the same reason: an announcement is self-signed and identity
-// keys cost nothing to mint, so without the gate a flood of invented
-// identities would fill this map and — with no way to grow past the bound —
-// lock every real peer out of it permanently, sending all their pushes under
-// this node's own epoch and dropping revocation convergence back to the
-// anti-entropy timer.
+// sealEpoch must be the epoch the session was sealed under, which taking part
+// authenticated — never the frame's plaintext beacon, which one crafted hello
+// could pin at 2^64-1. Only the frame's own Self names the peer, a remembered
+// epoch is never lowered, and entry is gated by membership so that minted
+// identities cannot fill this bounded map.
 func (n *Node) notePeer(peer *frame, sealEpoch uint64) {
 	if peer.Self == nil || peer.Self.Identity == n.opts.Self {
 		return
@@ -660,11 +711,9 @@ func (n *Node) notePeer(peer *frame, sealEpoch uint64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if _, known := n.peerEpoch[id]; !known && len(n.peerEpoch) >= maxRememberedPeers {
-		// Full. A member's entry displaces a non-member's, exactly as in the
-		// announcement cache; a subject that is not yet a member waits for
-		// room, which costs it nothing — an unknown epoch means a push under
-		// this node's own, and a just-admitted member is on this node's own
-		// epoch anyway.
+		// Full: a member displaces a non-member, as in the announcement cache.
+		// Waiting for room costs a non-member nothing — an unknown epoch
+		// means a push under this node's own.
 		if !n.opts.Endpoints.IsMember(id) || !n.evictNonMemberEpochLocked() {
 			return
 		}
@@ -674,12 +723,9 @@ func (n *Node) notePeer(peer *frame, sealEpoch uint64) {
 	}
 }
 
-// evictNonMemberEpochLocked drops one non-member's remembered epoch, so a
-// member can take its slot. It reports whether it freed one. The caller holds
-// n.mu.
-//
-// The bound is 2*[types.MaxNodes], so a full map always holds at least one
-// non-member and this cannot fail to free a slot for a genuine member.
+// evictNonMemberEpochLocked drops one non-member's remembered epoch so a
+// member can take its slot, reporting whether it freed one. The caller holds
+// n.mu. The bound is 2*[types.MaxNodes], so a full map always holds one.
 func (n *Node) evictNonMemberEpochLocked() bool {
 	for id := range n.peerEpoch {
 		if !n.opts.Endpoints.IsMember(id) {
@@ -746,10 +792,9 @@ func (n *Node) writeFrame(c net.Conn, epoch uint64, f *frame) error {
 	return nil
 }
 
-// readFrame reads one frame. epoch is both an input and an output: on the
-// first call of a session it is zero and takes the epoch the peer sealed
-// under, and afterwards it is checked, so that a session cannot be walked from
-// one epoch's key to another's mid-exchange.
+// readFrame reads one frame. epoch is in and out: zero on a session's first
+// call, taking the epoch the peer sealed under, and checked afterwards, so a
+// session cannot be walked from one epoch's key to another's.
 func (n *Node) readFrame(c net.Conn, epoch *uint64) (frame, error) {
 	var hdr [4]byte
 	if _, err := io.ReadFull(c, hdr[:]); err != nil {
@@ -760,12 +805,9 @@ func (n *Node) readFrame(c net.Conn, epoch *uint64) (frame, error) {
 		return frame{}, fmt.Errorf("gossip: peer announced a %d-byte frame, over the %d limit",
 			size, maxSealedSize)
 	}
-	// Grown as the bytes arrive rather than allocated from the announced
-	// size. The size is the peer's claim and nothing has authenticated it
-	// yet, so trusting it would let one peer that opens the maximum number
-	// of sessions, announces the maximum frame in each and then sends
-	// nothing hold hundreds of megabytes here until the deadline. Growing
-	// on receipt makes the memory cost what the peer actually sent.
+	// Grown as bytes arrive, never allocated from the announced size: that
+	// size is an unauthenticated claim, and trusting it lets a peer hold
+	// hundreds of megabytes here by announcing frames it never sends.
 	blob, err := readN(c, int(size))
 	if err != nil {
 		return frame{}, fmt.Errorf("gossip: reading a frame body: %w", err)
@@ -783,12 +825,8 @@ func (n *Node) readFrame(c net.Conn, epoch *uint64) (frame, error) {
 	return decodeFrame(pt)
 }
 
-// readN reads exactly n bytes, growing its buffer as they arrive.
-//
-// The caller has already checked n against the format's limit; what this adds
-// is that an announced size costs nothing until it is backed by bytes on the
-// wire. io.ReadFull into a pre-sized buffer would let the announcement itself
-// be the allocation.
+// readN reads exactly n bytes, growing its buffer as they arrive, so an
+// announced size costs nothing until bytes back it.
 func readN(r io.Reader, n int) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Grow(min(n, 32<<10))

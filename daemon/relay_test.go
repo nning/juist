@@ -1,0 +1,647 @@
+package daemon
+
+import (
+	"bytes"
+	"net/netip"
+	"os"
+	"slices"
+	"testing"
+
+	"github.com/nning/juist/conn"
+	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/types"
+)
+
+// setRoles builds and signs a record granting a member a role set.
+func (nw *network) setRoles(t *testing.T, f *reconcileFixture, id types.Identity, roles ...types.Role) {
+	t.Helper()
+	rec, err := f.auth.Builder().SetNodeRoutes(id, roles, nil)
+	if err != nil {
+		t.Fatalf("building the grant: %v", err)
+	}
+	if err := rec.Sign(nw.admin); err != nil {
+		t.Fatalf("signing the grant: %v", err)
+	}
+	if err := f.d.Inform([]types.AUM{rec}); err != nil {
+		t.Fatalf("applying the grant: %v", err)
+	}
+}
+
+// learnRelay hands the daemon an announcement in which a peer says where its
+// relay listens.
+func (f *reconcileFixture) learnRelay(t *testing.T, dev *device, port uint16, info *gossip.RelayInfo) {
+	t.Helper()
+	_, discoPub, err := conn.NewDiscoKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := gossip.Endpoint{
+		Identity:   dev.record.Identity,
+		Disco:      gossip.DiscoKey(discoPub),
+		Addrs:      []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("192.0.2.10"), port)},
+		GossipPort: port,
+		Seq:        2,
+		Relay:      info,
+	}
+	if err := e.Sign(dev.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatalf("learning an announcement: %v", err)
+	}
+}
+
+func testRelayInfo() *gossip.RelayInfo {
+	return &gossip.RelayInfo{
+		Port:     4443,
+		STUNPort: 4443,
+		Cert:     bytes.Repeat([]byte{7}, gossip.RelayCertSize),
+		HostName: "abcdefgh.relay.juist.invalid",
+	}
+}
+
+// TestRelayNeedsBothTheRoleAndTheAnnouncement: quorum says who may relay and
+// the member says where. Either half alone must produce nothing — otherwise a
+// member could volunteer itself as everyone's relay, or a grant would point
+// the mesh at an address nobody stated.
+func TestRelayNeedsBothTheRoleAndTheAnnouncement(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	other := f.nw.devices[1]
+
+	// Announced but not granted.
+	f.learnRelay(t, other, 41641, testRelayInfo())
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := f.mgr.relaySnapshot(); len(got) != 0 {
+		t.Fatalf("installed %d relays for a member the log never granted the role", len(got))
+	}
+
+	// Granted and announced.
+	f.nw.setRoles(t, f, other.record.Identity, types.RoleRelayCapable)
+	relays := f.mgr.relaySnapshot()
+	if len(relays) != 1 {
+		t.Fatalf("installed %d relays, want 1", len(relays))
+	}
+	r := relays[0]
+	if r.HostName != "abcdefgh.relay.juist.invalid" {
+		t.Errorf("relay host name %q", r.HostName)
+	}
+	if r.STUNPort != 4443 {
+		t.Errorf("relay STUN port %d, want 4443", r.STUNPort)
+	}
+	if want := netip.MustParseAddrPort("192.0.2.10:4443"); !slices.Contains(r.Addrs, want) {
+		t.Errorf("relay addresses %v, want one at %v", r.Addrs, want)
+	}
+	if r.CertHash != [32]byte(bytes.Repeat([]byte{7}, 32)) {
+		t.Error("the announced certificate hash did not reach the data plane")
+	}
+	if want := relayRegion(f.auth.State().GenesisHash(), other.record.Identity); r.Region != want {
+		t.Errorf("relay region %d, want the derived %d", r.Region, want)
+	}
+
+	// Granted, then the grant withdrawn.
+	f.nw.setRoles(t, f, other.record.Identity)
+	if got := f.mgr.relaySnapshot(); len(got) != 0 {
+		t.Errorf("a withdrawn grant left %d relays installed", len(got))
+	}
+}
+
+// TestHomeRelayNamingNothingIsDropped: a peer names the region it can be
+// reached through, and a region no relay-capable member serves is not a path.
+// Installing it would make the data plane treat an address that reaches
+// nothing as one that does.
+func TestHomeRelayNamingNothingIsDropped(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	other := f.nw.devices[1]
+
+	_, discoPub, err := conn.NewDiscoKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := gossip.Endpoint{
+		Identity:   other.record.Identity,
+		Disco:      gossip.DiscoKey(discoPub),
+		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:41641")},
+		GossipPort: 41641,
+		Seq:        3,
+		HomeRelay:  4242,
+	}
+	if err := e.Sign(other.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatalf("Learn: %v", err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	peers := f.mgr.snapshot()
+	if len(peers) != 1 {
+		t.Fatalf("installed %d peers, want 1", len(peers))
+	}
+	if peers[0].HomeRelay != 0 {
+		t.Errorf("home relay %d survived with no relay serving it", peers[0].HomeRelay)
+	}
+}
+
+// TestRelayRegionIsStableAndNetworkScoped: every member must derive the same
+// number for a relay without agreeing on anything, and two networks must not
+// derive the same one — a shared region would have members of one network
+// sending to the other's relay.
+func TestRelayRegionIsStableAndNetworkScoped(t *testing.T) {
+	id, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	netA, netB := types.Hash{1}, types.Hash{2}
+	a := relayRegion(netA, id.Public())
+	if a != relayRegion(netA, id.Public()) {
+		t.Error("the derivation is not a function of its inputs")
+	}
+	if a == relayRegion(netB, id.Public()) {
+		t.Error("the same identity derives the same region in two networks")
+	}
+	if a < 1 || a > conn.MaxRegionID {
+		t.Errorf("region %d is outside 1..%d, which the data plane truncates", a, conn.MaxRegionID)
+	}
+}
+
+// TestCollidingRelayRegionsKeepOneDeterministically: the derivation is 16 bits
+// wide because a peer's home region is, so two relay-capable members can
+// collide. Both being installed would put two unmeshed relays in one region,
+// where two clients can land on different servers and not reach each other.
+func TestCollidingRelayRegionsKeepOneDeterministically(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	network := f.auth.State().GenesisHash()
+
+	// Draw identities until two land in the same region: 16 bits, so a few
+	// hundred draws is the expectation rather than the hope.
+	seen := map[int]types.Identity{}
+	var lo, hi types.Identity
+	for range 200000 {
+		id, err := types.GenerateIdentity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := relayRegion(network, id.Public())
+		if other, dup := seen[r]; dup {
+			lo, hi = other, id.Public()
+			if hi.Compare(lo) < 0 {
+				lo, hi = hi, lo
+			}
+			break
+		}
+		seen[r] = id.Public()
+	}
+	if lo.IsZero() {
+		t.Skip("no region collision found; the derivation is wider than this test assumes")
+	}
+
+	held := map[types.Identity]gossip.Endpoint{
+		lo: {Identity: lo, Addrs: []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41641")},
+			Relay: testRelayInfo()},
+		hi: {Identity: hi, Addrs: []netip.AddrPort{netip.MustParseAddrPort("192.0.2.2:41641")},
+			Relay: testRelayInfo()},
+	}
+	nodes := []types.NodeRecord{
+		{Identity: lo, Roles: []types.Role{types.RoleRelayCapable}},
+		{Identity: hi, Roles: []types.Role{types.RoleRelayCapable}},
+	}
+	got := f.d.relaySet(network, nodes, held)
+	if len(got) != 1 {
+		t.Fatalf("two relays colliding on one region produced %d entries, want 1", len(got))
+	}
+	if want := relayRegion(network, lo); got[0].Region != want {
+		t.Errorf("region %d survived, want %d", got[0].Region, want)
+	}
+	if got[0].Addrs[0].Addr() != netip.MustParseAddr("192.0.2.1") {
+		t.Errorf("the surviving relay is %v; the lower identity must keep the region", got[0].Addrs[0])
+	}
+}
+
+// TestReflexiveAddressesJoinTheScanRatherThanReplacingIt: the interface scan is
+// what makes a LAN with no internet work, and a reflexive address is what makes
+// an off-LAN peer reachable. Neither is a superset of the other.
+func TestReflexiveAddressesJoinTheScanRatherThanReplacingIt(t *testing.T) {
+	scanned := []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41641")}
+	learned := []netip.AddrPort{
+		netip.MustParseAddrPort("198.51.100.7:33445"),
+		netip.MustParseAddrPort("192.0.2.1:41641"), // the scan's own, reported back
+	}
+	got := mergeEndpoints(scanned, learned)
+	for _, want := range []netip.AddrPort{
+		netip.MustParseAddrPort("192.0.2.1:41641"),
+		netip.MustParseAddrPort("198.51.100.7:33445"),
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("merged set %v is missing %v", got, want)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("merged set %v holds a duplicate", got)
+	}
+	if len(mergeEndpoints(scanned, nil)) != 1 {
+		t.Error("an empty learned set changed the scan")
+	}
+
+	// The bound is the announcement's, so a data plane reporting many
+	// addresses cannot make one unencodable.
+	many := make([]netip.AddrPort, 0, gossip.MaxEndpointAddrs*2)
+	for i := range cap(many) {
+		many = append(many, netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i + 1)}), 1))
+	}
+	if n := len(mergeEndpoints(scanned, many)); n > gossip.MaxEndpointAddrs {
+		t.Errorf("merged set holds %d addresses, over the %d announcement limit",
+			n, gossip.MaxEndpointAddrs)
+	}
+}
+
+// TestAFullScanDoesNotCrowdOutTheReflexiveAddress: a reflexive address is
+// numerically higher than the private ranges a multi-homed host is full of, so
+// truncating the sorted union would drop exactly the address the merge exists
+// to carry — and the node would announce nothing but addresses no other member
+// can reach.
+func TestAFullScanDoesNotCrowdOutTheReflexiveAddress(t *testing.T) {
+	scanned := make([]netip.AddrPort, 0, gossip.MaxEndpointAddrs)
+	for i := range gossip.MaxEndpointAddrs {
+		scanned = append(scanned,
+			netip.AddrPortFrom(netip.AddrFrom4([4]byte{10, 0, 0, byte(i + 1)}), 41641))
+	}
+	reflexive := netip.MustParseAddrPort("198.51.100.7:41641")
+
+	got := mergeEndpoints(gossip.SortAddrs(scanned), []netip.AddrPort{reflexive})
+	if len(got) != gossip.MaxEndpointAddrs {
+		t.Fatalf("merged set holds %d addresses, want the %d limit",
+			len(got), gossip.MaxEndpointAddrs)
+	}
+	if !slices.Contains(got, reflexive) {
+		t.Errorf("the reflexive address was dropped for private ones: %v", got)
+	}
+}
+
+// TestThisDeviceRelaysOnlyWhereTheLogSaysSo: running a relay is a standing
+// offer of this member's bandwidth, so it follows the grant rather than local
+// configuration — and the announcement has to carry where it listens, or the
+// grant points nowhere.
+func TestThisDeviceRelaysOnlyWhereTheLogSaysSo(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if f.d.Status().Relaying {
+		t.Fatal("this device relays without the log granting it the role")
+	}
+	if e, ok := f.d.Announcement(); ok && e.Relay != nil {
+		t.Fatal("the announcement names a relay this device is not running")
+	}
+
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	if !f.d.Status().Relaying {
+		t.Fatal("the grant did not start this device's relay")
+	}
+	e, ok := f.d.Announcement()
+	if !ok || e.Relay == nil {
+		t.Fatal("the announcement does not say where this device's relay listens")
+	}
+	if e.Relay.Port == 0 || e.Relay.HostName == "" || len(e.Relay.Cert) != gossip.RelayCertSize {
+		t.Errorf("the relay announcement is incomplete: %+v", e.Relay)
+	}
+	if err := e.Verify(); err != nil {
+		t.Errorf("the announcement carrying the relay does not verify: %v", err)
+	}
+
+	// The admission answer the relay serves from must be the log's, and it
+	// must be current before the relay can accept anything.
+	if !f.d.admitToRelay(f.nw.devices[1].record.WireGuard) {
+		t.Error("a member would be refused by this device's relay")
+	}
+	var stranger types.WGKey
+	stranger[0] = 9
+	if f.d.admitToRelay(stranger) {
+		t.Error("a key the log does not carry would be admitted to this device's relay")
+	}
+
+	f.nw.setRoles(t, f, f.self.record.Identity)
+	if f.d.Status().Relaying {
+		t.Error("withdrawing the grant did not stop this device's relay")
+	}
+	if e, ok := f.d.Announcement(); ok && e.Relay != nil {
+		t.Error("the announcement still names a relay after the grant was withdrawn")
+	}
+}
+
+// TestDisableRelayIsTheOperatorsVeto: the log decides who may relay, and the
+// operator of the machine decides whether it will. Without that, a grant would
+// commit someone else's uplink.
+func TestDisableRelayIsTheOperatorsVeto(t *testing.T) {
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.DisableRelay = true })
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	if f.d.Status().Relaying {
+		t.Error("a device with relaying disabled started one anyway")
+	}
+}
+
+// TestOnlyUnheardMembersAreLookedUp: a rendezvous query is visible to whoever
+// answers it, so asking after a member this node already holds an address for
+// would spend privacy on nothing — and asking after every member at once is
+// how a storage node would learn how many there are.
+func TestOnlyUnheardMembersAreLookedUp(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	want := []types.Identity{f.nw.devices[1].record.Identity, f.nw.devices[2].record.Identity}
+	got := f.d.unheard()
+	if len(got) != len(want) {
+		t.Fatalf("unheard = %v, want the two members with no announcement", got)
+	}
+	for _, id := range want {
+		if !slices.Contains(got, id) {
+			t.Errorf("unheard omits %v", id.ShortString())
+		}
+	}
+	if slices.Contains(got, f.self.record.Identity) {
+		t.Error("this node is looking for itself")
+	}
+
+	// One announcement arrives; that member drops out of the set.
+	f.learn(t, f.nw.devices[1], 41641)
+	got = f.d.unheard()
+	if len(got) != 1 || got[0] != f.nw.devices[2].record.Identity {
+		t.Errorf("unheard = %v after one announcement, want only the remaining member", got)
+	}
+}
+
+// TestAnAnnouncementFoundInTheDHTIsActedOn: where a record came from decides
+// nothing but the log line — its authority is its signature — so the
+// rendezvous path must reach the reconciler exactly as the LAN path does.
+func TestAnAnnouncementFoundInTheDHTIsActedOn(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	other := f.nw.devices[1]
+	_, discoPub, err := conn.NewDiscoKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := gossip.Endpoint{
+		Identity:   other.record.Identity,
+		Disco:      gossip.DiscoKey(discoPub),
+		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("198.51.100.9:41641")},
+		GossipPort: 41641,
+		Seq:        7,
+	}
+	if err := e.Sign(other.identity); err != nil {
+		t.Fatal(err)
+	}
+	f.d.onFoundInDHT(e)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	peers := f.mgr.snapshot()
+	if len(peers) != 1 {
+		t.Fatalf("installed %d peers after a DHT rendezvous, want 1", len(peers))
+	}
+	if len(peers[0].Endpoints) != 1 || peers[0].Endpoints[0] != e.Addrs[0] {
+		t.Errorf("peer endpoints %v, want the address found through the DHT", peers[0].Endpoints)
+	}
+}
+
+// TestTheEndpointCacheSurvivesARestart is what makes a cold start work where
+// there is no LAN to be found on: a device that comes back knows where its
+// peers were before it stopped, without a rendezvous round trip per peer.
+func TestTheEndpointCacheSurvivesARestart(t *testing.T) {
+	dir := t.TempDir()
+	path := EndpointCachePath(dir)
+
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.EndpointCachePath = path })
+	other := f.nw.devices[1]
+	want := f.learn(t, other, 41641)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("nothing was written to %s: %v", path, err)
+	}
+
+	// A second daemon over the same network and the same cache file: what it
+	// knows before hearing anything is what the first one wrote.
+	auth, st := f.nw.authorityFor(t)
+	mgr := &fakeManager{}
+	restarted, err := New(Options{
+		Authority:         auth,
+		Storage:           st,
+		Identity:          f.self.identity,
+		Recipient:         f.self.recipient,
+		WireGuard:         f.self.wgPrivate,
+		Connect:           func(conn.Options) (conn.Manager, error) { return mgr, nil },
+		DisableDiscovery:  true,
+		DisableDHT:        true,
+		EndpointCachePath: path,
+		Logf:              safeLogf(t, "restarted: "),
+	})
+	if err != nil {
+		t.Fatalf("restarting: %v", err)
+	}
+	defer restarted.Close()
+
+	got, held := restarted.Endpoints().Get(other.record.Identity)
+	if !held {
+		t.Fatal("a restarted daemon knows nothing about its peer")
+	}
+	if got.Seq != want.Seq || len(got.Addrs) != 1 || got.Addrs[0] != want.Addrs[0] {
+		t.Errorf("recovered %+v, want the announcement that was cached %+v", got, want)
+	}
+	if err := restarted.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n := len(mgr.snapshot()); n != 1 {
+		t.Errorf("installed %d peers from the cache alone, want 1", n)
+	}
+}
+
+// TestAnEditedEndpointCacheIsIgnored: the file is written by this node but is
+// not trusted by it — anyone who can write the state directory could otherwise
+// point every peer entry wherever they liked.
+func TestAnEditedEndpointCacheIsIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := EndpointCachePath(dir)
+
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.EndpointCachePath = path })
+	other := f.nw.devices[1]
+	f.learn(t, other, 41641)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Flip a byte in the announced address. The signature covers it, so the
+	// record must not survive the edit.
+	var held []gossip.Endpoint
+	if err := gossip.DecodeCachedEndpoints(raw, &held); err != nil {
+		t.Fatalf("decoding what was written: %v", err)
+	}
+	if len(held) != 1 {
+		t.Fatalf("cached %d records, want 1", len(held))
+	}
+	held[0].Addrs = []netip.AddrPort{netip.MustParseAddrPort("203.0.113.5:41641")}
+	edited, err := gossip.EncodeCachedEndpoints(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, edited, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	auth, st := f.nw.authorityFor(t)
+	restarted, err := New(Options{
+		Authority: auth, Storage: st,
+		Identity: f.self.identity, Recipient: f.self.recipient, WireGuard: f.self.wgPrivate,
+		Connect:           func(conn.Options) (conn.Manager, error) { return &fakeManager{}, nil },
+		DisableDiscovery:  true,
+		DisableDHT:        true,
+		EndpointCachePath: path,
+		Logf:              safeLogf(t, "restarted: "),
+	})
+	if err != nil {
+		t.Fatalf("restarting: %v", err)
+	}
+	defer restarted.Close()
+	if got, held := restarted.Endpoints().Get(other.record.Identity); held {
+		t.Errorf("an edited announcement was adopted: %+v", got)
+	}
+}
+
+// TestARelayStopsWhenMembershipCannotBeRead: who may use this member's relay
+// is a membership question, and a node under a fork alarm cannot answer one.
+// Leaving the relay up would keep admitting whoever the last state it managed
+// to read said was a member — including someone a branch it cannot choose
+// between has removed.
+func TestARelayStopsWhenMembershipCannotBeRead(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	if !f.d.Status().Relaying {
+		t.Fatal("the grant did not start this device's relay")
+	}
+	member := f.nw.devices[1]
+	if !f.d.admitToRelay(member.record.WireGuard) {
+		t.Fatal("a member would be refused before the fork")
+	}
+
+	// Two conflicting removals with the same parent: the loser is a
+	// revocation, which is what trust/log refuses to resolve.
+	a, b := f.nw.devices[1], f.nw.devices[2]
+	first := f.nw.removeNode(t, f.auth, a.record.Identity)
+	second := f.nw.removeNode(t, f.auth, b.record.Identity)
+	if err := f.auth.Inform(first, second); err != nil {
+		t.Fatalf("informing the fork: %v", err)
+	}
+	if f.auth.Alarm() == nil {
+		t.Fatal("two conflicting revocations did not raise a fork alarm")
+	}
+	if err := f.d.Reconcile(); err == nil {
+		t.Fatal("reconcile succeeded under a fork alarm")
+	}
+
+	if f.d.Status().Relaying {
+		t.Error("this device kept relaying under a fork alarm")
+	}
+	if f.d.admitToRelay(member.record.WireGuard) {
+		t.Error("the relay would still admit a member it can no longer vouch for")
+	}
+}
+
+// TestARemovedDeviceRelaysForNobody: the grant was in a state this device is
+// no longer part of, so honouring it would be volunteering an uplink on behalf
+// of a network that has removed you.
+func TestARemovedDeviceRelaysForNobody(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	if !f.d.Status().Relaying {
+		t.Fatal("the grant did not start this device's relay")
+	}
+
+	rec := f.nw.removeNode(t, f.auth, f.self.record.Identity)
+	if err := f.d.Inform([]types.AUM{rec}); err != nil {
+		t.Fatalf("applying the removal: %v", err)
+	}
+	st := f.d.Status()
+	if !st.NotMember {
+		t.Fatal("the daemon does not know it was removed")
+	}
+	if st.Relaying {
+		t.Error("a removed device kept relaying")
+	}
+}
+
+// TestThisNodesOwnRelayIsInItsOwnMap: a member that is the network's only
+// relay must still have a region to be reached through. Left out of its own
+// map it would announce none, and every peer that cannot punch to it directly
+// would have nowhere to fall back to.
+func TestThisNodesOwnRelayIsInItsOwnMap(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+
+	relays := f.mgr.relaySnapshot()
+	if len(relays) != 1 {
+		t.Fatalf("installed %d relays, want this node's own", len(relays))
+	}
+	want := relayRegion(f.auth.State().GenesisHash(), f.self.record.Identity)
+	if relays[0].Region != want {
+		t.Errorf("relay region %d, want this node's own %d", relays[0].Region, want)
+	}
+	e, ok := f.d.Announcement()
+	if !ok || e.Relay == nil {
+		t.Fatal("this node announces no relay")
+	}
+	if relays[0].HostName != e.Relay.HostName {
+		t.Errorf("the installed relay is %q, this node announces %q",
+			relays[0].HostName, e.Relay.HostName)
+	}
+
+	// And it goes away with the grant, rather than lingering as a region
+	// nothing serves.
+	f.nw.setRoles(t, f, f.self.record.Identity)
+	if got := f.mgr.relaySnapshot(); len(got) != 0 {
+		t.Errorf("%d relays survived the grant being withdrawn", len(got))
+	}
+}
+
+// TestTheRelayFloorIsReported is docs/04-architecture.md's floor: below two
+// relay-capable members there is no fallback path left when one is offline.
+// The count is of the *grant*, not of the relays installed, because a grant
+// with no announcement behind it is a relay nobody can reach — and an operator
+// needs to be able to tell those two situations apart.
+func TestTheRelayFloorIsReported(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := f.d.Status().RelayCapable; got != 0 {
+		t.Fatalf("a network with no grants reports %d relay-capable members", got)
+	}
+
+	other := f.nw.devices[1]
+	f.nw.setRoles(t, f, other.record.Identity, types.RoleRelayCapable)
+	st := f.d.Status()
+	if st.RelayCapable != 1 {
+		t.Errorf("RelayCapable = %d after one grant, want 1", st.RelayCapable)
+	}
+	if st.Relays != 0 {
+		t.Errorf("installed %d relays for a member that announced none", st.Relays)
+	}
+
+	f.learnRelay(t, other, 41641, testRelayInfo())
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if st := f.d.Status(); st.RelayCapable != 1 || st.Relays != 1 {
+		t.Errorf("RelayCapable=%d Relays=%d after the announcement, want 1 and 1",
+			st.RelayCapable, st.Relays)
+	}
+}

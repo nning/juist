@@ -17,12 +17,8 @@ var tcbPackages = []string{
 	"github.com/nning/juist/trust/store",
 }
 
-// Third-party modules the TCB is allowed to depend on, and why.
-//
-// The list is short on purpose. docs/03-control-plane-options.md rejected
-// go-libp2p partly on TCB size — "a large framework in the audit path, against
-// boring auditable Go" — and that argument only holds if the TCB's dependency
-// closure stays something a reviewer can actually read.
+// Third-party modules the TCB is allowed to depend on. Short on purpose: the
+// audit scope only means something if its dependency closure stays readable.
 var allowedModules = map[string]string{
 	// The Ed25519 group implementation from the standard library, repackaged
 	// as an importable module. Needed to reject small-order public keys, which
@@ -45,14 +41,10 @@ var forbiddenAnywhere = map[string]string{
 	"plugin":   "nothing in the trust layer loads code",
 }
 
-// Packages the TCB must not import *directly*, per package. Transitive reach
-// is the wrong granularity here — os and time arrive through half the standard
-// library — so what is checked is what the code itself asks for.
-//
-// The clock and the filesystem are excluded from the packages that decide
-// validity, because a record's verdict has to be a function of the record and
-// the state it is applied to. If it could depend on the time or on a file, two
-// nodes holding the same log could disagree about who is a member.
+// Packages the TCB must not import directly, per package; transitive reach is
+// the wrong granularity, since os and time arrive through half the standard
+// library. The clock and the filesystem are excluded from the packages that
+// decide validity: a verdict must be a function of the record and the state.
 var forbiddenDirect = map[string][]string{
 	"github.com/nning/juist/types":         {"os", "time", "math/rand", "math/rand/v2"},
 	"github.com/nning/juist/trust/log":     {"os", "time", "math/rand", "math/rand/v2"},
@@ -62,13 +54,9 @@ var forbiddenDirect = map[string][]string{
 	"github.com/nning/juist/trust/store": {"time", "math/rand", "math/rand/v2"},
 }
 
-// TestTCBDependencies is the architectural invariant behind the audit scope in
-// docs/06-verification.md, enforced rather than asserted. It lives here
-// because trust/log is the package that scope centres on.
-//
-// A dependency added to the TCB is a dependency an auditor has to read, so
-// adding one is a decision to make deliberately: extend the allowlist, with
-// the reason, in the same commit.
+// TestTCBDependencies enforces the audit scope in docs/06-verification.md. A
+// dependency added to the TCB is one an auditor has to read: extend the
+// allowlist, with the reason, in the same commit.
 func TestTCBDependencies(t *testing.T) {
 	for _, pkg := range tcbPackages {
 		for _, dep := range goList(t, "-deps", pkg) {
@@ -94,10 +82,9 @@ func TestTCBDependencies(t *testing.T) {
 	}
 }
 
-// TestTCBHasNoTailscaleDependency keeps the layering in
-// docs/04-architecture.md honest from the other direction: the connectivity
-// layer is built on Tailscale's stack, and the trust layer must not be. A
-// vendored-engine upgrade must never be able to change who is a member.
+// TestTCBHasNoTailscaleDependency: the connectivity layer is built on
+// Tailscale's stack and the trust layer must not be, so no engine upgrade can
+// change who is a member.
 func TestTCBHasNoTailscaleDependency(t *testing.T) {
 	for _, pkg := range tcbPackages {
 		for _, dep := range goList(t, "-deps", pkg) {
@@ -125,10 +112,8 @@ func isThirdParty(path string) bool {
 	return strings.Contains(first, ".")
 }
 
-// goList runs go list and returns its non-empty output lines.
-//
-// Shelling out to the toolchain is the only way to resolve a module-aware
-// import graph from a test without adding golang.org/x/tools to the tree,
+// goList runs go list and returns its non-empty output lines. Shelling out
+// resolves a module-aware import graph without adding golang.org/x/tools,
 // which for a test that exists to keep dependencies out would be
 // self-defeating.
 func goList(t *testing.T, args ...string) []string {

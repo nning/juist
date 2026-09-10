@@ -13,13 +13,8 @@ import (
 
 // State is the authority state at one position in the chain: who the members
 // are, which keys may authorize changes, and which group-secret epoch is
-// current.
-//
-// State values are treated as immutable. Applying a record produces a new
-// State rather than mutating one, so a caller holding a State keeps a stable
-// view while the chain moves underneath it. The member and admin maps make
-// that cheap: cloning copies map entries, and the node records they point at
-// are never written to once stored.
+// current. State values are immutable — applying a record produces a new one —
+// so a caller holding a State keeps a stable view while the chain moves.
 type State struct {
 	head        types.Hash
 	genesisHash types.Hash
@@ -27,6 +22,7 @@ type State struct {
 	quorum      uint32
 	epoch       uint64
 	epochCommit types.Hash
+	schema      types.SchemaVersion
 	disablement []types.Hash
 	admins      map[types.Identity]types.AdminKey
 	nodes       map[types.Identity]*types.NodeRecord
@@ -41,16 +37,11 @@ const (
 	// applyChain is a real application: every rule holds.
 	applyChain applyMode = iota
 
-	// applyProbe asks whether a record's substance would still be acceptable
-	// against a different state than the one it was signed against. It skips
-	// the two rules that are about a record's position rather than its
-	// content — that the epoch is exactly one past the current one, and that
-	// the wrap set covers the member set — because reissuing the record
-	// against a new parent is what would fix both.
-	//
-	// It exists for one purpose: deciding whether a branch that lost fork
-	// choice merely needs its records reissued, or genuinely conflicts with
-	// the branch that won. See [Authority.Alarm].
+	// applyProbe asks whether a record's substance would be acceptable against
+	// a state other than the one it was signed against, for deciding whether a
+	// losing branch merely needs reissuing. It skips the two rules about
+	// position rather than content — epoch sequencing and wrap coverage —
+	// since reissuing against a new parent is what fixes both.
 	applyProbe
 )
 
@@ -73,6 +64,9 @@ func (s *State) Epoch() uint64 { return s.epoch }
 // EpochCommit returns the commitment to the current epoch's group secret.
 func (s *State) EpochCommit() types.Hash { return s.epochCommit }
 
+// Schema returns the record schema this network is written under.
+func (s *State) Schema() types.SchemaVersion { return s.schema }
+
 // TotalVotes returns the summed weight of every admin key.
 func (s *State) TotalVotes() uint32 {
 	var total uint32
@@ -90,12 +84,9 @@ func (s *State) ULA() netip.Prefix { return types.ULA(s.genesisHash) }
 func (s *State) Addr6(id types.Identity) netip.Addr { return types.Addr6(s.genesisHash, id) }
 
 // Addrs returns a member's overlay addresses as single-host prefixes: the
-// derived v6 address, and the explicit v4 address if it has one.
-//
-// Single-host prefixes are not a formatting choice. These become a peer's
-// WireGuard AllowedIPs, which authorize the source addresses that peer may
-// originate as well as the destinations it may be sent; a prefix wider than
-// one host would let the peer impersonate other members (see conn.Peer.Addrs).
+// derived v6 address, and the explicit v4 address if it has one. Single-host
+// is load-bearing — these become AllowedIPs, which also authorize the source
+// addresses a peer may originate.
 func (s *State) Addrs(id types.Identity) []netip.Prefix {
 	n, ok := s.nodes[id]
 	if !ok {
@@ -162,12 +153,8 @@ func (s *State) Admins() []types.AdminKey {
 func (s *State) Disablement() []types.Hash { return slices.Clone(s.disablement) }
 
 // ValidDisablement reports whether secret is a preimage of one of the
-// network's break-glass commitments.
-//
-// Verification only: nothing in M1 consumes a revealed secret. What revealing
-// one authorizes — recovering a network whose admin quorum is lost — is an
-// operational question that lands with the revocation and enrollment UX in M4;
-// the commitments are fixed at genesis, so they have to exist from here.
+// network's break-glass commitments. Verification only: what revealing one
+// authorizes is an operational question, and nothing consumes it yet.
 func (s *State) ValidDisablement(secret []byte) bool {
 	if len(secret) != types.DisablementSecretSize {
 		return false
@@ -177,8 +164,7 @@ func (s *State) ValidDisablement(secret []byte) bool {
 
 // EpochRecord reconstructs the current epoch's distribution record, so a
 // member can recover the group secret from state alone — including state
-// bootstrapped from a checkpoint, where the record that originally carried the
-// epoch may have been compacted away.
+// bootstrapped from a checkpoint, where the original may be compacted away.
 func (s *State) EpochRecord() *types.EpochRecord {
 	rec := &types.EpochRecord{
 		Epoch:  s.epoch,
@@ -208,6 +194,7 @@ func (s *State) Snapshot() *types.Snapshot {
 		Admins:      s.Admins(),
 		Nodes:       s.Nodes(),
 		EpochWraps:  s.EpochRecord().Wraps,
+		Schema:      s.schema,
 	}
 	return snap
 }
@@ -217,6 +204,13 @@ func stateFromSnapshot(snap *types.Snapshot, head types.Hash) (*State, error) {
 	if snap.GenesisHash == nil {
 		return nil, errors.New("log: snapshot has no genesis hash")
 	}
+	// A state at a schema this build does not implement cannot be interpreted
+	// at all: its records may carry kinds and fields this build has never
+	// heard of, so acting on the part it understands would be exactly the
+	// split view the closed record set exists to prevent.
+	if snap.Schema > types.CurrentSchema {
+		return nil, &SchemaTooNewError{Version: snap.Schema, Implemented: types.CurrentSchema, At: head}
+	}
 	s := &State{
 		head:        head,
 		genesisHash: *snap.GenesisHash,
@@ -224,6 +218,7 @@ func stateFromSnapshot(snap *types.Snapshot, head types.Hash) (*State, error) {
 		quorum:      snap.Quorum,
 		epoch:       snap.Epoch,
 		epochCommit: snap.EpochCommit,
+		schema:      snap.Schema,
 		disablement: slices.Clone(snap.Disablement),
 		admins:      make(map[types.Identity]types.AdminKey, len(snap.Admins)),
 		nodes:       make(map[types.Identity]*types.NodeRecord, len(snap.Nodes)),
@@ -249,6 +244,7 @@ func (s *State) clone() *State {
 		quorum:      s.quorum,
 		epoch:       s.epoch,
 		epochCommit: s.epochCommit,
+		schema:      s.schema,
 		disablement: s.disablement, // never mutated after genesis
 		admins:      maps.Clone(s.admins),
 		nodes:       maps.Clone(s.nodes), // records are immutable once stored
@@ -256,14 +252,10 @@ func (s *State) clone() *State {
 	}
 }
 
-// apply returns the state resulting from applying a record.
-//
-// The record must already have been verified — well-formed, correctly signed,
-// and authorized (see verify.go). apply is where the *semantics* live: whether
-// the subject exists, whether an address or key collides, whether the epoch
-// bump covers the right members. Splitting it that way keeps each rule in one
-// place, and means the replay probe can reuse the semantics without the
-// authorization.
+// apply returns the state resulting from applying a record, which must already
+// be verified (see verify.go). This is where the semantics live: whether the
+// subject exists, whether an address or key collides, whether the epoch bump
+// covers the right members — so the replay probe can reuse them alone.
 func (s *State) apply(a *types.AUM, hash types.Hash, mode applyMode) (*State, error) {
 	if mode == applyChain && a.Kind != types.KindGenesis {
 		if a.Prev == nil || *a.Prev != s.head {
@@ -375,13 +367,10 @@ func (s *State) apply(a *types.AUM, hash types.Hash, mode applyMode) (*State, er
 		if a.State.GenesisHash == nil || *a.State.GenesisHash != next.genesisHash {
 			return nil, errors.New("log: checkpoint belongs to a different network")
 		}
-		// A checkpoint states the state; it must not be able to change it.
-		// Where the ancestry is known — which is everywhere except
-		// bootstrapping from a checkpoint handed to us — the claim is checked
-		// against what the chain actually produces. Without this a quorum
-		// could rewrite membership by asserting a state rather than by
-		// authoring the changes that reach it, leaving no record of what it
-		// altered.
+		// A checkpoint states the state; it must not change it. Where the
+		// ancestry is known, the claim is checked against what the chain
+		// produces — otherwise a quorum could rewrite membership by asserting
+		// a state rather than authoring the changes that reach it.
 		derived := next.Snapshot()
 		if !bytes.Equal(derived.Encode(), a.State.Encode()) {
 			return nil, errors.New("log: checkpoint state does not match the state its ancestry produces")
@@ -389,6 +378,20 @@ func (s *State) apply(a *types.AUM, hash types.Hash, mode applyMode) (*State, er
 
 	case types.KindEpochBump:
 		// Nothing but the epoch changes.
+
+	case types.KindSchemaUpgrade:
+		if *a.Schema <= next.schema {
+			return nil, fmt.Errorf("log: schema upgrade to %v, but the network is already at %v",
+				*a.Schema, next.schema)
+		}
+		if *a.Schema > types.CurrentSchema {
+			// Not a rejection: the record is authorized and the network has
+			// moved. This build cannot read what comes after it, so the chain
+			// stops here and the caller raises an alarm. Refusing the record
+			// outright would leave a node that only observed sync stopping.
+			return nil, &SchemaTooNewError{Version: *a.Schema, Implemented: types.CurrentSchema, At: hash}
+		}
+		next.schema = *a.Schema
 
 	default:
 		// Unreachable: StaticValidate rejects unknown kinds before this.
@@ -405,12 +408,9 @@ func (s *State) apply(a *types.AUM, hash types.Hash, mode applyMode) (*State, er
 	return next, nil
 }
 
-// applyEpoch installs a new group-secret epoch.
-//
-// prev is the state the record was applied to, needed for the sequencing rule.
-// The member set is read from next, which already reflects the record's own
-// membership change: an epoch bump has to cover the member set as it will be,
-// not as it was.
+// applyEpoch installs a new group-secret epoch. prev is the state the record
+// was applied to, for the sequencing rule; the member set is read from next,
+// since a bump must cover the set as it will be, not as it was.
 func (next *State) applyEpoch(prev *State, rec *types.EpochRecord, mode applyMode) error {
 	if mode == applyChain {
 		// Exactly one past the current epoch. Strict sequencing means a node's
@@ -430,10 +430,9 @@ func (next *State) applyEpoch(prev *State, rec *types.EpochRecord, mode applyMod
 					rec.Epoch, rec.Wraps[i].Recipient.ShortString())
 			}
 		}
-		// Wraps are sorted and duplicate-free (checked at decode), so equal
-		// counts plus every recipient being a member proves the two sets are
-		// equal: no member silently left without the secret, no non-member
-		// handed it.
+		// Wraps are sorted and duplicate-free, so equal counts plus every
+		// recipient being a member proves the sets are equal: no member left
+		// without the secret, no non-member handed it.
 	}
 	next.epoch = rec.Epoch
 	next.epochCommit = rec.Commit
@@ -445,10 +444,8 @@ func (next *State) applyEpoch(prev *State, rec *types.EpochRecord, mode applyMod
 }
 
 // checkNodeAdmissible checks a node record against the rest of the member set:
-// route legality, address collisions, and key collisions.
-//
-// excluding names a member to ignore, for the case where the record replaces
-// an existing membership rather than adding one.
+// route legality, address collisions, key collisions. excluding names a member
+// to ignore, for a record that replaces a membership rather than adding one.
 func (s *State) checkNodeAdmissible(n *types.NodeRecord, excluding types.Identity) error {
 	if err := n.ValidateRoutes(s.ULA()); err != nil {
 		return fmt.Errorf("log: %w", err)
@@ -458,10 +455,9 @@ func (s *State) checkNodeAdmissible(n *types.NodeRecord, excluding types.Identit
 		if other.Identity == excluding || other.Identity == n.Identity {
 			continue
 		}
-		// Deterministic rejection of derived-address collisions, the rule that
-		// makes coordination-free address allocation safe. At 80 bits of host
-		// space a collision is a formality, but every node must reject the
-		// same records or they would not agree on the member set.
+		// Deterministic rejection of derived-address collisions is what makes
+		// coordination-free allocation safe: at 80 bits a collision is a
+		// formality, but every node must reject the same records.
 		if s.Addr6(other.Identity) == addr {
 			return fmt.Errorf("log: %v and %v derive the same overlay address %v",
 				other.Identity.ShortString(), n.Identity.ShortString(), addr)
@@ -471,11 +467,9 @@ func (s *State) checkNodeAdmissible(n *types.NodeRecord, excluding types.Identit
 				other.Identity.ShortString(), n.Identity.ShortString(), *n.V4)
 		}
 		// Two members holding one WireGuard key would collide in the data
-		// plane, where a peer is keyed by exactly that: one would silently
-		// displace the other. Duplicate encryption keys are rejected on the
-		// same principle — one device's state copied onto a second, applying
-		// for a second membership, is the stolen-device case from
-		// docs/02-threat-model.md and should not be admissible by accident.
+		// plane, where a peer is keyed by exactly that. Duplicate encryption
+		// keys are rejected on the same principle: one device's state copied
+		// onto a second must not be admissible by accident.
 		if other.WireGuard == n.WireGuard {
 			return fmt.Errorf("log: %v and %v share a WireGuard key",
 				other.Identity.ShortString(), n.Identity.ShortString())
@@ -497,10 +491,8 @@ func applyGenesis(a *types.AUM, hash types.Hash) (*State, error) {
 	if a.Kind != types.KindGenesis {
 		return nil, fmt.Errorf("log: %v is not a genesis record", a.Kind)
 	}
-	// The genesis record cannot name its own hash, so the snapshot it carries
-	// has none and the applied state takes the record's hash. Everything the
-	// network is identified by follows from here: the overlay prefix, every
-	// derived address, and what a later checkpoint must prove it belongs to.
+	// The genesis record cannot name its own hash, so the applied state takes
+	// the record's. The overlay prefix and every derived address follow.
 	snap := a.State.Clone()
 	snap.GenesisHash = &hash
 	if err := snap.StaticValidate(false); err != nil {

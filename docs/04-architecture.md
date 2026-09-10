@@ -130,11 +130,17 @@ ratchets — the anchor and the epoch floor — that carry the last sentence.
 
 ## Gossip & sync
 
-- **Beacons:** every disco keepalive/pong and every gossip message carries
-  `(epoch, truncated log-head hash)`. Mismatch ⇒ pull sync: exchange heads, walk back
-  to common ancestor, transfer missing AUMs (bounded batch). AUMs are self-certifying,
-  so they may arrive over *any* transport — WG tunnels (normal case), the enrollment
-  channel, even DHT-published head pointers.
+- **Beacons:** every gossip frame carries `(epoch, log head, anchor)`. Disco
+  keepalives do not: magicsock's frames are not ours to extend, and a beacon there
+  would ride a channel the sync layer cannot answer on anyway. What M2 built in place
+  of walking back to a common ancestor is simpler — each side sends the hash set it
+  holds and answers from the *peer's* anchor, which is what keeps sync alive across
+  compaction asymmetry (see [09-mesh-layer-notes.md](09-mesh-layer-notes.md)). At a
+  few kilobytes of hashes it costs less than the bookkeeping a walk needs;
+  `MaxHashesPerFrame` is where that stops being true. AUMs are self-certifying, so
+  they may arrive over *any* transport — the underlay at M2, WG tunnels once M3a
+  gives them somewhere to run, the enrollment channel, even DHT-published head
+  pointers.
 - **Schedule:** push new locally-authored AUMs to all reachable members immediately;
   periodic anti-entropy with a random member every 2–5 min; full sync on daemon start.
 - **Offline catch-up:** a node returning after a week contacts cached endpoints + DHT,
@@ -148,9 +154,11 @@ ratchets — the anchor and the epoch floor — that carry the last sentence.
 
 - Every member gets a disco key; the netmap adapter renders members ⇒ netmap peers.
 - **DERP map = members with `relay-capable` role** (from the log), each running the
-  embedded, membership-authenticated derper. Warn at <2 relay-capable members. Public
-  untrusted STUN may supplement reflexive-address discovery; member disco reflection
-  is primary.
+  embedded, membership-authenticated derper. Warn at <2 relay-capable members —
+  a floor, not a capacity model: relay demand tracks the number of unpunchable
+  *pairs*, so above the 25–100 target the threshold has to become a function of
+  member count. Public untrusted STUN may supplement reflexive-address discovery;
+  member disco reflection is primary.
 - Endpoint records (current reflexive addrs) are signed by the node's identity key,
   gossiped, and cached persistently for cold start.
 
@@ -198,10 +206,19 @@ Both surveyed local-API CVEs in this space (Tailscale CVE-2022-41924: DNS rebind
 localhost TCP LocalAPI → RCE; NetBird GHSA-qcpp-8vwj-hhwr: 0666 unix socket → root)
 are the same lesson: **the local API is the most-exploited surface.** Rules:
 
-- **No TCP listener, ever.** IPC is a unix socket, mode 0600, owner root or a
-  dedicated group, in `/run/juist/`; peer identity verified via `SO_PEERCRED`
-  (Linux) / `LOCAL_PEERCRED` (FreeBSD). Admin operations additionally require the
-  CLI to hold the admin key — the daemon never holds admin signing keys.
+- **No TCP listener, ever.** IPC is a unix socket, mode 0600, peer identity verified
+  via `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (FreeBSD), and only the uid the daemon
+  runs as or root may call it. Admin operations additionally require the CLI to hold
+  the admin key — the daemon never holds admin signing keys.
+- **Before any local user may reach the daemon**, in this order: the socket moves out
+  of the state directory to `/run/juist/` (systemd `RuntimeDirectory`), and
+  `checkPeerCred` grows a read/write split. M3a ships it as `$home/daemon.sock`, so
+  today "may call the daemon" and "may read `node.keys`" are one permission, and
+  widening either widens both. Tailscale can afford a 0666 socket and an unconditional
+  read tier (`ipnserver.actor.Permissions`, with write gated on the configured
+  operator) precisely because its socket and its state are in different places; an
+  operator-equivalent here is not reachable until the same is true. Verified against
+  the pinned `tailscale.com` module, not from memory.
 - **Privilege separation:** TUN creation + route/config in a small privileged helper
   (or granted via `CAP_NET_ADMIN` on the service); the daemon body (parsers, gossip,
   DHT — the code facing attacker input) runs unprivileged. Android: VpnService
@@ -225,9 +242,10 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
 - Per-pair PSK: `HKDF(ML-KEM-768 encap between the pair's log-recorded static PQ keys,
   epoch)` — post-quantum harvest-now-decrypt-later hedge using stdlib `crypto/mlkem`.
   Rotated on epoch bump via WG reconfig (next handshake picks it up; tunnels stay up).
-  The key is reserved in the schema from M1; whether v1 can consume it is the open
-  question in [07-embedding-notes.md](07-embedding-notes.md), to be settled before the
-  M3 freeze.
+  The key is reserved in the schema from M1 and consumed for the epoch HPKE fan-out;
+  whether v1 can consume it in the data plane is the open question in
+  [07-embedding-notes.md](07-embedding-notes.md), where the ciphertext's transport
+  decides whether the M3 freeze binds it.
 - Addressing: v6 ULA `fd<40 bits from genesis hash>::/48`, host bits =
   `truncate(SHA-256(identity pubkey))`; v4 100.64/10 assigned explicitly in AddNode.
   The log validator rejects collisions deterministically on every node.

@@ -27,12 +27,19 @@ type reconcileFixture struct {
 
 func newReconcileFixture(t *testing.T, members int) *reconcileFixture {
 	t.Helper()
+	return newReconcileFixtureWith(t, members, nil)
+}
+
+// newReconcileFixtureWith is [newReconcileFixture] with the daemon's options
+// adjusted before it starts.
+func newReconcileFixtureWith(t *testing.T, members int, mutate func(*Options)) *reconcileFixture {
+	t.Helper()
 	nw := newNetwork(t, members)
 	auth, st := nw.authorityFor(t)
 	mgr := &fakeManager{}
 	self := nw.devices[0]
 
-	d, err := New(Options{
+	opts := Options{
 		Authority:        auth,
 		Storage:          st,
 		Identity:         self.identity,
@@ -40,8 +47,13 @@ func newReconcileFixture(t *testing.T, members int) *reconcileFixture {
 		WireGuard:        self.wgPrivate,
 		Connect:          func(conn.Options) (conn.Manager, error) { return mgr, nil },
 		DisableDiscovery: true,
+		DisableDHT:       true,
 		Logf:             safeLogf(t, ""),
-	})
+	}
+	if mutate != nil {
+		mutate(&opts)
+	}
+	d, err := New(opts)
 	if err != nil {
 		t.Fatalf("starting the daemon: %v", err)
 	}
@@ -73,11 +85,10 @@ func (f *reconcileFixture) learn(t *testing.T, dev *device, port uint16) gossip.
 	return e
 }
 
-// TestStatusNamesTheNetworkBeforeTheFirstReconcile pins what the daemon's
-// startup banner reads: a status taken between construction and the first
-// reconcile. The network's identity is fixed at genesis, so the daemon must
-// report it the moment it exists — waiting for the loop to start showed an
-// empty name and a zero hash, which reads as "the daemon lost my network".
+// TestStatusNamesTheNetworkBeforeTheFirstReconcile pins what the startup
+// banner reads: a status taken before the first reconcile. The network's
+// identity is fixed at genesis, so an empty name there reads as "the daemon
+// lost my network".
 func TestStatusNamesTheNetworkBeforeTheFirstReconcile(t *testing.T) {
 	f := newReconcileFixture(t, 2)
 	st := f.d.Status()
@@ -117,9 +128,8 @@ func TestMemberWithoutAnAnnouncementIsNotAPeer(t *testing.T) {
 }
 
 // TestAnnouncementAloneGrantsNothing is M2's first exit criterion at the
-// reconciler: a device holding perfectly good keys, announcing itself
-// correctly, and absent from the log gets no peer entry — so WireGuard's
-// cryptokey routing has nothing to let it complete a handshake against.
+// reconciler: good keys and a correct announcement, absent from the log, get
+// no peer entry and so nothing to handshake against.
 func TestAnnouncementAloneGrantsNothing(t *testing.T) {
 	f := newReconcileFixture(t, 2)
 	outsider := newDevice(t, "outsider", netip.AddrFrom4([4]byte{100, 64, 9, 9}))
@@ -131,19 +141,17 @@ func TestAnnouncementAloneGrantsNothing(t *testing.T) {
 	if f.mgr.has([32]byte(outsider.record.WireGuard)) {
 		t.Fatal("a non-member became a peer by announcing itself")
 	}
-	// The announcement is kept, and that is deliberate: an announcement whose
-	// subject the log does not carry *yet* is the normal order of arrival for
-	// a joining member. It is inert — nothing reads it until the log catches
-	// up, and the gossip set comes from the log too, so it is not dialled.
+	// Kept deliberately: an announcement whose subject the log does not carry
+	// yet is the normal arrival order for a joining member, and it is inert
+	// until the log catches up.
 	if _, held := f.d.Endpoints().Get(outsider.record.Identity); !held {
 		t.Error("an early announcement was dropped, which would hide a joining member")
 	}
 }
 
 // TestAnEarlyAnnouncementSurvivesUntilTheRecordArrives is the ordering the
-// cache exists to tolerate: on a LAN, discovery finds a joining node before
-// gossip delivers the record that admits it. Dropping the announcement in
-// between would leave the new member invisible until it announced again.
+// cache exists to tolerate: discovery finds a joining node before gossip
+// delivers the record admitting it.
 func TestAnEarlyAnnouncementSurvivesUntilTheRecordArrives(t *testing.T) {
 	f := newReconcileFixture(t, 1)
 	joiner := newDevice(t, "joiner", netip.AddrFrom4([4]byte{100, 64, 0, 5}))
@@ -228,6 +236,7 @@ func TestExpiredMembershipIsNotAPeer(t *testing.T) {
 		WireGuard:        nw.devices[0].wgPrivate,
 		Connect:          func(conn.Options) (conn.Manager, error) { return mgr, nil },
 		DisableDiscovery: true,
+		DisableDHT:       true,
 		Clock:            func() time.Time { return now },
 		Logf:             safeLogf(t, ""),
 	})
@@ -268,11 +277,9 @@ func TestExpiredMembershipIsNotAPeer(t *testing.T) {
 	}
 }
 
-// TestForkAlarmDropsEveryPeer is the fail-closed rule the threat model states
-// for freshness, applied to fork choice: a node that cannot tell who is a
-// member must deny, not guess. It drops peers the two branches agree on too,
-// which is the point — partial trust in a forked log is trust in whichever
-// branch happened to arrive first.
+// TestForkAlarmDropsEveryPeer is the fail-closed rule applied to fork choice:
+// a node that cannot tell who is a member must deny, not guess — including for
+// peers both branches agree on.
 func TestForkAlarmDropsEveryPeer(t *testing.T) {
 	f := newReconcileFixture(t, 3)
 	a, b := f.nw.devices[1], f.nw.devices[2]
@@ -309,10 +316,9 @@ func TestForkAlarmDropsEveryPeer(t *testing.T) {
 	}
 }
 
-// TestDaemonRefusesANetworkItIsNotIn catches the misconfiguration where a
-// device is pointed at somebody else's state directory. Starting anyway would
-// give it a daemon that can never open a group secret and never be a peer,
-// failing in three confusing places instead of one clear one.
+// TestDaemonRefusesANetworkItIsNotIn catches a device pointed at somebody
+// else's state directory: starting anyway fails in three confusing places
+// rather than one clear one.
 func TestDaemonRefusesANetworkItIsNotIn(t *testing.T) {
 	nw := newNetwork(t, 1)
 	auth, st := nw.authorityFor(t)
@@ -324,6 +330,7 @@ func TestDaemonRefusesANetworkItIsNotIn(t *testing.T) {
 		WireGuard:        stranger.wgPrivate,
 		Connect:          func(conn.Options) (conn.Manager, error) { return &fakeManager{}, nil },
 		DisableDiscovery: true,
+		DisableDHT:       true,
 	})
 	if err == nil {
 		t.Fatal("a daemon started for a network its key is not a member of")
@@ -368,11 +375,9 @@ func TestEpochSecretIsAdopted(t *testing.T) {
 }
 
 // TestMissingRespectsThePeersAnchor is the sync-after-compaction property: a
-// node with full history answering a node that only has a checkpoint must send
-// exactly the records descending from that checkpoint. Anything older is a
-// record the peer's log refuses — and because Inform is atomic, one refused
-// record would poison every acceptable one in the same batch, cutting the two
-// nodes off from each other permanently.
+// node with full history must send a checkpoint-only peer exactly the records
+// descending from that checkpoint. Anything older is refused, and Inform being
+// atomic, one refused record poisons the whole batch.
 func TestMissingRespectsThePeersAnchor(t *testing.T) {
 	f := newReconcileFixture(t, 2)
 
@@ -431,10 +436,9 @@ func TestMissingRespectsThePeersAnchor(t *testing.T) {
 			bootAuth.Head(), f.auth.Head())
 	}
 
-	// And the mirror case: once this node compacts, a peer anchored at the
-	// genesis it no longer holds gets nothing — that peer is the one with
-	// history to offer, and the other half of the same session is where it
-	// offers it.
+	// The mirror case: once this node compacts, a peer anchored at the genesis
+	// it no longer holds gets nothing — that peer is the one with history to
+	// offer.
 	if _, err := f.auth.Compact(); err != nil {
 		t.Fatalf("compacting: %v", err)
 	}
@@ -448,10 +452,8 @@ func TestMissingRespectsThePeersAnchor(t *testing.T) {
 }
 
 // TestOwnRemovalTearsDownTheDataPlane: when the removal reaches the removed
-// device itself, its daemon takes its own tunnels down and goes quiet. Peers
-// enforce membership on their side either way — this is not what keeps the
-// network safe — but a device that knows it was removed and keeps probing its
-// former peers is indistinguishable from an attack.
+// device, its daemon takes its own tunnels down. Peers enforce membership
+// anyway; this is so it stops probing them.
 func TestOwnRemovalTearsDownTheDataPlane(t *testing.T) {
 	f := newReconcileFixture(t, 3)
 	f.learn(t, f.nw.devices[1], 4001)
@@ -482,11 +484,9 @@ func TestOwnRemovalTearsDownTheDataPlane(t *testing.T) {
 	}
 }
 
-// TestRotationAppliedElsewhereIsReportedStale: a key rotation applied while
-// the daemon runs leaves the log naming keys this process does not hold.
-// Everything fails from there — tunnels against the old WireGuard key, the
-// group secret against the old recipient key — and every failure looks like a
-// network problem unless the daemon says what actually happened.
+// TestRotationAppliedElsewhereIsReportedStale: a rotation applied while the
+// daemon runs leaves the log naming keys it does not hold, and everything
+// fails from there looking like a network problem unless it says otherwise.
 func TestRotationAppliedElsewhereIsReportedStale(t *testing.T) {
 	f := newReconcileFixture(t, 2)
 	if err := f.d.Reconcile(); err != nil {
@@ -529,11 +529,8 @@ func TestRotationAppliedElsewhereIsReportedStale(t *testing.T) {
 
 // TestOwnRemovalGoesQuietOnTheLAN is the discovery half of
 // TestOwnRemovalTearsDownTheDataPlane: a removed device stops producing an
-// announcement, so it neither beacons unsolicited nor answers blinded queries
-// nor offers a Self in gossip hellos. It still holds old epoch secrets for
-// the keyring window — going quiet is behaviour, not access control — but a
-// device that knows it was removed and keeps advertising itself is the same
-// probing posture the data-plane teardown exists to avoid.
+// announcement, so it neither beacons nor answers queries nor offers a Self.
+// Behaviour rather than access control — it still holds old epoch secrets.
 func TestOwnRemovalGoesQuietOnTheLAN(t *testing.T) {
 	f := newReconcileFixture(t, 2)
 	if err := f.d.Reconcile(); err != nil {
@@ -552,12 +549,10 @@ func TestOwnRemovalGoesQuietOnTheLAN(t *testing.T) {
 	}
 }
 
-// TestRestartRecoversPastEpochs: the keyring's whole purpose is that members
-// one epoch apart can still reach each other, and a daemon that opened only
-// its newest epoch would throw that away on every restart. It could then
-// neither open a behind peer's frames nor seal one that peer could read — so
-// the two would have no epoch in common, and in a two-node network that is a
-// partition nothing heals.
+// TestRestartRecoversPastEpochs: a daemon that opened only its newest epoch
+// would lose the keyring's purpose on every restart, leaving it with no epoch
+// in common with a peer that is behind — in a two-node network, a partition
+// nothing heals.
 func TestRestartRecoversPastEpochs(t *testing.T) {
 	f := newReconcileFixture(t, 3)
 	if err := f.d.Reconcile(); err != nil {
@@ -597,6 +592,7 @@ func TestRestartRecoversPastEpochs(t *testing.T) {
 		WireGuard:        f.self.wgPrivate,
 		Connect:          func(conn.Options) (conn.Manager, error) { return &fakeManager{}, nil },
 		DisableDiscovery: true,
+		DisableDHT:       true,
 		Logf:             safeLogf(t, ""),
 	})
 	if err != nil {
@@ -616,13 +612,10 @@ func TestRestartRecoversPastEpochs(t *testing.T) {
 	}
 }
 
-// TestADisplacedPushIsDeferredNotDropped: anti-entropy rounds run beside the
-// loop so a slow one cannot delay the next revocation, and only one runs at a
-// time. What must not follow is that a round asked for while one is running is
-// simply forgotten — epidemic propagation depends on a node that learns
-// something new telling others in turn, so a revocation arriving mid-round
-// would be reconciled locally and never relayed, converging at the two-minute
-// backstop instead of the five seconds the milestone budgets.
+// TestADisplacedPushIsDeferredNotDropped: only one anti-entropy round runs at
+// a time, and one asked for while another is running must not be forgotten —
+// epidemic propagation depends on relaying, so a revocation arriving mid-round
+// would otherwise converge at the two-minute backstop.
 func TestADisplacedPushIsDeferredNotDropped(t *testing.T) {
 	f := newReconcileFixture(t, 2)
 	ctx := t.Context()
@@ -657,13 +650,10 @@ func TestADisplacedPushIsDeferredNotDropped(t *testing.T) {
 	}
 }
 
-// TestDiscoveryOfANonMemberDoesNotWakeTheLoop: a LAN announcement for a subject
-// the log does not carry is cached — the early-join contract needs that — but
-// it must not drive a reconcile, a gossip round, or a log line. Its subject is
-// inert at reconcile, and an epoch-secret holder can mint identities and sign a
-// rising Seq for each without limit, so waking on one is churn a single LAN
-// attacker could sustain across the whole mesh. A genuine member's announcement
-// still wakes the loop, because that is a peer that just became reachable.
+// TestDiscoveryOfANonMemberDoesNotWakeTheLoop: an announcement for a subject
+// the log does not carry is cached, as the early-join contract needs, but must
+// not drive a reconcile, a gossip round or a log line — an epoch-secret holder
+// can mint identities without limit. A member's announcement still wakes it.
 func TestDiscoveryOfANonMemberDoesNotWakeTheLoop(t *testing.T) {
 	f := newReconcileFixture(t, 3)
 
@@ -748,13 +738,10 @@ func TestDiscoveryOfANonMemberDoesNotWakeTheLoop(t *testing.T) {
 	}
 }
 
-// TestADuplicateDiscoKeyDropsOnlyTheColliders: the disco key is the only part
-// of a peer entry the peer itself chooses, and the connectivity layer refuses
-// a set containing two of the same. Passing that straight through would hand
-// any member a kill switch — one signed announcement copying someone else's
-// NAT-traversal key would make SetPeers reject the whole set and take every
-// tunnel on every member down. The colliding members lose their entries; the
-// rest of the mesh stays up.
+// TestADuplicateDiscoKeyDropsOnlyTheColliders: the disco key is the one part
+// of a peer entry the peer chooses, and conn refuses a set containing two of
+// the same — so passing a collision through would hand any member a kill
+// switch. The colliders lose their entries and the rest of the mesh stays up.
 func TestADuplicateDiscoKeyDropsOnlyTheColliders(t *testing.T) {
 	f := newReconcileFixture(t, 4)
 	victim, attacker, bystander := f.nw.devices[1], f.nw.devices[2], f.nw.devices[3]

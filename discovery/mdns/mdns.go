@@ -1,37 +1,19 @@
-// Package mdns is blinded LAN discovery: it lets members of one juist
-// network find each other on a local network with no internet, no coordination
-// server, and no rendezvous service of any kind.
+// Package mdns is blinded LAN discovery: it lets members of one juist network
+// find each other on a local network with no internet and no rendezvous
+// service. Nothing here is trust-critical — a beacon carries a signed
+// [gossip.Endpoint] saying where a node is, and membership is decided by the
+// log — so a hostile responder can at worst waste a dial.
 //
-// Nothing here is trust-critical. What a beacon carries is a
-// [gossip.Endpoint], which is signed by the node it describes and says only
-// where that node is; membership is decided by the log, several layers up.
-// A hostile responder on the LAN can at worst waste a dial.
+// The name a member queries for is a keyed derivation of the epoch group
+// secret ([secrets.Secret.MDNSName]) and the payload is sealed under the same
+// secret, so an observer learns that juist is in use and nothing more, and a
+// revoked device cannot compute the name at the next epoch.
 //
-// # What "blinded" means
-//
-// The service name a member queries for is a keyed derivation of the epoch
-// group secret ([secrets.Secret.MDNSName]), not a name. A LAN observer sees
-// that *some* host is asking about *some* opaque 32-character label under
-// `_juist._udp.local`, and can conclude that juist is in use — which
-// docs/02-threat-model.md accepts as residual weakness 5 — but cannot tell
-// which network, who is on it, or how many. The payload is sealed under the
-// same secret, so even the announcement's contents are opaque.
-//
-// Two consequences follow from deriving the name from the group secret, and
-// both are wanted. A revoked device stops being able to compute the name at
-// the next epoch, so it cannot even ask the LAN where the network is — the
-// discovery half of revocation (docs/research/building-blocks.md §5). And two
-// juist networks sharing a coffee-shop LAN are mutually invisible rather than
-// merely mutually incompatible.
-//
-// # Shape of the exchange
-//
-// Ordinary multicast DNS: a TXT query at the blinded name, answered with TXT
-// records by every member that recognizes it, plus unsolicited announcements
-// on a timer so that a node arriving on the LAN is found without anyone having
-// to ask. There is no PTR browsing and no SRV or A record, because there is
-// nothing to browse: only a holder of the group secret can construct the one
-// name that means anything, and the sealed payload already carries the port.
+// The exchange is ordinary multicast DNS: a TXT query at the blinded name,
+// answered by every member that recognizes it, plus announcements on a timer.
+// There is no PTR browsing and no SRV or A record — only a holder of the
+// secret can construct a name that means anything, and the payload carries the
+// port.
 package mdns
 
 import (
@@ -56,20 +38,16 @@ import (
 	"github.com/nning/juist/trust/secrets"
 )
 
-// The multicast endpoint. IPv4 only at this milestone: a LAN that carries
-// IPv4 multicast is the M2 target (docs/05-roadmap.md), and the IPv6 group
-// (ff02::fb) needs per-interface join handling that lands with the netns
-// harness in M3.
+// The multicast endpoint. IPv4 only: the IPv6 group (ff02::fb) needs
+// per-interface join handling that is not written yet.
 var (
 	// Group is the mDNS multicast endpoint beacons are sent to.
 	Group = netip.AddrPortFrom(netip.MustParseAddr("224.0.0.251"), 5353)
 )
 
-// Service is the DNS-SD service the blinded label sits under. It is the one
-// part of the exchange that is not blinded, and it is deliberate: a label with
-// no service suffix would be a malformed name, and hiding the fact that
-// *something* is running buys nothing when the packets are on the wire either
-// way.
+// Service is the DNS-SD service the blinded label sits under, and the one part
+// of the exchange that is not blinded: a label with no service suffix would be
+// a malformed name.
 const Service = "_juist._udp.local."
 
 // TTL on an announcement, in seconds. Short, because what it advertises — a
@@ -77,12 +55,9 @@ const Service = "_juist._udp.local."
 // laptop moves between networks.
 const ttl = 120
 
-// DefaultInterval is how often a node announces itself unsolicited.
-//
-// Two seconds is aggressive for mDNS and right for this: docs/05-roadmap.md
-// gives revocation five seconds to converge across a five-node mesh, and a
-// node that has just joined the LAN has to be found inside that budget. The
-// traffic is a few hundred bytes per node per interval.
+// DefaultInterval is how often a node announces itself unsolicited. Aggressive
+// for mDNS, because a node that has just joined must be found inside the
+// five-second convergence budget; the cost is a few hundred bytes per node.
 const DefaultInterval = 2 * time.Second
 
 // maxMessageSize bounds a received datagram. 1232 is the conventional mDNS
@@ -91,16 +66,9 @@ const DefaultInterval = 2 * time.Second
 const maxMessageSize = 1232
 
 // minAnswerInterval is the least time between two multicast transmissions of
-// this node's record under one name, whether as an answer or as an unsolicited
-// announcement. RFC 6762 §6 sets this floor for multicast responders, and here
-// it carries security weight as well as etiquette: the blinded name is public
-// on the wire — every answer and announcement carries it — so anyone on the
-// LAN can replay a question at it without holding any secret, and DNS name
-// compression fits a couple of hundred copies of one question into a single
-// datagram. Without the floor, each copy would cost every member a multicast
-// answer: a ~100x bandwidth amplifier aimed at the whole segment for the price
-// of one small packet. With it, a member transmits under a name at most once a
-// second no matter what arrives.
+// this node's record under one name, as RFC 6762 §6 requires. It also stops an
+// amplifier: the name is public on the wire, so anyone can replay a question
+// at it, and name compression fits hundreds of copies in one datagram.
 const minAnswerInterval = time.Second
 
 // A PacketConn is the datagram socket beacons travel over. It exists so that
@@ -127,15 +95,10 @@ type Options struct {
 	// runs on the beacon's read goroutine, so it must not block for long.
 	OnPeer func(gossip.Endpoint)
 
-	// NeedsPeers reports whether this node is still looking for members it
-	// has not heard from. Nil means "always", which is correct and noisy.
-	//
-	// Every query is answered by every member that recognizes the name, so
-	// querying unconditionally makes LAN traffic quadratic in the member
-	// count — fine at the two-to-five nodes M2 targets, and not fine at the
-	// twenty-five to a hundred the design does. Announcements alone are
-	// linear and are what keeps a settled network in step; the question is
-	// only needed by a node that is missing someone.
+	// NeedsPeers reports whether this node is still looking for members it has
+	// not heard from. Nil means "always", which is correct and noisy: every
+	// query is answered by every member, so asking unconditionally makes LAN
+	// traffic quadratic in the member count.
 	NeedsPeers func() bool
 
 	// Interval is the unsolicited announcement period. Zero uses
@@ -147,6 +110,11 @@ type Options struct {
 
 	// Dst is where announcements are sent. Zero uses [Group].
 	Dst netip.AddrPort
+
+	// SkipInterface is an interface discovery must never join or send on, in
+	// practice the overlay's TUN device: discovery is an underlay function,
+	// and a Linux TUN carries IFF_MULTICAST so it joins otherwise.
+	SkipInterface string
 
 	// Logf receives diagnostics. Nil discards them.
 	Logf func(format string, args ...any)
@@ -169,11 +137,10 @@ type Beacon struct {
 	closing   bool
 	wg        sync.WaitGroup
 
-	// mu guards the two maps below, both keyed by epoch. nameCache holds the
-	// derived rendezvous names: the derivation is keyed HKDF, and running it
-	// per received datagram — the mDNS group carries every other service on
-	// the LAN — would be a CPU tax anyone can levy by flooding the group.
-	// lastSent enforces [minAnswerInterval].
+	// mu guards the two maps below, both keyed by epoch. nameCache holds
+	// derived rendezvous names, so the keyed HKDF does not run per datagram —
+	// the group carries every other service on the LAN. lastSent enforces
+	// [minAnswerInterval].
 	mu        sync.Mutex
 	nameCache map[uint64]cachedName
 	lastSent  map[uint64]time.Time
@@ -212,7 +179,7 @@ func New(opts Options) (*Beacon, error) {
 		b.logf = func(string, ...any) {}
 	}
 	if b.conn == nil {
-		c, err := listenMulticast(dst)
+		c, err := listenMulticast(dst, opts.SkipInterface)
 		if err != nil {
 			return nil, err
 		}
@@ -221,22 +188,14 @@ func New(opts Options) (*Beacon, error) {
 	return b, nil
 }
 
-// listenMulticast opens the mDNS socket and joins the group on every
-// interface that can carry it.
+// listenMulticast opens the mDNS socket and joins the group on every interface
+// that can carry it.
 //
-// Not net.ListenMulticastUDP, which is the obvious call and the wrong one:
-// it binds the socket to the *group* address, so a datagram sent from it
-// carries a multicast source address and the kernel drops it. That failure is
-// silent in both directions — the join succeeds, the reads work, and nothing
-// ever arrives — which is exactly the shape of "my mesh does not form" with no
-// error to point at. So the socket is bound to the wildcard address with
-// SO_REUSEADDR (mDNS is a shared port; other responders on the host must keep
-// working), and the group is joined explicitly per interface.
-//
-// Failure to join anywhere is reported rather than tolerated: a daemon that
-// silently loses LAN discovery looks exactly like a daemon whose peers are all
+// Not net.ListenMulticastUDP: that binds the socket to the group address, so
+// datagrams leave with a multicast source and the kernel drops them silently.
+// Joining nowhere is an error — losing discovery looks like every peer being
 // offline.
-func listenMulticast(group netip.AddrPort) (PacketConn, error) {
+func listenMulticast(group netip.AddrPort, skipIface string) (PacketConn, error) {
 	lc := net.ListenConfig{Control: reuseAddr}
 	pc, err := lc.ListenPacket(context.Background(), "udp4",
 		net.JoinHostPort("", strconv.Itoa(int(group.Port()))))
@@ -249,14 +208,17 @@ func listenMulticast(group netip.AddrPort) (PacketConn, error) {
 		return nil, fmt.Errorf("mdns: expected a UDP socket, got %T", pc)
 	}
 	p := ipv4.NewPacketConn(uc)
-	// Loopback on, so that two members on one host — which is what a test
-	// bed and a first demo look like — can see each other. TTL 255 is what
-	// RFC 6762 requires, so that a beacon is recognizably link-local mDNS
-	// rather than something an intermediate device should forward.
+	// Loopback on, so two members on one host can see each other. TTL 255 is
+	// what RFC 6762 requires of link-local mDNS.
 	_ = p.SetMulticastLoopback(true)
 	_ = p.SetMulticastTTL(255)
 
-	c := &groupConn{UDPConn: uc, p: p, group: &net.UDPAddr{IP: group.Addr().AsSlice()}}
+	c := &groupConn{
+		UDPConn:   uc,
+		p:         p,
+		group:     &net.UDPAddr{IP: group.Addr().AsSlice()},
+		skipIface: skipIface,
+	}
 	if c.rejoin() == 0 {
 		uc.Close()
 		return nil, fmt.Errorf(
@@ -266,37 +228,28 @@ func listenMulticast(group netip.AddrPort) (PacketConn, error) {
 	return c, nil
 }
 
-// groupConn writes each datagram out of every interface it joined on.
-//
-// A wildcard-bound socket sends multicast out one interface, chosen by the
-// route table, which on a multi-homed host is not necessarily the one the
-// other members are on. Looping is what makes "the members on my LAN" mean
-// every LAN this host is attached to.
+// groupConn writes each datagram out of every interface it joined on. A
+// wildcard-bound socket would send out only one, chosen by the route table,
+// which on a multi-homed host is not necessarily where the members are.
 type groupConn struct {
 	*net.UDPConn
 	p     *ipv4.PacketConn
 	group *net.UDPAddr
 
-	// mu guards ifaces, and serializes writers with each other and with
-	// rejoin. The serialization is not optional: the multicast egress
-	// interface is per-socket state, so set-interface-then-send from two
-	// goroutines at once — the ticker's announce and the read loop's answer —
-	// would race, and datagrams would leave on whichever interface the other
-	// goroutine chose last.
+	// skipIface is [Options.SkipInterface]: never joined, never sent on.
+	skipIface string
+
+	// mu guards ifaces and serializes writers with each other and with rejoin:
+	// the multicast egress interface is per-socket state, so two goroutines
+	// doing set-interface-then-send would race.
 	mu     sync.Mutex
 	ifaces []net.Interface
 }
 
-// rejoin joins the group on every interface that can carry it and refreshes
-// the send list, reporting how many interfaces qualified.
-//
-// It runs at startup and then periodically from [Beacon.Run], because the
-// interface set is not fixed: multicast membership is per interface, and one
-// that appears after the daemon starts — Wi-Fi associating, a cable plugged
-// in, a laptop arriving on a new network — would otherwise never carry
-// discovery until a restart, even while the daemon's own announcements
-// advertise the new interface's address. Joining a group the socket is
-// already in fails with EADDRINUSE, which is what makes the call idempotent.
+// rejoin joins the group on every usable interface and refreshes the send
+// list, reporting how many qualified. It runs periodically because an
+// interface appearing later would otherwise never carry discovery; re-joining
+// returns EADDRINUSE, which is what makes it idempotent.
 func (c *groupConn) rejoin() int {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -305,6 +258,9 @@ func (c *groupConn) rejoin() int {
 	var joined []net.Interface
 	for _, ifi := range ifaces {
 		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagMulticast == 0 {
+			continue
+		}
+		if c.skipIface != "" && ifi.Name == c.skipIface {
 			continue
 		}
 		if err := c.p.JoinGroup(&ifi, c.group); err != nil && !errors.Is(err, syscall.EADDRINUSE) {
@@ -373,21 +329,16 @@ func (b *Beacon) Run(ctx context.Context) {
 		case <-b.closed:
 			return
 		case <-t.C:
-			// Refresh the group membership on a slow cadence, so an
-			// interface that appeared since startup starts carrying
-			// discovery; see [groupConn.rejoin]. Tests substitute a
-			// fan-out conn, which has no interfaces to rejoin.
+			// So an interface that appeared since startup starts carrying
+			// discovery. Tests substitute a conn with none to rejoin.
 			if gc, ok := b.conn.(*groupConn); ok && time.Since(lastRejoin) >= rejoinInterval {
 				lastRejoin = time.Now()
 				gc.rejoin()
 			}
-			// Announce and ask, every interval. Announcing alone is not
-			// enough: a node announces under its newest name only, so a
-			// member that is an epoch behind would never hear it — while a
-			// query names every epoch the asker holds, and is answered
-			// under the one it asked about. Asking alone is not enough
-			// either, since a node that has just arrived on the LAN should
-			// not have to wait for someone else's question.
+			// Both, every interval. A node announces under its newest name
+			// only, so a member an epoch behind never hears it, while a
+			// query names every epoch the asker holds; and a node that just
+			// arrived should not wait for someone else's question.
 			b.Announce()
 			if b.opts.NeedsPeers == nil || b.opts.NeedsPeers() {
 				b.Query()
@@ -434,9 +385,7 @@ func (b *Beacon) Query() {
 }
 
 // rejoinInterval is how often [Beacon.Run] refreshes the multicast group
-// membership. Slow next to the announce interval: interface changes are
-// human-scale events, and each refresh is an interface walk plus a join
-// syscall per interface.
+// membership. Slow, since each refresh is an interface walk plus a join.
 const rejoinInterval = 10 * time.Second
 
 // Announce multicasts this node's own record, unsolicited, under its newest
@@ -462,9 +411,7 @@ func (b *Beacon) Announce() {
 
 // allowSend reports whether this node may multicast its record under an
 // epoch's name now, and reserves the slot if so. One gate for answers and
-// announcements both, because both transmit the same record under the same
-// name and [minAnswerInterval] is a property of the name, not of why it was
-// sent.
+// announcements: [minAnswerInterval] is a property of the name.
 func (b *Beacon) allowSend(epoch uint64) bool {
 	now := time.Now()
 	b.mu.Lock()
@@ -497,10 +444,8 @@ func (b *Beacon) readLoop() {
 			default:
 			}
 			b.logf("mdns: read: %v", err)
-			// A read error that is not shutdown is almost always fatal for
-			// this socket (it was closed underneath us, or the interface
-			// went away). Backing off rather than spinning keeps a broken
-			// socket from burning a core.
+			// Almost always fatal for this socket; back off rather than
+			// spin, so a broken socket does not burn a core.
 			select {
 			case <-b.closed:
 				return
@@ -513,11 +458,8 @@ func (b *Beacon) readLoop() {
 }
 
 // handle processes one datagram: answers what it can, and takes what it is
-// told.
-//
-// Every parse failure is a silent drop. The mDNS group carries every other
-// service on the LAN, so most of what arrives is not addressed to this code at
-// all, and logging it would be noise rather than diagnostics.
+// told. Every parse failure is a silent drop, since most of what the group
+// carries is other services' traffic.
 func (b *Beacon) handle(raw []byte) {
 	var p dnsmessage.Parser
 	if _, err := p.Start(raw); err != nil {
@@ -592,13 +534,10 @@ func (b *Beacon) handle(raw []byte) {
 		}
 		ep, err := b.openAnnouncement(epoch, txt.TXT)
 		if err != nil {
-			// Silent, like every other parse failure here. The name is
-			// public on the wire, so anyone on the LAN can send rubbish at
-			// it as fast as they like, and a log line per datagram would be
-			// a log flood any bystander could trigger. Nothing legitimate
-			// produces this either: the name is derived from the same secret
-			// as the key, so a member that can construct the name can always
-			// be opened.
+			// Silent: the name is public on the wire, so a log line per
+			// datagram is a flood any bystander could trigger. Nothing
+			// legitimate produces this — a member that can construct the
+			// name holds the key that opens the payload.
 			continue
 		}
 		if b.opts.OnPeer != nil {
@@ -666,14 +605,8 @@ func (b *Beacon) openAnnouncement(epoch uint64, txt []string) (gossip.Endpoint, 
 }
 
 // sealPayload and openPayload wrap an announcement in the shared sealed-blob
-// format, keyed by the epoch's discovery key.
-//
-// [secrets.Secret.DiscoveryKey] is the derivation whose documented purpose is
-// exactly this — "the AEAD key protecting announcement payloads, so that a DHT
-// storage node sees opaque bytes at an opaque key" — and a LAN beacon is the
-// same statement to a different audience. It is a different key from the one
-// gossip frames use, so a captured announcement can never be replayed as a
-// frame or the reverse.
+// format under [secrets.Secret.DiscoveryKey] — a different key from the one
+// gossip frames use, so an announcement cannot be replayed as a frame.
 func sealPayload(s secrets.Secret, epoch uint64, body []byte) ([]byte, error) {
 	key := s.DiscoveryKey(epoch)
 	return aead.Seal(key, epoch, body)
@@ -730,17 +663,10 @@ func name(s secrets.Secret, epoch uint64) blindedName {
 }
 
 // names returns the rendezvous name for every epoch this node holds a secret
-// for, newest first.
-//
-// Answering to more than the current epoch is what keeps discovery alive
-// across a bump: for the length of a convergence round, members are one epoch
-// apart and would otherwise be asking about names none of the others
-// recognize.
-//
-// Names are derived once per epoch and cached, not once per call: this runs on
-// every datagram the mDNS group delivers, most of which are other services'
-// traffic, and the derivation is keyed HKDF. State for epochs the keyring has
-// dropped is pruned here, which keeps both maps bounded by [secrets.KeyringDepth].
+// for, newest first. Answering to more than the current epoch keeps discovery
+// alive across a bump, when members are an epoch apart. Names are cached per
+// epoch, since this runs on every datagram the group delivers, and state for
+// dropped epochs is pruned here.
 func (b *Beacon) names() []blindedName {
 	epochs := b.opts.Keyring.Epochs()
 	b.mu.Lock()
@@ -753,10 +679,8 @@ func (b *Beacon) names() []blindedName {
 		if !ok {
 			continue
 		}
-		// The secret is part of the cache check, not just the epoch: the
-		// keyring replaces an epoch's secret when the node resolves onto a
-		// different chain at the same epoch number, and the name has to
-		// follow it.
+		// The secret is part of the cache key, not just the epoch: resolving
+		// onto a different chain replaces a secret at the same epoch.
 		c, held := b.nameCache[epoch]
 		if !held || !c.secret.Equal(s) {
 			c = cachedName{secret: s, name: name(s, epoch)}

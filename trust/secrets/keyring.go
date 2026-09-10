@@ -7,41 +7,22 @@ import (
 
 // KeyringDepth is how many epochs' secrets a [Keyring] keeps.
 //
-// One would be enough if every member stepped to a new epoch at the same
-// instant. They do not: an epoch bump reaches members over gossip, so for the
-// length of a convergence round the network holds two adjacent epochs at once,
-// and the node that authored the change is the one that is ahead. If it could
-// only speak its own epoch, the very message that carries a revocation would
-// be unreadable to precisely the members that have not yet applied it — the
-// deadlock that would make revocation converge at the anti-entropy timer
-// instead of at push speed (docs/05-roadmap.md M2, exit criterion 2).
+// More than one, because a bump reaches members over gossip: for a convergence
+// round the network holds two adjacent epochs, and a node that spoke only its
+// own would make the message carrying a revocation unreadable to exactly the
+// members that have not applied it. Four, so a node briefly offline across a
+// couple of bumps rejoins rather than being re-enrolled.
 //
-// Four rather than two so that a node briefly offline across a couple of bumps
-// still rejoins the conversation instead of having to be re-enrolled. That
-// second purpose is what fixes the number, and it cuts against the first: a
-// *revoked* device also holds an epoch secret, and until the network has moved
-// [KeyringDepth] epochs past it, members will still open its gossip frames and
-// answer its LAN queries.
-//
-// What that window costs is metadata — the member set and where its members
-// are — and nothing else. A revoked device gets no WireGuard peer entry
-// anywhere from the first moment the removal converges, because peers come
-// from the log and not from anything the sync layer says. Since every
-// membership change carries an epoch bump, four changes retire the window
-// completely; docs/09-mesh-layer-notes.md records the trade, and the freshness
-// leases in M4 are what bound it in time rather than in changes.
+// The cost is that a revoked device's frames and queries are still answered
+// until the network is [KeyringDepth] epochs past it. That window leaks
+// metadata and nothing else — peer entries come from the log — and every
+// membership change carries a bump, so four changes retire it.
 const KeyringDepth = 4
 
-// A Keyring holds the epoch group secrets a node can still use.
-//
-// It exists for the sync layer, not for the log: the log records exactly one
-// current epoch, while gossip has to survive members being a step apart.
-// Nothing here decides what is authorized — a frame that opens under an old
-// epoch key is still only as trustworthy as the signatures on the records
-// inside it.
-//
-// Safe for concurrent use: the daemon reaches it from the reconcile loop and
-// from every gossip session at once.
+// A Keyring holds the epoch group secrets a node can still use. It exists for
+// the sync layer, not the log: the log has exactly one current epoch, while
+// gossip must survive members being a step apart. Nothing here decides what is
+// authorized. Safe for concurrent use.
 type Keyring struct {
 	mu sync.Mutex
 

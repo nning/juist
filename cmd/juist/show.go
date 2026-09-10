@@ -33,7 +33,7 @@ to the head.
 `)
 	}
 	if err := fs.Parse(args); err != nil {
-		return errSilent
+		return parseResult(err)
 	}
 	st, auth, err := h.openAuthority()
 	if err != nil {

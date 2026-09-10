@@ -1,57 +1,58 @@
 package log
 
 import (
+	"fmt"
 	"testing"
-	"time"
+
+	"github.com/nning/juist/types"
 )
 
-// TestScaleAtTargetSize is a sanity check rather than a benchmark: a network at
-// the top of the documented scale (docs/01-requirements.md: 25–100 devices)
-// with a long chain must open and extend in a time an operator would not
-// notice. It exists to catch an accidentally quadratic rule, not to track
-// performance.
-func TestScaleAtTargetSize(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds a 100-member network")
-	}
-	h := newHarness(t, 3, 2)
-	const members = 100
-	start := time.Now()
-	for i := range members {
-		h.addNode(string(rune('a'+i%26)) + string(rune('0'+i/26)))
-	}
-	build := time.Since(start)
-
-	start = time.Now()
-	reopened, err := Open(h.storage)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	open := time.Since(start)
-	if len(reopened.State().Nodes()) != members {
-		t.Fatalf("%d members after reopen, want %d", len(reopened.State().Nodes()), members)
+// TestRecordSizeAtMaxNodes is the measurement docs/05-roadmap.md requires
+// before the M3 record-schema freeze, kept as a regression guard: the epoch
+// group secret fans out one 1168-byte wrap per member, inline, in every record
+// that changes the member set and in every checkpoint. What the numbers
+// decided is in docs/08-trust-layer-notes.md.
+//
+// It also bounds what one record may cost a receiver: a checkpoint at
+// [types.MaxNodes] must stay inside [types.MaxRecordSize], and an epoch bump
+// inside a single gossip frame, or a network at the schema's ceiling could
+// author a record its own members refuse.
+func TestRecordSizeAtMaxNodes(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	members := make([]types.NodeRecord, 0, types.MaxNodes)
+	for i := range types.MaxNodes {
+		members = append(members, h.newNode(fmt.Sprintf("n%d", i)))
 	}
 
-	// A checkpoint at this size is the largest record the schema allows in
-	// practice; it must fit well inside the decode limit.
-	cp, err := h.auth.Builder().Checkpoint()
+	cp := h.handAssembledCheckpoint(members)
+	checkpoint, err := cp.Encode()
 	if err != nil {
-		t.Fatalf("Checkpoint: %v", err)
+		t.Fatalf("encoding the checkpoint: %v", err)
 	}
-	h.signQuorum(&cp)
-	encoded, err := cp.Encode()
+	epoch, err := h.sealer()(2, members)
 	if err != nil {
-		t.Fatalf("Encode: %v", err)
+		t.Fatalf("sealing an epoch: %v", err)
 	}
-	if err := h.auth.Inform(cp); err != nil {
-		t.Fatalf("Inform: %v", err)
+	prev := h.auth.Head()
+	bump := types.AUM{Kind: types.KindEpochBump, Prev: &prev, Epoch: epoch}
+	h.signQuorum(&bump)
+	bumped, err := bump.Encode()
+	if err != nil {
+		t.Fatalf("encoding the epoch bump: %v", err)
 	}
-	t.Logf("%d members: built %d records in %v, reopened in %v, checkpoint is %d bytes",
-		members, members+1, build, open, len(encoded))
 
-	// Generous ceilings: the point is to fail loudly if a rule turns
-	// superlinear, not to police milliseconds.
-	if open > 30*time.Second {
-		t.Errorf("reopening a %d-member log took %v", members, open)
+	t.Logf("at %d members: checkpoint %d bytes (%.0f KiB), epoch bump %d bytes (%.0f KiB)",
+		types.MaxNodes, len(checkpoint), float64(len(checkpoint))/1024,
+		len(bumped), float64(len(bumped))/1024)
+	t.Logf("one membership change costs each member %.0f KiB and the network %.0f MiB",
+		float64(len(bumped))/1024, float64(len(bumped))*(types.MaxNodes-1)/(1024*1024))
+
+	if len(checkpoint) > types.MaxRecordSize {
+		t.Errorf("a checkpoint at %d members is %d bytes, over the %d-byte record limit "+
+			"every node enforces", types.MaxNodes, len(checkpoint), types.MaxRecordSize)
+	}
+	if len(bumped) > types.MaxRecordSize {
+		t.Errorf("an epoch bump at %d members is %d bytes, over the %d-byte record limit",
+			types.MaxNodes, len(bumped), types.MaxRecordSize)
 	}
 }

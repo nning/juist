@@ -237,14 +237,22 @@ func TestDerivationsAreSeparated(t *testing.T) {
 		t.Fatalf("NewSecret: %v", err)
 	}
 	dk := s.DiscoveryKey(1)
+	alice, bob := types.Identity{1}, types.Identity{2}
+	seedE1W0A := s.TopicSeed(1, 0, alice)
+	seedE1W1A := s.TopicSeed(1, 1, alice)
+	seedE2W0A := s.TopicSeed(2, 0, alice)
+	seedE1W0B := s.TopicSeed(1, 0, bob)
 	seen := map[string]string{
-		"topic e1 w0":   string(s.TopicID(1, 0)),
-		"topic e1 w1":   string(s.TopicID(1, 1)),
-		"topic e2 w0":   string(s.TopicID(2, 0)),
-		"mdns e1":       string(s.MDNSName(1)),
-		"mdns e2":       string(s.MDNSName(2)),
-		"discovery e1":  string(dk[:]),
-		"secret itself": string(s[:]),
+		// Every axis a topic must separate on: two members, two windows and
+		// two epochs must never land on one another's item.
+		"topic e1 w0 alice": string(seedE1W0A[:]),
+		"topic e1 w1 alice": string(seedE1W1A[:]),
+		"topic e2 w0 alice": string(seedE2W0A[:]),
+		"topic e1 w0 bob":   string(seedE1W0B[:]),
+		"mdns e1":           string(s.MDNSName(1)),
+		"mdns e2":           string(s.MDNSName(2)),
+		"discovery e1":      string(dk[:]),
+		"secret itself":     string(s[:]),
 	}
 	byValue := map[string]string{}
 	for name, v := range seen {

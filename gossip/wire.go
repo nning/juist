@@ -12,19 +12,19 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// Structural limits on a gossip frame.
-//
-// These are not policy. They bound what a peer can make this node allocate or
-// hash before anything in the frame has been authenticated, which is the whole
-// job of a parser sitting on an untrusted transport
-// (docs/04-architecture.md: the sync layer moves self-certifying data over
-// transports it does not trust).
+// Structural limits on a gossip frame: what a peer can make this node allocate
+// or hash before anything in the frame has been authenticated.
 const (
 	// MaxFrameSize caps a frame's plaintext. The largest legitimate one is a
-	// batch of records containing a checkpoint, which at [types.MaxNodes]
-	// members runs to about 1.3 MiB; the limit leaves room for a few of them
-	// and stays far below anything that threatens memory.
+	// batch containing a checkpoint, about 1.3 MiB at [types.MaxNodes].
 	MaxFrameSize = 8 << 20
+
+	// maxRecordBytesPerFrame is the byte budget a records frame's payload may
+	// fill, leaving room for the frame's own fields. A batch is truncated to
+	// it: at [types.MaxNodes] members an epoch record is ~600 KiB, so a node
+	// far behind would otherwise be sent a batch that cannot be encoded at
+	// all.
+	maxRecordBytesPerFrame = MaxFrameSize - (1 << 20)
 
 	// MaxRecordsPerFrame caps the log records one frame may carry. Anti-
 	// entropy sends what a peer is missing in as many frames as it takes.
@@ -76,49 +76,40 @@ func (k frameKind) String() string {
 	}
 }
 
-// A frame is one anti-entropy message.
-//
-// Log records travel as raw byte strings rather than as a nested schema, so
-// that they can only enter this process through [types.DecodeAUM] — the
-// decoder that enforces the canonical encoding the hash chain and every
-// signature rest on. A gossip frame must not be a second way to build an AUM.
+// A frame is one anti-entropy message. Log records travel as raw byte strings
+// rather than a nested schema, so they can only enter through
+// [types.DecodeAUM]: a frame must not be a second way to build an AUM.
 type frame struct {
 	Kind frameKind `cbor:"1,keyasint"`
 
 	// Network is the sender's genesis hash. A frame for another network is
-	// dropped before anything in it is looked at; this is what keeps two
-	// juist networks sharing a LAN from feeding each other records their
-	// logs would only reject one by one.
+	// dropped before anything in it is looked at.
 	Network types.Hash `cbor:"2,keyasint"`
 
-	// Epoch and Head are the log-head beacon docs/04-architecture.md puts on
-	// every gossip message: where the sender's chain is. They are hints that
-	// decide whether there is anything to exchange, never anything the
-	// receiver adopts.
+	// Epoch and Head are the log-head beacon: where the sender's chain is.
+	// Hints that decide whether there is anything to exchange, never anything
+	// the receiver adopts.
 	Epoch uint64     `cbor:"3,keyasint"`
 	Head  types.Hash `cbor:"4,keyasint"`
 
 	// Have is the set of record hashes the sender already holds, in a hello.
 	Have []types.Hash `cbor:"5,keyasint,omitempty"`
 
-	// Anchor is the record the sender's chain is resolved from: its genesis,
-	// or the newest checkpoint it has compacted to. It is what the peer
-	// walks when deciding which records to send back — after a compaction,
-	// "everything you are missing" is wrong in both directions: records
-	// below the receiver's anchor are ones it can no longer accept, and one
-	// of them in a batch poisons the whole batch, since Inform is atomic.
+	// Anchor is the record the sender's chain is resolved from, and what the
+	// peer walks when deciding what to send back: records below it are ones
+	// the sender can no longer accept, and one such record poisons a whole
+	// batch, since Inform is atomic.
 	Anchor types.Hash `cbor:"9,keyasint"`
 
 	// Records are encoded AUMs, in a records frame, ordered so that every
 	// record's parent precedes it.
 	Records [][]byte `cbor:"6,keyasint,omitempty"`
 
-	// Self is the sender's own announcement, kept apart from the relayed
-	// ones so that "who am I talking to" has an answer. It is a hint, not
-	// authentication: the signature proves the announcement is genuine, not
-	// that the peer holding the socket is its author. Nothing is authorized
-	// on the strength of it — it only chooses which epoch key a reply is
-	// sealed under, and getting that wrong costs one failed session.
+	// Self is the sender's own announcement, kept apart from the relayed ones
+	// so "who am I talking to" has an answer. A hint, not authentication: the
+	// signature proves the record is genuine, not that the peer holding the
+	// socket wrote it. It only chooses which epoch key a reply is sealed
+	// under.
 	Self *Endpoint `cbor:"7,keyasint,omitempty"`
 
 	// Endpoints are announcements the sender is relaying from its cache.
@@ -157,15 +148,10 @@ func (f *frame) validate() error {
 
 // --- canonical CBOR --------------------------------------------------------
 
-// encMode and decMode mirror the choices in types: CTAP2 canonical CBOR, and
-// a decoder that rejects everything a permissive one would repair.
-//
-// They are a separate pair rather than the trust layer's, deliberately. A
-// gossip frame is a different wire format with different limits, it is not
-// hashed or signed as a whole, and docs/06-verification.md gives it its own
-// fuzz target from this milestone. Sharing the modes would tie the frame
-// parser's blast radius to the record parser's, and the record parser is the
-// one inside the audit scope.
+// encMode and decMode mirror the choices in types: CTAP2 canonical CBOR and a
+// strict decoder. A separate pair rather than the trust layer's, so the frame
+// parser's blast radius is not tied to the record parser's, which is the one
+// inside the audit scope.
 var encMode = func() cbor.EncMode {
 	m, err := cbor.CTAP2EncOptions().EncMode()
 	if err != nil {
@@ -203,13 +189,9 @@ func encode(v any) ([]byte, error) {
 }
 
 // decodeCanonical decodes b and rejects it unless b is exactly what encoding
-// the result produces.
-//
-// The re-encode check carries real weight for endpoint records, whose
-// signature covers their encoding: without it, a peer could re-spell a record
-// it received and the signature would still verify over a different byte
-// string. For frames it is cheap insurance and keeps one rule for the whole
-// format.
+// the result produces. It carries real weight for endpoint records, whose
+// signature covers their encoding: without it a peer could re-spell a record
+// and the signature would still verify over different bytes.
 func decodeCanonical[T any](b []byte) (T, error) {
 	var zero, v T
 	if len(b) == 0 {
@@ -263,10 +245,8 @@ func seal(s secrets.Secret, epoch uint64, plaintext []byte) ([]byte, error) {
 	return aead.Seal(key, epoch, plaintext)
 }
 
-// errUnknownEpoch reports a frame sealed under an epoch this node cannot open.
-// It is an ordinary condition, not an attack: a peer more than
-// [secrets.KeyringDepth] epochs away, and a device that is not a member at
-// all, both look like this and both are handled by dropping the frame.
+// errUnknownEpoch reports a frame sealed under an epoch this node cannot open:
+// an ordinary condition, and a peer far behind looks the same as a non-member.
 var errUnknownEpoch = errors.New("gossip: frame is sealed under an epoch this node does not hold")
 
 // open decrypts a sealed frame with whichever epoch key it names, returning

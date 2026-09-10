@@ -25,7 +25,7 @@ admins — the whole point of k-of-n being that no machine holds k keys — and
 `)
 	}
 	if err := fs.Parse(args); err != nil {
-		return errSilent
+		return parseResult(err)
 	}
 	if fs.NArg() == 0 {
 		fs.Usage()
@@ -36,10 +36,8 @@ admins — the whole point of k-of-n being that no machine holds k keys — and
 	if err != nil {
 		return err
 	}
-	// Absent node keys are normal — an admin-only keystore has none — but a
-	// key file that is present and unloadable is a fault to report, not a key
-	// to quietly do without: signing would go ahead and simply omit the
-	// signature the record needs, saying only that no local key could sign.
+	// Absent node keys are normal; a present but unloadable key file is a
+	// fault to report, or signing omits the signature the record needs.
 	node, nodeErr := h.nodeKeys()
 	if nodeErr != nil && !keys.Missing(nodeErr) {
 		return nodeErr
@@ -54,14 +52,10 @@ admins — the whole point of k-of-n being that no machine holds k keys — and
 		return fmt.Errorf("this keystore holds no key that could sign anything; see: juist key -h")
 	}
 
-	// A keystore with no network is the air-gapped signing machine, and it is
-	// a configuration worth supporting: it is the only way a quorum is real.
-	// The cost is that nothing here can check the record belongs to the
-	// network the keys govern, so the operator is told so.
-	//
-	// Only an *absent* network gets that treatment. A store that fails to open
-	// is an error: signing blind because the log is corrupt would be the worst
-	// of both.
+	// A keystore with no network is the air-gapped signing machine, which is
+	// how a quorum becomes real. The cost is that nothing can check the record
+	// belongs to the network the keys govern, so the operator is told. A store
+	// that fails to open is still an error.
 	st, auth, haveNetwork, err := h.openAuthorityAllowingNone()
 	if err != nil {
 		return err
@@ -77,12 +71,9 @@ admins — the whole point of k-of-n being that no machine holds k keys — and
 		if err != nil {
 			return err
 		}
-		// Refuse a record that does not belong to this log. A signature by a
-		// key the target network does not trust for the record does not merely
-		// fail to count — it makes the record invalid outright, since ignoring
-		// unknown signers would be a way to manufacture forks. So an operator
-		// who signs someone else's record destroys it. Catching that here is
-		// the difference between "wrong window" and a ruined ceremony.
+		// A signature by a key the target network does not trust does not
+		// merely fail to count, it invalidates the record — so an operator
+		// who signs someone else's record destroys it.
 		stale := false
 		if haveNetwork && aum.Kind != types.KindGenesis {
 			if _, err := st.AUM(*aum.Prev); err != nil {
@@ -92,12 +83,9 @@ admins — the whole point of k-of-n being that no machine holds k keys — and
 						"invalid for whoever's log it belongs to; sync first, or sign it on the right machine",
 					path, *aum.Prev)
 			}
-			// Being in the log is not the same as being the head. A record
-			// built on an older parent is judged against the state at *that*
-			// parent, so what this device currently trusts says nothing about
-			// it — and if the admin set has changed since, a signature by a
-			// current admin is an untrusted one there, which does not merely
-			// fail to count but invalidates the record outright.
+			// Being in the log is not being the head: a record on an older
+			// parent is judged against the state there, so if the admin set
+			// has moved, a signature by a current admin invalidates it.
 			stale = *aum.Prev != auth.Head()
 			if stale {
 				fmt.Fprintf(os.Stderr,
@@ -161,12 +149,9 @@ const (
 	nodeKey
 )
 
-// signIfWanted adds a signature only if the key has a role in this record.
-//
-// Signing with a key the network does not trust for the record would not just
-// be useless, it would make the record invalid: an untrusted signature is
-// rejected outright rather than ignored, so that nobody can mint a second valid
-// encoding of an authorized record.
+// signIfWanted adds a signature only if the key has a role in this record: an
+// untrusted signature is rejected outright rather than ignored, so signing
+// where it is not wanted invalidates the record.
 func signIfWanted(aum *types.AUM, key types.PrivateIdentity, auth *log.Authority, role keyRole) bool {
 	id := key.Public()
 	if aum.VerifySignature(id) {
@@ -191,17 +176,11 @@ func wanted(aum *types.AUM, id types.Identity, auth *log.Authority, role keyRole
 		return true
 	}
 	if auth == nil {
-		// No log to check against. For an admin key that is genuinely
-		// unknowable — refusing would make an air-gapped admin key useless,
-		// and the warning printed above is the honest answer.
-		//
-		// A node key is not unknowable. [log.SelfSigner] depends only on the
-		// record, so the check above is complete: it just said this record
-		// does not want this device's signature, and adding one anyway makes
-		// the record invalid outright rather than merely over-signed. The
-		// case that matters is the ordinary one — a freshly created device,
-		// node keys and no network, whose operator runs "juist sign" on their
-		// own enrollment record and destroys the admins' finished ceremony.
+		// No log to check against. For an admin key that is unknowable, and
+		// refusing would make an air-gapped key useless. A node key is not:
+		// [log.SelfSigner] depends only on the record, so the check above is
+		// complete — signing anyway would invalidate the enrollment record a
+		// freshly created device's operator was sent.
 		return role == adminKey
 	}
 	_, isAdmin := auth.State().Admin(id)

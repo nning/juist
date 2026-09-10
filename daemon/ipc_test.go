@@ -39,6 +39,7 @@ func newIPCFixture(t *testing.T) (*reconcileFixture, string) {
 		Identity: self.identity, Recipient: self.recipient, WireGuard: self.wgPrivate,
 		Connect:          func(conn.Options) (conn.Manager, error) { return mgr, nil },
 		DisableDiscovery: true,
+		DisableDHT:       true,
 		SocketPath:       sock,
 		Logf:             safeLogf(t, ""),
 	})
@@ -162,6 +163,7 @@ func TestIPCRefusesASharedWritableDirectory(t *testing.T) {
 		Connect:   func(conn.Options) (conn.Manager, error) { return &fakeManager{}, nil },
 
 		DisableDiscovery: true,
+		DisableDHT:       true,
 		SocketPath:       SocketPath(dir),
 	})
 	if err == nil {
@@ -172,11 +174,10 @@ func TestIPCRefusesASharedWritableDirectory(t *testing.T) {
 	}
 }
 
-// TestASecondDaemonOnTheSameHomeIsRefused is the split-brain guard. Without the
-// lock, a second daemon unlinks the first's socket and binds its own — the CLI
-// then talks to the newcomer while the original keeps a revoked peer's tunnel
-// up, two log authorities writing one store. Starting the second must fail
-// loudly instead, and the first must still be answering afterwards.
+// TestASecondDaemonOnTheSameHomeIsRefused is the split-brain guard: without
+// the lock a second daemon unlinks the first's socket and binds its own,
+// leaving two log authorities on one store. It must fail loudly instead, and
+// the first must still answer.
 func TestASecondDaemonOnTheSameHomeIsRefused(t *testing.T) {
 	f, sock := newIPCFixture(t)
 	home := filepath.Dir(sock)
@@ -193,6 +194,7 @@ func TestASecondDaemonOnTheSameHomeIsRefused(t *testing.T) {
 		Connect:   func(conn.Options) (conn.Manager, error) { return &fakeManager{}, nil },
 
 		DisableDiscovery: true,
+		DisableDHT:       true,
 		SocketPath:       SocketPath(home),
 		Logf:             safeLogf(t, ""),
 	})
@@ -220,6 +222,7 @@ func TestASecondDaemonOnTheSameHomeIsRefused(t *testing.T) {
 		Connect:   func(conn.Options) (conn.Manager, error) { return &fakeManager{}, nil },
 
 		DisableDiscovery: true,
+		DisableDHT:       true,
 		SocketPath:       SocketPath(home),
 		Logf:             safeLogf(t, ""),
 	})

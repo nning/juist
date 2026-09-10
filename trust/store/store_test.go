@@ -189,10 +189,9 @@ func TestSharedWritableDirRefused(t *testing.T) {
 	}
 }
 
-// TestCorruptRecordRefusesToOpen is the rule from docs/04-architecture.md: a
-// damaged log makes the node refuse to start, with an error pointing at the
-// file. It must never repair itself, and above all must never fall back to
-// creating a fresh network.
+// TestCorruptRecordRefusesToOpen: a damaged log makes the node refuse to
+// start, with an error naming the file. It must never repair itself, and never
+// fall back to creating a fresh network.
 func TestCorruptRecordRefusesToOpen(t *testing.T) {
 	n := newNetwork(t)
 	n.addNode("alpha")
@@ -377,17 +376,10 @@ func TestStrayFileRefusesToOpen(t *testing.T) {
 	}
 }
 
-// TestInterruptedWriteIsCleanedUp checks that a leftover temporary file — what
-// a crash mid-Add leaves behind — does not make the store unopenable, and is
-// swept once it is old enough to be debris rather than somebody's write in
-// flight.
-//
-// Every prefix is covered, because more than one can really be there. Add
-// stages under tempPrefix, but it once staged by way of writeFileSync, which
-// interposes a tmpPrefix file of its own. Sweeping only the prefix Add names
-// itself left the other able to wedge a node permanently: Open refuses entries
-// it cannot explain, nothing removes this one, and the store never opens
-// again — from a power loss during an ordinary write.
+// TestInterruptedWriteIsCleanedUp: a leftover temporary file from a crash
+// mid-Add must not make the store unopenable, and is swept once it is old
+// enough to be debris rather than a write in flight. Both prefixes are
+// covered, since a store written by an older build can hold either.
 func TestInterruptedWriteIsCleanedUp(t *testing.T) {
 	for _, prefix := range tempNames {
 		t.Run(prefix, func(t *testing.T) {
@@ -414,11 +406,9 @@ func TestInterruptedWriteIsCleanedUp(t *testing.T) {
 	}
 }
 
-// TestOpenLeavesAWriteInFlightAlone: opening a store is not exclusive — every
-// juist command does it, including read-only ones, while a daemon may be
-// mid-Add on the same directory. A sweep that removed a fresh staged file
-// would fail that daemon's rename, and because Inform is atomic, one deleted
-// file rejects the whole batch it belonged to.
+// TestOpenLeavesAWriteInFlightAlone: opening is not exclusive, and a daemon
+// may be mid-Add on the same directory. A sweep that removed a fresh staged
+// file would fail its rename, and Inform being atomic, cost it the batch.
 func TestOpenLeavesAWriteInFlightAlone(t *testing.T) {
 	for _, prefix := range tempNames {
 		t.Run(prefix, func(t *testing.T) {
@@ -439,5 +429,37 @@ func TestOpenLeavesAWriteInFlightAlone(t *testing.T) {
 				t.Errorf("opening the store destroyed another process's write in flight: %v", err)
 			}
 		})
+	}
+}
+
+// TestSchemaFloorSurvivesReopen: the schema ratchet is only worth having if it
+// outlives the process. Without it, restarting under an older build would read
+// a network that has moved on as one that never did.
+func TestSchemaFloorSurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if v, err := d.SchemaFloor(); err != nil || v != 0 {
+		t.Fatalf("a fresh store reports schema floor %v (err %v), want 0", v, err)
+	}
+	if err := d.SetSchemaFloor(4); err != nil {
+		t.Fatalf("SetSchemaFloor: %v", err)
+	}
+	// Lowering is refused rather than obeyed: it is a ratchet.
+	if err := d.SetSchemaFloor(2); err != nil {
+		t.Fatalf("SetSchemaFloor(lower): %v", err)
+	}
+	if v, _ := d.SchemaFloor(); v != 4 {
+		t.Fatalf("floor is %v after being handed a lower value, want 4", v)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	if v, err := reopened.SchemaFloor(); err != nil || v != 4 {
+		t.Errorf("reopened store reports schema floor %v (err %v), want 4", v, err)
 	}
 }

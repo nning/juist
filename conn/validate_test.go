@@ -1,21 +1,26 @@
 package conn
 
 import (
+	"errors"
 	"math"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"tailscale.com/net/dns"
 	"tailscale.com/types/key"
+	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/filter"
+	"tailscale.com/wgengine/router"
+	"tailscale.com/wgengine/wgcfg"
 )
 
 // TestSetPeersRejects covers the validation SetPeers does before touching any
-// state. These are all conditions the membership log is supposed to prevent, so
-// reaching one means a bug upstream — the point is that it fails loudly here
-// rather than silently binding an overlay address to the wrong key.
-//
-// Only rejection paths are exercised, so no engine is needed.
+// state. All of these mean a bug upstream, and the point is that they fail
+// loudly rather than binding an overlay address to the wrong key. Only
+// rejection paths, so no engine is needed.
 func TestSetPeersRejects(t *testing.T) {
 	selfKey, selfDisco := key.NewNode(), key.NewDisco()
 	m := &tsManager{
@@ -126,10 +131,8 @@ func TestSetPeersRejects(t *testing.T) {
 			want:  "v4-mapped",
 		},
 		{
-			// An entry carrying our own node key is skipped as the
-			// reconciler's rendering of this node itself — but only if it
-			// agrees with Self. A diverging one means the log and the data
-			// plane disagree about who we are.
+			// An entry carrying our own node key is this node's own
+			// rendering, but only if it agrees with Self.
 			name:  "self entry with wrong ID",
 			peers: []Peer{{ID: 9, NodeKey: selfKey.Public(), DiscoKey: selfDisco.Public(), Addrs: addr("100.64.0.1/32")}},
 			want:  "diverges from Self",
@@ -214,12 +217,9 @@ func TestNewRejectsBadSelf(t *testing.T) {
 	}
 }
 
-// TestPeerDelta covers the device-convergence decision SetPeers makes for
-// each previous peer: whose sessions are dead and must be reset. Getting it
-// wrong is invisible in a single-run test — it shows up as a restarted peer
-// blackholing until WireGuard's rekey timers expire — so the decision is
-// pinned here. (Everything retained is re-synced wholesale; there is no
-// decision to pin on that side.)
+// TestPeerDelta covers which previous peers SetPeers resets. Getting it wrong
+// is invisible in a single run: it shows up as a restarted peer blackholing
+// until WireGuard's rekey timers expire.
 func TestPeerDelta(t *testing.T) {
 	keys := make([]key.NodePublic, 5)
 	for i := range keys {
@@ -255,12 +255,10 @@ func TestPeerDelta(t *testing.T) {
 	}
 }
 
-// TestDiscoKeyAgrees pins the property NewDiscoKey's comment claims: the
-// public half it derives through crypto/ecdh equals the one the connectivity
-// stack derives from the same private bytes. If the two ever disagreed — say,
-// over clamping — every announcement would carry a disco key its owner does
-// not answer to, and the only symptom would be a mesh where discovery works
-// and no tunnel ever comes up.
+// TestDiscoKeyAgrees pins what NewDiscoKey claims: the public half it derives
+// through crypto/ecdh equals the one the connectivity stack derives. If they
+// disagreed over clamping, every announcement would carry a key its owner does
+// not answer to, and discovery would work while no tunnel came up.
 func TestDiscoKeyAgrees(t *testing.T) {
 	for range 32 {
 		priv, pub, err := NewDiscoKey()
@@ -273,5 +271,86 @@ func TestDiscoKeyAgrees(t *testing.T) {
 			t.Fatalf("stack derives %v from the private key, announcement would carry %v",
 				got.ShortString(), want.ShortString())
 		}
+	}
+}
+
+// fakeEngine implements just enough of [wgengine.Engine] for a reconfiguration.
+// The embedded nil interface means any other method panics rather than
+// silently doing nothing, which is what a test wants of a method it did not
+// expect to be called.
+type fakeEngine struct {
+	wgengine.Engine
+	routerFails bool
+	// last is what the engine believes it programmed, and programmed counts
+	// the configs that actually reached the router: wgengine records the first
+	// before attempting the second, which is the behaviour under test.
+	last       *router.Config
+	programmed []*router.Config
+}
+
+func (f *fakeEngine) GetFilter() *filter.Filter { return nil }
+func (f *fakeEngine) SetFilter(*filter.Filter)  {}
+func (f *fakeEngine) Reconfig(_ *wgcfg.Config, rt *router.Config, _ *dns.Config) error {
+	if f.last != nil && reflect.DeepEqual(f.last, rt) {
+		return wgengine.ErrNoChanges
+	}
+	f.last = rt
+	if f.routerFails {
+		return errors.New("router: netlink is busy")
+	}
+	f.programmed = append(f.programmed, rt)
+	return nil
+}
+
+// TestReconfigRetriesAfterAFailedRouter: a router that fails once must be
+// reprogrammed by the next reconfiguration, even though the peer set has not
+// changed. Without the retry the engine reports ErrNoChanges forever and the
+// host keeps the routes it had when the failure happened.
+func TestReconfigRetriesAfterAFailedRouter(t *testing.T) {
+	fake := &fakeEngine{routerFails: true}
+	m := &tsManager{
+		logf: t.Logf,
+		eng:  fake,
+		self: Self{
+			ID:      1,
+			NodeKey: key.NewNode(),
+			Addrs:   []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")},
+		},
+	}
+	m.state.Store(&peerState{})
+
+	if err := m.reconfig(); err == nil {
+		t.Fatal("a failing router did not surface an error")
+	}
+	if !m.routerStale {
+		t.Fatal("a failed reconfiguration was not recorded as stale")
+	}
+	if len(fake.programmed) != 0 {
+		t.Fatalf("the router took %d configs despite failing", len(fake.programmed))
+	}
+
+	fake.routerFails = false
+	if err := m.reconfig(); err != nil {
+		t.Fatalf("the retry failed: %v", err)
+	}
+	if m.routerStale {
+		t.Fatal("a successful reconfiguration left the router marked stale")
+	}
+	if len(fake.programmed) == 0 {
+		t.Fatal("the retry never reached the router: the host keeps the old routes")
+	}
+	last := fake.programmed[len(fake.programmed)-1]
+	if !slices.Equal(last.LocalAddrs, m.self.Addrs) {
+		t.Fatalf("the router ended at %v, want this node's addresses %v",
+			last.LocalAddrs, m.self.Addrs)
+	}
+
+	// And a steady state still short-circuits: no forcing when nothing failed.
+	before := len(fake.programmed)
+	if err := m.reconfig(); err != nil {
+		t.Fatalf("an unchanged reconfiguration failed: %v", err)
+	}
+	if len(fake.programmed) != before {
+		t.Fatal("an unchanged reconfiguration reprogrammed the router")
 	}
 }

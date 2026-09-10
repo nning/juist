@@ -2,9 +2,11 @@ package main
 
 import (
 	"crypto/rand"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,9 +17,7 @@ import (
 )
 
 // numDisablementSecrets is how many break-glass preimages the genesis ceremony
-// commits to. Tailnet lock commits about ten
-// (docs/research/building-blocks.md); the number only has to be large enough
-// that losing any one of them does not matter.
+// commits to: enough that losing any one of them does not matter.
 const numDisablementSecrets = 10
 
 func cmdInit(h *home, args []string) error {
@@ -47,7 +47,7 @@ Flags:
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		return errSilent
+		return parseResult(err)
 	}
 	if *network == "" {
 		fs.Usage()
@@ -57,11 +57,9 @@ Flags:
 		return fmt.Errorf("-quorum must be between 1 and %d", types.MaxVotes)
 	}
 
-	// Everything that can be rejected from the arguments alone is rejected
-	// before anything is written. The ceremony writes three files an operator
-	// cannot simply re-run over — the admin key, the break-glass secrets, the
-	// node keys — and a name the log will not accept used to fail after all
-	// three were on disk, leaving a half-ceremony that refuses to be redone.
+	// Everything decidable from the arguments is rejected before anything is
+	// written: the ceremony writes three files an operator cannot re-run over,
+	// so a late failure leaves a half-ceremony that refuses to be redone.
 	if err := types.ValidateName(*network); err != nil {
 		return fmt.Errorf("-network: %w", err)
 	}
@@ -102,6 +100,22 @@ Flags:
 	}
 	if uint32(*quorum) > total {
 		return fmt.Errorf("-quorum %d exceeds the total admin vote weight %d", *quorum, total)
+	}
+
+	// The ceremony writes files it will not write over, so every one of them
+	// is checked before the first is created: a failure at the third otherwise
+	// leaves a home that can neither finish the ceremony nor start it again.
+	targets := []string{filepath.Join(adminsDir, *adminName+".key"), disablementFile, genesisFile}
+	if *nodeName != "" {
+		targets = append(targets, nodeKeysFile)
+	}
+	for _, name := range targets {
+		if _, err := os.Stat(h.join(name)); err == nil {
+			return fmt.Errorf("%s already exists; this home holds part of an earlier "+
+				"ceremony, so remove it deliberately or use a different -home", h.join(name))
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 
 	localAdmin, err := h.createAdminKey(*adminName)
@@ -152,13 +166,10 @@ Flags:
 	if err := genesis.Sign(localAdmin); err != nil {
 		return err
 	}
-	// A genesis the local key cannot authorize on its own is the normal
-	// multi-admin case, not a failure: k-of-n means no machine holds k keys,
-	// so the record has to leave this one to collect the rest. Write it out
-	// rather than discarding it. Discarding was unrecoverable — the admin key
-	// and the break-glass secrets are already on disk and a second init
-	// refuses to overwrite them, so the ceremony could be neither finished
-	// nor restarted.
+	// A genesis the local key cannot authorize alone is the normal
+	// multi-admin case: write it out for the other admins. Discarding it
+	// would be unrecoverable, since the keys it commits to are already on
+	// disk and a second init refuses to overwrite them.
 	status, err := log.GenesisStatus(&genesis)
 	if err != nil {
 		return err
@@ -198,9 +209,8 @@ Flags:
 }
 
 // enrollLocalNode generates this device's keys and returns the record that
-// would admit it. An explicit WireGuard key overrides the generated one, for a
-// device whose data plane already holds a key. The name is persisted with the
-// keys so "juist key" can reprint the enrollment command later.
+// would admit it. An explicit WireGuard key overrides the generated one. The
+// name is persisted so "juist key" can reprint the enrollment command.
 func (h *home) enrollLocalNode(name, wgKeyText string) (types.NodeRecord, error) {
 	k, err := h.createNodeKeys(name)
 	if err != nil {
@@ -252,11 +262,8 @@ func parseAdminSpec(spec string) (types.AdminKey, error) {
 	return types.AdminKey{Public: key, Votes: uint32(votes), Name: name}, nil
 }
 
-// sealer returns the epoch sealer, drawing a fresh group secret per epoch.
-//
-// The secret is not kept: every member — including this one, if it is a member
-// — recovers it from the record's wrap addressed to it. Nothing needs the
-// plaintext at the machine that signs.
+// sealer returns the epoch sealer, drawing a fresh group secret per epoch. The
+// secret is not kept: every member recovers it from its own wrap.
 func sealer() log.Sealer {
 	return func(epoch uint64, members []types.NodeRecord) (*types.EpochRecord, error) {
 		_, rec, err := secrets.NewEpoch(epoch, members)

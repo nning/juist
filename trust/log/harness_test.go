@@ -240,17 +240,54 @@ func (h *harness) project(records ...types.AUM) *State {
 	return auth.State()
 }
 
-// handAssembledAddNode builds a signed AddNode record without going through the
-// builder, the way a quorum that wants a record admitted would.
-//
-// The builder refuses a colliding or otherwise inadmissible node before the
-// record is ever signed, which is the cooperative path. An attacker holding a
-// quorum has no reason to use it, so a test that only goes through the builder
-// never exercises the rule on the side that matters: the receiving node, which
-// has to reject the record on its own rather than trusting that whoever built
-// it ran the same checks. The epoch is sealed correctly for the member set the
-// record would produce, so anything rejected here is rejected for the record's
-// substance and not for a malformed bump.
+// adminKeys returns the network's admin keys, for a ceremony assembled without
+// the harness's own genesis.
+func (h *harness) adminKeys() []types.AdminKey {
+	out := make([]types.AdminKey, 0, len(h.admins))
+	for i, priv := range h.admins {
+		out = append(out, types.AdminKey{
+			Public: priv.Public(), Votes: 1, Name: fmt.Sprintf("admin%d", i),
+		})
+	}
+	return out
+}
+
+// commitments returns the network's break-glass commitments.
+func (h *harness) commitments() []types.Hash {
+	out := make([]types.Hash, 0, len(h.disablement))
+	for _, secret := range h.disablement {
+		out = append(out, types.DisablementCommit(secret))
+	}
+	return out
+}
+
+// handAssembledCheckpoint builds a quorum-signed checkpoint asserting a member
+// set, resealing the epoch so the wrap coverage matches it. It is what a
+// quorum that skips the builder can produce.
+func (h *harness) handAssembledCheckpoint(members []types.NodeRecord) types.AUM {
+	h.t.Helper()
+	slices.SortFunc(members, func(a, b types.NodeRecord) int {
+		return a.Identity.Compare(b.Identity)
+	})
+	snap := h.auth.State().Snapshot()
+	snap.Nodes = members
+	epoch, err := h.sealer()(snap.Epoch, members)
+	if err != nil {
+		h.t.Fatalf("sealing the epoch: %v", err)
+	}
+	snap.EpochCommit = epoch.Commit
+	snap.EpochWraps = epoch.Wraps
+	prev := h.auth.Head()
+	aum := types.AUM{Kind: types.KindCheckpoint, Prev: &prev, State: snap}
+	h.signQuorum(&aum)
+	return aum
+}
+
+// handAssembledAddNode builds a signed AddNode record without the builder, the
+// way a hostile quorum would: the builder refuses inadmissible nodes before
+// signing, so going through it never exercises the receiving node's own
+// checks. The epoch is sealed correctly, so a rejection is for the record's
+// substance rather than a malformed bump.
 func (h *harness) handAssembledAddNode(n types.NodeRecord) types.AUM {
 	h.t.Helper()
 	members := append(h.auth.State().Nodes(), *n.Clone())
@@ -263,6 +300,18 @@ func (h *harness) handAssembledAddNode(n types.NodeRecord) types.AUM {
 	}
 	prev := h.auth.Head()
 	aum := types.AUM{Kind: types.KindAddNode, Prev: &prev, Node: n.Clone(), Epoch: epoch}
+	h.signQuorum(&aum)
+	return aum
+}
+
+// handAssembledSchemaUpgrade builds a quorum-signed record raising the network
+// to a schema this build does not implement. The builder refuses to author one,
+// on purpose — a device cannot upgrade a network past what it can read — so
+// the only way to have one is to assemble it the way a newer build would.
+func (h *harness) handAssembledSchemaUpgrade(v types.SchemaVersion) types.AUM {
+	h.t.Helper()
+	prev := h.auth.Head()
+	aum := types.AUM{Kind: types.KindSchemaUpgrade, Prev: &prev, Schema: &v}
 	h.signQuorum(&aum)
 	return aum
 }

@@ -1,27 +1,16 @@
 // Package aead is the sealed-blob format the sync and discovery layers share.
-//
-// Both gossip frames and LAN announcements are opaque bytes at an opaque
-// label: what they buy is metadata confidentiality against an on-path or
-// on-LAN observer, and the ability of a revoked device to be shut out of
-// discovery at the next epoch. Neither carries any integrity weight — every
-// record inside is separately signed — which is why one small format serves
-// both and why losing an epoch secret costs discovery privacy and nothing else
-// (docs/02-threat-model.md).
-//
-// One implementation rather than one per caller, because the two differ only
-// in which key they derive from the epoch secret, and a second copy of nonce
-// handling is a second place to get nonce handling wrong.
-//
-// # Layout
+// It buys metadata confidentiality and nothing else: every record inside is
+// separately signed, so losing an epoch secret costs discovery privacy alone.
+// One implementation rather than one per caller, since the two differ only in
+// which key they derive and nonce handling is worth writing once.
 //
 //	[8 bytes]  epoch, big-endian, in the clear
 //	[24 bytes] nonce
 //	[n bytes]  XChaCha20-Poly1305 ciphertext
 //
-// The epoch is in the clear because the recipient has to know which key to
-// try, and it is the additional data so that it cannot be edited: a blob
-// sealed under one epoch cannot be relabelled as another's, even by someone
-// holding both keys.
+// The epoch is in the clear because the recipient must know which key to try,
+// and is the additional data so a blob cannot be relabelled as another
+// epoch's.
 package aead
 
 import (
@@ -41,12 +30,9 @@ const (
 	Overhead = EpochLen + NonceLen + chacha20poly1305.Overhead
 )
 
-// Seal encrypts plaintext under an epoch's key.
-//
-// XChaCha20-Poly1305 with a random nonce: at 192 bits there is no practical
-// collision bound to reason about, which matters because neither caller has
-// session state to derive a counter from and a node restarting must not be
-// able to repeat one.
+// Seal encrypts plaintext under an epoch's key. XChaCha20-Poly1305 with a
+// random nonce: at 192 bits there is no practical collision bound, which
+// matters because neither caller has session state to count from.
 func Seal(key [32]byte, epoch uint64, plaintext []byte) ([]byte, error) {
 	a, err := chacha20poly1305.NewX(key[:])
 	if err != nil {

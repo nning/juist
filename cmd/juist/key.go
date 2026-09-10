@@ -32,13 +32,11 @@ command to do it is printed ready to copy.
 `)
 	}
 	if err := fs.Parse(args); err != nil {
-		return errSilent
+		return parseResult(err)
 	}
 	if *createAdmin != "" {
 		// An admin key with no network of its own is the intended shape for a
-		// device that only ever signs: docs/04-architecture.md keeps admin
-		// keys out of the daemon, and a quorum only means anything if no
-		// single machine holds k of them.
+		// device that only ever signs.
 		priv, err := h.createAdminKey(*createAdmin)
 		if err != nil {
 			return err

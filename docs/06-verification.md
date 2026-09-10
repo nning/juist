@@ -5,12 +5,22 @@ Security claims are tested, not asserted. Every property in
 
 ## 1. Trust-layer unit & property tests
 
-- Golden adversarial vectors (checked into the repo): forged/missing/duplicate
-  signatures, sub-quorum changes, replay, reorder, rollback to lower epoch, dropped
-  checkpoints, address collisions, conflicting concurrent AUMs, fork injection.
-- Property-based tests (e.g. `pgregory.net/rapid`): random valid+invalid AUM sequences
-  ⇒ all honest validators converge to identical state or identical alarm; no sequence
-  reaches a state that skips quorum policy.
+- Adversarial cases, one test per attack: forged/missing/duplicate signatures,
+  sub-quorum changes, replay, reorder, rollback to lower epoch, dropped checkpoints,
+  address and key collisions, conflicting concurrent AUMs, fork injection. Each
+  builds its record from live keys rather than replaying a checked-in vector: a
+  frozen vector stops testing the validator the moment a schema field moves, and
+  every one of these attacks is cheaper to construct than to store. A whole state
+  arriving at once — a genesis naming founders, a checkpoint adopted as an anchor —
+  is covered as its own path, since it is admitted on a quorum's word rather than
+  record by record.
+- Property-based tests over generated valid+invalid AUM sequences ⇒ all honest
+  validators converge to identical state or identical alarm; no sequence reaches a
+  state that skips quorum policy. The generator is ours and each case is a numbered
+  seed rather than `pgregory.net/rapid` drawing fresh: a failure is replayed by
+  running the subtest it names, with no shrinking step and no recorded corpus to
+  keep. Reconsider if the sequences ever get complex enough that shrinking earns
+  the dependency.
 - Determinism check: two independent validation orders of the same AUM set produce
   byte-identical state (fork choice is deterministic).
 
@@ -37,12 +47,16 @@ would move the long runs onto someone else's hardware.
 
 ## 3. Multi-node integration harness
 
-Go test driver orchestrating **network namespaces** (Linux CI) with nftables/tc:
+Go test driver orchestrating **network namespaces** (Linux CI), with Linux
+netfilter doing the translation rather than a simulation of it:
 
-- **NAT matrix:** full-cone, address-restricted, port-restricted, symmetric
-  (endpoint-dependent), CGNAT double-NAT, UDP-blocked. Assert: direct connection where
-  theoretically possible, relay fallback otherwise, and the *measured* direct rate
-  per pair-class recorded as a regression metric.
+- **NAT matrix (M3b, `conn/netnsnat_linux_test.go`):** full-cone,
+  address-restricted, port-restricted, symmetric (endpoint-dependent), CGNAT
+  double-NAT, UDP-blocked. Whether a path ended up direct is asked by stopping the
+  relay — a pair that keeps reaching each other was never relying on it — and the
+  lab classifies its own NATs with two reflectors before testing anything, so a
+  rule that did not do what its name says cannot make a cell pass for the wrong
+  reason.
 - **Membership scenarios:** enrollment (QR + code paths), routine removal, emergency
   revocation (epoch bump), key rotation, admin add/remove, break-glass disablement.
 - **Partition & freshness:** iptables-partition a victim with a revoked peer; with an
@@ -73,6 +87,13 @@ Go test driver orchestrating **network namespaces** (Linux CI) with nftables/tc:
 - Egress assertion on every E2E run: **zero packets to any third-party service**
   except declared untrusted helpers (DHT bootstrap, optional public STUN) — catches
   accidental Tailscale-infra dependencies from vendored code.
+- Packaged-privilege drill, manual for now: install the RPM, start the unit, and
+  assert from `/proc` that the daemon runs as the dedicated user with
+  `CAP_NET_ADMIN` as its whole bounding set and a real device up (README, "Check
+  the privilege footprint"). The privileged CI job proves the device and the
+  namespaces, not the packaging — a hosted runner is the wrong place to install
+  a package and create a system user. Automating it needs a VM in CI, which is
+  the same dependency the FreeBSD interop matrix above wants; decide both at once.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
   VPS relay member + one mobile (Android on LTE); full lifecycle including emergency
   revocation from a phone.
@@ -89,6 +110,15 @@ Go test driver orchestrating **network namespaces** (Linux CI) with nftables/tc:
 ## 6. Continuous regression metrics
 
 Tracked per commit in CI: direct-connection rate per NAT class, revocation
-convergence time (connected case), sync time after 1-week offline, TCB LOC count
+convergence time (connected case), sync time after 1-week offline, encoded size
+of an epoch record and of a checkpoint at `MaxNodes` members, TCB LOC count
 (`trust/*` + `enroll` — budget alarm if it grows past 10 k). Fuzz corpus coverage
 is tracked per milestone instead, from the manual runs above.
+
+The record-size metric exists because the O(n) epoch wrap fan-out is the term
+that grows fastest with membership, and every figure written about it so far is
+struct sizes multiplied out rather than anything measured. Before the M3 freeze
+it is paired with a one-off: a gossip round against a `MaxNodes` log, timed.
+Those two numbers are what the pre-freeze schema hedges in
+[08-trust-layer-notes.md](08-trust-layer-notes.md) are decided against — they
+either confirm the fan-out is the binding constraint or point at whatever is.

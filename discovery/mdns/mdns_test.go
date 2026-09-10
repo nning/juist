@@ -11,17 +11,15 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/nettest"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
 
-// hub is a fake multicast group: every datagram written by one member is
-// delivered to all the others.
-//
-// A real 224.0.0.251 join is not available on a CI machine — loopback carries
-// no multicast on Linux — and a test that skipped there would assert nothing.
-// What matters about this code is the DNS encoding, the blinded naming and the
-// sealing, all of which this exercises exactly as the socket would.
+// hub is a fake multicast group: every datagram one member writes reaches all
+// the others. Linux loopback carries no multicast, so a real join would leave
+// these tests skipping — and what matters here is the DNS encoding, the
+// blinded naming and the sealing, which this exercises as the socket would.
 type hub struct {
 	mu      sync.Mutex
 	members []*hubConn
@@ -148,15 +146,22 @@ func mustSecret(t *testing.T) secrets.Secret {
 
 func waitFor(t *testing.T, n *beaconNode, want types.Identity, d time.Duration) {
 	t.Helper()
+	if !sawWithin(n, want, d) {
+		t.Fatalf("node did not discover %v within %v", want.ShortString(), d)
+	}
+}
+
+// sawWithin reports whether n discovered want before d elapsed.
+func sawWithin(n *beaconNode, want types.Identity, d time.Duration) bool {
 	deadline := time.After(d)
 	for {
 		select {
 		case e := <-n.seen:
 			if e.Identity == want {
-				return
+				return true
 			}
 		case <-deadline:
-			t.Fatalf("node did not discover %v within %v", want.ShortString(), d)
+			return false
 		}
 	}
 }
@@ -174,14 +179,10 @@ func TestMembersFindEachOther(t *testing.T) {
 	waitFor(t, b, a.id, 5*time.Second)
 }
 
-// TestAnotherNetworkIsInvisible covers two things at once: the name is blinded,
-// so a foreign network's beacons are not even recognized as questions to
-// answer, and the payload is sealed, so an eavesdropper on the group learns
-// nothing from what does go past.
-//
-// It is also what a revoked device looks like after the removal's epoch bump:
-// holding a secret nobody uses any more is the same as holding a different
-// network's.
+// TestAnotherNetworkIsInvisible covers both halves: the name is blinded, so a
+// foreign network's beacons are not recognized as questions, and the payload
+// is sealed, so an eavesdropper learns nothing. It is also what a revoked
+// device looks like after the epoch bump.
 func TestAnotherNetworkIsInvisible(t *testing.T) {
 	h := &hub{}
 	member := newBeaconNode(t, h, keyringAt(t, 7, mustSecret(t)), 4001)
@@ -197,9 +198,8 @@ func TestAnotherNetworkIsInvisible(t *testing.T) {
 }
 
 // TestDiscoverySurvivesAnEpochBump is why a beacon answers to every name in
-// its keyring rather than only its newest. During a convergence round the
-// network holds two adjacent epochs, and a node that only spoke its own would
-// go dark to exactly the peers it needs to hand the new epoch to.
+// its keyring: during a convergence round the network holds two adjacent
+// epochs, and speaking only its own would go dark to the peers that matter.
 func TestDiscoverySurvivesAnEpochBump(t *testing.T) {
 	h := &hub{}
 	old := mustSecret(t)
@@ -252,18 +252,12 @@ func TestNameIsAValidBlindedLabel(t *testing.T) {
 	}
 }
 
-// TestRealMulticastSocket is the regression guard for a bug the tests above
-// cannot see, because they inject a socket.
-//
-// The obvious call for this — net.ListenMulticastUDP — binds to the *group*
-// address, so datagrams sent from it carry a multicast source address and the
-// kernel drops them. Nothing reports it: the join succeeds, reads work, and no
-// beacon ever arrives. Two daemons on one host found each other only after the
-// socket was rebuilt around a wildcard bind with an explicit per-interface
-// join, and this test is what keeps it that way.
-//
-// It skips where the environment cannot carry multicast at all, which a
-// container without a multicast-capable interface cannot.
+// TestRealMulticastSocket guards what the tests above cannot see, since they
+// inject a socket: net.ListenMulticastUDP binds the group address, so
+// datagrams leave with a multicast source and the kernel drops them silently.
+// The wildcard bind with an explicit per-interface join is what works. A host
+// that carries no multicast looks the same as a socket that sends nothing, so
+// the assertion binds only where [nettest.RequireEnv] is set.
 func TestRealMulticastSocket(t *testing.T) {
 	s := mustSecret(t)
 	mk := func(port uint16) *beaconNode {
@@ -293,7 +287,7 @@ func TestRealMulticastSocket(t *testing.T) {
 			Logf:     t.Logf,
 		})
 		if err != nil {
-			t.Skipf("no usable multicast here: %v", err)
+			nettest.SkipUnlessRequired(t, "no usable multicast here: %v", err)
 		}
 		n.beacon = b
 		go b.Run(t.Context())
@@ -306,14 +300,16 @@ func TestRealMulticastSocket(t *testing.T) {
 	// Only one direction is asserted. Both would be strictly better, and on a
 	// host where the group loops back it holds — but the property that broke
 	// was "no datagram ever leaves the socket", and one arrival disproves it.
-	waitFor(t, a, b.id, 10*time.Second)
+	if !sawWithin(a, b.id, 10*time.Second) {
+		nettest.SkipUnlessRequired(t,
+			"nothing arrived on the multicast group within 10s, so this host "+
+				"cannot say whether the socket sends")
+	}
 }
 
-// TestAnswersAreRateLimited: the blinded name is public on the wire, so anyone
-// on the LAN can replay a question at it — and DNS compression packs hundreds
-// of copies into one datagram. Each name is answered at most once per
-// [minAnswerInterval], however many questions arrive, so a replayed query
-// costs the segment one answer rather than an amplified flood.
+// TestAnswersAreRateLimited: the blinded name is public on the wire and DNS
+// compression packs hundreds of questions into one datagram, so each name is
+// answered at most once per [minAnswerInterval] however many arrive.
 func TestAnswersAreRateLimited(t *testing.T) {
 	h := &hub{}
 	s := mustSecret(t)

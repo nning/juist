@@ -7,19 +7,11 @@ import (
 	"os"
 )
 
-// checkPeerCred verifies who is on the other end of an IPC connection.
-//
-// docs/04-architecture.md requires it: "peer identity verified via SO_PEERCRED
-// (Linux) / LOCAL_PEERCRED (FreeBSD)". The socket's 0600 mode inside a 0700
-// directory is the primary control, and this is what makes it a check rather
-// than an assumption — it still holds if the directory's mode is loosened
-// while the daemon is running, which is exactly the state a file-mode-only
-// defence cannot detect.
-//
-// The policy is narrow because the daemon's authority is narrow: only the user
-// running the daemon, or root, may call it. There is nothing here worth
-// delegating — the daemon holds no admin keys and cannot authorize a
-// membership change (docs/04-architecture.md, key custody).
+// checkPeerCred verifies who is on the other end of an IPC connection. The
+// socket's 0600 mode in a 0700 directory is the primary control; this still
+// holds if the directory is loosened while the daemon runs, which a
+// mode-only defence cannot detect. Only the user running the daemon, or root,
+// may call it.
 func checkPeerCred(c net.Conn) error {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {

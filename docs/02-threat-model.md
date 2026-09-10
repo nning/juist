@@ -64,7 +64,16 @@ adopting this system must accept them explicitly.
 5. **Metadata leakage.** Public DHT storage nodes observe that some IP stored an opaque
    record; member relays observe timing/volume between member IPs; LAN observers see
    blinded-but-present mDNS announcements. Full unobservability requires Tor-class
-   machinery — out of scope.
+   machinery — out of scope. Two consequences of the rendezvous design are worth
+   naming, since neither is removable at this layer. Running the DHT at all tells a
+   passive observer that this host speaks the BitTorrent DHT, which is the
+   internet-scale twin of the mDNS leak above — `juistd -no-dht` is the answer for a
+   deployment that would rather not, at the cost of off-LAN cold start. And a node's
+   *queries* are visible to whichever storage node answers them: each names one
+   opaque address, so no query says who is being looked for, but a node that asked
+   after all of its missing peers at once would turn that into a count. Lookups are
+   therefore capped per round and shuffled, and only members this node holds no
+   address for are asked after at all.
 6. **Enrollment bottoms out at admin-device security.** One-guess PAKE invites and
    full-entropy QR tokens shrink but cannot eliminate the window in which a mis-issued
    invite or a compromised admin device admits an attacker.
@@ -78,6 +87,20 @@ adopting this system must accept them explicitly.
    the role is separate from membership and separately revocable; advertised routes may
    never overlap the overlay space, so an exit node cannot intercept member-to-member
    traffic; and using one is an ACL grant rather than a network-wide default.
+8. **A real device puts the overlay addresses on the host, where the LAN can reach
+   them.** Linux's weak host model makes an address on `juist0` reachable through
+   *any* interface, so a LAN-adjacent attacker can send plain IP packets to a node's
+   overlay address and can forge the source as another member's. Both default-deny
+   gates sit downstream of WireGuard decryption and never see these packets. It is no
+   way in to membership, but **a source in `100.64.0.0/10` is not evidence that a
+   packet came through the tunnel**, and services bound only to an overlay address
+   are LAN-reachable. The v6 ULA has the same shape, guessable only from the genesis
+   hash. Tailscale closes the source half with a netfilter rule; juist runs
+   `NetfilterOff` so the daemon touches neither the host firewall nor any sysctl,
+   which is also what lets its unit file set `ProtectKernelTunables`. Accepted for
+   v1: the overlay is a transport, and anything on top authenticates its own peers.
+   Operators wanting the stronger boundary add the host rule themselves. Revisit at
+   M7b, which needs netfilter management anyway.
 
 ## Security design rules derived from the above
 
@@ -89,3 +112,10 @@ adopting this system must accept them explicitly.
 - Prefer attributable signatures (audit trail) over threshold/aggregated ones.
 - The data plane never depends on the group secret; discovery privacy never gates
   data-plane security.
+- The daemon runs with the narrowest host privilege that lets it own a TUN device:
+  `CAP_NET_ADMIN` as an ambient capability on a dedicated unprivileged user, never
+  as root (M3a; see `packaging/systemd/juistd.service`). This widens what a
+  compromised `juistd` can do to the *host* — create interfaces, set routes and the
+  reverse-path sysctls — not to the *network*: it still holds no admin keys and
+  still cannot authorize a membership change. Attacker-facing parsers (gossip, IPC,
+  later the DHT) get no privilege from this.

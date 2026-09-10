@@ -1,13 +1,8 @@
-// Package keys is the on-disk layout of a juist state directory, and the
-// format of the key files in it.
-//
-// It is shared by the CLI and the daemon because they read the same directory
-// and must agree byte for byte about what is in it — but only partly: the
-// split docs/04-architecture.md draws is that admin signing keys live in the
-// operator's CLI keystore and never in the daemon, while a node's identity and
-// recipient keys are exactly what the daemon needs in order to be a member. So
-// the daemon uses [LoadNode] and nothing else here, and `admins/` is the CLI's
-// alone.
+// Package keys is the on-disk layout of a juist state directory and the format
+// of the key files in it. The CLI and the daemon share it because they read
+// the same directory, but not equally: admin signing keys live in the
+// operator's keystore and never in the daemon, so the daemon uses [LoadNode]
+// and nothing else, and admins/ is the CLI's alone.
 package keys
 
 import (
@@ -62,31 +57,17 @@ const (
 var B64 = base64.RawURLEncoding
 
 // RefuseSharedWritable rejects a state directory that group or other can write
-// to.
-//
-// The individual key files are 0600 and their mode is checked when they are
-// read, but that is not enough: anyone who can write to the directory can
-// replace a key file wholesale, or drop a new one into admins/, where every
-// .key file is loaded and used to sign. trust/store already refuses a
-// shared-writable log directory for the same reason — a writable directory
-// undoes the protection its contents' modes provide.
-//
-// A directory this code creates is 0700. One it inherits is refused rather
-// than silently tightened, because the path is caller-supplied and quietly
-// changing the mode of somebody's existing directory is worse than saying so.
+// to. Key-file modes are not enough: anyone who can write to the directory can
+// replace a key file, or drop a new one into admins/, where every .key file is
+// loaded and used to sign. An inherited directory is refused rather than
+// silently tightened.
 func RefuseSharedWritable(path string) error {
 	if err := refuseWritableDir(path); err != nil {
 		return err
 	}
-	// admins/ as well, and not only because it is where the signing keys are.
-	// A directory this code created is 0700, but one restored from a backup or
-	// unpacked from an archive keeps whatever mode it was stored with, and the
-	// check on the parent does not see it. Anyone who can write there can
-	// replace an admin key with their own — which does not authorize anything,
-	// since the log trusts the public half it already names, but makes every
-	// record the operator signs invalid — or simply delete it. Losing admin
-	// keys below quorum is the one failure docs/02-threat-model.md calls
-	// unrecoverable by design.
+	// admins/ too: one restored from a backup keeps whatever mode it was
+	// stored with, and the check on the parent does not see it. Losing admin
+	// keys below quorum is unrecoverable by design.
 	admins := filepath.Join(path, AdminsDir)
 	if _, err := os.Stat(admins); err == nil {
 		return refuseWritableDir(admins)
@@ -108,17 +89,11 @@ func refuseWritableDir(path string) error {
 }
 
 // WriteSecret writes key material with owner-only permissions, refusing to
-// overwrite: silently replacing a key is how a network loses an admin.
-//
-// The write is crash-atomic. An earlier version opened the final path with
-// O_EXCL and wrote into it in place, so an interruption after the create left a
-// truncated key file at the real name — and O_EXCL then refused every retry,
-// stranding the operator on a corrupt file that looked like a genuine prior
-// key. It goes to a temporary file in the same directory, is fsync'd, and is
-// renamed into place, the same discipline trust/store uses for records. The
-// refusal is kept as an explicit existence check before the rename: this is the
-// operator's own 0700 directory, so the check-then-rename gap is not an
-// attacker's to race, and a lost admin key is the failure worth guarding.
+// overwrite: silently replacing a key is how a network loses an admin. The
+// write is crash-atomic — temporary file, fsync, rename — so an interruption
+// cannot leave a truncated key file at the real name. The refusal is an
+// explicit existence check before the rename; this is the operator's own 0700
+// directory, so the gap is not an attacker's to race.
 func WriteSecret(path string, lines []string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, DirMode); err != nil {
@@ -154,10 +129,9 @@ func WriteSecret(path string, lines []string) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("renaming %s to %s: %w", tmpName, path, err)
 	}
-	// The name is only durable once the directory entry is — same rule
-	// trust/store applies to its records, and it matters more here: a log
-	// that survives a power cut while the key file it names does not is a
-	// member that can never again open its own epoch wrap.
+	// The name is only durable once the directory entry is: a log that
+	// survives a power cut while the key file it names does not is a member
+	// that can never open its own epoch wrap again.
 	return SyncDir(dir)
 }
 
@@ -227,24 +201,26 @@ func TakeFields(path string, file map[string][][]byte, tag string, n int) ([][]b
 	return fields, nil
 }
 
-// Missing reports whether err means a key file is simply not there.
-//
-// "This device has no keys" is an ordinary state: a keystore that only ever
-// signs holds admin keys and nothing else, and a device with no rotation in
-// flight has nothing staged.
-//
-// A key file that exists and cannot be loaded is not that. It is readable by
-// others, or truncated, or holds material this build cannot parse — and
-// reporting it as absence tells the operator to create keys that are already
-// there while the fault that needs fixing stays invisible.
+// Missing reports whether err means a key file is simply not there, which is
+// an ordinary state. A file that exists and cannot be loaded is not: reporting
+// that as absence tells the operator to create keys that already exist while
+// the real fault stays invisible.
 func Missing(err error) bool { return errors.Is(err, fs.ErrNotExist) }
 
-// A Node is everything this device needs to be a member.
-//
-// All three secrets live in one file, so replacing them is one rename. That
-// matters: a device holding a new encryption key but an old WireGuard key, or
-// the reverse, is a device that either cannot handshake or cannot read the
-// group secret, and it would be in that state until someone noticed.
+// NestedLog reports whether a log directory contains another one. Copying a
+// log with "cp -r src/log dst/log" nests it when dst/log already exists — and
+// it does exist as soon as anything has opened the store, including the daemon
+// whose error message asks for the copy. Nothing reads the inner directory, so
+// without naming it the device simply looks like one that was never enrolled.
+func NestedLog(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, LogDir))
+	return err == nil && info.IsDir()
+}
+
+// A Node is everything this device needs to be a member. All three secrets
+// live in one file, so replacing them is one rename: a device holding a new
+// encryption key but an old WireGuard key can neither handshake nor read the
+// group secret.
 type Node struct {
 	Identity  types.PrivateIdentity
 	Recipient *secrets.PrivateKeys
@@ -253,10 +229,9 @@ type Node struct {
 	// Public is the same material as the log records it.
 	Public types.NodeKeys
 
-	// Name is the member name this device proposes at enrollment. It is a
-	// suggestion, not a fact: the admin sees it in the AddNode record and may
-	// change it before signing. Old key files carry no name line; they load
-	// with Name empty.
+	// Name is the member name this device proposes at enrollment: a
+	// suggestion, which the admin may change before signing. Old key files
+	// carry no name line and load with it empty.
 	Name string
 }
 
@@ -327,11 +302,9 @@ func (k *Node) NamedBy(rec *types.NodeRecord) bool {
 		rec.MLKEM == k.Public.MLKEM
 }
 
-// PromoteStaged replaces the live node keys with the staged ones. One rename,
-// so there is no state in which the device holds half of each, and the
-// directory is synced so the promotion survives a power cut: the log records
-// naming the new keys are fsynced by the store, and a rename that is not
-// equally durable could leave a durable log pointing at keys that rolled back.
+// PromoteStaged replaces the live node keys with the staged ones: one rename,
+// so the device never holds half of each, and the directory is synced, since a
+// durable log must not end up pointing at keys that rolled back.
 func PromoteStaged(home string) error {
 	staged := filepath.Join(home, NodeKeysFile+StagedSuffix)
 	if err := os.Rename(staged, filepath.Join(home, NodeKeysFile)); err != nil {
@@ -341,19 +314,11 @@ func PromoteStaged(home string) error {
 }
 
 // MaybePromoteStaged promotes staged node keys once the log names them, and
-// returns the promoted keys, or nil when nothing was promoted.
-//
-// lookup is the log's member lookup — [trust/log.State.Node] — kept as a
-// function so this package stays out of the trust layer's import graph. The
-// test is on the resulting state, not on which records were applied: a
-// rotation record can be authorized and still lose fork choice, in which case
-// the log still names the old keys and promoting would cut the device off.
-//
-// Both the CLI and the daemon call this, and the daemon's call is the one that
-// closes a loop: a rotation applied on another machine reaches this device as
-// log records over gossip, with no CLI involved — the staged file sits
-// unpromoted while the log names its keys, and every daemon start is the
-// chance to make them live.
+// returns them, or nil when nothing was promoted. lookup is the log's member
+// lookup, passed as a function so this package stays out of the trust layer's
+// import graph. The test is on the resulting state, not on which records were
+// applied: a rotation can be authorized and still lose fork choice, and
+// promoting then would cut the device off.
 func MaybePromoteStaged(home string, lookup func(types.Identity) (types.NodeRecord, bool)) (*Node, error) {
 	staged, err := LoadNode(filepath.Join(home, NodeKeysFile+StagedSuffix))
 	if Missing(err) {
@@ -410,10 +375,8 @@ func LoadNode(path string) (*Node, error) {
 		if len(nameFields) != 1 {
 			return nil, fmt.Errorf("%s: %s has %d fields, want 1", path, NameTag, len(nameFields))
 		}
-		// Checked on the way in as well as on the way out: this is the value
-		// printed to a terminal and pasted into a command, and a file edited
-		// by hand is the one path that reaches here without passing through
-		// the CLI's own validation.
+		// Checked on the way in as well as out: this is printed to a terminal,
+		// and a hand-edited file bypasses the CLI's own validation.
 		if err := types.ValidateName(string(nameFields[0])); err != nil {
 			return nil, fmt.Errorf("%s: %s: %w", path, NameTag, err)
 		}

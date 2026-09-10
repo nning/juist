@@ -7,15 +7,10 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// Deterministic fixtures. Fuzz targets and property tests need the same
-// network on every run — a fuzz failure that cannot be replayed is not a
-// failure report — so every key here comes from a counter rather than from the
-// CSPRNG.
-//
-// Deterministic keys are fine for these tests because nothing under test
-// depends on a key being unpredictable: the log's rules are about who signed,
-// not about how the signer's key was drawn. Tests that do care draw real keys;
-// see the harness.
+// Deterministic fixtures: fuzz targets and property tests need the same
+// network on every run, since a failure that cannot be replayed is not a
+// report. Nothing under test depends on a key being unpredictable — the log's
+// rules are about who signed.
 
 func fixedIdentity(n byte) types.PrivateIdentity {
 	seed := sha256.Sum256([]byte{'i', n})
@@ -74,10 +69,9 @@ func fixedRecipientKeys(n byte) *secrets.PrivateKeys {
 	return priv
 }
 
-// testSealer seals every epoch to a fixed group secret, so that a genesis
-// record with no members — and therefore no ciphertext — is byte-identical on
-// every run. HPKE seals are randomized, so records that do carry wraps still
-// differ between runs; nothing in these tests depends on them not to.
+// testSealer seals every epoch to a fixed group secret, so a genesis record
+// with no members is byte-identical on every run. HPKE seals are randomized,
+// so records carrying wraps still differ; nothing here depends otherwise.
 func testSealer() Sealer {
 	return func(epoch uint64, members []types.NodeRecord) (*types.EpochRecord, error) {
 		seed := sha256.Sum256([]byte("group secret"))

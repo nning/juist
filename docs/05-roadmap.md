@@ -54,25 +54,25 @@ introduces, and M3a is the slice that turns this from a thing you read
 
 The record schema freezes at the end of M3. M3a defines no records, so the freeze
 gate is in practice M3b, and every "before the M3 freeze" note elsewhere in these
-docs means that point.
+docs means that point. What the freeze means after M3b is that a schema change
+costs a quorum-signed record and a coordinated upgrade, not that it is
+impossible.
 
 ### M3a — OS plumbing: a real device, a real router
 
-Everything between the tunnel and the host stack. The data plane has worked since
-M0 and the reconciler has rendered log state into its peer set since M2 — but both
-run against `tstun.NewFake` and `router.NewFake`, so the overlay exists and nothing
-on the host can reach it. That is the whole of what M3a removes.
+Everything between the tunnel and the host stack. The data plane and the
+reconciler both run against `tstun.NewFake` and `router.NewFake`, so the overlay
+exists and nothing on the host can reach it. That is what M3a removes.
 
 Scope: a real TUN device; a real `router.Router` wired at engine construction; a
-route set for the peers, derived on every reconfiguration rather than at startup;
-and the privilege story that comes with both. Explicitly *not* DNS — naming is
-deferred post-v1, so the DNS configurator stays the no-op one. The netns harness
-lands here rather than in M3b, because two nodes with real devices no longer fit
-in one network namespace; M3b then builds its NAT matrix on top of it.
+route set for the peers, derived on every reconfiguration; and the privilege
+story that comes with both. Explicitly *not* DNS — naming is post-v1, so the DNS
+configurator stays the no-op one. The netns harness lands here rather than in
+M3b, because two nodes with real devices no longer fit in one namespace; M3b
+builds its NAT matrix on top of it.
 
-The wiring is spelled out in [07-embedding-notes.md](07-embedding-notes.md), under
-*What M3a has to wire* — including the one line of `conn` that has been written and
-dead since M0, and the one thing next to it that is missing outright.
+The constraints the wiring has to respect are in
+[07-embedding-notes.md](07-embedding-notes.md).
 
 - **Exit criteria:** (1) two nodes on one LAN, each with a real device in its own
   netns, exchange ICMP echo over *both* address families and carry a TCP stream,
@@ -97,6 +97,22 @@ Reflexive addresses learned through disco and relays are *added* to the local
 interface scan M2 announces from, rather than replacing it — and the scan's known
 weaknesses on a multi-homed host (09-mesh-layer-notes.md) are an input to that
 decision.
+
+**The freeze obligations land here too.** M3b is the last milestone that can add
+a field for free: it spends that on versioning the schema itself, so a later
+kind, role or field costs a quorum-signed `SchemaUpgrade` record and an upgrade
+window rather than a new network, with builds too old for the version stopping
+loudly instead of acting on the part they understand
+([08-trust-layer-notes.md](08-trust-layer-notes.md)). The scaling question the target scale hides — the epoch wrap
+set is O(n) *inline* in both `EpochRecord` and `Snapshot`, so one add or remove
+re-replicates it to everyone — was settled by measuring a record at `MaxNodes`
+rather than from the arithmetic: the fan-out costs bandwidth and not CPU, and
+only above the target range. Four candidate hedges are declined and one, a
+ciphersuite identifier, is taken; what each decision now binds is in
+[08-trust-layer-notes.md](08-trust-layer-notes.md). The relay and DHT work
+needs no record of its own: `relay-capable` is already a role, and where a
+relay listens is a claim a node makes about itself, which belongs in its signed
+endpoint announcement and not in the log.
 
 - **Exit criteria:** (1) direct connections established across the simulated NAT
   matrix (full-cone, restricted, port-restricted, symmetric×easy, CGNAT double-NAT),

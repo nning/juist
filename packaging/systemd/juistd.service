@@ -1,0 +1,73 @@
+# juistd, running as a dedicated unprivileged user with exactly the one host
+# privilege M3a requires: CAP_NET_ADMIN, to create a TUN device and program the
+# overlay's addresses and routes (docs/05-roadmap.md, M3a exit criterion). No
+# part of this runs as root. A compromised juistd can reconfigure host
+# networking; it still holds no admin keys and cannot change who is a member
+# (docs/02-threat-model.md, docs/04-architecture.md key custody).
+#
+# On Fedora, `make rpm` packages this unit along with the user and the state
+# directory; see packaging/rpm/juist.spec. By hand:
+#   sudo useradd --system --home-dir /var/lib/juist --shell /usr/sbin/nologin juist
+#   sudo install -m755 build/juistd /usr/local/bin/juistd
+#   sudo install -m644 packaging/systemd/juistd.service /etc/systemd/system/
+#   # enrol the device first: see the README. State lives in /var/lib/juist.
+#   sudo systemctl daemon-reload && sudo systemctl enable --now juistd
+
+[Unit]
+Description=juist node
+Documentation=https://github.com/nning/juist
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/juistd -home /var/lib/juist -tun juist0
+Restart=on-failure
+RestartSec=2
+
+# Dedicated user; /var/lib/juist is created and chowned by systemd.
+User=juist
+Group=juist
+StateDirectory=juist
+# 0700, not systemd's 0755 default: this holds node.keys. juist only refuses a
+# group/other-writable state dir, so 0755 would pass while world-readable.
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/juist
+# The control socket is born 0777&~umask and tightened to 0600 a line later;
+# 0077 closes that window at the source instead of leaning on the mode above.
+# A file another user is meant to read then needs an explicit chmod.
+UMask=0077
+
+# The whole privilege footprint: CAP_NET_ADMIN, ambient so the unprivileged
+# process keeps it, and nothing else in the bounding set.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+
+# Device access: /dev/net/tun only.
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+
+# Filesystem: read-only host, no access to real home directories, private /tmp.
+# StateDirectory above stays writable.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Networking: IP, netlink (routes/addresses), and the unix control socket.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+
+# ProtectKernelTunables is affordable only because conn keeps NetfilterMode at
+# NetfilterOff and advertises no subnet routes: those are the two gates on every
+# sysctl write the embedded router makes. Recheck at M7b and at each Tailscale
+# upgrade.
+
+[Install]
+WantedBy=multi-user.target

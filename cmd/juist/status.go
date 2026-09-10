@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/user"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -27,7 +29,7 @@ unreachable, not as denied.
 `)
 	}
 	if err := fs.Parse(args); err != nil {
-		return errSilent
+		return parseResult(err)
 	}
 	resp, err := daemon.Call(daemon.SocketPath(h.path), daemon.Request{Command: daemon.CmdStatus})
 	if err != nil {
@@ -54,6 +56,13 @@ func printStatus(s *daemon.Status) {
 	fmt.Printf("epoch        %d\n", s.Epoch)
 	fmt.Printf("members      %d\n", s.Members)
 	fmt.Printf("peers up     %d\n", s.Peers)
+	if s.Relays > 0 || s.Relaying || s.RelayCapable > 0 {
+		line := fmt.Sprintf("relays       %d of %d granted", s.Relays, s.RelayCapable)
+		if s.Relaying {
+			line += ", including this node"
+		}
+		fmt.Println(line)
+	}
 	if s.Unreachable > 0 {
 		fmt.Printf("unreachable  %d (members this node has not heard from yet)\n", s.Unreachable)
 	}
@@ -79,45 +88,81 @@ func printStatus(s *daemon.Status) {
 		fmt.Printf("\nWARNING: this node cannot open the current group secret: %s\n", s.EpochError)
 		fmt.Printf("It keeps its tunnels but is cut off from discovery and log sync.\n")
 	}
+	if s.DataPlaneError != "" {
+		fmt.Printf("\nWARNING: the data plane did not take the peer set: %s\n", s.DataPlaneError)
+	}
+	// The floor docs/04-architecture.md sets. It is not a capacity model:
+	// relay demand tracks the number of pairs that cannot be punched, which
+	// nothing here measures. One relay is a network that loses its fallback
+	// path whenever that member is off.
+	if s.RelayCapable < 2 && !s.NotMember && s.Alarm == "" {
+		fmt.Printf("\nNOTE: this network has %d relay-capable member(s).\n", s.RelayCapable)
+		fmt.Printf("Two members that cannot punch through their NATs need a third to relay,\n")
+		fmt.Printf("and below two there is no fallback when one is offline. Grant the role\n")
+		fmt.Printf("with \"juist propose set-routes -identity nid:… -roles relay-capable\"\n")
+		fmt.Printf("on a member with a public address.\n")
+	}
+	if s.SchemaAlarm != "" {
+		fmt.Printf("\nALARM: %s\n", s.SchemaAlarm)
+		fmt.Printf("This device still holds the state from before that record and still\n")
+		fmt.Printf("carries traffic, but it will apply nothing further — including removals.\n")
+	}
 	if s.Alarm != "" {
 		fmt.Printf("\nALARM: %s\n", s.Alarm)
 		fmt.Printf("No peers are configured while this is unresolved.\n")
 	}
 }
 
-// describeCallFailure turns "the socket did not answer" into the two
+// describeCallFailure turns "the socket did not answer" into the three
 // situations it actually is. They need different responses, and the syscall
 // error distinguishes them but says so in a way that reads like a bug.
 func describeCallFailure(h *home, err error) error {
+	sock := daemon.SocketPath(h.path)
 	if noDaemon(err) {
-		return fmt.Errorf("no daemon is running on %s (no control socket at %s)",
-			h.path, daemon.SocketPath(h.path))
+		return fmt.Errorf("no daemon is running on %s (no control socket at %s)", h.path, sock)
 	}
-	return fmt.Errorf("talking to the daemon at %s: %w", daemon.SocketPath(h.path), err)
+	if errors.Is(err, fs.ErrPermission) {
+		msg := fmt.Sprintf("not permitted to reach the daemon at %s: it answers only the user it "+
+			"runs as, which is not you", sock)
+		if owner := stateDirOwner(h.path); owner != "" {
+			msg += fmt.Sprintf(".\nRun: sudo -u %s juist -home %s status", owner, h.path)
+		}
+		return errors.New(msg)
+	}
+	return fmt.Errorf("talking to the daemon at %s: %w", sock, err)
 }
 
-// noDaemon reports whether a failed call means there is nothing listening, as
-// opposed to something listening that did not answer.
-//
-// Only two errors mean absence: no socket file, and a socket file nobody is
-// bound to — what a crashed daemon leaves behind. Everything else is a daemon
-// that is present and did not reply.
+// stateDirOwner names the account a daemon on this home directory runs as, or
+// "" if that cannot be established. It reads the directory rather than the
+// socket: the socket is what the caller was just refused.
+func stateDirOwner(dir string) string {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return ""
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return ""
+	}
+	uid := strconv.FormatUint(uint64(st.Uid), 10)
+	if u, err := user.LookupId(uid); err == nil {
+		return u.Username
+	}
+	return uid
+}
+
+// noDaemon reports whether a failed call means nothing is listening. Only two
+// errors mean absence: no socket file, and a socket file nobody is bound to,
+// which is what a crashed daemon leaves behind.
 func noDaemon(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
-// daemonState reports whether a daemon owns this home directory's log.
-//
-// It answers by connecting, not by looking for the file: a socket left behind
-// by a daemon that crashed is still a file, and treating it as a running
-// daemon would send records into a void.
-//
-// The three-way answer matters because the caller is deciding who writes the
-// log. "Present but silent" is not "absent": a daemon whose IPC slots are all
-// held, or that is wedged past the deadline, fails this probe while still
-// owning its in-memory authority — and writing the log underneath it is
-// exactly the split brain the probe exists to prevent. So that case is an
-// error rather than a licence to write.
+// daemonState reports whether a daemon owns this home directory's log, by
+// connecting rather than by looking for the file, since a crashed daemon
+// leaves one behind. The answer is three-way because "present but silent" is
+// not "absent": a wedged daemon still owns its in-memory authority, and
+// writing the log underneath it is the split brain this prevents.
 func daemonState(h *home) (running bool, err error) {
 	if _, err := daemon.Call(daemon.SocketPath(h.path), daemon.Request{Command: daemon.CmdStatus}); err != nil {
 		if noDaemon(err) {

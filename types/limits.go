@@ -1,11 +1,8 @@
 package types
 
-// Structural limits on records.
-//
-// These are validation bounds, not policy: they exist so that a malformed or
-// hostile record is rejected before it can make a node allocate or compute
-// something unbounded. Target scale is 25–100 devices with a few admins
-// (docs/01-requirements.md), so every limit here is generous by design.
+// Structural limits on records: validation bounds, not policy, so a hostile
+// record is rejected before it can make a node allocate something unbounded.
+// Target scale is 25–100 devices, so every limit here is generous.
 const (
 	// MaxNodes caps the member set. A checkpoint carries every node record
 	// and one epoch-secret wrap per node, so this is what bounds the largest
@@ -38,10 +35,8 @@ const (
 	// bytes. Names are cosmetic: nothing in the trust layer reads them.
 	MaxNameLen = 64
 
-	// MaxRecordSize caps the encoded size of a single record. The largest
-	// legitimate record is a checkpoint at MaxNodes members, which is on the
-	// order of 1.3 MiB; the limit is set well above that and well below
-	// anything that threatens memory.
+	// MaxRecordSize caps a record's encoded size. The largest legitimate one
+	// is a checkpoint at MaxNodes members, about 1.3 MiB.
 	MaxRecordSize = 4 << 20
 
 	// maxArrayElements bounds any CBOR array during decoding. It has to

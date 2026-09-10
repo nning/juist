@@ -13,35 +13,23 @@ import (
 // asserted by the node itself.
 type Role string
 
-// The defined roles. The set is closed: [validateRoles] rejects anything else.
-//
-// Accepting unknown role strings would be the forward-compatible choice, and
-// is what tka does for unknown fields. It is the wrong choice here. Tailscale
-// can let old clients ignore what they do not understand because their
-// coordination server orders the log and decides what it means; in this design
-// every node must independently reach the same verdict on the same bytes.
-// A node that ignores a role while its peers act on it holds a different view
-// of what the network authorizes, which is the split-view failure the whole
-// log exists to prevent. Adding a role is therefore a schema change, subject
-// to the M3 freeze like any other.
+// The defined roles. The set is closed: [validateRoles] rejects anything else,
+// because a node that ignores a role its peers act on holds a different view
+// of what the network authorizes. Adding one is a schema change.
 const (
-	// RoleAdmin marks a device operated by an admin. It carries no
-	// authority: authority comes from admin keys in the log, which
-	// docs/04-architecture.md keeps in the operator's CLI keystore and out
-	// of the daemon entirely. The role exists so that tooling can find the
-	// devices a signing ceremony has to reach.
+	// RoleAdmin marks a device operated by an admin, so tooling can find the
+	// devices a signing ceremony must reach. It carries no authority:
+	// authority comes from admin keys, which the daemon never holds.
 	RoleAdmin Role = "admin"
 
-	// RoleRelayCapable marks a node willing to relay for others. The DERP
-	// map is built from nodes holding it (docs/04-architecture.md), and
-	// operators are warned when fewer than two exist, because a network of
-	// entirely hard-NAT'd nodes with no relay cannot form.
+	// RoleRelayCapable marks a node willing to relay for others; the DERP map
+	// is built from these, and a network of hard-NAT'd nodes with no relay
+	// cannot form.
 	RoleRelayCapable Role = "relay-capable"
 
-	// RoleExitNode marks a node permitted to hold a default route. Nothing
-	// consumes it before M7b; it is validated from M1 because the schema
-	// freezes at M3. Holding it is what makes a full-tunnel grant explicit
-	// and separately revocable from membership.
+	// RoleExitNode marks a node permitted to hold a default route, which makes
+	// a full-tunnel grant explicit and separately revocable from membership.
+	// Nothing consumes it yet; it is validated because the schema freezes.
 	RoleExitNode Role = "exit-node"
 )
 
@@ -53,22 +41,17 @@ type AdminKey struct {
 	Public Identity `cbor:"1,keyasint"`
 
 	// Votes is the weight a signature by Public contributes toward
-	// [Snapshot.Quorum]. Weights rather than plain counting so that, for
-	// example, two long-lived organizational keys can outweigh a handful of
-	// laptop keys. Same mechanism as tka.
+	// [Snapshot.Quorum], so that long-lived organizational keys can outweigh
+	// laptop keys.
 	Votes uint32 `cbor:"2,keyasint"`
 
 	// Name is a human label. Nothing in the trust layer reads it.
 	Name string `cbor:"3,keyasint,omitempty"`
 }
 
-// A NodeRecord is a member device as the log records it.
-//
-// The [Identity] is the member; everything else is a mutable attribute of the
-// membership. That split is deliberate: WireGuard has no notion of identity
-// rotation, so rotating a node's WireGuard key has to be a control-plane
-// operation that keeps the node the same node
-// (docs/research/building-blocks.md §9).
+// A NodeRecord is a member device as the log records it. The [Identity] is the
+// member; everything else is a mutable attribute, so that rotating a node's
+// WireGuard key keeps it the same node.
 type NodeRecord struct {
 	// Identity is the node's Ed25519 identity key. Its overlay IPv6 address
 	// derives from it (see [Addr6]) and is not stored, so no record can
@@ -85,14 +68,8 @@ type NodeRecord struct {
 
 	// X25519 and MLKEM together form the node's HPKE recipient key, the
 	// classical and post-quantum halves of the hybrid KEM that epoch group
-	// secrets are sealed to.
-	//
-	// MLKEM is also the key material reserved for the per-pair WireGuard
-	// preshared-key hedge. docs/07-embedding-notes.md found no route to a
-	// PSK through the embedded engine's current API and left the choice —
-	// patch the vendored engine, or defer the hedge past v1 — open until
-	// the M3 freeze, while recording that the key belongs in the schema
-	// either way.
+	// secrets are sealed to. MLKEM is also reserved for the per-pair WireGuard
+	// preshared-key hedge; see docs/07-embedding-notes.md.
 	X25519 X25519Key `cbor:"4,keyasint"`
 	MLKEM  MLKEMKey  `cbor:"5,keyasint"`
 
@@ -123,18 +100,46 @@ const (
 	DisablementSecretSize = 32
 
 	// SealedSecretSize is the exact length of [EpochWrap.Sealed]: an HPKE
-	// single-shot ciphertext under the DHKEM(X25519)+ML-KEM-768 hybrid KEM
-	// with ChaCha20-Poly1305, over a GroupSecretSize plaintext.
-	//
-	// Pinning the exact length lets a malformed wrap be rejected by shape
-	// alone, before any cryptographic work. trust/secrets asserts the
-	// arithmetic against a real seal, so a ciphersuite change cannot leave
-	// this silently wrong.
+	// single-shot ciphertext under DHKEM(X25519)+ML-KEM-768 with
+	// ChaCha20-Poly1305 over a GroupSecretSize plaintext. Pinning it lets a
+	// malformed wrap be rejected by shape, before any cryptographic work.
 	SealedSecretSize = 1088 + // ML-KEM-768 ciphertext
 		32 + // X25519 encapsulated key
 		GroupSecretSize +
 		16 // Poly1305 tag
 )
+
+// An EpochSuite names the HPKE ciphersuite an epoch record's wraps are sealed
+// under. It exists so that replacing the ciphersuite is a value a decoder
+// already understands rather than a schema break, which the M3 freeze would
+// otherwise put out of reach: a node meeting a suite it does not implement
+// rejects the record and stops, instead of opening a wrap with the wrong
+// algorithm or splitting the network by ignoring a field.
+type EpochSuite uint64
+
+// SuiteHybridX25519MLKEM768 is the only suite v1 implements: HPKE base mode
+// with DHKEM(X25519)+ML-KEM-768, HKDF-SHA256 and ChaCha20-Poly1305. It is
+// zero, and therefore absent from the encoding, so naming the suite costs
+// nothing until there is a second one.
+const SuiteHybridX25519MLKEM768 EpochSuite = 0
+
+// String names the suite, so an error about an unimplemented one is readable.
+func (s EpochSuite) String() string {
+	if s == SuiteHybridX25519MLKEM768 {
+		return "DHKEM(X25519)+ML-KEM-768/HKDF-SHA256/ChaCha20-Poly1305"
+	}
+	return fmt.Sprintf("suite?<%d>", uint64(s))
+}
+
+// validateSuite rejects every suite this build does not implement. The sealed
+// length is pinned per suite, so accepting an unknown one would mean accepting
+// a length rule that does not exist yet.
+func validateSuite(s EpochSuite) error {
+	if s != SuiteHybridX25519MLKEM768 {
+		return fmt.Errorf("epoch secret is sealed under %v, which this version does not implement", s)
+	}
+	return nil
+}
 
 // An EpochWrap is one recipient's copy of an epoch group secret.
 type EpochWrap struct {
@@ -146,53 +151,40 @@ type EpochWrap struct {
 	Sealed []byte `cbor:"2,keyasint"`
 }
 
-// An EpochRecord distributes a new epoch group secret to the member set.
-//
-// The group secret gates discovery and gossip confidentiality — blinded DHT
-// topics, AEAD announcement payloads — and never the data plane, which
-// WireGuard secures end to end. Losing it is what stops a revoked member from
-// finding the network at all, which is why every membership change carries a
-// bump (docs/research/building-blocks.md §5).
-//
-// Each epoch's secret is fresh randomness rather than a derivation from the
-// last, so producing a bump never requires knowing the previous secret. An
-// admin can therefore rekey the network from an admin key alone, without
-// holding any member's decryption key.
+// An EpochRecord distributes a new epoch group secret to the member set. The
+// secret gates discovery and gossip confidentiality, never the data plane, and
+// losing it is what stops a revoked member from finding the network at all.
+// Each epoch's secret is fresh randomness rather than a derivation, so an admin
+// can rekey from an admin key alone.
 type EpochRecord struct {
-	// Epoch is the new epoch number, always exactly one more than the
-	// current one. Strictly sequential rather than merely increasing, so
-	// that no record can jump the counter toward exhaustion, and so a node's
-	// persisted epoch floor (rollback protection) has an exact meaning.
+	// Epoch is the new epoch number, always exactly one more than the current
+	// one: strictly sequential, so no record can jump the counter and a node's
+	// persisted epoch floor has an exact meaning.
 	Epoch uint64 `cbor:"1,keyasint"`
 
-	// Commit is a commitment to the secret: see [EpochCommit].
-	//
-	// Without it, nothing in the log ties the wraps to one another, and a
-	// malicious quorum could seal a different secret to each member —
-	// partitioning discovery invisibly. With it, every recipient checks what
-	// it decrypted against a value all members can see, so a mismatch is
-	// detectable rather than silent.
+	// Commit is a commitment to the secret: see [EpochCommit]. Without it a
+	// malicious quorum could seal a different secret to each member and
+	// partition discovery invisibly.
 	Commit Hash `cbor:"2,keyasint"`
 
 	// Wraps holds the secret sealed to each member, sorted by recipient and
-	// covering the member set exactly: one wrap per member, no wrap for a
-	// non-member. Requiring exactness is what stops an epoch bump from
-	// quietly excluding a member (locking it out of discovery without a
-	// removal record appearing in the log) or including a removed one.
+	// covering the member set exactly. Exactness is what stops a bump from
+	// quietly excluding a member or including a removed one.
 	Wraps []EpochWrap `cbor:"3,keyasint,omitempty"`
+
+	// Suite names the ciphersuite Wraps are sealed under. Absent means
+	// [SuiteHybridX25519MLKEM768].
+	Suite EpochSuite `cbor:"4,keyasint,omitempty"`
 }
 
 // A Snapshot is the complete authority state at one point in the chain: the
 // payload of a genesis or checkpoint record, and the value the log's runtime
 // state serializes to.
 type Snapshot struct {
-	// GenesisHash identifies the network: it is the hash of its genesis
-	// record. It is nil in the genesis record itself — where it would be a
-	// hash of the record carrying it — and set when that record is applied.
-	//
-	// It plays the role tka's StateID plays, and two more: the overlay
-	// address space derives from it, and it is what a checkpoint proves it
-	// belongs to the chain it is presented for.
+	// GenesisHash identifies the network: the hash of its genesis record, nil
+	// in that record itself and set when it is applied. The overlay address
+	// space derives from it, and a checkpoint proves membership of a chain
+	// with it.
 	GenesisHash *Hash `cbor:"1,keyasint,omitempty"`
 
 	// Network is a human-readable network name, fixed at genesis.
@@ -208,12 +200,9 @@ type Snapshot struct {
 	// EpochCommit commits to the current epoch's secret.
 	EpochCommit Hash `cbor:"5,keyasint"`
 
-	// Disablement holds commitments to break-glass secrets, fixed at
-	// genesis. Revealing a preimage is the documented recovery path from
-	// losing the admin quorum; losing both the quorum and every preimage
-	// makes the network unrecoverable, and that unrecoverability is the
-	// security property (docs/02-threat-model.md). See
-	// [Snapshot.ValidDisablement].
+	// Disablement holds commitments to break-glass secrets, fixed at genesis.
+	// Revealing a preimage is the recovery path from losing the admin quorum;
+	// losing both leaves the network unrecoverable, which is the point.
 	Disablement []Hash `cbor:"6,keyasint,omitempty"`
 
 	// Admins are the admin keys, sorted by public key.
@@ -225,6 +214,17 @@ type Snapshot struct {
 	// EpochWraps is the current epoch secret sealed to each member, sorted
 	// by recipient.
 	EpochWraps []EpochWrap `cbor:"9,keyasint,omitempty"`
+
+	// EpochSuite names the ciphersuite EpochWraps are sealed under. Absent
+	// means [SuiteHybridX25519MLKEM768].
+	EpochSuite EpochSuite `cbor:"10,keyasint,omitempty"`
+
+	// Schema is the record schema this network is written under, raised by
+	// [KindSchemaUpgrade]. Absent means [CurrentSchema] as this build knows
+	// it. Whether the version is one this build can act on is decided in
+	// trust/log, not here: a snapshot at a newer schema must still decode, so
+	// that a node too old for it can store and relay the record carrying it.
+	Schema SchemaVersion `cbor:"11,keyasint,omitempty"`
 }
 
 // EpochCommit returns the commitment stored in [EpochRecord.Commit] for a
@@ -234,12 +234,8 @@ func EpochCommit(secret []byte) Hash {
 }
 
 // DisablementCommit returns the value committed in [Snapshot.Disablement] for
-// a break-glass secret.
-//
-// A plain labelled hash, not a password KDF: unlike a human-chosen secret,
-// these are full-length CSPRNG output (see [DisablementSecretSize]), so there
-// is no low-entropy guessing to slow down and stretching would only obscure
-// what the commitment is.
+// a break-glass secret. A plain labelled hash, not a password KDF: these are
+// full-length CSPRNG output, so there is no guessing to slow down.
 func DisablementCommit(secret []byte) Hash {
 	return hashLabeled(labelDisablement, secret)
 }
@@ -265,10 +261,9 @@ func (n *NodeRecord) Clone() *NodeRecord {
 	return &out
 }
 
-// StaticValidate checks everything about a node record that does not depend on
-// the rest of the network: key validity, canonical ordering, and route form.
-// The route rules that need to know the overlay prefix are in
-// [NodeRecord.ValidateRoutes].
+// StaticValidate checks what does not depend on the rest of the network: key
+// validity, canonical ordering and route form. Rules needing the overlay
+// prefix are in [NodeRecord.ValidateRoutes].
 func (n *NodeRecord) StaticValidate() error {
 	if err := n.Identity.Validate(); err != nil {
 		return fmt.Errorf("node identity: %w", err)
@@ -307,9 +302,8 @@ func (n *NodeRecord) StaticValidate() error {
 }
 
 // ValidateRoutes checks the node's advertised routes against the network's own
-// overlay prefix. Kept separate from [NodeRecord.StaticValidate] because it
-// needs the genesis hash, which only the log knows; trust/log applies it to
-// every node record entering state.
+// overlay prefix. Separate from [NodeRecord.StaticValidate] because it needs
+// the genesis hash, which only the log knows.
 func (n *NodeRecord) ValidateRoutes(ula netip.Prefix) error {
 	exit := n.HasRole(RoleExitNode)
 	for _, pfx := range n.Routes {
@@ -344,17 +338,17 @@ func (e *EpochRecord) StaticValidate() error {
 	if e.Commit.IsZero() {
 		return errors.New("epoch record has no secret commitment")
 	}
+	if err := validateSuite(e.Suite); err != nil {
+		return err
+	}
 	if len(e.Wraps) > MaxNodes {
 		return fmt.Errorf("epoch record has %d wraps, over the %d limit", len(e.Wraps), MaxNodes)
 	}
 	for i := range e.Wraps {
 		w := &e.Wraps[i]
-		// A recipient is checked for shape only, not as a curve point. Every
-		// recipient must equal a member's identity key for the record to be
-		// accepted at all (trust/log checks coverage), and those are validated
-		// as keys where they are admitted — so validating up to MaxNodes points
-		// again here would be pure cost on a path that decodes records straight
-		// off an untrusted transport.
+		// Shape only, not a curve point: every recipient must equal a member's
+		// identity key for the record to be accepted, and those are validated
+		// where they are admitted.
 		if w.Recipient.IsZero() {
 			return fmt.Errorf("epoch wrap %d has a zero recipient", i)
 		}
@@ -447,10 +441,8 @@ func (s *Snapshot) Encode() []byte { return mustEncode(s) }
 
 // StaticValidate checks a snapshot's shape: every entry valid, every set
 // sorted and duplicate-free, quorum satisfiable, and the epoch invariants
-// that tie the wrap set to the member set.
-//
-// genesis selects the one difference between the two contexts a snapshot
-// appears in: the genesis record cannot name its own hash, a checkpoint must.
+// tying the wrap set to the member set. genesis selects the one difference:
+// the genesis record cannot name its own hash, a checkpoint must.
 func (s *Snapshot) StaticValidate(genesis bool) error {
 	switch {
 	case genesis && s.GenesisHash != nil:
@@ -520,6 +512,9 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	if s.EpochCommit.IsZero() {
 		return errors.New("no epoch secret commitment")
 	}
+	if err := validateSuite(s.EpochSuite); err != nil {
+		return err
+	}
 	if len(s.EpochWraps) != len(s.Nodes) {
 		return fmt.Errorf("%d epoch wraps for %d nodes; the epoch secret must reach every member and no one else",
 			len(s.EpochWraps), len(s.Nodes))
@@ -543,7 +538,11 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 
 // ValidateInNetwork checks the snapshot invariants that depend on the
 // network's own address space: derived-address collisions, explicit v4
-// collisions, and the route rules.
+// collisions, key collisions, and the route rules.
+//
+// A state reached record by record is checked by the log as each record
+// applies; this is the same set of rules for a state that arrives whole — a
+// genesis naming founding members, or a checkpoint adopted as an anchor.
 func (s *Snapshot) ValidateInNetwork() error {
 	if s.GenesisHash == nil {
 		return errors.New("snapshot has no genesis hash")
@@ -551,11 +550,33 @@ func (s *Snapshot) ValidateInNetwork() error {
 	ula := s.ULA()
 	seen6 := make(map[netip.Addr]Identity, len(s.Nodes))
 	seen4 := make(map[netip.Addr]Identity, len(s.Nodes))
+	seenWG := make(map[WGKey]Identity, len(s.Nodes))
+	seenX := make(map[X25519Key]Identity, len(s.Nodes))
+	seenML := make(map[MLKEMKey]Identity, len(s.Nodes))
 	for i := range s.Nodes {
 		n := &s.Nodes[i]
 		if err := n.ValidateRoutes(ula); err != nil {
 			return err
 		}
+		// Two members holding one key collide where that key is used: in the
+		// data plane for WireGuard, and in the epoch fan-out for the other
+		// two. The log enforces this on every record that admits a member;
+		// without it here a whole state could seat what no record could add.
+		if other, dup := seenWG[n.WireGuard]; dup {
+			return fmt.Errorf("nodes %v and %v share a WireGuard key",
+				other.ShortString(), n.Identity.ShortString())
+		}
+		seenWG[n.WireGuard] = n.Identity
+		if other, dup := seenX[n.X25519]; dup {
+			return fmt.Errorf("nodes %v and %v share an X25519 key",
+				other.ShortString(), n.Identity.ShortString())
+		}
+		seenX[n.X25519] = n.Identity
+		if other, dup := seenML[n.MLKEM]; dup {
+			return fmt.Errorf("nodes %v and %v share an ML-KEM key",
+				other.ShortString(), n.Identity.ShortString())
+		}
+		seenML[n.MLKEM] = n.Identity
 		a6 := Addr6(*s.GenesisHash, n.Identity)
 		if other, dup := seen6[a6]; dup {
 			return fmt.Errorf("nodes %v and %v derive the same overlay address %v",
@@ -588,17 +609,11 @@ func validateRoles(roles []Role) error {
 	return nil
 }
 
-// ValidateName checks a human label — the name on a node record or an admin
-// key: valid UTF-8, no control characters, no surrounding whitespace, within
-// [MaxNameLen]. Names are cosmetic, but they are attacker-supplied strings
-// that end up in operator-facing output, so control characters that could
-// rewrite a terminal line are rejected here rather than escaped at every print
-// site.
-//
-// Exported because tooling has to be able to ask the question before it
-// persists a name or prints a command built around one. A device that stores a
-// name the log will refuse has not failed yet — it fails later, on the admin's
-// machine, against a limit the device never mentioned.
+// ValidateName checks a human label — on a node record or an admin key: valid
+// UTF-8, no control characters, no surrounding whitespace, within [MaxNameLen].
+// Names are attacker-supplied strings that reach operator-facing output, so
+// control characters are rejected here rather than escaped at every print site.
+// Exported so tooling can ask before it persists a name.
 func ValidateName(s string) error {
 	if len(s) > MaxNameLen {
 		return fmt.Errorf("name is %d bytes, over the %d limit", len(s), MaxNameLen)

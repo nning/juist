@@ -9,15 +9,10 @@ import (
 )
 
 // The M1 exit criterion (docs/05-roadmap.md): forged signatures, replayed
-// records, reordered chains, rollback to a lower epoch, sub-quorum membership
-// changes, colliding addresses, conflicting concurrent records, fork injection,
-// and self-asserted or overlay-overlapping route grants are rejected 100 % of
-// the time.
-//
-// Each test states the attack in the terms an attacker would: what they hold,
-// what they submit, and what they would gain. Nothing is stubbed — every record
-// here is a real record that a real quorum could have produced, except for the
-// specific defect under test.
+// records, reordered chains, epoch rollback, sub-quorum changes, colliding
+// addresses, conflicting concurrent records, fork injection and self-asserted
+// route grants are all rejected. Nothing is stubbed — every record here is one
+// a real quorum could have produced, but for the defect under test.
 
 // --- forged and mis-signed records -----------------------------------------
 
@@ -46,11 +41,9 @@ func TestRejectsSignatureByUnknownKey(t *testing.T) {
 	h.mustReject("AddNode signed by a key the network never trusted", aum)
 }
 
-// TestRejectsExtraSignatureByUntrustedKey covers the record-laundering variant:
-// take a properly authorized record and append one more signature. The content
-// is unchanged and quorum is still met, but the record hash is different — so
-// accepting it would let anyone mint a sibling of any legitimate record and
-// manufacture a fork.
+// TestRejectsExtraSignatureByUntrustedKey: appending a signature to an
+// authorized record leaves the content and quorum intact but changes the hash,
+// so accepting it would let anyone manufacture a fork.
 func TestRejectsExtraSignatureByUntrustedKey(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	outsider, err := types.GenerateIdentity()
@@ -205,11 +198,9 @@ func TestRemoveAdminKey(t *testing.T) {
 	h.mustReject("AddAdminKey re-adding the removed key, signed by that key", restore)
 }
 
-// TestOneAdminCanRemoveTheOtherAtQuorumOne answers the two-admin question in
-// its permissive form: with two single-vote keys and a quorum of one, either
-// admin signs the other out. The anti-stranding rule still holds — one vote
-// remains against a quorum of one — but the network is now governed by a
-// single key, which is the price of a quorum of one.
+// TestOneAdminCanRemoveTheOtherAtQuorumOne: with two single-vote keys and a
+// quorum of one, either admin signs the other out. The anti-stranding rule
+// still holds; governance by a single key is the price of a quorum of one.
 func TestOneAdminCanRemoveTheOtherAtQuorumOne(t *testing.T) {
 	h := newHarness(t, 2, 1)
 	aum, err := h.auth.Builder().RemoveAdminKey(h.admins[1].Public())
@@ -290,11 +281,8 @@ func TestRejectsReplayedRecord(t *testing.T) {
 	if len(h.auth.State().Nodes()) != 1 {
 		t.Fatal("re-delivery admitted the member twice")
 	}
-	// The attack an on-path adversary can actually mount: take the captured
-	// record and re-parent it onto the current head, to apply the change a
-	// second time. The signature covers the parent hash, so re-parenting
-	// invalidates it — and re-signing is not available to anyone short of a
-	// quorum.
+	// Re-parent the captured record onto the current head to apply it twice.
+	// The signature covers the parent hash, so this invalidates it.
 	h.addNode("bravo")
 	replay := *aum.Clone()
 	head := h.auth.Head()
@@ -302,11 +290,9 @@ func TestRejectsReplayedRecord(t *testing.T) {
 	h.mustReject("captured AddNode re-parented onto the current head", replay)
 }
 
-// TestReauthorizedRecordAtTheSamePositionIsAFork covers what happens when a
-// quorum does re-sign the same change at the same chain position: it is not a
-// replay, it is two records competing for one slot. Fork choice picks one, and
-// the other cannot be reissued on top of it — so this surfaces as a conflict
-// rather than being silently absorbed.
+// TestReauthorizedRecordAtTheSamePositionIsAFork: a quorum re-signing the same
+// change at the same position is not a replay but two records competing for
+// one slot, which surfaces as a conflict rather than being absorbed.
 func TestReauthorizedRecordAtTheSamePositionIsAFork(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	n := h.newNode("alpha")
@@ -375,18 +361,40 @@ func TestRejectsOutOfOrderBatch(t *testing.T) {
 	}
 }
 
-// TestRejectsEpochRollback is the rollback attack: a chain that resolves to an
-// epoch this node has already passed. Reaching an older epoch through valid
-// records takes admin signatures, so this models a compromised quorum
-// rewriting history — and the node refuses rather than following.
+// TestRejectsEpochRollback: a chain resolving to an epoch this node has passed
+// takes admin signatures to build, so it models a compromised quorum rewriting
+// history. The node refuses rather than following.
 func TestRejectsEpochRollback(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	victim := h.newNode("victim")
-	add, err := h.auth.Builder().AddNode(victim, h.sealer())
-	if err != nil {
-		t.Fatalf("AddNode: %v", err)
+
+	// The rogue must win the hash tiebreak against `add`. Draw the pair each
+	// attempt, never one side: holding one fixed makes the per-attempt chance
+	// target.Hash()/2^256, which fails 1/66 of the time over 65 attempts
+	// rather than 2^-65.
+	var add, rogue types.AUM
+	for attempt := 0; ; attempt++ {
+		if attempt > 64 {
+			t.Fatal("could not draw a pair that puts the rogue record ahead on fork choice")
+		}
+		var err error
+		add, err = h.auth.Builder().AddNode(victim, h.sealer())
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		h.signQuorum(&add)
+		// A record forking from genesis: same network, same admin key, one
+		// record deep, so any chain through it resolves to epoch 2.
+		rogue, err = NewBuilder(h.genesisState()).AddNode(h.newNode("attacker"), h.sealer())
+		if err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+		h.signQuorum(&rogue)
+		if compareHash(rogue.Hash(), add.Hash()) < 0 {
+			break
+		}
 	}
-	h.signQuorum(&add)
+
 	if err := h.auth.Inform(add); err != nil {
 		t.Fatalf("Inform: %v", err)
 	}
@@ -400,27 +408,6 @@ func TestRejectsEpochRollback(t *testing.T) {
 	}
 	if floor != 3 {
 		t.Fatalf("epoch floor is %d, want 3", floor)
-	}
-
-	// A record forking from genesis: same network, same admin key, one record
-	// deep, so any chain through it resolves to epoch 2. To make the rollback
-	// the outcome rather than a coin flip, keep drawing until the rogue record
-	// wins fork choice against the record it displaces — which needs only a
-	// lower hash, since neither is a revocation.
-	var rogue types.AUM
-	for attempt := 0; ; attempt++ {
-		if attempt > 64 {
-			t.Fatal("could not draw a record that wins fork choice")
-		}
-		candidate, err := NewBuilder(h.genesisState()).AddNode(h.newNode("attacker"), h.sealer())
-		if err != nil {
-			t.Fatalf("AddNode: %v", err)
-		}
-		h.signQuorum(&candidate)
-		if compareHash(candidate.Hash(), add.Hash()) < 0 {
-			rogue = candidate
-			break
-		}
 	}
 
 	err = h.auth.Inform(rogue)
@@ -473,10 +460,8 @@ func TestRejectsNonSequentialEpoch(t *testing.T) {
 
 // --- epoch coverage --------------------------------------------------------
 
-// TestRejectsEpochExcludingAMember is the quiet lockout: a membership change
-// whose epoch bump omits one member's wrap. That member keeps its WireGuard
-// peer entries but loses discovery, with nothing in the log saying it was
-// removed.
+// TestRejectsEpochExcludingAMember is the quiet lockout: a bump omitting one
+// member's wrap costs it discovery, with nothing in the log saying so.
 func TestRejectsEpochExcludingAMember(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	victim := h.addNode("victim")
@@ -557,10 +542,9 @@ func TestRejectsCollidingV4Address(t *testing.T) {
 	}
 }
 
-// TestRejectsCollidingDerivedAddress forces the derived-address collision the
-// validator exists to reject. It cannot be produced by finding a hash collision
-// in a test, so the check is exercised through the snapshot validator with two
-// records that a hostile checkpoint could contain.
+// TestRejectsCollidingDerivedAddress forces the collision the validator exists
+// to reject. A hash collision cannot be found in a test, so the check is
+// exercised through the snapshot validator, as a hostile checkpoint would.
 func TestRejectsCollidingDerivedAddress(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	h.addNode("alpha")
@@ -579,15 +563,10 @@ func TestRejectsCollidingDerivedAddress(t *testing.T) {
 	}
 }
 
-// TestRejectsCollisionsFromAQuorumSignedRecord is the collision rules on the
-// attacker's path rather than the builder's.
-//
-// The tests above stop at the builder, which refuses these records before they
-// are signed. That proves the honest tool will not produce one; it says nothing
-// about a node receiving one from a quorum that skipped the tool. Since a
-// colliding record is fully authorized — real signatures, real quorum — the
-// only thing standing between it and the member set is the receiving node's own
-// validation, which is exactly what this exercises.
+// TestRejectsCollisionsFromAQuorumSignedRecord exercises the collision rules
+// on the attacker's path rather than the builder's: a quorum that skips the
+// tool produces a fully authorized record, and only the receiving node's own
+// validation stands between it and the member set.
 func TestRejectsCollisionsFromAQuorumSignedRecord(t *testing.T) {
 	addr := netip.MustParseAddr("100.64.0.5")
 	first := func(h *harness) types.NodeRecord {
@@ -646,12 +625,57 @@ func TestRejectsSharedWireGuardKey(t *testing.T) {
 	}
 }
 
+// TestRejectsSharedKeysInAWholeState covers the two paths that seat a member
+// set without authoring a record that admits anyone: a genesis naming founding
+// members, and a checkpoint adopted as a bootstrap anchor. Both take a member
+// set on a quorum's word, so both have to apply the key rules the incremental
+// path applies.
+func TestRejectsSharedKeysInAWholeState(t *testing.T) {
+	collisions := []struct {
+		what    string
+		collide func(seen types.NodeRecord, n *types.NodeRecord)
+	}{
+		{"a WireGuard key", func(seen types.NodeRecord, n *types.NodeRecord) { n.WireGuard = seen.WireGuard }},
+		{"an X25519 key", func(seen types.NodeRecord, n *types.NodeRecord) { n.X25519 = seen.X25519 }},
+		{"an ML-KEM key", func(seen types.NodeRecord, n *types.NodeRecord) { n.MLKEM = seen.MLKEM }},
+	}
+
+	for _, tc := range collisions {
+		t.Run("a genesis whose founders share "+tc.what, func(t *testing.T) {
+			h := newHarness(t, 1, 1)
+			first := h.newNode("alpha")
+			clone := h.newNode("clone")
+			tc.collide(first, &clone)
+
+			genesis, err := Genesis("test-net", 1, h.adminKeys(), h.commitments(),
+				[]types.NodeRecord{first, clone}, h.sealer())
+			if err != nil {
+				t.Fatalf("building the hostile genesis: %v", err)
+			}
+			h.signQuorum(&genesis)
+			if _, err := Create(NewMemStorage(), genesis); err == nil {
+				t.Fatalf("created a network whose founding members share %s", tc.what)
+			}
+		})
+
+		t.Run("a bootstrap checkpoint whose members share "+tc.what, func(t *testing.T) {
+			h := newHarness(t, 1, 1)
+			first := h.addNode("alpha")
+			clone := h.newNode("clone")
+			tc.collide(first, &clone)
+
+			cp := h.handAssembledCheckpoint(append(h.auth.State().Nodes(), clone))
+			if _, err := Bootstrap(NewMemStorage(), cp); err == nil {
+				t.Fatalf("bootstrapped from a checkpoint whose members share %s", tc.what)
+			}
+		})
+	}
+}
+
 // --- route grants ----------------------------------------------------------
 
-// TestRejectsSelfAssertedRoute is the shape of the guarantee rather than a
-// single case: there is no record kind through which a node grants itself
-// anything. A route arrives only in AddNode or SetNodeRoutes, both of which
-// need quorum, and a node's own signature is never a substitute.
+// TestRejectsSelfAssertedRoute: no record kind lets a node grant itself
+// anything. Routes arrive only in AddNode or SetNodeRoutes, both by quorum.
 func TestRejectsSelfAssertedRoute(t *testing.T) {
 	h := newHarness(t, 2, 2)
 	n := h.addNode("router")
@@ -901,37 +925,35 @@ func TestOrphanedRevocationAlarms(t *testing.T) {
 	victim := h.addNode("victim")
 	b := h.auth.Builder()
 
-	// Branch B: an unrelated addition, then the victim's removal one record
-	// deeper — deep enough that fork choice's revocation bias, which only ever
-	// compares immediate siblings, cannot see it.
-	b1, err := b.AddNode(h.newNode("b1"), h.sealer())
+	// Sibling AddNode records at equal depth, so fork choice separates them on
+	// the hash tiebreak; branch A must win, leaving the revocation orphaned.
+	// Draw both and assign the roles from the comparison rather than redrawing
+	// against a fixed target, which is not uniform.
+	first, err := b.AddNode(h.newNode("fork-one"), h.sealer())
 	if err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	h.signQuorum(&b1)
+	h.signQuorum(&first)
+	second, err := b.AddNode(h.newNode("fork-two"), h.sealer())
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	h.signQuorum(&second)
+	a1, b1 := first, second
+	if compareHash(b1.Hash(), a1.Hash()) < 0 {
+		a1, b1 = b1, a1
+	}
+
+	// Branch B, the loser: the victim's removal one record deeper than the
+	// fork point — deep enough that fork choice's revocation bias, which only
+	// ever compares immediate siblings, cannot see it.
 	b2, err := NewBuilder(h.project(b1)).RemoveNode(victim.Identity, h.sealer())
 	if err != nil {
 		t.Fatalf("RemoveNode: %v", err)
 	}
 	h.signQuorum(&b2)
 
-	// Branch A: two unrelated additions. Draw until A's root wins fork choice
-	// against B's, so the branch carrying the revocation is the one orphaned.
-	var a1 types.AUM
-	for attempt := 0; ; attempt++ {
-		if attempt > 64 {
-			t.Fatal("could not draw a record that wins fork choice")
-		}
-		candidate, err := b.AddNode(h.newNode("a1"), h.sealer())
-		if err != nil {
-			t.Fatalf("AddNode: %v", err)
-		}
-		h.signQuorum(&candidate)
-		if compareHash(candidate.Hash(), b1.Hash()) < 0 {
-			a1 = candidate
-			break
-		}
-	}
+	// Branch A, the winner: an unrelated addition at the same depth.
 	a2, err := NewBuilder(h.project(a1)).AddNode(h.newNode("a2"), h.sealer())
 	if err != nil {
 		t.Fatalf("AddNode: %v", err)

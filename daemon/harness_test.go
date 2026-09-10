@@ -38,10 +38,8 @@ func newDevice(t *testing.T, name string, v4 netip.Addr) *device {
 		t.Fatal(err)
 	}
 	d := &device{identity: id, recipient: recipient}
-	// A WireGuard static key is a Curve25519 scalar; for a peer set that is
-	// only ever compared, drawing raw bytes is exactly as good as deriving
-	// the public half, and the tests that bring tunnels up use conn's own
-	// generator instead.
+	// For a peer set that is only ever compared, raw bytes are as good as a
+	// derived public half; tests that bring tunnels up use conn's generator.
 	priv, pub, err := conn.NewDiscoKey()
 	if err != nil {
 		t.Fatal(err)
@@ -73,11 +71,9 @@ type network struct {
 	secretByEpoch map[uint64]secrets.Secret
 }
 
-// newNetwork founds a one-admin network with n founding members.
-//
-// One admin with a quorum of one is not a realistic policy and is the right
-// one here: what M2 tests is the mesh, and a k-of-n ceremony spread over
-// several machines is what trust/log's own tests already cover.
+// newNetwork founds a one-admin network with n founding members. A quorum of
+// one is not realistic policy but is the right one here: these tests are about
+// the mesh, and trust/log's own cover k-of-n ceremonies.
 func newNetwork(t *testing.T, n int) *network {
 	t.Helper()
 	admin, err := types.GenerateIdentity()
@@ -174,14 +170,10 @@ func (nw *network) removeNode(t *testing.T, auth *log.Authority, id types.Identi
 	return rec
 }
 
-// safeLogf returns a logger that forwards to t.Logf until the test is torn
-// down, and drops everything afterwards.
-//
-// The embedded engine keeps goroutines that outlive Close by a few
-// milliseconds and log as they wind down. Logging into a finished test is a
-// panic in Go's testing package and shows up under -race as a race on the
-// test's own state — a flake with nothing to do with the code under test. The
-// silencing cleanup is registered before any other, so it runs last.
+// safeLogf forwards to t.Logf until the test is torn down and drops everything
+// afterwards: the embedded engine's goroutines outlive Close by a few
+// milliseconds and log as they wind down, which would panic the testing
+// package. The silencing cleanup is registered first, so it runs last.
 func safeLogf(t *testing.T, prefix string) func(string, ...any) {
 	var (
 		mu   sync.Mutex
@@ -208,11 +200,17 @@ func safeLogf(t *testing.T, prefix string) func(string, ...any) {
 // reconciler decides rather than about packets moving. It records every peer
 // set it is given, which is the whole of the reconciler's output.
 type fakeManager struct {
-	mu     sync.Mutex
-	peers  []conn.Peer
-	sets   int
-	closed bool
-	err    error // returned by SetPeers, to exercise the failure path
+	mu       sync.Mutex
+	peers    []conn.Peer
+	relays   []conn.Relay
+	relaySet int
+	sets     int
+	closed   bool
+	err      error // returned by SetPeers, to exercise the failure path
+	relayErr error // returned by SetRelays
+
+	home int
+	eps  []netip.AddrPort
 }
 
 var _ conn.Manager = (*fakeManager)(nil)
@@ -228,6 +226,29 @@ func (m *fakeManager) SetPeers(peers []conn.Peer) error {
 	return nil
 }
 
+func (m *fakeManager) SetRelays(relays []conn.Relay) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.relayErr != nil {
+		return m.relayErr
+	}
+	m.relays = append([]conn.Relay(nil), relays...)
+	m.relaySet++
+	return nil
+}
+
+func (m *fakeManager) HomeRelay() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.home
+}
+
+func (m *fakeManager) LocalEndpoints() []netip.AddrPort {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]netip.AddrPort(nil), m.eps...)
+}
+
 func (m *fakeManager) LocalPort() uint16 { return 41641 }
 
 func (m *fakeManager) Ping(netip.Addr, func(conn.PingResult)) {}
@@ -237,6 +258,12 @@ func (m *fakeManager) Close() error {
 	defer m.mu.Unlock()
 	m.closed = true
 	return nil
+}
+
+func (m *fakeManager) relaySnapshot() []conn.Relay {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]conn.Relay(nil), m.relays...)
 }
 
 func (m *fakeManager) snapshot() []conn.Peer {

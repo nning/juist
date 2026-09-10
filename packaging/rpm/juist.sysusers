@@ -1,0 +1,4 @@
+# The unprivileged account juistd runs as. systemd-sysusers creates it at
+# install time; nothing removes it again, because a UID may own files this
+# package never installed.
+u juist - "juist mesh VPN" /var/lib/juist -

@@ -18,25 +18,15 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// The local API, and why it looks like this.
+// Two rules the local API follows, from the local-API CVEs in this space
+// (Tailscale CVE-2022-41924, NetBird GHSA-qcpp-8vwj-hhwr):
 //
-// Both surveyed local-API CVEs in this space (Tailscale CVE-2022-41924:
-// DNS rebinding into a localhost TCP LocalAPI; NetBird GHSA-qcpp-8vwj-hhwr: a
-// mode-0666 unix socket) come from the same two mistakes, and
-// docs/04-architecture.md turns them into rules this file follows:
+//   - No TCP listener, ever: a unix socket cannot be reached by a web page.
+//   - Mode 0600 in a 0700 directory, plus SO_PEERCRED, which is what catches a
+//     directory made permissive after the daemon started.
 //
-//   - No TCP listener, ever. A unix socket cannot be reached by a web page,
-//     which is what made the rebinding attack possible.
-//   - Mode 0600 in a 0700 directory, plus SO_PEERCRED. The mode is the
-//     defence; the credential check is what makes it a check rather than an
-//     assumption, and it is what catches a socket whose directory was made
-//     permissive after the daemon started.
-//
-// The daemon deliberately cannot do the one thing an attacker would most want
-// from it: authorize a membership change. Admin keys live in the operator's
-// CLI keystore and never here, so the most a caller can do through [cmdInform]
-// is hand over records a quorum has already signed — which any member could
-// equally have gossiped.
+// The daemon holds no admin keys, so the most a caller can do through
+// [cmdInform] is hand over records a quorum has already signed.
 
 // Limits on an IPC message. Small: every request here is a verb and at most a
 // batch of records.
@@ -115,10 +105,9 @@ func (r *Request) validate() error {
 	return nil
 }
 
-// The IPC codec is the same canonical CBOR discipline the rest of the project
-// uses, with its own limits. docs/06-verification.md schedules a fuzz target
-// for this decoder at M2 because it is the one parser reachable from a local
-// unprivileged process.
+// The IPC codec is the same canonical CBOR discipline as the rest of the
+// project, with its own limits. It is fuzzed: this is the one parser reachable
+// from a local unprivileged process.
 var ipcEnc = func() cbor.EncMode {
 	m, err := cbor.CTAP2EncOptions().EncMode()
 	if err != nil {
@@ -232,25 +221,15 @@ func (s *ipcServer) track() bool {
 // LockName is the single-instance lock file's name inside a state directory.
 const LockName = "daemon.lock"
 
-// newIPCServer creates the socket.
+// newIPCServer creates the socket. The order is load-bearing: take the
+// exclusive lock on the state directory first, then remove any stale socket
+// and bind. A unix socket is not a TCP port — unlinking a path another daemon
+// is listening on succeeds, and so does binding the freed path — so without
+// the lock a second daemon silently steals the control socket, leaving two log
+// authorities on one store.
 //
-// It first takes an exclusive advisory lock on a file in the state directory,
-// and only then removes any stale socket and binds. The order matters, and the
-// earlier reasoning here was wrong: a unix socket does not behave like a TCP
-// port. Unlinking a path another daemon is listening on succeeds — the running
-// daemon keeps its file descriptor and simply becomes unreachable by name —
-// and net.Listen on the freed path then also succeeds. So without the lock a
-// second daemon on the same home silently steals the control socket, leaving
-// two log authorities writing one store: the CLI talks to the newcomer while
-// the original keeps a revoked peer's tunnel up, and the split-brain that
-// docs/09-mesh-layer-notes.md's "two writers" rule exists to prevent happens
-// one layer down from where apply refuses it.
-//
-// The lock is held for the daemon's lifetime and released when this server
-// closes (or when the process dies, since the kernel drops an flock with its
-// open file). A crashed daemon therefore leaves no stale lock. With it held,
-// removing the socket is finally safe for the reason the old comment claimed:
-// this process is provably the only daemon on this home.
+// The lock is held for the daemon's lifetime, and the kernel drops it if the
+// process dies, so a crash leaves no stale lock.
 func newIPCServer(d *Daemon, path string) (*ipcServer, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -284,10 +263,9 @@ func newIPCServer(d *Daemon, path string) (*ipcServer, error) {
 		lock.Close()
 		return nil, fmt.Errorf("daemon: listening on %s: %w", path, err)
 	}
-	// Chmod after bind: the socket is created with the process umask
-	// applied, which on a default umask leaves it group- and
-	// world-readable. A brief window exists between the two, which the
-	// 0700 directory above closes.
+	// Chmod after bind: the socket is created with the umask applied, which
+	// leaves it group- and world-readable. The 0700 directory closes the
+	// window between the two.
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
 		lock.Close()
@@ -468,10 +446,8 @@ func writeMessage(c net.Conn, v any) error {
 
 // --- client side -----------------------------------------------------------
 
-// Call sends one request to a daemon's IPC socket and returns its reply.
-//
-// It is the CLI's half of the protocol, here rather than in cmd/ so that the
-// two halves of a wire format stay in one file.
+// Call sends one request to a daemon's IPC socket and returns its reply. The
+// CLI's half of the protocol, kept here so both halves stay in one file.
 func Call(path string, req Request) (Response, error) {
 	c, err := net.DialTimeout("unix", path, 5*time.Second)
 	if err != nil {

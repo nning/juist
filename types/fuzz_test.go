@@ -6,15 +6,10 @@ import (
 	"testing"
 )
 
-// FuzzDecodeAUM is the record-decoder target docs/06-verification.md schedules
-// for M1. It asserts the property the whole encoding rests on, which is
-// stronger than "does not crash":
-//
-//	Decode is injective. Whatever DecodeAUM accepts, re-encoding reproduces
-//	byte for byte.
-//
-// If that ever fails, a record has two encodings and therefore two hashes, and
-// a quorum's signature over one could be presented as authorizing the other.
+// FuzzDecodeAUM asserts the property the encoding rests on, which is stronger
+// than "does not crash": whatever DecodeAUM accepts, re-encoding reproduces
+// byte for byte. Without it a record has two hashes, and a quorum's signature
+// over one could be presented as authorizing the other.
 func FuzzDecodeAUM(f *testing.F) {
 	seedCorpus(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -45,11 +40,9 @@ func FuzzDecodeAUM(f *testing.F) {
 	})
 }
 
-// FuzzValidate feeds the validator records assembled by mutating a valid one,
-// rather than raw bytes, so it explores the semantic rules rather than the
-// decoder. It asserts only that validation terminates without panicking: a
-// panic in the trust layer is a denial of service reachable from any record a
-// peer sends.
+// FuzzValidate mutates a valid record rather than feeding raw bytes, so it
+// explores the semantic rules rather than the decoder. It asserts only that
+// validation terminates without panicking.
 func FuzzValidateAUM(f *testing.F) {
 	seedCorpus(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -131,6 +124,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 	parent := Hash{1, 2, 3}
 	id := node.Public()
 	quorum := uint32(2)
+	schema := CurrentSchema + 1
 	fresh, err := GenerateIdentity()
 	if err != nil {
 		t.Fatalf("generating identity: %v", err)
@@ -155,6 +149,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindSetQuorum, Prev: &parent, Quorum: &quorum},
 		{Kind: KindCheckpoint, Prev: &parent, State: checkpointSnap},
 		{Kind: KindEpochBump, Prev: &parent, Epoch: epoch},
+		{Kind: KindSchemaUpgrade, Prev: &parent, Schema: &schema},
 	}
 	out := make([][]byte, 0, len(records))
 	for i := range records {

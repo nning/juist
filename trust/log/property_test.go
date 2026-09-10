@@ -10,13 +10,10 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// TestResolutionIsOrderIndependent is the determinism property from
-// docs/06-verification.md, over randomly generated record sets that include
-// forks: two nodes holding the same records reach byte-identical state, the
-// same head, and the same alarm, whatever order the records arrived in.
-//
-// Seeded rather than randomized: a property test that cannot be replayed is
-// not much use when it fails.
+// TestResolutionIsOrderIndependent is the determinism property: over generated
+// record sets including forks, two nodes holding the same records reach
+// byte-identical state, head and alarm whatever order they arrived in. Seeded,
+// so a failure can be replayed.
 func TestResolutionIsOrderIndependent(t *testing.T) {
 	for seed := uint64(1); seed <= 24; seed++ {
 		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
@@ -47,9 +44,9 @@ func TestResolutionIsOrderIndependent(t *testing.T) {
 }
 
 // TestIncrementalDeliveryNeverRegresses models gossip: records arrive one at a
-// time, in an arbitrary order, possibly out of order. Whatever the sequence,
-// the epoch must never go backwards, a rejected record must leave nothing
-// behind, and the store must always reopen to the state it is serving.
+// time in arbitrary order. The epoch must never go backwards, a rejected
+// record must leave nothing behind, and the store must reopen to what it
+// serves.
 func TestIncrementalDeliveryNeverRegresses(t *testing.T) {
 	for seed := uint64(1); seed <= 16; seed++ {
 		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {

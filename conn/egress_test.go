@@ -14,27 +14,18 @@ import (
 	"time"
 )
 
-// TestNoThirdPartyEgress is the M0 exit criterion (docs/05-roadmap.md): a
-// working mesh must touch no third-party infrastructure at all. The risk is
-// specific — we embed Tailscale's connectivity stack, which in its normal
-// configuration reaches out to DERP relays and STUN servers run by Tailscale
-// — so this asserts the absence of exactly that.
+// TestNoThirdPartyEgress is the M0 exit criterion (docs/05-roadmap.md): the
+// embedded Tailscale stack must reach no DERP relay and no STUN server.
 //
-// Two independent checks, because each is weak alone: no DERP connection
-// according to magicsock itself, and no socket owned by this process with a
-// remote address outside this host. The socket scan does not depend on the
-// embedded code reporting honestly, but it cannot see everything either:
-// STUN leaves through magicsock's main *unconnected* UDP socket, which shows
-// a zero remote address in /proc/net, so STUN/relay egress rests on the
-// DERPs() check until the packet capture below exists.
-//
-// A packet-level capture is the real form of this assertion and needs
-// privileges; it lands with the netns harness in M2.
+// Two checks, because each is weak alone: magicsock's own DERP count, and no
+// socket owned by this process with a remote address outside the host. The
+// socket scan does not depend on the embedded code reporting honestly, but
+// STUN would leave through an unconnected socket, which /proc/net shows with
+// no remote address. The netns harness watches the wire instead.
 func TestNoThirdPartyEgress(t *testing.T) {
 	// Self-check: prove the detector can see an external remote before
-	// trusting its silence below. Connecting a UDP socket records the
-	// remote address in /proc/net without a single packet leaving the host
-	// (and TEST-NET-1 is never routed anyway).
+	// trusting its silence. Connecting a UDP socket records the address in
+	// /proc/net without sending anything.
 	probe, err := net.Dial("udp4", "192.0.2.1:9")
 	if err != nil {
 		t.Fatalf("dialing self-check probe: %v", err)
@@ -59,10 +50,8 @@ func TestNoThirdPartyEgress(t *testing.T) {
 		t.Fatal("mesh did not come up; an egress assertion over a dead mesh proves nothing")
 	}
 
-	// Deterministically kick the lazy paths that would reach out if STUN
-	// targets or a DERP map had leaked in: ReSTUN runs the same code a
-	// periodic netcheck would, instead of hoping a timer fires inside the
-	// window below.
+	// Kick the lazy paths that would reach out if a DERP map had leaked in,
+	// rather than hoping a timer fires inside the window below.
 	for _, n := range []*node{a, b} {
 		n.mgr.(*tsManager).magic.ReSTUN("egress-test")
 	}
@@ -158,10 +147,8 @@ func procNetRemotes(t *testing.T, family string) map[uint64]netip.AddrPort {
 }
 
 // TestParseProcAddr round-trips addresses through the kernel's /proc/net
-// rendering. The in-test encoder implements the kernel's rule — each 32-bit
-// word printed as %08X of the u32 as this host holds it in memory — so the
-// test is valid on either endianness, and it covers the 16-byte v6 path that
-// the in-test self-check probe (udp4) cannot.
+// rendering. The in-test encoder implements the kernel's rule, so the test is
+// valid on either endianness and covers the v6 path the self-check cannot.
 func TestParseProcAddr(t *testing.T) {
 	for _, s := range []string{"127.0.0.1:53", "192.0.2.7:9", "[2001:db8::1]:443", "[::1]:8080"} {
 		want := netip.MustParseAddrPort(s)
@@ -197,10 +184,9 @@ func parseProcAddr(s string) (netip.AddrPort, error) {
 	if err != nil || (len(raw) != 4 && len(raw) != 16) {
 		return netip.AddrPort{}, fmt.Errorf("bad address %q", host)
 	}
-	// /proc/net prints each 32-bit word as %08X of the u32 the kernel holds
-	// in memory, so decode the printed value and lay it back down in native
-	// byte order to recover the network-order bytes. On little-endian hosts
-	// that reverses each word; on big-endian hosts it is the identity.
+	// /proc/net prints each 32-bit word as %08X of the u32 the kernel holds in
+	// memory, so decoding and laying it back down in native byte order
+	// recovers the network-order bytes.
 	for i := 0; i < len(raw); i += 4 {
 		binary.NativeEndian.PutUint32(raw[i:i+4], binary.BigEndian.Uint32(raw[i:i+4]))
 	}

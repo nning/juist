@@ -7,32 +7,21 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// maxCachedEndpoints bounds the announcement cache.
-//
-// Two per member, so that the cache can hold every member of a full network
-// plus announcements for members this node has not yet learned about from the
-// log — a node that syncs endpoints before records is the normal order, not an
-// error. Past the bound, a member's announcement displaces a non-member's and
-// everything else is refused; see [Cache.Add].
+// maxCachedEndpoints bounds the announcement cache: two per member, so it
+// holds a full network plus announcements for subjects this node has not yet
+// learned from the log. Past the bound, a member's announcement displaces a
+// non-member's and everything else is refused.
 const maxCachedEndpoints = 2 * types.MaxNodes
 
-// A Cache holds the newest endpoint announcement seen for each node.
+// A Cache holds the newest endpoint announcement seen for each node. It is
+// deliberately not filtered by membership: announcements arrive before the
+// records that admit their subjects, and the reconciler ignores every subject
+// the log does not carry, so an early one is inert rather than dangerous.
 //
-// It is deliberately not filtered by membership. Gossip learns announcements
-// before it learns the log records that make their subjects members, and
-// dropping the ones that arrive early would make a joining node invisible
-// until the next anti-entropy round. What consumes the cache — the reconciler
-// — joins it onto the log's member set and ignores everything else, so an
-// announcement for a non-member is inert rather than dangerous.
-//
-// The cache does hold a *view* of membership ([Cache.SetMembers]), for one
-// purpose: deciding who wins when the bound is hit. An announcement only needs
-// a signature by the key it names, and identity keys cost nothing to mint —
-// so any holder of an epoch secret, including a revoked device inside the
-// keyring window, could otherwise fill the cache with signature-valid records
-// for invented identities and leave no room for a genuinely joining member,
-// silently and until a restart. Membership decides *eviction*, never entry:
-// early announcements still wait in whatever room the bound leaves.
+// The membership view it does hold decides only who wins when the bound is
+// hit. Identity keys cost nothing to mint, so any holder of an epoch secret
+// could otherwise fill the cache with signature-valid records for invented
+// identities. Membership decides eviction, never entry.
 //
 // Safe for concurrent use.
 type Cache struct {
@@ -46,22 +35,11 @@ type Cache struct {
 func NewCache() *Cache { return &Cache{by: map[types.Identity]Endpoint{}} }
 
 // SetMembership gives the cache the reconciler's view of the log: who is a
-// member now, and who this node has seen the log carry and drop.
-//
-// Members decide who may displace whom when the cache is full. Former members
-// are refused outright — a device that was revoked or expired keeps announcing
-// until it learns of its own removal, legitimately from its side, and every
-// one of those announcements would otherwise be cached, reported as new, and
-// pruned again on the next reconcile: a reconcile and a push round per member
-// per announcement interval, for as long as the device is powered on.
-//
-// A subject in neither set is accepted, which is the case that must not be
-// broken: gossip and discovery routinely deliver an announcement before the
-// record admitting its subject.
-//
-// One rule in one place, because there are two ways in — LAN discovery, and a
-// peer relaying its cache in a gossip session — and a rule enforced on only
-// one of them is not enforced.
+// member now, and who this node has seen it carry and drop. Members decide who
+// displaces whom when the cache is full. Former members are refused outright —
+// a removed device keeps announcing until it learns of its removal, and each
+// beacon would otherwise be cached, reported as new and pruned again. A
+// subject in neither set is accepted, which is the early-join case.
 func (c *Cache) SetMembership(members, former []types.Identity) {
 	m := make(map[types.Identity]bool, len(members))
 	for _, id := range members {
@@ -77,10 +55,8 @@ func (c *Cache) SetMembership(members, former []types.Identity) {
 }
 
 // Add records an announcement if it is newer than what is held, reporting
-// whether anything changed.
-//
-// The record must already be verified; [DecodeEndpoint] and the session code
-// do that. Passing an unverified one would let any peer speak for any node.
+// whether anything changed. The record must already be verified: passing an
+// unverified one would let any peer speak for any node.
 func (c *Cache) Add(e Endpoint) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -93,11 +69,9 @@ func (c *Cache) Add(e Endpoint) bool {
 		// A replay, or the same record arriving from two peers.
 		return false
 	case !held && len(c.by) >= maxCachedEndpoints:
-		// Full. A member's announcement makes room by displacing a
-		// non-member's — the member's is the one the reconciler will
-		// actually use, and a full cache necessarily holds a non-member,
-		// since the bound is twice the member limit. Anything else waits
-		// for room.
+		// Full: a member's announcement displaces a non-member's, and a full
+		// cache necessarily holds one, since the bound is twice the member
+		// limit. Anything else waits for room.
 		if !c.member[e.Identity] || !c.evictNonMemberLocked() {
 			return false
 		}
@@ -154,13 +128,9 @@ func (c *Cache) Get(id types.Identity) (Endpoint, bool) {
 }
 
 // All returns every announcement held: members first, then the rest, each
-// group sorted by identity.
-//
-// Members lead for the same reason [Cache.Add] prefers them: the relaying
-// hello truncates this list at [MaxEndpointsPerFrame], and a flood of
-// announcements for invented identities must not be able to crowd the members
-// out of what gets relayed. Within a membership view the order is still
-// deterministic, so two nodes holding the same set produce the same frame.
+// group sorted by identity. Members lead because the relaying hello truncates
+// at [MaxEndpointsPerFrame], and invented identities must not crowd them out;
+// the order stays deterministic, so equal sets produce equal frames.
 func (c *Cache) All() []Endpoint {
 	c.mu.Lock()
 	defer c.mu.Unlock()

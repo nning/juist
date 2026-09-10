@@ -13,10 +13,8 @@ import (
 )
 
 // node is a test node: its keys, its overlay addresses, and its live manager.
-//
-// Each node carries both families the design assigns (docs/04-architecture.md):
-// a v6 ULA address derived from its identity key, and an explicit v4 address.
-// Tests ping over v4 — see pingAddr.
+// Each carries both families the design assigns; tests ping over v4, see
+// pingAddr.
 type node struct {
 	id       uint64
 	nodeKey  key.NodePrivate
@@ -80,10 +78,9 @@ func (n *node) peer() Peer {
 	}
 }
 
-// hostAddr is this host's primary address. Loopback is not usable here:
-// Tailscale's netns binds its UDP sockets to the default interface, so a
-// datagram addressed to 127.0.0.1 is sent out that interface and never
-// arrives.
+// hostAddr is this host's primary address. Loopback is not usable: Tailscale's
+// netns binds UDP sockets to the default interface, so a datagram to 127.0.0.1
+// leaves through it and never arrives.
 func hostAddr(t *testing.T) netip.Addr {
 	t.Helper()
 	c, err := net.Dial("udp4", "192.0.2.1:9") // TEST-NET-1; no packet is sent
@@ -94,12 +91,9 @@ func hostAddr(t *testing.T) netip.Addr {
 	return c.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
 }
 
-// pingAddr is the address tests ping when the node was built by newNode. It
-// must be the v4 one: the engine's RespondToPing helper calls ICMP4Header
-// unconditionally on anything IsEchoRequest matches, so an ICMPv6 echo panics
-// it. That is scaffolding for TUN-less tests only — nothing in the product
-// depends on it. Both families are asserted in echotun_test.go, whose nodes
-// answer echoes from their own fake TUN instead.
+// pingAddr must be the v4 address: the engine's RespondToPing helper panics on
+// an ICMPv6 echo. Both families are asserted in echotun_test.go, whose nodes
+// answer from their own fake TUN.
 func (n *node) pingAddr() netip.Addr { return n.addrs[0].Addr() }
 
 // ping sends one overlay ICMP echo and reports whether it was answered.
@@ -182,10 +176,9 @@ func TestSetPeersAfterClose(t *testing.T) {
 	}
 }
 
-// TestNonMemberIsDenied is the property everything else rests on: holding
-// valid WireGuard keys is not membership. A node absent from the peer set
-// cannot exchange a single overlay packet, even knowing the address and
-// endpoint of a member.
+// TestNonMemberIsDenied is the property everything else rests on: a node
+// absent from the peer set cannot exchange an overlay packet, even knowing a
+// member's address and endpoint.
 func TestNonMemberIsDenied(t *testing.T) {
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
@@ -214,15 +207,10 @@ func TestNonMemberIsDenied(t *testing.T) {
 	}
 }
 
-// TestListenPortInUse asserts that a port the caller asked for and the engine
-// could not bind fails the manager, rather than moving the data plane
-// somewhere the caller was never told about.
-//
-// magicsock treats ListenPort as a preference: bindSocket's candidate list
-// always ends in 0, so a port already in use costs one log line and an
-// OS-assigned port. An operator who passes a port has usually opened it in a
-// firewall or forwarded it at a NAT, and the symptom of the silent move is
-// that nothing connects, with the cause far up a verbose log.
+// TestListenPortInUse: a port the caller asked for and the engine could not
+// bind must fail the manager rather than moving the data plane silently. An
+// operator who passes a port has usually opened it in a firewall, and the
+// symptom of the move is that nothing connects.
 func TestListenPortInUse(t *testing.T) {
 	// Held on udp4 because that is the socket magicsock.LocalPort reports,
 	// and the port the endpoint announcements are built from.

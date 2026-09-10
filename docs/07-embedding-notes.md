@@ -53,91 +53,140 @@ gates are worth keeping: M2's exit criterion is satisfied by either alone.
 ## Problem: no preshared-key path
 
 The per-pair ML-KEM-768 PSK hedge in [04-architecture.md](04-architecture.md) has
-**no route through the current API**:
+**no reachable route through the current API**. Two gaps, both above the crypto,
+against `tailscale.com v1.102.2` and `tailscale/wireguard-go v0.0.0-20260715223240`:
 
-- `wgcfg.Config` has no PSK field.
-- `device.NewPeerConfig` — what the peer-lookup func returns, and the only way a
-  lazily-created peer is configured — carries `AllowedIPs` and `Endpoint`, nothing else.
-- `grep -rn preshared wgengine/` returns nothing: Tailscale's engine layer never sets
-  a PSK.
+- `device.NewPeerConfig` (`device/device.go:456`) carries `AllowedIPs` and `Endpoint`
+  and nothing else, so a lazily-created peer starts with a zero PSK.
+- `wgengine`'s `wgdev` is private (`wgengine/userspace.go:81`) and no exported method
+  in the package returns a `*device.Device`, so the UAPI route is unreachable from
+  outside it. `grep -rn preshared wgengine/` returns nothing.
 
-The fork itself *does* implement PSK — `handshake.presharedKey` in the Noise
-handshake, settable per peer via the `preshared_key` UAPI key, all of it upstream
-WireGuard's standard, battle-tested support. Only the layer above omits it. And
-`wgengine`'s `wgdev` is private: it is not in the `Engine` interface and
-`SetSubsystem` never surfaces it, so **the UAPI route is not reachable from outside
-the package either**. That leaves two real options:
+What the fork already provides is more than plumbing-with-a-hole: `handshake.presharedKey`
+(`device/noise-protocol.go:218`) is mixed into the Noise handshake, and the UAPI
+`preshared_key` handler (`device/uapi.go:325`) writes it **in place** under the
+handshake mutex — no `RemovePeer`, no session invalidation. An established session
+keeps running on its derived transport keys and the next handshake mixes in the new
+value, which is exactly the rotation behaviour 04-architecture.md claims. That
+mechanism does not have to be invented; only access to it is missing. `IpcSet` and
+`IpcSetOperation` are exported.
 
-1. **Patch the vendored code** — add a `PresharedKey` field to `NewPeerConfig`, thread
-   it through `wgcfg.NewPeerLookupFunc`, and expose *some* in-place update path for
-   rotation. The crypto is upstream and untouched; the patch is plumbing. The cost is
-   that the pinned dependency becomes a *modified* one: every Tailscale upgrade needs
-   the patch rebased, and the diff is in the audit path even though it is not
+**Any design has to cover both peer states.** `wgcfg` no longer pushes configuration
+at all — the package is 40 lines, there is no `ReconfigDevice` and no UAPI writer, and
+peers are created lazily through `PeerLookupFunc`. So a PSK reaches a peer two ways
+depending on whether it exists yet: through the lookup func at creation, and through
+the in-place UAPI call afterwards. One without the other leaves a gap.
+
+**Rotation is bounded by the rekey window.** `RekeyAfterTime` is 120 s and
+`RejectAfterTime` 180 s (`device/constants.go:17,22`), so both ends must hold the new
+PSK before the next handshake or it fails. That is a convergence requirement on the
+reconciler, comfortably met by M2's measured ~80 ms revocation crossing, but it is a
+requirement and not a free property.
+
+Two options remain:
+
+1. **Patch the vendored code** — a `PresharedKey` field on `NewPeerConfig` threaded
+   through `wgcfg.NewPeerLookupFunc`, plus an engine-level call reaching the existing
+   UAPI path. The crypto is upstream and untouched; the patch is plumbing in two
+   pinned repositories. The cost is that the dependency becomes a *modified* one:
+   rebased at every Tailscale upgrade, and in the audit path even though it is not
    cryptographic.
 2. **Defer the PQ hedge to post-v1**, alongside the ML-DSA checkpoint co-signatures
    already deferred.
 
-Note also that [04-architecture.md](04-architecture.md) states PSKs are rotated on
-epoch bump with tunnels staying up. Peers are configured only at *creation* through
-`NewPeerConfig`, so without an in-place update path a rotation means recreating the
-peer — which drops the tunnel and forces a re-handshake. Either the patch supplies
-that path, or the documented rotation behaviour changes.
+**Settled at M3b: (2), deferred past v1.** The transport question below decides
+whether the freeze bound this, and it does not: ML-KEM is a KEM, so establishing
+a per-pair secret means a ciphertext travels, and it travels over gossip or
+disco rather than in the log — where the public halves it is built from are
+already recorded. So nothing about the schema forecloses it, and with the schema
+versioned it would not be foreclosed even if it did. What is left is entirely
+the cost in option 1: a modified dependency, rebased at every upgrade, inside
+the audit scope. That is a poor trade against a hedge whose whole value is
+against an adversary that does not exist yet, so it waits for a milestone that
+can carry the maintenance — and the group secret, which is where the hybrid KEM
+*is* used today, keeps its own post-quantum protection meanwhile.
 
-**Reserve the field in M1, decide before the M3 freeze.** `AddNode` should carry the
-ML-KEM public key regardless — reserving it costs nothing and keeps (1) and (2) open.
-But the record schema freezes at M3, and the choice determines whether v1 can claim
-the PQ property at all, so it cannot be left open past that point.
-
-*Done in M1:* `types.NodeRecord` carries `MLKEM` (an ML-KEM-768 encapsulation key)
-alongside `X25519`. Both are consumed now as the two halves of the hybrid HPKE KEM
-that seals epoch group secrets, which gives the discovery layer the PQ hedge
-immediately; the data-plane PSK use is still the open decision above. See
-[08-trust-layer-notes.md](08-trust-layer-notes.md).
+**What decides whether the M3 freeze binds this.** `types.NodeRecord` already carries
+`MLKEM` and consumes it, with `X25519`, as the two halves of the hybrid HPKE KEM that
+seals epoch group secrets (M1) — so the discovery layer has the PQ hedge today and no
+*new* record field is needed to derive a per-pair PSK from keys the log already holds.
+The open question is where the ML-KEM ciphertext travels: in the log, it is a schema
+field and the freeze binds; over gossip or disco, it is not and the implementation
+choice may outlive M3b. Settle the transport first — it determines whether this is a
+freeze gate or a v1-scope decision. See [08-trust-layer-notes.md](08-trust-layer-notes.md).
 
 ## Wiring requirements that nothing documents
 
-Each of these fails silently or confusingly; all three cost time in the spike.
+Each fails silently or confusingly.
 
 - **`tstun.Wrapper.Start()` must be called by us.** `ipnlocal` does it in Tailscale.
-  Without it, every TUN read blocks forever and the only symptom is a once-per-second
-  `tstun: awaiting Wrapper.Start call` log line — a breadcrumb upstream left
-  deliberately. Call it after all lookups, the filter, and the first `Reconfig` are
-  installed.
+  Without it every TUN read blocks forever, with only a once-per-second
+  `tstun: awaiting Wrapper.Start call` line to say so. Call it after the lookups,
+  the filter and the first `Reconfig` are installed.
 - **`SetSelfNode` and `SetPeerForIPFunc` gate diagnostics.** `Engine.Ping` resolves
-  its target through `SetPeerForIPFunc` and its source through `SetSelfNode`; without
-  both it reports "no matching peer" for a peer that is otherwise fully up.
+  its target through the first and its source through the second; without both it
+  reports "no matching peer" for a peer that is fully up.
 - **Loopback endpoints do not work.** Tailscale's `netns` binds UDP sockets to the
-  default interface, so a datagram addressed to `127.0.0.1` leaves via that interface
-  and is never delivered. Disco reports `sent ping` and then times out, with the
-  receiving node logging nothing at all. Multi-node tests on one host must use the
-  host's real address — and M2's netns-per-node harness sidesteps this anyway.
-- **Resetting dead WireGuard sessions on disco-key rotation is the embedder's
-  job.** `ipnlocal` calls `Engine.ResetDevicePeer` for every peer whose disco key
-  changed after `SetNetworkMap`; nothing below it does. An adapter that only resets
-  departed peers leaves a *restarted* peer's old session keys in the device, and
-  traffic to it blackholes until WireGuard's own rekey timers give up — tens of
-  seconds to minutes, with nothing logged. `SetPeers` diffs disco keys against the
-  previous set and resets exactly those peers.
+  default interface, so a datagram to `127.0.0.1` leaves via that interface and is
+  never delivered. Multi-node tests on one host must use the host's real address.
+- **Resetting dead WireGuard sessions on disco-key rotation is the embedder's job.**
+  `ipnlocal` calls `Engine.ResetDevicePeer` for every peer whose disco key changed
+  after `SetNetworkMap`; nothing below it does. Miss it and a *restarted* peer's dead
+  session keys stay in the device, blackholing traffic for minutes with nothing
+  logged.
 - **A real TUN device alone plumbs nothing into the OS.** `wgengine.Config.Router`
-  defaults to `router.NewFake` when left nil, so the `router.Config{LocalAddrs}`
-  passed to `Reconfig` is silently ignored: the interface gets no address and no
-  routes, and nothing points at the cause. Actual OS plumbing needs a real
-  `router.Router` wired at engine construction — M3a territory (see below); `conn`
-  deliberately does not pass one yet.
+  defaults to `router.NewFake`, which silently discards the `router.Config` passed to
+  `Reconfig`. OS plumbing needs a real `router.Router` wired at engine construction.
+  `router.New` wants the device and the engine wants the router, so the order is
+  fixed: netmon, TUN, router, engine. Share one `netmon.Monitor` through
+  `Config.NetMon`; the engine will not close one it was handed.
 - **`wgengine.Config.ListenPort` is a preference, not a requirement.**
-  `magicsock.bindSocket` builds a candidate port list that always ends in `0`, so a
-  port it cannot bind produces one `unable to bind udp4 port N: address already in
-  use` line and an OS-assigned port instead. For Tailscale that is right: endpoints
-  are discovered reflexively, so a moved port repairs itself. Here nothing repairs
-  it — `daemon.underlayEndpoints` announces what a local interface scan finds, and
-  the operator who passed the port has usually opened it in a firewall or forwarded
-  it at a NAT. Found on a real laptop, where the requested 41641 was already held by
-  the host's own `tailscaled` (that is its default port) and the daemon came up on
-  40463 with only a banner line to say so. `conn.New` now compares
-  `magicsock.LocalPort()` against a non-zero requested port and refuses to start on a
-  mismatch. Note `LocalPort` reports the *v4* socket only, which is also the port the
-  announcements are built from, so the check and the announcement agree by
-  construction.
+  `magicsock.bindSocket`'s candidate list ends in `0`, so a port it cannot bind
+  becomes an OS-assigned one after a single log line. Tailscale repairs that
+  reflexively; we cannot, because endpoints come from an interface scan. `conn.New`
+  compares `magicsock.LocalPort()` against a non-zero requested port and refuses to
+  start on a mismatch. `LocalPort` reports the v4 socket only, which is also what the
+  announcements are built from, so the two agree by construction.
+- **The TUN MTU must come from `tstun.DefaultTUNMTU()`.** It is 1280 — exactly the
+  IPv6 minimum. The kernel removes `/proc/sys/net/ipv6/conf/<iface>/` from an
+  interface below that, and the router reads exactly that path to decide whether to
+  program IPv6 at all. A "conservative" lower literal therefore deletes the v6 half
+  of the overlay silently, which costs us more than upstream: our ULA is the primary
+  family.
+- **Closing a router the engine never brought up panics.** `linuxRouter.Close`
+  dereferences `r.nfr`, which only `router.Up()` populates. `Config.Router` is not in
+  the engine's `closeOnErrorPool`, so a failed `NewUserspaceEngine` leaves the router
+  with us — and `magicsock.NewConn` and `wgdev.Up` both fail before `router.Up` runs.
+  Do not close it on that path. Nothing leaks: `bus.Close` releases its event client,
+  and any `ip` rules survive only until the next `router.Up`, which deletes before it
+  adds.
+- **Device names go straight to `TUNSETIFF`.** Over `IFNAMSIZ-1` (15 bytes) that is a
+  bare `EINVAL`; containing `%` it is a kernel *template*, so `juist%d` creates
+  `juist0` and the device is not the one the caller named. Validate before creating.
+- **Peer routes do not land in the main routing table.** `linuxRouter.routeTable()`
+  returns table 52 whenever policy routing is available, falling back to main only
+  when it is not. `ip route show dev juist0` therefore shows nothing; use
+  `ip route show table all dev juist0`.
+- **IPv6 is programmed conditionally and silently.** `addRoute` and `addAddress` both
+  open with `if !r.getV6Available() && cidr.Addr().Is6() { return nil }`, so on a host
+  with IPv6 off the v6 half of the config is skipped with no error. Assertions must
+  allow for it. `getV6Available` is not only a kernel check: it asks the router's
+  *netfilter* runner, which we otherwise never use, since `NetfilterOff` means we
+  install no rules. The runner reports IPv6 only where `disable_ipv6` and
+  `disable_policy` are 0 and IPv6 policy routing works — and, in its iptables mode,
+  only where the `ip6tables` binary exists. A host missing `ip6tables` therefore
+  loses the overlay's *primary* family with nothing but a log line. Packaging (M5)
+  must declare that dependency, and an operator report of "no v6 on the overlay"
+  should start here.
+- **`router.CleanUp` is not worth calling here**, though `tailscaled` calls it at
+  startup. It clears netfilter chains and orphaned addresses; we run `NetfilterOff`
+  so there are no chains, and a wireguard-go TUN is not persistent, so a crashed
+  daemon's device and everything on it is already gone. The `ip` rules that do
+  outlive a crash are reconciled by `addIPRules`, which begins with `delIPRules`.
+- **A real device joins LAN discovery unless told not to.** A Linux TUN carries
+  `IFF_MULTICAST`, so anything enumerating multicast-capable interfaces picks it up
+  and starts sending into the tunnel. Discovery is an underlay function; the overlay
+  is not one of the networks it should look on.
 
 ## Constraints on the test harness
 
@@ -149,9 +198,9 @@ Each of these fails silently or confusingly; all three cost time in the spike.
   ~100-line fake `tun.Device` that echoes ICMP for both families
   (`conn/echotun_test.go`) asserts v4 *and* v6 reachability today, and exercises the
   full TUN round trip (decrypt → filter → Wrapper.Write → Wrapper.Read → encrypt)
-  rather than RespondToPing's engine-internal shortcut. Real TUN devices arrive
-  with M3a, and do not replace this: a fake device keeps the two-node assertions
-  runnable in one namespace by an unprivileged CI job.
+  rather than RespondToPing's engine-internal shortcut. The real devices M3a adds
+  do not replace it: a fake device keeps the two-node assertions runnable in one
+  namespace by an unprivileged CI job, where the netns harness needs root.
 - **The M0 egress criterion is met without privileges** by scanning this process's own
   sockets (`/proc/self/fd` → `/proc/net/{tcp,tcp6,udp,udp6}`) and asserting no remote
   address outside the host, plus `magicsock.Conn.DERPs() == 0`. The detector is
@@ -160,94 +209,45 @@ Each of these fails silently or confusingly; all three cost time in the spike.
   before looking, so the lazy netcheck path runs inside the observation window
   rather than on its own timer. One blind spot is structural: STUN would leave via
   magicsock's main *unconnected* UDP socket, which `/proc/net` shows with a zero
-  remote address, so STUN egress is covered only by the `DERPs()`/netcheck side
-  until a packet capture exists. That capture is still the stronger form of the
-  whole assertion and lands with M3a's netns harness, which is the first point
-  there is an interface to capture on.
+  remote address, so STUN egress is covered only by the `DERPs()`/netcheck side.
+  The netns harness closes that from outside the process: an `AF_PACKET` tap on the
+  node's only link fails the test on any destination outside the lab's LAN. Two
+  details decide whether that tap can see anything at all, and both look like
+  passes when they are wrong. The namespace's default route must go through a
+  **next hop that already resolves** — the lab routes via a `.254` nobody holds and
+  gives each namespace a permanent neighbour entry for it — because an on-link
+  default route makes the kernel ARP for the third party itself and the IP packet
+  is never put on the wire. (An address on the bridge would do the same job and
+  give the *host* a second route for the lab's prefix, which is a poor trade for a
+  test.) And the tap counts **ARP and neighbour-solicitation targets** as
+  destinations, not only IP headers, so a resolution attempt that goes unanswered
+  still fails the test rather than passing as silence. The lab's underlay
+  is IPv4 only, so v6 egress is not so much asserted as unreachable: a node there
+  has no v6 route to a third party to take.
+- **A node needs its own namespace and its own process.** A network namespace is a
+  property of a *thread*, so a single Go process cannot hold two of them without
+  pinning every goroutine that might touch an engine. The harness re-executes the
+  test binary under `ip netns exec`, which sets the namespace before `exec`, and
+  drives each child over a one-line stdin/stdout protocol. That is also why the
+  privileged gate must stay a `go test` invocation: the child is the test binary.
+- **Traffic assertions use the host's own tools.** `ping` inside the namespace, and
+  an ordinary Go TCP client that knows nothing about juist, rather than
+  `Manager.Ping` — the criterion is that the *host stack* reaches the overlay, and
+  the engine's internal ICMP answers without a device being involved at all.
 
-## Open item for M2 — *settled*
+## Endpoints without a control plane
 
 **magicsock will not report its own local endpoints without a DERP map.**
-`Conn.setEndpoints` returns early when there is no STUN result *and* no DERP map
-("ignoring pre-DERP map, STUN-less endpoint update"). Our design gossips signed
-endpoint records, so something must be able to read local endpoints — and M2 is
-LAN-only with no relays, so no DERP map exists yet. Either read interface state
-directly for the LAN case, or install a DERP map built from member relay roles
-as soon as there is one.
+`Conn.setEndpoints` returns early with neither a STUN result nor a DERP map. Since
+the design gossips signed endpoint records, `daemon.underlayEndpoints` reads the
+host's interface addresses directly instead — the option that needs no third party,
+which is what "LAN-only operation with zero internet" requires. Reflexive addresses
+from disco and member relays arrive at M3b and are *added* to that set, never
+substituted for it.
 
-*Decided in M2:* read the host's interface addresses directly
-(`daemon.underlayEndpoints`), because that is the option that needs no third
-party at all, which is what M2's "LAN-only operation with zero internet works"
-asks for. Reflexive addresses from disco and member relays arrive at M3b and are
-added to that set rather than replacing it. See
-[09-mesh-layer-notes.md](09-mesh-layer-notes.md).
-
-M2 also found a second thing the reuse decision costs, in the same area:
-without a DERP map there is no fallback path, so the *first* WireGuard handshake
-to a new peer is dropped while disco is still establishing one, and WireGuard's
-own five-second retry then dominates — ten seconds to first packet on a LAN.
-`conn.warmPaths` starts discovery when a peer appears, which brings it to about
-seven milliseconds.
-
-## What M3a has to wire
-
-The OS plumbing slice ([05-roadmap.md](05-roadmap.md), M3a). M2 left the data plane
-deliberately unplumbed — `conn` passes neither a TUN device nor a router, so the
-engine substitutes `tstun.NewFake()` and `router.NewFake()` — and these are the
-pieces that removes. Two of them the code is already shaped for; one is missing
-outright, and one is not a code change at all.
-
-- **The missing field is `Router`, not `Tun`.** `conn.Options` already carries a
-  `Tun tun.Device` for the test harness, and `wgengine.Config` takes
-  `Router router.Router` beside it, falling back to `router.NewFake(logf)` when nil.
-  Construction order follows `ipnlocal`'s, because `router.New` wants the device and
-  the engine wants the router: `netmon.New`, then
-  `tun.CreateTUN(name, int(tstun.DefaultTUNMTU()))`, then
-  `router.New(logf, tundev, netMon, health, bus)`, then the engine with
-  `Config{Tun, Router, NetMon, HealthTracker}`. Share one `netmon.Monitor` rather
-  than letting the engine create its own — `Config.NetMon` exists for exactly that —
-  and take the MTU from `tstun.DefaultTUNMTU()` rather than picking a number.
-
-- **`reconfig` already runs at the right moments, and is missing `Routes`.**
-  `tsManager.reconfig` is called from `New` and from *every* `SetPeers`, and it
-  already passes `&router.Config{LocalAddrs: m.self.Addrs}` — a line that has been
-  written and dead since M0, because the fake router discards it. A real router makes
-  it live and immediately insufficient: `LocalAddrs` puts this node's overlay
-  addresses on the interface, but with no `Routes` the host has no reason to send a
-  *peer's* address into the tunnel. The route set is the peers' prefixes, read from
-  the same `m.state.Load()` snapshot `filter()` already walks, so it costs a loop in
-  a function that has the data and runs at the right time. Worth stating because the
-  failure mode is quiet and asymmetric: the interface comes up, pings to your own
-  overlay address work, and only peer traffic goes nowhere.
-
-- **The DNS configurator stays fake, on purpose.** Naming is deferred post-v1, so
-  `Config.DNS` stays nil and `reconfig` keeps passing an empty `dns.Config{}`. This
-  is called out because "plumb the overlay into the OS" reads like it includes DNS,
-  and wiring `resolved` here would give the daemon a host-wide side effect the
-  project has not decided to have.
-
-- **This is where the daemon stops being unprivileged, and that is a property being
-  spent.** Everything through M2 runs as an ordinary user; the fake device needs
-  nothing, which is why the M0 egress criterion could be met by reading
-  `/proc/self/fd`. Creating a TUN needs access to `/dev/net/tun`, and creating it and
-  programming addresses and routes both need `CAP_NET_ADMIN`. What widens is the
-  daemon's reach over the *host*, not over the *network*: a compromised `juistd`
-  still holds no admin keys and still cannot authorize a membership change
-  ([04-architecture.md](04-architecture.md), key custody). The smallest form is an
-  ambient capability on a dedicated user, not root, and
-  [02-threat-model.md](02-threat-model.md) should gain a line naming which of the two
-  it assumes.
-
-- **Two real devices do not fit in one namespace.** M2's manual test runs two daemons
-  side by side on one host, which works precisely because neither owns an interface.
-  With real devices they collide — both want a device, both want the same overlay
-  routes — and that, not NAT simulation, is why the netns harness belongs to M3a. It
-  starts as the minimum for two nodes on one machine; M3b extends the same harness
-  into the NAT matrix. Whether it can run unprivileged in CI via user namespaces
-  (`unshare -Ur`, which grants `CAP_NET_ADMIN` inside the new namespace) is worth
-  establishing early: if yes the M3a exit criterion is an ordinary CI gate, if no it
-  is a manual gate like `fuzz-long`, and that answer shapes how the tests are
-  written.
+A second cost of the same gap: with no fallback path the first WireGuard handshake
+to a new peer is dropped while disco is still working, and WireGuard's five-second
+retry then dominates. `conn.warmPaths` starts discovery when a peer appears.
 
 ## What tailcat confirms — and what M3b takes from it
 
@@ -296,7 +296,12 @@ mc.SendDERPPacketTo(p.Key(), regionID, pkt)
 
 The receiving magicsock disco-pings the advertised endpoints, which both teaches
 it a direct path to the sender and teaches the sender the receiver's address from
-the pings coming back. The prerequisite is knowing one's *own* disco private key,
+the pings coming back. **M3b did not need to hand-seal anything** — with a DERP
+map installed magicsock sends `CallMeMaybe` itself, but only for a peer it
+already holds one candidate address for, which is what the signed announcement
+supplies. See [10-connectivity-notes.md](10-connectivity-notes.md); the
+technique stays the right shape for a sideband over a relay, and nothing wants
+one yet. The prerequisite is knowing one's *own* disco private key,
 which magicsock otherwise generates internally and never reveals; that is what
 `wgengine.Config.ForceDiscoKey` is for, and `conn/tsmanager.go` already sets it
 from `Self.DiscoKey`. The precondition is in place.

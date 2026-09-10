@@ -13,16 +13,16 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// fakeLog is a membership log that holds no records.
-//
-// The four-frame exchange, the network check and announcement propagation are
-// all independent of what the log contains, so they are asserted here where a
-// test needs no genesis ceremony. Record transfer over a real chain is
-// asserted end to end in daemon's mesh tests.
+// fakeLog is a membership log that holds no records: the frame exchange, the
+// network check and announcement propagation do not depend on what the log
+// contains. Record transfer over a real chain is asserted in daemon's tests.
 type fakeLog struct {
 	network types.Hash
 	head    types.Hash
 	epoch   uint64
+
+	// missing overrides what this log offers a peer. Nil offers nothing.
+	missing func([]types.Hash, types.Hash) ([]types.AUM, error)
 
 	mu       sync.Mutex
 	informed [][]types.AUM
@@ -32,7 +32,12 @@ func (l *fakeLog) View() (View, error) {
 	return View{Network: l.network, Head: l.head, Epoch: l.epoch, Anchor: types.Hash{0xa}}, nil
 }
 
-func (l *fakeLog) Missing([]types.Hash, types.Hash) ([]types.AUM, error) { return nil, nil }
+func (l *fakeLog) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM, error) {
+	if l.missing != nil {
+		return l.missing(have, anchor)
+	}
+	return nil, nil
+}
 
 func (l *fakeLog) Inform(records []types.AUM) error {
 	l.mu.Lock()
@@ -74,6 +79,18 @@ func loopbackFor(announced netip.AddrPort) netip.AddrPort {
 
 func newTestNode(t *testing.T, network types.Hash, epoch uint64, s secrets.Secret) *testNode {
 	t.Helper()
+	// Short, so a test that waits on an unreachable peer does not wait out the
+	// production default.
+	return newTestNodeTimeout(t, network, epoch, s, 2*time.Second)
+}
+
+// newTestNodeTimeout is [newTestNode] with the session timeout stated. It is a
+// construction parameter rather than something a test sets afterwards: the
+// accept loop is already running by the time this returns, and its sessions
+// read the field.
+func newTestNodeTimeout(t *testing.T, network types.Hash, epoch uint64, s secrets.Secret,
+	timeout time.Duration) *testNode {
+	t.Helper()
 	priv, err := types.GenerateIdentity()
 	if err != nil {
 		t.Fatalf("generating identity: %v", err)
@@ -100,19 +117,14 @@ func newTestNode(t *testing.T, network types.Hash, epoch uint64, s secrets.Secre
 		Endpoints: tn.cache,
 		Announce:  tn.announce,
 		Listener:  ln,
-		// Announcements carry a routable-looking address, because loopback is
-		// refused by the schema: an announcement points the whole member set
-		// at an address, so "connect to your own loopback" is not something a
-		// member may say. The listener really is on loopback, so the dialer
-		// maps the announced address back to it — the same substitution the
-		// discovery tests make for the multicast group.
+		// The schema refuses loopback, since an announcement points the whole
+		// member set at an address, so these carry a routable-looking one and
+		// the dialer maps it back to the loopback listener.
 		Dial: func(ctx context.Context, addr netip.AddrPort) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "tcp", loopbackFor(addr).String())
 		},
-		// Short, so a test that waits on an unreachable peer does not wait
-		// out the production default.
-		Timeout: 2 * time.Second,
+		Timeout: timeout,
 		Logf:    t.Logf,
 	})
 	if err != nil {
@@ -193,10 +205,9 @@ func TestSessionRefusesAnotherNetwork(t *testing.T) {
 	}
 }
 
-// TestSessionRefusesAnotherGroupSecret is the membership check the sync layer
-// actually performs: a device without the current group secret cannot produce
-// a frame any member will open. It is what a revoked device looks like once
-// the removal's epoch bump has converged.
+// TestSessionRefusesAnotherGroupSecret is the sync layer's membership check: a
+// device without the current group secret cannot produce a frame any member
+// opens, which is what a revoked device looks like after the epoch bump.
 func TestSessionRefusesAnotherGroupSecret(t *testing.T) {
 	network := types.Hash{1}
 	s1, err := secrets.NewSecret()
@@ -218,11 +229,9 @@ func TestSessionRefusesAnotherGroupSecret(t *testing.T) {
 	}
 }
 
-// TestSessionSealsUnderTheLaggingPeersEpoch is the property that makes
-// push-on-author work across an epoch bump: the node that authored the change
-// is one epoch ahead of everyone, and if it could only speak its own epoch,
-// the push carrying a revocation would be unreadable to exactly the members
-// that have not applied it yet.
+// TestSessionSealsUnderTheLaggingPeersEpoch is what makes push-on-author work
+// across a bump: the author is an epoch ahead, so speaking only its own would
+// make the push carrying a revocation unreadable to everyone who needs it.
 func TestSessionSealsUnderTheLaggingPeersEpoch(t *testing.T) {
 	network := types.Hash{1}
 	old, err := secrets.NewSecret()
@@ -253,10 +262,9 @@ func TestSessionSealsUnderTheLaggingPeersEpoch(t *testing.T) {
 	}
 }
 
-// TestFrameEpochCannotChangeMidSession stops a peer from opening at an epoch
-// this node holds and then switching to another one it also holds — which
-// would make "what epoch is this session" unanswerable, and with it the reply
-// sealing rule.
+// TestFrameEpochCannotChangeMidSession stops a peer from opening at one epoch
+// this node holds and switching to another, which would leave "what epoch is
+// this session" unanswerable.
 func TestFrameEpochCannotChangeMidSession(t *testing.T) {
 	network := types.Hash{1}
 	s, err := secrets.NewSecret()
@@ -348,11 +356,9 @@ func mintedSelfFrame(t *testing.T, network types.Hash, beaconEpoch uint64, seq u
 	return &frame{Kind: kindHello, Network: network, Epoch: beaconEpoch, Self: &e}, priv.Public()
 }
 
-// TestRememberedEpochsAreBounded: an endpoint announcement is signed only by
-// the key it names, and identity keys cost nothing to mint, so anyone who can
-// open a frame — a revoked device still inside the keyring window, say — could
-// otherwise add one map entry per session for as long as it liked. A flood of
-// minted, non-member identities cannot grow the map past its bound.
+// TestRememberedEpochsAreBounded: identity keys cost nothing to mint, so
+// anyone who can open a frame could otherwise add a map entry per session. A
+// flood of minted non-member identities cannot grow the map past its bound.
 func TestRememberedEpochsAreBounded(t *testing.T) {
 	network := types.Hash{1}
 	s, err := secrets.NewSecret()
@@ -374,9 +380,8 @@ func TestRememberedEpochsAreBounded(t *testing.T) {
 }
 
 // TestNotePeerIgnoresTheUnauthenticatedBeacon: the remembered epoch is the
-// authenticated seal epoch of the session, never the frame's plaintext Epoch
-// beacon. Trusting the beacon let one crafted hello pin the value at 2^64-1 and
-// defeat the epoch-skew push for a targeted peer.
+// session's authenticated seal epoch, never the plaintext beacon, which one
+// crafted hello could pin at 2^64-1.
 func TestNotePeerIgnoresTheUnauthenticatedBeacon(t *testing.T) {
 	network := types.Hash{1}
 	s, err := secrets.NewSecret()
@@ -398,10 +403,9 @@ func TestNotePeerIgnoresTheUnauthenticatedBeacon(t *testing.T) {
 	}
 }
 
-// TestAMemberDisplacesANonMemberEpoch: once the map is full of minted
-// non-members, a genuine member must still be able to take a slot — otherwise a
-// one-time flood locks every real peer out of the push accommodation for the
-// process's life.
+// TestAMemberDisplacesANonMemberEpoch: with the map full of minted
+// non-members, a genuine member must still take a slot, or one flood locks
+// every real peer out for the process's life.
 func TestAMemberDisplacesANonMemberEpoch(t *testing.T) {
 	network := types.Hash{1}
 	s, err := secrets.NewSecret()
@@ -434,10 +438,9 @@ func TestAMemberDisplacesANonMemberEpoch(t *testing.T) {
 	}
 }
 
-// TestNotePeerRefusesFormerMembers: a revoked or expired device keeps sending
-// hellos for the keyring window, but there is nothing to gain from remembering
-// its epoch — this node no longer pushes to it — and doing so only gives it a
-// slot a real peer could use.
+// TestNotePeerRefusesFormerMembers: a revoked device keeps sending hellos for
+// the keyring window, and remembering its epoch only costs a slot a real peer
+// could use.
 func TestNotePeerRefusesFormerMembers(t *testing.T) {
 	network := types.Hash{1}
 	s, err := secrets.NewSecret()
@@ -455,5 +458,64 @@ func TestNotePeerRefusesFormerMembers(t *testing.T) {
 	n.node.mu.Unlock()
 	if held {
 		t.Error("remembered a former member's epoch")
+	}
+}
+
+// TestSilentConnectionsCannotHoldEveryInboundSlot: a peer that opens
+// connections and says nothing must not be able to shut inbound sync down for
+// the mesh. The budget is per source address and covers only connections that
+// have not authenticated, so members sharing one address — behind a NAT, or on
+// one host — are not the ones it costs.
+func TestSilentConnectionsCannotHoldEveryInboundSlot(t *testing.T) {
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A long timeout, so the hello deadline cannot be what ends these
+	// connections: the cap is what this test is about, not the timeout.
+	a := newTestNodeTimeout(t, types.Hash{1}, 1, s, time.Minute)
+
+	addr := loopbackFor(a.real).String()
+	var held []net.Conn
+	t.Cleanup(func() {
+		for _, c := range held {
+			c.Close()
+		}
+	})
+	for range maxInboundSessions + 4 {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatalf("dialing: %v", err)
+		}
+		held = append(held, c)
+	}
+
+	// Settle: the accept loop runs on its own goroutine, so wait for it to
+	// have taken the connections before reading the count.
+	silent, peak := 0, 0
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		a.node.mu.Lock()
+		silent = len(a.node.unauth[netip.MustParseAddr("127.0.0.1")])
+		a.node.mu.Unlock()
+		peak = max(peak, silent)
+		if peak >= maxUnauthPerSource && silent <= maxUnauthPerSource {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if silent > maxUnauthPerSource {
+		t.Fatalf("one address holds %d unauthenticated connections, over the %d cap",
+			silent, maxUnauthPerSource)
+	}
+
+	// And a real peer still gets through from the same address while they are
+	// held: authenticating is what releases the budget, so members sharing an
+	// address do not queue behind each other.
+	b := newTestNode(t, types.Hash{1}, 1, s)
+	t.Cleanup(func() { b.node.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := b.node.SyncWith(ctx, a.real, a.id); err != nil {
+		t.Fatalf("a session was refused while silent connections were held: %v", err)
 	}
 }

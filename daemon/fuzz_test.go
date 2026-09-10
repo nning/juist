@@ -7,16 +7,10 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// FuzzDecodeIPCRequest is the IPC request-decoder target
-// docs/06-verification.md schedules for M2.
-//
-// It matters more than its size suggests: the control socket is the only
-// parser in this daemon reachable from a local process rather than from the
-// network, and docs/04-architecture.md opens on the two CVEs in this space
-// that were both reached exactly that way. The assertion is injectivity, the
-// same property the record and frame decoders promise — anything accepted
-// re-encodes to the bytes it came from, so there is no second spelling of a
-// request and nothing can hide in the gap between the two.
+// FuzzDecodeIPCRequest targets the control socket, the one parser in this
+// daemon reachable from a local process rather than the network. The assertion
+// is injectivity, as for the record and frame decoders: anything accepted
+// re-encodes to the bytes it came from.
 func FuzzDecodeIPCRequest(f *testing.F) {
 	for _, seed := range []Request{
 		{Command: CmdStatus},

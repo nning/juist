@@ -157,21 +157,23 @@ a multi-homed host announces on every LAN it is attached to rather than on
 whichever one the route table prefers. `TestRealMulticastSocket` is the
 regression guard, and skips where multicast is genuinely unavailable.
 
-## The open item 07 left for M2, resolved
+**The per-node rate limit is not an aggregate one.** Each member queries as well
+as announces every interval, and a query is answered by every member holding
+that name, so traffic on one segment is O(n²) datagrams per interval — bounded
+per sender, unbounded in total. At 25–100 devices, and rarely all on one
+segment, that is noise. It stops being noise well before `MaxNodes`, and the fix
+is a suppression rule rather than a schema change (RFC 6762 §7.1: withhold an
+answer already seen from another responder in the same interval), so it can wait
+for a deployment that needs it — unlike the record-size question in
+[08-trust-layer-notes.md](08-trust-layer-notes.md), which cannot.
 
-[07-embedding-notes.md](07-embedding-notes.md) ends on: *magicsock will not
-report its own local endpoints without a DERP map* — `Conn.setEndpoints`
-returns early with neither a STUN result nor a DERP map — and offers two ways
-out.
+## Endpoints come from an interface scan
 
-**Taken: read the host's interface addresses directly.** It is the one that
-needs no third party at all, which is what exit criterion 3 ("LAN-only
-operation with zero internet works") asks for. `daemon.underlayEndpoints`
-enumerates up, non-loopback interfaces and filters out link-local addresses and
-the overlay's own ranges — announcing an overlay address as an underlay
-endpoint would ask peers to reach the tunnel through the tunnel. Reflexive
-addresses discovered through disco and member relays arrive at M3b and are
-*added* to this set rather than replacing it.
+magicsock reports no endpoints of its own without a STUN result or a DERP map,
+and an M2 network has neither. Of the two options 07 offered, the interface scan
+is the one needing no third party, which is what "LAN-only with zero internet"
+requires. Reflexive addresses from disco and member relays are *added* to that
+set at M3b, never substituted for it.
 
 ## What that interface scan actually announces on a real host
 
@@ -277,247 +279,18 @@ daemon is running, `juist apply` uses `inform` rather than writing under it: two
 writers would leave the on-disk log and the daemon's in-memory authority
 disagreeing about the head until a restart.
 
-## What the M2 review rounds changed
-
-**Round 5** — two ways a single actor holding one epoch secret could hurt
-availability past what the design admits, and the split-brain the local-API
-hardening did not actually close:
-
-- **A second daemon on the same home silently stole the control socket.** The
-  IPC listener unlinked any socket at its path before binding, on the reasoning
-  that a live daemon would have made the bind fail. For a unix socket that is
-  backwards: unlinking the path a running daemon listens on succeeds — it keeps
-  its file descriptor and merely becomes unreachable by name — and the bind on
-  the freed path then also succeeds. So a second `juistd` on one home took the
-  socket, and the CLI talked to it while the original kept a revoked peer's
-  tunnel up: two log authorities on one store, the exact split brain `apply`'s
-  direct-write refusal exists to prevent, defeated a layer down. The daemon now
-  holds an exclusive `flock` on a lock file in the home for its lifetime and
-  refuses to start if another holds it; the kernel drops the lock if the process
-  dies, so a crash leaves nothing stale.
-- **A remembered peer epoch was taken from an unauthenticated field, and its map
-  could not be reclaimed.** `notePeer` stored the frame's plaintext `Epoch`
-  beacon — attacker-chosen and decoupled from the signed `Self` — so one crafted
-  hello could pin a member's remembered epoch at `2^64-1`, and round 4's fill
-  bound, having no eviction, let a flood of minted identities lock every real
-  peer out of the map. Either one forces pushes to that peer under this node's
-  own epoch, so the push carrying a revocation is unreadable to a member an
-  epoch behind and convergence drops to the two-minute anti-entropy backstop —
-  against a five-second budget. The value stored is now the session's
-  *authenticated* seal epoch (an epoch the peer demonstrably held), and the map
-  is gated by membership exactly as the announcement cache is: a member always
-  displaces a minted non-member, a former member is refused.
-- **A LAN announcement for a non-member drove mesh-wide churn and unbounded log
-  growth.** Every accepted announcement woke a reconcile, an eight-way gossip
-  round, and a log line — and the cache accepts any rising `Seq`, which is a
-  *signed* field, so an epoch-secret holder minting identities and signing a new
-  `Seq` for each could sustain that across the whole mesh from one host. A
-  non-member's announcement is inert at reconcile, so it is now cached (the
-  early-join contract still needs that) but no longer wakes the loop or logs;
-  the record that admits a member is what wakes it. This keeps the keyring
-  window's cost to "metadata and nothing else", as claimed above.
-- Smaller: the endpoint validator was a denylist that admitted the limited
-  broadcast address `255.255.255.255`, which an announcement could point the
-  member set at as an amplifier — a positive `IsGlobalUnicast` check closes it.
-  The disco-collision resolver read the endpoint cache twice, so an announcement
-  arriving between the two reads could still drive the whole-set rejection the
-  round-4 fix was removing; it now decides over one snapshot. `WriteSecret` wrote
-  key material in place under `O_EXCL`, so an interrupted write left a truncated
-  file that then blocked every retry; it writes a temp and renames, like the
-  store. And a fork alarm left `Members`/`Conflicted` and the rest stale beside
-  the alarm, reading as though part of the mesh survived it; all derived fields
-  are cleared now.
-
-**Round 4** — one regression the previous round introduced, and the fields an
-attacker chooses:
-
-- **A displaced push was dropped.** Round 3 moved anti-entropy rounds off the
-  loop so a slow one could not delay a revocation, and made them single-flight.
-  What it did not do was remember a round it turned away — so a revocation
-  arriving while a round ran was reconciled locally and never relayed, which is
-  precisely the epidemic property the move was protecting. A displaced round is
-  deferred now and marks the daemon dirty when the running one ends.
-- **The disco key is the one peer-chosen field in a peer entry**, and the
-  connectivity layer keys NAT-traversal state by it, so two peers sharing one
-  make each other's paths ambiguous — a member could copy another member's key
-  and unplug it. It cannot read anything that way, since traffic stays sealed
-  to the logged node key. Duplicates are refused now, and, just as important,
-  refused *in the reconciler* rather than only in `SetPeers`: the data plane
-  rejects a whole set containing a duplicate, so passing the announcement
-  through would have turned one signed record into a kill switch for every
-  member's tunnels. The colliders lose their entries, the mesh stays up, and
-  `Conflicted` says so.
-- **Announcements could name addresses their author does not own.** An
-  announcement points the whole member set at an address — UDP from the data
-  plane, TCP from the sync layer — so loopback aimed peers at services on their
-  own hosts, and any address at all made the member set into a connection
-  source pointed wherever the announcer liked. The accepted set is now exactly
-  what a correct node announces about itself. A peer also gets one session's
-  worth of time across all its addresses, so announcing sixteen unreachable
-  ones no longer costs every member sixteen full timeouts a round.
-- **A revoked device's announcements re-entered through gossip.** Round 3 made
-  members refuse them on the LAN path only, while a peer relaying its cache in
-  a session went straight to `Cache.Add`. One rule in one place now — a rule
-  enforced on one of two entries is not enforced.
-- **Frame and IPC bodies were allocated from the announced size**, before
-  anything authenticated it, so sixteen sessions announcing the maximum and
-  sending nothing held hundreds of megabytes. Buffers grow as the bytes arrive.
-- **`peerEpoch` grew without bound.** An announcement is signed only by the key
-  it names and identity keys cost nothing to mint, so anyone able to open a
-  frame could add an entry per session indefinitely.
-- Smaller: a malformed announcement at our own name wrote a log line, which any
-  bystander could flood, and the rest of that parser drops silently by design;
-  `admins/` was not checked for a shared-writable mode, though it is where the
-  signing keys are and losing them below quorum is unrecoverable by design; and
-  a failed reconfiguration skipped path warm-up permanently, since the next
-  reconcile sees nothing new.
-
-**Round 3** — what the first two rounds' fixes left one layer short of, plus
-the first findings about what a hostile *LAN* can do rather than a hostile
-peer:
-
-- **Discovery answered every question it was asked.** The blinded name is
-  public on the wire — every announcement carries it — so anyone on the LAN can
-  replay a query at it without holding any secret, and DNS name compression
-  fits a couple of hundred copies into one datagram. Each copy cost every
-  member a multicast answer: roughly a hundredfold amplification aimed at the
-  whole segment for the price of one small packet. A member now transmits under
-  a name at most once a second (RFC 6762 §6's floor, which turns out to carry
-  security weight and not only etiquette), and names are derived once per epoch
-  rather than once per received datagram.
-- **The multicast interface set was frozen at startup.** Interfaces that
-  appeared later — Wi-Fi associating, a cable plugged in — never joined the
-  group and never carried a beacon, while the daemon's own announcements
-  advertised their addresses. The join is refreshed on a slow cadence now. The
-  per-interface send loop was also unsynchronized, and the multicast egress
-  interface is per-socket state, so an answer and an announcement racing each
-  other left on the wrong interface.
-- **A removed device stayed loud on the LAN.** Round 2 took its tunnels down
-  and stopped it gossiping, but its beacon kept announcing every two seconds
-  under a name its old epoch secret still computes. Members oscillated on it —
-  cache, log, reconcile, forget, repeat — a reconcile and a push round each,
-  per member, per interval. A device that knows it was removed now makes no
-  announcement at all, and members refuse announcements from a subject they
-  have seen the log drop.
-- **The announcement cache could be crowded out.** An announcement needs only a
-  signature by the key it names, and identity keys cost nothing to mint, so any
-  holder of an epoch secret could fill the cache with records for invented
-  nodes and leave no room for a genuinely joining member. Membership now
-  decides eviction and relay order — never entry, so early announcements still
-  work.
-- **The reconcile loop blocked on the network.** `pushAll` waited for every
-  session, each address of an unreachable peer costing a full timeout, and
-  while it waited the loop did not service `dirty` — so a revocation arriving
-  mid-round kept its WireGuard entry until the round finished, well past the
-  five-second budget. Rounds run beside the loop now. `Reconcile` also gained a
-  mutex: `Inform` runs one on the IPC goroutine, and two interleaved reconciles
-  could install their peer sets in the opposite order to their state reads.
-- **A restart threw the keyring away.** `adoptEpoch` opens only the current
-  epoch, so a restarted daemon held exactly one secret — unable to open a
-  behind peer's frames or seal one it could read, which in a two-node network
-  is a partition nothing heals. Past epochs are recovered from log history at
-  startup.
-- **Gossip could sync with itself.** Announced addresses are not unique to
-  their announcer: a bridge address like `172.17.0.1` is identical on every
-  host that has one, so dialling a peer there reaches the local listener. The
-  session "succeeded", and since a peer's address list stops at the first
-  address that completes, the real peer was never synced with — permanently.
-- **`juist sign` destroyed records on unenrolled devices.** A device with node
-  keys and no network gave every key the benefit of the doubt, so an operator
-  signing their own enrollment record added a signature the network does not
-  trust for it — which does not merely fail to count but invalidates the record
-  outright, ruining the admins' finished ceremony. Only admin keys get that
-  benefit now; a node key's one role is decided by the record alone.
-- **A rotation applied elsewhere never promoted.** Promotion lived only in
-  `juist apply`, but the tool tells whoever adds the last signature to apply it
-  — normally an admin. The record then reached the device over gossip with no
-  CLI involved, leaving it holding old keys while the log named new ones, and
-  the daemon's "restart juistd" advice could not fix what nothing promoted.
-  Opening the state directory promotes, which makes that advice true.
-- **Opening a store deleted other processes' writes in flight.** Every command
-  opens the store, including read-only ones, and the open swept staged files
-  unconditionally — so `juist log` could delete a file a running daemon was
-  between `writeSync` and `rename` on, and because `Inform` is atomic, that
-  rejected the whole batch. Opening tolerates them; the writer sweeps.
-- **`apply` treated a silent daemon as an absent one.** Any probe failure meant
-  "no daemon", so a daemon whose IPC slots were all held sent `apply` down the
-  direct-write branch — exactly the split brain the branch exists to prevent.
-  Only "no socket" and "nobody listening" mean absence now.
-- Key files and the staged-key promotion did not fsync their directory, so a
-  power cut could leave a durable log naming keys that rolled back.
-
-**Round 2**, mostly conditions one layer knew about and the next did not:
-
-- **Sync died across compaction.** `Missing` offered everything from its own
-  roots, so after any compaction asymmetry the batch always contained a record
-  the peer's log refuses, and Inform's atomicity turned that into "these two
-  nodes never exchange anything again". Hellos now carry the sender's anchor
-  and the walk starts there — which is also cheaper, since a session now reads
-  only the records it sends instead of the whole store.
-- **A device's own removal left its data plane up.** The reconciler skipped
-  self by identity, so a removed self kept tunnels to everyone and kept
-  dialling them every round. Peers refuse it either way — that was never the
-  security boundary — but a device that knows it was removed and keeps probing
-  its former peers is indistinguishable from an attack. It now tears down,
-  goes quiet, and says so in its status.
-- **A key rotation applied while the daemon ran failed silently.** The log
-  names the new keys, peers move immediately, and this process still holds the
-  old ones — every symptom looks like a network problem. The daemon now
-  compares the log's keys for itself against its own on every reconcile and
-  reports `StaleKeys` with a restart instruction.
-- `takeEndpoints`' comment claimed a bad announcement ends the session; the
-  code drops it and continues, which is right — relays forward from caches,
-  and integrity never rested on the transport. The comment now matches.
-- `conn.NewDiscoKey`'s comment promised a `TestDiscoKeyAgrees` that did not
-  exist. It does now, pinning that the announced public half equals the one
-  the connectivity stack derives.
-
-**Round 1** — same shape, a rule enforced in one layer and not the ones next
-to it:
-
-Five findings, all of them the same shape: a rule enforced in one layer and
-not in the ones next to it.
-
-- **An announcement was dropped before its record arrived.** `gossip.Cache`
-  documents that early announcements must be kept — discovery routinely finds
-  a joining node before gossip delivers the record admitting it — and the
-  reconciler dropped every announcement whose subject the log did not carry,
-  which is the same thing. Now it drops only subjects it has *seen* the log
-  carry and no longer does, which is the revoked case the hygiene was for.
-- **An expired membership lost the data plane and kept the sync layer.** The
-  expiry backstop denied a peer entry but left the device in the gossip set
-  and its address in the cache, so it was still being handed the member set
-  and every member's address. Expiry now means the same thing everywhere.
-- **A key rotation applied through a running daemon never promoted.** `juist
-  apply` hands records to the daemon over IPC, and the staged-key promotion
-  went with the branch that writes the log itself — leaving a device holding
-  old keys while the log named new ones, unable to handshake and unable to
-  open the group secret.
-- **Push was a broadcast.** One change reached every member directly, so the
-  network paid O(n²) sessions per change. Now it is epidemic with a fan-out of
-  eight, which is above the milestone's scale and so changes nothing measured
-  here, and turns into O(log n) rounds at the sizes
-  [01-requirements.md](01-requirements.md) targets. `Node.Sync` gained a
-  concurrency bound for the same reason.
-- **Discovery queried unconditionally.** Every query is answered by every
-  member, so asking on a timer is quadratic too. A node now asks only while it
-  is missing someone; announcements, which are linear, keep a settled network
-  in step.
-
 ## What M2 did not build
 
-- **Gossip inside the tunnel.** M3a at the earliest: it needs a device that
-  carries traffic, which is exactly what M3a adds.
-- **Relays, DHT cold start, real NAT traversal.** M3b, as planned.
-- **Endpoint-record persistence.** The cache is in memory, so a restarted node
-  rediscovers its peers from the LAN. The persistent cache is a cold-start
-  feature and belongs with the DHT work that needs it.
+Gossip inside the tunnel, relays, DHT cold start, real NAT traversal and
+endpoint-record persistence all arrived at M3b; see
+[10-connectivity-notes.md](10-connectivity-notes.md). What is still open:
+
 - **Freshness leases and the startup gate.** M4. Until they exist, a node with
   a stale log fails closed only in the sense that it has no peers it has not
   been told about — there is no TTL yet.
-- **The per-pair ML-KEM PSK.** Still the open decision in
-  [07-embedding-notes.md](07-embedding-notes.md), due before the M3 freeze.
-  M2's "PSK/epoch rotation" is the epoch half: every membership change rotates
+- **The per-pair ML-KEM PSK.** Settled at M3b and deferred past v1; see
+  [07-embedding-notes.md](07-embedding-notes.md). M2's "PSK/epoch rotation" is
+  the epoch half of it, and remains all of it: every membership change rotates
   the group secret, and the daemon follows it.
 
 ## Verification

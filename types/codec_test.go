@@ -316,3 +316,127 @@ func TestHashLabelsAreDistinct(t *testing.T) {
 		t.Fatal("signing hash equals the unlabelled record hash of the unsigned record")
 	}
 }
+
+// TestUnknownEpochSuiteRejected covers the one schema hedge the M3 freeze
+// took: the ciphersuite an epoch secret is sealed under is a value the decoder
+// already understands, so replacing it later is a version bump rather than a
+// new field. What makes that work is that a node meeting a suite it does not
+// implement refuses the record outright — ignoring the field would mean
+// opening a wrap with the wrong algorithm, and ignoring the record would mean
+// two nodes disagreeing about who is a member.
+func TestUnknownEpochSuiteRejected(t *testing.T) {
+	a, admin := testAUM(t)
+	a.State.EpochSuite = 1
+	a.Signatures = nil
+	if err := a.Sign(admin); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	if err := a.StaticValidate(); err == nil {
+		t.Error("a snapshot sealed under an unimplemented suite was accepted")
+	}
+
+	prev := Hash{1}
+	bump := AUM{Kind: KindEpochBump, Prev: &prev, Epoch: &EpochRecord{
+		Epoch:  2,
+		Commit: EpochCommit([]byte("secret")),
+		Suite:  1,
+	}}
+	if err := bump.Sign(admin); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	if err := bump.StaticValidate(); err == nil {
+		t.Error("an epoch record sealed under an unimplemented suite was accepted")
+	}
+
+	// The implemented suite is zero, so naming it costs no bytes: an encoding
+	// that spells it out explicitly must not exist.
+	bump.Epoch.Suite = SuiteHybridX25519MLKEM768
+	bump.Signatures = nil
+	if err := bump.Sign(admin); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	enc, err := bump.Encode()
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	if bytes.Contains(enc[:min(len(enc), 64)], []byte{0x04, 0x00}) {
+		t.Error("the default suite was written into the encoding; it must be absent")
+	}
+	if _, err := DecodeAUM(enc); err != nil {
+		t.Errorf("a record naming the implemented suite was refused: %v", err)
+	}
+}
+
+// TestSchemaUpgradeRecordDecodesInEveryBuild is the property that makes a
+// versioned schema work at all: the record that raises the version must be
+// readable by the builds it leaves behind. One that could not decode it would
+// see only that sync had stopped.
+func TestSchemaUpgradeRecordDecodesInEveryBuild(t *testing.T) {
+	admin := mustIdentity(t)
+	prev := Hash{1}
+	// A version far past anything this build implements, which is exactly the
+	// case that must still decode.
+	v := SchemaVersion(4097)
+	a := AUM{Kind: KindSchemaUpgrade, Prev: &prev, Schema: &v}
+	if err := a.Sign(admin); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	b, err := a.Encode()
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	got, err := DecodeAUM(b)
+	if err != nil {
+		t.Fatalf("a schema-upgrade record to %v did not decode: %v", v, err)
+	}
+	if got.Schema == nil || *got.Schema != v {
+		t.Errorf("decoded schema %v, want %v", got.Schema, v)
+	}
+
+	// The payload rule is exact for this kind too, so nothing can ride along
+	// inside a record whose whole purpose is to change how records are read.
+	q := uint32(2)
+	a.Quorum = &q
+	if err := a.StaticValidate(); err == nil {
+		t.Error("a schema-upgrade record carrying a second payload field was accepted")
+	}
+}
+
+// TestSnapshotSchemaRoundTrips: the version is part of the state, so a
+// checkpoint states it and a node bootstrapping from one learns it without the
+// history.
+func TestSnapshotSchemaRoundTrips(t *testing.T) {
+	a, admin := testAUM(t)
+	a.State.Schema = 7
+	a.Signatures = nil
+	if err := a.Sign(admin); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	b, err := a.Encode()
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	got, err := DecodeAUM(b)
+	if err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if got.State.Schema != 7 {
+		t.Errorf("decoded schema %v, want 7", got.State.Schema)
+	}
+	// Schema 0 is the one in force today, so it must stay absent from the
+	// encoding: a version that costs bytes before there is a second one would
+	// have been a poor trade.
+	a.State.Schema = 0
+	a.Signatures = nil
+	if err := a.Sign(admin); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	small, err := a.Encode()
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	if len(small) >= len(b) {
+		t.Errorf("schema 0 encodes to %d bytes and schema 7 to %d; the default must be absent",
+			len(small), len(b))
+	}
+}

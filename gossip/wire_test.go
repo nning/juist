@@ -312,12 +312,10 @@ func TestCacheKeepsTheNewestAnnouncement(t *testing.T) {
 	}
 }
 
-// TestAFullCacheStillAdmitsMembers: identity keys cost nothing to mint, so any
-// holder of an epoch secret can flood the cache with signature-valid
-// announcements for invented nodes. The bound must not let that crowd out the
-// announcement of an actual member — that is the record the reconciler needs
-// to build a tunnel, and losing it would be a silent, restart-persistent way
-// for one insider to keep a new member unreachable.
+// TestAFullCacheStillAdmitsMembers: any holder of an epoch secret can flood
+// the cache with signature-valid announcements for invented nodes, and the
+// bound must not let that crowd out a real member's — the record the
+// reconciler needs to build a tunnel.
 func TestAFullCacheStillAdmitsMembers(t *testing.T) {
 	c := NewCache()
 	for i := 0; c.Len() < maxCachedEndpoints; i++ {
@@ -360,12 +358,9 @@ func TestAFullCacheStillAdmitsMembers(t *testing.T) {
 	}
 }
 
-// TestCacheRefusesFormerMembers: a revoked or expired device keeps announcing
-// until it learns of its own removal, and both ways into the cache — a LAN
-// beacon and a peer relaying its cache in a gossip session — must refuse it.
-// Otherwise each announcement is cached, reported as new, and pruned again on
-// the next reconcile: a reconcile and a push round per member per interval,
-// for as long as the device is powered on.
+// TestCacheRefusesFormerMembers: a removed device keeps announcing until it
+// learns of its removal, and both ways into the cache must refuse it —
+// otherwise each beacon costs a reconcile and a push round per member.
 func TestCacheRefusesFormerMembers(t *testing.T) {
 	c := NewCache()
 	e, priv := testEndpoint(t)
@@ -396,11 +391,9 @@ func TestCacheRefusesFormerMembers(t *testing.T) {
 }
 
 // TestEndpointRefusesAddressesItsAuthorDoesNotOwn: an announcement points the
-// whole member set at an address — the data plane sends UDP there and the sync
-// layer opens TCP sessions to it — so the addresses a member may claim are
-// exactly the ones a correct node announces about itself. Loopback would aim
-// peers at services on their own hosts, and any of these would make the member
-// set into a connection source pointed wherever the announcer likes.
+// whole member set at an address, so the ones a member may claim are exactly
+// what a correct node announces about itself. Loopback would aim peers at
+// services on their own hosts.
 func TestEndpointRefusesAddressesItsAuthorDoesNotOwn(t *testing.T) {
 	for _, addr := range []string{
 		"127.0.0.1:41641",

@@ -1,43 +1,20 @@
 // Package secrets implements the epoch group secret: a symmetric secret held
-// by exactly the current member set, distributed by sealing it to each member
-// individually inside a signed log record, and replaced whenever membership
-// changes.
+// by exactly the current member set, sealed to each member inside a signed log
+// record and replaced whenever membership changes.
 //
-// # What it is for, and what it is not for
+// It gates discovery and gossip confidentiality — blinded DHT topics, AEAD
+// announcement payloads, blinded mDNS beacons — and never the data plane,
+// which WireGuard secures end to end. A leak costs discovery privacy and
+// nothing else. Against a revoked member it buys what removing a WireGuard
+// peer does not: the device can no longer recognize the network's topics or
+// read its announcements, so it cannot find members whose stale state might
+// still trust it. MLS was evaluated and rejected in
+// docs/research/building-blocks.md §3.
 //
-// The group secret gates discovery and gossip confidentiality: blinded DHT
-// topic IDs, AEAD-encrypted announcement payloads, blinded mDNS beacons. It
-// never gates the data plane, which WireGuard secures end to end from keys in
-// the log. That separation is a design rule
-// (docs/02-threat-model.md): "the data plane never depends on the group
-// secret; discovery privacy never gates data-plane security". A leaked group
-// secret costs discovery privacy and nothing else.
-//
-// What it buys against a revoked member is the thing a WireGuard peer removal
-// alone does not: the removed device can no longer recognize the network's
-// topics or read its announcements, so it cannot even find the members whose
-// stale state might still trust it
-// (docs/research/building-blocks.md §5, step 4).
-//
-// # Why not MLS
-//
-// Continuous group key agreement (RFC 9420) is the obvious-looking fit and was
-// evaluated and rejected in docs/research/building-blocks.md §3: MLS needs an
-// ordered broadcast channel, which here means the signed log — so MLS would be
-// a second, far larger state machine layered on the one that already provides
-// ordering — and its forward secrecy and post-compromise security protect
-// message content, which is WireGuard's job in this design. An epoch-numbered
-// secret fanned out by HPKE is O(n) per rekey, which at 25–100 members is
-// nothing.
-//
-// # Ciphersuite
-//
-// HPKE (RFC 9180) in base mode with DHKEM(X25519)+ML-KEM-768, HKDF-SHA256 and
-// ChaCha20-Poly1305. The hybrid KEM is the post-quantum hedge: an adversary
-// recording epoch records today and breaking X25519 later still needs to break
-// ML-KEM-768 to read them. It costs about 1.2 KiB per member per epoch, which
-// is the reason for the size limits in the schema and an acceptable price at
-// this scale.
+// The ciphersuite is HPKE (RFC 9180) in base mode with
+// DHKEM(X25519)+ML-KEM-768, HKDF-SHA256 and ChaCha20-Poly1305. The hybrid KEM
+// is the post-quantum hedge, at about 1.2 KiB per member per epoch — which is
+// where the schema's size limits come from.
 package secrets
 
 import (
@@ -57,13 +34,9 @@ import (
 )
 
 // The HPKE ciphersuite. Fixed, not negotiated: there is no peer to negotiate
-// with — a sealed secret is written into a record every member reads — and
-// negotiation is where downgrade attacks live.
-//
-// The KEM is not named here because it follows from the key halves passed to
-// hpke.NewHybridPublicKey. TestCiphersuiteIsTheIntendedOne pins it, so a
-// change in what the standard library assembles cannot quietly cost the
-// post-quantum property.
+// with, and negotiation is where downgrade attacks live. The KEM follows from
+// the key halves passed to hpke.NewHybridPublicKey, and
+// TestCiphersuiteIsTheIntendedOne pins it.
 func kdf() hpke.KDF   { return hpke.HKDFSHA256() }
 func aead() hpke.AEAD { return hpke.ChaCha20Poly1305() }
 
@@ -72,13 +45,9 @@ func aead() hpke.AEAD { return hpke.ChaCha20Poly1305() }
 // key material.
 type Secret [types.GroupSecretSize]byte
 
-// NewSecret draws a fresh group secret from the system CSPRNG.
-//
-// Each epoch's secret is independent of the last rather than derived from it.
-// That is what lets an admin rekey the network holding only an admin signing
-// key: producing a bump never requires reading the previous secret, so admin
-// keys stay out of the daemon and off the member devices, as
-// docs/04-architecture.md requires.
+// NewSecret draws a fresh group secret from the system CSPRNG. Each epoch's
+// secret is independent of the last, which is what lets an admin rekey holding
+// only a signing key — no bump ever requires reading the previous secret.
 func NewSecret() (Secret, error) {
 	var s Secret
 	if _, err := rand.Read(s[:]); err != nil {
@@ -96,12 +65,8 @@ func (s Secret) Equal(other Secret) bool {
 }
 
 // PrivateKeys is a node's HPKE recipient key material: the two halves of the
-// hybrid KEM. The public halves are what [types.NodeRecord] records.
-//
-// On a member device these are the keys the daemon needs to read the group
-// secret, so unlike admin signing keys they have to be available to it. They
-// are the sealed-at-rest material docs/04-architecture.md describes under key
-// custody.
+// hybrid KEM, whose public halves [types.NodeRecord] carries. Unlike admin
+// signing keys, the daemon needs these, so they live on the member device.
 type PrivateKeys struct {
 	x25519 *ecdh.PrivateKey
 	mlkem  *mlkem.DecapsulationKey768
@@ -154,14 +119,9 @@ func (p *PrivateKeys) Public() (types.X25519Key, types.MLKEMKey, error) {
 }
 
 // recipientKey assembles a node's HPKE public key from the two halves in its
-// record, rejecting either half if it is not a valid key.
-//
-// This is the only place a node record's encryption keys are interpreted. Both
-// checks are real but neither is complete: ML-KEM's modulus check rejects most
-// random byte strings, yet an all-zero key is a structurally valid encoding of
-// the all-zero polynomial and passes. Degenerate encryption keys are therefore
-// caught by shape in the record schema, which rejects zero-valued keys, and by
-// the fact that admitting one takes a quorum.
+// record, rejecting either half if it is not a valid key. Neither check is
+// complete — an all-zero ML-KEM key is a structurally valid encoding — so
+// degenerate keys are caught by the schema's shape rules and by quorum.
 func recipientKey(x types.X25519Key, m types.MLKEMKey) (hpke.PublicKey, error) {
 	xpub, err := ecdh.X25519().NewPublicKey(x[:])
 	if err != nil {
@@ -179,14 +139,10 @@ func recipientKey(x types.X25519Key, m types.MLKEMKey) (hpke.PublicKey, error) {
 }
 
 // sealInfo is the HPKE info string, binding a wrap to one epoch and one
-// recipient.
-//
-// It stops a wrap being lifted out of one epoch's record and dropped into
-// another's, or re-addressed to a different member — both of which would
-// otherwise decrypt fine, since the same recipient key is used across epochs.
-// Binding to the network as well would be circular for the genesis record,
-// whose own hash names the network; that binding comes instead from the
-// signatures over the record, which are by that network's admin keys.
+// recipient, so it cannot be lifted into another epoch's record or
+// re-addressed — both of which would decrypt fine, since recipient keys are
+// reused across epochs. Binding to the network too would be circular for the
+// genesis record; the signatures over the record supply that.
 func sealInfo(epoch uint64, recipient types.Identity) []byte {
 	info := make([]byte, 0, len(labelSealInfo)+1+8+types.IdentitySize)
 	info = append(info, labelSealInfo...)
@@ -197,12 +153,8 @@ func sealInfo(epoch uint64, recipient types.Identity) []byte {
 }
 
 // NewEpoch draws a fresh secret and builds the epoch record that distributes
-// it to nodes.
-//
-// nodes must be the member set as it will be *after* the record that carries
-// this epoch is applied — the set the log then requires the wraps to cover
-// exactly. Callers get that from the log's own projection of the change rather
-// than assembling it by hand; see trust/log's builders.
+// it. nodes must be the member set as it will be after the carrying record is
+// applied, which is the set the log requires the wraps to cover exactly.
 func NewEpoch(epoch uint64, nodes []types.NodeRecord) (Secret, *types.EpochRecord, error) {
 	secret, err := NewSecret()
 	if err != nil {
@@ -260,13 +212,10 @@ func SealTo(secret Secret, epoch uint64, nodes []types.NodeRecord) (*types.Epoch
 	return rec, nil
 }
 
-// Open recovers the group secret for the local node from an epoch record.
-//
-// self identifies which wrap to open. The recovered secret is checked against
-// the record's commitment: that check is what makes it impossible for a
-// malicious quorum to hand different members different secrets and split
-// discovery invisibly, since the commitment is one value the whole network
-// sees.
+// Open recovers the group secret for the local node from an epoch record. self
+// identifies which wrap to open, and the result is checked against the
+// record's commitment — one value the whole network sees, so a malicious
+// quorum cannot hand different members different secrets.
 func Open(rec *types.EpochRecord, self types.Identity, priv *PrivateKeys) (Secret, error) {
 	if err := rec.StaticValidate(); err != nil {
 		return Secret{}, fmt.Errorf("secrets: %w", err)
@@ -308,12 +257,9 @@ const (
 	labelGossipKey    = "juist/gossip-aead/v1"
 )
 
-// derive expands the secret into keying material for one labelled use.
-//
-// HKDF-SHA256 with the epoch as salt and the label plus context as info. The
-// epoch is mixed in as well as being part of which secret is used, so that a
-// derivation cannot be replayed across epochs even if a secret were ever
-// reused by mistake.
+// derive expands the secret into keying material for one labelled use:
+// HKDF-SHA256 with the epoch as salt and label plus context as info. Mixing
+// the epoch in guards against a secret ever being reused by mistake.
 func (s Secret) derive(label string, epoch uint64, context []byte, length int) []byte {
 	salt := binary.BigEndian.AppendUint64(nil, epoch)
 	info := make([]byte, 0, len(label)+1+len(context))
@@ -329,25 +275,31 @@ func (s Secret) derive(label string, epoch uint64, context []byte, length int) [
 	return out
 }
 
-// TopicIDSize is the length of a blinded rendezvous topic. Twenty bytes
-// matches a BitTorrent DHT infohash, which is what a BEP 44 lookup key is.
+// TopicIDSize is the length of a blinded rendezvous label. Twenty bytes
+// matches a BitTorrent DHT infohash.
 const TopicIDSize = 20
 
-// TopicID returns the blinded DHT rendezvous topic for a time window.
+// TopicSeed returns the Ed25519 seed one member's announcement is published
+// under for one epoch and time window. It is a keyed derivation rather than a
+// name, so an outsider watching the public DHT cannot recognize the network,
+// enumerate its members or count them, and a revoked member stops being able
+// to compute it at the next epoch.
 //
-// Blinded and rotating, per docs/research/building-blocks.md §6: an outsider
-// watching the public DHT cannot recognize the network, enumerate its members,
-// or count them, because the topic is a keyed derivation rather than a name.
-// A revoked member loses the ability to compute it at the next epoch, which is
-// the discovery half of revocation.
+// A *key* rather than a location, because BEP 44 does not let a publisher
+// choose where an item lands: a mutable item's address is the hash of the
+// public key and the salt, so what a network gets to blind is the key. A
+// per-member key rather than one key with per-member salts, because the key
+// travels in the clear with every item — one shared key would let a storage
+// node holding two of a network's items link them and count the members.
 //
-// window is the caller's coarse clock bucket — floor(unix / period) — so that
-// the topic rotates on a schedule all members agree on without any of them
-// needing an accurate clock. Nothing here reads the clock: the caller supplies
-// the window, and discovery/dht owns the period.
-func (s Secret) TopicID(epoch uint64, window uint64) []byte {
+// window is the caller's coarse clock bucket, floor(unix / period), so nothing
+// here reads the clock.
+func (s Secret) TopicSeed(epoch, window uint64, subject types.Identity) [32]byte {
 	ctx := binary.BigEndian.AppendUint64(nil, window)
-	return s.derive(labelTopic, epoch, ctx, TopicIDSize)
+	ctx = append(ctx, subject[:]...)
+	var out [32]byte
+	copy(out[:], s.derive(labelTopic, epoch, ctx, len(out)))
+	return out
 }
 
 // DiscoveryKey returns the AEAD key protecting announcement payloads, so that
@@ -366,15 +318,9 @@ func (s Secret) MDNSName(epoch uint64) []byte {
 }
 
 // GossipKey returns the AEAD key protecting gossip frames on the underlay.
-//
-// Separate from [Secret.DiscoveryKey] by label, so that a frame and an
-// announcement can never be decrypted with one another's key even though both
-// are reached from the same epoch secret. What it buys is the same thing the
-// blinded topics buy: a LAN or on-path observer sees opaque bytes rather than
-// the member set, and a revoked device loses the ability to read them at the
-// next epoch. It buys nothing about *integrity* — every record inside a frame
-// carries its own signatures, which is why docs/04-architecture.md can call
-// the transport untrusted by construction.
+// Separate from [Secret.DiscoveryKey] by label, so a frame and an announcement
+// cannot be decrypted with one another's key. It buys confidentiality only:
+// every record inside a frame carries its own signatures.
 func (s Secret) GossipKey(epoch uint64) [32]byte {
 	var out [32]byte
 	copy(out[:], s.derive(labelGossipKey, epoch, nil, len(out)))

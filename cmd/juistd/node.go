@@ -12,11 +12,8 @@ import (
 )
 
 // node is what the daemon needs out of a state directory: the log, and the key
-// material that makes this device a member of it.
-//
-// Notably absent: anything from admins/. The daemon does not read admin keys
-// and could not use them if it did — every record it applies has to arrive
-// already signed (docs/04-architecture.md, key custody).
+// material that makes this device a member. Notably not admins/ — every record
+// it applies has to arrive already signed.
 type node struct {
 	authority *log.Authority
 	storage   *store.Dir
@@ -25,11 +22,9 @@ type node struct {
 	wireguard [32]byte
 }
 
-// openNode loads a state directory that has already been enrolled.
-//
-// Every failure here is reported with what to do about it, because all of them
-// are the same situation from the operator's side — this device is not set up
-// yet — and they need different answers.
+// openNode loads a state directory that has already been enrolled. Every
+// failure is reported with what to do about it: they all look like "this
+// device is not set up yet" and need different answers.
 func openNode(home string) (*node, error) {
 	if err := keys.RefuseSharedWritable(home); err != nil {
 		return nil, err
@@ -50,6 +45,13 @@ func openNode(home string) (*node, error) {
 	if _, ok, err := st.Anchor(); err != nil {
 		return nil, err
 	} else if !ok {
+		if keys.NestedLog(filepath.Join(home, keys.LogDir)) {
+			return nil, fmt.Errorf("%s holds no network, but %s does: a copied log landed inside "+
+				"the existing directory. Move its contents up one level, or copy with "+
+				"\"cp -r SRC/log/. %s/\"",
+				filepath.Join(home, keys.LogDir), filepath.Join(home, keys.LogDir, keys.LogDir),
+				filepath.Join(home, keys.LogDir))
+		}
 		return nil, fmt.Errorf(
 			"%s holds no network; this device has not been enrolled. Give an admin the output of "+
 				"\"juist -home %s key\"; once they have applied the record that admits this device, "+
@@ -61,12 +63,10 @@ func openNode(home string) (*node, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A rotation applied anywhere but this device arrives here as log records
-	// over gossip, with no CLI involved: the staged key file sits unpromoted
-	// while the log names the keys in it, and every tunnel and the group
-	// secret both fail against the old ones. The daemon reports that as
-	// StaleKeys and says "restart juistd to pick up the promoted key file" —
-	// which is only true if a restart is what promotes them. This is that.
+	// A rotation applied elsewhere arrives as log records over gossip, with no
+	// CLI involved, leaving the staged key file unpromoted while the log names
+	// what is in it. The daemon's advice to restart is only true because this
+	// is what a restart does.
 	if promoted, err := keys.MaybePromoteStaged(home, auth.State().Node); err != nil {
 		return nil, err
 	} else if promoted != nil {

@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,12 +16,14 @@ import (
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/types/preftype"
 	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/usermetric"
@@ -29,6 +32,7 @@ import (
 	"tailscale.com/wgengine/filter/filtertype"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
+	_ "tailscale.com/wgengine/router/osrouter" // registers the real OS router that router.New builds
 	"tailscale.com/wgengine/wgcfg"
 )
 
@@ -43,15 +47,16 @@ type Options struct {
 	// Logf receives engine logs. Nil discards them.
 	Logf logger.Logf
 
-	// Tun is the OS TUN device. If nil, a no-op fake device is used: the
-	// tunnel is real, but nothing is plumbed into the host network stack and
-	// no privileges are needed. Used by tests and by RespondToPing demos.
-	//
-	// A real device does not change that by itself: the engine is built
-	// without a router (wgengine.Config.Router defaults to a fake), so
-	// overlay addresses and routes are never programmed into the OS either
-	// way. That plumbing arrives with the M2 netns harness.
+	// Tun is a caller-supplied TUN device, for tests. With both Tun and
+	// TunName unset the engine gets a fake device and a fake router: the
+	// tunnel is real, but nothing is plumbed into the host.
 	Tun tun.Device
+
+	// TunName, when set and Tun is nil, names an OS TUN device to create. New
+	// then also builds a real router, so this node's addresses and its peers'
+	// routes reach the host stack. Needs /dev/net/tun and CAP_NET_ADMIN, and
+	// fails rather than falling back to a device nothing can reach.
+	TunName string
 
 	// RespondToPing makes the engine answer overlay ICMP echo requests
 	// internally, without a TUN device. Test and demo use only.
@@ -59,14 +64,16 @@ type Options struct {
 
 	// Debug enables magicsock's verbose NAT-traversal logging.
 	Debug bool
+
+	// OnConnectivityChange is called, possibly from another goroutine, when
+	// [Manager.HomeRelay] or [Manager.LocalEndpoints] changes. Both belong in
+	// this node's announcement, so the caller re-announces and pushes.
+	OnConnectivityChange func()
 }
 
 // tsManager implements [Manager] on top of Tailscale's wgengine and magicsock.
-//
-// It is the adapter described in docs/04-architecture.md: the only place in
-// this project that touches Tailscale's types. Notably it does not use
-// controlclient, tsnet, or ipn — all of which assume a coordination server.
-// Peer state arrives only through SetPeers.
+// It is the only place in this project that touches Tailscale's types, and it
+// uses no controlclient, tsnet or ipn: all three assume a coordination server.
 type tsManager struct {
 	logf   logger.Logf
 	eng    wgengine.Engine
@@ -75,25 +82,43 @@ type tsManager struct {
 	self   Self
 	selfNV tailcfg.NodeView
 
-	// apply serializes whole reconfigurations, and shutdown. magicsock
-	// requires the caller to serialize SetNetworkMap calls relative to one
-	// another, the state snapshot below must not be overtaken by a later
-	// caller between being written and being pushed to the data plane —
-	// otherwise the data plane keeps one peer set while the lookups answer
-	// from another, and the two never reconverge until the next call — and
-	// Close must not tear the engine down under a SetPeers in flight.
+	// netMon is shared with the engine on the real-device path, nil on the
+	// fake one. The engine never closes a monitor it was handed, so Close does.
+	netMon *netmon.Monitor
+
+	// apply serializes whole reconfigurations and shutdown: magicsock requires
+	// SetNetworkMap calls to be serialized, a snapshot must not be overtaken
+	// between being stored and being pushed to the data plane, and Close must
+	// not tear the engine down under a SetPeers in flight.
 	apply  sync.Mutex
 	closed bool // guarded by apply: Close has run, the engine is gone
+
+	// routerStale records that the last reconfiguration failed, so the OS may
+	// not match what the engine believes it programmed. Guarded by apply.
+	routerStale bool
+
+	// relays is the relay set last installed, kept so an unchanged one does
+	// not restart the latency probes. Guarded by apply.
+	relays []Relay
+
+	// onChange is called when the home relay or the local endpoint set moves.
+	onChange func()
+
+	// homeRelay is the region the data plane picked, and localEps the
+	// addresses it believes this node is reachable at. Both are written from
+	// the engine's callbacks and read by the announcement.
+	homeRelay atomic.Int64
+	epsMu     sync.Mutex
+	localEps  []netip.AddrPort
 
 	// done is closed by Close, and warm tracks the path warm-up goroutines
 	// so that none of them can touch the engine after it is torn down.
 	done chan struct{}
 	warm sync.WaitGroup
 
-	// state is the peer set the data plane answers from. It is read
-	// lock-free on the per-packet paths and replaced wholesale, under
-	// apply, by SetPeers. The maps inside a snapshot are never mutated
-	// after it is stored.
+	// state is the peer set the data plane answers from: read lock-free on the
+	// per-packet paths, replaced wholesale under apply, never mutated once
+	// stored.
 	state atomic.Pointer[peerState]
 }
 
@@ -106,19 +131,15 @@ type peerState struct {
 
 var _ Manager = (*tsManager)(nil)
 
-// New starts a Tailscale-backed connectivity manager.
-//
-// No DERP map is installed, so the manager is direct-only: it makes no
-// connection to any relay or STUN server. Relays enter later, from
-// member-volunteered roles in the membership log.
+// New starts a Tailscale-backed connectivity manager. No DERP map is
+// installed, so it is direct-only: no connection to any relay or STUN server.
 func New(opts Options) (Manager, error) {
 	if opts.Self.NodeKey.IsZero() {
 		return nil, errors.New("conn: Self.NodeKey is required")
 	}
-	// A zero disco key would make magicsock generate an ephemeral one, which
-	// no peer could match against the key recorded for us in the log: every
-	// disco exchange would fail and the only symptom would be pings that
-	// never get a pong.
+	// A zero disco key makes magicsock generate an ephemeral one that no peer
+	// can match against the log, failing every exchange with no symptom but
+	// pings that get no pong.
 	if opts.Self.DiscoKey.IsZero() {
 		return nil, errors.New("conn: Self.DiscoKey is required")
 	}
@@ -143,21 +164,25 @@ func New(opts Options) (Manager, error) {
 
 	bus := eventbus.New()
 	m := &tsManager{
-		logf: logf,
-		bus:  bus,
-		self: opts.Self,
-		done: make(chan struct{}),
+		logf:     logf,
+		bus:      bus,
+		self:     opts.Self,
+		done:     make(chan struct{}),
+		onChange: opts.OnConnectivityChange,
 	}
 	m.state.Store(&peerState{})
 
+	// Shared with the OS router on the real-device path.
+	healthTracker := new(health.Tracker)
+
 	var tundev *tstun.Wrapper
-	eng, err := wgengine.NewUserspaceEngine(logf, wgengine.Config{
+	cfg := wgengine.Config{
 		Tun:           opts.Tun,
 		ListenPort:    opts.ListenPort,
 		RespondToPing: opts.RespondToPing,
 		EventBus:      bus,
 		Metrics:       new(usermetric.Registry),
-		HealthTracker: new(health.Tracker),
+		HealthTracker: healthTracker,
 		ForceDiscoKey: opts.Self.DiscoKey,
 		SetSubsystem: func(s any) {
 			switch v := s.(type) {
@@ -167,35 +192,79 @@ func New(opts Options) (Manager, error) {
 				tundev = v
 			}
 		},
-	})
+	}
+
+	// router.New wants the device and the engine wants the router, fixing the
+	// order: netmon, TUN, router, engine. The MTU must be DefaultTUNMTU() —
+	// 1280, the IPv6 minimum; lower and the kernel drops IPv6 silently.
+	if opts.Tun == nil && opts.TunName != "" {
+		if err := checkTunName(opts.TunName); err != nil {
+			bus.Close()
+			return nil, fmt.Errorf("conn: TunName: %w", err)
+		}
+		mon, err := netmon.New(bus, logf)
+		if err != nil {
+			bus.Close()
+			return nil, fmt.Errorf("conn: starting the network monitor: %w", err)
+		}
+		dev, err := tun.CreateTUN(opts.TunName, int(tstun.DefaultTUNMTU()))
+		if err != nil {
+			mon.Close()
+			bus.Close()
+			// Lists what creation needs; does not claim to be the cause,
+			// since a name already in use comes back as EBUSY.
+			return nil, fmt.Errorf("conn: creating TUN device %q: %w "+
+				"(needs /dev/net/tun and CAP_NET_ADMIN, and the name must be free)",
+				opts.TunName, err)
+		}
+		osRtr, err := router.New(logf, dev, mon, healthTracker, bus)
+		if err != nil {
+			dev.Close()
+			mon.Close()
+			bus.Close()
+			return nil, fmt.Errorf("conn: creating the OS router: %w", err)
+		}
+		// One monitor for both, rather than letting the engine start a second.
+		cfg.Tun = dev
+		cfg.Router = osRtr
+		cfg.NetMon = mon
+		m.netMon = mon
+	}
+
+	eng, err := wgengine.NewUserspaceEngine(logf, cfg)
 	if err != nil {
+		// The engine's cleanup closes the TUN wrapper and the device, but not
+		// a monitor it was handed. The router must NOT be closed here:
+		// linuxRouter.Close dereferences state only router.Up() populates, so
+		// closing one the engine never brought up panics. Nothing leaks.
+		if m.netMon != nil {
+			m.netMon.Close()
+			m.netMon = nil
+		}
 		bus.Close()
 		return nil, fmt.Errorf("conn: starting engine: %w", err)
 	}
-	if m.magic == nil || tundev == nil {
+	// Past here eng.Close() closes the router; the monitor is still ours.
+	teardownEngine := func() {
 		eng.Close()
+		if m.netMon != nil {
+			m.netMon.Close()
+			m.netMon = nil
+		}
 		bus.Close()
+	}
+	if m.magic == nil || tundev == nil {
+		teardownEngine()
 		return nil, errors.New("conn: engine did not surface its magicsock conn or TUN wrapper")
 	}
-	// magicsock treats ListenPort as a preference rather than a requirement:
-	// bindSocket's candidate list always ends in 0, so a port it cannot bind
-	// costs one log line and an OS-assigned port instead. That is the right
-	// default for a client whose only job is to reach a control plane and
-	// whose endpoints are discovered reflexively through STUN. It is the
-	// wrong one here. An operator who passes a port has usually opened it in
-	// a firewall or forwarded it at a NAT, and this project's endpoints come
-	// from a local interface scan rather than from a reflexive address
-	// (daemon.underlayEndpoints), so nothing downstream repairs the mismatch.
-	// The symptom would be that nothing connects, with the cause a "unable to
-	// bind" line far up a verbose log. Refuse to start instead.
-	//
-	// Only the initial bind is checked. magicsock may rebind later — a link
-	// change, a ReSTUN — and move the port again; callers must keep reading
-	// LocalPort rather than assuming the requested port holds forever.
+	// magicsock treats ListenPort as a preference: a port it cannot bind
+	// silently becomes an OS-assigned one, and nothing downstream repairs
+	// that, since our endpoints come from an interface scan. Only the initial
+	// bind is checked — magicsock may rebind, so callers keep reading
+	// LocalPort.
 	if opts.ListenPort != 0 {
 		if got := m.magic.LocalPort(); got != opts.ListenPort {
-			eng.Close()
-			bus.Close()
+			teardownEngine()
 			return nil, fmt.Errorf(
 				"conn: could not bind UDP port %d; the engine fell back to %d. "+
 					"Something else holds it, or pass 0 to let the OS choose",
@@ -214,27 +283,32 @@ func New(opts Options) (Manager, error) {
 	})
 	eng.SetSelfNode(m.selfNV)
 
-	// The data plane learns its peer set only from these two lookups, both
-	// backed by the snapshot that SetPeers stores. A key absent from that
-	// snapshot has no WireGuard peer and no allowed IPs, so it cannot
-	// complete a handshake: this is where default-deny lives.
+	// The data plane learns its peer set only from these lookups, backed by
+	// the snapshot SetPeers stores. A key absent from it has no peer entry and
+	// no allowed IPs, so it cannot handshake: default-deny lives here.
 	eng.SetPeerConfigFunc(m.allowedIPs)
 	eng.SetPeerByIPPacketFunc(m.peerByIP)
 	eng.SetPeerForIPFunc(m.peerForIP)
+
+	// Where reflexive addresses come from. Without a relay the engine reports
+	// none — its endpoint set needs a STUN result or a DERP map — so this is
+	// silent until SetRelays installs one, which is the whole reason the
+	// announcement is still built from an interface scan as well.
+	eng.SetStatusCallback(m.onStatus)
+	// The region the engine picked for itself. Peers cannot guess it: relays
+	// are not meshed, so a packet sent to any other region is dropped.
+	m.magic.SetNetInfoCallback(m.onNetInfo)
 
 	m.apply.Lock()
 	err = m.reconfig()
 	m.apply.Unlock()
 	if err != nil {
-		eng.Close()
-		bus.Close()
+		teardownEngine()
 		return nil, err
 	}
 
-	// The TUN wrapper blocks every read until Start is called; Tailscale
-	// calls it from ipnlocal once its subsystems are wired. We are the
-	// equivalent wiring point, and everything the wrapper depends on — the
-	// peer lookups, the filter, the initial config — is installed above.
+	// The wrapper blocks every read until Start is called, and everything it
+	// depends on — lookups, filter, initial config — is installed above.
 	tundev.Start()
 	if opts.Debug {
 		m.magic.SetDebugLoggingEnabled(true)
@@ -283,23 +357,16 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	byID := make(map[uint64]key.NodePublic, len(peers))
 	byDisco := make(map[key.DiscoPublic]key.NodePublic, len(peers))
 
-	// Validate everything before touching any state, so a rejected peer set
-	// leaves the data plane exactly as it was. These are all conditions the
-	// membership log is supposed to make impossible, so reaching one means a
-	// bug upstream — refuse loudly rather than let the data plane act on it.
+	// Validate before touching any state, so a rejected peer set leaves the
+	// data plane as it was. The log is supposed to make all of these
+	// impossible, so reaching one means a bug upstream.
 	for _, p := range peers {
 		if p.NodeKey.IsZero() {
 			return errors.New("conn: peer has zero node key")
 		}
 		if p.NodeKey == selfKey {
-			// The reconciler passes the full authorized set, which includes
-			// this node, so a matching self entry is expected. But one that
-			// disagrees with Options.Self means the log and the data plane
-			// hold different ideas of who we are — an upstream bug nothing
-			// else would ever surface, so it too is refused loudly. The disco
-			// key matters most: peers reach us with the logged one, so a
-			// divergence there is every inbound disco exchange failing with
-			// no symptom beyond pings that never get a pong.
+			// A matching self entry is expected; a disagreeing one means the
+			// log and the data plane hold different ideas of who we are.
 			if p.ID != m.self.ID || p.DiscoKey != m.self.DiscoKey.Public() || !samePrefixSet(p.Addrs, m.self.Addrs) {
 				return fmt.Errorf("conn: peer entry %v carries our node key but diverges from Self (ID %d, disco %v, addrs %v; Self has ID %d, disco %v, addrs %v)",
 					p.NodeKey.ShortString(), p.ID, p.DiscoKey.ShortString(), p.Addrs,
@@ -325,16 +392,9 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 		if p.DiscoKey.IsZero() {
 			return fmt.Errorf("conn: peer %v has no disco key", p.NodeKey.ShortString())
 		}
-		// Disco keys must be distinct, for the reason node IDs must be: the
-		// NAT-traversal layer keys its path state by disco key, so two peers
-		// sharing one make each other's paths ambiguous. This one is worth
-		// more care than the others, because it is the only field here a
-		// *peer* chooses — it arrives in that peer's own signed endpoint
-		// announcement — so a member could otherwise copy another member's
-		// disco key and take away its connectivity. It cannot read anything
-		// that way, since traffic is still sealed to the logged node key, but
-		// "one member can silently unplug another" is not a property this
-		// layer should hand out.
+		// Disco keys must be distinct: the NAT-traversal layer keys path state
+		// by them, and this is the one field a peer chooses, so without the
+		// check a member could copy another's and cut its connectivity.
 		if other, dup := byDisco[p.DiscoKey]; dup {
 			return fmt.Errorf("conn: peers %v and %v announce the same disco key %v",
 				other.ShortString(), p.NodeKey.ShortString(), p.DiscoKey.ShortString())
@@ -388,73 +448,33 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	// wireguard-go asks.
 	m.state.Store(next)
 
-	// A removed peer's session key material is discarded outright rather
-	// than left to expire. So is a retained peer's whose disco key changed:
-	// that means the peer restarted and its old sessions are dead —
-	// ipnlocal performs exactly this reset after SetNetworkMap, and with no
-	// ipnlocal here the job is ours. Either kind is re-created lazily on
-	// demand, with current state.
+	// Session keys are discarded outright rather than left to expire, for a
+	// removed peer and for one whose disco key changed — that means it
+	// restarted, so its old sessions are dead. Both are re-created lazily.
 	for _, nk := range resets {
 		m.eng.ResetDevicePeer(nk)
 	}
-	// Every kept peer is re-synced, not just those whose addresses changed:
-	// wireguard-go's lazy peer creation reads the config lookup with no
-	// ordering against this call, so a peer created concurrently can be
-	// inserted holding the *previous* snapshot's AllowedIPs. This sweep
-	// bounds that staleness at one reconcile round, the same self-healing
-	// the old sync-everything loop provided; only an upstream re-validation
-	// after insert could close the window entirely. The sweep is cheap:
-	// SyncDevicePeer is a no-op for peers not active in the device, and
-	// re-applying an unchanged AllowedIPs list is a no-op below it.
+	// Every kept peer, not just changed ones: wireguard-go's lazy peer
+	// creation reads the config lookup unordered against this call, so a
+	// concurrently created peer can hold the previous snapshot's AllowedIPs.
 	for nk := range next.peers {
 		m.eng.SyncDevicePeer(nk)
 	}
 	m.magic.SetNetworkMap(m.selfNV, nodeList)
-	// Warm the new peers' paths whether or not the reconfiguration succeeded.
-	// Discovery is independent of the packet filter, and a reconfig error is
-	// exactly when warming matters most: the next SetPeers computes what is
-	// new by comparing against the snapshot already stored above, so a peer
-	// skipped here would never be warmed at all, and would pay the ten-second
-	// first-packet delay this exists to prevent.
+	// Warm regardless of the reconfig result: the next SetPeers diffs against
+	// the snapshot already stored above, so a peer skipped here would never be
+	// warmed at all.
 	err := m.reconfig()
 	m.warmPaths(fresh)
 	return err
 }
 
-// warmPaths starts NAT-traversal discovery towards peers that have just
-// appeared, before anything asks to send to them.
-//
-// Without it the first packet to a new peer is a WireGuard handshake with
-// nowhere to go: magicsock has no verified path yet, logs "Failed to send
-// handshake initiation: no UDP or DERP addr", and drops it. Disco then
-// completes in about a millisecond — but WireGuard has already armed its own
-// five-second retry, and the *response* is dropped the same way for the same
-// reason on the other side, so a LAN mesh takes ten seconds to pass its first
-// packet instead of a few.
-//
-// Tailscale does not hit this because a DERP home relay is always available as
-// an immediate path, and the direct one is an upgrade. A juist network at M2
-// has no relays at all (docs/05-roadmap.md puts them in M3), so the direct
-// path is the only path and it has to exist before it is needed. This stays
-// worth doing once relays arrive: it is the difference between a new peer
-// being reachable directly and being reachable through someone else's uplink
-// for the first few seconds.
-//
-// It is repeated on [warmSchedule] rather than sent once, because the first
-// probe is often dropped for a reason that fixes itself: two nodes meeting for
-// the first time install each other a moment apart, and a disco ping arriving
-// at a peer that has not yet been told about us is discarded. A node only
-// adopts a path on receiving a *pong*, so the side that pinged early gets
-// nothing out of the exchange and would otherwise wait for WireGuard's retry.
-//
-// Failures are ignored. This is a warm-up, not a health check — the callback
-// reports what disco found, and everything it could report is something the
-// data plane will rediscover on its own. The cost of the whole schedule is
-// four 124-byte datagrams per newly appeared peer.
-//
-// The caller must hold m.apply, which is what makes the WaitGroup handshake
-// with Close safe: Close cannot start draining between the Add here and the
-// goroutine starting.
+// warmPaths starts NAT-traversal discovery towards new peers before anything
+// sends to them: without it the first handshake has no path, is dropped, and
+// WireGuard's five-second retry dominates in both directions. Probes repeat on
+// [warmSchedule], since a disco ping to a peer not yet told about us is
+// discarded. Failures are ignored. The caller must hold m.apply, which is what
+// makes the WaitGroup handshake with Close safe.
 func (m *tsManager) warmPaths(fresh []key.NodePublic) {
 	if len(fresh) == 0 || m.closed {
 		return
@@ -484,10 +504,9 @@ func (m *tsManager) warmPaths(fresh []key.NodePublic) {
 	}()
 }
 
-// warmSchedule is when path warm-up probes are sent, measured from the
-// reconcile that introduced the peer. Front-loaded, and over within a few
-// seconds: past that, WireGuard's own retry has taken over and more probes
-// would only add traffic to a peer that is not answering.
+// warmSchedule is when warm-up probes are sent, measured from the reconcile
+// that introduced the peer. Over within a few seconds: past that WireGuard's
+// own retry has taken over.
 var warmSchedule = []time.Duration{0, 250 * time.Millisecond, 1 * time.Second, 3 * time.Second}
 
 // newPaths reports the peers that need a path established: those that were not
@@ -502,11 +521,9 @@ func newPaths(prev, next map[key.NodePublic]Peer) (fresh []key.NodePublic) {
 	return fresh
 }
 
-// peerDelta compares two peer sets and reports which device peers must be
-// reset — removed from the device, discarding session keys. That covers peers
-// that left the set and peers whose disco key rotated: a rotation means the
-// peer restarted, so its old sessions are dead either way, and waiting out
-// WireGuard's rekey timers would blackhole traffic to it for minutes.
+// peerDelta reports which device peers must be reset, discarding session keys:
+// those that left the set, and those whose disco key rotated, since that means
+// a restart and waiting out the rekey timers would blackhole traffic.
 func peerDelta(prev, next map[key.NodePublic]Peer) (resets []key.NodePublic) {
 	for nk, old := range prev {
 		if cur, still := next[nk]; !still || cur.DiscoKey != old.DiscoKey {
@@ -523,33 +540,17 @@ func samePrefixSet(a, b []netip.Prefix) bool {
 		return false
 	}
 	as, bs := slices.Clone(a), slices.Clone(b)
-	cmp := func(x, y netip.Prefix) int {
-		if c := x.Addr().Compare(y.Addr()); c != 0 {
-			return c
-		}
-		return x.Bits() - y.Bits()
-	}
-	slices.SortFunc(as, cmp)
-	slices.SortFunc(bs, cmp)
+	slices.SortFunc(as, comparePrefix)
+	slices.SortFunc(bs, comparePrefix)
 	return slices.Equal(as, bs)
 }
 
-// checkHostPrefix enforces the address contract shared by [Self.Addrs] and
-// [Peer.Addrs]: a single host address in canonical form.
-//
-// Addrs become the peer's WireGuard AllowedIPs, and wireguard-go checks every
-// decrypted packet's *source* address against them (AllowedPeerSourceIP). A
-// prefix wider than one host would therefore authorize its peer to originate
-// traffic as any address inside it — impersonating other members straight
-// past the packet filter, which sees a member source and accepts. v1 binds
-// host addresses only; routes arrive in M7 through a deliberate,
-// quorum-granted widening, never implicitly here.
-//
-// A v4-mapped v6 prefix (::ffff:a.b.c.d) is refused for a related reason: it
-// aliases the plain v4 address while comparing unequal to it as a netip.Addr,
-// so it would slip past the duplicate-address and claims-our-address checks —
-// and could never match a packet anyway, since parsed packet addresses are
-// never v4-mapped.
+// checkHostPrefix enforces the contract shared by [Self.Addrs] and
+// [Peer.Addrs]: a single host address in canonical form. Addrs become
+// AllowedIPs, which also authorize the source addresses a peer may originate,
+// so a wider prefix lets it impersonate other members. A v4-mapped v6 prefix
+// is refused because it aliases the plain v4 address while comparing unequal
+// to it, slipping past the duplicate checks while matching no packet.
 func checkHostPrefix(pfx netip.Prefix) error {
 	if !pfx.IsSingleIP() {
 		return fmt.Errorf("%v is not a single-IP prefix", pfx)
@@ -572,43 +573,100 @@ func checkNodeID(id uint64) error {
 	return nil
 }
 
-// reconfig applies the local node's own WireGuard config and the packet
-// filter. Peers are not part of it: wireguard-go pulls those from the lookups
-// installed in New.
-//
-// The caller must hold m.apply.
+// maxTunNameLen is IFNAMSIZ-1, the longest name Linux and the BSDs accept.
+const maxTunNameLen = 15
+
+// checkTunName rejects device names the OS would mishandle, which TUNSETIFF
+// reports as a bare EINVAL. '%' matters most: the kernel treats it as a
+// template, so "juist%d" creates a device the caller never named.
+func checkTunName(name string) error {
+	if name == "" {
+		return errors.New("must not be empty")
+	}
+	if len(name) > maxTunNameLen {
+		return fmt.Errorf("%q is %d bytes; the OS accepts at most %d", name, len(name), maxTunNameLen)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("%q is not a usable interface name", name)
+	}
+	if strings.ContainsAny(name, "%") {
+		return fmt.Errorf("%q contains %%, which the kernel expands to a different name", name)
+	}
+	if strings.ContainsAny(name, "/: \t\n") {
+		return fmt.Errorf("%q contains a character an interface name may not hold", name)
+	}
+	return nil
+}
+
+// reconfig applies this node's own WireGuard config and the packet filter;
+// wireguard-go pulls peers from the lookups installed in New. The caller must
+// hold m.apply.
 func (m *tsManager) reconfig() error {
 	filt, err := m.filter()
 	if err != nil {
 		return fmt.Errorf("conn: building filter: %w", err)
 	}
 	m.eng.SetFilter(filt)
-	err = m.eng.Reconfig(
-		&wgcfg.Config{
-			PrivateKey: m.self.NodeKey,
-			Addresses:  m.self.Addrs,
-		},
-		&router.Config{LocalAddrs: m.self.Addrs},
-		&dns.Config{},
-	)
+	wg := &wgcfg.Config{
+		PrivateKey: m.self.NodeKey,
+		Addresses:  m.self.Addrs,
+	}
+	// LocalAddrs puts our addresses on the interface; Routes is what sends
+	// a peer's address into the tunnel. NetfilterOff is stated rather
+	// than left to the zero value: the systemd unit's
+	// ProtectKernelTunables depends on this daemon writing no sysctls.
+	rt := &router.Config{
+		LocalAddrs:    m.self.Addrs,
+		Routes:        m.peerRoutes(),
+		NetfilterMode: preftype.NetfilterOff,
+	}
+	err = m.eng.Reconfig(wg, rt, &dns.Config{})
+	if errors.Is(err, wgengine.ErrNoChanges) && m.routerStale {
+		// The engine records the router config before it programs it, so a
+		// failed programming leaves it believing the OS matches a config the
+		// OS never took — and every later identical call short-circuits here,
+		// leaving the host routed for the peer set it had when it broke.
+		// Handing it a config that differs makes the retry real. The window in
+		// which our addresses are off the device lasts one call and only on a
+		// path where the router is already known broken.
+		// Whether this one succeeds does not matter: either way the engine
+		// now holds a config the real one differs from.
+		_ = m.eng.Reconfig(wg, &router.Config{NetfilterMode: preftype.NetfilterOff}, &dns.Config{})
+		err = m.eng.Reconfig(wg, rt, &dns.Config{})
+	}
 	if err != nil && !errors.Is(err, wgengine.ErrNoChanges) {
+		m.routerStale = true
 		return fmt.Errorf("conn: reconfig: %w", err)
 	}
+	m.routerStale = false
 	return nil
 }
 
-// filter builds the v1 packet policy: any member may send anything to any
-// other member. Fine-grained ACLs are a post-v1 item (docs/01-requirements.md),
-// but the filter is installed explicitly rather than left nil, because a nil
-// filter drops every inbound packet.
-//
-// The Match values are built directly rather than routed through
-// tailcfg.FilterRule and its parser: that string layer is a control-plane
-// wire format, and round-tripping prefixes this package just validated
-// through it added parse failure modes that had no honest handling. The only
-// error left is the IPSet build, and it is propagated — a filter that could
-// not be built must fail the reconfig loudly, not fall back to dropping
-// member traffic while SetPeers reports success.
+// peerRoutes is one prefix per peer overlay address: what the host must route
+// into the tunnel. Sorted, so an unchanged peer set yields an identical slice
+// and Reconfig recognises the no-op instead of reprogramming the OS.
+func (m *tsManager) peerRoutes() []netip.Prefix {
+	st := m.state.Load()
+	routes := make([]netip.Prefix, 0, len(st.peers))
+	for _, p := range st.peers {
+		routes = append(routes, p.Addrs...)
+	}
+	slices.SortFunc(routes, comparePrefix)
+	return routes
+}
+
+// comparePrefix orders prefixes by address, then bits.
+func comparePrefix(x, y netip.Prefix) int {
+	if c := x.Addr().Compare(y.Addr()); c != 0 {
+		return c
+	}
+	return x.Bits() - y.Bits()
+}
+
+// filter builds the packet policy: any member may send anything to any other
+// member. It is installed explicitly, because a nil filter drops every inbound
+// packet, and built from Match values directly rather than through
+// tailcfg.FilterRule's parser, which only adds failure modes.
 func (m *tsManager) filter() (*filter.Filter, error) {
 	st := m.state.Load()
 	srcs := make([]netip.Prefix, 0, len(st.peers))
@@ -634,24 +692,14 @@ func (m *tsManager) filter() (*filter.Filter, error) {
 		Srcs:    srcs,
 		Dsts:    dsts,
 	}}
-	// Sharing state with the previous filter carries the flow-tracking
-	// cache across rebuilds, so a membership change does not send every
-	// established UDP flow back through the slow path (ipnlocal does the
-	// same). GetFilter is nil on the first build, which means fresh state.
+	// Sharing state with the previous filter carries the flow-tracking cache
+	// across rebuilds, so a membership change does not send every established
+	// UDP flow back through the slow path. Nil on the first build.
 	return filter.New(matches, nil, ls, ls, m.eng.GetFilter(), m.logf), nil
 }
 
-// allIPProtos enumerates every IP protocol number, which is the only way to
-// express "any protocol" here: Match.IPProto is a membership test with no
-// wildcard form, and one that silently rejects anything absent. Leaving any
-// value out would drop ESP, AH, GRE, SCTP, OSPF or whatever else a member
-// sends — a full mesh with no per-port ACLs (docs/01-requirements.md) has to
-// carry all of it.
-//
-// The cost is a linear scan of up to 256 entries, paid only on the filter's
-// slow paths (TCP SYN, uncached UDP, ICMP, other protocols) and not on
-// established flows. Performance is priority 3; silently dropping protocols
-// is not a trade we get to make.
+// allIPProtos enumerates every IP protocol number, the only way to say "any
+// protocol": Match.IPProto is a membership test with no wildcard.
 var allIPProtos = func() views.Slice[ipproto.Proto] {
 	p := make([]ipproto.Proto, 256)
 	for i := range p {
@@ -659,6 +707,101 @@ var allIPProtos = func() views.Slice[ipproto.Proto] {
 	}
 	return views.SliceOf(p)
 }()
+
+// SetRelays installs the relay set. It is separate from SetPeers because the
+// two change for different reasons: a relay set moves when a role is granted
+// or a relay restarts, and installing it re-runs the data plane's latency
+// probes, which an unchanged set must not.
+func (m *tsManager) SetRelays(relays []Relay) error {
+	if err := validateRelays(relays); err != nil {
+		return err
+	}
+	relays = slices.Clone(relays)
+	for i := range relays {
+		relays[i].Addrs = slices.Clone(relays[i].Addrs)
+	}
+	slices.SortFunc(relays, func(a, b Relay) int { return a.Region - b.Region })
+
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	if m.closed {
+		return errors.New("conn: manager is closed")
+	}
+	if sameRelays(m.relays, relays) {
+		return nil
+	}
+	m.relays = relays
+	m.magic.SetDERPMap(derpMap(relays))
+	if len(relays) == 0 {
+		// Nothing will report a home region again, and a stale one would be
+		// announced to peers as a path that no longer exists.
+		if m.homeRelay.Swap(0) != 0 {
+			m.notifyChange()
+		}
+	}
+	return nil
+}
+
+func (m *tsManager) HomeRelay() int { return int(m.homeRelay.Load()) }
+
+func (m *tsManager) LocalEndpoints() []netip.AddrPort {
+	m.epsMu.Lock()
+	defer m.epsMu.Unlock()
+	return slices.Clone(m.localEps)
+}
+
+// onStatus records the endpoint set the data plane believes this node is
+// reachable at. Without a relay it is empty: magicsock reports no endpoints of
+// its own with neither a STUN result nor a DERP map, which is why the
+// announcement is built from an interface scan as well and these are added to
+// it rather than substituted for it.
+func (m *tsManager) onStatus(st *wgengine.Status, err error) {
+	if err != nil || st == nil {
+		return
+	}
+	eps := make([]netip.AddrPort, 0, len(st.LocalAddrs))
+	for _, e := range st.LocalAddrs {
+		ap := e.Addr
+		if !ap.IsValid() || ap.Port() == 0 {
+			continue
+		}
+		eps = append(eps, netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()))
+	}
+	slices.SortFunc(eps, func(a, b netip.AddrPort) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
+		}
+		return int(a.Port()) - int(b.Port())
+	})
+	eps = slices.Compact(eps)
+
+	m.epsMu.Lock()
+	changed := !slices.Equal(m.localEps, eps)
+	m.localEps = eps
+	m.epsMu.Unlock()
+	if changed {
+		m.notifyChange()
+	}
+}
+
+// onNetInfo records the relay region the data plane chose for itself.
+func (m *tsManager) onNetInfo(ni *tailcfg.NetInfo) {
+	if ni == nil {
+		return
+	}
+	if m.homeRelay.Swap(int64(ni.PreferredDERP)) != int64(ni.PreferredDERP) {
+		m.notifyChange()
+	}
+}
+
+// notifyChange tells the caller that something in this node's announcement
+// moved. It runs on the engine's goroutines, so it must not block: the
+// callback's contract is that it returns promptly.
+func (m *tsManager) notifyChange() {
+	if m.onChange != nil {
+		m.onChange()
+	}
+}
 
 func (m *tsManager) LocalPort() uint16 { return m.magic.LocalPort() }
 
@@ -684,6 +827,12 @@ func (m *tsManager) Close() error {
 	close(m.done)
 	m.warm.Wait()
 	m.eng.Close()
+	// The engine closes the router it was given but not the monitor, since it
+	// did not create it. Do that here, after the engine has finished using it
+	// on the way down.
+	if m.netMon != nil {
+		m.netMon.Close()
+	}
 	m.bus.Close()
 	return nil
 }
@@ -698,6 +847,7 @@ func peerNode(p Peer) tailcfg.NodeView {
 		Addresses:  p.Addrs,
 		AllowedIPs: p.Addrs,
 		Endpoints:  p.Endpoints,
+		HomeDERP:   p.HomeRelay,
 		Cap:        tailcfg.CurrentCapabilityVersion,
 	}).View()
 }

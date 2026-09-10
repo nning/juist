@@ -11,12 +11,9 @@ import (
 const HashSize = sha256.Size
 
 // A Hash is a SHA-256 digest: a record's identity in the chain, or a
-// commitment to a secret.
-//
-// SHA-256 rather than the BLAKE2s that tka uses, for no deeper reason than
-// that it is in the standard library, hardware-accelerated on every target,
-// and already the hash the address derivation in docs/04-architecture.md
-// specifies. One hash function for everything is one less thing to get wrong.
+// commitment to a secret. SHA-256 rather than tka's BLAKE2s because it is in
+// the standard library and hardware-accelerated everywhere; one hash function
+// for everything is one less thing to get wrong.
 type Hash [HashSize]byte
 
 // base32NoPad is the text encoding for hashes. Base32 rather than base64
@@ -70,10 +67,9 @@ func ParseHash(s string) (Hash, error) {
 	return h, err
 }
 
-// Domain-separation labels. Every hash and every derived key in this project
-// is computed over one of these, so that no digest can be reinterpreted as a
-// digest of a different kind. The labels are versioned: a change in what is
-// hashed under a label is a new label, never a redefinition of an old one.
+// Domain-separation labels, so no digest can be reinterpreted as one of a
+// different kind. A change in what is hashed under a label is a new label,
+// never a redefinition.
 const (
 	labelAUM         = "juist/aum/v1"
 	labelAUMSig      = "juist/aum-sig/v1"
@@ -86,12 +82,9 @@ const (
 // errNULInLabel guards the invariant hashLabeled relies on.
 var errNULInLabel = errors.New("types: domain-separation label contains NUL")
 
-// hashLabeled returns SHA-256 over label, a NUL terminator, and parts.
-//
-// The NUL is what makes the labels unambiguous: no label contains one, so no
-// label-plus-data string can be read as a different label plus different data.
-// Concatenating labels without a separator would leave that open whenever one
-// label is a prefix of another.
+// hashLabeled returns SHA-256 over label, a NUL terminator, and parts. The NUL
+// is what makes the labels unambiguous: no label contains one, so no
+// label-plus-data string reads as a different label plus different data.
 func hashLabeled(label string, parts ...[]byte) Hash {
 	for i := 0; i < len(label); i++ {
 		if label[i] == 0 {

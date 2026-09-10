@@ -7,24 +7,18 @@ import (
 	"slices"
 )
 
-// A Kind identifies what an [AUM] does.
-//
-// Numbers are permanent: never reordered, never reused. Kind 0 is reserved as
-// invalid so that a record whose kind field was dropped cannot be mistaken for
-// a real one.
+// A Kind identifies what an [AUM] does. Numbers are permanent: never
+// reordered, never reused. Kind 0 is invalid, so a record whose kind field was
+// dropped cannot be mistaken for a real one.
 type Kind uint8
 
 const (
 	KindInvalid Kind = 0
 
-	// KindGenesis creates the network. It is the only record with no parent,
-	// and its hash names the network for the rest of its life: the overlay
-	// address space derives from it, and every later record chains to it.
-	//
-	// Its signatures are checked against the admin keys in the record
-	// itself, which is unavoidable — there is no earlier state to check
-	// against — and is why the genesis ceremony is the root of trust that
-	// docs/02-threat-model.md treats as such.
+	// KindGenesis creates the network: the only record with no parent, and the
+	// one whose hash names the network. Its signatures are checked against the
+	// admin keys in the record itself — there is no earlier state — which is
+	// what makes the genesis ceremony the root of trust.
 	KindGenesis Kind = 1
 
 	// KindAddNode admits a member device. Carries an epoch bump so the new
@@ -37,22 +31,19 @@ const (
 	KindRemoveNode Kind = 3
 
 	// KindSetNodeRoutes replaces a node's roles and advertised routes. Every
-	// capability a node holds is granted here or in its AddNode record and
-	// nowhere else — a node can never assert a role or a route for itself,
-	// and no peer's on-the-wire advertisement is ever believed.
+	// capability is granted here or in its AddNode record and nowhere else: a
+	// node can never assert a role or a route for itself.
 	KindSetNodeRoutes Kind = 4
 
 	// KindRotateNodeKey replaces a node's WireGuard and encryption keys,
-	// keeping its identity and address. Requires the node's own signature in
-	// addition to quorum: quorum decides that the membership may re-key,
-	// while the node's signature is what shows the new keys came from the
-	// device rather than from whoever asked for the rotation.
+	// keeping its identity and address. Requires the node's own signature as
+	// well as quorum, which is what shows the new keys came from the device.
 	KindRotateNodeKey Kind = 5
 
-	// KindRotateIdentity replaces a node's identity key, and with it the
-	// node's derived overlay address, keeping its roles, routes, v4 address
-	// and name. Requires quorum plus a signature by the new identity key,
-	// so that a membership slot cannot be bound to a key no device holds.
+	// KindRotateIdentity replaces a node's identity key, and with it its
+	// derived overlay address, keeping roles, routes, v4 address and name.
+	// Requires quorum plus a signature by the new key, so a membership slot
+	// cannot be bound to a key no device holds.
 	KindRotateIdentity Kind = 6
 
 	// KindAddAdminKey adds an admin signing key with a vote weight.
@@ -63,29 +54,26 @@ const (
 	// network permanently unmanageable.
 	KindRemoveAdminKey Kind = 8
 
-	// KindSetQuorum changes k, the vote weight a change requires.
-	//
-	// Not in the record list in docs/04-architecture.md, which follows tka in
-	// treating the quorum policy as fixed at genesis. Without it a network
-	// that grows from three admins to ten keeps whatever k it chose on day
-	// one, and there is no way to tighten policy short of recreating the
-	// network. Flagged for the M3 schema freeze.
+	// KindSetQuorum changes k, the vote weight a change requires, so a network
+	// that grows from three admins to ten is not stuck with day-one policy.
 	KindSetQuorum Kind = 9
 
-	// KindCheckpoint states the full authority state at a point in the
-	// chain, so that a new node can bootstrap without replaying history and
-	// so that old records can be compacted away.
-	//
-	// A checkpoint whose parent state is known must match it exactly; see
-	// trust/log. Otherwise a quorum could rewrite membership by asserting a
-	// state instead of by changing it.
+	// KindCheckpoint states the full authority state at a point in the chain,
+	// so a new node can bootstrap without replaying history and old records
+	// can be compacted away. One whose parent state is known must match it
+	// exactly, or a quorum could rewrite membership by asserting a state.
 	KindCheckpoint Kind = 10
 
-	// KindEpochBump rotates the group secret without changing membership:
-	// the routine half of the two-tier revocation response in
-	// docs/research/building-blocks.md §5, and the response to a suspected
-	// group-secret leak.
+	// KindEpochBump rotates the group secret without changing membership: the
+	// response to a suspected group-secret leak.
 	KindEpochBump Kind = 11
+
+	// KindSchemaUpgrade raises the record schema the network is written under,
+	// so that a schema change costs a quorum-signed record rather than a new
+	// network. It is the one record every build must be able to decode,
+	// whatever it implements: a node too old to apply it has to be able to see
+	// it, or it would only observe that sync had stopped.
+	KindSchemaUpgrade Kind = 12
 )
 
 func (k Kind) String() string {
@@ -114,15 +102,16 @@ func (k Kind) String() string {
 		return "checkpoint"
 	case KindEpochBump:
 		return "epoch-bump"
+	case KindSchemaUpgrade:
+		return "schema-upgrade"
 	default:
 		return fmt.Sprintf("kind?<%d>", uint8(k))
 	}
 }
 
-// IsRevocation reports whether the kind withdraws authority.
-//
-// Fork choice prefers these over their siblings and never lets one be silently
-// orphaned: the safety bias docs/04-architecture.md calls "revoked wins".
+// IsRevocation reports whether the kind withdraws authority. Fork choice
+// prefers these over their siblings and never silently orphans one: "revoked
+// wins".
 func (k Kind) IsRevocation() bool {
 	return k == KindRemoveNode || k == KindRemoveAdminKey
 }
@@ -136,24 +125,18 @@ type NodeKeys struct {
 }
 
 // A RouteGrant is the roles and routes [KindSetNodeRoutes] assigns to a node.
-//
-// It replaces the node's current set rather than adding to it, so the log
-// always states the whole grant in one place and there is no accumulated
-// history to reconstruct in order to know what a node is allowed to do. An
-// empty grant withdraws everything.
+// It replaces the current set rather than adding to it, so the whole grant is
+// stated in one place. An empty grant withdraws everything.
 type RouteGrant struct {
 	Roles  []Role         `cbor:"1,keyasint,omitempty"`
 	Routes []netip.Prefix `cbor:"2,keyasint,omitempty"`
 }
 
 // An AUM — Authority Update Message, the term tka uses — is one record of the
-// membership log.
-//
-// Every field beyond Kind and Prev is an optional payload, and
-// [AUM.StaticValidate] requires each kind to carry exactly the payload fields
-// it is defined with: not a subset, not a superset. A record cannot carry a
-// field its kind ignores, so there is no way to smuggle content past
-// validation into something that is signed and chained.
+// membership log. Every field beyond Kind and Prev is an optional payload, and
+// [AUM.StaticValidate] requires each kind to carry exactly the fields it is
+// defined with, so no content can be smuggled into something signed and
+// chained.
 type AUM struct {
 	Kind Kind `cbor:"1,keyasint"`
 
@@ -189,12 +172,12 @@ type AUM struct {
 	// Epoch is the group-secret bump that membership and key changes carry.
 	Epoch *EpochRecord `cbor:"11,keyasint,omitempty"`
 
+	// Schema is the version being adopted, for SchemaUpgrade.
+	Schema *SchemaVersion `cbor:"12,keyasint,omitempty"`
+
 	// Signatures authorize the record. Sorted by key ID and duplicate-free,
-	// like every other set in the schema.
-	//
-	// CBOR key 23 is the highest that encodes in a single byte, and is where
-	// tka puts its signatures for that reason; the same convention is kept
-	// here so payload fields have room to grow below it.
+	// like every other set. CBOR key 23 is the highest that encodes in one
+	// byte, leaving payload fields room to grow below it.
 	Signatures []Signature `cbor:"23,keyasint,omitempty"`
 }
 
@@ -211,6 +194,7 @@ const (
 	fNewIdentity
 	fQuorum
 	fEpoch
+	fSchema
 )
 
 var fieldNames = []struct {
@@ -226,6 +210,7 @@ var fieldNames = []struct {
 	{fNewIdentity, "NewIdentity"},
 	{fQuorum, "Quorum"},
 	{fEpoch, "Epoch"},
+	{fSchema, "Schema"},
 }
 
 func (f fieldSet) String() string {
@@ -241,11 +226,8 @@ func (f fieldSet) String() string {
 	return joinComma(names)
 }
 
-// kindFields is the exact payload each kind carries.
-//
-// A kind absent from this table is not a valid kind, which is how unknown
-// record types are rejected: see the package documentation for why this log
-// cannot afford to ignore records it does not understand.
+// kindFields is the exact payload each kind carries. A kind absent from this
+// table is not valid, which is how unknown record types are rejected.
 var kindFields = map[Kind]fieldSet{
 	KindGenesis:        fState,
 	KindAddNode:        fNode | fEpoch,
@@ -258,6 +240,7 @@ var kindFields = map[Kind]fieldSet{
 	KindSetQuorum:      fQuorum,
 	KindCheckpoint:     fState,
 	KindEpochBump:      fEpoch,
+	KindSchemaUpgrade:  fSchema,
 }
 
 func (a *AUM) presentFields() fieldSet {
@@ -289,6 +272,9 @@ func (a *AUM) presentFields() fieldSet {
 	if a.Epoch != nil {
 		f |= fEpoch
 	}
+	if a.Schema != nil {
+		f |= fSchema
+	}
 	return f
 }
 
@@ -296,15 +282,11 @@ func (a *AUM) presentFields() fieldSet {
 // node self-signature some kinds require.
 const MaxSignatures = MaxAdmins + 1
 
-// StaticValidate checks everything about a record that can be decided from the
-// record alone: that its kind is known, that it carries exactly that kind's
-// payload, that its sets are canonically ordered, that it is signed, and that
-// its payload values are individually well-formed.
-//
-// What it deliberately does not check is anything requiring state: whether the
-// signatures are from keys the network trusts, whether they reach quorum,
-// whether the subject exists, whether an address collides. Those are trust/log's
-// job, because they are only answerable against a particular parent state.
+// StaticValidate checks what can be decided from the record alone: known kind,
+// exactly that kind's payload, canonically ordered sets, at least one
+// signature, well-formed values. Anything needing state — whether the
+// signatures are trusted, reach quorum, or name an existing subject — is
+// trust/log's, since it is only answerable against a parent state.
 func (a *AUM) StaticValidate() error {
 	if err := a.ValidateUnsigned(); err != nil {
 		return err
@@ -312,13 +294,9 @@ func (a *AUM) StaticValidate() error {
 	return a.validateSignatureSet()
 }
 
-// ValidateUnsigned is [AUM.StaticValidate] without the requirement that the
-// record carry any signature, for a record still being assembled: a quorum is
-// collected across machines, so a record exists unsigned for as long as the
-// ceremony takes.
-//
-// Signatures present are still checked for shape and ordering. Only their
-// absence is tolerated.
+// ValidateUnsigned is [AUM.StaticValidate] for a record still being assembled,
+// which a quorum ceremony leaves unsigned for as long as it takes. Signatures
+// present are still checked for shape and ordering.
 func (a *AUM) ValidateUnsigned() error {
 	want, known := kindFields[a.Kind]
 	if !known {
@@ -410,6 +388,14 @@ func (a *AUM) ValidateUnsigned() error {
 			return fmt.Errorf("%v: %w", a.Kind, err)
 		}
 	}
+	if a.Schema != nil && *a.Schema == 0 {
+		// Zero is the schema every network starts under, so an upgrade to it
+		// raises nothing. Which versions this build can act on is deliberately
+		// not decided here: a record that fails to decode cannot be stored,
+		// and a node too old for the network still has to store this one, both
+		// to report it and to keep relaying it to members that are not.
+		return errors.New("schema-upgrade record adopts schema 0, which every network already has")
+	}
 	return nil
 }
 
@@ -446,31 +432,23 @@ func (a *AUM) validateSignatureShape() error {
 // Encode returns the record's canonical CBOR encoding.
 func (a *AUM) Encode() ([]byte, error) { return encode(a) }
 
-// Hash returns the record's identity in the chain.
-//
-// The record must be valid — either freshly out of [DecodeAUM], or having
-// passed [AUM.StaticValidate]. Hashing an invalid record panics rather than
-// returning a hash that nothing should act on.
+// Hash returns the record's identity in the chain. The record must be valid —
+// out of [DecodeAUM] or past [AUM.StaticValidate]; hashing an invalid one
+// panics rather than returning a hash nothing should act on.
 func (a *AUM) Hash() Hash { return hashLabeled(labelAUM, mustEncode(a)) }
 
 // SigHash returns the digest signatures are computed over: the record without
-// its signatures, so that the value being signed does not depend on the
-// signatures being collected.
-//
-// A record and its signing hash are separately labelled, so a signature can
-// never be replayed as though it were over a whole record, or the reverse.
-// Same precondition as [AUM.Hash].
+// its signatures, so what is signed does not depend on the signatures already
+// collected. Separately labelled from [AUM.Hash], so neither can be replayed
+// as the other, and with the same precondition.
 func (a *AUM) SigHash() Hash {
 	unsigned := *a
 	unsigned.Signatures = nil
 	return hashLabeled(labelAUMSig, mustEncode(&unsigned))
 }
 
-// Sign appends a signature by priv, keeping the signature set sorted.
-//
-// It is an error to sign twice with the same key: a repeated signature would
-// be a second encoding of the same authorization, and vote counting must not
-// be able to double-count.
+// Sign appends a signature by priv, keeping the signature set sorted. Signing
+// twice with one key is an error: vote counting must not double-count.
 func (a *AUM) Sign(priv PrivateIdentity) error {
 	id := priv.Public()
 	if slices.ContainsFunc(a.Signatures, func(s Signature) bool { return s.KeyID == id }) {
@@ -551,12 +529,9 @@ func (a *AUM) Clone() *AUM {
 	return &out
 }
 
-// DecodeAUM decodes and validates a record.
-//
-// It rejects anything that is not the canonical encoding of a structurally
-// valid record, so every AUM value produced here is one whose bytes are
-// exactly what re-encoding it yields — which is what lets [AUM.Hash] be taken
-// as the identity of the bytes it arrived as.
+// DecodeAUM decodes and validates a record, rejecting anything that is not the
+// canonical encoding of a structurally valid one — which is what lets
+// [AUM.Hash] be the identity of the bytes it arrived as.
 func DecodeAUM(b []byte) (AUM, error) {
 	a, err := decodeCanonical[AUM](b)
 	if err != nil {
@@ -568,12 +543,8 @@ func DecodeAUM(b []byte) (AUM, error) {
 	return a, nil
 }
 
-// DecodeUnsignedAUM is [DecodeAUM] for a record that may not carry any
-// signature yet, which is every record between being assembled and finishing
-// its signing ceremony. Signatures present are still checked for shape and
-// ordering; only their absence is tolerated.
-//
-// Nothing that acts on a record should use this: a record with no signatures is
+// DecodeUnsignedAUM is [DecodeAUM] for a record part-way through its signing
+// ceremony. Nothing that acts on a record should use it: an unsigned record is
 // a proposal, not an authorization, and trust/log rejects one either way.
 func DecodeUnsignedAUM(b []byte) (AUM, error) {
 	a, err := decodeCanonical[AUM](b)

@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"net"
 	"net/netip"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,8 +30,21 @@ type cli struct {
 
 func newCLI(t *testing.T) *cli {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "home")
-	return &cli{t: t, home: dir}
+	return &cli{t: t, home: filepath.Join(shortTempDir(t), "home")}
+}
+
+// shortTempDir is t.TempDir() without the test's name in the path: $home
+// holds the control socket, and a sockaddr_un path is capped at 104 bytes on
+// macOS and the BSDs, which t.TempDir() alone exceeds under /var/folders. A
+// bind over the cap fails with EINVAL, which does not mention length.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "juist")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
 }
 
 func (c *cli) run(args ...string) (string, error) {
@@ -194,11 +209,9 @@ func TestQuorumCeremonyAcrossKeystores(t *testing.T) {
 	// machine held both keys, k-of-n would be decoration.
 	secondKey := field(t, second.mustRun("key", "-create-admin", "second"), "admin key")
 
-	// The real network is created with both keys and a quorum of two, so the
-	// genesis record itself needs a ceremony. The founder cannot reach quorum
-	// alone, so init starts the ceremony rather than creating anything: it
-	// writes the record out for the other admin to sign, and no network exists
-	// until the record comes back.
+	// With a quorum of two the genesis itself needs a ceremony: init writes
+	// the record out for the other admin, and no network exists until it
+	// comes back.
 	first.mustRun("init", "-network", "twoadmin", "-quorum", "2",
 		"-admin", "second="+secondKey)
 	st, err := store.Open(filepath.Join(first.home, logDir))
@@ -300,10 +313,8 @@ func TestKeyRotationPromotesStagedKeysOnlyOnApply(t *testing.T) {
 	if !strings.Contains(c.mustRun("verify"), "group secret readable by this device") {
 		t.Fatal("this device cannot open the group secret after rotating its keys")
 	}
-	// A rotation replaces every rotatable key, so the WireGuard key moved too —
-	// and the one the log names is the one this keystore holds, which is the
-	// part that would silently leave the device unable to handshake if the
-	// staging were wrong.
+	// A rotation replaces every rotatable key, so the log must name the
+	// WireGuard key this keystore now holds.
 	wgAfter := field(t, c.mustRun("key"), "node wireguard")
 	if wgAfter == wgBefore {
 		t.Fatal("the rotation did not replace the WireGuard key")
@@ -324,12 +335,9 @@ func TestKeyRotationPromotesStagedKeysOnlyOnApply(t *testing.T) {
 	}
 }
 
-// TestStagedKeysNotPromotedWhenRotationLosesForkChoice covers the case that
-// makes "did the batch contain a rotation?" the wrong question. A rotation
-// record can be fully authorized and still not be applied — it can lose fork
-// choice to a sibling — and a device that promoted its staged keys anyway would
-// hold key material the log does not name: unable to handshake, unable to read
-// the group secret, with nothing to point at.
+// TestStagedKeysNotPromotedWhenRotationLosesForkChoice: a rotation can be
+// fully authorized and still lose fork choice, and promoting then would leave
+// the device holding keys the log does not name.
 func TestStagedKeysNotPromotedWhenRotationLosesForkChoice(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
@@ -532,12 +540,8 @@ func TestHomeIsOwnerOnly(t *testing.T) {
 const secretsSuffix = ".secrets"
 
 // TestFailedRotationProposalStagesNothing checks that a proposal the log
-// refuses leaves no staged key material behind.
-//
-// Staging before the record was built meant a single failed command wrote
-// node.keys.next and then errored. Nothing removes that file, and staging
-// refuses to write over it, so every later rotation failed too — the operator
-// had to know to delete a file the tool never mentioned.
+// refuses leaves no staged key material behind: staging refuses to write over
+// an earlier file, so debris blocks every later rotation.
 func TestFailedRotationProposalStagesNothing(t *testing.T) {
 	c := newCLI(t)
 	// A network this device is not a member of: it has node keys, but no
@@ -575,13 +579,8 @@ func TestFailedRotationProposalStagesNothing(t *testing.T) {
 
 // TestUnreadableKeyFileIsReportedNotIgnored checks that a key file which is
 // present but cannot be loaded is an error everywhere, rather than being
-// reported as "this device has no keys".
-//
-// Conflating the two is silent failure with consequences: "juist key" sends
-// the operator to -create, which then refuses to overwrite, and "juist sign"
-// omits the node signature a rotation needs while saying only that no local
-// key could sign it. The fault — here a mode that leaves private keys readable
-// by everyone — stays invisible in both.
+// reported as "this device has no keys": conflating the two sends the operator
+// to -create, and makes "sign" omit the signature a rotation needs.
 func TestUnreadableKeyFileIsReportedNotIgnored(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
@@ -613,9 +612,8 @@ func TestUnreadableKeyFileIsReportedNotIgnored(t *testing.T) {
 }
 
 // TestUnreadableStagedKeysAreReportedOnApply is the same rule for the staged
-// file. Swallowing its error meant "juist apply" reported the rotation applied
-// while silently not promoting the keys the log had just started naming —
-// leaving the device unable to handshake, with nothing said about why.
+// file: swallowing its error would report a rotation applied while leaving the
+// keys the log now names unpromoted.
 func TestUnreadableStagedKeysAreReportedOnApply(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
@@ -637,13 +635,8 @@ func TestUnreadableStagedKeysAreReportedOnApply(t *testing.T) {
 }
 
 // TestMemberNameIsCheckedWhereItIsChosen checks that a name the log will not
-// accept is refused at the machine that chooses it, rather than at the admin's.
-//
-// The failure it guards is quiet: "juist key -create" stored any name it was
-// given and printed an enrollment command built around it, so the limit was
-// discovered by whoever ran that command — on another machine, against a rule
-// the joining device never mentioned. Nothing was wrong with the keys, so
-// nothing pointed at the fix.
+// accept is refused at the machine that chooses it, rather than by whoever
+// runs the enrollment command it was printed into.
 func TestMemberNameIsCheckedWhereItIsChosen(t *testing.T) {
 	tooLong := strings.Repeat("a", types.MaxNameLen+1)
 
@@ -728,18 +721,9 @@ func regexpReplaceNameLine(body, want string) string {
 	return strings.Join(out, "")
 }
 
-// TestMultiAdminGenesisCeremonyCompletes walks a 2-of-2 genesis all the way
-// through: started on one machine, signed on another that holds nothing but its
-// admin key, and created back on the first.
-//
-// This is the ceremony k-of-n exists for, and it previously had no supported
-// flow at all. init built the genesis in memory and discarded it when the local
-// key could not reach quorum — so the one artefact that had to travel was the
-// one thing thrown away, while the admin key and break-glass secrets it commits
-// to were already on disk under files a second init refuses to overwrite. The
-// ceremony could be neither finished nor restarted, and the error advised
-// performing it "where the keys are", which is the one place a threshold
-// guarantees they are not.
+// TestMultiAdminGenesisCeremonyCompletes walks a 2-of-2 genesis through:
+// started on one machine, signed on another that holds nothing but its admin
+// key, and created back on the first. This is the ceremony k-of-n exists for.
 func TestMultiAdminGenesisCeremonyCompletes(t *testing.T) {
 	founder := newCLI(t)
 	other := newCLI(t)
@@ -790,18 +774,10 @@ func TestMultiAdminGenesisCeremonyCompletes(t *testing.T) {
 	founder.mustRun("apply", bumpPath)
 }
 
-// TestSignWarnsWhenTheParentIsNotTheHead covers a ceremony trap: a record built
-// on a parent that is no longer the head is judged against the state at that
-// parent, not the current one.
-//
-// A stale parent is usually benign — the record forks and its author reissues
-// it. It stops being benign when the admin set moved in between: a key that is
-// an admin now was not one at that parent, so its signature there is untrusted,
-// and an untrusted signature does not merely fail to count, it invalidates the
-// record outright. sign checked only that the parent was somewhere in the log
-// and then reported status against current state, so it would add that
-// signature and print "authorized — apply it" for a record it had just made
-// permanently unusable. A signature cannot be taken back.
+// TestSignWarnsWhenTheParentIsNotTheHead: a record on a stale parent is judged
+// against the state there, so if the admin set moved in between, a signature
+// by a current admin is untrusted at that parent and invalidates the record
+// outright — and a signature cannot be taken back.
 func TestSignWarnsWhenTheParentIsNotTheHead(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("init", "-network", "demo")
@@ -845,13 +821,9 @@ func copyFile(t *testing.T, from, to string) {
 	}
 }
 
-// TestSharedWritableHomeRefused checks that the keystore directory is held to
-// the same rule trust/store applies to the log directory.
-//
-// Key files are 0600 and their mode is checked on read, but a directory anyone
-// can write to undoes that: a key file can be replaced wholesale, or a new one
-// dropped into admins/, where every .key is loaded and used to sign. Checking
-// the contents but not the container made the guarantee arbitrary.
+// TestSharedWritableHomeRefused holds the keystore directory to the rule
+// trust/store applies to the log directory: a writable directory undoes the
+// key files' own modes, since one can be replaced or a new one dropped in.
 func TestSharedWritableHomeRefused(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("init", "-network", "demo")
@@ -871,10 +843,8 @@ func TestSharedWritableHomeRefused(t *testing.T) {
 	c.mustRun("key")
 }
 
-// TestStatusWithoutADaemon covers the answer an operator gets most often:
-// there is no daemon on this home directory. The distinction matters because
-// the underlying failure is a bare ENOENT from a connect(2), which reads like
-// a bug rather than like "nothing is running".
+// TestStatusWithoutADaemon: the common answer, whose underlying failure is a
+// bare ENOENT from connect(2) and reads like a bug unless it is translated.
 func TestStatusWithoutADaemon(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("key", "-create", "-name", "laptop")
@@ -887,16 +857,40 @@ func TestStatusWithoutADaemon(t *testing.T) {
 	}
 }
 
+// TestStatusRefusedByPermission: a packaged daemon runs as its own account, so
+// a socket the caller may not connect to is an ordinary answer rather than a
+// bug, and the message has to name the account to run as instead.
+func TestStatusRefusedByPermission(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root is not subject to the mode bits this test refuses with")
+	}
+	c := newCLI(t)
+	c.mustRun("key", "-create", "-name", "laptop")
+
+	sock := daemon.SocketPath(c.home)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	if err := os.Chmod(sock, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	if _, err := c.run("status"); err == nil {
+		t.Fatal("status succeeded against a socket it may not connect to")
+	} else if !strings.Contains(err.Error(), "not permitted to reach the daemon") {
+		t.Errorf("error %q does not say the call was refused", err)
+	} else if self, uerr := user.Current(); uerr == nil &&
+		!strings.Contains(err.Error(), "sudo -u "+self.Username) {
+		t.Errorf("error %q does not name the account that owns the state directory", err)
+	}
+}
+
 // TestKeyRotationPromotesWhenADaemonOwnsTheLog is the same property as
-// TestKeyRotationPromotesStagedKeysOnlyOnApply, in the configuration a member
-// device is actually in: a daemon is running, so "apply" hands the record over
-// IPC instead of writing the log itself.
-//
-// Promotion is still this tool's job. The daemon has no idea a rotation is in
-// flight — staged keys live in the keystore, which it never reads — so an
-// apply that skipped promotion because the daemon did the writing would leave
-// the device holding old keys while the log names new ones: unable to
-// handshake, unable to open the group secret, and with nothing to point at.
+// TestKeyRotationPromotesStagedKeysOnlyOnApply with a daemon running, so
+// "apply" hands the record over IPC. Promotion is still the CLI's job: the
+// daemon never reads staged keys.
 func TestKeyRotationPromotesWhenADaemonOwnsTheLog(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
@@ -940,6 +934,7 @@ func startDaemonOn(t *testing.T, home string) func() {
 		Identity: k.Identity, Recipient: k.Recipient, WireGuard: k.WireGuardPrivate(),
 		Connect:          func(conn.Options) (conn.Manager, error) { return stubManager{}, nil },
 		DisableDiscovery: true,
+		DisableDHT:       true,
 		SocketPath:       daemon.SocketPath(home),
 		Logf:             func(string, ...any) {},
 	})
@@ -969,20 +964,17 @@ func startDaemonOn(t *testing.T, home string) func() {
 type stubManager struct{}
 
 func (stubManager) SetPeers([]conn.Peer) error             { return nil }
+func (stubManager) SetRelays([]conn.Relay) error           { return nil }
+func (stubManager) HomeRelay() int                         { return 0 }
+func (stubManager) LocalEndpoints() []netip.AddrPort       { return nil }
 func (stubManager) LocalPort() uint16                      { return 41641 }
 func (stubManager) Ping(netip.Addr, func(conn.PingResult)) {}
 func (stubManager) Close() error                           { return nil }
 
-// TestSignOnAnUnenrolledDeviceDoesNotRuinTheRecord is the ordinary shape of a
-// destroyed ceremony: a device that has run "key -create" holds node keys and
-// no network, its operator is sent the fully-signed record admitting it, and
-// they run "sign" on it before "apply" out of reasonable caution.
-//
-// An untrusted signature does not merely fail to count — it makes the record
-// invalid outright, so the admins' finished ceremony would be ruined and the
-// only fix is another one. The device's own key has exactly one role in any
-// record, and log.SelfSigner decides it from the record alone, so no log is
-// needed to know an add-node record does not want it.
+// TestSignOnAnUnenrolledDeviceDoesNotRuinTheRecord: a device with node keys
+// and no network is sent the record admitting it and runs "sign" out of
+// caution. An untrusted signature invalidates the record outright, and
+// log.SelfSigner decides from the record alone, so no log is needed to refuse.
 func TestSignOnAnUnenrolledDeviceDoesNotRuinTheRecord(t *testing.T) {
 	admin := newCLI(t)
 	admin.mustRun("init", "-network", "demo")
@@ -1018,17 +1010,10 @@ func TestSignOnAnUnenrolledDeviceDoesNotRuinTheRecord(t *testing.T) {
 	}
 }
 
-// TestStagedKeysPromoteWhenTheRotationArrivesElsewhere covers the flow the
-// CLI's own guidance produces: the machine that adds the final signature is
-// told "apply it with: juist apply", so a rotation is normally applied on an
-// admin's machine, not on the device rotating. The record then reaches the
-// device as log records over gossip, with no CLI run there at all.
-//
-// If promotion only ever happened inside "juist apply", the device would hold
-// old keys while the log named new ones — unable to handshake and unable to
-// open the group secret — and the daemon's advice to restart could never fix
-// it, because nothing a restart did would promote them. Opening the state
-// directory is what promotes, which is what makes that advice true.
+// TestStagedKeysPromoteWhenTheRotationArrivesElsewhere: a rotation is normally
+// applied on an admin's machine and reaches the device as log records, with no
+// CLI run there. Opening the state directory is what promotes the staged keys,
+// which is what makes the daemon's advice to restart true.
 func TestStagedKeysPromoteWhenTheRotationArrivesElsewhere(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
@@ -1078,13 +1063,9 @@ func TestStagedKeysPromoteWhenTheRotationArrivesElsewhere(t *testing.T) {
 	}
 }
 
-// TestAWritableAdminsDirIsRefused: the mode check on the home directory does
-// not see a subdirectory restored from a backup or unpacked from an archive
-// with its stored mode. admins/ is where the signing keys are, and anyone who
-// can write there can replace an operator's key — making every record they
-// sign invalid rather than authorized — or delete it outright. Losing admin
-// keys below quorum is the one failure the threat model calls unrecoverable by
-// design, so the tool refuses to run rather than work in that state.
+// TestAWritableAdminsDirIsRefused: the check on the home directory does not
+// see a subdirectory restored from a backup with its stored mode, and anyone
+// who can write to admins/ can replace or delete a signing key.
 func TestAWritableAdminsDirIsRefused(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
@@ -1101,4 +1082,112 @@ func TestAWritableAdminsDirIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), adminsDir) {
 		t.Errorf("the error does not name the directory at fault: %v", err)
 	}
+}
+
+// TestUnwritableOutputStagesNothing: a rotation whose record never reached the
+// operator must leave no staged keys, or staging — which refuses to write over
+// an earlier rotation — blocks every later rotation over a file the failing
+// command never named.
+func TestUnwritableOutputStagesNothing(t *testing.T) {
+	c := newCLI(t)
+	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
+
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	if os.Geteuid() == 0 {
+		t.Skip("root is not subject to the mode bits this test refuses with")
+	}
+
+	staged := filepath.Join(c.home, nodeKeysFile+stagedSuffix)
+	if out, err := c.run("propose", "rotate-key", "-o", filepath.Join(dir, "rot.rec")); err == nil {
+		t.Fatalf("propose wrote to an unwritable directory\n%s", out)
+	}
+	if _, err := os.Stat(staged); !os.IsNotExist(err) {
+		t.Fatalf("a rotation whose record was never written left %s behind", staged)
+	}
+	// And the next rotation, to a path that works, is not blocked by it.
+	c.mustRun("propose", "rotate-key", "-o", filepath.Join(t.TempDir(), "rot.rec"))
+	if _, err := os.Stat(staged); err != nil {
+		t.Fatalf("the retried rotation staged nothing: %v", err)
+	}
+}
+
+// TestSecondRotationRefusesBeforeEmittingARecord: staging refuses to write
+// over an earlier rotation, and that refusal has to arrive before the record
+// does. Otherwise the operator holds a rotation record naming keys this device
+// never kept — and applying it cuts the device off the network.
+func TestSecondRotationRefusesBeforeEmittingARecord(t *testing.T) {
+	c := newCLI(t)
+	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
+	c.mustRun("propose", "rotate-key", "-o", filepath.Join(t.TempDir(), "first.rec"))
+
+	second := filepath.Join(t.TempDir(), "second.rec")
+	out, err := c.run("propose", "rotate-key", "-o", second)
+	if err == nil {
+		t.Fatalf("a second rotation was allowed over staged keys\n%s", out)
+	}
+	if _, err := os.Stat(second); !os.IsNotExist(err) {
+		t.Fatal("the refused rotation wrote its record anyway")
+	}
+
+	// The same rule on the path that prints to stdout rather than to a file.
+	out, err = c.run("propose", "rotate-key")
+	if err == nil {
+		t.Fatalf("a second rotation printed a record over staged keys\n%s", out)
+	}
+	if strings.Contains(out, recordTag) {
+		t.Fatalf("the refused rotation printed a record anyway:\n%s", out)
+	}
+}
+
+// TestProposeRefusesToOverwriteARecord: a record collects signatures in place,
+// so writing over one silently discards the ceremony it was holding.
+func TestProposeRefusesToOverwriteARecord(t *testing.T) {
+	c := newCLI(t)
+	c.mustRun("init", "-network", "demo", "-node-name", "laptop")
+	rec := filepath.Join(t.TempDir(), "bump.rec")
+	c.mustRun("propose", "epoch-bump", "-o", rec)
+	c.mustRun("sign", rec)
+	before, err := os.ReadFile(rec)
+	if err != nil {
+		t.Fatalf("reading the signed record: %v", err)
+	}
+
+	out, err := c.run("propose", "epoch-bump", "-o", rec)
+	if err == nil {
+		t.Fatalf("propose overwrote a record that was collecting signatures\n%s", out)
+	}
+	after, err := os.ReadFile(rec)
+	if err != nil {
+		t.Fatalf("reading the record afterwards: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("the refused propose changed the record anyway")
+	}
+}
+
+// TestInitChecksEveryCeremonyFileFirst: init writes three files it will not
+// write over, so a failure at the third must not leave a home that can neither
+// finish the ceremony nor start it again.
+func TestInitChecksEveryCeremonyFileFirst(t *testing.T) {
+	c := newCLI(t)
+	// A device with keys already, so the node-enrolment step of a ceremony
+	// naming a member is the one that cannot proceed.
+	c.mustRun("key", "-create", "-name", "laptop")
+
+	out, err := c.run("init", "-network", "demo", "-node-name", "laptop")
+	if err == nil {
+		t.Fatalf("init enrolled a node over existing keys\n%s", out)
+	}
+	for _, name := range []string{filepath.Join(adminsDir, "admin.key"), disablementFile, genesisFile} {
+		if _, err := os.Stat(c.home + "/" + name); !os.IsNotExist(err) {
+			t.Fatalf("a refused init left %s behind", name)
+		}
+	}
+
+	// The proof it is not wedged: the ceremony this home *can* run still runs.
+	c.mustRun("init", "-network", "demo")
 }

@@ -33,7 +33,36 @@ jobs:
           cache-dependency-path: go.sum
       # Milestone exit criteria are cumulative: every criterion from M0 onward
       # stays enforced here as an ordinary test. See docs/05-roadmap.md.
+      # JUIST_REQUIRE_HOST_NET makes internal/nettest's gates fail rather than
+      # skip: the host features they probe are givens on this runner.
       - run: make cover
+        env:
+          JUIST_REQUIRE_HOST_NET: '1'
+
+  os-plumbing:
+    name: OS plumbing (privileged)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      # The M3a real-device tests need root, /dev/net/tun and iproute2, so the
+      # test job above skips them. This is the one place they actually run:
+      # the single-device wiring test and the netns harness that carries ICMP
+      # and TCP between two nodes with real devices. It is its own job so the
+      # privileged surface stays this one command, and so a failure here is
+      # attributable to the OS plumbing and nothing else.
+      # `sudo -E` keeps setup-go's GOROOT and GOPATH; PATH is passed explicitly
+      # because sudo resets it, and HOME is kept so the caches sudo would
+      # otherwise point at /root are the ones setup-go populated.
+      # iptables is what the M3b NAT lab translates with. The runner image
+      # ships it; installing it here rather than skipping keeps a missing tool
+      # from quietly reducing the matrix to nothing.
+      - run: sudo apt-get install -y --no-install-recommends iptables
+      - run: sudo -E env "PATH=$PATH" "HOME=$HOME" make test-os-plumbing
 
   lint:
     runs-on: ubuntu-latest

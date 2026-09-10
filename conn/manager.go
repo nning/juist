@@ -1,13 +1,7 @@
-// Package conn is the connectivity layer: it turns membership state — a set of
-// authorized peers with keys and overlay addresses — into live WireGuard
-// tunnels.
-//
-// Nothing in this package is trust-critical. Per docs/04-architecture.md, the
-// connectivity layer may delay or deny connectivity, but it can never change
-// who is a member, and it cannot read or alter traffic: WireGuard's cryptokey
-// routing enforces that below it. The [Manager] interface is deliberately
-// narrow so the Tailscale-backed implementation can be swapped for a minimal
-// from-scratch disco manager if the fork burden ever outweighs the benefit.
+// Package conn turns membership state — authorized peers with keys and overlay
+// addresses — into live WireGuard tunnels. Nothing here is trust-critical: it
+// may delay or deny connectivity, but it cannot change who is a member, and
+// cryptokey routing below it stops it reading or altering traffic.
 package conn
 
 import (
@@ -36,21 +30,22 @@ type Peer struct {
 	// DiscoKey is the peer's NAT-traversal (disco) public key.
 	DiscoKey key.DiscoPublic
 
-	// Addrs are the peer's overlay addresses, as recorded in the log. They
-	// become the peer's WireGuard AllowedIPs, so this field — and only this
-	// field — is what binds an overlay address to a key.
-	//
-	// Every prefix must be a single host address (/32 or /128): AllowedIPs
-	// also authorizes the *source* addresses a peer may originate, so a
-	// wider prefix would let this peer impersonate other members. Routed
-	// prefixes are a post-v1 feature with their own quorum-granted path
-	// (docs/04-architecture.md, SetNodeRoutes).
+	// Addrs are the peer's overlay addresses as recorded in the log, and
+	// become its WireGuard AllowedIPs. Every prefix must be a single host
+	// address: AllowedIPs also authorize the source addresses a peer may
+	// originate, so a wider one would let it impersonate other members.
 	Addrs []netip.Prefix
 
 	// Endpoints are last-known reachable UDP endpoints for the peer, from
 	// gossiped endpoint records or the persistent cache. Hints only: disco
 	// discovers and verifies the working path itself.
 	Endpoints []netip.AddrPort
+
+	// HomeRelay is the relay region the peer says it can be reached through,
+	// or zero for none. It is the peer's own choice — a packet sent to any
+	// other region is dropped, since member relays are not meshed — so it
+	// travels in the peer's announcement rather than being decided here.
+	HomeRelay int
 }
 
 // Self is the local node's identity and overlay addressing. Addrs follows the
@@ -62,26 +57,38 @@ type Self struct {
 	Addrs    []netip.Prefix
 }
 
-// Manager owns the data plane and the NAT-traversal machinery.
-//
-// SetPeers is the only way membership enters this layer: the reconciler calls
-// it with the full authorized set, and the manager makes the data plane match.
-// A peer absent from the set cannot complete a WireGuard handshake.
+// Manager owns the data plane and the NAT-traversal machinery. SetPeers is the
+// only way membership enters this layer, and a peer absent from the set cannot
+// complete a WireGuard handshake.
 type Manager interface {
-	// SetPeers makes the data plane reflect exactly the given peer set. The
-	// set may include the local node itself (the reconciler passes the full
-	// membership); that entry must match Self and is otherwise ignored.
-	// After Close, SetPeers returns an error.
+	// SetPeers makes the data plane reflect exactly the given peer set, which
+	// may include the local node itself; that entry must match Self and is
+	// otherwise ignored. After Close it returns an error.
 	SetPeers(peers []Peer) error
+
+	// SetRelays makes the data plane reflect exactly the given relay set: the
+	// fallback path for a pair that cannot be punched, and the channel over
+	// which the NAT-traversal layer asks a peer to punch back. An empty set
+	// is direct-only. Regions must be unique.
+	SetRelays(relays []Relay) error
+
+	// HomeRelay reports the relay region this node has chosen to be reached
+	// through, or zero if it has none yet. Peers must be told, so it belongs
+	// in this node's announcement.
+	HomeRelay() int
+
+	// LocalEndpoints reports the underlay addresses the NAT-traversal layer
+	// believes this node can be reached at, including reflexive ones learned
+	// from a relay's STUN responder. It is empty until there is a relay to
+	// learn them from.
+	LocalEndpoints() []netip.AddrPort
 
 	// LocalPort reports the UDP port the manager is bound to.
 	LocalPort() uint16
 
-	// Ping sends an overlay ICMP echo to ip and reports the result to cb,
-	// possibly from another goroutine. cb may never be invoked — the engine
-	// drops the callback if no reply arrives within its own expiry, and a
-	// manager shutting down drops the echo silently — so callers apply
-	// their own timeout. Used by diagnostics and tests.
+	// Ping sends an overlay ICMP echo to ip and reports to cb, possibly from
+	// another goroutine. cb may never be invoked, so callers need their own
+	// timeout. Diagnostics and tests only.
 	Ping(ip netip.Addr, cb func(PingResult))
 
 	// Close shuts the manager down and releases the data plane. It is
@@ -89,15 +96,9 @@ type Manager interface {
 	Close() error
 }
 
-// PingResult reports the outcome of a [Manager.Ping]. It is this package's
-// own type so that the Manager seam stays free of the backing
-// implementation's diagnostic types.
-//
-// It deliberately carries no path information (endpoint, relay): the ICMP
-// ping path in the embedded engine never reports any, so a field for it
-// would always be empty — a promise the seam cannot keep. The direct-only
-// property is asserted where it actually lives, in the egress test's
-// relay-connection and socket checks.
+// PingResult reports the outcome of a [Manager.Ping], as this package's own
+// type so the seam stays free of the backing implementation's. It carries no
+// path information, because the engine's ICMP path reports none.
 type PingResult struct {
 	// Err is a human-readable failure, empty on success.
 	Err string
@@ -106,22 +107,9 @@ type PingResult struct {
 	Latency time.Duration
 }
 
-// Key conversions from the raw 32-byte form the membership log and the gossip
-// layer carry.
-//
-// They exist so that this package stays the only one that names Tailscale's
-// types, which is what docs/04-architecture.md promises about the adapter: the
-// reconciler holds a WireGuard key as the log records it and a disco key as an
-// endpoint announcement carries it, and hands both here without importing
-// anything from the connectivity stack.
-//
-// None of these can fail. A 32-byte string is a valid Curve25519 scalar or
-// point by construction; whether it is a key anyone holds the other half of is
-// a question only a handshake answers.
-//
-// The private one goes the long way round, through hex, because the direct
-// raw-bytes constructor is deprecated upstream and the untyped-hex one is not.
-// It runs once per daemon start.
+// Key conversions from the raw 32-byte form the log and gossip carry, so this
+// package stays the only one naming Tailscale's types. None can fail: 32 bytes
+// are a valid Curve25519 scalar or point by construction.
 func NodeKeyFromRaw32(b [32]byte) key.NodePrivate {
 	k, err := key.ParseNodePrivateUntyped(mem.B([]byte(hex.EncodeToString(b[:]))))
 	if err != nil {
@@ -143,15 +131,10 @@ func NodePublicFromRaw32(b [32]byte) key.NodePublic { return key.NodePublicFromR
 // announcement carries it.
 func DiscoPublicFromRaw32(b [32]byte) key.DiscoPublic { return key.DiscoPublicFromRaw32(mem.B(b[:])) }
 
-// NewDiscoKey draws a fresh NAT-traversal keypair in the raw form the gossip
-// layer announces.
-//
-// Clamping matches what the connectivity stack's own generator does: a disco
-// key is used for NaCl box, so the scalar has to be clamped, and
-// [DiscoKeyFromRaw32] does not clamp what it is handed. Generating the key
-// here rather than in the daemon is what keeps the two halves guaranteed to
-// agree — a private key clamped after its public half was derived would
-// announce a key no peer could reach.
+// NewDiscoKey draws a fresh NAT-traversal keypair in the raw form gossip
+// announces. The scalar must be clamped for NaCl box and [DiscoKeyFromRaw32]
+// does not clamp, so clamping after deriving the public half would announce an
+// unreachable key.
 func NewDiscoKey() (priv, pub [32]byte, err error) {
 	if _, err := rand.Read(priv[:]); err != nil {
 		return priv, pub, fmt.Errorf("conn: generating a disco key: %w", err)

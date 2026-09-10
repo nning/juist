@@ -13,11 +13,8 @@ import (
 // DiscoKeySize is the length of a NAT-traversal (disco) public key.
 const DiscoKeySize = 32
 
-// A DiscoKey is a node's NAT-traversal public key.
-//
-// It is this package's own type rather than the connectivity stack's, so that
-// the adapter in conn stays the only place that touches Tailscale's types
-// (docs/04-architecture.md). Converting is a 32-byte copy.
+// A DiscoKey is a node's NAT-traversal public key. This package's own type, so
+// the adapter in conn stays the only place that touches Tailscale's types.
 type DiscoKey [DiscoKeySize]byte
 
 // IsZero reports whether the key is unset.
@@ -41,38 +38,83 @@ func (k *DiscoKey) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
+// RelayCertSize is the length of the certificate hash a relay announcement
+// pins: a SHA-256 digest.
+const RelayCertSize = 32
+
+// A RelayInfo is a relay-capable member's statement of where its embedded
+// relay listens. Whether the member *may* relay comes from the log — the
+// `relay-capable` role — and never from here; this only says where.
+//
+// The certificate hash is what authenticates the relay in place of a
+// certificate authority. It is drawn fresh each time the relay starts, like
+// the disco key, so it belongs in the announcement rather than in the log.
+type RelayInfo struct {
+	// Port is the TCP port the relay serves DERP on, at each of the
+	// announcement's addresses.
+	Port uint16 `cbor:"1,keyasint"`
+
+	// STUNPort is the UDP port it answers binding requests on, or zero if it
+	// does not reflect.
+	STUNPort uint16 `cbor:"2,keyasint,omitempty"`
+
+	// Cert is the SHA-256 of the relay's TLS certificate.
+	Cert []byte `cbor:"3,keyasint"`
+
+	// HostName is the name the certificate is issued for, and the TLS server
+	// name a member must use. It is never resolved: the addresses come from
+	// the announcement.
+	HostName string `cbor:"4,keyasint"`
+}
+
+// MaxRelayHostNameLen caps the announced TLS server name. It is a derivation
+// of the relay's own certificate key, so the limit only has to stop a hostile
+// announcement being unbounded.
+const MaxRelayHostNameLen = 64
+
+// Clone returns a deep copy.
+func (r *RelayInfo) Clone() *RelayInfo {
+	out := *r
+	out.Cert = slices.Clone(r.Cert)
+	return &out
+}
+
+func (r *RelayInfo) validate() error {
+	switch {
+	case r.Port == 0:
+		return errors.New("relay announcement has no port")
+	case len(r.Cert) != RelayCertSize:
+		return fmt.Errorf("relay certificate hash is %d bytes, want %d", len(r.Cert), RelayCertSize)
+	case r.HostName == "":
+		return errors.New("relay announcement has no host name")
+	case len(r.HostName) > MaxRelayHostNameLen:
+		return fmt.Errorf("relay host name is %d bytes, over the %d limit",
+			len(r.HostName), MaxRelayHostNameLen)
+	}
+	for _, c := range r.HostName {
+		// A name that is only ever a TLS server name, so the accepted set is
+		// the one a certificate can be issued for and nothing wider.
+		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '.' && c != '-' {
+			return fmt.Errorf("relay host name %q holds a character a certificate name may not", r.HostName)
+		}
+	}
+	return nil
+}
+
 // MaxEndpointAddrs caps the underlay addresses one announcement may carry.
 // A multi-homed laptop has a handful; the limit is only here so that a
 // hostile announcement cannot make every member allocate.
 const MaxEndpointAddrs = 16
 
 // An Endpoint is a node's connectivity announcement: where to reach it on the
-// underlay, and the disco key it will answer NAT-traversal probes with.
+// underlay, and the disco key it answers NAT-traversal probes with. Not a log
+// record, because of lifetime — addresses and disco keys change per restart,
+// while membership records need a quorum ceremony.
 //
-// # Why this is not a log record
-//
-// docs/04-architecture.md puts the disco key in the connectivity layer and
-// endpoint records in gossip, and the reason is lifetime. A node's underlay
-// addresses change when it moves between networks, and its disco key changes
-// every time its daemon restarts — the connectivity layer treats a changed
-// disco key as exactly that signal (see conn's peerDelta). Membership records
-// need a k-of-n admin quorum, so putting either in the log would mean an
-// admin ceremony per reboot.
-//
-// So an Endpoint is signed by the node's own identity key and by nothing else.
-// That is the right amount of authority for what it claims: a node may say
-// where it is, and no node may say anything about another. Everything an
-// Endpoint could lie about costs connectivity and nothing more — a wrong
-// address fails to connect, and a wrong disco key fails to complete a disco
-// handshake. What it can never do is make its subject a member: the reconciler
-// reads the member set from the log and joins the announcements onto it,
-// dropping any for a node the log does not carry.
-//
-// # Ordering
-//
-// Seq is what makes a replayed announcement lose to the current one. It is the
-// author's own counter, so only the author can be harmed by rolling it back,
-// and rolling it back only costs the author reachability.
+// Signed by the node's own identity key alone, which is the right authority
+// for what it claims: a node may say where it is and nothing about another, so
+// every lie costs only its own connectivity. Seq makes a replayed announcement
+// lose to the current one, and is the author's own counter.
 type Endpoint struct {
 	// Identity is the announcing node, and the key that signs the record.
 	Identity types.Identity `cbor:"1,keyasint"`
@@ -80,15 +122,10 @@ type Endpoint struct {
 	// Disco is the node's current NAT-traversal public key.
 	Disco DiscoKey `cbor:"2,keyasint"`
 
-	// Addrs are the underlay UDP endpoints the node's data plane is
-	// reachable at. Hints only: disco discovers and verifies the working
-	// path itself.
-	//
-	// The order is canonical (see [Endpoint.StaticValidate]), not a
-	// preference: one announcement must have one encoding, and a signature
-	// covers the encoding. So a reader must not read the first address as
-	// the best one — it is the numerically lowest, which on a host with a
-	// bridge or VPN interface is often the least useful.
+	// Addrs are the underlay UDP endpoints the node's data plane is reachable
+	// at. Hints only: disco verifies the working path itself. The order is
+	// canonical, not a preference — the first address is the numerically
+	// lowest, which is often the least useful.
 	Addrs []netip.AddrPort `cbor:"3,keyasint,omitempty"`
 
 	// GossipPort is the TCP port this node accepts anti-entropy sessions
@@ -98,6 +135,17 @@ type Endpoint struct {
 	// Seq orders a node's own announcements. Strictly increasing per node;
 	// a record with a lower Seq than one already held is ignored.
 	Seq uint64 `cbor:"5,keyasint"`
+
+	// Relay is where this node's embedded relay listens, or nil if it runs
+	// none. A member that announces one without the log granting it
+	// `relay-capable` is ignored by the reconciler.
+	Relay *RelayInfo `cbor:"6,keyasint,omitempty"`
+
+	// HomeRelay is the relay region this node can be reached through, or zero
+	// for none. Member relays are not meshed, so a peer that sends to any
+	// other region reaches nothing — which is why this is the node's own
+	// statement rather than each peer's guess.
+	HomeRelay uint16 `cbor:"7,keyasint,omitempty"`
 
 	// Sig is the author's signature over the rest of the record. CBOR key 23
 	// for the same reason [types.AUM] uses it: the highest key that still
@@ -127,9 +175,8 @@ func (e *Endpoint) signingBytes() ([]byte, error) {
 }
 
 // Sign fills in the record's signature. The identity must be the one the
-// record names, which is checked rather than assumed: a record signed by the
-// wrong key is one every recipient silently drops, and the failure would
-// otherwise only show up as a node nobody can reach.
+// record names, which is checked rather than assumed: every recipient silently
+// drops a record signed by the wrong key.
 func (e *Endpoint) Sign(priv types.PrivateIdentity) error {
 	if priv.Public() != e.Identity {
 		return fmt.Errorf("gossip: endpoint record names %v but would be signed by %v",
@@ -169,21 +216,12 @@ func (e *Endpoint) Verify() error {
 // StaticValidate checks everything about the record that does not depend on
 // the network's state.
 //
-// The address rules matter more than they look. An announcement is what a
-// member's daemon will hand to the connectivity layer as a place to send UDP
-// to, and what its sync layer will open TCP sessions to, so an address the
-// announcer does not control is a member directing every other member's
-// traffic somewhere of its choosing. They are rejected here rather than
-// filtered later, because "later" would be several packages away from the
-// record that caused it.
-//
-// The accepted set is exactly what a correct node announces about itself
-// (daemon.underlayEndpoints): a routable unicast address. Loopback and
-// link-local are refused for the same reason the unspecified and multicast
-// ones are — a peer is by construction not on this host, so "connect to your
-// own 127.0.0.1" is never a path to it, and the only thing such an
-// announcement can achieve is to point the member set at services it did not
-// choose to reach.
+// The address rules carry weight: every member sends UDP and opens TCP
+// sessions to what an announcement names, so an address the announcer does not
+// control is a member directing everyone else's traffic where it likes. The
+// accepted set is what a correct node announces about itself — a routable
+// unicast address. Loopback and link-local are refused because a peer is by
+// construction not on this host.
 func (e *Endpoint) StaticValidate() error {
 	if err := e.Identity.Validate(); err != nil {
 		return fmt.Errorf("gossip: endpoint record: %w", err)
@@ -197,6 +235,11 @@ func (e *Endpoint) StaticValidate() error {
 	if len(e.Addrs) > MaxEndpointAddrs {
 		return fmt.Errorf("gossip: endpoint record for %v carries %d addresses, over the %d limit",
 			e.Identity.ShortString(), len(e.Addrs), MaxEndpointAddrs)
+	}
+	if e.Relay != nil {
+		if err := e.Relay.validate(); err != nil {
+			return fmt.Errorf("gossip: endpoint record for %v: %w", e.Identity.ShortString(), err)
+		}
 	}
 	for i, ap := range e.Addrs {
 		if err := validateEndpointAddr(ap); err != nil {
@@ -232,18 +275,11 @@ func validateEndpointAddr(ap netip.AddrPort) error {
 	case ap.Port() == 0:
 		return fmt.Errorf("address %v has no port", ap)
 	case !a.IsGlobalUnicast():
-		// The cases above are a denylist, and a denylist of an open set leaks:
-		// the limited broadcast address 255.255.255.255 passes every one of
-		// them, yet the comment on [Endpoint.StaticValidate] promises "a
-		// routable unicast address" — which a broadcast address is not, and
-		// which an announcement pointing the whole member set at it could turn
-		// into an amplifier. IsGlobalUnicast is the positive form of the rule
-		// (it is true for public, RFC 1918 and ULA addresses alike, and false
-		// for broadcast), so requiring it closes the broadcast case the
-		// denylist missed. A directed broadcast such as 192.168.1.255 is
-		// indistinguishable from a unicast host without the subnet mask and so
-		// is not caught here; disco verifying the working path before any real
-		// traffic flows is the backstop for that.
+		// The cases above are a denylist, which leaks: 255.255.255.255 passes
+		// all of them and would point the member set at an amplifier.
+		// IsGlobalUnicast is the positive form of the rule and closes it. A
+		// directed broadcast is indistinguishable from a host without the
+		// subnet mask; disco verifying the path is the backstop.
 		return fmt.Errorf("address %v is not a global unicast address", ap)
 	}
 	return nil
@@ -281,7 +317,52 @@ func (e *Endpoint) GossipAddrs() []netip.AddrPort {
 func (e *Endpoint) Clone() *Endpoint {
 	out := *e
 	out.Addrs = slices.Clone(e.Addrs)
+	if e.Relay != nil {
+		out.Relay = e.Relay.Clone()
+	}
 	return &out
+}
+
+// RelayAddrs returns the addresses this node's relay can be reached at: each
+// announced address with the relay's TCP port substituted for the data
+// plane's.
+func (e *Endpoint) RelayAddrs() []netip.AddrPort {
+	if e.Relay == nil {
+		return nil
+	}
+	out := make([]netip.AddrPort, 0, len(e.Addrs))
+	for _, ap := range e.Addrs {
+		out = append(out, netip.AddrPortFrom(ap.Addr(), e.Relay.Port))
+	}
+	return slices.Compact(out)
+}
+
+// cachedEndpoints is the wire form of a persisted announcement set: an array
+// under one key, so that a truncated file fails to decode rather than
+// producing half a cache.
+type cachedEndpoints struct {
+	Endpoints []Endpoint `cbor:"1,keyasint,omitempty"`
+}
+
+// EncodeCachedEndpoints encodes announcements for persistence.
+func EncodeCachedEndpoints(eps []Endpoint) ([]byte, error) {
+	return encode(&cachedEndpoints{Endpoints: eps})
+}
+
+// DecodeCachedEndpoints decodes a persisted announcement set. It does not
+// verify them: the caller drops the ones that do not, since a file this node
+// wrote is no more trusted than a frame a peer sent.
+func DecodeCachedEndpoints(b []byte, out *[]Endpoint) error {
+	held, err := decodeCanonical[cachedEndpoints](b)
+	if err != nil {
+		return err
+	}
+	if len(held.Endpoints) > types.MaxNodes {
+		return fmt.Errorf("gossip: cached announcement set holds %d records, over the %d limit",
+			len(held.Endpoints), types.MaxNodes)
+	}
+	*out = held.Endpoints
+	return nil
 }
 
 // DecodeEndpoint decodes and verifies one endpoint record.
