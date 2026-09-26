@@ -114,7 +114,8 @@ admits a signature for any message that anyone can compute. Quorum guards who
 gets added to the log; it cannot notice that what was added is a key with no
 owner. Admitting one as an admin key would silently convert that key's votes
 from "held by an admin" to "held by anybody" — a way to launder authority past a
-ceremony. This is the only reason `filippo.io/edwards25519` is a dependency.
+ceremony. This, and the group SPAKE2 runs in at enrollment, are why
+`filippo.io/edwards25519` is a dependency.
 
 **Members may not share WireGuard, X25519 or ML-KEM keys.** Two members with one
 WireGuard key collide in the data plane, where a peer is keyed by exactly that,
@@ -139,7 +140,7 @@ subnet-router target, and pointing a client's own local traffic at another
 member's host is the same class of attack as intercepting overlay traffic. The
 one exemption is the exact default route (`0.0.0.0/0`, `::/0`), which is legal
 only with the `exit-node` role and which by construction covers everything —
-see the obligation this puts on M7b below.
+see the obligation this puts on M6 below.
 
 **Names are checked for control and bidi-formatting characters.** They are
 attacker-supplied strings that end up in operator-facing output; rejecting them
@@ -155,18 +156,62 @@ would only let one quorum outbid another by collecting extra signatures: a
 tie-break that invites grinding and explains nothing to an operator reading the
 log.
 
+What counts as a revocation grew with M4. Removing a device or an admin key
+always did. Since the admin role carries vouching authority, schema 2 adds
+taking a device's admin role away and raising the vouching threshold
+(`State.Revokes`): otherwise a concurrent change with a lower hash could orphan
+the withdrawal and keep a distrusted admin device vouching. It is a rule of
+fork choice, which every node must apply alike, so it waits for the schema:
+networks at schema 1 keep the old rule until `juist log upgrade`.
+
+**Votes belong to people (schema 3).** A quorum of k meant k keys, and a person
+with a key on each of two laptops was two votes, so "two admins must agree"
+could be met by one. From schema 3 an admin key can name its holder, and a
+holder's keys are one voter: they carry its votes and cast them once, when at
+least `Needed` of them signed (`types.CountVotes`). One person can so hold a
+key per device, lose one without the others losing anything, and be made to
+need two of them (`KindSetHolder`), which is how one person running a network
+alone asks for two devices per change. What the network can still cast is
+counted per holder too (`types.AchievableVotes`): a holder needing more keys
+than it holds casts nothing, and a change that would leave the quorum out of
+reach is refused, as removing a key already was. Asking more keys of a holder,
+or giving it fewer votes, is a revocation for fork choice. Keys without a
+holder, which is every key before schema 3, stay voters of their own. The
+upgrade to schema 3 names each such key's holder after the key, where no other
+key's name folds to the same, so every holder has one key, no vote changes,
+and an admin's further keys join under the name they already have.
+
+**A removed key cannot undo its removal (schema 3).** A sibling is verified
+against its parent's state, where a key removed later still votes, so the key
+could sign a branch rooted before its removal and win on the revocation bias or
+a ground hash, undoing its removal and everything after. So one rule comes
+before both: a branch loses to a sibling whose branch removes an admin key that
+signed anything on it. Two keys removing each other at once are symmetric,
+since at the quorum they had either could do anything, and alarm.
+
 The branch that loses is not lost, but it is not applied either — its author
 reissues it against the new head. Two cases are not left to a deterministic rule
 at all, and raise a persistent alarm instead:
 
-- **An orphaned revocation.** The revocation bias only compares immediate
-  siblings, so a removal buried deeper on a losing branch would vanish
-  silently. Any revocation on an orphaned branch alarms.
+- **An orphaned revocation that cannot be reissued.** The revocation bias only
+  compares immediate siblings, so a removal buried deeper on a losing branch,
+  or one of two removals made at once, would vanish silently. One that the
+  chosen chain could take as it is is named instead, as not in effect, on
+  every device's status and in "juist log", for an admin to run again;
+  stopping the network at every two concurrent removals would be an outage for
+  what is a routine race. One already in effect on the chosen chain is
+  nothing. One the chosen chain cannot take alarms.
 - **An orphan that cannot be reissued.** Each orphaned record is replayed
   against the winning head with the position-dependent rules relaxed (epoch
-  sequencing, wrap coverage — both things reissuing would fix). If its
-  *substance* no longer applies, the two branches disagree about something
-  concrete, and no rule should be picking between them.
+  sequencing, wrap coverage, an admission's IPv4 address — all things
+  reissuing would fix). If its *substance* no longer applies, the two branches
+  disagree about something concrete, and no rule should be picking between
+  them. The address belongs in that list because it is allocated from the
+  chain the admission was built on: two admins admitting two devices at once
+  both take the lowest free one, and treating that as a conflict stopped every
+  tunnel of a network over a record whose device no longer existed. The CLI
+  counts the addresses of orphaned admissions as taken, so a reissue does not
+  collide again.
 
 While an alarm is raised, `Authority.TrustedState` refuses to hand out
 membership. That is the same trade as the freshness TTL: where security and
@@ -232,7 +277,7 @@ cannot be lifted between epochs or re-addressed. It does *not* bind the network:
 that would be circular for the genesis record, whose own hash names the network.
 Network binding comes from the signatures over the record instead.
 
-`juist propose rotate-key` therefore rotates *all* of a device's rotatable keys
+`juist rotate` therefore rotates *all* of a device's rotatable keys
 at once and generates them locally: a record naming a public key whose private
 half the device does not hold would be applied happily by the log and would
 leave the device unable to handshake or to read the group secret.
@@ -267,8 +312,8 @@ writing any of the three files a ceremony cannot simply be re-run over.
 **The genesis ceremony has to be completable by the tool that starts it.** A
 k-of-n genesis cannot be authorized on the machine that builds it — that is what
 the threshold means — so `init` builds the record, signs it with whatever local
-key exists, and, if that does not reach k, writes it to `genesis.rec` and stops.
-The other admins sign it where their keys are (`juist sign` works on a keystore
+key exists, and, if that does not reach k, writes it to `genesis-NETWORK.rec` and stops.
+The other admins sign it where their keys are (`juist approve` works on a keystore
 with no network, and reports a genesis against the policy the record itself
 declares, via `log.GenesisStatus`), and `juist apply` on a home directory with
 no network creates it. Previously the record was built in memory and discarded
@@ -362,7 +407,7 @@ extension bucket and no ignorable-unknown-field path** — either would reintrod
 the split view by letting two builds act on different subsets of the same
 record.
 
-What is still open, and belongs with M4's enrollment and M5's packaging: the
+What is still open, and belongs with M11's packaging: the
 gossip hello does not carry the versions a node supports, `juist status` cannot
 say which members would be stranded, and nothing stops an admin authoring an
 upgrade before the network is ready for it. Until those exist, raising the
@@ -406,7 +451,7 @@ taken. What each decision now binds:
   over an enrollment run, but it multiplies the cases fork choice has to decide
   between — two batches that overlap in one member are neither identical nor
   independent — and the ceremony it would save is not the expensive part: k
-  admins signing ten records in one sitting is ten invocations of `juist sign`,
+  admins signing ten records in one sitting is ten invocations of `juist approve`,
   not ten ceremonies. **M4 enrolls one device per record**, and that is now a
   constraint on its design rather than a preference.
 - **An addition that does not bump the epoch: declined, and it could not have
@@ -504,26 +549,62 @@ planned rotation away from a key being retired is exactly the case where it may
 already be gone. It is otherwise equivalent to remove-then-add, and exists to
 preserve a member's roles, routes, v4 address and name across the change.
 
+## Renumbering
+
+Schema 5 moves v4 addresses after admission. The rules a later change has to
+keep:
+
+- **The log stays time-free.** A renumbering's deadline is data, applied by
+  whoever renders addresses (`State.Addrs(id, now)`), never by `apply`: every
+  node must reach the same state from the same records, whatever its clock. A
+  skewed clock only keeps an old address live a little longer, which is safe
+  because the address stays bound to its member's key and is held against
+  collisions until a record retires it.
+- **A retiring address is held like a current one.** No admission, rotation or
+  renumbering — a network renumbering included — may give it to another
+  member while it is recorded, and a range a network renumbering leaves with
+  such addresses in it rejects admissions and overlapping route grants until
+  it retires. Only a retiring address may lie in such a range, and a genesis
+  retires nothing, so every state still validates once the range is gone. After that, the CLI's allocator still skips every
+  address the history gave out, as it does a removed member's.
+- **A member keeps one old address.** A second renumbering replaces the first
+  one's, dropping it before its deadline; the CLI asks before doing so.
+- **A network renumbering covers the member set exactly**, as an epoch's wraps
+  do, so none is left in a range that is going away. The addresses a
+  renumbering or an admission gives are where it sits, not what it says:
+  replayed against another chain it is a change to start again, never a
+  conflict, since a fork alarm takes every tunnel down for what is routine.
+  An admission's address is reallocated then; a single member's move has an
+  operator choose again.
+- **IPv6 does not move.** It follows from the identity key, so no record can
+  claim one; `RotateIdentity` is the only way to change it.
+
+## Renaming
+
+Schema 6 changes the network's name. The rule a later change has to keep:
+**nothing identifies a network by its name.** Records, pins, invites and
+admissions name it by its genesis hash, and so must anything added later. A
+name keyed on locally, as the keystore's break-glass and genesis files are,
+is the one it had when that was written, and stays so.
+
 ## Not built in M1, on purpose
 
-- **`FreshnessLease`.** M4 (leases, TTLs, the startup gate). It is not chained
-  into the log, so it is not part of the record schema and does not constrain
-  the M3 freeze.
+- **Freshness leases.** Built at M4, outside the record schema: see
+  [11-enrollment-and-freshness-notes.md](11-enrollment-and-freshness-notes.md).
 - **A disablement record.** The genesis ceremony commits to break-glass secrets
   and `State.ValidDisablement` verifies a preimage, which is what the schema
-  needs. *What revealing one authorizes* — recovering a network whose quorum is
-  lost — is an operational design question that belongs with the revocation UX
-  in M4.
-- **Route consumption.** Validated from M1, read by nothing until M7b.
+  needs. *What revealing one authorizes* is planned in
+  [05-roadmap.md](05-roadmap.md) as M9.
+- **Route consumption.** Validated from M1, read by nothing until M6.
 
-### The obligation M1 hands to M7b
+### The obligation M1 hands to M6
 
 The default route is exempt from the no-overlay-overlap rule, because it covers
 everything by construction. Whoever consumes route grants **must subtract the
-overlay space** — the genesis-derived ULA /48 and 100.64/10 — when rendering
+overlay space** — the genesis-derived ULA /48 and the overlay v4 ranges — when rendering
 `AllowedIPs` and filter destinations. Without that subtraction, an exit-node
 grant would re-open exactly the member-to-member interception the overlap rule
-exists to prevent. The rule is stated in `types.ValidateRoute`; M7b's exit
+exists to prevent. The rule is stated in `types.ValidateRoute`; M6's exit
 criterion (2) is where it gets proven.
 
 ## Verification
@@ -534,15 +615,16 @@ criterion (2) is where it gets proven.
   are the property tests from [06-verification.md](06-verification.md) §1,
   seeded rather than randomized so a failure can be replayed.
 - Fuzz targets: `FuzzDecodeAUM` (asserts injectivity, not just absence of
-  crashes), `FuzzValidateAUM`, `FuzzChainValidate` (asserts that a rejected
-  batch changes nothing and that the epoch never regresses). `make fuzz` is the
+  crashes), `FuzzValidateAUM`, `FuzzChainValidate` (signs what it mutates, so
+  the input reaches the state machine; asserts that a rejected record changes
+  nothing and that the epoch never regresses). `make fuzz` is the
   seconds-long smoke run; `make fuzz-long` is the gate. Neither runs on CI —
   see [06-verification.md](06-verification.md) §2.
 - `TestTCBDependencies` keeps the audit scope's dependency closure to the
   standard library plus two small modules, and keeps the clock and the
   filesystem out of the packages that decide validity.
 - `make tcb` reports the audit scope's size against the 10k-line budget
-  [06-verification.md](06-verification.md) §6 sets. It is ~4.5 k lines.
+  [06-verification.md](06-verification.md) §6 sets. It is ~8 k lines.
 
 - Fork-choice tests that need one record to beat another on the hash tiebreak must
   redraw *both* sides each attempt, or assign the roles after drawing. Redrawing

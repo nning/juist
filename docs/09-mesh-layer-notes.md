@@ -84,7 +84,7 @@ timer instead of at push speed.
 
 Two mechanisms fix it:
 
-- A **keyring** (`secrets.Keyring`) retains the last `KeyringDepth` = 4 epoch
+- A **keyring** (`keyring.Keyring`) retains the last `keyring.Depth` = 4 epoch
   secrets, so a node can still open a frame from a peer that is behind.
 - The initiator seals under **the recipient's last-known epoch** when it still
   holds that secret, and a responder always answers under the epoch the request
@@ -98,12 +98,49 @@ the member set and where its members are — and nothing else: the revoked devic
 gets no WireGuard peer entry anywhere from the moment the removal converges,
 because peers come from the log and not from anything the sync layer says.
 Since every membership change carries an epoch bump, four changes retire the
-window completely. Bounding it in *time* rather than in changes is what the
-freshness leases in M4 are for, and that is the right place for it — a
-time-bounded window needs a clock the trust layer deliberately does not have.
+window completely. It is not bounded in *time*: freshness leases bound how long
+a partitioned node carries a revoked peer's tunnel, not how long a keyring
+accepts an old epoch.
 
 The same window applies to discovery, for the same reason and with the same
 cost.
+
+**Past the window, catching up by identity.** A member further behind than the
+keyring holds no epoch its peers speak, so no frame of its opens anywhere. It
+asks for a catch-up instead:
+
+```
+initiator → ask        in the clear, under the reserved epoch label 0
+responder → challenge  a fresh nonce
+initiator → proof      its identity, and a signature over network ‖ nonce
+responder → grant      a session key sealed to the recipient keys its log
+                       names, signed — or a signed refusal naming its epoch
+```
+
+and the four frames above follow under the granted key, with the records
+frames in the other order. The rules it keeps:
+
+- The responder verifies the proof before it looks at the log, so one that
+  does not verify learns nothing, not even whether the identity is listed.
+- Only a responder that is itself a member and under no alarm answers, and it
+  checks the initiator is still listed before it sends records: the grant is
+  where the log was, and the initiator sets the pace.
+- The initiator is the one that cannot check the other side yet — a grantor
+  may be a member under an identity its log has not caught up with — so its
+  hello names nothing but what it holds, and its records, announcements and
+  leases go out only after the grantor's records have made its log list the
+  grantor. Anyone holding the recipient keys the log names can seal a grant,
+  which is every former member; without this rule each could harvest a
+  sleeper by hanging up on its hellos. What it cannot tell apart is a device removed
+  while it slept, which lists itself by feeding a prefix of the log that stops
+  before its removal: that is the stale view it already holds, bounded as an
+  ordinary session with that device would be.
+- A refusal counts only signed by a member the initiator's log lists and past
+  the initiator's epoch. Status reads a counted one as the device's removal.
+- An ask stays on the budget for connections that have said nothing until it
+  is granted.
+- A node that applies several epochs at once backfills the ones it skipped, so
+  its keyring holds the newest four rather than the ones it held before.
 
 ## Discovery: blinded, but not DNS-SD browsing
 
@@ -177,48 +214,28 @@ set at M3b, never substituted for it.
 
 ## What that interface scan actually announces on a real host
 
-The filter `daemon.usableUnderlay` applies is the obvious one — down, loopback,
-link-local, multicast, unspecified, plus the overlay's own `100.64/10` and this
-network's ULA — and on a developer laptop it is visibly not enough. A node on a
-machine with lxc, libvirt and Tailscale running announced itself as:
+A node on a machine with lxc, libvirt and Tailscale once announced
+`10.0.3.1`, `10.11.1.140`, `192.168.122.1`, a ULA and Tailscale's
+`fd7a:115c:a1e0::/48` address, of which only the WLAN address could carry a
+packet from another machine. `internal/underlay` now leaves out interfaces that
+lead only into this host — juist's own tunnel, other VPNs', and the bridges and
+veth pairs of container and VM runtimes, recognised by name — and Tailscale's
+ULA on any interface. Invite links, DHT rendezvous candidates and announcements
+all read addresses through it, and the addresses magicsock reports pass the
+same filter, since magicsock leaves out only Tailscale's ranges and would
+otherwise announce this network's overlay.
 
-```
-[10.0.3.1:41651 10.11.1.140:41651 192.168.122.1:41651
- [fc42:5009:ba4b:5ab0::1]:41651 [fd7a:115c:a1e0::2901:8d4e]:41651]
-```
-
-Exactly one of those five can carry a packet from another machine. The rest
-produced `sendto: network is unreachable` disco pings until the peer settled on
-the WLAN address. Nothing broke — disco probes every candidate and adopts the
-one that pongs, which is what it is for — but two things in that list are worth
-naming before M3b adds reflexive addresses on top.
-
-**The foreign-overlay filter is split by address family.** `100.64/10` is
-excluded, so Tailscale's IPv4 address is correctly absent; its ULA
-`fd7a:115c:a1e0::/48` is announced. Same interface, same foreign overlay, one
-family filtered and the other not. Announcing it is not wrong in the sense that
-a tunnel over another tunnel would fail — it would work, slowly — but it is not
-a *considered* decision, and the asymmetry is the evidence that it wasn't one.
-
-**A private address is not a name.** `10.0.3.1` is the lxc bridge default and
-`192.168.122.1` the libvirt one; every Linux host with those packages installed
-has the same two. A member that announces them is telling every other member to
-send disco to an address that, at the receiver, resolves to the receiver's own
-bridge. This is the same defect `gossip.Endpoint.StaticValidate` already refuses
-loopback for — "a peer is by construction not on this host" — one step out: an
-address the announcer genuinely holds that means something else at the far end.
-The consequence today is noise. The consequence worth writing down is that it
-gives any member a way to make every other member emit UDP to a chosen RFC1918
-address inside its own LAN, on a chosen port. It is a thin primitive — members
-only, disco payloads only — but it is one the threat model does not currently
-mention, and the fix is not another `StaticValidate` rule, because the sending
-node cannot tell an ambiguous address from a useful one by looking at it.
-
-Neither is fixed here. Both are inputs to the M3b decision about which local
-addresses are worth announcing at all once disco supplies reflexive ones: the
-answer may well be to prefer reflexive addresses and demote the interface scan
-to a same-segment fallback, at which point the ambiguity stops mattering because
-the addresses stop being load-bearing.
+**A private address is still not a name.** Recognition by name misses a bridge
+named by its owner. Its address, such as lxc's default `10.0.3.1`, exists on
+many hosts, and announcing it tells every member to send disco to an address
+that resolves to the receiver's own bridge. That gives any member a way to make
+every other member emit UDP to a chosen RFC1918 address inside its own LAN, on
+a chosen port: members only, disco payloads only, and not in the threat model.
+The sender cannot tell an ambiguous address from a useful one by looking at it,
+so this is not a `StaticValidate` rule. It stays an input to deciding which
+local addresses are worth announcing at all: preferring reflexive addresses and
+demoting the scan to a same-segment fallback would stop them being
+load-bearing.
 
 ## Time to first packet: 10 s → 7 ms
 
@@ -266,7 +283,7 @@ rather than one each.
 
 ## The local API
 
-[04-architecture.md](04-architecture.md)'s rules, implemented in `daemon/ipc.go`:
+[04-architecture.md](04-architecture.md)'s rules, served in `daemon/ipc.go` over the codec in `ipc/`:
 a unix socket at mode 0600 inside a 0700 directory, never a TCP listener,
 `SO_PEERCRED` on Linux and `LOCAL_PEERCRED` on the BSDs, and a canonical-CBOR
 request codec with its own limits and its own fuzz target.
@@ -285,9 +302,6 @@ Gossip inside the tunnel, relays, DHT cold start, real NAT traversal and
 endpoint-record persistence all arrived at M3b; see
 [10-connectivity-notes.md](10-connectivity-notes.md). What is still open:
 
-- **Freshness leases and the startup gate.** M4. Until they exist, a node with
-  a stale log fails closed only in the sense that it has no peers it has not
-  been told about — there is no TTL yet.
 - **The per-pair ML-KEM PSK.** Settled at M3b and deferred past v1; see
   [07-embedding-notes.md](07-embedding-notes.md). M2's "PSK/epoch rotation" is
   the epoch half of it, and remains all of it: every membership change rotates

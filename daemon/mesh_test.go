@@ -101,9 +101,9 @@ type mesh struct {
 // startMesh founds a network of n members and starts a daemon for each, with
 // nothing configured about where any of them is: every peer relationship in
 // the result was discovered on the "LAN" and authorized by the log.
-func startMesh(t *testing.T, n int) *mesh {
+func startMesh(t *testing.T, n int, adminDevices ...int) *mesh {
 	t.Helper()
-	m := &mesh{t: t, nw: newNetwork(t, n), hub: &lanHub{}}
+	m := &mesh{t: t, nw: newNetworkWithAdminDevices(t, n, adminDevices...), hub: &lanHub{}}
 	for i := range n {
 		m.nodes = append(m.nodes, m.start(t, i))
 	}
@@ -112,11 +112,18 @@ func startMesh(t *testing.T, n int) *mesh {
 
 func (m *mesh) start(t *testing.T, i int, seed ...types.AUM) *meshNode {
 	t.Helper()
-	dev := m.nw.devices[i]
 	auth, st := m.nw.authorityFor(t, seed...)
+	return m.startOn(t, i, m.nw.devices[i], auth, st, nil)
+}
+
+// startOn starts member i as dev over a log it already holds, as a restart
+// does; mutate adjusts the options first.
+func (m *mesh) startOn(t *testing.T, i int, dev *device, auth *log.Authority, st log.Storage,
+	mutate func(*Options)) *meshNode {
+	t.Helper()
 	logf := safeLogf(t, fmt.Sprintf("n%d: ", i))
 
-	d, err := New(Options{
+	opts := Options{
 		Authority: auth,
 		Storage:   st,
 		Identity:  dev.identity,
@@ -142,7 +149,11 @@ func (m *mesh) start(t *testing.T, i int, seed ...types.AUM) *meshNode {
 		SyncInterval:      30 * time.Second,
 		ReconcileInterval: time.Second,
 		Logf:              logf,
-	})
+	}
+	if mutate != nil {
+		mutate(&opts)
+	}
+	d, err := New(opts)
 	if err != nil {
 		t.Fatalf("starting node %d: %v", i, err)
 	}
@@ -368,5 +379,126 @@ func TestNewMemberJoinsAConvergedMesh(t *testing.T) {
 	t.Logf("a new member joined a running mesh in %v", took)
 	if !pingUntil(node, m.nodes[0].overlayV4(), 20*time.Second) {
 		t.Fatal("the new member cannot reach the network it just joined")
+	}
+}
+
+// startUnlinked starts a member's daemon that finds nobody by itself: no LAN
+// discovery, no DHT, and a data plane that carries nothing.
+func startUnlinked(t *testing.T, nw *network, i int) *Daemon {
+	t.Helper()
+	dev := nw.devices[i]
+	auth, st := nw.authorityFor(t)
+	d, err := New(Options{
+		Authority: auth, Storage: st,
+		Identity: dev.identity, Recipient: dev.recipient, WireGuard: dev.wgPrivate,
+		Connect:          func(conn.Options) (conn.Manager, error) { return &fakeManager{}, nil },
+		DisableDiscovery: true,
+		DisableDHT:       true,
+		Logf:             safeLogf(t, fmt.Sprintf("n%d: ", i)),
+	})
+	if err != nil {
+		t.Fatalf("starting node %d: %v", i, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go d.Run(ctx)
+	t.Cleanup(func() {
+		cancel()
+		d.Close()
+	})
+	return d
+}
+
+// A device that admitted a member reaches it where the admission ran: a new
+// member with a public address, admitted from behind NAT, is announced to the
+// others by nothing else, since it cannot open a session into the NAT.
+func TestTheAdmittingDeviceGreetsTheNewMember(t *testing.T) {
+
+	nw := newNetwork(t, 2)
+	start := func(i int) *Daemon { return startUnlinked(t, nw, i) }
+	host, guest := start(0), start(1)
+	host.greetAfter = []time.Duration{10 * time.Millisecond, 200 * time.Millisecond, time.Second}
+	hostID, guestID := nw.devices[0].record.Identity, nw.devices[1].record.Identity
+	if _, held := host.endpoints.Get(guestID); held {
+		t.Fatal("the host holds the guest's announcement before any session")
+	}
+	addr := netip.MustParseAddrPort(guest.gossip.Addr().String())
+	host.greetAt(guestID, netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), addr.Port()))
+	waitFor(t, 5*time.Second, "both to hold the other's announcement", func() bool {
+		_, a := host.endpoints.Get(guestID)
+		_, b := guest.endpoints.Get(hostID)
+		return a && b
+	})
+}
+
+// A greeting session that the far end holds open does not hold up Close: a
+// reset, which closes the mesh while holding the service, would otherwise
+// stall every status request with it.
+func TestAGreetingDoesNotHoldUpClose(t *testing.T) {
+	nw := newNetwork(t, 2)
+	d := startUnlinked(t, nw, 0)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // accepted, and never answered
+		}
+	}()
+	d.greetAfter = []time.Duration{0}
+	d.greetAt(nw.devices[1].record.Identity, netip.MustParseAddrPort(ln.Addr().String()))
+	time.Sleep(200 * time.Millisecond) // the session is under way
+	start := time.Now()
+	d.Close()
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("Close waited %v for a greeting", took)
+	}
+}
+
+// A member's identity rotation keeps its WireGuard key, so the data plane must
+// see the same peer under the new identity: a local handle that moved with
+// the identity would put one key under two handles, which the data plane
+// refuses. Here the rotated member's new announcement is held before its
+// record applies, as when both arrive in one session.
+func TestAPeerThatRotatedItsIdentityStaysAPeer(t *testing.T) {
+	m := startMesh(t, 2)
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	rotating, peer := m.nodes[0], m.nodes[1]
+
+	fresh, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := *rotating.dev
+	rotated.identity, rotated.record.Identity = fresh, fresh.Public()
+	e, err := endpointFor(&rotated, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Seq = uint64(time.Now().Unix())
+	if err := e.Sign(fresh); err != nil {
+		t.Fatal(err)
+	}
+	peer.d.Endpoints().Add(e)
+
+	rec, err := peer.auth.Builder().RotateIdentity(rotating.id(), fresh.Public(), m.nw.sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []types.PrivateIdentity{rotating.dev.identity, fresh, m.nw.admin} {
+		if err := rec.Sign(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := peer.d.Inform([]types.AUM{rec}); err != nil {
+		t.Fatal(err)
+	}
+	if st := peer.d.Status(); st.Peers != 1 || st.DataPlaneError != "" {
+		t.Fatalf("after the rotation: %d peers, data plane error %q", st.Peers, st.DataPlaneError)
 	}
 }

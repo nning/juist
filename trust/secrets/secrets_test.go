@@ -266,3 +266,35 @@ func TestDerivationsAreSeparated(t *testing.T) {
 		t.Error("the discovery key does not change with the epoch")
 	}
 }
+
+// A catch-up key opens only for the member it was sealed to, in the network
+// and for the nonce it was sealed for.
+func TestCatchUpKeyOpensOnlyForItsSession(t *testing.T) {
+	rec, priv := testNode(t)
+	_, other := testNode(t)
+	network, nonce := types.Hash{1}, bytes.Repeat([]byte{7}, 32)
+	key, sealed, err := SealCatchUp(network, &rec, nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sealed) != types.SealedSecretSize {
+		t.Fatalf("a sealed catch-up key is %d bytes, the grant carries %d", len(sealed), types.SealedSecretSize)
+	}
+	got, err := OpenCatchUp(network, rec.Identity, priv, nonce, sealed)
+	if err != nil || got != key {
+		t.Fatalf("the member could not open its own catch-up key: %v", err)
+	}
+	for name, open := range map[string]func() error{
+		"another member's keys": func() error { _, err := OpenCatchUp(network, rec.Identity, other, nonce, sealed); return err },
+		"another network":       func() error { _, err := OpenCatchUp(types.Hash{2}, rec.Identity, priv, nonce, sealed); return err },
+		"another recipient":     func() error { _, err := OpenCatchUp(network, types.Identity{9}, priv, nonce, sealed); return err },
+		"another nonce": func() error {
+			_, err := OpenCatchUp(network, rec.Identity, priv, bytes.Repeat([]byte{8}, 32), sealed)
+			return err
+		},
+	} {
+		if open() == nil {
+			t.Errorf("a catch-up key opened under %s", name)
+		}
+	}
+}

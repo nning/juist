@@ -2,9 +2,11 @@ package gossip
 
 import (
 	"bytes"
+	"net"
 	"net/netip"
 	"testing"
 
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -123,7 +125,7 @@ func FuzzOpenFrame(f *testing.F) {
 	for i := range s {
 		s[i] = byte(i)
 	}
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(1, s)
 
 	if blob, err := seal(s, 1, []byte{0xa1, 0x01, 0x01}); err == nil {
@@ -144,5 +146,95 @@ func FuzzOpenFrame(f *testing.F) {
 			t.Fatal("open reported success with no plaintext")
 		}
 		_, _ = decodeFrame(pt)
+	})
+}
+
+// FuzzDecodeCatchUp drives the catch-up message parser, which reads what a
+// peer sends before it has proved anything. What it accepts must re-encode to
+// the same bytes and carry exactly its step's fields.
+func FuzzDecodeCatchUp(f *testing.F) {
+	id, sig := types.Identity{1}, types.Sig{2}
+	for _, m := range []catchUpMsg{
+		{Step: stepAsk},
+		{Step: stepChallenge, Nonce: make([]byte, catchUpNonceSize)},
+		{Step: stepProof, Identity: &id, Sig: &sig},
+		{Step: stepGrant, Sealed: make([]byte, types.SealedSecretSize), Identity: &id, Sig: &sig},
+		{Step: stepRefused, Identity: &id, Sig: &sig, Epoch: 3},
+	} {
+		b, err := encode(&m)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(append(make([]byte, 8), b...))
+	}
+	f.Add([]byte(nil))
+	f.Add(make([]byte, 8))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		m, err := parseCatchUp(data)
+		if err != nil {
+			return
+		}
+		re, err := encode(&m)
+		if err != nil {
+			t.Fatalf("a decoded catch-up message failed to re-encode: %v", err)
+		}
+		if !bytes.Equal(re, data[8:]) {
+			t.Fatalf("re-encoding changed the bytes:\ninput: %x\nagain: %x", data[8:], re)
+		}
+		if err := m.validate(); err != nil {
+			t.Fatalf("an accepted message fails its own shape check: %v", err)
+		}
+	})
+}
+
+// FuzzAskCatchUp drives the asking side of a catch-up with whatever a peer
+// answers its proof with: it must fail or succeed, never panic.
+func FuzzAskCatchUp(f *testing.F) {
+	id, sig := types.Identity{1}, types.Sig{2}
+	for _, m := range []catchUpMsg{
+		{Step: stepAsk},
+		{Step: stepGrant, Sealed: make([]byte, types.SealedSecretSize), Identity: &id, Sig: &sig},
+		{Step: stepRefused, Identity: &id, Sig: &sig, Epoch: 3},
+	} {
+		b, err := encode(&m)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(append(make([]byte, 8), b...))
+	}
+	priv, err := types.GenerateIdentity()
+	if err != nil {
+		f.Fatal(err)
+	}
+	recipient, err := secrets.GenerateKeys()
+	if err != nil {
+		f.Fatal(err)
+	}
+	n, err := New(Options{Self: priv.Public(), Log: &fakeLog{network: types.Hash{1}}, Keyring: keyring.New(),
+		Endpoints: NewCache(), Listener: nopListener{}, CatchUp: &CatchUpKeys{Identity: priv, Recipient: recipient}})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Fuzz(func(t *testing.T, answer []byte) {
+		if len(answer) > maxCatchUpMsg+8 {
+			return
+		}
+		mine, theirs := net.Pipe()
+		defer mine.Close()
+		go func() {
+			defer theirs.Close()
+			if _, err := readBlob(theirs); err != nil {
+				return
+			}
+			if writeCatchUp(theirs, &catchUpMsg{Step: stepChallenge, Nonce: make([]byte, catchUpNonceSize)}) != nil {
+				return
+			}
+			if _, err := readBlob(theirs); err != nil {
+				return
+			}
+			_ = writeBlob(theirs, answer, "fuzzed")
+		}()
+		_, _, _ = n.askCatchUp(mine, types.Hash{1}, 2)
 	})
 }

@@ -441,7 +441,7 @@ func (n *netnsNode) pingUntil(to netip.Addr, within time.Duration) error {
 
 // routes returns the prefixes routed into the node's overlay device. Reading
 // "table all" is load-bearing: the Linux router keeps peer routes in its own
-// table 52 whenever policy routing is available.
+// table, juistRouteTable.
 func (n *netnsNode) routes() []netip.Prefix {
 	return ifaceRoutes(n.lab.t, []string{n.lab.ip, "-n", n.ns}, n.tun)
 }

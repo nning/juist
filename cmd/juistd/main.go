@@ -1,14 +1,12 @@
 // Command juistd runs a juist node: it holds the membership log this device
-// was enrolled into, keeps a WireGuard peer for every member the log
-// authorizes and nobody else, finds them with blinded LAN discovery, and keeps
-// its log in step by gossip. There is no coordination server to configure.
+// is in, keeps a WireGuard peer for every member the log authorizes and
+// nobody else, finds them with blinded LAN discovery, and keeps its log in
+// step by gossip. There is no coordination server to configure.
 //
 // It creates a real TUN device and programs the host's routes, which needs
-// /dev/net/tun and CAP_NET_ADMIN; pass -tun "" to run without one. It holds no
+// /dev/net/tun and CAP_NET_ADMIN; pass --tun "" to run without one. It holds no
 // admin signing keys and cannot authorize a membership change, so an attacker
 // who owns this process owns one member rather than the network.
-//
-//	juistd [-home DIR] [-port N] [-gossip-port N] [-tun NAME] [-no-discovery]
 package main
 
 import (
@@ -16,176 +14,238 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	iofs "io/fs"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
+	"github.com/nning/juist/cmd/internal/defaults"
 	"github.com/nning/juist/daemon"
+	"github.com/nning/juist/internal/cliflag"
+	"github.com/nning/juist/internal/rendezvous"
+	"github.com/nning/juist/ipc"
 )
 
-const usage = `juistd runs a juist node: log state in, WireGuard mesh out.
+const synopsis = "usage: juistd [options]"
 
-Usage:
-  juistd [flags]
-
-Flags:
-  -home DIR        state directory (default $JUIST_HOME, or ~/.config/juist)
-  -port N          UDP port for the data plane (default: chosen by the OS)
-  -gossip-port N   TCP port for log sync (default: chosen by the OS)
-  -tun NAME        OS TUN device to create (default "juist0"; "" for none).
-                   Creating it needs /dev/net/tun and CAP_NET_ADMIN.
-  -relay-port N    TCP and UDP port for this node's relay, used only where the
-                   log grants it the relay-capable role (default: OS-chosen)
-  -no-relay        do not relay for other members, whatever the log grants
-  -no-discovery    do not announce or look for members on the LAN
-  -no-dht          do not use the public DHT to find members that are on no
-                   LAN this node can see and at no address it has cached
-  -verbose         log what the daemon is doing
-
-The device must already have been enrolled: juistd never creates a network and
-never joins one on its own. Run "juist key -create" to generate this device's
-keys, give them to an admin, and apply the record they send back.
-`
+// errHelp is help asked for and given.
+var errHelp = errors.New("help")
 
 func main() {
-	err := run(os.Args[1:])
-	switch {
-	case err == nil, errors.Is(err, errHelp), errors.Is(err, context.Canceled):
-		return
-	case errors.Is(err, errSilent):
-		os.Exit(1)
-	default:
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	err := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "juistd: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
-	fs := flag.NewFlagSet("juistd", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
-	home := fs.String("home", defaultHome(), "state directory")
-	port := fs.Uint("port", 0, "UDP port for the data plane")
-	gossipPort := fs.Uint("gossip-port", 0, "TCP port for log sync")
-	tun := fs.String("tun", "juist0", `OS TUN device to create ("" for none)`)
-	relayPort := fs.Uint("relay-port", 0, "TCP/UDP port for this node's relay, when the log grants it the role")
-	noRelay := fs.Bool("no-relay", false, "do not relay for other members, whatever the log grants")
-	noDiscovery := fs.Bool("no-discovery", false, "do not use LAN discovery")
-	noDHT := fs.Bool("no-dht", false, "do not use the public DHT to find members off the LAN")
-	verbose := fs.Bool("verbose", false, "log what the daemon is doing")
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return errHelp
-		}
-		return errSilent
+// run runs the node args describe until ctx ends; help goes to out.
+func run(ctx context.Context, args []string, out, errOut io.Writer) error {
+	opts, err := parse(args, out)
+	if errors.Is(err, errHelp) {
+		return nil
 	}
-	if *port > 0xffff || *gossipPort > 0xffff || *relayPort > 0xffff {
-		return errors.New("a port must be below 65536")
-	}
-
-	logf := func(string, ...any) {}
-	if *verbose {
-		logf = func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }
-	}
-
-	node, err := openNode(*home)
 	if err != nil {
 		return err
 	}
-
-	d, err := daemon.New(daemon.Options{
-		Authority:         node.authority,
-		Storage:           node.storage,
-		Identity:          node.identity,
-		Recipient:         node.recipient,
-		WireGuard:         node.wireguard,
-		ListenPort:        uint16(*port),
-		TunName:           *tun,
-		GossipPort:        uint16(*gossipPort),
-		RelayPort:         uint16(*relayPort),
-		DisableRelay:      *noRelay,
-		DisableDiscovery:  *noDiscovery,
-		DisableDHT:        *noDHT,
-		SocketPath:        daemon.SocketPath(*home),
-		EndpointCachePath: daemon.EndpointCachePath(*home),
-		Logf:              logf,
-	})
+	if opts.verbose {
+		logf := func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) }
+		opts.service.Logf, opts.service.Mesh.Logf = logf, logf
+	}
+	s, err := daemon.NewService(opts.service)
 	if err != nil {
-		// Both ways out, because which one is right depends on whether this
-		// is a deployment or someone trying the thing.
-		if *tun != "" && errors.Is(err, iofs.ErrPermission) {
-			return fmt.Errorf("%w\n\n"+
-				"creating the %q device needs CAP_NET_ADMIN: grant it with "+
-				"\"setcap cap_net_admin+ep\" on this binary, run it under "+
-				"packaging/systemd/juistd.service, or pass -tun \"\" to run "+
-				"without a device as M2 did", err, *tun)
-		}
 		return err
 	}
-	defer d.Close()
-
-	// The banner prints before Run's first reconcile, so reconcile once here
-	// or the summary shows a fresh daemon's empty state. Run's own first
-	// reconcile is then a no-op.
-	if err := d.Reconcile(); err != nil {
-		logf("juistd: initial reconcile: %v", err)
+	// The deferred Close removes the control socket.
+	defer s.Close()
+	if err := s.Start(ctx); err != nil {
+		return err
 	}
-
-	st := d.Status()
-	fmt.Printf("juistd: network %q (%v)\n", st.NetworkName, st.Network)
-	fmt.Printf("  this node   %v\n", st.Self.ShortString())
-	for _, a := range st.Addrs {
-		fmt.Printf("  overlay     %v\n", a.Addr())
-	}
-	if *tun == "" {
-		fmt.Printf("  device      none (overlay not plumbed into the host stack)\n")
-	} else {
-		fmt.Printf("  device      %s\n", *tun)
-	}
-	fmt.Printf("  data plane  udp/%d\n", st.ListenPort)
-	fmt.Printf("  log sync    tcp/%d\n", st.GossipPort)
-	fmt.Printf("  control     %s\n", daemon.SocketPath(*home))
-	fmt.Printf("  members     %d\n", st.Members)
-	if st.Relaying {
-		fmt.Printf("  relaying    yes (this node's uplink carries traffic for members that cannot punch)\n")
-	}
-	if st.RelayCapable < 2 {
-		fmt.Printf("  relays      %d granted; below two there is no fallback when one is offline\n",
-			st.RelayCapable)
-	}
-	if st.SchemaAlarm != "" {
-		fmt.Printf("  ALARM       %s\n", st.SchemaAlarm)
-	}
-	if st.Alarm != "" {
-		fmt.Printf("  ALARM       %s\n", st.Alarm)
-	}
-
-	// SIGINT and SIGTERM stop the loop; everything the daemon owns is torn
-	// down by the deferred Close, including the control socket.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	return d.Run(ctx)
+	report(out, errOut, s.Status(), opts.service.Mesh.TunName)
+	<-ctx.Done()
+	return ctx.Err()
 }
 
-// errSilent reports a failure the flag package has already explained; errHelp
-// reports that help was asked for and given, which is a success.
-var (
-	errSilent = silentError{}
-	errHelp   = silentError{help: true}
-)
+type options struct {
+	service daemon.ServiceOptions
+	verbose bool
+}
 
-type silentError struct{ help bool }
-
-func (silentError) Error() string { return "" }
-
-func defaultHome() string {
-	if v := os.Getenv("JUIST_HOME"); v != "" {
-		return v
+// parse reads juistd's options, printing help to out where asked.
+func parse(args []string, out io.Writer) (options, error) {
+	fs := flag.NewFlagSet("juistd", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	home := fs.String("home", "", "state directory (default $JUIST_HOME, or ~/.config/juist)")
+	socket := fs.String("socket", "", "control socket (default daemon.sock in the state directory)")
+	port := fs.Uint("port", daemon.DefaultListenPort, "UDP port for the data plane")
+	gossipPort := fs.Uint("gossip-port", daemon.DefaultGossipPort, "TCP port for log sync")
+	relayPort := fs.Uint("relay-port", daemon.DefaultRelayPort, "TCP and UDP port for relaying, where the log grants it")
+	tun := fs.String("tun", "juist0", `TUN device to create, "" for none; needs CAP_NET_ADMIN`)
+	noRelay := fs.Bool("no-relay", false, "do not relay for other members, whatever the log grants")
+	noDiscovery := fs.Bool("no-discovery", false, "do not announce or look for members on the LAN")
+	noDHT := fs.Bool("no-dht", false, "do not use the public DHT, for members or invites")
+	stunList := fs.String("stun", strings.Join(rendezvous.DefaultSTUN, ","), "public STUN servers, comma-separated")
+	noSTUN := fs.Bool("no-stun", false, "ask no STUN server outside the network")
+	ttl := fs.Duration("freshness-ttl", daemon.DefaultFreshnessTTL, "how long to trust the network's state unvouched")
+	verbose := fs.Bool("verbose", false, "log what the daemon is doing")
+	for _, o := range optionOrder {
+		cliflag.Short(fs, o.short, o.long)
 	}
-	if dir, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(dir, "juist")
+	err := cliflag.Check(fs, args)
+	if err == nil {
+		err = cliflag.TidyIn(fs, fs.Parse(args))
 	}
-	return ".juist"
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		fmt.Fprint(out, help(fs))
+		return options{}, errHelp
+	case err != nil:
+		return options{}, fmt.Errorf("%v\n%s", err, synopsis)
+	case fs.NArg() > 0:
+		return options{}, fmt.Errorf("unexpected argument %q\n%s", fs.Arg(0), synopsis)
+	}
+	if *port > 0xffff || *gossipPort > 0xffff || *relayPort > 0xffff {
+		return options{}, errors.New("a port must be below 65536")
+	}
+	// Vouchers vouch every lease interval; a TTL below two of them has nodes
+	// go stale between leases and drop tunnels every time.
+	if minTTL := 2 * daemon.DefaultLeaseInterval; *ttl < minTTL {
+		return options{}, fmt.Errorf("--freshness-ttl must be at least %s, twice how often vouchers vouch",
+			shortDuration(minTTL))
+	}
+	var stun []string
+	if !*noSTUN {
+		for _, s := range strings.Split(*stunList, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				stun = append(stun, s)
+			}
+		}
+	}
+	if *home == "" {
+		*home = defaults.Home()
+	}
+	nop := func(string, ...any) {}
+	return options{verbose: *verbose, service: daemon.ServiceOptions{
+		Home:   *home,
+		Socket: *socket,
+		Mesh: daemon.Options{
+			ListenPort:   uint16(*port),
+			TunName:      *tun,
+			GossipPort:   uint16(*gossipPort),
+			RelayPort:    uint16(*relayPort),
+			DisableRelay: *noRelay,
+			// Ports the operator named are held to; defaults give way.
+			PortFallback:     !cliflag.IsSet(fs, "port") && !cliflag.IsSet(fs, "gossip-port") && !cliflag.IsSet(fs, "relay-port"),
+			DisableDiscovery: *noDiscovery,
+			DisableDHT:       *noDHT,
+			STUN:             stun,
+			FreshnessTTL:     *ttl,
+			Logf:             nop,
+		},
+		Logf: nop,
+	}}, nil
+}
+
+// optionOrder is every option's one-letter spelling, in the order help lists
+// them, with what its value is.
+var optionOrder = []struct {
+	short byte
+	long  string
+	arg   string
+}{
+	{'H', "home", "DIR"}, {'s', "socket", "PATH"}, {'p', "port", "N"}, {'g', "gossip-port", "N"},
+	{'r', "relay-port", "N"}, {'t', "tun", "NAME"}, {'R', "no-relay", ""}, {'l', "no-discovery", ""},
+	{'d', "no-dht", ""}, {'u', "stun", "LIST"}, {'U', "no-stun", ""}, {'f', "freshness-ttl", "D"},
+	{'v', "verbose", ""},
+}
+
+// help lists the options of fs with their defaults.
+func help(fs *flag.FlagSet) string {
+	var b strings.Builder
+	b.WriteString("Usage: juistd [options]\n\nRun a juist node: the membership log in, the WireGuard mesh out.\n\nOptions:\n")
+	for _, o := range optionOrder {
+		f := fs.Lookup(o.long)
+		label, _ := cliflag.Label(fs, f)
+		text, def := f.Usage, f.DefValue
+		if d, err := time.ParseDuration(def); err == nil {
+			def = shortDuration(d)
+		}
+		if def != "" && def != "false" {
+			text += " (default " + def + ")"
+		}
+		fmt.Fprintf(&b, "  %-22s %s\n", strings.TrimSpace(label+" "+o.arg), text)
+	}
+	fmt.Fprintf(&b, "  %-22s %s\n", "-h, --help", "show this help")
+	b.WriteString("\nDefault ports another program holds become OS-chosen ones; ports given here do not.\n")
+	return b.String()
+}
+
+// shortDuration prints 48h rather than 48h0m0s.
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
+
+// report says how the node started: its state on out, what needs attention
+// on errOut.
+func report(out, errOut io.Writer, st ipc.Status, tun string) {
+	warn := func(format string, a ...any) { fmt.Fprintf(errOut, "warning: "+format+"\n", a...) }
+	hint := func(format string, a ...any) { fmt.Fprintf(errOut, "hint: "+format+"\n", a...) }
+	field := func(label, format string, a ...any) {
+		fmt.Fprintf(out, "  %-11s %s\n", label, fmt.Sprintf(format, a...))
+	}
+	if !st.InNetwork {
+		fmt.Fprintf(out, "juistd: %s (%v) in no network\n", st.SelfName, st.Self.ShortString())
+		hint("juist init, or juist join CODE")
+		return
+	}
+	fmt.Fprintf(out, "juistd: network %q (%v)\n", st.NetworkName, st.Network)
+	field("this node", "%s (%v)", st.SelfName, st.Self.ShortString())
+	if st.NotMember {
+		warn("not a member: the log no longer lists this device")
+		hint("rejoin with a new invite")
+		return
+	}
+	for _, a := range st.Addrs {
+		field("overlay", "%v", a.Addr())
+	}
+	field("device", "%s", map[bool]string{true: "none", false: tun}[tun == ""])
+	field("data plane", "udp/%d", st.ListenPort)
+	field("log sync", "tcp/%d", st.GossipPort)
+	field("members", "%d", st.Members)
+	if st.Relaying {
+		field("relaying", "yes")
+	}
+	switch {
+	case st.LeaseSigners == 0:
+		field("freshness", "not checked: no voucher in the network")
+	case st.Stale:
+		field("freshness", "expired; tunnels only to vouchers until %d vouch again", max(st.Vouchers, 1))
+	default:
+		field("freshness", "good until %s", time.Unix(st.FreshUntil, 0).Format(time.DateTime))
+	}
+	for _, alarm := range []string{st.SchemaAlarm, st.Alarm} {
+		if alarm != "" {
+			warn("%s", alarm)
+		}
+	}
+	if st.StartError != "" {
+		warn("tunnels cannot start yet, retrying: %s", st.StartError)
+		if tun != "" && strings.Contains(st.StartError, iofs.ErrPermission.Error()) {
+			hint("creating %q needs CAP_NET_ADMIN: setcap cap_net_admin+ep on this binary, the packaged "+
+				"service, or --tun \"\"", tun)
+		}
+	}
 }

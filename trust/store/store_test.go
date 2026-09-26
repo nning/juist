@@ -463,3 +463,172 @@ func TestSchemaFloorSurvivesReopen(t *testing.T) {
 		t.Errorf("reopened store reports schema floor %v (err %v), want 4", v, err)
 	}
 }
+
+// Staging a record follows no link someone else planted under its name: the
+// CLI may run as root over a directory the daemon's user owns, and the name
+// is predictable from the record.
+func TestStagingFollowsNoLink(t *testing.T) {
+	n := newNetwork(t)
+	id, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := secrets.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, m, err := keys.Public()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := types.NodeRecord{Identity: id.Public(), Name: "alpha", X25519: x, MLKEM: m}
+	rec.WireGuard[0] = 1
+	aum, err := n.auth.Builder().AddNode(rec, n.sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := aum.Sign(n.admin); err != nil {
+		t.Fatal(err)
+	}
+	precious := filepath.Join(t.TempDir(), "precious")
+	if err := os.WriteFile(precious, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(precious, filepath.Join(n.store.records, tempPrefix+aum.Hash().String())); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.auth.Inform(aum); err != nil {
+		t.Fatalf("Inform: %v", err)
+	}
+	if b, _ := os.ReadFile(precious); string(b) != "keep" {
+		t.Fatalf("staging wrote %d bytes through the planted link", len(b))
+	}
+}
+
+// A store whose directory, or records directory, is a link someone planted
+// is refused rather than written through.
+func TestAStoreIsNoLink(t *testing.T) {
+	victim := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "log")
+	if err := os.Symlink(victim, dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Fatal("a store opened through a link")
+	}
+	if entries, _ := os.ReadDir(victim); len(entries) != 0 {
+		t.Fatalf("opening wrote %d entries through the link", len(entries))
+	}
+	real := filepath.Join(t.TempDir(), "log")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(real, recordsDir)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(real); err == nil {
+		t.Fatal("a store opened with its records directory a link")
+	}
+}
+
+// A crash between a batch's renames must not leave a store that refuses to
+// open. Here the batch is a fork that revokes: its first record wins fork
+// choice alone, at an epoch below the floor the rest of the batch clears.
+func TestABatchCutShortIsFinishedAtOpen(t *testing.T) {
+	n := newNetwork(t)
+	victim := n.addNode("victim")
+	fork := n.auth.State()
+	for range 3 {
+		bump, err := n.auth.Builder().EpochBump(n.sealer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := bump.Sign(n.admin); err != nil {
+			t.Fatal(err)
+		}
+		if err := n.auth.Inform(bump); err != nil {
+			t.Fatal(err)
+		}
+	}
+	floor := n.auth.State().Epoch()
+
+	b := log.NewBuilder(fork)
+	var batch []types.AUM
+	next := func(build func() (types.AUM, error)) {
+		t.Helper()
+		rec, err := build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rec.Sign(n.admin); err != nil {
+			t.Fatal(err)
+		}
+		st, err := b.Dry(&rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b = log.NewBuilder(st)
+		batch = append(batch, rec)
+	}
+	next(func() (types.AUM, error) { return b.RemoveNode(victim.Identity, n.sealer()) })
+	for range 4 {
+		next(func() (types.AUM, error) { return b.EpochBump(n.sealer()) })
+	}
+	want := b.State()
+	if want.Epoch() <= floor || batch[0].Epoch.Epoch >= floor {
+		t.Fatalf("the fork does not straddle the floor: %d then %d, floor %d", batch[0].Epoch.Epoch, want.Epoch(), floor)
+	}
+
+	// The crash that hurts: the revocation is published, the rest are not.
+	revocation := batch[0].Hash()
+	rename = func(string, string) error {
+		if err := os.Rename(filepath.Join(n.dir, recordsDir, tempPrefix+revocation.String()),
+			filepath.Join(n.dir, recordsDir, revocation.String()+recordExt)); err != nil {
+			t.Fatal(err)
+		}
+		panic("crashed")
+	}
+	func() {
+		defer func() { _ = recover() }()
+		_ = n.auth.Inform(batch...)
+	}()
+	rename = os.Rename
+
+	n.reopen()
+	auth, err := log.Open(n.store)
+	if err != nil {
+		t.Fatalf("a batch cut short left a store that does not open: %v", err)
+	}
+	if got := auth.State(); got.Head() != want.Head() || got.Epoch() != want.Epoch() {
+		t.Fatalf("after reopening: head %v epoch %d, want %v epoch %d", got.Head(), got.Epoch(), want.Head(), want.Epoch())
+	}
+}
+
+// A journal naming a record that is neither staged nor stored is a store that
+// lost it, and one that is not a journal is not guessed at: both refuse.
+func TestABrokenBatchJournalRefusesToOpen(t *testing.T) {
+	for name, body := range map[string]string{
+		"a lost record": batchHeader + "\n" + types.Hash{7}.String() + "\n",
+		"no header":     types.Hash{7}.String() + "\n",
+		"not a hash":    batchHeader + "\nnot-a-hash\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			n := newNetwork(t)
+			if err := os.WriteFile(filepath.Join(n.dir, batchFile), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(n.dir); err == nil {
+				t.Fatal("the store opened over a broken batch journal")
+			}
+		})
+	}
+}
+
+// A batch that completes leaves no journal behind.
+func TestACompletedBatchLeavesNoJournal(t *testing.T) {
+	n := newNetwork(t)
+	n.addNode("alpha")
+	if _, err := os.Stat(filepath.Join(n.dir, batchFile)); !os.IsNotExist(err) {
+		t.Fatalf("a completed batch left its journal: %v", err)
+	}
+}

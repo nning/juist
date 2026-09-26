@@ -124,3 +124,54 @@ func TestInformOrderIndependence(t *testing.T) {
 		t.Fatal("batched and incremental delivery produced different heads")
 	}
 }
+
+// Check is Dry for a record still collecting its votes: an unsigned record
+// that would apply passes, and one that never could does not — a checkpoint
+// stating another state, a record on another head, or a signature the
+// network does not trust.
+func TestCheckIsDryWithoutTheQuorum(t *testing.T) {
+	h := newHarness(t, 2, 2)
+	h.addNode("a")
+	add, err := h.auth.Builder().AddNode(h.newNode("b"), h.sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.auth.Builder().Check(&add); err != nil {
+		t.Fatalf("an unsigned record that would apply: %v", err)
+	}
+	if _, err := h.auth.Builder().Dry(&add); err == nil {
+		t.Fatal("Dry accepted an unsigned record")
+	}
+
+	lie := h.handAssembledCheckpoint(append(h.auth.State().Nodes(), h.newNode("ghost")))
+	lie.Signatures = nil
+	if _, err := h.auth.Builder().Check(&lie); err == nil {
+		t.Fatal("a checkpoint stating another state passed")
+	}
+	honest, err := h.auth.Builder().Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.auth.Builder().Check(&honest); err != nil {
+		t.Fatalf("the honest checkpoint: %v", err)
+	}
+
+	stale := add
+	prev := types.Hash{1}
+	stale.Prev = &prev
+	if _, err := h.auth.Builder().Check(&stale); err == nil {
+		t.Fatal("a record on another head passed")
+	}
+
+	stranger, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spoiled := add
+	if err := spoiled.Sign(stranger); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.auth.Builder().Check(&spoiled); err == nil {
+		t.Fatal("a record signed by a key the network does not trust passed")
+	}
+}

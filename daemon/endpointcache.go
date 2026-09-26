@@ -3,10 +3,12 @@ package daemon
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
+	"slices"
+	"time"
+
+	"github.com/nning/juist/internal/statedir"
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/types"
@@ -21,12 +23,6 @@ import (
 // file is not trusted. A record that was edited fails its signature and is
 // dropped, and one that is merely stale loses to the first fresher one a peer
 // sends, because [gossip.Endpoint.Seq] orders them.
-
-// endpointCacheFile is the cache's name inside the state directory.
-const endpointCacheFile = "endpoints.cbor"
-
-// EndpointCachePath returns where a home directory keeps the cache.
-func EndpointCachePath(home string) string { return filepath.Join(home, endpointCacheFile) }
 
 // loadEndpointCache reads announcements a previous run persisted. A missing
 // file is not an error — it is what a first run looks like — and neither is an
@@ -94,49 +90,24 @@ func (d *Daemon) saveEndpointCache(path string) {
 		return
 	}
 
+	// Renewed signatures alone do not rewrite it more than hourly: what the
+	// file is for — where to reach a peer after a restart — has not moved.
 	d.mu.Lock()
-	unchanged := bytes.Equal(d.cachedEndpoints, b)
+	unchanged := bytes.Equal(d.cachedEndpoints, b) ||
+		slices.EqualFunc(d.cachedList, keep, func(x, y gossip.Endpoint) bool { return x.SameAs(&y) }) &&
+			d.now().Sub(d.cachedAt) < cacheRenewal
 	if !unchanged {
-		d.cachedEndpoints = b
+		d.cachedEndpoints, d.cachedList, d.cachedAt = b, keep, d.now()
 	}
 	d.mu.Unlock()
 	if unchanged {
 		return
 	}
-	if err := writeFilePrivate(path, b); err != nil {
+	if err := statedir.WriteFilePrivate(path, b); err != nil {
 		d.logf("daemon: writing the endpoint cache: %v", err)
 	}
 }
 
-// writeFilePrivate writes owner-only, through a temporary file so a crash
-// cannot leave a half-written cache under the name a later run will read.
-func writeFilePrivate(path string, b []byte) error {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	// Synced before the rename, so the name never points at bytes the
-	// filesystem has not committed. The cache is only a hint and every record
-	// in it is verified on the way back, but a hint that decodes to nothing
-	// after a power cut costs a rediscovery for no reason.
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("renaming %s: %w", tmp, err)
-	}
-	return nil
-}
+// cacheRenewal is how often the endpoint cache is rewritten for renewed
+// signatures alone.
+const cacheRenewal = time.Hour

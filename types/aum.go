@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 )
 
 // A Kind identifies what an [AUM] does. Numbers are permanent: never
@@ -74,6 +75,35 @@ const (
 	// whatever it implements: a node too old to apply it has to be able to see
 	// it, or it would only observe that sync had stopped.
 	KindSchemaUpgrade Kind = 12
+
+	// KindSetVouchers changes how many admin devices must vouch for a node's
+	// view of the network within the freshness TTL: with one, a single
+	// dishonest admin device keeps every partition fresh; with m, it takes m
+	// of them. Schema 1 and later.
+	KindSetVouchers Kind = 13
+
+	// KindSetHolder sets how many votes a holder's keys cast between them,
+	// and how many of them must sign for those votes to count. Schema 3 and
+	// later.
+	KindSetHolder Kind = 14
+
+	// KindRenumberNetwork moves the network to another IPv4 prefix and every
+	// member to an address in it. The addresses and ranges it replaces stay
+	// live until its deadline, so members that have not seen it yet still
+	// reach and are reached by the rest. Schema 5 and later.
+	KindRenumberNetwork Kind = 15
+
+	// KindRenumberNode moves one member to another IPv4 address in the
+	// network's prefix, keeping its old one live until the deadline. Schema 5
+	// and later.
+	KindRenumberNode Kind = 16
+
+	// KindRetireAddresses retires every address and range a renumbering
+	// replaced, ahead of their deadlines. Schema 5 and later.
+	KindRetireAddresses Kind = 17
+
+	// KindRenameNetwork gives the network another name. Schema 6 and later.
+	KindRenameNetwork Kind = 18
 )
 
 func (k Kind) String() string {
@@ -104,6 +134,18 @@ func (k Kind) String() string {
 		return "epoch-bump"
 	case KindSchemaUpgrade:
 		return "schema-upgrade"
+	case KindSetVouchers:
+		return "set-vouchers"
+	case KindSetHolder:
+		return "set-holder"
+	case KindRenumberNetwork:
+		return "renumber-network"
+	case KindRenumberNode:
+		return "renumber-node"
+	case KindRetireAddresses:
+		return "retire-addresses"
+	case KindRenameNetwork:
+		return "rename-network"
 	default:
 		return fmt.Sprintf("kind?<%d>", uint8(k))
 	}
@@ -175,10 +217,93 @@ type AUM struct {
 	// Schema is the version being adopted, for SchemaUpgrade.
 	Schema *SchemaVersion `cbor:"12,keyasint,omitempty"`
 
+	// Vouchers is the new vouching threshold, for SetVouchers.
+	Vouchers *uint32 `cbor:"13,keyasint,omitempty"`
+
+	// Holder is a holder's new policy, for SetHolder.
+	Holder *HolderPolicy `cbor:"14,keyasint,omitempty"`
+
+	// Renumber is what a renumbering moves, for RenumberNetwork and
+	// RenumberNode.
+	Renumber *Renumbering `cbor:"15,keyasint,omitempty"`
+
+	// Network is the network's new name, for RenameNetwork.
+	Network *string `cbor:"16,keyasint,omitempty"`
+
 	// Signatures authorize the record. Sorted by key ID and duplicate-free,
 	// like every other set. CBOR key 23 is the highest that encodes in one
 	// byte, leaving payload fields room to grow below it.
 	Signatures []Signature `cbor:"23,keyasint,omitempty"`
+}
+
+// A HolderPolicy is what [KindSetHolder] states about a holder: the votes
+// its keys cast between them, and how many of them must sign.
+type HolderPolicy struct {
+	Name   string `cbor:"1,keyasint"`
+	Votes  uint32 `cbor:"2,keyasint"`
+	Needed uint32 `cbor:"3,keyasint"`
+}
+
+// A Renumbering is what a renumbering record moves: one member to V4, for
+// [KindRenumberNode], or the network to Prefix and every member to its entry
+// in Addrs, for [KindRenumberNetwork]. What it replaces stays live until Until,
+// in Unix seconds.
+type Renumbering struct {
+	Until  uint64        `cbor:"1,keyasint"`
+	V4     *netip.Addr   `cbor:"2,keyasint,omitempty"`
+	Prefix *netip.Prefix `cbor:"3,keyasint,omitempty"`
+	Addrs  []MemberV4    `cbor:"4,keyasint,omitempty"`
+}
+
+// A MemberV4 is the address a network renumbering gives one member.
+type MemberV4 struct {
+	Identity Identity   `cbor:"1,keyasint"`
+	V4       netip.Addr `cbor:"2,keyasint"`
+}
+
+// validate checks a renumbering's shape for kind.
+func (r *Renumbering) validate(kind Kind) error {
+	if r.Until == 0 {
+		return fmt.Errorf("%v record sets no deadline", kind)
+	}
+	if kind == KindRenumberNode {
+		switch {
+		case r.V4 == nil:
+			return errors.New("renumber-node record names no address")
+		case r.Prefix != nil || len(r.Addrs) > 0:
+			return errors.New("renumber-node record carries a network renumbering")
+		}
+		return ValidateV4(*r.V4, v4Choosable)
+	}
+	switch {
+	case r.Prefix == nil:
+		return errors.New("renumber-network record names no prefix")
+	case r.V4 != nil:
+		return errors.New("renumber-network record names a single address")
+	case len(r.Addrs) > MaxNodes:
+		return fmt.Errorf("renumber-network record has %d addresses, over the %d limit", len(r.Addrs), MaxNodes)
+	}
+	if err := ValidateV4Prefix(*r.Prefix); err != nil {
+		return err
+	}
+	seen := make(map[netip.Addr]bool, len(r.Addrs))
+	for i := range r.Addrs {
+		e := &r.Addrs[i]
+		if err := e.Identity.Validate(); err != nil {
+			return fmt.Errorf("renumbered member: %w", err)
+		}
+		if i > 0 && r.Addrs[i-1].Identity.Compare(e.Identity) >= 0 {
+			return fmt.Errorf("renumbered members are not sorted and unique at %v", e.Identity.ShortString())
+		}
+		if err := ValidateV4(e.V4, []netip.Prefix{*r.Prefix}); err != nil {
+			return fmt.Errorf("member %v: %w", e.Identity.ShortString(), err)
+		}
+		if seen[e.V4] {
+			return fmt.Errorf("renumbering gives %v to two members", e.V4)
+		}
+		seen[e.V4] = true
+	}
+	return nil
 }
 
 // payload field identifiers, for the exact-match table in StaticValidate.
@@ -195,6 +320,10 @@ const (
 	fQuorum
 	fEpoch
 	fSchema
+	fVouchers
+	fHolder
+	fRenumber
+	fNetwork
 )
 
 var fieldNames = []struct {
@@ -211,6 +340,10 @@ var fieldNames = []struct {
 	{fQuorum, "Quorum"},
 	{fEpoch, "Epoch"},
 	{fSchema, "Schema"},
+	{fVouchers, "Vouchers"},
+	{fHolder, "Holder"},
+	{fRenumber, "Renumber"},
+	{fNetwork, "Network"},
 }
 
 func (f fieldSet) String() string {
@@ -223,7 +356,7 @@ func (f fieldSet) String() string {
 			names = append(names, fn.name)
 		}
 	}
-	return joinComma(names)
+	return strings.Join(names, ", ")
 }
 
 // kindFields is the exact payload each kind carries. A kind absent from this
@@ -241,6 +374,13 @@ var kindFields = map[Kind]fieldSet{
 	KindCheckpoint:     fState,
 	KindEpochBump:      fEpoch,
 	KindSchemaUpgrade:  fSchema,
+	KindSetVouchers:    fVouchers,
+	KindSetHolder:      fHolder,
+
+	KindRenumberNetwork: fRenumber,
+	KindRenumberNode:    fSubject | fRenumber,
+	KindRetireAddresses: 0,
+	KindRenameNetwork:   fNetwork,
 }
 
 func (a *AUM) presentFields() fieldSet {
@@ -274,6 +414,18 @@ func (a *AUM) presentFields() fieldSet {
 	}
 	if a.Schema != nil {
 		f |= fSchema
+	}
+	if a.Vouchers != nil {
+		f |= fVouchers
+	}
+	if a.Holder != nil {
+		f |= fHolder
+	}
+	if a.Renumber != nil {
+		f |= fRenumber
+	}
+	if a.Network != nil {
+		f |= fNetwork
 	}
 	return f
 }
@@ -386,6 +538,35 @@ func (a *AUM) ValidateUnsigned() error {
 	if a.Epoch != nil {
 		if err := a.Epoch.StaticValidate(); err != nil {
 			return fmt.Errorf("%v: %w", a.Kind, err)
+		}
+	}
+	if a.Vouchers != nil && (*a.Vouchers == 0 || *a.Vouchers > MaxAdmins) {
+		return fmt.Errorf("a vouching threshold of %d; it must be between 1 and %d", *a.Vouchers, MaxAdmins)
+	}
+	if h := a.Holder; h != nil {
+		switch {
+		case h.Name == "":
+			return errors.New("a holder policy names no holder")
+		case h.Votes == 0 || h.Votes > MaxVotes:
+			return fmt.Errorf("a holder with %d votes; it must have between 1 and %d", h.Votes, MaxVotes)
+		case h.Needed == 0 || h.Needed > MaxAdmins:
+			return fmt.Errorf("a holder needing %d keys; it must need between 1 and %d", h.Needed, MaxAdmins)
+		}
+		if err := ValidateName(h.Name); err != nil {
+			return fmt.Errorf("holder: %w", err)
+		}
+	}
+	if a.Renumber != nil {
+		if err := a.Renumber.validate(a.Kind); err != nil {
+			return err
+		}
+	}
+	if a.Network != nil {
+		if *a.Network == "" {
+			return errors.New("rename-network record names no name")
+		}
+		if err := ValidateName(*a.Network); err != nil {
+			return fmt.Errorf("network name: %w", err)
 		}
 	}
 	if a.Schema != nil && *a.Schema == 0 {
@@ -516,8 +697,37 @@ func (a *AUM) Clone() *AUM {
 		q := *a.Quorum
 		out.Quorum = &q
 	}
+	if a.Schema != nil {
+		v := *a.Schema
+		out.Schema = &v
+	}
+	if a.Vouchers != nil {
+		m := *a.Vouchers
+		out.Vouchers = &m
+	}
+	if a.Holder != nil {
+		h := *a.Holder
+		out.Holder = &h
+	}
+	if a.Renumber != nil {
+		r := *a.Renumber
+		if r.V4 != nil {
+			v4 := *r.V4
+			r.V4 = &v4
+		}
+		if r.Prefix != nil {
+			p := *r.Prefix
+			r.Prefix = &p
+		}
+		r.Addrs = slices.Clone(r.Addrs)
+		out.Renumber = &r
+	}
+	if a.Network != nil {
+		n := *a.Network
+		out.Network = &n
+	}
 	if a.Epoch != nil {
-		e := EpochRecord{Epoch: a.Epoch.Epoch, Commit: a.Epoch.Commit}
+		e := *a.Epoch
 		e.Wraps = make([]EpochWrap, len(a.Epoch.Wraps))
 		for i := range a.Epoch.Wraps {
 			e.Wraps[i] = a.Epoch.Wraps[i]
@@ -559,14 +769,3 @@ func DecodeUnsignedAUM(b []byte) (AUM, error) {
 
 // bytes returns the hash as a slice, for the signing APIs that take one.
 func (h Hash) bytes() []byte { return h[:] }
-
-func joinComma(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += ", "
-		}
-		out += p
-	}
-	return out
-}

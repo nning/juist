@@ -13,9 +13,11 @@ import (
 	anacrolix "github.com/anacrolix/dht/v2"
 	"github.com/anacrolix/dht/v2/krpc"
 	alog "github.com/anacrolix/log"
+	"github.com/anacrolix/torrent/bencode"
 	"golang.org/x/time/rate"
 
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -98,7 +100,7 @@ type member struct {
 	found map[types.Identity]gossip.Endpoint
 }
 
-func newMember(t *testing.T, sw *swarm, kr *secrets.Keyring, name byte, wanted func() []types.Identity) *member {
+func newMember(t *testing.T, sw *swarm, kr *keyring.Keyring, name byte, wanted func() []types.Identity) *member {
 	t.Helper()
 	priv, err := types.GenerateIdentity()
 	if err != nil {
@@ -142,7 +144,7 @@ func newMember(t *testing.T, sw *swarm, kr *secrets.Keyring, name byte, wanted f
 		t.Fatalf("starting a DHT node: %v", err)
 	}
 	t.Cleanup(func() { n.Close() })
-	if _, err := n.srv.Bootstrap(); err != nil {
+	if _, err := n.store.srv.Bootstrap(); err != nil {
 		t.Logf("bootstrapping: %v", err)
 	}
 	m.node = n
@@ -155,13 +157,13 @@ func (m *member) record(e gossip.Endpoint) {
 	m.found[e.Identity] = e
 }
 
-func testKeyring(t *testing.T, epoch uint64) *secrets.Keyring {
+func testKeyring(t *testing.T, epoch uint64) *keyring.Keyring {
 	t.Helper()
 	s, err := secrets.NewSecret()
 	if err != nil {
 		t.Fatal(err)
 	}
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(epoch, s)
 	return kr
 }
@@ -421,7 +423,7 @@ func FuzzOpenItem(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(3, s)
 
 	priv, err := types.GenerateIdentity()
@@ -458,4 +460,117 @@ func FuzzOpenItem(f *testing.F) {
 			t.Fatalf("openAnnouncement returned an unverified record: %v", err)
 		}
 	})
+}
+
+func TestStorePutAndGet(t *testing.T) {
+	sw := newSwarm(t, 3)
+	a, err := NewStore(StoreOptions{Bootstrap: sw.addrs, NoSecurity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := NewStore(StoreOptions{Bootstrap: sw.addrs, NoSecurity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	seed := [32]byte{7}
+	ctx := context.Background()
+	if err := a.Put(ctx, seed, []byte("sealed")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Get(ctx, seed)
+	if err != nil || string(got) != "sealed" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if _, err := b.Get(ctx, [32]byte{8}); err == nil {
+		t.Fatal("found an item nobody put")
+	}
+}
+
+// answers reports whether the DHT node at addr answers a ping.
+func answers(t *testing.T, addr net.Addr) bool {
+	t.Helper()
+	c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ping, err := bencode.Marshal(krpc.Msg{T: "aa", Y: "q", Q: "ping", A: &krpc.MsgArgs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A node bound to every address is reached on loopback.
+	to := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: addr.(*net.UDPAddr).Port}
+	if _, err := c.WriteTo(ping, to); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(time.Second))
+	_, _, err = c.ReadFrom(make([]byte, 1500))
+	return err == nil
+}
+
+// A member's DHT nodes are clients only: a node that answered queries would
+// store any stranger's puts, for as long as its memory lasted.
+func TestMembersStoreNothingForStrangers(t *testing.T) {
+	sw := newSwarm(t, 3)
+	if !answers(t, sw.nodes[0].Addr()) {
+		t.Fatal("the swarm's own node does not answer; the probe is broken")
+	}
+	m := newMember(t, sw, testKeyring(t, 1), 1, nil)
+	if answers(t, m.node.store.srv.Addr()) {
+		t.Fatal("the discovery node answers queries")
+	}
+	s, err := NewStore(StoreOptions{Bootstrap: sw.addrs, NoSecurity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if answers(t, s.srv.Addr()) {
+		t.Fatal("the rendezvous store answers queries")
+	}
+}
+
+// A round brought forward puts nothing when the announcement says what the
+// one put a moment ago under the same epoch said, however it was signed
+// since; a change, another epoch, or a round on the interval puts.
+func TestAnUnchangedAnnouncementIsNotPutAgainSoon(t *testing.T) {
+	kr := testKeyring(t, 4)
+	put := gossip.Endpoint{Seq: 7, GossipPort: 1}
+	ann := put
+	n := &Node{opts: Options{Keyring: kr, Announce: func() (gossip.Endpoint, bool) { return ann, true }},
+		interval: DefaultInterval}
+	epoch, _, _ := kr.Latest()
+	reset := func(ep uint64, when time.Time) {
+		n.published, n.publishedEpoch, n.publishedWhen = put.Clone(), ep, when
+	}
+	// The node has no DHT server: getting past the check would panic.
+	reset(epoch, time.Now().Add(-3*time.Minute))
+	ann.Seq = 9 // renewed, nothing changed
+	if err := n.publish(t.Context(), true); err != nil {
+		t.Fatalf("an unchanged announcement, renewed: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		early bool
+		port  uint16
+		ep    uint64
+		when  time.Time
+	}{
+		{"a changed announcement", true, 2, epoch, time.Now()},
+		{"another epoch", true, 1, epoch - 1, time.Now()},
+		{"one put an interval ago", true, 1, epoch, time.Now().Add(-DefaultInterval)},
+		{"a round on the interval", false, 1, epoch, time.Now()},
+	} {
+		reset(tc.ep, tc.when)
+		ann.GossipPort = tc.port
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s was not put", tc.name)
+				}
+			}()
+			_ = n.publish(t.Context(), tc.early)
+		}()
+	}
 }

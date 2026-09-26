@@ -100,7 +100,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
-      # The v1 platform set (docs/05-roadmap.md M5). Compiling for each keeps
+      # The v1 platform set (docs/05-roadmap.md M7). Compiling for each keeps
       # the embedded Tailscale stack's build tags honest between milestones.
       - run: make cross
 
@@ -129,3 +129,24 @@ jobs:
       # The audit scope's size is a tracked regression metric
       # (docs/06-verification.md); this fails if it grows past the budget.
       - run: make tcb
+
+  packages:
+    name: packages (deb and rpm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Fedora, for rpmbuild with the systemd and sysusers macros the spec uses;
+    # the deb is built here too, since dpkg-deb comes along. Building both is
+    # what catches a spec or a Makefile target that no longer matches the
+    # files it packages.
+    container: fedora:42
+    steps:
+      - run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros dpkg git make tar gzip
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: make rpm deb
+      - run: rpm -qlp build/rpm/RPMS/*/juist-*.rpm
+      - run: dpkg-deb -c build/deb/juist_*.deb

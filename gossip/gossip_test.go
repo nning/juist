@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -20,16 +21,20 @@ type fakeLog struct {
 	network types.Hash
 	head    types.Hash
 	epoch   uint64
+	have    []types.Hash
 
 	// missing overrides what this log offers a peer. Nil offers nothing.
 	missing func([]types.Hash, types.Hash) ([]types.AUM, error)
+
+	// member answers [Log.Member]. Nil lists nobody.
+	member func(types.Identity) (types.NodeRecord, bool, error)
 
 	mu       sync.Mutex
 	informed [][]types.AUM
 }
 
 func (l *fakeLog) View() (View, error) {
-	return View{Network: l.network, Head: l.head, Epoch: l.epoch, Anchor: types.Hash{0xa}}, nil
+	return View{Network: l.network, Head: l.head, Epoch: l.epoch, Anchor: types.Hash{0xa}, Have: l.have}, nil
 }
 
 func (l *fakeLog) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM, error) {
@@ -37,6 +42,13 @@ func (l *fakeLog) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM, er
 		return l.missing(have, anchor)
 	}
 	return nil, nil
+}
+
+func (l *fakeLog) Member(id types.Identity) (types.NodeRecord, bool, error) {
+	if l.member == nil {
+		return types.NodeRecord{}, false, nil
+	}
+	return l.member(id)
 }
 
 func (l *fakeLog) Inform(records []types.AUM) error {
@@ -50,7 +62,8 @@ func (l *fakeLog) Inform(records []types.AUM) error {
 type testNode struct {
 	priv    types.PrivateIdentity
 	id      types.Identity
-	keyring *secrets.Keyring
+	record  types.NodeRecord // as a log listing it would carry it
+	keyring *keyring.Keyring
 	cache   *Cache
 	log     *fakeLog
 	node    *Node
@@ -64,6 +77,10 @@ var (
 	testAddrsMu sync.Mutex
 	testAddrs   = map[netip.AddrPort]netip.AddrPort{}
 )
+
+// blackhole is an address the test dialer never connects to or refuses, like
+// a private address on another site's LAN: the SYN goes unanswered.
+var blackhole = netip.MustParseAddr("10.0.0.9")
 
 func loopbackFor(announced netip.AddrPort) netip.AddrPort {
 	testAddrsMu.Lock()
@@ -89,7 +106,7 @@ func newTestNode(t *testing.T, network types.Hash, epoch uint64, s secrets.Secre
 // accept loop is already running by the time this returns, and its sessions
 // read the field.
 func newTestNodeTimeout(t *testing.T, network types.Hash, epoch uint64, s secrets.Secret,
-	timeout time.Duration) *testNode {
+	timeout time.Duration, mutate ...func(*Options)) *testNode {
 	t.Helper()
 	priv, err := types.GenerateIdentity()
 	if err != nil {
@@ -99,18 +116,27 @@ func newTestNodeTimeout(t *testing.T, network types.Hash, epoch uint64, s secret
 	if err != nil {
 		t.Fatalf("listening: %v", err)
 	}
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(epoch, s)
+	recipient, err := secrets.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, m, err := recipient.Public()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tn := &testNode{
 		priv:    priv,
 		id:      priv.Public(),
+		record:  types.NodeRecord{Identity: priv.Public(), X25519: x, MLKEM: m},
 		keyring: kr,
 		cache:   NewCache(),
 		log:     &fakeLog{network: network, epoch: epoch},
 		port:    uint16(ln.Addr().(*net.TCPAddr).Port),
 	}
 	tn.real = netip.MustParseAddrPort(ln.Addr().String())
-	n, err := New(Options{
+	opts := Options{
 		Self:      tn.id,
 		Log:       tn.log,
 		Keyring:   kr,
@@ -121,12 +147,21 @@ func newTestNodeTimeout(t *testing.T, network types.Hash, epoch uint64, s secret
 		// member set at an address, so these carry a routable-looking one and
 		// the dialer maps it back to the loopback listener.
 		Dial: func(ctx context.Context, addr netip.AddrPort) (net.Conn, error) {
+			if addr.Addr() == blackhole {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
 			var d net.Dialer
 			return d.DialContext(ctx, "tcp", loopbackFor(addr).String())
 		},
 		Timeout: timeout,
+		CatchUp: &CatchUpKeys{Identity: priv, Recipient: recipient},
 		Logf:    t.Logf,
-	})
+	}
+	for _, m := range mutate {
+		m(&opts)
+	}
+	n, err := New(opts)
 	if err != nil {
 		t.Fatalf("starting gossip: %v", err)
 	}
@@ -183,6 +218,41 @@ func TestSessionExchangesAnnouncements(t *testing.T) {
 	}
 	if _, ok := a.cache.Get(a.id); ok {
 		t.Errorf("initiator cached an announcement about itself")
+	}
+}
+
+// Both sides of a session hear which records the other holds, under the
+// identity it announces.
+func TestSessionReportsWhatThePeerHolds(t *testing.T) {
+	net1 := types.Hash{1}
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type heard struct {
+		from types.Identity
+		have []types.Hash
+	}
+	got := make(chan heard, 2)
+	holding := func(h types.Hash) func(*Options) {
+		return func(o *Options) {
+			o.Log.(*fakeLog).have = []types.Hash{h}
+			o.OnHave = func(from types.Identity, have []types.Hash) { got <- heard{from, have} }
+		}
+	}
+	a := newTestNodeTimeout(t, net1, 3, s, 2*time.Second, holding(types.Hash{0xa}))
+	b := newTestNodeTimeout(t, net1, 3, s, 2*time.Second, holding(types.Hash{0xb}))
+	if err := a.node.SyncWith(t.Context(), b.addr(), types.Identity{}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	for range 2 {
+		h := <-got
+		switch {
+		case h.from == a.id && slices.Equal(h.have, a.log.have):
+		case h.from == b.id && slices.Equal(h.have, b.log.have):
+		default:
+			t.Errorf("heard %v holding %v", h.from.ShortString(), h.have)
+		}
 	}
 }
 
@@ -262,6 +332,31 @@ func TestSessionSealsUnderTheLaggingPeersEpoch(t *testing.T) {
 	}
 }
 
+// A node that forgot where a peer is — restarted after rotating its own
+// keys — seals its hello under its newest epoch, which a peer that has not
+// applied the rotation cannot open. It retries under the older epochs it
+// still holds, or neither side could ever catch the other up.
+func TestSessionFindsTheEpochAnUnknownLaggingPeerHolds(t *testing.T) {
+	network := types.Hash{1}
+	old, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ahead := newTestNode(t, network, 3, old)
+	ahead.keyring.Adopt(4, fresh)
+	ahead.log.epoch = 4
+	behind := newTestNode(t, network, 3, old)
+
+	// No round before this one: nothing tells ahead that behind is at 3.
+	if err := ahead.node.SyncWith(t.Context(), behind.addr(), behind.id); err != nil {
+		t.Fatalf("sync with a lagging peer whose epoch nobody remembered: %v", err)
+	}
+}
+
 // TestFrameEpochCannotChangeMidSession stops a peer from opening at one epoch
 // this node holds and switching to another, which would leave "what epoch is
 // this session" unanswerable.
@@ -291,16 +386,15 @@ func TestFrameEpochCannotChangeMidSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	hello := frame{Kind: kindHello, Network: network, Epoch: 3, Anchor: types.Hash{0xa}}
-	if err := attacker.writeFrame(c, 3, &hello); err != nil {
+	if err := attacker.writeSealed(c, &sessionSeal{epoch: 3}, &hello); err != nil {
 		t.Fatalf("writing the first frame: %v", err)
 	}
 	// Read the victim's hello so it gets as far as expecting our records.
-	got := uint64(0)
-	if _, err := attacker.readFrame(c, &got); err != nil {
+	if _, err := attacker.readSealed(c, &sessionSeal{}); err != nil {
 		t.Fatalf("reading the peer hello: %v", err)
 	}
 	records := frame{Kind: kindRecords, Network: network, Epoch: 4, Anchor: types.Hash{0xa}}
-	if err := attacker.writeFrame(c, 4, &records); err != nil {
+	if err := attacker.writeSealed(c, &sessionSeal{epoch: 4}, &records); err != nil {
 		t.Fatalf("writing the second frame: %v", err)
 	}
 	// The victim must hang up rather than answer.
@@ -332,6 +426,39 @@ func TestSyncSkipsUnknownPeers(t *testing.T) {
 	}
 	if n := a.node.Sync(context.Background(), []types.Identity{a.id, other.Public()}); n != 0 {
 		t.Errorf("Sync reported %d successful rounds, want 0", n)
+	}
+}
+
+// TestAnUnansweredAddressLeavesTimeForTheNext: a peer's addresses share one
+// session budget, and a member behind NAT announces private addresses first
+// that nobody elsewhere can reach. If the first unanswered SYN spent the whole
+// budget, the address that works would never be tried.
+func TestAnUnansweredAddressLeavesTimeForTheNext(t *testing.T) {
+	network := types.Hash{1}
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestNode(t, network, 1, s)
+	b := newTestNode(t, network, 1, s)
+	e := Endpoint{
+		Identity:   b.id,
+		Disco:      DiscoKey{1, 2, 3},
+		Addrs:      SortAddrs([]netip.AddrPort{netip.AddrPortFrom(blackhole, b.port), b.addr()}),
+		GossipPort: b.port,
+		Seq:        1,
+	}
+	if e.Addrs[0].Addr() != blackhole {
+		t.Fatalf("the unanswered address must come first: %v", e.Addrs)
+	}
+	if err := e.Sign(b.priv); err != nil {
+		t.Fatal(err)
+	}
+	if !a.cache.Add(e) {
+		t.Fatal("the announcement was not cached")
+	}
+	if n := a.node.Sync(t.Context(), []types.Identity{b.id}); n != 1 {
+		t.Errorf("Sync reached %d peers, want 1: the second address was never tried", n)
 	}
 }
 
@@ -491,14 +618,15 @@ func TestSilentConnectionsCannotHoldEveryInboundSlot(t *testing.T) {
 	}
 
 	// Settle: the accept loop runs on its own goroutine, so wait for it to
-	// have taken the connections before reading the count.
+	// have taken the connections before reading the count — and for the
+	// sessions it evicted to have given their slots back, which they do only
+	// once their reads return. A peer arriving before that finds every slot
+	// taken and is refused, which is the retry path, not the one under test.
 	silent, peak := 0, 0
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
-		a.node.mu.Lock()
-		silent = len(a.node.unauth[netip.MustParseAddr("127.0.0.1")])
-		a.node.mu.Unlock()
+		silent = a.node.silent.Count(netip.MustParseAddr("127.0.0.1"))
 		peak = max(peak, silent)
-		if peak >= maxUnauthPerSource && silent <= maxUnauthPerSource {
+		if peak >= maxUnauthPerSource && silent <= maxUnauthPerSource && len(a.node.slots) <= silent {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -517,5 +645,54 @@ func TestSilentConnectionsCannotHoldEveryInboundSlot(t *testing.T) {
 	defer cancel()
 	if err := b.node.SyncWith(ctx, a.real, a.id); err != nil {
 		t.Fatalf("a session was refused while silent connections were held: %v", err)
+	}
+}
+
+// With OverlayOnly a peer is reached only at its overlay addresses: log sync
+// runs through the tunnel, and the announced underlay addresses are not tried.
+func TestOverlayOnlyDialsNoAnnouncedAddress(t *testing.T) {
+	network := types.Hash{1}
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestNode(t, network, 1, s)
+	b := newTestNode(t, network, 1, s)
+	e, _ := b.announce()
+	if !a.cache.Add(e) {
+		t.Fatal("the announcement was not cached")
+	}
+	a.node.opts.OverlayOnly = true
+	if n := a.node.Sync(t.Context(), []types.Identity{b.id}); n != 0 {
+		t.Fatalf("Sync reached %d peers through an announced address", n)
+	}
+	a.node.opts.OverlayAddrs = func(types.Identity) []netip.AddrPort { return []netip.AddrPort{b.addr()} }
+	if n := a.node.Sync(t.Context(), []types.Identity{b.id}); n != 1 {
+		t.Fatalf("Sync reached %d peers through the overlay address, want 1", n)
+	}
+}
+
+// A peer whose last round reached none of its addresses reads as failing, and
+// a round that reaches it clears that: what status says when a firewall on
+// the tunnel's device drops the sync port.
+func TestARoundThatReachesNoAddressIsFailing(t *testing.T) {
+	network := types.Hash{1}
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestNode(t, network, 1, s)
+	b := newTestNode(t, network, 1, s)
+	e, _ := b.announce()
+	a.cache.Add(e)
+	a.node.opts.OverlayOnly = true
+	a.node.Sync(t.Context(), []types.Identity{b.id})
+	if !a.node.Failing(b.id) {
+		t.Fatal("a round that reached no address did not read as failing")
+	}
+	a.node.opts.OverlayAddrs = func(types.Identity) []netip.AddrPort { return []netip.AddrPort{b.addr()} }
+	a.node.Sync(t.Context(), []types.Identity{b.id})
+	if a.node.Failing(b.id) {
+		t.Fatal("a round that reached the peer left it failing")
 	}
 }

@@ -32,6 +32,19 @@ type selfSigned struct {
 // an error about clocks.
 const certLifetime = 20 * 365 * 24 * time.Hour
 
+// A Certificate is a relay's TLS identity. A caller that restarts its relay
+// may pass the same one again, so the hash members pinned stays good.
+type Certificate struct{ s *selfSigned }
+
+// NewCertificate draws a fresh key and certificate.
+func NewCertificate() (*Certificate, error) {
+	s, err := newSelfSigned()
+	if err != nil {
+		return nil, err
+	}
+	return &Certificate{s: s}, nil
+}
+
 // newSelfSigned draws a fresh key and certificate.
 func newSelfSigned() (*selfSigned, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

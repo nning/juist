@@ -1,6 +1,7 @@
 package types
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base32"
 	"errors"
@@ -26,6 +27,9 @@ func (h Hash) String() string { return base32NoPad.EncodeToString(h[:]) }
 // IsZero reports whether h is the zero value, which no real digest is
 // expected to be.
 func (h Hash) IsZero() bool { return h == Hash{} }
+
+// Compare orders hashes bytewise, which is how fork choice breaks ties.
+func (h Hash) Compare(other Hash) int { return bytes.Compare(h[:], other[:]) }
 
 // MarshalText implements [encoding.TextMarshaler].
 func (h Hash) MarshalText() ([]byte, error) { return []byte(h.String()), nil }
@@ -77,6 +81,7 @@ const (
 	labelULA         = "juist/ula/v1"
 	labelDisablement = "juist/disablement/v1"
 	labelEpochCommit = "juist/epoch-commit/v1"
+	labelLease       = "juist/lease/v1"
 )
 
 // errNULInLabel guards the invariant hashLabeled relies on.

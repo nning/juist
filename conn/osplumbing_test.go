@@ -215,10 +215,10 @@ func ifaceHasAddrs(t *testing.T, name string, want ...netip.Addr) bool {
 // interface, by shelling out to iproute2. ipArgv is how to invoke it: the
 // netns harness prepends "-n <namespace>".
 //
-// "table all" is load-bearing: the Linux router puts peer routes in table 52
-// wherever policy routing is available, so reading the main table alone would
-// report no peer routes at all. Lines whose first field is a route type rather
-// than a destination are skipped.
+// "table all" is load-bearing: the Linux router puts peer routes in its own
+// table, juistRouteTable, so reading the main table alone would report no peer
+// routes at all. Lines whose first field is a route type rather than a
+// destination are skipped.
 func ifaceRoutes(t *testing.T, ipArgv []string, name string) []netip.Prefix {
 	t.Helper()
 	var out []netip.Prefix

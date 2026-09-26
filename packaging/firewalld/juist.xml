@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The firewalld service "juist": the one port the mesh has, for
+     WireGuard and path discovery. Log sync runs inside the tunnel. -->
+<service>
+  <short>juist</short>
+  <description>juist mesh VPN: WireGuard and path discovery. Log sync runs inside the tunnel.</description>
+  <port protocol="udp" port="41643"/>
+</service>

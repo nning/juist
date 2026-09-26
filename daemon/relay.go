@@ -3,12 +3,13 @@ package daemon
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"net/netip"
 	"slices"
+	"syscall"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/relay"
+	"github.com/nning/juist/relay/forward"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -17,18 +18,10 @@ import (
 // digest this project takes, so no hash can be reinterpreted as another kind.
 const labelRelayRegion = "juist/relay-region/v1"
 
-// relayRegion is a relay's network-wide identifier, derived from the network
-// and the relay member's identity so that every member computes the same
-// number without agreeing on anything.
-//
-// A sorted index over the relay-capable set would collide never but *renumber*
-// whenever that set changes, and a peer announces the region it can be reached
-// through: two members a reconcile apart would then read the same announcement
-// as two different relays. A derivation moves with nobody.
-//
-// The range is 1..65535 because the data plane keeps a peer's home region in
-// 16 bits. Collisions are possible and handled where the set is built, not
-// here.
+// relayRegion is a relay's region, 1..65535 as the data plane keeps it in 16
+// bits. It is derived from the network and the member so that it moves with
+// nobody: an index over the relay-capable set would renumber as the set
+// changes, and announcements name regions. Collisions are handled in relaySet.
 func relayRegion(network types.Hash, id types.Identity) int {
 	h := sha256.New()
 	h.Write([]byte(labelRelayRegion))
@@ -94,16 +87,9 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 	return out
 }
 
-// syncRelay starts this device's own relay when the log grants it
-// `relay-capable`, and stops it when the grant is withdrawn. Running one is a
-// standing offer of this member's bandwidth, so it follows the log rather than
-// local configuration — with [Options.DisableRelay] as the operator's veto
-// over their own machine.
-//
-// A nil state means this node cannot say who is a member — a fork alarm, or
-// its own removal — and the relay stops for the same reason the data plane
-// does: admitting members is a membership question, and a node that cannot
-// answer one must not guess.
+// syncRelay runs this device's relay while the log grants it relay-capable and
+// [Options.DisableRelay] does not veto it. A nil state, under a fork alarm or
+// after its own removal, stops it: who may use it is a membership question.
 func (d *Daemon) syncRelay(state *log.State) {
 	want := !d.noRelay
 	if state != nil {
@@ -126,10 +112,15 @@ func (d *Daemon) syncRelay(state *log.State) {
 
 	switch {
 	case want && running == nil:
-		srv, err := relay.New(relay.Options{
-			Admit: d.admitToRelay,
-			Port:  d.relayPort,
-			Logf:  d.logf,
+		cert, err := d.session.relayCertificate()
+		if err != nil {
+			d.logOnce("daemon: this device holds the relay-capable role but its relay " +
+				"could not start: " + err.Error())
+			return
+		}
+		srv, err := onPortOrAny(d, d.relayPort, syscall.EADDRINUSE, "relay", func(port uint16) (*relay.Server, error) {
+			return relay.New(relay.Options{Admit: d.admitToRelay, AdmitHost: d.admitHostToRelay, Port: port,
+				Certificate: cert, Logf: d.logf})
 		})
 		if err != nil {
 			d.logOnce("daemon: this device holds the relay-capable role but its relay " +
@@ -161,6 +152,7 @@ func (d *Daemon) syncRelay(state *log.State) {
 func (d *Daemon) stopRelaying() {
 	d.mu.Lock()
 	d.relayMembers = map[types.WGKey]bool{}
+	d.relayHosts = map[types.Identity]bool{}
 	d.mu.Unlock()
 	d.syncRelay(nil)
 }
@@ -173,6 +165,14 @@ func (d *Daemon) admitToRelay(wg [32]byte) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.relayMembers[types.WGKey(wg)]
+}
+
+// admitHostToRelay reports whether an identity may wait at this device's
+// relay for an invite's guest: any live member may.
+func (d *Daemon) admitHostToRelay(id [32]byte) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.relayHosts[types.Identity(id)]
 }
 
 // relayInfo is what this node announces about its own relay, or nil.
@@ -203,32 +203,26 @@ func (d *Daemon) closeRelay() {
 	}
 }
 
-// mergeEndpoints adds the addresses the data plane learned — reflexive ones
-// from a relay's STUN responder — to the interface scan, rather than replacing
-// it. The scan is what makes a LAN with no internet work at all, and a
-// reflexive address is what makes an off-LAN peer reachable; neither is a
-// superset of the other.
-//
-// Where the two together exceed what one announcement may carry, the learned
-// ones are kept. Truncating the sorted union instead would drop by numeric
-// order, and a reflexive address is usually the highest one there is — so a
-// multi-homed host would silently announce nothing but its own private
-// addresses, which is the one case this exists for.
-func mergeEndpoints(scanned, learned []netip.AddrPort) []netip.AddrPort {
-	if len(learned) == 0 {
-		return scanned
-	}
-	keep := gossip.SortAddrs(learned)
-	if len(keep) > gossip.MaxEndpointAddrs {
-		keep = keep[:gossip.MaxEndpointAddrs]
-	}
-	for _, ap := range scanned {
-		if len(keep) >= gossip.MaxEndpointAddrs {
-			break
+// inviteRelays are the member relays an invite from this device may wait at
+// for its guest: every other live member the log makes relay-capable whose
+// announcement says where its relay is.
+func (d *Daemon) inviteRelays(state *log.State) []forward.Relay {
+	now := d.now().Unix()
+	var out []forward.Relay
+	for _, n := range state.NodesWithRole(types.RoleRelayCapable) {
+		if n.Identity == d.self || n.Expired(now) {
+			continue
 		}
-		if !slices.Contains(keep, ap) {
-			keep = append(keep, ap)
+		ep, ok := d.endpoints.Get(n.Identity)
+		if !ok || ep.Relay == nil || len(ep.Relay.Cert) != sha256.Size {
+			continue
 		}
+		addrs := ep.RelayAddrs()
+		if len(addrs) == 0 {
+			continue
+		}
+		out = append(out, forward.Relay{Addrs: addrs, CertHash: [32]byte(ep.Relay.Cert),
+			ServerName: ep.Relay.HostName})
 	}
-	return gossip.SortAddrs(keep)
+	return out
 }

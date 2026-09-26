@@ -1,0 +1,306 @@
+package ipc
+
+import (
+	"net/netip"
+	"slices"
+
+	"github.com/nning/juist/internal/rendezvous"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/types"
+)
+
+// Status is what the daemon reports about itself, over IPC and to tests. Times
+// are Unix seconds: canonical CBOR admits one spelling per value, and
+// time.Time carries a monotonic reading and a location.
+//
+// The embedded parts travel flattened, as if their fields were Status's own.
+type Status struct {
+	// Self is this node's identity, and Addrs its overlay addresses.
+	Self  types.Identity `cbor:"1,keyasint"`
+	Addrs []netip.Prefix `cbor:"2,keyasint,omitempty"`
+
+	// Network is the genesis hash.
+	Network types.Hash `cbor:"3,keyasint"`
+
+	Derived
+	Tunnels
+
+	// SyncInTunnel says log sync runs through the tunnel alone.
+	SyncInTunnel bool `cbor:"47,keyasint,omitempty"`
+
+	// Rendezvous names the public services invites may meet through when
+	// neither device can reach the other; nil when the daemon is told to
+	// use none (--no-dht or --no-stun).
+	Rendezvous *rendezvous.Helpers `cbor:"34,keyasint,omitempty"`
+
+	// InNetwork is set once this device holds a network's log; NotMember
+	// then says whether the log still lists it. Joining is set while an
+	// invite is being redeemed.
+	InNetwork bool `cbor:"29,keyasint,omitempty"`
+
+	// StartError is why the mesh could not start over a log that lists this
+	// device; the daemon keeps retrying.
+	StartError string `cbor:"33,keyasint,omitempty"`
+	Joining    bool   `cbor:"32,keyasint,omitempty"`
+
+	// CanOperate says whether the caller may do more than ask for status, and
+	// Operator names the local user appointed to, if any.
+	CanOperate bool   `cbor:"30,keyasint,omitempty"`
+	Operator   string `cbor:"31,keyasint,omitempty"`
+
+	// EpochError is set when this node could not open its wrap of the
+	// current group secret, which costs it discovery and gossip but not the
+	// data plane.
+	EpochError string `cbor:"11,keyasint,omitempty"`
+
+	// SchemaAlarm is set when a quorum has moved the network to a record
+	// schema this build does not implement. The state below the upgrade is
+	// still held and still acted on — see [log.SchemaTooNewError] — but
+	// nothing after it will apply until the binary is newer.
+	SchemaAlarm string `cbor:"20,keyasint,omitempty"`
+
+	// ListenPort is the data plane's UDP port and GossipPort the sync
+	// layer's TCP port.
+	ListenPort uint16 `cbor:"13,keyasint,omitempty"`
+	GossipPort uint16 `cbor:"14,keyasint,omitempty"`
+}
+
+// Derived is the part of a [Status] a reconcile derives from the log. The
+// daemon replaces it whole, so no field outlives the state it came from.
+type Derived struct {
+	// NetworkName is the network's human-readable name.
+	NetworkName string `cbor:"4,keyasint,omitempty"`
+
+	// Head and Epoch are where this node's chain is: the same beacon it
+	// puts on every gossip frame.
+	Head  types.Hash `cbor:"5,keyasint"`
+	Epoch uint64     `cbor:"6,keyasint"`
+
+	// Members is how many the log carries, Peers how many are installed in the
+	// data plane, Unreachable how many have no announcement yet, and Expired
+	// how many are past their expiry and treated as former members.
+	Members     int `cbor:"7,keyasint"`
+	Peers       int `cbor:"8,keyasint"`
+	Unreachable int `cbor:"9,keyasint"`
+	Expired     int `cbor:"15,keyasint,omitempty"`
+
+	// Silent names the members counted in Unreachable, by their names in
+	// the log, so a person is told which devices are not heard from, not
+	// only how many. Status is anyone's to read, and the log is not.
+	Silent []string `cbor:"37,keyasint,omitempty"`
+
+	// Unrevoked names the revocations that lost fork choice to a concurrent
+	// change and are not in effect until reissued, as "remove-node of phone".
+	Unrevoked []string `cbor:"38,keyasint,omitempty"`
+
+	// Lost names the other changes that lost fork choice and can be started
+	// again, as "the admission of phone".
+	Lost []string `cbor:"48,keyasint,omitempty"`
+
+	// Devices are the members as the log lists them, for a caller who may
+	// read the status but not the log.
+	Devices []Device `cbor:"45,keyasint,omitempty"`
+
+	// Refused is set when a member's log refused this device a catch-up and
+	// no member it tried has answered since: most likely it was removed.
+	Refused bool `cbor:"52,keyasint,omitempty"`
+
+	// Unmoved names the other members not yet seen holding the newest
+	// renumbering, while old addresses still work.
+	Unmoved []string `cbor:"49,keyasint,omitempty"`
+
+	// SelfName is this node's member name.
+	SelfName string `cbor:"24,keyasint,omitempty"`
+
+	// LeaseSigners is how many members the log makes admin devices,
+	// counting expired ones, which may not vouch but still keep freshness
+	// enforced: with none, it is not. FreshSince is when the lease that
+	// completed the vouching threshold was issued and FreshUntil when it
+	// stops counting, both Unix seconds. Stale is set once it has:
+	// the node then keeps tunnels only to admin devices, which is how it
+	// catches up without trusting a view that may be missing a removal.
+	LeaseSigners int   `cbor:"25,keyasint,omitempty"`
+	FreshSince   int64 `cbor:"26,keyasint,omitempty"`
+	FreshUntil   int64 `cbor:"27,keyasint,omitempty"`
+
+	// Vouchers is how many admin devices must vouch for this node's view,
+	// and Vouching how many do with a lease that still counts.
+	Vouchers int  `cbor:"35,keyasint,omitempty"`
+	Vouching int  `cbor:"36,keyasint,omitempty"`
+	Stale    bool `cbor:"28,keyasint,omitempty"`
+
+	// Relays is how many member-run relays this node has installed,
+	// RelayCapable how many members the log grants the role, and Relaying
+	// reports whether this device is serving one itself. The three differ:
+	// a grant with no announcement behind it is a relay nobody can reach.
+	Relays       int  `cbor:"21,keyasint,omitempty"`
+	Relaying     bool `cbor:"22,keyasint,omitempty"`
+	RelayCapable int  `cbor:"23,keyasint,omitempty"`
+
+	// Conflicted is how many members were denied a peer entry for announcing a
+	// NAT-traversal key another member or this device already uses. Dropping
+	// only those keeps one announcement from costing everyone their data plane.
+	Conflicted int `cbor:"18,keyasint,omitempty"`
+
+	// Alarm is the fork alarm's text while one is raised, and empty
+	// otherwise. While it is set the data plane holds no peers at all.
+	Alarm string `cbor:"10,keyasint,omitempty"`
+
+	// NotMember is set when this device is no longer in the member set. The
+	// daemon has torn its own data plane down.
+	NotMember bool `cbor:"16,keyasint,omitempty"`
+
+	// StaleKeys is set when the log names different keys for this device than
+	// the daemon was started with: a rotation was applied while it ran, and
+	// tunnels and the group secret fail until it restarts over the new keys.
+	StaleKeys bool `cbor:"17,keyasint,omitempty"`
+
+	// DataPlaneError is set when the peer set was derived but the data plane
+	// refused it: the host may be routed for an older peer set than the log
+	// names. The daemon retries on every reconcile.
+	DataPlaneError string `cbor:"19,keyasint,omitempty"`
+
+	// LastReconcile is when the peer set was last derived, in Unix seconds.
+	LastReconcile int64 `cbor:"12,keyasint,omitempty"`
+}
+
+// Tunnels is the part of a [Status] the background tunnel check writes,
+// replaced whole by each check and cleared when the data plane comes down.
+type Tunnels struct {
+	// TunnelsLive is how many installed peers' WireGuard tunnels are live,
+	// and TunnelsDown names the others, as the last background check found;
+	// TunnelsChecked is set once one has run.
+	TunnelsChecked bool     `cbor:"39,keyasint,omitempty"`
+	TunnelsLive    int      `cbor:"40,keyasint,omitempty"`
+	TunnelsDown    []string `cbor:"41,keyasint,omitempty"`
+
+	// Reach is that check per installed peer, ReachChecked when it ran, in
+	// Unix seconds, and HomeRelay the member whose relay the data plane
+	// keeps its home connection to.
+	Reach        []PeerReach `cbor:"42,keyasint,omitempty"`
+	ReachChecked int64       `cbor:"43,keyasint,omitempty"`
+	HomeRelay    string      `cbor:"44,keyasint,omitempty"`
+
+	// Seeking names the members counted in TunnelsDown that may have
+	// restarted or moved, whose newest announcement is being looked for.
+	Seeking []string `cbor:"50,keyasint,omitempty"`
+
+	// Absent names those counted in TunnelsDown whose lookup found no newer
+	// announcement: most likely offline.
+	Absent []string `cbor:"51,keyasint,omitempty"`
+
+	// SyncFailing names the members whose tunnel is live but whose last log
+	// sync through it did not come up.
+	SyncFailing []string `cbor:"46,keyasint,omitempty"`
+
+	// Firewalled names the TUN device when a running firewalld lets log sync
+	// in on it neither by its zone accepting everything nor by the port.
+	// FirewallUnsure says the zone is not trusted, and its ports were not
+	// told.
+	Firewalled     string `cbor:"53,keyasint,omitempty"`
+	FirewallUnsure bool   `cbor:"54,keyasint,omitempty"`
+
+	// RelayedFor is how many members this device's relay was found to
+	// serve: connected to it, or announcing it as their home. RelayUnreached
+	// says it has served none for minutes while a live peer is homed at no
+	// member relay: RelayPort, TCP and UDP, is likely closed to the outside.
+	RelayedFor     int    `cbor:"55,keyasint,omitempty"`
+	RelayUnreached bool   `cbor:"56,keyasint,omitempty"`
+	RelayPort      uint16 `cbor:"57,keyasint,omitempty"`
+}
+
+// ForReader is the status as a caller who may not operate sees it. It is an
+// allow-list: a field not copied here reaches operators only.
+func (s *Status) ForReader() Status {
+	return Status{
+		Self: s.Self, Addrs: s.Addrs, Network: s.Network,
+		Derived: Derived{
+			NetworkName: s.NetworkName, Head: s.Head, Epoch: s.Epoch,
+			Members: s.Members, Peers: s.Peers, Unreachable: s.Unreachable, Expired: s.Expired,
+			Silent: s.Silent, Unrevoked: s.Unrevoked, Lost: s.Lost, Refused: s.Refused, SelfName: s.SelfName,
+			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
+			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
+			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted,
+			Alarm: s.Alarm, NotMember: s.NotMember, StaleKeys: s.StaleKeys,
+			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
+		},
+		Tunnels: Tunnels{
+			TunnelsChecked: s.TunnelsChecked, TunnelsLive: s.TunnelsLive, TunnelsDown: s.TunnelsDown,
+			Reach: s.Reach, ReachChecked: s.ReachChecked, HomeRelay: s.HomeRelay,
+			Seeking: s.Seeking, Absent: s.Absent, SyncFailing: s.SyncFailing,
+			Firewalled: s.Firewalled, FirewallUnsure: s.FirewallUnsure,
+			RelayedFor: s.RelayedFor, RelayUnreached: s.RelayUnreached, RelayPort: s.RelayPort,
+		},
+		SyncInTunnel: s.SyncInTunnel, Rendezvous: s.Rendezvous,
+		InNetwork: s.InNetwork, StartError: s.StartError, Joining: s.Joining,
+		CanOperate: s.CanOperate, Operator: s.Operator,
+		EpochError: s.EpochError, SchemaAlarm: s.SchemaAlarm,
+		ListenPort: s.ListenPort, GossipPort: s.GossipPort,
+	}
+}
+
+// A PeerReach is what the last check found for one installed peer.
+type PeerReach struct {
+	Identity types.Identity `cbor:"1,keyasint"`
+	Live     bool           `cbor:"2,keyasint,omitempty"`
+
+	// Direct says a live tunnel runs over a UDP path rather than a relay.
+	// Which path is not said: status is anyone's to read, and a peer's
+	// public address is nothing a local user sees otherwise.
+	Direct bool `cbor:"3,keyasint,omitempty"`
+
+	// Seeking says a tunnel that is down may be so because the peer
+	// restarted or moved, and its new announcement is being looked for;
+	// Absent that the lookup found none newer, so it is likely offline.
+	Seeking bool `cbor:"4,keyasint,omitempty"`
+	Absent  bool `cbor:"5,keyasint,omitempty"`
+
+	// Since is when a tunnel down was first found so, and Heard when the
+	// peer last signed its announcement, as its clock has it; Unix seconds.
+	Since int64 `cbor:"6,keyasint,omitempty"`
+	Heard int64 `cbor:"7,keyasint,omitempty"`
+}
+
+// A Device is a member as the log lists it.
+type Device struct {
+	Identity types.Identity `cbor:"1,keyasint"`
+	Name     string         `cbor:"2,keyasint,omitempty"`
+	V4       string         `cbor:"3,keyasint,omitempty"`
+	V6       string         `cbor:"4,keyasint,omitempty"`
+	Roles    []types.Role   `cbor:"5,keyasint,omitempty"`
+
+	// Retiring is the IPv4 address a renumbering moved the member from, and
+	// RetiringUntil when it stops working, in Unix seconds.
+	Retiring      string `cbor:"6,keyasint,omitempty"`
+	RetiringUntil int64  `cbor:"7,keyasint,omitempty"`
+}
+
+// DevicesOf lists the members as the log has them at unix time now.
+func DevicesOf(state *log.State, now int64) []Device {
+	nodes := state.Nodes()
+	out := make([]Device, 0, len(nodes))
+	for _, n := range nodes {
+		dev := Device{Identity: n.Identity, Name: n.Name, V6: state.Addr6(n.Identity).String(),
+			Roles: slices.Clone(n.Roles)}
+		if n.V4 != nil {
+			dev.V4 = n.V4.String()
+		}
+		if n.Retiring.Live(now) {
+			dev.Retiring, dev.RetiringUntil = n.Retiring.Addr.String(), int64(n.Retiring.Until)
+		}
+		out = append(out, dev)
+	}
+	return out
+}
+
+// ErrNotOperator is the text of the refusal a non-operator gets, which the
+// CLI recognizes.
+const ErrNotOperator = "only this device's operator may do that"
+
+// ErrNothingStaged is the text of [CmdUnstage]'s answer when no rotation
+// waits, which the CLI recognizes.
+const ErrNothingStaged = "no rotation of this device's keys is waiting"
+
+// ErrStillMember is the text of [CmdReset]'s refusal for a device the log
+// still lists, which the CLI recognizes.
+const ErrStillMember = "this device is still a member of its network"

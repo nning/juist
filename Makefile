@@ -28,7 +28,7 @@ GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 BUILDDIR ?= build
 CMDS     ?= juist juistd
 
-# Platforms v1 commits to (docs/05-roadmap.md M5). Building for each catches
+# Platforms the roadmap commits to (docs/05-roadmap.md M7, M11). Building for each catches
 # build-tag rot in the embedded Tailscale stack long before the platform work
 # starts.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
@@ -116,13 +116,24 @@ test-race: ## Run tests under the race detector
 # alone, verbosely, with the skip turned into a failure, so a machine that
 # cannot create a device or a namespace reports red rather than green. Run it
 # under sudo; `go` is resolved before privileges change, and the module and
-# build caches stay with the invoking user. The netns harness re-executes the
-# test binary inside each namespace, so it must stay a real `go test` run
-# rather than a pre-built binary invoked by hand.
+# build caches stay with the invoking user. The netns harness re-executes its
+# own test binary inside each namespace, which a compiled one is as much as
+# `go test`'s: test-os-plumbing-sudo relies on that.
+PLUMBING_TESTS = ^(TestRealDevicePlumbsOverlayIntoHost|TestNetns.*)$$
+
 .PHONY: test-os-plumbing
 test-os-plumbing: ## Run the privileged real-device and netns tests (use sudo)
 	JUIST_REQUIRE_OS_PLUMBING=1 $(GO) test $(GOFLAGS) ./conn $(TEST_FLAGS) -v \
-		-run '^(TestRealDevicePlumbsOverlayIntoHost|TestNetns.*)$$'
+		-run '$(PLUMBING_TESTS)'
+
+# The same tests compiled as the invoking user and only the binary run as
+# root, so no root-owned file lands in the user's Go caches — which running
+# `go` itself under sudo does on a desktop.
+.PHONY: test-os-plumbing-sudo
+test-os-plumbing-sudo: ## Build the privileged tests as you, run them with sudo
+	$(GO) test $(GOFLAGS) -c -o $(abspath $(BUILDDIR))/conn.test ./conn
+	cd conn && sudo JUIST_REQUIRE_OS_PLUMBING=1 $(abspath $(BUILDDIR))/conn.test \
+		-test.count=1 -test.timeout=15m -test.v -test.run '$(PLUMBING_TESTS)'
 
 .PHONY: cover
 cover: ## Run race tests with coverage, print a summary
@@ -195,16 +206,23 @@ tcb: ## Report the trusted computing base's size against its budget
 # `make rpm` builds an installable package from binaries this Makefile
 # compiles, rather than from source inside the build root, so it needs no Go
 # toolchain and no network there. Version 0 is deliberate — the project has cut
-# no release — and the release field carries the date and commit, which sorts
-# correctly between builds so dnf will upgrade one test build over another.
+# no release — and the release field carries the commit's UTC time and hash.
+# The time is what sorts: a hash alone does not, so two builds on one day would
+# otherwise upgrade or not by chance.
 RPMBUILD    ?= rpmbuild
 RPM_NAME    ?= juist
 RPMTOP      ?= $(abspath $(BUILDDIR)/rpm)
 RPM_VERSION ?= 0
 RPM_COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-RPM_DIRTY   ?= $(shell git rev-parse --is-inside-work-tree >/dev/null 2>&1 && \
-                 ! git diff --quiet HEAD 2>/dev/null && echo .dirty)
-RPM_RELEASE ?= 0.$(shell date -u +%Y%m%d)git$(RPM_COMMIT)$(RPM_DIRTY)
+# A tree with changes, untracked files included, carries the build's time too,
+# so two builds of one commit's changes still sort, one after the other.
+# Expanded once, so the name of the package and its metadata agree.
+ifeq ($(origin RPM_DIRTY),undefined)
+RPM_DIRTY := $(shell [ -n "$$(git status --porcelain 2>/dev/null)" ] && echo .dirty$$(date -u +%Y%m%d%H%M%S))
+endif
+RPM_STAMP   ?= $(shell TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S 2>/dev/null || \
+                 date -u +%Y%m%d%H%M%S)
+RPM_RELEASE ?= 0.$(RPM_STAMP)git$(RPM_COMMIT)$(RPM_DIRTY)
 
 # The project states no license, and rpm requires the tag. Set this once it
 # does; the placeholder is a valid SPDX LicenseRef, so it builds and says so.
@@ -223,7 +241,10 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 		echo "==> $$c"; \
 		CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $$stage/$$c ./cmd/$$c; \
 	done; \
-	cp packaging/systemd/juistd.service README.md $$stage/; \
+	cp packaging/systemd/juistd.service README.md packaging/firewall.sh \
+		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml \
+		packaging/firewalld/juist-invite.xml packaging/completions/juist.bash \
+		packaging/completions/_juist packaging/completions/juist.fish $$stage/; \
 	tar -czf $(RPMTOP)/SOURCES/$(RPM_NAME)-$(RPM_VERSION).tar.gz \
 		-C $(RPMTOP)/stage $(RPM_NAME)-$(RPM_VERSION)
 	@cp packaging/rpm/juist.sysusers $(RPMTOP)/SOURCES/
@@ -234,6 +255,78 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 		--define "license_tag $(RPM_LICENSE)" \
 		-bb $(RPMTOP)/SPECS/juist.spec
 	@find $(RPMTOP)/RPMS -name '*.rpm'
+
+# `make deb` is the same package for Debian and Ubuntu, assembled with
+# dpkg-deb from binaries this Makefile compiles, so it needs neither debhelper
+# nor root: --root-owner-group records root ownership without fakeroot. The
+# version sorts between test builds the way RPM_RELEASE does. DEB_ARCH picks
+# the target and GOARCH follows it, so `make deb DEB_ARCH=arm64` cross-builds.
+DEBTOP      ?= $(abspath $(BUILDDIR)/deb)
+DEB_ARCH    ?= $(shell dpkg --print-architecture 2>/dev/null || $(GO) env GOARCH)
+DEB_VERSION ?= $(RPM_VERSION)~$(RPM_STAMP)git$(RPM_COMMIT)$(subst .dirty,+dirty,$(RPM_DIRTY))
+DEB_GOARCH   = $(or $(DEB_GOARCH_$(DEB_ARCH)),$(error DEB_ARCH=$(DEB_ARCH) is not a target this Makefile knows))
+DEB_GOARCH_amd64 = amd64
+DEB_GOARCH_arm64 = arm64
+DEB_GOARCH_armhf = arm
+DEB_GOARCH_i386  = 386
+
+.PHONY: deb
+deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dpkg-deb)
+	@command -v dpkg-deb >/dev/null 2>&1 || { \
+		echo "dpkg-deb not found; it ships with dpkg on Debian and Ubuntu"; exit 1; }
+	@rm -rf $(DEBTOP)
+	@set -e; root=$(DEBTOP)/root; \
+	for c in $(CMDS); do \
+		echo "==> $$c ($(DEB_ARCH))"; \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$(DEB_GOARCH) $(GO) build $(GOFLAGS) -trimpath \
+			-o $$root/usr/bin/$$c ./cmd/$$c; \
+	done; \
+	install -D -m 0644 packaging/systemd/juistd.service $$root/usr/lib/systemd/system/juistd.service; \
+	sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=/usr/bin/juistd |' \
+		$$root/usr/lib/systemd/system/juistd.service; \
+	grep -q '^ExecStart=/usr/bin/juistd ' $$root/usr/lib/systemd/system/juistd.service; \
+	install -D -m 0644 packaging/rpm/juist.sysusers $$root/usr/lib/sysusers.d/juist.conf; \
+	install -D -m 0644 README.md $$root/usr/share/doc/juist/README.md; \
+	install -D -m 0755 packaging/firewall.sh $$root/usr/lib/juist/firewall.sh; \
+	for f in juist juist-relay juist-invite; do \
+		install -D -m 0644 packaging/firewalld/$$f.xml $$root/usr/lib/firewalld/services/$$f.xml; \
+	done; \
+	install -D -m 0644 packaging/ufw/juist $$root/etc/ufw/applications.d/juist; \
+	install -D -m 0644 packaging/completions/juist.bash $$root/usr/share/bash-completion/completions/juist; \
+	install -D -m 0644 packaging/completions/_juist $$root/usr/share/zsh/vendor-completions/_juist; \
+	install -D -m 0644 packaging/completions/juist.fish $$root/usr/share/fish/vendor_completions.d/juist.fish; \
+	install -d -m 0755 $$root/DEBIAN; \
+	install -m 0755 packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm $$root/DEBIAN/; \
+	echo /etc/ufw/applications.d/juist > $$root/DEBIAN/conffiles; \
+	size=$$(du -sk --exclude=DEBIAN $$root | cut -f1); \
+	sed -e 's|@VERSION@|$(DEB_VERSION)|' -e 's|@ARCH@|$(DEB_ARCH)|' -e "s|@SIZE@|$$size|" \
+		packaging/deb/control.in > $$root/DEBIAN/control; \
+	dpkg-deb --root-owner-group -Zxz --build $$root $(DEBTOP)/juist_$(DEB_VERSION)_$(DEB_ARCH).deb >/dev/null
+	@find $(DEBTOP) -maxdepth 1 -name '*.deb'
+
+# `make install` builds the package this system's package manager takes and
+# installs it: the .deb with apt, the RPM with dnf, with sudo unless make
+# already runs as root. An upgrade keeps the state directory.
+SUDO ?= sudo
+
+.PHONY: install
+install: ## Build this system's package (.deb or RPM) and install it with sudo
+	@set -e; \
+	sudo=$(SUDO); [ "$$(id -u)" -eq 0 ] && sudo=; \
+	if command -v apt >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory deb; \
+		pkg=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb'); \
+		echo "==> installing $$pkg"; \
+		$$sudo apt install -y "$$pkg"; \
+	elif command -v dnf >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory rpm; \
+		pkg=$$(find $(RPMTOP)/RPMS -name '*.rpm'); \
+		echo "==> installing $$pkg"; \
+		$$sudo dnf install -y "$$pkg"; \
+	else \
+		echo "make install knows apt (Debian, Ubuntu) and dnf (Fedora); use make deb or make rpm"; \
+		exit 1; \
+	fi
 
 ## --- lint ----------------------------------------------------------------
 
@@ -289,6 +382,30 @@ tidy-check: ## Fail if go.mod / go.sum are untidy (does not modify them)
 
 .PHONY: check
 check: lint tidy-check build-test test-race tcb ## Everything CI gates on; run before pushing
+
+# `make ci` is every job .github/workflows/ci.yml runs, on this machine: what
+# check gates, with the host-feature probes failing rather than skipping as on
+# the runner, then the cross builds, the vulnerability scan, both packages,
+# and last the privileged tests, the one step that asks for sudo.
+CI_TOOLS = ip ping iptables rpmbuild dpkg-deb sudo
+
+.PHONY: ci
+ci: ci-deps ## Run every CI job locally (asks for sudo for the privileged tests)
+	JUIST_REQUIRE_HOST_NET=1 $(MAKE) --no-print-directory check
+	$(MAKE) --no-print-directory cross govulncheck rpm deb
+	$(MAKE) --no-print-directory test-os-plumbing-sudo
+	@echo "ci: every job passed"
+
+.PHONY: ci-deps
+ci-deps: ## Check the tools make ci needs, and say how to install them
+	@missing=""; \
+	for t in $(CI_TOOLS); do command -v $$t >/dev/null 2>&1 || missing="$$missing $$t"; done; \
+	[ -c /dev/net/tun ] || missing="$$missing /dev/net/tun"; \
+	if [ -n "$$missing" ]; then \
+		echo "ci: missing:$$missing"; \
+		echo "hint: on Fedora: sudo dnf install iproute iputils iptables-nft rpm-build systemd-rpm-macros dpkg"; \
+		exit 1; \
+	fi
 
 .PHONY: clean
 clean: ## Remove build and test artifacts

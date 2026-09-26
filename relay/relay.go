@@ -23,6 +23,8 @@ import (
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+
+	"github.com/nning/juist/relay/forward"
 )
 
 // Options configures a [Server].
@@ -49,6 +51,14 @@ type Options struct {
 	// relay as a pure DERP node.
 	DisableSTUN bool
 
+	// Certificate is the TLS identity to serve. Nil draws a fresh one.
+	Certificate *Certificate
+
+	// AdmitHost reports whether an identity key belongs to a live member,
+	// which may then wait here for the guest of an invite (see forward.go).
+	// Nil forwards no invites.
+	AdmitHost func(identity [32]byte) bool
+
 	// Logf receives diagnostics. Nil discards them.
 	Logf logger.Logf
 }
@@ -57,10 +67,11 @@ type Options struct {
 // self-signed certificate, and a STUN responder that tells a member its own
 // reflexive address without asking a third party.
 //
-// The DERP identity key and the TLS certificate are drawn fresh each time a
-// server starts, like the disco key: they are connectivity material, and the
-// certificate hash travels in the signed announcement that points members
-// here, so a restart re-pins rather than breaking.
+// The DERP identity key is drawn fresh each time a server starts, and so is
+// the TLS certificate unless [Options.Certificate] passes one: both are
+// connectivity material, and the certificate hash travels in the signed
+// announcement that points members here, so a new one re-pins rather than
+// breaking — once members hold the new announcement.
 type Server struct {
 	logf   logger.Logf
 	derp   *derpserver.Server
@@ -69,6 +80,7 @@ type Server struct {
 	stun   *stunResponder
 	cert   *selfSigned
 	admit  func([32]byte) bool
+	fwd    *forwarder
 	token  string
 	closed chan struct{}
 
@@ -108,10 +120,16 @@ func New(opts Options) (*Server, error) {
 		port = uint16(ta.Port)
 	}
 
-	cert, err := newSelfSigned()
-	if err != nil {
-		ln.Close()
-		return nil, err
+	var cert *selfSigned
+	if opts.Certificate != nil {
+		cert = opts.Certificate.s
+	} else {
+		c, err := NewCertificate()
+		if err != nil {
+			ln.Close()
+			return nil, err
+		}
+		cert = c.s
 	}
 
 	s := &Server{
@@ -153,6 +171,11 @@ func New(opts Options) (*Server, error) {
 	// latency probes a client's netcheck uses.
 	mux.Handle("/derp", h)
 	mux.Handle("/derp/", h)
+	if opts.AdmitHost != nil {
+		s.fwd = newForwarder(opts.AdmitHost, cert.sha256, logf)
+		mux.HandleFunc(forward.HostPath, s.fwd.serveHost)
+		mux.HandleFunc(forward.GuestPath, s.fwd.serveGuest)
+	}
 	s.http = &http.Server{
 		Handler:   mux,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert.tls}, MinVersion: tls.VersionTLS12},
@@ -163,6 +186,10 @@ func New(opts Options) (*Server, error) {
 			return context.WithValue(ctx, connContextKey{}, c)
 		},
 		ReadHeaderTimeout: 30 * time.Second,
+		// A connection kept alive after one request, which anyone can open,
+		// is not kept for ever. DERP sessions and forwarded invites are
+		// taken over from the server and outlive this.
+		IdleTimeout: 30 * time.Second,
 	}
 
 	go func() {
@@ -237,21 +264,44 @@ func (s *Server) CertHash() [32]byte { return s.cert.sha256 }
 // carries.
 func (s *Server) HostName() string { return s.cert.hostName }
 
+// Connected reports whether a member with this WireGuard key holds a
+// connection to the relay.
+func (s *Server) Connected(wireGuard [32]byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.clients {
+		if rawNodeKey(c.nodeKey) == wireGuard {
+			return true
+		}
+	}
+	return false
+}
+
 // Reauthorize closes the connections of clients Admit no longer accepts. A
 // removed member otherwise keeps the connection it already holds, since the
 // admission check runs when a connection is opened and never again.
+//
+// Admit is asked without the relay's lock held: it may take a lock of its
+// own under which the caller asks [Server.Connected].
 func (s *Server) Reauthorize() {
 	s.mu.Lock()
-	var doomed []*client
+	held := make([]*client, 0, len(s.clients))
 	for c := range s.clients {
+		held = append(held, c)
+	}
+	s.mu.Unlock()
+	var doomed []*client
+	for _, c := range held {
 		if !s.admit(rawNodeKey(c.nodeKey)) {
 			doomed = append(doomed, c)
 		}
 	}
-	s.mu.Unlock()
 	for _, c := range doomed {
 		s.logf("relay: dropping %v, which is no longer a member", c.nodeKey.ShortString())
 		c.conn.Close()
+	}
+	if s.fwd != nil {
+		s.fwd.reauthorize()
 	}
 }
 
@@ -272,6 +322,9 @@ func (s *Server) Close() error {
 	close(s.closed)
 	unregisterAdmission(s.token)
 	err := s.http.Close()
+	if s.fwd != nil {
+		s.fwd.close()
+	}
 	s.derp.Close()
 	if s.stun != nil {
 		s.stun.close()

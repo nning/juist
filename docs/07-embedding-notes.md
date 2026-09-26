@@ -175,7 +175,7 @@ Each fails silently or confusingly.
   install no rules. The runner reports IPv6 only where `disable_ipv6` and
   `disable_policy` are 0 and IPv6 policy routing works — and, in its iptables mode,
   only where the `ip6tables` binary exists. A host missing `ip6tables` therefore
-  loses the overlay's *primary* family with nothing but a log line. Packaging (M5)
+  loses the overlay's *primary* family with nothing but a log line. Packaging (M11)
   must declare that dependency, and an operator report of "no v6 on the overlay"
   should start here.
 - **`router.CleanUp` is not worth calling here**, though `tailscaled` calls it at
@@ -183,10 +183,63 @@ Each fails silently or confusingly.
   so there are no chains, and a wireguard-go TUN is not persistent, so a crashed
   daemon's device and everything on it is already gone. The `ip` rules that do
   outlive a crash are reconciled by `addIPRules`, which begins with `delIPRules`.
+- **magicsock keeps its first home relay without a control plane.**
+  `maybeSetNearestDERP` changes the home region only while
+  `health.Tracker.GetInPollNetMap()` is true, since Tailscale tells peers of a new
+  home through control. Nothing sets that here, so the region picked at start is
+  kept for good: a node started before any member relayed homes on a STUN-only
+  region and never connects to a relay granted later. `conn` marks its tracker
+  as in a map poll, because announcements carry the home region to peers. The
+  flag is read nowhere else we link (v1.102.2).
+- **One node key under two node IDs is refused.** `magicsock.updateNodes` meets a key
+  it already holds under another `NodeID` with `devPanicf`: a panic under test, and
+  in production an endpoint silently not created until a later `SetNetworkMap`. An
+  identity rotation keeps the WireGuard key, so the daemon's local peer ID follows
+  the key, not the identity.
+- **Over DERP, WireGuard needs no disco key.** A DERP packet from a node key in the
+  peer map goes to wireguard-go whatever disco key that peer last announced, and the
+  reply takes the region it came from. It is what lets a device whose juistd
+  restarted, announcing its new disco key under an epoch its peers no longer hold,
+  reach them through a shared relay for a catch-up.
 - **A real device joins LAN discovery unless told not to.** A Linux TUN carries
   `IFF_MULTICAST`, so anything enumerating multicast-capable interfaces picks it up
   and starts sending into the tunnel. Discovery is an underlay function; the overlay
   is not one of the networks it should look on.
+
+## Upgrading the pinned Tailscale
+
+An upgrade is done when `make check` passes and each assumption below still
+holds. Every one is guarded by a test that fails if upstream changes it; a
+guard that fails names a workaround to revisit, not a test to relax. A new
+dependency on upstream behaviour gets a guard here before it merges. The
+`conn/upstream_test.go` guards read the pinned module's source or drive its
+code directly, so they fail on the upgrade itself rather than in the field.
+
+| Assumption | Where it is relied on | Guard |
+|---|---|---|
+| `SetSubsystem` hands over the `*magicsock.Conn` and the `*tstun.Wrapper` | `conn.New`, which refuses to start without both | every test that starts a manager, e.g. `TestTwoNodeOverlayPing` |
+| An unknown key gets no peer, and a nil filter drops everything | default-deny | `TestNonMemberIsDenied`, `TestFilterRejectsNonMembers` |
+| `ListenPort` is a preference magicsock may silently give up | `conn.New`'s port check, `ErrPortTaken` | `TestListenPortInUse` |
+| The engine records a router config before programming it, so it never retries one that failed | the forced retry in `reconfig` | `TestUpstreamEngineSkipsARouterItFailedToProgram`, `TestReconfigReprogramsAFailedRouterOnTheRealEngine` |
+| magicsock changes its home relay only while `GetInPollNetMap` is true, a check it skips under test | `GotStreamedMapResponse` in `conn.New` | `TestUpstreamHomeRelayWaitsForAMapPoll`, `TestTheHomeRelayMayChange` |
+| util/backoff logs `%s: [v1] backoff: %d msec` under `derp-<region>`, and derphttp says `no non-STUNOnly nodes` for a STUN-only region | `withoutSTUNHomeNoise` | `TestUpstreamBackoffLineIsTheOneFiltered`, `TestUpstreamSTUNOnlyRegionErrorIsTheOneFiltered` |
+| Nothing below `ipnlocal` resets a peer's sessions when its disco key changes | `ResetDevicePeer` in `SetPeers` | `TestARestartedPeerIsReachedAtOnce` |
+| derpserver asks its admission URL through `http.DefaultClient`, failing closed | relay admission, `relay/admit.go` | `TestNonMemberCannotUseTheRelay`, `TestMembersRelayThroughAMember` |
+| magicsock reaches no relay and no STUN server without a DERP map | direct-only operation | `TestNoThirdPartyEgress` |
+| The router, device and MTU behave as the wiring requirements above say | the real-device path | `make test-os-plumbing` (root, not on CI's unprivileged job) |
+
+## Sharing a host with tailscaled
+
+juist must hold nothing tailscaled also holds, since both run on one host:
+
+- **Not its address range.** tailscaled's `ts-input` chain drops every packet
+  from 100.64.0.0/10 that arrives on an interface other than `tailscale0`, local
+  ones included. Overlay IPv4 therefore comes from 198.18.0.0/15 from schema 4 on.
+- **Not its routing table or rule priorities.** Tailscale's Linux router hard-codes
+  table 52 and rules at 5210–5270, and deletes those rules when it closes. juist
+  programs its own table and priorities (`conn/router_linux.go`), below
+  Tailscale's so an exit node's default route in table 52 cannot capture overlay
+  traffic.
 
 ## Constraints on the test harness
 

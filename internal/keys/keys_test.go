@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nning/juist/types"
 )
 
 // TestWriteSecretRefusesToOverwrite: silently replacing key material is how a
@@ -60,5 +62,54 @@ func TestWriteSecretIsAtomicAndPrivate(t *testing.T) {
 		if e.Name() != "node.keys" {
 			t.Errorf("directory holds a stray file after a successful write: %q", e.Name())
 		}
+	}
+}
+
+func stage(t *testing.T, home string) *Node {
+	t.Helper()
+	k, err := GenerateNode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteSecret(filepath.Join(home, NodeKeysFile+StagedSuffix), k.Lines("staged")); err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// Abandoned key sets are bounded: an operator looping rotate and abandon
+// cannot grow what every log change has the daemon re-read.
+func TestAbandonedKeysAreBounded(t *testing.T) {
+	home := t.TempDir()
+	for range MaxAbandoned + 3 {
+		stage(t, home)
+		if err := Abandon(home); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := filepath.Glob(filepath.Join(home, NodeKeysFile+AbandonedSuffix+"*"))
+	if len(got) != MaxAbandoned {
+		t.Fatalf("%d abandoned key sets kept, want %d", len(got), MaxAbandoned)
+	}
+}
+
+// One damaged archive does not stop the device adopting the keys the log
+// names.
+func TestADamagedArchiveDoesNotBlockPromotion(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, NodeKeysFile+AbandonedSuffix+"-0"), []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k := stage(t, home)
+	named := func(id types.Identity) (types.NodeRecord, bool) {
+		return types.NodeRecord{Identity: id, WireGuard: k.Public.WireGuard, X25519: k.Public.X25519,
+			MLKEM: k.Public.MLKEM}, id == k.Identity.Public()
+	}
+	if err := Abandon(home); err != nil {
+		t.Fatal(err)
+	}
+	got, err := MaybePromote(home, named)
+	if err != nil || got == nil {
+		t.Fatalf("promoting past a damaged archive: %v, %v", got, err)
 	}
 }

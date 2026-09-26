@@ -1,0 +1,14 @@
+[juist]
+title=juist mesh VPN
+description=WireGuard and path discovery, the one port the mesh has. Log sync runs inside the tunnel.
+ports=41643/udp
+
+[juist-relay]
+title=juist member relay
+description=The relay (TCP) and the STUN answers members measure it by (UDP), on a relay-capable device.
+ports=41645/tcp|41645/udp
+
+[juist-invite]
+title=juist invites
+description=Invites taken directly, as a code on the LAN, while "juist invite" runs.
+ports=41642/tcp

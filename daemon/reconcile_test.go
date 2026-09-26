@@ -2,15 +2,21 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/statedir"
+
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
 
@@ -57,6 +63,8 @@ func newReconcileFixtureWith(t *testing.T, members int, mutate func(*Options)) *
 	if err != nil {
 		t.Fatalf("starting the daemon: %v", err)
 	}
+	// The recording data plane confirms a direct path with the probe's answer.
+	d.pathSettle = time.Millisecond
 	t.Cleanup(func() { d.Close() })
 	return &reconcileFixture{nw: nw, d: d, mgr: mgr, auth: auth, storage: st, self: self}
 }
@@ -292,16 +300,16 @@ func TestForkAlarmDropsEveryPeer(t *testing.T) {
 		t.Fatalf("installed %d peers, want 2", got)
 	}
 
-	// Two conflicting removals with the same parent: fork choice picks one,
-	// and the loser is a revocation that would be silently discarded, which
-	// is precisely the case trust/log refuses to resolve.
-	first := f.nw.removeNode(t, f.auth, a.record.Identity)
-	second := f.nw.removeNode(t, f.auth, b.record.Identity)
+	// A removal and a grant to the same member with the same parent: the
+	// removal wins, and the grant cannot be reissued on a chain without the
+	// member, which is precisely the case trust/log refuses to resolve.
+	first, second := f.nw.conflictingFork(t, f.auth, a.record.Identity)
+	_ = b
 	if err := f.auth.Inform(first, second); err != nil {
 		t.Fatalf("informing the fork: %v", err)
 	}
 	if f.auth.Alarm() == nil {
-		t.Fatal("two conflicting revocations did not raise a fork alarm")
+		t.Fatal("a conflicting fork did not raise an alarm")
 	}
 
 	err := f.d.Reconcile()
@@ -335,8 +343,8 @@ func TestDaemonRefusesANetworkItIsNotIn(t *testing.T) {
 	if err == nil {
 		t.Fatal("a daemon started for a network its key is not a member of")
 	}
-	if !strings.Contains(err.Error(), "never enrolled") {
-		t.Errorf("error %q does not say what is wrong", err)
+	if !errors.Is(err, ErrNotMember) {
+		t.Errorf("error %q is not ErrNotMember", err)
 	}
 }
 
@@ -776,5 +784,113 @@ func TestADuplicateDiscoKeyDropsOnlyTheColliders(t *testing.T) {
 	}
 	if f.d.Status().Peers != 1 {
 		t.Errorf("status reports %d peers, want 1", f.d.Status().Peers)
+	}
+}
+
+// A node that rotated its own keys can no longer open the chain's older
+// wraps, which are sealed to the keys it had. The secrets it held are kept in
+// the keyring file, and taken back where the chain's record commits to them —
+// so it keeps an epoch in common with every peer that has not applied the
+// rotation yet, and a planted file adds nothing.
+func TestKeptSecretsOutliveARotationOfTheKeys(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	f.d.keyringPath = filepath.Join(t.TempDir(), statedir.KeyringFile)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	removal := f.nw.removeNode(t, f.auth, f.nw.devices[2].record.Identity)
+	if err := f.d.Inform([]types.AUM{removal}); err != nil {
+		t.Fatal(err)
+	}
+	held := f.d.keyring.Epochs()
+	if len(held) < 2 {
+		t.Fatalf("the keyring holds %v", held)
+	}
+
+	// The same device with other sealing keys: nothing older opens for it.
+	other, err := secrets.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restart := func() *Daemon {
+		d, err := New(Options{
+			Authority: f.auth, Storage: f.storage, Identity: f.self.identity, Recipient: other,
+			WireGuard: f.self.wgPrivate, KeyringPath: f.d.keyringPath,
+			Connect:          func(conn.Options) (conn.Manager, error) { return &fakeManager{}, nil },
+			DisableDiscovery: true, DisableDHT: true, Logf: safeLogf(t, ""),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { d.Close() })
+		d.backfillEpochs()
+		return d
+	}
+	if got := restart().keyring.Epochs(); !slices.Equal(got, held) {
+		t.Fatalf("after the rotation the node holds %v, want the %v it held", got, held)
+	}
+
+	// A file whose secrets the chain does not commit to buys nothing.
+	b, err := os.ReadFile(f.d.keyringPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := strings.Map(func(r rune) rune {
+		if r == 'a' {
+			return 'b'
+		}
+		return r
+	}, string(b))
+	if err := os.WriteFile(f.d.keyringPath, []byte(forged), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := restart().keyring.Epochs(); len(got) >= len(held) {
+		t.Fatalf("a forged keyring file was taken back: %v", got)
+	}
+}
+
+// Two removals at once do not take the mesh down: the status names the one
+// that is not in effect, for an admin to run again.
+func TestAConcurrentRemovalIsNamedNotStopped(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	a, b := f.nw.devices[1], f.nw.devices[2]
+	first := f.nw.removeNode(t, f.auth, a.record.Identity)
+	second := f.nw.removeNode(t, f.auth, b.record.Identity)
+	if err := f.auth.Inform(first, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("two removals at once stopped the mesh: %v", err)
+	}
+	st := f.d.Status()
+	if st.Alarm != "" || len(st.Unrevoked) != 1 || !strings.HasPrefix(st.Unrevoked[0], "the removal of ") {
+		t.Fatalf("alarm %q, unrevoked %q", st.Alarm, st.Unrevoked)
+	}
+}
+
+// An admission that lost fork choice to one made at the same time is named in
+// the status: the device it admitted is left out of the network, and nothing
+// but "juist log" said so.
+func TestALostAdmissionIsNamed(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	b := f.auth.Builder()
+	var records []types.AUM
+	for i, name := range []string{"one", "two"} {
+		dev := newDevice(t, name, netip.AddrFrom4([4]byte{198, 18, 0, byte(50 + i)}))
+		rec, err := b.AddNode(dev.record, f.nw.sealer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rec.Sign(f.nw.admin); err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, rec)
+	}
+	if err := f.d.Inform(records); err != nil {
+		t.Fatal(err)
+	}
+	lost := f.d.Status().Lost
+	if len(lost) != 1 || !strings.HasPrefix(lost[0], "the admission of ") {
+		t.Fatalf("status names %v as lost, want one admission", lost)
 	}
 }

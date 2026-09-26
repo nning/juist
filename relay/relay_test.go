@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -342,5 +343,91 @@ func TestSTUNRepliesFromTheAddressItWasAsked(t *testing.T) {
 	}
 	if _, _, err := stun.ParseResponse(buf[:n]); err != nil {
 		t.Errorf("the answer does not parse: %v", err)
+	}
+}
+
+// Reauthorize asks Admit holding no lock of the relay's: Admit may take a lock
+// of its own under which its caller asks whether a member is connected.
+func TestReauthorizeAsksWithoutItsLock(t *testing.T) {
+	member := key.NewNode()
+	var srv atomic.Pointer[Server]
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Options{Listener: ln, Logf: t.Logf, Admit: func(k [32]byte) bool {
+		if r := srv.Load(); r != nil {
+			r.Connected(k)
+		}
+		return true
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	c := testClient(t, s, member)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := c.Connect(ctx); err != nil {
+		t.Fatalf("connecting: %v", err)
+	}
+	waitClients(t, s, 1)
+	srv.Store(s)
+	done := make(chan struct{})
+	go func() {
+		s.Reauthorize()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reauthorize deadlocked on an Admit that asks the relay")
+	}
+}
+
+// A binding request carries no identity, so the answer rate is what keeps an
+// open responder from being worth using as a reflector.
+func TestSTUNAnswersAreRateLimited(t *testing.T) {
+	s := testRelay(t, map[key.NodePublic]bool{})
+	if s.STUNPort() == 0 {
+		t.Skip("no STUN port could be bound here")
+	}
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	defer c.Close()
+	_ = c.SetReadBuffer(4 << 20)
+	type count struct {
+		n    int
+		last time.Time
+	}
+	answers := make(chan count)
+	start := time.Now()
+	go func() {
+		var got count
+		buf := make([]byte, 1500)
+		for {
+			_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			if _, _, err := c.ReadFromUDPAddrPort(buf); err != nil {
+				answers <- got
+				return
+			}
+			got.n, got.last = got.n+1, time.Now()
+		}
+	}()
+	to := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), s.STUNPort())
+	const asked = 3 * stunBurst
+	for range asked {
+		if _, err := c.WriteToUDPAddrPort(stun.Request(stun.NewTxID()), to); err != nil {
+			t.Fatalf("sending a binding request: %v", err)
+		}
+	}
+	res := <-answers
+	got, elapsed := res.n, res.last.Sub(start)
+	limit := stunBurst + int(elapsed.Seconds()*stunAnswersPerSecond) + 1
+	t.Logf("%d of %d requests answered in %v", got, asked, elapsed)
+	if got == 0 || got > limit {
+		t.Fatalf("%d of %d requests answered in %v; the limit allows %d", got, asked, elapsed, limit)
 	}
 }

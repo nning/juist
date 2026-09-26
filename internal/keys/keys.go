@@ -8,13 +8,17 @@ package keys
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
@@ -36,6 +40,11 @@ const (
 	// StagedSuffix names replacement key material that a rotation record has
 	// not yet made live.
 	StagedSuffix = ".next"
+
+	// AbandonedSuffix starts the names of staged keys whose rotation was
+	// abandoned, one file per key set. They are kept: the record already
+	// carries this device's signature, and an admin may still approve it.
+	AbandonedSuffix = ".abandoned"
 
 	// FileMode and DirMode are what key material is written with.
 	FileMode fs.FileMode = 0o600
@@ -302,39 +311,110 @@ func (k *Node) NamedBy(rec *types.NodeRecord) bool {
 		rec.MLKEM == k.Public.MLKEM
 }
 
-// PromoteStaged replaces the live node keys with the staged ones: one rename,
-// so the device never holds half of each, and the directory is synced, since a
-// durable log must not end up pointing at keys that rolled back.
-func PromoteStaged(home string) error {
-	staged := filepath.Join(home, NodeKeysFile+StagedSuffix)
-	if err := os.Rename(staged, filepath.Join(home, NodeKeysFile)); err != nil {
-		return fmt.Errorf("promoting %s: %w", staged, err)
+// MaybePromote promotes whichever staged or abandoned key set the log names,
+// and returns it, or nil when the log names none. lookup is the log's member
+// lookup, passed as a function so this package stays out of the trust
+// layer's import graph. The test is on the resulting state, not on which
+// records were applied: a rotation can be authorized and still lose fork
+// choice, and promoting then would cut the device off.
+func MaybePromote(home string, lookup func(types.Identity) (types.NodeRecord, bool)) (*Node, error) {
+	abandoned, err := filepath.Glob(filepath.Join(globEscape(home), NodeKeysFile+AbandonedSuffix+"*"))
+	if err != nil {
+		return nil, err
+	}
+	stagedPath := filepath.Join(home, NodeKeysFile+StagedSuffix)
+	for _, path := range append([]string{stagedPath}, abandoned...) {
+		staged, err := LoadNode(path)
+		switch {
+		case Missing(err):
+			continue
+		case err != nil && path != stagedPath:
+			// A damaged archive is one rotation that can no longer be
+			// adopted; it must not stop the device adopting any other.
+			continue
+		case err != nil:
+			return nil, err
+		}
+		rec, ok := lookup(staged.Identity.Public())
+		if !ok || !staged.NamedBy(&rec) {
+			continue
+		}
+		if err := os.Rename(path, filepath.Join(home, NodeKeysFile)); err != nil {
+			return nil, fmt.Errorf("promoting %s: %w", path, err)
+		}
+		return staged, SyncDir(home)
+	}
+	return nil, nil
+}
+
+// MaxAbandoned is how many abandoned key sets are kept. Every one is
+// re-read whenever the log changes, and nothing else bounds how many an
+// operator can make; a rotation abandoned this many rotations ago is
+// unlikely to be approved still, and if it is, the device is removed and
+// invited again.
+const MaxAbandoned = 8
+
+// Abandon archives the staged keys under a name of their own, so abandoning
+// a second rotation cannot overwrite the first's keys while its record may
+// still be approved. Nothing staged is nothing to do. Beyond [MaxAbandoned]
+// archives, the oldest go.
+func Abandon(home string) error {
+	path := filepath.Join(home, NodeKeysFile+StagedSuffix)
+	staged, err := LoadNode(path)
+	if Missing(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	id, pub := staged.Identity.Public(), staged.Public
+	sum := sha256.Sum256(slices.Concat(id[:], pub.WireGuard[:], pub.X25519[:]))
+	archived := filepath.Join(home, NodeKeysFile+AbandonedSuffix+"-"+hex.EncodeToString(sum[:6]))
+	if err := os.Rename(path, archived); err != nil {
+		return fmt.Errorf("archiving %s: %w", path, err)
+	}
+	if err := pruneAbandoned(home); err != nil {
+		return err
 	}
 	return SyncDir(home)
 }
 
-// MaybePromoteStaged promotes staged node keys once the log names them, and
-// returns them, or nil when nothing was promoted. lookup is the log's member
-// lookup, passed as a function so this package stays out of the trust layer's
-// import graph. The test is on the resulting state, not on which records were
-// applied: a rotation can be authorized and still lose fork choice, and
-// promoting then would cut the device off.
-func MaybePromoteStaged(home string, lookup func(types.Identity) (types.NodeRecord, bool)) (*Node, error) {
-	staged, err := LoadNode(filepath.Join(home, NodeKeysFile+StagedSuffix))
-	if Missing(err) {
-		return nil, nil
+func pruneAbandoned(home string) error {
+	paths, err := filepath.Glob(filepath.Join(globEscape(home), NodeKeysFile+AbandonedSuffix+"*"))
+	if err != nil || len(paths) <= MaxAbandoned {
+		return err
 	}
-	if err != nil {
-		return nil, err
+	type archive struct {
+		path string
+		mod  time.Time
 	}
-	rec, ok := lookup(staged.Identity.Public())
-	if !ok || !staged.NamedBy(&rec) {
-		return nil, nil
+	var all []archive
+	for _, p := range paths {
+		info, err := os.Lstat(p)
+		if err != nil {
+			return err
+		}
+		all = append(all, archive{p, info.ModTime()})
 	}
-	if err := PromoteStaged(home); err != nil {
-		return nil, err
+	slices.SortFunc(all, func(a, b archive) int { return a.mod.Compare(b.mod) })
+	for _, a := range all[:len(all)-MaxAbandoned] {
+		if err := os.Remove(a.path); err != nil {
+			return fmt.Errorf("removing %s: %w", a.path, err)
+		}
 	}
-	return staged, nil
+	return nil
+}
+
+// globEscape quotes a directory for filepath.Glob.
+func globEscape(dir string) string {
+	var b strings.Builder
+	for _, r := range dir {
+		if strings.ContainsRune(`*?[\`, r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // LoadNode reads a node key file.

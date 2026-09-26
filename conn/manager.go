@@ -8,6 +8,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/netip"
 	"time"
@@ -15,6 +16,9 @@ import (
 	"go4.org/mem"
 	"tailscale.com/types/key"
 )
+
+// ErrPortTaken reports a requested UDP port another socket already holds.
+var ErrPortTaken = errors.New("the port is taken")
 
 // Peer is the subset of a member's log state that the connectivity layer needs.
 // It is derived from membership records by the reconciler; this package never
@@ -91,6 +95,16 @@ type Manager interface {
 	// timeout. Diagnostics and tests only.
 	Ping(ip netip.Addr, cb func(PingResult))
 
+	// Tunnels reports what each installed peer's WireGuard session has done,
+	// keyed by [Peer.ID].
+	Tunnels() map[uint64]Tunnel
+
+	// Probe sends the peer at overlay address ip a message its data plane
+	// answers itself, past any host firewall, and reports to cb whether the
+	// answer came within timeout. cb is called once, possibly from another
+	// goroutine.
+	Probe(ip netip.Addr, timeout time.Duration, cb func(answered bool))
+
 	// Close shuts the manager down and releases the data plane. It is
 	// idempotent.
 	Close() error
@@ -105,6 +119,16 @@ type PingResult struct {
 
 	// Latency is the round-trip time, zero if unknown.
 	Latency time.Duration
+}
+
+// A Tunnel is what the data plane knows of one peer's WireGuard session.
+type Tunnel struct {
+	// LastHandshake is when a handshake last completed, zero if none has.
+	LastHandshake time.Time
+
+	// Direct is the UDP path the tunnel uses, invalid where it has none and
+	// runs through a relay if at all.
+	Direct netip.AddrPort
 }
 
 // Key conversions from the raw 32-byte form the log and gossip carry, so this

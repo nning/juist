@@ -1,7 +1,10 @@
 package conn
 
 import (
+	"errors"
+	"fmt"
 	"net/netip"
+	"slices"
 	"testing"
 )
 
@@ -24,7 +27,7 @@ func testRelay() Relay {
 // which fails — and on a host with a wildcard resolver, fails by connecting
 // somewhere else.
 func TestDERPMapNeverResolvesAHostName(t *testing.T) {
-	dm := derpMap([]Relay{testRelay()})
+	dm, _ := derpMap([]Relay{testRelay()}, nil)
 	if dm == nil {
 		t.Fatal("no map built")
 	}
@@ -65,13 +68,14 @@ func TestDERPMapNeverResolvesAHostName(t *testing.T) {
 	// netcheck spends its timeout on a port nothing answers.
 	quiet := testRelay()
 	quiet.STUNPort = 0
-	if got := derpMap([]Relay{quiet}).Regions[7].Nodes[0].STUNPort; got != -1 {
+	if dm, _ := derpMap([]Relay{quiet}, nil); dm.Regions[7].Nodes[0].STUNPort != -1 {
+		got := dm.Regions[7].Nodes[0].STUNPort
 		t.Errorf("STUNPort %d for a relay that does not reflect, want -1 (disabled)", got)
 	}
 
 	// No relays is direct-only, which is a nil map rather than an empty one:
 	// an empty map is a change the engine would act on.
-	if derpMap(nil) != nil {
+	if dm, _ := derpMap(nil, nil); dm != nil {
 		t.Error("an empty relay set produced a map")
 	}
 }
@@ -194,5 +198,62 @@ func TestRelayDialOrderPutsPublicFirst(t *testing.T) {
 	// unchanged map and the engine recognizes the no-op.
 	if got[0] != netip.MustParseAddrPort("198.51.100.7:4443") {
 		t.Errorf("first address is %v, want the announcement's first public one", got[0])
+	}
+}
+
+// TestSTUNServersNeverBecomeRelays: public STUN servers are asked for this
+// node's reflexive address and nothing else. They are STUN-only, least
+// preferred as a home by far, and never take a member relay's region.
+func TestSTUNServersNeverBecomeRelays(t *testing.T) {
+	r := testRelay()
+	r.Region = MaxRegionID
+	dm, stunRegions := derpMap([]Relay{r}, []string{"stun.example:3478", "[2001:db8::1]:19302"})
+	if dm.Regions[MaxRegionID].Nodes[0].STUNOnly {
+		t.Fatal("a STUN server took a member relay's region")
+	}
+	if len(stunRegions) != 2 {
+		t.Fatalf("STUN regions %v", stunRegions)
+	}
+	for id := range stunRegions {
+		reg := dm.Regions[id]
+		if len(reg.Nodes) != 1 || !reg.Nodes[0].STUNOnly || reg.Nodes[0].DERPPort != 0 {
+			t.Errorf("region %d is not a STUN-only node: %+v", id, reg.Nodes)
+		}
+		if dm.HomeParams.RegionScore[id] < 1000 {
+			t.Errorf("region %d could win the home relay on latency", id)
+		}
+	}
+	if !dm.OmitDefaultRegions {
+		t.Fatal("the map lets Tailscale's own regions in")
+	}
+	if _, err := parseSTUNServer("no-port"); err == nil {
+		t.Fatal("accepted a STUN server without a port")
+	}
+}
+
+func TestOnlyTheSTUNHomeRetriesAreDropped(t *testing.T) {
+	var got []string
+	m := &tsManager{}
+	m.stunRegions.Store(&map[int]bool{65534: true})
+	logf := m.withoutSTUNHomeNoise(func(format string, args ...any) { got = append(got, fmt.Sprintf(format, args...)) })
+	logf("%s: [v1] backoff: %d msec", "derp-65534", 900)
+	logf("derp.Recv(derp-65534): %v", errors.New("connect to region 65534 (stun1): no non-STUNOnly nodes for region 65534"))
+	logf("%s: [v1] backoff: %d msec", "derp-7", 900)
+	logf("magicsock: endpoints changed: %s", "192.0.2.1:41643 (stun)")
+	want := []string{"derp-7: [v1] backoff: 900 msec", "magicsock: endpoints changed: 192.0.2.1:41643 (stun)"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("kept %q, want %q", got, want)
+	}
+}
+
+// TestTheHomeRelayMayChange: magicsock changes its home relay only while it
+// believes a control plane will tell peers, and keeps the first one it picked
+// otherwise. With no control plane that first pick is the only one: a node
+// started before any relay existed homed on a STUN server and never used the
+// relay granted later.
+func TestTheHomeRelayMayChange(t *testing.T) {
+	n := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
+	if !n.mgr.(*tsManager).health.GetInPollNetMap() {
+		t.Error("the data plane believes it cannot announce a new home relay, so it will keep its first")
 	}
 }

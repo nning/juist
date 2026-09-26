@@ -3,9 +3,11 @@ package daemon
 import (
 	"crypto/rand"
 	"fmt"
+	"maps"
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
@@ -76,6 +78,24 @@ type network struct {
 // the mesh, and trust/log's own cover k-of-n ceremonies.
 func newNetwork(t *testing.T, n int) *network {
 	t.Helper()
+	return newNetworkWithAdminDevices(t, n)
+}
+
+// newNetworkWithAdminDevices is [newNetwork] with the given founding members
+// holding the admin role, which makes them freshness-lease signers.
+func newNetworkWithAdminDevices(t *testing.T, n int, adminDevices ...int) *network {
+	t.Helper()
+	return newNetworkMutated(t, n, func(nw *network) {
+		for _, i := range adminDevices {
+			nw.devices[i].record.Roles = []types.Role{types.RoleAdmin}
+		}
+	})
+}
+
+// newNetworkMutated founds a network after mutate has adjusted its devices'
+// records.
+func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
+	t.Helper()
 	admin, err := types.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +105,7 @@ func newNetwork(t *testing.T, n int) *network {
 		v4 := netip.AddrFrom4([4]byte{100, 64, 0, byte(i + 1)})
 		nw.devices = append(nw.devices, newDevice(t, fmt.Sprintf("n%d", i), v4))
 	}
+	mutate(nw)
 	disablement := make([]byte, types.DisablementSecretSize)
 	if _, err := rand.Read(disablement); err != nil {
 		t.Fatal(err)
@@ -170,6 +191,21 @@ func (nw *network) removeNode(t *testing.T, auth *log.Authority, id types.Identi
 	return rec
 }
 
+// conflictingFork is a fork trust/log cannot resolve: one branch removes a
+// member, the other grants it a role, which cannot be reissued on a chain
+// where it is gone.
+func (nw *network) conflictingFork(t *testing.T, auth *log.Authority, id types.Identity) (types.AUM, types.AUM) {
+	t.Helper()
+	grant, err := auth.Builder().SetNodeRoutes(id, []types.Role{types.RoleRelayCapable}, nil)
+	if err != nil {
+		t.Fatalf("building the grant: %v", err)
+	}
+	if err := grant.Sign(nw.admin); err != nil {
+		t.Fatalf("signing the grant: %v", err)
+	}
+	return nw.removeNode(t, auth, id), grant
+}
+
 // safeLogf forwards to t.Logf until the test is torn down and drops everything
 // afterwards: the embedded engine's goroutines outlive Close by a few
 // milliseconds and log as they wind down, which would panic the testing
@@ -211,6 +247,17 @@ type fakeManager struct {
 
 	home int
 	eps  []netip.AddrPort
+
+	tunnels map[uint64]conn.Tunnel
+	answers map[netip.Addr]bool // whether a probe to the address is answered
+	probed  []netip.Addr
+
+	// paths are the direct paths an answered probe leaves a peer's tunnel
+	// on, by the probed address, as a disco pong does.
+	paths map[netip.Addr]netip.AddrPort
+
+	// hold, when set, keeps every probe's answer back until it is closed.
+	hold chan struct{}
 }
 
 var _ conn.Manager = (*fakeManager)(nil)
@@ -252,6 +299,44 @@ func (m *fakeManager) LocalEndpoints() []netip.AddrPort {
 func (m *fakeManager) LocalPort() uint16 { return 41641 }
 
 func (m *fakeManager) Ping(netip.Addr, func(conn.PingResult)) {}
+
+func (m *fakeManager) Tunnels() map[uint64]conn.Tunnel {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.tunnels)
+}
+
+func (m *fakeManager) Probe(ip netip.Addr, _ time.Duration, cb func(bool)) {
+	m.mu.Lock()
+	ok := m.answers[ip]
+	m.probed = append(m.probed, ip)
+	if path, set := m.paths[ip]; ok && set {
+		for _, p := range m.peers {
+			if len(p.Addrs) > 0 && p.Addrs[0].Addr() == ip {
+				if m.tunnels == nil {
+					m.tunnels = map[uint64]conn.Tunnel{}
+				}
+				t := m.tunnels[p.ID]
+				t.Direct = path
+				m.tunnels[p.ID] = t
+			}
+		}
+	}
+	hold := m.hold
+	m.mu.Unlock()
+	go func() {
+		if hold != nil {
+			<-hold
+		}
+		cb(ok)
+	}()
+}
+
+func (m *fakeManager) probes() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.probed)
+}
 
 func (m *fakeManager) Close() error {
 	m.mu.Lock()

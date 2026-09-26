@@ -61,7 +61,7 @@ func FuzzValidateAUM(f *testing.F) {
 		}
 		if a.Node != nil {
 			_ = a.Node.StaticValidate()
-			_ = a.Node.ValidateRoutes(ULA(Hash{}))
+			_ = a.Node.ValidateInNetwork(ULA(Hash{}), V4Ranges(CurrentSchema, nil))
 			_ = a.Node.Clone()
 		}
 		if a.Epoch != nil {
@@ -131,9 +131,24 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 	}
 	freshPub := fresh.Public()
 
+	holderSnap := snap.Clone()
+	holderSnap.Schema = CurrentSchema
+	holderSnap.Admins = []AdminKey{{Public: priv.Public(), Votes: 1, Holder: "h"}}
+
 	checkpointSnap := snap.Clone()
 	gh := Hash{9}
 	checkpointSnap.GenesisHash = &gh
+
+	renumberTo := netip.MustParsePrefix("10.7.0.0/22")
+	renumberedSnap := checkpointSnap.Clone()
+	renumberedSnap.Schema = CurrentSchema
+	renumberedSnap.V4Prefix = &renumberTo
+	renumberedSnap.V4Retiring = &RetiringRanges{Prefixes: []netip.Prefix{OverlayV4}, Until: 99}
+	moved := rec
+	newV4 := netip.MustParseAddr("10.7.0.1")
+	moved.V4, moved.Retiring = &newV4, &RetiringV4{Addr: v4, Until: 99}
+	renumberedSnap.Nodes = []NodeRecord{moved}
+	renumberedSnap.EpochWraps = epoch.Wraps
 
 	records := []AUM{
 		{Kind: KindGenesis, State: snap},
@@ -150,6 +165,16 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindCheckpoint, Prev: &parent, State: checkpointSnap},
 		{Kind: KindEpochBump, Prev: &parent, Epoch: epoch},
 		{Kind: KindSchemaUpgrade, Prev: &parent, Schema: &schema},
+		{Kind: KindSetVouchers, Prev: &parent, Vouchers: &quorum},
+		{Kind: KindSetHolder, Prev: &parent, Holder: &HolderPolicy{Name: "h", Votes: 1, Needed: 2}},
+		{Kind: KindAddAdminKey, Prev: &parent, Admin: &AdminKey{Public: freshPub, Votes: 3, Holder: "h", Needed: 2}},
+		{Kind: KindGenesis, State: holderSnap},
+		{Kind: KindRenumberNetwork, Prev: &parent, Renumber: &Renumbering{Until: 99, Prefix: &renumberTo,
+			Addrs: []MemberV4{{Identity: id, V4: netip.MustParseAddr("10.7.0.1")}}}},
+		{Kind: KindRenumberNode, Prev: &parent, Subject: &id, Renumber: &Renumbering{Until: 99, V4: &v4}},
+		{Kind: KindRetireAddresses, Prev: &parent},
+		{Kind: KindRenameNetwork, Prev: &parent, Network: new("office")},
+		{Kind: KindCheckpoint, Prev: &parent, State: renumberedSnap},
 	}
 	out := make([][]byte, 0, len(records))
 	for i := range records {

@@ -59,6 +59,13 @@ install -D -m 0755 juist  %{buildroot}%{_bindir}/juist
 install -D -m 0755 juistd %{buildroot}%{_bindir}/juistd
 install -D -m 0644 juistd.service %{buildroot}%{_unitdir}/juistd.service
 install -D -m 0644 %{SOURCE1} %{buildroot}%{_sysusersdir}/%{name}.conf
+install -D -m 0755 firewall.sh %{buildroot}%{_prefix}/lib/juist/firewall.sh
+for f in juist juist-relay juist-invite; do
+	install -D -m 0644 $f.xml %{buildroot}%{_prefix}/lib/firewalld/services/$f.xml
+done
+install -D -m 0644 juist.bash %{buildroot}%{_datadir}/bash-completion/completions/juist
+install -D -m 0644 _juist %{buildroot}%{_datadir}/zsh/site-functions/_juist
+install -D -m 0644 juist.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/juist.fish
 install -d -m 0700 %{buildroot}%{_sharedstatedir}/%{name}
 
 # The unit in the repository names the path a manual install uses; a packaged
@@ -73,12 +80,24 @@ grep -q '^ExecStart=%{_bindir}/juistd ' %{buildroot}%{_unitdir}/juistd.service
 
 %post
 %systemd_post juistd.service
+# Traffic on juist0 is let through an active firewalld, and the service runs
+# from installation, in no network, as the deb's does; see firewall.sh.
+%{_prefix}/lib/juist/firewall.sh reload
+if [ $1 -eq 1 ]; then
+	%{_prefix}/lib/juist/firewall.sh allow
+	systemctl enable --now juistd.service >/dev/null 2>&1 || :
+fi
 
 %preun
 %systemd_preun juistd.service
+if [ $1 -eq 0 ]; then %{_prefix}/lib/juist/firewall.sh revoke; fi
 
 %postun
 %systemd_postun_with_restart juistd.service
+# The service files are gone; firewalld forgets them only on a reload.
+if [ $1 -eq 0 ] && firewall-cmd --state >/dev/null 2>&1; then
+	firewall-cmd --reload >/dev/null 2>&1 || :
+fi
 
 %files
 %doc README.md
@@ -86,6 +105,13 @@ grep -q '^ExecStart=%{_bindir}/juistd ' %{buildroot}%{_unitdir}/juistd.service
 %{_bindir}/juistd
 %{_unitdir}/juistd.service
 %{_sysusersdir}/%{name}.conf
+%{_prefix}/lib/juist/firewall.sh
+%{_prefix}/lib/firewalld/services/juist.xml
+%{_prefix}/lib/firewalld/services/juist-relay.xml
+%{_prefix}/lib/firewalld/services/juist-invite.xml
+%{_datadir}/bash-completion/completions/juist
+%{_datadir}/zsh/site-functions/_juist
+%{_datadir}/fish/vendor_completions.d/juist.fish
 # Holds this device's keys and its log. Owned so that an uninstall removes it
 # when it is empty and leaves it when it is not: deleting an enrolled device's
 # identity behind the operator's back is not something a package should do.

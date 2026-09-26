@@ -2,17 +2,17 @@ package daemon
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"maps"
-	"net"
-	"net/netip"
 	"slices"
 	"time"
+
+	"github.com/nning/juist/ipc"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/trust/log"
-	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
 
@@ -35,131 +35,191 @@ func (d *Daemon) Reconcile() error {
 	// behind a reconfiguration.
 	d.authMu.Lock()
 	state, stateErr := d.authority.TrustedState()
+	unrevoked, lost := d.orphansLocked()
 	d.authMu.Unlock()
 	if stateErr != nil {
 		// An alarm, and nothing else: TrustedState fails for no other reason.
-		// Tear the data plane down before returning, and stop relaying: who
-		// may use this member's relay is a membership question, and this node
-		// no longer knows the answer.
-		d.stopRelaying()
-		if err := d.manager.SetPeers(nil); err != nil {
-			err = fmt.Errorf("daemon: dropping every peer after %v: %w", stateErr, err)
-			d.setStatus(func(s *Status) { s.DataPlaneError = err.Error() })
-			return err
-		}
-		d.setStatus(func(s *Status) {
-			s.Alarm = stateErr.Error()
-			s.DataPlaneError = ""
-			// Every derived field is cleared, not just the peer counts: a
-			// stale count beside an alarm reads as though part of the mesh
-			// survived it, and none of it did.
-			s.Peers = 0
-			s.Unreachable = 0
-			s.Conflicted = 0
-			s.Members = 0
-			s.Expired = 0
-			s.Relays = 0
-			s.Relaying = false
-			s.RelayCapable = 0
-			s.NotMember = false
-			s.StaleKeys = false
-		})
-		return stateErr
+		// Only where the chain stood is kept: a count beside an alarm reads as
+		// though part of the mesh survived it, and none of it did.
+		prev := d.Status()
+		err := d.teardown(ipc.Derived{
+			Alarm:       stateErr.Error(),
+			NetworkName: prev.NetworkName, Head: prev.Head, Epoch: prev.Epoch,
+			SelfName: prev.SelfName,
+		}, fmt.Sprintf("after %v", stateErr))
+		return cmp.Or(err, stateErr)
 	}
 
 	d.adoptEpoch(state)
 	d.noteSchema()
 
-	now := d.now().Unix()
-	members := state.Nodes()
-	live := make(map[types.Identity]bool, len(members))
-	var expired int
-	for i := range members {
-		if members[i].Expired(now) {
-			// An expired membership is treated exactly like a former one
-			// everywhere: no peer entry, no gossip, no cached address.
-			expired++
-			continue
-		}
-		live[members[i].Identity] = true
-	}
-
+	s := d.snapshotOf(state)
 	// This device itself may be the one that is out, in which case the whole
 	// data plane comes down. Peers enforce membership on their side anyway;
 	// this is so a removed device stops probing them, and says why.
-	if !live[d.self] {
+	if !s.live[d.self] {
 		// A device that is not a member relays for nobody, whatever role the
 		// last state it saw granted it.
-		d.stopRelaying()
-		if err := d.manager.SetPeers(nil); err != nil {
-			err = fmt.Errorf("daemon: dropping every peer after losing membership: %w", err)
-			d.setStatus(func(s *Status) { s.DataPlaneError = err.Error() })
+		err := d.teardown(ipc.Derived{
+			NotMember:   true,
+			NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(),
+			Members: len(s.members), Expired: s.expired,
+			Unrevoked: unrevoked, Lost: lost,
+			SelfName: d.selfName(state),
+		}, "after losing membership")
+		if err != nil {
 			return err
 		}
-		d.pruneEndpoints(live)
-		d.setStatus(func(s *Status) {
-			s.Alarm = ""
-			s.DataPlaneError = ""
-			s.NotMember = true
-			s.Members = len(members)
-			s.Expired = expired
-			s.Peers = 0
-			s.Unreachable = 0
-			s.Relays = 0
-			s.Relaying = false
-			s.RelayCapable = 0
-			s.Epoch = state.Epoch()
-			s.Head = state.Head()
-			s.LastReconcile = d.now().Unix()
-		})
+		d.pruneEndpoints(s.live)
 		d.logOnce("daemon: this device is not in the member set (removed, or past its expiry); tunnels are down")
 		return nil
 	}
 
-	// A rotation applied while this daemon runs leaves the log naming keys the
-	// process does not hold. Peers move to them at once, so everything fails
-	// from here and looks like a network problem unless something says so.
-	staleKeys := false
-	if self, ok := state.Node(d.self); ok && self.WireGuard != d.wgPublic {
-		staleKeys = true
-		d.logOnce("daemon: the log names different keys for this device than this daemon holds; " +
-			"restart juistd to pick up the promoted key file")
+	staleKeys := d.keysAreStale(state)
+	fresh, admit := d.checkFreshness(state, s.now)
+	held, discoUsers := d.heldAnnouncements(s)
+	relays, err := d.installRelays(s, held)
+	if err != nil {
+		return err
+	}
+	b := d.buildPeers(s, held, discoUsers, relays, admit)
+	d.noteNewAnnouncements(b.named)
+	d.setInstalled(b.named)
+	if err := d.manager.SetPeers(b.peers); err != nil {
+		err = fmt.Errorf("daemon: installing %d peers: %w", len(b.peers), err)
+		d.setStatus(func(s *ipc.Status) { s.DataPlaneError = err.Error() })
+		return err
 	}
 
-	// The disco key is the one field a peer chooses for itself, and conn
-	// requires them distinct — left to conn, one member announcing another's
-	// key would make SetPeers refuse the whole set, a mesh kill switch. Drop
-	// every peer in a colliding set here instead and install the rest.
-	//
-	// Read each announcement once into a snapshot: gossip and discovery write
-	// the cache concurrently, and reading twice lets one added between the
-	// passes be counted zero times and installed once, restoring the kill
-	// switch.
-	held := make(map[types.Identity]gossip.Endpoint, len(members))
-	discoUsers := make(map[gossip.DiscoKey]int, len(members))
-	for i := range members {
-		if members[i].Identity == d.self || !live[members[i].Identity] {
+	d.pruneEndpoints(s.live)
+	// After pruning, so a former member's address is dropped from the file
+	// as well as from memory.
+	d.saveEndpointCache(d.cachePath)
+	unmoved := d.followRenumbering(state, s.now, s.live)
+
+	refused := d.refusedEverywhere(s.members, s.live)
+	if refused {
+		d.logOnce("daemon: members refuse this device a catch-up and none answers it; it was most likely removed")
+	}
+	d.setDerived(ipc.Derived{
+		NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(),
+		Members: len(s.members), Expired: s.expired,
+		Peers: len(b.peers), Unreachable: len(b.silent), Silent: b.silent,
+		Unrevoked: unrevoked, Lost: lost,
+		Devices: ipc.DevicesOf(state, s.now), Unmoved: unmoved,
+		Refused: refused, SelfName: d.selfName(state),
+		LeaseSigners: fresh.Signers, FreshSince: fresh.Since, FreshUntil: fresh.Until,
+		Vouchers: fresh.Needed, Vouching: fresh.Vouching, Stale: !fresh.Fresh(s.now),
+		Relays: len(relays), Relaying: d.isRelaying(), RelayCapable: relayCapableIn(s),
+		Conflicted:    b.conflicted,
+		StaleKeys:     staleKeys,
+		LastReconcile: d.now().Unix(),
+	})
+	return nil
+}
+
+// A snapshot is the member set one reconcile works from.
+type snapshot struct {
+	state   *log.State
+	now     int64
+	members []types.NodeRecord
+	live    map[types.Identity]bool
+	expired int
+}
+
+func (d *Daemon) snapshotOf(state *log.State) snapshot {
+	s := snapshot{state: state, now: d.now().Unix(), members: state.Nodes()}
+	// Renumbering moves the ranges without moving this device, and its
+	// deadline ends one with nothing applied.
+	d.mu.Lock()
+	d.v4 = state.V4RangesAt(s.now)
+	d.mu.Unlock()
+	s.live = make(map[types.Identity]bool, len(s.members))
+	for i := range s.members {
+		if s.members[i].Expired(s.now) {
+			// An expired membership is treated exactly like a former one
+			// everywhere: no peer entry, no gossip, no cached address.
+			s.expired++
 			continue
 		}
-		if ep, ok := d.endpoints.Get(members[i].Identity); ok {
-			held[members[i].Identity] = ep
+		s.live[s.members[i].Identity] = true
+	}
+	return s
+}
+
+// keysAreStale reports a rotation applied while this daemon runs, which leaves
+// the log naming keys the process does not hold. Peers move to them at once, so
+// everything fails from here and looks like a network problem unless something
+// says so.
+func (d *Daemon) keysAreStale(state *log.State) bool {
+	self, ok := state.Node(d.self)
+	if !ok || self.WireGuard == d.wgPublic {
+		return false
+	}
+	d.logOnce("daemon: the log names different keys for this device than this daemon holds; " +
+		"restart juistd to pick up the promoted key file")
+	return true
+}
+
+// checkFreshness renews and prunes the leases and reports what they say, and
+// which members may have a tunnel: all of them while an admin device has
+// vouched for this state recently, and only the admin devices, through which a
+// newer view arrives, once none has. This bounds how long a partitioned node
+// carries a member it has not heard was removed.
+func (d *Daemon) checkFreshness(state *log.State, now int64) (log.Freshness, func(types.Identity) bool) {
+	d.maybeIssueLease(state, time.Unix(now, 0))
+	d.pruneLeases(time.Unix(now, 0))
+	fresh := d.freshness(time.Unix(now, 0))
+	stale := !fresh.Fresh(now)
+	signers := map[types.Identity]bool{}
+	for _, n := range state.LeaseSigners(now) {
+		signers[n.Identity] = true
+	}
+	if wasStale := d.Status().Stale; stale && !wasStale {
+		d.logf("daemon: no voucher has vouched for this node's view of the network within %v; "+
+			"keeping tunnels only to vouchers until one does", d.ttl)
+	} else if !stale && wasStale {
+		d.logf("daemon: a voucher vouched for this node's view again; all tunnels allowed")
+	}
+	return fresh, func(id types.Identity) bool { return !stale || signers[id] }
+}
+
+// heldAnnouncements reads each live member's announcement once, and counts
+// the members announcing each disco key. Gossip and discovery write the cache
+// concurrently, and reading twice lets one added between the passes be
+// counted zero times and installed once.
+func (d *Daemon) heldAnnouncements(s snapshot) (map[types.Identity]gossip.Endpoint, map[gossip.DiscoKey]int) {
+	held := make(map[types.Identity]gossip.Endpoint, len(s.members))
+	discoUsers := make(map[gossip.DiscoKey]int, len(s.members))
+	for i := range s.members {
+		id := s.members[i].Identity
+		if id == d.self || !s.live[id] {
+			continue
+		}
+		if ep, ok := d.endpoints.Get(id); ok {
+			held[id] = ep
 			discoUsers[ep.Disco]++
 		}
 	}
+	return held, discoUsers
+}
 
-	// The relay set and the local relay are both derived from the same
-	// snapshot as the peer set, and installed before it: a peer whose only
-	// path is through a relay must find the relay already in the map.
-	relayMembers := make(map[types.WGKey]bool, len(members))
-	for i := range members {
-		if live[members[i].Identity] {
-			relayMembers[members[i].WireGuard] = true
+// installRelays derives the relay set from the same snapshot as the peer set
+// and installs it, and this device's own relay, first: a peer whose only path
+// is through a relay must find the relay already in the map.
+func (d *Daemon) installRelays(s snapshot, held map[types.Identity]gossip.Endpoint) ([]conn.Relay, error) {
+	relayMembers := make(map[types.WGKey]bool, len(s.members))
+	relayHosts := make(map[types.Identity]bool, len(s.members))
+	for i := range s.members {
+		if s.live[s.members[i].Identity] {
+			relayMembers[s.members[i].WireGuard] = true
+			relayHosts[s.members[i].Identity] = true
 		}
 	}
 	d.mu.Lock()
-	d.relayMembers = relayMembers
+	d.relayMembers, d.relayHosts = relayMembers, relayHosts
 	d.mu.Unlock()
-	d.syncRelay(state)
+	d.syncRelay(s.state)
 
 	// This node's own relay belongs in its own map. Without it, a member that
 	// is the network's only relay has no region to be reached through: it
@@ -170,87 +230,226 @@ func (d *Daemon) Reconcile() error {
 		relayHeld = maps.Clone(held)
 		relayHeld[d.self] = mine
 	}
-	relays := d.relaySet(state.GenesisHash(), members, relayHeld)
-	relayCapable := 0
-	for i := range members {
-		if live[members[i].Identity] && members[i].HasRole(types.RoleRelayCapable) {
-			relayCapable++
-		}
+	network := s.state.GenesisHash()
+	relays := d.relaySet(network, s.members, relayHeld)
+	// Where two relays derive one region the lower identity keeps it, and a
+	// peer homed there is homed at the other.
+	ownRegion := false
+	if mine, ok := relayHeld[d.self]; ok && mine.Relay != nil {
+		region := relayRegion(network, d.self)
+		ownRegion = slices.ContainsFunc(relays, func(r conn.Relay) bool {
+			return r.Region == region && bytes.Equal(r.CertHash[:], mine.Relay.Cert)
+		})
 	}
+	d.mu.Lock()
+	d.ownRegion = ownRegion
+	d.mu.Unlock()
 	if err := d.manager.SetRelays(relays); err != nil {
 		err = fmt.Errorf("daemon: installing %d relays: %w", len(relays), err)
-		d.setStatus(func(s *Status) { s.DataPlaneError = err.Error() })
-		return err
+		d.setStatus(func(s *ipc.Status) { s.DataPlaneError = err.Error() })
+		return nil, err
 	}
+	return relays, nil
+}
 
-	peers := make([]conn.Peer, 0, len(members))
-	var unreachable, conflicted int
-	for i := range members {
-		n := &members[i]
-		if n.Identity == d.self || !live[n.Identity] {
+// relayCapableIn counts the live members the log grants the relay role.
+func relayCapableIn(s snapshot) int {
+	n := 0
+	for i := range s.members {
+		if s.live[s.members[i].Identity] && s.members[i].HasRole(types.RoleRelayCapable) {
+			n++
+		}
+	}
+	return n
+}
+
+// A peerSet is the peer set a reconcile derived, and who was left out.
+type peerSet struct {
+	peers      []conn.Peer
+	named      []namedPeer
+	silent     []string // members with no announcement held
+	conflicted int      // members left out for a disco key another uses
+}
+
+// buildPeers renders the live members admit allows into peers: the log says
+// who is a member and which WireGuard key it holds, its own signed
+// announcement where it is and which disco key it answers with.
+//
+// The disco key is the one field a peer chooses for itself, and conn requires
+// them distinct — left to conn, one member announcing another's key would
+// make SetPeers refuse the whole set, a mesh kill switch. Every peer in a
+// colliding set is dropped here instead.
+func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
+	discoUsers map[gossip.DiscoKey]int, relays []conn.Relay, admit func(types.Identity) bool) peerSet {
+	out := peerSet{peers: make([]conn.Peer, 0, len(s.members))}
+	for i := range s.members {
+		n := &s.members[i]
+		if n.Identity == d.self || !s.live[n.Identity] || !admit(n.Identity) {
 			continue
 		}
-		// The log says who is a member and which WireGuard key it holds; its
-		// own signed announcement says where it is and which disco key it
-		// answers with.
 		ep, ok := held[n.Identity]
 		if !ok {
-			unreachable++
+			out.silent = append(out.silent, n.Name)
 			continue
 		}
 		if discoUsers[ep.Disco] > 1 || ep.Disco == d.discoPublic {
-			conflicted++
+			out.conflicted++
 			d.logOnce("daemon: two members announce the same NAT-traversal key, or one announces this " +
 				"device's; none of them gets a peer entry until that is resolved")
 			continue
 		}
-		peers = append(peers, conn.Peer{
-			ID:       d.peerID(n.Identity),
-			NodeKey:  conn.NodePublicFromRaw32(n.WireGuard),
-			DiscoKey: conn.DiscoPublicFromRaw32(ep.Disco),
-			Addrs:    state.Addrs(n.Identity),
-			// The peer says where it is and which relay it can be reached
-			// through; the log says it is a member. A home relay naming a
-			// region no relay-capable member holds is dropped rather than
-			// installed, since sending there reaches nothing.
+		p := conn.Peer{
+			ID:        d.peerID(n.WireGuard),
+			NodeKey:   conn.NodePublicFromRaw32(n.WireGuard),
+			DiscoKey:  conn.DiscoPublicFromRaw32(ep.Disco),
+			Addrs:     s.state.Addrs(n.Identity, s.now),
 			Endpoints: ep.Addrs,
 			HomeRelay: homeRelay(ep, relays),
-		})
+		}
+		out.peers = append(out.peers, p)
+		out.named = append(out.named, namedPeer{name: n.Name, id: n.Identity, wg: n.WireGuard, peer: p})
 	}
+	return out
+}
 
-	if err := d.manager.SetPeers(peers); err != nil {
-		err = fmt.Errorf("daemon: installing %d peers: %w", len(peers), err)
-		d.setStatus(func(s *Status) { s.DataPlaneError = err.Error() })
-		return err
+// selfName is this device's member name in state, or the last one known.
+func (d *Daemon) selfName(state *log.State) string {
+	if self, ok := state.Node(d.self); ok {
+		return self.Name
 	}
+	return d.Status().SelfName
+}
 
-	d.pruneEndpoints(live)
-	// After pruning, so a former member's address is dropped from the file
-	// as well as from memory.
-	d.saveEndpointCache(d.cachePath)
+// setDerived replaces what the last reconcile derived.
+func (d *Daemon) setDerived(v ipc.Derived) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.status.Derived = v
+}
 
-	// Read before setStatus, which holds the same mutex.
-	relaying := d.isRelaying()
-	d.setStatus(func(s *Status) {
-		s.Alarm = ""
-		s.DataPlaneError = ""
-		s.NotMember = false
-		s.StaleKeys = staleKeys
-		s.Network = state.GenesisHash()
-		s.NetworkName = state.Network()
-		s.Head = state.Head()
-		s.Epoch = state.Epoch()
-		s.Members = len(members)
-		s.Expired = expired
-		s.Peers = len(peers)
-		s.Unreachable = unreachable
-		s.Conflicted = conflicted
-		s.Relays = len(relays)
-		s.Relaying = relaying
-		s.RelayCapable = relayCapable
-		s.LastReconcile = d.now().Unix()
-	})
-	return nil
+// teardown drops every peer and stops relaying, for a node that cannot say
+// who is a member, and publishes v for the status. why completes the error
+// the data plane may return.
+func (d *Daemon) teardown(v ipc.Derived, why string) error {
+	d.stopRelaying()
+	d.setInstalled(nil)
+	d.mu.Lock()
+	d.status.Tunnels = ipc.Tunnels{}
+	d.relayUnreachedSince = time.Time{}
+	d.reachGen++
+	d.mu.Unlock()
+	err := d.manager.SetPeers(nil)
+	if err != nil {
+		err = fmt.Errorf("daemon: dropping every peer %s: %w", why, err)
+		v.DataPlaneError = err.Error()
+	}
+	v.LastReconcile = d.now().Unix()
+	d.setDerived(v)
+	return err
+}
+
+// orphansLocked names the changes that lost fork choice, for the status, with
+// d.authMu held: the revocations not in effect until reissued, and the other
+// changes that can be started again. The admission of a device among the
+// latter leaves it out of the network, which nothing else would say outside
+// "juist log"; those in an alarm's conflict are the alarm's to name.
+func (d *Daemon) orphansLocked() (unrevoked, lost []string) {
+	state := d.authority.State()
+	for _, o := range d.authority.Orphans() {
+		for _, h := range o.Unrevoked {
+			if aum, who, ok := d.orphanLocked(state, h); ok {
+				unrevoked = append(unrevoked, describeUnrevoked(aum, who))
+			}
+		}
+		if o.Conflict != "" {
+			continue
+		}
+		for _, h := range o.Records {
+			if slices.Contains(o.Unrevoked, h) {
+				continue
+			}
+			if aum, who, ok := d.orphanLocked(state, h); ok {
+				lost = append(lost, describeLost(aum, who))
+			}
+		}
+	}
+	return unrevoked, lost
+}
+
+// orphanLocked reads an orphaned record and names its subject as state knows
+// it, with d.authMu held.
+func (d *Daemon) orphanLocked(state *log.State, h types.Hash) (types.AUM, string, bool) {
+	aum, err := d.storage.AUM(h)
+	if err != nil {
+		return types.AUM{}, "", false
+	}
+	if aum.Subject == nil {
+		return aum, "", true
+	}
+	who := aum.Subject.ShortString()
+	if n, ok := state.Node(*aum.Subject); ok {
+		who = n.Name
+	} else if k, ok := state.Admin(*aum.Subject); ok {
+		who = cmp.Or(k.Holder, k.Name, who)
+	}
+	return aum, who, true
+}
+
+func describeUnrevoked(aum types.AUM, who string) string {
+	switch aum.Kind {
+	case types.KindRemoveNode:
+		return "the removal of " + who
+	case types.KindRemoveAdminKey:
+		return "taking the vote from " + who + "'s key"
+	case types.KindSetNodeRoutes:
+		return "taking the voucher role from " + who
+	case types.KindSetVouchers:
+		return "raising the vouching threshold"
+	case types.KindSetQuorum:
+		return "raising the quorum"
+	case types.KindSetHolder:
+		return "the stricter rule for " + aum.Holder.Name
+	}
+	return fmt.Sprintf("a %v", aum.Kind)
+}
+
+func describeLost(aum types.AUM, who string) string {
+	switch {
+	case aum.Kind == types.KindAddNode && aum.Node != nil:
+		return "the admission of " + cmp.Or(aum.Node.Name, aum.Node.Identity.ShortString())
+	case aum.Kind == types.KindSetNodeRoutes:
+		return "the change of " + who + "'s roles"
+	case aum.Kind == types.KindAddAdminKey && aum.Admin != nil:
+		return "the admin key " + cmp.Or(aum.Admin.Holder, aum.Admin.Name)
+	case aum.Kind == types.KindRenumberNetwork:
+		return "the renumbering of the network"
+	case aum.Kind == types.KindRenumberNode:
+		return "the renumbering of " + who
+	case aum.Kind == types.KindRenameNetwork && aum.Network != nil:
+		return "the renaming of the network to " + *aum.Network
+	}
+	return fmt.Sprintf("a %v", aum.Kind)
+}
+
+// refusedEverywhere reports whether a member's log refused this device a
+// catch-up while no member it holds an announcement of answered its last
+// round. One not tried yet counts as answering, so the report errs quiet.
+func (d *Daemon) refusedEverywhere(members []types.NodeRecord, live map[types.Identity]bool) bool {
+	refused := false
+	for i := range members {
+		id := members[i].Identity
+		if id == d.self || !live[id] {
+			continue
+		}
+		if d.gossip.Refused(id) {
+			refused = true
+			continue
+		}
+		if _, held := d.endpoints.Get(id); held && !d.gossip.Failing(id) {
+			return false
+		}
+	}
+	return refused
 }
 
 // homeRelay is the region a peer says it can be reached through, kept only if
@@ -310,12 +509,10 @@ func (d *Daemon) pruneEndpoints(live map[types.Identity]bool) {
 	d.endpoints.SetMembership(members, formerIDs)
 }
 
-// noteSchema reports a network that has moved to a record schema this build
-// cannot read. It is not an alarm that withdraws membership state: what the
-// node holds was correct up to the upgrade, and taking every tunnel down the
-// moment an admin raises the schema would turn a planned change into an
-// outage. It does mean this device applies nothing further, including
-// revocations, until it is upgraded.
+// noteSchema reports a network moved to a record schema this build cannot
+// read. It is no alarm, since what the node holds was correct up to the
+// upgrade, but this device applies nothing further, revocations included,
+// until it is upgraded.
 func (d *Daemon) noteSchema() {
 	d.authMu.Lock()
 	tooNew := d.authority.SchemaAlarm()
@@ -325,253 +522,22 @@ func (d *Daemon) noteSchema() {
 		msg = tooNew.Error()
 		d.logOnce("daemon: " + msg)
 	}
-	d.setStatus(func(s *Status) { s.SchemaAlarm = msg })
+	d.setStatus(func(s *ipc.Status) { s.SchemaAlarm = msg })
 }
 
-// adoptEpoch opens this node's wrap of the current group secret and puts it in
-// the keyring, so that gossip and discovery speak the epoch the log resolves
-// to.
-//
-// A failure is reported and survived: a member that cannot open its own wrap
-// keeps the data plane running on the epoch it already has.
-func (d *Daemon) adoptEpoch(state *log.State) {
-	epoch := state.Epoch()
-	if _, held := d.keyring.Secret(epoch); held {
-		return
-	}
-	if !state.IsMember(d.self) {
-		// Not a member of the chain we resolve to: there is no wrap for us
-		// and there is not supposed to be one. Nothing to report.
-		return
-	}
-	s, err := secrets.Open(state.EpochRecord(), d.self, d.recipient)
-	if err != nil {
-		d.logf("daemon: cannot open the epoch %d group secret: %v", epoch, err)
-		d.setStatus(func(st *Status) { st.EpochError = err.Error() })
-		return
-	}
-	d.keyring.Adopt(epoch, s)
-	d.setStatus(func(st *Status) { st.EpochError = "" })
-	d.logf("daemon: adopted the epoch %d group secret", epoch)
-}
-
-// backfillEpochs opens this node's wraps of recent past epochs, so a restarted
-// daemon holds a keyring rather than a single secret: a node holding only the
-// newest epoch can neither read a frame from a peer that is behind nor be read
-// by it, which in a two-node network is a permanent partition. It walks the
-// active chain back from the head until the keyring is full.
-func (d *Daemon) backfillEpochs() {
-	d.authMu.Lock()
-	chain, err := d.authority.Chain()
-	if err != nil {
-		d.authMu.Unlock()
-		d.logf("daemon: reading the chain to recover past epochs: %v", err)
-		return
-	}
-	records := make([]*types.EpochRecord, 0, secrets.KeyringDepth)
-	for i := len(chain) - 1; i >= 0 && len(records) < secrets.KeyringDepth; i-- {
-		aum, err := d.storage.AUM(chain[i])
-		if err != nil {
-			break
-		}
-		// Two places carry an epoch: a record's Epoch field, and a genesis or
-		// checkpoint snapshot, which holds the wraps inline. Missing the
-		// second skips the epoch a node that never saw a change is on.
-		switch {
-		case aum.Epoch != nil:
-			records = append(records, aum.Epoch)
-		case aum.State != nil:
-			records = append(records, &types.EpochRecord{
-				Epoch:  aum.State.Epoch,
-				Commit: aum.State.EpochCommit,
-				Wraps:  aum.State.EpochWraps,
-				Suite:  aum.State.EpochSuite,
-			})
-		}
-	}
-	d.authMu.Unlock()
-
-	for _, rec := range records {
-		if _, held := d.keyring.Secret(rec.Epoch); held {
-			continue
-		}
-		s, err := secrets.Open(rec, d.self, d.recipient)
-		if err != nil {
-			// Ordinary: every epoch older than this device's enrollment has
-			// no wrap for it, and a rotation means the older wraps are sealed
-			// to keys it no longer holds.
-			continue
-		}
-		d.keyring.Adopt(rec.Epoch, s)
-		d.logf("daemon: recovered the epoch %d group secret", rec.Epoch)
-	}
-}
-
-// peerID returns the local handle the connectivity layer knows a member by. It
-// is assigned sequentially rather than derived: the ID never leaves this
-// process, so deriving one would buy nothing and add a collision case that
-// would take the whole data plane down.
-func (d *Daemon) peerID(id types.Identity) uint64 {
+// peerID returns the local handle the connectivity layer knows a member by,
+// keyed by its WireGuard key: an identity rotation keeps that key, and the
+// data plane refuses one key under two handles. It is assigned sequentially
+// rather than derived: the ID never leaves this process, so deriving one would
+// buy nothing and add a collision case that would take the whole data plane
+// down.
+func (d *Daemon) peerID(k types.WGKey) uint64 {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if n, ok := d.peerIDs[id]; ok {
+	if n, ok := d.peerIDs[k]; ok {
 		return n
 	}
 	d.nextPeerID++
-	d.peerIDs[id] = d.nextPeerID
+	d.peerIDs[k] = d.nextPeerID
 	return d.nextPeerID
-}
-
-// announcement returns this node's signed endpoint record, rebuilding it when
-// the underlay addresses or the data-plane port change. The sequence number
-// advances with the content, and starts from the wall clock so a restart does
-// not reissue numbers peers would dismiss as replays.
-func (d *Daemon) announcement() (gossip.Endpoint, bool) {
-	// The interface scan is what makes a LAN with no internet work; the
-	// addresses the data plane learned are what makes an off-LAN peer
-	// reachable. Reflexive addresses are added to the scan, never substituted
-	// for it.
-	addrs := mergeEndpoints(gossip.SortAddrs(d.underlayEndpoints()), d.manager.LocalEndpoints())
-	relayInfo := d.relayInfo()
-	home := uint16(d.manager.HomeRelay())
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.status.NotMember {
-		// A removed device goes quiet on the LAN too: no beacons, no answers
-		// to queries, no Self in a gossip hello. Re-enrollment arrives over
-		// IPC, so it loses nothing it needs. A fork alarm does not gate this
-		// — staying discoverable is how the resolving records arrive.
-		return gossip.Endpoint{}, false
-	}
-	if d.announced != nil && slices.Equal(d.announced.Addrs, addrs) &&
-		d.announced.GossipPort == d.gossipPort && d.announced.HomeRelay == home &&
-		sameRelayInfo(d.announced.Relay, relayInfo) {
-		return *d.announced.Clone(), true
-	}
-	e := gossip.Endpoint{
-		Identity:   d.self,
-		Disco:      d.discoPublic,
-		Addrs:      addrs,
-		GossipPort: d.gossipPort,
-		Seq:        d.nextSeq(),
-		Relay:      relayInfo,
-		HomeRelay:  home,
-	}
-	if err := e.Sign(d.identity); err != nil {
-		d.logf("daemon: signing this node's announcement: %v", err)
-		return gossip.Endpoint{}, false
-	}
-	d.announced = &e
-	return *e.Clone(), true
-}
-
-// sameRelayInfo reports whether two relay announcements are identical, so an
-// unchanged one does not cost a new sequence number and a mesh-wide push.
-func sameRelayInfo(a, b *gossip.RelayInfo) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Port == b.Port && a.STUNPort == b.STUNPort &&
-		a.HostName == b.HostName && bytes.Equal(a.Cert, b.Cert)
-}
-
-// nextSeq returns a strictly increasing sequence number, seeded from the
-// clock. The caller holds d.mu.
-func (d *Daemon) nextSeq() uint64 {
-	next := uint64(d.now().Unix())
-	if next <= d.seq {
-		next = d.seq + 1
-	}
-	d.seq = next
-	return next
-}
-
-// underlayEndpoints reports where this node's data plane can be reached from
-// the local network. The host's interfaces are read directly, since magicsock
-// reports no endpoints without a STUN result or a DERP map and we want no
-// third party. Down, loopback, link-local and overlay addresses are filtered
-// out — the last would ask peers to reach the tunnel through the tunnel.
-func (d *Daemon) underlayEndpoints() []netip.AddrPort {
-	port := d.manager.LocalPort()
-	if port == 0 {
-		return nil
-	}
-	// Cached briefly: this runs on every gossip session and discovery tick,
-	// and enumerating interfaces is a syscall walk over every host address.
-	now := d.now()
-	d.mu.Lock()
-	if d.addrsPort == port && now.Before(d.addrsUntil) {
-		cached := slices.Clone(d.addrs)
-		d.mu.Unlock()
-		return cached
-	}
-	d.mu.Unlock()
-
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		d.logf("daemon: listing interfaces: %v", err)
-		return nil
-	}
-	var out []netip.AddrPort
-	for _, ifi := range ifaces {
-		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := ifi.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			pfx, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ip, ok := netip.AddrFromSlice(pfx.IP)
-			if !ok {
-				continue
-			}
-			ip = ip.Unmap()
-			if !d.usableUnderlay(ip) {
-				continue
-			}
-			out = append(out, netip.AddrPortFrom(ip, port))
-		}
-	}
-	if len(out) > gossip.MaxEndpointAddrs {
-		out = out[:gossip.MaxEndpointAddrs]
-	}
-	d.mu.Lock()
-	d.addrs, d.addrsPort, d.addrsUntil = slices.Clone(out), port, now.Add(underlayCacheFor)
-	d.mu.Unlock()
-	return out
-}
-
-// underlayCacheFor is how long an interface scan is reused. Short enough that
-// a laptop moving between networks re-announces within one discovery interval
-// of arriving.
-const underlayCacheFor = 2 * time.Second
-
-func (d *Daemon) usableUnderlay(ip netip.Addr) bool {
-	switch {
-	case !ip.IsValid(), ip.IsLoopback(), ip.IsLinkLocalUnicast(),
-		ip.IsLinkLocalMulticast(), ip.IsMulticast(), ip.IsUnspecified():
-		return false
-	case types.CGNAT.Contains(ip):
-		// The overlay's own v4 range. A host legitimately using 100.64/10 on
-		// its LAN cannot also be reached there by members, so excluding it is
-		// right either way.
-		return false
-	case d.ula.IsValid() && d.ula.Contains(ip):
-		return false
-	}
-	return true
-}
-
-// now is the daemon's clock, overridable in tests.
-func (d *Daemon) now() time.Time {
-	if d.clock != nil {
-		return d.clock()
-	}
-	return time.Now()
 }

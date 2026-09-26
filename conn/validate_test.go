@@ -162,6 +162,9 @@ func TestSetPeersRejects(t *testing.T) {
 					t.Fatalf("SetPeers accepted %s and panicked on the engine-less test manager: %v", tc.name, r)
 				}
 			}()
+			if err := validatePeers(m.self, tc.peers); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("validatePeers: %v, want an error mentioning %q", err, tc.want)
+			}
 			err := m.SetPeers(tc.peers)
 			if err == nil {
 				t.Fatalf("SetPeers accepted %s", tc.name)
@@ -352,5 +355,67 @@ func TestReconfigRetriesAfterAFailedRouter(t *testing.T) {
 	}
 	if len(fake.programmed) != before {
 		t.Fatal("an unchanged reconfiguration reprogrammed the router")
+	}
+}
+
+// validatePeers accepts what a healthy log produces: peers on both families,
+// and this node's own entry however its addresses are ordered.
+func TestValidatePeersAccepts(t *testing.T) {
+	selfKey, selfDisco := key.NewNode(), key.NewDisco()
+	self := Self{ID: 1, NodeKey: selfKey, DiscoKey: selfDisco, Addrs: []netip.Prefix{
+		netip.MustParsePrefix("198.18.0.1/32"), netip.MustParsePrefix("fd00::1/128")}}
+	k1, k2 := key.NewNode().Public(), key.NewNode().Public()
+	d1, d2 := key.NewDisco().Public(), key.NewDisco().Public()
+	pfx := func(ss ...string) []netip.Prefix {
+		var out []netip.Prefix
+		for _, s := range ss {
+			out = append(out, netip.MustParsePrefix(s))
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name  string
+		peers []Peer
+	}{
+		{"none", nil},
+		{"one", []Peer{{ID: 2, NodeKey: k1, DiscoKey: d1, Addrs: pfx("198.18.0.2/32")}}},
+		{"both families", []Peer{
+			{ID: 2, NodeKey: k1, DiscoKey: d1, Addrs: pfx("198.18.0.2/32", "fd00::2/128")},
+			{ID: 3, NodeKey: k2, DiscoKey: d2, Addrs: pfx("fd00::3/128", "198.18.0.3/32"),
+				Endpoints: []netip.AddrPort{netip.MustParseAddrPort("192.0.2.3:41641")}},
+		}},
+		{"self entry, reordered", []Peer{
+			{ID: 1, NodeKey: selfKey.Public(), DiscoKey: selfDisco.Public(), Addrs: pfx("fd00::1/128", "198.18.0.1/32")},
+			{ID: 2, NodeKey: k1, DiscoKey: d1, Addrs: pfx("198.18.0.2/32")},
+		}},
+	} {
+		if err := validatePeers(self, tc.peers); err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+	}
+}
+
+// What SetPeers stores is its own copy, without this node's entry, indexed by
+// every address.
+func TestNewPeerStateIndexesACopy(t *testing.T) {
+	selfKey := key.NewNode()
+	k1 := key.NewNode().Public()
+	addrs := []netip.Prefix{netip.MustParsePrefix("198.18.0.2/32"), netip.MustParsePrefix("fd00::2/128")}
+	peers := []Peer{
+		{ID: 1, NodeKey: selfKey.Public(), Addrs: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}},
+		{ID: 2, NodeKey: k1, DiscoKey: key.NewDisco().Public(), Addrs: addrs},
+	}
+	st, nodes := newPeerState(selfKey.Public(), clonePeers(peers))
+	addrs[0] = netip.MustParsePrefix("198.18.0.9/32")
+	if len(st.peers) != 1 || len(nodes) != 1 || st.nodes[k1].Key() != k1 {
+		t.Fatalf("state holds %d peers and %d views, want only the other peer", len(st.peers), len(nodes))
+	}
+	for _, a := range []string{"198.18.0.2", "fd00::2"} {
+		if st.byIP[netip.MustParseAddr(a)] != k1 {
+			t.Errorf("%s does not route to its peer", a)
+		}
+	}
+	if got := st.peers[k1].Addrs[0]; got != netip.MustParsePrefix("198.18.0.2/32") {
+		t.Errorf("a caller's later write reached the stored state: %v", got)
 	}
 }

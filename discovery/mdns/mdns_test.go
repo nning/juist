@@ -11,6 +11,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/internal/nettest"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
@@ -84,7 +85,7 @@ type beaconNode struct {
 	seen   chan gossip.Endpoint
 }
 
-func newBeaconNode(t *testing.T, h *hub, kr *secrets.Keyring, port uint16) *beaconNode {
+func newBeaconNode(t *testing.T, h *hub, kr *keyring.Keyring, port uint16) *beaconNode {
 	t.Helper()
 	priv, err := types.GenerateIdentity()
 	if err != nil {
@@ -128,9 +129,9 @@ func newBeaconNode(t *testing.T, h *hub, kr *secrets.Keyring, port uint16) *beac
 	return n
 }
 
-func keyringAt(t *testing.T, epoch uint64, s secrets.Secret) *secrets.Keyring {
+func keyringAt(t *testing.T, epoch uint64, s secrets.Secret) *keyring.Keyring {
 	t.Helper()
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(epoch, s)
 	return kr
 }

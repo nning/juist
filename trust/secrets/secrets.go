@@ -246,11 +246,60 @@ func Open(rec *types.EpochRecord, self types.Identity, priv *PrivateKeys) (Secre
 	return s, nil
 }
 
+// CatchUpKeySize is the length of a catch-up session key.
+const CatchUpKeySize = 32
+
+// catchUpInfo binds a catch-up grant to one network, one recipient and the
+// nonce of one session, so it can be neither replayed nor re-addressed.
+func catchUpInfo(network types.Hash, recipient types.Identity, nonce []byte) []byte {
+	info := make([]byte, 0, len(labelCatchUp)+1+len(network)+types.IdentitySize+len(nonce))
+	info = append(info, labelCatchUp...)
+	info = append(info, 0)
+	info = append(info, network[:]...)
+	info = append(info, recipient[:]...)
+	return append(info, nonce...)
+}
+
+// SealCatchUp draws a fresh session key for a member catching up and seals it
+// to the recipient keys its record names: only that device can open it.
+func SealCatchUp(network types.Hash, n *types.NodeRecord, nonce []byte) (key [CatchUpKeySize]byte, sealed []byte, err error) {
+	pub, err := recipientKey(n.X25519, n.MLKEM)
+	if err != nil {
+		return key, nil, fmt.Errorf("secrets: node %v: %w", n.Identity.ShortString(), err)
+	}
+	if _, err := rand.Read(key[:]); err != nil {
+		return key, nil, fmt.Errorf("secrets: drawing a catch-up key: %w", err)
+	}
+	sealed, err = hpke.Seal(pub, kdf(), aead(), catchUpInfo(network, n.Identity, nonce), key[:])
+	if err != nil {
+		return key, nil, fmt.Errorf("secrets: sealing a catch-up key to %v: %w", n.Identity.ShortString(), err)
+	}
+	return key, sealed, nil
+}
+
+// OpenCatchUp recovers the session key a peer sealed to this node.
+func OpenCatchUp(network types.Hash, self types.Identity, priv *PrivateKeys, nonce, sealed []byte) (key [CatchUpKeySize]byte, err error) {
+	hpkePriv, err := hpke.NewHybridPrivateKey(priv.mlkem, priv.x25519)
+	if err != nil {
+		return key, fmt.Errorf("secrets: assembling recipient key: %w", err)
+	}
+	pt, err := hpke.Open(hpkePriv, kdf(), aead(), catchUpInfo(network, self, nonce), sealed)
+	if err != nil {
+		return key, fmt.Errorf("secrets: opening a catch-up key: %w", err)
+	}
+	if len(pt) != CatchUpKeySize {
+		return key, fmt.Errorf("secrets: catch-up key is %d bytes, want %d", len(pt), CatchUpKeySize)
+	}
+	copy(key[:], pt)
+	return key, nil
+}
+
 // Domain-separation labels. Every derived value is bound to one of these, so
 // the discovery AEAD key and a topic ID can never come out equal, and neither
 // can ever equal the secret itself.
 const (
 	labelSealInfo     = "juist/epoch-seal/v1"
+	labelCatchUp      = "juist/catch-up/v1"
 	labelTopic        = "juist/dht-topic/v1"
 	labelDiscoveryKey = "juist/discovery-aead/v1"
 	labelMDNS         = "juist/mdns-beacon/v1"

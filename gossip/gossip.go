@@ -15,7 +15,9 @@
 // Every frame carries the sender's (epoch, head) whether or not anything needs
 // transferring, and one round makes both sides whole. The "what I hold" set is
 // sent outright rather than walked back to a common ancestor, which keeps the
-// exchange stateless up to [MaxHashesPerFrame].
+// exchange stateless up to [MaxHashesPerFrame]. A node that holds no epoch
+// its peer speaks asks for a catch-up first, and runs the same exchange under
+// the key it grants.
 //
 // Gossip runs on the underlay, since reaching a peer over the overlay needs
 // the tunnel gossip brings up; [seal] covers the metadata that costs.
@@ -23,6 +25,7 @@ package gossip
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -30,10 +33,13 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"slices"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/nning/juist/internal/admit"
+	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -74,6 +80,11 @@ type Log interface {
 	// Inform hands received records to the log, oldest first. An error is
 	// expected in normal operation and is reported, not fatal.
 	Inform(records []types.AUM) error
+
+	// Member returns the record of a current, unexpired member other than
+	// this node, which a catch-up is granted to. An error means this node
+	// answers no catch-up at all: it is under an alarm, or no member itself.
+	Member(id types.Identity) (rec types.NodeRecord, listed bool, err error)
 }
 
 // Options configures a [Node].
@@ -88,10 +99,15 @@ type Options struct {
 	// Keyring holds the epoch secrets frames are sealed under. A node whose
 	// keyring is empty cannot gossip at all: it has not opened its own
 	// epoch secret, which means it cannot prove membership to anyone.
-	Keyring *secrets.Keyring
+	Keyring *keyring.Keyring
 
 	// Endpoints is the announcement cache, shared with the reconciler.
 	Endpoints *Cache
+
+	// CatchUp are the keys this node asks for a catch-up with, when no epoch
+	// it holds is answered, and signs its answers to one with. Nil does
+	// neither.
+	CatchUp *CatchUpKeys
 
 	// Announce returns this node's current announcement, or false if it has
 	// none yet. Called per session, so it always reflects the live one.
@@ -114,10 +130,25 @@ type Options struct {
 	// than by this one. Nil tries only what the announcement carries.
 	OverlayAddrs func(types.Identity) []netip.AddrPort
 
+	// OverlayOnly tries only OverlayAddrs, not the announced addresses: log
+	// sync through the tunnel alone, where peers listen on no other network.
+	OverlayOnly bool
+
 	// OnRecords is called after a session accepted log records, so the
 	// daemon can reconcile without waiting for its next tick. It must not
 	// block for long; it runs on the session's goroutine.
 	OnRecords func()
+
+	// Leases returns the encoded freshness leases to send a peer, and
+	// OnLeases receives a peer's, after its records have been applied so a
+	// lease naming one of them can be checked against it. Both are optional.
+	Leases   func() [][]byte
+	OnLeases func([][]byte)
+
+	// OnHave receives the record hashes a peer's hello says it holds, under
+	// the identity its announcement names. Any member can forge that, so it
+	// is for display only. It runs on the session's goroutine.
+	OnHave func(from types.Identity, have []types.Hash)
 
 	// Logf receives diagnostics. Nil discards them.
 	Logf func(format string, args ...any)
@@ -127,6 +158,11 @@ type Options struct {
 // short enough that a peer that has gone away does not hold a slot until TCP
 // gives up on its own.
 const DefaultTimeout = 20 * time.Second
+
+// DialTimeout bounds opening one connection, at most a quarter of the session
+// timeout: a peer's addresses share one budget, and a SYN into a network that
+// drops it must not spend all of it before the address that works is tried.
+const DialTimeout = 3 * time.Second
 
 // maxInboundSessions bounds concurrent inbound sessions. Excess connections
 // are closed rather than queued: the peer retries on its own timer.
@@ -152,9 +188,10 @@ const helloTimeout = 5 * time.Second
 
 // A Node runs anti-entropy for one member.
 type Node struct {
-	opts    Options
-	timeout time.Duration
-	logf    func(string, ...any)
+	opts        Options
+	timeout     time.Duration
+	dialTimeout time.Duration
+	logf        func(string, ...any)
 
 	// slots bounds inbound concurrency; a token is held for a session's
 	// lifetime.
@@ -178,10 +215,16 @@ type Node struct {
 	mu        sync.Mutex
 	peerEpoch map[types.Identity]uint64
 
-	// unauth holds, per source address and oldest first, the inbound
-	// connections that have not yet opened a frame under the group secret.
-	// Guarded by mu.
-	unauth map[netip.Addr][]*unauthConn
+	// failing holds the peers whose last outbound round reached none of
+	// their addresses, and refused those of them whose catch-up refused this
+	// node, both under mu. Entered only for peers Sync was asked to reach,
+	// which the caller draws from the membership.
+	failing map[types.Identity]bool
+	refused map[types.Identity]bool
+
+	// silent counts the inbound connections that have not yet opened a frame
+	// under the group secret.
+	silent *admit.Set[netip.Addr]
 }
 
 // New starts a gossip node. The caller runs [Node.Serve] to accept sessions.
@@ -195,15 +238,21 @@ func New(opts Options) (*Node, error) {
 		return nil, errors.New("gossip: Endpoints cache is required")
 	case opts.Listener == nil:
 		return nil, errors.New("gossip: Listener is required")
+	case opts.CatchUp != nil && (opts.CatchUp.Recipient == nil || opts.CatchUp.Identity.Public() != opts.Self):
+		return nil, errors.New("gossip: CatchUp must hold this node's own identity and recipient keys")
 	}
 	n := &Node{
 		opts:      opts,
-		timeout:   cmpOr(opts.Timeout, DefaultTimeout),
+		timeout:   cmp.Or(opts.Timeout, DefaultTimeout),
 		logf:      opts.Logf,
 		slots:     make(chan struct{}, maxInboundSessions),
 		closed:    make(chan struct{}),
 		peerEpoch: map[types.Identity]uint64{},
+		failing:   map[types.Identity]bool{},
+		refused:   map[types.Identity]bool{},
+		silent:    admit.New[netip.Addr](admit.Limits{PerSource: maxUnauthPerSource, OnSource: admit.EvictOldest}),
 	}
+	n.dialTimeout = min(DialTimeout, n.timeout/4)
 	if n.logf == nil {
 		n.logf = func(string, ...any) {}
 	}
@@ -211,14 +260,6 @@ func New(opts Options) (*Node, error) {
 		n.opts.Dial = dialTCP
 	}
 	return n, nil
-}
-
-func cmpOr[T comparable](v, fallback T) T {
-	var zero T
-	if v == zero {
-		return fallback
-	}
-	return v
 }
 
 func dialTCP(ctx context.Context, addr netip.AddrPort) (net.Conn, error) {
@@ -241,72 +282,16 @@ func (n *Node) track() bool {
 	return true
 }
 
-// unauthConn is one inbound connection that has not authenticated yet. It is
-// identified by pointer, so eviction and release cannot confuse two
-// connections from the same address.
-type unauthConn struct{ c net.Conn }
-
-// admitUnauth records a connection as not yet having said anything, evicting
-// the oldest such connection from the same address if that address is over
-// [maxUnauthPerSource]. Closing one unblocks its read, so its session ends and
-// its slot comes back.
-func (n *Node) admitUnauth(src netip.Addr, c net.Conn) *unauthConn {
-	e := &unauthConn{c: c}
-	n.mu.Lock()
-	if n.unauth == nil {
-		n.unauth = map[netip.Addr][]*unauthConn{}
-	}
-	q := n.unauth[src]
-	var evicted []*unauthConn
-	for len(q) >= maxUnauthPerSource {
-		evicted = append(evicted, q[0])
-		q = q[1:]
-	}
-	n.unauth[src] = append(q, e)
-	n.mu.Unlock()
-
-	// Closed outside the lock: Close and the logger are both other people's
-	// code, and neither belongs inside a mutex the session path takes.
-	for _, old := range evicted {
+// admitSilent counts a connection as not yet having said anything; see
+// [maxUnauthPerSource]. Closing an evicted one unblocks its read, so its
+// session ends and its slot comes back.
+func (n *Node) admitSilent(c net.Conn) *admit.Ticket[netip.Addr] {
+	t, _ := n.silent.Admit(admit.Source(c.RemoteAddr()), func() {
 		n.logf("gossip: closing a silent connection from %v: %d from that address are "+
-			"already waiting to speak", old.c.RemoteAddr(), maxUnauthPerSource)
-		old.c.Close()
-	}
-	return e
-}
-
-// releaseUnauth takes a connection off the silent budget. Safe to call twice
-// and safe on one already evicted: the session releases the moment its peer
-// authenticates, and the accept loop releases whatever is left afterwards.
-func (n *Node) releaseUnauth(src netip.Addr, e *unauthConn) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	q := n.unauth[src]
-	i := slices.Index(q, e)
-	if i < 0 {
-		return
-	}
-	q = slices.Delete(q, i, i+1)
-	if len(q) == 0 {
-		delete(n.unauth, src)
-		return
-	}
-	n.unauth[src] = q
-}
-
-// sourceAddr reduces a remote address to the host it came from. An address
-// that does not parse counts as one source, which is the safe direction: it
-// shares a budget rather than escaping one.
-func sourceAddr(a net.Addr) netip.Addr {
-	if t, ok := a.(*net.TCPAddr); ok {
-		if ip, ok := netip.AddrFromSlice(t.IP); ok {
-			return ip.Unmap()
-		}
-	}
-	if ap, err := netip.ParseAddrPort(a.String()); err == nil {
-		return ap.Addr().Unmap()
-	}
-	return netip.Addr{}
+			"already waiting to speak", c.RemoteAddr(), maxUnauthPerSource)
+		c.Close()
+	})
+	return t
 }
 
 // Serve accepts inbound sessions until [Node.Close]. It blocks.
@@ -342,15 +327,13 @@ func (n *Node) Serve() {
 			c.Close()
 			return
 		}
-		src := sourceAddr(c.RemoteAddr())
-		silent := n.admitUnauth(src, c)
+		silent := n.admitSilent(c)
 		go func() {
 			defer n.wg.Done()
 			defer func() { <-n.slots }()
-			defer n.releaseUnauth(src, silent)
+			defer silent.Release()
 			defer c.Close()
-			authed := func() { n.releaseUnauth(src, silent) }
-			if err := n.session(c, false, types.Identity{}, authed); err != nil {
+			if _, err := n.session(c, sessionOpts{authed: silent.Release}); err != nil {
 				n.logf("gossip: inbound session from %v: %v", c.RemoteAddr(), err)
 			}
 		}()
@@ -373,12 +356,73 @@ func (n *Node) Close() error {
 // SyncWith runs one anti-entropy session against a peer. peerID may be zero
 // when the peer is not known yet, in which case the frame is sealed under this
 // node's own epoch.
+//
+// A peer that hangs up on the hello without answering is one that cannot
+// open it: behind by an epoch this node has not sealed to it before, as after
+// this node rotated its own keys and restarted, when nothing remembers the
+// peer's epoch. The session is then tried again under each older epoch this
+// node still holds, newest first, and the one that works is remembered. Both
+// sides behind a change would otherwise wait for each other forever. When no
+// epoch is answered, it asks for a catch-up.
 func (n *Node) SyncWith(ctx context.Context, addr netip.AddrPort, peerID types.Identity) error {
 	ctx, cancel := context.WithTimeout(ctx, n.timeout)
 	defer cancel()
-	c, err := n.opts.Dial(ctx, addr)
+	var force uint64
+	for {
+		used, err := n.syncOnce(ctx, addr, sessionOpts{initiator: true, peerID: peerID, force: force})
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, errNoEpochHeld) {
+			return n.catchUpWith(ctx, addr, peerID, err)
+		}
+		if !errors.Is(err, errNoHelloBack) {
+			return err
+		}
+		lower, ok := n.olderEpoch(used)
+		if !ok {
+			return n.catchUpWith(ctx, addr, peerID, err)
+		}
+		force = lower
+	}
+}
+
+// CatchUpWith runs one catch-up session against a peer, whatever epochs this
+// node holds.
+func (n *Node) CatchUpWith(ctx context.Context, addr netip.AddrPort) error {
+	ctx, cancel := context.WithTimeout(ctx, n.timeout)
+	defer cancel()
+	return n.catchUpWith(ctx, addr, types.Identity{}, nil)
+}
+
+func (n *Node) catchUpWith(ctx context.Context, addr netip.AddrPort, peerID types.Identity, unanswered error) error {
+	if n.opts.CatchUp == nil {
+		if unanswered == nil {
+			return errors.New("gossip: this node holds no keys to ask for a catch-up with")
+		}
+		return unanswered
+	}
+	_, err := n.syncOnce(ctx, addr, sessionOpts{initiator: true, peerID: peerID, catchUp: true})
+	if err != nil && unanswered != nil && errors.Is(err, errNoCatchUp) {
+		return fmt.Errorf("%w, nor a catch-up", unanswered)
+	}
+	return err
+}
+
+// errNoEpochHeld is a node whose keyring is empty, which only a catch-up
+// helps.
+var errNoEpochHeld = errors.New("this node holds no epoch secret, so it cannot gossip; " +
+	"it is not a member of the epoch its log resolves to")
+
+// errNoHelloBack is a peer that closed after this node's hello, unanswered.
+var errNoHelloBack = errors.New("the peer did not answer the hello")
+
+func (n *Node) syncOnce(ctx context.Context, addr netip.AddrPort, so sessionOpts) (uint64, error) {
+	dctx, cancel := context.WithTimeout(ctx, n.dialTimeout)
+	c, err := n.opts.Dial(dctx, addr)
+	cancel()
 	if err != nil {
-		return fmt.Errorf("gossip: dialing %v: %w", addr, err)
+		return 0, fmt.Errorf("gossip: dialing %v: %w", addr, err)
 	}
 	defer c.Close()
 	// Unblock the session's blocking reads and writes when the context ends;
@@ -386,10 +430,22 @@ func (n *Node) SyncWith(ctx context.Context, addr netip.AddrPort, peerID types.I
 	// this goroutine past the timeout.
 	stop := context.AfterFunc(ctx, func() { c.Close() })
 	defer stop()
-	if err := n.session(c, true, peerID, nil); err != nil {
-		return fmt.Errorf("gossip: session with %v: %w", addr, err)
+	used, err := n.session(c, so)
+	if err != nil {
+		return used, fmt.Errorf("gossip: session with %v: %w", addr, err)
 	}
-	return nil
+	return used, nil
+}
+
+// olderEpoch returns the newest epoch this node holds below e.
+func (n *Node) olderEpoch(e uint64) (uint64, bool) {
+	held := n.opts.Keyring.Epochs()
+	for i := len(held) - 1; i >= 0; i-- {
+		if held[i] < e {
+			return held[i], true
+		}
+	}
+	return 0, false
 }
 
 // Sync runs one round against every peer it can reach, concurrently, and
@@ -429,6 +485,9 @@ func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 			// the first that completes: they are alternative paths to one
 			// peer, not several peers.
 			addrs := e.GossipAddrs()
+			if n.opts.OverlayOnly {
+				addrs = nil
+			}
 			if n.opts.OverlayAddrs != nil {
 				// Last, not first: a peer's overlay address is only routable
 				// once the tunnel is up, and a TCP connect into a tunnel that
@@ -436,14 +495,22 @@ func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 				// than failing.
 				addrs = append(addrs, n.opts.OverlayAddrs(id)...)
 			}
+			reached, refused := false, false
+			defer func() { n.noteRound(id, reached, refused) }()
 			for _, addr := range addrs {
 				if pctx.Err() != nil {
 					return
 				}
 				if err := n.SyncWith(pctx, addr, id); err != nil {
 					n.logf("%v", err)
+					if errors.Is(err, ErrCatchUpRefused) {
+						// Its log's answer, whichever address it came by.
+						refused = true
+						return
+					}
 					continue
 				}
+				reached = true
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -455,9 +522,70 @@ func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 	return ok
 }
 
+func (n *Node) noteRound(id types.Identity, reached, refused bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	switch {
+	case reached:
+		delete(n.failing, id)
+		delete(n.refused, id)
+	case refused:
+		n.failing[id] = true
+		n.refused[id] = true
+	default:
+		n.failing[id] = true
+		delete(n.refused, id)
+	}
+}
+
+// Failing reports whether the last round Sync ran against the peer reached
+// none of its addresses.
+func (n *Node) Failing(id types.Identity) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.failing[id]
+}
+
+// Refused reports whether the last round Sync ran against the peer ended in
+// its log refusing this node a catch-up. Such a peer is also [Node.Failing].
+func (n *Node) Refused(id types.Identity) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.refused[id]
+}
+
+// sessionOpts are one session's parameters. An initiator seals under force
+// when it is set, and asks for a catch-up instead of sealing under an epoch
+// when catchUp is; authed is called once an inbound peer has proved it may
+// speak.
+type sessionOpts struct {
+	initiator bool
+	peerID    types.Identity
+	authed    func()
+	force     uint64
+	catchUp   bool
+}
+
+// A sessionSeal is what one session's frames are sealed under: the epoch the
+// first frame named, or for a catch-up the key its grant carried, under
+// [catchUpEpoch], and the identity on the other side of it.
+type sessionSeal struct {
+	epoch   uint64
+	catchUp *[secrets.CatchUpKeySize]byte
+	with    types.Identity
+}
+
 // session runs the four-frame exchange. See the package comment for the
 // ordering and why it is strictly alternating.
-func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity, authed func()) error {
+//
+// It returns the epoch the session was sealed under.
+func (n *Node) session(c net.Conn, so sessionOpts) (uint64, error) {
+	var ss sessionSeal
+	err := n.runSession(c, so, &ss)
+	return ss.epoch, err
+}
+
+func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 	if err := c.SetDeadline(time.Now().Add(n.timeout)); err != nil {
 		return err
 	}
@@ -465,47 +593,113 @@ func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity, authed
 	if err != nil {
 		return fmt.Errorf("reading local log state: %w", err)
 	}
-
-	var (
-		epoch uint64 // the epoch the whole session is sealed under
-		peer  frame
-	)
-	hello := n.hello(&view)
-
-	if initiator {
-		if epoch, err = n.sealEpoch(peerID, view.Epoch); err != nil {
-			return err
-		}
-		if err := n.writeFrame(c, epoch, &hello); err != nil {
-			return err
-		}
-		if peer, err = n.readFrame(c, &epoch); err != nil {
-			return err
-		}
+	var peer frame
+	if so.initiator {
+		peer, err = n.initiatorHello(c, so, ss, &view)
 	} else {
-		// A connection that has said nothing has proved nothing, so it gets a
-		// short deadline; the full one starts once its hello is in.
-		if err := c.SetDeadline(time.Now().Add(min(helloTimeout, n.timeout))); err != nil {
-			return err
+		peer, err = n.responderHello(c, so.authed, ss, &view)
+	}
+	if err != nil {
+		return err
+	}
+	if err := n.checkHello(&peer, &view); err != nil {
+		return err
+	}
+	switch {
+	case ss.catchUp == nil:
+		n.notePeer(&peer, ss.epoch)
+		return n.swapRecords(c, ss, &view, &peer, so.initiator, n.heard(&peer))
+	case so.initiator:
+		return n.finishCatchUp(c, ss, &view, &peer)
+	default:
+		return n.answerCatchUp(c, ss, &view, &peer)
+	}
+}
+
+// initiatorHello chooses what the session is sealed under, asking for a
+// catch-up where so says to, sends this node's hello and returns the peer's.
+func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view *View) (frame, error) {
+	hello := n.hello(view)
+	var err error
+	switch {
+	case so.catchUp:
+		if ss.catchUp, ss.with, err = n.askCatchUp(c, view.Network, view.Epoch); err != nil {
+			return frame{}, err
 		}
-		if peer, err = n.readFrame(c, &epoch); err != nil {
-			return err
-		}
-		// The frame opened, so the peer holds a group secret: it is a member
-		// or was recently one, and it stops counting against the budget for
-		// connections that have said nothing.
-		if authed != nil {
-			authed()
-		}
-		if err := c.SetDeadline(time.Now().Add(n.timeout)); err != nil {
-			return err
-		}
-		// The reply goes out under the epoch the request came in on, so a
-		// peer that is behind stays able to read us for the whole session.
-		if err := n.writeFrame(c, epoch, &hello); err != nil {
-			return err
+		// Nothing about this node or the others until the peer is known to
+		// be a member; see catchup.go.
+		hello.Self, hello.Endpoints = nil, nil
+	case so.force != 0:
+		ss.epoch = so.force
+	default:
+		if ss.epoch, err = n.sealEpoch(so.peerID, view.Epoch); err != nil {
+			return frame{}, err
 		}
 	}
+	if err := n.writeSealed(c, ss, &hello); err != nil {
+		return frame{}, err
+	}
+	peer, err := n.readSealed(c, ss)
+	if err != nil && !so.catchUp && (errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)) {
+		return frame{}, fmt.Errorf("%w: %w", errNoHelloBack, err)
+	}
+	return peer, err
+}
+
+// responderHello reads the peer's hello, granting a catch-up first where
+// that is what it opens with, and answers under the same seal, so a peer
+// that is behind stays able to read this node for the whole session. authed
+// is called once the peer has proved it may speak.
+func (n *Node) responderHello(c net.Conn, authed func(), ss *sessionSeal, view *View) (frame, error) {
+	hello := n.hello(view)
+	// A connection that has said nothing has proved nothing, so it gets a
+	// short deadline, covering a catch-up's proof too; the full one starts
+	// once its hello is in.
+	if err := c.SetDeadline(time.Now().Add(min(helloTimeout, n.timeout))); err != nil {
+		return frame{}, err
+	}
+	first, err := readBlob(c)
+	if err != nil {
+		return frame{}, err
+	}
+	var peer frame
+	if isCatchUp(first) {
+		if ss.catchUp, ss.with, err = n.grantCatchUp(c, first, view); err != nil {
+			return frame{}, err
+		}
+		if err := n.authenticated(c, authed); err != nil {
+			return frame{}, err
+		}
+		if peer, err = n.readSealed(c, ss); err != nil {
+			return frame{}, err
+		}
+	} else {
+		if peer, err = n.openSealed(first, ss); err != nil {
+			return frame{}, err
+		}
+		// The frame opened, so the peer holds a group secret: it is a member
+		// or was recently one.
+		if err := n.authenticated(c, authed); err != nil {
+			return frame{}, err
+		}
+	}
+	if err := n.writeSealed(c, ss, &hello); err != nil {
+		return frame{}, err
+	}
+	return peer, nil
+}
+
+// authenticated takes an inbound peer off the budget for connections that
+// have said nothing, and gives it the full session timeout.
+func (n *Node) authenticated(c net.Conn, authed func()) error {
+	if authed != nil {
+		authed()
+	}
+	return c.SetDeadline(time.Now().Add(n.timeout))
+}
+
+// checkHello refuses a hello the session cannot go on from.
+func (n *Node) checkHello(peer *frame, view *View) error {
 	if peer.Kind != kindHello {
 		return fmt.Errorf("expected a hello, got a %v frame", peer.Kind)
 	}
@@ -522,14 +716,106 @@ func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity, authed
 		// failure in the logs.
 		return errors.New("this session reached this node itself; the address is not unique to the peer")
 	}
-	n.notePeer(&peer, epoch)
-	changed := n.takeEndpoints(peer.Self, peer.Endpoints)
+	return nil
+}
 
+// swapRecords sends the peer what its hello shows it missing and takes the
+// records it sends back, writing first where writeFirst says to and reading
+// first otherwise. changed reports that the session already cached a new
+// announcement.
+func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame, writeFirst, changed bool) error {
+	reply, err := n.records(view, peer, false)
+	if err != nil {
+		return err
+	}
+	var theirs frame
+	if writeFirst {
+		if err := n.writeSealed(c, ss, &reply); err != nil {
+			return err
+		}
+		if theirs, err = n.readRecords(c, ss, view); err != nil {
+			return err
+		}
+	} else {
+		if theirs, err = n.readRecords(c, ss, view); err != nil {
+			return err
+		}
+		if err := n.writeSealed(c, ss, &reply); err != nil {
+			return err
+		}
+	}
+	if n.takeEndpoints(theirs.Self, theirs.Endpoints) {
+		changed = true
+	}
+	applied, err := n.take(&theirs)
+	if applied || changed {
+		n.onRecords()
+	}
+	return err
+}
+
+// answerCatchUp is the responder's side of a catch-up session past the
+// hellos: its records go first, so the initiator speaks last, and only while
+// the log still lists the initiator.
+func (n *Node) answerCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *frame) error {
+	changed := n.heard(peer)
+	if err := n.stillMember(ss.with); err != nil {
+		return err
+	}
+	return n.swapRecords(c, ss, view, peer, true, changed)
+}
+
+// finishCatchUp is the initiator's side of a catch-up session past the
+// hellos: the peer's records first, then this node's, only once its log lists
+// the peer that granted it.
+func (n *Node) finishCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *frame) error {
+	theirs, err := n.readRecords(c, ss, view)
+	if err != nil {
+		return err
+	}
+	applied, applyErr := n.take(&theirs)
+	if err := n.stillMember(ss.with); err != nil {
+		if applied {
+			n.onRecords()
+		}
+		return errors.Join(err, applyErr)
+	}
+	changed := n.heard(peer)
+	if n.takeEndpoints(theirs.Self, theirs.Endpoints) {
+		changed = true
+	}
+	if after, err := n.opts.Log.View(); err == nil {
+		view = &after
+	}
+	reply, err := n.records(view, peer, true)
+	if err != nil {
+		return err
+	}
+	err = n.writeSealed(c, ss, &reply)
+	if applied || changed {
+		n.onRecords()
+	}
+	return errors.Join(err, applyErr)
+}
+
+// heard takes what a peer's hello says: which records it holds, for display,
+// and its announcements, reporting whether any were new.
+func (n *Node) heard(peer *frame) bool {
+	if n.opts.OnHave != nil && peer.Self != nil && peer.Self.Identity != n.opts.Self && peer.Self.Verify() == nil {
+		n.opts.OnHave(peer.Self.Identity, peer.Have)
+	}
+	return n.takeEndpoints(peer.Self, peer.Endpoints)
+}
+
+// records builds the frame answering a peer's hello: what it is missing, and
+// the leases. withAnnouncements adds this node's own and the ones it holds,
+// for a peer that has not had them in a hello.
+func (n *Node) records(view *View, peer *frame, withAnnouncements bool) (frame, error) {
 	// What the peer is missing is computed from the hello it just sent, so
 	// this is the same question in both directions.
 	records, err := n.opts.Log.Missing(peer.Have, peer.Anchor)
 	if err != nil {
-		return fmt.Errorf("collecting records for the peer: %w", err)
+		return frame{}, fmt.Errorf("collecting records for the peer: %w", err)
 	}
 	reply := frame{
 		Kind:    kindRecords,
@@ -548,7 +834,7 @@ func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity, authed
 	for i := range records {
 		b, err := records[i].Encode()
 		if err != nil {
-			return fmt.Errorf("encoding record %v: %w", records[i].Hash(), err)
+			return frame{}, fmt.Errorf("encoding record %v: %w", records[i].Hash(), err)
 		}
 		if len(reply.Records) > 0 && len(b) > budget {
 			break
@@ -556,41 +842,49 @@ func (n *Node) session(c net.Conn, initiator bool, peerID types.Identity, authed
 		budget -= len(b)
 		reply.Records = append(reply.Records, b)
 	}
+	if n.opts.Leases != nil {
+		reply.Leases = n.opts.Leases()
+		if len(reply.Leases) > MaxLeasesPerFrame {
+			reply.Leases = reply.Leases[:MaxLeasesPerFrame]
+		}
+	}
+	if withAnnouncements {
+		h := n.hello(view)
+		reply.Self, reply.Endpoints = h.Self, h.Endpoints
+	}
+	return reply, nil
+}
 
-	var theirs frame
-	if initiator {
-		if err := n.writeFrame(c, epoch, &reply); err != nil {
-			return err
-		}
-		if theirs, err = n.readFrame(c, &epoch); err != nil {
-			return err
-		}
-	} else {
-		if theirs, err = n.readFrame(c, &epoch); err != nil {
-			return err
-		}
-		if err := n.writeFrame(c, epoch, &reply); err != nil {
-			return err
-		}
+// readRecords reads the peer's records frame.
+func (n *Node) readRecords(c net.Conn, ss *sessionSeal, view *View) (frame, error) {
+	theirs, err := n.readSealed(c, ss)
+	if err != nil {
+		return frame{}, err
 	}
 	if theirs.Kind != kindRecords {
-		return fmt.Errorf("expected records, got a %v frame", theirs.Kind)
+		return frame{}, fmt.Errorf("expected records, got a %v frame", theirs.Kind)
 	}
 	if theirs.Network != view.Network {
-		return fmt.Errorf("peer's records frame names network %v, this node is %v",
+		return frame{}, fmt.Errorf("peer's records frame names network %v, this node is %v",
 			theirs.Network, view.Network)
 	}
-	if n.takeEndpoints(theirs.Self, theirs.Endpoints) {
-		changed = true
-	}
+	return theirs, nil
+}
 
+// take applies a records frame's records, then its leases, which may name
+// them.
+func (n *Node) take(theirs *frame) (bool, error) {
 	applied, err := n.apply(theirs.Records)
-	if applied || changed {
-		if n.opts.OnRecords != nil {
-			n.opts.OnRecords()
-		}
+	if n.opts.OnLeases != nil && len(theirs.Leases) > 0 {
+		n.opts.OnLeases(theirs.Leases)
 	}
-	return err
+	return applied, err
+}
+
+func (n *Node) onRecords() {
+	if n.opts.OnRecords != nil {
+		n.opts.OnRecords()
+	}
 }
 
 // apply decodes and offers the peer's records to the log, reporting whether
@@ -757,8 +1051,7 @@ func (n *Node) sealEpoch(peerID types.Identity, own uint64) (uint64, error) {
 	}
 	latest, _, ok := n.opts.Keyring.Latest()
 	if !ok {
-		return 0, errors.New("this node holds no epoch secret, so it cannot gossip; " +
-			"it is not a member of the epoch its log resolves to")
+		return 0, errNoEpochHeld
 	}
 	return latest, nil
 }
@@ -768,41 +1061,86 @@ func (n *Node) sealEpoch(peerID types.Identity, own uint64) (uint64, error) {
 // Frames on the stream are length-prefixed sealed blobs. The prefix is
 // checked against the sealed-size limit before a single byte is buffered, so
 // a peer cannot announce a gigabyte and have this node try to hold it.
-func (n *Node) writeFrame(c net.Conn, epoch uint64, f *frame) error {
+func (n *Node) writeSealed(c net.Conn, ss *sessionSeal, f *frame) error {
 	pt, err := encode(f)
 	if err != nil {
 		return err
 	}
-	s, ok := n.opts.Keyring.Secret(epoch)
-	if !ok {
-		return fmt.Errorf("gossip: no secret for epoch %d, which this session is sealed under", epoch)
+	var blob []byte
+	if ss.catchUp != nil {
+		blob, err = aead.Seal(*ss.catchUp, catchUpEpoch, pt)
+	} else {
+		s, ok := n.opts.Keyring.Secret(ss.epoch)
+		if !ok {
+			return fmt.Errorf("gossip: no secret for epoch %d, which this session is sealed under", ss.epoch)
+		}
+		blob, err = seal(s, ss.epoch, pt)
 	}
-	blob, err := seal(s, epoch, pt)
 	if err != nil {
 		return err
 	}
+	return writeBlob(c, blob, f.Kind.String())
+}
+
+func writeBlob(c net.Conn, blob []byte, what string) error {
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(blob)))
 	if _, err := c.Write(hdr[:]); err != nil {
-		return fmt.Errorf("gossip: writing a %v frame: %w", f.Kind, err)
+		return fmt.Errorf("gossip: writing a %v frame: %w", what, err)
 	}
 	if _, err := c.Write(blob); err != nil {
-		return fmt.Errorf("gossip: writing a %v frame: %w", f.Kind, err)
+		return fmt.Errorf("gossip: writing a %v frame: %w", what, err)
 	}
 	return nil
 }
 
-// readFrame reads one frame. epoch is in and out: zero on a session's first
-// call, taking the epoch the peer sealed under, and checked afterwards, so a
-// session cannot be walked from one epoch's key to another's.
-func (n *Node) readFrame(c net.Conn, epoch *uint64) (frame, error) {
+// readSealed reads one frame. A session sealed under an epoch takes it from
+// its first frame and holds every later one to it, so a session cannot be
+// walked from one epoch's key to another's.
+func (n *Node) readSealed(c net.Conn, ss *sessionSeal) (frame, error) {
+	blob, err := readBlob(c)
+	if err != nil {
+		return frame{}, err
+	}
+	return n.openSealed(blob, ss)
+}
+
+func (n *Node) openSealed(blob []byte, ss *sessionSeal) (frame, error) {
+	if ss.catchUp != nil {
+		if len(blob) > maxSealedSize {
+			return frame{}, fmt.Errorf("gossip: sealed frame is %d bytes, over the %d limit", len(blob), maxSealedSize)
+		}
+		if !isCatchUp(blob) {
+			return frame{}, errors.New("gossip: a catch-up session's frame is sealed under an epoch")
+		}
+		pt, err := aead.Open(*ss.catchUp, blob)
+		if err != nil {
+			return frame{}, fmt.Errorf("gossip: catch-up frame: %w", err)
+		}
+		return decodeFrame(pt)
+	}
+	got, pt, err := open(n.opts.Keyring, blob)
+	if err != nil {
+		return frame{}, err
+	}
+	if ss.epoch == 0 {
+		ss.epoch = got
+	} else if got != ss.epoch {
+		return frame{}, fmt.Errorf("gossip: session began at epoch %d and this frame is sealed under %d",
+			ss.epoch, got)
+	}
+	return decodeFrame(pt)
+}
+
+// readBlob reads one length-prefixed blob off the stream.
+func readBlob(c net.Conn) ([]byte, error) {
 	var hdr [4]byte
 	if _, err := io.ReadFull(c, hdr[:]); err != nil {
-		return frame{}, fmt.Errorf("gossip: reading a frame header: %w", err)
+		return nil, fmt.Errorf("gossip: reading a frame header: %w", err)
 	}
 	size := binary.BigEndian.Uint32(hdr[:])
 	if size > maxSealedSize {
-		return frame{}, fmt.Errorf("gossip: peer announced a %d-byte frame, over the %d limit",
+		return nil, fmt.Errorf("gossip: peer announced a %d-byte frame, over the %d limit",
 			size, maxSealedSize)
 	}
 	// Grown as bytes arrive, never allocated from the announced size: that
@@ -810,19 +1148,9 @@ func (n *Node) readFrame(c net.Conn, epoch *uint64) (frame, error) {
 	// hundreds of megabytes here by announcing frames it never sends.
 	blob, err := readN(c, int(size))
 	if err != nil {
-		return frame{}, fmt.Errorf("gossip: reading a frame body: %w", err)
+		return nil, fmt.Errorf("gossip: reading a frame body: %w", err)
 	}
-	got, pt, err := open(n.opts.Keyring, blob)
-	if err != nil {
-		return frame{}, err
-	}
-	if *epoch == 0 {
-		*epoch = got
-	} else if got != *epoch {
-		return frame{}, fmt.Errorf("gossip: session began at epoch %d and this frame is sealed under %d",
-			*epoch, got)
-	}
-	return decodeFrame(pt)
+	return blob, nil
 }
 
 // readN reads exactly n bytes, growing its buffer as they arrive, so an

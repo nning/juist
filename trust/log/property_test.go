@@ -43,6 +43,22 @@ func TestResolutionIsOrderIndependent(t *testing.T) {
 	}
 }
 
+// TestGeneratorIsReproducible: a seed names one record set, hashes included,
+// or a failing seed would not replay the fork choices that failed.
+func TestGeneratorIsReproducible(t *testing.T) {
+	a, b := newGenerator(t, 3), newGenerator(t, 3)
+	a.run(24)
+	b.run(24)
+	if len(a.records) != len(b.records) {
+		t.Fatalf("one seed generated %d and %d records", len(a.records), len(b.records))
+	}
+	for i := range a.records {
+		if a.records[i].Hash() != b.records[i].Hash() {
+			t.Fatalf("record %d differs between two runs of one seed", i)
+		}
+	}
+}
+
 // TestIncrementalDeliveryNeverRegresses models gossip: records arrive one at a
 // time in arbitrary order. The epoch must never go backwards, a rejected
 // record must leave nothing behind, and the store must reopen to what it
@@ -99,16 +115,19 @@ func TestIncrementalDeliveryNeverRegresses(t *testing.T) {
 }
 
 // generator builds random but valid record sets, including forks, by keeping
-// every state it has produced and sometimes building against an old one.
+// every state it has produced and sometimes building against an old one. It
+// draws every kind but genesis and schema upgrades: the network starts at the
+// current schema.
 type generator struct {
-	t       *testing.T
-	rng     *rand.Rand
-	admin   types.PrivateIdentity
-	genesis types.AUM
-	states  []*State
-	records []types.AUM
-	nodeIDs map[types.Identity]types.PrivateIdentity
-	counter byte
+	t        *testing.T
+	rng      *rand.Rand
+	genesis  types.AUM
+	states   []*State
+	encoded  [][]byte // each state's snapshot as it was made
+	records  []types.AUM
+	adminIDs map[types.Identity]types.PrivateIdentity
+	nodeIDs  map[types.Identity]types.PrivateIdentity
+	counter  byte
 }
 
 func newGenerator(t *testing.T, seed uint64) *generator {
@@ -122,12 +141,13 @@ func newGenerator(t *testing.T, seed uint64) *generator {
 		t.Fatalf("applying genesis: %v", err)
 	}
 	return &generator{
-		t:       t,
-		rng:     rand.New(rand.NewPCG(seed, 0)),
-		admin:   admin,
-		genesis: genesis,
-		states:  []*State{root},
-		nodeIDs: map[types.Identity]types.PrivateIdentity{},
+		t:        t,
+		rng:      rand.New(rand.NewPCG(seed, 0)),
+		genesis:  genesis,
+		states:   []*State{root},
+		encoded:  [][]byte{root.Snapshot().Encode()},
+		adminIDs: map[types.Identity]types.PrivateIdentity{admin.Public(): admin},
+		nodeIDs:  map[types.Identity]types.PrivateIdentity{},
 	}
 }
 
@@ -145,8 +165,29 @@ func (g *generator) run(steps int) {
 		if rec, next, ok := g.step(base); ok {
 			g.records = append(g.records, rec)
 			g.states = append(g.states, next)
+			g.encoded = append(g.encoded, next.Snapshot().Encode())
 		}
 	}
+}
+
+func (g *generator) next() byte {
+	g.counter++
+	return g.counter
+}
+
+// freeV4 draws an address in base's range that no member holds.
+func (g *generator) freeV4(base *State) (netip.Addr, bool) {
+	r := base.V4Range()
+	for range 8 {
+		a := r.Addr()
+		for range 1 + g.rng.IntN(200) {
+			a = a.Next()
+		}
+		if r.Contains(a) && !base.v4Holder(a) {
+			return a, true
+		}
+	}
+	return netip.Addr{}, false
 }
 
 // step builds one random record against base, returning it and the state it
@@ -154,70 +195,132 @@ func (g *generator) run(steps int) {
 // expected and simply skipped.
 func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	b := NewBuilder(base)
-	members := base.Nodes()
+	members, admins := base.Nodes(), base.Admins()
+	var victim types.NodeRecord
+	if len(members) > 0 {
+		victim = members[g.rng.IntN(len(members))]
+	}
+	holder := admins[g.rng.IntN(len(admins))]
 	var aum types.AUM
 	var err error
-	var selfSign *types.PrivateIdentity
+	var devices []types.PrivateIdentity
 
-	switch g.rng.IntN(7) {
-	case 0, 1: // admit a member
-		g.counter++
-		node := fixedNode(g.counter)
-		g.nodeIDs[node.Identity] = fixedIdentity(100 + g.counter)
-		aum, err = b.AddNode(node, testSealer())
+	op := g.rng.IntN(17)
+	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14}, op) {
+		return types.AUM{}, nil, false
+	}
+	switch op {
+	case 0, 1: // admit a member, sometimes at an address of its own or as an admin device
+		n := g.next()
+		node := fixedNode(n)
+		g.nodeIDs[node.Identity] = fixedIdentity(100 + n)
+		if v4, ok := g.freeV4(base); ok && g.rng.IntN(2) == 0 {
+			node.V4 = &v4
+		}
+		if g.rng.IntN(3) == 0 {
+			node.Roles = []types.Role{types.RoleAdmin}
+		}
+		aum, err = b.AddNode(node, fixedSealer())
 	case 2: // revoke a member
-		if len(members) == 0 {
-			return types.AUM{}, nil, false
-		}
-		aum, err = b.RemoveNode(members[g.rng.IntN(len(members))].Identity, testSealer())
+		aum, err = b.RemoveNode(victim.Identity, fixedSealer())
 	case 3: // grant or withdraw roles and routes
-		if len(members) == 0 {
-			return types.AUM{}, nil, false
-		}
-		victim := members[g.rng.IntN(len(members))].Identity
-		if g.rng.IntN(2) == 0 {
-			aum, err = b.SetNodeRoutes(victim,
+		switch g.rng.IntN(3) {
+		case 0:
+			aum, err = b.SetNodeRoutes(victim.Identity,
 				[]types.Role{types.RoleExitNode, types.RoleRelayCapable},
 				[]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("192.168.0.0/16")})
-		} else {
-			aum, err = b.SetNodeRoutes(victim, nil, nil)
+		case 1:
+			aum, err = b.SetNodeRoutes(victim.Identity, []types.Role{types.RoleAdmin}, nil)
+		default:
+			aum, err = b.SetNodeRoutes(victim.Identity, nil, nil)
 		}
 	case 4: // rotate a member's keys
-		if len(members) == 0 {
+		fresh := fixedNode(g.next())
+		devices = []types.PrivateIdentity{g.nodeIDs[victim.Identity]}
+		aum, err = b.RotateNodeKey(victim.Identity, types.NodeKeys{
+			WireGuard: fresh.WireGuard, X25519: fresh.X25519, MLKEM: fresh.MLKEM,
+		}, fixedSealer())
+	case 5: // move a member to a new identity
+		fresh := fixedIdentity(100 + g.next())
+		g.nodeIDs[fresh.Public()] = fresh
+		devices = []types.PrivateIdentity{g.nodeIDs[victim.Identity], fresh}
+		aum, err = b.RotateIdentity(victim.Identity, fresh.Public(), fixedSealer())
+	case 6: // rotate the group secret
+		aum, err = b.EpochBump(fixedSealer())
+	case 7: // settle ordering with a checkpoint
+		aum, err = b.Checkpoint()
+	case 8: // add an admin key, of its own holder or another's
+		n := g.next()
+		priv := fixedIdentity(200 + n)
+		g.adminIDs[priv.Public()] = priv
+		k := types.AdminKey{Public: priv.Public(), Votes: 1, Holder: fmt.Sprintf("h%d", n)}
+		if g.rng.IntN(2) == 0 && holder.Holder != "" {
+			k.Holder, k.Votes, k.Needed = holder.Holder, holder.Votes, holder.Needed
+		}
+		aum, err = b.AddAdminKey(k)
+	case 9: // remove an admin key
+		aum, err = b.RemoveAdminKey(holder.Public)
+	case 10: // move the quorum
+		aum, err = b.SetQuorum(1 + uint32(g.rng.IntN(int(max(base.TotalVotes(), 1)))))
+	case 11: // change what a holder casts
+		if holder.Holder == "" {
 			return types.AUM{}, nil, false
 		}
-		victim := members[g.rng.IntN(len(members))]
-		g.counter++
-		fresh := fixedNode(g.counter)
-		priv, ok := g.nodeIDs[victim.Identity]
+		aum, err = b.SetHolder(types.HolderPolicy{Name: holder.Holder,
+			Votes: 1 + uint32(g.rng.IntN(3)), Needed: 1 + uint32(g.rng.IntN(2))})
+	case 12: // move the vouching threshold, once there is an admin device
+		switch admins := len(base.NodesWithRole(types.RoleAdmin)); {
+		case admins > 0:
+			aum, err = b.SetVouchers(1 + uint32(g.rng.IntN(admins)))
+		case len(members) > 0:
+			aum, err = b.SetNodeRoutes(victim.Identity, []types.Role{types.RoleAdmin}, nil)
+		default:
+			return types.AUM{}, nil, false
+		}
+	case 13: // renumber the network
+		prefix := netip.MustParsePrefix([]string{"10.7.0.0/22", "10.9.0.0/22", "10.11.0.0/22"}[g.rng.IntN(3)])
+		a := prefix.Addr()
+		var addrs []types.MemberV4
+		for _, m := range members {
+			a = a.Next()
+			addrs = append(addrs, types.MemberV4{Identity: m.Identity, V4: a})
+		}
+		aum, err = b.RenumberNetwork(prefix, addrs, 1000)
+	case 14: // move one member
+		v4, ok := g.freeV4(base)
 		if !ok {
 			return types.AUM{}, nil, false
 		}
-		selfSign = &priv
-		aum, err = b.RotateNodeKey(victim.Identity, types.NodeKeys{
-			WireGuard: fresh.WireGuard, X25519: fresh.X25519, MLKEM: fresh.MLKEM,
-		}, testSealer())
-	case 5: // rotate the group secret
-		aum, err = b.EpochBump(testSealer())
-	case 6: // settle ordering with a checkpoint
-		aum, err = b.Checkpoint()
+		aum, err = b.RenumberNode(victim.Identity, v4, 1000)
+	case 15: // retire what renumberings left
+		aum, err = b.RetireAddresses()
+	case 16: // rename the network
+		aum, err = b.RenameNetwork([]string{"alpha", "bravo", "charlie"}[g.rng.IntN(3)])
 	}
-	if err != nil {
+	if err != nil || !g.sign(&aum, base, devices) {
 		return types.AUM{}, nil, false
-	}
-	if err := aum.Sign(g.admin); err != nil {
-		g.t.Fatalf("signing: %v", err)
-	}
-	if selfSign != nil {
-		if err := aum.Sign(*selfSign); err != nil {
-			g.t.Fatalf("self-signing: %v", err)
-		}
 	}
 	next, err := base.apply(&aum, aum.Hash(), applyChain)
 	if err != nil {
 		return types.AUM{}, nil, false
 	}
 	return aum, next, true
+}
+
+// sign signs a record with every admin key of base the generator holds, and
+// with the device keys it needs, reporting whether that authorizes it.
+func (g *generator) sign(aum *types.AUM, base *State, devices []types.PrivateIdentity) bool {
+	for _, k := range base.Admins() {
+		if priv, ok := g.adminIDs[k.Public]; ok {
+			if err := aum.Sign(priv); err != nil {
+				g.t.Fatalf("signing: %v", err)
+			}
+		}
+	}
+	if err := SignAsDevice(aum, base.Schema(), devices...); err != nil {
+		g.t.Fatalf("signing as the device: %v", err)
+	}
+	return verifyAgainst(aum, base) == nil
 }
 
 // topological returns the records in a random order in which every record's

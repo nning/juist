@@ -6,6 +6,9 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
+
+	"github.com/nning/juist/internal/statedir"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
@@ -280,6 +283,44 @@ func TestAFullScanDoesNotCrowdOutTheReflexiveAddress(t *testing.T) {
 	}
 }
 
+// TestTheDataPlanesAddressesPassTheScansFilter: magicsock reads the host's
+// interfaces too and leaves out only Tailscale's ranges, so without the scan's
+// filter a device announces its own overlay addresses, and peers send its
+// tunnel's traffic to the underlay at them.
+func TestTheDataPlanesAddressesPassTheScansFilter(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	reflexive := netip.MustParseAddrPort("198.51.100.7:33445")
+	var overlay []netip.AddrPort
+	for _, p := range f.auth.State().Addrs(f.self.record.Identity, time.Now().Unix()) {
+		overlay = append(overlay, netip.AddrPortFrom(p.Addr(), 41641))
+	}
+	if len(overlay) == 0 {
+		t.Fatal("the device holds no overlay address")
+	}
+	f.mgr.mu.Lock()
+	f.mgr.eps = append(slices.Clone(overlay), reflexive)
+	f.mgr.mu.Unlock()
+
+	e, ok := f.d.announcement()
+	if !ok {
+		t.Fatal("no announcement")
+	}
+	for _, ap := range overlay {
+		if slices.Contains(e.Addrs, ap) {
+			t.Errorf("the announcement carries the overlay address %v: %v", ap, e.Addrs)
+		}
+	}
+	if !slices.Contains(e.Addrs, reflexive) {
+		t.Errorf("the reflexive address was dropped: %v", e.Addrs)
+	}
+
+	bridge := netip.MustParseAddr("172.17.0.1")
+	got := f.d.reachableLearned([]netip.AddrPort{netip.AddrPortFrom(bridge, 41641), reflexive}, []netip.Addr{bridge})
+	if !slices.Equal(got, []netip.AddrPort{reflexive}) {
+		t.Errorf("an address on an internal interface survived: %v", got)
+	}
+}
+
 // TestThisDeviceRelaysOnlyWhereTheLogSaysSo: running a relay is a standing
 // offer of this member's bandwidth, so it follows the grant rather than local
 // configuration — and the announcement has to carry where it listens, or the
@@ -373,6 +414,42 @@ func TestOnlyUnheardMembersAreLookedUp(t *testing.T) {
 	}
 }
 
+// TestAMemberWhoseTunnelIsDownIsLookedUpAgain: an announcement held can name
+// a disco key its member replaced when it restarted, and then its pings are
+// dropped unread on both sides. Holding it must not stop the lookup that
+// would bring the current one; a member that answers is still not asked
+// after.
+func TestAMemberWhoseTunnelIsDownIsLookedUpAgain(t *testing.T) {
+	f := newReconcileFixture(t, 4)
+	for i, dev := range f.nw.devices[1:] {
+		f.learn(t, dev, uint16(4001+i))
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	peer := func(i int) conn.Peer {
+		want := conn.NodePublicFromRaw32([32]byte(f.nw.devices[i].record.WireGuard))
+		for _, p := range f.mgr.snapshot() {
+			if p.NodeKey == want {
+				return p
+			}
+		}
+		t.Fatalf("device %d is not installed", i)
+		return conn.Peer{}
+	}
+	fresh, answering := peer(1), peer(2)
+	f.mgr.mu.Lock()
+	f.mgr.tunnels = map[uint64]conn.Tunnel{fresh.ID: {LastHandshake: time.Now()}}
+	f.mgr.answers = map[netip.Addr]bool{answering.Addrs[0].Addr(): true}
+	f.mgr.mu.Unlock()
+
+	f.d.refreshReach(t.Context())
+	got := f.d.wanted()
+	if want := []types.Identity{f.nw.devices[3].record.Identity}; !slices.Equal(got, want) {
+		t.Errorf("wanted = %v, want only the member whose tunnel does not answer", got)
+	}
+}
+
 // TestAnAnnouncementFoundInTheDHTIsActedOn: where a record came from decides
 // nothing but the log line — its authority is its signature — so the
 // rendezvous path must reach the reconciler exactly as the LAN path does.
@@ -414,7 +491,7 @@ func TestAnAnnouncementFoundInTheDHTIsActedOn(t *testing.T) {
 // peers were before it stopped, without a rendezvous round trip per peer.
 func TestTheEndpointCacheSurvivesARestart(t *testing.T) {
 	dir := t.TempDir()
-	path := EndpointCachePath(dir)
+	path := statedir.EndpointCachePath(dir)
 
 	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.EndpointCachePath = path })
 	other := f.nw.devices[1]
@@ -467,7 +544,7 @@ func TestTheEndpointCacheSurvivesARestart(t *testing.T) {
 // point every peer entry wherever they liked.
 func TestAnEditedEndpointCacheIsIgnored(t *testing.T) {
 	dir := t.TempDir()
-	path := EndpointCachePath(dir)
+	path := statedir.EndpointCachePath(dir)
 
 	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.EndpointCachePath = path })
 	other := f.nw.devices[1]
@@ -533,16 +610,16 @@ func TestARelayStopsWhenMembershipCannotBeRead(t *testing.T) {
 		t.Fatal("a member would be refused before the fork")
 	}
 
-	// Two conflicting removals with the same parent: the loser is a
-	// revocation, which is what trust/log refuses to resolve.
+	// A removal and a grant to the same member with the same parent, which
+	// trust/log refuses to resolve.
 	a, b := f.nw.devices[1], f.nw.devices[2]
-	first := f.nw.removeNode(t, f.auth, a.record.Identity)
-	second := f.nw.removeNode(t, f.auth, b.record.Identity)
+	first, second := f.nw.conflictingFork(t, f.auth, a.record.Identity)
+	_ = b
 	if err := f.auth.Inform(first, second); err != nil {
 		t.Fatalf("informing the fork: %v", err)
 	}
 	if f.auth.Alarm() == nil {
-		t.Fatal("two conflicting revocations did not raise a fork alarm")
+		t.Fatal("a conflicting fork did not raise an alarm")
 	}
 	if err := f.d.Reconcile(); err == nil {
 		t.Fatal("reconcile succeeded under a fork alarm")
@@ -643,5 +720,60 @@ func TestTheRelayFloorIsReported(t *testing.T) {
 	if st := f.d.Status(); st.RelayCapable != 1 || st.Relays != 1 {
 		t.Errorf("RelayCapable=%d Relays=%d after the announcement, want 1 and 1",
 			st.RelayCapable, st.Relays)
+	}
+}
+
+// An invite waits at the relays of other members the log makes
+// relay-capable and whose announcement says where, with the certificate each
+// announced; not at a member's that only announces, nor at its own.
+func TestAnInviteWaitsAtTheMembersRelays(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	relayDev, plain := f.nw.devices[1], f.nw.devices[2]
+	f.learnRelay(t, relayDev, 41641, testRelayInfo())
+	f.learnRelay(t, plain, 41641, testRelayInfo())
+	if got := f.d.inviteRelays(f.auth.State()); len(got) != 0 {
+		t.Fatalf("an invite would wait at %d relays nobody granted", len(got))
+	}
+	f.nw.setRoles(t, f, relayDev.record.Identity, types.RoleRelayCapable)
+	got := f.d.inviteRelays(f.auth.State())
+	if len(got) != 1 {
+		t.Fatalf("an invite would wait at %d relays, want 1", len(got))
+	}
+	if got[0].CertHash != [32]byte(bytes.Repeat([]byte{7}, 32)) || got[0].ServerName != "abcdefgh.relay.juist.invalid" ||
+		!slices.Contains(got[0].Addrs, netip.MustParseAddrPort("192.0.2.10:4443")) {
+		t.Fatalf("the relay to wait at is %+v", got[0])
+	}
+}
+
+// A member nobody holds an announcement for, such as one just admitted, is
+// looked up alongside members that are down, and one that stays down is
+// looked up ever less often, but at least once an hour.
+func TestLookupsPreferTheUnheardAndBackOffTheDown(t *testing.T) {
+	c := &clock{now: time.Unix(1_700_000_000, 0)}
+	f := newReconcileFixtureWith(t, 3, func(o *Options) { o.Clock = c.get })
+	f.learn(t, f.nw.devices[2], 4002)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	f.d.refreshReach(t.Context()) // device 2 installed, answering nothing
+	unheard, down := f.nw.devices[1].record.Identity, f.nw.devices[2].record.Identity
+	if got := f.d.wanted(); !slices.Contains(got, unheard) || !slices.Contains(got, down) {
+		t.Fatalf("wanted = %v, want the member not heard from and the one down", got)
+	}
+	start := c.get()
+	var asked []time.Duration
+	for s := time.Duration(0); s <= 3*time.Hour; s += 10 * time.Second {
+		c.set(start.Add(s))
+		if slices.Contains(f.d.wanted(), down) {
+			asked = append(asked, s)
+		}
+	}
+	for i := 2; i < len(asked); i++ {
+		if gap, prev := asked[i]-asked[i-1], asked[i-1]-asked[i-2]; gap > time.Hour || gap < prev {
+			t.Fatalf("lookups after %v: gaps must grow, up to the hour", asked)
+		}
+	}
+	if len(asked) < 5 || asked[len(asked)-1] < 2*time.Hour {
+		t.Fatalf("lookups after %v: a member down for hours is still looked up", asked)
 	}
 }

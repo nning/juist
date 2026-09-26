@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -160,7 +161,7 @@ func TestSignRefusesTheWrongKey(t *testing.T) {
 
 func TestFrameSealRoundTrip(t *testing.T) {
 	s := testSecret(t)
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(5, s)
 
 	f := frame{Kind: kindHello, Network: types.Hash{3}, Epoch: 5, Head: types.Hash{4}, Anchor: types.Hash{5}}
@@ -192,7 +193,7 @@ func TestFrameSealRoundTrip(t *testing.T) {
 // node that holds both keys.
 func TestFrameSealBindsItsEpoch(t *testing.T) {
 	s := testSecret(t)
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(5, s)
 	kr.Adopt(6, s)
 
@@ -208,7 +209,7 @@ func TestFrameSealBindsItsEpoch(t *testing.T) {
 
 func TestFrameSealRejectsUnknownEpoch(t *testing.T) {
 	s := testSecret(t)
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(5, s)
 	blob, err := seal(s, 9, []byte("payload"))
 	if err != nil {
@@ -221,7 +222,7 @@ func TestFrameSealRejectsUnknownEpoch(t *testing.T) {
 
 func TestFrameSealRejectsTampering(t *testing.T) {
 	s := testSecret(t)
-	kr := secrets.NewKeyring()
+	kr := keyring.New()
 	kr.Adopt(5, s)
 	blob, err := seal(s, 5, []byte("payload"))
 	if err != nil {
@@ -282,6 +283,25 @@ func TestCacheKeepsTheNewestAnnouncement(t *testing.T) {
 	if c.Add(e) {
 		t.Error("the same announcement was accepted twice")
 	}
+
+	renewed := *e.Clone()
+	renewed.Seq = e.Seq + 1
+	if err := renewed.Sign(priv); err != nil {
+		t.Fatal(err)
+	}
+	if c.Renews(e.Identity) {
+		t.Error("a node is taken to renew before it has")
+	}
+	if c.Add(renewed) {
+		t.Error("an announcement renewing its signature only was reported as news")
+	}
+	if !c.Renews(e.Identity) {
+		t.Error("a node seen renewing is not taken to renew")
+	}
+	if got, _ := c.Get(e.Identity); got.Seq != renewed.Seq {
+		t.Error("the renewed announcement was not kept")
+	}
+	e = renewed
 
 	older := *e.Clone()
 	older.Seq = e.Seq - 1

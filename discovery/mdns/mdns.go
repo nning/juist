@@ -35,6 +35,7 @@ import (
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 )
 
@@ -85,7 +86,7 @@ type Options struct {
 	// Keyring holds the epoch secrets. Every epoch in it yields a name this
 	// node answers to, which is what keeps discovery working across the
 	// window where members are one epoch apart.
-	Keyring *secrets.Keyring
+	Keyring *keyring.Keyring
 
 	// Announce returns this node's current announcement, or false if it has
 	// none yet.

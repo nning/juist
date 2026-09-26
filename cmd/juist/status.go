@@ -1,140 +1,450 @@
 package main
 
 import (
+	"cmp"
 	"errors"
-	"flag"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/user"
+	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/nning/juist/daemon"
+	"github.com/nning/juist/ipc"
+
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/types"
 )
 
-func cmdStatus(h *home, args []string) error {
-	fs := flag.NewFlagSet("juist status", flag.ContinueOnError)
-	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, `Usage: juist status
-
-Asks the local daemon what state it is in: which network, where its chain is,
-how many members the log carries, and how many of them it currently has a
-WireGuard peer for.
-
-The gap between those last two is the normal shape of a mesh coming up: a
-member the log carries but that has not been heard from yet is counted as
-unreachable, not as denied.
-`)
+func cmdStatus(a *app, args []string) error {
+	s := spec{name: "juist status", about: `
+Show this device's network, which devices it reaches, and what needs
+attention. Any local user may run it.`}
+	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
+		return err
 	}
-	if err := fs.Parse(args); err != nil {
-		return parseResult(err)
-	}
-	resp, err := daemon.Call(daemon.SocketPath(h.path), daemon.Request{Command: daemon.CmdStatus})
+	n, err := a.openNode()
 	if err != nil {
-		return describeCallFailure(h, err)
+		return err
 	}
-	printStatus(resp.Status)
+	st := n.status()
+	if st == nil {
+		return a.offlineStatus(n)
+	}
+	a.printStatus(st)
 	return nil
 }
 
-func printStatus(s *daemon.Status) {
-	if s == nil {
-		// A well-formed reply always carries one of Status or Err, and Err is
-		// turned into an error before this is reached. A reply with neither is
-		// a daemon that does not speak this protocol version.
-		fmt.Fprintln(os.Stderr, "the daemon replied without a status; it may be a different version")
-		return
+// offlineStatus reports what the log says when no daemon is there to ask.
+func (a *app) offlineStatus(n node) error {
+	auth, err := n.log()
+	if err != nil {
+		return err
 	}
-	fmt.Printf("network      %s (%v)\n", s.NetworkName, s.Network)
-	fmt.Printf("this node    %v\n", s.Self.ShortString())
-	for _, a := range s.Addrs {
-		fmt.Printf("overlay      %v\n", a.Addr())
+	state := auth.State()
+	a.printf("%s · %s\n", a.bold(state.Network()), "juistd not running")
+	k, err := a.home.optionalNodeKeys()
+	if err != nil {
+		return err
 	}
-	fmt.Printf("head         %v\n", s.Head)
-	fmt.Printf("epoch        %d\n", s.Epoch)
-	fmt.Printf("members      %d\n", s.Members)
-	fmt.Printf("peers up     %d\n", s.Peers)
-	if s.Relays > 0 || s.Relaying || s.RelayCapable > 0 {
-		line := fmt.Sprintf("relays       %d of %d granted", s.Relays, s.RelayCapable)
-		if s.Relaying {
-			line += ", including this node"
+	if k != nil {
+		if self, ok := state.Node(k.Identity.Public()); ok {
+			a.field("This device", "%s  %s", displayMember(self), addrList(state, self.Identity))
+		} else {
+			a.field("This device", "not a member")
 		}
-		fmt.Println(line)
 	}
-	if s.Unreachable > 0 {
-		fmt.Printf("unreachable  %d (members this node has not heard from yet)\n", s.Unreachable)
+	a.field("Devices", "%d", len(state.Nodes()))
+	a.startHint()
+	return nil
+}
+
+func (a *app) printStatus(s *ipc.Status) {
+	v := statusOf(s, a.now(), a.paint)
+	a.emit(v.head)
+	if v.devices {
+		a.printf("\n")
+		_ = a.printDevices(s.Devices, s.Self, s, false)
 	}
-	if s.Conflicted > 0 {
-		fmt.Printf("conflicted   %d (members announcing a NAT-traversal key another member claims)\n",
-			s.Conflicted)
+	if len(v.notes) > 0 {
+		a.printf("\n")
+		a.emit(v.notes)
 	}
-	fmt.Printf("data plane   udp/%d\n", s.ListenPort)
-	fmt.Printf("log sync     tcp/%d\n", s.GossipPort)
-	if s.LastReconcile > 0 {
-		fmt.Printf("reconciled   %s ago\n",
-			time.Since(time.Unix(s.LastReconcile, 0)).Round(time.Second))
-	}
-	if s.NotMember {
-		fmt.Printf("\nWARNING: this device is not in the member set (removed, or past its expiry).\n")
-		fmt.Printf("Its tunnels are down. Rejoining takes an admin enrolling it again.\n")
-	}
-	if s.StaleKeys {
-		fmt.Printf("\nWARNING: the log names different keys for this device than the daemon holds.\n")
-		fmt.Printf("A key rotation was applied while it ran; restart juistd to pick up the promoted keys.\n")
-	}
-	if s.EpochError != "" {
-		fmt.Printf("\nWARNING: this node cannot open the current group secret: %s\n", s.EpochError)
-		fmt.Printf("It keeps its tunnels but is cut off from discovery and log sync.\n")
-	}
-	if s.DataPlaneError != "" {
-		fmt.Printf("\nWARNING: the data plane did not take the peer set: %s\n", s.DataPlaneError)
-	}
-	// The floor docs/04-architecture.md sets. It is not a capacity model:
-	// relay demand tracks the number of pairs that cannot be punched, which
-	// nothing here measures. One relay is a network that loses its fallback
-	// path whenever that member is off.
-	if s.RelayCapable < 2 && !s.NotMember && s.Alarm == "" {
-		fmt.Printf("\nNOTE: this network has %d relay-capable member(s).\n", s.RelayCapable)
-		fmt.Printf("Two members that cannot punch through their NATs need a third to relay,\n")
-		fmt.Printf("and below two there is no fallback when one is offline. Grant the role\n")
-		fmt.Printf("with \"juist propose set-routes -identity nid:… -roles relay-capable\"\n")
-		fmt.Printf("on a member with a public address.\n")
-	}
-	if s.SchemaAlarm != "" {
-		fmt.Printf("\nALARM: %s\n", s.SchemaAlarm)
-		fmt.Printf("This device still holds the state from before that record and still\n")
-		fmt.Printf("carries traffic, but it will apply nothing further — including removals.\n")
-	}
-	if s.Alarm != "" {
-		fmt.Printf("\nALARM: %s\n", s.Alarm)
-		fmt.Printf("No peers are configured while this is unresolved.\n")
+	if !s.CanOperate {
+		a.hint("read-only; to manage this device: sudo juist set --operator=%s", currentUser())
 	}
 }
 
-// describeCallFailure turns "the socket did not answer" into the three
-// situations it actually is. They need different responses, and the syscall
-// error distinguishes them but says so in a way that reads like a bug.
-func describeCallFailure(h *home, err error) error {
-	sock := daemon.SocketPath(h.path)
-	if noDaemon(err) {
-		return fmt.Errorf("no daemon is running on %s (no control socket at %s)", h.path, sock)
+// A line is one line of output, of a kind that says how it is printed.
+type line struct {
+	kind  lineKind
+	label string // a field's
+	text  string
+}
+
+type lineKind int
+
+const (
+	linePlain lineKind = iota
+	lineField
+	lineInfo // dimmed
+	lineWarn
+	lineHint
+	lineAlarm
+)
+
+func (a *app) emit(lines []line) {
+	for _, l := range lines {
+		switch l.kind {
+		case linePlain:
+			a.printf("%s\n", l.text)
+		case lineField:
+			a.field(l.label, "%s", l.text)
+		case lineInfo:
+			a.printf("%s\n", a.dim(l.text))
+		case lineWarn:
+			a.warn("%s", l.text)
+		case lineHint:
+			a.hint("%s", l.text)
+		case lineAlarm:
+			a.alarm("%s", l.text)
+		}
 	}
+}
+
+// A statusView is "juist status" of a daemon's report: head, then the device
+// table where devices is set, then the notes on what needs attention.
+type statusView struct {
+	head    []line
+	devices bool
+	notes   []line
+}
+
+// checkStale is how old the last tunnel check may grow before its age is
+// worth saying: juistd checks every 30 seconds.
+const checkStale = 2 * time.Minute
+
+// stale reports whether s's last tunnel check is older than [checkStale].
+func stale(s *ipc.Status, now time.Time) bool {
+	return s.ReachChecked > 0 && now.Sub(time.Unix(s.ReachChecked, 0)) > checkStale
+}
+
+// statusOf renders s as of now; paint colours text.
+func statusOf(s *ipc.Status, now time.Time, paint func(code, s string) string) statusView {
+	var v statusView
+	head := func(state string) { v.head = append(v.head, line{text: paint("1", s.NetworkName) + " · " + state}) }
+	field := func(label, format string, args ...any) {
+		v.head = append(v.head, line{kind: lineField, label: label, text: fmt.Sprintf(format, args...)})
+	}
+	since := func(unix int64) string { return ago(now.Sub(time.Unix(unix, 0))) }
+
+	if !s.InNetwork {
+		name := cmp.Or(s.SelfName, s.Self.ShortString())
+		if s.Joining {
+			v.head = append(v.head, line{text: paint("1", name) + " · joining a network"})
+			return v
+		}
+		v.head = append(v.head, line{text: paint("1", name) + " · no network"},
+			line{kind: lineHint, text: "juist join CODE, or juist init"})
+		return v
+	}
+	if s.StartError != "" {
+		head(paint("1;31", "not connected"))
+		v.head = append(v.head, line{kind: lineWarn, text: "tunnels not up, retrying: " + s.StartError},
+			line{kind: lineHint, text: "without CAP_NET_ADMIN, run the packaged service"})
+		return v
+	}
+	if s.NotMember {
+		head(paint("1;31", "removed"))
+		v.head = append(v.head, line{kind: lineHint, text: "rejoin with a new invite, or start over: juist reset"})
+		return v
+	}
+	switch {
+	case s.Alarm != "":
+		head(paint("1;31", "disconnected"))
+	case s.Refused:
+		head(paint("1;31", "refused"))
+	case s.Stale:
+		head(paint("33", "limited"))
+	case s.Members > 1 && s.Peers == 0:
+		head(paint("33", "waiting for peers"))
+	case s.TunnelsChecked && s.Peers > 0 && s.TunnelsLive == 0:
+		head(paint("33", "no tunnel up"))
+	default:
+		head(paint("32", "connected"))
+	}
+
+	var selfDev ipc.Device
+	var until int64
+	for _, d := range s.Devices {
+		if d.Identity == s.Self {
+			selfDev = d
+		}
+		until = max(until, d.RetiringUntil)
+	}
+	var v4, old, v6 []string
+	for _, p := range s.Addrs {
+		switch {
+		case p.Addr().Is4() && p.Addr().String() == selfDev.Retiring:
+			old = append(old, fmt.Sprintf("%v (until %s)", p.Addr(), deadline(uint64(selfDev.RetiringUntil))))
+		case p.Addr().Is4():
+			v4 = append(v4, p.Addr().String())
+		default:
+			v6 = append(v6, p.Addr().String())
+		}
+	}
+	field("This device", "%s  %s", cmp.Or(s.SelfName, s.Self.ShortString()),
+		strings.Join(append(append(v4, old...), v6...), "  "))
+	// An offline device's announcement is held, but it has said nothing
+	// since it went quiet.
+	heard := s.Peers - len(s.Absent)
+	switch others := s.Members - 1 - s.Expired; {
+	case others == 1 && heard == 1:
+		field("Devices", "1 other, heard from")
+	case others == 1 && len(s.Absent) == 1:
+		field("Devices", "1 other, offline")
+	case others == 1:
+		field("Devices", "1 other, not heard from yet")
+	case others > 1 && heard == others:
+		field("Devices", "%d others, all heard from", others)
+	case others > 1:
+		field("Devices", "%d others, %d of them heard from", others, heard)
+	default:
+		field("Devices", "no others")
+	}
+	switch {
+	case s.TunnelsChecked && s.Peers > 0:
+		live := fmt.Sprintf("%d of %d live", s.TunnelsLive, s.TunnelsLive+len(s.TunnelsDown))
+		if len(s.TunnelsDown) > 0 {
+			live = paint("33", live)
+		}
+		if stale(s, now) {
+			live += ", " + paint("33", "checked "+since(s.ReachChecked))
+		}
+		field("Tunnels", "%s", live)
+	case s.Peers > 0:
+		field("Tunnels", "%s", paint("2", "not checked yet"))
+	}
+	if s.RelayCapable > 0 || s.Relaying {
+		relays := fmt.Sprintf("%d available", s.RelayCapable)
+		switch {
+		case s.Relaying:
+			// Its own relay is its home; whom it serves says more.
+		case s.HomeRelay != "":
+			relays += ", via " + s.HomeRelay
+		case s.Relays > 0 && s.TunnelsChecked:
+			relays += ", " + paint("33", "no connection")
+		}
+		if s.Relaying {
+			relays += "; this device relays"
+			if s.RelayedFor > 0 {
+				relays += " for " + count(s.RelayedFor, "device")
+			}
+		}
+		field("Relays", "%s", relays)
+	}
+	if until > 0 {
+		renumbering := "old addresses until " + deadline(uint64(until))
+		if len(s.Unmoved) > 0 {
+			renumbering += "; " + paint("33", "not moved: "+strings.Join(s.Unmoved, ", "))
+		} else {
+			renumbering += "; all moved"
+		}
+		field("Renumbering", "%s", renumbering)
+	}
+	switch {
+	case s.LeaseSigners == 0:
+		field("Freshness", "%s", paint("2", "unchecked: no voucher"))
+	case s.Stale && s.Vouchers > 1:
+		field("Freshness", "%s", paint("33", fmt.Sprintf("expired (%d of %d vouchers); vouchers only",
+			s.Vouching, s.Vouchers)))
+	case s.Stale:
+		field("Freshness", "%s", paint("33", "expired; vouchers only"))
+	case s.FreshUntil > 0:
+		by := ""
+		if s.Vouchers > 1 {
+			by = fmt.Sprintf(" by %d vouchers", s.Vouching)
+		}
+		field("Freshness", "vouched%s %s, valid %s", by, since(s.FreshSince),
+			roughly(time.Unix(s.FreshUntil, 0).Sub(now)))
+	}
+	ports := fmt.Sprintf("udp/%d", s.ListenPort)
+	if !s.SyncInTunnel {
+		ports += fmt.Sprintf(", tcp/%d sync", s.GossipPort)
+	}
+	if s.Relaying && s.RelayPort != 0 {
+		ports += fmt.Sprintf(", tcp/%d and udp/%d relay", s.RelayPort, s.RelayPort)
+	}
+	field("Ports", "%s", ports)
+	if s.LastReconcile > 0 {
+		field("Updated", "%s", since(s.LastReconcile))
+	}
+	v.devices = len(s.Devices) > 0
+	v.notes = statusNotes(s)
+	return v
+}
+
+// statusNotes are what needs attention on a connected device.
+func statusNotes(s *ipc.Status) []line {
+	var notes []line
+	note := func(kind lineKind, format string, args ...any) {
+		notes = append(notes, line{kind: kind, text: fmt.Sprintf(format, args...)})
+	}
+	if s.StaleKeys {
+		note(lineWarn, "juistd runs on replaced keys; restart it")
+	}
+	if s.Refused {
+		note(lineWarn, "the network's devices refuse this one: most likely it was removed")
+		note(lineHint, "rejoin with a new invite, or start over: juist reset")
+	}
+	if s.EpochError != "" {
+		note(lineWarn, "cannot open the group secret, so no discovery or log updates: %s", s.EpochError)
+	}
+	if s.Alarm == "" && s.Firewalled != "" {
+		if s.FirewallUnsure {
+			note(lineWarn, "firewalld may block %s: its zone is not trusted, and juistd may not read its ports",
+				s.Firewalled)
+		} else {
+			note(lineWarn, "firewalld blocks %s, so log sync in the tunnel fails", s.Firewalled)
+		}
+		note(lineHint, "sudo firewall-cmd --permanent --zone=trusted --change-interface=%s && sudo firewall-cmd --reload",
+			s.Firewalled)
+	}
+	if s.DataPlaneError != "" {
+		note(lineWarn, "data plane refused the device set: %s", s.DataPlaneError)
+	}
+	if s.Unreachable > 0 && s.Peers > 0 {
+		what := count(s.Unreachable, "device")
+		if len(s.Silent) > 0 {
+			what = strings.Join(s.Silent, ", ")
+		}
+		note(lineInfo, "not heard from: %s", what)
+	}
+	if len(s.SyncFailing) > 0 {
+		note(lineWarn, "log sync to %s fails in the tunnel: a firewall drops tcp/%d on juist0",
+			strings.Join(s.SyncFailing, ", "), s.GossipPort)
+		note(lineHint, "on both devices: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone")
+	}
+	if len(s.Seeking) > 0 {
+		note(lineInfo, "no answer from %s: offline, or udp/%d blocked", strings.Join(s.Seeking, ", "), s.ListenPort)
+	}
+	// Only where the announcement held is known to be the device's newest is
+	// the way to it to blame.
+	if down := slices.DeleteFunc(slices.Clone(s.TunnelsDown), func(n string) bool {
+		return slices.Contains(s.Seeking, n) || slices.Contains(s.Absent, n)
+	}); len(down) > 0 {
+		note(lineWarn, "no tunnel traffic from %s: udp/%d blocked, or both behind NAT with no relay",
+			strings.Join(down, ", "), s.ListenPort)
+		note(lineHint, "on a device with a public address: sudo ufw allow juist, or firewall-cmd --add-service=juist")
+	}
+	if s.Conflicted > 0 {
+		note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))
+	}
+	if s.RelayUnreached && s.Alarm == "" {
+		note(lineWarn, "no device reaches this relay: tcp/%d or udp/%d is likely closed", s.RelayPort, s.RelayPort)
+		note(lineHint, "sudo ufw allow juist-relay, or firewall-cmd --add-service=juist-relay; and any firewall in front of this host")
+	}
+	// Two devices behind strict NATs need a third, reachable, to relay.
+	if s.RelayCapable == 0 && s.Members > 2 && s.Alarm == "" {
+		note(lineWarn, "no device may relay; devices behind strict NATs need one")
+		note(lineHint, "juist grant DEVICE relay, on a device with a public address")
+	}
+	for _, l := range s.Lost {
+		note(lineWarn, "%s lost to a concurrent change", l)
+		note(lineHint, "redo it if still wanted; juist log lists what was lost")
+	}
+	for _, u := range s.Unrevoked {
+		note(lineWarn, "%s lost to a concurrent change and is not in effect", u)
+		note(lineHint, "an admin redoes it")
+	}
+	if s.SchemaAlarm != "" {
+		note(lineAlarm, "%s; no changes, removals included, apply until juist is updated", s.SchemaAlarm)
+	}
+	if s.Alarm != "" {
+		note(lineAlarm, "%s; tunnels down until resolved", s.Alarm)
+	}
+	return notes
+}
+
+// startWarning reports a daemon that holds the network but could not start
+// its tunnels, and whether it did.
+func (a *app) startWarning() bool {
+	st := a.node.status()
+	if st == nil || st.StartError == "" {
+		return false
+	}
+	a.warn("tunnels not up yet, retrying: %s", st.StartError)
+	return true
+}
+
+// ago and roughly render a duration the way a person reads one.
+func ago(d time.Duration) string {
+	if d < time.Minute {
+		return "just now"
+	}
+	return roughly(d) + " ago"
+}
+
+func roughly(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "under a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d.Round(time.Hour) <= 72*time.Hour:
+		// In hours up to three days, so the 48-hour TTL reads the same
+		// whether a little more or a little less of it is left.
+		return fmt.Sprintf("%dh", int(d.Round(time.Hour).Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+// deadline renders a Unix time in seconds as local time, with the year only
+// where it is not this one.
+func deadline(unix uint64) string {
+	t := time.Unix(int64(min(unix, 1<<62)), 0).Local()
+	if t.Year() != time.Now().Year() {
+		return t.Format("2 Jan 2006 15:04")
+	}
+	return t.Format("Mon 2 Jan 15:04")
+}
+
+// addrList renders a member's overlay addresses: IPv4 first, its own before
+// one it is retiring.
+func addrList(state *log.State, id types.Identity) string {
+	n, ok := state.Node(id)
+	if !ok {
+		return ""
+	}
+	var out []string
+	if n.V4 != nil {
+		out = append(out, n.V4.String())
+	}
+	if r := n.Retiring; r.Live(time.Now().Unix()) {
+		out = append(out, fmt.Sprintf("%v (until %s)", r.Addr, deadline(r.Until)))
+	}
+	return strings.Join(append(out, state.Addr6(id).String()), "  ")
+}
+
+// describeCallFailure turns "the socket did not answer" into what it means.
+func describeCallFailure(sock string, err error) error {
 	if errors.Is(err, fs.ErrPermission) {
-		msg := fmt.Sprintf("not permitted to reach the daemon at %s: it answers only the user it "+
-			"runs as, which is not you", sock)
-		if owner := stateDirOwner(h.path); owner != "" {
-			msg += fmt.Sprintf(".\nRun: sudo -u %s juist -home %s status", owner, h.path)
+		msg := fmt.Sprintf("%s: permission denied", sock)
+		if owner := stateDirOwner(filepath.Dir(sock)); owner != "" {
+			msg += fmt.Sprintf("\nhint: sudo -u %s juist --socket %s status", owner, sock)
 		}
 		return errors.New(msg)
 	}
-	return fmt.Errorf("talking to the daemon at %s: %w", sock, err)
+	return fmt.Errorf("%s: %w", sock, err)
 }
 
-// stateDirOwner names the account a daemon on this home directory runs as, or
-// "" if that cannot be established. It reads the directory rather than the
-// socket: the socket is what the caller was just refused.
+// stateDirOwner names the account a daemon on this home directory runs as,
+// read from the directory, since the socket is what the caller was refused.
 func stateDirOwner(dir string) string {
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -151,28 +461,8 @@ func stateDirOwner(dir string) string {
 	return uid
 }
 
-// noDaemon reports whether a failed call means nothing is listening. Only two
-// errors mean absence: no socket file, and a socket file nobody is bound to,
-// which is what a crashed daemon leaves behind.
+// noDaemon reports whether a failed call means nothing is listening: no socket
+// file, or one nobody is bound to, which is what a crashed daemon leaves.
 func noDaemon(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
-}
-
-// daemonState reports whether a daemon owns this home directory's log, by
-// connecting rather than by looking for the file, since a crashed daemon
-// leaves one behind. The answer is three-way because "present but silent" is
-// not "absent": a wedged daemon still owns its in-memory authority, and
-// writing the log underneath it is the split brain this prevents.
-func daemonState(h *home) (running bool, err error) {
-	if _, err := daemon.Call(daemon.SocketPath(h.path), daemon.Request{Command: daemon.CmdStatus}); err != nil {
-		if noDaemon(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf(
-			"a daemon appears to be running on %s but did not answer: %w\n"+
-				"Refusing to write the log underneath it, which would leave the two disagreeing "+
-				"about the head. Stop juistd and retry, or wait for it to answer",
-			h.path, err)
-	}
-	return true, nil
 }

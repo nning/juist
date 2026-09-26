@@ -2,8 +2,10 @@ package conn
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
+	"strconv"
 
 	"tailscale.com/tailcfg"
 )
@@ -38,11 +40,18 @@ type Relay struct {
 // peer's home region to 16 bits, so a larger one would alias another relay's.
 const MaxRegionID = 65535
 
-// derpMap renders relays as the map the data plane consumes. Empty returns
-// nil, which is how the engine is told there are no relays at all.
-func derpMap(relays []Relay) *tailcfg.DERPMap {
-	if len(relays) == 0 {
-		return nil
+// stunRegionScore makes a STUN-only region the least preferred home by far:
+// the data plane picks its home by latency, and a public STUN server is often
+// nearer than any member relay while being nothing to reach a peer through.
+const stunRegionScore = 1e6
+
+// derpMap renders relays and STUN servers as the map the data plane consumes,
+// and returns the regions the STUN servers took. Nothing at all returns nil,
+// which is how the engine is told there are no relays.
+func derpMap(relays []Relay, stun []string) (*tailcfg.DERPMap, map[int]bool) {
+	stunRegions := map[int]bool{}
+	if len(relays) == 0 && len(stun) == 0 {
+		return nil, stunRegions
 	}
 	dm := &tailcfg.DERPMap{
 		Regions: make(map[int]*tailcfg.DERPRegion, len(relays)),
@@ -83,7 +92,55 @@ func derpMap(relays []Relay) *tailcfg.DERPMap {
 		}
 		dm.Regions[r.Region] = reg
 	}
-	return dm
+	// STUN servers take the highest free regions, below which member relays
+	// derive theirs; a collision gives the relay the region.
+	next := MaxRegionID
+	for i, s := range stun {
+		hp, err := parseSTUNServer(s)
+		if err != nil {
+			continue // checked when the manager was built
+		}
+		for dm.Regions[next] != nil {
+			next--
+		}
+		dm.Regions[next] = &tailcfg.DERPRegion{
+			RegionID:   next,
+			RegionCode: fmt.Sprintf("stun%d", i),
+			RegionName: hp.host,
+			Nodes: []*tailcfg.DERPNode{{
+				Name:     fmt.Sprintf("stun%d", i),
+				RegionID: next,
+				HostName: hp.host,
+				STUNPort: int(hp.port),
+				STUNOnly: true,
+			}},
+		}
+		stunRegions[next] = true
+		if dm.HomeParams == nil {
+			dm.HomeParams = &tailcfg.DERPHomeParams{RegionScore: map[int]float64{}}
+		}
+		dm.HomeParams.RegionScore[next] = stunRegionScore
+		next--
+	}
+	return dm, stunRegions
+}
+
+type hostPort struct {
+	host string
+	port uint16
+}
+
+// parseSTUNServer reads a STUN server as host:port.
+func parseSTUNServer(s string) (hostPort, error) {
+	host, portText, err := net.SplitHostPort(s)
+	if err != nil || host == "" {
+		return hostPort{}, fmt.Errorf("conn: STUN server %q is not host:port", s)
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || port == 0 {
+		return hostPort{}, fmt.Errorf("conn: STUN server %q has no usable port", s)
+	}
+	return hostPort{host: host, port: uint16(port)}, nil
 }
 
 // relayDialOrder puts the addresses a relay is most likely to be reachable at

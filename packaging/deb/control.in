@@ -1,0 +1,15 @@
+Package: juist
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: juist developers <noreply@github.com>
+Installed-Size: @SIZE@
+Depends: iptables, systemd
+Section: net
+Priority: optional
+Homepage: https://github.com/nning/juist
+Description: peer-to-peer mesh VPN with no coordination server
+ juist is a Tailscale-like mesh VPN with a WireGuard data plane and no central
+ control plane: membership, key distribution, revocation and rendezvous are
+ peer-to-peer. This package installs the CLI, the node daemon, and a systemd
+ unit that runs the daemon as a dedicated unprivileged user holding
+ CAP_NET_ADMIN and nothing else.

@@ -44,6 +44,11 @@ type Orphan struct {
 	// Conflict explains why the branch cannot simply be reissued on the
 	// current head, or is empty if it can.
 	Conflict string
+
+	// Unrevoked are the branch's revocations that are not in effect: they
+	// lost fork choice, and could be reissued on the current head. They do
+	// not stop the network, as a conflict does, and are to be reissued.
+	Unrevoked []types.Hash
 }
 
 // An Alarm is a condition an operator has to resolve. While one is raised,
@@ -133,6 +138,9 @@ type Authority struct {
 	// Anything stored and absent from it is a leftover from an interrupted
 	// compaction, harmless and removed by the next Compact.
 	reachable map[types.Hash]bool
+
+	// onChain is the active chain of the last adopted resolution.
+	onChain map[types.Hash]bool
 }
 
 // Create initializes a new network from a genesis record and makes it the
@@ -149,7 +157,7 @@ func Create(st Storage, genesis types.AUM) (*Authority, error) {
 	} else if len(stored) != 0 {
 		return nil, errors.New("log: storage already holds records; refusing to create a network over them")
 	}
-	if err := verifyGenesis(&genesis); err != nil {
+	if err := verifySelfSigned(&genesis, types.KindGenesis); err != nil {
 		return nil, err
 	}
 	// Reject a genesis whose state is unusable before it is written, so a
@@ -177,7 +185,7 @@ func Bootstrap(st Storage, checkpoint types.AUM) (*Authority, error) {
 	} else if ok {
 		return nil, errors.New("log: storage already holds a network; refusing to bootstrap over it")
 	}
-	if err := verifyCheckpointSelfSigned(&checkpoint); err != nil {
+	if err := verifySelfSigned(&checkpoint, types.KindCheckpoint); err != nil {
 		return nil, err
 	}
 	hash := checkpoint.Hash()
@@ -265,7 +273,8 @@ func checkFloors(st Storage, res *resolution) error {
 
 // Inform verifies records, stores them, and re-resolves the chain. Records are
 // accepted from any transport, since they carry their own proof; order them
-// oldest first. Either the whole batch is stored or none of it is.
+// oldest first. A refused batch stores nothing; one that fails in [Storage.Add]
+// may be stored in part, which the next resolution of the store picks up.
 func (a *Authority) Inform(aums ...types.AUM) error {
 	if len(aums) == 0 {
 		return nil
@@ -307,9 +316,9 @@ func (a *Authority) Inform(aums ...types.AUM) error {
 		for i := range pending {
 			h := pending[i].Hash()
 			if !res.reachable[h] {
-				return fmt.Errorf(
+				return reject(RuleParent, fmt.Errorf(
 					"log: record %v (%v) does not descend from this node's anchor %v; "+
-						"send its ancestors first", h, pending[i].Kind, a.anchor)
+						"send its ancestors first", h, pending[i].Kind, a.anchor))
 			}
 		}
 	}
@@ -357,6 +366,10 @@ func (a *Authority) adopt(res *resolution) {
 	a.state = res.state
 	a.orphans = res.orphans
 	a.reachable = res.reachable
+	a.onChain = make(map[types.Hash]bool, len(res.chain))
+	for _, h := range res.chain {
+		a.onChain[h] = true
+	}
 	a.tooNew = res.tooNew
 	var conflicts []Orphan
 	for _, o := range res.orphans {
@@ -514,14 +527,14 @@ func resolve(r reader, anchor types.Hash) (*resolution, error) {
 	var state *State
 	switch anchorAUM.Kind {
 	case types.KindGenesis:
-		if err := verifyGenesis(&anchorAUM); err != nil {
+		if err := verifySelfSigned(&anchorAUM, types.KindGenesis); err != nil {
 			return nil, fmt.Errorf("log: anchor genesis record: %w", err)
 		}
 		if state, err = applyGenesis(&anchorAUM, anchor); err != nil {
 			return nil, err
 		}
 	case types.KindCheckpoint:
-		if err := verifyCheckpointSelfSigned(&anchorAUM); err != nil {
+		if err := verifySelfSigned(&anchorAUM, types.KindCheckpoint); err != nil {
 			return nil, fmt.Errorf("log: anchor checkpoint: %w", err)
 		}
 		if state, err = stateFromCheckpoint(&anchorAUM, anchor); err != nil {
@@ -568,7 +581,10 @@ func resolve(r reader, anchor types.Hash) (*resolution, error) {
 		if len(valid) == 0 {
 			break
 		}
-		primary := pickPrimary(valid)
+		primary, err := pickPrimary(r, valid, state)
+		if err != nil {
+			return nil, err
+		}
 		for _, c := range valid {
 			ch := c.hash
 			if ch == primary.hash {
@@ -627,24 +643,98 @@ type candidate struct {
 	aum  types.AUM
 }
 
-// pickPrimary applies fork choice to a set of valid siblings: a revocation
-// beats anything else, otherwise the lower hash wins. Signature weight is
-// deliberately not part of the rule — every change already needs quorum, so
-// weight would only let one quorum outbid another by collecting extras.
-func pickPrimary(candidates []candidate) candidate {
-	best := candidates[0]
-	for _, c := range candidates[1:] {
-		rev, bestRev := c.aum.Kind.IsRevocation(), best.aum.Kind.IsRevocation()
-		switch {
-		case rev != bestRev:
-			if rev {
-				best = c
+// pickPrimary applies fork choice to a set of valid siblings of parent: a
+// revocation beats anything else, otherwise the lower hash wins. Signature
+// weight is deliberately not part of the rule — every change already needs
+// quorum, so weight would only let one quorum outbid another by collecting
+// extras.
+//
+// From [types.SchemaHolders] on, one rule comes first: a branch loses to a
+// sibling whose branch removes an admin key that signed anything on it. An
+// admin key removed at some point could otherwise sign a sibling rooted
+// before its removal, win on the revocation bias or a ground hash, and undo
+// its own removal with everything after it.
+func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, error) {
+	var keys []branchKeys
+	if parent.schema >= types.SchemaHolders {
+		keys = make([]branchKeys, len(candidates))
+		budget := maxOrphanRecords
+		for i := range candidates {
+			k, err := keysOfBranch(r, candidates[i].hash, &budget)
+			if err != nil {
+				return candidate{}, err
 			}
-		case compareHash(c.hash, best.hash) < 0:
-			best = c
+			keys[i] = k
 		}
 	}
-	return best
+	// undone reports whether the branch at i signs with a key the branch at
+	// j removes.
+	undone := func(i, j int) bool {
+		if keys == nil {
+			return false
+		}
+		for id := range keys[i].signers {
+			if keys[j].removed[id] {
+				return true
+			}
+		}
+		return false
+	}
+	best := 0
+	for i := 1; i < len(candidates); i++ {
+		c, b := &candidates[i], &candidates[best]
+		cUndone, bUndone := undone(i, best), undone(best, i)
+		rev, bestRev := parent.Revokes(&c.aum), parent.Revokes(&b.aum)
+		switch {
+		case cUndone != bUndone:
+			if bUndone {
+				best = i
+			}
+		case rev != bestRev:
+			if rev {
+				best = i
+			}
+		case c.hash.Compare(b.hash) < 0:
+			best = i
+		}
+	}
+	return candidates[best], nil
+}
+
+// branchKeys are the admin keys that signed a branch's records, and those
+// its records remove.
+type branchKeys struct {
+	signers, removed map[types.Identity]bool
+}
+
+// keysOfBranch collects branchKeys over every stored record from root on,
+// within budget: the chain ahead of a fork is at most as long as the chain.
+func keysOfBranch(r reader, root types.Hash, budget *int) (branchKeys, error) {
+	k := branchKeys{signers: map[types.Identity]bool{}, removed: map[types.Identity]bool{}}
+	stack := []types.Hash{root}
+	for len(stack) > 0 {
+		if *budget -= 1; *budget < -maxChainLength {
+			return k, fmt.Errorf("log: branches past %d records; refusing to resolve", maxChainLength)
+		}
+		h := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		aum, err := r.AUM(h)
+		if err != nil {
+			return k, fmt.Errorf("log: reading %v: %w", h, err)
+		}
+		for i := range aum.Signatures {
+			k.signers[aum.Signatures[i].KeyID] = true
+		}
+		if aum.Kind == types.KindRemoveAdminKey {
+			k.removed[*aum.Subject] = true
+		}
+		children, err := r.Children(h)
+		if err != nil {
+			return k, err
+		}
+		stack = append(stack, children...)
+	}
+	return k, nil
 }
 
 // walkOrphan verifies a branch that lost fork choice and decides whether it
@@ -677,9 +767,25 @@ func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget 
 
 	var nextProbe *State
 	switch {
-	case aum.Kind.IsRevocation():
+	case branch.Revokes(&aum) && probe != nil && probe.alreadyRevoked(&aum):
+		// Lost, but what it withdraws is withdrawn on the chosen chain too:
+		// two admins removing one device at once.
+		nextProbe = probe
+	case branch.Revokes(&aum) && probe != nil:
 		// A revocation on a losing branch is what the bias exists to prevent;
-		// it can only get here below a sibling that also won on that bias.
+		// it gets here below a sibling that won on it too, as two concurrent
+		// removals do. One that the chosen chain can take is not in effect
+		// until reissued, which is said rather than stopping the network;
+		// one it cannot take is a conflict.
+		nextProbe, err = probe.apply(&aum, h, applyProbe)
+		switch {
+		case err != nil && o.Conflict == "":
+			o.Conflict = fmt.Sprintf("record %v revokes %s and cannot be reissued on the chosen chain: %v",
+				h, revocationSubject(&aum), err)
+		case err == nil:
+			o.Unrevoked = append(o.Unrevoked, h)
+		}
+	case branch.Revokes(&aum):
 		if o.Conflict == "" {
 			o.Conflict = fmt.Sprintf("record %v revokes %s and would be discarded", h, revocationSubject(&aum))
 		}
@@ -706,7 +812,16 @@ func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget 
 }
 
 func revocationSubject(a *types.AUM) string {
-	if a.Subject != nil {
+	switch {
+	case a.Kind == types.KindSetNodeRoutes && a.Subject != nil:
+		return "the admin role of " + a.Subject.ShortString()
+	case a.Kind == types.KindSetVouchers:
+		return "vouching authority (a raised vouching threshold)"
+	case a.Kind == types.KindSetHolder:
+		return "authority of " + a.Holder.Name + " (fewer votes, or more keys needed)"
+	case a.Kind == types.KindSetQuorum:
+		return "authority of every smaller coalition (a raised quorum)"
+	case a.Subject != nil:
 		return a.Subject.ShortString()
 	}
 	return "an unnamed subject"
@@ -715,14 +830,34 @@ func revocationSubject(a *types.AUM) string {
 // stateFromCheckpoint builds state from a checkpoint used as a bootstrap
 // anchor.
 func stateFromCheckpoint(a *types.AUM, hash types.Hash) (*State, error) {
-	if a.State.GenesisHash == nil {
-		return nil, errors.New("log: checkpoint has no genesis hash")
+	return adoptSnapshot(a.State, hash, "checkpoint")
+}
+
+// FromRecords builds an authority over st from a chain handed over whole,
+// anchor first: a genesis, or a checkpoint taken on its signers' word as
+// [Bootstrap] does, followed by the records after it. Every record is
+// verified as it would be arriving one by one.
+func FromRecords(st Storage, records []types.AUM) (*Authority, error) {
+	if len(records) == 0 {
+		return nil, errors.New("log: no records")
 	}
-	if err := a.State.StaticValidate(false); err != nil {
-		return nil, fmt.Errorf("log: checkpoint state: %w", err)
+	var auth *Authority
+	var err error
+	switch records[0].Kind {
+	case types.KindGenesis:
+		auth, err = Create(st, records[0])
+	case types.KindCheckpoint:
+		auth, err = Bootstrap(st, records[0])
+	default:
+		return nil, fmt.Errorf("log: a chain starts with a genesis or a checkpoint, not a %v", records[0].Kind)
 	}
-	if err := a.State.ValidateInNetwork(); err != nil {
-		return nil, fmt.Errorf("log: checkpoint state: %w", err)
+	if err != nil {
+		return nil, err
 	}
-	return stateFromSnapshot(a.State, hash)
+	if len(records) > 1 {
+		if err := auth.Inform(records[1:]...); err != nil {
+			return nil, err
+		}
+	}
+	return auth, nil
 }

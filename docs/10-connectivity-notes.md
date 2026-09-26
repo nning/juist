@@ -61,6 +61,20 @@ carries no identity; what it discloses is the querier's own address, back to
 the querier, and it is rate-limited so that a two-times amplifier is not worth
 using.
 
+**Public STUN servers stand in where no member relays** (added in M4). Two
+devices behind NAT with no relay-capable member learned no reflexive address
+at all, so each announced only its LAN addresses and they never met. juistd now
+also asks public STUN servers (`--stun`, Google's and Cloudflare's by default,
+`--no-stun` for none). They enter the data plane's map as STUN-only regions at
+the top of the region space, below which member relays derive theirs, with a
+home score that keeps any member relay preferred. Netcheck picks a home among
+every region it measured, so with no member relay a STUN server becomes the
+engine's home: the engine then retries a relay connection that fails before
+sending anything, which juist leaves alone and keeps out of the log, and
+`onNetInfo` tells peers of no home rather than a region with nothing to reach.
+`SetHomeless` would have avoided the retries and also stopped the periodic STUN
+that keeps the public address current.
+
 ## Relay regions are derived, not assigned
 
 A peer announces the relay region it can be reached through, and member relays
@@ -104,7 +118,7 @@ asked after all of its missing peers at once would turn that into a count.
 Lookups are capped per round, shuffled, and only for members this node holds no
 address for. Recorded as residual weakness 5 in
 [02-threat-model.md](02-threat-model.md), together with the fact that running
-the DHT at all says this host speaks the BitTorrent DHT. `juistd -no-dht` is
+the DHT at all says this host speaks the BitTorrent DHT. `juistd --no-dht` is
 the answer for a deployment that would rather not, at the cost of off-LAN cold
 start.
 
@@ -142,9 +156,58 @@ underlay addresses. Two members behind NAT can open no TCP session to each
 other there, so they synced only through whichever member both could reach — a
 partition that gossip's epidemic push papers over rather than solves.
 
-A peer's overlay addresses are tried as well, **last**. A TCP connect into a
-tunnel that is not yet up spends the whole per-peer budget waiting rather than
-failing, so the underlay stays the first thing tried.
+With a TUN device gossip now runs through the tunnel alone: it listens on
+the overlay addresses and dials only a peer's, so a device needs no port for
+it from outside. Without one it listens and dials on the underlay, overlay
+addresses last, as before. What a tunnel cannot bring up must then come some
+other way: a new member's announcement travels with its join, a restarted
+one's through the DHT or LAN discovery.
+
+**Finding a peer again.** Because a tunnel cannot carry the announcement that
+would bring it back up, how fast the DHT is asked decides how long a pair
+stays cut off. The rules:
+
+- A mesh restarted in the same process on the same keys announces the same
+  disco key and relay certificate (`daemon.Session`), so peers reach it on the
+  announcement they hold. New keys draw new ones: a rotation answers a device
+  that may have been copied. Neither is ever written to disk.
+- A peer whose probes go unanswered twice in a row is down unless it
+  completed a handshake in the last check interval; the 180 s a handshake
+  stays fresh stands in only for a probe not sent or one lost, since a peer
+  that restarted leaves the last one looking fresh for minutes.
+- A peer found down is looked up at once, again after 30 s, then at doubling
+  gaps up to an hour, counted from when each was due. Members never heard
+  from share that schedule, and a round takes the four due longest, so none
+  starves another. A round brought forward waits 15 s after the last one and
+  puts this node's own announcement again only if it says something new; a
+  round on the interval always puts it, freshly signed; a changed one brings
+  a round forward at once.
+- A new announcement for an installed peer is probed at once, past the probe
+  backoff, and a tunnel back up is synced at once.
+- A running device signs its announcement again every 5 minutes, and for
+  each DHT publication, though nothing in it changed. The sequence number is
+  the signer's clock, so a signature made after a peer's tunnel went down is
+  the one sign that the peer runs: finding the old record again proves
+  nothing, since it stays in the DHT and the cache long after its author went
+  quiet. A renewal that says nothing new is kept but not acted on: no
+  reconcile, no push, and the endpoint cache is rewritten for it hourly.
+- The status blames the way to a peer — a blocked UDP port, a missing relay —
+  only where it has changed its announcement since it went down, or signed
+  it more than two minutes after, allowing for a clock ahead of this one's.
+  Without that it says the peer is offline once a renewal could have come
+  (a DHT interval, a lookup gap, the clock skew both ways; less with no
+  DHT), and at once where this device's relay holds the peer's home region
+  and finds it disconnected; until then it says it does not know which. A
+  device never seen renewing may be on a build that does not, so the window
+  alone never calls it offline. A failed sync
+  through a live tunnel is reported only once a retry through it failed too.
+
+**Open: a relayed pair whose home relay moves.** The home region now follows
+netcheck, and a peer reached only through a relay learns the new region from
+the announcement, which gossip carries through the very tunnel the old region
+no longer serves. Until the DHT or LAN discovery brings it, the pair is cut
+off. A test with two relays and a pair that punches through neither is what
+would show whether this needs the announcement sent over the relay as well.
 
 ## The hand-sealed CallMeMaybe, and why the announcement is what primes it
 
@@ -190,10 +253,10 @@ approximation.
 - Symmetric masquerades with `--random-fully`, so the kernel picks a fresh
   external port per destination.
 - Double NAT is a port-restricted NAT behind a second one, with the carrier
-  segment in 100.64/10 — the range carriers actually use, and the overlay's own
-  v4 range. A juist node never holds an address there, because it is behind the
-  inner NAT, but it is worth knowing that `daemon.usableUnderlay` refuses to
-  announce a 100.64/10 address: a node addressed there directly would have
+  segment in 100.64/10 — the range carriers actually use, and the overlay's
+  own v4 range before schema 4. A juist node never holds an address there,
+  because it is behind the inner NAT, but it is worth knowing that
+  `daemon.usableUnderlay` refuses to announce a 100.64/10 address: a node addressed there directly would have
   nothing but reflexive addresses to offer.
 
 **Whether a path ended up direct is asked by stopping the relay.** A pair that
@@ -219,7 +282,7 @@ and a criterion should not be a probabilistic one.
   pattern ever becomes load-bearing.
 - **Relay capacity, or any check that a relay can be reached.** A relay accepts
   every member. There is no rate limit per client, no accounting, and no way for
-  a member to say "not through me right now" short of `-no-relay`. Nor does
+  a member to say "not through me right now" short of `--no-relay`. Nor does
   anything test that a relay-capable member is reachable at all: a member behind
   NAT that is granted the role advertises its relay at each address it
   announces, including reflexive ones, where the relay's TCP port is not

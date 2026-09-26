@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -17,9 +19,10 @@ type Role string
 // because a node that ignores a role its peers act on holds a different view
 // of what the network authorizes. Adding one is a schema change.
 const (
-	// RoleAdmin marks a device operated by an admin, so tooling can find the
-	// devices a signing ceremony must reach. It carries no authority:
-	// authority comes from admin keys, which the daemon never holds.
+	// RoleAdmin marks an admin device: one whose daemon signs freshness
+	// leases, vouching that the view of the network it holds is current. It
+	// carries no authority over membership, which comes from admin keys, and
+	// the daemon never holds those.
 	RoleAdmin Role = "admin"
 
 	// RoleRelayCapable marks a node willing to relay for others; the DERP map
@@ -45,8 +48,114 @@ type AdminKey struct {
 	// laptop keys.
 	Votes uint32 `cbor:"2,keyasint"`
 
-	// Name is a human label. Nothing in the trust layer reads it.
+	// Name is a human label. The trust layer reads it once: the upgrade to
+	// [SchemaHolders] makes it the Holder of a key whose name no other folds to.
 	Name string `cbor:"3,keyasint,omitempty"`
+
+	// Holder names the person the key belongs to, from [SchemaHolders] on.
+	// The keys of one holder are one voter: they carry the holder's Votes and
+	// Needed alike, and the holder's votes count once, when at least Needed
+	// of its keys signed. So a person with a key on each of two devices
+	// casts one vote with either, and can be made to need both. Without a
+	// holder a key is a voter of its own, as before schema 3.
+	Holder string `cbor:"4,keyasint,omitempty"`
+
+	// Needed is how many of the holder's keys must sign for its votes to
+	// count. Zero is one, and one is always written as zero, so that a state
+	// has one encoding.
+	Needed uint32 `cbor:"5,keyasint,omitempty"`
+}
+
+// FoldName maps a name to the one form of every name strings.EqualFold holds
+// equal to it: each rune to the smallest in its case-folding orbit. Two
+// holders whose names fold alike are refused, since a person reading them
+// could not tell them apart.
+func FoldName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			least = min(least, f)
+		}
+		b.WriteRune(least)
+	}
+	return b.String()
+}
+
+// NeededKeys is how many of a key's holder's keys must sign.
+func (a *AdminKey) NeededKeys() uint32 { return max(a.Needed, 1) }
+
+// voter names the voter a key belongs to: its holder, or the key itself.
+func (a *AdminKey) voter() string {
+	if a.Holder != "" {
+		return "holder\x00" + a.Holder
+	}
+	return "key\x00" + string(a.Public[:])
+}
+
+// AchievableVotes is the vote weight the admin keys can cast between them:
+// every voter's, counted once, except a holder's that has fewer keys than it
+// needs, which can cast none.
+func AchievableVotes(keys []AdminKey) uint32 {
+	return CountVotes(keys, func(Identity) bool { return true })
+}
+
+// CountVotes is the vote weight the keys in signed cast: each voter's once,
+// if at least as many of its keys signed as it needs.
+func CountVotes(keys []AdminKey, signed func(Identity) bool) uint32 {
+	type voter struct{ votes, needed, signed uint32 }
+	voters := map[string]*voter{}
+	for i := range keys {
+		v := voters[keys[i].voter()]
+		if v == nil {
+			v = &voter{votes: keys[i].Votes, needed: keys[i].NeededKeys()}
+			voters[keys[i].voter()] = v
+		}
+		if signed(keys[i].Public) {
+			v.signed++
+		}
+	}
+	var total uint32
+	for _, v := range voters {
+		if v.signed >= v.needed {
+			total += v.votes
+		}
+	}
+	return total
+}
+
+// ValidateAdmins checks what the keys say about their holders: holders only
+// from [SchemaHolders] on, and one holder's keys agreeing on its votes and
+// the keys it needs.
+func ValidateAdmins(keys []AdminKey, schema SchemaVersion) error {
+	type policy struct {
+		name          string
+		votes, needed uint32
+	}
+	holders := map[string]policy{}
+	for i := range keys {
+		k := &keys[i]
+		if (k.Holder != "" || k.Needed != 0) && schema < SchemaHolders {
+			return fmt.Errorf("admin key %v names a holder, which needs %v; the network is at %v",
+				k.Public.ShortString(), SchemaHolders, schema)
+		}
+		if k.Holder == "" {
+			if k.Needed != 0 {
+				return fmt.Errorf("admin key %v needs %d keys and belongs to no holder", k.Public.ShortString(), k.Needed)
+			}
+			continue
+		}
+		p := policy{k.Holder, k.Votes, k.Needed}
+		seen, ok := holders[FoldName(k.Holder)]
+		switch {
+		case ok && seen.name != k.Holder:
+			return fmt.Errorf("the holders %q and %q differ only in case", seen.name, k.Holder)
+		case ok && seen != p:
+			return fmt.Errorf("the keys of %q disagree on its votes or the keys it needs", k.Holder)
+		}
+		holders[FoldName(k.Holder)] = p
+	}
+	return nil
 }
 
 // A NodeRecord is a member device as the log records it. The [Identity] is the
@@ -73,23 +182,49 @@ type NodeRecord struct {
 	X25519 X25519Key `cbor:"4,keyasint"`
 	MLKEM  MLKEMKey  `cbor:"5,keyasint"`
 
-	// V4 is an optional overlay IPv4 address inside [CGNAT]. Assigned
-	// explicitly rather than derived: 100.64/10 has 22 host bits, where
-	// hash-derived addresses start colliding in the hundreds of nodes.
+	// V4 is an optional overlay IPv4 address inside [V4Ranges]. Assigned
+	// explicitly rather than derived: too few host bits for hash-derived
+	// addresses not to collide in the hundreds of nodes.
 	V4 *netip.Addr `cbor:"6,keyasint,omitempty"`
 
 	// Roles are the capabilities quorum has granted this node.
 	Roles []Role `cbor:"7,keyasint,omitempty"`
 
 	// Routes are the prefixes this node may forward for. Unconsumed before
-	// M7b, validated from M1. See [ValidateRoute].
+	// M9b, validated from M1. See [ValidateRoute].
 	Routes []netip.Prefix `cbor:"8,keyasint,omitempty"`
 
 	// Expiry is a Unix timestamp in seconds after which the membership is
 	// stale, or 0 for no expiry. It is a backstop, not the revocation
 	// mechanism: revocation is a signed record (see [KindRemoveNode]).
 	Expiry uint64 `cbor:"9,keyasint,omitempty"`
+
+	// Retiring is the IPv4 address a renumbering moved the node from, which
+	// it still holds until the deadline. Schema 5 and later.
+	Retiring *RetiringV4 `cbor:"10,keyasint,omitempty"`
 }
+
+// A RetiringV4 is an overlay IPv4 address a renumbering replaced, live until
+// Until, in Unix seconds. No other member may hold it while it is recorded.
+type RetiringV4 struct {
+	Addr  netip.Addr `cbor:"1,keyasint"`
+	Until uint64     `cbor:"2,keyasint"`
+}
+
+// Live reports whether the address is still in use at unix time now.
+func (r *RetiringV4) Live(now int64) bool { return r != nil && liveUntil(r.Until, now) }
+
+// RetiringRanges are the IPv4 ranges a network renumbering moved away from,
+// live until Until, in Unix seconds.
+type RetiringRanges struct {
+	Prefixes []netip.Prefix `cbor:"1,keyasint"`
+	Until    uint64         `cbor:"2,keyasint"`
+}
+
+// Live reports whether the ranges are still in use at unix time now.
+func (r *RetiringRanges) Live(now int64) bool { return r != nil && liveUntil(r.Until, now) }
+
+func liveUntil(until uint64, now int64) bool { return now < 0 || uint64(now) < until }
 
 // Sizes of the secrets the log carries and commits to.
 const (
@@ -187,7 +322,8 @@ type Snapshot struct {
 	// with it.
 	GenesisHash *Hash `cbor:"1,keyasint,omitempty"`
 
-	// Network is a human-readable network name, fixed at genesis.
+	// Network is the network's human-readable name, set at genesis and
+	// changed by [KindRenameNetwork]. Nothing identifies the network by it.
 	Network string `cbor:"2,keyasint"`
 
 	// Quorum is k: the total vote weight required to authorize a change.
@@ -220,11 +356,32 @@ type Snapshot struct {
 	EpochSuite EpochSuite `cbor:"10,keyasint,omitempty"`
 
 	// Schema is the record schema this network is written under, raised by
-	// [KindSchemaUpgrade]. Absent means [CurrentSchema] as this build knows
-	// it. Whether the version is one this build can act on is decided in
+	// [KindSchemaUpgrade]. Absent means schema 0, the schema frozen at M3b.
+	// Whether the version is one this build can act on is decided in
 	// trust/log, not here: a snapshot at a newer schema must still decode, so
 	// that a node too old for it can store and relay the record carrying it.
 	Schema SchemaVersion `cbor:"11,keyasint,omitempty"`
+
+	// Vouchers is how many admin devices must vouch for a node's view within
+	// the freshness TTL; absent means one. Schema 1 and later.
+	Vouchers uint32 `cbor:"12,keyasint,omitempty"`
+
+	// V4Prefix is the network's own overlay IPv4 prefix, fixed at genesis;
+	// absent means the schema's range. Schema 4 and later.
+	V4Prefix *netip.Prefix `cbor:"13,keyasint,omitempty"`
+
+	// V4Retiring are the ranges a network renumbering moved away from, while
+	// members may still hold addresses in them. Schema 5 and later.
+	V4Retiring *RetiringRanges `cbor:"14,keyasint,omitempty"`
+}
+
+// V4Ranges returns the ranges the network's overlay IPv4 addresses may lie in.
+func (s *Snapshot) V4Ranges() []netip.Prefix {
+	out := V4Ranges(s.Schema, s.V4Prefix)
+	if s.V4Retiring != nil {
+		out = append(out, s.V4Retiring.Prefixes...)
+	}
+	return out
 }
 
 // EpochCommit returns the commitment stored in [EpochRecord.Commit] for a
@@ -238,6 +395,19 @@ func EpochCommit(secret []byte) Hash {
 // full-length CSPRNG output, so there is no guessing to slow down.
 func DisablementCommit(secret []byte) Hash {
 	return hashLabeled(labelDisablement, secret)
+}
+
+// V4Addrs returns every overlay IPv4 address the node holds: its own, and the
+// one it is retiring.
+func (n *NodeRecord) V4Addrs() []netip.Addr {
+	var out []netip.Addr
+	if n.V4 != nil {
+		out = append(out, *n.V4)
+	}
+	if n.Retiring != nil {
+		out = append(out, n.Retiring.Addr)
+	}
+	return out
 }
 
 // HasRole reports whether the node holds role.
@@ -256,6 +426,10 @@ func (n *NodeRecord) Clone() *NodeRecord {
 		v4 := *n.V4
 		out.V4 = &v4
 	}
+	if n.Retiring != nil {
+		r := *n.Retiring
+		out.Retiring = &r
+	}
 	out.Roles = slices.Clone(n.Roles)
 	out.Routes = slices.Clone(n.Routes)
 	return &out
@@ -263,7 +437,7 @@ func (n *NodeRecord) Clone() *NodeRecord {
 
 // StaticValidate checks what does not depend on the rest of the network: key
 // validity, canonical ordering and route form. Rules needing the overlay
-// prefix are in [NodeRecord.ValidateRoutes].
+// prefix or the schema are in [NodeRecord.ValidateInNetwork].
 func (n *NodeRecord) StaticValidate() error {
 	if err := n.Identity.Validate(); err != nil {
 		return fmt.Errorf("node identity: %w", err)
@@ -281,8 +455,21 @@ func (n *NodeRecord) StaticValidate() error {
 		return fmt.Errorf("node %v has no ML-KEM key", n.Identity.ShortString())
 	}
 	if n.V4 != nil {
-		if err := ValidateV4(*n.V4); err != nil {
+		if err := ValidateV4(*n.V4, v4Choosable); err != nil {
 			return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
+		}
+	}
+	if r := n.Retiring; r != nil {
+		switch {
+		case n.V4 == nil:
+			return fmt.Errorf("node %v retires an IPv4 address and holds none", n.Identity.ShortString())
+		case r.Addr == *n.V4:
+			return fmt.Errorf("node %v retires the address it holds", n.Identity.ShortString())
+		case r.Until == 0:
+			return fmt.Errorf("node %v retires an address with no deadline", n.Identity.ShortString())
+		}
+		if err := ValidateV4(r.Addr, v4Choosable); err != nil {
+			return fmt.Errorf("node %v retiring: %w", n.Identity.ShortString(), err)
 		}
 	}
 	if err := validateRoles(n.Roles); err != nil {
@@ -301,13 +488,23 @@ func (n *NodeRecord) StaticValidate() error {
 	return nil
 }
 
-// ValidateRoutes checks the node's advertised routes against the network's own
-// overlay prefix. Separate from [NodeRecord.StaticValidate] because it needs
-// the genesis hash, which only the log knows.
-func (n *NodeRecord) ValidateRoutes(ula netip.Prefix) error {
+// ValidateInNetwork checks the node's overlay IPv4 address and advertised
+// routes against the network's overlay prefix and [V4Ranges], which only the
+// log knows.
+func (n *NodeRecord) ValidateInNetwork(ula netip.Prefix, v4 []netip.Prefix) error {
+	if n.V4 != nil {
+		if err := ValidateV4(*n.V4, v4); err != nil {
+			return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
+		}
+	}
+	if n.Retiring != nil {
+		if err := ValidateV4(n.Retiring.Addr, v4); err != nil {
+			return fmt.Errorf("node %v retiring: %w", n.Identity.ShortString(), err)
+		}
+	}
 	exit := n.HasRole(RoleExitNode)
 	for _, pfx := range n.Routes {
-		if err := ValidateRoute(pfx, ula, exit); err != nil {
+		if err := ValidateRoute(pfx, ula, v4, exit); err != nil {
 			return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
 		}
 	}
@@ -325,6 +522,15 @@ func (a *AdminKey) StaticValidate() error {
 	if a.Votes > MaxVotes {
 		return fmt.Errorf("admin key %v has %d votes, over the %d limit",
 			a.Public.ShortString(), a.Votes, MaxVotes)
+	}
+	if a.Needed > MaxAdmins {
+		return fmt.Errorf("admin key %v needs %d keys, over the %d-key limit", a.Public.ShortString(), a.Needed, MaxAdmins)
+	}
+	if a.Needed == 1 {
+		return fmt.Errorf("admin key %v needs one key, which is written as zero", a.Public.ShortString())
+	}
+	if err := ValidateName(a.Holder); err != nil {
+		return fmt.Errorf("admin key %v's holder: %w", a.Public.ShortString(), err)
 	}
 	return ValidateName(a.Name)
 }
@@ -394,15 +600,10 @@ func (s *Snapshot) Admin(id Identity) (*AdminKey, bool) {
 	return &s.Admins[i], true
 }
 
-// TotalVotes returns the summed vote weight of every admin key. Bounded by
-// [MaxAdmins] times [MaxVotes], so the sum cannot overflow.
-func (s *Snapshot) TotalVotes() uint32 {
-	var total uint32
-	for i := range s.Admins {
-		total += s.Admins[i].Votes
-	}
-	return total
-}
+// TotalVotes returns the vote weight the admin keys can cast
+// ([AchievableVotes]). Bounded by [MaxAdmins] times [MaxVotes], so the sum
+// cannot overflow.
+func (s *Snapshot) TotalVotes() uint32 { return AchievableVotes(s.Admins) }
 
 // ULA returns the network's overlay IPv6 prefix, or the zero prefix if the
 // snapshot has no genesis hash yet (which is only true inside an unapplied
@@ -420,6 +621,14 @@ func (s *Snapshot) Clone() *Snapshot {
 	if s.GenesisHash != nil {
 		h := *s.GenesisHash
 		out.GenesisHash = &h
+	}
+	if s.V4Prefix != nil {
+		p := *s.V4Prefix
+		out.V4Prefix = &p
+	}
+	if s.V4Retiring != nil {
+		r := RetiringRanges{Prefixes: slices.Clone(s.V4Retiring.Prefixes), Until: s.V4Retiring.Until}
+		out.V4Retiring = &r
 	}
 	out.Disablement = slices.Clone(s.Disablement)
 	out.Admins = slices.Clone(s.Admins)
@@ -455,6 +664,55 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	if err := ValidateName(s.Network); err != nil {
 		return fmt.Errorf("network name: %w", err)
 	}
+	if s.Vouchers > MaxAdmins {
+		return fmt.Errorf("a vouching threshold of %d exceeds the %d-admin limit", s.Vouchers, MaxAdmins)
+	}
+	if s.Vouchers != 0 && s.Schema < SchemaVouchers {
+		return fmt.Errorf("a vouching threshold needs %v; the state is at %v", SchemaVouchers, s.Schema)
+	}
+	if s.V4Prefix != nil {
+		if s.Schema < SchemaOverlayV4 {
+			return fmt.Errorf("an IPv4 prefix of the network's own needs %v; the state is at %v",
+				SchemaOverlayV4, s.Schema)
+		}
+		if err := ValidateV4Prefix(*s.V4Prefix); err != nil {
+			return err
+		}
+	}
+	if r := s.V4Retiring; r != nil {
+		switch {
+		case genesis:
+			return errors.New("a genesis retires IPv4 ranges it never had")
+		case s.Schema < SchemaRenumber:
+			return fmt.Errorf("retiring IPv4 ranges need %v; the state is at %v", SchemaRenumber, s.Schema)
+		case s.V4Prefix == nil:
+			return errors.New("retiring IPv4 ranges, but no prefix they were renumbered to")
+		case len(r.Prefixes) == 0:
+			return errors.New("retiring IPv4 ranges name none")
+		case len(r.Prefixes) > len(v4Choosable):
+			return fmt.Errorf("%d retiring IPv4 ranges, over the %d limit", len(r.Prefixes), len(v4Choosable))
+		case r.Until == 0:
+			return errors.New("retiring IPv4 ranges have no deadline")
+		}
+		for i, p := range r.Prefixes {
+			if err := ValidateV4Prefix(p); err != nil {
+				return fmt.Errorf("retiring: %w", err)
+			}
+			if i > 0 && comparePrefix(r.Prefixes[i-1], p) >= 0 {
+				return fmt.Errorf("retiring IPv4 ranges are not sorted and unique at %v", p)
+			}
+		}
+	}
+	// A genesis is held to what a SetVouchers record is. A checkpoint is
+	// not: it states a chain's state, where admin devices removed after the
+	// threshold was set may have left fewer, which fails closed. Only from
+	// schema 3, the newest when the bound came in, so that no genesis stored
+	// before it changes its verdict.
+	if genesis && s.Vouchers > 0 && s.Schema >= SchemaHolders {
+		if err := ValidateVouchers(s.Vouchers, s.Nodes); err != nil {
+			return err
+		}
+	}
 	if s.Network == "" {
 		return errors.New("network name is empty")
 	}
@@ -486,6 +744,9 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 			return fmt.Errorf("admin keys are not sorted and unique at %v", s.Admins[i].Public.ShortString())
 		}
 	}
+	if err := ValidateAdmins(s.Admins, s.Schema); err != nil {
+		return err
+	}
 	if s.Quorum == 0 {
 		return errors.New("quorum is zero; any single signature would authorize a change")
 	}
@@ -500,6 +761,14 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	for i := range s.Nodes {
 		if err := s.Nodes[i].StaticValidate(); err != nil {
 			return err
+		}
+		if s.Nodes[i].Retiring != nil && genesis {
+			return fmt.Errorf("node %v retires an address in a genesis, which never gave it one",
+				s.Nodes[i].Identity.ShortString())
+		}
+		if s.Nodes[i].Retiring != nil && s.Schema < SchemaRenumber {
+			return fmt.Errorf("node %v retires an address, which needs %v; the state is at %v",
+				s.Nodes[i].Identity.ShortString(), SchemaRenumber, s.Schema)
 		}
 		if i > 0 && s.Nodes[i-1].Identity.Compare(s.Nodes[i].Identity) >= 0 {
 			return fmt.Errorf("nodes are not sorted and unique at %v", s.Nodes[i].Identity.ShortString())
@@ -536,62 +805,114 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	return nil
 }
 
+// ValidateVouchers checks a vouching threshold against the admin devices
+// among nodes: more than there are would leave no node ever fresh.
+func ValidateVouchers(vouchers uint32, nodes []NodeRecord) error {
+	devices := 0
+	for i := range nodes {
+		if nodes[i].HasRole(RoleAdmin) {
+			devices++
+		}
+	}
+	if int(vouchers) > devices {
+		return fmt.Errorf("%d admin devices cannot meet a vouching threshold of %d", devices, vouchers)
+	}
+	return nil
+}
+
 // ValidateInNetwork checks the snapshot invariants that depend on the
-// network's own address space: derived-address collisions, explicit v4
-// collisions, key collisions, and the route rules.
-//
-// A state reached record by record is checked by the log as each record
-// applies; this is the same set of rules for a state that arrives whole — a
-// genesis naming founding members, or a checkpoint adopted as an anchor.
+// network's own address space: the route rules and the collisions a
+// [MemberIndex] rejects. The log applies the same rules record by record;
+// this is them for a state that arrives whole — a genesis naming founding
+// members, or a checkpoint adopted as an anchor.
 func (s *Snapshot) ValidateInNetwork() error {
 	if s.GenesisHash == nil {
 		return errors.New("snapshot has no genesis hash")
 	}
 	ula := s.ULA()
-	seen6 := make(map[netip.Addr]Identity, len(s.Nodes))
-	seen4 := make(map[netip.Addr]Identity, len(s.Nodes))
-	seenWG := make(map[WGKey]Identity, len(s.Nodes))
-	seenX := make(map[X25519Key]Identity, len(s.Nodes))
-	seenML := make(map[MLKEMKey]Identity, len(s.Nodes))
+	current := V4Ranges(s.Schema, s.V4Prefix)
+	seated := NewMemberIndex(*s.GenesisHash, len(s.Nodes))
 	for i := range s.Nodes {
 		n := &s.Nodes[i]
-		if err := n.ValidateRoutes(ula); err != nil {
+		if err := n.ValidateInNetwork(ula, s.V4Ranges()); err != nil {
 			return err
 		}
-		// Two members holding one key collide where that key is used: in the
-		// data plane for WireGuard, and in the epoch fan-out for the other
-		// two. The log enforces this on every record that admits a member;
-		// without it here a whole state could seat what no record could add.
-		if other, dup := seenWG[n.WireGuard]; dup {
-			return fmt.Errorf("nodes %v and %v share a WireGuard key",
-				other.ShortString(), n.Identity.ShortString())
-		}
-		seenWG[n.WireGuard] = n.Identity
-		if other, dup := seenX[n.X25519]; dup {
-			return fmt.Errorf("nodes %v and %v share an X25519 key",
-				other.ShortString(), n.Identity.ShortString())
-		}
-		seenX[n.X25519] = n.Identity
-		if other, dup := seenML[n.MLKEM]; dup {
-			return fmt.Errorf("nodes %v and %v share an ML-KEM key",
-				other.ShortString(), n.Identity.ShortString())
-		}
-		seenML[n.MLKEM] = n.Identity
-		a6 := Addr6(*s.GenesisHash, n.Identity)
-		if other, dup := seen6[a6]; dup {
-			return fmt.Errorf("nodes %v and %v derive the same overlay address %v",
-				other.ShortString(), n.Identity.ShortString(), a6)
-		}
-		seen6[a6] = n.Identity
-		if n.V4 != nil {
-			if other, dup := seen4[*n.V4]; dup {
-				return fmt.Errorf("nodes %v and %v both claim overlay v4 address %v",
-					other.ShortString(), n.Identity.ShortString(), *n.V4)
+		// Only an address a member is retiring may lie in a retiring range:
+		// one it holds there would be left outside the network once it
+		// retires.
+		if n.V4 != nil && s.V4Retiring != nil {
+			if err := ValidateV4(*n.V4, current); err != nil {
+				return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
 			}
-			seen4[*n.V4] = n.Identity
+		}
+		if err := seated.Check(n); err != nil {
+			return err
+		}
+		seated.Add(n)
+	}
+	return nil
+}
+
+// A MemberIndex holds what a set of members claims — derived and IPv4 overlay
+// addresses, and keys — so one more can be checked against all of them.
+// Rejecting derived-address collisions deterministically is what makes
+// coordination-free allocation safe; a shared key collides where it is used,
+// in the data plane for WireGuard and in the epoch fan-out for the others.
+type MemberIndex struct {
+	genesis Hash
+	addr6   map[netip.Addr]Identity
+	addr4   map[netip.Addr]Identity
+	wg      map[WGKey]Identity
+	x25519  map[X25519Key]Identity
+	mlkem   map[MLKEMKey]Identity
+}
+
+// NewMemberIndex returns an empty index for the network genesis names, sized
+// for n members.
+func NewMemberIndex(genesis Hash, n int) *MemberIndex {
+	return &MemberIndex{
+		genesis: genesis,
+		addr6:   make(map[netip.Addr]Identity, n),
+		addr4:   make(map[netip.Addr]Identity, 2*n),
+		wg:      make(map[WGKey]Identity, n),
+		x25519:  make(map[X25519Key]Identity, n),
+		mlkem:   make(map[MLKEMKey]Identity, n),
+	}
+}
+
+// Check reports what n shares with a member added before.
+func (ix *MemberIndex) Check(n *NodeRecord) error {
+	id := n.Identity.ShortString()
+	if other, dup := ix.wg[n.WireGuard]; dup {
+		return fmt.Errorf("nodes %v and %v share a WireGuard key", other.ShortString(), id)
+	}
+	if other, dup := ix.x25519[n.X25519]; dup {
+		return fmt.Errorf("nodes %v and %v share an X25519 key", other.ShortString(), id)
+	}
+	if other, dup := ix.mlkem[n.MLKEM]; dup {
+		return fmt.Errorf("nodes %v and %v share an ML-KEM key", other.ShortString(), id)
+	}
+	a6 := Addr6(ix.genesis, n.Identity)
+	if other, dup := ix.addr6[a6]; dup {
+		return fmt.Errorf("nodes %v and %v derive the same overlay address %v", other.ShortString(), id, a6)
+	}
+	for _, a := range n.V4Addrs() {
+		if other, dup := ix.addr4[a]; dup {
+			return fmt.Errorf("nodes %v and %v both claim overlay v4 address %v", other.ShortString(), id, a)
 		}
 	}
 	return nil
+}
+
+// Add records what n claims, unchecked.
+func (ix *MemberIndex) Add(n *NodeRecord) {
+	ix.wg[n.WireGuard] = n.Identity
+	ix.x25519[n.X25519] = n.Identity
+	ix.mlkem[n.MLKEM] = n.Identity
+	ix.addr6[Addr6(ix.genesis, n.Identity)] = n.Identity
+	for _, a := range n.V4Addrs() {
+		ix.addr4[a] = n.Identity
+	}
 }
 
 func validateRoles(roles []Role) error {
@@ -614,12 +935,17 @@ func validateRoles(roles []Role) error {
 // Names are attacker-supplied strings that reach operator-facing output, so
 // control characters are rejected here rather than escaped at every print site.
 // Exported so tooling can ask before it persists a name.
-func ValidateName(s string) error {
-	if len(s) > MaxNameLen {
-		return fmt.Errorf("name is %d bytes, over the %d limit", len(s), MaxNameLen)
+func ValidateName(s string) error { return ValidateText("name", s, MaxNameLen) }
+
+// ValidateText applies [ValidateName]'s rules to any attacker-supplied string
+// bound for operator-facing output, with its own length limit. what names the
+// string in the error.
+func ValidateText(what, s string, limit int) error {
+	if len(s) > limit {
+		return fmt.Errorf("%s is %d bytes, over the %d limit", what, len(s), limit)
 	}
 	if !utf8.ValidString(s) {
-		return errors.New("name is not valid UTF-8")
+		return fmt.Errorf("%s is not valid UTF-8", what)
 	}
 	for _, r := range s {
 		// Unicode Cc, plus DEL, plus the bidi and zero-width formatting
@@ -627,11 +953,11 @@ func ValidateName(s string) error {
 		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) ||
 			(r >= 0x200b && r <= 0x200f) || (r >= 0x202a && r <= 0x202e) ||
 			(r >= 0x2066 && r <= 0x2069) || r == 0xfeff {
-			return fmt.Errorf("name contains the control or formatting character U+%04X", r)
+			return fmt.Errorf("%s contains the control or formatting character U+%04X", what, r)
 		}
 	}
 	if trimmed := trimSpace(s); trimmed != s {
-		return errors.New("name has leading or trailing whitespace")
+		return fmt.Errorf("%s has leading or trailing whitespace", what)
 	}
 	return nil
 }

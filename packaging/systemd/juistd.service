@@ -10,8 +10,9 @@
 #   sudo useradd --system --home-dir /var/lib/juist --shell /usr/sbin/nologin juist
 #   sudo install -m755 build/juistd /usr/local/bin/juistd
 #   sudo install -m644 packaging/systemd/juistd.service /etc/systemd/system/
-#   # enrol the device first: see the README. State lives in /var/lib/juist.
 #   sudo systemctl daemon-reload && sudo systemctl enable --now juistd
+#   sudo juist join CODE    # or: juist init
+# State lives in /var/lib/juist, the control socket in /run/juist.
 
 [Unit]
 Description=juist node
@@ -21,7 +22,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/juistd -home /var/lib/juist -tun juist0
+ExecStart=/usr/local/bin/juistd --home /var/lib/juist --socket /run/juist/juistd.sock --tun juist0
 Restart=on-failure
 RestartSec=2
 
@@ -33,9 +34,13 @@ StateDirectory=juist
 # group/other-writable state dir, so 0755 would pass while world-readable.
 StateDirectoryMode=0700
 WorkingDirectory=/var/lib/juist
-# The control socket is born 0777&~umask and tightened to 0600 a line later;
-# 0077 closes that window at the source instead of leaning on the mode above.
-# A file another user is meant to read then needs an explicit chmod.
+# The control socket lives apart from the state, so that reaching it is not
+# reading node.keys: any local user may connect and ask for status, and the
+# daemon decides everything else per call from the caller's kernel-reported
+# uid. 0755 so users can reach the socket; nothing else is kept there.
+RuntimeDirectory=juist
+RuntimeDirectoryMode=0755
+# Every file the daemon writes is private; the socket is chmodded explicitly.
 UMask=0077
 
 # The whole privilege footprint: CAP_NET_ADMIN, ambient so the unprivileged
@@ -58,10 +63,20 @@ ProtectKernelModules=yes
 ProtectKernelTunables=yes
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
+RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+SystemCallArchitectures=native
+# No SystemCallFilter yet: the embedded engine's netlink and TUN paths have not
+# been traced against @system-service on every target, and a missing syscall
+# kills the daemon rather than failing one call.
 
-# Networking: IP, netlink (routes/addresses), and the unix control socket.
+# Networking: IP, netlink (routes/addresses), the unix control socket, and the
+# system bus, over which firewalld is asked whether it lets log sync in.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 
 # ProtectKernelTunables is affordable only because conn keeps NetfilterMode at

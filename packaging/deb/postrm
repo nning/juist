@@ -1,0 +1,23 @@
+#!/bin/sh
+# /var/lib/juist is removed on purge only if it is empty: it holds an enrolled
+# device's identity, and deleting that behind the operator's back is not a
+# package's call. The juist user is never removed, since a UID may own files
+# this package never installed.
+set -e
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload || true
+fi
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+	# The service files are gone; firewalld forgets them only on a reload.
+	if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+		firewall-cmd --reload >/dev/null 2>&1 || true
+	fi
+fi
+if [ "$1" = purge ]; then
+	rm -f /var/lib/juist.removed
+fi
+if [ "$1" = purge ] && [ -d /var/lib/juist ]; then
+	rmdir /var/lib/juist 2>/dev/null ||
+		echo "juist: kept /var/lib/juist, which still holds this device's keys and log" >&2
+fi
+exit 0

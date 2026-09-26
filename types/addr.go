@@ -4,13 +4,85 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 )
 
-// CGNAT is the IPv4 range overlay v4 addresses are assigned from (RFC 6598),
-// matching Tailscale's choice. Unlike the v6 address it is assigned explicitly
-// in the record: 22 host bits is too few for hash-derived addresses to avoid
-// birthday collisions.
+// CGNAT is the overlay IPv4 range before [SchemaOverlayV4] (RFC 6598). It is
+// Tailscale's too, and tailscaled drops packets from it that arrive on any
+// interface but its own, so juist cannot use it on a host running both.
 var CGNAT = netip.MustParsePrefix("100.64.0.0/10")
+
+// OverlayV4 is the overlay IPv4 range from [SchemaOverlayV4] on: RFC 2544's
+// benchmarking block, which no public network routes and neither LANs nor
+// Tailscale use. Unlike the v6 address a v4 one is assigned explicitly in the
+// record, since 17 host bits are too few for hash-derived addresses.
+var OverlayV4 = netip.MustParsePrefix("198.18.0.0/15")
+
+// v4Choosable are the ranges a network's own IPv4 prefix may lie in.
+var v4Choosable = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	CGNAT,
+	OverlayV4,
+}
+
+// Bounds on a network's own IPv4 prefix length.
+const (
+	MinV4PrefixBits = 8
+	MaxV4PrefixBits = 28
+)
+
+// ValidateV4Prefix checks a network's own IPv4 prefix: canonical, private or
+// one of juist's ranges, and between [MinV4PrefixBits] and [MaxV4PrefixBits].
+func ValidateV4Prefix(p netip.Prefix) error {
+	switch {
+	case !p.IsValid() || !p.Addr().Is4():
+		return fmt.Errorf("IPv4 prefix %v is not an IPv4 prefix", p)
+	case p.Masked() != p:
+		return fmt.Errorf("IPv4 prefix %v is not masked; did you mean %v?", p, p.Masked())
+	case p.Bits() < MinV4PrefixBits || p.Bits() > MaxV4PrefixBits:
+		return fmt.Errorf("IPv4 prefix %v must be between /%d and /%d", p, MinV4PrefixBits, MaxV4PrefixBits)
+	}
+	for _, r := range v4Choosable {
+		if r.Bits() <= p.Bits() && r.Contains(p.Addr()) {
+			return nil
+		}
+	}
+	return fmt.Errorf("IPv4 prefix %v is not private address space (10/8, 172.16/12, 192.168/16) "+
+		"or %v", p, OverlayV4)
+}
+
+// V4Range returns the range new overlay IPv4 addresses are assigned from: the
+// network's own prefix where it has one, else the schema's range.
+func V4Range(schema SchemaVersion, own *netip.Prefix) netip.Prefix {
+	switch {
+	case own != nil:
+		return *own
+	case schema >= SchemaOverlayV4:
+		return OverlayV4
+	}
+	return CGNAT
+}
+
+// V4Ranges returns every range an overlay IPv4 address may hold. Without a
+// prefix of its own, the upgrade to [SchemaOverlayV4] leaves existing members
+// their addresses.
+func V4Ranges(schema SchemaVersion, own *netip.Prefix) []netip.Prefix {
+	switch {
+	case own != nil:
+		return []netip.Prefix{*own}
+	case schema >= SchemaOverlayV4:
+		return []netip.Prefix{CGNAT, OverlayV4}
+	}
+	return []netip.Prefix{CGNAT}
+}
+
+// IsOverlayV4 reports whether a lies in a range any schema assigns overlay
+// IPv4 addresses from, and so is never an underlay address.
+func IsOverlayV4(a netip.Addr) bool {
+	return CGNAT.Contains(a) || OverlayV4.Contains(a)
+}
 
 // Prefixes an advertised route may never cover, on top of the network's own
 // overlay space: a grant covering loopback, link-local or multicast would
@@ -73,23 +145,30 @@ func validateAddrForm(a netip.Addr) error {
 	return nil
 }
 
-// ValidateV4 checks a node's optional explicit overlay IPv4 address.
-func ValidateV4(a netip.Addr) error {
+// ValidateV4 checks a node's optional explicit overlay IPv4 address against
+// the ranges it may lie in.
+func ValidateV4(a netip.Addr, ranges []netip.Prefix) error {
 	if err := validateAddrForm(a); err != nil {
 		return err
 	}
 	if !a.Is4() {
 		return fmt.Errorf("overlay v4 address %v is not IPv4", a)
 	}
-	if !CGNAT.Contains(a) {
-		return fmt.Errorf("overlay v4 address %v is outside %v", a, CGNAT)
+	for _, r := range ranges {
+		if r.Contains(a) {
+			return nil
+		}
 	}
-	return nil
+	names := make([]string, len(ranges))
+	for i, r := range ranges {
+		names[i] = r.String()
+	}
+	return fmt.Errorf("overlay v4 address %v is outside %s", a, strings.Join(names, " and "))
 }
 
 // ValidateRoute checks one advertised prefix from a route grant. ula is the
-// network's overlay prefix and exitNode whether the granted node holds the
-// exit-node role.
+// network's overlay prefix, v4 its [V4Ranges], and exitNode whether the
+// granted node holds the exit-node role.
 //
 //   - Canonical form: masked, no zone, no IPv4-mapped-IPv6.
 //   - No overlap with the overlay's own space, which is what stops a grant
@@ -98,7 +177,7 @@ func ValidateV4(a netip.Addr) error {
 //   - The default route only with the exit-node role, and exempt from the
 //     overlap rules it would otherwise fail by construction; the consumer
 //     subtracts the overlay space when rendering AllowedIPs.
-func ValidateRoute(pfx netip.Prefix, ula netip.Prefix, exitNode bool) error {
+func ValidateRoute(pfx netip.Prefix, ula netip.Prefix, v4 []netip.Prefix, exitNode bool) error {
 	if !pfx.IsValid() {
 		return errors.New("route prefix is invalid")
 	}
@@ -123,8 +202,10 @@ func ValidateRoute(pfx netip.Prefix, ula netip.Prefix, exitNode bool) error {
 	if pfx.Overlaps(ula) {
 		return fmt.Errorf("route %v overlaps the overlay prefix %v", pfx, ula)
 	}
-	if pfx.Overlaps(CGNAT) {
-		return fmt.Errorf("route %v overlaps the overlay v4 range %v", pfx, CGNAT)
+	for _, r := range v4 {
+		if pfx.Overlaps(r) {
+			return fmt.Errorf("route %v overlaps the overlay v4 range %v", pfx, r)
+		}
 	}
 	for _, bad := range forbiddenRoutes {
 		if pfx.Overlaps(bad) {

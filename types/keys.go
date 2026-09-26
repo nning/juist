@@ -142,13 +142,6 @@ func (k *WGKey) UnmarshalBinary(b []byte) error {
 	return unmarshalKeyBinary("WireGuard key", b, k[:])
 }
 
-// ParseWGKey parses the text form produced by [WGKey.String].
-func ParseWGKey(s string) (WGKey, error) {
-	var k WGKey
-	err := k.UnmarshalText([]byte(s))
-	return k, err
-}
-
 func (k X25519Key) IsZero() bool                   { return k == X25519Key{} }
 func (k X25519Key) String() string                 { return x25519Prefix + b64.EncodeToString(k[:]) }
 func (k X25519Key) MarshalText() ([]byte, error)   { return []byte(k.String()), nil }
@@ -159,13 +152,6 @@ func (k *X25519Key) UnmarshalText(text []byte) error {
 }
 func (k *X25519Key) UnmarshalBinary(b []byte) error {
 	return unmarshalKeyBinary("X25519 key", b, k[:])
-}
-
-// ParseX25519Key parses the text form produced by [X25519Key.String].
-func ParseX25519Key(s string) (X25519Key, error) {
-	var k X25519Key
-	err := k.UnmarshalText([]byte(s))
-	return k, err
 }
 
 // IsZero reports whether k is the zero value. Unlike the 32-byte keys this is
@@ -182,13 +168,6 @@ func (k *MLKEMKey) UnmarshalText(text []byte) error {
 }
 func (k *MLKEMKey) UnmarshalBinary(b []byte) error {
 	return unmarshalKeyBinary("ML-KEM key", b, k[:])
-}
-
-// ParseMLKEMKey parses the text form produced by [MLKEMKey.String].
-func ParseMLKEMKey(s string) (MLKEMKey, error) {
-	var k MLKEMKey
-	err := k.UnmarshalText([]byte(s))
-	return k, err
 }
 
 func (s Sig) IsZero() bool                   { return s == Sig{} }

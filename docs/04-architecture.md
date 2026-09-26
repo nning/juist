@@ -66,14 +66,15 @@ connection manager over plain wireguard-go / kernel WireGuard.
 | `trust/log` | Membership log: AUM chain, k-of-n quorum verification, checkpoints, fork choice, address-collision validation | TKA's *design*, not its code — see [08-trust-layer-notes.md](08-trust-layer-notes.md) | ~2–3 k LOC (P2P additions: fork choice, freshness, validation rules) |
 | `trust/secrets` | Epoch group secret: HPKE fan-out, derivations (blinded topic IDs, discovery AEAD keys, ML-KEM per-pair PSKs) | stdlib `crypto/ecdh`, `crypto/mlkem`, HPKE lib | ~1 k LOC |
 | `trust/store` | Persisted log, highest-seen epoch (rollback protection), key material | — | ~1 k LOC |
-| `enroll` | Invite issue/redeem: QR full-entropy token path; wormhole-code + SPAKE2 path; join state machine → AddNode AUM | SPAKE2 impl (minimal, vetted) | ~1.5 k LOC |
+| `trust/enroll` | Invite issue/redeem: full-entropy link and wormhole-style code, both over SPAKE2 (RFC 9382); join protocol → AddNode AUM; see [11-enrollment-and-freshness-notes.md](11-enrollment-and-freshness-notes.md) | `filippo.io/edwards25519` | ~0.9 k LOC |
 | `gossip` | Anti-entropy AUM/endpoint-record sync; log-head beacons; fork alarm | — | ~1–2 k LOC (records self-certifying; transport untrusted) |
 | `discovery/dht` | BEP 44 publish/lookup, blinded topics, AEAD payloads | `anacrolix/dht` | ~800 LOC, **not** TCB (trust-free) |
 | `discovery/mdns` | Blinded LAN beacons | stdlib/mdns lib | ~300 LOC, not TCB |
 | `conn` | Log state → synthetic netmap → magicsock/wgengine; DERP map from member relay roles | `magicsock`, `wgengine`, `netcheck`, `portmapper` (vendored Tailscale) | glue ~1–2 k LOC, not TCB |
 | `relay` | Embedded DERP server on relay-capable members, **membership-authenticated** (client keys checked against log) | `derp`/`derphttp` server | ~500 LOC glue |
 | `daemon` | Reconciliation loop (log state ⇒ WG config ⇒ netmap), lifecycle, IPC server | — | reconciler is TCB-adjacent (~800 LOC) |
-| `cli` | `init`, `invite`, `join`, `ls`, `revoke`, `rotate`, `heartbeat`, `status` | — | thin |
+| `internal/host` | The inviting half of an enrollment: listener, LAN answers, DHT rendezvous, serial sessions; asks an admitter (the CLI) for every signature | — | not TCB (holds no key) |
+| `cli` | `init`, `invite`, `join`, `status`, `devices`, `remove`, `rotate`; for admins `grant`, `revoke`, `approve`, `apply`, `admins`, `log`. Holds the admin keys and a per-network anchor; signs only what it rebuilt from its own verified log | — | thin |
 
 New trust-critical code target: **≈ 7–9 k LOC** — a realistic external-audit scope.
 Everything else is glue around production-tested imports.
@@ -96,9 +97,9 @@ Record types, all hash-chained, all carrying signer IDs + signatures:
   prefixes it may forward for. Quorum-signed like any other authority change: a node
   can never self-assert a route, and route state is read only from the log, never from
   anything a peer advertises over the wire. Validation is enforced from M1 even though
-  nothing consumes routes until M7:
+  nothing consumes routes until M6:
   - advertised prefixes **must not overlap** the network's own overlay space (the
-    genesis-derived ULA /48, or the 100.64/10 v4 range) — otherwise a route grant
+    genesis-derived ULA /48, or the overlay v4 ranges of the network's schema) — otherwise a route grant
     could hijack overlay destinations and intercept member-to-member traffic;
   - `0.0.0.0/0` and `::/0` are legal only in combination with the `exit-node` role,
     which exists to make a full-tunnel grant explicit and separately revocable;
@@ -113,9 +114,18 @@ Record types, all hash-chained, all carrying signer IDs + signatures:
   must equal the state that ancestry produces.
 - `EpochBump` — rotates the group secret with no membership change: the routine tier
   of the two-tier revocation response.
-- `FreshnessLease` — quorum-signed (or delegated-signer) statement "head H at time T";
-  not chained into the log (high frequency), but references the head. TTL default
-  48 h; acceptors fail closed.
+- `RenumberNetwork` / `RenumberNode` / `RetireAddresses` (schema 5) — move the
+  network to another v4 prefix with every member to an address in it, or one member
+  to another address in the prefix. The address a member leaves stays its own until
+  the record's deadline, and the ranges the network leaves with such addresses in
+  them stay reserved until a `RetireAddresses` or the next network renumbering: see
+  [08-trust-layer-notes.md](08-trust-layer-notes.md#renumbering).
+- `RenameNetwork` (schema 6) — gives the network another name. The name is a label;
+  the genesis hash is what identifies the network, so nothing else changes.
+- `Lease` — an admin device's signed statement "head H at time T", the delegated
+  signer being a member the quorum grants the `admin` role; not chained into the
+  log (hourly), but references the head. TTL default 48 h, set by the acceptor,
+  which fails closed.
 
 Fork choice: between checkpoints, concurrent non-conflicting AUMs order by ascending
 AUM hash; **conflicting records never auto-resolve except revocations, where
@@ -145,7 +155,9 @@ ratchets — the anchor and the epoch floor — that carry the last sentence.
   periodic anti-entropy with a random member every 2–5 min; full sync on daemon start.
 - **Offline catch-up:** a node returning after a week contacts cached endpoints + DHT,
   syncs before the reconciler will bring tunnels up if its state is past TTL
-  (fail-closed startup gate).
+  (fail-closed startup gate). One that holds no epoch its peers still speak asks for
+  a catch-up, granted by identity against the peer's current log
+  ([09-mesh-layer-notes.md](09-mesh-layer-notes.md)).
 - **Convergence math:** at n ≤ 100, epidemic push/pull converges in seconds while any
   path of fresh members exists; revocation latency is gossip convergence for reachable
   nodes and ≤ TTL for partitioned ones.
@@ -162,16 +174,19 @@ ratchets — the anchor and the epoch floor — that carry the last sentence.
 - Endpoint records (current reflexive addrs) are signed by the node's identity key,
   gossiped, and cached persistently for cold start.
 
-## Exit nodes and subnet routes (v1.1 — schema reserved in v1)
+## Exit nodes and subnet routes (M6)
 
-Not in v1. The connectivity and data-plane pieces come almost free from the `wgengine`
-reuse decision; the new work is policy plumbing and the privileged helper.
+Planned as M6, with the schema reserved from M1. The connectivity and data-plane
+pieces come almost free from the `wgengine` reuse decision; the new work is policy
+plumbing and the privileged helper.
 
-**Must not ship before coarse ACLs.** Who may *use* an exit node is an access-control
-question (Tailscale expresses it as `autogroup:internet`). With no policy layer, the
-`exit-node` role would mean "every member may route all their internet traffic through
-this member's uplink" — an all-or-nothing grant with no way to scope it. Hence the
-ordering in [05-roadmap.md](05-roadmap.md): coarse ACLs, then exit nodes.
+**Ships before coarse ACLs, unscoped.** Who may *use* an exit node is an
+access-control question (Tailscale expresses it as `autogroup:internet`), and coarse
+ACLs come later, at M12 in [05-roadmap.md](05-roadmap.md). Until then the
+`exit-node` role means "every member may route all their internet traffic through
+this member's uplink" — an all-or-nothing grant the quorum makes per exit node,
+with no way to scope it to some members. Accepted in
+[02-threat-model.md](02-threat-model.md) item 7; M12 scopes it.
 
 What changes, layer by layer:
 
@@ -197,7 +212,7 @@ What changes, layer by layer:
 - **CLI.** `juist exit-node list / use <node> / off` for members; admin-side
   `juist route grant|revoke`, which emits a quorum-signed `SetNodeRoutes`.
 
-Excluded even in v1.1: automatic exit-node selection, per-destination split tunneling
+Excluded at M6: automatic exit-node selection, per-destination split tunneling
 beyond the LAN bypass, and exit-node chaining.
 
 ## Local security architecture
@@ -206,23 +221,21 @@ Both surveyed local-API CVEs in this space (Tailscale CVE-2022-41924: DNS rebind
 localhost TCP LocalAPI → RCE; NetBird GHSA-qcpp-8vwj-hhwr: 0666 unix socket → root)
 are the same lesson: **the local API is the most-exploited surface.** Rules:
 
-- **No TCP listener, ever.** IPC is a unix socket, mode 0600, peer identity verified
-  via `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (FreeBSD), and only the uid the daemon
-  runs as or root may call it. Admin operations additionally require the CLI to hold
-  the admin key — the daemon never holds admin signing keys.
-- **Before any local user may reach the daemon**, in this order: the socket moves out
-  of the state directory to `/run/juist/` (systemd `RuntimeDirectory`), and
-  `checkPeerCred` grows a read/write split. M3a ships it as `$home/daemon.sock`, so
-  today "may call the daemon" and "may read `node.keys`" are one permission, and
-  widening either widens both. Tailscale can afford a 0666 socket and an unconditional
-  read tier (`ipnserver.actor.Permissions`, with write gated on the configured
-  operator) precisely because its socket and its state are in different places; an
-  operator-equivalent here is not reachable until the same is true. Verified against
-  the pinned `tailscale.com` module, not from memory.
+- **No TCP listener, ever.** IPC is a unix socket, and every call is attributed to a
+  uid by `SO_PEERCRED` (Linux) / `LOCAL_PEERCRED` (FreeBSD). The packaged socket lives
+  in `/run/juist/`, apart from the state, so reaching it is not reading `node.keys`;
+  it is 0666 where the kernel reports callers and 0600 where it cannot. Any local user
+  may ask for status; root, the daemon's own user and the one appointed **operator**
+  may do everything else; only root and the daemon's own user may appoint. That is
+  Tailscale's read/write split (`ipnserver.actor.Permissions`, verified against the
+  pinned module) with the read tier narrowed to status, since the member list is an
+  asset here. Admin operations additionally require the CLI to hold the admin key —
+  the daemon never holds admin signing keys, and in the packaged layout cannot read
+  them either: they are in the operator's own keystore.
 - **Privilege separation:** TUN creation + route/config in a small privileged helper
   (or granted via `CAP_NET_ADMIN` on the service); the daemon body (parsers, gossip,
   DHT — the code facing attacker input) runs unprivileged. Android: VpnService
-  sandbox, in-process API only. Exit-node support (v1.1) widens this helper to
+  sandbox, in-process API only. Exit-node support (M6) widens this helper to
   forwarding, NAT and policy routing, so its input must stay a validated route set
   derived from log state — never free-form rules passed down by the daemon.
 - **Key custody:** node identity key sealed at rest (Linux: kernel keyring/TPM2 where
@@ -247,5 +260,9 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
   [07-embedding-notes.md](07-embedding-notes.md), where the ciphertext's transport
   decides whether the M3 freeze binds it.
 - Addressing: v6 ULA `fd<40 bits from genesis hash>::/48`, host bits =
-  `truncate(SHA-256(identity pubkey))`; v4 100.64/10 assigned explicitly in AddNode.
-  The log validator rejects collisions deterministically on every node.
+  `truncate(SHA-256(identity pubkey))`; v4 assigned explicitly in AddNode, from the prefix
+  the network chose at genesis or last renumbered to, else 198.18/15 (100.64/10 before
+  schema 4). The log validator rejects collisions deterministically on every node,
+  counting the addresses renumberings leave. While one is live a member has two v4
+  addresses, in its AllowedIPs and on its device, and sends from the old one, which
+  every member still accepts; the Linux router pins that as each route's source.

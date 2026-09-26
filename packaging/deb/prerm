@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+if [ "$1" = remove ]; then
+	if [ -d /run/systemd/system ]; then
+		systemctl disable --now juistd.service || true
+	fi
+	/usr/lib/juist/firewall.sh revoke
+	# Remembered for a later reinstall: the package then sits in config-files
+	# state, so postinst sees an old version, yet the service is disabled and
+	# the firewall rule revoked, as on a first install. See postinst for why
+	# it is not kept in /var/lib/juist.
+	touch /var/lib/juist.removed
+fi
+exit 0

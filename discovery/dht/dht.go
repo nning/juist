@@ -14,8 +14,8 @@
 package dht
 
 import (
+	"cmp"
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -24,16 +24,11 @@ import (
 	"sync"
 	"time"
 
-	anacrolix "github.com/anacrolix/dht/v2"
-	"github.com/anacrolix/dht/v2/bep44"
-	"github.com/anacrolix/dht/v2/exts/getput"
 	"github.com/anacrolix/dht/v2/krpc"
-	alog "github.com/anacrolix/log"
-	"github.com/anacrolix/torrent/bencode"
-	"golang.org/x/time/rate"
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -54,6 +49,11 @@ const (
 	// to outlive its own interval — a stuck one would stop this node
 	// republishing, and an item that is not republished expires.
 	OperationTimeout = 30 * time.Second
+
+	// KickGap is the least time between the start of one round and a round a
+	// [Node.Kick] brings forward, so that members going down together, or a
+	// flapping link, cost one round rather than one each.
+	KickGap = 15 * time.Second
 
 	// MaxLookupsPerRound bounds how many members one round looks for. A
 	// storage node sees this node's queries, so asking for everything at once
@@ -79,16 +79,16 @@ type Options struct {
 
 	// Keyring holds the epoch secrets. Publication uses the newest; lookups
 	// try each, so a member an epoch behind can still be found.
-	Keyring *secrets.Keyring
+	Keyring *keyring.Keyring
 
 	// Announce returns this node's current signed announcement, or false if
 	// it has none to make.
 	Announce func() (gossip.Endpoint, bool)
 
-	// Wanted returns the members this node has no announcement for. Only
-	// these are looked up: a query is visible to whichever storage node
-	// answers it, so asking for a member already known would spend privacy
-	// on nothing.
+	// Wanted returns the members to look up: those this node has no
+	// announcement for or cannot reach. Only these are looked up: a query is
+	// visible to whichever storage node answers it, so asking for a member
+	// already reachable would spend privacy on nothing.
 	Wanted func() []types.Identity
 
 	// OnPeer receives each announcement found, already verified.
@@ -118,11 +118,19 @@ type Options struct {
 // A Node publishes this member's announcement and looks for others'.
 type Node struct {
 	opts     Options
-	srv      *anacrolix.Server
+	store    *Store
 	interval time.Duration
 
 	closeOnce sync.Once
 	closed    chan struct{}
+	kick      chan struct{}
+
+	// published is what was last put, under which epoch and when; a round
+	// brought forward does not put the same announcement again.
+	publishMu      sync.Mutex
+	published      *gossip.Endpoint
+	publishedEpoch uint64
+	publishedWhen  time.Time
 }
 
 // New starts a DHT node. Bootstrapping happens in the background: a network
@@ -145,64 +153,18 @@ func New(opts Options) (*Node, error) {
 		opts.Logf = func(string, ...any) {}
 	}
 
-	conn := opts.Conn
-	if conn == nil {
-		var err error
-		conn, err = net.ListenPacket("udp", ":0")
-		if err != nil {
-			return nil, fmt.Errorf("dht: binding a UDP socket: %w", err)
-		}
-	}
-	cfg := anacrolix.NewDefaultServerConfig()
-	cfg.Conn = conn
-	cfg.NoSecurity = opts.NoSecurity
-	// Its own send budget rather than the library's process-global one. That
-	// one is shared by every DHT server in the process and sized for a
-	// torrent client; sharing it means another node's burst silently costs
-	// this one its replies, which look exactly like an unreachable peer.
-	cfg.SendLimiter = rate.NewLimiter(sendRate, sendBurst)
-	// The library logs to the standard logger by default, which in a daemon
-	// means DHT chatter on stderr no operator asked for.
-	cfg.Logger = alog.Default.FilterLevel(alog.Critical)
-	if len(opts.Bootstrap) > 0 {
-		addrs := opts.Bootstrap
-		cfg.StartingNodes = func() ([]anacrolix.Addr, error) { return resolveAll(addrs) }
-	}
-	srv, err := anacrolix.NewServer(cfg)
+	store, err := newStore(opts.Conn, opts.Bootstrap, opts.NoSecurity)
 	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("dht: starting the DHT node: %w", err)
+		return nil, err
 	}
 	n := &Node{
 		opts:     opts,
-		srv:      srv,
-		interval: cmpOr(opts.Interval, DefaultInterval),
+		store:    store,
+		interval: cmp.Or(opts.Interval, DefaultInterval),
 		closed:   make(chan struct{}),
+		kick:     make(chan struct{}, 1),
 	}
 	return n, nil
-}
-
-func resolveAll(hostPorts []string) ([]anacrolix.Addr, error) {
-	out := make([]anacrolix.Addr, 0, len(hostPorts))
-	for _, hp := range hostPorts {
-		ua, err := net.ResolveUDPAddr("udp", hp)
-		if err != nil {
-			continue
-		}
-		out = append(out, anacrolix.NewAddr(ua))
-	}
-	if len(out) == 0 {
-		return nil, errors.New("dht: no bootstrap address resolved")
-	}
-	return out, nil
-}
-
-func cmpOr[T comparable](v, fallback T) T {
-	var zero T
-	if v == zero {
-		return fallback
-	}
-	return v
 }
 
 // Run publishes and looks until ctx is cancelled or [Node.Close] is called.
@@ -217,25 +179,53 @@ func (n *Node) Run(ctx context.Context) {
 		}
 	}()
 
-	if _, err := n.srv.Bootstrap(); err != nil {
+	if _, err := n.store.srv.Bootstrap(); err != nil {
 		n.opts.Logf("dht: bootstrap: %v", err)
 	}
 	t := time.NewTicker(n.interval)
 	defer t.Stop()
+	early := false
 	for {
-		n.Round(ctx)
+		started := time.Now()
+		n.round(ctx, early)
+		early = false
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-n.kick:
+			early = true
+			if wait := KickGap - time.Since(started); wait > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+			}
 		}
+	}
+}
+
+// Kick runs a round soon rather than at the next interval, as for a member
+// just admitted, whose announcement nobody holds yet, or one whose tunnel just
+// went down. Kicks while one is pending are one kick, and none comes sooner
+// than [KickGap] after the last round started.
+func (n *Node) Kick() {
+	select {
+	case n.kick <- struct{}{}:
+	default:
 	}
 }
 
 // Round is one publish-and-look cycle, exported so a test can drive it without
 // waiting out an interval.
-func (n *Node) Round(ctx context.Context) {
-	if err := n.Publish(ctx); err != nil {
+func (n *Node) Round(ctx context.Context) { n.round(ctx, false) }
+
+// round is [Node.Round]; early says a [Node.Kick] brought it forward, which
+// puts this node's announcement only if it says something new. A round on
+// the interval always puts, so the item stays alive and freshly signed.
+func (n *Node) round(ctx context.Context, early bool) {
+	if err := n.publish(ctx, early); err != nil {
 		n.opts.Logf("dht: publishing this node's announcement: %v", err)
 	}
 	wanted := n.opts.Wanted()
@@ -256,6 +246,7 @@ func (n *Node) Round(ctx context.Context) {
 		}
 		e, err := n.Lookup(ctx, id)
 		if err != nil {
+			n.opts.Logf("dht: looking up %v: %v", id.ShortString(), err)
 			continue
 		}
 		n.opts.OnPeer(e)
@@ -275,7 +266,9 @@ func (n *Node) window() uint64 {
 // the newest epoch it holds. It publishes under one epoch and looks under
 // every one, so that a member and a peer an epoch apart still meet: whichever
 // of them is behind is the one that finds the other.
-func (n *Node) Publish(ctx context.Context) error {
+func (n *Node) Publish(ctx context.Context) error { return n.publish(ctx, false) }
+
+func (n *Node) publish(ctx context.Context, early bool) error {
 	e, ok := n.opts.Announce()
 	if !ok {
 		return nil
@@ -284,26 +277,23 @@ func (n *Node) Publish(ctx context.Context) error {
 	if !ok {
 		return errors.New("dht: no epoch secret to publish under")
 	}
+	n.publishMu.Lock()
+	same := early && n.published != nil && n.published.SameAs(&e) && epoch == n.publishedEpoch &&
+		time.Since(n.publishedWhen) < n.interval
+	n.publishMu.Unlock()
+	if same {
+		return nil
+	}
 	value, err := sealAnnouncement(secret, epoch, e)
 	if err != nil {
 		return err
 	}
-	priv := ed25519.NewKeyFromSeed(seedFor(secret, epoch, n.window(), n.opts.Self))
-	target := bep44.MakeMutableTarget([32]byte(priv.Public().(ed25519.PublicKey)), nil)
-	ctx, cancel := context.WithTimeout(ctx, OperationTimeout)
-	defer cancel()
-	_, err = getput.Put(ctx, target, n.srv, nil, func(seq int64) bep44.Put {
-		put := bep44.Put{
-			V:   value,
-			K:   (*[32]byte)([]byte(priv.Public().(ed25519.PublicKey))),
-			Seq: seq + 1,
-		}
-		put.Sign(priv)
-		return put
-	})
-	if err != nil {
+	if err := n.store.Put(ctx, secret.TopicSeed(epoch, n.window(), n.opts.Self), value); err != nil {
 		return fmt.Errorf("dht: putting this node's announcement: %w", err)
 	}
+	n.publishMu.Lock()
+	n.published, n.publishedEpoch, n.publishedWhen = e.Clone(), epoch, time.Now()
+	n.publishMu.Unlock()
 	return nil
 }
 
@@ -324,16 +314,9 @@ func (n *Node) Lookup(ctx context.Context, id types.Identity) (gossip.Endpoint, 
 			continue
 		}
 		for _, w := range [2]uint64{cur, cur - 1} {
-			priv := ed25519.NewKeyFromSeed(seedFor(secret, epoch, w, id))
-			target := bep44.MakeMutableTarget([32]byte(priv.Public().(ed25519.PublicKey)), nil)
-			res, err := n.get(ctx, target)
+			raw, err := n.store.Get(ctx, secret.TopicSeed(epoch, w, id))
 			if err != nil {
 				lastErr = err
-				continue
-			}
-			var raw []byte
-			if err := bencode.Unmarshal(res.V, &raw); err != nil {
-				lastErr = fmt.Errorf("dht: item for %v is not a byte string: %w", id.ShortString(), err)
 				continue
 			}
 			e, err := openAnnouncement(n.opts.Keyring, raw)
@@ -357,20 +340,6 @@ func (n *Node) Lookup(ctx context.Context, id types.Identity) (gossip.Endpoint, 
 	return gossip.Endpoint{}, lastErr
 }
 
-// get is one bounded traversal.
-func (n *Node) get(ctx context.Context, target bep44.Target) (getput.GetResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, OperationTimeout)
-	defer cancel()
-	res, _, err := getput.Get(ctx, target, n.srv, nil, nil)
-	return res, err
-}
-
-// seedFor is the rendezvous key one member's announcement lives under.
-func seedFor(s secrets.Secret, epoch, window uint64, subject types.Identity) []byte {
-	seed := s.TopicSeed(epoch, window, subject)
-	return seed[:]
-}
-
 // sealAnnouncement encodes and seals an announcement for publication. The
 // size check is not a formality: a member whose announcement grew past BEP
 // 44's limit would be silently unpublishable.
@@ -391,7 +360,7 @@ func sealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint) ([]byte
 }
 
 // openAnnouncement opens and verifies a published announcement.
-func openAnnouncement(kr *secrets.Keyring, blob []byte) (gossip.Endpoint, error) {
+func openAnnouncement(kr *keyring.Keyring, blob []byte) (gossip.Endpoint, error) {
 	epoch, err := aead.Epoch(blob)
 	if err != nil {
 		return gossip.Endpoint{}, fmt.Errorf("dht: %w", err)
@@ -408,16 +377,16 @@ func openAnnouncement(kr *secrets.Keyring, blob []byte) (gossip.Endpoint, error)
 }
 
 // Addr reports the UDP address this node's DHT socket is bound to.
-func (n *Node) Addr() net.Addr { return n.srv.Addr() }
+func (n *Node) Addr() net.Addr { return n.store.srv.Addr() }
 
 // ID reports this node's DHT identifier, for tests.
-func (n *Node) ID() krpc.ID { return n.srv.ID() }
+func (n *Node) ID() krpc.ID { return n.store.srv.ID() }
 
 // Close shuts the node down. It is idempotent.
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
 		close(n.closed)
-		n.srv.Close()
+		n.store.Close()
 	})
 	return nil
 }

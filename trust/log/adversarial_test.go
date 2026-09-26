@@ -1,7 +1,9 @@
 package log
 
 import (
+	"fmt"
 	"net/netip"
+	"slices"
 	"testing"
 
 	"github.com/nning/juist/trust/secrets"
@@ -22,7 +24,7 @@ func TestRejectsUnsignedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	h.mustReject("unsigned AddNode", aum)
+	h.mustReject("unsigned AddNode", RuleMalformed, aum)
 }
 
 func TestRejectsSignatureByUnknownKey(t *testing.T) {
@@ -38,7 +40,7 @@ func TestRejectsSignatureByUnknownKey(t *testing.T) {
 	if err := aum.Sign(outsider); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
-	h.mustReject("AddNode signed by a key the network never trusted", aum)
+	h.mustReject("AddNode signed by a key the network never trusted", RuleUnauthorized, aum)
 }
 
 // TestRejectsExtraSignatureByUntrustedKey: appending a signature to an
@@ -58,7 +60,7 @@ func TestRejectsExtraSignatureByUntrustedKey(t *testing.T) {
 	if err := aum.Sign(outsider); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
-	h.mustReject("authorized AddNode with an extra untrusted signature", aum)
+	h.mustReject("authorized AddNode with an extra untrusted signature", RuleUnauthorized, aum)
 }
 
 func TestRejectsTamperedPayload(t *testing.T) {
@@ -73,7 +75,7 @@ func TestRejectsTamperedPayload(t *testing.T) {
 	// the classic "authorize one device, admit another" substitution.
 	attacker := h.newNode("attacker")
 	aum.Node.WireGuard = attacker.WireGuard
-	h.mustReject("AddNode whose WireGuard key was swapped after signing", aum)
+	h.mustReject("AddNode whose WireGuard key was swapped after signing", RuleUnauthorized, aum)
 }
 
 func TestRejectsTamperedSignatureBits(t *testing.T) {
@@ -84,7 +86,7 @@ func TestRejectsTamperedSignatureBits(t *testing.T) {
 	}
 	h.signQuorum(&aum)
 	aum.Signatures[0].Sig[0] ^= 0x01
-	h.mustReject("AddNode with a corrupted signature", aum)
+	h.mustReject("AddNode with a corrupted signature", RuleUnauthorized, aum)
 }
 
 // --- quorum ----------------------------------------------------------------
@@ -100,7 +102,7 @@ func TestRejectsSubQuorumChange(t *testing.T) {
 	if err := aum.Sign(h.admins[0]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
-	h.mustReject("AddNode with one of two required votes", aum)
+	h.mustReject("AddNode with one of two required votes", RuleUnauthorized, aum)
 
 	// The same record becomes valid once a second admin signs it, which is
 	// what makes the rejection above about quorum and not about something else.
@@ -124,7 +126,7 @@ func TestRejectsDuplicateSignatureForVotes(t *testing.T) {
 	// One admin, two copies of its signature: the cheapest way to fake a
 	// quorum if vote counting deduplicated nothing.
 	aum.Signatures = append(aum.Signatures, aum.Signatures[0])
-	h.mustReject("AddNode carrying one admin's signature twice", aum)
+	h.mustReject("AddNode carrying one admin's signature twice", RuleMalformed, aum)
 }
 
 func TestRejectsAdminRemovalBelowQuorum(t *testing.T) {
@@ -132,15 +134,13 @@ func TestRejectsAdminRemovalBelowQuorum(t *testing.T) {
 	// Both admins agree to remove one of them, which would leave one vote
 	// against a quorum of two: a network nobody could ever change again,
 	// including to undo this.
-	aum, err := h.auth.Builder().RemoveAdminKey(h.admins[0].Public())
-	if err == nil {
-		h.signQuorum(&aum)
-		h.mustReject("RemoveAdminKey that strands the quorum", aum)
-		return
-	}
-	// Rejected at build time, which is the better outcome: the ceremony never
-	// happens.
-	t.Logf("rejected while building: %v", err)
+	// The builder refuses, so the ceremony never happens; a quorum that skips
+	// it is refused by the receiving node.
+	subject := h.admins[0].Public()
+	_, err := h.auth.Builder().RemoveAdminKey(subject)
+	mustBreak(t, "building a RemoveAdminKey that strands the quorum", RuleState, err)
+	h.mustReject("RemoveAdminKey that strands the quorum", RuleState,
+		h.signed(types.AUM{Kind: types.KindRemoveAdminKey, Subject: &subject}))
 }
 
 // TestRemoveAdminKey is the happy path the rejection test above guards: the
@@ -182,7 +182,7 @@ func TestRemoveAdminKey(t *testing.T) {
 	if len(status.Untrusted) != 1 || status.Untrusted[0] != h.admins[2].Public() {
 		t.Fatalf("removed key's signature reported %+v, want untrusted", status)
 	}
-	h.mustReject("AddNode signed by the removed admin key", next)
+	h.mustReject("AddNode signed by the removed admin key", RuleUnauthorized, next)
 
 	// And the removed key cannot re-add itself: restoring it would need
 	// quorum of the set that no longer contains it.
@@ -195,7 +195,7 @@ func TestRemoveAdminKey(t *testing.T) {
 	if err := restore.Sign(h.admins[2]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
-	h.mustReject("AddAdminKey re-adding the removed key, signed by that key", restore)
+	h.mustReject("AddAdminKey re-adding the removed key, signed by that key", RuleUnauthorized, restore)
 }
 
 // TestOneAdminCanRemoveTheOtherAtQuorumOne: with two single-vote keys and a
@@ -243,18 +243,15 @@ func TestQuorumPolicyCanBeTightened(t *testing.T) {
 		t.Fatalf("AddNode: %v", err)
 	}
 	h.signQuorum(&next)
-	h.mustReject("AddNode under the old quorum after tightening", next)
+	h.mustReject("AddNode under the old quorum after tightening", RuleUnauthorized, next)
 }
 
 func TestRejectsUnsatisfiableQuorum(t *testing.T) {
 	h := newHarness(t, 2, 1)
-	aum, err := h.auth.Builder().SetQuorum(99)
-	if err == nil {
-		h.signQuorum(&aum)
-		h.mustReject("SetQuorum above the total admin vote weight", aum)
-		return
-	}
-	t.Logf("rejected while building: %v", err)
+	_, err := h.auth.Builder().SetQuorum(99)
+	mustBreak(t, "building a SetQuorum above the total admin vote weight", RuleState, err)
+	h.mustReject("SetQuorum above the total admin vote weight", RuleState,
+		h.signed(types.AUM{Kind: types.KindSetQuorum, Quorum: new(uint32(99))}))
 }
 
 // --- replay, reorder, rollback ---------------------------------------------
@@ -287,7 +284,7 @@ func TestRejectsReplayedRecord(t *testing.T) {
 	replay := *aum.Clone()
 	head := h.auth.Head()
 	replay.Prev = &head
-	h.mustReject("captured AddNode re-parented onto the current head", replay)
+	h.mustReject("captured AddNode re-parented onto the current head", RuleUnauthorized, replay)
 }
 
 // TestReauthorizedRecordAtTheSamePositionIsAFork: a quorum re-signing the same
@@ -333,7 +330,7 @@ func TestRejectsRecordWithUnknownParent(t *testing.T) {
 	aum.Prev = &ghost
 	aum.Signatures = nil
 	h.signQuorum(&aum)
-	h.mustReject("AddNode chaining to an unknown parent", aum)
+	h.mustReject("AddNode chaining to an unknown parent", RuleParent, aum)
 }
 
 func TestRejectsOutOfOrderBatch(t *testing.T) {
@@ -352,7 +349,7 @@ func TestRejectsOutOfOrderBatch(t *testing.T) {
 	// Child before parent. The whole batch must be refused, not partially
 	// applied: a store holding a record whose parent is missing is a store
 	// that will never look at that record again.
-	h.mustReject("batch delivered child-first", second)
+	h.mustReject("batch delivered child-first", RuleParent, second)
 	if err := h.auth.Inform(second, first); err != nil {
 		t.Fatalf("reversed batch rejected: %v", err)
 	}
@@ -390,7 +387,7 @@ func TestRejectsEpochRollback(t *testing.T) {
 			t.Fatalf("AddNode: %v", err)
 		}
 		h.signQuorum(&rogue)
-		if compareHash(rogue.Hash(), add.Hash()) < 0 {
+		if rogue.Hash().Compare(add.Hash()) < 0 {
 			break
 		}
 	}
@@ -455,7 +452,7 @@ func TestRejectsNonSequentialEpoch(t *testing.T) {
 	aum.Epoch.Epoch = 99
 	aum.Signatures = nil
 	h.signQuorum(&aum)
-	h.mustReject("AddNode claiming a non-sequential epoch", aum)
+	h.mustReject("AddNode claiming a non-sequential epoch", RuleState, aum)
 }
 
 // --- epoch coverage --------------------------------------------------------
@@ -508,7 +505,7 @@ func TestRejectsMembershipChangeWithoutEpochBump(t *testing.T) {
 	aum.Epoch = nil
 	aum.Signatures = nil
 	h.signQuorum(&aum)
-	h.mustReject("AddNode with the epoch bump stripped", aum)
+	h.mustReject("AddNode with the epoch bump stripped", RuleMalformed, aum)
 }
 
 // --- collisions ------------------------------------------------------------
@@ -597,7 +594,7 @@ func TestRejectsCollisionsFromAQuorumSignedRecord(t *testing.T) {
 			seen := first(h)
 			clone := h.newNode("clone")
 			tc.collide(seen, &clone)
-			h.mustReject(tc.what, h.handAssembledAddNode(clone))
+			h.mustReject(tc.what, RuleState, h.handAssembledAddNode(clone))
 		})
 	}
 }
@@ -688,14 +685,14 @@ func TestRejectsSelfAssertedRoute(t *testing.T) {
 	if err := aum.Sign(h.nodeIDs[n.Identity]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
-	h.mustReject("SetNodeRoutes signed only by the node it grants", aum)
+	h.mustReject("SetNodeRoutes signed only by the node it grants", RuleUnauthorized, aum)
 
 	// One admin short of quorum is equally not enough.
 	aum.Signatures = nil
 	if err := aum.Sign(h.admins[0]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
-	h.mustReject("SetNodeRoutes with one of two required votes", aum)
+	h.mustReject("SetNodeRoutes with one of two required votes", RuleUnauthorized, aum)
 
 	// With quorum it applies, which is what makes the rejections above about
 	// authority rather than about the grant's contents.
@@ -769,12 +766,12 @@ func TestDefaultRouteRequiresExitNodeRole(t *testing.T) {
 	if err := h.auth.Inform(aum); err != nil {
 		t.Fatalf("Inform: %v", err)
 	}
-	stripRole, err := h.auth.Builder().SetNodeRoutes(n.Identity, nil,
-		[]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")})
-	if err == nil {
-		h.signQuorum(&stripRole)
-		h.mustReject("keeping a default route while dropping the exit-node role", stripRole)
-	}
+	defaultRoute := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
+	_, err = h.auth.Builder().SetNodeRoutes(n.Identity, nil, defaultRoute)
+	mustBreak(t, "building a grant keeping a default route without the exit-node role", RuleState, err)
+	h.mustReject("keeping a default route while dropping the exit-node role", RuleState,
+		h.signed(types.AUM{Kind: types.KindSetNodeRoutes, Subject: &n.Identity,
+			Grant: &types.RouteGrant{Routes: defaultRoute}}))
 }
 
 func TestRejectsUnmaskedRoute(t *testing.T) {
@@ -819,7 +816,7 @@ func TestConcurrentNonConflictingRecordsResolveDeterministically(t *testing.T) {
 	if one.Head() != two.Head() {
 		t.Fatal("two nodes with the same records chose different heads")
 	}
-	if compareHash(one.Head(), max2(left.Hash(), right.Hash())) == 0 {
+	if one.Head().Compare(max2(left.Hash(), right.Hash())) == 0 {
 		t.Fatal("fork choice did not prefer the lower record hash")
 	}
 	if one.Alarm() != nil {
@@ -917,10 +914,12 @@ func TestConflictingConcurrentRecordsAlarm(t *testing.T) {
 	t.Logf("alarm: %v", alarm)
 }
 
-// TestOrphanedRevocationAlarms is the dangerous fork: a removal buried on a
+// TestAnOrphanedRevocationIsNamed is the dangerous fork: a removal buried on a
 // branch that loses. Fork choice's bias only looks at immediate siblings, so a
-// revocation deeper on a losing branch would otherwise disappear silently.
-func TestOrphanedRevocationAlarms(t *testing.T) {
+// revocation deeper on a losing branch would otherwise disappear silently. It
+// is named as not in effect, for reissuing, rather than stopping the network:
+// it could be reissued on the chosen chain.
+func TestAnOrphanedRevocationIsNamed(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	victim := h.addNode("victim")
 	b := h.auth.Builder()
@@ -940,7 +939,7 @@ func TestOrphanedRevocationAlarms(t *testing.T) {
 	}
 	h.signQuorum(&second)
 	a1, b1 := first, second
-	if compareHash(b1.Hash(), a1.Hash()) < 0 {
+	if b1.Hash().Compare(a1.Hash()) < 0 {
 		a1, b1 = b1, a1
 	}
 
@@ -969,14 +968,58 @@ func TestOrphanedRevocationAlarms(t *testing.T) {
 	if !h.auth.State().IsMember(victim.Identity) {
 		t.Fatal("the orphaned removal was applied after all")
 	}
-	alarm := h.auth.Alarm()
-	if alarm == nil {
-		t.Fatal("a revocation on an orphaned branch raised no alarm")
+	if alarm := h.auth.Alarm(); alarm != nil {
+		t.Fatalf("a revocation that can be reissued stopped the network: %v", alarm)
 	}
-	if _, err := h.auth.TrustedState(); err == nil {
-		t.Fatal("TrustedState served membership with an orphaned revocation")
+	var unrevoked []types.Hash
+	for _, o := range h.auth.Orphans() {
+		unrevoked = append(unrevoked, o.Unrevoked...)
 	}
-	t.Logf("alarm: %v", alarm)
+	if !slices.Equal(unrevoked, []types.Hash{b2.Hash()}) {
+		t.Fatalf("the orphaned removal is not named as not in effect: %v", unrevoked)
+	}
+}
+
+// TestConcurrentAdmissionsOfOneAddressNeedOnlyReissuing: two admins admit
+// two devices at once, and both allocate the same free IPv4 address. The
+// address is where a record sits, not what it says — reissued against the
+// chosen chain, the losing admission is given another — so the loser is a
+// change to start again, not a fork alarm that stops every tunnel.
+func TestConcurrentAdmissionsOfOneAddressNeedOnlyReissuing(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	b := h.auth.Builder()
+	addr := h.auth.State().V4Range().Addr().Next().Next()
+	one, two := h.newNode("one"), h.newNode("two")
+	one.V4, two.V4 = &addr, &addr
+	first, err := b.AddNode(one, h.sealer())
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	h.signQuorum(&first)
+	second, err := b.AddNode(two, h.sealer())
+	if err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	h.signQuorum(&second)
+
+	for i, order := range [][]types.AUM{{first, second}, {second, first}} {
+		auth := h.fork()
+		if err := auth.Inform(order...); err != nil {
+			t.Fatalf("order %d: Inform: %v", i, err)
+		}
+		if alarm := auth.Alarm(); alarm != nil {
+			t.Fatalf("order %d: two admissions of one address stopped the network: %v", i, alarm)
+		}
+		var lost int
+		for _, o := range auth.Orphans() {
+			if o.Conflict == "" {
+				lost += len(o.Records) - len(o.Unrevoked)
+			}
+		}
+		if lost != 1 {
+			t.Fatalf("order %d: %d changes to reissue, want the losing admission", i, lost)
+		}
+	}
 }
 
 // --- checkpoints -----------------------------------------------------------
@@ -1008,7 +1051,7 @@ func TestCheckpointMustMatchDerivedState(t *testing.T) {
 	sortSnapshot(forged.State)
 	forged.Signatures = nil
 	h.signQuorum(&forged)
-	h.mustReject("checkpoint asserting a member the chain never admitted", forged)
+	h.mustReject("checkpoint asserting a member the chain never admitted", RuleState, forged)
 }
 
 func TestCheckpointFromAnotherNetworkRejected(t *testing.T) {
@@ -1027,7 +1070,7 @@ func TestCheckpointFromAnotherNetworkRejected(t *testing.T) {
 	cp.Prev = &head
 	cp.Signatures = nil
 	h.signQuorum(&cp)
-	h.mustReject("checkpoint belonging to another network", cp)
+	h.mustReject("checkpoint belonging to another network", RuleState, cp)
 }
 
 func TestBootstrapFromCheckpointAndCompact(t *testing.T) {
@@ -1108,7 +1151,7 @@ func TestCompactedAnchorRejectsPreCheckpointFork(t *testing.T) {
 		t.Fatalf("RemoveNode: %v", err)
 	}
 	h.signQuorum(&fork)
-	h.mustReject("a fork rooted before the adopted checkpoint", fork)
+	h.mustReject("a fork rooted before the adopted checkpoint", RuleParent, fork)
 	if !h.auth.State().IsMember(victim.Identity) {
 		t.Fatal("the pre-checkpoint fork changed membership")
 	}
@@ -1125,7 +1168,7 @@ func TestRotateNodeKeyRequiresNodeSignature(t *testing.T) {
 		t.Fatalf("RotateNodeKey: %v", err)
 	}
 	h.signQuorum(&aum)
-	h.mustReject("RotateNodeKey with quorum but no node signature", aum)
+	h.mustReject("RotateNodeKey with quorum but no node signature", RuleUnauthorized, aum)
 
 	if err := aum.Sign(h.nodeIDs[n.Identity]); err != nil {
 		t.Fatalf("signing: %v", err)
@@ -1151,7 +1194,7 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 		t.Fatalf("RotateIdentity: %v", err)
 	}
 	h.signQuorum(&aum)
-	h.mustReject("RotateIdentity with no proof the new key is held", aum)
+	h.mustReject("RotateIdentity with no proof the new key is held", RuleUnauthorized, aum)
 
 	// Signing with the *old* key is not a substitute: the point is that some
 	// device holds the new one.
@@ -1160,11 +1203,19 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 	if err := aum.Sign(h.nodeIDs[n.Identity]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
-	h.mustReject("RotateIdentity signed by the old key", aum)
+	h.mustReject("RotateIdentity signed by the old key", RuleUnauthorized, aum)
 
+	// Nor, from schema 1, is the new key alone: the device whose slot it is
+	// has to agree, or admins alone could move an admin device's membership
+	// and role to a key of their choosing.
 	aum.Signatures = nil
 	h.signQuorum(&aum)
 	if err := aum.Sign(fresh); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	h.mustReject("RotateIdentity without the old key's signature", RuleUnauthorized, aum)
+
+	if err := aum.Sign(h.nodeIDs[n.Identity]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	if err := h.auth.Inform(aum); err != nil {
@@ -1176,6 +1227,28 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 	}
 	if st.Addr6(fresh.Public()) == st.Addr6(n.Identity) {
 		t.Fatal("the rotated identity kept the old overlay address")
+	}
+}
+
+// A schema-0 network keeps the rule it was written under: the new key's
+// signature is enough.
+func TestRotateIdentityAtSchemaZeroNeedsOnlyTheNewKey(t *testing.T) {
+	h := newHarnessAt(t, 1, 1, 0)
+	n := h.addNode("alpha")
+	fresh, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	aum, err := h.auth.Builder().RotateIdentity(n.Identity, fresh.Public(), h.sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.signQuorum(&aum)
+	if err := aum.Sign(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.auth.Inform(aum); err != nil {
+		t.Fatalf("a schema-0 identity rotation signed by the new key: %v", err)
 	}
 }
 
@@ -1219,7 +1292,7 @@ func asRollback(err error, target **RollbackError) bool {
 }
 
 func max2(a, b types.Hash) types.Hash {
-	if compareHash(a, b) > 0 {
+	if a.Compare(b) > 0 {
 		return a
 	}
 	return b
@@ -1234,6 +1307,53 @@ func sortByIdentity[T any](items []T, key func(T) types.Identity) {
 	for i := 1; i < len(items); i++ {
 		for j := i; j > 0 && key(items[j]).Compare(key(items[j-1])) < 0; j-- {
 			items[j], items[j-1] = items[j-1], items[j]
+		}
+	}
+}
+
+// Withdrawing vouching authority is a revocation from schema 2 on: taking an
+// admin device's role away, or raising the threshold, lands whichever hash is
+// lower, where at schema 1 a concurrent change could orphan it on its hash
+// and keep a distrusted admin device vouching.
+func TestWithdrawingVouchingAuthorityWinsForkChoice(t *testing.T) {
+	for _, schema := range []types.SchemaVersion{1, 2} {
+		h := newHarnessAt(t, 1, 1, schema)
+		a, b := h.addNode("admin-a"), h.addNode("admin-b")
+		h.grantAdmin(a.Identity)
+		h.grantAdmin(b.Identity)
+		builder := h.auth.Builder()
+		demote, err := builder.SetNodeRoutes(b.Identity, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.signQuorum(&demote)
+		raise, err := builder.SetVouchers(2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.signQuorum(&raise)
+		for _, withdraw := range []types.AUM{demote, raise} {
+			// A sibling that would win on its hash: added under names until
+			// its hash is lower than the withdrawal's.
+			var other types.AUM
+			for i := 0; ; i++ {
+				other, err = builder.AddNode(h.newNode(fmt.Sprintf("n%d", i)), h.sealer())
+				if err != nil {
+					t.Fatal(err)
+				}
+				h.signQuorum(&other)
+				if other.Hash().Compare(withdraw.Hash()) < 0 {
+					break
+				}
+			}
+			auth := h.fork()
+			if err := auth.Inform(other, withdraw); err != nil {
+				t.Fatalf("schema %d: %v", schema, err)
+			}
+			won := auth.Head() == withdraw.Hash()
+			if won != (schema >= types.SchemaRevokingRoles) {
+				t.Errorf("schema %d, %v: the withdrawal won fork choice: %v", schema, withdraw.Kind, won)
+			}
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -158,6 +159,50 @@ func TestTwoNodeOverlayPing(t *testing.T) {
 	t.Logf("a -> b: %v", res.Latency)
 }
 
+// A peer that restarts keeps its node key and draws a new disco key; the
+// sessions its old process held are dead, and nothing in the engine discards
+// them but conn. Without that, a's traffic to it goes nowhere until the
+// sessions expire minutes later.
+func TestARestartedPeerIsReachedAtOnce(t *testing.T) {
+	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
+	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
+	for _, n := range []*node{a, b} {
+		if err := n.mgr.SetPeers([]Peer{a.peer(), b.peer()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := pingUntil(t, a, b.pingAddr(), 30*time.Second); !ok {
+		t.Fatal("a could not ping b before the restart")
+	}
+
+	b.mgr.Close()
+	b.discoKey = key.NewDisco()
+	mgr, err := New(Options{
+		Self:          Self{ID: b.id, NodeKey: b.nodeKey, DiscoKey: b.discoKey, Addrs: b.addrs},
+		RespondToPing: true,
+		Logf:          logger.WithPrefix(t.Logf, "n2': "),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mgr.Close() })
+	b.mgr = mgr
+	// b first, so a's first probes find it knowing a.
+	for _, n := range []*node{b, a} {
+		if err := n.mgr.SetPeers([]Peer{a.peer(), b.peer()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Time for the path warm-up, so a handshake is not dropped for want of
+	// one and what is left is the sessions.
+	time.Sleep(time.Second)
+	start := time.Now()
+	if _, ok := pingUntil(t, a, b.pingAddr(), 10*time.Second); !ok {
+		t.Fatal("a could not reach b after b restarted")
+	}
+	t.Logf("reached the restarted peer after %v", time.Since(start))
+}
+
 // TestSetPeersAfterClose pins the shutdown contract: Close is idempotent, and
 // a SetPeers that loses the race with Close must refuse rather than drive a
 // torn-down engine.
@@ -220,6 +265,7 @@ func TestListenPortInUse(t *testing.T) {
 	}
 	defer held.Close()
 	port := uint16(held.LocalAddr().(*net.UDPAddr).Port)
+	before := socketInodes(t)
 
 	mgr, err := New(Options{
 		Self: Self{
@@ -238,5 +284,65 @@ func TestListenPortInUse(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), fmt.Sprint(port)) {
 		t.Errorf("the error does not name the port that could not be bound (%d): %v", port, err)
+	}
+	if !errors.Is(err, ErrPortTaken) {
+		t.Errorf("the error is not ErrPortTaken: %v", err)
+	}
+	// The engine had started, so its sockets are what shows it was torn down.
+	var leaked []uint64
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		leaked = leaked[:0]
+		for ino := range socketInodes(t) {
+			if !before[ino] {
+				leaked = append(leaked, ino)
+			}
+		}
+		if len(leaked) == 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	if len(leaked) > 0 {
+		t.Fatalf("a failed New left %d sockets open", len(leaked))
+	}
+}
+
+// A probe is answered by the peer's data plane itself, so it proves the tunnel
+// where the peer answers no ICMP, and the handshake it causes shows in
+// Tunnels. A peer that is gone leaves it unanswered.
+func TestProbeProvesTheTunnel(t *testing.T) {
+	quiet := func(o *Options) { o.RespondToPing = false }
+	a := startNode(t, 1, "198.18.0.1/32", "fd7a:115c:a1e0::1/128", quiet)
+	b := startNode(t, 2, "198.18.0.2/32", "fd7a:115c:a1e0::2/128", quiet)
+	if err := a.mgr.SetPeers([]Peer{b.peer()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.mgr.SetPeers([]Peer{a.peer()}); err != nil {
+		t.Fatal(err)
+	}
+	if hs := a.mgr.Tunnels()[b.id].LastHandshake; !hs.IsZero() {
+		t.Fatalf("a handshake at %v before any traffic", hs)
+	}
+	probe := func() bool {
+		res := make(chan bool, 1)
+		a.mgr.Probe(b.pingAddr(), 2*time.Second, func(ok bool) { res <- ok })
+		return <-res
+	}
+	answered := false
+	for deadline := time.Now().Add(15 * time.Second); !answered && time.Now().Before(deadline); {
+		answered = probe()
+	}
+	if !answered {
+		t.Fatal("the probe was never answered")
+	}
+	if _, ok := ping(t, a, b.pingAddr(), time.Second); ok {
+		t.Fatal("the peer answered ICMP, so the probe proved nothing beyond a ping")
+	}
+	if a.mgr.Tunnels()[b.id].LastHandshake.IsZero() {
+		t.Fatal("an answered probe left no handshake")
+	}
+
+	b.mgr.Close()
+	if probe() {
+		t.Fatal("a closed peer answered the probe")
 	}
 }

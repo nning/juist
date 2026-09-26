@@ -30,6 +30,7 @@ const (
 	anchorFile  = "anchor"
 	floorFile   = "epoch-floor"
 	schemaFile  = "schema-floor"
+	batchFile   = "batch"
 	recordsDir  = "records"
 	recordExt   = ".cbor"
 
@@ -64,7 +65,14 @@ var _ log.Storage = (*Dir)(nil)
 
 // Open opens or creates a store at path. Every record file is read and
 // verified against its name, so opening is where corruption is caught.
+//
+// Neither the directory nor its records directory may be a symbolic link:
+// the CLI may open, as root, a store in a directory another user owns, and a
+// link planted there would have it write wherever the link points.
 func Open(path string) (*Dir, error) {
+	if err := refuseLink(path); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(path, dirMode); err != nil {
 		return nil, fmt.Errorf("store: creating %s: %w", path, err)
 	}
@@ -74,6 +82,9 @@ func Open(path string) (*Dir, error) {
 		parents:  map[types.Hash]types.Hash{},
 		children: map[types.Hash][]types.Hash{},
 	}
+	if err := refuseLink(d.records); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(d.records, dirMode); err != nil {
 		return nil, fmt.Errorf("store: creating %s: %w", d.records, err)
 	}
@@ -81,6 +92,9 @@ func Open(path string) (*Dir, error) {
 		return nil, err
 	}
 	if err := d.checkVersion(); err != nil {
+		return nil, err
+	}
+	if err := d.finishBatch(); err != nil {
 		return nil, err
 	}
 	if err := d.loadIndex(); err != nil {
@@ -215,6 +229,78 @@ func (d *Dir) Children(h types.Hash) ([]types.Hash, error) {
 }
 
 // Prefixes naming a file that is not a record: an in-progress write.
+// rename publishes a staged record; a variable so a test can cut a batch
+// short as a crash would.
+var rename = os.Rename
+
+const batchHeader = "juist-batch-v1"
+
+// writeBatch journals the records a batch is about to publish.
+func (d *Dir) writeBatch(hashes []types.Hash) error {
+	var b strings.Builder
+	b.WriteString(batchHeader + "\n")
+	for _, h := range hashes {
+		b.WriteString(h.String() + "\n")
+	}
+	return writeFileSync(filepath.Join(d.path, batchFile), []byte(b.String()))
+}
+
+func (d *Dir) clearBatch() error {
+	if err := os.Remove(filepath.Join(d.path, batchFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("store: removing the batch journal: %w", err)
+	}
+	return fsyncDir(d.path)
+}
+
+// publish renames a staged record into place. A record already there counts:
+// opening is not exclusive, so another process finishing the same journaled
+// batch may have got to it first.
+func (d *Dir) publish(h types.Hash) error {
+	final := d.recordPath(h)
+	err := rename(filepath.Join(d.records, tempPrefix+h.String()), final)
+	if err == nil {
+		return nil
+	}
+	if _, serr := os.Lstat(final); serr == nil && errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return fmt.Errorf("store: publishing record %v: %w", h, err)
+}
+
+// finishBatch publishes what a batch cut short by a crash left staged. Every
+// record it names was fsynced before the journal was written, so each is
+// either staged or in place; one that is neither is a store that lost it.
+func (d *Dir) finishBatch() error {
+	name := filepath.Join(d.path, batchFile)
+	if err := refuseLink(name); err != nil {
+		return err
+	}
+	b, err := os.ReadFile(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: reading %s: %w", name, err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	if len(lines) == 0 || lines[0] != batchHeader {
+		return fmt.Errorf("store: %s is not a batch journal", name)
+	}
+	for _, line := range lines[1:] {
+		h, err := types.ParseHash(line)
+		if err != nil {
+			return fmt.Errorf("store: %s names %q, which is not a record hash", name, line)
+		}
+		if err := d.publish(h); err != nil {
+			return fmt.Errorf("store: finishing the batch %s journals: %w", name, err)
+		}
+	}
+	if err := fsyncDir(d.records); err != nil {
+		return err
+	}
+	return d.clearBatch()
+}
+
 // tempPrefix is what Add stages under, tmpPrefix what writeFileSync replaces
 // through. Both are tolerated by loadIndex and swept by [Dir.Add].
 const (
@@ -231,9 +317,9 @@ type staged struct {
 
 // Add writes records durably: every file is written and fsynced before any is
 // renamed into place, so a crash cannot leave a half-written record under a
-// name claiming to hash to it. A crash between renames can store part of a
-// batch, which is safe — a record whose parent is missing does not descend
-// from the anchor, so resolution never looks at it.
+// name claiming to hash to it. The batch is journaled before the first
+// rename, and a batch cut short is finished at the next [Open]: part of one
+// can resolve on its own, below the floor the whole of it clears.
 func (d *Dir) Add(aums ...types.AUM) error {
 	var pending []staged
 	cleanup := func() {
@@ -262,20 +348,34 @@ func (d *Dir) Add(aums ...types.AUM) error {
 		}
 		pending = append(pending, staged{hash: h, temp: temp})
 	}
+	if len(pending) == 0 {
+		return nil
+	}
+	hashes := make([]types.Hash, len(pending))
+	for i := range pending {
+		hashes[i] = pending[i].hash
+	}
+	if err := d.writeBatch(hashes); err != nil {
+		cleanup()
+		return err
+	}
+	// From here a failure leaves the journal and the staged files, which the
+	// next Open publishes.
 	for _, s := range pending {
-		if err := os.Rename(s.temp, d.recordPath(s.hash)); err != nil {
-			cleanup()
-			return fmt.Errorf("store: publishing record %v: %w", s.hash, err)
+		if err := d.publish(s.hash); err != nil {
+			return err
 		}
 	}
 	// Swept here rather than at open: this process is the writer, so a staged
 	// file it does not own is residue rather than a write in flight.
 	d.sweepStaged(pending)
-	// The renames are only durable once the directory entry is.
-	if len(pending) > 0 {
-		if err := fsyncDir(d.records); err != nil {
-			return err
-		}
+	// The renames are only durable once the directory entry is, and the
+	// journal may go only once they are.
+	if err := fsyncDir(d.records); err != nil {
+		return err
+	}
+	if err := d.clearBatch(); err != nil {
+		return err
 	}
 	for _, s := range pending {
 		aum, err := d.readRecord(s.hash)
@@ -428,6 +528,15 @@ func (d *Dir) SetEpochFloor(epoch uint64) error {
 	return nil
 }
 
+func refuseLink(path string) error {
+	info, err := os.Lstat(path)
+	if err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("store: %s is a symbolic link, which a store never is; remove it, or open the "+
+			"directory it points to", path)
+	}
+	return nil
+}
+
 // checkNotSharedWritable refuses a store directory that group or other can
 // write to. The log is not secret, but anyone who can write here can lower the
 // anchor or the epoch floor. An inherited directory is refused rather than
@@ -449,8 +558,18 @@ func checkNotSharedWritable(path string) error {
 // rename [writeFileSync] does. Add stages record bodies with it, so a crash
 // leaves debris under the one prefix Add's cleanup knows; Add's own rename is
 // what publishes the record.
+//
+// The name is predictable from the record, so whatever is already there —
+// debris of a crash, or a link someone who can write the directory planted —
+// is removed rather than opened, and the file is created exclusively: a link
+// planted in between fails the create instead of redirecting it.
 func writeSync(name string, body []byte) error {
-	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
+	// RemoveAll, so that a directory planted under the name does not block
+	// staging for good; it removes links rather than following them.
+	if err := os.RemoveAll(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("store: removing %s: %w", name, err)
+	}
+	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
 	if err != nil {
 		return fmt.Errorf("store: creating %s: %w", name, err)
 	}

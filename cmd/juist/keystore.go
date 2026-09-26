@@ -9,7 +9,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nning/juist/internal/statedir"
+
 	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/trust/store"
 	"github.com/nning/juist/types"
 )
 
@@ -22,12 +26,6 @@ const (
 	adminsDir    = keys.AdminsDir
 	nodeKeysFile = keys.NodeKeysFile
 	stagedSuffix = keys.StagedSuffix
-
-	disablementFile = "disablement.secrets"
-
-	// genesisFile holds a genesis record still collecting signatures. Not
-	// secret — every admin in the ceremony has to see it.
-	genesisFile = "genesis.rec"
 
 	keyFileMode fs.FileMode = keys.FileMode
 	keyDirMode  fs.FileMode = keys.DirMode
@@ -64,12 +62,18 @@ func (h *home) join(parts ...string) string {
 }
 
 func (h *home) writeSecret(name string, lines []string) error {
+	if statedir.HomeInUse(h.path) {
+		return fmt.Errorf("%s is juistd's state directory, not a keystore\nhint: drop --home", h.path)
+	}
 	return keys.WriteSecret(h.join(name), lines)
 }
 
 // --- admin keys ------------------------------------------------------------
 
 func (h *home) createAdminKey(name string) (types.PrivateIdentity, error) {
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
+		return types.PrivateIdentity{}, fmt.Errorf("%q cannot name an admin key file", name)
+	}
 	priv, err := types.GenerateIdentity()
 	if err != nil {
 		return priv, err
@@ -96,18 +100,9 @@ func (h *home) adminKeys() ([]types.PrivateIdentity, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".key") {
 			continue
 		}
-		path := h.join(adminsDir, e.Name())
-		file, err := keys.ReadTagged(path)
+		priv, err := loadAdminKey(h.join(adminsDir, e.Name()))
 		if err != nil {
 			return nil, err
-		}
-		fields, err := keys.TakeFields(path, file, identityTag, 1)
-		if err != nil {
-			return nil, err
-		}
-		priv, err := types.NewPrivateIdentity(fields[0])
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		out = append(out, priv)
 	}
@@ -118,6 +113,39 @@ func (h *home) adminKeys() ([]types.PrivateIdentity, error) {
 	return out, nil
 }
 
+// adminKey loads the admin key called name, if the keystore has one.
+func (h *home) adminKey(name string) (types.PrivateIdentity, bool, error) {
+	priv, err := loadAdminKey(h.join(adminsDir, name+".key"))
+	if keys.Missing(err) {
+		return types.PrivateIdentity{}, false, nil
+	}
+	return priv, err == nil, err
+}
+
+func loadAdminKey(path string) (types.PrivateIdentity, error) {
+	file, err := keys.ReadTagged(path)
+	if err != nil {
+		return types.PrivateIdentity{}, err
+	}
+	fields, err := keys.TakeFields(path, file, identityTag, 1)
+	if err != nil {
+		return types.PrivateIdentity{}, err
+	}
+	priv, err := types.NewPrivateIdentity(fields[0])
+	if err != nil {
+		return types.PrivateIdentity{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return priv, nil
+}
+
+// breakGlassFile holds a network's break-glass secrets, and genesisFileFor
+// its genesis record while that collects signatures: not secret, since every
+// admin in the ceremony has to see it. Both are per network, so one keystore
+// can found several.
+func breakGlassFile(network string) string { return "break-glass-" + fileSafe(network) + ".secrets" }
+
+func genesisFileFor(network string) string { return "genesis-" + fileSafe(network) + ".rec" }
+
 // --- node keys -------------------------------------------------------------
 
 // createNodeKeys generates this device's key material and writes it. name is
@@ -127,8 +155,8 @@ func (h *home) createNodeKeys(name string) (*nodeKeys, error) {
 	if name != "" {
 		// Refuse here rather than storing it: otherwise the failure lands on
 		// the admin's machine, against a limit this device never mentioned.
-		if err := types.ValidateName(name); err != nil {
-			return nil, fmt.Errorf("member name: %w", err)
+		if err := checkName("member name", name); err != nil {
+			return nil, err
 		}
 	} else {
 		name = defaultMemberName()
@@ -151,9 +179,7 @@ func (h *home) createNodeKeys(name string) (*nodeKeys, error) {
 func (h *home) canStageNodeKeys() error {
 	staged := h.join(nodeKeysFile + stagedSuffix)
 	if _, err := os.Stat(staged); err == nil {
-		return fmt.Errorf(
-			"%s already holds staged keys from an earlier rotation; apply that record, "+
-				"or remove the file to abandon it", staged)
+		return fmt.Errorf("%s: an earlier rotation is staged\nhint: apply its record, or juist rotate abandon", staged)
 	}
 	return nil
 }
@@ -215,16 +241,26 @@ func (h *home) rotatedIdentity() (*nodeKeys, error) {
 
 func (h *home) nodeKeys() (*nodeKeys, error) { return keys.LoadNode(h.join(nodeKeysFile)) }
 
+// optionalNodeKeys is nodeKeys for callers to whom a device without keys is an
+// ordinary state: it returns nil for absent keys, and an error only for keys
+// that are there and cannot be loaded, which must never pass for "no keys".
+func (h *home) optionalNodeKeys() (*nodeKeys, error) {
+	k, err := h.nodeKeys()
+	if keys.Missing(err) {
+		return nil, nil
+	}
+	return k, err
+}
+
 // defaultMemberName is the name a device proposes when the operator did not
 // choose one: its hostname, if the log would accept it. A fully qualified name
-// can run past [types.MaxNameLen], and falling back to none leaves "juist key"
-// printing a NAME placeholder rather than a command that fails.
+// can run past [types.MaxNameLen]; with none, the inviting admin names it.
 func defaultMemberName() string {
 	host, err := os.Hostname()
-	if err != nil || types.ValidateName(host) != nil {
+	if err != nil {
 		return ""
 	}
-	return host
+	return memberName(host)
 }
 
 // displayName returns the member name to present at enrollment, falling back
@@ -293,12 +329,31 @@ func readRecordFile(path string) (types.AUM, error) {
 	return types.AUM{}, fmt.Errorf("%s: no %s line", path, recordTag)
 }
 
+// writeRecordFile replaces a record file with the record as it is now,
+// through a fresh temporary file and a rename: a record file often sits in a
+// directory others can write to, and writing in place would follow a symlink
+// planted under its name.
 func writeRecordFile(path string, a *types.AUM) error {
 	text, err := encodeRecord(a)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	defer os.Remove(f.Name()) // a no-op once renamed
+	err = f.Chmod(0o644)
+	if err == nil {
+		_, err = f.WriteString(text)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), path)
+	}
+	if err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
@@ -314,8 +369,7 @@ func writeNewRecordFile(path string, a *types.AUM) error {
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if errors.Is(err, fs.ErrExist) {
-		return fmt.Errorf("%s already exists; it may be a record still collecting "+
-			"signatures, so pick another path or remove it deliberately", path)
+		return fmt.Errorf("%s exists; a change still collecting approvals? %w", path, err)
 	}
 	if err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
@@ -332,4 +386,37 @@ func writeNewRecordFile(path string, a *types.AUM) error {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
+}
+
+// --- the log ---------------------------------------------------------------
+
+// openAuthorityAllowingNone opens the log, treating "there is no network here"
+// as a result rather than an error. Only that: a store that fails to open is
+// an error, or a damaged log becomes a device that never had one.
+//
+// A home without a log directory has no network, and reading it creates
+// none: an empty store would make the home look like a device of its own.
+func (h *home) openAuthorityAllowingNone() (*store.Dir, *log.Authority, bool, error) {
+	if _, err := os.Stat(h.join(logDir)); keys.Missing(err) {
+		return nil, nil, false, nil
+	}
+	st, err := store.Open(h.join(logDir))
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if _, ok, err := st.Anchor(); err != nil {
+		return nil, nil, false, err
+	} else if !ok {
+		return st, nil, false, nil
+	}
+	auth, err := log.Open(st)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return st, auth, true, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

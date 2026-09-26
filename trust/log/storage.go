@@ -26,9 +26,12 @@ type Storage interface {
 	// any order.
 	Children(h types.Hash) ([]types.Hash, error)
 
-	// Add stores records durably, atomically across the whole batch.
-	// Re-adding a record already held is not an error: the name is its
-	// content.
+	// Add stores records durably. A failure may leave part of the batch
+	// stored, which callers re-resolve to find out, but a store that
+	// outlives a crash must hold all of a batch or none of it when next
+	// opened: part of one can resolve below the epoch floor the whole
+	// clears. Re-adding a record already held is not an error: the name is
+	// its content.
 	Add(aums ...types.AUM) error
 
 	// Delete removes records. Used only by compaction, after the anchor has
@@ -178,7 +181,7 @@ func (m *MemStorage) SetSchemaFloor(v types.SchemaVersion) error {
 
 func (m *MemStorage) Hashes() ([]types.Hash, error) {
 	out := slices.Collect(maps.Keys(m.aums))
-	slices.SortFunc(out, compareHash)
+	slices.SortFunc(out, types.Hash.Compare)
 	return out, nil
 }
 
@@ -198,7 +201,7 @@ func newOverlay(base reader, aums []types.AUM) (*overlay, error) {
 	}
 	for i := range aums {
 		if err := aums[i].StaticValidate(); err != nil {
-			return nil, fmt.Errorf("log: %w", err)
+			return nil, reject(RuleMalformed, fmt.Errorf("log: %w", err))
 		}
 		a := aums[i].Clone()
 		h := a.Hash()
@@ -233,7 +236,7 @@ func (o *overlay) Children(h types.Hash) ([]types.Hash, error) {
 	out := append(base, o.children[h]...)
 	// Deterministic order: fork choice must not depend on the order the store
 	// happens to return children in.
-	slices.SortFunc(out, compareHash)
+	slices.SortFunc(out, types.Hash.Compare)
 	return slices.Compact(out), nil
 }
 
@@ -241,22 +244,10 @@ func (o *overlay) Children(h types.Hash) ([]types.Hash, error) {
 // exactly those once resolution has approved them.
 func (o *overlay) pending() []types.AUM {
 	hashes := slices.Collect(maps.Keys(o.added))
-	slices.SortFunc(hashes, compareHash)
+	slices.SortFunc(hashes, types.Hash.Compare)
 	out := make([]types.AUM, 0, len(hashes))
 	for _, h := range hashes {
 		out = append(out, o.added[h])
 	}
 	return out
-}
-
-func compareHash(a, b types.Hash) int {
-	for i := range a {
-		if a[i] != b[i] {
-			if a[i] < b[i] {
-				return -1
-			}
-			return 1
-		}
-	}
-	return 0
 }

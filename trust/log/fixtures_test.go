@@ -1,6 +1,7 @@
 package log
 
 import (
+	"bytes"
 	"crypto/sha256"
 
 	"github.com/nning/juist/trust/secrets"
@@ -45,7 +46,7 @@ func fixedGenesis() (types.AUM, types.PrivateIdentity, error) {
 	admin := fixedIdentity(0)
 	commit := types.DisablementCommit(fixedDisablementSecret())
 	genesis, err := Genesis("fuzz-net", 1,
-		[]types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin"}},
+		[]types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin", Holder: "admin"}},
 		[]types.Hash{commit}, nil, testSealer())
 	if err != nil {
 		return types.AUM{}, admin, err
@@ -78,6 +79,21 @@ func testSealer() Sealer {
 		var secret secrets.Secret
 		copy(secret[:], seed[:])
 		return secrets.SealTo(secret, epoch, members)
+	}
+}
+
+// fixedSealer is testSealer without the randomness: wraps are placeholders of
+// the right length, which the log checks but never opens, so a record carrying
+// them hashes alike on every run — and so does every fork choice between them.
+func fixedSealer() Sealer {
+	return func(epoch uint64, members []types.NodeRecord) (*types.EpochRecord, error) {
+		rec := &types.EpochRecord{Epoch: epoch, Commit: types.EpochCommit([]byte("group secret"))}
+		for _, m := range members {
+			sealed := bytes.Repeat([]byte{byte(epoch)}, types.SealedSecretSize)
+			copy(sealed, m.Identity[:])
+			rec.Wraps = append(rec.Wraps, types.EpochWrap{Recipient: m.Identity, Sealed: sealed})
+		}
+		return rec, nil
 	}
 }
 

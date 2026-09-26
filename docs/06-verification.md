@@ -33,8 +33,14 @@ Targets, added the milestone their input surface appears:
 | AUM/record decoder | raw CBOR | M1 |
 | Chain validator | AUM sequences | M1 |
 | Gossip frame parser | raw frames | M2 |
+| Gossip catch-up messages, and the asking side's reading of them | raw frames | M4b |
 | DHT payload decrypt/parse | BEP44 values | M3 |
-| Invite string / QR token parser | strings | M4 |
+| Invite code and link parser | strings | M4 |
+| Enrollment handshake and message decoder | raw frames | M4 |
+| Invite rendezvous stream | UDP packets on a punched path | M4 |
+| LAN discovery beacon (`FuzzBeaconHandle`) | multicast DNS datagrams | M2 |
+| Invite nameplate question and answer (`FuzzInviteMessages`) | multicast DNS datagrams | M4 |
+| Relay invite forwarding (`FuzzForwardRequests`, `FuzzRelayAnswers`) | upgrade requests; a relay's answers to host and guest | M4 |
 | IPC request decoder | socket payloads | M2 |
 
 72 CPU-hour clean runs gate each milestone; corpus is preserved and grows. This
@@ -70,20 +76,22 @@ netfilter doing the translation rather than a simulation of it:
   start but never yields a false member; a crawler on the swarm cannot link
   announcements to the network or count members.
 - **Relay abuse:** non-member and *revoked* member attempt relay use ⇒ rejected.
-- **Policy & routing (M7):** a peer denied by ACL is dropped by the *receiver* even
-  with a sender patched to ignore its own filter; a node forwarding traffic it holds no
+- **Exit nodes and subnet routes (M6):** a node forwarding traffic it holds no
   grant for is dropped by every peer; a full-tunnel client leaks no DNS query and no
   non-LAN packet outside the tunnel (capture on the physical interface) while LAN
   destinations keep resolving and routing locally; withdrawing an `exit-node` role cuts
   egress at gossip convergence (reachable) and at the TTL boundary (partitioned).
+- **Coarse ACLs (M12):** a peer denied by ACL is dropped by the *receiver* even with a
+  sender patched to ignore its own filter; a member without a grant for an exit node
+  gets nothing forwarded by it.
 - **Chaos:** packet loss/reorder/duplication on gossip paths; node kill/restart
   mid-sync; clock skew between members (±minutes) — assert convergence and no
   state corruption (fsync/rollback tests with `kill -9`).
 
 ## 4. End-to-end / platform
 
-- CI interop matrix: Linux + FreeBSD (qemu VMs), Android emulator smoke test —
-  enrollment by QR, ping over tunnel, revocation.
+- CI interop matrix: Linux + FreeBSD (qemu VMs), and from M11 an Android emulator
+  smoke test — enrollment by QR, ping over tunnel, revocation.
 - Egress assertion on every E2E run: **zero packets to any third-party service**
   except declared untrusted helpers (DHT bootstrap, optional public STUN) — catches
   accidental Tailscale-infra dependencies from vendored code.
@@ -95,14 +103,14 @@ netfilter doing the translation rather than a simulation of it:
   a package and create a system user. Automating it needs a VM in CI, which is
   the same dependency the FreeBSD interop matrix above wants; decide both at once.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
-  VPS relay member + one mobile (Android on LTE); full lifecycle including emergency
-  revocation from a phone.
+  VPS relay member + one mobile (Android on LTE, from M11); full lifecycle including
+  emergency revocation from a phone.
 
 ## 5. Cryptographic review gates
 
 - Internal design review of the trust layer before M3 (log rules frozen).
-- External audit at M6 scoped to `trust/*`, `enroll`, `gossip` (~7–9 k LOC) plus the
-  reconciler's default-deny property.
+- External audit at M10 scoped to `trust/*`, `enroll`, `gossip` (~7–9 k LOC) plus the
+  reconciler's default-deny property, M6's route consumption and M8's resolver.
 - A short machine-checkable model (e.g. Tamarin/ProVerif sketch or TLA+ for the
   epoch/freshness state machine) is a stretch goal — valuable for the freshness and
   fork-choice rules, which are where novel logic lives.

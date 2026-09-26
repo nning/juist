@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- For a device that runs "juist invite" and lets a guest on the LAN in with
+     the typed code. A link reaches it through a relay or the DHT without it. -->
+<service>
+  <short>juist invite</short>
+  <description>juist invites taken directly, as a code on the LAN.</description>
+  <port protocol="tcp" port="41642"/>
+</service>

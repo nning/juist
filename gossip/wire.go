@@ -8,6 +8,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 
 	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -38,6 +39,10 @@ const (
 	// MaxEndpointsPerFrame caps the announcements one frame may carry: one
 	// per member, since holding two for one member is pointless.
 	MaxEndpointsPerFrame = types.MaxNodes
+
+	// MaxLeasesPerFrame caps the freshness leases one frame may carry: the
+	// newest per admin device, and a network has a handful.
+	MaxLeasesPerFrame = 64
 
 	// maxArrayElements, maxMapPairs and maxNestedLevels bound the CBOR
 	// decoder itself, below the schema-level limits above.
@@ -114,6 +119,10 @@ type frame struct {
 
 	// Endpoints are announcements the sender is relaying from its cache.
 	Endpoints []Endpoint `cbor:"8,keyasint,omitempty"`
+
+	// Leases are encoded freshness leases, in a records frame. Raw bytes for
+	// the same reason as Records: they enter only through types.DecodeLease.
+	Leases [][]byte `cbor:"10,keyasint,omitempty"`
 }
 
 func (f *frame) validate() error {
@@ -137,8 +146,16 @@ func (f *frame) validate() error {
 		return fmt.Errorf("gossip: frame carries %d announcements, over the %d limit",
 			len(f.Endpoints), MaxEndpointsPerFrame)
 	}
-	if f.Kind == kindHello && len(f.Records) > 0 {
-		return errors.New("gossip: a hello frame must not carry records")
+	if f.Kind == kindHello && (len(f.Records) > 0 || len(f.Leases) > 0) {
+		return errors.New("gossip: a hello frame must not carry records or leases")
+	}
+	if len(f.Leases) > MaxLeasesPerFrame {
+		return fmt.Errorf("gossip: frame carries %d leases, over the %d limit", len(f.Leases), MaxLeasesPerFrame)
+	}
+	for _, l := range f.Leases {
+		if len(l) == 0 || len(l) > types.MaxLeaseSize {
+			return fmt.Errorf("gossip: frame carries a %d-byte lease", len(l))
+		}
 	}
 	if f.Anchor.IsZero() {
 		return errors.New("gossip: frame names no anchor")
@@ -161,16 +178,7 @@ var encMode = func() cbor.EncMode {
 }()
 
 var decMode = func() cbor.DecMode {
-	m, err := cbor.DecOptions{
-		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
-		IndefLength:       cbor.IndefLengthForbidden,
-		TagsMd:            cbor.TagsForbidden,
-		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
-		UTF8:              cbor.UTF8RejectInvalid,
-		MaxNestedLevels:   maxNestedLevels,
-		MaxArrayElements:  maxArrayElements,
-		MaxMapPairs:       maxMapPairs,
-	}.DecMode()
+	m, err := types.StrictDecOptions(maxNestedLevels, maxArrayElements, maxMapPairs).DecMode()
 	if err != nil {
 		panic(fmt.Sprintf("gossip: building CBOR decoder: %v", err))
 	}
@@ -251,7 +259,7 @@ var errUnknownEpoch = errors.New("gossip: frame is sealed under an epoch this no
 
 // open decrypts a sealed frame with whichever epoch key it names, returning
 // that epoch so a reply can be sealed under the same one.
-func open(kr *secrets.Keyring, blob []byte) (epoch uint64, plaintext []byte, err error) {
+func open(kr *keyring.Keyring, blob []byte) (epoch uint64, plaintext []byte, err error) {
 	if len(blob) > maxSealedSize {
 		return 0, nil, fmt.Errorf("gossip: sealed frame is %d bytes, over the %d limit",
 			len(blob), maxSealedSize)

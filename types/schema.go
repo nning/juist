@@ -21,6 +21,52 @@ type SchemaVersion uint16
 //
 // Version numbers are the numbers, not the project's release names: there is
 // no "v1 schema", only schema 0, schema 1, and so on.
-const CurrentSchema SchemaVersion = 0
+//
+// Schema 1 adds how many admin devices must vouch for a node's view before it
+// counts as fresh ([KindSetVouchers], and the state's [Snapshot.Vouchers]),
+// and requires an identity rotation to be signed by the old key as well as
+// the new one.
+//
+// Schema 2 adds no field, only a rule of fork choice: taking a device's admin
+// role away, and raising the vouching threshold, count as revocations, as
+// removing a device does. Both withdraw vouching authority, and a concurrent
+// change must not orphan them on its hash.
+//
+// Schema 3 lets admin keys belong to a holder, a person whose keys cast one
+// vote between them ([AdminKey.Holder], [KindSetHolder]).
+//
+// Schema 4 assigns overlay IPv4 addresses from [OverlayV4] instead of
+// [CGNAT], which Tailscale owns on any host running it, or from a prefix the
+// network chose at genesis ([Snapshot.V4Prefix]). Addresses assigned before
+// the upgrade stay valid.
+//
+// Schema 5 moves overlay IPv4 addresses after admission: the network to
+// another prefix ([KindRenumberNetwork]) or one member to another address
+// ([KindRenumberNode]), each keeping the addresses it replaces live until a
+// deadline ([NodeRecord.Retiring], [Snapshot.V4Retiring]).
+//
+// Schema 6 renames the network ([KindRenameNetwork]). The name is a label:
+// the genesis hash stays what identifies the network.
+const CurrentSchema SchemaVersion = 6
+
+// SchemaVouchers is the first schema with a vouching threshold.
+const SchemaVouchers SchemaVersion = 1
+
+// SchemaRevokingRoles is the first schema in which withdrawing vouching
+// authority is a revocation for fork choice.
+const SchemaRevokingRoles SchemaVersion = 2
+
+// SchemaHolders is the first schema in which admin keys have holders.
+const SchemaHolders SchemaVersion = 3
+
+// SchemaOverlayV4 is the first schema assigning overlay IPv4 addresses from
+// [OverlayV4].
+const SchemaOverlayV4 SchemaVersion = 4
+
+// SchemaRenumber is the first schema in which overlay IPv4 addresses move.
+const SchemaRenumber SchemaVersion = 5
+
+// SchemaRename is the first schema in which the network's name changes.
+const SchemaRename SchemaVersion = 6
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

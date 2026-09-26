@@ -44,11 +44,12 @@ func Genesis(network string, quorum uint32, admins []types.AdminKey,
 	snap := &types.Snapshot{
 		Network:     network,
 		Quorum:      quorum,
+		Schema:      types.CurrentSchema,
 		Disablement: slices.Clone(disablement),
 		Admins:      slices.Clone(admins),
 		Nodes:       slices.Clone(nodes),
 	}
-	slices.SortFunc(snap.Disablement, func(a, b types.Hash) int { return compareHash(a, b) })
+	slices.SortFunc(snap.Disablement, types.Hash.Compare)
 	slices.SortFunc(snap.Admins, func(a, b types.AdminKey) int { return a.Public.Compare(b.Public) })
 	slices.SortFunc(snap.Nodes, func(a, b types.NodeRecord) int { return a.Identity.Compare(b.Identity) })
 
@@ -69,7 +70,7 @@ func Genesis(network string, quorum uint32, admins []types.AdminKey,
 
 	aum := types.AUM{Kind: types.KindGenesis, State: snap}
 	if err := aum.ValidateUnsigned(); err != nil {
-		return types.AUM{}, fmt.Errorf("log: genesis: %w", err)
+		return types.AUM{}, reject(RuleMalformed, fmt.Errorf("log: genesis: %w", err))
 	}
 	return aum, nil
 }
@@ -164,6 +165,17 @@ func (b *Builder) RemoveAdminKey(id types.Identity) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindRemoveAdminKey, Subject: &id})
 }
 
+// SetHolder builds a record setting a holder's votes, and how many of its
+// keys must sign for them to count.
+func (b *Builder) SetHolder(p types.HolderPolicy) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindSetHolder, Holder: &p})
+}
+
+// SetVouchers builds a record changing how many admin devices must vouch.
+func (b *Builder) SetVouchers(m uint32) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindSetVouchers, Vouchers: &m})
+}
+
 // SetQuorum builds a record changing the vote threshold.
 func (b *Builder) SetQuorum(q uint32) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindSetQuorum, Quorum: &q})
@@ -200,6 +212,33 @@ func (b *Builder) SchemaUpgrade(v types.SchemaVersion) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindSchemaUpgrade, Schema: &v})
 }
 
+// RenumberNetwork builds a record moving the network to prefix and each
+// member to its address in addrs, keeping the ones they leave live until
+// until, in Unix seconds.
+func (b *Builder) RenumberNetwork(prefix netip.Prefix, addrs []types.MemberV4, until uint64) (types.AUM, error) {
+	r := &types.Renumbering{Until: until, Prefix: &prefix, Addrs: slices.Clone(addrs)}
+	slices.SortFunc(r.Addrs, func(x, y types.MemberV4) int { return x.Identity.Compare(y.Identity) })
+	return b.finish(types.AUM{Kind: types.KindRenumberNetwork, Renumber: r})
+}
+
+// RenumberNode builds a record moving one member to v4, keeping the address
+// it leaves live until until, in Unix seconds.
+func (b *Builder) RenumberNode(id types.Identity, v4 netip.Addr, until uint64) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindRenumberNode, Subject: &id,
+		Renumber: &types.Renumbering{Until: until, V4: &v4}})
+}
+
+// RetireAddresses builds a record retiring every address and range a
+// renumbering left live.
+func (b *Builder) RetireAddresses() (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindRetireAddresses})
+}
+
+// RenameNetwork builds a record giving the network another name.
+func (b *Builder) RenameNetwork(name string) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindRenameNetwork, Network: &name})
+}
+
 func (b *Builder) seal(sealer Sealer, members []types.NodeRecord) (*types.EpochRecord, error) {
 	if sealer == nil {
 		return nil, errors.New("log: this record kind requires an epoch bump, so it needs a sealer")
@@ -225,7 +264,7 @@ func (b *Builder) finish(aum types.AUM) (types.AUM, error) {
 	head := b.state.head
 	aum.Prev = &head
 	if err := aum.ValidateUnsigned(); err != nil {
-		return types.AUM{}, fmt.Errorf("log: %w", err)
+		return types.AUM{}, reject(RuleMalformed, fmt.Errorf("log: %w", err))
 	}
 	if _, err := b.state.apply(&aum, types.Hash{}, applyChain); err != nil {
 		return types.AUM{}, err
@@ -245,6 +284,17 @@ func comparePrefixes(a, b netip.Prefix) int {
 // checked too, or the answer would change the moment it is offered for real.
 func (b *Builder) Dry(aum *types.AUM) (*State, error) {
 	if err := verifyAgainst(aum, b.state); err != nil {
+		return nil, err
+	}
+	return b.state.apply(aum, aum.Hash(), applyChain)
+}
+
+// Check is [Builder.Dry] for a record still collecting its votes: all but the
+// quorum is checked, so an admin is not asked to sign a record that could
+// never apply here — one built on another head, or a checkpoint that does not
+// state the chain's state.
+func (b *Builder) Check(aum *types.AUM) (*State, error) {
+	if err := verify(aum, b.state, true); err != nil {
 		return nil, err
 	}
 	return b.state.apply(aum, aum.Hash(), applyChain)

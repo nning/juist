@@ -6,10 +6,10 @@ import (
 	"net"
 	"net/netip"
 	"sync"
-	"time"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"golang.org/x/time/rate"
 	"tailscale.com/net/stun"
 	"tailscale.com/types/logger"
 )
@@ -29,12 +29,11 @@ type stunResponder struct {
 	mu     sync.Mutex
 	closed bool
 
-	// budget is a token bucket over answers. A binding response is about
-	// twice its request, so an open responder is a weak reflector; the cap
-	// is far above what netcheck asks of one relay and low enough that the
-	// reflector is not worth using.
-	tokens   int
-	refilled time.Time
+	// answers bounds the reply rate. A binding response is about twice its
+	// request, so an open responder is a weak reflector; the cap is far above
+	// what netcheck asks of one relay and low enough that the reflector is not
+	// worth using.
+	answers *rate.Limiter
 }
 
 const (
@@ -49,7 +48,7 @@ const (
 // port, so the two must agree. A family that will not bind is logged and left
 // out rather than failing the relay.
 func listenSTUN(port uint16, logf logger.Logf) (*stunResponder, error) {
-	s := &stunResponder{logf: logf, tokens: stunBurst, refilled: time.Now()}
+	s := &stunResponder{logf: logf, answers: rate.NewLimiter(stunAnswersPerSecond, stunBurst)}
 	v4, err := listenSTUNFamily("udp4", port, logf)
 	if err != nil {
 		return nil, err
@@ -219,27 +218,11 @@ func (s *stunResponder) serve(sock *stunSocket) {
 		if err != nil {
 			continue
 		}
-		if !s.allow() {
+		if !s.answers.Allow() {
 			continue
 		}
 		if err := sock.write(stun.Response(txid, from), from, to); err != nil {
 			s.logf("relay: STUN write to %v: %v", from, err)
 		}
 	}
-}
-
-// allow takes a token, refilling by elapsed time.
-func (s *stunResponder) allow() bool {
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if gained := int(now.Sub(s.refilled).Seconds() * stunAnswersPerSecond); gained > 0 {
-		s.tokens = min(s.tokens+gained, stunBurst)
-		s.refilled = now
-	}
-	if s.tokens <= 0 {
-		return false
-	}
-	s.tokens--
-	return true
 }

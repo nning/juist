@@ -153,6 +153,20 @@ type Endpoint struct {
 	Sig types.Sig `cbor:"23,keyasint"`
 }
 
+// SameAs reports whether two announcements say the same, whatever their
+// sequence numbers and signatures: one renews the other.
+func (e *Endpoint) SameAs(o *Endpoint) bool {
+	return e.Identity == o.Identity && e.Disco == o.Disco && slices.Equal(e.Addrs, o.Addrs) &&
+		e.GossipPort == o.GossipPort && e.HomeRelay == o.HomeRelay && sameRelay(e.Relay, o.Relay)
+}
+
+func sameRelay(a, b *RelayInfo) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Port == b.Port && a.STUNPort == b.STUNPort && a.HostName == b.HostName && slices.Equal(a.Cert, b.Cert)
+}
+
 // labelEndpoint is the domain-separation label for an endpoint record's
 // signature. It is distinct from every label in types, so a signature over an
 // announcement can never be replayed as a signature over a log record.

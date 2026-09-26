@@ -1,236 +1,128 @@
 package daemon
 
 import (
-	"bytes"
-	"encoding/binary"
+	"context"
 	"errors"
 	"fmt"
-	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/fxamacker/cbor/v2"
-	"golang.org/x/sys/unix"
+	"github.com/nning/juist/ipc"
 
-	"github.com/nning/juist/types"
+	"golang.org/x/sys/unix"
 )
 
-// Two rules the local API follows, from the local-API CVEs in this space
+// Rules the local API follows, from the local-API CVEs in this space
 // (Tailscale CVE-2022-41924, NetBird GHSA-qcpp-8vwj-hhwr):
 //
 //   - No TCP listener, ever: a unix socket cannot be reached by a web page.
-//   - Mode 0600 in a 0700 directory, plus SO_PEERCRED, which is what catches a
-//     directory made permissive after the daemon started.
+//   - Every call is attributed to a user by the kernel (SO_PEERCRED), and what
+//     it may do follows from that user alone; see [Service.mayOperate]
+//     and [Service.mayAppoint].
 //
-// The daemon holds no admin keys, so the most a caller can do through
-// [cmdInform] is hand over records a quorum has already signed.
+// The daemon holds no admin keys, so the most any caller can do through
+// [CmdInform] is hand over records a quorum has already signed.
 
-// Limits on an IPC message. Small: every request here is a verb and at most a
-// batch of records.
+// Timeouts on a call. The request must arrive promptly: any local user can
+// connect, and a slot held by a silent caller is one a real caller waits for.
+const ipcRequestTimeout = 5 * time.Second
+
+// Admission to the socket, which every local user can reach. Callers are
+// identified at accept and take a slot in one of two pools, each user at most
+// a share of it: those who may operate, and those who may only read the
+// status, who also get a short deadline and a small request. A user looping
+// on connections therefore cannot lock root or the operator out, nor make the
+// daemon buffer much, and the operator cannot lock root out either. The
+// readers' pool is shared, so two users — or one with a range of subuids —
+// can keep the other unprivileged users from reading the status for as long
+// as they loop.
 const (
-	// MaxIPCMessage caps one encoded request or response.
-	MaxIPCMessage = 8 << 20
-
-	// MaxIPCRecords caps the records one inform request may carry.
-	MaxIPCRecords = 256
-
-	ipcMaxNestedLevels = 6
-	ipcMaxArrayElems   = MaxIPCRecords
-	ipcMaxMapPairs     = 32
+	maxIPCClients       = 8 // callers who may operate
+	maxOperatorsPerUser = 4 // of those, per uid
+	maxReaderClients    = 4 // callers who may only read the status
+	maxClientsPerUser   = 2 // of those, per uid
+	readerTimeout       = time.Second
+	maxReaderRequest    = 4 << 10
 )
 
-// A Command is an IPC verb. Numbers are permanent; 0 is invalid.
-type Command uint8
+// A pool admits up to size callers at once, each uid at most perUser of them.
+type pool struct {
+	mu      sync.Mutex
+	size    int
+	perUser int
+	total   int
+	byUser  map[uint32]int
+}
 
-const (
-	cmdInvalid Command = 0
+func newPool(size, perUser int) *pool {
+	return &pool{size: size, perUser: perUser, byUser: map[uint32]int{}}
+}
 
-	// CmdStatus asks what state the daemon is in.
-	CmdStatus Command = 1
-
-	// CmdInform hands the daemon log records to apply and gossip.
-	CmdInform Command = 2
-)
-
-func (c Command) String() string {
-	switch c {
-	case cmdInvalid:
-		return "no command"
-	case CmdStatus:
-		return "status"
-	case CmdInform:
-		return "inform"
-	default:
-		return fmt.Sprintf("command?<%d>", uint8(c))
+// take admits uid, returning how to give its slot back.
+func (p *pool) take(uid uint32) (func(), bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.total >= p.size || p.byUser[uid] >= p.perUser {
+		return nil, false
 	}
-}
-
-// A Request is one IPC call.
-type Request struct {
-	Command Command `cbor:"1,keyasint"`
-
-	// Records are encoded AUMs, for [CmdInform]. They travel as raw bytes so
-	// that they can only enter through types.DecodeAUM, the same rule the
-	// gossip frame follows.
-	Records [][]byte `cbor:"2,keyasint,omitempty"`
-}
-
-// A Response is one IPC reply. Err is set when the call failed, in which case
-// nothing else is meaningful.
-type Response struct {
-	Err    string  `cbor:"1,keyasint,omitempty"`
-	Status *Status `cbor:"2,keyasint,omitempty"`
-}
-
-func (r *Request) validate() error {
-	switch r.Command {
-	case CmdStatus:
-		if len(r.Records) > 0 {
-			return errors.New("daemon: a status request must not carry records")
+	p.total++
+	p.byUser[uid]++
+	return func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.total--
+		if p.byUser[uid]--; p.byUser[uid] == 0 {
+			delete(p.byUser, uid)
 		}
-	case CmdInform:
-		if len(r.Records) == 0 {
-			return errors.New("daemon: an inform request carries no records")
-		}
-	default:
-		return fmt.Errorf("daemon: request has %v", r.Command)
-	}
-	if len(r.Records) > MaxIPCRecords {
-		return fmt.Errorf("daemon: request carries %d records, over the %d limit",
-			len(r.Records), MaxIPCRecords)
-	}
-	return nil
+	}, true
 }
 
-// The IPC codec is the same canonical CBOR discipline as the rest of the
-// project, with its own limits. It is fuzzed: this is the one parser reachable
-// from a local unprivileged process.
-var ipcEnc = func() cbor.EncMode {
-	m, err := cbor.CTAP2EncOptions().EncMode()
-	if err != nil {
-		panic(fmt.Sprintf("daemon: building the IPC encoder: %v", err))
-	}
-	return m
-}()
-
-var ipcDec = func() cbor.DecMode {
-	m, err := cbor.DecOptions{
-		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
-		IndefLength:       cbor.IndefLengthForbidden,
-		TagsMd:            cbor.TagsForbidden,
-		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
-		UTF8:              cbor.UTF8RejectInvalid,
-		MaxNestedLevels:   ipcMaxNestedLevels,
-		MaxArrayElements:  ipcMaxArrayElems,
-		MaxMapPairs:       ipcMaxMapPairs,
-	}.DecMode()
-	if err != nil {
-		panic(fmt.Sprintf("daemon: building the IPC decoder: %v", err))
-	}
-	return m
-}()
-
-func ipcEncode(v any) ([]byte, error) {
-	b, err := ipcEnc.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("daemon: encoding an IPC message: %w", err)
-	}
-	if len(b) > MaxIPCMessage {
-		return nil, fmt.Errorf("daemon: IPC message is %d bytes, over the %d limit", len(b), MaxIPCMessage)
-	}
-	return b, nil
+// A caller is who is on the other end of a call, as the kernel reports it.
+// Known is false where the platform cannot say, and the socket's mode is the
+// whole control.
+type caller struct {
+	uid   uint32
+	known bool
 }
 
-func ipcDecode[T any](b []byte) (T, error) {
-	var zero, v T
-	if len(b) == 0 {
-		return zero, errors.New("daemon: empty IPC message")
-	}
-	if len(b) > MaxIPCMessage {
-		return zero, fmt.Errorf("daemon: IPC message is %d bytes, over the %d limit", len(b), MaxIPCMessage)
-	}
-	if err := ipcDec.Unmarshal(b, &v); err != nil {
-		return zero, fmt.Errorf("daemon: decoding an IPC message: %w", err)
-	}
-	re, err := ipcEnc.Marshal(v)
-	if err != nil {
-		return zero, fmt.Errorf("daemon: re-encoding an IPC message: %w", err)
-	}
-	if !bytes.Equal(re, b) {
-		return zero, errors.New("daemon: non-canonical IPC message")
-	}
-	return v, nil
-}
-
-// DecodeRequest decodes and shape-checks an IPC request. Exported for the
-// fuzz target.
-func DecodeRequest(b []byte) (Request, error) {
-	r, err := ipcDecode[Request](b)
-	if err != nil {
-		return Request{}, err
-	}
-	if err := r.validate(); err != nil {
-		return Request{}, err
-	}
-	return r, nil
-}
-
-// DecodeResponse decodes an IPC reply.
-func DecodeResponse(b []byte) (Response, error) { return ipcDecode[Response](b) }
-
-// ipcTimeout bounds one call. A local caller that stops reading must not hold
-// a daemon goroutine.
-const ipcTimeout = 30 * time.Second
-
-// maxIPCClients bounds concurrent callers.
-const maxIPCClients = 8
+// A handler answers one request. It may send events first, for a call that
+// runs long; ctx ends when the caller hangs up or the server closes. replies
+// carries the caller's [CmdInviteReply] requests, for a [CmdInvite].
+type handler func(ctx context.Context, req *ipc.Request, who caller, events func(*ipc.Event) error,
+	replies <-chan ipc.Request) ipc.Response
 
 type ipcServer struct {
-	d    *Daemon
-	ln   net.Listener
-	path string
+	h          handler
+	privileged func(caller) bool
+	ln         net.Listener
+	path       string
+	logf       func(string, ...any)
 
-	// lock is the home-directory lock file, held for this server's lifetime.
-	// It is what makes this daemon the single writer of the store beneath it;
-	// see [newIPCServer].
-	lock *os.File
+	operators, readers *pool
 
-	// closing guards the wait set; see [Daemon.track] for why an Add cannot
-	// simply race the Wait in close.
 	closeOnce sync.Once
 	closed    chan struct{}
-	slots     chan struct{}
-	trackMu   sync.Mutex
-	closing   bool
-	wg        sync.WaitGroup
+	waits     waitSet
 }
 
-func (s *ipcServer) track() bool {
-	s.trackMu.Lock()
-	defer s.trackMu.Unlock()
-	if s.closing {
-		return false
+// socketMode is 0666 where the kernel reports every caller, so any local user
+// may ask for status and the daemon decides the rest per call, and 0600 where
+// it cannot, so the mode is the control.
+func socketMode() fs.FileMode {
+	if peerCredSupported {
+		return 0o666
 	}
-	s.wg.Add(1)
-	return true
+	return 0o600
 }
 
-// LockName is the single-instance lock file's name inside a state directory.
-const LockName = "daemon.lock"
-
-// newIPCServer creates the socket. The order is load-bearing: take the
-// exclusive lock on the state directory first, then remove any stale socket
-// and bind. A unix socket is not a TCP port — unlinking a path another daemon
-// is listening on succeeds, and so does binding the freed path — so without
-// the lock a second daemon silently steals the control socket, leaving two log
-// authorities on one store.
-//
-// The lock is held for the daemon's lifetime, and the kernel drops it if the
-// process dies, so a crash leaves no stale lock.
-func newIPCServer(d *Daemon, path string) (*ipcServer, error) {
+// newIPCServer creates the socket. The caller must hold the state directory's
+// lock: unlinking a socket path another daemon is listening on succeeds, so
+// without it a second daemon would silently take over the first's socket.
+func newIPCServer(path string, h handler, privileged func(caller) bool, logf func(string, ...any)) (*ipcServer, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("daemon: creating %s: %w", dir, err)
@@ -238,52 +130,34 @@ func newIPCServer(d *Daemon, path string) (*ipcServer, error) {
 	if err := refuseSharedWritable(dir); err != nil {
 		return nil, err
 	}
-
-	lockPath := filepath.Join(dir, LockName)
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("daemon: opening the lock file %s: %w", lockPath, err)
-	}
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		lock.Close()
-		if errors.Is(err, unix.EWOULDBLOCK) {
-			return nil, fmt.Errorf(
-				"daemon: another juistd is already running on %s (lock held on %s); "+
-					"refusing to start a second one on the same home", dir, lockPath)
-		}
-		return nil, fmt.Errorf("daemon: locking %s: %w", lockPath, err)
-	}
-
 	if err := removeIfExists(path); err != nil {
-		lock.Close()
 		return nil, fmt.Errorf("daemon: removing a stale socket at %s: %w", path, err)
 	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
-		lock.Close()
 		return nil, fmt.Errorf("daemon: listening on %s: %w", path, err)
 	}
-	// Chmod after bind: the socket is created with the umask applied, which
-	// leaves it group- and world-readable. The 0700 directory closes the
-	// window between the two.
-	if err := os.Chmod(path, 0o600); err != nil {
+	// Chmod after bind, which applies the umask; either way the caller is
+	// checked on every call.
+	if err := os.Chmod(path, socketMode()); err != nil {
 		ln.Close()
-		lock.Close()
-		return nil, fmt.Errorf("daemon: tightening %s: %w", path, err)
+		return nil, fmt.Errorf("daemon: setting the mode of %s: %w", path, err)
 	}
 	return &ipcServer{
-		d:      d,
-		ln:     ln,
-		path:   path,
-		lock:   lock,
-		closed: make(chan struct{}),
-		slots:  make(chan struct{}, maxIPCClients),
+		h:          h,
+		privileged: privileged,
+		ln:         ln,
+		path:       path,
+		logf:       logf,
+		closed:     make(chan struct{}),
+		operators:  newPool(maxIPCClients, maxOperatorsPerUser),
+		readers:    newPool(maxReaderClients, maxClientsPerUser),
 	}, nil
 }
 
 // refuseSharedWritable rejects a socket directory group or other can write to:
 // anyone who can write there can replace the socket and impersonate the
-// daemon to the CLI. Same rule the keystore applies to its own directory.
+// daemon to the CLI.
 func refuseSharedWritable(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -292,7 +166,23 @@ func refuseSharedWritable(path string) error {
 	if perm := info.Mode().Perm(); perm&0o022 != 0 {
 		return fmt.Errorf(
 			"daemon: %s is mode %o, writable by group or other; anyone who can write there can "+
-				"replace the control socket. Run: chmod 700 %s", path, perm, path)
+				"replace the control socket. Run: chmod 755 %s", path, perm, path)
+	}
+	return refuseForeignOwner(path)
+}
+
+// refuseForeignOwner rejects a directory owned by another user than the
+// daemon's. Its owner can write there whatever its mode, and for the state
+// directory that means appointing an operator or planting files the daemon
+// writes through — as root, where root runs it over a user's directory.
+func refuseForeignOwner(path string) error {
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		return fmt.Errorf("daemon: inspecting %s: %w", path, err)
+	}
+	if uid := uint32(os.Geteuid()); st.Uid != uid {
+		return fmt.Errorf("daemon: %s belongs to uid %d, not to uid %d this daemon runs as; "+
+			"run juistd as its owner, or give it a directory of its own", path, st.Uid, uid)
 	}
 	return nil
 }
@@ -314,7 +204,7 @@ func (s *ipcServer) serve() {
 				return
 			default:
 			}
-			s.d.logf("daemon: ipc accept: %v", err)
+			s.logf("daemon: ipc accept: %v", err)
 			select {
 			case <-s.closed:
 				return
@@ -322,23 +212,28 @@ func (s *ipcServer) serve() {
 			}
 			continue
 		}
-		select {
-		case s.slots <- struct{}{}:
-		default:
+		who, err := peerOf(c)
+		if err != nil {
 			c.Close()
 			continue
 		}
-		if !s.track() {
-			<-s.slots
+		privileged := s.privileged(who)
+		release, ok := s.admit(who, privileged)
+		if !ok {
+			c.Close()
+			continue
+		}
+		if !s.waits.track() {
+			release()
 			c.Close()
 			return
 		}
 		go func() {
-			defer s.wg.Done()
-			defer func() { <-s.slots }()
+			defer s.waits.done()
+			defer release()
 			defer c.Close()
-			if err := s.handle(c); err != nil {
-				s.d.logf("daemon: ipc: %v", err)
+			if err := s.handle(c, who, privileged); err != nil {
+				s.logf("daemon: ipc: %v", err)
 			}
 		}()
 	}
@@ -346,136 +241,82 @@ func (s *ipcServer) serve() {
 
 func (s *ipcServer) close() {
 	s.closeOnce.Do(func() {
-		s.trackMu.Lock()
-		s.closing = true
-		s.trackMu.Unlock()
+		s.waits.stop()
 		close(s.closed)
 		s.ln.Close()
-		// The listener's own cleanup removes the socket file; this covers
-		// the case where it did not.
 		_ = removeIfExists(s.path)
-		// Releasing the lock is the last thing, so no successor daemon can
-		// bind the socket until this one has let its own go.
-		if s.lock != nil {
-			s.lock.Close()
-		}
 	})
-	s.wg.Wait()
+	s.waits.wait()
 }
 
-func (s *ipcServer) handle(c net.Conn) error {
-	if err := c.SetDeadline(time.Now().Add(ipcTimeout)); err != nil {
+// admit takes a slot for a caller, returning how to give it back.
+func (s *ipcServer) admit(who caller, privileged bool) (func(), bool) {
+	if privileged {
+		return s.operators.take(who.uid)
+	}
+	return s.readers.take(who.uid)
+}
+
+func (s *ipcServer) handle(c net.Conn, who caller, privileged bool) error {
+	timeout, limit := ipcRequestTimeout, uint32(ipc.MaxRequest)
+	if !privileged {
+		timeout, limit = readerTimeout, maxReaderRequest
+	}
+	if err := c.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return err
 	}
-	if err := checkPeerCred(c); err != nil {
-		return err
-	}
-	raw, err := readMessage(c, MaxIPCMessage)
+	raw, err := ipc.ReadMessage(c, limit)
 	if err != nil {
 		return err
 	}
-	req, err := DecodeRequest(raw)
+	req, err := ipc.DecodeRequest(raw)
 	if err != nil {
-		return writeMessage(c, Response{Err: err.Error()})
+		return ipc.WriteMessage(c, &ipc.Response{Err: err.Error()}, ipc.MaxResponse)
 	}
-	return writeMessage(c, s.dispatch(&req))
-}
 
-func (s *ipcServer) dispatch(req *Request) Response {
-	switch req.Command {
-	case CmdStatus:
-		st := s.d.Status()
-		return Response{Status: &st}
-	case CmdInform:
-		records := make([]types.AUM, 0, len(req.Records))
-		for _, b := range req.Records {
-			aum, err := types.DecodeAUM(b)
+	// The call ends when the caller hangs up, which for a long one is the
+	// only sign it stopped waiting: it sends nothing after its request.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-s.closed:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	_ = c.SetDeadline(time.Time{})
+	replies := make(chan ipc.Request)
+	go func() {
+		defer cancel()
+		if req.Command != ipc.CmdInvite {
+			var b [1]byte
+			_, _ = c.Read(b[:])
+			return
+		}
+		// A conversation: everything the caller sends after its request is
+		// a reply, and anything else ends the call.
+		for {
+			raw, err := ipc.ReadMessage(c, ipc.MaxReply)
 			if err != nil {
-				return Response{Err: fmt.Sprintf("undecodable record: %v", err)}
+				return
 			}
-			records = append(records, aum)
+			r, err := ipc.DecodeRequest(raw)
+			if err != nil || r.Command != ipc.CmdInviteReply {
+				return
+			}
+			select {
+			case replies <- r:
+			case <-ctx.Done():
+				return
+			}
 		}
-		if err := s.d.Inform(records); err != nil {
-			return Response{Err: err.Error()}
-		}
-		st := s.d.Status()
-		return Response{Status: &st}
-	default:
-		// Unreachable: validate rejects unknown commands.
-		return Response{Err: fmt.Sprintf("unhandled %v", req.Command)}
+	}()
+	events := func(e *ipc.Event) error {
+		_ = c.SetWriteDeadline(time.Now().Add(ipc.CallTimeout))
+		return ipc.WriteMessage(c, &ipc.Response{Event: e}, ipc.MaxResponse)
 	}
+	resp := s.h(ctx, &req, who, events, replies)
+	_ = c.SetWriteDeadline(time.Now().Add(ipc.CallTimeout))
+	return ipc.WriteMessage(c, &resp, ipc.MaxResponse)
 }
-
-// Messages on the socket are length-prefixed, checked against the limit before
-// anything is buffered.
-func readMessage(c net.Conn, limit uint32) ([]byte, error) {
-	var hdr [4]byte
-	if _, err := io.ReadFull(c, hdr[:]); err != nil {
-		return nil, fmt.Errorf("daemon: reading an IPC header: %w", err)
-	}
-	n := binary.BigEndian.Uint32(hdr[:])
-	if n == 0 || n > limit {
-		return nil, fmt.Errorf("daemon: peer announced a %d-byte IPC message, over the %d limit", n, limit)
-	}
-	// Grown as the bytes arrive, not allocated from the announced size: the
-	// same rule the gossip framing follows, so that a caller that announces
-	// the maximum and sends nothing costs nothing.
-	var buf bytes.Buffer
-	buf.Grow(min(int(n), 32<<10))
-	if _, err := io.CopyN(&buf, c, int64(n)); err != nil {
-		return nil, fmt.Errorf("daemon: reading an IPC body: %w", err)
-	}
-	return buf.Bytes(), nil
-}
-
-func writeMessage(c net.Conn, v any) error {
-	b, err := ipcEncode(v)
-	if err != nil {
-		return err
-	}
-	var hdr [4]byte
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(b)))
-	if _, err := c.Write(hdr[:]); err != nil {
-		return fmt.Errorf("daemon: writing an IPC message: %w", err)
-	}
-	if _, err := c.Write(b); err != nil {
-		return fmt.Errorf("daemon: writing an IPC message: %w", err)
-	}
-	return nil
-}
-
-// --- client side -----------------------------------------------------------
-
-// Call sends one request to a daemon's IPC socket and returns its reply. The
-// CLI's half of the protocol, kept here so both halves stay in one file.
-func Call(path string, req Request) (Response, error) {
-	c, err := net.DialTimeout("unix", path, 5*time.Second)
-	if err != nil {
-		return Response{}, err
-	}
-	defer c.Close()
-	if err := c.SetDeadline(time.Now().Add(ipcTimeout)); err != nil {
-		return Response{}, err
-	}
-	if err := writeMessage(c, req); err != nil {
-		return Response{}, err
-	}
-	raw, err := readMessage(c, MaxIPCMessage)
-	if err != nil {
-		return Response{}, err
-	}
-	resp, err := DecodeResponse(raw)
-	if err != nil {
-		return Response{}, err
-	}
-	if resp.Err != "" {
-		return resp, errors.New(resp.Err)
-	}
-	return resp, nil
-}
-
-// SocketName is the socket's name inside a juist state directory.
-const SocketName = "daemon.sock"
-
-// SocketPath returns the control socket's path for a state directory.
-func SocketPath(home string) string { return filepath.Join(home, SocketName) }

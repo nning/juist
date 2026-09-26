@@ -27,12 +27,23 @@ const maxCachedEndpoints = 2 * types.MaxNodes
 type Cache struct {
 	mu     sync.Mutex
 	by     map[types.Identity]Endpoint
+	renews map[types.Identity]bool
 	member map[types.Identity]bool
 	former map[types.Identity]bool
 }
 
 // NewCache returns an empty cache.
-func NewCache() *Cache { return &Cache{by: map[types.Identity]Endpoint{}} }
+func NewCache() *Cache {
+	return &Cache{by: map[types.Identity]Endpoint{}, renews: map[types.Identity]bool{}}
+}
+
+// Renews reports whether a node has been seen signing its announcement again
+// with nothing changed, as a build that renews does.
+func (c *Cache) Renews(id types.Identity) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.renews[id]
+}
 
 // SetMembership gives the cache the reconciler's view of the log: who is a
 // member now, and who this node has seen it carry and drop. Members decide who
@@ -55,7 +66,10 @@ func (c *Cache) SetMembership(members, former []types.Identity) {
 }
 
 // Add records an announcement if it is newer than what is held, reporting
-// whether anything changed. The record must already be verified: passing an
+// whether it says anything new. One that only renews the signature is kept,
+// so what is held stays as fresh as its author made it, but reported as
+// nothing new: acting on it would cost every member a reconcile and a push
+// for each renewal. The record must already be verified: passing an
 // unverified one would let any peer speak for any node.
 func (c *Cache) Add(e Endpoint) bool {
 	c.mu.Lock()
@@ -77,6 +91,10 @@ func (c *Cache) Add(e Endpoint) bool {
 		}
 	}
 	c.by[e.Identity] = *e.Clone()
+	if held && cur.SameAs(&e) {
+		c.renews[e.Identity] = true
+		return false
+	}
 	return true
 }
 

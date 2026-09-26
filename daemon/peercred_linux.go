@@ -33,3 +33,6 @@ func peerUID(c *net.UnixConn) (uint32, error) {
 	}
 	return cred.Uid, nil
 }
+
+// peerCredSupported: the kernel reports every caller here.
+const peerCredSupported = true

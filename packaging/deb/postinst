@@ -1,0 +1,41 @@
+#!/bin/sh
+# The service is enabled and started on first install: it runs in no network
+# and waits, so "sudo juist join CODE" or "juist init" is the next step.
+set -e
+
+if [ "$1" = configure ]; then
+	if command -v systemd-sysusers >/dev/null 2>&1; then
+		systemd-sysusers /usr/lib/sysusers.d/juist.conf
+	elif ! getent passwd juist >/dev/null; then
+		adduser --system --group --home /var/lib/juist --no-create-home juist
+	fi
+	# 0700: this directory holds the device's keys. It exists before the
+	# service first starts, so the daemon has its home from the start.
+	install -d -m 0700 -o juist -g juist /var/lib/juist
+	# Traffic on juist0 is let through an active firewalld or ufw on first
+	# install only, so an upgrade does not undo a "firewall.sh revoke"; see
+	# /usr/lib/juist/firewall.sh for what that admits. A removal's marker
+	# is kept where only root writes: /var/lib/juist is the daemon's, and
+	# the daemon must not be able to make an upgrade count as a fresh
+	# install, or have root act on a file of its choosing.
+	fresh=
+	if [ -z "$2" ] || [ -e /var/lib/juist.removed ]; then
+		fresh=1
+		rm -f /var/lib/juist.removed
+	fi
+	/usr/lib/juist/firewall.sh reload
+	if [ -n "$fresh" ]; then
+		/usr/lib/juist/firewall.sh allow
+	fi
+
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+		if [ -n "$fresh" ]; then
+			systemctl enable --now juistd.service || true
+		else
+			# An upgrade restarts a daemon that was running, and only that.
+			systemctl try-restart juistd.service || true
+		fi
+	fi
+fi
+exit 0

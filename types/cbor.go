@@ -26,21 +26,29 @@ var encMode = func() cbor.EncMode {
 	return m
 }()
 
-// decMode rejects everything a permissive CBOR decoder would repair: duplicate
-// map keys, indefinite lengths, tags, and unknown fields. Each is a way for two
-// byte strings to mean one record. [decodeCanonical]'s re-encode check catches
-// the rest, including non-minimal integers and misordered keys.
-var decMode = func() cbor.DecMode {
-	m, err := cbor.DecOptions{
+// StrictDecOptions are the decoder options every parser in the project uses,
+// with its own limits: duplicate map keys, indefinite lengths, tags, unknown
+// fields and invalid UTF-8 are all refused. Each is a way for two byte
+// strings to mean one message.
+func StrictDecOptions(maxNested, maxArray, maxPairs int) cbor.DecOptions {
+	return cbor.DecOptions{
 		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
 		IndefLength:       cbor.IndefLengthForbidden,
 		TagsMd:            cbor.TagsForbidden,
 		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
 		UTF8:              cbor.UTF8RejectInvalid,
-		MaxNestedLevels:   maxNestedLevels,
-		MaxArrayElements:  maxArrayElements,
-		MaxMapPairs:       maxMapPairs,
-	}.DecMode()
+		MaxNestedLevels:   maxNested,
+		MaxArrayElements:  maxArray,
+		MaxMapPairs:       maxPairs,
+	}
+}
+
+// decMode rejects everything a permissive CBOR decoder would repair: duplicate
+// map keys, indefinite lengths, tags, and unknown fields. Each is a way for two
+// byte strings to mean one record. [decodeCanonical]'s re-encode check catches
+// the rest, including non-minimal integers and misordered keys.
+var decMode = func() cbor.DecMode {
+	m, err := StrictDecOptions(maxNestedLevels, maxArrayElements, maxMapPairs).DecMode()
 	if err != nil {
 		panic(fmt.Sprintf("types: building CBOR decoder: %v", err))
 	}

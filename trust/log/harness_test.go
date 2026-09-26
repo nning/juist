@@ -2,6 +2,7 @@ package log
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -33,6 +34,19 @@ type harness struct {
 // newHarness creates a network with numAdmins single-vote admin keys and the
 // given quorum, and no members.
 func newHarness(t *testing.T, numAdmins int, quorum uint32) *harness {
+	t.Helper()
+	return newHarnessAt(t, numAdmins, quorum, types.CurrentSchema)
+}
+
+// newHarnessAt is [newHarness] for a network created at an older schema.
+func newHarnessAt(t *testing.T, numAdmins int, quorum uint32, schema types.SchemaVersion) *harness {
+	t.Helper()
+	return newHarnessWith(t, numAdmins, quorum, func(s *types.Snapshot) { s.Schema = schema })
+}
+
+// newHarnessWith is [newHarness] with the genesis state adjusted before it is
+// signed.
+func newHarnessWith(t *testing.T, numAdmins int, quorum uint32, mutate func(*types.Snapshot)) *harness {
 	t.Helper()
 	h := &harness{
 		t:        t,
@@ -67,6 +81,7 @@ func newHarness(t *testing.T, numAdmins int, quorum uint32) *harness {
 	if err != nil {
 		t.Fatalf("building genesis: %v", err)
 	}
+	mutate(genesis.State)
 	h.signQuorum(&genesis)
 	auth, err := Create(h.storage, genesis)
 	if err != nil {
@@ -316,19 +331,17 @@ func (h *harness) handAssembledSchemaUpgrade(v types.SchemaVersion) types.AUM {
 	return aum
 }
 
-// mustReject asserts that a record is refused, and that refusing it left the
-// authority exactly as it was: a rejected record must not move the head, and
-// must not be stored where a later resolution would find it.
-func (h *harness) mustReject(what string, aum types.AUM) {
+// mustReject asserts that a record is refused under rule, and that refusing it
+// left the authority exactly as it was: a rejected record must not move the
+// head, and must not be stored where a later resolution would find it.
+func (h *harness) mustReject(what string, rule Rule, aum types.AUM) {
 	h.t.Helper()
 	headBefore := h.auth.Head()
 	before, err := h.storage.Hashes()
 	if err != nil {
 		h.t.Fatalf("listing records: %v", err)
 	}
-	if err := h.auth.Inform(aum); err == nil {
-		h.t.Fatalf("%s: accepted", what)
-	}
+	mustBreak(h.t, what, rule, h.auth.Inform(aum))
 	if h.auth.Head() != headBefore {
 		h.t.Fatalf("%s: rejected but the head moved", what)
 	}
@@ -341,5 +354,19 @@ func (h *harness) mustReject(what string, aum types.AUM) {
 	// same storage, which is where a partially-written batch would surface.
 	if _, err := Open(h.storage); err != nil {
 		h.t.Fatalf("%s: storage no longer opens after the rejection: %v", what, err)
+	}
+}
+
+// mustBreak asserts that err is a refusal under rule.
+func mustBreak(t testing.TB, what string, rule Rule, err error) {
+	t.Helper()
+	var re *RejectError
+	switch {
+	case err == nil:
+		t.Fatalf("%s: accepted", what)
+	case !errors.As(err, &re):
+		t.Fatalf("%s: refused, but not as a rejection: %v", what, err)
+	case re.Rule != rule:
+		t.Fatalf("%s: refused by the %v rules, want %v: %v", what, re.Rule, rule, err)
 	}
 }

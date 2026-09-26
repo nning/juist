@@ -32,5 +32,15 @@ decision that has not been made yet.
 ## Gates
 
 `make check` is what CI runs; it must pass before pushing. `make cross` builds
-every v1 target platform. Claims about the embedded Tailscale stack are verified
+every v1 target platform. `make ci` runs every CI job on the local machine,
+the privileged tests last under sudo. Claims about the embedded Tailscale stack are verified
 against the pinned module cache, not from memory.
+
+## CLI output
+
+juist speaks like a Unix tool, not a chat: one line per outcome, lowercase,
+no trailing period, no ✓. Warnings are `warning: …` and suggestions `hint: …`,
+both on stderr; errors are `juist: …` with at most one `hint:` line, or a
+`usage:` line for bad arguments. Say what happened, not what to do next unless
+it is needed to act; explanations belong in `--help` and `docs/`, and `--help`
+text stays a few lines.

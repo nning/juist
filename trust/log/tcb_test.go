@@ -15,6 +15,7 @@ var tcbPackages = []string{
 	"github.com/nning/juist/trust/log",
 	"github.com/nning/juist/trust/secrets",
 	"github.com/nning/juist/trust/store",
+	"github.com/nning/juist/trust/enroll",
 }
 
 // Third-party modules the TCB is allowed to depend on. Short on purpose: the
@@ -22,8 +23,9 @@ var tcbPackages = []string{
 var allowedModules = map[string]string{
 	// The Ed25519 group implementation from the standard library, repackaged
 	// as an importable module. Needed to reject small-order public keys, which
-	// crypto/ed25519 gives no way to detect.
-	"filippo.io/edwards25519": "small-order public key rejection",
+	// crypto/ed25519 gives no way to detect, and for the group arithmetic
+	// SPAKE2 needs at enrollment, which crypto/ecdh does not expose.
+	"filippo.io/edwards25519": "small-order public key rejection; the SPAKE2 group",
 
 	// The CBOR codec, in CTAP2 canonical mode, and its float16 helper. Same
 	// library and same mode tka uses.
@@ -49,6 +51,9 @@ var forbiddenDirect = map[string][]string{
 	"github.com/nning/juist/types":         {"os", "time", "math/rand", "math/rand/v2"},
 	"github.com/nning/juist/trust/log":     {"os", "time", "math/rand", "math/rand/v2"},
 	"github.com/nning/juist/trust/secrets": {"os", "time", "math/rand", "math/rand/v2"},
+	// The enrollment protocol runs over a connection its caller owns, so the
+	// caller dials, listens and keeps time.
+	"github.com/nning/juist/trust/enroll": {"os", "time", "math/rand", "math/rand/v2"},
 	// trust/store is the one that owns files, so os is its job; the clock and
 	// weak randomness still are not.
 	"github.com/nning/juist/trust/store": {"time", "math/rand", "math/rand/v2"},

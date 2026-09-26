@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- For a device the network made relay-capable: the relay itself on TCP, and
+     on UDP the STUN answers members measure it by. -->
+<service>
+  <short>juist relay</short>
+  <description>juist member relay: the relay (TCP) and its STUN responder (UDP).</description>
+  <port protocol="tcp" port="41645"/>
+  <port protocol="udp" port="41645"/>
+</service>

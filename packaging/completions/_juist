@@ -1,0 +1,11 @@
+#compdef juist
+# zsh completion for juist. The candidates come from juist itself
+# ("juist __complete"), so they follow the commands and options it has.
+local -a candidates
+candidates=("${(@f)$(juist __complete "${(@)words[2,CURRENT]}" 2>/dev/null)}")
+if [[ -n ${candidates[1]} ]]; then
+	compadd -- "${candidates[@]}"
+else
+	# Nothing to offer means a file name, as approve and apply take.
+	_files
+fi
