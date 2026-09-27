@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -26,18 +27,18 @@ import (
 func TestInviteAndJoin(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	out := admin.mustRun("init", "home", "--device", "laptop")
-	mustContain(t, out, `created network "home"`, "laptop", "198.18.0.1")
+	out := admin.mustRun("create", "home", "--device", "laptop")
+	mustContain(t, out, `created network "home"`, "laptop", "198.18.4.1")
 
 	inv, link := startInvite(t, admin)
 	guest := newCLI(t)
 	out = guest.mustRun("join", link, "--name", "phone")
-	mustContain(t, out, `joined "home" as phone`, "198.18.0.2", "juistd")
+	mustContain(t, out, `joined "home" as phone`, "198.18.4.2", "juistd")
 	hostOut, err := inv.wait(t)
 	if err != nil {
 		t.Fatalf("invite: %v\n%s", err, hostOut)
 	}
-	mustContain(t, hostOut, "admitted phone at 198.18.0.2", "phone joined")
+	mustContain(t, hostOut, "admitted phone at 198.18.4.2", "phone joined")
 
 	// The guest verified and stored the same log the admin holds.
 	if a, g := openLog(t, admin).Head(), openLog(t, guest).Head(); a != g {
@@ -45,7 +46,7 @@ func TestInviteAndJoin(t *testing.T) {
 	}
 	mustContain(t, guest.mustRun("log", "verify"), "group secret: ok")
 	out = admin.mustRun("devices")
-	mustContain(t, out, "laptop (this device)", "phone", "198.18.0.2", "voucher")
+	mustContain(t, out, "laptop (this device)", "phone", "198.18.4.2", "voucher")
 
 	epoch := openLog(t, admin).State().Epoch()
 	admin.mustRun("remove", "phone", "--yes")
@@ -63,7 +64,7 @@ func TestInviteAndJoin(t *testing.T) {
 // test is that the code is the password the host checks.
 func TestJoinWithTheCode(t *testing.T) {
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	inv, link := startInviteOnTheLAN(t, admin)
 	code := inv.waitFor(t, regexp.MustCompile(`juist join (\d+-[a-z]+-[a-z]+-[a-z]+)`))[1]
 	guest := newCLI(t)
@@ -86,7 +87,7 @@ func TestJoinWithTheCode(t *testing.T) {
 // gone, so the right code no longer works either.
 func TestAWrongCodeVoidsTheInvite(t *testing.T) {
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	inv, link := startInviteOnTheLAN(t, admin)
 	code := inv.waitFor(t, regexp.MustCompile(`juist join (\d+-[a-z]+-[a-z]+-[a-z]+)`))[1]
 	c, err := enroll.ParseCode(code)
@@ -125,7 +126,7 @@ func TestAWrongCodeVoidsTheInvite(t *testing.T) {
 func TestAWrongLinkLeavesTheInviteOpen(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	inv, link := startInvite(t, admin)
 	body, addr, _ := strings.Cut(strings.TrimPrefix(link, enroll.LinkPrefix), "@")
 	secret, adminKey, _ := strings.Cut(body, ".")
@@ -145,7 +146,7 @@ func TestAWrongLinkLeavesTheInviteOpen(t *testing.T) {
 func TestAnInviteAdmitsOneDevice(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	inv, link := startInvite(t, admin)
 	newCLI(t).mustRun("join", link)
 	if _, err := inv.wait(t); err != nil {
@@ -159,7 +160,7 @@ func TestAnInviteAdmitsOneDevice(t *testing.T) {
 func TestInviteExpires(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	r := admin.start("invite", "--no-lan", "--port", "0", "--expires", "300ms", "--yes")
 	out, err := r.wait(t)
 	if err == nil || !strings.Contains(err.Error(), "expired") {
@@ -179,7 +180,7 @@ func TestInviteWaitsForTheOtherAdmins(t *testing.T) {
 	if key == nil {
 		t.Fatal("admins new printed no key")
 	}
-	out := first.mustRun("init", "home", "--quorum", "2", "--admin", "second="+key[1])
+	out := first.mustRun("create", "home", "--quorum", "2", "--admin", "second="+key[1])
 	mustContain(t, out, "needs 1 more vote", "juist approve")
 	genesis := filepath.Join(first.home, genesisFileFor("home"))
 	if _, err := first.run("apply", genesis); err == nil {
@@ -224,7 +225,7 @@ func TestInviteWaitsForTheOtherAdmins(t *testing.T) {
 func TestInviteNamesDevicesUniquely(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home", "--device", "laptop")
+	admin.mustRun("create", "home", "--device", "laptop")
 	enrollDevice(t, admin, "laptop")
 	mustContain(t, admin.mustRun("devices"), "laptop-2")
 }
@@ -234,7 +235,7 @@ func TestInviteNamesDevicesUniquely(t *testing.T) {
 func TestARemovedDeviceCanRejoin(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	phone := enrollDevice(t, admin, "phone")
 	admin.mustRun("remove", "phone", "--yes")
 
@@ -249,7 +250,7 @@ func TestARemovedDeviceCanRejoin(t *testing.T) {
 
 	// A device holding another network's log is not silently moved over.
 	other := newCLI(t)
-	other.mustRun("init", "elsewhere")
+	other.mustRun("create", "elsewhere")
 	inv, link = startInvite(t, other)
 	if _, err := phone.run("join", link); err == nil {
 		t.Fatal("a device in one network joined another without being asked to leave it")
@@ -263,7 +264,7 @@ func TestUniqueNameFitsTheLimit(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
 	long := strings.Repeat("a", types.MaxNameLen)
-	c.mustRun("init", "home", "--device", long)
+	c.mustRun("create", "home", "--device", long)
 	state := openLog(t, c).State()
 	got := uniqueName(state, long)
 	if got == long || types.ValidateName(got) != nil || len(got) > types.MaxNameLen {
@@ -273,7 +274,7 @@ func TestUniqueNameFitsTheLimit(t *testing.T) {
 
 func TestJoinThroughTheDaemonWithTheCode(t *testing.T) {
 	laptop := newDaemonDevice(t, nil)
-	laptop.mustRun("init", "home")
+	laptop.mustRun("create", "home")
 	inv := laptop.start("invite", "--port", "0", "--yes")
 	link := inv.waitFor(t, linkRE)[1]
 	code := inv.waitFor(t, regexp.MustCompile(`juist join (\d+-[a-z]+-[a-z]+-[a-z]+)`))[1]
@@ -290,7 +291,7 @@ func TestJoinThroughTheDaemonWithTheCode(t *testing.T) {
 func TestAnInviteThroughTheDaemonAdmitsOneDevice(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	var out syncBuffer
 	a := c.app(&out, "")
 	a.home, _ = openHome(c.home)
@@ -340,7 +341,7 @@ func TestAnInviteThroughTheDaemonAdmitsOneDevice(t *testing.T) {
 func TestAdmissionWaitsForTheWordsToMatch(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	var out syncBuffer
 	a := c.app(&out, "n")
 	a.home, _ = openHome(c.home)
@@ -401,7 +402,7 @@ func TestFirstFreeV4(t *testing.T) {
 func TestAnAddressIsNeverGivenOutTwice(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	enrollDevice(t, admin, "phone")
 	admin.mustRun("remove", "phone", "--yes")
 	tablet := enrollDevice(t, admin, "tablet")
@@ -415,7 +416,7 @@ func TestAnAddressIsNeverGivenOutTwice(t *testing.T) {
 func TestNamesAreUniqueAsRemoveComparesThem(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "server")
+	c.mustRun("create", "home", "--device", "server")
 	if got := uniqueName(openLog(t, c).State(), "ſerver"); strings.EqualFold(got, "server") {
 		t.Fatalf("uniqueName(ſerver) = %q, which remove cannot tell from server", got)
 	}
@@ -427,7 +428,7 @@ func TestInvitesSkipAddressesOnLosingBranches(t *testing.T) {
 	t.Parallel()
 	for attempt := 0; attempt < 8; attempt++ {
 		one := newCLI(t)
-		one.mustRun("init", "home")
+		one.mustRun("create", "home")
 		two := newCLI(t)
 		copyTree(t, one.home, two.home)
 		enrollDevice(t, one, "a")
@@ -467,4 +468,66 @@ func TestInvitesSkipAddressesOnLosingBranches(t *testing.T) {
 		return
 	}
 	t.Skip("the two-admission branch never lost fork choice")
+}
+
+// The link an invite prints is one word to a shell as printed: IPv6
+// addresses in brackets are globs to zsh, and commas split nothing but look
+// as if they might.
+func TestThePrintedLinkIsOneShellWord(t *testing.T) {
+	t.Parallel()
+	link, err := enroll.NewLink([]netip.AddrPort{
+		netip.MustParseAddrPort("[fd00::1]:41642"), netip.MustParseAddrPort("192.168.1.20:41642")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	a := newCLI(t).app(&out, "")
+	a.announceInvite("home", "", link, DefaultInvitePort, inviteOptions{expires: time.Hour})
+	var line string
+	for l := range strings.Lines(out.String()) {
+		if cmd, ok := strings.CutPrefix(strings.TrimSpace(l), "juist join "); ok {
+			line = cmd
+		}
+	}
+	if line == "" {
+		t.Fatalf("no join command printed:\n%s", out.String())
+	}
+	// sh leaves a glob that matches nothing as it is, and zsh fails on it,
+	// so the quotes are asserted, and a shell run where there is one.
+	if !strings.HasPrefix(line, "'") || !strings.HasSuffix(line, "'") {
+		t.Fatalf("the link is printed unquoted: %s", line)
+	}
+	shell := "sh"
+	if _, err := exec.LookPath("zsh"); err == nil {
+		shell = "zsh"
+	}
+	got, err := exec.Command(shell, "-c", `printf '%s|' `+line).Output()
+	if err != nil {
+		t.Fatalf("%s: %v", shell, err)
+	}
+	if string(got) != link.String()+"|" {
+		t.Fatalf("a shell reads %q as %q, want the link as one word", line, got)
+	}
+}
+
+// An invite sets each join command apart from the text around it, so a long
+// link is selected whole.
+func TestTheInviteSetsItsCommandsApart(t *testing.T) {
+	t.Parallel()
+	link, err := enroll.NewLink([]netip.AddrPort{netip.MustParseAddrPort("10.11.1.11:41642")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	link = link.WithRelays([]netip.AddrPort{netip.MustParseAddrPort("203.0.113.34:41645")})
+	var out syncBuffer
+	a := newCLI(t).app(&out, "")
+	a.announceInvite("lab", "865-endow-millionaire-blockade", link, DefaultInvitePort,
+		inviteOptions{expires: time.Hour, lan: true})
+	want := "invite to \"lab\", expires in 1h; on the new device:\n\n" +
+		"  juist join 865-endow-millionaire-blockade  # same LAN\n\n" +
+		"  juist join '" + link.String() + "'\n\n" +
+		"meets through relay 203.0.113.34:41645 where this device is unreachable\n"
+	if got := out.String(); !strings.HasPrefix(got, want) {
+		t.Fatalf("the invite reads\n%s\nwant\n%s", got, want)
+	}
 }

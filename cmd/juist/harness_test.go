@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +31,24 @@ import (
 type cli struct {
 	t    *testing.T
 	home string
+
+	// host, where set, is the host's juistd instances this CLI sees, and
+	// root whether it runs as root there; see newHost. Elsewhere it sees
+	// none, whatever runs on the machine the tests run on.
+	host *hostLayout
+	root bool
+
+	// admissionHold, where set, is how long an admission's copy waits.
+	admissionHold time.Duration
+}
+
+// noHost is a host with no juistd, and none installed.
+var noHost = &hostLayout{
+	runDir: "/nonexistent/juist-test/run", stateDir: "/nonexistent/juist-test/state",
+	wantsDir: "/nonexistent/juist-test/wants",
+	start:    func(context.Context, int) error { return errors.New("no host in this test") },
+	stop:     func(context.Context, int) error { return errors.New("no host in this test") },
+	firewall: func(context.Context, string, int) error { return nil },
 }
 
 func newCLI(t *testing.T) *cli {
@@ -79,7 +99,28 @@ func (c *cli) app(out *syncBuffer, in string) *app {
 	}
 	// Nothing in a test reaches the public DHT or STUN servers.
 	a.helpers = nil
+	// A network founded without --ipv4 takes the first free prefix, so that
+	// tests can name its addresses.
+	a.drawV4 = firstV4Draw
+	a.host = noHost
+	if c.admissionHold != 0 {
+		a.admissionHold = c.admissionHold
+	}
+	if c.host != nil {
+		a.host, a.asRoot = c.host, func() bool { return c.root }
+	}
 	return a
+}
+
+// firstV4Draw is [drawV4Prefix] without the chance: the first prefix taken
+// leaves.
+func firstV4Draw(taken func(netip.Prefix) bool) (netip.Prefix, error) {
+	for _, p := range v4DrawCandidates() {
+		if !taken(p) {
+			return p, nil
+		}
+	}
+	return netip.Prefix{}, errors.New("no prefix free")
 }
 
 func (c *cli) run(args ...string) (string, error) {
@@ -153,7 +194,7 @@ func (r *running) wait(t *testing.T) (string, error) {
 	}
 }
 
-var linkRE = regexp.MustCompile(`juist join (juist:\S+)`)
+var linkRE = regexp.MustCompile(`juist join '(juist:[^']+)'`)
 
 // startInvite starts an invite and returns it with its link.
 func startInvite(t *testing.T, host *cli, args ...string) (*running, string) {
@@ -310,13 +351,16 @@ func corrupt(t *testing.T, c *cli) {
 // sock (or in the directory), with a data plane that records rather than
 // connects and LAN discovery replaced by find.
 func startService(t *testing.T, home, sock string,
-	find func(context.Context, uint16) ([]mdns.InviteHost, error)) func() {
+	find func(context.Context, uint16) ([]mdns.InviteHost, error), mgr conn.Manager) func() {
 	t.Helper()
+	if mgr == nil {
+		mgr = stubManager{}
+	}
 	s, err := daemon.NewService(daemon.ServiceOptions{
 		Home:   home,
 		Socket: sock,
 		Mesh: daemon.Options{
-			Connect:          func(conn.Options) (conn.Manager, error) { return stubManager{}, nil },
+			Connect:          func(conn.Options) (conn.Manager, error) { return mgr, nil },
 			DisableDiscovery: true,
 			DisableDHT:       true,
 			Logf:             func(string, ...any) {},
@@ -373,13 +417,42 @@ func (stubManager) Close() error { return nil }
 type daemonDevice struct {
 	*cli
 	state, sock string
+	mgr         *peersManager
+}
+
+// peersManager is a data plane that keeps the peer set it was last given.
+type peersManager struct {
+	stubManager
+	mu    sync.Mutex
+	peers []conn.Peer
+}
+
+func (m *peersManager) SetPeers(peers []conn.Peer) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.peers = slices.Clone(peers)
+	return nil
+}
+
+// allowed is the addresses the data plane accepts from the peer whose
+// WireGuard key is wg.
+func (m *peersManager) allowed(wg types.WGKey) []netip.Prefix {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.peers {
+		if p.NodeKey == conn.NodePublicFromRaw32(wg) {
+			return slices.Clone(p.Addrs)
+		}
+	}
+	return nil
 }
 
 func newDaemonDevice(t *testing.T, find func(context.Context, uint16) ([]mdns.InviteHost, error)) *daemonDevice {
 	t.Helper()
 	d := &daemonDevice{cli: newCLI(t), state: filepath.Join(shortTempDir(t), "state"),
 		sock: filepath.Join(shortTempDir(t), "juistd.sock")}
-	startService(t, d.state, d.sock, find)
+	d.mgr = &peersManager{}
+	startService(t, d.state, d.sock, find, d.mgr)
 	return d
 }
 
@@ -395,6 +468,11 @@ func (d *daemonDevice) mustRun(args ...string) string {
 		d.t.Fatalf("juist %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return out
+}
+
+func (d *daemonDevice) answer(reply string, args ...string) (string, error) {
+	d.t.Helper()
+	return d.cli.answer(reply, append([]string{"--socket", d.sock}, args...)...)
 }
 
 func (d *daemonDevice) start(args ...string) *running {

@@ -23,6 +23,8 @@ import (
 	"tailscale.com/tsconst"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/wgengine/router"
+
+	"github.com/nning/juist/internal/instance"
 )
 
 // tailscalePrefBase and tailscaleTable are what tailscaled's Linux router
@@ -37,7 +39,7 @@ func TestJuistRulesStayClearOfTailscale(t *testing.T) {
 		t.Fatalf("juistRouteTable %d collides with Tailscale's or a kernel table", juistRouteTable)
 	}
 	for _, fam := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
-		rules := juistRules(fam)
+		rules := juistRules(fam, 0)
 		want := []struct {
 			pref, table int
 			mark        bool
@@ -65,7 +67,7 @@ func TestJuistRulesStayClearOfTailscale(t *testing.T) {
 			}
 			// Below Tailscale's first rule, so ours are consulted first, and
 			// inside the range the restore filter watches.
-			if ru.Priority >= tailscalePrefBase+10 || !isJuistRulePref(uint32(ru.Priority)) {
+			if ru.Priority >= tailscalePrefBase+10 || !isJuistRulePref(uint32(ru.Priority), 0) {
 				t.Errorf("rule %d: priority %d is not ours or not ahead of Tailscale's", i, ru.Priority)
 			}
 			if ru.Goto != -1 || ru.Flow != -1 || ru.SuppressIfgroup != -1 || ru.SuppressPrefixlen != -1 {
@@ -74,8 +76,80 @@ func TestJuistRulesStayClearOfTailscale(t *testing.T) {
 		}
 	}
 	for _, pref := range []uint32{5099, 5200, 5210, 5270, 1310} {
-		if isJuistRulePref(pref) {
+		if isJuistRulePref(pref, 0) {
 			t.Errorf("isJuistRulePref(%d) = true; a Tailscale rule's deletion would trigger our restore", pref)
+		}
+	}
+}
+
+// Each instance on a host has a table and priorities of its own, so none
+// deletes another's rules or reacts to their deletion, every instance's
+// bypass comes before any instance's table, and the default's table is
+// consulted first.
+func TestInstancesKeepTheirRulesApart(t *testing.T) {
+	prefs := map[int]int{} // priority → instance
+	tables := map[int]int{}
+	for inst := 0; inst <= instance.Max; inst++ {
+		rules := juistRules(netlink.FAMILY_V4, inst)
+		lookup := rules[len(rules)-1]
+		if lookup.Table != juistRouteTable+inst || lookup.Table == tailscaleTable || lookup.Table >= 253 && lookup.Table <= 255 {
+			t.Fatalf("instance %d looks up table %d", inst, lookup.Table)
+		}
+		if other, ok := tables[lookup.Table]; ok {
+			t.Fatalf("instances %d and %d share table %d", other, inst, lookup.Table)
+		}
+		tables[lookup.Table] = inst
+		for _, ru := range rules {
+			if other, ok := prefs[ru.Priority]; ok {
+				t.Fatalf("instances %d and %d share priority %d", other, inst, ru.Priority)
+			}
+			prefs[ru.Priority] = inst
+			if ru.Priority >= tailscalePrefBase {
+				t.Fatalf("instance %d's priority %d is behind Tailscale's", inst, ru.Priority)
+			}
+			for other := 0; other <= instance.Max; other++ {
+				if isJuistRulePref(uint32(ru.Priority), other) != (other == inst) {
+					t.Fatalf("instance %d's priority %d reads as instance %d's", inst, ru.Priority, other)
+				}
+			}
+		}
+		for other := 0; other <= instance.Max; other++ {
+			otherRules := juistRules(netlink.FAMILY_V4, other)
+			for _, bypass := range rules[:len(rules)-1] {
+				if bypass.Priority >= otherRules[len(otherRules)-1].Priority {
+					t.Fatalf("instance %d's bypass %d comes after instance %d's table", inst, bypass.Priority, other)
+				}
+			}
+			if other > inst && otherRules[len(otherRules)-1].Priority <= lookup.Priority {
+				t.Fatalf("instance %d's table is consulted before instance %d's", other, inst)
+			}
+		}
+	}
+}
+
+// A default route comes without a destination, and holds the whole family.
+func TestARouteWithoutDestinationHoldsItsFamily(t *testing.T) {
+	for fam, want := range map[int]string{netlink.FAMILY_V4: "0.0.0.0/0", netlink.FAMILY_V6: "::/0"} {
+		if got := routeDst(netlink.Route{Family: fam}); got.String() != want {
+			t.Errorf("family %d: %v, want %s", fam, got, want)
+		}
+	}
+	dst := netipx.PrefixIPNet(netip.MustParsePrefix("198.18.4.9/32"))
+	if got := routeDst(netlink.Route{Family: netlink.FAMILY_V4, Dst: dst}); got != netip.MustParsePrefix("198.18.4.9/32") {
+		t.Errorf("a host route: %v", got)
+	}
+}
+
+// Reading what the host's instances hold needs no privilege, and a host
+// without any holds nothing.
+func TestInstanceHoldingsUnprivileged(t *testing.T) {
+	held, err := InstanceHoldings(0, "")
+	if err != nil {
+		t.Fatalf("InstanceHoldings: %v", err)
+	}
+	for _, h := range held {
+		if h.Instance == 0 || h.Instance > instance.Max || len(h.Prefixes) == 0 {
+			t.Errorf("a holding of instance %d on %q: %v", h.Instance, h.Device, h.Prefixes)
 		}
 	}
 }
@@ -241,7 +315,7 @@ func TestHelperNetnsRouter(t *testing.T) {
 	defer mon.Close()
 	mon.Start()
 	newRouter := func() router.Router {
-		r, err := newOSRouter(t.Logf, dev, mon, nil, bus)
+		r, err := newOSRouter(t.Logf, dev, mon, nil, bus, 0)
 		if err != nil {
 			t.Fatalf("newOSRouter: %v", err)
 		}
@@ -293,7 +367,7 @@ func TestHelperNetnsRouter(t *testing.T) {
 	}
 
 	// systemd-networkd's move: delete one of ours and expect it back.
-	gone := juistRules(netlink.FAMILY_V4)[3]
+	gone := juistRules(netlink.FAMILY_V4, 0)[3]
 	if err := netlink.RuleDel(&gone); err != nil {
 		t.Fatalf("deleting %v: %v", gone, err)
 	}
@@ -340,6 +414,155 @@ func TestHelperNetnsRouter(t *testing.T) {
 	fmt.Println(protoPrefix + "ROUTER OK")
 }
 
+// TestNetnsInstancesLeaveEachOtherAlone runs two instances' routers side by
+// side in one namespace, as a host in two networks does: each routes its own
+// peers into its own device, the lower instance wins an address both claim,
+// and stopping either leaves the other's routes and rules in place.
+func TestNetnsInstancesLeaveEachOtherAlone(t *testing.T) {
+	lab := newNetnsLab(t)
+	n := lab.newDetachedNode("i", 1)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating this test binary: %v", err)
+	}
+	cmd := lab.exec(n, self, "-test.run", "^TestHelperNetnsInstances$", "-test.v", "-test.timeout", "2m")
+	cmd.Env = append(os.Environ(), netnsHelperEnv+"=instances", envTun+"="+n.tun)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("instances helper: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), protoPrefix+"INSTANCES OK") {
+		t.Fatalf("instances helper did not run to the end:\n%s", out)
+	}
+}
+
+// TestHelperNetnsInstances is the namespace half of
+// TestNetnsInstancesLeaveEachOtherAlone.
+func TestHelperNetnsInstances(t *testing.T) {
+	if os.Getenv(netnsHelperEnv) != "instances" {
+		t.Skip("not a netns instances helper invocation")
+	}
+	p := netip.MustParsePrefix
+	const second = 4
+	type side struct {
+		inst       int
+		name       string
+		self, peer netip.Prefix
+		dev        tun.Device
+		link       netlink.Link
+		r          router.Router
+	}
+	sides := []*side{
+		{inst: 0, name: os.Getenv(envTun), self: p("198.18.4.1/32"), peer: p("198.18.4.2/32")},
+		{inst: second, name: os.Getenv(envTun) + "b", self: p("198.18.8.1/32"), peer: p("198.18.8.2/32")},
+	}
+	// An address both networks' logs name: the lower instance's route wins.
+	shared := p("198.18.12.7/32")
+	bus := eventbus.New()
+	defer bus.Close()
+	mon, err := netmon.New(bus, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mon.Close()
+	mon.Start()
+	up := func(s *side) {
+		t.Helper()
+		r, err := newOSRouter(t.Logf, s.dev, mon, nil, bus, s.inst)
+		if err != nil {
+			t.Fatalf("instance %d: newOSRouter: %v", s.inst, err)
+		}
+		if err := r.Up(); err != nil {
+			t.Fatalf("instance %d: Up: %v", s.inst, err)
+		}
+		if err := r.Set(&router.Config{LocalAddrs: []netip.Prefix{s.self}, Routes: []netip.Prefix{s.peer, shared}}); err != nil {
+			t.Fatalf("instance %d: Set: %v", s.inst, err)
+		}
+		s.r = r
+	}
+	for _, s := range sides {
+		dev, err := tun.CreateTUN(s.name, int(tstun.DefaultTUNMTU()))
+		if err != nil {
+			t.Fatalf("creating %s: %v", s.name, err)
+		}
+		defer dev.Close()
+		if s.link, err = netlink.LinkByName(s.name); err != nil {
+			t.Fatal(err)
+		}
+		s.dev = dev
+		up(s)
+	}
+	requireRouted := func(running []*side) {
+		t.Helper()
+		for _, s := range running {
+			for _, ru := range juistRules(netlink.FAMILY_V4, s.inst) {
+				if !haveRule(t, ru) {
+					t.Errorf("instance %d's %v is gone", s.inst, ru)
+				}
+			}
+			if !routedVia(s.peer.Addr(), s.link) {
+				t.Errorf("instance %d's peer %v is not routed into %s", s.inst, s.peer.Addr(), s.name)
+			}
+			if got := routeSrc(s.peer.Addr()); got != s.self.Addr() {
+				t.Errorf("instance %d's peer is sent to from %v, want %v", s.inst, got, s.self.Addr())
+			}
+		}
+		if len(running) > 0 && !routedVia(shared.Addr(), running[0].link) {
+			t.Errorf("%v, claimed by both, is not routed into the lowest running instance's %s",
+				shared.Addr(), running[0].name)
+		}
+	}
+	requireRouted(sides)
+
+	// Each sees what the other holds, by its table, and nothing of its own.
+	for i, s := range sides {
+		other := sides[1-i]
+		held, err := InstanceHoldings(s.inst, s.name)
+		if err != nil {
+			t.Fatalf("instance %d: InstanceHoldings: %v", s.inst, err)
+		}
+		if len(held) != 1 || held[0].Instance != other.inst || held[0].Device != other.name {
+			t.Fatalf("instance %d sees %+v, want instance %d on %s alone", s.inst, held, other.inst, other.name)
+		}
+		for _, want := range []netip.Prefix{other.self, other.peer, shared} {
+			if !slices.Contains(held[0].Prefixes, want) {
+				t.Errorf("instance %d does not see instance %d hold %v: %v", s.inst, other.inst, want, held[0].Prefixes)
+			}
+		}
+		if slices.Contains(held[0].Prefixes, s.self) {
+			t.Errorf("instance %d sees its own address as the other's: %v", s.inst, held[0].Prefixes)
+		}
+	}
+
+	// The second instance stops: the first keeps everything.
+	if err := sides[1].r.Close(); err != nil {
+		t.Fatalf("closing instance %d: %v", second, err)
+	}
+	requireRouted(sides[:1])
+	for _, ru := range juistRules(netlink.FAMILY_V4, second) {
+		if haveRule(t, ru) {
+			t.Errorf("instance %d's %v outlived it", second, ru)
+		}
+	}
+	if rs, err := netlink.RouteListFiltered(netlink.FAMILY_ALL, &netlink.Route{Table: routeTable(second)},
+		netlink.RT_FILTER_TABLE); err != nil || len(rs) != 0 {
+		t.Errorf("table %d after instance %d stopped: %v (err %v)", routeTable(second), second, rs, err)
+	}
+
+	// Back up, then the first stops: the second keeps everything, and takes
+	// the shared address over.
+	up(sides[1])
+	requireRouted(sides)
+	if err := sides[0].r.Close(); err != nil {
+		t.Fatalf("closing instance 0: %v", err)
+	}
+	requireRouted(sides[1:])
+	if err := sides[1].r.Close(); err != nil {
+		t.Fatalf("closing instance %d: %v", second, err)
+	}
+	fmt.Println(protoPrefix + "INSTANCES OK")
+}
+
 func tailscaleRules(fam int) []netlink.Rule {
 	main, all := *netlink.NewRule(), *netlink.NewRule()
 	main.Family, main.Priority, main.Table = fam, tailscalePrefBase+10, unix.RT_TABLE_MAIN
@@ -363,7 +586,7 @@ func haveRule(t *testing.T, want netlink.Rule) bool {
 func requireRules(t *testing.T, fams []int, present bool) {
 	t.Helper()
 	for _, fam := range fams {
-		for _, ru := range juistRules(fam) {
+		for _, ru := range juistRules(fam, 0) {
 			if haveRule(t, ru) != present {
 				t.Errorf("%v (family %d): present = %v, want %v", ru, fam, !present, present)
 			}

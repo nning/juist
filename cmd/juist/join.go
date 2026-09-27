@@ -9,11 +9,12 @@ import (
 )
 
 func cmdJoin(a *app, args []string) error {
-	s := spec{name: "juist join", args: "CODE", min: 1, max: 1, about: `
+	s := spec{name: "juist join", args: "CODE", min: 1, max: 1, anyNetwork: true, about: `
 Join a network with the code or link "juist invite" printed, such as
 42-drumbeat-tolerance-glucose. The device verifies the network's log itself.
 Under sudo on a device with no operator, the sudo user becomes its operator
-unless --operator names another.`}
+unless --operator names another. A device in a network already joins the
+next beside it, with a juistd of its own.`}
 	fs := newFlags(s.name)
 	name := fs.String("name", "", "`NAME` to join as (default: the hostname)")
 	var operator optionalString
@@ -31,6 +32,13 @@ unless --operator names another.`}
 	// nothing and is explained in terms of the code.
 	if _, err := guest.ParseInvite(pos[0]); err != nil {
 		return err
+	}
+	// On a device already in a network, the new one gets a juistd of its own.
+	// $JUIST_NETWORK names a network the device is in, which an invite need
+	// not be for; --network, given here, names the instance to join with.
+	a.purpose = forJoining
+	if a.networkFromEnv {
+		a.network = ""
 	}
 	n, err := a.openNode()
 	if err != nil {
@@ -68,6 +76,7 @@ unless --operator names another.`}
 		}
 	})
 	if err != nil {
+		a.unmake()
 		if a.ctx.Err() != nil {
 			return fmt.Errorf("cancelled")
 		}
@@ -96,6 +105,7 @@ func (a *app) reportJoined(state *log.State, id types.Identity) {
 			a.field("Operator", "%s", st.Operator)
 		}
 		a.startWarning()
+		a.warnHostOverlap()
 		return
 	}
 	a.startHint()

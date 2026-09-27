@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nning/juist/discovery/mdns"
@@ -98,6 +99,10 @@ type Options struct {
 	// NetworkName names it, for the refusal.
 	NetworkName string
 
+	// Elsewhere are networks the host is in through another of its juistd
+	// instances, which this device must not join a second time.
+	Elsewhere []types.Hash
+
 	// Adopt stores the chain once it has been verified to admit this device,
 	// anchor first. It is the only thing that writes.
 	Adopt func(records []types.AUM) error
@@ -137,8 +142,16 @@ type Result struct {
 	Admission *enroll.Admission
 }
 
-// ParseInvite reads a code or a link.
+// ParseInvite reads a code or a link. One pasted with the quotes it was
+// printed in, where no shell took them off, is read without them.
 func ParseInvite(s string) (enroll.Secret, error) {
+	s = strings.TrimSpace(s)
+	for _, q := range []string{"'", `"`} {
+		if len(s) >= 2 && strings.HasPrefix(s, q) && strings.HasSuffix(s, q) {
+			s = s[1 : len(s)-1]
+			break
+		}
+	}
 	if enroll.IsLink(s) {
 		return enroll.ParseLink(s)
 	}
@@ -543,7 +556,12 @@ func adopt(records []types.AUM, o Options, admin *types.Identity, admission *enr
 	}
 	if !o.Network.IsZero() && state.GenesisHash() != o.Network {
 		return nil, fmt.Errorf("this device still holds the log of %q, and the invite is for another "+
-			"network; to join that one, remove this device's state first", o.NetworkName)
+			"network\nhint: juist reset --force forgets %q; then join again", o.NetworkName, o.NetworkName)
+	}
+	if slices.Contains(o.Elsewhere, state.GenesisHash()) {
+		return nil, fmt.Errorf("this host is in %q already, through another juistd, so it did not join it "+
+			"again\nhint: the invite admitted it as %q all the same; an admin removes that: juist remove %s",
+			state.Network(), self.Name, self.Name)
 	}
 	if err := o.Adopt(records); err != nil {
 		return nil, err

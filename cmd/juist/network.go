@@ -13,21 +13,23 @@ import (
 
 	"go4.org/netipx"
 
+	"github.com/nning/juist/internal/cliflag"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
 func networkFamily() family {
 	return family{name: "juist network", intro: "Show, rename and renumber the network.", subs: []subcommand{
-		{name: "show", run: networkShow, forms: [][2]string{{"", "name and address ranges"}}},
-		{name: "rename", run: networkRename, forms: [][2]string{{"rename NAME", "rename the network"}}},
+		{name: "show", run: networkShow, forms: [][2]string{{"[NETWORK]", "name and address ranges; every\nnetwork's, without NETWORK"}}},
+		{name: "rename", run: networkRename, forms: [][2]string{{"rename [NETWORK] NAME", "rename the network"}}},
 		{name: "renumber", run: networkRenumber, forms: [][2]string{
-			{"renumber PREFIX", "move every device into PREFIX,\nsuch as 10.7.0.0/22"},
-			{"renumber DEVICE ADDR", "move one device to ADDR"},
-			{"renumber --finish", "retire the old addresses now"},
+			{"renumber [NETWORK] PREFIX", "move every device into PREFIX,\nsuch as 10.7.0.0/22"},
+			{"renumber [NETWORK] DEVICE ADDR", "move one device to ADDR; with\n--finish, retiring its old one now"},
+			{"renumber [NETWORK] --finish", "retire the old addresses now"},
 		}},
-	}, footer: `Old IPv4 addresses keep working until the deadline. IPv6 addresses never
-move.`}
+	}, footer: `NETWORK names one of this device's networks, or its juistd (juist1); it may
+be left out where the device is in one. Old IPv4 addresses keep working
+until the deadline. IPv6 addresses never move.`}
 }
 
 func cmdNetwork(a *app, args []string) error { return networkFamily().run(a, args) }
@@ -37,13 +39,26 @@ func networkShow(a *app, args []string) error {
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
+	a.listingHeads = true
+	if listed, err := a.forEachNetwork(a.showNetwork); listed {
+		return err
+	}
+	return a.showNetwork()
+}
+
+// showNetwork is "juist network" for one network.
+func (a *app) showNetwork() error {
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
 	}
 	state := auth.State()
 	now := a.now().Unix()
-	a.printf("%s\n", a.bold(state.Network()))
+	if a.listing != "" {
+		a.printf("%s · %s\n", a.bold(state.Network()), a.dim(a.listing))
+	} else {
+		a.printf("%s\n", a.bold(state.Network()))
+	}
 	line := state.V4Range().String()
 	for _, r := range types.V4Ranges(state.Schema(), nil) {
 		if r != state.V4Range() && !state.V4Range().Overlaps(r) && holdsIn(state, r) {
@@ -55,10 +70,33 @@ func networkShow(a *app, args []string) error {
 	}
 	a.field("IPv4", "%s", line)
 	a.field("IPv6", "%v", state.ULA())
-	var moving []types.NodeRecord
+	var moving, heldNodes []types.NodeRecord
 	for _, n := range state.Nodes() {
-		if n.Retiring.Live(now) {
+		switch {
+		case n.Retiring.Live(now):
 			moving = append(moving, n)
+		case n.Retiring != nil:
+			heldNodes = append(heldNodes, n)
+		}
+	}
+	slices.SortFunc(heldNodes, func(x, y types.NodeRecord) int { return x.Retiring.Addr.Compare(y.Retiring.Addr) })
+	var held []string
+	r, retiring := state.V4Retiring()
+	if retiring && !r.Live(now) {
+		held = append(held, joinPrefixes(r.Prefixes)+" (the old range)")
+	}
+	for _, n := range heldNodes {
+		// What the old range holds needs no line of its own.
+		if !retiring || r.Live(now) || !slices.ContainsFunc(r.Prefixes, func(p netip.Prefix) bool { return p.Contains(n.Retiring.Addr) }) {
+			held = append(held, fmt.Sprintf("%v (%s's old address)", n.Retiring.Addr, displayMember(n)))
+		}
+	}
+	if len(held) > 0 {
+		a.field("Held", "%s", strings.Join(held, ", "))
+		if len(moving) > 0 {
+			a.hint("juist network renumber --finish frees them, and ends the moves below")
+		} else {
+			a.hint("juist network renumber --finish frees them")
 		}
 	}
 	if len(moving) == 0 {
@@ -133,30 +171,35 @@ func (d *longDuration) Set(v string) error {
 }
 
 func networkRenumber(a *app, args []string) error {
-	s := spec{name: "juist network renumber", args: "PREFIX | DEVICE ADDR", max: 2, about: `
+	s := spec{name: "juist network renumber", args: "PREFIX | DEVICE ADDR | --finish", max: 2, about: `
 Move IPv4 addresses.
 
-  juist network renumber PREFIX        every device into PREFIX, at its
-                                       offset where free
-  juist network renumber DEVICE ADDR   one device to ADDR
-  juist network renumber --finish      retire the old addresses now
+  juist network renumber [NETWORK] PREFIX        every device into PREFIX,
+                                                 at its offset where free
+  juist network renumber [NETWORK] DEVICE ADDR   one device to ADDR; with
+                                                 --finish, retiring its old
+                                                 one now
+  juist network renumber [NETWORK] --finish      retire the old addresses now
 
 Old addresses keep working until --for from now; make it long enough for
-every device to come online once. Configuration outside juist that names old
-addresses is not moved.`}
+every device to come online once. Retired ones are held, for no other
+device to take, until a plain --finish. Configuration outside juist that
+names old addresses is not moved.`}
 	fs := newFlags(s.name)
 	keep := longDuration(7 * 24 * time.Hour)
 	fs.Var(&keep, "for", "keep old addresses for `DURATION`, like 12h or 7d")
-	finish := fs.Bool("finish", false, "retire the old addresses now")
+	finish := fs.Bool("finish", false, "retire old addresses now; with DEVICE ADDR, only that device's")
 	yes := fs.Bool("yes", false, "do not ask")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
 	}
-	if *finish != (len(pos) == 0) {
-		if *finish {
-			return fmt.Errorf("--finish takes no arguments\n%s", s.usage(fs))
-		}
+	switch {
+	case *finish && cliflag.IsSet(fs, "for"):
+		return fmt.Errorf("--finish takes no --for: it retires the old address now\n%s", s.usage(fs))
+	case *finish && len(pos) == 1:
+		return fmt.Errorf("--finish takes DEVICE ADDR, or nothing\n%s", s.usage(fs))
+	case !*finish && len(pos) == 0:
 		return fmt.Errorf("missing PREFIX, or DEVICE ADDR\n%s", s.usage(fs))
 	}
 	if keep <= 0 {
@@ -176,6 +219,9 @@ addresses is not moved.`}
 	case 1:
 		return a.renumberNetwork(auth, pos[0], until, *yes)
 	default:
+		if *finish {
+			until = types.RetireAtOnce
+		}
 		return a.renumberDevice(auth, pos[0], pos[1], until, *yes)
 	}
 }
@@ -213,6 +259,10 @@ func (a *app) renumberNetwork(auth *log.Authority, arg string, until uint64, yes
 	// Each risk is said here, and the one question below covers them all.
 	if used := hostNetsOverlapping(prefix, own...); len(used) > 0 {
 		a.warn("%v overlaps %s here; traffic to both goes into the network", prefix, strings.Join(used, ", "))
+	}
+	if other := a.networkClaiming(prefix); other != "" {
+		a.warn("%v overlaps %s, which this device is in; one of the two would run here without IPv4",
+			prefix, other)
 	}
 	to := make(map[types.Identity]netip.Addr, len(addrs))
 	for _, m := range addrs {
@@ -254,6 +304,14 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 		return fmt.Errorf("%v is the first or last address of %v", addr, r)
 	}
 	if target.V4 != nil && *target.V4 == addr {
+		now := a.now().Unix()
+		if r := target.Retiring; r.Live(now) {
+			a.ok("unchanged: %s at %v; its old %v works until %s", name, addr, r.Addr, deadline(r.Until))
+			if until == types.RetireAtOnce {
+				a.hint("juist network renumber --finish retires every old address now")
+			}
+			return nil
+		}
 		a.ok("unchanged: %s at %v", name, addr)
 		return nil
 	}
@@ -261,7 +319,7 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 		switch {
 		case n.Identity == target.Identity || !slices.Contains(n.V4Addrs(), addr):
 		case n.Retiring != nil && n.Retiring.Addr == addr && !n.Retiring.Live(a.now().Unix()):
-			return fmt.Errorf("%v is %s's old address until retired\nhint: juist network renumber --finish",
+			return fmt.Errorf("%v is held as %s's old address\nhint: juist network renumber --finish frees it",
 				addr, displayMember(n))
 		default:
 			return fmt.Errorf("%v is taken by %s", addr, displayMember(n))
@@ -276,8 +334,16 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 			cmp.Or(g.name, g.id.ShortString()))
 	}
 	a.warnTransitionEnds([]types.NodeRecord{target}, map[types.Identity]netip.Addr{target.Identity: addr})
+	atOnce := until == types.RetireAtOnce && target.V4 != nil
+	if atOnce {
+		a.warn("connections to %s's %v end; devices not told yet reach %s over IPv6 only until they are", name,
+			*target.V4, name)
+	}
 	question := fmt.Sprintf("give %s %v?", name, addr)
-	if target.V4 != nil {
+	switch {
+	case atOnce:
+		question = fmt.Sprintf("move %s from %v to %v, retiring %v now?", name, *target.V4, addr, *target.V4)
+	case target.V4 != nil:
 		question = fmt.Sprintf("move %s from %v to %v, old address until %s?", name, *target.V4, addr,
 			deadline(until))
 	}
@@ -289,7 +355,10 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 		return err
 	}
 	done := fmt.Sprintf("%s moving to %v", name, addr)
-	if target.V4 != nil {
+	switch {
+	case atOnce:
+		done = fmt.Sprintf("%s moved to %v; %v retired", name, addr, *target.V4)
+	case target.V4 != nil:
 		done = fmt.Sprintf("%s moving to %v; %v until %s", name, addr, *target.V4, deadline(until))
 	}
 	_, err = a.submit(auth, &change{aum: aum, file: "renumber-" + fileSafe(name) + ".rec", done: done})
@@ -298,33 +367,58 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 
 func (a *app) retireAddresses(auth *log.Authority, yes bool) error {
 	state := auth.State()
-	_, ranges := state.V4Retiring()
-	var retiring, live []string
-	for _, n := range state.Nodes() {
-		if n.Retiring == nil {
-			continue
-		}
-		retiring = append(retiring, fmt.Sprintf("%s's %v", displayMember(n), n.Retiring.Addr))
-		if n.Retiring.Live(a.now().Unix()) {
-			live = append(live, retiring[len(retiring)-1])
+	now := a.now().Unix()
+	nodes := slices.DeleteFunc(state.Nodes(), func(n types.NodeRecord) bool { return n.Retiring == nil })
+	slices.SortFunc(nodes, func(x, y types.NodeRecord) int { return x.Retiring.Addr.Compare(y.Retiring.Addr) })
+	// What still works is retired; what works no more, but is held, is freed.
+	var live, held []string
+	if r, ok := state.V4Retiring(); ok {
+		item := "the old range " + joinPrefixes(r.Prefixes)
+		if r.Live(now) {
+			live = append(live, item)
+		} else {
+			held = append(held, item)
 		}
 	}
-	if !ranges && len(retiring) == 0 {
+	for _, n := range nodes {
+		item := fmt.Sprintf("%s's %v", displayMember(n), n.Retiring.Addr)
+		if n.Retiring.Live(now) {
+			live = append(live, item)
+		} else {
+			held = append(held, item)
+		}
+	}
+	if len(live)+len(held) == 0 {
 		a.ok("no old addresses to retire")
 		return nil
 	}
 	if len(live) > 0 {
-		a.warn("devices not yet moved lose %s", strings.Join(live, ", "))
+		a.warn("devices not told yet lose %s", strings.Join(live, ", "))
 	}
-	if err := a.proceed(yes, "retire the old addresses now?"); err != nil {
+	list := func(items []string, what string) string {
+		if len(items) > 3 {
+			return count(len(items), what)
+		}
+		return strings.Join(items, ", ")
+	}
+	var question, done string
+	switch {
+	case len(held) == 0:
+		question, done = "retire "+list(live, "old address"), "old addresses retired"
+	case len(live) == 0:
+		question, done = "free "+list(held, "held address"), "held addresses freed"
+	default:
+		question = "retire " + list(live, "old address") + " and free " + list(held, "held address")
+		done = "old addresses retired; held ones freed"
+	}
+	if err := a.proceed(yes, question+" now?"); err != nil {
 		return err
 	}
 	aum, err := auth.Builder().RetireAddresses()
 	if err != nil {
 		return err
 	}
-	_, err = a.submit(auth, &change{aum: aum, file: "retire.rec",
-		done: "old addresses retired"})
+	_, err = a.submit(auth, &change{aum: aum, file: "retire.rec", done: done})
 	return err
 }
 

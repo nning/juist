@@ -28,6 +28,10 @@ type Status struct {
 	// SyncInTunnel says log sync runs through the tunnel alone.
 	SyncInTunnel bool `cbor:"47,keyasint,omitempty"`
 
+	// Waiting is how many copies of changes waiting for votes the daemon
+	// holds, which [CmdWaiting] hands over.
+	Waiting int `cbor:"62,keyasint,omitempty"`
+
 	// Rendezvous names the public services invites may meet through when
 	// neither device can reach the other; nil when the daemon is told to
 	// use none (--no-dht or --no-stun).
@@ -63,6 +67,46 @@ type Status struct {
 	// layer's TCP port.
 	ListenPort uint16 `cbor:"13,keyasint,omitempty"`
 	GossipPort uint16 `cbor:"14,keyasint,omitempty"`
+
+	// Instance is this daemon's number among the juist instances on the
+	// host, 0 for the default. HostConflict is set while a lower instance
+	// holds what this network claims: the mesh runs without IPv4 then, or,
+	// where it is this very network, does not start; see [HostConflict].
+	Instance     int           `cbor:"58,keyasint,omitempty"`
+	HostConflict *HostConflict `cbor:"59,keyasint,omitempty"`
+
+	// Device is the TUN device, empty for none.
+	Device string `cbor:"60,keyasint,omitempty"`
+
+	// V4Claims is the IPv4 the network claims on a host: its prefix and the
+	// ranges it is moving away from, or where it has no prefix of its own,
+	// its members' addresses. The host's other instances yield to it, and a
+	// network founded here keeps out of it. A reader who may not operate the
+	// device sees members' addresses only as the /22s they are in.
+	V4Claims []netip.Prefix `cbor:"61,keyasint,omitempty"`
+}
+
+// A HostConflict is another juist instance on this host holding an address
+// this device's network claims, or this very network. A host routes an
+// address into one tunnel only — the lower instance's — so the higher of the
+// two runs without IPv4 until one of the networks renumbers, and does not
+// start at all where both are in one network.
+type HostConflict struct {
+	// Instance is the other instance's number and Device its TUN device.
+	Instance int    `cbor:"1,keyasint"`
+	Device   string `cbor:"2,keyasint,omitempty"`
+
+	// SameNetwork says the other instance is in this network too.
+	SameNetwork bool `cbor:"3,keyasint,omitempty"`
+
+	// Held is the other's address or route, and Claim what of this network's
+	// it falls in: its prefix, or one member's address.
+	Held  netip.Prefix `cbor:"4,keyasint"`
+	Claim netip.Prefix `cbor:"5,keyasint"`
+
+	// Unanswered says the other holds a network but did not answer when this
+	// instance started, as while both start at once: IPv4 waits for it.
+	Unanswered bool `cbor:"6,keyasint,omitempty"`
 }
 
 // Derived is the part of a [Status] a reconcile derives from the log. The
@@ -236,7 +280,23 @@ func (s *Status) ForReader() Status {
 		CanOperate: s.CanOperate, Operator: s.Operator,
 		EpochError: s.EpochError, SchemaAlarm: s.SchemaAlarm,
 		ListenPort: s.ListenPort, GossipPort: s.GossipPort,
+		Instance: s.Instance, HostConflict: s.HostConflict, Device: s.Device, V4Claims: coarseClaims(s.V4Claims),
 	}
+}
+
+// coarseClaims is claims with each single address widened to the /22 it is
+// in: enough to draw a prefix clear of them, and no member list.
+func coarseClaims(claims []netip.Prefix) []netip.Prefix {
+	var out []netip.Prefix
+	for _, c := range claims {
+		if c.IsSingleIP() && c.Addr().Is4() {
+			c = netip.PrefixFrom(c.Addr(), 22).Masked()
+		}
+		if !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // A PeerReach is what the last check found for one installed peer.

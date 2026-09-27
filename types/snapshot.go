@@ -64,6 +64,21 @@ type AdminKey struct {
 	// count. Zero is one, and one is always written as zero, so that a state
 	// has one encoding.
 	Needed uint32 `cbor:"5,keyasint,omitempty"`
+
+	// Recipient is the key's encryption key, from [SchemaSealing] on, which
+	// only the key itself sets: a genesis naming one is signed by the key,
+	// and so is a [KindSetAdminRecipient].
+	Recipient *RecipientKey `cbor:"6,keyasint,omitempty"`
+}
+
+// Clone returns a deep copy of k.
+func (k *AdminKey) Clone() *AdminKey {
+	out := *k
+	if k.Recipient != nil {
+		r := *k.Recipient
+		out.Recipient = &r
+	}
+	return &out
 }
 
 // FoldName maps a name to the one form of every name strings.EqualFold holds
@@ -139,6 +154,10 @@ func ValidateAdmins(keys []AdminKey, schema SchemaVersion) error {
 			return fmt.Errorf("admin key %v names a holder, which needs %v; the network is at %v",
 				k.Public.ShortString(), SchemaHolders, schema)
 		}
+		if k.Recipient != nil && schema < SchemaSealing {
+			return fmt.Errorf("admin key %v has an encryption key, which needs %v; the network is at %v",
+				k.Public.ShortString(), SchemaSealing, schema)
+		}
 		if k.Holder == "" {
 			if k.Needed != 0 {
 				return fmt.Errorf("admin key %v needs %d keys and belongs to no holder", k.Public.ShortString(), k.Needed)
@@ -213,6 +232,11 @@ type RetiringV4 struct {
 
 // Live reports whether the address is still in use at unix time now.
 func (r *RetiringV4) Live(now int64) bool { return r != nil && liveUntil(r.Until, now) }
+
+// RetireAtOnce is the deadline of a move that ends the old address as it
+// applies: a time no transition can still run at, which tells such a move
+// from a transition that ran out.
+const RetireAtOnce uint64 = 1
 
 // RetiringRanges are the IPv4 ranges a network renumbering moved away from,
 // live until Until, in Unix seconds.
@@ -532,6 +556,11 @@ func (a *AdminKey) StaticValidate() error {
 	if err := ValidateName(a.Holder); err != nil {
 		return fmt.Errorf("admin key %v's holder: %w", a.Public.ShortString(), err)
 	}
+	if a.Recipient != nil {
+		if err := a.Recipient.validate(); err != nil {
+			return fmt.Errorf("admin key %v: %w", a.Public.ShortString(), err)
+		}
+	}
 	return ValidateName(a.Name)
 }
 
@@ -631,7 +660,10 @@ func (s *Snapshot) Clone() *Snapshot {
 		out.V4Retiring = &r
 	}
 	out.Disablement = slices.Clone(s.Disablement)
-	out.Admins = slices.Clone(s.Admins)
+	out.Admins = make([]AdminKey, len(s.Admins))
+	for i := range s.Admins {
+		out.Admins[i] = *s.Admins[i].Clone()
+	}
 	out.Nodes = make([]NodeRecord, len(s.Nodes))
 	for i := range s.Nodes {
 		out.Nodes[i] = *s.Nodes[i].Clone()

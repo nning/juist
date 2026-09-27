@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/ecdh"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -801,6 +803,14 @@ func TestServiceResetIsAFreshInstall(t *testing.T) {
 	if resp := ask(ipc.Request{Command: ipc.CmdReset}); resp.Err != ipc.ErrStillMember {
 		t.Fatalf("a member was reset unforced: %+v", resp)
 	}
+	// Another instance's home inside this one is another network's device.
+	other := filepath.Join(f.home, "juist3", keys.NodeKeysFile)
+	if err := os.MkdirAll(filepath.Dir(other), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if st := f.s.Status(); !st.InNetwork {
 		t.Fatal("a refused reset left the network")
 	}
@@ -820,10 +830,13 @@ func TestServiceResetIsAFreshInstall(t *testing.T) {
 	}
 	for _, e := range entries {
 		switch e.Name() {
-		case statedir.LockName, ipc.SocketName, keys.NodeKeysFile, keys.LogDir:
+		case statedir.LockName, ipc.SocketName, keys.NodeKeysFile, keys.LogDir, "juist3":
 		default:
 			t.Errorf("%s survived the reset", e.Name())
 		}
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("the reset took another instance's home with it: %v", err)
 	}
 	if _, has, err := f.s.store.Anchor(); err != nil || has {
 		t.Fatalf("the log survived the reset (%v)", err)
@@ -909,5 +922,70 @@ func TestAStrangersStatusCarriesNoMemberList(t *testing.T) {
 	}
 	if st := ask(stranger); len(st.Devices) != 0 {
 		t.Errorf("a stranger's status lists %d members", len(st.Devices))
+	}
+}
+
+// A removal handed to the service is offered to the device it removes first;
+// here that device is not running, so the offer fails, and says so.
+func TestServiceInformOffersARemovalToTheRemoved(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	f := newServiceFixtureWith(t, func(o *Options) {
+		o.Logf = func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			lines = append(lines, fmt.Sprintf(format, args...))
+		}
+	})
+	auth, _ := f.nw.authorityFor(t)
+	victim := f.nw.devices[1].record.Identity
+	removal := f.nw.removeNode(t, auth, victim)
+	body, err := removal.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdInform, Records: [][]byte{body}}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, l := range lines {
+		if strings.Contains(l, "the change that ends its membership") && strings.Contains(l, victim.ShortString()) {
+			return
+		}
+	}
+	t.Fatalf("the removed device was not offered its removal:\n%s", strings.Join(lines, "\n"))
+}
+
+// A device moved at once starts on its new address as the move applies, not
+// at the next look at its addresses.
+func TestAMovedDeviceRestartsOnItsNewAddressAtOnce(t *testing.T) {
+	f := newServiceFixture(t, true)
+	before := f.s.Mesh()
+	auth, _ := f.nw.authorityFor(t)
+	self := f.nw.devices[0].record.Identity
+	move, err := auth.Builder().RenumberNode(self, netip.MustParseAddr("198.18.0.99"), types.RetireAtOnce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := move.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	body, err := move.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdInform, Records: [][]byte{body}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(rotationCheckInterval / 2)
+	for {
+		if m := f.s.Mesh(); m != nil && m != before && !m.addrsMoved() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the moved device did not start on its new address before its next look")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

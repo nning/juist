@@ -11,8 +11,13 @@
 #   sudo install -m755 build/juistd /usr/local/bin/juistd
 #   sudo install -m644 packaging/systemd/juistd.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now juistd
-#   sudo juist join CODE    # or: juist init
+#   sudo juist join CODE    # or: juist create
 # State lives in /var/lib/juist, the control socket in /run/juist.
+#
+# This is the host's default instance, in the first network it joins. Every
+# further network runs in an instance of juistd@.service beside it; see
+# juistd@.service, which must stay this unit but for the lines that name the
+# instance (packaging/scripts_test.go holds them to that).
 
 [Unit]
 Description=juist node
@@ -38,8 +43,12 @@ WorkingDirectory=/var/lib/juist
 # reading node.keys: any local user may connect and ask for status, and the
 # daemon decides everything else per call from the caller's kernel-reported
 # uid. 0755 so users can reach the socket; nothing else is kept there.
+# Preserved, because every instance's socket is in it: systemd would delete
+# the directory with whichever unit stopped first. juistd removes its own
+# socket when it stops.
 RuntimeDirectory=juist
 RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 # Every file the daemon writes is private; the socket is chmodded explicitly.
 UMask=0077
 
@@ -81,8 +90,8 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 
 # ProtectKernelTunables is affordable only because conn keeps NetfilterMode at
 # NetfilterOff and advertises no subnet routes: those are the two gates on every
-# sysctl write the embedded router makes. Recheck at M7b and at each Tailscale
-# upgrade.
+# sysctl write the embedded router makes. Recheck at M6 (exit nodes) and at
+# each Tailscale upgrade.
 
 [Install]
 WantedBy=multi-user.target

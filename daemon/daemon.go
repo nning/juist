@@ -86,6 +86,36 @@ type Options struct {
 	// /dev/net/tun and CAP_NET_ADMIN. Empty means no host device.
 	TunName string
 
+	// Instance numbers this node among the juist nodes on the host, one per
+	// network: 0 for the default, up to instance.Max. It chooses the routing
+	// table and policy rules the device's routes live in; see
+	// conn.Options.Instance.
+	Instance int
+
+	// HostHoldings lists what the host's other instances hold; see
+	// [conn.InstanceHoldings], which the service uses where the node has a
+	// TUN device and this is nil.
+	HostHoldings func(self int, own string) ([]conn.Holding, error)
+
+	// LowerStatus asks instance n on the host for its status, which says
+	// what its network claims, where it answers; the service asks the
+	// sockets beside its own where this is nil. An instance that does not
+	// answer is read from HostHoldings instead.
+	LowerStatus func(ctx context.Context, n int) (*ipc.Status, error)
+
+	// LowerHome is where instance n on the host keeps its state, which says
+	// whether it holds a network while it does not answer; the service
+	// derives it from its own home where this is nil.
+	LowerHome func(n int) string
+
+	// NoV4 runs the mesh on IPv6 alone: no IPv4 address on this device and
+	// none of the members' in the data plane, so none is routed or accepted.
+	// The service sets it while a lower instance on the host holds IPv4 this
+	// network claims, which the host routes into that instance's network;
+	// log sync goes on over IPv6, so a renumbering that ends the conflict
+	// still arrives.
+	NoV4 bool
+
 	// RelayPort is the TCP port this device's relay serves DERP on, and the
 	// UDP port it answers STUN on. Zero picks one; the port travels in the
 	// signed announcement either way.
@@ -108,6 +138,10 @@ type Options struct {
 
 	// Connect builds the data plane. Nil uses [conn.New].
 	Connect func(conn.Options) (conn.Manager, error)
+
+	// GossipDial opens outbound log sync sessions. Nil dials TCP; tests
+	// replace it to cut a device off as a dropped tunnel would.
+	GossipDial func(ctx context.Context, addr netip.AddrPort) (net.Conn, error)
 
 	// GossipListener accepts inbound anti-entropy sessions. Nil listens on
 	// GossipPort.
@@ -146,6 +180,14 @@ type Options struct {
 	// memory only, so a restart starts stale until an admin device vouches.
 	LeasePath string
 
+	// WaitingPath is where the changes waiting for votes this node holds are
+	// kept across a restart. Empty keeps them in memory only.
+	WaitingPath string
+
+	// OnAddrsMoved is called, once and on a goroutine of its own, when the
+	// log gives this device other overlay addresses than the mesh started on.
+	OnAddrsMoved func()
+
 	// FreshnessTTL is how long this node acts on its view of the network
 	// after an admin device last vouched for it. Zero uses
 	// [DefaultFreshnessTTL].
@@ -181,13 +223,13 @@ type Options struct {
 // none is held across a call into the data plane:
 //
 //	Service.mu → reconcileMu → authMu,  Service.mu → mu → waits' own
-//	reconcileMu → mu,  probeMu → mu
-//	leaseSaveMu → leaseMu,  keyringSaveMu → the keyring's own
+//	Service.mu → waitMu,  reconcileMu → mu,  reconcileMu → waitSaveMu → waitMu
+//	probeMu → mu,  leaseSaveMu → leaseMu,  keyringSaveMu → the keyring's own
 //	a relay server's lock → mu: its admission callbacks take mu, so mu is
 //	never held across a call into the relay
 //
-// authMu, mu and leaseMu are never held together, and the function passed to
-// setStatus runs under mu, so it must take no lock of the daemon's.
+// authMu, mu, leaseMu and waitMu are never held together, and the function
+// passed to setStatus runs under mu, so it must take no lock of the daemon's.
 type Daemon struct {
 	self      types.Identity
 	identity  types.PrivateIdentity
@@ -204,8 +246,12 @@ type Daemon struct {
 	relayPort    uint16
 	portFallback bool
 	noRelay      bool
+	noV4         bool
 	cachePath    string
 	leasePath    string
+	waitingPath  string
+	onAddrsMoved func()
+	movedOnce    sync.Once
 	keyringPath  string
 
 	session      *Session
@@ -271,6 +317,12 @@ type Daemon struct {
 
 	// keyringSaveMu serializes writing the keyring out.
 	keyringSaveMu sync.Mutex
+
+	// waitMu guards waiting, the changes waiting for votes held, by the hash
+	// of their encoding, and waitSaveMu serializes writing them out.
+	waitSaveMu sync.Mutex
+	waitMu     sync.Mutex
+	waiting    map[types.Hash]heldChange
 
 	mu sync.Mutex
 
@@ -399,10 +451,14 @@ func New(opts Options) (*Daemon, error) {
 		relayPort:      opts.RelayPort,
 		portFallback:   opts.PortFallback,
 		noRelay:        opts.DisableRelay,
+		noV4:           opts.NoV4,
 		relayMembers:   map[types.WGKey]bool{},
 		relayHosts:     map[types.Identity]bool{},
 		leases:         map[types.Identity]types.Lease{},
 		leasePath:      opts.LeasePath,
+		waitingPath:    opts.WaitingPath,
+		onAddrsMoved:   opts.OnAddrsMoved,
+		waiting:        map[types.Hash]heldChange{},
 		keyringPath:    opts.KeyringPath,
 		ttl:            cmp.Or(opts.FreshnessTTL, DefaultFreshnessTTL),
 		leaseEvery:     cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
@@ -410,7 +466,7 @@ func New(opts Options) (*Daemon, error) {
 	// The addresses are those of this moment: past a renumbering's deadline
 	// they change, and the service restarts the mesh on them.
 	now := d.now().Unix()
-	selfAddrs := state.Addrs(self, now)
+	selfAddrs := d.overlayAddrs(state, self, now)
 	d.v4 = state.V4RangesAt(now)
 	d.kept = d.loadKeyring()
 	if d.logf == nil {
@@ -447,9 +503,10 @@ func New(opts Options) (*Daemon, error) {
 			DiscoKey: conn.DiscoKeyFromRaw32(d.discoPrivate),
 			Addrs:    selfAddrs,
 		},
-		TunName: opts.TunName,
-		STUN:    opts.STUN,
-		Logf:    d.logf,
+		TunName:  opts.TunName,
+		Instance: opts.Instance,
+		STUN:     opts.STUN,
+		Logf:     d.logf,
 		// The home relay and the reflexive addresses both belong in this
 		// node's announcement, and both are learned asynchronously once
 		// there is a relay to learn them from.
@@ -487,12 +544,14 @@ func New(opts Options) (*Daemon, error) {
 		CatchUp:      &gossip.CatchUpKeys{Identity: opts.Identity, Recipient: opts.Recipient},
 		Announce:     d.announcement,
 		Listener:     ln,
+		Dial:         opts.GossipDial,
 		OverlayAddrs: d.overlayGossipAddrs,
 		OverlayOnly:  d.overlayOnly,
 		OnRecords:    d.MarkDirty,
 		Leases:       d.encodedLeases,
 		OnLeases:     d.offerLeases,
 		OnHave:       d.onHave,
+		Waiting:      (*waitingAdapter)(d),
 		Logf:         d.logf,
 	})
 	if err != nil {
@@ -540,6 +599,7 @@ func New(opts Options) (*Daemon, error) {
 	// fresh its state was.
 	d.loadEndpointCache(d.cachePath)
 	d.loadLeases()
+	d.loadWaiting()
 
 	d.setStatus(func(s *ipc.Status) {
 		s.Self = self
@@ -840,7 +900,7 @@ func (d *Daemon) overlayGossipAddrs(id types.Identity) []netip.AddrPort {
 	if !held || e.GossipPort == 0 {
 		return nil
 	}
-	addrs := state.Addrs(id, d.now().Unix())
+	addrs := d.overlayAddrs(state, id, d.now().Unix())
 	out := make([]netip.AddrPort, 0, len(addrs))
 	for _, pfx := range addrs {
 		out = append(out, netip.AddrPortFrom(pfx.Addr(), e.GossipPort))
@@ -895,7 +955,17 @@ func (d *Daemon) addrsMoved() bool {
 	if err != nil || !state.IsMember(d.self) {
 		return false
 	}
-	return !slices.Equal(state.Addrs(d.self, d.now().Unix()), d.startAddrs)
+	return !slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.startAddrs)
+}
+
+// overlayAddrs is [log.State.Addrs] as this mesh uses them: without IPv4
+// where it runs without.
+func (d *Daemon) overlayAddrs(state *log.State, id types.Identity, now int64) []netip.Prefix {
+	addrs := state.Addrs(id, now)
+	if d.noV4 {
+		addrs = slices.DeleteFunc(addrs, func(p netip.Prefix) bool { return p.Addr().Is4() })
+	}
+	return addrs
 }
 
 // actionableSubject reports whether an announcement's subject is one the
@@ -940,10 +1010,14 @@ func (d *Daemon) needsPeers() bool {
 
 // Status returns a snapshot of what the daemon knows about itself.
 func (d *Daemon) Status() ipc.Status {
+	d.waitMu.Lock()
+	held := len(d.waiting)
+	d.waitMu.Unlock()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s := d.status
 	s.Addrs = append([]netip.Prefix(nil), d.status.Addrs...)
+	s.Waiting = held
 	return s
 }
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/nning/juist/internal/statedir"
 
@@ -70,24 +71,82 @@ func (h *home) writeSecret(name string, lines []string) error {
 
 // --- admin keys ------------------------------------------------------------
 
-func (h *home) createAdminKey(name string) (types.PrivateIdentity, error) {
+// An adminKeyFile is an admin key under its file's name: "alice@home" for one
+// filed under its network, and "alice" for one from before keys were named
+// for networks, or one made before its network, which is unfiled.
+type adminKeyFile struct {
+	name    string
+	priv    types.PrivateIdentity
+	unfiled bool
+}
+
+// network is the network the key is filed under, "" for none.
+func (k adminKeyFile) network() string {
+	_, network, _ := strings.Cut(k.name, "@")
+	return network
+}
+
+// adminKeyName names the key person holds for network, as its break-glass
+// file is named: from the name it had then, so that a rename moves nothing.
+func adminKeyName(person, network string) string {
+	if network == "" {
+		return person
+	}
+	return person + "@" + fileSafe(network)
+}
+
+// keyPersonOf is the admin an admin key's file is named for.
+func keyPersonOf(name string) string {
+	person, _, _ := strings.Cut(name, "@")
+	return person
+}
+
+func checkKeyName(name string) error {
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
-		return types.PrivateIdentity{}, fmt.Errorf("%q cannot name an admin key file", name)
+		return fmt.Errorf("%q cannot name an admin key file", name)
+	}
+	return nil
+}
+
+func adminKeyLines(priv types.PrivateIdentity, unfiled bool) []string {
+	lines := []string{
+		"# juist admin signing key: " + priv.Public().String(),
+		"# Keep this file secret and off the daemon's machine if you can.",
+		identityTag + " " + b64.EncodeToString(priv.Seed()),
+	}
+	if unfiled {
+		lines = append(lines, keys.UnfiledTag)
+	}
+	return lines
+}
+
+// createAdminKey creates the admin key name; an unfiled one is filed under
+// the first network whose log names it.
+func (h *home) createAdminKey(name string, unfiled bool) (types.PrivateIdentity, error) {
+	if err := checkKeyName(name); err != nil {
+		return types.PrivateIdentity{}, err
 	}
 	priv, err := types.GenerateIdentity()
 	if err != nil {
 		return priv, err
 	}
-	err = h.writeSecret(filepath.Join(adminsDir, name+".key"), []string{
-		"# juist admin signing key: " + priv.Public().String(),
-		"# Keep this file secret and off the daemon's machine if you can.",
-		identityTag + " " + b64.EncodeToString(priv.Seed()),
-	})
-	return priv, err
+	return priv, h.writeSecret(filepath.Join(adminsDir, name+".key"), adminKeyLines(priv, unfiled))
 }
 
-// adminKeys loads every admin key in the keystore, sorted by public key.
-func (h *home) adminKeys() ([]types.PrivateIdentity, error) {
+// adminKeyFiles loads every admin key in the keystore, by name.
+func (h *home) adminKeyFiles() ([]adminKeyFile, error) {
+	files, err := h.loadAdminKeyFiles()
+	// An unfiled key beside its filed copy is a filing cut short.
+	filed := map[types.Identity]bool{}
+	for _, k := range files {
+		if !k.unfiled {
+			filed[k.priv.Public()] = true
+		}
+	}
+	return slices.DeleteFunc(files, func(k adminKeyFile) bool { return k.unfiled && filed[k.priv.Public()] }), err
+}
+
+func (h *home) loadAdminKeyFiles() ([]adminKeyFile, error) {
 	entries, err := os.ReadDir(h.join(adminsDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -95,47 +154,102 @@ func (h *home) adminKeys() ([]types.PrivateIdentity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", h.join(adminsDir), err)
 	}
-	var out []types.PrivateIdentity
+	var out []adminKeyFile
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".key") {
+		name, ok := strings.CutSuffix(e.Name(), ".key")
+		if e.IsDir() || !ok {
 			continue
 		}
-		priv, err := loadAdminKey(h.join(adminsDir, e.Name()))
+		priv, unfiled, err := loadAdminKey(h.join(adminsDir, e.Name()))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, priv)
+		out = append(out, adminKeyFile{name: name, priv: priv, unfiled: unfiled})
+	}
+	return out, nil
+}
+
+// adminKeys loads every admin key in the keystore, sorted by public key.
+func (h *home) adminKeys() ([]types.PrivateIdentity, error) {
+	files, err := h.adminKeyFiles()
+	if err != nil {
+		return nil, err
+	}
+	return privateKeys(files), nil
+}
+
+func privateKeys(files []adminKeyFile) []types.PrivateIdentity {
+	var out []types.PrivateIdentity
+	for _, k := range files {
+		out = append(out, k.priv)
 	}
 	slices.SortFunc(out, func(a, b types.PrivateIdentity) int {
 		x, y := a.Public(), b.Public()
 		return x.Compare(y)
 	})
-	return out, nil
+	return out
 }
 
 // adminKey loads the admin key called name, if the keystore has one.
 func (h *home) adminKey(name string) (types.PrivateIdentity, bool, error) {
-	priv, err := loadAdminKey(h.join(adminsDir, name+".key"))
+	if err := checkKeyName(name); err != nil {
+		return types.PrivateIdentity{}, false, err
+	}
+	priv, _, err := loadAdminKey(h.join(adminsDir, name+".key"))
 	if keys.Missing(err) {
 		return types.PrivateIdentity{}, false, nil
 	}
 	return priv, err == nil, err
 }
 
-func loadAdminKey(path string) (types.PrivateIdentity, error) {
+// fileAdminKeys files each unfiled key that governs network under it. It is
+// best effort: a key left unfiled signs all the same.
+func (h *home) fileAdminKeys(network string, governs func(types.Identity) bool) {
+	// Another user's keystore, as a person's is to root under sudo: a key
+	// filed there would be one they cannot read.
+	if !ownedByUs(h.join(adminsDir)) {
+		return
+	}
+	files, err := h.loadAdminKeyFiles()
+	if err != nil {
+		return
+	}
+	filed := map[types.Identity]bool{}
+	for _, k := range files {
+		if !k.unfiled {
+			filed[k.priv.Public()] = true
+		}
+	}
+	for _, k := range files {
+		id := k.priv.Public()
+		if !k.unfiled || !filed[id] && !governs(id) {
+			continue
+		}
+		if !filed[id] {
+			name := adminKeyName(k.name, network)
+			if h.writeSecret(filepath.Join(adminsDir, name+".key"), adminKeyLines(k.priv, false)) != nil {
+				continue
+			}
+			filed[id] = true
+		}
+		_ = os.Remove(h.join(adminsDir, k.name+".key"))
+	}
+}
+
+func loadAdminKey(path string) (priv types.PrivateIdentity, unfiled bool, err error) {
 	file, err := keys.ReadTagged(path)
 	if err != nil {
-		return types.PrivateIdentity{}, err
+		return priv, false, err
 	}
 	fields, err := keys.TakeFields(path, file, identityTag, 1)
 	if err != nil {
-		return types.PrivateIdentity{}, err
+		return priv, false, err
 	}
-	priv, err := types.NewPrivateIdentity(fields[0])
-	if err != nil {
-		return types.PrivateIdentity{}, fmt.Errorf("%s: %w", path, err)
+	if priv, err = types.NewPrivateIdentity(fields[0]); err != nil {
+		return priv, false, fmt.Errorf("%s: %w", path, err)
 	}
-	return priv, nil
+	_, unfiled = file[keys.UnfiledTag]
+	return priv, unfiled, nil
 }
 
 // breakGlassFile holds a network's break-glass secrets, and genesisFileFor
@@ -414,6 +528,16 @@ func (h *home) openAuthorityAllowingNone() (*store.Dir, *log.Authority, bool, er
 		return nil, nil, false, err
 	}
 	return st, auth, true, nil
+}
+
+// ownedByUs reports whether this process's user owns path.
+func ownedByUs(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Geteuid()
 }
 
 func fileExists(path string) bool {

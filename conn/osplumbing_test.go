@@ -14,6 +14,8 @@ import (
 
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+
+	"github.com/nning/juist/internal/instance"
 )
 
 // TestTunNameYieldsToInjectedDevice pins the precedence in Options: a
@@ -95,10 +97,13 @@ func TestRealDevicePlumbsOverlayIntoHost(t *testing.T) {
 	// Within IFNAMSIZ, and unique enough that a stale device from an
 	// interrupted run does not collide with a live one.
 	name := fmt.Sprintf("juisttest%d", os.Getpid()%10000)
-	selfV4 := netip.MustParsePrefix("100.64.0.1/32")
-	selfV6 := netip.MustParsePrefix("fd7a:115c:a1e0::1/128")
-	peerV4 := netip.MustParsePrefix("100.64.0.2/32")
-	peerV6 := netip.MustParsePrefix("fd7a:115c:a1e0::2/128")
+	// Beside a running juistd: an instance nobody holds, whose table and rules
+	// Close may delete, and documentation addresses no network routes.
+	inst := freeInstance(t)
+	selfV4 := netip.MustParsePrefix("192.0.2.1/32")
+	selfV6 := netip.MustParsePrefix("2001:db8:6a75::1/128")
+	peerV4 := netip.MustParsePrefix("192.0.2.2/32")
+	peerV6 := netip.MustParsePrefix("2001:db8:6a75::2/128")
 
 	mgr, err := New(Options{
 		Self: Self{
@@ -107,8 +112,9 @@ func TestRealDevicePlumbsOverlayIntoHost(t *testing.T) {
 			DiscoKey: key.NewDisco(),
 			Addrs:    []netip.Prefix{selfV4, selfV6},
 		},
-		TunName: name,
-		Logf:    logger.WithPrefix(t.Logf, "n1: "),
+		TunName:  name,
+		Instance: inst,
+		Logf:     logger.WithPrefix(t.Logf, "n1: "),
 	})
 	if err != nil {
 		// euid 0 without CAP_NET_ADMIN (some containers), or no /dev/net/tun:
@@ -160,13 +166,31 @@ func TestRealDevicePlumbsOverlayIntoHost(t *testing.T) {
 	// into the device. This holds because peerRoutes is built only from the
 	// peer set, but assert it against the real device so a regression shows.
 	for _, absent := range []netip.Prefix{
-		netip.MustParsePrefix("100.64.0.9/32"),
-		netip.MustParsePrefix("fd7a:115c:a1e0::9/128"),
+		netip.MustParsePrefix("192.0.2.9/32"),
+		netip.MustParsePrefix("2001:db8:6a75::9/128"),
 	} {
 		if slices.Contains(routes, absent) {
 			t.Errorf("non-member prefix %v was routed into %q", absent, name)
 		}
 	}
+}
+
+// freeInstance is the highest instance number whose table routes nothing and
+// whose device does not exist, so that a test may take it without touching a
+// juistd running on the host.
+func freeInstance(t *testing.T) int {
+	t.Helper()
+	held, err := InstanceHoldings(-1, "")
+	if err != nil {
+		t.Fatalf("reading the host's juist instances: %v", err)
+	}
+	for inst := instance.Max; inst > 0; inst-- {
+		if !slices.ContainsFunc(held, func(h Holding) bool { return h.Instance == inst }) {
+			return inst
+		}
+	}
+	skipUnlessRequired(t, "every juist instance on this host is in use: %v", held)
+	return 0
 }
 
 // requireOSPlumbingEnv is the environment variable that makes the real-device

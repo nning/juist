@@ -1,6 +1,6 @@
 #!/bin/sh
 # The service is enabled and started on first install: it runs in no network
-# and waits, so "sudo juist join CODE" or "juist init" is the next step.
+# and waits, so "sudo juist join CODE" or "juist create" is the next step.
 set -e
 
 if [ "$1" = configure ]; then
@@ -33,8 +33,9 @@ if [ "$1" = configure ]; then
 		if [ -n "$fresh" ]; then
 			systemctl enable --now juistd.service || true
 		else
-			# An upgrade restarts a daemon that was running, and only that.
-			systemctl try-restart juistd.service || true
+			# An upgrade restarts the daemons that were running, and only
+			# those: the default's and every other network's instance.
+			systemctl try-restart juistd.service 'juistd@*.service' || true
 		fi
 	fi
 fi

@@ -294,6 +294,103 @@ func OpenCatchUp(network types.Hash, self types.Identity, priv *PrivateKeys, non
 	return key, nil
 }
 
+// AdminRecipient derives an admin key's encryption keys from its signing
+// seed, so that the admin key file holds both and a copy of it covers both.
+func AdminRecipient(seed []byte) (*PrivateKeys, error) {
+	if len(seed) != 32 {
+		return nil, fmt.Errorf("secrets: an admin key seed is %d bytes, want 32", len(seed))
+	}
+	x, err := hkdf.Key(sha256.New, seed, nil, labelAdminX25519, 32)
+	if err != nil {
+		return nil, err
+	}
+	m, err := hkdf.Key(sha256.New, seed, nil, labelAdminMLKEM, mlkem.SeedSize)
+	if err != nil {
+		return nil, err
+	}
+	return NewPrivateKeys(x, m)
+}
+
+// Recipient returns the public halves as an admin key carries them.
+func (p *PrivateKeys) Recipient() (types.RecipientKey, error) {
+	x, m, err := p.Public()
+	return types.RecipientKey{X25519: x, MLKEM: m}, err
+}
+
+// SealedKeySize is the length of what [SealKeyTo] returns.
+const SealedKeySize = types.SealedSecretSize
+
+// KeySize is the length of a key [SealKeyTo] seals.
+const KeySize = 32
+
+func keyInfo(context []byte, reader types.Identity) []byte {
+	info := append([]byte(labelWaitingKey), 0)
+	info = append(info, context...)
+	return append(info, reader[:]...)
+}
+
+// SealKeyTo seals key to the encryption key r of the admin key reader, bound
+// to context: only that admin opens it, and only as sealed for context.
+func SealKeyTo(context []byte, reader types.Identity, r types.RecipientKey, key [KeySize]byte) ([]byte, error) {
+	pub, err := recipientKey(r.X25519, r.MLKEM)
+	if err != nil {
+		return nil, fmt.Errorf("secrets: %v's encryption key: %w", reader.ShortString(), err)
+	}
+	sealed, err := hpke.Seal(pub, kdf(), aead(), keyInfo(context, reader), key[:])
+	if err != nil {
+		return nil, fmt.Errorf("secrets: sealing to %v: %w", reader.ShortString(), err)
+	}
+	return sealed, nil
+}
+
+// OpenKey opens what [SealKeyTo] sealed to reader, whose encryption keys
+// priv are.
+func OpenKey(context []byte, reader types.Identity, priv *PrivateKeys, sealed []byte) ([KeySize]byte, error) {
+	var key [KeySize]byte
+	hpkePriv, err := hpke.NewHybridPrivateKey(priv.mlkem, priv.x25519)
+	if err != nil {
+		return key, fmt.Errorf("secrets: assembling recipient key: %w", err)
+	}
+	pt, err := hpke.Open(hpkePriv, kdf(), aead(), keyInfo(context, reader), sealed)
+	if err != nil {
+		return key, fmt.Errorf("secrets: opening a key: %w", err)
+	}
+	if len(pt) != KeySize {
+		return key, fmt.Errorf("secrets: a key of %d bytes", len(pt))
+	}
+	copy(key[:], pt)
+	return key, nil
+}
+
+func peerInfo(network types.Hash, recipient types.Identity) []byte {
+	info := append([]byte(labelPeer), 0)
+	info = append(info, network[:]...)
+	return append(info, recipient[:]...)
+}
+
+// SealToPeer seals plaintext to the member n, in network: only that device
+// can open it, whoever holds the connection it is sent on.
+func SealToPeer(network types.Hash, n *types.NodeRecord, plaintext []byte) ([]byte, error) {
+	pub, err := recipientKey(n.X25519, n.MLKEM)
+	if err != nil {
+		return nil, fmt.Errorf("secrets: node %v: %w", n.Identity.ShortString(), err)
+	}
+	return hpke.Seal(pub, kdf(), aead(), peerInfo(network, n.Identity), plaintext)
+}
+
+// OpenFromPeer opens what [SealToPeer] sealed to this device, self.
+func OpenFromPeer(network types.Hash, self types.Identity, priv *PrivateKeys, sealed []byte) ([]byte, error) {
+	hpkePriv, err := hpke.NewHybridPrivateKey(priv.mlkem, priv.x25519)
+	if err != nil {
+		return nil, fmt.Errorf("secrets: assembling recipient key: %w", err)
+	}
+	pt, err := hpke.Open(hpkePriv, kdf(), aead(), peerInfo(network, self), sealed)
+	if err != nil {
+		return nil, fmt.Errorf("secrets: opening what a peer sealed: %w", err)
+	}
+	return pt, nil
+}
+
 // Domain-separation labels. Every derived value is bound to one of these, so
 // the discovery AEAD key and a topic ID can never come out equal, and neither
 // can ever equal the secret itself.
@@ -304,6 +401,10 @@ const (
 	labelDiscoveryKey = "juist/discovery-aead/v1"
 	labelMDNS         = "juist/mdns-beacon/v1"
 	labelGossipKey    = "juist/gossip-aead/v1"
+	labelAdminX25519  = "juist/admin-recipient-x25519/v1"
+	labelAdminMLKEM   = "juist/admin-recipient-mlkem/v1"
+	labelWaitingKey   = "juist/waiting-key/v1"
+	labelPeer         = "juist/peer-seal/v1"
 )
 
 // derive expands the secret into keying material for one labelled use:

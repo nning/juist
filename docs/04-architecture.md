@@ -74,7 +74,7 @@ connection manager over plain wireguard-go / kernel WireGuard.
 | `relay` | Embedded DERP server on relay-capable members, **membership-authenticated** (client keys checked against log) | `derp`/`derphttp` server | ~500 LOC glue |
 | `daemon` | Reconciliation loop (log state ⇒ WG config ⇒ netmap), lifecycle, IPC server | — | reconciler is TCB-adjacent (~800 LOC) |
 | `internal/host` | The inviting half of an enrollment: listener, LAN answers, DHT rendezvous, serial sessions; asks an admitter (the CLI) for every signature | — | not TCB (holds no key) |
-| `cli` | `init`, `invite`, `join`, `status`, `devices`, `remove`, `rotate`; for admins `grant`, `revoke`, `approve`, `apply`, `admins`, `log`. Holds the admin keys and a per-network anchor; signs only what it rebuilt from its own verified log | — | thin |
+| `cli` | `create`, `invite`, `join`, `status`, `devices`, `remove`, `rotate`; for admins `grant`, `revoke`, `approve`, `apply`, `admins`, `log`. Holds the admin keys and a per-network anchor; signs only what it rebuilt from its own verified log | — | thin |
 
 New trust-critical code target: **≈ 7–9 k LOC** — a realistic external-audit scope.
 Everything else is glue around production-tested imports.
@@ -176,7 +176,8 @@ ratchets — the anchor and the epoch floor — that carry the last sentence.
 
 ## Exit nodes and subnet routes (M6)
 
-Planned as M6, with the schema reserved from M1. The connectivity and data-plane
+Planned as M6, with the schema reserved from M1, and built in three steps:
+exit nodes (M6a), subnet routers (M6b) and the exit node's DNS (M6c). The connectivity and data-plane
 pieces come almost free from the `wgengine` reuse decision; the new work is policy
 plumbing and the privileged helper.
 
@@ -261,8 +262,12 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
   decides whether the M3 freeze binds it.
 - Addressing: v6 ULA `fd<40 bits from genesis hash>::/48`, host bits =
   `truncate(SHA-256(identity pubkey))`; v4 assigned explicitly in AddNode, from the prefix
-  the network chose at genesis or last renumbered to, else 198.18/15 (100.64/10 before
-  schema 4). The log validator rejects collisions deterministically on every node,
+  the network chose at genesis or last renumbered to. `juist create` draws a random
+  /22 in 198.18/15 unless told one, so two networks on one host rarely collide; a
+  network without a prefix of its own, founded before that, uses all of 198.18/15
+  (100.64/10 before schema 4) and numbers from its start, which the draw leaves out.
+  No address is handed out twice, so a /22 serves 1022 admissions over the
+  network's life; renumbering into a larger prefix makes room. The log validator rejects collisions deterministically on every node,
   counting the addresses renumberings leave. While one is live a member has two v4
   addresses, in its AllowedIPs and on its device, and sends from the old one, which
   every member still accepts; the Linux router pins that as each route's source.

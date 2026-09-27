@@ -15,7 +15,7 @@ import (
 func TestTheDaemonRefusesAKeystore(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	_, err := daemon.NewService(daemon.ServiceOptions{Home: c.home})
 	if err == nil || !strings.Contains(err.Error(), "holds admin keys") {
 		t.Fatalf("a daemon over a keystore: %v", err)
@@ -27,7 +27,7 @@ func TestTheDaemonRefusesAKeystore(t *testing.T) {
 func TestUnreadableKeysAreReportedNotIgnored(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	path := filepath.Join(c.home, nodeKeysFile)
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ func TestUnreadableStagedKeysAreReportedOnApply(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	phone := enrollDevice(t, admin, "phone")
 	phone.mustRun("rotate")
 	pending := filepath.Join(dir, "rotate-phone.rec")
@@ -61,7 +61,7 @@ func TestUnreadableStagedKeysAreReportedOnApply(t *testing.T) {
 func TestHomeIsOwnerOnly(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	err := filepath.WalkDir(c.home, func(path string, e os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -86,7 +86,7 @@ func TestHomeIsOwnerOnly(t *testing.T) {
 func TestSharedWritableHomeRefused(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	if err := os.Chmod(c.home, 0o777); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestSharedWritableHomeRefused(t *testing.T) {
 func TestAWritableAdminsDirIsRefused(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	admins := filepath.Join(c.home, adminsDir)
 	if err := os.Chmod(admins, 0o770); err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestAWritableAdminsDirIsRefused(t *testing.T) {
 func TestTheDaemonsStateDirectoryIsNotAKeystore(t *testing.T) {
 	t.Parallel()
 	d := newDaemonDevice(t, nil)
-	d.mustRun("init", "home", "--device", "laptop")
+	d.mustRun("create", "home", "--device", "laptop")
 	var out syncBuffer
 	a := (&cli{t: t, home: d.state}).app(&out, "")
 	if err := a.main([]string{"--home", d.state, "status"}); err == nil &&
@@ -135,7 +135,7 @@ func TestTheDaemonsStateDirectoryIsNotAKeystore(t *testing.T) {
 func TestResetStartsOverAndKeepsAdminKeys(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	before := c.mustRun("devices", "--keys")
 	if _, err := c.run("reset", "--yes"); err == nil || !strings.Contains(err.Error(), "still a member") {
 		t.Fatalf("a member was reset without --force: %v", err)
@@ -151,7 +151,7 @@ func TestResetStartsOverAndKeepsAdminKeys(t *testing.T) {
 	if _, err := c.run("devices"); err == nil {
 		t.Error("a reset device still lists devices")
 	}
-	c.mustRun("init", "again")
+	c.mustRun("create", "again")
 	if after := c.mustRun("devices", "--keys"); after == before {
 		t.Error("the device kept its keys through the reset")
 	}
@@ -162,7 +162,7 @@ func TestResetStartsOverAndKeepsAdminKeys(t *testing.T) {
 func TestAResetClearsAStoppedDaemonsState(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	for _, name := range statedir.StateFiles {
 		if err := os.WriteFile(filepath.Join(c.home, name), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)

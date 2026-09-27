@@ -8,7 +8,7 @@ import (
 func TestRemoveAsksFirst(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	enrollDevice(t, admin, "phone")
 	if _, err := admin.answer("n", "remove", "phone"); err == nil {
 		t.Fatal("remove went ahead when told no")
@@ -28,7 +28,7 @@ func TestRemoveAsksFirst(t *testing.T) {
 func TestGrant(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	enrollDevice(t, admin, "phone")
 	mustContain(t, admin.mustRun("grant", "phone", "relay"), "phone: roles relay")
 	mustContain(t, admin.mustRun("grant", "phone", "relay"), "unchanged")
@@ -44,7 +44,7 @@ func TestGrant(t *testing.T) {
 func TestAdminDevicesAreNotLostByAccident(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop")
 	enrollDevice(t, c, "phone")
 	c.mustRun("grant", "phone", "voucher")
 	c.mustRun("admins", "vouchers", "2")

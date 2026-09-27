@@ -12,7 +12,7 @@ import (
 func TestAdminsVouchers(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	if _, err := c.run("admins", "vouchers", "2"); err == nil {
 		t.Fatal("a threshold of two admin devices was set with one")
 	}
@@ -28,7 +28,7 @@ func TestAdminsVouchers(t *testing.T) {
 func TestEitherOfTwoLaptopsApprovesAlone(t *testing.T) {
 	t.Parallel()
 	laptop1 := newCLI(t)
-	laptop1.mustRun("init", "home", "--device", "laptop1")
+	laptop1.mustRun("create", "home", "--device", "laptop1")
 	laptop2 := enrollDevice(t, laptop1, "laptop2")
 	enrollDevice(t, laptop1, "phone")
 	add := regexp.MustCompile(`juist admins add laptop2 (nid:\S+)`).FindStringSubmatch(
@@ -48,7 +48,7 @@ func TestTwoPeopleWithTwoDevicesEach(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	alice := newCLI(t)
-	alice.mustRun("init", "home", "--admin-name", "alice")
+	alice.mustRun("create", "home", "--admin-name", "alice")
 	alice2, a2 := adminKeyOf(t, "alice")
 	bob1, b1 := adminKeyOf(t, "bob")
 	_, b2 := adminKeyOf(t, "bob")
@@ -75,7 +75,7 @@ func TestOnePersonCanRequireTwoDevices(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	laptop := newCLI(t)
-	laptop.mustRun("init", "home", "--admin-name", "alice")
+	laptop.mustRun("create", "home", "--admin-name", "alice")
 	desktop, d := adminKeyOf(t, "alice")
 	_, p := adminKeyOf(t, "alice")
 	laptop.mustRun("admins", "add", "alice", d)
@@ -97,7 +97,7 @@ func TestOnePersonCanRequireTwoDevices(t *testing.T) {
 func TestRequiringEveryKeyIsWarnedAbout(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--admin-name", "alice")
+	c.mustRun("create", "home", "--admin-name", "alice")
 	_, k := adminKeyOf(t, "alice")
 	c.mustRun("admins", "add", "alice", k)
 	if _, err := c.run("admins", "require", "alice", "2"); err == nil || !strings.Contains(err.Error(), "confirmation") {
@@ -113,7 +113,7 @@ func TestRequiringEveryKeyIsWarnedAbout(t *testing.T) {
 func TestALostDevicesKeyIsRemoved(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--admin-name", "alice")
+	c.mustRun("create", "home", "--admin-name", "alice")
 	_, lost := adminKeyOf(t, "alice")
 	_, kept := adminKeyOf(t, "alice")
 	c.mustRun("admins", "add", "alice", lost)
@@ -128,7 +128,7 @@ func TestALostDevicesKeyIsRemoved(t *testing.T) {
 func TestAPersonKeepsTheirVoteWhenOneKeyGoes(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--admin-name", "alice")
+	c.mustRun("create", "home", "--admin-name", "alice")
 	_, lost := adminKeyOf(t, "alice")
 	c.mustRun("admins", "add", "alice", lost)
 	mustContain(t, c.mustRun("admins", "remove", lost), "removed a key of alice's; 1 key left")
@@ -142,7 +142,7 @@ func TestAPersonKeepsTheirVoteWhenOneKeyGoes(t *testing.T) {
 func TestAdminKeysNameTheirMachine(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop", "--admin-name", "alice")
+	c.mustRun("create", "home", "--device", "laptop", "--admin-name", "alice")
 	other := newCLI(t)
 	add := regexp.MustCompile(`juist admins add alice (nid:\S+) --on nas`).FindStringSubmatch(
 		other.mustRun("admins", "new", "alice", "--on", "nas"))

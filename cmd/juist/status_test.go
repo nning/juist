@@ -59,7 +59,7 @@ func TestStatusNotesComeFromTheReport(t *testing.T) {
 func TestLogVerifyReportsCorruption(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	corrupt(t, c)
 	if _, err := c.run("log", "verify"); err == nil {
 		t.Fatal("log verify accepted a corrupt log")
@@ -69,21 +69,21 @@ func TestLogVerifyReportsCorruption(t *testing.T) {
 func TestLogShow(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop")
 	mustContain(t, c.mustRun("log"), "network creation", "approved by")
 }
 
 func TestStatusWithoutADaemon(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
-	mustContain(t, c.mustRun("status"), "juistd not running", "laptop", "198.18.0.1")
+	c.mustRun("create", "home", "--device", "laptop")
+	mustContain(t, c.mustRun("status"), "juistd not running", "laptop", "198.18.4.1")
 }
 
 func TestStatusShowsFreshness(t *testing.T) {
 	t.Parallel()
 	d := newDaemonDevice(t, nil)
-	d.mustRun("init", "home", "--device", "laptop")
+	d.mustRun("create", "home", "--device", "laptop")
 	mustContain(t, d.mustRun("status"), "home · ", "laptop", "Freshness", "vouched")
 }
 
@@ -96,7 +96,7 @@ func TestStatusRefusedByPermission(t *testing.T) {
 		t.Skip("root is not subject to the mode bits this test refuses with")
 	}
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	sock := ipc.SocketPath(c.home)
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
@@ -118,7 +118,7 @@ func TestStatusRefusedByPermission(t *testing.T) {
 func TestLogUpgradeOnANetworkAtTheCurrentSchema(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	mustContain(t, c.mustRun("log", "upgrade"), "unchanged")
 }
 
@@ -239,7 +239,7 @@ func TestStatusNamesTheRelayInUse(t *testing.T) {
 func TestARemovedDeviceListsNoDevices(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	phone := enrollDevice(t, admin, "phone")
 	admin.mustRun("remove", "phone", "--yes")
 	if err := os.RemoveAll(filepath.Join(phone.home, logDir)); err != nil {
@@ -340,7 +340,7 @@ func TestStatusNamesSyncBlockedInTheTunnel(t *testing.T) {
 func TestAnAdminMachineIsNotTakenForARemovedDevice(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--no-device")
+	c.mustRun("create", "home", "--no-device")
 	out := c.mustRun("devices")
 	if strings.Contains(out, "no longer in") {
 		t.Fatalf("an admin machine was told it left the network:\n%s", out)
@@ -421,5 +421,21 @@ func TestWrap(t *testing.T) {
 		if got := wrap(c.s, c.width); !slices.Equal(got, c.want) {
 			t.Errorf("wrap(%q, %d) = %q, want %q", c.s, c.width, got, c.want)
 		}
+	}
+}
+
+// A status names the devices not yet told of a renumbering while an old
+// address works, and once it is retired too, when they reach the moved
+// device at no address at all.
+func TestStatusNamesTheDevicesNotYetMoved(t *testing.T) {
+	st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3,
+		Unmoved: []string{"tablet"}}}
+	st.Devices = []ipc.Device{{Name: "phone", V4: "198.18.4.9", Retiring: "198.18.4.2", RetiringUntil: 2_000_000_000}}
+	mustContain(t, render(statusOf(st, testNow(), noPaint).head), "old addresses until", "not told yet: tablet")
+	st.Devices[0].Retiring, st.Devices[0].RetiringUntil = "", 0
+	mustContain(t, render(statusOf(st, testNow(), noPaint).head), "old addresses held; not told yet: tablet")
+	st.Unmoved = nil
+	if head := render(statusOf(st, testNow(), noPaint).head); strings.Contains(head, "old addresses") {
+		t.Fatalf("a status with nothing to follow speaks of a renumbering:\n%s", head)
 	}
 }

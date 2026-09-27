@@ -29,6 +29,16 @@ func (a *app) complete(words []string) error {
 		words = []string{""}
 	}
 	cur, prev := words[len(words)-1], words[:len(words)-1]
+	// The value of --network is one of the networks this device is in.
+	if n := len(prev); n > 0 && prev[n-1] == "--network" || strings.HasPrefix(cur, "--network=") {
+		given := strings.TrimPrefix(cur, "--network=")
+		for _, name := range networkNames(a.hostInstances()) {
+			if strings.HasPrefix(name, given) && shellSafe(name) {
+				fmt.Fprintln(a.out, strings.TrimSuffix(cur, given)+name)
+			}
+		}
+		return nil
+	}
 	// The value of --home or --socket is a path, which the shell completes.
 	for _, g := range []string{"--home", "--socket", "-H", "-s"} {
 		if n := len(prev); n > 0 && prev[n-1] == g || strings.HasPrefix(cur, g+"=") {
@@ -64,7 +74,7 @@ func shellSafe(s string) bool {
 func (a *app) candidates(g globals, cur string, prev []string) []string {
 	if len(prev) == 0 {
 		if strings.HasPrefix(cur, "-") {
-			return []string{"--home", "--socket", "--help"}
+			return []string{"--home", "--socket", "--network", "--help"}
 		}
 		names := []string{"help", "version"}
 		for _, c := range commands {
@@ -92,7 +102,7 @@ func (a *app) candidates(g globals, cur string, prev []string) []string {
 		return nil
 	}
 	if strings.HasPrefix(cur, "-") {
-		out := []string{"--help", "--home", "--socket"}
+		out := []string{"--help", "--home", "--socket", "--network"}
 		got.fs.VisitAll(func(f *flag.Flag) {
 			if len(f.Name) > 1 {
 				out = append(out, "--"+f.Name)
@@ -126,6 +136,7 @@ func (a *app) captureCommand(g globals, cmd *command, args []string) (completion
 	}
 	a.home, a.homeExplicit = h, g.homeExplicit
 	a.socket, a.socketExplicit = g.socket, g.socket != ""
+	a.network = g.network
 	if err := cmd.run(a, args); !errors.Is(err, errCompleting) || got.fs == nil {
 		return got, false
 	}

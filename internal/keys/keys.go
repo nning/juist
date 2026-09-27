@@ -60,6 +60,10 @@ const (
 	WireGuardTag = "juist-wireguard-v1"
 	NameTag      = "juist-name-v1"
 	RecordTag    = "juist-record-v1"
+
+	// UnfiledTag marks an admin key made before any network named it, which
+	// the CLI files under the first network whose log does.
+	UnfiledTag = "juist-unfiled-v1"
 )
 
 // B64 is the encoding every field in a key file uses.

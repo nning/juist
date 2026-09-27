@@ -18,6 +18,7 @@ import (
 	iofs "io/fs"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/nning/juist/cmd/internal/defaults"
 	"github.com/nning/juist/daemon"
 	"github.com/nning/juist/internal/cliflag"
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/rendezvous"
 	"github.com/nning/juist/ipc"
 )
@@ -81,7 +83,8 @@ func parse(args []string, out io.Writer) (options, error) {
 	fs := flag.NewFlagSet("juistd", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
-	home := fs.String("home", "", "state directory (default $JUIST_HOME, or ~/.config/juist)")
+	inst := fs.String("instance", "", "run as instance NAME, juist1 to juist9: another network beside the default's")
+	home := fs.String("home", "", "state directory (default $JUIST_HOME, or ~/.config/juist, and NAME in it)")
 	socket := fs.String("socket", "", "control socket (default daemon.sock in the state directory)")
 	port := fs.Uint("port", daemon.DefaultListenPort, "UDP port for the data plane")
 	gossipPort := fs.Uint("gossip-port", daemon.DefaultGossipPort, "TCP port for log sync")
@@ -96,6 +99,12 @@ func parse(args []string, out io.Writer) (options, error) {
 	verbose := fs.Bool("verbose", false, "log what the daemon is doing")
 	for _, o := range optionOrder {
 		cliflag.Short(fs, o.short, o.long)
+	}
+	if len(args) == 1 && args[0] == "__manpage" {
+		if err := manpage(out, fs); err != nil {
+			return options{}, err
+		}
+		return options{}, errHelp
 	}
 	err := cliflag.Check(fs, args)
 	if err == nil {
@@ -113,6 +122,25 @@ func parse(args []string, out io.Writer) (options, error) {
 	if *port > 0xffff || *gossipPort > 0xffff || *relayPort > 0xffff {
 		return options{}, errors.New("a port must be below 65536")
 	}
+	n := 0
+	if cliflag.IsSet(fs, "instance") {
+		if n, err = instance.Parse(*inst); err != nil {
+			return options{}, fmt.Errorf("--instance: %w", err)
+		}
+		// Everything two instances must not share follows from the number,
+		// unless given.
+		if !cliflag.IsSet(fs, "tun") {
+			*tun = *inst
+		}
+		for _, p := range []struct {
+			name string
+			v    *uint
+		}{{"port", port}, {"gossip-port", gossipPort}, {"relay-port", relayPort}} {
+			if !cliflag.IsSet(fs, p.name) {
+				*p.v = uint(instance.Port(uint16(*p.v), n))
+			}
+		}
+	}
 	// Vouchers vouch every lease interval; a TTL below two of them has nodes
 	// go stale between leases and drop tunnels every time.
 	if minTTL := 2 * daemon.DefaultLeaseInterval; *ttl < minTTL {
@@ -129,6 +157,9 @@ func parse(args []string, out io.Writer) (options, error) {
 	}
 	if *home == "" {
 		*home = defaults.Home()
+		if n > 0 {
+			*home = filepath.Join(*home, *inst)
+		}
 	}
 	nop := func(string, ...any) {}
 	return options{verbose: *verbose, service: daemon.ServiceOptions{
@@ -137,6 +168,7 @@ func parse(args []string, out io.Writer) (options, error) {
 		Mesh: daemon.Options{
 			ListenPort:   uint16(*port),
 			TunName:      *tun,
+			Instance:     n,
 			GossipPort:   uint16(*gossipPort),
 			RelayPort:    uint16(*relayPort),
 			DisableRelay: *noRelay,
@@ -159,7 +191,7 @@ var optionOrder = []struct {
 	long  string
 	arg   string
 }{
-	{'H', "home", "DIR"}, {'s', "socket", "PATH"}, {'p', "port", "N"}, {'g', "gossip-port", "N"},
+	{'i', "instance", "NAME"}, {'H', "home", "DIR"}, {'s', "socket", "PATH"}, {'p', "port", "N"}, {'g', "gossip-port", "N"},
 	{'r', "relay-port", "N"}, {'t', "tun", "NAME"}, {'R', "no-relay", ""}, {'l', "no-discovery", ""},
 	{'d', "no-dht", ""}, {'u', "stun", "LIST"}, {'U', "no-stun", ""}, {'f', "freshness-ttl", "D"},
 	{'v', "verbose", ""},
@@ -183,6 +215,7 @@ func help(fs *flag.FlagSet) string {
 	}
 	fmt.Fprintf(&b, "  %-22s %s\n", "-h, --help", "show this help")
 	b.WriteString("\nDefault ports another program holds become OS-chosen ones; ports given here do not.\n")
+	b.WriteString("An instance takes the default ports plus ten times its number, and its name for the device.\n")
 	return b.String()
 }
 
@@ -208,7 +241,7 @@ func report(out, errOut io.Writer, st ipc.Status, tun string) {
 	}
 	if !st.InNetwork {
 		fmt.Fprintf(out, "juistd: %s (%v) in no network\n", st.SelfName, st.Self.ShortString())
-		hint("juist init, or juist join CODE")
+		hint("juist create, or juist join CODE")
 		return
 	}
 	fmt.Fprintf(out, "juistd: network %q (%v)\n", st.NetworkName, st.Network)

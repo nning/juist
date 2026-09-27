@@ -123,7 +123,23 @@ type frame struct {
 	// Leases are encoded freshness leases, in a records frame. Raw bytes for
 	// the same reason as Records: they enter only through types.DecodeLease.
 	Leases [][]byte `cbor:"10,keyasint,omitempty"`
+
+	// Waiting is a [waitingPayload] sealed to the receiving device: in a
+	// hello the changes waiting for votes the sender holds, in a records
+	// frame those it hands over. Only admin devices are sent any.
+	Waiting []byte `cbor:"11,keyasint,omitempty"`
 }
+
+// A waitingPayload is what [frame.Waiting] carries once opened. Changes enter
+// only through the [Waiting] store, which checks each.
+type waitingPayload struct {
+	Held    []types.Hash `cbor:"1,keyasint,omitempty"`
+	Changes [][]byte     `cbor:"2,keyasint,omitempty"`
+}
+
+// MaxWaitingPerFrame caps the changes one frame may hand over, and the ones
+// a hello may say it holds.
+const MaxWaitingPerFrame = 64
 
 func (f *frame) validate() error {
 	switch f.Kind {
@@ -159,6 +175,9 @@ func (f *frame) validate() error {
 	}
 	if f.Anchor.IsZero() {
 		return errors.New("gossip: frame names no anchor")
+	}
+	if len(f.Waiting) > maxRecordBytesPerFrame {
+		return fmt.Errorf("gossip: frame carries %d bytes of waiting changes", len(f.Waiting))
 	}
 	return nil
 }

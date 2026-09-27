@@ -160,7 +160,7 @@ func TestSignersAreNamedByPerson(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop", "--admin-name", "alice")
+	c.mustRun("create", "home", "--device", "laptop", "--admin-name", "alice")
 	other := newCLI(t)
 	key := regexp.MustCompile(`juist admins add alice (nid:\S+)`).FindStringSubmatch(
 		other.mustRun("admins", "new", "alice", "--on", "nas"))[1]
@@ -180,7 +180,7 @@ func TestSignersAreNamedByPerson(t *testing.T) {
 func TestRemovingAKeyNamesThePerson(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop", "--admin-name", "alice")
+	c.mustRun("create", "home", "--device", "laptop", "--admin-name", "alice")
 	bob := newCLI(t)
 	key := regexp.MustCompile(`juist admins add bob (nid:\S+)`).FindStringSubmatch(
 		bob.mustRun("admins", "new", "bob", "--on", "bobpc"))[1]
@@ -204,7 +204,7 @@ func TestARenumberingApprovedTooLateSaysSo(t *testing.T) {
 	dir := workDir(t)
 	first, second := newCLI(t), newCLI(t)
 	key := regexp.MustCompile(`(nid:\S+)`).FindString(second.mustRun("admins", "new", "second"))
-	first.mustRun("init", "home", "--device", "laptop", "--admin", "second="+key)
+	first.mustRun("create", "home", "--device", "laptop", "--admin", "second="+key)
 	enrollDevice(t, first, "phone")
 	first.mustRun("admins", "quorum", "2", "--yes")
 	first.mustRun("network", "renumber", "10.7.0.0/24", "--for", "1s", "--yes")
@@ -212,16 +212,35 @@ func TestARenumberingApprovedTooLateSaysSo(t *testing.T) {
 	mustContain(t, second.mustRun("approve", "--yes", filepath.Join(dir, "renumber.rec")), "deadline has passed")
 }
 
+// One approved close to its deadline says how little of the transition is
+// left, since the deadline was fixed when it was proposed.
+func TestARenumberingApprovedLateSaysHowMuchIsLeft(t *testing.T) {
+	t.Parallel()
+	dir := workDir(t)
+	first, second := newCLI(t), newCLI(t)
+	key := regexp.MustCompile(`(nid:\S+)`).FindString(second.mustRun("admins", "new", "second"))
+	first.mustRun("create", "home", "--device", "laptop", "--admin", "second="+key)
+	enrollDevice(t, first, "phone")
+	first.mustRun("admins", "quorum", "2", "--yes")
+	out := first.mustRun("network", "renumber", "10.7.0.0/24", "--for", "7d", "--yes")
+	if strings.Contains(out, "BUT") {
+		t.Fatalf("a renumbering with its whole transition ahead warns:\n%s", out)
+	}
+	advance(t, 6*24*time.Hour)
+	mustContain(t, second.mustRun("approve", "--yes", filepath.Join(dir, "renumber.rec")),
+		"BUT only 24h of that is left", "--for")
+}
+
 // An old address past its deadline still blocks until the renumbering is
 // finished, which the refusal says; finishing warns of nothing that stopped.
 func TestAnOldAddressPastItsDeadline(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop")
 	enrollDevice(t, c, "phone")
-	c.mustRun("network", "renumber", "phone", "198.18.0.9", "--for", "1s", "--yes")
+	c.mustRun("network", "renumber", "phone", "198.18.4.9", "--for", "1s", "--yes")
 	advance(t, 2*time.Second)
-	if _, err := c.run("network", "renumber", "laptop", "198.18.0.2", "--yes"); err == nil ||
+	if _, err := c.run("network", "renumber", "laptop", "198.18.4.2", "--yes"); err == nil ||
 		!strings.Contains(err.Error(), "--finish") {
 		t.Errorf("moving onto an old address past its deadline: %v, want the way to free it", err)
 	}
@@ -235,10 +254,10 @@ func TestAnOldAddressPastItsDeadline(t *testing.T) {
 func TestMovingBackIsNoLoss(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop")
 	enrollDevice(t, c, "phone")
-	c.mustRun("network", "renumber", "phone", "198.18.0.9", "--yes")
-	if out := c.mustRun("network", "renumber", "phone", "198.18.0.2", "--yes"); strings.Contains(out, "stop working now") {
+	c.mustRun("network", "renumber", "phone", "198.18.4.9", "--yes")
+	if out := c.mustRun("network", "renumber", "phone", "198.18.4.2", "--yes"); strings.Contains(out, "stop working now") {
 		t.Errorf("moving back warned of a loss:\n%s", out)
 	}
 }
@@ -318,19 +337,102 @@ func TestStatusCallsAnOfflineDeviceOffline(t *testing.T) {
 func TestRenumberingAsksOnce(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop")
 	enrollDevice(t, c, "phone")
 	enrollDevice(t, c, "tablet")
 	c.mustRun("remove", "tablet", "--yes")
-	c.mustRun("network", "renumber", "phone", "198.18.0.9", "--yes")
+	c.mustRun("network", "renumber", "phone", "198.18.4.9", "--yes")
 	// Onto the removed tablet's address, cutting the phone's old one short:
 	// two warnings, one question.
-	out, err := c.answer("y", "network", "renumber", "phone", "198.18.0.3")
+	out, err := c.answer("y", "network", "renumber", "phone", "198.18.4.3")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	mustContain(t, out, "was tablet's", "retire now")
 	if n := strings.Count(out, "[y/N]"); n != 1 {
 		t.Errorf("asked %d times:\n%s", n, out)
+	}
+}
+
+// A range every address of which went to a device once is full, however few
+// members are left in it: none is handed out twice. The error says how to
+// make room rather than only that there is none.
+func TestARangeFullByHistorySaysHowToGrow(t *testing.T) {
+	t.Parallel()
+	admin, _ := types.GenerateIdentity()
+	st := log.NewMemStorage()
+	first := testNode(t, "n0")
+	v4 := netip.MustParseAddr("10.7.0.1")
+	first.V4 = &v4
+	prefix := netip.MustParsePrefix("10.7.0.0/28")
+	g, err := log.Genesis("net", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "a", Holder: "a"}},
+		[]types.Hash{{1}}, []types.NodeRecord{first}, sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.State.V4Prefix = &prefix
+	if err := g.Sign(admin); err != nil {
+		t.Fatal(err)
+	}
+	auth, err := log.Create(st, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := func() []types.AUM {
+		hs, _ := auth.Chain()
+		var out []types.AUM
+		for _, h := range hs {
+			a, _ := st.AUM(h)
+			out = append(out, a)
+		}
+		return out
+	}
+	inform := func(a types.AUM, err error) {
+		t.Helper()
+		if err == nil {
+			err = a.Sign(admin)
+		}
+		if err == nil {
+			err = auth.Inform(a)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 20 {
+		a, err := nextV4(auth.State(), history())
+		if err != nil {
+			if !strings.Contains(err.Error(), "juist network renumber") || len(auth.State().Nodes()) != 1 {
+				t.Fatalf("after %d admissions, with %d members: %v", i, len(auth.State().Nodes()), err)
+			}
+			return
+		}
+		n := testNode(t, fmt.Sprintf("n%d", i+1))
+		n.V4 = &a
+		inform(auth.Builder().AddNode(n, sealer()))
+		inform(auth.Builder().RemoveNode(n.Identity, sealer()))
+	}
+	t.Fatal("a /28 took twenty admissions")
+}
+
+// A move at once reads as one to the admin who approves it, however late.
+func TestAMoveAtOnceReadsAsOne(t *testing.T) {
+	t.Parallel()
+	dir := workDir(t)
+	first, second := newCLI(t), newCLI(t)
+	key := regexp.MustCompile(`(nid:\S+)`).FindString(second.mustRun("admins", "new", "second"))
+	first.mustRun("create", "home", "--device", "laptop", "--admin", "second="+key)
+	enrollDevice(t, first, "phone")
+	first.mustRun("admins", "quorum", "2", "--yes")
+	mustContain(t, first.mustRun("network", "renumber", "phone", "198.18.4.9", "--finish", "--yes"),
+		"needs 1 more vote")
+	advance(t, 3*24*time.Hour)
+	out := second.mustRun("approve", "--yes", filepath.Join(dir, "renumber-phone.rec"))
+	mustContain(t, out, "to 198.18.4.9 at once", "retires its old address now")
+	out = first.mustRun("approve", filepath.Join(dir, "renumber-phone.rec"))
+	mustContain(t, out, "moves phone", "to 198.18.4.9 at once",
+		"retires 198.18.4.2 now: devices not told yet reach the device over IPv6 only", "applied")
+	if strings.Contains(out, "BUT") || strings.Contains(out, "1970") || strings.Contains(out, "until") {
+		t.Fatalf("a move at once reads as a transition that ran out:\n%s", out)
 	}
 }

@@ -47,6 +47,7 @@ const (
 	envPort      = "JUIST_NETNS_PORT"
 	envPeers     = "JUIST_NETNS_PEERS"
 	envTCPListen = "JUIST_NETNS_TCP_LISTEN"
+	envInstance  = "JUIST_NETNS_INSTANCE"
 	envTCPDial   = "JUIST_NETNS_TCP_DIAL"
 	envTCPBytes  = "JUIST_NETNS_TCP_BYTES"
 
@@ -113,6 +114,14 @@ type netnsNode struct {
 	tun      string
 	underlay netip.Addr
 	addrs    []netip.Prefix
+
+	// inst is the host instance the node is, which picks its routing table,
+	// and udpPort its data plane's port, underlayPort where zero. sharesNS
+	// is set on a second instance in another node's namespace, which that
+	// node's cleanup deletes.
+	inst     int
+	udpPort  int
+	sharesNS bool
 
 	nodeKey   key.NodePrivate
 	discoPriv [32]byte
@@ -276,6 +285,60 @@ func (l *netnsLab) newDetachedNode(name string, host int) *netnsNode {
 	return n
 }
 
+// listenPort is the UDP port the node's data plane binds.
+func (n *netnsNode) listenPort() int {
+	if n.udpPort != 0 {
+		return n.udpPort
+	}
+	return underlayPort
+}
+
+// addInstance adds a node to host's namespace as another juist instance, as a
+// host in two networks runs: a device, keys and port of its own, and inst's
+// routing table. octet numbers its overlay addresses and node ID.
+func (l *netnsLab) addInstance(host *netnsNode, name string, octet, inst int) *netnsNode {
+	t := l.t
+	t.Helper()
+	discoPriv, discoPub, err := NewDiscoKey()
+	if err != nil {
+		t.Fatalf("generating a disco key: %v", err)
+	}
+	n := &netnsNode{
+		lab: l, name: name, id: uint64(octet),
+		ns: host.ns, veth: host.veth, port: host.port, underlay: host.underlay, public: host.public,
+		tun:     "jt" + name + l.tag,
+		nodeKey: key.NewNode(), discoPriv: discoPriv, discoPub: discoPub,
+		addrs: []netip.Prefix{
+			netip.MustParsePrefix(fmt.Sprintf("100.64.0.%d/32", octet)),
+			netip.MustParsePrefix(fmt.Sprintf("fd7a:115c:a1e0::%d/128", octet)),
+		},
+		inst: inst, udpPort: underlayPort + 10*inst, sharesNS: true,
+		lines: make(chan string, 16), exited: make(chan struct{}),
+	}
+	l.nodes = append(l.nodes, n)
+	return n
+}
+
+// restart stops the node's helper and starts another on addrs, as a daemon
+// restarts on new addresses.
+func (n *netnsNode) restart(addrs []netip.Prefix, peers []*netnsNode) {
+	n.lab.t.Helper()
+	n.stop()
+	n.mu.Lock()
+	n.gone = false
+	n.mu.Unlock()
+	n.cmd, n.addrs = nil, addrs
+	n.lines, n.exited, n.waitErr = make(chan string, 16), make(chan struct{}), nil
+	n.start(peers, 0)
+}
+
+// viewOf is n as a peer that holds addrs for it sees it: what a member whose
+// log is behind, or ahead, installs.
+func viewOf(n *netnsNode, addrs ...netip.Prefix) *netnsNode {
+	return &netnsNode{id: n.id, nodeKey: n.nodeKey, discoPub: n.discoPub, addrs: addrs,
+		underlay: n.underlay, udpPort: n.udpPort}
+}
+
 // start runs the node's helper inside its namespace and waits for it to report
 // a live manager. tcpEcho, when non-zero, is a TCP port the helper accepts and
 // echoes on.
@@ -294,7 +357,8 @@ func (n *netnsNode) start(peers []*netnsNode, tcpEcho int) {
 		envDiscoKey+"="+rawHex(n.discoPriv),
 		envAddrs+"="+joinPrefixes(n.addrs),
 		envTun+"="+n.tun,
-		envPort+"="+strconv.Itoa(underlayPort),
+		envPort+"="+strconv.Itoa(n.listenPort()),
+		envInstance+"="+strconv.Itoa(n.inst),
 		envPeers+"="+encodePeers(peers),
 	)
 	cmd.Env = append(cmd.Env, n.env...)
@@ -478,6 +542,9 @@ func (l *netnsLab) cleanup() {
 		n.stop()
 	}
 	for _, n := range l.nodes {
+		if n.sharesNS {
+			continue
+		}
 		if out, err := exec.Command(l.ip, "netns", "del", n.ns).CombinedOutput(); err != nil {
 			l.t.Logf("deleting namespace %s: %v: %s", n.ns, err, strings.TrimSpace(string(out)))
 		}
@@ -503,7 +570,7 @@ func encodePeers(peers []*netnsNode) string {
 			p.nodeKey.Public().String(),
 			rawHex(p.discoPub),
 			joinPrefixes(p.addrs),
-			netip.AddrPortFrom(p.underlay, underlayPort).String(),
+			netip.AddrPortFrom(p.underlay, uint16(p.listenPort())).String(),
 		}, "|"))
 	}
 	return strings.Join(out, ";")

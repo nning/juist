@@ -3,7 +3,7 @@
 // how this device is connected. juistd, the daemon, carries the traffic;
 // this tool holds the admin keys and never hands them to it.
 //
-//	juist init home          # a new network, with this device in it
+//	juist create home        # a new network, with this device in it
 //	juist invite             # prints a code for the next device
 //	juist join 42-…          # on that device
 package main
@@ -42,7 +42,8 @@ const (
 )
 
 var commands = []command{
-	{name: "init", group: groupStart, summary: "create a network with this device in it", run: cmdInit},
+	{name: "create", aliases: []string{"init"}, group: groupStart, summary: "create a network with this device in it",
+		run: cmdCreate},
 	{name: "invite", group: groupStart, summary: "invite a device", run: cmdInvite},
 	{name: "join", group: groupStart, summary: "join a network", run: cmdJoin},
 
@@ -81,7 +82,8 @@ type subcommand struct {
 }
 
 func (f family) run(a *app, args []string) error {
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+	// "juist network home" is the first subcommand, for network home.
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") || !f.hasSub(args[0]) && a.namesNetwork(args[0]) {
 		return f.subs[0].run(a, args)
 	}
 	sub, rest := args[0], args[1:]
@@ -91,6 +93,10 @@ func (f family) run(a *app, args []string) error {
 		}
 	}
 	return fmt.Errorf("unknown subcommand %q%s\nhint: %s --help", sub, didYouMean(sub, f.names()...), f.name)
+}
+
+func (f family) hasSub(name string) bool {
+	return slices.ContainsFunc(f.subs, func(s subcommand) bool { return s.name == name || slices.Contains(s.aliases, name) })
 }
 
 func (f family) names() []string {
@@ -157,10 +163,14 @@ Other:
   help      show help, or a command's
   version   print the version
 
+On a device in several networks, a command about one takes it first, by its
+name or its juistd's (juist1): juist devices home. Listings show them all.
+
 Options for every command:
-  -H, --home DIR     keystore (default $JUIST_HOME, or ~/.config/juist)
-  -s, --socket PATH  juistd's socket (default $JUIST_SOCKET, or the service's)
-  -h, --help         show a command's help
+  -H, --home DIR       keystore (default $JUIST_HOME, or ~/.config/juist)
+  -s, --socket PATH    juistd's socket (default $JUIST_SOCKET, or the service's)
+      --network NAME   the network, as NETWORK first does ($JUIST_NETWORK)
+  -h, --help           show a command's help
 `)
 }
 
@@ -231,6 +241,12 @@ func (a *app) dispatch(args []string) error {
 		fmt.Fprintf(a.out, "juist %s\n", version())
 		return nil
 	}
+	if name == "__manpage" {
+		return a.manpage(a.out)
+	}
+	if name == "__instance" {
+		return a.runCommand(&command{name: name, run: cmdInstance}, g, rest)
+	}
 	if name == "--version" || name == "-v" || name == "-V" {
 		return fmt.Errorf("unknown option %s; use: juist version", name)
 	}
@@ -248,15 +264,16 @@ func (a *app) dispatch(args []string) error {
 // of the few every command takes.
 func unknownGlobal(arg string) error {
 	name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
-	if _, ok := lookup(name); ok {
-		return fmt.Errorf("unknown option %s; did you mean: juist %s?", arg, name)
+	if c, ok := lookup(name); ok {
+		return fmt.Errorf("unknown option %s; did you mean: juist %s?", arg, c.name)
 	}
-	for _, g := range []string{"home", "socket"} {
+	for _, g := range []string{"home", "socket", "network"} {
 		if cliflag.EditDistance(name, g) <= 2 || strings.HasPrefix(g, name) && name != "" {
 			return fmt.Errorf("unknown option %s; did you mean --%s?", arg, g)
 		}
 	}
-	return fmt.Errorf("unknown option %s\nhint: only -H and -s go before the command; its own options follow it", arg)
+	return fmt.Errorf("unknown option %s\nhint: only -H, -s and --network go before the command; its own "+
+		"options follow it", arg)
 }
 
 func unknownCommand(name string) error {
@@ -274,6 +291,7 @@ func (a *app) runCommand(c *command, g globals, args []string) error {
 	}
 	a.home, a.homeExplicit = h, g.homeExplicit
 	a.socket, a.socketExplicit = g.socket, g.socket != ""
+	a.network, a.networkFromEnv = g.network, g.networkFromEnv
 	return c.run(a, args)
 }
 
@@ -282,15 +300,19 @@ type globals struct {
 	home         string
 	homeExplicit bool
 	socket       string
+	network      string
+	// networkFromEnv says network is $JUIST_NETWORK's, not --network's.
+	networkFromEnv bool
 }
 
 // globalShorts spell the global options with one letter.
 var globalShorts = map[string]string{"H": "home", "s": "socket"}
 
-// extractGlobals takes --home and --socket out of args wherever they appear,
-// so they can be given before or after the command.
+// extractGlobals takes --home, --socket and --network out of args wherever
+// they appear, so they can be given before or after the command.
 func extractGlobals(args []string) (globals, []string, error) {
-	g := globals{home: defaults.Home(), socket: os.Getenv("JUIST_SOCKET")}
+	g := globals{home: defaults.Home(), socket: os.Getenv("JUIST_SOCKET"), network: os.Getenv("JUIST_NETWORK")}
+	g.networkFromEnv = g.network != ""
 	_, g.homeExplicit = os.LookupEnv("JUIST_HOME")
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
@@ -303,28 +325,34 @@ func extractGlobals(args []string) (globals, []string, error) {
 		name, value, hasValue := strings.Cut(body, "=")
 		if short, ok := strings.CutPrefix(arg, "-"); ok && !isLong {
 			n, v, has := strings.Cut(short, "=")
-			if n == "home" || n == "socket" {
+			if n == "home" || n == "socket" || n == "network" {
 				return g, nil, fmt.Errorf("%s: an option's full name takes two dashes, as --%s", arg, n)
 			}
 			if long, ok := globalShorts[n]; ok {
 				isLong, name, value, hasValue = true, long, v, has
 			}
 		}
-		if !isLong || (name != "home" && name != "socket") {
+		if !isLong || (name != "home" && name != "socket" && name != "network") {
 			out = append(out, arg)
 			continue
 		}
 		if !hasValue {
 			if i+1 >= len(args) {
+				if name == "network" {
+					return g, nil, fmt.Errorf("%s needs a network's name", arg)
+				}
 				return g, nil, fmt.Errorf("%s needs a path", arg)
 			}
 			i++
 			value = args[i]
 		}
-		if name == "home" {
+		switch name {
+		case "home":
 			g.home, g.homeExplicit = value, true
-		} else {
+		case "socket":
 			g.socket = value
+		default:
+			g.network, g.networkFromEnv = value, false
 		}
 	}
 	return g, out, nil

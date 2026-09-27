@@ -58,7 +58,7 @@ func peerAddrs(t *testing.T, mgr *fakeManager, dev *device) []netip.Prefix {
 
 // A member renumbered on its own is reached at both addresses until the
 // deadline, and at the new one only after it; and the status names the
-// members not seen holding the change until they are.
+// members not seen holding the change until they are, past the deadline too.
 func TestARenumberedPeerIsReachedAtBothAddressesUntilTheDeadline(t *testing.T) {
 	c := &clock{now: time.Unix(1_700_000_000, 0)}
 	f := newReconcileFixtureWith(t, 3, func(o *Options) { o.Clock = c.get })
@@ -101,8 +101,16 @@ func TestARenumberedPeerIsReachedAtBothAddressesUntilTheDeadline(t *testing.T) {
 	if got, want := peerAddrs(t, f.mgr, peer), []netip.Prefix{v6, moved}; !slices.Equal(got, want) {
 		t.Errorf("after the deadline the peer is at %v, want %v", got, want)
 	}
-	if st := f.d.Status(); st.Unmoved != nil || st.Devices[i].Retiring != "" {
-		t.Errorf("after the deadline the status still follows a renumbering: %v, %q", st.Unmoved, st.Devices[i].Retiring)
+	if st := f.d.Status(); !slices.Equal(st.Unmoved, []string{other.record.Name}) || st.Devices[i].Retiring != "" {
+		t.Errorf("after the deadline the status has %v not moved, the peer retiring %q; want %v and none",
+			st.Unmoved, st.Devices[i].Retiring, other.record.Name)
+	}
+	f.d.onHave(other.record.Identity, []types.Hash{rec.Hash()})
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.d.Status(); st.Unmoved != nil {
+		t.Errorf("once every member holds the change, the status still names %v", st.Unmoved)
 	}
 }
 

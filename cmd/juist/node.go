@@ -85,6 +85,10 @@ type node interface {
 
 	// converse runs a conversation with the daemon, such as an invite.
 	converse(ctx context.Context, req ipc.Request, handle eventHandler) error
+
+	// waiting hands the daemon changes waiting for votes, and returns every
+	// one it holds; errNoDaemon where none runs.
+	waiting(hand [][]byte) ([][]byte, error)
 }
 
 // An eventHandler answers a daemon's events in a conversation; an error hangs up.
@@ -94,11 +98,13 @@ type eventHandler = func(ctx context.Context, e *ipc.Event, reply func(ipc.Reque
 type resetStanding struct {
 	network string
 	member  bool
+	// members is how many devices the network lists.
+	members int
 	// logOnly is a keystore that holds a network's log and no device.
 	logOnly bool
 }
 
-var errNoNetwork = errors.New("not in a network\nhint: juist join CODE, or juist init")
+var errNoNetwork = errors.New("not in a network\nhint: juist join CODE, or juist create")
 
 // An operatorChoice is who should operate the daemon after a create or join.
 type operatorChoice struct {
@@ -112,6 +118,10 @@ type daemonNode struct {
 	sock string
 	st   *ipc.Status
 	home *home
+
+	// elsewhere are the networks the host is in through its other
+	// instances, which a join through this one refuses.
+	elsewhere []types.Hash
 
 	// auth is the log as last verified, and verified the records it was
 	// verified from: what is sent on is exactly what was checked.
@@ -238,6 +248,14 @@ func (n *daemonNode) apply(records []types.AUM) error {
 	return nil
 }
 
+func (n *daemonNode) waiting(hand [][]byte) ([][]byte, error) {
+	resp, err := n.call(ipc.Request{Command: ipc.CmdWaiting, Waiting: hand})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Waiting, nil
+}
+
 func (n *daemonNode) self() (*ipc.Self, error) {
 	resp, err := n.call(ipc.Request{Command: ipc.CmdSelf})
 	if err != nil {
@@ -263,7 +281,7 @@ func (n *daemonNode) create(genesis types.AUM, op operatorChoice) error {
 func (n *daemonNode) join(ctx context.Context, invite, name string, op operatorChoice,
 	progress func(guest.Event)) (*enroll.Admission, error) {
 	resp, err := ipc.Stream(ctx, n.sock, ipc.Request{Command: ipc.CmdJoin, Invite: invite, Name: name,
-		SetOperator: op.set, OperatorUID: op.uid}, func(e *ipc.Event) {
+		SetOperator: op.set, OperatorUID: op.uid, Elsewhere: n.elsewhere}, func(e *ipc.Event) {
 		ev := guest.Event{Kind: guest.EventKind(e.Kind), Votes: e.Votes, Quorum: e.Quorum, Words: e.Text}
 		if ev.Kind == guest.Connected {
 			ev.Words, ev.Relayed = "", e.Text == "relay"
@@ -314,7 +332,7 @@ func (n *daemonNode) standing(bool) (resetStanding, error) {
 	if !n.st.InNetwork {
 		return resetStanding{}, nil
 	}
-	return resetStanding{network: n.st.NetworkName, member: !n.st.NotMember}, nil
+	return resetStanding{network: n.st.NetworkName, member: !n.st.NotMember, members: n.st.Members}, nil
 }
 
 func (n *daemonNode) reset(force bool) error {
@@ -391,6 +409,7 @@ func (n *localNode) forget()                          {}
 func (n *localNode) setOperator(operatorChoice) error { return errNoDaemon }
 
 func (n *localNode) converse(context.Context, ipc.Request, eventHandler) error { return errNoDaemon }
+func (n *localNode) waiting([][]byte) ([][]byte, error)                        { return nil, errNoDaemon }
 
 var errNoDaemon = errors.New("juistd not running")
 
@@ -604,7 +623,7 @@ func (n *localNode) standing(force bool) (resetStanding, error) {
 	switch {
 	case err == nil:
 		state := auth.State()
-		s := resetStanding{network: state.Network(), logOnly: k == nil}
+		s := resetStanding{network: state.Network(), logOnly: k == nil, members: len(state.Nodes())}
 		if k != nil {
 			s.member = state.IsMember(k.Identity.Public())
 		}
@@ -639,10 +658,11 @@ const systemHome = "/var/lib/juist"
 // openNode finds this device's node. --socket names the daemon outright.
 // Otherwise a daemon on the home's own socket wins, then a home that holds a
 // device of its own — a developer's, or one set up before the service — and
-// then the installed service; only where none of them is there does the CLI
-// start a device in the home itself. What it must never do is quietly enroll
-// a device in the keystore while the installed service sits outside the
-// network.
+// then the installed service, or of its instances the one the command is
+// about (instances.go); only where none of them is there does the CLI start
+// a device in the home itself. What it must never do is quietly enroll a
+// device in the keystore while the installed service sits outside the
+// network. --network names one of the host's instances and nothing else.
 func (a *app) openNode() (node, error) {
 	if a.node != nil {
 		return a.node, nil
@@ -667,27 +687,35 @@ func (a *app) openNode() (node, error) {
 		}
 		return nil, fmt.Errorf("juistd not running at %s", a.socket)
 	}
+	if a.network != "" {
+		return a.hostNode()
+	}
 	if ok, err := try(ipc.SocketPath(a.home.path)); ok || err != nil {
 		return a.node, err
 	}
 	if holdsNode(a.home) {
 		if statedir.HomeInUse(a.home.path) {
 			// A daemon runs from this directory: its state is changed through
-			// it, never behind its back.
-			if ok, err := try(ipc.SystemSocket); ok || err != nil {
+			// it, never behind its back. The packaged ones' sockets follow
+			// from their homes.
+			sock := ipc.SystemSocket
+			if n, ok := a.host.homeOf(a.home.path); ok {
+				sock = a.host.socket(n)
+			}
+			if ok, err := try(sock); ok || err != nil {
 				return a.node, err
 			}
 			return nil, fmt.Errorf("juistd owns %s\nhint: use --socket, or drop --home", a.home.path)
 		}
-		if serviceInstalled() && !a.homeExplicit {
+		if a.serviceInstalled() && !a.homeExplicit {
 			a.warn("juistd not running for %s; using %s", systemHome, a.home.path)
 		}
 		return a.localNode()
 	}
-	if ok, err := try(ipc.SystemSocket); ok || err != nil {
-		return a.node, err
+	if n, err := a.hostNode(); n != nil || err != nil {
+		return n, err
 	}
-	if serviceInstalled() {
+	if a.serviceInstalled() {
 		return nil, errors.New("juistd not running\nhint: sudo systemctl enable --now juistd")
 	}
 	return a.localNode()
@@ -706,8 +734,8 @@ func (a *app) localNode() (node, error) {
 	return a.node, nil
 }
 
-func serviceInstalled() bool {
-	_, err := os.Stat(systemHome)
+func (a *app) serviceInstalled() bool {
+	_, err := os.Stat(a.host.stateDir)
 	return err == nil
 }
 

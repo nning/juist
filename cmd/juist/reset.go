@@ -9,14 +9,17 @@ import (
 
 	"github.com/nning/juist/internal/statedir"
 
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/keys"
 )
 
 func cmdReset(a *app, args []string) error {
 	s := spec{name: "juist reset", about: `
-Forget the network and this device's keys, log, peers and operator, as on a
-fresh install. Admin keys are kept. A device the network still lists needs
---force; remove it first where possible.`}
+Forget the network and this device's keys, log, peers and operator for it,
+as on a fresh install. Admin keys are kept. A device the network still lists
+needs --force; remove it first where possible. On a device in several
+networks only the one named is forgotten, with its juistd unless that is
+the default; the others keep their keys.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	force := fs.Bool("force", false, "reset even if the network still lists this device")
@@ -38,9 +41,30 @@ fresh install. Admin keys are kept. A device the network still lists needs
 		return fmt.Errorf("this keystore holds %q's log and no device; a reset deletes it\nhint: --force",
 			st.network)
 	}
+	if st.member && st.members == 1 {
+		a.warn("this device is the only one in %q: the network ends with it", st.network)
+	}
+	others := a.otherNetworks()
+	inst := 0
+	if a.instance != nil {
+		inst = a.instance.n
+	}
 	q := "reset this device, with new keys?"
-	if st.network != "" {
+	switch {
+	case st.network != "" && inst > 0:
+		q = fmt.Sprintf("forget %q, with this device's keys for it and its juistd (%s)?", st.network,
+			instance.Name(inst))
+	case st.network != "" && len(others) > 0:
+		q = fmt.Sprintf("forget %q, with this device's keys for it?", st.network)
+	case st.network != "":
 		q = fmt.Sprintf("forget %q and reset this device, with new keys?", st.network)
+	}
+	switch len(others) {
+	case 0:
+	case 1:
+		a.printf("%s\n", a.dim(others[0]+" stays as it is, with its keys"))
+	default:
+		a.printf("%s\n", a.dim(strings.Join(others, " and ")+" stay as they are, with their keys"))
 	}
 	if err := a.proceed(*yes, q); err != nil {
 		return err
@@ -48,7 +72,19 @@ fresh install. Admin keys are kept. A device the network still lists needs
 	if err := n.reset(*force); err != nil {
 		return err
 	}
-	a.ok("reset; new keys, no network")
+	switch {
+	case st.network != "" && (inst > 0 || len(others) > 0):
+		a.ok("left %q", st.network)
+	default:
+		a.ok("reset; new keys, no network")
+	}
+	if i := a.instance; i != nil && i.n > 0 {
+		// A network beside the default one had a juistd of its own, which
+		// goes with it.
+		if err := a.dropInstance(i.n, *yes); err != nil {
+			return err
+		}
+	}
 	if entries, err := os.ReadDir(a.home.join(keys.AdminsDir)); err == nil && len(entries) > 0 {
 		a.printf("%s\n", a.dim("admin keys kept in "+a.home.join(keys.AdminsDir)))
 	}

@@ -17,12 +17,21 @@ import (
 func cmdDevices(a *app, args []string) error {
 	s := spec{name: "juist devices", about: `
 List the network's devices and how juistd last reached each: directly, or
-through a relay. juistd checks every 30s.`}
+through a relay. juistd checks every 30s. On a device in several networks,
+each network's, unless NETWORK names one.`}
 	fs := newFlags(s.name)
 	long := fs.Bool("keys", false, "show identity keys")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
+	if listed, err := a.forEachNetwork(func() error { return a.listDevices(*long) }); listed {
+		return err
+	}
+	return a.listDevices(*long)
+}
+
+// listDevices is "juist devices" for one network.
+func (a *app) listDevices(long bool) error {
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
@@ -37,7 +46,11 @@ through a relay. juistd checks every 30s.`}
 	if hasDevice && !state.IsMember(self) {
 		// What the log says of the others is the old network's business.
 		a.warn("not in %q any more", state.Network())
-		a.hint("rejoin with a new invite, or start over: juist reset")
+		reset := "juist reset"
+		if a.instance != nil && (a.instance.n > 0 || len(a.networkInstances()) > 1) {
+			reset += " " + a.instance.name()
+		}
+		a.hint("rejoin with a new invite, or start over: %s", reset)
 		return nil
 	}
 
@@ -48,7 +61,7 @@ through a relay. juistd checks every 30s.`}
 			st = nil
 		}
 	}
-	if err := a.printDevices(ipc.DevicesOf(state, a.now().Unix()), self, st, *long); err != nil {
+	if err := a.printDevices(ipc.DevicesOf(state, a.now().Unix()), self, st, long); err != nil {
 		return err
 	}
 	if alarm := auth.Alarm(); alarm != nil {

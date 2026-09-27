@@ -345,3 +345,29 @@ func TestConcurrentLikeRenumberingsDoNotAlarm(t *testing.T) {
 		t.Errorf("two retirements at once stopped the network: %v", alarm)
 	}
 }
+
+// A move at once ends the old address as it applies, however late, and keeps
+// it from anyone else until the renumbering is finished; another member's
+// transition runs on.
+func TestRenumberNodeAtOnce(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	a, b := h.admitAt("a", "198.18.0.1"), h.admitAt("b", "198.18.0.2")
+	h.apply(h.auth.Builder().RenumberNode(b.Identity, netip.MustParseAddr("198.18.0.8"), 1<<40))
+	h.apply(h.auth.Builder().RenumberNode(a.Identity, netip.MustParseAddr("198.18.0.9"), types.RetireAtOnce))
+	st := h.auth.State()
+	now := int64(1_800_000_000)
+	if got, want := st.Addrs(a.Identity, now), []netip.Prefix{netip.PrefixFrom(st.Addr6(a.Identity), 128),
+		host("198.18.0.9")}; !slices.Equal(got, want) {
+		t.Errorf("a holds %v once moved at once, want %v", got, want)
+	}
+	if got := st.Addrs(b.Identity, now); !slices.Contains(got, host("198.18.0.2")) {
+		t.Errorf("b's transition ended with a's move: b holds %v", got)
+	}
+	c := h.newNode("c")
+	c.V4 = new(netip.MustParseAddr("198.18.0.1"))
+	h.mustReject("an admission at the address a left at once", RuleState, h.handAssembledAddNode(c))
+	h.apply(h.auth.Builder().RetireAddresses())
+	if n, _ := h.auth.State().Node(a.Identity); n.Retiring != nil {
+		t.Errorf("finishing left a retiring %v", n.Retiring.Addr)
+	}
+}

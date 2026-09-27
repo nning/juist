@@ -47,7 +47,11 @@ type SchemaVersion uint16
 //
 // Schema 6 renames the network ([KindRenameNetwork]). The name is a label:
 // the genesis hash stays what identifies the network.
-const CurrentSchema SchemaVersion = 6
+//
+// Schema 7 gives admin keys an encryption key ([AdminKey.Recipient],
+// [KindSetAdminRecipient]), which changes waiting for their votes are sealed
+// to.
+const CurrentSchema SchemaVersion = 7
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -68,5 +72,8 @@ const SchemaRenumber SchemaVersion = 5
 
 // SchemaRename is the first schema in which the network's name changes.
 const SchemaRename SchemaVersion = 6
+
+// SchemaSealing is the first schema in which admin keys have encryption keys.
+const SchemaSealing SchemaVersion = 7
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

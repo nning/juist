@@ -29,14 +29,58 @@ future decision has to respect. They are not a changelog. Findings that have
 been fixed do not belong there — record a constraint only while it still binds a
 decision that has not been made yet.
 
+The state of the project lives here too: which milestone is done and what
+it was validated with (`05-roadmap.md`), and the latest run of the gates CI
+cannot run (`12-validating.md`, "The last privileged run"). Record it in the
+same commit as the work, not only in an agent's own notes.
+
+## Landing changes
+
+Work lands directly on `main`, without pull requests. Fetch and rebase onto
+`origin/main` before reading code for a change or a review, and again just
+before pushing: other agents push to `main` meanwhile. Review rounds are one
+commit each, `M<N> review <k>: …`.
+
+A fix for a finding comes with a regression test that fails against the code
+before the fix: revert the fix, watch the test fail, restore it. A test that
+exists for a scenario is not evidence that the scenario works.
+
 ## Gates
 
 `make check` is what CI runs; it must pass before pushing. `make cross` builds
-every v1 target platform. `make ci` runs every CI job on the local machine,
-the privileged tests last under sudo. Claims about the embedded Tailscale stack are verified
-against the pinned module cache, not from memory.
+every v1 target platform; run it whenever a build-tagged file changes, which
+`make check` does not compile for other platforms. `make ci` runs every CI job
+on the local machine, the privileged tests last under sudo. After pushing,
+check with `gh run view` that CI's jobs started at all. Claims about the
+embedded Tailscale stack are verified against the pinned module cache
+(`~/go/pkg/mod/tailscale.com@<version>`), not from memory.
 
-## CLI output
+The real-device and netns tests (`conn/osplumbing_test.go`,
+`conn/netns*_linux_test.go`) skip without root, `/dev/net/tun` and network
+namespaces, as in a container. A skip is not a pass: say which gates did not
+run. They are safe to run beside a juistd in a network. Each round of these
+tests on another machine is expensive, so a change to the harness carries the
+diagnostic that would answer the next question as well.
+
+## Hand tests and packaging
+
+Recipes for hand tests target Fedora as well as Debian: `dnf`, firewalld, and
+SELinux as a suspect where file capabilities do not take. Anything tested by
+installing it is tested as the package, and the package removes cleanly; what
+it leaves on purpose (the `juist` user, the keys in `/var/lib/juist`) is said.
+A host running tailscaled is a normal test host; what juist must not share
+with it is in `07-embedding-notes.md`, "Sharing a host with tailscaled".
+
+## CLI
+
+Few commands, each clear on its own. Every option has a default that makes it
+unnecessary to give, and the important ones can be overridden. No command asks
+which network or device is meant: where that is ambiguous it stops and says
+what to add. New commands go through the command table and helpers in
+`cmd/juist` (`cli.go`, `changes.go`), and are tested through the in-process
+app with injected output, never `os.Stdout`.
+
+### Output
 
 juist speaks like a Unix tool, not a chat: one line per outcome, lowercase,
 no trailing period, no ✓. Warnings are `warning: …` and suggestions `hint: …`,

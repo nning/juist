@@ -34,18 +34,20 @@ func TestIPCMessageRoundTrip(t *testing.T) {
 func TestEachCommandTakesItsOwnFields(t *testing.T) {
 	base := map[Command]Request{
 		CmdStatus: {}, CmdBootstrap: {}, CmdLog: {}, CmdSelf: {}, CmdUnstage: {}, CmdRotate: {}, CmdReset: {},
+		CmdWaiting:     {},
 		CmdInform:      {Records: [][]byte{{1}}},
 		CmdCreate:      {Records: [][]byte{{1}}},
 		CmdJoin:        {Invite: "7-acme-adviser-aimless"},
 		CmdSetOperator: {SetOperator: true},
 		CmdInvite:      {Offer: &InviteOffer{Expires: 60}},
 		CmdInviteReply: {Reply: &InviteReply{Refused: "no"}},
-		cmdInvalid:     {}, Command(14): {}, Command(200): {},
+		cmdInvalid:     {}, Command(15): {}, Command(200): {},
 	}
 	accepts := map[Command][]string{
 		CmdStatus: {"Probe"}, CmdLog: {"Orphans"}, CmdRotate: {"Identity"}, CmdReset: {"Force"},
 		CmdInform: {"Records"}, CmdCreate: {"SetOperator"}, CmdJoin: {"Invite", "Name", "SetOperator"},
 		CmdSetOperator: {"SetOperator", "OperatorUID"}, CmdInvite: {"Offer"}, CmdInviteReply: {"Reply"},
+		CmdWaiting: {"Waiting"},
 	}
 	fields := map[string]func(*Request){
 		"Records":     func(r *Request) { r.Records = append(r.Records, []byte{2}) },
@@ -59,10 +61,11 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 		"Orphans":     func(r *Request) { r.Orphans = true },
 		"Probe":       func(r *Request) { r.Probe = true },
 		"Force":       func(r *Request) { r.Force = true },
+		"Waiting":     func(r *Request) { r.Waiting = append(r.Waiting, []byte{3}) },
 	}
 	for cmd, req := range base {
 		req.Command = cmd
-		valid := cmd >= CmdStatus && cmd <= CmdReset
+		valid := cmd >= CmdStatus && cmd <= CmdWaiting
 		if err := req.validate(); (err == nil) != valid {
 			t.Errorf("%v alone: %v", cmd, err)
 		}

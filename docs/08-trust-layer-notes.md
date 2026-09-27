@@ -306,12 +306,12 @@ Staging now happens only once the record exists. Likewise a member name is
 checked against `types.ValidateName` where the device chooses it, because the
 alternative is that the device persists a name the schema will not accept, prints
 an enrollment command built around it, and the limit is discovered by a different
-operator on a different machine. `init` validates every name it was given before
+operator on a different machine. `create` (then `init`) validates every name it was given before
 writing any of the three files a ceremony cannot simply be re-run over.
 
 **The genesis ceremony has to be completable by the tool that starts it.** A
 k-of-n genesis cannot be authorized on the machine that builds it — that is what
-the threshold means — so `init` builds the record, signs it with whatever local
+the threshold means — so `create` builds the record, signs it with whatever local
 key exists, and, if that does not reach k, writes it to `genesis-NETWORK.rec` and stops.
 The other admins sign it where their keys are (`juist approve` works on a keystore
 with no network, and reports a genesis against the policy the record itself
@@ -319,7 +319,7 @@ declares, via `log.GenesisStatus`), and `juist apply` on a home directory with
 no network creates it. Previously the record was built in memory and discarded
 on failure, so the one artefact that had to travel was the one thing thrown
 away — while the admin key and break-glass secrets it commits to were already on
-disk under files a second `init` refuses to overwrite. The ceremony could be
+disk under files a second `create` refuses to overwrite. The ceremony could be
 neither finished nor restarted, and the error advised performing it "where the
 keys are", which is the one place a threshold guarantees they are not.
 
@@ -578,6 +578,9 @@ keep:
   operator choose again.
 - **IPv6 does not move.** It follows from the identity key, so no record can
   claim one; `RotateIdentity` is the only way to change it.
+- **A deadline of `RetireAtOnce` is a move at once**, not a transition that
+  ran out: the log treats it as any past deadline, and what is shown to an
+  admin must say which it is.
 
 ## Renaming
 
@@ -586,6 +589,22 @@ Schema 6 changes the network's name. The rule a later change has to keep:
 admissions name it by its genesis hash, and so must anything added later. A
 name keyed on locally, as the keystore's break-glass and genesis files are,
 is the one it had when that was written, and stays so.
+
+## Admin encryption keys
+
+Schema 7 gives admin keys an encryption key, which changes waiting for votes
+are sealed to (M5b). The rules a later change has to keep:
+
+- **Only the key sets its own.** A `SetAdminRecipient` needs the subject key's
+  signature as well as the quorum, and a genesis naming one is signed by that
+  key; `AddAdminKey` carries none. Otherwise a quorum could have what is sealed
+  to an admin sealed to a key of its own choosing. A checkpoint a device
+  bootstraps from is the exception, taken on its signers' word like the rest
+  of what it states.
+- **It is derived from the admin key's seed**, under a label of its own, so no
+  file holds one without the other.
+- **Nothing in the log is sealed to it.** It decides who can read a change
+  before it counts, never whether it counts.
 
 ## Not built in M1, on purpose
 
@@ -604,7 +623,7 @@ everything by construction. Whoever consumes route grants **must subtract the
 overlay space** — the genesis-derived ULA /48 and the overlay v4 ranges — when rendering
 `AllowedIPs` and filter destinations. Without that subtraction, an exit-node
 grant would re-open exactly the member-to-member interception the overlap rule
-exists to prevent. The rule is stated in `types.ValidateRoute`; M6's exit
+exists to prevent. The rule is stated in `types.ValidateRoute`; M6a's exit
 criterion (2) is where it gets proven.
 
 ## Verification

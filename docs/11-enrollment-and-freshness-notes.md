@@ -12,7 +12,7 @@ invite on the LAN), and the CLI in `cmd/juist`.
 
 ## The command line is the product loop
 
-`init`, `invite`, `join`, `status`, `devices`, `remove`, `rotate` are what a
+`create`, `invite`, `join`, `status`, `devices`, `remove`, `rotate` are what a
 person uses; `grant`, `approve`, `apply`, `admins` and `log` are what an admin
 of a multi-admin network uses. Records, keys and the log directory are no
 longer things an operator handles by hand. Every command that changes the
@@ -21,11 +21,12 @@ key that has a part in the record, apply it if that authorizes it, and
 otherwise write it to the working directory for the other admins. Pending is an
 outcome, not an error: with a quorum above one no machine can finish a change.
 
-Defaults a user does not have to choose: `init` names the network with two
+Defaults a user does not have to choose: `create` names the network with two
 random words of the PGP word list, as Tailscale names a tailnet, the device
-after its host and the admin key after the user; the first device gets
-198.18.0.1 and the admin role, and every admitted device the next free IPv4
-address, so `ping 198.18.0.2` works without anyone having assigned it. A name
+after its host and the admin key after the user; the network numbers from a
+random /22 in 198.18/15, such as 198.18.36.0/22; the first device gets its
+first address and the admin role, and every admitted device the next free
+IPv4 address, so `ping 198.18.36.2` works without anyone having assigned it. A name
 another member uses gets a numeric suffix, because devices are removed by name.
 
 ## The daemon owns the device; the person owns the keys
@@ -342,5 +343,14 @@ Accepted, and stated here rather than fixed:
   [05-roadmap.md](05-roadmap.md) as M9.
 - **A QR code.** The link is the payload a QR would carry; rendering one is
   useful once a device can scan it (Android, M11).
-- **A removed device learning it was removed.** It keeps reporting itself
-  connected until its lease runs out, although no member accepts its handshakes.
+- **A removed device learning it was removed, where it was offline.** The
+  device a removal is applied on hands it to every member it removes before
+  it applies it: until then they are members, so this is an ordinary log
+  sync session, and afterwards the tunnel it would run through is gone
+  (`daemon/farewell.go`). A removed device that was offline then, or whose
+  tunnel the last check found down, is not told. It keeps reporting itself
+  connected, although no member accepts its handshakes. Where it is a voucher
+  itself its own leases keep its view fresh, so it never goes stale either.
+  Its catch-up would learn of the removal, but the catch-up needs a tunnel
+  too. Telling it takes a path that does not need its WireGuard peer, such
+  as a signed refusal handed over by a relay.

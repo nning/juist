@@ -362,6 +362,28 @@ func (a *Authority) Inform(aums ...types.AUM) error {
 	return nil
 }
 
+// Preview returns the state aums would lead to if informed now, storing
+// nothing: what a change does before it does it, such as whom it removes. It
+// refuses what Inform would refuse for being unreachable from the anchor; the
+// storage-side checks Inform makes after that are not run.
+func (a *Authority) Preview(aums ...types.AUM) (*State, error) {
+	ov, err := newOverlay(a.storage, aums)
+	if err != nil {
+		return nil, err
+	}
+	res, err := resolve(ov, a.anchor)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range ov.pending() {
+		if !res.reachable[p.Hash()] {
+			return nil, reject(RuleParent, fmt.Errorf("log: record %v (%v) does not descend from this node's "+
+				"anchor %v", p.Hash(), p.Kind, a.anchor))
+		}
+	}
+	return res.state, nil
+}
+
 func (a *Authority) adopt(res *resolution) {
 	a.state = res.state
 	a.orphans = res.orphans

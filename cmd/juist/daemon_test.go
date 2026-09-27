@@ -18,8 +18,8 @@ func TestTheDaemonHoldsTheDeviceAndThePersonHoldsTheKeys(t *testing.T) {
 	laptop := newDaemonDevice(t, nil)
 	mustContain(t, laptop.mustRun("status"), "no network", "juist join CODE")
 
-	mustContain(t, laptop.mustRun("init", "home", "--device", "laptop"),
-		`created network "home"`, "laptop", "198.18.0.1")
+	mustContain(t, laptop.mustRun("create", "home", "--device", "laptop"),
+		`created network "home"`, "laptop", "198.18.4.1")
 	if _, err := os.Stat(filepath.Join(laptop.state, adminsDir)); !os.IsNotExist(err) {
 		t.Fatal("an admin key was written into the daemon's state directory")
 	}
@@ -29,14 +29,14 @@ func TestTheDaemonHoldsTheDeviceAndThePersonHoldsTheKeys(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(laptop.cli.home, nodeKeysFile)); !os.IsNotExist(err) {
 		t.Fatal("device keys were written into the person's keystore")
 	}
-	mustContain(t, laptop.mustRun("status"), "home · ", "laptop", "198.18.0.1")
+	mustContain(t, laptop.mustRun("status"), "home · ", "laptop", "198.18.4.1")
 
 	phone := newDaemonDevice(t, nil)
 	inv := laptop.start("invite", "--no-lan", "--port", "0", "--yes")
 	link := inv.waitFor(t, linkRE)[1]
 	out := phone.mustRun("join", link, "--name", "phone")
 	mustContain(t, out, "connected to", `joined "home" as phone`,
-		"198.18.0.2")
+		"198.18.4.2")
 	if out, err := inv.wait(t); err != nil {
 		t.Fatalf("invite: %v\n%s", err, out)
 	}

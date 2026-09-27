@@ -241,6 +241,14 @@ juist must hold nothing tailscaled also holds, since both run on one host:
   Tailscale's so an exit node's default route in table 52 cannot capture overlay
   traffic.
 
+The same holds between juist's own instances, one per network on a host (M5):
+instance n routes in table 0x6a75+n behind rules at 5110+n, 5130+n, 5150+n and
+5170+n, so every instance's bypass rule comes before any instance's table, each
+deletes and restores only its own rules, and where two tables claim an address
+the lowest instance's wins. That is why the higher of two instances whose
+networks claim one address runs without IPv4 (`daemon/host.go`): its routes
+would never win.
+
 ## Constraints on the test harness
 
 - **`RespondToPing` is IPv4-only.** `wgengine.echoRespondToAll` calls `ICMP4Header()`

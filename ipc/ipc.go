@@ -95,6 +95,10 @@ const (
 	// CmdReset returns the device to a fresh install: no network, new keys,
 	// no operator. A member is reset only with [Request.Force].
 	CmdReset Command = 13
+
+	// CmdWaiting hands the daemon changes waiting for votes, if the request
+	// carries any, and answers with every one it holds.
+	CmdWaiting Command = 14
 )
 
 func (c Command) String() string {
@@ -127,6 +131,8 @@ func (c Command) String() string {
 		return "invite-reply"
 	case CmdReset:
 		return "reset"
+	case CmdWaiting:
+		return "waiting"
 	default:
 		return fmt.Sprintf("command?<%d>", uint8(c))
 	}
@@ -169,7 +175,17 @@ type Request struct {
 
 	// Force lets [CmdReset] reset a device the log still lists.
 	Force bool `cbor:"12,keyasint,omitempty"`
+
+	// Elsewhere are the networks the host is in through its other juistd
+	// instances, which [CmdJoin] refuses to join a second time.
+	Elsewhere []types.Hash `cbor:"13,keyasint,omitempty"`
+
+	// Waiting are encoded changes waiting for votes, for [CmdWaiting].
+	Waiting [][]byte `cbor:"14,keyasint,omitempty"`
 }
+
+// MaxWaiting caps the changes one [CmdWaiting] request hands on.
+const MaxWaiting = 16
 
 // An InviteOffer is how an invite is offered.
 type InviteOffer struct {
@@ -225,6 +241,10 @@ type Response struct {
 	// admin's admission of this device, which the CLI checks against the
 	// link itself rather than take the daemon's word for the network.
 	Admission *enroll.Admission `cbor:"9,keyasint,omitempty"`
+
+	// Waiting answers [CmdWaiting]: the encoded changes waiting for votes
+	// the daemon holds.
+	Waiting [][]byte `cbor:"10,keyasint,omitempty"`
 }
 
 // RotationProof is what a rotated device's current identity key signs for
@@ -306,6 +326,7 @@ const (
 	fOrphans
 	fProbe
 	fForce
+	fWaiting
 )
 
 // present lists the optional fields r sets.
@@ -318,7 +339,7 @@ func (r *Request) present() reqField {
 		{len(r.Records) > 0, fRecords}, {r.Invite != "", fInvite}, {r.Name != "", fName},
 		{r.SetOperator || r.OperatorUID != 0, fSetOperator}, {r.Identity, fIdentity},
 		{r.Offer != nil, fOffer}, {r.Reply != nil, fReply}, {r.Orphans, fOrphans},
-		{r.Probe, fProbe}, {r.Force, fForce},
+		{r.Probe, fProbe}, {r.Force, fForce}, {len(r.Waiting) > 0, fWaiting},
 	} {
 		if p.set {
 			f |= p.f
@@ -342,6 +363,8 @@ var requestShapes = map[Command]requestShape{
 	CmdUnstage:   {},
 	CmdRotate:    {takes: fIdentity},
 	CmdReset:     {takes: fForce},
+	CmdWaiting: {takes: fWaiting, shape: fmt.Sprintf("a waiting request carries at most %d changes and nothing else", MaxWaiting),
+		check: func(r *Request) bool { return len(r.Waiting) <= MaxWaiting }},
 	CmdInform: {takes: fRecords, shape: "an inform request carries records and nothing else",
 		check: func(r *Request) bool { return len(r.Records) > 0 }},
 	CmdCreate: {takes: fRecords | fSetOperator, shape: "a create request carries one genesis record",

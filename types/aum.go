@@ -1,6 +1,7 @@
 package types
 
 import (
+	"crypto/mlkem"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -104,6 +105,10 @@ const (
 
 	// KindRenameNetwork gives the network another name. Schema 6 and later.
 	KindRenameNetwork Kind = 18
+
+	// KindSetAdminRecipient sets the encryption key of an admin key, which
+	// must sign it too. Schema 7 and later.
+	KindSetAdminRecipient Kind = 19
 )
 
 func (k Kind) String() string {
@@ -146,6 +151,8 @@ func (k Kind) String() string {
 		return "retire-addresses"
 	case KindRenameNetwork:
 		return "rename-network"
+	case KindSetAdminRecipient:
+		return "set-admin-recipient"
 	default:
 		return fmt.Sprintf("kind?<%d>", uint8(k))
 	}
@@ -164,6 +171,26 @@ type NodeKeys struct {
 	WireGuard WGKey     `cbor:"1,keyasint"`
 	X25519    X25519Key `cbor:"2,keyasint"`
 	MLKEM     MLKEMKey  `cbor:"3,keyasint"`
+}
+
+// A RecipientKey is an HPKE recipient key: the classical and post-quantum
+// halves of the hybrid KEM, as a node record carries them.
+type RecipientKey struct {
+	X25519 X25519Key `cbor:"1,keyasint"`
+	MLKEM  MLKEMKey  `cbor:"2,keyasint"`
+}
+
+func (r *RecipientKey) validate() error {
+	switch {
+	case r.X25519.IsZero():
+		return errors.New("encryption key has no X25519 key")
+	case r.MLKEM.IsZero():
+		return errors.New("encryption key has no ML-KEM key")
+	}
+	if _, err := mlkem.NewEncapsulationKey768(r.MLKEM[:]); err != nil {
+		return fmt.Errorf("encryption key: %w", err)
+	}
+	return nil
 }
 
 // A RouteGrant is the roles and routes [KindSetNodeRoutes] assigns to a node.
@@ -229,6 +256,10 @@ type AUM struct {
 
 	// Network is the network's new name, for RenameNetwork.
 	Network *string `cbor:"16,keyasint,omitempty"`
+
+	// Recipient is an admin key's new encryption key, for
+	// SetAdminRecipient.
+	Recipient *RecipientKey `cbor:"17,keyasint,omitempty"`
 
 	// Signatures authorize the record. Sorted by key ID and duplicate-free,
 	// like every other set. CBOR key 23 is the highest that encodes in one
@@ -324,6 +355,7 @@ const (
 	fHolder
 	fRenumber
 	fNetwork
+	fRecipient
 )
 
 var fieldNames = []struct {
@@ -344,6 +376,7 @@ var fieldNames = []struct {
 	{fHolder, "Holder"},
 	{fRenumber, "Renumber"},
 	{fNetwork, "Network"},
+	{fRecipient, "Recipient"},
 }
 
 func (f fieldSet) String() string {
@@ -381,6 +414,8 @@ var kindFields = map[Kind]fieldSet{
 	KindRenumberNode:    fSubject | fRenumber,
 	KindRetireAddresses: 0,
 	KindRenameNetwork:   fNetwork,
+
+	KindSetAdminRecipient: fSubject | fRecipient,
 }
 
 func (a *AUM) presentFields() fieldSet {
@@ -426,6 +461,9 @@ func (a *AUM) presentFields() fieldSet {
 	}
 	if a.Network != nil {
 		f |= fNetwork
+	}
+	if a.Recipient != nil {
+		f |= fRecipient
 	}
 	return f
 }
@@ -538,6 +576,11 @@ func (a *AUM) ValidateUnsigned() error {
 	if a.Epoch != nil {
 		if err := a.Epoch.StaticValidate(); err != nil {
 			return fmt.Errorf("%v: %w", a.Kind, err)
+		}
+	}
+	if a.Recipient != nil {
+		if err := a.Recipient.validate(); err != nil {
+			return err
 		}
 	}
 	if a.Vouchers != nil && (*a.Vouchers == 0 || *a.Vouchers > MaxAdmins) {
@@ -678,8 +721,7 @@ func (a *AUM) Clone() *AUM {
 		out.Subject = &s
 	}
 	if a.Admin != nil {
-		adm := *a.Admin
-		out.Admin = &adm
+		out.Admin = a.Admin.Clone()
 	}
 	if a.Keys != nil {
 		k := *a.Keys
@@ -708,6 +750,10 @@ func (a *AUM) Clone() *AUM {
 	if a.Holder != nil {
 		h := *a.Holder
 		out.Holder = &h
+	}
+	if a.Recipient != nil {
+		r := *a.Recipient
+		out.Recipient = &r
 	}
 	if a.Renumber != nil {
 		r := *a.Renumber

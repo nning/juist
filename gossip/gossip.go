@@ -145,6 +145,10 @@ type Options struct {
 	Leases   func() [][]byte
 	OnLeases func([][]byte)
 
+	// Waiting is the store of changes waiting for votes, handed between
+	// admin devices beside the log. Nil hands none.
+	Waiting Waiting
+
 	// OnHave receives the record hashes a peer's hello says it holds, under
 	// the identity its announcement names. Any member can forge that, so it
 	// is for display only. It runs on the session's goroutine.
@@ -387,6 +391,52 @@ func (n *Node) SyncWith(ctx context.Context, addr netip.AddrPort, peerID types.I
 	}
 }
 
+// PushTo runs one session with a member that hands it, after what it lacks of
+// this node's log, records this node holds but has not applied: the change
+// ending its membership, while it still has a tunnel to hear it through.
+func (n *Node) PushTo(ctx context.Context, id types.Identity, records [][]byte) error {
+	e, held := n.opts.Endpoints.Get(id)
+	if !held {
+		return fmt.Errorf("gossip: no announcement of %v to reach it at", id.ShortString())
+	}
+	ctx, cancel := context.WithTimeout(ctx, n.timeout)
+	defer cancel()
+	addrs := e.GossipAddrs()
+	if n.opts.OverlayOnly {
+		addrs = nil
+	}
+	if n.opts.OverlayAddrs != nil {
+		addrs = append(addrs, n.opts.OverlayAddrs(id)...)
+	}
+	err := fmt.Errorf("gossip: no address to reach %v at", id.ShortString())
+	for _, addr := range addrs {
+		if ctx.Err() != nil {
+			break
+		}
+		if _, err = n.syncOnce(ctx, addr, sessionOpts{initiator: true, peerID: id, extra: records}); err == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+// withExtra appends records to a records frame, after those already in it,
+// within the frame's byte budget: all of them, or an error.
+func withExtra(f *frame, extra [][]byte) error {
+	used := 0
+	for _, b := range f.Records {
+		used += len(b)
+	}
+	for _, b := range extra {
+		used += len(b)
+	}
+	if len(f.Records)+len(extra) > MaxRecordsPerFrame || used > maxRecordBytesPerFrame {
+		return fmt.Errorf("gossip: %d records to hand over do not fit one frame", len(extra))
+	}
+	f.Records = append(f.Records, extra...)
+	return nil
+}
+
 // CatchUpWith runs one catch-up session against a peer, whatever epochs this
 // node holds.
 func (n *Node) CatchUpWith(ctx context.Context, addr netip.AddrPort) error {
@@ -564,6 +614,9 @@ type sessionOpts struct {
 	authed    func()
 	force     uint64
 	catchUp   bool
+	// extra are records this node holds but has not applied, sent after
+	// what the peer lacks of its log; see [Node.PushTo].
+	extra [][]byte
 }
 
 // A sessionSeal is what one session's frames are sealed under: the epoch the
@@ -608,7 +661,7 @@ func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 	switch {
 	case ss.catchUp == nil:
 		n.notePeer(&peer, ss.epoch)
-		return n.swapRecords(c, ss, &view, &peer, so.initiator, n.heard(&peer))
+		return n.swapRecords(c, ss, &view, &peer, so.initiator, n.heard(&peer), so.extra)
 	case so.initiator:
 		return n.finishCatchUp(c, ss, &view, &peer)
 	default:
@@ -635,6 +688,7 @@ func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view 
 		if ss.epoch, err = n.sealEpoch(so.peerID, view.Epoch); err != nil {
 			return frame{}, err
 		}
+		hello.Waiting = n.heldFor(view.Network, so.peerID)
 	}
 	if err := n.writeSealed(c, ss, &hello); err != nil {
 		return frame{}, err
@@ -682,6 +736,9 @@ func (n *Node) responderHello(c net.Conn, authed func(), ss *sessionSeal, view *
 		if err := n.authenticated(c, authed); err != nil {
 			return frame{}, err
 		}
+		if id, ok := n.claimed(&peer); ok && peer.Network == view.Network {
+			hello.Waiting = n.heldFor(view.Network, id)
+		}
 	}
 	if err := n.writeSealed(c, ss, &hello); err != nil {
 		return frame{}, err
@@ -723,16 +780,27 @@ func (n *Node) checkHello(peer *frame, view *View) error {
 // records it sends back, writing first where writeFirst says to and reading
 // first otherwise. changed reports that the session already cached a new
 // announcement.
-func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame, writeFirst, changed bool) error {
+func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame, writeFirst, changed bool,
+	extra [][]byte) error {
 	reply, err := n.records(view, peer, false)
 	if err != nil {
 		return err
+	}
+	if len(extra) > 0 {
+		if err := withExtra(&reply, extra); err != nil {
+			return err
+		}
+	}
+	var sent [][]byte
+	if ss.catchUp == nil {
+		reply.Waiting, sent = n.waitingFor(view.Network, peer, maxRecordBytesPerFrame-recordBytes(&reply))
 	}
 	var theirs frame
 	if writeFirst {
 		if err := n.writeSealed(c, ss, &reply); err != nil {
 			return err
 		}
+		n.handed(peer, sent)
 		if theirs, err = n.readRecords(c, ss, view); err != nil {
 			return err
 		}
@@ -743,15 +811,33 @@ func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame,
 		if err := n.writeSealed(c, ss, &reply); err != nil {
 			return err
 		}
+		n.handed(peer, sent)
 	}
 	if n.takeEndpoints(theirs.Self, theirs.Endpoints) {
 		changed = true
 	}
 	applied, err := n.take(&theirs)
+	// After the records, which may be what a change waits on.
+	if ss.catchUp == nil && n.takeWaiting(view.Network, &theirs) {
+		changed = true
+	}
 	if applied || changed {
 		n.onRecords()
 	}
 	return err
+}
+
+// recordBytes is what a records frame's records and leases take of its
+// budget.
+func recordBytes(f *frame) int {
+	used := 0
+	for _, b := range f.Records {
+		used += len(b)
+	}
+	for _, b := range f.Leases {
+		used += len(b)
+	}
+	return used
 }
 
 // answerCatchUp is the responder's side of a catch-up session past the
@@ -762,7 +848,7 @@ func (n *Node) answerCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *fram
 	if err := n.stillMember(ss.with); err != nil {
 		return err
 	}
-	return n.swapRecords(c, ss, view, peer, true, changed)
+	return n.swapRecords(c, ss, view, peer, true, changed, nil)
 }
 
 // finishCatchUp is the initiator's side of a catch-up session past the

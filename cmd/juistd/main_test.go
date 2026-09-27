@@ -71,6 +71,9 @@ func TestBadArgumentsAreRefused(t *testing.T) {
 		{[]string{"start"}, `unexpected argument "start"`, true},
 		{[]string{"--port", "70000"}, "a port must be below 65536", false},
 		{[]string{"-f", "1h"}, "--freshness-ttl must be at least 2h", false},
+		{[]string{"--instance", "juist0"}, "juist0 is the default instance", false},
+		{[]string{"-i", "work"}, "want juist1 to juist9", false},
+		{[]string{"--instance", "juist10"}, "want juist1 to juist9", false},
 	} {
 		_, err := parse(tc.args, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -114,6 +117,34 @@ func TestOptionsReachTheService(t *testing.T) {
 	}
 }
 
+// An instance takes everything two nodes on a host must not share from its
+// number, and what is given explicitly stays as given.
+func TestAnInstanceTakesItsOwnDeviceAndPorts(t *testing.T) {
+	t.Setenv("JUIST_HOME", "/var/lib/juist-test")
+	o, err := parse([]string{"--instance", "juist3"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := o.service.Mesh
+	if o.service.Home != "/var/lib/juist-test/juist3" || m.Instance != 3 || m.TunName != "juist3" ||
+		m.ListenPort != daemon.DefaultListenPort+30 || m.GossipPort != daemon.DefaultGossipPort+30 ||
+		m.RelayPort != daemon.DefaultRelayPort+30 || !m.PortFallback {
+		t.Errorf("--instance juist3: home %s, %+v", o.service.Home, m)
+	}
+	o, err = parse([]string{"-i", "juist2", "-H", "/h", "-t", "tun9", "-p", "5000"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = o.service.Mesh
+	if o.service.Home != "/h" || m.Instance != 2 || m.TunName != "tun9" || m.ListenPort != 5000 ||
+		m.GossipPort != daemon.DefaultGossipPort+20 || m.PortFallback {
+		t.Errorf("--instance juist2 with overrides: home %s, %+v", o.service.Home, m)
+	}
+	if o, _ := parse(nil, io.Discard); o.service.Mesh.Instance != 0 {
+		t.Errorf("without --instance the node is instance %d", o.service.Mesh.Instance)
+	}
+}
+
 // The start report says what happened on stdout, and what needs attention as
 // warnings and hints on stderr.
 func TestTheStartReportSpeaksLikeTheCLI(t *testing.T) {
@@ -122,7 +153,7 @@ func TestTheStartReportSpeaksLikeTheCLI(t *testing.T) {
 		tun       string
 		out, errs []string
 	}{
-		{ipc.Status{Derived: ipc.Derived{SelfName: "laptop"}}, "juist0", []string{"juistd: laptop ("}, []string{"hint: juist init, or juist join CODE"}},
+		{ipc.Status{Derived: ipc.Derived{SelfName: "laptop"}}, "juist0", []string{"juistd: laptop ("}, []string{"hint: juist create, or juist join CODE"}},
 		{ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", NotMember: true}}, "juist0",
 			[]string{`network "home"`}, []string{"warning: not a member", "hint: rejoin with a new invite"}},
 		{ipc.Status{InNetwork: true, SchemaAlarm: "schema 9", Addrs: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}, ListenPort: 41643, Derived: ipc.Derived{NetworkName: "home", Alarm: "fork"}}, "",
@@ -150,5 +181,33 @@ func TestTheStartReportSpeaksLikeTheCLI(t *testing.T) {
 		if all := out.String() + errs.String(); strings.Contains(all, "ALARM") || strings.Contains(all, "NOT A") {
 			t.Errorf("shouts:\n%s", all)
 		}
+	}
+}
+
+// juistd(8) lists every option juistd takes, from the flags themselves.
+func TestTheManPageListsEveryOption(t *testing.T) {
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"__manpage"}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	page := out.String()
+	if !strings.HasPrefix(page, ".TH JUISTD 8") || !strings.Contains(page, ".BR juist (1)") {
+		t.Fatalf("not a juistd(8):\n%s", page)
+	}
+	for _, o := range optionOrder {
+		if want := `\-\-` + strings.ReplaceAll(o.long, "-", `\-`); !strings.Contains(page, want) {
+			t.Errorf("the page lacks --%s", o.long)
+		}
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+// A man page that could not be written fails the build that asked for it.
+func TestAFailedManPageIsAnError(t *testing.T) {
+	if _, err := parse([]string{"__manpage"}, failingWriter{}); err == nil || errors.Is(err, errHelp) {
+		t.Fatalf("writing the man page failed, and parse said %v", err)
 	}
 }

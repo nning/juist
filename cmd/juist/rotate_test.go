@@ -14,7 +14,7 @@ import (
 func TestRotateOnAnAdminDevice(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	before := nodeKeysOf(t, c)
 	mustContain(t, c.mustRun("rotate"), "rotated this device's keys", "new keys live")
 	after := nodeKeysOf(t, c)
@@ -34,7 +34,7 @@ func TestRotateOnAnAdminDevice(t *testing.T) {
 func TestRotateIdentity(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop")
 	before := nodeKeysOf(t, c).Identity.Public()
 	c.mustRun("rotate", "identity")
 	after := nodeKeysOf(t, c).Identity.Public()
@@ -54,7 +54,7 @@ func TestRotationOnAMemberWaitsForAnAdmin(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	phone := enrollDevice(t, admin, "phone")
 	before := nodeKeysOf(t, phone)
 
@@ -83,7 +83,7 @@ func TestRotationThatLosesForkChoiceIsNotPromoted(t *testing.T) {
 	dir := workDir(t)
 	first, second := newCLI(t), newCLI(t)
 	key := regexp.MustCompile(`(nid:\S+)`).FindString(second.mustRun("admins", "new", "second"))
-	first.mustRun("init", "home", "--admin", "second="+key)
+	first.mustRun("create", "home", "--admin", "second="+key)
 	phone := enrollDevice(t, first, "phone")
 	first.mustRun("admins", "quorum", "2", "--yes")
 
@@ -112,7 +112,7 @@ func TestRotationThatLosesForkChoiceIsNotPromoted(t *testing.T) {
 func TestFailedRotationStagesNothing(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--no-device")
+	c.mustRun("create", "home", "--no-device")
 	if _, err := c.home2().createNodeKeys("laptop"); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestUnwritablePendingDirectoryStagesNothing(t *testing.T) {
 	}
 	dir := workDir(t)
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	phone := enrollDevice(t, admin, "phone")
 	if err := os.Chmod(dir, 0o500); err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestSecondRotationIsRefusedBeforeARecord(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	phone := enrollDevice(t, admin, "phone")
 	phone.mustRun("rotate")
 	if out, err := phone.run("rotate"); err == nil {
@@ -175,7 +175,7 @@ func TestSecondRotationIsRefusedBeforeARecord(t *testing.T) {
 func TestRotationThroughARunningDaemon(t *testing.T) {
 	t.Parallel()
 	d := newDaemonDevice(t, nil)
-	d.mustRun("init", "home")
+	d.mustRun("create", "home")
 	load := func() types.NodeKeys {
 		k, err := keys.LoadNode(filepath.Join(d.state, nodeKeysFile))
 		if err != nil {
@@ -197,7 +197,7 @@ func TestAMemberRotatesThroughItsDaemon(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	laptop := newDaemonDevice(t, nil)
-	laptop.mustRun("init", "home")
+	laptop.mustRun("create", "home")
 	phone := newDaemonDevice(t, nil)
 	inv := laptop.start("invite", "--no-lan", "--port", "0", "--yes")
 	phone.mustRun("join", inv.waitFor(t, linkRE)[1], "--name", "phone")
@@ -235,7 +235,7 @@ func TestAMemberRotatesThroughItsDaemon(t *testing.T) {
 func TestRotationRecordsFromTheDaemonAreChecked(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init")
+	c.mustRun("create")
 	auth := openLog(t, c)
 	me := nodeKeysOf(t, c).Identity
 	self := me.Public()

@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,10 +94,11 @@ type meshNode struct {
 func (n *meshNode) id() types.Identity { return n.dev.record.Identity }
 
 type mesh struct {
-	t     *testing.T
-	nw    *network
-	hub   *lanHub
-	nodes []*meshNode
+	t      *testing.T
+	nw     *network
+	hub    *lanHub
+	nodes  []*meshNode
+	mutate func(*Options) // applied to every member's options, where set
 }
 
 // startMesh founds a network of n members and starts a daemon for each, with
@@ -103,7 +106,13 @@ type mesh struct {
 // the result was discovered on the "LAN" and authorized by the log.
 func startMesh(t *testing.T, n int, adminDevices ...int) *mesh {
 	t.Helper()
-	m := &mesh{t: t, nw: newNetworkWithAdminDevices(t, n, adminDevices...), hub: &lanHub{}}
+	return startMeshWith(t, n, nil, adminDevices...)
+}
+
+// startMeshWith is startMesh with every member's options adjusted by mutate.
+func startMeshWith(t *testing.T, n int, mutate func(*Options), adminDevices ...int) *mesh {
+	t.Helper()
+	m := &mesh{t: t, nw: newNetworkWithAdminDevices(t, n, adminDevices...), hub: &lanHub{}, mutate: mutate}
 	for i := range n {
 		m.nodes = append(m.nodes, m.start(t, i))
 	}
@@ -113,7 +122,7 @@ func startMesh(t *testing.T, n int, adminDevices ...int) *mesh {
 func (m *mesh) start(t *testing.T, i int, seed ...types.AUM) *meshNode {
 	t.Helper()
 	auth, st := m.nw.authorityFor(t, seed...)
-	return m.startOn(t, i, m.nw.devices[i], auth, st, nil)
+	return m.startOn(t, i, m.nw.devices[i], auth, st, m.mutate)
 }
 
 // startOn starts member i as dev over a log it already holds, as a restart
@@ -500,5 +509,76 @@ func TestAPeerThatRotatedItsIdentityStaysAPeer(t *testing.T) {
 	}
 	if st := peer.d.Status(); st.Peers != 1 || st.DataPlaneError != "" {
 		t.Fatalf("after the rotation: %d peers, data plane error %q", st.Peers, st.DataPlaneError)
+	}
+}
+
+// The device a removal removes is told of it by the device that applies it,
+// before that one drops its tunnel: afterwards nothing could reach it, and
+// it would go on believing it is a member.
+func TestARemovedDeviceIsToldFirst(t *testing.T) {
+	// Log sync runs in the tunnel, which a removal takes away; here, with no
+	// tunnel to take, cut is what takes it: no session with the victim once
+	// it is set.
+	var cut atomic.Bool
+	var victimPort atomic.Uint32
+	var victimIdentity atomic.Pointer[types.Identity]
+	m := startMeshWith(t, 3, func(o *Options) {
+		me := o.Identity.Public()
+		o.GossipDial = func(ctx context.Context, addr netip.AddrPort) (net.Conn, error) {
+			if v := victimIdentity.Load(); cut.Load() && (me == *v || uint32(addr.Port()) == victimPort.Load()) {
+				return nil, errors.New("no tunnel")
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, "tcp", addr.String())
+		}
+	})
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	victim, admin := m.nodes[2], m.nodes[0]
+	id := victim.id()
+	victimIdentity.Store(&id)
+	victimPort.Store(uint32(victim.d.Status().GossipPort))
+	removal := m.nw.removeNode(t, admin.auth, victim.id())
+
+	admin.d.farewell(t.Context(), []types.AUM{removal})
+	cut.Store(true)
+	// Sessions under way when the tunnel went finish before the removal
+	// applies, so none of them can be what carries it.
+	time.Sleep(time.Second)
+	if err := admin.d.Inform([]types.AUM{removal}); err != nil {
+		t.Fatal(err)
+	}
+	// Well inside the periodic sync, so only the handover explains it.
+	waitFor(t, 5*time.Second, "the removed device to learn of its removal", func() bool {
+		return victim.d.Status().NotMember
+	})
+	if st := admin.d.Status(); st.Peers != 1 {
+		t.Fatalf("the admin kept %d peers, want the survivor alone", st.Peers)
+	}
+}
+
+// A change that removes nobody hands nothing over, and neither does one that
+// would not apply; one that removes a member hands it to that member alone.
+func TestAFarewellIsOnlyForTheRemoved(t *testing.T) {
+	m := startMesh(t, 3)
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	admin, other := m.nodes[0], m.nodes[1]
+	removal := m.nw.removeNode(t, admin.auth, other.id())
+	unsigned := removal
+	unsigned.Signatures = nil
+	if told := admin.d.farewell(t.Context(), []types.AUM{unsigned}); len(told) != 0 {
+		t.Fatalf("an unauthorized removal was handed to %v", told)
+	}
+	bump, err := admin.auth.Builder().EpochBump(m.nw.sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bump.Sign(m.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	if told := admin.d.farewell(t.Context(), []types.AUM{bump}); len(told) != 0 {
+		t.Fatalf("a change that removes nobody was handed to %v", told)
+	}
+	if told := admin.d.farewell(t.Context(), []types.AUM{removal}); len(told) != 1 || told[0] != other.id() {
+		t.Fatalf("the removal was handed to %v, want the removed member alone", told)
 	}
 }

@@ -64,6 +64,8 @@ var kindRules = map[types.Kind]kindRule{
 	types.KindRenumberNode:    {types.SchemaRenumber, "renumbering", (*State).renumberNode},
 	types.KindRetireAddresses: {types.SchemaRenumber, "retiring addresses", (*State).retireAddresses},
 	types.KindRenameNetwork:   {types.SchemaRename, "renaming the network", (*State).renameNetwork},
+
+	types.KindSetAdminRecipient: {types.SchemaSealing, "admin encryption keys", (*State).setAdminRecipient},
 }
 
 // inEffectError is a record refused because what it does is done already,
@@ -233,6 +235,10 @@ func (next *State) rotateIdentity(a *types.AUM, _ applyMode) error {
 }
 
 func (next *State) addAdminKey(a *types.AUM, _ applyMode) error {
+	if a.Admin.Recipient != nil {
+		return fmt.Errorf("log: %v comes with an encryption key, which only the key itself sets",
+			a.Admin.Public.ShortString())
+	}
 	if _, exists := next.admins[a.Admin.Public]; exists {
 		return fmt.Errorf("log: %v is already an admin key", a.Admin.Public.ShortString())
 	}
@@ -259,6 +265,20 @@ func (next *State) removeAdminKey(a *types.AUM, _ applyMode) error {
 				"making the network permanently unmanageable",
 			a.Subject.ShortString(), total, next.quorum)
 	}
+	return nil
+}
+
+func (next *State) setAdminRecipient(a *types.AUM, _ applyMode) error {
+	k, exists := next.admins[*a.Subject]
+	if !exists {
+		return fmt.Errorf("log: %v is not an admin key", a.Subject.ShortString())
+	}
+	if k.Recipient != nil && *k.Recipient == *a.Recipient {
+		return inEffect(fmt.Errorf("log: %v has that encryption key already", a.Subject.ShortString()))
+	}
+	r := *a.Recipient
+	k.Recipient = &r
+	next.admins[*a.Subject] = k
 	return nil
 }
 

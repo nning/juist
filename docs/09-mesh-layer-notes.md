@@ -326,6 +326,6 @@ endpoint-record persistence all arrived at M3b; see
   converged across the remaining four in ~80 ms against a five-second budget,
   a new member joined a running mesh in ~20 ms.
 - Run by hand with the real binaries, which is where the multicast-socket bug
-  above turned up: `juist init`, enroll a second device, start a `juistd` on
+  above turned up: `juist create`, enroll a second device, start a `juistd` on
   each, and `juist status` on both reports a peer discovered on the LAN with
   nothing configured about where anyone is.

@@ -26,7 +26,7 @@ admin keys + vote weights, k-of-n quorum verification, checkpoints, fork choice,
 epoch group secret records (HPKE fan-out), address derivation/collision rules, and
 node roles + advertised-route grants (`SetNodeRoutes`) with their validation rules —
 reserved here, unconsumed until M6, because the record schema freezes at M3.
-CLI: `juist init / sign / verify / log show`. No networking.
+CLI: `juist init / sign / verify / log show` (`init` is `create` since M5). No networking.
 
 - **Exit criterion:** an adversarial test suite — forged signatures, replayed AUMs,
   reordered chains, rollback to lower epoch, sub-quorum membership changes, colliding
@@ -197,75 +197,230 @@ known node key over DERP whatever disco key it last announced.
 
 ## M5 — Several networks on one host
 
-Today a juistd holds one network, and `juist join` on a device that is in one
-refuses to join another. The keystore already keeps its admin keys, anchors and
-break-glass files per network, so a person can administer several networks;
-what is missing is a host being a member of several. Running a second juistd by
-hand, with its own `--home`, `--socket`, `--tun` and ports, works in part, but
-three things break: every network numbers its devices from the start of the
-same range (198.18.0.0/15 from schema 4, 100.64/10 before), so the two TUN
-devices claim overlapping IPv4 routes; the Linux router's table and policy
-rule priorities are fixed, so one instance stopping deletes the rules the
-other routes by; and the packaged firewall rules and unit know one instance
-with the fixed ports only. The overlay IPv6 prefix is derived from each
-network's genesis and does not collide.
+Before M5 a juistd held one network, and `juist join` on a device that was in
+one refused to join another. The keystore already kept its admin keys, anchors
+and break-glass files per network; what was missing was a host being a member
+of several. Running a second juistd by hand worked in part, but three things
+broke: every network numbered its devices from the start of the same range, so
+two TUN devices claimed overlapping IPv4 routes; the Linux router's table and
+policy rule priorities were fixed, so one instance stopping deleted the rules
+the other routed by; and the packaging knew one unit with fixed ports. The
+overlay IPv6 prefix is derived from each network's genesis and does not
+collide. How each was resolved, and the rules a later change must keep, are in
+[13-multi-network-notes.md](13-multi-network-notes.md).
 
-The plan, in order:
+What was built, in the plan's order:
 
-1. **An IPv4 prefix per network.** Schema 4 has `Snapshot.V4Prefix`, chosen
-   at genesis with `juist init --ipv4` and moved by renumbering (6); without
-   it a network uses all of 198.18/15, so two such networks collide on one
-   host. What remains is the default: `juist init` should draw a random /22 inside 198.18/15 (1022
-   devices, one of 128) rather than take the whole range.
-2. **Instances.** A systemd template, `juistd@NETWORK.service`, with its home
-   in `/var/lib/juist/NETWORK`, its socket in `/run/juist/NETWORK.sock`, and a
-   TUN device named from the network (within IFNAMSIZ). The instance's name is
-   chosen once, when the instance is created, and does not follow a rename (schema 6), which would
-   otherwise move its home and socket under a running juistd. The first instance
-   keeps the fixed ports; later ones take free ports, which the announcements
-   already carry. Each instance also gets its own routing table and policy
-   rule priorities, so that none removes what another routes by — the rule
-   docs/07-embedding-notes.md sets for tailscaled holds between instances too.
-   The unit for one network, `juistd.service`, remains the default instance.
-3. **Refusing overlap on the host.** An instance does not start while another
-   running here holds an overlapping IPv4 prefix, or the same network, and
-   says which: two networks that drew one prefix cannot both route on one host,
-   whatever either log says.
-4. **The CLI.** `--network NAME` chooses the instance, and without it a
-   command on a host with several asks which; `juist status` lists every
-   network the host is in. `juist join` on a member device offers to join as a
-   second network, creating the instance, instead of refusing.
-5. **Packaging and firewall.** The firewalld and ufw definitions cover the
-   instances' TUN devices and ports; `firewall.sh` allows and revokes per
-   instance.
-6. **Renumbering.** Schema 5 has it: `juist network renumber PREFIX` moves
-   every member into another prefix, `juist network renumber DEVICE ADDR` one
-   member to another address, and `--finish` retires the old addresses ahead
-   of the deadline; the rules the log keeps are in
-   [08-trust-layer-notes.md](08-trust-layer-notes.md#renumbering). What
-   remains: exit criteria (5) and (6) in the netns matrix; preferring the old
-   address as the source on platforms other than Linux, where the OS picks
-   between the two; and the deadline counting from signing, so a record
-   approved late leaves less of a transition. What juist cannot move is
-   anything outside it that names the old addresses.
+1. **An IPv4 prefix per network.** `juist create` draws a random /22 in
+   198.18/15 (1022 addresses, one of 127) unless `--ipv4` names one. It never
+   draws the first, where networks without a prefix of their own number
+   from, nor one this host's interfaces or other networks claim.
+2. **Instances.** `juistd.service` is instance 0; `juistd@juist1` to
+   `juistd@juist9` run beside it. The number chooses the TUN device, the
+   ports (the defaults plus ten times the number), the routing table and the
+   policy rule priorities. Where two tables claim an address, the lowest
+   instance's wins. Instances are numbered, not named after their network as
+   planned: the name is needed before the join that learns it, and a device
+   name has to fit IFNAMSIZ.
+3. **Overlap on the host.** An instance whose network claims IPv4 that a
+   lower instance holds runs without IPv4, and says which. The plan said to
+   refuse to start, but a refused instance also stops syncing its log, and
+   then never hears of the renumbering that would end the conflict. One that
+   finds its own network held by another instance does not start at all.
+4. **The CLI.** A command about one network takes it first (`juist devices
+   home`, `juist reset juist1`), and may leave it out where there is one.
+   Listings show every network, and no command asks which. `juist create` and `juist join` on a device in a
+   network run the new one in an instance of its own, after asking for sudo
+   once, and a reset removes that instance again.
+5. **Packaging and firewall.** The template unit is packaged, and upgrades
+   and removal cover instances. `firewall.sh` allows and revokes one device
+   at a time, and each new instance is allowed as `juist0` is at install.
+   The firewalld and ufw service definitions still name the default ports.
+   Status hints give an instance's own ports by number.
+6. **Renumbering.** Criteria (5) and (6) are netns tests. An approval shows
+   how much of a renumbering's transition is left, since its deadline is
+   fixed when it is proposed. Choosing the old address as the source on
+   platforms other than Linux moves to M7, with the FreeBSD router. What
+   juist cannot move is anything outside it that names the old addresses.
 
-Security stays as it is per network: instances share no state, each home is
-the juist user's alone, and a TUN device routes its own network's prefixes
-only, so no packet crosses from one network into the other through juist.
+Instances share no state, and a TUN device routes its own network's prefixes
+only, so no packet crosses from one network into the other through juist. They
+do share the `juist` user, so one compromised instance holds every network's
+device on the host: residual weakness 9 in
+[02-threat-model.md](02-threat-model.md), and a user per instance is for M10.
 
 - **Exit criteria:** (1) one host in two networks, in the netns matrix, pings
   members of both over IPv4 and IPv6, and no route of one prefix points into
   the other's device; (2) a second instance whose prefix overlaps a running
-  one refuses to start with a message naming both; (3) removal from one
-  network leaves the host's membership of the other untouched, across a
-  restart of either instance, and stopping one leaves the other's routes and
-  rules in place; (4) an existing network without `V4Prefix` keeps working as
-  the default instance next to a new one; (5) a network renumbered while one
-  member is offline keeps every pair of members reachable throughout, the
-  offline one included once it returns; (6) a member renumbered on its own
-  is reachable at both addresses until the deadline and at the new one
-  only after it, and a record giving it an address another member holds, or
-  one outside the network's range, is rejected by every node.
+  one runs without IPv4 and says so, naming both, and one in a network the
+  host runs already does not start; (3) removal from one network leaves the
+  host's membership of the other untouched, across a restart of either
+  instance, and stopping one leaves the other's routes and rules in place;
+  (4) an existing network without `V4Prefix` keeps working as the default
+  instance next to a new one; (5) a network renumbered while one member is
+  offline keeps every pair of members reachable throughout, the offline one
+  included once it returns; (6) a member renumbered on its own is reachable
+  at both addresses until the deadline and at the new one only after it, and
+  a record giving it an address another member holds, or one outside the
+  network's range, is rejected by every node.
+- **Validated on real hardware:** the privileged tests of (1), (3), (5) and
+  (6), as the data plane sees them, passed on 2026-09-27
+  ([12-validating.md](12-validating.md#the-last-privileged-run)). The rest are
+  checked by `make check`.
+
+## M5a — An admin key per network
+
+Before M5a `juist create` took an admin key already in the keystore when one
+was named for the admin (`admins/alex.key`, after the user by default), on
+the rule that one person's key may govern several networks. With several
+networks on one device (M5) that default cost more than it saved: one key
+taken or lost was every network it governed taken or lost; its public half is
+in every network's log, so a member of two saw that one person ran both; and
+rotating, removing or backing up (M9's `juist admins export`) the key of one
+network touched the others.
+
+What was built, in the plan's order:
+
+1. **A new key for every network.** `juist create` creates one, named for the
+   network as its break-glass file is (`admins/alex@home.key`), so that a
+   rename (schema 6) moves nothing. In the log the admin is still "alex".
+   A key already under that name, made with `juist admins new --network`, is
+   the one it was made for and is used. Where there is a log, signing needs no
+   mapping from networks to keys: the CLI signs with every local key that has
+   a part in a record.
+2. **Sharing on purpose.** `juist create --admin-key NAME` governs the new
+   network with a key already in the keystore; the admin name defaults to the
+   key's.
+3. **Keys made before their network.** `juist admins new NAME` makes a key
+   named for the admin alone and marked unfiled. The first network whose log
+   (or genesis, signed with it) names it files it under that network. Given
+   `--network`, it is named for that network at once. Not planned: without a
+   log, keys filed under different networks do not sign one record together,
+   since each would spoil the other's; `juist approve --key NAME` picks one.
+4. **Existing keystores.** A key named `admins/NAME.key` without the mark
+   keeps working and keeps its name. `juist admins` ends with the keys here
+   and the networks each governs, so a shared one is visible as such.
+
+- **Exit criteria:** (1) two networks founded one after the other in one
+  keystore are governed by different keys, and neither key's signature counts
+  in the other network; (2) `--admin-key` governs a second network with an
+  existing key, and `juist admins` lists that key under both; (3) a keystore
+  from before M5a signs for its networks unchanged; (4) a key made with
+  `juist admins new` before its network is used for that network once added,
+  and not offered for any other.
+- **Validated:** by `make check`; the tests are in
+  `cmd/juist/adminkeys_test.go`. Nothing in M5a runs privileged.
+
+## M5b — Changes that wait for other admins, carried to them
+
+With a quorum above one, no machine finishes a change alone. Before M5b the
+CLI signed what it could and wrote the change to a file (`add-phone.rec`),
+which a person carried to the next admin, who ran `juist approve` on it. That
+is sound, since every signature and the quorum are checked where the change
+applies, but it left the carrying to people. M5b carries it: another admin,
+or the same person on another device with a key of their own, sees the change
+waiting and signs it there.
+
+**Not through the DHT.** A BEP 44 item holds 1000 bytes, and a change that
+bumps the epoch carries 1168 bytes per member. The DHT's addresses and payloads
+are keyed on the epoch secret, so every member could read them and a
+signing-only keystore could not. Items expire within about two hours and a
+lookup takes up to a minute. Every item is also more public traffic from
+members' addresses (02, weakness 5). Two admin devices in a network already
+have a tunnel or a relay between them, and log sync runs through it.
+
+What was built, in the plan's order:
+
+1. **Waiting changes in log sync** (`internal/waiting`, `daemon/waiting.go`,
+   `gossip/waiting.go`). A change that lacks votes travels as one admin key's
+   copy of it, signed by that key; each admin who signs hands on a copy of
+   their own, and where the change is read the copies' signatures merge. Each
+   juistd keeps the copies handed on by a current admin key that build on its
+   head and have not expired: at most 64, 32 MiB, 8 MiB per signing key and
+   seven days, persisted across a restart. A copy leaves once the log moves
+   past it, which applying it does. Only admin devices take copies from their
+   peers, and none is sent to a device without the role or to one the change
+   is about. Not a frame kind of its own, as planned, but a field of the hello
+   (what a device holds) and of the records frame (what it hands over),
+   sealed to the receiving device's encryption key: a peer claiming another's
+   identity gets nothing it can open, and the exchange stays four frames.
+2. **The CLI.** `juist status` says "1 change waits for your vote: removes
+   the device phone (…), proposed by alice", and `juist approve` without files
+   asks about each one, shown from the local log, discarding what was typed
+   before the question; it takes no `--yes`. The signature that completes the
+   quorum applies the change there. A change that still lacks votes is
+   written to a file as before, and is carried as well where a juistd runs.
+   An admission's copies wait five minutes at a time, renewed by the running
+   invite with the votes they gathered, and one is never carried from its
+   file: approved after its invite, it would admit a device without the log.
+3. **Readable by the admins alone**, built with stage 1 rather than after it:
+   a change is only ever carried sealed, to every admin key with an
+   encryption key, so the daemons that carry it cannot read it. Schema 7 gives
+   admin keys an encryption key (`AdminKey.Recipient`), set by
+   `KindSetAdminRecipient`, which the key must sign as well as the quorum, or
+   by a genesis the key signs. It is derived from the admin key's seed, so the
+   key file and its backup hold both. `juist create` puts the founder's in the
+   genesis; any other admin runs `juist admins receive` once, after
+   `juist log upgrade` on an older network.
+
+The trust stays where it is: the transport may withhold, replay or flood,
+and cannot make a change count. What becomes easier is a compromised admin
+key putting a change in front of the other admins, rather than handing them
+a file (02, weakness 10). The decision remains a person's, and the log says
+who signed.
+
+- **Exit criteria:** (1) a change proposed on one admin device appears on
+  another admin device of the network within gossip convergence, and is
+  applied once that one's signature completes the quorum; (2) a change
+  carrying no valid signature of a current admin key, or a replayed one that
+  no longer fits the log, is dropped by every daemon and shown to nobody;
+  (3) no device without the admin role, and not the device a change is about,
+  receives it, asserted on the wire; (4) nothing is signed without the admin
+  being asked, and what they are shown is the effect computed from their own
+  log; (5) after stage 2, a change sealed to an admin cannot be read with any
+  other key, the group secret included.
+- **Validated:** by `make check`; the tests are listed in
+  [12-validating.md](12-validating.md#what-checks-what). Nothing in M5b runs
+  privileged.
+
+## M5c — Moving one device without a transition
+
+`juist network renumber core desktop 10.11.111.12 --finish` moves the device
+and retires its old address at once. Before M5c a move always kept the old
+address for `--for`, and `--finish` took no arguments and retired every old
+address in the network, so this took two changes and cut other devices'
+transitions short.
+
+What was built:
+
+- A renumber-node record whose deadline is `types.RetireAtOnce`, the first
+  second of 1970, and so no schema change. The plan had the deadline be now;
+  a deadline that is simply past reads, to an admin approving it later, as a
+  transition that ran out ("BUT that deadline has passed"), and the marker
+  lets the approval say "moves desktop to 10.11.111.12 at once" instead. The
+  old address stays recorded, unused and held against collisions, until the
+  next plain `--finish` or the device's next move, since devices not yet told
+  still route it to the device. `juist network` lists what is held, and how
+  to free it.
+- It warns that connections to the old address end and devices not told yet
+  reach the device over IPv6 only until they are, and asks "move desktop
+  from … to …, retiring … now?". A plain `--finish` retires what still works
+  and frees what is held, and says which. `--for` beside it, and `--finish` with a PREFIX or a
+  device alone, are usage errors: moving the whole network at once would cut
+  every device off from every one not yet told.
+- `juist status` names the devices not told yet of a renumbering for as long
+  as an old address is recorded, not only while one works. The moved device
+  starts on its new address as the move applies there.
+- A device that misses the move is not cut off: its IPv6 address does not
+  change, and log sync through the tunnel tells it of its new address.
+
+- **Exit criterion:** after the command, every node that has applied the record
+  reaches the device at the new address only, other devices' old addresses
+  stay live until their deadlines, and the test runs through the in-process
+  app.
+- **Validated:** by `make check`; the tests are listed in
+  [12-validating.md](12-validating.md#what-checks-what). Nothing in M5c runs
+  privileged.
 
 ## M6 — Exit nodes and subnet routers
 
@@ -274,7 +429,9 @@ validation landed in M1), widened `AllowedIPs` and filter destinations,
 privileged-helper forwarding/NAT, client-side default-route capture with LAN bypass
 and DNS handling. Design in
 [04-architecture.md](04-architecture.md#exit-nodes-and-subnet-routes-m6). It
-covers Linux; FreeBSD's side (pf) comes with M7, and Android's with M11.
+covers Linux; FreeBSD's side (pf) comes with M7, and Android's with M11. Split
+in three, each shipped on its own: exit nodes first, as the feature asked for,
+then subnet routers, then the exit node's DNS.
 
 **Before ACLs, unscoped.** Coarse ACLs come at M12, so until then using an exit
 node is open to every member: the quorum grants the role per exit node, and each
@@ -282,22 +439,119 @@ client's owner chooses whether to use one, but no grant says *which* members may
 A subnet router's prefixes are likewise reachable from every member. The
 trade is accepted in [02-threat-model.md](02-threat-model.md) item 7; M12 scopes it.
 
+## M6a — Exit nodes
+
+Next. What both kinds of route need, and the exit node on top of it. The plan:
+
+1. **Route grants consumed from the log.** `juist grant vps exit-node` gives
+   the role and the default routes (`0.0.0.0/0`, `::/0`); `revoke` takes both.
+   A client installs them for the one exit node it uses, and nowhere else: its
+   `AllowedIPs`, and the exit node's filter destinations, widen to *the
+   internet*, which is the default routes without the overlay space (the
+   obligation M1 left, [08-trust-layer-notes.md](08-trust-layer-notes.md)) and
+   without private and special-use ranges. An exit node therefore never
+   intercepts member-to-member traffic and never opens its own LAN; that is
+   M6b's, as a subnet route.
+2. **Both sides agree.** The quorum grants the role; the exit node's operator
+   agrees on that host with `juist exit-node serve` (and `--stop`), and its
+   signed announcement says so, so that a client sees "granted, not serving"
+   rather than traffic that goes nowhere. It serves while it holds the grant,
+   has agreed and its view is fresh.
+3. **Once as root on the exit node.** `serve` asks for sudo once and runs a
+   packaged script, as `firewall.sh` is run: `/etc/sysctl.d/60-juist-exit.conf`
+   with IPv4 and IPv6 forwarding, `accept_ra=2` where the kernel takes router
+   advertisements (forwarding would otherwise cost a SLAAC host its IPv6
+   default route), and the forward path in ufw (`route allow in on juist0`) and
+   Docker's `DOCKER-USER` chain; firewalld's trusted zone, which `juist0` is
+   in, forwards already. `--stop` and removing the package put back what it
+   changed. juistd itself writes no sysctl, so the unit keeps
+   `ProtectKernelTunables`; it masquerades overlay sources in an nftables
+   table of its own over netlink, with `CAP_NET_ADMIN` alone.
+4. **The client.** `juist exit-node` lists the exit nodes, `use NODE` and
+   `off` choose. The choice is the device's, held by its juistd per network,
+   and names the node by identity, so that it survives renames and
+   renumbering; "never chosen", "off" and a node are three states, which a
+   default an admin sets later (below) needs. Internet traffic goes to a
+   table of juist's own, after `lookup main suppress_prefixlength 0`, so that
+   every route the host has but its default one, the LAN's among them, keeps
+   working. juistd's own traffic, by its user, is kept outside the tunnel by a
+   rule of its own, so that it can always find its exit node again, and an
+   exit node is refused where juistd runs as root. One network per host uses
+   one at a time.
+5. **Failing closed.** While the chosen exit node cannot be used — not
+   granted, not serving, not reachable, or this device's view stale — internet
+   traffic is refused with "unreachable" rather than sent out directly, and
+   `juist status` says why. `juist exit-node off` is how to go direct.
+6. **DNS is not handled yet (M6c).** A resolver on the LAN, link-local or on
+   the host itself is reached outside the tunnel, and the network there sees
+   which names are looked up; the traffic to them still goes through it.
+   `juist exit-node use` warns where that is so, and `juist status` says it
+   for as long as it is. IPv6 goes through the tunnel even where the exit
+   node has none, and is refused there rather than sent out directly.
+
+For later, and not to be precluded: **a default an admin sets.** A
+quorum-signed default exit node per device, which `juist invite --exit-node`
+could set at admission, applied below the device's own choice and so undone
+by `juist exit-node off`, and shown in `juist status` as the network's. Open
+then: whether it may be a requirement rather than a default, and whether a
+device fails closed or goes direct while its default is down.
+
 - **Exit criteria:** (1) a member that forwards traffic without a route grant is
   dropped by every peer; (2) a grant overlapping the overlay ULA or an overlay v4
-  range is rejected by the log validator, so an exit node can never intercept
-  member-to-member traffic; (3) with a full tunnel up, no DNS query and no non-LAN packet leaves the
-  host outside the tunnel (asserted by capture on the physical interface) while LAN
-  destinations still resolve and route locally; (4) withdrawing the `exit-node` role
-  cuts egress within gossip convergence for reachable clients and at the TTL boundary
-  for partitioned ones.
+  range is rejected by the log validator, and an exit node's default route
+  leaves the overlay out, so an exit node can never intercept member-to-member
+  traffic; (3) with a full tunnel up, no non-LAN packet leaves the host outside
+  the tunnel but DNS to a LAN or link-local resolver, which the CLI names
+  (asserted by capture on the physical interface), while LAN destinations still
+  route locally; (4) withdrawing the `exit-node` role cuts egress within gossip
+  convergence for reachable clients and at the TTL boundary for partitioned
+  ones.
+
+## M6b — Subnet routers
+
+On M6a's route consumption, forwarding and masquerade: a member granted
+prefixes routes them for every member, and clients install routes for them.
+
+- **Open:** whether a client takes granted routes by itself or after its
+  owner agrees, as Tailscale's `--accept-routes`. By itself, leaving out a
+  prefix that overlaps a network the client is attached to, and saying so,
+  fits a default that makes the option unnecessary.
+- **Exit criteria:** (1) a member forwarding for prefixes it holds no grant
+  for is dropped by every peer; (2) a granted prefix is reached through the
+  router from every member, and one overlapping a client's own LAN does not
+  take that LAN's traffic away from it; (3) withdrawing a grant removes the
+  route within gossip convergence for reachable clients and at the TTL
+  boundary for partitioned ones.
+
+## M6c — The exit node's DNS
+
+While a full tunnel is up, the client's DNS goes through it, to a resolver
+the exit node answers for, so that the network the client sits in sees no
+lookup. It needs what M8's step 3 needs, resolved configured through the
+pinned `net/dns`, and whichever comes first builds it for both.
+
+- **Open:** what the exit node resolves with, and whether the client's LAN
+  names (its router's search domain) are still asked of the LAN resolver,
+  which is a lookup the local network sees again.
+- **Exit criteria:** (1) with a full tunnel up, no DNS query leaves the host
+  outside the tunnel (asserted by capture on the physical interface) and
+  names resolve; (2) `juist exit-node off`, or the exit node's role being
+  withdrawn, puts the host's DNS back as it was; (3) without resolved,
+  nothing is configured, and `juist exit-node use` says DNS stays outside the
+  tunnel.
 
 ## M7 — FreeBSD
 
 The FreeBSD port: M3a's real device, router and privilege story on FreeBSD,
 M6's forwarding, NAT and default-route capture with pf, and a port that
-installs it. Reproducible builds, for Linux and FreeBSD alike. Android and the
-rest of the release work — distro packages, signed releases — are M11, after
-v1.0.
+installs it. Two things M5 left to it: keeping instances apart, where
+Tailscale's router routes in the host's one table (a FIB per instance, or the
+IPv4 yield of [13-multi-network-notes.md](13-multi-network-notes.md) read
+from that table), and sending from the old address during a renumbering,
+which Linux's router pins and FreeBSD leaves to the OS.
+
+Reproducible builds, for Linux and FreeBSD alike. Android and the rest of the
+release work — distro packages, signed releases — are M11, after v1.0.
 
 - **Exit criteria:** (1) Linux/FreeBSD interop matrix green in CI (FreeBSD via
   qemu); (2) build artifacts for both reproducible byte-for-byte from two
@@ -334,7 +588,8 @@ The plan, in order:
    AAAA, around the tunnel. TTLs are short (30 s), so a withdrawn override
    leaves caches quickly. How juistd binds port 53 on the overlay address,
    and what capability that takes, is part of this step.
-3. **Wiring it to the host.** resolved gets `~NETWORK` and one routing domain
+3. **Wiring it to the host** (built by M6c, if that comes first).
+   resolved gets `~NETWORK` and one routing domain
    per override (`~mx.example.net`), so no other query reaches juistd, and the
    rest of `example.net` resolves as before. Without resolved nothing is
    configured and `juist status` says so; rewriting `/etc/resolv.conf` is not
@@ -372,7 +627,7 @@ them for up to a TTL.
 
 ## M9 — Break-glass recovery and key backup
 
-Genesis commits to break-glass secrets, `juist init` writes them to a file to
+Genesis commits to break-glass secrets, `juist create` writes them to a file to
 keep offline, and `State.ValidDisablement` verifies one; nothing consumes a
 revealed secret yet. Until something does, an admin whose keys are all lost
 leaves a network whose quorum needs them unchangeable, which `juist admins
@@ -420,7 +675,10 @@ External security audit of the trust layer + enrollment (the ≈7–9 k LOC TCB)
 plus what M6 and M8 add to it — route consumption and its forwarding helper, the
 override record and the resolver — fix findings, mature fuzz corpus (consider
 OSS-Fuzz), implementation-vs-threat-model review, documentation of the
-residual-weakness acceptances for operators.
+residual-weakness acceptances for operators. Before the audit, a user per
+juistd instance, so that one network's compromised daemon on a host no longer
+holds the others' device keys (M5's residual weakness 9 in
+[02-threat-model.md](02-threat-model.md)).
 
 v1 is Linux and FreeBSD; Android and the release work follow in M11.
 

@@ -12,8 +12,8 @@ func TestFlagsGoAnywhere(t *testing.T) {
 	c := newCLI(t)
 	var out syncBuffer
 	// --home after the command, a flag after the positional argument.
-	if err := c.app(&out, "").main([]string{"init", "home", "--home", c.home, "--device", "laptop"}); err != nil {
-		t.Fatalf("init: %v\n%s", err, out.String())
+	if err := c.app(&out, "").main([]string{"create", "home", "--home", c.home, "--device", "laptop"}); err != nil {
+		t.Fatalf("create: %v\n%s", err, out.String())
 	}
 	mustContain(t, c.mustRun("devices"), "laptop")
 }
@@ -54,7 +54,8 @@ func TestOptionsHaveOneSpellingAndActionsAreCommands(t *testing.T) {
 		{[]string{"invite", "--expire", "2h"}, "did you mean --expires?"},
 		{[]string{"remove", "--y", "x"}, "as -y"},
 		{[]string{"--version"}, "use: juist version"},
-		{[]string{"-init"}, "did you mean: juist init"},
+		{[]string{"-init"}, "did you mean: juist create"},
+		{[]string{"-create"}, "did you mean: juist create"},
 		{[]string{"rotate", "--identity"}, "unknown option --identity"},
 		{[]string{"rotate", "sideways"}, "unknown rotation"},
 		{[]string{"grant", "--remove", "a", "relay"}, "unknown option --remove"},
@@ -88,7 +89,7 @@ func TestOptionsHaveOneSpellingAndActionsAreCommands(t *testing.T) {
 func TestCompletion(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop")
 	for _, tc := range []struct {
 		words []string
 		want  []string
@@ -104,7 +105,7 @@ func TestCompletion(t *testing.T) {
 		{[]string{"invite", "--port", ""}, nil, []string{"--port", "laptop"}},
 		{[]string{"admins", "remove", ""}, []string{defaultAdminName()}, []string{"remove"}},
 		{[]string{"remove", "--home", ""}, nil, []string{"remove", "laptop"}},
-		{[]string{"--home", "/tm"}, nil, []string{"init", "status"}},
+		{[]string{"--home", "/tm"}, nil, []string{"create", "status"}},
 	} {
 		out := c.mustRun(append([]string{"__complete"}, tc.words...)...)
 		got := strings.Fields(out)

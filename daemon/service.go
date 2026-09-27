@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,8 +22,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/nning/juist/conn"
 	"github.com/nning/juist/discovery/mdns"
 	"github.com/nning/juist/internal/guest"
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/internal/rendezvous"
 	"github.com/nning/juist/trust/enroll"
@@ -62,6 +65,14 @@ type Service struct {
 	// meshErr is why the mesh last failed to start over a log that lists
 	// this device; the watcher retries.
 	meshErr error
+
+	// hostConflict is what a lower instance on the host held of this
+	// network's claims when the mesh last started, or nil; hostErr is the
+	// last failure to read the host, logged once.
+	hostConflict *hostConflictError
+	hostErr      string
+	clearChecks  int  // checks in a row that found the conflict gone
+	meshStarted  bool // a mesh ran in this process: the host is known
 
 	// session is what a restarted mesh announces again, for as long as the
 	// device's keys are sessionKeys: new keys take a new one, since a
@@ -110,6 +121,17 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	s := &Service{opts: opts, logf: opts.Logf, selfUID: uint32(os.Getuid())}
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
+	}
+	// Only a real device puts anything into the host's tables.
+	if s.opts.Mesh.HostHoldings == nil && s.opts.Mesh.TunName != "" {
+		s.opts.Mesh.HostHoldings = conn.InstanceHoldings
+	}
+	if s.opts.Mesh.LowerStatus == nil && s.opts.Mesh.HostHoldings != nil {
+		sock := cmp.Or(opts.Socket, ipc.SocketPath(opts.Home))
+		s.opts.Mesh.LowerStatus = lowerStatusBeside(sock)
+	}
+	if s.opts.Mesh.LowerHome == nil && s.opts.Mesh.HostHoldings != nil {
+		s.opts.Mesh.LowerHome = lowerHomesBeside(opts.Home, opts.Mesh.Instance)
 	}
 	home := opts.Home
 	if err := os.MkdirAll(home, keys.DirMode); err != nil {
@@ -295,6 +317,7 @@ func (s *Service) watch(ctx context.Context) {
 		case <-t.C:
 			s.adoptRotation()
 			s.followAddrs()
+			s.checkHost()
 			s.retryMesh()
 		}
 	}
@@ -308,6 +331,45 @@ func (s *Service) startMeshLocked() error {
 		return nil
 	}
 	o := s.opts.Mesh
+	// A lower instance on the host holding what this network claims routes
+	// it into its own network: this one runs without IPv4 then, and does not
+	// run at all where that instance is in this very network.
+	prev := s.hostConflict
+	s.hostConflict = nil
+	if state := s.auth.State(); state.IsMember(s.keys.Identity.Public()) {
+		c, err := s.hostConflictLocked(state)
+		if err != nil {
+			// Unreadable is no verdict: keep what was last found, if anything.
+			s.logHostOnce(err)
+			c = prev
+		} else {
+			s.hostErr = ""
+		}
+		// A lower instance that restarts holds nothing for a moment; the
+		// conflict ends once it has been seen gone a few times over.
+		if c == nil && prev != nil {
+			if s.clearChecks++; s.clearChecks < conflictClearChecks {
+				c = prev
+			}
+		}
+		if c != prev {
+			s.clearChecks = 0
+		}
+		switch {
+		case c != nil && (prev == nil || prev.Error() != c.Error()) && c.SameNetwork:
+			s.logf("daemon: not starting the mesh: %v", c)
+		case c != nil && (prev == nil || prev.Error() != c.Error()):
+			s.logf("daemon: running without IPv4: %v", c)
+		case c == nil && prev != nil:
+			s.logf("daemon: IPv4 back: no instance below this one holds what %q claims", state.Network())
+		}
+		s.hostConflict = c
+		if c != nil && c.SameNetwork {
+			s.meshErr = c
+			return c
+		}
+		o.NoV4 = c != nil
+	}
 	o.Authority, o.Storage = s.auth, s.store
 	o.Identity, o.Recipient, o.WireGuard = s.keys.Identity, s.keys.Recipient, s.keys.WireGuardPrivate()
 	if s.session == nil || s.sessionID != s.keys.Identity.Public() || s.sessionKeys != s.keys.Public {
@@ -320,6 +382,8 @@ func (s *Service) startMeshLocked() error {
 	o.Session = s.session
 	o.EndpointCachePath = statedir.EndpointCachePath(s.opts.Home)
 	o.LeasePath = statedir.LeasePath(s.opts.Home)
+	o.WaitingPath = statedir.WaitingPath(s.opts.Home)
+	o.OnAddrsMoved = s.followAddrs
 	o.KeyringPath = statedir.KeyringPath(s.opts.Home)
 	if o.Logf == nil {
 		o.Logf = s.logf
@@ -351,6 +415,7 @@ func (s *Service) startMeshLocked() error {
 	}()
 	// The mesh owns the authority from here; the service asks it.
 	s.mesh, s.meshStop, s.meshDone, s.auth = d, cancel, done, nil
+	s.meshStarted = true
 	return nil
 }
 
@@ -362,6 +427,40 @@ func (s *Service) stopMeshLocked() {
 	s.mesh.Close()
 	<-s.meshDone
 	s.mesh = nil
+}
+
+// checkHost restarts the mesh when what a lower instance on the host holds
+// has come to conflict with this network, or stopped doing so: one started
+// later, or a network renumbered into this one's addresses or out of them.
+// See [Service.startMeshLocked] for what a conflict does.
+func (s *Service) checkHost() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mesh == nil || s.opts.Mesh.HostHoldings == nil {
+		return
+	}
+	state, err := s.mesh.TrustedState()
+	if err != nil {
+		return
+	}
+	c, err := s.hostConflictLocked(state)
+	if err != nil {
+		s.logHostOnce(err)
+		return
+	}
+	s.hostErr = ""
+	if c == nil && s.hostConflict != nil {
+		if s.clearChecks++; s.clearChecks < conflictClearChecks {
+			return
+		}
+	} else if c != nil {
+		s.clearChecks = 0
+	}
+	if (c == nil) == (s.hostConflict == nil) && (c == nil || !c.SameNetwork) {
+		s.hostConflict = c // the same mode; what it names may have moved
+		return
+	}
+	s.restartMeshLocked(nil, "a change on the host")
 }
 
 // retryMesh starts a mesh that failed to start, which a transient cause —
@@ -453,6 +552,7 @@ func (s *Service) Status() ipc.Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var st ipc.Status
+	var state *log.State
 	switch {
 	case s.mesh != nil:
 		st = s.mesh.Status()
@@ -460,8 +560,9 @@ func (s *Service) Status() ipc.Status {
 		// Whoever reads the warning may be fixing the firewall, and should
 		// see it gone on their next look, not the next tunnel check's.
 		s.mesh.recheckFirewall()
+		state, _ = s.mesh.TrustedState()
 	case s.auth != nil:
-		state := s.auth.State()
+		state = s.auth.State()
 		st = ipc.Status{
 			Network: state.GenesisHash(), InNetwork: true,
 			Derived: ipc.Derived{
@@ -472,6 +573,14 @@ func (s *Service) Status() ipc.Status {
 		if s.meshErr != nil && !errors.Is(s.meshErr, ErrNotMember) {
 			st.StartError = s.meshErr.Error()
 		}
+	}
+	st.Instance, st.Device = s.opts.Mesh.Instance, s.opts.Mesh.TunName
+	if state != nil {
+		st.V4Claims, _ = hostClaims(state, s.now().Unix())
+	}
+	if s.hostConflict != nil {
+		c := s.hostConflict.HostConflict
+		st.HostConflict = &c
 	}
 	st.Self = s.keys.Identity.Public()
 	if st.SelfName == "" {
@@ -584,6 +693,15 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 		err = s.unstage()
 	case ipc.CmdReset:
 		err = s.reset(req.Force)
+	case ipc.CmdWaiting:
+		m := s.Mesh()
+		if m == nil {
+			err = errNoNetwork
+			break
+		}
+		if err = m.OfferWaiting(req.Waiting); err == nil {
+			return ipc.Response{Waiting: m.Waiting()}
+		}
 	default:
 		err = fmt.Errorf("unhandled %v", req.Command)
 	}
@@ -598,8 +716,9 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 var errNoNetwork = errors.New("this device is not in a network yet")
 
 // reset returns the device to a fresh install: everything in the state
-// directory but the lock and the socket goes, and the device gets new keys.
-// A member is reset only when forced, since the others keep listing it.
+// directory but the lock, the socket and the homes of the host's other
+// instances goes, and the device gets new keys. A member is reset only when
+// forced, since the others keep listing it.
 func (s *Service) reset(force bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -624,14 +743,16 @@ func (s *Service) reset(force bool) error {
 		return fmt.Errorf("daemon: %s holds no %s, so it is not reset: %w", home, keys.NodeKeysFile, err)
 	}
 	s.stopMeshLocked()
-	s.auth, s.meshErr = nil, nil
+	s.auth, s.meshErr, s.hostConflict = nil, nil, nil
 
 	entries, err := os.ReadDir(home)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if e.Name() == statedir.LockName || e.Name() == ipc.SocketName {
+		// The default instance's home holds the others' (juist1 …), which
+		// are other networks' devices, not this one's state.
+		if e.Name() == statedir.LockName || e.Name() == ipc.SocketName || e.IsDir() && instance.IsName(e.Name()) {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(home, e.Name())); err != nil {
@@ -805,6 +926,14 @@ func (s *Service) inform(raw [][]byte) error {
 	if err != nil {
 		return err
 	}
+	// A device the records remove is told first, while it still has a
+	// tunnel to be told through; outside mu, since that is network I/O.
+	s.mu.Lock()
+	mesh := s.mesh
+	s.mu.Unlock()
+	if mesh != nil {
+		mesh.farewell(context.Background(), records)
+	}
 	s.mu.Lock()
 	switch {
 	case s.mesh != nil:
@@ -899,6 +1028,7 @@ func (s *Service) join(ctx context.Context, req *ipc.Request, events func(*ipc.E
 		Keys:          k,
 		Network:       network,
 		NetworkName:   networkName,
+		Elsewhere:     req.Elsewhere,
 		Find:          s.opts.Find,
 		SkipInterface: s.opts.Mesh.TunName,
 		Meet:          s.helpers().Meeter(s.logf),

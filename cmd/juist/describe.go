@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
@@ -161,6 +162,17 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 			}
 		}
 		add("takes the vote away from the admin key %s", name)
+	case types.KindSetAdminRecipient:
+		name := "the admin key " + aum.Subject.ShortString()
+		if state != nil {
+			if k, ok := state.Admin(*aum.Subject); ok {
+				name = orDash(keyPerson(k)) + "'s admin key " + aum.Subject.ShortString()
+				if m := keyMachine(k); m != "" {
+					name += " on " + m
+				}
+			}
+		}
+		add("gives %s the encryption key %s", name, recipientDigest(*aum.Recipient))
 	case types.KindSetQuorum:
 		if state != nil {
 			add("changes the quorum from %d to %d, of %d", state.Quorum(), *aum.Quorum, state.TotalVotes())
@@ -188,18 +200,34 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 			add("%s to %v", member(e.Identity), e.V4)
 		}
 		add("old addresses until %s", deadline(r.Until))
-		if past := pastDeadline(r.Until, now); past != "" {
+		if past := deadlineNote(r.Until, now); past != "" {
 			add("%s", past)
 		}
 	case types.KindRenumberNode:
 		r := aum.Renumber
-		add("moves %s to %v", member(*aum.Subject), *r.V4)
+		var old *netip.Addr
+		known := false
 		if state != nil {
-			if n, ok := state.Node(*aum.Subject); ok && n.V4 != nil {
-				add("%v until %s", *n.V4, deadline(r.Until))
-				if past := pastDeadline(r.Until, now); past != "" {
-					add("%s", past)
-				}
+			if n, ok := state.Node(*aum.Subject); ok {
+				old, known = n.V4, true
+			}
+		}
+		atOnce := r.Until == types.RetireAtOnce && (old != nil || !known)
+		if atOnce {
+			add("moves %s to %v at once", member(*aum.Subject), *r.V4)
+		} else {
+			add("moves %s to %v", member(*aum.Subject), *r.V4)
+		}
+		switch {
+		case atOnce && old != nil:
+			add("retires %v now: devices not told yet reach the device over IPv6 only", *old)
+		case atOnce:
+			add("retires its old address now")
+		case r.Until == types.RetireAtOnce:
+		case old != nil:
+			add("%v until %s", *old, deadline(r.Until))
+			if past := deadlineNote(r.Until, now); past != "" {
+				add("%s", past)
 			}
 		}
 	case types.KindRetireAddresses:
@@ -216,14 +244,27 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 	return out
 }
 
-// pastDeadline warns of a renumbering whose deadline has passed: applied now,
-// it moves every address at once, with nothing to fall back on.
-func pastDeadline(until uint64, now int64) string {
-	if now < int64(min(until, 1<<62)) {
-		return ""
+// deadlineNote warns of a renumbering whose deadline has passed, or is near.
+// Its deadline was fixed when it was proposed, so every approval after that
+// leaves less of the transition: applied past it, it moves every address at
+// once, with nothing to fall back on; applied close to it, a device offline
+// for longer than is left loses its old address before it hears of the new.
+func deadlineNote(until uint64, now int64) string {
+	left := time.Duration(int64(min(until, 1<<32))-now) * time.Second
+	switch {
+	case left <= 0:
+		return "BUT that deadline has passed: old addresses stop on applying; redo it with a longer --for"
+	case left < shortTransition:
+		return fmt.Sprintf("BUT only %s of that is left: a device offline longer loses its old address "+
+			"before it hears of the move; redo it with a longer --for if that is too short", roughly(left))
 	}
-	return "BUT that deadline has passed: old addresses stop on applying; redo it with a longer --for"
+	return ""
 }
+
+// shortTransition is how little of a renumbering's transition is worth an
+// approver's attention: less than the freshness TTL a device may be offline
+// for and still count as current.
+const shortTransition = 48 * time.Hour
 
 // changesAuthority reports whether a record changes who may approve changes
 // or vouch for the network's state. Such a record is approved only where the
@@ -235,7 +276,8 @@ func changesAuthority(aum *types.AUM) bool {
 	case types.KindRotateIdentity:
 		return true
 	case types.KindAddAdminKey, types.KindRemoveAdminKey, types.KindSetQuorum,
-		types.KindCheckpoint, types.KindSchemaUpgrade, types.KindSetVouchers, types.KindSetHolder:
+		types.KindCheckpoint, types.KindSchemaUpgrade, types.KindSetVouchers, types.KindSetHolder,
+		types.KindSetAdminRecipient:
 		return true
 	case types.KindAddNode:
 		return slices.Contains(aum.Node.Roles, types.RoleAdmin)
@@ -288,5 +330,11 @@ func describeRoutes(r []netip.Prefix) string {
 // compare.
 func keysDigest(k types.NodeKeys) string {
 	sum := sha256.Sum256(slices.Concat(k.WireGuard[:], k.X25519[:], k.MLKEM[:]))
+	return hex.EncodeToString(sum[:6])
+}
+
+// recipientDigest names an encryption key in the same form.
+func recipientDigest(r types.RecipientKey) string {
+	sum := sha256.Sum256(slices.Concat(r.X25519[:], r.MLKEM[:]))
 	return hex.EncodeToString(sum[:6])
 }

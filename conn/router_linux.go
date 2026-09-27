@@ -29,8 +29,9 @@ import (
 )
 
 const (
-	// juistRouteTable holds only juist's peer routes: 0x6a75 is "ju", apart
-	// from Tailscale's 52 and the kernel's 253–255.
+	// juistRouteTable holds only the default instance's peer routes: 0x6a75
+	// is "ju", apart from Tailscale's 52 and the kernel's 253–255. Instance n
+	// has table juistRouteTable+n.
 	juistRouteTable = 0x6a75
 
 	// juistRulePrefBase is below Tailscale's 5200, so an overlay route wins
@@ -38,10 +39,16 @@ const (
 	juistRulePrefBase = 5100
 )
 
-// juistRules are Tailscale's policy rules with our table and priorities:
-// bypass-marked packets (magicsock's own) skip the overlay, everything else
-// consults our table first and falls through to later rules on a miss.
-func juistRules(family int) []netlink.Rule {
+// routeTable is instance inst's routing table.
+func routeTable(inst int) int { return juistRouteTable + inst }
+
+// juistRules are Tailscale's policy rules with instance inst's table and
+// priorities: bypass-marked packets (magicsock's own) skip the overlay,
+// everything else consults the table and falls through to later rules on a
+// miss. Instance n's rules sit n above the default's, so every instance's
+// bypass comes before any instance's table, each deletes only its own, and
+// where two tables claim one address the lower instance's wins.
+func juistRules(family, inst int) []netlink.Rule {
 	specs := []struct {
 		pref, table int
 		mark        bool
@@ -50,13 +57,13 @@ func juistRules(family int) []netlink.Rule {
 		{10, unix.RT_TABLE_MAIN, true, 0},
 		{30, unix.RT_TABLE_DEFAULT, true, 0},
 		{50, 0, true, unix.RTN_UNREACHABLE},
-		{70, juistRouteTable, false, 0},
+		{70, routeTable(inst), false, 0},
 	}
 	rules := make([]netlink.Rule, 0, len(specs))
 	for _, s := range specs {
 		ru := *netlink.NewRule()
 		ru.Family = family
-		ru.Priority = juistRulePrefBase + s.pref
+		ru.Priority = juistRulePrefBase + s.pref + inst
 		ru.Table = s.table
 		ru.Type = s.typ
 		if s.mark {
@@ -68,8 +75,14 @@ func juistRules(family int) []netlink.Rule {
 	return rules
 }
 
-func isJuistRulePref(pref uint32) bool {
-	return pref >= juistRulePrefBase && pref < juistRulePrefBase+100
+// isJuistRulePref reports whether pref is one of instance inst's rules.
+func isJuistRulePref(pref uint32, inst int) bool {
+	for _, ru := range juistRules(netlink.FAMILY_V4, inst) {
+		if pref == uint32(ru.Priority) {
+			return true
+		}
+	}
+	return false
 }
 
 // linuxRouter programs juist's addresses, routes and policy rules. It serves
@@ -77,6 +90,7 @@ func isJuistRulePref(pref uint32) bool {
 type linuxRouter struct {
 	logf    logger.Logf
 	link    netlink.Link
+	inst    int  // the host's juist instance this is, which owns table and rules
 	v6Rules bool // the kernel has IPv6 at all
 	ec      *eventbus.Client
 
@@ -91,7 +105,8 @@ type linuxRouter struct {
 	v6Logged bool
 }
 
-func newOSRouter(logf logger.Logf, dev tun.Device, _ *netmon.Monitor, _ *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
+func newOSRouter(logf logger.Logf, dev tun.Device, _ *netmon.Monitor, _ *health.Tracker, bus *eventbus.Bus,
+	inst int) (router.Router, error) {
 	name, err := dev.Name()
 	if err != nil {
 		return nil, err
@@ -104,6 +119,7 @@ func newOSRouter(logf logger.Logf, dev tun.Device, _ *netmon.Monitor, _ *health.
 	r := &linuxRouter{
 		logf:         logger.WithPrefix(logf, "router: "),
 		link:         link,
+		inst:         inst,
 		v6Rules:      err == nil,
 		restoreLimit: rate.NewLimiter(rate.Every(5*time.Second), 10),
 	}
@@ -243,7 +259,7 @@ func (r *linuxRouter) delAddr(p netip.Prefix) error {
 }
 
 func (r *linuxRouter) route(p netip.Prefix) *netlink.Route {
-	return &netlink.Route{LinkIndex: r.link.Attrs().Index, Dst: netipx.PrefixIPNet(p), Table: juistRouteTable}
+	return &netlink.Route{LinkIndex: r.link.Attrs().Index, Dst: netipx.PrefixIPNet(p), Table: routeTable(r.inst)}
 }
 
 func (r *linuxRouter) addRoute(p netip.Prefix) error {
@@ -275,7 +291,7 @@ func (r *linuxRouter) ruleFamilies() []int {
 func (r *linuxRouter) addRulesLocked() error {
 	var errs []error
 	for _, fam := range r.ruleFamilies() {
-		for _, ru := range juistRules(fam) {
+		for _, ru := range juistRules(fam, r.inst) {
 			err := netlink.RuleAdd(&ru)
 			if fam == netlink.FAMILY_V6 && errors.Is(err, syscall.EAFNOSUPPORT) {
 				r.logf("the kernel has no IPv6 policy routing; skipping IPv6 rules")
@@ -295,7 +311,7 @@ func (r *linuxRouter) addRulesLocked() error {
 func (r *linuxRouter) delRulesLocked() error {
 	var errs []error
 	for _, fam := range r.ruleFamilies() {
-		for _, ru := range juistRules(fam) {
+		for _, ru := range juistRules(fam, r.inst) {
 			if err := netlink.RuleDel(&ru); err != nil && !errors.Is(err, syscall.ENOENT) {
 				errs = append(errs, fmt.Errorf("deleting %v: %w", ru, err))
 			}
@@ -307,7 +323,7 @@ func (r *linuxRouter) delRulesLocked() error {
 // onRuleDeleted restores our rules after someone else (systemd-networkd, say)
 // deletes them, once per burst and at a bounded rate.
 func (r *linuxRouter) onRuleDeleted(pref uint32) {
-	if !isJuistRulePref(pref) || r.restorePending.Swap(true) {
+	if !isJuistRulePref(pref, r.inst) || r.restorePending.Swap(true) {
 		return
 	}
 	res := r.restoreLimit.Reserve()

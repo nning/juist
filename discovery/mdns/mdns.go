@@ -35,6 +35,7 @@ import (
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 )
@@ -114,7 +115,9 @@ type Options struct {
 
 	// SkipInterface is an interface discovery must never join or send on, in
 	// practice the overlay's TUN device: discovery is an underlay function,
-	// and a Linux TUN carries IFF_MULTICAST so it joins otherwise.
+	// and a Linux TUN carries IFF_MULTICAST so it joins otherwise. The
+	// devices of the host's juist instances (juist0 to juist9) are skipped
+	// whatever it says.
 	SkipInterface string
 
 	// Logf receives diagnostics. Nil discards them.
@@ -261,7 +264,9 @@ func (c *groupConn) rejoin() int {
 		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagMulticast == 0 {
 			continue
 		}
-		if c.skipIface != "" && ifi.Name == c.skipIface {
+		// Nor the host's other juist instances' devices: each leads into
+		// another network's tunnel, which drops multicast anyway.
+		if c.skipIface != "" && ifi.Name == c.skipIface || instance.IsDevice(ifi.Name) {
 			continue
 		}
 		if err := c.p.JoinGroup(&ifi, c.group); err != nil && !errors.Is(err, syscall.EADDRINUSE) {

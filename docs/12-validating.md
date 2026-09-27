@@ -23,6 +23,16 @@ own, which sets `JUIST_REQUIRE_OS_PLUMBING=1` so a skip there becomes a failure.
 If you are checking a claim about devices, routes or NAT, `make check` is not the
 command.
 
+The privileged tests leave a juistd running on the same machine alone. The
+namespace tests run every node in namespaces of their own, and put only a
+bridge without an address and its veth ends in the host's. The one real-device
+test in the host's namespace takes an instance number no juistd holds, with its
+own table and rules, and documentation addresses (192.0.2.0/24,
+2001:db8::/32). `make test-os-plumbing-sudo` does the same without running `go`
+as root, which would leave root's files in your Go caches. A run cut short
+leaves namespaces named `juist…`, `jn…` or `jc…` and a bridge `jbr…`;
+`ip netns del` and `ip link del` remove them.
+
 **Fuzzing never runs on CI.** [06-verification.md](06-verification.md) sets
 the gate at 72 clean CPU-hours per input surface, which is far more hosted-runner
 time than this project will spend, so it is run by hand before a milestone
@@ -69,6 +79,38 @@ than skip. A NAT cell can be run alone with
 | M4 — a compromised juistd cannot get the admin's signature on anything else | `cmd/juist`: `TestRotationRecordsFromTheDaemonAreChecked`, `TestAnInviteThroughTheDaemonAdmitsOneDevice`, `TestTheKeystoreAnchorsWhatItVerified`, `TestTheAnchorRefusesARollback` | no |
 | M4 — approve shows a record's effect, not its file name | `cmd/juist`: `TestApproveShowsWhatItSigns` | no |
 | M4 — freshness needs the threshold of admin devices | `trust/log`: `TestFreshnessNeedsTheThresholdOfAdminDevices` | no |
+| M5 — one host in two networks reaches both, over both families | `conn`: `TestNetnsAHostInTwoNetworks` | **yes** |
+| M5 — instances keep their tables and rules apart | `conn`: `TestInstancesKeepTheirRulesApart`, `TestNetnsInstancesLeaveEachOtherAlone` | for the second |
+| M5 — an overlapping instance yields IPv4, the same network twice does not start | `daemon`: `TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt`, `TestAnInstanceRefusesANetworkTheHostRunsAlready`, `TestTheLowerInstanceKeepsItsAddresses` | no |
+| M5 — the CLI finds, makes and removes instances | `cmd/juist`: `TestASecondNetworkRunsBesideTheFirst`, `TestJoiningASecondNetwork` | no |
+| M5 — a renumbering keeps every pair reachable, the offline one included | `conn`: `TestNetnsRenumberingKeepsEveryPairReachable`; `trust/log`: `TestRejectsCollidingV4Address` | for the first |
+| M5a — each network its own admin key, one shared only on purpose | `cmd/juist`: `TestEachNetworkHasAnAdminKeyOfItsOwn` | no |
+| M5a — keys from before, and keys made before their network | `cmd/juist`: `TestAKeyFromBeforeKeysPerNetworkSignsUnchanged`, `TestAKeyMadeBeforeItsNetworkIsFiledUnderIt`, `TestWithoutALogKeysOfTwoNetworksSignByName` | no |
+| M5b — a waiting change reaches the other admin device and applies with its vote | `cmd/juist`: `TestAChangeWaitsOnTheOtherAdminDevice`, `TestAnInviteGoesOnWithAVoteFromAnotherAdminDevice`, `TestAnAdmissionGathersVotesWhileItsInviteRuns`, `TestApprovingTheFileCarriesTheSignature`; `gossip`: `TestWaitingChangesReachTheAdminDevices` | no |
+| M5b — a copy not from a current admin key, or past the log, is dropped | `daemon`: `TestADaemonHoldsOnlyChangesThatFit`, `TestOneSignerCannotFillTheRoom`; `internal/waiting`: `TestAChangedCopyIsRefused`, `TestASignerLyingAboutItsChangeIsFoundOut` | no |
+| M5b — no device without the admin role, nor the one a change is about, receives it | `gossip`: `TestWaitingChangesReachNoOtherDevice`; `daemon`: `TestADaemonHandsChangesToAdminDevicesAlone`, `TestHeldChangesAreSaidToAdminDevicesAlone`; `cmd/juist`: `TestAChangeNeverReachesTheDeviceItIsAbout` | no |
+| M5b — nothing is signed unasked | `cmd/juist`: `TestAChangeWaitsOnTheOtherAdminDevice`, `TestAChangeThatExpiresWhileAskedIsNotSigned` | no |
+| M5b — a change sealed to its admins opens for no other key | `internal/waiting`: `TestAChangeOpensForItsAdminsAlone`; `trust/secrets`: `TestSealKeyToOpensForItsReaderAlone`; `trust/log`: `TestSetAdminRecipient`, `TestAGenesisRecipientIsSignedForByItsKey` | no |
+| M5c — a device moved at once is reached at its new address only, and other transitions run on | `cmd/juist`: `TestAMoveAtOnceReachesEveryDevice`, `TestMovingADeviceAtOnce`, `TestAMoveAtOnceReadsAsOne`, `TestHeldAddressesRead`, `TestStatusNamesTheDevicesNotYetMoved`; `daemon`: `TestAMovedDeviceRestartsOnItsNewAddressAtOnce`; `trust/log`: `TestRenumberNodeAtOnce` | no |
+
+### The last privileged run
+
+No CI job has started since 2026-09-25: the GitHub account's spending limit
+ends every run within seconds, so a red run there is no test failure, and
+`make check` and `make cross` run locally are the gates meanwhile. The
+privileged rows above were therefore last checked by hand, and this records the
+latest such run. Update it with each one, so it is clear how old the evidence
+is.
+
+- **2026-09-27, at M5.** `make test-os-plumbing-sudo` ran on a Fedora 44
+  Workstation desktop (kernel 7.2.5, iptables 1.8.11 on nf_tables,
+  iproute2 6.17), beside a running juistd in a network of four devices and
+  beside Tailscale. All eleven tests passed and none skipped: every row marked
+  privileged above, including all six cells of the NAT matrix and M5's three
+  netns tests, which ran for the first time. Afterwards the host's juistd
+  still had all three tunnels up, with its policy rules in place.
+- **Not covered by that run:** the checks done by hand against the installed
+  package, the privilege footprint and two networks on one host (below).
 
 ## Check the privilege footprint
 
@@ -78,7 +120,7 @@ checked against the package rather than against a binary in `build/`:
 ```sh
 make rpm && sudo dnf install ./build/rpm/RPMS/*/juist-*.rpm
 sudo systemctl enable --now juistd
-juist init testbox
+juist create testbox
 ```
 
 ```sh
@@ -96,6 +138,32 @@ if the bounding set were left wide, and the criterion is that nothing beyond
 address carries only its derived ULA address on the device, and a network of one
 member programs no peer routes — both are the expected picture, not a half-built
 device.
+
+## Check two networks on one host
+
+M5's criteria are about the installed services side by side, so they too are
+checked against the package. On a host with the package installed and in one
+network already, with a second device to invite from:
+
+```sh
+juist create lab --yes                # asks for sudo once; says juist1
+juist status                        # both, headed juist0 and juist1
+systemctl status juistd@juist1      # running, as the juist user
+ip -br addr show juist1             # the second network's addresses
+ip rule | grep -E '^51[0-9][0-9]'   # 5110 … 5170 and 5111 … 5171
+ip route show table 27254           # juist1's routes, and nothing else's
+sudo systemctl restart juistd       # juist1's routes and rules stay put
+juist reset lab --force            # juist1 goes, with its home
+```
+
+For the conflict, found the second network with `--ipv4` set to the first
+one's range (`juist create lab --ipv4 RANGE --yes`, which warns). `juist status`
+then reports the second one without IPv4 and names the first, and
+`ip -br addr show juist1` shows no IPv4 address. Renumbering either network
+out of the other's range, and retiring the old addresses
+(`juist network renumber lab PREFIX`, then
+`juist network renumber lab --finish`), brings IPv4 back after
+three checks in a row find the conflict gone, about fifteen seconds.
 
 ## Reading a failure in the NAT matrix
 
@@ -132,7 +200,9 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   the schema version exists so that case fails loudly rather than silently, but
   the readiness check that would stop an admin stranding members is M11's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)). Mixed builds do not
-  sync at all across M4, whose gossip frames carry leases older builds reject.
+  sync at all across M4, whose gossip frames carry leases older builds reject,
+  nor across M5b between two admin devices while either holds waiting
+  changes.
 - **The freshness TTL on a real clock.** The tests move a fake one. On real
   devices, stopping every admin device for longer than the TTL is what shows the
   other members going down to admin-only tunnels.

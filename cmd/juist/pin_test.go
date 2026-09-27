@@ -38,8 +38,8 @@ func chainOf(t *testing.T, c *cli) ([]types.AUM, *log.Authority) {
 func TestTheKeystoreAnchorsWhatItVerified(t *testing.T) {
 	t.Parallel()
 	real, other := newCLI(t), newCLI(t)
-	real.mustRun("init", "home")
-	other.mustRun("init", "elsewhere")
+	real.mustRun("create", "home")
+	other.mustRun("create", "elsewhere")
 	keystore, err := openHome(filepath.Join(shortTempDir(t), "keystore"))
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func orphansOf(t *testing.T, c *cli) func() ([]types.AUM, error) {
 func TestTheAnchorFollowsForkChoice(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("init", "home")
+	admin.mustRun("create", "home")
 	enrollDevice(t, admin, "phone")
 	twin := newCLI(t)
 	copyTree(t, admin.home, twin.home)
@@ -171,7 +171,7 @@ func TestTheAnchorFollowsForkChoice(t *testing.T) {
 func TestTheAnchorRefusesARollback(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	name := displayName(nodeKeysOf(t, c))
 	c.mustRun("grant", name, "relay")
 	c.mustRun("revoke", name, "relay")
@@ -203,8 +203,8 @@ func TestTheAnchorRefusesARollback(t *testing.T) {
 func TestAJoinAnchorsTheAdmittedNetwork(t *testing.T) {
 	t.Parallel()
 	real, other := newCLI(t), newCLI(t)
-	real.mustRun("init", "home")
-	other.mustRun("init", "elsewhere")
+	real.mustRun("create", "home")
+	other.mustRun("create", "elsewhere")
 	recs, auth := chainOf(t, real)
 	orecs, oauth := chainOf(t, other)
 	h, err := openHome(real.home)
@@ -268,7 +268,7 @@ func TestAJoinAnchorsTheAdmittedNetwork(t *testing.T) {
 func TestTooManyOrphansAreNotResolved(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	recs, auth := chainOf(t, c)
 	flood := func() ([]types.AUM, error) { return make([]types.AUM, maxOrphans+1), nil }
 	if lost, _ := lostForkChoice(recs[0].Hash(), auth, recs, flood); lost {
@@ -293,7 +293,7 @@ func TestSocketPinsDoNotCollide(t *testing.T) {
 func TestAnOrphansFailureIsReportedAsSuch(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home")
+	c.mustRun("create", "home")
 	recs, auth := chainOf(t, c)
 	keystore, err := openHome(filepath.Join(shortTempDir(t), "keystore"))
 	if err != nil {

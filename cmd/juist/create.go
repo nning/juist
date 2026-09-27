@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	mathrand "math/rand/v2"
 	"net"
 	"net/netip"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"go4.org/netipx"
 
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/store"
@@ -40,10 +42,11 @@ func (a *app) drawNetworkName() (string, error) {
 	}
 }
 
-// An initPlan is what "juist init" was asked for, checked before anything is
+// An initPlan is what "juist create" was asked for, checked before anything is
 // written: the ceremony writes files that cannot simply be written over.
 type initPlan struct {
 	network, device, adminName string
+	adminKey                   string
 	noDevice, relay, yes       bool
 	adminVotes, quorum         uint
 	extraAdmins                stringList
@@ -51,12 +54,16 @@ type initPlan struct {
 	operator                   optionalString
 
 	// v4 is the parsed --ipv4, and admins every admin key, this keystore's
-	// first, whose key the ceremony fills in.
-	v4     *netip.Prefix
-	admins []types.AdminKey
+	// first, whose key the ceremony fills in: key, named keyName, if the
+	// keystore holds it already.
+	v4       *netip.Prefix
+	admins   []types.AdminKey
+	keyName  string
+	key      types.PrivateIdentity
+	keyFound bool
 }
 
-func cmdInit(a *app, args []string) error {
+func cmdCreate(a *app, args []string) error {
 	p, err := a.parseInit(args)
 	if err != nil {
 		return err
@@ -64,31 +71,50 @@ func cmdInit(a *app, args []string) error {
 	if err := a.checkInit(&p); err != nil {
 		return err
 	}
+	// On a device already in a network, the new one gets a juistd of its own;
+	// one for signing only gets none. $JUIST_NETWORK names a network the
+	// device is in, which a new one is not.
+	if a.networkFromEnv {
+		a.network = ""
+	}
+	if !p.noDevice {
+		a.purpose, a.yes = forFounding, p.yes
+	}
 	n, op, err := a.initNode(&p)
 	if err != nil {
+		a.unmake()
 		return err
 	}
-	return a.foundNetwork(n, op, &p)
+	if err := a.foundNetwork(n, op, &p); err != nil {
+		a.unmake()
+		return err
+	}
+	return nil
 }
 
 func (a *app) parseInit(args []string) (initPlan, error) {
-	s := spec{name: "juist init", args: "[NETWORK]", max: 1, about: `
+	s := spec{name: "juist create", args: "[NETWORK]", max: 1, anyNetwork: true, about: `
 Create a network with this device as its first member and voucher.
-NETWORK defaults to two random words.
+NETWORK defaults to two random words. A device in a network already runs
+the new one beside it, with a juistd of its own.
 
 The admin keys (this keystore's and --admin) and --quorum decide who may
-change the network; changing them later takes a quorum as well. Recovery
-without the admin keys is not implemented: losing them loses the network.`}
+change the network; changing them later takes a quorum as well. This
+keystore's is a new one, unless --admin-key shares one with its other
+networks. Recovery without the admin keys is not implemented: losing them
+loses the network.`}
 	var p initPlan
 	fs := newFlags(s.name)
 	fs.StringVar(&p.device, "device", "", "this device's `NAME` (default: the hostname)")
 	fs.BoolVar(&p.noDevice, "no-device", false, "do not make this device a member; for a signing-only machine")
 	fs.BoolVar(&p.relay, "relay", false, "make this device a relay")
-	fs.StringVar(&p.adminName, "admin-name", "", "`NAME` of the admin key created here (default: your user name)")
+	fs.StringVar(&p.adminName, "admin-name", "", "your `NAME` as admin (default: your user name, or --admin-key's)")
+	fs.StringVar(&p.adminKey, "admin-key", "", "govern it with the admin key `NAME` here too, as \"juist admins\" lists it")
 	fs.Var(&p.extraAdmins, "admin", "another admin, as `NAME=KEY[:VOTES]`; repeatable")
 	fs.UintVar(&p.adminVotes, "admin-votes", 1, "votes of the admin key created here")
 	fs.UintVar(&p.quorum, "quorum", 1, "votes a change needs")
-	fs.StringVar(&p.ipv4, "ipv4", "", "IPv4 `PREFIX`, such as 10.111.0.0/24 (default: "+types.OverlayV4.String()+")")
+	fs.StringVar(&p.ipv4, "ipv4", "", "IPv4 `PREFIX`, such as 10.111.0.0/24 (default: a free /22 in "+
+		types.OverlayV4.String()+")")
 	fs.BoolVar(&p.yes, "yes", false, "do not ask")
 	fs.Var(&p.operator, "operator", "local `USER` who manages this device without sudo")
 	pos, err := a.parse(s, fs, args)
@@ -100,7 +126,11 @@ without the admin keys is not implemented: losing them loses the network.`}
 	} else if p.network, err = a.drawNetworkName(); err != nil {
 		return p, err
 	}
-	if p.adminName == "" {
+	switch {
+	case p.adminName != "":
+	case p.adminKey != "":
+		p.adminName = keyPersonOf(p.adminKey)
+	default:
 		p.adminName = defaultAdminName()
 	}
 	return p, nil
@@ -120,6 +150,15 @@ func (a *app) checkInit(p *initPlan) error {
 	if err := checkName("--admin-name", p.adminName); err != nil {
 		return err
 	}
+	// A key made for this network before it, with "juist admins new
+	// --network", is the one it was made for.
+	p.keyName = cmp.Or(p.adminKey, adminKeyName(p.adminName, p.network))
+	var err error
+	if p.key, p.keyFound, err = a.home.adminKey(p.keyName); err != nil {
+		return err
+	} else if !p.keyFound && p.adminKey != "" {
+		return fmt.Errorf("--admin-key: no admin key %q here\nhint: juist admins", p.adminKey)
+	}
 	if p.device != "" {
 		if err := checkName("--device", p.device); err != nil {
 			return err
@@ -138,6 +177,20 @@ func (a *app) checkInit(p *initPlan) error {
 			if err := a.proceed(p.yes, "continue?"); err != nil {
 				return err
 			}
+		}
+		if other := a.networkClaiming(v4); other != "" {
+			a.warn("%v overlaps %s, which this device is in; one of the two would run here without IPv4", v4, other)
+			if err := a.proceed(p.yes, "continue?"); err != nil {
+				return err
+			}
+		}
+		p.v4 = &v4
+	} else {
+		v4, err := a.drawV4(func(c netip.Prefix) bool {
+			return len(hostNetsOverlapping(c)) > 0 || a.networkClaiming(c) != ""
+		})
+		if err != nil {
+			return err
 		}
 		p.v4 = &v4
 	}
@@ -168,6 +221,9 @@ func (a *app) checkInit(p *initPlan) error {
 // initNode finds the node the network is founded on, and checks it and the
 // keystore can take a new one.
 func (a *app) initNode(p *initPlan) (node, operatorChoice, error) {
+	if p.noDevice && !a.socketExplicit && a.anyInstanceRuns() {
+		return nil, operatorChoice{}, errors.New("--no-device: juistd runs here")
+	}
 	n, err := a.openNode()
 	if err != nil {
 		return nil, operatorChoice{}, err
@@ -187,8 +243,7 @@ func (a *app) initNode(p *initPlan) (node, operatorChoice, error) {
 	if err != nil {
 		return nil, operatorChoice{}, err
 	}
-	// An admin key already here is used again: one person's key may govern
-	// several networks. What belongs to one network alone is named for it.
+	// What belongs to one network alone is named for it.
 	for _, name := range []string{breakGlassFile(p.network), genesisFileFor(p.network)} {
 		if _, err := os.Stat(a.home.join(name)); err == nil {
 			return nil, operatorChoice{}, fmt.Errorf("network %q already prepared here: %s\nhint: pick another "+
@@ -204,10 +259,7 @@ func (a *app) initNode(p *initPlan) (node, operatorChoice, error) {
 // keystore's admin key and creates the network, or where more admins must
 // sign, writes it out for them.
 func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) error {
-	localAdmin, reused, err := a.home.adminKey(p.adminName)
-	if err != nil {
-		return err
-	}
+	localAdmin := p.key
 	var nodes []types.NodeRecord
 	machine := ""
 	if !p.noDevice {
@@ -217,12 +269,18 @@ func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) error {
 		}
 		nodes, machine = append(nodes, founder), founder.Name
 	}
-	if reused {
-		a.printf("using admin key %q from %s\n", p.adminName, a.home.path)
-	} else if localAdmin, err = a.home.createAdminKey(p.adminName); err != nil {
+	var err error
+	if p.keyFound {
+		a.printf("using admin key %q from %s\n", p.keyName, a.home.path)
+	} else if localAdmin, err = a.home.createAdminKey(p.keyName, false); err != nil {
 		return err
 	}
 	p.admins[0].Public = localAdmin.Public()
+	r, err := adminRecipient(localAdmin)
+	if err != nil {
+		return err
+	}
+	p.admins[0].Recipient = &r
 	p.admins[0].Name = cmp.Or(machine, a.machineName())
 	commitments, err := a.writeDisablementSecrets(p.network)
 	if err != nil {
@@ -320,6 +378,7 @@ func (a *app) reportCreated() error {
 		a.field("Operator", "%s", st.Operator)
 	}
 	a.startWarning()
+	a.warnHostOverlap()
 	// --no-device leaves the log in the keystore, and no device to start.
 	if a.node.status() == nil && state.IsMember(id) {
 		a.startHint()
@@ -381,6 +440,43 @@ func defaultAdminName() string {
 	return "admin"
 }
 
+// v4DrawBits is the length of the prefix a network founded without --ipv4
+// numbers from: 1022 addresses, one of 128 in [types.OverlayV4]. That is
+// about twice [types.MaxNodes] at once, and 1022 admissions over the network's
+// life, since no address is handed out twice; renumbering into a larger
+// range makes room. A network holding all of 198.18/15 would overlap every
+// other on a host that is in two.
+const v4DrawBits = 22
+
+// drawV4Prefix picks a random /22 in [types.OverlayV4] that taken leaves. The
+// first is never drawn: a network founded before prefixes were drawn numbers
+// from the start of the range, so a host in one of those and a new one would
+// otherwise hold the same addresses. One that has given out more than 1022
+// addresses reaches into the draw's range; a host in both then runs the
+// higher instance without IPv4 until one renumbers (daemon/host.go).
+func drawV4Prefix(taken func(netip.Prefix) bool) (netip.Prefix, error) {
+	candidates := v4DrawCandidates()
+	for _, i := range mathrand.Perm(len(candidates)) {
+		if !taken(candidates[i]) {
+			return candidates[i], nil
+		}
+	}
+	return netip.Prefix{}, fmt.Errorf("every /%d in %v overlaps a network on this host\n"+
+		"hint: choose the range with --ipv4", v4DrawBits, types.OverlayV4)
+}
+
+// v4DrawCandidates lists the prefixes [drawV4Prefix] draws from, in order:
+// every /22 in [types.OverlayV4] but the first.
+func v4DrawCandidates() []netip.Prefix {
+	var out []netip.Prefix
+	p := netip.PrefixFrom(types.OverlayV4.Addr(), v4DrawBits)
+	for types.OverlayV4.Contains(p.Addr()) {
+		out = append(out, p)
+		p = netip.PrefixFrom(netipx.PrefixLastIP(p).Next(), v4DrawBits)
+	}
+	return out[1:]
+}
+
 // hostNetsOverlapping names this device's interface networks that overlap p,
 // as "10.111.0.0/24 on eth0", other than those at the addresses in own.
 func hostNetsOverlapping(p netip.Prefix, own ...netip.Addr) []string {
@@ -390,7 +486,9 @@ func hostNetsOverlapping(p netip.Prefix, own ...netip.Addr) []string {
 	}
 	var out []string
 	for _, ifi := range ifaces {
-		if ifi.Flags&net.FlagLoopback != 0 {
+		// juist's own devices are the host's other networks, which
+		// networkClaiming asks about by what they claim.
+		if ifi.Flags&net.FlagLoopback != 0 || instance.IsDevice(ifi.Name) {
 			continue
 		}
 		addrs, err := ifi.Addrs()

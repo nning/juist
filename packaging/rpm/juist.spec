@@ -58,8 +58,11 @@ CAP_NET_ADMIN and nothing else.
 install -D -m 0755 juist  %{buildroot}%{_bindir}/juist
 install -D -m 0755 juistd %{buildroot}%{_bindir}/juistd
 install -D -m 0644 juistd.service %{buildroot}%{_unitdir}/juistd.service
+install -D -m 0644 juistd@.service %{buildroot}%{_unitdir}/juistd@.service
 install -D -m 0644 %{SOURCE1} %{buildroot}%{_sysusersdir}/%{name}.conf
 install -D -m 0755 firewall.sh %{buildroot}%{_prefix}/lib/juist/firewall.sh
+install -D -m 0644 juist.1 %{buildroot}%{_mandir}/man1/juist.1
+install -D -m 0644 juistd.8 %{buildroot}%{_mandir}/man8/juistd.8
 for f in juist juist-relay juist-invite; do
 	install -D -m 0644 $f.xml %{buildroot}%{_prefix}/lib/firewalld/services/$f.xml
 done
@@ -68,12 +71,13 @@ install -D -m 0644 _juist %{buildroot}%{_datadir}/zsh/site-functions/_juist
 install -D -m 0644 juist.fish %{buildroot}%{_datadir}/fish/vendor_completions.d/juist.fish
 install -d -m 0700 %{buildroot}%{_sharedstatedir}/%{name}
 
-# The unit in the repository names the path a manual install uses; a packaged
+# The units in the repository name the path a manual install uses; a packaged
 # binary lives in %{_bindir}. The grep is the guard: a rewrite that silently
 # missed would ship a unit pointing at a file this package does not install.
-sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=%{_bindir}/juistd |' \
-    %{buildroot}%{_unitdir}/juistd.service
-grep -q '^ExecStart=%{_bindir}/juistd ' %{buildroot}%{_unitdir}/juistd.service
+for u in juistd.service juistd@.service; do
+	sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=%{_bindir}/juistd |' %{buildroot}%{_unitdir}/$u
+	grep -q '^ExecStart=%{_bindir}/juistd ' %{buildroot}%{_unitdir}/$u
+done
 
 %pre
 %sysusers_create_compat %{SOURCE1}
@@ -90,10 +94,24 @@ fi
 
 %preun
 %systemd_preun juistd.service
-if [ $1 -eq 0 ]; then %{_prefix}/lib/juist/firewall.sh revoke; fi
+# Every other network's instance goes with the package, and its device's
+# rule with it; their state directories stay, as the default's does.
+if [ $1 -eq 0 ]; then
+	for i in 1 2 3 4 5 6 7 8 9; do
+		systemctl --no-reload disable --now juistd@juist$i.service >/dev/null 2>&1 || :
+	done
+	%{_prefix}/lib/juist/firewall.sh revoke
+fi
 
 %postun
 %systemd_postun_with_restart juistd.service
+# The instances that run take the upgraded juistd too, restarted the way the
+# default is: marked here, restarted once systemd has reloaded the units.
+for i in 1 2 3 4 5 6 7 8 9; do
+	if systemctl is-active --quiet juistd@juist$i.service 2>/dev/null; then
+		%systemd_postun_with_restart juistd@juist$i.service
+	fi
+done
 # The service files are gone; firewalld forgets them only on a reload.
 if [ $1 -eq 0 ] && firewall-cmd --state >/dev/null 2>&1; then
 	firewall-cmd --reload >/dev/null 2>&1 || :
@@ -104,8 +122,11 @@ fi
 %{_bindir}/juist
 %{_bindir}/juistd
 %{_unitdir}/juistd.service
+%{_unitdir}/juistd@.service
 %{_sysusersdir}/%{name}.conf
 %{_prefix}/lib/juist/firewall.sh
+%{_mandir}/man1/juist.1*
+%{_mandir}/man8/juistd.8*
 %{_prefix}/lib/firewalld/services/juist.xml
 %{_prefix}/lib/firewalld/services/juist-relay.xml
 %{_prefix}/lib/firewalld/services/juist-invite.xml

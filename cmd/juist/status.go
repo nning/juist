@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/ipc"
 
 	"github.com/nning/juist/trust/log"
@@ -23,9 +25,13 @@ import (
 func cmdStatus(a *app, args []string) error {
 	s := spec{name: "juist status", about: `
 Show this device's network, which devices it reaches, and what needs
-attention. Any local user may run it.`}
+attention; every network, where it is in several. Any local user may run it.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
+	}
+	if insts := a.statusInstances(); len(insts) > 1 || len(insts) == 1 && insts[0].st == nil {
+		a.printHostStatus(insts)
+		return nil
 	}
 	n, err := a.openNode()
 	if err != nil {
@@ -36,6 +42,9 @@ attention. Any local user may run it.`}
 		return a.offlineStatus(n)
 	}
 	a.printStatus(st)
+	if st.Waiting > 0 && st.CanOperate {
+		a.waitingNote()
+	}
 	return nil
 }
 
@@ -63,8 +72,15 @@ func (a *app) offlineStatus(n node) error {
 	return nil
 }
 
-func (a *app) printStatus(s *ipc.Status) {
-	v := statusOf(s, a.now(), a.paint)
+func (a *app) printStatus(s *ipc.Status) { a.printStatusIn(s, "") }
+
+// printStatusIn is printStatus with the head naming the instance, on a host
+// in several networks.
+func (a *app) printStatusIn(s *ipc.Status, inst string) {
+	v := statusOfOn(s, a.now(), a.paint, a.instanceLabel, inst != "")
+	if inst != "" && len(v.head) > 0 {
+		v.head[0].text += " · " + a.dim(inst)
+	}
 	a.emit(v.head)
 	if v.devices {
 		a.printf("\n")
@@ -75,7 +91,11 @@ func (a *app) printStatus(s *ipc.Status) {
 		a.emit(v.notes)
 	}
 	if !s.CanOperate {
-		a.hint("read-only; to manage this device: sudo juist set --operator=%s", currentUser())
+		network := ""
+		if inst != "" {
+			network = inst + " "
+		}
+		a.hint("read-only; to manage this device: sudo juist set %s--operator=%s", network, currentUser())
 	}
 }
 
@@ -135,6 +155,14 @@ func stale(s *ipc.Status, now time.Time) bool {
 
 // statusOf renders s as of now; paint colours text.
 func statusOf(s *ipc.Status, now time.Time, paint func(code, s string) string) statusView {
+	return statusOfOn(s, now, paint, instance.Name, false)
+}
+
+// statusOfOn is statusOf on a host whose instances other names, for what
+// one of them holds of this network's claims; several says the host is in
+// more networks than s's.
+func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string, other func(n int) string,
+	several bool) statusView {
 	var v statusView
 	head := func(state string) { v.head = append(v.head, line{text: paint("1", s.NetworkName) + " · " + state}) }
 	field := func(label, format string, args ...any) {
@@ -149,7 +177,15 @@ func statusOf(s *ipc.Status, now time.Time, paint func(code, s string) string) s
 			return v
 		}
 		v.head = append(v.head, line{text: paint("1", name) + " · no network"},
-			line{kind: lineHint, text: "juist join CODE, or juist init"})
+			line{kind: lineHint, text: "juist join CODE, or juist create"})
+		return v
+	}
+	if c := s.HostConflict; c != nil && c.SameNetwork {
+		head(paint("1;31", "not connected"))
+		v.head = append(v.head, line{kind: lineWarn, text: fmt.Sprintf("this network runs on this host already, "+
+			"as %s; this juistd would be a second device in it", other(c.Instance))},
+			line{kind: lineHint, text: fmt.Sprintf("juist reset %s --force, which removes it",
+				instance.Name(s.Instance))})
 		return v
 	}
 	if s.StartError != "" {
@@ -160,7 +196,8 @@ func statusOf(s *ipc.Status, now time.Time, paint func(code, s string) string) s
 	}
 	if s.NotMember {
 		head(paint("1;31", "removed"))
-		v.head = append(v.head, line{kind: lineHint, text: "rejoin with a new invite, or start over: juist reset"})
+		v.head = append(v.head, line{kind: lineHint, text: "rejoin with a new invite, or start over: " +
+			resetCommand(s, several)})
 		return v
 	}
 	switch {
@@ -247,14 +284,18 @@ func statusOf(s *ipc.Status, now time.Time, paint func(code, s string) string) s
 		}
 		field("Relays", "%s", relays)
 	}
-	if until > 0 {
+	switch {
+	case until > 0:
 		renumbering := "old addresses until " + deadline(uint64(until))
 		if len(s.Unmoved) > 0 {
-			renumbering += "; " + paint("33", "not moved: "+strings.Join(s.Unmoved, ", "))
+			renumbering += "; " + paint("33", "not told yet: "+strings.Join(s.Unmoved, ", "))
 		} else {
-			renumbering += "; all moved"
+			renumbering += "; all told"
 		}
 		field("Renumbering", "%s", renumbering)
+	case len(s.Unmoved) > 0:
+		// Retired already, so these reach a moved device over IPv6 alone.
+		field("Renumbering", "%s", "old addresses held; "+paint("33", "not told yet: "+strings.Join(s.Unmoved, ", ")))
 	}
 	switch {
 	case s.LeaseSigners == 0:
@@ -284,12 +325,26 @@ func statusOf(s *ipc.Status, now time.Time, paint func(code, s string) string) s
 		field("Updated", "%s", since(s.LastReconcile))
 	}
 	v.devices = len(s.Devices) > 0
-	v.notes = statusNotes(s)
+	if c := s.HostConflict; c != nil && c.Unanswered {
+		v.notes = append(v.notes, line{kind: lineInfo, text: fmt.Sprintf("no IPv4 yet: %s holds a network "+
+			"here and has not answered; IPv4 follows once it has, if the two do not overlap", other(c.Instance))})
+	} else if c != nil {
+		v.notes = append(v.notes, line{kind: lineWarn, text: fmt.Sprintf(
+			"no IPv4 on this host: %s holds %s, which %q claims too (%v)",
+			other(c.Instance), heldText(c.Held), s.NetworkName, c.Claim)})
+		if !slices.ContainsFunc(s.Addrs, func(p netip.Prefix) bool { return p.Addr().Is6() }) {
+			v.notes = append(v.notes, line{kind: lineWarn,
+				text: "and IPv6 is off here, so this network has no address on this host at all"})
+		}
+		v.notes = append(v.notes, line{kind: lineHint, text: fmt.Sprintf("renumber one of the two networks: "+
+			"juist network renumber %s PREFIX, or the other", instance.Name(s.Instance))})
+	}
+	v.notes = append(v.notes, statusNotes(s, several)...)
 	return v
 }
 
 // statusNotes are what needs attention on a connected device.
-func statusNotes(s *ipc.Status) []line {
+func statusNotes(s *ipc.Status, several bool) []line {
 	var notes []line
 	note := func(kind lineKind, format string, args ...any) {
 		notes = append(notes, line{kind: kind, text: fmt.Sprintf(format, args...)})
@@ -299,7 +354,7 @@ func statusNotes(s *ipc.Status) []line {
 	}
 	if s.Refused {
 		note(lineWarn, "the network's devices refuse this one: most likely it was removed")
-		note(lineHint, "rejoin with a new invite, or start over: juist reset")
+		note(lineHint, "rejoin with a new invite, or start over: %s", resetCommand(s, several))
 	}
 	if s.EpochError != "" {
 		note(lineWarn, "cannot open the group secret, so no discovery or log updates: %s", s.EpochError)
@@ -324,10 +379,11 @@ func statusNotes(s *ipc.Status) []line {
 		}
 		note(lineInfo, "not heard from: %s", what)
 	}
+	dev := cmp.Or(s.Device, instance.Name(s.Instance))
 	if len(s.SyncFailing) > 0 {
-		note(lineWarn, "log sync to %s fails in the tunnel: a firewall drops tcp/%d on juist0",
-			strings.Join(s.SyncFailing, ", "), s.GossipPort)
-		note(lineHint, "on both devices: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone")
+		note(lineWarn, "log sync to %s fails in the tunnel: a firewall drops tcp/%d on %s",
+			strings.Join(s.SyncFailing, ", "), s.GossipPort, dev)
+		note(lineHint, "on both devices: sudo ufw allow in on %s, or add %s to firewalld's trusted zone", dev, dev)
 	}
 	if len(s.Seeking) > 0 {
 		note(lineInfo, "no answer from %s: offline, or udp/%d blocked", strings.Join(s.Seeking, ", "), s.ListenPort)
@@ -339,14 +395,16 @@ func statusNotes(s *ipc.Status) []line {
 	}); len(down) > 0 {
 		note(lineWarn, "no tunnel traffic from %s: udp/%d blocked, or both behind NAT with no relay",
 			strings.Join(down, ", "), s.ListenPort)
-		note(lineHint, "on a device with a public address: sudo ufw allow juist, or firewall-cmd --add-service=juist")
+		note(lineHint, "on a device with a public address: %s", openPorts("juist", s.ListenPort, serviceDataPort,
+			"udp"))
 	}
 	if s.Conflicted > 0 {
 		note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))
 	}
 	if s.RelayUnreached && s.Alarm == "" {
 		note(lineWarn, "no device reaches this relay: tcp/%d or udp/%d is likely closed", s.RelayPort, s.RelayPort)
-		note(lineHint, "sudo ufw allow juist-relay, or firewall-cmd --add-service=juist-relay; and any firewall in front of this host")
+		note(lineHint, "%s; and any firewall in front of this host",
+			openPorts("juist-relay", s.RelayPort, serviceRelayPort, "tcp", "udp"))
 	}
 	// Two devices behind strict NATs need a third, reachable, to relay.
 	if s.RelayCapable == 0 && s.Members > 2 && s.Alarm == "" {
@@ -368,6 +426,45 @@ func statusNotes(s *ipc.Status) []line {
 		note(lineAlarm, "%s; tunnels down until resolved", s.Alarm)
 	}
 	return notes
+}
+
+// resetCommand is how a device that left s's network starts over: the
+// default instance stays, in no network; another goes with its reset.
+func resetCommand(s *ipc.Status, several bool) string {
+	if s.Instance == 0 && !several {
+		return "juist reset"
+	}
+	return "juist reset " + instance.Name(s.Instance)
+}
+
+// heldText is an address, or a prefix where it is more than one.
+func heldText(p netip.Prefix) string {
+	if p.IsSingleIP() {
+		return p.Addr().String()
+	}
+	return p.String()
+}
+
+// The ports the package's firewalld and ufw services name: juistd's
+// defaults, which the default instance listens on (packaging/firewalld).
+const (
+	serviceDataPort  = 41643
+	serviceRelayPort = 41645
+)
+
+// openPorts says how to let port in through ufw or firewalld: by the
+// package's service where it is the default port, by number where an
+// instance's is another.
+func openPorts(service string, port, def uint16, protos ...string) string {
+	if port == 0 || port == def {
+		return fmt.Sprintf("sudo ufw allow %s, or firewall-cmd --add-service=%s", service, service)
+	}
+	var ufw, fwd []string
+	for _, p := range protos {
+		ufw = append(ufw, fmt.Sprintf("sudo ufw allow %d/%s", port, p))
+		fwd = append(fwd, fmt.Sprintf("--add-port=%d/%s", port, p))
+	}
+	return strings.Join(ufw, " && ") + ", or firewall-cmd " + strings.Join(fwd, " ")
 }
 
 // startWarning reports a daemon that holds the network but could not start

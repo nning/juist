@@ -16,6 +16,9 @@ import (
 // before Up.
 func closeUnstartedRouter(router.Router) {}
 
-func newOSRouter(logf logger.Logf, dev tun.Device, mon *netmon.Monitor, ht *health.Tracker, bus *eventbus.Bus) (router.Router, error) {
+// newOSRouter ignores the instance: Tailscale's router here routes in the
+// host's one table, so instances are kept apart by their prefixes alone.
+func newOSRouter(logf logger.Logf, dev tun.Device, mon *netmon.Monitor, ht *health.Tracker, bus *eventbus.Bus,
+	_ int) (router.Router, error) {
 	return router.New(logf, dev, mon, ht, bus)
 }

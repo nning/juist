@@ -45,9 +45,20 @@ func (s SignatureStatus) Authorized() bool {
 // schema 1 by the old one too: otherwise admins alone could move a member's
 // slot — an admin device's, with its role — to a key of their choosing, and
 // the device it belonged to would have had no say. Schema 0 networks keep the
-// rule they were written under.
+// rule they were written under. An admin key signs for its own encryption key,
+// in a genesis as in [types.KindSetAdminRecipient].
 func SelfSigners(a *types.AUM, schema types.SchemaVersion) []types.Identity {
 	switch a.Kind {
+	case types.KindGenesis:
+		var out []types.Identity
+		for _, k := range a.State.Admins {
+			if k.Recipient != nil {
+				out = append(out, k.Public)
+			}
+		}
+		return out
+	case types.KindSetAdminRecipient:
+		return []types.Identity{*a.Subject}
 	case types.KindRotateNodeKey:
 		return []types.Identity{*a.Subject}
 	case types.KindRotateIdentity:
@@ -168,7 +179,7 @@ func GenesisStatus(a *types.AUM) (SignatureStatus, error) {
 	if err := a.ValidateUnsigned(); err != nil {
 		return SignatureStatus{}, fmt.Errorf("log: %w", err)
 	}
-	return signatureStatus(a, genesisAdmins(a), a.State.Quorum, nil), nil
+	return signatureStatus(a, genesisAdmins(a), a.State.Quorum, SelfSigners(a, a.State.Schema)), nil
 }
 
 // genesisAdmins indexes the admin keys a genesis or self-signed checkpoint
@@ -193,7 +204,11 @@ func verifySelfSigned(a *types.AUM, kind types.Kind) error {
 	if a.Kind != kind {
 		return reject(RuleMalformed, fmt.Errorf("log: %v is not a %v record", a.Kind, kind))
 	}
-	return checkStatus(a, signatureStatus(a, genesisAdmins(a), a.State.Quorum, nil))
+	var self []types.Identity
+	if kind == types.KindGenesis {
+		self = SelfSigners(a, a.State.Schema)
+	}
+	return checkStatus(a, signatureStatus(a, genesisAdmins(a), a.State.Quorum, self))
 }
 
 func checkStatus(a *types.AUM, st SignatureStatus) error {

@@ -160,6 +160,12 @@ func (b *Builder) AddAdminKey(k types.AdminKey) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindAddAdminKey, Admin: &k})
 }
 
+// SetAdminRecipient builds a record giving the admin key id the encryption
+// key r. The key must sign it as well as the quorum.
+func (b *Builder) SetAdminRecipient(id types.Identity, r types.RecipientKey) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindSetAdminRecipient, Subject: &id, Recipient: &r})
+}
+
 // RemoveAdminKey builds a record removing an admin signing key.
 func (b *Builder) RemoveAdminKey(id types.Identity) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindRemoveAdminKey, Subject: &id})

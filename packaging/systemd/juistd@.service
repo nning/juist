@@ -1,0 +1,96 @@
+# juistd for one more network on this host, as instance %i (juist1 to
+# juist9) beside the default juistd.service: "sudo juist join CODE" on a
+# device already in a network creates one, and "juist reset" of that network
+# removes it. The instance number chooses its TUN device (%i), its ports (the
+# defaults plus ten times the number), its routing table and its policy
+# rules, so that no instance takes what another routes by. It starts after
+# the default, which it yields IPv4 to where their networks overlap.
+#
+# The rest is juistd.service's, line for line:
+#
+# juistd, running as a dedicated unprivileged user with exactly the one host
+# privilege M3a requires: CAP_NET_ADMIN, to create a TUN device and program the
+# overlay's addresses and routes (docs/05-roadmap.md, M3a exit criterion). No
+# part of this runs as root. A compromised juistd can reconfigure host
+# networking; it still holds no admin keys and cannot change who is a member
+# (docs/02-threat-model.md, docs/04-architecture.md key custody).
+#
+# State lives in /var/lib/juist/%i, the control socket is /run/juist/%i.sock.
+
+
+[Unit]
+Description=juist node %i
+Documentation=https://github.com/nning/juist
+After=network-online.target juistd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/juistd --instance %i --home /var/lib/juist/%i --socket /run/juist/%i.sock
+Restart=on-failure
+RestartSec=2
+
+# Dedicated user; /var/lib/juist/%i is created and chowned by systemd.
+User=juist
+Group=juist
+StateDirectory=juist/%i
+# 0700, not systemd's 0755 default: this holds node.keys. juist only refuses a
+# group/other-writable state dir, so 0755 would pass while world-readable.
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/juist/%i
+# The control socket lives apart from the state, so that reaching it is not
+# reading node.keys: any local user may connect and ask for status, and the
+# daemon decides everything else per call from the caller's kernel-reported
+# uid. 0755 so users can reach the socket; nothing else is kept there.
+# Preserved, because every instance's socket is in it: systemd would delete
+# the directory with whichever unit stopped first. juistd removes its own
+# socket when it stops.
+RuntimeDirectory=juist
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# Every file the daemon writes is private; the socket is chmodded explicitly.
+UMask=0077
+
+# The whole privilege footprint: CAP_NET_ADMIN, ambient so the unprivileged
+# process keeps it, and nothing else in the bounding set.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+
+# Device access: /dev/net/tun only.
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+
+# Filesystem: read-only host, no access to real home directories, private /tmp.
+# StateDirectory above stays writable.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+SystemCallArchitectures=native
+# No SystemCallFilter yet: the embedded engine's netlink and TUN paths have not
+# been traced against @system-service on every target, and a missing syscall
+# kills the daemon rather than failing one call.
+
+# Networking: IP, netlink (routes/addresses), the unix control socket, and the
+# system bus, over which firewalld is asked whether it lets log sync in.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+
+# ProtectKernelTunables is affordable only because conn keeps NetfilterMode at
+# NetfilterOff and advertises no subnet routes: those are the two gates on every
+# sysctl write the embedded router makes. Recheck at M6 (exit nodes) and at
+# each Tailscale upgrade.
+
+[Install]
+WantedBy=multi-user.target

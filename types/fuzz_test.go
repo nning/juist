@@ -174,6 +174,8 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindRenumberNode, Prev: &parent, Subject: &id, Renumber: &Renumbering{Until: 99, V4: &v4}},
 		{Kind: KindRetireAddresses, Prev: &parent},
 		{Kind: KindRenameNetwork, Prev: &parent, Network: new("office")},
+		{Kind: KindSetAdminRecipient, Prev: &parent, Subject: &id,
+			Recipient: &RecipientKey{X25519: X25519Key{8}, MLKEM: MLKEMKey{9}}},
 		{Kind: KindCheckpoint, Prev: &parent, State: renumberedSnap},
 	}
 	out := make([][]byte, 0, len(records))

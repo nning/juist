@@ -22,11 +22,12 @@ type renumbering struct {
 
 // followRenumbering returns the names of the live members other than this one
 // not yet seen holding the newest renumbering, while any member's old address
-// still works at unix time now.
-func (d *Daemon) followRenumbering(state *log.State, now int64, live map[types.Identity]bool) []string {
-	moving := false
+// is still recorded: working until its deadline, or held after it, when a
+// member not told yet reaches the moved one over IPv6 alone.
+func (d *Daemon) followRenumbering(state *log.State, live map[types.Identity]bool) []string {
+	_, moving := state.V4Retiring()
 	for _, n := range state.Nodes() {
-		moving = moving || n.Retiring.Live(now)
+		moving = moving || n.Retiring != nil
 	}
 	d.mu.Lock()
 	cur := d.moving

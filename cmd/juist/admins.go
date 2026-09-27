@@ -28,6 +28,8 @@ func adminsFamily() family {
 				forms: [][2]string{{"require NAME N", "count NAME's votes only when N of their keys sign"}}},
 			{name: "vouchers", run: adminsVouchers,
 				forms: [][2]string{{"vouchers M", "require M vouchers to confirm a device's view"}}},
+			{name: "receive", run: adminsReceive,
+				forms: [][2]string{{"receive", "let changes waiting for your vote reach your keys here"}}},
 		},
 		footer: "Admin keys never leave their machine, which needs no network of its own."}
 }
@@ -39,6 +41,21 @@ func adminsList(a *app, args []string) error {
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
+	governs := map[types.Identity][]string{}
+	list := func() error { return a.listAdmins(governs) }
+	listed, err := a.forEachNetwork(list)
+	if !listed {
+		err = list()
+	}
+	if err != nil {
+		return err
+	}
+	return a.listKeysHere(governs)
+}
+
+// listAdmins is "juist admins" for one network, noting in governs the
+// networks each key governs.
+func (a *app) listAdmins(governs map[types.Identity][]string) error {
 	local, err := a.home.adminKeys()
 	if err != nil {
 		return err
@@ -55,13 +72,15 @@ func adminsList(a *app, args []string) error {
 		if len(local) == 0 {
 			return errors.New("no network and no admin key here\nhint: juist admins new NAME")
 		}
-		a.printf("no network; admin keys here:\n")
-		for _, k := range local {
-			a.printf("  %v\n", k.Public())
-		}
+		a.printf("no network here\n")
 		return nil
 	}
 	state := auth.State()
+	for _, k := range state.Admins() {
+		if here[k.Public] {
+			governs[k.Public] = append(governs[k.Public], state.Network())
+		}
+	}
 	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ADMIN\tVOTES\tSIGNS WITH\tON\tKEY")
 	for _, p := range adminPeople(state.Admins()) {
@@ -90,12 +109,19 @@ func adminsList(a *app, args []string) error {
 	if devices := len(state.NodesWithRole(types.RoleAdmin)); devices > 0 {
 		a.field("Vouchers", "%d of %d", max(state.Vouchers(), 1), devices)
 	}
+	if state.Schema() >= types.SchemaSealing && slices.ContainsFunc(state.Admins(), func(k types.AdminKey) bool {
+		return here[k.Public] && k.Recipient == nil
+	}) {
+		a.hint("for changes waiting for your vote to reach you: juist admins receive")
+	}
 	return nil
 }
 
 func adminsNew(a *app, args []string) error {
-	s := spec{name: "juist admins new", args: "NAME", min: 1, max: 1, about: `
-Create an admin key on this machine and print the command that adds it.`}
+	s := spec{name: "juist admins new", args: "NAME", min: 1, max: 1, anyNetwork: true, about: `
+Create an admin key on this machine and print the command that adds it.
+--network names the network it is for; without, the first network whose
+log names it here files it under that network.`}
 	fs := newFlags(s.name)
 	on := fs.String("on", "", "`MACHINE` the key is kept on (default: this device's name, or the hostname)")
 	pos, err := a.parse(s, fs, args)
@@ -114,11 +140,19 @@ Create an admin key on this machine and print the command that adds it.`}
 	if u := a.sudoUser(); u != "" {
 		return fmt.Errorf("run as %s, without sudo: the key belongs in your keystore", u)
 	}
-	priv, err := a.home.createAdminKey(pos[0])
+	network := ""
+	if a.network != "" && !a.networkFromEnv {
+		if err := checkName("--network", a.network); err != nil {
+			return err
+		}
+		network = a.network
+	}
+	name := adminKeyName(pos[0], network)
+	priv, err := a.home.createAdminKey(name, network == "")
 	if err != nil {
 		return err
 	}
-	a.ok("created admin key %q; an admin of the network runs:", pos[0])
+	a.ok("created admin key %q; an admin of the network runs:", name)
 	a.command("juist admins add %s %v --on %s", pos[0], priv.Public(), *on)
 	a.hint("an admin already? add it under your admin name, or it gets a vote of its own")
 	return nil
@@ -210,6 +244,67 @@ an unverified label.`}
 	}
 	_, err = a.submit(auth, &change{aum: aum, file: "admin-add-" + fileSafe(pos[0]) + ".rec", done: done})
 	return err
+}
+
+func adminsReceive(a *app, args []string) error {
+	s := spec{name: "juist admins receive", about: `
+Give this keystore's admin keys the encryption keys that changes waiting for
+their votes are sealed to, so that they reach you on the admin devices. It
+is a change like any other, which each key signs for itself.`}
+	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
+		return err
+	}
+	auth, err := a.networkLog()
+	if err != nil {
+		return err
+	}
+	if auth.State().Schema() < types.SchemaSealing {
+		return needsUpgrade("changes carried to the admins")
+	}
+	files, err := a.adminKeyFiles()
+	if err != nil {
+		return err
+	}
+	governs, changed := false, false
+	for i, f := range files {
+		k, ok := auth.State().Admin(f.priv.Public())
+		if !ok {
+			continue
+		}
+		governs = true
+		r, err := adminRecipient(f.priv)
+		if err != nil {
+			return err
+		}
+		if k.Recipient != nil && *k.Recipient == r {
+			continue
+		}
+		aum, err := auth.Builder().SetAdminRecipient(k.Public, r)
+		if err != nil {
+			return err
+		}
+		name := cmp.Or(keyPerson(k), k.Public.ShortString())
+		applied, err := a.submit(auth, &change{aum: aum, file: "admin-receive-" + fileSafe(f.name) + ".rec",
+			done: fmt.Sprintf("changes waiting for %s reach key %s", name, f.name)})
+		if err != nil || !applied {
+			// Another from this head would fork the one pending.
+			if err == nil && i < len(files)-1 {
+				a.hint("once that is applied, run it again for the other keys here")
+			}
+			return err
+		}
+		if auth, err = a.freshLog(); err != nil {
+			return err
+		}
+		changed = true
+	}
+	switch {
+	case !governs:
+		return errors.New("no admin key of this network here\nhint: run it where an admin's key is")
+	case !changed:
+		a.ok("unchanged: changes waiting for your vote reach your keys here")
+	}
+	return nil
 }
 
 func adminsRequire(a *app, args []string) error {
@@ -389,6 +484,24 @@ must be online.`}
 	_, err = a.submit(auth, &change{aum: aum, file: "vouchers.rec",
 		done: fmt.Sprintf("vouchers %d", m)})
 	return err
+}
+
+// listKeysHere lists the keystore's admin keys by the names --admin-key and
+// --key take, with the networks each governs: a key governing several is
+// shared.
+func (a *app) listKeysHere(governs map[types.Identity][]string) error {
+	files, err := a.home.adminKeyFiles()
+	if err != nil || len(files) == 0 {
+		return err
+	}
+	a.printf("\n")
+	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "KEY HERE\tGOVERNS\tPUBLIC")
+	for _, k := range files {
+		networks := strings.Join(governs[k.priv.Public()], ", ")
+		fmt.Fprintf(tw, "%s\t%s\t%v\n", k.name, orDash(networks), k.priv.Public())
+	}
+	return tw.Flush()
 }
 
 // keyPerson is the admin a key belongs to: its holder, or before holders its

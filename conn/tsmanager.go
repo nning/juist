@@ -34,6 +34,8 @@ import (
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
+
+	"github.com/nning/juist/internal/instance"
 )
 
 // Options configures a Tailscale-backed [Manager].
@@ -64,6 +66,12 @@ type Options struct {
 	// routes reach the host stack. Needs /dev/net/tun and CAP_NET_ADMIN, and
 	// fails rather than falling back to a device nothing can reach.
 	TunName string
+
+	// Instance numbers this node among the juist nodes on the host, from 0
+	// to instance.Max. The real router keeps each instance's routes in a
+	// table of its own, behind policy rules of its own, so stopping one
+	// leaves the others' in place.
+	Instance int
 
 	// RespondToPing makes the engine answer overlay ICMP echo requests
 	// internally, without a TUN device. Test and demo use only.
@@ -229,7 +237,7 @@ func New(opts Options) (_ Manager, err error) {
 				opts.TunName, err)
 		}
 		undo.push(func() { dev.Close() })
-		osRtr, err := newOSRouter(logf, dev, mon, healthTracker, bus)
+		osRtr, err := newOSRouter(logf, dev, mon, healthTracker, bus, opts.Instance)
 		if err != nil {
 			return nil, fmt.Errorf("conn: creating the OS router: %w", err)
 		}
@@ -348,6 +356,9 @@ func checkOptions(opts *Options) error {
 		if err := checkTunName(opts.TunName); err != nil {
 			return fmt.Errorf("conn: TunName: %w", err)
 		}
+	}
+	if opts.Instance < 0 || opts.Instance > instance.Max {
+		return fmt.Errorf("conn: Instance %d is not between 0 and %d", opts.Instance, instance.Max)
 	}
 	return nil
 }

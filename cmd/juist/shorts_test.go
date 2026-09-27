@@ -15,7 +15,7 @@ import (
 func TestEveryOptionHasAOneLetterSpelling(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop")
 	a := c.app(&syncBuffer{}, "")
 	g := globals{home: c.home, homeExplicit: true}
 	h, err := openHome(c.home)
@@ -58,14 +58,14 @@ func TestEveryOptionHasAOneLetterSpelling(t *testing.T) {
 func TestOneLetterOptions(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("init", "office", "-n", "laptop", "-4", "10.111.0.0/24", "-y")
+	c.mustRun("create", "office", "-n", "laptop", "-4", "10.111.0.0/24", "-y")
 	state := openLog(t, c).State()
 	self, _ := state.Node(nodeKeysOf(t, c).Identity.Public())
 	if self.Name != "laptop" || state.V4Range() != netip.MustParsePrefix("10.111.0.0/24") {
 		t.Fatalf("init -n laptop -4 10.111.0.0/24 made %q in %v", self.Name, state.V4Range())
 	}
 	signer := newCLI(t)
-	signer.mustRun("init", "office", "-N")
+	signer.mustRun("create", "office", "-N")
 	if n := len(openLog(t, signer).State().Nodes()); n != 0 {
 		t.Errorf("init -N made a network of %d devices, not this one's keys alone", n)
 	}

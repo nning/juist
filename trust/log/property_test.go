@@ -205,7 +205,7 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	var err error
 	var devices []types.PrivateIdentity
 
-	op := g.rng.IntN(17)
+	op := g.rng.IntN(18)
 	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14}, op) {
 		return types.AUM{}, nil, false
 	}
@@ -296,6 +296,9 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 		aum, err = b.RetireAddresses()
 	case 16: // rename the network
 		aum, err = b.RenameNetwork([]string{"alpha", "bravo", "charlie"}[g.rng.IntN(3)])
+	case 17: // give an admin key an encryption key
+		keys := fixedNode(g.next())
+		aum, err = b.SetAdminRecipient(holder.Public, types.RecipientKey{X25519: keys.X25519, MLKEM: keys.MLKEM})
 	}
 	if err != nil || !g.sign(&aum, base, devices) {
 		return types.AUM{}, nil, false

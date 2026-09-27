@@ -9,6 +9,16 @@
 GO      ?= go
 GOFLAGS ?=
 
+# One toolchain for every target, so a commit builds to the same bytes anywhere
+# and local runs match CI's GO_VERSION.
+export GOTOOLCHAIN ?= go1.26.8
+
+# Static binaries that need no C toolchain; only the race detector wants cgo.
+export CGO_ENABLED ?= 0
+
+# How every shipped binary is built; `make repro` checks it is reproducible.
+GOBUILD = CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath
+
 # Tool versions are pinned so local runs and CI agree, and so a compromised or
 # simply changed upstream cannot silently alter what our gates check. Bump
 # these deliberately.
@@ -80,8 +90,18 @@ build: ## Build the binaries into build/
 	@mkdir -p $(BUILDDIR)
 	@for c in $(CMDS); do \
 		echo "==> $(BUILDDIR)/$$c"; \
-		$(GO) build $(GOFLAGS) -o $(BUILDDIR)/$$c ./cmd/$$c || exit 1; \
+		$(GOBUILD) -o $(BUILDDIR)/$$c ./cmd/$$c || exit 1; \
 	done
+
+# The man pages are made by the commands themselves, from their own help, so
+# they say what the commands say: juist(1) and juistd(8).
+MANDIR ?= $(BUILDDIR)/man
+
+.PHONY: man
+man: ## Build the man pages, juist(1) and juistd(8), into build/man
+	@mkdir -p $(MANDIR)
+	$(GO) run $(GOFLAGS) ./cmd/juist __manpage > $(MANDIR)/juist.1
+	$(GO) run $(GOFLAGS) ./cmd/juistd __manpage > $(MANDIR)/juistd.8
 
 # The compile gate, and only that: `go build` over more than one package
 # discards what it produces, so this writes no binaries — which is the point,
@@ -99,6 +119,19 @@ cross: ## Compile for every v1 target platform
 		CGO_ENABLED=0 GOOS=$${p%/*} GOARCH=$${p#*/} $(GO) build $(GOFLAGS) ./... || exit 1; \
 	done
 
+# HEAD built twice, from two paths and once with an empty build cache, so
+# neither the checkout's location nor a cached object can hide a difference.
+.PHONY: repro
+repro: ## Fail unless HEAD builds to the same binaries twice
+	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	git clone -q . "$$tmp/a"; git clone -q . "$$tmp/elsewhere/b"; \
+	for c in $(CMDS); do \
+		(cd "$$tmp/a" && $(GOBUILD) -o "$$tmp/out-a/$$c" ./cmd/$$c); \
+		(cd "$$tmp/elsewhere/b" && GOCACHE="$$tmp/cache" $(GOBUILD) -o "$$tmp/out-b/$$c" ./cmd/$$c); \
+		cmp -s "$$tmp/out-a/$$c" "$$tmp/out-b/$$c" || { echo "repro: two builds of $$c differ"; exit 1; }; \
+		echo "==> $$c reproducible"; \
+	done
+
 ## --- test ----------------------------------------------------------------
 
 .PHONY: test
@@ -107,7 +140,7 @@ test: ## Run tests
 
 .PHONY: test-race
 test-race: ## Run tests under the race detector
-	$(GO) test $(GOFLAGS) ./... $(TEST_FLAGS) -race
+	CGO_ENABLED=1 $(GO) test $(GOFLAGS) ./... $(TEST_FLAGS) -race
 
 # The privileged tests — M3a's real device and netns harness, and M3b's NAT
 # matrix on top of it (conn/osplumbing_test.go, conn/netns*_linux_test.go) —
@@ -137,7 +170,7 @@ test-os-plumbing-sudo: ## Build the privileged tests as you, run them with sudo
 
 .PHONY: cover
 cover: ## Run race tests with coverage, print a summary
-	$(GO) test $(GOFLAGS) ./... $(TEST_FLAGS) -race \
+	CGO_ENABLED=1 $(GO) test $(GOFLAGS) ./... $(TEST_FLAGS) -race \
 		-covermode=atomic -coverprofile=$(COVERPROFILE)
 	@$(GO) tool cover -func=$(COVERPROFILE) | tail -n 1
 
@@ -239,9 +272,11 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	@set -e; stage=$(RPMTOP)/stage/$(RPM_NAME)-$(RPM_VERSION); mkdir -p $$stage; \
 	for c in $(CMDS); do \
 		echo "==> $$c"; \
-		CGO_ENABLED=0 $(GO) build $(GOFLAGS) -o $$stage/$$c ./cmd/$$c; \
+		$(GOBUILD) -o $$stage/$$c ./cmd/$$c; \
 	done; \
-	cp packaging/systemd/juistd.service README.md packaging/firewall.sh \
+	$(GO) run $(GOFLAGS) ./cmd/juist __manpage > $$stage/juist.1; \
+	$(GO) run $(GOFLAGS) ./cmd/juistd __manpage > $$stage/juistd.8; \
+	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service README.md packaging/firewall.sh \
 		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml \
 		packaging/firewalld/juist-invite.xml packaging/completions/juist.bash \
 		packaging/completions/_juist packaging/completions/juist.fish $$stage/; \
@@ -278,15 +313,19 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	@set -e; root=$(DEBTOP)/root; \
 	for c in $(CMDS); do \
 		echo "==> $$c ($(DEB_ARCH))"; \
-		CGO_ENABLED=0 GOOS=linux GOARCH=$(DEB_GOARCH) $(GO) build $(GOFLAGS) -trimpath \
-			-o $$root/usr/bin/$$c ./cmd/$$c; \
+		GOOS=linux GOARCH=$(DEB_GOARCH) $(GOBUILD) -o $$root/usr/bin/$$c ./cmd/$$c; \
 	done; \
-	install -D -m 0644 packaging/systemd/juistd.service $$root/usr/lib/systemd/system/juistd.service; \
-	sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=/usr/bin/juistd |' \
-		$$root/usr/lib/systemd/system/juistd.service; \
-	grep -q '^ExecStart=/usr/bin/juistd ' $$root/usr/lib/systemd/system/juistd.service; \
+	for u in juistd.service juistd@.service; do \
+		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/system/$$u; \
+		sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=/usr/bin/juistd |' $$root/usr/lib/systemd/system/$$u; \
+		grep -q '^ExecStart=/usr/bin/juistd ' $$root/usr/lib/systemd/system/$$u; \
+	done; \
 	install -D -m 0644 packaging/rpm/juist.sysusers $$root/usr/lib/sysusers.d/juist.conf; \
 	install -D -m 0644 README.md $$root/usr/share/doc/juist/README.md; \
+	install -d -m 0755 $$root/usr/share/man/man1 $$root/usr/share/man/man8; \
+	$(GO) run $(GOFLAGS) ./cmd/juist __manpage > $$root/usr/share/man/man1/juist.1; \
+	$(GO) run $(GOFLAGS) ./cmd/juistd __manpage > $$root/usr/share/man/man8/juistd.8; \
+	gzip -9n $$root/usr/share/man/man1/juist.1 $$root/usr/share/man/man8/juistd.8; \
 	install -D -m 0755 packaging/firewall.sh $$root/usr/lib/juist/firewall.sh; \
 	for f in juist juist-relay juist-invite; do \
 		install -D -m 0644 packaging/firewalld/$$f.xml $$root/usr/lib/firewalld/services/$$f.xml; \
@@ -381,7 +420,7 @@ tidy-check: ## Fail if go.mod / go.sum are untidy (does not modify them)
 ## --- aggregate -----------------------------------------------------------
 
 .PHONY: check
-check: lint tidy-check build-test test-race tcb ## Everything CI gates on; run before pushing
+check: lint tidy-check build-test test-race tcb repro ## Everything CI gates on; run before pushing
 
 # `make ci` is every job .github/workflows/ci.yml runs, on this machine: what
 # check gates, with the host-feature probes failing rather than skipping as on

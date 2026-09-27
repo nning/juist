@@ -151,8 +151,12 @@ func newTestNodeTimeout(t *testing.T, network types.Hash, epoch uint64, s secret
 				<-ctx.Done()
 				return nil, ctx.Err()
 			}
+			// Loopback answers at once; only a starved scheduler outruns the
+			// 500ms dial budget, so a looser one bounds this dial.
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
 			var d net.Dialer
-			return d.DialContext(ctx, "tcp", loopbackFor(addr).String())
+			return d.DialContext(dctx, "tcp", loopbackFor(addr).String())
 		},
 		Timeout: timeout,
 		CatchUp: &CatchUpKeys{Identity: priv, Recipient: recipient},
@@ -193,6 +197,24 @@ func (tn *testNode) addr() netip.AddrPort {
 	testAddrs[a] = tn.real
 	testAddrsMu.Unlock()
 	return a
+}
+
+// TestTestDialerOutlastsItsDeadline: a loopback dial never hangs, so one that
+// a loaded machine delays past the 500ms dial budget must still connect.
+func TestTestDialerOutlastsItsDeadline(t *testing.T) {
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestNode(t, types.Hash{1}, 1, s)
+	b := newTestNode(t, types.Hash{1}, 1, s)
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	c, err := a.node.opts.Dial(ctx, b.addr())
+	if err != nil {
+		t.Fatalf("dialing a listener on loopback: %v", err)
+	}
+	c.Close()
 }
 
 // TestSessionExchangesAnnouncements is the base case: one round leaves both
@@ -694,5 +716,57 @@ func TestARoundThatReachesNoAddressIsFailing(t *testing.T) {
 	a.node.Sync(t.Context(), []types.Identity{b.id})
 	if a.node.Failing(b.id) {
 		t.Fatal("a round that reached the peer left it failing")
+	}
+}
+
+// PushTo hands a member records this node has not applied, after what it
+// lacks of this node's log, in an ordinary session: how a removed device is
+// told of its removal while it still has a tunnel to be told through.
+func TestPushToHandsOverRecordsNotApplied(t *testing.T) {
+	net1 := types.Hash{1}
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestNode(t, net1, 3, s)
+	b := newTestNode(t, net1, 3, s)
+	// a learns where b is, as a member does before any push.
+	if err := a.node.SyncWith(t.Context(), b.addr(), b.id); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	prev := types.Hash{9}
+	v := types.SchemaVersion(3)
+	pending := types.AUM{Kind: types.KindSchemaUpgrade, Prev: &prev, Schema: &v}
+	signer, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.Sign(signer); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := pending.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.node.PushTo(t.Context(), b.id, [][]byte{raw}); err != nil {
+		t.Fatalf("PushTo: %v", err)
+	}
+	// The peer applies what it was handed after answering, so after PushTo
+	// has returned.
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		b.log.mu.Lock()
+		n := len(b.log.informed)
+		b.log.mu.Unlock()
+		if n > 0 {
+			break
+		}
+	}
+	b.log.mu.Lock()
+	defer b.log.mu.Unlock()
+	if len(b.log.informed) != 1 || len(b.log.informed[0]) != 1 || b.log.informed[0][0].Hash() != pending.Hash() {
+		t.Fatalf("the peer was informed of %v, want the record handed over", b.log.informed)
+	}
+	if err := a.node.PushTo(t.Context(), types.Identity{7}, [][]byte{raw}); err == nil {
+		t.Fatal("a push to a member with no announcement succeeded")
 	}
 }

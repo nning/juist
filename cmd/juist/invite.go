@@ -30,6 +30,10 @@ const DefaultInvitePort = host.DefaultPort
 // how often that reaches it.
 const admissionPoll = 2 * time.Second
 
+// admissionHold is how long a copy of an admission waits on the admin
+// devices, unless the app says otherwise; the invite renews it while it runs.
+const admissionHold = 5 * time.Minute
+
 type inviteOptions struct {
 	name    string
 	relay   bool
@@ -54,7 +58,8 @@ than one admin must approve, the invite waits for them.`}
 	var o inviteOptions
 	fs.BoolVar(&o.relay, "relay", false, "make the device a relay")
 	fs.BoolVar(&o.admin, "voucher", false, "make the device a voucher")
-	fs.DurationVar(&o.expires, "expires", time.Hour, "invite lifetime, like 30m or 2h")
+	expires := longDuration(time.Hour)
+	fs.Var(&expires, "expires", "invite lifetime, like 30m, 2h or 7d")
 	fs.UintVar(&o.port, "port", DefaultInvitePort, "TCP port to listen on")
 	noLAN := fs.Bool("no-lan", false, "no code on the LAN; link only")
 	noDHT := fs.Bool("no-dht", false, "do not meet through the public DHT")
@@ -63,7 +68,7 @@ than one admin must approve, the invite waits for them.`}
 	if err != nil {
 		return err
 	}
-	o.lan, o.dht = !*noLAN, !*noDHT
+	o.lan, o.dht, o.expires = !*noLAN, !*noDHT, time.Duration(expires)
 	if len(pos) == 1 {
 		o.name = pos[0]
 		if err := checkName("device name", o.name); err != nil {
@@ -283,11 +288,16 @@ func (a *app) announceInvite(network, code string, link enroll.Link, port uint16
 	if len(roles) > 0 {
 		as = " as " + describeRoles(roles)
 	}
-	a.printf("invite to %q%s, expires in %s; on the new device:\n", network, as, shortDuration(o.expires))
+	// Each command on a line of its own, set apart, so that a long link is
+	// easy to select whole.
+	a.printf("invite to %q%s, expires in %s; on the new device:\n\n", network, as, shortDuration(o.expires))
 	if o.lan {
-		a.printf("  %s  %s\n", a.bold("juist join "+code), a.dim("# same LAN"))
+		a.printf("  %s  %s\n\n", a.bold("juist join "+code), a.dim("# same LAN"))
 	}
-	a.command("juist join %s", link)
+	// Quoted: a link holds brackets around IPv6 addresses, which zsh
+	// globs, and commas; pasted as printed, it must reach juist as one word.
+	a.command("juist join '%s'", link)
+	a.printf("\n")
 	if len(link.Relays) > 0 {
 		a.printf("%s\n", a.dim(fmt.Sprintf("meets through relay %s where this device is unreachable", link.Relays[0])))
 	}
@@ -481,6 +491,11 @@ func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll
 		file: "add-" + fileSafe(name) + ".rec",
 		done: fmt.Sprintf("admitted %s at %s", name, v4),
 	}
+	// Approved after the invite, it would admit a device that never got the
+	// log, so a copy on the admin devices outlives the invite by little.
+	end, _ := ctx.Deadline()
+	holdFor := func() time.Duration { return max(min(time.Until(end), a.admissionHold), time.Second) }
+	c.wait = holdFor()
 	// The invite may have ended while a person looked at the words: a device
 	// admitted then would be a member that never got the log.
 	if err := ctx.Err(); err != nil {
@@ -490,7 +505,26 @@ func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll
 	if err != nil || applied {
 		return err
 	}
-	err = a.awaitAdmission(ctx, wait, req.Identity, auth.State().SignatureStatus(&c.aum))
+	// Renewed with the votes its copies gathered, which would lapse with them.
+	renew := func() {
+		if changes, err := a.waitingChanges(auth); err == nil {
+			for _, w := range changes {
+				if w.aum.SigHash() == c.aum.SigHash() {
+					c.aum.Signatures = mergeSignatures(auth.State(), &c.aum, w.aum.Signatures)
+				}
+			}
+		}
+		if auth.State().SignatureStatus(&c.aum).Authorized() {
+			if err := a.applyRecords([]types.AUM{c.aum}, false); err != nil {
+				a.warn("%v", err)
+			}
+			return
+		}
+		if _, _, err := a.carry(auth, &c.aum, holdFor(), types.Identity{}); err != nil {
+			a.warn("%v", err)
+		}
+	}
+	err = a.awaitAdmission(ctx, wait, req.Identity, auth.State().SignatureStatus(&c.aum), renew)
 	// Approved after the invite, the record would admit a device that never
 	// received the log.
 	if err != nil && ctx.Err() != nil && c.written != "" && os.Remove(a.path(c.written)) == nil {
@@ -505,19 +539,24 @@ func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll
 // awaitAdmission waits for other admins to approve an admission, however it
 // reaches this device's log, telling the guest as it goes.
 func (a *app) awaitAdmission(ctx context.Context, wait func(votes, quorum uint32) error, id types.Identity,
-	st log.SignatureStatus) error {
+	st log.SignatureStatus, renew func()) error {
 	if err := wait(st.Votes, st.Quorum); err != nil {
 		return err
 	}
 	a.printf("%s\n", a.dim("waiting for the other admins"))
-	poll := time.NewTicker(admissionPoll)
+	poll := time.NewTicker(min(admissionPoll, a.admissionHold/4))
 	defer poll.Stop()
+	renewed := time.Now()
 	var lastHead types.Hash
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.New("invite ended before the other admins approved")
 		case <-poll.C:
+		}
+		if time.Since(renewed) > a.admissionHold/2 {
+			renew()
+			renewed = time.Now()
 		}
 		// The head is cheap to ask for; the log is re-read only when it moved.
 		head, err := a.node.head()

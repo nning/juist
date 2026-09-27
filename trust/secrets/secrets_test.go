@@ -298,3 +298,89 @@ func TestCatchUpKeyOpensOnlyForItsSession(t *testing.T) {
 		}
 	}
 }
+
+// An admin key's encryption keys follow from its seed, and from nothing else.
+func TestAdminRecipientFollowsFromTheSeed(t *testing.T) {
+	seed := bytes.Repeat([]byte{7}, 32)
+	a, err := AdminRecipient(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := AdminRecipient(bytes.Clone(seed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := AdminRecipient(bytes.Repeat([]byte{8}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ra, _ := a.Recipient()
+	rb, _ := b.Recipient()
+	ro, _ := other.Recipient()
+	if ra != rb || ra == ro {
+		t.Fatal("an admin key's encryption key is not a function of its seed alone")
+	}
+	if _, err := AdminRecipient(seed[:31]); err == nil {
+		t.Fatal("derived encryption keys from a short seed")
+	}
+}
+
+// What SealKeyTo seals opens for its reader alone, and in its context alone.
+func TestSealKeyToOpensForItsReaderAlone(t *testing.T) {
+	var ids []types.Identity
+	var privs []*PrivateKeys
+	var keys []types.RecipientKey
+	for i := range 2 {
+		p, err := AdminRecipient(bytes.Repeat([]byte{byte(i + 1)}, 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, _ := p.Recipient()
+		ids, privs, keys = append(ids, types.Identity{byte(i + 1)}), append(privs, p), append(keys, r)
+	}
+	ctx, key := []byte("network+change"), [KeySize]byte{7}
+	sealed, err := SealKeyTo(ctx, ids[0], keys[0], key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := OpenKey(ctx, ids[0], privs[0], sealed); err != nil || got != key {
+		t.Fatalf("the reader opened %x, %v", got, err)
+	}
+	if _, err := OpenKey(ctx, ids[1], privs[1], sealed); err == nil {
+		t.Error("another reader opened it")
+	}
+	if _, err := OpenKey(ctx, ids[1], privs[0], sealed); err == nil {
+		t.Error("opened as sealed to another reader")
+	}
+	if _, err := OpenKey([]byte("elsewhere"), ids[0], privs[0], sealed); err == nil {
+		t.Error("opened under another context")
+	}
+}
+
+// What SealToPeer seals opens on the member it names alone.
+func TestSealToPeerOpensOnThatMemberAlone(t *testing.T) {
+	priv, err := GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, m, _ := priv.Public()
+	n := types.NodeRecord{Identity: types.Identity{1}, X25519: x, MLKEM: m}
+	network := types.Hash{9}
+	sealed, err := SealToPeer(network, &n, []byte("changes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := OpenFromPeer(network, n.Identity, priv, sealed); err != nil || string(got) != "changes" {
+		t.Fatalf("%q, %v", got, err)
+	}
+	if _, err := OpenFromPeer(network, types.Identity{2}, priv, sealed); err == nil {
+		t.Error("opened as another member")
+	}
+	if _, err := OpenFromPeer(types.Hash{8}, n.Identity, priv, sealed); err == nil {
+		t.Error("opened in another network")
+	}
+	other, _ := GenerateKeys()
+	if _, err := OpenFromPeer(network, n.Identity, other, sealed); err == nil {
+		t.Error("opened with another device's keys")
+	}
+}

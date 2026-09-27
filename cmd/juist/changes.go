@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,8 +11,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/ipc"
 
 	"go4.org/netipx"
@@ -31,6 +34,10 @@ type change struct {
 
 	// done describes the change once applied, as a sentence.
 	done string
+
+	// wait is how long the change waits for more votes on the admin devices,
+	// zero for as long as a change may.
+	wait time.Duration
 }
 
 // needsUpgrade refuses what the network's schema predates.
@@ -73,8 +80,21 @@ func (a *app) submit(auth *log.Authority, c *change) (applied bool, err error) {
 		return false, errNotSubmitted{err}
 	}
 	c.written = path
-	a.printf("pending %s: needs %s; another admin runs:\n", path, approvalsNeeded(st, auth.State().Admins(), &c.aum))
-	a.command("juist approve %s", filepath.Base(path))
+	carried, unread, err := a.carry(auth, &c.aum, cmp.Or(c.wait, waiting.MaxLifetime), types.Identity{})
+	if err != nil {
+		a.warn("%v", err)
+	}
+	needs := approvalsNeeded(st, auth.State().Admins(), &c.aum)
+	if carried {
+		a.printf("pending %s: needs %s; another admin runs, on an admin device or with the file:\n", path, needs)
+		a.commands("juist approve", "juist approve "+filepath.Base(path))
+	} else {
+		a.printf("pending %s: needs %s; another admin runs:\n", path, needs)
+		a.command("juist approve %s", filepath.Base(path))
+	}
+	if len(unread) > 0 && auth.State().Schema() >= types.SchemaSealing && a.node != nil && a.node.status() != nil {
+		a.hint("%s cannot read it on an admin device yet; send them the file", strings.Join(unread, " or "))
+	}
 	return false, nil
 }
 
@@ -152,7 +172,7 @@ func (a *app) writePending(name string, aum *types.AUM) (string, error) {
 // may be the air-gapped key the record is waiting for. A device's own
 // signature, which rotations need, is added where its keys are.
 func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity, error) {
-	admins, err := a.adminKeys()
+	admins, err := a.signingKeys(aum, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -166,13 +186,49 @@ func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity
 			added = append(added, id)
 		}
 	}
+	if aum.Kind == types.KindGenesis && aum.State != nil && len(added) > 0 && a.sudoUser() == "" {
+		a.home.fileAdminKeys(aum.State.Network, func(id types.Identity) bool { return slices.Contains(added, id) })
+	}
 	return added, nil
+}
+
+// signingKeys are the admin keys here that may sign aum: the one --key
+// names, or every one. Without a log to ask, keys filed under different
+// networks are refused together, since each spoils the other's records.
+func (a *app) signingKeys(aum *types.AUM, auth *log.Authority) ([]types.PrivateIdentity, error) {
+	files, err := a.adminKeyFiles()
+	if err != nil {
+		return nil, err
+	}
+	if a.keyName != "" {
+		for _, k := range files {
+			if k.name == a.keyName {
+				return []types.PrivateIdentity{k.priv}, nil
+			}
+		}
+		return nil, fmt.Errorf("--key: no admin key %q here\nhint: juist admins", a.keyName)
+	}
+	// Keys filed under one network are that network's; any other two may be
+	// two networks'.
+	if auth == nil && aum.Kind != types.KindGenesis && len(files) > 1 {
+		var names []string
+		one := files[0].network() != ""
+		for _, k := range files {
+			names = append(names, k.name)
+			one = one && k.network() == files[0].network()
+		}
+		if !one {
+			return nil, fmt.Errorf("no log here to say which admin key is this network's: %s\n"+
+				"hint: juist approve --key NAME FILE", strings.Join(names, ", "))
+		}
+	}
+	return privateKeys(files), nil
 }
 
 // partIn reports whether any admin key here may sign aum, and whether every
 // such key already has.
 func (a *app) partIn(aum *types.AUM, auth *log.Authority) (part, signed bool, err error) {
-	admins, err := a.adminKeys()
+	admins, err := a.signingKeys(aum, auth)
 	if err != nil {
 		return false, false, err
 	}
@@ -278,9 +334,14 @@ func wanted(aum *types.AUM, id types.Identity, auth *log.Authority) bool {
 // adminKeys loads this user's admin keys. Run under sudo, the keystore is
 // root's, which is rarely what was meant: the keys belong to the person.
 func (a *app) adminKeys() ([]types.PrivateIdentity, error) {
-	keys, err := a.home.adminKeys()
-	if err != nil || len(keys) > 0 {
-		return keys, err
+	files, err := a.adminKeyFiles()
+	return privateKeys(files), err
+}
+
+func (a *app) adminKeyFiles() ([]adminKeyFile, error) {
+	files, err := a.home.adminKeyFiles()
+	if err != nil || len(files) > 0 {
+		return files, err
 	}
 	if u := a.sudoUser(); u != "" {
 		return nil, fmt.Errorf("run as %s, without sudo: admin keys are in your keystore", u)
@@ -346,7 +407,15 @@ func (a *app) networkLog() (*log.Authority, error) {
 	if err := a.requireOperator(); err != nil {
 		return nil, err
 	}
-	return n.log()
+	auth, err := n.log()
+	if err == nil && a.sudoUser() == "" {
+		state := auth.State()
+		a.home.fileAdminKeys(state.Network(), func(id types.Identity) bool {
+			_, ok := state.Admin(id)
+			return ok
+		})
+	}
+	return auth, err
 }
 
 // optionalLog is networkLog where a machine with no network is a normal
@@ -440,7 +509,14 @@ func nextV4(state *log.State, history []types.AUM) (netip.Addr, error) {
 	for v4 := range givenOut(state, history) {
 		taken[v4] = true
 	}
-	return firstFreeV4(state.V4Range(), taken)
+	v4, err := firstFreeV4(state.V4Range(), taken)
+	if err != nil && len(state.Nodes()) < types.MaxNodes {
+		// Full by history rather than by members: every address has been
+		// given out once. A range of its own is 1022 addresses for good.
+		return netip.Addr{}, fmt.Errorf("%w: every address in it went to a device once, and none is "+
+			"handed out twice\nhint: juist network renumber PREFIX, into a larger range", err)
+	}
+	return v4, err
 }
 
 // firstFreeV4 skips r's first and last address, which some systems treat as

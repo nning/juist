@@ -166,3 +166,24 @@ func TestARelayOnlyLinkFailsCleanly(t *testing.T) {
 		t.Fatalf("a relay-only link: %v", err)
 	}
 }
+
+// A link or code pasted with the quotes it was printed in is read without
+// them, where no shell took them off.
+func TestAQuotedInviteParses(t *testing.T) {
+	link, err := enroll.NewLink([]netip.AddrPort{netip.MustParseAddrPort("[fd00::1]:41642")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{link.String(), "'" + link.String() + "'", `"` + link.String() + `"`, " '" + link.String() + "' "} {
+		got, err := ParseInvite(s)
+		if err != nil {
+			t.Fatalf("%q: %v", s, err)
+		}
+		if l, ok := got.(enroll.Link); !ok || l.String() != link.String() {
+			t.Fatalf("%q read as %v", s, got)
+		}
+	}
+	if _, err := ParseInvite("'" + link.String()); err == nil {
+		t.Fatal("a link with one quote parsed")
+	}
+}

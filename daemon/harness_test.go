@@ -67,6 +67,9 @@ type network struct {
 	genesis types.AUM
 	devices []*device
 
+	// v4Prefix, set by a mutate, is the network's own IPv4 prefix.
+	v4Prefix *netip.Prefix
+
 	// secretsByEpoch records what each epoch's group secret is, so a test
 	// can check that a node opened the right one.
 	mu            sync.Mutex
@@ -121,6 +124,7 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 	if err != nil {
 		t.Fatalf("building genesis: %v", err)
 	}
+	g.State.V4Prefix = nw.v4Prefix
 	if err := g.Sign(admin); err != nil {
 		t.Fatalf("signing genesis: %v", err)
 	}

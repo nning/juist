@@ -210,6 +210,7 @@ Raise the network to this build's record schema:
   schema 4  new devices numbered from 198.18.0.0/15, not 100.64.0.0/10
   schema 5  juist network renumber
   schema 6  juist network rename
+  schema 7  changes carried to the admin devices (admins receive)
 
 Devices on older builds stop at the upgrade until updated: update them first.`}
 	fs := newFlags(s.name)
@@ -233,8 +234,11 @@ Devices on older builds stop at the upgrade until updated: update them first.`}
 	if err != nil {
 		return err
 	}
-	_, err = a.submit(auth, &change{aum: aum, file: "schema-upgrade.rec",
+	applied, err := a.submit(auth, &change{aum: aum, file: "schema-upgrade.rec",
 		done: fmt.Sprintf("upgraded to %v", types.CurrentSchema)})
+	if applied && auth.State().Schema() < types.SchemaSealing {
+		a.hint("for changes waiting for your vote to reach you: juist admins receive")
+	}
 	return err
 }
 

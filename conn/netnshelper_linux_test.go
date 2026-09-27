@@ -55,6 +55,12 @@ func TestHelperNetnsNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer set: %v", err)
 	}
+	inst := 0
+	if v := os.Getenv(envInstance); v != "" {
+		if inst, err = strconv.Atoi(v); err != nil {
+			t.Fatalf("instance: %v", err)
+		}
+	}
 
 	// A relay comes up before the manager, so that it holds its ports before
 	// anything else in this process binds. Where it listens is reported after
@@ -78,6 +84,7 @@ func TestHelperNetnsNode(t *testing.T) {
 		},
 		ListenPort: uint16(port),
 		TunName:    os.Getenv(envTun),
+		Instance:   inst,
 		Debug:      os.Getenv(envDebug) != "",
 		// Engine logs go to stderr as they happen. The test framework's own
 		// log buffers until the test ends, which is far too late to explain a

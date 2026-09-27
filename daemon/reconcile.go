@@ -52,6 +52,11 @@ func (d *Daemon) Reconcile() error {
 
 	d.adoptEpoch(state)
 	d.noteSchema()
+	d.pruneWaiting(state)
+	if d.onAddrsMoved != nil && state.IsMember(d.self) &&
+		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.startAddrs) {
+		d.movedOnce.Do(func() { go d.onAddrsMoved() })
+	}
 
 	s := d.snapshotOf(state)
 	// This device itself may be the one that is out, in which case the whole
@@ -95,7 +100,7 @@ func (d *Daemon) Reconcile() error {
 	// After pruning, so a former member's address is dropped from the file
 	// as well as from memory.
 	d.saveEndpointCache(d.cachePath)
-	unmoved := d.followRenumbering(state, s.now, s.live)
+	unmoved := d.followRenumbering(state, s.live)
 
 	refused := d.refusedEverywhere(s.members, s.live)
 	if refused {
@@ -302,7 +307,7 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			ID:        d.peerID(n.WireGuard),
 			NodeKey:   conn.NodePublicFromRaw32(n.WireGuard),
 			DiscoKey:  conn.DiscoPublicFromRaw32(ep.Disco),
-			Addrs:     s.state.Addrs(n.Identity, s.now),
+			Addrs:     d.overlayAddrs(s.state, n.Identity, s.now),
 			Endpoints: ep.Addrs,
 			HomeRelay: homeRelay(ep, relays),
 		}

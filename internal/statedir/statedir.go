@@ -30,7 +30,14 @@ const (
 
 // StateFiles are what a daemon keeps in its state directory beside the log
 // and the node keys, for a reset of a home no daemon runs from.
-var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, OperatorFile}
+var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, OperatorFile, WaitingFile}
+
+// WaitingFile holds the changes waiting for votes a node holds, sealed to
+// the admins, so that a restart does not lose them.
+const WaitingFile = "waiting.cbor"
+
+// WaitingPath returns where a home directory keeps them.
+func WaitingPath(home string) string { return filepath.Join(home, WaitingFile) }
 
 // EndpointCacheFile is the cache's name inside the state directory.
 const EndpointCacheFile = "endpoints.cbor"

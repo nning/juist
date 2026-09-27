@@ -124,6 +124,27 @@ adopting this system must accept them explicitly.
    **every member can reach every port the host listens on through the tunnel**;
    the host firewall still guards every other interface, and
    `/usr/lib/juist/firewall.sh revoke` takes the rule back.
+9. **A host's networks trust one another's juistd (M5).** A host in several
+   networks runs one juistd per network, all as the `juist` user. An attacker
+   who takes over one of them, through a parser bug a member of that network
+   reaches, can read the other instances' device keys and operate them over
+   their sockets. That makes the attacker this device in every network the
+   host is in. It gains no admin key and no vote in any of them. Each
+   instance already holds `CAP_NET_ADMIN` and could redirect the host's
+   traffic anyway, so the step from one network to all of them on that host
+   is the device keys. Bounded by: a device is still removed from each network
+   by that network's quorum. A user per instance, which would close it, needs
+   the packaging and each instance's view of the one below reworked, and is
+   left for the hardening before the audit (M10).
+10. **Admin devices see what waits for the admins (M5b).** A change waiting
+   for votes is sealed to the admin keys, but the juistd of every admin device
+   that carries it sees its outside: which admin key handed it on, when it
+   expires, how large it is, and which devices it is about. A compromised
+   admin device can tell a device that its removal waits. A compromised admin
+   key can put changes in front of the other admins, within the bounds of 16
+   changes and 8 MiB per signing key. Neither makes a change
+   count: that still takes the quorum's signatures, each given where its
+   admin was shown the change from their own log.
 
 ## Security design rules derived from the above
 

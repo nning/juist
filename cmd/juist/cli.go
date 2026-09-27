@@ -55,6 +55,28 @@ type app struct {
 	socketExplicit bool
 	node           node
 
+	// host is where the host's juistd instances are, one per network;
+	// network is --network, naming one; purpose is what the command wants of
+	// them, and yes that it may make a new one without asking. instances is
+	// what they answered, and instance the one the node is. See instances.go.
+	host    *hostLayout
+	network string
+	// networkFromEnv says network is $JUIST_NETWORK's rather than given.
+	networkFromEnv bool
+	purpose        purpose
+	yes            bool
+	instances      *[]hostInstance
+	instance       *hostInstance
+	asRoot         func() bool
+	made           int    // an instance this invocation started, which a failure takes back
+	keyName        string // the one admin key to sign with, where one is named
+	spec           spec   // the command's, as parsed, for hints that name it
+
+	// listing is the instance a listing of every network is at, and
+	// listingHeads says the listing heads each network itself.
+	listing      string
+	listingHeads bool
+
 	// interactive is set when a person can answer a question on in, read
 	// through reader; reading is a read under way.
 	interactive bool
@@ -72,6 +94,14 @@ type app struct {
 	// daemon says which; nil, as in tests, meets through none.
 	helpers *rendezvous.Helpers
 
+	// drawV4 picks a new network's IPv4 prefix among those taken leaves;
+	// tests make it deterministic.
+	drawV4 func(taken func(netip.Prefix) bool) (netip.Prefix, error)
+
+	// admissionHold is how long a copy of an admission waits on the admin
+	// devices before its invite renews it; tests shorten it.
+	admissionHold time.Duration
+
 	// dir is the working directory pending changes are written to and
 	// relative paths are read from, "" meaning the process's; now is the
 	// clock. Tests replace both.
@@ -84,7 +114,8 @@ type app struct {
 }
 
 func newApp(in io.Reader, out, errOut io.Writer) *app {
-	a := &app{ctx: context.Background(), in: in, out: out, errOut: errOut, inviteAddrs: hostAddrs, now: time.Now,
+	a := &app{ctx: context.Background(), in: in, out: out, errOut: errOut, inviteAddrs: hostAddrs, now: time.Now, drawV4: drawV4Prefix,
+		host: systemLayout(), asRoot: func() bool { return os.Geteuid() == 0 }, admissionHold: admissionHold,
 		helpers: &rendezvous.Helpers{STUN: rendezvous.DefaultSTUN}}
 	a.interactive = isTerminal(in)
 	a.color = isTerminal(out) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
@@ -249,6 +280,19 @@ type spec struct {
 	about string // what it does, in a paragraph or two
 	min   int
 	max   int // -1 for no limit
+
+	// anyNetwork is set on a command about no network the device is in —
+	// one it founds or joins, or none — which takes no NETWORK argument.
+	anyNetwork bool
+}
+
+// synopsis is the command's arguments as usage shows them: a command about
+// one of the device's networks takes it first, where it is in several.
+func (s spec) synopsis() string {
+	if s.anyNetwork || strings.Contains(s.args, "SUBCOMMAND") {
+		return s.args
+	}
+	return strings.TrimSpace("[NETWORK] " + s.args)
 }
 
 // shorts are the one-letter options, by the long option each spells: one
@@ -257,6 +301,7 @@ type spec struct {
 // authority takes a letter no one types by habit, such as -v for verbose.
 var shorts = map[string]byte{
 	"admin":       'a',
+	"admin-key":   'K',
 	"admin-name":  'u',
 	"admin-votes": 'v',
 	"device":      'n',
@@ -265,6 +310,7 @@ var shorts = map[string]byte{
 	"for":         't',
 	"force":       'f',
 	"ipv4":        '4',
+	"key":         'k',
 	"keys":        'k',
 	"name":        'n',
 	"no-apply":    'n',
@@ -347,6 +393,14 @@ func (a *app) parse(s spec, fs *flag.FlagSet, args []string) ([]string, error) {
 		args = args[1:]
 	}
 	pos = append(pos, tail...)
+	a.spec = s
+	// A first argument that names one of the device's networks is that
+	// network, where what follows still makes the command. With one network
+	// it may be left out.
+	if !s.anyNetwork && (a.network == "" || a.networkFromEnv) && len(pos) > 0 && len(pos)-1 >= s.min &&
+		a.namesNetwork(pos[0]) {
+		a.network, a.networkFromEnv, pos = pos[0], false, pos[1:]
+	}
 	switch {
 	case len(pos) < s.min:
 		missing := strings.Fields(s.args)
@@ -361,8 +415,8 @@ func (a *app) parse(s spec, fs *flag.FlagSet, args []string) ([]string, error) {
 // usage is the one-line synopsis errors end with; fs, if any, adds options.
 func (s spec) usage(fs *flag.FlagSet) string {
 	u := "usage: " + s.name
-	if s.args != "" {
-		u += " " + s.args
+	if args := s.synopsis(); args != "" {
+		u += " " + args
 	}
 	if fs != nil {
 		has := false
@@ -376,8 +430,8 @@ func (s spec) usage(fs *flag.FlagSet) string {
 
 func (a *app) help(s spec, fs *flag.FlagSet, w io.Writer) {
 	usage := "Usage: " + s.name
-	if s.args != "" {
-		usage += " " + s.args
+	if args := s.synopsis(); args != "" {
+		usage += " " + args
 	}
 	hasFlags := false
 	fs.VisitAll(func(*flag.Flag) { hasFlags = true })
@@ -389,6 +443,15 @@ func (a *app) help(s spec, fs *flag.FlagSet, w io.Writer) {
 		return
 	}
 	fmt.Fprintf(w, "\nOptions:\n")
+	for _, o := range optionRows(fs) {
+		fmt.Fprintf(w, "  %-28s %s\n", o[0], o[1])
+	}
+}
+
+// optionRows are fs's options as help lists them: each one's spellings with
+// its value, and what it does with its default.
+func optionRows(fs *flag.FlagSet) [][2]string {
+	var rows [][2]string
 	fs.VisitAll(func(f *flag.Flag) {
 		left, ok := cliflag.Label(fs, f)
 		if !ok {
@@ -413,8 +476,9 @@ func (a *app) help(s spec, fs *flag.FlagSet, w io.Writer) {
 		if !slices.Contains([]string{"", "false", "0", "0s"}, def) {
 			text += fmt.Sprintf(" (default %s)", def)
 		}
-		fmt.Fprintf(w, "  %-28s %s\n", left, text)
+		rows = append(rows, [2]string{left, text})
 	})
+	return rows
 }
 
 // stringList collects a repeatable string flag.

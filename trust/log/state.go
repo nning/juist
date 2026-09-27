@@ -129,6 +129,15 @@ func (s *State) TotalVotes() uint32 { return types.AchievableVotes(s.Admins()) }
 // ULA returns the network's overlay IPv6 prefix.
 func (s *State) ULA() netip.Prefix { return types.ULA(s.genesisHash) }
 
+// V4Prefix returns the network's own IPv4 prefix, if it has one: a network
+// founded before prefixes were drawn numbers from the schema's whole range.
+func (s *State) V4Prefix() (netip.Prefix, bool) {
+	if s.v4Prefix == nil {
+		return netip.Prefix{}, false
+	}
+	return *s.v4Prefix, true
+}
+
 // V4Range returns the range new overlay IPv4 addresses are assigned from.
 func (s *State) V4Range() netip.Prefix { return types.V4Range(s.schema, s.v4Prefix) }
 
@@ -224,14 +233,14 @@ func (s *State) NodesWithRole(r types.Role) []types.NodeRecord {
 // Admin returns an admin key entry.
 func (s *State) Admin(id types.Identity) (types.AdminKey, bool) {
 	a, ok := s.admins[id]
-	return a, ok
+	return *a.Clone(), ok
 }
 
 // Admins returns every admin key, sorted by public key.
 func (s *State) Admins() []types.AdminKey {
 	out := make([]types.AdminKey, 0, len(s.admins))
 	for _, id := range sortedIdentities(s.admins) {
-		out = append(out, s.admins[id])
+		out = append(out, *new(s.admins[id]).Clone())
 	}
 	return out
 }
@@ -329,8 +338,8 @@ func stateFromSnapshot(snap *types.Snapshot, head types.Hash) (*State, error) {
 		r := types.RetiringRanges{Prefixes: slices.Clone(snap.V4Retiring.Prefixes), Until: snap.V4Retiring.Until}
 		s.v4Retiring = &r
 	}
-	for _, a := range snap.Admins {
-		s.admins[a.Public] = a
+	for i := range snap.Admins {
+		s.admins[snap.Admins[i].Public] = *snap.Admins[i].Clone()
 	}
 	for i := range snap.Nodes {
 		s.nodes[snap.Nodes[i].Identity] = snap.Nodes[i].Clone()

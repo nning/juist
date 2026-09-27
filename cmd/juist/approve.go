@@ -4,15 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"time"
 
+	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
 func cmdApprove(a *app, args []string) error {
-	s := spec{name: "juist approve", args: "FILE...", min: 1, max: -1, about: `
+	s := spec{name: "juist approve", args: "[FILE...]", max: -1, about: `
 Sign change files with this keystore's admin keys, in place, and apply each
-once fully approved. Alias: juist apply.
+once fully approved. Without files, ask about each change waiting for your
+vote on this admin device. Alias: juist apply.
 
 Each change's effect is shown from the record and the log, never from the
 file's name or comments. Changes to who may approve need the log here.
@@ -21,12 +25,23 @@ taken back.`}
 	fs := newFlags(s.name)
 	r := &approval{a: a}
 	fs.BoolVar(&r.noApply, "no-apply", false, "sign only")
+	fs.StringVar(&a.keyName, "key", "", "sign with the admin key `NAME` only, as \"juist admins\" lists it")
 	fs.BoolVar(&r.yes, "yes", false, "do not ask")
 	files, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
 	}
-	if r.auth, err = a.optionalLog(); err != nil {
+	if len(files) == 0 {
+		if r.yes || r.noApply {
+			return fmt.Errorf("--yes and --no-apply take files: a waiting change is asked about\n%s", s.usage(fs))
+		}
+		return a.approveWaiting()
+	}
+	// A genesis belongs to no network this device is in: one founded on a
+	// device in some already runs beside them, as with juist create.
+	if allGenesis(a, files) {
+		a.purpose = forFounding
+	} else if r.auth, err = a.optionalLog(); err != nil {
 		return err
 	}
 	r.haveNetwork = r.auth != nil
@@ -38,6 +53,17 @@ taken back.`}
 		}
 	}
 	return r.flush()
+}
+
+// allGenesis reports whether every file holds a genesis record.
+func allGenesis(a *app, files []string) bool {
+	for _, path := range files {
+		aum, err := readRecordFile(a.path(path))
+		if err != nil || aum.Kind != types.KindGenesis {
+			return false
+		}
+	}
+	return true
 }
 
 // An approval is one run of "juist approve" over its files.
@@ -208,6 +234,9 @@ func (r *approval) settle(path string, aum types.AUM, part, signed bool) error {
 				approvalsNeeded(sst, r.auth.State().Admins(), &aum))
 		case !sst.Authorized():
 			a.reportStatus(path, sst, r.auth.State().Admins(), &aum)
+			if part {
+				r.carryApproval(&aum)
+			}
 		case r.noApply:
 			a.printf("  approved; apply: juist approve %s\n", path)
 		default:
@@ -215,6 +244,31 @@ func (r *approval) settle(path string, aum types.AUM, part, signed bool) error {
 		}
 	}
 	return nil
+}
+
+// carryApproval hands on a change approved from its file: for as long as it
+// waits on the admin devices already, or where it waits nowhere, for as long
+// as a change may, but for an admission, which waits no longer than its
+// invite and so is never carried from a file.
+func (r *approval) carryApproval(aum *types.AUM) {
+	a := r.a
+	changes, err := a.waitingChanges(r.auth)
+	if err != nil {
+		a.warn("%v", err)
+		return
+	}
+	ttl, proposer := waiting.MaxLifetime, types.Identity{}
+	switch i := slices.IndexFunc(changes, func(w waitingChange) bool { return w.aum.SigHash() == aum.SigHash() }); {
+	case i >= 0:
+		// With the votes the copies carry, the proposer's among them.
+		aum.Signatures = mergeSignatures(r.auth.State(), aum, changes[i].aum.Signatures)
+		ttl, proposer = time.Unix(changes[i].expires, 0).Sub(a.now()), changes[i].proposer
+	case aum.Kind == types.KindAddNode:
+		return
+	}
+	if _, _, err := a.carry(r.auth, aum, ttl, proposer); err != nil {
+		a.warn("%v", err)
+	}
 }
 
 // createFromGenesis completes a genesis ceremony whose record collected the
@@ -314,6 +368,8 @@ func describeKind(k types.Kind) string {
 		return "retirement of old addresses"
 	case types.KindRenameNetwork:
 		return "renaming of the network"
+	case types.KindSetAdminRecipient:
+		return "encryption key of an admin key"
 	default:
 		return k.String()
 	}

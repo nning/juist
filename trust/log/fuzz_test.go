@@ -203,6 +203,9 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 		},
 		func() (types.AUM, error) { return b.RenumberNode(first, netip.MustParseAddr("198.18.0.9"), 1000) },
 		func() (types.AUM, error) { return b.RenameNetwork("renamed") },
+		func() (types.AUM, error) {
+			return b.SetAdminRecipient(admin.Public(), types.RecipientKey{X25519: fourth.X25519, MLKEM: fourth.MLKEM})
+		},
 		// A fork: an admission off the first member's, beside the second's.
 		func() (types.AUM, error) { return NewBuilder(afterFirst).AddNode(third, seal) },
 	}
