@@ -84,6 +84,10 @@ type Options struct {
 	// [Manager.HomeRelay] or [Manager.LocalEndpoints] changes. Both belong in
 	// this node's announcement, so the caller re-announces and pushes.
 	OnConnectivityChange func()
+
+	// OnHostRoutesChange is called, possibly from another goroutine, when
+	// what [Manager.HostRoutes] says may have changed.
+	OnHostRoutesChange func()
 }
 
 // tsManager implements [Manager] on top of Tailscale's wgengine and magicsock.
@@ -113,6 +117,16 @@ type tsManager struct {
 	// routerStale records that the last reconfiguration failed, so the OS may
 	// not match what the engine believes it programmed. Guarded by apply.
 	routerStale bool
+
+	// exits is the OS router's side of egress and serving, nil without a
+	// device of this node's own; egress and serve are what it was last given.
+	// Guarded by apply.
+	exits exitRouter
+	// tunnelled is what the router was last told the peers carry.
+	tunnelled tunnelled
+	egress    Egress
+	serve     Serve
+	tunName   string
 
 	// stun are the public STUN servers, and stunRegions the regions they
 	// hold in the map last installed.
@@ -146,9 +160,47 @@ type tsManager struct {
 
 // peerState is one immutable peer-set snapshot.
 type peerState struct {
-	peers map[key.NodePublic]Peer             // keyed by WireGuard public key
-	byIP  map[netip.Addr]key.NodePublic       // overlay address -> owner
-	nodes map[key.NodePublic]tailcfg.NodeView // prebuilt views for peerForIP
+	peers   map[key.NodePublic]Peer             // keyed by WireGuard public key
+	byIP    map[netip.Addr]key.NodePublic       // overlay address -> owner
+	nodes   map[key.NodePublic]tailcfg.NodeView // prebuilt views for peerForIP
+	allowed map[key.NodePublic][]netip.Prefix   // each peer's addresses and routes
+	routes  []routeEntry                        // every peer's routes, by first address
+}
+
+// A routeEntry is one peer's route as a range of addresses.
+type routeEntry struct {
+	r  netipx.IPRange
+	nk key.NodePublic
+}
+
+// byRoute finds the peer whose routes hold ip. Routes do not overlap, so the
+// one starting at or below ip is the only candidate.
+func (st *peerState) byRoute(ip netip.Addr) (key.NodePublic, netip.Prefix, bool) {
+	i, _ := slices.BinarySearchFunc(st.routes, ip, func(e routeEntry, ip netip.Addr) int {
+		return e.r.From().Compare(ip)
+	})
+	switch {
+	case i < len(st.routes) && st.routes[i].r.From() == ip:
+	case i > 0:
+		i--
+	default:
+		return key.NodePublic{}, netip.Prefix{}, false
+	}
+	if e := st.routes[i]; e.r.Contains(ip) {
+		p, _ := e.r.Prefix()
+		return e.nk, p, true
+	}
+	return key.NodePublic{}, netip.Prefix{}, false
+}
+
+// exitRouter is what an OS router does for egress and serving beside
+// [router.Router].
+type exitRouter interface {
+	setEgress(e Egress, t tunnelled) error
+	setServe(s Serve) error
+	// lans is the networks the host is on but through this node's device,
+	// and its own addresses in them.
+	lans() ([]netip.Prefix, []netip.Addr)
 }
 
 var _ Manager = (*tsManager)(nil)
@@ -249,8 +301,23 @@ func New(opts Options) (_ Manager, err error) {
 		// One monitor for both, rather than letting the engine start a second.
 		cfg.Tun = dev
 		cfg.Router = osRtr
+		m.exits, _ = osRtr.(exitRouter)
+		if w, ok := osRtr.(interface{ watchHostRoutes(func()) }); ok && opts.OnHostRoutesChange != nil {
+			w.watchHostRoutes(opts.OnHostRoutesChange)
+		}
+		m.tunName = opts.TunName
 		cfg.NetMon = mon
 		m.netMon = mon
+		// What an exit node serves leaves out the networks it is on, which
+		// change under it.
+		ec := bus.Client("juist-serve")
+		eventbus.SubscribeFunc(ec, func(d netmon.ChangeDelta) {
+			// Not on the bus's goroutine: Close holds apply while it closes
+			// the bus, which waits for this callback.
+			if d.InterfaceIPsChanged {
+				go m.refilter()
+			}
+		})
 	}
 
 	eng, err := wgengine.NewUserspaceEngine(logf, cfg)
@@ -379,17 +446,18 @@ func (c cleanups) run() {
 
 // allowedIPs answers the data plane's live per-peer config lookup.
 func (m *tsManager) allowedIPs(nk key.NodePublic) ([]netip.Prefix, bool) {
-	p, ok := m.state.Load().peers[nk]
-	if !ok {
-		return nil, false
-	}
-	return p.Addrs, true
+	a, ok := m.state.Load().allowed[nk]
+	return a, ok
 }
 
 // peerByIP routes every outbound packet to a peer, so it stays lock-free:
 // one atomic load and one map read.
 func (m *tsManager) peerByIP(ip netip.Addr) (key.NodePublic, bool) {
-	nk, ok := m.state.Load().byIP[ip]
+	st := m.state.Load()
+	if nk, ok := st.byIP[ip]; ok {
+		return nk, true
+	}
+	nk, _, ok := st.byRoute(ip)
 	return nk, ok
 }
 
@@ -400,11 +468,13 @@ func (m *tsManager) peerForIP(ip netip.Addr) (wgengine.PeerForIP, bool) {
 		}
 	}
 	st := m.state.Load()
-	nk, ok := st.byIP[ip]
-	if !ok {
-		return wgengine.PeerForIP{}, false
+	if nk, ok := st.byIP[ip]; ok {
+		return wgengine.PeerForIP{Node: st.nodes[nk], Route: netip.PrefixFrom(ip, ip.BitLen())}, true
 	}
-	return wgengine.PeerForIP{Node: st.nodes[nk], Route: netip.PrefixFrom(ip, ip.BitLen())}, true
+	if nk, r, ok := st.byRoute(ip); ok {
+		return wgengine.PeerForIP{Node: st.nodes[nk], Route: r}, true
+	}
+	return wgengine.PeerForIP{}, false
 }
 
 func (m *tsManager) SetPeers(peers []Peer) error {
@@ -450,6 +520,15 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	// the snapshot already stored above, so a peer skipped here would never be
 	// warmed at all.
 	err := m.reconfig()
+	// Best effort: the peers are installed, and the SetEgress each reconcile
+	// follows with tries again and reports.
+	if t := tunnelledBy(next.peers); m.exits != nil && m.egress != EgressDirect && !t.equal(m.tunnelled) {
+		if gerr := m.exits.setEgress(m.egress, t); gerr != nil {
+			m.logf("conn: guarding what the peers carry: %v", gerr)
+		} else {
+			m.tunnelled = t
+		}
+	}
 	m.warmPaths(fresh)
 	return err
 }
@@ -459,6 +538,8 @@ func clonePeers(peers []Peer) []Peer {
 	out := slices.Clone(peers)
 	for i := range out {
 		out[i].Addrs = slices.Clone(out[i].Addrs)
+		out[i].Routes = slices.Clone(out[i].Routes)
+		out[i].Subnets = slices.Clone(out[i].Subnets)
 		out[i].Endpoints = slices.Clone(out[i].Endpoints)
 	}
 	return out
@@ -538,6 +619,44 @@ func validatePeers(self Self, peers []Peer) error {
 		byID[p.ID] = p.NodeKey
 		byDisco[p.DiscoKey] = p.NodeKey
 	}
+	return validateRoutes(self, peers)
+}
+
+// validateRoutes holds routes to their contract: canonical prefixes outside
+// every address of this node's and its peers', and no two overlapping, so
+// that every address a route holds has one peer.
+func validateRoutes(self Self, peers []Peer) error {
+	var addrs, routes netipx.IPSetBuilder
+	for _, p := range self.Addrs {
+		addrs.AddPrefix(p)
+	}
+	for _, p := range peers {
+		for _, a := range p.Addrs {
+			addrs.AddPrefix(a)
+		}
+	}
+	held, err := addrs.IPSet()
+	if err != nil {
+		return fmt.Errorf("conn: %w", err)
+	}
+	for _, p := range peers {
+		for _, r := range p.carried() {
+			switch {
+			case !r.IsValid() || r.Masked() != r || r.Addr().Is4In6() || r.Addr().Zone() != "":
+				return fmt.Errorf("conn: peer %v route %v is not a canonical prefix", p.NodeKey.ShortString(), r)
+			case held.OverlapsPrefix(r):
+				return fmt.Errorf("conn: peer %v route %v holds an overlay address", p.NodeKey.ShortString(), r)
+			}
+			carried, err := routes.IPSet()
+			if err != nil {
+				return fmt.Errorf("conn: %w", err)
+			}
+			if carried.OverlapsPrefix(r) {
+				return fmt.Errorf("conn: route %v is carried twice", r)
+			}
+			routes.AddPrefix(r)
+		}
+	}
 	return nil
 }
 
@@ -545,9 +664,10 @@ func validatePeers(self Self, peers []Peer) error {
 // selfKey.
 func newPeerState(selfKey key.NodePublic, peers []Peer) (*peerState, []tailcfg.NodeView) {
 	st := &peerState{
-		peers: make(map[key.NodePublic]Peer, len(peers)),
-		byIP:  make(map[netip.Addr]key.NodePublic, len(peers)),
-		nodes: make(map[key.NodePublic]tailcfg.NodeView, len(peers)),
+		peers:   make(map[key.NodePublic]Peer, len(peers)),
+		byIP:    make(map[netip.Addr]key.NodePublic, len(peers)),
+		nodes:   make(map[key.NodePublic]tailcfg.NodeView, len(peers)),
+		allowed: make(map[key.NodePublic][]netip.Prefix, len(peers)),
 	}
 	nodes := make([]tailcfg.NodeView, 0, len(peers))
 	for _, p := range peers {
@@ -557,11 +677,16 @@ func newPeerState(selfKey key.NodePublic, peers []Peer) (*peerState, []tailcfg.N
 		nv := peerNode(p)
 		st.peers[p.NodeKey] = p
 		st.nodes[p.NodeKey] = nv
+		st.allowed[p.NodeKey] = slices.Concat(p.Addrs, p.carried())
 		for _, pfx := range p.Addrs {
 			st.byIP[pfx.Addr()] = p.NodeKey
 		}
+		for _, r := range p.carried() {
+			st.routes = append(st.routes, routeEntry{r: netipx.RangeOfPrefix(r), nk: p.NodeKey})
+		}
 		nodes = append(nodes, nv)
 	}
+	slices.SortFunc(st.routes, func(x, y routeEntry) int { return x.r.From().Compare(y.r.From()) })
 	return st, nodes
 }
 
@@ -735,14 +860,16 @@ func (m *tsManager) reconfig() error {
 	return nil
 }
 
-// peerRoutes is one prefix per peer overlay address: what the host must route
-// into the tunnel. Sorted, so an unchanged peer set yields an identical slice
-// and Reconfig recognises the no-op instead of reprogramming the OS.
+// peerRoutes is one prefix per peer overlay address, and each subnet a peer
+// routes: what the host must route into the tunnel. Sorted, so an unchanged
+// peer set yields an identical slice and Reconfig recognises the no-op
+// instead of reprogramming the OS.
 func (m *tsManager) peerRoutes() []netip.Prefix {
 	st := m.state.Load()
 	routes := make([]netip.Prefix, 0, len(st.peers))
 	for _, p := range st.peers {
 		routes = append(routes, p.Addrs...)
+		routes = append(routes, p.Subnets...)
 	}
 	slices.SortFunc(routes, comparePrefix)
 	return routes
@@ -767,9 +894,24 @@ func (m *tsManager) filter() (*filter.Filter, error) {
 		srcs = append(srcs, p.Addrs...)
 	}
 
+	serves := m.serve.Routes
+	if len(serves) > 0 {
+		var nets []netip.Prefix
+		var hosts []netip.Addr
+		if m.exits != nil {
+			nets, hosts = m.exits.lans()
+		} else {
+			nets, hosts = attached(m.tunName)
+		}
+		serves = served(serves, nets, hosts)
+	}
+	// A subnet router's networks are the very ones it serves.
+	serves = append(serves, m.serve.Subnets...)
 	var localNets netipx.IPSetBuilder
-	dsts := make([]filtertype.NetPortRange, 0, len(m.self.Addrs))
-	for _, pfx := range m.self.Addrs {
+	dsts := make([]filtertype.NetPortRange, 0, len(m.self.Addrs)+len(serves))
+	// What this node serves its peers is theirs to send to, as its own
+	// addresses are; nothing else outside them is.
+	for _, pfx := range slices.Concat(m.self.Addrs, serves) {
 		localNets.AddPrefix(pfx)
 		dsts = append(dsts, filtertype.NetPortRange{Net: pfx, Ports: filtertype.AllPorts})
 	}
@@ -791,6 +933,22 @@ func (m *tsManager) filter() (*filter.Filter, error) {
 	return filter.New(matches, nil, ls, ls, m.eng.GetFilter(), m.logf), nil
 }
 
+// refilter builds the packet filter again, where this node serves as an exit
+// node.
+func (m *tsManager) refilter() {
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	if m.closed || !m.serve.serving() {
+		return
+	}
+	filt, err := m.filter()
+	if err != nil {
+		m.logf("conn: building filter: %v", err)
+		return
+	}
+	m.eng.SetFilter(filt)
+}
+
 // allIPProtos enumerates every IP protocol number, the only way to say "any
 // protocol": Match.IPProto is a membership test with no wildcard.
 var allIPProtos = func() views.Slice[ipproto.Proto] {
@@ -800,6 +958,74 @@ var allIPProtos = func() views.Slice[ipproto.Proto] {
 	}
 	return views.SliceOf(p)
 }()
+
+// errNoExits is egress or serving asked of a node that routes nothing itself.
+var errNoExits = errors.New("conn: exit nodes need a device of this node's own, on Linux")
+
+func (m *tsManager) SetEgress(e Egress) error {
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	switch {
+	case m.closed:
+		return errors.New("conn: manager is closed")
+	case e == EgressDirect && m.egress == EgressDirect:
+		return nil
+	case m.exits == nil && e != EgressDirect:
+		return errNoExits
+	}
+	// Given again, the router installs it again: a route someone flushed is
+	// not announced, and every reconcile gives the egress.
+	if m.exits != nil {
+		t := tunnelledBy(m.state.Load().peers)
+		if err := m.exits.setEgress(e, t); err != nil {
+			return err
+		}
+		m.tunnelled = t
+	}
+	m.egress = e
+	return nil
+}
+
+func (m *tsManager) SetServe(s Serve) error {
+	s = Serve{Routes: slices.Clone(s.Routes), Subnets: slices.Clone(s.Subnets), Sources: slices.Clone(s.Sources)}
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	switch {
+	case m.closed:
+		return errors.New("conn: manager is closed")
+	case slices.Equal(s.Routes, m.serve.Routes) && slices.Equal(s.Subnets, m.serve.Subnets) &&
+		slices.Equal(s.Sources, m.serve.Sources):
+		// Given again, the router installs it again, as it does egress; where
+		// it no longer may, nothing is served.
+		if s.serving() && m.exits != nil {
+			if err := m.exits.setServe(s); err != nil {
+				m.serve = Serve{}
+				return errors.Join(err, m.reconfig())
+			}
+		}
+		return nil
+	case m.exits == nil && s.serving():
+		return errNoExits
+	}
+	for _, r := range slices.Concat(s.Routes, s.Subnets) {
+		if tsaddr.PrefixesContainsIP(m.self.Addrs, r.Addr()) || !r.IsValid() || r.Masked() != r {
+			return fmt.Errorf("conn: route %v to serve is not a prefix outside this node", r)
+		}
+	}
+	// Masquerading before the filter lets anything through, and taking it
+	// away after, so that nothing leaves with an overlay source.
+	if s.serving() && m.exits != nil {
+		if err := m.exits.setServe(s); err != nil {
+			return err
+		}
+	}
+	m.serve = s
+	err := m.reconfig()
+	if !s.serving() && m.exits != nil {
+		err = errors.Join(err, m.exits.setServe(s))
+	}
+	return err
+}
 
 // SetRelays installs the relay set. It is separate from SetPeers because the
 // two change for different reasons: a relay set moves when a role is granted
@@ -1012,6 +1238,17 @@ func (m *tsManager) Close() error {
 	return nil
 }
 
+func (m *tsManager) HostRoutes() []netip.Prefix {
+	if r, ok := m.exits.(interface{ hostRoutes() []netip.Prefix }); ok {
+		return r.hostRoutes()
+	}
+	nets, _ := attached(m.tunName)
+	return nets
+}
+
+// carried is everything outside the overlay p carries for this node.
+func (p Peer) carried() []netip.Prefix { return slices.Concat(p.Routes, p.Subnets) }
+
 func peerNode(p Peer) tailcfg.NodeView {
 	return (&tailcfg.Node{
 		ID:         tailcfg.NodeID(p.ID),
@@ -1020,7 +1257,7 @@ func peerNode(p Peer) tailcfg.NodeView {
 		Key:        p.NodeKey,
 		DiscoKey:   p.DiscoKey,
 		Addresses:  p.Addrs,
-		AllowedIPs: p.Addrs,
+		AllowedIPs: slices.Concat(p.Addrs, p.carried()),
 		Endpoints:  p.Endpoints,
 		HomeDERP:   p.HomeRelay,
 		Cap:        tailcfg.CurrentCapabilityVersion,

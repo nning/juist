@@ -68,6 +68,20 @@ const (
 	// nothing without it.
 	envDebug = "JUIST_NETNS_DEBUG"
 
+	// envEgress is the egress a node starts with, and envServe the overlay
+	// sources it masquerades while serving the internet as an exit node.
+	envEgress = "JUIST_NETNS_EGRESS"
+	envServe  = "JUIST_NETNS_SERVE"
+	// envSubnets are the subnets a node routes for its peers, with
+	// envServe's sources.
+	envSubnets = "JUIST_NETNS_SUBNETS"
+	// envServeDNS is the resolver an exit node forwards its members' DNS
+	// to, on its overlay addresses at [dnsPort].
+	envServeDNS = "JUIST_NETNS_SERVE_DNS"
+	dnsPort     = 41646
+	// envDNSListen is where the DNS helper answers.
+	envDNSListen = "JUIST_NETNS_DNS_LISTEN"
+
 	// protoPrefix marks the helper's protocol lines, so they are separable
 	// from the test framework's own output on the same stream.
 	protoPrefix = "#juist "
@@ -114,6 +128,10 @@ type netnsNode struct {
 	tun      string
 	underlay netip.Addr
 	addrs    []netip.Prefix
+	// carries is what the node's peers route through it, as a grant gives
+	// it: the internet, and subnets.
+	carries []netip.Prefix
+	subnets []netip.Prefix
 
 	// inst is the host instance the node is, which picks its routing table,
 	// and udpPort its data plane's port, underlayPort where zero. sharesNS
@@ -571,6 +589,8 @@ func encodePeers(peers []*netnsNode) string {
 			rawHex(p.discoPub),
 			joinPrefixes(p.addrs),
 			netip.AddrPortFrom(p.underlay, uint16(p.listenPort())).String(),
+			joinPrefixes(p.carries),
+			joinPrefixes(p.subnets),
 		}, "|"))
 	}
 	return strings.Join(out, ";")
@@ -584,8 +604,8 @@ func decodePeers(s string) ([]Peer, error) {
 	var peers []Peer
 	for _, rec := range strings.Split(s, ";") {
 		f := strings.Split(rec, "|")
-		if len(f) != 5 {
-			return nil, fmt.Errorf("peer record %q has %d fields, want 5", rec, len(f))
+		if len(f) != 7 {
+			return nil, fmt.Errorf("peer record %q has %d fields, want 7", rec, len(f))
 		}
 		id, err := strconv.ParseUint(f[0], 10, 64)
 		if err != nil {
@@ -607,11 +627,24 @@ func decodePeers(s string) ([]Peer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("peer endpoint %q: %w", f[4], err)
 		}
+		var routes, subnets []netip.Prefix
+		if f[5] != "" {
+			if routes, err = splitPrefixes(f[5]); err != nil {
+				return nil, err
+			}
+		}
+		if f[6] != "" {
+			if subnets, err = splitPrefixes(f[6]); err != nil {
+				return nil, err
+			}
+		}
 		peers = append(peers, Peer{
 			ID:        id,
 			NodeKey:   nodePub,
 			DiscoKey:  DiscoPublicFromRaw32(discoPub),
 			Addrs:     addrs,
+			Routes:    routes,
+			Subnets:   subnets,
 			Endpoints: []netip.AddrPort{ep},
 		})
 	}

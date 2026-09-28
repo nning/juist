@@ -84,6 +84,14 @@ type Service struct {
 	// operator is 0 for none: root needs no appointment. Atomic, since the
 	// accept loop asks for every connection and must not wait on mu.
 	operator atomic.Uint32
+
+	// exit and serve are the owner's choice of exit node and the operator's
+	// word on serving as one, as kept in Home.
+	exit  ExitChoice
+	serve bool
+	// serveSubnets and subnetsOff are the operator's and the owner's word
+	// on subnet routes, as the state directory keeps them.
+	serveSubnets, subnetsOff bool
 }
 
 // ServiceOptions configures a [Service].
@@ -185,6 +193,18 @@ func NewService(opts ServiceOptions) (*Service, error) {
 		}
 	}
 	s.operator.Store(loadOperator(filepath.Join(home, statedir.OperatorFile), s.logf))
+	if s.exit, err = LoadExitChoice(filepath.Join(home, statedir.ExitFile)); err != nil {
+		s.logf("daemon: %v; internet traffic is refused until an exit node is chosen again", err)
+		s.exit = ExitChoice{Chosen: true, Unreadable: true}
+	}
+	_, err = os.Stat(filepath.Join(home, statedir.ServeFile))
+	s.serve = err == nil
+	_, err = os.Stat(filepath.Join(home, statedir.SubnetServeFile))
+	s.serveSubnets = err == nil
+	_, err = os.Stat(filepath.Join(home, statedir.SubnetsFile))
+	s.subnetsOff = err == nil
+	s.clearEgressUnlessChosen()
+	s.holdExitLocked()
 
 	sock := opts.Socket
 	if sock == "" {
@@ -297,7 +317,172 @@ func (s *Service) Close() {
 	}
 	s.closed = true
 	s.stopMeshLocked()
+	// Stopped for good, the host routes by itself again.
+	s.clearEgress()
 	s.lock.Close()
+}
+
+// clearEgress ends what a stopped mesh left refusing, on a device of its own:
+// in tests there is no device, and the host's routing is another juistd's.
+func (s *Service) clearEgress() {
+	if s.opts.Mesh.TunName == "" {
+		return
+	}
+	if err := conn.ClearEgress(s.opts.Mesh.Instance); err != nil {
+		s.logf("daemon: %v", err)
+	}
+}
+
+func (s *Service) clearEgressUnlessChosen() {
+	if !s.exit.Refuses() {
+		s.clearEgress()
+	}
+}
+
+// exitWithoutMeshLocked is what becomes of exit nodes while no mesh runs.
+func (s *Service) exitWithoutMeshLocked(state *log.State, notMember bool) *ipc.Exit {
+	if !s.exit.Refuses() && !s.serve {
+		return nil
+	}
+	why := "the tunnels are not up"
+	if notMember {
+		why = "this device is no member of the network"
+	}
+	e := &ipc.Exit{Consent: s.serve}
+	if s.serve {
+		e.NotServing = why
+	}
+	if s.exit.Refuses() {
+		e.Node, e.Refused = s.exit.Node, why
+		if s.exit.Unreadable {
+			e.Refused = errUnreadableChoice
+		}
+		if n, ok := state.Node(s.exit.Node); ok {
+			e.Name = n.Name
+		}
+	}
+	return e
+}
+
+// holdExitLocked refuses the chosen exit node's traffic while no mesh runs to
+// route it, so that none leaves directly meanwhile; a mesh's router takes the
+// refusal over.
+func (s *Service) holdExitLocked() {
+	if s.opts.Mesh.TunName == "" || s.mesh != nil || !s.exit.Refuses() {
+		return
+	}
+	if err := conn.RefuseEgress(s.opts.Mesh.Instance); err != nil {
+		s.logf("daemon: %v", err)
+	}
+}
+
+// followExit keeps the choice the mesh followed to the chosen node's rotated
+// identity: the mesh's as it is now, which a later rotation or the owner's
+// own choice may have overtaken since.
+func (s *Service) followExit(_, to types.Identity) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mesh == nil || !s.exit.Refuses() || s.exit.Unreadable {
+		return
+	}
+	c := s.mesh.exitChoiceNow()
+	if c.Node != to || c == s.exit {
+		return
+	}
+	if err := SaveExitChoice(filepath.Join(s.opts.Home, statedir.ExitFile), c); err != nil {
+		s.logf("daemon: keeping the exit node's new identity: %v", err)
+		return
+	}
+	s.exit = c
+}
+
+// setSubnet records the operator's word on routing this device's subnets, or
+// the owner's on routing its peers', and hands it to the running mesh. Each
+// is a file whose presence says yes.
+func (s *Service) setSubnet(req *ipc.Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name, on := statedir.SubnetServeFile, req.ServeSubnets
+	if req.AcceptSubnets != nil {
+		off := !*req.AcceptSubnets
+		name, on = statedir.SubnetsFile, &off
+	}
+	if err := setFlagFile(s.opts.Home, name, *on); err != nil {
+		return err
+	}
+	if req.ServeSubnets != nil {
+		s.serveSubnets = *on
+	} else {
+		s.subnetsOff = *on
+	}
+	if s.mesh != nil {
+		s.mesh.SetSubnetConsent(s.serveSubnets)
+		s.mesh.SetSubnetsOff(s.subnetsOff)
+		_ = s.mesh.Reconcile() // so that the status answered says what came of it
+	}
+	return nil
+}
+
+// setFlagFile makes name in home exist where on, and not where off, durably.
+func setFlagFile(home, name string, on bool) error {
+	path := filepath.Join(home, name)
+	if on {
+		return statedir.WriteFilePrivate(path, nil)
+	}
+	if err := os.Remove(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	// So that a power cut does not bring the word back.
+	return keys.SyncDir(home)
+}
+
+// setExit records the owner's choice of exit node, or the operator's word on
+// serving as one, and hands it to the running mesh.
+func (s *Service) setExit(req *ipc.Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	home := s.opts.Home
+	switch {
+	case req.Serve != nil:
+		path := filepath.Join(home, statedir.ServeFile)
+		var err error
+		if *req.Serve {
+			err = statedir.WriteFilePrivate(path, nil)
+		} else if err = os.Remove(path); errors.Is(err, os.ErrNotExist) {
+			err = nil
+		} else if err == nil {
+			// So that a power cut does not bring the consent back.
+			err = keys.SyncDir(home)
+		}
+		if err != nil {
+			return err
+		}
+		s.serve = *req.Serve
+		if s.mesh != nil {
+			s.mesh.SetServeConsent(s.serve)
+			_ = s.mesh.Reconcile() // so that the status answered says what came of it
+		}
+		return nil
+	}
+	c := ExitChoice{Chosen: true, Node: req.ExitNode}
+	if req.ExitOff {
+		c = ExitChoice{Chosen: true}
+	} else if why := egressUserOf(s.opts.Mesh.EgressUser); why != "" {
+		return errors.New(why + "\nhint: run the packaged service, as its own user")
+	}
+	if err := SaveExitChoice(filepath.Join(home, statedir.ExitFile), c); err != nil {
+		return err
+	}
+	s.exit = c
+	if s.mesh != nil {
+		s.mesh.SetExitChoice(s.exit)
+		_ = s.mesh.Reconcile()
+	}
+	s.clearEgressUnlessChosen()
+	s.holdExitLocked()
+	return nil
 }
 
 // Mesh returns the running mesh, or nil.
@@ -384,6 +569,8 @@ func (s *Service) startMeshLocked() error {
 	o.LeasePath = statedir.LeasePath(s.opts.Home)
 	o.WaitingPath = statedir.WaitingPath(s.opts.Home)
 	o.OnAddrsMoved = s.followAddrs
+	o.Exit, o.ServeExit, o.OnExitMoved = s.exit, s.serve, s.followExit
+	o.ServeSubnets, o.SubnetsOff = s.serveSubnets, s.subnetsOff
 	o.KeyringPath = statedir.KeyringPath(s.opts.Home)
 	if o.Logf == nil {
 		o.Logf = s.logf
@@ -427,6 +614,7 @@ func (s *Service) stopMeshLocked() {
 	s.mesh.Close()
 	<-s.meshDone
 	s.mesh = nil
+	s.holdExitLocked()
 }
 
 // checkHost restarts the mesh when what a lower instance on the host holds
@@ -573,6 +761,13 @@ func (s *Service) Status() ipc.Status {
 		if s.meshErr != nil && !errors.Is(s.meshErr, ErrNotMember) {
 			st.StartError = s.meshErr.Error()
 		}
+		st.Exit = s.exitWithoutMeshLocked(state, st.NotMember)
+		if s.serveSubnets || s.subnetsOff {
+			st.Subnets = &ipc.Subnets{Consent: s.serveSubnets, Off: s.subnetsOff}
+			if s.serveSubnets {
+				st.Subnets.NotServing = "the tunnels are not up"
+			}
+		}
 	}
 	st.Instance, st.Device = s.opts.Mesh.Instance, s.opts.Mesh.TunName
 	if state != nil {
@@ -693,6 +888,10 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 		err = s.unstage()
 	case ipc.CmdReset:
 		err = s.reset(req.Force)
+	case ipc.CmdSubnet:
+		err = s.setSubnet(req)
+	case ipc.CmdExit:
+		err = s.setExit(req)
 	case ipc.CmdWaiting:
 		m := s.Mesh()
 		if m == nil {
@@ -744,6 +943,10 @@ func (s *Service) reset(force bool) error {
 	}
 	s.stopMeshLocked()
 	s.auth, s.meshErr, s.hostConflict = nil, nil, nil
+	// The choice and the consent were this network's, and go with it.
+	s.exit, s.serve = ExitChoice{}, false
+	s.serveSubnets, s.subnetsOff = false, false
+	s.clearEgress()
 
 	entries, err := os.ReadDir(home)
 	if err != nil {

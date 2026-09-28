@@ -12,11 +12,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"tailscale.com/net/stun"
 
+	"github.com/nning/juist/internal/dnsfwd"
 	"github.com/nning/juist/relay"
 )
 
@@ -75,7 +77,9 @@ func TestHelperNetnsNode(t *testing.T) {
 			srv.Port(), srv.STUNPort(), srv.HostName(), hex.EncodeToString(sum[:]))
 	}
 
+	var hostRouteChanges atomic.Int64
 	mgr, err := New(Options{
+		OnHostRoutesChange: func() { hostRouteChanges.Add(1) },
 		Self: Self{
 			ID:       id,
 			NodeKey:  NodeKeyFromRaw32(nodeRaw),
@@ -124,6 +128,45 @@ func TestHelperNetnsNode(t *testing.T) {
 	if err := mgr.SetPeers(peers); err != nil {
 		t.Fatalf("SetPeers: %v", err)
 	}
+	if v := os.Getenv(envServe); v != "" {
+		srcs, err := splitPrefixes(v)
+		if err != nil {
+			t.Fatalf("serve sources: %v", err)
+		}
+		s := Serve{Sources: srcs}
+		if sub := os.Getenv(envSubnets); sub != "" {
+			if s.Subnets, err = splitPrefixes(sub); err != nil {
+				t.Fatalf("subnets: %v", err)
+			}
+		} else {
+			s.Routes = Internet(true, true, nil)
+		}
+		if err := mgr.SetServe(s); err != nil {
+			t.Fatalf("SetServe: %v", err)
+		}
+	}
+	if up := os.Getenv(envServeDNS); up != "" {
+		upstream := netip.MustParseAddrPort(up)
+		var own []netip.Addr
+		for _, p := range addrs {
+			own = append(own, p.Addr())
+		}
+		fwd, err := dnsfwd.Start(dnsfwd.Options{Addrs: own, Port: dnsPort, Device: os.Getenv(envTun),
+			Allowed: func(a netip.Addr) bool {
+				return netip.MustParsePrefix("100.64.0.0/24").Contains(a) ||
+					netip.MustParsePrefix("fd7a:115c:a1e0::/48").Contains(a)
+			},
+			Upstream: func() []netip.AddrPort { return []netip.AddrPort{upstream} }})
+		if err != nil {
+			t.Fatalf("answering DNS: %v", err)
+		}
+		defer fwd.Close()
+	}
+	if v := os.Getenv(envEgress); v != "" {
+		if err := setEgressByName(mgr, v); err != nil {
+			t.Fatalf("egress %s: %v", v, err)
+		}
+	}
 	if p := os.Getenv(envTCPListen); p != "" {
 		serveTCPEcho(t, p)
 	}
@@ -169,6 +212,17 @@ func TestHelperNetnsNode(t *testing.T) {
 			say("OK")
 			continue
 		}
+		if at, ok := strings.CutPrefix(cmd, "ASK "); ok {
+			say("%s", askDNS(at))
+			continue
+		}
+		if name, ok := strings.CutPrefix(cmd, "EGRESS "); ok {
+			if err := setEgressByName(mgr, name); err != nil {
+				t.Fatalf("EGRESS %s: %v", name, err)
+			}
+			say("OK")
+			continue
+		}
 		switch cmd {
 		case "PEERS all":
 			if err := mgr.SetPeers(peers); err != nil {
@@ -180,6 +234,9 @@ func TestHelperNetnsNode(t *testing.T) {
 				t.Fatalf("SetPeers(none): %v", err)
 			}
 			say("OK")
+		case "HOSTROUTES":
+			// How often the host's own routes were seen to change.
+			say("HOSTROUTES %d", hostRouteChanges.Load())
 		case "HOME":
 			// What region the data plane settled on, once netcheck has run.
 			// Zero means it has no relay yet, which the lab waits out.
@@ -200,6 +257,72 @@ func TestHelperNetnsNode(t *testing.T) {
 			t.Fatalf("unknown command %q", cmd)
 		}
 	}
+}
+
+// dnsQuery is a query for example.com A.
+var dnsQuery = []byte{0x12, 0x34, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+	7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
+
+// askDNS puts dnsQuery to at and says whether it was answered.
+func askDNS(at string) string {
+	c, err := net.Dial("udp", at)
+	if err != nil {
+		return "ASK fail " + err.Error()
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.Write(dnsQuery); err != nil {
+		return "ASK fail " + err.Error()
+	}
+	buf := make([]byte, 1500)
+	n, err := c.Read(buf)
+	switch {
+	case err != nil:
+		return "ASK fail " + err.Error()
+	case n < 2 || buf[0] != 0x12 || buf[1] != 0x34 || buf[2]&0x80 == 0:
+		return "ASK fail no answer to the query"
+	}
+	return "ASK ok"
+}
+
+// TestHelperNetnsDNS is a resolver: it answers every query on UDP port 53
+// with the query as its answer, and asks as the node helper does.
+func TestHelperNetnsDNS(t *testing.T) {
+	if os.Getenv(netnsHelperEnv) != "dns" {
+		t.Skip("not a netns DNS helper invocation")
+	}
+	pc, err := net.ListenPacket("udp", os.Getenv(envDNSListen))
+	if err != nil {
+		t.Fatalf("binding: %v", err)
+	}
+	defer pc.Close()
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, src, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			buf[2] |= 0x80
+			pc.WriteTo(buf[:n], src)
+		}
+	}()
+	say("READY")
+	sc := bufio.NewScanner(os.Stdin)
+	for sc.Scan() {
+		if at, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "ASK "); ok {
+			say("%s", askDNS(at))
+		}
+	}
+}
+
+func setEgressByName(mgr Manager, name string) error {
+	for _, e := range []Egress{EgressDirect, EgressTunnel, EgressRefused} {
+		if e.String() == name {
+			return mgr.SetEgress(e)
+		}
+	}
+	return fmt.Errorf("no egress %q", name)
 }
 
 // serveRelay starts this node's relay, admitting exactly the keys the lab
@@ -359,4 +482,14 @@ func TestHelperNetnsTCP(t *testing.T) {
 // say writes one protocol line to the lab.
 func say(format string, args ...any) {
 	fmt.Printf(protoPrefix+format+"\n", args...)
+}
+
+// TestHelperNetnsRPFilter says what [StrictRP6] makes of its namespace's
+// ruleset.
+func TestHelperNetnsRPFilter(t *testing.T) {
+	if os.Getenv(netnsHelperEnv) != "rpfilter" {
+		t.Skip("not a netns reverse-path helper invocation")
+	}
+	strict, err := StrictRP6()
+	say("RPFILTER %v %v", strict, err)
 }

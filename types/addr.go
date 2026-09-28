@@ -87,11 +87,12 @@ func IsOverlayV4(a netip.Addr) bool {
 // Prefixes an advertised route may never cover, on top of the network's own
 // overlay space: a grant covering loopback, link-local or multicast would
 // point a client's own local traffic at another member's host. The full-tunnel
-// case has its own form — the default route plus the exit-node role.
+// case has its own form — the default route plus the exit role.
 var forbiddenRoutes = []netip.Prefix{
 	netip.MustParsePrefix("127.0.0.0/8"),
 	netip.MustParsePrefix("169.254.0.0/16"),
 	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("::1/128"),
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("ff00::/8"),
@@ -168,13 +169,13 @@ func ValidateV4(a netip.Addr, ranges []netip.Prefix) error {
 
 // ValidateRoute checks one advertised prefix from a route grant. ula is the
 // network's overlay prefix, v4 its [V4Ranges], and exitNode whether the
-// granted node holds the exit-node role.
+// granted node holds the exit role.
 //
 //   - Canonical form: masked, no zone, no IPv4-mapped-IPv6.
 //   - No overlap with the overlay's own space, which is what stops a grant
 //     becoming a way to intercept member-to-member traffic.
 //   - Nothing in [forbiddenRoutes].
-//   - The default route only with the exit-node role, and exempt from the
+//   - The default route only with the exit role, and exempt from the
 //     overlap rules it would otherwise fail by construction; the consumer
 //     subtracts the overlay space when rendering AllowedIPs.
 func ValidateRoute(pfx netip.Prefix, ula netip.Prefix, v4 []netip.Prefix, exitNode bool) error {
@@ -192,7 +193,7 @@ func ValidateRoute(pfx netip.Prefix, ula netip.Prefix, v4 []netip.Prefix, exitNo
 	}
 	if pfx.Bits() == 0 {
 		if !exitNode {
-			return fmt.Errorf("default route %v requires the %s role", pfx, RoleExitNode)
+			return fmt.Errorf("default route %v requires the %s role", pfx, RoleExit)
 		}
 		return nil
 	}
@@ -212,8 +213,24 @@ func ValidateRoute(pfx netip.Prefix, ula netip.Prefix, v4 []netip.Prefix, exitNo
 			return fmt.Errorf("route %v overlaps reserved prefix %v", pfx, bad)
 		}
 	}
+	for _, other := range overlaySpaces {
+		if pfx.Overlaps(other) {
+			return fmt.Errorf("route %v overlaps %v, which overlays on a member's host may hold", pfx, other)
+		}
+	}
+	// Any other juist network's overlay prefix is a /48 of fc00::/7.
+	if uniqueLocal.Contains(pfx.Addr()) && pfx.Bits() < 48 {
+		return fmt.Errorf("route %v spans unique-local /48s, one of which another network's overlay may be", pfx)
+	}
 	return nil
 }
+
+// overlaySpaces are what overlays on a member's host may hold, another juist
+// network's or tailscaled's, which a route through a member would take from
+// them.
+var overlaySpaces = []netip.Prefix{CGNAT, OverlayV4, netip.MustParsePrefix("fd7a:115c:a1e0::/48")}
+
+var uniqueLocal = netip.MustParsePrefix("fc00::/7")
 
 // comparePrefix orders prefixes deterministically: by address family, then
 // address, then prefix length. Route sets are sorted by it so that one set has

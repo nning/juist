@@ -88,14 +88,19 @@ func isJuistRulePref(pref uint32, inst int) bool {
 // linuxRouter programs juist's addresses, routes and policy rules. It serves
 // only LocalAddrs and Routes; netfilter, SNAT and DNS are never touched.
 type linuxRouter struct {
-	logf    logger.Logf
-	link    netlink.Link
-	inst    int  // the host's juist instance this is, which owns table and rules
-	v6Rules bool // the kernel has IPv6 at all
-	ec      *eventbus.Client
+	logf      logger.Logf
+	link      netlink.Link
+	inst      int  // the host's juist instance this is, which owns table and rules
+	v6Present bool // the kernel has IPv6 at all
+	v6Rules   bool // and routes it by policy
+	ec        *eventbus.Client
 
 	restorePending atomic.Bool
 	restoreLimit   *rate.Limiter
+
+	// done ends the watch of the host's routes when the router closes.
+	done     chan struct{}
+	doneOnce sync.Once
 
 	mu       sync.Mutex
 	closed   bool
@@ -103,6 +108,15 @@ type linuxRouter struct {
 	routes   map[netip.Prefix]bool
 	src4     netip.Addr // the IPv4 source the routes were installed with
 	v6Logged bool
+	egress   Egress // installed
+	want     Egress // asked for, which a lower instance's egress may keep out
+	// tunnelled is what the peers carry, the rest refused into the tunnel.
+	tunnelled tunnelled
+	exit      map[exitRoute]bool // the exit table's routes installed
+	// exitListed says the exit table was read for what an earlier juistd
+	// of this instance left there.
+	exitListed bool
+	serving    bool // the serving table is installed
 }
 
 func newOSRouter(logf logger.Logf, dev tun.Device, _ *netmon.Monitor, _ *health.Tracker, bus *eventbus.Bus,
@@ -120,11 +134,19 @@ func newOSRouter(logf logger.Logf, dev tun.Device, _ *netmon.Monitor, _ *health.
 		logf:         logger.WithPrefix(logf, "router: "),
 		link:         link,
 		inst:         inst,
+		v6Present:    err == nil,
 		v6Rules:      err == nil,
 		restoreLimit: rate.NewLimiter(rate.Every(5*time.Second), 10),
+		exit:         map[exitRoute]bool{},
+		done:         make(chan struct{}),
 	}
 	r.ec = bus.Client("juist-router")
 	eventbus.SubscribeFunc(r.ec, func(d netmon.RuleDeleted) { r.onRuleDeleted(d.Priority) })
+	eventbus.SubscribeFunc(r.ec, func(d netmon.ChangeDelta) {
+		if d.InterfaceIPsChanged || d.IsInitialState {
+			r.onLinksChanged()
+		}
+	})
 	return r, nil
 }
 
@@ -159,6 +181,9 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		for p := range r.routes {
 			r.routes[p] = false
 		}
+		if r.egress != EgressDirect {
+			errs = append(errs, r.setEgressLocked(r.egress))
+		}
 	}
 	r.routes = reconcile(r.routes, usable(cfg.Routes, v6, true), r.addRoute, r.delRoute, &errs)
 	return errors.Join(errs...)
@@ -178,9 +203,18 @@ func preferredSrc4(addrs []netip.Prefix) netip.Addr {
 
 // Close must not assume Up ran: the engine closes routers it never brought up.
 func (r *linuxRouter) Close() error {
+	r.doneOnce.Do(func() { close(r.done) })
 	r.mu.Lock()
 	r.closed = true
 	var errs []error
+	// A chosen exit node's traffic stays refused, not let out, until the
+	// next node takes over or [ClearEgress] ends it.
+	if r.egress != EgressDirect {
+		errs = append(errs, r.setEgressLocked(EgressRefused))
+	}
+	if r.serving {
+		errs = append(errs, r.setServeLocked(Serve{}))
+	}
 	r.routes = reconcile(r.routes, nil, r.addRoute, r.delRoute, &errs)
 	errs = append(errs, r.delRulesLocked())
 	r.mu.Unlock()
@@ -323,7 +357,9 @@ func (r *linuxRouter) delRulesLocked() error {
 // onRuleDeleted restores our rules after someone else (systemd-networkd, say)
 // deletes them, once per burst and at a bounded rate.
 func (r *linuxRouter) onRuleDeleted(pref uint32) {
-	if !isJuistRulePref(pref, r.inst) || r.restorePending.Swap(true) {
+	// Another instance's exit rule going may let this one's egress in.
+	other := pref >= juistRulePrefBase+exitRuleExit && pref <= juistRulePrefBase+exitRuleExit+exitRuleMaxShift
+	if !isJuistRulePref(pref, r.inst) && !isExitRulePref(pref, r.inst) && !other || r.restorePending.Swap(true) {
 		return
 	}
 	res := r.restoreLimit.Reserve()
@@ -338,9 +374,13 @@ func (r *linuxRouter) onRuleDeleted(pref uint32) {
 		if r.closed {
 			return
 		}
-		r.logf("ip rules deleted by someone else; restoring them")
 		if err := r.addRulesLocked(); err != nil {
 			r.logf("restoring ip rules: %v", err)
+		}
+		if r.want != EgressDirect {
+			if err := r.setEgressLocked(r.want); err != nil && !errors.Is(err, ErrEgressTaken) {
+				r.logf("restoring egress: %v", err)
+			}
 		}
 	})
 }

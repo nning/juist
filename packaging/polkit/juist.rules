@@ -1,0 +1,22 @@
+// juistd, as the juist user, points systemd-resolved at the exit node in use
+// on its own device, juist0 to juist9, and gives the device back. Nothing
+// else is allowed, and no one is asked. resolved names the device from
+// systemd 256 on, and a device named must be juist's; before, it names none,
+// and the four actions are allowed on any link, which juistd, holding
+// CAP_NET_ADMIN, could redirect DNS on by other means anyway.
+polkit.addRule(function(action, subject) {
+	var allowed = [
+		"org.freedesktop.resolve1.set-dns-servers",
+		"org.freedesktop.resolve1.set-domains",
+		"org.freedesktop.resolve1.set-default-route",
+		"org.freedesktop.resolve1.revert",
+	];
+	if (subject.user != "juist" || allowed.indexOf(action.id) < 0) {
+		return polkit.Result.NOT_HANDLED;
+	}
+	var ifname = action.lookup("interface");
+	if (ifname !== undefined && ifname !== null && !/^juist[0-9]$/.test(ifname)) {
+		return polkit.Result.NOT_HANDLED;
+	}
+	return polkit.Result.YES;
+});

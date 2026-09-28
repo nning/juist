@@ -40,7 +40,7 @@ const (
 	maxNestedLevels = 6
 	// maxMapPairs must exceed the fields of the largest struct, Status:
 	// a struct travels as a map with a key per field.
-	maxMapPairs = 64
+	maxMapPairs = 96
 )
 
 // A Command is an IPC verb. Numbers are permanent; 0 is invalid.
@@ -99,6 +99,15 @@ const (
 	// CmdWaiting hands the daemon changes waiting for votes, if the request
 	// carries any, and answers with every one it holds.
 	CmdWaiting Command = 14
+
+	// CmdExit chooses this device's exit node, [Request.ExitNode], or none,
+	// [Request.ExitOff], or says whether it serves as one, [Request.Serve].
+	CmdExit Command = 15
+
+	// CmdSubnet says whether this device routes its peers' subnets,
+	// [Request.AcceptSubnets], or routes its own for them,
+	// [Request.ServeSubnets].
+	CmdSubnet Command = 16
 )
 
 func (c Command) String() string {
@@ -133,6 +142,10 @@ func (c Command) String() string {
 		return "reset"
 	case CmdWaiting:
 		return "waiting"
+	case CmdExit:
+		return "exit"
+	case CmdSubnet:
+		return "subnet"
 	default:
 		return fmt.Sprintf("command?<%d>", uint8(c))
 	}
@@ -182,6 +195,16 @@ type Request struct {
 
 	// Waiting are encoded changes waiting for votes, for [CmdWaiting].
 	Waiting [][]byte `cbor:"14,keyasint,omitempty"`
+
+	// ExitNode, ExitOff and Serve are what a [CmdExit] sets, one of them.
+	ExitNode types.Identity `cbor:"15,keyasint,omitempty"`
+	ExitOff  bool           `cbor:"16,keyasint,omitempty"`
+	Serve    *bool          `cbor:"17,keyasint,omitempty"`
+
+	// ServeSubnets and AcceptSubnets are what a [CmdSubnet] sets, one of
+	// them.
+	ServeSubnets  *bool `cbor:"18,keyasint,omitempty"`
+	AcceptSubnets *bool `cbor:"19,keyasint,omitempty"`
 }
 
 // MaxWaiting caps the changes one [CmdWaiting] request hands on.
@@ -327,6 +350,8 @@ const (
 	fProbe
 	fForce
 	fWaiting
+	fExit
+	fSubnet
 )
 
 // present lists the optional fields r sets.
@@ -340,6 +365,8 @@ func (r *Request) present() reqField {
 		{r.SetOperator || r.OperatorUID != 0, fSetOperator}, {r.Identity, fIdentity},
 		{r.Offer != nil, fOffer}, {r.Reply != nil, fReply}, {r.Orphans, fOrphans},
 		{r.Probe, fProbe}, {r.Force, fForce}, {len(r.Waiting) > 0, fWaiting},
+		{!r.ExitNode.IsZero() || r.ExitOff || r.Serve != nil, fExit},
+		{r.ServeSubnets != nil || r.AcceptSubnets != nil, fSubnet},
 	} {
 		if p.set {
 			f |= p.f
@@ -363,6 +390,18 @@ var requestShapes = map[Command]requestShape{
 	CmdUnstage:   {},
 	CmdRotate:    {takes: fIdentity},
 	CmdReset:     {takes: fForce},
+	CmdExit: {takes: fExit, shape: "an exit request sets an exit node, off, or serving, and one of them",
+		check: func(r *Request) bool {
+			n := 0
+			for _, set := range []bool{!r.ExitNode.IsZero(), r.ExitOff, r.Serve != nil} {
+				if set {
+					n++
+				}
+			}
+			return n == 1
+		}},
+	CmdSubnet: {takes: fSubnet, shape: "a subnet request sets serving or accepting, and one of them",
+		check: func(r *Request) bool { return (r.ServeSubnets != nil) != (r.AcceptSubnets != nil) }},
 	CmdWaiting: {takes: fWaiting, shape: fmt.Sprintf("a waiting request carries at most %d changes and nothing else", MaxWaiting),
 		check: func(r *Request) bool { return len(r.Waiting) <= MaxWaiting }},
 	CmdInform: {takes: fRecords, shape: "an inform request carries records and nothing else",

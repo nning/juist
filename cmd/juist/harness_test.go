@@ -40,6 +40,9 @@ type cli struct {
 
 	// admissionHold, where set, is how long an admission's copy waits.
 	admissionHold time.Duration
+
+	// system is the host's files this CLI reads, by path; none elsewhere.
+	system map[string]string
 }
 
 // noHost is a host with no juistd, and none installed.
@@ -103,6 +106,12 @@ func (c *cli) app(out *syncBuffer, in string) *app {
 	// tests can name its addresses.
 	a.drawV4 = firstV4Draw
 	a.host = noHost
+	a.system = func(path string) ([]byte, error) {
+		if s, ok := c.system[path]; ok {
+			return []byte(s), nil
+		}
+		return nil, os.ErrNotExist
+	}
 	if c.admissionHold != 0 {
 		a.admissionHold = c.admissionHold
 	}
@@ -364,6 +373,8 @@ func startService(t *testing.T, home, sock string,
 			DisableDiscovery: true,
 			DisableDHT:       true,
 			Logf:             func(string, ...any) {},
+			// The packaged service's, which exit nodes need.
+			EgressUser: func() string { return "" },
 		},
 		Find: find,
 		InviteAddrs: func(port uint16) []netip.AddrPort {
@@ -395,6 +406,12 @@ func (stubManager) SetPeers([]conn.Peer) error { return nil }
 
 func (stubManager) SetRelays([]conn.Relay) error { return nil }
 
+func (stubManager) SetEgress(conn.Egress) error { return nil }
+
+func (stubManager) SetServe(conn.Serve) error { return nil }
+
+func (stubManager) HostRoutes() []netip.Prefix { return nil }
+
 func (stubManager) HomeRelay() int { return 0 }
 
 func (stubManager) LocalEndpoints() []netip.AddrPort { return nil }
@@ -420,11 +437,43 @@ type daemonDevice struct {
 	mgr         *peersManager
 }
 
-// peersManager is a data plane that keeps the peer set it was last given.
+// peersManager is a data plane that keeps the peer set, egress and serving
+// it was last given.
 type peersManager struct {
 	stubManager
-	mu    sync.Mutex
-	peers []conn.Peer
+	mu     sync.Mutex
+	peers  []conn.Peer
+	egress conn.Egress
+	serve  conn.Serve
+	// host is what the host reaches outside juist.
+	host []netip.Prefix
+}
+
+func (m *peersManager) HostRoutes() []netip.Prefix {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.host)
+}
+
+func (m *peersManager) SetEgress(e conn.Egress) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.egress = e
+	return nil
+}
+
+func (m *peersManager) SetServe(s conn.Serve) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.serve = s
+	return nil
+}
+
+// exitState is the egress and serving last set.
+func (m *peersManager) exitState() (conn.Egress, conn.Serve) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.egress, m.serve
 }
 
 func (m *peersManager) SetPeers(peers []conn.Peer) error {

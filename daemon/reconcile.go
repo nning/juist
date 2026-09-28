@@ -85,16 +85,23 @@ func (d *Daemon) Reconcile() error {
 	held, discoUsers := d.heldAnnouncements(s)
 	relays, err := d.installRelays(s, held)
 	if err != nil {
+		d.applyExit(d.exitDown("the data plane refused the relay set"))
 		return err
 	}
 	b := d.buildPeers(s, held, discoUsers, relays, admit)
 	d.noteNewAnnouncements(b.named)
 	d.setInstalled(b.named)
+	sub := d.planSubnets(s, fresh.Fresh(s.now), held, b.peers, b.named)
+	exit := d.planExit(s, fresh.Fresh(s.now), held, b.peers, b.named, sub.taken).withSubnets(sub, overlaySpace(state))
+	// The peer carrying the routes first, then the routing into it: the
+	// other order would send traffic into a tunnel nobody carries.
 	if err := d.manager.SetPeers(b.peers); err != nil {
 		err = fmt.Errorf("daemon: installing %d peers: %w", len(b.peers), err)
 		d.setStatus(func(s *ipc.Status) { s.DataPlaneError = err.Error() })
+		d.applyExit(d.exitDown("the data plane refused the peer set"))
 		return err
 	}
+	d.applyExit(exit)
 
 	d.pruneEndpoints(s.live)
 	// After pruning, so a former member's address is dropped from the file
@@ -119,6 +126,8 @@ func (d *Daemon) Reconcile() error {
 		Conflicted:    b.conflicted,
 		StaleKeys:     staleKeys,
 		LastReconcile: d.now().Unix(),
+		Exit:          d.exitNow(),
+		Subnets:       d.subnetsNow(),
 	})
 	return nil
 }
@@ -348,6 +357,13 @@ func (d *Daemon) teardown(v ipc.Derived, why string) error {
 		err = fmt.Errorf("daemon: dropping every peer %s: %w", why, err)
 		v.DataPlaneError = err.Error()
 	}
+	down := "this device cannot tell who is a member"
+	if v.NotMember {
+		down = "this device is no member of the network"
+	}
+	d.applyExit(d.exitDown(down))
+	v.Exit = d.exitNow()
+	v.Subnets = d.subnetsNow()
 	v.LastReconcile = d.now().Unix()
 	d.setDerived(v)
 	return err

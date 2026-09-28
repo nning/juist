@@ -249,6 +249,19 @@ the lowest instance's wins. That is why the higher of two instances whose
 networks claim one address runs without IPv4 (`daemon/host.go`): its routes
 would never win.
 
+An instance using an exit node (M6a) adds two rules after every instance's
+table and before Tailscale's: juistd's own user to main at 5180+n, and its
+exit table, 0x6a75+0x100+n, at 5200+n, which throws special space back to
+later rules. Bypass-marked packets, tailscaled's as well as magicsock's, have
+left for main at 5110 by then, and the exit rule skips them anyway, as it
+must where an instance refuses without a mesh, and so without a bypass rule; tailscaled's tailnet (100.64.0.0/10,
+fd7a:115c:a1e0::/48) is special space, which reaches its table 52; its
+guard, the nftables tables `juistNguard`, lets bypass-marked packets and
+special space past. The first exit table takes every address it is asked
+about: of two instances using an exit node the lower one's routes, the
+higher routing nothing of its own, and an instance serves nothing beside one
+that uses an exit node (`conn.ErrEgressTaken`).
+
 ## Constraints on the test harness
 
 - **`RespondToPing` is IPv4-only.** `wgengine.echoRespondToAll` calls `ICMP4Header()`

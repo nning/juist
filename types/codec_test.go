@@ -29,7 +29,7 @@ func testAUM(t *testing.T) (AUM, PrivateIdentity) {
 			X25519:    X25519Key{2},
 			MLKEM:     MLKEMKey{3},
 			V4:        &v4,
-			Roles:     []Role{RoleAdmin, RoleExitNode},
+			Roles:     []Role{RoleAdmin, RoleExit},
 			Routes:    []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("10.0.0.0/8")},
 			Expiry:    1 << 40,
 		}},

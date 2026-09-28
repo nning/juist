@@ -5,14 +5,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"go4.org/netipx"
 
 	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/ipc"
@@ -39,6 +43,11 @@ type hostLayout struct {
 	// takes that back ("revoke").
 	start, stop func(ctx context.Context, n int) error
 	firewall    func(ctx context.Context, action string, n int) error
+
+	// exitScript is the package's exit-node.sh, "" for none.
+	exitScript string
+	// dockerNets are the host's Docker bridges' networks, by bridge.
+	dockerNets func() map[string][]netip.Prefix
 }
 
 func systemLayout() *hostLayout {
@@ -51,7 +60,35 @@ func systemLayout() *hostLayout {
 		start:    func(ctx context.Context, n int) error { return systemctl(ctx, "enable", "--now", unitOf(n)) },
 		stop:     func(ctx context.Context, n int) error { return systemctl(ctx, "disable", "--now", unitOf(n)) },
 		firewall: runFirewallScript,
+
+		exitScript: "/usr/lib/juist/exit-node.sh",
+		dockerNets: dockerNets,
 	}
+}
+
+var dockerBridge = regexp.MustCompile(`^br-[0-9a-f]{12}$`)
+
+// dockerNets are the networks of Docker's bridges, docker0 and br-<id>.
+func dockerNets() map[string][]netip.Prefix {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	out := map[string][]netip.Prefix{}
+	for _, ifc := range ifs {
+		if ifc.Name != "docker0" && !dockerBridge.MatchString(ifc.Name) {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok {
+				if p, ok := netipx.FromStdIPNet(n); ok {
+					out[ifc.Name] = append(out[ifc.Name], p.Masked())
+				}
+			}
+		}
+	}
+	return out
 }
 
 func (l *hostLayout) socket(n int) string {

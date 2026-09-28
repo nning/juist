@@ -47,6 +47,10 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 		GossipPort: d.gossipPort,
 		Relay:      relayInfo,
 		HomeRelay:  home,
+		Exit:       d.servingExit,
+		Subnets:    d.servingSubnets,
+		DNS:        d.dnsPort,
+		NoV4:       d.announcedNoV4,
 	}
 	now := d.now()
 	renewal := d.signed != nil && d.signed.SameAs(&e)

@@ -104,7 +104,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		X25519:    X25519Key{2},
 		MLKEM:     MLKEMKey{3},
 		V4:        &v4,
-		Roles:     []Role{RoleExitNode},
+		Roles:     []Role{RoleExit},
 		Routes:    []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")},
 		Expiry:    99,
 	}

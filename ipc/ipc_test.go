@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nning/juist/types"
 )
 
 // TestIPCMessageRoundTrip pins the encoding both halves share.
@@ -35,19 +37,20 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 	base := map[Command]Request{
 		CmdStatus: {}, CmdBootstrap: {}, CmdLog: {}, CmdSelf: {}, CmdUnstage: {}, CmdRotate: {}, CmdReset: {},
 		CmdWaiting:     {},
+		CmdExit:        {ExitOff: true},
 		CmdInform:      {Records: [][]byte{{1}}},
 		CmdCreate:      {Records: [][]byte{{1}}},
 		CmdJoin:        {Invite: "7-acme-adviser-aimless"},
 		CmdSetOperator: {SetOperator: true},
 		CmdInvite:      {Offer: &InviteOffer{Expires: 60}},
 		CmdInviteReply: {Reply: &InviteReply{Refused: "no"}},
-		cmdInvalid:     {}, Command(15): {}, Command(200): {},
+		cmdInvalid:     {}, Command(16): {}, Command(200): {},
 	}
 	accepts := map[Command][]string{
 		CmdStatus: {"Probe"}, CmdLog: {"Orphans"}, CmdRotate: {"Identity"}, CmdReset: {"Force"},
 		CmdInform: {"Records"}, CmdCreate: {"SetOperator"}, CmdJoin: {"Invite", "Name", "SetOperator"},
 		CmdSetOperator: {"SetOperator", "OperatorUID"}, CmdInvite: {"Offer"}, CmdInviteReply: {"Reply"},
-		CmdWaiting: {"Waiting"},
+		CmdWaiting: {"Waiting"}, CmdExit: {"ExitOff"},
 	}
 	fields := map[string]func(*Request){
 		"Records":     func(r *Request) { r.Records = append(r.Records, []byte{2}) },
@@ -62,10 +65,12 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 		"Probe":       func(r *Request) { r.Probe = true },
 		"Force":       func(r *Request) { r.Force = true },
 		"Waiting":     func(r *Request) { r.Waiting = append(r.Waiting, []byte{3}) },
+		"ExitOff":     func(r *Request) { r.ExitOff = true },
+		"ExitNode":    func(r *Request) { r.ExitNode = types.Identity{1} },
 	}
 	for cmd, req := range base {
 		req.Command = cmd
-		valid := cmd >= CmdStatus && cmd <= CmdWaiting
+		valid := cmd >= CmdStatus && cmd <= CmdExit
 		if err := req.validate(); (err == nil) != valid {
 			t.Errorf("%v alone: %v", cmd, err)
 		}
@@ -104,5 +109,39 @@ func TestRepliesArePrintableText(t *testing.T) {
 	}
 	if !strings.Contains(r.Err, "\nhint") {
 		t.Errorf("the newline before a hint was lost: %q", r.Err)
+	}
+}
+
+// An exit request sets one thing: a node, off, or serving.
+func TestAnExitRequestSetsOneThing(t *testing.T) {
+	on := true
+	id := types.Identity{1}
+	for _, tc := range []struct {
+		req  Request
+		want bool
+	}{
+		{Request{ExitNode: id}, true}, {Request{ExitOff: true}, true}, {Request{Serve: &on}, true},
+		{Request{}, false}, {Request{ExitNode: id, ExitOff: true}, false}, {Request{ExitOff: true, Serve: &on}, false},
+	} {
+		tc.req.Command = CmdExit
+		if err := tc.req.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v, want valid %v", tc.req, err, tc.want)
+		}
+	}
+}
+
+func TestASubnetRequestSetsOneThing(t *testing.T) {
+	on := true
+	for _, tc := range []struct {
+		req  Request
+		want bool
+	}{
+		{Request{ServeSubnets: &on}, true}, {Request{AcceptSubnets: &on}, true}, {Request{}, false},
+		{Request{ServeSubnets: &on, AcceptSubnets: &on}, false}, {Request{ServeSubnets: &on, Serve: &on}, false},
+	} {
+		tc.req.Command = CmdSubnet
+		if err := tc.req.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v, want valid %v", tc.req, err, tc.want)
+		}
 	}
 }

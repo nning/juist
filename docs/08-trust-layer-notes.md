@@ -139,7 +139,7 @@ of the no-overlay-overlap rule the plan states. None is a plausible
 subnet-router target, and pointing a client's own local traffic at another
 member's host is the same class of attack as intercepting overlay traffic. The
 one exemption is the exact default route (`0.0.0.0/0`, `::/0`), which is legal
-only with the `exit-node` role and which by construction covers everything —
+only with the `exit` role and which by construction covers everything —
 see the obligation this puts on M6 below.
 
 **Names are checked for control and bidi-formatting characters.** They are
@@ -621,10 +621,11 @@ are sealed to (M5b). The rules a later change has to keep:
 The default route is exempt from the no-overlay-overlap rule, because it covers
 everything by construction. Whoever consumes route grants **must subtract the
 overlay space** — the genesis-derived ULA /48 and the overlay v4 ranges — when rendering
-`AllowedIPs` and filter destinations. Without that subtraction, an exit-node
+`AllowedIPs` and filter destinations. Without that subtraction, an exit
 grant would re-open exactly the member-to-member interception the overlap rule
-exists to prevent. The rule is stated in `types.ValidateRoute`; M6a's exit
-criterion (2) is where it gets proven.
+exists to prevent. The rule is stated in `types.ValidateRoute`; exit nodes
+subtract the overlay in `conn.Internet`, and M6b's subnet routes, which carry
+no default route, are held to the overlap rule by the validator itself.
 
 ## Verification
 

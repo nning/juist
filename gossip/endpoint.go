@@ -147,6 +147,23 @@ type Endpoint struct {
 	// statement rather than each peer's guess.
 	HomeRelay uint16 `cbor:"7,keyasint,omitempty"`
 
+	// Exit says the node forwards members' internet traffic, as its operator
+	// agreed. Whether it may comes from the log, the `exit` role, and
+	// never from here.
+	Exit bool `cbor:"8,keyasint,omitempty"`
+
+	// Subnets says the node routes the subnets the log grants it, as its
+	// operator agreed; which ones comes from the log alone.
+	Subnets bool `cbor:"9,keyasint,omitempty"`
+
+	// DNS is the port, on the node's overlay addresses, of the resolver it
+	// answers for members through as an exit node; zero for none.
+	DNS uint16 `cbor:"10,keyasint,omitempty"`
+
+	// NoV4 says the node runs without overlay IPv4, as where another network
+	// on its host holds the range: it carries no member's IPv4.
+	NoV4 bool `cbor:"11,keyasint,omitempty"`
+
 	// Sig is the author's signature over the rest of the record. CBOR key 23
 	// for the same reason [types.AUM] uses it: the highest key that still
 	// encodes in one byte, leaving room for payload fields below it.
@@ -157,7 +174,8 @@ type Endpoint struct {
 // sequence numbers and signatures: one renews the other.
 func (e *Endpoint) SameAs(o *Endpoint) bool {
 	return e.Identity == o.Identity && e.Disco == o.Disco && slices.Equal(e.Addrs, o.Addrs) &&
-		e.GossipPort == o.GossipPort && e.HomeRelay == o.HomeRelay && sameRelay(e.Relay, o.Relay)
+		e.GossipPort == o.GossipPort && e.HomeRelay == o.HomeRelay && sameRelay(e.Relay, o.Relay) && e.Exit == o.Exit &&
+		e.Subnets == o.Subnets && e.DNS == o.DNS && e.NoV4 == o.NoV4
 }
 
 func sameRelay(a, b *RelayInfo) bool {

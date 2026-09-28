@@ -89,6 +89,11 @@ type node interface {
 	// waiting hands the daemon changes waiting for votes, and returns every
 	// one it holds; errNoDaemon where none runs.
 	waiting(hand [][]byte) ([][]byte, error)
+
+	// exit sends the daemon a choice of exit node, or its operator's word on
+	// serving as one, and returns its status after; errNoDaemon where none
+	// runs.
+	exit(req ipc.Request) (*ipc.Status, error)
 }
 
 // An eventHandler answers a daemon's events in a conversation; an error hangs up.
@@ -256,6 +261,18 @@ func (n *daemonNode) waiting(hand [][]byte) ([][]byte, error) {
 	return resp.Waiting, nil
 }
 
+func (n *daemonNode) exit(req ipc.Request) (*ipc.Status, error) {
+	resp, err := n.call(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status == nil {
+		return nil, errNoStatus
+	}
+	n.st = resp.Status
+	return n.st, nil
+}
+
 func (n *daemonNode) self() (*ipc.Self, error) {
 	resp, err := n.call(ipc.Request{Command: ipc.CmdSelf})
 	if err != nil {
@@ -410,6 +427,7 @@ func (n *localNode) setOperator(operatorChoice) error { return errNoDaemon }
 
 func (n *localNode) converse(context.Context, ipc.Request, eventHandler) error { return errNoDaemon }
 func (n *localNode) waiting([][]byte) ([][]byte, error)                        { return nil, errNoDaemon }
+func (n *localNode) exit(ipc.Request) (*ipc.Status, error)                     { return nil, errNoDaemon }
 
 var errNoDaemon = errors.New("juistd not running")
 

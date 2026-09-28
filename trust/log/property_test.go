@@ -227,7 +227,7 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 		switch g.rng.IntN(3) {
 		case 0:
 			aum, err = b.SetNodeRoutes(victim.Identity,
-				[]types.Role{types.RoleExitNode, types.RoleRelayCapable},
+				[]types.Role{types.RoleExit, types.RoleRelayCapable},
 				[]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("192.168.0.0/16")})
 		case 1:
 			aum, err = b.SetNodeRoutes(victim.Identity, []types.Role{types.RoleAdmin}, nil)

@@ -51,6 +51,10 @@ var commands = []command{
 	{name: "devices", aliases: []string{"ls"}, group: groupDaily, summary: "list devices", run: cmdDevices},
 	{name: "remove", aliases: []string{"rm"}, group: groupDaily, summary: "remove a device", run: cmdRemove},
 	{name: "rotate", group: groupDaily, summary: "replace keys", run: cmdRotate},
+	{name: "exit", group: groupDaily, summary: "route internet traffic through a device", run: cmdExit,
+		family: exitFamily},
+	{name: "subnet", group: groupDaily, summary: "reach networks behind a device", run: cmdSubnet,
+		family: subnetFamily},
 	{name: "reset", group: groupDaily, summary: "forget the network and keys", run: cmdReset},
 
 	{name: "grant", group: groupAdmin, summary: "give a device a role", run: cmdGrant},

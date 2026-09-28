@@ -192,9 +192,10 @@ func (next *State) setNodeRoutes(a *types.AUM, _ applyMode) error {
 	updated.Roles = slices.Clone(a.Grant.Roles)
 	updated.Routes = slices.Clone(a.Grant.Routes)
 	// The grant's routes were checked for form at decode; the overlap rules
-	// need the network's own prefix, which only state knows.
-	if err := updated.ValidateInNetwork(next.ULA(), next.V4Ranges()); err != nil {
-		return fmt.Errorf("log: %w", err)
+	// need the network's own prefix and the other members' routes, which
+	// only state knows.
+	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+		return err
 	}
 	next.nodes[*a.Subject] = updated
 	return nil
@@ -462,7 +463,7 @@ func (next *State) renumberNetwork(a *types.AUM, mode applyMode) error {
 		// prefix would overlap are substance.
 		for _, n := range next.nodes {
 			for _, pfx := range n.Routes {
-				if err := types.ValidateRoute(pfx, next.ULA(), next.V4Ranges(), n.HasRole(types.RoleExitNode)); err != nil {
+				if err := types.ValidateRoute(pfx, next.ULA(), next.V4Ranges(), n.HasRole(types.RoleExit)); err != nil {
 					return fmt.Errorf("log: node %v: %w", n.Identity.ShortString(), err)
 				}
 			}

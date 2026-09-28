@@ -268,29 +268,16 @@ func TestOverlayV4MovesAtItsSchema(t *testing.T) {
 	}
 }
 
-// The upgrade to schema 4 is refused while a granted route covers the range it
-// reserves, and such a route cannot be granted after it.
+// No route in the range schema 4 reserves is granted, at any schema: other
+// networks' overlays on a member's host are there.
 func TestOverlayV4UpgradeRefusesAGrantedRouteInItsRange(t *testing.T) {
-	h := newHarnessAt(t, 1, 1, types.SchemaHolders)
-	r := h.addNode("router")
 	inside := []netip.Prefix{netip.MustParsePrefix("198.18.5.0/24")}
-	grant, err := h.auth.Builder().SetNodeRoutes(r.Identity, nil, inside)
-	if err != nil {
-		t.Fatalf("granting 198.18.5.0/24 at schema 3: %v", err)
-	}
-	h.signQuorum(&grant)
-	if err := h.auth.Inform(grant); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.auth.Builder().SchemaUpgrade(types.SchemaOverlayV4); err == nil {
-		t.Fatal("the builder authored an upgrade over a route in 198.18/15")
-	}
-	h.mustReject("upgrade over a route in 198.18/15", RuleState, h.handAssembledSchemaUpgrade(types.SchemaOverlayV4))
-
-	h = newHarness(t, 1, 1)
-	r = h.addNode("router")
-	if _, err := h.auth.Builder().SetNodeRoutes(r.Identity, nil, inside); err == nil {
-		t.Fatal("a route in 198.18/15 was granted at schema 4")
+	for _, schema := range []types.SchemaVersion{types.SchemaHolders, types.CurrentSchema} {
+		h := newHarnessAt(t, 1, 1, schema)
+		r := h.addNode("router")
+		if _, err := h.auth.Builder().SetNodeRoutes(r.Identity, nil, inside); err == nil {
+			t.Errorf("a route in 198.18/15 was granted at %v", schema)
+		}
 	}
 }
 
@@ -324,8 +311,12 @@ func TestOwnV4Prefix(t *testing.T) {
 		t.Error("a route into the network's prefix was granted")
 	}
 	if _, err := h.auth.Builder().SetNodeRoutes(r.Identity, nil,
-		[]netip.Prefix{netip.MustParsePrefix("198.18.0.0/16")}); err != nil {
-		t.Errorf("a route into a range the network does not use was refused: %v", err)
+		[]netip.Prefix{netip.MustParsePrefix("10.112.0.0/24")}); err != nil {
+		t.Errorf("a route beside the network's prefix was refused: %v", err)
+	}
+	if _, err := h.auth.Builder().SetNodeRoutes(r.Identity, nil,
+		[]netip.Prefix{netip.MustParsePrefix("198.18.0.0/16")}); err == nil {
+		t.Error("a route into other networks' overlay range was granted")
 	}
 	if got := h.auth.State().Snapshot().V4Prefix; got == nil || *got != own {
 		t.Errorf("the state statement carries %v, want %v", got, own)

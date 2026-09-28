@@ -30,7 +30,22 @@ const (
 
 // StateFiles are what a daemon keeps in its state directory beside the log
 // and the node keys, for a reset of a home no daemon runs from.
-var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, OperatorFile, WaitingFile}
+var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
+	SubnetsFile, SubnetServeFile}
+
+// ExitFile holds the exit node this device's owner chose, or "off"; without
+// it none was chosen. ServeFile, where it exists, is the operator's word that
+// this device serves as an exit node where the network makes it one.
+const (
+	ExitFile  = "exit-node"
+	ServeFile = "exit-serve"
+
+	// SubnetsFile, where it exists, is the owner's word that this device
+	// routes none of its peers' subnets; SubnetServeFile the operator's that
+	// it routes its own for them, where granted.
+	SubnetsFile     = "subnets-off"
+	SubnetServeFile = "subnet-serve"
+)
 
 // WaitingFile holds the changes waiting for votes a node holds, sealed to
 // the admins, so that a restart does not lose them.

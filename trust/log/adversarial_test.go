@@ -677,7 +677,7 @@ func TestRejectsSelfAssertedRoute(t *testing.T) {
 	h := newHarness(t, 2, 2)
 	n := h.addNode("router")
 	aum, err := h.auth.Builder().SetNodeRoutes(n.Identity,
-		[]types.Role{types.RoleExitNode}, []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")})
+		[]types.Role{types.RoleExit}, []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")})
 	if err != nil {
 		t.Fatalf("SetNodeRoutes: %v", err)
 	}
@@ -702,7 +702,7 @@ func TestRejectsSelfAssertedRoute(t *testing.T) {
 		t.Fatalf("quorum-signed SetNodeRoutes rejected: %v", err)
 	}
 	got, _ := h.auth.State().Node(n.Identity)
-	if !got.HasRole(types.RoleExitNode) || len(got.Routes) != 1 {
+	if !got.HasRole(types.RoleExit) || len(got.Routes) != 1 {
 		t.Fatalf("grant did not apply: roles=%v routes=%v", got.Roles, got.Routes)
 	}
 }
@@ -730,14 +730,59 @@ func TestRejectsOverlayOverlappingRoutes(t *testing.T) {
 		{"link-local v6", netip.MustParsePrefix("fe80::/10")},
 		{"v4 multicast", netip.MustParsePrefix("224.0.0.0/4")},
 		{"v6 multicast", netip.MustParsePrefix("ff00::/8")},
+		{"reserved v4 and broadcast", netip.MustParsePrefix("255.255.255.255/32")},
+		{"tailscaled's IPv6 overlay", netip.MustParsePrefix("fd7a:115c:a1e0:ab12::/64")},
+		{"juist's IPv4 overlay range", netip.MustParsePrefix("198.18.200.0/24")},
+		{"unique-local /48s", netip.MustParsePrefix("fd12::/16")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := h.auth.Builder().SetNodeRoutes(n.Identity,
-				[]types.Role{types.RoleExitNode}, []netip.Prefix{tc.route}); err == nil {
+				[]types.Role{types.RoleExit}, []netip.Prefix{tc.route}); err == nil {
 				t.Fatalf("accepted a route grant covering %s (%v)", tc.name, tc.route)
 			}
 		})
 	}
+}
+
+// Two members never route one address: the one granted a prefix first keeps
+// it, and a grant overlapping it, either way, is refused, as is one member's
+// grant overlapping itself. Exit nodes' default routes are no subnet routes.
+func TestTwoMembersNeverRouteOneAddress(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	a, b := h.addNode("a"), h.addNode("b")
+	p := func(s ...string) []netip.Prefix {
+		var out []netip.Prefix
+		for _, x := range s {
+			out = append(out, netip.MustParsePrefix(x))
+		}
+		return out
+	}
+	grant := func(n types.NodeRecord, roles []types.Role, routes []netip.Prefix) {
+		t.Helper()
+		aum, err := h.auth.Builder().SetNodeRoutes(n.Identity, roles, routes)
+		if err != nil {
+			t.Fatalf("granting %v: %v", routes, err)
+		}
+		h.signQuorum(&aum)
+		if err := h.auth.Inform(aum); err != nil {
+			t.Fatalf("granting %v: %v", routes, err)
+		}
+	}
+	grant(a, nil, p("192.168.1.0/24"))
+	for _, routes := range [][]netip.Prefix{p("192.168.1.0/24"), p("192.168.0.0/16"), p("192.168.1.128/25")} {
+		_, err := h.auth.Builder().SetNodeRoutes(b.Identity, nil, routes)
+		mustBreak(t, fmt.Sprintf("building a grant of %v, which a routes", routes), RuleState, err)
+		h.mustReject(fmt.Sprintf("a grant of %v, which a routes", routes), RuleState,
+			h.signed(types.AUM{Kind: types.KindSetNodeRoutes, Subject: &b.Identity,
+				Grant: &types.RouteGrant{Routes: routes}}))
+	}
+	if _, err := h.auth.Builder().SetNodeRoutes(a.Identity, nil, p("10.0.0.0/8", "10.1.0.0/16")); err == nil {
+		t.Error("accepted a grant overlapping itself")
+	}
+	grant(b, nil, p("192.168.2.0/24"))
+	exits := []types.Role{types.RoleExit}
+	grant(a, exits, p("0.0.0.0/0", "192.168.1.0/24"))
+	grant(b, exits, p("0.0.0.0/0", "::/0", "192.168.2.0/24"))
 }
 
 func TestDefaultRouteRequiresExitNodeRole(t *testing.T) {
@@ -748,17 +793,17 @@ func TestDefaultRouteRequiresExitNodeRole(t *testing.T) {
 		netip.MustParsePrefix("::/0"),
 	} {
 		if _, err := h.auth.Builder().SetNodeRoutes(n.Identity, nil, []netip.Prefix{def}); err == nil {
-			t.Fatalf("accepted %v without the exit-node role", def)
+			t.Fatalf("accepted %v without the exit role", def)
 		}
 		if _, err := h.auth.Builder().SetNodeRoutes(n.Identity,
-			[]types.Role{types.RoleExitNode}, []netip.Prefix{def}); err != nil {
-			t.Fatalf("rejected %v with the exit-node role: %v", def, err)
+			[]types.Role{types.RoleExit}, []netip.Prefix{def}); err != nil {
+			t.Fatalf("rejected %v with the exit role: %v", def, err)
 		}
 	}
 	// Withdrawing the role must withdraw the default route with it, rather
 	// than leaving a grant nothing authorizes.
 	aum, err := h.auth.Builder().SetNodeRoutes(n.Identity,
-		[]types.Role{types.RoleExitNode}, []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")})
+		[]types.Role{types.RoleExit}, []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")})
 	if err != nil {
 		t.Fatalf("SetNodeRoutes: %v", err)
 	}
@@ -768,8 +813,8 @@ func TestDefaultRouteRequiresExitNodeRole(t *testing.T) {
 	}
 	defaultRoute := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
 	_, err = h.auth.Builder().SetNodeRoutes(n.Identity, nil, defaultRoute)
-	mustBreak(t, "building a grant keeping a default route without the exit-node role", RuleState, err)
-	h.mustReject("keeping a default route while dropping the exit-node role", RuleState,
+	mustBreak(t, "building a grant keeping a default route without the exit role", RuleState, err)
+	h.mustReject("keeping a default route while dropping the exit role", RuleState,
 		h.signed(types.AUM{Kind: types.KindSetNodeRoutes, Subject: &n.Identity,
 			Grant: &types.RouteGrant{Routes: defaultRoute}}))
 }

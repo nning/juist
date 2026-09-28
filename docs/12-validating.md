@@ -86,12 +86,30 @@ than skip. A NAT cell can be run alone with
 | M5 — a renumbering keeps every pair reachable, the offline one included | `conn`: `TestNetnsRenumberingKeepsEveryPairReachable`; `trust/log`: `TestRejectsCollidingV4Address` | for the first |
 | M5a — each network its own admin key, one shared only on purpose | `cmd/juist`: `TestEachNetworkHasAnAdminKeyOfItsOwn` | no |
 | M5a — keys from before, and keys made before their network | `cmd/juist`: `TestAKeyFromBeforeKeysPerNetworkSignsUnchanged`, `TestAKeyMadeBeforeItsNetworkIsFiledUnderIt`, `TestWithoutALogKeysOfTwoNetworksSignByName` | no |
-| M5b — a waiting change reaches the other admin device and applies with its vote | `cmd/juist`: `TestAChangeWaitsOnTheOtherAdminDevice`, `TestAnInviteGoesOnWithAVoteFromAnotherAdminDevice`, `TestAnAdmissionGathersVotesWhileItsInviteRuns`, `TestApprovingTheFileCarriesTheSignature`; `gossip`: `TestWaitingChangesReachTheAdminDevices` | no |
+| M5b — a waiting change reaches the other admin device and applies with its vote | `cmd/juist`: `TestAChangeWaitsOnTheOtherAdminDevice`, `TestAnInviteGoesOnWithAVoteFromAnotherAdminDevice`, `TestAnAdmissionGathersVotesWhileItsInviteRuns`, `TestApprovingTheFileCarriesTheSignature`, `TestAFileIsHandedOnByItsSigner`; `gossip`: `TestWaitingChangesReachTheAdminDevices` | no |
 | M5b — a copy not from a current admin key, or past the log, is dropped | `daemon`: `TestADaemonHoldsOnlyChangesThatFit`, `TestOneSignerCannotFillTheRoom`; `internal/waiting`: `TestAChangedCopyIsRefused`, `TestASignerLyingAboutItsChangeIsFoundOut` | no |
 | M5b — no device without the admin role, nor the one a change is about, receives it | `gossip`: `TestWaitingChangesReachNoOtherDevice`; `daemon`: `TestADaemonHandsChangesToAdminDevicesAlone`, `TestHeldChangesAreSaidToAdminDevicesAlone`; `cmd/juist`: `TestAChangeNeverReachesTheDeviceItIsAbout` | no |
 | M5b — nothing is signed unasked | `cmd/juist`: `TestAChangeWaitsOnTheOtherAdminDevice`, `TestAChangeThatExpiresWhileAskedIsNotSigned` | no |
 | M5b — a change sealed to its admins opens for no other key | `internal/waiting`: `TestAChangeOpensForItsAdminsAlone`; `trust/secrets`: `TestSealKeyToOpensForItsReaderAlone`; `trust/log`: `TestSetAdminRecipient`, `TestAGenesisRecipientIsSignedForByItsKey` | no |
 | M5c — a device moved at once is reached at its new address only, and other transitions run on | `cmd/juist`: `TestAMoveAtOnceReachesEveryDevice`, `TestMovingADeviceAtOnce`, `TestAMoveAtOnceReadsAsOne`, `TestHeldAddressesRead`, `TestStatusNamesTheDevicesNotYetMoved`; `daemon`: `TestAMovedDeviceRestartsOnItsNewAddressAtOnce`; `trust/log`: `TestRenumberNodeAtOnce` | no |
+| M6a (1) — only the chosen exit node carries the internet, and a member without a grant is dropped sending from it | `conn`: `TestRoutesCarryTrafficToAndFromTheirPeer`, `TestSetPeersRefusesRoutesThatClash`, `TestAServingNodeAcceptsWhatItServesAlone`, `TestByRouteAtTheEdges`; `daemon`: `TestAClientRoutesThroughItsExitNode` | no |
+| M6a (2) — no grant overlaps the overlay, and the internet leaves out the overlay, private and special ranges | `trust/log`: `TestRejectsOverlayOverlappingRoutes`, `TestDefaultRouteRequiresExitNodeRole`; `conn`: `TestInternetIsPublicSpaceAlone` | no |
+| M6a (3) — with a full tunnel up nothing but the LAN is reached outside it, pushed routes, bound sockets and a flushed table notwithstanding, and a lost exit node is refused, not gone around | `conn`: `TestNetnsExitNode`, `TestNetnsARefusingClientHearsItsExitNode`, `TestTheExitTable`, `TestTheGuardDropsWhatElseWouldLeave`, `TestTheGuardLetsTheHostsOwnLinkTrafficOut`, `TestAddrInReadsTheRightAddress`, `TestOtherEgress`; `daemon`: `TestAChosenExitNodeFailsClosed`, `TestNoExitNodeGoesDirect`, `TestAnUnreadableChoiceIsRefused`, `TestAChoiceWithoutAMeshIsRefused`, `TestAnEgressThatFailsIsNotCalledRefused`, `TestAnExitNodeNeedsASystemUser`; `cmd/juist`: `TestDNSOutsideTheTunnel`, `TestOneNetworkAHostUsesAnExitNodeThrough`, `TestTwoNetworksServingAndUsing`, `TestStrictReversePathFiltering`, `TestFirewalldStrictReversePath`; `conn`: `TestExitRoutesReadBack`, `TestTheExitRuleLeavesBypassMarkedPackets`, `TestAStrictReversePathRuleIsToldApart`, `TestNetnsAStrictReversePathFilterIsFound`, `TestAnUnmarkedExitRuleIsFound`, `TestNetnsAFamilyNoExitNodeCarriesIsRefused`; `daemon`: `TestTheStatusSaysAStrictReversePathFilter`, `TestAnUnreadableReversePathFilterIsLogged` | for the first two and the `Netns` ones |
+| M6a (4) — a withdrawn role ends use and serving, and a stale exit node serves nothing | `daemon`: `TestAChosenExitNodeFailsClosed/withdrawn`, `TestAnExitNodeServesWhenGrantedAndAgreed`, `TestAStaleExitNodeServesNothing`; `cmd/juist`: `TestAnExitNodeFromGrantToOff` | no |
+| M6a — an exit node opens none of its own networks, and forwards nothing that is no peer's | `conn`: `TestAnExitNodeServesNotItsOwnNetworks`, `TestServingDropsWhatIsNoPeers`, `TestServingLetsEveryJuistDeviceIn`, `TestNetnsExitNode` | for the last |
+| M6a — serving needs the grant, the operator's word and forwarding, and the setup is undone | `cmd/juist`: `TestServingWaitsForTheGrant`, `TestServingAndUsingExcludeEachOther`, `TestForwardingIsReadFromTheKernel`; `daemon`: `TestARefusedRelaySetEndsServing`; `conn`: `TestServingNeedsForwarding`, `TestTheExitScriptKnowsTheRules`; `packaging`: `TestExitNodeScriptUndoesWhatItDid`, `TestExitNodeScriptKeepsForwardingItFound`, `TestExitNodeScriptClearsWhatAFailedJuistdLeft` | no |
+| M6a — the choice is the owner's, kept, followed and forgotten with the network | `daemon`: `TestTheExitChoiceIsKept`, `TestTheChoiceFollowsARotatedExitNode`, `TestTheServiceKeepsTheMeshsFollowedChoice`, `TestAResetForgetsTheExitChoice`; `cmd/juist`: `TestForceChoosesAnExitNodeThatDoesNotServe`, `TestTheStatusSaysAnExitNodeIsOffline` | no |
+| M6b (1) — only a router's granted, agreed subnets are sent to it and taken from it | `conn`: `TestSubnetsAreRoutedIntoTheTunnel`; `daemon`: `TestAClientRoutesAGrantedSubnet`, `TestASubnetIsLeftOutWhereItMustBe`; `trust/log`: `TestTwoMembersNeverRouteOneAddress` | no |
+| M6b (2) — a subnet is reached through its router, a client's own LAN inside it stays its own, and a wider one gives it up, both said | `conn`: `TestNetnsASubnetThroughItsRouter`, `TestARouterServesItsOwnNetworks`; `daemon`: `TestASubnetIsLeftOutWhereItMustBe`, `TestAnExitNodeCarriesNoRoutedSubnet`; `cmd/juist`: `TestASubnetFromGrantToRevoke` | for the first |
+| M6b — a route of the host's own inside a subnet is noticed at once, and a Docker network routed is warned of | `conn`: `TestNetnsASubnetThroughItsRouter`; `cmd/juist`: `TestRoutingADockerNetworkIsWarnedOf` | for the first |
+| M6b (3) — a withdrawn or stale grant ends routing, on both sides | `daemon`: `TestARouterRoutesWhatItIsGranted`, `TestASubnetIsLeftOutWhereItMustBe/stale`; `cmd/juist`: `TestASubnetFromGrantToRevoke` | no |
+| M6b — the operator's and the owner's word are kept and forgotten with the network | `daemon`: `TestTheSubnetWordsAreKept`; `ipc`: `TestASubnetRequestSetsOneThing` | no |
+| M6b — no subnet takes another overlay, a VPN's or the host's own routes, nor what a network pushed | `trust/log`: `TestRejectsOverlayOverlappingRoutes`; `conn`: `TestTheHostsOwnRoutes`; `daemon`: `TestARouterWithoutIPv4RoutesNoIPv4`, `TestAPeerWithoutIPv4IsSentNoIPv4`, `TestOnlyARoutedDeviceSaysItHasNoIPv4`; `cmd/juist`: `TestForwardingStaysWhileEitherServes` | no |
+| M6c (1) — a member's DNS is answered through its exit node, and not outside the tunnel; no one else is answered | `conn`: `TestNetnsExitNodeAnswersDNS`; `internal/dnsfwd`: `TestAQueryIsForwarded`, `TestOnlyMembersQueriesAreForwarded`, `TestAMemberIsAnsweredAtItsRate`, `TestTheHostsResolvers`; `daemon`: `TestAnExitNodeAnswersItsMembersDNS` | for the first |
+| M6c (2) — resolved is pointed at the exit node while one is chosen, refused too, and given back when off | `daemon`: `TestTheHostsDNSGoesThroughTheExitNode`; `internal/resolved`: `TestRouteAndRevert`, `TestADialledClientRoutes`; `packaging`: `TestThePolkitRuleAllowsJuistsDNSAlone` | no |
+| M6c (3) — without resolved, or refused by it, nothing is configured and the reason is said | `daemon`: `TestDNSOutsideTheTunnelIsSaid`, `TestDNSAroundResolvedIsSaid`, `TestAFailedDNSRoutingWaits`; `internal/resolved`: `TestWhatResolvedCannotDoIsSaid`; `cmd/juist`: `TestDNSOutsideTheTunnel`, `TestTheStatusSaysWhereDNSGoes` | no |
+| M6c — DNS follows the choice whatever the network does, and a stopped daemon leaves it alone | `daemon`: `TestDNSFollowsTheChoiceWhateverTheNetwork`, `TestAClosedDaemonLeavesDNSAlone`; `internal/dnsfwd`: `TestAFailingResolverIsPassedOver`, `TestASourceHoldsFewConnections` | no |
+| M6c — an exit node of one family is sent and asked that family alone, and the other is refused at once and said to be | `conn`: `TestNetnsAFamilyNoExitNodeCarriesIsRefused`, `TestTheGuardRefusesWhatNoPeerCarries`, `TestTheRouterLearnsWhatThePeersCarry`; `daemon`: `TestAnExitNodeOfOneFamilyIsSaid`; `cmd/juist`: `TestTheStatusSaysWhereDNSGoes` | for the first |
 
 ### The last privileged run
 
@@ -102,6 +120,12 @@ privileged rows above were therefore last checked by hand, and this records the
 latest such run. Update it with each one, so it is clear how old the evidence
 is.
 
+- **2026-09-28, at M6.** `make test-os-plumbing-sudo` on the same host,
+  kernel 7.2.5, beside its running juistd and Tailscale: all seventeen tests
+  passed and none skipped, M6's six netns tests among them, as the first five
+  had at M6 earlier that day, when they first ran. The runs before, at M6
+  and M6, failed M6 tests in the harness alone (IPv4 forwarding only, a
+  tap before the route, a resolver answering from a wildcard socket).
 - **2026-09-27, at M5.** `make test-os-plumbing-sudo` ran on a Fedora 44
   Workstation desktop (kernel 7.2.5, iptables 1.8.11 on nf_tables,
   iproute2 6.17), beside a running juistd in a network of four devices and
@@ -109,8 +133,18 @@ is.
   privileged above, including all six cells of the NAT matrix and M5's three
   netns tests, which ran for the first time. Afterwards the host's juistd
   still had all three tunnels up, with its policy rules in place.
-- **Not covered by that run:** the checks done by hand against the installed
-  package, the privilege footprint and two networks on one host (below).
+- **By hand, 2026-09-28, at M6:** [Check an exit node](#check-an-exit-node)
+  and [Check a subnet router](#check-a-subnet-router) passed with the
+  packages on a Debian 12 exit node and router (systemd 252, Docker 29.8, ufw
+  off) and a Fedora 44 client (systemd 259, firewalld, Tailscale beside
+  juist), in a live network of four. The exit node was on the client's LAN,
+  behind the same NAT and without public IPv6; a public Ubuntu 24.04 server
+  as the exit node then showed its own addresses to the client, IPv4 and
+  IPv6 alike, the client having no IPv6 of its own, and warned of firewalld's
+  IPv6 reverse-path filter when strict alone. A client below systemd 256 was
+  not tried.
+- **Not covered by those runs:** the privilege footprint and two networks on
+  one host (below), and what the exit node's hand test leaves out.
 
 ## Check the privilege footprint
 
@@ -165,6 +199,80 @@ out of the other's range, and retiring the old addresses
 `juist network renumber lab --finish`), brings IPv4 back after
 three checks in a row find the conflict gone, about fifteen seconds.
 
+## Check an exit node
+
+M6a and M6c are about two installed packages and a real uplink, so they are
+checked by hand as well: an exit node with a public address (a test VM), and
+a client behind a LAN running systemd-resolved. On the exit node, after
+`juist grant vps exit` from an admin device:
+
+```sh
+juist exit serve                      # asks for sudo once; "serving as an exit node"
+cat /etc/sysctl.d/60-juist-exit.conf  # "# for: juist0", forwarding on
+sudo nft list table ip juist0         # masquerade of the overlay, out of any device but juist0
+ip -6 route show default              # still there where the host takes router advertisements
+ss -ulpn | grep 41646                 # juistd, on the overlay addresses alone
+```
+
+On Debian with ufw, `sudo ufw status` lists `ALLOW FWD` in on juist0; on
+Fedora, `firewall-cmd --get-zone-of-interface=juist0` says `trusted`. With
+Docker, `sudo iptables -L DOCKER-USER` holds the two juist0 rules. On the
+client:
+
+```sh
+juist exit                            # vps  …  serving
+juist exit use vps                    # "internet via vps"
+juist status                          # Exit node  vps, DNS too
+resolvectl status juist0              # the exit node's overlay addresses at :41646, and ~.
+resolvectl query example.com          # answered on juist0
+resolvectl query router.lan           # the LAN's own domain, answered on the LAN's link
+sudo tcpdump -ni eth0 port 53 & dig example.com   # nothing on eth0
+curl -4 ifconfig.me; curl -6 ifconfig.me          # the exit node's addresses
+ping -c1 192.168.1.1                  # the LAN router, directly
+ip rule | grep -E '^5(18|20)0'        # juistd's own traffic, then the exit table
+sudo nft list table ip juist0guard    # what may leave outside the tunnel
+sudo tcpdump -ni eth0 host 1.1.1.1 & ping -c3 1.1.1.1   # answered, and nothing on eth0
+ping -c1 -I eth0 1.1.1.1              # refused by the guard, and still nothing on eth0
+```
+
+Then stop the exit node's juistd: the client's `curl` fails at once, and
+`juist status` says why; `juist exit off` brings the internet back directly,
+and `resolvectl status juist0` shows no DNS servers again. `juist status`
+saying "systemd-resolved refused juistd" means the package's
+`/usr/share/polkit-1/rules.d/60-juist.rules` is not in force. `juist exit
+serve --stop` puts forwarding back as it found it, and removing the package
+leaves no `/etc/sysctl.d/60-juist-exit.conf`, no `ip rule` from 5180 to 5209
+and no `juist0` or `juist0guard` nftables table. Where `serve` reports
+forwarding off on Fedora after the script ran, suspect SELinux on
+`/etc/sysctl.d` before the script.
+
+## Check a subnet router
+
+M6b likewise: a router on a LAN, 192.168.1.0/24 here, and a client on
+another network. After `juist grant nas 192.168.1.0/24` from an admin device,
+on the router:
+
+```sh
+juist subnet serve                    # "routing 192.168.1.0/24"; sudo once, as for an exit node
+juist subnet                          # 192.168.1.0/24  nas (this device)  routed
+```
+
+On the client:
+
+```sh
+juist subnet                          # 192.168.1.0/24  nas  in use
+ip route show table 27253             # 192.168.1.0/24 dev juist0
+ping -c1 192.168.1.10                 # a host behind nas, which sees nas's address
+```
+
+A second client on 192.168.1.0/24 itself shows the prefix "not in use: this
+device reaches it by a route of its own", and reaches the LAN directly; so
+does one with `juist subnet off`. `juist revoke nas 192.168.1.0/24` takes the
+route from every client within a sync. A Docker network is no subnet to test
+with: Docker 28 and later drop what is routed to its containers from any
+device but their bridge, which `juist subnet serve` warns of; a namespace
+behind the router is (`ip netns add`, a veth pair, an address each side).
+
 ## Reading a failure in the NAT matrix
 
 The matrix classifies each NAT before it tests anything — one socket, two
@@ -202,7 +310,9 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)). Mixed builds do not
   sync at all across M4, whose gossip frames carry leases older builds reject,
   nor across M5b between two admin devices while either holds waiting
-  changes.
+  changes, nor across M6, whose announcements of an exit node, a subnet
+  router, an exit node's DNS or a routed device without IPv4 older builds
+  reject, and with them the tunnel to it.
 - **The freshness TTL on a real clock.** The tests move a fake one. On real
   devices, stopping every admin device for longer than the TTL is what shows the
   other members going down to admin-only tunnels.

@@ -84,6 +84,9 @@ needs 41643/udp.
 | remove a device, on every device at once | `juist remove phone` |
 | let a device with a public address relay for the others | `juist grant vps relay` (`revoke` takes it back) |
 | have a device vouch that the network's state is current | `juist grant vps voucher` |
+| let a device carry the others' internet traffic | `juist grant vps exit`, then `juist exit serve` on it |
+| send this device's internet traffic through it | `juist exit use vps` (`off` goes direct again) |
+| let every device reach the LAN behind one | `juist grant nas 192.168.1.0/24`, then `juist subnet serve` on it |
 | see every change, and who approved it | `juist log` |
 | rename the network, on every device | `juist network rename office` |
 | move every device's IPv4 address | `juist network renumber 10.7.0.0/22` |
@@ -232,6 +235,8 @@ so on). What arrives on `juist0` has already passed WireGuard and juist's own
 filter, and the packages let it in where ufw or firewalld runs. A firewall
 configured by hand must let it in too, or the device keeps its tunnels but
 misses changes to the network, removals included; `juist status` says so.
+An exit node answers its members' DNS there too, UDP and TCP 41646, which such
+a firewall must let in, or their lookups go nowhere.
 
 Upgrading from a build whose `juist` profile opened every port: ufw keeps the
 old ports for an allowed profile until `sudo ufw app update juist`, and
@@ -272,6 +277,9 @@ common cases:
 | Freshness: expired; vouchers only | no voucher has been reachable for 48 h; bring one back |
 | removed | this device is out of the network: join again with a new invite, or `juist reset` |
 | no IPv4 on this host | two networks here overlap; renumber one of them |
+| Exit node: vps, internet refused: … | bring vps back, or `juist exit off` to go direct |
+| this device does not serve: IP forwarding is off … | `juist exit serve` again, which sets it up with sudo |
+| DNS goes to …, outside the tunnel: systemd-resolved refused juistd … | install the package, whose polkit rule allows juistd that |
 
 `journalctl -u juistd` shows the daemon's log.
 
@@ -305,8 +313,9 @@ All residual weaknesses are in [02-threat-model.md](docs/02-threat-model.md).
 
 ## Status
 
-Milestones up to **M5b** of [05-roadmap.md](docs/05-roadmap.md) are done;
-next is M5c, moving one device without a transition. What works:
+Milestones up to **M6** of [05-roadmap.md](docs/05-roadmap.md), exit
+nodes, subnet routers and the exit node's DNS, are done; next is M7,
+FreeBSD. What works:
 
 - The membership log, with quorum, fork choice, fork alarm and a versioned
   schema.
@@ -318,10 +327,13 @@ next is M5c, moving one device without a transition. What works:
 - Several networks on one device, each with an admin key of its own, and
   renumbering a network.
 - Changes that need more admins carried to their devices, sealed to them.
+- Exit nodes on Linux, failing closed, and DNS through them where
+  systemd-resolved runs.
+- Subnet routers on Linux, leaving every device's own LAN to it.
 - Debian and Fedora packages, with man pages.
 
 Not yet: FreeBSD, Android, ACLs (every member reaches every port on the
-others), exit nodes, names, break-glass recovery, the post-quantum data plane,
+others), names, break-glass recovery, the post-quantum data plane,
 and QR codes.
 
 ## Development

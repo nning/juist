@@ -150,8 +150,15 @@ type Derived struct {
 	Refused bool `cbor:"52,keyasint,omitempty"`
 
 	// Unmoved names the other members not yet seen holding the newest
-	// renumbering, while old addresses still work.
+	// renumbering, while an old address is still recorded.
 	Unmoved []string `cbor:"49,keyasint,omitempty"`
+
+	// Exit is what this device does with exit nodes.
+	Exit *Exit `cbor:"63,keyasint,omitempty"`
+
+	// Subnets is what this device makes of subnet routes; nil where the
+	// network grants none and this device neither routes nor refuses them.
+	Subnets *Subnets `cbor:"64,keyasint,omitempty"`
 
 	// SelfName is this node's member name.
 	SelfName string `cbor:"24,keyasint,omitempty"`
@@ -265,7 +272,8 @@ func (s *Status) ForReader() Status {
 			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
 			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted,
-			Alarm: s.Alarm, NotMember: s.NotMember, StaleKeys: s.StaleKeys,
+			Alarm: s.Alarm, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(),
+			Subnets:        s.Subnets.forReader(),
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
 		},
 		Tunnels: Tunnels{
@@ -333,6 +341,92 @@ type Device struct {
 	// RetiringUntil when it stops working, in Unix seconds.
 	Retiring      string `cbor:"6,keyasint,omitempty"`
 	RetiringUntil int64  `cbor:"7,keyasint,omitempty"`
+
+	// Subnets are the prefixes the member is granted to route.
+	Subnets []netip.Prefix `cbor:"8,keyasint,omitempty"`
+}
+
+// Exit is a device's use of exit nodes, and its serving as one.
+type Exit struct {
+	// Node is the exit node chosen, Name its member name; Off is a choice of
+	// none. Refused says why the traffic it would carry is refused rather
+	// than carried; empty, it is carried.
+	Node    types.Identity `cbor:"1,keyasint,omitempty"`
+	Name    string         `cbor:"2,keyasint,omitempty"`
+	Off     bool           `cbor:"3,keyasint,omitempty"`
+	Refused string         `cbor:"4,keyasint,omitempty"`
+
+	// Consent says this device's operator agreed to serve as one, Serving
+	// that it does, and NotServing why not, where it agreed.
+	Consent    bool   `cbor:"5,keyasint,omitempty"`
+	Serving    bool   `cbor:"6,keyasint,omitempty"`
+	NotServing string `cbor:"7,keyasint,omitempty"`
+
+	// Offering are the other exit nodes whose operators agreed to serve, as
+	// their announcements say.
+	Offering []types.Identity `cbor:"8,keyasint,omitempty"`
+
+	// Failed says the data plane could not route as chosen, not even
+	// refusing, so that internet traffic may leave directly.
+	Failed string `cbor:"9,keyasint,omitempty"`
+
+	// DNS says the host's DNS goes to the exit node in use, and DNSNot why
+	// not, where it does not.
+	DNS    bool   `cbor:"10,keyasint,omitempty"`
+	DNSNot string `cbor:"11,keyasint,omitempty"`
+
+	// Partly says which family the exit node in use refuses, and why, where
+	// it carries the other alone.
+	Partly string `cbor:"12,keyasint,omitempty"`
+
+	// StrictRP6 says the host's strict IPv6 reverse-path filter drops what
+	// the exit node in use answers over IPv6.
+	StrictRP6 bool `cbor:"13,keyasint,omitempty"`
+}
+
+// Subnets is what a device makes of subnet routes: Off says its owner turned
+// them off; Consent that its operator agreed to route its own, Serving those
+// it routes, and NotServing why none, where it agreed. Routes are the routes
+// the network grants, each as this device takes it.
+type Subnets struct {
+	Off        bool           `cbor:"1,keyasint,omitempty"`
+	Consent    bool           `cbor:"2,keyasint,omitempty"`
+	Serving    []netip.Prefix `cbor:"3,keyasint,omitempty"`
+	NotServing string         `cbor:"4,keyasint,omitempty"`
+	Routes     []SubnetRoute  `cbor:"5,keyasint,omitempty"`
+}
+
+// A SubnetRoute is one granted prefix: who routes it, whether this device
+// sends it into the tunnel, and why not, or only in part.
+type SubnetRoute struct {
+	Prefix netip.Prefix   `cbor:"1,keyasint"`
+	Router types.Identity `cbor:"2,keyasint,omitempty"`
+	Name   string         `cbor:"3,keyasint,omitempty"`
+	InUse  bool           `cbor:"4,keyasint,omitempty"`
+	Why    string         `cbor:"5,keyasint,omitempty"`
+}
+
+// forReader is s without who routes what, which only an operator lists.
+func (s *Subnets) forReader() *Subnets {
+	if s == nil {
+		return nil
+	}
+	r := *s
+	r.Routes = slices.Clone(s.Routes)
+	for i := range r.Routes {
+		r.Routes[i].Router, r.Routes[i].Name = types.Identity{}, ""
+	}
+	return &r
+}
+
+// forReader is e without the other exit nodes, which only an operator lists.
+func (e *Exit) forReader() *Exit {
+	if e == nil {
+		return nil
+	}
+	r := *e
+	r.Offering = nil
+	return &r
 }
 
 // DevicesOf lists the members as the log has them at unix time now.
@@ -341,7 +435,7 @@ func DevicesOf(state *log.State, now int64) []Device {
 	out := make([]Device, 0, len(nodes))
 	for _, n := range nodes {
 		dev := Device{Identity: n.Identity, Name: n.Name, V6: state.Addr6(n.Identity).String(),
-			Roles: slices.Clone(n.Roles)}
+			Roles: slices.Clone(n.Roles), Subnets: n.SubnetRoutes()}
 		if n.V4 != nil {
 			dev.V4 = n.V4.String()
 		}

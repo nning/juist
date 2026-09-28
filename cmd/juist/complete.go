@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/types"
 )
 
 // "juist __complete WORD..." prints the candidates for the last word, one per
@@ -192,6 +193,10 @@ func (a *app) positional(command string, pos []string) []string {
 		if len(pos) == 0 {
 			return a.deviceNames()
 		}
+	case "juist exit use":
+		if len(pos) == 0 {
+			return a.exitNodeNames()
+		}
 	case "juist grant", "juist revoke":
 		if len(pos) == 0 {
 			return a.deviceNames()
@@ -217,6 +222,21 @@ func (a *app) deviceNames() []string {
 	var out []string
 	for _, n := range auth.State().Nodes() {
 		out = append(out, n.Name)
+	}
+	return out
+}
+
+func (a *app) exitNodeNames() []string {
+	auth, err := a.quietLog()
+	if err != nil {
+		return nil
+	}
+	self, _, _ := a.selfID()
+	var out []string
+	for _, n := range auth.State().NodesWithRole(types.RoleExit) {
+		if n.Identity != self {
+			out = append(out, n.Name)
+		}
 	}
 	return out
 }

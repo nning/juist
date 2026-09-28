@@ -424,7 +424,7 @@ What was built:
 
 ## M6 — Exit nodes and subnet routers
 
-The `exit-node` role and route grants consumed from log state (schema and
+The `exit` role and route grants consumed from log state (schema and
 validation landed in M1), widened `AllowedIPs` and filter destinations,
 privileged-helper forwarding/NAT, client-side default-route capture with LAN bypass
 and DNS handling. Design in
@@ -432,6 +432,10 @@ and DNS handling. Design in
 covers Linux; FreeBSD's side (pf) comes with M7, and Android's with M11. Split
 in three, each shipped on its own: exit nodes first, as the feature asked for,
 then subnet routers, then the exit node's DNS.
+
+**Done** on 2026-09-28: M6a, M6b and M6c are built and validated as their
+sections say, privileged and by hand against the packages. Untried: a
+client below systemd 256, whose resolved polkit asks without the device.
 
 **Before ACLs, unscoped.** Coarse ACLs come at M12, so until then using an exit
 node is open to every member: the quorum grants the role per exit node, and each
@@ -441,58 +445,93 @@ trade is accepted in [02-threat-model.md](02-threat-model.md) item 7; M12 scopes
 
 ## M6a — Exit nodes
 
-Next. What both kinds of route need, and the exit node on top of it. The plan:
+`juist exit use vps` sends the device's internet traffic through vps, a
+member the network made an exit node and whose operator agreed to serve.
 
-1. **Route grants consumed from the log.** `juist grant vps exit-node` gives
-   the role and the default routes (`0.0.0.0/0`, `::/0`); `revoke` takes both.
-   A client installs them for the one exit node it uses, and nowhere else: its
-   `AllowedIPs`, and the exit node's filter destinations, widen to *the
-   internet*, which is the default routes without the overlay space (the
-   obligation M1 left, [08-trust-layer-notes.md](08-trust-layer-notes.md)) and
-   without private and special-use ranges. An exit node therefore never
-   intercepts member-to-member traffic and never opens its own LAN; that is
-   M6b's, as a subnet route.
+What was built:
+
+1. **Route grants consumed from the log.** `juist grant vps exit` gives
+   the role and the default routes (`0.0.0.0/0`, `::/0`); `revoke` takes
+   both.
+   A client installs them for the one exit node it uses, and nowhere else,
+   as *the internet*: public IPv4 and `2000::/3`, without the overlay space
+   (the obligation M1 left, [08-trust-layer-notes.md](08-trust-layer-notes.md))
+   and without private and special-use ranges (`conn.Internet`). The exit
+   node's filter accepts the same, less the networks the exit node is on,
+   public or not, of which only its own addresses stay. An exit node
+   therefore never intercepts member-to-member traffic and never opens its
+   own LAN; that is M6b's, as a subnet route. While it serves, its forward
+   path drops what arrives from elsewhere with an overlay source, and what
+   comes new into the overlay from public space.
 2. **Both sides agree.** The quorum grants the role; the exit node's operator
-   agrees on that host with `juist exit-node serve` (and `--stop`), and its
-   signed announcement says so, so that a client sees "granted, not serving"
-   rather than traffic that goes nowhere. It serves while it holds the grant,
-   has agreed and its view is fresh.
-3. **Once as root on the exit node.** `serve` asks for sudo once and runs a
-   packaged script, as `firewall.sh` is run: `/etc/sysctl.d/60-juist-exit.conf`
-   with IPv4 and IPv6 forwarding, `accept_ra=2` where the kernel takes router
-   advertisements (forwarding would otherwise cost a SLAAC host its IPv6
-   default route), and the forward path in ufw (`route allow in on juist0`) and
-   Docker's `DOCKER-USER` chain; firewalld's trusted zone, which `juist0` is
-   in, forwards already. `--stop` and removing the package put back what it
-   changed. juistd itself writes no sysctl, so the unit keeps
+   agrees on that host with `juist exit serve` (and `--stop`), kept in
+   the state directory, and its signed announcement says so, so that a
+   client lists it as serving or not and `use` refuses one that does not
+   (`--force` chooses it anyway). It serves while it holds the grant, has
+   agreed, its view is fresh and the host forwards; `juist status` says
+   which of these is missing.
+3. **Once as root on the exit node.** `serve` asks for sudo once and runs the
+   packaged `/usr/lib/juist/exit-node.sh on juist0`:
+   `/etc/sysctl.d/60-juist-exit.conf` with IPv4 and IPv6 forwarding,
+   `accept_ra=2` where an interface took router advertisements, and the
+   forward path in ufw (`route allow in on juist0`) and Docker's
+   `DOCKER-USER` chain; firewalld's trusted zone forwards already. The file
+   records what forwarding was before, so `--stop` and removing the package
+   put it back, and the removal also clears what a juistd that failed left
+   refusing (`exit-node.sh clear`). `serve` runs it again wherever the host
+   does not forward. juistd writes no sysctl, so the unit keeps
    `ProtectKernelTunables`; it masquerades overlay sources in an nftables
-   table of its own over netlink, with `CAP_NET_ADMIN` alone.
-4. **The client.** `juist exit-node` lists the exit nodes, `use NODE` and
+   table of its own over netlink (`juist0` in `ip` and `ip6`).
+4. **The client.** `juist exit` lists the exit nodes, `use DEVICE` and
    `off` choose. The choice is the device's, held by its juistd per network,
-   and names the node by identity, so that it survives renames and
-   renumbering; "never chosen", "off" and a node are three states, which a
-   default an admin sets later (below) needs. Internet traffic goes to a
-   table of juist's own, after `lookup main suppress_prefixlength 0`, so that
-   every route the host has but its default one, the LAN's among them, keeps
-   working. juistd's own traffic, by its user, is kept outside the tunnel by a
-   rule of its own, so that it can always find its exit node again, and an
-   exit node is refused where juistd runs as root. One network per host uses
-   one at a time.
-5. **Failing closed.** While the chosen exit node cannot be used — not
-   granted, not serving, not reachable, or this device's view stale — internet
-   traffic is refused with "unreachable" rather than sent out directly, and
-   `juist status` says why. `juist exit-node off` is how to go direct.
-6. **DNS is not handled yet (M6c).** A resolver on the LAN, link-local or on
-   the host itself is reached outside the tunnel, and the network there sees
-   which names are looked up; the traffic to them still goes through it.
-   `juist exit-node use` warns where that is so, and `juist status` says it
-   for as long as it is. IPv6 goes through the tunnel even where the exit
-   node has none, and is refused there rather than sent out directly.
+   by identity, followed through the node's identity rotations: "never
+   chosen", "off" and a node are three states, which a default an admin sets
+   later (below) needs. Internet traffic goes to a table of juist's own at
+   5200, before the host's routes, which throws back to them what no exit
+   node carries (private, link-local, multicast and other special space,
+   tailscaled's among it); routes a network pushes, as DHCP option 121 does,
+   therefore take nothing out of the tunnel. A LAN in public space goes
+   through the exit node too, since a network could claim any public prefix
+   for itself, and so do answers to connections from the internet to the
+   device's own address. An nftables guard (`juist0guard`) drops whatever
+   would still leave by another device to anywhere else, such as a socket
+   bound to the LAN's device, or traffic whose routes someone flushed.
+   Refused, the internet still goes into the tunnel, where the guard rejects
+   it, so that a loose reverse-path check (rp_filter 2, firewalld's
+   `IPv6_rpfilter=loose`) keeps admitting the exit node's answers; a strict
+   one drops them all the same, which `use` and `juist status` say, with the
+   setting to change. So is a family the exit node does not carry, refused
+   at once rather than dropped unsaid, so that a program falls back to the
+   other; routed subnets pass.
+   juistd's own traffic, by its user, goes by the host's routes at 5180 and
+   past the guard, so that it can always find its exit node again; an exit
+   node is therefore refused unless juistd runs as a system user, as the
+   packaged service does, and where another network's juistd on the host
+   uses one or serves as one, which the CLI refuses. Where it happens all
+   the same, the refusal wins: of two that use one, the lower instance's
+   routes and the higher routes nothing of its own, and one that serves
+   stops beside one that uses an exit node. A device that uses one serves as none. Everything is installed
+   again on each reconcile, since a table someone flushed is not announced.
+5. **Failing closed.** While the chosen exit node cannot be used — not a
+   member, not granted, not reachable, not serving, or this device's view
+   stale — internet traffic meets an unreachable route rather than going out
+   directly, and `juist status` says why; one that stopped answering is shown
+   so. So does a choice kept that cannot be read. The refusal holds while the
+   mesh restarts or does not run, as on a device the network removed, and a
+   juistd that fails leaves it until the service runs again (or
+   `exit-node.sh clear`); a clean stop of the service lifts it, so a
+   `systemctl restart` goes direct for the moment in between. Where even the
+   refusal cannot be installed, `juist status` says the traffic may leave
+   directly.
+6. **DNS is not handled yet (M6c).** A resolver on the LAN or link-local is
+   reached outside the tunnel; `juist exit use` and `juist status` name
+   it. IPv6 goes through the tunnel even where the exit node has none, and
+   is refused there rather than sent out directly.
 
 For later, and not to be precluded: **a default an admin sets.** A
-quorum-signed default exit node per device, which `juist invite --exit-node`
+quorum-signed default exit node per device, which `juist invite --exit`
 could set at admission, applied below the device's own choice and so undone
-by `juist exit-node off`, and shown in `juist status` as the network's. Open
+by `juist exit off`, and shown in `juist status` as the network's. Open
 then: whether it may be a requirement rather than a default, and whether a
 device fails closed or goes direct while its default is down.
 
@@ -503,46 +542,128 @@ device fails closed or goes direct while its default is down.
   traffic; (3) with a full tunnel up, no non-LAN packet leaves the host outside
   the tunnel but DNS to a LAN or link-local resolver, which the CLI names
   (asserted by capture on the physical interface), while LAN destinations still
-  route locally; (4) withdrawing the `exit-node` role cuts egress within gossip
+  route locally; (4) withdrawing the `exit` role cuts egress within gossip
   convergence for reachable clients and at the TTL boundary for partitioned
   ones.
+- **Validated:** (1), (2) and (4) by `make check`; the tests are listed in
+  [12-validating.md](12-validating.md#what-checks-what). (3) is
+  `TestNetnsExitNode`, privileged, and the hand test against the packages
+  ([Check an exit node](12-validating.md#check-an-exit-node)), both passed on
+  2026-09-28, IPv6 through a public exit node included.
 
 ## M6b — Subnet routers
 
-On M6a's route consumption, forwarding and masquerade: a member granted
-prefixes routes them for every member, and clients install routes for them.
+`juist grant nas 192.168.1.0/24` lets every member reach the LAN behind nas
+through it, once nas's operator agrees: `juist subnet serve`.
 
-- **Open:** whether a client takes granted routes by itself or after its
-  owner agrees, as Tailscale's `--accept-routes`. By itself, leaving out a
-  prefix that overlaps a network the client is attached to, and saying so,
-  fits a default that makes the option unnecessary.
+What was built:
+
+1. **Grants.** A prefix in place of a role grants it, and `revoke` takes it:
+   masked, outside the overlay and the ranges that never leave a link, clear
+   of what overlays on a member's host may hold (100.64.0.0/10,
+   198.18.0.0/15, tailscaled's `fd7a:115c:a1e0::/48`, and unique-local space
+   wider than a /48, one of which another network's overlay may be), and
+   overlapping no prefix another member routes, nor one of its own, which
+   the log now refuses as it refuses a shared address; two such grants
+   made at once on two branches are a conflict, as two admissions of one
+   address are. No network held such a grant before these rules, so none is
+   gated by a schema. The CLI says the
+   masked form of a prefix with host bits, points `0.0.0.0/0` to `exit`,
+   names the member already routing an overlapping prefix, and warns where a
+   prefix is public space, which then goes through the router for everyone.
+2. **Both sides agree,** as for exit nodes: the router's operator agrees
+   with `juist subnet serve` (and `--stop`), which sets forwarding up with
+   the same script, kept for as long as the host serves either; the
+   announcement says the router routes. It routes while it holds a grant,
+   has agreed and its view is fresh; its filter admits members' traffic to
+   exactly its granted prefixes, and it masquerades overlay sources onto
+   them, behind the same forward chain as an exit node.
+3. **Clients take routes by themselves.** Each member routes a router's
+   prefixes into the tunnel, in the overlay's table, less what the host
+   reaches by routes of its own inside them, in the main table,
+   tailscaled's and lower juist networks': its LANs, VPNs and container
+   bridges among them, and the client says so. A wider route of the host's,
+   as a DHCP netmask or a router advertisement's short prefix would give,
+   takes none: the tunnel takes that part of it, and the client says that
+   too. A route a network pushed, by DHCP or router advertisement, is not
+   the host's own, so a hostile LAN takes a subnet out of the tunnel only by
+   numbering itself inside it, which it could as the client's LAN anyway,
+   or where its DHCP client marks the routes it installs as no one's, as
+   Debian's dhclient does, by pushing a route inside it. A router or exit
+   node without overlay IPv4 says so, and is sent none. Not with a stale
+   view, so a withdrawn grant ends at the TTL; not IPv4 on a device without
+   overlay IPv4; not while the router cannot be reached or has not agreed. `juist subnet off` turns them off on a device,
+   and `on` back. `juist subnet` lists every prefix with its router and
+   what this device makes of it; `juist status` sums it up.
+4. **Beside an exit node,** a routed subnet goes through its router and the
+   exit node's routes leave it out.
+
 - **Exit criteria:** (1) a member forwarding for prefixes it holds no grant
   for is dropped by every peer; (2) a granted prefix is reached through the
-  router from every member, and one overlapping a client's own LAN does not
-  take that LAN's traffic away from it; (3) withdrawing a grant removes the
+  router from every member, and a client's own LAN inside it keeps that
+  LAN's traffic, while a wider one gives the prefix up, both said; (3) withdrawing a grant removes the
   route within gossip convergence for reachable clients and at the TTL
   boundary for partitioned ones.
+- **Validated:** (1), (3) and the LAN half of (2) by `make check`; the tests
+  are listed in [12-validating.md](12-validating.md#what-checks-what). The
+  data path of (2) is `TestNetnsASubnetThroughItsRouter`, privileged, which
+  passed on 2026-09-28, as did
+  [Check a subnet router](12-validating.md#check-a-subnet-router). A Docker
+  network cannot be routed to, since Docker drops what reaches its
+  containers from another device; `juist subnet serve` warns of it.
 
 ## M6c — The exit node's DNS
 
-While a full tunnel is up, the client's DNS goes through it, to a resolver
-the exit node answers for, so that the network the client sits in sees no
-lookup. It needs what M8's step 3 needs, resolved configured through the
-pinned `net/dns`, and whichever comes first builds it for both.
+While an exit node is in use, the device's DNS goes through it, so that the
+network the device sits in sees no lookup but for its own names.
 
-- **Open:** what the exit node resolves with, and whether the client's LAN
-  names (its router's search domain) are still asked of the LAN resolver,
-  which is a lookup the local network sees again.
+What was built:
+
+1. **The exit node answers.** While it serves, juistd answers DNS on its
+   overlay addresses, UDP and TCP port 41646, bound to `juist0` so that
+   nothing arriving on another device reaches it, and from the network's
+   overlay alone; standard queries only, at a bounded rate, with bounded
+   queries in flight and connections per source. It asks the host's own
+   resolvers, resolved's stub itself where the host uses it, so that the
+   exit host's own DNS routing, DNS-over-TLS and DNSSEC apply, passing over
+   one that fails the query; its announcement names the port. No capability is added: the port is
+   no privileged one.
+2. **The client points systemd-resolved at it,** over D-Bus, on `juist0`:
+   the exit node's overlay addresses and port as its servers, `~.` as its
+   routing domain and its default route, so that every name goes there but
+   those a longer routing domain of the LAN's link claims, its router's own
+   domain among them. A refused exit node keeps it, so that lookups go
+   nowhere rather than to the LAN; `juist exit off` gives the link back to
+   resolved, and so does juistd stopping, with the device. juistd runs as
+   the `juist` user, so the package ships a polkit rule allowing it the four
+   resolved actions it needs, on `juist0` to `juist9` alone where resolved
+   names the device, from systemd 256 on, and on any link before, which
+   juistd's CAP_NET_ADMIN could redirect DNS on by other means anyway. DNS counts as through the tunnel
+   only where `/etc/resolv.conf` asks resolved's stub; else the host's
+   programs ask their resolvers around resolved, and the CLI says so.
+3. **Without resolved,** or where it refuses, nothing is configured, and
+   `juist exit use` and `juist status` name the resolvers left outside the
+   tunnel and why; `juist status` says "DNS too" where it goes through.
+
 - **Exit criteria:** (1) with a full tunnel up, no DNS query leaves the host
   outside the tunnel (asserted by capture on the physical interface) and
-  names resolve; (2) `juist exit-node off`, or the exit node's role being
-  withdrawn, puts the host's DNS back as it was; (3) without resolved,
-  nothing is configured, and `juist exit-node use` says DNS stays outside the
-  tunnel.
+  names resolve; (2) `juist exit off` puts the host's DNS back as it was,
+  and while the exit node cannot be used, its role withdrawn among the
+  reasons, lookups go nowhere rather than to the LAN, as the traffic does;
+  (3) without resolved, nothing is configured, and `juist exit use` says DNS
+  stays outside the tunnel.
+- **Validated:** (2) and (3) by `make check`, against a stand-in resolved on
+  a private bus; the tests are listed in
+  [12-validating.md](12-validating.md#what-checks-what). (1)'s data path is
+  `TestNetnsExitNodeAnswersDNS`, privileged, which passed on 2026-09-28; its
+  resolved half is the hand test
+  ([Check an exit node](12-validating.md#check-an-exit-node)), since
+  resolved runs one per host, not per namespace, which passed that day on
+  systemd 259; below 256, where polkit sees no interface, it is untried.
 
 ## M7 — FreeBSD
 
-The FreeBSD port: M3a's real device, router and privilege story on FreeBSD,
+Next. The FreeBSD port: M3a's real device, router and privilege story on FreeBSD,
 M6's forwarding, NAT and default-route capture with pf, and a port that
 installs it. Two things M5 left to it: keeping instances apart, where
 Tailscale's router routes in the host's one table (a FIB per instance, or the

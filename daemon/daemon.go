@@ -13,6 +13,7 @@ import (
 	"crypto/ecdh"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net"
 	"net/netip"
@@ -188,6 +189,41 @@ type Options struct {
 	// log gives this device other overlay addresses than the mesh started on.
 	OnAddrsMoved func()
 
+	// Exit is the exit node this device's owner chose, and ServeExit whether
+	// its operator agreed to serve as one; [Daemon.SetExitChoice] and
+	// [Daemon.SetServeConsent] change them.
+	Exit      ExitChoice
+	ServeExit bool
+
+	// ServeSubnets says the operator agreed to route the subnets the log
+	// grants this device, and SubnetsOff that its owner routes none of its
+	// peers'; [Daemon.SetSubnetConsent] and [Daemon.SetSubnetsOff] change
+	// them.
+	ServeSubnets bool
+	SubnetsOff   bool
+
+	// OnExitMoved is called, on a goroutine of its own, where the exit node
+	// chosen rotated its identity from one to another.
+	OnExitMoved func(from, to types.Identity)
+
+	// EgressUser says why juistd's user may use no exit node, "" where it
+	// may; nil asks the host, once, of the user juistd runs as.
+	EgressUser func() string
+
+	// HostDNS routes the host's DNS through the exit node in use, and
+	// ServeDNS answers members' DNS on an exit node: systemd-resolved and
+	// [dnsfwd] on TunName where nil, and nothing without it.
+	HostDNS  HostDNS
+	ServeDNS DNSServer
+	// ResolvConf is what the host's programs read their resolvers from,
+	// /etc/resolv.conf where empty; it must name resolved's stub for
+	// resolved's routing to be theirs.
+	ResolvConf string
+	// StrictRP6 reports whether the host drops an exit node's IPv6 answers
+	// by a strict reverse-path filter: firewalld's ruleset on TunName where
+	// nil, and never without it.
+	StrictRP6 func() bool
+
 	// FreshnessTTL is how long this node acts on its view of the network
 	// after an admin device last vouched for it. Zero uses
 	// [DefaultFreshnessTTL].
@@ -220,10 +256,13 @@ type Options struct {
 //
 // Each field sits under the lock that guards it; those above the first lock
 // are set by [New] and not changed after. Locks are taken in this order, and
-// none is held across a call into the data plane:
+// none is held across a call into the data plane but dnsMu, across the
+// host's resolver (D-Bus) and the DNS server's Close, which gossip never
+// waits on:
 //
 //	Service.mu → reconcileMu → authMu,  Service.mu → mu → waits' own
 //	Service.mu → waitMu,  reconcileMu → mu,  reconcileMu → waitSaveMu → waitMu
+//	reconcileMu → dnsMu → mu
 //	probeMu → mu,  leaseSaveMu → leaseMu,  keyringSaveMu → the keyring's own
 //	a relay server's lock → mu: its admission callbacks take mu, so mu is
 //	never held across a call into the relay
@@ -353,6 +392,52 @@ type Daemon struct {
 	logged       map[string]bool
 	pushDeferred bool
 
+	// exitChoice and serveConsent are the owner's and the operator's word on
+	// exit nodes, servingExit whether this device serves as one now, and
+	// exitStatus what the last reconcile made of them.
+	exitChoice  ExitChoice
+	onExitMoved func(from, to types.Identity)
+	// successorMiss is the identity and head a rotation was last looked
+	// for in vain.
+	successorMiss struct {
+		id   types.Identity
+		head types.Hash
+	}
+	userEgress   string      // why this user may use no exit node, "" where it may
+	strictRP6    func() bool // [Options.StrictRP6], nil for never
+	serveConsent bool
+	servingExit  bool
+	exitStatus   ipc.Exit
+	// subnetConsent and subnetsOff are the operator's and the owner's word
+	// on subnet routes, servingSubnets whether this device routes its own
+	// now, and subnetStatus what the last reconcile made of them.
+	subnetConsent  bool
+	subnetsOff     bool
+	servingSubnets bool
+	subnetStatus   ipc.Subnets
+	// dnsPort is the port this device answers members' DNS on, zero for
+	// none, which its announcement says.
+	dnsPort uint16
+	// announcedNoV4 is whether the announcement says this device has no
+	// IPv4: only where the log routes through it.
+	announcedNoV4 bool
+
+	// dnsMu guards the DNS this device answers as an exit node and the
+	// host's DNS routing through one: hostDNS and startDNS do the work,
+	// dnsServer and dnsAddrs are what answers, dnsRouted where the host's
+	// DNS goes and dnsRoutedAt since when.
+	dnsMu       sync.Mutex
+	hostDNS     HostDNS
+	startDNS    DNSServer
+	dnsServer   io.Closer
+	dnsAddrs    []netip.Addr
+	dnsOverlay  []netip.Prefix
+	dnsRouted   []netip.AddrPort
+	dnsRoutedAt time.Time
+	dnsWhy      string // why the routing last failed, "" where it did not
+	dnsClosed   bool
+	resolvConf  string
+
 	announced   *gossip.Endpoint // nil when it is to be rebuilt
 	signed      *gossip.Endpoint // the last one signed, which announced renews
 	announcedAt time.Time
@@ -458,6 +543,12 @@ func New(opts Options) (*Daemon, error) {
 		leasePath:      opts.LeasePath,
 		waitingPath:    opts.WaitingPath,
 		onAddrsMoved:   opts.OnAddrsMoved,
+		exitChoice:     opts.Exit,
+		serveConsent:   opts.ServeExit,
+		subnetConsent:  opts.ServeSubnets,
+		subnetsOff:     opts.SubnetsOff,
+		onExitMoved:    opts.OnExitMoved,
+		userEgress:     egressUserOf(opts.EgressUser),
 		waiting:        map[types.Hash]heldChange{},
 		keyringPath:    opts.KeyringPath,
 		ttl:            cmp.Or(opts.FreshnessTTL, DefaultFreshnessTTL),
@@ -511,6 +602,8 @@ func New(opts Options) (*Daemon, error) {
 		// node's announcement, and both are learned asynchronously once
 		// there is a relay to learn them from.
 		OnConnectivityChange: d.onConnectivityChange,
+		// A subnet a route of the host's now holds is given back at once.
+		OnHostRoutesChange: d.MarkDirty,
 	}
 	mgr, err := onPortOrAny(d, opts.ListenPort, conn.ErrPortTaken, "UDP", func(port uint16) (conn.Manager, error) {
 		o := connOpts
@@ -528,6 +621,19 @@ func New(opts Options) (*Daemon, error) {
 	// Without one there is no overlay to bind, as in tests and the one-machine
 	// demo, and it listens on the underlay.
 	d.overlayOnly, d.tunName = opts.TunName != "", opts.TunName
+	d.hostDNS, d.startDNS, d.resolvConf = opts.HostDNS, opts.ServeDNS, opts.ResolvConf
+	d.strictRP6 = opts.StrictRP6
+	if opts.TunName != "" {
+		if d.strictRP6 == nil {
+			d.strictRP6 = d.loggedStrictRP6(conn.StrictRP6)
+		}
+		if d.hostDNS == nil {
+			d.hostDNS = resolvedDNS{dev: opts.TunName}
+		}
+		if d.startDNS == nil {
+			d.startDNS = defaultDNSServer(opts.TunName)
+		}
+	}
 	d.startAddrs = selfAddrs
 	ln, err := d.listenGossip(opts, selfAddrs)
 	if err != nil {
@@ -1103,6 +1209,8 @@ func (d *Daemon) Close() error {
 		}
 		d.gossip.Close()
 		d.closeRelay()
+		// Before the device goes, which resolved's routing names.
+		d.closeDNS()
 		err = d.manager.Close()
 		d.waits.wait()
 	})

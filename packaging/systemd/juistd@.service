@@ -88,9 +88,10 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 
 # ProtectKernelTunables is affordable only because conn keeps NetfilterMode at
-# NetfilterOff and advertises no subnet routes: those are the two gates on every
-# sysctl write the embedded router makes. Recheck at M6 (exit nodes) and at
-# each Tailscale upgrade.
+# NetfilterOff and advertises no subnet routes to the embedded router: those
+# are the two gates on every sysctl write it makes. An exit node's forwarding
+# is packaging/exit-node.sh's, run once as root; juistd only reads it. Recheck
+# at each Tailscale upgrade.
 
 [Install]
 WantedBy=multi-user.target

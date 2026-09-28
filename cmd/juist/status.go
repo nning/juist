@@ -90,6 +90,10 @@ func (a *app) printStatusIn(s *ipc.Status, inst string) {
 		a.printf("\n")
 		a.emit(v.notes)
 	}
+	if ex := s.Exit; ex != nil && !ex.Node.IsZero() && ex.Refused == "" && ex.Failed == "" {
+		a.warnDNS(ex, dnsOverlay(s, nil))
+		a.warnStrictRP(ex)
+	}
 	if !s.CanOperate {
 		network := ""
 		if inst != "" {
@@ -283,6 +287,36 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 			}
 		}
 		field("Relays", "%s", relays)
+	}
+	if ex := s.Exit; ex != nil {
+		name := exitName(ex)
+		switch {
+		case ex.Failed != "":
+			field("Exit node", "%s", paint("1;31", name+", internet may leave directly: "+ex.Failed))
+		case ex.Refused != "" && ex.Node.IsZero():
+			field("Exit node", "%s", paint("1;31", "internet refused: "+ex.Refused))
+		case ex.Refused != "":
+			field("Exit node", "%s", paint("1;31", name+", internet refused: "+ex.Refused))
+		case !ex.Node.IsZero() && exitReach(s, ex.Node) != "":
+			field("Exit node", "%s", paint("33", name+", "+exitReach(s, ex.Node)))
+		case !ex.Node.IsZero() && ex.Partly != "":
+			text := name
+			if ex.DNS {
+				text += ", DNS too"
+			}
+			field("Exit node", "%s", text+"; "+paint("33", ex.Partly))
+		case !ex.Node.IsZero() && ex.DNS:
+			field("Exit node", "%s, DNS too", name)
+		case !ex.Node.IsZero():
+			field("Exit node", "%s", name)
+		case ex.Serving:
+			field("Exit node", "this device serves")
+		case ex.Consent:
+			field("Exit node", "%s", paint("33", "this device does not serve: "+ex.NotServing))
+		}
+	}
+	if t := subnetSummary(s.Subnets, paint); t != "" {
+		field("Subnets", "%s", t)
 	}
 	switch {
 	case until > 0:

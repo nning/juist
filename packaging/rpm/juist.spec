@@ -61,6 +61,8 @@ install -D -m 0644 juistd.service %{buildroot}%{_unitdir}/juistd.service
 install -D -m 0644 juistd@.service %{buildroot}%{_unitdir}/juistd@.service
 install -D -m 0644 %{SOURCE1} %{buildroot}%{_sysusersdir}/%{name}.conf
 install -D -m 0755 firewall.sh %{buildroot}%{_prefix}/lib/juist/firewall.sh
+install -D -m 0755 exit-node.sh %{buildroot}%{_prefix}/lib/juist/exit-node.sh
+install -D -m 0644 juist.rules %{buildroot}%{_datadir}/polkit-1/rules.d/60-juist.rules
 install -D -m 0644 juist.1 %{buildroot}%{_mandir}/man1/juist.1
 install -D -m 0644 juistd.8 %{buildroot}%{_mandir}/man8/juistd.8
 for f in juist juist-relay juist-invite; do
@@ -101,6 +103,10 @@ if [ $1 -eq 0 ]; then
 		systemctl --no-reload disable --now juistd@juist$i.service >/dev/null 2>&1 || :
 	done
 	%{_prefix}/lib/juist/firewall.sh revoke
+	# Forwarding for an exit node goes back as it was, and nothing a
+	# juistd that failed left refusing the internet stays.
+	%{_prefix}/lib/juist/exit-node.sh off
+	%{_prefix}/lib/juist/exit-node.sh clear
 fi
 
 %postun
@@ -125,6 +131,8 @@ fi
 %{_unitdir}/juistd@.service
 %{_sysusersdir}/%{name}.conf
 %{_prefix}/lib/juist/firewall.sh
+%{_prefix}/lib/juist/exit-node.sh
+%{_datadir}/polkit-1/rules.d/60-juist.rules
 %{_mandir}/man1/juist.1*
 %{_mandir}/man8/juistd.8*
 %{_prefix}/lib/firewalld/services/juist.xml

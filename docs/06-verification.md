@@ -79,7 +79,7 @@ netfilter doing the translation rather than a simulation of it:
 - **Exit nodes and subnet routes (M6):** a node forwarding traffic it holds no
   grant for is dropped by every peer; a full-tunnel client leaks no DNS query and no
   non-LAN packet outside the tunnel (capture on the physical interface) while LAN
-  destinations keep resolving and routing locally; withdrawing an `exit-node` role cuts
+  destinations keep resolving and routing locally; withdrawing the `exit` role cuts
   egress at gossip convergence (reachable) and at the TTL boundary (partitioned).
 - **Coarse ACLs (M12):** a peer denied by ACL is dropped by the *receiver* even with a
   sender patched to ignore its own filter; a member without a grant for an exit node

@@ -277,6 +277,7 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	$(GO) run $(GOFLAGS) ./cmd/juist __manpage > $$stage/juist.1; \
 	$(GO) run $(GOFLAGS) ./cmd/juistd __manpage > $$stage/juistd.8; \
 	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service README.md packaging/firewall.sh \
+		packaging/exit-node.sh packaging/polkit/juist.rules \
 		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml \
 		packaging/firewalld/juist-invite.xml packaging/completions/juist.bash \
 		packaging/completions/_juist packaging/completions/juist.fish $$stage/; \
@@ -327,6 +328,8 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	$(GO) run $(GOFLAGS) ./cmd/juistd __manpage > $$root/usr/share/man/man8/juistd.8; \
 	gzip -9n $$root/usr/share/man/man1/juist.1 $$root/usr/share/man/man8/juistd.8; \
 	install -D -m 0755 packaging/firewall.sh $$root/usr/lib/juist/firewall.sh; \
+	install -D -m 0755 packaging/exit-node.sh $$root/usr/lib/juist/exit-node.sh; \
+	install -D -m 0644 packaging/polkit/juist.rules $$root/usr/share/polkit-1/rules.d/60-juist.rules; \
 	for f in juist juist-relay juist-invite; do \
 		install -D -m 0644 packaging/firewalld/$$f.xml $$root/usr/lib/firewalld/services/$$f.xml; \
 	done; \
@@ -426,7 +429,7 @@ check: lint tidy-check build-test test-race tcb repro ## Everything CI gates on;
 # check gates, with the host-feature probes failing rather than skipping as on
 # the runner, then the cross builds, the vulnerability scan, both packages,
 # and last the privileged tests, the one step that asks for sudo.
-CI_TOOLS = ip ping iptables rpmbuild dpkg-deb sudo
+CI_TOOLS = ip ping iptables nft rpmbuild dpkg-deb sudo
 
 .PHONY: ci
 ci: ci-deps ## Run every CI job locally (asks for sudo for the privileged tests)

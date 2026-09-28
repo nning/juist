@@ -265,10 +265,36 @@ func (r *approval) carryApproval(aum *types.AUM) {
 		ttl, proposer = time.Unix(changes[i].expires, 0).Sub(a.now()), changes[i].proposer
 	case aum.Kind == types.KindAddNode:
 		return
+	default:
+		proposer = a.handedOn(r.auth.State(), aum)
 	}
 	if _, _, err := a.carry(r.auth, aum, ttl, proposer); err != nil {
 		a.warn("%v", err)
 	}
+}
+
+// handedOn is who handed on a change approved from its file before any copy
+// of it arrived: the one admin key that signed it and is not this keystore's,
+// zero where there is none, or more.
+func (a *app) handedOn(state *log.State, aum *types.AUM) types.Identity {
+	files, err := a.adminKeyFiles()
+	if err != nil {
+		return types.Identity{}
+	}
+	var other types.Identity
+	hash := aum.SigHash()
+	for _, s := range aum.Signatures {
+		_, admin := state.Admin(s.KeyID)
+		mine := slices.ContainsFunc(files, func(k adminKeyFile) bool { return k.priv.Public() == s.KeyID })
+		switch {
+		case !admin || mine || !s.KeyID.Verify(hash[:], s.Sig):
+		case !other.IsZero():
+			return types.Identity{}
+		default:
+			other = s.KeyID
+		}
+	}
+	return other
 }
 
 // createFromGenesis completes a genesis ceremony whose record collected the
@@ -339,7 +365,7 @@ func describeKind(k types.Kind) string {
 	case types.KindRemoveNode:
 		return "device removal"
 	case types.KindSetNodeRoutes:
-		return "change of a device's roles"
+		return "change of a device's roles or subnets"
 	case types.KindRotateNodeKey:
 		return "key rotation"
 	case types.KindRotateIdentity:

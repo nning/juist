@@ -78,6 +78,7 @@ func startInstanceService(t *testing.T, home, sock string, n int) func() {
 			DisableDiscovery: true,
 			DisableDHT:       true,
 			Logf:             func(string, ...any) {},
+			EgressUser:       func() string { return "" },
 		},
 		InviteAddrs: func(port uint16) []netip.AddrPort {
 			return []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port)}

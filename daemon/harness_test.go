@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -248,6 +249,10 @@ type fakeManager struct {
 	closed   bool
 	err      error // returned by SetPeers, to exercise the failure path
 	relayErr error // returned by SetRelays
+	// hostRoutes is what the host reaches outside juist.
+	hostRoutes []netip.Prefix
+	// egressErr is what SetEgress returns for each egress.
+	egressErr map[conn.Egress]error
 
 	home int
 	eps  []netip.AddrPort
@@ -262,6 +267,40 @@ type fakeManager struct {
 
 	// hold, when set, keeps every probe's answer back until it is closed.
 	hold chan struct{}
+
+	// egress and serve are what the reconciler last asked for.
+	egress conn.Egress
+	serve  conn.Serve
+}
+
+func (m *fakeManager) HostRoutes() []netip.Prefix {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.hostRoutes)
+}
+
+func (m *fakeManager) SetEgress(e conn.Egress) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.egressErr[e]; err != nil {
+		return err
+	}
+	m.egress = e
+	return nil
+}
+
+func (m *fakeManager) SetServe(s conn.Serve) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.serve = s
+	return nil
+}
+
+// exitState is the egress and serving last set.
+func (m *fakeManager) exitState() (conn.Egress, conn.Serve) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.egress, m.serve
 }
 
 var _ conn.Manager = (*fakeManager)(nil)

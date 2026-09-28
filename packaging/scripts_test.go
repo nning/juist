@@ -4,11 +4,13 @@
 package packaging
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -30,7 +32,7 @@ func newSandbox(t *testing.T) *sandbox {
 	}
 	// Every stub logs how it was called. install creates the directory it
 	// is given, as the real one would.
-	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "install"} {
+	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "exit-node.sh", "install"} {
 		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(root, "calls") + "\n"
 		if name == "install" {
 			body += "for last; do :; done; mkdir -p \"$last\"\n"
@@ -51,6 +53,7 @@ func (sb *sandbox) run(script string, args ...string) {
 	}
 	s := strings.NewReplacer(
 		"/usr/lib/juist/firewall.sh", filepath.Join(sb.root, "bin", "firewall.sh"),
+		"/usr/lib/juist/exit-node.sh", filepath.Join(sb.root, "bin", "exit-node.sh"),
 		"/var/lib/", sb.root+"/var/lib/",
 		"/run/systemd/system", filepath.Join(sb.root, "run/systemd/system"),
 	).Replace(string(b))
@@ -114,8 +117,9 @@ func TestAReinstallIsAFreshInstall(t *testing.T) {
 	sb := newSandbox(t)
 	sb.run("prerm", "remove")
 	calls := sb.calls()
-	if !strings.Contains(calls, "firewall.sh revoke\n") || !strings.Contains(calls, "disable --now juistd.service") {
-		t.Fatalf("a removal left the service or the rule:\n%s", calls)
+	if !strings.Contains(calls, "firewall.sh revoke\n") || !strings.Contains(calls, "disable --now juistd.service") ||
+		!strings.Contains(calls, "exit-node.sh off\nexit-node.sh clear\n") {
+		t.Fatalf("a removal left the service, the rule or an exit node's forwarding:\n%s", calls)
 	}
 	for i := 1; i <= 9; i++ {
 		if !strings.Contains(calls, fmt.Sprintf("disable --now juistd@juist%d.service", i)) {
@@ -257,5 +261,241 @@ func TestFirewallScriptTakesADevice(t *testing.T) {
 	}
 	if calls, err := run("open"); err == nil {
 		t.Fatalf("an unknown action succeeded:\n%s", calls)
+	}
+}
+
+// exitSandbox is a host for exit-node.sh: /proc/sys/net and /etc/sysctl.d
+// under the sandbox, and ufw and a Docker host's iptables as stubs.
+func exitSandbox(t *testing.T) (sb *sandbox, run func(args ...string) (string, error)) {
+	sb = newSandbox(t)
+	set := func(rel, v string) {
+		p := filepath.Join(sb.root, "proc/sys/net", rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(v+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set("ipv4/ip_forward", "0")
+	set("ipv6/conf/all/forwarding", "0")
+	set("ipv6/conf/all/accept_ra", "1")
+	set("ipv6/conf/default/accept_ra", "1")
+	set("ipv6/conf/lo/accept_ra", "1")
+	set("ipv6/conf/eth0/accept_ra", "1")
+	set("ipv6/conf/eth1/accept_ra", "0")
+	set("ipv6/conf/juist0/accept_ra", "1")
+	set("ipv6/conf/veth3e0a3e1/accept_ra", "1")
+	for _, name := range []string{"ufw", "iptables", "ip6tables"} {
+		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(sb.root, "calls") + "\n"
+		if name != "ufw" {
+			// DOCKER-USER exists; no rule is there to check or delete.
+			body += "case \"$*\" in *-C*|*-D*) exit 1 ;; esac\n"
+		}
+		if err := os.WriteFile(filepath.Join(sb.root, "bin", name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := os.ReadFile("exit-node.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.NewReplacer("/proc/sys/net", filepath.Join(sb.root, "proc/sys/net"),
+		"/etc/sysctl.d/", filepath.Join(sb.root, "etc/sysctl.d")+"/").Replace(string(b))
+	script := filepath.Join(sb.root, "exit-node.sh")
+	if err := os.WriteFile(script, []byte(s), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return sb, func(args ...string) (string, error) {
+		cmd := exec.Command("/bin/sh", append([]string{script}, args...)...)
+		cmd.Env = []string{"PATH=" + filepath.Join(sb.root, "bin") + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		return string(out) + sb.calls(), err
+	}
+}
+
+func (sb *sandbox) sysctl(rel string) string {
+	b, _ := os.ReadFile(filepath.Join(sb.root, "proc/sys/net", rel))
+	return strings.TrimSpace(string(b))
+}
+
+// The exit node's setup forwards, keeps the host's router advertisements,
+// opens ufw and Docker's chain for the device alone, and its undoing puts
+// every one of them back as it was, once the last device is done.
+func TestExitNodeScriptUndoesWhatItDid(t *testing.T) {
+	sb, run := exitSandbox(t)
+	conf := filepath.Join(sb.root, "etc/sysctl.d/60-juist-exit.conf")
+	calls, err := run("on", "juist0")
+	if err != nil {
+		t.Fatalf("on (%v):\n%s", err, calls)
+	}
+	for rel, want := range map[string]string{"ipv4/ip_forward": "1", "ipv6/conf/all/forwarding": "1",
+		"ipv6/conf/eth0/accept_ra": "2", "ipv6/conf/eth1/accept_ra": "0", "ipv6/conf/lo/accept_ra": "1",
+		"ipv6/conf/juist0/accept_ra": "1"} {
+		if got := sb.sysctl(rel); got != want {
+			t.Errorf("after on, %s is %s, want %s", rel, got, want)
+		}
+	}
+	b, _ := os.ReadFile(conf)
+	for _, want := range []string{"# for: juist0\n", "net.ipv4.ip_forward = 1", "net.ipv6.conf.all.forwarding = 1",
+		"net.ipv6.conf.eth0.accept_ra = 2"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("the sysctl file lacks %q:\n%s", want, b)
+		}
+	}
+	// A container's veth takes no router advertisement, and goes with it.
+	if strings.Contains(string(b), "veth") {
+		t.Errorf("the sysctl file keeps a container's veth:\n%s", b)
+	}
+	for _, want := range []string{"ufw route allow in on juist0", "iptables -I DOCKER-USER -i juist0 -j ACCEPT",
+		"ip6tables -I DOCKER-USER -o juist0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("on did not run %q:\n%s", want, calls)
+		}
+	}
+
+	if calls, err := run("on", "juist2"); err != nil || !strings.Contains(calls, "on juist2") {
+		t.Fatalf("on juist2 (%v):\n%s", err, calls)
+	}
+	if calls, err := run("off", "juist0"); err != nil || !strings.Contains(calls, "ufw route delete allow in on juist0") ||
+		strings.Contains(calls, "juist2") {
+		t.Fatalf("off juist0 (%v):\n%s", err, calls)
+	}
+	if sb.sysctl("ipv4/ip_forward") != "1" {
+		t.Fatal("off for one device stopped forwarding for another")
+	}
+	if b, _ := os.ReadFile(conf); !strings.Contains(string(b), "# for: juist2\n") {
+		t.Fatalf("the sysctl file after off juist0:\n%s", b)
+	}
+	if calls, err := run("off"); err != nil || !strings.Contains(calls, "delete allow in on juist9") {
+		t.Fatalf("off (%v):\n%s", err, calls)
+	}
+	for rel, want := range map[string]string{"ipv4/ip_forward": "0", "ipv6/conf/all/forwarding": "0",
+		"ipv6/conf/eth0/accept_ra": "1", "ipv6/conf/eth1/accept_ra": "0"} {
+		if got := sb.sysctl(rel); got != want {
+			t.Errorf("after off, %s is %s, want %s", rel, got, want)
+		}
+	}
+	if _, err := os.Stat(conf); !os.IsNotExist(err) {
+		t.Error("off left the sysctl file")
+	}
+	if calls, err := run("off"); err != nil {
+		t.Fatalf("a second off (%v):\n%s", err, calls)
+	}
+}
+
+// Forwarding a host had on before stays on after.
+func TestExitNodeScriptKeepsForwardingItFound(t *testing.T) {
+	sb, run := exitSandbox(t)
+	if err := os.WriteFile(filepath.Join(sb.root, "proc/sys/net/ipv4/ip_forward"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if calls, err := run("on", "juist0"); err != nil {
+		t.Fatalf("on (%v):\n%s", err, calls)
+	}
+	if calls, err := run("off", "juist0"); err != nil {
+		t.Fatalf("off (%v):\n%s", err, calls)
+	}
+	if sb.sysctl("ipv4/ip_forward") != "1" || sb.sysctl("ipv6/conf/all/forwarding") != "0" {
+		t.Fatalf("forwarding after off: %s %s", sb.sysctl("ipv4/ip_forward"), sb.sysctl("ipv6/conf/all/forwarding"))
+	}
+}
+
+// clear takes juist's egress rules, exit tables and masquerade, of every
+// instance, and nothing else.
+func TestExitNodeScriptClearsWhatAFailedJuistdLeft(t *testing.T) {
+	sb, run := exitSandbox(t)
+	for _, name := range []string{"ip", "nft"} {
+		// Each rule is there once.
+		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(sb.root, "calls") + "\n" +
+			"f=" + filepath.Join(sb.root, "gone") + "-$(echo \"$*\" | tr ' ' _)\n" +
+			"[ -e \"$f\" ] && exit 2\ntouch \"$f\"\n"
+		if err := os.WriteFile(filepath.Join(sb.root, "bin", name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls, err := run("clear")
+	if err != nil {
+		t.Fatalf("clear (%v):\n%s", err, calls)
+	}
+	for _, want := range []string{"ip -4 rule del pref 5180 table main", "ip -6 rule del pref 5189 table main",
+		"ip -4 rule del pref 5200 table 27509", "ip -6 rule del pref 5199 table main", "ip -6 rule del pref 5209 table 27518", "ip -4 route flush table 27509",
+		"ip -6 route flush table 27518", "nft delete table ip juist0", "nft delete table ip6 juist9",
+		"nft delete table ip juist3guard"} {
+		if !strings.Contains(calls, want+"\n") {
+			t.Errorf("clear did not run %q:\n%s", want, calls)
+		}
+	}
+	if strings.Contains(calls, "pref 5170") || strings.Contains(calls, "pref 5210") ||
+		strings.Contains(calls, "ufw") || regexp.MustCompile(`rule del pref \d+\n`).MatchString(calls) {
+		t.Errorf("clear touched what is not an exit node's:\n%s", calls)
+	}
+}
+
+func TestExitNodeScriptTakesJuistDevicesAlone(t *testing.T) {
+	_, run := exitSandbox(t)
+	for _, args := range [][]string{{"on"}, {"on", "eth0"}, {"on", "juist10"}, {"on", "juist1;reboot"},
+		{"off", "-x"}, {"serve", "juist0"}, {"clear", "juist0"}, {}} {
+		if calls, err := run(args...); err == nil || strings.Contains(calls, "ufw") {
+			t.Errorf("%q ran (%v):\n%s", args, err, calls)
+		}
+	}
+}
+
+// The polkit rule lets the juist user route resolved's DNS on juist's own
+// devices, and nothing else, and nobody else.
+func TestThePolkitRuleAllowsJuistsDNSAlone(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node to run polkit's JavaScript with")
+	}
+	b, err := os.ReadFile(filepath.Join("polkit", "juist.rules"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness := `
+var rule;
+var polkit = {Result: {YES: "yes", NO: "no", NOT_HANDLED: "not handled"}, addRule: function(f) { rule = f; }};
+` + string(b) + `
+var cases = JSON.parse(process.argv[process.argv.length - 1]);
+var out = cases.map(function(c) {
+	var action = {id: c.action, lookup: function(k) { return c.details[k]; }};
+	return rule(action, {user: c.user});
+});
+console.log(JSON.stringify(out));
+`
+	type check struct {
+		User    string            `json:"user"`
+		Action  string            `json:"action"`
+		Details map[string]string `json:"details"`
+		want    string
+	}
+	checks := []check{
+		{"juist", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist0"}, "yes"},
+		{"juist", "org.freedesktop.resolve1.set-domains", map[string]string{"interface": "juist3"}, "yes"},
+		{"juist", "org.freedesktop.resolve1.revert", map[string]string{"interface": "juist9"}, "yes"},
+		{"juist", "org.freedesktop.resolve1.set-default-route", map[string]string{}, "yes"}, // before systemd 256
+		{"juist", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "eth0"}, "not handled"},
+		{"juist", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist10"}, "not handled"},
+		{"juist", "org.freedesktop.resolve1.set-dnssec", map[string]string{"interface": "juist0"}, "not handled"},
+		{"juist", "org.freedesktop.systemd1.manage-units", map[string]string{}, "not handled"},
+		{"mallory", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist0"}, "not handled"},
+	}
+	in, err := json.Marshal(checks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(node, "-e", harness, string(in)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the rule: %v\n%s", err, out)
+	}
+	var got []string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	for i, c := range checks {
+		if got[i] != c.want {
+			t.Errorf("%s asking %s on %v: %s, want %s", c.User, c.Action, c.Details, got[i], c.want)
+		}
 	}
 }

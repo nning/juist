@@ -217,6 +217,15 @@ func TestNetnsPeerEncoding(t *testing.T) {
 	if len(got.Endpoints) != 1 || got.Endpoints[0] != want {
 		t.Errorf("endpoints = %v, want [%v]", got.Endpoints, want)
 	}
+	if got.Routes != nil {
+		t.Errorf("routes = %v, want none", got.Routes)
+	}
+	exit := viewOf(n, n.addrs...)
+	exit.carries = Internet(true, true, nil)
+	if peers, err := decodePeers(encodePeers([]*netnsNode{exit, n})); err != nil || len(peers) != 2 ||
+		!slices.Equal(peers[0].Routes, exit.carries) || peers[1].Routes != nil {
+		t.Errorf("an exit node's routes did not survive the encoding: %v", err)
+	}
 
 	// An empty peer set is how a removed member is expressed, so it must
 	// decode to no peers rather than to one malformed one.

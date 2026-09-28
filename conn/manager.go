@@ -40,6 +40,15 @@ type Peer struct {
 	// originate, so a wider one would let it impersonate other members.
 	Addrs []netip.Prefix
 
+	// Routes are prefixes outside the overlay the peer carries for this node:
+	// sent to it, and accepted from it as sources. They overlap no peer's
+	// address or routes and no address of this node's; the caller leaves the
+	// overlay out. Subnets are carried the same way, and routed into the
+	// tunnel by the host's own routes too; Routes, the internet an exit
+	// node carries, only as [Egress] says.
+	Routes  []netip.Prefix
+	Subnets []netip.Prefix
+
 	// Endpoints are last-known reachable UDP endpoints for the peer, from
 	// gossiped endpoint records or the persistent cache. Hints only: disco
 	// discovers and verifies the working path itself.
@@ -69,6 +78,21 @@ type Manager interface {
 	// may include the local node itself; that entry must match Self and is
 	// otherwise ignored. After Close it returns an error.
 	SetPeers(peers []Peer) error
+
+	// SetEgress says where traffic bound outside the overlay goes. Only a
+	// node with a device of its own routes it; EgressTunnel and EgressRefused
+	// return an error where the platform cannot.
+	SetEgress(e Egress) error
+
+	// SetServe says what this node forwards for its peers out of the overlay,
+	// masquerading their sources, where the platform can.
+	SetServe(s Serve) error
+
+	// HostRoutes is what the host reaches but by its default routes: the
+	// networks of its interfaces, and its routes in the main table,
+	// tailscaled's and lower juist instances', but for those DHCP or router
+	// advertisements pushed.
+	HostRoutes() []netip.Prefix
 
 	// SetRelays makes the data plane reflect exactly the given relay set: the
 	// fallback path for a pair that cannot be punched, and the channel over

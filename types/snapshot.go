@@ -30,13 +30,13 @@ const (
 	// cannot form.
 	RoleRelayCapable Role = "relay-capable"
 
-	// RoleExitNode marks a node permitted to hold a default route, which makes
-	// a full-tunnel grant explicit and separately revocable from membership.
-	// Nothing consumes it yet; it is validated because the schema freezes.
-	RoleExitNode Role = "exit-node"
+	// RoleExit marks an exit node: one permitted to hold a default route and
+	// carry members' internet traffic, a full-tunnel grant explicit and
+	// separately revocable from membership.
+	RoleExit Role = "exit"
 )
 
-var knownRoles = []Role{RoleAdmin, RoleExitNode, RoleRelayCapable}
+var knownRoles = []Role{RoleAdmin, RoleExit, RoleRelayCapable}
 
 // An AdminKey is one member of the admin quorum: a signing key and the vote
 // weight its signature carries.
@@ -526,13 +526,32 @@ func (n *NodeRecord) ValidateInNetwork(ula netip.Prefix, v4 []netip.Prefix) erro
 			return fmt.Errorf("node %v retiring: %w", n.Identity.ShortString(), err)
 		}
 	}
-	exit := n.HasRole(RoleExitNode)
+	exit := n.HasRole(RoleExit)
 	for _, pfx := range n.Routes {
 		if err := ValidateRoute(pfx, ula, v4, exit); err != nil {
 			return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
 		}
 	}
+	subnets := n.SubnetRoutes()
+	for i := range subnets {
+		for _, q := range subnets[i+1:] {
+			if subnets[i].Overlaps(q) {
+				return fmt.Errorf("node %v: routes %v and %v overlap", n.Identity.ShortString(), subnets[i], q)
+			}
+		}
+	}
 	return nil
+}
+
+// SubnetRoutes is n's routes but the default ones, which its exit role holds.
+func (n *NodeRecord) SubnetRoutes() []netip.Prefix {
+	var out []netip.Prefix
+	for _, p := range n.Routes {
+		if p.Bits() > 0 {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // StaticValidate checks an admin key entry.
@@ -897,6 +916,14 @@ type MemberIndex struct {
 	wg      map[WGKey]Identity
 	x25519  map[X25519Key]Identity
 	mlkem   map[MLKEMKey]Identity
+	routes  []routeClaim
+}
+
+// A routeClaim is a subnet route a member is granted: one member routes each
+// address, or two peers would each be sent some of its traffic.
+type routeClaim struct {
+	prefix netip.Prefix
+	by     Identity
 }
 
 // NewMemberIndex returns an empty index for the network genesis names, sized
@@ -933,7 +960,27 @@ func (ix *MemberIndex) Check(n *NodeRecord) error {
 			return fmt.Errorf("nodes %v and %v both claim overlay v4 address %v", other.ShortString(), id, a)
 		}
 	}
+	for _, p := range n.SubnetRoutes() {
+		if c, ok := ix.overlapping(p); ok {
+			return fmt.Errorf("nodes %v and %v both route %v", c.by.ShortString(), id, p.Masked())
+		}
+	}
 	return nil
+}
+
+// overlapping is a claim overlapping p. Claims are disjoint and kept sorted
+// by their first address, so only the one starting at or before p and the one
+// after it can overlap it.
+func (ix *MemberIndex) overlapping(p netip.Prefix) (routeClaim, bool) {
+	i, _ := slices.BinarySearchFunc(ix.routes, p.Addr(), func(c routeClaim, a netip.Addr) int {
+		return c.prefix.Addr().Compare(a)
+	})
+	for _, j := range []int{i - 1, i} {
+		if j >= 0 && j < len(ix.routes) && ix.routes[j].prefix.Overlaps(p) {
+			return ix.routes[j], true
+		}
+	}
+	return routeClaim{}, false
 }
 
 // Add records what n claims, unchecked.
@@ -944,6 +991,12 @@ func (ix *MemberIndex) Add(n *NodeRecord) {
 	ix.addr6[Addr6(ix.genesis, n.Identity)] = n.Identity
 	for _, a := range n.V4Addrs() {
 		ix.addr4[a] = n.Identity
+	}
+	for _, p := range n.SubnetRoutes() {
+		i, _ := slices.BinarySearchFunc(ix.routes, p.Addr(), func(c routeClaim, a netip.Addr) int {
+			return c.prefix.Addr().Compare(a)
+		})
+		ix.routes = slices.Insert(ix.routes, i, routeClaim{p, n.Identity})
 	}
 }
 

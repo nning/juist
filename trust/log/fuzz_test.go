@@ -180,7 +180,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 		func() (types.AUM, error) { return b.AddNode(third, seal) },
 		func() (types.AUM, error) { return b.RemoveNode(first, seal) },
 		func() (types.AUM, error) {
-			return b.SetNodeRoutes(first, []types.Role{types.RoleExitNode},
+			return b.SetNodeRoutes(first, []types.Role{types.RoleExit},
 				[]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")})
 		},
 		func() (types.AUM, error) {

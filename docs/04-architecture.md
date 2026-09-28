@@ -88,12 +88,12 @@ Record types, all hash-chained, all carrying signer IDs + signatures:
   (HPKE-wrapped).
 - `AddNode` / `RemoveNode` — node identity key, WG pubkey, X25519 + ML-KEM pubkeys,
   derived v6 (validated collision-free), optional explicit v4, roles
-  (`relay-capable`, `admin`, `exit-node`), advertised routes, expiry. **Every**
+  (`relay-capable`, `admin`, `exit`), advertised routes, expiry. **Every**
   record that changes the member set or a member's keys carries an epoch bump whose
   wrap set covers exactly the resulting member set — stricter than "RemoveNode must",
   and what makes a quiet lockout or a leak to a non-member detectable
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
-- `SetNodeRoutes` — grants or withdraws a node's `exit-node` role and the set of
+- `SetNodeRoutes` — grants or withdraws a node's `exit` role and the set of
   prefixes it may forward for. Quorum-signed like any other authority change: a node
   can never self-assert a route, and route state is read only from the log, never from
   anything a peer advertises over the wire. Validation is enforced from M1 even though
@@ -101,7 +101,7 @@ Record types, all hash-chained, all carrying signer IDs + signatures:
   - advertised prefixes **must not overlap** the network's own overlay space (the
     genesis-derived ULA /48, or the overlay v4 ranges of the network's schema) — otherwise a route grant
     could hijack overlay destinations and intercept member-to-member traffic;
-  - `0.0.0.0/0` and `::/0` are legal only in combination with the `exit-node` role,
+  - `0.0.0.0/0` and `::/0` are legal only in combination with the `exit` role,
     which exists to make a full-tunnel grant explicit and separately revocable;
   - overlapping advertisements from several nodes are legal (failover); the reconciler
     picks one, and that choice is local, not consensus.
@@ -184,14 +184,14 @@ plumbing and the privileged helper.
 **Ships before coarse ACLs, unscoped.** Who may *use* an exit node is an
 access-control question (Tailscale expresses it as `autogroup:internet`), and coarse
 ACLs come later, at M12 in [05-roadmap.md](05-roadmap.md). Until then the
-`exit-node` role means "every member may route all their internet traffic through
+`exit` role means "every member may route all their internet traffic through
 this member's uplink" — an all-or-nothing grant the quorum makes per exit node,
 with no way to scope it to some members. Accepted in
 [02-threat-model.md](02-threat-model.md) item 7; M12 scopes it.
 
 What changes, layer by layer:
 
-- **Trust layer.** `exit-node` role plus advertised prefixes, granted only by quorum
+- **Trust layer.** `exit` role plus advertised prefixes, granted only by quorum
   (`SetNodeRoutes`) with the no-overlay-overlap rule above. Withdrawal is an ordinary
   log record, so it converges at gossip speed for reachable clients and at the
   freshness TTL for partitioned ones — not instantly, and no single admin can pull an
@@ -204,17 +204,23 @@ What changes, layer by layer:
   member *without* a grant must keep rejecting them, so this stays a two-sided rule
   like all filtering here: the receiver's filter is the one carrying the security
   weight, since a compromised sender can always ignore its own.
-- **Privileged helper.** New duties on the exit node: enable forwarding, install
-  NAT/masquerade for overlay sources. On the client: default-route capture (or a
-  policy-routing table), LAN and link-local bypass so the local printer keeps working,
-  and DNS handling so queries do not leak to the local resolver while the full tunnel
-  is up. This is the bulk of the work and it is per-platform (Linux nftables + ip
-  rules, FreeBSD pf, Android `VpnService` route/`allowBypass` config).
-- **CLI.** `juist exit-node list / use <node> / off` for members; admin-side
-  `juist route grant|revoke`, which emits a quorum-signed `SetNodeRoutes`.
+- **Privileged helper.** New duties on the exit node: forwarding, set once as
+  root by a packaged script, since juistd writes no sysctl; masquerade for
+  overlay sources, in an nftables table of juistd's own. On the client: a
+  policy-routing table behind the host's routes without their default, so the
+  LAN and link-local stay direct, and a rule keeping juistd's own traffic
+  outside the tunnel; DNS, pointed at the exit node's resolver through
+  systemd-resolved over D-Bus, which a polkit rule allows the `juist` user on
+  juist's own devices. This is the bulk of the work and it is per-platform (Linux nftables +
+  ip rules, FreeBSD pf, Android `VpnService` route/`allowBypass` config).
+- **CLI.** `juist exit`, `use NODE`, `off` for members, `serve` for an
+  exit node's operator; admin-side `juist grant DEVICE exit`, which emits
+  a quorum-signed `SetNodeRoutes` with the role and the default routes, and
+  `juist grant DEVICE PREFIX` for a subnet, which `juist subnet serve` agrees
+  to route.
 
-Excluded at M6: automatic exit-node selection, per-destination split tunneling
-beyond the LAN bypass, and exit-node chaining.
+Excluded at M6: automatic exit node selection, per-destination split tunneling
+beyond the LAN bypass, and exit node chaining.
 
 ## Local security architecture
 

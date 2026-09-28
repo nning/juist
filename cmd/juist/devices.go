@@ -99,7 +99,7 @@ func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Statu
 		if d.Retiring != "" {
 			v4 += " (was " + d.Retiring + ")"
 		}
-		row := []string{name, v4, d.V6, describeRoles(d.Roles)}
+		row := []string{name, v4, d.V6, describeGrant(d.Roles, d.Subnets)}
 		if long {
 			row = append(row, d.Identity.String())
 		}

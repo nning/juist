@@ -108,6 +108,9 @@ type app struct {
 	dir string
 	now func() time.Time
 
+	// system reads the host's own files, as resolv.conf; tests replace it.
+	system func(path string) ([]byte, error)
+
 	// capture, when set, receives a command's spec and flags at its parse,
 	// which then stops the command: shell completion.
 	capture func(spec, *flag.FlagSet)
@@ -116,6 +119,7 @@ type app struct {
 func newApp(in io.Reader, out, errOut io.Writer) *app {
 	a := &app{ctx: context.Background(), in: in, out: out, errOut: errOut, inviteAddrs: hostAddrs, now: time.Now, drawV4: drawV4Prefix,
 		host: systemLayout(), asRoot: func() bool { return os.Geteuid() == 0 }, admissionHold: admissionHold,
+		system:  os.ReadFile,
 		helpers: &rendezvous.Helpers{STUN: rendezvous.DefaultSTUN}}
 	a.interactive = isTerminal(in)
 	a.color = isTerminal(out) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
@@ -322,6 +326,7 @@ var shorts = map[string]byte{
 	"port":        'p',
 	"quorum":      'q',
 	"relay":       'r',
+	"stop":        'S',
 	"voucher":     'V',
 	"votes":       'v',
 	"yes":         'y',
