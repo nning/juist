@@ -120,7 +120,7 @@ func TestAChangedCopyIsRefused(t *testing.T) {
 		"a later expiry": func(c *Change) { c.Expires++ },
 		"fewer devices":  func(c *Change) { c.About = nil },
 		"another parent": func(c *Change) { c.Prev = types.Hash{3} },
-		"another body":   func(c *Change) { c.Body = append([]byte{0}, c.Body[1:]...) },
+		"another body":   func(c *Change) { c.Body = append([]byte{c.Body[0] ^ 0xff}, c.Body[1:]...) },
 	} {
 		if _, err := Decode(mutated(change, false)); err == nil {
 			t.Errorf("%s, not signed again: decoded", name)

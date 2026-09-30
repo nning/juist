@@ -4,7 +4,8 @@
 // step by gossip. There is no coordination server to configure.
 //
 // It creates a real TUN device and programs the host's routes, which needs
-// /dev/net/tun and CAP_NET_ADMIN; pass --tun "" to run without one. It holds no
+// CAP_NET_ADMIN on Linux and root on FreeBSD, where it keeps root for a
+// helper alone; pass --tun "" to run without one. It holds no
 // admin signing keys and cannot authorize a membership change, so an attacker
 // who owns this process owns one member rather than the network.
 package main
@@ -37,6 +38,9 @@ const synopsis = "usage: juistd [options]"
 var errHelp = errors.New("help")
 
 func main() {
+	if code, ok := split(os.Args[1:]); ok {
+		os.Exit(code)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	err := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()
@@ -59,6 +63,22 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		logf := func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) }
 		opts.service.Logf, opts.service.Mesh.Logf = logf, logf
 	}
+	var helperGone <-chan struct{}
+	if opts.service.Mesh.Plumber, helperGone, err = inheritedPlumber(); err != nil {
+		return err
+	}
+	if helperGone != nil {
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(ctx)
+		defer cancel(nil)
+		go func() {
+			select {
+			case <-helperGone:
+				cancel(errors.New("the helper is gone, and with it the device's plumbing"))
+			case <-ctx.Done():
+			}
+		}()
+	}
 	s, err := daemon.NewService(opts.service)
 	if err != nil {
 		return err
@@ -70,7 +90,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	report(out, errOut, s.Status(), opts.service.Mesh.TunName)
 	<-ctx.Done()
-	return ctx.Err()
+	return context.Cause(ctx)
 }
 
 type options struct {
@@ -89,7 +109,7 @@ func parse(args []string, out io.Writer) (options, error) {
 	port := fs.Uint("port", daemon.DefaultListenPort, "UDP port for the data plane")
 	gossipPort := fs.Uint("gossip-port", daemon.DefaultGossipPort, "TCP port for log sync")
 	relayPort := fs.Uint("relay-port", daemon.DefaultRelayPort, "TCP and UDP port for relaying, where the log grants it")
-	tun := fs.String("tun", "juist0", `TUN device to create, "" for none; needs CAP_NET_ADMIN`)
+	tun := fs.String("tun", "juist0", `TUN device to create, "" for none; needs `+defaults.TunPrivilege)
 	noRelay := fs.Bool("no-relay", false, "do not relay for other members, whatever the log grants")
 	noDiscovery := fs.Bool("no-discovery", false, "do not announce or look for members on the LAN")
 	noDHT := fs.Bool("no-dht", false, "do not use the public DHT, for members or invites")
@@ -277,8 +297,7 @@ func report(out, errOut io.Writer, st ipc.Status, tun string) {
 	if st.StartError != "" {
 		warn("tunnels cannot start yet, retrying: %s", st.StartError)
 		if tun != "" && strings.Contains(st.StartError, iofs.ErrPermission.Error()) {
-			hint("creating %q needs CAP_NET_ADMIN: setcap cap_net_admin+ep on this binary, the packaged "+
-				"service, or --tun \"\"", tun)
+			hint(permHint, tun)
 		}
 	}
 }

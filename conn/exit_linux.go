@@ -33,10 +33,25 @@ func exitTable(inst int) int { return juistRouteTable + 0x100 + inst }
 // table comes before the host's routes, so that routes a network pushes, as
 // DHCP option 121 does, cannot take the internet out of the tunnel.
 const (
+	exitRuleAnswers  = 60
 	exitRuleOwn      = 80
 	exitRuleExit     = 100
 	exitRuleMaxShift = 9
 )
+
+// answerMark marks, in conntrack, a connection that came in by another
+// device than juist's, and each packet answering it, which the rule at
+// exitRuleAnswers sends by the host's routes, the way it came. Apart from
+// Tailscale's bits.
+const answerMark = 0x20000000
+
+// answerRule is instance inst's rule sending answers by the host's routes.
+func answerRule(family, inst int) netlink.Rule {
+	ru := *netlink.NewRule()
+	ru.Family, ru.Priority, ru.Table = family, juistRulePrefBase+exitRuleAnswers+inst, unix.RT_TABLE_MAIN
+	ru.Mark, ru.Mask = answerMark, answerMark
+	return ru
+}
 
 // exitRule leaves bypass-marked packets, tailscaled's and magicsock's, to
 // later rules: without a router of this instance's, as while no mesh runs,
@@ -82,7 +97,8 @@ func unmarkedExitRule(ru, want netlink.Rule) bool {
 
 // isExitRulePref reports whether pref is one of instance inst's egress rules.
 func isExitRulePref(pref uint32, inst int) bool {
-	return pref == uint32(juistRulePrefBase+exitRuleOwn+inst) || pref == uint32(juistRulePrefBase+exitRuleExit+inst)
+	return pref == uint32(juistRulePrefBase+exitRuleOwn+inst) || pref == uint32(juistRulePrefBase+exitRuleExit+inst) ||
+		pref == uint32(juistRulePrefBase+exitRuleAnswers+inst)
 }
 
 // An exitRoute is one route of the exit table.
@@ -113,19 +129,6 @@ func exitRoutes(v6 bool) []exitRoute {
 		out = append(out, exitRoute{p, unix.RTN_THROW, 0})
 	}
 	return out
-}
-
-// offTunnel is where traffic may go outside the tunnel while an exit node is
-// used: what no exit node carries. A LAN in public space is not among it: a
-// network could claim any public prefix for itself, by DHCP or router
-// advertisement, and so take it out of the tunnel.
-func offTunnel() []netip.Prefix {
-	var b netipx.IPSetBuilder
-	for _, p := range localSpace {
-		b.AddPrefix(p)
-	}
-	s, _ := b.IPSet()
-	return s.Prefixes()
 }
 
 func (r *linuxRouter) setEgress(e Egress, t tunnelled) error {
@@ -314,12 +317,28 @@ func (r *linuxRouter) addExitRulesLocked() error {
 			}
 		}
 		errs = append(errs, dropUnmarkedExitRules(fam, r.inst))
+		errs = append(errs, setAnswerRule(fam, r.inst, !r.tunnelled.answers))
 		ru := exitRule(fam, r.inst)
 		if err := netlink.RuleAdd(&ru); err != nil && !errors.Is(err, syscall.EEXIST) {
 			errs = append(errs, fmt.Errorf("adding %v: %w", ru, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// setAnswerRule adds instance inst's answer rule in fam, or deletes it.
+func setAnswerRule(fam, inst int, on bool) error {
+	ru := answerRule(fam, inst)
+	if on {
+		if err := netlink.RuleAdd(&ru); err != nil && !errors.Is(err, syscall.EEXIST) {
+			return fmt.Errorf("adding %v: %w", ru, err)
+		}
+		return nil
+	}
+	if err := netlink.RuleDel(&ru); err != nil && !errors.Is(err, syscall.ENOENT) && !errors.Is(err, syscall.EAFNOSUPPORT) {
+		return fmt.Errorf("deleting %v: %w", ru, err)
+	}
+	return nil
 }
 
 func (r *linuxRouter) delExitRulesLocked() error {
@@ -336,12 +355,15 @@ func (r *linuxRouter) delExitRulesLocked() error {
 		if err := netlink.RuleDel(&ru); err != nil && !errors.Is(err, syscall.ENOENT) {
 			errs = append(errs, fmt.Errorf("deleting %v: %w", ru, err))
 		}
+		errs = append(errs, setAnswerRule(fam, r.inst, false))
 	}
 	return errors.Join(errs...)
 }
 
 // lans is what [attached] finds, and the routes in main that need no gateway,
 // as the /64 a router advertises beside a /128 address from DHCPv6.
+func (r *linuxRouter) answersThrough() string { return "" }
+
 func (r *linuxRouter) lans() ([]netip.Prefix, []netip.Addr) {
 	nets, hosts := attached(r.link.Attrs().Name)
 	for _, fam := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
@@ -497,6 +519,20 @@ func setGuard(inst int, on bool, dev string, through tunnelled, refuse bool, uid
 	if on {
 		for _, fam := range families {
 			t := c.AddTable(guardTable(fam, inst))
+			if !through.answers {
+				// Marked where a connection comes in, before routing, and
+				// on its answers, forwarded ones there and the host's own
+				// in a route chain, which routes them again.
+				accept := nftables.ChainPolicyAccept
+				pre := c.AddChain(&nftables.Chain{Table: t, Name: "answers-in", Type: nftables.ChainTypeFilter,
+					Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityMangle, Policy: &accept})
+				c.AddRule(&nftables.Rule{Table: t, Chain: pre, Exprs: markIncoming(dev)})
+				c.AddRule(&nftables.Rule{Table: t, Chain: pre, Exprs: clearAnswerMark()})
+				c.AddRule(&nftables.Rule{Table: t, Chain: pre, Exprs: markAnswer()})
+				out := c.AddChain(&nftables.Chain{Table: t, Name: "answers-out", Type: nftables.ChainTypeRoute,
+					Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityMangle, Policy: &accept})
+				c.AddRule(&nftables.Rule{Table: t, Chain: out, Exprs: markAnswer()})
+			}
 			for _, hook := range []*nftables.ChainHook{nftables.ChainHookOutput, nftables.ChainHookForward} {
 				accept := nftables.ChainPolicyAccept
 				ch := c.AddChain(&nftables.Chain{Table: t, Name: map[bool]string{true: "output", false: "forward"}[hook == nftables.ChainHookOutput],
@@ -531,6 +567,9 @@ func guardRules(fam nftables.TableFamily, output bool, dev string, through tunne
 	} else if dev != "" {
 		rules = append(rules, append(oif(dev), accept))
 	}
+	if !through.answers {
+		rules = append(rules, append(isAnswer(), accept))
+	}
 	rules = append(rules, append(oif("lo"), accept))
 	rules = append(rules, [][]expr.Any{
 		{&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
@@ -560,6 +599,77 @@ func guardRules(fam nftables.TableFamily, output bool, dev string, through tunne
 		rules = append(rules, append(addrIn(p, false), accept))
 	}
 	return append(rules, []expr.Any{&expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop}})
+}
+
+// markIncoming marks a connection coming in by another device, from its
+// first packet or, for one older than the guard, its next: "ct direction
+// original ct mark & answerMark == 0 iifname != { juist*, dev, lo } fib
+// daddr . iif type local meta mark set meta mark | answerMark fib saddr .
+// mark . iif oif != 0 ct mark set ct mark | answerMark". It must be sent to
+// an address of that device, and the host's routes, as answers take them,
+// must lead back by it: what a LAN sends to the overlay's addresses, or what
+// comes in by a device whose routes are not the host's, as another VPN's, is
+// no connection to answer that way.
+func markIncoming(dev string) []expr.Any {
+	e := []expr.Any{
+		&expr.Ct{Register: 1, Key: expr.CtKeyDIRECTION},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0}}, // IP_CT_DIR_ORIGINAL
+		&expr.Ct{Register: 1, Key: expr.CtKeyMARK},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(answerMark), Xor: u32(0)},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: u32(0)},
+		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte("juist")}, // a prefix: every instance's
+		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: ifname("lo")},
+	}
+	if dev != "" {
+		e = append(e, &expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: ifname(dev)})
+	}
+	return append(e,
+		&expr.Fib{Register: 1, FlagDADDR: true, FlagIIF: true, ResultADDRTYPE: true},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: u32(unix.RTN_LOCAL)},
+		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(^uint32(answerMark)), Xor: u32(answerMark)},
+		&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1},
+		&expr.Fib{Register: 1, FlagSADDR: true, FlagMARK: true, FlagIIF: true, ResultOIF: true},
+		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: u32(0)},
+		&expr.Ct{Register: 1, Key: expr.CtKeyMARK},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(^uint32(answerMark)), Xor: u32(answerMark)},
+		&expr.Ct{Register: 1, Key: expr.CtKeyMARK, SourceRegister: true},
+	)
+}
+
+// clearAnswerMark takes the mark [markIncoming] looked the way back up with
+// off the packet that came in: "ct direction original meta mark set meta
+// mark & ~answerMark".
+func clearAnswerMark() []expr.Any {
+	return []expr.Any{
+		&expr.Ct{Register: 1, Key: expr.CtKeyDIRECTION},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0}},
+		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(^uint32(answerMark)), Xor: u32(0)},
+		&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1},
+	}
+}
+
+// isAnswer is "ct direction reply ct mark & answerMark != 0".
+func isAnswer() []expr.Any {
+	return []expr.Any{
+		&expr.Ct{Register: 1, Key: expr.CtKeyDIRECTION},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}}, // IP_CT_DIR_REPLY
+		&expr.Ct{Register: 1, Key: expr.CtKeyMARK},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(answerMark), Xor: u32(0)},
+		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: u32(0)},
+	}
+}
+
+// markAnswer is [isAnswer] "meta mark set meta mark | answerMark".
+func markAnswer() []expr.Any {
+	return append(isAnswer(),
+		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(^uint32(answerMark)), Xor: u32(answerMark)},
+		&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
 }
 
 // dhcpRule is "udp sport client dport server", of DHCP in fam.
@@ -658,6 +768,19 @@ func (r *linuxRouter) setServeLocked(s Serve) error {
 					c.AddRule(&nftables.Rule{Table: t, Chain: nat, Exprs: masquerade(src, dev)})
 				}
 			}
+			if s.DNS == 0 {
+				continue
+			}
+			dnat := c.AddChain(&nftables.Chain{Table: t, Name: "prerouting", Type: nftables.ChainTypeNAT,
+				Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityNATDest, Policy: &accept})
+			for a := range r.addrs {
+				if a.Addr().Is4() != (fam == nftables.TableFamilyIPv4) {
+					continue
+				}
+				for _, proto := range []byte{unix.IPPROTO_UDP, unix.IPPROTO_TCP} {
+					c.AddRule(&nftables.Rule{Table: t, Chain: dnat, Exprs: dnsRedirect(dev, a.Addr(), proto, s.DNS)})
+				}
+			}
 		}
 	}
 	if err := c.Flush(); err != nil {
@@ -720,6 +843,22 @@ func forwardingOff(read func(string) ([]byte, error), routes []netip.Prefix) err
 	return nil
 }
 
+// dnsRedirect is "iifname dev daddr addr l4proto proto th dport 53 redirect
+// to :port": peers' DNS to this node's address, and to no other server.
+func dnsRedirect(dev []byte, addr netip.Addr, proto byte, port uint16) []expr.Any {
+	return slices.Concat(
+		[]expr.Any{&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: dev}},
+		addrIn(netip.PrefixFrom(addr, addr.BitLen()), false),
+		[]expr.Any{
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{proto}},
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0, 53}},
+			&expr.Immediate{Register: 1, Data: []byte{byte(port >> 8), byte(port)}},
+			&expr.Redir{RegisterProtoMin: 1},
+		})
+}
+
 // masquerade is "saddr src oifname != dev masquerade".
 func masquerade(src netip.Prefix, dev []byte) []expr.Any {
 	return slices.Concat(addrIn(src, true), []expr.Any{
@@ -734,7 +873,7 @@ func masquerade(src netip.Prefix, dev []byte) []expr.Any {
 // and the guard, which need no device of the instance's. A router of the
 // instance's takes them over. Where a lower instance routes the internet
 // already, it is that one's, and ErrEgressTaken says so.
-func RefuseEgress(inst int) error {
+func RefuseEgress(inst int, isolate bool) error {
 	var errs []error
 	uid := os.Getuid()
 	rules, err := netlink.RuleList(netlink.FAMILY_V4)
@@ -744,7 +883,7 @@ func RefuseEgress(inst int) error {
 	if otherEgress(rules, inst, true) >= 0 {
 		return errors.Join(ErrEgressTaken, ClearEgress(inst))
 	}
-	if err := setGuard(inst, true, "", tunnelled{}, true, uint32(uid)); err != nil {
+	if err := setGuard(inst, true, "", tunnelled{answers: isolate}, true, uint32(uid)); err != nil {
 		errs = append(errs, err)
 	}
 	for _, fam := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
@@ -767,6 +906,9 @@ func RefuseEgress(inst int) error {
 			}
 		}
 		errs = append(errs, dropUnmarkedExitRules(fam, inst))
+		if err := setAnswerRule(fam, inst, !isolate); err != nil && !(v6 && errors.Is(err, syscall.EAFNOSUPPORT)) {
+			errs = append(errs, err)
+		}
 		ru := exitRule(fam, inst)
 		if err := netlink.RuleAdd(&ru); err != nil && !errors.Is(err, syscall.EEXIST) && !(v6 && errors.Is(err, syscall.EAFNOSUPPORT)) {
 			errs = append(errs, fmt.Errorf("adding %v: %w", ru, err))
@@ -799,7 +941,8 @@ func ClearEgress(inst int) error {
 		legacy := *netlink.NewRule()
 		legacy.Family, legacy.Priority = fam, juistRulePrefBase+90+inst
 		legacy.Table, legacy.SuppressPrefixlen = unix.RT_TABLE_MAIN, 0
-		for _, ru := range []*netlink.Rule{&ru, &unmarked, &legacy} {
+		answers := answerRule(fam, inst)
+		for _, ru := range []*netlink.Rule{&ru, &unmarked, &legacy, &answers} {
 			if err := netlink.RuleDel(ru); err != nil && !errors.Is(err, syscall.ENOENT) &&
 				!errors.Is(err, syscall.EAFNOSUPPORT) {
 				errs = append(errs, err)

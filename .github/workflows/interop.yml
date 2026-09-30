@@ -1,0 +1,46 @@
+name: interop
+
+# The Linux/FreeBSD lab (make interop): its own workflow, so that its minutes
+# are counted, and cancelled, apart from CI's.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Only the newest commit's lab is worth its minutes.
+concurrency:
+  group: interop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.26.8'
+
+jobs:
+  interop:
+    name: Linux and FreeBSD in qemu
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      # The runner has KVM, but only root may open it until udev says so.
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils xz-utils
+      # The images, fetched once and checked against interop/vm_test.go's sums.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/juist-interop
+          key: interop-images-${{ hashFiles('interop/vm_test.go') }}
+      - run: make interop
+      - if: failure() || cancelled()
+        run: tail -c 20000 build/interop/*.console

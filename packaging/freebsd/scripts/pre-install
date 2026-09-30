@@ -1,0 +1,9 @@
+# The juist user, a system one below 1000 for juistd's daemon; one that
+# exists is kept. 829 is free in the ports tree's UIDs and GIDs.
+id=829
+while pw usershow -u $id >/dev/null 2>&1 || pw groupshow -g $id >/dev/null 2>&1; do
+	id=$((id - 1))
+done
+pw groupshow juist >/dev/null 2>&1 || pw groupadd juist -g $id
+pw usershow juist >/dev/null 2>&1 ||
+	pw useradd juist -u $id -g juist -d /var/db/juist -s /usr/sbin/nologin -c "juist daemon"

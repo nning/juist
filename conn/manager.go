@@ -79,10 +79,16 @@ type Manager interface {
 	// otherwise ignored. After Close it returns an error.
 	SetPeers(peers []Peer) error
 
-	// SetEgress says where traffic bound outside the overlay goes. Only a
-	// node with a device of its own routes it; EgressTunnel and EgressRefused
-	// return an error where the platform cannot.
-	SetEgress(e Egress) error
+	// SetEgress says where traffic bound outside the overlay goes, and with
+	// isolate, answers to connections that came in by another device too.
+	// Only a node with a device of its own routes it; EgressTunnel and
+	// EgressRefused return an error where the platform cannot.
+	SetEgress(e Egress, isolate bool) error
+
+	// AnswersThrough says why answers to connections that came in by another
+	// device would go through the exit node though not isolated, as where
+	// the host's own firewall decides; "" where they leave the way they came.
+	AnswersThrough() string
 
 	// SetServe says what this node forwards for its peers out of the overlay,
 	// masquerading their sources, where the platform can.

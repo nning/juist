@@ -112,7 +112,7 @@ func TestRepliesArePrintableText(t *testing.T) {
 	}
 }
 
-// An exit request sets one thing: a node, off, or serving.
+// An exit request sets one thing: a node, isolated or not, off, or serving.
 func TestAnExitRequestSetsOneThing(t *testing.T) {
 	on := true
 	id := types.Identity{1}
@@ -122,6 +122,8 @@ func TestAnExitRequestSetsOneThing(t *testing.T) {
 	}{
 		{Request{ExitNode: id}, true}, {Request{ExitOff: true}, true}, {Request{Serve: &on}, true},
 		{Request{}, false}, {Request{ExitNode: id, ExitOff: true}, false}, {Request{ExitOff: true, Serve: &on}, false},
+		{Request{ExitNode: id, ExitIsolate: true}, true}, {Request{ExitOff: true, ExitIsolate: true}, false},
+		{Request{ExitIsolate: true}, false},
 	} {
 		tc.req.Command = CmdExit
 		if err := tc.req.validate(); (err == nil) != tc.want {

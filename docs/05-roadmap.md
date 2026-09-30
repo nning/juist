@@ -492,8 +492,16 @@ What was built:
    tailscaled's among it); routes a network pushes, as DHCP option 121 does,
    therefore take nothing out of the tunnel. A LAN in public space goes
    through the exit node too, since a network could claim any public prefix
-   for itself, and so do answers to connections from the internet to the
-   device's own address. An nftables guard (`juist0guard`) drops whatever
+   for itself. Answers to connections that came in by another device leave
+   by it, so that a server stays reachable at its own address: conntrack
+   marks such a connection where it comes in, and a rule at 5160 sends its
+   answers by the host's routes, past the guard; on FreeBSD pf keeps state
+   for them, and sends them back to the gateway they came from, where
+   juist's ruleset is pf's, and `use` and the status say where the host's
+   own passes what comes in instead. `use --isolate` sends them through the
+   exit node too, and stops where that would end the ssh session it runs in,
+   found by `SSH_CONNECTION`, an ancestor's under sudo; `--force` goes on.
+   An nftables guard (`juist0guard`) drops whatever
    would still leave by another device to anywhere else, such as a socket
    bound to the LAN's device, or traffic whose routes someone flushed.
    Refused, the internet still goes into the tunnel, where the guard rejects
@@ -626,7 +634,10 @@ What was built:
    queries in flight and connections per source. It asks the host's own
    resolvers, resolved's stub itself where the host uses it, so that the
    exit host's own DNS routing, DNS-over-TLS and DNSSEC apply, passing over
-   one that fails the query; its announcement names the port. No capability is added: the port is
+   one that fails the query. Members ask it on port 53 of those
+   addresses, which the data plane redirects to it, and no other server's
+   53, as a resolver that takes no port, FreeBSD's, needs; the
+   announcement names 53. No capability is added: the forwarder's port is
    no privileged one.
 2. **The client points systemd-resolved at it,** over D-Bus, on `juist0`:
    the exit node's overlay addresses and port as its servers, `~.` as its
@@ -640,7 +651,9 @@ What was built:
    names the device, from systemd 256 on, and on any link before, which
    juistd's CAP_NET_ADMIN could redirect DNS on by other means anyway. DNS counts as through the tunnel
    only where `/etc/resolv.conf` asks resolved's stub; else the host's
-   programs ask their resolvers around resolved, and the CLI says so.
+   programs ask their resolvers around resolved, and the CLI says so, with
+   the stub as the hint where the file is resolved's list of every link's
+   servers, as on Debian's cloud images.
 3. **Without resolved,** or where it refuses, nothing is configured, and
    `juist exit use` and `juist status` name the resolvers left outside the
    tunnel and why; `juist status` says "DNS too" where it goes through.
@@ -663,13 +676,117 @@ What was built:
 
 ## M7 — FreeBSD
 
-Next. The FreeBSD port: M3a's real device, router and privilege story on FreeBSD,
+**Done** on 2026-09-30: M7a, M7b and M7c are built and validated as their
+sections say, and reviewed for security (M7 review 5). The first exit
+criterion is met but for CI: the lab passes locally, and its workflow waits
+for CI's budget to run once. Untried: a FreeBSD host outside qemu using an
+exit node.
+
+The FreeBSD port: M3a's real device, router and privilege story on FreeBSD,
 M6's forwarding, NAT and default-route capture with pf, and a port that
 installs it. Two things M5 left to it: keeping instances apart, where
 Tailscale's router routes in the host's one table (a FIB per instance, or the
 IPv4 yield of [13-multi-network-notes.md](13-multi-network-notes.md) read
 from that table), and sending from the old address during a renumbering,
-which Linux's router pins and FreeBSD leaves to the OS.
+which Linux's router pins and FreeBSD leaves to the OS. Split in three, each
+shipped on its own, against FreeBSD 14 in qemu:
+
+- **M7a — device, router and privileges.** FreeBSD has no `CAP_NET_ADMIN`, and
+  Tailscale's BSD router runs `ifconfig` and `route`, which need root. So
+  juistd splits: started as root, it keeps a helper as root that creates the
+  TUN device, sets its addresses and routes and destroys it, for juist's own
+  devices alone, and runs the daemon as the `juist` user, which receives the
+  device's descriptor and asks the helper for the rest over a socket pair.
+  wireguard-go's FreeBSD device sets its MTU itself, which needs root, so
+  juist opens its own on the descriptor. Instances share the host's one
+  table: the IPv4 yield reads it, and a route names its source address, as
+  Linux's pins it. An rc.d script, `/var/db/juist`, `/var/run/juist`, and the
+  CLI's instance launcher through `service` and `sysrc`.
+  - **Built:** `internal/plumber`, the helper and its client: a CBOR request
+    per frame over a socket pair, the device's descriptor passed alongside,
+    and nothing done to a device the helper did not make or whose name is not
+    `juistN`, nor any default route. juistd started as root on FreeBSD keeps
+    the helper and runs itself as `juist`, and stops once a pipe from the
+    helper reads EOF: a parent-death signal does not survive the change of
+    user there. The daemon's device reads and writes the descriptor; its
+    router hands the helper the addresses and the routes, a route's source
+    pinned by naming it as the gateway, since `-ifa` beside `-iface` is
+    ignored. `InstanceHoldings` reads the instances' devices and the routes
+    into them. `packaging/freebsd/juistd`, the rc.d script, runs the default
+    and `juistd_instances`, and the CLI starts and stops instances through
+    `sysrc` and `service`, and says so in its hints. `/var/db/juist` and
+    `/var/run/juist`. `make test-freebsd` runs every test on a FreeBSD host.
+  - **Validated:** `make test-freebsd` on FreeBSD 14.5 in qemu, as root:
+    every package passes, `TestAPlumbedDeviceCarriesTheOverlay`,
+    `TestRootSplitsOffTheDaemon` and `TestTheDaemonGoesWithItsHelper` among
+    them; and [Check a FreeBSD node](12-validating.md#check-a-freebsd-node)
+    by hand between two such VMs, both families through the tunnel. Exit
+    nodes and subnet routers are refused on FreeBSD until M7b.
+- **M7b — exit nodes, subnet routers and DNS.** Tailscale keeps its own
+  traffic off the tunnel on FreeBSD by nothing. The internet goes into the
+  device by two half routes; pf, in an anchor of juist's, sends juistd's own
+  traffic (`user juist`) back to the host's gateway with its source
+  translated, guards what else would leave, and does the exit node's NAT and
+  forwarding filter. A FIB of the daemon's own was the other way: FIBs are
+  not given back at runtime, and it would mirror every route of the host's.
+  DNS through the exit node goes through resolvconf(8), on port 53, which an
+  exit node redirects to its forwarder. FreeBSD's dhclient installs pushed
+  routes as plain static ones, so `HostRoutes` counts them as the host's
+  own, as Debian's dhclient has Linux do.
+  - **Built:** serving and using. The helper has the host forward,
+    recording how it found it, and loads pf, on with juist's anchors alone
+    where it was off, and says what `/etc/pf.conf` lacks where the host's
+    own ruleset calls none. A serving device's anchor masquerades the
+    overlay onto each of the host's devices, redirects DNS on 53 to the
+    forwarder, takes overlay sources and the forwarder by the tunnel alone,
+    and keeps state for what peers send, so that nothing from the internet
+    reaches into the overlay unasked. Using an exit node routes the
+    internet but local space into the device; its anchor sends juistd's
+    own traffic, by the uid the helper started the daemon as, back to the
+    host's gateway, rejects a family no exit node carries, and drops what
+    else would leave by another device, without state, so that answers to
+    what came in still go out. Refusing outlasts the device; going direct,
+    or stopping serving, puts pf, forwarding and the routes back as found.
+    The host's DNS goes to the exit node by resolvconf(8), exclusively, and
+    back. `juist exit` and `juist subnet` work on FreeBSD without
+    `exit-node.sh`.
+  - **Validated:** `make test-freebsd` on FreeBSD 14.5 in qemu, the
+    helper's serving, egress and DNS tests among it; and by hand between two
+    such VMs (Check a FreeBSD node): a subnet behind a router in a VNET
+    jail, a FreeBSD exit node's internet and DNS from a FreeBSD client, no
+    packet leaking on the client's uplink, a bound socket included,
+    refusal with the exit node gone, and everything back after `exit off`.
+    A Linux client through a FreeBSD exit node, and the other way, wait for
+    M7c's lab.
+- **M7c — the port, reproducible builds and the interop matrix.** A port
+  that installs the rc.d script and the user; `make repro` for FreeBSD's
+  artifacts too, from two builders; and a qemu lab of Linux and FreeBSD
+  nodes that `make` runs without root, which CI runs once its budget allows.
+  - **Built:** `make pkg-freebsd`, a package that
+    `packaging/freebsd/mkpkg` writes rather than pkg-create(8), so that any
+    system builds it, to the same bytes from one commit: juist, juistd, the
+    rc.d script, completions, and man pages in FreeBSD's words, which the
+    `freebsdman` tag renders elsewhere. Installing creates the juist user,
+    uid 829, free in the ports tree's `UIDs`, or the next free below it.
+    Removing stops every juistd and runs `service juistd clear`, new, which
+    takes what a juistd left, a refusing guard among it; an upgrade leaves
+    juistd running, since pkg kills what its scripts start. `gmake install`
+    on FreeBSD builds and adds it. `make repro-freebsd` builds the binaries
+    for both systems and the package here and on a FreeBSD host, and
+    compares them. A port in the ports tree needs a release to fetch, and
+    comes with M11's. `make interop` is the lab, `interop/`: a Debian 12
+    and a FreeBSD 14.5 VM in qemu without root, their packages installed,
+    one network across them, each the other's exit node, subnet router and
+    DNS, and both packages removed cleanly; CI's `interop` workflow runs it
+    with KVM. An exit node carries nothing to networks attached to it, so
+    the lab's internet is a hop behind each.
+  - **Validated:** `make repro-freebsd` between Debian 12 and FreeBSD 14.5
+    in qemu, the binaries for both systems and the package the same bytes;
+    the package installed, upgraded and removed there by hand, serving and
+    using an exit node (Check a FreeBSD node); `make interop` passing under
+    TCG here. The lab found Debian's cloud image asking every link's
+    resolvers, which the CLI now names, with the stub as the hint.
+  - **Open:** the lab's first run in CI, which waits for CI's budget.
 
 Reproducible builds, for Linux and FreeBSD alike. Android and the rest of the
 release work — distro packages, signed releases — are M11, after v1.0.
@@ -801,10 +918,26 @@ juistd instance, so that one network's compromised daemon on a host no longer
 holds the others' device keys (M5's residual weakness 9 in
 [02-threat-model.md](02-threat-model.md)).
 
+Also before the audit, checkpoints put to use. Only `juist log checkpoint`
+writes one and nothing calls `Authority.Compact`, so every log grows for good,
+and past `MaxHashesPerFrame` records two nodes stop converging
+([08-trust-layer-notes.md](08-trust-layer-notes.md), "The size constraint
+that outlives the freeze"). Open, to decide in this order:
+
+- **Proposing.** What prompts a checkpoint — a record count, a log size, an
+  epoch bump — and which device drafts it, since it takes a quorum like any
+  change and the admins must be asked to sign.
+- **Compacting.** When a device compacts to a checkpoint it holds, and
+  whether it keeps any history below the anchor for peers still behind it.
+- **Joining.** Whether a device joining is handed the anchor instead of the
+  whole chain.
+
 v1 is Linux and FreeBSD; Android and the release work follow in M11.
 
-- **Exit criterion:** audit complete, all high/medium findings fixed and regression-
-  tested; v1.0 tag.
+- **Exit criteria:** (1) audit complete, all high/medium findings fixed and
+  regression-tested; (2) a network that has authored more than
+  `MaxHashesPerFrame` records still converges on a new change, with no admin
+  having asked for a checkpoint; v1.0 tag.
 
 ## M11 — Android & packaging *(post-v1)*
 

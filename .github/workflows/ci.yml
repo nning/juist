@@ -131,7 +131,7 @@ jobs:
       - run: make tcb
 
   packages:
-    name: packages (deb and rpm)
+    name: packages (deb, rpm and FreeBSD)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Fedora, for rpmbuild with the systemd and sysusers macros the spec uses;
@@ -147,6 +147,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - run: make rpm deb
+      - run: make rpm deb pkg-freebsd
       - run: rpm -qlp build/rpm/RPMS/*/juist-*.rpm
       - run: dpkg-deb -c build/deb/juist_*.deb
+      - run: tar -tvzf build/freebsd/juist-*.pkg

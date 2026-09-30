@@ -1,0 +1,126 @@
+#!/bin/sh
+
+# PROVIDE: juistd
+# REQUIRE: NETWORKING devd
+# KEYWORD: shutdown
+#
+# juistd_enable (bool):   YES runs the default network's juistd, on juist0.
+# juistd_instances (str): the other networks' instances, juist1 to juist9.
+# juistd_args (str):      more options for juistd, for each of them.
+#
+# juistd starts as root, keeps a helper as root that plumbs its devices, and
+# runs the daemon as the juist user. "service juistd start juist1" starts
+# one instance. "service juistd clear", with none running, removes what one
+# that did not stop cleanly, or left refusing the internet, holds of the host.
+
+. /etc/rc.subr
+
+name=juistd
+rcvar=juistd_enable
+desc="juist mesh VPN daemon"
+
+load_rc_config $name
+: ${juistd_enable:="NO"}
+: ${juistd_instances:=""}
+: ${juistd_args:=""}
+: ${juistd_bin:=/usr/local/sbin/juistd}
+command=/usr/sbin/daemon
+start_precmd=juistd_precmd
+extra_commands=clear
+clear_cmd=juistd_clear
+
+inst=$2
+case $inst in
+"")
+	pidfile=/var/run/juistd.pid
+	logfile=/var/log/juistd.log
+	home=/var/db/juist
+	args="--home $home --socket /var/run/juist/juistd.sock --tun juist0"
+	;;
+juist[1-9])
+	name=juistd_$inst
+	rcvar=juistd_enable
+	juistd_enable=YES
+	pidfile=/var/run/juistd.$inst.pid
+	logfile=/var/log/juistd.$inst.log
+	home=/var/db/juist/$inst
+	args="--instance $inst --home $home --socket /var/run/juist/$inst.sock"
+	;;
+*)
+	echo "juistd: no instance $inst: juist1 to juist9" >&2
+	exit 64
+	;;
+esac
+case $1 in
+*clear) rcvar= ;; # for every juistd, enabled or not
+esac
+procname=$command
+# -H reopens the log on SIGHUP, which newsyslog(8) sends it rotated.
+command_args="-f -r -H -P $pidfile -o $logfile $juistd_bin $args $juistd_args"
+
+juistd_precmd()
+{
+	install -d -o juist -g juist -m 0700 /var/db/juist
+	# An instance's home is in the juist user's directory, where that user
+	# could plant a link: it is made as that user, never followed as root.
+	if [ "$home" != /var/db/juist ]; then
+		su -m juist -c "mkdir -p -m 0700 $home" || return 1
+	fi
+	install -d -o juist -g juist -m 0755 /var/run/juist
+	kldload -n if_tuntap
+}
+
+# juistd_clear undoes what internal/plumber does to the host: the devices,
+# their resolvers, the pf anchors, and forwarding and pf as they were.
+juistd_clear()
+{
+	# The host's own, not a jail's, or a daemon(8) about to start one again.
+	running=$(pgrep -j none -x juistd)
+	for p in /var/run/juistd.pid /var/run/juistd.juist[1-9].pid; do
+		[ -f "$p" ] && pgrep -q -F "$p" && running=yes
+	done
+	if [ -n "$running" ]; then
+		echo "juistd: a juistd runs; stop it first" >&2
+		return 1
+	fi
+	for d in $(ifconfig -l); do
+		case $d in
+		juist[0-9])
+			resolvconf -d "$d" >/dev/null 2>&1
+			ifconfig "$d" destroy
+			;;
+		esac
+	done
+	for a in $(pfctl -a juist -s Anchors 2>/dev/null); do
+		pfctl -a "$a" -F all >/dev/null 2>&1
+	done
+	state=/var/run/juistd.host
+	if [ -f $state ]; then
+		sed -n 's/^was //p' $state | while read -r kv; do
+			sysctl "$kv" >/dev/null
+		done
+		# pf off again where juist turned it on, unless the host loaded its
+		# own rules since, or starts pf itself.
+		if grep -qx pf-off $state && ! checkyesno pf_enable &&
+		    [ "$(pfctl -s rules 2>/dev/null)" = 'anchor "juist/*" all' ] &&
+		    [ "$(pfctl -s nat 2>/dev/null | tr -s ' \n' ' ')" = 'nat-anchor "juist/*" all rdr-anchor "juist/*" all ' ]; then
+			pfctl -F all >/dev/null 2>&1
+			pfctl -d >/dev/null 2>&1
+		fi
+		rm -f $state
+	fi
+	echo "juistd: cleared"
+}
+
+run_rc_command "$1"
+status=$?
+if [ -z "$inst" ]; then
+	case $1 in
+	*start|*stop|*restart|*status)
+		for i in $juistd_instances; do
+			"$0" "$1" "$i" || status=1
+		done
+		;;
+	esac
+fi
+exit $status

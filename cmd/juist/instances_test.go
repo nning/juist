@@ -43,13 +43,14 @@ func newHost(t *testing.T) *testHost {
 		return nil
 	}
 	h.layout = &hostLayout{
-		runDir:   filepath.Join(dir, "run"),
-		stateDir: filepath.Join(dir, "state"),
-		wantsDir: filepath.Join(dir, "wants"),
-		unitDirs: []string{filepath.Join(dir, "units")},
-		start:    h.start,
-		stop:     h.stop,
-		firewall: h.firewall,
+		runDir:       filepath.Join(dir, "run"),
+		stateDir:     filepath.Join(dir, "state"),
+		wantsDir:     filepath.Join(dir, "wants"),
+		unitDirs:     []string{filepath.Join(dir, "units")},
+		instanceUnit: "juistd@.service",
+		start:        h.start,
+		stop:         h.stop,
+		firewall:     h.firewall,
 	}
 	for _, d := range []string{h.layout.runDir, h.layout.stateDir, h.layout.wantsDir, h.layout.unitDirs[0]} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -194,7 +195,7 @@ func TestASecondNetworkRunsBesideTheFirst(t *testing.T) {
 		t.Fatalf("reset work: %v\n%s", err, out)
 	}
 	mustContain(t, out, `forget "work", with this device's keys for it and its juistd (juist1)?`,
-		`"home" and "lab" stay as they are, with their keys`, `left "work"`, "removed juistd@juist1.service")
+		`"home" and "lab" stay as they are, with their keys`, `left "work"`, "removed "+unitOf(1))
 	if strings.Contains(out, "reset this device") {
 		t.Errorf("leaving one network reads as resetting the device:\n%s", out)
 	}
@@ -270,7 +271,7 @@ func TestASecondNetworkNeedsTheInstanceUnitAndRoot(t *testing.T) {
 	if err := os.Remove(filepath.Join(h.layout.unitDirs[0], "juistd@.service")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.run("create", "work"); err == nil || !strings.Contains(err.Error(), "juistd@.service") {
+	if _, err := h.run("create", "work"); err == nil || !strings.Contains(err.Error(), instanceNeed) {
 		t.Fatalf("init without the instance unit: %v", err)
 	}
 	if len(h.started) != 0 {
@@ -300,11 +301,11 @@ func TestANewInstanceTakesAFreeNumber(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(h.layout.wantsDir, unitOf(4)), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.run("create", "lab"); err == nil || !strings.Contains(err.Error(), "juistd@juist4.service is not running") {
+	if _, err := h.run("create", "lab"); err == nil || !strings.Contains(err.Error(), unitOf(4)+" is not running") {
 		t.Fatalf("init beside an enabled instance that is down: %v", err)
 	}
 	out := h.mustRun("status")
-	mustContain(t, out, "juist4 · not running", "sudo systemctl start juistd@juist4.service", "home · ", "work · ")
+	mustContain(t, out, "juist4 · not running", startCmd(4), "home · ", "work · ")
 	mustContain(t, h.mustRun("devices"), "juist4 · not running", "home · juist0", "work · juist2")
 	if _, err := h.run("remove", "phone"); err == nil || !strings.Contains(err.Error(), "juist4 (not running)") {
 		t.Fatalf("a command with an instance down: %v", err)

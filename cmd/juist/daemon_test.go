@@ -82,9 +82,10 @@ func TestANonOperatorIsToldHowToBecomeOne(t *testing.T) {
 	a := newApp(strings.NewReader(""), &out, &out)
 	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
 	err := a.requireOperator()
-	if err == nil || !strings.Contains(err.Error(), "sudo juist set --operator=") {
-		t.Fatalf("got %v", err)
+	want := asRoot("juist set --operator=" + currentUser())
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("got %v, want %q", err, want)
 	}
 	a.printStatus(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home"}})
-	mustContain(t, out.String(), "read-only", "sudo juist set --operator=")
+	mustContain(t, out.String(), "read-only", "juist set --operator=")
 }

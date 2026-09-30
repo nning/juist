@@ -187,6 +187,17 @@ func TestAWaitingInviteBelongsToItsMember(t *testing.T) {
 	}
 }
 
+// manyLoopbacks skips where the loopback device holds 127.0.0.1 alone, as
+// FreeBSD's does unless given more with ifconfig lo0 alias.
+func manyLoopbacks(t *testing.T) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.4.1:0")
+	if err != nil {
+		t.Skipf("guests from many places need 127.0.4.0/24 on loopback: %v", err)
+	}
+	l.Close()
+}
+
 // guestFrom asks the relay for id from the loopback address src, so that
 // tests can stand in for guests from many places, and returns the
 // connection once joined.
@@ -274,6 +285,7 @@ func TestAMembersSessionsAreBoundedAndEndWithIt(t *testing.T) {
 // A host that goes away right after proving itself leaves nothing held:
 // no guest waits for good, and the guest bounds come back.
 func TestAHostGoneAtOnceHoldsNothing(t *testing.T) {
+	manyLoopbacks(t)
 	m := newMember(t)
 	s, r := forwardRelay(t, func([32]byte) bool { return true })
 	id := [16]byte{0x88}
@@ -320,6 +332,7 @@ func TestAHostGoneAtOnceHoldsNothing(t *testing.T) {
 // while the last slot was free, and joined after another took it, is turned
 // away rather than told it joined and then cut off.
 func TestAGuestIsToldItJoinedOnlyWithinTheBound(t *testing.T) {
+	manyLoopbacks(t)
 	m := newMember(t)
 	_, r := forwardRelay(t, func(id [32]byte) bool { return id == m.pub })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -141,6 +141,9 @@ func TestHelperNetnsNode(t *testing.T) {
 		} else {
 			s.Routes = Internet(true, true, nil)
 		}
+		if os.Getenv(envServeDNS) != "" {
+			s.DNS = dnsPort
+		}
 		if err := mgr.SetServe(s); err != nil {
 			t.Fatalf("SetServe: %v", err)
 		}
@@ -319,7 +322,7 @@ func TestHelperNetnsDNS(t *testing.T) {
 func setEgressByName(mgr Manager, name string) error {
 	for _, e := range []Egress{EgressDirect, EgressTunnel, EgressRefused} {
 		if e.String() == name {
-			return mgr.SetEgress(e)
+			return mgr.SetEgress(e, false)
 		}
 	}
 	return fmt.Errorf("no egress %q", name)

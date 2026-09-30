@@ -166,11 +166,11 @@ func TestAServingNodeAcceptsWhatItServesAlone(t *testing.T) {
 func TestEgressNeedsADevice(t *testing.T) {
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	for _, e := range []Egress{EgressTunnel, EgressRefused} {
-		if err := a.mgr.SetEgress(e); err == nil {
+		if err := a.mgr.SetEgress(e, false); err == nil {
 			t.Errorf("%v without a device was accepted", e)
 		}
 	}
-	if err := a.mgr.SetEgress(EgressDirect); err != nil {
+	if err := a.mgr.SetEgress(EgressDirect, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.mgr.SetServe(Serve{}); err != nil {
@@ -299,16 +299,47 @@ func TestARouterServesItsOwnNetworks(t *testing.T) {
 // recordingExits is an OS router's egress side that records what it is told,
 // failing with err where set.
 type recordingExits struct {
-	told []tunnelled
-	err  error
+	told   []tunnelled
+	served []Serve
+	err    error
 }
 
 func (r *recordingExits) setEgress(_ Egress, t tunnelled) error {
 	r.told = append(r.told, t)
 	return r.err
 }
-func (r *recordingExits) setServe(Serve) error                 { return nil }
+func (r *recordingExits) setServe(s Serve) error {
+	r.served = append(r.served, s)
+	return nil
+}
 func (r *recordingExits) lans() ([]netip.Prefix, []netip.Addr) { return nil, nil }
+func (r *recordingExits) answersThrough() string               { return "" }
+
+// The router is told to redirect DNS as the node serves it, and again where
+// only that changes.
+func TestTheRouterServesDNSAsAsked(t *testing.T) {
+	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
+	m := a.mgr.(*tsManager)
+	rec := &recordingExits{}
+	m.apply.Lock()
+	m.exits = rec
+	m.apply.Unlock()
+	s := Serve{Routes: Internet(true, false, nil), Sources: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")}}
+	if err := m.SetServe(s); err != nil {
+		t.Fatal(err)
+	}
+	s.DNS = 41646
+	if err := m.SetServe(s); err != nil {
+		t.Fatal(err)
+	}
+	var dns []uint16
+	for _, s := range rec.served {
+		dns = append(dns, s.DNS)
+	}
+	if len(dns) < 2 || dns[len(dns)-1] != 41646 {
+		t.Errorf("the router was told to redirect DNS to %v", dns)
+	}
+}
 
 // The router learns what the peers carry with the egress, and again whenever
 // a new peer set changes it while an exit node is in use.
@@ -325,7 +356,7 @@ func TestTheRouterLearnsWhatThePeersCarry(t *testing.T) {
 	if err := m.SetPeers([]Peer{exit}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.SetEgress(EgressTunnel); err != nil {
+	if err := m.SetEgress(EgressTunnel, false); err != nil {
 		t.Fatal(err)
 	}
 	exit.Routes = Internet(true, true, nil)
@@ -345,5 +376,20 @@ func TestTheRouterLearnsWhatThePeersCarry(t *testing.T) {
 	exit.Routes = Internet(false, true, nil)
 	if err := m.SetPeers([]Peer{exit}); err != nil {
 		t.Errorf("the router failing, the peer set was refused: %v", err)
+	}
+}
+
+// fixedRoutes is an OS router that reads routes.
+type fixedRoutes []netip.Prefix
+
+func (f fixedRoutes) hostRoutes() []netip.Prefix { return f }
+
+// The manager says what its OS router reads of the host's routes, rather
+// than the attached networks alone.
+func TestTheManagerAsksItsRouterForTheHostsRoutes(t *testing.T) {
+	want := []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
+	m := &tsManager{hostRouter: fixedRoutes(want)}
+	if got := m.HostRoutes(); !slices.Equal(got, want) {
+		t.Errorf("the host's routes are %v, want %v", got, want)
 	}
 }

@@ -15,7 +15,7 @@ checks that log for itself.
   tunnels only to vouchers, so it cannot carry a removed device
   along indefinitely.
 
-juist runs on Linux; FreeBSD and Android are on the
+juist runs on Linux and FreeBSD; Android is on the
 [roadmap](docs/05-roadmap.md). It has not had a security audit yet.
 
 **Contents:** [Install](#install) · [Your first network](#your-first-network) ·
@@ -30,13 +30,15 @@ On every device:
 
 ```sh
 make install     # builds the .deb (Debian, Ubuntu) or the RPM (Fedora) and installs it with sudo
+gmake install    # on FreeBSD, as root: builds the package and installs it with pkg
 ```
 
-`make deb` and `make rpm` build the package only, for copying to another
-machine (`sudo apt install ./juist_*.deb`, `sudo dnf install ./juist-*.rpm`).
-The package brings `juist`, the command, and `juistd`, the daemon, which
-starts right away and waits, outside any network, until you create one or
-join one. It also brings shell completion for bash, zsh and fish, and the man
+`make deb`, `make rpm` and `make pkg-freebsd` build the package only, for
+copying to another machine (`sudo apt install ./juist_*.deb`,
+`sudo dnf install ./juist-*.rpm`, `pkg add ./juist-*.pkg`). The package brings
+`juist`, the command, and `juistd`, the daemon, which on Linux starts right
+away and waits, outside any network, until you create one or join one; on
+FreeBSD, `sysrc juistd_enable=YES && service juistd start` starts it. It also brings shell completion for bash, zsh and fish, and the man
 pages `juist(1)` and `juistd(8)`.
 
 ## Your first network
@@ -313,9 +315,9 @@ All residual weaknesses are in [02-threat-model.md](docs/02-threat-model.md).
 
 ## Status
 
-Milestones up to **M6** of [05-roadmap.md](docs/05-roadmap.md), exit
-nodes, subnet routers and the exit node's DNS, are done; next is M7,
-FreeBSD. What works:
+Milestones up to **M7** of [05-roadmap.md](docs/05-roadmap.md), FreeBSD
+beside Linux, with a package, builds reproducible from two builders and a
+lab where both meet, are done; next is M8, names. What works:
 
 - The membership log, with quorum, fork choice, fork alarm and a versioned
   schema.
@@ -331,8 +333,11 @@ FreeBSD. What works:
   systemd-resolved runs.
 - Subnet routers on Linux, leaving every device's own LAN to it.
 - Debian and Fedora packages, with man pages.
+- FreeBSD: the device and its routes through a helper as root, the daemon
+  itself as the juist user, exit nodes and subnet routers with pf, DNS
+  through resolvconf, an rc.d script, and a package.
 
-Not yet: FreeBSD, Android, ACLs (every member reaches every port on the
+Not yet: Android, ACLs (every member reaches every port on the
 others), names, break-glass recovery, the post-quantum data plane,
 and QR codes.
 

@@ -189,18 +189,6 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	return errors.Join(errs...)
 }
 
-// preferredSrc4 is the first IPv4 address among addrs. With two, as while a
-// renumbering is under way, it is the one every peer still accepts, and the
-// kernel would otherwise choose by the order the addresses were added in.
-func preferredSrc4(addrs []netip.Prefix) netip.Addr {
-	for _, p := range addrs {
-		if p.Addr().Is4() {
-			return p.Addr()
-		}
-	}
-	return netip.Addr{}
-}
-
 // Close must not assume Up ran: the engine closes routers it never brought up.
 func (r *linuxRouter) Close() error {
 	r.doneOnce.Do(func() { close(r.done) })

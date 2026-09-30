@@ -216,11 +216,10 @@ device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
   told this host's addresses in its other networks, and try them as paths.
   They lead nowhere for them, but they say which ranges the host is in.
 
-- **FreeBSD** (M7). Tailscale's router there routes in the host's one table,
-  so instances are kept apart by their prefixes alone, and
-  `conn.InstanceHoldings` reports nothing: no instance yields. M7 decides
-  whether to give each instance a FIB of its own.
-- **Choosing the source address during a renumbering off Linux.** Also M7.
+- **FreeBSD** (M7a) keeps every instance in the host's one table, with no
+  FIB of its own: `conn.InstanceHoldings` knows an instance by its device's
+  name, and holds its addresses and the routes into it, so the IPv4 yield
+  works as on Linux. A route pins its source by naming it as the gateway.
 - **Renumbering's deadline** is fixed when the change is proposed, so every
   approval after that leaves less of the transition. Approvers now see how
   much is left, with a warning under the freshness TTL. Moving the deadline

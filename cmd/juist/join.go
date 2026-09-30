@@ -119,7 +119,7 @@ func (a *app) startHint() {
 	keys, _ := a.home.adminKeys()
 	switch {
 	case a.home.path == systemHome:
-		a.hint("sudo systemctl enable --now juistd")
+		a.hint("%s", enableCmd())
 	case len(keys) > 0:
 		a.hint("no juistd runs for a keystore (%s); install the juist package", a.home.path)
 	default:

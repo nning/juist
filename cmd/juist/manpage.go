@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/nning/juist/ipc"
 )
 
 // manpage writes juist(1) in roff, from the command table and each command's
@@ -90,8 +93,8 @@ any other command stops and names the networks. No command asks which.`)
 	m.section("FILES")
 	for _, f := range [][2]string{
 		{"~/.config/juist", "The keystore: admins/ holds admin keys, NAME@NETWORK.key for one network's, networks/ what the keystore last verified of each network, break-glass-NETWORK.secrets each network's recovery secrets, to keep offline."},
-		{"/var/lib/juist", "The packaged juistd's state: the device's keys and the network's log. /var/lib/juist/juistN for the others."},
-		{"/run/juist/juistd.sock", "The packaged juistd's control socket; /run/juist/juistN.sock for the others."},
+		{systemHome, "The packaged juistd's state: the device's keys and the network's log. " + systemHome + "/juistN for the others."},
+		{ipc.SystemSocket, "The packaged juistd's control socket; " + filepath.Dir(ipc.SystemSocket) + "/juistN.sock for the others."},
 	} {
 		m.option(f[0], f[1])
 	}

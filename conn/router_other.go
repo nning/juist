@@ -27,4 +27,4 @@ func newOSRouter(logf logger.Logf, dev tun.Device, mon *netmon.Monitor, ht *heal
 func ClearEgress(int) error { return nil }
 
 // RefuseEgress refuses nothing: no platform but Linux uses an exit node.
-func RefuseEgress(int) error { return nil }
+func RefuseEgress(int, bool) error { return nil }

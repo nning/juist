@@ -41,8 +41,9 @@ func TestRecordsBatchIsBoundedByBytes(t *testing.T) {
 		t.Fatalf("drawing a secret: %v", err)
 	}
 	network := types.Hash{7}
-	a := newTestNode(t, network, 1, s)
-	b := newTestNode(t, network, 1, s)
+	// A frame's worth of records takes long where the CPU is emulated.
+	a := newTestNodeTimeout(t, network, 1, s, 30*time.Second)
+	b := newTestNodeTimeout(t, network, 1, s, 30*time.Second)
 
 	signer, err := types.GenerateIdentity()
 	if err != nil {

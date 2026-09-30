@@ -35,6 +35,9 @@ import (
 // upstreamSource reads a file of the tailscale.com module this build uses.
 func upstreamSource(t *testing.T, rel string) string {
 	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("reads the pinned module's source, which a host without Go has not")
+	}
 	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "tailscale.com").Output()
 	if err != nil {
 		t.Fatalf("locating the tailscale.com module: %v", err)

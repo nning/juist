@@ -67,6 +67,10 @@ type Options struct {
 	// fails rather than falling back to a device nothing can reach.
 	TunName string
 
+	// Plumber, where set, creates the device TunName names and routes it,
+	// for a node that may not itself; only FreeBSD's router uses one.
+	Plumber Plumber
+
 	// Instance numbers this node among the juist nodes on the host, from 0
 	// to instance.Max. The real router keeps each instance's routes in a
 	// table of its own, behind policy rules of its own, so stopping one
@@ -122,8 +126,12 @@ type tsManager struct {
 	// device of this node's own; egress and serve are what it was last given.
 	// Guarded by apply.
 	exits exitRouter
-	// tunnelled is what the router was last told the peers carry.
+	// hostRouter is the OS router's reading of the host's own routes.
+	hostRouter interface{ hostRoutes() []netip.Prefix }
+	// tunnelled is what the router was last told the peers carry, and
+	// isolate whether answers go in too.
 	tunnelled tunnelled
+	isolate   bool
 	egress    Egress
 	serve     Serve
 	tunName   string
@@ -201,6 +209,10 @@ type exitRouter interface {
 	// lans is the networks the host is on but through this node's device,
 	// and its own addresses in them.
 	lans() ([]netip.Prefix, []netip.Addr)
+	// answersThrough is why answers to what comes in by another device
+	// would go into the tunnel though not isolated, "" where they leave by
+	// it.
+	answersThrough() string
 }
 
 var _ Manager = (*tsManager)(nil)
@@ -280,18 +292,24 @@ func New(opts Options) (_ Manager, err error) {
 		}
 		// The engine never closes a monitor it was handed.
 		undo.push(func() { mon.Close() })
-		dev, err := tun.CreateTUN(opts.TunName, int(tstun.DefaultTUNMTU()))
-		if err != nil {
-			// Lists what creation needs; does not claim to be the cause,
-			// since a name already in use comes back as EBUSY.
-			return nil, fmt.Errorf("conn: creating TUN device %q: %w "+
-				"(needs /dev/net/tun and CAP_NET_ADMIN, and the name must be free)",
-				opts.TunName, err)
-		}
-		undo.push(func() { dev.Close() })
-		osRtr, err := newOSRouter(logf, dev, mon, healthTracker, bus, opts.Instance)
-		if err != nil {
-			return nil, fmt.Errorf("conn: creating the OS router: %w", err)
+		var dev tun.Device
+		var osRtr router.Router
+		if opts.Plumber != nil {
+			if dev, osRtr, err = newPlumbed(opts.Plumber, opts.TunName, opts.Instance, int(tstun.DefaultTUNMTU()), logf); err != nil {
+				return nil, fmt.Errorf("conn: creating TUN device %q: %w", opts.TunName, err)
+			}
+			undo.push(func() { dev.Close() })
+		} else {
+			if dev, err = tun.CreateTUN(opts.TunName, int(tstun.DefaultTUNMTU())); err != nil {
+				// Lists what creation needs; does not claim to be the cause,
+				// since a name already in use comes back as EBUSY.
+				return nil, fmt.Errorf("conn: creating TUN device %q: %w (needs %s, and the name must be free)",
+					opts.TunName, err, tunNeeds)
+			}
+			undo.push(func() { dev.Close() })
+			if osRtr, err = newOSRouter(logf, dev, mon, healthTracker, bus, opts.Instance); err != nil {
+				return nil, fmt.Errorf("conn: creating the OS router: %w", err)
+			}
 		}
 		// The engine's own cleanup closes the device, and neither closes the
 		// router on failure; the router may already hold the policy rules its
@@ -302,6 +320,7 @@ func New(opts Options) (_ Manager, err error) {
 		cfg.Tun = dev
 		cfg.Router = osRtr
 		m.exits, _ = osRtr.(exitRouter)
+		m.hostRouter, _ = osRtr.(interface{ hostRoutes() []netip.Prefix })
 		if w, ok := osRtr.(interface{ watchHostRoutes(func()) }); ok && opts.OnHostRoutesChange != nil {
 			w.watchHostRoutes(opts.OnHostRoutesChange)
 		}
@@ -522,7 +541,7 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	err := m.reconfig()
 	// Best effort: the peers are installed, and the SetEgress each reconcile
 	// follows with tries again and reports.
-	if t := tunnelledBy(next.peers); m.exits != nil && m.egress != EgressDirect && !t.equal(m.tunnelled) {
+	if t := m.tunnelledBy(next.peers); m.exits != nil && m.egress != EgressDirect && !t.equal(m.tunnelled) {
 		if gerr := m.exits.setEgress(m.egress, t); gerr != nil {
 			m.logf("conn: guarding what the peers carry: %v", gerr)
 		} else {
@@ -959,12 +978,30 @@ var allIPProtos = func() views.Slice[ipproto.Proto] {
 	return views.SliceOf(p)
 }()
 
+// AnswersThrough is why answers to what comes in by another device would go
+// through the exit node though not isolated, "" where they leave the way
+// they came, or where there is no device.
+func (m *tsManager) AnswersThrough() string {
+	if m.exits == nil {
+		return ""
+	}
+	return m.exits.answersThrough()
+}
+
+// tunnelledBy is what peers carry, answers as asked.
+func (m *tsManager) tunnelledBy(peers map[key.NodePublic]Peer) tunnelled {
+	t := tunnelledBy(peers)
+	t.answers = m.isolate
+	return t
+}
+
 // errNoExits is egress or serving asked of a node that routes nothing itself.
 var errNoExits = errors.New("conn: exit nodes need a device of this node's own, on Linux")
 
-func (m *tsManager) SetEgress(e Egress) error {
+func (m *tsManager) SetEgress(e Egress, isolate bool) error {
 	m.apply.Lock()
 	defer m.apply.Unlock()
+	m.isolate = isolate
 	switch {
 	case m.closed:
 		return errors.New("conn: manager is closed")
@@ -976,7 +1013,7 @@ func (m *tsManager) SetEgress(e Egress) error {
 	// Given again, the router installs it again: a route someone flushed is
 	// not announced, and every reconcile gives the egress.
 	if m.exits != nil {
-		t := tunnelledBy(m.state.Load().peers)
+		t := m.tunnelledBy(m.state.Load().peers)
 		if err := m.exits.setEgress(e, t); err != nil {
 			return err
 		}
@@ -987,14 +1024,14 @@ func (m *tsManager) SetEgress(e Egress) error {
 }
 
 func (m *tsManager) SetServe(s Serve) error {
-	s = Serve{Routes: slices.Clone(s.Routes), Subnets: slices.Clone(s.Subnets), Sources: slices.Clone(s.Sources)}
+	s = Serve{Routes: slices.Clone(s.Routes), Subnets: slices.Clone(s.Subnets), Sources: slices.Clone(s.Sources), DNS: s.DNS}
 	m.apply.Lock()
 	defer m.apply.Unlock()
 	switch {
 	case m.closed:
 		return errors.New("conn: manager is closed")
 	case slices.Equal(s.Routes, m.serve.Routes) && slices.Equal(s.Subnets, m.serve.Subnets) &&
-		slices.Equal(s.Sources, m.serve.Sources):
+		slices.Equal(s.Sources, m.serve.Sources) && s.DNS == m.serve.DNS:
 		// Given again, the router installs it again, as it does egress; where
 		// it no longer may, nothing is served.
 		if s.serving() && m.exits != nil {
@@ -1239,8 +1276,8 @@ func (m *tsManager) Close() error {
 }
 
 func (m *tsManager) HostRoutes() []netip.Prefix {
-	if r, ok := m.exits.(interface{ hostRoutes() []netip.Prefix }); ok {
-		return r.hostRoutes()
+	if m.hostRouter != nil {
+		return m.hostRouter.hostRoutes()
 	}
 	nets, _ := attached(m.tunName)
 	return nets

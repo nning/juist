@@ -467,8 +467,11 @@ func TestNetnsExitNodeAnswersDNS(t *testing.T) {
 		t.Fatalf("the exit node's own query to %v: %s", resolver, got)
 	}
 	for _, a := range exit.addrs {
-		if got := client.ask(netip.AddrPortFrom(a.Addr(), dnsPort)); got != "ASK ok" {
-			t.Errorf("the exit node's resolver at %v: %s", a.Addr(), got)
+		// Port 53 too, redirected, as a resolver without ports asks.
+		for _, port := range []uint16{dnsPort, 53} {
+			if got := client.ask(netip.AddrPortFrom(a.Addr(), port)); got != "ASK ok" {
+				t.Errorf("the exit node's resolver at %v port %d: %s", a.Addr(), port, got)
+			}
 		}
 	}
 	if s := tap.strangers(); len(s) > 0 {

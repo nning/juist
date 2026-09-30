@@ -1,0 +1,13 @@
+{
+	"name": "juist",
+	"origin": "net/juist",
+	"comment": "Peer-to-peer mesh VPN with no coordination server",
+	"maintainer": "noreply@github.com",
+	"www": "https://github.com/nning/juist",
+	"prefix": "/usr/local",
+	"desc": "juist is a Tailscale-like mesh VPN with a WireGuard data plane and no central\ncontrol plane: membership, key distribution, revocation and rendezvous are\npeer-to-peer. This package installs the CLI, the node daemon, and an rc.d\nscript that runs the daemon as a dedicated user beside a helper as root that\nsets up its devices, routes and pf rules.",
+	"messages": [
+		{"type": "install", "message": "juist: sysrc juistd_enable=YES, then service juistd start"},
+		{"type": "upgrade", "message": "juist: service juistd restart runs the new juistd"}
+	]
+}

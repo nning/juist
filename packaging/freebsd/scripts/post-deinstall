@@ -1,0 +1,9 @@
+# Kept on purpose: the user, which may own files the package never had, and
+# the device's keys.
+rmdir /var/run/juist 2>/dev/null
+kept="the juist user"
+[ -d /var/db/juist ] && kept="$kept, /var/db/juist with this device's keys"
+ls /var/log/juistd*.log >/dev/null 2>&1 && kept="$kept, /var/log/juistd*.log"
+grep -qs '^juistd_' /etc/rc.conf /etc/rc.conf.local && kept="$kept, juistd_ settings in rc.conf"
+echo "juist: kept $kept"
+exit 0

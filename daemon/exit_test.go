@@ -265,17 +265,43 @@ func TestAStaleExitNodeServesNothing(t *testing.T) {
 	}
 }
 
-// The owner's choice survives a restart, as three states.
+// The owner's choice survives a restart, as three states, a node isolated
+// or not.
 func TestTheExitChoiceIsKept(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "exit-node")
 	id := newDevice(t, "vps", netip.Addr{}).record.Identity
-	for _, c := range []ExitChoice{{}, {Chosen: true}, {Chosen: true, Node: id}} {
+	for _, c := range []ExitChoice{{}, {Chosen: true}, {Chosen: true, Node: id}, {Chosen: true, Node: id, Isolate: true}} {
 		if err := SaveExitChoice(path, c); err != nil {
 			t.Fatal(err)
 		}
 		got, err := LoadExitChoice(path)
 		if err != nil || got != c {
 			t.Errorf("kept %+v, read %+v, %v", c, got, err)
+		}
+	}
+}
+
+// Isolated, answers to what came in by another device go through the exit
+// node too, as the data plane is told; not isolated, the status says why
+// they would all the same, where the data plane knows.
+func TestAnIsolatedChoiceSendsAnswersThrough(t *testing.T) {
+	f := exitFixture(t, 1, -1, nil)
+	exit := f.nw.devices[1]
+	f.learnExit(t, exit, 7001, true)
+	f.mgr.mu.Lock()
+	f.mgr.through = "the host's own pf rules"
+	f.mgr.mu.Unlock()
+	for _, isolate := range []bool{false, true} {
+		f.d.SetExitChoice(ExitChoice{Chosen: true, Node: exit.record.Identity, Isolate: isolate})
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		f.mgr.mu.Lock()
+		got := f.mgr.isolate
+		f.mgr.mu.Unlock()
+		st := f.d.Status().Exit
+		if got != isolate || st == nil || st.Isolated != isolate || (st.AnswersThrough != "") == isolate {
+			t.Errorf("isolate %v: the data plane was told %v, the status says %+v", isolate, got, st)
 		}
 	}
 }
@@ -475,14 +501,18 @@ func (f *serviceFixture) exitStatus(t *testing.T) *ipc.Exit {
 	return resp.Status.Exit
 }
 
-// A choice kept that cannot be read is refused, not taken for none.
+// A choice kept that cannot be read is refused, not taken for none, and
+// isolated, as it may have been.
 func TestAnUnreadableChoiceIsRefused(t *testing.T) {
 	nw := newNetwork(t, 2)
 	f := serviceWithChoice(t, nw, nw.devices[0], "nid:garbage\n")
 	waitFor(t, 10*time.Second, "the refusal", func() bool {
 		ex := f.exitStatus(t)
 		e, _ := f.mgr.exitState()
-		return ex != nil && strings.Contains(ex.Refused, "cannot be read") && e == conn.EgressRefused
+		f.mgr.mu.Lock()
+		isolated := f.mgr.isolate
+		f.mgr.mu.Unlock()
+		return ex != nil && strings.Contains(ex.Refused, "cannot be read") && e == conn.EgressRefused && isolated
 	})
 }
 

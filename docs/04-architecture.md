@@ -245,6 +245,10 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
   sandbox, in-process API only. Exit-node support (M6) widens this helper to
   forwarding, NAT and policy routing, so its input must stay a validated route set
   derived from log state — never free-form rules passed down by the daemon.
+  FreeBSD, which grants no capability for the network alone, has the helper
+  (M7a): juistd started as root keeps a process as root that creates, addresses,
+  routes and destroys juist's own devices, and runs the daemon as `juist` with
+  the device's descriptor (`internal/plumber`).
 - **Key custody:** node identity key sealed at rest (Linux: kernel keyring/TPM2 where
   present; Android: Keystore for the identity key — WG keys must live in app memory
   for wireguard-go; FreeBSD: 0600 state file, document geli). Admin keys live in the

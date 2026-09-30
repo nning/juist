@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -11,14 +13,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/dnsfwd"
 	"github.com/nning/juist/internal/resolved"
 )
 
-// DefaultDNSPort is where an exit node answers its members' DNS, on its
-// overlay addresses alone: UDP and TCP.
-const DefaultDNSPort = 41646
+// DefaultDNSPort is where an exit node's forwarder answers its members' DNS,
+// on its overlay addresses alone: UDP and TCP. Members ask it on
+// dnsAskedPort, which the data plane redirects there, as a resolver that
+// takes no port, FreeBSD's, needs.
+const (
+	DefaultDNSPort = 41646
+	dnsAskedPort   = 53
+)
 
 // dnsRenewal is how often a host's DNS routing is given again, which a
 // restarted resolved forgets.
@@ -67,6 +75,41 @@ func (r resolvedDNS) Revert() error {
 	}
 	defer c.Close()
 	return c.Revert(i)
+}
+
+// plumbedDNS is the host's DNS through resolvconf(8), by the helper that
+// plumbs the device named dev, as on FreeBSD, whose resolver takes no port.
+type plumbedDNS struct {
+	p   conn.Plumber
+	dev string
+}
+
+func (r plumbedDNS) Route(servers []netip.AddrPort) error {
+	var addrs []netip.Addr
+	for _, s := range servers {
+		if s.Port() != 53 {
+			return fmt.Errorf("the exit node answers DNS on port %d, which this host's resolver cannot ask", s.Port())
+		}
+		addrs = append(addrs, s.Addr())
+	}
+	return r.p.SetDNS(r.dev, addrs)
+}
+
+func (r plumbedDNS) Revert() error { return r.p.SetDNS(r.dev, nil) }
+
+// through reports whether the host's programs ask servers, whose resolver
+// resolvconf wrote.
+func (r plumbedDNS) through(path string, servers []netip.AddrPort) (bool, string) {
+	got, why := nameservers(path)
+	if why != "" {
+		return false, why
+	}
+	for _, s := range got {
+		if !slices.ContainsFunc(servers, func(ap netip.AddrPort) bool { return ap.Addr().String() == s }) {
+			return false, path + " asks " + s + ", not the exit node"
+		}
+	}
+	return true, ""
 }
 
 // defaultDNSServer answers on the device named dev.
@@ -170,12 +213,40 @@ func (d *Daemon) routeDNSLocked(servers []netip.AddrPort, keep bool) (bool, stri
 }
 
 // throughStub reports whether the host's programs ask resolved, whose routing
-// is then theirs, and why not.
+// is then theirs, and why not; or, where the host's DNS says itself, whether
+// they ask the servers routed.
 func (d *Daemon) throughStub() (bool, string) {
 	path := cmp.Or(d.resolvConf, "/etc/resolv.conf")
+	if t, ok := d.hostDNS.(interface {
+		through(string, []netip.AddrPort) (bool, string)
+	}); ok {
+		return t.through(path, d.dnsRouted)
+	}
+	servers, why := nameservers(path)
+	if why != "" {
+		return false, why
+	}
+	if b, _ := os.ReadFile(path); bytes.HasPrefix(b, []byte(uplinkHeader)) {
+		// Programs ask each server in turn, the exit node's among them.
+		return false, path + " lists every link's servers, systemd-resolved's uplink mode, not its stub"
+	}
+	for _, s := range servers {
+		if s != "127.0.0.53" && s != "127.0.0.54" {
+			return false, path + " asks " + s + ", not systemd-resolved"
+		}
+	}
+	return true, ""
+}
+
+// uplinkHeader opens the resolv.conf systemd-resolved writes with every
+// link's servers.
+const uplinkHeader = "# This is /run/systemd/resolve/resolv.conf managed by"
+
+// nameservers are the resolvers path names, and why none where it names none.
+func nameservers(path string) ([]string, string) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return false, path + " cannot be read"
+		return nil, path + " cannot be read"
 	}
 	var servers []string
 	for _, l := range strings.Split(string(b), "\n") {
@@ -183,15 +254,10 @@ func (d *Daemon) throughStub() (bool, string) {
 			servers = append(servers, f[1])
 		}
 	}
-	for _, s := range servers {
-		if s != "127.0.0.53" && s != "127.0.0.54" {
-			return false, path + " asks " + s + ", not systemd-resolved"
-		}
-	}
 	if len(servers) == 0 {
-		return false, path + " names no resolver"
+		return nil, path + " names no resolver"
 	}
-	return true, ""
+	return servers, ""
 }
 
 // closeDNS stops answering members' DNS and gives the host's back, for good:

@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -83,6 +84,9 @@ func TestCheckTunName(t *testing.T) {
 // JUIST_REQUIRE_OS_PLUMBING is set, which the privileged CI job does so that a
 // runner that cannot create a device turns red rather than green.
 func TestRealDevicePlumbsOverlayIntoHost(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux's router; FreeBSD's is TestAPlumbedDeviceCarriesTheOverlay")
+	}
 	if os.Geteuid() != 0 {
 		skipUnlessRequired(t, "needs CAP_NET_ADMIN to create a TUN device and program routes")
 	}

@@ -22,11 +22,13 @@ import (
 // ("off"), or one, by identity, which follows the node's renames, renumbering
 // and identity rotations. Unreadable is a choice kept that cannot be read,
 // refused as a node that cannot be used is. A default an admin sets comes
-// below the first two.
+// below the first two. Isolate sends answers to connections that came in by
+// another device through the node too.
 type ExitChoice struct {
 	Chosen     bool
 	Node       types.Identity
 	Unreadable bool
+	Isolate    bool
 }
 
 // Off reports a choice to go direct.
@@ -45,15 +47,18 @@ func LoadExitChoice(path string) (ExitChoice, error) {
 	if err != nil {
 		return ExitChoice{}, err
 	}
-	s := strings.TrimSpace(string(b))
-	if s == "off" {
+	f := strings.Fields(string(b))
+	if len(f) == 1 && f[0] == "off" {
 		return ExitChoice{Chosen: true}, nil
 	}
-	id, err := types.ParseIdentity(s)
+	if len(f) == 0 || len(f) > 2 || len(f) == 2 && f[1] != "isolate" {
+		return ExitChoice{}, fmt.Errorf("%s: %q is no exit node", path, strings.TrimSpace(string(b)))
+	}
+	id, err := types.ParseIdentity(f[0])
 	if err != nil {
 		return ExitChoice{}, fmt.Errorf("%s: %w", path, err)
 	}
-	return ExitChoice{Chosen: true, Node: id}, nil
+	return ExitChoice{Chosen: true, Node: id, Isolate: len(f) == 2}, nil
 }
 
 // SaveExitChoice keeps c at path, or removes the file for no choice.
@@ -66,6 +71,8 @@ func SaveExitChoice(path string, c ExitChoice) error {
 		return nil
 	case c.Off():
 		return statedir.WriteFilePrivate(path, []byte("off\n"))
+	case c.Isolate:
+		return statedir.WriteFilePrivate(path, []byte(c.Node.String()+" isolate\n"))
 	}
 	return statedir.WriteFilePrivate(path, []byte(c.Node.String()+"\n"))
 }
@@ -91,6 +98,7 @@ func (d *Daemon) SetServeConsent(on bool) {
 // An exitPlan is what one reconcile decides about exit nodes.
 type exitPlan struct {
 	egress  conn.Egress
+	isolate bool
 	serve   conn.Serve
 	status  ipc.Exit
 	subnets ipc.Subnets
@@ -167,7 +175,7 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 		case choice.Refuses():
 			p.status.NotServing = "this device uses an exit node itself"
 		default:
-			p.serve = conn.Serve{Routes: serves, Sources: overlaySpace(s.state)}
+			p.serve = conn.Serve{Routes: serves, Sources: overlaySpace(s.state), DNS: DefaultDNSPort}
 			for _, a := range d.overlayAddrs(s.state, d.self, s.now) {
 				p.dnsServe = append(p.dnsServe, a.Addr())
 			}
@@ -178,7 +186,7 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 		p.status.Off = choice.Off()
 		return p
 	}
-	p.egress = conn.EgressRefused
+	p.egress, p.isolate, p.status.Isolated = conn.EgressRefused, choice.Isolate, choice.Isolate
 	// Where no exit node is known to point DNS at, it stays where it is:
 	// lookups go nowhere rather than to the LAN, as the traffic does.
 	p.keepDNS = true
@@ -250,7 +258,7 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 // applyExit hands the plan to the data plane, egress before serving, and
 // records what it did. The peer set carrying the routes is installed first.
 func (d *Daemon) applyExit(p exitPlan) {
-	if err := d.manager.SetEgress(p.egress); err != nil {
+	if err := d.manager.SetEgress(p.egress, p.isolate); err != nil {
 		// Refused is only what is refused: where even that fails, the
 		// traffic may leave directly, and the status says so apart.
 		switch {
@@ -259,7 +267,7 @@ func (d *Daemon) applyExit(p exitPlan) {
 		case errors.Is(err, conn.ErrEgressTaken):
 			// The other network's table takes this one's traffic: not direct.
 			p.status.Refused = err.Error()
-		case p.egress == conn.EgressTunnel && d.manager.SetEgress(conn.EgressRefused) == nil:
+		case p.egress == conn.EgressTunnel && d.manager.SetEgress(conn.EgressRefused, p.isolate) == nil:
 			p.status.Refused = err.Error()
 		default:
 			p.status.Refused, p.status.Failed = "", err.Error()
@@ -278,7 +286,14 @@ func (d *Daemon) applyExit(p exitPlan) {
 	}
 	p.status.Serving = len(p.serve.Routes) > 0
 	p.subnets.Serving = p.serve.Subnets
+	if !p.isolate {
+		p.status.AnswersThrough = d.manager.AnswersThrough()
+	}
 	port := d.serveDNS(p.status.Serving, p.dnsServe, p.dnsOverlay)
+	if port != 0 && p.serve.DNS != 0 {
+		// Asked on 53, which the data plane sends to the forwarder.
+		port = dnsAskedPort
+	}
 	through, why := d.routeDNS(p.dns, p.keepDNS)
 	p.status.DNS = through
 	if !through && !p.status.Node.IsZero() && p.status.DNSNot == "" {
@@ -415,6 +430,7 @@ func (d *Daemon) exitDown(why string) exitPlan {
 	}
 	if choice.Refuses() {
 		p.egress, p.status.Refused = conn.EgressRefused, why
+		p.isolate, p.status.Isolated = choice.Isolate, choice.Isolate
 		if choice.Unreadable {
 			p.status.Refused = errUnreadableChoice
 		}

@@ -195,7 +195,8 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	s.operator.Store(loadOperator(filepath.Join(home, statedir.OperatorFile), s.logf))
 	if s.exit, err = LoadExitChoice(filepath.Join(home, statedir.ExitFile)); err != nil {
 		s.logf("daemon: %v; internet traffic is refused until an exit node is chosen again", err)
-		s.exit = ExitChoice{Chosen: true, Unreadable: true}
+		// Isolated too: the choice kept may have been.
+		s.exit = ExitChoice{Chosen: true, Unreadable: true, Isolate: true}
 	}
 	_, err = os.Stat(filepath.Join(home, statedir.ServeFile))
 	s.serve = err == nil
@@ -328,7 +329,11 @@ func (s *Service) clearEgress() {
 	if s.opts.Mesh.TunName == "" {
 		return
 	}
-	if err := conn.ClearEgress(s.opts.Mesh.Instance); err != nil {
+	err := conn.ClearEgress(s.opts.Mesh.Instance)
+	if p := s.opts.Mesh.Plumber; p != nil {
+		err = conn.ClearEgressBy(p, s.opts.Mesh.TunName)
+	}
+	if err != nil {
 		s.logf("daemon: %v", err)
 	}
 }
@@ -371,7 +376,11 @@ func (s *Service) holdExitLocked() {
 	if s.opts.Mesh.TunName == "" || s.mesh != nil || !s.exit.Refuses() {
 		return
 	}
-	if err := conn.RefuseEgress(s.opts.Mesh.Instance); err != nil {
+	err := conn.RefuseEgress(s.opts.Mesh.Instance, s.exit.Isolate)
+	if p := s.opts.Mesh.Plumber; p != nil {
+		err = conn.RefuseEgressBy(p, s.opts.Mesh.TunName, s.exit.Isolate)
+	}
+	if err != nil {
 		s.logf("daemon: %v", err)
 	}
 }
@@ -466,7 +475,7 @@ func (s *Service) setExit(req *ipc.Request) error {
 		}
 		return nil
 	}
-	c := ExitChoice{Chosen: true, Node: req.ExitNode}
+	c := ExitChoice{Chosen: true, Node: req.ExitNode, Isolate: req.ExitIsolate}
 	if req.ExitOff {
 		c = ExitChoice{Chosen: true}
 	} else if why := egressUserOf(s.opts.Mesh.EgressUser); why != "" {

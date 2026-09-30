@@ -1,0 +1,615 @@
+//go:build unix
+
+// Package plumber lets juistd run unprivileged where the host grants network
+// configuration to root alone, as FreeBSD does: a helper that stays root
+// creates juist's TUN devices, sets their addresses and routes and destroys
+// them, for the daemon, which asks over a socket and receives the device's
+// descriptor. The helper does nothing to any other device.
+package plumber
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"regexp"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/fxamacker/cbor/v2"
+	"golang.org/x/sys/unix"
+)
+
+// EnvFD names the environment variable that gives the daemon the descriptor
+// of its end of the helper's socket, and EnvLifeline that of a pipe the
+// helper holds the other end of, which reads EOF once the helper is gone.
+const (
+	EnvFD       = "JUIST_PLUMBER_FD"
+	EnvLifeline = "JUIST_PLUMBER_LIFELINE_FD"
+)
+
+// maxFrame bounds a request: a route per member of a large network fits.
+const maxFrame = 4 << 20
+
+// callTimeout bounds one call, a route set for a large network included; a
+// variable for tests.
+var callTimeout = 2 * time.Minute
+
+// devicePattern is the devices the helper serves: juist's own.
+var devicePattern = regexp.MustCompile(`^juist[0-9]$`)
+
+const (
+	opOpen    = "open"
+	opAddrs   = "addrs"
+	opRoutes  = "routes"
+	opServe   = "serve"
+	opEgress  = "egress"
+	opDNS     = "dns"
+	opDestroy = "destroy"
+	opAnswers = "answers"
+)
+
+type request struct {
+	Op     string         `cbor:"1,keyasint"`
+	Device string         `cbor:"2,keyasint"`
+	MTU    int            `cbor:"3,keyasint,omitempty"`
+	Addrs  []netip.Prefix `cbor:"4,keyasint,omitempty"`
+	Routes []netip.Prefix `cbor:"5,keyasint,omitempty"`
+	Src4   netip.Addr     `cbor:"6,keyasint,omitempty"`
+	Serve  *ServeSpec     `cbor:"7,keyasint,omitempty"`
+	Egress *EgressSpec    `cbor:"8,keyasint,omitempty"`
+	DNS    []netip.Addr   `cbor:"9,keyasint,omitempty"`
+}
+
+type response struct {
+	Err     string `cbor:"1,keyasint,omitempty"`
+	Answers string `cbor:"2,keyasint,omitempty"`
+}
+
+var decMode = func() cbor.DecMode {
+	m, err := cbor.DecOptions{ExtraReturnErrors: cbor.ExtraDecErrorUnknownField}.DecMode()
+	if err != nil {
+		panic(err)
+	}
+	return m
+}()
+
+// A Client asks the helper; it is safe for concurrent use.
+type Client struct {
+	mu     sync.Mutex
+	c      *net.UnixConn
+	broken error         // set once a call went wrong on the wire
+	gone   chan struct{} // closed with it
+}
+
+// NewClient is a client on f, the daemon's end of the helper's socket.
+func NewClient(f *os.File) (*Client, error) {
+	c, err := net.FileConn(f)
+	f.Close()
+	if err != nil {
+		return nil, fmt.Errorf("plumber: %w", err)
+	}
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		c.Close()
+		return nil, errors.New("plumber: not a unix socket")
+	}
+	return &Client{c: uc, gone: make(chan struct{})}, nil
+}
+
+// Broken is closed once a call has gone wrong on the wire, as a helper that
+// did not answer in time; every call after it fails.
+func (c *Client) Broken() <-chan struct{} { return c.gone }
+
+// OpenTUN creates the device name, up and with mtu, destroying a leftover of
+// that name first, and returns its descriptor.
+func (c *Client) OpenTUN(name string, mtu int) (*os.File, error) {
+	f, err := c.call(request{Op: opOpen, Device: name, MTU: mtu})
+	if err == nil && f == nil {
+		err = errors.New("plumber: no descriptor came with the device")
+	}
+	return f, err
+}
+
+// SetAddrs gives the device exactly addrs.
+func (c *Client) SetAddrs(dev string, addrs []netip.Prefix) error {
+	_, err := c.call(request{Op: opAddrs, Device: dev, Addrs: addrs})
+	return err
+}
+
+// SetRoutes routes exactly routes into the device, from src4 for IPv4 where
+// it is valid.
+func (c *Client) SetRoutes(dev string, routes []netip.Prefix, src4 netip.Addr) error {
+	_, err := c.call(request{Op: opRoutes, Device: dev, Routes: routes, Src4: src4})
+	return err
+}
+
+// SetServe has the host serve as s asks through dev, forwarding with NAT
+// behind a pf anchor of juist's, or no longer where s serves nothing.
+func (c *Client) SetServe(dev string, s ServeSpec) error {
+	_, err := c.call(request{Op: opServe, Device: dev, Serve: &s})
+	return err
+}
+
+// SetEgress has the host send its traffic outside the overlay as e asks:
+// through dev, refused, or by its own routes.
+func (c *Client) SetEgress(dev string, e EgressSpec) error {
+	_, err := c.call(request{Op: opEgress, Device: dev, Egress: &e})
+	return err
+}
+
+// SetDNS makes servers, on port 53, the host's resolvers for every name, by
+// dev, or gives the host its own back where there are none.
+func (c *Client) SetDNS(dev string, servers []netip.Addr) error {
+	_, err := c.call(request{Op: opDNS, Device: dev, DNS: servers})
+	return err
+}
+
+// Answers says why answers to connections that came in by another device
+// would not leave by it, as the host's own firewall rules decide; "" where
+// they would.
+func (c *Client) Answers(dev string) (string, error) {
+	_, resp, err := c.exchange(request{Op: opAnswers, Device: dev})
+	return resp.Answers, err
+}
+
+// Destroy destroys the device, and with it its addresses and routes.
+func (c *Client) Destroy(dev string) error {
+	_, err := c.call(request{Op: opDestroy, Device: dev})
+	return err
+}
+
+// Close ends the connection, which has the helper destroy what it made.
+func (c *Client) Close() error { return c.c.Close() }
+
+func (c *Client) call(req request) (*os.File, error) {
+	f, _, err := c.exchange(req)
+	return f, err
+}
+
+func (c *Client) exchange(req request) (*os.File, response, error) {
+	body, err := cbor.Marshal(req)
+	if err != nil {
+		return nil, response{}, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.broken != nil {
+		return nil, response{}, c.broken
+	}
+	// A helper that stopped answering would hold every later call; one
+	// that answered late would answer the next call with this one's
+	// answer, so the connection goes.
+	fail := func(err error) (*os.File, response, error) {
+		c.broken = fmt.Errorf("plumber: the helper did not answer: %w", err)
+		c.c.Close()
+		close(c.gone)
+		return nil, response{}, c.broken
+	}
+	if err := c.c.SetDeadline(time.Now().Add(callTimeout)); err != nil {
+		return fail(err)
+	}
+	if err := writeFrame(c.c, body, nil); err != nil {
+		return fail(err)
+	}
+	body, f, err := readFrame(c.c, req.Op == opOpen)
+	if err != nil {
+		if f != nil {
+			f.Close()
+		}
+		return fail(err)
+	}
+	var resp response
+	if err := decMode.Unmarshal(body, &resp); err != nil {
+		if f != nil {
+			f.Close()
+		}
+		return nil, response{}, fmt.Errorf("plumber: %w", err)
+	}
+	if resp.Err != "" {
+		if f != nil {
+			f.Close()
+		}
+		return nil, resp, fmt.Errorf("plumber: %s", resp.Err)
+	}
+	return f, resp, nil
+}
+
+// writeFrame writes body, length first, with f's descriptor alongside the
+// length. The body goes by Write, which sends all of it: one sendmsg sends
+// what the socket's buffer holds, on FreeBSD 8 KiB.
+func writeFrame(c *net.UnixConn, body []byte, f *os.File) error {
+	head := binary.BigEndian.AppendUint32(nil, uint32(len(body)))
+	var oob []byte
+	if f != nil {
+		oob = unix.UnixRights(int(f.Fd()))
+	}
+	n, oobn, err := c.WriteMsgUnix(head, oob, nil)
+	if err == nil && (n != len(head) || oobn != len(oob)) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return err
+	}
+	_, err = c.Write(body)
+	return err
+}
+
+// readFrame reads a frame, and a descriptor with it where fd says one may
+// come.
+func readFrame(c *net.UnixConn, fd bool) ([]byte, *os.File, error) {
+	head := make([]byte, 4)
+	oob := make([]byte, unix.CmsgSpace(4))
+	n, oobn, _, _, err := c.ReadMsgUnix(head, oob)
+	if err != nil {
+		return nil, nil, err
+	}
+	var f *os.File
+	if oobn > 0 {
+		f, err = descriptor(oob[:oobn])
+		if err != nil {
+			return nil, nil, err
+		}
+		if !fd {
+			f.Close()
+			return nil, nil, errors.New("a descriptor came unasked")
+		}
+	}
+	if _, err := io.ReadFull(c, head[n:]); err != nil {
+		return nil, f, err
+	}
+	size := binary.BigEndian.Uint32(head)
+	if size > maxFrame {
+		return nil, f, fmt.Errorf("a frame of %d bytes", size)
+	}
+	body := make([]byte, size)
+	if _, err := io.ReadFull(c, body); err != nil {
+		return nil, f, err
+	}
+	return body, f, nil
+}
+
+func descriptor(oob []byte) (*os.File, error) {
+	msgs, err := unix.ParseSocketControlMessage(oob)
+	if err != nil || len(msgs) != 1 {
+		return nil, errors.New("an unreadable control message")
+	}
+	fds, err := unix.ParseUnixRights(&msgs[0])
+	if err != nil || len(fds) != 1 {
+		for _, fd := range fds {
+			unix.Close(fd)
+		}
+		return nil, errors.New("not one descriptor")
+	}
+	// Non-blocking, so that the runtime's poller serves it.
+	if err := unix.SetNonblock(fds[0], true); err != nil {
+		unix.Close(fds[0])
+		return nil, err
+	}
+	return os.NewFile(uintptr(fds[0]), "tun"), nil
+}
+
+// A Host is what the helper does to the host's network, as root.
+type Host interface {
+	// OpenTUN creates the device, up, with mtu, and returns a descriptor for
+	// the daemon and how to destroy the device.
+	OpenTUN(name string, mtu int) (f *os.File, destroy func() error, err error)
+	AddAddr(dev string, p netip.Prefix) error
+	DelAddr(dev string, p netip.Prefix) error
+	// AddRoute routes p into dev, from src where valid.
+	AddRoute(dev string, p netip.Prefix, src netip.Addr) error
+	// DelRoute deletes the route AddRoute made, from src, alone.
+	DelRoute(dev string, p netip.Prefix, src netip.Addr) error
+	// SetServe serves through dev as s asks, or no longer; destroying the
+	// device ends it too.
+	SetServe(dev string, s ServeSpec) error
+	// SetEgress sends the host's traffic as e asks, uid being juistd's, whose
+	// own goes by the host's routes. Refusing outlasts the device.
+	SetEgress(dev string, e EgressSpec, uid int) error
+	// SetDNS makes servers the host's resolvers by dev, or no longer.
+	SetDNS(dev string, servers []netip.Addr) error
+	// Free reports whether no helper holds dev.
+	Free(dev string) bool
+	// Answers says why answers to what comes in by another device would not
+	// leave by it, "" where they would.
+	Answers() string
+}
+
+// device is what the helper made and installed on one device.
+type device struct {
+	destroy func() error
+	addrs   []netip.Prefix
+	routes  map[netip.Prefix]netip.Addr
+}
+
+// Serve answers the daemon on c until it hangs up, or sends what no helper
+// takes, and returns how to destroy every device it made. The caller
+// destroys them once the daemon is gone: destroying a device waits for its
+// descriptor to close. uid is the daemon's, as the caller started it: the
+// socket's own credentials are its creator's, the helper's.
+func Serve(c *net.UnixConn, h Host, uid int, logf func(string, ...any)) (destroy func(), err error) {
+	devs := map[string]*device{}
+	destroy = func() {
+		for name, d := range devs {
+			if err := d.destroy(); err != nil {
+				logf("plumber: destroying %s: %v", name, err)
+			}
+			delete(devs, name)
+		}
+	}
+	return destroy, serve(c, h, devs, uid)
+}
+
+func serve(c *net.UnixConn, h Host, devs map[string]*device, uid int) error {
+	for {
+		body, f, err := readFrame(c, false)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if f != nil {
+			f.Close()
+		}
+		if err != nil {
+			return err
+		}
+		var req request
+		var out *os.File
+		var resp response
+		err = decMode.Unmarshal(body, &req)
+		if err == nil && req.Op == opAnswers {
+			// Read alone, of no device in particular.
+			resp.Answers = h.Answers()
+		} else if err == nil {
+			out, err = handle(devs, h, req, uid)
+		}
+		if err != nil {
+			resp.Err = err.Error()
+		}
+		b, merr := cbor.Marshal(resp)
+		if merr != nil {
+			return merr
+		}
+		werr := writeFrame(c, b, out)
+		if out != nil {
+			out.Close()
+		}
+		if werr != nil {
+			return werr
+		}
+	}
+}
+
+func handle(devs map[string]*device, h Host, req request, uid int) (*os.File, error) {
+	if !devicePattern.MatchString(req.Device) {
+		return nil, fmt.Errorf("%q is no device of juist's", req.Device)
+	}
+	d := devs[req.Device]
+	if req.Op == opEgress && req.Egress != nil {
+		if err := checkEgress(*req.Egress); err != nil {
+			return nil, err
+		}
+	}
+	if req.Op == opDNS && d == nil && len(req.DNS) == 0 && h.Free(req.Device) {
+		// Given back while no device runs; set only with one.
+		return nil, h.SetDNS(req.Device, nil)
+	}
+	if req.Op == opEgress && d == nil && req.Egress != nil && h.Free(req.Device) && len(req.Egress.Capture) == 0 &&
+		(req.Egress.Mode == EgressDirect || req.Egress.Mode == EgressRefused) {
+		// Refusing, or no longer, before the device is opened or after it
+		// went: a stopped mesh's refusal is kept so, routing nothing into a
+		// device of no one's. Another helper's device's egress is that
+		// helper's.
+		return nil, h.SetEgress(req.Device, *req.Egress, uid)
+	}
+	if req.Op == opOpen {
+		if d != nil {
+			return nil, fmt.Errorf("%s is open already", req.Device)
+		}
+		if req.MTU < 1280 || req.MTU > 65535 {
+			return nil, fmt.Errorf("an MTU of %d", req.MTU)
+		}
+		f, destroy, err := h.OpenTUN(req.Device, req.MTU)
+		if err != nil {
+			return nil, err
+		}
+		devs[req.Device] = &device{destroy: destroy, routes: map[netip.Prefix]netip.Addr{}}
+		return f, nil
+	}
+	if d == nil {
+		return nil, fmt.Errorf("%s was not opened here", req.Device)
+	}
+	switch req.Op {
+	case opDestroy:
+		delete(devs, req.Device)
+		return nil, d.destroy()
+	case opAddrs:
+		return nil, setAddrs(h, req.Device, d, req.Addrs)
+	case opRoutes:
+		return nil, setRoutes(h, req.Device, d, req.Routes, req.Src4)
+	case opServe:
+		if req.Serve == nil {
+			return nil, errors.New("nothing to serve")
+		}
+		// Its own, as the helper set them: an address is written into
+		// pf's rules, and one with a zone could say anything there.
+		for _, a := range req.Serve.Addrs {
+			if !slices.ContainsFunc(d.addrs, func(p netip.Prefix) bool { return p.Addr() == a }) {
+				return nil, fmt.Errorf("%q is no address of %s", a, req.Device)
+			}
+		}
+		// Sources are masqueraded onto, and blocked coming in by, every
+		// other device: the overlay's alone, lest the LAN or the internet be.
+		for _, p := range req.Serve.Sources {
+			if !within(p, overlaySpace) {
+				return nil, fmt.Errorf("a source %v outside any network's space", p)
+			}
+		}
+		if err := validPrefixes(req.Serve.Local); err != nil {
+			return nil, err
+		}
+		return nil, h.SetServe(req.Device, *req.Serve)
+	case opDNS:
+		return nil, setDNS(h, req.Device, req.DNS)
+	case opEgress:
+		if req.Egress == nil {
+			return nil, errors.New("no egress")
+		}
+		if req.Egress.Mode == EgressTunnel && len(req.Egress.Capture) == 0 {
+			return nil, errors.New("a tunnel capturing nothing")
+		}
+		return nil, h.SetEgress(req.Device, *req.Egress, uid)
+	}
+	return nil, fmt.Errorf("no operation %q", req.Op)
+}
+
+// overlaySpace is where a network's addresses lie: the ranges its own IPv4
+// prefix may be chosen in (types.ValidateV4Prefix), and ULA.
+var overlaySpace = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("fc00::/7"),
+}
+
+// hostSpace is what the host keeps to itself or its links, which an exit
+// node's capture must leave be.
+var hostSpace = append(slices.Clone(overlaySpace),
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("224.0.0.0/3"),
+	netip.MustParsePrefix("::/127"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+)
+
+// within reports whether p is a valid, masked prefix inside one of space.
+func within(p netip.Prefix, space []netip.Prefix) bool {
+	return p.IsValid() && p.Masked() == p &&
+		slices.ContainsFunc(space, func(s netip.Prefix) bool { return s.Bits() <= p.Bits() && s.Contains(p.Addr()) })
+}
+
+func validPrefixes(ps []netip.Prefix) error {
+	for _, p := range ps {
+		if !p.IsValid() {
+			return errors.New("an invalid prefix")
+		}
+	}
+	return nil
+}
+
+// checkEgress refuses an egress whose capture would take what the host keeps
+// to itself and its links, as the LAN, into the device.
+func checkEgress(e EgressSpec) error {
+	switch e.Mode {
+	case EgressDirect, EgressTunnel, EgressRefused:
+	default:
+		return fmt.Errorf("no egress %q", e.Mode)
+	}
+	for _, p := range e.Capture {
+		if !p.IsValid() || p.Masked() != p || p.Bits() == 0 ||
+			slices.ContainsFunc(hostSpace, func(s netip.Prefix) bool { return s.Overlaps(p) }) {
+			return fmt.Errorf("a capture of %v", p)
+		}
+	}
+	if err := validPrefixes(e.Local); err != nil {
+		return err
+	}
+	return validPrefixes(e.Subnets)
+}
+
+func setDNS(h Host, dev string, servers []netip.Addr) error {
+	for _, s := range servers {
+		if !s.IsValid() || s.Zone() != "" {
+			return fmt.Errorf("a resolver %v", s)
+		}
+	}
+	if len(servers) > 3 {
+		// All the host's resolver takes.
+		servers = servers[:3]
+	}
+	return h.SetDNS(dev, servers)
+}
+
+func setAddrs(h Host, dev string, d *device, want []netip.Prefix) error {
+	var errs []error
+	for _, p := range slices.Clone(d.addrs) {
+		if !slices.Contains(want, p) {
+			if err := h.DelAddr(dev, p); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			d.addrs = slices.DeleteFunc(d.addrs, func(q netip.Prefix) bool { return q == p })
+		}
+	}
+	for _, p := range want {
+		if !p.IsValid() || slices.Contains(d.addrs, p) {
+			continue
+		}
+		if !p.IsSingleIP() {
+			// A wider one would route the rest of it into the device.
+			errs = append(errs, fmt.Errorf("an address of more than one host, %v", p))
+			continue
+		}
+		if !within(p, overlaySpace) {
+			// One of the internet's, or the LAN's, would be the host's own.
+			errs = append(errs, fmt.Errorf("an address outside any network's space, %v", p))
+			continue
+		}
+		if err := h.AddAddr(dev, p); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		d.addrs = append(d.addrs, p)
+	}
+	return errors.Join(errs...)
+}
+
+func setRoutes(h Host, dev string, d *device, want []netip.Prefix, src4 netip.Addr) error {
+	var errs []error
+	wanted := map[netip.Prefix]netip.Addr{}
+	for _, p := range want {
+		switch {
+		case !p.IsValid():
+			continue
+		case p.Bits() == 0:
+			// The internet goes into the tunnel by the exit node's own
+			// means, which keep the host's traffic apart; not this way.
+			errs = append(errs, fmt.Errorf("a default route, %v", p))
+			continue
+		}
+		src := netip.Addr{}
+		if p.Addr().Is4() && src4.Is4() &&
+			slices.ContainsFunc(d.addrs, func(a netip.Prefix) bool { return a.Addr() == src4 }) {
+			src = src4
+		}
+		wanted[p.Masked()] = src
+	}
+	for p, src := range d.routes {
+		if s, ok := wanted[p]; ok && s == src {
+			continue
+		}
+		if err := h.DelRoute(dev, p, src); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		delete(d.routes, p)
+	}
+	for p, src := range wanted {
+		if _, ok := d.routes[p]; ok {
+			continue
+		}
+		if err := h.AddRoute(dev, p, src); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		d.routes[p] = src
+	}
+	return errors.Join(errs...)
+}

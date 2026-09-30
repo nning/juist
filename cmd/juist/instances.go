@@ -35,8 +35,12 @@ type hostLayout struct {
 	runDir   string   // sockets: juistd.sock, and juistN.sock for the others
 	stateDir string   // the default's home, holding the others' as juistN
 	wantsDir string   // an enabled instance has its unit linked here
-	unitDirs []string // where juistd@.service may be installed
+	unitDirs []string // where instanceUnit may be installed
 	systemd  string   // exists while systemd runs the host; "" for always
+	// instanceUnit is what runs another network's instance, and enabledBy,
+	// where set, says whether instance n starts with the host.
+	instanceUnit string
+	enabledBy    func(n int) bool
 
 	// start enables and starts instance n, stop stops and disables it, and
 	// firewall lets its device through the host firewall ("allow") or
@@ -48,22 +52,6 @@ type hostLayout struct {
 	exitScript string
 	// dockerNets are the host's Docker bridges' networks, by bridge.
 	dockerNets func() map[string][]netip.Prefix
-}
-
-func systemLayout() *hostLayout {
-	return &hostLayout{
-		runDir:   filepath.Dir(ipc.SystemSocket),
-		stateDir: systemHome,
-		wantsDir: "/etc/systemd/system/multi-user.target.wants",
-		unitDirs: []string{"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"},
-		systemd:  "/run/systemd/system",
-		start:    func(ctx context.Context, n int) error { return systemctl(ctx, "enable", "--now", unitOf(n)) },
-		stop:     func(ctx context.Context, n int) error { return systemctl(ctx, "disable", "--now", unitOf(n)) },
-		firewall: runFirewallScript,
-
-		exitScript: "/usr/lib/juist/exit-node.sh",
-		dockerNets: dockerNets,
-	}
 }
 
 var dockerBridge = regexp.MustCompile(`^br-[0-9a-f]{12}$`)
@@ -115,16 +103,11 @@ func (l *hostLayout) homeOf(path string) (int, bool) {
 	return 0, false
 }
 
-// unit is instance n's systemd unit.
-func unitOf(n int) string {
-	if n == 0 {
-		return "juistd.service"
-	}
-	return "juistd@" + instance.Name(n) + ".service"
-}
-
 // enabled reports whether instance n is set to start with the host.
 func (l *hostLayout) enabled(n int) bool {
+	if l.enabledBy != nil {
+		return l.enabledBy(n)
+	}
 	if n == 0 {
 		return fileExists(l.stateDir)
 	}
@@ -137,7 +120,7 @@ func (l *hostLayout) canMakeInstances() bool {
 	if l.systemd != "" && !fileExists(l.systemd) {
 		return false
 	}
-	return slices.ContainsFunc(l.unitDirs, func(d string) bool { return fileExists(filepath.Join(d, "juistd@.service")) })
+	return slices.ContainsFunc(l.unitDirs, func(d string) bool { return fileExists(filepath.Join(d, l.instanceUnit)) })
 }
 
 // A hostInstance is one of the host's juistds, running or set to.
@@ -259,8 +242,8 @@ func (a *app) hostNode() (node, error) {
 		// One that does not answer may be some network's device; it is
 		// started, not stood in for.
 		if len(down) > 0 {
-			return nil, fmt.Errorf("%s is not running, so this device's networks are not all known\nhint: sudo "+
-				"systemctl start %s", unitOf(down[0].n), unitOf(down[0].n))
+			return nil, fmt.Errorf("%s is not running, so this device's networks are not all known\nhint: %s",
+				unitOf(down[0].n), startCmd(down[0].n))
 		}
 		// On a device in one network, the one it was removed from: joining
 		// it again is what a removed device does.
@@ -289,7 +272,7 @@ func (a *app) hostNode() (node, error) {
 }
 
 func notRunning(i hostInstance) error {
-	return fmt.Errorf("%s is not running\nhint: sudo systemctl start %s", unitOf(i.n), unitOf(i.n))
+	return fmt.Errorf("%s is not running\nhint: %s", unitOf(i.n), startCmd(i.n))
 }
 
 func (a *app) nodeOf(i hostInstance) node {
@@ -319,8 +302,7 @@ func (a *app) namedInstance(insts []hostInstance) (hostInstance, error) {
 	switch len(matches) {
 	case 0:
 		if len(insts) == 0 {
-			return hostInstance{}, fmt.Errorf("no juistd runs here, so no network %q\nhint: sudo systemctl "+
-				"enable --now juistd", want)
+			return hostInstance{}, fmt.Errorf("no juistd runs here, so no network %q\nhint: %s", want, enableCmd())
 		}
 		return hostInstance{}, fmt.Errorf("this device is in no network %q%s\nhint: %s", want,
 			didYouMean(want, networkNames(insts)...), a.networksHint(insts))
@@ -436,7 +418,7 @@ func (a *app) forEachNetwork(run func() error) (bool, error) {
 		}
 		if i.st == nil {
 			a.printf("%s · %s\n", a.bold(i.name()), a.paint("1;31", "not running"))
-			a.hint("sudo systemctl start %s", unitOf(i.n))
+			a.hint("%s", startCmd(i.n))
 			continue
 		}
 		if !a.listingHeads {
@@ -461,9 +443,9 @@ func (a *app) newInstance(in []hostInstance) (hostInstance, error) {
 	}
 	already := "this device is in " + strings.Join(labels, " and ")
 	if !a.host.canMakeInstances() {
-		return hostInstance{}, fmt.Errorf("%s, and another network needs juistd@.service beside juistd, which "+
-			"the juist package installs\nhint: or leave %s first: juist reset %s --force", already, labels[0],
-			in[0].word())
+		return hostInstance{}, fmt.Errorf("%s, and another network needs %s, which "+
+			"the juist package installs\nhint: or leave %s first: juist reset %s --force", already, instanceNeed,
+			labels[0], in[0].word())
 	}
 	if a.asRoot() {
 		n, err := a.makeInstance(operatorChoice{})
@@ -515,6 +497,10 @@ func (a *app) sudo(args []string, out *strings.Builder) error {
 	self, err := os.Executable()
 	if err != nil {
 		return err
+	}
+	if _, err := exec.LookPath("sudo"); err != nil {
+		// FreeBSD's base system has none.
+		return errors.New("this takes root, and there is no sudo here\nhint: run it as root")
 	}
 	cmd := exec.CommandContext(a.ctx, "sudo", append([]string{self}, args...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, a.out, a.errOut
@@ -569,8 +555,7 @@ func (a *app) makeInstance(op operatorChoice) (int, error) {
 		select {
 		case <-ctx.Done():
 			undo()
-			return 0, fmt.Errorf("%s did not answer on %s\nhint: journalctl -u %s", unitOf(n), a.host.socket(n),
-				unitOf(n))
+			return 0, fmt.Errorf("%s did not answer on %s\nhint: %s", unitOf(n), a.host.socket(n), logCmd(n))
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -603,8 +588,8 @@ func (a *app) removeInstance(n int) error {
 	// One that does not answer is judged by its home: a log in it is a
 	// network's, and its keys that network's device.
 	if fileExists(filepath.Join(a.host.home(n), logDir, "anchor")) {
-		return fmt.Errorf("%s holds a network's log in %s\nhint: sudo systemctl start %s, then juist "+
-			"reset %s --force", instance.Name(n), a.host.home(n), unitOf(n), instance.Name(n))
+		return fmt.Errorf("%s holds a network's log in %s\nhint: %s, then juist reset %s --force",
+			instance.Name(n), a.host.home(n), startCmd(n), instance.Name(n))
 	}
 	if err := a.host.stop(a.ctx, n); err != nil {
 		return err
@@ -670,8 +655,7 @@ func (a *app) unmake() {
 		err = exec.Command("sudo", "-n", self, "__instance", "remove", instance.Name(n)).Run()
 	}
 	if err != nil {
-		a.hint("%s stays, in no network, for the next one; sudo systemctl disable --now %s removes it",
-			unitOf(n), unitOf(n))
+		a.hint("%s stays, in no network, for the next one; %s removes it", unitOf(n), disableCmd(n))
 	}
 }
 
@@ -685,14 +669,6 @@ func runFirewallScript(ctx context.Context, action string, n int) error {
 	}
 	if out, err := exec.CommandContext(ctx, script, action, instance.Name(n)).CombinedOutput(); err != nil {
 		return fmt.Errorf("%s %s %s: %v: %s", script, action, instance.Name(n), err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func systemctl(ctx context.Context, args ...string) error {
-	out, err := exec.CommandContext(ctx, "systemctl", args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("systemctl %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -774,7 +750,7 @@ func (a *app) printHostStatus(insts []hostInstance) {
 		}
 		if i.st == nil {
 			a.printf("%s · %s\n", a.bold(i.name()), a.paint("1;31", "not running"))
-			a.hint("sudo systemctl start %s", unitOf(i.n))
+			a.hint("%s", startCmd(i.n))
 			continue
 		}
 		a.printStatusIn(i.st, i.name())
@@ -799,8 +775,7 @@ func (a *app) dropInstance(n int, yes bool) error {
 		return nil
 	}
 	if !a.interactive && !yes {
-		a.hint("%s stays, in no network, for the next one; sudo systemctl disable --now %s removes it",
-			unitOf(n), unitOf(n))
+		a.hint("%s stays, in no network, for the next one; %s removes it", unitOf(n), disableCmd(n))
 		return nil
 	}
 	if !a.interactive {
@@ -810,8 +785,7 @@ func (a *app) dropInstance(n int, yes bool) error {
 			err = exec.Command("sudo", "-n", self, "__instance", "remove", instance.Name(n)).Run()
 		}
 		if err != nil {
-			a.hint("%s stays, in no network, for the next one; sudo systemctl disable --now %s removes it",
-				unitOf(n), unitOf(n))
+			a.hint("%s stays, in no network, for the next one; %s removes it", unitOf(n), disableCmd(n))
 			return nil
 		}
 		a.ok("removed %s", unitOf(n))

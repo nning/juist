@@ -99,7 +99,7 @@ func (a *app) printStatusIn(s *ipc.Status, inst string) {
 		if inst != "" {
 			network = inst + " "
 		}
-		a.hint("read-only; to manage this device: sudo juist set %s--operator=%s", network, currentUser())
+		a.hint("read-only; to manage this device: %s", asRoot("juist set "+network+"--operator="+currentUser()))
 	}
 }
 
@@ -290,6 +290,9 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	}
 	if ex := s.Exit; ex != nil {
 		name := exitName(ex)
+		if !ex.Node.IsZero() {
+			name += isolation(ex.Isolated)
+		}
 		switch {
 		case ex.Failed != "":
 			field("Exit node", "%s", paint("1;31", name+", internet may leave directly: "+ex.Failed))

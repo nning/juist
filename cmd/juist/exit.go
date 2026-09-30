@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,13 +30,10 @@ func exitFamily() family {
 			{name: "use", run: exitUse, forms: [][2]string{{"use DEVICE", "send internet traffic through DEVICE"}}},
 			{name: "off", run: exitOff, forms: [][2]string{{"off", "send it directly again"}}},
 			{name: "serve", run: exitServe, forms: [][2]string{
-				{"serve", "carry the network's internet traffic;\nsets the host up with sudo where needed"},
+				{"serve", "carry the network's internet traffic;\n" + servesSetUp},
 				{"serve --stop", "stop, and undo that"},
 			}},
-		}, footer: `An admin makes a device an exit node: juist grant DEVICE exit. It
-carries public addresses alone, so the LAN stays direct; where
-systemd-resolved runs, it takes DNS too, but for the LAN's own domain. Where
-it cannot be used, traffic is refused, not sent directly.`}
+		}, footer: exitFooter}
 }
 
 func cmdExit(a *app, args []string) error { return exitFamily().run(a, args) }
@@ -177,7 +173,7 @@ func (a *app) daemonStatus() (*ipc.Status, error) {
 	st := n.status()
 	switch {
 	case st == nil:
-		return nil, errors.New("juistd not running\nhint: sudo systemctl start juistd")
+		return nil, errors.New("juistd not running\nhint: " + startCmd(0))
 	case !st.InNetwork:
 		return nil, errNoNetwork
 	}
@@ -195,14 +191,10 @@ func (a *app) restatus() (*ipc.Status, error) {
 }
 
 func exitUse(a *app, args []string) error {
-	s := spec{name: "juist exit use", args: "DEVICE", min: 1, max: 1, about: `
-Send this device's internet traffic through DEVICE, and its DNS too where
-systemd-resolved runs. The LAN and the network's devices stay direct;
-connections from the internet to this device's own address do not. Where
-DEVICE cannot carry it, the traffic is refused, not sent directly; --force
-chooses one that does not serve yet.`}
+	s := spec{name: "juist exit use", args: "DEVICE", min: 1, max: 1, about: exitUseAbout}
 	fs := newFlags(s.name)
-	force := fs.Bool("force", false, "choose it though it does not serve")
+	force := fs.Bool("force", false, "choose it though it does not serve, or would end this ssh session")
+	isolate := fs.Bool("isolate", false, "send answers to connections from the internet through it too")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
@@ -236,25 +228,38 @@ chooses one that does not serve yet.`}
 		return errors.New("this device cannot be its own exit node")
 	case !target.HasRole(types.RoleExit):
 		return fmt.Errorf("%s is not an exit node\nhint: an admin makes it one: juist grant %s exit", name, name)
-	case runtime.GOOS != "linux":
-		return errors.New("exit nodes are used on Linux alone so far")
-	case ex.Node == target.Identity && ex.Refused == "" && ex.Failed == "":
-		a.ok("unchanged: internet via %s", name)
+	case !servesHere:
+		return errors.New("exit nodes are used on Linux and FreeBSD alone")
+	case ex.Node == target.Identity && ex.Refused == "" && ex.Failed == "" && ex.Isolated == *isolate:
+		a.ok("unchanged: internet via %s%s", name, isolation(*isolate))
 		a.warnPartly(ex)
 		return nil
 	case !slices.Contains(ex.Offering, target.Identity) && !*force:
 		return fmt.Errorf("%s does not serve as an exit node\nhint: on %s, juist exit serve; or --force", name, name)
 	}
+	overlay := dnsOverlay(st, append(slices.Clone(state.V4Ranges()), state.ULA()))
+	for _, d := range st.Devices {
+		overlay = append(overlay, d.Subnets...)
+	}
+	// Its answers would leave through the exit node, from another address.
+	why := ex.AnswersThrough
+	if *isolate {
+		why = "isolated, answers to the internet go through " + name
+	}
+	if client, cut := a.cutsSSH(overlay); cut && why != "" && !*force {
+		return fmt.Errorf("this ssh session, %s, would end: %s\n"+
+			"hint: ssh to this device in the network%s, and run it there; or --force", client, why, overlayAddr(st))
+	}
 	n, err := a.openNode()
 	if err != nil {
 		return err
 	}
-	after, err := n.exit(ipc.Request{Command: ipc.CmdExit, ExitNode: target.Identity})
+	after, err := n.exit(ipc.Request{Command: ipc.CmdExit, ExitNode: target.Identity, ExitIsolate: *isolate})
 	if err != nil {
 		return err
 	}
 	switch ex := after.Exit; {
-	case ex == nil || ex.Node != target.Identity:
+	case ex == nil || ex.Node != target.Identity || ex.Isolated != *isolate:
 		return errors.New("juistd did not take the choice; version mismatch?")
 	case ex.Failed != "":
 		return fmt.Errorf("chose %s, and internet traffic may leave directly: %s\nhint: juist exit off", name, ex.Failed)
@@ -266,7 +271,13 @@ chooses one that does not serve yet.`}
 		}
 		return nil
 	}
-	a.ok("internet via %s", name)
+	a.ok("internet via %s%s", name, isolation(*isolate))
+	switch {
+	case *isolate:
+		a.warn("answers to connections from the internet go through %s too: this device's services are not reached at its own address", name)
+	case ex.AnswersThrough != "":
+		a.warn("answers to connections from the internet go through %s: %s", name, ex.AnswersThrough)
+	}
 	a.warnPartly(ex)
 	if r := exitReach(after, target.Identity); r != "" {
 		a.warn("%s is %s; internet traffic waits for it", name, r)
@@ -339,8 +350,11 @@ func (a *app) warnDNS(ex *ipc.Exit, overlay []netip.Prefix) {
 	case len(out) == 0:
 	case ex != nil && ex.DNSNot != "":
 		a.warn("DNS goes to %s, outside the tunnel: %s", joinAddrs(out), ex.DNSNot)
-		if strings.Contains(ex.DNSNot, "refused juistd") {
+		switch {
+		case strings.Contains(ex.DNSNot, "refused juistd"):
 			a.hint("the package's polkit rule allows juistd that: /usr/share/polkit-1/rules.d/60-juist.rules")
+		case strings.Contains(ex.DNSNot, "uplink mode"):
+			a.hint("%s", asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"))
 		}
 	default:
 		a.warn("DNS goes to %s, outside the tunnel", joinAddrs(out))
@@ -415,10 +429,7 @@ Send this device's internet traffic directly again.`}
 }
 
 func exitServe(a *app, args []string) error {
-	s := spec{name: "juist exit serve", about: `
-Carry the network's internet traffic, where an admin made this device an
-exit node. Where the host does not forward yet, sudo sets that up and lets
-the traffic through the firewall; --stop stops, and undoes it.`}
+	s := spec{name: "juist exit serve", about: exitServeAbout}
 	fs := newFlags(s.name)
 	stop := fs.Bool("stop", false, "stop serving")
 	if _, err := a.parse(s, fs, args); err != nil {
@@ -428,8 +439,8 @@ the traffic through the firewall; --stop stops, and undoes it.`}
 	if err != nil {
 		return err
 	}
-	if runtime.GOOS != "linux" {
-		return errors.New("an exit node runs on Linux alone so far")
+	if !servesHere {
+		return errors.New("an exit node runs on Linux and FreeBSD alone")
 	}
 	if err := a.requireOperator(); err != nil {
 		return err
@@ -450,7 +461,7 @@ the traffic through the firewall; --stop stops, and undoes it.`}
 			a.ok("unchanged: not serving")
 		}
 		// Forwarding stays for as long as this device routes subnets.
-		if exitSetUp(a.system, dev) && (st.Subnets == nil || !st.Subnets.Consent) {
+		if !helperSetsUpHost && exitSetUp(a.system, dev) && (st.Subnets == nil || !st.Subnets.Consent) {
 			return a.exitSetup("off", dev, "juist exit serve")
 		}
 		return nil
@@ -462,7 +473,7 @@ the traffic through the firewall; --stop stops, and undoes it.`}
 		return fmt.Errorf("%s uses an exit node, which would take what this device serves\n"+
 			"hint: juist exit off %s", other.label(), other.word())
 	}
-	if !exitSetUp(a.system, dev) || !forwarding(a.system) {
+	if !helperSetsUpHost && (!exitSetUp(a.system, dev) || !forwarding(a.system)) {
 		if err := a.exitSetup("on", dev, "juist exit serve"); err != nil {
 			return err
 		}
@@ -602,4 +613,27 @@ func joinAddrs(addrs []netip.Addr) string {
 		s[i] = a.String()
 	}
 	return strings.Join(s, ", ")
+}
+
+// overlayAddr is ", at ADDR", this device's address in the network, IPv4
+// first, or nothing where it has none.
+func overlayAddr(st *ipc.Status) string {
+	var v6 string
+	for _, p := range st.Addrs {
+		if p.Addr().Is4() {
+			return ", at " + p.Addr().String()
+		}
+		if v6 == "" {
+			v6 = ", at " + p.Addr().String()
+		}
+	}
+	return v6
+}
+
+// isolation is ", isolated" where isolated.
+func isolation(isolated bool) string {
+	if isolated {
+		return ", isolated"
+	}
+	return ""
 }

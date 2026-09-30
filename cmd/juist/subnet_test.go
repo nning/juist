@@ -35,6 +35,7 @@ func prefixes(s ...string) []netip.Prefix {
 // member reaches through the router, less what it reaches by routes of its
 // own; its owner may turn subnets off, and a revoke ends it.
 func TestASubnetFromGrantToRevoke(t *testing.T) {
+	exitNodesHere(t)
 	t.Parallel()
 	laptop, vps := homeAndVPS(t)
 	mustContain(t, laptop.mustRun("subnet"), "no subnets", "juist grant DEVICE 192.168.1.0/24")
@@ -131,6 +132,10 @@ func TestASubnetFromGrantToRevoke(t *testing.T) {
 // Forwarding set up for a device stays while it serves either way, and goes
 // with the last.
 func TestForwardingStaysWhileEitherServes(t *testing.T) {
+	exitNodesHere(t)
+	if helperSetsUpHost {
+		t.Skip("exit-node.sh's; FreeBSD's helper holds forwarding per device, as TestServingSetsTheHostUpAndBack shows")
+	}
 	t.Parallel()
 	h := newHost(t)
 	h.mustRun("create", "home", "--device", "laptop")
@@ -193,6 +198,11 @@ func TestTheStatusSaysWhereDNSGoes(t *testing.T) {
 	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNSNot: "systemd-resolved refused juistd"}, nil)
 	mustContain(t, out.String(), "warning: DNS goes to 192.168.1.1, outside the tunnel: systemd-resolved refused juistd",
 		"hint: the package's polkit rule allows juistd that")
+	out = &syncBuffer{}
+	a = c.app(out, "")
+	a.warnDNS(&ipc.Exit{Node: id, Name: "vps",
+		DNSNot: "/etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub"}, nil)
+	mustContain(t, out.String(), "hint: "+asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"))
 	out = &syncBuffer{}
 	a = c.app(out, "")
 	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNS: true}, nil)

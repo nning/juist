@@ -382,6 +382,12 @@ type Exit struct {
 	// StrictRP6 says the host's strict IPv6 reverse-path filter drops what
 	// the exit node in use answers over IPv6.
 	StrictRP6 bool `cbor:"13,keyasint,omitempty"`
+
+	// Isolated says answers to connections that came in by another device go
+	// through the exit node in use too, as chosen; AnswersThrough why they
+	// would though not chosen, "" where they leave the way they came.
+	Isolated       bool   `cbor:"14,keyasint,omitempty"`
+	AnswersThrough string `cbor:"15,keyasint,omitempty"`
 }
 
 // Subnets is what a device makes of subnet routes: Off says its owner turned

@@ -228,6 +228,19 @@ code directly, so they fail on the upgrade itself rather than in the field.
 | magicsock reaches no relay and no STUN server without a DERP map | direct-only operation | `TestNoThirdPartyEgress` |
 | The router, device and MTU behave as the wiring requirements above say | the real-device path | `make test-os-plumbing` (root, not on CI's unprivileged job) |
 
+## Answers leave the way they came (Linux)
+
+Using an exit node, answers to connections that came in by another device
+leave by it. The conntrack mark is bit 0x20000000, apart from Tailscale's
+0xff0000; software that saves or clears the whole mark, as Calico's default
+mask does, breaks the answers, not the guard. A connection is marked only
+where it was sent to an address of the device it came by, and where the
+host's routes, as answers take them, lead back by that device: this keeps
+what a LAN sends to the overlay's addresses, and what comes by another VPN,
+out. A UDP server bound to the wildcard address without `IP_PKTINFO` picks
+its answer's source by the routes, the exit node's, so its answers are no
+answers to conntrack and go through the tunnel.
+
 ## Sharing a host with tailscaled
 
 juist must hold nothing tailscaled also holds, since both run on one host:
@@ -261,6 +274,50 @@ special space past. The first exit table takes every address it is asked
 about: of two instances using an exit node the lower one's routes, the
 higher routing nothing of its own, and an instance serves nothing beside one
 that uses an exit node (`conn.ErrEgressTaken`).
+
+## FreeBSD
+
+What the pinned Tailscale and wireguard-go do on FreeBSD, and what juist does
+instead (M7a):
+
+- **Tailscale's BSD router is not used.** It runs `ifconfig` and `route`,
+  which need root, and its `Close` leaves routes behind. juist's router asks
+  its helper instead (`conn/plumbed_freebsd.go`).
+- **wireguard-go's FreeBSD device is not used by the daemon.** Built from a
+  descriptor it sets the MTU itself, `SIOCSIFMTU`, which only root may, even
+  to the MTU the device has. The helper creates the device with it; the
+  daemon reads and writes the descriptor behind the four-byte family header
+  `TUNSIFHEAD` asks for.
+- **`route add … -iface DEV -ifa SRC` does not pin the source** of what the
+  host sends; the route shares its next hop with one without `-ifa`. Naming
+  the source as the gateway, `route add P SRC -ifp DEV`, does.
+- **netmon hears devd's IFNET events alone**, and polls every ten seconds
+  without devd: a route change alone is not heard.
+- **Nothing keeps Tailscale's own traffic off the tunnel** on FreeBSD: no
+  mark, no FIB, no binding. juist's pf anchor sends it back to the host's
+  gateway by its user (M7b).
+- **pf, as juist uses it:** a stateful `pass` takes a TCP connection by its
+  SYN alone, so the guard passes without state, or it drops what answers a
+  connection that came in, sshd's included. A NAT's state, taken on the
+  uplink, does not pass an answer out of the tunnel, so the exit node keeps
+  state as peers' traffic comes in. `LOCAL_PEERCRED` on a socket pair names
+  its creator, the helper, not the daemon holding the other end.
+- **A host that runs pf itself** must call `nat-anchor "juist/*"`,
+  `rdr-anchor "juist/*"` and `anchor "juist/*"` in `/etc/pf.conf` before any
+  rule that passes quick, which would pass what the guard drops; juist
+  refuses otherwise, and says so. Without pf running, juist runs it with
+  those lines alone, and turns it off again while nobody changed them and
+  rc.conf does not start pf. Answers to what comes in keep leaving the way
+  it came only with that ruleset of juist's: pf decides by the last rule
+  that matches, so a pass of juist's would override a host's `block in all`
+  before the anchor, and `match` takes no `reply-to` in 14.5; beside the
+  host's own rules theirs decide, and the status says so.
+- **Routes to one prefix do not stand side by side** on 14.5, even with
+  `net.route.multipath=1`, whatever their gateways: juist deletes a route
+  by its gateway all the same, so as never to take another's.
+- **IPv6 on the device** takes the address as `inet6 A prefixlen 128`;
+  Tailscale's `/48` workaround for FreeBSD bug 218508 concerns the
+  point-to-point form, which juist does not use.
 
 ## Constraints on the test harness
 

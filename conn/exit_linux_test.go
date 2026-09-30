@@ -192,8 +192,8 @@ func TestTheGuardDropsWhatElseWouldLeave(t *testing.T) {
 		output, refuse bool
 		want           int
 	}{
-		{nftables.TableFamilyIPv4, true, false, 5 + v4 + 1}, {nftables.TableFamilyIPv4, false, false, 3 + v4 + 1},
-		{nftables.TableFamilyIPv6, true, false, 6 + v6 + 1}, {nftables.TableFamilyIPv4, true, true, v4 + 1 + 4 + v4 + 1},
+		{nftables.TableFamilyIPv4, true, false, 6 + v4 + 1}, {nftables.TableFamilyIPv4, false, false, 4 + v4 + 1},
+		{nftables.TableFamilyIPv6, true, false, 7 + v6 + 1}, {nftables.TableFamilyIPv4, true, true, v4 + 1 + 5 + v4 + 1},
 	} {
 		rules := guardRules(tc.fam, tc.output, "juist0", both, tc.refuse, 900)
 		if len(rules) != tc.want {
@@ -219,7 +219,7 @@ func TestTheGuardDropsWhatElseWouldLeave(t *testing.T) {
 			t.Errorf("%v refuse %v: %d rejects", tc.fam, tc.refuse, rejects)
 		}
 	}
-	if n := len(guardRules(nftables.TableFamilyIPv4, true, "", both, true, 0)); n != 3+v4+1 {
+	if n := len(guardRules(nftables.TableFamilyIPv4, true, "", both, true, 0)); n != 4+v4+1 {
 		t.Errorf("with no device and root: %d rules", n)
 	}
 	for _, a := range []string{"203.0.114.9", "8.8.8.8", "2a02:810d::10"} {
@@ -432,5 +432,76 @@ func TestAStrictReversePathRuleIsToldApart(t *testing.T) {
 	loose := rule(nfproto, &expr.Fib{Register: 1, FlagSADDR: true, FlagMARK: true, ResultOIF: true})
 	if !strictRPRule(strict) || strictRPRule(loose) || strictRPRule(rule(nfproto)) || strictRPRule(nil) {
 		t.Error("the strict rule is not told apart from the loose one")
+	}
+}
+
+// Peers' DNS is redirected to the forwarder where it asks this node's own
+// address on port 53, and no other server's.
+func TestDNSIsRedirectedToTheForwarder(t *testing.T) {
+	addr := netip.MustParseAddr("10.11.11.13")
+	rule := dnsRedirect(ifname("juist0"), addr, unix.IPPROTO_UDP, 41646)
+	var sawAddr, saw53, sawPort, redir bool
+	for _, e := range rule {
+		switch v := e.(type) {
+		case *expr.Cmp:
+			sawAddr = sawAddr || slices.Equal(v.Data, addr.AsSlice())
+			saw53 = saw53 || slices.Equal(v.Data, []byte{0, 53})
+		case *expr.Immediate:
+			sawPort = slices.Equal(v.Data, []byte{0xa2, 0xae})
+		case *expr.Redir:
+			redir = v.RegisterProtoMin == 1
+		}
+	}
+	if !sawAddr || !saw53 || !sawPort || !redir {
+		t.Errorf("the rule %v: address %v, port 53 %v, forwarder %v, redirect %v", rule, sawAddr, saw53, sawPort, redir)
+	}
+}
+
+// Answers to what came in by another device pass the guard, in both chains,
+// unless the host is isolated; a connection is marked for it only where it
+// comes in by a device of neither juist's nor the loopback.
+func TestTheGuardPassesAnswersButIsolated(t *testing.T) {
+	answering := func(rules [][]expr.Any) bool {
+		return slices.ContainsFunc(rules, func(r []expr.Any) bool {
+			ct, ok := r[0].(*expr.Ct)
+			return ok && ct.Key == expr.CtKeyDIRECTION
+		})
+	}
+	for _, output := range []bool{true, false} {
+		if !answering(guardRules(nftables.TableFamilyIPv4, output, "juist0", tunnelled{v4: true}, false, 900)) {
+			t.Errorf("output %v: answers do not pass", output)
+		}
+		if answering(guardRules(nftables.TableFamilyIPv4, output, "juist0", tunnelled{v4: true, answers: true}, true, 900)) {
+			t.Errorf("output %v: isolated, answers pass", output)
+		}
+	}
+	var names [][]byte
+	var fibs []*expr.Fib
+	for _, e := range markIncoming("vpn0") {
+		if c, ok := e.(*expr.Cmp); ok && c.Op == expr.CmpOpNeq && len(c.Data) != 4 {
+			names = append(names, c.Data)
+		}
+		if f, ok := e.(*expr.Fib); ok {
+			fibs = append(fibs, f)
+		}
+		if ct, ok := e.(*expr.Ct); ok && ct.Key == expr.CtKeySTATE {
+			t.Error("only new connections are marked, not those older than the guard")
+		}
+	}
+	if len(names) != 3 || string(names[0]) != "juist" || string(names[1]) != "lo\x00" || string(names[2]) != "vpn0\x00" {
+		t.Errorf("a connection is marked coming in by any device but %q", names)
+	}
+	// Sent to the device's own address, from where the host's routes, with
+	// the answer's mark, lead back by that device.
+	if len(fibs) != 2 || !fibs[0].FlagDADDR || !fibs[0].FlagIIF || !fibs[0].ResultADDRTYPE ||
+		!fibs[1].FlagSADDR || !fibs[1].FlagMARK || !fibs[1].FlagIIF || !fibs[1].ResultOIF {
+		t.Errorf("a connection is marked without both lookups: %+v", fibs)
+	}
+	if !isExitRulePref(uint32(juistRulePrefBase+exitRuleAnswers+3), 3) {
+		t.Error("the answer rule, deleted, is not put back")
+	}
+	if r := answerRule(unix.AF_INET, 3); r.Priority != juistRulePrefBase+exitRuleAnswers+3 || r.Table != unix.RT_TABLE_MAIN ||
+		r.Mark != answerMark || r.Mask != answerMark || answerMark&tsconst.LinuxFwmarkMaskNum != 0 {
+		t.Errorf("the answer rule is %+v", r)
 	}
 }

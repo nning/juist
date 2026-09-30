@@ -85,6 +85,11 @@ help: ## Show this help
 # without it make would call `build` up to date the moment the directory exists.
 # Deciding what is stale is left to the Go build cache, which knows the
 # dependency graph make would have to be told.
+# bindir is where the packages build GOOS $(1) and GOARCH $(2)'s binaries:
+# build/ itself for this system's, as `build` leaves them, so that go finds
+# them up to date and relinks nothing; build/GOOS-GOARCH for another's.
+bindir = $(if $(filter $(shell $(GO) env GOOS)/$(shell $(GO) env GOARCH),$(1)/$(2)),$(BUILDDIR),$(BUILDDIR)/$(1)-$(2))
+
 .PHONY: build
 build: ## Build the binaries into build/
 	@mkdir -p $(BUILDDIR)
@@ -118,6 +123,7 @@ cross: ## Compile for every v1 target platform
 		echo "==> $$p"; \
 		CGO_ENABLED=0 GOOS=$${p%/*} GOARCH=$${p#*/} $(GO) build $(GOFLAGS) ./... || exit 1; \
 	done
+	@echo "==> FreeBSD's manual pages, here"; $(GO) build $(GOFLAGS) -tags freebsdman ./cmd/...
 
 # HEAD built twice, from two paths and once with an empty build cache, so
 # neither the checkout's location nor a cached object can hide a difference.
@@ -167,6 +173,35 @@ test-os-plumbing-sudo: ## Build the privileged tests as you, run them with sudo
 	$(GO) test $(GOFLAGS) -c -o $(abspath $(BUILDDIR))/conn.test ./conn
 	cd conn && sudo JUIST_REQUIRE_OS_PLUMBING=1 $(abspath $(BUILDDIR))/conn.test \
 		-test.count=1 -test.timeout=15m -test.v -test.run '$(PLUMBING_TESTS)'
+
+# Every package's tests, built here for FreeBSD and run on a FreeBSD host as
+# root, the OS plumbing required. FREEBSD_SSH reaches it; the default is a
+# qemu VM with its ssh forwarded to 2222, as docs/12-validating.md sets up.
+FREEBSD_SSH ?= ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 2222 root@127.0.0.1
+
+# HEAD built here and on a FreeBSD host (FREEBSD_SSH), for Linux and FreeBSD:
+# two builders on two systems making the same bytes.
+.PHONY: repro-freebsd
+repro-freebsd: ## Fail unless a FreeBSD host builds HEAD to the same binaries as this one
+	sh packaging/freebsd/repro.sh "$(GO)" "$(FREEBSD_SSH)" "$(GOTOOLCHAIN)"
+
+# The interop lab, interop/: a Debian and a FreeBSD VM in qemu with the
+# packages, each the other's exit node and subnet router. KVM where /dev/kvm
+# opens, TCG, far slower, elsewhere; the images are fetched into
+# INTEROP_CACHE once and checked against their pinned sums.
+INTEROP_CACHE ?= $(HOME)/.cache/juist-interop
+
+.PHONY: interop
+interop: deb pkg-freebsd ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh)
+	cd interop && JUIST_INTEROP_WORK=$(abspath $(BUILDDIR))/interop \
+		JUIST_INTEROP_DEB=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb') \
+		JUIST_INTEROP_PKG=$$(find $(abspath $(BUILDDIR))/freebsd -name '*.pkg') \
+		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) GO=$(GO) \
+		$(GO) test $(GOFLAGS) -tags interop -count=1 -timeout 150m -v .
+
+.PHONY: test-freebsd
+test-freebsd: ## Run every test on a FreeBSD host over ssh, as root (FREEBSD_SSH)
+	sh packaging/freebsd/test.sh "$(GO)" "$(FREEBSD_SSH)"
 
 .PHONY: cover
 cover: ## Run race tests with coverage, print a summary
@@ -272,10 +307,11 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	@set -e; stage=$(RPMTOP)/stage/$(RPM_NAME)-$(RPM_VERSION); mkdir -p $$stage; \
 	for c in $(CMDS); do \
 		echo "==> $$c"; \
-		$(GOBUILD) -o $$stage/$$c ./cmd/$$c; \
+		$(GOBUILD) -o $(BUILDDIR)/$$c ./cmd/$$c; \
+		cp $(BUILDDIR)/$$c $$stage/$$c; \
 	done; \
-	$(GO) run $(GOFLAGS) ./cmd/juist __manpage > $$stage/juist.1; \
-	$(GO) run $(GOFLAGS) ./cmd/juistd __manpage > $$stage/juistd.8; \
+	$(BUILDDIR)/juist __manpage > $$stage/juist.1; \
+	$(BUILDDIR)/juistd __manpage > $$stage/juistd.8; \
 	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service README.md packaging/firewall.sh \
 		packaging/exit-node.sh packaging/polkit/juist.rules \
 		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml \
@@ -311,10 +347,11 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	@command -v dpkg-deb >/dev/null 2>&1 || { \
 		echo "dpkg-deb not found; it ships with dpkg on Debian and Ubuntu"; exit 1; }
 	@rm -rf $(DEBTOP)
-	@set -e; root=$(DEBTOP)/root; \
+	@set -e; root=$(DEBTOP)/root; bin=$(call bindir,linux,$(DEB_GOARCH)); \
 	for c in $(CMDS); do \
 		echo "==> $$c ($(DEB_ARCH))"; \
-		GOOS=linux GOARCH=$(DEB_GOARCH) $(GOBUILD) -o $$root/usr/bin/$$c ./cmd/$$c; \
+		GOOS=linux GOARCH=$(DEB_GOARCH) $(GOBUILD) -o $$bin/$$c ./cmd/$$c; \
+		install -D -m 0755 $$bin/$$c $$root/usr/bin/$$c; \
 	done; \
 	for u in juistd.service juistd@.service; do \
 		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/system/$$u; \
@@ -324,8 +361,12 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	install -D -m 0644 packaging/rpm/juist.sysusers $$root/usr/lib/sysusers.d/juist.conf; \
 	install -D -m 0644 README.md $$root/usr/share/doc/juist/README.md; \
 	install -d -m 0755 $$root/usr/share/man/man1 $$root/usr/share/man/man8; \
-	$(GO) run $(GOFLAGS) ./cmd/juist __manpage > $$root/usr/share/man/man1/juist.1; \
-	$(GO) run $(GOFLAGS) ./cmd/juistd __manpage > $$root/usr/share/man/man8/juistd.8; \
+	for m in juist.1 juistd.8; do \
+		c=$${m%.*}; out=$$root/usr/share/man/man$${m#*.}/$$m; \
+		if [ "$$bin" = "$(BUILDDIR)" ]; then $$bin/$$c __manpage > $$out; \
+		else vcs=; $(GO) version -m $$bin/$$c | grep -q vcs= && vcs=-buildvcs=true; \
+			$(GO) run $$vcs $(GOFLAGS) ./cmd/$$c __manpage > $$out; fi; \
+	done; \
 	gzip -9n $$root/usr/share/man/man1/juist.1 $$root/usr/share/man/man8/juistd.8; \
 	install -D -m 0755 packaging/firewall.sh $$root/usr/lib/juist/firewall.sh; \
 	install -D -m 0755 packaging/exit-node.sh $$root/usr/lib/juist/exit-node.sh; \
@@ -346,13 +387,25 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	dpkg-deb --root-owner-group -Zxz --build $$root $(DEBTOP)/juist_$(DEB_VERSION)_$(DEB_ARCH).deb >/dev/null
 	@find $(DEBTOP) -maxdepth 1 -name '*.deb'
 
+# `make pkg-freebsd` is the FreeBSD package, written by packaging/freebsd/mkpkg
+# rather than pkg-create(8), so that any system builds it, to the same bytes
+# from one commit. FREEBSD_ABI picks the release and machine it installs on.
+FREEBSD_ABI     ?= FreeBSD:14:amd64
+FREEBSD_VERSION ?= $(RPM_VERSION).$(RPM_STAMP)$(subst .dirty,.,$(RPM_DIRTY))
+
+.PHONY: pkg-freebsd
+pkg-freebsd: ## Build the FreeBSD package into build/freebsd
+	@rm -rf $(BUILDDIR)/freebsd
+	@sh packaging/freebsd/pkg.sh "$(GO)" "$(abspath $(BUILDDIR))/freebsd/juist-$(FREEBSD_VERSION).pkg" \
+		"$(FREEBSD_VERSION)" "$(FREEBSD_ABI)" "$(abspath $(BUILDDIR))"
+
 # `make install` builds the package this system's package manager takes and
-# installs it: the .deb with apt, the RPM with dnf, with sudo unless make
-# already runs as root. An upgrade keeps the state directory.
+# installs it: the .deb with apt, the RPM with dnf, FreeBSD's with pkg, with
+# sudo unless make already runs as root. An upgrade keeps the state directory.
 SUDO ?= sudo
 
 .PHONY: install
-install: ## Build this system's package (.deb or RPM) and install it with sudo
+install: ## Build this system's package (.deb, RPM or FreeBSD's) and install it with sudo
 	@set -e; \
 	sudo=$(SUDO); [ "$$(id -u)" -eq 0 ] && sudo=; \
 	if command -v apt >/dev/null 2>&1; then \
@@ -365,8 +418,14 @@ install: ## Build this system's package (.deb or RPM) and install it with sudo
 		pkg=$$(find $(RPMTOP)/RPMS -name '*.rpm'); \
 		echo "==> installing $$pkg"; \
 		$$sudo dnf install -y "$$pkg"; \
+	elif [ "$$(uname)" = FreeBSD ]; then \
+		abi=$$(pkg config abi); \
+		$(MAKE) --no-print-directory pkg-freebsd FREEBSD_ABI=$$abi; \
+		pkg=$$(find $(BUILDDIR)/freebsd -name '*.pkg'); \
+		echo "==> installing $$pkg"; \
+		$$sudo pkg add "$$pkg"; \
 	else \
-		echo "make install knows apt (Debian, Ubuntu) and dnf (Fedora); use make deb or make rpm"; \
+		echo "make install knows apt (Debian, Ubuntu), dnf (Fedora) and pkg (FreeBSD); use make deb, rpm or pkg-freebsd"; \
 		exit 1; \
 	fi
 
@@ -388,6 +447,7 @@ fmt-check: ## Fail if any file is unformatted
 .PHONY: vet
 vet: ## Run go vet
 	$(GO) vet $(GOFLAGS) ./...
+	$(GO) vet $(GOFLAGS) -tags interop ./interop
 
 .PHONY: staticcheck
 staticcheck: ## Run staticcheck
@@ -427,14 +487,14 @@ check: lint tidy-check build-test test-race tcb repro ## Everything CI gates on;
 
 # `make ci` is every job .github/workflows/ci.yml runs, on this machine: what
 # check gates, with the host-feature probes failing rather than skipping as on
-# the runner, then the cross builds, the vulnerability scan, both packages,
+# the runner, then the cross builds, the vulnerability scan, the packages,
 # and last the privileged tests, the one step that asks for sudo.
 CI_TOOLS = ip ping iptables nft rpmbuild dpkg-deb sudo
 
 .PHONY: ci
 ci: ci-deps ## Run every CI job locally (asks for sudo for the privileged tests)
 	JUIST_REQUIRE_HOST_NET=1 $(MAKE) --no-print-directory check
-	$(MAKE) --no-print-directory cross govulncheck rpm deb
+	$(MAKE) --no-print-directory cross govulncheck rpm deb pkg-freebsd
 	$(MAKE) --no-print-directory test-os-plumbing-sudo
 	@echo "ci: every job passed"
 

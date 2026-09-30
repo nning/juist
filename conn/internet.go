@@ -152,6 +152,10 @@ func (e Egress) String() string {
 type tunnelled struct {
 	v4, v6  bool
 	subnets []netip.Prefix
+	// answers sends the answers to connections that came in by another
+	// device into the tunnel too, isolating the host; else they leave by
+	// the way the connection came.
+	answers bool
 }
 
 func tunnelledBy(peers map[key.NodePublic]Peer) tunnelled {
@@ -167,7 +171,7 @@ func tunnelledBy(peers map[key.NodePublic]Peer) tunnelled {
 }
 
 func (t tunnelled) equal(o tunnelled) bool {
-	return t.v4 == o.v4 && t.v6 == o.v6 && slices.Equal(t.subnets, o.subnets)
+	return t.v4 == o.v4 && t.v6 == o.v6 && slices.Equal(t.subnets, o.subnets) && t.answers == o.answers
 }
 
 // ErrForwardingOff reports a host that does not forward a family an exit node
@@ -181,13 +185,29 @@ var ErrEgressTaken = errors.New("another network on this host uses an exit node"
 // Serve is what this node forwards for its peers out of the overlay: Routes,
 // the internet it carries as an exit node, less the networks the host is on;
 // and Subnets, which it routes as a subnet router. Peers' traffic from
-// Sources, the overlay ranges, leaves with this host's own address. The zero
-// value forwards nothing.
+// Sources, the overlay ranges, leaves with this host's own address. Where DNS
+// is set, peers' DNS on port 53 of this node's own addresses goes to the
+// forwarder on port DNS, which a resolver without ports, as FreeBSD's, needs.
+// The zero value forwards nothing.
 type Serve struct {
 	Routes  []netip.Prefix
 	Subnets []netip.Prefix
 	Sources []netip.Prefix
+	DNS     uint16
 }
 
 // serving reports whether s forwards anything.
 func (s Serve) serving() bool { return len(s.Routes)+len(s.Subnets) > 0 }
+
+// offTunnel is where traffic may go outside the tunnel while an exit node is
+// used: what no exit node carries. A LAN in public space is not among it: a
+// network could claim any public prefix for itself, by DHCP or router
+// advertisement, and so take it out of the tunnel.
+func offTunnel() []netip.Prefix {
+	var b netipx.IPSetBuilder
+	for _, p := range localSpace {
+		b.AddPrefix(p)
+	}
+	s, _ := b.IPSet()
+	return s.Prefixes()
+}

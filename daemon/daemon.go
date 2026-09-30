@@ -84,8 +84,10 @@ type Options struct {
 	ListenPort uint16
 
 	// TunName is the OS TUN device the data plane creates, which needs
-	// /dev/net/tun and CAP_NET_ADMIN. Empty means no host device.
+	// CAP_NET_ADMIN on Linux, or Plumber. Empty means no host device.
 	TunName string
+	// Plumber creates it and routes it where juistd may not, as on FreeBSD.
+	Plumber conn.Plumber
 
 	// Instance numbers this node among the juist nodes on the host, one per
 	// network: 0 for the default, up to instance.Max. It chooses the routing
@@ -595,6 +597,7 @@ func New(opts Options) (*Daemon, error) {
 			Addrs:    selfAddrs,
 		},
 		TunName:  opts.TunName,
+		Plumber:  opts.Plumber,
 		Instance: opts.Instance,
 		STUN:     opts.STUN,
 		Logf:     d.logf,
@@ -623,6 +626,9 @@ func New(opts Options) (*Daemon, error) {
 	d.overlayOnly, d.tunName = opts.TunName != "", opts.TunName
 	d.hostDNS, d.startDNS, d.resolvConf = opts.HostDNS, opts.ServeDNS, opts.ResolvConf
 	d.strictRP6 = opts.StrictRP6
+	if opts.Plumber != nil && d.hostDNS == nil {
+		d.hostDNS = plumbedDNS{p: opts.Plumber, dev: opts.TunName}
+	}
 	if opts.TunName != "" {
 		if d.strictRP6 == nil {
 			d.strictRP6 = d.loggedStrictRP6(conn.StrictRP6)

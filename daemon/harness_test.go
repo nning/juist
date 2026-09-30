@@ -242,6 +242,8 @@ func safeLogf(t *testing.T, prefix string) func(string, ...any) {
 // set it is given, which is the whole of the reconciler's output.
 type fakeManager struct {
 	mu       sync.Mutex
+	isolate  bool   // as SetEgress was last told
+	through  string // what AnswersThrough says
 	peers    []conn.Peer
 	relays   []conn.Relay
 	relaySet int
@@ -279,14 +281,20 @@ func (m *fakeManager) HostRoutes() []netip.Prefix {
 	return slices.Clone(m.hostRoutes)
 }
 
-func (m *fakeManager) SetEgress(e conn.Egress) error {
+func (m *fakeManager) SetEgress(e conn.Egress, isolate bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.egressErr[e]; err != nil {
 		return err
 	}
-	m.egress = e
+	m.egress, m.isolate = e, isolate
 	return nil
+}
+
+func (m *fakeManager) AnswersThrough() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.through
 }
 
 func (m *fakeManager) SetServe(s conn.Serve) error {

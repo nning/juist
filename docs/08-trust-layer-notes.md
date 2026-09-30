@@ -491,7 +491,7 @@ carries the rest. The same reasoning has not been carried through
 `Have`, the peer re-offers records it already holds, and the two make no
 progress. That is unreachable until a network has authored 4096 records without
 a checkpoint, and closing it is part of deciding **when compaction runs without
-an admin asking** — undecided, and the decision this binds.
+an admin asking** — undecided, and the decision this binds; M10 makes it.
 
 ## Storage
 

@@ -401,7 +401,7 @@ func notOperator(err error) error {
 }
 
 func errNotOperator() error {
-	return fmt.Errorf("operator only\nhint: sudo juist set --operator=%s", currentUser())
+	return fmt.Errorf("operator only\nhint: %s", asRoot("juist set --operator="+currentUser()))
 }
 
 // --- a state directory ----------------------------------------------------
@@ -669,10 +669,6 @@ func (n *localNode) reset(bool) error {
 
 // --- choosing one ---------------------------------------------------------
 
-// systemHome is the packaged service's state directory. Its existence says
-// the service is installed, whether or not it runs.
-const systemHome = "/var/lib/juist"
-
 // openNode finds this device's node. --socket names the daemon outright.
 // Otherwise a daemon on the home's own socket wins, then a home that holds a
 // device of its own — a developer's, or one set up before the service — and
@@ -734,7 +730,7 @@ func (a *app) openNode() (node, error) {
 		return n, err
 	}
 	if a.serviceInstalled() {
-		return nil, errors.New("juistd not running\nhint: sudo systemctl enable --now juistd")
+		return nil, errors.New("juistd not running\nhint: " + enableCmd())
 	}
 	return a.localNode()
 }

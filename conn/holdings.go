@@ -1,6 +1,10 @@
 package conn
 
-import "net/netip"
+import (
+	"net/netip"
+
+	"github.com/nning/juist/internal/instance"
+)
 
 // A Holding is what another juist instance on this host has put into the
 // kernel: the addresses on its device and the routes in its table. Two
@@ -15,4 +19,13 @@ type Holding struct {
 	// Prefixes are single-host prefixes for its addresses, and its routes as
 	// installed.
 	Prefixes []netip.Prefix
+}
+
+// deviceInstance reads the instance a device's name says it is.
+func deviceInstance(name string) (int, bool) {
+	if name == instance.Name(0) {
+		return 0, true
+	}
+	n, err := instance.Parse(name)
+	return n, err == nil
 }

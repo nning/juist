@@ -110,7 +110,15 @@ adopting this system must accept them explicitly.
    hostile DHCP server can claim a wide one, `com` say, as its own domain. While no
    mesh runs, as on a device the network removed, the host's own resolvers answer,
    though its traffic stays refused. A clean restart of the client's juistd lets
-   its traffic out directly for the moment in between.
+   its traffic out directly for the moment in between. Answers to connections
+   that came in from the internet leave directly, from the address they were
+   sent to, which the one who connected knows already. So a program on the
+   host can talk around the exit node with a party it tells its address, where
+   the host's firewall lets that party's packets in first, and so can a socket
+   bound to the host's own address with a sender who forges the first packet
+   from where it will send; a client that must
+   send nothing outside the tunnel, not even answers, chooses the exit node
+   with `--isolate`.
 8. **A real device puts the overlay addresses on the host, where the LAN can reach
    them.** Linux's weak host model makes an address on `juist0` reachable through
    *any* interface, so a LAN-adjacent attacker can send plain IP packets to a node's
@@ -175,4 +183,16 @@ adopting this system must accept them explicitly.
   host's nftables rules, and mirror traffic from other interfaces with `tc`.
   Treat a compromised `juistd` as one that controls the host's network
   configuration. Attacker-facing parsers (gossip, IPC,
-  later the DHT) get no privilege from this.
+  later the DHT) get no privilege from this. FreeBSD has no such capability, so
+  there juistd splits (M7a): a helper stays root and does four things, for
+  devices named `juist0`–`juist9` it made itself and holds a lock on —
+  create, address with single hosts, route, destroy — and the daemon runs as
+  `juist`. A compromised daemon can route any prefix but a default into its
+  own device, and so take the host's traffic, as on Linux; it reaches no other
+  interface, firewall or sysctl. The helper parses one CBOR request at a time
+  from the daemon alone, and a compromised helper is root. Serving and using
+  an exit node (M7b) add sysctl forwarding, pf anchors under `juist/`, and
+  resolvconf(8) for the device's resolvers; the pf rules are the helper's
+  own text around the daemon's prefixes and addresses, never text the
+  daemon wrote, and juistd's uid in them is the one the helper started it
+  as.

@@ -100,12 +100,3 @@ func routeDst(rt netlink.Route) netip.Prefix {
 	}
 	return netip.PrefixFrom(netip.IPv4Unspecified(), 0)
 }
-
-// deviceInstance reads the instance a device's name says it is.
-func deviceInstance(name string) (int, bool) {
-	if name == instance.Name(0) {
-		return 0, true
-	}
-	n, err := instance.Parse(name)
-	return n, err == nil
-}

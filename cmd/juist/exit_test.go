@@ -72,6 +72,14 @@ func daemonLog(t *testing.T, d *daemonDevice) *log.Authority {
 	return auth
 }
 
+// exitNodesHere skips where there are no exit nodes and subnet routers.
+func exitNodesHere(t *testing.T) {
+	t.Helper()
+	if !servesHere {
+		t.Skip("no exit nodes and subnet routers here")
+	}
+}
+
 func carries(ps []netip.Prefix, a string) bool {
 	return slices.ContainsFunc(ps, func(p netip.Prefix) bool { return p.Contains(netip.MustParseAddr(a)) })
 }
@@ -79,6 +87,7 @@ func carries(ps []netip.Prefix, a string) bool {
 // An exit node takes an admin's grant and its operator's word; a device then
 // chooses it, sends the internet through it alone, and goes direct again.
 func TestAnExitNodeFromGrantToOff(t *testing.T) {
+	exitNodesHere(t)
 	t.Parallel()
 	if os.Getuid() == 0 {
 		t.Skip("a juistd running as root cannot use an exit node")
@@ -132,6 +141,35 @@ func TestAnExitNodeFromGrantToOff(t *testing.T) {
 		t.Fatalf("the list:\n%s", out)
 	}
 
+	// Over ssh from the internet, isolated, the session's answers would
+	// leave through vps; not isolated, they leave the way they came.
+	laptop.cli.env = map[string]string{"SSH_CONNECTION": "8.8.4.4 51022 192.168.1.20 22"}
+	out, err = laptop.run("exit", "use", "vps", "--isolate")
+	if err == nil {
+		t.Fatal("chose an exit node, isolated, that ends this ssh session")
+	}
+	mustContain(t, out+err.Error(), "this ssh session, from 8.8.4.4, would end: isolated", "--force")
+	if e, _ := laptop.mgr.exitState(); e != conn.EgressDirect {
+		t.Fatalf("a choice stopped for ssh left egress %v", e)
+	}
+	// Where the host's own firewall keeps answers from leaving the way they
+	// came, as FreeBSD's pf rules of its own, the session would end as well.
+	laptop.mgr.mu.Lock()
+	laptop.mgr.through = "the host's own pf rules pass what comes in"
+	laptop.mgr.mu.Unlock()
+	eventually(t, "the status says why answers go through", func() bool {
+		ex := statusOfDaemon(t, laptop).Exit
+		return ex != nil && ex.AnswersThrough != ""
+	})
+	out, err = laptop.run("exit", "use", "vps")
+	if err == nil {
+		t.Fatal("chose an exit node that ends this ssh session by the host's own rules")
+	}
+	mustContain(t, out+err.Error(), "would end: the host's own pf rules pass what comes in")
+	laptop.mgr.mu.Lock()
+	laptop.mgr.through = ""
+	laptop.mgr.mu.Unlock()
+
 	laptop.cli.system = map[string]string{"/etc/resolv.conf": "nameserver 192.168.1.1\nnameserver 9.9.9.9\n"}
 	out = laptop.mustRun("exit", "use", "vps")
 	mustContain(t, out, "internet via vps", "warning: DNS goes to 192.168.1.1, outside the tunnel")
@@ -149,6 +187,15 @@ func TestAnExitNodeFromGrantToOff(t *testing.T) {
 	mustContain(t, laptop.mustRun("status"), "Exit node", "vps")
 	mustContain(t, laptop.mustRun("exit"), "in use")
 	mustContain(t, laptop.mustRun("exit", "use", "vps"), "unchanged: internet via vps")
+	laptop.cli.env = map[string]string{"SSH_CONNECTION": "192.168.1.5 51022 192.168.1.20 22"}
+	mustContain(t, laptop.mustRun("exit", "use", "vps", "--isolate"), "internet via vps, isolated",
+		"warning: answers to connections from the internet go through vps too")
+	mustContain(t, laptop.mustRun("status"), "vps, isolated")
+	out = laptop.mustRun("exit", "use", "vps")
+	mustContain(t, out, "internet via vps")
+	if strings.Contains(out, "isolated") || strings.Contains(out, "unchanged") {
+		t.Errorf("the isolated choice was not given up:\n%s", out)
+	}
 	if b, err := os.ReadFile(filepath.Join(laptop.state, statedir.ExitFile)); err != nil ||
 		strings.TrimSpace(string(b)) != n.Identity.String() {
 		t.Fatalf("the choice kept is %q, %v", b, err)
@@ -185,6 +232,7 @@ func TestAnExitNodeFromGrantToOff(t *testing.T) {
 
 // Serving can be agreed to before the grant, and starts with it.
 func TestServingWaitsForTheGrant(t *testing.T) {
+	exitNodesHere(t)
 	t.Parallel()
 	laptop, vps := homeAndVPS(t)
 	out := vps.mustRun("exit", "serve")
@@ -248,6 +296,7 @@ func TestExitSetUpReadsTheDevices(t *testing.T) {
 // On a host in two networks, one uses an exit node at a time, and the hint
 // names the other network as the command takes it.
 func TestOneNetworkAHostUsesAnExitNodeThrough(t *testing.T) {
+	exitNodesHere(t)
 	t.Parallel()
 	h := newHost(t)
 	h.mustRun("create", "home", "--device", "laptop")
@@ -271,6 +320,7 @@ func TestOneNetworkAHostUsesAnExitNodeThrough(t *testing.T) {
 // A device that serves and uses another stops serving, and says so; one
 // that uses another is not set up to serve.
 func TestServingAndUsingExcludeEachOther(t *testing.T) {
+	exitNodesHere(t)
 	t.Parallel()
 	laptop, vps := homeAndVPS(t)
 	laptop.mustRun("grant", "vps", "exit")
@@ -305,6 +355,7 @@ func TestServingAndUsingExcludeEachOther(t *testing.T) {
 // --force chooses an exit node that does not serve: the outcome is the
 // choice, and the internet is refused, which is said.
 func TestForceChoosesAnExitNodeThatDoesNotServe(t *testing.T) {
+	exitNodesHere(t)
 	t.Parallel()
 	laptop, _ := homeAndVPS(t)
 	laptop.mustRun("grant", "vps", "exit")
@@ -366,6 +417,7 @@ func TestForwardingIsReadFromTheKernel(t *testing.T) {
 // keeps the other from using an exit node, and one using keeps the other from
 // serving.
 func TestTwoNetworksServingAndUsing(t *testing.T) {
+	exitNodesHere(t)
 	t.Parallel()
 	h := newHost(t)
 	h.mustRun("create", "home", "--device", "laptop")
@@ -389,7 +441,7 @@ func TestTwoNetworksServingAndUsing(t *testing.T) {
 		t.Fatalf("use beside a network that serves: %v", err)
 	}
 	mustContain(t, h.mustRun("exit", "serve", "--stop", "home"), "stopped serving")
-	if b, _ := os.ReadFile(calls); string(b) != "off juist0\n" {
+	if b, _ := os.ReadFile(calls); !helperSetsUpHost && string(b) != "off juist0\n" {
 		t.Errorf("the setup script ran %q, want off juist0", b)
 	}
 	k, err := types.GenerateIdentity()

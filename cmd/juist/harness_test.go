@@ -41,8 +41,10 @@ type cli struct {
 	// admissionHold, where set, is how long an admission's copy waits.
 	admissionHold time.Duration
 
-	// system is the host's files this CLI reads, by path; none elsewhere.
+	// system is the host's files this CLI reads, by path, and env its
+	// environment; none elsewhere, whatever the test's own.
 	system map[string]string
+	env    map[string]string
 }
 
 // noHost is a host with no juistd, and none installed.
@@ -106,6 +108,7 @@ func (c *cli) app(out *syncBuffer, in string) *app {
 	// tests can name its addresses.
 	a.drawV4 = firstV4Draw
 	a.host = noHost
+	a.getenv = func(k string) string { return c.env[k] }
 	a.system = func(path string) ([]byte, error) {
 		if s, ok := c.system[path]; ok {
 			return []byte(s), nil
@@ -406,7 +409,9 @@ func (stubManager) SetPeers([]conn.Peer) error { return nil }
 
 func (stubManager) SetRelays([]conn.Relay) error { return nil }
 
-func (stubManager) SetEgress(conn.Egress) error { return nil }
+func (stubManager) SetEgress(conn.Egress, bool) error { return nil }
+
+func (stubManager) AnswersThrough() string { return "" }
 
 func (stubManager) SetServe(conn.Serve) error { return nil }
 
@@ -441,10 +446,11 @@ type daemonDevice struct {
 // it was last given.
 type peersManager struct {
 	stubManager
-	mu     sync.Mutex
-	peers  []conn.Peer
-	egress conn.Egress
-	serve  conn.Serve
+	mu      sync.Mutex
+	through string // what AnswersThrough says
+	peers   []conn.Peer
+	egress  conn.Egress
+	serve   conn.Serve
 	// host is what the host reaches outside juist.
 	host []netip.Prefix
 }
@@ -455,7 +461,13 @@ func (m *peersManager) HostRoutes() []netip.Prefix {
 	return slices.Clone(m.host)
 }
 
-func (m *peersManager) SetEgress(e conn.Egress) error {
+func (m *peersManager) AnswersThrough() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.through
+}
+
+func (m *peersManager) SetEgress(e conn.Egress, _ bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.egress = e

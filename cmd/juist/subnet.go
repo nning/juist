@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"net/netip"
-	"runtime"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -20,7 +19,7 @@ func subnetFamily() family {
 		subs: []subcommand{
 			{name: "list", aliases: []string{"ls"}, run: subnetList, forms: [][2]string{{"", "the subnets, and which this device uses"}}},
 			{name: "serve", run: subnetServe, forms: [][2]string{
-				{"serve", "route what the network grants this device;\nsets the host up with sudo where needed"},
+				{"serve", "route what the network grants this device;\n" + servesSetUp},
 				{"serve --stop", "stop, and undo that"},
 			}},
 			{name: "off", run: subnetOff, forms: [][2]string{{"off", "reach none of them through the network"}}},
@@ -107,10 +106,7 @@ func (a *app) selfSubnetState(sub *ipc.Subnets, r ipc.SubnetRoute) string {
 }
 
 func subnetServe(a *app, args []string) error {
-	s := spec{name: "juist subnet serve", about: `
-Route the subnets the network grants this device for its members. Where the
-host does not forward yet, sudo sets that up and lets the traffic through
-the firewall; --stop stops, and undoes it.`}
+	s := spec{name: "juist subnet serve", about: subnetServeAbout}
 	fs := newFlags(s.name)
 	stop := fs.Bool("stop", false, "stop routing")
 	if _, err := a.parse(s, fs, args); err != nil {
@@ -120,8 +116,8 @@ the firewall; --stop stops, and undoes it.`}
 	if err != nil {
 		return err
 	}
-	if runtime.GOOS != "linux" {
-		return errors.New("a subnet router runs on Linux alone so far")
+	if !servesHere {
+		return errors.New("a subnet router runs on Linux and FreeBSD alone")
 	}
 	if err := a.requireOperator(); err != nil {
 		return err
@@ -142,7 +138,7 @@ the firewall; --stop stops, and undoes it.`}
 			a.ok("unchanged: not routing")
 		}
 		// Forwarding stays for as long as this device serves as an exit node.
-		if exitSetUp(a.system, dev) && (st.Exit == nil || !st.Exit.Consent) {
+		if !helperSetsUpHost && exitSetUp(a.system, dev) && (st.Exit == nil || !st.Exit.Consent) {
 			return a.exitSetup("off", dev, "juist subnet serve")
 		}
 		return nil
@@ -151,7 +147,7 @@ the firewall; --stop stops, and undoes it.`}
 		return fmt.Errorf("%s uses an exit node, which would take what this device routes\n"+
 			"hint: juist exit off %s", other.label(), other.word())
 	}
-	if !exitSetUp(a.system, dev) || !forwarding(a.system) {
+	if !helperSetsUpHost && (!exitSetUp(a.system, dev) || !forwarding(a.system)) {
 		if err := a.exitSetup("on", dev, "juist subnet serve"); err != nil {
 			return err
 		}

@@ -196,10 +196,13 @@ type Request struct {
 	// Waiting are encoded changes waiting for votes, for [CmdWaiting].
 	Waiting [][]byte `cbor:"14,keyasint,omitempty"`
 
-	// ExitNode, ExitOff and Serve are what a [CmdExit] sets, one of them.
-	ExitNode types.Identity `cbor:"15,keyasint,omitempty"`
-	ExitOff  bool           `cbor:"16,keyasint,omitempty"`
-	Serve    *bool          `cbor:"17,keyasint,omitempty"`
+	// ExitNode, ExitOff and Serve are what a [CmdExit] sets, one of them;
+	// ExitIsolate, with ExitNode, sends answers to connections that came in
+	// by another device through it too.
+	ExitNode    types.Identity `cbor:"15,keyasint,omitempty"`
+	ExitOff     bool           `cbor:"16,keyasint,omitempty"`
+	Serve       *bool          `cbor:"17,keyasint,omitempty"`
+	ExitIsolate bool           `cbor:"20,keyasint,omitempty"`
 
 	// ServeSubnets and AcceptSubnets are what a [CmdSubnet] sets, one of
 	// them.
@@ -365,7 +368,7 @@ func (r *Request) present() reqField {
 		{r.SetOperator || r.OperatorUID != 0, fSetOperator}, {r.Identity, fIdentity},
 		{r.Offer != nil, fOffer}, {r.Reply != nil, fReply}, {r.Orphans, fOrphans},
 		{r.Probe, fProbe}, {r.Force, fForce}, {len(r.Waiting) > 0, fWaiting},
-		{!r.ExitNode.IsZero() || r.ExitOff || r.Serve != nil, fExit},
+		{!r.ExitNode.IsZero() || r.ExitOff || r.Serve != nil || r.ExitIsolate, fExit},
 		{r.ServeSubnets != nil || r.AcceptSubnets != nil, fSubnet},
 	} {
 		if p.set {
@@ -390,7 +393,7 @@ var requestShapes = map[Command]requestShape{
 	CmdUnstage:   {},
 	CmdRotate:    {takes: fIdentity},
 	CmdReset:     {takes: fForce},
-	CmdExit: {takes: fExit, shape: "an exit request sets an exit node, off, or serving, and one of them",
+	CmdExit: {takes: fExit, shape: "an exit request sets an exit node, isolated or not, off, or serving, and one of them",
 		check: func(r *Request) bool {
 			n := 0
 			for _, set := range []bool{!r.ExitNode.IsZero(), r.ExitOff, r.Serve != nil} {
@@ -398,7 +401,7 @@ var requestShapes = map[Command]requestShape{
 					n++
 				}
 			}
-			return n == 1
+			return n == 1 && (!r.ExitIsolate || !r.ExitNode.IsZero())
 		}},
 	CmdSubnet: {takes: fSubnet, shape: "a subnet request sets serving or accepting, and one of them",
 		check: func(r *Request) bool { return (r.ServeSubnets != nil) != (r.AcceptSubnets != nil) }},
@@ -796,6 +799,3 @@ const SocketName = "daemon.sock"
 
 // SocketPath returns the control socket's path for a state directory.
 func SocketPath(home string) string { return filepath.Join(home, SocketName) }
-
-// SystemSocket is where the packaged service listens.
-const SystemSocket = "/run/juist/juistd.sock"
