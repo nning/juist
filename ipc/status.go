@@ -160,6 +160,10 @@ type Derived struct {
 	// network grants none and this device neither routes nor refuses them.
 	Subnets *Subnets `cbor:"64,keyasint,omitempty"`
 
+	// Names is how the host resolves the network's names; nil where it is
+	// not meant to, as on a device that is no member.
+	Names *Names `cbor:"65,keyasint,omitempty"`
+
 	// SelfName is this node's member name.
 	SelfName string `cbor:"24,keyasint,omitempty"`
 
@@ -273,7 +277,7 @@ func (s *Status) ForReader() Status {
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
 			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted,
 			Alarm: s.Alarm, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(),
-			Subnets:        s.Subnets.forReader(),
+			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(),
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
 		},
 		Tunnels: Tunnels{
@@ -342,8 +346,10 @@ type Device struct {
 	Retiring      string `cbor:"6,keyasint,omitempty"`
 	RetiringUntil int64  `cbor:"7,keyasint,omitempty"`
 
-	// Subnets are the prefixes the member is granted to route.
+	// Subnets are the prefixes the member is granted to route, and Names
+	// the public names pointed at it.
 	Subnets []netip.Prefix `cbor:"8,keyasint,omitempty"`
+	Names   []string       `cbor:"9,keyasint,omitempty"`
 }
 
 // Exit is a device's use of exit nodes, and its serving as one.
@@ -388,6 +394,39 @@ type Exit struct {
 	// would though not chosen, "" where they leave the way they came.
 	Isolated       bool   `cbor:"14,keyasint,omitempty"`
 	AnswersThrough string `cbor:"15,keyasint,omitempty"`
+}
+
+// Names is how the host resolves the network's names: under Domain, as
+// home.juist, where Resolved, and else Not says why not; Cannot where the
+// host or the network's name does not allow it at all. Accepted says the
+// owner agreed to the public names the network points at members, which
+// Overrides are.
+type Names struct {
+	Domain    string         `cbor:"1,keyasint,omitempty"`
+	Resolved  bool           `cbor:"2,keyasint,omitempty"`
+	Not       string         `cbor:"3,keyasint,omitempty"`
+	Cannot    bool           `cbor:"4,keyasint,omitempty"`
+	Accepted  bool           `cbor:"5,keyasint,omitempty"`
+	Overrides []NameOverride `cbor:"6,keyasint,omitempty"`
+}
+
+// A NameOverride is a public name pointed at Device, and Not why this device
+// does not resolve it so now, where accepted.
+type NameOverride struct {
+	Name   string `cbor:"1,keyasint"`
+	Device string `cbor:"2,keyasint,omitempty"`
+	Not    string `cbor:"3,keyasint,omitempty"`
+}
+
+// forReader is n without the devices names point at, which the device list
+// is kept from a reader.
+func (n *Names) forReader() *Names {
+	if n == nil {
+		return nil
+	}
+	c := *n
+	c.Overrides = nil
+	return &c
 }
 
 // Subnets is what a device makes of subnet routes: Off says its owner turned
@@ -441,7 +480,7 @@ func DevicesOf(state *log.State, now int64) []Device {
 	out := make([]Device, 0, len(nodes))
 	for _, n := range nodes {
 		dev := Device{Identity: n.Identity, Name: n.Name, V6: state.Addr6(n.Identity).String(),
-			Roles: slices.Clone(n.Roles), Subnets: n.SubnetRoutes()}
+			Roles: slices.Clone(n.Roles), Subnets: n.SubnetRoutes(), Names: slices.Clone(n.Names)}
 		if n.V4 != nil {
 			dev.V4 = n.V4.String()
 		}

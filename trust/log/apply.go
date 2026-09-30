@@ -66,6 +66,7 @@ var kindRules = map[types.Kind]kindRule{
 	types.KindRenameNetwork:   {types.SchemaRename, "renaming the network", (*State).renameNetwork},
 
 	types.KindSetAdminRecipient: {types.SchemaSealing, "admin encryption keys", (*State).setAdminRecipient},
+	types.KindSetNodeNames:      {types.SchemaNames, "names", (*State).setNodeNames},
 }
 
 // inEffectError is a record refused because what it does is done already,
@@ -194,6 +195,24 @@ func (next *State) setNodeRoutes(a *types.AUM, _ applyMode) error {
 	// The grant's routes were checked for form at decode; the overlap rules
 	// need the network's own prefix and the other members' routes, which
 	// only state knows.
+	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+		return err
+	}
+	next.nodes[*a.Subject] = updated
+	return nil
+}
+
+func (next *State) setNodeNames(a *types.AUM, _ applyMode) error {
+	cur, err := next.member(*a.Subject)
+	if err != nil {
+		return err
+	}
+	if slices.Equal(cur.Names, a.Names.Names) {
+		return inEffect(fmt.Errorf("log: %v answers for those names already", a.Subject.ShortString()))
+	}
+	updated := cur.Clone()
+	updated.Names = slices.Clone(a.Names.Names)
+	// Held by no other member, which only state knows.
 	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
 		return err
 	}
@@ -595,6 +614,9 @@ func (s *State) v4Holder(addr netip.Addr) bool {
 func (s *State) checkNodeAdmissible(n *types.NodeRecord, excluding types.Identity) error {
 	if err := n.ValidateInNetwork(s.ULA(), s.V4Ranges()); err != nil {
 		return fmt.Errorf("log: %w", err)
+	}
+	if len(n.Names) > 0 && s.schema < types.SchemaNames {
+		return fmt.Errorf("log: names need %v; the network is at %v", types.SchemaNames, s.schema)
 	}
 	others := types.NewMemberIndex(s.genesisHash, len(s.nodes))
 	for _, other := range s.nodes {

@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -29,6 +30,8 @@ import (
 	"github.com/nning/juist/discovery/mdns"
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/names"
+	"github.com/nning/juist/internal/resolved"
 	"github.com/nning/juist/relay"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/secrets"
@@ -204,6 +207,11 @@ type Options struct {
 	ServeSubnets bool
 	SubnetsOff   bool
 
+	// AcceptNames says the owner agreed that this device resolves the
+	// public names the network points at members to them;
+	// [Daemon.SetAcceptNames] changes it.
+	AcceptNames bool
+
 	// OnExitMoved is called, on a goroutine of its own, where the exit node
 	// chosen rotated its identity from one to another.
 	OnExitMoved func(from, to types.Identity)
@@ -217,6 +225,11 @@ type Options struct {
 	// [dnsfwd] on TunName where nil, and nothing without it.
 	HostDNS  HostDNS
 	ServeDNS DNSServer
+	// ServeNames answers the host's DNS for the network's names at
+	// NamesAddr, an address the device holds on [NamesPort] where zero:
+	// [dnsfwd] with a TUN device, and nothing without one.
+	ServeNames NamesServer
+	NamesAddr  netip.AddrPort
 	// ResolvConf is what the host's programs read their resolvers from,
 	// /etc/resolv.conf where empty; it must name resolved's stub for
 	// resolved's routing to be theirs.
@@ -417,6 +430,7 @@ type Daemon struct {
 	subnetsOff     bool
 	servingSubnets bool
 	subnetStatus   ipc.Subnets
+	acceptNames    bool // [Options.AcceptNames]
 	// dnsPort is the port this device answers members' DNS on, zero for
 	// none, which its announcement says.
 	dnsPort uint16
@@ -424,21 +438,37 @@ type Daemon struct {
 	// IPv4: only where the log routes through it.
 	announcedNoV4 bool
 
-	// dnsMu guards the DNS this device answers as an exit node and the
-	// host's DNS routing through one: hostDNS and startDNS do the work,
-	// dnsServer and dnsAddrs are what answers, dnsRouted where the host's
-	// DNS goes and dnsRoutedAt since when.
+	// dnsMu guards the DNS this device answers members as an exit node, and
+	// the host's: dnsRouting is what the host was last told, and names
+	// answers it from zone.
 	dnsMu       sync.Mutex
 	hostDNS     HostDNS
 	startDNS    DNSServer
 	dnsServer   io.Closer
 	dnsAddrs    []netip.Addr
 	dnsOverlay  []netip.Prefix
-	dnsRouted   []netip.AddrPort
+	dnsRouting  DNSRouting       // what the host was last told
+	dnsExit     []netip.AddrPort // the exit node's resolvers it is meant to ask
 	dnsRoutedAt time.Time
 	dnsWhy      string // why the routing last failed, "" where it did not
 	dnsClosed   bool
-	resolvConf  string
+
+	startNames    NamesServer
+	names         io.Closer
+	namesAt       netip.AddrPort // where names answers, while it does
+	namesFixed    netip.AddrPort // [Options.NamesAddr]
+	namesFailedAt time.Time
+	namesWhy      string // why names did not start
+	namesStatus   *ipc.Names
+	overrides     []heldOverride // the network's public names, answered or not
+	namesAccepted bool
+	namesUntil    int64 // until when overrides are answered, the view's freshness
+	reachable     atomic.Pointer[map[types.Identity]bool]
+	zone          atomic.Pointer[names.Zone]
+	namesExit     atomic.Pointer[[]netip.AddrPort] // the exit node's resolvers, which names asks
+	hostRouting   atomic.Pointer[resolved.Routing] // how the host routes names but to juist's device
+	hostRoutingAt time.Time
+	resolvConf    string
 
 	announced   *gossip.Endpoint // nil when it is to be rebuilt
 	signed      *gossip.Endpoint // the last one signed, which announced renews
@@ -549,6 +579,7 @@ func New(opts Options) (*Daemon, error) {
 		serveConsent:   opts.ServeExit,
 		subnetConsent:  opts.ServeSubnets,
 		subnetsOff:     opts.SubnetsOff,
+		acceptNames:    opts.AcceptNames,
 		onExitMoved:    opts.OnExitMoved,
 		userEgress:     egressUserOf(opts.EgressUser),
 		waiting:        map[types.Hash]heldChange{},
@@ -637,9 +668,13 @@ func New(opts Options) (*Daemon, error) {
 			d.hostDNS = resolvedDNS{dev: opts.TunName}
 		}
 		if d.startDNS == nil {
-			d.startDNS = defaultDNSServer(opts.TunName)
+			d.startDNS = d.defaultDNSServer(opts.TunName)
+		}
+		if opts.ServeNames == nil {
+			opts.ServeNames = defaultNamesServer(opts.TunName)
 		}
 	}
+	d.startNames, d.namesFixed = opts.ServeNames, opts.NamesAddr
 	d.startAddrs = selfAddrs
 	ln, err := d.listenGossip(opts, selfAddrs)
 	if err != nil {
@@ -1125,11 +1160,12 @@ func (d *Daemon) Status() ipc.Status {
 	d.waitMu.Lock()
 	held := len(d.waiting)
 	d.waitMu.Unlock()
+	names := d.namesNow() // before d.mu, which dnsMu is taken before
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s := d.status
 	s.Addrs = append([]netip.Prefix(nil), d.status.Addrs...)
-	s.Waiting = held
+	s.Waiting, s.Names = held, names
 	return s
 }
 

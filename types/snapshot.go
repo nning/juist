@@ -221,6 +221,11 @@ type NodeRecord struct {
 	// Retiring is the IPv4 address a renumbering moved the node from, which
 	// it still holds until the deadline. Schema 5 and later.
 	Retiring *RetiringV4 `cbor:"10,keyasint,omitempty"`
+
+	// Names are the public DNS names quorum points at this node, which
+	// members that accept them resolve to its overlay addresses. Sorted, and
+	// held by no other node. Schema 8 and later; see [ValidateHostName].
+	Names []string `cbor:"11,keyasint,omitempty"`
 }
 
 // A RetiringV4 is an overlay IPv4 address a renumbering replaced, live until
@@ -456,6 +461,7 @@ func (n *NodeRecord) Clone() *NodeRecord {
 	}
 	out.Roles = slices.Clone(n.Roles)
 	out.Routes = slices.Clone(n.Routes)
+	out.Names = slices.Clone(n.Names)
 	return &out
 }
 
@@ -508,6 +514,9 @@ func (n *NodeRecord) StaticValidate() error {
 			return fmt.Errorf("node %v routes are not sorted and unique at %v",
 				n.Identity.ShortString(), pfx)
 		}
+	}
+	if err := validateNames(n.Names); err != nil {
+		return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
 	}
 	return nil
 }
@@ -824,6 +833,10 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 		if i > 0 && s.Nodes[i-1].Identity.Compare(s.Nodes[i].Identity) >= 0 {
 			return fmt.Errorf("nodes are not sorted and unique at %v", s.Nodes[i].Identity.ShortString())
 		}
+		if len(s.Nodes[i].Names) > 0 && s.Schema < SchemaNames {
+			return fmt.Errorf("node %v has names, which need %v; the state is at %v",
+				s.Nodes[i].Identity.ShortString(), SchemaNames, s.Schema)
+		}
 	}
 
 	if s.Epoch == 0 {
@@ -917,6 +930,7 @@ type MemberIndex struct {
 	x25519  map[X25519Key]Identity
 	mlkem   map[MLKEMKey]Identity
 	routes  []routeClaim
+	names   map[string]Identity
 }
 
 // A routeClaim is a subnet route a member is granted: one member routes each
@@ -936,6 +950,7 @@ func NewMemberIndex(genesis Hash, n int) *MemberIndex {
 		wg:      make(map[WGKey]Identity, n),
 		x25519:  make(map[X25519Key]Identity, n),
 		mlkem:   make(map[MLKEMKey]Identity, n),
+		names:   map[string]Identity{},
 	}
 }
 
@@ -963,6 +978,12 @@ func (ix *MemberIndex) Check(n *NodeRecord) error {
 	for _, p := range n.SubnetRoutes() {
 		if c, ok := ix.overlapping(p); ok {
 			return fmt.Errorf("nodes %v and %v both route %v", c.by.ShortString(), id, p.Masked())
+		}
+	}
+	// A name resolves to one member alone.
+	for _, name := range n.Names {
+		if other, dup := ix.names[name]; dup {
+			return fmt.Errorf("nodes %v and %v both answer for %s", other.ShortString(), id, name)
 		}
 	}
 	return nil
@@ -997,6 +1018,9 @@ func (ix *MemberIndex) Add(n *NodeRecord) {
 			return c.prefix.Addr().Compare(a)
 		})
 		ix.routes = slices.Insert(ix.routes, i, routeClaim{p, n.Identity})
+	}
+	for _, name := range n.Names {
+		ix.names[name] = n.Identity
 	}
 }
 

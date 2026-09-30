@@ -475,6 +475,8 @@ console.log(JSON.stringify(out));
 		{"juist", "org.freedesktop.resolve1.set-domains", map[string]string{"interface": "juist3"}, "yes"},
 		{"juist", "org.freedesktop.resolve1.revert", map[string]string{"interface": "juist9"}, "yes"},
 		{"juist", "org.freedesktop.resolve1.set-default-route", map[string]string{}, "yes"}, // before systemd 256
+		{"juist", "org.freedesktop.resolve1.set-dnssec-negative-trust-anchors", map[string]string{"interface": "juist0"}, "yes"},
+		{"juist", "org.freedesktop.resolve1.set-dnssec-negative-trust-anchors", map[string]string{"interface": "eth0"}, "not handled"},
 		{"juist", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "eth0"}, "not handled"},
 		{"juist", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist10"}, "not handled"},
 		{"juist", "org.freedesktop.resolve1.set-dnssec", map[string]string{"interface": "juist0"}, "not handled"},

@@ -296,6 +296,11 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		return
 	}
 	downs := make(map[types.Identity]*downPeer, len(checks))
+	reachable := make(map[types.Identity]bool, len(checks))
+	for _, c := range checks {
+		reachable[c.id] = c.reach.Live
+	}
+	d.reachable.Store(&reachable)
 	for i, c := range checks {
 		reach[i] = c.reach
 		if c.reach.Live {

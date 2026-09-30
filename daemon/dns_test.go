@@ -29,20 +29,21 @@ func stubResolvConf(t *testing.T) string {
 // fakeHostDNS records where the host's DNS was routed; err is what routing
 // returns.
 type fakeHostDNS struct {
-	mu     sync.Mutex
-	routed []netip.AddrPort
-	calls  []string
-	err    error
+	mu      sync.Mutex
+	routed  []netip.AddrPort
+	routing DNSRouting
+	calls   []string
+	err     error
 }
 
-func (h *fakeHostDNS) Route(s []netip.AddrPort) error {
+func (h *fakeHostDNS) Route(r DNSRouting) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.calls = append(h.calls, "route")
 	if h.err != nil {
 		return h.err
 	}
-	h.routed = slices.Clone(s)
+	h.routed, h.routing = slices.Clone(r.Servers), r
 	return nil
 }
 
@@ -50,7 +51,7 @@ func (h *fakeHostDNS) Revert() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.calls = append(h.calls, "revert")
-	h.routed = nil
+	h.routed, h.routing = nil, DNSRouting{}
 	return nil
 }
 
@@ -402,10 +403,14 @@ func TestAHelpersDNSTakesPort53Alone(t *testing.T) {
 	at := func(port uint16) []netip.AddrPort {
 		return []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("198.19.44.2"), port)}
 	}
-	if err := h.Route(at(DefaultDNSPort)); err == nil || !strings.Contains(err.Error(), "port 41646") {
+	every := func(port uint16) DNSRouting { return DNSRouting{Servers: at(port), Everything: true} }
+	if err := h.Route(every(DefaultDNSPort)); err == nil || !strings.Contains(err.Error(), "port 41646") {
 		t.Errorf("an exit node on 41646 alone: %v", err)
 	}
-	if err := h.Route(at(53)); err != nil || len(p.set) != 1 || p.set[0][0] != at(53)[0].Addr() {
+	if err := h.Route(DNSRouting{Servers: at(53), Domains: []string{"home.juist"}}); !errors.Is(err, errNoDomains) {
+		t.Errorf("domains alone: %v", err)
+	}
+	if err := h.Route(every(53)); err != nil || len(p.set) != 1 || p.set[0][0] != at(53)[0].Addr() {
 		t.Errorf("on 53: %v, the helper was asked %v", err, p.set)
 	}
 	if err := h.Revert(); err != nil || len(p.set) != 2 || len(p.set[1]) != 0 {

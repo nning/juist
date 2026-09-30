@@ -15,14 +15,18 @@ import (
 func cmdSet(a *app, args []string) error {
 	s := spec{name: "juist set", about: `
 Change this device's settings. --operator names the local user who may
-manage it without sudo; --operator="" clears it. Needs root.`}
+manage it without sudo, which needs root; --operator="" clears it.
+--accept-names resolves the public names the network points at devices to
+them; --accept-names=false stops.`}
 	fs := newFlags(s.name)
 	var op optionalString
+	var accept optionalBool
 	fs.Var(&op, "operator", "local `USER` who manages this device")
+	fs.Var(&accept, "accept-names", "resolve the network's public names to its devices")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	if !op.set {
+	if !op.set && !accept.set {
 		a.help(s, fs, a.errOut)
 		return errSilent
 	}
@@ -33,18 +37,61 @@ manage it without sudo; --operator="" clears it. Needs root.`}
 	if n.status() == nil {
 		return errNoDaemon
 	}
-	choice, err := operatorFor(op.value)
+	if op.set {
+		choice, err := operatorFor(op.value)
+		if err != nil {
+			return err
+		}
+		if err := n.setOperator(choice); err != nil {
+			return err
+		}
+		if choice.uid == 0 {
+			a.ok("operator cleared")
+		} else {
+			a.ok("operator %s", op.value)
+		}
+	}
+	if accept.set {
+		return setAcceptNames(a, accept.value)
+	}
+	return nil
+}
+
+// setAcceptNames has this device resolve the network's public names to its
+// devices, or not, and says which it points where.
+func setAcceptNames(a *app, on bool) error {
+	st, err := a.daemonStatus()
 	if err != nil {
 		return err
 	}
-	if err := n.setOperator(choice); err != nil {
+	word := map[bool]string{true: "public names accepted", false: "public names not accepted"}[on]
+	// Sent either way: a status without a running mesh does not say.
+	unchanged := st.Names != nil && st.Names.Accepted == on
+	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	if choice.uid == 0 {
-		a.ok("operator cleared")
+	n, err := a.openNode()
+	if err != nil {
+		return err
+	}
+	st, err = n.exit(ipc.Request{Command: ipc.CmdNames, AcceptNames: &on})
+	if err != nil {
+		return err
+	}
+	if unchanged {
+		a.ok("unchanged: %s", word)
 		return nil
 	}
-	a.ok("operator %s", op.value)
+	if t := overridesList(st.Names, a.paint); on && t != "" {
+		word += ": " + t
+	}
+	a.ok("%s", word)
+	if n := st.Names; on && n != nil && !n.Resolved {
+		a.warn("this host resolves none of them: %s", n.Not)
+		if h := dnsHint(n.Not); h != "" {
+			a.hint("%s", h)
+		}
+	}
 	return nil
 }
 
@@ -62,6 +109,24 @@ func (o *optionalString) Set(v string) error {
 }
 
 var _ flag.Value = (*optionalString)(nil)
+
+// optionalBool is a boolean flag that knows whether it was given, so that
+// leaving it out changes nothing.
+type optionalBool struct {
+	value bool
+	set   bool
+}
+
+func (o *optionalBool) String() string   { return strconv.FormatBool(o.value) }
+func (o *optionalBool) IsBoolFlag() bool { return true }
+func (o *optionalBool) Set(v string) error {
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return err
+	}
+	o.value, o.set = b, true
+	return nil
+}
 
 // operatorFor resolves a user name, or a uid, to the operator it names. An
 // empty name names none.

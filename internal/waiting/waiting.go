@@ -138,7 +138,7 @@ func Seal(network types.Hash, aum *types.AUM, admins []types.AdminKey, signer ty
 func AboutOf(aum *types.AUM) []types.Identity {
 	switch aum.Kind {
 	case types.KindRemoveNode, types.KindSetNodeRoutes, types.KindRotateNodeKey, types.KindRotateIdentity,
-		types.KindRenumberNode:
+		types.KindRenumberNode, types.KindSetNodeNames:
 		return []types.Identity{*aum.Subject}
 	}
 	return nil

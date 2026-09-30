@@ -797,7 +797,7 @@ release work — distro packages, signed releases — are M11, after v1.0.
 
 ## M8 — Names
 
-A resolver in juistd for two things: members' names (`mailer.NETWORK`, the
+A resolver in juistd for two things: members' names (`mailer.home.juist`, the
 MagicDNS equivalent), and **name overrides**, which point a public name at a
 member so that members reach it through the tunnel instead of its public
 address — `mx.example.net → mailer` puts every member's IMAP and submission
@@ -805,42 +805,84 @@ through the overlay, with the certificate still matching, since the name is
 unchanged. Only members' lookups change; the rest of the internet still
 resolves the public records.
 
-Most of the mechanism is in the pinned Tailscale: `net/dns` configures
-systemd-resolved over D-Bus — a DNS server and routing domains on `juist0`,
-what `resolvectl dns` and `resolvectl domain` do by hand — and `dns.Config`
-has the `Hosts` and `Routes` it needs. juist hands the engine an empty
-`dns.Config` today (`conn/tsmanager.go`), per M3a.
+Members are named under `.juist`, not under the network's name alone: a
+network named as a public top-level domain is, `app` or `dev`, would have
+the host route that whole domain to juistd. `NETWORK.juist` is also the
+host's search domain, so `mailer` alone resolves. A device or network name
+that is no DNS label has no name there.
 
-The plan, in order:
+Split in three, each shipped on its own:
 
-1. **The record.** A quorum-signed record kind (a schema bump) mapping a name
-   to a *member*, never to an address: an override follows renumbering by
-   itself and cannot send a name outside the network. The validator refuses a
-   name inside the network's own name space, a duplicate, and a member that
-   does not exist; removing the member removes its overrides.
-2. **The resolver.** juistd answers on its overlay address on `juist0`, only
-   for member names and overrides. For an overridden name it answers every
-   type: A and AAAA with the member's overlay addresses, HTTPS/SVCB (type 65)
-   empty — their address hints would carry the public address — and the
-   other types forwarded. Answering A alone would send clients to the public
-   AAAA, around the tunnel. TTLs are short (30 s), so a withdrawn override
-   leaves caches quickly. How juistd binds port 53 on the overlay address,
-   and what capability that takes, is part of this step.
-3. **Wiring it to the host** (built by M6c, if that comes first).
-   resolved gets `~NETWORK` and one routing domain
-   per override (`~mx.example.net`), so no other query reaches juistd, and the
-   rest of `example.net` resolves as before. Without resolved nothing is
-   configured and `juist status` says so; rewriting `/etc/resolv.conf` is not
-   in scope.
-4. **Opt-in and visibility.** A device applies overrides only after its owner
-   agreed (`juist set --accept-names`, like Tailscale's `--accept-dns`);
-   member names need no agreement, since they claim nothing outside the
-   network. `juist status` lists the overrides in effect.
-5. **Falling back to the public name.** juistd stops answering an override
-   while the device is stale, or while the member it points at is not
-   reachable: the connection then goes to the public address, as without
-   juist, instead of into a tunnel that is down. A stale view therefore
-   redirects nothing beyond the TTL, like every other authority change.
+- **M8a — the record.** Schema 8: a node record's `Names`, replaced whole by
+  a quorum-signed `SetNodeNames`, so that a name points at a member, never
+  at an address, follows renumbering and identity rotations, and goes with
+  the member. The TCB takes a name in one form alone (lowercase ASCII, xn--
+  for Unicode), of two labels or more, no address, nothing under `.juist` or
+  a domain the host keeps to itself, and each name for one member.
+  `juist grant DEVICE NAME` and `juist revoke DEVICE NAME` propose it, the
+  device list shows it, and an approver reads what each change points where.
+  - **Built:** as above; `juist log upgrade` raises a network to schema 8.
+  - **Validated:** `types`, `trust/log` and `cmd/juist` tests (see
+    12-validating.md); a quorum short, a non-member, an address and a name
+    another member holds are refused by the log, which every node runs.
+- **M8b — the resolver and the host.** resolved takes one set of servers per
+  link, and `juist0`'s is the exit node's where one is used. So juistd's
+  resolver is the link's one server: on the device's IPv6 overlay address,
+  port 41647, bound to the device, which the host's own queries come in by,
+  and answering the host's own sources alone. resolved asks a link's
+  servers through the link, which reaches a loopback address only from
+  systemd 252.20 and 253, not Ubuntu 22.04's 249; the device's own address
+  it reaches from 248, and takes a port from 246. It answers members' names,
+  and overrides with A and AAAA of the member's overlay addresses, HTTPS
+  and SVCB empty, since their hints carry the public address, and 30 s TTLs;
+  everything else it forwards, to the exit node in use, else to the host's
+  own resolvers, never resolved's stub. resolved gets `~NETWORK.juist` and
+  `NETWORK.juist` as search domain, one routing domain per override in
+  effect, and `~.` while an exit node is used. FreeBSD's resolvconf routes
+  no domains: names are not wired there, and `juist status` says so.
+  - **Built:** as above; `juist status` names the domain, or why the host
+    does not resolve it, with the fix where resolv.conf bypasses the stub.
+  - **Validated:** `internal/names`, `internal/dnsfwd`, `internal/resolved`,
+    `daemon` and `cmd/juist` tests; by hand on Debian 12's cloud image
+    (systemd 252), as the package: `mailer.home.juist` and `mailer` resolve
+    to both addresses through resolved, a name the network lacks does not
+    exist, a public name still resolves, and the uplink resolv.conf the
+    image ships is named with its fix. The exit node's case goes into the
+    interop lab with M8c.
+- **M8c — opt-in, falling back, and visibility.** A device applies
+  overrides only after its owner agreed (`juist set --accept-names`, like
+  Tailscale's `--accept-dns`); members' names need no agreement, since they
+  claim nothing outside the network. juistd stops answering an override
+  while the device is stale, or while the member it points at is not
+  reachable: the connection then goes to the public address, as without
+  juist, instead of into a tunnel that is down, and a stale view redirects
+  nothing beyond the TTL, like every other authority change. `juist status`
+  lists the overrides in effect. Tested in the interop lab, where Debian
+  runs resolved, without root.
+  - **Built:** as above. Freshness and reachability are asked at each
+    query, the last tunnel check's, so resolved keeps routing the name to
+    juistd, which then forwards it as any other; a name is resolved
+    publicly within a TTL of the check that finds its member down, at most
+    a minute or so after it went. Answers carry EDNS where asked, without
+    which resolved stops using EDNS with the server, for every name it
+    forwards; the link's domains are negative trust anchors, so that a
+    resolved validating DNSSEC takes juistd's unsigned answers. An exit node
+    asks the host's resolvers, not its stub, for a member's query of a name
+    it overrides itself, so that no member is answered an override it did
+    not agree to. The resolver answers on the device's IPv4 address where
+    the device holds no IPv6. `juist grant DEVICE NAME` hints at
+    `--accept-names` where the device granting has not.
+  - **Validated:** `internal/names`, `internal/resolved`, `daemon`, `ipc`
+    and `cmd/juist` tests; by hand on Debian 12 (systemd 252) as the
+    package; and `make interop` under TCG, where each exit criterion but (2),
+    which the log's tests hold, ran (see 12-validating.md).
+
+**Still open: DNS over TLS for what juistd forwards.** Without an exit
+node, what juistd does not answer itself, an overridden name's other types,
+the names below it and one whose member is down, it asks the resolvers
+resolved would, by resolved's routing read over D-Bus every 30 s but for
+juist's own link, since its stub would route them back; it asks them in
+plain DNS where resolved is configured for DNS over TLS.
 
 **The trade.** Whoever can set an override can point any public name at a
 member of their choosing on every device that accepted overrides. Verified
@@ -851,7 +893,7 @@ The cost of the feature itself: in normal operation the overridden names
 depend on juistd, and a broken juistd on a device that accepted them loses
 them for up to a TTL.
 
-- **Exit criteria:** (1) in the netns matrix, with resolved, an overridden
+- **Exit criteria:** (1) in the interop lab, with resolved, an overridden
   name resolves to the member's overlay addresses and a connection to it
   crosses `juist0`, while no A, AAAA or HTTPS query for it reaches the public
   resolver (asserted by capture on the physical interface), and a name next

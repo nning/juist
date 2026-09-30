@@ -211,6 +211,7 @@ Raise the network to this build's record schema:
   schema 5  juist network renumber
   schema 6  juist network rename
   schema 7  changes carried to the admin devices (admins receive)
+  schema 8  public names pointed at devices (juist grant DEVICE NAME)
 
 Devices on older builds stop at the upgrade until updated: update them first.`}
 	fs := newFlags(s.name)

@@ -396,6 +396,8 @@ func describeKind(k types.Kind) string {
 		return "renaming of the network"
 	case types.KindSetAdminRecipient:
 		return "encryption key of an admin key"
+	case types.KindSetNodeNames:
+		return "change of the public names a device answers for"
 	default:
 		return k.String()
 	}

@@ -350,15 +350,24 @@ func (a *app) warnDNS(ex *ipc.Exit, overlay []netip.Prefix) {
 	case len(out) == 0:
 	case ex != nil && ex.DNSNot != "":
 		a.warn("DNS goes to %s, outside the tunnel: %s", joinAddrs(out), ex.DNSNot)
-		switch {
-		case strings.Contains(ex.DNSNot, "refused juistd"):
-			a.hint("the package's polkit rule allows juistd that: /usr/share/polkit-1/rules.d/60-juist.rules")
-		case strings.Contains(ex.DNSNot, "uplink mode"):
-			a.hint("%s", asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"))
+		if h := dnsHint(ex.DNSNot); h != "" {
+			a.hint("%s", h)
 		}
 	default:
 		a.warn("DNS goes to %s, outside the tunnel", joinAddrs(out))
 	}
+}
+
+// dnsHint is what lets the host's DNS through juistd where why stops it, ""
+// where nothing on this host would.
+func dnsHint(why string) string {
+	switch {
+	case strings.Contains(why, "refused juistd"):
+		return "the package's polkit rule allows juistd that: /usr/share/polkit-1/rules.d/60-juist.rules"
+	case strings.Contains(why, "uplink mode"):
+		return asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf")
+	}
+	return ""
 }
 
 // dnsOverlay is the overlay as st knows it, with more, where it has it.

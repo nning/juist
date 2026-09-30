@@ -169,6 +169,10 @@ func TestAnExitNodeFromGrantToOff(t *testing.T) {
 	laptop.mgr.mu.Lock()
 	laptop.mgr.through = ""
 	laptop.mgr.mu.Unlock()
+	eventually(t, "the status says answers leave the way they came", func() bool {
+		ex := statusOfDaemon(t, laptop).Exit
+		return ex != nil && ex.AnswersThrough == ""
+	})
 
 	laptop.cli.system = map[string]string{"/etc/resolv.conf": "nameserver 192.168.1.1\nnameserver 9.9.9.9\n"}
 	out = laptop.mustRun("exit", "use", "vps")

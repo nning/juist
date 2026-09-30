@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +178,9 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	t.Run("Linux serves FreeBSD", func(t *testing.T) {
 		serve(t, fb, lx, fb, lxSide, fbSide, lx4, lx6)
 	})
+	t.Run("names", func(t *testing.T) {
+		names(t, fb, lx, fb4, fb6)
+	})
 	t.Run("removal", func(t *testing.T) {
 		fb.run(t, "pkg delete -y juist")
 		fb.run(t, `! ifconfig juist0 >/dev/null 2>&1
@@ -236,9 +240,13 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 	client.eventually(t, "reaching the subnet through it", 2*time.Minute,
 		"/tmp/probe get "+s.inner+":80", has(name))
 	client.eventually(t, "its DNS answered on 53", 2*time.Minute, "/tmp/probe dns "+addr4, ok)
-	route, dns := "ip route get "+s.target, "resolvectl dns juist0"
+	// resolved asks juistd's own resolver on juist0 for every name, which
+	// asks the exit node; FreeBSD's resolv.conf names the exit node itself.
+	route, dns := "ip route get "+s.target, "resolvectl domain juist0"
+	through := func(out string) bool { return strings.Contains(out, "~.") }
 	if client.freebsd {
 		route, dns = "route -n get "+s.target, "cat /etc/resolv.conf"
+		through = func(out string) bool { return strings.Contains(out, addr4) || strings.Contains(out, addr6) }
 	}
 	client.eventually(t, "routing the internet into the tunnel", time.Minute, route, has("juist0"))
 
@@ -256,9 +264,7 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 	}
 	client.run(t, "juist exit use "+server.name)
 	client.eventually(t, "answering again, not isolated", time.Minute, reach, has(client.name+"-host from "+back.target))
-	client.eventually(t, "resolving through it", time.Minute, dns, func(out string) bool {
-		return strings.Contains(out, addr4) || strings.Contains(out, addr6)
-	})
+	client.eventually(t, "resolving through it", time.Minute, dns, through)
 
 	if !client.freebsd {
 		// Debian's cloud image has resolv.conf list every link's servers,
@@ -269,9 +275,82 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 			func(out string) bool { return !strings.Contains(out, "warning: DNS") })
 	}
 	client.run(t, "juist exit off")
-	client.eventually(t, "resolving as before", time.Minute, dns, func(out string) bool {
-		return !strings.Contains(out, addr4) && !strings.Contains(out, addr6)
+	client.eventually(t, "resolving as before", time.Minute, dns, func(out string) bool { return !through(out) })
+}
+
+// names has lx, whose resolved routes domains, resolve fb by its name, and a
+// public name the network points at fb to fb, once agreed and while fb is
+// reachable, without asking the public resolver for it; fb's resolvconf
+// routes no domains. The public resolver is lx's target, for lab.example.
+func names(t *testing.T, fb, lx *vm, fb4, fb6 string) {
+	t.Cleanup(func() {
+		if t.Failed() {
+			for _, v := range []*vm{fb, lx} {
+				out, _ := v.try(diagnose(v)+"; cat /tmp/dns.log 2>/dev/null | tail -20", 2*time.Minute)
+				t.Logf("%s:\n%s", v.name, out)
+			}
+			hold(t, fb, lx)
+		}
+		fb.try("service juistd start", 2*time.Minute)
 	})
+	lx.run(t, `ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+ip netns exec tgt setsid -f /tmp/probe resolve 10.99.2.2 /tmp/dns.log >/dev/null 2>&1 < /dev/null
+resolvectl dns vt0 10.99.2.2; resolvectl domain vt0 '~lab.example'`)
+	lx.eventually(t, "resolving fb by its name", 2*time.Minute, "getent ahosts fb.interop.juist", func(out string) bool {
+		return strings.Contains(out, fb4) && strings.Contains(out, fb6)
+	})
+	lx.eventually(t, "resolving fb by its name alone", time.Minute, "getent hosts fb", has(fb6))
+	mustHave(t, lx.run(t, "juist status"), "Names", "interop.juist")
+	mustHave(t, fb.run(t, "juist status"), "not resolved here: this host's resolver routes no domains")
+
+	public := "203.0.113.7"
+	fb.run(t, "juist grant fb svc.lab.example")
+	lx.eventually(t, "hearing of the public name", 2*time.Minute, "juist status", has("1 public name not accepted"))
+	lx.eventually(t, "not agreed, resolving it publicly", time.Minute, "getent ahosts svc.lab.example", has(public))
+	if !slices.Contains(strings.Split(lx.run(t, "cat /tmp/dns.log"), "\n"), "A svc.lab.example.") {
+		t.Error("not agreed, the public resolver was not asked for the name")
+	}
+
+	mustHave(t, lx.run(t, "juist set --accept-names"), "public names accepted: svc.lab.example at fb")
+	lx.eventually(t, "resolving it to fb", 2*time.Minute, "getent ahosts svc.lab.example", func(out string) bool {
+		return strings.Contains(out, fb4) && strings.Contains(out, fb6) && !strings.Contains(out, public)
+	})
+	lx.run(t, "resolvectl flush-caches; : > /tmp/dns.log")
+	lx.eventually(t, "reaching it through the tunnel", time.Minute, "/tmp/probe get svc.lab.example:80", has("fb-host from "))
+	mustHave(t, lx.run(t, "ip route get "+strings.TrimSpace(lx.run(t, "getent ahostsv4 svc.lab.example | awk 'NR==1 {print $1}'"))), "juist0")
+	lx.run(t, "getent ahosts other.lab.example | grep -q "+public+"; resolvectl query --cache=no -t HTTPS svc.lab.example || true")
+	log := lx.run(t, "cat /tmp/dns.log")
+	asked := strings.Split(log, "\n")
+	for _, typ := range []string{"A", "AAAA", "HTTPS"} {
+		if slices.Contains(asked, typ+" svc.lab.example.") {
+			t.Errorf("the public resolver was asked %s svc.lab.example:\n%s", typ, log)
+		}
+	}
+	if !slices.Contains(asked, "A other.lab.example.") {
+		t.Errorf("the public resolver was not asked for the name beside it:\n%s", log)
+	}
+
+	fb.run(t, "service juistd stop")
+	lx.eventually(t, "fb gone, resolving it publicly", 4*time.Minute,
+		"resolvectl flush-caches; getent ahosts svc.lab.example", has(public))
+	mustHave(t, lx.run(t, "juist status"), "svc.lab.example at fb (resolved publicly: fb is not reachable)")
+	fb.run(t, "service juistd start")
+	lx.eventually(t, "fb back, resolving it to fb", 4*time.Minute,
+		"resolvectl flush-caches; getent ahosts svc.lab.example", has(fb4))
+
+	fb.run(t, "juist revoke fb svc.lab.example")
+	lx.eventually(t, "withdrawn, resolving it publicly", 3*time.Minute,
+		"resolvectl flush-caches; getent ahosts svc.lab.example", has(public))
+	lx.run(t, "juist set --accept-names=false")
+}
+
+func mustHave(t *testing.T, out string, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Fatalf("output lacks %q:\n%s", w, out)
+		}
+	}
 }
 
 // diagnose is what says why v did not carry or reach what it should.

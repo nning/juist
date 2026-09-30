@@ -93,6 +93,12 @@ func startUpstream(t *testing.T, stray bool) *upstream {
 
 func startForwarder(t *testing.T, up *upstream, allowed func(netip.Addr) bool) netip.AddrPort {
 	t.Helper()
+	return startForwarderWith(t, up, func(o *Options) { o.Allowed = allowed })
+}
+
+// startForwarderWith is [startForwarder] with options set sets.
+func startForwarderWith(t *testing.T, up *upstream, set func(*Options)) netip.AddrPort {
+	t.Helper()
 	// A port free for UDP may be another's for TCP, as under make check.
 	for range 20 {
 		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -101,8 +107,10 @@ func startForwarder(t *testing.T, up *upstream, allowed func(netip.Addr) bool) n
 		}
 		port := netip.MustParseAddrPort(pc.LocalAddr().String()).Port()
 		pc.Close()
-		f, err := Start(Options{Addrs: []netip.Addr{loopback}, Port: port, Allowed: allowed,
-			Upstream: func() []netip.AddrPort { return []netip.AddrPort{up.addr} }})
+		opts := Options{Addrs: []netip.Addr{loopback}, Port: port,
+			Upstream: func() []netip.AddrPort { return []netip.AddrPort{up.addr} }}
+		set(&opts)
+		f, err := Start(opts)
 		if errors.Is(err, syscall.EADDRINUSE) {
 			continue
 		}
@@ -278,5 +286,62 @@ func TestASourceHoldsFewConnections(t *testing.T) {
 	}
 	if answered != perSourceConns {
 		t.Errorf("%d connections of one source were answered, want %d", answered, perSourceConns)
+	}
+}
+
+// A query the forwarder answers itself is answered so, over UDP and TCP,
+// and reaches no resolver; the rest goes on.
+func TestAnAnswerOfItsOwnReachesNoResolver(t *testing.T) {
+	up := startUpstream(t, false)
+	own := func(q []byte) []byte {
+		if q[0] != 0x42 {
+			return nil
+		}
+		a := slices.Clone(q)
+		a[2] |= 0x80
+		a[3] = 3 // NXDOMAIN, which no upstream here says
+		return a
+	}
+	at := startForwarderWith(t, up, func(o *Options) { o.Answer = own })
+	resp, err := askUDP(t, at, query(0x4200))
+	if err != nil || resp[3]&0x0f != 3 {
+		t.Fatalf("over UDP: %x, %v", resp, err)
+	}
+	c, err := net.Dial("tcp", at.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(time.Second))
+	c.Write(tcpMessage(query(0x4201)))
+	if resp, err := readTCPMessage(bufio.NewReader(c)); err != nil || resp[3]&0x0f != 3 {
+		t.Fatalf("over TCP: %x, %v", resp, err)
+	}
+	if n := up.asked.Load(); n != 0 {
+		t.Errorf("the resolver was asked %d times", n)
+	}
+	if resp, err := askUDP(t, at, query(0x1000)); err != nil || !answers(resp, query(0x1000)) || up.asked.Load() != 1 {
+		t.Errorf("the rest was not forwarded: %x, %v", resp, err)
+	}
+}
+
+// The host, asking for all its programs, is held to no one source's rate.
+func TestTheHostIsHeldToNoSourcesRate(t *testing.T) {
+	up := startUpstream(t, false)
+	at := startForwarderWith(t, up, func(o *Options) { o.Local = true })
+	c, err := net.Dial("udp", at.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for i := range 3 * perSourceMax {
+		c.Write(query(uint16(i)))
+		if i%50 == 49 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+	if n := up.asked.Load(); n <= perSourceMax+perSourceQPS {
+		t.Errorf("only %d of %d queries were forwarded", n, 3*perSourceMax)
 	}
 }

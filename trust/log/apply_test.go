@@ -34,7 +34,7 @@ func TestEveryKindHasARule(t *testing.T) {
 func TestApplyLeavesItsParentUnchanged(t *testing.T) {
 	type outcomes struct{ accepted, refused int }
 	seen := map[types.Kind]*outcomes{}
-	for seed := uint64(1); seed <= 8; seed++ {
+	for seed := uint64(1); seed <= 16; seed++ {
 		g := newGenerator(t, seed)
 		g.run(30)
 		for _, s := range g.states {

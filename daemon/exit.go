@@ -12,6 +12,7 @@ import (
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/names"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
@@ -114,6 +115,14 @@ type exitPlan struct {
 	// routed is whether the log routes anything through this device, whose
 	// clients then need to know it has no IPv4.
 	routed bool
+
+	// zone is what the host resolves of the network's names, nil to keep
+	// what it resolves; overrides are the public names the log holds, and
+	// namesUntil until when they may be answered.
+	zone       *names.Zone
+	overrides  []heldOverride
+	namesUntil int64
+	accepted   bool
 }
 
 // withSubnets adds sub's serving and status to p.
@@ -294,6 +303,7 @@ func (d *Daemon) applyExit(p exitPlan) {
 		// Asked on 53, which the data plane sends to the forwarder.
 		port = dnsAskedPort
 	}
+	d.setZone(p)
 	through, why := d.routeDNS(p.dns, p.keepDNS)
 	p.status.DNS = through
 	if !through && !p.status.Node.IsZero() && p.status.DNSNot == "" {

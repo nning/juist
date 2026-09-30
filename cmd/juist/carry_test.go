@@ -191,7 +191,7 @@ func TestAnAdminGivesItsEncryptionKeyAfterTheUpgrade(t *testing.T) {
 	if _, err := c.run("admins", "receive"); err == nil || !strings.Contains(err.Error(), "juist log upgrade") {
 		t.Fatalf("receive before the upgrade: %v", err)
 	}
-	mustContain(t, c.mustRun("log", "upgrade", "--yes"), "upgraded to schema 7", "juist admins receive")
+	mustContain(t, c.mustRun("log", "upgrade", "--yes"), "upgraded to "+types.CurrentSchema.String(), "juist admins receive")
 	mustContain(t, c.mustRun("admins"), "hint: for changes waiting for your vote to reach you: juist admins receive")
 	mustContain(t, c.mustRun("admins", "receive"), "changes waiting for alice reach key alice@home")
 	if k, _ := openLog(t, c).State().Admin(alice.Public()); k.Recipient == nil {

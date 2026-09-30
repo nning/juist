@@ -55,6 +55,17 @@ type Options struct {
 	// Upstream is the resolvers asked, read from the host where nil.
 	Upstream func() []netip.AddrPort
 
+	// UpstreamFor, where set, is the resolvers asked for query instead, nil
+	// for Upstream's; empty, it is asked of none.
+	UpstreamFor func(query []byte) []netip.AddrPort
+
+	// Answer, where set, answers a query itself, nil passing it upstream.
+	Answer func(query []byte) []byte
+
+	// Local has the host alone ask, its resolver as one source for all its
+	// programs: no source is held to the limits on one.
+	Local bool
+
 	Logf func(format string, args ...any)
 }
 
@@ -136,6 +147,9 @@ func (f *Forwarder) admit(src netip.Addr) bool {
 	if f.opts.Allowed != nil && !f.opts.Allowed(src) {
 		return false
 	}
+	if f.opts.Local {
+		return true
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	l := f.limits[src]
@@ -152,6 +166,9 @@ func (f *Forwarder) admit(src netip.Addr) bool {
 // hold takes one of src's count slots in m, of at most max, reporting
 // whether there was one; release gives it back.
 func (f *Forwarder) hold(m map[netip.Addr]int, src netip.Addr, max int) bool {
+	if f.opts.Local {
+		max = maxInFlight
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if m[src] >= max {
@@ -188,7 +205,14 @@ func (f *Forwarder) serveUDP(c *net.UDPConn) {
 			continue
 		}
 		from := src.Addr().Unmap()
-		if !isQuery(buf[:n]) || !f.admit(from) || !f.hold(f.busy, from, perSourceInFlight) {
+		if !isQuery(buf[:n]) || !f.admit(from) {
+			continue
+		}
+		if resp := f.answer(buf[:n]); resp != nil {
+			c.WriteToUDPAddrPort(resp, src)
+			continue
+		}
+		if !f.hold(f.busy, from, perSourceInFlight) {
 			continue
 		}
 		select {
@@ -255,9 +279,11 @@ func (f *Forwarder) serveConn(c net.Conn, src netip.Addr) {
 		if err != nil || !isQuery(q) || !f.admit(src) {
 			return
 		}
-		resp, err := f.ask("tcp", q)
-		if err != nil {
-			return
+		resp := f.answer(q)
+		if resp == nil {
+			if resp, err = f.ask("tcp", q); err != nil {
+				return
+			}
 		}
 		c.SetWriteDeadline(time.Now().Add(queryTimeout))
 		if _, err := c.Write(tcpMessage(resp)); err != nil {
@@ -266,13 +292,37 @@ func (f *Forwarder) serveConn(c net.Conn, src netip.Addr) {
 	}
 }
 
+// answer is the forwarder's own response to q, nil where it has none.
+func (f *Forwarder) answer(q []byte) []byte {
+	if f.opts.Answer == nil {
+		return nil
+	}
+	return f.opts.Answer(q)
+}
+
+// Port is the port the forwarder answers on, as bound where Options.Port
+// was zero.
+func (f *Forwarder) Port() uint16 {
+	if len(f.udp) == 0 {
+		return 0
+	}
+	return uint16(f.udp[0].LocalAddr().(*net.UDPAddr).Port)
+}
+
 // ask puts q to the host's resolvers in turn, over network, and returns the
 // first answer that is not a failure of the resolver itself (SERVFAIL or
 // REFUSED), else the last answer or error.
 func (f *Forwarder) ask(network string, q []byte) ([]byte, error) {
 	var last error = errors.New("dnsfwd: no resolver on this host")
 	var failed []byte
-	for _, up := range f.opts.Upstream() {
+	var ups []netip.AddrPort
+	if f.opts.UpstreamFor != nil {
+		ups = f.opts.UpstreamFor(q)
+	}
+	if ups == nil {
+		ups = f.opts.Upstream()
+	}
+	for _, up := range ups {
 		resp, err := exchange(network, up, q)
 		switch {
 		case err != nil:

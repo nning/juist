@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/godbus/dbus/v5/prop"
 
 	"github.com/nning/juist/internal/firewalld/firewalldtest"
 )
@@ -56,6 +57,9 @@ func startResolvedBus(t *testing.T, f *fake) *firewalldtest.Bus {
 			return f.record(fmt.Sprintf("default-route %d %v", i, on))
 		},
 		"RevertLink": func(i int32) *dbus.Error { return f.record(fmt.Sprintf("revert %d", i)) },
+		"SetLinkDNSSECNegativeTrustAnchors": func(i int32, names []string) *dbus.Error {
+			return f.record(fmt.Sprintf("nta %d %v", i, names))
+		},
 	}
 	if !f.old {
 		methods["SetLinkDNSEx"] = func(i int32, s []server) *dbus.Error {
@@ -89,7 +93,7 @@ func TestADialledClientRoutes(t *testing.T) {
 	if err := c.Route(7, []netip.AddrPort{netip.MustParseAddrPort("198.18.4.2:41646")}); err != nil {
 		t.Fatalf("routing: %v", err)
 	}
-	if got := f.asked(); len(got) != 3 {
+	if got := f.asked(); len(got) != 4 {
 		t.Errorf("asked %q", got)
 	}
 }
@@ -108,7 +112,8 @@ func TestRouteAndRevert(t *testing.T) {
 	if err := c.Revert(7); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"dns 7 [2 198.18.4.2:41646 10 [fd12::2]:41646]", "domains 7 [{. true}]", "default-route 7 true", "revert 7"}
+	want := []string{"dns 7 [2 198.18.4.2:41646 10 [fd12::2]:41646]", "domains 7 [{. true}]", "default-route 7 true",
+		"nta 7 []", "revert 7"}
 	if got := f.asked(); !slices.Equal(got, want) {
 		t.Errorf("asked %q, want %q", got, want)
 	}
@@ -134,5 +139,105 @@ func TestWhatResolvedCannotDoIsSaid(t *testing.T) {
 	bus := firewalldtest.Start(t)
 	if _, err := Open(bus.Connect(t)); !errors.Is(err, ErrNotRunning) {
 		t.Errorf("not running: %v", err)
+	}
+}
+
+// A link routed for some domains alone takes them, a search domain among
+// them, and is no default route; with everything, "." is added once. Its
+// own domains are kept from DNSSEC validation, which answers from juistd
+// would fail.
+func TestConfigureDomains(t *testing.T) {
+	f := &fake{}
+	c, err := Open(startResolved(t, f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := []netip.AddrPort{netip.MustParseAddrPort("[fd12::5]:41647")}
+	if err := c.Configure(7, servers, []Domain{{Name: "home.juist", Search: true}, {Name: "mx.example.net"}}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Configure(7, servers, []Domain{{Name: "home.juist", Search: true}}, true); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"dns 7 [10 [fd12::5]:41647]", "domains 7 [{home.juist false} {mx.example.net true}]", "default-route 7 false",
+		"nta 7 [home.juist mx.example.net]",
+		"dns 7 [10 [fd12::5]:41647]", "domains 7 [{home.juist false} {. true}]", "default-route 7 true", "nta 7 [home.juist]",
+	}
+	if got := f.asked(); !slices.Equal(got, want) {
+		t.Errorf("asked %q, want %q", got, want)
+	}
+}
+
+// Routing reads resolved's servers and domains of every link but the one
+// skipped, and routes a name as resolved does: to the links whose domain
+// matching it is longest, else to those that take every name.
+func TestRouting(t *testing.T) {
+	bus := firewalldtest.Start(t)
+	conn := bus.Connect(t)
+	type srv struct {
+		Ifindex int32
+		Family  int32
+		Address []byte
+		Port    uint16
+		Name    string
+	}
+	type dom struct {
+		Ifindex   int32
+		Domain    string
+		RouteOnly bool
+	}
+	a := func(s string) []byte { return netip.MustParseAddr(s).AsSlice() }
+	servers := []srv{{0, 2, a("10.0.0.1"), 0, ""}, {2, 2, a("10.0.2.3"), 53, ""}, {5, 2, a("10.99.2.2"), 0, ""},
+		{7, 10, a("fd12::1"), 41647, ""}, {9, 10, a("fd99::53"), 5353, ""}}
+	domains := []dom{{2, "lan", false}, {5, "lab.example.", true}, {7, "svc.lab.example", true},
+		{7, "home.juist", false}, {9, "corp.example", true}}
+	links := map[int32]bool{2: true, 5: false, 7: false, 9: false}
+	if err := conn.ExportMethodTable(map[string]any{
+		"GetLink": func(i int32) (dbus.ObjectPath, *dbus.Error) {
+			return dbus.ObjectPath(fmt.Sprintf("%s/link/_%d", objPath, i)), nil
+		},
+	}, objPath, manager); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prop.Export(conn, objPath, prop.Map{manager: {
+		"DNSEx":   {Value: servers},
+		"Domains": {Value: domains},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for i, on := range links {
+		if _, err := prop.Export(conn, dbus.ObjectPath(fmt.Sprintf("%s/link/_%d", objPath, i)),
+			prop.Map{busName + ".Link": {"DefaultRoute": {Value: on}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(bus.Connect(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	r, err := c.Routing(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ap := netip.MustParseAddrPort
+	for name, want := range map[string][]netip.AddrPort{
+		"svc.lab.example.":  {ap("10.99.2.2:53")},
+		"a.b.lab.example":   {ap("10.99.2.2:53")},
+		"nas.lan":           {ap("10.0.2.3:53")},
+		"git.corp.example":  {ap("[fd99::53]:5353")},
+		"example.org":       {ap("10.0.0.1:53"), ap("10.0.2.3:53")},
+		"mailer.home.juist": {ap("10.0.0.1:53"), ap("10.0.2.3:53")},
+	} {
+		if got := r.Servers(name); !slices.Equal(got, want) {
+			t.Errorf("%s is asked of %v, want %v", name, got, want)
+		}
+	}
+	if got := (Routing{}).Servers("example.org"); got == nil || len(got) != 0 {
+		t.Errorf("no links ask %v", got)
 	}
 }

@@ -18,7 +18,14 @@ func TestResolutionIsOrderIndependent(t *testing.T) {
 	for seed := uint64(1); seed <= 24; seed++ {
 		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
 			g := newGenerator(t, seed)
-			g.run(24)
+			// Enough records whatever path the seed takes, as a step that
+			// draws a refused record adds none.
+			for range 8 {
+				if len(g.records) >= 12 {
+					break
+				}
+				g.run(24)
+			}
 			if len(g.records) < 8 {
 				t.Fatalf("generator produced only %d records", len(g.records))
 			}
@@ -205,8 +212,8 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	var err error
 	var devices []types.PrivateIdentity
 
-	op := g.rng.IntN(18)
-	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14}, op) {
+	op := g.rng.IntN(19)
+	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14, 18}, op) {
 		return types.AUM{}, nil, false
 	}
 	switch op {
@@ -299,6 +306,9 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	case 17: // give an admin key an encryption key
 		keys := fixedNode(g.next())
 		aum, err = b.SetAdminRecipient(holder.Public, types.RecipientKey{X25519: keys.X25519, MLKEM: keys.MLKEM})
+	case 18: // point names at a member, one another may hold, or withdraw them
+		names := [][]string{{"mx.example.org"}, {"imap.example.org", "mx.example.org"}, nil}
+		aum, err = b.SetNodeNames(victim.Identity, names[g.rng.IntN(len(names))])
 	}
 	if err != nil || !g.sign(&aum, base, devices) {
 		return types.AUM{}, nil, false

@@ -92,6 +92,8 @@ type Service struct {
 	// serveSubnets and subnetsOff are the operator's and the owner's word
 	// on subnet routes, as the state directory keeps them.
 	serveSubnets, subnetsOff bool
+	// acceptNames is the owner's word on the network's public names.
+	acceptNames bool
 }
 
 // ServiceOptions configures a [Service].
@@ -204,6 +206,8 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	s.serveSubnets = err == nil
 	_, err = os.Stat(filepath.Join(home, statedir.SubnetsFile))
 	s.subnetsOff = err == nil
+	_, err = os.Stat(filepath.Join(home, statedir.NamesFile))
+	s.acceptNames = err == nil
 	s.clearEgressUnlessChosen()
 	s.holdExitLocked()
 
@@ -432,6 +436,22 @@ func (s *Service) setSubnet(req *ipc.Request) error {
 	return nil
 }
 
+// setNames records the owner's word on resolving the network's public names,
+// a file whose presence says yes, and hands it to the running mesh.
+func (s *Service) setNames(on bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := setFlagFile(s.opts.Home, statedir.NamesFile, on); err != nil {
+		return err
+	}
+	s.acceptNames = on
+	if s.mesh != nil {
+		s.mesh.SetAcceptNames(on)
+		_ = s.mesh.Reconcile() // so that the status answered says what came of it
+	}
+	return nil
+}
+
 // setFlagFile makes name in home exist where on, and not where off, durably.
 func setFlagFile(home, name string, on bool) error {
 	path := filepath.Join(home, name)
@@ -580,6 +600,7 @@ func (s *Service) startMeshLocked() error {
 	o.OnAddrsMoved = s.followAddrs
 	o.Exit, o.ServeExit, o.OnExitMoved = s.exit, s.serve, s.followExit
 	o.ServeSubnets, o.SubnetsOff = s.serveSubnets, s.subnetsOff
+	o.AcceptNames = s.acceptNames
 	o.KeyringPath = statedir.KeyringPath(s.opts.Home)
 	if o.Logf == nil {
 		o.Logf = s.logf
@@ -899,6 +920,8 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 		err = s.reset(req.Force)
 	case ipc.CmdSubnet:
 		err = s.setSubnet(req)
+	case ipc.CmdNames:
+		err = s.setNames(*req.AcceptNames)
 	case ipc.CmdExit:
 		err = s.setExit(req)
 	case ipc.CmdWaiting:
@@ -954,7 +977,7 @@ func (s *Service) reset(force bool) error {
 	s.auth, s.meshErr, s.hostConflict = nil, nil, nil
 	// The choice and the consent were this network's, and go with it.
 	s.exit, s.serve = ExitChoice{}, false
-	s.serveSubnets, s.subnetsOff = false, false
+	s.serveSubnets, s.subnetsOff, s.acceptNames = false, false, false
 	s.clearEgress()
 
 	entries, err := os.ReadDir(home)

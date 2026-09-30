@@ -321,6 +321,13 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	if t := subnetSummary(s.Subnets, paint); t != "" {
 		field("Subnets", "%s", t)
 	}
+	if s.Names != nil {
+		text, hint := namesSummary(s.Names, paint)
+		field("Names", "%s", text)
+		if hint != "" {
+			v.head = append(v.head, line{kind: lineHint, text: hint})
+		}
+	}
 	switch {
 	case until > 0:
 		renumbering := "old addresses until " + deadline(uint64(until))

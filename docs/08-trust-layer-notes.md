@@ -606,6 +606,24 @@ are sealed to (M5b). The rules a later change has to keep:
 - **Nothing in the log is sealed to it.** It decides who can read a change
   before it counts, never whether it counts.
 
+## Names
+
+Schema 8 points public DNS names at members (M8): a node record's `Names`,
+replaced by `SetNodeNames`. The rules a later change has to keep:
+
+- **A name points at a member, never at an address**, so it follows
+  renumbering and an identity rotation, and goes with the member. No name
+  can send traffic outside the network.
+- **One form of a name alone:** lowercase ASCII, a Unicode name as xn--,
+  checked in the TCB without IDNA tables, which the CLI applies before. Two
+  spellings are never two names.
+- **One member per name**, as for subnet routes, and no name of juist's
+  own domain, `.juist`, nor of a domain the host keeps to itself (`local`,
+  `localhost`, `arpa`, `onion`, `invalid`), nor one that is an address.
+- **The log only says what may be answered.** Whether a device answers, it
+  decides itself: it has to agree to, and stops while its view is stale or
+  the member is out of reach (docs/05-roadmap.md, M8).
+
 ## Not built in M1, on purpose
 
 - **Freshness leases.** Built at M4, outside the record schema: see

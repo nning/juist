@@ -34,7 +34,9 @@ func TestIPCMessageRoundTrip(t *testing.T) {
 
 // Each command takes exactly the fields listed here beside the ones it needs.
 func TestEachCommandTakesItsOwnFields(t *testing.T) {
+	on := true
 	base := map[Command]Request{
+		CmdNames:  {AcceptNames: &on},
 		CmdStatus: {}, CmdBootstrap: {}, CmdLog: {}, CmdSelf: {}, CmdUnstage: {}, CmdRotate: {}, CmdReset: {},
 		CmdWaiting:     {},
 		CmdExit:        {ExitOff: true},
@@ -50,7 +52,7 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 		CmdStatus: {"Probe"}, CmdLog: {"Orphans"}, CmdRotate: {"Identity"}, CmdReset: {"Force"},
 		CmdInform: {"Records"}, CmdCreate: {"SetOperator"}, CmdJoin: {"Invite", "Name", "SetOperator"},
 		CmdSetOperator: {"SetOperator", "OperatorUID"}, CmdInvite: {"Offer"}, CmdInviteReply: {"Reply"},
-		CmdWaiting: {"Waiting"}, CmdExit: {"ExitOff"},
+		CmdWaiting: {"Waiting"}, CmdExit: {"ExitOff"}, CmdNames: {"AcceptNames"},
 	}
 	fields := map[string]func(*Request){
 		"Records":     func(r *Request) { r.Records = append(r.Records, []byte{2}) },
@@ -67,10 +69,11 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 		"Waiting":     func(r *Request) { r.Waiting = append(r.Waiting, []byte{3}) },
 		"ExitOff":     func(r *Request) { r.ExitOff = true },
 		"ExitNode":    func(r *Request) { r.ExitNode = types.Identity{1} },
+		"AcceptNames": func(r *Request) { r.AcceptNames = &on },
 	}
 	for cmd, req := range base {
 		req.Command = cmd
-		valid := cmd >= CmdStatus && cmd <= CmdExit
+		valid := cmd >= CmdStatus && cmd <= CmdExit || cmd == CmdNames
 		if err := req.validate(); (err == nil) != valid {
 			t.Errorf("%v alone: %v", cmd, err)
 		}
@@ -129,6 +132,24 @@ func TestAnExitRequestSetsOneThing(t *testing.T) {
 		if err := tc.req.validate(); (err == nil) != tc.want {
 			t.Errorf("%+v: %v, want valid %v", tc.req, err, tc.want)
 		}
+	}
+}
+
+func TestANamesRequestSetsAcceptingAlone(t *testing.T) {
+	on := true
+	for _, tc := range []struct {
+		req  Request
+		want bool
+	}{
+		{Request{AcceptNames: &on}, true}, {Request{}, false}, {Request{AcceptNames: &on, AcceptSubnets: &on}, false},
+	} {
+		tc.req.Command = CmdNames
+		if err := tc.req.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v, want valid %v", tc.req, err, tc.want)
+		}
+	}
+	if err := (&Request{Command: CmdSubnet, AcceptSubnets: &on, AcceptNames: &on}).validate(); err == nil {
+		t.Error("a subnet request sets names")
 	}
 }
 

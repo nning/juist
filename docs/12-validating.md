@@ -62,8 +62,14 @@ address behind the server, in a VNET jail or a network namespace, must see
 the server's masquerade as its source, the subnet's target must answer, the
 server's port 53 must, and the client's resolver must take the server and
 give it back after `juist exit off`. A host on a public address behind the
-client reaches it, and must be answered, but not once the client isolates. Last, both packages are removed, leaving
-no device, rule or forwarding. It needs qemu, qemu-img, xz and ssh, and no
+client reaches it, and must be answered, but not once the client isolates.
+Then names: Debian resolves FreeBSD by `fb.interop.juist` and `fb`, and a
+public name the network points at FreeBSD resolves publicly until Debian
+accepts names, then to FreeBSD's overlay addresses and through the tunnel,
+without the public resolver (a probe on Debian's target) being asked A, AAAA
+or HTTPS for it; publicly again while FreeBSD's juistd is stopped, and once
+the name is revoked. Last, both packages are removed, leaving no device,
+rule or forwarding. It needs qemu, qemu-img, xz and ssh, and no
 root: KVM where `/dev/kvm` opens, as in CI's `interop` workflow, TCG
 elsewhere, which takes about an hour. The images are fetched into
 `INTEROP_CACHE` once and checked against the sums pinned in
@@ -153,6 +159,13 @@ than skip. A NAT cell can be run alone with
 | M6c — DNS follows the choice whatever the network does, and a stopped daemon leaves it alone | `daemon`: `TestDNSFollowsTheChoiceWhateverTheNetwork`, `TestAClosedDaemonLeavesDNSAlone`; `internal/dnsfwd`: `TestAFailingResolverIsPassedOver`, `TestASourceHoldsFewConnections` | no |
 | M6c — an exit node of one family is sent and asked that family alone, and the other is refused at once and said to be | `conn`: `TestNetnsAFamilyNoExitNodeCarriesIsRefused`, `TestTheGuardRefusesWhatNoPeerCarries`, `TestTheRouterLearnsWhatThePeersCarry`; `daemon`: `TestAnExitNodeOfOneFamilyIsSaid`; `cmd/juist`: `TestTheStatusSaysWhereDNSGoes` | for the first |
 | M7a — on FreeBSD the daemon runs as juist, and a helper as root plumbs juist's own devices alone, one helper each, addresses of one host and no default route, and neither outlives the other | `internal/plumber`: `TestTheHelperPlumbsWhatItIsAsked`, `TestTheHelperTouchesNothingElse`, `TestAnAddressIsOneHost`, `TestALargeRouteSetGoesWhole`, `TestALateAnswerIsNoOtherCallsAnswer`, `TestADeviceIsOneHelpers`, `TestManyRoutesGoInFast`; `cmd/juistd`: `TestRootSplitsOffTheDaemon`, `TestTheDaemonGoesWithItsHelper`, `TestAHelperThatStopsServingStopsTheDaemon`, `TestRootNeedsAHome`, `TestRootGetsHelp`, `TestTheDaemonGetsNoneOfRootsEnvironment`, `TestAJuistUserOfRootsIsRefused` | FreeBSD, for the last nine |
+| M8a — a name is taken in one form alone, of two labels or more, no address and nothing of `.juist` or the host's own domains, sorted and one member's; a state names members only from schema 8 | `types`: `TestHostNames`, `TestNameSets`, `TestNamesNeedTheirSchema`, `TestEveryPayloadIsValidated` | — |
+| M8a — a quorum points names at a member and takes them back; they survive reopening, a checkpoint and an identity rotation, and go with the member; a name another holds, a non-member, the names it has, a quorum short and schema 7 are refused | `trust/log`: `TestNamesFollowTheMember`, `TestNamesAreRefused`, `TestApplyLeavesItsParentUnchanged` | — |
+| M8a — `juist grant` and `revoke` take a name in its one form, alone, never two devices' or the network's own, and an approver reads what a change points where | `cmd/juist`: `TestGrantNames`, `TestANamesChangeSaysWhatItPoints` | — |
+| M8b — members' names are answered from the log with the zone's SOA, a name the network lacks does not exist, and overrides are answered by address alone, their hints empty | `internal/names`: `TestMembersAreAnswered`, `TestOverridesAreAnswered`, `TestTheZoneIsItsAuthority`, `TestTheZonesNamesGoNowhereElse`, `TestLabels`; `internal/dnsfwd`: `TestAnAnswerOfItsOwnReachesNoResolver`, `TestTheHostIsHeldToNoSourcesRate` | — |
+| M8b — resolved routes the network's domain, and every name with an exit node, to juistd's resolver on an address the device holds, bound to it and answering the host alone, which asks the exit node, else the resolvers resolved would but its own link's; the domains are kept from DNSSEC validation; it is given back on close, and the status says why names do not resolve | `daemon`: `TestTheHostResolvesTheNetworksNames`, `TestNamesThatWillNotStartLeaveTheExitNode`, `TestNamesNotResolvedAreSaid`, `TestTheNamesServerIsBoundToTheDevice`, `TestTheNamesAddressIsOneTheDeviceHolds`, `TestWhatIsNotAnsweredGoesWhereTheHostRoutesIt`; `internal/resolved`: `TestConfigureDomains`, `TestRouting`; `packaging`: `TestThePolkitRuleAllowsJuistsDNSAlone`; `cmd/juist`: `TestStatusSaysHowNamesResolve` | — |
+| M8c — a public name is resolved to its member only where the owner agreed, never by an exit node for a member that did not, while the view is fresh and the member reachable, and publicly otherwise; the word is kept and forgotten with the network, and the status lists each name and why it resolves publicly | `internal/names`: `TestOverridesAreAnswered`, `TestEDNSIsAnsweredInKind`, `TestOverridden`; `daemon`: `TestAPublicNameNeedsTheOwnersWord`, `TestAnExitNodeHandsNoOverrideOn`, `TestAStaleViewAnswersNoPublicName`, `TestNoMemberNoNames`, `TestTheNamesWordIsKept`; `ipc`: `TestANamesRequestSetsAcceptingAlone`, `TestAReaderSeesNoPublicNames`; `cmd/juist`: `TestAcceptNames`, `TestStatusListsPublicNames`; `ipc`: `TestEachCommandTakesItsOwnFields` | — |
+| M8 (1), (3)–(5) — with resolved, members resolve by name, a public name resolves to its member through the tunnel without the public resolver being asked, a name beside it publicly, and publicly again while the member is down and once revoked | `make interop`: `TestLinuxAndFreeBSD/names` | qemu |
 | M7 review — the helper takes no address or source outside a network's space, captures nothing the host keeps to its links, deletes a route by its gateway, keeps what to put back where that fails, leaves a pf rc.conf starts on, and adds answer rules beside no ruleset of the host's | `internal/plumber`: `TestTheHelperKeepsToTheNetworksSpace`, `TestARouteDeletedLeavesTheHosts`, `TestAPfTheHostStartsIsLeftOn`, `TestPFIsKeptAndLeftBe`; `conn`: `TestARedirectsRouteIsNotTheHosts` | FreeBSD, but for the first |
 | M7 review — an instance's home is made as the juist user, never followed as root; clear waits for a supervised juistd | `packaging`: `TestAnInstanceHomeFollowsNoLink`, `TestClearWaitsForASupervisedJuistd` | FreeBSD |
 | M7 review — the FreeBSD package's modes go by where a file goes, and a file twice or a stray script is refused | `packaging/freebsd/mkpkg`: `TestModesAndMistakes` | — |
@@ -210,6 +223,13 @@ is.
   both systems, and `make repro-freebsd` found the binaries for both systems
   and the package the same bytes from this Debian 12 container and that VM.
   The review's rc.d, pf and route fixes each failed their test there before.
+- **2026-09-30, at M8c.** `make interop` passed under TCG in 12 minutes,
+  names among it: Debian's resolved (systemd 252) resolved FreeBSD by name
+  and a public name pointed at it only once accepted, through the tunnel,
+  never asking the public resolver on its own link for it, and publicly
+  again, by that link, while FreeBSD's juistd was stopped and once the name
+  was revoked. `make test-freebsd` on FreeBSD 14.5 in qemu: all 32 packages
+  passed.
   [Check a FreeBSD node](#check-a-freebsd-node) passed by hand between two
   such VMs on one LAN, serving and using an exit node and the package
   included.
@@ -303,7 +323,7 @@ client:
 juist exit                            # vps  …  serving
 juist exit use vps                    # "internet via vps"
 juist status                          # Exit node  vps, DNS too
-resolvectl status juist0              # the exit node's overlay addresses at :53, and ~.
+resolvectl status juist0              # this device's IPv6 overlay address at :41647, home.juist and ~.
 resolvectl query example.com          # answered on juist0
 resolvectl query router.lan           # the LAN's own domain, answered on the LAN's link
 sudo tcpdump -ni eth0 port 53 & dig example.com   # nothing on eth0
@@ -317,7 +337,7 @@ ping -c1 -I eth0 1.1.1.1              # refused by the guard, and still nothing 
 
 Then stop the exit node's juistd: the client's `curl` fails at once, and
 `juist status` says why; `juist exit off` brings the internet back directly,
-and `resolvectl status juist0` shows no DNS servers again. `juist status`
+and `resolvectl status juist0` routes the network's domain alone again. `juist status`
 saying "systemd-resolved refused juistd" means the package's
 `/usr/share/polkit-1/rules.d/60-juist.rules` is not in force. `juist exit
 serve --stop` puts forwarding back as it found it, and removing the package

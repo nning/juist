@@ -1,6 +1,7 @@
 // Package resolved points systemd-resolved, over D-Bus, at the resolvers of
-// one link for every name, and back. It starts no resolved that is not
-// running, and never has polkit ask anyone for a password.
+// one link, for the domains it routes there or every name, and back. It
+// starts no resolved that is not running, and never has polkit ask anyone
+// for a password.
 package resolved
 
 import (
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -83,9 +85,23 @@ type domain struct {
 	RouteOnly bool
 }
 
+// A Domain is one a link's servers answer for: a routing domain alone, or a
+// search domain too, which single names are tried in.
+type Domain struct {
+	Name   string
+	Search bool
+}
+
 // Route makes servers, on the link ifindex, resolved's resolvers for every
 // name no other link claims by a longer routing domain.
 func (c *Client) Route(ifindex int, servers []netip.AddrPort) error {
+	return c.Configure(ifindex, servers, []Domain{{Name: "."}}, true)
+}
+
+// Configure makes servers, on the link ifindex, resolved's resolvers for
+// domains, and for every name no other link claims where everything; a
+// search domain is tried for single names too.
+func (c *Client) Configure(ifindex int, servers []netip.AddrPort, domains []Domain, everything bool) error {
 	list := make([]server, len(servers))
 	for i, s := range servers {
 		fam := int32(unix.AF_INET)
@@ -100,12 +116,30 @@ func (c *Client) Route(ifindex int, servers []netip.AddrPort) error {
 		}
 		return err
 	}
+	ds := make([]domain, len(domains))
+	for i, d := range domains {
+		ds[i] = domain{Domain: d.Name, RouteOnly: !d.Search}
+	}
+	if everything && !slices.ContainsFunc(domains, func(d Domain) bool { return d.Name == "." }) {
+		ds = append(ds, domain{".", true})
+	}
 	// Half-routed, the link would send some names to servers the caller
 	// believes unrouted: it goes back whole.
-	if err := c.call("SetLinkDomains", int32(ifindex), []domain{{".", true}}); err != nil {
+	if err := c.call("SetLinkDomains", int32(ifindex), ds); err != nil {
 		return errors.Join(err, c.Revert(ifindex))
 	}
-	if err := c.call("SetLinkDefaultRoute", int32(ifindex), true); err != nil && !isUnknownMethod(err) {
+	if err := c.call("SetLinkDefaultRoute", int32(ifindex), everything); err != nil && !isUnknownMethod(err) {
+		return errors.Join(err, c.Revert(ifindex))
+	}
+	// Answered unsigned by juistd, the domains would be bogus to a
+	// resolved that validates.
+	var unsigned []string
+	for _, d := range domains {
+		if d.Name != "." {
+			unsigned = append(unsigned, d.Name)
+		}
+	}
+	if err := c.call("SetLinkDNSSECNegativeTrustAnchors", int32(ifindex), unsigned); err != nil && !isUnknownMethod(err) {
 		return errors.Join(err, c.Revert(ifindex))
 	}
 	return nil

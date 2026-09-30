@@ -93,6 +93,10 @@ func (d *Daemon) Reconcile() error {
 	d.setInstalled(b.named)
 	sub := d.planSubnets(s, fresh.Fresh(s.now), held, b.peers, b.named)
 	exit := d.planExit(s, fresh.Fresh(s.now), held, b.peers, b.named, sub.taken).withSubnets(sub, overlaySpace(state))
+	d.mu.Lock()
+	exit.accepted = d.acceptNames
+	d.mu.Unlock()
+	exit.zone, exit.overrides, exit.namesUntil = d.namesZone(state, fresh, exit.accepted, s.now)
 	// The peer carrying the routes first, then the routing into it: the
 	// other order would send traffic into a tunnel nobody carries.
 	if err := d.manager.SetPeers(b.peers); err != nil {
@@ -361,7 +365,10 @@ func (d *Daemon) teardown(v ipc.Derived, why string) error {
 	if v.NotMember {
 		down = "this device is no member of the network"
 	}
-	d.applyExit(d.exitDown(down))
+	// A device that cannot tell who is a member resolves none of them.
+	p := d.exitDown(down)
+	p.zone = noZone
+	d.applyExit(p)
 	v.Exit = d.exitNow()
 	v.Subnets = d.subnetsNow()
 	v.LastReconcile = d.now().Unix()
@@ -448,6 +455,8 @@ func describeLost(aum types.AUM, who string) string {
 		return "the renumbering of " + who
 	case aum.Kind == types.KindRenameNetwork && aum.Network != nil:
 		return "the renaming of the network to " + *aum.Network
+	case aum.Kind == types.KindSetNodeNames:
+		return "the change of " + who + "'s names"
 	}
 	return fmt.Sprintf("a %v", aum.Kind)
 }

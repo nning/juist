@@ -27,14 +27,14 @@ A PREFIX, such as 192.168.1.0/24, is a subnet the device routes for every
 member, once its operator agrees: juist subnet serve.`
 
 func cmdGrant(a *app, args []string) error {
-	s := spec{name: "juist grant", args: "DEVICE ROLE|PREFIX...", min: 2, max: -1, about: `
-Give a device roles, or subnets to route. ` + rolesAbout + subnetsAbout}
+	s := spec{name: "juist grant", args: "DEVICE ROLE|PREFIX|NAME...", min: 2, max: -1, about: `
+Give a device roles, subnets to route, or public names. ` + rolesAbout + subnetsAbout + namesAbout}
 	return changeRoles(a, s, args, true)
 }
 
 func cmdRevoke(a *app, args []string) error {
-	s := spec{name: "juist revoke", args: "DEVICE ROLE|PREFIX...", min: 2, max: -1, about: `
-Take roles or subnets from a device. ` + rolesAbout + subnetsAbout}
+	s := spec{name: "juist revoke", args: "DEVICE ROLE|PREFIX|NAME...", min: 2, max: -1, about: `
+Take roles, subnets or public names from a device. ` + rolesAbout + subnetsAbout + namesAbout}
 	return changeRoles(a, s, args, false)
 }
 
@@ -63,6 +63,9 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 		roles[r] = true
 	}
 	subnets := slices.Clone(target.SubnetRoutes())
+	names := slices.Clone(target.Names)
+	var namesAsked []string
+	others := false
 	for _, arg := range pos[1:] {
 		if pfx, ok, err := parseSubnet(arg, name); ok || err != nil {
 			if err != nil {
@@ -71,8 +74,20 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 			if subnets, err = a.changeSubnet(state, target, subnets, pfx, grant); err != nil {
 				return err
 			}
+			others = true
 			continue
 		}
+		if host, ok, err := parseHostName(arg); ok || err != nil {
+			if err != nil {
+				return err
+			}
+			if names, err = changeName(state, target, names, host, grant); err != nil {
+				return err
+			}
+			namesAsked = append(namesAsked, host)
+			continue
+		}
+		others = true
 		r, err := parseRole(arg)
 		if err != nil {
 			return err
@@ -84,6 +99,14 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 		if on {
 			next = append(next, r)
 		}
+	}
+	switch {
+	case len(namesAsked) > 0 && others:
+		// Two changes, each approved on its own.
+		return fmt.Errorf("names are a change of their own, apart from roles and subnets\nhint: juist %s %s %s",
+			map[bool]string{true: "grant", false: "revoke"}[grant], pos[0], strings.Join(namesAsked, " "))
+	case len(namesAsked) > 0:
+		return a.submitNames(auth, target, names)
 	}
 	next = sortRoles(next)
 	routes := exitRoutes(subnets, slices.Contains(next, types.RoleExit))
@@ -253,19 +276,29 @@ var roleNames = []struct {
 	{"exit", types.RoleExit},
 }
 
-// describeGrant is roles, and the subnets routed beside them.
-func describeGrant(roles []types.Role, subnets []netip.Prefix) string {
-	switch {
-	case len(subnets) == 0:
-		return describeRoles(roles)
-	case len(roles) == 0 && len(subnets) <= 2:
-		return "routes " + listPrefixes(subnets)
-	case len(roles) == 0:
-		return fmt.Sprintf("routes %d subnets", len(subnets))
-	case len(subnets) <= 2:
-		return describeRoles(roles) + ", routes " + listPrefixes(subnets)
+// describeGrant is roles, and the subnets routed and names answered beside
+// them.
+func describeGrant(roles []types.Role, subnets []netip.Prefix, names []string) string {
+	var parts []string
+	if len(roles) > 0 {
+		parts = append(parts, describeRoles(roles))
 	}
-	return fmt.Sprintf("%s, routes %d subnets", describeRoles(roles), len(subnets))
+	switch {
+	case len(subnets) > 2:
+		parts = append(parts, fmt.Sprintf("routes %d subnets", len(subnets)))
+	case len(subnets) > 0:
+		parts = append(parts, "routes "+listPrefixes(subnets))
+	}
+	switch {
+	case len(names) > 2:
+		parts = append(parts, fmt.Sprintf("%d names", len(names)))
+	case len(names) > 0:
+		parts = append(parts, "names "+strings.Join(names, ", "))
+	}
+	if len(parts) == 0 {
+		return describeRoles(nil)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func describeRoles(roles []types.Role) string {

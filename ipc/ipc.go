@@ -108,6 +108,10 @@ const (
 	// [Request.AcceptSubnets], or routes its own for them,
 	// [Request.ServeSubnets].
 	CmdSubnet Command = 16
+
+	// CmdNames says whether this device resolves the public names the
+	// network points at members to them, [Request.AcceptNames].
+	CmdNames Command = 17
 )
 
 func (c Command) String() string {
@@ -146,6 +150,8 @@ func (c Command) String() string {
 		return "exit"
 	case CmdSubnet:
 		return "subnet"
+	case CmdNames:
+		return "names"
 	default:
 		return fmt.Sprintf("command?<%d>", uint8(c))
 	}
@@ -208,6 +214,9 @@ type Request struct {
 	// them.
 	ServeSubnets  *bool `cbor:"18,keyasint,omitempty"`
 	AcceptSubnets *bool `cbor:"19,keyasint,omitempty"`
+
+	// AcceptNames is what a [CmdNames] sets.
+	AcceptNames *bool `cbor:"21,keyasint,omitempty"`
 }
 
 // MaxWaiting caps the changes one [CmdWaiting] request hands on.
@@ -355,6 +364,7 @@ const (
 	fWaiting
 	fExit
 	fSubnet
+	fNames
 )
 
 // present lists the optional fields r sets.
@@ -370,6 +380,7 @@ func (r *Request) present() reqField {
 		{r.Probe, fProbe}, {r.Force, fForce}, {len(r.Waiting) > 0, fWaiting},
 		{!r.ExitNode.IsZero() || r.ExitOff || r.Serve != nil || r.ExitIsolate, fExit},
 		{r.ServeSubnets != nil || r.AcceptSubnets != nil, fSubnet},
+		{r.AcceptNames != nil, fNames},
 	} {
 		if p.set {
 			f |= p.f
@@ -405,6 +416,8 @@ var requestShapes = map[Command]requestShape{
 		}},
 	CmdSubnet: {takes: fSubnet, shape: "a subnet request sets serving or accepting, and one of them",
 		check: func(r *Request) bool { return (r.ServeSubnets != nil) != (r.AcceptSubnets != nil) }},
+	CmdNames: {takes: fNames, shape: "a names request sets accepting, and nothing else",
+		check: func(r *Request) bool { return r.AcceptNames != nil }},
 	CmdWaiting: {takes: fWaiting, shape: fmt.Sprintf("a waiting request carries at most %d changes and nothing else", MaxWaiting),
 		check: func(r *Request) bool { return len(r.Waiting) <= MaxWaiting }},
 	CmdInform: {takes: fRecords, shape: "an inform request carries records and nothing else",

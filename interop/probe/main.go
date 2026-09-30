@@ -5,6 +5,7 @@
 //	probe get ADDR:PORT [FROM]        print what the target there answers, asked from FROM
 //	probe hold ADDR:PORT FROM SECS    as get, then after SECS on the same connection print the echo of "again"
 //	probe dns ADDR                    ask ADDR's port 53 for example.org, and print the answer's code
+//	probe resolve ADDR LOG            answer DNS on ADDR's port 53 as the public would, logging "TYPE NAME" to LOG
 package main
 
 import (
@@ -14,14 +15,16 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
 
 func main() {
-	if len(os.Args) != 3 && !(len(os.Args) == 4 && os.Args[1] == "get") && !(len(os.Args) == 5 && os.Args[1] == "hold") {
-		fmt.Fprintln(os.Stderr, "usage: probe serve NAME | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | dns ADDR")
+	if len(os.Args) != 3 && !(len(os.Args) == 4 && (os.Args[1] == "get" || os.Args[1] == "resolve")) &&
+		!(len(os.Args) == 5 && os.Args[1] == "hold") {
+		fmt.Fprintln(os.Stderr, "usage: probe serve NAME | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | dns ADDR | resolve ADDR LOG")
 		os.Exit(2)
 	}
 	var err error
@@ -34,6 +37,8 @@ func main() {
 		err = hold(os.Args[2], os.Args[3], os.Args[4])
 	case "dns":
 		err = dns(os.Args[2])
+	case "resolve":
+		err = resolve(os.Args[2], os.Args[3])
 	default:
 		err = fmt.Errorf("no command %q", os.Args[1])
 	}
@@ -149,4 +154,53 @@ func dns(addr string) error {
 	}
 	fmt.Println(h.RCode)
 	return nil
+}
+
+// Public addresses resolve answers every name with.
+var (
+	public4 = [4]byte{203, 0, 113, 7}
+	public6 = [16]byte{0x20, 0x01, 0x0d, 0xb8, 15: 7}
+)
+
+func resolve(addr, logPath string) error {
+	c, err := net.ListenPacket("udp", net.JoinHostPort(addr, "53"))
+	if err != nil {
+		return err
+	}
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 1500)
+	for {
+		n, src, err := c.ReadFrom(buf)
+		if err != nil {
+			return err
+		}
+		var p dnsmessage.Parser
+		h, err := p.Start(buf[:n])
+		if err != nil {
+			continue
+		}
+		q, err := p.Question()
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(log, "%s %s\n", strings.TrimPrefix(q.Type.String(), "Type"), strings.ToLower(q.Name.String()))
+		b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, Authoritative: true,
+			RecursionDesired: h.RecursionDesired, RecursionAvailable: true})
+		b.StartQuestions()
+		b.Question(q)
+		b.StartAnswers()
+		rh := dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 5}
+		switch q.Type {
+		case dnsmessage.TypeA:
+			b.AResource(rh, dnsmessage.AResource{A: public4})
+		case dnsmessage.TypeAAAA:
+			b.AAAAResource(rh, dnsmessage.AAAAResource{AAAA: public6})
+		}
+		if msg, err := b.Finish(); err == nil {
+			c.WriteTo(msg, src)
+		}
+	}
 }

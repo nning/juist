@@ -147,6 +147,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 	moved := rec
 	newV4 := netip.MustParseAddr("10.7.0.1")
 	moved.V4, moved.Retiring = &newV4, &RetiringV4{Addr: v4, Until: 99}
+	moved.Names = []string{"imap.example.org", "mx.example.org"}
 	renumberedSnap.Nodes = []NodeRecord{moved}
 	renumberedSnap.EpochWraps = epoch.Wraps
 
@@ -177,6 +178,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindSetAdminRecipient, Prev: &parent, Subject: &id,
 			Recipient: &RecipientKey{X25519: X25519Key{8}, MLKEM: MLKEMKey{9}}},
 		{Kind: KindCheckpoint, Prev: &parent, State: renumberedSnap},
+		{Kind: KindSetNodeNames, Prev: &parent, Subject: &id, Names: &NameGrant{Names: []string{"mx.example.org"}}},
 	}
 	out := make([][]byte, 0, len(records))
 	for i := range records {

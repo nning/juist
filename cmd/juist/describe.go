@@ -71,6 +71,9 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		if len(n.Routes) > 0 {
 			add("routing %v", n.Routes)
 		}
+		for _, name := range n.Names {
+			add("pointing %s at it", name)
+		}
 	case types.KindRemoveNode:
 		add("removes the device %s", member(*aum.Subject))
 	case types.KindSetNodeRoutes:
@@ -232,6 +235,28 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		}
 	case types.KindRetireAddresses:
 		add("retires old addresses before their deadlines")
+	case types.KindSetNodeNames:
+		var had []string
+		if state != nil {
+			if n, ok := state.Node(*aum.Subject); ok {
+				had = n.Names
+			}
+		}
+		// What each member that accepts names then resolves, which is what
+		// an approver has to weigh: a public name sent into the network.
+		for _, n := range aum.Names.Names {
+			if !slices.Contains(had, n) {
+				add("points %s at %s", n, member(*aum.Subject))
+			}
+		}
+		for _, n := range had {
+			if !slices.Contains(aum.Names.Names, n) {
+				add("no longer points %s at %s", n, member(*aum.Subject))
+			}
+		}
+		if len(out) == 0 {
+			add("leaves %s's names as they are", member(*aum.Subject))
+		}
 	case types.KindRenameNetwork:
 		if state != nil {
 			add("renames the network %q to %q", state.Network(), *aum.Network)

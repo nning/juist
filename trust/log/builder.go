@@ -112,6 +112,15 @@ func (b *Builder) SetNodeRoutes(id types.Identity, roles []types.Role, routes []
 	return b.finish(types.AUM{Kind: types.KindSetNodeRoutes, Subject: &id, Grant: grant})
 }
 
+// SetNodeNames builds a record replacing the public names a member answers
+// for, sorted and without repeats; none withdraws them all.
+func (b *Builder) SetNodeNames(id types.Identity, names []string) (types.AUM, error) {
+	grant := &types.NameGrant{Names: slices.Clone(names)}
+	slices.Sort(grant.Names)
+	grant.Names = slices.Compact(grant.Names)
+	return b.finish(types.AUM{Kind: types.KindSetNodeNames, Subject: &id, Names: grant})
+}
+
 // RotateNodeKey builds a record replacing a member's WireGuard and encryption
 // keys. The resulting record needs the member's own signature as well as
 // quorum.

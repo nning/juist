@@ -109,6 +109,10 @@ const (
 	// KindSetAdminRecipient sets the encryption key of an admin key, which
 	// must sign it too. Schema 7 and later.
 	KindSetAdminRecipient Kind = 19
+
+	// KindSetNodeNames replaces the public names a node answers for. Schema
+	// 8 and later.
+	KindSetNodeNames Kind = 20
 )
 
 func (k Kind) String() string {
@@ -153,6 +157,8 @@ func (k Kind) String() string {
 		return "rename-network"
 	case KindSetAdminRecipient:
 		return "set-admin-recipient"
+	case KindSetNodeNames:
+		return "set-node-names"
 	default:
 		return fmt.Sprintf("kind?<%d>", uint8(k))
 	}
@@ -199,6 +205,12 @@ func (r *RecipientKey) validate() error {
 type RouteGrant struct {
 	Roles  []Role         `cbor:"1,keyasint,omitempty"`
 	Routes []netip.Prefix `cbor:"2,keyasint,omitempty"`
+}
+
+// A NameGrant is the names [KindSetNodeNames] gives a node, replacing what it
+// had; an empty one withdraws them all.
+type NameGrant struct {
+	Names []string `cbor:"1,keyasint,omitempty"`
 }
 
 // An AUM — Authority Update Message, the term tka uses — is one record of the
@@ -260,6 +272,9 @@ type AUM struct {
 	// Recipient is an admin key's new encryption key, for
 	// SetAdminRecipient.
 	Recipient *RecipientKey `cbor:"17,keyasint,omitempty"`
+
+	// Names is a node's new set of names, for SetNodeNames.
+	Names *NameGrant `cbor:"18,keyasint,omitempty"`
 
 	// Signatures authorize the record. Sorted by key ID and duplicate-free,
 	// like every other set. CBOR key 23 is the highest that encodes in one
@@ -356,6 +371,7 @@ const (
 	fRenumber
 	fNetwork
 	fRecipient
+	fNames
 )
 
 var fieldNames = []struct {
@@ -377,6 +393,7 @@ var fieldNames = []struct {
 	{fRenumber, "Renumber"},
 	{fNetwork, "Network"},
 	{fRecipient, "Recipient"},
+	{fNames, "Names"},
 }
 
 func (f fieldSet) String() string {
@@ -416,6 +433,8 @@ var kindFields = map[Kind]fieldSet{
 	KindRenameNetwork:   fNetwork,
 
 	KindSetAdminRecipient: fSubject | fRecipient,
+
+	KindSetNodeNames: fSubject | fNames,
 }
 
 func (a *AUM) presentFields() fieldSet {
@@ -464,6 +483,9 @@ func (a *AUM) presentFields() fieldSet {
 	}
 	if a.Recipient != nil {
 		f |= fRecipient
+	}
+	if a.Names != nil {
+		f |= fNames
 	}
 	return f
 }
@@ -581,6 +603,11 @@ func (a *AUM) ValidateUnsigned() error {
 	if a.Recipient != nil {
 		if err := a.Recipient.validate(); err != nil {
 			return err
+		}
+	}
+	if a.Names != nil {
+		if err := validateNames(a.Names.Names); err != nil {
+			return fmt.Errorf("name grant: %w", err)
 		}
 	}
 	if a.Vouchers != nil && (*a.Vouchers == 0 || *a.Vouchers > MaxAdmins) {
@@ -754,6 +781,9 @@ func (a *AUM) Clone() *AUM {
 	if a.Recipient != nil {
 		r := *a.Recipient
 		out.Recipient = &r
+	}
+	if a.Names != nil {
+		out.Names = &NameGrant{Names: slices.Clone(a.Names.Names)}
 	}
 	if a.Renumber != nil {
 		r := *a.Renumber

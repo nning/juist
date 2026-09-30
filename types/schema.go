@@ -51,7 +51,11 @@ type SchemaVersion uint16
 // Schema 7 gives admin keys an encryption key ([AdminKey.Recipient],
 // [KindSetAdminRecipient]), which changes waiting for their votes are sealed
 // to.
-const CurrentSchema SchemaVersion = 7
+//
+// Schema 8 points public DNS names at members ([NodeRecord.Names],
+// [KindSetNodeNames]), which members that accept them resolve to the
+// member's overlay addresses.
+const CurrentSchema SchemaVersion = 8
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -75,5 +79,8 @@ const SchemaRename SchemaVersion = 6
 
 // SchemaSealing is the first schema in which admin keys have encryption keys.
 const SchemaSealing SchemaVersion = 7
+
+// SchemaNames is the first schema in which members answer for public names.
+const SchemaNames SchemaVersion = 8
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

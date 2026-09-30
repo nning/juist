@@ -82,6 +82,8 @@ needs 41643/udp.
 |---|---|
 | see whether this device is connected, and what needs attention | `juist status` |
 | list the devices and their addresses | `juist devices` |
+| reach a device by name, where systemd-resolved runs | `ssh laptop.home.juist`, or `ssh laptop` |
+| have members reach a public name through the tunnel | `juist grant nas mail.example.org`, then `juist set --accept-names` on each |
 | add a device | `juist invite`, then `sudo juist join …` on it |
 | remove a device, on every device at once | `juist remove phone` |
 | let a device with a public address relay for the others | `juist grant vps relay` (`revoke` takes it back) |
@@ -317,7 +319,8 @@ All residual weaknesses are in [02-threat-model.md](docs/02-threat-model.md).
 
 Milestones up to **M7** of [05-roadmap.md](docs/05-roadmap.md), FreeBSD
 beside Linux, with a package, builds reproducible from two builders and a
-lab where both meet, are done; next is M8, names. What works:
+lab where both meet, are done; M8, names, is built and validated. What
+works:
 
 - The membership log, with quorum, fork choice, fork alarm and a versioned
   schema.
@@ -332,13 +335,16 @@ lab where both meet, are done; next is M8, names. What works:
 - Exit nodes on Linux, failing closed, and DNS through them where
   systemd-resolved runs.
 - Subnet routers on Linux, leaving every device's own LAN to it.
+- Names where systemd-resolved runs: every member as DEVICE.NETWORK.juist,
+  and public names a quorum points at members, on each device whose owner
+  accepts them.
 - Debian and Fedora packages, with man pages.
 - FreeBSD: the device and its routes through a helper as root, the daemon
   itself as the juist user, exit nodes and subnet routers with pf, DNS
   through resolvconf, an rc.d script, and a package.
 
 Not yet: Android, ACLs (every member reaches every port on the
-others), names, break-glass recovery, the post-quantum data plane,
+others), break-glass recovery, the post-quantum data plane,
 and QR codes.
 
 ## Development
