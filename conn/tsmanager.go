@@ -3,6 +3,7 @@ package conn
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/netip"
 	"slices"
@@ -136,10 +137,15 @@ type tsManager struct {
 	serve     Serve
 	tunName   string
 
+	// confiner keeps ingresses to what they may send; ingressPorts is what
+	// SetIngressPorts last named. Guarded by apply.
+	confiner     *confiner
+	ingressPorts []uint16
+
 	// stun are the public STUN servers, and stunRegions the regions they
 	// hold in the map last installed.
 	stun        []string
-	stunRegions atomic.Pointer[map[int]bool]
+	stunRegions atomic.Pointer[map[tailcfg.DERPRegionID]bool]
 
 	// relays is the relay set last installed, kept so an unchanged one does
 	// not restart the latency probes. Guarded by apply.
@@ -164,6 +170,10 @@ type tsManager struct {
 	// per-packet paths, replaced wholesale under apply, never mutated once
 	// stored.
 	state atomic.Pointer[peerState]
+
+	// evicting is the peer peerConfig disowns while it is taken out of the
+	// device, the engine's only way to drop a peer's sessions. Set under apply.
+	evicting atomic.Pointer[key.NodePublic]
 }
 
 // peerState is one immutable peer-set snapshot.
@@ -249,7 +259,7 @@ func New(opts Options) (_ Manager, err error) {
 		stun:     slices.Clone(opts.STUN),
 	}
 	m.state.Store(&peerState{})
-	m.stunRegions.Store(&map[int]bool{})
+	m.stunRegions.Store(&map[tailcfg.DERPRegionID]bool{})
 	if opts.Logf != nil && len(opts.STUN) > 0 {
 		logf = m.withoutSTUNHomeNoise(logf)
 		m.logf = logf
@@ -351,6 +361,7 @@ func New(opts Options) (_ Manager, err error) {
 	if m.magic == nil || tundev == nil {
 		return nil, errors.New("conn: engine did not surface its magicsock conn or TUN wrapper")
 	}
+	m.confiner = confine(tundev)
 	// magicsock treats ListenPort as a preference: a port it cannot bind
 	// silently becomes an OS-assigned one, and nothing downstream repairs
 	// that, since our endpoints come from an interface scan. Only the initial
@@ -379,7 +390,7 @@ func New(opts Options) (_ Manager, err error) {
 	// The data plane learns its peer set only from these lookups, backed by
 	// the snapshot SetPeers stores. A key absent from it has no peer entry and
 	// no allowed IPs, so it cannot handshake: default-deny lives here.
-	eng.SetPeerConfigFunc(m.allowedIPs)
+	eng.SetPeerConfigFunc(m.peerConfig)
 	eng.SetPeerByIPPacketFunc(m.peerByIP)
 	eng.SetPeerForIPFunc(m.peerForIP)
 
@@ -463,10 +474,13 @@ func (c cleanups) run() {
 	}
 }
 
-// allowedIPs answers the data plane's live per-peer config lookup.
-func (m *tsManager) allowedIPs(nk key.NodePublic) ([]netip.Prefix, bool) {
+// peerConfig answers the data plane's live per-peer config lookup.
+func (m *tsManager) peerConfig(nk key.NodePublic) (wgcfg.PeerConfig, bool) {
+	if e := m.evicting.Load(); e != nil && *e == nk {
+		return wgcfg.PeerConfig{}, false
+	}
 	a, ok := m.state.Load().allowed[nk]
-	return a, ok
+	return wgcfg.PeerConfig{AllowedIPs: a}, ok
 }
 
 // peerByIP routes every outbound packet to a peer, so it stays lock-free:
@@ -519,15 +533,18 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 
 	// Order matters: the snapshot is swapped in before the data plane is
 	// told to resync, so a removed peer's lookup already fails by the time
-	// wireguard-go asks.
+	// wireguard-go asks. A newly confined peer is confined first.
+	m.confiner.set(peers, m.self.Addrs, m.ingressPorts)
 	m.state.Store(next)
 
 	// Session keys are discarded outright rather than left to expire, for a
 	// removed peer and for one whose disco key changed — that means it
 	// restarted, so its old sessions are dead. Both are re-created lazily.
 	for _, nk := range resets {
-		m.eng.ResetDevicePeer(nk)
+		m.evicting.Store(&nk)
+		m.eng.SyncDevicePeer(nk)
 	}
+	m.evicting.Store(nil)
 	// Every kept peer, not just changed ones: wireguard-go's lazy peer
 	// creation reads the config lookup unordered against this call, so a
 	// concurrently created peer can hold the previous snapshot's AllowedIPs.
@@ -619,6 +636,9 @@ func validatePeers(self Self, peers []Peer) error {
 		}
 		if len(p.Addrs) == 0 {
 			return fmt.Errorf("conn: peer %v has no overlay address", p.NodeKey.ShortString())
+		}
+		if p.Confined != ConfineNone && len(p.Routes)+len(p.Subnets) > 0 {
+			return fmt.Errorf("conn: peer %v is confined and routes", p.NodeKey.ShortString())
 		}
 		for _, pfx := range p.Addrs {
 			if err := checkHostPrefix(pfx); err != nil {
@@ -1023,6 +1043,19 @@ func (m *tsManager) SetEgress(e Egress, isolate bool) error {
 	return nil
 }
 
+func (m *tsManager) SetIngressPorts(ports []uint16) error {
+	ports = slices.Clone(ports)
+	slices.Sort(ports)
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	if m.closed {
+		return errors.New("conn: manager is closed")
+	}
+	m.ingressPorts = slices.Compact(ports)
+	m.confiner.set(slices.Collect(maps.Values(m.state.Load().peers)), m.self.Addrs, m.ingressPorts)
+	return nil
+}
+
 func (m *tsManager) SetServe(s Serve) error {
 	s = Serve{Routes: slices.Clone(s.Routes), Subnets: slices.Clone(s.Subnets), Sources: slices.Clone(s.Sources), DNS: s.DNS}
 	m.apply.Lock()
@@ -1112,7 +1145,7 @@ func (m *tsManager) withoutSTUNHomeNoise(logf logger.Logf) logger.Logf {
 	stunRetry := func(args []any) bool {
 		name, _ := args[0].(string)
 		region, err := strconv.Atoi(strings.TrimPrefix(name, "derp-"))
-		return err == nil && (*m.stunRegions.Load())[region]
+		return err == nil && (*m.stunRegions.Load())[tailcfg.DERPRegionID(region)]
 	}
 	return func(format string, args ...any) {
 		switch {
@@ -1296,7 +1329,7 @@ func peerNode(p Peer) tailcfg.NodeView {
 		Addresses:  p.Addrs,
 		AllowedIPs: slices.Concat(p.Addrs, p.carried()),
 		Endpoints:  p.Endpoints,
-		HomeDERP:   p.HomeRelay,
+		HomeDERP:   tailcfg.DERPRegionID(p.HomeRelay),
 		Cap:        tailcfg.CurrentCapabilityVersion,
 	}).View()
 }

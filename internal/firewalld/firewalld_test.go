@@ -2,6 +2,7 @@ package firewalld
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/godbus/dbus/v5"
@@ -173,5 +174,54 @@ func TestARefusalIsNotAuthorized(t *testing.T) {
 	}
 	if _, err := c.Zone("juist0"); !errors.Is(err, ErrNotAuthorized) {
 		t.Errorf("Zone: %v, want ErrNotAuthorized", err)
+	}
+}
+
+// An interface counts as blocked where its zone lets the port in
+// neither by accepting everything nor by the port, or where firewalld names
+// a zone other than trusted and will not tell its ports.
+func TestBlocksAsksFirewalldOnTheSystemBus(t *testing.T) {
+	b := firewalldtest.Start(t)
+	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", b.Addr)
+	if blocked, _ := Blocks(t.Context(), "juist0", 41644); blocked {
+		t.Error("with no firewalld, an interface counts as blocked")
+	}
+
+	b.Polkit(t, firewalldtest.ActionInfo, firewalldtest.ActionConfigInfo)
+	f := b.Firewalld(t)
+	f.Set(func(f *firewalldtest.Firewalld) {
+		f.Default = "FedoraWorkstation"
+		f.Zones["vpn0"] = "trusted"
+		f.Zones["public0"] = "public"
+		f.Zones["open0"] = "open"
+		f.Targets["open"] = "ACCEPT"
+		f.Ports["FedoraWorkstation 41644/tcp"] = true
+	})
+	for iface, want := range map[string]bool{"vpn0": false, "juist0": false, "open0": false, "public0": true} {
+		if got, unsure := Blocks(t.Context(), iface, 41644); got != want || unsure {
+			t.Errorf("%s: blocked %v, unsure %v; want %v, sure", iface, got, unsure, want)
+		}
+	}
+	if blocked, _ := Blocks(t.Context(), "juist0", 41700); !blocked {
+		t.Error("a port the default zone does not open counts as let in")
+	}
+}
+
+// Where only the zone may be asked, as under firewalld's server policy, a
+// zone other than trusted is warned of, unsure, rather than passed over.
+func TestAZoneWhosePortsCannotBeAskedCountsAsFirewalled(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root is answered without polkit")
+	}
+	b := firewalldtest.Start(t)
+	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", b.Addr)
+	b.Polkit(t, firewalldtest.ActionInfo)
+	f := b.Firewalld(t)
+	f.Set(func(f *firewalldtest.Firewalld) { f.Default, f.Zones["vpn0"] = "FedoraServer", "trusted" })
+	if blocked, _ := Blocks(t.Context(), "vpn0", 41644); blocked {
+		t.Error("the trusted zone counts as blocked")
+	}
+	if blocked, unsure := Blocks(t.Context(), "juist0", 41644); !blocked || !unsure {
+		t.Errorf("an untrusted zone firewalld will not tell about: blocked %v, unsure %v; want both", blocked, unsure)
 	}
 }

@@ -57,10 +57,14 @@ const Service = "_juist._udp.local."
 // laptop moves between networks.
 const ttl = 120
 
-// DefaultInterval is how often a node announces itself unsolicited. Aggressive
-// for mDNS, because a node that has just joined must be found inside the
-// five-second convergence budget; the cost is a few hundred bytes per node.
+// DefaultInterval is the first gap between a node's unsolicited
+// announcements, short because a node that has just joined must be found
+// inside the five-second convergence budget.
 const DefaultInterval = 2 * time.Second
+
+// slowest is how many intervals the gap doubles up to while nothing changes:
+// every member receives every announcement, which wakes a laptop's radio.
+const slowest = 30
 
 // maxMessageSize bounds a received datagram. 1232 is the conventional mDNS
 // payload ceiling (1280-byte IPv6 MTU less headers); anything larger is either
@@ -103,8 +107,8 @@ type Options struct {
 	// traffic quadratic in the member count.
 	NeedsPeers func() bool
 
-	// Interval is the unsolicited announcement period. Zero uses
-	// [DefaultInterval].
+	// Interval is the first gap between unsolicited announcements and
+	// queries. Zero uses [DefaultInterval].
 	Interval time.Duration
 
 	// Conn is the datagram socket. Nil opens the real multicast socket.
@@ -137,6 +141,7 @@ type Beacon struct {
 	// the read loop while Close drains would be.
 	closeOnce sync.Once
 	closed    chan struct{}
+	wake      chan struct{}
 	trackMu   sync.Mutex
 	closing   bool
 	wg        sync.WaitGroup
@@ -173,6 +178,7 @@ func New(opts Options) (*Beacon, error) {
 		interval:  opts.Interval,
 		logf:      opts.Logf,
 		closed:    make(chan struct{}),
+		wake:      make(chan struct{}, 1),
 		nameCache: map[uint64]cachedName{},
 		lastSent:  map[uint64]time.Time{},
 	}
@@ -308,7 +314,8 @@ func (c *groupConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 }
 
 // Run serves the beacon until [Beacon.Close]: it reads the group, answers
-// queries for a name it recognizes, and announces itself on a timer.
+// queries for a name it recognizes, and announces itself at gaps that double
+// from the interval while its announcement, epoch and interfaces stay put.
 func (b *Beacon) Run(ctx context.Context) {
 	b.trackMu.Lock()
 	if b.closing {
@@ -325,32 +332,65 @@ func (b *Beacon) Run(ctx context.Context) {
 	// One query straight away, so that a node joining an established LAN is
 	// answered rather than waiting a full interval for others to announce.
 	b.Query()
-	t := time.NewTicker(b.interval)
+	gap := b.interval
+	t := time.NewTimer(gap)
 	defer t.Stop()
 	lastRejoin := time.Now()
+	joined, epoch := -1, b.newestEpoch()
 	for {
+		woken := false
 		select {
 		case <-ctx.Done():
 			return
 		case <-b.closed:
 			return
+		case <-b.wake:
+			woken = true
 		case <-t.C:
-			// So an interface that appeared since startup starts carrying
-			// discovery. Tests substitute a conn with none to rejoin.
-			if gc, ok := b.conn.(*groupConn); ok && time.Since(lastRejoin) >= rejoinInterval {
-				lastRejoin = time.Now()
-				gc.rejoin()
-			}
-			// Both, every interval. A node announces under its newest name
-			// only, so a member an epoch behind never hears it, while a
-			// query names every epoch the asker holds; and a node that just
-			// arrived should not wait for someone else's question.
-			b.Announce()
-			if b.opts.NeedsPeers == nil || b.opts.NeedsPeers() {
-				b.Query()
-			}
 		}
+		// So an interface that appeared since startup starts carrying
+		// discovery. Tests substitute a conn with none to rejoin.
+		if gc, ok := b.conn.(*groupConn); ok && (woken || time.Since(lastRejoin) >= rejoinInterval) {
+			lastRejoin = time.Now()
+			n := gc.rejoin()
+			woken = woken || joined >= 0 && n != joined
+			joined = n
+		}
+		if e := b.newestEpoch(); e != epoch {
+			woken, epoch = true, e
+		}
+		if woken {
+			gap = b.interval
+		} else {
+			gap = min(2*gap, slowest*b.interval)
+		}
+		// Both, each time. A node announces under its newest name only, so
+		// a member an epoch behind never hears it, while a query names every
+		// epoch the asker holds; and a node that just arrived should not
+		// wait for someone else's question.
+		b.Announce()
+		if b.opts.NeedsPeers == nil || b.opts.NeedsPeers() {
+			b.Query()
+		}
+		t.Reset(gap)
 	}
+}
+
+// Wake announces this node at once and returns the beacon to its first
+// interval, for an announcement that changed. It does not block.
+func (b *Beacon) Wake() {
+	select {
+	case b.wake <- struct{}{}:
+	default:
+	}
+}
+
+// newestEpoch is the epoch this node announces under, zero with none.
+func (b *Beacon) newestEpoch() uint64 {
+	if names := b.names(); len(names) > 0 {
+		return names[0].epoch
+	}
+	return 0
 }
 
 // Close stops the beacon.

@@ -196,6 +196,46 @@ func TestApproveRefusesAuthorityChangesWithoutALog(t *testing.T) {
 	}
 }
 
+// Without the log a removal is refused too: whether the device is a voucher,
+// and the last or one the threshold needs, only the log says.
+func TestApproveRefusesARemovalWithoutALog(t *testing.T) {
+	t.Parallel()
+	dir := workDir(t)
+	first, second := newCLI(t), newCLI(t)
+	key := regexp.MustCompile(`(nid:\S+)`).FindString(second.mustRun("admins", "new", "second"))
+	first.mustRun("create", "home", "--device", "laptop", "--admin", "second="+key)
+	first.mustRun("admins", "quorum", "2", "--yes")
+	first.mustRun("remove", "laptop", "--yes")
+	pending, _ := filepath.Glob(filepath.Join(dir, "*.rec"))
+	if len(pending) != 1 {
+		t.Fatalf("pending records: %v", pending)
+	}
+	out, err := second.run("approve", "--yes", pending[0])
+	if err == nil || !strings.Contains(err.Error(), "approve it where the log is") {
+		t.Fatalf("an air-gapped approval of a removal: %v\n%s", err, out)
+	}
+}
+
+// Approving a removal where the log is says the device is a voucher, and
+// warns before the last one goes, as proposing it does.
+func TestApproveSaysARemovalTakesAVoucher(t *testing.T) {
+	t.Parallel()
+	dir := workDir(t)
+	c := newCLI(t)
+	c.mustRun("create", "home", "--device", "laptop")
+	auth := openLog(t, c)
+	removal, err := auth.Builder().RemoveNode(nodeKeysOf(t, c).Identity.Public(), sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "remove-phone.rec")
+	if err := writeRecordFile(path, &removal); err != nil {
+		t.Fatal(err)
+	}
+	out := c.mustRun("approve", "--yes", "--no-apply", path)
+	mustContain(t, out, "removes the device laptop (", "), voucher", "last voucher")
+}
+
 // A change that takes a device's routes away says so: shown only when there
 // are routes, it would read as a change of roles alone.
 func TestEffectShowsRoutesTakenAway(t *testing.T) {

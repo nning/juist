@@ -113,6 +113,18 @@ const (
 	// KindSetNodeNames replaces the public names a node answers for. Schema
 	// 8 and later.
 	KindSetNodeNames Kind = 20
+
+	// KindSetDomain sets the network's public domain, or withdraws it.
+	// Schema 9 and later.
+	KindSetDomain Kind = 21
+
+	// KindSetPublished replaces the names a node publishes under the
+	// network's domain. Schema 9 and later.
+	KindSetPublished Kind = 22
+
+	// KindRenameNode gives a member another name, one no other member's
+	// folds like. Schema 10 and later.
+	KindRenameNode Kind = 23
 )
 
 func (k Kind) String() string {
@@ -159,6 +171,12 @@ func (k Kind) String() string {
 		return "set-admin-recipient"
 	case KindSetNodeNames:
 		return "set-node-names"
+	case KindSetDomain:
+		return "set-domain"
+	case KindSetPublished:
+		return "set-published"
+	case KindRenameNode:
+		return "rename-node"
 	default:
 		return fmt.Sprintf("kind?<%d>", uint8(k))
 	}
@@ -211,6 +229,12 @@ type RouteGrant struct {
 // had; an empty one withdraws them all.
 type NameGrant struct {
 	Names []string `cbor:"1,keyasint,omitempty"`
+}
+
+// A PublishGrant is the names [KindSetPublished] gives a node to publish,
+// replacing what it had; an empty one withdraws them all.
+type PublishGrant struct {
+	Names []PublishedName `cbor:"1,keyasint,omitempty"`
 }
 
 // An AUM — Authority Update Message, the term tka uses — is one record of the
@@ -275,6 +299,16 @@ type AUM struct {
 
 	// Names is a node's new set of names, for SetNodeNames.
 	Names *NameGrant `cbor:"18,keyasint,omitempty"`
+
+	// Domain is the network's new public domain, empty to withdraw it, for
+	// SetDomain.
+	Domain *string `cbor:"19,keyasint,omitempty"`
+
+	// Publish is a node's new set of published names, for SetPublished.
+	Publish *PublishGrant `cbor:"20,keyasint,omitempty"`
+
+	// NodeName is a member's new name, for RenameNode.
+	NodeName *string `cbor:"21,keyasint,omitempty"`
 
 	// Signatures authorize the record. Sorted by key ID and duplicate-free,
 	// like every other set. CBOR key 23 is the highest that encodes in one
@@ -353,7 +387,7 @@ func (r *Renumbering) validate(kind Kind) error {
 }
 
 // payload field identifiers, for the exact-match table in StaticValidate.
-type fieldSet uint16
+type fieldSet uint32
 
 const (
 	fState fieldSet = 1 << iota
@@ -372,6 +406,9 @@ const (
 	fNetwork
 	fRecipient
 	fNames
+	fDomain
+	fPublish
+	fNodeName
 )
 
 var fieldNames = []struct {
@@ -394,6 +431,9 @@ var fieldNames = []struct {
 	{fNetwork, "Network"},
 	{fRecipient, "Recipient"},
 	{fNames, "Names"},
+	{fDomain, "Domain"},
+	{fPublish, "Publish"},
+	{fNodeName, "NodeName"},
 }
 
 func (f fieldSet) String() string {
@@ -435,6 +475,11 @@ var kindFields = map[Kind]fieldSet{
 	KindSetAdminRecipient: fSubject | fRecipient,
 
 	KindSetNodeNames: fSubject | fNames,
+
+	KindSetDomain:    fDomain,
+	KindSetPublished: fSubject | fPublish,
+
+	KindRenameNode: fSubject | fNodeName,
 }
 
 func (a *AUM) presentFields() fieldSet {
@@ -486,6 +531,15 @@ func (a *AUM) presentFields() fieldSet {
 	}
 	if a.Names != nil {
 		f |= fNames
+	}
+	if a.Domain != nil {
+		f |= fDomain
+	}
+	if a.Publish != nil {
+		f |= fPublish
+	}
+	if a.NodeName != nil {
+		f |= fNodeName
 	}
 	return f
 }
@@ -566,7 +620,7 @@ func (a *AUM) ValidateUnsigned() error {
 		}
 	}
 	if a.Grant != nil {
-		if err := validateRoles(a.Grant.Roles); err != nil {
+		if err := validateGrant(a.Grant.Roles, a.Grant.Routes); err != nil {
 			return fmt.Errorf("route grant: %w", err)
 		}
 		if len(a.Grant.Routes) > MaxRoutesPerNode {
@@ -610,6 +664,16 @@ func (a *AUM) ValidateUnsigned() error {
 			return fmt.Errorf("name grant: %w", err)
 		}
 	}
+	if a.Domain != nil && *a.Domain != "" {
+		if err := ValidateHostName(*a.Domain); err != nil {
+			return fmt.Errorf("domain: %w", err)
+		}
+	}
+	if a.Publish != nil {
+		if err := validatePublished(a.Publish.Names); err != nil {
+			return fmt.Errorf("publish grant: %w", err)
+		}
+	}
 	if a.Vouchers != nil && (*a.Vouchers == 0 || *a.Vouchers > MaxAdmins) {
 		return fmt.Errorf("a vouching threshold of %d; it must be between 1 and %d", *a.Vouchers, MaxAdmins)
 	}
@@ -637,6 +701,14 @@ func (a *AUM) ValidateUnsigned() error {
 		}
 		if err := ValidateName(*a.Network); err != nil {
 			return fmt.Errorf("network name: %w", err)
+		}
+	}
+	if a.NodeName != nil {
+		if *a.NodeName == "" {
+			return errors.New("rename-node record names no name")
+		}
+		if err := ValidateName(*a.NodeName); err != nil {
+			return fmt.Errorf("node name: %w", err)
 		}
 	}
 	if a.Schema != nil && *a.Schema == 0 {
@@ -784,6 +856,17 @@ func (a *AUM) Clone() *AUM {
 	}
 	if a.Names != nil {
 		out.Names = &NameGrant{Names: slices.Clone(a.Names.Names)}
+	}
+	if a.Domain != nil {
+		d := *a.Domain
+		out.Domain = &d
+	}
+	if a.NodeName != nil {
+		n := *a.NodeName
+		out.NodeName = &n
+	}
+	if a.Publish != nil {
+		out.Publish = &PublishGrant{Names: slices.Clone(a.Publish.Names)}
 	}
 	if a.Renumber != nil {
 		r := *a.Renumber

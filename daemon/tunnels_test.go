@@ -400,7 +400,7 @@ func TestAPeerGoneFromThisRelayIsOffline(t *testing.T) {
 
 // Where log sync runs through the tunnel alone, each check asks whether the
 // host firewall keeps it from arriving on the TUN device, and the status names
-// the device while it does.
+// the device while it does; a network stack of its own has none.
 func TestTheStatusNamesATunnelTheFirewallBlocks(t *testing.T) {
 	f := newReconcileFixture(t, 2)
 	f.learn(t, f.nw.devices[1], 4001)
@@ -421,7 +421,13 @@ func TestTheStatusNamesATunnelTheFirewallBlocks(t *testing.T) {
 			asked, f.d.Status().Firewalled)
 	}
 
-	f.d.overlayOnly, f.d.tunName = true, "vpn0"
+	f.d.overlayOnly = true // on a network stack of its own
+	f.d.refreshReach(t.Context())
+	if len(asked) != 0 || f.d.Status().Firewalled != "" {
+		t.Fatalf("on a network stack the firewall was asked %v, and the status says %q", asked, f.d.Status().Firewalled)
+	}
+
+	f.d.tunName = "vpn0"
 	f.d.refreshReach(t.Context())
 	if want := fmt.Sprintf("vpn0 tcp/%d", f.d.gossipPort); len(asked) != 1 || asked[0] != want {
 		t.Errorf("the firewall was asked %v, want %q", asked, want)
@@ -499,5 +505,71 @@ func TestARelayNobodyReachesIsReported(t *testing.T) {
 	announce(live, start.Add(relayUnreachedAfter), region)
 	if st := check(start.Add(relayUnreachedAfter + time.Second)); st.RelayUnreached || st.RelayedFor != 1 {
 		t.Fatalf("a peer homed here: unreached %v for %d; want reached for 1", st.RelayUnreached, st.RelayedFor)
+	}
+}
+
+// A peer that answered is probed again only after quietProbeEvery where a
+// relay can bring its tunnel back, so magicsock lets the tunnel go quiet, and
+// its answer stands meanwhile. Without this device's relay, it is probed in
+// every check, which keeps the NAT mappings towards it open.
+func TestAQuietPeerARelayCanWakeIsProbedRarely(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	c := &clock{now: t0}
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	region := uint16(relayRegion(f.auth.State().GenesisHash(), f.self.record.Identity))
+	dev := f.nw.devices[1]
+	e := f.signedBy(t, dev, t0)
+	e.HomeRelay = region
+	if err := e.Sign(dev.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	peer := f.installed(t, 1)
+	if peer.HomeRelay == 0 {
+		t.Fatal("the peer is installed without its home relay")
+	}
+	addr := peer.Addrs[0].Addr()
+	f.mgr.mu.Lock()
+	f.mgr.home = int(region)
+	f.mgr.answers = map[netip.Addr]bool{addr: true}
+	f.mgr.paths = map[netip.Addr]netip.AddrPort{addr: netip.MustParseAddrPort("192.0.2.7:41641")}
+	f.mgr.mu.Unlock()
+	probes := func() int {
+		f.mgr.mu.Lock()
+		defer f.mgr.mu.Unlock()
+		return len(f.mgr.probed)
+	}
+	checks := func(n int) {
+		t.Helper()
+		for range n {
+			f.d.refreshReach(t.Context())
+			if r := f.d.Status().Reach; len(r) != 1 || !r[0].Live || !r[0].Direct {
+				t.Fatalf("at %v the peer reads %+v, want live and direct", c.get().Sub(t0), r)
+			}
+			c.set(c.get().Add(reachEvery))
+		}
+	}
+
+	checks(int(quietProbeEvery / reachEvery))
+	if got := probes(); got != 1 {
+		t.Fatalf("a quiet peer was probed in %d checks over %v, want 1", got, quietProbeEvery)
+	}
+	checks(1)
+	if got := probes(); got != 2 {
+		t.Fatalf("after %v the answer still stands: %d probes", quietProbeEvery, got)
+	}
+
+	f.mgr.mu.Lock()
+	f.mgr.home = 0
+	f.mgr.mu.Unlock()
+	checks(3)
+	if got := probes(); got != 5 {
+		t.Fatalf("with no relay of its own, the peer was probed in %d of 3 checks", got-2)
 	}
 }

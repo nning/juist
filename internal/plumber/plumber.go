@@ -477,9 +477,9 @@ var overlaySpace = []netip.Prefix{
 	netip.MustParsePrefix("fc00::/7"),
 }
 
-// hostSpace is what the host keeps to itself or its links, which an exit
-// node's capture must leave be.
-var hostSpace = append(slices.Clone(overlaySpace),
+// linkSpace is what the host keeps to itself or its links, which no route
+// into a device may take.
+var linkSpace = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("127.0.0.0/8"),
 	netip.MustParsePrefix("169.254.0.0/16"),
@@ -487,7 +487,11 @@ var hostSpace = append(slices.Clone(overlaySpace),
 	netip.MustParsePrefix("::/127"),
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("ff00::/8"),
-)
+}
+
+// hostSpace is what an exit node's capture must leave be: the links, and the
+// LAN.
+var hostSpace = append(slices.Clone(overlaySpace), linkSpace...)
 
 // within reports whether p is a valid, masked prefix inside one of space.
 func within(p netip.Prefix, space []netip.Prefix) bool {
@@ -526,7 +530,8 @@ func checkEgress(e EgressSpec) error {
 
 func setDNS(h Host, dev string, servers []netip.Addr) error {
 	for _, s := range servers {
-		if !s.IsValid() || s.Zone() != "" {
+		// An exit node's, the only resolvers a device is given.
+		if !s.IsValid() || s.Zone() != "" || !within(netip.PrefixFrom(s, s.BitLen()), overlaySpace) {
 			return fmt.Errorf("a resolver %v", s)
 		}
 	}
@@ -582,6 +587,10 @@ func setRoutes(h Host, dev string, d *device, want []netip.Prefix, src4 netip.Ad
 			// The internet goes into the tunnel by the exit node's own
 			// means, which keep the host's traffic apart; not this way.
 			errs = append(errs, fmt.Errorf("a default route, %v", p))
+			continue
+		}
+		if slices.ContainsFunc(linkSpace, func(s netip.Prefix) bool { return s.Overlaps(p) }) {
+			errs = append(errs, fmt.Errorf("a route of the host's links, %v", p))
 			continue
 		}
 		src := netip.Addr{}

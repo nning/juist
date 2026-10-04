@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -10,55 +9,6 @@ import (
 
 	"github.com/nning/juist/internal/firewalld/firewalldtest"
 )
-
-// The TUN device counts as firewalled where its zone lets the sync port in
-// neither by accepting everything nor by the port, or where firewalld names
-// a zone other than trusted and will not tell its ports.
-func TestFirewalledAsksFirewalldOnTheSystemBus(t *testing.T) {
-	b := firewalldtest.Start(t)
-	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", b.Addr)
-	if blocked, _ := firewalled(t.Context(), "juist0", 41644); blocked {
-		t.Error("with no firewalld, the tunnel counts as firewalled")
-	}
-
-	b.Polkit(t, firewalldtest.ActionInfo, firewalldtest.ActionConfigInfo)
-	f := b.Firewalld(t)
-	f.Set(func(f *firewalldtest.Firewalld) {
-		f.Default = "FedoraWorkstation"
-		f.Zones["vpn0"] = "trusted"
-		f.Zones["public0"] = "public"
-		f.Zones["open0"] = "open"
-		f.Targets["open"] = "ACCEPT"
-		f.Ports["FedoraWorkstation 41644/tcp"] = true
-	})
-	for iface, want := range map[string]bool{"vpn0": false, "juist0": false, "open0": false, "public0": true} {
-		if got, unsure := firewalled(t.Context(), iface, 41644); got != want || unsure {
-			t.Errorf("%s: firewalled %v, unsure %v; want %v, sure", iface, got, unsure, want)
-		}
-	}
-	if blocked, _ := firewalled(t.Context(), "juist0", 41700); !blocked {
-		t.Error("a port the default zone does not open counts as let in")
-	}
-}
-
-// Where only the zone may be asked, as under firewalld's server policy, a
-// zone other than trusted is warned of, unsure, rather than passed over.
-func TestAZoneWhosePortsCannotBeAskedCountsAsFirewalled(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root is answered without polkit")
-	}
-	b := firewalldtest.Start(t)
-	t.Setenv("DBUS_SYSTEM_BUS_ADDRESS", b.Addr)
-	b.Polkit(t, firewalldtest.ActionInfo)
-	f := b.Firewalld(t)
-	f.Set(func(f *firewalldtest.Firewalld) { f.Default, f.Zones["vpn0"] = "FedoraServer", "trusted" })
-	if blocked, _ := firewalled(t.Context(), "vpn0", 41644); blocked {
-		t.Error("the trusted zone counts as firewalled")
-	}
-	if blocked, unsure := firewalled(t.Context(), "juist0", 41644); !blocked || !unsure {
-		t.Errorf("an untrusted zone firewalld will not tell about: blocked %v, unsure %v; want both", blocked, unsure)
-	}
-}
 
 // A warning of the firewall is gone on the next status after the fix, not
 // only after the next tunnel check: reading it asks the firewall again.

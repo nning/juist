@@ -56,3 +56,39 @@ func TestRecordSizeAtMaxNodes(t *testing.T) {
 			types.MaxNodes, len(bumped), types.MaxRecordSize)
 	}
 }
+
+// readCounting counts the records read from the store.
+type readCounting struct {
+	*MemStorage
+	reads int
+}
+
+func (c *readCounting) AUM(h types.Hash) (types.AUM, error) {
+	c.reads++
+	return c.MemStorage.AUM(h)
+}
+
+// Resolving a chain reads each record a bounded number of times. Every read
+// of the persisted store decodes and verifies from disk, and the daemon
+// resolves holding the lock reconciliation and IPC wait on.
+func TestResolutionReadsEachRecordBoundedTimes(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	const n = 100
+	for i := range n {
+		aum, err := h.auth.Builder().RenameNetwork(fmt.Sprintf("n%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.signQuorum(&aum)
+		if err := h.auth.Inform(aum); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := &readCounting{MemStorage: h.copyStorage()}
+	if _, err := Open(st); err != nil {
+		t.Fatal(err)
+	}
+	if st.reads > 4*n {
+		t.Fatalf("opening a chain of %d records read %d", n, st.reads)
+	}
+}

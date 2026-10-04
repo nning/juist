@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nning/juist/internal/changelog"
 	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
@@ -138,6 +139,14 @@ func (r *approval) file(path string) error {
 	for _, line := range effect(&aum, state, a.now().Unix()) {
 		a.printf("  %s\n", line)
 	}
+	if state != nil {
+		if n, ok := voucherLost(state, &aum); ok {
+			// Asked by "approve?" below.
+			if err := a.checkAdminDeviceLoss(state, n, true); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+		}
+	}
 	part, signed, err := a.partIn(&aum, r.auth)
 	if err != nil {
 		return err
@@ -161,7 +170,7 @@ func (r *approval) check(path string, aum *types.AUM) (done bool, err error) {
 	}
 	if !r.haveNetwork {
 		if changesAuthority(aum) {
-			return false, fmt.Errorf("%s changes who may approve (%s); approve it where the log is",
+			return false, fmt.Errorf("%s may change who approves or vouches (%s); approve it where the log is",
 				path, describeKind(aum.Kind))
 		}
 		if !r.warnedUnchecked {
@@ -356,49 +365,4 @@ func (a *app) reportStatus(path string, st log.SignatureStatus, keys []types.Adm
 }
 
 // describeKind names a record kind the way an operator thinks of it.
-func describeKind(k types.Kind) string {
-	switch k {
-	case types.KindGenesis:
-		return "network creation"
-	case types.KindAddNode:
-		return "device admission"
-	case types.KindRemoveNode:
-		return "device removal"
-	case types.KindSetNodeRoutes:
-		return "change of a device's roles or subnets"
-	case types.KindRotateNodeKey:
-		return "key rotation"
-	case types.KindRotateIdentity:
-		return "identity rotation"
-	case types.KindAddAdminKey:
-		return "new admin key"
-	case types.KindRemoveAdminKey:
-		return "admin key removal"
-	case types.KindSetQuorum:
-		return "change of the approval threshold"
-	case types.KindCheckpoint:
-		return "checkpoint"
-	case types.KindEpochBump:
-		return "group secret rotation"
-	case types.KindSchemaUpgrade:
-		return "schema upgrade"
-	case types.KindSetHolder:
-		return "change of how many of an admin's keys must sign"
-	case types.KindSetVouchers:
-		return "change of how many vouchers must confirm"
-	case types.KindRenumberNetwork:
-		return "renumbering of the network"
-	case types.KindRenumberNode:
-		return "renumbering of a device"
-	case types.KindRetireAddresses:
-		return "retirement of old addresses"
-	case types.KindRenameNetwork:
-		return "renaming of the network"
-	case types.KindSetAdminRecipient:
-		return "encryption key of an admin key"
-	case types.KindSetNodeNames:
-		return "change of the public names a device answers for"
-	default:
-		return k.String()
-	}
-}
+func describeKind(k types.Kind) string { return changelog.KindName(k) }

@@ -247,7 +247,7 @@ Instances share no state, and a TUN device routes its own network's prefixes
 only, so no packet crosses from one network into the other through juist. They
 do share the `juist` user, so one compromised instance holds every network's
 device on the host: residual weakness 9 in
-[02-threat-model.md](02-threat-model.md), and a user per instance is for M10.
+[02-threat-model.md](02-threat-model.md), and a user per instance is for M12.
 
 - **Exit criteria:** (1) one host in two networks, in the netns matrix, pings
   members of both over IPv4 and IPv6, and no route of one prefix points into
@@ -276,7 +276,7 @@ the rule that one person's key may govern several networks. With several
 networks on one device (M5) that default cost more than it saved: one key
 taken or lost was every network it governed taken or lost; its public half is
 in every network's log, so a member of two saw that one person ran both; and
-rotating, removing or backing up (M9's `juist admins export`) the key of one
+rotating, removing or backing up (M11's `juist admins export`) the key of one
 network touched the others.
 
 What was built, in the plan's order:
@@ -429,7 +429,7 @@ validation landed in M1), widened `AllowedIPs` and filter destinations,
 privileged-helper forwarding/NAT, client-side default-route capture with LAN bypass
 and DNS handling. Design in
 [04-architecture.md](04-architecture.md#exit-nodes-and-subnet-routes-m6). It
-covers Linux; FreeBSD's side (pf) comes with M7, and Android's with M11. Split
+covers Linux; FreeBSD's side (pf) comes with M7, and Android's with M13. Split
 in three, each shipped on its own: exit nodes first, as the feature asked for,
 then subnet routers, then the exit node's DNS.
 
@@ -437,11 +437,11 @@ then subnet routers, then the exit node's DNS.
 sections say, privileged and by hand against the packages. Untried: a
 client below systemd 256, whose resolved polkit asks without the device.
 
-**Before ACLs, unscoped.** Coarse ACLs come at M12, so until then using an exit
+**Before ACLs, unscoped.** Coarse ACLs come at M14, so until then using an exit
 node is open to every member: the quorum grants the role per exit node, and each
 client's owner chooses whether to use one, but no grant says *which* members may.
 A subnet router's prefixes are likewise reachable from every member. The
-trade is accepted in [02-threat-model.md](02-threat-model.md) item 7; M12 scopes it.
+trade is accepted in [02-threat-model.md](02-threat-model.md) item 7; M14 scopes it.
 
 ## M6a — Exit nodes
 
@@ -561,7 +561,7 @@ device fails closed or goes direct while its default is down.
 
 ## M6b — Subnet routers
 
-`juist grant nas 192.168.1.0/24` lets every member reach the LAN behind nas
+`juist subnet add nas 192.168.1.0/24` lets every member reach the LAN behind nas
 through it, once nas's operator agrees: `juist subnet serve`.
 
 What was built:
@@ -774,7 +774,7 @@ shipped on its own, against FreeBSD 14 in qemu:
     on FreeBSD builds and adds it. `make repro-freebsd` builds the binaries
     for both systems and the package here and on a FreeBSD host, and
     compares them. A port in the ports tree needs a release to fetch, and
-    comes with M11's. `make interop` is the lab, `interop/`: a Debian 12
+    comes with M13's. `make interop` is the lab, `interop/`: a Debian 12
     and a FreeBSD 14.5 VM in qemu without root, their packages installed,
     one network across them, each the other's exit node, subnet router and
     DNS, and both packages removed cleanly; CI's `interop` workflow runs it
@@ -788,8 +788,9 @@ shipped on its own, against FreeBSD 14 in qemu:
     resolvers, which the CLI now names, with the stub as the hint.
   - **Open:** the lab's first run in CI, which waits for CI's budget.
 
-Reproducible builds, for Linux and FreeBSD alike. Android and the rest of the
-release work — distro packages, signed releases — are M11, after v1.0.
+Reproducible builds, for Linux and FreeBSD alike. The full Android app and the
+rest of the release work — distro packages, signed releases — are M13, after
+v1.0; a minimal Android app is M10.
 
 - **Exit criteria:** (1) Linux/FreeBSD interop matrix green in CI (FreeBSD via
   qemu); (2) build artifacts for both reproducible byte-for-byte from two
@@ -819,8 +820,10 @@ Split in three, each shipped on its own:
   the member. The TCB takes a name in one form alone (lowercase ASCII, xn--
   for Unicode), of two labels or more, no address, nothing under `.juist` or
   a domain the host keeps to itself, and each name for one member.
-  `juist grant DEVICE NAME` and `juist revoke DEVICE NAME` propose it, the
-  device list shows it, and an approver reads what each change points where.
+  `juist names add DEVICE NAME` and `juist names remove DEVICE NAME` propose
+  it, `juist names` and the device list show it, and an approver reads what
+  each change points where. `juist grant` and `revoke` take roles alone and
+  name the command for a subnet or a name given them.
   - **Built:** as above; `juist log upgrade` raises a network to schema 8.
   - **Validated:** `types`, `trust/log` and `cmd/juist` tests (see
     12-validating.md); a quorum short, a non-member, an address and a name
@@ -850,7 +853,7 @@ Split in three, each shipped on its own:
     image ships is named with its fix. The exit node's case goes into the
     interop lab with M8c.
 - **M8c — opt-in, falling back, and visibility.** A device applies
-  overrides only after its owner agreed (`juist set --accept-names`, like
+  overrides only after its owner agreed (`juist names on`, like
   Tailscale's `--accept-dns`); members' names need no agreement, since they
   claim nothing outside the network. juistd stops answering an override
   while the device is stale, or while the member it points at is not
@@ -870,8 +873,8 @@ Split in three, each shipped on its own:
     asks the host's resolvers, not its stub, for a member's query of a name
     it overrides itself, so that no member is answered an override it did
     not agree to. The resolver answers on the device's IPv4 address where
-    the device holds no IPv6. `juist grant DEVICE NAME` hints at
-    `--accept-names` where the device granting has not.
+    the device holds no IPv6. `juist names add DEVICE NAME` hints at
+    `juist names on` where the device granting has not.
   - **Validated:** `internal/names`, `internal/resolved`, `daemon`, `ipc`
     and `cmd/juist` tests; by hand on Debian 12 (systemd 252) as the
     package; and `make interop` under TCG, where each exit criterion but (2),
@@ -905,7 +908,420 @@ them for up to a TTL.
   within gossip convergence plus one TTL for reachable devices and at the
   freshness TTL for partitioned ones.
 
-## M9 — Break-glass recovery and key backup
+## M9 — Publishing services
+
+**Done** on 2026-10-03: M9a, M9b, M9c and M9d are built and validated as
+their sections say, the exit criteria (1) to (7) among them, and reviewed
+whole (M9 review 4), privileged on Fedora too and by hand against the RPM
+(12-validating.md), and by hand with a public ingress and Let's Encrypt
+(M9 review 6). M9e and M9f followed; with them M9 is closed, nothing of it
+left open, and validated by `make ci-vm` on 2026-10-04 (12-validating.md).
+
+A member's service reached from the internet by name, through an
+**ingress**: a member with a public address that the quorum granted the role.
+TLS ends at the service's side, so the ingress reads the name in the
+ClientHello and nothing else. Public DNS needs one record per domain,
+`*.pub.example.com` pointing at the ingress, never one per service:
+
+```
+browser ──TLS──▶ vps (ingress, SNI only) ──overlay──▶ target (TLS ends) ──▶ 127.0.0.1:2283
+```
+
+Inside the network, M8's override of each published name sends members to
+the target directly, with the same certificate.
+
+Split in four, each shipped on its own:
+
+- **M9a — the ingress and published names.** Schema 9: the role `ingress`,
+  which the validator refuses beside `admin` or `exit`; the network's public
+  domain, set by quorum (`juist network domain pub.example.com`); and a
+  member's published names, each one label under that domain with the port
+  it is reached on, quorum-signed like a name (`juist publish add nas immich
+  443`) and served once the target's operator agrees, as with a subnet
+  (`juist publish serve`; until then `juist status` says "published, not
+  served"). `juist ingress serve`
+  on the device granted the role binds 443, and 80 for a redirect to https
+  alone, with a firewall profile `juist-ingress`. The proxy reads SNI with
+  `crypto/tls`'s own parser, splices TCP to the target through the overlay,
+  and terminates nothing; PROXY protocol v2 is an option per name. It runs
+  as a process of its own, with its own user and `CAP_NET_BIND_SERVICE`,
+  dials the targets' overlay addresses, takes the published names read-only from juistd's
+  socket, and holds no node key. Every member confines an ingress (below):
+  it takes from one only connections to the ports it publishes and serves,
+  and log sync, so a compromised ingress reaches nothing else. A stale
+  ingress publishes nothing.
+  - **Built so far:** schema 9, with `juist network domain`, `juist publish
+    add` and `remove`, and `juist grant DEVICE ingress`; withdrawing a name
+    or the role is no revocation, as for exit and names, and an ingress
+    routes no subnet, so that its overlay addresses are all it sends from.
+    `juist publish serve` and the confinement below, the ports a stale view
+    or a withdrawn consent closes again. The ingress's call on the socket,
+    below, read by `ipc.CallPublished`. The ingress itself, `juistd
+    --helper ingress`: SNI read by `crypto/tls`, the ClientHello replayed to the
+    target, PROXY protocol v2, and port 80 redirecting a served name;
+    `juist ingress serve`, the `juist-ingress` unit and user, and the
+    `juist-ingress` firewall profiles, in the deb and the RPM. The ingress
+    is told only the names whose target announces it serves them; `juist
+    status` there says whether it asked lately. `juist publish add` and
+    `juist grant DEVICE ingress` hint the target's step, or take it where
+    run on the target by its operator; `juist invite --ingress`.
+  - **Validated:** unit tests of each part (see 12-validating.md), and
+    `make interop`, where Debian, granted the role, serves a name FreeBSD
+    publishes from the deb's unit, once FreeBSD's operator agreed, and
+    FreeBSD takes nothing else from it, exit criterion (2). By hand, both
+    packages as an ingress, the RPM on Fedora with firewalld and SELinux
+    enforcing, the deb on Ubuntu with ufw (12-validating.md).
+  - **Flows to confined peers** are bounded per address (4096) and in all
+    (16384), so one peer's churn evicts its own flows and no other's.
+- **M9b — TLS at the target, and the service member.** The target holds a
+  certificate for each name it publishes, from ACME TLS-ALPN-01 through the
+  ingress, terminates TLS and forwards plain HTTP or TCP to the local
+  service its operator names (`juist publish add immich 127.0.0.1:2283`),
+  which needs no certificate and no reverse proxy. A service that
+  must not reach the network once compromised runs behind a **service
+  member**: a juistd on gVisor through wireguard-go's `tun/netstack`, with
+  no TUN, root or capability, as a container beside it on an internal
+  network (`juistd --serve immich=immich-server:2283`). It answers its
+  published ports alone. Its role, `service`, has every member confine it
+  with no port open to it, so it opens no connection to any of them while
+  its replies to theirs pass. Not `wgengine/netstack`, which imports `ipnlocal`
+  and `controlclient`, 72 packages juistd does not have. `juist publish
+  serve` on a full member warns that a compromised server there reaches the network
+  and the LAN, and prints the CAA record that binds issuance to the target's
+  ACME account.
+  - **Decided:** TLS ends in a process of its own, `juistd --helper tls` as
+    the user `juist-serve`, holding no key of the network's and asking
+    juistd's socket only what this device serves, as the ingress asks what
+    is published; it listens on the device's overlay addresses on the
+    published port, and where another program holds that port it says so,
+    and a name published on another port is served beside it, members then
+    reaching it through the ingress. A service member has no way out. In
+    Docker, its service sits on an internal network with it alone, in the
+    isolated gateway mode, Docker 29's: an internal network otherwise leaves
+    the host reachable at its gateway address, as measured on Docker 20.10
+    and 29.8 (12-validating.md).
+  - **Built so far:** `juist publish add NAME HOST:PORT`, which publishes
+    NAME on this device where an admin key is here and adds where it goes
+    to what the operator said before, kept apart from the word, which
+    `juist publish serve --stop` withdraws alone; `juist publish remove NAME`
+    takes both back;
+    the terminator, with certificates from autocert by TLS-ALPN-01, ALPN
+    offered for the challenge alone, a PROXY header believed from an
+    ingress's address alone and passed on where the name asks for one;
+    `juist-serve.service`, its user and `serve.sh` in the deb and the RPM;
+    `juist-serve.path`, by which systemd starts the terminator while juistd
+    keeps `/run/juist/serve-wanted`, for a name whose TLS juist ends or a
+    share, and juistd telling it when it may stop, so that neither takes
+    root on Linux;
+    and a name published on 443 resolved to its target by members that
+    accept names, where the target announces it serves it. The service
+    member: `juistd --serve NAME=ADDR`, on a network stack of its own
+    (`internal/netstack`, wireguard-go's adapted to the gVisor Tailscale
+    pins, which wireguard-go's own copy no longer builds against), syncing
+    the log there alone and ending TLS in its own process; the role
+    `service`, alone and routing nothing, which every member confines with
+    no port open to it. `juistd --ingress` and `--serve-tls` became
+    `--helper ingress` and `--helper tls`. The CAA record: the terminator
+    registers with the CA under autocert's own account key and tells juistd
+    the account with each ask, and `juist publish add` and `serve` print a
+    record for each name whose TLS it ends, which the terminator logs too,
+    for a service member. On FreeBSD, the `juist_ingress` and `juist_serve` rc.d
+    scripts and their users in the package: the ingress binds its ports as
+    root and drops to its user, and the terminator runs as its user beside
+    a parent that stays root to listen where juistd says this device
+    serves, and nowhere else, there being no capability for the ports
+    alone. `juistd --join LINK`, or `$JUIST_JOIN`, joins once started where
+    in no network, so that a container joins by its environment;
+    `examples/service-member`, a service and its service member in Compose,
+    for Docker and Podman.
+    `juist invite --service NAME` admits a service member publishing
+    NAME in one step, which the approval says. The service member's image,
+    `make image`, written by `packaging/image/mkimage` as docker save would,
+    to the same bytes from one commit.
+  - **Validated:** unit tests of each part, `make test-acme` with Pebble,
+    and `make interop`, exit criteria (1) and (4), the terminator on Linux
+    and FreeBSD, FreeBSD's ingress from its package, and with
+    `JUIST_INTEROP_DOCKER=1` the service member as its image runs it, where
+    see 12-validating.md.
+- **M9c — sharing at once.** `juist grant mailer publish`, once and by
+  quorum, lets a device publish under its own name,
+  `mailer.pub.example.com`, without a vote each time: it signs a short-lived
+  announcement of a port and an expiry and sends it to the ingresses through
+  the overlay, outside the log; an ingress checks the grant, the name and the
+  expiry. `juist share FILE|DIR` serves read-only under a random 128-bit
+  path, until Ctrl-C or for `--for 24h`; `juist publish 8000` publishes a
+  local HTTP server the same way. One certificate per device keeps shares
+  out of Let's Encrypt's per-domain limit and out of CT logs.
+  - **Decided:** the role `publish`, at schema 9 and never beside
+    `ingress`; the device's name, lowercased, is its label, which the log
+    holds as it holds a published one: a name that gives no label is
+    refused the role, and the label is no other member's published label,
+    publish label or name. The announcement is a field of the device's
+    signed endpoint announcement, gossiped as the rest: a port and an
+    expiry at most ten minutes ahead, renewed while the share runs, the
+    share's own end where sooner; an ingress takes it from a live member
+    holding the role, before the expiry. `juist share` and `juist publish
+    PORT` hold a call to juistd open, which shares while it lasts and to
+    `--for` at most, one at a time per device. The terminator ends TLS for
+    the device's name and sends it to the CLI's server on loopback, which
+    `juist share` runs as the user, from an `os.Root`, under a random
+    128-bit path, and 404 outside it.
+  - **Built:** the role, its label in the log, the announcement and its
+    renewal, an ingress taking a share from a member holding the role while
+    its announcement holds and ends no further ahead than a lease, the
+    terminator ending TLS for it, the port opened to the ingresses, members
+    resolving it directly, `juist share`, `juist publish PORT` and the
+    status's Sharing line. Both take `--background`: the CLI runs again in a
+    session of its own, which says the share and lets go of the terminal,
+    and takes the share up again under its path where juistd restarts, for
+    ten minutes at most; `juist share --stop` ends a device's share through
+    juistd, whichever call holds it.
+  - **Validated:** unit tests of each part (12-validating.md), and `make
+    interop`, exit criteria (5) and (6) for shares: the ingress serves a
+    share no longer once stopped or past its end; that one whose device is
+    gone ends within a lease, the unit tests alone show.
+- **M9d — the domain itself.** A member publishes the network's domain, not
+  only a label under it, so that a site such as `juist.dev` is served from
+  home: `juist network domain juist.dev`, then `juist publish add web
+  juist.dev 443`, spelled out rather than by a sign such as `@`. Still
+  schema 9, since M9 is not released: the empty label is the domain,
+  published by one member at most, and every check that holds labels holds
+  it too, against M8's names included, which today `publishedLabel` misses
+  for a name equal to the domain. `Under` is the one place a name is made;
+  the ingress and the terminator take the domain as its SNI, and an approval
+  says that the domain itself is published. The apex needs its own A and
+  AAAA records at the ingress, which a wildcard does not cover, and a CNAME
+  may not be. Every device of a network runs a juistd that knows the empty
+  label before an admin publishes it, since an older one refuses the state.
+  - **Decided:** every member sends the whole domain to juistd, names on or
+    not, which answers a name published there on 443, or shared, and the
+    domain itself, with its device's addresses while fresh, and passes the
+    rest on upstream; DNSSEC is off for the domain on members, by the
+    negative trust anchor a routed domain takes. M8's names elsewhere still
+    need `juist names on`: the domain's names are answered without it, as
+    the approval of `juist network domain` says. CAA at the apex holds for
+    every name under it without one of its own: `juist publish add` warns
+    to give each device's names theirs. A name behind `--proxy` is reached
+    through the ingress by members too, since its service may want the
+    header.
+  - **Built:** the empty label in the log, once and against M8's names,
+    `@` for it in the names' file, the zone's public domain routed whole,
+    `juist publish add [DEVICE] DOMAIN …`, `juistd --serve @=ADDR`, the
+    approval's wording and the warning of `juist network domain`, the
+    status naming the domain, and the hints for the apex's own records and
+    its CAA.
+  - **Validated:** unit tests of each part (12-validating.md), and `make
+    interop`, exit criterion (7).
+
+**The ingress on the socket.** A fourth caller beside root, the daemon's
+user and the operator: the user `juist-ingress`, which the packages create
+beside `juist` and leave as they leave it, and juistd looks up at start; no
+appointment, and no such user, no ingress. It takes a pool of its own,
+shared with the terminator, one slot each, with the readers' deadline and
+request size, so no local user starves it and it starves no one. It may make one call, `published`, and no other, the status included:
+for each name it serves, the target's overlay addresses, the port and
+whether PROXY protocol is on, and nothing while this device is stale, so
+that staleness is decided in juistd alone. The answer is a type of its own,
+decoded with unknown fields ignored, so a juistd upgraded first does not
+silence an ingress still running; every other call stays strict. The
+ingress asks every 5 s and publishes nothing once two asks in a row go
+unanswered: polling holds no slot, and a juistd that stops answering takes
+the names down with it.
+
+**Confined sources.** Tailscale's filter takes TCP without SYN, ICMP errors
+and TSMP from any peer, to any address the node serves, routes and exit
+included: a peer can be kept from opening connections, not from sending.
+So conn confines the members whose role is `ingress` or `service` with two
+hooks of its own, installed before `tundev.Start` and each calling the
+engine's own after it (with `TS_DEBUG_CONNECT_FAILURES`, on by default, the
+engine sets `PreFilterPacketInboundFromWireGuard` and
+`PostFilterPacketOutboundToWireGuard` itself):
+
+- outbound, after the filter: a TCP SYN, a UDP datagram or an ICMP echo
+  request this node sends to a confined peer opens a flow in an LRU of
+  bounded size, which every packet on it refreshes, so replies to what this
+  node opened are known and a reply to the peer opens nothing; an RST ends
+  a TCP flow, and FINs both ways a minute later, for retransmissions;
+- inbound, before the filter: a packet from a confined peer passes only as
+  the reverse of such a flow, or, from an ingress, as TCP to one of this
+  node's own overlay addresses, on a port it publishes and serves or on its
+  gossip port. An ICMP error passes where it quotes a flow this node
+  opened to that peer. Everything else from it is dropped, UDP, ICMP and
+  TSMP included, and so is anything for a route, subnet or exit this node
+  serves. Packets from other members pass to the filter as now.
+
+TSMP pings are answered before either hook, which tells a confined peer
+only that the node is up. `conn.Peer` carries the role, and conn the ports
+this node publishes and serves, both through `buildPeers` and the serve
+state, rebuilt at each reconfig and swapped in atomically.
+
+M9a is built in this order, each step tested on its own: schema 9 (the role,
+the domain, the published names) with `juist network domain` and `juist
+publish add`; `juist publish serve` and the confinement; the ingress's call
+on the socket; then the ingress itself, with its unit and firewall profile.
+
+Not planned: plain HTTP outward, which the ingress would have to parse,
+reading every link; TLS ending at the ingress; and a domain run for every
+network, as `ts.net` is, a central service
+[01-requirements.md](01-requirements.md) excludes.
+
+**The trade.** The ingress sees names, client addresses, timing and sizes,
+and can drop; it logs them, a line per connection, and on port 80 the path
+and User-Agent too, kept as long as its host's journal keeps them. Whoever controls it controls where the names point, and can get
+a certificate for them by TLS-ALPN-01 to intercept public clients, though not
+members, who reach the target directly; CAA with `accounturi`, one entry per
+publishing device, closes that. A PROXY protocol header is believed from
+an ingress's addresses, so any process on the ingress's host can name a
+client to a service that takes one. The domain stays with its DNS provider:
+delegated to the ingress by NS, a compromised ingress would serve the CAA
+too. A server published from a full member is one compromise away from the
+network and the LAN, hence the service member and the warning.
+
+- **Exit criteria:** (1) in the interop lab, with Pebble as the ACME CA, a
+  client outside the network fetches `https://NAME` through the ingress with
+  a valid certificate, and a capture on the ingress holds no plaintext; (2)
+  an ingress whose daemon is patched to connect to a port not published, to
+  a name its target does not serve, or to a member publishing nothing, is
+  dropped by that member; (3) a service
+  member patched to open a connection to a member is dropped by it, while
+  its replies pass; (4) a service member answers no port but its published
+  ones; (5) a stale ingress, a withdrawn name, a removed target and an
+  expired share publish nothing within gossip convergence, and at the
+  freshness TTL for a partitioned ingress; (6) a share's path without its
+  token gets 404 and lists nothing; (7) in the interop lab, a client outside
+  the network fetches `https://DOMAIN` through the ingress, and a second
+  member publishing the domain, or an M8 name equal to it, is refused.
+
+## M9e — Renaming a device
+
+**Done** on 2026-10-03, as below.
+
+A device's name was fixed when it joined (`--name`, `--device`); the only way
+to another was to remove it and join again, with new keys and addresses.
+Schema 10 adds a record `RenameNode` that a quorum signs like any change,
+naming the node by key, and `juist rename DEVICE NAME` beside `juist remove`.
+
+- **Decided:** the new name passes `checkName`, and one that folds like
+  another member's is refused rather than numbered as at a join, since a
+  person chose it; the log refuses it too, as it does for holders. The name
+  is a label, as the network's is: keys, addresses, roles, routes and public
+  names stay with the node. Its share name, where it holds the publish role,
+  follows it, so a rename is checked as an admission is
+  (`checkNodeAdmissible`): refused where the new name gives no label, or one
+  another member holds. `DEVICE.NETWORK.juist` follows the name, and the old
+  one stops resolving; the approval says both. An admin key filed under the
+  machine's old name keeps it, and the name a device proposes on joining
+  another network stays its host's.
+- **Built:** the record and its rule in the log, `juist rename`, the
+  approval's wording, `juist log`'s line for it, the warning for a name that
+  gives no DNS label, a running share said again under the new name, and a
+  rename carried to the other admin devices, not the renamed one.
+- **Validated:** unit tests of each part (12-validating.md), the in-process
+  app renaming a device through a quorum of two, and `make interop`: lx
+  resolves fb by its new name, at its addresses, and no longer by its old.
+- **Exit criterion:** a renamed device is reached by its new name on every
+  member that has applied the record, nothing else about it changes, and
+  the test runs through the in-process app.
+
+## M9f — The status page
+
+**Done** on 2026-10-04, as below; the whole network's reach went to "Later".
+
+A device serves the network's status page under a published name, in the
+website's look (`juist publish status-page status`), until the Android app
+shows the same: devices, how this device reaches them, published names and
+shares, the alarms and the log's newest changes.
+
+- **Decided:** the terminator renders it, holding no key of the network's
+  and asking juistd's socket one call more, `status page`, answered only
+  where the operator serves one; no helper or user of its own. Its target is
+  `status-page[:WHAT]` where a name's HOST:PORT goes, so it is kept, listed
+  and taken back as one. Members see all of it, known by the overlay address
+  their connection comes from, never by a PROXY header; an ingress's address
+  is the public's. The public sees what `--public` says: `none`, `services`
+  (the default), `network` or `all`, the log's changes in `all` alone.
+  Device names and the serving device are the network's, shown from
+  `network` on.
+- **Built:** as above; `internal/webstyle` holds the website's fonts,
+  colours and wordmark for it and the share listing, and `internal/changelog`
+  the log's lines for it and `juist log`. `juistd --serve
+  status=status-page:WHAT` serves it from a service member.
+- **Validated:** unit tests of each part (12-validating.md), and the page
+  rendered in headless Chrome, day and night, at phone and desktop widths.
+- **Review 1:** by hand, a member opening the page by `http://` reached
+  another program on the target's port 80, members resolving the name to the
+  target. A device's terminator now redirects port 80 of the addresses it
+  serves on to https, where no other program holds it on every address, which
+  `juist status` and the page warn of; the page sends HSTS. A service member
+  answers no port 80, holding to exit criterion (4).
+
+## M10 — Android, minimal
+
+An Android app that joins a network as a member and reaches the others, with
+none of the roles. It comes before the audit, so that M12 covers the app's key
+custody and its in-process API; the full app and its release are M13.
+
+- **Joining.** The invite's link scanned as a QR code, which `juist invite`
+  renders in the terminal beside the link; or the code typed or pasted, its
+  words completed from enrollment's word list. Then the words to compare, in
+  large type, and the wait for votes.
+- **Status.** The network, this device and its addresses, freshness, and each
+  member as reached: live, direct or through a relay, sought, absent. The
+  alarms `juist status` reports are shown, and nothing `ipc.Status` does not
+  carry.
+- **Reaching members.** Ping and HTTP to a member's overlay address from the
+  phone's own apps while the VPN is on, and a ping per member in the app.
+- **Not in M10:** names, since with a DNS server set `VpnService` sends all
+  the phone's DNS to it, so the resolver would have to forward everything
+  else; exit nodes and subnets; inviting; admin keys; relaying; several
+  networks.
+
+What it builds on: the tree builds for `android/arm64` (`make cross`), and
+router, exit and holdings are left out there by build tag.
+
+- **The core** is the daemon's service in the app's process, bound with
+  gomobile, its control protocol over an in-process pipe instead of the
+  socket: the app's sandbox takes the place of `SO_PEERCRED` and the operator.
+- **A `conn.Plumber` for `VpnService`.** `OpenTUN` is `Builder.establish()`;
+  addresses, routes and DNS are the builder's, and a change establishes
+  again. Serving and egress are refused.
+- **The core's own sockets** — data plane, log sync, DHT, mDNS — stay out of
+  the tunnel through `VpnService.protect`, by `netns.SetAndroidProtectFunc`;
+  `netmon.RegisterInterfaceGetter` replaces the netlink enumeration Android
+  refuses apps from API 30. Both are in the pinned Tailscale.
+- **Lifecycle.** A foreground service keeps the mesh up in Doze, and a
+  multicast lock lets mDNS find members on the Wi-Fi.
+
+The app looks finished from M10 on, not from M13: Kotlin and Compose, with a
+theme of its own (colour, type, shape, spacing and motion as tokens), light
+and dark, and every state `ipc.Status` can report designed rather than left
+to an error. A screenshot test renders every screen in both themes, at 200 %
+font scale, and in German and English, so a review needs no device. The
+colours are `design/tokens.json`, by Material 3 role, which the website shares,
+so that a member's reach (direct, relay, sought, absent) and an alarm look the
+same in both; the launcher icon is `design/logo/icon.svg`, monochrome
+`icon-mono.svg` ([14-website.md](14-website.md)).
+
+Open, to decide in this order:
+
+- **Key custody.** The identity key is to be held by Keystore
+  ([04-architecture.md](04-architecture.md)), but Go signs with it: either
+  `node.keys` sealed by a Keystore AES key, or every signature a call
+  through JNI into Keystore.
+- **Dynamic colour.** Material You's colours, taken from the wallpaper,
+  would replace the tokens, the status colours among them. Proposed: the
+  app's own theme alone.
+- **minSdk.** 31 is proposed: fewer cases to support, and Material You if
+  dynamic colour is taken.
+
+- **Exit criteria:** (1) in `make interop`, an Android emulator joins the
+  network by the invite's QR code and by its typed code, pings a member and
+  fetches a page from it over HTTP, directly and through a relay; (2) removed,
+  it loses its tunnels as fast as a Linux member does, and past the freshness
+  TTL keeps tunnels only to admin devices; (3) by hand, a phone on LTE joins
+  and reaches a member behind NAT.
+
+## M11 — Break-glass recovery and key backup
 
 Genesis commits to break-glass secrets, `juist create` writes them to a file to
 keep offline, and `State.ValidDisablement` verifies one; nothing consumes a
@@ -942,18 +1358,103 @@ version tag and a checksum, so a truncated paste fails at import and not at
 the first signature. Import refuses to overwrite a key of that name and says
 whether the log still gives the key a vote: a key removed since the backup is
 worth knowing about when it is restored, not at the next change. The
-break-glass file gets the same pair under M9's recovery command, and its
+break-glass file gets the same pair under M11's recovery command, and its
 export says to keep it apart from the admin keys, since a vault holding both
 is one secret that governs the network and recovers it too; likewise k admin
 keys in one vault make the quorum one master password. Node keys are not
 exported: they are the device, a copy restored elsewhere is a clone of a
 member, and a lost device is removed and re-invited instead.
 
-## M10 — Hardening → v1
+## M11a — Post-quantum WireGuard
+
+Every pair of members mixes a preshared key into WireGuard's handshake that a
+quantum computer cannot recover, so recorded tunnel traffic stays
+confidential (harvest now, decrypt later). Authentication stays X25519 and
+Ed25519; PQ authentication stays deferred, as it cannot be harvested now. It
+is part of v1 and comes before the audit, so that M12 covers it.
+
+What it builds on:
+
+- **The keys.** Every `NodeRecord` carries an ML-KEM-768 public key, and the
+  epoch's group secret is already sealed to it with hybrid HPKE; no new record
+  field is needed ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
+- **The engine.** Since Tailscale 1.104, `wgcfg.PeerConfig.PresharedKey`
+  reaches a peer created lazily through the config lookup, and
+  `SyncDevicePeer` sets it in place on an active one, keeping its session
+  ([07-embedding-notes.md](07-embedding-notes.md)). Setting a PSK is a few
+  dozen lines in `conn`, with no patch to the pinned modules.
+- **Not Rosenpass:** a daemon per link and no audit, where juist's own key
+  distribution and stdlib `crypto/mlkem` do the same
+  ([research/building-blocks.md](research/building-blocks.md)).
+
+The engine is the small part. What makes this a milestone is agreeing on the
+key: WireGuard holds one PSK per peer, the responder cannot tell a wrong one
+from a lost packet, and a key held by one side alone fails every handshake.
+
+Two stages, the first standing on its own:
+
+1. **A PSK from the group secret.** `HKDF(epoch group secret, both WireGuard
+   keys, epoch)`: no message to send, and it rotates with every epoch bump,
+   that is every membership change. Outsiders who record traffic are held off,
+   as the group secret reaches members only through the hybrid KEM. Every
+   member can derive every pair's key, though, so a member, or one removed
+   later, who recorded the traffic of others could read it with a quantum
+   computer.
+2. **A PSK per pair from ML-KEM.** Each side encapsulates once to the other's
+   key; the PSK is HKDF over both secrets and the stage-1 key, so neither side
+   picks it alone and no third member can derive it. The 1088-byte
+   ciphertexts travel on the sealed DERP or disco sideband, or by gossip; not
+   in the log.
+
+Open, to decide in this order:
+
+- **Catching up.** Gossip runs through the tunnel alone
+  ([10-connectivity-notes.md](10-connectivity-notes.md)), so a member that
+  missed an epoch bump cannot handshake with the key that would bring it the
+  bump. Proposed: a pair uses the key of the lower of their two epochs, each
+  learning the other's outside the tunnel, as DHT and mDNS records are
+  published under the newest epoch and looked up under every one held; a
+  member past `keyring.Depth` is invited again, as today (M4b).
+- **No downgrade.** Falling back to no PSK at all would let an active
+  attacker who blocks handshakes strip the protection. Towards a peer whose
+  signed announcement says it uses PSKs, a member never handshakes without
+  one; a fallback goes to an older epoch's key and nothing weaker.
+- **Mixed versions.** A member that sets a PSK cannot reach one that does
+  not, and the announcement's decoder refuses unknown fields
+  (`types.StrictDecOptions`), so saying "I use PSKs" is a schema change every
+  member must understand before any member sends it. Which schema gate, and
+  whether a network can then require PSKs. The whole network's reach
+  ("Later") waits for the same gate.
+- **Switching keys.** On an epoch bump both sides change within the gossip's
+  convergence, but a handshake in that window fails and is retried only after
+  the 5 s `RekeyTimeout`. Whether the key changes at the next rekey (120 s)
+  instead, and when a pair moves from stage 1 to stage 2 and back.
+- **Status.** `juist status` names each tunnel that is not post-quantum, and
+  says which stage the others are at.
+- **The upgrade guard.** Both PSK paths get a row in 07's upgrade table and a
+  test that reads the pinned engine.
+
+Size: stage 1 is the derivation and the catch-up and downgrade rules; stage 2
+adds a message with its own parser and fuzz target, and the derivation in
+`trust/`, which `make tcb` counts. Together about as large as M9e and M9f.
+
+- **Exit criteria:** (1) two members' handshakes carry a PSK, and a peer
+  holding the right WireGuard key but the wrong PSK cannot complete one;
+  (2) in `make interop`, an epoch bump changes the PSK while a ping across
+  the tunnel loses nothing, and a member that slept through a bump reaches
+  the others again without help; (3) blocking handshakes never makes two
+  members that announce PSKs handshake without one; (4) a member of the
+  previous release and one of this one still reach each other, and
+  `juist status` says which tunnels are post-quantum; (5) with stage 2, a
+  third member holding the group secret cannot derive a pair's PSK.
+
+## M12 — Hardening → v1
 
 External security audit of the trust layer + enrollment (the ≈7–9 k LOC TCB),
-plus what M6 and M8 add to it — route consumption and its forwarding helper, the
-override record and the resolver — fix findings, mature fuzz corpus (consider
+plus what M6, M8, M9, M9e, M10 and M11a add to it — route consumption and its forwarding helper, the
+override record and the resolver, the published names and the ingress, the
+preshared-key exchange, the Android
+app's key custody and in-process API — fix findings, mature fuzz corpus (consider
 OSS-Fuzz), implementation-vs-threat-model review, documentation of the
 residual-weakness acceptances for operators. Before the audit, a user per
 juistd instance, so that one network's compromised daemon on a host no longer
@@ -971,27 +1472,54 @@ that outlives the freeze"). Open, to decide in this order:
   change and the admins must be asked to sign.
 - **Compacting.** When a device compacts to a checkpoint it holds, and
   whether it keeps any history below the anchor for peers still behind it.
+  A store that is not empty cannot yet move its anchor to a checkpoint it
+  receives (`Bootstrap` takes an empty one), so a device behind a peer that
+  compacted does not catch up. Every `Inform` also verifies the whole chain
+  again, about a second at 4096 records.
 - **Joining.** Whether a device joining is handed the anchor instead of the
   whole chain.
 
-v1 is Linux and FreeBSD; Android and the release work follow in M11.
+Also open before the audit:
+
+- **The scope the gate measures.** `make tcb` counts `types` and `trust/`.
+  The CLI's checks against a compromised juistd (`pin.go`, `rotate.go`,
+  `changes.go`, `waiting.go`, `describe.go`, about 1 k lines), the filter
+  and the resolver are audited too: they move into `trust/`, or the gate
+  counts them against a budget that holds them.
+- **Fuzzing.** `waiting.Decode`, `types.DecodeLease`, the helper's protocol
+  and the resolver's input have no target, and no `fuzz-long` run is
+  recorded in [12-validating.md](12-validating.md).
+- **The read tier.** `ForReader` passes members' identities in `Reach` and
+  their names in `Silent` and `TunnelsDown`, which the tier was narrowed to
+  keep from any local user.
+- **The FreeBSD helper's routes.** It refuses the host's links, loopback and
+  multicast, but not a route over the host's own LAN, which a subnet route
+  looks like; whether it checks the host's connected routes itself.
+- **A checkpoint at the caps.** `MaxNodes` members, each holding their caps
+  of names and published names, encode to about 5.5 MB, past
+  `MaxRecordSize` (4 MiB), M8's names most of it: a state the quorum can
+  reach cannot be checkpointed. A cap on a member's name bytes, or a record
+  size of its own for checkpoints, with `TestRecordSizeAtMaxNodes` filling
+  names to their caps.
+
+v1 is Linux and FreeBSD, with M10's minimal Android app; the full app and the
+release work follow in M13.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) a network that has authored more than
   `MaxHashesPerFrame` records still converges on a new change, with no admin
   having asked for a checkpoint; v1.0 tag.
 
-## M11 — Android & packaging *(post-v1)*
+## M13 — Android & packaging *(post-v1)*
 
-Android app (gomobile + VpnService, Keystore-held identity), with M6's client
-side through `VpnService` routes and `allowBypass`; distro packages, signed
-releases.
+The full Android app, on M10's: M6's client side through `VpnService` routes
+and `allowBypass`, and M8's names; distro packages, signed releases.
 
 - **Exit criterion:** 3-platform interop matrix green in CI (Linux/FreeBSD via qemu,
   Android emulator smoke test); release artifacts, the Android app included,
   reproducible byte-for-byte from two independent builders.
 
-## M12 — Coarse ACLs *(post-v1)*
+## M14 — Coarse ACLs *(post-v1)*
 
 Per-node allow-lists as quorum-signed log records; the netmap adapter renders them
 into `wgengine`'s packet filter, replacing v1's allow-all-members rule, on sender
@@ -999,13 +1527,24 @@ and receiver alike. They also scope M6: using an exit node, or a subnet router's
 routes, becomes a grant (Tailscale's `autogroup:internet`) instead of open to every
 member.
 
+Two members the policy keeps apart both ways are no peers at all: neither
+installs the other, so no handshake or disco passes between them, and the log
+reaches each through the members it may reach. Discovery follows the policy
+too: a member's announcement goes only to its peers, and its DHT record is
+sealed for them, not under the group secret every member holds, which today
+shows each member every other's public addresses; whether keys go per pair
+or per group is open. Listings and `.juist` names show a member its peers
+alone. The log stays whole on every member, names, keys and overlay addresses
+included: hiding those conflicts with verifying the chain.
+
 - **Exit criterion:** under a policy denying A→B, B drops A's packets even when A's
   daemon is patched to ignore its own outbound filter (receiver-side enforcement
   proven independently of sender cooperation); a node whose policy state is past the
   freshness TTL fails closed; a member without a grant for an exit node gets
-  nothing forwarded by it, enforced at the exit node.
+  nothing forwarded by it, enforced at the exit node; two members kept apart
+  both ways exchange no packet, and neither learns the other's endpoints.
 
-## M13 — Multicast *(post-v1)*
+## M15 — Multicast *(post-v1)*
 
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LAN games.
 The overlay counts as one link for them. Multicast routing, streaming and
@@ -1070,8 +1609,160 @@ of an overlay address to its member that the source check rests on.
   listener joined on the default interface receives a routed group's packets
   from a member.
 
+## M16 — HTTP/3 for published names *(post-v1)*
+
+QUIC on the published path: a handshake in one round trip, no head-of-line
+blocking on lossy links, and a connection that survives the client's
+address changing. Today the ingress passes TCP alone, by the SNI of the
+ClientHello, and the terminator passes the bytes TLS carried; HTTP/2 rides
+that as it is (`--http2`), HTTP/3 cannot.
+
+1. **The ingress on 443/udp.** It reads the SNI from the client's Initial
+   packets: Initial keys from the Destination Connection ID (RFC 9001,
+   5.2), header protection off, the CRYPTO frames reassembled until the
+   ClientHello is whole. A browser's ClientHello spans several Initials with
+   a post-quantum key share, and Chrome sends its CRYPTO frames out of order
+   on purpose. What waits for the rest is bounded per source; a flow, keyed
+   by the client's address and port, goes to the target's overlay address
+   and idles out, within the per-source bounds TCP has.
+2. **The terminator ends QUIC and HTTP/3** for names whose service speaks
+   HTTP, and proxies each request to it as HTTP/1.1 or h2c: QUIC streams are
+   no byte stream to pass on. golang.org/x/net/quic is not ready for
+   production (v0.56.0 says so), so quic-go, pinned, which the TCB budget
+   does not count.
+3. **Advertising.** `Alt-Svc: h3=":443"` on the TCP path's answers, which
+   only a terminator that proxies HTTP there can add, and the DNS `HTTPS`
+   record `juist publish` prints, as it prints CAA.
+4. **Firewalls and packages:** 443/udp in firewalld's, ufw's and pf's rules
+   for the ingress, and both handbooks.
+
+Open decisions:
+
+- **The client's address** to the terminator: PROXY v2 has no per-flow form
+  for UDP; a port per flow on the tunnel, or a header in the first datagram.
+- **The TCP path as a proxy** for HTTP names, which `Alt-Svc` needs, or
+  advertising by the DNS record alone.
+- **Retry and amplification:** whether the ingress or the terminator sends
+  QUIC Retry to an unvalidated address.
+
+- **Exit criteria:** (1) headless Chrome in the lab fetches a published name
+  over HTTP/3 through the ingress, and over HTTP/2 where 443/udp is blocked;
+  (2) the Initial parser has a fuzz target that runs clean for 72 CPU-hours,
+  and drops what does not parse without state kept; (3) the ingress sends
+  an unvalidated address no more than three times what it received from it;
+  (4) a name not published gets no datagram forwarded; (5) `make load-lab`
+  over HTTP/3 loses no visitor at the rate HTTP/2 holds.
+
+## Later — The whole network's reach
+
+Not scheduled. The status page, and `juist status`, show reach from the
+device asked alone. Each member's own, live, direct or relayed per peer,
+needs a field every member understands before any sends it, gated by a
+schema, as the announcements' decoders are strict: the gate M11a needs too.
+A summary in the announcement would re-sign and re-gossip it, and its copy
+in the DHT, at every change of reach.
+
+## Later — Battery life on laptops
+
+Not scheduled. Done (M9): a quiet tunnel to a peer a relay can wake is
+probed every 5 minutes rather than every 30 s, and mDNS slows from 2 s to a
+minute while nothing changes; validated by unit tests alone. Open, in this
+order:
+
+1. **Measure.** Datagrams per minute on the underlay (magicsock's port, 5353,
+   the relay's) and wakeups (`powertop`) of an idle laptop with three peers,
+   with and without a relay, before and after M9. Every step below is
+   judged by that number, so it is taken first.
+2. **Events instead of polls.** The service's watch loop every 5 s (rotation,
+   overlay addresses, host conflicts, mesh retry), the reconcile every 15 s,
+   and the host's DNS routing every 30 s. Each becomes a timer on the next
+   known deadline (a membership's expiry, a renumbering's) or a signal
+   (a log change, netmon, resolved's `PropertiesChanged`), keeping a slow
+   backstop: a missed event fails silently.
+3. **A keepalive that lets magicsock rest.** Without a relay every check still
+   probes, since that holds the NAT mappings open, and each probe restarts
+   magicsock's 3 s heartbeat for 45 s. A TSMP ping and a disco ping from the
+   ping path both count as traffic; what keeps a mapping open without that
+   is to be found in the pinned module.
+4. **On battery.** Read the power source (Linux
+   `/sys/class/power_supply/*/online` of a `Mains` supply, FreeBSD
+   `hw.acpi.acline`) and, on battery, stop relaying though granted, and
+   stretch the quiet probe and the sync interval. A relay that goes away moves
+   its peers' home region, so the switch wants hysteresis, and the status
+   says when it happened.
+
+M10's app inherits the pacing: in Doze a foreground service keeps the mesh up,
+and every timer above costs more on a phone than on a laptop.
+
 ## Deferred (post-v1, schema must not preclude)
 
 Kernel WireGuard fast path for public-endpoint nodes ·
-hardware-backed admin keys (FIDO2/PIV signing) · update transparency log ·
+hardware-backed admin keys (FIDO2/PIV signing) · sealing the node key, a 0600
+file in v1 (TPM, kernel keyring; FreeBSD: geli) · update transparency log ·
 macOS/Windows/iOS · PQ authentication (ML-DSA checkpoint co-signatures).
+
+## Optional idea — Device owners and an identity provider
+
+Not planned; SSO/OIDC stays a non-goal ([01-requirements.md](01-requirements.md)).
+Recorded so M14's schema leaves room for it. The rule it rests on: adding a
+member is the dangerous direction, removing one costs at most availability, so
+an identity provider may remove alone but never add alone.
+
+1. **Owners.** A device record names its owner, quorum-signed, in the same
+   namespace as an admin key's `Holder`, so `alice` the admin and `alice` the
+   owner are one person. It gives offboarding (remove every device of an
+   owner), ACLs by person or group in M14, and `juist devices` showing whose
+   device is whose. The quorum asserts the binding; nothing checks it against
+   an IdP. A schema bump, like schema 3.
+2. **Scoped admin keys.** A key whose votes count only for some kinds of
+   change, today every vote counts for every change. A remove-only key lets a
+   SCIM or webhook receiver remove a deprovisioned owner's devices at once; if
+   it is compromised it can remove members, never add one.
+3. **IdP-checked joins.** An enrollment service checks an OIDC login and signs
+   a join naming the logged-in user as owner, with a vote the quorum policy
+   keeps below the quorum, so a human admin co-signs. Giving it the full
+   quorum is Tailscale's model, visible in the log as an operator's choice.
+
+Rejected: ID tokens in log records that every member verifies. Members would
+fetch the IdP's JWKS, which breaks LAN-only operation, tokens expire while
+records do not, every member would hold every owner's address, and the IdP
+would become trusted infrastructure. Admin keys are not bound to IdP accounts:
+that makes the IdP vouch for the key and weakens it; where a key is kept is
+custody, not protocol.
+
+## Optional idea — A gateway between two networks
+
+Not planned. A company keeps its people's devices in one network and its
+servers in another, and a gateway, a member of both, routes the servers'
+network into the clients'. A server then opens nothing to a client, the
+servers' network holds no laptop, and a leaving person is removed from one
+network alone.
+
+Today, by reading the code rather than by a test: the gateway runs both as
+instances (M5), a quorum of the clients' network grants it the servers'
+ULA /48 as a subnet (M6b), which `ValidateRoute` takes, and the clients'
+instance masquerades onto `juist1` as onto a LAN, so the servers see the
+gateway's address alone. What is missing:
+
+1. **IPv4.** The servers' /22 lies in 198.18/15, which no route may cover,
+   since other overlays on a client's host may hold it. A grant naming
+   another juist network's prefix would be taken by a client only where none
+   of its own networks claims an overlapping range, as M5's claims decide.
+2. **Names.** `DEVICE.servers.juist` resolves only on members of that
+   network; the clients would send the zone to the gateway, as M6c sends DNS
+   to an exit node.
+3. **A test.** In the netns matrix: a client in A, the gateway in A and B, a
+   server in B, both families, and a server that cannot open a connection to
+   a client.
+
+What it does not change: the servers see the gateway, not who used it, and
+every client still holds the clients' network's whole log, so it knows every
+other client's name, keys and addresses, and reaches them until M14. Hiding
+members from each other conflicts with full replication, which verifying the
+chain rests on. An access VPN where clients know only a hub and access
+follows an SSO login is a hub-and-spoke design with a central policy, not
+this one; for owners and an identity provider see the previous section.
+
+One network under M14's policy, clients reaching the servers and not each
+other, is the direct way to the same end, IPv4 and names included; the
+gateway is for before M14, or for keeping the servers out of the clients' log.

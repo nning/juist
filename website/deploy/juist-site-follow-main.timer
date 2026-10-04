@@ -1,0 +1,10 @@
+[Unit]
+Description=Build juist's website from main when it changed
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=2min
+RandomizedDelaySec=10s
+
+[Install]
+WantedBy=timers.target

@@ -32,9 +32,15 @@ const (
 // where a probe was answered without one.
 const pathSettle = time.Second
 
-// reachEvery is how often the tunnels are checked in the background. The
-// probes also keep NAT mappings towards quiet peers open.
+// reachEvery is how often the tunnels are checked in the background. Its
+// probes keep the NAT mappings towards a quiet peer open where no relay could
+// bring the tunnel back.
 const reachEvery = 30 * time.Second
+
+// quietProbeEvery is how often a peer that answered is probed where a relay
+// can bring its tunnel back: each probe keeps magicsock pinging it every 3 s
+// for 45 s, so probing every reachEvery keeps a laptop's radio awake.
+const quietProbeEvery = 5 * time.Minute
 
 // recheckGap is the least time between two checks, however often a new
 // announcement asks for one.
@@ -144,16 +150,29 @@ func (d *Daemon) Tunnels(wait time.Duration) (live int, down []string) {
 	return live, down
 }
 
+// A probeAnswer is the last probe a peer answered.
+type probeAnswer struct {
+	at     time.Time // wall clock, so that a suspend ages it
+	direct bool
+}
+
+// standsAt reports whether a needs no new probe at at.
+func (a probeAnswer) standsAt(at time.Time) bool {
+	age := at.Sub(a.at)
+	return age >= 0 && age < quietProbeEvery
+}
+
 // A tunnelCheck is one installed peer and what checking it found.
 type tunnelCheck struct {
 	namedPeer
 	reach ipc.PeerReach
 }
 
-// checkTunnels checks every installed peer's tunnel. Every one is probed,
-// fresh handshake or not: the path is read after the probes, since magicsock
-// names a direct path only for a few seconds after its last pong, and a quiet
-// tunnel would otherwise read as relayed.
+// checkTunnels checks every installed peer's tunnel. Each is probed, fresh
+// handshake or not, unless both ends have a relay and it answered within
+// [quietProbeEvery], when its last answer stands: the path is read after the
+// probes, since magicsock names a direct path only for a few seconds after its
+// last pong, and a quiet tunnel would otherwise read as relayed.
 func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 	d.probeMu.Lock()
 	defer d.probeMu.Unlock()
@@ -162,13 +181,21 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 	now := d.probeNow
 	d.probeNow = nil
 	d.mu.Unlock()
+	at := d.now().Round(0)
+	homed := d.manager.HomeRelay() != 0
 
 	out := make([]tunnelCheck, len(peers))
-	probed, answered := make([]bool, len(peers)), make([]bool, len(peers))
+	probed, answered, kept := make([]bool, len(peers)), make([]bool, len(peers)), make([]bool, len(peers))
+	answers := make(map[types.Identity]probeAnswer, len(peers))
 	var wg sync.WaitGroup
 	for i, p := range peers {
 		out[i] = tunnelCheck{namedPeer: p, reach: ipc.PeerReach{Identity: p.id}}
 		if len(p.peer.Addrs) == 0 {
+			continue
+		}
+		if a, ok := d.answered[p.id]; ok && homed && p.peer.HomeRelay != 0 && !now[p.id] && a.standsAt(at) {
+			out[i].reach.Live, out[i].reach.Direct, kept[i] = true, a.direct, true
+			answers[p.id] = a
 			continue
 		}
 		// A peer that has not answered for a while is probed in only every
@@ -201,8 +228,8 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		if hs := t.LastHandshake; !hs.IsZero() && time.Since(hs) < fresh {
 			out[i].reach.Live = true
 		}
-		out[i].reach.Direct = out[i].reach.Live && t.Direct.IsValid()
-		settle = settle || out[i].reach.Live && !out[i].reach.Direct
+		out[i].reach.Direct = out[i].reach.Direct || out[i].reach.Live && t.Direct.IsValid()
+		settle = settle || !kept[i] && out[i].reach.Live && !out[i].reach.Direct
 	}
 	misses := make(map[types.Identity]int, len(out))
 	for _, c := range out {
@@ -232,6 +259,12 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 			}
 		}
 	}
+	for i, c := range out {
+		if answered[i] {
+			answers[c.id] = probeAnswer{at: at, direct: c.reach.Direct}
+		}
+	}
+	d.answered = answers
 	return out
 }
 
@@ -354,13 +387,14 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	for _, c := range checks {
 		// The tunnel carries traffic, yet the session through it did not
 		// come up: a firewall drops the sync port on juist0 on one side.
-		if c.reach.Live && d.overlayOnly && d.gossip.Failing(c.id) {
+		if c.reach.Live && d.tunName != "" && d.gossip.Failing(c.id) {
 			syncFailing = append(syncFailing, c.name)
 		}
 	}
 	var firewalled string
 	var firewallUnsure bool
-	if d.overlayOnly {
+	// A network stack of its own has no host firewall before it.
+	if d.tunName != "" {
 		if blocked, unsure := d.firewalled(ctx, d.tunName, d.gossipPort); blocked {
 			firewalled, firewallUnsure = d.tunName, unsure
 		}

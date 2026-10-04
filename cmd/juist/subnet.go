@@ -18,15 +18,19 @@ func subnetFamily() family {
 	return family{name: "juist subnet", intro: "Reach networks behind a device, or route this device's for the others.",
 		subs: []subcommand{
 			{name: "list", aliases: []string{"ls"}, run: subnetList, forms: [][2]string{{"", "the subnets, and which this device uses"}}},
+			{name: "add", run: subnetAdd, forms: [][2]string{{"add DEVICE PREFIX...", "have DEVICE route PREFIX for every member"}}},
+			{name: "remove", aliases: []string{"rm"}, run: subnetRemove,
+				forms: [][2]string{{"remove DEVICE PREFIX...", "take PREFIX from DEVICE"}}},
 			{name: "serve", run: subnetServe, forms: [][2]string{
 				{"serve", "route what the network grants this device;\n" + servesSetUp},
 				{"serve --stop", "stop, and undo that"},
 			}},
 			{name: "off", run: subnetOff, forms: [][2]string{{"off", "reach none of them through the network"}}},
 			{name: "on", run: subnetOn, forms: [][2]string{{"on", "reach them again"}}},
-		}, footer: `An admin grants a device a subnet: juist grant DEVICE 192.168.1.0/24. Every
-member then reaches it through that device, but a member that reaches those
-addresses by a route of its own, as on its LAN.`}
+		}, footer: `An admin adds a subnet, such as 192.168.1.0/24, to a device, and its operator
+agrees to route it: juist subnet serve. Every member then reaches it through
+that device, but a member that reaches those addresses by a route of its
+own, as on its LAN.`}
 }
 
 func cmdSubnet(a *app, args []string) error { return subnetFamily().run(a, args) }
@@ -58,7 +62,7 @@ func (a *app) listSubnets() error {
 	sub := cmp.Or(st.Subnets, &ipc.Subnets{})
 	if len(sub.Routes) == 0 {
 		a.ok("no subnets")
-		a.hint("an admin grants one: juist grant DEVICE 192.168.1.0/24")
+		a.hint("an admin adds one: juist subnet add DEVICE 192.168.1.0/24")
 		return nil
 	}
 	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
@@ -164,7 +168,7 @@ func subnetServe(a *app, args []string) error {
 		a.warnDocker(sub.Serving)
 	case !hasOwnSubnets(sub, st):
 		a.ok("will route once an admin grants this device a subnet")
-		a.hint("juist grant %s PREFIX", cmp.Or(st.SelfName, st.Self.ShortString()))
+		a.hint("juist subnet add %s PREFIX", cmp.Or(st.SelfName, st.Self.ShortString()))
 	default:
 		return fmt.Errorf("not routing: %s", sub.NotServing)
 	}
@@ -198,6 +202,38 @@ func hasOwnSubnets(sub *ipc.Subnets, st *ipc.Status) bool {
 		}
 	}
 	return false
+}
+
+func subnetAdd(a *app, args []string) error {
+	return changeSubnets(a, args, true, spec{name: "juist subnet add", args: "DEVICE PREFIX...", min: 2, max: -1,
+		about: `
+Have a device route subnets, such as 192.168.1.0/24, for every member, once
+its operator agrees: juist subnet serve.`})
+}
+
+func subnetRemove(a *app, args []string) error {
+	return changeSubnets(a, args, false, spec{name: "juist subnet remove", args: "DEVICE PREFIX...", min: 2, max: -1,
+		about: `
+Take subnets from a device.`})
+}
+
+func changeSubnets(a *app, args []string, add bool, s spec) error {
+	auth, target, pos, err := a.deviceChange(s, newFlags(s.name), args)
+	if err != nil {
+		return err
+	}
+	subnets := slices.Clone(target.SubnetRoutes())
+	for _, arg := range pos {
+		pfx, err := parseSubnet(arg, displayMember(target))
+		if err != nil {
+			return err
+		}
+		if subnets, err = a.changeSubnet(auth.State(), target, subnets, pfx, add); err != nil {
+			return err
+		}
+	}
+	_, err = a.submitRoutes(auth, target, target.Roles, subnets, false)
+	return err
 }
 
 func subnetOff(a *app, args []string) error {

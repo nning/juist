@@ -1,0 +1,17 @@
+[Unit]
+Description=Build juist's website from main and serve it
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=juist-build
+Group=juist-build
+Environment=HOME=/var/lib/juist-build
+ExecStart=/usr/local/lib/juist-site/build
+ExecStartPost=+/usr/local/lib/juist-site/install
+Nice=19
+CPUWeight=idle
+IOSchedulingClass=idle
+OOMScoreAdjust=500
+TimeoutStartSec=1h

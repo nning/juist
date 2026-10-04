@@ -1,0 +1,14 @@
+{{ define "main" }}
+<div class="docs">
+  {{ partial "sidebar.html" . }}
+  <article class="content">
+    {{ with .Parent }}{{ if not .IsHome }}<div class="crumbs"><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></div>{{ end }}{{ end }}
+    <h1>{{ .Title }}</h1>
+    {{ with .Params.lead }}<p class="lead">{{ . | markdownify }}</p>{{ end }}
+    {{ partial "meta.html" . }}
+    <div class="prose">{{ .Content }}</div>
+    {{ partial "pager.html" . }}
+  </article>
+  {{ if ne .Params.toc false }}<aside class="toc"><h4>{{ i18n "onThisPage" }}</h4>{{ .TableOfContents }}</aside>{{ end }}
+</div>
+{{ end }}

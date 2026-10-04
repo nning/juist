@@ -19,9 +19,13 @@ import (
 )
 
 func networkFamily() family {
-	return family{name: "juist network", intro: "Show, rename and renumber the network.", subs: []subcommand{
+	return family{name: "juist network", intro: "Show, rename and renumber the network, and set its domain.", subs: []subcommand{
 		{name: "show", run: networkShow, forms: [][2]string{{"[NETWORK]", "name and address ranges; every\nnetwork's, without NETWORK"}}},
 		{name: "rename", run: networkRename, forms: [][2]string{{"rename [NETWORK] NAME", "rename the network"}}},
+		{name: "domain", run: networkDomain, forms: [][2]string{
+			{"domain [NETWORK] DOMAIN", "the public domain names are\npublished under (juist publish)"},
+			{"domain [NETWORK] off", "withdraw it"},
+		}},
 		{name: "renumber", run: networkRenumber, forms: [][2]string{
 			{"renumber [NETWORK] PREFIX", "move every device into PREFIX,\nsuch as 10.7.0.0/22"},
 			{"renumber [NETWORK] DEVICE ADDR", "move one device to ADDR; with\n--finish, retiring its old one now"},
@@ -70,6 +74,9 @@ func (a *app) showNetwork() error {
 	}
 	a.field("IPv4", "%s", line)
 	a.field("IPv6", "%v", state.ULA())
+	if d := state.Domain(); d != "" {
+		a.field("Domain", "%s", d)
+	}
 	var moving, heldNodes []types.NodeRecord
 	for _, n := range state.Nodes() {
 		switch {
@@ -141,6 +148,56 @@ Rename the network on every device. Nothing else changes.`}
 	}
 	_, err = a.submit(auth, &change{aum: aum, file: "rename.rec",
 		done: fmt.Sprintf("renamed %q to %q", state.Network(), name)})
+	return err
+}
+
+func networkDomain(a *app, args []string) error {
+	s := spec{name: "juist network domain", args: "DOMAIN|off", min: 1, max: 1, about: `
+Set the public domain devices publish names under, such as pub.example.org,
+whose DNS points *.DOMAIN at the ingresses; off withdraws it. Every member
+then resolves DOMAIN through juistd, with DNSSEC off for it.`}
+	pos, err := a.parse(s, newFlags(s.name), args)
+	if err != nil {
+		return err
+	}
+	domain := ""
+	if pos[0] != "off" {
+		if domain, err = parseHostName(pos[0]); err != nil {
+			return err
+		}
+	}
+	auth, err := a.networkLog()
+	if err != nil {
+		return err
+	}
+	state := auth.State()
+	if state.Domain() == domain {
+		a.ok("unchanged: %s", cmp.Or(domain, "no domain"))
+		return nil
+	}
+	if state.Schema() < types.SchemaPublish {
+		return needsUpgrade("a public domain")
+	}
+	if domain == "" {
+		for _, n := range state.Nodes() {
+			if len(n.Published) > 0 {
+				return fmt.Errorf("%s publishes names under %s\nhint: juist publish remove %s %s", displayMember(n),
+					state.Domain(), displayMember(n), n.Published[0].Under(state.Domain()))
+			}
+		}
+	}
+	aum, err := auth.Builder().SetDomain(domain)
+	if err != nil {
+		return err
+	}
+	if domain != "" {
+		a.warn("every member then resolves %s through juistd, names on or not, with DNSSEC off for it", domain)
+	}
+	done := "domain " + domain
+	if domain == "" {
+		done = "no domain"
+	}
+	_, err = a.submit(auth, &change{aum: aum, file: "domain.rec", done: done})
 	return err
 }
 

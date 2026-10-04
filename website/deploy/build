@@ -1,0 +1,27 @@
+#!/bin/sh
+# Builds the website of nning/juist's main into ~/site-out when website/ or
+# design/ changed since the last build. Runs as juist-build.
+set -eu
+export GOTOOLCHAIN=go1.26.8
+# /tmp may be a small tmpfs; compiling Hugo needs more.
+export GOTMPDIR="$HOME/.cache/go-tmp"
+cd "$HOME"
+mkdir -p "$GOTMPDIR"
+[ -d site-src/.git ] || git clone -q --branch main https://github.com/nning/juist.git site-src
+cd site-src
+git fetch -q origin main
+new=$(git rev-parse FETCH_HEAD)
+built=$(cat "$HOME/site-built" 2>/dev/null || true)
+[ "$new" != "$built" ] || exit 0
+if [ -n "$built" ] && git cat-file -e "$built^{commit}" 2>/dev/null &&
+	git diff --quiet "$built" "$new" -- website design; then
+	echo "$new" > "$HOME/site-built"
+	exit 0
+fi
+git reset -q --hard "$new"
+git clean -qfdx
+rm -rf "$HOME/site-out"
+make -C website check OUT="$HOME/site-out/site"
+(cd website && CGO_ENABLED=0 go build -trimpath -ldflags=-s -o "$HOME/site-out/server" ./server)
+echo "$new" > "$HOME/site-out/commit"
+echo "$new" > "$HOME/site-built"

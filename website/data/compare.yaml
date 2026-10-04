@@ -1,0 +1,191 @@
+# The matrix on the comparison page. Marks: one letter per column in order, y, p (partly), n or f (planned):
+#   juist | Tailscale Headscale NetBird Netmaker ZeroTier | Nebula Tinc rayfish EasyTier WireGuard
+sides:
+  central: {en: With a central server, de: Mit zentralem Server}
+  p2p: {en: Without one, de: Ohne zentralen Server}
+columns:
+  - {key: juist, name: juist}
+  - {key: tailscale, name: Tailscale, side: central}
+  - {key: headscale, name: Headscale, side: central}
+  - {key: netbird, name: NetBird, side: central}
+  - {key: netmaker, name: Netmaker, side: central}
+  - {key: zerotier, name: ZeroTier, side: central}
+  - {key: nebula, name: Nebula, side: p2p}
+  - {key: tinc, name: Tinc, side: p2p}
+  - {key: rayfish, name: rayfish, side: p2p}
+  - {key: shared-secret, name: EasyTier, side: p2p}
+  - {key: wireguard, name: WireGuard, side: p2p}
+groups:
+  - en: Design
+    de: Aufbau
+    rows:
+      - en: No central infrastructure
+        de: Keine zentrale Infrastruktur
+        marks: ynnnnnyypyy
+        notes:
+          rayfish:
+            en: By default n0's pkarr server and relays; both can be replaced.
+            de: Standardmäßig der pkarr-Server und die Relays von n0; beides lässt sich ersetzen.
+      - en: No server to trust
+        de: Kein Server, dem man vertrauen muss
+        marks: ypnnnnyyyyy
+        notes:
+          tailscale:
+            en: With Tailnet Lock, devices accept only keys you have signed; removal still goes through the server.
+            de: Mit Tailnet Lock nehmen Geräte nur Schlüssel an, die du signiert hast; Entfernen läuft weiter über den Server.
+      - en: Tunnels over WireGuard
+        de: Tunnel über WireGuard
+        marks: yyyyynnnnpy
+        notes:
+          shared-secret:
+            en: One transport among several.
+            de: Eines von mehreren Transportprotokollen.
+  - en: Membership
+    de: Mitgliedschaft
+    rows:
+      - en: Changes take several admins if wanted
+        de: Änderungen brauchen mehrere Admins wenn gewünscht
+        marks: ynnnnnnnnnn
+      - en: Removing a device leaves the others untouched
+        de: Ein Gerät entfernen, ohne die übrigen anzufassen
+        marks: yyyyyynnynn
+      - en: A removal spreads without a server
+        de: Eine Entfernung verbreitet sich ohne Server
+        marks: ynnnnpnnpnn
+        notes:
+          zerotier:
+            en: The controller issues the removal, the devices pass it on.
+            de: Der Controller stellt die Entfernung aus, die Geräte geben sie weiter.
+          rayfish:
+            en: Through a pkarr server, and from the coordinator over the mesh.
+            de: Über einen pkarr-Server, und vom Coordinator über das Mesh.
+  - en: Connections
+    de: Verbindungen
+    rows:
+      - en: Through NAT on both sides
+        de: Durch NAT auf beiden Seiten
+        marks: yyyyyyyyyyn
+      - en: A relay where direct fails
+        de: Ein Relay, wo es direkt nicht geht
+        marks: yyyyyyyyyyn
+      - en: Runs without its maker's servers
+        de: Läuft ohne Server des Herstellers
+        marks: ynyyynyyyyy
+        notes:
+          headscale:
+            en: With a DERP relay of your own.
+            de: Mit einem eigenen DERP-Relay.
+          zerotier:
+            en: Its root servers are run by ZeroTier.
+            de: Die Root-Server betreibt ZeroTier.
+      - en: Tunnels in the kernel
+        de: Tunnel im Kernel
+        marks: fnnyynnnnny
+  - en: Routing and names
+    de: Verkehr und Namen
+    rows:
+      - en: Exit nodes
+        de: Exit-Nodes
+        marks: yyyyyppppyp
+        notes:
+          zerotier:
+            en: Allow Default by hand on every client, NAT by hand on the gateway.
+            de: Allow Default von Hand auf jedem Client, NAT von Hand auf dem Gateway.
+          nebula:
+            en: By hand in every device's configuration.
+            de: Von Hand in der Konfiguration jedes Geräts.
+          tinc:
+            en: Routes by hand on every device.
+            de: Routen von Hand auf jedem Gerät.
+          rayfish:
+            en: IPv6 only.
+            de: Nur IPv6.
+          wireguard:
+            en: By hand on every device.
+            de: Von Hand auf jedem Gerät.
+      - en: Subnet routers
+        de: Subnet-Router
+        marks: yyyyypppnyp
+        notes:
+          zerotier:
+            en: Forwarding and NAT by hand on the router.
+            de: Weiterleitung und NAT von Hand auf dem Router.
+          nebula:
+            en: By hand in every device's configuration.
+            de: Von Hand in der Konfiguration jedes Geräts.
+          tinc:
+            en: Routes by hand on every device.
+            de: Routen von Hand auf jedem Gerät.
+          wireguard:
+            en: By hand on every device.
+            de: Von Hand auf jedem Gerät.
+      - en: Names for every device
+        de: Namen für jedes Gerät
+        marks: yyyyynpnypn
+        notes:
+          juist:
+            en: On Linux with systemd-resolved.
+            de: Unter Linux mit systemd-resolved.
+          nebula:
+            en: Every device's resolver pointed at a lighthouse by hand.
+            de: Der Resolver jedes Geräts muss von Hand auf einen Lighthouse zeigen.
+          shared-secret:
+            en: By hand on every device.
+            de: Von Hand auf jedem Gerät.
+      - en: A public name pointed at a member
+        de: Ein öffentlicher Name, der auf ein Mitglied zeigt
+        marks: ynyynnnnnnn
+        notes:
+          juist:
+            en: On Linux with systemd-resolved.
+            de: Unter Linux mit systemd-resolved.
+      - en: Services published to the internet
+        de: Dienste im Internet veröffentlichen
+        marks: ypnynnnnnnn
+        notes:
+          tailscale:
+            en: Only names under ts.net, through Tailscale's servers.
+            de: Nur Namen unter ts.net, über die Server von Tailscale.
+          netbird:
+            en: In beta.
+            de: In der Beta.
+      - en: One device in several networks at once
+        de: Ein Gerät in mehreren Netzen zugleich
+        marks: ynnnyyyyyyy
+        notes:
+          zerotier:
+            en: On phones, one at a time.
+            de: Auf Handys nur eines zugleich.
+  - en: Everyday use
+    de: Im Alltag
+    rows:
+      - en: Access rules
+        de: Zugriffsregeln
+        marks: fyyyyyynyyn
+        notes:
+          rayfish:
+            en: Each device's own firewall, with rules the coordinator suggests.
+            de: Die eigene Firewall jedes Geräts, mit Regeln, die der Coordinator vorschlägt.
+      - en: Users, with sign-in through an identity provider
+        de: Benutzer, mit Anmeldung über einen Identitätsanbieter
+        marks: nyyyppnnnnn
+        notes:
+          netmaker:
+            en: In the paid edition.
+            de: In der kostenpflichtigen Edition.
+          zerotier:
+            en: In the paid plans.
+            de: In den bezahlten Tarifen.
+      - en: Windows, macOS, Android and iOS
+        de: Windows, macOS, Android und iOS
+        marks: fyyyyyypppy
+        notes:
+          tinc:
+            en: No Android or iOS.
+            de: Kein Android und iOS.
+          rayfish:
+            en: No iOS.
+            de: Kein iOS.
+          shared-secret:
+            en: No iOS.
+            de: Kein iOS.

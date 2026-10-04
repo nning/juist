@@ -184,6 +184,11 @@ stays cut off. The rules:
   a round forward at once.
 - A new announcement for an installed peer is probed at once, past the probe
   backoff, and a tunnel back up is synced at once.
+- A peer that answered is probed again only after 5 minutes where both ends
+  have a home relay, its answer standing meanwhile: a probe keeps magicsock
+  pinging the peer every 3 s for 45 s, so probing every check never lets a
+  tunnel go quiet. A relay brings it back by CallMeMaybe; without one, every
+  check probes, since that is what keeps the NAT mappings open.
 - A running device signs its announcement again every 5 minutes, and for
   each DHT publication, though nothing in it changed. The sequence number is
   the signer's clock, so a signature made after a peer's tunnel went down is

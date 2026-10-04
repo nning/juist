@@ -42,10 +42,22 @@ attention; every network, where it is in several. Any local user may run it.`}
 		return a.offlineStatus(n)
 	}
 	a.printStatus(st)
-	if st.Waiting > 0 && st.CanOperate {
+	a.adminNotes(st, false)
+	return nil
+}
+
+// adminNotes says what waits for an admin key in this keystore: changes for
+// its vote, and a network to upgrade; several names the network in the hint.
+func (a *app) adminNotes(st *ipc.Status, several bool) {
+	if !st.CanOperate {
+		return
+	}
+	if st.Waiting > 0 {
 		a.waitingNote()
 	}
-	return nil
+	if st.InNetwork && !st.NotMember && st.SchemaAlarm == "" && st.Schema < types.CurrentSchema {
+		a.upgradeNote(several)
+	}
 }
 
 // offlineStatus reports what the log says when no daemon is there to ask.
@@ -321,6 +333,15 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	if t := subnetSummary(s.Subnets, paint); t != "" {
 		field("Subnets", "%s", t)
 	}
+	if t := publishSummary(s.Publish, paint); t != "" {
+		field("Published", "%s", t)
+	}
+	if t := ingressSummary(s.Ingress, paint); t != "" {
+		field("Ingress", "%s", t)
+	}
+	if t := shareSummary(s.Share, paint); t != "" {
+		field("Sharing", "%s", t)
+	}
 	if s.Names != nil {
 		text, hint := namesSummary(s.Names, paint)
 		field("Names", "%s", text)
@@ -415,6 +436,16 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	}
 	if s.DataPlaneError != "" {
 		note(lineWarn, "data plane refused the device set: %s", s.DataPlaneError)
+	}
+	if t := s.Terminator; t != nil && t.Running {
+		for _, n := range t.NoCert {
+			note(lineWarn, "no certificate for %s: %s", n.Name, n.Why)
+		}
+		if on := t.HTTPHeldOn(); len(on) > 0 {
+			note(lineWarn, "another program holds port 80 on %s, so http:// to a name served here reaches it, "+
+				"not a redirect to https", strings.Join(on, ", "))
+			note(lineHint, "have it listen on the addresses it serves alone, not on every one")
+		}
 	}
 	if s.Unreachable > 0 && s.Peers > 0 {
 		what := count(s.Unreachable, "device")

@@ -10,6 +10,9 @@ if [ "$1" = remove ]; then
 		done
 	fi
 	/usr/lib/juist/firewall.sh revoke
+	# An ingress stops, and its ports close.
+	/usr/lib/juist/ingress.sh off
+	/usr/lib/juist/serve.sh off
 	# Forwarding for an exit node goes back as it was, and nothing a
 	# juistd that failed left refusing the internet stays.
 	/usr/lib/juist/exit-node.sh off

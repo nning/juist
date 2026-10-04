@@ -1,6 +1,7 @@
 package log
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -350,5 +351,73 @@ func TestConcurrentRemovalsDoNotStopTheNetwork(t *testing.T) {
 		if len(o.Unrevoked) > 0 || o.Conflict != "" {
 			t.Fatalf("removing one device twice at once was reported: %+v", o)
 		}
+	}
+}
+
+// Fork choice is a function of the records alone. Here a beats c, its branch
+// removing c's signer, while on hash c beats b and b beats a: whichever order
+// the store returns the siblings in, every node settles on one head.
+func TestForkChoiceIgnoresTheStoreOrder(t *testing.T) {
+	h := newHarness(t, 3, 1)
+	b := h.auth.Builder()
+	rename := func(name string, by types.PrivateIdentity) types.AUM {
+		aum, err := b.RenameNetwork(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := aum.Sign(by); err != nil {
+			t.Fatal(err)
+		}
+		return aum
+	}
+	var a, bb, c types.AUM
+	for i := 0; ; i++ {
+		a = rename(fmt.Sprintf("a%d", i), h.admins[0])
+		bb = rename(fmt.Sprintf("b%d", i), h.admins[1])
+		c = rename(fmt.Sprintf("c%d", i), h.admins[2])
+		if c.Hash().Compare(bb.Hash()) < 0 && bb.Hash().Compare(a.Hash()) < 0 {
+			break
+		}
+	}
+	onA := h.fork()
+	if err := onA.Inform(a); err != nil {
+		t.Fatal(err)
+	}
+	removal, err := onA.Builder().RemoveAdminKey(h.admins[2].Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removal.Sign(h.admins[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	heads := map[types.Hash][]string{}
+	for _, order := range [][]types.AUM{{a, bb, c}, {a, c, bb}, {bb, a, c}, {bb, c, a}, {c, a, bb}, {c, bb, a}} {
+		st := h.copyStorage()
+		auth, err := Open(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range order {
+			if err := auth.Inform(r); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := auth.Inform(removal); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := Open(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := ""
+		for _, r := range order {
+			names += *r.Network
+		}
+		heads[auth.Head()] = append(heads[auth.Head()], names+" informed")
+		heads[reopened.Head()] = append(heads[reopened.Head()], names+" reopened")
+	}
+	if len(heads) != 1 {
+		t.Fatalf("one record set, %d heads: %v", len(heads), heads)
 	}
 }

@@ -42,7 +42,11 @@ func upstreamSource(t *testing.T, rel string) string {
 	if err != nil {
 		t.Fatalf("locating the tailscale.com module: %v", err)
 	}
-	b, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(out)), rel))
+	dir := strings.TrimSpace(string(out))
+	if dir == "" {
+		t.Skip("reads the pinned module's source, which a test run outside the module has not")
+	}
+	b, err := os.ReadFile(filepath.Join(dir, rel))
 	if err != nil {
 		t.Fatalf("reading upstream %s: %v", rel, err)
 	}
@@ -53,7 +57,7 @@ func upstreamSource(t *testing.T, rel string) string {
 // was kept.
 func filtered(format string, args ...any) bool {
 	m := &tsManager{}
-	m.stunRegions.Store(&map[int]bool{65534: true})
+	m.stunRegions.Store(&map[tailcfg.DERPRegionID]bool{65534: true})
 	kept := false
 	m.withoutSTUNHomeNoise(func(string, ...any) { kept = true })(format, args...)
 	return kept

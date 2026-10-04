@@ -163,7 +163,10 @@ sharing a coffee-shop LAN are mutually invisible rather than merely mutually
 incompatible.
 
 A beacon announces under its newest name and **answers to every name in its
-keyring**, and queries as well as announces on each interval. Announcing alone
+keyring**, and queries as well as announces each time. The gap doubles from
+2 s to a minute while nothing changes, since every member's radio receives
+every datagram, and starts over when the announcement, the epoch or the
+interface set changes; a node arriving queries at once. Announcing alone
 is not enough — a node announces under one name, so a member an epoch behind
 would never hear it — and asking alone is not enough either, since a node
 arriving on the LAN should not have to wait for someone else's question.
@@ -195,7 +198,7 @@ whichever one the route table prefers. `TestRealMulticastSocket` is the
 regression guard, and skips where multicast is genuinely unavailable.
 
 **The per-node rate limit is not an aggregate one.** Each member queries as well
-as announces every interval, and a query is answered by every member holding
+as announces at each gap, and a query is answered by every member holding
 that name, so traffic on one segment is O(n²) datagrams per interval — bounded
 per sender, unbounded in total. At 25–100 devices, and rarely all on one
 segment, that is noise. It stops being noise well before `MaxNodes`, and the fix
@@ -302,10 +305,10 @@ Gossip inside the tunnel, relays, DHT cold start, real NAT traversal and
 endpoint-record persistence all arrived at M3b; see
 [10-connectivity-notes.md](10-connectivity-notes.md). What is still open:
 
-- **The per-pair ML-KEM PSK.** Settled at M3b and deferred past v1; see
-  [07-embedding-notes.md](07-embedding-notes.md). M2's "PSK/epoch rotation" is
-  the epoch half of it, and remains all of it: every membership change rotates
-  the group secret, and the daemon follows it.
+- **The per-pair ML-KEM PSK.** M11a; see [05-roadmap.md](05-roadmap.md). M2's
+  "PSK/epoch rotation" is the epoch half of it, and remains all of it until
+  then: every membership change rotates the group secret, and the daemon
+  follows it.
 
 ## Verification
 

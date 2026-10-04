@@ -31,24 +31,29 @@ func prefixes(s ...string) []netip.Prefix {
 	return out
 }
 
-// A subnet an admin grants, and its router's operator agrees to route, every
+// A subnet an admin adds, and its router's operator agrees to route, every
 // member reaches through the router, less what it reaches by routes of its
-// own; its owner may turn subnets off, and a revoke ends it.
-func TestASubnetFromGrantToRevoke(t *testing.T) {
+// own; its owner may turn subnets off, removing it ends it, and grant and
+// revoke, which take roles alone, say where one goes.
+func TestASubnetFromAddToRemove(t *testing.T) {
 	exitNodesHere(t)
 	t.Parallel()
 	laptop, vps := homeAndVPS(t)
-	mustContain(t, laptop.mustRun("subnet"), "no subnets", "juist grant DEVICE 192.168.1.0/24")
+	mustContain(t, laptop.mustRun("subnet"), "no subnets", "juist subnet add DEVICE 192.168.1.0/24")
 
 	for _, tc := range []struct {
 		args []string
 		want []string
 	}{
-		{[]string{"grant", "vps", "192.168.50.1/24"}, []string{"192.168.50.1/24 has host bits set", "hint: 192.168.50.0/24"}},
-		{[]string{"grant", "vps", "0.0.0.0/0"}, []string{"0.0.0.0/0 is the internet", "hint: juist grant vps exit"}},
-		{[]string{"grant", "vps", "198.18.4.0/24"}, []string{"overlaps the network's own addresses"}},
-		{[]string{"grant", "vps", "192.168/16"}, []string{`"192.168/16" is no prefix`}},
-		{[]string{"revoke", "vps", "10.0.0.0/8"}, []string{"vps does not route 10.0.0.0/8", "hint: juist subnet"}},
+		{[]string{"subnet", "add", "vps", "192.168.50.1/24"}, []string{"192.168.50.1/24 has host bits set", "hint: 192.168.50.0/24"}},
+		{[]string{"subnet", "add", "vps", "0.0.0.0/0"}, []string{"0.0.0.0/0 is the internet", "hint: juist grant vps exit"}},
+		{[]string{"subnet", "add", "vps", "198.18.4.0/24"}, []string{"overlaps the network's own addresses"}},
+		{[]string{"subnet", "add", "vps", "192.168/16"}, []string{`"192.168/16" is no prefix`}},
+		{[]string{"subnet", "add", "vps", "192.168.50.1"}, []string{`"192.168.50.1" is no prefix`}},
+		{[]string{"subnet", "remove", "vps", "10.0.0.0/8"}, []string{"vps does not route 10.0.0.0/8", "hint: juist subnet"}},
+		{[]string{"grant", "vps", "192.168.50.0/24"}, []string{"192.168.50.0/24 is a subnet, not a role",
+			"hint: juist subnet add vps 192.168.50.0/24"}},
+		{[]string{"revoke", "vps", "relay", "192.168.50.0/24"}, []string{"hint: juist subnet remove vps 192.168.50.0/24"}},
 	} {
 		out, err := laptop.run(tc.args...)
 		if err == nil {
@@ -58,15 +63,15 @@ func TestASubnetFromGrantToRevoke(t *testing.T) {
 		mustContain(t, out+err.Error(), tc.want...)
 	}
 
-	mustContain(t, laptop.mustRun("grant", "vps", "192.168.50.0/24"), "vps: routes 192.168.50.0/24")
-	mustContain(t, laptop.mustRun("grant", "vps", "192.168.50.0/24"), "vps: unchanged")
-	out, err := laptop.run("grant", "laptop", "192.168.0.0/16")
+	mustContain(t, laptop.mustRun("subnet", "add", "vps", "192.168.50.0/24"), "vps: routes 192.168.50.0/24")
+	mustContain(t, laptop.mustRun("subnet", "add", "vps", "192.168.50.0/24"), "vps: unchanged")
+	out, err := laptop.run("subnet", "add", "laptop", "192.168.0.0/16")
 	if err == nil || !strings.Contains(err.Error(), "overlaps 192.168.50.0/24, which vps routes") {
 		t.Fatalf("a second router for the same addresses (%v):\n%s", err, out)
 	}
-	mustContain(t, laptop.mustRun("grant", "laptop", "203.0.114.0/24"),
+	mustContain(t, laptop.mustRun("subnet", "add", "laptop", "203.0.114.0/24"),
 		"warning: 203.0.114.0/24 is public space: every member reaches it through laptop")
-	laptop.mustRun("revoke", "laptop", "203.0.114.0/24")
+	laptop.mustRun("subnet", "rm", "laptop", "203.0.114.0/24")
 
 	eventually(t, "laptop lists the subnet, not routed yet", func() bool {
 		out, err := laptop.run("subnet")
@@ -117,7 +122,7 @@ func TestASubnetFromGrantToRevoke(t *testing.T) {
 		t.Fatal("subnets on, laptop routes none")
 	}
 
-	mustContain(t, laptop.mustRun("revoke", "vps", "192.168.50.0/24"), "vps: no roles")
+	mustContain(t, laptop.mustRun("subnet", "remove", "vps", "192.168.50.0/24"), "vps: no roles")
 	if s := laptop.mgr.onlyPeerSubnets(t); len(s) != 0 {
 		t.Fatalf("after the revoke, laptop routes %v", s)
 	}

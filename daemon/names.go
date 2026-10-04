@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/nning/juist/internal/dnsfwd"
 	"github.com/nning/juist/internal/names"
@@ -98,21 +99,28 @@ func defaultNamesServer(dev string) NamesServer {
 var noZone = &names.Zone{}
 
 // A heldOverride is a public name the log points at target, whose name is
-// device.
+// device; published, where the network publishes it under its domain.
 type heldOverride struct {
-	name   string
-	target types.Identity
-	device string
+	name      string
+	target    types.Identity
+	device    string
+	published bool
 }
 
 // namesZone is what the host resolves of state's network: each member by its
 // name as a DNS label under the network's, and none of a label two members'
-// names share, or where the network's name is no label; and, where accepted
-// and fresh at now, the public names pointed at members, each answered while
-// the view stays fresh and its member is reachable. It also returns every
-// public name the log holds, and until when the view is fresh.
-func (d *Daemon) namesZone(state *log.State, fresh log.Freshness, accepted bool, now int64) (*names.Zone, []heldOverride, int64) {
-	z := &names.Zone{Members: map[string][]netip.Addr{}, Overrides: map[string]names.Override{}}
+// names share, or where the network's name is no label; and, where fresh at
+// now, the public names pointed at members, where accepted too, each
+// answered while the view stays fresh and its member is reachable. It also
+// returns every public name the log holds, and until when the view is fresh.
+//
+// The network's own domain goes to juistd whole on every member: a name
+// published there on port 443, or shared, is resolved to its member where
+// serves says the member serves it, which members then reach directly, with
+// the same certificate; the rest goes on upstream.
+func (d *Daemon) namesZone(state *log.State, fresh log.Freshness, accepted bool, now int64,
+	serves func(types.Identity) bool) (*names.Zone, []heldOverride, int64) {
+	z := &names.Zone{Members: map[string][]netip.Addr{}, Overrides: map[string]names.Override{}, Public: state.Domain()}
 	if network := names.Label(state.Network()); network != "" {
 		z.Domain = network + "." + types.NamesTLD
 	}
@@ -121,6 +129,15 @@ func (d *Daemon) namesZone(state *log.State, fresh log.Freshness, accepted bool,
 	for _, n := range state.Nodes() {
 		for _, name := range n.Names {
 			held = append(held, heldOverride{name: name, target: n.Identity, device: n.Name})
+		}
+		for _, p := range n.Published {
+			// A service behind --proxy may want the ingress's header.
+			if p.Port == 443 && !p.Proxy && state.Domain() != "" && serves(n.Identity) {
+				held = append(held, heldOverride{name: p.Under(state.Domain()), target: n.Identity, device: n.Name, published: true})
+			}
+		}
+		if name, err := shareName(state, n.Identity); err == nil && d.sharing(n.Identity, time.Unix(now, 0)) {
+			held = append(held, heldOverride{name: name, target: n.Identity, device: n.Name, published: true})
 		}
 		l := names.Label(n.Name)
 		if l == "" || z.Domain == "" {
@@ -139,11 +156,14 @@ func (d *Daemon) namesZone(state *log.State, fresh log.Freshness, accepted bool,
 	if fresh.Enforced() {
 		until = fresh.Until
 	}
-	if !accepted || !fresh.Fresh(now) {
+	if !fresh.Fresh(now) {
 		return z, held, until
 	}
 	targets := map[string]heldOverride{}
 	for _, h := range held {
+		if !accepted && !h.published {
+			continue
+		}
 		n, _ := state.Node(h.target)
 		z.Overrides[h.name] = names.Override{Addrs: memberAddrs(state, n), Target: h.target.String()}
 		targets[h.target.String()] = h
@@ -202,7 +222,8 @@ func uplinkResolvers() []netip.AddrPort {
 	return out
 }
 
-// routedDomains are the domains z has a word on, its own first, each once.
+// routedDomains are the domains z has a word on, its own first, then the
+// network's public domain, each once.
 func routedDomains(z *names.Zone) []string {
 	if z == nil {
 		return nil
@@ -211,8 +232,14 @@ func routedDomains(z *names.Zone) []string {
 	if z.Domain != "" {
 		out = append(out, z.Domain)
 	}
+	if z.Public != "" {
+		out = append(out, z.Public)
+	}
 	var others []string
 	for n := range z.Overrides {
+		if z.Public != "" && (n == z.Public || strings.HasSuffix(n, "."+z.Public)) {
+			continue
+		}
 		others = append(others, n)
 	}
 	slices.Sort(others)

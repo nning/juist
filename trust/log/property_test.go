@@ -212,8 +212,8 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	var err error
 	var devices []types.PrivateIdentity
 
-	op := g.rng.IntN(19)
-	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14, 18}, op) {
+	op := g.rng.IntN(22)
+	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14, 18, 20, 21}, op) {
 		return types.AUM{}, nil, false
 	}
 	switch op {
@@ -309,6 +309,14 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	case 18: // point names at a member, one another may hold, or withdraw them
 		names := [][]string{{"mx.example.org"}, {"imap.example.org", "mx.example.org"}, nil}
 		aum, err = b.SetNodeNames(victim.Identity, names[g.rng.IntN(len(names))])
+	case 19: // set the domain, to one a name points into, or withdraw it
+		aum, err = b.SetDomain([]string{"pub.example.org", "example.org", ""}[g.rng.IntN(3)])
+	case 20: // publish names on a member, one another may publish, or withdraw them
+		names := [][]types.PublishedName{{{Label: "mx", Port: 443}}, {{Label: "immich", Port: 2283, Proxy: true}}, nil}
+		aum, err = b.SetPublished(victim.Identity, names[g.rng.IntN(len(names))])
+	case 21: // rename a member, sometimes to a name another holds
+		names := []string{"laptop", "Laptop", members[g.rng.IntN(len(members))].Name}
+		aum, err = b.RenameNode(victim.Identity, names[g.rng.IntN(len(names))])
 	}
 	if err != nil || !g.sign(&aum, base, devices) {
 		return types.AUM{}, nil, false

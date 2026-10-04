@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"time"
 
 	"github.com/nning/juist/types"
 )
@@ -164,6 +165,14 @@ type Endpoint struct {
 	// on its host holds the range: it carries no member's IPv4.
 	NoV4 bool `cbor:"11,keyasint,omitempty"`
 
+	// Published says the node serves the names the log publishes on it, as
+	// its operator agreed; which ones comes from the log alone.
+	Published bool `cbor:"12,keyasint,omitempty"`
+
+	// Share is what the node publishes under its own name, as the publish
+	// role lets it; an ingress takes it from a member holding the role alone.
+	Share *Share `cbor:"13,keyasint,omitempty"`
+
 	// Sig is the author's signature over the rest of the record. CBOR key 23
 	// for the same reason [types.AUM] uses it: the highest key that still
 	// encodes in one byte, leaving room for payload fields below it.
@@ -175,8 +184,19 @@ type Endpoint struct {
 func (e *Endpoint) SameAs(o *Endpoint) bool {
 	return e.Identity == o.Identity && e.Disco == o.Disco && slices.Equal(e.Addrs, o.Addrs) &&
 		e.GossipPort == o.GossipPort && e.HomeRelay == o.HomeRelay && sameRelay(e.Relay, o.Relay) && e.Exit == o.Exit &&
-		e.Subnets == o.Subnets && e.DNS == o.DNS && e.NoV4 == o.NoV4
+		e.Subnets == o.Subnets && e.DNS == o.DNS && e.NoV4 == o.NoV4 && e.Published == o.Published &&
+		(e.Share == nil) == (o.Share == nil) && (e.Share == nil || *e.Share == *o.Share)
 }
+
+// A Share is the port of a node's overlay addresses its own name is reached
+// on, until Until, in Unix seconds.
+type Share struct {
+	Port  uint16 `cbor:"1,keyasint"`
+	Until int64  `cbor:"2,keyasint"`
+}
+
+// Live reports whether s is announced and not past at now.
+func (s *Share) Live(now time.Time) bool { return s != nil && now.Unix() < s.Until }
 
 func sameRelay(a, b *RelayInfo) bool {
 	if a == nil || b == nil {
@@ -267,6 +287,9 @@ func (e *Endpoint) StaticValidate() error {
 	if len(e.Addrs) > MaxEndpointAddrs {
 		return fmt.Errorf("gossip: endpoint record for %v carries %d addresses, over the %d limit",
 			e.Identity.ShortString(), len(e.Addrs), MaxEndpointAddrs)
+	}
+	if e.Share != nil && (e.Share.Port == 0 || e.Share.Until <= 0) {
+		return fmt.Errorf("gossip: endpoint record for %v shares with no port or end", e.Identity.ShortString())
 	}
 	if e.Relay != nil {
 		if err := e.Relay.validate(); err != nil {

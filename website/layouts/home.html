@@ -1,0 +1,12 @@
+{{ define "main" }}
+<section class="hero">
+  {{ partialCached "chart.html" . }}
+  <div class="in">
+    <h1>{{ .Params.headline }}</h1>
+    <p class="lead">{{ .Params.lead }}</p>
+    <code class="install">make install</code>
+    <div class="links">{{ range .Params.links }}{{ if .page }}{{ with site.GetPage .page }}<a href="{{ .RelPermalink }}">{{ .LinkTitle }} →</a>{{ end }}{{ else }}<a href="#{{ .anchor }}">{{ .label }}</a>{{ end }}{{ end }}</div>
+  </div>
+</section>
+<div class="home-body">{{ .Content }}</div>
+{{ end }}

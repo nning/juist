@@ -1,12 +1,15 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/nning/juist/daemon"
 	"github.com/nning/juist/ipc"
 )
 
@@ -71,6 +74,62 @@ func TestSetOperator(t *testing.T) {
 	}
 	if _, err := d.run("set"); err == nil {
 		t.Fatal("set with nothing to set succeeded")
+	}
+}
+
+// A juistd given an invite joins by it once started, saying how, and one
+// already in a network ignores it.
+func TestAJuistdJoinsByTheInviteItWasGiven(t *testing.T) {
+	t.Parallel()
+	laptop := newDaemonDevice(t, nil)
+	laptop.mustRun("create", "home", "--device", "laptop")
+	inv := laptop.start("invite", "web", "--no-lan", "--port", "0", "--yes")
+	link := inv.waitFor(t, linkRE)[1]
+	var said syncBuffer
+	say := func(o *daemon.ServiceOptions) {
+		o.Say = func(format string, a ...any) { fmt.Fprintf(&said, format+"\n", a...) }
+	}
+	state, sock := filepath.Join(shortTempDir(t), "state"), filepath.Join(shortTempDir(t), "juistd.sock")
+	stop := startService(t, state, sock, nil, nil, say, func(o *daemon.ServiceOptions) { o.Join = link })
+	eventually(t, "the join", func() bool { return strings.Contains(said.String(), `joined "home" as web`) })
+	if out, err := inv.wait(t); err != nil {
+		t.Fatalf("invite: %v\n%s", err, out)
+	}
+	mustContain(t, laptop.mustRun("devices"), "web")
+	stop()
+	said = syncBuffer{}
+	startService(t, state, sock, nil, nil, say, func(o *daemon.ServiceOptions) { o.Join = "juist:AAAAAAAAAAAAAAAAAAAAAA@127.0.0.1:1" })
+	resp, err := ipc.Call(sock, ipc.Request{Command: ipc.CmdStatus})
+	if err != nil || !resp.Status.InNetwork || resp.Status.SelfName != "web" {
+		t.Fatalf("restarted with another invite: %+v, %v", resp.Status, err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if s := said.String(); s != "" {
+		t.Errorf("a juistd in a network tried to join again: %q", s)
+	}
+}
+
+// TestNamingTheOperatorAlreadyAppointedAsksNothing: "juist create -o ME" run
+// as ME, whom requireOperator just appointed with sudo, must not ask juistd
+// for the appointment again, which it refuses to anyone but root.
+func TestNamingTheOperatorAlreadyAppointedAsksNothing(t *testing.T) {
+	me, err := user.Current()
+	if err != nil || me.Uid == "0" {
+		t.Skip("needs a user other than root")
+	}
+	for _, name := range []string{me.Username, me.Uid} {
+		op, err := defaultOperator(optionalString{value: name, set: true}, &ipc.Status{Operator: me.Username})
+		if err != nil || op.set {
+			t.Fatalf("-o %s, already the operator: %+v, %v", name, op, err)
+		}
+	}
+	op, err := defaultOperator(optionalString{value: me.Username, set: true}, &ipc.Status{})
+	if err != nil || !op.set {
+		t.Fatalf("-o %s, no operator yet: %+v, %v", me.Username, op, err)
+	}
+	op, err = defaultOperator(optionalString{set: true}, &ipc.Status{})
+	if err != nil || op.set {
+		t.Fatalf(`-o "", no operator to clear: %+v, %v`, op, err)
 	}
 }
 

@@ -67,6 +67,9 @@ var kindRules = map[types.Kind]kindRule{
 
 	types.KindSetAdminRecipient: {types.SchemaSealing, "admin encryption keys", (*State).setAdminRecipient},
 	types.KindSetNodeNames:      {types.SchemaNames, "names", (*State).setNodeNames},
+	types.KindSetDomain:         {types.SchemaPublish, "a public domain", (*State).setDomain},
+	types.KindSetPublished:      {types.SchemaPublish, "published names", (*State).setPublished},
+	types.KindRenameNode:        {types.SchemaRenameNode, "renaming a device", (*State).renameNode},
 }
 
 // inEffectError is a record refused because what it does is done already,
@@ -85,8 +88,9 @@ func (s *State) clone() *State {
 		epochCommit: s.epochCommit,
 		schema:      s.schema,
 		vouchers:    s.vouchers,
-		v4Prefix:    s.v4Prefix,    // replaced, never mutated
-		v4Retiring:  s.v4Retiring,  // replaced, never mutated
+		v4Prefix:    s.v4Prefix,   // replaced, never mutated
+		v4Retiring:  s.v4Retiring, // replaced, never mutated
+		domain:      s.domain,
 		disablement: s.disablement, // never mutated after genesis
 		admins:      maps.Clone(s.admins),
 		nodes:       maps.Clone(s.nodes), // records are immutable once stored
@@ -213,6 +217,43 @@ func (next *State) setNodeNames(a *types.AUM, _ applyMode) error {
 	updated := cur.Clone()
 	updated.Names = slices.Clone(a.Names.Names)
 	// Held by no other member, which only state knows.
+	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+		return err
+	}
+	next.nodes[*a.Subject] = updated
+	return nil
+}
+
+func (next *State) setDomain(a *types.AUM, _ applyMode) error {
+	if *a.Domain == next.domain {
+		return inEffect(fmt.Errorf("log: the network's domain is %q already", next.domain))
+	}
+	ix := types.NewMemberIndex(next.genesisHash, len(next.nodes))
+	ix.SetDomain(*a.Domain)
+	for _, n := range next.Nodes() {
+		if len(n.Published) > 0 && *a.Domain == "" {
+			return fmt.Errorf("log: %v publishes names; withdraw them before the domain", n.Identity.ShortString())
+		}
+		// A published name under the new domain may be one pointed at a member.
+		if err := ix.Check(&n); err != nil {
+			return fmt.Errorf("log: %w", err)
+		}
+		ix.Add(&n)
+	}
+	next.domain = *a.Domain
+	return nil
+}
+
+func (next *State) setPublished(a *types.AUM, _ applyMode) error {
+	cur, err := next.member(*a.Subject)
+	if err != nil {
+		return err
+	}
+	if slices.Equal(cur.Published, a.Publish.Names) {
+		return inEffect(fmt.Errorf("log: %v publishes those names already", a.Subject.ShortString()))
+	}
+	updated := cur.Clone()
+	updated.Published = slices.Clone(a.Publish.Names)
 	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
 		return err
 	}
@@ -417,6 +458,32 @@ func (next *State) renameNetwork(a *types.AUM, _ applyMode) error {
 	return nil
 }
 
+// renameNode refuses a name another member's folds like, as a holder's: a
+// person chose it, and devices are named on the command line by it.
+func (next *State) renameNode(a *types.AUM, _ applyMode) error {
+	cur, err := next.member(*a.Subject)
+	if err != nil {
+		return err
+	}
+	name := *a.NodeName
+	if cur.Name == name {
+		return inEffect(fmt.Errorf("log: %v is named %q already", a.Subject.ShortString(), name))
+	}
+	for id, n := range next.nodes {
+		if id != *a.Subject && types.FoldName(n.Name) == types.FoldName(name) {
+			return fmt.Errorf("log: %v is named %q already", id.ShortString(), n.Name)
+		}
+	}
+	updated := cur.Clone()
+	updated.Name = name
+	// The share label follows the name.
+	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+		return err
+	}
+	next.nodes[*a.Subject] = updated
+	return nil
+}
+
 func (next *State) retireAddresses(_ *types.AUM, _ applyMode) error {
 	retired := next.v4Retiring != nil
 	next.v4Retiring = nil
@@ -615,10 +682,17 @@ func (s *State) checkNodeAdmissible(n *types.NodeRecord, excluding types.Identit
 	if err := n.ValidateInNetwork(s.ULA(), s.V4Ranges()); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
-	if len(n.Names) > 0 && s.schema < types.SchemaNames {
-		return fmt.Errorf("log: names need %v; the network is at %v", types.SchemaNames, s.schema)
+	if need, what := n.NeedsSchema(); s.schema < need {
+		return fmt.Errorf("log: %s needs %v; the network is at %v", what, need, s.schema)
+	}
+	if len(n.Published) > 0 && s.domain == "" {
+		return errors.New("log: the network has no domain to publish names under")
+	}
+	if err := n.ValidatePublishing(); err != nil {
+		return fmt.Errorf("log: %w", err)
 	}
 	others := types.NewMemberIndex(s.genesisHash, len(s.nodes))
+	others.SetDomain(s.domain)
 	for _, other := range s.nodes {
 		if other.Identity != excluding && other.Identity != n.Identity {
 			others.Add(other)

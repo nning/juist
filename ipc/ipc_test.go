@@ -1,6 +1,8 @@
 package ipc
 
 import (
+	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -36,8 +38,11 @@ func TestIPCMessageRoundTrip(t *testing.T) {
 func TestEachCommandTakesItsOwnFields(t *testing.T) {
 	on := true
 	base := map[Command]Request{
-		CmdNames:  {AcceptNames: &on},
-		CmdStatus: {}, CmdBootstrap: {}, CmdLog: {}, CmdSelf: {}, CmdUnstage: {}, CmdRotate: {}, CmdReset: {},
+		CmdNames:     {AcceptNames: &on},
+		CmdPublish:   {ServePublished: &on},
+		CmdPublished: {},
+		CmdServing:   {},
+		CmdStatus:    {}, CmdBootstrap: {}, CmdLog: {}, CmdSelf: {}, CmdUnstage: {}, CmdRotate: {}, CmdReset: {},
 		CmdWaiting:     {},
 		CmdExit:        {ExitOff: true},
 		CmdInform:      {Records: [][]byte{{1}}},
@@ -52,28 +57,29 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 		CmdStatus: {"Probe"}, CmdLog: {"Orphans"}, CmdRotate: {"Identity"}, CmdReset: {"Force"},
 		CmdInform: {"Records"}, CmdCreate: {"SetOperator"}, CmdJoin: {"Invite", "Name", "SetOperator"},
 		CmdSetOperator: {"SetOperator", "OperatorUID"}, CmdInvite: {"Offer"}, CmdInviteReply: {"Reply"},
-		CmdWaiting: {"Waiting"}, CmdExit: {"ExitOff"}, CmdNames: {"AcceptNames"},
+		CmdWaiting: {"Waiting"}, CmdExit: {"ExitOff"}, CmdNames: {"AcceptNames"}, CmdPublish: {"ServePublished"},
 	}
 	fields := map[string]func(*Request){
-		"Records":     func(r *Request) { r.Records = append(r.Records, []byte{2}) },
-		"Invite":      func(r *Request) { r.Invite = "3-other-code-here" },
-		"Name":        func(r *Request) { r.Name = "phone" },
-		"SetOperator": func(r *Request) { r.SetOperator = true },
-		"OperatorUID": func(r *Request) { r.OperatorUID = 1000 },
-		"Identity":    func(r *Request) { r.Identity = true },
-		"Offer":       func(r *Request) { r.Offer = &InviteOffer{Expires: 60} },
-		"Reply":       func(r *Request) { r.Reply = &InviteReply{Refused: "no"} },
-		"Orphans":     func(r *Request) { r.Orphans = true },
-		"Probe":       func(r *Request) { r.Probe = true },
-		"Force":       func(r *Request) { r.Force = true },
-		"Waiting":     func(r *Request) { r.Waiting = append(r.Waiting, []byte{3}) },
-		"ExitOff":     func(r *Request) { r.ExitOff = true },
-		"ExitNode":    func(r *Request) { r.ExitNode = types.Identity{1} },
-		"AcceptNames": func(r *Request) { r.AcceptNames = &on },
+		"Records":        func(r *Request) { r.Records = append(r.Records, []byte{2}) },
+		"Invite":         func(r *Request) { r.Invite = "3-other-code-here" },
+		"Name":           func(r *Request) { r.Name = "phone" },
+		"SetOperator":    func(r *Request) { r.SetOperator = true },
+		"OperatorUID":    func(r *Request) { r.OperatorUID = 1000 },
+		"Identity":       func(r *Request) { r.Identity = true },
+		"Offer":          func(r *Request) { r.Offer = &InviteOffer{Expires: 60} },
+		"Reply":          func(r *Request) { r.Reply = &InviteReply{Refused: "no"} },
+		"Orphans":        func(r *Request) { r.Orphans = true },
+		"Probe":          func(r *Request) { r.Probe = true },
+		"Force":          func(r *Request) { r.Force = true },
+		"Waiting":        func(r *Request) { r.Waiting = append(r.Waiting, []byte{3}) },
+		"ExitOff":        func(r *Request) { r.ExitOff = true },
+		"ExitNode":       func(r *Request) { r.ExitNode = types.Identity{1} },
+		"AcceptNames":    func(r *Request) { r.AcceptNames = &on },
+		"ServePublished": func(r *Request) { r.ServePublished = &on },
 	}
 	for cmd, req := range base {
 		req.Command = cmd
-		valid := cmd >= CmdStatus && cmd <= CmdExit || cmd == CmdNames
+		valid := cmd >= CmdStatus && cmd <= CmdExit || cmd == CmdNames || cmd == CmdPublish || cmd == CmdPublished || cmd == CmdServing
 		if err := req.validate(); (err == nil) != valid {
 			t.Errorf("%v alone: %v", cmd, err)
 		}
@@ -166,5 +172,133 @@ func TestASubnetRequestSetsOneThing(t *testing.T) {
 		if err := tc.req.validate(); (err == nil) != tc.want {
 			t.Errorf("%+v: %v, want valid %v", tc.req, err, tc.want)
 		}
+	}
+}
+
+// An ingress reads what is published from a reply carrying more than it
+// knows, as from a juistd upgraded before it.
+func TestTheIngressReadsAReplyOfANewerJuistd(t *testing.T) {
+	type newer struct {
+		Response
+		Later string `cbor:"99,keyasint"`
+	}
+	want := Published{Names: []PublishedTarget{{Name: "immich.pub.example.org", Port: 443,
+		Addrs: []netip.Addr{netip.MustParseAddr("198.18.0.2")}}}}
+	b, err := encMode.Marshal(newer{Response: Response{Published: &want, Status: &Status{}}, Later: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodePublished(b)
+	if err != nil || !reflect.DeepEqual(*got, want) {
+		t.Fatalf("read %+v, %v", got, err)
+	}
+	if _, err := DecodeResponse(b); err == nil {
+		t.Error("the strict decoder took the newer reply; the test proves nothing")
+	}
+	b, _ = encMode.Marshal(Response{Err: "the ingress may ask what is published\x1b[2J"})
+	if _, err := DecodePublished(b); err == nil || strings.Contains(err.Error(), "\x1b") {
+		t.Errorf("an error reply read as %v", err)
+	}
+}
+
+// A publish request says where to send names on only while serving, each
+// once, sorted, as one label to one HOST:PORT; it takes labels away alone.
+func TestAPublishRequestNamesWhereTo(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		to   []ServeTo
+		on   *bool
+		want bool
+	}{
+		{[]ServeTo{{"immich", "127.0.0.1:2283"}, {"photos", "[::1]:80"}}, &on, true},
+		{[]ServeTo{{"immich", "immich-server:2283"}}, &on, true},
+		{[]ServeTo{{"immich", "127.0.0.1:2283"}}, &off, false},
+		{[]ServeTo{{"photos", "127.0.0.1:1"}, {"immich", "127.0.0.1:2"}}, &on, false},
+		{[]ServeTo{{"immich", "127.0.0.1:1"}, {"immich", "127.0.0.1:2"}}, &on, false},
+		{[]ServeTo{{"Immich", "127.0.0.1:2283"}}, &on, false},
+		{[]ServeTo{{"immich", "127.0.0.1"}}, &on, false},
+		{[]ServeTo{{"immich", ":2283"}}, &on, false},
+		{[]ServeTo{{"immich", "127.0.0.1:0"}}, &on, false},
+		{[]ServeTo{{"immich", "a b:1"}}, &on, false},
+		{[]ServeTo{{"status", "status-page"}}, &on, true},
+		{[]ServeTo{{"status", "status-page:all"}}, &on, true},
+		{[]ServeTo{{"status", "status-page:everything"}}, &on, false},
+		{[]ServeTo{{"status", "status-page:"}}, &on, false},
+		{[]ServeTo{{"status", "status-pages"}}, &on, false},
+	} {
+		r := Request{Command: CmdPublish, ServePublished: tc.on, ServeTo: tc.to}
+		if err := r.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v", tc.to, err)
+		}
+	}
+	for _, tc := range []struct {
+		r    Request
+		want bool
+	}{
+		{Request{Unserve: []string{"docs", "immich"}}, true},
+		{Request{}, false},
+		{Request{Unserve: []string{"immich", "docs"}}, false},
+		{Request{Unserve: []string{"docs", "docs"}}, false},
+		{Request{Unserve: []string{"docs.pub.example.org"}}, false},
+		{Request{Unserve: []string{"docs"}, ServePublished: &on}, false},
+		{Request{Unserve: []string{"docs"}, ServePublished: &on, ServeTo: []ServeTo{{"immich", "127.0.0.1:1"}}}, false},
+	} {
+		tc.r.Command = CmdPublish
+		if err := tc.r.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v", tc.r, err)
+		}
+	}
+}
+
+// A serving request carries a terminator's account only where it fits a CAA
+// record as it is, and nothing else.
+func TestAServingRequestCarriesAnAccountThatFitsCAA(t *testing.T) {
+	ok := []string{"letsencrypt.org"}
+	for _, tc := range []struct {
+		a    *ACMEAccount
+		want bool
+	}{
+		{nil, true},
+		{&ACMEAccount{URI: "https://acme-v02.api.letsencrypt.org/acme/acct/123", Issuers: ok}, true},
+		{&ACMEAccount{URI: "https://ca.example/acct/1"}, true},
+		{&ACMEAccount{URI: "http://ca.example/acct/1", Issuers: ok}, false},
+		{&ACMEAccount{URI: `https://ca.example/a"; issue "evil.example`, Issuers: ok}, false},
+		{&ACMEAccount{URI: "https://ca.example/a;b", Issuers: ok}, false},
+		{&ACMEAccount{URI: "https://ca.example/a b", Issuers: ok}, false},
+		{&ACMEAccount{URI: "https://ca.example/a", Issuers: []string{"Evil.example"}}, false},
+		{&ACMEAccount{URI: "https://ca.example/a", Issuers: []string{"a;b"}}, false},
+		{&ACMEAccount{URI: "https://ca.example/a", Issuers: []string{""}}, false},
+	} {
+		r := Request{Command: CmdServing, Account: tc.a}
+		if err := r.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v", tc.a, err)
+		}
+	}
+	r := Request{Command: CmdServing, Name: "x"}
+	if r.validate() == nil {
+		t.Error("a serving request carried a name")
+	}
+	for _, tc := range []struct {
+		n    []NoCert
+		want bool
+	}{
+		{[]NoCert{{Name: "a.example", Why: strings.Repeat("x", MaxNoCertWhy)}, {Name: "b.example"}}, true},
+		{[]NoCert{{Name: "a.example", Why: strings.Repeat("x", MaxNoCertWhy+1)}}, false},
+		{[]NoCert{{Name: "b.example"}, {Name: "a.example"}}, false},
+		{[]NoCert{{Name: ""}}, false},
+	} {
+		r := Request{Command: CmdServing, NoCert: tc.n}
+		if err := r.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v", tc.n, err)
+		}
+	}
+	if r := (Request{Command: CmdStatus, NoCert: []NoCert{{Name: "a.example"}}}); r.validate() == nil {
+		t.Error("a status request carried names without a certificate")
+	}
+	a := &ACMEAccount{URI: "https://ca.example/acct/1", Issuers: []string{"ca.example", "other.example"}}
+	want := []string{`immich.pub.example.org. CAA 0 issue "ca.example; accounturi=https://ca.example/acct/1"`,
+		`immich.pub.example.org. CAA 0 issue "other.example; accounturi=https://ca.example/acct/1"`}
+	if got := a.CAA("immich.pub.example.org"); !slices.Equal(got, want) {
+		t.Errorf("the records are %q", got)
 	}
 }

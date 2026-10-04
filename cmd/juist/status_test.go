@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -12,10 +13,48 @@ import (
 	"time"
 
 	"github.com/nning/juist/ipc"
+	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/trust/store"
 	"github.com/nning/juist/types"
 )
 
 func noPaint(_, s string) string { return s }
+
+// A name the terminator has no certificate for is warned of, with why, while
+// it runs.
+func TestTheStatusWarnsOfANameWithoutACertificate(t *testing.T) {
+	t.Parallel()
+	st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2}}
+	st.Terminator = &ipc.Terminator{Running: true, NoCert: []ipc.NoCert{{Name: "1.juist.dev", Why: "no viable challenge type found"}}}
+	want := line{kind: lineWarn, text: "no certificate for 1.juist.dev: no viable challenge type found"}
+	if v := statusOf(st, testNow(), noPaint); !slices.Contains(v.notes, want) {
+		t.Errorf("notes %v lack %v", v.notes, want)
+	}
+	st.Terminator.Running = false
+	if v := statusOf(st, testNow(), noPaint); slices.Contains(v.notes, want) {
+		t.Errorf("a terminator not running is still said to lack a certificate: %v", v.notes)
+	}
+}
+
+// Another program holding port 80 where names are served is warned of: http://
+// to them reaches it, not the terminator's redirect.
+func TestTheStatusWarnsOfPort80HeldByAnother(t *testing.T) {
+	t.Parallel()
+	st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2}}
+	st.Terminator = &ipc.Terminator{Running: true, Listening: []string{"10.11.11.13:443"},
+		Unbound: []string{"10.11.11.13:80", "[fd90::1]:80", "10.11.11.13:8443"}}
+	want := line{kind: lineWarn, text: "another program holds port 80 on 10.11.11.13, fd90::1, so http:// to a name " +
+		"served here reaches it, not a redirect to https"}
+	if v := statusOf(st, testNow(), noPaint); !slices.Contains(v.notes, want) {
+		t.Errorf("notes %v lack %v", v.notes, want)
+	}
+	st.Terminator.Unbound = []string{"10.11.11.13:8443"}
+	for _, l := range statusOf(st, testNow(), noPaint).notes {
+		if strings.Contains(l.text, "port 80") {
+			t.Errorf("warned of port 80 held by none: %v", l)
+		}
+	}
+}
 
 // The status's notes are worked out from the report alone, and each warning
 // comes with its hint. An alarm already explains the silence a firewall would.
@@ -437,5 +476,61 @@ func TestStatusNamesTheDevicesNotYetMoved(t *testing.T) {
 	st.Unmoved = nil
 	if head := render(statusOf(st, testNow(), noPaint).head); strings.Contains(head, "old addresses") {
 		t.Fatalf("a status with nothing to follow speaks of a renumbering:\n%s", head)
+	}
+}
+
+// An admin's status says the network is below this build's schema, until it
+// is upgraded; a keystore without its admin keys is not told.
+func TestStatusTellsAnAdminToUpgradeTheLog(t *testing.T) {
+	t.Parallel()
+	d := &daemonDevice{cli: newCLI(t), state: filepath.Join(shortTempDir(t), "state"),
+		sock: filepath.Join(shortTempDir(t), "juistd.sock"), mgr: &peersManager{}}
+	stop := startService(t, d.state, d.sock, nil, d.mgr)
+	d.mustRun("create", "home", "--device", "laptop")
+	if out := d.mustRun("status"); strings.Contains(out, "log upgrade") {
+		t.Fatalf("a network at this build's schema is to be upgraded:\n%s", out)
+	}
+	stop()
+
+	cur := openLog(t, &cli{t: t, home: d.state}).State()
+	genesis, err := log.Genesis("home", 1, cur.Admins(), []types.Hash{{1}}, cur.Nodes(), sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	genesis.State.Schema = types.CurrentSchema - 1
+	if p, ok := cur.V4Prefix(); ok {
+		genesis.State.V4Prefix = &p
+	}
+	keys, err := d.home2().adminKeys()
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("admin keys: %v, %v", keys, err)
+	}
+	if err := genesis.Sign(keys[0]); err != nil {
+		t.Fatal(err)
+	}
+	// The keystore pins the network it saw; this is another genesis.
+	for _, dir := range []string{filepath.Join(d.state, logDir), filepath.Join(d.home, "networks")} {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := store.Open(filepath.Join(d.state, logDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Create(st, genesis); err != nil {
+		t.Fatal(err)
+	}
+	startService(t, d.state, d.sock, nil, d.mgr)
+
+	mustContain(t, d.mustRun("status"), fmt.Sprintf("the network is at %v, this version at %v",
+		types.CurrentSchema-1, types.CurrentSchema), "hint: once every device runs this version: juist log upgrade")
+	other := &daemonDevice{cli: newCLI(t), state: d.state, sock: d.sock}
+	if out := other.mustRun("status"); strings.Contains(out, "log upgrade") {
+		t.Errorf("a keystore without an admin key is told to upgrade:\n%s", out)
+	}
+	d.mustRun("log", "upgrade", "--yes")
+	if out := d.mustRun("status"); strings.Contains(out, "log upgrade") {
+		t.Errorf("the hint outlives the upgrade:\n%s", out)
 	}
 }

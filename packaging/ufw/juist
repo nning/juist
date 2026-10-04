@@ -12,3 +12,8 @@ ports=41645/tcp|41645/udp
 title=juist invites
 description=Invites taken directly, as a code on the LAN, while "juist invite" runs.
 ports=41642/tcp
+
+[juist-ingress]
+title=juist ingress
+description=The names members publish, over TLS, and HTTP redirected to it, on the network's ingress.
+ports=80,443/tcp

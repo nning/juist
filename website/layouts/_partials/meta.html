@@ -1,0 +1,1 @@
+{{- with .Params.status }}<div class="meta">{{ range $i, $s := . }}{{ if $i }} · {{ end }}{{ $s }}{{ end }}</div>{{ else }}<div class="meta"></div>{{ end -}}

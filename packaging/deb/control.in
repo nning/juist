@@ -4,6 +4,7 @@ Architecture: @ARCH@
 Maintainer: juist developers <noreply@github.com>
 Installed-Size: @SIZE@
 Depends: iptables, systemd
+Recommends: polkitd
 Section: net
 Priority: optional
 Homepage: https://github.com/nning/juist

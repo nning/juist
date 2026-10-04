@@ -26,17 +26,19 @@ const (
 	// MaxRoutesPerNode caps a node's advertised-route grant.
 	MaxRoutesPerNode = 64
 
-	// MaxRolesPerNode caps a node's role set. There are three roles; the
+	// MaxRolesPerNode caps a node's role set. There are six roles; the
 	// limit only has to stop repetition, which is already rejected as
 	// non-canonical.
 	MaxRolesPerNode = 8
 
 	// MaxNameLen caps the human-readable label on a node or admin key, in
-	// bytes. Names are cosmetic: nothing in the trust layer reads them.
+	// bytes. The trust layer reads a node's only for the label the publish
+	// role holds.
 	MaxNameLen = 64
 
-	// MaxRecordSize caps a record's encoded size. The largest legitimate one
-	// is a checkpoint at MaxNodes members, about 1.3 MiB.
+	// MaxRecordSize caps a record's encoded size. The largest is a checkpoint
+	// at MaxNodes members, which names and published names at their caps push
+	// past it (docs/05-roadmap.md, M12).
 	MaxRecordSize = 4 << 20
 
 	// maxArrayElements bounds any CBOR array during decoding. It has to

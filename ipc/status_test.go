@@ -66,7 +66,7 @@ func TestAFullStatusDecodes(t *testing.T) {
 
 // statusGolden is a full status as the CLI reads it. Adding a field changes it;
 // nothing else may.
-const statusGolden = "b8410158200100000000000000000000000000000000000000000000000000000000000000028141ff" +
+const statusGolden = "b8460158200100000000000000000000000000000000000000000000000000000000000000028141ff" +
 	"0358200300000000000000000000000000000000000000000000000000000000000000046273340558" +
 	"2005000000000000000000000000000000000000000000000000000000000000000606070708080909" +
 	"0a637331300b637331310c0c0d0d0e0e0f0f10f511f5121213637331391463733230151516f5171718" +
@@ -76,12 +76,13 @@ const statusGolden = "b841015820010000000000000000000000000000000000000000000000
 	"182c63733434182d81a101582000000000000000000000000000000000000000000000000000000000" +
 	"00000000182e8163733436182ff5183081637334381831816373343918328163733530183381637335" +
 	"311834f51835637335331836f5183718371838f518391839183a183a183ba301000441ff0541ff183c" +
-	"63733630183d8141ff183e183e183fa1015820" +
-	"0000000000000000000000000000000000000000000000000000000000000000" + "1840a01841a0"
+	"63733630183d8141ff183e183e183fa101582000000000000000000000000000000000000000000000" +
+	"000000000000000000001840a01841a01842a01843a01844a102601845a018461846"
 
 // operatorOnly are the status fields a caller who may not operate is not
 // shown. Every other field must be copied by [Status.ForReader].
-var operatorOnly = map[string]bool{"Devices": true, "Unmoved": true, "Waiting": true}
+var operatorOnly = map[string]bool{"Devices": true, "Unmoved": true, "Waiting": true, "Publish": true, "Ingress": true,
+	"Share": true, "Terminator": true}
 
 // A field added to Status is shown to every local user or kept from them by
 // decision, not by default.
@@ -114,13 +115,14 @@ func TestStatusWireFormatIsUnchanged(t *testing.T) {
 	}
 }
 
-// A reader sees how names resolve, not which devices public names point at,
-// as it sees no device list.
+// A reader sees how names resolve, the public domain included, not which
+// devices public names point at, as it sees no device list.
 func TestAReaderSeesNoPublicNames(t *testing.T) {
-	st := Status{Derived: Derived{Names: &Names{Domain: "home.juist", Resolved: true, Accepted: true,
-		Overrides: []NameOverride{{Name: "mx.example.net", Device: "mailer"}}}}}
+	st := Status{Derived: Derived{Names: &Names{Domain: "home.juist", Public: "pub.example.org", Resolved: true,
+		Accepted: true, Overrides: []NameOverride{{Name: "mx.example.net", Device: "mailer"}}}}}
 	got := st.ForReader().Names
-	if got == nil || got.Domain != "home.juist" || !got.Resolved || !got.Accepted || got.Overrides != nil {
+	if got == nil || got.Domain != "home.juist" || got.Public != "pub.example.org" || !got.Resolved || !got.Accepted ||
+		got.Overrides != nil {
 		t.Fatalf("a reader sees %+v", got)
 	}
 	if len(st.Names.Overrides) != 1 {

@@ -45,8 +45,19 @@ const (
 	maxOperatorsPerUser = 4 // of those, per uid
 	maxReaderClients    = 4 // callers who may only read the status
 	maxClientsPerUser   = 2 // of those, per uid
+	maxIngressClients   = 2 // the ingress and the terminator, in a pool of their own
+	maxIngressPerUser   = 1 // so that neither crowds out the other
 	readerTimeout       = time.Second
 	maxReaderRequest    = 4 << 10
+)
+
+// A tier is what a caller may do, which decides the pool that admits it.
+type tier uint8
+
+const (
+	tierReader   tier = iota // the status
+	tierIngress              // what is published, and nothing else
+	tierOperator             // everything
 )
 
 // A pool admits up to size callers at once, each uid at most perUser of them.
@@ -96,13 +107,13 @@ type handler func(ctx context.Context, req *ipc.Request, who caller, events func
 	replies <-chan ipc.Request) ipc.Response
 
 type ipcServer struct {
-	h          handler
-	privileged func(caller) bool
-	ln         net.Listener
-	path       string
-	logf       func(string, ...any)
+	h      handler
+	tierOf func(caller) tier
+	ln     net.Listener
+	path   string
+	logf   func(string, ...any)
 
-	operators, readers *pool
+	operators, readers, ingress *pool
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -122,7 +133,7 @@ func socketMode() fs.FileMode {
 // newIPCServer creates the socket. The caller must hold the state directory's
 // lock: unlinking a socket path another daemon is listening on succeeds, so
 // without it a second daemon would silently take over the first's socket.
-func newIPCServer(path string, h handler, privileged func(caller) bool, logf func(string, ...any)) (*ipcServer, error) {
+func newIPCServer(path string, h handler, tierOf func(caller) tier, logf func(string, ...any)) (*ipcServer, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("daemon: creating %s: %w", dir, err)
@@ -144,14 +155,15 @@ func newIPCServer(path string, h handler, privileged func(caller) bool, logf fun
 		return nil, fmt.Errorf("daemon: setting the mode of %s: %w", path, err)
 	}
 	return &ipcServer{
-		h:          h,
-		privileged: privileged,
-		ln:         ln,
-		path:       path,
-		logf:       logf,
-		closed:     make(chan struct{}),
-		operators:  newPool(maxIPCClients, maxOperatorsPerUser),
-		readers:    newPool(maxReaderClients, maxClientsPerUser),
+		h:         h,
+		tierOf:    tierOf,
+		ln:        ln,
+		path:      path,
+		logf:      logf,
+		closed:    make(chan struct{}),
+		operators: newPool(maxIPCClients, maxOperatorsPerUser),
+		readers:   newPool(maxReaderClients, maxClientsPerUser),
+		ingress:   newPool(maxIngressClients, maxIngressPerUser),
 	}, nil
 }
 
@@ -217,8 +229,8 @@ func (s *ipcServer) serve() {
 			c.Close()
 			continue
 		}
-		privileged := s.privileged(who)
-		release, ok := s.admit(who, privileged)
+		t := s.tierOf(who)
+		release, ok := s.admit(who, t)
 		if !ok {
 			c.Close()
 			continue
@@ -232,7 +244,7 @@ func (s *ipcServer) serve() {
 			defer s.waits.done()
 			defer release()
 			defer c.Close()
-			if err := s.handle(c, who, privileged); err != nil {
+			if err := s.handle(c, who, t); err != nil {
 				s.logf("daemon: ipc: %v", err)
 			}
 		}()
@@ -250,16 +262,19 @@ func (s *ipcServer) close() {
 }
 
 // admit takes a slot for a caller, returning how to give it back.
-func (s *ipcServer) admit(who caller, privileged bool) (func(), bool) {
-	if privileged {
+func (s *ipcServer) admit(who caller, t tier) (func(), bool) {
+	switch t {
+	case tierOperator:
 		return s.operators.take(who.uid)
+	case tierIngress:
+		return s.ingress.take(who.uid)
 	}
 	return s.readers.take(who.uid)
 }
 
-func (s *ipcServer) handle(c net.Conn, who caller, privileged bool) error {
+func (s *ipcServer) handle(c net.Conn, who caller, t tier) error {
 	timeout, limit := ipcRequestTimeout, uint32(ipc.MaxRequest)
-	if !privileged {
+	if t != tierOperator {
 		timeout, limit = readerTimeout, maxReaderRequest
 	}
 	if err := c.SetDeadline(time.Now().Add(timeout)); err != nil {

@@ -10,7 +10,7 @@
 
 %{!?ver: %global ver 0}
 %{!?rel: %global rel 1}
-%{!?license_tag: %global license_tag LicenseRef-unspecified}
+%{!?license_tag: %global license_tag BSD-3-Clause}
 
 Name:           juist
 Version:        %{ver}
@@ -40,6 +40,8 @@ BuildRequires:  systemd-rpm-macros
 # `Provides: /usr/sbin/...` that iptables-nft carries covers iptables only —
 # `Requires: /usr/sbin/ip6tables` fails to resolve on Fedora 42 and later.
 Requires:       iptables
+# Runs the rule that lets juistd route the network's DNS through resolved.
+Recommends:     polkit
 
 %description
 juist is a Tailscale-like mesh VPN with a WireGuard data plane and no central
@@ -59,13 +61,18 @@ install -D -m 0755 juist  %{buildroot}%{_bindir}/juist
 install -D -m 0755 juistd %{buildroot}%{_bindir}/juistd
 install -D -m 0644 juistd.service %{buildroot}%{_unitdir}/juistd.service
 install -D -m 0644 juistd@.service %{buildroot}%{_unitdir}/juistd@.service
+install -D -m 0644 juist-ingress.service %{buildroot}%{_unitdir}/juist-ingress.service
+install -D -m 0644 juist-serve.service %{buildroot}%{_unitdir}/juist-serve.service
+install -D -m 0644 juist-serve.path %{buildroot}%{_unitdir}/juist-serve.path
 install -D -m 0644 %{SOURCE1} %{buildroot}%{_sysusersdir}/%{name}.conf
 install -D -m 0755 firewall.sh %{buildroot}%{_prefix}/lib/juist/firewall.sh
 install -D -m 0755 exit-node.sh %{buildroot}%{_prefix}/lib/juist/exit-node.sh
+install -D -m 0755 ingress.sh %{buildroot}%{_prefix}/lib/juist/ingress.sh
+install -D -m 0755 serve.sh %{buildroot}%{_prefix}/lib/juist/serve.sh
 install -D -m 0644 juist.rules %{buildroot}%{_datadir}/polkit-1/rules.d/60-juist.rules
 install -D -m 0644 juist.1 %{buildroot}%{_mandir}/man1/juist.1
 install -D -m 0644 juistd.8 %{buildroot}%{_mandir}/man8/juistd.8
-for f in juist juist-relay juist-invite; do
+for f in juist juist-relay juist-invite juist-ingress; do
 	install -D -m 0644 $f.xml %{buildroot}%{_prefix}/lib/firewalld/services/$f.xml
 done
 install -D -m 0644 juist.bash %{buildroot}%{_datadir}/bash-completion/completions/juist
@@ -76,7 +83,7 @@ install -d -m 0700 %{buildroot}%{_sharedstatedir}/%{name}
 # The units in the repository name the path a manual install uses; a packaged
 # binary lives in %{_bindir}. The grep is the guard: a rewrite that silently
 # missed would ship a unit pointing at a file this package does not install.
-for u in juistd.service juistd@.service; do
+for u in juistd.service juistd@.service juist-ingress.service juist-serve.service; do
 	sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=%{_bindir}/juistd |' %{buildroot}%{_unitdir}/$u
 	grep -q '^ExecStart=%{_bindir}/juistd ' %{buildroot}%{_unitdir}/$u
 done
@@ -92,6 +99,11 @@ done
 if [ $1 -eq 1 ]; then
 	%{_prefix}/lib/juist/firewall.sh allow
 	systemctl enable --now juistd.service >/dev/null 2>&1 || :
+	systemctl enable --now juist-serve.path >/dev/null 2>&1 || :
+elif systemctl is-enabled --quiet juist-serve.service 2>/dev/null; then
+	# A terminator enabled before juist-serve.path came is started by it.
+	systemctl disable --quiet juist-serve.service >/dev/null 2>&1 || :
+	systemctl enable --now juist-serve.path >/dev/null 2>&1 || :
 fi
 
 %preun
@@ -103,6 +115,9 @@ if [ $1 -eq 0 ]; then
 		systemctl --no-reload disable --now juistd@juist$i.service >/dev/null 2>&1 || :
 	done
 	%{_prefix}/lib/juist/firewall.sh revoke
+	# An ingress stops, and its ports close.
+	%{_prefix}/lib/juist/ingress.sh off
+	%{_prefix}/lib/juist/serve.sh off
 	# Forwarding for an exit node goes back as it was, and nothing a
 	# juistd that failed left refusing the internet stays.
 	%{_prefix}/lib/juist/exit-node.sh off
@@ -111,6 +126,11 @@ fi
 
 %postun
 %systemd_postun_with_restart juistd.service
+for u in juist-ingress juist-serve; do
+	if systemctl is-active --quiet $u.service 2>/dev/null; then
+		%systemd_postun_with_restart $u.service
+	fi
+done
 # The instances that run take the upgraded juistd too, restarted the way the
 # default is: marked here, restarted once systemd has reloaded the units.
 for i in 1 2 3 4 5 6 7 8 9; do
@@ -122,22 +142,35 @@ done
 if [ $1 -eq 0 ] && firewall-cmd --state >/dev/null 2>&1; then
 	firewall-cmd --reload >/dev/null 2>&1 || :
 fi
+# Kept on purpose, and said: the terminator's ACME account, which CAA
+# records may name.
+if [ $1 -eq 0 ] && [ -d /var/lib/juist-serve ]; then
+	echo "juist: kept /var/lib/juist-serve, the terminator's ACME account, which CAA records may name" >&2
+fi
 
 %files
 %doc README.md
+%license LICENSE THIRD_PARTY_LICENSES
 %{_bindir}/juist
 %{_bindir}/juistd
 %{_unitdir}/juistd.service
 %{_unitdir}/juistd@.service
+%{_unitdir}/juist-ingress.service
+%{_unitdir}/juist-serve.service
+%{_unitdir}/juist-serve.path
 %{_sysusersdir}/%{name}.conf
+%dir %{_prefix}/lib/juist
 %{_prefix}/lib/juist/firewall.sh
 %{_prefix}/lib/juist/exit-node.sh
+%{_prefix}/lib/juist/ingress.sh
+%{_prefix}/lib/juist/serve.sh
 %{_datadir}/polkit-1/rules.d/60-juist.rules
 %{_mandir}/man1/juist.1*
 %{_mandir}/man8/juistd.8*
 %{_prefix}/lib/firewalld/services/juist.xml
 %{_prefix}/lib/firewalld/services/juist-relay.xml
 %{_prefix}/lib/firewalld/services/juist-invite.xml
+%{_prefix}/lib/firewalld/services/juist-ingress.xml
 %{_datadir}/bash-completion/completions/juist
 %{_datadir}/zsh/site-functions/_juist
 %{_datadir}/fish/vendor_completions.d/juist.fish

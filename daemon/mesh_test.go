@@ -167,12 +167,21 @@ func (m *mesh) startOn(t *testing.T, i int, dev *device, auth *log.Authority, st
 		t.Fatalf("starting node %d: %v", i, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go d.Run(ctx)
-	t.Cleanup(func() {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.Run(ctx)
+	}()
+	// Run done, so that a node restarted on auth shares it with no old run.
+	stop := func() {
 		cancel()
+		<-done
+	}
+	t.Cleanup(func() {
+		stop()
 		d.Close()
 	})
-	return &meshNode{dev: dev, d: d, auth: auth, stop: cancel}
+	return &meshNode{dev: dev, d: d, auth: auth, stop: stop}
 }
 
 // waitFor polls until cond holds or the deadline passes, returning how long it

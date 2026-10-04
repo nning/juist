@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/netip"
@@ -29,8 +30,10 @@ import (
 	"github.com/nning/juist/discovery/dht"
 	"github.com/nning/juist/discovery/mdns"
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/firewalld"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/internal/names"
+	"github.com/nning/juist/internal/netstack"
 	"github.com/nning/juist/internal/resolved"
 	"github.com/nning/juist/relay"
 	"github.com/nning/juist/trust/log"
@@ -157,6 +160,12 @@ type Options struct {
 	// nil. Zero picks one: the port travels in the signed announcement.
 	GossipPort uint16
 
+	// Netstack runs the overlay on a network stack in this process instead
+	// of a device of the host's: what reaches the overlay addresses reaches
+	// this process alone, which listens there and dials from there. For a
+	// service member, which needs no TUN, root or capability.
+	Netstack bool
+
 	// Discovery configures LAN discovery; the daemon fills in the keyring and
 	// the callbacks. Nil uses the real multicast group.
 	Discovery *mdns.Options
@@ -207,6 +216,12 @@ type Options struct {
 	ServeSubnets bool
 	SubnetsOff   bool
 
+	// ServePublished says the operator agreed to serve the names the log
+	// publishes on this device, and ServeTo where those go, by label, whose
+	// TLS juist ends; [Daemon.SetPublishConsent] changes them.
+	ServePublished bool
+	ServeTo        map[string]string
+
 	// AcceptNames says the owner agreed that this device resolves the
 	// public names the network points at members to them;
 	// [Daemon.SetAcceptNames] changes it.
@@ -243,6 +258,11 @@ type Options struct {
 	// after an admin device last vouched for it. Zero uses
 	// [DefaultFreshnessTTL].
 	FreshnessTTL time.Duration
+
+	// TerminatorWanted, where set, is a file kept while this device needs
+	// its terminator, for systemd to start it by, which is then told when
+	// it may stop.
+	TerminatorWanted string
 
 	// LeaseInterval is how often this node vouches, if it is an admin
 	// device. Zero uses [DefaultLeaseInterval].
@@ -307,6 +327,8 @@ type Daemon struct {
 	onAddrsMoved func()
 	movedOnce    sync.Once
 	keyringPath  string
+	// terminatorWanted is [Options.TerminatorWanted].
+	terminatorWanted string
 
 	session      *Session
 	discoPrivate [32]byte
@@ -314,6 +336,7 @@ type Daemon struct {
 	wgPublic     types.WGKey
 	gossipPort   uint16
 	overlayOnly  bool           // log sync through the tunnel alone
+	stack        *netstack.Net  // the overlay's network stack, nil on a device
 	startAddrs   []netip.Prefix // this device's overlay addresses as the mesh started
 	tunName      string
 
@@ -362,6 +385,7 @@ type Daemon struct {
 	probeMu     sync.Mutex
 	probeMisses map[types.Identity]int // checks in a row each peer missed
 	unanswered  map[types.Identity]int // probes in a row a peer left unanswered
+	answered    map[types.Identity]probeAnswer
 
 	// leaseMu guards leases, the newest lease held per signer, and
 	// leaseSaveMu serializes writing them out.
@@ -429,8 +453,12 @@ type Daemon struct {
 	subnetConsent  bool
 	subnetsOff     bool
 	servingSubnets bool
-	subnetStatus   ipc.Subnets
-	acceptNames    bool // [Options.AcceptNames]
+	// servingPublished is whether this device serves what is published on
+	// it, which its announcement says.
+	servingPublished bool
+	subnetStatus     ipc.Subnets
+	acceptNames      bool // [Options.AcceptNames]
+	pub              publishing
 	// dnsPort is the port this device answers members' DNS on, zero for
 	// none, which its announcement says.
 	dnsPort uint16
@@ -541,52 +569,54 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	d := &Daemon{
-		authority:      opts.Authority,
-		storage:        opts.Storage,
-		identity:       opts.Identity,
-		recipient:      opts.Recipient,
-		self:           self,
-		ula:            state.ULA(),
-		endpoints:      gossip.NewCache(),
-		keyring:        keyring.New(),
-		syncEvery:      cmp.Or(opts.SyncInterval, DefaultSyncInterval),
-		reachEvery:     reachEvery,
-		greetAfter:     defaultGreetAfter,
-		reachDelay:     cmp.Or(opts.ReachDelay, DefaultReachDelay),
-		pathSettle:     pathSettle,
-		firewalled:     firewalled,
-		reconcileEvery: cmp.Or(opts.ReconcileInterval, DefaultReconcileInterval),
-		clock:          opts.Clock,
-		logf:           opts.Logf,
-		dirty:          make(chan struct{}, 1),
-		recheck:        make(chan struct{}, 1),
-		syncing:        make(chan struct{}, 1),
-		closed:         make(chan struct{}),
-		peerIDs:        map[types.WGKey]uint64{},
-		everMember:     map[types.Identity]bool{},
-		cachePath:      opts.EndpointCachePath,
-		relayPort:      opts.RelayPort,
-		portFallback:   opts.PortFallback,
-		noRelay:        opts.DisableRelay,
-		noV4:           opts.NoV4,
-		relayMembers:   map[types.WGKey]bool{},
-		relayHosts:     map[types.Identity]bool{},
-		leases:         map[types.Identity]types.Lease{},
-		leasePath:      opts.LeasePath,
-		waitingPath:    opts.WaitingPath,
-		onAddrsMoved:   opts.OnAddrsMoved,
-		exitChoice:     opts.Exit,
-		serveConsent:   opts.ServeExit,
-		subnetConsent:  opts.ServeSubnets,
-		subnetsOff:     opts.SubnetsOff,
-		acceptNames:    opts.AcceptNames,
-		onExitMoved:    opts.OnExitMoved,
-		userEgress:     egressUserOf(opts.EgressUser),
-		waiting:        map[types.Hash]heldChange{},
-		keyringPath:    opts.KeyringPath,
-		ttl:            cmp.Or(opts.FreshnessTTL, DefaultFreshnessTTL),
-		leaseEvery:     cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
+		authority:        opts.Authority,
+		storage:          opts.Storage,
+		identity:         opts.Identity,
+		recipient:        opts.Recipient,
+		self:             self,
+		ula:              state.ULA(),
+		endpoints:        gossip.NewCache(),
+		keyring:          keyring.New(),
+		syncEvery:        cmp.Or(opts.SyncInterval, DefaultSyncInterval),
+		reachEvery:       reachEvery,
+		greetAfter:       defaultGreetAfter,
+		reachDelay:       cmp.Or(opts.ReachDelay, DefaultReachDelay),
+		pathSettle:       pathSettle,
+		firewalled:       firewalld.Blocks,
+		reconcileEvery:   cmp.Or(opts.ReconcileInterval, DefaultReconcileInterval),
+		clock:            opts.Clock,
+		logf:             opts.Logf,
+		dirty:            make(chan struct{}, 1),
+		recheck:          make(chan struct{}, 1),
+		syncing:          make(chan struct{}, 1),
+		closed:           make(chan struct{}),
+		peerIDs:          map[types.WGKey]uint64{},
+		everMember:       map[types.Identity]bool{},
+		cachePath:        opts.EndpointCachePath,
+		relayPort:        opts.RelayPort,
+		portFallback:     opts.PortFallback,
+		noRelay:          opts.DisableRelay,
+		noV4:             opts.NoV4,
+		relayMembers:     map[types.WGKey]bool{},
+		relayHosts:       map[types.Identity]bool{},
+		leases:           map[types.Identity]types.Lease{},
+		leasePath:        opts.LeasePath,
+		waitingPath:      opts.WaitingPath,
+		onAddrsMoved:     opts.OnAddrsMoved,
+		exitChoice:       opts.Exit,
+		serveConsent:     opts.ServeExit,
+		subnetConsent:    opts.ServeSubnets,
+		subnetsOff:       opts.SubnetsOff,
+		acceptNames:      opts.AcceptNames,
+		onExitMoved:      opts.OnExitMoved,
+		userEgress:       egressUserOf(opts.EgressUser),
+		waiting:          map[types.Hash]heldChange{},
+		keyringPath:      opts.KeyringPath,
+		terminatorWanted: opts.TerminatorWanted,
+		ttl:              cmp.Or(opts.FreshnessTTL, DefaultFreshnessTTL),
+		leaseEvery:       cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
 	}
+	d.pub.consent, d.pub.to = opts.ServePublished, maps.Clone(opts.ServeTo)
 	// The addresses are those of this moment: past a renumbering's deadline
 	// they change, and the service restarts the mesh on them.
 	now := d.now().Unix()
@@ -596,6 +626,9 @@ func New(opts Options) (*Daemon, error) {
 	if d.logf == nil {
 		d.logf = func(string, ...any) {}
 	}
+	d.pub.mu.Lock()
+	d.flagTerminatorLocked()
+	d.pub.mu.Unlock()
 
 	wgPub, err := wgPublicOf(opts.WireGuard)
 	if err != nil {
@@ -619,6 +652,9 @@ func New(opts Options) (*Daemon, error) {
 	connect := opts.Connect
 	if connect == nil {
 		connect = conn.New
+	}
+	if opts.Netstack {
+		connect = d.onNetstack(connect)
 	}
 	connOpts := conn.Options{
 		Self: conn.Self{
@@ -654,7 +690,7 @@ func New(opts Options) (*Daemon, error) {
 	// bound to the overlay addresses and reachable from no other network.
 	// Without one there is no overlay to bind, as in tests and the one-machine
 	// demo, and it listens on the underlay.
-	d.overlayOnly, d.tunName = opts.TunName != "", opts.TunName
+	d.overlayOnly, d.tunName = opts.TunName != "" || opts.Netstack, opts.TunName
 	d.hostDNS, d.startDNS, d.resolvConf = opts.HostDNS, opts.ServeDNS, opts.ResolvConf
 	d.strictRP6 = opts.StrictRP6
 	if opts.Plumber != nil && d.hostDNS == nil {
@@ -691,7 +727,7 @@ func New(opts Options) (*Daemon, error) {
 		CatchUp:      &gossip.CatchUpKeys{Identity: opts.Identity, Recipient: opts.Recipient},
 		Announce:     d.announcement,
 		Listener:     ln,
-		Dial:         opts.GossipDial,
+		Dial:         d.gossipDial(opts.GossipDial),
 		OverlayAddrs: d.overlayGossipAddrs,
 		OverlayOnly:  d.overlayOnly,
 		OnRecords:    d.MarkDirty,
@@ -813,7 +849,12 @@ func (d *Daemon) listenGossip(opts Options, overlay []netip.Prefix) (net.Listene
 		return opts.GossipListener, nil
 	}
 	listen := func(port uint16) (net.Listener, error) { return net.Listen("tcp", fmt.Sprintf(":%d", port)) }
-	if d.overlayOnly {
+	switch {
+	case d.stack != nil:
+		listen = func(port uint16) (net.Listener, error) {
+			return listenEach(func(ap netip.AddrPort) (net.Listener, error) { return d.stack.ListenTCPAddrPort(ap) }, overlay, port)
+		}
+	case d.overlayOnly:
 		listen = func(port uint16) (net.Listener, error) { return listenOverlay(overlay, port) }
 	}
 	ln, err := onPortOrAny(d, opts.GossipPort, syscall.EADDRINUSE, "TCP", listen)

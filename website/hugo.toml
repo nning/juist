@@ -1,0 +1,44 @@
+baseURL = "/"
+title = "juist"
+defaultContentLanguage = "en"
+defaultContentLanguageInSubdir = true
+disableKinds = ["taxonomy", "term", "rss"]
+enableRobotsTXT = true
+refLinksErrorLevel = "ERROR"
+
+[params]
+repo = "https://github.com/nning/juist"
+
+[languages.en]
+contentDir = "content/en"
+label = "English"
+locale = "en"
+weight = 1
+
+[languages.de]
+contentDir = "content/de"
+label = "Deutsch"
+locale = "de"
+weight = 2
+
+[markup.highlight]
+noClasses = false
+lineNos = false
+
+[markup.goldmark.parser.attribute]
+block = true
+
+[markup.tableOfContents]
+startLevel = 2
+endLevel = 2
+
+[minify]
+minifyOutput = true
+
+[[module.mounts]]
+source = "assets"
+target = "assets"
+
+[[module.mounts]]
+source = "../design"
+target = "assets/design"

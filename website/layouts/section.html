@@ -1,0 +1,21 @@
+{{ define "main" }}
+<div class="docs">
+  {{ partial "sidebar.html" . }}
+  <article class="content">
+    <h1>{{ .Title }}</h1>
+    {{ with .Params.lead }}<p class="lead">{{ . | markdownify }}</p>{{ end }}
+    <div class="meta"></div>
+    <div class="prose">
+      {{ .Content }}
+      {{- range hugo.Data.nav }}
+        {{- $pages := slice }}
+        {{- range .items }}{{ with site.GetPage . }}{{ $pages = $pages | append . }}{{ end }}{{ end }}
+        {{- if $pages }}
+        <h2>{{ i18n .group }}</h2>
+        <dl class="index">{{ range $pages }}<dt><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></dt><dd>{{ .Description }}</dd>{{ end }}</dl>
+        {{- end }}
+      {{- end }}
+    </div>
+  </article>
+</div>
+{{ end }}

@@ -9,7 +9,6 @@ import (
 
 	anacrolix "github.com/anacrolix/dht/v2"
 	"github.com/anacrolix/dht/v2/bep44"
-	"github.com/anacrolix/dht/v2/exts/getput"
 	alog "github.com/anacrolix/log"
 	"github.com/anacrolix/torrent/bencode"
 	"golang.org/x/time/rate"
@@ -98,9 +97,10 @@ func resolveAll(hostPorts []string) ([]anacrolix.Addr, error) {
 	return out, nil
 }
 
-func storeKey(seed [32]byte) (ed25519.PrivateKey, bep44.Target) {
+func storeKey(seed [32]byte) (ed25519.PrivateKey, [32]byte, bep44.Target) {
 	priv := ed25519.NewKeyFromSeed(seed[:])
-	return priv, bep44.MakeMutableTarget([32]byte(priv.Public().(ed25519.PublicKey)), nil)
+	pub := [32]byte(priv.Public().(ed25519.PublicKey))
+	return priv, pub, bep44.MakeMutableTarget(pub, nil)
 }
 
 // Put stores value at seed's address.
@@ -108,28 +108,27 @@ func (s *Store) Put(ctx context.Context, seed [32]byte, value []byte) error {
 	if len(value) > MaxValueSize {
 		return fmt.Errorf("dht: a %d-byte value is over BEP 44's %d-byte limit", len(value), MaxValueSize)
 	}
-	priv, target := storeKey(seed)
+	priv, pub, target := storeKey(seed)
 	ctx, cancel := operation(ctx)
 	defer cancel()
-	_, err := getput.Put(ctx, target, s.srv, nil, func(seq int64) bep44.Put {
-		put := bep44.Put{V: value, K: (*[32]byte)([]byte(priv.Public().(ed25519.PublicKey))), Seq: seq + 1}
-		put.Sign(priv)
-		return put
+	return put(ctx, s.srv, pub, target, func(seq int64) bep44.Put {
+		p := bep44.Put{V: value, K: &pub, Seq: seq + 1}
+		p.Sign(priv)
+		return p
 	})
-	return err
 }
 
 // Get fetches the value at seed's address.
 func (s *Store) Get(ctx context.Context, seed [32]byte) ([]byte, error) {
-	_, target := storeKey(seed)
+	_, pub, target := storeKey(seed)
 	ctx, cancel := operation(ctx)
 	defer cancel()
-	res, _, err := getput.Get(ctx, target, s.srv, nil, nil)
+	it, err := get(ctx, s.srv, pub, target)
 	if err != nil {
 		return nil, err
 	}
 	var raw []byte
-	if err := bencode.Unmarshal(res.V, &raw); err != nil {
+	if err := bencode.Unmarshal(it.v, &raw); err != nil {
 		return nil, errors.New("dht: the item is not a byte string")
 	}
 	return raw, nil

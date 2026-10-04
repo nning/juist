@@ -1,0 +1,36 @@
+#!/bin/sh
+
+# PROVIDE: juist_serve
+# REQUIRE: juistd
+# KEYWORD: shutdown
+#
+# juist_serve_enable (bool): YES ends TLS for the names published on this
+#                            device; juist publish add NAME HOST:PORT sets it.
+# juist_serve_args (str):    more options, such as --acme URL.
+#
+# Started as root, the terminator runs as juist-serve beside a parent that
+# stays root to listen where juistd says this device serves, and nowhere else.
+
+. /etc/rc.subr
+
+name=juist_serve
+rcvar=juist_serve_enable
+desc="juist TLS terminator"
+
+load_rc_config $name
+: ${juist_serve_enable:="NO"}
+: ${juist_serve_args:=""}
+: ${juist_serve_bin:=/usr/local/sbin/juistd}
+home=/var/db/juist-serve
+pidfile=/var/run/juist_serve.pid
+command=/usr/sbin/daemon
+procname=$command
+command_args="-f -r -H -P $pidfile -o /var/log/juist-serve.log $juist_serve_bin --helper tls --home $home --socket /var/run/juist/juistd.sock $juist_serve_args"
+start_precmd=juist_serve_precmd
+
+juist_serve_precmd()
+{
+	install -d -o juist-serve -g juist-serve -m 0700 $home
+}
+
+run_rc_command "$1"

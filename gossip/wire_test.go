@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
@@ -427,6 +428,47 @@ func TestEndpointRefusesAddressesItsAuthorDoesNotOwn(t *testing.T) {
 		e.Addrs = []netip.AddrPort{netip.MustParseAddrPort(addr)}
 		if err := e.Sign(priv); err == nil {
 			t.Errorf("an announcement claiming %s was accepted", addr)
+		}
+	}
+}
+
+// A share reaches every member as its author signed it, is a change of the
+// announcement and no renewal, and has a port and an end.
+func TestAShareIsAnnounced(t *testing.T) {
+	e, priv := testEndpoint(t)
+	plain := e
+	e.Share = &Share{Port: 443, Until: 1_700_000_600}
+	if err := e.Sign(priv); err != nil {
+		t.Fatal(err)
+	}
+	b, err := e.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeEndpoint(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Share == nil || *got.Share != *e.Share {
+		t.Fatalf("the share came back as %+v", got.Share)
+	}
+	if got.SameAs(&plain) {
+		t.Error("a share reads as a renewal of no share")
+	}
+	later := got
+	later.Share = &Share{Port: 443, Until: 1_700_001_200}
+	if later.SameAs(&got) {
+		t.Error("a later end reads as a renewal")
+	}
+	if !got.Share.Live(time.Unix(1_700_000_599, 0)) || got.Share.Live(time.Unix(1_700_000_600, 0)) {
+		t.Error("the share's end is not where it says")
+	}
+	for _, bad := range []Share{{Port: 0, Until: 1}, {Port: 443}} {
+		e.Share = &bad
+		if err := e.Sign(priv); err == nil {
+			if err := e.StaticValidate(); err == nil {
+				t.Errorf("a share %+v validated", bad)
+			}
 		}
 	}
 }

@@ -38,6 +38,8 @@ type inviteOptions struct {
 	name    string
 	relay   bool
 	admin   bool
+	ingress bool
+	service string // the name it publishes as a service member
 	expires time.Duration
 	port    uint
 	lan     bool
@@ -49,8 +51,8 @@ func cmdInvite(a *app, args []string) error {
 	s := spec{name: "juist invite", args: "[NAME]", max: 1, about: `
 Invite one device, then wait for it to join. Prints a code, for the same
 LAN, and a link, for anywhere; behind NAT, the two devices meet through the
-public BitTorrent DHT. Both end when a device joins, the invite expires, or
-the code is guessed wrong once.
+public BitTorrent DHT. Both end when a device joins or the invite expires;
+a wrong guess voids the code, and the link still works.
 
 NAME is the device's name in the network (default: its own). Where more
 than one admin must approve, the invite waits for them.`}
@@ -58,8 +60,10 @@ than one admin must approve, the invite waits for them.`}
 	var o inviteOptions
 	fs.BoolVar(&o.relay, "relay", false, "make the device a relay")
 	fs.BoolVar(&o.admin, "voucher", false, "make the device a voucher")
+	fs.BoolVar(&o.ingress, "ingress", false, "make the device an ingress")
+	fs.StringVar(&o.service, "service", "", "make the device a service member publishing `NAME`")
 	expires := longDuration(time.Hour)
-	fs.Var(&expires, "expires", "invite lifetime, like 30m, 2h or 7d")
+	fs.Var(&expires, "expires", "invite lifetime `DURATION`, like 30m, 2h or 7d")
 	fs.UintVar(&o.port, "port", DefaultInvitePort, "TCP port to listen on")
 	noLAN := fs.Bool("no-lan", false, "no code on the LAN; link only")
 	noDHT := fs.Bool("no-dht", false, "do not meet through the public DHT")
@@ -78,6 +82,12 @@ than one admin must approve, the invite waits for them.`}
 	if o.port > 0xffff {
 		return errors.New("--port must be below 65536")
 	}
+	if o.ingress && o.admin {
+		return fmt.Errorf("an ingress is no voucher\n%s", s.usage(fs))
+	}
+	if o.service != "" && (o.ingress || o.admin || o.relay) {
+		return fmt.Errorf("a service member holds no other role\n%s", s.usage(fs))
+	}
 	if o.expires <= 0 || o.expires > 7*24*time.Hour {
 		return errors.New("--expires must be between 1s and 7d")
 	}
@@ -85,6 +95,20 @@ than one admin must approve, the invite waits for them.`}
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
+	}
+	if need, what := (&types.NodeRecord{Roles: o.roles()}).NeedsSchema(); auth.State().Schema() < need {
+		return needsUpgrade(what)
+	}
+	if o.service != "" {
+		if auth.State().Domain() == "" {
+			return fmt.Errorf("the network has no domain to publish under\nhint: juist network domain pub.example.org")
+		}
+		if o.service, err = parseLabel(o.service, auth.State().Domain()); err != nil {
+			return err
+		}
+		if err := labelFree(auth.State(), o.service, types.Identity{}); err != nil {
+			return err
+		}
 	}
 	key, err := a.admittingKey(auth)
 	if err != nil {
@@ -276,7 +300,8 @@ func daemonHostError(err error) error {
 	return err
 }
 
-func (a *app) announceInvite(network, code string, link enroll.Link, port uint16, o inviteOptions) {
+// roles are the roles the invited device is admitted with.
+func (o inviteOptions) roles() []types.Role {
 	var roles []types.Role
 	if o.relay {
 		roles = append(roles, types.RoleRelayCapable)
@@ -284,6 +309,25 @@ func (a *app) announceInvite(network, code string, link enroll.Link, port uint16
 	if o.admin {
 		roles = append(roles, types.RoleAdmin)
 	}
+	if o.ingress {
+		roles = append(roles, types.RoleIngress)
+	}
+	if o.service != "" {
+		roles = append(roles, types.RoleService)
+	}
+	return sortRoles(roles)
+}
+
+// published is what the invited device is admitted publishing.
+func (o inviteOptions) published() []types.PublishedName {
+	if o.service == "" {
+		return nil
+	}
+	return []types.PublishedName{{Label: o.service, Port: 443}}
+}
+
+func (a *app) announceInvite(network, code string, link enroll.Link, port uint16, o inviteOptions) {
+	roles := o.roles()
 	as := ""
 	if len(roles) > 0 {
 		as = " as " + describeRoles(roles)
@@ -473,14 +517,7 @@ func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll
 		return err
 	}
 	rec.V4 = &v4
-	var roles []types.Role
-	if o.relay {
-		roles = append(roles, types.RoleRelayCapable)
-	}
-	if o.admin {
-		roles = append(roles, types.RoleAdmin)
-	}
-	rec.Roles = sortRoles(roles)
+	rec.Roles, rec.Published = o.roles(), o.published()
 	aum, err := auth.Builder().AddNode(rec, sealer())
 	if err != nil {
 		return fmt.Errorf("cannot admit %s: %w", name, err)

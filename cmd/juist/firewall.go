@@ -1,13 +1,19 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nning/juist/internal/firewalld"
+	"github.com/nning/juist/internal/instance"
+	"github.com/nning/juist/ipc"
+	"github.com/nning/juist/types"
 )
 
 // Host firewalls juist knows how to ask about. Nothing here changes one: the
@@ -61,4 +67,58 @@ func firewalldAdmitsInvite(c *firewalld.Client, port uint16) bool {
 	}
 	open, err := c.HasService(zone, "juist-invite")
 	return err == nil && open
+}
+
+// warnFirewalled warns where the host firewall keeps ports, which this
+// device serves on, from arriving on its juist device: the package lets the
+// device through at its first install alone.
+func (a *app) warnFirewalled(st *ipc.Status, ports ...uint16) {
+	if a.host.firewalled == nil || st == nil || len(ports) == 0 {
+		return
+	}
+	dev := cmp.Or(st.Device, instance.Name(st.Instance))
+	ports = slices.Compact(slices.Sorted(slices.Values(ports)))
+	var blocked []string
+	unsure := false
+	for _, port := range ports {
+		if b, u := a.host.firewalled(a.ctx, dev, port); b {
+			blocked = append(blocked, fmt.Sprintf("tcp/%d", port))
+			unsure = unsure || u
+		}
+	}
+	if len(blocked) == 0 {
+		return
+	}
+	what := strings.Join(blocked, ", ")
+	if unsure {
+		a.warn("firewalld may block %s on %s: its zone is not trusted, and juist may not read its ports", what, dev)
+	} else {
+		a.warn("firewalld blocks %s on %s, so the ingresses and members reach nothing served there", what, dev)
+	}
+	a.hint("sudo firewall-cmd --permanent --zone=trusted --change-interface=%s && sudo firewall-cmd --reload", dev)
+}
+
+// warnServedFirewalled warns, as warnFirewalled, of the ports the names
+// published on this device are served on.
+func (a *app) warnServedFirewalled() {
+	st, err := a.daemonStatus()
+	if err != nil {
+		return
+	}
+	auth, err := a.networkLog()
+	if err != nil {
+		return
+	}
+	if self, ok := auth.State().Node(st.Self); ok {
+		a.warnFirewalled(st, publishedPorts(self.Published)...)
+	}
+}
+
+// publishedPorts are the ports names are published on.
+func publishedPorts(names []types.PublishedName) []uint16 {
+	var ports []uint16
+	for _, p := range names {
+		ports = append(ports, p.Port)
+	}
+	return ports
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/ipc"
@@ -32,6 +33,14 @@ func systemLayout() *hostLayout {
 		enabledBy:    enabledRC,
 		firewall:     func(context.Context, string, int) error { return nil },
 		dockerNets:   func() map[string][]netip.Prefix { return nil },
+
+		ingressScript:  "/usr/local/libexec/juist/ingress.sh",
+		serveScript:    "/usr/local/libexec/juist/serve.sh",
+		answers:        answersSoon,
+		answersTLS:     endsTLSSoon,
+		terminatorOn:   terminatorOnRC,
+		caaWait:        15 * time.Second,
+		terminatorWait: 15 * time.Second,
 	}
 }
 
@@ -69,6 +78,10 @@ func logCmd(n int) string {
 // asRoot is cmd as a hint says to run it as root.
 func asRoot(cmd string) string { return cmd + ", as root" }
 
+// helperLog is what shows the log of the ingress, juist-ingress, or the
+// terminator, juist-serve.
+func helperLog(name string) string { return "tail /var/log/" + name + ".log" }
+
 // startRC enables instance n in rc.conf and starts it.
 func startRC(ctx context.Context, n int) error {
 	enable := "juistd_enable=YES"
@@ -102,6 +115,12 @@ func stopRC(ctx context.Context, n int) error {
 		return stopErr
 	}
 	return nil
+}
+
+// terminatorOnRC reports whether rc.conf starts juist_serve and it runs.
+func terminatorOnRC(ctx context.Context) bool {
+	return runCmd(ctx, service, "juist_serve", "enabled") == nil &&
+		runCmd(ctx, service, "juist_serve", "status") == nil
 }
 
 // enabledRC reports whether rc.conf starts instance n with the host.

@@ -2,3 +2,9 @@
 # install time; nothing removes it again, because a UID may own files this
 # package never installed.
 u juist - "juist mesh VPN" /var/lib/juist -
+# The network's ingress, where this device is one: it holds no key and
+# reaches juistd's socket alone.
+u juist-ingress - "juist ingress" - -
+# The terminator, where this device ends TLS for what it publishes: it holds
+# no key of the network's, its certificates in /var/lib/juist-serve.
+u juist-serve - "juist TLS terminator" /var/lib/juist-serve -

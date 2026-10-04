@@ -389,8 +389,26 @@ func TestTheHelperKeepsToTheNetworksSpace(t *testing.T) {
 	if err := c.SetEgress("juist0", EgressSpec{Mode: EgressTunnel, Capture: prefixes("8.0.0.0/7", "2000::/4")}); err != nil {
 		t.Errorf("the internet not captured: %v", err)
 	}
+	for _, p := range []string{"0.0.0.0/1", "128.0.0.0/1", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4",
+		"0.0.0.0/8", "::/1", "8000::/1", "::1/128", "fe80::/64", "ff02::/16"} {
+		if err := c.SetRoutes("juist0", prefixes(p), netip.Addr{}); err == nil {
+			t.Errorf("routed %s", p)
+		}
+	}
+	if err := c.SetRoutes("juist0", prefixes("10.1.0.0/16", "203.0.113.0/24", "fd7a:115c:a1e0::/48"), netip.Addr{}); err != nil {
+		t.Errorf("a member's routes refused: %v", err)
+	}
+	for _, a := range []string{"8.8.8.8", "127.0.0.1", "192.0.2.53", "fe80::1", "2001:4860:4860::8888"} {
+		if err := c.SetDNS("juist0", []netip.Addr{netip.MustParseAddr(a)}); err == nil {
+			t.Errorf("took the resolver %s", a)
+		}
+	}
+	if err := c.SetDNS("juist0", []netip.Addr{netip.MustParseAddr("198.19.44.2")}); err != nil {
+		t.Errorf("the exit node's resolver refused: %v", err)
+	}
 	for _, call := range h.took() {
-		if strings.Contains(call, "8.8.8.8") || strings.Contains(call, "0.0.0.0/0") || strings.HasPrefix(call, "dns juist1 [198") {
+		if strings.Contains(call, "8.8.8.8") || strings.Contains(call, "0.0.0.0/0") || strings.HasPrefix(call, "dns juist1 [198") ||
+			strings.Contains(call, "/1 ") || strings.Contains(call, "127.0.0") || strings.Contains(call, "fe80::") {
 			t.Errorf("the host was asked %q", call)
 		}
 	}

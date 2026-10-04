@@ -11,7 +11,7 @@ GOFLAGS ?=
 
 # One toolchain for every target, so a commit builds to the same bytes anywhere
 # and local runs match CI's GO_VERSION.
-export GOTOOLCHAIN ?= go1.26.8
+export GOTOOLCHAIN ?= go1.27.1
 
 # Static binaries that need no C toolchain; only the race detector wants cgo.
 export CGO_ENABLED ?= 0
@@ -38,7 +38,7 @@ GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 BUILDDIR ?= build
 CMDS     ?= juist juistd
 
-# Platforms the roadmap commits to (docs/05-roadmap.md M7, M11). Building for each catches
+# Platforms the roadmap commits to (docs/05-roadmap.md M7, M10). Building for each catches
 # build-tag rot in the embedded Tailscale stack long before the platform work
 # starts.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
@@ -192,12 +192,63 @@ repro-freebsd: ## Fail unless a FreeBSD host builds HEAD to the same binaries as
 INTEROP_CACHE ?= $(HOME)/.cache/juist-interop
 
 .PHONY: interop
-interop: deb pkg-freebsd ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh)
+interop: deb pkg-freebsd image ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh)
 	cd interop && JUIST_INTEROP_WORK=$(abspath $(BUILDDIR))/interop \
 		JUIST_INTEROP_DEB=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb') \
 		JUIST_INTEROP_PKG=$$(find $(abspath $(BUILDDIR))/freebsd -name '*.pkg') \
+		JUIST_INTEROP_IMAGE=$$(find $(abspath $(BUILDDIR))/image -name 'juist-*-$(IMAGE_ARCH).tar' | head -1) \
 		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) GO=$(GO) \
 		$(GO) test $(GOFLAGS) -tags interop -count=1 -timeout 150m -v .
+
+# agg renders the cast as a GIF: https://github.com/asciinema/agg
+AGG       ?= agg
+AGG_FLAGS ?= --font-size 14
+
+.PHONY: demo
+demo: deb pkg-freebsd ## Record the README's demo in the lab, into website/static/demo.{cast,gif}
+	cd interop && JUIST_INTEROP_WORK=$(abspath $(BUILDDIR))/demo \
+		JUIST_INTEROP_DEB=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb') \
+		JUIST_INTEROP_PKG=$$(find $(abspath $(BUILDDIR))/freebsd -name '*.pkg') \
+		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) JUIST_DEMO_CAST=$(abspath website/static/demo.cast) GO=$(GO) \
+		$(GO) test $(GOFLAGS) -tags interop -count=1 -timeout 60m -run TestDemo -v .
+	$(AGG) $(AGG_FLAGS) --theme asciinema website/static/demo.cast website/static/demo.gif
+
+# The website under load: visitors as browsers come, LOAD_RATE a second for
+# LOAD_FOR. load-site loads its server alone, here; load-lab loads it in the
+# lab behind an ingress and the tunnel, as it is published.
+LOAD_RATE ?= 20
+LOAD_FOR  ?= 90s
+
+.PHONY: load-site
+load-site: ## Load the website's server alone, here
+	$(MAKE) -C website site
+	cd website && $(GO) build -o $(abspath $(BUILDDIR))/site-server ./server
+	$(GO) build -o $(BUILDDIR)/probe ./interop/probe
+	@$(BUILDDIR)/site-server -root $(abspath $(BUILDDIR))/site -addr 127.0.0.1:18181 2>/dev/null & pid=$$!; \
+	trap 'kill $$pid' EXIT; sleep 1; \
+	$(BUILDDIR)/probe visitors -rate $(LOAD_RATE) -for $(LOAD_FOR) -hold 30s http://127.0.0.1:18181/en/
+
+.PHONY: load-lab
+load-lab: deb pkg-freebsd ## Load the website in the lab, through an ingress and the tunnel (qemu)
+	$(MAKE) -C website site
+	tar -czf $(BUILDDIR)/site.tgz -C $(BUILDDIR) site
+	cd website && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -o $(abspath $(BUILDDIR))/site-server-linux ./server
+	cd interop && JUIST_INTEROP_WORK=$(abspath $(BUILDDIR))/load \
+		JUIST_INTEROP_DEB=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb') \
+		JUIST_INTEROP_PKG=$$(find $(abspath $(BUILDDIR))/freebsd -name '*.pkg') \
+		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) GO=$(GO) \
+		JUIST_LOAD_SITE=$(abspath $(BUILDDIR))/site.tgz JUIST_LOAD_SERVER=$(abspath $(BUILDDIR))/site-server-linux \
+		JUIST_LOAD_RATE=$(LOAD_RATE) JUIST_LOAD_FOR=$(LOAD_FOR) \
+		$(GO) test $(GOFLAGS) -tags interop -count=1 -timeout 60m -run TestLoad -v .
+
+# Pebble is Let's Encrypt's test CA. It runs on this machine alone; nothing
+# here talks to a real CA.
+PEBBLE_VERSION ?= v2.10.1
+
+.PHONY: test-acme
+test-acme: ## Run the TLS terminator against Pebble, an ACME CA of its own
+	GOBIN=$(abspath $(BUILDDIR)) $(GO) install github.com/letsencrypt/pebble/v2/cmd/pebble@$(PEBBLE_VERSION)
+	JUIST_PEBBLE=$(abspath $(BUILDDIR))/pebble $(GO) test $(GOFLAGS) $(TEST_FLAGS) -run TestACertificateFromPebble -v ./internal/terminator
 
 .PHONY: test-freebsd
 test-freebsd: ## Run every test on a FreeBSD host over ssh, as root (FREEBSD_SSH)
@@ -292,9 +343,8 @@ RPM_STAMP   ?= $(shell TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d
                  date -u +%Y%m%d%H%M%S)
 RPM_RELEASE ?= 0.$(RPM_STAMP)git$(RPM_COMMIT)$(RPM_DIRTY)
 
-# The project states no license, and rpm requires the tag. Set this once it
-# does; the placeholder is a valid SPDX LicenseRef, so it builds and says so.
-RPM_LICENSE ?= LicenseRef-unspecified
+# juist's own; THIRD_PARTY_LICENSES holds those of what it links.
+RPM_LICENSE ?= BSD-3-Clause
 
 .PHONY: rpm
 rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
@@ -312,9 +362,10 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	done; \
 	$(BUILDDIR)/juist __manpage > $$stage/juist.1; \
 	$(BUILDDIR)/juistd __manpage > $$stage/juistd.8; \
-	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service README.md packaging/firewall.sh \
-		packaging/exit-node.sh packaging/polkit/juist.rules \
-		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml \
+	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service packaging/systemd/juist-ingress.service \
+		packaging/systemd/juist-serve.service packaging/systemd/juist-serve.path README.md LICENSE THIRD_PARTY_LICENSES packaging/firewall.sh packaging/exit-node.sh \
+		packaging/ingress.sh packaging/serve.sh packaging/polkit/juist.rules \
+		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml packaging/firewalld/juist-ingress.xml \
 		packaging/firewalld/juist-invite.xml packaging/completions/juist.bash \
 		packaging/completions/_juist packaging/completions/juist.fish $$stage/; \
 	tar -czf $(RPMTOP)/SOURCES/$(RPM_NAME)-$(RPM_VERSION).tar.gz \
@@ -353,13 +404,16 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 		GOOS=linux GOARCH=$(DEB_GOARCH) $(GOBUILD) -o $$bin/$$c ./cmd/$$c; \
 		install -D -m 0755 $$bin/$$c $$root/usr/bin/$$c; \
 	done; \
-	for u in juistd.service juistd@.service; do \
+	for u in juistd.service juistd@.service juist-ingress.service juist-serve.service; do \
 		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/system/$$u; \
 		sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=/usr/bin/juistd |' $$root/usr/lib/systemd/system/$$u; \
 		grep -q '^ExecStart=/usr/bin/juistd ' $$root/usr/lib/systemd/system/$$u; \
 	done; \
+	install -D -m 0644 packaging/systemd/juist-serve.path $$root/usr/lib/systemd/system/juist-serve.path; \
 	install -D -m 0644 packaging/rpm/juist.sysusers $$root/usr/lib/sysusers.d/juist.conf; \
 	install -D -m 0644 README.md $$root/usr/share/doc/juist/README.md; \
+	install -D -m 0644 LICENSE $$root/usr/share/doc/juist/copyright; \
+	install -D -m 0644 THIRD_PARTY_LICENSES $$root/usr/share/doc/juist/THIRD_PARTY_LICENSES; \
 	install -d -m 0755 $$root/usr/share/man/man1 $$root/usr/share/man/man8; \
 	for m in juist.1 juistd.8; do \
 		c=$${m%.*}; out=$$root/usr/share/man/man$${m#*.}/$$m; \
@@ -370,8 +424,10 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	gzip -9n $$root/usr/share/man/man1/juist.1 $$root/usr/share/man/man8/juistd.8; \
 	install -D -m 0755 packaging/firewall.sh $$root/usr/lib/juist/firewall.sh; \
 	install -D -m 0755 packaging/exit-node.sh $$root/usr/lib/juist/exit-node.sh; \
+	install -D -m 0755 packaging/ingress.sh $$root/usr/lib/juist/ingress.sh; \
+	install -D -m 0755 packaging/serve.sh $$root/usr/lib/juist/serve.sh; \
 	install -D -m 0644 packaging/polkit/juist.rules $$root/usr/share/polkit-1/rules.d/60-juist.rules; \
-	for f in juist juist-relay juist-invite; do \
+	for f in juist juist-relay juist-invite juist-ingress; do \
 		install -D -m 0644 packaging/firewalld/$$f.xml $$root/usr/lib/firewalld/services/$$f.xml; \
 	done; \
 	install -D -m 0644 packaging/ufw/juist $$root/etc/ufw/applications.d/juist; \
@@ -398,6 +454,26 @@ pkg-freebsd: ## Build the FreeBSD package into build/freebsd
 	@rm -rf $(BUILDDIR)/freebsd
 	@sh packaging/freebsd/pkg.sh "$(GO)" "$(abspath $(BUILDDIR))/freebsd/juist-$(FREEBSD_VERSION).pkg" \
 		"$(FREEBSD_VERSION)" "$(FREEBSD_ABI)" "$(abspath $(BUILDDIR))"
+
+# `make image` is the service member's container image, written by
+# packaging/image/mkimage as docker save would, for docker or podman load:
+# juistd and juist for IMAGE_ARCH and this host's CA certificates.
+IMAGE_ARCH  ?= amd64
+# The host's CA bundle: Debian's, Fedora's, or FreeBSD's.
+IMAGE_CERTS ?= $(firstword $(wildcard /etc/ssl/certs/ca-certificates.crt \
+	/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/cert.pem))
+
+.PHONY: image
+image: ## Build the service member's container image into build/image
+	@mkdir -p $(BUILDDIR)/image/linux-$(IMAGE_ARCH) && rm -f $(BUILDDIR)/image/juist-*-$(IMAGE_ARCH).tar
+	@for c in juist juistd; do \
+		GOOS=linux GOARCH=$(IMAGE_ARCH) CGO_ENABLED=0 $(GO) build -trimpath -o $(BUILDDIR)/image/linux-$(IMAGE_ARCH)/$$c ./cmd/$$c || exit 1; \
+	done
+	@$(GO) run ./packaging/image/mkimage -o $(BUILDDIR)/image/juist-$(FREEBSD_VERSION)-$(IMAGE_ARCH).tar \
+		-tag juist:$(FREEBSD_VERSION) -arch $(IMAGE_ARCH) -mtime $$(git log -1 --format=%ct) -certs $(IMAGE_CERTS) \
+		-license LICENSE -third-party THIRD_PARTY_LICENSES \
+		-juistd $(BUILDDIR)/image/linux-$(IMAGE_ARCH)/juistd -juist $(BUILDDIR)/image/linux-$(IMAGE_ARCH)/juist
+	@echo $(BUILDDIR)/image/juist-$(FREEBSD_VERSION)-$(IMAGE_ARCH).tar
 
 # `make install` builds the package this system's package manager takes and
 # installs it: the .deb with apt, the RPM with dnf, FreeBSD's with pkg, with
@@ -470,6 +546,10 @@ lint: fmt-check vet staticcheck actionlint ## Run all static analysis
 tidy: ## Tidy go.mod / go.sum
 	$(GO) mod tidy
 
+.PHONY: licenses
+licenses: ## Write THIRD_PARTY_LICENSES from the modules juist links
+	$(GO) run ./packaging/licenses > THIRD_PARTY_LICENSES.tmp && mv THIRD_PARTY_LICENSES.tmp THIRD_PARTY_LICENSES
+
 .PHONY: tidy-check
 tidy-check: ## Fail if go.mod / go.sum are untidy (does not modify them)
 	@cp go.mod go.mod.check.bak; cp go.sum go.sum.check.bak; \
@@ -497,6 +577,13 @@ ci: ci-deps ## Run every CI job locally (asks for sudo for the privileged tests)
 	$(MAKE) --no-print-directory cross govulncheck rpm deb pkg-freebsd
 	$(MAKE) --no-print-directory test-os-plumbing-sudo
 	@echo "ci: every job passed"
+
+# `make ci-vm` is CI without a hosted runner: make ci and make interop in a
+# Fedora VM under KVM, which ci/main.go sets up in ~/.cache/juist-ci on first
+# use, from the working tree as it is. It logs to build/ci.
+.PHONY: ci-vm
+ci-vm: ## Run every CI job in a KVM VM it sets up itself (needs qemu, ssh); logs to build/ci
+	$(GO) run ./ci $(if $(CI_MAKE),-make "$(CI_MAKE)")
 
 .PHONY: ci-deps
 ci-deps: ## Check the tools make ci needs, and say how to install them

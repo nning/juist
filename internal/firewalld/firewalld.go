@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -64,6 +65,31 @@ func open(conn *dbus.Conn, root bool) (*Client, error) {
 		return nil, ErrNotRunning
 	}
 	return &Client{conn: conn, fw: conn.Object(busName, objPath), root: root, allowed: map[string]bool{}}, nil
+}
+
+// blocksWait bounds [Blocks].
+const blocksWait = 2 * time.Second
+
+// Blocks reports whether firewalld keeps TCP to port from arriving on iface;
+// false where it does not run or will not say. A zone other than trusted
+// whose ports it will not tell counts as keeping it out, unsure.
+func Blocks(ctx context.Context, iface string, port uint16) (blocked, unsure bool) {
+	ctx, cancel := context.WithTimeout(ctx, blocksWait)
+	defer cancel()
+	c, err := Dial(ctx)
+	if err != nil {
+		return false, false
+	}
+	defer c.Close()
+	zone, err := c.Zone(iface)
+	if err != nil {
+		return false, false
+	}
+	open, err := c.Admits(zone, port, "tcp")
+	if errors.Is(err, ErrNotAuthorized) {
+		return true, true
+	}
+	return err == nil && !open, false
 }
 
 // Close ends the client's connection.

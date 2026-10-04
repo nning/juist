@@ -1,0 +1,42 @@
+# The features table on the home page. A row whose handbook page exists links to it;
+# its anchor is the English title, and a note marks a feature that does not run everywhere.
+- doc: docs/how-it-works
+  en: {title: Mesh and NAT traversal, text: "WireGuard tunnels between every pair of devices, direct where NAT allows."}
+  de: {title: Mesh und NAT-Traversal, text: "WireGuard-Tunnel zwischen allen Geräten, direkt, wo das NAT es zulässt."}
+- doc: docs/invites
+  en: {title: Invites, text: "A code for the LAN or a link for anywhere. Both devices show four words to compare."}
+  de: {title: Einladungen, text: "Ein Code fürs LAN oder ein Link für überall. Beide Geräte zeigen vier Wörter, die du vergleichst."}
+- doc: docs/admins
+  en: {title: Admins and quorum, text: "Every change takes k of n admins. One that needs more is carried to their devices."}
+  de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}
+- doc: docs/networks
+  en: {title: Several networks, text: "One device in several networks, each with an admin key of its own."}
+  de: {title: Mehrere Netze, text: "Ein Gerät in mehreren Netzen, jedes mit eigenem Admin-Schlüssel."}
+- doc: docs/exit-nodes
+  en: {title: Exit nodes, text: "A device's internet traffic and DNS through another member."}
+  de: {title: Exit-Nodes, text: "Internetverkehr und DNS eines Geräts über ein anderes Mitglied."}
+- doc: docs/subnets
+  en: {title: Subnet routers, text: "The LAN behind one member, reached from all the others."}
+  de: {title: Subnet-Router, text: "Das LAN hinter einem Mitglied, erreichbar für alle anderen."}
+- doc: docs/names
+  en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
+  de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}
+  note: {en: "Only on Linux with systemd-resolved.", de: "Nur unter Linux mit systemd-resolved."}
+- doc: docs/publishing
+  en: {title: Publishing services, text: "A member's service reached from the internet by name, through an ingress."}
+  de: {title: Dienste veröffentlichen, text: "Dienste auf Mitgliedern, über eine Ingress unter einem Namen aus dem Internet erreichbar."}
+- doc: docs/publishing
+  en: {title: Sharing, text: "A file, a directory or a web server, from the internet at once, under a device's own name. A directory downloads as a ZIP."}
+  de: {title: Teilen, text: "Eine Datei, ein Verzeichnis oder einen Webserver sofort im Internet teilen, unter dem eigenen Namen des Geräts. Ein Verzeichnis lädt sich auch als ZIP."}
+- doc: docs/publishing
+  en: {title: Status page, text: "Devices, their reach, published names and the log's changes on one page, for members, and as much for anyone else as you choose."}
+  de: {title: Statusseite, text: "Geräte, ihre Erreichbarkeit, veröffentlichte Namen und die Änderungen im Log auf einer Seite, für Mitglieder, und so viel davon für alle anderen, wie du willst."}
+- doc: docs/relays
+  en: {title: Relays, text: "Where NAT wins, traffic goes through a member with a public address."}
+  de: {title: Relays, text: "Wo das NAT keine direkte Verbindung zulässt, läuft der Verkehr über ein Mitglied mit öffentlicher Adresse."}
+- doc: docs/network-changes
+  en: {title: Renaming and renumbering, text: "The network or a device gets another name, the devices other IPv4 addresses. Nothing is set up again."}
+  de: {title: Umbenennen und umnummerieren, text: "Das Netz oder ein Gerät bekommt einen anderen Namen, die Geräte andere IPv4-Adressen. Nichts wird neu eingerichtet."}
+- doc: docs/remove
+  en: {title: Freshness and removal, text: "A removed device is told. One cut off for 48 h keeps tunnels only to vouchers."}
+  de: {title: Frische und Entfernen, text: "Ein entferntes Gerät erfährt davon. Ein Gerät, das 48 Stunden abgeschnitten ist, behält nur Tunnel zu Vouchern."}

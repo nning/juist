@@ -1,0 +1,8 @@
+{{- $lang := .Type | default "text" -}}
+{{- $shell := in (slice "sh" "shell" "bash") $lang -}}
+<div class="code{{ if $shell }} sh{{ end }}">
+  <div class="head"><span>{{ with .Attributes.device }}{{ . }}{{ end }}</span>
+    {{- if $shell }}<button class="copy" type="button" data-done="{{ i18n "copied" }}">{{ i18n "copy" }}</button>{{ end }}
+  </div>
+  {{- transform.Highlight .Inner (cond $shell "bash" $lang) "" }}
+</div>

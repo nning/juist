@@ -14,10 +14,15 @@ import (
 // address that cannot be bound is skipped, as the IPv6 half is where the host
 // lacks IPv6; none at all is an error.
 func listenOverlay(addrs []netip.Prefix, port uint16) (net.Listener, error) {
+	return listenEach(func(ap netip.AddrPort) (net.Listener, error) { return net.Listen("tcp", ap.String()) }, addrs, port)
+}
+
+// listenEach is listenOverlay by listen.
+func listenEach(listen func(netip.AddrPort) (net.Listener, error), addrs []netip.Prefix, port uint16) (net.Listener, error) {
 	var lns []net.Listener
 	var errs []error
 	for _, p := range addrs {
-		ln, err := net.Listen("tcp", netip.AddrPortFrom(p.Addr(), port).String())
+		ln, err := listen(netip.AddrPortFrom(p.Addr(), port))
 		if err != nil {
 			errs = append(errs, err)
 			continue

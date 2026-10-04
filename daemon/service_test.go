@@ -445,19 +445,19 @@ func TestReadersCannotCrowdOutOperators(t *testing.T) {
 	}
 	flooder, other := caller{uid: 4242, known: true}, caller{uid: 4343, known: true}
 	for i := 0; i < maxClientsPerUser; i++ {
-		if _, ok := s.admit(flooder, false); !ok {
+		if _, ok := s.admit(flooder, tierReader); !ok {
 			t.Fatal("a reader was refused its own share")
 		}
 	}
-	if _, ok := s.admit(flooder, false); ok {
+	if _, ok := s.admit(flooder, tierReader); ok {
 		t.Fatal("one reader took more than its share of the pool")
 	}
-	release, ok := s.admit(other, false)
+	release, ok := s.admit(other, tierReader)
 	if !ok {
 		t.Fatal("another reader was locked out by the first")
 	}
 	release()
-	if _, ok := s.admit(caller{uid: 0, known: true}, true); !ok {
+	if _, ok := s.admit(caller{uid: 0, known: true}, tierOperator); !ok {
 		t.Fatal("root was refused while readers held their pool")
 	}
 }
@@ -472,7 +472,7 @@ func TestTheOperatorCannotLockRootOut(t *testing.T) {
 	operator := caller{uid: 1000, known: true}
 	held := 0
 	for {
-		if _, ok := s.admit(operator, true); !ok {
+		if _, ok := s.admit(operator, tierOperator); !ok {
 			break
 		}
 		held++
@@ -480,7 +480,7 @@ func TestTheOperatorCannotLockRootOut(t *testing.T) {
 	if held >= maxIPCClients {
 		t.Fatalf("the operator took all %d slots", held)
 	}
-	if _, ok := s.admit(caller{uid: 0, known: true}, true); !ok {
+	if _, ok := s.admit(caller{uid: 0, known: true}, tierOperator); !ok {
 		t.Fatal("root was locked out by the operator")
 	}
 }

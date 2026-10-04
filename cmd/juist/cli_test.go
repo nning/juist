@@ -38,6 +38,10 @@ func TestHelp(t *testing.T) {
 	}
 	mustContain(t, c.mustRun("invite", "--help"), "Usage: juist invite", "--expires")
 	mustContain(t, c.mustRun("help", "join"), "Usage: juist join CODE")
+	// The help says what the README and the invite's own hint say.
+	mustContain(t, c.mustRun("help", "invite"), "a wrong guess voids the code, and the link still works")
+	mustContain(t, c.mustRun("help", "publish"), "where juist ends TLS")
+	mustContain(t, c.mustRun("help", "publish", "add"), "where juist ends TLS with a")
 }
 
 // Options are --name or -n, and actions are commands: nothing else parses.

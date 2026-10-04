@@ -1,0 +1,17 @@
+# The website as an image: the built pages and the server, nothing else.
+# Build from the repository's root: docker build -f website/Containerfile -t juist-site .
+FROM docker.io/library/golang:1.26.8 AS build
+WORKDIR /src/website
+COPY website/go.mod website/go.sum ./
+RUN go mod download
+COPY design /src/design
+COPY website /src/website
+RUN go tool hugo --gc -d /out/site \
+ && CGO_ENABLED=0 go build -trimpath -ldflags=-s -o /out/server ./server
+
+FROM scratch
+COPY --from=build /out/server /server
+COPY --from=build /out/site /site
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["/server", "-root", "/site", "-addr", ":8080"]

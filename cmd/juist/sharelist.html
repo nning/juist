@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{{.Title}}</title>
+{{template "juist-style" .}}
+<style>
+.zip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font: 600 14.5px var(--sans); text-decoration: none; white-space: nowrap; }
+.zip:hover { filter: brightness(1.08); }
+.zip svg { width: 16px; height: 16px; }
+td.name a { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+td.name a:hover { color: var(--accent); text-decoration: underline; }
+td.name svg { flex: none; width: 18px; height: 18px; color: var(--muted); }
+tr.dir td.name svg { color: var(--sand); }
+td.size, td.time { font: 400 13px var(--mono); color: var(--muted); white-space: nowrap; }
+.size { text-align: right; }
+td.act { width: 1%; padding-right: 0; text-align: right; }
+td.act a { font: 400 12px var(--mono); color: var(--text-2); text-decoration: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+td.act a:hover { color: var(--text); border-color: var(--line-2); }
+@media (max-width: 640px) {
+	.time { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="bar"><div class="in"><span class="brand">{{template "juist-wordmark"}}</span><span class="note">read-only</span></div></div>
+<main>
+<div class="head">
+<div>
+{{if .Crumbs}}<nav class="crumbs">{{range .Crumbs}}<a href="{{.Href}}">{{.Name}}</a><span>/</span>{{end}}</nav>{{end}}
+<h1>{{.Name}}</h1>
+<div class="meta">{{.Summary}}</div>
+</div>
+{{if .Entries}}<a class="zip" href="?zip" download><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0-5-5m5 5 5-5M5 21h14"/></svg>Download all (.zip)</a>{{end}}
+</div>
+<table>
+<thead><tr>
+<th><a href="{{.SortHref "name"}}">Name{{.Arrow "name"}}</a></th>
+<th class="size"><a href="{{.SortHref "size"}}">Size{{.Arrow "size"}}</a></th>
+<th class="time"><a href="{{.SortHref "time"}}">Modified{{.Arrow "time"}}</a></th>
+<th></th>
+</tr></thead>
+<tbody>
+{{if .Parent}}<tr class="dir"><td class="name"><a href="../"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>..</a></td><td class="size"></td><td class="time"></td><td class="act"></td></tr>
+{{end}}{{range .Entries}}<tr{{if .Dir}} class="dir"{{end}}><td class="name"><a href="{{.Href}}">{{if .Dir}}<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h3.6a2 2 0 0 1 1.4.6l1.3 1.3a2 2 0 0 0 1.4.6h5.3A2.5 2.5 0 0 1 21 9v8.5a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>{{else}}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>{{end}}{{.Name}}</a></td><td class="size">{{.Size}}</td><td class="time">{{.Time}}</td><td class="act">{{if .Dir}}<a href="{{.Href}}?zip" download>zip</a>{{end}}</td></tr>
+{{else}}<tr><td class="empty" colspan="4">This folder is empty.</td></tr>
+{{end}}</tbody>
+</table>
+</main>
+<footer><div class="in">Shared read-only with juist. Nothing else is reached under this name.</div></footer>
+</body>
+</html>

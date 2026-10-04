@@ -10,7 +10,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -112,6 +115,30 @@ const (
 	// CmdNames says whether this device resolves the public names the
 	// network points at members to them, [Request.AcceptNames].
 	CmdNames Command = 17
+
+	// CmdPublish says whether this device serves the names the network
+	// publishes on it, [Request.ServePublished].
+	CmdPublish Command = 18
+
+	// CmdPublished asks what an ingress serves: the one call the ingress
+	// may make, answered in [Response.Published].
+	CmdPublished Command = 19
+
+	// CmdServing asks what this device ends TLS for: the one call the
+	// terminator may make, answered in [Response.Serving].
+	CmdServing Command = 20
+
+	// CmdShare publishes this device under its own name, [Request.Share],
+	// for as long as the call lasts: an [EventSharing] says the name, and
+	// the response comes at the share's end.
+	CmdShare Command = 21
+
+	// CmdUnshare ends this device's share, whichever call holds it.
+	CmdUnshare Command = 22
+
+	// CmdStatusPage asks what a status page served here shows, answered in
+	// [Response.StatusPage]; the terminator's second call.
+	CmdStatusPage Command = 23
 )
 
 func (c Command) String() string {
@@ -152,6 +179,18 @@ func (c Command) String() string {
 		return "subnet"
 	case CmdNames:
 		return "names"
+	case CmdPublish:
+		return "publish"
+	case CmdPublished:
+		return "published"
+	case CmdServing:
+		return "serving"
+	case CmdShare:
+		return "share"
+	case CmdUnshare:
+		return "unshare"
+	case CmdStatusPage:
+		return "status page"
 	default:
 		return fmt.Sprintf("command?<%d>", uint8(c))
 	}
@@ -217,6 +256,168 @@ type Request struct {
 
 	// AcceptNames is what a [CmdNames] sets.
 	AcceptNames *bool `cbor:"21,keyasint,omitempty"`
+
+	// ServePublished is what a [CmdPublish] sets, if anything; ServeTo, with
+	// it on, adds names whose TLS juist ends and where it sends them on, and
+	// Unserve takes such names away, by label.
+	ServePublished *bool     `cbor:"22,keyasint,omitempty"`
+	ServeTo        []ServeTo `cbor:"23,keyasint,omitempty"`
+	Unserve        []string  `cbor:"25,keyasint,omitempty"`
+
+	// Account is the terminator's, which a [CmdServing] may carry, with
+	// Listening, where it listens, and Unbound, where another program
+	// holds the port, as ADDR:PORT; NoCert, the names it has no
+	// certificate for; Stopping, that it stops.
+	Account   *ACMEAccount `cbor:"24,keyasint,omitempty"`
+	Listening []string     `cbor:"27,keyasint,omitempty"`
+	Unbound   []string     `cbor:"28,keyasint,omitempty"`
+	Stopping  bool         `cbor:"29,keyasint,omitempty"`
+	NoCert    []NoCert     `cbor:"30,keyasint,omitempty"`
+
+	// Share is what a [CmdShare] publishes.
+	Share *ShareRequest `cbor:"26,keyasint,omitempty"`
+}
+
+// maxTerminatorAddrs caps the addresses a terminator reports, each way.
+const maxTerminatorAddrs = 64
+
+func validAddrPorts(aps []string) bool {
+	if len(aps) > maxTerminatorAddrs {
+		return false
+	}
+	for _, s := range aps {
+		if _, err := netip.ParseAddrPort(s); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// A TerminatorReport is what a terminator tells juistd with each
+// [CmdServing]: its account once known, where it listens, where another
+// program holds the port, and the names it has no certificate for; or, last,
+// that it stops.
+type TerminatorReport struct {
+	Account            *ACMEAccount
+	Listening, Unbound []string
+	NoCert             []NoCert
+	Stopping           bool
+}
+
+// A NoCert is a name served that a client asked for and got no certificate,
+// and why, at most [MaxNoCertWhy] bytes.
+type NoCert struct {
+	Name string `cbor:"1,keyasint"`
+	Why  string `cbor:"2,keyasint,omitempty"`
+}
+
+// MaxNoCertWhy caps why a [NoCert] has no certificate.
+const MaxNoCertWhy = 256
+
+func validNoCerts(ns []NoCert) bool {
+	if len(ns) > maxTerminatorAddrs {
+		return false
+	}
+	for i, n := range ns {
+		if n.Name == "" || len(n.Name) > 253 || len(n.Why) > MaxNoCertWhy || i > 0 && ns[i-1].Name >= n.Name {
+			return false
+		}
+	}
+	return true
+}
+
+// A ShareRequest is where the connections for this device's own name go, a
+// loopback HOST:PORT, and its end in Unix seconds, zero for the call's.
+type ShareRequest struct {
+	To    string `cbor:"1,keyasint"`
+	Until int64  `cbor:"2,keyasint,omitempty"`
+}
+
+// Valid reports whether s goes to a port on loopback and ends after the epoch.
+func (s *ShareRequest) Valid() bool {
+	ap, err := netip.ParseAddrPort(s.To)
+	return err == nil && ap.Addr().IsLoopback() && ap.Port() != 0 && s.Until >= 0
+}
+
+// An ACMEAccount is the account a terminator takes its certificates under,
+// as a CAA record names it: its URI, and the names the CA gives itself there.
+type ACMEAccount struct {
+	URI     string   `cbor:"1,keyasint"`
+	Issuers []string `cbor:"2,keyasint,omitempty"`
+}
+
+// maxIssuers caps the CA's names an [ACMEAccount] carries.
+const maxIssuers = 8
+
+// Valid reports whether a fits in a CAA record as it is: an https URI and
+// host names, none holding what would end the record's value.
+func (a *ACMEAccount) Valid() bool {
+	u, err := url.Parse(a.URI)
+	if err != nil || u.Scheme != "https" || u.Host == "" || len(a.URI) > 512 || len(a.Issuers) > maxIssuers {
+		return false
+	}
+	for _, c := range a.URI {
+		if c <= ' ' || c > '~' || c == '"' || c == ';' || c == '\\' {
+			return false
+		}
+	}
+	for _, i := range a.Issuers {
+		if len(i) == 0 || len(i) > 253 || strings.Trim(i, "abcdefghijklmnopqrstuvwxyz0123456789-.") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// CAA is the records that bind name's certificates to a, one for each name
+// the CA goes by; none for a nil a.
+func (a *ACMEAccount) CAA(name string) []string {
+	if a == nil {
+		return nil
+	}
+	var out []string
+	for _, issuer := range a.Issuers {
+		out = append(out, fmt.Sprintf(`%s. CAA 0 issue "%s; accounturi=%s"`, name, issuer, a.URI))
+	}
+	return out
+}
+
+// MaxServeTo caps the names one [CmdPublish] says where to send on, and
+// those a device keeps.
+const MaxServeTo = types.MaxPublishedPerNode
+
+// A ServeTo is a published name's label and the local address its plain
+// connections go to, as HOST:PORT or [HTTP2To] of one, or a status page, as
+// [StatusPageTo] has it.
+type ServeTo struct {
+	Label string `cbor:"1,keyasint"`
+	To    string `cbor:"2,keyasint"`
+}
+
+// Valid reports whether s names one label and one HOST:PORT or status page.
+func (s ServeTo) Valid() bool {
+	if _, ok := StatusPageOf(s.To); ok {
+		return s.Label == "" || types.ValidateLabel(s.Label) == nil
+	}
+	addr, _ := HTTP2Of(s.To)
+	host, port, err := net.SplitHostPort(addr)
+	n, perr := strconv.ParseUint(port, 10, 16)
+	return (s.Label == "" || types.ValidateLabel(s.Label) == nil) && err == nil && perr == nil && n > 0 && host != "" &&
+		!strings.ContainsAny(addr, " \t\n")
+}
+
+const http2To = "h2c://"
+
+// HTTP2To is addr as the target of a service that takes HTTP/2 without TLS
+// (h2c) besides HTTP/1.1, which the terminator then offers clients.
+func HTTP2To(addr string) string { return http2To + addr }
+
+// HTTP2Of is the address to names, and whether its service takes h2c.
+func HTTP2Of(to string) (addr string, h2c bool) {
+	if addr, ok := strings.CutPrefix(to, http2To); ok {
+		return addr, true
+	}
+	return to, false
 }
 
 // MaxWaiting caps the changes one [CmdWaiting] request hands on.
@@ -280,6 +481,17 @@ type Response struct {
 	// Waiting answers [CmdWaiting]: the encoded changes waiting for votes
 	// the daemon holds.
 	Waiting [][]byte `cbor:"10,keyasint,omitempty"`
+
+	// Published answers [CmdPublished]. An ingress reads it with
+	// [CallPublished], which ignores what it does not know.
+	Published *Published `cbor:"11,keyasint,omitempty"`
+
+	// Serving answers [CmdServing], read with [CallServing] likewise.
+	Serving *Published `cbor:"12,keyasint,omitempty"`
+
+	// StatusPage answers [CmdStatusPage], read with [CallStatusPage]
+	// likewise.
+	StatusPage *StatusPage `cbor:"13,keyasint,omitempty"`
 }
 
 // RotationProof is what a rotated device's current identity key signs for
@@ -345,10 +557,12 @@ const (
 	EventCodeVoided    uint8 = 23 // a wrong code spent the code; the link works
 	EventInviteNoRelay uint8 = 24 // the invite cannot wait at the relay at Addr; it keeps trying
 	EventInviteReveal  uint8 = 25 // the guest's nonce, for the salt the caller sent
+
+	EventSharing uint8 = 26 // a [CmdShare] publishes Name
 )
 
 // A reqField is one of a [Request]'s optional fields.
-type reqField uint16
+type reqField uint32
 
 const (
 	fRecords     reqField = 1 << iota
@@ -365,6 +579,9 @@ const (
 	fExit
 	fSubnet
 	fNames
+	fPublish
+	fAccount
+	fShare
 )
 
 // present lists the optional fields r sets.
@@ -381,6 +598,9 @@ func (r *Request) present() reqField {
 		{!r.ExitNode.IsZero() || r.ExitOff || r.Serve != nil || r.ExitIsolate, fExit},
 		{r.ServeSubnets != nil || r.AcceptSubnets != nil, fSubnet},
 		{r.AcceptNames != nil, fNames},
+		{r.ServePublished != nil || len(r.ServeTo) > 0 || len(r.Unserve) > 0, fPublish},
+		{r.Account != nil || len(r.Listening) > 0 || len(r.Unbound) > 0 || len(r.NoCert) > 0 || r.Stopping, fAccount},
+		{r.Share != nil, fShare},
 	} {
 		if p.set {
 			f |= p.f
@@ -418,6 +638,45 @@ var requestShapes = map[Command]requestShape{
 		check: func(r *Request) bool { return (r.ServeSubnets != nil) != (r.AcceptSubnets != nil) }},
 	CmdNames: {takes: fNames, shape: "a names request sets accepting, and nothing else",
 		check: func(r *Request) bool { return r.AcceptNames != nil }},
+	CmdPublish: {takes: fPublish, shape: fmt.Sprintf("a publish request sets serving, or adds or takes away where to "+
+		"for at most %d names, not both", MaxServeTo),
+		check: func(r *Request) bool {
+			switch {
+			case len(r.ServeTo) > MaxServeTo || len(r.Unserve) > MaxServeTo || len(r.ServeTo) > 0 && len(r.Unserve) > 0:
+				return false
+			case len(r.ServeTo) > 0:
+				if r.ServePublished == nil || !*r.ServePublished {
+					return false
+				}
+			case len(r.Unserve) > 0:
+				if r.ServePublished != nil {
+					return false
+				}
+			case r.ServePublished == nil:
+				return false
+			}
+			for i, s := range r.ServeTo {
+				if !s.Valid() || i > 0 && r.ServeTo[i-1].Label >= s.Label {
+					return false
+				}
+			}
+			for i, label := range r.Unserve {
+				if label != "" && types.ValidateLabel(label) != nil || i > 0 && r.Unserve[i-1] >= label {
+					return false
+				}
+			}
+			return true
+		}},
+	CmdPublished:  {},
+	CmdUnshare:    {},
+	CmdStatusPage: {},
+	CmdShare: {takes: fShare, shape: "a share request carries where to, on loopback, and an end, and nothing else",
+		check: func(r *Request) bool { return r.Share != nil && r.Share.Valid() }},
+	CmdServing: {takes: fAccount, shape: "a serving request carries the terminator's account and where it listens, and nothing else",
+		check: func(r *Request) bool {
+			return (r.Account == nil || r.Account.Valid()) && validAddrPorts(r.Listening) && validAddrPorts(r.Unbound) &&
+				validNoCerts(r.NoCert)
+		}},
 	CmdWaiting: {takes: fWaiting, shape: fmt.Sprintf("a waiting request carries at most %d changes and nothing else", MaxWaiting),
 		check: func(r *Request) bool { return len(r.Waiting) <= MaxWaiting }},
 	CmdInform: {takes: fRecords, shape: "an inform request carries records and nothing else",

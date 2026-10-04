@@ -86,6 +86,8 @@ func (d *Daemon) Reconcile() error {
 	relays, err := d.installRelays(s, held)
 	if err != nil {
 		d.applyExit(d.exitDown("the data plane refused the relay set"))
+		// Published ports close too, as they would once the view went stale.
+		_ = d.manager.SetIngressPorts([]uint16{d.gossipPort})
 		return err
 	}
 	b := d.buildPeers(s, held, discoUsers, relays, admit)
@@ -96,7 +98,17 @@ func (d *Daemon) Reconcile() error {
 	d.mu.Lock()
 	exit.accepted = d.acceptNames
 	d.mu.Unlock()
-	exit.zone, exit.overrides, exit.namesUntil = d.namesZone(state, fresh, exit.accepted, s.now)
+	ports := d.planPublish(s, fresh.Fresh(s.now))
+	d.notePublishing()
+	exit.zone, exit.overrides, exit.namesUntil = d.namesZone(state, fresh, exit.accepted, s.now,
+		func(id types.Identity) bool {
+			return id == d.self && d.publishing() || id != d.self && held[id].Published
+		})
+	// Before the peers, so that a name withdrawn is closed to an ingress
+	// before anything else changes.
+	if err := d.manager.SetIngressPorts(ports); err != nil {
+		d.logOnce("daemon: opening published ports to the ingresses: " + err.Error())
+	}
 	// The peer carrying the routes first, then the routing into it: the
 	// other order would send traffic into a tunnel nobody carries.
 	if err := d.manager.SetPeers(b.peers); err != nil {
@@ -117,12 +129,16 @@ func (d *Daemon) Reconcile() error {
 	if refused {
 		d.logOnce("daemon: members refuse this device a catch-up and none answers it; it was most likely removed")
 	}
+	devices := ipc.DevicesOf(state, s.now)
+	for i := range devices {
+		devices[i].Serving = len(devices[i].Published) > 0 && d.servesPublished(devices[i].Identity)
+	}
 	d.setDerived(ipc.Derived{
-		NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(),
+		NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(), Schema: state.Schema(),
 		Members: len(s.members), Expired: s.expired,
 		Peers: len(b.peers), Unreachable: len(b.silent), Silent: b.silent,
 		Unrevoked: unrevoked, Lost: lost,
-		Devices: ipc.DevicesOf(state, s.now), Unmoved: unmoved,
+		Devices: devices, Unmoved: unmoved,
 		Refused: refused, SelfName: d.selfName(state),
 		LeaseSigners: fresh.Signers, FreshSince: fresh.Since, FreshUntil: fresh.Until,
 		Vouchers: fresh.Needed, Vouching: fresh.Vouching, Stale: !fresh.Fresh(s.now),
@@ -132,6 +148,7 @@ func (d *Daemon) Reconcile() error {
 		LastReconcile: d.now().Unix(),
 		Exit:          d.exitNow(),
 		Subnets:       d.subnetsNow(),
+		Publish:       d.publishNow(),
 	})
 	return nil
 }
@@ -146,12 +163,19 @@ type snapshot struct {
 }
 
 func (d *Daemon) snapshotOf(state *log.State) snapshot {
-	s := snapshot{state: state, now: d.now().Unix(), members: state.Nodes()}
+	s := d.membersOf(state)
 	// Renumbering moves the ranges without moving this device, and its
 	// deadline ends one with nothing applied.
 	d.mu.Lock()
 	d.v4 = state.V4RangesAt(s.now)
 	d.mu.Unlock()
+	return s
+}
+
+// membersOf is state's member set now, as [Daemon.snapshotOf] without what
+// a reconcile takes up of it, for a reader outside one.
+func (d *Daemon) membersOf(state *log.State) snapshot {
+	s := snapshot{state: state, now: d.now().Unix(), members: state.Nodes()}
 	s.live = make(map[types.Identity]bool, len(s.members))
 	for i := range s.members {
 		if s.members[i].Expired(s.now) {
@@ -324,6 +348,12 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			Endpoints: ep.Addrs,
 			HomeRelay: homeRelay(ep, relays),
 		}
+		switch {
+		case n.HasRole(types.RoleIngress):
+			p.Confined = conn.ConfineIngress
+		case n.HasRole(types.RoleService):
+			p.Confined = conn.ConfineService
+		}
 		out.peers = append(out.peers, p)
 		out.named = append(out.named, namedPeer{name: n.Name, id: n.Identity, wg: n.WireGuard, peer: p})
 	}
@@ -457,6 +487,12 @@ func describeLost(aum types.AUM, who string) string {
 		return "the renaming of the network to " + *aum.Network
 	case aum.Kind == types.KindSetNodeNames:
 		return "the change of " + who + "'s names"
+	case aum.Kind == types.KindSetPublished:
+		return "the change of what " + who + " publishes"
+	case aum.Kind == types.KindSetDomain:
+		return "the change of the network's domain"
+	case aum.Kind == types.KindRenameNode && aum.NodeName != nil:
+		return fmt.Sprintf("the renaming of %s to %q", who, *aum.NodeName)
 	}
 	return fmt.Sprintf("a %v", aum.Kind)
 }

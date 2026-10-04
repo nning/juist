@@ -1,0 +1,25 @@
+publish:
+  hops:
+    - name: browser
+      role: {en: anywhere, de: überall}
+      en: Asks for docs.example.org.
+      de: Ruft docs.example.org auf.
+    - name: vps
+      role: {en: ingress, de: Ingress}
+      via: TLS
+      en: Reads the name in the TLS ClientHello and passes the connection on.
+      de: Liest den Namen aus dem TLS-ClientHello und leitet die Verbindung weiter.
+    - name: nas
+      role: {en: target, de: Ziel}
+      via: WireGuard
+      en: Ends TLS, with a certificate from Let's Encrypt.
+      de: Entschlüsselt TLS mit einem Zertifikat von Let's Encrypt.
+    - name: 127.0.0.1:8080
+      end: true
+      role: {en: service, de: Dienst}
+      via: HTTP
+      en: Gets the plain connection.
+      de: Bekommt die entschlüsselte Verbindung.
+  legend:
+    en: "The ingress sees the name, the client's address, sizes and timing, not the content."
+    de: "Die Ingress sieht den Namen, die Adresse des Clients, Datenmengen und Zeitpunkte, aber nicht den Inhalt."

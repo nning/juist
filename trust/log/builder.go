@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/nning/juist/types"
 )
@@ -119,6 +120,22 @@ func (b *Builder) SetNodeNames(id types.Identity, names []string) (types.AUM, er
 	slices.Sort(grant.Names)
 	grant.Names = slices.Compact(grant.Names)
 	return b.finish(types.AUM{Kind: types.KindSetNodeNames, Subject: &id, Names: grant})
+}
+
+// SetDomain builds a record setting the network's public domain; "" withdraws
+// it.
+func (b *Builder) SetDomain(domain string) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindSetDomain, Domain: &domain})
+}
+
+// SetPublished builds a record replacing the names a member publishes, sorted
+// by label and without repeats; none withdraws them all. A label given twice
+// otherwise alike is refused.
+func (b *Builder) SetPublished(id types.Identity, names []types.PublishedName) (types.AUM, error) {
+	grant := &types.PublishGrant{Names: slices.Clone(names)}
+	slices.SortFunc(grant.Names, func(x, y types.PublishedName) int { return strings.Compare(x.Label, y.Label) })
+	grant.Names = slices.Compact(grant.Names)
+	return b.finish(types.AUM{Kind: types.KindSetPublished, Subject: &id, Publish: grant})
 }
 
 // RotateNodeKey builds a record replacing a member's WireGuard and encryption
@@ -252,6 +269,11 @@ func (b *Builder) RetireAddresses() (types.AUM, error) {
 // RenameNetwork builds a record giving the network another name.
 func (b *Builder) RenameNetwork(name string) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindRenameNetwork, Network: &name})
+}
+
+// RenameNode builds a record giving member id another name.
+func (b *Builder) RenameNode(id types.Identity, name string) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindRenameNode, Subject: &id, NodeName: &name})
 }
 
 func (b *Builder) seal(sealer Sealer, members []types.NodeRecord) (*types.EpochRecord, error) {

@@ -47,7 +47,7 @@ func FuzzDecodeIPCRequest(f *testing.F) {
 		if !bytes.Equal(re, data) {
 			t.Fatalf("re-encoding changed the bytes:\ninput: %x\nagain: %x", data, re)
 		}
-		if req.Command < CmdStatus || req.Command > CmdReset {
+		if _, known := requestShapes[req.Command]; !known {
 			t.Fatalf("validate() let through %v", req.Command)
 		}
 		if (req.Offer != nil) != (req.Command == CmdInvite) || (req.Reply != nil) != (req.Command == CmdInviteReply) {
@@ -99,6 +99,29 @@ func FuzzDecodeIPCResponse(f *testing.F) {
 		}
 		if !bytes.Equal(re, data) {
 			t.Fatalf("re-encoding changed the bytes:\ninput: %x\nagain: %x", data, re)
+		}
+	})
+}
+
+// FuzzDecodePublished targets the ingress's one reader of juistd's replies,
+// which ignores fields it does not know: whatever it takes, it takes without
+// a panic, and an error reply is never what is published.
+func FuzzDecodePublished(f *testing.F) {
+	for _, seed := range []Response{
+		{Published: &Published{Names: []PublishedTarget{{Name: "immich.pub.example.org", Port: 443, Proxy: true}}}},
+		{Published: &Published{}},
+		{Err: "the ingress may ask what is published, and nothing else"},
+		{Status: &Status{}},
+	} {
+		if b, err := encode(&seed, MaxResponse); err == nil {
+			f.Add(b)
+		}
+	}
+	f.Add([]byte{0xa0})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		p, err := DecodePublished(data)
+		if err == nil && p == nil {
+			t.Fatal("no error and nothing published")
 		}
 	})
 }

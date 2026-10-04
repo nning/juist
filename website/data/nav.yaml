@@ -1,0 +1,14 @@
+# The handbook's sidebar, in reading order. A page that does not exist yet is
+# left out, and so is a group with none.
+- group: basics
+  items: [docs/how-it-works, docs/install, docs/first-network, docs/invites]
+- group: everyday
+  items: [docs/status, docs/operator, docs/names, docs/remove]
+- group: admins
+  items: [docs/admins, docs/networks, docs/network-changes, docs/keys]
+- group: routing
+  items: [docs/exit-nodes, docs/subnets, docs/relays, docs/publishing]
+- group: design
+  items: [docs/architecture, docs/compare, docs/security]
+- group: help
+  items: [docs/troubleshooting]

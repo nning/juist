@@ -1,0 +1,5 @@
+{{- $f := index hugo.Data.flows (.Get 0) -}}
+{{- $l := site.Language.Lang -}}
+<figure class="flow"><ol>
+{{- range $i, $h := $f.hops }}<li{{ if $h.end }} class="end"{{ end }}>{{ with $h.via }}<span class="via">{{ . }}</span>{{ end }}<b>{{ $h.name }}</b><small>{{ index $h.role $l }}</small><p>{{ index $h $l }}</p></li>{{ end }}
+</ol><figcaption>{{ index $f.legend $l }}</figcaption></figure>

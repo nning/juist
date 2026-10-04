@@ -3,3 +3,7 @@
 /coverage.out
 /juist
 /juistd
+/probe
+/website/resources/
+/website/public/
+/website/.hugo_build.lock

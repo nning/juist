@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/nning/juist/ipc"
 )
 
 type sandbox struct {
@@ -31,11 +33,16 @@ func newSandbox(t *testing.T) *sandbox {
 		}
 	}
 	// Every stub logs how it was called. install creates the directory it
-	// is given, as the real one would.
-	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "exit-node.sh", "install"} {
+	// is given, as the real one would, and systemctl has enabled the units
+	// the sandbox's enabled file lists.
+	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "exit-node.sh", "ingress.sh", "serve.sh", "install"} {
 		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(root, "calls") + "\n"
-		if name == "install" {
+		switch name {
+		case "install":
 			body += "for last; do :; done; mkdir -p \"$last\"\n"
+		case "systemctl":
+			body += "if [ \"$1\" = is-enabled ]; then for last; do :; done; grep -qx \"$last\" " +
+				filepath.Join(root, "enabled") + " 2>/dev/null; exit; fi\n"
 		}
 		if err := os.WriteFile(filepath.Join(root, "bin", name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
@@ -54,6 +61,8 @@ func (sb *sandbox) run(script string, args ...string) {
 	s := strings.NewReplacer(
 		"/usr/lib/juist/firewall.sh", filepath.Join(sb.root, "bin", "firewall.sh"),
 		"/usr/lib/juist/exit-node.sh", filepath.Join(sb.root, "bin", "exit-node.sh"),
+		"/usr/lib/juist/ingress.sh", filepath.Join(sb.root, "bin", "ingress.sh"),
+		"/usr/lib/juist/serve.sh", filepath.Join(sb.root, "bin", "serve.sh"),
 		"/var/lib/", sb.root+"/var/lib/",
 		"/run/systemd/system", filepath.Join(sb.root, "run/systemd/system"),
 	).Replace(string(b))
@@ -84,7 +93,7 @@ func TestAnUpgradeIgnoresWhatTheDaemonPlants(t *testing.T) {
 	}
 	sb.run("postinst", "configure", "0.9")
 	calls := sb.calls()
-	if strings.Contains(calls, "firewall.sh allow") || strings.Contains(calls, "enable") {
+	if strings.Contains(calls, "firewall.sh allow") || strings.Contains(calls, "systemctl enable") {
 		t.Fatalf("an upgrade acted as a fresh install:\n%s", calls)
 	}
 	if !strings.Contains(calls, "try-restart juistd.service juistd@*.service") {
@@ -499,5 +508,113 @@ console.log(JSON.stringify(out));
 		if got[i] != c.want {
 			t.Errorf("%s asking %s on %v: %s, want %s", c.User, c.Action, c.Details, got[i], c.want)
 		}
+	}
+}
+
+// ingress.sh starts the ingress and lets 443 and 80 through an active
+// firewall, and takes both back, from a stopped firewalld too.
+func TestIngressScriptOpensAndCloses(t *testing.T) {
+	sb := newSandbox(t)
+	for _, name := range []string{"firewall-cmd", "ufw"} {
+		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(sb.root, "calls") + "\n"
+		if name == "ufw" {
+			body += "[ \"$1\" = status ] && echo 'Status: active'\n"
+		}
+		if err := os.WriteFile(filepath.Join(sb.root, "bin", name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("/bin/sh", append([]string{"ingress.sh"}, args...)...)
+		cmd.Env = []string{"PATH=" + filepath.Join(sb.root, "bin") + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		return string(out) + sb.calls(), err
+	}
+	calls, err := run("on")
+	for _, want := range []string{"systemctl enable --now --quiet juist-ingress.service", "firewall-cmd --add-service=juist-ingress",
+		"firewall-cmd --permanent --add-service=juist-ingress", "ufw allow juist-ingress"} {
+		if err != nil || !strings.Contains(calls, want) {
+			t.Fatalf("on lacks %q (%v):\n%s", want, err, calls)
+		}
+	}
+	calls, err = run("off")
+	for _, want := range []string{"systemctl disable --now juist-ingress.service", "firewall-cmd --remove-service=juist-ingress",
+		"firewall-cmd --permanent --remove-service=juist-ingress", "ufw delete allow juist-ingress"} {
+		if err != nil || !strings.Contains(calls, want) {
+			t.Fatalf("off lacks %q (%v):\n%s", want, err, calls)
+		}
+	}
+	if calls, err := run("open"); err == nil {
+		t.Fatalf("an unknown action succeeded:\n%s", calls)
+	}
+
+	// A firewall that refuses is said, and the ingress runs all the same.
+	refusing := "#!/bin/sh\n[ \"$1\" = --state ] && exit 0\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(sb.root, "bin", "firewall-cmd"), []byte(refusing), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if calls, err := run("on"); err != nil || !strings.Contains(calls, "warning: firewalld did not let juist-ingress in") {
+		t.Fatalf("a refusing firewalld (%v):\n%s", err, calls)
+	}
+}
+
+// Removing the package stops an ingress and closes its ports.
+func TestARemovalStopsTheIngress(t *testing.T) {
+	sb := newSandbox(t)
+	sb.run("prerm", "remove")
+	if calls := sb.calls(); !strings.Contains(calls, "ingress.sh off") || !strings.Contains(calls, "serve.sh off") {
+		t.Fatalf("prerm left the ingress or the terminator:\n%s", calls)
+	}
+}
+
+// systemd starts the terminator by juistd's file, from a fresh install on;
+// an upgrade moves a terminator enabled the old way to it, and enables
+// nothing else.
+func TestTheTerminatorStartsByItsPath(t *testing.T) {
+	b, err := os.ReadFile("systemd/juist-serve.path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"\nPathExists=" + ipc.TerminatorWanted + "\n", "\nUnit=juist-serve.service\n"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("juist-serve.path lacks %q", strings.TrimSpace(want))
+		}
+	}
+	sb := newSandbox(t)
+	sb.run("postinst", "configure")
+	if calls := sb.calls(); !strings.Contains(calls, "systemctl enable --now juist-serve.path") {
+		t.Fatalf("a fresh install left the terminator's path off:\n%s", calls)
+	}
+	sb.run("postinst", "configure", "0.9")
+	if calls := sb.calls(); strings.Contains(calls, "juist-serve.path") {
+		t.Fatalf("an upgrade enabled the terminator's path:\n%s", calls)
+	}
+	if err := os.WriteFile(filepath.Join(sb.root, "enabled"), []byte("juist-serve.service\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sb.run("postinst", "configure", "0.9")
+	if calls := sb.calls(); !strings.Contains(calls, "systemctl disable --quiet juist-serve.service\n") ||
+		!strings.Contains(calls, "systemctl enable --now juist-serve.path\n") {
+		t.Fatalf("an upgrade left the terminator enabled the old way:\n%s", calls)
+	}
+}
+
+// serve.sh starts the terminator and stops it.
+func TestServeScriptStartsAndStops(t *testing.T) {
+	sb := newSandbox(t)
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("/bin/sh", append([]string{"serve.sh"}, args...)...)
+		cmd.Env = []string{"PATH=" + filepath.Join(sb.root, "bin") + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		return string(out) + sb.calls(), err
+	}
+	if calls, err := run("on"); err != nil || !strings.Contains(calls, "systemctl enable --now --quiet juist-serve.path") {
+		t.Fatalf("on (%v):\n%s", err, calls)
+	}
+	if calls, err := run("off"); err != nil || !strings.Contains(calls, "systemctl disable --now juist-serve.path juist-serve.service") {
+		t.Fatalf("off (%v):\n%s", err, calls)
+	}
+	if calls, err := run("open"); err == nil {
+		t.Fatalf("an unknown action succeeded:\n%s", calls)
 	}
 }

@@ -218,3 +218,58 @@ func TestClearWaitsForASupervisedJuistd(t *testing.T) {
 		t.Errorf("cleared beside a supervised juistd (%v):\n%s", err, out)
 	}
 }
+
+// The ingress's and the terminator's rc.d scripts run juistd as their
+// helpers on the default network's socket, under daemon(8), and stop them.
+func TestTheHelpersRCScriptsRunThem(t *testing.T) {
+	requireRoot(t)
+	for _, tc := range []struct{ script, want string }{
+		{"juist_ingress", "--helper ingress --socket /var/run/juist/juistd.sock"},
+		{"juist_serve", "--helper tls --home /var/db/juist-serve --socket /var/run/juist/juistd.sock --acme https://ca.example/dir"},
+	} {
+		t.Run(tc.script, func(t *testing.T) {
+			if tc.script == "juist_serve" {
+				if err := exec.Command("pw", "usershow", "juist-serve").Run(); err != nil {
+					t.Skip("no juist-serve user here")
+				}
+				if _, err := os.Stat("/var/db/juist-serve"); err != nil {
+					t.Cleanup(func() { os.Remove("/var/db/juist-serve") })
+				}
+			}
+			dir := t.TempDir()
+			argsFile := filepath.Join(dir, "args")
+			fake := filepath.Join(dir, "juistd")
+			if err := os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\" > "+argsFile+"\nexec sleep 60\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			rc := func(verb string) (string, error) {
+				cmd := exec.Command("/bin/sh", "freebsd/"+tc.script, verb)
+				cmd.Env = append(os.Environ(), tc.script+"_bin="+fake, "juist_serve_args=--acme https://ca.example/dir")
+				out, err := cmd.CombinedOutput()
+				return string(out), err
+			}
+			if out, err := rc("onestatus"); err == nil {
+				t.Skipf("%s runs here:\n%s", tc.script, out)
+			}
+			if out, err := rc("onestart"); err != nil {
+				t.Fatalf("start: %v\n%s", err, out)
+			}
+			t.Cleanup(func() { rc("onestop"); os.Remove("/var/log/" + strings.ReplaceAll(tc.script, "_", "-") + ".log") })
+			var args []byte
+			for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+				if args, _ = os.ReadFile(argsFile); len(args) > 0 {
+					break
+				}
+			}
+			if got := strings.TrimSpace(string(args)); got != tc.want {
+				t.Errorf("juistd got %q, want %q", got, tc.want)
+			}
+			if out, err := rc("onestop"); err != nil {
+				t.Errorf("stop: %v\n%s", err, out)
+			}
+			if out, err := rc("onestatus"); err == nil {
+				t.Errorf("stopped, the status says:\n%s", out)
+			}
+		})
+	}
+}

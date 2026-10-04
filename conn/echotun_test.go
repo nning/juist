@@ -56,13 +56,13 @@ func (d *echoTUN) Close() error {
 // Read blocks until an echo reply is queued or the device is closed. The
 // packet goes at bufs[i][offset:], per the tun.Device contract: the caller
 // reserves that headroom for WireGuard's transport header.
-func (d *echoTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+func (d *echoTUN) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	select {
 	case pkt := <-d.replies:
-		if len(bufs) < 1 || len(bufs[0]) < offset+len(pkt) {
+		if len(slab) < 2*tun.ReadPacketSpacing+len(pkt) {
 			return 0, io.ErrShortBuffer
 		}
-		sizes[0] = copy(bufs[0][offset:], pkt)
+		packets[0] = tun.ReadPacket{Offset: tun.ReadPacketSpacing, Size: copy(slab[tun.ReadPacketSpacing:], pkt)}
 		return 1, nil
 	case <-d.closed:
 		return 0, io.EOF

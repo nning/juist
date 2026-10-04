@@ -1,0 +1,18 @@
+# The website on a member, for juist publish add NAME 127.0.0.1:8181:
+#   docker compose up -d     builds the image from this checkout and (re)starts it
+services:
+  site:
+    container_name: juist-site
+    image: juist-site
+    build:
+      context: ..
+      dockerfile: website/Containerfile
+    pull_policy: build
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8181:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    pids_limit: 64

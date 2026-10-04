@@ -1,0 +1,5 @@
+# Podman has no gateway mode, and rootless keeps the host from the service
+# anyway. Used where .env sets COMPOSE_FILE=compose.yaml:compose.podman.yaml.
+networks:
+  whoami-only:
+    driver_opts: !reset {}

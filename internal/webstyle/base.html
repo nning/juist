@@ -1,0 +1,52 @@
+{{define "juist-style"}}<style>
+@font-face { font-family: Plex; font-weight: 400; font-display: swap; src: url({{.Assets}}plex-sans-400.woff2) format("woff2"); unicode-range: U+0000, U+000D, U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02; }
+@font-face { font-family: Plex; font-weight: 600; font-display: swap; src: url({{.Assets}}plex-sans-600.woff2) format("woff2"); unicode-range: U+0000, U+000D, U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02; }
+@font-face { font-family: PlexMono; font-weight: 400; font-display: swap; src: url({{.Assets}}plex-mono-400.woff2) format("woff2"); unicode-range: U+0000, U+000D, U+0020-007E, U+00A0-00FF, U+0131, U+0152-0153, U+02C6, U+02DA, U+02DC, U+2013-2014, U+2018-201A, U+201C-201E, U+2020-2022, U+2026, U+2030, U+2039-203A, U+2044, U+20AC, U+2122, U+2212, U+FB01-FB02; }
+:root {
+	--sans: Plex, system-ui, sans-serif; --mono: PlexMono, ui-monospace, monospace;
+	color-scheme: light dark;
+	--bg: #0a1317; --panel: #102127; --panel-2: #142a31; --line: #1d363e; --line-2: #7d9192;
+	--text: #e4dccb; --text-2: #a9b8b4; --muted: #7d9192;
+	--accent: #46d1bf; --accent-ink: #062823; --sand: #e8c98e; --red: #f0644f;
+	--direct: #4cc68a; --relay: #f1c453; --sought: #46d1bf; --absent: #7d9192; --alarm: #f0644f;
+}
+@media (prefers-color-scheme: light) {
+	:root {
+		--bg: #f6f0e1; --panel: #fbf7ec; --panel-2: #efe7d3; --line: #ddd3bb; --line-2: #5f6e6d;
+		--text: #17262b; --text-2: #3d5157; --muted: #5f6e6d;
+		--accent: #0b7268; --accent-ink: #f6f0e1; --sand: #8a5d0f; --red: #b82d1b;
+		--direct: #1a7444; --relay: #8f6100; --sought: #0b7268; --absent: #5f6e6d; --alarm: #b82d1b;
+	}
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 400 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+.bar { height: 56px; border-bottom: 1px solid var(--line); }
+.bar .in, main, footer .in { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+.bar .in { height: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.brand { color: var(--text); --mark-link: var(--accent); line-height: 0; }
+.brand svg { height: 24px; width: auto; }
+.bar .note { font: 400 13px var(--mono); color: var(--muted); }
+main { padding-top: 36px; padding-bottom: 72px; }
+.crumbs { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+.crumbs a { color: var(--muted); }
+.crumbs span { margin: 0 6px; }
+.head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 32px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+h1 { font-size: clamp(28px, 3.6vw, 40px); font-weight: 600; line-height: 1.2; letter-spacing: -0.025em; margin: 8px 0 10px; overflow-wrap: anywhere; }
+.meta { font: 400 13px var(--mono); color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-size: 15px; margin-top: 8px; }
+th { text-align: left; font-weight: 600; font-size: 13.5px; border-bottom: 1px solid var(--line-2); padding: 10px 16px 8px 0; white-space: nowrap; }
+th a { color: var(--text); text-decoration: none; }
+th a:hover { color: var(--accent); }
+td { border-bottom: 1px solid var(--line); padding: 9px 16px 9px 0; vertical-align: middle; }
+.empty { color: var(--muted); padding: 32px 0; text-align: center; }
+footer { border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--muted); font-size: 13.5px; }
+@media (max-width: 640px) {
+	.bar .in, main, footer .in { padding: 0 16px; }
+	main { padding-top: 24px; padding-bottom: 48px; }
+	td, th { padding-right: 10px; }
+}
+</style>{{end}}
+{{define "juist-wordmark"}}<svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="80 -770 2860 980"><path d="M95.0,99.0L308.0,99.0L308.0,-415.0L91.0,-415.0L91.0,-516.0L436.0,-516.0L436.0,60.0Q436.0,122.0 401.0,161.0Q366.0,200.0 292.0,200.0L95.0,200.0L95.0,99.0ZM997.0,-91.0L992.0,-91.0Q975.0,-49.0 939.0,-18.0Q904.0,12.0 841.0,12.0Q765.0,12.0 717.0,-38.0Q670.0,-89.0 670.0,-183.0L670.0,-516.0L798.0,-516.0L798.0,-201.0Q798.0,-89.0 895.0,-89.0Q914.0,-89.0 932.0,-94.0Q951.0,-99.0 965.0,-109.0Q980.0,-120.0 988.0,-135.0Q997.0,-150.0 997.0,-171.0L997.0,-516.0L1125.0,-516.0L1125.0,0.0L997.0,0.0L997.0,-91.0ZM1298.0,-101.0L1468.0,-101.0L1468.0,-415.0L1298.0,-415.0L1298.0,-516.0L1596.0,-516.0L1596.0,-101.0L1754.0,-101.0L1754.0,0.0L1298.0,0.0L1298.0,-101.0ZM2098.0,12.0Q2013.0,12.0 1951.0,-14.0Q1889.0,-41.0 1854.0,-86.0L1929.0,-154.0Q1961.0,-119.0 2002.0,-100.0Q2044.0,-81.0 2099.0,-81.0Q2147.0,-81.0 2176.0,-97.0Q2205.0,-113.0 2205.0,-146.0Q2205.0,-174.0 2185.0,-184.0Q2166.0,-194.0 2134.0,-199.0L2051.0,-212.0Q2019.0,-217.0 1988.0,-226.0Q1958.0,-236.0 1934.0,-253.0Q1911.0,-270.0 1897.0,-296.0Q1883.0,-323.0 1883.0,-361.0Q1883.0,-442.0 1943.0,-485.0Q2004.0,-528.0 2110.0,-528.0Q2185.0,-528.0 2237.0,-507.0Q2290.0,-486.0 2324.0,-448.0L2257.0,-374.0Q2235.0,-398.0 2198.0,-416.0Q2162.0,-435.0 2106.0,-435.0Q2008.0,-435.0 2008.0,-374.0Q2008.0,-346.0 2028.0,-335.0Q2048.0,-325.0 2080.0,-320.0L2162.0,-307.0Q2195.0,-302.0 2225.0,-292.0Q2256.0,-283.0 2279.0,-266.0Q2303.0,-249.0 2317.0,-223.0Q2331.0,-197.0 2331.0,-159.0Q2331.0,-79.0 2269.0,-33.0Q2208.0,12.0 2098.0,12.0ZM2735.0,0.0Q2661.0,0.0 2626.0,-39.0Q2591.0,-78.0 2591.0,-140.0L2591.0,-415.0L2441.0,-415.0L2441.0,-516.0L2543.0,-516.0Q2574.0,-516.0 2587.0,-528.0Q2600.0,-541.0 2600.0,-573.0L2600.0,-698.0L2719.0,-698.0L2719.0,-516.0L2929.0,-516.0L2929.0,-415.0L2719.0,-415.0L2719.0,-101.0L2929.0,-101.0L2929.0,0.0L2735.0,0.0Z" fill="currentColor"/><g class="link"><line x1="373" y1="-673" x2="1532" y2="-673" stroke="var(--mark-link, #46d1bf)" stroke-width="26" stroke-linecap="round"/><circle cx="373" cy="-673" r="82" fill="var(--mark-link, #46d1bf)"/><circle cx="1532" cy="-673" r="82" fill="var(--mark-link, #46d1bf)"/></g></svg>{{end}}

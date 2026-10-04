@@ -6,8 +6,13 @@ set -e
 if [ "$1" = configure ]; then
 	if command -v systemd-sysusers >/dev/null 2>&1; then
 		systemd-sysusers /usr/lib/sysusers.d/juist.conf
-	elif ! getent passwd juist >/dev/null; then
-		adduser --system --group --home /var/lib/juist --no-create-home juist
+	else
+		getent passwd juist >/dev/null ||
+			adduser --system --group --home /var/lib/juist --no-create-home juist
+		getent passwd juist-ingress >/dev/null ||
+			adduser --system --group --home /nonexistent --no-create-home juist-ingress
+		getent passwd juist-serve >/dev/null ||
+			adduser --system --group --home /var/lib/juist-serve --no-create-home juist-serve
 	fi
 	# 0700: this directory holds the device's keys. It exists before the
 	# service first starts, so the daemon has its home from the start.
@@ -32,10 +37,17 @@ if [ "$1" = configure ]; then
 		systemctl daemon-reload || true
 		if [ -n "$fresh" ]; then
 			systemctl enable --now juistd.service || true
+			systemctl enable --now juist-serve.path || true
 		else
+			# A terminator enabled before juist-serve.path came is started
+			# by it.
+			if systemctl is-enabled --quiet juist-serve.service 2>/dev/null; then
+				systemctl disable --quiet juist-serve.service || true
+				systemctl enable --now juist-serve.path || true
+			fi
 			# An upgrade restarts the daemons that were running, and only
 			# those: the default's and every other network's instance.
-			systemctl try-restart juistd.service 'juistd@*.service' || true
+			systemctl try-restart juistd.service 'juistd@*.service' juist-ingress.service juist-serve.service || true
 		fi
 	fi
 fi

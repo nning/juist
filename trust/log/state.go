@@ -24,6 +24,7 @@ type State struct {
 	vouchers    uint32 // zero reads as one
 	v4Prefix    *netip.Prefix
 	v4Retiring  *types.RetiringRanges
+	domain      string
 	disablement []types.Hash
 	admins      map[types.Identity]types.AdminKey
 	nodes       map[types.Identity]*types.NodeRecord
@@ -48,6 +49,9 @@ func (s *State) Epoch() uint64 { return s.epoch }
 
 // EpochCommit returns the commitment to the current epoch's group secret.
 func (s *State) EpochCommit() types.Hash { return s.epochCommit }
+
+// Domain returns the network's public domain, or "" for none.
+func (s *State) Domain() string { return s.domain }
 
 // Schema returns the record schema this network is written under.
 func (s *State) Schema() types.SchemaVersion { return s.schema }
@@ -292,6 +296,7 @@ func (s *State) Snapshot() *types.Snapshot {
 		EpochWraps:  s.EpochRecord().Wraps,
 		Schema:      s.schema,
 		Vouchers:    s.vouchers,
+		Domain:      s.domain,
 	}
 	if s.v4Prefix != nil {
 		p := *s.v4Prefix
@@ -325,6 +330,7 @@ func stateFromSnapshot(snap *types.Snapshot, head types.Hash) (*State, error) {
 		epochCommit: snap.EpochCommit,
 		schema:      snap.Schema,
 		vouchers:    snap.Vouchers,
+		domain:      snap.Domain,
 		disablement: slices.Clone(snap.Disablement),
 		admins:      make(map[types.Identity]types.AdminKey, len(snap.Admins)),
 		nodes:       make(map[types.Identity]*types.NodeRecord, len(snap.Nodes)),

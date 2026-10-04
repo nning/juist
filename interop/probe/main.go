@@ -6,14 +6,26 @@
 //	probe hold ADDR:PORT FROM SECS    as get, then after SECS on the same connection print the echo of "again"
 //	probe dns ADDR                    ask ADDR's port 53 for example.org, and print the answer's code
 //	probe resolve ADDR LOG            answer DNS on ADDR's port 53 as the public would, logging "TYPE NAME" to LOG
+//	probe tls NAME PORT               as serve, over TLS on PORT, with a certificate of its own
+//	probe hello ADDR:PORT SNI [CA]    as get, over TLS, asking for SNI, taking a certificate CA's file issued, or any
+//	probe answer ADDR IP              answer DNS on ADDR, over UDP and TCP, with IP for every name
+//	probe visitors [FLAGS] URL        load a website as browsers do, and print what came of it
 package main
 
 import (
 	"bufio"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
+	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,15 +34,23 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 3 && !(len(os.Args) == 4 && (os.Args[1] == "get" || os.Args[1] == "resolve")) &&
-		!(len(os.Args) == 5 && os.Args[1] == "hold") {
-		fmt.Fprintln(os.Stderr, "usage: probe serve NAME | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | dns ADDR | resolve ADDR LOG")
+	if len(os.Args) > 1 && os.Args[1] == "visitors" {
+		if err := visitors(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "probe:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) != 3 && !(len(os.Args) == 4 && slices.Contains([]string{"serve", "get", "resolve", "tls", "hello", "answer"}, os.Args[1])) &&
+		!(len(os.Args) == 5 && (os.Args[1] == "hold" || os.Args[1] == "hello")) {
+		fmt.Fprintln(os.Stderr, "usage: probe serve NAME [PORT] | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | dns ADDR | "+
+			"resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | answer ADDR IP")
 		os.Exit(2)
 	}
 	var err error
 	switch os.Args[1] {
 	case "serve":
-		err = serve(os.Args[2])
+		err = serve(os.Args[2], append(os.Args[3:], "80")[0])
 	case "get":
 		err = get(os.Args[2], os.Args[3:])
 	case "hold":
@@ -39,6 +59,12 @@ func main() {
 		err = dns(os.Args[2])
 	case "resolve":
 		err = resolve(os.Args[2], os.Args[3])
+	case "tls":
+		err = serveTLS(os.Args[2], os.Args[3])
+	case "hello":
+		err = hello(os.Args[2], os.Args[3], os.Args[4:])
+	case "answer":
+		err = answerAll(os.Args[2], os.Args[3])
 	default:
 		err = fmt.Errorf("no command %q", os.Args[1])
 	}
@@ -48,8 +74,8 @@ func main() {
 	}
 }
 
-func serve(name string) error {
-	l, err := net.Listen("tcp", ":80")
+func serve(name, port string) error {
+	l, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		return err
 	}
@@ -64,6 +90,137 @@ func serve(name string) error {
 			host, _, _ := net.SplitHostPort(c.RemoteAddr().String())
 			fmt.Fprintf(c, "%s from %s\n", name, host)
 			io.Copy(c, c)
+		}()
+	}
+}
+
+func serveTLS(name, port string) error {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour),
+		NotAfter: time.Now().Add(24 * time.Hour), DNSNames: []string{name}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return err
+	}
+	l, err := tls.Listen("tcp", ":"+port, &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}})
+	if err != nil {
+		return err
+	}
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			return err
+		}
+		go func() {
+			defer c.Close()
+			c.SetDeadline(time.Now().Add(time.Minute))
+			host, _, _ := net.SplitHostPort(c.RemoteAddr().String())
+			fmt.Fprintf(c, "%s from %s\n", name, host)
+		}()
+	}
+}
+
+func hello(addr, sni string, ca []string) error {
+	cfg := &tls.Config{ServerName: sni, InsecureSkipVerify: true}
+	if len(ca) == 1 {
+		pem, err := os.ReadFile(ca[0])
+		if err != nil {
+			return err
+		}
+		cfg.RootCAs, cfg.InsecureSkipVerify = x509.NewCertPool(), false
+		if !cfg.RootCAs.AppendCertsFromPEM(pem) {
+			return fmt.Errorf("%s holds no certificate", ca[0])
+		}
+	}
+	d := net.Dialer{Timeout: 10 * time.Second}
+	c, err := tls.DialWithDialer(&d, "tcp", addr, cfg)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil {
+		return err
+	}
+	fmt.Print(line)
+	return nil
+}
+
+func answerAll(addr, ip string) error {
+	a, err := netip.ParseAddr(ip)
+	if err != nil || !a.Is4() {
+		return fmt.Errorf("%q is no IPv4 address", ip)
+	}
+	reply := func(q []byte) []byte {
+		var p dnsmessage.Parser
+		h, err := p.Start(q)
+		if err != nil {
+			return nil
+		}
+		question, err := p.Question()
+		if err != nil {
+			return nil
+		}
+		b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, Authoritative: true})
+		b.StartQuestions()
+		b.Question(question)
+		b.StartAnswers()
+		if question.Type == dnsmessage.TypeA {
+			b.AResource(dnsmessage.ResourceHeader{Name: question.Name, Class: dnsmessage.ClassINET, TTL: 5},
+				dnsmessage.AResource{A: a.As4()})
+		}
+		out, _ := b.Finish()
+		return out
+	}
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return err
+	}
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if out := reply(buf[:n]); out != nil {
+				pc.WriteTo(out, from)
+			}
+		}
+	}()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return err
+		}
+		go func() {
+			defer c.Close()
+			c.SetDeadline(time.Now().Add(time.Minute))
+			for {
+				var n [2]byte
+				if _, err := io.ReadFull(c, n[:]); err != nil {
+					return
+				}
+				q := make([]byte, int(n[0])<<8|int(n[1]))
+				if _, err := io.ReadFull(c, q); err != nil {
+					return
+				}
+				out := reply(q)
+				if out == nil {
+					return
+				}
+				if _, err := c.Write(append([]byte{byte(len(out) >> 8), byte(len(out))}, out...)); err != nil {
+					return
+				}
+			}
 		}()
 	}
 }

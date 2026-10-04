@@ -285,6 +285,12 @@ func (a *app) approveOne(auth *log.Authority, w *waitingChange) error {
 		a.warn("%v", err)
 		return nil
 	}
+	if n, ok := voucherLost(auth.State(), &w.aum); ok {
+		if err := a.checkAdminDeviceLoss(auth.State(), n, true); err != nil {
+			a.warn("%v", err)
+			return nil
+		}
+	}
 	ok, err := a.askNow(a.ctx, "approve?")
 	if err != nil {
 		return err

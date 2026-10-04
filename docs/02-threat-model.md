@@ -17,9 +17,9 @@
 | Evicted member | Was a member; retains all old keys and state | Signed revocation records + epoch bump (loses group secret → loses discovery) + WG peer removal + fail-closed freshness TTL |
 | Stolen/lost device | Full key material of one member | Same as evicted member, after detection; per-device keys mean no shared secrets to rotate |
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
-| Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; use open to every member until coarse ACLs (M12) scope it |
+| Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; use open to every member until coarse ACLs (M14) scope it |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
-| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); signed releases (M11, after v1.0); update transparency (roadmap item, not v1) |
+| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); signed releases (M13, after v1.0); update transparency (roadmap item, not v1) |
 
 ## Out of scope / consciously accepted
 
@@ -102,7 +102,7 @@ adopting this system must accept them explicitly.
    never overlap the overlay space, so an exit node cannot intercept member-to-member
    traffic; an exit node carries public addresses alone, so it reaches neither its
    own LAN nor a client's; and a client uses one only when its owner chooses it
-   and its operator agreed to serve. Until ACLs (M12), though, the grant is
+   and its operator agreed to serve. Until ACLs (M14), though, the grant is
    network-wide: every member may use every exit node, so the quorum that grants
    the role decides for all members at once. The exit node answers its clients' DNS
    too, where systemd-resolved runs on them, and so sees their lookups as it sees
@@ -136,7 +136,7 @@ adopting this system must accept them explicitly.
    daemon, does touch the host firewall once, in the other direction: where
    firewalld or ufw runs it lets everything in on `juist0`, as Tailscale's own
    rules do for `tailscale0`, because a host firewall that drops the overlay
-   silently breaks gossip — and with it removals. So until ACLs exist (M12),
+   silently breaks gossip — and with it removals. So until ACLs exist (M14),
    **every member can reach every port the host listens on through the tunnel**;
    the host firewall still guards every other interface, and
    `/usr/lib/juist/firewall.sh revoke` takes the rule back.
@@ -151,7 +151,7 @@ adopting this system must accept them explicitly.
    is the device keys. Bounded by: a device is still removed from each network
    by that network's quorum. A user per instance, which would close it, needs
    the packaging and each instance's view of the one below reworked, and is
-   left for the hardening before the audit (M10).
+   left for the hardening before the audit (M12).
 10. **Admin devices see what waits for the admins (M5b).** A change waiting
    for votes is sealed to the admin keys, but the juistd of every admin device
    that carries it sees its outside: which admin key handed it on, when it

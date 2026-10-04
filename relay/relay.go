@@ -17,9 +17,11 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
+	"tailscale.com/derp"
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -166,7 +168,7 @@ func New(opts Options) (*Server, error) {
 	registerAdmission(s.token, s)
 
 	mux := http.NewServeMux()
-	h := s.track(derpserver.Handler(s.derp))
+	h := s.track(http.HandlerFunc(s.serveDERP))
 	// Both patterns: "/derp" is the connection endpoint and "/derp/..." the
 	// latency probes a client's netcheck uses.
 	mux.Handle("/derp", h)
@@ -233,6 +235,39 @@ func (s *Server) track(h http.Handler) http.Handler {
 		}()
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientContextKey{}, rec)))
 	})
+}
+
+// serveDERP is derpserver.Handler with the session kept on the request's
+// goroutine and context, which carry the record the admission hook fills in.
+// Upstream's detaches both, so its sessions are admitted with no record.
+func (s *Server) serveDERP(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/derp/probe", "/derp/latency-check":
+		derpserver.ProbeHandler(w, r)
+		return
+	}
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "derp") {
+		http.Error(w, "DERP requires connection upgrade", http.StatusUpgradeRequired)
+		return
+	}
+	nc, brw, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		http.Error(w, "the connection cannot be taken over", http.StatusInternalServerError)
+		return
+	}
+	if r.Header.Get(derp.FastStartHeader) != "1" {
+		nc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		if _, err := fmt.Fprintf(nc, "HTTP/1.1 101 Switching Protocols\r\n"+
+			"Upgrade: DERP\r\n"+
+			"Connection: Upgrade\r\n"+
+			"Derp-Version: %v\r\n"+
+			"Derp-Public-Key: %s\r\n\r\n",
+			derp.ProtocolVersion, s.derp.PublicKey().UntypedHexString()); err != nil {
+			nc.Close()
+			return
+		}
+	}
+	s.derp.Accept(r.Context(), nc, brw, nc.RemoteAddr().String())
 }
 
 // Port reports the TCP port DERP is served on, which is what members put in

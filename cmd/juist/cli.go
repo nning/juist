@@ -77,6 +77,15 @@ type app struct {
 	listing      string
 	listingHeads bool
 
+	// argv is the invocation's arguments, which a background share runs
+	// again with. spawn starts that run, in a session of its own; ready is
+	// set in it, and says once the share is up, whereupon detach lets go of
+	// the terminal.
+	argv   []string
+	spawn  func(args []string) (ready io.ReadCloser, wait func() error, kill func(), err error)
+	ready  io.WriteCloser
+	detach func()
+
 	// interactive is set when a person can answer a question on in, read
 	// through reader; reading is a read under way.
 	interactive bool
@@ -122,7 +131,7 @@ func newApp(in io.Reader, out, errOut io.Writer) *app {
 	a := &app{ctx: context.Background(), in: in, out: out, errOut: errOut, inviteAddrs: hostAddrs, now: time.Now, drawV4: drawV4Prefix,
 		host: systemLayout(), asRoot: func() bool { return os.Geteuid() == 0 }, admissionHold: admissionHold,
 		system: os.ReadFile, getenv: os.Getenv,
-		helpers: &rendezvous.Helpers{STUN: rendezvous.DefaultSTUN}}
+		helpers: &rendezvous.Helpers{STUN: rendezvous.DefaultSTUN}, spawn: spawnBackground}
 	a.interactive = isTerminal(in)
 	a.color = isTerminal(out) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
 	a.width = termWidth(out)
@@ -306,34 +315,39 @@ func (s spec) synopsis() string {
 // --home and --socket, which every command takes. A switch that grants
 // authority takes a letter no one types by habit, such as -v for verbose.
 var shorts = map[string]byte{
-	"accept-names": 'A',
-	"admin":        'a',
-	"admin-key":    'K',
-	"admin-name":   'u',
-	"admin-votes":  'v',
-	"device":       'n',
-	"expires":      'e',
-	"finish":       'f',
-	"for":          't',
-	"force":        'f',
-	"ipv4":         '4',
-	"isolate":      'i',
-	"key":          'k',
-	"keys":         'k',
-	"name":         'n',
-	"no-apply":     'n',
-	"no-device":    'N',
-	"no-dht":       'd',
-	"no-lan":       'l',
-	"on":           'o',
-	"operator":     'o',
-	"port":         'p',
-	"quorum":       'q',
-	"relay":        'r',
-	"stop":         'S',
-	"voucher":      'V',
-	"votes":        'v',
-	"yes":          'y',
+	"admin":       'a',
+	"admin-key":   'K',
+	"admin-name":  'u',
+	"admin-votes": 'v',
+	"background":  'b',
+	"device":      'n',
+	"expires":     'e',
+	"finish":      'f',
+	"for":         't',
+	"force":       'f',
+	"ingress":     'i',
+	"ipv4":        '4',
+	"isolate":     'i',
+	"key":         'k',
+	"keys":        'k',
+	"name":        'n',
+	"no-apply":    'n',
+	"no-device":   'N',
+	"no-dht":      'd',
+	"no-lan":      'l',
+	"on":          'o',
+	"operator":    'o',
+	"port":        'p',
+	"http2":       '2',
+	"proxy":       'P',
+	"public":      'W',
+	"quorum":      'q',
+	"relay":       'r',
+	"service":     'S',
+	"stop":        'S',
+	"voucher":     'V',
+	"votes":       'v',
+	"yes":         'y',
 }
 
 // addShorts gives every long option of fs its one-letter spelling.
@@ -412,9 +426,14 @@ func (a *app) parse(s spec, fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 	switch {
 	case len(pos) < s.min:
-		missing := strings.Fields(s.args)
-		missing = missing[min(len(pos), len(missing)):]
-		return nil, fmt.Errorf("missing %s\n%s", strings.Trim(strings.Join(missing, " "), "[]"), s.usage(fs))
+		// Of several forms, the first; of its arguments, those not given.
+		form, _, _ := strings.Cut(s.args, " | ")
+		fields := strings.Fields(form)
+		missing := slices.DeleteFunc(fields[min(len(pos), len(fields)):], func(f string) bool { return strings.HasPrefix(f, "[") })
+		if len(missing) == 0 {
+			missing = []string{"an argument"}
+		}
+		return nil, fmt.Errorf("missing %s\n%s", strings.Join(missing, " "), s.usage(fs))
 	case s.max >= 0 && len(pos) > s.max:
 		return nil, fmt.Errorf("unexpected argument %q\n%s", pos[s.max], s.usage(fs))
 	}

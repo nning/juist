@@ -331,13 +331,15 @@ func (d *Daemon) routedLocked(exit []netip.AddrPort) (bool, string) {
 	}
 	if d.dnsWhy != "" {
 		if named {
-			d.namesStatus = &ipc.Names{Domain: d.zone.Load().Domain, Not: d.dnsWhy}
+			z := d.zone.Load()
+			d.namesStatus = &ipc.Names{Domain: z.Domain, Public: z.Public, Not: d.dnsWhy}
 		}
 		return false, d.dnsWhy
 	}
 	through, why := d.throughStub()
 	if named {
-		d.namesStatus = &ipc.Names{Domain: d.zone.Load().Domain, Resolved: through, Not: why}
+		z := d.zone.Load()
+		d.namesStatus = &ipc.Names{Domain: z.Domain, Public: z.Public, Resolved: through, Not: why}
 	}
 	if len(exit) == 0 {
 		return false, ""
@@ -352,14 +354,14 @@ func (d *Daemon) namesNotLocked() *ipc.Names {
 	switch {
 	case d.dnsClosed || z == nil || z == noZone:
 		return nil
-	case z.Domain == "":
+	case z.Domain == "" && z.Public == "":
 		return &ipc.Names{Not: "the network's name is no DNS label", Cannot: true}
 	case d.hostDNS == nil || d.startNames == nil:
-		return &ipc.Names{Domain: z.Domain, Not: "juistd runs without a device of its own", Cannot: true}
+		return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: "juistd runs without a device of its own", Cannot: true}
 	case !routesDomains(d.hostDNS):
-		return &ipc.Names{Domain: z.Domain, Not: errNoDomains.Error(), Cannot: true}
+		return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: errNoDomains.Error(), Cannot: true}
 	}
-	return &ipc.Names{Domain: z.Domain, Not: cmp.Or(d.namesWhy, "juistd does not answer them")}
+	return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: cmp.Or(d.namesWhy, "juistd does not answer them")}
 }
 
 // setZone has the host resolve what p plans of the network's names.
@@ -384,6 +386,9 @@ func (d *Daemon) namesNow() *ipc.Names {
 	n := *d.namesStatus
 	n.Accepted = d.namesAccepted
 	for _, h := range d.overrides {
+		if h.published {
+			continue // the network's own domain's, which the publish lines say
+		}
 		o := ipc.NameOverride{Name: h.name, Device: h.device}
 		if n.Accepted {
 			o.Not = d.overrideNot(h, d.namesUntil)

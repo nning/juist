@@ -17,7 +17,7 @@ import (
 // or hash before anything in the frame has been authenticated.
 const (
 	// MaxFrameSize caps a frame's plaintext. The largest legitimate one is a
-	// batch containing a checkpoint, about 1.3 MiB at [types.MaxNodes].
+	// batch containing a checkpoint, at most [types.MaxRecordSize].
 	MaxFrameSize = 8 << 20
 
 	// maxRecordBytesPerFrame is the byte budget a records frame's payload may
@@ -31,9 +31,8 @@ const (
 	// entropy sends what a peer is missing in as many frames as it takes.
 	MaxRecordsPerFrame = 256
 
-	// MaxHashesPerFrame caps the "what I already hold" set in a hello. A
-	// node with more records than this sends the newest ones and converges
-	// over more rounds.
+	// MaxHashesPerFrame caps the "what I already hold" set in a hello. Past
+	// it two nodes stop converging: see docs/05-roadmap.md, M12.
 	MaxHashesPerFrame = 4096
 
 	// MaxEndpointsPerFrame caps the announcements one frame may carry: one

@@ -50,11 +50,19 @@ var commands = []command{
 	{name: "status", group: groupDaily, summary: "show this device's connection", run: cmdStatus},
 	{name: "devices", aliases: []string{"ls"}, group: groupDaily, summary: "list devices", run: cmdDevices},
 	{name: "remove", aliases: []string{"rm"}, group: groupDaily, summary: "remove a device", run: cmdRemove},
+	{name: "rename", group: groupDaily, summary: "rename a device", run: cmdRename},
 	{name: "rotate", group: groupDaily, summary: "replace keys", run: cmdRotate},
 	{name: "exit", group: groupDaily, summary: "route internet traffic through a device", run: cmdExit,
 		family: exitFamily},
 	{name: "subnet", group: groupDaily, summary: "reach networks behind a device", run: cmdSubnet,
 		family: subnetFamily},
+	{name: "names", group: groupDaily, summary: "point public names at devices", run: cmdNames,
+		family: namesFamily},
+	{name: "publish", group: groupDaily, summary: "publish devices' services through an ingress", run: cmdPublish,
+		family: publishFamily},
+	{name: "share", group: groupDaily, summary: "share a file or directory from the internet", run: cmdShare},
+	{name: "ingress", group: groupDaily, summary: "take connections for published names", run: cmdIngress,
+		family: ingressFamily},
 	{name: "reset", group: groupDaily, summary: "forget the network and keys", run: cmdReset},
 
 	{name: "grant", group: groupAdmin, summary: "give a device a role", run: cmdGrant},
@@ -62,7 +70,7 @@ var commands = []command{
 	{name: "approve", aliases: []string{"apply"}, group: groupAdmin, summary: "sign and apply change files", run: cmdApprove},
 	{name: "admins", group: groupAdmin, summary: "manage admin keys and quorum", run: cmdAdmins, family: adminsFamily},
 	{name: "set", group: groupAdmin, summary: "change device settings", run: cmdSet},
-	{name: "network", group: groupAdmin, summary: "show, rename or renumber the network", run: cmdNetwork, family: networkFamily},
+	{name: "network", group: groupAdmin, summary: "show, rename or renumber the network, or set its domain", run: cmdNetwork, family: networkFamily},
 	{name: "log", group: groupAdmin, summary: "inspect the membership log", run: cmdLog, family: logFamily},
 }
 
@@ -180,6 +188,7 @@ Options for every command:
 
 func main() {
 	a := newApp(os.Stdin, os.Stdout, os.Stderr)
+	a.ready, a.detach = backgroundShare()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	a.ctx = ctx
 	err := a.main(os.Args[1:])
@@ -197,6 +206,7 @@ func main() {
 
 // main runs one invocation. Help that was asked for is a success.
 func (a *app) main(args []string) error {
+	a.argv = args
 	if err := a.dispatch(args); !errors.Is(err, errHelp) {
 		return err
 	}

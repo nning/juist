@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/sys/unix"
 	"tailscale.com/wgengine/router"
 
@@ -95,14 +96,14 @@ func TestAPlumbedDeviceCarriesTheOverlay(t *testing.T) {
 	defer ping.Wait()
 	got := make(chan netip.Addr, 1)
 	go func() {
-		bufs := [][]byte{make([]byte, 2000)}
-		sizes := []int{0}
+		slab := make([]byte, 2000+2*tun.ReadPacketSpacing)
+		packets := make([]tun.ReadPacket, 1)
 		for {
-			n, err := dev.Read(bufs, sizes, 4)
+			n, err := dev.Read(slab, packets)
 			if err != nil || n == 0 {
 				return
 			}
-			pkt := bufs[0][4 : 4+sizes[0]]
+			pkt := slab[packets[0].Offset : packets[0].Offset+packets[0].Size]
 			if len(pkt) >= 20 && pkt[0]>>4 == 4 {
 				got <- netip.AddrFrom4([4]byte(pkt[12:16]))
 				return
@@ -184,12 +185,12 @@ func TestAPlumbedDeviceTakesWhatTheNodeWrites(t *testing.T) {
 	}
 	got := make(chan bool, 1)
 	go func() {
-		bufs, sizes := [][]byte{make([]byte, 2000)}, []int{0}
+		slab, packets := make([]byte, 2000+2*tun.ReadPacketSpacing), make([]tun.ReadPacket, 1)
 		for {
-			if n, err := dev.Read(bufs, sizes, 4); err != nil || n == 0 {
+			if n, err := dev.Read(slab, packets); err != nil || n == 0 {
 				return
 			}
-			p := bufs[0][4 : 4+sizes[0]]
+			p := slab[packets[0].Offset : packets[0].Offset+packets[0].Size]
 			if len(p) >= 28 && p[9] == 1 && p[20] == 0 && netip.AddrFrom4([4]byte(p[16:20])) == peer.Addr() {
 				got <- true
 				return

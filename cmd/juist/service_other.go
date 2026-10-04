@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/nning/juist/internal/firewalld"
 	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/ipc"
 )
@@ -26,8 +28,19 @@ func systemLayout() *hostLayout {
 		stop:         func(ctx context.Context, n int) error { return systemctl(ctx, "disable", "--now", unitOf(n)) },
 		firewall:     runFirewallScript,
 
-		exitScript: "/usr/lib/juist/exit-node.sh",
-		dockerNets: dockerNets,
+		exitScript:    "/usr/lib/juist/exit-node.sh",
+		ingressScript: "/usr/lib/juist/ingress.sh",
+		serveScript:   "/usr/lib/juist/serve.sh",
+		answers:       answersSoon,
+		answersTLS:    endsTLSSoon,
+		terminatorOn:  terminatorOnSystemd,
+		terminatorStarts: func(ctx context.Context) bool {
+			return exec.CommandContext(ctx, "systemctl", "is-enabled", "--quiet", "juist-serve.path").Run() == nil
+		},
+		caaWait:        15 * time.Second,
+		terminatorWait: 15 * time.Second,
+		dockerNets:     dockerNets,
+		firewalled:     firewalld.Blocks,
 	}
 }
 
@@ -51,6 +64,21 @@ func logCmd(n int) string     { return "journalctl -u " + unitOf(n) }
 
 // asRoot is cmd as a hint says to run it as root.
 func asRoot(cmd string) string { return "sudo " + cmd }
+
+// helperLog is what shows the log of the ingress, juist-ingress, or the
+// terminator, juist-serve.
+func helperLog(name string) string { return "journalctl -u " + name }
+
+// terminatorOnSystemd reports whether juist-serve is enabled and running,
+// which any user may ask systemd.
+func terminatorOnSystemd(ctx context.Context) bool {
+	for _, verb := range []string{"is-enabled", "is-active"} {
+		if exec.CommandContext(ctx, "systemctl", verb, "--quiet", "juist-serve.service").Run() != nil {
+			return false
+		}
+	}
+	return true
+}
 
 func systemctl(ctx context.Context, args ...string) error {
 	out, err := exec.CommandContext(ctx, "systemctl", args...).CombinedOutput()

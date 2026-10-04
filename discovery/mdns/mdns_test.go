@@ -390,3 +390,64 @@ drain:
 		t.Errorf("100 questions inside one interval drew %d answers, want 1", answers)
 	}
 }
+
+// countConn counts the datagrams a beacon sends and receives none.
+type countConn struct {
+	mu     sync.Mutex
+	sent   int
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *countConn) ReadFrom([]byte) (int, net.Addr, error) {
+	<-c.closed
+	return 0, nil, net.ErrClosed
+}
+
+func (c *countConn) WriteTo(b []byte, _ net.Addr) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sent++
+	return len(b), nil
+}
+
+func (c *countConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *countConn) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sent
+}
+
+// A beacon whose announcement stays put sends at gaps that double, since
+// every member's radio receives every datagram; woken by a change, it starts
+// again at the first interval.
+func TestABeaconSlowsDownUntilWoken(t *testing.T) {
+	c := &countConn{closed: make(chan struct{})}
+	const interval = 20 * time.Millisecond
+	b, err := New(Options{
+		Keyring:  keyringAt(t, 1, mustSecret(t)),
+		Interval: interval,
+		Conn:     c,
+		Dst:      netip.MustParseAddrPort("224.0.0.251:5353"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go b.Run(t.Context())
+	t.Cleanup(func() { b.Close() })
+
+	time.Sleep(50 * interval)
+	if n := c.count(); n > 12 {
+		t.Fatalf("%d datagrams in %v at a first interval of %v; the gaps do not grow", n, 50*interval, interval)
+	}
+	before := c.count()
+	b.Wake()
+	time.Sleep(10 * interval)
+	if n := c.count() - before; n < 3 {
+		t.Fatalf("%d datagrams in %v after waking, want the first interval's pace", n, 10*interval)
+	}
+}

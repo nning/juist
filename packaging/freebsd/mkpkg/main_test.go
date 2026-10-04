@@ -101,7 +101,8 @@ func TestPackage(t *testing.T) {
 	}
 }
 
-// An rc.d script runs though the checkout lost its mode; a file given twice,
+// An rc.d script, and a script in libexec, runs though the checkout lost its
+// mode; a file given twice,
 // a path not clean, or a script pkg does not run is refused.
 func TestModesAndMistakes(t *testing.T) {
 	dir := t.TempDir()
@@ -109,7 +110,7 @@ func TestModesAndMistakes(t *testing.T) {
 	os.WriteFile(src, []byte("#!/bin/sh\n"), 0o644)
 	out := filepath.Join(dir, "p.pkg")
 	if err := run("../manifest.json", "../scripts", "1", "FreeBSD:14:amd64", 0, out,
-		[]string{"/usr/local/etc/rc.d/juistd=" + src}); err != nil {
+		[]string{"/usr/local/etc/rc.d/juistd=" + src, "/usr/local/libexec/juist/serve.sh=" + src}); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(out)
@@ -120,8 +121,8 @@ func TestModesAndMistakes(t *testing.T) {
 		if err != nil {
 			break
 		}
-		if h.Name == "/usr/local/etc/rc.d/juistd" && h.Mode != 0o755 {
-			t.Errorf("the rc.d script's mode is %o", h.Mode)
+		if (h.Name == "/usr/local/etc/rc.d/juistd" || h.Name == "/usr/local/libexec/juist/serve.sh") && h.Mode != 0o755 {
+			t.Errorf("%s's mode is %o", h.Name, h.Mode)
 		}
 	}
 	for _, specs := range [][]string{

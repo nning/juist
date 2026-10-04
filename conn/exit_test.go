@@ -81,12 +81,13 @@ func TestRoutesCarryTrafficToAndFromTheirPeer(t *testing.T) {
 			t.Errorf("%s goes to a peer", dst)
 		}
 	}
-	allowed, _ := m.allowedIPs(bk)
+	pc, _ := m.peerConfig(bk)
+	allowed := pc.AllowedIPs
 	if s := setOf(t, allowed); !s.Contains(netip.MustParseAddr("8.8.8.8")) || !s.Contains(b.pingAddr()) {
 		t.Errorf("the exit node may send from %v", allowed)
 	}
 	ck := c.mgr.(*tsManager).self.NodeKey.Public()
-	if allowed, _ := m.allowedIPs(ck); setOf(t, allowed).Contains(netip.MustParseAddr("8.8.8.8")) {
+	if pc, _ := m.peerConfig(ck); setOf(t, pc.AllowedIPs).Contains(netip.MustParseAddr("8.8.8.8")) {
 		t.Error("a member with no routes may send from the internet")
 	}
 }
@@ -253,7 +254,7 @@ func TestSubnetsAreRoutedIntoTheTunnel(t *testing.T) {
 	if nk, ok := m.peerByIP(netip.MustParseAddr("192.168.50.7")); !ok || nk != bk {
 		t.Error("the subnet does not go to its router")
 	}
-	if allowed, _ := m.allowedIPs(bk); !setOf(t, allowed).Contains(netip.MustParseAddr("fd00:50::7")) {
+	if pc, _ := m.peerConfig(bk); !setOf(t, pc.AllowedIPs).Contains(netip.MustParseAddr("fd00:50::7")) {
 		t.Error("the router may not answer from its subnet")
 	}
 	// The same addresses carried twice, by the exit node and the router, are

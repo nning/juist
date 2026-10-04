@@ -48,6 +48,7 @@ func TestLinuxAndFreeBSD(t *testing.T) {
 			t.Fatalf("building the probe: %v\n%s", err, out)
 		}
 	}
+	pebble := buildPebble(t)
 	fbBase, lxBase := base(t, cache, work, freebsdImage), base(t, cache, work, debianImage)
 
 	fb := &vm{name: "fb", freebsd: true, lanAddr: "10.77.0.1", mac: "52:54:00:77:00:01", net: "10.0.4.0/24", dir: work, key: key}
@@ -115,49 +116,7 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	fb.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
 	lx.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
 	fb.run(t, "juist create interop --device fb")
-	link := make(chan string, 1)
-	invited := make(chan error, 1)
-	go func() {
-		cmd := exec.Command("ssh", fb.sshArgs("juist invite --yes --no-dht --expires 15m")...)
-		stdout, _ := cmd.StdoutPipe()
-		cmd.Stderr = cmd.Stdout
-		if err := cmd.Start(); err != nil {
-			invited <- err
-			return
-		}
-		var all strings.Builder
-		sc := bufio.NewScanner(stdout)
-		for sc.Scan() {
-			all.WriteString(sc.Text() + "\n")
-			if m := regexp.MustCompile(`juist:[^\s']+`).FindString(sc.Text()); m != "" {
-				select {
-				case link <- m:
-				default:
-				}
-			}
-		}
-		if err := cmd.Wait(); err != nil {
-			invited <- fmt.Errorf("invite: %v\n%s", err, all.String())
-			return
-		}
-		invited <- nil
-	}()
-	select {
-	case l := <-link:
-		lx.run(t, "juist join '"+l+"'")
-	case err := <-invited:
-		t.Fatalf("the invite ended with no link: %v", err)
-	case <-time.After(5 * time.Minute):
-		t.Fatal("the invite printed no link")
-	}
-	select {
-	case err := <-invited:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Minute):
-		t.Fatal("the invite did not end")
-	}
+	invite(t, fb, lx, "juist join '%s'")
 
 	fb4 := strings.TrimSpace(fb.run(t, `ifconfig juist0 inet | awk '/inet / {print $2; exit}'`))
 	fb6 := strings.TrimSpace(fb.run(t, `ifconfig juist0 inet6 | awk '/inet6 / && !/fe80/ {print $2; exit}'`))
@@ -181,6 +140,31 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	t.Run("names", func(t *testing.T) {
 		names(t, fb, lx, fb4, fb6)
 	})
+	t.Run("ingress", func(t *testing.T) {
+		ingress(t, fb, lx, fb4)
+	})
+	t.Run("TLS at the target", func(t *testing.T) {
+		tlsAtTheTarget(t, fb, lx, work, pebble)
+	})
+	t.Run("service member", func(t *testing.T) {
+		serviceMember(t, fb, lx)
+	})
+	t.Run("share", func(t *testing.T) {
+		share(t, fb, lx, work)
+	})
+	t.Run("domain itself", func(t *testing.T) {
+		domainItself(t, fb, lx)
+	})
+	if image := os.Getenv("JUIST_INTEROP_IMAGE"); image != "" && os.Getenv("JUIST_INTEROP_DOCKER") != "" {
+		t.Run("service member in a container", func(t *testing.T) {
+			containerMember(t, fb, lx, image)
+		})
+	}
+	fb.try("juist publish serve --stop; juist ingress serve --stop; pkill -f '[p]ebble'; pkill -f '[p]robe answer'; "+
+		"pkill -f '[p]robe serve fb-web'; sysrc -x juist_serve_env juist_serve_args", time.Minute)
+	t.Run("rename", func(t *testing.T) {
+		rename(t, fb, lx, fb4, fb6)
+	})
 	t.Run("removal", func(t *testing.T) {
 		fb.run(t, "pkg delete -y juist")
 		fb.run(t, `! ifconfig juist0 >/dev/null 2>&1
@@ -189,10 +173,62 @@ pfctl -s info | grep -q 'Status: Disabled'
 ! pgrep -x juistd`)
 		lx.run(t, "dpkg --purge juist")
 		lx.run(t, `! ip link show juist0 >/dev/null 2>&1
+! systemctl is-active --quiet juist-ingress
+getent passwd juist-ingress >/dev/null
 [ "$(sysctl -n net.ipv4.ip_forward)" = 0 ]
 ! ip rule | grep -q -E '^5(1[89]|2[0-9])[0-9]:'
 ! pgrep -x juistd`)
 	})
+}
+
+// ingress has lx, granted the role, take connections on 443 for a name fb
+// publishes and pass them to fb through the tunnel, while fb's operator
+// agrees; fb takes nothing else from lx once it is an ingress, and a
+// withdrawn name reaches nothing.
+func ingress(t *testing.T, fb, lx *vm, fb4 string) {
+	t.Cleanup(func() {
+		if t.Failed() {
+			for _, v := range []*vm{fb, lx} {
+				out, _ := v.try(diagnose(v)+"; juist devices; juist publish; juist ingress", 2*time.Minute)
+				t.Logf("%s:\n%s", v.name, out)
+			}
+			out, _ := lx.try("systemctl status juist-ingress --no-pager; journalctl -u juist-ingress --no-pager | tail -20", time.Minute)
+			t.Logf("lx's ingress:\n%s", out)
+			hold(t, fb, lx)
+		}
+	})
+	ok := func(string) bool { return true }
+	fb.run(t, "daemon -f /tmp/probe tls fb-tls 8443")
+	lx.eventually(t, "reaching fb as a member", time.Minute, "/tmp/probe get "+fb4+":80", has("fb-host from"))
+	// An ingress is no exit node and routes no subnet: what serving fb gave lx
+	// goes first, and so does the probe holding lx's port 80.
+	lx.run(t, "juist exit serve --stop; juist subnet serve --stop; pkill -f '[p]robe serve lx-host'; true")
+	fb.run(t, `set -e
+juist revoke lx exit --yes
+juist subnet remove lx `+lxSide.subnet+`
+juist network domain pub.example.org
+juist grant lx ingress
+juist publish add fb web 8443`)
+	// Published on fb by its operator, the name is served at once.
+	lx.eventually(t, "learning it is the ingress", 3*time.Minute, "juist ingress serve", has("serving 1 name on 443 and 80"))
+	lx.run(t, "systemctl is-active --quiet juist-ingress && getent passwd juist-ingress >/dev/null")
+	lx.eventually(t, "being confined by fb", 2*time.Minute, "! /tmp/probe get "+fb4+":80", ok)
+	// Without fb's word, lx is told no name.
+	fb.run(t, "juist publish serve --stop")
+	lx.eventually(t, "being told no name", 2*time.Minute, "juist ingress serve", has("serving 0 names on 443 and 80"))
+	lx.eventually(t, "taking the name no longer", time.Minute,
+		`[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: web.pub.example.org' http://127.0.0.1/)" = 404 ]`, ok)
+	lx.run(t, "! /tmp/probe hello 127.0.0.1:443 web.pub.example.org")
+	fb.run(t, "juist publish serve")
+	lx.eventually(t, "reaching fb's published port through itself", 2*time.Minute,
+		"/tmp/probe hello 127.0.0.1:443 web.pub.example.org", has("fb-tls from"))
+	lx.run(t, "juist status | grep -q 'Ingress *serving web.pub.example.org on 443 and 80'")
+	lx.run(t, "! /tmp/probe get "+fb4+":80")
+	lx.run(t, `[ "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: web.pub.example.org' http://127.0.0.1/)" = "308 https://web.pub.example.org/" ]`)
+	fb.run(t, "juist publish rm fb web")
+	lx.eventually(t, "the withdrawn name reaching nothing", 2*time.Minute,
+		"! /tmp/probe hello 127.0.0.1:443 web.pub.example.org", ok)
+	lx.run(t, "juist ingress serve --stop && ! systemctl is-active --quiet juist-ingress")
 }
 
 func has(want string) func(string) bool {
@@ -214,7 +250,7 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 		client.try("juist exit off", 2*time.Minute)
 		server.try("juist exit serve --stop; juist subnet serve --stop", 2*time.Minute)
 	})
-	admin.run(t, fmt.Sprintf("juist grant %s exit && juist grant %s %s", server.name, server.name, s.subnet))
+	admin.run(t, fmt.Sprintf("juist grant %s exit && juist subnet add %s %s", server.name, server.name, s.subnet))
 	ok := func(string) bool { return true }
 	server.eventually(t, "serving as exit node", 3*time.Minute, "juist exit serve", ok)
 	server.eventually(t, "routing the subnet", 3*time.Minute, "juist subnet serve", ok)
@@ -304,14 +340,14 @@ resolvectl dns vt0 10.99.2.2; resolvectl domain vt0 '~lab.example'`)
 	mustHave(t, fb.run(t, "juist status"), "not resolved here: this host's resolver routes no domains")
 
 	public := "203.0.113.7"
-	fb.run(t, "juist grant fb svc.lab.example")
-	lx.eventually(t, "hearing of the public name", 2*time.Minute, "juist status", has("1 public name not accepted"))
+	fb.run(t, "juist names add fb svc.lab.example")
+	lx.eventually(t, "hearing of the public name", 2*time.Minute, "juist status", has("1 public name, off on this device"))
 	lx.eventually(t, "not agreed, resolving it publicly", time.Minute, "getent ahosts svc.lab.example", has(public))
 	if !slices.Contains(strings.Split(lx.run(t, "cat /tmp/dns.log"), "\n"), "A svc.lab.example.") {
 		t.Error("not agreed, the public resolver was not asked for the name")
 	}
 
-	mustHave(t, lx.run(t, "juist set --accept-names"), "public names accepted: svc.lab.example at fb")
+	mustHave(t, lx.run(t, "juist names on"), "public names on: svc.lab.example at fb")
 	lx.eventually(t, "resolving it to fb", 2*time.Minute, "getent ahosts svc.lab.example", func(out string) bool {
 		return strings.Contains(out, fb4) && strings.Contains(out, fb6) && !strings.Contains(out, public)
 	})
@@ -338,10 +374,10 @@ resolvectl dns vt0 10.99.2.2; resolvectl domain vt0 '~lab.example'`)
 	lx.eventually(t, "fb back, resolving it to fb", 4*time.Minute,
 		"resolvectl flush-caches; getent ahosts svc.lab.example", has(fb4))
 
-	fb.run(t, "juist revoke fb svc.lab.example")
+	fb.run(t, "juist names remove fb svc.lab.example")
 	lx.eventually(t, "withdrawn, resolving it publicly", 3*time.Minute,
 		"resolvectl flush-caches; getent ahosts svc.lab.example", has(public))
-	lx.run(t, "juist set --accept-names=false")
+	lx.run(t, "juist names off")
 }
 
 func mustHave(t *testing.T, out string, want ...string) {
@@ -381,5 +417,54 @@ func hold(t *testing.T, vms ...*vm) {
 			return
 		}
 		time.Sleep(5 * time.Second)
+	}
+}
+
+// invite has inviter invite a device and joiner run join, a command with %s
+// for the link, until the invite ends.
+func invite(t *testing.T, inviter, joiner *vm, join string) {
+	t.Helper()
+	link := make(chan string, 1)
+	invited := make(chan error, 1)
+	go func() {
+		cmd := exec.Command("ssh", inviter.sshArgs("juist invite --yes --no-dht --expires 15m")...)
+		stdout, _ := cmd.StdoutPipe()
+		cmd.Stderr = cmd.Stdout
+		if err := cmd.Start(); err != nil {
+			invited <- err
+			return
+		}
+		var all strings.Builder
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			all.WriteString(sc.Text() + "\n")
+			if m := regexp.MustCompile(`juist:[^\s']+`).FindString(sc.Text()); m != "" {
+				select {
+				case link <- m:
+				default:
+				}
+			}
+		}
+		if err := cmd.Wait(); err != nil {
+			invited <- fmt.Errorf("invite: %v\n%s", err, all.String())
+			return
+		}
+		invited <- nil
+	}()
+	select {
+	case l := <-link:
+		joiner.run(t, fmt.Sprintf(join, l))
+	case err := <-invited:
+		t.Fatalf("the invite ended with no link: %v", err)
+	case <-time.After(5 * time.Minute):
+		t.Fatal("the invite printed no link")
+	}
+	select {
+	case err := <-invited:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Minute):
+		t.Fatal("the invite did not end")
 	}
 }

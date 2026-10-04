@@ -60,3 +60,22 @@ func TestAdminDevicesAreNotLostByAccident(t *testing.T) {
 	}
 	mustContain(t, c.mustRun("revoke", "laptop", "admin", "--yes"), "last voucher")
 }
+
+// A role that excludes one the device holds is refused in words, naming
+// what to take away.
+func TestARoleThatExcludesAnotherIsSaid(t *testing.T) {
+	t.Parallel()
+	admin := newCLI(t)
+	admin.mustRun("create", "home", "--device", "laptop")
+	enrollDevice(t, admin, "vps")
+	admin.mustRun("grant", "vps", "voucher")
+	for _, tc := range []struct{ role, want string }{
+		{"ingress", "vps holds the role voucher, which the role ingress excludes\nhint: juist revoke vps voucher"},
+		{"service", "vps holds the role voucher, which the role service excludes\nhint: juist revoke vps voucher"},
+	} {
+		if _, err := admin.run("grant", "vps", tc.role); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("grant %s: %v", tc.role, err)
+		}
+	}
+	admin.mustRun("grant", "vps", "relay")
+}

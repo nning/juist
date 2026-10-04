@@ -1,9 +1,10 @@
-# Kept on purpose: the user, which may own files the package never had, and
-# the device's keys.
+# Kept on purpose: the users, which may own files the package never had, the
+# device's keys, and the terminator's ACME account, which CAA records may name.
 rmdir /var/run/juist 2>/dev/null
-kept="the juist user"
+kept="the juist, juist-ingress and juist-serve users"
 [ -d /var/db/juist ] && kept="$kept, /var/db/juist with this device's keys"
-ls /var/log/juistd*.log >/dev/null 2>&1 && kept="$kept, /var/log/juistd*.log"
-grep -qs '^juistd_' /etc/rc.conf /etc/rc.conf.local && kept="$kept, juistd_ settings in rc.conf"
+[ -d /var/db/juist-serve ] && kept="$kept, /var/db/juist-serve with the terminator's ACME account"
+ls /var/log/juistd*.log /var/log/juist-*.log >/dev/null 2>&1 && kept="$kept, /var/log/juist*.log"
+grep -qs '^juist' /etc/rc.conf /etc/rc.conf.local && kept="$kept, juist settings in rc.conf"
 echo "juist: kept $kept"
 exit 0

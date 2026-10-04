@@ -1,0 +1,9 @@
+{{- $flat := slice }}
+{{- range hugo.Data.nav }}{{ range .items }}{{ with site.GetPage . }}{{ $flat = $flat | append . }}{{ end }}{{ end }}{{ end }}
+{{- $i := -1 }}{{ range $k, $p := $flat }}{{ if eq $p.RelPermalink $.RelPermalink }}{{ $i = $k }}{{ end }}{{ end }}
+{{- if ge $i 0 }}
+<nav class="pager">
+  {{- if gt $i 0 }}{{ with index $flat (sub $i 1) }}<a class="prev" href="{{ .RelPermalink }}"><small>← {{ i18n "prev" }}</small>{{ .LinkTitle }}</a>{{ end }}{{ end }}
+  {{- if lt (add $i 1) (len $flat) }}{{ with index $flat (add $i 1) }}<a class="next" href="{{ .RelPermalink }}"><small>{{ i18n "next" }} →</small>{{ .LinkTitle }}</a>{{ end }}{{ end }}
+</nav>
+{{- end }}

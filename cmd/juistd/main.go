@@ -11,24 +11,32 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	iofs "io/fs"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
+
 	"github.com/nning/juist/cmd/internal/defaults"
 	"github.com/nning/juist/daemon"
 	"github.com/nning/juist/internal/cliflag"
+	"github.com/nning/juist/internal/ingress"
 	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/rendezvous"
+	"github.com/nning/juist/internal/terminator"
 	"github.com/nning/juist/ipc"
 )
 
@@ -59,10 +67,45 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	switch opts.helper {
+	case "ingress":
+		return runIngress(ctx, cmp.Or(opts.service.Socket, ipc.SystemSocket), opts, errOut)
+	case "tls":
+		socket := cmp.Or(opts.service.Socket, ipc.SystemSocket)
+		if os.Getuid() == 0 {
+			// No capability binds a port alone everywhere: root stays,
+			// to listen where juistd says, and the terminator drops.
+			return runBinder(ctx, args, socket, errOut)
+		}
+		b, gone, err := inheritedBinder()
+		if err != nil {
+			return err
+		}
+		var listen func(network, addr string) (net.Listener, error)
+		if b != nil {
+			listen = b.listen
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ctx)
+			defer cancel()
+			go func() {
+				select {
+				case <-gone:
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+		}
+		return runTerminator(ctx, opts, errOut, func(ctx context.Context, r *ipc.TerminatorReport) (*ipc.Published, error) {
+			return ipc.CallServing(ctx, socket, r)
+		}, func(ctx context.Context) (*ipc.StatusPage, error) {
+			return ipc.CallStatusPage(ctx, socket)
+		}, listen, httpPort)
+	}
 	if opts.verbose {
 		logf := func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) }
 		opts.service.Logf, opts.service.Mesh.Logf = logf, logf
 	}
+	opts.service.Say = func(format string, a ...any) { fmt.Fprintf(out, "juistd: "+format+"\n", a...) }
 	var helperGone <-chan struct{}
 	if opts.service.Mesh.Plumber, helperGone, err = inheritedPlumber(); err != nil {
 		return err
@@ -89,6 +132,27 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return err
 	}
 	report(out, errOut, s.Status(), opts.service.Mesh.TunName)
+	if opts.service.ServeTo != nil {
+		// A service member ends TLS itself, on its network stack.
+		go func() {
+			err := runTerminator(ctx, opts, errOut, func(_ context.Context, r *ipc.TerminatorReport) (*ipc.Published, error) {
+				if m := s.Mesh(); m != nil {
+					return m.Serving(r), nil
+				}
+				return nil, errors.New("no network yet")
+			}, func(context.Context) (*ipc.StatusPage, error) {
+				return s.StatusPage()
+			}, func(_, addr string) (net.Listener, error) {
+				if m := s.Mesh(); m != nil {
+					return m.ListenOverlay(addr)
+				}
+				return nil, errors.New("no network yet")
+			}, 0)
+			if err != nil {
+				fmt.Fprintf(errOut, "juistd: %v\n", err)
+			}
+		}()
+	}
 	<-ctx.Done()
 	return context.Cause(ctx)
 }
@@ -96,6 +160,85 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 type options struct {
 	service daemon.ServiceOptions
 	verbose bool
+
+	// helper is "ingress" or "tls" for a helper of the juistd on the
+	// socket, and acmeDirectory the CA a terminator asks, whose own
+	// certificate a CA of one's own has trusted by SSL_CERT_FILE.
+	helper        string
+	acmeDirectory string
+
+	// maxConns and maxPerSource bound a helper's or service member's
+	// connections, zero for its default.
+	maxConns, maxPerSource int
+}
+
+// httpPort is where a device's terminator redirects plain HTTP to https.
+const httpPort = 80
+
+// runTerminator ends TLS for what serving says, and serves the status page
+// statusPage says, listening by listen, nil for the host's, and redirecting
+// plain HTTP on redirect, 0 for none, with certificates its CA issues by
+// TLS-ALPN-01, kept in the home's certs.
+func runTerminator(ctx context.Context, opts options, errOut io.Writer,
+	serving func(context.Context, *ipc.TerminatorReport) (*ipc.Published, error),
+	statusPage func(context.Context) (*ipc.StatusPage, error), listen func(network, addr string) (net.Listener, error),
+	redirect uint16) error {
+	certs := filepath.Join(opts.service.Home, "certs")
+	if err := os.MkdirAll(certs, 0o700); err != nil {
+		return err
+	}
+	logf := func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) }
+	return terminator.Serve(ctx, terminator.Options{
+		Serving: serving, StatusPage: statusPage, Listen: listen, HTTPPort: redirect,
+		ACME: &acme.Client{DirectoryURL: opts.acmeDirectory}, Cache: autocert.DirCache(certs),
+		MaxConns: opts.maxConns, Logf: logf,
+	})
+}
+
+// listenIngress binds port for the ingress, saying why it cannot.
+func listenIngress(port int) (net.Listener, error) {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	switch {
+	case errors.Is(err, syscall.EADDRINUSE):
+		return nil, fmt.Errorf("%w\nhint: another program serves port %d here", err, port)
+	case errors.Is(err, syscall.EACCES):
+		return nil, fmt.Errorf("%w\nhint: an ingress binds 443 and 80, which takes CAP_NET_BIND_SERVICE", err)
+	}
+	return ln, err
+}
+
+// runIngress serves the network's published names as its ingress, on 443
+// and 80, asking the juistd at socket what they are.
+func runIngress(ctx context.Context, socket string, opts options, errOut io.Writer) error {
+	tlsLn, err := listenIngress(443)
+	if err != nil {
+		return err
+	}
+	defer tlsLn.Close()
+	httpLn, err := listenIngress(80)
+	if err != nil {
+		return err
+	}
+	defer httpLn.Close()
+	if os.Getuid() == 0 {
+		// Bound as root, served as its own user.
+		if err := dropTo(daemon.IngressUser); err != nil {
+			return err
+		}
+	}
+	o := ingressOptions(socket, errOut)
+	o.MaxConns, o.MaxPerSource = opts.maxConns, opts.maxPerSource
+	return ingress.Serve(ctx, tlsLn, httpLn, o)
+}
+
+// ingressOptions has the ingress ask the juistd on socket, and say on errOut
+// when it stops answering, which is why names go down, and each connection.
+func ingressOptions(socket string, errOut io.Writer) ingress.Options {
+	return ingress.Options{
+		Published: func(ctx context.Context) (*ipc.Published, error) { return ipc.CallPublished(ctx, socket) },
+		Logf:      func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) },
+		Access:    func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) },
+	}
 }
 
 // parse reads juistd's options, printing help to out where asked.
@@ -117,6 +260,15 @@ func parse(args []string, out io.Writer) (options, error) {
 	noSTUN := fs.Bool("no-stun", false, "ask no STUN server outside the network")
 	ttl := fs.Duration("freshness-ttl", daemon.DefaultFreshnessTTL, "how long to trust the network's state unvouched")
 	verbose := fs.Bool("verbose", false, "log what the daemon is doing")
+	helper := fs.String("helper", "", `run as a helper of the juistd on --socket: ingress, or tls for what is published here`)
+	var serve serveFlag
+	fs.Var(&serve, "serve", "be a service member, on no device, ending TLS for NAME, @ for the domain itself, and sending it to ADDR, or serving status-page[:WHAT]; repeatable")
+	acmeDir := fs.String("acme", autocert.DefaultACMEDirectory, "the ACME directory TLS certificates are taken from")
+	join := fs.String("join", "", "join the network LINK invites to once started, unless in one (default $JUIST_JOIN)")
+	maxConns := fs.Uint("max-conns", 0, fmt.Sprintf("connections served at once: %d by an ingress, %d ending TLS, unless given",
+		ingress.DefaultMaxConns, terminator.DefaultMaxConns))
+	maxPerSource := fs.Uint("max-per-source", ingress.DefaultMaxPerSource,
+		"connections an ingress takes from one address at once, 4 times that from its /24 or /48")
 	for _, o := range optionOrder {
 		cliflag.Short(fs, o.short, o.long)
 	}
@@ -181,27 +333,61 @@ func parse(args []string, out io.Writer) (options, error) {
 			*home = filepath.Join(*home, *inst)
 		}
 	}
+	// Read here rather than as the flag's default, which --help would show.
+	switch {
+	case *helper != "" && cliflag.IsSet(fs, "join"):
+		return options{}, fmt.Errorf("a helper joins no network\n%s", synopsis)
+	case *helper == "" && !cliflag.IsSet(fs, "join"):
+		*join = os.Getenv("JUIST_JOIN")
+	}
 	nop := func(string, ...any) {}
-	return options{verbose: *verbose, service: daemon.ServiceOptions{
-		Home:   *home,
-		Socket: *socket,
-		Mesh: daemon.Options{
-			ListenPort:   uint16(*port),
-			TunName:      *tun,
-			Instance:     n,
-			GossipPort:   uint16(*gossipPort),
-			RelayPort:    uint16(*relayPort),
-			DisableRelay: *noRelay,
-			// Ports the operator named are held to; defaults give way.
-			PortFallback:     !cliflag.IsSet(fs, "port") && !cliflag.IsSet(fs, "gossip-port") && !cliflag.IsSet(fs, "relay-port"),
-			DisableDiscovery: *noDiscovery,
-			DisableDHT:       *noDHT,
-			STUN:             stun,
-			FreshnessTTL:     *ttl,
-			Logf:             nop,
-		},
-		Logf: nop,
-	}}, nil
+	if *helper != "" && *helper != "ingress" && *helper != "tls" {
+		return options{}, fmt.Errorf("--helper is ingress or tls, not %q\n%s", *helper, synopsis)
+	}
+	switch {
+	case cliflag.IsSet(fs, "max-conns") && *helper == "" && serve == nil:
+		return options{}, fmt.Errorf("--max-conns is for a helper or a service member\n%s", synopsis)
+	case cliflag.IsSet(fs, "max-per-source") && *helper != "ingress":
+		return options{}, fmt.Errorf("--max-per-source is for an ingress\n%s", synopsis)
+	case *maxConns > 1<<20 || *maxPerSource > 1<<20 || cliflag.IsSet(fs, "max-per-source") && *maxPerSource == 0:
+		return options{}, fmt.Errorf("--max-conns and --max-per-source take 1 to %d\n%s", 1<<20, synopsis)
+	}
+	if serve != nil {
+		if cliflag.IsSet(fs, "tun") || *helper != "" {
+			return options{}, fmt.Errorf("a service member runs on no device and is no helper\n%s", synopsis)
+		}
+		*tun = ""
+	}
+	// systemd starts the terminator by this file (juist-serve.path), which
+	// ends TLS for the default instance alone.
+	wanted := ""
+	if runtime.GOOS == "linux" && n == 0 && serve == nil && *helper == "" {
+		wanted = filepath.Join(filepath.Dir(cmp.Or(*socket, ipc.SocketPath(*home))), filepath.Base(ipc.TerminatorWanted))
+	}
+	return options{verbose: *verbose, helper: *helper, acmeDirectory: *acmeDir,
+		maxConns: int(*maxConns), maxPerSource: int(*maxPerSource),
+		service: daemon.ServiceOptions{ServeTo: serve, Join: *join,
+			Home:   *home,
+			Socket: *socket,
+			Mesh: daemon.Options{
+				ListenPort:   uint16(*port),
+				TunName:      *tun,
+				Instance:     n,
+				GossipPort:   uint16(*gossipPort),
+				RelayPort:    uint16(*relayPort),
+				DisableRelay: *noRelay,
+				// Ports the operator named are held to; defaults give way.
+				PortFallback:     !cliflag.IsSet(fs, "port") && !cliflag.IsSet(fs, "gossip-port") && !cliflag.IsSet(fs, "relay-port"),
+				DisableDiscovery: *noDiscovery,
+				DisableDHT:       *noDHT,
+				STUN:             stun,
+				FreshnessTTL:     *ttl,
+				TerminatorWanted: wanted,
+				Netstack:         serve != nil,
+				Logf:             nop,
+			},
+			Logf: nop,
+		}}, nil
 }
 
 // optionOrder is every option's one-letter spelling, in the order help lists
@@ -214,7 +400,8 @@ var optionOrder = []struct {
 	{'i', "instance", "NAME"}, {'H', "home", "DIR"}, {'s', "socket", "PATH"}, {'p', "port", "N"}, {'g', "gossip-port", "N"},
 	{'r', "relay-port", "N"}, {'t', "tun", "NAME"}, {'R', "no-relay", ""}, {'l', "no-discovery", ""},
 	{'d', "no-dht", ""}, {'u', "stun", "LIST"}, {'U', "no-stun", ""}, {'f', "freshness-ttl", "D"},
-	{'v', "verbose", ""},
+	{'v', "verbose", ""}, {'S', "serve", "NAME=ADDR"}, {'j', "join", "LINK"}, {'I', "helper", "KIND"}, {'A', "acme", "URL"},
+	{'M', "max-conns", "N"}, {'m', "max-per-source", "N"},
 }
 
 // help lists the options of fs with their defaults.
@@ -225,17 +412,16 @@ func help(fs *flag.FlagSet) string {
 		f := fs.Lookup(o.long)
 		label, _ := cliflag.Label(fs, f)
 		text, def := f.Usage, f.DefValue
-		if d, err := time.ParseDuration(def); err == nil {
+		if d, err := time.ParseDuration(def); err == nil && def != "0" {
 			def = shortDuration(d)
 		}
-		if def != "" && def != "false" {
+		if def != "" && def != "false" && def != "0" {
 			text += " (default " + def + ")"
 		}
 		fmt.Fprintf(&b, "  %-22s %s\n", strings.TrimSpace(label+" "+o.arg), text)
 	}
 	fmt.Fprintf(&b, "  %-22s %s\n", "-h, --help", "show this help")
-	b.WriteString("\nDefault ports another program holds become OS-chosen ones; ports given here do not.\n")
-	b.WriteString("An instance takes the default ports plus ten times its number, and its name for the device.\n")
+	b.WriteString("\nDefault ports in use become OS-chosen; an instance adds ten times its number to each, and names its device.\n")
 	return b.String()
 }
 
@@ -300,4 +486,39 @@ func report(out, errOut io.Writer, st ipc.Status, tun string) {
 			hint(permHint, tun)
 		}
 	}
+}
+
+// serveFlag is --serve, by label: where a service member sends each name,
+// "@" naming the domain itself.
+type serveFlag map[string]string
+
+func (f *serveFlag) String() string { return "" }
+
+func (f *serveFlag) Set(v string) error {
+	name, addr, _ := strings.Cut(v, "=")
+	label := name
+	if name == "@" {
+		label = ""
+	}
+	if t := (ipc.ServeTo{Label: label, To: addr}); name == "" || !t.Valid() {
+		return fmt.Errorf("%q is no NAME=ADDR, such as immich=immich-server:2283", v)
+	}
+	name = label
+	if *f == nil {
+		*f = serveFlag{}
+	}
+	(*f)[name] = addr
+	return nil
+}
+
+// onNoDevice reports whether args run juistd where it plumbs no device: as a
+// helper, or as a service member, which then needs no helper of its own.
+func onNoDevice(args []string) bool {
+	for _, a := range args {
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if strings.HasPrefix(a, "-") && (name == "helper" || name == "I" || name == "serve" || name == "S") {
+			return true
+		}
+	}
+	return false
 }

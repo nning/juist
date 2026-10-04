@@ -432,6 +432,12 @@ func TestAMoveAtOnceReachesEveryDevice(t *testing.T) {
 		"phone moved to 198.18.4.9; 198.18.4.2 retired")
 	wgOf := func(d *daemonDevice) types.WGKey { return nodeKeysOf(t, &cli{t: t, home: d.state}).Public.WireGuard }
 	host := netip.MustParsePrefix
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("the phone's allowed IPs: alice %v, tablet %v; none where it is no peer",
+				alice.mgr.allowed(wgOf(phone)), tablet.mgr.allowed(wgOf(phone)))
+		}
+	})
 	for _, d := range []*daemonDevice{alice, tablet} {
 		eventually(t, "the phone's peers accept it at its new address only", func() bool {
 			got := d.mgr.allowed(wgOf(phone))

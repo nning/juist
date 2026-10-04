@@ -488,6 +488,57 @@ func TestStorePutAndGet(t *testing.T) {
 	}
 }
 
+// A storage node answering a get with the item's key but no sequence number,
+// which anyone who saw the key can send, costs the lookup and not the process.
+func TestAnItemWithoutASequenceNumberIsNoItem(t *testing.T) {
+	seed := [32]byte{9}
+	_, pub, _ := storeKey(seed)
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	gets := make(chan struct{}, 64)
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			var q krpc.Msg
+			if bencode.Unmarshal(buf[:n], &q) != nil || q.Y != "q" {
+				continue
+			}
+			token := "token"
+			r := &krpc.Return{ID: krpc.ID{1}, Token: &token}
+			if q.Q == "get" {
+				r.K = pub
+				r.V = bencode.Bytes("1:x")
+				gets <- struct{}{}
+			}
+			b, err := bencode.Marshal(krpc.Msg{T: q.T, Y: "r", R: r})
+			if err == nil {
+				_, _ = conn.WriteTo(b, from)
+			}
+		}
+	}()
+	s, err := NewStore(StoreOptions{Bootstrap: []string{conn.LocalAddr().String()}, NoSecurity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got, err := s.Get(t.Context(), seed); err == nil {
+		t.Fatalf("got %q from an item nobody signed", got)
+	}
+	if err := s.Put(t.Context(), seed, []byte("sealed")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if len(gets) == 0 {
+		t.Fatal("the hostile node was never asked; the test proves nothing")
+	}
+}
+
 // answers reports whether the DHT node at addr answers a ping.
 func answers(t *testing.T, addr net.Addr) bool {
 	t.Helper()

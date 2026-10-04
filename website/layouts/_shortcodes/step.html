@@ -1,0 +1,4 @@
+{{- $n := add (.Page.Store.Get "step" | default 0) 1 }}{{ .Page.Store.Set "step" $n -}}
+<div class="step"><div class="where"><span class="n">{{ $n }}</span>{{ i18n "onDevice" }} {{ $on := .Get "on" }}{{ if in $on " " }}{{ $on }}{{ else }}<b>{{ $on }}</b>{{ end }}{{ with .Get "as" }}, {{ . }}{{ end }}</div>
+{{ .Inner | .Page.RenderString (dict "display" "block") }}
+</div>

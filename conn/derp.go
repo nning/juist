@@ -48,28 +48,29 @@ const stunRegionScore = 1e6
 // derpMap renders relays and STUN servers as the map the data plane consumes,
 // and returns the regions the STUN servers took. Nothing at all returns nil,
 // which is how the engine is told there are no relays.
-func derpMap(relays []Relay, stun []string) (*tailcfg.DERPMap, map[int]bool) {
-	stunRegions := map[int]bool{}
+func derpMap(relays []Relay, stun []string) (*tailcfg.DERPMap, map[tailcfg.DERPRegionID]bool) {
+	stunRegions := map[tailcfg.DERPRegionID]bool{}
 	if len(relays) == 0 && len(stun) == 0 {
 		return nil, stunRegions
 	}
 	dm := &tailcfg.DERPMap{
-		Regions: make(map[int]*tailcfg.DERPRegion, len(relays)),
+		Regions: make(map[tailcfg.DERPRegionID]*tailcfg.DERPRegion, len(relays)),
 		// Nothing would add Tailscale's own regions here, since this map is
 		// built whole. Stated because a relay reached through a third party
 		// is the thing this design exists to avoid.
 		OmitDefaultRegions: true,
 	}
 	for _, r := range relays {
+		id := tailcfg.DERPRegionID(r.Region)
 		reg := &tailcfg.DERPRegion{
-			RegionID:   r.Region,
+			RegionID:   id,
 			RegionCode: fmt.Sprintf("j%d", r.Region),
 			RegionName: r.HostName,
 		}
 		for i, ap := range relayDialOrder(r.Addrs) {
 			n := &tailcfg.DERPNode{
 				Name:     fmt.Sprintf("j%d-%d", r.Region, i),
-				RegionID: r.Region,
+				RegionID: id,
 				HostName: r.HostName,
 				CertName: fmt.Sprintf("sha256-raw:%x", r.CertHash),
 				DERPPort: int(ap.Port()),
@@ -90,11 +91,11 @@ func derpMap(relays []Relay, stun []string) (*tailcfg.DERPMap, map[int]bool) {
 			}
 			reg.Nodes = append(reg.Nodes, n)
 		}
-		dm.Regions[r.Region] = reg
+		dm.Regions[id] = reg
 	}
 	// STUN servers take the highest free regions, below which member relays
 	// derive theirs; a collision gives the relay the region.
-	next := MaxRegionID
+	next := tailcfg.DERPRegionID(MaxRegionID)
 	for i, s := range stun {
 		hp, err := parseSTUNServer(s)
 		if err != nil {
@@ -117,7 +118,7 @@ func derpMap(relays []Relay, stun []string) (*tailcfg.DERPMap, map[int]bool) {
 		}
 		stunRegions[next] = true
 		if dm.HomeParams == nil {
-			dm.HomeParams = &tailcfg.DERPHomeParams{RegionScore: map[int]float64{}}
+			dm.HomeParams = &tailcfg.DERPHomeParams{RegionScore: map[tailcfg.DERPRegionID]float64{}}
 		}
 		dm.HomeParams.RegionScore[next] = stunRegionScore
 		next--

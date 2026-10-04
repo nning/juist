@@ -34,9 +34,47 @@ const (
 	// carry members' internet traffic, a full-tunnel grant explicit and
 	// separately revocable from membership.
 	RoleExit Role = "exit"
+
+	// RoleIngress marks an ingress: a member with a public address that
+	// takes connections for the names members publish and splices them to
+	// their targets, terminating nothing. Never beside admin or exit, so a
+	// compromised ingress holds no other authority. Schema 9 and later.
+	RoleIngress Role = "ingress"
+
+	// RoleService marks a service member: a juistd that publishes a service
+	// beside it, and that every member confines with no port open to it, so
+	// that a compromised service reaches none of them. Alone, and routing
+	// nothing. Schema 9 and later.
+	RoleService Role = "service"
+
+	// RolePublish lets a member publish under its own name, the label its
+	// name gives, without a vote each time: what and until when, it
+	// announces itself. Never beside ingress. Schema 9 and later.
+	RolePublish Role = "publish"
 )
 
-var knownRoles = []Role{RoleAdmin, RoleExit, RoleRelayCapable}
+// roleSchemas is every role, with the schema a network must be at to grant it.
+var roleSchemas = map[Role]SchemaVersion{RoleAdmin: 0, RoleExit: 0, RoleRelayCapable: 0, RoleIngress: SchemaPublish,
+	RoleService: SchemaPublish, RolePublish: SchemaPublish}
+
+// NeedsSchema returns the schema a network must be at to hold n, and what in
+// n needs it; zero where the first schema does.
+func (n *NodeRecord) NeedsSchema() (SchemaVersion, string) {
+	var need SchemaVersion
+	what := ""
+	for _, r := range n.Roles {
+		if v := roleSchemas[r]; v > need {
+			need, what = v, fmt.Sprintf("the role %q", r)
+		}
+	}
+	if len(n.Names) > 0 && SchemaNames > need {
+		need, what = SchemaNames, "names"
+	}
+	if len(n.Published) > 0 && SchemaPublish > need {
+		need, what = SchemaPublish, "published names"
+	}
+	return need, what
+}
 
 // An AdminKey is one member of the admin quorum: a signing key and the vote
 // weight its signature carries.
@@ -210,7 +248,7 @@ type NodeRecord struct {
 	Roles []Role `cbor:"7,keyasint,omitempty"`
 
 	// Routes are the prefixes this node may forward for. Unconsumed before
-	// M9b, validated from M1. See [ValidateRoute].
+	// M6, validated from M1. See [ValidateRoute].
 	Routes []netip.Prefix `cbor:"8,keyasint,omitempty"`
 
 	// Expiry is a Unix timestamp in seconds after which the membership is
@@ -226,6 +264,10 @@ type NodeRecord struct {
 	// members that accept them resolve to its overlay addresses. Sorted, and
 	// held by no other node. Schema 8 and later; see [ValidateHostName].
 	Names []string `cbor:"11,keyasint,omitempty"`
+
+	// Published are the names this node publishes under the network's
+	// domain, each a label held by no other node. Schema 9 and later.
+	Published []PublishedName `cbor:"12,keyasint,omitempty"`
 }
 
 // A RetiringV4 is an overlay IPv4 address a renumbering replaced, live until
@@ -402,6 +444,10 @@ type Snapshot struct {
 	// V4Retiring are the ranges a network renumbering moved away from, while
 	// members may still hold addresses in them. Schema 5 and later.
 	V4Retiring *RetiringRanges `cbor:"14,keyasint,omitempty"`
+
+	// Domain is the network's public domain, under which members publish
+	// names; empty for none. Schema 9 and later.
+	Domain string `cbor:"15,keyasint,omitempty"`
 }
 
 // V4Ranges returns the ranges the network's overlay IPv4 addresses may lie in.
@@ -462,6 +508,7 @@ func (n *NodeRecord) Clone() *NodeRecord {
 	out.Roles = slices.Clone(n.Roles)
 	out.Routes = slices.Clone(n.Routes)
 	out.Names = slices.Clone(n.Names)
+	out.Published = slices.Clone(n.Published)
 	return &out
 }
 
@@ -502,7 +549,7 @@ func (n *NodeRecord) StaticValidate() error {
 			return fmt.Errorf("node %v retiring: %w", n.Identity.ShortString(), err)
 		}
 	}
-	if err := validateRoles(n.Roles); err != nil {
+	if err := validateGrant(n.Roles, n.Routes); err != nil {
 		return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
 	}
 	if len(n.Routes) > MaxRoutesPerNode {
@@ -518,7 +565,10 @@ func (n *NodeRecord) StaticValidate() error {
 	if err := validateNames(n.Names); err != nil {
 		return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
 	}
-	return nil
+	if err := validatePublished(n.Published); err != nil {
+		return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
+	}
+	return n.ValidatePublishing()
 }
 
 // ValidateInNetwork checks the node's overlay IPv4 address and advertised
@@ -776,6 +826,14 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	if s.Network == "" {
 		return errors.New("network name is empty")
 	}
+	if s.Domain != "" {
+		if s.Schema < SchemaPublish {
+			return fmt.Errorf("a public domain needs %v; the state is at %v", SchemaPublish, s.Schema)
+		}
+		if err := ValidateHostName(s.Domain); err != nil {
+			return fmt.Errorf("domain: %w", err)
+		}
+	}
 
 	if n := len(s.Disablement); n == 0 {
 		return errors.New("no disablement commitments; the network would have no break-glass path")
@@ -833,9 +891,12 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 		if i > 0 && s.Nodes[i-1].Identity.Compare(s.Nodes[i].Identity) >= 0 {
 			return fmt.Errorf("nodes are not sorted and unique at %v", s.Nodes[i].Identity.ShortString())
 		}
-		if len(s.Nodes[i].Names) > 0 && s.Schema < SchemaNames {
-			return fmt.Errorf("node %v has names, which need %v; the state is at %v",
-				s.Nodes[i].Identity.ShortString(), SchemaNames, s.Schema)
+		if len(s.Nodes[i].Published) > 0 && s.Domain == "" {
+			return fmt.Errorf("node %v publishes names, and the network has no domain", s.Nodes[i].Identity.ShortString())
+		}
+		if need, what := s.Nodes[i].NeedsSchema(); s.Schema < need {
+			return fmt.Errorf("node %v has %s, which needs %v; the state is at %v",
+				s.Nodes[i].Identity.ShortString(), what, need, s.Schema)
 		}
 	}
 
@@ -896,6 +957,7 @@ func (s *Snapshot) ValidateInNetwork() error {
 	ula := s.ULA()
 	current := V4Ranges(s.Schema, s.V4Prefix)
 	seated := NewMemberIndex(*s.GenesisHash, len(s.Nodes))
+	seated.SetDomain(s.Domain)
 	for i := range s.Nodes {
 		n := &s.Nodes[i]
 		if err := n.ValidateInNetwork(ula, s.V4Ranges()); err != nil {
@@ -931,6 +993,8 @@ type MemberIndex struct {
 	mlkem   map[MLKEMKey]Identity
 	routes  []routeClaim
 	names   map[string]Identity
+	domain  string
+	labels  map[string]Identity
 }
 
 // A routeClaim is a subnet route a member is granted: one member routes each
@@ -951,8 +1015,13 @@ func NewMemberIndex(genesis Hash, n int) *MemberIndex {
 		x25519:  make(map[X25519Key]Identity, n),
 		mlkem:   make(map[MLKEMKey]Identity, n),
 		names:   map[string]Identity{},
+		labels:  map[string]Identity{},
 	}
 }
+
+// SetDomain is the network's public domain, which a published name and a
+// name pointed at a member must not both claim. Set before the first Add.
+func (ix *MemberIndex) SetDomain(domain string) { ix.domain = domain }
 
 // Check reports what n shares with a member added before.
 func (ix *MemberIndex) Check(n *NodeRecord) error {
@@ -984,6 +1053,49 @@ func (ix *MemberIndex) Check(n *NodeRecord) error {
 	for _, name := range n.Names {
 		if other, dup := ix.names[name]; dup {
 			return fmt.Errorf("nodes %v and %v both answer for %s", other.ShortString(), id, name)
+		}
+		if label, ok := publishedLabel(name, ix.domain); ok {
+			if other, dup := ix.labels[label]; dup {
+				return fmt.Errorf("node %v publishes %s, which node %v answers for", other.ShortString(), name, id)
+			}
+		}
+	}
+	if l, ok := n.ShareLabel(); ok && n.HasRole(RolePublish) {
+		if other, dup := ix.labels[l]; dup {
+			return fmt.Errorf("node %v publishes under its name %s, which node %v publishes", id, l, other.ShortString())
+		}
+		if slices.ContainsFunc(n.Published, func(p PublishedName) bool { return p.Label == l }) {
+			return fmt.Errorf("node %v publishes %s, the label its own name gives", id, l)
+		}
+		if ix.domain != "" {
+			name := l + "." + ix.domain
+			if other, dup := ix.names[name]; dup || slices.Contains(n.Names, name) {
+				if !dup {
+					other = n.Identity
+				}
+				return fmt.Errorf("node %v publishes under its name %s, which node %v answers for", id, name, other.ShortString())
+			}
+			if len(name) > MaxHostNameLen {
+				return fmt.Errorf("node %v publishes under a name of %d bytes, over the %d limit", id, len(name), MaxHostNameLen)
+			}
+		}
+	}
+	for _, p := range n.Published {
+		if other, dup := ix.labels[p.Label]; dup {
+			return fmt.Errorf("nodes %v and %v both publish %s", other.ShortString(), id, p.shown())
+		}
+		if ix.domain == "" {
+			continue
+		}
+		name := p.Under(ix.domain)
+		if len(name) > MaxHostNameLen {
+			return fmt.Errorf("node %v publishes a name of %d bytes, over the %d limit", id, len(name), MaxHostNameLen)
+		}
+		if other, dup := ix.names[name]; dup || slices.Contains(n.Names, name) {
+			if !dup {
+				other = n.Identity
+			}
+			return fmt.Errorf("node %v publishes %s, which node %v answers for", id, name, other.ShortString())
 		}
 	}
 	return nil
@@ -1022,6 +1134,27 @@ func (ix *MemberIndex) Add(n *NodeRecord) {
 	for _, name := range n.Names {
 		ix.names[name] = n.Identity
 	}
+	for _, p := range n.Published {
+		ix.labels[p.Label] = n.Identity
+	}
+	if l, ok := n.ShareLabel(); ok && n.HasRole(RolePublish) {
+		ix.labels[l] = n.Identity
+	}
+}
+
+// validateGrant checks roles, and that an ingress routes nothing: its peers
+// confine it by its overlay addresses alone.
+func validateGrant(roles []Role, routes []netip.Prefix) error {
+	if err := validateRoles(roles); err != nil {
+		return err
+	}
+	if slices.Contains(roles, RoleIngress) && len(routes) > 0 {
+		return errors.New("an ingress routes nothing")
+	}
+	if slices.Contains(roles, RoleService) && (len(roles) > 1 || len(routes) > 0) {
+		return errors.New("a service member holds no other role and routes nothing")
+	}
+	return nil
 }
 
 func validateRoles(roles []Role) error {
@@ -1029,12 +1162,18 @@ func validateRoles(roles []Role) error {
 		return fmt.Errorf("%d roles, over the %d limit", len(roles), MaxRolesPerNode)
 	}
 	for i, r := range roles {
-		if !slices.Contains(knownRoles, r) {
+		if _, ok := roleSchemas[r]; !ok {
 			return fmt.Errorf("unknown role %q", r)
 		}
 		if i > 0 && roles[i-1] >= r {
 			return fmt.Errorf("roles are not sorted and unique at %q", r)
 		}
+	}
+	if slices.Contains(roles, RoleIngress) && (slices.Contains(roles, RoleAdmin) || slices.Contains(roles, RoleExit)) {
+		return errors.New("an ingress is neither a voucher nor an exit node")
+	}
+	if slices.Contains(roles, RoleIngress) && slices.Contains(roles, RolePublish) {
+		return errors.New("an ingress publishes nothing under its own name, whose port it holds")
 	}
 	return nil
 }

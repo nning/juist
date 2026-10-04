@@ -1,10 +1,11 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/nning/juist/internal/changelog"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/secrets"
@@ -36,80 +37,9 @@ func logShow(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	state := auth.State()
-	// Names from the whole chain, so a removed device is still named in the
-	// record that removed it.
-	names := map[types.Identity]string{}
-	for _, aum := range chain {
-		if aum.Node != nil && aum.Node.Name != "" {
-			names[aum.Node.Identity] = aum.Node.Name
-		}
-		if aum.Admin != nil && keyPerson(*aum.Admin) != "" {
-			names[aum.Admin.Public] = keyPerson(*aum.Admin)
-		}
-		// A device's new identity key signs its own rotation.
-		if aum.NewIdentity != nil && aum.Subject != nil {
-			if n, ok := names[*aum.Subject]; ok {
-				names[*aum.NewIdentity] = n
-			}
-		}
-		if aum.State != nil {
-			for _, n := range aum.State.Nodes {
-				if n.Name != "" {
-					names[n.Identity] = n.Name
-				}
-			}
-			for _, k := range aum.State.Admins {
-				if keyPerson(k) != "" {
-					names[k.Public] = keyPerson(k)
-				}
-			}
-		}
-	}
-	for _, k := range state.Admins() {
-		if keyPerson(k) != "" {
-			names[k.Public] = keyPerson(k)
-		}
-	}
-	nameOf := func(id types.Identity) string {
-		if n, ok := names[id]; ok {
-			return n
-		}
-		return id.ShortString()
-	}
-	for i, aum := range chain {
-		hash := aum.Hash()
-		// One name per signer, with how many of their keys signed: two keys
-		// of one admin are one approval.
-		var signers []string
-		keysOf := map[string]int{}
-		for _, sig := range aum.Signatures {
-			n := nameOf(sig.KeyID)
-			if keysOf[n] == 0 {
-				signers = append(signers, n)
-			}
-			keysOf[n]++
-		}
-		for i, n := range signers {
-			if k := keysOf[n]; k > 1 {
-				signers[i] = fmt.Sprintf("%s (%d keys)", n, k)
-			}
-		}
-		what := describeKind(aum.Kind)
-		switch {
-		case aum.Node != nil:
-			what += ": " + displayMember(*aum.Node)
-		case aum.Subject != nil:
-			what += ": " + nameOf(*aum.Subject)
-		case aum.Admin != nil:
-			what += ": " + cmp.Or(aum.Admin.Holder, aum.Admin.Name)
-		case aum.Holder != nil:
-			what = "admin policy: " + aum.Holder.Name
-		case aum.Network != nil:
-			what += ": " + *aum.Network
-		}
-		a.printf("%4d  %-44s %s\n", i, what, a.dim(hash.String()[:12]))
-		a.printf("      %s\n", a.dim("approved by "+strings.Join(signers, ", ")))
+	for i, e := range changelog.Of(chain, auth.State().Admins()) {
+		a.printf("%4d  %-44s %s\n", i, e.What, a.dim(e.Hash.String()[:12]))
+		a.printf("      %s\n", a.dim("approved by "+strings.Join(e.Signers, ", ")))
 	}
 	a.printf("%s\n", a.dim(count(len(chain), "change")))
 	a.reportLogHealth(auth)
@@ -211,7 +141,9 @@ Raise the network to this build's record schema:
   schema 5  juist network renumber
   schema 6  juist network rename
   schema 7  changes carried to the admin devices (admins receive)
-  schema 8  public names pointed at devices (juist grant DEVICE NAME)
+  schema 8  public names pointed at devices (juist names add DEVICE NAME)
+  schema 9  services published through an ingress (juist publish add)
+  schema 10 devices renamed (juist rename)
 
 Devices on older builds stop at the upgrade until updated: update them first.`}
 	fs := newFlags(s.name)
@@ -241,6 +173,32 @@ Devices on older builds stop at the upgrade until updated: update them first.`}
 		a.hint("for changes waiting for your vote to reach you: juist admins receive")
 	}
 	return err
+}
+
+// upgradeNote says the network's schema is below this build's, where a key
+// in this keystore is one of its admins'.
+func (a *app) upgradeNote(several bool) {
+	auth, err := a.networkLog()
+	if err != nil {
+		return
+	}
+	state := auth.State()
+	if state.Schema() >= types.CurrentSchema {
+		return
+	}
+	files, err := a.home.adminKeyFiles()
+	if err != nil || !slices.ContainsFunc(files, func(k adminKeyFile) bool {
+		_, admin := state.Admin(k.priv.Public())
+		return admin
+	}) {
+		return
+	}
+	cmd := "juist log upgrade"
+	if several {
+		cmd += " " + a.network
+	}
+	a.printf("\nthe network is at %v, this version at %v\n", state.Schema(), types.CurrentSchema)
+	a.hint("once every device runs this version: %s", cmd)
 }
 
 func logCheckpoint(a *app, args []string) error {

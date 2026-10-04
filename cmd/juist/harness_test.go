@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -117,6 +118,24 @@ func (c *cli) app(out *syncBuffer, in string) *app {
 	}
 	if c.admissionHold != 0 {
 		a.admissionHold = c.admissionHold
+	}
+	// A background share runs in-process, writing to out until it is up.
+	a.spawn = func(args []string) (io.ReadCloser, func() error, func(), error) {
+		r, w := io.Pipe()
+		child := c.app(out, "")
+		ctx, cancel := context.WithCancel(context.Background())
+		child.ctx, child.ready = ctx, w
+		done := make(chan struct{})
+		var err error
+		go func() {
+			defer close(done)
+			if err = child.main(args); err != nil && !errors.Is(err, errSilent) {
+				child.fail(err)
+			}
+			w.Close()
+		}()
+		c.t.Cleanup(func() { cancel(); <-done })
+		return r, func() error { <-done; return err }, cancel, nil
 	}
 	if c.host != nil {
 		a.host, a.asRoot = c.host, func() bool { return c.root }
@@ -363,12 +382,12 @@ func corrupt(t *testing.T, c *cli) {
 // sock (or in the directory), with a data plane that records rather than
 // connects and LAN discovery replaced by find.
 func startService(t *testing.T, home, sock string,
-	find func(context.Context, uint16) ([]mdns.InviteHost, error), mgr conn.Manager) func() {
+	find func(context.Context, uint16) ([]mdns.InviteHost, error), mgr conn.Manager, mutate ...func(*daemon.ServiceOptions)) func() {
 	t.Helper()
 	if mgr == nil {
 		mgr = stubManager{}
 	}
-	s, err := daemon.NewService(daemon.ServiceOptions{
+	opts := daemon.ServiceOptions{
 		Home:   home,
 		Socket: sock,
 		Mesh: daemon.Options{
@@ -383,7 +402,11 @@ func startService(t *testing.T, home, sock string,
 		InviteAddrs: func(port uint16) []netip.AddrPort {
 			return []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port)}
 		},
-	})
+	}
+	for _, m := range mutate {
+		m(&opts)
+	}
+	s, err := daemon.NewService(opts)
 	if err != nil {
 		t.Fatalf("starting the daemon: %v", err)
 	}
@@ -414,6 +437,8 @@ func (stubManager) SetEgress(conn.Egress, bool) error { return nil }
 func (stubManager) AnswersThrough() string { return "" }
 
 func (stubManager) SetServe(conn.Serve) error { return nil }
+
+func (stubManager) SetIngressPorts([]uint16) error { return nil }
 
 func (stubManager) HostRoutes() []netip.Prefix { return nil }
 
@@ -473,6 +498,8 @@ func (m *peersManager) SetEgress(e conn.Egress, _ bool) error {
 	m.egress = e
 	return nil
 }
+
+func (*peersManager) SetIngressPorts([]uint16) error { return nil }
 
 func (m *peersManager) SetServe(s conn.Serve) error {
 	m.mu.Lock()

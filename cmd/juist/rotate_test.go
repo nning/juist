@@ -86,13 +86,26 @@ func TestRotationThatLosesForkChoiceIsNotPromoted(t *testing.T) {
 	first.mustRun("create", "home", "--admin", "second="+key)
 	phone := enrollDevice(t, first, "phone")
 	first.mustRun("admins", "quorum", "2", "--yes")
+	// The second admin approves a removal only where the log is: on a device
+	// of its own, admitted with its own vote.
+	inv, link := startInvite(t, first)
+	joined := second.start("join", link, "--name", "desk")
+	inv.waitFor(t, regexp.MustCompile(`juist approve add-desk\.rec`))
+	second.mustRun("approve", "--yes", filepath.Join(dir, "add-desk.rec"))
+	first.mustRun("apply", filepath.Join(dir, "add-desk.rec"))
+	if out, err := inv.wait(t); err != nil {
+		t.Fatalf("invite: %v\n%s", err, out)
+	}
+	if out, err := joined.wait(t); err != nil {
+		t.Fatalf("join: %v\n%s", err, out)
+	}
 
 	before := nodeKeysOf(t, first).Public
 	first.mustRun("rotate")
 	first.mustRun("remove", "phone", "--yes")
 	rotate, remove := filepath.Join(dir, "rotate-"+fileSafe(displayName(nodeKeysOf(t, first)))+".rec"),
 		filepath.Join(dir, "remove-phone.rec")
-	second.mustRun("approve", "--yes", rotate, remove)
+	second.mustRun("approve", "--yes", "--no-apply", rotate, remove)
 	// The removal was started with the rotation, and undoes it.
 	mustContain(t, first.mustRun("apply", rotate, remove), "lost to a concurrent change")
 
@@ -211,7 +224,7 @@ func TestAMemberRotatesThroughItsDaemon(t *testing.T) {
 	mustContain(t, phone.mustRun("rotate"), "juist approve rotate-phone.rec")
 	pending := filepath.Join(dir, "rotate-phone.rec")
 	laptop.mustRun("approve", "--yes", pending)
-	mustContain(t, phone.mustRun("apply", pending), "new keys live")
+	phone.mustRun("apply", pending) // a no-op where gossip brought it first
 	after, err := keys.LoadNode(filepath.Join(phone.state, nodeKeysFile))
 	if err != nil {
 		t.Fatal(err)

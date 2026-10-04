@@ -34,6 +34,17 @@ it was validated with (`05-roadmap.md`), and the latest run of the gates CI
 cannot run (`12-validating.md`, "The last privileged run"). Record it in the
 same commit as the work, not only in an agent's own notes.
 
+## User documentation
+
+A change a user can notice (a command, flag, default, output line, port,
+platform or limit) updates, in the same commit, every place that describes
+it: the README, `--help`, and the handbook in `website/content`, English and
+German alike. A new feature gets its page or section and its row in
+`website/data/features.yaml`. The website says what juist does now: no
+milestones, plans or work in progress, except the comparison matrix's
+"planned" mark. Grep `website/` for the command or
+term to find each page, and run `make -C website check`.
+
 ## Landing changes
 
 Work lands directly on `main`, without pull requests. Fetch and rebase onto
@@ -47,11 +58,17 @@ exists for a scenario is not evidence that the scenario works.
 
 ## Gates
 
-`make check` is what CI runs; it must pass before pushing. `make cross` builds
+`make check` gates every push; it must pass before pushing. `make cross` builds
 every v1 target platform; run it whenever a build-tagged file changes, which
-`make check` does not compile for other platforms. `make ci` runs every CI job
-on the local machine, the privileged tests last under sudo. After pushing,
-check with `gh run view` that CI's jobs started at all. Claims about the
+`make check` does not compile for other platforms. CI is `make ci-vm`: `make
+ci` and `make interop` in a KVM VM it sets up itself, about 25 minutes, logged
+to `build/ci`; GitHub's workflows run by hand alone. Run it whole, in the
+background, when a milestone or the review round closing it is done, and
+record it in `12-validating.md`. A change to what `make check` skips runs the
+part that covers it: devices, routes, firewall or NAT `make ci-vm
+CI_MAKE=test-os-plumbing-sudo`, packages, units or what passes between hosts
+`make ci-vm CI_MAKE=interop`. Say its result, or that it did not run.
+`12-validating.md`, "When each gate runs", has the whole table. Claims about the
 embedded Tailscale stack are verified against the pinned module cache
 (`~/go/pkg/mod/tailscale.com@<version>`), not from memory.
 

@@ -226,3 +226,19 @@ func TestAProposerWhoDidNotSignIsFoundOut(t *testing.T) {
 		t.Fatal("a copy naming a proposer who did not sign it opened")
 	}
 }
+
+// Every kind is decided on whether it is about the device it names.
+func TestEveryKindIsDecidedOnWhomItIsAbout(t *testing.T) {
+	for k := types.Kind(1); k != 0; k++ {
+		if strings.HasPrefix(k.String(), "kind?") {
+			continue
+		}
+		if _, ok := aboutSubject[k]; !ok {
+			t.Errorf("%v is not decided on whether it is about its subject", k)
+		}
+	}
+	id := types.Identity{1}
+	if got := AboutOf(&types.AUM{Kind: types.KindRenameNode, Subject: &id}); len(got) != 1 || got[0] != id {
+		t.Errorf("a rename is about %v", got)
+	}
+}

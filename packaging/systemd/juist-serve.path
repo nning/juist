@@ -1,0 +1,15 @@
+# Starts the terminator, juist-serve.service, while juistd keeps
+# /run/juist/serve-wanted: while this device ends TLS for a published name or
+# a share. juistd then tells the terminator when nothing needs it, and it
+# stops. So no one needs root to start it; see /usr/lib/juist/serve.sh.
+
+[Unit]
+Description=juist TLS terminator, started while juistd needs it
+Documentation=https://github.com/nning/juist
+
+[Path]
+PathExists=/run/juist/serve-wanted
+Unit=juist-serve.service
+
+[Install]
+WantedBy=paths.target

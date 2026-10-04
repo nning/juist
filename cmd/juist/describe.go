@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nning/juist/internal/names"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -74,8 +76,25 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		for _, name := range n.Names {
 			add("pointing %s at it", name)
 		}
+		domain := "DOMAIN"
+		if state != nil {
+			domain = cmp.Or(state.Domain(), domain)
+		}
+		for _, p := range n.Published {
+			line := fmt.Sprintf("publishing %s on port %d of it", publishedPhrase(p, domain), p.Port)
+			if p.Proxy {
+				line += ", with PROXY protocol"
+			}
+			add("%s", line)
+		}
 	case types.KindRemoveNode:
-		add("removes the device %s", member(*aum.Subject))
+		roles := ""
+		if state != nil {
+			if n, ok := state.Node(*aum.Subject); ok {
+				roles = rolesSuffix(n.Roles)
+			}
+		}
+		add("removes the device %s%s", member(*aum.Subject), roles)
 	case types.KindSetNodeRoutes:
 		var now *types.NodeRecord
 		if state != nil {
@@ -257,11 +276,101 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		if len(out) == 0 {
 			add("leaves %s's names as they are", member(*aum.Subject))
 		}
+	case types.KindSetDomain:
+		was := ""
+		if state != nil {
+			was = state.Domain()
+		}
+		switch d := *aum.Domain; {
+		case d == "" && was != "":
+			add("withdraws the public domain %s", was)
+		case d == "":
+			add("withdraws the public domain")
+		case was != "":
+			add("moves the public domain from %s to %s, and every published name with it", was, d)
+			add(domainResolution, d, d)
+			for _, n := range state.Nodes() {
+				if slices.ContainsFunc(n.Published, func(p types.PublishedName) bool { return p.Label == "" }) {
+					add("publishes the domain %s itself on %s", d, displayMember(n))
+				}
+			}
+		default:
+			add("sets the public domain to %s", d)
+			add(domainResolution, d, d)
+		}
+	case types.KindSetPublished:
+		var had []types.PublishedName
+		domain := "DOMAIN"
+		if state != nil {
+			if n, ok := state.Node(*aum.Subject); ok {
+				had = n.Published
+			}
+			domain = cmp.Or(state.Domain(), domain)
+		}
+		// What the internet then reaches, which is what an approver weighs.
+		for _, p := range aum.Publish.Names {
+			if !slices.Contains(had, p) {
+				line := fmt.Sprintf("publishes %s on port %d of %s", publishedPhrase(p, domain), p.Port, member(*aum.Subject))
+				if p.Proxy {
+					line += ", with PROXY protocol"
+				}
+				add("%s", line)
+			}
+		}
+		for _, p := range had {
+			if !slices.ContainsFunc(aum.Publish.Names, func(q types.PublishedName) bool { return q.Label == p.Label }) {
+				add("no longer publishes %s", publishedPhrase(p, domain))
+			}
+		}
+		if len(out) == 0 {
+			add("leaves what %s publishes as it is", member(*aum.Subject))
+		}
 	case types.KindRenameNetwork:
 		if state != nil {
 			add("renames the network %q to %q", state.Network(), *aum.Network)
 		} else {
 			add("renames the network to %q", *aum.Network)
+		}
+	case types.KindRenameNode:
+		add("renames %s to %q", member(*aum.Subject), *aum.NodeName)
+		if state == nil {
+			break
+		}
+		n, ok := state.Node(*aum.Subject)
+		if !ok {
+			break
+		}
+		// What others then reach it by, which is what an approver weighs.
+		if network := names.Label(state.Network()); network != "" {
+			zone := network + "." + types.NamesTLD
+			was, is := names.Label(n.Name), names.Label(*aum.NodeName)
+			// A label two members held, which resolved to neither, goes to the other.
+			var other string
+			for _, o := range state.Nodes() {
+				if o.Identity != n.Identity && was != "" && names.Label(o.Name) == was {
+					other = member(o.Identity)
+				}
+			}
+			switch {
+			case was == is:
+			case other != "" && is != "":
+				add("%s.%s resolves to it, and %s.%s to %s", is, zone, was, zone, other)
+			case other != "":
+				add("%s.%s resolves to %s", was, zone, other)
+			case was != "" && is != "":
+				add("%s.%s resolves to it, and %s.%s no longer does", is, zone, was, zone)
+			case was != "":
+				add("%s.%s no longer resolves, and no name under %s does", was, zone, zone)
+			case is != "":
+				add("%s.%s resolves to it", is, zone)
+			}
+		}
+		renamed := n.Clone()
+		renamed.Name = *aum.NodeName
+		was, _ := n.ShareLabel()
+		is, _ := renamed.ShareLabel()
+		if n.HasRole(types.RolePublish) && state.Domain() != "" && was != is {
+			add("shares under %s, not %s", nameUnder(is, state.Domain()), nameUnder(was, state.Domain()))
 		}
 	default:
 		add("a %s record", aum.Kind)
@@ -297,20 +406,51 @@ const shortTransition = 48 * time.Hour
 // only what it claims. An identity rotation moves a member's roles — an admin
 // device's too — to the new key, which only the log can say.
 func changesAuthority(aum *types.AUM) bool {
-	switch aum.Kind {
-	case types.KindRotateIdentity:
-		return true
-	case types.KindAddAdminKey, types.KindRemoveAdminKey, types.KindSetQuorum,
-		types.KindCheckpoint, types.KindSchemaUpgrade, types.KindSetVouchers, types.KindSetHolder,
-		types.KindSetAdminRecipient:
-		return true
-	case types.KindAddNode:
+	if aum.Kind == types.KindAddNode {
 		return slices.Contains(aum.Node.Roles, types.RoleAdmin)
-	case types.KindSetNodeRoutes:
-		return true // it can grant the admin role, or take the last one away
-	default:
-		return false
 	}
+	changes, known := kindChangesAuthority[aum.Kind]
+	return changes || !known
+}
+
+// kindChangesAuthority is, for every kind but an admission, whether its record
+// can; a kind missing from it is taken to.
+var kindChangesAuthority = map[types.Kind]bool{
+	types.KindGenesis:           true,
+	types.KindRemoveNode:        true, // the device may be a voucher, which only the log says
+	types.KindSetNodeRoutes:     true, // it can grant the admin role, or take the last one away
+	types.KindRotateNodeKey:     false,
+	types.KindRotateIdentity:    true,
+	types.KindAddAdminKey:       true,
+	types.KindRemoveAdminKey:    true,
+	types.KindSetQuorum:         true,
+	types.KindCheckpoint:        true,
+	types.KindEpochBump:         false,
+	types.KindSchemaUpgrade:     true,
+	types.KindSetVouchers:       true,
+	types.KindSetHolder:         true,
+	types.KindRenumberNetwork:   false,
+	types.KindRenumberNode:      false,
+	types.KindRetireAddresses:   false,
+	types.KindRenameNetwork:     false,
+	types.KindSetAdminRecipient: true,
+	types.KindSetNodeNames:      false,
+	types.KindSetDomain:         false,
+	types.KindSetPublished:      false,
+	types.KindRenameNode:        false,
+}
+
+// voucherLost returns the device aum takes the admin role from, by removing
+// it or by a grant without the role.
+func voucherLost(state *log.State, aum *types.AUM) (types.NodeRecord, bool) {
+	switch {
+	case aum.Kind == types.KindRemoveNode:
+	case aum.Kind == types.KindSetNodeRoutes && !slices.Contains(aum.Grant.Roles, types.RoleAdmin):
+	default:
+		return types.NodeRecord{}, false
+	}
+	n, ok := state.Node(*aum.Subject)
+	return n, ok && slices.Contains(n.Roles, types.RoleAdmin)
 }
 
 // plural is word, or its plural where n is not one.
@@ -363,3 +503,18 @@ func recipientDigest(r types.RecipientKey) string {
 	sum := sha256.Sum256(slices.Concat(r.X25519[:], r.MLKEM[:]))
 	return hex.EncodeToString(sum[:6])
 }
+
+// publishedPhrase is p's name under domain as an approval says it, the
+// domain itself said so.
+func publishedPhrase(p types.PublishedName, domain string) string {
+	if p.Label == "" {
+		return "the domain " + domain + " itself"
+	}
+	return p.Under(domain)
+}
+
+// domainResolution is what a public domain makes of members' resolution,
+// which an approver weighs: every name of it goes to juistd, without each
+// device's consent, and DNSSEC with it.
+const domainResolution = "has every member resolve %s through juistd, which answers the names published " +
+	"there with their devices, and turns DNSSEC off for %s on members"

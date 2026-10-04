@@ -1,7 +1,7 @@
 # 07 — Embedding Tailscale's connectivity stack
 
-Findings from the M0 spike (`conn/`), against **tailscale.com v1.102.2** and its
-wireguard-go fork `v0.0.0-20260715223240`. These are pinned versions; anything here
+Findings from embedding it in `conn/`, against the pinned **tailscale.com v1.104.0**
+and its wireguard-go fork `v0.0.0-20260928213032`. Anything here
 may change at upgrade time, which is the cost
 [04-architecture.md](04-architecture.md) already accepted.
 
@@ -50,70 +50,28 @@ packet filter drops *every* inbound packet (`tstun`:
 `if filt == nil { return filter.Drop }`). The filter must be built explicitly. Both
 gates are worth keeping: M2's exit criterion is satisfied by either alone.
 
-## Problem: no preshared-key path
+## The preshared-key path
 
-The per-pair ML-KEM-768 PSK hedge in [04-architecture.md](04-architecture.md) has
-**no reachable route through the current API**. Two gaps, both above the crypto,
-against `tailscale.com v1.102.2` and `tailscale/wireguard-go v0.0.0-20260715223240`:
+The per-pair ML-KEM-768 PSK of [04-architecture.md](04-architecture.md) is M11a
+([05-roadmap.md](05-roadmap.md)). Against `tailscale.com v1.104.0` and
+`tailscale/wireguard-go v0.0.0-20260928213032`, the engine carries it with no
+patch, and a design has to respect what it does:
 
-- `device.NewPeerConfig` (`device/device.go:456`) carries `AllowedIPs` and `Endpoint`
-  and nothing else, so a lazily-created peer starts with a zero PSK.
-- `wgengine`'s `wgdev` is private (`wgengine/userspace.go:81`) and no exported method
-  in the package returns a `*device.Device`, so the UAPI route is unreachable from
-  outside it. `grep -rn preshared wgengine/` returns nothing.
-
-What the fork already provides is more than plumbing-with-a-hole: `handshake.presharedKey`
-(`device/noise-protocol.go:218`) is mixed into the Noise handshake, and the UAPI
-`preshared_key` handler (`device/uapi.go:325`) writes it **in place** under the
-handshake mutex — no `RemovePeer`, no session invalidation. An established session
-keeps running on its derived transport keys and the next handshake mixes in the new
-value, which is exactly the rotation behaviour 04-architecture.md claims. That
-mechanism does not have to be invented; only access to it is missing. `IpcSet` and
-`IpcSetOperation` are exported.
-
-**Any design has to cover both peer states.** `wgcfg` no longer pushes configuration
-at all — the package is 40 lines, there is no `ReconfigDevice` and no UAPI writer, and
-peers are created lazily through `PeerLookupFunc`. So a PSK reaches a peer two ways
-depending on whether it exists yet: through the lookup func at creation, and through
-the in-place UAPI call afterwards. One without the other leaves a gap.
-
-**Rotation is bounded by the rekey window.** `RekeyAfterTime` is 120 s and
-`RejectAfterTime` 180 s (`device/constants.go:17,22`), so both ends must hold the new
-PSK before the next handshake or it fails. That is a convergence requirement on the
-reconciler, comfortably met by M2's measured ~80 ms revocation crossing, but it is a
-requirement and not a free property.
-
-Two options remain:
-
-1. **Patch the vendored code** — a `PresharedKey` field on `NewPeerConfig` threaded
-   through `wgcfg.NewPeerLookupFunc`, plus an engine-level call reaching the existing
-   UAPI path. The crypto is upstream and untouched; the patch is plumbing in two
-   pinned repositories. The cost is that the dependency becomes a *modified* one:
-   rebased at every Tailscale upgrade, and in the audit path even though it is not
-   cryptographic.
-2. **Defer the PQ hedge to post-v1**, alongside the ML-DSA checkpoint co-signatures
-   already deferred.
-
-**Settled at M3b: (2), deferred past v1.** The transport question below decides
-whether the freeze bound this, and it does not: ML-KEM is a KEM, so establishing
-a per-pair secret means a ciphertext travels, and it travels over gossip or
-disco rather than in the log — where the public halves it is built from are
-already recorded. So nothing about the schema forecloses it, and with the schema
-versioned it would not be foreclosed even if it did. What is left is entirely
-the cost in option 1: a modified dependency, rebased at every upgrade, inside
-the audit scope. That is a poor trade against a hedge whose whole value is
-against an adversary that does not exist yet, so it waits for a milestone that
-can carry the maintenance — and the group secret, which is where the hybrid KEM
-*is* used today, keeps its own post-quantum protection meanwhile.
-
-**What decides whether the M3 freeze binds this.** `types.NodeRecord` already carries
-`MLKEM` and consumes it, with `X25519`, as the two halves of the hybrid HPKE KEM that
-seals epoch group secrets (M1) — so the discovery layer has the PQ hedge today and no
-*new* record field is needed to derive a per-pair PSK from keys the log already holds.
-The open question is where the ML-KEM ciphertext travels: in the log, it is a schema
-field and the freeze binds; over gossip or disco, it is not and the implementation
-choice may outlive M3b. Settle the transport first — it determines whether this is a
-freeze gate or a v1-scope decision. See [08-trust-layer-notes.md](08-trust-layer-notes.md).
+- **Both peer states have a path, and need one.** Peers are created lazily, so
+  a PSK reaches a new peer through the config lookup (`wgcfg.PeerConfig.PresharedKey`,
+  passed on by `wgcfg.NewPeerLookupFunc`, `wgcfg/device.go:60`) and an active one
+  through `SyncDevicePeer` (`wgengine/userspace.go:714`). One without the other
+  leaves a gap.
+- **A change keeps the session.** `Peer.SetPresharedKey` (`device/peer.go:197`)
+  writes under the handshake mutex: the session runs on its derived keys and the
+  next handshake mixes in the new value.
+- **Rotation is bounded by the rekey window.** `RekeyAfterTime` is 120 s and
+  `RejectAfterTime` 180 s (`device/constants.go`), and a peer holds one PSK, so
+  both ends need the new key before the next handshake or it fails.
+- **The ciphertext does not travel in the log.** ML-KEM is a KEM, so a
+  per-pair secret means a ciphertext sent over gossip or the sealed sideband;
+  the public keys it is built from are already in `NodeRecord.MLKEM`
+  ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
 
 ## Wiring requirements that nothing documents
 
@@ -175,7 +133,7 @@ Each fails silently or confusingly.
   install no rules. The runner reports IPv6 only where `disable_ipv6` and
   `disable_policy` are 0 and IPv6 policy routing works — and, in its iptables mode,
   only where the `ip6tables` binary exists. A host missing `ip6tables` therefore
-  loses the overlay's *primary* family with nothing but a log line. Packaging (M11)
+  loses the overlay's *primary* family with nothing but a log line. Packaging (M13)
   must declare that dependency, and an operator report of "no v6 on the overlay"
   should start here.
 - **`router.CleanUp` is not worth calling here**, though `tailscaled` calls it at
@@ -190,7 +148,7 @@ Each fails silently or confusingly.
   kept for good: a node started before any member relayed homes on a STUN-only
   region and never connects to a relay granted later. `conn` marks its tracker
   as in a map poll, because announcements carry the home region to peers. The
-  flag is read nowhere else we link (v1.102.2).
+  flag is read nowhere else we link (v1.104.0).
 - **One node key under two node IDs is refused.** `magicsock.updateNodes` meets a key
   it already holds under another `NodeID` with `devPanicf`: a panic under test, and
   in production an endpoint silently not created until a later `SetNetworkMap`. An
@@ -223,8 +181,8 @@ code directly, so they fail on the upgrade itself rather than in the field.
 | The engine records a router config before programming it, so it never retries one that failed | the forced retry in `reconfig` | `TestUpstreamEngineSkipsARouterItFailedToProgram`, `TestReconfigReprogramsAFailedRouterOnTheRealEngine` |
 | magicsock changes its home relay only while `GetInPollNetMap` is true, a check it skips under test | `GotStreamedMapResponse` in `conn.New` | `TestUpstreamHomeRelayWaitsForAMapPoll`, `TestTheHomeRelayMayChange` |
 | util/backoff logs `%s: [v1] backoff: %d msec` under `derp-<region>`, and derphttp says `no non-STUNOnly nodes` for a STUN-only region | `withoutSTUNHomeNoise` | `TestUpstreamBackoffLineIsTheOneFiltered`, `TestUpstreamSTUNOnlyRegionErrorIsTheOneFiltered` |
-| Nothing below `ipnlocal` resets a peer's sessions when its disco key changes | `ResetDevicePeer` in `SetPeers` | `TestARestartedPeerIsReachedAtOnce` |
-| derpserver asks its admission URL through `http.DefaultClient`, failing closed | relay admission, `relay/admit.go` | `TestNonMemberCannotUseTheRelay`, `TestMembersRelayThroughAMember` |
+| Nothing below `ipnlocal` resets a peer's sessions when its disco key changes, and `SyncDevicePeer` removes a peer whose lookup fails | the eviction in `SetPeers` | `TestARestartedPeerIsReachedAtOnce` |
+| derpserver asks its admission URL through `http.DefaultClient`, failing closed, with the context `Accept` was given | relay admission, `relay/admit.go`, `serveDERP` | `TestNonMemberCannotUseTheRelay`, `TestMembersRelayThroughAMember` |
 | magicsock reaches no relay and no STUN server without a DERP map | direct-only operation | `TestNoThirdPartyEgress` |
 | The router, device and MTU behave as the wiring requirements above say | the real-device path | `make test-os-plumbing` (root, not on CI's unprivileged job) |
 
@@ -460,15 +418,13 @@ sealed under the epoch group secret, because unlike tailcat we have a group
 secret and a membership to bind it to.
 
 **All three APIs — `ForceDiscoKey`, `SendDERPPacketTo`, `OnDERPRecv` — are
-present in the pinned tailscale.com v1.102.2**, verified against the module cache.
+present in the pinned tailscale.com v1.104.0**, verified against the module cache.
 tailcat pins a v1.103.0-pre, but adopting these techniques needs no upgrade.
 
 ### What tailcat does not solve
 
 The preshared key. `grep -rn preshared` over tailcat returns nothing: it runs the
-same PSK-less Noise IKpsk2 as stock Tailscale. The open decision above — patch
-the vendored engine or defer the PQ data-plane hedge past v1 — is untouched, and
-tailcat is evidence that upstream is not about to open that path on its own.
+same PSK-less Noise IKpsk2 as stock Tailscale, so M11a has no prior art to take.
 
 ### Where ours differs on purpose
 

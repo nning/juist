@@ -1,6 +1,7 @@
 package log
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/nning/juist/types"
@@ -46,6 +47,56 @@ func TestRenameNetwork(t *testing.T) {
 
 	old := newHarnessAt(t, 1, 1, types.SchemaRenumber)
 	old.mustReject("a rename at schema 5", RuleState, old.signed(types.AUM{Kind: types.KindRenameNetwork, Network: new("lab")}))
+}
+
+// A device's rename changes its name and nothing else about it, survives
+// reopening and a checkpoint, and is refused for a name another member's
+// folds like or one its share label could not follow.
+func TestRenameNode(t *testing.T) {
+	h := newHarness(t, 2, 2)
+	nas, laptop, vps := h.addNode("nas"), h.addNode("laptop"), h.addNode("vps")
+	h.apply(h.auth.Builder().RenameNode(nas.Identity, "storage"))
+	got, _ := h.auth.State().Node(nas.Identity)
+	want := nas.Clone()
+	want.Name = "storage"
+	if !reflect.DeepEqual(&got, want) {
+		t.Fatalf("renamed, nas is %+v, want %+v", got, *want)
+	}
+	if n, _ := h.fork().State().Node(nas.Identity); n.Name != "storage" {
+		t.Fatalf("reopened, nas is named %q", n.Name)
+	}
+	cp := h.apply(h.auth.Builder().Checkpoint())
+	boot, err := Bootstrap(NewMemStorage(), cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := boot.State().Node(nas.Identity); n.Name != "storage" {
+		t.Fatalf("bootstrapped from a checkpoint, nas is named %q", n.Name)
+	}
+
+	rename := func(id types.Identity, name string) types.AUM {
+		return h.signed(types.AUM{Kind: types.KindRenameNode, Subject: &id, NodeName: &name})
+	}
+	h.mustReject("a rename to the name it has", RuleState, rename(nas.Identity, "storage"))
+	if _, err := h.auth.Builder().RenameNode(nas.Identity, "storage"); err == nil {
+		t.Error("the builder authored a rename to the name the device has")
+	}
+	h.mustReject("a rename to another member's name, folded", RuleState, rename(nas.Identity, "LAPTOP"))
+	h.mustReject("a rename of no member", RuleState, rename(h.newNode("gone").Identity, "gone"))
+	h.apply(h.auth.Builder().RenameNode(laptop.Identity, "Laptop"))
+
+	h.apply(h.auth.Builder().SetDomain("pub.example.org"))
+	h.apply(h.auth.Builder().SetNodeRoutes(nas.Identity, []types.Role{types.RolePublish}, nil))
+	h.apply(h.auth.Builder().SetPublished(vps.Identity, []types.PublishedName{{Label: "photos", Port: 443}}))
+	h.mustReject("a share name that gives no label", RuleState, rename(nas.Identity, "my.nas"))
+	h.mustReject("a share label another member publishes", RuleState, rename(nas.Identity, "photos"))
+	h.apply(h.auth.Builder().RenameNode(nas.Identity, "nas"))
+	h.apply(h.auth.Builder().RenameNode(vps.Identity, "storage"))
+
+	old := newHarnessAt(t, 1, 1, types.SchemaPublish)
+	n := old.addNode("nas")
+	old.mustReject("a rename at schema 9", RuleState, old.signed(types.AUM{Kind: types.KindRenameNode,
+		Subject: &n.Identity, NodeName: new("storage")}))
 }
 
 // Two admins renaming at once are a fork like any other: one name wins, and

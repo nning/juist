@@ -120,6 +120,9 @@ type Derived struct {
 	Head  types.Hash `cbor:"5,keyasint"`
 	Epoch uint64     `cbor:"6,keyasint"`
 
+	// Schema is the network's record schema.
+	Schema types.SchemaVersion `cbor:"70,keyasint,omitempty"`
+
 	// Members is how many the log carries, Peers how many are installed in the
 	// data plane, Unreachable how many have no announcement yet, and Expired
 	// how many are past their expiry and treated as former members.
@@ -163,6 +166,20 @@ type Derived struct {
 	// Names is how the host resolves the network's names; nil where it is
 	// not meant to, as on a device that is no member.
 	Names *Names `cbor:"65,keyasint,omitempty"`
+
+	// Publish is what this device makes of the names published on it; nil
+	// where none is and its operator did not agree to serve them.
+	Publish *Publish `cbor:"66,keyasint,omitempty"`
+
+	// Ingress is this device's serving as an ingress; nil where it is none.
+	Ingress *Ingress `cbor:"67,keyasint,omitempty"`
+
+	// Share is what this device publishes under its own name; nil for none.
+	Share *Share `cbor:"68,keyasint,omitempty"`
+
+	// Terminator is what this device's terminator last said; nil where it
+	// never asked.
+	Terminator *Terminator `cbor:"69,keyasint,omitempty"`
 
 	// SelfName is this node's member name.
 	SelfName string `cbor:"24,keyasint,omitempty"`
@@ -270,7 +287,7 @@ func (s *Status) ForReader() Status {
 	return Status{
 		Self: s.Self, Addrs: s.Addrs, Network: s.Network,
 		Derived: Derived{
-			NetworkName: s.NetworkName, Head: s.Head, Epoch: s.Epoch,
+			NetworkName: s.NetworkName, Head: s.Head, Epoch: s.Epoch, Schema: s.Schema,
 			Members: s.Members, Peers: s.Peers, Unreachable: s.Unreachable, Expired: s.Expired,
 			Silent: s.Silent, Unrevoked: s.Unrevoked, Lost: s.Lost, Refused: s.Refused, SelfName: s.SelfName,
 			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
@@ -350,6 +367,12 @@ type Device struct {
 	// the public names pointed at it.
 	Subnets []netip.Prefix `cbor:"8,keyasint,omitempty"`
 	Names   []string       `cbor:"9,keyasint,omitempty"`
+
+	// Published are the names the member publishes, under the domain, and
+	// Serving says it serves them, as its announcement says; [DevicesOf]
+	// leaves Serving unset.
+	Published []string `cbor:"10,keyasint,omitempty"`
+	Serving   bool     `cbor:"11,keyasint,omitempty"`
 }
 
 // Exit is a device's use of exit nodes, and its serving as one.
@@ -400,7 +423,7 @@ type Exit struct {
 // home.juist, where Resolved, and else Not says why not; Cannot where the
 // host or the network's name does not allow it at all. Accepted says the
 // owner agreed to the public names the network points at members, which
-// Overrides are.
+// Overrides are. Public is the network's public domain, resolved as Domain is.
 type Names struct {
 	Domain    string         `cbor:"1,keyasint,omitempty"`
 	Resolved  bool           `cbor:"2,keyasint,omitempty"`
@@ -408,6 +431,7 @@ type Names struct {
 	Cannot    bool           `cbor:"4,keyasint,omitempty"`
 	Accepted  bool           `cbor:"5,keyasint,omitempty"`
 	Overrides []NameOverride `cbor:"6,keyasint,omitempty"`
+	Public    string         `cbor:"7,keyasint,omitempty"`
 }
 
 // A NameOverride is a public name pointed at Device, and Not why this device
@@ -439,6 +463,73 @@ type Subnets struct {
 	Serving    []netip.Prefix `cbor:"3,keyasint,omitempty"`
 	NotServing string         `cbor:"4,keyasint,omitempty"`
 	Routes     []SubnetRoute  `cbor:"5,keyasint,omitempty"`
+}
+
+// Publish is whether this device's operator agreed to serve the names the
+// network publishes on it, which it serves, or why none.
+type Publish struct {
+	Consent    bool     `cbor:"1,keyasint,omitempty"`
+	Serving    []string `cbor:"2,keyasint,omitempty"`
+	NotServing string   `cbor:"3,keyasint,omitempty"`
+
+	// Ending are the names served whose TLS juist ends, as "NAME to ADDR".
+	Ending []string `cbor:"4,keyasint,omitempty"`
+
+	// CAA are the records that bind those names' certificates to the
+	// terminator's account, once it has one, in zone file syntax.
+	CAA []string `cbor:"5,keyasint,omitempty"`
+
+	// Ends says the operator named where some name goes, for juist to end
+	// its TLS; TerminatorSilent, that the terminator has not asked lately
+	// while there is TLS to end.
+	Ends             bool `cbor:"6,keyasint,omitempty"`
+	TerminatorSilent bool `cbor:"7,keyasint,omitempty"`
+
+	// To is where the operator said each name whose TLS juist ends goes,
+	// published here or not, kept while not serving too; sorted by label.
+	To []ServeTo `cbor:"8,keyasint,omitempty"`
+}
+
+// A Terminator says whether this device's terminator asked lately, where it
+// listens and where another program holds the port, as ADDR:PORT, and the
+// names it has no certificate for.
+type Terminator struct {
+	Running   bool     `cbor:"1,keyasint,omitempty"`
+	Listening []string `cbor:"2,keyasint,omitempty"`
+	Unbound   []string `cbor:"3,keyasint,omitempty"`
+	NoCert    []NoCert `cbor:"4,keyasint,omitempty"`
+}
+
+// HTTPHeldOn are the addresses where another program holds port 80, from
+// which the terminator would redirect to https.
+func (t *Terminator) HTTPHeldOn() []string {
+	var on []string
+	for _, u := range t.Unbound {
+		if ap, err := netip.ParseAddrPort(u); err == nil && ap.Port() == 80 {
+			on = append(on, ap.Addr().String())
+		}
+	}
+	return on
+}
+
+// A Share is this device's own name, published while a call holds it open:
+// where it goes, its end in Unix seconds, zero for the call's, and why it
+// reaches nobody, where it does not.
+type Share struct {
+	Name      string `cbor:"1,keyasint,omitempty"`
+	To        string `cbor:"2,keyasint"`
+	Until     int64  `cbor:"3,keyasint,omitempty"`
+	NotShared string `cbor:"4,keyasint,omitempty"`
+
+	// CAA binds the name's certificates to the terminator's account.
+	CAA []string `cbor:"5,keyasint,omitempty"`
+}
+
+// Ingress says whether the ingress on this device asked lately what is
+// published, and the names it is told.
+type Ingress struct {
+	Running bool     `cbor:"1,keyasint,omitempty"`
+	Names   []string `cbor:"2,keyasint,omitempty"`
 }
 
 // A SubnetRoute is one granted prefix: who routes it, whether this device
@@ -481,6 +572,9 @@ func DevicesOf(state *log.State, now int64) []Device {
 	for _, n := range nodes {
 		dev := Device{Identity: n.Identity, Name: n.Name, V6: state.Addr6(n.Identity).String(),
 			Roles: slices.Clone(n.Roles), Subnets: n.SubnetRoutes(), Names: slices.Clone(n.Names)}
+		for _, p := range n.Published {
+			dev.Published = append(dev.Published, p.Under(state.Domain()))
+		}
 		if n.V4 != nil {
 			dev.V4 = n.V4.String()
 		}

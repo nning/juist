@@ -28,9 +28,9 @@ import (
 var scriptNames = []string{"pre-install", "post-install", "install", "pre-deinstall", "post-deinstall", "deinstall"}
 
 // modeOf is a file's mode by where it goes, not by what the checkout says:
-// commands and rc.d scripts run, the rest is read.
+// commands, rc.d scripts and what libexec holds run, the rest is read.
 func modeOf(dest string) int64 {
-	for _, dir := range []string{"/bin/", "/sbin/", "/etc/rc.d/"} {
+	for _, dir := range []string{"/bin/", "/sbin/", "/etc/rc.d/", "/libexec/"} {
 		if strings.Contains(dest, dir) {
 			return 0o755
 		}

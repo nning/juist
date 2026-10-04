@@ -1,0 +1,27 @@
+{{- /* The matrix from data/compare.yaml; a column links to the page's section of the same key. */ -}}
+{{- $l := site.Language.Lang -}}
+{{- $d := hugo.Data.compare -}}
+{{- $sym := dict "y" "●" "p" "◐" "n" "–" "f" "○" -}}
+{{- $spans := slice }}{{ $starts := slice }}{{ $prev := "" }}{{ $cnt := 0 -}}
+{{- range $i, $c := $d.columns }}{{ $s := $c.side | default "" -}}
+{{- if and $cnt (ne $s $prev) }}{{ $spans = $spans | append (dict "side" $prev "n" $cnt) }}{{ $starts = $starts | append $i }}{{ $cnt = 0 }}{{ end -}}
+{{- $prev = $s }}{{ $cnt = add $cnt 1 }}{{ end -}}
+{{- $spans = $spans | append (dict "side" $prev "n" $cnt) -}}
+{{- $n := 0 }}{{ $notes := slice -}}
+<div class="matrix-wrap"><table class="matrix">
+<thead><tr class="sides"><td></td>{{ range $spans }}{{ $w := .n }}{{ with .side }}<th colspan="{{ $w }}" scope="colgroup" class="edge">{{ index $d.sides . $l }}</th>{{ else }}<td{{ if gt $w 1 }} colspan="{{ $w }}"{{ end }}></td>{{ end }}{{ end }}</tr>
+<tr><td></td>{{ range $i, $c := $d.columns }}<th scope="col"{{ if in $starts $i }} class="edge"{{ end }}><span>{{ if eq .key "juist" }}{{ .name }}{{ else }}<a href="#{{ .key }}">{{ .name }}</a>{{ end }}</span></th>{{ end }}</tr></thead>
+{{- range $d.groups }}
+<tbody><tr class="group"><th colspan="{{ add (len $d.columns) 1 }}" scope="colgroup">{{ index . $l }}</th></tr>
+{{- range .rows }}{{ $r := . }}
+{{- if ne (len $r.marks) (len $d.columns) }}{{ errorf "compare.yaml: %q has %d marks for %d columns" $r.en (len $r.marks) (len $d.columns) }}{{ end }}
+<tr class="lab"><td colspan="{{ len $d.columns }}">{{ index $r $l }}</td></tr>
+<tr><th scope="row">{{ index $r $l }}</th>
+{{- range $i, $c := $d.columns }}{{ $m := substr $r.marks $i 1 }}<td class="{{ $m }}{{ if in $starts $i }} edge{{ end }}"><span role="img" aria-label="{{ i18n (print "mark" (upper $m)) }}">{{ index $sym $m }}</span>
+{{- with and $r.notes (index $r.notes $c.key) }}{{ $n = add $n 1 }}{{ $notes = $notes | append (dict "n" $n "col" $c.name "text" (index . $l)) }}<sup><a href="#matrix-{{ $n }}">{{ $n }}</a></sup>{{ end }}</td>
+{{- end }}</tr>
+{{- end }}</tbody>
+{{- end }}
+</table></div>
+<p class="matrix-legend">{{ range slice "y" "p" "f" "n" }}<span class="{{ . }}">{{ index $sym . }}</span> {{ i18n (print "mark" (upper .)) }} {{ end }}</p>
+{{ with $notes }}<details class="matrix-notes"><summary>{{ i18n "matrixNotes" }}</summary><ol>{{ range . }}<li id="matrix-{{ .n }}">{{ .col }}: {{ .text }}</li>{{ end }}</ol></details>{{ end }}

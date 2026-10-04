@@ -1,0 +1,29 @@
+#!/bin/sh
+
+# PROVIDE: juist_ingress
+# REQUIRE: juistd
+# KEYWORD: shutdown
+#
+# juist_ingress_enable (bool): YES serves as the network's ingress, on 443 and
+#                              80; juist ingress serve sets it.
+# juist_ingress_args (str):    more options, such as --max-conns N.
+#
+# Started as root, the ingress binds its ports and runs as juist-ingress. pf,
+# where the host runs it, is the host's: it lets 443 and 80 in itself.
+
+. /etc/rc.subr
+
+name=juist_ingress
+rcvar=juist_ingress_enable
+desc="juist ingress"
+
+load_rc_config $name
+: ${juist_ingress_enable:="NO"}
+: ${juist_ingress_bin:=/usr/local/sbin/juistd}
+: ${juist_ingress_args:=""}
+pidfile=/var/run/juist_ingress.pid
+command=/usr/sbin/daemon
+procname=$command
+command_args="-f -r -H -P $pidfile -o /var/log/juist-ingress.log $juist_ingress_bin --helper ingress --socket /var/run/juist/juistd.sock $juist_ingress_args"
+
+run_rc_command "$1"

@@ -1,0 +1,7 @@
+{{ define "main" }}
+<div class="home-body">
+  <h1>404</h1>
+  <p>{{ i18n "notFound" }}</p>
+  <p><a href="{{ site.Home.RelPermalink }}">juist</a> · {{ with site.GetPage "docs" }}<a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a>{{ end }}</p>
+</div>
+{{ end }}

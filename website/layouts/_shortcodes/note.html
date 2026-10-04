@@ -1,0 +1,2 @@
+{{- $k := .Get 0 | default "note" -}}
+<div class="note {{ $k }}"><div class="t">{{ i18n $k }}</div>{{ .Inner | .Page.RenderString (dict "display" "block") }}</div>

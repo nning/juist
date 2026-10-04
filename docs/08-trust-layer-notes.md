@@ -263,7 +263,7 @@ What it forecloses above that range, and by when, is a section of its own below.
 A node's recipient key is recorded as **two fields** (`X25519`, `MLKEM`) rather
 than one opaque hybrid blob, so each half is validated as the key it is, and so
 the ML-KEM half is a first-class field for the per-pair preshared-key hedge
-[07-embedding-notes.md](07-embedding-notes.md) reserves. Domain separation
+of M11a ([05-roadmap.md](05-roadmap.md)). Domain separation
 between the two uses comes from HPKE's own suite labelling and from a distinct
 HKDF label on the reserved side.
 
@@ -407,7 +407,7 @@ extension bucket and no ignorable-unknown-field path** — either would reintrod
 the split view by letting two builds act on different subsets of the same
 record.
 
-What is still open, and belongs with M11's packaging: the
+What is still open, and belongs with M13's packaging: the
 gossip hello does not carry the versions a node supports, `juist status` cannot
 say which members would be stranded, and nothing stops an admin authoring an
 upgrade before the network is ready for it. Until those exist, raising the
@@ -491,7 +491,7 @@ carries the rest. The same reasoning has not been carried through
 `Have`, the peer re-offers records it already holds, and the two make no
 progress. That is unreachable until a network has authored 4096 records without
 a checkpoint, and closing it is part of deciding **when compaction runs without
-an admin asking** — undecided, and the decision this binds; M10 makes it.
+an admin asking** — undecided, and the decision this binds; M12 makes it.
 
 ## Storage
 
@@ -624,6 +624,45 @@ replaced by `SetNodeNames`. The rules a later change has to keep:
   decides itself: it has to agree to, and stops while its view is stale or
   the member is out of reach (docs/05-roadmap.md, M8).
 
+## Published names
+
+Schema 9 publishes members' services through an ingress (M9): the roles
+`ingress`, `service` and `publish`, the network's `Domain` set by
+`SetDomain`, and a node record's `Published`, replaced by `SetPublished`.
+The rules a later change has to keep:
+
+- **An ingress holds nothing else:** never beside `admin` or `exit`, and
+  routing no subnet, so a compromised one vouches for no view, carries no
+  traffic but spliced connections, and sends from its overlay addresses
+  alone, by which its peers confine it.
+- **A service member holds no other role and routes nothing**, and neither
+  does a holder of `publish` hold `ingress`, whose port 443 it would share.
+- **A published name is one label under the domain, on one member**, or
+  the domain itself, the empty label, and never also a name pointed at a
+  member, the domain itself included, checked again whenever the domain
+  moves. Publishing needs the domain, and the domain is withdrawn only once
+  nothing is published under it; shares under members' names then end.
+- **A holder of `publish` holds the label its name gives**, lowercased, as a
+  published label: no other member's published label, share label or name,
+  and a name that gives none is refused the role. Anything that changes a
+  member's name, as M9e's rename, checks it again (`checkNodeAdmissible`).
+- **Withdrawing is no revocation**, as for the exit role and names: an
+  ingress or a name taken away converges at gossip speed, and a partitioned
+  ingress stops at the freshness TTL.
+- **The log only says what may be published.** Whether a device serves a
+  name, its operator decides (docs/05-roadmap.md, M9a).
+
+## Renamed members
+
+Schema 10 renames a member by `RenameNode`, which replaces its name alone.
+The rules a later change has to keep:
+
+- **No two members' names fold alike**, which the log refuses for a rename
+  as it does for holders; admissions are numbered apart by the CLI alone,
+  so a state may hold two from before, and neither is renamed to the other.
+- **A rename is checked as an admission is** (`checkNodeAdmissible`), since
+  a holder of `publish` shares under the label its name gives.
+
 ## Not built in M1, on purpose
 
 - **Freshness leases.** Built at M4, outside the record schema: see
@@ -631,7 +670,7 @@ replaced by `SetNodeNames`. The rules a later change has to keep:
 - **A disablement record.** The genesis ceremony commits to break-glass secrets
   and `State.ValidDisablement` verifies a preimage, which is what the schema
   needs. *What revealing one authorizes* is planned in
-  [05-roadmap.md](05-roadmap.md) as M9.
+  [05-roadmap.md](05-roadmap.md) as M11.
 - **Route consumption.** Validated from M1, read by nothing until M6.
 
 ### The obligation M1 hands to M6

@@ -1,0 +1,35 @@
+# A web service published as whoami.DOMAIN through a juist service member,
+# its only way in or out. See README.md.
+name: juist-service-member
+
+services:
+  # Answers HTTP with what it sees of the request. On the internal network
+  # alone, with no port published.
+  whoami:
+    image: docker.io/traefik/whoami:latest
+    networks: [whoami-only]
+    restart: unless-stopped
+
+  # juistd on a network stack of its own, with no TUN, root or capability:
+  # it ends TLS for whoami.DOMAIN and sends the connections on to whoami:80.
+  juist:
+    image: ${JUIST_IMAGE:?set JUIST_IMAGE in .env}
+    command: ["--serve", "whoami=whoami:80"]
+    environment:
+      JUIST_JOIN: ${JUIST_JOIN:-} # joined by once started, ignored once in the network
+    volumes:
+      - juist:/var/lib/juist # its keys, log and certificates
+    networks: [whoami-only, out]
+    restart: unless-stopped
+
+networks:
+  # No way out, and with Docker 29's isolated gateway mode none to the host.
+  whoami-only:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+  # juistd's way to the other devices, the DHT and the ACME CA.
+  out: {}
+
+volumes:
+  juist: {}

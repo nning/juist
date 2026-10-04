@@ -1,0 +1,25 @@
+{{- /* Rendered by ExecuteAsTemplate from design/tokens.json, which the Android app shares. */ -}}
+{{- $t := resources.Get "design/tokens.json" | transform.Unmarshal -}}
+{{- define "vars" -}}
+{{- $c := index .t.color .th -}}{{- $s := index .t.status .th -}}{{- $ch := index .t.chart .th -}}
+  --bg: {{ $c.background }}; --bg-2: {{ $c.surfaceVariant }}; --panel: {{ $c.surface }}; --panel-2: {{ $c.surfaceVariant }};
+  --line: {{ $c.outlineVariant }}; --line-2: {{ $c.outline }};
+  --text: {{ $c.onBackground }}; --text-2: {{ $c.onSurfaceVariant }}; --muted: {{ $c.outline }};
+  --accent: {{ $c.primary }}; --accent-ink: {{ $c.onPrimary }}; --accent-soft: color-mix(in srgb, {{ $c.primary }} 14%, transparent);
+  --sand: {{ $c.secondary }}; --magenta: {{ $c.tertiary }}; --red: {{ $c.error }};
+  --direct: {{ $s.direct }}; --relay: {{ $s.relay }}; --absent: {{ $s.absent }}; --alarm: {{ $s.alarm }};
+  --code-bg: {{ index .t.code.background .th }}; --code-text: {{ .t.code.text }}; --code-comment: {{ .t.code.comment }};
+  --c-water: {{ $ch.water }}; --c-shallow: {{ $ch.shallow }}; --c-contour: {{ $ch.contour }}; --c-watt: {{ $ch.watt }};
+  --c-land: {{ $ch.land }}; --c-coast: {{ $ch.coast }}; --c-grid: {{ $ch.grid }}; --c-label: {{ $ch.label }}; --c-light: {{ $ch.light }};
+{{- end }}
+:root, [data-theme="night"] {
+{{ template "vars" (dict "t" $t "th" "night") }}
+}
+[data-theme="day"] {
+{{ template "vars" (dict "t" $t "th" "day") }}
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+{{ template "vars" (dict "t" $t "th" "day") }}
+  }
+}

@@ -136,12 +136,38 @@ func Seal(network types.Hash, aum *types.AUM, admins []types.AdminKey, signer ty
 // AboutOf lists the devices a change is about: whose record it changes or
 // removes.
 func AboutOf(aum *types.AUM) []types.Identity {
-	switch aum.Kind {
-	case types.KindRemoveNode, types.KindSetNodeRoutes, types.KindRotateNodeKey, types.KindRotateIdentity,
-		types.KindRenumberNode, types.KindSetNodeNames:
+	if aboutSubject[aum.Kind] {
 		return []types.Identity{*aum.Subject}
 	}
 	return nil
+}
+
+// aboutSubject is, for every kind, whether its subject is the device whose
+// record it changes.
+var aboutSubject = map[types.Kind]bool{
+	types.KindGenesis:           false,
+	types.KindAddNode:           false,
+	types.KindRemoveNode:        true,
+	types.KindSetNodeRoutes:     true,
+	types.KindRotateNodeKey:     true,
+	types.KindRotateIdentity:    true,
+	types.KindAddAdminKey:       false,
+	types.KindRemoveAdminKey:    false,
+	types.KindSetQuorum:         false,
+	types.KindCheckpoint:        false,
+	types.KindEpochBump:         false,
+	types.KindSchemaUpgrade:     false,
+	types.KindSetVouchers:       false,
+	types.KindSetHolder:         false,
+	types.KindRenumberNetwork:   false,
+	types.KindRenumberNode:      true,
+	types.KindRetireAddresses:   false,
+	types.KindRenameNetwork:     false,
+	types.KindSetAdminRecipient: false,
+	types.KindSetNodeNames:      true,
+	types.KindSetDomain:         false,
+	types.KindSetPublished:      true,
+	types.KindRenameNode:        true,
 }
 
 // Open reads the change as the admin key admin, and checks that it is what

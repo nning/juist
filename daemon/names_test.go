@@ -302,7 +302,7 @@ func TestAStaleViewAnswersNoPublicName(t *testing.T) {
 		{"fresh", log.Freshness{Signers: 1, Until: now + 60}, true},
 		{"stale", log.Freshness{Signers: 1, Until: now - 1}, false},
 	} {
-		z, held, until := f.d.namesZone(state, tc.fresh, true, now)
+		z, held, until := f.d.namesZone(state, tc.fresh, true, now, func(types.Identity) bool { return false })
 		if _, ok := z.Overrides["mx.example.net"]; ok != tc.want || len(held) != 1 {
 			t.Errorf("%s: the zone overrides %v, holding %v", tc.name, z.Overrides, held)
 		}
@@ -310,7 +310,7 @@ func TestAStaleViewAnswersNoPublicName(t *testing.T) {
 			t.Errorf("%s: answered %v", tc.name, got)
 		}
 	}
-	z, held, until := f.d.namesZone(state, log.Freshness{Signers: 1, Until: now + 1}, true, now)
+	z, held, until := f.d.namesZone(state, log.Freshness{Signers: 1, Until: now + 1}, true, now, func(types.Identity) bool { return false })
 	if !z.Up(n1.String()) {
 		t.Fatal("fresh, the override is not up")
 	}
@@ -474,5 +474,49 @@ func TestTheNamesAddressIsOneTheDeviceHolds(t *testing.T) {
 	}
 	if at, err := (&Daemon{tunName: "lo", startAddrs: addrs}).namesAddrNow(); err == nil {
 		t.Errorf("answers at %v, which the device does not hold", at)
+	}
+}
+
+// A renamed device is answered by its new name once the record is applied,
+// and its old name by none.
+func TestARenamedDeviceIsAnsweredByItsNewName(t *testing.T) {
+	f, _, served := namesFixture(t, false)
+	n1 := f.nw.devices[1].record
+	if a := answeredA(t, served, "n1.m2-testnet.juist."); a == nil || *a != *n1.V4 {
+		t.Fatalf("n1 is %v, want %v", a, *n1.V4)
+	}
+	rec, err := f.auth.Builder().RenameNode(n1.Identity, "storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Inform([]types.AUM{rec}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if a := answeredA(t, served, "storage.m2-testnet.juist."); a == nil || *a != *n1.V4 {
+		t.Errorf("renamed, storage is %v, want %v", a, *n1.V4)
+	}
+	if a := answeredA(t, served, "n1.m2-testnet.juist."); a == nil || a.IsValid() {
+		t.Errorf("renamed, n1 is %v, want no address", a)
+	}
+}
+
+// The status names the network's public domain beside its own, which the
+// host resolves through juistd alike.
+func TestTheStatusNamesThePublicDomain(t *testing.T) {
+	served := &fakeNames{}
+	f := exitFixtureWith(t, func(nw *network) { nw.domain = "pub.example.org" },
+		func(o *Options) { o.HostDNS, o.ServeNames = &fakeHostDNS{}, served.start })
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	want := ipc.Names{Domain: "m2-testnet.juist", Public: "pub.example.org", Not: errNoDomains.Error(), Cannot: true}
+	if n := f.d.Status().Names; n == nil || !reflect.DeepEqual(*n, want) {
+		t.Errorf("the status says %+v, want %+v", n, want)
 	}
 }

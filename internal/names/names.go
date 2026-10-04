@@ -21,12 +21,15 @@ const ednsSize = 1232
 // A Zone is what a device answers: Domain, as home.juist, "" for none, with
 // Members by their DNS label, and Overrides, public names pointed at
 // members, by name, each lowercase without a final dot. Up says whether an
-// override's target is answered for now; nil answers every one.
+// override's target is answered for now; nil answers every one. Public is
+// the network's public domain, which comes here whole, its names but the
+// overrides going on upstream.
 type Zone struct {
 	Domain    string
 	Members   map[string][]netip.Addr
 	Overrides map[string]Override
 	Up        func(target string) bool
+	Public    string
 }
 
 // An Override points a public name at Target, a member, by its addresses.

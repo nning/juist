@@ -45,10 +45,11 @@ connection manager over plain wireguard-go / kernel WireGuard.
   parsing code of our own.
 - The coupling to Tailscale types is manageable: `magicsock` consumes a
   `NetworkMap`/DERP-map and disco keys; `wgengine` takes WG configs. We write an
-  **adapter** (`conn/netmapper`) that renders our log state into those types. We do
+  **adapter** (`conn`, chiefly `tsmanager.go`) that renders our log state into those types. We do
   **not** use `tsnet`/`controlclient`/`ipn` (those assume a coordination server).
 - **Consequences accepted:** (1) we pin/vendor a Tailscale release and absorb internal
-  API churn at upgrade time — the adapter is the only file that touches their types;
+  API churn at upgrade time — `conn` is the only package that touches their types,
+  besides the relay's derper and STUN;
   (2) magicsock is a userspace UDP bind, so the data plane is **wireguard-go on all
   platforms in v1** (Android requires it anyway). Kernel WireGuard (Linux netlink,
   FreeBSD if_wg) becomes a **post-v1 optimization** for nodes with static public
@@ -183,11 +184,11 @@ plumbing and the privileged helper.
 
 **Ships before coarse ACLs, unscoped.** Who may *use* an exit node is an
 access-control question (Tailscale expresses it as `autogroup:internet`), and coarse
-ACLs come later, at M12 in [05-roadmap.md](05-roadmap.md). Until then the
+ACLs come later, at M14 in [05-roadmap.md](05-roadmap.md). Until then the
 `exit` role means "every member may route all their internet traffic through
 this member's uplink" — an all-or-nothing grant the quorum makes per exit node,
 with no way to scope it to some members. Accepted in
-[02-threat-model.md](02-threat-model.md) item 7; M12 scopes it.
+[02-threat-model.md](02-threat-model.md) item 7; M14 scopes it.
 
 What changes, layer by layer:
 
@@ -216,7 +217,7 @@ What changes, layer by layer:
 - **CLI.** `juist exit`, `use NODE`, `off` for members, `serve` for an
   exit node's operator; admin-side `juist grant DEVICE exit`, which emits
   a quorum-signed `SetNodeRoutes` with the role and the default routes, and
-  `juist grant DEVICE PREFIX` for a subnet, which `juist subnet serve` agrees
+  `juist subnet add DEVICE PREFIX` for a subnet, which `juist subnet serve` agrees
   to route.
 
 Excluded at M6: automatic exit node selection, per-destination split tunneling
@@ -249,10 +250,11 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
   (M7a): juistd started as root keeps a process as root that creates, addresses,
   routes and destroys juist's own devices, and runs the daemon as `juist` with
   the device's descriptor (`internal/plumber`).
-- **Key custody:** node identity key sealed at rest (Linux: kernel keyring/TPM2 where
-  present; Android: Keystore for the identity key — WG keys must live in app memory
-  for wireguard-go; FreeBSD: 0600 state file, document geli). Admin keys live in the
-  admin's CLI keystore (or hardware key, roadmap), *never* in the daemon.
+- **Key custody:** node identity key a 0600 file on Linux and FreeBSD (sealing
+  it in the kernel keyring or a TPM is post-v1; FreeBSD: document geli);
+  Android: Keystore for the identity key — WG keys must live in app memory for
+  wireguard-go. Admin keys live in the admin's CLI keystore (or hardware key,
+  roadmap), *never* in the daemon.
 - **State integrity:** log + highest-epoch persisted with fsync before any action
   depends on them; state file corruption ⇒ refuse to start with recovery instructions,
   never silently re-genesis.
@@ -266,10 +268,9 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
 - Per-pair PSK: `HKDF(ML-KEM-768 encap between the pair's log-recorded static PQ keys,
   epoch)` — post-quantum harvest-now-decrypt-later hedge using stdlib `crypto/mlkem`.
   Rotated on epoch bump via WG reconfig (next handshake picks it up; tunnels stay up).
-  The key is reserved in the schema from M1 and consumed for the epoch HPKE fan-out;
-  whether v1 can consume it in the data plane is the open question in
-  [07-embedding-notes.md](07-embedding-notes.md), where the ciphertext's transport
-  decides whether the M3 freeze binds it.
+  The key is in the schema from M1 and consumed for the epoch HPKE fan-out; the
+  data plane takes it in M11a ([05-roadmap.md](05-roadmap.md)), the engine's PSK
+  path in [07-embedding-notes.md](07-embedding-notes.md).
 - Addressing: v6 ULA `fd<40 bits from genesis hash>::/48`, host bits =
   `truncate(SHA-256(identity pubkey))`; v4 assigned explicitly in AddNode, from the prefix
   the network chose at genesis or last renumbered to. `juist create` draws a random

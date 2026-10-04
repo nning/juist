@@ -1047,9 +1047,9 @@ func (n *Node) hello(view *View) frame {
 		Have:    view.Have,
 	}
 	if len(f.Have) > MaxHashesPerFrame {
-		// Which ones survive is arbitrary — the store reports by hash, not by
-		// chain position — which costs bandwidth and never correctness: a
-		// peer that cannot see we hold a record sends it again.
+		// Which ones survive is arbitrary, by hash and not by chain position:
+		// the peer resends from the anchor what it cannot see we hold, a frame
+		// at a time, and may never reach what we lack.
 		f.Have = f.Have[:MaxHashesPerFrame]
 	}
 	if n.opts.Announce != nil {

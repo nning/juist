@@ -47,10 +47,16 @@ mkdir -p "$(dirname "$out")"
 	$p/bin/juist="$bin/juist" \
 	$p/sbin/juistd="$bin/juistd" \
 	$p/etc/rc.d/juistd=packaging/freebsd/juistd \
+	$p/etc/rc.d/juist_ingress=packaging/freebsd/juist_ingress \
+	$p/etc/rc.d/juist_serve=packaging/freebsd/juist_serve \
+	$p/libexec/juist/ingress.sh=packaging/freebsd/libexec/ingress.sh \
+	$p/libexec/juist/serve.sh=packaging/freebsd/libexec/serve.sh \
 	$p/etc/newsyslog.conf.d/juistd.conf=packaging/freebsd/newsyslog.conf \
 	$p/share/man/man1/juist.1.gz="$work/juist.1" \
 	$p/share/man/man8/juistd.8.gz="$work/juistd.8" \
 	$p/share/doc/juist/README.md=README.md \
+	$p/share/doc/juist/LICENSE=LICENSE \
+	$p/share/doc/juist/THIRD_PARTY_LICENSES=THIRD_PARTY_LICENSES \
 	$p/share/bash-completion/completions/juist=packaging/completions/juist.bash \
 	$p/share/zsh/site-functions/_juist=packaging/completions/_juist \
 	$p/share/fish/vendor_completions.d/juist.fish=packaging/completions/juist.fish

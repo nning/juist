@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{{.Title}} · status</title>
+{{template "juist-style" .}}
+<style>
+h2 { font-size: 22px; font-weight: 600; line-height: 1.2; letter-spacing: -0.015em; margin: 44px 0 6px; }
+h2 small { font: 400 13px var(--mono); color: var(--muted); margin-left: 8px; letter-spacing: 0; }
+.head .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font: 500 12.5px var(--mono); white-space: nowrap; }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.direct { color: var(--direct); } .relay { color: var(--relay); } .sought { color: var(--sought); }
+.absent { color: var(--absent); } .alarm { color: var(--alarm); } .self { color: var(--accent); }
+.absent.pill::before { background: none; border: 1.5px solid currentColor; width: 7px; height: 7px; }
+td.name { font-weight: 600; overflow-wrap: anywhere; }
+td.name a { color: var(--text); text-decoration: none; }
+td.name a:hover { color: var(--accent); text-decoration: underline; }
+td .sub { display: block; font: 400 12.5px var(--mono); color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
+td.state { width: 1%; white-space: nowrap; }
+td.dim, td.hash { font: 400 13px var(--mono); color: var(--muted); }
+td.hash, td.idx { white-space: nowrap; }
+td.idx { width: 1%; font: 400 13px var(--mono); color: var(--muted); }
+.alarms { list-style: none; margin: 16px 0 0; padding: 0; }
+.alarms li { margin: 10px 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--alarm); color: var(--text); font-size: 15.5px; }
+dl.facts { margin: 12px 0 0; display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); border-top: 1px solid var(--line); }
+dl.facts dt, dl.facts dd { padding: 9px 0; border-bottom: 1px solid var(--line); margin: 0; font-size: 15px; }
+dl.facts dt { color: var(--muted); padding-right: 16px; }
+dl.facts dd { overflow-wrap: anywhere; }
+.narrow { display: none; }
+.unavailable { margin: 32px 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--alarm); }
+footer p { margin: 0 0 6px; }
+@media (max-width: 640px) {
+	.wide { display: none; }
+	td .sub.narrow { display: block; }
+	dl.facts { grid-template-columns: 7rem minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="bar"><div class="in"><span class="brand">{{template "juist-wordmark"}}</span><span class="note">status{{if .From}} · seen from {{.From}}{{end}}</span></div></div>
+<main>
+<div class="head">
+<div>
+<div class="crumbs">{{.Name}}</div>
+<h1>{{.Title}}</h1>
+<div class="meta"><span class="pill {{.StateClass}}">{{.State}}</span>{{if .Summary}}<span>{{.Summary}}</span>{{end}}<span>updated {{.Updated}}</span></div>
+</div>
+</div>
+{{if .Unavailable}}<p class="unavailable">{{.Unavailable}}; this page shows nothing until it does.</p>{{else}}
+{{if .Alarms}}<h2>Needs attention</h2>
+<ul class="alarms">{{range .Alarms}}<li>{{.}}</li>{{end}}</ul>
+{{end}}
+<h2>Services<small>{{len .Services}}</small></h2>
+<table>
+<thead><tr><th>Name</th>{{if .ShowNetwork}}<th class="wide">Device</th>{{end}}<th>State</th></tr></thead>
+<tbody>
+{{range .Services}}<tr><td class="name">{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td>{{if $.ShowNetwork}}<td class="dim wide">{{.Device}}</td>{{end}}<td class="state"><span class="pill {{.Class}}">{{.State}}</span></td></tr>
+{{else}}<tr><td class="empty" colspan="3">Nothing is published or shared.</td></tr>
+{{end}}</tbody>
+</table>
+{{if .ShowNetwork}}
+<h2>Devices<small>{{len .Devices}}</small></h2>
+<table>
+<thead><tr><th>Name</th><th>Reach</th><th class="wide">Last heard</th></tr></thead>
+<tbody>
+{{range .Devices}}<tr><td class="name">{{.Name}}<span class="sub">{{.Addrs}}{{if .Roles}} · {{.Roles}}{{end}}</span></td><td class="state"><span class="pill {{.Class}}">{{.Reach}}</span>{{if .Heard}}<span class="sub narrow">{{.Heard}}</span>{{end}}</td><td class="dim wide">{{.Heard}}</td></tr>
+{{end}}</tbody>
+</table>
+<h2>Network</h2>
+<dl class="facts">{{range .Facts}}<dt>{{.Label}}</dt><dd>{{.Text}}</dd>{{end}}</dl>
+{{end}}
+{{if .ShowChanges}}
+<h2>Changes<small>{{if gt .Total (len .Changes)}}newest {{len .Changes}} of {{.Total}}{{else}}{{.Total}}{{end}}</small></h2>
+<table>
+<thead><tr><th>#</th><th>Change</th><th class="wide">Hash</th></tr></thead>
+<tbody>
+{{range .Changes}}<tr><td class="idx">{{.Index}}</td><td>{{.What}}{{if .Signers}}<span class="sub">approved by {{join .Signers}}</span>{{end}}</td><td class="hash wide">{{short .Hash}}</td></tr>
+{{end}}</tbody>
+</table>
+{{end}}
+{{end}}
+</main>
+<footer><div class="in">
+{{if not .From}}<p>Served by juist.</p>{{end}}
+{{if .From}}<p>Served by juist on {{.From}}. Reach and state are as {{.From}} sees them; devices, services and changes are the network's, as every device holds them.</p>{{end}}
+{{if .Member}}<p>You see this as a member of the network; the public sees {{.Public}}.</p>{{end}}
+</div></footer>
+<script src="{{.Assets}}refresh.js"></script>
+</body>
+</html>

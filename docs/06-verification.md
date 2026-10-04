@@ -81,7 +81,7 @@ netfilter doing the translation rather than a simulation of it:
   non-LAN packet outside the tunnel (capture on the physical interface) while LAN
   destinations keep resolving and routing locally; withdrawing the `exit` role cuts
   egress at gossip convergence (reachable) and at the TTL boundary (partitioned).
-- **Coarse ACLs (M12):** a peer denied by ACL is dropped by the *receiver* even with a
+- **Coarse ACLs (M14):** a peer denied by ACL is dropped by the *receiver* even with a
   sender patched to ignore its own filter; a member without a grant for an exit node
   gets nothing forwarded by it.
 - **Chaos:** packet loss/reorder/duplication on gossip paths; node kill/restart
@@ -90,8 +90,8 @@ netfilter doing the translation rather than a simulation of it:
 
 ## 4. End-to-end / platform
 
-- CI interop matrix: Linux + FreeBSD (qemu VMs), and from M11 an Android emulator
-  smoke test — enrollment by QR, ping over tunnel, revocation.
+- CI interop matrix: Linux + FreeBSD (qemu VMs), and from M10 an Android emulator
+  smoke test — enrollment by QR and by code, ping over tunnel, revocation.
 - Egress assertion on every E2E run: **zero packets to any third-party service**
   except declared untrusted helpers (DHT bootstrap, optional public STUN) — catches
   accidental Tailscale-infra dependencies from vendored code.
@@ -103,13 +103,13 @@ netfilter doing the translation rather than a simulation of it:
   a package and create a system user. Automating it needs a VM in CI, which is
   the same dependency the FreeBSD interop matrix above wants; decide both at once.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
-  VPS relay member + one mobile (Android on LTE, from M11); full lifecycle including
-  emergency revocation from a phone.
+  VPS relay member + one mobile (Android on LTE, from M10); full lifecycle including
+  emergency revocation from a phone (from M13).
 
 ## 5. Cryptographic review gates
 
 - Internal design review of the trust layer before M3 (log rules frozen).
-- External audit at M10 scoped to `trust/*`, `enroll`, `gossip` (~7–9 k LOC) plus the
+- External audit at M12 scoped to `trust/*`, `enroll`, `gossip` (~7–9 k LOC) plus the
   reconciler's default-deny property, M6's route consumption and M8's resolver.
 - A short machine-checkable model (e.g. Tamarin/ProVerif sketch or TLA+ for the
   epoch/freshness state machine) is a stretch goal — valuable for the freshness and

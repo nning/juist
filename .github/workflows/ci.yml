@@ -1,23 +1,16 @@
 name: CI
 
+# By hand alone: CI is make ci-vm, on a machine of our own.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 # Nothing here needs write access to the repository.
 permissions:
   contents: read
 
-# A new push to a PR makes the previous run's result irrelevant.
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 env:
   # The Makefile's GOTOOLCHAIN; the two move together.
-  GO_VERSION: '1.26.8'
+  GO_VERSION: '1.27.1'
 
 jobs:
   test:

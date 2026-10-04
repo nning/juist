@@ -1,6 +1,6 @@
 # Research appendix — Decentralized / P2P VPN control-plane survey
 
-*Compiled Aug 2026; project status claims verified against live sources at that time.*
+*Compiled Aug 2026, extended Oct 2026; project status claims verified against live sources at those times.*
 
 ## Tailscale
 
@@ -76,7 +76,9 @@ dir ([repo](https://github.com/gravitl/netmaker)).
 servers.
 5. History of severe control-plane bugs (2023 hardcoded-key/JWT vulnerability allowing
 admin takeover, fixed 0.17.1/0.18.6). Kernel WireGuard = good data-plane perf.
-6. Active commercial project; low reuse value for a P2P design.
+6. Active commercial project; low reuse value for a P2P design. Oct 2026: v1.7.0;
+   netclient on Linux, FreeBSD, Windows, macOS, mobile app; UDP hole punching with
+   relays, failover relays and IdP sign-in in the paid edition.
 
 ## Nebula (closest serverless-CA prior art)
 
@@ -154,7 +156,10 @@ CVEs in 2018 (fixed by SPTPS in 1.1). Historical interest only.
 6. C++, **BSL 1.1** (GPL→BSL in 2019; controller-as-a-service and some commercial use
    require paid license; community reports license friction,
    [issue #2206](https://github.com/zerotier/ZeroTierOne/issues/2206)); v1.16.2
-   May 2026. License makes it a poor foundation.
+   May 2026. License makes it a poor foundation. Oct 2026: since 1.16.0 the agent is
+   MPL-2.0 and the controller sits in `nonfree/` under a source-available licence that
+   bars commercial use without a paid licence; free hosted plan 10 devices; SSO only in
+   paid plans; moons deprecated.
 
 ## Yggdrasil
 
@@ -219,7 +224,28 @@ peers** (the creator initially); `ray kick` = mesh-wide removal; invite revocati
 propagates ([repo](https://github.com/rayfish/rayfish)). MPL-2.0, explicitly
 **experimental, pre-1.0, unaudited**, wire format unstable. Weakness: coordinator
 liveness = admission/eviction availability; DHT record is a single-writer-ish trust
-point; not WireGuard (no kernel path).
+point; not WireGuard (no kernel path). Oct 2026 (v0.5.7, source read): the record goes
+to n0's pkarr relay `dns.iroh.link` by default and relays are iroh's N0 preset, both
+overridable; co-coordinators (`ray admin add`) receive **the same network key**, so
+multi-admin means a shared key, not a quorum; per-device firewall with
+coordinator-suggested rules carried in the signed record; Linux, macOS, Windows,
+Android, FreeBSD, no iOS.
+
+### Other serverless signed-roster meshes (Oct 2026)
+
+- **nostr-vpn** ([repo](https://github.com/mmalmi/nostr-vpn)): Rust, MIT, since Mar
+  2026, v4.1, ~1.2k★. Devices accept a roster only if a configured admin signed it;
+  several admins, any one suffices. Data plane is its own FIPS overlay, not WireGuard;
+  Nostr relays carry discovery only. All five desktop/mobile platforms, no FreeBSD.
+  How a removal reaches devices the admin cannot reach is not documented.
+- **Tunnet** ([repo](https://github.com/tunnetio/Tunnet)): open-core (AGPL control
+  plane), mainly a self-hostable Tailscale-like product; its *Direct* mode keeps a
+  signed genesis, epoch, member records and revocations in an iroh-docs document the
+  devices replicate, with a coordinator as the single signer. Pre-1.0.
+- **meshguard**: Zig, MIT, serverless WireGuard over SWIM gossip with org-signed
+  identities and revocation, FreeBSD support; ~20★, too small to compare against.
+
+None of these, nor any other project found, requires k-of-n admin signatures.
 
 ## libp2p-based VPNs
 

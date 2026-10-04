@@ -6,6 +6,8 @@ import (
 	"net/netip"
 	"slices"
 	"testing"
+
+	"tailscale.com/tailcfg"
 )
 
 func testRelay() Relay {
@@ -234,7 +236,7 @@ func TestSTUNServersNeverBecomeRelays(t *testing.T) {
 func TestOnlyTheSTUNHomeRetriesAreDropped(t *testing.T) {
 	var got []string
 	m := &tsManager{}
-	m.stunRegions.Store(&map[int]bool{65534: true})
+	m.stunRegions.Store(&map[tailcfg.DERPRegionID]bool{65534: true})
 	logf := m.withoutSTUNHomeNoise(func(format string, args ...any) { got = append(got, fmt.Sprintf(format, args...)) })
 	logf("%s: [v1] backoff: %d msec", "derp-65534", 900)
 	logf("derp.Recv(derp-65534): %v", errors.New("connect to region 65534 (stun1): no non-STUNOnly nodes for region 65534"))

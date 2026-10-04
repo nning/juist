@@ -196,8 +196,10 @@ func TestARestartedPeerIsReachedAtOnce(t *testing.T) {
 	// Time for the path warm-up, so a handshake is not dropped for want of
 	// one and what is left is the sessions.
 	time.Sleep(time.Second)
+	// Below WireGuard's 5 s RekeyTimeout, which a handshake merely
+	// scheduled on the stale session waits out.
 	start := time.Now()
-	if _, ok := pingUntil(t, a, b.pingAddr(), 10*time.Second); !ok {
+	if _, ok := pingUntil(t, a, b.pingAddr(), 2*time.Second); !ok {
 		t.Fatal("a could not reach b after b restarted")
 	}
 	t.Logf("reached the restarted peer after %v", time.Since(start))

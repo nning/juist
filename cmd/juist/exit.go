@@ -363,7 +363,7 @@ func (a *app) warnDNS(ex *ipc.Exit, overlay []netip.Prefix) {
 func dnsHint(why string) string {
 	switch {
 	case strings.Contains(why, "refused juistd"):
-		return "the package's polkit rule allows juistd that: /usr/share/polkit-1/rules.d/60-juist.rules"
+		return "the package's polkit rule allows juistd that, where polkit runs: /usr/share/polkit-1/rules.d/60-juist.rules"
 	case strings.Contains(why, "uplink mode"):
 		return asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf")
 	}

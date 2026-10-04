@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"os/user"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -33,7 +32,7 @@ const permHint = `creating %q needs root: start juistd as root, which runs the d
 // reports the daemon's exit code, and whether it split. Root always splits:
 // a helper's descriptor in its environment is no helper's.
 func split(args []string) (int, bool) {
-	if os.Getuid() != 0 || slices.ContainsFunc(args, func(a string) bool {
+	if os.Getuid() != 0 || onNoDevice(args) || slices.ContainsFunc(args, func(a string) bool {
 		return a == "-h" || a == "--help" || a == "-help" || a == "__manpage"
 	}) {
 		return 0, false
@@ -172,54 +171,10 @@ func runSplit(args []string) error {
 	return err
 }
 
-// stopWait is how long a daemon told to stop has before it is killed.
-const stopWait = time.Minute
-
-// daemonEnv is what of root's environment the daemon gets: the locale, the
-// time zone, the path and juist's and Go's own, none of root's credentials
-// or directories.
-func daemonEnv(env []string) []string {
-	var out []string
-	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
-		switch {
-		case k == "PATH" || k == "TZ" || k == "LANG" || k == "GODEBUG" || k == "GOTRACEBACK",
-			strings.HasPrefix(k, "LC_"), strings.HasPrefix(k, "JUIST") && k != plumber.EnvFD && k != plumber.EnvLifeline:
-			out = append(out, kv)
-		}
-	}
-	return out
-}
-
 func logServed(err error) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "juistd: helper: %v\n", err)
 	}
-}
-
-func credential(u *user.User) (*syscall.Credential, error) {
-	uid, err := strconv.ParseUint(u.Uid, 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	gid, err := strconv.ParseUint(u.Gid, 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	if uid == 0 || gid == 0 {
-		return nil, fmt.Errorf("the %s user is root's, uid %d, gid %d: the daemon would keep root's rights", u.Username, uid, gid)
-	}
-	cred := &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
-	groups, err := u.GroupIds()
-	if err != nil {
-		return nil, err
-	}
-	for _, g := range groups {
-		if n, err := strconv.ParseUint(g, 10, 32); err == nil {
-			cred.Groups = append(cred.Groups, uint32(n))
-		}
-	}
-	return cred, nil
 }
 
 // inheritedPlumber is the helper that started this daemon, if one did, and
@@ -254,18 +209,4 @@ func inheritedPlumber() (conn.Plumber, <-chan struct{}, error) {
 		close(gone)
 	}()
 	return c, gone, nil
-}
-
-func inheritedFD(env string) (int, error) {
-	v := os.Getenv(env)
-	if v == "" {
-		return -1, nil
-	}
-	os.Unsetenv(env)
-	fd, err := strconv.Atoi(v)
-	if err != nil {
-		return -1, fmt.Errorf("%s=%q", env, v)
-	}
-	unix.CloseOnExec(fd)
-	return fd, nil
 }

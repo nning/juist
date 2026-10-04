@@ -94,6 +94,8 @@ func fill(v reflect.Value, n *uint64) {
 		v.SetString(fmt.Sprint("s", *n))
 	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		v.SetUint(*n)
+	case reflect.Bool:
+		v.SetBool(true)
 	default:
 		panic(fmt.Sprintf("fill: unhandled %v", v.Type()))
 	}
@@ -147,10 +149,10 @@ func TestCloneCopiesEveryField(t *testing.T) {
 
 // TestEveryPayloadIsValidated: a payload at its zero value is refused, so a
 // field that reaches the record without a rule in ValidateUnsigned shows.
-// An empty route or name grant, which withdraws everything, is the one zero
-// payload with a meaning.
+// An empty route, name or publish grant and an empty domain, which withdraw
+// everything, are the zero payloads with a meaning.
 func TestEveryPayloadIsValidated(t *testing.T) {
-	meaningful := map[string]bool{"Grant": true, "Names": true}
+	meaningful := map[string]bool{"Grant": true, "Names": true, "Domain": true, "Publish": true}
 	checked := map[string]bool{}
 	for i, seed := range corpusSeeds(t) {
 		a, err := DecodeAUM(seed)

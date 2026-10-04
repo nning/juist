@@ -30,6 +30,7 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 	addrs := mergeEndpoints(gossip.SortAddrs(scanned), d.reachableLearned(d.manager.LocalEndpoints(), internal))
 	relayInfo := d.relayInfo()
 	home := uint16(d.manager.HomeRelay())
+	shared := d.shareAnnounced(d.now())
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -51,16 +52,23 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 		Subnets:    d.servingSubnets,
 		DNS:        d.dnsPort,
 		NoV4:       d.announcedNoV4,
+		Published:  d.servingPublished,
+		Share:      shared,
 	}
 	now := d.now()
 	renewal := d.signed != nil && d.signed.SameAs(&e)
 	if d.announced != nil && renewal && now.Sub(d.announcedAt) < renew {
 		return *d.announced.Clone(), true
 	}
-	if !renewal && d.seq != 0 && d.dht != nil {
+	if !renewal && d.seq != 0 {
 		// Changed since the last one: a peer whose tunnel it breaks finds
-		// the new one in the DHT, so it goes there at once.
-		d.dht.Kick()
+		// the new one in the DHT or on the LAN, so it goes there at once.
+		if d.dht != nil {
+			d.dht.Kick()
+		}
+		if d.beacon != nil {
+			d.beacon.Wake()
+		}
 	}
 	e.Seq = d.nextSeq()
 	if err := e.Sign(d.identity); err != nil {
@@ -185,5 +193,8 @@ func (d *Daemon) onConnectivityChange() {
 	d.mu.Lock()
 	d.announced = nil
 	d.mu.Unlock()
+	if d.beacon != nil {
+		d.beacon.Wake()
+	}
 	d.MarkDirty()
 }

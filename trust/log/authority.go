@@ -542,6 +542,7 @@ type resolution struct {
 // no dependence on arrival or storage order — which is what makes two nodes
 // holding the same records reach the same state.
 func resolve(r reader, anchor types.Hash) (*resolution, error) {
+	r = hashOrdered{r}
 	anchorAUM, err := r.AUM(anchor)
 	if err != nil {
 		return nil, fmt.Errorf("log: reading anchor %v: %w", anchor, err)
@@ -659,6 +660,16 @@ func resolve(r reader, anchor types.Hash) (*resolution, error) {
 	return res, nil
 }
 
+// hashOrdered returns children in hash order, which pickPrimary's rule needs:
+// it is not transitive, so its result depends on the order it is given.
+type hashOrdered struct{ reader }
+
+func (o hashOrdered) Children(h types.Hash) ([]types.Hash, error) {
+	children, err := o.reader.Children(h)
+	slices.SortFunc(children, types.Hash.Compare)
+	return children, err
+}
+
 // candidate is a sibling record, already read and verified.
 type candidate struct {
 	hash types.Hash
@@ -677,6 +688,10 @@ type candidate struct {
 // before its removal, win on the revocation bias or a ground hash, and undo
 // its own removal with everything after it.
 func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, error) {
+	// Walking each branch on a chain without forks makes resolution quadratic.
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
 	var keys []branchKeys
 	if parent.schema >= types.SchemaHolders {
 		keys = make([]branchKeys, len(candidates))

@@ -1,0 +1,15 @@
+{{- $cur := . -}}
+<aside class="sidebar" aria-label="{{ i18n "docs" }}">
+{{- range hugo.Data.nav }}
+  {{- $pages := slice }}
+  {{- range .items }}{{ with site.GetPage . }}{{ $pages = $pages | append . }}{{ end }}{{ end }}
+  {{- if $pages }}
+  <h4>{{ i18n .group }}</h4>
+  <ul>
+  {{- range $pages }}
+    <li><a href="{{ .RelPermalink }}"{{ if eq .RelPermalink $cur.RelPermalink }} aria-current="page"{{ end }}>{{ .LinkTitle }}</a></li>
+  {{- end }}
+  </ul>
+  {{- end }}
+{{- end }}
+</aside>

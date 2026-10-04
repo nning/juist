@@ -1,8 +1,10 @@
 #!/bin/sh
 # /var/lib/juist is removed on purge only if it is empty: it holds an enrolled
 # device's identity, and deleting that behind the operator's back is not a
-# package's call. The juist user is never removed, since a UID may own files
-# this package never installed.
+# package's call. The juist, juist-ingress and juist-serve users are never
+# removed, since a UID may own files this package never installed; nor is
+# /var/lib/juist-serve, whose ACME account the published names' CAA records
+# name.
 set -e
 if [ -d /run/systemd/system ]; then
 	systemctl daemon-reload || true
@@ -15,6 +17,9 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 fi
 if [ "$1" = purge ]; then
 	rm -f /var/lib/juist.removed
+fi
+if [ "$1" = purge ] && [ -d /var/lib/juist-serve ]; then
+	echo "juist: kept /var/lib/juist-serve, the terminator's ACME account, which CAA records may name" >&2
 fi
 if [ "$1" = purge ] && [ -d /var/lib/juist ]; then
 	rmdir /var/lib/juist 2>/dev/null ||

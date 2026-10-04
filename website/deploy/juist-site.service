@@ -1,0 +1,21 @@
+[Unit]
+Description=juist website on 127.0.0.1:8181
+After=network.target
+ConditionPathExists=/var/lib/juist-site/current/server
+
+[Service]
+ExecStart=/var/lib/juist-site/current/server -root /var/lib/juist-site/current/site -addr 127.0.0.1:8181
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallFilter=@system-service
+MemoryMax=128M
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

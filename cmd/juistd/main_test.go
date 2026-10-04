@@ -3,16 +3,22 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
+	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/nning/juist/daemon"
+	"github.com/nning/juist/internal/ingress"
 	"github.com/nning/juist/internal/rendezvous"
+	"github.com/nning/juist/internal/terminator"
 	"github.com/nning/juist/ipc"
 )
 
@@ -35,7 +41,7 @@ func TestHelpListsEveryOptionWithItsDefault(t *testing.T) {
 			t.Errorf("help lacks %q:\n%s", want, got)
 		}
 	}
-	if n := strings.Count(got, "\n"); n > 25 {
+	if n := strings.Count(got, "\n"); n > 28 {
 		t.Errorf("help is %d lines", n)
 	}
 	if _, err := parse([]string{"--help"}, io.Discard); !errors.Is(err, errHelp) {
@@ -114,6 +120,32 @@ func TestOptionsReachTheService(t *testing.T) {
 	o, _ = parse([]string{"--stun", " a:1, ,b:2 "}, io.Discard)
 	if !slices.Equal(o.service.Mesh.STUN, []string{"a:1", "b:2"}) {
 		t.Errorf("--stun: %q", o.service.Mesh.STUN)
+	}
+}
+
+// A helper's bounds reach it, and are a helper's alone.
+func TestTheBoundsAreAHelpers(t *testing.T) {
+	t.Setenv("JUIST_HOME", "/var/lib/juist-test")
+	o, err := parse([]string{"--helper", "ingress", "-M", "40000", "-m", "512"}, io.Discard)
+	if err != nil || o.maxConns != 40000 || o.maxPerSource != 512 {
+		t.Errorf("an ingress's bounds: %d, %d, %v", o.maxConns, o.maxPerSource, err)
+	}
+	o, err = parse([]string{"--helper", "tls"}, io.Discard)
+	if err != nil || o.maxConns != 0 || o.maxPerSource != ingress.DefaultMaxPerSource {
+		t.Errorf("a terminator's defaults: %d, %d, %v", o.maxConns, o.maxPerSource, err)
+	}
+	for _, args := range [][]string{
+		{"--max-conns", "100"},
+		{"--helper", "tls", "--max-per-source", "10"},
+		{"--helper", "ingress", "--max-per-source", "0"},
+		{"--helper", "ingress", "--max-conns", "2000000"},
+	} {
+		if _, err := parse(args, io.Discard); err == nil {
+			t.Errorf("%q: taken", args)
+		}
+	}
+	if ingress.DefaultMaxConns < 16384 || ingress.DefaultMaxPerSource < 256 || terminator.DefaultMaxConns < 8192 {
+		t.Error("the bounds a launch day needs are lowered")
 	}
 }
 
@@ -209,5 +241,111 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk ful
 func TestAFailedManPageIsAnError(t *testing.T) {
 	if _, err := parse([]string{"__manpage"}, failingWriter{}); err == nil || errors.Is(err, errHelp) {
 		t.Fatalf("writing the man page failed, and parse said %v", err)
+	}
+}
+
+// An ingress that cannot bind its port says why: another program holds it.
+func TestAnIngressSaysWhoHoldsItsPort(t *testing.T) {
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_, err = listenIngress(ln.Addr().(*net.TCPAddr).Port)
+	if err == nil || !strings.Contains(err.Error(), "another program serves port") {
+		t.Fatalf("a port taken: %v", err)
+	}
+}
+
+// --serve makes a service member: on a network stack, no device, serving
+// what it names, @ the domain itself; beside a device or as a helper it is
+// refused, and so is a NAME=ADDR that is none.
+// --join, or $JUIST_JOIN, reaches the service, which --help does not show,
+// and no helper takes one.
+func TestJoinTakesTheInviteFromTheEnvironment(t *testing.T) {
+	t.Setenv("JUIST_JOIN", "juist:secret@192.0.2.1:41642")
+	o, err := parse(nil, io.Discard)
+	if err != nil || o.service.Join != "juist:secret@192.0.2.1:41642" {
+		t.Fatalf("from the environment: %q, %v", o.service.Join, err)
+	}
+	if o, err = parse([]string{"-j", "juist:given@192.0.2.2:1"}, io.Discard); err != nil || o.service.Join != "juist:given@192.0.2.2:1" {
+		t.Fatalf("given: %q, %v", o.service.Join, err)
+	}
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"--help"}, &out, io.Discard); err != nil || strings.Contains(out.String(), "secret") {
+		t.Errorf("--help shows the invite (%v):\n%s", err, out.String())
+	}
+	if o, err := parse([]string{"--helper", "tls"}, io.Discard); err != nil || o.service.Join != "" {
+		t.Errorf("a helper took $JUIST_JOIN: %q, %v", o.service.Join, err)
+	}
+	if _, err := parse([]string{"--helper", "tls", "--join", "juist:given@192.0.2.2:1"}, io.Discard); err == nil {
+		t.Error("a helper took --join")
+	}
+}
+
+// The Compose example runs juistd with options it takes, and joins by
+// $JUIST_JOIN.
+func TestTheComposeExampleRunsAServiceMember(t *testing.T) {
+	b, err := os.ReadFile("../../examples/service-member/compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^\s+command: (\[.*\])$`).FindSubmatch(b)
+	var args []string
+	if m == nil || json.Unmarshal(m[1], &args) != nil {
+		t.Fatalf("no command in the example:\n%s", b)
+	}
+	o, err := parse(args, io.Discard)
+	if err != nil || o.service.ServeTo["whoami"] != "whoami:80" {
+		t.Fatalf("juistd %q: %+v, %v", args, o.service.ServeTo, err)
+	}
+	if !bytes.Contains(b, []byte("JUIST_JOIN:")) {
+		t.Error("the example does not pass $JUIST_JOIN")
+	}
+}
+
+func TestServeMakesAServiceMember(t *testing.T) {
+	opts, err := parse([]string{"--serve", "immich=immich-server:2283", "--serve", "photos=10.0.0.5:80",
+		"--serve", "@=web:80"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.service.Mesh.Netstack || opts.service.Mesh.TunName != "" || opts.service.ServeTo["immich"] != "immich-server:2283" ||
+		opts.service.ServeTo["photos"] != "10.0.0.5:80" || opts.service.ServeTo[""] != "web:80" {
+		t.Errorf("parsed as %+v", opts.service)
+	}
+	for _, args := range [][]string{
+		{"--serve", "immich=immich-server:2283", "--tun", "juist0"},
+		{"--serve", "immich=immich-server:2283", "--helper", "tls"},
+		{"--serve", "immich"},
+		{"--serve", "=127.0.0.1:80"},
+		{"--helper", "egress"},
+	} {
+		if _, err := parse(args, io.Discard); err == nil {
+			t.Errorf("%q taken", args)
+		}
+	}
+}
+
+// A helper and a service member plumb no device, so root starts them as
+// they are, with no helper split off.
+func TestOnNoDevice(t *testing.T) {
+	for args, want := range map[string]bool{
+		"--helper ingress": true, "--helper=tls": true, "-I tls": true, "--serve a=b:1": true, "-S=a=b:1": true,
+		"--home /var/db/juist": false, "--tun juist0": false, "": false,
+	} {
+		if got := onNoDevice(strings.Fields(args)); got != want {
+			t.Errorf("%q: %v", args, got)
+		}
+	}
+}
+
+// The ingress says when juistd stops answering, without --verbose.
+func TestTheIngressSaysJuistdIsGone(t *testing.T) {
+	var out strings.Builder
+	o := ingressOptions(t.TempDir()+"/none.sock", &out)
+	o.Logf("ingress: juistd does not answer")
+	if !strings.Contains(out.String(), "juistd does not answer") {
+		t.Errorf("the ingress said %q", out.String())
 	}
 }

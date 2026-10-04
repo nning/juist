@@ -1,10 +1,7 @@
 name: interop
 
-# The Linux/FreeBSD lab (make interop): its own workflow, so that its minutes
-# are counted, and cancelled, apart from CI's.
+# The Linux/FreeBSD lab (make interop), by hand alone: make ci-vm runs it.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.26.8'
+  GO_VERSION: '1.27.1'
 
 jobs:
   interop:

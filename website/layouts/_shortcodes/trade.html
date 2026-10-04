@@ -1,0 +1,6 @@
+{{- $id := anchorize (.Get "title") -}}
+<section class="trade" id="{{ $id }}">
+  <h4>{{ .Get "title" }} <a class="anchor" href="#{{ $id }}" aria-label="{{ i18n "anchor" }}">#</a></h4>
+  {{ with .Get "knob" }}<p class="knob">{{ . }}</p>{{ end }}
+  {{ .Inner | .Page.RenderString (dict "display" "block") }}
+</section>

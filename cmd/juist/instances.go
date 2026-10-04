@@ -48,10 +48,28 @@ type hostLayout struct {
 	start, stop func(ctx context.Context, n int) error
 	firewall    func(ctx context.Context, action string, n int) error
 
-	// exitScript is the package's exit-node.sh, "" for none.
-	exitScript string
+	// exitScript, ingressScript and serveScript are the package's
+	// exit-node.sh, ingress.sh and serve.sh, "" for none; answers says
+	// whether a service just started takes connections at an address.
+	exitScript, ingressScript, serveScript string
+	answers                                func(ctx context.Context, addr string) error
+	// answersTLS says whether what answers at addr ends TLS.
+	answersTLS func(ctx context.Context, addr string) error
+	// terminatorOn says whether the terminator's service is enabled and
+	// running, so that serveScript need not be run; nil for unknown.
+	// terminatorStarts says whether systemd starts it once juistd needs it,
+	// and juistd then stops it, so that serveScript is never run; nil for
+	// never.
+	terminatorOn, terminatorStarts func(ctx context.Context) bool
+	// caaWait is how long a terminator just started may take to have an
+	// ACME account, which the CAA records name, and terminatorWait to say
+	// where it listens; zero for not waiting.
+	caaWait, terminatorWait time.Duration
 	// dockerNets are the host's Docker bridges' networks, by bridge.
 	dockerNets func() map[string][]netip.Prefix
+	// firewalled says whether the host firewall keeps TCP to port from
+	// arriving on device; nil for none known.
+	firewalled func(ctx context.Context, device string, port uint16) (blocked, unsure bool)
 }
 
 var dockerBridge = regexp.MustCompile(`^br-[0-9a-f]{12}$`)
@@ -754,11 +772,9 @@ func (a *app) printHostStatus(insts []hostInstance) {
 			continue
 		}
 		a.printStatusIn(i.st, i.name())
-		if i.st.Waiting > 0 && i.st.CanOperate {
-			a.network, a.node, a.instance = i.name(), nil, nil
-			a.waitingNote()
-			a.network, a.node, a.instance = "", nil, nil
-		}
+		a.network, a.node, a.instance = i.name(), nil, nil
+		a.adminNotes(i.st, true)
+		a.network, a.node, a.instance = "", nil, nil
 	}
 }
 

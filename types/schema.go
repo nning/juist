@@ -55,7 +55,14 @@ type SchemaVersion uint16
 // Schema 8 points public DNS names at members ([NodeRecord.Names],
 // [KindSetNodeNames]), which members that accept them resolve to the
 // member's overlay addresses.
-const CurrentSchema SchemaVersion = 8
+//
+// Schema 9 publishes members' services through an ingress: the role
+// [RoleIngress], the network's public domain ([Snapshot.Domain],
+// [KindSetDomain]) and a member's published names under it
+// ([NodeRecord.Published], [KindSetPublished]).
+//
+// Schema 10 renames members ([KindRenameNode]).
+const CurrentSchema SchemaVersion = 10
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -82,5 +89,11 @@ const SchemaSealing SchemaVersion = 7
 
 // SchemaNames is the first schema in which members answer for public names.
 const SchemaNames SchemaVersion = 8
+
+// SchemaPublish is the first schema in which members publish services.
+const SchemaPublish SchemaVersion = 9
+
+// SchemaRenameNode is the first schema in which a member's name changes.
+const SchemaRenameNode SchemaVersion = 10
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

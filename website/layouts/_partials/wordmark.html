@@ -1,0 +1,1 @@
+{{- (resources.Get "design/logo/wordmark.svg").Content | replaceRE `<!--.*?-->\s*` "" | replaceRE `<svg ` `<svg aria-hidden="true" ` | safeHTML -}}

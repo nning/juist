@@ -31,7 +31,7 @@ const (
 // StateFiles are what a daemon keeps in its state directory beside the log
 // and the node keys, for a reset of a home no daemon runs from.
 var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
-	SubnetsFile, SubnetServeFile, NamesFile}
+	SubnetsFile, SubnetServeFile, NamesFile, PublishServeFile, PublishToFile}
 
 // ExitFile holds the exit node this device's owner chose, or "off"; without
 // it none was chosen. ServeFile, where it exists, is the operator's word that
@@ -49,6 +49,12 @@ const (
 	// NamesFile, where it exists, is the owner's word that this device
 	// resolves the public names the network points at members to them.
 	NamesFile = "accept-names"
+
+	// PublishServeFile, where it exists, is the operator's word that this
+	// device serves the names the network publishes on it; PublishToFile
+	// holds where those whose TLS juist ends go.
+	PublishServeFile = "publish-serve"
+	PublishToFile    = "publish-to"
 )
 
 // WaitingFile holds the changes waiting for votes a node holds, sealed to

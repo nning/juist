@@ -1,7 +1,11 @@
 # Every juistd stops with the package, undoing what it set up on the host,
-# and "clear" takes what one left. An upgrade leaves them running: pkg kills
-# what its scripts start, so a restart is the operator's.
+# and "clear" takes what one left; the ingress and the terminator stop too.
+# An upgrade leaves them running: pkg kills what its scripts start, so a
+# restart is the operator's.
 [ "${PKG_UPGRADE:-}" = true ] && exit 0
+for s in juist_ingress juist_serve; do
+	/usr/local/etc/rc.d/$s onestop >/dev/null 2>&1
+done
 rc=/usr/local/etc/rc.d/juistd
 for i in juist1 juist2 juist3 juist4 juist5 juist6 juist7 juist8 juist9 ""; do
 	$rc onestatus $i >/dev/null 2>&1 && $rc onestop $i >/dev/null 2>&1

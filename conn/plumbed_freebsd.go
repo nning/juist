@@ -56,15 +56,12 @@ func (d *plumbedTUN) Name() (string, error)    { return d.name, nil }
 func (d *plumbedTUN) Events() <-chan tun.Event { return d.events }
 func (d *plumbedTUN) BatchSize() int           { return 1 }
 
-func (d *plumbedTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
-	if offset < 4 {
-		return 0, io.ErrShortBuffer
-	}
-	n, err := d.f.Read(bufs[0][offset-4:])
+func (d *plumbedTUN) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
+	n, err := d.f.Read(slab[tun.ReadPacketSpacing-4 : len(slab)-tun.ReadPacketSpacing])
 	if n < 4 {
 		return 0, err
 	}
-	sizes[0] = n - 4
+	packets[0] = tun.ReadPacket{Offset: tun.ReadPacketSpacing, Size: n - 4}
 	return 1, err
 }
 

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,6 +87,15 @@ type Service struct {
 	// accept loop asks for every connection and must not wait on mu.
 	operator atomic.Uint32
 
+	// ingressUID and serveUID are the users juist-ingress's and
+	// juist-serve's, 0 where there is none: the ingress, which may ask what
+	// is published, and the terminator, what this device ends TLS for,
+	// and nothing else.
+	ingressUID, serveUID uint32
+	// ingressAsked is when the ingress last asked what is published, in Unix
+	// seconds.
+	ingressAsked atomic.Int64
+
 	// exit and serve are the owner's choice of exit node and the operator's
 	// word on serving as one, as kept in Home.
 	exit  ExitChoice
@@ -92,8 +103,11 @@ type Service struct {
 	// serveSubnets and subnetsOff are the operator's and the owner's word
 	// on subnet routes, as the state directory keeps them.
 	serveSubnets, subnetsOff bool
-	// acceptNames is the owner's word on the network's public names.
-	acceptNames bool
+	// acceptNames is the owner's word on the network's public names, and
+	// servePublished the operator's on serving what is published here.
+	acceptNames, servePublished bool
+	// serveTo is, by label, where the names whose TLS juist ends go.
+	serveTo map[string]string
 }
 
 // ServiceOptions configures a [Service].
@@ -115,6 +129,16 @@ type ServiceOptions struct {
 	// Find replaces the LAN search for an invite, for tests.
 	Find func(ctx context.Context, nameplate uint16) ([]mdns.InviteHost, error)
 
+	// ServeTo, where set, is the operator's word on serving what is
+	// published here and where it goes, by label, given on the command line
+	// of a service member rather than kept.
+	ServeTo map[string]string
+
+	// Join, where set, is an invite this node joins by once started, unless
+	// it is in a network; Say receives how that goes.
+	Join string
+	Say  func(format string, args ...any)
+
 	// Logf receives diagnostics. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -128,7 +152,8 @@ const rotationCheckInterval = 5 * time.Second
 // this device's keys or creates them, opens the log if there is one, and
 // listens on the control socket. Call [Service.Start].
 func NewService(opts ServiceOptions) (*Service, error) {
-	s := &Service{opts: opts, logf: opts.Logf, selfUID: uint32(os.Getuid())}
+	s := &Service{opts: opts, logf: opts.Logf, selfUID: uint32(os.Getuid()),
+		ingressUID: lookupUID(IngressUser), serveUID: lookupUID(ServeUser)}
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
 	}
@@ -208,6 +233,10 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	s.subnetsOff = err == nil
 	_, err = os.Stat(filepath.Join(home, statedir.NamesFile))
 	s.acceptNames = err == nil
+	s.servePublished, s.serveTo = loadServeTo(home, s.logf)
+	if s.opts.ServeTo != nil {
+		s.servePublished, s.serveTo = true, maps.Clone(s.opts.ServeTo)
+	}
 	s.clearEgressUnlessChosen()
 	s.holdExitLocked()
 
@@ -215,7 +244,7 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	if sock == "" {
 		sock = ipc.SocketPath(home)
 	}
-	if s.ipc, err = newIPCServer(sock, s.handle, s.mayOperate, s.logf); err != nil {
+	if s.ipc, err = newIPCServer(sock, s.handle, s.tierOf, s.logf); err != nil {
 		return nil, err
 	}
 	ok = true
@@ -309,7 +338,54 @@ func (s *Service) Start(ctx context.Context) error {
 	s.mu.Unlock()
 	go s.ipc.serve()
 	go s.watch(ctx)
+	if s.opts.Join != "" {
+		go s.joinAtStart(ctx)
+	}
 	return nil
+}
+
+// joinAtStart joins by [ServiceOptions.Join] where this node is in no
+// network, saying how it goes.
+func (s *Service) joinAtStart(ctx context.Context) {
+	say := s.opts.Say
+	if say == nil {
+		say = func(string, ...any) {}
+	}
+	s.mu.Lock()
+	alone := s.mesh == nil && s.auth == nil
+	s.mu.Unlock()
+	if !alone {
+		return
+	}
+	var shown [2]uint32
+	_, err := s.join(ctx, &ipc.Request{Command: ipc.CmdJoin, Invite: s.opts.Join}, func(e *ipc.Event) error {
+		switch guest.EventKind(e.Kind) {
+		case guest.Meeting:
+			say("no direct answer; meeting through the DHT (up to a minute)")
+		case guest.Connected:
+			if e.Text == relayedText {
+				say("connected to %s via relay", e.Addr)
+			} else {
+				say("connected to %s", e.Addr)
+			}
+		case guest.Compare:
+			say("tell the inviting admin these words: %s", e.Text)
+		case guest.Waiting:
+			if e.Quorum != 0 && shown != [2]uint32{e.Votes, e.Quorum} {
+				shown = [2]uint32{e.Votes, e.Quorum}
+				say("waiting for approval (%d of %d votes)", e.Votes, e.Quorum)
+			}
+		}
+		return nil
+	})
+	switch {
+	case ctx.Err() != nil:
+	case err != nil:
+		say("cannot join: %v", err)
+	default:
+		st := s.Status()
+		say("joined %q as %s", st.NetworkName, st.SelfName)
+	}
 }
 
 // Close stops the control socket, then the mesh, then releases the lock.
@@ -434,6 +510,97 @@ func (s *Service) setSubnet(req *ipc.Request) error {
 		_ = s.mesh.Reconcile() // so that the status answered says what came of it
 	}
 	return nil
+}
+
+// setPublish records the operator's word on serving the names the network
+// publishes on this device, a file whose presence says yes, and where those
+// whose TLS juist ends go, a line "LABEL HOST:PORT" each in a file of their
+// own, kept while not serving. It hands both to the running mesh.
+func (s *Service) setPublish(req *ipc.Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	on, to := s.servePublished, maps.Clone(s.serveTo)
+	if req.ServePublished != nil {
+		on = *req.ServePublished
+	}
+	for _, label := range req.Unserve {
+		delete(to, label)
+	}
+	for _, t := range req.ServeTo {
+		if to == nil {
+			to = map[string]string{}
+		}
+		to[t.Label] = t.To
+	}
+	if len(to) > ipc.MaxServeTo {
+		return fmt.Errorf("this device says where %d names go, the most it may", ipc.MaxServeTo)
+	}
+	toPath := filepath.Join(s.opts.Home, statedir.PublishToFile)
+	if len(to) > 0 {
+		var b strings.Builder
+		for _, label := range slices.Sorted(maps.Keys(to)) {
+			fmt.Fprintf(&b, "%s %s\n", cmp.Or(label, domainItself), to[label])
+		}
+		if err := statedir.WriteFilePrivate(toPath, []byte(b.String())); err != nil {
+			return err
+		}
+	}
+	// Rewritten before the names' file may go, so that the lines an older
+	// version kept in it never come back.
+	if err := setFlagFile(s.opts.Home, statedir.PublishServeFile, on); err != nil {
+		return err
+	}
+	if len(to) == 0 {
+		if err := setFlagFile(s.opts.Home, statedir.PublishToFile, false); err != nil {
+			return err
+		}
+		to = nil
+	}
+	s.servePublished, s.serveTo = on, to
+	if s.mesh != nil {
+		s.mesh.SetPublishConsent(on, to)
+		_ = s.mesh.Reconcile() // so that the status answered says what came of it
+	}
+	return nil
+}
+
+// domainItself is the domain's own empty label as the names' file holds it.
+const domainItself = "@"
+
+// loadServeTo reads the operator's word on serving what is published here,
+// and where to: from home's names' file, or, without one, from the lines an
+// older version kept in the word's. A line it cannot read is left out, and
+// said so.
+func loadServeTo(home string, logf func(string, ...any)) (bool, map[string]string) {
+	consent := fileExists(filepath.Join(home, statedir.PublishServeFile))
+	path := filepath.Join(home, statedir.PublishToFile)
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		path = filepath.Join(home, statedir.PublishServeFile)
+		b, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return consent, nil
+	}
+	var to map[string]string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line == "" {
+			continue
+		}
+		label, addr, ok := strings.Cut(line, " ")
+		if label == domainItself {
+			label = ""
+		}
+		if t := (ipc.ServeTo{Label: label, To: addr}); !ok || !t.Valid() {
+			logf("daemon: %s: leaving out %q, which names no published name and address", path, line)
+			continue
+		}
+		if to == nil {
+			to = map[string]string{}
+		}
+		to[label] = addr
+	}
+	return consent, to
 }
 
 // setNames records the owner's word on resolving the network's public names,
@@ -600,7 +767,7 @@ func (s *Service) startMeshLocked() error {
 	o.OnAddrsMoved = s.followAddrs
 	o.Exit, o.ServeExit, o.OnExitMoved = s.exit, s.serve, s.followExit
 	o.ServeSubnets, o.SubnetsOff = s.serveSubnets, s.subnetsOff
-	o.AcceptNames = s.acceptNames
+	o.AcceptNames, o.ServePublished, o.ServeTo = s.acceptNames, s.servePublished, s.serveTo
 	o.KeyringPath = statedir.KeyringPath(s.opts.Home)
 	if o.Logf == nil {
 		o.Logf = s.logf
@@ -784,7 +951,7 @@ func (s *Service) Status() ipc.Status {
 		st = ipc.Status{
 			Network: state.GenesisHash(), InNetwork: true,
 			Derived: ipc.Derived{
-				NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(),
+				NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(), Schema: state.Schema(),
 				Members: len(state.Nodes()), NotMember: !state.IsMember(s.keys.Identity.Public()),
 			},
 		}
@@ -798,6 +965,9 @@ func (s *Service) Status() ipc.Status {
 				st.Subnets.NotServing = "the tunnels are not up"
 			}
 		}
+		if s.servePublished {
+			st.Publish = &ipc.Publish{Consent: true, NotServing: "the tunnels are not up"}
+		}
 	}
 	st.Instance, st.Device = s.opts.Mesh.Instance, s.opts.Mesh.TunName
 	if state != nil {
@@ -808,6 +978,35 @@ func (s *Service) Status() ipc.Status {
 		st.HostConflict = &c
 	}
 	st.Self = s.keys.Identity.Public()
+	if s.mesh != nil && state != nil {
+		if self, ok := state.Node(st.Self); ok && self.HasRole(types.RoleIngress) {
+			st.Ingress = &ipc.Ingress{Running: s.now().Unix()-s.ingressAsked.Load() <= int64(ingressSilence/time.Second)}
+			for _, t := range s.mesh.Published().Names {
+				st.Ingress.Names = append(st.Ingress.Names, t.Name)
+			}
+		}
+		if st.Publish != nil && len(st.Publish.Ending) > 0 {
+			p := *st.Publish
+			p.TerminatorSilent = s.mesh.terminatorSilent()
+			st.Publish = &p
+		}
+		now := s.now()
+		st.Share = s.mesh.shareStatus(state, s.mesh.freshness(now).Fresh(now.Unix()), now)
+		st.Terminator = s.mesh.terminatorStatus()
+	}
+	if len(s.serveTo) > 0 && st.InNetwork {
+		p := ipc.Publish{NotServing: "the tunnels are not up"}
+		switch {
+		case st.Publish != nil:
+			p = *st.Publish
+		case s.mesh != nil:
+			p.NotServing = nothingPublished
+		}
+		for _, label := range slices.Sorted(maps.Keys(s.serveTo)) {
+			p.To = append(p.To, ipc.ServeTo{Label: label, To: s.serveTo[label]})
+		}
+		st.Publish = &p
+	}
 	if st.SelfName == "" {
 		st.SelfName = s.keys.Name
 	}
@@ -850,6 +1049,51 @@ func (s *Service) mayOperate(who caller) bool {
 	return op != 0 && who.uid == op
 }
 
+// ingressSilence is how long the ingress, which asks every 5 s, may go
+// without asking before the status says it is not running.
+const ingressSilence = 15 * time.Second
+
+// isIngress and isServe report whether who is the ingress, or the
+// terminator.
+func (s *Service) isIngress(who caller) bool {
+	return who.known && s.ingressUID != 0 && who.uid == s.ingressUID
+}
+
+func (s *Service) isServe(who caller) bool {
+	return who.known && s.serveUID != 0 && who.uid == s.serveUID
+}
+
+// tierOf is what who may do on the socket.
+func (s *Service) tierOf(who caller) tier {
+	switch {
+	case s.mayOperate(who):
+		return tierOperator
+	case s.isIngress(who), s.isServe(who):
+		return tierIngress
+	}
+	return tierReader
+}
+
+// IngressUser and ServeUser are the users an ingress and a terminator run
+// as, which the packages create.
+const (
+	IngressUser = "juist-ingress"
+	ServeUser   = "juist-serve"
+)
+
+// lookupUID is name's uid, 0 where there is no such user.
+func lookupUID(name string) uint32 {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return 0
+	}
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(uid)
+}
+
 // mayAppoint reports whether who may choose the operator.
 func (s *Service) mayAppoint(who caller) bool {
 	return !who.known || who.uid == 0 || who.uid == s.selfUID
@@ -857,6 +1101,33 @@ func (s *Service) mayAppoint(who caller) bool {
 
 func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, events func(*ipc.Event) error,
 	replies <-chan ipc.Request) ipc.Response {
+	operates := s.mayOperate(who)
+	switch {
+	case req.Command == ipc.CmdPublished && (operates || s.isIngress(who)):
+		if s.isIngress(who) {
+			s.ingressAsked.Store(s.now().Unix())
+		}
+		if m := s.Mesh(); m != nil {
+			return ipc.Response{Published: m.Published()}
+		}
+		return ipc.Response{Published: &ipc.Published{}}
+	case req.Command == ipc.CmdServing && (operates || s.isServe(who)):
+		if m := s.Mesh(); m != nil {
+			return ipc.Response{Serving: m.serving(&ipc.TerminatorReport{Account: req.Account,
+				Listening: req.Listening, Unbound: req.Unbound, NoCert: req.NoCert, Stopping: req.Stopping}, s.isServe(who))}
+		}
+		return ipc.Response{Serving: &ipc.Published{}}
+	case req.Command == ipc.CmdStatusPage && (operates || s.isServe(who)):
+		p, err := s.StatusPage()
+		if err != nil {
+			return ipc.Response{Err: err.Error()}
+		}
+		return ipc.Response{StatusPage: p}
+	case s.isIngress(who) && !operates:
+		return ipc.Response{Err: "the ingress may ask what is published, and nothing else"}
+	case s.isServe(who) && !operates:
+		return ipc.Response{Err: "the terminator may ask what this device serves and its status page, and nothing else"}
+	}
 	if req.Command == ipc.CmdStatus {
 		st := s.Status()
 		st.CanOperate = s.mayOperate(who)
@@ -906,6 +1177,10 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 		}
 	case ipc.CmdInvite:
 		err = s.invite(ctx, req.Offer, events, replies)
+	case ipc.CmdShare:
+		err = s.share(ctx, req.Share, events)
+	case ipc.CmdUnshare:
+		err = s.unshare()
 	case ipc.CmdInviteReply:
 		err = errors.New("an invite reply is sent inside the invite it answers")
 	case ipc.CmdRotate:
@@ -922,6 +1197,8 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 		err = s.setSubnet(req)
 	case ipc.CmdNames:
 		err = s.setNames(*req.AcceptNames)
+	case ipc.CmdPublish:
+		err = s.setPublish(req)
 	case ipc.CmdExit:
 		err = s.setExit(req)
 	case ipc.CmdWaiting:
@@ -977,7 +1254,7 @@ func (s *Service) reset(force bool) error {
 	s.auth, s.meshErr, s.hostConflict = nil, nil, nil
 	// The choice and the consent were this network's, and go with it.
 	s.exit, s.serve = ExitChoice{}, false
-	s.serveSubnets, s.subnetsOff, s.acceptNames = false, false, false
+	s.serveSubnets, s.subnetsOff, s.acceptNames, s.servePublished, s.serveTo = false, false, false, false, nil
 	s.clearEgress()
 
 	entries, err := os.ReadDir(home)

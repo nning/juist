@@ -37,15 +37,8 @@ type upstream struct {
 
 func startUpstream(t *testing.T, stray bool) *upstream {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	pc, ln := listenBoth(t)
 	ap := netip.MustParseAddrPort(pc.LocalAddr().String())
-	ln, err := net.Listen("tcp", ap.String())
-	if err != nil {
-		t.Fatal(err)
-	}
 	u := &upstream{addr: ap, stray: stray}
 	t.Cleanup(func() { pc.Close(); ln.Close() })
 	answer := func(q []byte) []byte {
@@ -89,6 +82,29 @@ func startUpstream(t *testing.T, stray bool) *upstream {
 		}
 	}()
 	return u
+}
+
+// listenBoth listens on one loopback port for UDP and TCP both: a port free
+// for UDP may be another's for TCP, as under make check.
+func listenBoth(t *testing.T) (net.PacketConn, net.Listener) {
+	t.Helper()
+	for range 20 {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln, err := net.Listen("tcp", pc.LocalAddr().String())
+		if errors.Is(err, syscall.EADDRINUSE) {
+			pc.Close()
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pc, ln
+	}
+	t.Fatal("no port free for UDP and TCP both")
+	return nil, nil
 }
 
 func startForwarder(t *testing.T, up *upstream, allowed func(netip.Addr) bool) netip.AddrPort {

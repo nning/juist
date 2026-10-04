@@ -171,6 +171,18 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 			afterFirst = auth.State()
 		}
 	}
+	// A domain, so that a published name is something the fuzzer can apply.
+	domain, err := auth.Builder().SetDomain("pub.example.org")
+	if err != nil {
+		return nil, err
+	}
+	if err := domain.Sign(admin); err != nil {
+		return nil, err
+	}
+	if err := auth.Inform(domain); err != nil {
+		return nil, err
+	}
+	fx.records = append(fx.records, domain)
 
 	b := auth.Builder()
 	first, third := fixedNode(1).Identity, fixedNode(3)
@@ -203,7 +215,12 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 		},
 		func() (types.AUM, error) { return b.RenumberNode(first, netip.MustParseAddr("198.18.0.9"), 1000) },
 		func() (types.AUM, error) { return b.RenameNetwork("renamed") },
+		func() (types.AUM, error) { return b.RenameNode(first, "renamed") },
 		func() (types.AUM, error) { return b.SetNodeNames(first, []string{"mx.example.org"}) },
+		func() (types.AUM, error) { return b.SetDomain("pub.example.net") },
+		func() (types.AUM, error) {
+			return b.SetPublished(first, []types.PublishedName{{Label: "immich", Port: 443}})
+		},
 		func() (types.AUM, error) {
 			return b.SetAdminRecipient(admin.Public(), types.RecipientKey{X25519: fourth.X25519, MLKEM: fourth.MLKEM})
 		},

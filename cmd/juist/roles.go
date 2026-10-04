@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"flag"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -16,25 +17,26 @@ const rolesAbout = `Roles:
 
   exit     carries other devices' internet traffic, once its operator
            agrees: juist exit serve
+  ingress  takes connections from the internet for the names devices
+           publish; on a device with a public address, and nothing else
+  service  a service member: juistd --serve beside a service, which every
+           device keeps from opening any connection to it
+  publish  shares under its own name at once, without a vote each time:
+           juist share FILE, juist publish PORT
   relay    relays for devices that cannot reach each other; best on two or
            more devices with public addresses
   voucher  vouches hourly that the network state is current, so cut-off
            devices notice; keep one online. Not an admin key.`
 
-const subnetsAbout = `
-
-A PREFIX, such as 192.168.1.0/24, is a subnet the device routes for every
-member, once its operator agrees: juist subnet serve.`
-
 func cmdGrant(a *app, args []string) error {
-	s := spec{name: "juist grant", args: "DEVICE ROLE|PREFIX|NAME...", min: 2, max: -1, about: `
-Give a device roles, subnets to route, or public names. ` + rolesAbout + subnetsAbout + namesAbout}
+	s := spec{name: "juist grant", args: "DEVICE ROLE...", min: 2, max: -1, about: `
+Give a device roles. ` + rolesAbout}
 	return changeRoles(a, s, args, true)
 }
 
 func cmdRevoke(a *app, args []string) error {
-	s := spec{name: "juist revoke", args: "DEVICE ROLE|PREFIX|NAME...", min: 2, max: -1, about: `
-Take roles, subnets or public names from a device. ` + rolesAbout + subnetsAbout + namesAbout}
+	s := spec{name: "juist revoke", args: "DEVICE ROLE...", min: 2, max: -1, about: `
+Take roles from a device. ` + rolesAbout}
 	return changeRoles(a, s, args, false)
 }
 
@@ -44,50 +46,18 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 	if !grant {
 		fs.BoolVar(yes, "yes", false, "do not ask")
 	}
-	pos, err := a.parse(s, fs, args)
+	auth, target, pos, err := a.deviceChange(s, fs, args)
 	if err != nil {
 		return err
 	}
-	auth, err := a.networkLog()
-	if err != nil {
-		return err
-	}
-	state := auth.State()
-	target, err := resolveDevice(state, pos[0])
-	if err != nil {
-		return err
-	}
-	name := displayMember(target)
 	roles := map[types.Role]bool{}
 	for _, r := range target.Roles {
 		roles[r] = true
 	}
-	subnets := slices.Clone(target.SubnetRoutes())
-	names := slices.Clone(target.Names)
-	var namesAsked []string
-	others := false
-	for _, arg := range pos[1:] {
-		if pfx, ok, err := parseSubnet(arg, name); ok || err != nil {
-			if err != nil {
-				return err
-			}
-			if subnets, err = a.changeSubnet(state, target, subnets, pfx, grant); err != nil {
-				return err
-			}
-			others = true
-			continue
+	for _, arg := range pos {
+		if err := notARole(arg, displayMember(target), grant); err != nil {
+			return err
 		}
-		if host, ok, err := parseHostName(arg); ok || err != nil {
-			if err != nil {
-				return err
-			}
-			if names, err = changeName(state, target, names, host, grant); err != nil {
-				return err
-			}
-			namesAsked = append(namesAsked, host)
-			continue
-		}
-		others = true
 		r, err := parseRole(arg)
 		if err != nil {
 			return err
@@ -100,27 +70,111 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 			next = append(next, r)
 		}
 	}
-	switch {
-	case len(namesAsked) > 0 && others:
-		// Two changes, each approved on its own.
-		return fmt.Errorf("names are a change of their own, apart from roles and subnets\nhint: juist %s %s %s",
-			map[bool]string{true: "grant", false: "revoke"}[grant], pos[0], strings.Join(namesAsked, " "))
-	case len(namesAsked) > 0:
-		return a.submitNames(auth, target, names)
+	if grant {
+		if err := roleConflict(target, sortRoles(next)); err != nil {
+			return err
+		}
 	}
-	next = sortRoles(next)
+	applied, err := a.submitRoutes(auth, target, sortRoles(next), target.SubnetRoutes(), *yes)
+	if err != nil || !applied {
+		return err
+	}
+	name := displayMember(target)
+	for _, r := range []types.Role{types.RoleIngress, types.RoleService} {
+		if target.HasRole(r) && !roles[r] {
+			// The role confined the device; a member like any other is not.
+			a.warn("%s is confined no more, now a member like any other", name)
+			a.hint("one that may be compromised goes by juist remove %s", name)
+		}
+	}
+	if target.HasRole(types.RoleIngress) && !roles[types.RoleIngress] {
+		a.hint("on %s, juist ingress serve --stop", name)
+	}
+	if roles[types.RolePublish] && !target.HasRole(types.RolePublish) {
+		a.hint("on %s, juist share FILE or juist publish PORT", name)
+	}
+	if !roles[types.RoleIngress] || target.HasRole(types.RoleIngress) {
+		return nil
+	}
+	return a.serveIngressNext(target)
+}
+
+// roleConflict says which of target's roles keeps it from next, as the log
+// refuses: an ingress beside a voucher, an exit node or publish, and a
+// service member beside anything.
+func roleConflict(target types.NodeRecord, next []types.Role) error {
+	apart := func(a, b types.Role) bool {
+		switch {
+		case a == types.RoleService || b == types.RoleService:
+			return true
+		case a == types.RoleIngress || b == types.RoleIngress:
+			return slices.Contains([]types.Role{types.RoleAdmin, types.RoleExit, types.RolePublish}, a) ||
+				slices.Contains([]types.Role{types.RoleAdmin, types.RoleExit, types.RolePublish}, b)
+		}
+		return false
+	}
+	name := displayMember(target)
+	for _, r := range next {
+		for _, other := range next {
+			if r == other || !apart(r, other) || target.HasRole(r) || !target.HasRole(other) {
+				continue
+			}
+			had, wants := describeRoles([]types.Role{other}), describeRoles([]types.Role{r})
+			return fmt.Errorf("%s holds the role %s, which the role %s excludes\nhint: juist revoke %s %s",
+				name, had, wants, name, had)
+		}
+	}
+	return nil
+}
+
+// notARole names the command that takes arg, where it is a subnet or a
+// public name for device.
+func notARole(arg, device string, grant bool) error {
+	verb := map[bool]string{true: "add", false: "remove"}[grant]
+	switch {
+	case strings.Contains(arg, "/"):
+		return fmt.Errorf("%s is a subnet, not a role\nhint: juist subnet %s %s %s", arg, verb, device, arg)
+	case strings.Contains(arg, "."):
+		return fmt.Errorf("%s is a public name, not a role\nhint: juist names %s %s %s", arg, verb, device, arg)
+	}
+	return nil
+}
+
+// deviceChange parses args for s, its flags fs, and opens the log and the
+// device the first argument names; the rest are what to change.
+func (a *app) deviceChange(s spec, fs *flag.FlagSet, args []string) (*log.Authority, types.NodeRecord, []string, error) {
+	pos, err := a.parse(s, fs, args)
+	if err != nil {
+		return nil, types.NodeRecord{}, nil, err
+	}
+	auth, err := a.networkLog()
+	if err != nil {
+		return nil, types.NodeRecord{}, nil, err
+	}
+	target, err := resolveDevice(auth.State(), pos[0])
+	return auth, target, pos[1:], err
+}
+
+// submitRoutes proposes target's roles and subnets as next and subnets, and
+// reports whether the change applied.
+func (a *app) submitRoutes(auth *log.Authority, target types.NodeRecord, next []types.Role, subnets []netip.Prefix,
+	yes bool) (bool, error) {
+	name := displayMember(target)
 	routes := exitRoutes(subnets, slices.Contains(next, types.RoleExit))
 	if slices.Equal(next, target.Roles) && sameRoutes(routes, target.Routes) {
 		a.ok("%s: unchanged", name)
-		return nil
+		return false, nil
+	}
+	if need, what := (&types.NodeRecord{Roles: next}).NeedsSchema(); auth.State().Schema() < need {
+		return false, needsUpgrade(what)
 	}
 	aum, err := auth.Builder().SetNodeRoutes(target.Identity, next, routes)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !slices.Contains(next, types.RoleAdmin) {
-		if err := a.checkAdminDeviceLoss(auth.State(), target, *yes); err != nil {
-			return err
+		if err := a.checkAdminDeviceLoss(auth.State(), target, yes); err != nil {
+			return false, err
 		}
 	}
 	var parts []string
@@ -131,26 +185,21 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 		parts = append(parts, "routes "+listPrefixes(sortedPrefixes(subnets)))
 	}
 	done := name + ": " + cmp.Or(strings.Join(parts, ", "), "no roles, no subnets")
-	_, err = a.submit(auth, &change{aum: aum, file: "roles-" + fileSafe(name) + ".rec", done: done})
-	return err
+	return a.submit(auth, &change{aum: aum, file: "roles-" + fileSafe(name) + ".rec", done: done})
 }
 
-// parseSubnet reads arg as a subnet for device name to route, where it is a
-// prefix at all: ok says it is meant as one.
-func parseSubnet(arg, name string) (pfx netip.Prefix, ok bool, err error) {
-	if !strings.Contains(arg, "/") {
-		return netip.Prefix{}, false, nil
-	}
-	pfx, err = netip.ParsePrefix(arg)
+// parseSubnet reads arg as a subnet for device name to route.
+func parseSubnet(arg, name string) (netip.Prefix, error) {
+	pfx, err := netip.ParsePrefix(arg)
 	switch {
 	case err != nil:
-		return pfx, true, fmt.Errorf("%q is no prefix, such as 192.168.1.0/24", arg)
+		return pfx, fmt.Errorf("%q is no prefix, such as 192.168.1.0/24", arg)
 	case pfx.Bits() == 0:
-		return pfx, true, fmt.Errorf("%v is the internet\nhint: juist grant %s exit", pfx, name)
+		return pfx, fmt.Errorf("%v is the internet\nhint: juist grant %s exit", pfx, name)
 	case pfx.Masked() != pfx:
-		return pfx, true, fmt.Errorf("%v has host bits set\nhint: %v", pfx, pfx.Masked())
+		return pfx, fmt.Errorf("%v has host bits set\nhint: %v", pfx, pfx.Masked())
 	}
-	return pfx.Masked(), true, nil
+	return pfx, nil
 }
 
 // changeSubnet is subnets with pfx granted or taken, checked as the log will
@@ -274,11 +323,14 @@ var roleNames = []struct {
 	{"voucher", types.RoleAdmin},
 	{"relay", types.RoleRelayCapable},
 	{"exit", types.RoleExit},
+	{"ingress", types.RoleIngress},
+	{"service", types.RoleService},
+	{"publish", types.RolePublish},
 }
 
 // describeGrant is roles, and the subnets routed and names answered beside
 // them.
-func describeGrant(roles []types.Role, subnets []netip.Prefix, names []string) string {
+func describeGrant(roles []types.Role, subnets []netip.Prefix, names, published []string) string {
 	var parts []string
 	if len(roles) > 0 {
 		parts = append(parts, describeRoles(roles))
@@ -294,6 +346,12 @@ func describeGrant(roles []types.Role, subnets []netip.Prefix, names []string) s
 		parts = append(parts, fmt.Sprintf("%d names", len(names)))
 	case len(names) > 0:
 		parts = append(parts, "names "+strings.Join(names, ", "))
+	}
+	switch {
+	case len(published) > 2:
+		parts = append(parts, fmt.Sprintf("publishes %d names", len(published)))
+	case len(published) > 0:
+		parts = append(parts, "publishes "+strings.Join(published, ", "))
 	}
 	if len(parts) == 0 {
 		return describeRoles(nil)

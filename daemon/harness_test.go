@@ -68,8 +68,10 @@ type network struct {
 	genesis types.AUM
 	devices []*device
 
-	// v4Prefix, set by a mutate, is the network's own IPv4 prefix.
+	// v4Prefix and domain, set by a mutate, are the network's own IPv4
+	// prefix and public domain.
 	v4Prefix *netip.Prefix
+	domain   string
 
 	// secretsByEpoch records what each epoch's group secret is, so a test
 	// can check that a node opened the right one.
@@ -116,7 +118,9 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 	}
 	records := make([]types.NodeRecord, 0, n)
 	for _, d := range nw.devices {
-		records = append(records, d.record)
+		r := d.record
+		r.Published = nil // under the domain, set below
+		records = append(records, r)
 	}
 	g, err := log.Genesis("m2-testnet", 1,
 		[]types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin"}},
@@ -125,7 +129,14 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 	if err != nil {
 		t.Fatalf("building genesis: %v", err)
 	}
-	g.State.V4Prefix = nw.v4Prefix
+	g.State.V4Prefix, g.State.Domain = nw.v4Prefix, nw.domain
+	for i := range g.State.Nodes {
+		for _, d := range nw.devices {
+			if d.record.Identity == g.State.Nodes[i].Identity {
+				g.State.Nodes[i].Published = d.record.Published
+			}
+		}
+	}
 	if err := g.Sign(admin); err != nil {
 		t.Fatalf("signing genesis: %v", err)
 	}
@@ -270,9 +281,10 @@ type fakeManager struct {
 	// hold, when set, keeps every probe's answer back until it is closed.
 	hold chan struct{}
 
-	// egress and serve are what the reconciler last asked for.
-	egress conn.Egress
-	serve  conn.Serve
+	// egress, serve and ingressPorts are what the reconciler last asked for.
+	egress       conn.Egress
+	serve        conn.Serve
+	ingressPorts []uint16
 }
 
 func (m *fakeManager) HostRoutes() []netip.Prefix {
@@ -302,6 +314,20 @@ func (m *fakeManager) SetServe(s conn.Serve) error {
 	defer m.mu.Unlock()
 	m.serve = s
 	return nil
+}
+
+func (m *fakeManager) SetIngressPorts(ports []uint16) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ingressPorts = slices.Clone(ports)
+	return nil
+}
+
+// ingressPortsNow is the ports an ingress was last allowed.
+func (m *fakeManager) ingressPortsNow() []uint16 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.ingressPorts)
 }
 
 // exitState is the egress and serving last set.

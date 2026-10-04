@@ -1,0 +1,29 @@
+#!/bin/sh
+# Serves juist-build's website build when it is not the one served already.
+set -eu
+src=/var/lib/juist-build/site-out
+dst=/var/lib/juist-site
+[ -f "$src/commit" ] || exit 0
+commit=$(cat "$src/commit")
+old=$(cat "$dst/current/commit" 2>/dev/null || true)
+[ "$commit" != "$old" ] || exit 0
+# The build is not root's; a link in it could point the server anywhere.
+if [ -n "$(find "$src" -type l)" ]; then
+	echo "refusing $src: it holds symlinks" >&2
+	exit 1
+fi
+mkdir -p "$dst/releases"
+rel="$dst/releases/$commit"
+rm -rf "$rel" "$rel.tmp"
+cp -r --no-preserve=all "$src" "$rel.tmp"
+chmod 755 "$rel.tmp/server"
+mv -T "$rel.tmp" "$rel"
+oldserver=$(readlink -f "$dst/current/server" 2>/dev/null || true)
+ln -sfn "releases/$commit" "$dst/current.tmp"
+mv -T "$dst/current.tmp" "$dst/current"
+if [ -z "$oldserver" ] || ! cmp -s "$oldserver" "$rel/server"; then
+	systemctl restart juist-site.service
+fi
+# Keep the release served and the one before it.
+ls -1t "$dst/releases" | tail -n +3 | while read -r r; do rm -rf "$dst/releases/$r"; done
+echo "website ${old:-none} -> $commit"

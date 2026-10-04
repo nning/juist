@@ -894,3 +894,12 @@ func TestALostAdmissionIsNamed(t *testing.T) {
 		t.Fatalf("status names %v as lost, want one admission", lost)
 	}
 }
+
+// A change lost to a concurrent one is said in words, a rename included.
+func TestALostRenameIsSaid(t *testing.T) {
+	id := types.Identity{1}
+	got := describeLost(types.AUM{Kind: types.KindRenameNode, Subject: &id, NodeName: new("desk")}, "laptop")
+	if got != `the renaming of laptop to "desk"` {
+		t.Errorf("a lost rename is %q", got)
+	}
+}
