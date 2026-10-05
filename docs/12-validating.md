@@ -30,6 +30,7 @@ every push:
 | a change to the packages, their units and scripts, or what passes between hosts (ingress, exit, subnets, names, sharing) | `make ci-vm CI_MAKE=interop` | 13 min |
 | a milestone, or the review round closing it, is done; before a release | `make ci-vm`, recorded under "The last privileged run" | 25 min |
 | where a milestone's criteria ask for it | `make test-freebsd`, `make test-acme`, `make fuzz-long`, the hand tests on Fedora | — |
+| a change to `mobile` or `android/` | `make android-check`, with a JDK and the Android SDK; the app by hand in an emulator or on a phone | 3 min |
 | documentation alone | nothing; the commit carries `[skip ci]` | — |
 
 The times are KVM's on a four-core host; `make ci` runs the same jobs as
@@ -202,7 +203,7 @@ than skip. A NAT cell can be run alone with
 | M8a — `juist names add` and `remove` take a name in its one form, never two devices' or the network's own, `grant` and `revoke` name them for a name or a subnet, and an approver reads what a change points where | `cmd/juist`: `TestNamesAddAndRemove`, `TestNameStates`, `TestASubnetFromAddToRemove`, `TestANamesChangeSaysWhatItPoints` | — |
 | M8b — members' names are answered from the log with the zone's SOA, a name the network lacks does not exist, and overrides are answered by address alone, their hints empty | `internal/names`: `TestMembersAreAnswered`, `TestOverridesAreAnswered`, `TestTheZoneIsItsAuthority`, `TestTheZonesNamesGoNowhereElse`, `TestLabels`; `internal/dnsfwd`: `TestAnAnswerOfItsOwnReachesNoResolver`, `TestTheHostIsHeldToNoSourcesRate` | — |
 | M8b — resolved routes the network's domain, and every name with an exit node, to juistd's resolver on an address the device holds, bound to it and answering the host alone, which asks the exit node, else the resolvers resolved would but its own link's; the domains are kept from DNSSEC validation; it is given back on close, and the status says why names do not resolve | `daemon`: `TestTheHostResolvesTheNetworksNames`, `TestNamesThatWillNotStartLeaveTheExitNode`, `TestNamesNotResolvedAreSaid`, `TestTheNamesServerIsBoundToTheDevice`, `TestTheNamesAddressIsOneTheDeviceHolds`, `TestWhatIsNotAnsweredGoesWhereTheHostRoutesIt`; `internal/resolved`: `TestConfigureDomains`, `TestRouting`; `packaging`: `TestThePolkitRuleAllowsJuistsDNSAlone`; `cmd/juist`: `TestStatusSaysHowNamesResolve` | — |
-| M8c — a public name is resolved to its member only where the owner agreed, never by an exit node for a member that did not, while the view is fresh and the member reachable, and publicly otherwise; the word is kept and forgotten with the network, and the status lists each name and why it resolves publicly | `internal/names`: `TestOverridesAreAnswered`, `TestEDNSIsAnsweredInKind`, `TestOverridden`; `daemon`: `TestAPublicNameNeedsTheOwnersWord`, `TestAnExitNodeHandsNoOverrideOn`, `TestAStaleViewAnswersNoPublicName`, `TestNoMemberNoNames`, `TestTheNamesWordIsKept`; `ipc`: `TestANamesRequestSetsAcceptingAlone`, `TestAReaderSeesNoPublicNames`; `cmd/juist`: `TestAcceptNames`, `TestStatusListsPublicNames`; `ipc`: `TestEachCommandTakesItsOwnFields` | — |
+| M8c — a public name is resolved to its member only where the owner agreed, never by an exit node for a member that did not, which an exit node whose host's resolver does not ask juist's, as without resolved, asks of its own resolvers, while the view is fresh and the member reachable, and publicly otherwise; the word is kept and forgotten with the network, and the status lists each name and why it resolves publicly | `internal/names`: `TestOverridesAreAnswered`, `TestEDNSIsAnsweredInKind`, `TestOverridden`; `daemon`: `TestAPublicNameNeedsTheOwnersWord`, `TestAnExitNodeHandsNoOverrideOn`, `TestAnExitNodeWithoutNamesAsksTheHostsResolvers`, `TestAStaleViewAnswersNoPublicName`, `TestNoMemberNoNames`, `TestTheNamesWordIsKept`; `ipc`: `TestANamesRequestSetsAcceptingAlone`, `TestAReaderSeesNoPublicNames`; `cmd/juist`: `TestAcceptNames`, `TestStatusListsPublicNames`; `ipc`: `TestEachCommandTakesItsOwnFields` | — |
 | M9a — a published name is one label on a port, sorted and once; an ingress is neither voucher nor exit; a state publishes only under a domain of its own, from schema 9 | `types`: `TestPublishedNameSets`, `TestAnIngressIsNothingElse`, `TestPublishedNamesNeedTheirDomain`, `TestRolesNeedTheirSchema`, `TestEveryPayloadIsValidated` | — |
 | M9a — a quorum sets the domain and publishes names, which survive reopening and a checkpoint; a name before the domain, the domain withdrawn under names, a label another publishes and a name both published and pointed at a member are refused, the domain's move included; the ingress role at schema 8 too | `trust/log`: `TestPublishedNamesNeedTheDomain`, `TestPublishedNamesAreOneMembers`, `TestTheIngressRole`, `TestApplyLeavesItsParentUnchanged`, `TestStateCarriesEveryField` | — |
 | M9a — `juist network domain` and `juist publish` set and list what is published, `juist grant` an ingress, and an approver reads what a change publishes | `cmd/juist`: `TestPublishAddAndRemove`, `TestGrantAnIngress`, `TestAPublishChangeSaysWhatItPublishes`, `TestEveryKindIsDescribed` | — |
@@ -275,6 +276,19 @@ than skip. A NAT cell can be run alone with
 | M7c — two builders on two systems make the same binaries for Linux and FreeBSD, and the same package | `make repro-freebsd` | a FreeBSD host |
 | M7b — pf rules hold none of the daemon's text, what someone takes of juist's pf is put back, the host's own ruleset must call the anchors first and is left be | `internal/plumber`: `TestServingTakesTheDevicesAddressesAlone`, `TestTheHostsRulesCallTheAnchorsFirst`, `TestPFIsKeptAndLeftBe` | FreeBSD, for the last |
 | M6c, M7b — members ask the exit node's DNS on port 53 of its own addresses alone, which reaches the forwarder | `conn`: `TestNetnsExitNodeAnswersDNS`, `TestDNSIsRedirectedToTheForwarder`, `TestTheRouterServesDNSAsAsked`; `daemon`: `TestAnExitNodeAnswersItsMembersDNS` | for the first |
+| M10 — the core runs in the app's process, over a pipe, its keys sealed by the platform | `mobile`: `TestACoreKeepsItsKeysSealedAcrossRestarts`; `daemon`: `TestAServiceInProcessAnswersThroughItsPipeAlone`; `internal/keys`: `TestSealedNodeKeysOpenOnlyWithTheirSealer` | no |
+| M10 — a VPN device moves to each descriptor established, and serves nothing | `conn`: `TestAVPNDeviceMovesToEachEstablishedDescriptor`, `TestAVPNPlumberRefusesServingAndEgress` | no |
+| M10 — the app judges the status as `juist status` does, and reads what the core writes | `mobile`: `TestTheViewJudgesAsJuistStatusDoes`, `TestTheViewIsWhatTheAppReads`; `android/app`: `CoreTest` | no |
+| M10 — every socket the core opens on the underlay is protected from the VPN | `internal/underlay`: `TestASocketIsProtectedBeforeItIsUsed`; `discovery/dht`: `TestTheDHTSocketIsProtected`; `discovery/mdns`: `TestTheMulticastSocketIsProtected`; `internal/rendezvous`: `TestTheRendezvousSocketIsProtected`; `internal/guest`: `TestTheDialToTheHostIsProtected`; `relay/forward`: `TestTheDialToTheRelayIsProtected` | no |
+| M10 — through an exit node, the VPN routes the internet and its DNS, refused where it cannot be used | `conn`: `TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS`; `daemon`: `TestAVPNsDNSIsThroughWithoutAResolvConf`; `mobile`: `TestTheViewOffersTheExitNodes` | no |
+| M10 — a member joining does not establish the VPN again, and a listener Android took down listens again | `conn`: `TestAVPNRoutesTheNetworkWholeAndIsNotEstablishedAgainForAMember`; `daemon`: `TestAListenerTakenDownIsOpenedAgain` | no |
+| M10 — a ping through the tunnel | `daemon`: `TestPingAnswersWithTheRoundTrip` | no |
+| M10 — `juist invite` draws its link as a QR code, on a terminal alone | `cmd/juist`: `TestTheInviteDrawsItsLinkAsAQRCode`, `TestQRCodeOnlyOnATerminal` | no |
+| M10 — the core follows the phone's network outside its own VPN, which Android reports as the app's default once up, and a network lost after another replaced it changes nothing | `android/app`: `UnderlayTest`; the app by hand in an emulator | no |
+| M6c — an exit node asks nothing of tailscaled for a member, but the resolvers tailscaled replaced, or resolved's other links | `daemon`: `TestAnExitNodeAsksNothingOfTailscaled` | no |
+| M10 — the core's dials into the overlay leave by the VPN device, from its own address, and fail before it is established rather than leave by the LAN | `conn`: `TestAVPNDialLeavesByTheDeviceAlone` | no |
+| M10 — the epoch secrets kept beside the node's keys are sealed as they are | `daemon`: `TestKeptSecretsAreSealedAsTheNodesKeys` | no |
+| M10 — every screen in both themes, both languages and at 200 % | `make android-check`: the Roborazzi tests against `android/app/screenshots` | no |
 
 ### The last privileged run
 
@@ -288,6 +302,48 @@ whole lab passed at M9's tree in 13 minutes. What CI cannot run, Fedora with fir
 was last checked by hand, and this records the latest such run. Update it with
 each one, so it is clear how old the evidence is.
 
+- **2026-10-05, at M10, an exit node asking nothing of tailscaled.**
+  `make ci-vm CI_MAKE=interop` passed whole in 13 minutes; on edge01, whose
+  resolv.conf tailscaled writes, a member's query for a ts.net name is
+  answered with its public addresses.
+- **2026-10-05, at M10, an exit node whose host's resolver does not ask
+  juist's.** `make ci-vm CI_MAKE=interop` passed whole in 13 minutes; on
+  edge01, without resolved, a member's query for docs.juist.nning.io is
+  answered again.
+- **2026-10-05, the app after review.** In an Android 16 emulator the VPN
+  turned off and on three times within seconds ends on, the core's log sync
+  leaves from the device's overlay address and carries a rename made on the
+  partner, and the kept epoch secrets are sealed on the phone. `make
+  check`, `make android-check` and `make -C website check` passed.
+- **2026-10-05, at M10, an exit node without resolved answering
+  members' published names.** `make ci-vm CI_MAKE=interop` passed whole in
+  13 minutes.
+- **2026-10-04, the app following the phone's network.** In an Android 16
+  emulator with an exit node chosen, the core took its own VPN for the
+  phone's network, its VPN's underlying network was that VPN, and Wi-Fi
+  going and coming told it nothing; with the change it follows the Wi-Fi,
+  pauses when it goes and rebinds when it comes, and the member it reached
+  directly reaches it directly again. `make check` and `make android-check`
+  passed; `make ci-vm` did not run, the change being the app's alone.
+- **2026-10-04, the overlay's addresses kept to the tunnel on Linux.** `make
+  ci-vm CI_MAKE=test-os-plumbing-sudo` passed the 18 privileged tests, none
+  skipped, on this change over M10; the commits it was rebased onto
+  touch no Linux router. Over M10 without the change, the new
+  `TestNetnsTheLANReachesNoOverlayAddress` failed on all four of its
+  checks, the 17 others passing.
+- **2026-10-04, at M10, M10's exit node and protected sockets.** `make
+  ci-vm` passed `make ci`, its 17 privileged tests none skipped, and `make
+  interop` whole, in 26 minutes. The run before it failed in two tests M10
+  did not touch, which pass alone under the race detector and repeated:
+  `TestARestartedMeshKeepsItsSession` writes a mesh's `startAddrs` while its
+  reconcile reads them, a race in the test; and
+  `internal/pipe`'s `TestJoinIdlesBothWaysAtOnce` got 19456 bytes.
+- **2026-10-04, at M10, M10's core and app.** `make ci-vm` passed `make
+  ci` with its 17 privileged tests, none skipped, and `make interop` whole,
+  in 25 minutes: the VPN device, the interfaces through netmon and the
+  in-process service change nothing a Linux or FreeBSD node does. The app
+  itself was tried by hand in an Android 16 emulator (the M10 rows above;
+  05-roadmap.md, M10).
 - **2026-10-04, M9 closed.** `make ci-vm` on M9's tree, Tailscale
   1.104 and Go 1.27, passed `make ci` with its 17 privileged tests, none
   skipped, and `make interop` whole, Linux and FreeBSD nodes, in 35 minutes.
@@ -740,7 +796,7 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   `JUIST_PUBLIC_TESTS=1 go test -run PublicDHT -v ./internal/rendezvous`.
 - **Upgrades.** Nothing yet tests a network whose members run different builds;
   the schema version exists so that case fails loudly rather than silently, but
-  the readiness check that would stop an admin stranding members is M13's
+  the readiness check that would stop an admin stranding members is M16's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)). Mixed builds do not
   sync at all across M4, whose gossip frames carry leases older builds reject,
   nor across M5b between two admin devices while either holds waiting

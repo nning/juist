@@ -92,7 +92,8 @@ type app struct {
 	reader      *bufio.Reader
 	reading     chan readResult
 	color       bool
-	width       int // the terminal's columns, 0 for no limit
+	width       int  // the terminal's columns, 0 for no limit
+	terminal    bool // out is a terminal that can draw block characters
 
 	// inviteAddrs lists where an invite's host can be reached, and findInvite
 	// asks the LAN who holds an invite, nil meaning mDNS; tests replace both.
@@ -135,6 +136,7 @@ func newApp(in io.Reader, out, errOut io.Writer) *app {
 	a.interactive = isTerminal(in)
 	a.color = isTerminal(out) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
 	a.width = termWidth(out)
+	a.terminal = isTerminal(out) && os.Getenv("TERM") != "dumb"
 	return a
 }
 

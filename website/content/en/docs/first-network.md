@@ -52,7 +52,7 @@ invite to "home", expires in 1h; on the new device:
 ```
 
 It prints a code, for a device on the same LAN, and a link, for a device
-anywhere. Then it waits.
+anywhere, with a QR code of the link above it, left out here. Then it waits.
 {{< /step >}}
 {{< step on="nas" as="the new device" >}}
 Join with the code, or with the link if the NAS is somewhere else:

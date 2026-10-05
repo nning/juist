@@ -103,6 +103,10 @@ entscheidest du selbst, mit `juist exit off`.
 - Eine von Hand eingerichtete Firewall auf dem Exit-Node muss UDP und TCP
   41646 auf `juist0` durchlassen, denn dort beantwortet er die DNS-Anfragen
   seiner Mitglieder ([Relays, Ports und Firewalls]({{< relref "docs/relays" >}})).
+- Läuft auf dem Exit-Node auch Tailscale, beantwortet er die DNS-Anfragen
+  seiner Mitglieder so, wie das Internet sie beantwortet. Den Resolver von
+  Tailscale fragt er nie, denn der lieferte für Namen aus dem Tailnet
+  Adressen, die seine Mitglieder nicht erreichen.
 - Unter FreeBSD arbeiten Exit-Nodes mit pf, und DNS läuft über resolvconf.
 - Wird juistd ordentlich beendet, hebt er die Blockade auf. Während eines
   Neustarts des Dienstes geht der Verkehr also kurz direkt ins Internet.

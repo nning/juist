@@ -95,6 +95,9 @@ go nowhere rather than to the LAN. Going direct is your choice, with
 - A firewall configured by hand on the exit node must let in UDP and TCP 41646
   on `juist0`, where it answers its members' DNS
   ([Relays, ports and firewalls]({{< relref "docs/relays" >}})).
+- An exit node that also runs Tailscale answers its members' DNS as the
+  internet does. It never asks Tailscale's resolver, which would answer
+  names of its tailnet with addresses its members cannot reach.
 - On FreeBSD, exit nodes work with pf, and DNS goes through resolvconf.
 - A clean stop of juistd lifts the refusal, so during a restart of the service
   traffic goes direct for a moment.

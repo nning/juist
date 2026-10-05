@@ -1,8 +1,9 @@
 # Following main on a member
 
-Builds the site whenever `website/` or `design/` changes on `main` and serves
-it on `127.0.0.1:8181`. Needs the user `juist-build`, with read access to the
-repository, as `juist-follow-main` sets it up. As root, from this directory:
+Builds the site whenever `website/`, `design/` or `android/app/screenshots/`
+changes on `main` and serves it on `127.0.0.1:8181`. Needs the user
+`juist-build`, with read access to the repository, as
+`packaging/follow-main/setup` sets it up. As root, from this directory:
 
 ```sh
 install -d -m 755 /usr/local/lib/juist-site /var/lib/juist-site

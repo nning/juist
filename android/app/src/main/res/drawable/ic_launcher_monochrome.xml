@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- From design/logo/icon-mono.svg: glyphs of IBM Plex Mono SemiBold (OFL), the tittles two linked nodes. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="18" android:translateY="18" android:scaleX="0.072" android:scaleY="0.072">
+        <group android:translateX="167.4" android:translateY="659.9" android:scaleX="0.5815" android:scaleY="0.5815">
+            <path android:pathData="M95.0,99.0L308.0,99.0L308.0,-415.0L91.0,-415.0L91.0,-516.0L436.0,-516.0L436.0,60.0Q436.0,122.0 401.0,161.0Q366.0,200.0 292.0,200.0L95.0,200.0L95.0,99.0ZM600.0,-101.0L770.0,-101.0L770.0,-415.0L600.0,-415.0L600.0,-516.0L898.0,-516.0L898.0,-101.0L1056.0,-101.0L1056.0,0.0L600.0,0.0L600.0,-101.0Z" android:fillColor="#000000"/>
+            <path android:pathData="M373,-673L932,-673" android:strokeColor="#000000" android:strokeWidth="30" android:strokeLineCap="round"/><path android:pathData="M283,-673a90,90 0 1,0 180,0a90,90 0 1,0 -180,0ZM842,-673a90,90 0 1,0 180,0a90,90 0 1,0 -180,0Z" android:fillColor="#000000"/>
+        </group>
+    </group>
+</vector>

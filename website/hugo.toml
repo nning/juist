@@ -42,3 +42,7 @@ target = "assets"
 [[module.mounts]]
 source = "../design"
 target = "assets/design"
+
+[[module.mounts]]
+source = "../android/app/screenshots"
+target = "assets/android"

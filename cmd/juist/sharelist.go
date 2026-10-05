@@ -22,16 +22,16 @@ import (
 //go:embed sharelist.html
 var shareListHTML string
 
-// shareAssets is where, under a share's token, the listing's fonts are: a
-// dot-entry, so that no shared file is in the way.
+// shareAssets is where, under a share's token, the listing's fonts and icon
+// are: a dot-entry, so that no shared file is in the way.
 const shareAssets = ".juist/"
 
 var shareListTmpl = webstyle.Page("list", shareListHTML, nil)
 
-// shareListCSP lets the listing style itself and load its fonts, and nothing
-// else; it is no sandbox, which would keep a browser from downloading what it
-// links to.
-const shareListCSP = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+// shareListCSP lets the listing style itself and load its fonts and icon, and
+// nothing else; it is no sandbox, which would keep a browser from downloading
+// what it links to.
+const shareListCSP = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 type shareCrumb struct{ Name, Href string }
 

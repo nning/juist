@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -67,6 +69,7 @@ func TestAFailedAcceptDoesNotStopTheListener(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := newMultiListener([]net.Listener{&flakyListener{Listener: inner}})
+	m.start()
 	defer m.Close()
 	if _, err := m.Accept(); !errors.Is(err, syscall.EMFILE) {
 		t.Fatalf("the first accept returned %v, want the listener's error", err)
@@ -93,3 +96,79 @@ func TestAFailedAcceptDoesNotStopTheListener(t *testing.T) {
 		t.Fatal("the listener stopped accepting after one error")
 	}
 }
+
+// A listener the system took down, as Android does a VPN device's when it
+// replaces the device, fails every accept with EINVAL; it is opened again.
+func TestAListenerTakenDownIsOpenedAgain(t *testing.T) {
+	dead := &deadListener{addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}}
+	var again net.Listener
+	m := newMultiListener([]net.Listener{dead})
+	m.reopen = func(int) (net.Listener, error) {
+		var err error
+		again, err = net.Listen("tcp", "127.0.0.1:0")
+		return again, err
+	}
+	m.start()
+	defer m.Close()
+	got := make(chan error, 1)
+	go func() {
+		for {
+			c, err := m.Accept()
+			if errors.Is(err, net.ErrClosed) {
+				got <- err
+				return
+			}
+			if err == nil {
+				c.Close()
+				got <- nil
+				return
+			}
+		}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		ln := m.lns[0]
+		m.mu.Unlock()
+		if ln != dead {
+			c, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the listener taken down was not opened again")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing accepted on the listener opened again")
+	}
+	if !dead.closed.Load() {
+		t.Error("the listener taken down was left open")
+	}
+}
+
+// A deadListener fails every accept as a socket Android destroyed does.
+type deadListener struct {
+	addr   net.Addr
+	closed atomic.Bool
+}
+
+func (d *deadListener) Accept() (net.Conn, error) {
+	if d.closed.Load() {
+		return nil, net.ErrClosed
+	}
+	time.Sleep(time.Millisecond)
+	return nil, &net.OpError{Op: "accept", Net: "tcp", Err: os.NewSyscallError("accept4", syscall.EINVAL)}
+}
+
+func (d *deadListener) Close() error   { d.closed.Store(true); return nil }
+func (d *deadListener) Addr() net.Addr { return d.addr }

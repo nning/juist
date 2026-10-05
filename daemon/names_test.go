@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/dnsfwd"
 	"github.com/nning/juist/internal/resolved"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
@@ -387,11 +388,12 @@ func TestAnExitNodeHandsNoOverrideOn(t *testing.T) {
 	was := UplinkResolvConf
 	UplinkResolvConf = uplink
 	t.Cleanup(func() { UplinkResolvConf = was })
+	host := hostResolvConf(t, "nameserver 10.0.2.9\n")
 	f, _, _ := namesFixture(t, true)
 	up := netip.MustParseAddrPort("10.0.2.3:53")
 	for name, want := range map[string][]netip.AddrPort{
 		"mx.example.net.": {up}, "MX.Example.net.": {up}, "a.mx.example.net.": {up},
-		"example.net.": nil, "www.example.net.": nil, "n1.m2-testnet.juist.": nil,
+		"example.net.": host, "www.example.net.": host, "n1.m2-testnet.juist.": host,
 	} {
 		if got := f.d.membersUpstreamFor(nameQuery(t, name)); !slices.Equal(got, want) || (want != nil) != (got != nil) {
 			t.Errorf("%s is asked of %v, want %v", name, got, want)
@@ -400,6 +402,83 @@ func TestAnExitNodeHandsNoOverrideOn(t *testing.T) {
 	os.Remove(uplink)
 	if got := f.d.membersUpstreamFor(nameQuery(t, "mx.example.net.")); got == nil || len(got) != 0 {
 		t.Errorf("without the host's resolvers, an overridden name is asked of %v, want none", got)
+	}
+}
+
+// hostResolvConf has the host's resolv.conf say text, for the test, and is
+// the resolvers it names.
+func hostResolvConf(t *testing.T, text string) []netip.AddrPort {
+	path := filepath.Join(t.TempDir(), "resolv.conf")
+	os.WriteFile(path, []byte(text), 0o644)
+	was := dnsfwd.ResolvConf
+	dnsfwd.ResolvConf = path
+	t.Cleanup(func() { dnsfwd.ResolvConf = was })
+	return dnsfwd.HostResolvers()
+}
+
+// Where the host's resolver does not ask juist's, as without resolved, an
+// exit node asks a member's overridden name of the host's resolvers, which
+// know no override, rather than of none: whether juist's resolver did not
+// start, or started and resolved could not be told of it.
+func TestAnExitNodeWithoutNamesAsksTheHostsResolvers(t *testing.T) {
+	was := UplinkResolvConf
+	UplinkResolvConf = filepath.Join(t.TempDir(), "absent")
+	t.Cleanup(func() { UplinkResolvConf = was })
+	want := hostResolvConf(t, "nameserver 10.0.2.9\n")
+	for name, tc := range map[string]struct {
+		names error
+		host  error
+	}{
+		"no resolver of juist's": {names: errors.New("no address")},
+		"no resolved":            {host: resolved.ErrNotRunning},
+	} {
+		t.Run(name, func(t *testing.T) {
+			served := &fakeNames{err: tc.names}
+			host := &domainsHostDNS{fakeHostDNS{err: tc.host}}
+			f := exitFixtureWith(t, func(nw *network) { nw.devices[1].record.Names = []string{"mx.example.net"} },
+				func(o *Options) { o.HostDNS, o.ServeNames, o.AcceptNames = host, served.start, true })
+			if err := f.d.Reconcile(); err != nil {
+				t.Fatal(err)
+			}
+			if z := f.d.zone.Load(); z == nil || !z.Overridden(nameQuery(t, "mx.example.net.")) {
+				t.Fatal("the zone overrides no mx.example.net")
+			}
+			if got := f.d.membersUpstreamFor(nameQuery(t, "mx.example.net.")); !slices.Equal(got, want) {
+				t.Errorf("an overridden name is asked of %v, want the host's %v", got, want)
+			}
+		})
+	}
+}
+
+// An exit node asks nothing of tailscaled for a member, whose answer would
+// come from the host's tailnet, out of the member's reach: where tailscaled
+// wrote resolv.conf, the resolvers it replaced are asked; where resolved
+// routes the tailnet's domain to tailscaled, its other links are.
+func TestAnExitNodeAsksNothingOfTailscaled(t *testing.T) {
+	ap := netip.MustParseAddrPort
+	q := nameQuery(t, "devvm.example-tail.ts.net.")
+
+	pre := filepath.Join(t.TempDir(), "resolv.pre-tailscale-backup.conf")
+	os.WriteFile(pre, []byte("nameserver 185.12.64.1\nnameserver 185.12.64.2\n"), 0o644)
+	was := PreTailscaleResolvConf
+	PreTailscaleResolvConf = pre
+	t.Cleanup(func() { PreTailscaleResolvConf = was })
+	hostResolvConf(t, "nameserver 100.100.100.100\nnameserver fd7a:115c:a1e0::53\nsearch example-tail.ts.net\n")
+	f := exitFixtureWith(t, func(*network) {}, func(o *Options) { o.HostDNS = &fakeHostDNS{err: resolved.ErrNotRunning} })
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.d.membersUpstreamFor(q), []netip.AddrPort{ap("185.12.64.1:53"), ap("185.12.64.2:53")}; !slices.Equal(got, want) {
+		t.Errorf("without resolved, a member's tailnet name is asked of %v, want %v", got, want)
+	}
+
+	hostResolvConf(t, "nameserver 127.0.0.53\n")
+	f.d.hostRouting.Store(&resolved.Routing{Scopes: []resolved.Scope{
+		{Ifindex: 2, Servers: []netip.AddrPort{ap("10.0.2.3:53")}, DefaultRoute: true},
+		{Ifindex: 7, Servers: []netip.AddrPort{ap("100.100.100.100:53")}, Domains: []string{"example-tail.ts.net"}, DefaultRoute: true},
+	}})
+	if got, want := f.d.membersUpstreamFor(q), []netip.AddrPort{ap("10.0.2.3:53")}; !slices.Equal(got, want) {
+		t.Errorf("through resolved, a member's tailnet name is asked of %v, want %v", got, want)
 	}
 }
 

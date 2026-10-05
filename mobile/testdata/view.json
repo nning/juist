@@ -1,0 +1,71 @@
+{
+  "state": "connected",
+  "network": "home",
+  "self": {
+    "identity": "nid:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "name": "phone",
+    "v4": "10.0.0.5",
+    "v6": "fd00::5",
+    "reach": "self"
+  },
+  "members": [
+    {
+      "identity": "nid:AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "name": "anna",
+      "roles": [
+        "admin"
+      ],
+      "reach": "direct"
+    },
+    {
+      "identity": "nid:AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "name": "bert",
+      "reach": "relay"
+    },
+    {
+      "identity": "nid:BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "name": "cleo",
+      "reach": "sought",
+      "since": 140
+    },
+    {
+      "identity": "nid:BQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "name": "dora",
+      "reach": "silent"
+    }
+  ],
+  "fresh": {
+    "state": "fresh",
+    "since": 100,
+    "until": 200,
+    "vouching": 1,
+    "vouchers": 1
+  },
+  "tunnels": {
+    "live": 2,
+    "total": 3,
+    "checked": 150
+  },
+  "alarms": [
+    {
+      "kind": "epoch",
+      "severity": "warn",
+      "text": "no wrap for this device"
+    },
+    {
+      "kind": "silent",
+      "severity": "info",
+      "names": [
+        "dora"
+      ],
+      "count": 1
+    },
+    {
+      "kind": "seeking",
+      "severity": "info",
+      "names": [
+        "cleo"
+      ]
+    }
+  ]
+}

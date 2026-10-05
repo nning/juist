@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
@@ -17,7 +18,8 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// saveKeyring writes the epoch secrets held, owner-only. A failure costs the
+// saveKeyring writes the epoch secrets held, owner-only and sealed as the
+// node's keys are. A failure costs the
 // secrets across a rotation, which is logged, not fatal.
 func (d *Daemon) saveKeyring() {
 	if d.keyringPath == "" {
@@ -47,7 +49,12 @@ func (d *Daemon) saveKeyring() {
 		s := all[e]
 		fmt.Fprintf(&b, "%d %s\n", e, hex.EncodeToString(s[:]))
 	}
-	if err := statedir.WriteFilePrivate(d.keyringPath, []byte(b.String())); err != nil {
+	text, err := keys.SealText(b.String())
+	if err != nil {
+		d.logf("daemon: keeping the epoch secrets: %v", err)
+		return
+	}
+	if err := statedir.WriteFilePrivate(d.keyringPath, []byte(text)); err != nil {
 		d.logf("daemon: keeping the epoch secrets: %v", err)
 	}
 }
@@ -64,7 +71,12 @@ func (d *Daemon) loadKeyring() map[uint64]secrets.Secret {
 	if err != nil {
 		return out
 	}
-	for line := range strings.Lines(string(b)) {
+	text, err := keys.OpenText(d.keyringPath, string(b))
+	if err != nil {
+		d.logf("daemon: reading the kept epoch secrets: %v", err)
+		return out
+	}
+	for line := range strings.Lines(text) {
 		epochText, secretText, ok := strings.Cut(strings.TrimSpace(line), " ")
 		if !ok || strings.HasPrefix(epochText, "#") {
 			continue

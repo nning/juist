@@ -1,6 +1,7 @@
 #!/bin/sh
-# Builds the website of nning/juist's main into ~/site-out when website/ or
-# design/ changed since the last build. Runs as juist-build.
+# Builds the website of nning/juist's main into ~/site-out when website/,
+# design/ or the app's screenshots changed since the last build. Runs as
+# juist-build.
 set -eu
 export GOTOOLCHAIN=go1.26.8
 # /tmp may be a small tmpfs; compiling Hugo needs more.
@@ -14,7 +15,7 @@ new=$(git rev-parse FETCH_HEAD)
 built=$(cat "$HOME/site-built" 2>/dev/null || true)
 [ "$new" != "$built" ] || exit 0
 if [ -n "$built" ] && git cat-file -e "$built^{commit}" 2>/dev/null &&
-	git diff --quiet "$built" "$new" -- website design; then
+	git diff --quiet "$built" "$new" -- website design android/app/screenshots; then
 	echo "$new" > "$HOME/site-built"
 	exit 0
 fi

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"net/netip"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/internal/statedir"
 
 	"github.com/nning/juist/conn"
@@ -846,6 +848,46 @@ func TestKeptSecretsOutliveARotationOfTheKeys(t *testing.T) {
 	}
 	if got := restart().keyring.Epochs(); len(got) >= len(held) {
 		t.Fatalf("a forged keyring file was taken back: %v", got)
+	}
+}
+
+// xorSealer seals by XOR, enough to tell a sealed file from a plain one.
+type xorSealer struct{}
+
+func (xorSealer) Seal(plain []byte) ([]byte, error)  { return xorBytes(plain), nil }
+func (xorSealer) Open(sealed []byte) ([]byte, error) { return xorBytes(sealed), nil }
+
+func xorBytes(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i := range b {
+		out[i] = b[i] ^ 0x5a
+	}
+	return out
+}
+
+// Where the node's keys are sealed, the epoch secrets kept beside them are
+// too, and are read back.
+func TestKeptSecretsAreSealedAsTheNodesKeys(t *testing.T) {
+	keys.SealWith(xorSealer{})
+	t.Cleanup(func() { keys.SealWith(nil) })
+	f := newReconcileFixture(t, 2)
+	f.d.keyringPath = filepath.Join(t.TempDir(), statedir.KeyringFile)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	epochs, held := f.d.keyring.Held()
+	if len(held) == 0 {
+		t.Fatal("the keyring holds nothing")
+	}
+	b, err := os.ReadFile(f.d.keyringPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), keys.SealedTag) || strings.Contains(string(b), hex.EncodeToString(held[0][:])) {
+		t.Fatalf("the kept secrets are not sealed:\n%s", b)
+	}
+	if got := f.d.loadKeyring(); got[epochs[0]] != held[0] {
+		t.Errorf("the sealed secrets read back as %v", got)
 	}
 }
 

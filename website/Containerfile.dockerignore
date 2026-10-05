@@ -1,6 +1,7 @@
 *
 !design
 !website
+!android/app/screenshots
 website/resources
 website/public
 website/.hugo_build.lock

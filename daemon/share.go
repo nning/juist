@@ -16,8 +16,8 @@ import (
 // holds it open: where its connections go, and its end, zero for none but
 // the call's.
 type share struct {
-	to  string
-	end time.Time
+	to, what, path string
+	end            time.Time
 	// stopped is closed once [Daemon.StopShare] ends the share.
 	stopped chan struct{}
 }
@@ -43,9 +43,9 @@ var (
 )
 
 // StartShare publishes this device under its own name, its connections
-// going to to, until end where not zero, and returns the name and the share,
-// which [Daemon.EndShare] ends.
-func (d *Daemon) StartShare(to string, end time.Time) (string, *share, error) {
+// going where req says, until end where not zero, and returns the name and
+// the share, which [Daemon.EndShare] ends.
+func (d *Daemon) StartShare(req *ipc.ShareRequest, end time.Time) (string, *share, error) {
 	d.authMu.Lock()
 	state, err := d.authority.TrustedState()
 	d.authMu.Unlock()
@@ -61,7 +61,7 @@ func (d *Daemon) StartShare(to string, end time.Time) (string, *share, error) {
 	if d.pub.share != nil {
 		return "", nil, ErrSharing
 	}
-	sh := &share{to: to, end: end, stopped: make(chan struct{})}
+	sh := &share{to: req.To, what: req.What, path: req.Path, end: end, stopped: make(chan struct{})}
 	d.pub.share = sh
 	d.flagTerminatorLocked()
 	d.MarkDirty()
@@ -208,7 +208,7 @@ func (d *Daemon) shareStatus(state *log.State, fresh bool, now time.Time) *ipc.S
 	if sh == nil {
 		return nil
 	}
-	st := &ipc.Share{To: sh.to}
+	st := &ipc.Share{To: sh.to, What: sh.what, Path: sh.path}
 	if !sh.end.IsZero() {
 		st.Until = sh.end.Unix()
 	}
@@ -256,7 +256,7 @@ func (s *Service) share(ctx context.Context, req *ipc.ShareRequest, events func(
 	if m == nil {
 		return errNoNetwork
 	}
-	name, sh, err := m.StartShare(req.To, end)
+	name, sh, err := m.StartShare(req, end)
 	if err != nil {
 		return err
 	}
@@ -292,7 +292,7 @@ func (s *Service) share(ctx context.Context, req *ipc.ShareRequest, events func(
 			case now != m:
 				// Taken up first: a share another call made meanwhile is
 				// not this one's to end.
-				again, nsh, err := now.StartShare(req.To, end)
+				again, nsh, err := now.StartShare(req, end)
 				if err != nil {
 					return err
 				}

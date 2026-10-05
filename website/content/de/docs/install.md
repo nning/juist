@@ -9,7 +9,9 @@ lead: juist installierst du als Paket deines Systems, und zwar auf jedem Gerät,
 
 juist läuft unter Linux und FreeBSD. Auf Debian und Ubuntu ist es ein `.deb`,
 auf Fedora ein RPM und auf FreeBSD ein pkg-Paket. Fertige Pakete gibt es
-nicht. Du baust das Paket aus dem Quellcode und installierst es dann.
+nicht. Du baust das Paket aus dem Quellcode und installierst es dann. Ein
+Telefon tritt stattdessen mit der App bei, siehe
+[Android]({{< relref "docs/android" >}}).
 
 Zum Bauen brauchst du Go 1.27. `make` lädt dann selbst go1.27.1 herunter und
 verwendet es, damit ein Commit auf jedem Rechner exakt dasselbe Ergebnis

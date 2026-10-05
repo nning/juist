@@ -696,18 +696,25 @@ func u32(v uint32) []byte {
 
 // addrIn is "saddr in p", or "daddr in p" where dst.
 func addrIn(p netip.Prefix, src bool) []expr.Any {
+	field := addrField(p.Addr().Is6(), src)
+	return []expr.Any{
+		field,
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: field.Len, Mask: netipx.PrefixIPNet(p).Mask, Xor: make([]byte, field.Len)},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: p.Masked().Addr().AsSlice()},
+	}
+}
+
+// addrField loads a packet's source address, or its destination, into
+// register 1.
+func addrField(v6, src bool) *expr.Payload {
 	off, n := uint32(16), uint32(4)
-	if p.Addr().Is6() {
+	if v6 {
 		off, n = 24, 16
 	}
 	if src {
 		off -= n
 	}
-	return []expr.Any{
-		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: off, Len: n},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: n, Mask: netipx.PrefixIPNet(p).Mask, Xor: make([]byte, n)},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: p.Masked().Addr().AsSlice()},
-	}
+	return &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: off, Len: n}
 }
 
 func (r *linuxRouter) setServe(s Serve) error {

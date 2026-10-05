@@ -407,8 +407,11 @@ func tcpMessage(msg []byte) []byte {
 // HostResolvers is the resolvers the host asks, as /etc/resolv.conf names
 // them, resolved's stub among them, which then applies the host's own DNS
 // routing, DNS-over-TLS and DNSSEC. Port 53 throughout.
-func HostResolvers() []netip.AddrPort {
-	servers := nameservers(ResolvConf)
+func HostResolvers() []netip.AddrPort { return ResolversIn(ResolvConf) }
+
+// ResolversIn is the resolvers the resolv.conf at path names, port 53.
+func ResolversIn(path string) []netip.AddrPort {
+	servers := nameservers(path)
 	out := make([]netip.AddrPort, len(servers))
 	for i, s := range servers {
 		out[i] = netip.AddrPortFrom(s, 53)

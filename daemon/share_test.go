@@ -27,11 +27,11 @@ func TestADeviceSharesUnderItsName(t *testing.T) {
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	name, sh, err := f.d.StartShare("127.0.0.1:8000", time.Time{})
+	name, sh, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{})
 	if err != nil || name != "n0.pub.example.org" {
 		t.Fatalf("sharing as %q: %v", name, err)
 	}
-	if _, _, err := f.d.StartShare("127.0.0.1:8001", time.Time{}); !errors.Is(err, ErrSharing) {
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8001"}, time.Time{}); !errors.Is(err, ErrSharing) {
 		t.Errorf("a second share: %v", err)
 	}
 	now := f.d.now()
@@ -67,7 +67,7 @@ func TestADeviceSharesUnderItsName(t *testing.T) {
 	}
 
 	end := now.Add(time.Minute)
-	_, sh, err = f.d.StartShare("127.0.0.1:8000", end)
+	_, sh, err = f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestADeviceSharesUnderItsName(t *testing.T) {
 	f.d.EndShare(sh)
 
 	g := exitFixtureWith(t, func(nw *network) { nw.domain = "pub.example.org" }, nil)
-	if _, _, err := g.d.StartShare("127.0.0.1:8000", time.Time{}); !errors.Is(err, ErrNoPublishRole) {
+	if _, _, err := g.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); !errors.Is(err, ErrNoPublishRole) {
 		t.Errorf("sharing without the role: %v", err)
 	}
 }
@@ -212,7 +212,7 @@ func TestAShareIsAnnouncedWhileItCanBeServed(t *testing.T) {
 		nw.domain = "pub.example.org"
 		nw.devices[0].record.Roles = []types.Role{types.RolePublish}
 	}, nil)
-	if _, _, err := f.d.StartShare("127.0.0.1:8000", time.Time{}); err != nil {
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if st := f.d.shareStatus(f.auth.State(), true, f.d.now()); st == nil || st.NotShared != "the terminator does not run" {
@@ -237,7 +237,7 @@ func TestAShareIsAnnouncedWhileItCanBeServed(t *testing.T) {
 		nw.devices[0].record.Roles = []types.Role{types.RolePublish}
 		nw.devices[2].record.Roles = []types.Role{types.RoleAdmin} // a voucher who vouched nothing
 	}, nil)
-	if _, _, err := g.d.StartShare("127.0.0.1:8000", time.Time{}); err != nil {
+	if _, _, err := g.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if e, _ := g.d.announce(0); e.Share != nil {
@@ -253,7 +253,7 @@ func TestAShareIsRenewedAsItsEndMoves(t *testing.T) {
 		nw.domain = "pub.example.org"
 		nw.devices[0].record.Roles = []types.Role{types.RolePublish}
 	}, func(o *Options) { o.Clock = c.get })
-	if _, _, err := f.d.StartShare("127.0.0.1:8000", time.Time{}); err != nil {
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	var last int64
@@ -422,12 +422,12 @@ func TestAShareEndsItselfAlone(t *testing.T) {
 		nw.domain = "pub.example.org"
 		nw.devices[0].record.Roles = []types.Role{types.RolePublish}
 	}, nil)
-	_, first, err := f.d.StartShare("127.0.0.1:8000", time.Time{})
+	_, first, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.d.EndShare(first)
-	if _, _, err := f.d.StartShare("127.0.0.1:8001", time.Time{}); err != nil {
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8001"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	f.d.EndShare(first)
@@ -462,7 +462,7 @@ func TestARestartedShareLeavesAnothers(t *testing.T) {
 	f.s.mu.Lock()
 	f.s.restartMeshLocked(nil, "a test")
 	f.s.mu.Unlock()
-	if _, _, err := f.s.Mesh().StartShare("127.0.0.1:9000", time.Time{}); err != nil {
+	if _, _, err := f.s.Mesh().StartShare(&ipc.ShareRequest{To: "127.0.0.1:9000"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -498,7 +498,7 @@ func TestPublishedHasNoSideEffectsAndExpiryEndsServing(t *testing.T) {
 		nw.devices[0].record.Roles = []types.Role{types.RolePublish}
 		nw.devices[0].record.Expiry = uint64(time.Now().Add(-time.Hour).Unix())
 	}, nil)
-	if _, _, err := g.d.StartShare("127.0.0.1:8000", time.Time{}); err != nil {
+	if _, _, err := g.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := g.d.Serving(nil); len(got.Names) != 0 {
@@ -531,7 +531,7 @@ func TestJuistdSaysWhenTheTerminatorIsNeeded(t *testing.T) {
 		}
 	}
 	needed(false)
-	_, sh, err := f.d.StartShare("127.0.0.1:8000", time.Time{})
+	_, sh, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +542,7 @@ func TestJuistdSaysWhenTheTerminatorIsNeeded(t *testing.T) {
 	needed(true)
 	f.d.SetPublishConsent(true, nil)
 	needed(false)
-	if _, _, err := f.d.StartShare("127.0.0.1:8000", time.Time{}); err != nil {
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.StopShare(); err != nil {

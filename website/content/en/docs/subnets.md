@@ -83,6 +83,8 @@ printer directly and not through the NAS. `juist subnet` then says
 - Subnet routers run on Linux, and on FreeBSD with pf.
 - Docker drops routed traffic to its containers. `juist subnet serve` warns
   when a subnet holds a Docker network.
+- Hosts in the subnet reach the members, but not the router's own juist
+  address: on Linux it answers only through the tunnel.
 
 ## If something goes wrong
 

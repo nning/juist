@@ -9,7 +9,8 @@ lead: juist is installed as a package of your system, on every device that will 
 
 juist runs on Linux and FreeBSD. On Debian and Ubuntu it is a `.deb`, on
 Fedora an RPM, and on FreeBSD a pkg package. There are no released packages,
-so you build the package from the source and then install it.
+so you build the package from the source and then install it. A phone joins
+with the app instead, see [Android]({{< relref "docs/android" >}}).
 
 You need Go 1.27 to build it. `make` then fetches and uses go1.27.1 itself, so
 that a commit builds to the same bytes on any machine.

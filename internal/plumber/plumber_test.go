@@ -95,10 +95,12 @@ func (h *fakeHost) took() []string {
 // other, which returns into done.
 func pair(t *testing.T, h Host) (*Client, chan error) {
 	t.Helper()
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	unix.CloseOnExec(fds[0])
+	unix.CloseOnExec(fds[1])
 	c, err := NewClient(os.NewFile(uintptr(fds[0]), "daemon"))
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,10 @@
+[Unit]
+Description=Build juist from main when it changed
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+RandomizedDelaySec=10s
+
+[Install]
+WantedBy=timers.target

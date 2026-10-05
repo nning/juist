@@ -74,7 +74,8 @@ needs the publish role.`}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: time.Minute}
 	go srv.Serve(ln)
 	defer srv.Close()
-	return a.shareLocal(ln.Addr().String(), time.Duration(dur), *bg, func(name string) string {
+	req := ipc.ShareRequest{To: ln.Addr().String(), What: path, Path: under}
+	return a.shareLocal(req, time.Duration(dur), *bg, func(name string) string {
 		return fmt.Sprintf("sharing %s at https://%s%s", pos[0], name, under)
 	})
 }
@@ -115,7 +116,7 @@ until Ctrl-C or for --for; with --background, until juist share --stop or
 		to = net.JoinHostPort("127.0.0.1", pos[0])
 		a.warn("nothing answers on %s yet", to)
 	}
-	return a.shareLocal(to, time.Duration(dur), *bg, func(name string) string {
+	return a.shareLocal(ipc.ShareRequest{To: to}, time.Duration(dur), *bg, func(name string) string {
 		return fmt.Sprintf("publishing %s at https://%s", to, name)
 	})
 }
@@ -140,10 +141,10 @@ func publishesPort(a *app, args []string) bool {
 	return len(words) > 0 && strings.Trim(words[0], "0123456789") == "" && !a.namesNetwork(words[0])
 }
 
-// shareLocal publishes this device under its own name, sending its
-// connections to to, for dur, zero for until Ctrl-C, or in the background;
-// saying says what is shared where.
-func (a *app) shareLocal(to string, dur time.Duration, background bool, saying func(name string) string) error {
+// shareLocal publishes this device under its own name, as req says, for dur,
+// zero for until Ctrl-C, or in the background; saying says what is shared
+// where.
+func (a *app) shareLocal(req ipc.ShareRequest, dur time.Duration, background bool, saying func(name string) string) error {
 	st, err := a.daemonStatus()
 	if err != nil {
 		return err
@@ -164,7 +165,6 @@ func (a *app) shareLocal(to string, dur time.Duration, background bool, saying f
 	if err != nil {
 		return err
 	}
-	req := ipc.ShareRequest{To: to}
 	var until time.Time
 	if dur > 0 {
 		until = time.Now().Add(dur)
@@ -363,7 +363,7 @@ func shareHandler(shared string, info os.FileInfo, token string) (http.Handler, 
 		case !under || !strings.HasPrefix(r.URL.Path, prefix) || clean != r.URL.Path && clean+"/" != r.URL.Path:
 			http.NotFound(w, r)
 		case file == "" && strings.HasPrefix(rel, shareAssets):
-			webstyle.ServeFont(w, r, strings.TrimPrefix(rel, shareAssets))
+			webstyle.ServeAsset(w, r, strings.TrimPrefix(rel, shareAssets))
 		case file != "":
 			if rel != file {
 				http.NotFound(w, r)
@@ -446,6 +446,12 @@ func shareSummary(sh *ipc.Share, paint func(code, s string) string) string {
 		end = "until " + time.Unix(sh.Until, 0).Format("Jan 2 15:04")
 	}
 	line := fmt.Sprintf("%s to %s, %s", cmp.Or(sh.Name, "this device's name"), sh.To, end)
+	switch {
+	case sh.What != "" && sh.Name != "":
+		line = fmt.Sprintf("%s at https://%s%s, %s", sh.What, sh.Name, sh.Path, end)
+	case sh.What != "":
+		line = fmt.Sprintf("%s, %s", sh.What, end)
+	}
 	if sh.NotShared != "" {
 		return paint("33", line+", reached by nobody: "+sh.NotShared)
 	}

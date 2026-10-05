@@ -118,6 +118,10 @@ func WriteSecret(path string, lines []string) error {
 		return fmt.Errorf("inspecting %s: %w", path, err)
 	}
 
+	lines, err := sealLines(lines)
+	if err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(dir, ".tmp-key-*")
 	if err != nil {
 		return fmt.Errorf("creating a temporary key file in %s: %w", dir, err)
@@ -178,8 +182,12 @@ func ReadTagged(path string) (map[string][][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	text, err := unseal(path, string(b))
+	if err != nil {
+		return nil, err
+	}
 	out := map[string][][]byte{}
-	for line := range strings.Lines(string(b)) {
+	for line := range strings.Lines(text) {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

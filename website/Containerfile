@@ -5,6 +5,7 @@ WORKDIR /src/website
 COPY website/go.mod website/go.sum ./
 RUN go mod download
 COPY design /src/design
+COPY android/app/screenshots /src/android/app/screenshots
 COPY website /src/website
 RUN go tool hugo --gc -d /out/site \
  && CGO_ENABLED=0 go build -trimpath -ldflags=-s -o /out/server ./server

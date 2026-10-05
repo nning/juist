@@ -56,7 +56,9 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
   Schlüssel betrifft also nur ein Netz.
 - Die Schlüssel des Geräts selbst verwahrt juistd. Unter Linux legt das Paket
   sie in `/var/lib/juist` ab. juistd läuft unter einem eigenen Benutzer und
-  hat nur `CAP_NET_ADMIN`. Der Befehl `juist` signiert nur, was er aus seinem
+  hat nur `CAP_NET_ADMIN`. Auf einem Telefon versiegelt die
+  [Android-App]({{< relref "docs/android" >}}) sie mit einem Schlüssel, den
+  der Android-Keystore hält. Der Befehl `juist` signiert nur, was er aus seinem
   eigenen geprüften Log nachvollzogen hat, ganz gleich, worum juistd ihn
   bittet.
 - Die Break-glass-Geheimnisse, die `juist create` schreibt, liest kein
@@ -125,9 +127,12 @@ nicht auf juist verlassen.
 ## Gut zu wissen
 
 - Ein Sicherheitsaudit gab es für juist bisher nicht.
-- Unter Linux ist ein Dienst, der nur auf der juist-Adresse eines Geräts
-  lauscht, trotzdem aus dem LAN dieses Geräts erreichbar. Dienste sollten
-  deshalb selbst prüfen, wer sich verbindet.
+- Unter Linux verwirft juist, was die juist-Adressen eines Geräts nicht durch
+  den Tunnel erreicht, und was vorgibt, von einem Mitglied zu kommen, aber aus
+  dem LAN eintrifft. Ein Container auf dem Gerät erreicht dessen eigene
+  juist-Adresse deshalb nicht mehr. Unter FreeBSD ist ein Dienst, der nur auf
+  der juist-Adresse eines Geräts lauscht, weiterhin aus dem LAN dieses Geräts
+  erreichbar. Dienste sollten in jedem Fall selbst prüfen, wer sich verbindet.
 - Jede Änderung am Netz steht mit den Namen derer, die sie bestätigt haben, in
   `juist log`.
 

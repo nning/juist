@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="handbook_url">https://docs.juist.nning.io/de/docs/</string>
+
+    <!-- Welcome -->
+    <string name="welcome_title">Netz beitreten</string>
+    <string name="welcome_body">Verbindet dieses Telefon mit deinen anderen Geräten. Wer dazugehört, entscheiden nur deine Admins.</string>
+    <string name="welcome_step_invite">Ein Admin startet auf einem deiner Geräte juist invite.</string>
+    <string name="welcome_step_scan">Scanne den angezeigten QR-Code oder tippe den Code ein.</string>
+    <string name="welcome_step_words">Der Admin vergleicht vier Wörter mit diesem Telefon und nimmt es auf.</string>
+    <string name="action_scan">QR-Code scannen</string>
+    <string name="action_enter_code">Code eintippen</string>
+
+    <!-- Scan -->
+    <string name="scan_title">Einladung scannen</string>
+    <string name="scan_hint">Richte die Kamera auf den QR-Code</string>
+    <string name="scan_not_invite">Keine juist-Einladung</string>
+    <string name="scan_torch">Taschenlampe</string>
+    <string name="scan_camera_title">Kamera</string>
+    <string name="scan_camera_body">juist nutzt die Kamera nur hier, um den QR-Code zu lesen. Nichts wird gespeichert oder verschickt.</string>
+    <string name="scan_camera_denied">Der Kamerazugriff ist aus. Erlaube ihn in den Einstellungen oder tippe den Code ein.</string>
+    <string name="action_allow_camera">Kamera erlauben</string>
+    <string name="action_open_settings">Einstellungen öffnen</string>
+
+    <!-- Code -->
+    <string name="code_title">Einladung eintippen</string>
+    <string name="code_body">Eine Zahl und drei Wörter, etwa 42-drumbeat-tolerance-glucose, oder ein juist:-Link.</string>
+    <string name="code_label">Einladungscode</string>
+    <string name="code_supporting">Wörter werden beim Tippen ergänzt</string>
+    <string name="code_link">Einladungslink</string>
+    <string name="code_bad_number">Ein Code beginnt mit einer Zahl von 1 bis 999</string>
+    <string name="code_unknown_word">„%1$s“ gibt es in Einladungscodes nicht</string>
+    <string name="code_wrong_place">„%1$s“ steht an der falschen Stelle</string>
+    <string name="code_incomplete">Ein Code besteht aus einer Zahl und drei Wörtern</string>
+    <string name="code_bad_link">Kein gültiger Einladungslink. Kopiere ihn noch einmal vollständig.</string>
+    <string name="code_parts">%1$d von %2$d</string>
+    <string name="action_continue">Weiter</string>
+
+    <!-- Confirm -->
+    <string name="confirm_title">Beitreten</string>
+    <string name="confirm_link">Einladungslink</string>
+    <string name="confirm_link_about">Gescannt oder eingefügt</string>
+    <string name="confirm_link_opened">Aus einer anderen App geöffnet. Tritt nur bei, wenn du diese Einladung erwartest.</string>
+    <string name="confirm_code">Einladungscode</string>
+    <string name="confirm_name">Name dieses Telefons</string>
+    <string name="confirm_name_about">So erscheint es im Netz</string>
+    <string name="confirm_vpn_about">Android fragt gleich, ob juist ein VPN einrichten darf.</string>
+    <string name="action_join">Beitreten</string>
+    <string name="vpn_refused">Ohne VPN erreicht juist deine Geräte nicht</string>
+    <string name="vpn_not_established">Android hat juist kein VPN einrichten lassen</string>
+
+    <!-- Joining -->
+    <string name="joining_title">Beitritt</string>
+    <string name="join_looking">Suche das einladende Gerät</string>
+    <string name="join_meeting">Verbinde über das Internet</string>
+    <string name="join_connected">Mit dem einladenden Gerät verbunden</string>
+    <string name="join_connected_relay">Über ein Relay verbunden</string>
+    <string name="join_approval">Warte auf den Admin</string>
+    <plurals name="join_votes">
+        <item quantity="one">Warte auf Zustimmung: %1$d von %2$d Stimme</item>
+        <item quantity="other">Warte auf Zustimmung: %1$d von %2$d Stimmen</item>
+    </plurals>
+    <string name="join_compare_title">Beim Admin sollte stehen</string>
+    <string name="join_compare_body">Lies dem Admin diese Wörter vor. Stehen dort andere, brich ab.</string>
+    <string name="join_failed">Nicht beigetreten</string>
+    <string name="join_failed_body">Die Einladung ist abgelaufen oder schon benutzt, oder das einladende Gerät ist nicht erreichbar. Bitte um eine neue Einladung.</string>
+    <string name="join_failed_code">Ein Code funktioniert nur im selben WLAN. Sonst scanne den QR-Code oder füge den Link ein.</string>
+    <string name="done">Fertig</string>
+    <string name="action_try_again">Noch einmal</string>
+    <string name="action_cancel">Abbrechen</string>
+    <string name="action_back">Zurück</string>
+    <string name="core_off">juist ist aus</string>
+
+    <!-- Status -->
+    <string name="vpn_switch">VPN</string>
+    <string name="state_none">Kein Netz</string>
+    <string name="state_joining">Beitritt läuft</string>
+    <string name="state_starting">Startet</string>
+    <string name="state_starting_about">Die Tunnel werden aufgebaut</string>
+    <string name="state_vpn_off">Aus</string>
+    <string name="state_vpn_off_about">Schalte das VPN ein, um dein Netz zu erreichen.</string>
+    <string name="state_revoked_about">Eine andere VPN-App hat übernommen, oder das VPN wurde in den Einstellungen ausgeschaltet.</string>
+    <string name="state_failed">Nicht gestartet</string>
+    <string name="state_unstarted">Nicht verbunden</string>
+    <string name="state_unstarted_about">Die Tunnel stehen nicht. juist versucht es weiter.</string>
+    <string name="state_removed">Entfernt</string>
+    <string name="state_removed_about">Dieses Telefon wurde aus dem Netz entfernt. Vergiss das Netz, um mit einer neuen Einladung wieder beizutreten.</string>
+    <string name="state_disconnected">Getrennt</string>
+    <string name="state_disconnected_about">Die Geschichte des Netzes hat sich gespalten. Bis ein Admin das klärt, sind alle Tunnel unterbrochen.</string>
+    <string name="state_refused">Abgewiesen</string>
+    <string name="state_refused_about">Wahrscheinlich wurde dieses Telefon entfernt.</string>
+    <string name="state_limited">Eingeschränkt</string>
+    <string name="state_limited_about">Kein Voucher hat zuletzt bestätigt, dass dieses Telefon auf dem aktuellen Stand ist. Bis dahin erreicht es nur Voucher.</string>
+    <string name="state_waiting">Wartet auf Geräte</string>
+    <string name="state_waiting_about">Noch hat sich kein Gerät gemeldet.</string>
+    <string name="state_notunnel">Kein Tunnel steht</string>
+    <string name="state_notunnel_about">Deine Geräte sind bekannt, aber kein Tunnel trägt Verkehr.</string>
+    <string name="state_connected">Verbunden</string>
+    <string name="action_connect">Einschalten</string>
+    <string name="action_disconnect">Ausschalten</string>
+    <string name="action_forget">Netz vergessen</string>
+    <string name="action_start_over">Neu beginnen</string>
+    <string name="start_over_title">Neu beginnen?</string>
+    <string name="start_over_body">Löscht die Schlüssel des Telefons und alles, was es über das Netz weiß. Zum erneuten Beitritt brauchst du eine neue Einladung, und ein Admin sollte dieses Telefon entfernen.</string>
+    <string name="action_more">Mehr</string>
+
+    <string name="section_this_device">Dieses Telefon</string>
+    <plurals name="section_devices">
+        <item quantity="one">%d anderes Gerät</item>
+        <item quantity="other">%d andere Geräte</item>
+    </plurals>
+    <string name="members_reached">%1$d von %2$d erreicht</string>
+    <string name="members_none">Noch keine anderen Geräte</string>
+    <string name="members_checked">Geprüft %1$s</string>
+    <string name="label_name">Name</string>
+    <string name="label_ipv4">IPv4</string>
+    <string name="label_ipv4_retiring">IPv4 (alt)</string>
+    <string name="label_ipv6">IPv6</string>
+    <string name="label_freshness">Frische</string>
+    <string name="label_heard">Zuletzt gemeldet</string>
+    <string name="label_down_since">Unterbrochen seit</string>
+    <string name="label_identity">Identitätsschlüssel</string>
+    <string name="label_version">Version</string>
+    <string name="copied">%1$s kopiert</string>
+    <string name="action_copy_value">%1$s kopieren</string>
+
+    <string name="fresh_unenforced">Nicht geprüft: Das Netz hat keine Voucher</string>
+    <string name="fresh_unchecked">Noch nicht bestätigt</string>
+    <string name="fresh_stale">Abgelaufen: erreicht nur Voucher</string>
+    <plurals name="fresh_stale_of">
+        <item quantity="one">Abgelaufen (%1$d von %2$d Voucher): erreicht nur Voucher</item>
+        <item quantity="other">Abgelaufen (%1$d von %2$d Vouchern): erreicht nur Voucher</item>
+    </plurals>
+    <string name="fresh_vouched">Bestätigt %1$s, noch %2$s gültig</string>
+    <plurals name="fresh_vouched_by">
+        <item quantity="one">Bestätigt %2$s von %1$d Voucher, noch %3$s gültig</item>
+        <item quantity="other">Bestätigt %2$s von %1$d Vouchern, noch %3$s gültig</item>
+    </plurals>
+
+    <!-- Exit node -->
+    <string name="section_internet">Internet</string>
+    <string name="exit_direct">Direkt</string>
+    <string name="exit_through">Internet und DNS laufen über %1$s.</string>
+    <string name="exit_through_no_dns">Das Internet läuft über %1$s, das DNS nicht: %2$s</string>
+    <string name="exit_refused">Gesperrt, damit nichts direkt hinausgeht: %1$s</string>
+    <string name="exit_failed">Nicht umgeleitet: %1$s</string>
+    <string name="exit_partly">Teilweise: %1$s</string>
+    <string name="exit_always_on">Stoppt juist, geht der Verkehr direkt hinaus. Um ihn stattdessen zu sperren, schalte „Durchgehend aktives VPN“ und „Verbindungen ohne VPN blockieren“ ein.</string>
+    <string name="action_vpn_settings">VPN-Einstellungen</string>
+
+    <!-- Reach -->
+    <string name="reach_self">Dieses Telefon</string>
+    <string name="reach_direct">Direkt</string>
+    <string name="reach_relay">Über ein Relay</string>
+    <string name="reach_down">Keine Antwort</string>
+    <string name="reach_sought">Wird gesucht</string>
+    <string name="reach_absent">Offline</string>
+    <string name="reach_absent_heard">Offline, zuletzt gemeldet %1$s</string>
+    <string name="reach_silent">Noch nicht gemeldet</string>
+    <string name="reach_unchecked">Noch nicht geprüft</string>
+    <string name="reach_unconnected">Nicht verbunden</string>
+    <string name="reach_unknown">Unbekannt</string>
+    <string name="reach_off">Aus</string>
+    <string name="reach_relay_about">Der Verkehr läuft über ein Relay, eines deiner Geräte, und bleibt durchgehend verschlüsselt.</string>
+    <string name="reach_down_about">Das Gerät ist offline, oder eine Firewall blockiert den Tunnel.</string>
+    <string name="reach_sought_about">Das Gerät wurde vielleicht neu gestartet oder hat das Netz gewechselt. juist sucht es.</string>
+    <string name="reach_absent_about">Wahrscheinlich offline.</string>
+    <string name="reach_silent_about">Das Gerät hat noch nicht mitgeteilt, wie es erreichbar ist.</string>
+    <string name="reach_unconnected_about">Gemeldet, aber ohne Tunnel. Der Stand dieses Telefons ist vielleicht veraltet.</string>
+
+    <string name="role_voucher">Voucher</string>
+    <string name="role_relay">Relay</string>
+    <string name="role_exit">Exit-Node</string>
+    <string name="role_ingress">Ingress</string>
+    <string name="role_publish">veröffentlicht</string>
+    <string name="role_service">Dienst</string>
+
+    <!-- Alarms -->
+    <string name="alarm_fork">Die Geschichte des Netzes hat sich gespalten</string>
+    <string name="alarm_fork_hint">Alle Tunnel sind unterbrochen, bis ein Admin das klärt.</string>
+    <string name="alarm_schema">Das Netz nutzt ein neueres Format als diese App</string>
+    <string name="alarm_schema_hint">Bis du juist aktualisierst, gilt hier keine Änderung, auch kein Entfernen.</string>
+    <string name="alarm_stale_keys">juist läuft mit ersetzten Schlüsseln</string>
+    <string name="alarm_stale_keys_hint">Schalte das VPN aus und wieder ein.</string>
+    <string name="alarm_refused">Die Geräte des Netzes lehnen dieses Telefon ab</string>
+    <string name="alarm_refused_hint">Wahrscheinlich wurde es entfernt. Tritt mit einer neuen Einladung wieder bei.</string>
+    <string name="alarm_epoch">Das Gruppengeheimnis lässt sich nicht öffnen: keine Updates, keine Suche</string>
+    <string name="alarm_data_plane">Die Tunnel haben die aktuelle Geräteliste abgelehnt</string>
+    <string name="alarm_no_traffic">Kein Tunnelverkehr von %1$s</string>
+    <string name="alarm_no_traffic_hint">Vielleicht sind beide hinter NAT, ohne Relay dazwischen.</string>
+    <plurals name="alarm_conflicted">
+        <item quantity="one">%d Gerät meldet den Schlüssel eines anderen und wird ignoriert</item>
+        <item quantity="other">%d Geräte melden den Schlüssel eines anderen und werden ignoriert</item>
+    </plurals>
+    <string name="alarm_no_relay">Kein Gerät darf weiterleiten</string>
+    <string name="alarm_no_relay_hint">Im Mobilfunk braucht ein Telefon oft eines. Ein Admin kann die Rolle an ein Gerät mit öffentlicher Adresse vergeben.</string>
+    <string name="alarm_lost">Eine Änderung ist einer gleichzeitigen unterlegen</string>
+    <string name="alarm_unrevoked">Ein Entfernen ist einer gleichzeitigen Änderung unterlegen und gilt nicht</string>
+    <string name="alarm_unrevoked_hint">Ein Admin muss das Gerät erneut entfernen.</string>
+    <string name="alarm_silent">Noch nicht gemeldet: %1$s</string>
+    <plurals name="alarm_silent_count">
+        <item quantity="one">%d Gerät hat sich noch nicht gemeldet</item>
+        <item quantity="other">%d Geräte haben sich noch nicht gemeldet</item>
+    </plurals>
+    <string name="alarm_seeking">Keine Antwort von %1$s: offline oder blockiert</string>
+    <string name="list_and">%1$s und %2$s</string>
+
+    <!-- Member -->
+    <string name="section_addresses">Adressen</string>
+    <string name="section_reach">Erreichen</string>
+    <string name="section_identity">Identität</string>
+    <string name="ping_about">Andere Apps erreichen das Gerät unter diesen Adressen, solange das VPN an ist.</string>
+    <string name="action_ping">Ping</string>
+    <string name="action_open_web">Im Browser öffnen</string>
+    <string name="ping_ms">%1$.1f ms</string>
+    <string name="ping_failed">fehlgeschlagen: %1$s</string>
+    <string name="no_browser">Kein Browser installiert</string>
+
+    <!-- About -->
+    <string name="about_title">Über juist</string>
+    <string name="about_body">Ein Mesh-VPN, dessen Mitglieder selbst festlegen, wer dazugehört. Kein Server kann ein Gerät hinzufügen.</string>
+    <string name="section_more">Mehr</string>
+    <string name="action_handbook">Handbuch</string>
+    <string name="action_licenses">Open-Source-Lizenzen</string>
+    <string name="action_copy_log">Protokoll kopieren</string>
+    <string name="about_log">Das Protokoll liegt nur im Speicher und enthält deine Geräte und ihre Adressen. Teile es nur mit jemandem, dem du vertraust.</string>
+    <string name="log_copied">Protokoll kopiert</string>
+
+    <!-- Notification -->
+    <string name="notification_channel">Verbindung</string>
+    <plurals name="notification_reached">
+        <item quantity="one">%1$s · %2$d von %3$d Gerät erreicht</item>
+        <item quantity="other">%1$s · %2$d von %3$d Geräten erreicht</item>
+    </plurals>
+
+    <!-- Time -->
+    <string name="just_now">gerade eben</string>
+    <plurals name="minutes">
+        <item quantity="one">%d Minute</item>
+        <item quantity="other">%d Minuten</item>
+    </plurals>
+    <plurals name="hours">
+        <item quantity="one">%d Stunde</item>
+        <item quantity="other">%d Stunden</item>
+    </plurals>
+    <plurals name="days">
+        <item quantity="one">%d Tag</item>
+        <item quantity="other">%d Tage</item>
+    </plurals>
+</resources>

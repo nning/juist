@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/netip"
 	"os"
@@ -987,5 +988,67 @@ func TestAMovedDeviceRestartsOnItsNewAddressAtOnce(t *testing.T) {
 			t.Fatal("the moved device did not start on its new address before its next look")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestAServiceInProcessAnswersThroughItsPipeAlone(t *testing.T) {
+	nw := newNetwork(t, 2)
+	home := socketDir(t)
+	writeDevice(t, home, nw.devices[0])
+	s, err := NewService(ServiceOptions{Home: home, InProcess: true, Logf: safeLogf(t, ""),
+		Mesh: Options{DisableDiscovery: true, DisableDHT: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); s.Close() })
+	if _, err := os.Lstat(ipc.SocketPath(home)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a service in process made %s: %v", ipc.SocketPath(home), err)
+	}
+	resp, err := ipc.CallVia(s.Pipe, ipc.Request{Command: ipc.CmdStatus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Status.CanOperate || resp.Status.Self != nw.devices[0].record.Identity {
+		t.Errorf("status through the pipe: CanOperate=%v Self=%v", resp.Status.CanOperate, resp.Status.Self)
+	}
+	if _, err := ipc.CallVia(s.Pipe, ipc.Request{Command: ipc.CmdPing, Ping: nw.devices[1].record.Identity}); err == nil ||
+		err.Error() != errNoNetwork.Error() {
+		t.Errorf("a ping outside any network: %v", err)
+	}
+	s.Close()
+	if _, err := s.Pipe(); err == nil {
+		t.Error("a closed service still opened a pipe")
+	}
+}
+
+func TestCallsInProcessAreNotHeldToOneUsersShare(t *testing.T) {
+	nw := newNetwork(t, 2)
+	home := socketDir(t)
+	writeDevice(t, home, nw.devices[0])
+	s, err := NewService(ServiceOptions{Home: home, InProcess: true, Logf: safeLogf(t, ""),
+		Mesh: Options{DisableDiscovery: true, DisableDHT: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cancel(); s.Close() })
+	// Calls that have not sent their request yet hold their slots, as a join
+	// waiting for votes and pings waiting for answers do.
+	for range maxOperatorsPerUser + 2 {
+		c, err := s.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+	}
+	if _, err := ipc.CallVia(s.Pipe, ipc.Request{Command: ipc.CmdStatus}); err != nil {
+		t.Errorf("a status call beside %d others: %v", maxOperatorsPerUser+2, err)
 	}
 }

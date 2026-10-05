@@ -18,6 +18,7 @@ import (
 
 	"github.com/nning/juist/discovery/mdns"
 	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/relay/forward"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/trust/log"
@@ -388,7 +389,7 @@ func direct(addrs []netip.AddrPort) []func(context.Context) (net.Conn, error) {
 	out := make([]func(context.Context) (net.Conn, error), 0, len(addrs))
 	for _, addr := range addrs {
 		out = append(out, func(ctx context.Context) (net.Conn, error) {
-			return (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", addr.String())
+			return underlay.Dialer(dialTimeout).DialContext(ctx, "tcp", addr.String())
 		})
 	}
 	return out

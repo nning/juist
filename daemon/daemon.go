@@ -494,6 +494,7 @@ type Daemon struct {
 	reachable     atomic.Pointer[map[types.Identity]bool]
 	zone          atomic.Pointer[names.Zone]
 	namesExit     atomic.Pointer[[]netip.AddrPort] // the exit node's resolvers, which names asks
+	namesRouted   atomic.Bool                      // whether the host's resolver asks names
 	hostRouting   atomic.Pointer[resolved.Routing] // how the host routes names but to juist's device
 	hostRoutingAt time.Time
 	resolvConf    string

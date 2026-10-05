@@ -85,8 +85,9 @@ func isJuistRulePref(pref uint32, inst int) bool {
 	return false
 }
 
-// linuxRouter programs juist's addresses, routes and policy rules. It serves
-// only LocalAddrs and Routes; netfilter, SNAT and DNS are never touched.
+// linuxRouter programs juist's addresses, routes and policy rules. Of the
+// router config it serves only LocalAddrs and Routes; its netfilter state is
+// tables of its own.
 type linuxRouter struct {
 	logf      logger.Logf
 	link      netlink.Link
@@ -117,6 +118,9 @@ type linuxRouter struct {
 	// of this instance left there.
 	exitListed bool
 	serving    bool // the serving table is installed
+	// inOwn and inPeers are what the in table guards, where inInstalled.
+	inOwn, inPeers []netip.Addr
+	inInstalled    bool
 }
 
 func newOSRouter(logf logger.Logf, dev tun.Device, _ *netmon.Monitor, _ *health.Tracker, bus *eventbus.Bus,
@@ -202,6 +206,9 @@ func (r *linuxRouter) Close() error {
 	}
 	if r.serving {
 		errs = append(errs, r.setServeLocked(Serve{}))
+	}
+	if r.inInstalled {
+		errs = append(errs, setInGuard(r.inst, r.link.Attrs().Name, nil, nil))
 	}
 	r.routes = reconcile(r.routes, nil, r.addRoute, r.delRoute, &errs)
 	errs = append(errs, r.delRulesLocked())

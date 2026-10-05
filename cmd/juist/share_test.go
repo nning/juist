@@ -105,9 +105,14 @@ func TestShareUntilStopped(t *testing.T) {
 	mustContain(t, h.mustRun("grant", "laptop", "publish"), "laptop: roles voucher, publish",
 		"hint: on laptop, juist share FILE or juist publish PORT")
 	r := h.cli.start("share", dir, "--for", "1h")
-	r.waitFor(t, regexp.MustCompile(`sharing \S+ at https://laptop\.pub\.example\.org/[A-Za-z0-9_-]{22}/, until`))
+	link := regexp.MustCompile(`sharing \S+ at (https://laptop\.pub\.example\.org/[A-Za-z0-9_-]{22}/), until`)
+	r.waitFor(t, link)
 	mustContain(t, r.out.String(), "warning: the network has no ingress")
-	mustContain(t, h.mustRun("status"), "Sharing", "laptop.pub.example.org to 127.0.0.1:")
+	shared, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, h.mustRun("status"), "Sharing", shared+" at "+link.FindStringSubmatch(r.out.String())[1]+", until")
 	if _, err := h.run("publish", "8000"); err == nil || !strings.Contains(err.Error(), "shares already") {
 		t.Errorf("a second share: %v", err)
 	}
@@ -584,6 +589,9 @@ func TestTheListingsFontsAreUnderTheToken(t *testing.T) {
 	if w := get(h, "/tok/.juist/plex-sans-400.woff2"); w.Code != 200 || w.Header().Get("Content-Type") != "font/woff2" || w.Body.Len() < 1000 {
 		t.Errorf("a font: %d %v", w.Code, w.Header())
 	}
+	if w := get(h, "/tok/.juist/icon.svg"); w.Code != 200 || w.Header().Get("Content-Type") != "image/svg+xml" {
+		t.Errorf("the icon: %d %v", w.Code, w.Header())
+	}
 	for _, path := range []string{"/.juist/plex-sans-400.woff2", "/tok/.juist/sharelist.html", "/tok/.juist/"} {
 		if w := get(h, path); w.Code != 404 {
 			t.Errorf("%s: %d", path, w.Code)
@@ -591,6 +599,9 @@ func TestTheListingsFontsAreUnderTheToken(t *testing.T) {
 	}
 	if w := get(h, "/tok/"); !strings.Contains(w.Body.String(), "/tok/.juist/plex-sans-400.woff2") {
 		t.Error("the listing does not load its font from under the token")
+	} else if !strings.Contains(w.Body.String(), `href="/tok/.juist/icon.svg"`) ||
+		!strings.Contains(w.Header().Get("Content-Security-Policy"), "img-src 'self'") {
+		t.Error("the listing does not load its icon from under the token")
 	}
 	file := filepath.Join(dir, "a.txt")
 	info, _ = os.Stat(file)

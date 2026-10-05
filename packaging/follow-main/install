@@ -1,0 +1,16 @@
+#!/bin/sh
+# Installs juist-build's deb when it is newer than the installed package.
+set -eu
+src=$(find /var/lib/juist-build/out -maxdepth 1 -name 'juist_*.deb' 2>/dev/null | head -n 1)
+[ -n "$src" ] || exit 0
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+# A copy of our own, so the file checked is the file installed.
+cp "$src" "$tmp/juist.deb"
+version=$(dpkg-deb -f "$tmp/juist.deb" Version)
+installed=$(dpkg-query -W -f '${Version}' juist 2>/dev/null || true)
+if [ -z "$installed" ] || dpkg --compare-versions "$version" gt "$installed"; then
+	# The postinst restarts juist's daemons; needrestart would restart others too.
+	NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=900 "$tmp/juist.deb"
+	echo "juist $installed -> $version"
+fi

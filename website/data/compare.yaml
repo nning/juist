@@ -88,6 +88,9 @@ groups:
         de: Exit-Nodes
         marks: yyyyyppppyp
         notes:
+          juist:
+            en: Android uses one, and serves as none.
+            de: Android nutzt eine, ist aber selbst keine.
           zerotier:
             en: Allow Default by hand on every client, NAT by hand on the gateway.
             de: Allow Default von Hand auf jedem Client, NAT von Hand auf dem Gateway.
@@ -107,6 +110,9 @@ groups:
         de: Subnet-Router
         marks: yyyyypppnyp
         notes:
+          juist:
+            en: Not on Android.
+            de: Nicht unter Android.
           zerotier:
             en: Forwarding and NAT by hand on the router.
             de: Weiterleitung und NAT von Hand auf dem Router.
@@ -153,6 +159,9 @@ groups:
         de: Ein Gerät in mehreren Netzen zugleich
         marks: ynnnyyyyyyy
         notes:
+          juist:
+            en: Only one on Android.
+            de: Unter Android nur eines.
           zerotier:
             en: On phones, one at a time.
             de: Auf Handys nur eines zugleich.
@@ -178,8 +187,11 @@ groups:
             de: In den bezahlten Tarifen.
       - en: Windows, macOS, Android and iOS
         de: Windows, macOS, Android und iOS
-        marks: fyyyyyypppy
+        marks: pyyyyyypppy
         notes:
+          juist:
+            en: Android alone, as a member without names, roles or subnets.
+            de: Nur Android, als Mitglied ohne Namen, Rollen und Subnetze.
           tinc:
             en: No Android or iOS.
             de: Kein Android und iOS.

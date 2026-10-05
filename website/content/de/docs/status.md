@@ -73,8 +73,9 @@ In der ersten Zeile steht einer dieser Zustände:
 - `Published`: die auf diesem Gerät veröffentlichten Namen, die es bedient,
   oder warum nicht. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}).
 - `Ingress`: auf einer Ingress, ob sie läuft und welche Namen sie bedient.
-- `Sharing`: was dieses Gerät unter seinem eigenen Namen teilt, bis wann,
-  oder warum es niemand erreicht.
+- `Sharing`: was dieses Gerät unter seinem eigenen Namen teilt, eine Datei
+  oder ein Verzeichnis mit seinem Link, bis wann, oder warum es niemand
+  erreicht.
 - `Ports`: die Ports, auf denen juistd lauscht. `udp/41643` ist der für die Tunnel.
 - `Updated`: wann juistd zuletzt einen neuen Stand des Netzes übernommen hat.
 

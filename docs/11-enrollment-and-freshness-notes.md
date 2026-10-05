@@ -235,7 +235,7 @@ rule, not something the code can enforce.
 **Two tiers of revocation collapse into one.** The plan's emergency tier was an
 epoch bump plus a forced re-handshake. Every removal already bumps the epoch
 ([08-trust-layer-notes.md](08-trust-layer-notes.md)), and a re-handshake has
-nothing to rotate until per-pair preshared keys exist, which is M11a
+nothing to rotate until per-pair preshared keys exist, which is M12a
 ([05-roadmap.md](05-roadmap.md)). `juist rotate group-secret`
 remains for a suspected leak of the group secret with no one to remove.
 
@@ -340,7 +340,7 @@ Accepted, and stated here rather than fixed:
   and member relays admit only members. A relay a member grants to one invite
   would close the gap and needs a design of its own.
 - **What a break-glass secret authorizes.** Planned in
-  [05-roadmap.md](05-roadmap.md) as M11.
+  [05-roadmap.md](05-roadmap.md) as M12.
 - **A QR code.** The link is the payload a QR carries; `juist invite` renders
   it for the Android app to scan, planned in [05-roadmap.md](05-roadmap.md)
   as M10.

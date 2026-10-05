@@ -263,7 +263,7 @@ What it forecloses above that range, and by when, is a section of its own below.
 A node's recipient key is recorded as **two fields** (`X25519`, `MLKEM`) rather
 than one opaque hybrid blob, so each half is validated as the key it is, and so
 the ML-KEM half is a first-class field for the per-pair preshared-key hedge
-of M11a ([05-roadmap.md](05-roadmap.md)). Domain separation
+of M12a ([05-roadmap.md](05-roadmap.md)). Domain separation
 between the two uses comes from HPKE's own suite labelling and from a distinct
 HKDF label on the reserved side.
 
@@ -407,7 +407,7 @@ extension bucket and no ignorable-unknown-field path** — either would reintrod
 the split view by letting two builds act on different subsets of the same
 record.
 
-What is still open, and belongs with M13's packaging: the
+What is still open, and belongs with M16's packaging: the
 gossip hello does not carry the versions a node supports, `juist status` cannot
 say which members would be stranded, and nothing stops an admin authoring an
 upgrade before the network is ready for it. Until those exist, raising the
@@ -491,7 +491,7 @@ carries the rest. The same reasoning has not been carried through
 `Have`, the peer re-offers records it already holds, and the two make no
 progress. That is unreachable until a network has authored 4096 records without
 a checkpoint, and closing it is part of deciding **when compaction runs without
-an admin asking** — undecided, and the decision this binds; M12 makes it.
+an admin asking** — undecided, and the decision this binds; M14 makes it.
 
 ## Storage
 
@@ -670,7 +670,7 @@ The rules a later change has to keep:
 - **A disablement record.** The genesis ceremony commits to break-glass secrets
   and `State.ValidDisablement` verifies a preimage, which is what the schema
   needs. *What revealing one authorizes* is planned in
-  [05-roadmap.md](05-roadmap.md) as M11.
+  [05-roadmap.md](05-roadmap.md) as M12.
 - **Route consumption.** Validated from M1, read by nothing until M6.
 
 ### The obligation M1 hands to M6

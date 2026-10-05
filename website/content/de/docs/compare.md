@@ -164,7 +164,7 @@ untereinander abgleichen. Bei beiden kann ein einzelner Admin oder
 Coordinator jede Änderung vornehmen.
 
 rayfish passt, wenn du ein Mesh ohne Server auf Plattformen ausprobieren
-willst, die juist fehlen, etwa Windows, macOS oder Android.
+willst, die juist fehlen, etwa Windows oder macOS.
 
 ## Meshes mit gemeinsamem Geheimnis {#shared-secret}
 
@@ -202,8 +202,9 @@ Server herum, der bestimmt, wer dazugehört.
 ## Wo juist schwächer ist {#weaker}
 
 - Ein Sicherheitsaudit gab es für juist bisher nicht.
-- Es läuft nur unter Linux und FreeBSD. Für Android, Windows, macOS und iOS
-  gibt es nichts.
+- Es läuft unter Linux und FreeBSD, und unter Android als Mitglied ohne
+  Namen, Rollen, Exit-Nodes und Subnetze. Für Windows, macOS und iOS gibt es
+  nichts.
 - Es kennt keine Zugriffsregeln: Jedes Mitglied erreicht jeden Port jedes
   anderen Mitglieds.
 - Es kennt nur Geräte, keine Benutzer, und bietet keine Anmeldung über einen

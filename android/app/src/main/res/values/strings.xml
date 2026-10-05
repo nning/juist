@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">juist</string>
+    <string name="handbook_url">https://docs.juist.nning.io/en/docs/</string>
+
+    <!-- Welcome -->
+    <string name="welcome_title">Join your network</string>
+    <string name="welcome_body">Connects this phone with your other devices. Only your admins decide who joins.</string>
+    <string name="welcome_step_invite">An admin runs juist invite on one of your devices.</string>
+    <string name="welcome_step_scan">Scan the QR code it shows, or type the code.</string>
+    <string name="welcome_step_words">The admin compares four words with this phone and lets it in.</string>
+    <string name="action_scan">Scan QR code</string>
+    <string name="action_enter_code">Type code</string>
+
+    <!-- Scan -->
+    <string name="scan_title">Scan invite</string>
+    <string name="scan_hint">Point the camera at the QR code</string>
+    <string name="scan_not_invite">Not a juist invite</string>
+    <string name="scan_torch">Flashlight</string>
+    <string name="scan_camera_title">Camera</string>
+    <string name="scan_camera_body">juist uses the camera only here, to read the QR code. Nothing is stored or sent.</string>
+    <string name="scan_camera_denied">Camera access is off. Allow it in settings, or type the code.</string>
+    <string name="action_allow_camera">Allow camera</string>
+    <string name="action_open_settings">Open settings</string>
+
+    <!-- Code -->
+    <string name="code_title">Type invite</string>
+    <string name="code_body">A number and three words, such as 42-drumbeat-tolerance-glucose, or a juist: link.</string>
+    <string name="code_label">Invite code</string>
+    <string name="code_supporting">Words complete as you type</string>
+    <string name="code_link">Invite link</string>
+    <string name="code_bad_number">A code starts with a number from 1 to 999</string>
+    <string name="code_unknown_word">“%1$s” is not an invite word</string>
+    <string name="code_wrong_place">“%1$s” is in the wrong place</string>
+    <string name="code_incomplete">A code is a number and three words</string>
+    <string name="code_bad_link">Not a valid invite link. Copy it again in full.</string>
+    <string name="code_parts">%1$d of %2$d</string>
+    <string name="action_continue">Continue</string>
+
+    <!-- Confirm -->
+    <string name="confirm_title">Join</string>
+    <string name="confirm_link">Invite link</string>
+    <string name="confirm_link_about">Scanned or pasted</string>
+    <string name="confirm_link_opened">Opened from another app. Join only if you asked for this invite.</string>
+    <string name="confirm_code">Invite code</string>
+    <string name="confirm_name">Name of this phone</string>
+    <string name="confirm_name_about">How the network lists it</string>
+    <string name="confirm_vpn_about">Android will ask you to allow juist’s VPN.</string>
+    <string name="action_join">Join</string>
+    <string name="vpn_refused">juist needs the VPN to reach your devices</string>
+    <string name="vpn_not_established">Android did not let juist set up its VPN</string>
+
+    <!-- Joining -->
+    <string name="joining_title">Joining</string>
+    <string name="join_looking">Looking for the inviting device</string>
+    <string name="join_meeting">Reaching the inviting device over the internet</string>
+    <string name="join_connected">Connected to the inviting device</string>
+    <string name="join_connected_relay">Connected through a relay</string>
+    <string name="join_approval">Waiting for the admin</string>
+    <plurals name="join_votes">
+        <item quantity="one">Waiting for approval: %1$d of %2$d vote</item>
+        <item quantity="other">Waiting for approval: %1$d of %2$d votes</item>
+    </plurals>
+    <string name="join_compare_title">The admin should see</string>
+    <string name="join_compare_body">Read these words to the admin. If theirs differ, cancel.</string>
+    <string name="join_failed">Not joined</string>
+    <string name="join_failed_body">The invite may have expired or been used, or the inviting device is out of reach. Ask for a new invite.</string>
+    <string name="join_failed_code">A code works only on the same Wi-Fi. Elsewhere, scan the QR code or paste the link.</string>
+    <string name="done">Done</string>
+    <string name="action_try_again">Try again</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_back">Back</string>
+    <string name="core_off">juist is off</string>
+
+    <!-- Status -->
+    <string name="vpn_switch">VPN</string>
+    <string name="state_none">No network</string>
+    <string name="state_joining">Joining</string>
+    <string name="state_starting">Starting</string>
+    <string name="state_starting_about">Setting up tunnels</string>
+    <string name="state_vpn_off">Off</string>
+    <string name="state_vpn_off_about">Turn it on to reach your network.</string>
+    <string name="state_revoked_about">Another VPN app took over, or the VPN was turned off in settings.</string>
+    <string name="state_failed">Not started</string>
+    <string name="state_unstarted">Not connected</string>
+    <string name="state_unstarted_about">Tunnels are down. juist keeps trying.</string>
+    <string name="state_removed">Removed</string>
+    <string name="state_removed_about">This phone was removed from the network. Forget the network to join again with a new invite.</string>
+    <string name="state_disconnected">Disconnected</string>
+    <string name="state_disconnected_about">The network’s history has split. Tunnels stay down until an admin resolves it.</string>
+    <string name="state_refused">Refused</string>
+    <string name="state_refused_about">Most likely this phone was removed.</string>
+    <string name="state_limited">Limited</string>
+    <string name="state_limited_about">No voucher has confirmed lately that this phone is up to date. Until one does, it reaches vouchers only.</string>
+    <string name="state_waiting">Waiting for devices</string>
+    <string name="state_waiting_about">No device has been heard from yet.</string>
+    <string name="state_notunnel">No tunnel up</string>
+    <string name="state_notunnel_about">Your devices are known, but no tunnel carries traffic.</string>
+    <string name="state_connected">Connected</string>
+    <string name="action_connect">Turn on</string>
+    <string name="action_disconnect">Turn off</string>
+    <string name="action_forget">Forget network</string>
+    <string name="action_start_over">Start over</string>
+    <string name="start_over_title">Start over?</string>
+    <string name="start_over_body">Deletes this phone’s keys and what it knows of the network. Joining again takes a new invite, and an admin should remove this phone.</string>
+    <string name="action_more">More</string>
+
+    <string name="section_this_device">This phone</string>
+    <plurals name="section_devices">
+        <item quantity="one">%d other device</item>
+        <item quantity="other">%d other devices</item>
+    </plurals>
+    <string name="members_reached">%1$d of %2$d reached</string>
+    <string name="members_none">No other devices yet</string>
+    <string name="members_checked">Checked %1$s</string>
+    <string name="label_name">Name</string>
+    <string name="label_ipv4">IPv4</string>
+    <string name="label_ipv4_retiring">IPv4 (old)</string>
+    <string name="label_ipv6">IPv6</string>
+    <string name="label_freshness">Freshness</string>
+    <string name="label_heard">Last heard</string>
+    <string name="label_down_since">Down since</string>
+    <string name="label_identity">Identity key</string>
+    <string name="label_version">Version</string>
+    <string name="copied">%1$s copied</string>
+    <string name="action_copy_value">Copy %1$s</string>
+
+    <string name="fresh_unenforced">Not checked: the network has no vouchers</string>
+    <string name="fresh_unchecked">Not vouched for yet</string>
+    <string name="fresh_stale">Expired: reaches vouchers only</string>
+    <plurals name="fresh_stale_of">
+        <item quantity="one">Expired (%1$d of %2$d voucher): reaches vouchers only</item>
+        <item quantity="other">Expired (%1$d of %2$d vouchers): reaches vouchers only</item>
+    </plurals>
+    <string name="fresh_vouched">Vouched %1$s, valid for %2$s</string>
+    <plurals name="fresh_vouched_by">
+        <item quantity="one">Vouched by %1$d voucher %2$s, valid for %3$s</item>
+        <item quantity="other">Vouched by %1$d vouchers %2$s, valid for %3$s</item>
+    </plurals>
+
+    <!-- Exit node -->
+    <string name="section_internet">Internet</string>
+    <string name="exit_direct">Direct</string>
+    <string name="exit_through">Internet and DNS go through %1$s.</string>
+    <string name="exit_through_no_dns">Internet goes through %1$s, DNS does not: %2$s</string>
+    <string name="exit_refused">Blocked, so nothing goes out directly: %1$s</string>
+    <string name="exit_failed">Not routed: %1$s</string>
+    <string name="exit_partly">Partly: %1$s</string>
+    <string name="exit_always_on">If juist stops, traffic goes out directly. To block it instead, turn on Always-on VPN and Block connections without VPN.</string>
+    <string name="action_vpn_settings">VPN settings</string>
+
+    <!-- Reach -->
+    <string name="reach_self">This phone</string>
+    <string name="reach_direct">Direct</string>
+    <string name="reach_relay">Through a relay</string>
+    <string name="reach_down">No answer</string>
+    <string name="reach_sought">Searching</string>
+    <string name="reach_absent">Offline</string>
+    <string name="reach_absent_heard">Offline, last heard %1$s</string>
+    <string name="reach_silent">Not heard from</string>
+    <string name="reach_unchecked">Not checked yet</string>
+    <string name="reach_unconnected">Not connected</string>
+    <string name="reach_unknown">Unknown</string>
+    <string name="reach_off">Off</string>
+    <string name="reach_relay_about">Traffic passes through a relay, one of your devices, and stays encrypted end to end.</string>
+    <string name="reach_down_about">The device is offline, or a firewall blocks the tunnel.</string>
+    <string name="reach_sought_about">The device may have restarted or changed networks. juist is looking for it.</string>
+    <string name="reach_absent_about">Probably offline.</string>
+    <string name="reach_silent_about">The device has not said yet where to reach it.</string>
+    <string name="reach_unconnected_about">Heard from, but no tunnel to it. This phone’s view of the network may be out of date.</string>
+
+    <string name="role_voucher">voucher</string>
+    <string name="role_relay">relay</string>
+    <string name="role_exit">exit node</string>
+    <string name="role_ingress">ingress</string>
+    <string name="role_publish">publish</string>
+    <string name="role_service">service</string>
+
+    <!-- Alarms -->
+    <string name="alarm_fork">The network’s history has split</string>
+    <string name="alarm_fork_hint">Every tunnel is down until an admin resolves it.</string>
+    <string name="alarm_schema">The network uses a newer format than this app</string>
+    <string name="alarm_schema_hint">Nothing changes here, removals included, until you update juist.</string>
+    <string name="alarm_stale_keys">juist runs on replaced keys</string>
+    <string name="alarm_stale_keys_hint">Turn the VPN off and on again.</string>
+    <string name="alarm_refused">The network’s devices refuse this phone</string>
+    <string name="alarm_refused_hint">Most likely it was removed. Join again with a new invite.</string>
+    <string name="alarm_epoch">The group secret cannot be opened: no updates, no discovery</string>
+    <string name="alarm_data_plane">The tunnels rejected the current device list</string>
+    <string name="alarm_no_traffic">No tunnel traffic from %1$s</string>
+    <string name="alarm_no_traffic_hint">Both may be behind NAT with no relay between them.</string>
+    <plurals name="alarm_conflicted">
+        <item quantity="one">%d device announces another’s key and is ignored</item>
+        <item quantity="other">%d devices announce another’s key and are ignored</item>
+    </plurals>
+    <string name="alarm_no_relay">No device may relay</string>
+    <string name="alarm_no_relay_hint">Phones on mobile data often need one. An admin can grant the role to a device with a public address.</string>
+    <string name="alarm_lost">A change lost to one made at the same time</string>
+    <string name="alarm_unrevoked">A removal lost to a change made at the same time and is not in effect</string>
+    <string name="alarm_unrevoked_hint">An admin must remove the device again.</string>
+    <string name="alarm_silent">Not heard from: %1$s</string>
+    <plurals name="alarm_silent_count">
+        <item quantity="one">%d device not heard from</item>
+        <item quantity="other">%d devices not heard from</item>
+    </plurals>
+    <string name="alarm_seeking">No answer from %1$s: offline or blocked</string>
+    <string name="list_and">%1$s and %2$s</string>
+
+    <!-- Member -->
+    <string name="section_addresses">Addresses</string>
+    <string name="section_reach">Reach it</string>
+    <string name="section_identity">Identity</string>
+    <string name="ping_about">Other apps reach the device at these addresses while the VPN is on.</string>
+    <string name="action_ping">Ping</string>
+    <string name="action_open_web">Open in browser</string>
+    <string name="ping_ms">%1$.1f ms</string>
+    <string name="ping_failed">failed: %1$s</string>
+    <string name="no_browser">No browser installed</string>
+
+    <!-- About -->
+    <string name="about_title">About</string>
+    <string name="about_body">A mesh VPN whose members decide among themselves who belongs. No server can add a device.</string>
+    <string name="section_more">More</string>
+    <string name="action_handbook">Handbook</string>
+    <string name="action_licenses">Open-source licenses</string>
+    <string name="action_copy_log">Copy log</string>
+    <string name="about_log">The log stays in memory and names your devices and their addresses. Share it only with someone you trust.</string>
+    <string name="log_copied">Log copied</string>
+
+    <!-- Notification -->
+    <string name="notification_channel">Connection</string>
+    <plurals name="notification_reached">
+        <item quantity="one">%1$s · %2$d of %3$d device reached</item>
+        <item quantity="other">%1$s · %2$d of %3$d devices reached</item>
+    </plurals>
+
+    <!-- Time -->
+    <string name="just_now">just now</string>
+    <plurals name="minutes">
+        <item quantity="one">%d minute</item>
+        <item quantity="other">%d minutes</item>
+    </plurals>
+    <plurals name="hours">
+        <item quantity="one">%d hour</item>
+        <item quantity="other">%d hours</item>
+    </plurals>
+    <plurals name="days">
+        <item quantity="one">%d day</item>
+        <item quantity="other">%d days</item>
+    </plurals>
+</resources>

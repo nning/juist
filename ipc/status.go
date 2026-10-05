@@ -523,6 +523,11 @@ type Share struct {
 
 	// CAA binds the name's certificates to the terminator's account.
 	CAA []string `cbor:"5,keyasint,omitempty"`
+
+	// What and Path are the shared file or directory and the URL path it is
+	// reached under, as [ShareRequest] says. Path is the share's secret.
+	What string `cbor:"6,keyasint,omitempty"`
+	Path string `cbor:"7,keyasint,omitempty"`
 }
 
 // Ingress says whether the ingress on this device asked lately what is

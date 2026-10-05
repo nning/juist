@@ -1,0 +1,9 @@
+{{- /* Screenshots of the Android app in the page's language, one "NAME: caption" a line, NAME as in android/app/screenshots. */ -}}
+{{- $v := cond (eq site.Language.Lang "de") "night_de" "day_en" -}}
+<div class="screens">
+{{- range split (trim .Inner "\n") "\n" }}{{ $p := split . ": " }}{{ $name := trim (index $p 0) " " }}{{ $cap := delimit (after 1 $p) ": " }}
+{{- with resources.Get (printf "android/%s_%s.png" $name $v) }}{{ $i := . | fingerprint }}
+<figure><img src="{{ $i.RelPermalink }}" width="{{ div .Width 2 }}" height="{{ div .Height 2 }}" alt="{{ $cap }}" loading="lazy"><figcaption>{{ $cap }}</figcaption></figure>
+{{- else }}{{ errorf "screens: no screenshot %s_%s.png" $name $v }}{{ end }}
+{{- end }}
+</div>

@@ -42,6 +42,15 @@ inviting admin's key, which binds the new device to that admin's signature.
 Copy it whole, with its quotes, since it contains characters a shell would
 otherwise change.
 
+In a terminal, `juist invite` also draws the link as a QR code, above the
+`juist join` line; a camera reads it as the link's text, without the
+command. The code is left out where the output is not a terminal, and in a
+window too narrow for it, which says so:
+`no qr code: the terminal is narrower than 59 columns`.
+
+A phone joins by scanning the QR code with the
+[Android app]({{< relref "docs/android" >}}), or by typing the code into it.
+
 Both end when a device joins or the invite expires. An invite lasts an hour
 unless you give `--expires`, such as `--expires 2h`; the longest is `7d`.
 

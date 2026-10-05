@@ -271,10 +271,11 @@ type socket struct {
 }
 
 func listen() (*socket, error) {
-	pc, err := net.ListenUDP("udp", nil)
+	c, err := underlay.ListenPacket("udp", ":0")
 	if err != nil {
 		return nil, fmt.Errorf("rendezvous: binding a UDP socket: %w", err)
 	}
+	pc := c.(*net.UDPConn)
 	s := &socket{pc: pc, packets: make(chan inbound, 64), stopped: make(chan struct{}), done: make(chan struct{})}
 	go s.read()
 	return s, nil

@@ -81,7 +81,7 @@ netfilter doing the translation rather than a simulation of it:
   non-LAN packet outside the tunnel (capture on the physical interface) while LAN
   destinations keep resolving and routing locally; withdrawing the `exit` role cuts
   egress at gossip convergence (reachable) and at the TTL boundary (partitioned).
-- **Coarse ACLs (M14):** a peer denied by ACL is dropped by the *receiver* even with a
+- **Coarse ACLs (M13):** a peer denied by ACL is dropped by the *receiver* even with a
   sender patched to ignore its own filter; a member without a grant for an exit node
   gets nothing forwarded by it.
 - **Chaos:** packet loss/reorder/duplication on gossip paths; node kill/restart
@@ -104,12 +104,12 @@ netfilter doing the translation rather than a simulation of it:
   the same dependency the FreeBSD interop matrix above wants; decide both at once.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
   VPS relay member + one mobile (Android on LTE, from M10); full lifecycle including
-  emergency revocation from a phone (from M13).
+  emergency revocation from a phone (from M17).
 
 ## 5. Cryptographic review gates
 
 - Internal design review of the trust layer before M3 (log rules frozen).
-- External audit at M12 scoped to `trust/*`, `enroll`, `gossip` (~7–9 k LOC) plus the
+- External audit at M14 scoped to `trust/*`, `enroll`, `gossip` (~7–9 k LOC) plus the
   reconciler's default-deny property, M6's route consumption and M8's resolver.
 - A short machine-checkable model (e.g. Tamarin/ProVerif sketch or TLA+ for the
   epoch/freshness state machine) is a stretch goal — valuable for the freshness and

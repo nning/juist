@@ -32,7 +32,7 @@ const (
 	MaxRecordsPerFrame = 256
 
 	// MaxHashesPerFrame caps the "what I already hold" set in a hello. Past
-	// it two nodes stop converging: see docs/05-roadmap.md, M12.
+	// it two nodes stop converging: see docs/05-roadmap.md, M14.
 	MaxHashesPerFrame = 4096
 
 	// MaxEndpointsPerFrame caps the announcements one frame may carry: one

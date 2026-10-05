@@ -427,3 +427,19 @@ func TestAHelpersDNSTakesPort53Alone(t *testing.T) {
 		t.Errorf("another resolver: %v %s", ok, why)
 	}
 }
+
+// A VPN device's own servers take every program's lookups, with no resolv.conf
+// to read, as on Android.
+func TestAVPNsDNSIsThroughWithoutAResolvConf(t *testing.T) {
+	p := &dnsPlumber{}
+	h := VPNDNS(p, "juist0")
+	at := []netip.AddrPort{netip.MustParseAddrPort("198.19.44.2:53")}
+	if err := h.Route(DNSRouting{Servers: at, Everything: true}); err != nil || len(p.set) != 1 {
+		t.Errorf("routing to the exit node: %v, %v", err, p.set)
+	}
+	if ok, why := h.(interface {
+		through(string, []netip.AddrPort) (bool, string)
+	}).through(filepath.Join(t.TempDir(), "absent"), at); !ok {
+		t.Errorf("not through: %s", why)
+	}
+}

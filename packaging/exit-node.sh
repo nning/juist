@@ -11,7 +11,7 @@
 # notes what it changes. off takes DEVICE out; with the last, or without
 # DEVICE, as removing the package does, everything goes back as it was.
 #
-# clear removes the routing rules, tables, guard and masquerade a juistd that
+# clear removes the routing rules, tables, guards and masquerade a juistd that
 # did not stop cleanly leaves, refusing the internet on purpose; removing the
 # package runs it once every juistd has stopped, and so should anyone else.
 set -u
@@ -43,7 +43,7 @@ clear)
 			done
 		fi
 		if command -v nft >/dev/null 2>&1; then
-			for t in juist$i juist${i}guard; do
+			for t in juist$i juist${i}guard juist${i}in; do
 				nft delete table ip $t 2>/dev/null
 				nft delete table ip6 $t 2>/dev/null
 			done

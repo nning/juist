@@ -69,7 +69,8 @@ type Options struct {
 	TunName string
 
 	// Plumber, where set, creates the device TunName names and routes it,
-	// for a node that may not itself; only FreeBSD's router uses one.
+	// for a node that may not itself, as on FreeBSD; one from [NewVPNPlumber]
+	// establishes it as Android's VpnService does.
 	Plumber Plumber
 
 	// Instance numbers this node among the juist nodes on the host, from 0
@@ -129,6 +130,9 @@ type tsManager struct {
 	exits exitRouter
 	// hostRouter is the OS router's reading of the host's own routes.
 	hostRouter interface{ hostRoutes() []netip.Prefix }
+	// inGuard keeps the overlay's addresses to the tunnel where the OS
+	// router can.
+	inGuard overlayGuard
 	// tunnelled is what the router was last told the peers carry, and
 	// isolate whether answers go in too.
 	tunnelled tunnelled
@@ -209,6 +213,12 @@ func (st *peerState) byRoute(ip netip.Addr) (key.NodePublic, netip.Prefix, bool)
 		return e.nk, p, true
 	}
 	return key.NodePublic{}, netip.Prefix{}, false
+}
+
+// overlayGuard is an OS router that drops what reaches the overlay's
+// addresses by another device than the tunnel.
+type overlayGuard interface {
+	guardOverlay(own, peers []netip.Addr) error
 }
 
 // exitRouter is what an OS router does for egress and serving beside
@@ -304,7 +314,10 @@ func New(opts Options) (_ Manager, err error) {
 		undo.push(func() { mon.Close() })
 		var dev tun.Device
 		var osRtr router.Router
-		if opts.Plumber != nil {
+		if vp, ok := opts.Plumber.(*vpnPlumber); ok {
+			dev, osRtr = newVPNPlumbed(vp, opts.TunName, int(tstun.DefaultTUNMTU()), logf)
+			undo.push(func() { dev.Close() })
+		} else if opts.Plumber != nil {
 			if dev, osRtr, err = newPlumbed(opts.Plumber, opts.TunName, opts.Instance, int(tstun.DefaultTUNMTU()), logf); err != nil {
 				return nil, fmt.Errorf("conn: creating TUN device %q: %w", opts.TunName, err)
 			}
@@ -331,6 +344,7 @@ func New(opts Options) (_ Manager, err error) {
 		cfg.Router = osRtr
 		m.exits, _ = osRtr.(exitRouter)
 		m.hostRouter, _ = osRtr.(interface{ hostRoutes() []netip.Prefix })
+		m.inGuard, _ = osRtr.(overlayGuard)
 		if w, ok := osRtr.(interface{ watchHostRoutes(func()) }); ok && opts.OnHostRoutesChange != nil {
 			w.watchHostRoutes(opts.OnHostRoutesChange)
 		}
@@ -896,7 +910,29 @@ func (m *tsManager) reconfig() error {
 		return fmt.Errorf("conn: reconfig: %w", err)
 	}
 	m.routerStale = false
+	if m.inGuard != nil {
+		return m.inGuard.guardOverlay(hostAddrs(m.self.Addrs), m.peerAddrs())
+	}
 	return nil
+}
+
+// peerAddrs is every peer's overlay addresses, sorted.
+func (m *tsManager) peerAddrs() []netip.Addr {
+	var addrs []netip.Addr
+	for _, p := range m.state.Load().peers {
+		addrs = append(addrs, hostAddrs(p.Addrs)...)
+	}
+	slices.SortFunc(addrs, netip.Addr.Compare)
+	return slices.Compact(addrs)
+}
+
+// hostAddrs is the addresses of single-address prefixes.
+func hostAddrs(ps []netip.Prefix) []netip.Addr {
+	addrs := make([]netip.Addr, 0, len(ps))
+	for _, p := range ps {
+		addrs = append(addrs, p.Addr())
+	}
+	return addrs
 }
 
 // peerRoutes is one prefix per peer overlay address, and each subnet a peer
@@ -1235,6 +1271,28 @@ func (m *tsManager) LocalPort() uint16 { return m.magic.LocalPort() }
 
 func (m *tsManager) Ping(ip netip.Addr, cb func(PingResult)) {
 	m.eng.Ping(ip, tailcfg.PingICMP, 0, func(r *ipnstate.PingResult) {
+		res := PingResult{Err: r.Err}
+		if r.LatencySeconds > 0 {
+			res.Latency = time.Duration(r.LatencySeconds * float64(time.Second))
+		}
+		cb(res)
+	})
+}
+
+// NetworkChanged has the network monitor look at the host's interfaces now,
+// as Android, whose monitor only polls every few minutes, has to say.
+func (m *tsManager) NetworkChanged() {
+	if m.netMon != nil {
+		m.netMon.InjectEvent()
+	}
+}
+
+func (m *tsManager) Echo(ip netip.Addr, cb func(PingResult)) {
+	if m.isClosed() {
+		cb(PingResult{Err: "the data plane is closed"})
+		return
+	}
+	m.eng.Ping(ip, tailcfg.PingTSMP, 0, func(r *ipnstate.PingResult) {
 		res := PingResult{Err: r.Err}
 		if r.LatencySeconds > 0 {
 			res.Latency = time.Duration(r.LatencySeconds * float64(time.Second))

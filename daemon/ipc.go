@@ -41,12 +41,13 @@ const ipcRequestTimeout = 5 * time.Second
 // can keep the other unprivileged users from reading the status for as long
 // as they loop.
 const (
-	maxIPCClients       = 8 // callers who may operate
-	maxOperatorsPerUser = 4 // of those, per uid
-	maxReaderClients    = 4 // callers who may only read the status
-	maxClientsPerUser   = 2 // of those, per uid
-	maxIngressClients   = 2 // the ingress and the terminator, in a pool of their own
-	maxIngressPerUser   = 1 // so that neither crowds out the other
+	maxIPCClients       = 8  // callers who may operate
+	maxOperatorsPerUser = 4  // of those, per uid
+	maxReaderClients    = 4  // callers who may only read the status
+	maxClientsPerUser   = 2  // of those, per uid
+	maxIngressClients   = 2  // the ingress and the terminator, in a pool of their own
+	maxIngressPerUser   = 1  // so that neither crowds out the other
+	maxPipeClients      = 64 // calls from this process, all one caller's: an app's join, pings and polls
 	readerTimeout       = time.Second
 	maxReaderRequest    = 4 << 10
 )
@@ -167,6 +168,19 @@ func newIPCServer(path string, h handler, tierOf func(caller) tier, logf func(st
 	}, nil
 }
 
+// newPipeServer answers calls from this process alone, through [ipcServer.pipe].
+func newPipeServer(h handler, tierOf func(caller) tier, logf func(string, ...any)) *ipcServer {
+	return &ipcServer{
+		h:         h,
+		tierOf:    tierOf,
+		logf:      logf,
+		closed:    make(chan struct{}),
+		operators: newPool(maxPipeClients, maxPipeClients),
+		readers:   newPool(0, 0),
+		ingress:   newPool(0, 0),
+	}
+}
+
 // refuseSharedWritable rejects a socket directory group or other can write to:
 // anyone who can write there can replace the socket and impersonate the
 // daemon to the CLI.
@@ -208,6 +222,9 @@ func removeIfExists(path string) error {
 }
 
 func (s *ipcServer) serve() {
+	if s.ln == nil {
+		return
+	}
 	for {
 		c, err := s.ln.Accept()
 		if err != nil {
@@ -229,34 +246,55 @@ func (s *ipcServer) serve() {
 			c.Close()
 			continue
 		}
-		t := s.tierOf(who)
-		release, ok := s.admit(who, t)
-		if !ok {
-			c.Close()
-			continue
-		}
-		if !s.waits.track() {
-			release()
-			c.Close()
+		if !s.serveConn(c, who) {
 			return
 		}
-		go func() {
-			defer s.waits.done()
-			defer release()
-			defer c.Close()
-			if err := s.handle(c, who, t); err != nil {
-				s.logf("daemon: ipc: %v", err)
-			}
-		}()
 	}
+}
+
+// serveConn answers c's call on a goroutine of its own, closing c where it
+// is not admitted, and reports false once the server is closed.
+func (s *ipcServer) serveConn(c net.Conn, who caller) bool {
+	t := s.tierOf(who)
+	release, ok := s.admit(who, t)
+	if !ok {
+		c.Close()
+		return true
+	}
+	if !s.waits.track() {
+		release()
+		c.Close()
+		return false
+	}
+	go func() {
+		defer s.waits.done()
+		defer release()
+		defer c.Close()
+		if err := s.handle(c, who, t); err != nil {
+			s.logf("daemon: ipc: %v", err)
+		}
+	}()
+	return true
+}
+
+// pipe is a connection to the server from this process, whose caller the
+// kernel cannot name, so it is one [caller.known] leaves unknown.
+func (s *ipcServer) pipe() (net.Conn, error) {
+	client, server := net.Pipe()
+	if !s.serveConn(server, caller{}) {
+		return nil, net.ErrClosed
+	}
+	return client, nil
 }
 
 func (s *ipcServer) close() {
 	s.closeOnce.Do(func() {
 		s.waits.stop()
 		close(s.closed)
-		s.ln.Close()
-		_ = removeIfExists(s.path)
+		if s.ln != nil {
+			s.ln.Close()
+			_ = removeIfExists(s.path)
+		}
 	})
 	s.waits.wait()
 }

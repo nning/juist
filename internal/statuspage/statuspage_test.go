@@ -139,7 +139,7 @@ func TestThePageEscapesWhatItShows(t *testing.T) {
 
 func TestThePageServesItsAssetsAndNothingElse(t *testing.T) {
 	for path, want := range map[string]int{"/": 200, "/.juist/plex-sans-400.woff2": 200, "/.juist/refresh.js": 200,
-		"/.juist/page.html": 404, "/index.html": 404, "/.juist/": 404} {
+		"/.juist/icon.svg": 200, "/.juist/page.html": 404, "/index.html": 404, "/.juist/": 404} {
 		if w := serve(t, sample(), ipc.ShowServices, public, path); w.Code != want {
 			t.Errorf("%s: %d, want %d", path, w.Code, want)
 		}
@@ -149,8 +149,11 @@ func TestThePageServesItsAssetsAndNothingElse(t *testing.T) {
 		t.Errorf("HSTS %q", hsts)
 	}
 	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") ||
-		!strings.Contains(csp, "frame-ancestors 'none'") {
+		!strings.Contains(csp, "frame-ancestors 'none'") || !strings.Contains(csp, "img-src 'self'") {
 		t.Errorf("CSP %q", csp)
+	}
+	if !strings.Contains(w.Body.String(), `<link rel="icon" href="/.juist/icon.svg"`) {
+		t.Error("the page has no icon")
 	}
 	if w := serve(t, sample(), ipc.ShowNone, public, "/.juist/refresh.js"); w.Code != 404 {
 		t.Errorf("a page that answers members alone serves its script to the public: %d", w.Code)

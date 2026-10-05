@@ -51,7 +51,8 @@ The full analysis, with every weakness that remains, is in the
   network.
 - The device's own keys are held by juistd; on Linux the package keeps
   them in `/var/lib/juist`. juistd runs as its own user, with `CAP_NET_ADMIN`
-  only. The `juist` command signs only what it has rebuilt from its own
+  only. On a phone, the [Android app]({{< relref "docs/android" >}}) seals
+  them by a key that Android Keystore holds. The `juist` command signs only what it has rebuilt from its own
   verified log, whatever juistd asks.
 - No juist command reads the break-glass secrets that `juist create`
   writes. Keep them offline anyway.
@@ -112,8 +113,12 @@ traffic that must stay secret for decades.
 ## Good to know
 
 - juist has not had a security audit.
-- On Linux, a service that listens only on a device's juist address can still
-  be reached from that device's LAN. Have services check who connects.
+- On Linux, juist drops what reaches a device's juist addresses other than
+  through the tunnel, and what claims to come from a member but arrives from
+  the LAN. So a container on the device no longer reaches the device's own
+  juist address. On FreeBSD a service that listens only on a device's juist
+  address can still be reached from that device's LAN. Either way, have
+  services check who connects.
 - Every change to the network, and who approved it, is in `juist log`.
 
 ## Reporting a vulnerability

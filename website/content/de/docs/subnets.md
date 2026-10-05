@@ -89,6 +89,8 @@ er direkt mit dem Drucker und nicht über das NAS. `juist subnet` meldet dann
 - Subnet-Router gibt es unter Linux und unter FreeBSD mit pf.
 - Docker verwirft gerouteten Verkehr zu seinen Containern.
   `juist subnet serve` warnt, wenn ein Subnetz ein Docker-Netz enthält.
+- Hosts im Subnetz erreichen die Mitglieder, aber nicht die juist-Adresse des
+  Routers selbst: Unter Linux antwortet sie nur durch den Tunnel.
 
 ## Wenn etwas nicht klappt
 

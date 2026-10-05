@@ -1,0 +1,309 @@
+package io.juist.app.core
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.VpnService
+import android.net.wifi.WifiManager
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.util.Log
+import io.juist.app.BuildConfig
+import io.juist.app.MainActivity
+import io.juist.app.R
+import io.juist.app.ui.stateLabel
+import io.juist.mobile.Core
+import io.juist.mobile.Mobile
+import io.juist.mobile.Platform
+import java.net.InetAddress
+import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+
+/**
+ * Runs the core while the VPN is on: in the foreground, so that the mesh stays
+ * up in Doze, and holding a multicast lock, so that mDNS finds members on the
+ * Wi-Fi. Its device carries the network's addresses, and the phone's internet
+ * and DNS only while an exit node is used.
+ */
+class JuistVpnService : VpnService() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Confined to the serial thread, as are the fields below.
+    @Volatile private var core: Core? = null
+    @Volatile private var destroyed = false
+    private var multicast: WifiManager.MulticastLock? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkThread: HandlerThread? = null
+    private var notifier: Job? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            Juist.want(this, false)
+            serial.execute { shutDown(OffReason.None, startId) }
+            return START_NOT_STICKY
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notification(NotificationLines.of(this, null)), ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
+        } else {
+            startForeground(NOTIFICATION_ID, notification(NotificationLines.of(this, null)))
+        }
+        serial.execute { startCore() }
+        return START_STICKY
+    }
+
+    private fun startCore() {
+        if (core != null || destroyed) return
+        try {
+            val home = Juist.home(this).apply { mkdirs() }
+            val c = Mobile.start(home.path, platform)
+            core = c
+            holdMulticast()
+            followNetworks()
+            Juist.attached(c)
+            notifier = scope.launch {
+                Juist.connection.mapNotNull { (it as? Connection.On)?.view }
+                    .map { NotificationLines.of(this@JuistVpnService, it) }
+                    .distinctUntilChanged()
+                    .collect { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(it)) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "starting the core", e)
+            Juist.failed(e.message.orEmpty())
+            stopSelf()
+        }
+    }
+
+    override fun onRevoke() = serial.execute { shutDown(OffReason.Revoked) }
+
+    override fun onDestroy() {
+        destroyed = true
+        serial.execute {
+            if (stopCore()) Juist.detached(this)
+            getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+            scope.cancel()
+        }
+        super.onDestroy()
+    }
+
+    /**
+     * Stops the core and the service, unless a start came after startId's
+     * stop, whose core then starts after this one stopped.
+     */
+    private fun shutDown(reason: OffReason, startId: Int? = null) {
+        stopCore()
+        Juist.detached(this, reason)
+        if (startId == null || stopSelfResult(startId)) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    /** Stops the core, reporting whether one ran. */
+    private fun stopCore(): Boolean {
+        val c = core ?: return false
+        notifier?.cancel()
+        notifier = null
+        networkCallback?.let { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) }
+        networkCallback = null
+        networkThread?.quitSafely()
+        networkThread = null
+        core = null
+        c.close()
+        multicast?.takeIf { it.isHeld }?.release()
+        multicast = null
+        return true
+    }
+
+    private fun holdMulticast() {
+        multicast = getSystemService(WifiManager::class.java)?.createMulticastLock("juist-mdns")?.apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    /**
+     * Tells Android which network the tunnels go out on, so that it counts the
+     * VPN as that network, and the core that it changed, which on Android it
+     * does not notice for minutes by itself.
+     */
+    private fun followNetworks() {
+        val thread = HandlerThread("juist-underlay").apply { start() }
+        val follower = UnderlayFollower(
+            use = { setUnderlyingNetworks(it?.let { n -> arrayOf(n) }) },
+            changed = { core?.networkChanged(it) },
+        )
+        getSystemService(ConnectivityManager::class.java)
+            .registerBestMatchingNetworkCallback(underlayRequest(), follower, Handler(thread.looper))
+        networkCallback = follower
+        networkThread = thread
+    }
+
+    private val platform = object : Platform {
+        override fun protect(fd: Int): Boolean = this@JuistVpnService.protect(fd)
+
+        override fun establish(config: String): Int {
+            val c = coreJson.decodeFromString(EstablishConfig.serializer(), config)
+            val b = Builder()
+                .setSession(Juist.last?.network?.takeIf { it.isNotEmpty() } ?: getString(R.string.app_name))
+                .setMtu(c.mtu)
+                .setConfigureIntent(openApp())
+            for (a in c.addrs) {
+                val (addr, bits) = prefix(a)
+                b.addAddress(addr, bits)
+            }
+            for (r in c.routes) {
+                val (addr, bits) = prefix(r)
+                b.addRoute(addr, bits)
+            }
+            // Set only while an exit node is used, which then answers all of the phone's lookups.
+            for (d in c.dns) b.addDnsServer(InetAddress.getByName(d))
+            val pfd = b.establish() ?: throw IllegalStateException(getString(R.string.vpn_not_established))
+            return pfd.detachFd()
+        }
+
+        override fun interfaces(): String = interfacesJson()
+
+        override fun seal(plain: ByteArray): ByteArray = KeystoreSealer.seal(plain)
+
+        override fun open(sealed: ByteArray): ByteArray = KeystoreSealer.open(sealed)
+
+        override fun log(line: String) {
+            Diagnostics.add(line)
+            if (BuildConfig.DEBUG) Log.d(TAG, line)
+        }
+    }
+
+    private fun prefix(s: String): Pair<InetAddress, Int> {
+        val (addr, bits) = s.split('/', limit = 2)
+        return InetAddress.getByName(addr) to bits.toInt()
+    }
+
+    private fun openApp(): PendingIntent = PendingIntent.getActivity(
+        this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
+
+    private fun notification(lines: NotificationLines): Notification {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(CHANNEL) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW)
+                    .apply { setShowBadge(false) },
+            )
+        }
+        val stop = PendingIntent.getService(
+            this, 1, Intent(this, JuistVpnService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(lines.title)
+            .setContentText(lines.text)
+            .setContentIntent(openApp())
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+            .addAction(Notification.Action.Builder(null, getString(R.string.action_disconnect), stop).build())
+            .build()
+    }
+
+    @Serializable
+    private data class EstablishConfig(
+        val addrs: List<String>,
+        val routes: List<String>,
+        val dns: List<String> = emptyList(),
+        val mtu: Int,
+    )
+
+    companion object {
+        private const val TAG = "juist"
+        private const val CHANNEL = "status"
+        private const val NOTIFICATION_ID = 1
+        private const val ACTION_STOP = "io.juist.STOP"
+
+        /** Where cores start and stop, one after the other and off the main thread. */
+        private val serial = Executors.newSingleThreadExecutor { Thread(it, "juist-core") }
+
+        fun start(context: Context) {
+            context.startForegroundService(Intent(context, JuistVpnService::class.java))
+        }
+
+        fun stop(context: Context) {
+            context.startService(Intent(context, JuistVpnService::class.java).setAction(ACTION_STOP))
+        }
+    }
+}
+
+/**
+ * What the tunnels go out on: the best network outside any VPN. The app's
+ * default network is its own VPN once that is up, and follows it instead.
+ */
+internal fun underlayRequest(): NetworkRequest = NetworkRequest.Builder()
+    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+    .build()
+
+/**
+ * Hands the network [underlayRequest] matches to use, null where there is
+ * none, and its interface's name to changed, "" for none. A network lost
+ * after another replaced it changes nothing.
+ */
+internal class UnderlayFollower(
+    private val use: (Network?) -> Unit,
+    private val changed: (String) -> Unit,
+) : ConnectivityManager.NetworkCallback() {
+    private var current: Network? = null
+
+    override fun onAvailable(network: Network) {
+        current = network
+        use(network)
+    }
+
+    // Android calls it after every onAvailable.
+    override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
+        if (network == current) changed(properties.interfaceName.orEmpty())
+    }
+
+    override fun onLost(network: Network) {
+        if (network != current) return
+        current = null
+        use(null)
+        changed("")
+    }
+}
+
+/** What the notification says of view: the network, and one line about it. */
+internal data class NotificationLines(val title: String, val text: String) {
+    companion object {
+        fun of(context: Context, view: NetworkView?): NotificationLines {
+            val title = view?.network?.takeIf { it.isNotEmpty() } ?: context.getString(R.string.app_name)
+            if (view == null) return NotificationLines(title, context.getString(R.string.state_starting))
+            val state = context.getString(stateLabel(view.state))
+            val total = view.members.size
+            val text = if (view.inNetwork && total > 0) {
+                context.resources.getQuantityString(R.plurals.notification_reached, total, state, view.reached, total)
+            } else {
+                state
+            }
+            return NotificationLines(title, text)
+        }
+    }
+}

@@ -591,3 +591,20 @@ func TestAFarewellIsOnlyForTheRemoved(t *testing.T) {
 		t.Fatalf("the removal was handed to %v, want the removed member alone", told)
 	}
 }
+
+func TestPingAnswersWithTheRoundTrip(t *testing.T) {
+	m := startMesh(t, 2)
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	a, b := m.nodes[0], m.nodes[1]
+	ctx := context.Background()
+	waitFor(t, 20*time.Second, "an echo from the other member", func() bool {
+		p, err := a.d.Ping(ctx, b.id())
+		if err != nil {
+			t.Fatalf("pinging a member: %v", err)
+		}
+		return p.Err == "" && p.Micros > 0
+	})
+	if _, err := a.d.Ping(ctx, a.id()); !errors.Is(err, errNotInstalled) {
+		t.Errorf("pinging itself: %v, want %v", err, errNotInstalled)
+	}
+}

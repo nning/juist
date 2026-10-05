@@ -54,7 +54,8 @@ invite to "home", expires in 1h; on the new device:
 ```
 
 Du bekommst einen Code für ein Gerät im selben LAN und einen Link für ein
-Gerät, das woanders steht. Danach wartet die Einladung.
+Gerät, das woanders steht, darüber den Link als QR-Code, der hier fehlt.
+Danach wartet die Einladung.
 {{< /step >}}
 {{< step on="nas" as="das neue Gerät" >}}
 Tritt mit dem Code bei, oder mit dem Link, falls das NAS woanders steht:

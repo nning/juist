@@ -150,8 +150,8 @@ func TestTheExitScriptKnowsTheRules(t *testing.T) {
 			t.Errorf("exit-node.sh lacks %s", want)
 		}
 	}
-	if !strings.Contains(string(b), "for t in juist$i juist${i}guard") || natTable(0, 7).Name != "juist7" ||
-		guardTable(0, 7).Name != "juist7guard" {
+	if !strings.Contains(string(b), "for t in juist$i juist${i}guard juist${i}in") || natTable(0, 7).Name != "juist7" ||
+		guardTable(0, 7).Name != "juist7guard" || inTable(0, 7).Name != "juist7in" {
 		t.Error("exit-node.sh does not name the nftables tables as conn does")
 	}
 }
@@ -503,5 +503,45 @@ func TestTheGuardPassesAnswersButIsolated(t *testing.T) {
 	if r := answerRule(unix.AF_INET, 3); r.Priority != juistRulePrefBase+exitRuleAnswers+3 || r.Table != unix.RT_TABLE_MAIN ||
 		r.Mark != answerMark || r.Mask != answerMark || answerMark&tsconst.LinuxFwmarkMaskNum != 0 {
 		t.Errorf("the answer rule is %+v", r)
+	}
+}
+
+// The in table drops what is for this node's addresses by any device but its
+// own and loopback, and what is from an overlay address by any but a juist
+// device too.
+func TestTheInTableKeepsTheOverlayToItsDevice(t *testing.T) {
+	own, overlay := &nftables.Set{Name: "own", ID: 1}, &nftables.Set{Name: "overlay", ID: 2}
+	for _, fam := range families {
+		rules := inRules(fam, "jt0", own, overlay)
+		if len(rules) != 2 {
+			t.Fatalf("%v: %d rules, want 2", fam, len(rules))
+		}
+		off := map[nftables.TableFamily][2]uint32{nftables.TableFamilyIPv4: {16, 12}, nftables.TableFamilyIPv6: {24, 8}}[fam]
+		for i, want := range []struct {
+			set  string
+			from []string
+		}{{"own", []string{"jt0\x00", "lo\x00"}}, {"overlay", []string{"juist", "jt0\x00", "lo\x00"}}} {
+			r := rules[i]
+			var from []string
+			for _, e := range r {
+				if c, ok := e.(*expr.Cmp); ok && c.Op == expr.CmpOpNeq {
+					from = append(from, string(c.Data))
+				}
+			}
+			if !slices.Equal(from, want.from) {
+				t.Errorf("%v rule %d: not from %q, want %q", fam, i, from, want.from)
+			}
+			pl := r[len(r)-4].(*expr.Payload)
+			lk := r[len(r)-3].(*expr.Lookup)
+			if pl.Offset != off[i] || lk.SetName != want.set {
+				t.Errorf("%v rule %d: looks up offset %d in %s", fam, i, pl.Offset, lk.SetName)
+			}
+			if v := r[len(r)-1].(*expr.Verdict); v.Kind != expr.VerdictDrop {
+				t.Errorf("%v rule %d does not drop", fam, i)
+			}
+		}
+	}
+	if rules := inRules(nftables.TableFamilyIPv4, "jt0", nil, overlay); len(rules) != 1 {
+		t.Errorf("without own addresses: %d rules", len(rules))
 	}
 }

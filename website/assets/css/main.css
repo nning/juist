@@ -157,6 +157,12 @@ h1, h2, h3 { font-weight: 600; line-height: 1.2; letter-spacing: -0.015em; }
 .note.caution { border-left-color: var(--sand); } .note.caution .t { color: var(--sand); }
 .note.danger { border-left-color: var(--red); } .note.danger .t { color: var(--red); }
 
+/* App screenshots */
+.screens { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 270px)); gap: 24px; margin: 26px 0; }
+.screens figure { margin: 0; }
+.screens img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 14px; }
+.screens figcaption { margin-top: 8px; font-size: 14px; line-height: 1.5; color: var(--text-2); }
+
 /* A flow of hops */
 .flow { margin: 26px 0; }
 .flow ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 40px; }

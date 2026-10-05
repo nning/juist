@@ -42,6 +42,8 @@ CMDS     ?= juist juistd
 # build-tag rot in the embedded Tailscale stack long before the platform work
 # starts.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
+# Platforms kept compiling though nothing ships for them: macOS, deferred past v1.
+CROSS_UNSHIPPED ?= darwin/arm64
 
 # -count=1 defeats the test cache: several tests here assert on external state
 # (open sockets, /proc) that the cache cannot see.
@@ -118,12 +120,13 @@ build-test: ## Compile every package as a check, producing no binaries
 	$(GO) build $(GOFLAGS) ./...
 
 .PHONY: cross
-cross: ## Compile for every v1 target platform
-	@for p in $(CROSS_PLATFORMS); do \
+cross: ## Compile for every v1 target platform, and macOS
+	@for p in $(CROSS_PLATFORMS) $(CROSS_UNSHIPPED); do \
 		echo "==> $$p"; \
 		CGO_ENABLED=0 GOOS=$${p%/*} GOARCH=$${p#*/} $(GO) build $(GOFLAGS) ./... || exit 1; \
 	done
 	@echo "==> FreeBSD's manual pages, here"; $(GO) build $(GOFLAGS) -tags freebsdman ./cmd/...
+	@echo "==> darwin's tests, which run nowhere"; CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) vet $(GOFLAGS) ./...
 
 # HEAD built twice, from two paths and once with an empty build cache, so
 # neither the checkout's location nor a cached object can hide a difference.
@@ -319,6 +322,37 @@ tcb: ## Report the trusted computing base's size against its budget
 		echo "over budget: the audit scope has grown past what docs/06-verification.md plans for"; \
 		exit 1; \
 	fi
+
+## --- android -------------------------------------------------------------
+
+# The app (android/) is Kotlin around the core in ./mobile, which gomobile
+# binds into an AAR for the phone and the emulator. Needs a JDK and the
+# Android SDK and NDK: ANDROID_HOME, and ANDROID_NDK_HOME or the NDK in it.
+ANDROID_AAR    = $(BUILDDIR)/android/juist-core.aar
+ANDROID_API    ?= 31
+ANDROID_TARGET ?= android/arm64,android/amd64
+GRADLE          = cd android && ./gradlew --no-daemon -q
+
+.PHONY: android-core
+android-core: ## Bind the core in ./mobile into an AAR for the Android app
+	@mkdir -p $(BUILDDIR)/tools $(BUILDDIR)/android/assets
+	$(GO) build -o $(BUILDDIR)/tools/ golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
+	PATH="$(abspath $(BUILDDIR)/tools):$$PATH" CGO_ENABLED=1 $(BUILDDIR)/tools/gomobile bind -target $(ANDROID_TARGET) \
+		-androidapi $(ANDROID_API) -javapkg io.juist -trimpath -ldflags="-s -w -buildid=" -o $(ANDROID_AAR) ./mobile
+	@cat THIRD_PARTY_LICENSES "$$($(GO) list -m -f '{{.Dir}}' golang.org/x/mobile)/LICENSE" \
+		android/THIRD_PARTY_NOTICES > $(BUILDDIR)/android/assets/licenses.txt
+
+.PHONY: android
+android: android-core ## Build the Android app's debug and release APKs into android/app/build
+	$(GRADLE) assembleDebug assembleRelease
+
+.PHONY: android-check
+android-check: android-core ## Test the Android app: unit and screenshot tests, and lint
+	$(GRADLE) testDebugUnitTest verifyRoborazziDebug lintDebug
+
+.PHONY: android-screenshots
+android-screenshots: android-core ## Record the Android app's screenshots anew, into android/app/screenshots
+	$(GRADLE) recordRoborazziDebug
 
 ## --- packaging -----------------------------------------------------------
 

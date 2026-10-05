@@ -1,6 +1,7 @@
 // Command licenses writes THIRD_PARTY_LICENSES: the license of Go, of every
-// module that juist and juistd link on any v1 target platform, and of what
-// they embed from elsewhere, which every binary package must carry.
+// module that juist, juistd and the Android app's core link on any v1 target
+// platform, and of what they embed from elsewhere, which every binary package
+// must carry.
 //
 //	go run ./packaging/licenses > THIRD_PARTY_LICENSES
 package main
@@ -18,7 +19,8 @@ import (
 // platforms are the Makefile's CROSS_PLATFORMS; a test holds them equal.
 var platforms = []string{"linux/amd64", "linux/arm64", "freebsd/amd64", "android/arm64"}
 
-var commands = []string{"github.com/nning/juist/cmd/juist", "github.com/nning/juist/cmd/juistd"}
+var commands = []string{"github.com/nning/juist/cmd/juist", "github.com/nning/juist/cmd/juistd",
+	"github.com/nning/juist/mobile"}
 
 // embedded are the licenses of what the binaries embed from this tree but
 // did not write, by the directory that holds each.

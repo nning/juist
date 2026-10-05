@@ -134,6 +134,11 @@ type Manager interface {
 	// timeout. Diagnostics and tests only.
 	Ping(ip netip.Addr, cb func(PingResult))
 
+	// Echo sends ip a TSMP ping, which the peer's data plane answers past
+	// its host's firewall and stack, and reports the round trip to cb,
+	// possibly from another goroutine. cb may never be invoked.
+	Echo(ip netip.Addr, cb func(PingResult))
+
 	// Tunnels reports what each installed peer's WireGuard session has done,
 	// keyed by [Peer.ID].
 	Tunnels() map[uint64]Tunnel

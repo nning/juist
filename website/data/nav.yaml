@@ -1,7 +1,7 @@
 # The handbook's sidebar, in reading order. A page that does not exist yet is
 # left out, and so is a group with none.
 - group: basics
-  items: [docs/how-it-works, docs/install, docs/first-network, docs/invites]
+  items: [docs/how-it-works, docs/install, docs/first-network, docs/invites, docs/android]
 - group: everyday
   items: [docs/status, docs/operator, docs/names, docs/remove]
 - group: admins

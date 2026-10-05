@@ -377,6 +377,8 @@ func (m *fakeManager) LocalPort() uint16 { return 41641 }
 
 func (m *fakeManager) Ping(netip.Addr, func(conn.PingResult)) {}
 
+func (m *fakeManager) Echo(netip.Addr, func(conn.PingResult)) {}
+
 func (m *fakeManager) Tunnels() map[uint64]conn.Tunnel {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -42,6 +42,9 @@ type cli struct {
 	// admissionHold, where set, is how long an admission's copy waits.
 	admissionHold time.Duration
 
+	// terminal has the output be a colour terminal 80 columns wide.
+	terminal bool
+
 	// system is the host's files this CLI reads, by path, and env its
 	// environment; none elsewhere, whatever the test's own.
 	system map[string]string
@@ -118,6 +121,9 @@ func (c *cli) app(out *syncBuffer, in string) *app {
 	}
 	if c.admissionHold != 0 {
 		a.admissionHold = c.admissionHold
+	}
+	if c.terminal {
+		a.terminal, a.color, a.width = true, true, 80
 	}
 	// A background share runs in-process, writing to out until it is up.
 	a.spawn = func(args []string) (io.ReadCloser, func() error, func(), error) {
@@ -449,6 +455,7 @@ func (stubManager) LocalEndpoints() []netip.AddrPort { return nil }
 func (stubManager) LocalPort() uint16 { return 41641 }
 
 func (stubManager) Ping(netip.Addr, func(conn.PingResult)) {}
+func (stubManager) Echo(netip.Addr, func(conn.PingResult)) {}
 
 func (stubManager) Tunnels() map[uint64]conn.Tunnel { return nil }
 

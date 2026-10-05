@@ -52,7 +52,7 @@ gates are worth keeping: M2's exit criterion is satisfied by either alone.
 
 ## The preshared-key path
 
-The per-pair ML-KEM-768 PSK of [04-architecture.md](04-architecture.md) is M11a
+The per-pair ML-KEM-768 PSK of [04-architecture.md](04-architecture.md) is M12a
 ([05-roadmap.md](05-roadmap.md)). Against `tailscale.com v1.104.0` and
 `tailscale/wireguard-go v0.0.0-20260928213032`, the engine carries it with no
 patch, and a design has to respect what it does:
@@ -133,7 +133,7 @@ Each fails silently or confusingly.
   install no rules. The runner reports IPv6 only where `disable_ipv6` and
   `disable_policy` are 0 and IPv6 policy routing works — and, in its iptables mode,
   only where the `ip6tables` binary exists. A host missing `ip6tables` therefore
-  loses the overlay's *primary* family with nothing but a log line. Packaging (M13)
+  loses the overlay's *primary* family with nothing but a log line. Packaging (M16)
   must declare that dependency, and an operator report of "no v6 on the overlay"
   should start here.
 - **`router.CleanUp` is not worth calling here**, though `tailscaled` calls it at
@@ -211,6 +211,11 @@ juist must hold nothing tailscaled also holds, since both run on one host:
   programs its own table and priorities (`conn/router_linux.go`), below
   Tailscale's so an exit node's default route in table 52 cannot capture overlay
   traffic.
+
+- **Not its resolver.** An exit node asks nothing of tailscaled's
+  100.100.100.100 or fd7a:115c:a1e0::53 for a member, whose answer would come
+  from the host's tailnet: where tailscaled wrote resolv.conf, it asks the
+  resolvers in `/etc/resolv.pre-tailscale-backup.conf`.
 
 The same holds between juist's own instances, one per network on a host (M5):
 instance n routes in table 0x6a75+n behind rules at 5110+n, 5130+n, 5150+n and
@@ -424,7 +429,7 @@ tailcat pins a v1.103.0-pre, but adopting these techniques needs no upgrade.
 ### What tailcat does not solve
 
 The preshared key. `grep -rn preshared` over tailcat returns nothing: it runs the
-same PSK-less Noise IKpsk2 as stock Tailscale, so M11a has no prior art to take.
+same PSK-less Noise IKpsk2 as stock Tailscale, so M12a has no prior art to take.
 
 ### Where ours differs on purpose
 

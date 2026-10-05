@@ -38,7 +38,7 @@ const (
 
 	// MaxRecordSize caps a record's encoded size. The largest is a checkpoint
 	// at MaxNodes members, which names and published names at their caps push
-	// past it (docs/05-roadmap.md, M12).
+	// past it (docs/05-roadmap.md, M14).
 	MaxRecordSize = 4 << 20
 
 	// maxArrayElements bounds any CBOR array during decoding. It has to

@@ -146,6 +146,15 @@ func Fingerprint(salt Salt, nonce Nonce, id types.Identity, keys types.NodeKeys)
 	return strings.Join(words, "-")
 }
 
+// WordsAt lists, in order, the words a code may hold at position i of its
+// three, counted from 0 after the nameplate.
+func WordsAt(i int) []string {
+	if i%2 == 0 {
+		return slices.Clone(evenWords[:])
+	}
+	return slices.Clone(oddWords[:])
+}
+
 // wordAt alternates the two lists, so a swapped pair reads as a wrong word
 // instead of a wrong code.
 func wordAt(i int, b byte) string {

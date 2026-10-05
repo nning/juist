@@ -50,6 +50,13 @@ func TestThePagesLookAsTheWebsiteDoes(t *testing.T) {
 	if !strings.Contains(baseHTML, mark) {
 		t.Error("the wordmark is not design/logo/wordmark.svg")
 	}
+	svg, err = os.ReadFile("../../design/logo/icon.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regexp.MustCompile(`(?s)<!--.*?-->\s*`).ReplaceAllString(string(svg), "") != string(icon) {
+		t.Error("the icon is not design/logo/icon.svg")
+	}
 }
 
 // ibmFonts are the fonts as IBM/plex publishes them, at 763c36e: the OFL

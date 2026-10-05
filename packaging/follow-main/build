@@ -1,0 +1,35 @@
+#!/bin/sh
+# Builds the deb of nning/juist's main into ~/out when main changed outside
+# the docs since the last build. Runs as juist-build.
+set -eu
+# The Go that setup copied, if any; GOTOOLCHAIN fetches what go.mod asks for.
+[ -x /usr/local/lib/juist-follow-main/go/bin/go ] &&
+	PATH=/usr/local/lib/juist-follow-main/go/bin:$PATH
+export PATH GOTOOLCHAIN=auto
+# /tmp may be a small tmpfs.
+export GOTMPDIR="$HOME/.cache/go-tmp"
+mkdir -p "$GOTMPDIR"
+cd "$HOME"
+[ -d juist/.git ] || git clone -q --branch main https://github.com/nning/juist.git juist
+cd juist
+git fetch -q origin main
+new=$(git rev-parse FETCH_HEAD)
+built=$(cat "$HOME/built" 2>/dev/null || true)
+[ "$new" != "$built" ] || exit 0
+# A commit whose build failed or was killed waits for the next one;
+# remove ~/failed to try it again.
+[ "$new" != "$(cat "$HOME/failed" 2>/dev/null || true)" ] || exit 0
+if [ -n "$built" ] && git cat-file -e "$built^{commit}" 2>/dev/null &&
+	git diff --quiet "$built" "$new" -- . ':(exclude)docs' ':(exclude)*.md'; then
+	echo "$new" > "$HOME/built"
+	exit 0
+fi
+echo "$new" > "$HOME/failed"
+git reset -q --hard "$new"
+git clean -qfdx
+make deb
+rm -rf "$HOME/out"
+mkdir "$HOME/out"
+cp build/deb/juist_*.deb "$HOME/out/"
+echo "$new" > "$HOME/built"
+rm -f "$HOME/failed"

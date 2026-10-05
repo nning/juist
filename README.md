@@ -17,8 +17,8 @@ checks that log for itself.
 
 ![A laptop on Debian creates a network and invites a NAS on FreeBSD, which joins and pings it](website/static/demo.gif)
 
-juist runs on Linux and FreeBSD; Android is on the
-[roadmap](docs/05-roadmap.md). It has not had a security audit yet.
+juist runs on Linux and FreeBSD, and an app makes an Android phone a member.
+It has not had a security audit yet.
 
 The [handbook](https://docs.juist.nning.io/en/docs/) explains every feature step by step;
 `juist help COMMAND` and `man juist` say what each command does.
@@ -107,6 +107,22 @@ shares, the status page, and a service member that keeps a published server
 in Docker from the rest of the network
 ([examples/service-member](examples/service-member)).
 
+## Android
+
+The app, for Android 12 or newer, joins one network as a member by scanning
+the QR code `juist invite` shows in a terminal, or by the code typed in on the
+same LAN. While its VPN is on, every app on the phone reaches the other
+devices at their addresses; the phone's other traffic and its DNS are left
+alone.
+
+```sh
+make android    # needs a JDK 21, the Android SDK and NDK; the APKs land in android/app/build/outputs/apk
+```
+
+It sends its internet through an exit node where one is chosen; it resolves
+no names, uses no subnets, and takes no roles.
+Building, signing and what the app shows: [Android](https://docs.juist.nning.io/en/docs/android/).
+
 ## Several networks and several admins
 
 A device can be in several networks at once, each with a juistd of its own;
@@ -178,9 +194,8 @@ are done: the signed log with quorum, WireGuard with NAT traversal and member
 relays, invites, several networks, exit nodes, subnet routers, names,
 publishing, and Debian, Fedora and FreeBSD packages.
 
-Not yet: Android, ACLs (every member reaches every port on the
-others), break-glass recovery, the post-quantum data plane,
-and QR codes.
+Not yet: ACLs (every member reaches every port on the others), break-glass
+recovery, and the post-quantum data plane.
 
 ## Development
 

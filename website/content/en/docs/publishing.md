@@ -157,8 +157,8 @@ folder holding an `index.html` shows that page instead. It ends with the command
 `--for`, seven days at most, and where the device goes away, ten minutes
 later at most. With `--background` (`-b`), the command returns once the share
 is up, and the share goes on, under the same link even across a restart of
-juistd, until `juist share --stop` or `--for`; `juist status` shows it as
-`Sharing`. One certificate for the device's name covers every share, so
+juistd, until `juist share --stop` or `--for`; `juist status` shows it,
+with its link, as `Sharing`. One certificate for the device's name covers every share, so
 their paths reach no certificate log. A device shares one thing at a time.
 [Renamed]({{< relref "docs/network-changes" >}}), it shares under its new
 name, and `juist share` prints the new link.

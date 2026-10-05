@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/net/netmon"
 )
 
 // Invites are found on the LAN by their nameplate, the number a typed code
@@ -258,9 +259,15 @@ func OnLink(addr netip.Addr) bool {
 	if addr.IsLoopback() || addr.IsLinkLocalUnicast() {
 		return true
 	}
-	addrs, err := net.InterfaceAddrs()
+	list, err := netmon.GetInterfaceList()
 	if err != nil {
 		return false
+	}
+	var addrs []net.Addr
+	for _, ifi := range list {
+		if as, err := ifi.Addrs(); err == nil {
+			addrs = append(addrs, as...)
+		}
 	}
 	for _, a := range addrs {
 		if n, ok := a.(*net.IPNet); ok {

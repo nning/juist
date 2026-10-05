@@ -149,7 +149,7 @@ revocations in a document the devices replicate. In both, one admin or
 coordinator can make any change.
 
 Choose rayfish to try a mesh without a server on platforms juist lacks, such
-as Windows, macOS or Android.
+as Windows or macOS.
 
 ## Shared-secret meshes {#shared-secret}
 
@@ -184,8 +184,8 @@ belongs.
 ## Where juist is weaker {#weaker}
 
 - juist has not had a security audit.
-- It runs on Linux and FreeBSD only; there is nothing for Android, Windows,
-  macOS or iOS.
+- It runs on Linux and FreeBSD, and on Android as a member without names,
+  roles, exit nodes or subnets; there is nothing for Windows, macOS or iOS.
 - It has no access rules: every member reaches every port of every other
   member.
 - It knows devices, not users, and has no sign-in through an identity

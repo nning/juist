@@ -6,6 +6,10 @@
 - doc: docs/invites
   en: {title: Invites, text: "A code for the LAN or a link for anywhere. Both devices show four words to compare."}
   de: {title: Einladungen, text: "Ein Code fürs LAN oder ein Link für überall. Beide Geräte zeigen vier Wörter, die du vergleichst."}
+- doc: docs/android
+  en: {title: Android, text: "A phone joins by the invite's QR code or code, reaches every member at its address, and shows how each is reached."}
+  de: {title: Android, text: "Ein Telefon tritt per QR-Code oder Code der Einladung bei, erreicht jedes Mitglied unter seiner Adresse und zeigt, wie jedes erreicht wird."}
+  note: {en: "On Android 12 or newer, as a member without names, roles or subnets.", de: "Unter Android 12 oder neuer, als Mitglied ohne Namen, Rollen und Subnetze."}
 - doc: docs/admins
   en: {title: Admins and quorum, text: "Every change takes k of n admins. One that needs more is carried to their devices."}
   de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}

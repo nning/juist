@@ -143,6 +143,14 @@ func (r plumbedDNS) Route(rt DNSRouting) error {
 
 func (r plumbedDNS) Revert() error { return r.p.SetDNS(r.dev, nil) }
 
+// VPNDNS is the host's DNS through a VPN device's own servers, as Android's
+// VpnService sets them, which every program's lookups then go to.
+func VPNDNS(p conn.Plumber, dev string) HostDNS { return vpnDNS{plumbedDNS{p: p, dev: dev}} }
+
+type vpnDNS struct{ plumbedDNS }
+
+func (vpnDNS) through(string, []netip.AddrPort) (bool, string) { return true, "" }
+
 // through reports whether the host's programs ask servers, whose resolver
 // resolvconf wrote.
 func (r plumbedDNS) through(path string, servers []netip.AddrPort) (bool, string) {
@@ -169,13 +177,53 @@ func (d *Daemon) defaultDNSServer(dev string) DNSServer {
 }
 
 // membersUpstreamFor is who a member's query q is asked of: the host's
-// resolvers resolved would ask where this device's zone overrides its name,
-// and the forwarder's own otherwise.
+// resolvers resolved would ask where this device's zone overrides its name
+// and the host's resolver asks juist's, and [Daemon.uplinkFor] otherwise,
+// which know no override.
 func (d *Daemon) membersUpstreamFor(q []byte) []netip.AddrPort {
-	if z := d.zone.Load(); z != nil && z.Overridden(q) {
+	if z := d.zone.Load(); z != nil && d.namesRouted.Load() && z.Overridden(q) {
 		return d.hostUpstreamFor(q)
 	}
-	return nil
+	return d.uplinkFor(q)
+}
+
+// tailscaledResolvers answer from the host's tailnet, whose addresses a
+// member reaching the internet through this exit node cannot reach.
+var tailscaledResolvers = []netip.Addr{netip.MustParseAddr("100.100.100.100"), netip.MustParseAddr("fd7a:115c:a1e0::53")}
+
+// PreTailscaleResolvConf is the host's resolv.conf as tailscaled found it
+// before writing its own.
+var PreTailscaleResolvConf = "/etc/resolv.pre-tailscale-backup.conf"
+
+// uplinkFor is who a member's query q is asked of where no override is
+// answered: those the host asks, by resolved's routing where resolv.conf
+// names its stub alone, but never tailscaled's resolvers; nil, the
+// forwarder's own, where they are all there is.
+func (d *Daemon) uplinkFor(q []byte) []netip.AddrPort {
+	ups := dnsfwd.HostResolvers()
+	stubOnly := len(ups) > 0 && !slices.ContainsFunc(ups, func(a netip.AddrPort) bool { return !a.Addr().IsLoopback() })
+	if r := d.hostRouting.Load(); r != nil && stubOnly {
+		if name, ok := names.Question(q); ok {
+			ups = withoutTailscaled(r.Servers(name))
+			if len(ups) == 0 {
+				for _, s := range r.Scopes {
+					if s.DefaultRoute {
+						ups = append(ups, withoutTailscaled(s.Servers)...)
+					}
+				}
+			}
+		}
+	} else if ups = withoutTailscaled(ups); len(ups) == 0 {
+		ups = withoutTailscaled(dnsfwd.ResolversIn(PreTailscaleResolvConf))
+	}
+	if len(ups) == 0 {
+		return nil
+	}
+	return ups
+}
+
+func withoutTailscaled(ups []netip.AddrPort) []netip.AddrPort {
+	return slices.DeleteFunc(slices.Clone(ups), func(a netip.AddrPort) bool { return slices.Contains(tailscaledResolvers, a.Addr()) })
 }
 
 // namesUpstreamFor is who juistd's resolver asks q of, what it does not
@@ -280,10 +328,11 @@ func (d *Daemon) routeDNSLocked(exit []netip.AddrPort, keep bool) (bool, string)
 	up := slices.Clone(exit)
 	d.namesExit.Store(&up)
 	want := d.wantRoutingLocked(exit)
-	if d.names != nil && len(exit) == 0 {
+	if d.names != nil && len(exit) == 0 || d.dnsServer != nil {
 		d.readHostRoutingLocked()
 	}
 	d.namesStatus = nil
+	d.namesRouted.Store(false)
 	if want.empty() {
 		if !d.dnsRouting.empty() && d.hostDNS != nil {
 			if err := d.hostDNS.Revert(); err != nil {
@@ -326,6 +375,7 @@ func (d *Daemon) routeDNSLocked(exit []netip.AddrPort, keep bool) (bool, string)
 // as [Daemon.routeDNS] reports it, and of the network's names.
 func (d *Daemon) routedLocked(exit []netip.AddrPort) (bool, string) {
 	named := d.names != nil && d.dnsRouting.Servers[0] == d.namesAt
+	d.namesRouted.Store(named && d.dnsWhy == "")
 	if !named {
 		d.namesStatus = d.namesNotLocked()
 	}
@@ -524,6 +574,7 @@ func (d *Daemon) closeDNS() {
 	if d.names != nil {
 		d.names.Close()
 		d.names = nil
+		d.namesRouted.Store(false)
 	}
 }
 

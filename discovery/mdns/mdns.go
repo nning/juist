@@ -32,11 +32,13 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/ipv4"
+	"tailscale.com/net/netmon"
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/trust/secrets"
 )
 
@@ -206,7 +208,12 @@ func New(opts Options) (*Beacon, error) {
 // Joining nowhere is an error — losing discovery looks like every peer being
 // offline.
 func listenMulticast(group netip.AddrPort, skipIface string) (PacketConn, error) {
-	lc := net.ListenConfig{Control: reuseAddr}
+	lc := net.ListenConfig{Control: func(network, address string, c syscall.RawConn) error {
+		if err := reuseAddr(network, address, c); err != nil {
+			return err
+		}
+		return underlay.Control(network, address, c)
+	}}
 	pc, err := lc.ListenPacket(context.Background(), "udp4",
 		net.JoinHostPort("", strconv.Itoa(int(group.Port()))))
 	if err != nil {
@@ -261,12 +268,13 @@ type groupConn struct {
 // interface appearing later would otherwise never carry discovery; re-joining
 // returns EADDRINUSE, which is what makes it idempotent.
 func (c *groupConn) rejoin() int {
-	ifaces, err := net.Interfaces()
+	list, err := netmon.GetInterfaceList()
 	if err != nil {
 		return 0
 	}
 	var joined []net.Interface
-	for _, ifi := range ifaces {
+	for _, l := range list {
+		ifi := *l.Interface
 		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagMulticast == 0 {
 			continue
 		}

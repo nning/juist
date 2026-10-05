@@ -46,6 +46,15 @@ Geräts und den Schlüssel des einladenden Admins, der das neue Gerät an dessen
 Signatur bindet. Kopiere ihn vollständig samt Anführungszeichen, denn er
 enthält Zeichen, die eine Shell sonst verändern würde.
 
+Im Terminal zeichnet `juist invite` den Link zusätzlich als QR-Code, über der
+Zeile mit `juist join`. Eine Kamera liest darin den Text des Links, ohne den
+Befehl. Geht die Ausgabe nicht in ein Terminal, fehlt der QR-Code, ebenso in
+einem Fenster, das zu schmal für ihn ist. Das sagt juist dann:
+`no qr code: the terminal is narrower than 59 columns`.
+
+Ein Telefon tritt bei, indem die [Android-App]({{< relref "docs/android" >}})
+den QR-Code scannt oder du den Code in sie eintippst.
+
 Code und Link verfallen, sobald ein Gerät beigetreten ist oder die Einladung
 abläuft. Eine Einladung gilt eine Stunde, es sei denn, du gibst `--expires`
 an, etwa `--expires 2h`. Höchstens sind `7d` möglich.

@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"net/netip"
 	"time"
+
+	"github.com/nning/juist/internal/underlay"
 )
 
 const (
@@ -168,7 +170,7 @@ func dial(ctx context.Context, addrs []netip.AddrPort, path string, cfg *tls.Con
 	net.Conn, *bufio.Reader, error) {
 	var lastErr error = errors.New("no address to reach the relay at")
 	for _, a := range addrs {
-		d := tls.Dialer{NetDialer: &net.Dialer{Timeout: dialTimeout}, Config: cfg}
+		d := tls.Dialer{NetDialer: underlay.Dialer(dialTimeout), Config: cfg}
 		c, err := d.DialContext(ctx, "tcp", a.String())
 		if err != nil {
 			lastErr = err

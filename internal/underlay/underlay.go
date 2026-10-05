@@ -6,13 +6,16 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+
+	"tailscale.com/net/netmon"
 )
 
 // Scan returns the addresses of every up, non-loopback interface: in addrs
 // those a device elsewhere might reach this host at, in internal those it
 // cannot, which callers use to tell an interface address from a reflexive one.
+// The interfaces are netmon's, which an Android app lists itself.
 func Scan() (addrs, internal []netip.Addr) {
-	ifaces, err := net.Interfaces()
+	ifaces, err := netmon.GetInterfaceList()
 	if err != nil {
 		return nil, nil
 	}

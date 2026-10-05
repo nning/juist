@@ -12,6 +12,8 @@ import (
 	alog "github.com/anacrolix/log"
 	"github.com/anacrolix/torrent/bencode"
 	"golang.org/x/time/rate"
+
+	"github.com/nning/juist/internal/underlay"
 )
 
 // A Store puts and gets one opaque value at an address derived from a seed,
@@ -52,7 +54,7 @@ func NewStore(opts StoreOptions) (*Store, error) {
 func newStore(conn net.PacketConn, bootstrap []string, noSecurity bool) (*Store, error) {
 	if conn == nil {
 		var err error
-		if conn, err = net.ListenPacket("udp", ":0"); err != nil {
+		if conn, err = underlay.ListenPacket("udp", ":0"); err != nil {
 			return nil, fmt.Errorf("dht: binding a UDP socket: %w", err)
 		}
 	}

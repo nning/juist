@@ -32,13 +32,13 @@ var pageTmpl = webstyle.Page("status", pageHTML, template.FuncMap{
 	"short": func(h types.Hash) string { return h.String()[:12] },
 })
 
-// assets is where the page's fonts and script are: a dot-entry, which no
+// assets is where the page's fonts, icon and script are: a dot-entry, which no
 // page of its own is.
 const assets = "/.juist/"
 
-// csp lets the page style itself, load its fonts and script, and fetch
+// csp lets the page style itself, load its fonts, icon and script, and fetch
 // itself again, and nothing else.
-const csp = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; " +
+const csp = "default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self'; script-src 'self'; connect-src 'self'; " +
 	"base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
 // cacheFor is how long one answer of juistd's serves every client, and
@@ -120,7 +120,7 @@ func (s *Server) Handler(name string, public ipc.Visibility) http.Handler {
 			_, _ = w.Write(refreshJS)
 			return
 		case strings.HasPrefix(r.URL.Path, assets):
-			webstyle.ServeFont(w, r, strings.TrimPrefix(r.URL.Path, assets))
+			webstyle.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, assets))
 			return
 		case r.URL.Path != "/":
 			http.NotFound(w, r)

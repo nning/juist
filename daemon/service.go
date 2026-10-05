@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net"
 	"net/netip"
 	"os"
 	"os/user"
@@ -117,6 +118,10 @@ type ServiceOptions struct {
 
 	// Socket is where the control socket listens. Empty uses SocketPath(Home).
 	Socket string
+
+	// InProcess listens on no socket: calls come through [Service.Pipe]
+	// alone, each an operator's, as in an app whose sandbox is the boundary.
+	InProcess bool
 
 	// InviteAddrs lists where a guest can reach this device's invite at
 	// port; nil scans the interfaces. Tests replace it.
@@ -244,7 +249,9 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	if sock == "" {
 		sock = ipc.SocketPath(home)
 	}
-	if s.ipc, err = newIPCServer(sock, s.handle, s.tierOf, s.logf); err != nil {
+	if opts.InProcess {
+		s.ipc = newPipeServer(s.handle, s.tierOf, s.logf)
+	} else if s.ipc, err = newIPCServer(sock, s.handle, s.tierOf, s.logf); err != nil {
 		return nil, err
 	}
 	ok = true
@@ -680,6 +687,10 @@ func (s *Service) setExit(req *ipc.Request) error {
 	s.holdExitLocked()
 	return nil
 }
+
+// Pipe is a connection to the control protocol from this process, an
+// [ipc.Dialer] for [ServiceOptions.InProcess].
+func (s *Service) Pipe() (net.Conn, error) { return s.ipc.pipe() }
 
 // Mesh returns the running mesh, or nil.
 func (s *Service) Mesh() *Daemon {
@@ -1201,6 +1212,16 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 		err = s.setPublish(req)
 	case ipc.CmdExit:
 		err = s.setExit(req)
+	case ipc.CmdPing:
+		m := s.Mesh()
+		if m == nil {
+			err = errNoNetwork
+			break
+		}
+		var p *ipc.Ping
+		if p, err = m.Ping(ctx, req.Ping); err == nil {
+			return ipc.Response{Ping: p}
+		}
 	case ipc.CmdWaiting:
 		m := s.Mesh()
 		if m == nil {

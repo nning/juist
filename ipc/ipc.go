@@ -139,6 +139,10 @@ const (
 	// CmdStatusPage asks what a status page served here shows, answered in
 	// [Response.StatusPage]; the terminator's second call.
 	CmdStatusPage Command = 23
+
+	// CmdPing sends a TSMP ping through the tunnel to the member
+	// [Request.Ping] names, answered in [Response.Ping].
+	CmdPing Command = 24
 )
 
 func (c Command) String() string {
@@ -191,6 +195,8 @@ func (c Command) String() string {
 		return "unshare"
 	case CmdStatusPage:
 		return "status page"
+	case CmdPing:
+		return "ping"
 	default:
 		return fmt.Sprintf("command?<%d>", uint8(c))
 	}
@@ -276,6 +282,9 @@ type Request struct {
 
 	// Share is what a [CmdShare] publishes.
 	Share *ShareRequest `cbor:"26,keyasint,omitempty"`
+
+	// Ping is the member a [CmdPing] pings.
+	Ping types.Identity `cbor:"31,keyasint,omitempty"`
 }
 
 // maxTerminatorAddrs caps the addresses a terminator reports, each way.
@@ -327,16 +336,23 @@ func validNoCerts(ns []NoCert) bool {
 }
 
 // A ShareRequest is where the connections for this device's own name go, a
-// loopback HOST:PORT, and its end in Unix seconds, zero for the call's.
+// loopback HOST:PORT, and its end in Unix seconds, zero for the call's; for a
+// file or directory, also its path and the URL path it is reached under.
 type ShareRequest struct {
 	To    string `cbor:"1,keyasint"`
 	Until int64  `cbor:"2,keyasint,omitempty"`
+	What  string `cbor:"3,keyasint,omitempty"`
+	Path  string `cbor:"4,keyasint,omitempty"`
 }
+
+// maxSharePath bounds a [ShareRequest]'s What and Path.
+const maxSharePath = 4096
 
 // Valid reports whether s goes to a port on loopback and ends after the epoch.
 func (s *ShareRequest) Valid() bool {
 	ap, err := netip.ParseAddrPort(s.To)
-	return err == nil && ap.Addr().IsLoopback() && ap.Port() != 0 && s.Until >= 0
+	return err == nil && ap.Addr().IsLoopback() && ap.Port() != 0 && s.Until >= 0 &&
+		len(s.What) <= maxSharePath && len(s.Path) <= maxSharePath && (s.Path == "" || s.Path[0] == '/')
 }
 
 // An ACMEAccount is the account a terminator takes its certificates under,
@@ -492,6 +508,15 @@ type Response struct {
 	// StatusPage answers [CmdStatusPage], read with [CallStatusPage]
 	// likewise.
 	StatusPage *StatusPage `cbor:"13,keyasint,omitempty"`
+
+	// Ping answers [CmdPing].
+	Ping *Ping `cbor:"14,keyasint,omitempty"`
+}
+
+// A Ping is an echo's round trip in microseconds, or why none came back.
+type Ping struct {
+	Micros int64  `cbor:"1,keyasint,omitempty"`
+	Err    string `cbor:"2,keyasint,omitempty"`
 }
 
 // RotationProof is what a rotated device's current identity key signs for
@@ -582,6 +607,7 @@ const (
 	fPublish
 	fAccount
 	fShare
+	fPing
 )
 
 // present lists the optional fields r sets.
@@ -600,7 +626,7 @@ func (r *Request) present() reqField {
 		{r.AcceptNames != nil, fNames},
 		{r.ServePublished != nil || len(r.ServeTo) > 0 || len(r.Unserve) > 0, fPublish},
 		{r.Account != nil || len(r.Listening) > 0 || len(r.Unbound) > 0 || len(r.NoCert) > 0 || r.Stopping, fAccount},
-		{r.Share != nil, fShare},
+		{r.Share != nil, fShare}, {!r.Ping.IsZero(), fPing},
 	} {
 		if p.set {
 			f |= p.f
@@ -670,6 +696,8 @@ var requestShapes = map[Command]requestShape{
 	CmdPublished:  {},
 	CmdUnshare:    {},
 	CmdStatusPage: {},
+	CmdPing: {takes: fPing, shape: "a ping request names a member and nothing else",
+		check: func(r *Request) bool { return !r.Ping.IsZero() }},
 	CmdShare: {takes: fShare, shape: "a share request carries where to, on loopback, and an end, and nothing else",
 		check: func(r *Request) bool { return r.Share != nil && r.Share.Valid() }},
 	CmdServing: {takes: fAccount, shape: "a serving request carries the terminator's account and where it listens, and nothing else",
@@ -867,6 +895,11 @@ func (r *Response) makePrintable() {
 		for i := range st.Unmoved {
 			st.Unmoved[i] = printable(st.Unmoved[i])
 		}
+		if sh := st.Share; sh != nil {
+			for _, f := range []*string{&sh.Name, &sh.To, &sh.NotShared, &sh.What, &sh.Path} {
+				*f = printable(*f)
+			}
+		}
 	}
 	if e := r.Event; e != nil {
 		for _, f := range []*string{&e.Addr, &e.Code, &e.Link, &e.Name, &e.Text} {
@@ -878,6 +911,9 @@ func (r *Response) makePrintable() {
 	}
 	if r.Self != nil {
 		r.Self.Name = printable(r.Self.Name)
+	}
+	if r.Ping != nil {
+		r.Ping.Err = printable(r.Ping.Err)
 	}
 }
 
@@ -946,20 +982,39 @@ func WriteMessage(c net.Conn, v any, limit int) error {
 
 // --- client side -----------------------------------------------------------
 
+// A Dialer opens a connection to a daemon: its socket, or a pipe into a
+// daemon in the same process.
+type Dialer func() (net.Conn, error)
+
+// Socket dials the control socket at path.
+func Socket(path string) Dialer {
+	return func() (net.Conn, error) { return net.DialTimeout("unix", path, 5*time.Second) }
+}
+
 // Call sends one request to a daemon's IPC socket and returns its reply. The
 // CLI's half of the protocol, kept here so both halves stay in one file.
 func Call(path string, req Request) (Response, error) {
-	return Stream(context.Background(), path, req, nil)
+	return CallVia(Socket(path), req)
+}
+
+// CallVia is [Call] over the connection dial opens.
+func CallVia(dial Dialer, req Request) (Response, error) {
+	return StreamVia(context.Background(), dial, req, nil)
 }
 
 // Stream is [Call] for a request that reports progress: onEvent receives each
 // event until the reply arrives. A nil onEvent refuses a streaming reply.
 // Ending ctx hangs up, which ends the call on the daemon's side too.
 func Stream(ctx context.Context, path string, req Request, onEvent func(*Event)) (Response, error) {
+	return StreamVia(ctx, Socket(path), req, onEvent)
+}
+
+// StreamVia is [Stream] over the connection dial opens.
+func StreamVia(ctx context.Context, dial Dialer, req Request, onEvent func(*Event)) (Response, error) {
 	if onEvent == nil {
-		return converse(ctx, path, req, nil, eventTimeout)
+		return converse(ctx, dial, req, nil, eventTimeout)
 	}
-	return converse(ctx, path, req, func(_ context.Context, e *Event, _ func(Request) error) error {
+	return converse(ctx, dial, req, func(_ context.Context, e *Event, _ func(Request) error) error {
 		onEvent(e)
 		return nil
 	}, eventTimeout)
@@ -972,14 +1027,14 @@ func Stream(ctx context.Context, path string, req Request, onEvent func(*Event))
 // silence ends the call; ctx does.
 func Converse(ctx context.Context, path string, req Request,
 	onEvent func(ctx context.Context, e *Event, reply func(Request) error) error) (Response, error) {
-	return converse(ctx, path, req, onEvent, 0)
+	return converse(ctx, Socket(path), req, onEvent, 0)
 }
 
 // converse runs a call, waiting at most idle between frames once the first
 // has come; zero waits for as long as ctx lets it.
-func converse(ctx context.Context, path string, req Request,
+func converse(ctx context.Context, dial Dialer, req Request,
 	onEvent func(context.Context, *Event, func(Request) error) error, idle time.Duration) (Response, error) {
-	c, err := net.DialTimeout("unix", path, 5*time.Second)
+	c, err := dial()
 	if err != nil {
 		return Response{}, err
 	}

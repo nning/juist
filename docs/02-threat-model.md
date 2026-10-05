@@ -17,9 +17,9 @@
 | Evicted member | Was a member; retains all old keys and state | Signed revocation records + epoch bump (loses group secret → loses discovery) + WG peer removal + fail-closed freshness TTL |
 | Stolen/lost device | Full key material of one member | Same as evicted member, after detection; per-device keys mean no shared secrets to rotate |
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
-| Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; use open to every member until coarse ACLs (M14) scope it |
+| Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; use open to every member until coarse ACLs (M13) scope it |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
-| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); signed releases (M13, after v1.0); update transparency (roadmap item, not v1) |
+| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); signed releases (M16, after v1.0); update transparency (roadmap item, not v1) |
 
 ## Out of scope / consciously accepted
 
@@ -64,9 +64,11 @@ adopting this system must accept them explicitly.
    entirely.
 4. **Cold-start availability.** First contact requires the public DHT or one reachable
    member. A network that is 100 % hard-NAT with zero relay-capable members cannot
-   form. DHT eclipse/Sybil attacks can *delay* cold start; they can never corrupt
-   membership. Mitigation: cache last-known endpoints, advertise "relay-capable" as a
-   first-class role, warn when fewer than two exist.
+   form, unless it chooses a public DERP server (planned, see
+   [05-roadmap.md](05-roadmap.md), "Networks of phones alone"). DHT eclipse/Sybil
+   attacks can *delay* cold start; they can never corrupt membership. Mitigation:
+   cache last-known endpoints, advertise "relay-capable" as a first-class role, warn
+   when fewer than two exist.
 5. **Metadata leakage.** Public DHT storage nodes observe that some IP stored an opaque
    record; member relays observe timing/volume between member IPs; LAN observers see
    blinded-but-present mDNS announcements. Full unobservability requires Tor-class
@@ -87,7 +89,10 @@ adopting this system must accept them explicitly.
    link's secret, so a storage node learns that two addresses met through one
    opaque key within minutes of each other — who invited whom, to what, stays
    inside the seal. `juist invite --no-dht` and `juistd --no-dht` keep invites off
-   the DHT.
+   the DHT. A public DERP server a network chooses (planned) sees more than
+   either: every client's public address and node key, which keys exchange
+   packets with which, when and how much, for as long as the pair has no
+   other path.
 6. **Enrollment bottoms out at admin-device security.** One-guess PAKE invites and
    full-entropy QR tokens shrink but cannot eliminate the window in which a mis-issued
    invite or a compromised admin device admits an attacker.
@@ -102,7 +107,7 @@ adopting this system must accept them explicitly.
    never overlap the overlay space, so an exit node cannot intercept member-to-member
    traffic; an exit node carries public addresses alone, so it reaches neither its
    own LAN nor a client's; and a client uses one only when its owner chooses it
-   and its operator agreed to serve. Until ACLs (M14), though, the grant is
+   and its operator agreed to serve. Until ACLs (M13), though, the grant is
    network-wide: every member may use every exit node, so the quorum that grants
    the role decides for all members at once. The exit node answers its clients' DNS
    too, where systemd-resolved runs on them, and so sees their lookups as it sees
@@ -119,24 +124,24 @@ adopting this system must accept them explicitly.
    from where it will send; a client that must
    send nothing outside the tunnel, not even answers, chooses the exit node
    with `--isolate`.
-8. **A real device puts the overlay addresses on the host, where the LAN can reach
-   them.** Linux's weak host model makes an address on `juist0` reachable through
-   *any* interface, so a LAN-adjacent attacker can send plain IP packets to a node's
-   overlay address and can forge the source as another member's. Both default-deny
-   gates sit downstream of WireGuard decryption and never see these packets. It is no
-   way in to membership, but **a source in the overlay v4 range is not evidence that a
-   packet came through the tunnel**, and services bound only to an overlay address
-   are LAN-reachable. The v6 ULA has the same shape, guessable only from the genesis
-   hash. Tailscale closes the source half with a netfilter rule; juist runs
-   `NetfilterOff` so the daemon touches neither the host firewall nor any sysctl,
-   which is also what lets its unit file set `ProtectKernelTunables`. Accepted for
-   v1: the overlay is a transport, and anything on top authenticates its own peers.
-   Operators wanting the stronger boundary add the host rule themselves. Revisit at
-   M6, which needs netfilter management anyway. The package's installer, not the
+8. **A real device puts the overlay addresses on the host, where the LAN could
+   reach them.** Linux's weak host model makes an address on `juist0` reachable
+   through *any* interface, and both default-deny gates sit downstream of WireGuard
+   decryption. On Linux juistd therefore drops, in an nftables table of its own
+   (`juistNin`, prerouting at raw priority), what comes for this node's overlay
+   addresses by another device than its tunnel or loopback, and what comes from a
+   member's overlay address by a device that is no juist device. Tailscale drops
+   only the second. What this costs: a container or VM on a bridge of the host no
+   longer reaches the host's own overlay address, and a LAN host no longer reaches
+   a subnet router's. **FreeBSD is still open**: it takes an address by any
+   interface too, and pf, which juist runs only to serve or use an exit node, is
+   where the same two rules belong. There a service bound only to an overlay
+   address stays LAN-reachable, and an overlay source is no evidence that a packet
+   came through the tunnel. The package's installer, not the
    daemon, does touch the host firewall once, in the other direction: where
    firewalld or ufw runs it lets everything in on `juist0`, as Tailscale's own
    rules do for `tailscale0`, because a host firewall that drops the overlay
-   silently breaks gossip — and with it removals. So until ACLs exist (M14),
+   silently breaks gossip — and with it removals. So until ACLs exist (M13),
    **every member can reach every port the host listens on through the tunnel**;
    the host firewall still guards every other interface, and
    `/usr/lib/juist/firewall.sh revoke` takes the rule back.
@@ -151,7 +156,7 @@ adopting this system must accept them explicitly.
    is the device keys. Bounded by: a device is still removed from each network
    by that network's quorum. A user per instance, which would close it, needs
    the packaging and each instance's view of the one below reworked, and is
-   left for the hardening before the audit (M12).
+   left for the hardening before the audit (M14).
 10. **Admin devices see what waits for the admins (M5b).** A change waiting
    for votes is sealed to the admin keys, but the juistd of every admin device
    that carries it sees its outside: which admin key handed it on, when it

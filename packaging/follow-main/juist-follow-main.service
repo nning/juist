@@ -1,0 +1,17 @@
+[Unit]
+Description=Build juist from main and install it
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=juist-build
+Group=juist-build
+Environment=HOME=/var/lib/juist-build
+ExecStart=/usr/local/lib/juist-follow-main/build
+ExecStartPost=+/usr/local/lib/juist-follow-main/install
+Nice=19
+CPUWeight=idle
+IOSchedulingClass=idle
+OOMScoreAdjust=500
+TimeoutStartSec=3h

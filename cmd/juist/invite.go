@@ -52,7 +52,8 @@ func cmdInvite(a *app, args []string) error {
 Invite one device, then wait for it to join. Prints a code, for the same
 LAN, and a link, for anywhere; behind NAT, the two devices meet through the
 public BitTorrent DHT. Both end when a device joins or the invite expires;
-a wrong guess voids the code, and the link still works.
+a wrong guess voids the code, and the link still works. A terminal shows
+the link as a QR code too.
 
 NAME is the device's name in the network (default: its own). Where more
 than one admin must approve, the invite waits for them.`}
@@ -338,6 +339,7 @@ func (a *app) announceInvite(network, code string, link enroll.Link, port uint16
 	if o.lan {
 		a.printf("  %s  %s\n\n", a.bold("juist join "+code), a.dim("# same LAN"))
 	}
+	a.showQR(link.String())
 	// Quoted: a link holds brackets around IPv6 addresses, which zsh
 	// globs, and commas; pasted as printed, it must reach juist as one word.
 	a.command("juist join '%s'", link)

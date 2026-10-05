@@ -305,7 +305,7 @@ Gossip inside the tunnel, relays, DHT cold start, real NAT traversal and
 endpoint-record persistence all arrived at M3b; see
 [10-connectivity-notes.md](10-connectivity-notes.md). What is still open:
 
-- **The per-pair ML-KEM PSK.** M11a; see [05-roadmap.md](05-roadmap.md). M2's
+- **The per-pair ML-KEM PSK.** M12a; see [05-roadmap.md](05-roadmap.md). M2's
   "PSK/epoch rotation" is the epoch half of it, and remains all of it until
   then: every membership change rotates the group secret, and the daemon
   follows it.

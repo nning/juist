@@ -100,7 +100,8 @@ func TestRepliesArePrintableText(t *testing.T) {
 	b, err := encode(&Response{Err: "no\x1b]0;owned\x07 way\nhint",
 		Status: &Status{
 			Derived: Derived{Alarm: "\x1b[2Jcleared", NetworkName: "home\u202egnp.exe",
-				Devices: []Device{{Name: "b\x1b[0m", V4: "\u202e1"}}},
+				Devices: []Device{{Name: "b\x1b[0m", V4: "\u202e1"}},
+				Share:   &Share{What: "/home/a\x1b[2J", Path: "/t/\u202eb"}},
 			Tunnels: Tunnels{HomeRelay: "\x1b[1mvps", TunnelsDown: []string{"a\x07"}}}}, MaxResponse)
 	if err != nil {
 		t.Fatal(err)
@@ -111,13 +112,33 @@ func TestRepliesArePrintableText(t *testing.T) {
 	}
 	r.makePrintable()
 	for _, s := range []string{r.Err, r.Status.Alarm, r.Status.NetworkName, r.Status.HomeRelay,
-		r.Status.TunnelsDown[0], r.Status.Devices[0].Name, r.Status.Devices[0].V4} {
+		r.Status.TunnelsDown[0], r.Status.Devices[0].Name, r.Status.Devices[0].V4, r.Status.Share.What, r.Status.Share.Path} {
 		if strings.ContainsAny(s, "\x1b\x07\u202e") {
 			t.Errorf("%q reached the CLI", s)
 		}
 	}
 	if !strings.Contains(r.Err, "\nhint") {
 		t.Errorf("the newline before a hint was lost: %q", r.Err)
+	}
+}
+
+// A share's URL path is absolute, and neither it nor what is shared is
+// longer than a path may be.
+func TestAShareRequestIsBounded(t *testing.T) {
+	long := "/" + strings.Repeat("a", maxSharePath)
+	for _, tc := range []struct {
+		req  ShareRequest
+		want bool
+	}{
+		{ShareRequest{To: "127.0.0.1:8000", What: "/srv/x", Path: "/tok/x"}, true},
+		{ShareRequest{To: "127.0.0.1:8000"}, true},
+		{ShareRequest{To: "127.0.0.1:8000", Path: "tok/x"}, false},
+		{ShareRequest{To: "127.0.0.1:8000", Path: long}, false},
+		{ShareRequest{To: "127.0.0.1:8000", What: long}, false},
+	} {
+		if got := tc.req.Valid(); got != tc.want {
+			t.Errorf("%+v valid: %v, want %v", tc.req, got, tc.want)
+		}
 	}
 }
 

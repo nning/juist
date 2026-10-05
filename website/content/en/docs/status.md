@@ -71,8 +71,8 @@ The state on the first line is one of these:
 - `Published`: the names published on this device that it serves, or why
   not. See [Publishing services]({{< relref "docs/publishing" >}}).
 - `Ingress`: on an ingress, whether it runs and the names it serves.
-- `Sharing`: what this device shares under its own name, until when, or why
-  it reaches nobody.
+- `Sharing`: what this device shares under its own name, a file or
+  directory with its link, until when, or why it reaches nobody.
 - `Ports`: the ports juistd listens on. `udp/41643` is the one for the tunnels.
 - `Updated`: when juistd last applied the network's state.
 

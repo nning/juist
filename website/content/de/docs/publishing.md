@@ -173,7 +173,7 @@ Tagen. Verschwindet das Gerät, endet sie spätestens zehn Minuten später.
 Mit `--background` (`-b`) kehrt der Befehl zurück, sobald die Freigabe steht.
 Sie läuft dann weiter, auch über einen Neustart von juistd hinweg unter
 demselben Link, bis `juist share --stop` oder bis `--for` abläuft;
-`juist status` zeigt sie als `Sharing`. Ein
+`juist status` zeigt sie samt Link als `Sharing`. Ein
 einziges Zertifikat für den Namen des Geräts deckt alle Freigaben ab, ihre
 Pfade landen also in keinem Zertifikats-Log. Ein Gerät kann immer nur eine
 Sache gleichzeitig teilen. Wird es

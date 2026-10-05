@@ -105,7 +105,7 @@ func runBinder(ctx context.Context, args []string, socket string, errOut io.Writ
 		syscall.CloseOnExec(fd)
 	}
 	// One message to each request and each answer.
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)
+	fds, err := socketpair(unix.SOCK_SEQPACKET)
 	if err != nil {
 		return err
 	}
@@ -323,6 +323,20 @@ func inheritedFD(env string) (int, error) {
 	}
 	unix.CloseOnExec(fd)
 	return fd, nil
+}
+
+// socketpair is a local socket pair of typ, both ends close-on-exec: under
+// ForkLock, since darwin has no SOCK_CLOEXEC to set it atomically.
+func socketpair(typ int) ([2]int, error) {
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	fds, err := unix.Socketpair(unix.AF_UNIX, typ, 0)
+	if err != nil {
+		return fds, err
+	}
+	unix.CloseOnExec(fds[0])
+	unix.CloseOnExec(fds[1])
+	return fds, nil
 }
 
 // daemonEnv is what of root's environment a process run as another user
