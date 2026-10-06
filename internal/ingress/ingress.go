@@ -1,8 +1,8 @@
 // Package ingress takes connections from the internet for the names members
-// publish, reads the name a TLS client asks for, and splices the connection
-// to the member through the overlay. It terminates nothing and holds no key:
-// what it may serve it asks the juistd beside it, which says nothing while
-// its view is stale.
+// publish, reads the name a TLS client asks for, or takes the port a name
+// published by TCP has, and splices the connection to the member through the
+// overlay. It terminates nothing and holds no key: what it may serve it asks
+// the juistd beside it, which says nothing while its view is stale.
 package ingress
 
 import (
@@ -18,9 +18,12 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/netutil"
@@ -55,8 +58,18 @@ const (
 
 // Options configures an ingress.
 type Options struct {
-	// Published asks what to serve; [ipc.CallPublished] on juistd's socket.
-	Published func(context.Context) (*ipc.Published, error)
+	// Published asks what to serve, telling the ingress's report;
+	// [ipc.CallPublished] on juistd's socket.
+	Published func(context.Context, *ipc.IngressReport) (*ipc.Published, error)
+	// Listen binds a public port for the names published by TCP; every
+	// address's by default.
+	Listen func(port uint16) (net.Listener, error)
+	// ListenQUIC, where set, binds 443/udp, passed by the name a client's
+	// Initial packets ask for, and is asked again with each poll until it
+	// does; DialUDP opens a socket toward a target, a net.Dialer's by
+	// default.
+	ListenQUIC func() (*net.UDPConn, error)
+	DialUDP    func(ctx context.Context, to netip.AddrPort) (net.Conn, error)
 	// Poll is how often it asks.
 	Poll time.Duration
 	// Dial reaches a target; a net.Dialer's by default.
@@ -66,20 +79,35 @@ type Options struct {
 	MaxConns     int
 	MaxPerSource int
 	Logf         func(format string, args ...any)
-	// Access, where set, is told a line for each connection on 443 and each
-	// request on 80: from where, for which name, and what came of it.
+	// Access, where set, is told a line for each connection on 443 or a
+	// public port and each request on 80: from where, for which name, and
+	// what came of it.
 	Access func(format string, args ...any)
 
-	helloTimeout, answer, idle, httpIdle time.Duration // for tests
+	helloTimeout, answer, idle, httpIdle, flowIdle time.Duration // for tests
+	maxUnproven                                    int
+	started                                        func(*ingress)
 }
 
 // An ingress serves what juistd last said is published.
 type ingress struct {
 	o       Options
 	table   atomic.Pointer[map[string]ipc.PublishedTarget]
+	tcp     atomic.Pointer[map[uint16]ipc.PublishedTarget] // by public port
 	conns   chan struct{}
 	sources pipe.Sources
 	named   pipe.Named
+	passed  pipe.Named // by tcpKey
+
+	mu        sync.Mutex
+	listeners map[uint16]net.Listener
+	failed    map[uint16]bool // said already, true where another program holds the port
+
+	quic atomic.Pointer[quicFlows] // while QUIC is served
+
+	// wg holds what Serve waits for; quicServing and quicSaid are poll's.
+	wg                    sync.WaitGroup
+	quicServing, quicSaid bool
 }
 
 // Serve runs the ingress on tlsLn, and on httpLn, where not nil, a redirect
@@ -116,11 +144,31 @@ func Serve(ctx context.Context, tlsLn, httpLn net.Listener, o Options) error {
 	if o.Access == nil {
 		o.Access = func(string, ...any) {}
 	}
-	in := &ingress{o: o, conns: make(chan struct{}, o.MaxConns), sources: pipe.Sources{Max: o.MaxPerSource}}
+	if o.maxUnproven == 0 {
+		o.maxUnproven = maxUnproven
+	}
+	if o.flowIdle == 0 {
+		o.flowIdle = flowIdle
+	}
+	if o.DialUDP == nil {
+		o.DialUDP = func(ctx context.Context, to netip.AddrPort) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "udp", to.String())
+		}
+	}
+	if o.Listen == nil {
+		o.Listen = func(port uint16) (net.Listener, error) { return net.Listen("tcp", fmt.Sprintf(":%d", port)) }
+	}
+	in := &ingress{o: o, conns: make(chan struct{}, o.MaxConns), sources: pipe.Sources{Max: o.MaxPerSource},
+		listeners: map[uint16]net.Listener{}, failed: map[uint16]bool{}}
 	in.table.Store(&map[string]ipc.PublishedTarget{})
+	in.tcp.Store(&map[uint16]ipc.PublishedTarget{})
+	if o.started != nil {
+		o.started(in)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var wg sync.WaitGroup
+	wg := &in.wg
 	wg.Go(func() { in.poll(ctx) })
 	if httpLn != nil {
 		srv := &http.Server{Handler: http.HandlerFunc(in.redirect), ReadHeaderTimeout: 5 * time.Second,
@@ -134,6 +182,7 @@ func Serve(ctx context.Context, tlsLn, httpLn net.Listener, o Options) error {
 	err := in.accept(ctx, tlsLn)
 	cancel()
 	wg.Wait()
+	in.listen(ctx, nil)
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -148,8 +197,10 @@ func (in *ingress) poll(ctx context.Context) {
 	t := time.NewTicker(in.o.Poll)
 	defer t.Stop()
 	for {
+		in.listenQUIC(ctx)
+		r := in.report()
 		actx, cancel := context.WithTimeout(ctx, in.o.Poll)
-		p, err := in.o.Published(actx)
+		p, err := in.o.Published(actx, r)
 		cancel()
 		switch {
 		case err == nil:
@@ -157,13 +208,18 @@ func (in *ingress) poll(ctx context.Context) {
 				in.o.Logf("ingress: juistd answers again")
 			}
 			misses = 0
-			in.serve(tableOf(p))
+			in.serve(ctx, p)
+			// What it listens on changed: juistd hears of it at once.
+			if again := in.report(); !slices.Equal(again.Listening, r.Listening) || !slices.Equal(again.Unbound, r.Unbound) ||
+				again.NoQUIC != r.NoQUIC {
+				continue
+			}
 		case ctx.Err() != nil:
 			return
 		default:
 			if misses++; misses == missesAllowed+1 {
 				in.o.Logf("ingress: juistd does not answer (%v); serving nothing until it does", err)
-				in.serve(&map[string]ipc.PublishedTarget{})
+				in.serve(ctx, in.held())
 			}
 		}
 		select {
@@ -174,21 +230,136 @@ func (in *ingress) poll(ctx context.Context) {
 	}
 }
 
-// serve takes table as what is served, closing what no longer is.
-func (in *ingress) serve(table *map[string]ipc.PublishedTarget) {
-	in.table.Store(table)
+// serve takes p as what is served, closing what no longer is.
+func (in *ingress) serve(ctx context.Context, p *ipc.Published) {
+	table := make(map[string]ipc.PublishedTarget, len(p.Names))
+	for _, t := range p.Names {
+		table[t.Name] = t
+	}
+	tcp := make(map[uint16]ipc.PublishedTarget, len(p.TCP))
+	for _, t := range p.TCP {
+		if t.Public != 0 {
+			tcp[t.Public] = t
+		}
+	}
+	in.table.Store(&table)
+	in.tcp.Store(&tcp)
 	in.named.CloseUnless(func(name string) bool {
 		_, ok := in.lookup(name)
 		return ok
 	})
+	if q := in.quic.Load(); q != nil {
+		q.closeUnless(func(name string) bool {
+			_, ok := in.lookup(name)
+			return ok
+		})
+	}
+	in.passed.CloseUnless(func(key string) bool {
+		t, ok := tcp[portOfKey(key)]
+		return ok && tcpKey(t) == key
+	})
+	in.listen(ctx, tcp)
 }
 
-func tableOf(p *ipc.Published) *map[string]ipc.PublishedTarget {
-	m := make(map[string]ipc.PublishedTarget, len(p.Names))
-	for _, t := range p.Names {
-		m[t.Name] = t
+// held is what is served while juistd does not answer: nothing, its public
+// ports held still, so that no other program takes what the host's firewall
+// lets in.
+func (in *ingress) held() *ipc.Published {
+	p := &ipc.Published{}
+	for _, t := range *in.tcp.Load() {
+		t.Addrs = nil
+		p.TCP = append(p.TCP, t)
 	}
-	return &m
+	return p
+}
+
+// listen has a listener on each public port of tcp and on no other, saying
+// once why one cannot be bound; a port it could not bind it tries again at
+// the next answer.
+func (in *ingress) listen(ctx context.Context, tcp map[uint16]ipc.PublishedTarget) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for port, ln := range in.listeners {
+		if _, ok := tcp[port]; !ok {
+			ln.Close()
+			delete(in.listeners, port)
+		}
+	}
+	for port := range in.failed {
+		if _, ok := tcp[port]; !ok {
+			delete(in.failed, port)
+		}
+	}
+	for port, t := range tcp {
+		if in.listeners[port] != nil {
+			continue
+		}
+		ln, err := in.o.Listen(port)
+		if err != nil {
+			if _, said := in.failed[port]; !said {
+				in.o.Logf("ingress: listening on port %d for %s: %s", port, t.Name, strings.ReplaceAll(err.Error(), "\n", "; "))
+			}
+			in.failed[port] = errors.Is(err, syscall.EADDRINUSE)
+			continue
+		}
+		delete(in.failed, port)
+		in.listeners[port] = ln
+		go in.acceptTCP(ctx, port, ln)
+	}
+}
+
+// report is what the ingress tells juistd: the public ports it listens on,
+// and those another program holds. poll alone asks it.
+func (in *ingress) report() *ipc.IngressReport {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	r := &ipc.IngressReport{}
+	for port := range in.listeners {
+		r.Listening = append(r.Listening, port)
+	}
+	for port, held := range in.failed {
+		if held {
+			r.Unbound = append(r.Unbound, port)
+		}
+	}
+	slices.Sort(r.Listening)
+	slices.Sort(r.Unbound)
+	r.NoQUIC = in.o.ListenQUIC != nil && !in.quicServing
+	return r
+}
+
+// listenQUIC serves QUIC on 443/udp where it is not yet, saying once why
+// not: without it, browsers keep to TCP.
+func (in *ingress) listenQUIC(ctx context.Context) {
+	if in.o.ListenQUIC == nil || in.quicServing || ctx.Err() != nil {
+		return
+	}
+	pc, err := in.o.ListenQUIC()
+	if err != nil {
+		if !in.quicSaid {
+			in.o.Logf("ingress: no QUIC on 443/udp: %v", err)
+			in.quicSaid = true
+		}
+		return
+	}
+	if in.quicSaid {
+		in.o.Logf("ingress: QUIC on 443/udp")
+	}
+	in.quicServing = true
+	in.wg.Go(func() { in.serveQUIC(ctx, pc) })
+	context.AfterFunc(ctx, func() { pc.Close() })
+}
+
+// tcpKey names the connections passed for t: its port, its name and
+// whether it is served, so that any of them changing closes them.
+func tcpKey(t ipc.PublishedTarget) string {
+	return strconv.Itoa(int(t.Public)) + " " + t.Name + " " + strconv.FormatBool(len(t.Addrs) > 0)
+}
+
+func portOfKey(key string) uint16 {
+	p, _, _ := strings.Cut(key, " ")
+	n, _ := strconv.ParseUint(p, 10, 16)
+	return uint16(n)
 }
 
 // lookup is where name goes, if it is served.
@@ -198,6 +369,22 @@ func (in *ingress) lookup(name string) (ipc.PublishedTarget, bool) {
 }
 
 func (in *ingress) accept(ctx context.Context, ln net.Listener) error {
+	return in.acceptEach(ctx, ln, "tls", "", in.splice)
+}
+
+// acceptTCP passes what ln takes on public port to the name published there,
+// until ln is closed.
+func (in *ingress) acceptTCP(ctx context.Context, port uint16, ln net.Listener) {
+	_ = in.acceptEach(ctx, ln, "tcp", fmt.Sprintf(" %d", port), func(ctx context.Context, c net.Conn) {
+		in.pass(ctx, port, c)
+	})
+}
+
+// acceptEach serves what ln takes by serve, within the bounds on
+// connections in all and from one source, until ln is closed; what and
+// port, after the client, say which listener in the access log.
+func (in *ingress) acceptEach(ctx context.Context, ln net.Listener, what, port string,
+	serve func(context.Context, net.Conn)) error {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -212,22 +399,65 @@ func (in *ingress) accept(ctx context.Context, ln net.Listener) error {
 		case in.conns <- struct{}{}:
 		default:
 			c.Close() // at the bound: the client tries again
-			in.o.Access("access: tls %v refused: too many connections", client)
+			in.o.Access("access: %s %v%s refused: too many connections", what, client, port)
 			continue
 		}
 		src := client.Addr()
 		if !in.sources.Take(src) {
 			<-in.conns
 			c.Close()
-			in.o.Access("access: tls %v refused: too many connections from it", client)
+			in.o.Access("access: %s %v%s refused: too many connections from it", what, client, port)
 			continue
 		}
 		go func() {
 			defer func() { <-in.conns }()
 			defer in.sources.Done(src)
-			in.splice(ctx, c)
+			serve(ctx, c)
 		}()
 	}
+}
+
+// pass splices c, taken on public port, to the name published there at
+// once, after a PROXY protocol header where the name asks for one, for as
+// long as the name is served there: a protocol may have the server speak
+// first.
+func (in *ingress) pass(ctx context.Context, port uint16, c net.Conn) {
+	defer c.Close()
+	start, client := time.Now(), addrPort(c.RemoteAddr())
+	var name, outcome string
+	var up, down atomic.Int64
+	defer func() {
+		in.o.Access("access: tcp %v %d %q %s up=%d down=%d %v", client, port, name, outcome, up.Load(), down.Load(),
+			time.Since(start).Round(time.Millisecond))
+	}()
+	t, ok := (*in.tcp.Load())[port]
+	if ok {
+		name = t.Name
+	}
+	if !ok || len(t.Addrs) == 0 {
+		outcome = "not served"
+		return
+	}
+	target, err := in.dial(ctx, t)
+	if err != nil {
+		outcome = "target unreachable"
+		return
+	}
+	defer target.Close()
+	if t.Proxy {
+		if _, err := target.Write(proxyproto.Header(client, addrPort(c.LocalAddr()))); err != nil {
+			outcome = "target unreachable"
+			return
+		}
+	}
+	outcome = "spliced"
+	key := tcpKey(t)
+	in.passed.Add(c, key, func() { c.Close(); target.Close() })
+	defer in.passed.Remove(c)
+	if now, ok := (*in.tcp.Load())[port]; !ok || tcpKey(now) != key {
+		return // withdrawn meanwhile
+	}
+	pipe.Join(ctx, watched{c, func(n int) { up.Add(int64(n)) }}, watched{target, func(n int) { down.Add(int64(n)) }}, in.o.idle)
 }
 
 // splice passes c to the target its ClientHello names, the bytes read so far

@@ -285,6 +285,7 @@ type fakeManager struct {
 	egress       conn.Egress
 	serve        conn.Serve
 	ingressPorts []uint16
+	ingressUDP   []uint16
 }
 
 func (m *fakeManager) HostRoutes() []netip.Prefix {
@@ -316,10 +317,11 @@ func (m *fakeManager) SetServe(s conn.Serve) error {
 	return nil
 }
 
-func (m *fakeManager) SetIngressPorts(ports []uint16) error {
+func (m *fakeManager) SetIngressPorts(ports conn.IngressPorts) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ingressPorts = slices.Clone(ports)
+	m.ingressPorts = slices.Clone(ports.TCP)
+	m.ingressUDP = slices.Clone(ports.UDP)
 	return nil
 }
 

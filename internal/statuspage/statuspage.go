@@ -321,7 +321,10 @@ func services(p *ipc.StatusPage) []service {
 		}
 		r, _ := reachOf(st, d.Identity)
 		for _, name := range d.Published {
-			s := service{Name: name, Href: "https://" + name + "/", Device: cmp.Or(d.Name, d.Identity.ShortString())}
+			s := service{Name: name, Device: cmp.Or(d.Name, d.Identity.ShortString())}
+			if !strings.Contains(name, ":") {
+				s.Href = "https://" + name + "/" // one published by TCP, NAME:PORT, is no web page
+			}
 			switch {
 			case !served:
 				s.State, s.Class = "not served", "absent"

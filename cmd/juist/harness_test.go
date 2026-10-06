@@ -444,7 +444,7 @@ func (stubManager) AnswersThrough() string { return "" }
 
 func (stubManager) SetServe(conn.Serve) error { return nil }
 
-func (stubManager) SetIngressPorts([]uint16) error { return nil }
+func (stubManager) SetIngressPorts(conn.IngressPorts) error { return nil }
 
 func (stubManager) HostRoutes() []netip.Prefix { return nil }
 
@@ -506,7 +506,7 @@ func (m *peersManager) SetEgress(e conn.Egress, _ bool) error {
 	return nil
 }
 
-func (*peersManager) SetIngressPorts([]uint16) error { return nil }
+func (*peersManager) SetIngressPorts(conn.IngressPorts) error { return nil }
 
 func (m *peersManager) SetServe(s conn.Serve) error {
 	m.mu.Lock()

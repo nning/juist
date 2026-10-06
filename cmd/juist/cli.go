@@ -71,6 +71,7 @@ type app struct {
 	made           int    // an instance this invocation started, which a failure takes back
 	keyName        string // the one admin key to sign with, where one is named
 	spec           spec   // the command's, as parsed, for hints that name it
+	ownRecordsSaid bool   // see hintOwnRecords
 
 	// listing is the instance a listing of every network is at, and
 	// listingHeads says the listing heads each network itself.
@@ -341,12 +342,14 @@ var shorts = map[string]byte{
 	"operator":    'o',
 	"port":        'p',
 	"http2":       '2',
+	"http3":       '3',
 	"proxy":       'P',
 	"public":      'W',
 	"quorum":      'q',
 	"relay":       'r',
 	"service":     'S',
 	"stop":        'S',
+	"tcp":         'T',
 	"voucher":     'V',
 	"votes":       'v',
 	"yes":         'y',
@@ -488,6 +491,9 @@ func optionRows(fs *flag.FlagSet) [][2]string {
 			return
 		}
 		arg, text := flag.UnquoteUsage(f)
+		if p, ok := f.Value.(interface{ Placeholder() string }); ok {
+			arg = p.Placeholder()
+		}
 		switch arg {
 		case "uint", "int":
 			arg = "N"
@@ -496,7 +502,10 @@ func optionRows(fs *flag.FlagSet) [][2]string {
 		case "string":
 			arg = "VALUE"
 		}
-		if arg != "" {
+		switch {
+		case strings.HasPrefix(arg, "[="):
+			left += arg // an optional value, given as --name=VALUE alone
+		case arg != "":
 			left += " " + arg
 		}
 		def := f.DefValue

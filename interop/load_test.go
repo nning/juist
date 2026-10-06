@@ -16,9 +16,9 @@ import (
 
 // TestLoad loads the website along the whole path it is published by:
 // visitors from 100 addresses, an ingress on fb, the tunnel, and lx's
-// terminator and the site's server behind it, over HTTP/1.1 and then
-// HTTP/2. It fails where a visitor is lost, or where HTTP/2 does not hold
-// fewer connections. make load-lab runs it, at LOAD_RATE visitors a second
+// terminator and the site's server behind it, over HTTP/1.1, HTTP/2 and
+// then HTTP/3. It fails where a visitor is lost, or where HTTP/2 does not
+// hold fewer connections. make load-lab runs it, at LOAD_RATE visitors a second
 // for LOAD_FOR.
 func TestLoad(t *testing.T) {
 	site := os.Getenv("JUIST_LOAD_SITE")
@@ -113,8 +113,12 @@ rm -rf /tmp/site; tar -xzf /tmp/site.tgz -C /tmp`)
 	lx.eventually(t, "offering HTTP/2", time.Minute, "juist publish add docs 127.0.0.1:8181 --http2",
 		has("to 127.0.0.1:8181 over HTTP/2"))
 	failed2, open2 := load("HTTP/2")
-	if failed1 > 0 || failed2 > 0 {
-		t.Errorf("visitors were lost: %d over HTTP/1.1, %d over HTTP/2", failed1, failed2)
+	lx.eventually(t, "offering HTTP/3", time.Minute, "juist publish add docs 127.0.0.1:8181 --http2 --http3",
+		has("to 127.0.0.1:8181 over HTTP/2, with HTTP/3"))
+	visit += " -h3"
+	failed3, _ := load("HTTP/3")
+	if failed1 > 0 || failed2 > 0 || failed3 > 0 {
+		t.Errorf("visitors were lost: %d over HTTP/1.1, %d over HTTP/2, %d over HTTP/3", failed1, failed2, failed3)
 	}
 	if open2*3 > open1 {
 		t.Errorf("HTTP/2 held %d connections at most, HTTP/1.1 %d", open2, open1)

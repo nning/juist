@@ -164,7 +164,7 @@ func startIngress(t *testing.T, port, target int) {
 	go func() {
 		defer close(done)
 		_ = ingress.Serve(ctx, ln, nil, ingress.Options{
-			Published: func(context.Context) (*ipc.Published, error) { return p, nil }, Poll: 50 * time.Millisecond})
+			Published: func(context.Context, *ipc.IngressReport) (*ipc.Published, error) { return p, nil }, Poll: 50 * time.Millisecond})
 	}()
 	t.Cleanup(func() { cancel(); <-done })
 }

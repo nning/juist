@@ -51,6 +51,19 @@ func (d *Daemon) gossipDial(dial func(context.Context, netip.AddrPort) (net.Conn
 	}
 }
 
+// ListenOverlayUDP takes datagrams at addr as [Daemon.ListenOverlay]
+// listens for TCP.
+func (d *Daemon) ListenOverlayUDP(addr string) (net.PacketConn, error) {
+	if d.stack == nil {
+		return nil, errors.New("daemon: no network stack of its own")
+	}
+	ap, err := netip.ParseAddrPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	return d.stack.ListenUDPAddrPort(ap)
+}
+
 // ListenOverlay listens for TCP at addr, one of this node's overlay
 // addresses and a port, on the network stack where the daemon runs on one.
 func (d *Daemon) ListenOverlay(addr string) (net.Listener, error) {

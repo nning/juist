@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"cmp"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"net/netip"
@@ -11,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nning/juist/conn"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
 )
@@ -36,6 +39,12 @@ type publishing struct {
 	// flagged is whether the terminator's file was last left to exist,
 	// once flagSet.
 	flagged, flagSet bool
+
+	// publicPorts is what the ingress's file last said, once publicSet;
+	// publicWant the public ports the log publishes names on, and
+	// ingressListening those the ingress last said it listens on.
+	publicPorts, publicWant, ingressListening []uint16
+	publicSet, listeningSet                   bool
 }
 
 // nothingPublished is why a device the log publishes nothing on serves none.
@@ -78,18 +87,86 @@ func (d *Daemon) flagTerminatorLocked() {
 	d.pub.flagged, d.pub.flagSet = want, true
 }
 
-// planPublish is the TCP ports an ingress may open on this device: log
-// sync's, and those of the names the log publishes on it, once its operator
-// agreed, and its share's, while its view is fresh, so that a withdrawn name
-// ends at the freshness TTL.
-func (d *Daemon) planPublish(s snapshot, fresh bool) []uint16 {
+// publicPorts is the ports every ingress takes for the names s publishes by
+// TCP, where this device is an ingress whose view is fresh; none otherwise.
+func (d *Daemon) publicPorts(s snapshot, fresh bool) []uint16 {
+	if self, ok := s.state.Node(d.self); !ok || !fresh || !self.HasRole(types.RoleIngress) {
+		return nil
+	}
+	var ports []uint16
+	for _, n := range s.members {
+		if !s.live[n.Identity] {
+			continue
+		}
+		for _, p := range n.Published {
+			if p.Public != 0 {
+				ports = append(ports, p.Public)
+			}
+		}
+	}
+	slices.Sort(ports)
+	return slices.Compact(ports)
+}
+
+// noteIngressPorts has [Options.IngressPorts] list, of ports, those the
+// ingress listens on, one a line, for the host's firewall to let in: a port
+// another program holds is no ingress's to open. It is written where they
+// changed alone, since each write has the firewall follow.
+func (d *Daemon) noteIngressPorts(ports []uint16) {
+	d.pub.mu.Lock()
+	defer d.pub.mu.Unlock()
+	d.pub.publicWant = slices.Clone(ports)
+	d.writeIngressPortsLocked()
+}
+
+// NoteIngressListening is what the ingress said it listens on.
+func (d *Daemon) NoteIngressListening(ports []uint16) {
+	d.pub.mu.Lock()
+	defer d.pub.mu.Unlock()
+	d.pub.ingressListening, d.pub.listeningSet = slices.Clone(ports), true
+	d.writeIngressPortsLocked()
+}
+
+func (d *Daemon) writeIngressPortsLocked() {
+	ports := slices.DeleteFunc(slices.Clone(d.pub.publicWant), func(p uint16) bool {
+		return !slices.Contains(d.pub.ingressListening, p)
+	})
+	switch {
+	case d.ingressPorts == "" || d.pub.publicSet && slices.Equal(d.pub.publicPorts, ports):
+		return
+	case !d.pub.listeningSet && len(ports) == 0 && len(d.pub.publicWant) > 0:
+		return // until the ingress says, as after juistd restarted beside it
+	}
+	var b strings.Builder
+	for _, p := range ports {
+		fmt.Fprintf(&b, "%d\n", p)
+	}
+	// Renamed into place: the firewall reads it as it changes, and would
+	// read a file half written as ports withdrawn.
+	tmp := d.ingressPorts + ".new"
+	err := os.WriteFile(tmp, []byte(b.String()), 0o644)
+	if err == nil {
+		err = os.Rename(tmp, d.ingressPorts)
+	}
+	if err != nil {
+		d.logOnce("daemon: telling the firewall the ingress's ports: " + err.Error())
+		return
+	}
+	d.pub.publicPorts, d.pub.publicSet = slices.Clone(ports), true
+}
+
+// planPublish is the ports an ingress may open on this device: log sync's,
+// and those of the names the log publishes on it, once its operator agreed,
+// and its share's, while its view is fresh, so that a withdrawn name ends at
+// the freshness TTL; by UDP too, those of names offered HTTP/3, for QUIC.
+func (d *Daemon) planPublish(s snapshot, fresh bool) conn.IngressPorts {
 	d.pub.mu.Lock()
 	defer d.pub.mu.Unlock()
 	self, _ := s.state.Node(d.self)
-	ports := []uint16{d.gossipPort}
+	ports := conn.IngressPorts{TCP: []uint16{d.gossipPort}}
 	if sh := d.pub.share; sh != nil && fresh && (sh.end.IsZero() || s.now < sh.end.Unix()) {
 		if _, err := shareName(s.state, d.self); err == nil {
-			ports = append(ports, sharePort)
+			ports.TCP = append(ports.TCP, sharePort)
 		}
 	}
 	d.pub.status = nil
@@ -105,13 +182,20 @@ func (d *Daemon) planPublish(s snapshot, fresh bool) []uint16 {
 		st.NotServing = "this device's view of the network is stale"
 	default:
 		for _, p := range self.Published {
-			if !slices.Contains(ports, p.Port) {
-				ports = append(ports, p.Port)
+			ports.TCP = append(ports.TCP, p.Port)
+			to, ok := passedTo(p, d.pub.to)
+			if ok && p.Public == 0 && ipc.OffersHTTP3(to) {
+				ports.UDP = append(ports.UDP, p.Port)
 			}
-			st.Serving = append(st.Serving, p.Under(s.state.Domain()))
-			if to, ok := d.pub.to[p.Label]; ok {
-				st.Ending = append(st.Ending, p.Under(s.state.Domain())+" to "+to)
-				st.CAA = append(st.CAA, d.pub.account.CAA(p.Under(s.state.Domain()))...)
+			name := p.Under(s.state.Domain())
+			st.Serving = append(st.Serving, name)
+			switch {
+			case !ok:
+			case p.Public != 0:
+				st.Passing = append(st.Passing, name+" to "+to)
+			default:
+				st.Ending = append(st.Ending, name+" to "+to)
+				st.CAA = append(st.CAA, d.pub.account.CAA(name)...)
 			}
 		}
 	}
@@ -148,6 +232,7 @@ func (d *Daemon) publishNow() *ipc.Publish {
 	}
 	st := *d.pub.status
 	st.Serving, st.Ending, st.CAA = slices.Clone(st.Serving), slices.Clone(st.Ending), slices.Clone(st.CAA)
+	st.Passing = slices.Clone(st.Passing)
 	return &st
 }
 
@@ -251,9 +336,9 @@ func (d *Daemon) serving(r *ipc.TerminatorReport, byTerminator bool) *ipc.Publis
 		return out
 	}
 	for _, p := range self.Published {
-		if dst, ok := to[p.Label]; ok {
-			out.Names = append(out.Names, ipc.PublishedTarget{Name: p.Under(state.Domain()), Addrs: addrs,
-				Port: p.Port, Proxy: p.Proxy, To: dst})
+		if dst, ok := passedTo(p, to); ok {
+			addPublished(out, ipc.PublishedTarget{Name: p.Under(state.Domain()), Addrs: addrs, Port: p.Port, Proxy: p.Proxy,
+				To: dst, Public: p.Public})
 		}
 	}
 	return out
@@ -271,8 +356,9 @@ func (d *Daemon) servesPublished(id types.Identity) bool {
 
 // Published is what an ingress on this device serves: every name published
 // in the network whose target serves it, and every member's share, under its
-// own name while its announcement holds, and where they go; nothing while
-// this device is no ingress or its view is stale.
+// own name while its announcement holds, and where they go; a name published
+// by TCP whose target does not serve it, with no address; nothing while this
+// device is no ingress or its view is stale.
 func (d *Daemon) Published() *ipc.Published {
 	out := &ipc.Published{}
 	d.authMu.Lock()
@@ -298,17 +384,48 @@ func (d *Daemon) Published() *ipc.Published {
 			}
 			out.Names = append(out.Names, t)
 		}
-		if !d.servesPublished(n.Identity) {
-			continue
-		}
+		serves := d.servesPublished(n.Identity)
 		for _, p := range n.Published {
-			t := ipc.PublishedTarget{Name: p.Under(state.Domain()), Port: p.Port, Proxy: p.Proxy}
-			for _, a := range d.overlayAddrs(state, n.Identity, now.Unix()) {
-				t.Addrs = append(t.Addrs, a.Addr())
+			// A public port is held while its target does not serve it,
+			// with nowhere to go, as the host's firewall lets it in.
+			if !serves && p.Public == 0 {
+				continue
 			}
-			out.Names = append(out.Names, t)
+			t := ipc.PublishedTarget{Name: p.Under(state.Domain()), Port: p.Port, Proxy: p.Proxy, Public: p.Public}
+			for _, a := range d.overlayAddrs(state, n.Identity, now.Unix()) {
+				if serves {
+					t.Addrs = append(t.Addrs, a.Addr())
+				}
+			}
+			addPublished(out, t)
 		}
 	}
 	slices.SortFunc(out.Names, func(x, y ipc.PublishedTarget) int { return strings.Compare(x.Name, y.Name) })
+	slices.SortFunc(out.TCP, func(x, y ipc.PublishedTarget) int { return cmp.Compare(x.Public, y.Public) })
 	return out
+}
+
+// addPublished puts t in p's list of the names published as t is: by TCP
+// or by TLS.
+func addPublished(p *ipc.Published, t ipc.PublishedTarget) {
+	if t.Public != 0 {
+		p.TCP = append(p.TCP, t)
+	} else {
+		p.Names = append(p.Names, t)
+	}
+}
+
+// passedTo is where p goes on this device, as to has it by label: for a name
+// published by TCP, an address alone, which HTTP/2 and the status page are
+// not, being TLS's.
+func passedTo(p types.PublishedName, to map[string]string) (string, bool) {
+	dst, ok := to[p.Label]
+	if !ok || p.Public == 0 {
+		return dst, ok
+	}
+	if _, page := ipc.StatusPageOf(dst); page {
+		return "", false
+	}
+	addr, _ := ipc.HTTP2Of(dst)
+	return addr, true
 }

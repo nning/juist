@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,12 +22,12 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/nning/juist/daemon"
 	"github.com/nning/juist/internal/plumber"
+	"github.com/nning/juist/internal/terminator"
 	"github.com/nning/juist/ipc"
 )
 
-// envBinder names the descriptor a terminator asks its root parent to
+// envBinder names the descriptor a helper asks its root parent to
 // listen through, and envBinderLifeline the one that ends with the parent.
 const (
 	envBinder         = "JUIST_BINDER_FD"
@@ -92,11 +93,11 @@ func dropTo(name string) error {
 	return nil
 }
 
-// runBinder, started as root, runs args again as the terminator's user, and
-// stays root to listen for it where the juistd on socket says this device
-// serves, and nowhere else.
-func runBinder(ctx context.Context, args []string, socket string, errOut io.Writer) error {
-	cred, err := helperUser(daemon.ServeUser)
+// runBinder, started as root, runs args again as the helper user name, and
+// stays root to listen for it by bind, which refuses what it may not.
+func runBinder(ctx context.Context, args []string, name string, bind func(context.Context, string) (*os.File, error),
+	errOut io.Writer) error {
+	cred, err := helperUser(name)
 	if err != nil {
 		return err
 	}
@@ -109,8 +110,8 @@ func runBinder(ctx context.Context, args []string, socket string, errOut io.Writ
 	if err != nil {
 		return err
 	}
-	parentEnd, childEnd := os.NewFile(uintptr(fds[0]), "binder"), os.NewFile(uintptr(fds[1]), "terminator")
-	// Orphaned, the terminator would keep its listeners from the next.
+	parentEnd, childEnd := os.NewFile(uintptr(fds[0]), "binder"), os.NewFile(uintptr(fds[1]), "helper")
+	// Orphaned, the helper would keep its listeners from the next.
 	lifeline, held, err := os.Pipe()
 	if err != nil {
 		return err
@@ -126,7 +127,7 @@ func runBinder(ctx context.Context, args []string, socket string, errOut io.Writ
 	cmd.Env = append(daemonEnv(os.Environ()), envBinder+"=3", envBinderLifeline+"=4")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred, Setsid: true}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting the terminator as %s: %w", daemon.ServeUser, err)
+		return fmt.Errorf("starting the helper as %s: %w", name, err)
 	}
 	childEnd.Close()
 	lifeline.Close()
@@ -137,9 +138,7 @@ func runBinder(ctx context.Context, args []string, socket string, errOut io.Writ
 		return err
 	}
 	defer c.Close()
-	go serveBinds(ctx, c.(*net.UnixConn), func(ctx context.Context) (*ipc.Published, error) {
-		return ipc.CallServing(ctx, socket, nil)
-	})
+	go serveBinds(ctx, c.(*net.UnixConn), bind)
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)
@@ -156,10 +155,10 @@ func runBinder(ctx context.Context, args []string, socket string, errOut io.Writ
 // stopWait is how long a process told to stop has before it is killed.
 const stopWait = time.Minute
 
-// serveBinds listens at each address the terminator asks for on c, where
-// serving says this device serves it, and hands it the listener, its answer
-// naming the address it answers.
-func serveBinds(ctx context.Context, c *net.UnixConn, serving func(context.Context) (*ipc.Published, error)) {
+// serveBinds listens at each address the helper asks for on c, where bind
+// lets it, and hands it the listener, its answer naming the address it
+// answers.
+func serveBinds(ctx context.Context, c *net.UnixConn, bind func(context.Context, string) (*os.File, error)) {
 	buf := make([]byte, maxBindMessage)
 	for {
 		n, err := c.Read(buf)
@@ -167,9 +166,9 @@ func serveBinds(ctx context.Context, c *net.UnixConn, serving func(context.Conte
 			return
 		}
 		addr := strings.TrimSpace(string(buf[:n]))
-		f, err := bindServed(ctx, addr, serving)
+		f, err := bind(ctx, addr)
 		if err != nil {
-			// The terminator logs it, once; "2" is a port another program holds.
+			// The helper logs it, once; "2" is a port another program holds.
 			code := "1 "
 			if errors.Is(err, syscall.EADDRINUSE) {
 				code = "2 "
@@ -188,7 +187,7 @@ func serveBinds(ctx context.Context, c *net.UnixConn, serving func(context.Conte
 	}
 }
 
-// bindWait is how long the terminator waits for the binder's answer.
+// bindWait is how long a helper waits for the binder's answer.
 var bindWait = 30 * time.Second
 
 // maxBindMessage bounds a request to the binder and its answer.
@@ -198,6 +197,7 @@ const maxBindMessage = 512
 // HTTP for one. The address is not reused: root binding where another
 // program listens on every address would take its connections there.
 func bindServed(ctx context.Context, addr string, serving func(context.Context) (*ipc.Published, error)) (*os.File, error) {
+	addr, udp := strings.CutSuffix(addr, "/udp")
 	ap, err := netip.ParseAddrPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("%q is no address and port", addr)
@@ -206,22 +206,35 @@ func bindServed(ctx context.Context, addr string, serving func(context.Context) 
 	if err != nil {
 		return nil, fmt.Errorf("asking juistd what is served: %w", err)
 	}
+	if udp {
+		// QUIC, for a name offered HTTP/3 alone.
+		if !slices.ContainsFunc(p.Names, func(n ipc.PublishedTarget) bool {
+			return terminator.HTTP3(n) && slices.Contains(n.Addrs, ap.Addr()) && n.Port == ap.Port()
+		}) {
+			return nil, fmt.Errorf("this device serves no QUIC at %v", ap)
+		}
+		pc, err := net.ListenPacket("udp", ap.String())
+		if err != nil {
+			return nil, err
+		}
+		defer pc.Close()
+		return pc.(*net.UDPConn).File()
+	}
 	served := false
 	for _, n := range p.Names {
 		for _, a := range n.Addrs {
 			served = served || netip.AddrPortFrom(a, n.Port) == ap || netip.AddrPortFrom(a, httpPort) == ap
 		}
 	}
+	for _, n := range p.TCP {
+		for _, a := range n.Addrs {
+			served = served || netip.AddrPortFrom(a, n.Port) == ap
+		}
+	}
 	if !served {
 		return nil, fmt.Errorf("this device serves nothing at %v", ap)
 	}
-	lc := net.ListenConfig{Control: func(_, _ string, rc syscall.RawConn) error {
-		var serr error
-		if err := rc.Control(func(fd uintptr) { serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 0) }); err != nil {
-			return err
-		}
-		return serr
-	}}
+	lc := net.ListenConfig{Control: noReuse}
 	ln, err := lc.Listen(ctx, "tcp", ap.String())
 	if err != nil {
 		return nil, err
@@ -230,13 +243,62 @@ func bindServed(ctx context.Context, addr string, serving func(context.Context) 
 	return ln.(*net.TCPListener).File()
 }
 
-// binder is the terminator's end: it listens through its root parent.
+// bindPublic listens on every address at addr, ":PORT", where an ingress
+// serves: 443 and 80, and the ports published says names are published on
+// by TCP; ":443/udp" is QUIC's socket.
+func bindPublic(ctx context.Context, addr string, published func(context.Context) (*ipc.Published, error)) (*os.File, error) {
+	if addr == ":443/udp" {
+		pc, err := net.ListenPacket("udp", ":443")
+		if err != nil {
+			return nil, err
+		}
+		defer pc.Close()
+		return pc.(*net.UDPConn).File()
+	}
+	p, ok := strings.CutPrefix(addr, ":")
+	port, err := strconv.ParseUint(p, 10, 16)
+	if !ok || err != nil || port == 0 {
+		return nil, fmt.Errorf("%q is no port", addr)
+	}
+	if port != 443 && port != 80 {
+		got, err := published(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("asking juistd what is published: %w", err)
+		}
+		if !slices.ContainsFunc(got.TCP, func(t ipc.PublishedTarget) bool { return t.Public == uint16(port) }) {
+			return nil, fmt.Errorf("nothing is published on port %d", port)
+		}
+	}
+	// A public port is not reused, as bindServed's: BSD would bind every
+	// address beside a program holding one of them, which keeps its clients.
+	lc := net.ListenConfig{}
+	if port != 443 && port != 80 {
+		lc.Control = noReuse
+	}
+	ln, err := lc.Listen(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	defer ln.Close()
+	return ln.(*net.TCPListener).File()
+}
+
+// noReuse turns SO_REUSEADDR off, which Go turns on.
+func noReuse(_, _ string, rc syscall.RawConn) error {
+	var serr error
+	if err := rc.Control(func(fd uintptr) { serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 0) }); err != nil {
+		return err
+	}
+	return serr
+}
+
+// binder is a helper's end: it listens through its root parent.
 type binder struct {
 	mu sync.Mutex
 	c  *net.UnixConn
 }
 
-// inheritedBinder is the root parent this terminator was started by, if any,
+// inheritedBinder is the root parent this helper was started by, if any,
 // and a channel that closes once that parent is gone.
 func inheritedBinder() (*binder, <-chan struct{}, error) {
 	fd, err := inheritedFD(envBinder)
@@ -258,6 +320,35 @@ func inheritedBinder() (*binder, <-chan struct{}, error) {
 }
 
 func (b *binder) listen(_, addr string) (net.Listener, error) {
+	f, err := b.bound(addr)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return net.FileListener(f)
+}
+
+// listenUDP is listen for a UDP socket.
+func (b *binder) listenUDP(addr string) (*net.UDPConn, error) {
+	f, err := b.bound(addr + "/udp")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	pc, err := net.FilePacketConn(f)
+	if err != nil {
+		return nil, err
+	}
+	u, ok := pc.(*net.UDPConn)
+	if !ok {
+		pc.Close()
+		return nil, errors.New("the binder sent no UDP socket")
+	}
+	return u, nil
+}
+
+// bound asks the binder for a socket at addr.
+func (b *binder) bound(addr string) (*os.File, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	_ = b.c.SetDeadline(time.Now().Add(bindWait))
@@ -292,8 +383,7 @@ func (b *binder) listen(_, addr string) (net.Listener, error) {
 		case f == nil:
 			return nil, errors.New("the binder sent no listener")
 		}
-		defer f.Close()
-		return net.FileListener(f)
+		return f, nil
 	}
 }
 

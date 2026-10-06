@@ -30,6 +30,12 @@
   en: {title: Publishing services, text: "A member's service reached from the internet by name, through an ingress."}
   de: {title: Dienste veröffentlichen, text: "Dienste auf Mitgliedern, über eine Ingress unter einem Namen aus dem Internet erreichbar."}
 - doc: docs/publishing
+  en: {title: HTTP/3, text: "Published names over QUIC, through the ingress, for browsers that find it or are told of it by DNS."}
+  de: {title: HTTP/3, text: "Veröffentlichte Namen über QUIC, durch die Ingress, für Browser, die es finden oder per DNS davon erfahren."}
+- doc: docs/publishing
+  en: {title: TCP services, text: "A game server or any other TCP service on a port of its own on every ingress, passed on unread."}
+  de: {title: TCP-Dienste, text: "Ein Spieleserver oder jeder andere TCP-Dienst auf einem eigenen Port jeder Ingress, ungelesen weitergereicht."}
+- doc: docs/publishing
   en: {title: Sharing, text: "A file, a directory or a web server, from the internet at once, under a device's own name. A directory downloads as a ZIP."}
   de: {title: Teilen, text: "Eine Datei, ein Verzeichnis oder einen Webserver sofort im Internet teilen, unter dem eigenen Namen des Geräts. Ein Verzeichnis lädt sich auch als ZIP."}
 - doc: docs/publishing

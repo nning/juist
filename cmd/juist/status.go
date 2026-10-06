@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/netip"
 	"os"
 	"os/user"
@@ -445,6 +446,19 @@ func statusNotes(s *ipc.Status, several bool) []line {
 			note(lineWarn, "another program holds port 80 on %s, so http:// to a name served here reaches it, "+
 				"not a redirect to https", strings.Join(on, ", "))
 			note(lineHint, "have it listen on the addresses it serves alone, not on every one")
+		}
+		held := map[uint16][]string{}
+		for _, u := range t.Unbound {
+			if ap, err := netip.ParseAddrPort(u); err == nil && ap.Port() != 80 {
+				held[ap.Port()] = append(held[ap.Port()], ap.Addr().String())
+			}
+		}
+		for _, port := range slices.Sorted(maps.Keys(held)) {
+			note(lineWarn, "another program holds port %d on %s, where juist would serve what is published here",
+				port, strings.Join(held[port], ", "))
+		}
+		if len(held) > 0 {
+			note(lineHint, "where the service listens on every address, publish its port: juist publish add DEVICE NAME PORT")
 		}
 	}
 	if s.Unreachable > 0 && s.Peers > 0 {

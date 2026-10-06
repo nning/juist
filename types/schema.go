@@ -62,7 +62,10 @@ type SchemaVersion uint16
 // ([NodeRecord.Published], [KindSetPublished]).
 //
 // Schema 10 renames members ([KindRenameNode]).
-const CurrentSchema SchemaVersion = 10
+//
+// Schema 11 lets a published name carry a public TCP port
+// ([PublishedName.Public]), which every ingress passes on by port alone.
+const CurrentSchema SchemaVersion = 11
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -95,5 +98,9 @@ const SchemaPublish SchemaVersion = 9
 
 // SchemaRenameNode is the first schema in which a member's name changes.
 const SchemaRenameNode SchemaVersion = 10
+
+// SchemaTCP is the first schema in which a published name has a public TCP
+// port.
+const SchemaTCP SchemaVersion = 11
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

@@ -264,6 +264,10 @@ type Options struct {
 	// it may stop.
 	TerminatorWanted string
 
+	// IngressPorts, where set, is a file kept listing the public TCP ports
+	// an ingress here takes, for the host's firewall to follow.
+	IngressPorts string
+
 	// LeaseInterval is how often this node vouches, if it is an admin
 	// device. Zero uses [DefaultLeaseInterval].
 	LeaseInterval time.Duration
@@ -327,8 +331,9 @@ type Daemon struct {
 	onAddrsMoved func()
 	movedOnce    sync.Once
 	keyringPath  string
-	// terminatorWanted is [Options.TerminatorWanted].
-	terminatorWanted string
+	// terminatorWanted is [Options.TerminatorWanted], ingressPorts
+	// [Options.IngressPorts].
+	terminatorWanted, ingressPorts string
 
 	session      *Session
 	discoPrivate [32]byte
@@ -614,6 +619,7 @@ func New(opts Options) (*Daemon, error) {
 		waiting:          map[types.Hash]heldChange{},
 		keyringPath:      opts.KeyringPath,
 		terminatorWanted: opts.TerminatorWanted,
+		ingressPorts:     opts.IngressPorts,
 		ttl:              cmp.Or(opts.FreshnessTTL, DefaultFreshnessTTL),
 		leaseEvery:       cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
 	}

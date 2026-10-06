@@ -45,6 +45,15 @@ if [ "$1" = configure ]; then
 				systemctl disable --quiet juist-serve.service || true
 				systemctl enable --now juist-serve.path || true
 			fi
+			# An ingress enabled before juist-ingress-ports.path came has
+			# the firewall follow its ports by it.
+			if systemctl is-enabled --quiet juist-ingress.service 2>/dev/null; then
+				systemctl enable --now juist-ingress-ports.path || true
+			fi
+			# ufw holds a profile's ports as they were when allowed.
+			if command -v ufw >/dev/null 2>&1; then
+				ufw app update juist-ingress >/dev/null 2>&1 || true
+			fi
 			# An upgrade restarts the daemons that were running, and only
 			# those: the default's and every other network's instance.
 			systemctl try-restart juistd.service 'juistd@*.service' juist-ingress.service juist-serve.service || true

@@ -273,7 +273,8 @@ type Request struct {
 	// Account is the terminator's, which a [CmdServing] may carry, with
 	// Listening, where it listens, and Unbound, where another program
 	// holds the port, as ADDR:PORT; NoCert, the names it has no
-	// certificate for; Stopping, that it stops.
+	// certificate for; Stopping, that it stops. A [CmdPublished] carries
+	// Listening and Unbound as the ingress's public ports.
 	Account   *ACMEAccount `cbor:"24,keyasint,omitempty"`
 	Listening []string     `cbor:"27,keyasint,omitempty"`
 	Unbound   []string     `cbor:"28,keyasint,omitempty"`
@@ -301,6 +302,26 @@ func validAddrPorts(aps []string) bool {
 	}
 	return true
 }
+
+// validPorts reports whether ps are ports an ingress may report, each a
+// number from 1 to 65535, or 443/udp.
+func validPorts(ps []string) bool {
+	if len(ps) > MaxIngressPorts {
+		return false
+	}
+	for _, s := range ps {
+		if s == quicUnbound {
+			continue
+		}
+		if n, err := strconv.ParseUint(s, 10, 16); err != nil || n == 0 || strconv.FormatUint(n, 10) != s {
+			return false
+		}
+	}
+	return true
+}
+
+// MaxIngressPorts bounds the ports an ingress reports of each kind.
+const MaxIngressPorts = 256
 
 // A TerminatorReport is what a terminator tells juistd with each
 // [CmdServing]: its account once known, where it listens, where another
@@ -422,7 +443,10 @@ func (s ServeTo) Valid() bool {
 		!strings.ContainsAny(addr, " \t\n")
 }
 
-const http2To = "h2c://"
+const (
+	http2To = "h2c://"
+	http3To = "h3+"
+)
 
 // HTTP2To is addr as the target of a service that takes HTTP/2 without TLS
 // (h2c) besides HTTP/1.1, which the terminator then offers clients.
@@ -430,10 +454,34 @@ func HTTP2To(addr string) string { return http2To + addr }
 
 // HTTP2Of is the address to names, and whether its service takes h2c.
 func HTTP2Of(to string) (addr string, h2c bool) {
+	to, _ = HTTP3Of(to)
 	if addr, ok := strings.CutPrefix(to, http2To); ok {
 		return addr, true
 	}
 	return to, false
+}
+
+// HTTP3To is to, an address or [HTTP2To] of one, as the target of a service
+// that speaks HTTP, which the terminator then proxies, offering clients
+// HTTP/3 besides.
+func HTTP3To(to string) string { return http3To + to }
+
+// HTTP3Of is what to names without HTTP/3, and whether clients are offered
+// it.
+func HTTP3Of(to string) (rest string, h3 bool) {
+	if rest, ok := strings.CutPrefix(to, http3To); ok {
+		return rest, true
+	}
+	return to, false
+}
+
+// OffersHTTP3 reports whether a name sent to to is offered HTTP/3, the
+// terminator ending QUIC for it: its service speaks HTTP, or it is the
+// status page.
+func OffersHTTP3(to string) bool {
+	_, h3 := HTTP3Of(to)
+	_, page := StatusPageOf(to)
+	return h3 || page
 }
 
 // MaxWaiting caps the changes one [CmdWaiting] request hands on.
@@ -605,9 +653,10 @@ const (
 	fSubnet
 	fNames
 	fPublish
-	fAccount
+	fAccount // Account, NoCert and Stopping
 	fShare
 	fPing
+	fListening // Listening and Unbound
 )
 
 // present lists the optional fields r sets.
@@ -625,7 +674,8 @@ func (r *Request) present() reqField {
 		{r.ServeSubnets != nil || r.AcceptSubnets != nil, fSubnet},
 		{r.AcceptNames != nil, fNames},
 		{r.ServePublished != nil || len(r.ServeTo) > 0 || len(r.Unserve) > 0, fPublish},
-		{r.Account != nil || len(r.Listening) > 0 || len(r.Unbound) > 0 || len(r.NoCert) > 0 || r.Stopping, fAccount},
+		{r.Account != nil || len(r.NoCert) > 0 || r.Stopping, fAccount},
+		{len(r.Listening) > 0 || len(r.Unbound) > 0, fListening},
 		{r.Share != nil, fShare}, {!r.Ping.IsZero(), fPing},
 	} {
 		if p.set {
@@ -693,14 +743,15 @@ var requestShapes = map[Command]requestShape{
 			}
 			return true
 		}},
-	CmdPublished:  {},
+	CmdPublished: {takes: fListening, shape: "a published request carries the ingress's ports and nothing else",
+		check: func(r *Request) bool { return validPorts(r.Listening) && validPorts(r.Unbound) }},
 	CmdUnshare:    {},
 	CmdStatusPage: {},
 	CmdPing: {takes: fPing, shape: "a ping request names a member and nothing else",
 		check: func(r *Request) bool { return !r.Ping.IsZero() }},
 	CmdShare: {takes: fShare, shape: "a share request carries where to, on loopback, and an end, and nothing else",
 		check: func(r *Request) bool { return r.Share != nil && r.Share.Valid() }},
-	CmdServing: {takes: fAccount, shape: "a serving request carries the terminator's account and where it listens, and nothing else",
+	CmdServing: {takes: fAccount | fListening, shape: "a serving request carries the terminator's account and where it listens, and nothing else",
 		check: func(r *Request) bool {
 			return (r.Account == nil || r.Account.Valid()) && validAddrPorts(r.Listening) && validAddrPorts(r.Unbound) &&
 				validNoCerts(r.NoCert)

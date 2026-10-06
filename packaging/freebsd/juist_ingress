@@ -5,11 +5,14 @@
 # KEYWORD: shutdown
 #
 # juist_ingress_enable (bool): YES serves as the network's ingress, on 443 and
-#                              80; juist ingress serve sets it.
+#                              80 and the ports names are published on by
+#                              TCP; juist ingress serve sets it.
 # juist_ingress_args (str):    more options, such as --max-conns N.
 #
-# Started as root, the ingress binds its ports and runs as juist-ingress. pf,
-# where the host runs it, is the host's: it lets 443 and 80 in itself.
+# Started as root, the ingress runs as juist-ingress beside a parent that
+# stays root to listen on 443 and 80, and on the ports juistd says names are
+# published on by TCP, and nowhere else. pf, where the host runs it, is the
+# host's: it lets those in itself.
 
 . /etc/rc.subr
 

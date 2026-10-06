@@ -131,8 +131,19 @@ func sh(t *testing.T, name string, args ...string) string {
 	return string(out)
 }
 
+// freePort is a port of 127.0.0.1 free by network, "tcp", "udp" or "both".
 func freePort(t *testing.T, network string) int {
 	t.Helper()
+	if network == "both" {
+		for range 100 {
+			p := freePort(t, "tcp")
+			if c, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", p)); err == nil {
+				c.Close()
+				return p
+			}
+		}
+		t.Fatal("no port free by TCP and UDP")
+	}
 	if network == "udp" {
 		c, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
@@ -160,8 +171,20 @@ type vm struct {
 	dir     string
 	key     string
 	ssh     int
+	https   int // the host's port forwarded to 443, by TCP and UDP, where set
+	tcpOnly int // and one forwarded to 443 by TCP alone
 	cmd     *exec.Cmd
 	exited  chan struct{}
+}
+
+// httpsFwd forwards v.https on the host to v's 443, by TCP and UDP, and
+// v.tcpOnly by TCP alone.
+func (v *vm) httpsFwd() string {
+	if v.https == 0 {
+		return ""
+	}
+	return fmt.Sprintf(",hostfwd=tcp:127.0.0.1:%d-:443,hostfwd=udp:127.0.0.1:%d-:443,hostfwd=tcp:127.0.0.1:%d-:443",
+		v.https, v.https, v.tcpOnly)
 }
 
 // boot starts v from the base image, its LAN a UDP socket on port mine that
@@ -179,7 +202,7 @@ func (v *vm) boot(t *testing.T, baseDisk string, mine, peer int, seed string) {
 	args := append([]string{"-machine", "q35", "-smp", "2", "-m", "2048"}, accel...)
 	args = append(args,
 		"-drive", "file="+disk+",if=virtio",
-		"-netdev", fmt.Sprintf("user,id=n0,net=%s,hostfwd=tcp:127.0.0.1:%d-:22", v.net, v.ssh),
+		"-netdev", fmt.Sprintf("user,id=n0,net=%s,hostfwd=tcp:127.0.0.1:%d-:22%s", v.net, v.ssh, v.httpsFwd()),
 		"-device", "virtio-net-pci,netdev=n0",
 		"-netdev", fmt.Sprintf("socket,id=n1,udp=127.0.0.1:%d,localaddr=127.0.0.1:%d", peer, mine),
 		"-device", "virtio-net-pci,netdev=n1,mac="+v.mac,

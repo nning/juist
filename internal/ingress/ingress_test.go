@@ -71,7 +71,8 @@ func (tg *target) published(name string, proxy bool) ipc.PublishedTarget {
 		Port: ap.Port(), Proxy: proxy}
 }
 
-// source is juistd's answer, which a test may change or silence.
+// source is juistd's answer, which a test may change or silence, and the
+// last report it was told.
 type source struct {
 	mu     sync.Mutex
 	p      *ipc.Published
@@ -79,13 +80,29 @@ type source struct {
 	hangs  bool
 	delay  time.Duration
 	asked  atomic.Int32
+	told   ipc.IngressReport
 }
 
-func (s *source) ask(ctx context.Context) (*ipc.Published, error) {
+func (s *source) set(p *ipc.Published) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.p = p
+}
+
+func (s *source) report() ipc.IngressReport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.told
+}
+
+func (s *source) ask(ctx context.Context, r *ipc.IngressReport) (*ipc.Published, error) {
 	s.asked.Add(1)
 	time.Sleep(s.delay)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if r != nil {
+		s.told = *r
+	}
 	if s.hangs {
 		s.mu.Unlock()
 		<-ctx.Done()

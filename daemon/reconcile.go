@@ -75,6 +75,7 @@ func (d *Daemon) Reconcile() error {
 		if err != nil {
 			return err
 		}
+		d.noteIngressPorts(nil)
 		d.pruneEndpoints(s.live)
 		d.logOnce("daemon: this device is not in the member set (removed, or past its expiry); tunnels are down")
 		return nil
@@ -87,7 +88,7 @@ func (d *Daemon) Reconcile() error {
 	if err != nil {
 		d.applyExit(d.exitDown("the data plane refused the relay set"))
 		// Published ports close too, as they would once the view went stale.
-		_ = d.manager.SetIngressPorts([]uint16{d.gossipPort})
+		_ = d.manager.SetIngressPorts(conn.IngressPorts{TCP: []uint16{d.gossipPort}})
 		return err
 	}
 	b := d.buildPeers(s, held, discoUsers, relays, admit)
@@ -100,6 +101,7 @@ func (d *Daemon) Reconcile() error {
 	d.mu.Unlock()
 	ports := d.planPublish(s, fresh.Fresh(s.now))
 	d.notePublishing()
+	d.noteIngressPorts(d.publicPorts(s, fresh.Fresh(s.now)))
 	exit.zone, exit.overrides, exit.namesUntil = d.namesZone(state, fresh, exit.accepted, s.now,
 		func(id types.Identity) bool {
 			return id == d.self && d.publishing() || id != d.self && held[id].Published

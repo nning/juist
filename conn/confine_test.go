@@ -65,7 +65,7 @@ func TestTheConfinerKeepsAnIngressToItsPorts(t *testing.T) {
 	service := netip.MustParsePrefix("100.64.0.4/32")
 	c.set([]Peer{{Addrs: []netip.Prefix{ingress}, Confined: ConfineIngress}, {Addrs: []netip.Prefix{member}},
 		{Addrs: []netip.Prefix{service}, Confined: ConfineService}},
-		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, []uint16{443, 41641})
+		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{TCP: []uint16{41641, 443}, UDP: []uint16{443}})
 	verdicts := []struct {
 		what string
 		pkt  []byte
@@ -76,7 +76,10 @@ func TestTheConfinerKeepsAnIngressToItsPorts(t *testing.T) {
 		{"log sync", tcpPacket(ap("100.64.0.2:5001"), ap("100.64.0.1:41641"), tcpSyn), filter.Accept},
 		{"a SYN to another port", tcpPacket(ap("100.64.0.2:5000"), ap("100.64.0.1:22"), tcpSyn), filter.Drop},
 		{"an ACK to another port", tcpPacket(ap("100.64.0.2:5000"), ap("100.64.0.1:22"), tcpAck), filter.Drop},
-		{"UDP to a published port", udpPacket(ap("100.64.0.2:5000"), ap("100.64.0.1:443")), filter.Drop},
+		{"UDP to a port published by TLS, for QUIC", udpPacket(ap("100.64.0.2:5000"), ap("100.64.0.1:443")), filter.Accept},
+		{"UDP to log sync's port", udpPacket(ap("100.64.0.2:5000"), ap("100.64.0.1:41641")), filter.Drop},
+		{"UDP to another port", udpPacket(ap("100.64.0.2:5000"), ap("100.64.0.1:53")), filter.Drop},
+		{"UDP to what this node routes", udpPacket(ap("100.64.0.2:5000"), ap("192.168.1.5:443")), filter.Drop},
 		{"TCP to what this node routes", tcpPacket(ap("100.64.0.2:5000"), ap("192.168.1.5:443"), tcpAck), filter.Drop},
 		{"ICMP", ipPacket(ipproto.ICMPv4, netip.MustParseAddr("100.64.0.2"), netip.MustParseAddr("100.64.0.1"),
 			[]byte{3, 3, 0, 0, 0, 0, 0, 0}), filter.Drop},
@@ -132,7 +135,7 @@ func TestTheConfinerCallsTheEnginesHooks(t *testing.T) {
 	var calls int
 	next := func(*packet.Parsed, *tstun.Wrapper) filter.Response { calls++; return filter.DropSilently }
 	c := &confiner{nextIn: next, nextOut: next}
-	c.set(nil, nil, nil)
+	c.set(nil, nil, IngressPorts{})
 	pkt := parsed(tcpPacket(ap("100.64.0.3:5000"), ap("100.64.0.1:22"), tcpAck))
 	if got := c.in(pkt, nil); got != filter.DropSilently {
 		t.Errorf("in: %v, want the engine's verdict", got)
@@ -209,7 +212,7 @@ func TestAnIngressReachesItsPortsAlone(t *testing.T) {
 	if err := member.mgr.SetPeers([]Peer{confined}); err != nil {
 		t.Fatal(err)
 	}
-	if err := member.mgr.SetIngressPorts([]uint16{443}); err != nil {
+	if err := member.mgr.SetIngressPorts(IngressPorts{TCP: []uint16{443}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ingress.mgr.SetPeers([]Peer{member.peer()}); err != nil {
@@ -269,7 +272,7 @@ func TestAConfinedPeerAnswersPingsAndErrors(t *testing.T) {
 	c.maxFlowsPerAddr = 16
 	c.set([]Peer{{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32"),
 		netip.MustParsePrefix("fd00::2/128")}, Confined: ConfineIngress}},
-		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd00::1/128")}, []uint16{443})
+		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd00::1/128")}, IngressPorts{TCP: []uint16{443}})
 	self4, peer4 := netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("100.64.0.2")
 	self6, peer6 := netip.MustParseAddr("fd00::1"), netip.MustParseAddr("fd00::2")
 	echo := func(id byte) []byte { return []byte{0, id, 0, 1} }
@@ -306,7 +309,7 @@ func TestAConfinedFlowEndsWithItsConnection(t *testing.T) {
 	c := &confiner{now: func() time.Time { return now }}
 	c.maxFlowsPerAddr = 16
 	c.set([]Peer{{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Confined: ConfineService}},
-		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, nil)
+		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{})
 	conn := func(port uint16) (out, in func(flags byte) filter.Response) {
 		self := netip.AddrPortFrom(netip.MustParseAddr("100.64.0.1"), port)
 		peer := ap("100.64.0.2:8080")
@@ -367,7 +370,7 @@ func TestOnePeersFlowsEvictNoOthers(t *testing.T) {
 	c.set([]Peer{
 		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Confined: ConfineService},
 		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")}, Confined: ConfineService},
-	}, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, nil)
+	}, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{})
 	self := func(port uint16) netip.AddrPort { return netip.AddrPortFrom(netip.MustParseAddr("100.64.0.1"), port) }
 	quiet, busy := ap("100.64.0.2:53"), ap("100.64.0.3:53")
 	c.out(parsed(udpPacket(self(40000), quiet)), nil)
@@ -388,7 +391,7 @@ func TestOnePeersFlowsEvictNoOthers(t *testing.T) {
 	c.set([]Peer{
 		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Confined: ConfineService},
 		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32"), netip.MustParsePrefix("100.64.0.5/32")}, Confined: ConfineService},
-	}, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, nil)
+	}, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{})
 	for port := range uint16(4) {
 		c.out(parsed(udpPacket(self(42000+port), ap("100.64.0.5:53"))), nil)
 	}
@@ -404,8 +407,75 @@ func TestOnePeersFlowsEvictNoOthers(t *testing.T) {
 	}
 
 	// A peer no longer confined leaves no flows behind.
-	c.set(nil, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, nil)
+	c.set(nil, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{})
 	if len(c.flows) != 0 {
 		t.Errorf("flows kept for %d addresses no longer confined", len(c.flows))
+	}
+}
+
+// fragment4 is a fragment of a UDP datagram from src to dst other than the
+// first, offset bytes in.
+func fragment4(src, dst netip.Addr, offset int) []byte {
+	b := ipPacket(ipproto.UDP, src, dst, make([]byte, 64))
+	binary.BigEndian.PutUint16(b[6:8], uint16(offset/8)) // no more fragments, at offset
+	b[10], b[11] = 0, 0
+	binary.BigEndian.PutUint16(b[10:12], ipChecksum(b[:20]))
+	return b
+}
+
+func ipChecksum(h []byte) uint16 {
+	var sum uint32
+	for i := 0; i < len(h); i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(h[i:]))
+	}
+	for sum > 0xffff {
+		sum = sum>>16 + sum&0xffff
+	}
+	return ^uint16(sum)
+}
+
+// A datagram larger than the tunnel takes, as a browser's QUIC Initial, comes
+// in fragments: those after the first, which carry no port, pass from a
+// confined peer to this node's own addresses, as the filter passes them, the
+// first having been checked; to what this node routes, or inside a transport
+// header, not.
+func TestFragmentsOfAConfinedPeersDatagramPass(t *testing.T) {
+	c := &confiner{}
+	self, ingress := netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("100.64.0.2")
+	c.set([]Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(ingress, 32)}, Confined: ConfineIngress}},
+		[]netip.Prefix{netip.PrefixFrom(self, 32)}, IngressPorts{UDP: []uint16{443}})
+	if p := parsed(fragment4(ingress, self, 1232)); p.IPProto != ipproto.Fragment {
+		t.Fatalf("the packet is no fragment: %v", p.IPProto)
+	}
+	for _, v := range []struct {
+		what string
+		pkt  []byte
+		want filter.Response
+	}{
+		{"a later fragment to this node", fragment4(ingress, self, 1232), filter.Accept},
+		{"a later fragment to what this node routes", fragment4(ingress, netip.MustParseAddr("192.168.1.5"), 1232), filter.Drop},
+		{"a fragment inside a transport header", fragment4(ingress, self, 8), filter.Drop},
+	} {
+		if got := c.in(parsed(v.pkt), nil); got != v.want {
+			t.Errorf("%s: %v, want %v", v.what, got, v.want)
+		}
+	}
+}
+
+// A reply from a port an ingress may send UDP to opens nothing: once the
+// port is no longer its, the ingress reaches it no more.
+func TestAQUICReplyOpensNothing(t *testing.T) {
+	c := &confiner{}
+	self, ingress := netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("100.64.0.2/32")
+	peers := []Peer{{Addrs: []netip.Prefix{ingress}, Confined: ConfineIngress}}
+	c.set(peers, []netip.Prefix{self}, IngressPorts{UDP: []uint16{443}})
+	in := udpPacket(ap("100.64.0.2:5000"), ap("100.64.0.1:443"))
+	if got := c.in(parsed(in), nil); got != filter.Accept {
+		t.Fatalf("UDP to a port QUIC is served on: %v", got)
+	}
+	c.out(parsed(udpPacket(ap("100.64.0.1:443"), ap("100.64.0.2:5000"))), nil)
+	c.set(peers, []netip.Prefix{self}, IngressPorts{})
+	if got := c.in(parsed(in), nil); got != filter.Drop {
+		t.Errorf("UDP to a port no longer served: %v", got)
 	}
 }

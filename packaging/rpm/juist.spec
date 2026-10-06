@@ -64,6 +64,8 @@ install -D -m 0644 juistd@.service %{buildroot}%{_unitdir}/juistd@.service
 install -D -m 0644 juist-ingress.service %{buildroot}%{_unitdir}/juist-ingress.service
 install -D -m 0644 juist-serve.service %{buildroot}%{_unitdir}/juist-serve.service
 install -D -m 0644 juist-serve.path %{buildroot}%{_unitdir}/juist-serve.path
+install -D -m 0644 juist-ingress-ports.path %{buildroot}%{_unitdir}/juist-ingress-ports.path
+install -D -m 0644 juist-ingress-ports.service %{buildroot}%{_unitdir}/juist-ingress-ports.service
 install -D -m 0644 %{SOURCE1} %{buildroot}%{_sysusersdir}/%{name}.conf
 install -D -m 0755 firewall.sh %{buildroot}%{_prefix}/lib/juist/firewall.sh
 install -D -m 0755 exit-node.sh %{buildroot}%{_prefix}/lib/juist/exit-node.sh
@@ -104,6 +106,11 @@ elif systemctl is-enabled --quiet juist-serve.service 2>/dev/null; then
 	# A terminator enabled before juist-serve.path came is started by it.
 	systemctl disable --quiet juist-serve.service >/dev/null 2>&1 || :
 	systemctl enable --now juist-serve.path >/dev/null 2>&1 || :
+fi
+# An ingress enabled before juist-ingress-ports.path came has the firewall
+# follow its ports by it.
+if [ $1 -gt 1 ] && systemctl is-enabled --quiet juist-ingress.service 2>/dev/null; then
+	systemctl enable --now juist-ingress-ports.path >/dev/null 2>&1 || :
 fi
 
 %preun
@@ -158,6 +165,8 @@ fi
 %{_unitdir}/juist-ingress.service
 %{_unitdir}/juist-serve.service
 %{_unitdir}/juist-serve.path
+%{_unitdir}/juist-ingress-ports.path
+%{_unitdir}/juist-ingress-ports.service
 %{_sysusersdir}/%{name}.conf
 %dir %{_prefix}/lib/juist
 %{_prefix}/lib/juist/firewall.sh

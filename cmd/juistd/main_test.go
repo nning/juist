@@ -41,7 +41,7 @@ func TestHelpListsEveryOptionWithItsDefault(t *testing.T) {
 			t.Errorf("help lacks %q:\n%s", want, got)
 		}
 	}
-	if n := strings.Count(got, "\n"); n > 28 {
+	if n := strings.Count(got, "\n"); n > 29 {
 		t.Errorf("help is %d lines", n)
 	}
 	if _, err := parse([]string{"--help"}, io.Discard); !errors.Is(err, errHelp) {
@@ -251,7 +251,7 @@ func TestAnIngressSaysWhoHoldsItsPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	_, err = listenIngress(ln.Addr().(*net.TCPAddr).Port)
+	_, err = listenIngress(uint16(ln.Addr().(*net.TCPAddr).Port))
 	if err == nil || !strings.Contains(err.Error(), "another program serves port") {
 		t.Fatalf("a port taken: %v", err)
 	}
@@ -347,5 +347,23 @@ func TestTheIngressSaysJuistdIsGone(t *testing.T) {
 	o.Logf("ingress: juistd does not answer")
 	if !strings.Contains(out.String(), "juistd does not answer") {
 		t.Errorf("the ingress said %q", out.String())
+	}
+}
+
+// --http3 offers HTTP/3 for every name a service member serves, the status
+// page offering it already, and is for a service member alone.
+func TestHTTP3IsForAServiceMember(t *testing.T) {
+	o, err := parse([]string{"--serve", "immich=immich-server:2283", "-S", "status=status-page:all", "--http3"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := o.service.ServeTo["immich"]; got != ipc.HTTP3To("immich-server:2283") {
+		t.Errorf("immich goes to %q", got)
+	}
+	if got := o.service.ServeTo["status"]; got != "status-page:all" {
+		t.Errorf("the status page goes to %q", got)
+	}
+	if _, err := parse([]string{"--http3"}, io.Discard); err == nil || !strings.Contains(err.Error(), "beside --serve") {
+		t.Errorf("--http3 alone: %v", err)
 	}
 }

@@ -1,0 +1,15 @@
+# Lets the ports names are published on by TCP through the firewall as
+# juistd lists them in /run/juist/ingress-ports, while this device serves as
+# the network's ingress; see /usr/lib/juist/ingress.sh. juist ingress serve
+# enables it.
+
+[Unit]
+Description=juist ingress ports, let through the firewall as juistd lists them
+Documentation=https://github.com/nning/juist
+
+[Path]
+PathChanged=/run/juist/ingress-ports
+Unit=juist-ingress-ports.service
+
+[Install]
+WantedBy=paths.target

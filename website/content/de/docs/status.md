@@ -72,7 +72,9 @@ In der ersten Zeile steht einer dieser Zustände:
 - `Freshness`: wann ein Voucher zuletzt bestätigt hat, dass dieses Gerät den aktuellen Stand des Netzes kennt, und wie lange das gilt. Ein Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich ausstellt. Nach 48 Stunden ohne Bestätigung steht dort `expired; vouchers only`. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
 - `Published`: die auf diesem Gerät veröffentlichten Namen, die es bedient,
   oder warum nicht. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}).
-- `Ingress`: auf einer Ingress, ob sie läuft und welche Namen sie bedient.
+- `Ingress`: auf einer Ingress, ob sie läuft, welche Namen sie bedient,
+  welche Ports sie per TCP weiterreicht und welche ein anderes Programm
+  belegt.
 - `Sharing`: was dieses Gerät unter seinem eigenen Namen teilt, eine Datei
   oder ein Verzeichnis mit seinem Link, bis wann, oder warum es niemand
   erreicht.

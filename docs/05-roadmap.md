@@ -1401,8 +1401,12 @@ Decided:
 M9's ingress passes TCP to 443 alone, by SNI. M11 widens what it carries,
 before the audit so that M14 covers it, in two parts shipped on their own:
 a TCP service on a port of its own (M11a), then HTTP/3 over 443/udp (M11b).
+Both are done.
 
 ## M11a — Publishing a TCP port
+
+**Done** on 2026-10-05, as below, reviewed (M11 review 1) and validated by
+`make interop` and by hand on Fedora and Ubuntu (12-validating.md).
 
 A service that speaks no TLS, such as a Minecraft server on 25565/tcp,
 reached from the internet through the ingress. With no ClientHello there is
@@ -1436,11 +1440,47 @@ client connects to `mc.example.org:25565`.
     an ingress reaches only the ports a member publishes and serves.
   - Only the quorum publishes a TCP port. The publish role (M9c) shares on
     443 alone, since a public port is the network's, not the device's.
-- **Open:** the CLI's spelling, a flag on `juist publish add` or a form of
-  its own, and whether the public port may differ from the target's; whether
-  members reach a TCP name through the ingress, as behind `--proxy`, or
-  directly through M8's override where the target serves the same port; an
-  SRV record printed beside CAA, for clients that look one up.
+  - The spelling: `juist publish add DEVICE NAME PORT --tcp`, the public
+    port the device's unless `--tcp=PUBLIC` gives another, such as 2222 for
+    a device's sshd on 22, since an ingress's own sshd holds 22; and `juist
+    publish add NAME HOST:PORT --tcp` on the device, the device taking the
+    public port too. A name published by TCP stays so until removed: a
+    command without `--tcp` is refused rather than turning it to TLS.
+  - Members reach a TCP name at its device through M8's override where its
+    public port is the device's and it has no `--proxy`, and through the
+    ingress otherwise.
+  - No SRV record is printed: its service name is the protocol's, which
+    juist does not know; the handbook shows Minecraft's.
+  - The log also refuses a public port that an ingress's own name goes to,
+    which the ingress holds, and a name by TCP going to a port another name
+    of its device goes to, or to 443 where the device holds the publish role.
+  - The ingress holds every public port the log has while it runs, a name
+    whose target does not serve it answering nothing, and so it does while
+    juistd is silent: no other program on the host takes a port the
+    firewall lets in. The firewall follows the log while the ingress runs:
+    juistd lists the public ports in `/run/juist/ingress-ports` while this
+    device is a fresh ingress, those alone the ingress says it listens on, a
+    port another program held before staying that program's and its
+    firewall rules', `juist-ingress-ports.path` runs `ingress.sh
+    ports` as root, which juistd's `CAP_NET_ADMIN` could do by itself
+    anyway, and the ingress's start and stop run it too, one run at a time.
+    firewalld keeps the ports across reloads, `ingress.sh` noting its own
+    in `/var/lib/juist-ingress-ports`; ufw marks them with a comment. A rule
+    someone else made for the port stays theirs.
+  - On FreeBSD, and wherever started as root, the ingress runs as its user
+    beside a parent that stays root to bind 443, 80 and the public ports
+    juistd says are published, as the terminator's does.
+- **Built:** schema 11 and its rules; the ingress's listeners, splicing at
+  once, PROXY v2, the bounds, the idle timeout and the access log shared with
+  443; the report of the ports it listens on and those another program
+  holds, which the status says; the terminator passing such a name's bytes on
+  unread, on a full member and a service member; the CLI, the approval's
+  wording ("by TCP on port P of every ingress"), the status page showing
+  NAME:PORT with no link; `juist-ingress-ports.path` and `.service` in the
+  deb and the RPM.
+- **Validated:** unit tests of each part; `make interop`, exit criteria (1)
+  and (3) at the ingress; by hand, exit criteria (3) in firewalld and ufw
+  and (4), a Minecraft client through public ingresses (12-validating.md).
 - **Not in M11a:** UDP, such as Minecraft's Bedrock edition on 19132/udp,
   which needs flows at the ingress, as M11b builds for QUIC.
 
@@ -1459,6 +1499,10 @@ and the LAN, as in M9.
   a Minecraft client joins a server on a member through a public ingress.
 
 ## M11b — HTTP/3 for published names
+
+**Done** on 2026-10-06, as below, reviewed (M11 reviews 2 to 4) and
+validated by `make interop`, `make load-lab`, 72 CPU-hours of fuzzing and by
+hand on Fedora and Ubuntu (12-validating.md).
 
 QUIC on the published path: a handshake in one round trip, no head-of-line
 blocking on lossy links, and a connection that survives the client's
@@ -1485,14 +1529,79 @@ that as it is (`--http2`), HTTP/3 cannot.
 4. **Firewalls and packages:** 443/udp in firewalld's, ufw's and pf's rules
    for the ingress, and both handbooks.
 
-Open decisions:
+Decided:
 
-- **The client's address** to the terminator: PROXY v2 has no per-flow form
-  for UDP; a port per flow on the tunnel, or a header in the first datagram.
-- **The TCP path as a proxy** for HTTP names, which `Alt-Svc` needs, or
-  advertising by the DNS record alone.
-- **Retry and amplification:** whether the ingress or the terminator sends
-  QUIC Retry to an unvalidated address.
+- **The client's address:** a socket per flow on the tunnel, and ahead of
+  the flow's datagrams, until the target answers, a datagram of its own
+  holding a PROXY v2 header for UDP, behind `--proxy` alone. No room is
+  left in the datagrams themselves: a browser's Initials take 1250 bytes,
+  which the tunnel's MTU of 1280 carries over IPv4 alone, so the ingress
+  sends a flow to the target's IPv4 address first. The terminator believes
+  the header from an ingress's address alone, as for TCP.
+- **The TCP path as a proxy:** `juist publish add NAME HOST:PORT --http3`
+  says the service speaks HTTP; the terminator then proxies its requests
+  over TCP too, HTTP/2 offered to clients whatever the service takes, and
+  adds `Alt-Svc`. Its own Host goes to the service, and no header of the
+  proxy's: `X-Forwarded-*` from the client are dropped. The status page is
+  offered HTTP/3 as it is; `juistd --serve … --http3` offers it for a
+  service member's names. A member lets an ingress send UDP to the port of
+  a name offered HTTP/3 alone, whose QUIC juist ends: a service ending TLS
+  itself stays on TCP. Each client connection has a proxy of its own to the
+  service, at most 64 connections to it and 512 for all clients, gone with
+  the client's; past 512 the idle ones go, and a request waits 5 s at most.
+  An upgrade, as to a WebSocket, goes over HTTP/1.1.
+- **Retry and amplification:** the terminator, by quic-go, sends Retry
+  once 512 connections are open; the ingress, which cannot check QUIC's
+  address validation, passes an address no more than three times what it
+  sent until the terminator says, by a datagram holding a PROXY v2 LOCAL
+  header naming the client, that the client completed its handshake, and by
+  one carrying a NOOP TLV besides that a connection ended; the ingress sends
+  the client's PROXY header for that, whatever the name asks, and believes
+  one naming its flow's client alone, as a socket of its may have been
+  another flow's. A connection ID proves nothing: a client moves to one the
+  server gave inside the encryption as soon as its handshake completes. A
+  flow unproven holds no slot of the bounds TCP shares, at most 16 from one
+  host and 1024 in all, the oldest giving way past that, one still without a
+  target first, and ends after
+  twice the hello timeout; its access line is logged once a second at most.
+  A first Initial is read only where its connection ID is of 8 bytes or
+  more, and none past the rate of new flows, even from a flow's address. The
+  terminator counts QUIC's connections against `--max-conns`. 0-RTT
+  is off: it can be replayed.
+- **One socket, several names:** a flow is the client's address; a
+  connection from it to a name of the flow's target joins the flow, eight
+  live at most, and one to another target is refused, as the ingress cannot
+  tell their datagrams apart by connection IDs it cannot see; one arriving
+  before the flow has a target is dropped, which its client sends again.
+  juistd leaves the firewall's list as it was until the ingress says what it
+  listens on, so that its restart closes no port the ingress holds.
+- **Not in M11b:** a client's address changing keeps no connection through
+  the ingress, which routes by address: QUIC's migration needs connection
+  IDs an ingress can route by (QUIC-LB). Shares stay on TCP. The ingress
+  cannot tell a name offered HTTP/3 from another, which the member's
+  announcement does not say: a client's QUIC for one not offered ends at the
+  member's confinement, holding an unproven flow meanwhile.
+- **Built:** `internal/quicinitial`, the Initial packets of versions 1 and 2
+  read with the keys their DCID gives, and the ClientHello's CRYPTO data,
+  out of order and over datagrams, handed to crypto/tls's own QUIC parser,
+  bounded at 8 KiB and 32 pieces; the ingress's QUIC on 443/udp, a flow per
+  client address, a datagram of 1200 bytes the least that starts one, at
+  most 16 waiting for the rest of a hello from one address and 1024 in
+  all, the per-source and total bounds shared with TCP, the three-times
+  bound, the access log's `access: quic` line; the confinement letting an
+  ingress send UDP to the port of a name offered HTTP/3, and a fragment after the
+  first to this node, as the filter does, since a datagram past the tunnel's
+  MTU comes in fragments; the terminator's QUIC, quic-go pinned, a socket
+  per address and port, the client from an ingress's datagram, HTTP/3
+  proxied as HTTP/1.1 or h2c, the TCP path proxied with `Alt-Svc`;
+  `--http3` on `juist publish add` and `juistd --serve`, and the HTTPS
+  record printed; 443/udp in firewalld's and ufw's profiles, ufw's taken
+  anew on upgrade, and the root parent binding it on FreeBSD.
+- **Validated:** unit tests of each part, exit criteria (3) and (4) among
+  them; `make interop`, exit criterion (1) with Chrome on the host; `make
+  load-lab`, (5); `FuzzPayloads` clean for 72 CPU-hours, (2); by hand,
+  Chrome through public ingresses with a Let's Encrypt certificate, over
+  HTTP/3 and, with 443/udp blocked, HTTP/2 (12-validating.md).
 
 - **Exit criteria:** (1) headless Chrome in the lab fetches a published name
   over HTTP/3 through the ingress, and over HTTP/2 where 443/udp is blocked;

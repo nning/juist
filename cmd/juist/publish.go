@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -23,6 +24,7 @@ func publishFamily() family {
 			{name: "add", run: publishAdd, forms: [][2]string{
 				{"add NAME HOST:PORT", "publish NAME.DOMAIN on this device,\nending TLS and sending it on to HOST:PORT"},
 				{"add DEVICE NAME [PORT]", "publish NAME.DOMAIN on DEVICE's PORT"},
+				{"add DEVICE NAME PORT --tcp", "publish DEVICE's PORT on PORT of every\ningress, by TCP"},
 			}},
 			{name: "status-page", run: publishStatusPage, forms: [][2]string{{"status-page NAME [--public WHAT]",
 				"serve the network's status page as\nNAME.DOMAIN on this device"}}},
@@ -32,7 +34,8 @@ func publishFamily() family {
 the domain itself, spelled out, whose DNS points at the ingresses (juist
 grant DEVICE ingress). The ingresses read the name a client asks for and
 pass the connection to the device, where juist ends TLS (juist publish add
-NAME HOST:PORT) or the service does. juist publish PORT publishes this
+NAME HOST:PORT) or the service does; a name published by TCP (--tcp) has a
+port of its own on every ingress instead. juist publish PORT publishes this
 host's PORT under the device's own name at once, as the publish role lets it.`}
 }
 
@@ -79,7 +82,7 @@ func (a *app) listPublished() error {
 	}
 	for _, n := range state.Nodes() {
 		for _, p := range n.Published {
-			r := row{name: p.Under(state.Domain()), device: displayMember(n), port: strconv.Itoa(int(p.Port))}
+			r := row{name: p.Under(state.Domain()), device: displayMember(n), port: portShown(p)}
 			if p.Proxy {
 				r.port += " (proxy protocol)"
 			}
@@ -127,22 +130,47 @@ Publish NAME.DOMAIN, or DOMAIN itself. Given HOST:PORT, such as
 127.0.0.1:2283, it is published on this device, where juist ends TLS with a
 certificate of its own and sends the connection on to HOST:PORT. Given
 DEVICE, on DEVICE's PORT, 443 unless given, where the service ends TLS once
-DEVICE's operator agrees.`}
+DEVICE's operator agrees. With --tcp, every ingress passes TCP on a port of
+its own to the device instead, for a service that speaks no TLS.`}
 	fs := newFlags(s.name)
 	proxy := fs.Bool("proxy", false, "send the client's address in a PROXY protocol v2 header")
 	http2 := fs.Bool("http2", false, "offer clients HTTP/2; the service at HOST:PORT takes it without TLS (h2c)")
+	http3 := fs.Bool("http3", false, "offer clients HTTP/3 too; juist proxies the HTTP of the service at HOST:PORT")
+	tcp := &tcpFlag{}
+	fs.Var(tcp, "tcp", "publish by TCP on PORT of every ingress, the device's port unless given, not by TLS on 443")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
+		first, _, _ := strings.Cut(err.Error(), "\n")
+		var extra string
+		if _, scanErr := fmt.Sscanf(first, "unexpected argument %q", &extra); scanErr == nil && tcp.on && tcp.port == 0 {
+			if _, perr := strconv.ParseUint(extra, 10, 16); perr == nil {
+				return fmt.Errorf("%s\nhint: a public port goes with the option: --tcp=%s", first, extra)
+			}
+		}
 		return err
+	}
+	httpFlag := "--http2"
+	if *http3 {
+		httpFlag = "--http3"
+	}
+	if (*http2 || *http3) && tcp.on {
+		return fmt.Errorf("%s is for a name whose TLS juist ends, not one published by TCP\n%s", httpFlag, s.usage(fs))
+	}
+	if _, err := strconv.ParseUint(pos[len(pos)-1], 10, 16); err == nil && len(pos) == 3 && strings.Contains(pos[1], ":") &&
+		tcp.on && tcp.port == 0 {
+		return fmt.Errorf("unexpected argument %q\nhint: a public port goes with the option: --tcp=%s", pos[2], pos[2])
 	}
 	if last := pos[len(pos)-1]; strings.Contains(last, ":") {
 		if *http2 {
 			pos[len(pos)-1] = ipc.HTTP2To(last)
 		}
-		return a.publishHere(pos, *proxy)
+		if *http3 {
+			pos[len(pos)-1] = ipc.HTTP3To(pos[len(pos)-1])
+		}
+		return a.publishHere(pos, *proxy, tcp)
 	}
-	if *http2 {
-		return fmt.Errorf("--http2 is for a service whose TLS juist ends, given as HOST:PORT\n%s", s.usage(fs))
+	if *http2 || *http3 {
+		return fmt.Errorf("%s is for a service whose TLS juist ends, given as HOST:PORT\n%s", httpFlag, s.usage(fs))
 	}
 	auth, err := a.networkLog()
 	if err != nil {
@@ -164,8 +192,15 @@ DEVICE's operator agrees.`}
 			return fmt.Errorf("%q is no port", pos[2])
 		}
 		port = uint16(n)
+	} else if tcp.on {
+		return fmt.Errorf("a name published by TCP needs the device's port\nhint: juist publish add %s %s PORT --tcp",
+			pos[0], pos[1])
 	}
-	next, err := publishedWith(state, target, types.PublishedName{Label: label, Port: port, Proxy: *proxy})
+	p := types.PublishedName{Label: label, Port: port, Proxy: *proxy}
+	if p.Public, err = tcp.public(state, target, label, port, ""); err != nil {
+		return err
+	}
+	next, err := publishedWith(state, target, p)
 	if err != nil {
 		return err
 	}
@@ -187,8 +222,9 @@ func (a *app) domainItselfHint(label, domain string) {
 
 // publishHere is "juist publish add [DEVICE] NAME HOST:PORT", DEVICE this
 // one: NAME published here, on the port it is already or 443, and its TLS
-// ended here and sent on.
-func (a *app) publishHere(pos []string, proxy bool) error {
+// ended here and sent on; by TCP, on the public port, and passed on as it
+// is.
+func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
 	st, err := a.daemonStatus()
 	if err != nil {
 		return err
@@ -202,22 +238,39 @@ func (a *app) publishHere(pos []string, proxy bool) error {
 	if !ok {
 		return errors.New("this device is no member of the network")
 	}
+	ends, flags := "ends TLS", ""
+	if tcp.on {
+		ends, flags = "passes TCP on", " --tcp"
+		if tcp.port != 0 {
+			flags += "=" + strconv.Itoa(int(tcp.port))
+		}
+	}
+	if proxy {
+		flags += " --proxy"
+	}
+	hostPort, h2c := ipc.HTTP2Of(pos[len(pos)-1])
+	if h2c {
+		flags += " --http2"
+	}
+	if _, h3 := ipc.HTTP3Of(pos[len(pos)-1]); h3 {
+		flags += " --http3"
+	}
 	if len(pos) == 3 {
 		target, err := resolveDevice(state, pos[0])
 		if err != nil {
 			return err
 		}
 		if target.Identity != self.Identity {
-			return fmt.Errorf("juist ends TLS on the device it runs on\nhint: on %s, juist publish add %s %s",
-				displayMember(target), pos[1], pos[2])
+			return fmt.Errorf("juist %s on the device it runs on\nhint: on %s, juist publish add %s %s%s",
+				ends, displayMember(target), pos[1], hostPort, flags)
 		}
 		pos = pos[1:]
 	}
 	switch {
 	case a.host.serveScript == "":
-		return errors.New("juist ends TLS on Linux and FreeBSD alone")
+		return fmt.Errorf("juist %s on Linux and FreeBSD alone", ends)
 	case st.Instance != 0:
-		return errors.New("juist ends TLS for the default network's instance alone, for now")
+		return fmt.Errorf("juist %s for the default network's instance alone, for now", ends)
 	}
 	label, err := publishableLabel(state, pos[0])
 	if err != nil {
@@ -232,6 +285,25 @@ func (a *app) publishHere(pos []string, proxy bool) error {
 	i := slices.IndexFunc(self.Published, func(q types.PublishedName) bool { return q.Label == label })
 	if i >= 0 {
 		p.Port = self.Published[i].Port
+	}
+	switch {
+	case !tcp.on:
+	case i >= 0 && self.Published[i].Public != 0 && (tcp.port == 0 || tcp.port == self.Published[i].Public):
+		// On the ports it is published on already.
+		p.Port = self.Published[i].Port
+		tcp = &tcpFlag{on: true, port: self.Published[i].Public}
+	default:
+		_, port, _ := net.SplitHostPort(pos[1])
+		n, _ := strconv.ParseUint(port, 10, 16)
+		// The device takes the public port too, so that members reach it there.
+		p.Port = cmp.Or(tcp.port, uint16(n))
+	}
+	again := "juist publish add " + pos[0] + " " + hostPort + " --tcp"
+	if proxy {
+		again += " --proxy"
+	}
+	if p.Public, err = tcp.public(state, self, label, p.Port, again); err != nil {
+		return err
 	}
 	next, err := publishedWith(state, self, p)
 	if err != nil {
@@ -260,7 +332,7 @@ func (a *app) publishHere(pos []string, proxy bool) error {
 		return err
 	}
 	pub := cmp.Or(after.Publish, &ipc.Publish{})
-	if err := a.startTerminator(); err != nil {
+	if err := a.startTerminator(p.Under(state.Domain())); err != nil {
 		return err
 	}
 	if !agreed && len(pub.Serving) > 0 {
@@ -268,9 +340,12 @@ func (a *app) publishHere(pos []string, proxy bool) error {
 	}
 	name := p.Under(state.Domain())
 	switch {
+	case slices.Contains(pub.Passing, name+" to "+t.To):
+		a.ok("passing %s to %s", name, t.To)
 	case slices.Contains(pub.Ending, name+" to "+t.To):
 		a.ok("ending TLS for %s to %s", name, describeTo(t.To))
 		a.showCAA(name)
+		a.showHTTPS(pub.Ending, name)
 		if label == "" {
 			a.warn("a CAA record at %s holds for every name under it without one of its own: give each device's names theirs", name)
 		}
@@ -286,14 +361,10 @@ func (a *app) publishHere(pos []string, proxy bool) error {
 		a.warnFirewalled(st, publishedPorts(next)...)
 	}
 	if !canPublish {
-		how := name
-		if p.Port != 443 || proxy {
-			how += " " + strconv.Itoa(int(p.Port))
+		if p.Public != 0 && i >= 0 && self.Published[i].Public == 0 {
+			a.warn("until an admin publishes it by TCP, juist ends TLS for %s", name)
 		}
-		if proxy {
-			how += " --proxy"
-		}
-		a.hint("an admin publishes it: juist publish add %s %s", displayMember(self), how)
+		a.hint("an admin publishes it: juist publish add %s %s", displayMember(self), publishArgs(p, state.Domain()))
 	}
 	if !agreed {
 		a.warnServing()
@@ -317,7 +388,108 @@ else sees: none, services, network (all but the changes) or all.`}
 	if err != nil {
 		return fmt.Errorf("--public: %v\n%s", err, s.usage(fs))
 	}
-	return a.publishHere([]string{pos[0], ipc.StatusPageTo(vis)}, false)
+	return a.publishHere([]string{pos[0], ipc.StatusPageTo(vis)}, false, &tcpFlag{})
+}
+
+// tcpFlag is --tcp, or --tcp=PORT: a name published by TCP, on the public
+// port given or on the one the device takes.
+type tcpFlag struct {
+	on   bool
+	port uint16
+}
+
+func (f *tcpFlag) String() string {
+	switch {
+	case f == nil || !f.on:
+		return "false"
+	case f.port == 0:
+		return "true"
+	}
+	return strconv.Itoa(int(f.port))
+}
+
+func (f *tcpFlag) Set(v string) error {
+	switch v {
+	case "true":
+		f.on, f.port = true, 0
+		return nil
+	case "false":
+		f.on, f.port = false, 0
+		return nil
+	}
+	n, err := strconv.ParseUint(v, 10, 16)
+	if err != nil || n == 0 {
+		return errors.New("want a port, as --tcp=25565")
+	}
+	f.on, f.port = true, uint16(n)
+	return nil
+}
+
+func (*tcpFlag) IsBoolFlag() bool    { return true }
+func (*tcpFlag) Placeholder() string { return "[=PORT]" }
+
+// public is the public port of label, published on target's port, by TCP
+// where f says, zero otherwise: a name published by TCP stays so until
+// removed, so that one left out of a command is not turned to TLS.
+// The hint names again, or the admin's command where empty.
+func (f *tcpFlag) public(state *log.State, target types.NodeRecord, label string, port uint16, again string) (uint16, error) {
+	i := slices.IndexFunc(target.Published, func(q types.PublishedName) bool { return q.Label == label })
+	if !f.on {
+		if i >= 0 && target.Published[i].Public != 0 {
+			p := target.Published[i]
+			if again == "" {
+				again = "juist publish add " + displayMember(target) + " " + publishArgs(p, state.Domain())
+			}
+			return 0, fmt.Errorf("%s is published by TCP on port %d\nhint: %s, or juist publish remove first",
+				p.Under(state.Domain()), p.Public, again)
+		}
+		return 0, nil
+	}
+	if state.Schema() < types.SchemaTCP {
+		return 0, needsUpgrade("names published by TCP")
+	}
+	public := cmp.Or(f.port, port)
+	if err := types.ValidatePublicPort(public); err != nil {
+		return 0, fmt.Errorf("a name is not published by TCP on %v", err)
+	}
+	for _, n := range state.Nodes() {
+		for _, q := range n.Published {
+			if q.Public == public && (n.Identity != target.Identity || q.Label != label) {
+				return 0, fmt.Errorf("%s is published on port %d already\nhint: another port, as --tcp=PORT",
+					q.Under(state.Domain()), public)
+			}
+		}
+	}
+	return public, nil
+}
+
+// publishArgs is what follows DEVICE in "juist publish add" to publish p.
+func publishArgs(p types.PublishedName, domain string) string {
+	how := p.Under(domain)
+	if p.Port != 443 || p.Proxy || p.Public != 0 {
+		how += " " + strconv.Itoa(int(p.Port))
+	}
+	switch {
+	case p.Public == p.Port:
+		how += " --tcp"
+	case p.Public != 0:
+		how += " --tcp=" + strconv.Itoa(int(p.Public))
+	}
+	if p.Proxy {
+		how += " --proxy"
+	}
+	return how
+}
+
+// portShown is where p is published, as a listing says it.
+func portShown(p types.PublishedName) string {
+	switch {
+	case p.Public == 0:
+		return strconv.Itoa(int(p.Port))
+	case p.Public == p.Port:
+		return strconv.Itoa(int(p.Public)) + "/tcp"
+	}
+	return fmt.Sprintf("%d/tcp to %d", p.Public, p.Port)
 }
 
 // describeTo says where a name whose TLS juist ends goes.
@@ -325,10 +497,41 @@ func describeTo(to string) string {
 	if vis, ok := ipc.StatusPageOf(to); ok {
 		return "the status page, public: " + vis.String()
 	}
-	if addr, ok := ipc.HTTP2Of(to); ok {
-		return addr + " over HTTP/2"
+	_, h3 := ipc.HTTP3Of(to)
+	addr, h2c := ipc.HTTP2Of(to)
+	if h2c {
+		addr += " over HTTP/2"
 	}
-	return to
+	if h3 {
+		addr += ", with HTTP/3"
+	}
+	return addr
+}
+
+// showHTTPS prints the DNS record that has browsers ask each of names over
+// HTTP/3 from the first, which ending, "NAME to TO" each, offers it for.
+func (a *app) showHTTPS(ending []string, names ...string) {
+	said := false
+	for _, e := range ending {
+		name, to, _ := strings.Cut(e, " to ")
+		if _, h3 := ipc.HTTP3Of(to); h3 && slices.Contains(names, name) {
+			a.printf("%s. HTTPS 1 . alpn=\"h3,h2\"\n", name)
+			said = true
+		}
+	}
+	if said {
+		a.hint("at the domain's DNS, this record has browsers try HTTP/3 at once, not from their second request")
+		a.hintOwnRecords()
+	}
+}
+
+// hintOwnRecords says once that a name given records of its own, CAA or
+// HTTPS, is given no address by a wildcard (RFC 4592).
+func (a *app) hintOwnRecords() {
+	if !a.ownRecordsSaid {
+		a.ownRecordsSaid = true
+		a.hint("a name with records of its own gets no address from a wildcard: give it A and AAAA records too")
+	}
 }
 
 // nameUnder is label under domain, or label alone without one.
@@ -572,7 +775,7 @@ func (a *app) serveHere(self string) error {
 	// Started once told where names go, so that it is there when they are
 	// published or the view is fresh again.
 	if len(pub.To) > 0 {
-		if err := a.startTerminator(); err != nil {
+		if err := a.startTerminator(""); err != nil {
 			return err
 		}
 	}
@@ -592,7 +795,12 @@ func (a *app) serveHere(self string) error {
 		a.ok("ending TLS for %s to %s", name, describeTo(to))
 		names = append(names, name)
 	}
+	for _, e := range pub.Passing {
+		name, to, _ := strings.Cut(e, " to ")
+		a.ok("passing %s to %s", name, to)
+	}
 	a.showCAA(names...)
+	a.showHTTPS(pub.Ending, names...)
 	a.warnServedFirewalled()
 	a.warnServing()
 	return nil
@@ -605,8 +813,8 @@ func (a *app) warnServing() {
 }
 
 // startTerminator has the package's script start the terminator, and waits
-// for it to answer where the first name it serves is listened for.
-func (a *app) startTerminator() error {
+// for it to answer where name, or the first name it serves, is listened for.
+func (a *app) startTerminator(name string) error {
 	if a.host.serveScript == "" {
 		return errors.New("juist ends TLS on Linux and FreeBSD alone")
 	}
@@ -619,14 +827,19 @@ func (a *app) startTerminator() error {
 	if err != nil {
 		return err
 	}
-	if st := n.status(); st != nil && st.Instance != 0 {
+	st := n.status()
+	if st != nil && st.Instance != 0 {
 		return errors.New("juist ends TLS for the default network's instance alone, for now")
 	}
+	self := "DEVICE"
+	if st != nil {
+		self = cmp.Or(st.SelfName, st.Self.ShortString())
+	}
 	resp, err := ipc.Call(n.socket(), ipc.Request{Command: ipc.CmdServing})
-	if err != nil || resp.Serving == nil || len(resp.Serving.Names) == 0 || a.host.answersTLS == nil {
+	if err != nil || resp.Serving == nil || a.host.answersTLS == nil {
 		return err
 	}
-	t := resp.Serving.Names[0]
+	t := servedAs(resp.Serving, name)
 	if len(t.Addrs) == 0 {
 		return nil
 	}
@@ -635,10 +848,15 @@ func (a *app) startTerminator() error {
 	// another program's.
 	for deadline := time.Now().Add(a.host.terminatorWait); a.host.terminatorWait > 0; {
 		var said *ipc.Terminator
-		if st, _ := n.restatus(); st != nil {
-			said = st.Terminator
+		if now, _ := n.restatus(); now != nil {
+			said = now.Terminator
 		}
-		listening, err := terminatorAt(said, at)
+		listening, err := terminatorAt(said, at, t)
+		if err != nil && t.Public != 0 {
+			// A service on every address of the device is reached there.
+			return fmt.Errorf("%v\nhint: where the service listens on every address, publish the device's port: "+
+				"juist publish add %s %s %d --tcp", err, self, t.Name, t.Port)
+		}
 		if err != nil {
 			return fmt.Errorf("%v\nhint: %s", err, helperLog("juist-serve"))
 		}
@@ -654,18 +872,39 @@ func (a *app) startTerminator() error {
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+	// A service passed by TCP speaks no protocol to ask.
+	if t.Public != 0 {
+		return nil
+	}
 	if err := a.host.answersTLS(a.ctx, at); err != nil {
 		return fmt.Errorf("the terminator does not answer on %s: %v\nhint: %s", at, err, helperLog("juist-serve"))
 	}
 	return nil
 }
 
+// servedAs is how p serves name, or the first name it serves where none is
+// called so.
+func servedAs(p *ipc.Published, name string) ipc.PublishedTarget {
+	all := slices.Concat(p.Names, p.TCP)
+	if i := slices.IndexFunc(all, func(t ipc.PublishedTarget) bool { return t.Name == name }); i >= 0 {
+		return all[i]
+	}
+	if len(all) > 0 {
+		return all[0]
+	}
+	return ipc.PublishedTarget{}
+}
+
 // terminatorAt reports whether the terminator, as it last said, listens at
-// at, and why it cannot where another program holds the port.
-func terminatorAt(t *ipc.Terminator, at string) (bool, error) {
+// at for n, and why it cannot where another program holds the port.
+func terminatorAt(t *ipc.Terminator, at string, n ipc.PublishedTarget) (bool, error) {
 	switch {
 	case t == nil || !t.Running:
 		return false, nil
+	case slices.Contains(t.Unbound, at) && n.Public != 0:
+		ap := netip.MustParseAddrPort(at)
+		return false, fmt.Errorf("another program holds port %d on %s, where juist would pass %s by TCP",
+			ap.Port(), ap.Addr(), n.Name)
 	case slices.Contains(t.Unbound, at):
 		ap := netip.MustParseAddrPort(at)
 		return false, fmt.Errorf("another program holds port %d on %s, where juist would end TLS", ap.Port(), ap.Addr())
@@ -713,6 +952,7 @@ func (a *app) showCAA(names ...string) {
 				a.printf("%s\n", r)
 			}
 			a.hint("at the domain's DNS, these records keep the names' certificates to this device")
+			a.hintOwnRecords()
 			return
 		}
 		if err != nil || a.host.caaWait == 0 {
@@ -740,6 +980,9 @@ func publishSummary(pub *ipc.Publish, paint func(code, s string) string) string 
 	switch {
 	case pub == nil:
 		return ""
+	case len(pub.Serving) > 0 && pub.TerminatorSilent && len(pub.Ending) == 0:
+		return paint("33", "this device serves "+strings.Join(pub.Serving, ", ")+
+			", but passes none on: the terminator does not run (juist publish serve)")
 	case len(pub.Serving) > 0 && pub.TerminatorSilent:
 		return paint("33", "this device serves "+strings.Join(pub.Serving, ", ")+
 			", but ends TLS for none: the terminator does not run (juist publish serve)")
@@ -790,11 +1033,12 @@ func (a *app) submitPublished(auth *log.Authority, target types.NodeRecord, next
 	return a.submit(auth, &change{aum: aum, file: "publish-" + fileSafe(name) + ".rec", done: done})
 }
 
-// publishedList is ps under domain, as "NAME:PORT".
+// publishedList is ps under domain, as "NAME:PORT", or "NAME:PORT/tcp" for
+// a name published by TCP.
 func publishedList(ps []types.PublishedName, domain string) string {
 	out := make([]string, len(ps))
 	for i, p := range ps {
-		out[i] = fmt.Sprintf("%s:%d", p.Under(domain), p.Port)
+		out[i] = p.Under(domain) + ":" + portShown(p)
 	}
 	return strings.Join(out, ", ")
 }

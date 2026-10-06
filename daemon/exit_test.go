@@ -473,7 +473,7 @@ func TestTheServiceKeepsTheMeshsFollowedChoice(t *testing.T) {
 
 // serviceWithChoice is a service over nw's log, as device self, whose home
 // holds exit-node file contents choice, if any.
-func serviceWithChoice(t *testing.T, nw *network, self *device, choice string) *serviceFixture {
+func serviceWithChoice(t *testing.T, nw *network, self *device, choice string, mutate ...func(*Options)) *serviceFixture {
 	t.Helper()
 	home := socketDir(t)
 	writeDevice(t, home, self)
@@ -489,7 +489,12 @@ func serviceWithChoice(t *testing.T, nw *network, self *device, choice string) *
 			t.Fatal(err)
 		}
 	}
-	return startServiceWith(t, nw, home, func(o *Options) { o.EgressUser = func() string { return "" } })
+	return startServiceWith(t, nw, home, func(o *Options) {
+		o.EgressUser = func() string { return "" }
+		for _, m := range mutate {
+			m(o)
+		}
+	})
 }
 
 func (f *serviceFixture) exitStatus(t *testing.T) *ipc.Exit {

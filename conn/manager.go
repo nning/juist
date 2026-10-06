@@ -98,10 +98,10 @@ type Manager interface {
 	// masquerading their sources, where the platform can.
 	SetServe(s Serve) error
 
-	// SetIngressPorts names the TCP ports of this node's own addresses an
-	// ingress may open connections to: those it publishes and serves, and
-	// log sync's.
-	SetIngressPorts(ports []uint16) error
+	// SetIngressPorts names the ports of this node's own addresses an
+	// ingress may open connections or send datagrams to: those it publishes
+	// and serves, and log sync's.
+	SetIngressPorts(ports IngressPorts) error
 
 	// HostRoutes is what the host reaches but by its default routes: the
 	// networks of its interfaces, and its routes in the main table,

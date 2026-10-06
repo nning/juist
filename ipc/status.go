@@ -1,8 +1,10 @@
 package ipc
 
 import (
+	"net"
 	"net/netip"
 	"slices"
+	"strconv"
 
 	"github.com/nning/juist/internal/rendezvous"
 	"github.com/nning/juist/trust/log"
@@ -368,9 +370,10 @@ type Device struct {
 	Subnets []netip.Prefix `cbor:"8,keyasint,omitempty"`
 	Names   []string       `cbor:"9,keyasint,omitempty"`
 
-	// Published are the names the member publishes, under the domain, and
-	// Serving says it serves them, as its announcement says; [DevicesOf]
-	// leaves Serving unset.
+	// Published are the names the member publishes, under the domain, one
+	// published by TCP as NAME:PORT with its public port, and Serving says
+	// it serves them, as its announcement says; [DevicesOf] leaves Serving
+	// unset.
 	Published []string `cbor:"10,keyasint,omitempty"`
 	Serving   bool     `cbor:"11,keyasint,omitempty"`
 }
@@ -488,6 +491,10 @@ type Publish struct {
 	// To is where the operator said each name whose TLS juist ends goes,
 	// published here or not, kept while not serving too; sorted by label.
 	To []ServeTo `cbor:"8,keyasint,omitempty"`
+
+	// Passing are the names served by TCP whose bytes juist passes on, as
+	// "NAME to ADDR".
+	Passing []string `cbor:"9,keyasint,omitempty"`
 }
 
 // A Terminator says whether this device's terminator asked lately, where it
@@ -531,10 +538,14 @@ type Share struct {
 }
 
 // Ingress says whether the ingress on this device asked lately what is
-// published, and the names it is told.
+// published, and the names it is told; Ports are the public TCP ports it
+// said it listens on, and Unbound those another program holds.
 type Ingress struct {
 	Running bool     `cbor:"1,keyasint,omitempty"`
 	Names   []string `cbor:"2,keyasint,omitempty"`
+	Ports   []uint16 `cbor:"3,keyasint,omitempty"`
+	Unbound []uint16 `cbor:"4,keyasint,omitempty"`
+	NoQUIC  bool     `cbor:"5,keyasint,omitempty"` // 443/udp held by another program
 }
 
 // A SubnetRoute is one granted prefix: who routes it, whether this device
@@ -578,7 +589,11 @@ func DevicesOf(state *log.State, now int64) []Device {
 		dev := Device{Identity: n.Identity, Name: n.Name, V6: state.Addr6(n.Identity).String(),
 			Roles: slices.Clone(n.Roles), Subnets: n.SubnetRoutes(), Names: slices.Clone(n.Names)}
 		for _, p := range n.Published {
-			dev.Published = append(dev.Published, p.Under(state.Domain()))
+			name := p.Under(state.Domain())
+			if p.Public != 0 {
+				name = net.JoinHostPort(name, strconv.Itoa(int(p.Public)))
+			}
+			dev.Published = append(dev.Published, name)
 		}
 		if n.V4 != nil {
 			dev.V4 = n.V4.String()

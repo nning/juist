@@ -70,7 +70,8 @@ The state on the first line is one of these:
 - `Freshness`: when a voucher last confirmed that this device's view of the network is current, and how long that stays valid. A voucher is a device the network trusts to confirm this, every hour. After 48 hours without one, the line reads `expired; vouchers only`. See [Removing a device]({{< relref "docs/remove" >}}).
 - `Published`: the names published on this device that it serves, or why
   not. See [Publishing services]({{< relref "docs/publishing" >}}).
-- `Ingress`: on an ingress, whether it runs and the names it serves.
+- `Ingress`: on an ingress, whether it runs, the names it serves, the ports
+  it passes by TCP, and those another program holds.
 - `Sharing`: what this device shares under its own name, a file or
   directory with its link, until when, or why it reaches nobody.
 - `Ports`: the ports juistd listens on. `udp/41643` is the one for the tunnels.

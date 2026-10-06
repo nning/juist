@@ -1,23 +1,30 @@
 # The network's ingress, where the log grants this device the role: it takes
-# connections on 443 and 80 for the names members publish and splices them to
-# their devices through juist0, ending no TLS. It runs as its own user, with
+# connections on 443 and 80, and on the ports names are published on by TCP,
+# for the names members publish and splices them to their devices through
+# juist0, ending no TLS. It runs as its own user, with
 # CAP_NET_BIND_SERVICE alone, holds no key, and asks juistd's control socket
 # what it may serve, nothing else (docs/05-roadmap.md, M9a).
 #
-# juist ingress serve enables it, and lets 443 and 80 through the firewall;
-# see /usr/lib/juist/ingress.sh.
+# juist ingress serve enables it, and lets 443 and 80 through the firewall,
+# and the ports names are published on by TCP as they come and go; see
+# /usr/lib/juist/ingress.sh.
 
 [Unit]
 Description=juist ingress
 Documentation=https://github.com/nning/juist
 After=network-online.target juistd.service
 Wants=network-online.target
+# The firewall follows the ports names are published on by TCP while the
+# ingress runs: once it starts, which an event juist-ingress-ports.path
+# missed meanwhile needs too, and once it stops.
+Wants=juist-ingress-ports.service
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/juistd --helper ingress --socket /run/juist/juistd.sock
 Restart=on-failure
 RestartSec=2
+ExecStopPost=+/usr/lib/juist/ingress.sh ports
 
 User=juist-ingress
 Group=juist-ingress

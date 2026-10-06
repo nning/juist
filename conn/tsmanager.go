@@ -144,7 +144,7 @@ type tsManager struct {
 	// confiner keeps ingresses to what they may send; ingressPorts is what
 	// SetIngressPorts last named. Guarded by apply.
 	confiner     *confiner
-	ingressPorts []uint16
+	ingressPorts IngressPorts
 
 	// stun are the public STUN servers, and stunRegions the regions they
 	// hold in the map last installed.
@@ -1079,15 +1079,13 @@ func (m *tsManager) SetEgress(e Egress, isolate bool) error {
 	return nil
 }
 
-func (m *tsManager) SetIngressPorts(ports []uint16) error {
-	ports = slices.Clone(ports)
-	slices.Sort(ports)
+func (m *tsManager) SetIngressPorts(ports IngressPorts) error {
 	m.apply.Lock()
 	defer m.apply.Unlock()
 	if m.closed {
 		return errors.New("conn: manager is closed")
 	}
-	m.ingressPorts = slices.Compact(ports)
+	m.ingressPorts = ports.sorted()
 	m.confiner.set(slices.Collect(maps.Values(m.state.Load().peers)), m.self.Addrs, m.ingressPorts)
 	return nil
 }

@@ -1,0 +1,13 @@
+# Lets exactly the ports juistd lists in /run/juist/ingress-ports through an
+# active firewalld or ufw, and takes back those it let through before; see
+# /usr/lib/juist/ingress.sh. juist-ingress-ports.path starts it.
+
+[Unit]
+Description=juist ingress ports through the firewall
+Documentation=https://github.com/nning/juist
+After=firewalld.service ufw.service juist-ingress.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/juist/ingress.sh ports
+TimeoutStartSec=2min

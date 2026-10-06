@@ -98,6 +98,7 @@ ingress.
 juist network domain pub.example.org    # DNS: *.pub.example.org points at the vps
 juist grant vps ingress                 # then juist ingress serve, on the vps
 juist publish add immich 127.0.0.1:2283 # on the nas: https://immich.pub.example.org
+juist publish add nas mc 25565 --tcp    # a service without TLS on a port of its own: mc.pub.example.org:25565
 juist share ~/photos/2026               # with the publish role: a directory under this device's name
 ```
 
@@ -153,7 +154,8 @@ has a public address, never through a third party.
 | 41643/udp | WireGuard and path discovery | a device with a public address |
 | 41645/tcp, 41645/udp | the relay, and the STUN answers members measure it by | a device granted `relay` |
 | 41642/tcp | an invite taken as a code on the LAN | the inviting device, while `juist invite` runs |
-| 443/tcp, 80/tcp | the names devices publish | a device granted `ingress`; `juist ingress serve` opens them |
+| 443/tcp, 443/udp, 80/tcp | the names devices publish, by TLS and QUIC | a device granted `ingress`; `juist ingress serve` opens them |
+| the ports names are published on by TCP | those names | every ingress; it opens and closes them as they come and go |
 
 The packages install ufw and firewalld profiles by the names `juist`,
 `juist-relay`, `juist-invite` and `juist-ingress`. Log sync runs inside the
@@ -192,7 +194,8 @@ Report a vulnerability privately, as [SECURITY.md](SECURITY.md) says.
 Milestones up to **M9**, publishing, of [05-roadmap.md](docs/05-roadmap.md)
 are done: the signed log with quorum, WireGuard with NAT traversal and member
 relays, invites, several networks, exit nodes, subnet routers, names,
-publishing, and Debian, Fedora and FreeBSD packages.
+publishing, and Debian, Fedora and FreeBSD packages; and **M11**, TCP
+services and HTTP/3 through the ingress.
 
 Not yet: ACLs (every member reaches every port on the others), break-glass
 recovery, and the post-quantum data plane.

@@ -53,8 +53,10 @@ juist ingress serve
 ```
 
 It asks once for sudo, starts the `juist-ingress` service, and opens ports 443
-and 80 in firewalld or ufw; on FreeBSD, pf is left to the host's own rules.
-Port 80 only redirects to https.
+(TCP and UDP, for HTTP/3) and 80 in firewalld or ufw, and the ports names are
+published on by TCP as they come and go
+([below](#a-game-server-or-another-tcp-service)); on FreeBSD, pf is left to
+the host's own rules. Port 80 only redirects to https.
 {{< /step >}}
 
 {{< step on="nas" as="the target" >}}
@@ -137,6 +139,94 @@ gateway mode, Docker 29's, keeps the host from the service too; without it,
 the service reaches whatever on the host listens on every address, at the
 network's gateway.
 
+## HTTP/3
+
+Browsers reach a name over HTTP/3, QUIC on 443/udp, which takes one round
+trip less to connect and loses no time to a lost packet on a slow link,
+where its service speaks HTTP and juist ends its TLS:
+
+```sh
+juist publish add docs 127.0.0.1:8080 --http3
+```
+
+It prints `ending TLS for docs.example.org to 127.0.0.1:8080, with
+HTTP/3`, and a DNS record to add at your DNS provider,
+`docs.example.org. HTTPS 1 . alpn="h3,h2"`, which has browsers try HTTP/3
+from their first request; without it they do from their second, told by
+the `Alt-Svc` header juist adds to its answers. Where 443/udp is blocked
+anywhere on the way, browsers keep to HTTP/2 over TCP.
+
+- juist then proxies the service's HTTP over TCP too, offering clients
+  HTTP/2: the service gets every request with its own Host, as before, and
+  no `X-Forwarded-For` or other header of the proxy's. With `--http2`
+  besides, juist asks the service by h2c.
+- The status page is offered HTTP/3 as it is. A service member offers it
+  for its names with `juistd --serve NAME=ADDR --http3`.
+- WebSockets keep to HTTP/1.1 over TCP; juist passes them on as they
+  are.
+- `--proxy` names the client to the service on each of its connections, as
+  over TCP.
+- A client whose address changes, as a phone moving from Wi-Fi to LTE,
+  connects anew; shares stay on TCP.
+- A client connecting from one UDP socket to names on two devices, as Go's
+  HTTP/3 client does, reaches the first device alone over QUIC.
+
+## A game server or another TCP service
+
+A service that speaks no TLS, such as a Minecraft server, gets a port of its
+own on every ingress, which passes each connection on that port to the
+device at once, reading nothing of it.
+
+{{< step on="an admin's device" >}}
+```sh
+juist publish add nas mc 25565 --tcp
+```
+
+It publishes port 25565 of nas on port 25565 of every ingress, as
+`mc.example.org`, and prints `nas: publishes mc.example.org:25565/tcp`.
+`--tcp=PORT` takes another public port: `juist publish add nas ssh 22
+--tcp=2222` prints `ssh.example.org:2222/tcp to 22`.
+{{< /step >}}
+
+{{< step on="nas" as="the target" >}}
+Where the service listens on every address, its operator agrees with
+`juist publish serve`. Where it listens on loopback alone, juist passes the
+bytes on to it as they are:
+
+```sh
+juist publish add mc 127.0.0.1:25565 --tcp
+```
+
+It prints `passing mc.example.org to 127.0.0.1:25565`.
+{{< /step >}}
+
+Players then connect to `mc.example.org:25565`. Every ingress holds each
+such port while a name is published on it, answering nothing where the
+device does not serve it, and on Linux lets it through firewalld or ufw
+while the ingress runs, closing it again once the name is withdrawn or the
+ingress stops; `juist status` there names the ports, and those another
+program holds.
+
+- Only admins publish a TCP port, as a change of the network; the role
+  `publish` shares on 443 alone.
+- A public port is one name's in the network. 80, 443 and juist's own ports,
+  41640 to 41739, are refused, and so is one an ingress's own name goes to.
+- Members reach the name at its device directly where its public port is the
+  device's port and it has no `--proxy`, and through the ingress otherwise.
+- `--proxy` sends the client's address first, in a PROXY protocol v2 header,
+  which the service must expect: Paper and Velocity do where told to,
+  vanilla Minecraft does not.
+- juist prints no SRV record. A client that looks one up, as Minecraft's does
+  for a name without a port, finds one you add at your DNS provider:
+  `_minecraft._tcp.mc.example.org. SRV 0 5 25565 mc.example.org.`
+- UDP is not passed on, so neither is Minecraft Bedrock's 19132/udp.
+
+{{< note caution >}}
+The ingress sees everything a protocol that does not encrypt itself
+carries, and a CAA record protects nothing there. Publish that way only what
+encrypts itself, as SSH does, or what you would show anyone.
+{{< /note >}}
+
 ## Sharing at once
 
 A device an admin gave the role `publish` (`juist grant laptop publish`)
@@ -218,6 +308,9 @@ then that of a device every other keeps from opening connections.
   A and AAAA records of its own at your DNS provider, the ingress's, which
   `*.example.org` does not cover. A CAA record there holds for every name
   under it that has none of its own: give each device's names their own.
+- A name with a record of its own, as the CAA or HTTPS record juist prints,
+  gets no address from `*.example.org` any more: give it A and AAAA records
+  of its own too, the ingress's.
 - A service can end TLS itself and hold its own certificate, as it would
   facing the internet. An admin then publishes it with
   `juist publish add nas docs`, on port 443 unless you give another port after
@@ -249,26 +342,31 @@ then that of a device every other keeps from opening connections.
   stops serving and keeps where names go. `juist ingress serve --stop` stops
   the ingress.
 - An ingress and juist's own TLS run on Linux and FreeBSD, for the device's
-  default network. On FreeBSD, pf, where the host runs it, lets 443 and 80 in by
-  the host's own rules.
+  default network. On FreeBSD, pf, where the host runs it, lets 443 by TCP
+  and UDP, 80 and the ports names are published on by TCP in by the host's
+  own rules.
 - `juist network domain off` is refused while a device publishes names under
   the domain, with the `juist publish remove` that comes first.
 - An ingress is never a voucher or an exit node, publishes nothing under its
-  own name or on 80 and 443, which it holds itself, and routes no subnet; a
+  own name or on 80, 443 or a port a name is published on by TCP, which it
+  holds itself, and routes no subnet; a
   service member holds no other role. `juist grant` names the role that is in
   the way. Every
   member takes from it only connections to the ports it publishes and serves,
   and log sync, replies to what it opened itself, pings included, and ICMP
   errors on its own connections. Everything else from it is dropped.
-- An ingress holds 1024 connections at once: 64 from one address, or one
-  IPv6 /64, and 256 from one IPv4 /24 or IPv6 /48, on 443 and on 80 each. A
-  client that does not answer its service's TLS hello within a minute is let
-  go, one quiet both ways after 5 minutes.
+- A client that does not answer its service's TLS hello within a minute is
+  let go, and any connection quiet both ways after 5 minutes.
 - A client gets 10 seconds to send its TLS hello to the ingress.
 - The ingress logs a line for each connection: the client's address and
   port, the name it asked for, what came of it (`spliced`, `not served`,
   `no hello`, `target unreachable`, `refused`), the bytes each way and how
-  long it lasted; on port 80 the method, path, status and User-Agent too.
+  long it lasted; on port 80 the method, path, status and User-Agent too,
+  and on a port published by TCP the port and the name it goes to; a QUIC
+  flow is logged once it ends, as `access: quic`, `not proven` where its
+  client never completed a handshake, which a spoofed address cannot. Lines
+  of such flows, and of QUIC refused, come once a second at most, saying
+  how many more went unsaid.
   Past port 80 it sees neither path nor User-Agent, TLS ending at the
   device. `journalctl -u juist-ingress` shows them, on FreeBSD
   `/var/log/juist-ingress.log`, kept as long as the journal or newsyslog keeps them.
@@ -309,6 +407,11 @@ prints it, and the terminator's log names it for a service member.
 | `juist status`: `warning: another program holds port 80 on …` | members opening `http://NAME` reach that program instead of a redirect to https; have it listen on the addresses it serves alone, and open the name with `https://` meanwhile |
 | `juist status`: `warning: no certificate for NAME: …` | the CA issued none, for the reason given; most often it cannot reach NAME, whose public DNS must point at a running ingress. Until then a client's TLS fails |
 | `another program holds port 443 on …, where juist would end TLS` | stop that program, or publish on another port |
+| on vps, `juist status`: `Ingress` says `…; another program holds port 443/udp` | another program, often a web server's own HTTP/3, holds 443/udp on the ingress; browsers keep to TCP until it lets go, and the ingress takes the port then |
+| `access: quic … refused: another name's flow from its address` | a client connected to names on two devices from one UDP socket, which the ingress passes to one of them alone; browsers use a socket for each |
+| HTTP/3 slower than HTTP/2 under load | the host's UDP buffers are small: `sysctl -w net.core.rmem_max=7500000 net.core.wmem_max=7500000` on the device ending TLS |
+| `another program holds port 25565 on …, where juist would pass NAME by TCP` | the service listens on every address, the device's overlay addresses too: publish its port instead, as the hint says, and agree with `juist publish serve` |
+| on vps, `juist status`: `Ingress` says `…; another program holds port 22` | a program on the ingress, often its sshd, holds a port a name is published on by TCP, which juist then leaves to that program and to the firewall's rules: publish the name on another port with `--tcp=PORT` |
 | `this device shares already` | stop the other `juist share` or `juist publish PORT` first, in the background too: `juist share --stop` |
 | `this device is no ingress` | an admin runs `juist grant DEVICE ingress` |
 | `warning: the network has no ingress, so nothing reaches it from the internet` | grant a device with a public address the role `ingress` |

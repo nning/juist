@@ -115,9 +115,10 @@ type heldOverride struct {
 // returns every public name the log holds, and until when the view is fresh.
 //
 // The network's own domain goes to juistd whole on every member: a name
-// published there on port 443, or shared, is resolved to its member where
-// serves says the member serves it, which members then reach directly, with
-// the same certificate; the rest goes on upstream.
+// published there on port 443, or by TCP on its own port, or shared, is
+// resolved to its member where serves says the member serves it, which
+// members then reach directly, with the same certificate; the rest goes on
+// upstream.
 func (d *Daemon) namesZone(state *log.State, fresh log.Freshness, accepted bool, now int64,
 	serves func(types.Identity) bool) (*names.Zone, []heldOverride, int64) {
 	z := &names.Zone{Members: map[string][]netip.Addr{}, Overrides: map[string]names.Override{}, Public: state.Domain()}
@@ -131,8 +132,7 @@ func (d *Daemon) namesZone(state *log.State, fresh log.Freshness, accepted bool,
 			held = append(held, heldOverride{name: name, target: n.Identity, device: n.Name})
 		}
 		for _, p := range n.Published {
-			// A service behind --proxy may want the ingress's header.
-			if p.Port == 443 && !p.Proxy && state.Domain() != "" && serves(n.Identity) {
+			if reachedDirectly(p) && state.Domain() != "" && serves(n.Identity) {
 				held = append(held, heldOverride{name: p.Under(state.Domain()), target: n.Identity, device: n.Name, published: true})
 			}
 		}
@@ -244,4 +244,14 @@ func routedDomains(z *names.Zone) []string {
 	}
 	slices.Sort(others)
 	return append(out, others...)
+}
+
+// reachedDirectly reports whether members reach p at its member, on the port
+// the internet reaches it on: by TLS on 443, or by TCP on its own port. A
+// service behind --proxy may want the ingress's header.
+func reachedDirectly(p types.PublishedName) bool {
+	if p.Public != 0 {
+		return p.Public == p.Port && !p.Proxy
+	}
+	return p.Port == 443 && !p.Proxy
 }

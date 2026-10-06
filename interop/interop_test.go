@@ -51,7 +51,9 @@ func TestLinuxAndFreeBSD(t *testing.T) {
 	pebble := buildPebble(t)
 	fbBase, lxBase := base(t, cache, work, freebsdImage), base(t, cache, work, debianImage)
 
-	fb := &vm{name: "fb", freebsd: true, lanAddr: "10.77.0.1", mac: "52:54:00:77:00:01", net: "10.0.4.0/24", dir: work, key: key}
+	chrome := need(t, "JUIST_INTEROP_CHROME")
+	fb := &vm{name: "fb", freebsd: true, lanAddr: "10.77.0.1", mac: "52:54:00:77:00:01", net: "10.0.4.0/24", dir: work, key: key,
+		https: freePort(t, "both"), tcpOnly: freePort(t, "tcp")}
 	lx := &vm{name: "lx", lanAddr: "10.77.0.3", mac: "52:54:00:77:00:03", net: "10.0.3.0/24", dir: work, key: key}
 	vms := []*vm{fb, lx}
 	pa, pb := freePort(t, "udp"), freePort(t, "udp")
@@ -155,6 +157,12 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	t.Run("domain itself", func(t *testing.T) {
 		domainItself(t, fb, lx)
 	})
+	t.Run("TCP", func(t *testing.T) {
+		tcpPorts(t, fb, lx)
+	})
+	t.Run("HTTP/3", func(t *testing.T) {
+		http3(t, fb, lx, work, chrome)
+	})
 	if image := os.Getenv("JUIST_INTEROP_IMAGE"); image != "" && os.Getenv("JUIST_INTEROP_DOCKER") != "" {
 		t.Run("service member in a container", func(t *testing.T) {
 			containerMember(t, fb, lx, image)
@@ -210,19 +218,19 @@ juist network domain pub.example.org
 juist grant lx ingress
 juist publish add fb web 8443`)
 	// Published on fb by its operator, the name is served at once.
-	lx.eventually(t, "learning it is the ingress", 3*time.Minute, "juist ingress serve", has("serving 1 name on 443 and 80"))
+	lx.eventually(t, "learning it is the ingress", 3*time.Minute, "juist ingress serve", has("serving 1 name on 443, 443/udp and 80"))
 	lx.run(t, "systemctl is-active --quiet juist-ingress && getent passwd juist-ingress >/dev/null")
 	lx.eventually(t, "being confined by fb", 2*time.Minute, "! /tmp/probe get "+fb4+":80", ok)
 	// Without fb's word, lx is told no name.
 	fb.run(t, "juist publish serve --stop")
-	lx.eventually(t, "being told no name", 2*time.Minute, "juist ingress serve", has("serving 0 names on 443 and 80"))
+	lx.eventually(t, "being told no name", 2*time.Minute, "juist ingress serve", has("serving 0 names on 443, 443/udp and 80"))
 	lx.eventually(t, "taking the name no longer", time.Minute,
 		`[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: web.pub.example.org' http://127.0.0.1/)" = 404 ]`, ok)
 	lx.run(t, "! /tmp/probe hello 127.0.0.1:443 web.pub.example.org")
 	fb.run(t, "juist publish serve")
 	lx.eventually(t, "reaching fb's published port through itself", 2*time.Minute,
 		"/tmp/probe hello 127.0.0.1:443 web.pub.example.org", has("fb-tls from"))
-	lx.run(t, "juist status | grep -q 'Ingress *serving web.pub.example.org on 443 and 80'")
+	lx.run(t, "juist status | grep -q 'Ingress *serving web.pub.example.org on 443, 443/udp and 80'")
 	lx.run(t, "! /tmp/probe get "+fb4+":80")
 	lx.run(t, `[ "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: web.pub.example.org' http://127.0.0.1/)" = "308 https://web.pub.example.org/" ]`)
 	fb.run(t, "juist publish rm fb web")

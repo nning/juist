@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"slices"
@@ -25,10 +26,11 @@ func ingressFamily() family {
 	return family{name: "juist ingress", intro: "Take connections from the internet for the names devices publish.",
 		subs: []subcommand{
 			{name: "list", aliases: []string{"ls"}, run: ingressList, forms: [][2]string{{"", "what this ingress serves"}}},
-			{name: "serve", run: ingressServe, forms: [][2]string{{"serve [--stop]", "serve as the network's ingress, on 443\nand 80"}}},
+			{name: "serve", run: ingressServe, forms: [][2]string{{"serve [--stop]", "serve as the network's ingress, on 443\nand 80, and the ports names are published\non by TCP"}}},
 		}, footer: `An ingress is a device with a public address the network granted the role
-(juist grant DEVICE ingress). It reads the name a client asks for and
-passes the connection to the device, through the tunnel, ending no TLS.`}
+(juist grant DEVICE ingress). It reads the name a client asks for, or takes
+the port a name is published on by TCP, and passes the connection to the
+device, through the tunnel, ending no TLS.`}
 }
 
 func cmdIngress(a *app, args []string) error { return ingressFamily().run(a, args) }
@@ -54,7 +56,7 @@ func ingressList(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(p.Names) == 0 {
+	if len(p.Names) == 0 && len(p.TCP) == 0 {
 		a.ok("nothing to serve")
 		if st.Stale {
 			a.hint("this device's view of the network is stale, and a stale ingress serves nothing")
@@ -62,21 +64,32 @@ func ingressList(a *app, args []string) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tTO")
-	for _, t := range p.Names {
+	fmt.Fprintln(tw, "NAME\tPORT\tTO")
+	for _, t := range slices.Concat(p.Names, p.TCP) {
 		to := "-"
 		if len(t.Addrs) > 0 {
-			to = t.Addrs[0].String() + ":" + strconv.Itoa(int(t.Port))
+			to = netip.AddrPortFrom(t.Addrs[0], t.Port).String()
 		}
-		fmt.Fprintf(tw, "%s\t%s\n", t.Name, to)
+		port := "443"
+		if t.Public != 0 {
+			port = strconv.Itoa(int(t.Public)) + "/tcp"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", t.Name, port, to)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if in := st.Ingress; in != nil && len(heldPorts(in)) > 0 {
+		a.warn("another program holds %s here, which the ingress cannot listen on", portsPhrase(heldPorts(in)))
+	}
+	return nil
 }
 
 func ingressServe(a *app, args []string) error {
 	s := spec{name: "juist ingress serve", about: `
-Serve as the network's ingress: the juist-ingress service, on 443 and 80,
-let through firewalld or ufw where one runs. --stop undoes it.`}
+Serve as the network's ingress: the juist-ingress service, on 443, 443/udp
+for HTTP/3, 80 and the ports names are published on by TCP, let through
+firewalld or ufw where one runs. --stop undoes it.`}
 	fs := newFlags(s.name)
 	stop := fs.Bool("stop", false, "stop serving")
 	if _, err := a.parse(s, fs, args); err != nil {
@@ -124,14 +137,26 @@ func (a *app) serveIngress(stale bool) error {
 	if err != nil {
 		return err
 	}
-	a.sayServing(len(p.Names), stale)
+	var ports []uint16
+	names := len(p.Names)
+	for _, t := range p.TCP {
+		if len(t.Addrs) > 0 {
+			ports = append(ports, t.Public)
+			names++
+		}
+	}
+	a.sayServing(names, ports, stale)
 	return nil
 }
 
-// sayServing says how many names the ingress serves, and why none where
-// this device's view is stale.
-func (a *app) sayServing(names int, stale bool) {
-	a.ok("serving %s on 443 and 80", count(names, "name"))
+// sayServing says how many names the ingress serves, and on which ports
+// by TCP, and why none where this device's view is stale.
+func (a *app) sayServing(names int, tcp []uint16, stale bool) {
+	if len(tcp) > 0 {
+		a.ok("serving %s on 443, 443/udp, 80 and by TCP on %s", count(names, "name"), strings.Join(portStrings(tcp), ", "))
+	} else {
+		a.ok("serving %s on 443, 443/udp and 80", count(names, "name"))
+	}
 	if names == 0 && stale {
 		a.hint("this device's view of the network is stale, and a stale ingress serves nothing")
 	}
@@ -227,17 +252,56 @@ func (a *app) serveIngressNext(target types.NodeRecord) error {
 }
 
 // ingressSummary is the status line of this device's serving as an ingress;
-// paint colours one that does not run.
+// paint colours one that does not run, and the ports it cannot listen on.
 func ingressSummary(in *ipc.Ingress, paint func(code, s string) string) string {
 	switch {
 	case in == nil:
 		return ""
 	case !in.Running:
 		return paint("33", "not running on this device (juist ingress serve)")
-	case len(in.Names) == 0 || len(in.Names) > 2:
-		return "serving " + count(len(in.Names), "name") + " on 443 and 80"
 	}
-	return "serving " + strings.Join(in.Names, ", ") + " on 443 and 80"
+	text := "serving " + count(len(in.Names), "name")
+	if n := len(in.Names); n > 0 && n <= 2 {
+		text = "serving " + strings.Join(in.Names, ", ")
+	}
+	on := []string{"443", "443/udp", "80"}
+	if in.NoQUIC {
+		on = []string{"443", "80"}
+	}
+	if len(in.Ports) > 0 {
+		text += " on " + strings.Join(on, ", ") + " and by TCP on " + strings.Join(portStrings(in.Ports), ", ")
+	} else {
+		text += " on " + strings.Join(on[:len(on)-1], ", ") + " and " + on[len(on)-1]
+	}
+	if held := heldPorts(in); len(held) > 0 {
+		text += "; " + paint("33", "another program holds "+portsPhrase(held))
+	}
+	return text
+}
+
+// heldPorts are the ports another program holds on the ingress.
+func heldPorts(in *ipc.Ingress) []string {
+	held := portStrings(in.Unbound)
+	if in.NoQUIC {
+		held = append(held, "443/udp")
+	}
+	return held
+}
+
+// portsPhrase is "port 22", or "ports 22, 23".
+func portsPhrase(ports []string) string {
+	if len(ports) == 1 {
+		return "port " + ports[0]
+	}
+	return "ports " + strings.Join(ports, ", ")
+}
+
+func portStrings(ports []uint16) []string {
+	out := make([]string, len(ports))
+	for i, p := range ports {
+		out[i] = strconv.Itoa(int(p))
+	}
+	return out
 }
 
 // isIngress reports whether the status's device holds the ingress role.

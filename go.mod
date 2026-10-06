@@ -11,6 +11,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/nftables v0.3.0
 	github.com/mdlayher/netlink v1.11.2
+	github.com/quic-go/quic-go v0.63.0
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/wireguard-go v0.0.0-20260928213032-417aef361226
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
@@ -56,6 +57,7 @@ require (
 	github.com/kamstrup/intmap v0.5.2 // indirect
 	github.com/mdlayher/socket v0.7.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417 // indirect
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect

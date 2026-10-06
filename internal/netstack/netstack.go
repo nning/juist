@@ -184,6 +184,15 @@ func (n *Net) ListenTCPAddrPort(ap netip.AddrPort) (*gonet.TCPListener, error) {
 	return gonet.ListenTCP(n.d.stack, fa, proto)
 }
 
+// ListenUDPAddrPort takes datagrams at ap, one of the stack's addresses.
+func (n *Net) ListenUDPAddrPort(ap netip.AddrPort) (*gonet.UDPConn, error) {
+	fa, proto := fullAddr(ap)
+	if n.d.stack.CheckLocalAddress(0, proto, fa.Addr) == 0 {
+		return nil, fmt.Errorf("netstack: %v is none of the stack's addresses", ap.Addr())
+	}
+	return gonet.DialUDP(n.d.stack, &fa, nil, proto)
+}
+
 // DialContextTCPAddrPort dials ap from the stack.
 func (n *Net) DialContextTCPAddrPort(ctx context.Context, ap netip.AddrPort) (*gonet.TCPConn, error) {
 	fa, proto := fullAddr(ap)

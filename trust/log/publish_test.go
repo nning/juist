@@ -227,3 +227,42 @@ func TestTheDomainItselfIsOneMembers(t *testing.T) {
 	h.apply(h.auth.Builder().SetDomain("example.net"))
 	h.mustReject("the domain a name points elsewhere at", RuleState, apex(nas.Identity))
 }
+
+// A name published by TCP is schema 11's; its public port is one member's,
+// and no ingress's own name goes to it, whichever comes first.
+func TestNamesPublishedByTCP(t *testing.T) {
+	old := newHarnessAt(t, 1, 1, types.SchemaRenameNode)
+	nas := old.addNode("nas")
+	old.apply(old.auth.Builder().SetDomain("pub.example.org"))
+	tcp := func(h *harness, id types.Identity, ps ...types.PublishedName) types.AUM {
+		return h.signed(types.AUM{Kind: types.KindSetPublished, Subject: &id, Publish: &types.PublishGrant{Names: ps}})
+	}
+	mc := types.PublishedName{Label: "mc", Port: 25565, Public: 25565}
+	old.mustReject("a name by TCP at schema 10", RuleState, tcp(old, nas.Identity, mc))
+
+	h := newHarness(t, 1, 1)
+	nas, vps, pi := h.addNode("nas"), h.addNode("vps"), h.addNode("pi")
+	h.apply(h.auth.Builder().SetDomain("pub.example.org"))
+	h.apply(h.auth.Builder().SetPublished(nas.Identity, []types.PublishedName{mc}))
+	if got := publishedOf(t, h.fork().State(), nas.Identity); !slices.Equal(got, []types.PublishedName{mc}) {
+		t.Fatalf("reopened, nas publishes %+v", got)
+	}
+	h.mustReject("a public port another member publishes on", RuleState,
+		tcp(h, pi.Identity, types.PublishedName{Label: "mc2", Port: 25566, Public: 25565}))
+	for _, port := range []uint16{80, 443, 41643} {
+		h.mustReject("a public port an ingress holds", RuleMalformed,
+			tcp(h, pi.Identity, types.PublishedName{Label: "x", Port: 1, Public: port}))
+	}
+	h.apply(h.auth.Builder().SetNodeRoutes(vps.Identity, []types.Role{types.RoleIngress}, nil))
+	h.mustReject("an ingress's own name on a public port", RuleState,
+		tcp(h, vps.Identity, types.PublishedName{Label: "web", Port: 25565}))
+	h.apply(h.auth.Builder().SetPublished(vps.Identity, []types.PublishedName{{Label: "web", Port: 8443}}))
+	h.mustReject("a public port an ingress's own name goes to", RuleState,
+		tcp(h, pi.Identity, types.PublishedName{Label: "alt", Port: 1, Public: 8443}))
+	h.apply(h.auth.Builder().SetPublished(pi.Identity, []types.PublishedName{{Label: "alt", Port: 8443, Public: 8444}}))
+	box := h.addNode("box")
+	h.apply(h.auth.Builder().SetPublished(box.Identity, []types.PublishedName{{Label: "box", Port: 25565}}))
+	h.mustReject("the ingress role for a device whose name goes to a public port", RuleState,
+		h.signed(types.AUM{Kind: types.KindSetNodeRoutes, Subject: &box.Identity,
+			Grant: &types.RouteGrant{Roles: []types.Role{types.RoleIngress}}}))
+}

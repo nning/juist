@@ -211,7 +211,7 @@ func sourceOf(a netip.Addr) (host, site netip.Prefix) {
 // no longer served.
 type Named struct {
 	mu    sync.Mutex
-	conns map[net.Conn]named
+	conns map[any]named
 }
 
 type named struct {
@@ -220,17 +220,17 @@ type named struct {
 }
 
 // Add keeps c under name until Remove; close ends it.
-func (n *Named) Add(c net.Conn, name string, close func()) {
+func (n *Named) Add(c any, name string, close func()) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.conns == nil {
-		n.conns = map[net.Conn]named{}
+		n.conns = map[any]named{}
 	}
 	n.conns[c] = named{name, close}
 }
 
 // Remove forgets c.
-func (n *Named) Remove(c net.Conn) {
+func (n *Named) Remove(c any) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	delete(n.conns, c)

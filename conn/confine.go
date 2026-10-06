@@ -25,8 +25,8 @@ const (
 	ConfineNone Confinement = iota
 
 	// ConfineIngress takes from a peer replies to what this node opened, and
-	// TCP to this node's own addresses on the ports [Manager.SetIngressPorts]
-	// names.
+	// TCP and UDP to this node's own addresses on the ports
+	// [Manager.SetIngressPorts] names for each.
 	ConfineIngress
 
 	// ConfineService takes from a peer replies to what this node opened
@@ -74,11 +74,26 @@ type closingFlow struct {
 // peer's retransmissions and last ACK.
 const closedGrace = time.Minute
 
+// IngressPorts are the ports of this node's own addresses an ingress may
+// open TCP connections to, and send UDP datagrams to, sorted.
+type IngressPorts struct {
+	TCP, UDP []uint16
+}
+
+func (p IngressPorts) sorted() IngressPorts {
+	clean := func(ports []uint16) []uint16 {
+		ports = slices.Clone(ports)
+		slices.Sort(ports)
+		return slices.Compact(ports)
+	}
+	return IngressPorts{TCP: clean(p.TCP), UDP: clean(p.UDP)}
+}
+
 // confinePolicy is one immutable snapshot of who is confined and to what.
 type confinePolicy struct {
 	peers map[netip.Addr]Confinement // confined peers' overlay addresses
 	self  []netip.Addr               // this node's own overlay addresses
-	ports []uint16                   // TCP ports an ingress may open
+	ports IngressPorts               // what an ingress may open
 }
 
 // confine installs c around w's filter. It must run before w starts, since
@@ -92,8 +107,8 @@ func confine(w *tstun.Wrapper) *confiner {
 
 // set replaces the policy: peers by kind, this node's addresses and the ports
 // an ingress may open.
-func (c *confiner) set(peers []Peer, self []netip.Prefix, ports []uint16) {
-	p := &confinePolicy{peers: map[netip.Addr]Confinement{}, ports: slices.Clone(ports)}
+func (c *confiner) set(peers []Peer, self []netip.Prefix, ports IngressPorts) {
+	p := &confinePolicy{peers: map[netip.Addr]Confinement{}, ports: ports.sorted()}
 	for _, peer := range peers {
 		if peer.Confined == ConfineNone {
 			continue
@@ -129,6 +144,12 @@ func (c *confiner) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 
 // admits reports whether a confined peer of kind may send p.
 func (c *confiner) admits(pol *confinePolicy, kind Confinement, p *packet.Parsed) bool {
+	// A fragment after the first carries no port: it passes to this node as
+	// the filter passes it, the first having been checked, and the kernel
+	// drops what has no first.
+	if p.IPProto == ipproto.Fragment {
+		return slices.Contains(pol.self, p.Dst.Addr())
+	}
 	if isICMP(p.IPProto) && p.IsError() {
 		t, ok := erredFlow(p)
 		c.mu.Lock()
@@ -156,19 +177,29 @@ func (c *confiner) admits(pol *confinePolicy, kind Confinement, p *packet.Parsed
 	if opened {
 		return true
 	}
-	return kind == ConfineIngress && p.IPProto == ipproto.TCP &&
-		slices.Contains(pol.self, p.Dst.Addr()) && slices.Contains(pol.ports, p.Dst.Port())
+	if kind != ConfineIngress || !slices.Contains(pol.self, p.Dst.Addr()) {
+		return false
+	}
+	switch p.IPProto {
+	case ipproto.TCP:
+		return slices.Contains(pol.ports.TCP, p.Dst.Port())
+	case ipproto.UDP:
+		return slices.Contains(pol.ports.UDP, p.Dst.Port())
+	}
+	return false
 }
 
 func (c *confiner) out(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if pol := c.policy.Load(); pol != nil {
-		if _, ok := pol.peers[p.Dst.Addr()]; ok {
+		if kind, ok := pol.peers[p.Dst.Addr()]; ok {
 			t := flowKey(p, true)
 			c.mu.Lock()
 			c.expireLocked()
 			f, known := c.getLocked(t)
 			switch {
 			// A reply opens nothing: only what this node starts is its own.
+			case !known && p.IPProto == ipproto.UDP && kind == ConfineIngress &&
+				slices.Contains(pol.ports.UDP, p.Src.Port()) && slices.Contains(pol.self, p.Src.Addr()):
 			case !known && (p.IPProto == ipproto.UDP || p.IsTCPSyn() || isICMP(p.IPProto) && p.IsEchoRequest()):
 				c.addLocked(t)
 			case known && p.IsTCPSyn():

@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 	"tailscale.com/wgengine/router"
 
+	"github.com/nning/juist/internal/nettest"
 	"github.com/nning/juist/internal/plumber"
 )
 
@@ -245,6 +246,9 @@ func TestAVPNDialLeavesByTheDeviceAlone(t *testing.T) {
 	if c, err := dial(t.Context(), to); err == nil {
 		c.Close()
 		t.Fatal("a dial before the device is established was made")
+	}
+	if !nettest.HasLoopbackAddr(netip.MustParseAddr("127.0.0.2")) {
+		nettest.SkipUnlessRequired(t, "this host carries no 127.0.0.2 for the device's address")
 	}
 	dev, rtr := newVPNPlumbed(p.(*vpnPlumber), "juist0", 1280, t.Logf)
 	defer dev.Close()

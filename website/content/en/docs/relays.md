@@ -62,7 +62,8 @@ devices with public addresses. In a network of more than two devices,
 | 41643/udp | WireGuard and path discovery | a device with a public address |
 | 41645/tcp, 41645/udp | the relay, and the STUN answers members measure it by | a device granted `relay` |
 | 41642/tcp | an invite taken as a code on the LAN | the inviting device, while `juist invite` runs |
-| 443/tcp, 80/tcp | the names devices publish | a device granted `ingress`; `juist ingress serve` opens them |
+| 443/tcp, 443/udp, 80/tcp | the names devices publish, by TLS and QUIC | a device granted `ingress`; `juist ingress serve` opens them |
+| the ports names are published on by TCP | those names | every ingress; it opens and closes them as they come and go |
 
 Behind NAT, nothing needs opening. A link invite needs no port either: where it
 cannot reach the inviting device directly, it meets it through a relay at once,

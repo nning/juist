@@ -181,7 +181,7 @@ func (a *app) shareLocal(req ipc.ShareRequest, dur time.Duration, background boo
 				}
 				// Started by the package's script, as root, only where it runs not.
 				if now, _ := n.restatus(); terminatorDown(now) {
-					if err := a.startTerminator(); err != nil {
+					if err := a.startTerminator(""); err != nil {
 						return err
 					}
 				}

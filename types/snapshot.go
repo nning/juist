@@ -73,6 +73,9 @@ func (n *NodeRecord) NeedsSchema() (SchemaVersion, string) {
 	if len(n.Published) > 0 && SchemaPublish > need {
 		need, what = SchemaPublish, "published names"
 	}
+	if slices.ContainsFunc(n.Published, func(p PublishedName) bool { return p.Public != 0 }) && SchemaTCP > need {
+		need, what = SchemaTCP, "names published by TCP"
+	}
 	return need, what
 }
 
@@ -995,6 +998,11 @@ type MemberIndex struct {
 	names   map[string]Identity
 	domain  string
 	labels  map[string]Identity
+
+	// public holds each public TCP port's member, and held the ports
+	// ingresses' own names go to, which every ingress's public ports bar.
+	public map[uint16]Identity
+	held   map[uint16]Identity
 }
 
 // A routeClaim is a subnet route a member is granted: one member routes each
@@ -1016,6 +1024,8 @@ func NewMemberIndex(genesis Hash, n int) *MemberIndex {
 		mlkem:   make(map[MLKEMKey]Identity, n),
 		names:   map[string]Identity{},
 		labels:  map[string]Identity{},
+		public:  map[uint16]Identity{},
+		held:    map[uint16]Identity{},
 	}
 }
 
@@ -1080,9 +1090,20 @@ func (ix *MemberIndex) Check(n *NodeRecord) error {
 			}
 		}
 	}
+	ingress := n.HasRole(RoleIngress)
 	for _, p := range n.Published {
 		if other, dup := ix.labels[p.Label]; dup {
 			return fmt.Errorf("nodes %v and %v both publish %s", other.ShortString(), id, p.shown())
+		}
+		if other, dup := ix.public[p.Public]; dup && p.Public != 0 {
+			return fmt.Errorf("nodes %v and %v both publish on port %d", other.ShortString(), id, p.Public)
+		}
+		if other, dup := ix.held[p.Public]; dup && p.Public != 0 {
+			return fmt.Errorf("node %v publishes on port %d, where ingress %v serves a name of its own", id, p.Public, other.ShortString())
+		}
+		if other, dup := ix.public[p.Port]; dup && ingress {
+			return fmt.Errorf("node %v is an ingress, which holds port %d for node %v, and publishes %s on it",
+				id, p.Port, other.ShortString(), p.shown())
 		}
 		if ix.domain == "" {
 			continue
@@ -1136,6 +1157,12 @@ func (ix *MemberIndex) Add(n *NodeRecord) {
 	}
 	for _, p := range n.Published {
 		ix.labels[p.Label] = n.Identity
+		if p.Public != 0 {
+			ix.public[p.Public] = n.Identity
+		}
+		if n.HasRole(RoleIngress) {
+			ix.held[p.Port] = n.Identity
+		}
 	}
 	if l, ok := n.ShareLabel(); ok && n.HasRole(RolePublish) {
 		ix.labels[l] = n.Identity

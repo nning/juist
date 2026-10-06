@@ -148,7 +148,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 	newV4 := netip.MustParseAddr("10.7.0.1")
 	moved.V4, moved.Retiring = &newV4, &RetiringV4{Addr: v4, Until: 99}
 	moved.Names = []string{"imap.example.org", "mx.example.org"}
-	moved.Published = []PublishedName{{Label: "immich", Port: 443, Proxy: true}}
+	moved.Published = []PublishedName{{Label: "immich", Port: 443, Proxy: true}, {Label: "mc", Port: 25565, Public: 25565}}
 	renumberedSnap.Domain = "pub.example.org"
 	renumberedSnap.Nodes = []NodeRecord{moved}
 	renumberedSnap.EpochWraps = epoch.Wraps
@@ -184,6 +184,8 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindSetDomain, Prev: &parent, Domain: new("pub.example.org")},
 		{Kind: KindSetPublished, Prev: &parent, Subject: &id,
 			Publish: &PublishGrant{Names: []PublishedName{{Label: "immich", Port: 443}}}},
+		{Kind: KindSetPublished, Prev: &parent, Subject: &id,
+			Publish: &PublishGrant{Names: []PublishedName{{Label: "ssh", Port: 22, Proxy: true, Public: 2222}}}},
 		{Kind: KindRenameNode, Prev: &parent, Subject: &id, NodeName: new("laptop")},
 	}
 	out := make([][]byte, 0, len(records))

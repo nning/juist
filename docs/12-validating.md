@@ -289,6 +289,17 @@ than skip. A NAT cell can be run alone with
 | M10 — the core's dials into the overlay leave by the VPN device, from its own address, and fail before it is established rather than leave by the LAN | `conn`: `TestAVPNDialLeavesByTheDeviceAlone` | no |
 | M10 — the epoch secrets kept beside the node's keys are sealed as they are | `daemon`: `TestKeptSecretsAreSealedAsTheNodesKeys` | no |
 | M10 — every screen in both themes, both languages and at 200 % | `make android-check`: the Roborazzi tests against `android/app/screenshots` | no |
+| M11a — a public TCP port is one name's, off 80, 443, juist's own ports and those an ingress's own names go to, from schema 11 | `types`: `TestNamesPublishedByTCP`, `TestTheIngressHoldsThePublicPorts`; `trust/log`: `TestNamesPublishedByTCP` | no |
+| M11a — every ingress holds each public port, passes TCP at once, with a PROXY header where asked, within the bounds, and closes a port withdrawn | `internal/ingress`: `tcp_test.go`; `make interop`: `TCP` | no |
+| M11a — the terminator passes a name by TCP on unread, from an ingress's header where asked | `internal/terminator`: `tcp_test.go` | no |
+| M11a — the firewall follows the public ports while the ingress runs, one run at a time, its own rules noted and others' left; it lets in those alone the ingress listens on, never one another program holds, and juistd's restart leaves them | `packaging`: `TestIngressScriptFollowsThePorts`, `TestIngressScriptRunsOneAtATime`; `daemon`: `TestTheIngressPortsFollowTheLog`, `TestTheFirewallLetsInWhatTheIngressHolds`; by hand on Fedora and Ubuntu | no |
+| M11a — `juist publish add … --tcp`, its approval, the status and the listings | `cmd/juist`: `tcp_test.go` | no |
+| M11b — the Initial packets of versions 1 and 2 read by the keys their DCID gives, coalesced ones of one connection alone, the ClientHello reassembled out of order and over datagrams within its bounds, and the header IDs read without keys | `internal/quicinitial`: `quicinitial_test.go`, `FuzzParse`, `FuzzHello` | no |
+| M11b — the ingress passes QUIC by the name the Initials ask for and no datagram for another; keeps nothing of what does not parse; drops a client's PROXY header; passes three times what an unproven client sent until the terminator says, naming the client, it is proven; bounds unproven flows by host, the oldest giving way past the bound in all, one without a target first, ends them after twice the hello timeout and logs them once a second; carries connections from one socket to the same target, eight live at most and any number one after another, refuses one to another target and any past the rate of new flows; ends a flow once the terminator says its connections ended, a withdrawn name's and a quiet one's; takes 443/udp once free, telling juistd meanwhile | `internal/ingress`: `quic_test.go` | no |
+| M11b — the terminator ends QUIC for names offered HTTP/3 alone, proxies them as HTTP/1.1 or h2c over QUIC and TCP with `Alt-Svc`, tells an ingress, naming the client, that it completed its handshake and that its connection ended, believes a header from an ingress alone, counts QUIC against its bound, gives each client connection its own proxy, gone with it, the idle connections of others giving way past a service's bound, passes upgrades, takes headers of 64 KiB without a client's naming one, and ends a withdrawn name's QUIC | `internal/terminator`: `quic_test.go`, `proxy_test.go` | no |
+| M11b — a member lets an ingress send UDP to the ports of names offered HTTP/3 alone, and later fragments to itself; a reply from such a port opens nothing | `conn`: `TestTheConfinerKeepsAnIngressToItsPorts`, `TestFragmentsOfAConfinedPeersDatagramPass`, `TestAQUICReplyOpensNothing`; `daemon`: `TestAnIngressSendsQUICToNamesOfferedHTTP3Alone` | no |
+| M11b — `juist publish add … --http3`, the HTTPS record it prints, and the hint that a name with records of its own needs its own addresses; the ingress's status says 443/udp, or that another program holds it | `cmd/juist`: `TestPublishAddOffersHTTP3`, `TestPublishAddEndsTLS`, `TestTheIngressSummaryNamesItsPorts`; `daemon`: `TestTheStatusSaysTheIngressPorts` | no |
+| M11b — between hosts: Chrome fetches a name on lx over HTTP/3 through fb, and over HTTP/2 where 443/udp is not forwarded | `make interop`: `TestLinuxAndFreeBSD/HTTP/3` | qemu |
 
 ### The last privileged run
 
@@ -302,6 +313,48 @@ whole lab passed at M9's tree in 13 minutes. What CI cannot run, Fedora with fir
 was last checked by hand, and this records the latest such run. Update it with
 each one, so it is clear how old the evidence is.
 
+- **2026-10-06, M11b, at M11 after its third review.** `make ci-vm`
+  ran `make ci` whole at M11, the privileged tests among it, none
+  skipped; its `make interop` failed on the ingress's line, which now names
+  443/udp, and passed whole at M11, the same code, in 13m41s, the HTTP/3
+  part among it: Chrome on the host fetches a name on lx through fb over
+  HTTP/3, and over HTTP/2 where 443/udp is not forwarded. `make load-lab`,
+  20 visitors a second for 90 s, lost none over HTTP/1.1, HTTP/2 or HTTP/3,
+  HTTP/3's p50 37 ms and p99 1.5 s against HTTP/2's 32 and 72 ms. `make
+  test-freebsd` passed. By hand, on the M11a hosts with a name of
+  sslip.io and Let's Encrypt's certificate, published `--http3`: headless
+  Chrome 152 came by HTTP/2 first, then by HTTP/3 as `Alt-Svc` said, and
+  kept to HTTP/2 with 443/udp blocked at the ingress (at M11); a
+  quic-go client fetched over HTTP/3 through each ingress, its 1280-byte
+  Initials in fragments; a program holding 5432 on the Fedora ingress kept
+  5432 shut in firewalld while ufw on Ubuntu let it in, and firewalld let it
+  in once the program let go; a program holding 443/udp was said by `juist
+  status`, and the ingress took the port once freed. No SELinux denial.
+  Exit criteria (1), (3), (4) and (5) are met; `FuzzPayloads` runs for (2).
+  After the fourth review, at M11: `make ci-vm CI_MAKE=interop` passed
+  whole in 13m55s; `make load-lab` lost no visitor, HTTP/3's p50 34 ms and
+  p99 94 ms against HTTP/2's 31 and 69 ms; by hand, Chrome and the quic-go
+  client as before, and firewalld kept 25565 in while juistd restarted
+  beside the running ingress. `FuzzPayloads`, which encrypts as a client
+  the Initials whose plaintext it chooses, ran clean for 72 CPU-hours on
+  quicinitial as at M11, unchanged since: 8 workers on each of two
+  Hetzner cx43 hosts for 4h30m, 3.43 billion inputs; `FuzzParse` ran clean
+  for 5 CPU-hours before. Exit criterion (2) is met, and so M11b.
+- **2026-10-05, M11a.** `make ci-vm CI_MAKE=interop` passed whole at
+  M11 and at M11, its review, the TCP part among it: a client on the
+  LAN reaches services on lx through fb's public ports, behind `--proxy` told
+  its own address, and a withdrawn name's port closes, which fb's root
+  parent bound. `make test-freebsd` passed. By hand, on Hetzner VMs: the RPM
+  on Fedora 44 with firewalld and SELinux enforcing, and the deb on Ubuntu
+  24.04 with ufw, as two ingresses of one network, and a Debian 13 member
+  running Minecraft 1.21.11 on loopback, published with `juist publish add
+  mc 127.0.0.1:25565 --tcp`: a mineflayer client joined and chatted through
+  each ingress's public address; firewalld and ufw opened 25565 while
+  published and closed it within 3 s of the name's withdrawal, kept it
+  across a firewalld reload and an RPM upgrade, and closed it while the
+  ingress was stopped; a port the member stopped serving stayed held,
+  answering `not served`; sshd holding 22 was said by `juist status`. No
+  SELinux denial. Exit criteria (1) to (4) are met.
 - **2026-10-05, at M10, an exit node asking nothing of tailscaled.**
   `make ci-vm CI_MAKE=interop` passed whole in 13 minutes; on edge01, whose
   resolv.conf tailscaled writes, a member's query for a ts.net name is
@@ -649,7 +702,7 @@ juist publish add nas immich          # on nas's port 443, once nas's operator a
 On the ingress:
 
 ```sh
-juist ingress serve                   # "serving N names on 443 and 80"
+juist ingress serve                   # "serving N names on 443, 443/udp and 80"
 ss -ltnp | grep -E ':(80|443) '       # juistd, as juist-ingress, on every address
 sudo firewall-cmd --list-services     # Fedora: juist-ingress among them
 sudo ufw status                       # Debian and Ubuntu: juist-ingress allowed

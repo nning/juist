@@ -81,11 +81,7 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 			domain = cmp.Or(state.Domain(), domain)
 		}
 		for _, p := range n.Published {
-			line := fmt.Sprintf("publishing %s on port %d of it", publishedPhrase(p, domain), p.Port)
-			if p.Proxy {
-				line += ", with PROXY protocol"
-			}
-			add("%s", line)
+			add("%s", publishedLine("publishing", p, domain, "it"))
 		}
 	case types.KindRemoveNode:
 		roles := ""
@@ -310,11 +306,7 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		// What the internet then reaches, which is what an approver weighs.
 		for _, p := range aum.Publish.Names {
 			if !slices.Contains(had, p) {
-				line := fmt.Sprintf("publishes %s on port %d of %s", publishedPhrase(p, domain), p.Port, member(*aum.Subject))
-				if p.Proxy {
-					line += ", with PROXY protocol"
-				}
-				add("%s", line)
+				add("%s", publishedLine("publishes", p, domain, member(*aum.Subject)))
 			}
 		}
 		for _, p := range had {
@@ -502,6 +494,21 @@ func keysDigest(k types.NodeKeys) string {
 func recipientDigest(r types.RecipientKey) string {
 	sum := sha256.Sum256(slices.Concat(r.X25519[:], r.MLKEM[:]))
 	return hex.EncodeToString(sum[:6])
+}
+
+// publishedLine says what publishing p on the device called it opens to the
+// internet, which is what an approver weighs: a port of every ingress where
+// p is published by TCP.
+func publishedLine(verb string, p types.PublishedName, domain, it string) string {
+	line := fmt.Sprintf("%s %s on port %d of %s", verb, publishedPhrase(p, domain), p.Port, it)
+	if p.Public != 0 {
+		line = fmt.Sprintf("%s %s by TCP on port %d of every ingress, to port %d of %s", verb,
+			publishedPhrase(p, domain), p.Public, p.Port, it)
+	}
+	if p.Proxy {
+		line += ", with PROXY protocol"
+	}
+	return line
 }
 
 // publishedPhrase is p's name under domain as an approval says it, the

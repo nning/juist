@@ -205,3 +205,17 @@ func TestJuistdIsAskedOnceAMoment(t *testing.T) {
 		t.Errorf("asked %d times", n)
 	}
 }
+
+// A name published by TCP is shown with its port, and links nowhere: it is
+// no web page.
+func TestANamePublishedByTCPIsNoLink(t *testing.T) {
+	p := sample()
+	p.Status.Devices[3].Published = append(p.Status.Devices[3].Published, "mc.pub.example.org:25565")
+	body := serve(t, p, ipc.ShowServices, public, "/").Body.String()
+	if !strings.Contains(body, ">mc.pub.example.org:25565<") || strings.Contains(body, "https://mc.pub.example.org") {
+		t.Errorf("the page shows the name published by TCP as:\n%s", body)
+	}
+	if !strings.Contains(body, `href="https://files.pub.example.org/"`) {
+		t.Error("a name published by TLS links nowhere")
+	}
+}

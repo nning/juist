@@ -1,7 +1,8 @@
 #!/bin/sh
 # Has this host serve as the network's ingress, or no longer: the
 # juist_ingress service, started at boot. pf, where the host runs it, is the
-# host's: it lets 443 and 80 in itself.
+# host's: it lets 443 and 80 in itself, and the ports names are published on
+# by TCP.
 #
 #   ingress.sh on | off
 set -u

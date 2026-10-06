@@ -36,7 +36,7 @@ const (
 // interop need. A change to it sets the VM up again.
 const provision = `set -e
 sudo dnf install -y -q git make tar gzip xz gcc rpm-build systemd-rpm-macros dpkg \
-	iproute iputils iptables-nft nftables openssh-clients qemu-system-x86-core qemu-img
+	iproute iputils iptables-nft nftables openssh-clients qemu-system-x86-core qemu-img chromium
 sudo usermod -aG kvm ci
 `
 

@@ -94,8 +94,9 @@ type Service struct {
 	// and nothing else.
 	ingressUID, serveUID uint32
 	// ingressAsked is when the ingress last asked what is published, in Unix
-	// seconds.
+	// seconds, and ingressSaid what it said then.
 	ingressAsked atomic.Int64
+	ingressSaid  atomic.Pointer[ipc.IngressReport]
 
 	// exit and serve are the owner's choice of exit node and the operator's
 	// word on serving as one, as kept in Home.
@@ -992,11 +993,18 @@ func (s *Service) Status() ipc.Status {
 	if s.mesh != nil && state != nil {
 		if self, ok := state.Node(st.Self); ok && self.HasRole(types.RoleIngress) {
 			st.Ingress = &ipc.Ingress{Running: s.now().Unix()-s.ingressAsked.Load() <= int64(ingressSilence/time.Second)}
-			for _, t := range s.mesh.Published().Names {
-				st.Ingress.Names = append(st.Ingress.Names, t.Name)
+			p := s.mesh.Published()
+			for _, t := range slices.Concat(p.Names, p.TCP) {
+				if len(t.Addrs) > 0 {
+					st.Ingress.Names = append(st.Ingress.Names, t.Name)
+				}
+			}
+			if r := s.ingressSaid.Load(); r != nil && st.Ingress.Running {
+				st.Ingress.Ports, st.Ingress.Unbound = slices.Clone(r.Listening), slices.Clone(r.Unbound)
+				st.Ingress.NoQUIC = r.NoQUIC
 			}
 		}
-		if st.Publish != nil && len(st.Publish.Ending) > 0 {
+		if st.Publish != nil && len(st.Publish.Ending)+len(st.Publish.Passing) > 0 {
 			p := *st.Publish
 			p.TerminatorSilent = s.mesh.terminatorSilent()
 			st.Publish = &p
@@ -1117,6 +1125,11 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 	case req.Command == ipc.CmdPublished && (operates || s.isIngress(who)):
 		if s.isIngress(who) {
 			s.ingressAsked.Store(s.now().Unix())
+			r := ipc.IngressReportOf(*req)
+			s.ingressSaid.Store(&r)
+			if m := s.Mesh(); m != nil {
+				m.NoteIngressListening(r.Listening)
+			}
 		}
 		if m := s.Mesh(); m != nil {
 			return ipc.Response{Published: m.Published()}

@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- For a device the network made its ingress: TLS for the names members
-     publish, and HTTP, which it only redirects to it. -->
+     publish, QUIC for them, and HTTP, which it only redirects to TLS. -->
 <service>
   <short>juist ingress</short>
-  <description>juist ingress: the names members publish, over TLS, and HTTP redirected to it.</description>
+  <description>juist ingress: the names members publish, over TLS and QUIC, and HTTP redirected to TLS.</description>
   <port protocol="tcp" port="443"/>
+  <port protocol="udp" port="443"/>
   <port protocol="tcp" port="80"/>
 </service>

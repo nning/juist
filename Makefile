@@ -193,14 +193,16 @@ repro-freebsd: ## Fail unless a FreeBSD host builds HEAD to the same binaries as
 # opens, TCG, far slower, elsewhere; the images are fetched into
 # INTEROP_CACHE once and checked against their pinned sums.
 INTEROP_CACHE ?= $(HOME)/.cache/juist-interop
+# The browser the lab fetches over HTTP/3 with, headless.
+INTEROP_CHROME ?= $(firstword $(shell command -v chromium chromium-browser google-chrome chrome 2>/dev/null))
 
 .PHONY: interop
-interop: deb pkg-freebsd image ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh)
+interop: deb pkg-freebsd image ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh, Chrome)
 	cd interop && JUIST_INTEROP_WORK=$(abspath $(BUILDDIR))/interop \
 		JUIST_INTEROP_DEB=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb') \
 		JUIST_INTEROP_PKG=$$(find $(abspath $(BUILDDIR))/freebsd -name '*.pkg') \
 		JUIST_INTEROP_IMAGE=$$(find $(abspath $(BUILDDIR))/image -name 'juist-*-$(IMAGE_ARCH).tar' | head -1) \
-		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) GO=$(GO) \
+		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) JUIST_INTEROP_CHROME=$(INTEROP_CHROME) GO=$(GO) \
 		$(GO) test $(GOFLAGS) -tags interop -count=1 -timeout 150m -v .
 
 # agg renders the cast as a GIF: https://github.com/asciinema/agg
@@ -397,6 +399,7 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	$(BUILDDIR)/juist __manpage > $$stage/juist.1; \
 	$(BUILDDIR)/juistd __manpage > $$stage/juistd.8; \
 	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service packaging/systemd/juist-ingress.service \
+		packaging/systemd/juist-ingress-ports.path packaging/systemd/juist-ingress-ports.service \
 		packaging/systemd/juist-serve.service packaging/systemd/juist-serve.path README.md LICENSE THIRD_PARTY_LICENSES packaging/firewall.sh packaging/exit-node.sh \
 		packaging/ingress.sh packaging/serve.sh packaging/polkit/juist.rules \
 		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml packaging/firewalld/juist-ingress.xml \
@@ -443,7 +446,9 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 		sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=/usr/bin/juistd |' $$root/usr/lib/systemd/system/$$u; \
 		grep -q '^ExecStart=/usr/bin/juistd ' $$root/usr/lib/systemd/system/$$u; \
 	done; \
-	install -D -m 0644 packaging/systemd/juist-serve.path $$root/usr/lib/systemd/system/juist-serve.path; \
+	for u in juist-serve.path juist-ingress-ports.path juist-ingress-ports.service; do \
+		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/system/$$u; \
+	done; \
 	install -D -m 0644 packaging/rpm/juist.sysusers $$root/usr/lib/sysusers.d/juist.conf; \
 	install -D -m 0644 README.md $$root/usr/share/doc/juist/README.md; \
 	install -D -m 0644 LICENSE $$root/usr/share/doc/juist/copyright; \

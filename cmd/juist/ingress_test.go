@@ -31,7 +31,7 @@ func TestIngressServe(t *testing.T) {
 	}
 	mustContain(t, h.mustRun("ingress"), "this device is no ingress")
 	h.mustRun("revoke", "laptop", "voucher", "--yes")
-	mustContain(t, h.mustRun("grant", "laptop", "ingress"), "laptop: roles ingress", "serving 0 names on 443 and 80")
+	mustContain(t, h.mustRun("grant", "laptop", "ingress"), "laptop: roles ingress", "serving 0 names on 443, 443/udp and 80")
 	mustContain(t, h.mustRun("status"), "Ingress", "not running on this device (juist ingress serve)")
 	h.layout.answers = func(context.Context, string) error { return errors.New("connection refused") }
 	if _, err := h.run("ingress", "serve"); err == nil || !strings.Contains(err.Error(), "does not answer on 443") ||
@@ -39,7 +39,7 @@ func TestIngressServe(t *testing.T) {
 		t.Fatalf("an ingress that does not answer: %v", err)
 	}
 	h.layout.answers = nil
-	mustContain(t, h.mustRun("ingress", "serve"), "serving 0 names on 443 and 80")
+	mustContain(t, h.mustRun("ingress", "serve"), "serving 0 names on 443, 443/udp and 80")
 	mustContain(t, h.mustRun("ingress"), "nothing to serve")
 	h.mustRun("network", "domain", "pub.example.org")
 	h.mustRun("publish", "add", "laptop", "immich", "2283")
@@ -117,8 +117,12 @@ func TestPublishAddEndsTLS(t *testing.T) {
 		return strings.Contains(h.mustRun("publish", "add", "docs", "127.0.0.1:8282"),
 			`docs.pub.example.org. CAA 0 issue "ca.example; accounturi=https://ca.example/acct/7"`)
 	})
-	if out := h.mustRun("publish", "add", "docs", "127.0.0.1:8282"); strings.Contains(out, "immich.pub.example.org. CAA") {
+	out = h.mustRun("publish", "add", "docs", "127.0.0.1:8282")
+	if strings.Contains(out, "immich.pub.example.org. CAA") {
 		t.Errorf("a name's CAA record with another's:\n%s", out)
+	}
+	if strings.Count(out, "gets no address from a wildcard") != 1 {
+		t.Errorf("a name's own records, said not once:\n%s", out)
 	}
 	mustContain(t, h.mustRun("status"), "this device serves docs.pub.example.org, immich.pub.example.org")
 
@@ -308,8 +312,8 @@ func TestHelpersServeTheDefaultInstanceAlone(t *testing.T) {
 func TestAStaleIngressIsToldWhy(t *testing.T) {
 	t.Parallel()
 	out := &syncBuffer{}
-	newCLI(t).app(out, "").sayServing(0, true)
-	mustContain(t, out.String(), "serving 0 names on 443 and 80", "hint: this device's view of the network is stale")
+	newCLI(t).app(out, "").sayServing(0, nil, true)
+	mustContain(t, out.String(), "serving 0 names on 443, 443/udp and 80", "hint: this device's view of the network is stale")
 }
 
 // juist publish status-page serves the status page as a name whose TLS juist

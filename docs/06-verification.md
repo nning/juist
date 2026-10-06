@@ -42,6 +42,8 @@ Targets, added the milestone their input surface appears:
 | Invite nameplate question and answer (`FuzzInviteMessages`) | multicast DNS datagrams | M4 |
 | Relay invite forwarding (`FuzzForwardRequests`, `FuzzRelayAnswers`) | upgrade requests; a relay's answers to host and guest | M4 |
 | IPC request decoder | socket payloads | M2 |
+| QUIC Initial parser and ClientHello reassembly (`FuzzParse`, `FuzzPayloads`, `FuzzHello`) | a client's datagrams at the ingress | M11b |
+| PROXY v2 header for UDP, and its LOCAL form (`FuzzReadUDP`) | an ingress's datagrams at the terminator, a terminator's at the ingress | M11b |
 
 72 CPU-hour clean runs gate each milestone; corpus is preserved and grows. This
 does not run on CI — hours per input surface is far more hosted-runner time than

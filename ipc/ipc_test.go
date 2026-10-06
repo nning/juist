@@ -323,3 +323,58 @@ func TestAServingRequestCarriesAnAccountThatFitsCAA(t *testing.T) {
 		t.Errorf("the records are %q", got)
 	}
 }
+
+// A published request carries the ports the ingress listens on and those
+// another program holds, as numbers, and nothing else; a serving request
+// still carries where the terminator listens.
+func TestAPublishedRequestCarriesTheIngressPorts(t *testing.T) {
+	for _, tc := range []struct {
+		r    Request
+		want bool
+	}{
+		{Request{}, true},
+		{Request{Listening: []string{"25565", "2222"}, Unbound: []string{"22"}}, true},
+		{Request{Listening: []string{"0"}}, false},
+		{Request{Listening: []string{"70000"}}, false},
+		{Request{Unbound: []string{"025565"}}, false},
+		{Request{Listening: []string{"[::]:25565"}}, false},
+		{Request{Listening: []string{"25565"}, Stopping: true}, false},
+		{Request{Name: "x"}, false},
+	} {
+		tc.r.Command = CmdPublished
+		if err := tc.r.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v", tc.r, err)
+		}
+	}
+	many := make([]string, MaxIngressPorts+1)
+	for i := range many {
+		many[i] = "1"
+	}
+	if err := (&Request{Command: CmdPublished, Listening: many}).validate(); err == nil {
+		t.Error("a published request carried ports past the bound")
+	}
+	r := Request{Command: CmdServing, Listening: []string{"100.64.0.1:443"}, Unbound: []string{"100.64.0.1:80"}, Stopping: true}
+	if err := r.validate(); err != nil {
+		t.Errorf("a serving request: %v", err)
+	}
+}
+
+// A target offering HTTP/3 is its address still, with h2c or without.
+func TestHTTP3IsOfferedBesideAnAddress(t *testing.T) {
+	for _, c := range []struct {
+		to      string
+		addr    string
+		h2c, h3 bool
+	}{
+		{HTTP3To("127.0.0.1:8080"), "127.0.0.1:8080", false, true},
+		{HTTP3To(HTTP2To("127.0.0.1:8080")), "127.0.0.1:8080", true, true},
+		{HTTP2To("127.0.0.1:8080"), "127.0.0.1:8080", true, false},
+		{"127.0.0.1:8080", "127.0.0.1:8080", false, false},
+	} {
+		addr, h2c := HTTP2Of(c.to)
+		_, h3 := HTTP3Of(c.to)
+		if addr != c.addr || h2c != c.h2c || h3 != c.h3 || !(ServeTo{Label: "x", To: c.to}).Valid() {
+			t.Errorf("%q: %q, %v, %v", c.to, addr, h2c, h3)
+		}
+	}
+}

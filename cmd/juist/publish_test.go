@@ -202,7 +202,13 @@ func TestTheTerminatorsWordDecides(t *testing.T) {
 		{&ipc.Terminator{Running: true, Listening: []string{at}}, true, ""},
 		{&ipc.Terminator{Running: true, Unbound: []string{at}}, false, "another program holds port 443 on 100.64.0.1"},
 	} {
-		listening, err := terminatorAt(tc.t, at)
+		if tc.t != nil && len(tc.t.Unbound) > 0 {
+			_, err := terminatorAt(tc.t, at, ipc.PublishedTarget{Name: "mc.pub.example.org", Public: 25565})
+			if err == nil || !strings.Contains(err.Error(), "where juist would pass mc.pub.example.org by TCP") {
+				t.Errorf("a name by TCP: %v", err)
+			}
+		}
+		listening, err := terminatorAt(tc.t, at, ipc.PublishedTarget{Name: "immich.pub.example.org"})
 		if listening != tc.listening || (err == nil) != (tc.err == "") || err != nil && !strings.Contains(err.Error(), tc.err) {
 			t.Errorf("%+v: %v, %v", tc.t, listening, err)
 		}
@@ -333,7 +339,7 @@ func TestAStartedTerminatorIsWaitedFor(t *testing.T) {
 		answersTLS: func(context.Context, string) error { return nil }}
 	a.asRoot = func() bool { return true }
 	a.node = &daemonNode{sock: sock, st: &ipc.Status{InNetwork: true}}
-	if err := a.startTerminator(); err != nil {
+	if err := a.startTerminator(""); err != nil {
 		t.Fatalf("waiting for the terminator: %v\n%s", err, out)
 	}
 }

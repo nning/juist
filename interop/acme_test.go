@@ -160,7 +160,8 @@ juist publish add fb fbweb 8443`)
 		has("ending TLS for fbweb.pub.example.org to 127.0.0.1:8081"))
 	fb.eventually(t, "fetching its own name through itself", 3*time.Minute,
 		"/tmp/probe hello "+fb.lanAddr+":443 fbweb.pub.example.org /tmp/root.pem", has("fb-web from 127.0.0.1"))
-	fb.run(t, `[ "$(ps -o uid= -p $(pgrep -f '[j]uistd --helper ingress' | head -1) | tr -d ' ')" = "$(id -u juist-ingress)" ]`)
+	// Each serves as its own user, beside a parent that stays root to bind.
+	fb.run(t, "pgrep -U juist-ingress -f '[j]uistd --helper ingress' >/dev/null")
 	fb.run(t, "pgrep -U juist-serve -f '[j]uistd --helper tls' >/dev/null")
 }
 

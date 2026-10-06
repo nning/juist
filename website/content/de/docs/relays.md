@@ -65,7 +65,8 @@ darf.
 | 41643/udp | WireGuard und Wegsuche | auf einem Gerät mit öffentlicher Adresse |
 | 41645/tcp, 41645/udp | das Relay und die STUN-Antworten, mit denen Mitglieder es vermessen | auf einem Gerät mit der Rolle `relay` |
 | 41642/tcp | eine Einladung, die per Code im LAN angenommen wird | auf dem einladenden Gerät, solange `juist invite` läuft |
-| 443/tcp, 80/tcp | die Namen, die Geräte veröffentlichen | auf einem Gerät mit der Rolle `ingress`; `juist ingress serve` öffnet sie |
+| 443/tcp, 443/udp, 80/tcp | die Namen, die Geräte veröffentlichen, per TLS und QUIC | auf einem Gerät mit der Rolle `ingress`; `juist ingress serve` öffnet sie |
+| die Ports, auf denen Namen per TCP veröffentlicht sind | diese Namen | auf jeder Ingress; sie öffnet und schließt sie, wie sie kommen und gehen |
 
 Hinter NAT musst du nichts öffnen. Auch eine Einladung per Link braucht
 keinen offenen Port: Erreicht das neue Gerät das einladende nicht direkt,

@@ -86,7 +86,7 @@ func TestAnIngressReachesWhatIsServedAlone(t *testing.T) {
 	if st := f.d.Status().Publish; st == nil || !slices.Equal(st.Serving, []string{"immich.pub.example.org"}) {
 		t.Errorf("agreed, the status says %+v", st)
 	}
-	if got := f.d.planPublish(f.d.snapshotOf(f.auth.State()), false); !slices.Equal(got, []uint16{gossip}) {
+	if got := f.d.planPublish(f.d.snapshotOf(f.auth.State()), false); !slices.Equal(got.TCP, []uint16{gossip}) || len(got.UDP) > 0 {
 		t.Errorf("stale, an ingress may open %v", got)
 	}
 	if st := f.d.publishNow(); st == nil || st.NotServing != "this device's view of the network is stale" {
@@ -160,8 +160,19 @@ func TestTheIngressAsksWhatIsPublishedAlone(t *testing.T) {
 	if resp := ask(root, ipc.CmdPublished); resp.Published == nil {
 		t.Errorf("root asked what is published: %+v", resp)
 	}
-	if got, err := ipc.CallPublished(context.Background(), f.sock); err != nil || len(got.Names) != 0 {
+	if got, err := ipc.CallPublished(context.Background(), f.sock, nil); err != nil || len(got.Names) != 0 {
 		t.Errorf("over the socket, a device that is no ingress serves %+v, %v", got, err)
+	}
+	// What the ingress says it listens on passes the socket's checks.
+	report := &ipc.IngressReport{Listening: []uint16{2222, 25565}, Unbound: []uint16{22}, NoQUIC: true}
+	if _, err := ipc.CallPublished(context.Background(), f.sock, report); err != nil {
+		t.Errorf("over the socket, with the ingress's report: %v", err)
+	}
+	for p := range uint16(2000) {
+		report.Listening = append(report.Listening, 1+p)
+	}
+	if _, err := ipc.CallPublished(context.Background(), f.sock, report); err != nil {
+		t.Errorf("over the socket, with a report of more ports than a request carries: %v", err)
 	}
 }
 

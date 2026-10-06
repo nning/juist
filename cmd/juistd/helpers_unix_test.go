@@ -49,7 +49,9 @@ func TestTheBinderListensWhereNamesAreServed(t *testing.T) {
 		return &ipc.Published{Names: []ipc.PublishedTarget{{Name: "immich.pub.example.org",
 			Addrs: []netip.Addr{served.Addr()}, Port: served.Port()}}}, nil
 	}
-	go serveBinds(context.Background(), parent.(*net.UnixConn), serving)
+	go serveBinds(context.Background(), parent.(*net.UnixConn), func(ctx context.Context, addr string) (*os.File, error) {
+		return bindServed(ctx, addr, serving)
+	})
 	b := &binder{c: child.(*net.UnixConn)}
 
 	ln, err := b.listen("tcp", served.String())
@@ -76,6 +78,95 @@ func TestTheBinderListensWhereNamesAreServed(t *testing.T) {
 		} else if !strings.Contains(err.Error(), "serves nothing") && !strings.Contains(err.Error(), "no address") {
 			t.Errorf("at %s: %v", addr, err)
 		}
+	}
+}
+
+// The binder listens for a terminator where a name published by TCP goes,
+// and on no port 80 for it, which it does not redirect.
+func TestTheBinderListensWhereTCPIsPassed(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := probe.Addr().(*net.TCPAddr).AddrPort()
+	probe.Close()
+	b := binderPair(t, func(context.Context) (*ipc.Published, error) {
+		return &ipc.Published{TCP: []ipc.PublishedTarget{{Name: "mc.pub.example.org",
+			Addrs: []netip.Addr{served.Addr()}, Port: served.Port(), Public: 25565}}}, nil
+	})
+	ln, err := b.listen("tcp", served.String())
+	if err != nil {
+		t.Fatalf("where a name is passed by TCP: %v", err)
+	}
+	ln.Close()
+	if _, err := b.listen("tcp", netip.AddrPortFrom(served.Addr(), httpPort).String()); err == nil ||
+		!strings.Contains(err.Error(), "serves nothing") {
+		t.Errorf("port 80 beside a name passed by TCP: %v", err)
+	}
+}
+
+// The ingress's root parent listens on 443 and 80, and on a port juistd says
+// a name is published on by TCP, on every address, and on no other port.
+func TestTheIngressBindsThePublicPorts(t *testing.T) {
+	probe, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	public := uint16(probe.Addr().(*net.TCPAddr).Port)
+	probe.Close()
+	published := func(context.Context) (*ipc.Published, error) {
+		return &ipc.Published{TCP: []ipc.PublishedTarget{{Name: "mc.pub.example.org", Port: 25565, Public: public}}}, nil
+	}
+	f, err := bindPublic(context.Background(), ":"+strconv.Itoa(int(public)), published)
+	if err != nil {
+		t.Fatalf("a port published by TCP: %v", err)
+	}
+	ln, err := net.FileListener(f)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if ap := ln.Addr().(*net.TCPAddr).AddrPort(); !ap.Addr().IsUnspecified() || ap.Port() != public {
+		t.Errorf("listening at %v", ap)
+	}
+	for _, addr := range []string{":" + strconv.Itoa(int(public)+1), "127.0.0.1:" + strconv.Itoa(int(public)), ":0",
+		"nonsense", ":65536"} {
+		if f, err := bindPublic(context.Background(), addr, published); err == nil {
+			f.Close()
+			t.Errorf("bound %s", addr)
+		}
+	}
+	// 443 and 80 are an ingress's whatever is published; binding them needs root.
+	for _, addr := range []string{":443", ":80"} {
+		f, err := bindPublic(context.Background(), addr, func(context.Context) (*ipc.Published, error) {
+			return nil, errors.New("not asked")
+		})
+		if err == nil {
+			f.Close()
+		} else if strings.Contains(err.Error(), "asked") || strings.Contains(err.Error(), "published") {
+			t.Errorf("%s: %v", addr, err)
+		}
+	}
+}
+
+// A public port another program holds on one address is no port the
+// ingress takes on every address, which on BSD it could beside it.
+func TestTheIngressTakesNoPortHeldOnOneAddress(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	port := uint16(held.Addr().(*net.TCPAddr).Port)
+	published := func(context.Context) (*ipc.Published, error) {
+		return &ipc.Published{TCP: []ipc.PublishedTarget{{Name: "mc.pub.example.org", Port: 25565, Public: port}}}, nil
+	}
+	if f, err := bindPublic(context.Background(), ":"+strconv.Itoa(int(port)), published); err == nil {
+		f.Close()
+		t.Error("bound every address beside a program holding one")
+	} else if !errors.Is(err, syscall.EADDRINUSE) {
+		t.Errorf("%v, not EADDRINUSE", err)
 	}
 }
 
@@ -129,7 +220,9 @@ func binderPair(t *testing.T, serving func(context.Context) (*ipc.Published, err
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { parent.Close(); child.Close() })
-	go serveBinds(context.Background(), parent.(*net.UnixConn), serving)
+	go serveBinds(context.Background(), parent.(*net.UnixConn), func(ctx context.Context, addr string) (*os.File, error) {
+		return bindServed(ctx, addr, serving)
+	})
 	return &binder{c: child.(*net.UnixConn)}
 }
 

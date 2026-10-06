@@ -69,37 +69,54 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	switch opts.helper {
 	case "ingress":
-		return runIngress(ctx, cmp.Or(opts.service.Socket, ipc.SystemSocket), opts, errOut)
+		socket := cmp.Or(opts.service.Socket, ipc.SystemSocket)
+		if os.Getuid() == 0 {
+			// Root stays, to listen on the ports juistd says are
+			// published, and the ingress drops.
+			return runBinder(ctx, args, daemon.IngressUser, func(ctx context.Context, addr string) (*os.File, error) {
+				return bindPublic(ctx, addr, func(ctx context.Context) (*ipc.Published, error) {
+					return ipc.CallPublished(ctx, socket, nil)
+				})
+			}, errOut)
+		}
+		b, ctx, cancel, err := withBinder(ctx)
+		if err != nil {
+			return err
+		}
+		defer cancel()
+		listen, listenQUIC := listenIngress, listenIngressQUIC
+		if b != nil {
+			listen = func(port uint16) (net.Listener, error) { return b.listen("tcp", fmt.Sprintf(":%d", port)) }
+			listenQUIC = func() (*net.UDPConn, error) { return b.listenUDP(":443") }
+		}
+		return runIngress(ctx, socket, opts, listen, listenQUIC, errOut)
 	case "tls":
 		socket := cmp.Or(opts.service.Socket, ipc.SystemSocket)
 		if os.Getuid() == 0 {
 			// No capability binds a port alone everywhere: root stays,
 			// to listen where juistd says, and the terminator drops.
-			return runBinder(ctx, args, socket, errOut)
+			return runBinder(ctx, args, daemon.ServeUser, func(ctx context.Context, addr string) (*os.File, error) {
+				return bindServed(ctx, addr, func(ctx context.Context) (*ipc.Published, error) {
+					return ipc.CallServing(ctx, socket, nil)
+				})
+			}, errOut)
 		}
-		b, gone, err := inheritedBinder()
+		b, ctx, cancel, err := withBinder(ctx)
 		if err != nil {
 			return err
 		}
+		defer cancel()
 		var listen func(network, addr string) (net.Listener, error)
+		var listenPacket func(network, addr string) (net.PacketConn, error)
 		if b != nil {
 			listen = b.listen
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithCancel(ctx)
-			defer cancel()
-			go func() {
-				select {
-				case <-gone:
-					cancel()
-				case <-ctx.Done():
-				}
-			}()
+			listenPacket = func(_, addr string) (net.PacketConn, error) { return b.listenUDP(addr) }
 		}
 		return runTerminator(ctx, opts, errOut, func(ctx context.Context, r *ipc.TerminatorReport) (*ipc.Published, error) {
 			return ipc.CallServing(ctx, socket, r)
 		}, func(ctx context.Context) (*ipc.StatusPage, error) {
 			return ipc.CallStatusPage(ctx, socket)
-		}, listen, httpPort)
+		}, listen, listenPacket, httpPort)
 	}
 	if opts.verbose {
 		logf := func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) }
@@ -147,6 +164,11 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 					return m.ListenOverlay(addr)
 				}
 				return nil, errors.New("no network yet")
+			}, func(_, addr string) (net.PacketConn, error) {
+				if m := s.Mesh(); m != nil {
+					return m.ListenOverlayUDP(addr)
+				}
+				return nil, errors.New("no network yet")
 			}, 0)
 			if err != nil {
 				fmt.Fprintf(errOut, "juistd: %v\n", err)
@@ -176,58 +198,82 @@ type options struct {
 const httpPort = 80
 
 // runTerminator ends TLS for what serving says, and serves the status page
-// statusPage says, listening by listen, nil for the host's, and redirecting
+// statusPage says, listening by listen and listenPacket, nil for the host's,
+// and redirecting
 // plain HTTP on redirect, 0 for none, with certificates its CA issues by
 // TLS-ALPN-01, kept in the home's certs.
 func runTerminator(ctx context.Context, opts options, errOut io.Writer,
 	serving func(context.Context, *ipc.TerminatorReport) (*ipc.Published, error),
 	statusPage func(context.Context) (*ipc.StatusPage, error), listen func(network, addr string) (net.Listener, error),
-	redirect uint16) error {
+	listenPacket func(network, addr string) (net.PacketConn, error), redirect uint16) error {
 	certs := filepath.Join(opts.service.Home, "certs")
 	if err := os.MkdirAll(certs, 0o700); err != nil {
 		return err
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) }
 	return terminator.Serve(ctx, terminator.Options{
-		Serving: serving, StatusPage: statusPage, Listen: listen, HTTPPort: redirect,
+		Serving: serving, StatusPage: statusPage, Listen: listen, ListenPacket: listenPacket, HTTPPort: redirect,
 		ACME: &acme.Client{DirectoryURL: opts.acmeDirectory}, Cache: autocert.DirCache(certs),
 		MaxConns: opts.maxConns, Logf: logf,
 	})
 }
 
+// withBinder is the root parent this helper was started by, if any, and ctx
+// ended once that parent is gone.
+func withBinder(ctx context.Context) (*binder, context.Context, context.CancelFunc, error) {
+	b, gone, err := inheritedBinder()
+	if err != nil || b == nil {
+		return nil, ctx, func() {}, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-gone:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return b, ctx, cancel, nil
+}
+
 // listenIngress binds port for the ingress, saying why it cannot.
-func listenIngress(port int) (net.Listener, error) {
+func listenIngress(port uint16) (net.Listener, error) {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	switch {
 	case errors.Is(err, syscall.EADDRINUSE):
 		return nil, fmt.Errorf("%w\nhint: another program serves port %d here", err, port)
 	case errors.Is(err, syscall.EACCES):
-		return nil, fmt.Errorf("%w\nhint: an ingress binds 443 and 80, which takes CAP_NET_BIND_SERVICE", err)
+		return nil, fmt.Errorf("%w\nhint: an ingress binds 443, 80 and the ports names are published on by TCP, which takes CAP_NET_BIND_SERVICE", err)
 	}
 	return ln, err
 }
 
+// listenIngressQUIC binds 443/udp for the ingress's QUIC.
+func listenIngressQUIC() (*net.UDPConn, error) {
+	pc, err := net.ListenPacket("udp", ":443")
+	if err != nil {
+		return nil, err
+	}
+	return pc.(*net.UDPConn), nil
+}
+
 // runIngress serves the network's published names as its ingress, on 443
-// and 80, asking the juistd at socket what they are.
-func runIngress(ctx context.Context, socket string, opts options, errOut io.Writer) error {
-	tlsLn, err := listenIngress(443)
+// and 80, QUIC on 443/udp, and the ports names are published on by TCP,
+// each bound by listen, asking the juistd at socket what they are.
+func runIngress(ctx context.Context, socket string, opts options, listen func(uint16) (net.Listener, error),
+	listenQUIC func() (*net.UDPConn, error), errOut io.Writer) error {
+	tlsLn, err := listen(443)
 	if err != nil {
 		return err
 	}
 	defer tlsLn.Close()
-	httpLn, err := listenIngress(80)
+	httpLn, err := listen(80)
 	if err != nil {
 		return err
 	}
 	defer httpLn.Close()
-	if os.Getuid() == 0 {
-		// Bound as root, served as its own user.
-		if err := dropTo(daemon.IngressUser); err != nil {
-			return err
-		}
-	}
 	o := ingressOptions(socket, errOut)
-	o.MaxConns, o.MaxPerSource = opts.maxConns, opts.maxPerSource
+	o.MaxConns, o.MaxPerSource, o.Listen, o.ListenQUIC = opts.maxConns, opts.maxPerSource, listen, listenQUIC
 	return ingress.Serve(ctx, tlsLn, httpLn, o)
 }
 
@@ -235,9 +281,11 @@ func runIngress(ctx context.Context, socket string, opts options, errOut io.Writ
 // when it stops answering, which is why names go down, and each connection.
 func ingressOptions(socket string, errOut io.Writer) ingress.Options {
 	return ingress.Options{
-		Published: func(ctx context.Context) (*ipc.Published, error) { return ipc.CallPublished(ctx, socket) },
-		Logf:      func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) },
-		Access:    func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) },
+		Published: func(ctx context.Context, r *ipc.IngressReport) (*ipc.Published, error) {
+			return ipc.CallPublished(ctx, socket, r)
+		},
+		Logf:   func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) },
+		Access: func(format string, a ...any) { fmt.Fprintf(errOut, format+"\n", a...) },
 	}
 }
 
@@ -262,7 +310,8 @@ func parse(args []string, out io.Writer) (options, error) {
 	verbose := fs.Bool("verbose", false, "log what the daemon is doing")
 	helper := fs.String("helper", "", `run as a helper of the juistd on --socket: ingress, or tls for what is published here`)
 	var serve serveFlag
-	fs.Var(&serve, "serve", "be a service member, on no device, ending TLS for NAME, @ for the domain itself, and sending it to ADDR, or serving status-page[:WHAT]; repeatable")
+	fs.Var(&serve, "serve", "be a service member, on no device, ending TLS for NAME, @ for the domain itself, and sending it to ADDR, or passing it by TCP where published so, or serving status-page[:WHAT]; repeatable")
+	http3 := fs.Bool("http3", false, "with --serve, offer clients HTTP/3 too, proxying each service's HTTP")
 	acmeDir := fs.String("acme", autocert.DefaultACMEDirectory, "the ACME directory TLS certificates are taken from")
 	join := fs.String("join", "", "join the network LINK invites to once started, unless in one (default $JUIST_JOIN)")
 	maxConns := fs.Uint("max-conns", 0, fmt.Sprintf("connections served at once: %d by an ingress, %d ending TLS, unless given",
@@ -358,11 +407,21 @@ func parse(args []string, out io.Writer) (options, error) {
 		}
 		*tun = ""
 	}
+	if *http3 && serve == nil {
+		return options{}, fmt.Errorf("--http3 is for a service member, beside --serve\n%s", synopsis)
+	}
+	for label, to := range serve {
+		if _, page := ipc.StatusPageOf(to); *http3 && !page {
+			serve[label] = ipc.HTTP3To(to)
+		}
+	}
 	// systemd starts the terminator by this file (juist-serve.path), which
 	// ends TLS for the default instance alone.
-	wanted := ""
+	wanted, ingressPorts := "", ""
 	if runtime.GOOS == "linux" && n == 0 && serve == nil && *helper == "" {
-		wanted = filepath.Join(filepath.Dir(cmp.Or(*socket, ipc.SocketPath(*home))), filepath.Base(ipc.TerminatorWanted))
+		dir := filepath.Dir(cmp.Or(*socket, ipc.SocketPath(*home)))
+		wanted = filepath.Join(dir, filepath.Base(ipc.TerminatorWanted))
+		ingressPorts = filepath.Join(dir, filepath.Base(ipc.IngressPorts))
 	}
 	return options{verbose: *verbose, helper: *helper, acmeDirectory: *acmeDir,
 		maxConns: int(*maxConns), maxPerSource: int(*maxPerSource),
@@ -383,6 +442,7 @@ func parse(args []string, out io.Writer) (options, error) {
 				STUN:             stun,
 				FreshnessTTL:     *ttl,
 				TerminatorWanted: wanted,
+				IngressPorts:     ingressPorts,
 				Netstack:         serve != nil,
 				Logf:             nop,
 			},
@@ -400,7 +460,7 @@ var optionOrder = []struct {
 	{'i', "instance", "NAME"}, {'H', "home", "DIR"}, {'s', "socket", "PATH"}, {'p', "port", "N"}, {'g', "gossip-port", "N"},
 	{'r', "relay-port", "N"}, {'t', "tun", "NAME"}, {'R', "no-relay", ""}, {'l', "no-discovery", ""},
 	{'d', "no-dht", ""}, {'u', "stun", "LIST"}, {'U', "no-stun", ""}, {'f', "freshness-ttl", "D"},
-	{'v', "verbose", ""}, {'S', "serve", "NAME=ADDR"}, {'j', "join", "LINK"}, {'I', "helper", "KIND"}, {'A', "acme", "URL"},
+	{'v', "verbose", ""}, {'S', "serve", "NAME=ADDR"}, {'3', "http3", ""}, {'j', "join", "LINK"}, {'I', "helper", "KIND"}, {'A', "acme", "URL"},
 	{'M', "max-conns", "N"}, {'m', "max-per-source", "N"},
 }
 

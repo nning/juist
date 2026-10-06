@@ -2,6 +2,8 @@
 // for every system in it:
 //
 //	probe serve NAME                  answer each TCP connection on port 80 with "NAME from SOURCE", then echo it
+//	probe proxied NAME PORT           as serve, on PORT, SOURCE the client a PROXY protocol v2 header names
+//	probe web PORT                    serve HTTP on PORT: a page whose script asks /proto?PROTOCOL, the one it came by, which it prints
 //	probe get ADDR:PORT [FROM]        print what the target there answers, asked from FROM
 //	probe hold ADDR:PORT FROM SECS    as get, then after SECS on the same connection print the echo of "again"
 //	probe dns ADDR                    ask ADDR's port 53 for example.org, and print the answer's code
@@ -9,7 +11,7 @@
 //	probe tls NAME PORT               as serve, over TLS on PORT, with a certificate of its own
 //	probe hello ADDR:PORT SNI [CA]    as get, over TLS, asking for SNI, taking a certificate CA's file issued, or any
 //	probe answer ADDR IP              answer DNS on ADDR, over UDP and TCP, with IP for every name
-//	probe visitors [FLAGS] URL        load a website as browsers do, and print what came of it
+//	probe visitors [FLAGS] URL        load a website as browsers do, over HTTP/3 with -h3, and print what came of it
 package main
 
 import (
@@ -23,6 +25,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"slices"
@@ -31,6 +34,8 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+
+	"github.com/nning/juist/internal/proxyproto"
 )
 
 func main() {
@@ -41,16 +46,20 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) != 3 && !(len(os.Args) == 4 && slices.Contains([]string{"serve", "get", "resolve", "tls", "hello", "answer"}, os.Args[1])) &&
+	if len(os.Args) != 3 && !(len(os.Args) == 4 && slices.Contains([]string{"serve", "get", "resolve", "tls", "hello", "answer", "proxied"}, os.Args[1])) &&
 		!(len(os.Args) == 5 && (os.Args[1] == "hold" || os.Args[1] == "hello")) {
-		fmt.Fprintln(os.Stderr, "usage: probe serve NAME [PORT] | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | dns ADDR | "+
-			"resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | answer ADDR IP")
+		fmt.Fprintln(os.Stderr, "usage: probe serve NAME [PORT] | proxied NAME PORT | web PORT | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | "+
+			"dns ADDR | resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | answer ADDR IP")
 		os.Exit(2)
 	}
 	var err error
 	switch os.Args[1] {
 	case "serve":
 		err = serve(os.Args[2], append(os.Args[3:], "80")[0])
+	case "proxied":
+		err = serveProxied(os.Args[2], os.Args[3])
+	case "web":
+		err = serveWeb(os.Args[2])
 	case "get":
 		err = get(os.Args[2], os.Args[3:])
 	case "hold":
@@ -92,6 +101,48 @@ func serve(name, port string) error {
 			io.Copy(c, c)
 		}()
 	}
+}
+
+func serveProxied(name, port string) error {
+	l, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		return err
+	}
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			return err
+		}
+		go func() {
+			defer c.Close()
+			c.SetDeadline(time.Now().Add(5 * time.Minute))
+			r := bufio.NewReader(c)
+			src, ok, err := proxyproto.Read(r)
+			if err != nil || !ok {
+				fmt.Fprintf(c, "%s: no PROXY header (%v)\n", name, err)
+				return
+			}
+			fmt.Fprintf(c, "%s from %s\n", name, src.Addr())
+			io.Copy(c, r)
+		}()
+	}
+}
+
+// page has a browser say the protocol it fetched the page by, as the
+// browser knows it.
+const page = `<!doctype html><title>juist</title><script>
+fetch('/proto?' + performance.getEntriesByType('navigation')[0].nextHopProtocol)
+</script>`
+
+func serveWeb(port string) error {
+	return http.ListenAndServe(":"+port, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/proto" {
+			fmt.Printf("proto=%s\n", r.URL.RawQuery)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, page)
+	}))
 }
 
 func serveTLS(name, port string) error {
