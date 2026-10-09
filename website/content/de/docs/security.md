@@ -61,8 +61,10 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
   der Android-Keystore hält. Der Befehl `juist` signiert nur, was er aus seinem
   eigenen geprüften Log nachvollzogen hat, ganz gleich, worum juistd ihn
   bittet.
-- Die Break-glass-Geheimnisse, die `juist create` schreibt, liest kein
-  juist-Befehl. Bewahre sie trotzdem offline auf.
+- Das Break-glass-Geheimnis, das `juist create` einmal anzeigt und nirgends
+  speichert, beendet das Netz endgültig, ganz ohne Admin. Bewahre es offline
+  auf, getrennt von den Admin-Schlüsseln: Ein Tresor mit beidem regiert das
+  Netz und beendet es.
 
 ## Wovor Einladungen schützen
 

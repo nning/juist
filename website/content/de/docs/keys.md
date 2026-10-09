@@ -1,7 +1,7 @@
 ---
 title: Schlüssel erneuern und zurücksetzen
 linkTitle: Schlüssel
-description: Einem Gerät neue Schlüssel geben, ein Gerät von vorn beginnen lassen, mit einem verlorenen Gerät umgehen und wissen, was sich nicht rückgängig machen lässt.
+description: Einem Gerät neue Schlüssel geben, ein Gerät von vorn beginnen lassen, mit einem verlorenen Gerät umgehen, Admin-Schlüssel sichern und wissen, was sich nicht rückgängig machen lässt.
 lead: Jedes Gerät hat eigene Schlüssel, und alle Geräte eines Netzes teilen ein gemeinsames Geheimnis. Du kannst beides ersetzen, ein Gerät aus dem Netz nehmen und von vorn beginnen lassen oder ein verlorenes Gerät aussperren.
 ---
 
@@ -103,6 +103,41 @@ Ein Ersatzgerät tritt wie jedes neue Gerät mit einer neuen Einladung bei
 auf, meldet sein `juist status` den Zustand `removed`. Lade es dann neu ein,
 oder führe dort `juist reset` aus.
 
+## Admin-Schlüssel sichern
+
+Ein Admin-Schlüssel liegt nur im Schlüsselspeicher des Rechners, auf dem er
+entstanden ist. Für eine Kopie im Passwortmanager gibst du ihn als eine Zeile
+aus und leitest sie dorthin. `juist admins` listet die Schlüssel auf diesem
+Rechner unter `KEY HERE`:
+
+{{< step on="dem Rechner eines Admins" >}}
+```sh
+juist admins export alice@home | pass insert -m juist/alice
+```
+{{< /step >}}
+
+Zurück bekommst du ihn auf jedem Rechner, indem du die Zeile wieder
+hineinleitest:
+
+```console {device="laptop"}
+$ pass show juist/alice | juist admins import alice@home
+imported admin key "alice@home"
+it casts 1 vote in "home"
+```
+
+Die Zeile läuft durch eine Pipe, nie über die Kommandozeile. Sie trägt eine
+Prüfsumme, deshalb wird eine abgeschnittene Zeile abgelehnt. Ein Import
+ersetzt nie einen Schlüssel und warnt mit `"home" gives it no vote`, wenn der
+Schlüssel seit der Sicherung entfernt wurde.
+
+Die Break-glass-Zeile, die `juist create` angezeigt hat, bewahrst du ebenso
+auf, getrennt von den Admin-Schlüsseln
+([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
+
+Die eigenen Schlüssel eines Geräts werden nicht exportiert: Eine Kopie auf
+einem anderen Rechner wäre ein zweites Gerät unter dem Namen des ersten. Ein
+verlorenes Gerät wird entfernt und ein neues eingeladen.
+
 ## Gut zu wissen
 
 - Erneuern, Zurücksetzen und Entfernen sind root und dem
@@ -116,11 +151,11 @@ oder führe dort `juist reset` aus.
 Gehen so viele Admin-Schlüssel verloren, dass kein Quorum mehr zustande kommt,
 ist das endgültig. Bleiben weniger Admin-Schlüssel übrig, als eine Änderung
 braucht, lässt sich keine Änderung mehr signieren: Kein Gerät kann mehr
-hinzukommen oder entfernt werden. `juist create` schreibt
-Break-glass-Geheimnisse, etwa nach
-`~/.config/juist/break-glass-home.secrets`, die kein juist-Befehl liest.
-Bewahre sie trotzdem offline auf. Vorbeugen kannst du so: Setze mehr Admins
-ein, als das Quorum braucht, jeden mit eigenen Geräten, und halte bei
+hinzukommen oder entfernt werden. Das Break-glass-Geheimnis, das
+`juist create` anzeigt, gibt dem Netz keine neuen Admins, es beendet es
+endgültig ([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
+Vorbeugen kannst du so: Sichere jeden Admin-Schlüssel, setze mehr Admins ein,
+als das Quorum braucht, jeden mit eigenen Geräten, und halte bei
 `juist admins require` einen Schlüssel mehr bereit, als verlangt wird.
 {{< /note >}}
 

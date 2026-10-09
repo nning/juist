@@ -1,16 +1,36 @@
 #!/bin/sh
-# Installs juist-build's deb when it is newer than the installed package.
+# Installs juist-build's package when it is newer than the installed one.
 set -eu
-src=$(find /var/lib/juist-build/out -maxdepth 1 -name 'juist_*.deb' 2>/dev/null | head -n 1)
+if [ "$(uname)" = FreeBSD ]; then
+	src=$(find /var/db/juist-build/out -maxdepth 1 -name 'juist-*.pkg' 2>/dev/null | head -n 1)
+else
+	src=$(find /var/lib/juist-build/out -maxdepth 1 -name 'juist_*.deb' 2>/dev/null | head -n 1)
+fi
 [ -n "$src" ] || exit 0
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-# A copy of our own, so the file checked is the file installed.
-cp "$src" "$tmp/juist.deb"
-version=$(dpkg-deb -f "$tmp/juist.deb" Version)
-installed=$(dpkg-query -W -f '${Version}' juist 2>/dev/null || true)
-if [ -z "$installed" ] || dpkg --compare-versions "$version" gt "$installed"; then
+# A copy of our own, so the file checked is the file installed; apt knows a .deb by its name.
+file=$tmp/juist.${src##*.}
+cp "$src" "$file"
+if [ "$(uname)" = FreeBSD ]; then
+	version=$(pkg query -F "$file" %v)
+	installed=$(pkg query %v juist 2>/dev/null || true)
+	[ -z "$installed" ] || [ "$(pkg version -t "$version" "$installed")" = ">" ] || exit 0
+	pkg add -q "$file"
+	# pkg's scripts cannot restart the daemons, so they run the old binaries until here.
+	for i in "" $(sysrc -n juistd_instances 2>/dev/null || true); do
+		service juistd onestatus $i >/dev/null 2>&1 && service juistd onerestart $i
+	done
+	for s in juist_ingress juist_serve; do
+		service $s onestatus >/dev/null 2>&1 && service $s onerestart
+	done
+else
+	version=$(dpkg-deb -f "$file" Version)
+	installed=$(dpkg-query -W -f '${Version}' juist 2>/dev/null || true)
+	if [ -n "$installed" ] && ! dpkg --compare-versions "$version" gt "$installed"; then
+		exit 0
+	fi
 	# The postinst restarts juist's daemons; needrestart would restart others too.
-	NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=900 "$tmp/juist.deb"
-	echo "juist $installed -> $version"
+	NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get install -y -q -o DPkg::Lock::Timeout=900 "$file"
 fi
+echo "juist $installed -> $version"

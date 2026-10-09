@@ -13,8 +13,8 @@ import (
 // announcement returns this node's signed endpoint record, rebuilding it when
 // the underlay addresses or the data-plane port change, and signing it again
 // every [announceRenewal] though they do not. The sequence number is the
-// wall clock, so a restart does not reissue numbers peers would dismiss as
-// replays, and a peer reads from it when the record was signed.
+// wall clock, so a peer reads from it when the record was signed, and moves
+// past a previous run's that a peer echoes back (see [Daemon.ownEchoed]).
 func (d *Daemon) announcement() (gossip.Endpoint, bool) { return d.announce(announceRenewal) }
 
 // publishedAnnouncement is [Daemon.announcement] for the DHT, freshly signed
@@ -80,14 +80,27 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 }
 
 // nextSeq returns a strictly increasing sequence number, seeded from the
-// clock. The caller holds d.mu.
+// clock and kept across mesh restarts by the session. The caller holds d.mu.
 func (d *Daemon) nextSeq() uint64 {
-	next := uint64(d.now().Unix())
-	if next <= d.seq {
-		next = d.seq + 1
+	d.seq = d.session.nextSeq(d.now())
+	return d.seq
+}
+
+// ownEchoed takes this node's announcement as a peer holds it. One numbered
+// at or past this run's that says something else is a previous run's, which
+// peers keep over this run's until the next one is numbered past it.
+func (d *Daemon) ownEchoed(e gossip.Endpoint) {
+	d.mu.Lock()
+	behind := e.Seq >= d.seq && (d.signed == nil || !d.signed.SameAs(&e))
+	d.mu.Unlock()
+	if !behind || e.Verify() != nil {
+		return
 	}
-	d.seq = next
-	return next
+	d.mu.Lock()
+	d.session.passSeq(e.Seq)
+	d.announced, d.signed = nil, nil
+	d.mu.Unlock()
+	d.MarkDirty()
 }
 
 // underlayEndpoints reports where this node's data plane can be reached from

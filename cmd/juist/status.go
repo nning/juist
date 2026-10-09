@@ -197,6 +197,12 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 			line{kind: lineHint, text: "juist join CODE, or juist create"})
 		return v
 	}
+	if s.Disabled != "" {
+		head(paint("1;31", "disabled"))
+		v.head = append(v.head, line{kind: lineWarn, text: "the network was ended with a break-glass secret"},
+			line{kind: lineHint, text: "start over: " + resetCommand(s, several)})
+		return v
+	}
 	if c := s.HostConflict; c != nil && c.SameNetwork {
 		head(paint("1;31", "not connected"))
 		v.head = append(v.head, line{kind: lineWarn, text: fmt.Sprintf("this network runs on this host already, "+
@@ -489,6 +495,24 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	}
 	if s.Conflicted > 0 {
 		note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))
+	}
+	if s.LeaseSigners == 0 {
+		var relays []string
+		for _, d := range s.Devices {
+			// An ingress or a service member may not vouch.
+			if slices.Contains(d.Roles, types.RoleRelayCapable) &&
+				!slices.Contains(d.Roles, types.RoleIngress) && !slices.Contains(d.Roles, types.RoleService) {
+				relays = append(relays, d.Name)
+			}
+		}
+		if len(relays) >= 2 {
+			note(lineHint, "vouchers that are always on bound how long a removal takes to reach a device cut off: "+
+				"juist grant %s voucher, juist grant %s voucher, juist admins vouchers 2", relays[0], relays[1])
+		}
+	}
+	if left, ending := s.FreshnessEnding(time.Now().Unix()); ending {
+		note(lineWarn, "freshness ends in %s unless %s", roughly(left), s.VouchAgain())
+		note(lineHint, "a voucher vouches while juistd runs on it and reaches this device")
 	}
 	if s.RelayUnreached && s.Alarm == "" {
 		note(lineWarn, "no device reaches this relay: tcp/%d or udp/%d is likely closed", s.RelayPort, s.RelayPort)

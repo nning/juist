@@ -30,8 +30,11 @@ func adminsFamily() family {
 				forms: [][2]string{{"vouchers M", "require M vouchers to confirm a device's view"}}},
 			{name: "receive", run: adminsReceive,
 				forms: [][2]string{{"receive", "let changes waiting for your vote reach your keys here"}}},
+			{name: "export", run: adminsExport,
+				forms: [][2]string{{"export NAME", "print an admin key here as one line, for a password manager"}}},
+			{name: "import", run: adminsImport, forms: [][2]string{{"import NAME", "read that line from stdin into the key NAME"}}},
 		},
-		footer: "Admin keys never leave their machine, which needs no network of its own."}
+		footer: "Admin keys leave their machine only as export's line, and it needs no network of its own."}
 }
 
 func cmdAdmins(a *app, args []string) error { return adminsFamily().run(a, args) }
@@ -449,8 +452,11 @@ Require K admin votes for every later change.`}
 	if err != nil {
 		return err
 	}
-	_, err = a.submit(auth, &change{aum: aum, file: "quorum.rec",
+	applied, err := a.submit(auth, &change{aum: aum, file: "quorum.rec",
 		done: fmt.Sprintf("quorum %d", k)})
+	if err == nil && applied {
+		a.hintVoucherCarries(uint32(k), auth.State().NodesWithRole(types.RoleAdmin))
+	}
 	return err
 }
 
@@ -481,8 +487,11 @@ must be online.`}
 	if err != nil {
 		return err
 	}
-	_, err = a.submit(auth, &change{aum: aum, file: "vouchers.rec",
+	applied, err := a.submit(auth, &change{aum: aum, file: "vouchers.rec",
 		done: fmt.Sprintf("vouchers %d", m)})
+	if err == nil && applied {
+		a.warnVouchers(auth.State().NodesWithRole(types.RoleAdmin), int(m))
+	}
 	return err
 }
 

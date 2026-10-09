@@ -10,14 +10,15 @@ import (
 
 // TestEveryKindHasARule keeps kindRules in step with the record kinds types
 // defines: a kind without a rule would be decodable and never appliable.
+// Genesis starts a state and a disable record ends one; neither changes one.
 func TestEveryKindHasARule(t *testing.T) {
 	for k := types.Kind(1); k != 0; k++ {
 		if strings.HasPrefix(k.String(), "kind?") {
 			continue
 		}
 		_, ruled := kindRules[k]
-		if ruled == (k == types.KindGenesis) {
-			t.Errorf("%v: has a rule %v, want %v", k, ruled, k != types.KindGenesis)
+		if want := k != types.KindGenesis && k != types.KindDisable; ruled != want {
+			t.Errorf("%v: has a rule %v, want %v", k, ruled, want)
 		}
 	}
 	for k := range kindRules {

@@ -215,6 +215,7 @@ uninstalled.
 |---|---|
 | **Not joined** | The invite may have expired or been used, or the inviting device is out of reach. Start a new invite. A code works only on the same LAN; scan the QR code instead. |
 | **No device may relay** | An admin grants `relay` to a device with a public address ([Relays]({{< relref "docs/relays" >}})). |
-| **Limited** | No voucher has been reached for 48 hours. Connect the phone to a network where it reaches one. |
+| **Limited** | Too few vouchers have been reached for 48 hours. Connect the phone to a network where it reaches them. |
+| **Too few vouchers have vouched: limited in … hours** | Bring a voucher back online before then. |
 | **Refused** or **Removed** | The phone was removed. Forget the network and join again with a new invite. |
 | `nas.home.juist` does not resolve | The phone resolves no names; use the address the device's screen shows. |

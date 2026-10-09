@@ -194,6 +194,9 @@ func (r *approval) check(path string, aum *types.AUM) (done bool, err error) {
 // and writes it back; ok is false where the person said no.
 func (r *approval) sign(path string, aum *types.AUM) (ok bool, err error) {
 	a := r.a
+	if r.auth != nil && r.auth.Disabled() != nil {
+		return false, fmt.Errorf("%q is disabled; nothing changes it any more", r.auth.State().Network())
+	}
 	if !r.yes {
 		if ok, err := a.confirm("approve?"); err != nil || !ok {
 			if err == nil {
@@ -333,7 +336,8 @@ func (a *app) createFromGenesis(records []types.AUM) error {
 		return err
 	}
 	_ = os.Remove(a.home.join(genesisFileFor(genesis.State.Network)))
-	return a.reportCreated()
+	a.markFounded(genesis.State.Network)
+	return a.reportCreated(nil, nil)
 }
 
 func (a *app) reportGenesisStatus(path string, aum *types.AUM) {

@@ -1,0 +1,9 @@
+#!/bin/sh
+# FreeBSD's juist-follow-main.service: builds as juist-build, at idle
+# priority, then installs. Runs as root from cron, under lockf.
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
+export PATH
+lib=/usr/local/lib/juist-follow-main
+env HOME=/var/db/juist-build idprio 31 \
+	su -m juist-build -c 'exec "$@"' follow-main timeout 3h "$lib/build" || exit
+exec "$lib/install"

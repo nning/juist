@@ -233,6 +233,8 @@ func state(st *ipc.Status) (string, string) {
 	switch {
 	case !st.InNetwork:
 		return "no network", "alarm"
+	case st.Disabled != "":
+		return "disabled", "alarm"
 	case st.NotMember:
 		return "removed", "alarm"
 	case st.StartError != "":
@@ -348,6 +350,9 @@ func services(p *ipc.StatusPage) []service {
 func alarms(st *ipc.Status) []string {
 	var out []string
 	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
+	if st.Disabled != "" {
+		add("the network was ended with a break-glass secret")
+	}
 	if st.Alarm != "" {
 		add("%s; tunnels down until resolved", st.Alarm)
 	}
@@ -391,6 +396,9 @@ func alarms(st *ipc.Status) []string {
 	}
 	if st.Conflicted > 0 {
 		add("%s announce a key another device uses", plural(st.Conflicted, "device"))
+	}
+	if left, ending := st.FreshnessEnding(time.Now().Unix()); ending {
+		add("freshness ends in %s unless %s", roughly(left), st.VouchAgain())
 	}
 	if st.RelayUnreached {
 		add("no device reaches this device's relay")

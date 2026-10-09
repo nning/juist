@@ -66,7 +66,7 @@ func TestPublishAddAndRemove(t *testing.T) {
 func TestGrantAnIngress(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	admin.mustRun("create", "home", "--device", "laptop")
+	admin.mustRun("create", "home", "--device", "laptop", "--voucher")
 	enrollDevice(t, admin, "vps")
 	mustContain(t, admin.mustRun("grant", "vps", "ingress"), "vps: roles ingress", "hint: on vps, juist ingress serve")
 	if out := admin.mustRun("grant", "vps", "relay"); !strings.Contains(out, "vps: roles ingress, relay") ||

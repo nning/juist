@@ -125,6 +125,13 @@ const (
 	// KindRenameNode gives a member another name, one no other member's
 	// folds like. Schema 10 and later.
 	KindRenameNode Kind = 23
+
+	// KindDisable ends the network for good by revealing one of the
+	// break-glass secrets the genesis committed to, which is its whole
+	// authority: it carries no signature, and counts wherever it hangs. Valid
+	// under every schema, since a network that lost its admins cannot upgrade
+	// first; a build from before it cannot read it and keeps running.
+	KindDisable Kind = 24
 )
 
 func (k Kind) String() string {
@@ -177,6 +184,8 @@ func (k Kind) String() string {
 		return "set-published"
 	case KindRenameNode:
 		return "rename-node"
+	case KindDisable:
+		return "disable"
 	default:
 		return fmt.Sprintf("kind?<%d>", uint8(k))
 	}
@@ -310,6 +319,9 @@ type AUM struct {
 	// NodeName is a member's new name, for RenameNode.
 	NodeName *string `cbor:"21,keyasint,omitempty"`
 
+	// Secret is the break-glass secret revealed, for Disable.
+	Secret *DisablementSecret `cbor:"22,keyasint,omitempty"`
+
 	// Signatures authorize the record. Sorted by key ID and duplicate-free,
 	// like every other set. CBOR key 23 is the highest that encodes in one
 	// byte, leaving payload fields room to grow below it.
@@ -409,6 +421,7 @@ const (
 	fDomain
 	fPublish
 	fNodeName
+	fSecret
 )
 
 var fieldNames = []struct {
@@ -434,6 +447,7 @@ var fieldNames = []struct {
 	{fDomain, "Domain"},
 	{fPublish, "Publish"},
 	{fNodeName, "NodeName"},
+	{fSecret, "Secret"},
 }
 
 func (f fieldSet) String() string {
@@ -480,6 +494,8 @@ var kindFields = map[Kind]fieldSet{
 	KindSetPublished: fSubject | fPublish,
 
 	KindRenameNode: fSubject | fNodeName,
+
+	KindDisable: fSecret,
 }
 
 func (a *AUM) presentFields() fieldSet {
@@ -541,6 +557,9 @@ func (a *AUM) presentFields() fieldSet {
 	if a.NodeName != nil {
 		f |= fNodeName
 	}
+	if a.Secret != nil {
+		f |= fSecret
+	}
 	return f
 }
 
@@ -550,7 +569,7 @@ const MaxSignatures = MaxAdmins + 1
 
 // StaticValidate checks what can be decided from the record alone: known kind,
 // exactly that kind's payload, canonically ordered sets, at least one
-// signature, well-formed values. Anything needing state — whether the
+// signature (none for a disable record), well-formed values. Anything needing state — whether the
 // signatures are trusted, reach quorum, or name an existing subject — is
 // trust/log's, since it is only answerable against a parent state.
 func (a *AUM) StaticValidate() error {
@@ -703,6 +722,9 @@ func (a *AUM) ValidateUnsigned() error {
 			return fmt.Errorf("network name: %w", err)
 		}
 	}
+	if a.Secret != nil && *a.Secret == (DisablementSecret{}) {
+		return errors.New("disable record reveals a zero secret")
+	}
 	if a.NodeName != nil {
 		if *a.NodeName == "" {
 			return errors.New("rename-node record names no name")
@@ -723,13 +745,17 @@ func (a *AUM) ValidateUnsigned() error {
 }
 
 func (a *AUM) validateSignatureSet() error {
-	if len(a.Signatures) == 0 {
+	if len(a.Signatures) == 0 && a.Kind != KindDisable {
 		return fmt.Errorf("%v record is unsigned", a.Kind)
 	}
 	return nil
 }
 
 func (a *AUM) validateSignatureShape() error {
+	if a.Kind == KindDisable && len(a.Signatures) > 0 {
+		// A signature would add no authority, only a second encoding.
+		return errors.New("disable record is signed; its secret is its only authority")
+	}
 	if len(a.Signatures) > MaxSignatures {
 		return fmt.Errorf("%v record has %d signatures, over the %d limit",
 			a.Kind, len(a.Signatures), MaxSignatures)
@@ -773,6 +799,9 @@ func (a *AUM) SigHash() Hash {
 // Sign appends a signature by priv, keeping the signature set sorted. Signing
 // twice with one key is an error: vote counting must not double-count.
 func (a *AUM) Sign(priv PrivateIdentity) error {
+	if a.Kind == KindDisable {
+		return errors.New("types: a disable record is not signed")
+	}
 	id := priv.Public()
 	if slices.ContainsFunc(a.Signatures, func(s Signature) bool { return s.KeyID == id }) {
 		return fmt.Errorf("types: %v is already a signer of this record", id.ShortString())
@@ -864,6 +893,10 @@ func (a *AUM) Clone() *AUM {
 	if a.NodeName != nil {
 		n := *a.NodeName
 		out.NodeName = &n
+	}
+	if a.Secret != nil {
+		s := *a.Secret
+		out.Secret = &s
 	}
 	if a.Publish != nil {
 		out.Publish = &PublishGrant{Names: slices.Clone(a.Publish.Names)}

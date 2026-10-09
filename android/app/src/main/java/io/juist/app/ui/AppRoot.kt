@@ -86,13 +86,13 @@ sealed interface Route {
     }
 }
 
-private fun encode(r: Route): String = when (r) {
+internal fun encode(r: Route): String = when (r) {
     is Route.Confirm -> (if (r.fromElsewhere) "opened:" else "confirm:") + r.invite
     is Route.MemberOf -> "member:" + r.identity
     else -> r.toString()
 }
 
-private fun decode(s: String): Route = when {
+internal fun decode(s: String): Route = when {
     s.startsWith("confirm:") -> Route.Confirm(s.removePrefix("confirm:"))
     s.startsWith("opened:") -> Route.Confirm(s.removePrefix("opened:"), fromElsewhere = true)
     s.startsWith("member:") -> Route.MemberOf(s.removePrefix("member:"))

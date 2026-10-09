@@ -36,7 +36,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
 
 /**
  * Runs the core while the VPN is on: in the foreground, so that the mesh stays
@@ -77,7 +76,7 @@ class JuistVpnService : VpnService() {
             core = c
             holdMulticast()
             followNetworks()
-            Juist.attached(c)
+            Juist.attached(GoCore(c))
             notifier = scope.launch {
                 Juist.connection.mapNotNull { (it as? Connection.On)?.view }
                     .map { NotificationLines.of(this@JuistVpnService, it) }
@@ -160,21 +159,16 @@ class JuistVpnService : VpnService() {
         override fun protect(fd: Int): Boolean = this@JuistVpnService.protect(fd)
 
         override fun establish(config: String): Int {
-            val c = coreJson.decodeFromString(EstablishConfig.serializer(), config)
             val b = Builder()
                 .setSession(Juist.last?.network?.takeIf { it.isNotEmpty() } ?: getString(R.string.app_name))
-                .setMtu(c.mtu)
                 .setConfigureIntent(openApp())
-            for (a in c.addrs) {
-                val (addr, bits) = prefix(a)
-                b.addAddress(addr, bits)
-            }
-            for (r in c.routes) {
-                val (addr, bits) = prefix(r)
-                b.addRoute(addr, bits)
-            }
-            // Set only while an exit node is used, which then answers all of the phone's lookups.
-            for (d in c.dns) b.addDnsServer(InetAddress.getByName(d))
+            // No allowBypass: no app leaves the tunnel by binding to the network beside it.
+            configureVpn(config, object : VpnTarget {
+                override fun addAddress(address: InetAddress, prefixLength: Int) { b.addAddress(address, prefixLength) }
+                override fun addRoute(address: InetAddress, prefixLength: Int) { b.addRoute(address, prefixLength) }
+                override fun addDnsServer(address: InetAddress) { b.addDnsServer(address) }
+                override fun setMtu(mtu: Int) { b.setMtu(mtu) }
+            })
             val pfd = b.establish() ?: throw IllegalStateException(getString(R.string.vpn_not_established))
             return pfd.detachFd()
         }
@@ -189,11 +183,6 @@ class JuistVpnService : VpnService() {
             Diagnostics.add(line)
             if (BuildConfig.DEBUG) Log.d(TAG, line)
         }
-    }
-
-    private fun prefix(s: String): Pair<InetAddress, Int> {
-        val (addr, bits) = s.split('/', limit = 2)
-        return InetAddress.getByName(addr) to bits.toInt()
     }
 
     private fun openApp(): PendingIntent = PendingIntent.getActivity(
@@ -224,14 +213,6 @@ class JuistVpnService : VpnService() {
             .addAction(Notification.Action.Builder(null, getString(R.string.action_disconnect), stop).build())
             .build()
     }
-
-    @Serializable
-    private data class EstablishConfig(
-        val addrs: List<String>,
-        val routes: List<String>,
-        val dns: List<String> = emptyList(),
-        val mtu: Int,
-    )
 
     companion object {
         private const val TAG = "juist"

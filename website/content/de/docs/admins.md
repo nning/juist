@@ -97,12 +97,15 @@ Bob hat jetzt zwei Schlüssel, die zusammen eine Stimme haben.
 {{< /step >}}
 
 {{< step on="dem Gerät eines Admins" >}}
-Verlange für jede Änderung beide Admins, und dazu zwei Voucher, die
-bestätigen, dass der Stand des Netzes aktuell ist:
+Mach drei Geräte, die ständig laufen, zu Vouchern, verlange, dass zwei von
+ihnen den Stand des Netzes bestätigen, und für jede Änderung beide Admins:
 
 ```sh
-juist admins quorum 2
+juist grant nas voucher
+juist grant vps voucher
+juist grant pi voucher
 juist admins vouchers 2
+juist admins quorum 2
 ```
 
 `juist admins` zeigt jetzt `Quorum  2 of 2 votes`.
@@ -110,7 +113,8 @@ juist admins vouchers 2
 
 Mit `juist admins vouchers 2` kann ein Voucher, der über den Stand des Netzes
 lügt, kein Gerät mehr allein täuschen. Er bräuchte einen Komplizen. Dafür
-müssen aber auch zwei Voucher online sein.
+müssen aber auch zwei Voucher online sein; der dritte sorgt dafür, wenn einer
+ausfällt.
 
 ## Allein, aber mit zwei Geräten für jede Änderung
 
@@ -190,8 +194,12 @@ betrifft, verrät nämlich nur das Log.
   wird abgelehnt, wenn die übrigen Schlüssel das Quorum nicht mehr erreichen.
 - `juist admins quorum` warnt, wenn jede Änderung alle Admins braucht, denn
   dann sperrt schon der Verlust der Schlüssel eines einzigen Admins das Netz.
-- Admin-Schlüssel verlassen nie ihren Rechner, und dieser Rechner muss selbst
-  zu keinem Netz gehören. Mit `juist create --no-device` legst du ein Netz von
+  Ist das Quorum größer als 1 und hat das Netz keinen Voucher, weist es
+  darauf hin, dass Änderungen, die auf Stimmen warten, über Voucher laufen;
+  `juist create --quorum` ebenso.
+- Admin-Schlüssel verlassen ihren Rechner nur als Sicherungszeile
+  ([Schlüssel]({{< relref "docs/keys" >}}#admin-schlüssel-sichern)), und dieser
+  Rechner muss selbst zu keinem Netz gehören. Mit `juist create --no-device` legst du ein Netz von
   einem Rechner aus an, der nur signiert.
 - Führe Admin-Befehle als du selbst aus, ohne sudo, denn die Schlüssel liegen
   in deinem Keystore.
@@ -204,10 +212,12 @@ betrifft, verrät nämlich nur das Log.
 
 {{< note danger >}}
 Gehen so viele Admin-Schlüssel verloren, dass keine Änderung mehr genug
-Stimmen bekommt, ist das Netz für immer gesperrt. Die Break-glass-Geheimnisse,
-die `juist create` schreibt, liest kein juist-Befehl. Bewahre sie trotzdem
-offline auf. Setze mehr Admins ein, als das Quorum braucht, jeden mit eigenen
-Geräten ([Schlüssel]({{< relref "docs/keys" >}})).
+Stimmen bekommt, ist das Netz für immer gesperrt. Das Break-glass-Geheimnis,
+das `juist create` anzeigt, kann es nur beenden
+([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
+Sichere jeden Admin-Schlüssel, und setze mehr Admins ein, als das Quorum
+braucht, jeden mit eigenen Geräten
+([Schlüssel]({{< relref "docs/keys" >}}#admin-schlüssel-sichern)).
 {{< /note >}}
 
 ## Wenn etwas nicht klappt

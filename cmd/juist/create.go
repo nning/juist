@@ -24,10 +24,6 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// numDisablementSecrets is how many break-glass preimages the genesis ceremony
-// commits to: enough that losing any one of them does not matter.
-const numDisablementSecrets = 10
-
 // drawNetworkName names a network nobody named, as two random words, and
 // not as one this keystore has prepared already.
 func (a *app) drawNetworkName() (string, error) {
@@ -36,7 +32,8 @@ func (a *app) drawNetworkName() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if !fileExists(a.home.join(breakGlassFile(name))) && !fileExists(a.home.join(genesisFileFor(name))) {
+		if !slices.ContainsFunc([]string{foundedFile(name), breakGlassFile(name), genesisFileFor(name)},
+			func(f string) bool { return fileExists(a.home.join(f)) }) {
 			return name, nil
 		}
 	}
@@ -48,6 +45,7 @@ type initPlan struct {
 	network, device, adminName string
 	adminKey                   string
 	noDevice, relay, yes       bool
+	voucher                    bool
 	adminVotes, quorum         uint
 	extraAdmins                stringList
 	ipv4                       string
@@ -89,12 +87,23 @@ func cmdCreate(a *app, args []string) error {
 		a.unmake()
 		return err
 	}
+	if p.quorum > 1 && !p.voucher {
+		a.hint(voucherCarriesHint)
+	}
+	if p.voucher {
+		if auth, err := a.networkLog(); err == nil {
+			st := auth.State()
+			a.warnVouchers(st.NodesWithRole(types.RoleAdmin), int(st.Vouchers()))
+		}
+	}
 	return nil
 }
 
 func (a *app) parseInit(args []string) (initPlan, error) {
 	s := spec{name: "juist create", args: "[NETWORK]", max: 1, anyNetwork: true, about: `
-Create a network with this device as its first member and voucher.
+Create a network with this device as its first member. --voucher makes it
+vouch for the network's state too; where it is then off for 48 hours, every
+other device reaches only vouchers, so use it on a device that is always on.
 NETWORK defaults to two random words. A device in a network already runs
 the new one beside it, with a juistd of its own.
 
@@ -108,6 +117,7 @@ loses the network.`}
 	fs.StringVar(&p.device, "device", "", "this device's `NAME` (default: the hostname)")
 	fs.BoolVar(&p.noDevice, "no-device", false, "do not make this device a member; for a signing-only machine")
 	fs.BoolVar(&p.relay, "relay", false, "make this device a relay")
+	fs.BoolVar(&p.voucher, "voucher", false, "make this device a voucher")
 	fs.StringVar(&p.adminName, "admin-name", "", "your `NAME` as admin (default: your user name, or --admin-key's)")
 	fs.StringVar(&p.adminKey, "admin-key", "", "govern it with the admin key `NAME` here too, as \"juist admins\" lists it")
 	fs.Var(&p.extraAdmins, "admin", "another admin, as `NAME=KEY[:VOTES]`; repeatable")
@@ -120,6 +130,9 @@ loses the network.`}
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		return p, err
+	}
+	if p.noDevice && (p.voucher || p.relay) {
+		return p, errors.New("--voucher and --relay are roles of this device, which --no-device leaves out")
 	}
 	if len(pos) == 1 {
 		p.network = pos[0]
@@ -244,7 +257,7 @@ func (a *app) initNode(p *initPlan) (node, operatorChoice, error) {
 		return nil, operatorChoice{}, err
 	}
 	// What belongs to one network alone is named for it.
-	for _, name := range []string{breakGlassFile(p.network), genesisFileFor(p.network)} {
+	for _, name := range []string{foundedFile(p.network), breakGlassFile(p.network), genesisFileFor(p.network)} {
 		if _, err := os.Stat(a.home.join(name)); err == nil {
 			return nil, operatorChoice{}, fmt.Errorf("network %q already prepared here: %s\nhint: pick another "+
 				"name, or move the file away if that network never came to be", p.network, a.home.join(name))
@@ -258,7 +271,7 @@ func (a *app) initNode(p *initPlan) (node, operatorChoice, error) {
 // foundNetwork runs the genesis ceremony: it signs the genesis with this
 // keystore's admin key and creates the network, or where more admins must
 // sign, writes it out for them.
-func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) error {
+func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) (err error) {
 	localAdmin := p.key
 	var nodes []types.NodeRecord
 	machine := ""
@@ -269,7 +282,6 @@ func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) error {
 		}
 		nodes, machine = append(nodes, founder), founder.Name
 	}
-	var err error
 	if p.keyFound {
 		a.printf("using admin key %q from %s\n", p.keyName, a.home.path)
 	} else if localAdmin, err = a.home.createAdminKey(p.keyName, false); err != nil {
@@ -282,11 +294,11 @@ func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) error {
 	}
 	p.admins[0].Recipient = &r
 	p.admins[0].Name = cmp.Or(machine, a.machineName())
-	commitments, err := a.writeDisablementSecrets(p.network)
+	secret, commitment, err := drawBreakGlass()
 	if err != nil {
 		return err
 	}
-	genesis, err := log.Genesis(p.network, uint32(p.quorum), p.admins, commitments, nodes, sealer())
+	genesis, err := log.Genesis(p.network, uint32(p.quorum), p.admins, []types.Hash{commitment}, nodes, sealer())
 	if err != nil {
 		return err
 	}
@@ -300,7 +312,7 @@ func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) error {
 	}
 	if !status.Authorized() {
 		// The other admins sign it where their keys are; discarding it would
-		// strand the keys and secrets already written for it.
+		// strand the key already written for it.
 		path := a.home.join(genesisFileFor(p.network))
 		if err := writeRecordFile(path, &genesis); err != nil {
 			return err
@@ -308,8 +320,19 @@ func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) error {
 		a.printf("prepared %q; needs %s\n", p.network, approvalsNeeded(status, genesis.State.Admins, &genesis))
 		a.printf("wrote %s; each admin runs:\n", path)
 		a.command("juist approve %s", filepath.Base(path))
+		a.field("Break-glass", "%s", backupLine(breakGlassLine, secret[:]))
+		a.breakGlassWarning()
 		return nil
 	}
+	// Handed over, the network may come to be whatever this side hears: its
+	// secret is shown, failure or not, or nobody ever has it.
+	shown := false
+	defer func() {
+		if !shown {
+			a.field("Break-glass", "%s", backupLine(breakGlassLine, secret[:]))
+			a.breakGlassWarning()
+		}
+	}()
 	if p.noDevice {
 		// No device, so no daemon either: the log lives in the keystore.
 		st, err := store.Open(a.home.join(logDir))
@@ -320,14 +343,20 @@ func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) error {
 			return err
 		}
 	} else if err := n.create(genesis, op); err != nil {
-		return fmt.Errorf("%w\nhint: if \"juist status\" shows no network, move %s away before retrying",
-			err, a.home.join(breakGlassFile(p.network)))
+		return err
 	}
-	return a.reportCreated()
+	a.markFounded(p.network)
+	return a.reportCreated(&secret, &shown)
 }
 
-// founderRecord is this device's record in the genesis: an admin device, at
-// the first address of the range.
+// markFounded notes in the keystore that the network was founded from it, so
+// that no second one of that name is; best effort.
+func (a *app) markFounded(network string) {
+	_ = os.WriteFile(a.home.join(foundedFile(network)), []byte("# juist: network "+network+" founded here\n"), 0o600)
+}
+
+// founderRecord is this device's record in the genesis, at the first address
+// of the range.
 func founderRecord(n node, p *initPlan) (types.NodeRecord, error) {
 	self, err := n.self()
 	if err != nil {
@@ -337,7 +366,10 @@ func founderRecord(n node, p *initPlan) (types.NodeRecord, error) {
 	if err != nil {
 		return types.NodeRecord{}, err
 	}
-	roles := []types.Role{types.RoleAdmin}
+	var roles []types.Role
+	if p.voucher {
+		roles = append(roles, types.RoleAdmin)
+	}
 	if p.relay {
 		roles = append(roles, types.RoleRelayCapable)
 	}
@@ -352,8 +384,10 @@ func founderRecord(n node, p *initPlan) (types.NodeRecord, error) {
 	}, nil
 }
 
-// reportCreated describes a network that has just come into existence.
-func (a *app) reportCreated() error {
+// reportCreated describes a network that has just come into existence, with
+// its break-glass secret where this is the one time it is shown, setting
+// shown once it is.
+func (a *app) reportCreated(secret *types.DisablementSecret, shown *bool) error {
 	a.node = nil
 	auth, err := a.networkLog()
 	if err != nil {
@@ -370,9 +404,9 @@ func (a *app) reportCreated() error {
 	if name := a.localAdminName(state); name != "" {
 		a.field("Admin", "%s", name)
 	}
-	// The founder of a ceremony has the file; whoever applied it may not.
-	if path := a.home.join(breakGlassFile(state.Network())); fileExists(path) {
-		a.field("Break-glass", "%s (keep offline)", path)
+	if secret != nil {
+		a.field("Break-glass", "%s", backupLine(breakGlassLine, secret[:]))
+		*shown = true
 	}
 	if st := a.node.status(); st != nil && st.Operator != "" {
 		a.field("Operator", "%s", st.Operator)
@@ -383,26 +417,26 @@ func (a *app) reportCreated() error {
 	if a.node.status() == nil && state.IsMember(id) {
 		a.startHint()
 	}
+	if secret != nil {
+		a.breakGlassWarning()
+	}
 	return nil
 }
 
-func (a *app) writeDisablementSecrets(network string) ([]types.Hash, error) {
-	lines := []string{
-		"# juist break-glass secrets for network " + network,
-		"# Any one of these authorizes recovery if the admin quorum is lost.",
-		"# Move this file offline. Losing these AND the admin keys makes the",
-		"# network unrecoverable, which is the security property, not a bug.",
+// drawBreakGlass draws the network's one break-glass secret, which juist
+// create shows once and writes nowhere, and the genesis's commitment to it.
+func drawBreakGlass() (types.DisablementSecret, types.Hash, error) {
+	var s types.DisablementSecret
+	if _, err := rand.Read(s[:]); err != nil {
+		return s, types.Hash{}, fmt.Errorf("drawing the break-glass secret: %w", err)
 	}
-	commitments := make([]types.Hash, 0, numDisablementSecrets)
-	for range numDisablementSecrets {
-		s := make([]byte, types.DisablementSecretSize)
-		if _, err := rand.Read(s); err != nil {
-			return nil, fmt.Errorf("drawing a break-glass secret: %w", err)
-		}
-		lines = append(lines, b64.EncodeToString(s))
-		commitments = append(commitments, types.DisablementCommit(s))
-	}
-	return commitments, a.home.writeSecret(breakGlassFile(network), lines)
+	return s, types.DisablementCommit(s[:]), nil
+}
+
+// breakGlassWarning says what the break-glass secret just shown is for.
+func (a *app) breakGlassWarning() {
+	a.warn("the break-glass secret is shown only now and kept nowhere: keep it safe, apart from the admin keys")
+	a.hint("with it, juist network disable ends the network once too few admin keys are left to change it")
 }
 
 // parseAdminSpec parses NAME=KEY[:VOTES].

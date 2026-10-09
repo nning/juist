@@ -117,7 +117,10 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	t.Log("joining")
 	fb.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
 	lx.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
-	fb.run(t, "juist create interop --device fb")
+	glass := breakGlassLine.FindString(fb.run(t, "juist create interop --device fb --voucher"))
+	if glass == "" {
+		t.Fatal("juist create showed no break-glass line")
+	}
 	invite(t, fb, lx, "juist join '%s'")
 
 	fb4 := strings.TrimSpace(fb.run(t, `ifconfig juist0 inet | awk '/inet / {print $2; exit}'`))
@@ -172,6 +175,9 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 		"pkill -f '[p]robe serve fb-web'; sysrc -x juist_serve_env juist_serve_args", time.Minute)
 	t.Run("rename", func(t *testing.T) {
 		rename(t, fb, lx, fb4, fb6)
+	})
+	t.Run("disable", func(t *testing.T) {
+		disable(t, fb, lx, fb4, glass)
 	})
 	t.Run("removal", func(t *testing.T) {
 		fb.run(t, "pkg delete -y juist")

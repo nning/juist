@@ -37,11 +37,11 @@ home · connected
   Ports         udp/41643
   Updated       just now
 
-NAME                  IPV4         IPV6                                    ROLES                   REACHED
-laptop (this device)  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0  voucher                 -
-nas                   198.18.36.2  fd4c:8a21:e3f:77c0:1e4b:a923:6d05:f18e  names mail.example.org  direct
-vps                   198.18.36.3  fd4c:8a21:e3f:c2d9:84f1:3b6a:e057:29dc  voucher, relay          direct
-phone                 198.18.36.4  fd4c:8a21:e3f:e83:5a7d:f12c:9b46:d371   -                       relayed
+NAME                  IPV4         IPV6                                    ROLES                            REACHED
+laptop (this device)  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0  -                                -
+nas                   198.18.36.2  fd4c:8a21:e3f:77c0:1e4b:a923:6d05:f18e  voucher, names mail.example.org  direct
+vps                   198.18.36.3  fd4c:8a21:e3f:c2d9:84f1:3b6a:e057:29dc  voucher, relay                   direct
+phone                 198.18.36.4  fd4c:8a21:e3f:e83:5a7d:f12c:9b46:d371   -                                relayed
 ```
 
 The first line names the network and its state. Below come the details, the
@@ -56,6 +56,7 @@ The state on the first line is one of these:
 | `waiting for peers` | there are other devices, but none has been heard from yet |
 | `no tunnel up` | other devices are known, but no tunnel to them carries traffic |
 | `limited` | this device's view may be out of date, so it keeps tunnels only to vouchers (see Freshness below) |
+| `disabled` | the network was ended with a break-glass secret; start over with `juist reset` |
 | `removed` | this device is no longer in the network |
 | `juistd not running` | the daemon is not running; start it (see [Troubleshooting]({{< relref "docs/troubleshooting" >}})) |
 
@@ -67,7 +68,7 @@ The state on the first line is one of these:
 - `Relays`: how many devices may relay, and which one this device uses. A [relay]({{< relref "docs/relays" >}}) passes traffic between two devices that cannot reach each other directly.
 - `Exit node`: which device carries this device's internet traffic, if any. See [Exit nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: the domain under which this device finds the others, such as `home.juist`, or why it cannot. See [Names]({{< relref "docs/names" >}}).
-- `Freshness`: when a voucher last confirmed that this device's view of the network is current, and how long that stays valid. A voucher is a device the network trusts to confirm this, every hour. After 48 hours without one, the line reads `expired; vouchers only`. See [Removing a device]({{< relref "docs/remove" >}}).
+- `Freshness`: when a voucher last confirmed that this device's view of the network is current, and how long that stays valid. A voucher is a device the network trusts to confirm this, every hour. After 48 hours without one, the line reads `expired; vouchers only`; a day before, a warning says when. Where no device vouches, the line reads `unchecked: no voucher`, and where two devices may relay, a hint suggests them as vouchers. See [Removing a device]({{< relref "docs/remove" >}}).
 - `Published`: the names published on this device that it serves, or why
   not. See [Publishing services]({{< relref "docs/publishing" >}}).
 - `Ingress`: on an ingress, whether it runs, the names it serves, the ports

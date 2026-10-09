@@ -168,6 +168,7 @@ var aboutSubject = map[types.Kind]bool{
 	types.KindSetDomain:         false,
 	types.KindSetPublished:      true,
 	types.KindRenameNode:        true,
+	types.KindDisable:           false,
 }
 
 // Open reads the change as the admin key admin, and checks that it is what

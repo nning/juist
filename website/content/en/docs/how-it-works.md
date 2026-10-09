@@ -54,8 +54,8 @@ give roles, rename it. Whoever runs `juist create` is its first admin.
 
 An admin signs changes with an admin key. The keys live in the admin's
 keystore, `~/.config/juist` in their home directory, on each machine they
-approve from. juistd never holds them. A key never leaves the machine it was
-made on, so an admin with two laptops has a key on each.
+approve from. juistd never holds them. A key leaves the machine it was made
+on only as a backup line, so an admin with two laptops has a key on each.
 
 The **quorum** is how many admin votes a change needs. It is 1 by default, so
 one admin decides alone. After `juist admins quorum 2`, every change needs two
@@ -155,18 +155,28 @@ statement from the last 48 hours is fresh. A member without one is stale: it
 keeps tunnels only to vouchers until it hears from one again. So a removed
 device can be carried along for 48 hours at most.
 
-This has three consequences:
+This has four consequences:
 
-- Keep at least one voucher online. The device that created the network is its
-  first voucher. If every voucher is offline for more than 48 hours, all other
-  members fall back to tunnels with vouchers only.
+- A new network has no voucher, so it does not check freshness at all.
+  A removal still reaches every device once it is in touch with one that
+  knows; there is just no limit on how long a cut-off device can take.
+  `juist create --voucher` makes the first device a voucher.
+- Make only devices vouchers that are always on, such as a VPS or a home
+  server. If too few vouchers are online for 48 hours, every other member
+  falls back to tunnels with vouchers only. A network of laptops and phones
+  that are often off is better without vouchers.
 - With one voucher, you trust that it is honest. After
   `juist admins vouchers 2`, a member is fresh only with statements from two
-  vouchers, so one lying voucher is not enough.
-- A network with no voucher does not check freshness at all.
+  vouchers, so one lying voucher is not enough. Keep a spare: two of three
+  vouchers on hosts that fail apart, not two machines at one provider.
+- A relay can cut a device off from the others. With one voucher needed, do
+  not make a relay the voucher, or that one machine can both cut a device off
+  and keep it fresh.
 
 `juist status` shows the state in its `Freshness` line, for example
-`vouched just now, valid 48h` or `expired; vouchers only`.
+`vouched just now, valid 48h`, `expired; vouchers only` or `unchecked: no
+voucher`. It warns a day ahead: `freshness ends in 20h unless 2 vouchers vouch
+again`.
 
 ## Terms {#terms}
 
@@ -185,6 +195,6 @@ This has three consequences:
 | quorum | How many admin votes a change needs |
 | role | An extra job for a device: voucher, relay, exit, ingress, service or publish |
 | invite | A code or link that lets one new device join |
-| freshness | Whether a device has heard from a voucher in the last 48 hours |
+| freshness | Whether enough vouchers have confirmed a device's view in the last 48 hours |
 | voucher | A device that confirms every hour that the network's state is current |
 | relay | A member that passes traffic between members that cannot reach each other |

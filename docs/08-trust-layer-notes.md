@@ -263,7 +263,7 @@ What it forecloses above that range, and by when, is a section of its own below.
 A node's recipient key is recorded as **two fields** (`X25519`, `MLKEM`) rather
 than one opaque hybrid blob, so each half is validated as the key it is, and so
 the ML-KEM half is a first-class field for the per-pair preshared-key hedge
-of M12a ([05-roadmap.md](05-roadmap.md)). Domain separation
+of M15 ([05-roadmap.md](05-roadmap.md)). Domain separation
 between the two uses comes from HPKE's own suite labelling and from a distinct
 HKDF label on the reserved side.
 
@@ -407,7 +407,7 @@ extension bucket and no ignorable-unknown-field path** — either would reintrod
 the split view by letting two builds act on different subsets of the same
 record.
 
-What is still open, and belongs with M16's packaging: the
+What is still open, and belongs with M18's packaging: the
 gossip hello does not carry the versions a node supports, `juist status` cannot
 say which members would be stranded, and nothing stops an admin authoring an
 upgrade before the network is ready for it. Until those exist, raising the
@@ -491,7 +491,7 @@ carries the rest. The same reasoning has not been carried through
 `Have`, the peer re-offers records it already holds, and the two make no
 progress. That is unreachable until a network has authored 4096 records without
 a checkpoint, and closing it is part of deciding **when compaction runs without
-an admin asking** — undecided, and the decision this binds; M14 makes it.
+an admin asking** — undecided, and the decision this binds; M16 makes it.
 
 ## Storage
 
@@ -587,7 +587,7 @@ keep:
 Schema 6 changes the network's name. The rule a later change has to keep:
 **nothing identifies a network by its name.** Records, pins, invites and
 admissions name it by its genesis hash, and so must anything added later. A
-name keyed on locally, as the keystore's break-glass and genesis files are,
+name keyed on locally, as the keystore's admin key and genesis files are,
 is the one it had when that was written, and stays so.
 
 ## Admin encryption keys
@@ -663,14 +663,30 @@ The rules a later change has to keep:
 - **A rename is checked as an admission is** (`checkNodeAdmissible`), since
   a holder of `publish` shares under the label its name gives.
 
+## Disable records
+
+A `Disable` record reveals a break-glass secret and ends the network (M12).
+The rules a later change has to keep:
+
+- **Its secret is its whole authority.** It carries no signature, which
+  could only give it a second encoding, and is checked against the
+  commitments fixed at genesis, which every checkpoint restates unchanged.
+- **It counts wherever it hangs.** Resolution takes in every stored disable
+  record the walk does not reach, below the anchor, past the orphan budget or
+  past a schema this build stops at, and gossip hands it to every peer that
+  lacks it; a device hands it to every member before it drops the tunnels
+  log sync runs through. Nothing follows it.
+- **It is valid under every schema**, since a network that lost its admins
+  cannot upgrade first. A build that predates it cannot decode it and keeps
+  running.
+- **It disables, it never recovers.** A secret in the log is read by every
+  member that relays it, so a record that gave authority to someone would be
+  one any of them could issue again for themselves.
+
 ## Not built in M1, on purpose
 
 - **Freshness leases.** Built at M4, outside the record schema: see
   [11-enrollment-and-freshness-notes.md](11-enrollment-and-freshness-notes.md).
-- **A disablement record.** The genesis ceremony commits to break-glass secrets
-  and `State.ValidDisablement` verifies a preimage, which is what the schema
-  needs. *What revealing one authorizes* is planned in
-  [05-roadmap.md](05-roadmap.md) as M12.
 - **Route consumption.** Validated from M1, read by nothing until M6.
 
 ### The obligation M1 hands to M6

@@ -94,8 +94,9 @@ roborazzi {
 }
 
 tasks.withType<Test>().configureEach {
-    // CoreTest reads what the Go side's test writes.
+    // CoreTest and VpnConfigTest read what the Go side's tests write.
     inputs.file(repo.file("mobile/testdata/view.json"))
+    inputs.file(repo.file("mobile/testdata/establish.json"))
     maxHeapSize = "3g"
     // Robolectric sets up shared memory through FileDescriptor's internals.
     jvmArgs("--add-opens=java.base/java.io=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")

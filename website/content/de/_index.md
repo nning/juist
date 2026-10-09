@@ -19,7 +19,7 @@ Kein Server in der Mitte
 : Um ein Gerät aufzunehmen oder zu entfernen, braucht es ein Quorum von Admins, jeder mit einem Schlüssel auf seinen eigenen Geräten. Die Schlüssel bleiben im Keystore, der Daemon bekommt sie nie.
 
 Fail-closed
-: Hat sich 48 Stunden lang kein Voucher für ein Gerät verbürgt, behält es nur noch Tunnel zu Vouchern. So hält es keine Verbindung zu einem Gerät, das längst entfernt wurde.
+: Hat ein Netz Voucher und haben sich 48 Stunden lang zu wenige von ihnen für ein Gerät verbürgt, behält es nur noch Tunnel zu Vouchern. So hält es keine Verbindung zu einem Gerät, das längst entfernt wurde.
 {{< /rules >}}
 
 ## Das erste Netz
@@ -82,7 +82,7 @@ Warum juist das hinnimmt
 : Es gibt keinen Server, den jedes Gerät fragen könnte. Die Frische setzt dem eine Grenze: Hat sich 48 Stunden lang kein Voucher für ein Gerät verbürgt, behält es nur noch Tunnel zu Vouchern.
 
 Was du tun kannst
-: M Voucher verlangen. Dann hält die Grenze auch, wenn M − 1 von ihnen lügen.
+: Geräte, die ständig laufen, zu Vouchern machen und M von ihnen verlangen. Dann hält die Grenze auch, wenn M − 1 von ihnen lügen. Ein neues Netz hat keine Voucher und keine Grenze.
 {{< /trade >}}
 
 {{< trade title="Ein verlorenes Quorum ist endgültig" knob="mehr Admins, als das Quorum braucht" >}}

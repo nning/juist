@@ -94,11 +94,13 @@ func (a *app) askNow(ctx context.Context, text string) (bool, error) {
 // confirm asks a question defaulting to no. Without a terminal to ask on it
 // refuses, so a script has to say --yes rather than get a default; an
 // interrupt is a no.
-func (a *app) confirm(text string) (bool, error) {
+func (a *app) confirm(text string) (bool, error) { return a.confirmAs(question{text: text}) }
+
+func (a *app) confirmAs(q question) (bool, error) {
 	if !a.interactive {
 		return false, errors.New("needs confirmation; pass --yes or run in a terminal")
 	}
-	ok, err := a.ask(a.ctx, question{text: text})
+	ok, err := a.ask(a.ctx, q)
 	if errors.Is(err, context.Canceled) {
 		return false, errAborted
 	}
@@ -106,11 +108,19 @@ func (a *app) confirm(text string) (bool, error) {
 }
 
 // proceed is confirm where no is the end of the command; yes skips asking.
-func (a *app) proceed(yes bool, text string) error {
+func (a *app) proceed(yes bool, text string) error { return a.proceedAs(yes, question{text: text}) }
+
+// proceedNow is proceed for what cannot be undone: only what is typed after
+// the question answers it.
+func (a *app) proceedNow(yes bool, text string) error {
+	return a.proceedAs(yes, question{text: text, fresh: true})
+}
+
+func (a *app) proceedAs(yes bool, q question) error {
 	if yes {
 		return nil
 	}
-	ok, err := a.confirm(text)
+	ok, err := a.confirmAs(q)
 	if err != nil {
 		return err
 	}

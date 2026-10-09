@@ -15,13 +15,17 @@ import (
 // does not answer: an announcement held can name a disco key its member has
 // since replaced, as every restart does. Each of these is asked after in
 // fewer rounds the longer it stays down, since a member gone for good would
-// otherwise be looked up, and seen to be, every round for ever.
+// otherwise be looked up, and seen to be, every round for ever. A stale node
+// looks up the members it keeps no tunnel to on the same schedule: their
+// relays are in its map, and a relay's announcement can only reach it there.
 //
 // At most one round's worth is returned, those due longest first and the
-// unheard among equals, and only those returned are rescheduled: a member
-// left out keeps its turn for the next round.
+// unheard among equals, members set aside only after every other one due,
+// and only those returned are rescheduled: a member left out keeps its turn
+// for the next round.
 func (d *Daemon) wanted() []types.Identity {
 	unheard := d.unheard()
+	aside := d.setAside()
 	now := d.now()
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -34,23 +38,44 @@ func (d *Daemon) wanted() []types.Identity {
 		seeks[id] = p
 	}
 	d.unheardPlan = seeks
+	asides := make(map[types.Identity]*lookupPlan, len(aside))
+	for _, id := range aside {
+		if d.down[id] != nil || slices.ContainsFunc(d.installed, func(p namedPeer) bool { return p.id == id }) {
+			continue
+		}
+		p := d.asidePlan[id]
+		if p == nil {
+			p = &lookupPlan{lookAt: now}
+		}
+		asides[id] = p
+	}
+	d.asidePlan = asides
 	type due struct {
 		id      types.Identity
 		p       *lookupPlan
 		unheard bool
+		aside   bool
 	}
 	var all []due
 	for id, p := range seeks {
 		if !now.Before(p.lookAt) {
-			all = append(all, due{id, p, true})
+			all = append(all, due{id, p, true, false})
 		}
 	}
 	for id, p := range d.down {
 		if !now.Before(p.lookAt) {
-			all = append(all, due{id, &p.lookupPlan, false})
+			all = append(all, due{id, &p.lookupPlan, false, false})
+		}
+	}
+	for id, p := range asides {
+		if !now.Before(p.lookAt) {
+			all = append(all, due{id, p, false, true})
 		}
 	}
 	slices.SortFunc(all, func(a, b due) int {
+		if a.aside != b.aside {
+			return cmp.Compare(boolInt(a.aside), boolInt(b.aside))
+		}
 		if c := a.p.lookAt.Compare(b.p.lookAt); c != 0 {
 			return c
 		}
@@ -96,6 +121,31 @@ func (d *Daemon) unheard() []types.Identity {
 			continue
 		}
 		if _, held := d.endpoints.Get(n.Identity); !held {
+			out = append(out, n.Identity)
+		}
+	}
+	return out
+}
+
+// setAside returns the live members a stale node holds an announcement for:
+// none of them has a tunnel, so none is ever found down.
+func (d *Daemon) setAside() []types.Identity {
+	if !d.Status().Stale {
+		return nil
+	}
+	state, err := d.TrustedState()
+	if err != nil {
+		return nil
+	}
+	now := d.now().Unix()
+	nodes := state.Nodes()
+	var out []types.Identity
+	for i := range nodes {
+		n := &nodes[i]
+		if n.Identity == d.self || n.Expired(now) {
+			continue
+		}
+		if _, held := d.endpoints.Get(n.Identity); held {
 			out = append(out, n.Identity)
 		}
 	}

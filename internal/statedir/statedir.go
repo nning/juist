@@ -30,7 +30,7 @@ const (
 
 // StateFiles are what a daemon keeps in its state directory beside the log
 // and the node keys, for a reset of a home no daemon runs from.
-var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
+var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, RelayCertFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
 	SubnetsFile, SubnetServeFile, NamesFile, PublishServeFile, PublishToFile}
 
 // ExitFile holds the exit node this device's owner chose, or "off"; without
@@ -63,6 +63,13 @@ const WaitingFile = "waiting.cbor"
 
 // WaitingPath returns where a home directory keeps them.
 func WaitingPath(home string) string { return filepath.Join(home, WaitingFile) }
+
+// RelayCertFile holds this device's relay certificate and key, so a restart
+// keeps the hash its members pinned.
+const RelayCertFile = "relay-cert.pem"
+
+// RelayCertPath returns where a home directory keeps it.
+func RelayCertPath(home string) string { return filepath.Join(home, RelayCertFile) }
 
 // EndpointCacheFile is the cache's name inside the state directory.
 const EndpointCacheFile = "endpoints.cbor"

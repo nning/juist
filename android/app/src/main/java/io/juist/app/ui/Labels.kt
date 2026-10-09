@@ -31,6 +31,7 @@ fun stateLabel(s: State): Int = when (s) {
     State.None -> R.string.state_none
     State.Joining -> R.string.state_joining
     State.Unstarted -> R.string.state_unstarted
+    State.Disabled -> R.string.state_disabled
     State.Removed -> R.string.state_removed
     State.Disconnected -> R.string.state_disconnected
     State.Refused -> R.string.state_refused
@@ -45,6 +46,7 @@ fun stateLabel(s: State): Int = when (s) {
 @StringRes
 fun stateExplanation(s: State): Int? = when (s) {
     State.Unstarted -> R.string.state_unstarted_about
+    State.Disabled -> R.string.state_disabled_about
     State.Removed -> R.string.state_removed_about
     State.Disconnected -> R.string.state_disconnected_about
     State.Refused -> R.string.state_refused_about
@@ -62,7 +64,7 @@ fun stateColor(s: State): Color {
     return when (s) {
         State.Connected -> status.direct
         State.Limited, State.Waiting, State.NoTunnel -> status.relay
-        State.Removed, State.Disconnected, State.Refused, State.Unstarted -> status.alarm
+        State.Disabled, State.Removed, State.Disconnected, State.Refused, State.Unstarted -> status.alarm
         else -> status.absent
     }
 }
@@ -184,6 +186,7 @@ fun alarmTitle(a: Alarm): String = when (a.kind) {
     "noTraffic" -> stringResource(R.string.alarm_no_traffic, names(a.names))
     "conflicted" -> pluralStringResource(R.plurals.alarm_conflicted, a.count, a.count)
     "noRelay" -> stringResource(R.string.alarm_no_relay)
+    "freshnessEnding" -> pluralStringResource(R.plurals.alarm_freshness_ending, a.count, a.count)
     "lost" -> stringResource(R.string.alarm_lost)
     "unrevoked" -> stringResource(R.string.alarm_unrevoked)
     "silent" -> if (a.names.isNotEmpty()) {
@@ -204,6 +207,7 @@ fun alarmHint(a: Alarm): Int? = when (a.kind) {
     "refused" -> R.string.alarm_refused_hint
     "noTraffic" -> R.string.alarm_no_traffic_hint
     "noRelay" -> R.string.alarm_no_relay_hint
+    "freshnessEnding" -> R.string.alarm_freshness_ending_hint
     "unrevoked" -> R.string.alarm_unrevoked_hint
     else -> null
 }

@@ -79,7 +79,8 @@ type Service struct {
 
 	// session is what a restarted mesh announces again, for as long as the
 	// device's keys are sessionKeys: new keys take a new one, since a
-	// rotation answers a device that may have been copied.
+	// rotation answers a device that may have been copied. Its relay
+	// certificate outlives the process too (NewStoredSession).
 	session     *Session
 	sessionKeys types.NodeKeys
 	sessionID   types.Identity
@@ -766,9 +767,12 @@ func (s *Service) startMeshLocked() error {
 	o.Authority, o.Storage = s.auth, s.store
 	o.Identity, o.Recipient, o.WireGuard = s.keys.Identity, s.keys.Recipient, s.keys.WireGuardPrivate()
 	if s.session == nil || s.sessionID != s.keys.Identity.Public() || s.sessionKeys != s.keys.Public {
-		sess, err := NewSession()
+		sess, err := NewStoredSession(s.opts.Home, s.keys.Identity.Public(), s.keys.Public)
 		if err != nil {
 			return err
+		}
+		if s.session != nil && s.sessionID == s.keys.Identity.Public() {
+			sess.follow(s.session)
 		}
 		s.session, s.sessionID, s.sessionKeys = sess, s.keys.Identity.Public(), s.keys.Public
 	}
@@ -969,6 +973,9 @@ func (s *Service) Status() ipc.Status {
 		}
 		if s.meshErr != nil && !errors.Is(s.meshErr, ErrNotMember) {
 			st.StartError = s.meshErr.Error()
+		}
+		if d := s.auth.Disabled(); d != nil {
+			st.Disabled = d.At.String()
 		}
 		st.Exit = s.exitWithoutMeshLocked(state, st.NotMember)
 		if s.serveSubnets || s.subnetsOff {
@@ -1178,7 +1185,7 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 	case ipc.CmdLog:
 		var records, orphans [][]byte
 		if records, err = s.chain(); err == nil && req.Orphans {
-			orphans, err = s.orphans(records)
+			orphans, err = s.orphans(records, maxOrphans)
 		}
 		if err == nil {
 			return ipc.Response{Records: records, Orphans: orphans}
@@ -1259,8 +1266,8 @@ var errNoNetwork = errors.New("this device is not in a network yet")
 
 // reset returns the device to a fresh install: everything in the state
 // directory but the lock, the socket and the homes of the host's other
-// instances goes, and the device gets new keys. A member is reset only when
-// forced, since the others keep listing it.
+// instances goes, and the device gets new keys. A member of a network not
+// disabled is reset only when forced, since the others keep listing it.
 func (s *Service) reset(force bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1270,9 +1277,10 @@ func (s *Service) reset(force bool) error {
 	member := false
 	switch {
 	case s.mesh != nil:
-		member = !s.mesh.Status().NotMember
+		st := s.mesh.Status()
+		member = !st.NotMember && st.Disabled == ""
 	case s.auth != nil:
-		member = s.auth.State().IsMember(s.keys.Identity.Public())
+		member = s.auth.Disabled() == nil && s.auth.State().IsMember(s.keys.Identity.Public())
 	}
 	if member && !force {
 		return errors.New(ipc.ErrStillMember)
@@ -1370,9 +1378,9 @@ func (s *Service) setOperatorLocked(uid uint32) error {
 // maxOrphans bounds the records off the active chain one reply carries.
 const maxOrphans = 4096
 
-// orphans returns the stored records that are not on chain, the active chain
-// as encoded.
-func (s *Service) orphans(chain [][]byte) ([][]byte, error) {
+// orphans returns up to limit stored records that are not on chain, the
+// active chain as encoded; the record that disabled the network first.
+func (s *Service) orphans(chain [][]byte, limit int) ([][]byte, error) {
 	on := make(map[types.Hash]bool, len(chain))
 	for _, b := range chain {
 		aum, err := types.DecodeAUM(b)
@@ -1382,15 +1390,30 @@ func (s *Service) orphans(chain [][]byte) ([][]byte, error) {
 		on[aum.Hash()] = true
 	}
 	s.mu.Lock()
-	st := s.store
+	st, mesh := s.store, s.mesh
+	var disabled *log.DisabledError
+	if mesh == nil && s.auth != nil {
+		disabled = s.auth.Disabled()
+	}
 	s.mu.Unlock()
+	if mesh != nil {
+		disabled = mesh.Disabled()
+	}
 	hashes, err := st.Hashes()
 	if err != nil {
 		return nil, err
 	}
 	var out [][]byte
+	if disabled != nil && !on[disabled.At] {
+		if aum, err := st.AUM(disabled.At); err == nil {
+			if b, err := aum.Encode(); err == nil {
+				out = append(out, b)
+				on[disabled.At] = true
+			}
+		}
+	}
 	for _, h := range hashes {
-		if len(out) == maxOrphans {
+		if len(out) >= limit {
 			break
 		}
 		if on[h] {

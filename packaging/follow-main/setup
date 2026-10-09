@@ -1,31 +1,48 @@
 #!/bin/sh
-# Sets up juist-follow-main on a Debian or Ubuntu host: run as root from this
-# directory, with GOROOT of a Go to copy when the system has none recent.
+# Sets up juist-follow-main on a Debian, Ubuntu or FreeBSD host: run as root
+# from this directory, with GOROOT of a Go to copy when the system has none recent.
 #   sudo sh setup [GOROOT]
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo "setup: run as root" >&2; exit 1; }
-for c in git make dpkg-deb apt-get; do
+if [ "$(uname)" = FreeBSD ]; then
+	freebsd=yes needs="git gmake pkg" home=/var/db/juist-build
+else
+	freebsd= needs="git make dpkg-deb apt-get" home=/var/lib/juist-build
+fi
+for c in $needs; do
 	command -v "$c" >/dev/null || { echo "setup: $c not found" >&2; exit 1; }
 done
+# as_build runs a command as juist-build, with its home as HOME.
+as_build() {
+	if [ -n "$freebsd" ]; then
+		env HOME="$home" su -m juist-build -c 'exec "$@"' follow-main "$@"
+	else
+		runuser -u juist-build -- env HOME="$home" "$@"
+	fi
+}
 lib=/usr/local/lib/juist-follow-main
 install -d -m 755 "$lib"
 if [ $# -gt 0 ]; then
 	# A copy of root's own: the build user must not run a Go others can change.
 	"$1/bin/go" version
 	rm -rf "$lib/go.tmp"
-	cp -r --no-preserve=ownership "$1" "$lib/go.tmp"
-	chown -R root:root "$lib/go.tmp"
+	cp -R "$1" "$lib/go.tmp"
+	chown -R 0:0 "$lib/go.tmp"
 	chmod -R go-w "$lib/go.tmp"
 	rm -rf "$lib/go"
 	mv "$lib/go.tmp" "$lib/go"
 fi
-getent passwd juist-build >/dev/null ||
-	useradd --system --user-group --home-dir /var/lib/juist-build --create-home \
-		--shell /usr/sbin/nologin juist-build
-home=/var/lib/juist-build
+if [ -n "$freebsd" ]; then
+	pw usershow juist-build >/dev/null 2>&1 ||
+		pw useradd juist-build -d "$home" -m -s /usr/sbin/nologin -c "juist follow-main"
+else
+	getent passwd juist-build >/dev/null ||
+		useradd --system --user-group --home-dir "$home" --create-home \
+			--shell /usr/sbin/nologin juist-build
+fi
 # The repository is private: juist-build reads it with a deploy key of its own.
 if [ ! -e "$home/.git-credentials" ]; then
-	runuser -u juist-build -- env HOME="$home" sh -eu -c '
+	as_build sh -eu -c '
 		cd
 		mkdir -p -m 700 ~/.ssh
 		[ -e ~/.ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -C "juist-build@$(hostname)" -f ~/.ssh/id_ed25519
@@ -33,14 +50,25 @@ if [ ! -e "$home/.git-credentials" ]; then
 		git config --global url.git@github.com:.insteadOf https://github.com/'
 fi
 install -m 755 build install "$lib/"
-install -m 644 juist-follow-main.service juist-follow-main.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now juist-follow-main.timer
+if [ -n "$freebsd" ]; then
+	install -m 755 run "$lib/"
+	install -m 644 juist-follow-main.cron /etc/cron.d/juist-follow-main
+	install -d -m 755 /usr/local/etc/newsyslog.conf.d
+	install -m 644 juist-follow-main.newsyslog /usr/local/etc/newsyslog.conf.d/juist-follow-main.conf
+else
+	install -m 644 juist-follow-main.service juist-follow-main.timer /etc/systemd/system/
+	systemctl daemon-reload
+	systemctl enable --now juist-follow-main.timer
+fi
 if [ ! -e "$home/.git-credentials" ]; then
 	# Read as juist-build: root must not follow links in its home.
-	runuser -u juist-build -- cat "$home/.ssh/id_ed25519.pub" > "$lib/deploy-key.pub"
+	as_build cat "$home/.ssh/id_ed25519.pub" > "$lib/deploy-key.pub"
 	chmod 644 "$lib/deploy-key.pub"
 	echo "setup: add $lib/deploy-key.pub to nning/juist as a read-only deploy key:"
 	cat "$lib/deploy-key.pub"
 fi
-echo "setup: journalctl -fu juist-follow-main shows the first build"
+if [ -n "$freebsd" ]; then
+	echo "setup: /var/log/juist-follow-main.log shows the first build"
+else
+	echo "setup: journalctl -fu juist-follow-main shows the first build"
+fi

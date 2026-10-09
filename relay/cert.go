@@ -9,6 +9,9 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base32"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -26,10 +29,10 @@ type selfSigned struct {
 	hostName string
 }
 
-// certLifetime is deliberately long. The certificate is pinned by hash in an
-// announcement that is reissued whenever this process restarts, so expiry
-// protects nothing here — while an expired one would take the relay down with
-// an error about clocks.
+// certLifetime is deliberately long. The certificate is pinned by hash in a
+// signed announcement and kept across restarts, so expiry protects nothing
+// here — while an expired one would take the relay down with an error about
+// clocks.
 const certLifetime = 20 * 365 * 24 * time.Hour
 
 // A Certificate is a relay's TLS identity. A caller that restarts its relay
@@ -44,6 +47,68 @@ func NewCertificate() (*Certificate, error) {
 	}
 	return &Certificate{s: s}, nil
 }
+
+const (
+	pemCert  = "CERTIFICATE"
+	pemKey   = "EC PRIVATE KEY"
+	pemOwner = "Juist-Owner"
+)
+
+// Encode returns the certificate and its key as PEM, bound to owner: the
+// device keys it may be loaded for again.
+func (c *Certificate) Encode(owner [32]byte) ([]byte, error) {
+	priv, ok := c.s.tls.PrivateKey.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("relay: certificate key is not ECDSA")
+	}
+	der, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("relay: encoding the certificate key: %w", err)
+	}
+	out := pem.EncodeToMemory(&pem.Block{Type: pemCert, Bytes: c.s.tls.Certificate[0]})
+	return append(out, pem.EncodeToMemory(&pem.Block{Type: pemKey, Bytes: der,
+		Headers: map[string]string{pemOwner: hex.EncodeToString(owner[:])}})...), nil
+}
+
+// DecodeCertificate reads what [Certificate.Encode] wrote, and fails for any
+// owner but the one it was bound to, or a certificate that has expired.
+func DecodeCertificate(b []byte, owner [32]byte, now time.Time) (*Certificate, error) {
+	certBlock, rest := pem.Decode(b)
+	keyBlock, _ := pem.Decode(rest)
+	if certBlock == nil || certBlock.Type != pemCert || keyBlock == nil || keyBlock.Type != pemKey {
+		return nil, errors.New("relay: not a stored relay certificate")
+	}
+	if keyBlock.Headers[pemOwner] != hex.EncodeToString(owner[:]) {
+		return nil, errors.New("relay: stored certificate belongs to other device keys")
+	}
+	leaf, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("relay: parsing the stored certificate: %w", err)
+	}
+	priv, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("relay: parsing the stored certificate key: %w", err)
+	}
+	pub, ok := leaf.PublicKey.(*ecdsa.PublicKey)
+	if !ok || !pub.Equal(&priv.PublicKey) {
+		return nil, errors.New("relay: stored certificate and key do not match")
+	}
+	host := hostNameFor(priv)
+	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != host {
+		return nil, errors.New("relay: stored certificate names another key")
+	}
+	if !now.Before(leaf.NotAfter) {
+		return nil, errors.New("relay: stored certificate has expired")
+	}
+	return &Certificate{s: &selfSigned{
+		tls:      tls.Certificate{Certificate: [][]byte{certBlock.Bytes}, PrivateKey: priv, Leaf: leaf},
+		sha256:   sha256.Sum256(certBlock.Bytes),
+		hostName: host,
+	}}, nil
+}
+
+// Hash returns the SHA-256 of the certificate members pin.
+func (c *Certificate) Hash() [32]byte { return c.s.sha256 }
 
 // newSelfSigned draws a fresh key and certificate.
 func newSelfSigned() (*selfSigned, error) {

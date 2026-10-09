@@ -84,6 +84,8 @@
     <string name="state_failed">Not started</string>
     <string name="state_unstarted">Not connected</string>
     <string name="state_unstarted_about">Tunnels are down. juist keeps trying.</string>
+    <string name="state_disabled">Disabled</string>
+    <string name="state_disabled_about">The network was ended with its break-glass secret. Forget it to join another.</string>
     <string name="state_removed">Removed</string>
     <string name="state_removed_about">This phone was removed from the network. Forget the network to join again with a new invite.</string>
     <string name="state_disconnected">Disconnected</string>
@@ -193,6 +195,11 @@
         <item quantity="one">%d device announces another’s key and is ignored</item>
         <item quantity="other">%d devices announce another’s key and are ignored</item>
     </plurals>
+    <plurals name="alarm_freshness_ending">
+        <item quantity="one">Too few vouchers have vouched: limited in %d hour</item>
+        <item quantity="other">Too few vouchers have vouched: limited in %d hours</item>
+    </plurals>
+    <string name="alarm_freshness_ending_hint">A voucher vouches while it runs and reaches this phone. Until enough do again, the phone will reach only vouchers.</string>
     <string name="alarm_no_relay">No device may relay</string>
     <string name="alarm_no_relay_hint">Phones on mobile data often need one. An admin can grant the role to a device with a public address.</string>
     <string name="alarm_lost">A change lost to one made at the same time</string>

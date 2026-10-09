@@ -38,11 +38,11 @@ home · connected
   Ports         udp/41643
   Updated       just now
 
-NAME                  IPV4         IPV6                                    ROLES                   REACHED
-laptop (this device)  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0  voucher                 -
-nas                   198.18.36.2  fd4c:8a21:e3f:77c0:1e4b:a923:6d05:f18e  names mail.example.org  direct
-vps                   198.18.36.3  fd4c:8a21:e3f:c2d9:84f1:3b6a:e057:29dc  voucher, relay          direct
-phone                 198.18.36.4  fd4c:8a21:e3f:e83:5a7d:f12c:9b46:d371   -                       relayed
+NAME                  IPV4         IPV6                                    ROLES                            REACHED
+laptop (this device)  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0  -                                -
+nas                   198.18.36.2  fd4c:8a21:e3f:77c0:1e4b:a923:6d05:f18e  voucher, names mail.example.org  direct
+vps                   198.18.36.3  fd4c:8a21:e3f:c2d9:84f1:3b6a:e057:29dc  voucher, relay                   direct
+phone                 198.18.36.4  fd4c:8a21:e3f:e83:5a7d:f12c:9b46:d371   -                                relayed
 ```
 
 Die erste Zeile nennt das Netz und seinen Zustand. Darunter folgen die
@@ -58,6 +58,7 @@ In der ersten Zeile steht einer dieser Zustände:
 | `waiting for peers` | es gibt andere Geräte, aber noch keines hat sich gemeldet |
 | `no tunnel up` | andere Geräte sind bekannt, aber durch keinen Tunnel zu ihnen fließt Verkehr |
 | `limited` | der Stand dieses Geräts ist womöglich veraltet, deshalb hält es nur Tunnel zu Vouchern (siehe Frische unten) |
+| `disabled` | das Netz wurde mit einem Break-glass-Geheimnis beendet; mit `juist reset` beginnst du von vorn |
 | `removed` | dieses Gerät gehört nicht mehr zum Netz |
 | `juistd not running` | der Daemon läuft nicht, starte ihn (siehe [Fehlersuche]({{< relref "docs/troubleshooting" >}})) |
 
@@ -69,7 +70,7 @@ In der ersten Zeile steht einer dieser Zustände:
 - `Relays`: wie viele Geräte Verkehr weiterleiten dürfen und welches davon dieses Gerät nutzt. Ein [Relay]({{< relref "docs/relays" >}}) leitet Verkehr zwischen zwei Geräten weiter, die sich nicht direkt erreichen.
 - `Exit node`: über welches Gerät der Internetverkehr dieses Geräts läuft, falls überhaupt. Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: die Domain, unter der dieses Gerät die anderen findet, etwa `home.juist`, oder der Grund, warum das nicht geht. Siehe [Namen]({{< relref "docs/names" >}}).
-- `Freshness`: wann ein Voucher zuletzt bestätigt hat, dass dieses Gerät den aktuellen Stand des Netzes kennt, und wie lange das gilt. Ein Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich ausstellt. Nach 48 Stunden ohne Bestätigung steht dort `expired; vouchers only`. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
+- `Freshness`: wann ein Voucher zuletzt bestätigt hat, dass dieses Gerät den aktuellen Stand des Netzes kennt, und wie lange das gilt. Ein Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich ausstellt. Nach 48 Stunden ohne Bestätigung steht dort `expired; vouchers only`; einen Tag vorher sagt eine Warnung, wann. Wo kein Gerät Voucher ist, steht dort `unchecked: no voucher`, und wo zwei Geräte Verkehr weiterleiten dürfen, schlägt ein Hinweis sie als Voucher vor. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
 - `Published`: die auf diesem Gerät veröffentlichten Namen, die es bedient,
   oder warum nicht. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}).
 - `Ingress`: auf einer Ingress, ob sie läuft, welche Namen sie bedient,

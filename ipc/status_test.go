@@ -66,7 +66,7 @@ func TestAFullStatusDecodes(t *testing.T) {
 
 // statusGolden is a full status as the CLI reads it. Adding a field changes it;
 // nothing else may.
-const statusGolden = "b8460158200100000000000000000000000000000000000000000000000000000000000000028141ff" +
+const statusGolden = "b8470158200100000000000000000000000000000000000000000000000000000000000000028141ff" +
 	"0358200300000000000000000000000000000000000000000000000000000000000000046273340558" +
 	"2005000000000000000000000000000000000000000000000000000000000000000606070708080909" +
 	"0a637331300b637331310c0c0d0d0e0e0f0f10f511f5121213637331391463733230151516f5171718" +
@@ -77,7 +77,7 @@ const statusGolden = "b846015820010000000000000000000000000000000000000000000000
 	"00000000182e8163733436182ff5183081637334381831816373343918328163733530183381637335" +
 	"311834f51835637335331836f5183718371838f518391839183a183a183ba301000441ff0541ff183c" +
 	"63733630183d8141ff183e183e183fa101582000000000000000000000000000000000000000000000" +
-	"000000000000000000001840a01841a01842a01843a01844a102601845a018461846"
+	"000000000000000000001840a01841a01842a01843a01844a102601845a018461846184763733731"
 
 // operatorOnly are the status fields a caller who may not operate is not
 // shown. Every other field must be copied by [Status.ForReader].
@@ -141,5 +141,40 @@ func TestAReaderSeesClaimsCoarsely(t *testing.T) {
 	}
 	if !slices.Equal(st.V4Claims, []netip.Prefix{p("198.18.0.5/32"), p("198.18.1.9/32"), p("10.7.0.0/24")}) {
 		t.Fatalf("coarsening changed the operator's status: %v", st.V4Claims)
+	}
+}
+
+// A fresh node warns once the lease completing its threshold is past half
+// its life, which hourly renewals never let happen, and not when stale or
+// where nothing is enforced.
+func TestFreshnessEndsOnlyPastHalfTheLease(t *testing.T) {
+	const now, ttl = 1_800_000_000, 48 * 3600
+	for _, c := range []struct {
+		name  string
+		since int64
+		stale bool
+		want  bool
+	}{
+		{"renewed an hour ago", now - 3600, false, false},
+		{"exactly half", now - ttl/2, false, false},
+		{"past half", now - ttl/2 - 1, false, true},
+		{"stale", now - ttl - 1, true, false},
+	} {
+		s := Status{Derived: Derived{LeaseSigners: 2, Vouchers: 2, Vouching: 2,
+			FreshSince: c.since, FreshUntil: c.since + ttl, Stale: c.stale}}
+		if left, got := s.FreshnessEnding(now); got != c.want {
+			t.Errorf("%s: ending=%v (%v left), want %v", c.name, got, left, c.want)
+		}
+	}
+	if _, got := (&Status{}).FreshnessEnding(now); got {
+		t.Error("a network without vouchers warned that freshness ends")
+	}
+}
+
+func TestVouchAgainAgreesWithTheCount(t *testing.T) {
+	for n, want := range map[int]string{1: "a voucher vouches again", 2: "2 vouchers vouch again"} {
+		if got := (&Status{Derived: Derived{Vouchers: n}}).VouchAgain(); got != want {
+			t.Errorf("%d needed: %q, want %q", n, got, want)
+		}
 	}
 }

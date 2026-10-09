@@ -19,7 +19,7 @@ import (
 )
 
 func networkFamily() family {
-	return family{name: "juist network", intro: "Show, rename and renumber the network, and set its domain.", subs: []subcommand{
+	return family{name: "juist network", intro: "Show, rename and renumber the network, set its domain, or end it.", subs: []subcommand{
 		{name: "show", run: networkShow, forms: [][2]string{{"[NETWORK]", "name and address ranges; every\nnetwork's, without NETWORK"}}},
 		{name: "rename", run: networkRename, forms: [][2]string{{"rename [NETWORK] NAME", "rename the network"}}},
 		{name: "domain", run: networkDomain, forms: [][2]string{
@@ -30,6 +30,9 @@ func networkFamily() family {
 			{"renumber [NETWORK] PREFIX", "move every device into PREFIX,\nsuch as 10.7.0.0/22"},
 			{"renumber [NETWORK] DEVICE ADDR", "move one device to ADDR; with\n--finish, retiring its old one now"},
 			{"renumber [NETWORK] --finish", "retire the old addresses now"},
+		}},
+		{name: "disable", run: networkDisable, forms: [][2]string{
+			{"disable [NETWORK]", "end the network for good with the\nbreak-glass secret: every device stops"},
 		}},
 	}, footer: `NETWORK names one of this device's networks, or its juistd (juist1); it may
 be left out where the device is in one. Old IPv4 addresses keep working

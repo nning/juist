@@ -263,7 +263,7 @@ func threeAdmins(t *testing.T) (alice, bob, carol *daemonDevice) {
 	keyOf := func(d *daemonDevice, name string) string {
 		return regexp.MustCompile(`juist admins add \S+ (nid:\S+)`).FindStringSubmatch(d.mustRun("admins", "new", name))[1]
 	}
-	alice.mustRun("create", "home", "--device", "a", "--admin-name", "alice",
+	alice.mustRun("create", "home", "--device", "a", "--voucher", "--admin-name", "alice",
 		"--admin", "bob="+keyOf(bob, "bob"), "--admin", "carol="+keyOf(carol, "carol"))
 	joinDaemon(t, alice, bob, "b", "--voucher")
 	joinDaemon(t, alice, carol, "c", "--voucher")

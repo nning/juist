@@ -326,6 +326,73 @@ func TestForkAlarmDropsEveryPeer(t *testing.T) {
 	}
 }
 
+// A disabled network is down for good, and says so rather than raising an alarm.
+func TestDisableDropsEveryPeer(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	f.learn(t, f.nw.devices[1], 4001)
+	f.learn(t, f.nw.devices[2], 4002)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(f.mgr.snapshot()); got != 2 {
+		t.Fatalf("installed %d peers, want 2", got)
+	}
+	aum, err := f.auth.Builder().Disable(f.nw.disablement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Inform([]types.AUM{aum}); err != nil {
+		t.Fatalf("Inform: %v", err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatalf("reconcile of a disabled network: %v", err)
+	}
+	if got := len(f.mgr.snapshot()); got != 0 {
+		t.Fatalf("%d peers survived the network's end", got)
+	}
+	if st := f.d.Status(); st.Disabled != aum.Hash().String() || st.Alarm != "" {
+		t.Fatalf("status disabled %q, alarm %q", st.Disabled, st.Alarm)
+	}
+	// It still tells the members, or the end would not spread past it.
+	if got := len(f.d.memberList()); got != 2 {
+		t.Fatalf("a disabled node gossips with %d members, want 2", got)
+	}
+}
+
+// A disable record no walk from a peer's anchor reaches still goes to the peer,
+// as do catch-ups, so that it reaches members which are behind.
+func TestADisabledNodeHandsTheRecordOn(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	f.learn(t, f.nw.devices[1], 4001)
+	parent := types.Hash{7, 7, 7}
+	aum := types.AUM{Kind: types.KindDisable, Prev: &parent, Secret: &f.nw.disablement}
+	if err := f.d.Inform([]types.AUM{aum}); err != nil {
+		t.Fatalf("Inform: %v", err)
+	}
+	adapter := (*logAdapter)(f.d)
+	view, err := adapter.View()
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := slices.DeleteFunc(view.Have, func(h types.Hash) bool { return h == aum.Hash() })
+	out, err := adapter.Missing(have, view.Anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].Hash() != aum.Hash() {
+		t.Fatalf("a peer lacking the disable record is sent %d records", len(out))
+	}
+	if _, ok, err := adapter.Member(f.nw.devices[1].record.Identity); !ok || err != nil {
+		t.Fatalf("a disabled node grants no catch-up: %v", err)
+	}
+	// Where log sync runs in the tunnels, it needs their addresses to hand
+	// the record on before it drops them.
+	f.d.overlayOnly = true
+	if addrs := f.d.overlayGossipAddrs(f.nw.devices[1].record.Identity); len(addrs) == 0 {
+		t.Fatal("a disabled node has no address to hand the record on at")
+	}
+}
+
 // TestDaemonRefusesANetworkItIsNotIn catches a device pointed at somebody
 // else's state directory: starting anyway fails in three confusing places
 // rather than one clear one.

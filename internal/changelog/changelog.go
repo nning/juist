@@ -40,6 +40,7 @@ var kindNames = map[types.Kind]string{
 	types.KindSetDomain:         "change of the network's public domain",
 	types.KindSetPublished:      "change of the names a device publishes",
 	types.KindRenameNode:        "renaming of a device",
+	types.KindDisable:           "end of the network",
 }
 
 // An Entry is one change: what it did, who approved it, and its hash.

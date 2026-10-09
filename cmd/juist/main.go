@@ -70,7 +70,7 @@ var commands = []command{
 	{name: "approve", aliases: []string{"apply"}, group: groupAdmin, summary: "sign and apply change files", run: cmdApprove},
 	{name: "admins", group: groupAdmin, summary: "manage admin keys and quorum", run: cmdAdmins, family: adminsFamily},
 	{name: "set", group: groupAdmin, summary: "change device settings", run: cmdSet},
-	{name: "network", group: groupAdmin, summary: "show, rename or renumber the network, or set its domain", run: cmdNetwork, family: networkFamily},
+	{name: "network", group: groupAdmin, summary: "show, rename or renumber the network, set its domain, or end it", run: cmdNetwork, family: networkFamily},
 	{name: "log", group: groupAdmin, summary: "inspect the membership log", run: cmdLog, family: logFamily},
 }
 

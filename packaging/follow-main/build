@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds the deb of nning/juist's main into ~/out when main changed outside
-# the docs since the last build. Runs as juist-build.
+# Builds the package of nning/juist's main, the deb or FreeBSD's, into ~/out
+# when main changed outside the docs since the last build. Runs as juist-build.
 set -eu
 # The Go that setup copied, if any; GOTOOLCHAIN fetches what go.mod asks for.
 [ -x /usr/local/lib/juist-follow-main/go/bin/go ] &&
@@ -27,9 +27,15 @@ fi
 echo "$new" > "$HOME/failed"
 git reset -q --hard "$new"
 git clean -qfdx
-make deb
+if [ "$(uname)" = FreeBSD ]; then
+	gmake pkg-freebsd FREEBSD_ABI="$(pkg config abi)"
+	file=build/freebsd/juist-*.pkg
+else
+	make deb
+	file=build/deb/juist_*.deb
+fi
 rm -rf "$HOME/out"
 mkdir "$HOME/out"
-cp build/deb/juist_*.deb "$HOME/out/"
+cp $file "$HOME/out/"
 echo "$new" > "$HOME/built"
 rm -f "$HOME/failed"

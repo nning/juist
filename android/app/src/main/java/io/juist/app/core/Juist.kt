@@ -68,6 +68,31 @@ val Connection.lastView: NetworkView?
         is Connection.Failed -> last
     }
 
+/** What [Juist] asks of a running core: the Go core's, or a test's. */
+internal interface CoreCalls {
+    fun status(): String
+    /** Joins by invite as name, telling progress each event (internal/guest.EventKind). */
+    fun join(invite: String, name: String, progress: (kind: Int, text: String, votes: Int, quorum: Int) -> Unit)
+    fun cancelJoin()
+    /** One echo's round trip, in microseconds. */
+    fun ping(identity: String): Long
+    fun useExit(identity: String)
+    fun exitOff()
+    fun forget()
+}
+
+/** The Go core's calls. */
+internal class GoCore(private val c: Core) : CoreCalls {
+    override fun status(): String = c.status()
+    override fun join(invite: String, name: String, progress: (Int, String, Int, Int) -> Unit) =
+        c.join(invite, name, JoinListener { kind, text, votes, quorum -> progress(kind, text, votes, quorum) })
+    override fun cancelJoin() = c.cancelJoin()
+    override fun ping(identity: String): Long = c.ping(identity)
+    override fun useExit(identity: String) = c.useExit(identity)
+    override fun exitOff() = c.exitOff()
+    override fun forget() = c.forget()
+}
+
 /** The process's one core, which [JuistVpnService] runs and the screens watch. */
 object Juist {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -79,7 +104,7 @@ object Juist {
     private val _join = MutableStateFlow<JoinState>(JoinState.Idle)
     val join: StateFlow<JoinState> = _join.asStateFlow()
 
-    @Volatile private var core: Core? = null
+    @Volatile private var core: CoreCalls? = null
     private var poller: Job? = null
     // Held while the connection is published, so that no status outlives the core it came from.
     private val publishing = Any()
@@ -128,7 +153,7 @@ object Juist {
 
     // --- for JuistVpnService ---------------------------------------------------
 
-    internal fun attached(c: Core) {
+    internal fun attached(c: CoreCalls) {
         synchronized(publishing) { core = c }
         poller?.cancel()
         poller = scope.launch {
@@ -180,7 +205,7 @@ object Juist {
         }
     }
 
-    private suspend fun runningCore(): Core? =
+    private suspend fun runningCore(): CoreCalls? =
         core ?: withTimeoutOrNull(20_000) {
             connection.first { it is Connection.On || it is Connection.Failed || it is Connection.Off && it.reason != OffReason.None }
             core
@@ -201,10 +226,11 @@ object Juist {
                 _join.value = JoinState.Failed((connection.value as? Connection.Failed)?.message)
                 return@launch
             }
-            val listener = JoinListener { kind, text, votes, quorum ->
-                if (isActive) _join.update { joinStep(it, kind, text, votes, quorum) }
+            val result = runCatching {
+                c.join(invite.trim(), name) { kind, text, votes, quorum ->
+                    if (isActive) _join.update { joinStep(it, kind, text, votes, quorum) }
+                }
             }
-            val result = runCatching { c.join(invite.trim(), name, listener) }
             refresh()
             // Cancelled by the person, whose screen has moved on.
             if (!isActive) return@launch

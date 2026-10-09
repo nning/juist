@@ -225,6 +225,7 @@ deinstalliert wurde, führt das Netz weiter.
 |---|---|
 | **Nicht beigetreten** | Die Einladung ist vielleicht abgelaufen oder schon benutzt, oder das einladende Gerät ist nicht erreichbar. Starte eine neue Einladung. Ein Code funktioniert nur im selben LAN; scanne stattdessen den QR-Code. |
 | **Kein Gerät darf weiterleiten** | Ein Admin vergibt `relay` an ein Gerät mit öffentlicher Adresse ([Relays]({{< relref "docs/relays" >}})). |
-| **Eingeschränkt** | Seit 48 Stunden war kein Voucher erreichbar. Verbinde das Telefon mit einem Netz, in dem es einen erreicht. |
+| **Eingeschränkt** | Seit 48 Stunden waren zu wenige Voucher erreichbar. Verbinde das Telefon mit einem Netz, in dem es sie erreicht. |
+| **Zu wenige Voucher haben bestätigt: eingeschränkt in … Stunden** | Bring vorher einen Voucher wieder online. |
 | **Abgewiesen** oder **Entfernt** | Das Telefon wurde entfernt. Vergiss das Netz und tritt mit einer neuen Einladung wieder bei. |
 | `nas.home.juist` löst nicht auf | Das Telefon löst keine Namen auf; nimm die Adresse, die der Bildschirm des Geräts zeigt. |

@@ -64,8 +64,8 @@ the removal only when it is back in touch. Until then, it could keep a tunnel
 to the removed device.
 
 Freshness puts a limit on that. A **voucher** is a device that confirms every
-hour that the network's state is current. The device that created the network
-is one. A device that no voucher has
+hour that the network's state is current. A new network has none, so there is
+no limit until you make one. A device that no voucher has
 confirmed for 48 hours keeps tunnels only to vouchers, so it cannot carry a
 removed device along. Its `juist status` then shows the state `limited` and
 `Freshness  expired; vouchers only`.
@@ -92,7 +92,10 @@ juist admins vouchers 2
 ```
 
 Now a device trusts its view only when two vouchers have confirmed it within
-48 hours. One dishonest voucher is not enough, but two vouchers must be online.
+48 hours. One dishonest voucher is not enough, but two vouchers must be online,
+so give the role to a third as a spare. `juist grant` and `juist admins
+vouchers` warn where there is none, and where the one voucher needed also
+relays.
 
 ## Good to know
 
@@ -104,7 +107,8 @@ Now a device trusts its view only when two vouchers have confirmed it within
 
 ## If something goes wrong
 
-`Freshness  expired; vouchers only` means no voucher has been reachable for
-48 hours. Bring a voucher back online; the device is current again once the
+`Freshness  expired; vouchers only` means too few vouchers have been
+reachable for 48 hours. `juist status` warns a day before, with `freshness
+ends in …`. Bring a voucher back online; the device is current again once the
 voucher's confirmation arrives. See
 [Troubleshooting]({{< relref "docs/troubleshooting" >}}).

@@ -364,6 +364,8 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		if n.HasRole(types.RolePublish) && state.Domain() != "" && was != is {
 			add("shares under %s, not %s", nameUnder(is, state.Domain()), nameUnder(was, state.Domain()))
 		}
+	case types.KindDisable:
+		add("ends the network for good with a break-glass secret: every device stops")
 	default:
 		add("a %s record", aum.Kind)
 	}
@@ -430,6 +432,7 @@ var kindChangesAuthority = map[types.Kind]bool{
 	types.KindSetDomain:         false,
 	types.KindSetPublished:      false,
 	types.KindRenameNode:        false,
+	types.KindDisable:           true,
 }
 
 // voucherLost returns the device aum takes the admin role from, by removing

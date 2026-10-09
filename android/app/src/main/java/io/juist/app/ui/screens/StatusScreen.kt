@@ -139,8 +139,9 @@ fun StatusScreen(
                 if (on && view != null) {
                     for (a in view.alarms) AlarmCard(a)
                 }
-                // A removed device has nothing left to show but how to start over.
-                if (view != null && view.inNetwork && !(on && view.state == State.Removed)) {
+                // A removed device, or one in a disabled network, has nothing
+                // left to show but how to start over.
+                if (view != null && view.inNetwork && !(on && view.state.ended)) {
                     SectionTitle(stringResource(R.string.section_this_device))
                     ThisDevice(view, on, copied)
                     view.exit?.let { ExitSection(it, on, onExit, onVpnSettings) }
@@ -229,7 +230,7 @@ private fun Hero(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (on && state == State.Removed) {
+        if (on && state?.ended == true) {
             Button(onForget, Modifier.fillMaxWidth().padding(start = Space.l, end = Space.l, bottom = Space.l)) {
                 Text(stringResource(R.string.action_forget))
             }

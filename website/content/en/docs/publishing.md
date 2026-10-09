@@ -331,7 +331,8 @@ then that of a device every other keeps from opening connections.
   juistd, which answers a name published on 443, or shared, with its
   device's address while that device is reachable, so that members
   reach it directly through the tunnel, with the same certificate, and passes
-  every other name of the domain on as before. DNSSEC is off for the domain on
+  every other name of the domain on as before, held for 30 seconds at most,
+  so that a name newly published is reached directly soon. DNSSEC is off for the domain on
   members ([Names]({{< relref "docs/names" >}})). `http://` to such a name
   goes to the device's port 80, where juist redirects it to https, unless
   another program listens there on every address: that program then answers,

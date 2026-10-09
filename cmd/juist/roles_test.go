@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nning/juist/types"
 )
 
 func TestRemoveAsksFirst(t *testing.T) {
@@ -44,7 +47,7 @@ func TestGrant(t *testing.T) {
 func TestAdminDevicesAreNotLostByAccident(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("create", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop", "--voucher")
 	enrollDevice(t, c, "phone")
 	c.mustRun("grant", "phone", "voucher")
 	c.mustRun("admins", "vouchers", "2")
@@ -78,4 +81,43 @@ func TestARoleThatExcludesAnotherIsSaid(t *testing.T) {
 		}
 	}
 	admin.mustRun("grant", "vps", "relay")
+}
+
+// A voucher set without a spare, or with a relay as the one voucher needed,
+// is said when it is made, not when every device has gone limited.
+func TestVoucherSetsWithoutASpareAreSaid(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home", "--device", "laptop", "--voucher")
+	enrollDevice(t, c, "vps")
+	enrollDevice(t, c, "nas")
+	mustLack(t, c.mustRun("grant", "laptop", "publish"), "warning")
+	mustContain(t, c.mustRun("grant", "laptop", "relay"), "no spare voucher", "laptop relays too")
+	out := c.mustRun("grant", "vps", "voucher")
+	mustContain(t, out, "laptop relays too")
+	mustLack(t, out, "no spare voucher")
+	out = c.mustRun("admins", "vouchers", "2")
+	mustContain(t, out, "no spare voucher")
+	mustLack(t, out, "relays too")
+	mustLack(t, c.mustRun("grant", "nas", "voucher"), "warning")
+}
+
+func mustLack(t *testing.T, out, s string) {
+	t.Helper()
+	if strings.Contains(out, s) {
+		t.Fatalf("output has %q:\n%s", s, out)
+	}
+}
+
+// A voucher whose membership has expired is no spare.
+func TestAnExpiredVoucherIsNoSpare(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_800_000_000, 0)
+	var out syncBuffer
+	a := newCLI(t).app(&out, "")
+	a.now = func() time.Time { return now }
+	voucher := types.NodeRecord{Name: "nas", Roles: []types.Role{types.RoleAdmin}}
+	expired := types.NodeRecord{Name: "laptop", Roles: []types.Role{types.RoleAdmin}, Expiry: uint64(now.Unix())}
+	a.warnVouchers([]types.NodeRecord{voucher, expired}, 1)
+	mustContain(t, out.String(), "no spare voucher")
 }

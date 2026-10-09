@@ -112,6 +112,8 @@ func (s *State) apply(a *types.AUM, hash types.Hash, mode applyMode) (*State, er
 	switch {
 	case a.Kind == types.KindGenesis:
 		return nil, reject(RuleMalformed, errors.New("log: genesis cannot be applied to an existing state"))
+	case a.Kind == types.KindDisable:
+		return nil, reject(RuleMalformed, errors.New("log: a disable record ends the network; nothing applies it"))
 	case !ok:
 		// Unreachable: StaticValidate rejects unknown kinds before this.
 		return nil, reject(RuleMalformed, fmt.Errorf("log: unhandled record kind %v", a.Kind))

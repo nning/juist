@@ -63,9 +63,9 @@ aufnehmen und entfernen, Rollen vergeben oder das Netz umbenennen. Wer
 Änderungen signiert ein Admin mit seinem Admin-Schlüssel. Die Schlüssel
 liegen im Keystore des Admins, also in `~/.config/juist` in seinem
 Home-Verzeichnis, und zwar auf jedem Rechner, von dem aus er Änderungen
-bestätigt. juistd bekommt sie nie zu sehen. Ein Schlüssel verlässt nie den
-Rechner, auf dem er erzeugt wurde. Wer zwei Laptops hat, hat also auf jedem
-einen eigenen.
+bestätigt. juistd bekommt sie nie zu sehen. Ein Schlüssel verlässt den
+Rechner, auf dem er erzeugt wurde, nur als Sicherungszeile. Wer zwei Laptops
+hat, hat also auf jedem einen eigenen.
 
 Das **Quorum** legt fest, wie viele Admin-Stimmen eine Änderung braucht.
 Voreingestellt ist 1, ein Admin kann also allein entscheiden. Nach
@@ -171,18 +171,30 @@ Bestätigung aus den letzten 48 Stunden hat, ist frisch. Hat es keine, ist es
 abgelaufen: Dann behält es nur noch Tunnel zu Vouchern, bis es wieder von
 einem hört. Ein entferntes Gerät bleibt so höchstens 48 Stunden verbunden.
 
-Daraus ergibt sich dreierlei:
+Daraus ergibt sich viererlei:
 
-- Halte mindestens einen Voucher online. Das Gerät, auf dem du das Netz
-  angelegt hast, ist der erste Voucher. Sind alle Voucher länger als 48
-  Stunden offline, haben alle anderen Mitglieder nur noch Tunnel zu Vouchern.
+- Ein neues Netz hat keinen Voucher und prüft die Frische deshalb gar nicht.
+  Ein Entfernen erreicht trotzdem jedes Gerät, sobald es Kontakt zu einem
+  hat, das davon weiß; nur ist nicht begrenzt, wie lange das bei einem
+  abgeschnittenen Gerät dauert. `juist create --voucher` macht schon das
+  erste Gerät zum Voucher.
+- Mach nur Geräte zu Vouchern, die ständig laufen, etwa einen VPS oder einen
+  Heimserver. Sind 48 Stunden lang zu wenige Voucher online, haben alle
+  anderen Mitglieder nur noch Tunnel zu Vouchern. Ein Netz aus Laptops und
+  Telefonen, die oft aus sind, fährt ohne Voucher besser.
 - Einem Voucher musst du vertrauen. Nach `juist admins vouchers 2` braucht ein
   Mitglied Bestätigungen von zwei Vouchern, um frisch zu sein. Ein einzelner
-  Voucher, der lügt, reicht dann nicht mehr.
-- In einem Netz ohne Voucher prüft juist die Frische gar nicht.
+  Voucher, der lügt, reicht dann nicht mehr. Halte einen in Reserve: zwei von
+  drei Vouchern auf Hosts, die unabhängig voneinander ausfallen, nicht zwei
+  Maschinen beim selben Anbieter.
+- Ein Relay kann ein Gerät von den anderen abschneiden. Reicht ein Voucher,
+  mach kein Relay zum Voucher, sonst kann diese eine Maschine ein Gerät
+  abschneiden und zugleich frisch halten.
 
 `juist status` zeigt den Stand in der Zeile `Freshness`, zum Beispiel
-`vouched just now, valid 48h` oder `expired; vouchers only`.
+`vouched just now, valid 48h`, `expired; vouchers only` oder `unchecked: no
+voucher`. Einen Tag vorher warnt es: `freshness ends in 20h unless 2 vouchers
+vouch again`.
 
 ## Begriffe {#terms}
 
@@ -201,6 +213,6 @@ Daraus ergibt sich dreierlei:
 | Quorum | Wie viele Admin-Stimmen eine Änderung braucht |
 | Rolle | Eine zusätzliche Aufgabe für ein Gerät: Voucher, Relay, Exit, Ingress, Service oder Publish |
 | Einladung | Ein Code oder Link, mit dem ein neues Gerät beitritt |
-| Frische | Ob ein Gerät in den letzten 48 Stunden von einem Voucher gehört hat |
+| Frische | Ob genug Voucher den Stand eines Geräts in den letzten 48 Stunden bestätigt haben |
 | Voucher | Ein Gerät, das stündlich bestätigt, dass der Stand des Netzes aktuell ist |
 | Relay | Ein Mitglied, das Verkehr zwischen Mitgliedern weiterleitet, die sich nicht direkt erreichen |

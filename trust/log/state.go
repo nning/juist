@@ -253,8 +253,8 @@ func (s *State) Admins() []types.AdminKey {
 func (s *State) Disablement() []types.Hash { return slices.Clone(s.disablement) }
 
 // ValidDisablement reports whether secret is a preimage of one of the
-// network's break-glass commitments. Verification only: what revealing one
-// authorizes is an operational question, and nothing consumes it yet.
+// network's break-glass commitments, which a [types.KindDisable] record
+// reveals to end the network.
 func (s *State) ValidDisablement(secret []byte) bool {
 	if len(secret) != types.DisablementSecretSize {
 		return false

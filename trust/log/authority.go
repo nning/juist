@@ -12,7 +12,8 @@
 // Fork choice: of two records with the same parent, a revocation wins, and
 // otherwise the lower hash. The loser is kept but not applied, and its author
 // reissues it against the new head; where that would fail, the fork is a
-// genuine conflict and this package alarms rather than choosing.
+// genuine conflict and this package alarms rather than choosing. A disable
+// record takes no part in fork choice: wherever it hangs, it ends the network.
 package log
 
 import (
@@ -124,15 +125,27 @@ func (e *SchemaTooNewError) Error() string {
 		e.Version, e.At, e.Implemented)
 }
 
+// A DisabledError reports that a [types.KindDisable] record has ended the
+// network. It is final: no record undoes it.
+type DisabledError struct {
+	// At is the disable record.
+	At types.Hash
+}
+
+func (e *DisabledError) Error() string {
+	return fmt.Sprintf("log: the network was disabled with a break-glass secret in record %v", e.At)
+}
+
 // An Authority is a node's view of the membership log. Not safe for concurrent
 // use; callers that share one serialize access.
 type Authority struct {
-	storage Storage
-	anchor  types.Hash
-	state   *State
-	orphans []Orphan
-	alarm   *Alarm
-	tooNew  *SchemaTooNewError
+	storage  Storage
+	anchor   types.Hash
+	state    *State
+	orphans  []Orphan
+	alarm    *Alarm
+	tooNew   *SchemaTooNewError
+	disabled *DisabledError
 
 	// reachable is the set of records the last adopted resolution covered.
 	// Anything stored and absent from it is a leftover from an interrupted
@@ -315,6 +328,10 @@ func (a *Authority) Inform(aums ...types.AUM) error {
 	} else {
 		for i := range pending {
 			h := pending[i].Hash()
+			if !res.reachable[h] && followsDisable(ov, &pending[i]) {
+				return reject(RuleParent, fmt.Errorf("log: record %v (%v) follows a disable record, which nothing may",
+					h, pending[i].Kind))
+			}
 			if !res.reachable[h] {
 				return reject(RuleParent, fmt.Errorf(
 					"log: record %v (%v) does not descend from this node's anchor %v; "+
@@ -393,6 +410,7 @@ func (a *Authority) adopt(res *resolution) {
 		a.onChain[h] = true
 	}
 	a.tooNew = res.tooNew
+	a.disabled = res.disabled
 	var conflicts []Orphan
 	for _, o := range res.orphans {
 		if o.Conflict != "" {
@@ -417,10 +435,13 @@ func (a *Authority) Anchor() types.Hash { return a.anchor }
 // did; use [Authority.TrustedState] for anything that grants access.
 func (a *Authority) State() *State { return a.state }
 
-// TrustedState returns the authority state, or an error while an alarm is
-// raised. This is the accessor anything that grants access must use: where
-// security and availability conflict, deny.
+// TrustedState returns the authority state, or an error once the network is
+// disabled or while an alarm is raised. This is the accessor anything that
+// grants access must use: where security and availability conflict, deny.
 func (a *Authority) TrustedState() (*State, error) {
+	if a.disabled != nil {
+		return nil, a.disabled
+	}
 	if a.alarm != nil {
 		return nil, a.alarm
 	}
@@ -429,6 +450,9 @@ func (a *Authority) TrustedState() (*State, error) {
 
 // Alarm returns the current fork alarm, or nil.
 func (a *Authority) Alarm() *Alarm { return a.alarm }
+
+// Disabled returns the disable record that ended the network, or nil.
+func (a *Authority) Disabled() *DisabledError { return a.disabled }
 
 // SchemaAlarm reports that the network has moved to a record schema this build
 // does not implement, or nil. It does not gate [Authority.TrustedState]: see
@@ -470,8 +494,12 @@ func (a *Authority) Chain() ([]types.Hash, error) {
 // not considered at all. Refused while either alarm is raised: a schema this
 // build cannot read leaves records above the chain's end, and compaction
 // deletes what the anchor cannot reach — which is exactly the records a newer
-// build would need to resume from.
+// build would need to resume from. Refused once the network is disabled too,
+// since the disable record may hang below the newest checkpoint.
 func (a *Authority) Compact() (int, error) {
+	if a.disabled != nil {
+		return 0, a.disabled
+	}
 	if a.alarm != nil {
 		return 0, a.alarm
 	}
@@ -535,14 +563,17 @@ type resolution struct {
 	// tooNew is set when the walk stopped at an authorized schema upgrade
 	// this build cannot implement. The state is the one before it.
 	tooNew *SchemaTooNewError
+
+	// disabled is the first disable record the walk met, chain first.
+	disabled *DisabledError
 }
 
 // resolve computes the active chain and the branches off it. It is a pure
 // function of the records reachable from the anchor — no clock, no randomness,
 // no dependence on arrival or storage order — which is what makes two nodes
 // holding the same records reach the same state.
-func resolve(r reader, anchor types.Hash) (*resolution, error) {
-	r = hashOrdered{r}
+func resolve(st reader, anchor types.Hash) (*resolution, error) {
+	r := reader(hashOrdered{st})
 	anchorAUM, err := r.AUM(anchor)
 	if err != nil {
 		return nil, fmt.Errorf("log: reading anchor %v: %w", anchor, err)
@@ -599,6 +630,10 @@ func resolve(r reader, anchor types.Hash) (*resolution, error) {
 				return nil, fmt.Errorf("log: record %v (%v) is not authorized: %w",
 					ch, child.Kind, err)
 			}
+			if child.Kind == types.KindDisable {
+				res.noteDisabled(ch)
+				continue
+			}
 			valid = append(valid, candidate{hash: ch, aum: child})
 		}
 		if len(valid) == 0 {
@@ -652,12 +687,57 @@ func resolve(r reader, anchor types.Hash) (*resolution, error) {
 	budget := maxOrphanRecords
 	for _, po := range orphanRoots {
 		o := Orphan{Root: po.root}
-		if err := walkOrphan(r, po.root, po.branch, state, &o, &budget, res.reachable); err != nil {
+		if err := walkOrphan(r, po.root, po.branch, state, &o, &budget, res); err != nil {
 			return nil, err
 		}
 		res.orphans = append(res.orphans, o)
 	}
+	if err := placeDisables(st, res); err != nil {
+		return nil, err
+	}
 	return res, nil
+}
+
+// followsDisable reports whether a record's parent is a disable record.
+func followsDisable(r reader, a *types.AUM) bool {
+	if a.Prev == nil {
+		return false
+	}
+	parent, err := r.AUM(*a.Prev)
+	return err == nil && parent.Kind == types.KindDisable
+}
+
+// placeDisables takes in the disable records the walk did not reach: hung
+// below the anchor, past a schema this build stopped at, or deeper on a branch
+// than the walk goes. Every state holds the commitments fixed at genesis, so
+// a record revealing one of the secrets ends the network wherever it hangs.
+func placeDisables(r reader, res *resolution) error {
+	hashes, err := r.Hashes()
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(hashes, types.Hash.Compare)
+	for _, h := range hashes {
+		if res.reachable[h] {
+			continue
+		}
+		aum, err := r.AUM(h)
+		if err != nil {
+			return fmt.Errorf("log: reading %v: %w", h, err)
+		}
+		if aum.Kind == types.KindDisable && res.state.ValidDisablement(aum.Secret[:]) {
+			res.noteDisabled(h)
+		}
+	}
+	return nil
+}
+
+// noteDisabled records a verified disable record, which nothing descends from.
+func (res *resolution) noteDisabled(h types.Hash) {
+	res.reachable[h] = true
+	if res.disabled == nil {
+		res.disabled = &DisabledError{At: h}
+	}
 }
 
 // hashOrdered returns children in hash order, which pickPrimary's rule needs:
@@ -779,7 +859,7 @@ func keysOfBranch(r reader, root types.Hash, budget *int) (branchKeys, error) {
 // it: branch, which every record must verify against, since a branch of
 // unauthorized records is a corrupt store rather than a fork; and probe, the
 // result of replaying the branch's substance onto the chain that won.
-func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget *int, reachable map[types.Hash]bool) error {
+func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget *int, res *resolution) error {
 	if *budget <= 0 {
 		if o.Conflict == "" {
 			o.Conflict = fmt.Sprintf("branch exceeds %d records; too large to analyze", maxOrphanRecords)
@@ -795,12 +875,17 @@ func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget 
 	if err := verifyAgainst(&aum, branch); err != nil {
 		return fmt.Errorf("log: record %v (%v) on a branch is not authorized: %w", h, aum.Kind, err)
 	}
+	if aum.Kind == types.KindDisable {
+		// Hung on a branch that lost, it ends the network all the same.
+		res.noteDisabled(h)
+		return nil
+	}
 	nextBranch, err := branch.apply(&aum, h, applyChain)
 	if err != nil {
 		return fmt.Errorf("log: applying branch record %v (%v): %w", h, aum.Kind, err)
 	}
 	o.Records = append(o.Records, h)
-	reachable[h] = true
+	res.reachable[h] = true
 
 	var nextProbe *State
 	switch {
@@ -841,7 +926,7 @@ func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget 
 		return err
 	}
 	for _, ch := range children {
-		if err := walkOrphan(r, ch, nextBranch, nextProbe, o, budget, reachable); err != nil {
+		if err := walkOrphan(r, ch, nextBranch, nextProbe, o, budget, res); err != nil {
 			return err
 		}
 	}

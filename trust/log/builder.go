@@ -336,3 +336,14 @@ func (b *Builder) Check(aum *types.AUM) (*State, error) {
 	}
 	return b.state.apply(aum, aum.Hash(), applyChain)
 }
+
+// Disable builds the record that ends the network by revealing one of its
+// break-glass secrets. It is complete as built: it carries no signature.
+func (b *Builder) Disable(secret types.DisablementSecret) (types.AUM, error) {
+	head := b.state.head
+	aum := types.AUM{Kind: types.KindDisable, Prev: &head, Secret: &secret}
+	if err := verifyAgainst(&aum, b.state); err != nil {
+		return types.AUM{}, err
+	}
+	return aum, nil
+}

@@ -61,6 +61,45 @@ func (d *Daemon) farewell(ctx context.Context, records []types.AUM) []types.Iden
 	return gone
 }
 
+// handOnDisable hands the record that disabled the network to every member,
+// once, before this node drops the tunnels log sync runs through: afterwards
+// it reaches nobody, and nobody it.
+func (d *Daemon) handOnDisable(at types.Hash) {
+	d.mu.Lock()
+	done := d.handedOn == at
+	d.handedOn = at
+	d.mu.Unlock()
+	if done {
+		return
+	}
+	d.authMu.Lock()
+	state := d.authority.State()
+	aum, err := d.storage.AUM(at)
+	d.authMu.Unlock()
+	if err != nil {
+		return
+	}
+	b, err := aum.Encode()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), farewellWait)
+	defer cancel()
+	now := d.now().Unix()
+	var wg sync.WaitGroup
+	for _, n := range state.Nodes() {
+		if n.Identity == d.self || n.Expired(now) {
+			continue
+		}
+		wg.Go(func() {
+			if err := d.gossip.PushTo(ctx, n.Identity, [][]byte{b}); err != nil {
+				d.logf("daemon: handing %v the record that disabled the network: %v", n.Identity.ShortString(), err)
+			}
+		})
+	}
+	wg.Wait()
+}
+
 // seenDown reports whether the last tunnel check found the member's tunnel
 // down.
 func (d *Daemon) seenDown(id types.Identity) bool {

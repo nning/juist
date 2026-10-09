@@ -222,7 +222,7 @@ func TestApproveSaysARemovalTakesAVoucher(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	c := newCLI(t)
-	c.mustRun("create", "home", "--device", "laptop")
+	c.mustRun("create", "home", "--device", "laptop", "--voucher")
 	auth := openLog(t, c)
 	removal, err := auth.Builder().RemoveNode(nodeKeysOf(t, c).Identity.Public(), sealer())
 	if err != nil {

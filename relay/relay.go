@@ -187,6 +187,7 @@ func New(opts Options) (*Server, error) {
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return context.WithValue(ctx, connContextKey{}, c)
 		},
+		ErrorLog:          newServerErrorLog(logf, time.Now),
 		ReadHeaderTimeout: 30 * time.Second,
 		// A connection kept alive after one request, which anyone can open,
 		// is not kept for ever. DERP sessions and forwarded invites are

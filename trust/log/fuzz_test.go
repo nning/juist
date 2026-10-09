@@ -226,6 +226,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 		},
 		// A fork: an admission off the first member's, beside the second's.
 		func() (types.AUM, error) { return NewBuilder(afterFirst).AddNode(third, seal) },
+		func() (types.AUM, error) { return b.Disable(types.DisablementSecret(fixedDisablementSecret())) },
 	}
 	// Refused on their substance, which is what a seed for these can show.
 	head := auth.Head()

@@ -294,6 +294,72 @@ func TestRevocationConvergesWithinTheBudget(t *testing.T) {
 	}
 }
 
+// The record that disables the network reaches every member from the one it
+// was handed to, though that one drops its tunnels at once.
+func TestDisableReachesEveryMember(t *testing.T) {
+	m := startMesh(t, 3)
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	first := m.nodes[0]
+	aum, err := first.auth.Builder().Disable(m.nw.disablement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.d.Inform([]types.AUM{aum}); err != nil {
+		t.Fatalf("Inform: %v", err)
+	}
+	waitFor(t, 10*time.Second, "every member to stop", func() bool {
+		for _, n := range m.nodes {
+			if st := n.d.Status(); st.Disabled != aum.Hash().String() || st.Peers != 0 {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// Log sync runs in the tunnels, which a disabled device drops: it hands the
+// record on first, and so does each device it reaches.
+func TestADisabledDeviceHandsTheRecordOnBeforeItsTunnelsGo(t *testing.T) {
+	var nodes atomic.Pointer[[]*meshNode]
+	down := func(match func(*meshNode) bool) bool {
+		for _, n := range *nodes.Load() {
+			if match(n) && n.d.Status().Disabled != "" {
+				return true
+			}
+		}
+		return false
+	}
+	m := startMeshWith(t, 3, func(o *Options) {
+		me := o.Identity.Public()
+		o.GossipDial = func(ctx context.Context, addr netip.AddrPort) (net.Conn, error) {
+			if nodes.Load() != nil && (down(func(n *meshNode) bool { return n.id() == me }) ||
+				down(func(n *meshNode) bool { return n.d.Status().GossipPort == addr.Port() })) {
+				return nil, errors.New("no tunnel")
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, "tcp", addr.String())
+		}
+	})
+	nodes.Store(&m.nodes)
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	first := m.nodes[0]
+	aum, err := first.auth.Builder().Disable(m.nw.disablement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.d.Inform([]types.AUM{aum}); err != nil {
+		t.Fatalf("Inform: %v", err)
+	}
+	waitFor(t, 10*time.Second, "every member to stop", func() bool {
+		for _, n := range m.nodes {
+			if n.d.Status().Disabled == "" {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 // TestRevokedDeviceLosesTheDataPlane is M2's first exit criterion from the
 // harder direction: the device still holds every key it ever had and is on the
 // same LAN. What it lacks is a peer entry anywhere, which cryptokey routing

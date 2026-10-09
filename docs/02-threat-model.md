@@ -17,9 +17,9 @@
 | Evicted member | Was a member; retains all old keys and state | Signed revocation records + epoch bump (loses group secret → loses discovery) + WG peer removal + fail-closed freshness TTL |
 | Stolen/lost device | Full key material of one member | Same as evicted member, after detection; per-device keys mean no shared secrets to rotate |
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
-| Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; use open to every member until coarse ACLs (M13) scope it |
+| Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; use open to every member until coarse ACLs (M14) scope it |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
-| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); signed releases (M16, after v1.0); update transparency (roadmap item, not v1) |
+| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); signed releases (M18, after v1.0); update transparency (roadmap item, not v1) |
 
 ## Out of scope / consciously accepted
 
@@ -44,7 +44,8 @@ adopting this system must accept them explicitly.
    members the quorum grants the `admin` role — sign "my head was H at T" every hour;
    a node whose newest lease naming its own chain is older than the TTL (48 h default)
    keeps tunnels only to admin devices. The TTL and the vouching threshold M
-   (`juist admins vouchers`, one by default) are the knobs: max revocation latency =
+   (`juist admins vouchers`, one by default; a new network has no admin device, so
+   freshness is unchecked until one is granted) are the knobs: max revocation latency =
    max survivable partition *without M admin devices in it*. A signer inside the
    partition vouches for what it holds, and a lying or revoked admin device can vouch
    for a head from before every removal, so with M = 1 freshness assumes every admin
@@ -52,11 +53,12 @@ adopting this system must accept them explicitly.
    ([11-enrollment-and-freshness-notes.md](11-enrollment-and-freshness-notes.md)). Instantaneous global revocation in a partitioned P2P system is a
    CAP-style impossibility. (Same principle as Rivest 1998 and the Web PKI's move to
    ever-shorter cert lifetimes.)
-2. **Admin-quorum custody is the crown jewel.** Lose k-of-n admin keys *and* all
-   pre-committed break-glass disablement secrets → the network is unrecoverable **by
-   design**; that unrecoverability is the security property (Tailscale documents the
-   same for tailnet lock). Compromise of a full quorum is game over — true of every
-   design, centralized or not.
+2. **Admin-quorum custody is the crown jewel.** Lose k-of-n admin keys → the network
+   can never be changed again **by design**; that is the security property (Tailscale
+   documents the same for tailnet lock). A pre-committed break-glass secret then only
+   ends it for good (M12): it disables, it never recovers, so a stolen secret costs
+   availability and never custody. Compromise of a full quorum is game over — true of
+   every design, centralized or not.
 3. **Split-view window under a malicious quorum.** A colluding quorum can briefly show
    divergent logs to disjoint node sets. Cross-gossiped log heads (fork detection)
    expose this after the fact; nothing prevents it in real time short of global
@@ -107,7 +109,7 @@ adopting this system must accept them explicitly.
    never overlap the overlay space, so an exit node cannot intercept member-to-member
    traffic; an exit node carries public addresses alone, so it reaches neither its
    own LAN nor a client's; and a client uses one only when its owner chooses it
-   and its operator agreed to serve. Until ACLs (M13), though, the grant is
+   and its operator agreed to serve. Until ACLs (M14), though, the grant is
    network-wide: every member may use every exit node, so the quorum that grants
    the role decides for all members at once. The exit node answers its clients' DNS
    too, where systemd-resolved runs on them, and so sees their lookups as it sees
@@ -141,7 +143,7 @@ adopting this system must accept them explicitly.
    daemon, does touch the host firewall once, in the other direction: where
    firewalld or ufw runs it lets everything in on `juist0`, as Tailscale's own
    rules do for `tailscale0`, because a host firewall that drops the overlay
-   silently breaks gossip — and with it removals. So until ACLs exist (M13),
+   silently breaks gossip — and with it removals. So until ACLs exist (M14),
    **every member can reach every port the host listens on through the tunnel**;
    the host firewall still guards every other interface, and
    `/usr/lib/juist/firewall.sh revoke` takes the rule back.
@@ -156,7 +158,7 @@ adopting this system must accept them explicitly.
    is the device keys. Bounded by: a device is still removed from each network
    by that network's quorum. A user per instance, which would close it, needs
    the packaging and each instance's view of the one below reworked, and is
-   left for the hardening before the audit (M14).
+   left for the hardening before the audit (M16).
 10. **Admin devices see what waits for the admins (M5b).** A change waiting
    for votes is sealed to the admin keys, but the juistd of every admin device
    that carries it sees its outside: which admin key handed it on, when it

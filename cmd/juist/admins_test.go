@@ -12,7 +12,7 @@ import (
 func TestAdminsVouchers(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
-	c.mustRun("create", "home")
+	c.mustRun("create", "home", "--voucher")
 	if _, err := c.run("admins", "vouchers", "2"); err == nil {
 		t.Fatal("a threshold of two admin devices was set with one")
 	}

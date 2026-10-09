@@ -112,7 +112,7 @@ func (d *Daemon) syncRelay(state *log.State) {
 
 	switch {
 	case want && running == nil:
-		cert, err := d.session.relayCertificate()
+		cert, err := d.session.relayCertificate(d.logf)
 		if err != nil {
 			d.logOnce("daemon: this device holds the relay-capable role but its relay " +
 				"could not start: " + err.Error())

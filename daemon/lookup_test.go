@@ -122,3 +122,67 @@ func TestWhyAPeerIsDown(t *testing.T) {
 }
 
 var _ = types.Identity{}
+
+// A stale node keeps no tunnel to a plain member, so it never finds it down;
+// it looks it up anyway, or a relay that restarted stays pinned to its old
+// certificate until the node is fresh again.
+func TestAStaleNodeLooksUpTheMembersItKeepsNoTunnelTo(t *testing.T) {
+	f := newFreshFixture(t, "")
+	plain := f.nw.devices[2].record.Identity
+	f.reconcileAt(t, f.start.Add(time.Minute))
+	if !f.d.Status().Stale || f.mgr.has([32]byte(f.nw.devices[2].record.WireGuard)) {
+		t.Fatal("the fixture is not a stale node without a tunnel to the plain member")
+	}
+	if !slices.Contains(f.d.wanted(), plain) {
+		t.Fatal("a stale node does not look up a member it keeps no tunnel to")
+	}
+	if slices.Contains(f.d.wanted(), plain) {
+		t.Fatal("the member was looked up again in the next round")
+	}
+	f.clock.Set(f.start.Add(time.Minute + firstLookupGap))
+	if !slices.Contains(f.d.wanted(), plain) {
+		t.Fatal("the member was not looked up again after the first gap")
+	}
+}
+
+// A fresh node looks up only members it holds no announcement for or finds
+// down: one it carries a tunnel to is not asked after every round.
+func TestAFreshNodeDoesNotLookUpItsLivePeers(t *testing.T) {
+	f := newFreshFixture(t, "")
+	f.d.offerLeases([][]byte{f.leaseFrom(t, 1, f.auth.Head(), f.start)})
+	f.reconcileAt(t, f.start.Add(time.Minute))
+	if f.d.Status().Stale {
+		t.Fatal("the fixture is not fresh")
+	}
+	if got := f.d.wanted(); len(got) != 0 {
+		t.Fatalf("a fresh node with every announcement held looks up %d members", len(got))
+	}
+}
+
+// A member set aside waits behind every member found down, such as the
+// vouchers a stale node needs back, though it was due first.
+func TestAStaleNodeLooksUpTheDownBeforeTheSetAside(t *testing.T) {
+	f := newFreshFixture(t, "")
+	plain := f.nw.devices[2].record.Identity
+	f.reconcileAt(t, f.start.Add(time.Minute))
+	if !f.d.Status().Stale {
+		t.Fatal("the fixture is not stale")
+	}
+	f.d.mu.Lock()
+	f.d.asidePlan = map[types.Identity]*lookupPlan{plain: {lookAt: f.start}}
+	if f.d.down == nil {
+		f.d.down = map[types.Identity]*downPeer{}
+	}
+	var down []types.Identity
+	for i := range dht.MaxLookupsPerRound {
+		id := types.Identity{0xd0, byte(i)}
+		f.d.down[id] = &downPeer{lookupPlan: lookupPlan{lookAt: f.start.Add(time.Minute)}}
+		down = append(down, id)
+	}
+	f.d.mu.Unlock()
+	got := f.d.wanted()
+	slices.SortFunc(got, types.Identity.Compare)
+	if !slices.Equal(got, down) {
+		t.Fatalf("looked up %v, want the members found down %v", got, down)
+	}
+}

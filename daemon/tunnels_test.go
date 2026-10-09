@@ -338,6 +338,63 @@ func TestARestartedMeshKeepsItsSession(t *testing.T) {
 	}
 }
 
+// A mesh restarted within the second of its last announcement numbers the
+// next one past it; peers dismiss an equal number as a replay, and with it a
+// new gossip port or address.
+func TestARestartedMeshAnnouncesPastItsLastNumber(t *testing.T) {
+	c := &clock{now: time.Unix(1_700_000_000, 0)}
+	f := newServiceFixtureWith(t, func(o *Options) { o.Clock = c.get })
+	before := f.s.Mesh()
+	first, ok := before.announcement()
+	if !ok {
+		t.Fatal("no announcement")
+	}
+	before.startAddrs = []netip.Prefix{netip.MustParsePrefix("198.18.9.9/32")}
+	f.s.followAddrs()
+	after := f.s.Mesh()
+	if after == nil || after == before {
+		t.Fatal("the mesh did not restart")
+	}
+	next, _ := after.announcement()
+	if next.Seq <= first.Seq {
+		t.Fatalf("the restarted mesh announced %d after %d", next.Seq, first.Seq)
+	}
+	f.s.mu.Lock()
+	f.s.sessionKeys.WireGuard[0] ^= 1 // as a rotation leaves them
+	f.s.restartMeshLocked(nil, "a test")
+	f.s.mu.Unlock()
+	if rotated, _ := f.s.Mesh().announcement(); rotated.Seq <= next.Seq {
+		t.Fatalf("the mesh restarted on new keys announced %d after %d", rotated.Seq, next.Seq)
+	}
+}
+
+// A previous run's announcement, signed in the same second as this run's
+// and echoed back by a peer, makes the next one numbered past it.
+func TestAnEchoOfAPreviousRunIsAnnouncedPast(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	c := &clock{now: t0}
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
+	mine, _ := f.d.announcement()
+	f.d.ownEchoed(mine)
+	if again, _ := f.d.announcement(); again.Seq != mine.Seq {
+		t.Fatal("an echo of this run's announcement had it signed again")
+	}
+	previous := f.signedBy(t, f.self, t0)
+	if previous.SameAs(&mine) || previous.Seq != mine.Seq {
+		t.Fatal("the fixture's previous run is not another announcement in the same second")
+	}
+	forged := previous
+	forged.Seq++
+	f.d.ownEchoed(forged)
+	if again, _ := f.d.announcement(); again.Seq != mine.Seq {
+		t.Fatal("an echo that does not verify had the announcement signed again")
+	}
+	f.d.ownEchoed(previous)
+	if next, _ := f.d.announcement(); next.Seq <= previous.Seq {
+		t.Fatalf("announced %d after a previous run's %d", next.Seq, previous.Seq)
+	}
+}
+
 // A device whose clock runs ahead of this one's, suspended a minute after it
 // renewed, looks as though it signed after it went quiet; within the skew
 // allowed that is no sign of it running.

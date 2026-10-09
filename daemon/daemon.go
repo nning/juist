@@ -341,6 +341,7 @@ type Daemon struct {
 	wgPublic     types.WGKey
 	gossipPort   uint16
 	overlayOnly  bool           // log sync through the tunnel alone
+	handedOn     types.Hash     // the disable record handOnDisable gave members
 	stack        *netstack.Net  // the overlay's network stack, nil on a device
 	startAddrs   []netip.Prefix // this device's overlay addresses as the mesh started
 	tunName      string
@@ -421,6 +422,7 @@ type Daemon struct {
 
 	down        map[types.Identity]*downPeer   // installed members found down
 	unheardPlan map[types.Identity]*lookupPlan // members with no announcement held
+	asidePlan   map[types.Identity]*lookupPlan // members a stale node keeps no tunnel to
 	probeNow    map[types.Identity]bool        // members to probe past their backoff
 	syncRetried map[types.Identity]time.Time   // when a failing sync was last retried
 
@@ -737,6 +739,7 @@ func New(opts Options) (*Daemon, error) {
 		Dial:         d.gossipDial(opts.GossipDial),
 		OverlayAddrs: d.overlayGossipAddrs,
 		OverlayOnly:  d.overlayOnly,
+		OnOwn:        d.ownEchoed,
 		OnRecords:    d.MarkDirty,
 		Leases:       d.encodedLeases,
 		OnLeases:     d.offerLeases,
@@ -1032,9 +1035,10 @@ func (d *Daemon) syncOne(ctx context.Context) {
 
 // memberList returns the members to gossip with: everyone the log carries
 // except this node. It reads TrustedState, so a node under a fork alarm
-// gossips with nobody.
+// gossips with nobody; a disabled one still hands the members the record
+// that disabled it.
 func (d *Daemon) memberList() []types.Identity {
-	state, err := d.TrustedState()
+	state, err := d.gossipState()
 	if err != nil {
 		return nil
 	}
@@ -1087,7 +1091,7 @@ func (d *Daemon) discovered(e gossip.Endpoint, where string) {
 // other on the underlay, so without this they sync only through whichever
 // member both can reach.
 func (d *Daemon) overlayGossipAddrs(id types.Identity) []netip.AddrPort {
-	state, err := d.TrustedState()
+	state, err := d.gossipState()
 	if err != nil {
 		return nil
 	}
@@ -1221,6 +1225,25 @@ func (d *Daemon) setStatus(f func(*ipc.Status)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	f(&d.status)
+}
+
+// Disabled returns the record that ended the network, or nil.
+func (d *Daemon) Disabled() *log.DisabledError {
+	d.authMu.Lock()
+	defer d.authMu.Unlock()
+	return d.authority.Disabled()
+}
+
+// gossipState is TrustedState, or once the network is disabled the state it
+// ended at: log sync goes on with the members, so the record reaches them.
+func (d *Daemon) gossipState() (*log.State, error) {
+	d.authMu.Lock()
+	defer d.authMu.Unlock()
+	state, err := d.authority.TrustedState()
+	if errors.As(err, new(*log.DisabledError)) {
+		return d.authority.State(), nil
+	}
+	return state, err
 }
 
 // TrustedState returns the membership state, or the alarm that withholds it.

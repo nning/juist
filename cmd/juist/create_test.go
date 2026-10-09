@@ -29,8 +29,18 @@ func TestInitDefaults(t *testing.T) {
 	if got := state.V4Range(); got != netip.MustParsePrefix("198.18.4.0/22") {
 		t.Fatalf("a network founded without --ipv4 numbers from %v, want a /22 of its own", got)
 	}
+	if self.HasRole(types.RoleAdmin) {
+		t.Fatal("the first device vouches unasked, so the network goes limited whenever it is off for the TTL")
+	}
+}
+
+func TestInitMakesAVoucherWhenAsked(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home", "--voucher")
+	self, _ := openLog(t, c).State().Node(nodeKeysOf(t, c).Identity.Public())
 	if !self.HasRole(types.RoleAdmin) {
-		t.Fatal("the first device is not an admin device, so nothing vouches for the network's state")
+		t.Fatal("create --voucher did not make the first device a voucher")
 	}
 }
 
@@ -103,13 +113,10 @@ func TestAKeystoreFoundsSeveralNetworks(t *testing.T) {
 	t.Parallel()
 	a, b := newDaemonDevice(t, nil), newDaemonDevice(t, nil)
 	b.cli = a.cli
-	a.mustRun("create", "home")
-	mustContain(t, b.mustRun("create", "work"), `created network "work"`)
-	for _, network := range []string{"home", "work"} {
-		if _, err := os.Stat(filepath.Join(a.home, breakGlassFile(network))); err != nil {
-			t.Errorf("no break-glass secrets for %s: %v", network, err)
-		}
-	}
+	breakGlassOf(t, a.mustRun("create", "home"))
+	work := b.mustRun("create", "work")
+	mustContain(t, work, `created network "work"`)
+	breakGlassOf(t, work)
 	if keys, err := a.home2().adminKeys(); err != nil || len(keys) != 2 {
 		t.Fatalf("%d admin keys, %v", len(keys), err)
 	}
@@ -202,5 +209,52 @@ func TestInitIsCreate(t *testing.T) {
 	mustContain(t, c.mustRun("help", "init"), "Usage: juist create")
 	if strings.Contains(c.mustRun("help"), "  init ") {
 		t.Error("help lists init beside create")
+	}
+}
+
+// A key made for a network before it founds it, and no second network of
+// that name after.
+func TestAKeyMadeBeforeFoundsOneNetworkOfItsName(t *testing.T) {
+	t.Parallel()
+	a, b := newDaemonDevice(t, nil), newDaemonDevice(t, nil)
+	b.cli = a.cli
+	a.mustRun("--network", "home", "admins", "new", "alice")
+	mustContain(t, a.mustRun("create", "home", "--admin-name", "alice"), `using admin key "alice@home"`,
+		`created network "home"`)
+	if _, err := b.run("create", "home", "--admin-name", "alice"); err == nil ||
+		!strings.Contains(err.Error(), "already prepared") {
+		t.Fatalf("a second network called home with alice@home: %v", err)
+	}
+}
+
+// Changes waiting for votes travel through vouchers, so a network whose
+// changes can wait, founded without one, is told how to get one.
+func TestInitWithAdminsHintsAVoucher(t *testing.T) {
+	t.Parallel()
+	c, other := newCLI(t), newCLI(t)
+	key := regexp.MustCompile(`(nid:\S+)`).FindString(other.mustRun("admins", "new", "second"))
+	mustLack(t, newCLI(t).mustRun("create", "home", "--admin", "second="+key), "travel through vouchers")
+	mustContain(t, c.mustRun("create", "home", "--admin", "second="+key, "--quorum", "2"), "travel through vouchers")
+}
+
+// Raising the quorum where no voucher would carry a change waiting for votes
+// says so.
+func TestAQuorumWithoutAVoucherHintsOne(t *testing.T) {
+	t.Parallel()
+	laptop, _ := createDaemonDevice(t)
+	_, bob := adminKeyOf(t, "bob")
+	laptop.mustRun("admins", "add", "bob", bob)
+	mustContain(t, laptop.mustRun("admins", "quorum", "2", "--yes"), "travel through vouchers")
+}
+
+// A network founded with one voucher has no spare, and one that relays too
+// is the voucher that can both cut a device off and keep it fresh.
+func TestInitWithAVoucherWarnsOfNoSpare(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	mustContain(t, c.mustRun("create", "home", "--device", "vps", "--voucher", "--relay"),
+		"no spare voucher", "vps relays too")
+	if _, err := newCLI(t).run("create", "home", "--no-device", "--voucher"); err == nil {
+		t.Fatal("a voucher was asked of a device --no-device leaves out")
 	}
 }

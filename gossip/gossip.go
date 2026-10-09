@@ -134,6 +134,10 @@ type Options struct {
 	// sync through the tunnel alone, where peers listen on no other network.
 	OverlayOnly bool
 
+	// OnOwn is handed this node's own announcement as a peer holds it,
+	// unverified. Nil ignores it.
+	OnOwn func(Endpoint)
+
 	// OnRecords is called after a session accepted log records, so the
 	// daemon can reconcile without waiting for its next tick. It must not
 	// block for long; it runs on the session's goroutine.
@@ -1022,6 +1026,9 @@ func (n *Node) takeEndpoints(self *Endpoint, relayed []Endpoint) bool {
 		e := eps[i]
 		if e.Identity == n.opts.Self {
 			// Our own announcement, echoed back. We are the authority on it.
+			if n.opts.OnOwn != nil {
+				n.opts.OnOwn(e)
+			}
 			continue
 		}
 		if err := e.Verify(); err != nil {

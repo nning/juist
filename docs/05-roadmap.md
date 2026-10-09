@@ -247,7 +247,7 @@ Instances share no state, and a TUN device routes its own network's prefixes
 only, so no packet crosses from one network into the other through juist. They
 do share the `juist` user, so one compromised instance holds every network's
 device on the host: residual weakness 9 in
-[02-threat-model.md](02-threat-model.md), and a user per instance is for M14.
+[02-threat-model.md](02-threat-model.md), and a user per instance is for M16.
 
 - **Exit criteria:** (1) one host in two networks, in the netns matrix, pings
   members of both over IPv4 and IPv6, and no route of one prefix points into
@@ -282,8 +282,8 @@ network touched the others.
 What was built, in the plan's order:
 
 1. **A new key for every network.** `juist create` creates one, named for the
-   network as its break-glass file is (`admins/alex@home.key`), so that a
-   rename (schema 6) moves nothing. In the log the admin is still "alex".
+   network (`admins/alex@home.key`), so that a rename (schema 6) moves
+   nothing. In the log the admin is still "alex".
    A key already under that name, made with `juist admins new --network`, is
    the one it was made for and is used. Where there is a log, signing needs no
    mapping from networks to keys: the CLI signs with every local key that has
@@ -430,7 +430,7 @@ privileged-helper forwarding/NAT, client-side default-route capture with LAN byp
 and DNS handling. Design in
 [04-architecture.md](04-architecture.md#exit-nodes-and-subnet-routes-m6). It
 covers Linux; FreeBSD's side (pf) comes with M7, Android's use of an exit
-node with M10, and the rest of Android's with M17. Split
+node with M10, and the rest of Android's with M19. Split
 in three, each shipped on its own: exit nodes first, as the feature asked for,
 then subnet routers, then the exit node's DNS.
 
@@ -438,11 +438,11 @@ then subnet routers, then the exit node's DNS.
 sections say, privileged and by hand against the packages. Untried: a
 client below systemd 256, whose resolved polkit asks without the device.
 
-**Before ACLs, unscoped.** Coarse ACLs come at M13, so until then using an exit
+**Before ACLs, unscoped.** Coarse ACLs come at M14, so until then using an exit
 node is open to every member: the quorum grants the role per exit node, and each
 client's owner chooses whether to use one, but no grant says *which* members may.
 A subnet router's prefixes are likewise reachable from every member. The
-trade is accepted in [02-threat-model.md](02-threat-model.md) item 7; M13 scopes it.
+trade is accepted in [02-threat-model.md](02-threat-model.md) item 7; M14 scopes it.
 
 ## M6a — Exit nodes
 
@@ -775,7 +775,7 @@ shipped on its own, against FreeBSD 14 in qemu:
     on FreeBSD builds and adds it. `make repro-freebsd` builds the binaries
     for both systems and the package here and on a FreeBSD host, and
     compares them. A port in the ports tree needs a release to fetch, and
-    comes with M16's. `make interop` is the lab, `interop/`: a Debian 12
+    comes with M18's. `make interop` is the lab, `interop/`: a Debian 12
     and a FreeBSD 14.5 VM in qemu without root, their packages installed,
     one network across them, each the other's exit node, subnet router and
     DNS, and both packages removed cleanly; CI's `interop` workflow runs it
@@ -790,7 +790,7 @@ shipped on its own, against FreeBSD 14 in qemu:
   - **Open:** the lab's first run in CI, which waits for CI's budget.
 
 Reproducible builds, for Linux and FreeBSD alike. The rest of the release work
-— distro packages, signed releases — is M16 and the full Android app M17, after
+— distro packages, signed releases — is M18 and the full Android app M19, after
 v1.0; a minimal Android app is M10.
 
 - **Exit criteria:** (1) Linux/FreeBSD interop matrix green in CI (FreeBSD via
@@ -1266,8 +1266,8 @@ internet, and is yet to across the VPN turned off and on and the phone
 changing networks.
 
 An Android app that joins a network as a member from anywhere, reaches the
-others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M14 covers the app's key
-custody and its in-process API; the full app is M17, after v1.
+others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M16 covers the app's key
+custody and its in-process API; the full app is M19, after v1.
 
 - **Joining.** The invite's link scanned as a QR code, which `juist invite`
   renders in the terminal beside the link; or the code typed or pasted, its
@@ -1325,7 +1325,7 @@ router, exit and holdings are left out there by build tag.
 - **Lifecycle.** A foreground service keeps the mesh up in Doze, and a
   multicast lock lets mDNS find members on the Wi-Fi.
 
-The app looks finished from M10 on, not from M17: Kotlin and Compose, with a
+The app looks finished from M10 on, not from M19: Kotlin and Compose, with a
 theme of its own (colour, type, shape, spacing and motion as tokens), light
 and dark, and every state `ipc.Status` can report designed rather than left
 to an error. A screenshot test renders every screen in both themes, at 200 %
@@ -1399,7 +1399,7 @@ Decided:
 ## M11 — More than HTTPS through the ingress
 
 M9's ingress passes TCP to 443 alone, by SNI. M11 widens what it carries,
-before the audit so that M14 covers it, in two parts shipped on their own:
+before the audit so that M16 covers it, in two parts shipped on their own:
 a TCP service on a port of its own (M11a), then HTTP/3 over 443/udp (M11b).
 Both are done.
 
@@ -1611,57 +1611,183 @@ Decided:
   (4) a name not published gets no datagram forwarded; (5) `make load-lab`
   over HTTP/3 loses no visitor at the rate HTTP/2 holds.
 
-## M12 — Break-glass recovery and key backup
+## M12 — Break-glass disablement and key backup
 
-Genesis commits to break-glass secrets, `juist create` writes them to a file to
-keep offline, and `State.ValidDisablement` verifies one; nothing consumes a
-revealed secret yet. Until something does, an admin whose keys are all lost
-leaves a network whose quorum needs them unchangeable, which `juist admins
-quorum` and `juist admins require` warn about. The threat model's custody
-property (02, item 2) rests on this record, so the audit has to see it.
+**Done** on 2026-10-07, as below, reviewed (M12 reviews 1 to 5) and
+validated by `make ci-vm` and `make android-check` (12-validating.md).
 
-Open, to decide in this order:
+Genesis commits to one break-glass secret, which `juist create` shows once
+and writes nowhere. Revealed, it ends the network for good; it does not
+recover it. The threat model's custody property (02, item 2) rests
+on this record, so the audit has to see it.
 
-- **Scope.** What a revealed secret authorizes: replacing the admin set and
-  quorum, only lowering the quorum, or disabling the network outright.
-- **Use.** Whether a secret is spent by its record, and whether one secret
-  suffices or several must be revealed together.
-- **Veto.** Whether the record takes effect only after a delay in which a
-  quorum of the remaining admins can cancel it; without one, a stolen secret
-  is a takeover.
-- **Devices.** How members surface an applied or pending recovery, and whether
-  it raises the log's alarm.
-- **CLI.** One command that reveals a secret from the file and submits the
-  record.
+- **Decided:**
+  - **Scope.** A revealed secret disables the network, as tailnet lock's
+    disablement does: every member stops. Replacing the admin set was set
+    aside: a secret in the log is read by every member that relays it, any
+    of whom could reveal it again under admin keys of their own, and binding
+    a record against that takes a commit and a reveal in two records and a
+    delay the log, which has no clock, cannot measure. An end is the same
+    whoever submits it.
+  - **One secret, shown once.** `juist create` draws one and shows it as one
+    line to keep offline, apart from the admin keys; nothing writes it. Ten
+    in one file served nobody, and a file in the keystore sat beside the
+    admin key, one vault that governs the network and ends it. The secret is
+    shown wherever the genesis was handed over, failure or not, since the
+    network may exist whatever the founder heard. A file `founded-NETWORK`
+    marks the network as founded from the keystore, which the secrets' file
+    did before. Networks from before keep their file of ten, which still
+    works.
+  - **Veto.** None. A stolen secret costs availability, never custody.
+  - **The record.** `KindDisable` carries the secret and no signature, is
+    valid under every schema, so existing networks gain it without a flag
+    day, and counts wherever it hangs; nothing follows it. Its rules are in
+    [08-trust-layer-notes.md](08-trust-layer-notes.md), "Disable records".
+  - **Devices.** A device that sees the record hands it to every member,
+    then drops every tunnel, which log sync runs through, and says
+    `disabled` in `juist status`, juistd's report, the status page and the
+    app; it raises no fork alarm. A device offline meanwhile finds no member
+    to reach when it returns, so it says `no tunnel up`, not `disabled`.
+    Changes to a disabled network are refused, and `juist reset` forgets it
+    without `--force`. A build from before M12 cannot read the record and
+    keeps running until it is updated.
+  - **CLI.** `juist network disable` reads the line from stdin, without
+    echo on a terminal, or from `--secrets FILE`, or an older network's
+    file in the keystore; asks; and hands the record to juistd, which it
+    needs.
 
-The schema already carries the commitments, so existing networks gain
-recovery without a flag day.
+- **Backing up the keystore.** `juist admins export NAME` prints an admin
+  key as one line on stdout, for a pipe into a password manager, and `juist
+  admins import NAME` reads that line from stdin and writes the key file with
+  the keystore's modes, never through argv or a temporary file. The line
+  carries a version tag and a checksum, so a truncated paste fails at import.
+  Import refuses a name or a key the keystore holds already, and says whether
+  the log still gives the key a vote. Node keys are not exported: a copy
+  restored elsewhere is a clone of a member, and a lost device is removed and
+  re-invited instead.
 
-**Backing up the keystore.** Admin keys and break-glass secrets exist only in
-`~/.config/juist`, and today the only backup is copying files in juist's own
-format out of it. `juist admins export NAME` prints an admin key as one line
-on stdout, made for a pipe into a password manager (`juist admins export
-alice | bx create --name "juist alice" --password-stdin`), and `juist admins
-import NAME` reads that line from stdin and writes the key file with the
-keystore's modes — never through argv or a temporary file. The line carries a
-version tag and a checksum, so a truncated paste fails at import and not at
-the first signature. Import refuses to overwrite a key of that name and says
-whether the log still gives the key a vote: a key removed since the backup is
-worth knowing about when it is restored, not at the next change. The
-break-glass file gets the same pair under M12's recovery command, and its
-export says to keep it apart from the admin keys, since a vault holding both
-is one secret that governs the network and recovers it too; likewise k admin
-keys in one vault make the quorum one master password. Node keys are not
-exported: they are the device, a copy restored elsewhere is a clone of a
-member, and a lost device is removed and re-invited instead.
+- **Exit criteria:** (1) a disable record revealing no secret of the network
+  is refused, and one carrying a signature too; (2) one that reveals a secret
+  ends the network on every device it reaches, wherever it hangs: on the
+  chain, on a losing branch, below a compacted anchor, past a schema the
+  build stops at; (3) a backup line cut short or altered is refused at
+  import, and an import never replaces a key.
 
-## M12a — Post-quantum WireGuard
+## M13 — HTTPS alone to the outside
+
+A device on a network that passes TCP to 443 alone, or whose firewall
+sorts traffic by simple DPI (a hotel's, a company's, a school's), reaches
+its peers as one HTTPS client among others: with
+`juistd --https-only` it sends nothing but TLS over TCP to port 443 of
+member relays, and DNS queries for their names. Every packet then goes
+through a relay, at the relay's throughput and latency. It does not hide
+juist from a censor that probes servers or fingerprints ClientHellos
+(below). It is part of v1 and comes before the audit, so that M16 covers
+it.
+
+```
+member ──TLS :443, SNI relay.example.org──▶ relay (DERP) ◀──UDP or :443── peers
+```
+
+1. **No UDP from the data plane.** magicsock's `Conn.SetOnlyTCP443(true)`,
+   not `TS_DEBUG_ALWAYS_USE_DERP`, which leaves STUN, the port mapper and
+   peer relays running against a dead socket. It sends no WireGuard, disco
+   or STUN over UDP, maps no port, uses no peer relay, and netcheck picks
+   the home region by HTTPS latency (`/derp/latency-check`). It does not
+   filter relays by port: the device's DERP map holds only relays on 443,
+   by juist's own filter.
+2. **Nothing else outside TLS.** The DHT, public STUN and mDNS are off,
+   invite hosts are not dialled directly and nothing punches. Gossip runs
+   through the tunnel, so the flag needs a TUN or the netstack and stops
+   with `--tun ""` otherwise.
+3. **A relay on 443 under a real name.** A relay member given a DNS name
+   (a new `juistd` option; the operator's record points at it) serves DERP
+   on 443/tcp beside its own port, both listeners one DERP server and one
+   region, and announces the name: a new announcement field, so a schema
+   bump. Its certificate is ACME's by TLS-ALPN-01, the
+   terminator's autocert path, and members on 443 verify it by WebPKI
+   against the system roots, not by M3b's pin, which every renewal would
+   break. A certificate forged for the name gains a relay's position:
+   WireGuard's ciphertext and which member keys connect (weakness 5 in
+   [02-threat-model.md](02-threat-model.md)). The system roots also let a
+   company's TLS interception pass. A relay that is also the ingress,
+   which holds 443, gets the connections whose SNI is the relay's name
+   from the ingress, locally rather than over the overlay. STUN stays on
+   the relay's own port, off 443/udp, which HTTP/3 uses.
+4. **Announcements through the relay.** The DHT is what finds a peer again
+   once its tunnel is gone ([10-connectivity-notes.md](10-connectivity-notes.md)).
+   The relay offers the DHT's get and put over HTTPS, for the same blinded
+   keys and sealed items, answering from its cache first. It learns
+   nothing the public DHT does not show, and bounds requests per client.
+   A relayed pair whose home relay moves is the case to test.
+5. **Invites.** A link names a relay by its name on 443 (`r=` with a host
+   name), so a guest on such a network joins through the forward the relay
+   already runs.
+6. **Saying so.** `juist status` and the status page say `https only` and
+   the relays on 443, and `warning: no relay on 443/tcp` where there is
+   none. `--help` is at its 29-line cap, so a line goes.
+
+Not in this plan:
+
+- **ALPN.** magicsock's DERP client offers none and, at v1.104.0, has no
+  hook for its TLS config: a ClientHello as Go's programs send it, not a
+  browser's. DERP needs HTTP/1.1 (`Upgrade`, a hijacked connection), so
+  the most it could offer is `http/1.1`; that, or a ClientHello like
+  Chrome's (uTLS), wants a hook upstream.
+- **Active probing.** A non-member's `Upgrade: DERP` gets the server's key
+  before admission refuses it, so a prober sees a DERP server.
+- **HTTP/3.** WireGuard in HTTP datagrams (RFC 9298) would avoid TCP in
+  TCP, but magicsock has no transport hook for it, and the networks this
+  serves often block 443/udp.
+
+**Then: a company's proxy.** `--proxy URL`, HTTPS_PROXY otherwise. DERP
+dials through a CONNECT proxy once `tailscale.com/feature/useproxy` is
+linked (`derphttp`'s `dialNodeUsingProxy`), and step 4's requests take the
+same proxy. A proxy that ends TLS and passes no unknown `Upgrade` needs
+DERP over WebSocket, which v1.104.0 builds only under a debug tag and not
+on FreeBSD: read the pinned module again then.
+
+- **Exit criteria:** (1) in `make interop`, a member whose namespace passes
+  only TCP to 443 and DNS joins by a link, reaches its peers, keeps
+  reaching a peer whose home relay moves, and does again after a restart;
+  (2) a capture of its underlay holds nothing else, and nDPI classifies
+  each flow as TLS, none as WireGuard, Tailscale or STUN; (3) its
+  ClientHellos name the relay's DNS name, and the certificate is the lab's
+  ACME CA's (Pebble); (4) a relay that is also the ingress serves both on
+  443; (5) through a CONNECT proxy, criterion (1) holds.
+
+## M14 — Coarse ACLs
+
+Per-node allow-lists as quorum-signed log records; the netmap adapter renders them
+into `wgengine`'s packet filter, replacing the allow-all-members rule, on sender
+and receiver alike. They also scope M6: using an exit node, or a subnet router's
+routes, becomes a grant (Tailscale's `autogroup:internet`) instead of open to every
+member.
+
+Two members the policy keeps apart both ways are no peers at all: neither
+installs the other, so no handshake or disco passes between them, and the log
+reaches each through the members it may reach. Discovery follows the policy
+too: a member's announcement goes only to its peers, and its DHT record,
+the relay's copy of M13 included, is sealed for them, not under the group
+secret every member holds, which today shows each member every other's
+public addresses; whether keys go per pair or per group is open. Listings and `.juist` names show a member its peers
+alone. The log stays whole on every member, names, keys and overlay addresses
+included: hiding those conflicts with verifying the chain.
+
+- **Exit criterion:** under a policy denying A→B, B drops A's packets even when A's
+  daemon is patched to ignore its own outbound filter (receiver-side enforcement
+  proven independently of sender cooperation); a node whose policy state is past the
+  freshness TTL fails closed; a member without a grant for an exit node gets
+  nothing forwarded by it, enforced at the exit node; two members kept apart
+  both ways exchange no packet, and neither learns the other's endpoints.
+
+## M15 — Post-quantum WireGuard
 
 Every pair of members mixes a preshared key into WireGuard's handshake that a
 quantum computer cannot recover, so recorded tunnel traffic stays
 confidential (harvest now, decrypt later). Authentication stays X25519 and
 Ed25519; PQ authentication stays deferred, as it cannot be harvested now. It
-is part of v1 and comes before the audit, so that M14 covers it.
+is part of v1 and comes before the audit, so that M16 covers it.
 
 What it builds on:
 
@@ -1738,38 +1864,13 @@ adds a message with its own parser and fuzz target, and the derivation in
   `juist status` says which tunnels are post-quantum; (5) with stage 2, a
   third member holding the group secret cannot derive a pair's PSK.
 
-## M13 — Coarse ACLs
-
-Per-node allow-lists as quorum-signed log records; the netmap adapter renders them
-into `wgengine`'s packet filter, replacing the allow-all-members rule, on sender
-and receiver alike. They also scope M6: using an exit node, or a subnet router's
-routes, becomes a grant (Tailscale's `autogroup:internet`) instead of open to every
-member.
-
-Two members the policy keeps apart both ways are no peers at all: neither
-installs the other, so no handshake or disco passes between them, and the log
-reaches each through the members it may reach. Discovery follows the policy
-too: a member's announcement goes only to its peers, and its DHT record is
-sealed for them, not under the group secret every member holds, which today
-shows each member every other's public addresses; whether keys go per pair
-or per group is open. Listings and `.juist` names show a member its peers
-alone. The log stays whole on every member, names, keys and overlay addresses
-included: hiding those conflicts with verifying the chain.
-
-- **Exit criterion:** under a policy denying A→B, B drops A's packets even when A's
-  daemon is patched to ignore its own outbound filter (receiver-side enforcement
-  proven independently of sender cooperation); a node whose policy state is past the
-  freshness TTL fails closed; a member without a grant for an exit node gets
-  nothing forwarded by it, enforced at the exit node; two members kept apart
-  both ways exchange no packet, and neither learns the other's endpoints.
-
-## M14 — Hardening → v1
+## M16 — Hardening → v1
 
 External security audit of the trust layer + enrollment (the ≈7–9 k LOC TCB),
-plus what M6, M8, M9, M9e, M10, M11, M12a and M13 add to it — route consumption and its forwarding helper, the
+plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14 and M15 add to it — route consumption and its forwarding helper, the
 override record and the resolver, the published names and the ingress, its QUIC Initial parser included, the
-preshared-key exchange, the Android
-app's key custody and in-process API, the ACL policy and its filter — fix findings, mature fuzz corpus (consider
+disable record, the preshared-key exchange, the Android
+app's key custody and in-process API, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate — fix findings, mature fuzz corpus (consider
 OSS-Fuzz), implementation-vs-threat-model review, documentation of the
 residual-weakness acceptances for operators. Before the audit, a user per
 juistd instance, so that one network's compromised daemon on a host no longer
@@ -1819,15 +1920,15 @@ Also open before the audit:
   size of its own for checkpoints, with `TestRecordSizeAtMaxNodes` filling
   names to their caps.
 
-v1 is Linux and FreeBSD with M13's ACLs, and M10's minimal Android app;
-packaging and the full app follow in M16 and M17.
+v1 is Linux and FreeBSD with M14's ACLs, and M10's minimal Android app;
+packaging and the full app follow in M18 and M19.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) a network that has authored more than
   `MaxHashesPerFrame` records still converges on a new change, with no admin
   having asked for a checkpoint; v1.0 tag.
 
-## M15 — Multicast *(post-v1)*
+## M17 — Multicast *(post-v1)*
 
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LAN games.
 The overlay counts as one link for them. Multicast routing, streaming and
@@ -1892,7 +1993,7 @@ of an overlay address to its member that the source check rests on.
   listener joined on the default interface receives a routed group's packets
   from a member.
 
-## M16 — Packaging *(post-v1)*
+## M18 — Packaging *(post-v1)*
 
 Distro packages and signed releases, and the readiness check that keeps an
 admin from stranding members on an upgrade.
@@ -1900,10 +2001,10 @@ admin from stranding members on an upgrade.
 - **Exit criterion:** Linux/FreeBSD interop matrix green in CI via qemu;
   release artifacts reproducible byte-for-byte from two independent builders.
 
-## M17 — The full Android app *(post-v1)*
+## M19 — The full Android app *(post-v1)*
 
 The full Android app, on M10's: M6b's subnet routes through `VpnService`
-routes, and M8's names, released as M16 releases the rest.
+routes, and M8's names, released as M18 releases the rest.
 
 - **Exit criterion:** 3-platform interop matrix green in CI, Android by an
   emulator smoke test; the app's release artifact reproducible byte-for-byte
@@ -1914,7 +2015,7 @@ routes, and M8's names, released as M16 releases the rest.
 Not scheduled. The status page, and `juist status`, show reach from the
 device asked alone. Each member's own, live, direct or relayed per peer,
 needs a field every member understands before any sends it, gated by a
-schema, as the announcements' decoders are strict: the gate M12a needs too.
+schema, as the announcements' decoders are strict: the gate M15 needs too.
 A summary in the announcement would re-sign and re-gossip it, and its copy
 in the DHT, at every change of reach.
 
@@ -1961,14 +2062,14 @@ PQ authentication (ML-DSA checkpoint co-signatures).
 ## Optional idea — Device owners and an identity provider
 
 Not planned; SSO/OIDC stays a non-goal ([01-requirements.md](01-requirements.md)).
-Recorded so M13's schema leaves room for it. The rule it rests on: adding a
+Recorded so M14's schema leaves room for it. The rule it rests on: adding a
 member is the dangerous direction, removing one costs at most availability, so
 an identity provider may remove alone but never add alone.
 
 1. **Owners.** A device record names its owner, quorum-signed, in the same
    namespace as an admin key's `Holder`, so `alice` the admin and `alice` the
    owner are one person. It gives offboarding (remove every device of an
-   owner), ACLs by person or group in M13, and `juist devices` showing whose
+   owner), ACLs by person or group in M14, and `juist devices` showing whose
    device is whose. The quorum asserts the binding; nothing checks it against
    an IdP. A schema bump, like schema 3.
 2. **Scoped admin keys.** A key whose votes count only for some kinds of
@@ -2014,19 +2115,19 @@ gateway's address alone. What is missing:
 
 What it does not change: the servers see the gateway, not who used it, and
 every client still holds the clients' network's whole log, so it knows every
-other client's name, keys and addresses, and reaches them until M13. Hiding
+other client's name, keys and addresses, and reaches them until M14. Hiding
 members from each other conflicts with full replication, which verifying the
 chain rests on. An access VPN where clients know only a hub and access
 follows an SSO login is a hub-and-spoke design with a central policy, not
 this one; for owners and an identity provider see the previous section.
 
-One network under M13's policy, clients reaching the servers and not each
+One network under M14's policy, clients reaching the servers and not each
 other, is the direct way to the same end, IPv4 and names included; the
-gateway is for before M13, or for keeping the servers out of the clients' log.
+gateway is for before M14, or for keeping the servers out of the clients' log.
 
 ## Later — Networks of phones alone
 
-Not scheduled; after M17, whose names it uses. A network whose every member is
+Not scheduled; after M19, whose names it uses. A network whose every member is
 an Android phone, created, invited to, governed and kept fresh from the app,
 whose members reach each other without a VPS: a family's phones, and a
 peer-to-peer chat between them. A relay member stays the answer that always
@@ -2044,7 +2145,7 @@ only way to need none.
    IPv6, and each carrier's NAT mapping and filtering. Step 4 is judged by that
    table, so it is taken first.
 2. **Governing from the app.** Genesis on the phone, its admin key sealed by
-   Keystore as `node.keys` is (M10), which M14's audit did not cover for
+   Keystore as `node.keys` is (M10), which M16's audit did not cover for
    admin keys, so it wants a review of its own. The app invites (the QR code
    on its screen, the code on the Wi-Fi, a link through the DHT's
    rendezvous), shows the words, votes, approves carried changes (M5b),
@@ -2103,7 +2204,7 @@ only way to need none.
       handshake carries its own retransmission.
 6. **Reaching an app on a phone.** M10 tried a phone's connections out, not
    in. An app listening on the phone's overlay address takes a connection
-   from another member through `VpnService`, tested. Until M13 every member
+   from another member through `VpnService`, tested. Until M14 every member
    reaches every port a phone's apps open.
 
 A chat is not juist's: a separate app talks to members by their names, and

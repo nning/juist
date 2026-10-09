@@ -172,6 +172,9 @@ func (a *app) writePending(name string, aum *types.AUM) (string, error) {
 // may be the air-gapped key the record is waiting for. A device's own
 // signature, which rotations need, is added where its keys are.
 func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity, error) {
+	if auth != nil && auth.Disabled() != nil {
+		return nil, fmt.Errorf("%q is disabled; nothing changes it any more", auth.State().Network())
+	}
 	admins, err := a.signingKeys(aum, auth)
 	if err != nil {
 		return nil, err
@@ -366,6 +369,10 @@ func (a *app) applyRecords(records []types.AUM, report bool) error {
 	n, err := a.openNode()
 	if err != nil {
 		return err
+	}
+	if auth, err := n.log(); err == nil && auth.Disabled() != nil &&
+		slices.ContainsFunc(records, func(r types.AUM) bool { return r.Kind != types.KindDisable }) {
+		return fmt.Errorf("%q is disabled; nothing changes it any more", auth.State().Network())
 	}
 	// A rotation of this device's keys is adopted where the keys are; what
 	// the device calls itself before and after says whether it happened.

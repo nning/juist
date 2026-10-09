@@ -32,8 +32,10 @@ created network "home"
   IPv4 range    198.18.36.0/22
   Quorum        1 of 1 vote
   Admin         alice
-  Break-glass   /home/alice/.config/juist/break-glass-home.secrets (keep offline)
+  Break-glass   juist-break-glass-1.qL0x…dW8.u3Rk6g
   Operator      alice
+warning: the break-glass secret is shown only now and kept nowhere: keep it safe, apart from the admin keys
+hint: with it, juist network disable ends the network once too few admin keys are left to change it
 ```
 
 juist fragt einmal nach sudo, um dich zum **Operator** des Geräts zu machen.
@@ -102,13 +104,13 @@ home · connected
   Devices       1 other, heard from
   Tunnels       1 of 1 live
   Names         home.juist
-  Freshness     vouched just now, valid 48h
+  Freshness     unchecked: no voucher
   Ports         udp/41643
   Updated       just now
 
-NAME                  IPV4         IPV6                                     ROLES    REACHED
-laptop (this device)  198.18.36.1  fd84:7a1f:97ee:5630:7c56:12b6:971f:2222  voucher  -
-nas                   198.18.36.2  fd84:7a1f:97ee:21a8:2ab0:e8e:caa0:b306   -        direct
+NAME                  IPV4         IPV6                                     ROLES  REACHED
+laptop (this device)  198.18.36.1  fd84:7a1f:97ee:5630:7c56:12b6:971f:2222  -      -
+nas                   198.18.36.2  fd84:7a1f:97ee:21a8:2ab0:e8e:caa0:b306   -      direct
 $ ping 198.18.36.2
 ```
 
@@ -140,11 +142,17 @@ Adresse, etwa ein VPS, braucht 41643/udp.
   macht ihn ungültig. Der Link bleibt dann trotzdem gültig.
 - Eine Einladung gilt eine Stunde und für genau ein Gerät. Für das nächste
   rufst du `juist invite` erneut auf.
-- Die Break-glass-Datei liest kein juist-Befehl. Bewahre sie trotzdem
-  offline auf.
-- Der Laptop ist der erste **Voucher** des Netzes, also ein Gerät, das
-  stündlich bestätigt, dass der Stand des Netzes aktuell ist. Halte immer
-  einen Voucher online. Mehr dazu unter [Frische]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
+- Die Zeile `Break-glass` erscheint nur dieses eine Mal und wird nirgends
+  gespeichert. Lege sie in einen Passwortmanager oder auf Papier, getrennt
+  von den Admin-Schlüsseln: Mit ihr beendest du das Netz, wenn nicht mehr
+  genug Admin-Schlüssel übrig sind, um es zu ändern
+  ([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
+- Das Netz hat noch keinen **Voucher**, also kein Gerät, das stündlich
+  bestätigt, dass der Stand des Netzes aktuell ist. Das begrenzt, wie lange
+  ein abgeschnittenes Gerät noch mit einem entfernten sprechen kann. Gib die
+  Rolle nur Geräten, die ständig laufen (`juist grant GERÄT voucher`);
+  `juist create --voucher` macht schon das erste Gerät dazu. Mehr dazu unter
+  [Frische]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
 
 ## Wenn etwas nicht klappt
 

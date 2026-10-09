@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"crypto/ecdh"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -1050,5 +1051,67 @@ func TestCallsInProcessAreNotHeldToOneUsersShare(t *testing.T) {
 	}
 	if _, err := ipc.CallVia(s.Pipe, ipc.Request{Command: ipc.CmdStatus}); err != nil {
 		t.Errorf("a status call beside %d others: %v", maxOperatorsPerUser+2, err)
+	}
+}
+
+// The CLI checks the disable record against the log it rebuilds, so the reply
+// of records off the chain carries it whatever else fills its bound.
+func TestTheDisableRecordComesFirstOffTheChain(t *testing.T) {
+	f := newServiceFixture(t, true)
+	mesh := f.s.Mesh()
+	mesh.authMu.Lock()
+	b := mesh.authority.Builder()
+	mesh.authMu.Unlock()
+	var lost types.Hash
+	var admissions []types.AUM
+	for i, name := range []string{"one", "two"} {
+		dev := newDevice(t, name, netip.AddrFrom4([4]byte{100, 64, 0, byte(50 + i)}))
+		rec, err := b.AddNode(dev.record, f.nw.sealer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rec.Sign(f.nw.admin); err != nil {
+			t.Fatal(err)
+		}
+		admissions = append(admissions, rec)
+	}
+	if err := mesh.Inform(admissions); err != nil {
+		t.Fatal(err)
+	}
+	mesh.authMu.Lock()
+	head := mesh.authority.Head()
+	mesh.authMu.Unlock()
+	for _, r := range admissions {
+		if r.Hash() != head {
+			lost = r.Hash()
+		}
+	}
+	// Hashed after the lost admission, so that a reply in hash order alone
+	// would leave it out.
+	var aum types.AUM
+	for i := uint32(1); ; i++ {
+		parent := types.Hash{7}
+		binary.BigEndian.PutUint32(parent[1:], i)
+		aum = types.AUM{Kind: types.KindDisable, Prev: &parent, Secret: &f.nw.disablement}
+		if aum.Hash().Compare(lost) > 0 {
+			break
+		}
+	}
+	if err := mesh.Inform([]types.AUM{aum}); err != nil {
+		t.Fatal(err)
+	}
+	chain, err := f.s.chain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.s.orphans(chain, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("%d records off the chain, want 1", len(out))
+	}
+	if got, err := types.DecodeAUM(out[0]); err != nil || got.Hash() != aum.Hash() {
+		t.Fatalf("the first record off the chain is not the disable record: %v", err)
 	}
 }

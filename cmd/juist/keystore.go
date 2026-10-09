@@ -86,8 +86,8 @@ func (k adminKeyFile) network() string {
 	return network
 }
 
-// adminKeyName names the key person holds for network, as its break-glass
-// file is named: from the name it had then, so that a rename moves nothing.
+// adminKeyName names the key person holds for network: from the name it had
+// then, so that a rename moves nothing.
 func adminKeyName(person, network string) string {
 	if network == "" {
 		return person
@@ -252,10 +252,13 @@ func loadAdminKey(path string) (priv types.PrivateIdentity, unfiled bool, err er
 	return priv, unfiled, nil
 }
 
-// breakGlassFile holds a network's break-glass secrets, and genesisFileFor
+// foundedFile marks a network founded from this keystore; genesisFileFor holds
 // its genesis record while that collects signatures: not secret, since every
-// admin in the ceremony has to see it. Both are per network, so one keystore
-// can found several.
+// admin in the ceremony has to see it; breakGlassFile holds the break-glass
+// secrets of a network that has such a file. All are per network, so one
+// keystore can found several.
+func foundedFile(network string) string { return "founded-" + fileSafe(network) }
+
 func breakGlassFile(network string) string { return "break-glass-" + fileSafe(network) + ".secrets" }
 
 func genesisFileFor(network string) string { return "genesis-" + fileSafe(network) + ".rec" }

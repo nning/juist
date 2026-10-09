@@ -243,6 +243,38 @@ func TestSessionExchangesAnnouncements(t *testing.T) {
 	}
 }
 
+// A peer holding this node's announcement hands it back, for the node to
+// judge against its own.
+func TestSessionEchoesTheNodesOwnAnnouncement(t *testing.T) {
+	net1 := types.Hash{1}
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	echoed := make(chan Endpoint, 4)
+	a := newTestNodeTimeout(t, net1, 3, s, 2*time.Second, func(o *Options) {
+		o.OnOwn = func(e Endpoint) { echoed <- e }
+	})
+	b := newTestNode(t, net1, 3, s)
+	previous, _ := a.announce()
+	previous.Seq = 5
+	if err := previous.Sign(a.priv); err != nil {
+		t.Fatal(err)
+	}
+	b.cache.Add(previous)
+	if err := a.node.SyncWith(t.Context(), b.addr(), types.Identity{}); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	select {
+	case e := <-echoed:
+		if e.Seq != previous.Seq {
+			t.Fatalf("echoed %d, the peer holds %d", e.Seq, previous.Seq)
+		}
+	default:
+		t.Fatal("the peer's copy of this node's announcement was not handed on")
+	}
+}
+
 // Both sides of a session hear which records the other holds, under the
 // identity it announces.
 func TestSessionReportsWhatThePeerHolds(t *testing.T) {

@@ -1,7 +1,7 @@
 ---
 title: Umbenennen und umnummerieren
 linkTitle: Umbenennen und umnummerieren
-description: Dem Netz oder einem Gerät einen anderen Namen geben oder die IPv4-Adressen der Geräte verschieben, auf allen Geräten gleichzeitig.
+description: Dem Netz oder einem Gerät einen anderen Namen geben, die IPv4-Adressen der Geräte verschieben oder das Netz beenden, auf allen Geräten gleichzeitig.
 lead: Du kannst ein Netz oder ein Gerät umbenennen und die IPv4-Adressen in einen anderen Bereich verschieben, ohne etwas neu einzurichten. Die alten Adressen funktionieren noch eine Woche lang, damit ein Gerät, das in dieser Zeit offline ist, nicht den Anschluss verliert.
 ---
 
@@ -115,6 +115,33 @@ Haben alle Geräte vom Umzug erfahren, musst du nicht auf die Frist warten:
 `--finish` warnt vorher, dass Geräte, die vom Umzug noch nichts wissen, die
 alte Adresse verlieren.
 
+## Das Netz beenden
+
+`juist create` zeigt das Break-glass-Geheimnis des Netzes einmal an, als
+Zeile `Break-glass   juist-break-glass-1.…`, und speichert es nirgends. Mit
+ihm endet das Netz endgültig, ganz ohne Admin: der Ausweg, wenn nicht mehr
+genug Admin-Schlüssel übrig sind, um es zu ändern, weil sie verloren oder
+gestohlen sind.
+
+{{< step on="einem Gerät des Netzes" >}}
+```console {device="laptop"}
+$ pass show juist/break-glass-home | juist network disable --yes
+disabled "home"; every device stops as the record reaches it
+```
+{{< /step >}}
+
+Ohne Pipe fragt `juist network disable` nach der Zeile, die es nicht anzeigt,
+und dann, ob es das Netz beenden soll. `--secrets FILE` liest die Zeile aus
+einer Datei.
+
+Jedes Gerät gibt den Record weiter und baut seine Tunnel ab, sobald es davon
+erfährt, und sein `juist status` meldet `disabled`. Jedes beginnt dann mit
+`juist reset` von vorn und tritt einem Netz bei, das mit `juist create` neu
+entsteht.
+
+Bewahre die Zeile getrennt von den Admin-Schlüsseln auf: Ein Tresor mit
+beidem regiert das Netz und beendet es.
+
 ## Gut zu wissen
 
 - Alte IPv4-Adressen funktionieren in der Voreinstellung noch 7 Tage. Mit
@@ -143,6 +170,13 @@ alte Adresse verlieren.
   teilt.
 - Ein Admin-Schlüssel behält den Gerätenamen, unter dem er abgelegt wurde;
   `juist admins` zeigt ihn.
+- Wer die Break-glass-Zeile hat, kann das Netz beenden. Ein Gerät mit einem
+  juist, das älter ist als `juist network disable`, hält erst an, wenn es
+  aktualisiert ist, und ein Gerät, das gerade offline ist, findet danach
+  kein Gerät mehr, das es erreicht.
+- Netze, die entstanden sind, bevor juist die Zeile anzeigte, haben ihre
+  Geheimnisse im Schlüsselspeicher, als `break-glass-NETZ.secrets`.
+  `juist network disable` liest diese Datei dort; bring sie offline.
 
 ## Wenn etwas nicht klappt
 
@@ -154,3 +188,6 @@ alte Adresse verlieren.
 | `juist: the network predates renumbering` | Sobald alle Geräte diese Version haben: `juist log upgrade`. |
 | `juist: the network predates renaming a device` | Ebenso. |
 | `juist: another device is named "tablet" already` | Wähl einen anderen Namen, oder benenne zuerst das andere Gerät um. |
+| `juist: no line on stdin` | Leite die Break-glass-Zeile hinein, oder gib ihre Datei mit `--secrets FILE` an. |
+| `juist: no break-glass secret of "home" there` | Die Zeile gehört zu einem anderen Netz. |
+| `juist: "home" is disabled; nothing changes it any more` | Das Netz ist beendet: `juist reset`, dann `juist create`. |

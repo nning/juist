@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nning/juist/internal/dnsfwd"
+	"github.com/nning/juist/internal/names"
 	"github.com/nning/juist/internal/resolved"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
@@ -597,5 +599,62 @@ func TestTheStatusNamesThePublicDomain(t *testing.T) {
 	want := ipc.Names{Domain: "m2-testnet.juist", Public: "pub.example.org", Not: errNoDomains.Error(), Cannot: true}
 	if n := f.d.Status().Names; n == nil || !reflect.DeepEqual(*n, want) {
 		t.Errorf("the status says %+v, want %+v", n, want)
+	}
+}
+
+// juistd's resolver passes on a public name it does not answer with a TTL
+// no longer than its own answers', so that the name, once published, is
+// answered by it soon.
+func TestTheNamesServerPassesOnShortTTLs(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, src, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			var p dnsmessage.Parser
+			h, _ := p.Start(buf[:n])
+			q, _ := p.Question()
+			b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true})
+			b.StartQuestions()
+			b.Question(q)
+			b.StartAnswers()
+			b.AAAAResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 38400},
+				dnsmessage.AAAAResource{AAAA: netip.MustParseAddr("2001:db8::1").As16()})
+			m, _ := b.Finish()
+			pc.WriteTo(m, src)
+		}
+	}()
+	up := netip.MustParseAddrPort(pc.LocalAddr().String())
+	s, err := defaultNamesServer("")(netip.MustParseAddrPort("127.0.0.1:0"),
+		func([]byte) []byte { return nil }, func([]byte) []netip.AddrPort { return []netip.AddrPort{up} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	c, err := net.Dial("udp", netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), s.(*dnsfwd.Forwarder).Port()).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	c.Write(nameQuery(t, "status.example.org."))
+	buf := make([]byte, 512)
+	n, err := c.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m dnsmessage.Message
+	if err := m.Unpack(buf[:n]); err != nil || len(m.Answers) != 1 {
+		t.Fatalf("answer %+v, %v", m, err)
+	}
+	if ttl := m.Answers[0].Header.TTL; ttl != names.TTL {
+		t.Errorf("passed on with TTL %d, want %d", ttl, names.TTL)
 	}
 }

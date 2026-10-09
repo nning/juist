@@ -91,7 +91,10 @@ func defaultNamesServer(dev string) NamesServer {
 		// Never the host's resolv.conf, whose stub would route it back here.
 		none := func() []netip.AddrPort { return nil }
 		return dnsfwd.Start(dnsfwd.Options{Addrs: []netip.Addr{addr.Addr()}, Port: addr.Port(), Device: dev,
-			Allowed: own, Local: true, Answer: answer, Upstream: none, UpstreamFor: upstream})
+			Allowed: own, Local: true, Answer: answer, Upstream: none, UpstreamFor: upstream,
+			// A public name newly pointed at a member replaces its public
+			// address in the host's cache as soon as its own answers expire.
+			MaxTTL: names.TTL})
 	}
 }
 

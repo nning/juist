@@ -1,6 +1,6 @@
 module github.com/nning/juist
 
-go 1.27.1
+go 1.27.2
 
 require (
 	filippo.io/edwards25519 v1.2.0
@@ -17,7 +17,7 @@ require (
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/time v0.16.0
 	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72

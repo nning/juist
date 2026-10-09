@@ -1,7 +1,7 @@
 ---
 title: Keys, rotating and resetting
 linkTitle: Keys
-description: Give a device new keys, start a device over, deal with a lost device, and know what cannot be undone.
+description: Give a device new keys, start a device over, deal with a lost device, back up admin keys, and know what cannot be undone.
 lead: Each device has keys of its own, and the network shares one secret. You can replace them, take a device out and start it over, and cut off a device you have lost.
 ---
 
@@ -94,6 +94,39 @@ A replacement device joins with a new invite, as any new device does
 its `juist status` says `removed`. Join it again with a new invite, or run
 `juist reset` there.
 
+## Backing up admin keys
+
+An admin key exists only in the keystore of the machine it was made on. To
+keep a copy in a password manager, print it as one line and pipe it there.
+`juist admins` lists the keys on this machine under `KEY HERE`:
+
+{{< step on="an admin's machine" >}}
+```sh
+juist admins export alice@home | pass insert -m juist/alice
+```
+{{< /step >}}
+
+To have it back, on any machine, pipe the line in again:
+
+```console {device="laptop"}
+$ pass show juist/alice | juist admins import alice@home
+imported admin key "alice@home"
+it casts 1 vote in "home"
+```
+
+The line goes through a pipe, never onto the command line. It carries a
+checksum, so a line cut short is refused. An import never replaces a key,
+and warns `"home" gives it no vote` where the key was removed since the
+backup.
+
+The break-glass line `juist create` showed is kept the same way, apart from
+the admin keys
+([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
+
+A device's own keys are not exported: a copy on another machine would be a
+second device under the first one's name. A lost device is removed, and a new
+one invited.
+
 ## Good to know
 
 - Rotating, resetting and removing are for root and the device's
@@ -105,11 +138,12 @@ its `juist status` says `removed`. Join it again with a new invite, or run
 {{< note danger >}}
 Losing a quorum of admin keys is final. With fewer admin keys left than a
 change needs, no change can be signed again: no device can be added or
-removed. `juist create` writes break-glass secrets, such as
-`~/.config/juist/break-glass-home.secrets`, which no juist command reads.
-Keep them offline anyway. What helps is more
-admins than the quorum needs, each on devices of their own, and for
-`juist admins require`, one key more than it requires.
+removed. The break-glass secret `juist create` shows does not give the
+network new admins: it ends it for good
+([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
+What helps is a backup of each admin key, more admins than the quorum needs,
+each on devices of their own, and for `juist admins require`, one key more
+than it requires.
 {{< /note >}}
 
 Why juist accepts this is under

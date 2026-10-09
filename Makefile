@@ -11,7 +11,7 @@ GOFLAGS ?=
 
 # One toolchain for every target, so a commit builds to the same bytes anywhere
 # and local runs match CI's GO_VERSION.
-export GOTOOLCHAIN ?= go1.27.1
+export GOTOOLCHAIN ?= go1.27.2
 
 # Static binaries that need no C toolchain; only the race detector wants cgo.
 export CGO_ENABLED ?= 0
@@ -21,8 +21,7 @@ GOBUILD = CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath
 
 # Tool versions are pinned so local runs and CI agree, and so a compromised or
 # simply changed upstream cannot silently alter what our gates check. Bump
-# these deliberately.
-STATICCHECK_VERSION ?= v0.8.1
+# these deliberately; staticcheck's are in tools/go.mod.
 GOVULNCHECK_VERSION ?= v1.7.0
 ACTIONLINT_VERSION  ?= v1.7.7
 
@@ -566,7 +565,8 @@ vet: ## Run go vet
 
 .PHONY: staticcheck
 staticcheck: ## Run staticcheck
-	$(GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
+	$(GO) build -C tools -o $(abspath $(BUILDDIR))/staticcheck honnef.co/go/tools/cmd/staticcheck
+	$(BUILDDIR)/staticcheck ./...
 
 .PHONY: govulncheck
 govulncheck: ## Check dependencies against the Go vulnerability database

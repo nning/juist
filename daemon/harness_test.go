@@ -73,6 +73,9 @@ type network struct {
 	v4Prefix *netip.Prefix
 	domain   string
 
+	// disablement is the network's one break-glass secret.
+	disablement types.DisablementSecret
+
 	// secretsByEpoch records what each epoch's group secret is, so a test
 	// can check that a node opened the right one.
 	mu            sync.Mutex
@@ -112,8 +115,7 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 		nw.devices = append(nw.devices, newDevice(t, fmt.Sprintf("n%d", i), v4))
 	}
 	mutate(nw)
-	disablement := make([]byte, types.DisablementSecretSize)
-	if _, err := rand.Read(disablement); err != nil {
+	if _, err := rand.Read(nw.disablement[:]); err != nil {
 		t.Fatal(err)
 	}
 	records := make([]types.NodeRecord, 0, n)
@@ -124,7 +126,7 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 	}
 	g, err := log.Genesis("m2-testnet", 1,
 		[]types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin"}},
-		[]types.Hash{types.DisablementCommit(disablement)},
+		[]types.Hash{types.DisablementCommit(nw.disablement[:])},
 		records, nw.sealer())
 	if err != nil {
 		t.Fatalf("building genesis: %v", err)

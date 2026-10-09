@@ -12,7 +12,7 @@ Fedora an RPM, and on FreeBSD a pkg package. There are no released packages,
 so you build the package from the source and then install it. A phone joins
 with the app instead, see [Android]({{< relref "docs/android" >}}).
 
-You need Go 1.27 to build it. `make` then fetches and uses go1.27.1 itself, so
+You need Go 1.27 to build it. `make` then fetches and uses go1.27.2 itself, so
 that a commit builds to the same bytes on any machine.
 
 ## Installing on this device

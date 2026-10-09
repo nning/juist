@@ -62,6 +62,10 @@ type Options struct {
 	// Answer, where set, answers a query itself, nil passing it upstream.
 	Answer func(query []byte) []byte
 
+	// MaxTTL, where set, caps the TTL of every record an answer from
+	// upstream carries, in seconds.
+	MaxTTL uint32
+
 	// Local has the host alone ask, its resolver as one source for all its
 	// programs: no source is held to the limits on one.
 	Local bool
@@ -330,13 +334,60 @@ func (f *Forwarder) ask(network string, q []byte) ([]byte, error) {
 		case resp[3]&0x0f == 2 || resp[3]&0x0f == 5:
 			failed = resp
 		default:
+			capTTL(resp, f.opts.MaxTTL)
 			return resp, nil
 		}
 	}
 	if failed != nil {
+		capTTL(failed, f.opts.MaxTTL)
 		return failed, nil
 	}
 	return nil, last
+}
+
+// capTTL lowers every TTL in msg above max to max, in place, but an OPT
+// record's, whose TTL holds flags; zero caps none. It stops where msg does
+// not parse.
+func capTTL(msg []byte, max uint32) {
+	if max == 0 || len(msg) < headerLen {
+		return
+	}
+	off := headerLen
+	for range binary.BigEndian.Uint16(msg[4:]) {
+		if off = skipName(msg, off); off < 0 || off+4 > len(msg) {
+			return
+		}
+		off += 4
+	}
+	records := int(binary.BigEndian.Uint16(msg[6:])) + int(binary.BigEndian.Uint16(msg[8:])) + int(binary.BigEndian.Uint16(msg[10:]))
+	for range records {
+		if off = skipName(msg, off); off < 0 || off+10 > len(msg) {
+			return
+		}
+		if typ, ttl := binary.BigEndian.Uint16(msg[off:]), binary.BigEndian.Uint32(msg[off+4:]); typ != typeOPT && ttl > max {
+			binary.BigEndian.PutUint32(msg[off+4:], max)
+		}
+		off += 10 + int(binary.BigEndian.Uint16(msg[off+8:]))
+	}
+}
+
+const typeOPT = 41
+
+// skipName is the offset past the name at off in msg, -1 where there is none.
+func skipName(msg []byte, off int) int {
+	for off < len(msg) {
+		switch l := int(msg[off]); {
+		case l == 0:
+			return off + 1
+		case l&0xc0 == 0xc0:
+			return off + 2
+		case l&0xc0 != 0:
+			return -1
+		default:
+			off += 1 + l
+		}
+	}
+	return -1
 }
 
 func exchange(network string, up netip.AddrPort, q []byte) ([]byte, error) {

@@ -123,6 +123,8 @@ Record types, all hash-chained, all carrying signer IDs + signatures:
   [08-trust-layer-notes.md](08-trust-layer-notes.md#renumbering).
 - `RenameNetwork` (schema 6) — gives the network another name. The name is a label;
   the genesis hash is what identifies the network, so nothing else changes.
+- `Disable` (every schema) — reveals a break-glass secret the genesis committed to and
+  ends the network for good; unsigned, and in effect wherever it hangs (M12).
 - `Lease` — an admin device's signed statement "head H at time T", the delegated
   signer being a member the quorum grants the `admin` role; not chained into the
   log (hourly), but references the head. TTL default 48 h, set by the acceptor,
@@ -184,11 +186,11 @@ plumbing and the privileged helper.
 
 **Ships before coarse ACLs, unscoped.** Who may *use* an exit node is an
 access-control question (Tailscale expresses it as `autogroup:internet`), and coarse
-ACLs come later, at M13 in [05-roadmap.md](05-roadmap.md). Until then the
+ACLs come later, at M14 in [05-roadmap.md](05-roadmap.md). Until then the
 `exit` role means "every member may route all their internet traffic through
 this member's uplink" — an all-or-nothing grant the quorum makes per exit node,
 with no way to scope it to some members. Accepted in
-[02-threat-model.md](02-threat-model.md) item 7; M13 scopes it.
+[02-threat-model.md](02-threat-model.md) item 7; M14 scopes it.
 
 What changes, layer by layer:
 
@@ -269,7 +271,7 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
   epoch)` — post-quantum harvest-now-decrypt-later hedge using stdlib `crypto/mlkem`.
   Rotated on epoch bump via WG reconfig (next handshake picks it up; tunnels stay up).
   The key is in the schema from M1 and consumed for the epoch HPKE fan-out; the
-  data plane takes it in M12a ([05-roadmap.md](05-roadmap.md)), the engine's PSK
+  data plane takes it in M15 ([05-roadmap.md](05-roadmap.md)), the engine's PSK
   path in [07-embedding-notes.md](07-embedding-notes.md).
 - Addressing: v6 ULA `fd<40 bits from genesis hash>::/48`, host bits =
   `truncate(SHA-256(identity pubkey))`; v4 assigned explicitly in AddNode, from the prefix

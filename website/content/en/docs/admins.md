@@ -90,12 +90,16 @@ Bob now holds two keys, which cast one vote between them.
 {{< /step >}}
 
 {{< step on="an admin's device" >}}
-Require both admins for every change, and two vouchers to confirm that the
-network's state is current:
+Make three devices that are always on vouchers, require two of them to
+confirm that the network's state is current, and both admins for every
+change:
 
 ```sh
-juist admins quorum 2
+juist grant nas voucher
+juist grant vps voucher
+juist grant pi voucher
 juist admins vouchers 2
+juist admins quorum 2
 ```
 
 `juist admins` now shows `Quorum  2 of 2 votes`.
@@ -103,7 +107,7 @@ juist admins vouchers 2
 
 With `juist admins vouchers 2`, one voucher that lies about the network's
 state cannot fool a device alone. It needs one accomplice. Two vouchers must
-then be online.
+then be online, which the third keeps true while one is down.
 
 ## Alone, with two devices for every change
 
@@ -178,9 +182,12 @@ change touches.
 - `juist admins remove NAME|KEY` takes a key's vote away. It is refused if
   the rest cannot reach the quorum.
 - `juist admins quorum` warns when every change needs every admin, since then
-  losing one admin's keys locks the network.
-- Admin keys never leave their machine, and that machine needs no network of
-  its own. `juist create --no-device` makes a network from a machine that
+  losing one admin's keys locks the network. Above 1 in a network with no
+  voucher, it says that changes waiting for votes travel through vouchers, as
+  `juist create --quorum` does.
+- Admin keys leave their machine only as a backup line
+  ([Keys]({{< relref "docs/keys" >}}#backing-up-admin-keys)), and that machine
+  needs no network of its own. `juist create --no-device` makes a network from a machine that
   only signs.
 - Run admin commands as yourself, without sudo: the keys are in your
   keystore.
@@ -193,10 +200,10 @@ change touches.
 
 {{< note danger >}}
 Losing every key of the admins a change needs locks the network for good.
-No juist command reads the break-glass secrets `juist create` writes. Keep
-them offline anyway. Give the network more admins than
-the quorum needs, each on devices of their own
-([Keys]({{< relref "docs/keys" >}})).
+The break-glass secret `juist create` shows only ends it
+([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
+Back each admin key up, and give the network more admins than the quorum
+needs, each on devices of their own ([Keys]({{< relref "docs/keys" >}}#backing-up-admin-keys)).
 {{< /note >}}
 
 ## If something goes wrong

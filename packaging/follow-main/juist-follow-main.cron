@@ -1,0 +1,2 @@
+# Builds juist from main when it changed, and installs it.
+* * * * * root /usr/bin/lockf -s -t 0 /var/run/juist-follow-main.lock /usr/local/lib/juist-follow-main/run >>/var/log/juist-follow-main.log 2>&1

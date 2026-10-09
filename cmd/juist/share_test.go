@@ -91,7 +91,7 @@ func TestAShareIsReadUnderItsTokenAlone(t *testing.T) {
 func TestShareUntilStopped(t *testing.T) {
 	t.Parallel()
 	h := newHost(t)
-	h.mustRun("create", "home", "--device", "laptop")
+	h.mustRun("create", "home", "--device", "laptop", "--voucher")
 	calls := filepath.Join(t.TempDir(), "calls")
 	h.layout.serveScript = filepath.Join(t.TempDir(), "serve.sh")
 	if err := os.WriteFile(h.layout.serveScript, []byte("#!/bin/sh\necho \"$*\" >> "+calls+"\n"), 0o755); err != nil {

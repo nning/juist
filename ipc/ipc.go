@@ -911,7 +911,7 @@ func (r *Response) makePrintable() {
 	r.Err = printable(r.Err)
 	if st := r.Status; st != nil {
 		for _, f := range []*string{&st.NetworkName, &st.SelfName, &st.StartError, &st.Operator,
-			&st.Alarm, &st.EpochError, &st.SchemaAlarm, &st.DataPlaneError, &st.HomeRelay} {
+			&st.Alarm, &st.Disabled, &st.EpochError, &st.SchemaAlarm, &st.DataPlaneError, &st.HomeRelay} {
 			*f = printable(*f)
 		}
 		for i := range st.Silent {

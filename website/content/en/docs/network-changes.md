@@ -1,7 +1,7 @@
 ---
 title: Renaming and renumbering
 linkTitle: Renaming and renumbering
-description: Give the network or a device another name, or move its devices' IPv4 addresses, on every device at once.
+description: Give the network or a device another name, move its devices' IPv4 addresses, or end the network, on every device at once.
 lead: You can rename a network or a device, and move its IPv4 addresses to another range, without setting anything up again. Old addresses keep working for a week, so a device that is offline meanwhile is not cut off.
 ---
 
@@ -109,6 +109,31 @@ When every device has heard of the move, you need not wait for the deadline:
 `--finish` warns first: devices not told of the move yet lose the old
 address.
 
+## Ending the network
+
+`juist create` shows the network's break-glass secret once, as the line
+`Break-glass   juist-break-glass-1.…`, and keeps it nowhere. With it the
+network ends for good, with no admin needed: the way out where too few admin
+keys are left to change it, because they are lost or stolen.
+
+{{< step on="a device of the network" >}}
+```console {device="laptop"}
+$ pass show juist/break-glass-home | juist network disable --yes
+disabled "home"; every device stops as the record reaches it
+```
+{{< /step >}}
+
+Without a pipe, `juist network disable` asks for the line, which it does not
+show, and then whether to end the network. `--secrets FILE` reads the line
+from a file.
+
+Every device hands the record on and drops its tunnels as soon as it hears of
+it, and its `juist status` says `disabled`. Each starts over with
+`juist reset` and joins a network made anew with `juist create`.
+
+Keep the line apart from the admin keys: one vault holding both governs the
+network and ends it.
+
 ## Good to know
 
 - Old IPv4 addresses keep working for 7 days by default. `--for 12h` or
@@ -132,6 +157,13 @@ address.
   cannot take such a name, since it shares under its name.
 - An admin key keeps the device name it was filed under; `juist admins`
   shows it.
+- Anyone holding the break-glass line can end the network. A device running
+  a juist older than `juist network disable` does not stop until it is
+  updated, and a device offline at the time finds no device to reach when
+  it is back.
+- Networks made before juist showed the line kept their secrets in the
+  keystore, as `break-glass-NETWORK.secrets`. `juist network disable` reads
+  that file where it is; move it offline.
 
 ## If something goes wrong
 
@@ -143,3 +175,6 @@ address.
 | `juist: the network predates renumbering` | once every device runs this version: `juist log upgrade` |
 | `juist: the network predates renaming a device` | the same |
 | `juist: another device is named "tablet" already` | pick another name, or rename that device first |
+| `juist: no line on stdin` | pipe the break-glass line in, or give its file with `--secrets FILE` |
+| `juist: no break-glass secret of "home" there` | that line is another network's |
+| `juist: "home" is disabled; nothing changes it any more` | the network has ended: `juist reset`, then `juist create` |

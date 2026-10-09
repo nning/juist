@@ -431,3 +431,60 @@ func TestSTUNAnswersAreRateLimited(t *testing.T) {
 		t.Fatalf("%d of %d requests answered in %v; the limit allows %d", got, asked, elapsed, limit)
 	}
 }
+
+// One host's flood spends its own answers, not another's netcheck.
+func TestSTUNFloodFromOneHostStarvesNoOther(t *testing.T) {
+	s := testRelay(t, map[key.NodePublic]bool{})
+	if s.STUNPort() == 0 {
+		t.Skip("no STUN port could be bound here")
+	}
+	flooder, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listening: %v", err)
+	}
+	defer flooder.Close()
+	other, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 2)})
+	if err != nil {
+		t.Skipf("no second loopback address here: %v", err)
+	}
+	defer other.Close()
+	to := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), s.STUNPort())
+	stop := make(chan struct{})
+	flooding := make(chan struct{})
+	go func() {
+		defer close(flooding)
+		req := stun.Request(stun.NewTxID())
+		// 20,000 requests a second, a hundred times the rate in all.
+		for tick := time.NewTicker(10 * time.Millisecond); ; <-tick.C {
+			select {
+			case <-stop:
+				tick.Stop()
+				return
+			default:
+			}
+			for range 200 {
+				_, _ = flooder.WriteToUDPAddrPort(req, to)
+			}
+		}
+	}()
+	defer func() { close(stop); <-flooding }()
+	time.Sleep(time.Second) // past the burst in all
+
+	buf := make([]byte, 1500)
+	for range 3 {
+		txid := stun.NewTxID()
+		if _, err := other.WriteToUDPAddrPort(stun.Request(txid), to); err != nil {
+			t.Fatalf("sending a binding request: %v", err)
+		}
+		_ = other.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		n, _, err := other.ReadFromUDPAddrPort(buf)
+		if err != nil {
+			continue
+		}
+		if got, _, err := stun.ParseResponse(buf[:n]); err != nil || got != txid {
+			t.Fatalf("the other host got %v, %v", got, err)
+		}
+		return
+	}
+	t.Fatal("the other host went unanswered during the flood")
+}

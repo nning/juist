@@ -11,8 +11,9 @@ checks that log for itself.
 - **Changes need your admins.** Admitting or removing a device takes a k-of-n
   quorum of admins, each with a key on their own devices. The keys stay in your
   keystore; the daemon never holds them.
-- **Fail-closed.** A device that no voucher has vouched for in 48 h keeps
-  tunnels only to vouchers, so it cannot carry a removed device
+- **Fail-closed, where you want it.** Once you name vouchers, always-on
+  devices that vouch hourly, a device that too few of them have vouched for
+  in 48 h keeps tunnels only to vouchers, so it cannot carry a removed device
   along indefinitely.
 
 ![A laptop on Debian creates a network and invites a NAS on FreeBSD, which joins and pings it](website/static/demo.gif)
@@ -81,6 +82,8 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | see every change, and who approved it | `juist log` | [admins](https://docs.juist.nning.io/en/docs/admins/) |
 | manage this device without sudo from now on | `sudo juist set --operator=$USER` | [operator](https://docs.juist.nning.io/en/docs/operator/) |
 | give this device new keys | `juist rotate` | [keys](https://docs.juist.nning.io/en/docs/keys/) |
+| back an admin key up in a password manager | `juist admins export alice@home \| pass insert -m juist/alice` | [keys](https://docs.juist.nning.io/en/docs/keys/) |
+| end the network for good, with a break-glass secret | `juist network disable` | [changes](https://docs.juist.nning.io/en/docs/network-changes/) |
 | leave the network, as on a fresh install | `juist reset` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
 
 Any local user may run `juist status`; everything else is for root and the
@@ -135,6 +138,7 @@ and a quorum make every change need more than one of them:
 
 ```sh
 juist admins add bob nid:…      # once per device of bob's
+juist grant nas voucher         # carries changes waiting for votes
 juist admins quorum 2           # every change needs alice and bob
 juist approve                   # on a voucher device: asks about each change waiting for your vote
 ```
@@ -194,15 +198,16 @@ Report a vulnerability privately, as [SECURITY.md](SECURITY.md) says.
 Milestones up to **M9**, publishing, of [05-roadmap.md](docs/05-roadmap.md)
 are done: the signed log with quorum, WireGuard with NAT traversal and member
 relays, invites, several networks, exit nodes, subnet routers, names,
-publishing, and Debian, Fedora and FreeBSD packages; and **M11**, TCP
-services and HTTP/3 through the ingress.
+publishing, and Debian, Fedora and FreeBSD packages; **M11**, TCP
+services and HTTP/3 through the ingress; and **M12**, ending a network with a
+break-glass secret and backing admin keys up.
 
-Not yet: ACLs (every member reaches every port on the others), break-glass
-recovery, and the post-quantum data plane.
+Not yet: ACLs (every member reaches every port on the others), and the
+post-quantum data plane.
 
 ## Development
 
-Go 1.27; `make` fetches and uses go1.27.1, so that a commit builds to the
+Go 1.27; `make` fetches and uses go1.27.2, so that a commit builds to the
 same bytes anywhere, and lists the targets.
 
 ```sh

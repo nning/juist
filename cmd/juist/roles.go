@@ -26,7 +26,9 @@ const rolesAbout = `Roles:
   relay    relays for devices that cannot reach each other; best on two or
            more devices with public addresses
   voucher  vouches hourly that the network state is current, so cut-off
-           devices notice; keep one online. Not an admin key.`
+           devices notice; where too few vouch for 48 hours, devices reach
+           only vouchers: give it to devices that are always on. Not an
+           admin key.`
 
 func cmdGrant(a *app, args []string) error {
 	s := spec{name: "juist grant", args: "DEVICE ROLE...", min: 2, max: -1, about: `
@@ -80,6 +82,11 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 		return err
 	}
 	name := displayMember(target)
+	vouches, relays := roles[types.RoleAdmin], roles[types.RoleRelayCapable]
+	if vouches != target.HasRole(types.RoleAdmin) || vouches && relays != target.HasRole(types.RoleRelayCapable) {
+		st := auth.State()
+		a.warnVouchers(vouchersWith(st.Nodes(), target, sortRoles(next)), int(st.Vouchers()))
+	}
 	for _, r := range []types.Role{types.RoleIngress, types.RoleService} {
 		if target.HasRole(r) && !roles[r] {
 			// The role confined the device; a member like any other is not.

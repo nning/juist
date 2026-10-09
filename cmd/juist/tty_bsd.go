@@ -4,7 +4,10 @@ package main
 
 import "golang.org/x/sys/unix"
 
-const ioctlGetTermios = unix.TIOCGETA
+const (
+	ioctlGetTermios = unix.TIOCGETA
+	ioctlSetTermios = unix.TIOCSETA
+)
 
 // fread is FREAD from <sys/fcntl.h>, the same on every BSD and missing from
 // x/sys/unix on some: TIOCFLUSH with it discards the input queue only.

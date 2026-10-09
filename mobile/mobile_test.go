@@ -11,7 +11,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/nning/juist/conn"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
@@ -230,6 +232,10 @@ func TestTheViewJudgesAsJuistStatusDoes(t *testing.T) {
 	if v := viewOf(s); v.State != "removed" {
 		t.Errorf("removed: %s", v.State)
 	}
+	s.Disabled, s.StartError = "IY5WHNAM5UBB", "the mesh did not start"
+	if v := viewOf(s); v.State != "disabled" {
+		t.Errorf("disabled: %s", v.State)
+	}
 }
 
 // The app reads what viewOf writes; android/app's unit tests read this file
@@ -255,5 +261,60 @@ func TestTheViewIsWhatTheAppReads(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("the view is now\n%s\nnot %s; if the app reads it, JUIST_UPDATE_GOLDEN=1 and update android/app too", got, path)
+	}
+}
+
+// recordingPlatform keeps what the core establishes the VPN with.
+type recordingPlatform struct {
+	fakePlatform
+	established []string
+}
+
+func (p *recordingPlatform) Establish(config string) (int32, error) {
+	p.established = append(p.established, config)
+	return -1, nil
+}
+
+// The app brings the VPN up with what Establish hands it, through an exit
+// node its routes and DNS too; android/app's unit tests read this file, so
+// that a field the app no longer finds, as the DNS servers, fails a test
+// rather than leaking lookups past the tunnel. JUIST_UPDATE_GOLDEN=1 writes
+// it anew.
+func TestTheVPNConfigIsWhatTheAppReads(t *testing.T) {
+	p := &recordingPlatform{fakePlatform: fakePlatform{t: t}}
+	_, err := vpn{p: p}.Establish(conn.VPNConfig{
+		Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.7/32"), netip.MustParsePrefix("fd00:1:2::7/128")},
+		Routes: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("fd00:1:2::/48"),
+			netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("128.0.0.0/2"), netip.MustParsePrefix("2000::/3")},
+		DNS: []netip.Addr{netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("fd00:1:2::1")},
+		MTU: 1280,
+	})
+	if err == nil || len(p.established) != 1 {
+		t.Fatalf("established %q, %v", p.established, err)
+	}
+	got := []byte(p.established[0] + "\n")
+	path := filepath.Join("testdata", "establish.json")
+	if os.Getenv("JUIST_UPDATE_GOLDEN") != "" {
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("the VPN's config is now\n%s\nnot %s; if the app reads it, JUIST_UPDATE_GOLDEN=1 and update android/app too", got, path)
+	}
+}
+
+func TestTheViewWarnsBeforeFreshnessEnds(t *testing.T) {
+	s := sampleStatus()
+	now := time.Now().Unix()
+	s.FreshSince, s.FreshUntil = now-30*3600, now+18*3600
+	v := viewOf(s)
+	i := slices.IndexFunc(v.Alarms, func(a alarm) bool { return a.Kind == "freshnessEnding" })
+	if i < 0 || v.Alarms[i].Count != 18 {
+		t.Fatalf("alarms %+v, want freshnessEnding in 18 hours", v.Alarms)
 	}
 }

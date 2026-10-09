@@ -209,7 +209,7 @@ device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
   instance. Then an instance's home cannot sit in the default's 0700 one,
   each needs a runtime directory of its own, and the instance above has to be
   allowed to read the exact claims of the one below. That is for the
-  hardening before the audit (M14).
+  hardening before the audit (M16).
 - **Other networks' addresses in path discovery.** magicsock learns this
   host's addresses from every interface but Tailscale's own, and sends them to
   peers in the call-me-maybe it relays. A network's members may therefore be

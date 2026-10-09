@@ -292,3 +292,38 @@ func TestHTTP3CountsAgainstTheBound(t *testing.T) {
 		t.Error("a connection past the bound")
 	}
 }
+
+// A header an ingress sends as soon as the socket is open names the client:
+// quic-go drops what is not QUIC until it is first asked for it.
+func TestAHeaderAtOnceNamesTheClient(t *testing.T) {
+	ingress := netip.MustParseAddr("127.0.0.1")
+	tt := &terminator{o: Options{ListenPacket: net.ListenPacket}}
+	tt.now.Store(&what{ingresses: []netip.Addr{ingress}})
+	q := &quicServer{t: tt}
+	client := netip.MustParseAddrPort("203.0.113.7:51000")
+	for range 200 {
+		s, err := q.open(netip.AddrPortFrom(ingress, 0), &tls.Config{GetCertificate: selfSigned(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		to := addrPortUDP(s.conn.LocalAddr())
+		pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: ingress.AsSlice()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pc.WriteToUDP(proxyproto.HeaderUDP(client, to), net.UDPAddrFromAddrPort(to)); err != nil {
+			t.Fatal(err)
+		}
+		flow := addrPortUDP(pc.LocalAddr())
+		var got netip.AddrPort
+		var named bool
+		for deadline := time.Now().Add(time.Second); !named && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			got, named = s.pc.client(flow)
+		}
+		pc.Close()
+		s.close()
+		if !named || got != client {
+			t.Fatalf("a header sent at once named %v (%v), want %v", got, named, client)
+		}
+	}
+}

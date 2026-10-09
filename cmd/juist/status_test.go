@@ -122,7 +122,7 @@ func TestStatusWithoutADaemon(t *testing.T) {
 func TestStatusShowsFreshness(t *testing.T) {
 	t.Parallel()
 	d := newDaemonDevice(t, nil)
-	d.mustRun("create", "home", "--device", "laptop")
+	d.mustRun("create", "home", "--device", "laptop", "--voucher")
 	mustContain(t, d.mustRun("status"), "home · ", "laptop", "Freshness", "vouched")
 }
 
@@ -159,6 +159,16 @@ func TestLogUpgradeOnANetworkAtTheCurrentSchema(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("create", "home")
 	mustContain(t, c.mustRun("log", "upgrade"), "unchanged")
+}
+
+func TestLogUpgradesHelpNamesEverySchema(t *testing.T) {
+	t.Parallel()
+	out := newCLI(t).mustRun("help", "log", "upgrade")
+	for v := types.SchemaVersion(1); v <= types.CurrentSchema; v++ {
+		if !strings.Contains(out, fmt.Sprintf("\n  %v ", v)) {
+			t.Errorf("juist help log upgrade does not say what %v brings", v)
+		}
+	}
 }
 
 // status names the devices it has not heard from.
@@ -532,5 +542,45 @@ func TestStatusTellsAnAdminToUpgradeTheLog(t *testing.T) {
 	d.mustRun("log", "upgrade", "--yes")
 	if out := d.mustRun("status"); strings.Contains(out, "log upgrade") {
 		t.Errorf("the hint outlives the upgrade:\n%s", out)
+	}
+}
+
+// status warns before freshness ends, not only once it has.
+func TestStatusWarnsBeforeFreshnessEnds(t *testing.T) {
+	t.Parallel()
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
+	now := time.Now().Unix()
+	a.printStatus(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3,
+		LeaseSigners: 3, Vouchers: 2, Vouching: 2, FreshSince: now - 30*3600, FreshUntil: now + 18*3600}})
+	mustContain(t, out.String(), "warning: freshness ends in", "unless 2 vouchers vouch again")
+}
+
+// Where nothing vouches and two devices relay, status names them as the
+// vouchers that would bound how long a removal takes; with one, it names none.
+func TestStatusSuggestsAlwaysOnVouchers(t *testing.T) {
+	t.Parallel()
+	relay := []types.Role{types.RoleRelayCapable}
+	for _, c := range []struct {
+		devices []ipc.Device
+		want    bool
+	}{
+		{[]ipc.Device{{Name: "laptop"}, {Name: "vps", Roles: relay}, {Name: "nas", Roles: relay}}, true},
+		{[]ipc.Device{{Name: "laptop"}, {Name: "vps", Roles: relay}}, false},
+		{[]ipc.Device{{Name: "vps", Roles: relay}, {Name: "nas", Roles: relay},
+			{Name: "edge", Roles: []types.Role{types.RoleIngress, types.RoleRelayCapable}}}, true},
+		{[]ipc.Device{{Name: "vps", Roles: relay}, {Name: "edge", Roles: []types.Role{types.RoleIngress, types.RoleRelayCapable}}}, false},
+	} {
+		var out syncBuffer
+		a := newApp(strings.NewReader(""), &out, &out)
+		a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
+		a.printStatus(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Devices: c.devices}})
+		if got := strings.Contains(out.String(), "juist grant vps voucher, juist grant nas voucher"); got != c.want {
+			t.Errorf("suggested=%v, want %v\n%s", got, c.want, out.String())
+		}
+		if strings.Contains(out.String(), "juist grant edge voucher") {
+			t.Errorf("an ingress was suggested as a voucher:\n%s", out.String())
+		}
 	}
 }

@@ -24,7 +24,8 @@ and where a relay is has the lifetime of a process rather than of a membership
 
 **The certificate is pinned, not signed by anyone.** A member-run relay has no
 certificate authority to ask and should not have one. It draws a self-signed
-certificate at startup and announces its SHA-256; members put that in the DERP
+certificate once per set of device keys, keeps it in the state directory, and
+announces its SHA-256; members put that in the DERP
 map's `CertName` as `sha256-raw:…`, which makes the TLS check an exact-hash
 comparison. The name in the certificate is derived from its own key under
 `.invalid`, and is never resolved: a member dials the addresses in the
@@ -59,7 +60,8 @@ address without a public STUN server —
 primary". It cannot be membership-authenticated, because a binding request
 carries no identity; what it discloses is the querier's own address, back to
 the querier, and it is rate-limited so that a two-times amplifier is not worth
-using.
+using, per host as well as in all, so that one host's flood does not starve
+everyone's netcheck.
 
 **Public STUN servers stand in where no member relays** (added in M4). Two
 devices behind NAT with no relay-capable member learned no reflexive address
@@ -170,7 +172,15 @@ stays cut off. The rules:
 - A mesh restarted in the same process on the same keys announces the same
   disco key and relay certificate (`daemon.Session`), so peers reach it on the
   announcement they hold. New keys draw new ones: a rotation answers a device
-  that may have been copied. Neither is ever written to disk.
+  that may have been copied. The relay certificate is also kept on disk,
+  bound to the device keys (`relay-cert.pem`), so a restarted process keeps
+  the hash members pinned. A member that is stale has no tunnel to most
+  relays, so it never finds them down, and learns a new hash only from its
+  next DHT lookup; with the hash kept, there is none to learn. The disco key
+  is not written, since a peer that is down is looked up anyway.
+- A stale member looks up every member it holds an announcement for but
+  keeps no tunnel to, on the schedule of a peer found down: those
+  announcements carry the relays it still uses.
 - A peer whose probes go unanswered twice in a row is down unless it
   completed a handshake in the last check interval; the 180 s a handshake
   stays fresh stands in only for a probe not sent or one lost, since a peer

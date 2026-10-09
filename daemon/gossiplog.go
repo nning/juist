@@ -57,6 +57,16 @@ func (a *logAdapter) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM,
 		held[h] = true
 	}
 	out := make([]types.AUM, 0, gossip.MaxRecordsPerFrame)
+	// First, and whatever the peer's anchor: it may hang where no walk from
+	// there reaches, and the peer takes it in wherever it hangs.
+	if dis := d.authority.Disabled(); dis != nil && !held[dis.At] {
+		aum, err := d.storage.AUM(dis.At)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, aum)
+		held[dis.At] = true
+	}
 	queue := []types.Hash{anchor}
 	visited := map[types.Hash]bool{anchor: true}
 	for len(queue) > 0 && len(out) < gossip.MaxRecordsPerFrame {
@@ -86,10 +96,10 @@ func (a *logAdapter) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM,
 
 // Member grants a catch-up to a live member of the trusted state. A node
 // under an alarm, or no longer a member itself, answers none: it cannot say
-// who is listed.
+// who is listed. A disabled one still does, so the record reaches them.
 func (a *logAdapter) Member(id types.Identity) (types.NodeRecord, bool, error) {
 	d := a.daemon()
-	state, err := d.TrustedState()
+	state, err := d.gossipState()
 	if err != nil {
 		return types.NodeRecord{}, false, err
 	}

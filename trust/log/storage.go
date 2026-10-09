@@ -74,6 +74,7 @@ type Storage interface {
 type reader interface {
 	AUM(h types.Hash) (types.AUM, error)
 	Children(h types.Hash) ([]types.Hash, error)
+	Hashes() ([]types.Hash, error)
 }
 
 // MemStorage is an in-memory [Storage], for tests and for callers that do not
@@ -238,6 +239,14 @@ func (o *overlay) Children(h types.Hash) ([]types.Hash, error) {
 	// happens to return children in.
 	slices.SortFunc(out, types.Hash.Compare)
 	return slices.Compact(out), nil
+}
+
+func (o *overlay) Hashes() ([]types.Hash, error) {
+	base, err := o.base.Hashes()
+	if err != nil {
+		return nil, err
+	}
+	return append(base, slices.Collect(maps.Keys(o.added))...), nil
 }
 
 // pending returns the records the overlay adds, so the caller can commit

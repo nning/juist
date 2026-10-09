@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/nning/juist/internal/rendezvous"
 	"github.com/nning/juist/trust/log"
@@ -220,6 +221,10 @@ type Derived struct {
 	// otherwise. While it is set the data plane holds no peers at all.
 	Alarm string `cbor:"10,keyasint,omitempty"`
 
+	// Disabled names the record that ended the network with a break-glass
+	// secret. The data plane then holds no peers, for good.
+	Disabled string `cbor:"71,keyasint,omitempty"`
+
 	// NotMember is set when this device is no longer in the member set. The
 	// daemon has torn its own data plane down.
 	NotMember bool `cbor:"16,keyasint,omitempty"`
@@ -283,6 +288,28 @@ type Tunnels struct {
 	RelayPort      uint16 `cbor:"57,keyasint,omitempty"`
 }
 
+// FreshnessEnding returns how long a fresh node stays fresh, where the lease
+// completing its threshold is past half its life: vouchers renew hourly, so
+// that happens only where too few of them have run for a day.
+func (s *Status) FreshnessEnding(now int64) (time.Duration, bool) {
+	if s.Stale || s.LeaseSigners == 0 || s.FreshUntil <= s.FreshSince {
+		return 0, false
+	}
+	left := s.FreshUntil - now
+	if left <= 0 || 2*left >= s.FreshUntil-s.FreshSince {
+		return 0, false
+	}
+	return time.Duration(left) * time.Second, true
+}
+
+// VouchAgain says what keeps a node fresh whose freshness is ending.
+func (s *Status) VouchAgain() string {
+	if s.Vouchers <= 1 {
+		return "a voucher vouches again"
+	}
+	return strconv.Itoa(s.Vouchers) + " vouchers vouch again"
+}
+
 // ForReader is the status as a caller who may not operate sees it. It is an
 // allow-list: a field not copied here reaches operators only.
 func (s *Status) ForReader() Status {
@@ -295,7 +322,7 @@ func (s *Status) ForReader() Status {
 			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
 			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted,
-			Alarm: s.Alarm, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(),
+			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(),
 			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(),
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
 		},

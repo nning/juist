@@ -351,6 +351,60 @@ func TestNameplateMissesAreReported(t *testing.T) {
 	}
 }
 
+// remoteConn is a connection from addr.
+type remoteConn struct {
+	net.Conn
+	addr net.Addr
+}
+
+func (c remoteConn) RemoteAddr() net.Addr { return c.addr }
+
+// The typed code is a LAN secret: a hello for it from off the link, through a
+// meeting, or while the invite does not answer on the LAN never reaches the
+// invite, so it spends nothing of the code; one for the link is taken from
+// anywhere.
+func TestTheCodeIsTakenFromTheLinkAlone(t *testing.T) {
+	inv, err := enroll.NewInvite(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name             string
+		from             string
+		lan, met, queued bool
+		link             bool
+	}{
+		{name: "code on the link", from: "127.0.0.1:4000", lan: true, queued: true},
+		{name: "code from off the link", from: "192.0.2.7:4000", lan: true},
+		{name: "code through a meeting", from: "127.0.0.1:4000", lan: true, met: true},
+		{name: "code without the LAN", from: "127.0.0.1:4000"},
+		{name: "link from off the link", from: "192.0.2.7:4000", lan: true, link: true, queued: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			g := newGreeter(ctx, tc.lan)
+			hc, gc := net.Pipe()
+			defer gc.Close()
+			var secret enroll.Secret = inv.Code()
+			if tc.link {
+				secret = inv.Link()
+			}
+			go enroll.Join(gc, secret)
+			addr := net.TCPAddrFromAddrPort(netip.MustParseAddrPort(tc.from))
+			src := sourceOf(addr)
+			greeting, ok := g.enter(hc, src)
+			if !ok {
+				t.Fatal("no greeting place")
+			}
+			if got := g.hello(remoteConn{hc, addr}, src, greeting, tc.met); got != tc.queued {
+				t.Fatalf("queued %v, want %v", got, tc.queued)
+			}
+			g.drain()
+		})
+	}
+}
+
 // The guest hands the host its announcement as the join ends, after it has
 // started in the network: a host behind NAT, which a guest can open no
 // connection to, learns where the guest is from nothing else.

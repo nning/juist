@@ -52,7 +52,7 @@ gates are worth keeping: M2's exit criterion is satisfied by either alone.
 
 ## The preshared-key path
 
-The per-pair ML-KEM-768 PSK of [04-architecture.md](04-architecture.md) is M12a
+The per-pair ML-KEM-768 PSK of [04-architecture.md](04-architecture.md) is M15
 ([05-roadmap.md](05-roadmap.md)). Against `tailscale.com v1.104.0` and
 `tailscale/wireguard-go v0.0.0-20260928213032`, the engine carries it with no
 patch, and a design has to respect what it does:
@@ -133,7 +133,7 @@ Each fails silently or confusingly.
   install no rules. The runner reports IPv6 only where `disable_ipv6` and
   `disable_policy` are 0 and IPv6 policy routing works — and, in its iptables mode,
   only where the `ip6tables` binary exists. A host missing `ip6tables` therefore
-  loses the overlay's *primary* family with nothing but a log line. Packaging (M16)
+  loses the overlay's *primary* family with nothing but a log line. Packaging (M18)
   must declare that dependency, and an operator report of "no v6 on the overlay"
   should start here.
 - **`router.CleanUp` is not worth calling here**, though `tailscaled` calls it at
@@ -429,7 +429,7 @@ tailcat pins a v1.103.0-pre, but adopting these techniques needs no upgrade.
 ### What tailcat does not solve
 
 The preshared key. `grep -rn preshared` over tailcat returns nothing: it runs the
-same PSK-less Noise IKpsk2 as stock Tailscale, so M12a has no prior art to take.
+same PSK-less Noise IKpsk2 as stock Tailscale, so M15 has no prior art to take.
 
 ### Where ours differs on purpose
 

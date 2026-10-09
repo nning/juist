@@ -411,8 +411,7 @@ type Snapshot struct {
 	EpochCommit Hash `cbor:"5,keyasint"`
 
 	// Disablement holds commitments to break-glass secrets, fixed at genesis.
-	// Revealing a preimage is the recovery path from losing the admin quorum;
-	// losing both leaves the network unrecoverable, which is the point.
+	// Revealing a preimage in a [KindDisable] record ends the network.
 	Disablement []Hash `cbor:"6,keyasint,omitempty"`
 
 	// Admins are the admin keys, sorted by public key.
@@ -466,6 +465,15 @@ func (s *Snapshot) V4Ranges() []netip.Prefix {
 // group secret. Recipients compare it against what they decrypt.
 func EpochCommit(secret []byte) Hash {
 	return hashLabeled(labelEpochCommit, secret)
+}
+
+// A DisablementSecret is a break-glass secret, as [KindDisable] reveals it.
+type DisablementSecret [DisablementSecretSize]byte
+
+func (s DisablementSecret) MarshalBinary() ([]byte, error) { return cloneArray(s[:]) }
+
+func (s *DisablementSecret) UnmarshalBinary(b []byte) error {
+	return unmarshalKeyBinary("break-glass secret", b, s[:])
 }
 
 // DisablementCommit returns the value committed in [Snapshot.Disablement] for

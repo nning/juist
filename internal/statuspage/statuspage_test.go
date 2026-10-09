@@ -219,3 +219,13 @@ func TestANamePublishedByTCPIsNoLink(t *testing.T) {
 		t.Error("a name published by TLS links nowhere")
 	}
 }
+
+func TestADisabledNetworkSaysSo(t *testing.T) {
+	st := &ipc.Status{InNetwork: true, Disabled: "IY5WHNAM5UBB", NotMember: true}
+	if s, class := state(st); s != "disabled" || class != "alarm" {
+		t.Fatalf("state %q, class %q", s, class)
+	}
+	if a := alarms(st); len(a) != 1 || !strings.Contains(a[0], "break-glass") {
+		t.Fatalf("alarms %q", a)
+	}
+}

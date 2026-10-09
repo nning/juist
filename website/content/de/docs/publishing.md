@@ -361,8 +361,9 @@ die eines Geräts, zu dem alle anderen keine Verbindung öffnen lassen.
   juistd. Es beantwortet einen auf 443 veröffentlichten oder geteilten Namen
   mit der Adresse seines Geräts, solange es erreichbar ist,
   sodass Mitglieder ihn direkt durch den Tunnel erreichen, mit demselben
-  Zertifikat, und reicht jeden anderen Namen der Domain weiter wie bisher.
-  DNSSEC ist für die Domain auf Mitgliedern aus ([Namen]({{< relref "docs/names" >}})).
+  Zertifikat, und reicht jeden anderen Namen der Domain weiter wie bisher,
+  für höchstens 30 Sekunden gemerkt, sodass ein neu veröffentlichter Name
+  bald direkt erreicht wird. DNSSEC ist für die Domain auf Mitgliedern aus ([Namen]({{< relref "docs/names" >}})).
   `http://` zu einem solchen Namen geht an Port 80 des Geräts, wo juist auf
   https umleitet, es sei denn, ein anderes Programm lauscht dort auf allen
   Adressen: Dann antwortet dieses, und `juist status` warnt davor.

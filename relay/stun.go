@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -26,14 +27,17 @@ type stunResponder struct {
 	v4, v6 *stunSocket
 	logf   logger.Logf
 
-	mu     sync.Mutex
-	closed bool
-
-	// answers bounds the reply rate. A binding response is about twice its
-	// request, so an open responder is a weak reflector; the cap is far above
-	// what netcheck asks of one relay and low enough that the reflector is not
-	// worth using.
+	// answers bounds the reply rate in all, and perSource from one host. A
+	// binding response is about twice its request, so an open responder is a
+	// weak reflector; the caps are far above what netcheck asks of one relay
+	// and low enough that the reflector is not worth using, and one host's
+	// flood does not spend the others' answers.
 	answers *rate.Limiter
+
+	mu        sync.Mutex // guards closed, perSource and pruned
+	closed    bool
+	perSource map[netip.Prefix]*rate.Limiter
+	pruned    time.Time
 }
 
 const (
@@ -41,6 +45,12 @@ const (
 	// depth. A member's netcheck asks a few times per five minutes.
 	stunAnswersPerSecond = 200
 	stunBurst            = 400
+
+	// stunPerSource is one host's sustained answer rate, its burst twice
+	// that, and stunSources the hosts tracked; past them the rate in all
+	// alone applies, which a flood from spoofed sources still spends.
+	stunPerSource = 20
+	stunSources   = 4096
 )
 
 // listenSTUN binds the responder on both families. port zero picks one, and
@@ -48,7 +58,8 @@ const (
 // port, so the two must agree. A family that will not bind is logged and left
 // out rather than failing the relay.
 func listenSTUN(port uint16, logf logger.Logf) (*stunResponder, error) {
-	s := &stunResponder{logf: logf, answers: rate.NewLimiter(stunAnswersPerSecond, stunBurst)}
+	s := &stunResponder{logf: logf, answers: rate.NewLimiter(stunAnswersPerSecond, stunBurst),
+		perSource: map[netip.Prefix]*rate.Limiter{}}
 	v4, err := listenSTUNFamily("udp4", port, logf)
 	if err != nil {
 		return nil, err
@@ -218,11 +229,40 @@ func (s *stunResponder) serve(sock *stunSocket) {
 		if err != nil {
 			continue
 		}
-		if !s.answers.Allow() {
+		if !s.allow(from.Addr()) {
 			continue
 		}
 		if err := sock.write(stun.Response(txid, from), from, to); err != nil {
 			s.logf("relay: STUN write to %v: %v", from, err)
 		}
 	}
+}
+
+// allow reports whether a request from a is answered, by the rates from its
+// host, an IPv6 address's /64, and in all.
+func (s *stunResponder) allow(a netip.Addr) bool {
+	bits := 64
+	if a.Is4() {
+		bits = 32
+	}
+	host, _ := a.Prefix(bits)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l := s.perSource[host]
+	if l == nil {
+		if len(s.perSource) >= stunSources && time.Since(s.pruned) >= time.Second {
+			s.pruned = time.Now()
+			for h, l := range s.perSource {
+				if l.Tokens() >= 2*stunPerSource {
+					delete(s.perSource, h)
+				}
+			}
+		}
+		if len(s.perSource) >= stunSources {
+			return s.answers.Allow()
+		}
+		l = rate.NewLimiter(stunPerSource, 2*stunPerSource)
+		s.perSource[host] = l
+	}
+	return l.Allow() && s.answers.Allow()
 }

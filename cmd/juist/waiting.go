@@ -291,6 +291,9 @@ func (a *app) approveOne(auth *log.Authority, w *waitingChange) error {
 			return nil
 		}
 	}
+	if auth.Disabled() != nil {
+		return fmt.Errorf("%q is disabled; nothing changes it any more", auth.State().Network())
+	}
 	ok, err := a.askNow(a.ctx, "approve?")
 	if err != nil {
 		return err

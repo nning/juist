@@ -46,7 +46,7 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	lx.run(t, "juist create home --device lx")
+	lx.run(t, "juist create home --device lx --voucher")
 	invite(t, lx, fb, "juist join '%s'")
 	testCA(t, work, fb.lanAddr, "127.0.0.1")
 	if err := os.WriteFile(filepath.Join(work, "pebble.json"), []byte(pebbleConfig), 0o644); err != nil {

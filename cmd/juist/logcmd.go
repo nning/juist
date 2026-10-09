@@ -144,6 +144,8 @@ Raise the network to this build's record schema:
   schema 8  public names pointed at devices (juist names add DEVICE NAME)
   schema 9  services published through an ingress (juist publish add)
   schema 10 devices renamed (juist rename)
+  schema 11 services published on a TCP port of their own
+            (juist publish add --tcp)
 
 Devices on older builds stop at the upgrade until updated: update them first.`}
 	fs := newFlags(s.name)
@@ -233,6 +235,9 @@ func (a *app) reportLogHealth(auth *log.Authority) {
 	}
 	if alarm := auth.Alarm(); alarm != nil {
 		a.alarm("%v", alarm)
+	}
+	if d := auth.Disabled(); d != nil {
+		a.alarm("the network was ended with a break-glass secret, in record %s", d.At.String()[:12])
 	}
 }
 

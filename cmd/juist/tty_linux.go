@@ -2,7 +2,10 @@ package main
 
 import "golang.org/x/sys/unix"
 
-const ioctlGetTermios = unix.TCGETS
+const (
+	ioctlGetTermios = unix.TCGETS
+	ioctlSetTermios = unix.TCSETS
+)
 
 // flushInput discards what was typed but not yet read, so that a key pressed
 // before a question was asked is not taken as its answer.

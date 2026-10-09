@@ -83,6 +83,8 @@
     <string name="state_failed">Nicht gestartet</string>
     <string name="state_unstarted">Nicht verbunden</string>
     <string name="state_unstarted_about">Die Tunnel stehen nicht. juist versucht es weiter.</string>
+    <string name="state_disabled">Abgeschaltet</string>
+    <string name="state_disabled_about">Das Netz wurde mit seinem Break-glass-Geheimnis beendet. Vergiss es, um einem anderen beizutreten.</string>
     <string name="state_removed">Entfernt</string>
     <string name="state_removed_about">Dieses Telefon wurde aus dem Netz entfernt. Vergiss das Netz, um mit einer neuen Einladung wieder beizutreten.</string>
     <string name="state_disconnected">Getrennt</string>
@@ -192,6 +194,11 @@
         <item quantity="one">%d Gerät meldet den Schlüssel eines anderen und wird ignoriert</item>
         <item quantity="other">%d Geräte melden den Schlüssel eines anderen und werden ignoriert</item>
     </plurals>
+    <plurals name="alarm_freshness_ending">
+        <item quantity="one">Zu wenige Voucher haben bestätigt: eingeschränkt in %d Stunde</item>
+        <item quantity="other">Zu wenige Voucher haben bestätigt: eingeschränkt in %d Stunden</item>
+    </plurals>
+    <string name="alarm_freshness_ending_hint">Ein Voucher bestätigt, solange er läuft und dieses Telefon erreicht. Bestätigen nicht wieder genug, erreicht das Telefon nur noch Voucher.</string>
     <string name="alarm_no_relay">Kein Gerät darf weiterleiten</string>
     <string name="alarm_no_relay_hint">Im Mobilfunk braucht ein Telefon oft eines. Ein Admin kann die Rolle an ein Gerät mit öffentlicher Adresse vergeben.</string>
     <string name="alarm_lost">Eine Änderung ist einer gleichzeitigen unterlegen</string>

@@ -35,7 +35,7 @@ juistd runs from installation, in no network, and holds everything that is the
 device's: its keys (created on first start), its log, its hints. It creates a
 network from a genesis the CLI signed, and redeems an invite itself — the
 guest's half needs only the device's keys. The CLI holds everything that is the
-person's: admin keys and break-glass secrets in `~/.config/juist`.
+person's: admin keys in `~/.config/juist`.
 
 Where the two meet, the daemon is the less trusted side: it runs the parsers an
 attacker reaches first. The CLI asks it for its chain, verifies it in memory
@@ -89,10 +89,12 @@ the transcript's `K` there is nothing to test a password against offline.
 
 **Exactly one guess, and only a guess spends it.** The guest confirms first. A
 wrong code voids the code and both sides say so; the host then refuses the
-right code too, and the link still works: voiding the whole invite would let
-anyone on the LAN end it with one connection. A wrong link voids nothing:
+right code too, and the link still works (`TestAWrongCodeVoidsTheInvite`):
+voiding the whole invite would let anyone on the LAN end it with one
+connection. Anyone on the LAN can void the code, whose nameplate mDNS gives
+away; that is accepted, since the link remains. A wrong link voids nothing:
 guessing 128 bits online is hopeless. The code is taken only from the LAN
-(`TestAWrongCodeVoidsTheInvite`), never through the DHT or from a routed
+(`TestTheCodeIsTakenFromTheLinkAlone`), never through the DHT or from a routed
 address, and 32 hellos for other nameplates retire it too, since asking for a
 nameplate costs nothing and there are only 999
 (`TestNameplateMissesRetireTheCode`). A session that ends before the guest's
@@ -227,15 +229,39 @@ fresh. Freshness bounds how long a partition without enough admin devices
 survives. An admin device that is itself revoked can keep vouching for the
 head before its removal to anyone who has not seen it, which is why the
 threshold exists. A network with no admin device does not enforce freshness
-at all, and `juist status` says so. And an admin device that is offline for longer than
-the TTL takes every other member down to admin-only tunnels: a network should
-keep at least one always-on member as an admin device, which is a deployment
-rule, not something the code can enforce.
+at all, and `juist status` says so. And too few admin devices online for
+longer than the TTL take every other member down to admin-only tunnels, which
+is why no device is one by default (below).
+
+**No voucher by default.** Fail-closed freshness costs availability unless
+vouchers are always on: a device that meets only a removed one learns of the
+removal from nothing but the clock, and that clock also cuts every tunnel
+while the honest devices are off; with every device a voucher at M = 1 it
+checks nothing, since a voucher vouches for itself. So
+`juist create` makes the founder a voucher only with `--voucher`, a network
+with none says `unchecked: no voucher`, and removals still spread by gossip,
+the epoch bump and the rotated group secret. Where they are on:
+
+- vouchers are hosts that are always on and fail apart: two of three at
+  M = 2, not two machines in one cloud account;
+- a relay is not the one voucher at M = 1, since it can withhold the removal
+  and vouch for the old head alone;
+- `juist create --voucher`, `juist grant` and `juist admins vouchers` warn of
+  a set with no spare or a relay as the one voucher needed; `juist status`
+  warns once the lease
+  completing the threshold is past half the TTL, which hourly renewals never
+  allow, and suggests two relays as vouchers where none vouches;
+- a longer `juistd --freshness-ttl` is the knob for a network that wants a
+  bound but has no device that is always on; it is set per acceptor, not in
+  the log;
+- changes waiting for votes are carried by admin devices
+  ([05-roadmap.md](05-roadmap.md), M5b), so `juist create --quorum` and
+  `juist admins quorum` above 1 hint a voucher where there is none.
 
 **Two tiers of revocation collapse into one.** The plan's emergency tier was an
 epoch bump plus a forced re-handshake. Every removal already bumps the epoch
 ([08-trust-layer-notes.md](08-trust-layer-notes.md)), and a re-handshake has
-nothing to rotate until per-pair preshared keys exist, which is M12a
+nothing to rotate until per-pair preshared keys exist, which is M15
 ([05-roadmap.md](05-roadmap.md)). `juist rotate group-secret`
 remains for a suspected leak of the group secret with no one to remove.
 
@@ -339,8 +365,6 @@ Accepted, and stated here rather than fixed:
   every NAT that keeps one public port per socket; two that do not need a relay,
   and member relays admit only members. A relay a member grants to one invite
   would close the gap and needs a design of its own.
-- **What a break-glass secret authorizes.** Planned in
-  [05-roadmap.md](05-roadmap.md) as M12.
 - **A QR code.** The link is the payload a QR carries; `juist invite` renders
   it for the Android app to scan, planned in [05-roadmap.md](05-roadmap.md)
   as M10.
@@ -355,3 +379,7 @@ Accepted, and stated here rather than fixed:
   Its catch-up would learn of the removal, but the catch-up needs a tunnel
   too. Telling it takes a path that does not need its WireGuard peer, such
   as a signed refusal handed over by a relay.
+- **Vouchers that fail together.** Two vouchers at one provider count as two,
+  and nothing in the log says where a device runs, so the warnings cover only
+  a set with no spare and a relay as the one voucher needed. The status page
+  and the app warn before freshness ends but do not suggest vouchers.

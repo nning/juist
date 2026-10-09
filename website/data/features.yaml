@@ -47,6 +47,12 @@
 - doc: docs/network-changes
   en: {title: Renaming and renumbering, text: "The network or a device gets another name, the devices other IPv4 addresses. Nothing is set up again."}
   de: {title: Umbenennen und umnummerieren, text: "Das Netz oder ein Gerät bekommt einen anderen Namen, die Geräte andere IPv4-Adressen. Nichts wird neu eingerichtet."}
+- doc: docs/keys
+  en: {title: Key backups, text: "An admin key as one line, for a password manager."}
+  de: {title: Schlüssel sichern, text: "Ein Admin-Schlüssel als eine Zeile, für den Passwortmanager."}
+- doc: docs/network-changes
+  en: {title: Break-glass, text: "A secret shown once at creation and kept offline ends the network for good, with no admin needed."}
+  de: {title: Break-glass, text: "Ein Geheimnis, beim Anlegen einmal angezeigt und offline verwahrt, beendet das Netz endgültig, ganz ohne Admin."}
 - doc: docs/remove
-  en: {title: Freshness and removal, text: "A removed device is told. One cut off for 48 h keeps tunnels only to vouchers."}
-  de: {title: Frische und Entfernen, text: "Ein entferntes Gerät erfährt davon. Ein Gerät, das 48 Stunden abgeschnitten ist, behält nur Tunnel zu Vouchern."}
+  en: {title: Freshness and removal, text: "A removed device is told. With vouchers, one cut off for 48 h keeps tunnels only to vouchers."}
+  de: {title: Frische und Entfernen, text: "Ein entferntes Gerät erfährt davon. Mit Vouchern behält ein Gerät, das 48 Stunden abgeschnitten ist, nur Tunnel zu Vouchern."}

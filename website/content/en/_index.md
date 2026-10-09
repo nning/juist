@@ -19,7 +19,7 @@ Changes need your admins
 : Admitting or removing a device takes a quorum of admins, each with a key on their own devices. The keys stay in the keystore; the daemon never holds them.
 
 Fail-closed
-: A device that no voucher has vouched for in 48 hours keeps tunnels only to vouchers, so it cannot carry a removed device along.
+: Once a network has vouchers, a device that too few of them have vouched for in 48 hours keeps tunnels only to vouchers, so it cannot carry a removed device along.
 {{< /rules >}}
 
 ## Your first network
@@ -80,7 +80,7 @@ Why accepted
 : There is no server that every device could ask. The freshness lease bounds it: a device no voucher has vouched for in 48 h keeps tunnels only to vouchers.
 
 What you can do
-: Require M vouchers, so that the bound holds against M − 1 dishonest ones.
+: Make always-on devices vouchers, and require M of them, so that the bound holds against M − 1 dishonest ones. A new network has none, and no bound.
 {{< /trade >}}
 
 {{< trade title="Losing a quorum of admin keys is final" knob="more admins than the quorum needs" >}}

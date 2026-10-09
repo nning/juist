@@ -29,6 +29,7 @@ data class NetworkView(
 enum class State {
     @SerialName("none") None,
     @SerialName("joining") Joining,
+    @SerialName("disabled") Disabled,
     @SerialName("unstarted") Unstarted,
     @SerialName("removed") Removed,
     @SerialName("disconnected") Disconnected,
@@ -37,7 +38,10 @@ enum class State {
     @SerialName("waiting") Waiting,
     @SerialName("notunnel") NoTunnel,
     @SerialName("connected") Connected,
-    Unknown,
+    Unknown;
+
+    /** Whether nothing is left of the network on this phone but forgetting it. */
+    val ended get() = this == Removed || this == Disabled
 }
 
 @Serializable

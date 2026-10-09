@@ -54,8 +54,9 @@ The full analysis, with every weakness that remains, is in the
   only. On a phone, the [Android app]({{< relref "docs/android" >}}) seals
   them by a key that Android Keystore holds. The `juist` command signs only what it has rebuilt from its own
   verified log, whatever juistd asks.
-- No juist command reads the break-glass secrets that `juist create`
-  writes. Keep them offline anyway.
+- The break-glass secret `juist create` shows once, and keeps nowhere, ends
+  the network for good with no admin needed. Keep it offline, apart from the
+  admin keys: one vault holding both governs the network and ends it.
 
 ## What invites protect against
 

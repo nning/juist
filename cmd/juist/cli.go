@@ -347,6 +347,7 @@ var shorts = map[string]byte{
 	"public":      'W',
 	"quorum":      'q',
 	"relay":       'r',
+	"secrets":     'g',
 	"service":     'S',
 	"stop":        'S',
 	"tcp":         'T',

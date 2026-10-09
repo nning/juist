@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"cmp"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -38,15 +39,21 @@ func (d *Daemon) Reconcile() error {
 	unrevoked, lost := d.orphansLocked()
 	d.authMu.Unlock()
 	if stateErr != nil {
-		// An alarm, and nothing else: TrustedState fails for no other reason.
-		// Only where the chain stood is kept: a count beside an alarm reads as
+		// Disabled or an alarm: TrustedState fails for no other reason. Only
+		// where the chain stood is kept: a count beside an alarm reads as
 		// though part of the mesh survived it, and none of it did.
 		prev := d.Status()
-		err := d.teardown(ipc.Derived{
-			Alarm:       stateErr.Error(),
-			NetworkName: prev.NetworkName, Head: prev.Head, Epoch: prev.Epoch,
-			SelfName: prev.SelfName,
-		}, fmt.Sprintf("after %v", stateErr))
+		v := ipc.Derived{NetworkName: prev.NetworkName, Head: prev.Head, Epoch: prev.Epoch, SelfName: prev.SelfName}
+		var disabled *log.DisabledError
+		if errors.As(stateErr, &disabled) {
+			d.handOnDisable(disabled.At)
+			v.Disabled = disabled.At.String()
+			err := d.teardown(v, "after the network was disabled")
+			d.logOnce("daemon: the network was disabled with a break-glass secret; tunnels are down for good")
+			return err
+		}
+		v.Alarm = stateErr.Error()
+		err := d.teardown(v, fmt.Sprintf("after %v", stateErr))
 		return cmp.Or(err, stateErr)
 	}
 
@@ -394,7 +401,10 @@ func (d *Daemon) teardown(v ipc.Derived, why string) error {
 		v.DataPlaneError = err.Error()
 	}
 	down := "this device cannot tell who is a member"
-	if v.NotMember {
+	switch {
+	case v.Disabled != "":
+		down = "the network is disabled"
+	case v.NotMember:
 		down = "this device is no member of the network"
 	}
 	// A device that cannot tell who is a member resolves none of them.

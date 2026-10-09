@@ -258,8 +258,8 @@ func (c *Core) ExitOff() error {
 	return err
 }
 
-// Forget returns a device the network removed to a fresh install, with new
-// keys, so it can join again.
+// Forget returns a device the network removed, or one in a disabled network,
+// to a fresh install, with new keys, so it can join again.
 func (c *Core) Forget() error {
 	_, err := c.call(ipc.Request{Command: ipc.CmdReset})
 	return err

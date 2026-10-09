@@ -218,6 +218,7 @@ func (q *quicServer) open(ap netip.AddrPort, tlsConf *tls.Config) (*quicSocket, 
 			})
 			return ctx, nil
 		}}
+	cc.listen(tr)
 	ln, err := tr.Listen(tlsConf, &quic.Config{MaxIdleTimeout: quicIdle, InitialPacketSize: quicPacket,
 		HandshakeIdleTimeout: helloTimeout})
 	if err != nil {
@@ -302,6 +303,17 @@ type named struct {
 	at     time.Time
 }
 
+// listen has tr keep what it takes for no QUIC packet, which it drops until
+// first asked for it; it is called before any client can send.
+func (c *clientsConn) listen(tr *quic.Transport) {
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+	buf := make([]byte, 2048)
+	if n, from, err := tr.ReadNonQUICPacket(done, buf); err == nil {
+		c.take(buf[:n], from)
+	}
+}
+
 // read reads what tr takes for no QUIC packet until tr is closed.
 func (c *clientsConn) read(tr *quic.Transport) {
 	buf := make([]byte, 2048)
@@ -310,13 +322,17 @@ func (c *clientsConn) read(tr *quic.Transport) {
 		if err != nil {
 			return
 		}
-		remote := addrPortUDP(from)
-		if !proxyproto.IsHeader(buf[:n]) || !containsAddr(c.ingresses(), remote.Addr()) {
-			continue // a member's header names no one
-		}
-		if client, err := proxyproto.ReadUDP(buf[:n]); err == nil {
-			c.note(remote, client)
-		}
+		c.take(buf[:n], from)
+	}
+}
+
+func (c *clientsConn) take(d []byte, from net.Addr) {
+	remote := addrPortUDP(from)
+	if !proxyproto.IsHeader(d) || !containsAddr(c.ingresses(), remote.Addr()) {
+		return // a member's header names no one
+	}
+	if client, err := proxyproto.ReadUDP(d); err == nil {
+		c.note(remote, client)
 	}
 }
 

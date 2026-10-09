@@ -70,8 +70,9 @@ wieder Kontakt hat. Bis dahin könnte es noch einen Tunnel zum entfernten
 Gerät halten.
 
 Die Frische setzt dem eine Grenze. Ein **Voucher** ist ein Gerät, das
-stündlich bestätigt, dass der Stand des Netzes aktuell ist. Das Gerät, auf
-dem das Netz angelegt wurde, ist einer. Hat ein Gerät 48 Stunden lang keine
+stündlich bestätigt, dass der Stand des Netzes aktuell ist. Ein neues Netz
+hat keinen, die Grenze gilt also erst, wenn du einen ernennst. Hat ein Gerät
+48 Stunden lang keine
 Bestätigung von einem Voucher bekommen, hält es nur noch Tunnel zu Vouchern.
 So kann es keine Verbindung zu einem entfernten Gerät aufrechterhalten. Sein
 `juist status` zeigt dann den Zustand `limited` und
@@ -102,7 +103,10 @@ juist admins vouchers 2
 
 Jetzt hält ein Gerät seinen Stand nur dann für aktuell, wenn zwei Voucher ihn
 innerhalb von 48 Stunden bestätigt haben. Ein einzelner unehrlicher Voucher
-reicht dann nicht mehr, dafür müssen aber zwei Voucher online sein.
+reicht dann nicht mehr, dafür müssen aber zwei Voucher online sein. Gib die
+Rolle deshalb einem dritten als Reserve. `juist grant` und `juist admins
+vouchers` warnen, wenn keine Reserve da ist und wenn der eine nötige Voucher
+auch Relay ist.
 
 ## Gut zu wissen
 
@@ -114,7 +118,8 @@ reicht dann nicht mehr, dafür müssen aber zwei Voucher online sein.
 
 ## Wenn etwas nicht klappt
 
-`Freshness  expired; vouchers only` bedeutet, dass 48 Stunden lang kein
-Voucher erreichbar war. Bring einen Voucher wieder online. Sobald seine
+`Freshness  expired; vouchers only` bedeutet, dass 48 Stunden lang zu wenige
+Voucher erreichbar waren. `juist status` warnt einen Tag vorher mit
+`freshness ends in …`. Bring einen Voucher wieder online. Sobald seine
 Bestätigung ankommt, ist das Gerät wieder auf dem aktuellen Stand. Siehe
 [Fehlersuche]({{< relref "docs/troubleshooting" >}}).

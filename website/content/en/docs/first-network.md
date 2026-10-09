@@ -31,8 +31,10 @@ created network "home"
   IPv4 range    198.18.36.0/22
   Quorum        1 of 1 vote
   Admin         alice
-  Break-glass   /home/alice/.config/juist/break-glass-home.secrets (keep offline)
+  Break-glass   juist-break-glass-1.qL0x…dW8.u3Rk6g
   Operator      alice
+warning: the break-glass secret is shown only now and kept nowhere: keep it safe, apart from the admin keys
+hint: with it, juist network disable ends the network once too few admin keys are left to change it
 ```
 
 juist asks for sudo once, to make you the device's **operator**: the local
@@ -99,13 +101,13 @@ home · connected
   Devices       1 other, heard from
   Tunnels       1 of 1 live
   Names         home.juist
-  Freshness     vouched just now, valid 48h
+  Freshness     unchecked: no voucher
   Ports         udp/41643
   Updated       just now
 
-NAME                  IPV4         IPV6                                     ROLES    REACHED
-laptop (this device)  198.18.36.1  fd84:7a1f:97ee:5630:7c56:12b6:971f:2222  voucher  -
-nas                   198.18.36.2  fd84:7a1f:97ee:21a8:2ab0:e8e:caa0:b306   -        direct
+NAME                  IPV4         IPV6                                     ROLES  REACHED
+laptop (this device)  198.18.36.1  fd84:7a1f:97ee:5630:7c56:12b6:971f:2222  -      -
+nas                   198.18.36.2  fd84:7a1f:97ee:21a8:2ab0:e8e:caa0:b306   -      direct
 $ ping 198.18.36.2
 ```
 
@@ -135,9 +137,15 @@ address, such as a VPS, needs 41643/udp open.
   still works then.
 - An invite admits one device and lasts an hour. Run `juist invite` again for
   the next one.
-- No juist command reads the break-glass file. Keep it offline anyway.
-- The laptop is the network's first **voucher**: a device that confirms every
-  hour that the network's state is current. Keep one voucher online. See
+- The `Break-glass` line is shown only this once and kept nowhere. Put it in
+  a password manager or on paper, apart from the admin keys: it is what ends
+  the network once too few admin keys are left to change it
+  ([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
+- The network has no **voucher** yet: a device that confirms every hour that
+  the network's state is current, which limits how long a cut-off device can
+  keep talking to one you removed. Give the role only to devices that are
+  always on (`juist grant DEVICE voucher`); `juist create --voucher` makes the
+  first device one. See
   [freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
 
 ## If something goes wrong

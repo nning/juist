@@ -3,6 +3,7 @@ package mobile
 import (
 	"cmp"
 	"slices"
+	"time"
 
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
@@ -11,8 +12,8 @@ import (
 // A view is an [ipc.Status] as the app shows it, judged as `juist status`
 // judges it, and with nothing the status does not carry.
 type view struct {
-	// State is none, joining, unstarted, removed, disconnected, refused,
-	// limited, waiting, notunnel or connected, in the order they win.
+	// State is none, joining, disabled, unstarted, removed, disconnected,
+	// refused, limited, waiting, notunnel or connected, in the order they win.
 	State   string `json:"state"`
 	Network string `json:"network,omitempty"`
 	// Detail is why the mesh did not start, for unstarted.
@@ -113,6 +114,9 @@ func viewOf(s *ipc.Status) view {
 		return v
 	case !s.InNetwork:
 		v.State = "none"
+		return v
+	case s.Disabled != "":
+		v.State = "disabled"
 		return v
 	case s.StartError != "":
 		v.State, v.Detail = "unstarted", s.StartError
@@ -249,6 +253,9 @@ func alarmsOf(s *ipc.Status) []alarm {
 	}
 	if s.Conflicted > 0 {
 		add(alarm{Kind: "conflicted", Severity: "warn", Count: s.Conflicted})
+	}
+	if left, ending := s.FreshnessEnding(time.Now().Unix()); ending {
+		add(alarm{Kind: "freshnessEnding", Severity: "warn", Count: int((left + time.Hour - 1) / time.Hour)})
 	}
 	if s.RelayCapable == 0 && s.Members > 2 && s.Alarm == "" {
 		add(alarm{Kind: "noRelay", Severity: "warn"})

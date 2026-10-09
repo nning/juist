@@ -29,6 +29,10 @@ future decision has to respect. They are not a changelog. Findings that have
 been fixed do not belong there — record a constraint only while it still binds a
 decision that has not been made yet.
 
+Milestones still to come carry whole numbers, no letters: a new one takes
+its place in the order, those after it move up, and every reference in the
+repository moves with them. Done milestones keep their names.
+
 The state of the project lives here too: which milestone is done and what
 it was validated with (`05-roadmap.md`), and the latest run of the gates CI
 cannot run (`12-validating.md`, "The last privileged run"). Record it in the

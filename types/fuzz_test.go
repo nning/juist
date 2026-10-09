@@ -187,12 +187,15 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindSetPublished, Prev: &parent, Subject: &id,
 			Publish: &PublishGrant{Names: []PublishedName{{Label: "ssh", Port: 22, Proxy: true, Public: 2222}}}},
 		{Kind: KindRenameNode, Prev: &parent, Subject: &id, NodeName: new("laptop")},
+		{Kind: KindDisable, Prev: &parent, Secret: &DisablementSecret{2}},
 	}
 	out := make([][]byte, 0, len(records))
 	for i := range records {
 		a := records[i]
-		if err := a.Sign(priv); err != nil {
-			t.Fatalf("signing seed %v: %v", a.Kind, err)
+		if a.Kind != KindDisable {
+			if err := a.Sign(priv); err != nil {
+				t.Fatalf("signing seed %v: %v", a.Kind, err)
+			}
 		}
 		b, err := a.Encode()
 		if err != nil {

@@ -161,6 +161,12 @@ func verify(a *types.AUM, parent *State, votesPending bool) error {
 	if a.Prev == nil || *a.Prev != parent.head {
 		return reject(RuleParent, fmt.Errorf("log: record's parent is not %v", parent.head))
 	}
+	if a.Kind == types.KindDisable {
+		if !parent.ValidDisablement(a.Secret[:]) {
+			return reject(RuleUnauthorized, errors.New("log: disable record reveals none of this network's break-glass secrets"))
+		}
+		return nil
+	}
 	st := parent.SignatureStatus(a)
 	if votesPending {
 		st.Votes = max(st.Votes, st.Quorum)

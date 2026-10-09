@@ -118,11 +118,18 @@ Siehe [Relays]({{< relref "docs/relays" >}}).
 
 ### `Freshness  expired; vouchers only`
 
-48 Stunden lang war kein Voucher erreichbar. Ein Voucher ist ein Gerät, das
-stündlich bestätigt, dass der Stand des Netzes aktuell ist. Bis wieder eine
-Bestätigung kommt, hält dieses Gerät nur Tunnel zu Vouchern, und sein Zustand
-lautet `limited`. Bring einen Voucher wieder online. Siehe
-[Geräte entfernen]({{< relref "docs/remove" >}}).
+48 Stunden lang waren zu wenige Voucher erreichbar. Ein Voucher ist ein
+Gerät, das stündlich bestätigt, dass der Stand des Netzes aktuell ist. Bis
+wieder genug bestätigen, hält dieses Gerät nur Tunnel zu Vouchern, und sein
+Zustand lautet `limited`. Bring einen Voucher wieder online. Damit es nicht
+wieder passiert, mach nur Geräte zu Vouchern, die ständig laufen, und halte
+einen in Reserve. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
+
+### `warning: freshness ends in 20h unless 2 vouchers vouch again`
+
+Seit einem Tag haben weniger Voucher bestätigt als nötig. Nach der genannten
+Zeit wird dieses Gerät wie oben `limited`. Bring vorher einen Voucher wieder
+online.
 
 ### `removed`
 

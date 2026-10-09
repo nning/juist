@@ -27,7 +27,7 @@ import (
 func TestInviteAndJoin(t *testing.T) {
 	t.Parallel()
 	admin := newCLI(t)
-	out := admin.mustRun("create", "home", "--device", "laptop")
+	out := admin.mustRun("create", "home", "--device", "laptop", "--voucher")
 	mustContain(t, out, `created network "home"`, "laptop", "198.18.4.1")
 
 	inv, link := startInvite(t, admin)

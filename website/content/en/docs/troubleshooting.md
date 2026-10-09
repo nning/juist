@@ -113,11 +113,17 @@ See [Relays]({{< relref "docs/relays" >}}).
 
 ### `Freshness  expired; vouchers only`
 
-No voucher has been reachable for 48 hours. A voucher is a device that
-confirms every hour that the network's state is current. Until one does again,
-this device keeps tunnels only to vouchers, and its state reads `limited`.
-Bring a voucher back online. See
+Too few vouchers have been reachable for 48 hours. A voucher is a device that
+confirms every hour that the network's state is current. Until enough do
+again, this device keeps tunnels only to vouchers, and its state reads
+`limited`. Bring a voucher back online. To keep it from happening again, make
+vouchers only of devices that are always on, with a spare. See
 [Removing a device]({{< relref "docs/remove" >}}).
+
+### `warning: freshness ends in 20h unless 2 vouchers vouch again`
+
+Fewer vouchers than needed have vouched for a day. In the time shown, this
+device becomes `limited` as above. Bring a voucher back online before then.
 
 ### `removed`
 

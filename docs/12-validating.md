@@ -156,8 +156,9 @@ than skip. A NAT cell can be run alone with
 | M3b — relay fallback, and relay over TCP | `conn`: `TestNetnsNATMatrix/symmetric_x_symmetric`, `TestNetnsRelayCarriesWhatUDPCannot` | **yes** |
 | M3b — a DHT observer learns nothing | `discovery/dht`: `TestCrawlerLearnsNothing`, `TestAnItemIsUselessWithoutTheGroupSecret` | no |
 | M3b — non-members cannot use member relays | `relay`: `TestNonMemberCannotUseTheRelay`, `TestRemovedMemberLosesTheConnectionItHolds` | no |
+| M3b — a relay's STUN answers are bounded per host and in all, so one host starves no other | `relay`: `TestSTUNAnswersAreRateLimited`, `TestSTUNFloodFromOneHostStarvesNoOther`, `TestSTUNTracksBoundedHosts`, `TestSTUNCountsAnIPv6HostByItsPrefix` | no |
 | M3b — the record schema is versioned | `trust/log`: `schema_test.go`; `types`: `TestUnknownEpochSuiteRejected` | no |
-| M4 — a code admits exactly one guess, from the LAN | `trust/enroll`: `TestOneGuessPerInvite`; `cmd/juist`: `TestAWrongCodeVoidsTheInvite` | no |
+| M4 — a code admits exactly one guess, from the LAN | `trust/enroll`: `TestOneGuessPerInvite`; `cmd/juist`: `TestAWrongCodeVoidsTheInvite`; `internal/host`: `TestTheCodeIsTakenFromTheLinkAlone` | no |
 | M4 — a partitioned member drops a revoked peer at exactly the TTL | `daemon`: `TestPartitionedVictimRefusesARevokedPeerAtTheTTL`, `TestStartupGate` | no |
 | M4 — admins on separate machines approve a change | `cmd/juist`: `TestInviteWaitsForTheOtherAdmins` | no |
 | M4 — only root and the operator manage a device; anyone sees its status | `daemon`: `TestSocketIsOpenAndCallsAreChecked`; `cmd/juist`: `TestTheDaemonHoldsTheDeviceAndThePersonHoldsTheKeys` | no |
@@ -288,6 +289,9 @@ than skip. A NAT cell can be run alone with
 | M6c — an exit node asks nothing of tailscaled for a member, but the resolvers tailscaled replaced, or resolved's other links | `daemon`: `TestAnExitNodeAsksNothingOfTailscaled` | no |
 | M10 — the core's dials into the overlay leave by the VPN device, from its own address, and fail before it is established rather than leave by the LAN | `conn`: `TestAVPNDialLeavesByTheDeviceAlone` | no |
 | M10 — the epoch secrets kept beside the node's keys are sealed as they are | `daemon`: `TestKeptSecretsAreSealedAsTheNodesKeys` | no |
+| M10 — the app brings the VPN up as the core says: its addresses, routes and, through an exit node, DNS servers, from the file the Go side's test writes | `mobile`: `TestTheVPNConfigIsWhatTheAppReads`; `android/app`: `VpnConfigTest` | no |
+| M10 — the app's connection follows the core: starting, on, off, failed, off when another VPN took over and not wanted again; its last view outlives the process; a join ends as the core says; an exit node chosen reaches the core; a reboot or update turns on what was on, with consent | `android/app`: `JuistTest` | no |
+| M10 — an invite link opened from elsewhere asks to join and joins nothing untapped, changes nothing in a network, and no other link is taken; every screen survives a recreated activity; the exit nodes are chosen by a tap, not while off, and one chosen and no longer offered stays listed and refused | `android/app`: `AppRootTest`, `ExitSectionTest` | no |
 | M10 — every screen in both themes, both languages and at 200 % | `make android-check`: the Roborazzi tests against `android/app/screenshots` | no |
 | M11a — a public TCP port is one name's, off 80, 443, juist's own ports and those an ingress's own names go to, from schema 11 | `types`: `TestNamesPublishedByTCP`, `TestTheIngressHoldsThePublicPorts`; `trust/log`: `TestNamesPublishedByTCP` | no |
 | M11a — every ingress holds each public port, passes TCP at once, with a PROXY header where asked, within the bounds, and closes a port withdrawn | `internal/ingress`: `tcp_test.go`; `make interop`: `TCP` | no |
@@ -300,6 +304,10 @@ than skip. A NAT cell can be run alone with
 | M11b — a member lets an ingress send UDP to the ports of names offered HTTP/3 alone, and later fragments to itself; a reply from such a port opens nothing | `conn`: `TestTheConfinerKeepsAnIngressToItsPorts`, `TestFragmentsOfAConfinedPeersDatagramPass`, `TestAQUICReplyOpensNothing`; `daemon`: `TestAnIngressSendsQUICToNamesOfferedHTTP3Alone` | no |
 | M11b — `juist publish add … --http3`, the HTTPS record it prints, and the hint that a name with records of its own needs its own addresses; the ingress's status says 443/udp, or that another program holds it | `cmd/juist`: `TestPublishAddOffersHTTP3`, `TestPublishAddEndsTLS`, `TestTheIngressSummaryNamesItsPorts`; `daemon`: `TestTheStatusSaysTheIngressPorts` | no |
 | M11b — between hosts: Chrome fetches a name on lx over HTTP/3 through fb, and over HTTP/2 where 443/udp is not forwarded | `make interop`: `TestLinuxAndFreeBSD/HTTP/3` | qemu |
+| M12 — a disable record is refused without a secret of the network, or with a signature; with one it ends the network wherever it hangs (on the chain, a losing branch, below a compacted anchor, an unknown parent, past a schema stop), under every schema, finally, and alike in any order; nothing follows it | `trust/log`: `disable_test.go`; `types`: `fields_test.go`, `FuzzChainValidate`'s seed | no |
+| M12 — a disabled juistd drops every peer, says so, keeps handing the record to members and granting catch-ups, and is reset without `--force` | `daemon`: `TestDisableDropsEveryPeer`, `TestADisabledNodeHandsTheRecordOn`, `TestDisableReachesEveryMember` | no |
+| M12 — `juist create` shows the one break-glass secret and writes it nowhere; `juist network disable` asks, needs a juistd and a secret of the network, from a line on stdin, a file, or an older network's file in the keystore; nothing signs or applies a change after; admin keys go out and in as one checksummed line, never replacing a key | `cmd/juist`: `backup_test.go`, `TestAKeystoreFoundsSeveralNetworks` | no |
+| M12 — between hosts: fb ends the network and lx, told by fb's juistd, drops its tunnel | `make interop`: `TestLinuxAndFreeBSD/disable` | qemu |
 
 ### The last privileged run
 
@@ -313,6 +321,19 @@ whole lab passed at M9's tree in 13 minutes. What CI cannot run, Fedora with fir
 was last checked by hand, and this records the latest such run. Update it with
 each one, so it is clear how old the evidence is.
 
+- **2026-10-07, M12, at M12 after its fifth review**, which has juist
+  create show one break-glass secret and write it nowhere. `make ci-vm`
+  passed whole in 24m24s, the privileged tests none skipped, the lab's
+  disable step piping the line create showed into `juist network disable`.
+- **2026-10-07, M12, at M12 after its fourth review.** `make ci-vm`
+  ran `make ci` whole at M12, the privileged tests among it, none
+  skipped, and again at M12 in 12m13s. Its `make interop` failed twice on the new
+  disable step: lx never heard fb had ended the network, since log sync runs
+  in the tunnels and fb's juistd dropped them before handing the record on,
+  and then found no tunnel address to hand it at. At M12 it passed whole
+  in 13m2s, the step among it: fb ends the network, and lx says `disabled`
+  within 5 s. `make android-check` passed at M12's tree. No hand test
+  on Fedora: M12 changes no firewall rule, unit or package.
 - **2026-10-06, M11b, at M11 after its third review.** `make ci-vm`
   ran `make ci` whole at M11, the privileged tests among it, none
   skipped; its `make interop` failed on the ingress's line, which now names
@@ -849,7 +870,7 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   `JUIST_PUBLIC_TESTS=1 go test -run PublicDHT -v ./internal/rendezvous`.
 - **Upgrades.** Nothing yet tests a network whose members run different builds;
   the schema version exists so that case fails loudly rather than silently, but
-  the readiness check that would stop an admin stranding members is M16's
+  the readiness check that would stop an admin stranding members is M18's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)). Mixed builds do not
   sync at all across M4, whose gossip frames carry leases older builds reject,
   nor across M5b between two admin devices while either holds waiting

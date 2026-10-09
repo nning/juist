@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 var loopback = netip.MustParseAddr("127.0.0.1")
@@ -359,5 +361,51 @@ func TestTheHostIsHeldToNoSourcesRate(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if n := up.asked.Load(); n <= perSourceMax+perSourceQPS {
 		t.Errorf("only %d of %d queries were forwarded", n, 3*perSourceMax)
+	}
+}
+
+// An answer passed on keeps no TTL above the cap, in any section, and an OPT
+// record's flags stay as they are.
+func TestAnAnswerPassedOnIsCapped(t *testing.T) {
+	name := dnsmessage.MustNewName("status.example.org.")
+	apex := dnsmessage.MustNewName("example.org.")
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 1, Response: true})
+	b.EnableCompression()
+	b.StartQuestions()
+	b.Question(dnsmessage.Question{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET})
+	b.StartAnswers()
+	b.CNAMEResource(dnsmessage.ResourceHeader{Name: name, Class: dnsmessage.ClassINET, TTL: 38400},
+		dnsmessage.CNAMEResource{CNAME: apex})
+	b.AResource(dnsmessage.ResourceHeader{Name: apex, Class: dnsmessage.ClassINET, TTL: 5},
+		dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}})
+	b.StartAuthorities()
+	b.SOAResource(dnsmessage.ResourceHeader{Name: apex, Class: dnsmessage.ClassINET, TTL: 3600},
+		dnsmessage.SOAResource{NS: apex, MBox: apex, MinTTL: 3600})
+	b.StartAdditionals()
+	var opt dnsmessage.ResourceHeader
+	opt.SetEDNS0(1232, dnsmessage.RCodeSuccess, true)
+	b.OPTResource(opt, dnsmessage.OPTResource{})
+	msg, err := b.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	capTTL(msg, 30)
+	var m dnsmessage.Message
+	if err := m.Unpack(msg); err != nil {
+		t.Fatal(err)
+	}
+	var got []uint32
+	for _, r := range slices.Concat(m.Answers, m.Authorities) {
+		got = append(got, r.Header.TTL)
+	}
+	if !slices.Equal(got, []uint32{30, 5, 30}) {
+		t.Errorf("TTLs %v, want [30 5 30]", got)
+	}
+	if len(m.Additionals) != 1 || m.Additionals[0].Header.TTL != opt.TTL {
+		t.Errorf("the OPT record: %+v, want TTL %#x", m.Additionals, opt.TTL)
+	}
+	for n := range len(msg) {
+		capTTL(msg[:n], 30) // a cut message is left as it parses
 	}
 }

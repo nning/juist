@@ -74,7 +74,7 @@ any other command stops and names the networks. No command asks which.`)
 	m.section("OPTIONS")
 	m.text("These go before or after the command, and are taken by every one.")
 	for _, o := range [][2]string{
-		{"-H, --home DIR", "The keystore: admin keys, and each network's anchor and break-glass file. Default $JUIST_HOME, or ~/.config/juist."},
+		{"-H, --home DIR", "The keystore: admin keys, and each network's anchor. Default $JUIST_HOME, or ~/.config/juist."},
 		{"-s, --socket PATH", "The juistd to talk to. Default $JUIST_SOCKET, or the packaged service's."},
 		{"--network NAME", "The network, as NETWORK first does. Default $JUIST_NETWORK."},
 		{"-h, --help", "Show a command's help."},
@@ -92,7 +92,7 @@ any other command stops and names the networks. No command asks which.`)
 	}
 	m.section("FILES")
 	for _, f := range [][2]string{
-		{"~/.config/juist", "The keystore: admins/ holds admin keys, NAME@NETWORK.key for one network's, networks/ what the keystore last verified of each network, break-glass-NETWORK.secrets each network's recovery secrets, to keep offline."},
+		{"~/.config/juist", "The keystore: admins/ holds admin keys, NAME@NETWORK.key for one network's, networks/ what the keystore last verified of each network, founded-NETWORK each network founded from it."},
 		{systemHome, "The packaged juistd's state: the device's keys and the network's log. " + systemHome + "/juistN for the others."},
 		{ipc.SystemSocket, "The packaged juistd's control socket; " + filepath.Dir(ipc.SystemSocket) + "/juistN.sock for the others."},
 	} {

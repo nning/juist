@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nning/juist/internal/statedir"
@@ -213,11 +214,50 @@ func (n *daemonNode) log() (*log.Authority, error) {
 	if err != nil {
 		return nil, fmt.Errorf("juistd's log does not verify: %w", err)
 	}
+	if n.st.Disabled != "" {
+		if err := n.informDisabled(auth); err != nil {
+			return nil, err
+		}
+	}
 	if err := n.home.checkPin(n.sock, auth, records, n.orphans); err != nil {
 		return nil, err
 	}
 	n.auth, n.verified = auth, records
 	return auth, nil
+}
+
+// informDisabled verifies the record the daemon says disabled the network,
+// which hangs off the active chain, with the records between them.
+func (n *daemonNode) informDisabled(auth *log.Authority) error {
+	at, err := types.ParseHash(n.st.Disabled)
+	if err != nil {
+		return fmt.Errorf("juistd names no record as disabling the network: %w", err)
+	}
+	off, err := n.orphans()
+	if err != nil {
+		return err
+	}
+	byHash := make(map[types.Hash]types.AUM, len(off))
+	for _, a := range off {
+		byHash[a.Hash()] = a
+	}
+	var path []types.AUM
+	for h := at; len(path) <= len(off); {
+		a, ok := byHash[h]
+		if !ok || a.Prev == nil {
+			break
+		}
+		path = append(path, a)
+		h = *a.Prev
+	}
+	slices.Reverse(path)
+	if err := auth.Inform(path...); err != nil {
+		return fmt.Errorf("juistd's record disabling the network does not verify: %w", err)
+	}
+	if auth.Disabled() == nil {
+		return errors.New("juistd says the network is disabled, and sends no record that disabled it")
+	}
+	return nil
 }
 
 // orphans returns the daemon's records off the active chain.
@@ -349,7 +389,8 @@ func (n *daemonNode) standing(bool) (resetStanding, error) {
 	if !n.st.InNetwork {
 		return resetStanding{}, nil
 	}
-	return resetStanding{network: n.st.NetworkName, member: !n.st.NotMember, members: n.st.Members}, nil
+	return resetStanding{network: n.st.NetworkName, member: !n.st.NotMember && n.st.Disabled == "",
+		members: n.st.Members}, nil
 }
 
 func (n *daemonNode) reset(force bool) error {
@@ -643,7 +684,7 @@ func (n *localNode) standing(force bool) (resetStanding, error) {
 		state := auth.State()
 		s := resetStanding{network: state.Network(), logOnly: k == nil, members: len(state.Nodes())}
 		if k != nil {
-			s.member = state.IsMember(k.Identity.Public())
+			s.member = auth.Disabled() == nil && state.IsMember(k.Identity.Public())
 		}
 		return s, nil
 	case errors.Is(err, errNoNetwork), force:

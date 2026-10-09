@@ -540,6 +540,9 @@ func report(out, errOut io.Writer, st ipc.Status, tun string) {
 			warn("%s", alarm)
 		}
 	}
+	if st.Disabled != "" {
+		warn("the network was ended with a break-glass secret; tunnels are down for good")
+	}
 	if st.StartError != "" {
 		warn("tunnels cannot start yet, retrying: %s", st.StartError)
 		if tun != "" && strings.Contains(st.StartError, iofs.ErrPermission.Error()) {
