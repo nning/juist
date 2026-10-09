@@ -24,8 +24,10 @@ The full analysis, with every weakness that remains, is in the
 - The network's start. Every device checks each change in the
   [membership log]({{< relref "docs/how-it-works" >}}#the-membership-log) back
   to the first one, made when the network was created.
-- Every member. Once admitted, a device reaches every port of every other
-  member through the tunnel. juist has no access rules.
+- Every member, as far as the [access policy]({{< relref "docs/access" >}})
+  lets it in. Without one, an admitted device reaches every port of every
+  other member through the tunnel. With one, each device refuses what no
+  rule passes, whatever the sender does.
 - An exit node, for what it carries. The internet traffic you send through an
   [exit node]({{< relref "docs/exit-nodes" >}}) is readable there, as it would
   be at any VPN provider.

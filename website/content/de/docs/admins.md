@@ -204,6 +204,9 @@ betrifft, verrät nämlich nur das Log.
 - Führe Admin-Befehle als du selbst aus, ohne sudo, denn die Schlüssel liegen
   in deinem Keystore.
 - `juist log` zeigt jede Änderung und wer sie bestätigt hat.
+- [Zugriffsregeln]({{< relref "docs/access" >}}) änderst du genauso.
+  `juist approve policy.rec` zeigt die Änderung als Diff gegen die geltenden
+  Regeln.
 - Nach einem Update von juist meldet `juist status` auf deinem Gerät
   `the network is at schema 9, this version at schema 10`, wenn diese Version
   dem Log des Netzes etwas hinzufügt. Sobald alle Geräte sie haben, führe

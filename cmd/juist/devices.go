@@ -9,8 +9,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/ipc"
-
 	"github.com/nning/juist/types"
 )
 
@@ -21,17 +21,18 @@ through a relay. juistd checks every 30s. On a device in several networks,
 each network's, unless NETWORK names one.`}
 	fs := newFlags(s.name)
 	long := fs.Bool("keys", false, "show identity keys")
+	all := fs.Bool("all", false, "list the devices the access policy keeps apart from this one too")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	if listed, err := a.forEachNetwork(func() error { return a.listDevices(*long) }); listed {
+	if listed, err := a.forEachNetwork(func() error { return a.listDevices(*long, *all) }); listed {
 		return err
 	}
-	return a.listDevices(*long)
+	return a.listDevices(*long, *all)
 }
 
 // listDevices is "juist devices" for one network.
-func (a *app) listDevices(long bool) error {
+func (a *app) listDevices(long, all bool) error {
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
@@ -61,8 +62,19 @@ func (a *app) listDevices(long bool) error {
 			st = nil
 		}
 	}
-	if err := a.printDevices(ipc.DevicesOf(state, a.now().Unix()), self, st, long); err != nil {
+	devs := ipc.DevicesOf(state, a.now().Unix())
+	apart := 0
+	if hasDevice && !all {
+		view := policy.NetworkOf(state, a.now().Unix()).View(self)
+		listed := len(devs)
+		devs = slices.DeleteFunc(devs, func(d ipc.Device) bool { return !view.Lists(self, d.Identity) })
+		apart = listed - len(devs)
+	}
+	if err := a.printDevices(devs, self, st, long); err != nil {
 		return err
+	}
+	if apart > 0 {
+		a.hint("%s the access policy keeps apart from this one: juist devices --all", count(apart, "more device"))
 	}
 	if alarm := auth.Alarm(); alarm != nil {
 		a.printf("\n")

@@ -229,6 +229,8 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 		p.status.Refused = "it carries IPv4 alone, and has no IPv4 in the network"
 	case routes == nil:
 		p.status.Refused = "the network has not made it an exit node"
+	case s.view.Restricted && len(s.view.Out[choice.Node].Exit) == 0:
+		p.status.Refused = "the access policy does not let this device use it"
 	case !fresh:
 		p.status.Refused = "this device's view of the network is stale"
 	case i < 0:

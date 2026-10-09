@@ -63,9 +63,9 @@ func TestTheConfinerKeepsAnIngressToItsPorts(t *testing.T) {
 	c.maxFlowsPerAddr = 4
 	ingress, member := netip.MustParsePrefix("100.64.0.2/32"), netip.MustParsePrefix("100.64.0.3/32")
 	service := netip.MustParsePrefix("100.64.0.4/32")
-	c.set([]Peer{{Addrs: []netip.Prefix{ingress}, Confined: ConfineIngress}, {Addrs: []netip.Prefix{member}},
-		{Addrs: []netip.Prefix{service}, Confined: ConfineService}},
-		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{TCP: []uint16{41641, 443}, UDP: []uint16{443}})
+	c.set([]Peer{{Addrs: []netip.Prefix{ingress}, Access: ingressAccess([]uint16{41641, 443}, []uint16{443})},
+		{Addrs: []netip.Prefix{member}}, {Addrs: []netip.Prefix{service}, Access: serviceAccess()}},
+		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")})
 	verdicts := []struct {
 		what string
 		pkt  []byte
@@ -135,7 +135,7 @@ func TestTheConfinerCallsTheEnginesHooks(t *testing.T) {
 	var calls int
 	next := func(*packet.Parsed, *tstun.Wrapper) filter.Response { calls++; return filter.DropSilently }
 	c := &confiner{nextIn: next, nextOut: next}
-	c.set(nil, nil, IngressPorts{})
+	c.set(nil, nil)
 	pkt := parsed(tcpPacket(ap("100.64.0.3:5000"), ap("100.64.0.1:22"), tcpAck))
 	if got := c.in(pkt, nil); got != filter.DropSilently {
 		t.Errorf("in: %v, want the engine's verdict", got)
@@ -208,11 +208,8 @@ func TestAnIngressReachesItsPortsAlone(t *testing.T) {
 		o.Tun, o.RespondToPing = ingressTUN, false
 	})
 	confined := ingress.peer()
-	confined.Confined = ConfineIngress
+	confined.Access = ingressAccess([]uint16{443}, nil)
 	if err := member.mgr.SetPeers([]Peer{confined}); err != nil {
-		t.Fatal(err)
-	}
-	if err := member.mgr.SetIngressPorts(IngressPorts{TCP: []uint16{443}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ingress.mgr.SetPeers([]Peer{member.peer()}); err != nil {
@@ -271,8 +268,8 @@ func TestAConfinedPeerAnswersPingsAndErrors(t *testing.T) {
 	c := &confiner{}
 	c.maxFlowsPerAddr = 16
 	c.set([]Peer{{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32"),
-		netip.MustParsePrefix("fd00::2/128")}, Confined: ConfineIngress}},
-		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd00::1/128")}, IngressPorts{TCP: []uint16{443}})
+		netip.MustParsePrefix("fd00::2/128")}, Access: ingressAccess([]uint16{443}, nil)}},
+		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd00::1/128")})
 	self4, peer4 := netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("100.64.0.2")
 	self6, peer6 := netip.MustParseAddr("fd00::1"), netip.MustParseAddr("fd00::2")
 	echo := func(id byte) []byte { return []byte{0, id, 0, 1} }
@@ -308,8 +305,8 @@ func TestAConfinedFlowEndsWithItsConnection(t *testing.T) {
 	now := time.Unix(1000, 0)
 	c := &confiner{now: func() time.Time { return now }}
 	c.maxFlowsPerAddr = 16
-	c.set([]Peer{{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Confined: ConfineService}},
-		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{})
+	c.set([]Peer{{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Access: serviceAccess()}},
+		[]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")})
 	conn := func(port uint16) (out, in func(flags byte) filter.Response) {
 		self := netip.AddrPortFrom(netip.MustParseAddr("100.64.0.1"), port)
 		peer := ap("100.64.0.2:8080")
@@ -368,9 +365,9 @@ func TestAConfinedFlowEndsWithItsConnection(t *testing.T) {
 func TestOnePeersFlowsEvictNoOthers(t *testing.T) {
 	c := &confiner{maxFlows: 8, maxFlowsPerAddr: 4}
 	c.set([]Peer{
-		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Confined: ConfineService},
-		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")}, Confined: ConfineService},
-	}, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{})
+		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Access: serviceAccess()},
+		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")}, Access: serviceAccess()},
+	}, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")})
 	self := func(port uint16) netip.AddrPort { return netip.AddrPortFrom(netip.MustParseAddr("100.64.0.1"), port) }
 	quiet, busy := ap("100.64.0.2:53"), ap("100.64.0.3:53")
 	c.out(parsed(udpPacket(self(40000), quiet)), nil)
@@ -389,9 +386,9 @@ func TestOnePeersFlowsEvictNoOthers(t *testing.T) {
 
 	// Past the whole bound, the address holding most gives way.
 	c.set([]Peer{
-		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Confined: ConfineService},
-		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32"), netip.MustParsePrefix("100.64.0.5/32")}, Confined: ConfineService},
-	}, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{})
+		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Access: serviceAccess()},
+		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32"), netip.MustParsePrefix("100.64.0.5/32")}, Access: serviceAccess()},
+	}, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")})
 	for port := range uint16(4) {
 		c.out(parsed(udpPacket(self(42000+port), ap("100.64.0.5:53"))), nil)
 	}
@@ -407,7 +404,7 @@ func TestOnePeersFlowsEvictNoOthers(t *testing.T) {
 	}
 
 	// A peer no longer confined leaves no flows behind.
-	c.set(nil, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}, IngressPorts{})
+	c.set(nil, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")})
 	if len(c.flows) != 0 {
 		t.Errorf("flows kept for %d addresses no longer confined", len(c.flows))
 	}
@@ -442,8 +439,8 @@ func ipChecksum(h []byte) uint16 {
 func TestFragmentsOfAConfinedPeersDatagramPass(t *testing.T) {
 	c := &confiner{}
 	self, ingress := netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("100.64.0.2")
-	c.set([]Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(ingress, 32)}, Confined: ConfineIngress}},
-		[]netip.Prefix{netip.PrefixFrom(self, 32)}, IngressPorts{UDP: []uint16{443}})
+	c.set([]Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(ingress, 32)}, Access: ingressAccess(nil, []uint16{443})}},
+		[]netip.Prefix{netip.PrefixFrom(self, 32)})
 	if p := parsed(fragment4(ingress, self, 1232)); p.IPProto != ipproto.Fragment {
 		t.Fatalf("the packet is no fragment: %v", p.IPProto)
 	}
@@ -467,15 +464,32 @@ func TestFragmentsOfAConfinedPeersDatagramPass(t *testing.T) {
 func TestAQUICReplyOpensNothing(t *testing.T) {
 	c := &confiner{}
 	self, ingress := netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("100.64.0.2/32")
-	peers := []Peer{{Addrs: []netip.Prefix{ingress}, Confined: ConfineIngress}}
-	c.set(peers, []netip.Prefix{self}, IngressPorts{UDP: []uint16{443}})
+	peers := []Peer{{Addrs: []netip.Prefix{ingress}, Access: ingressAccess(nil, []uint16{443})}}
+	c.set(peers, []netip.Prefix{self})
 	in := udpPacket(ap("100.64.0.2:5000"), ap("100.64.0.1:443"))
 	if got := c.in(parsed(in), nil); got != filter.Accept {
 		t.Fatalf("UDP to a port QUIC is served on: %v", got)
 	}
 	c.out(parsed(udpPacket(ap("100.64.0.1:443"), ap("100.64.0.2:5000"))), nil)
-	c.set(peers, []netip.Prefix{self}, IngressPorts{})
+	peers[0].Access = ingressAccess(nil, nil)
+	c.set(peers, []netip.Prefix{self})
 	if got := c.in(parsed(in), nil); got != filter.Drop {
 		t.Errorf("UDP to a port no longer served: %v", got)
 	}
 }
+
+// ingressAccess is what an ingress may open: TCP and UDP to these ports of
+// this node's own addresses.
+func ingressAccess(tcp, udp []uint16) *Access {
+	a := &Access{Sends: []Ports{{}}}
+	for _, p := range tcp {
+		a.Open = append(a.Open, Ports{Proto: ipproto.TCP, First: p, Last: p})
+	}
+	for _, p := range udp {
+		a.Open = append(a.Open, Ports{Proto: ipproto.UDP, First: p, Last: p})
+	}
+	return a
+}
+
+// serviceAccess is a service member's: replies alone.
+func serviceAccess() *Access { return &Access{Sends: []Ports{{}}} }

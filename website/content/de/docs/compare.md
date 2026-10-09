@@ -53,9 +53,9 @@ Lücke: Geräte nehmen einen neuen Schlüssel nur an, wenn ein Schlüssel in
 deiner Hand ihn signiert hat. Das Entfernen eines Geräts und das Verteilen der
 Änderung laufen aber weiterhin über den Server.
 
-Tailscale passt, wenn du schon heute Clients für alle Plattformen,
-Benutzerkonten und Zugriffsregeln brauchst und damit leben kannst, dass der
-Server einer Firma in der Mitte steht.
+Tailscale passt, wenn du schon heute Clients für alle Plattformen und
+Benutzerkonten mit Zugriffsregeln nach Benutzern brauchst und damit leben
+kannst, dass der Server einer Firma in der Mitte steht.
 
 ## Headscale {#headscale}
 
@@ -79,7 +79,8 @@ selbst betreiben. Der Client steht unter BSD-3-Clause, die Server unter
 AGPL-3.0.
 
 NetBird passt, wenn du einen selbst betriebenen Server mit Dashboard,
-Anmeldung über deinen Identitätsanbieter und Zugriffsregeln willst.
+Anmeldung über deinen Identitätsanbieter und Zugriffsregeln nach Benutzern
+willst.
 
 ## Netmaker {#netmaker}
 
@@ -205,10 +206,8 @@ Server herum, der bestimmt, wer dazugehört.
 - Es läuft unter Linux und FreeBSD, und unter Android als Mitglied ohne
   Namen, Rollen, Exit-Nodes und Subnetze. Für Windows, macOS und iOS gibt es
   nichts.
-- Es kennt keine Zugriffsregeln: Jedes Mitglied erreicht jeden Port jedes
-  anderen Mitglieds.
-- Es kennt nur Geräte, keine Benutzer, und bietet keine Anmeldung über einen
-  Identitätsanbieter.
+- Es kennt nur Geräte, keine Benutzer: Seine Zugriffsregeln nennen Geräte,
+  und eine Anmeldung über einen Identitätsanbieter gibt es nicht.
 - Ein entferntes Gerät ist draußen, sobald die anderen Geräte davon erfahren.
   Ein abgeschnittenes Gerät erfährt es aber womöglich erst nach bis zu 48
   Stunden. Ein zentraler Server teilt es jedem Gerät, das er erreicht, sofort

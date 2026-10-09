@@ -60,9 +60,9 @@ type Peer struct {
 	// travels in the peer's announcement rather than being decided here.
 	HomeRelay int
 
-	// Confined is what the peer may send this node, by its role. A confined
-	// peer routes nothing.
-	Confined Confinement
+	// Access is what the peer may open on this node and this node on it;
+	// nil leaves it to the filter, which takes anything from a member.
+	Access *Access
 }
 
 // Self is the local node's identity and overlay addressing. Addrs follows the
@@ -97,11 +97,6 @@ type Manager interface {
 	// SetServe says what this node forwards for its peers out of the overlay,
 	// masquerading their sources, where the platform can.
 	SetServe(s Serve) error
-
-	// SetIngressPorts names the ports of this node's own addresses an
-	// ingress may open connections or send datagrams to: those it publishes
-	// and serves, and log sync's.
-	SetIngressPorts(ports IngressPorts) error
 
 	// HostRoutes is what the host reaches but by its default routes: the
 	// networks of its interfaces, and its routes in the main table,

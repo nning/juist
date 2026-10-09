@@ -25,6 +25,7 @@ type State struct {
 	v4Prefix    *netip.Prefix
 	v4Retiring  *types.RetiringRanges
 	domain      string
+	policy      *types.Policy // replaced, never mutated
 	disablement []types.Hash
 	admins      map[types.Identity]types.AdminKey
 	nodes       map[types.Identity]*types.NodeRecord
@@ -52,6 +53,14 @@ func (s *State) EpochCommit() types.Hash { return s.epochCommit }
 
 // Domain returns the network's public domain, or "" for none.
 func (s *State) Domain() string { return s.domain }
+
+// Policy returns the network's access policy, or nil for none.
+func (s *State) Policy() *types.Policy {
+	if s.policy == nil {
+		return nil
+	}
+	return s.policy.Clone()
+}
 
 // Schema returns the record schema this network is written under.
 func (s *State) Schema() types.SchemaVersion { return s.schema }
@@ -306,6 +315,7 @@ func (s *State) Snapshot() *types.Snapshot {
 		r := types.RetiringRanges{Prefixes: slices.Clone(s.v4Retiring.Prefixes), Until: s.v4Retiring.Until}
 		snap.V4Retiring = &r
 	}
+	snap.Policy = s.Policy()
 	return snap
 }
 
@@ -343,6 +353,9 @@ func stateFromSnapshot(snap *types.Snapshot, head types.Hash) (*State, error) {
 	if snap.V4Retiring != nil {
 		r := types.RetiringRanges{Prefixes: slices.Clone(snap.V4Retiring.Prefixes), Until: snap.V4Retiring.Until}
 		s.v4Retiring = &r
+	}
+	if snap.Policy != nil {
+		s.policy = snap.Policy.Clone()
 	}
 	for i := range snap.Admins {
 		s.admins[snap.Admins[i].Public] = *snap.Admins[i].Clone()

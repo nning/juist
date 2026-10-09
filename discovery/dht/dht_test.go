@@ -3,6 +3,7 @@ package dht
 import (
 	"context"
 	"crypto/rand"
+	"math"
 	"net"
 	"net/netip"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/addrkey"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
@@ -371,6 +373,22 @@ func TestAnnouncementFitsTheItemLimit(t *testing.T) {
 		t.Fatalf("the largest announcement the schema admits is not publishable: %v", err)
 	}
 	t.Logf("largest sealed announcement: %d bytes of the %d BEP 44 allows", len(value), MaxValueSize)
+
+	// A member the policy keeps apart from another seals its addresses: it
+	// carries no relay, since a relay peers every member.
+	sealed, err := addrkey.Seal(addrkey.Key{1}, e.Addrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Relay, e.Addrs, e.Sealed = nil, nil, sealed
+	e.Share = &gossip.Share{Port: 65535, Until: math.MaxInt64}
+	if err := e.Sign(priv); err != nil {
+		t.Fatal(err)
+	}
+	if value, err = sealAnnouncement(s, 1, e); err != nil {
+		t.Fatalf("the largest announcement with sealed addresses is not publishable: %v", err)
+	}
+	t.Logf("largest announcement with sealed addresses: %d bytes", len(value))
 }
 
 // queryBytes renders the parts of a query a storage node actually holds.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/nning/juist/internal/dnsfwd"
 	"github.com/nning/juist/internal/names"
+	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/internal/resolved"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
@@ -305,7 +306,7 @@ func TestAStaleViewAnswersNoPublicName(t *testing.T) {
 		{"fresh", log.Freshness{Signers: 1, Until: now + 60}, true},
 		{"stale", log.Freshness{Signers: 1, Until: now - 1}, false},
 	} {
-		z, held, until := f.d.namesZone(state, tc.fresh, true, now, func(types.Identity) bool { return false })
+		z, held, until := f.d.namesZone(state, policy.View{}, tc.fresh, true, now, func(types.Identity) bool { return false })
 		if _, ok := z.Overrides["mx.example.net"]; ok != tc.want || len(held) != 1 {
 			t.Errorf("%s: the zone overrides %v, holding %v", tc.name, z.Overrides, held)
 		}
@@ -313,7 +314,7 @@ func TestAStaleViewAnswersNoPublicName(t *testing.T) {
 			t.Errorf("%s: answered %v", tc.name, got)
 		}
 	}
-	z, held, until := f.d.namesZone(state, log.Freshness{Signers: 1, Until: now + 1}, true, now, func(types.Identity) bool { return false })
+	z, held, until := f.d.namesZone(state, policy.View{}, log.Freshness{Signers: 1, Until: now + 1}, true, now, func(types.Identity) bool { return false })
 	if !z.Up(n1.String()) {
 		t.Fatal("fresh, the override is not up")
 	}

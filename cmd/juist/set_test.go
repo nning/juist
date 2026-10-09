@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -34,4 +36,42 @@ func TestSetSaysWhatItSetOf443(t *testing.T) {
 		t.Errorf("a SOCKS proxy was taken:\n%s", out)
 	}
 	mustContain(t, laptop.mustRun("set", "--proxy", ""), "proxy cleared")
+	// Off the command line, which every user may read.
+	out, err := laptop.cli.answer("http://user:secret@proxy.example:3128", "--socket", laptop.sock, "set", "--proxy", "-")
+	if err != nil {
+		t.Fatalf("--proxy - (%v):\n%s", err, out)
+	}
+	mustContain(t, out, "proxy http://user:xxxxx@proxy.example:3128")
+	if _, err := laptop.cli.answer("", "--socket", laptop.sock, "set", "--proxy", "-"); err == nil {
+		t.Error("--proxy - took an empty stdin")
+	}
+}
+
+// A grant of 443 that outlived its relay name, as where relay.sh off found
+// no root, is warned of, and taken back by a reset.
+func TestAGrantOf443WithoutANameIsTakenBack(t *testing.T) {
+	t.Parallel()
+	h := newHost(t)
+	h.mustRun("create", "home", "--device", "laptop")
+	calls := filepath.Join(t.TempDir(), "calls")
+	h.layout.relayScript = filepath.Join(t.TempDir(), "relay.sh")
+	if err := os.WriteFile(h.layout.relayScript, []byte("#!/bin/sh\necho \"$*\" >> "+calls+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.layout.relayGrant = filepath.Join(t.TempDir(), "juist-relay-443.conf")
+	if err := os.WriteFile(h.layout.relayGrant, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, h.mustRun("status"), "warning: juistd may bind any port below 1024",
+		h.layout.relayScript+" off")
+	// Another juistd, by its socket, is none of the grant's.
+	other := newDaemonDevice(t, nil)
+	other.cli.host = h.layout
+	if out := other.mustRun("status"); strings.Contains(out, "below 1024") {
+		t.Errorf("another juistd is warned of the host's grant:\n%s", out)
+	}
+	h.mustRun("reset", "--yes", "--force")
+	if b, _ := os.ReadFile(calls); string(b) != "off\n" {
+		t.Errorf("relay.sh ran %q, want off", b)
+	}
 }

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/types/ipproto"
+
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
@@ -155,15 +157,35 @@ func (d *Daemon) writeIngressPortsLocked() {
 	d.pub.publicPorts, d.pub.publicSet = slices.Clone(ports), true
 }
 
+// ingressPorts are the ports of this device's own addresses an ingress may
+// open by TCP, and send UDP to.
+type ingressPorts struct{ TCP, UDP []uint16 }
+
+// access is the ports as the data plane passes them.
+func (p ingressPorts) access() []conn.Ports {
+	var out []conn.Ports
+	for _, l := range []struct {
+		proto ipproto.Proto
+		ports []uint16
+	}{{ipproto.TCP, p.TCP}, {ipproto.UDP, p.UDP}} {
+		for _, port := range slices.Sorted(slices.Values(l.ports)) {
+			if n := len(out); n == 0 || out[n-1] != (conn.Ports{Proto: l.proto, First: port, Last: port}) {
+				out = append(out, conn.Ports{Proto: l.proto, First: port, Last: port})
+			}
+		}
+	}
+	return out
+}
+
 // planPublish is the ports an ingress may open on this device: log sync's,
 // and those of the names the log publishes on it, once its operator agreed,
 // and its share's, while its view is fresh, so that a withdrawn name ends at
 // the freshness TTL; by UDP too, those of names offered HTTP/3, for QUIC.
-func (d *Daemon) planPublish(s snapshot, fresh bool) conn.IngressPorts {
+func (d *Daemon) planPublish(s snapshot, fresh bool) ingressPorts {
 	d.pub.mu.Lock()
 	defer d.pub.mu.Unlock()
 	self, _ := s.state.Node(d.self)
-	ports := conn.IngressPorts{TCP: []uint16{d.gossipPort}}
+	ports := ingressPorts{TCP: []uint16{d.gossipPort}}
 	if sh := d.pub.share; sh != nil && fresh && (sh.end.IsZero() || s.now < sh.end.Unix()) {
 		if _, err := shareName(s.state, d.self); err == nil {
 			ports.TCP = append(ports.TCP, sharePort)
@@ -407,6 +429,11 @@ func (d *Daemon) Published() *ipc.Published {
 			addPublished(out, t)
 		}
 	}
+	// The relay keeps its name: a member's name the same would be handed
+	// the relay's clients, and its certificate's challenges.
+	out.Names = slices.DeleteFunc(out.Names, func(t ipc.PublishedTarget) bool {
+		return slices.ContainsFunc(out.Relays, func(r ipc.PublishedTarget) bool { return r.Name == t.Name })
+	})
 	slices.SortFunc(out.Names, func(x, y ipc.PublishedTarget) int { return strings.Compare(x.Name, y.Name) })
 	slices.SortFunc(out.TCP, func(x, y ipc.PublishedTarget) int { return cmp.Compare(x.Public, y.Public) })
 	return out
@@ -417,12 +444,11 @@ func (d *Daemon) Published() *ipc.Published {
 func (d *Daemon) relayHandedOn() (ipc.PublishedTarget, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	// Only once the relay reads the ingress's PROXY header.
+	// Only once the relay takes them at the hand-off socket.
 	if d.relay == nil || d.relayCerts == nil || !d.httpsHanded {
 		return ipc.PublishedTarget{}, false
 	}
-	return ipc.PublishedTarget{Name: d.relayName, Addrs: []netip.Addr{netip.AddrFrom4([4]byte{127, 0, 0, 1})},
-		Port: d.relay.Port(), Proxy: true}, true
+	return ipc.PublishedTarget{Name: d.relayName, Socket: d.handOffPath, Proxy: true}, true
 }
 
 // addPublished puts t in p's list of the names published as t is: by TCP

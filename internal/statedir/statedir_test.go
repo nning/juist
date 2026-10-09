@@ -162,7 +162,7 @@ func TestSeedHintsKeepsOnlyWhatVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	var held []gossip.Endpoint
-	if err := gossip.DecodeCachedEndpoints(b, &held); err != nil {
+	if err := gossip.DecodeCachedEndpoints(b, &held, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(held) != 1 || !held[0].SameAs(&good) {

@@ -2,9 +2,11 @@ package plumber
 
 import (
 	"errors"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -360,4 +362,40 @@ func TestAPfTheHostStartsIsLeftOn(t *testing.T) {
 	if info, _ := pfOutput("-s", "info"); !strings.Contains(info, "Status: Enabled") {
 		t.Error("juist turned off a pf the host starts itself")
 	}
+}
+
+// The helper binds 443 for the relay where root granted it alone, and never
+// where another program answers on the wildcard: root's socket at the address
+// would take that server's clients.
+func TestTheRelaysPortIsTakenFromNoServer(t *testing.T) {
+	requireRoot(t)
+	was := RelayGrant
+	RelayGrant = filepath.Join(t.TempDir(), "relay-443")
+	defer func() { RelayGrant = was }()
+	probe, err := net.Dial("udp4", "192.0.2.1:9")
+	if err != nil {
+		t.Skip("no route off this host")
+	}
+	host := probe.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
+	probe.Close()
+	if _, err := (FreeBSD{}).ListenHTTPS(host); err == nil || !strings.Contains(err.Error(), "not granted") {
+		t.Fatalf("without root's grant: %v", err)
+	}
+	if err := os.WriteFile(RelayGrant, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server, err := net.Listen("tcp4", "0.0.0.0:443")
+	if err != nil {
+		t.Skipf("443 is held here: %v", err)
+	}
+	if f, err := (FreeBSD{}).ListenHTTPS(host); err == nil {
+		f.Close()
+		t.Error("443 was taken at the host's address from a server on the wildcard")
+	}
+	server.Close()
+	f, err := FreeBSD{}.ListenHTTPS(host)
+	if err != nil {
+		t.Fatalf("granted, with no server: %v", err)
+	}
+	f.Close()
 }

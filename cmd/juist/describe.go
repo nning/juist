@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nning/juist/internal/names"
+	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -61,6 +62,9 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		}
 		for _, n := range st.Nodes {
 			add("device %s (%v)%s", displayMember(n), n.Identity.ShortString(), rolesSuffix(n.Roles))
+		}
+		if st.Policy != nil {
+			add("an access policy of %s", count(len(st.Policy.Rules), "rule"))
 		}
 	case types.KindAddNode:
 		n := aum.Node
@@ -323,6 +327,8 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		} else {
 			add("renames the network to %q", *aum.Network)
 		}
+	case types.KindSetPolicy:
+		out = append(out, policyEffect(aum.Policy, state, now)...)
 	case types.KindRenameNode:
 		add("renames %s to %q", member(*aum.Subject), *aum.NodeName)
 		if state == nil {
@@ -433,6 +439,36 @@ var kindChangesAuthority = map[types.Kind]bool{
 	types.KindSetPublished:      false,
 	types.KindRenameNode:        false,
 	types.KindDisable:           true,
+	types.KindSetPolicy:         false,
+}
+
+// policyEffect is the policy p as a diff against the one in state, with the
+// tests it fails.
+func policyEffect(p *types.Policy, state *log.State, now int64) []string {
+	name := func(types.Identity) string { return "" }
+	var was string
+	if state != nil {
+		name = policy.Names(state)
+		if cur := state.Policy(); cur != nil {
+			was = policy.Format(cur, name)
+		}
+	}
+	if p.Empty() {
+		return []string{"withdraws the access policy: every device may open anything on every other"}
+	}
+	out := []string{"replaces the access policy:"}
+	if state == nil || state.Policy() == nil {
+		out = []string{"sets an access policy: devices open on each other only what it passes"}
+	}
+	out = append(out, policy.Diff(was, policy.Format(p, name))...)
+	if state != nil {
+		n := policy.NetworkOf(state, now)
+		n.Policy = p
+		for _, f := range n.Failures(name) {
+			out = append(out, "fails its own "+f.Text)
+		}
+	}
+	return out
 }
 
 // voucherLost returns the device aum takes the admin role from, by removing

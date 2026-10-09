@@ -98,8 +98,10 @@ entscheidest du selbst, mit `juist exit off`.
 - Ein Gerät, das einen Exit-Node nutzt, kann nicht selbst einer sein. Ein
   Gerät in [mehreren Netzen]({{< relref "docs/networks" >}}) leitet seinen
   Internetverkehr nur über eines davon.
-- Ein Exit-Node steht jedem Mitglied offen. Es gibt keine Zugriffsregeln
-  (ACLs), die festlegen, wer ihn nutzen darf.
+- Ohne [Zugriffsregeln]({{< relref "docs/access" >}}) darf jedes Mitglied
+  einen Exit-Node nutzen. Mit ihnen nutzt ein Gerät nur die Exit-Nodes, die
+  eine Regel wie `pass from laptop to internet via vps` ihm erlaubt, und der
+  Exit-Node leitet nur das weiter.
 - Eine von Hand eingerichtete Firewall auf dem Exit-Node muss UDP und TCP
   41646 auf `juist0` durchlassen, denn dort beantwortet er die DNS-Anfragen
   seiner Mitglieder ([Relays, Ports und Firewalls]({{< relref "docs/relays" >}})).
@@ -117,6 +119,7 @@ entscheidest du selbst, mit `juist exit off`.
 |---|---|
 | `juist status`: `Exit node` zeigt `vps, internet refused: …` | Mach vps wieder erreichbar, oder geh mit `juist exit off` direkt ins Internet. |
 | `juist exit use vps`: `vps does not serve as an exit node` | Führe auf vps `juist exit serve` aus, oder häng `--force` an. |
+| `juist status`: `Exit node` zeigt `vps, internet refused: the access policy does not let this device use it` | Ergänze eine Regel `pass from … to internet via vps` ([Zugriffsregeln]({{< relref "docs/access" >}})). |
 | auf vps, `juist status`: `this device does not serve: IP forwarding is off on this host` | Führe `juist exit serve` noch einmal aus, es richtet das mit sudo ein. |
 | `warning: DNS goes to …, outside the tunnel: systemd-resolved refused juistd` | Installiere das Paket, dessen polkit-Regel juistd das erlaubt, und polkit. |
 | `warning: strict reverse-path filtering on … drops the exit node's answers` | Führe die Zeile `sudo sysctl -w …` aus, die der Hinweis ausgibt. |

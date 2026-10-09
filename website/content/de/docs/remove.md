@@ -22,7 +22,8 @@ Dadurch findet das entfernte Gerät die anderen nicht mehr.
 
 {{< step on="dem Gerät eines Admins" >}}
 Entferne das Gerät über seinen Namen, seine Adresse oder seinen Schlüssel
-(siehe `juist devices --keys`):
+(siehe `juist devices --keys`, mit `--all`, wo Zugriffsregeln es von diesem
+Gerät trennen):
 
 ```sh
 juist remove phone

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("table<admins>{0}\ntable<0>{<admins>}\nservice 0=proto tcp proto tcp port 1")

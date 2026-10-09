@@ -70,7 +70,9 @@ the default; the others keep their keys.`}
 		return err
 	}
 	ds := n.status()
-	named := ds != nil && ds.HTTPS != nil && ds.HTTPS.Name != "" && ds.Instance == 0
+	// Whatever juistd says: a name cleared while relay.sh found no root
+	// leaves the grant.
+	named := inst == 0 && (ds != nil && ds.HTTPS != nil && ds.HTTPS.Name != "" || a.relayGranted())
 	if err := n.reset(*force); err != nil {
 		return err
 	}

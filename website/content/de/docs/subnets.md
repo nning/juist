@@ -10,7 +10,7 @@ lead: Ein Subnet-Router ist ein Mitglied, das Verkehr aus dem Netz in sein LAN w
 Dein NAS zu Hause ist ein Mitglied, also ein Gerät, das zu deinem Netz gehört
 ([So funktioniert juist]({{< relref "docs/how-it-works" >}})). Der Drucker
 daneben ist keines, auf ihm läuft kein juist. Mit einem Subnet-Router sind
-solche Geräte trotzdem für jedes Mitglied erreichbar: Das NAS nimmt den
+solche Geräte trotzdem für andere Mitglieder erreichbar: Das NAS nimmt den
 Verkehr für sie aus dem Tunnel und leitet ihn in sein LAN weiter, in diesem
 Beispiel `192.168.1.0/24`. Einen solchen Adressbereich nennt man Subnetz.
 
@@ -26,7 +26,7 @@ eigens eingerichtet werden.
 ## Einen Subnet-Router einrichten
 
 {{< step on="dem Gerät eines Admins" >}}
-Lass nas sein LAN für alle Mitglieder routen:
+Lass nas sein LAN für das Netz routen:
 
 ```sh
 juist subnet add nas 192.168.1.0/24
@@ -82,8 +82,10 @@ er direkt mit dem Drucker und nicht über das NAS. `juist subnet` meldet dann
   Subnetz darf sich nicht mit den Adressen des Netzes selbst überschneiden.
   Für das ganze Internet (`0.0.0.0/0`) nimmst du einen
   [Exit-Node]({{< relref "docs/exit-nodes" >}}).
-- Jedes Mitglied erreicht ein geroutetes Subnetz. Es gibt keine
-  Zugriffsregeln (ACLs), die das einschränken.
+- Ohne [Zugriffsregeln]({{< relref "docs/access" >}}) erreicht jedes
+  Mitglied ein geroutetes Subnetz. Mit ihnen erreicht ein Gerät nur die
+  Adressen, die eine Regel wie `pass from laptop to 192.168.1.0/24` ihm
+  erlaubt, und der Router leitet nur das weiter.
 - Auch wenn ein Exit-Node genutzt wird, läuft ein geroutetes Subnetz weiter
   über seinen Router.
 - Subnet-Router gibt es unter Linux und unter FreeBSD mit pf.
@@ -102,6 +104,7 @@ hinter `not in use:`:
 | `its router cannot be reached` | Bring den Router wieder online. |
 | `its router's operator has not agreed to route it` | Führe auf dem Router `juist subnet serve` aus. |
 | `subnets are off on this device` | Führe `juist subnet on` aus. |
+| `the access policy passes none of it to this device` | Ergänze eine Regel für das Subnetz ([Zugriffsregeln]({{< relref "docs/access" >}})). |
 | `this device's view of the network is stale` | Bring einen Voucher wieder online, also ein Gerät, das den aktuellen Stand des Netzes bestätigt. Siehe [Status]({{< relref "docs/status" >}}). |
 
 Auf dem Router selbst bedeutet `not routed: not agreed to on this device`,

@@ -57,11 +57,26 @@ func (FreeBSD) OpenTUN(name string, mtu int) (*os.File, func() error, error) {
 	}, nil
 }
 
-// Free reports whether no helper holds name's lock, which one holds while
-// its device lives.
-// ListenHTTPS binds 443/tcp at a.
+// RelayGrant is root's file whose presence lets the helper bind 443 for the
+// relay, as the package's relay.sh on leaves it.
+var RelayGrant = "/usr/local/etc/juist/relay-443"
+
+// ListenHTTPS binds 443/tcp at a, where root granted the relay 443 and no
+// program answers there yet: root's socket at an address would take the
+// clients of another server's on the wildcard.
 func (FreeBSD) ListenHTTPS(a netip.Addr) (*os.File, error) {
-	ln, err := net.ListenTCP("tcp", net.TCPAddrFromAddrPort(netip.AddrPortFrom(a, 443)))
+	if err := relayGranted(); err != nil {
+		return nil, err
+	}
+	at := netip.AddrPortFrom(a, 443)
+	switch c, err := net.DialTimeout("tcp", at.String(), time.Second); {
+	case err == nil:
+		c.Close()
+		return nil, fmt.Errorf("listen tcp %v: another program answers there", at)
+	case !errors.Is(err, syscall.ECONNREFUSED):
+		return nil, fmt.Errorf("listen tcp %v: whether another program answers there: %w", at, err)
+	}
+	ln, err := net.ListenTCP("tcp", net.TCPAddrFromAddrPort(at))
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +84,21 @@ func (FreeBSD) ListenHTTPS(a netip.Addr) (*os.File, error) {
 	return ln.File()
 }
 
+// relayGranted says whether RelayGrant is in place, and root's alone.
+func relayGranted() error {
+	fi, err := os.Lstat(RelayGrant)
+	if err != nil {
+		return errors.New("root has not granted the relay 443")
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.Mode().IsRegular() || !ok || st.Uid != 0 || fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s is not root's alone", RelayGrant)
+	}
+	return nil
+}
+
+// Free reports whether no helper holds name's lock, which one holds while
+// its device lives.
 func (FreeBSD) Free(name string) bool {
 	lock, err := os.OpenFile(filepath.Join(lockDir, "juistd."+name+".lock"), os.O_CREATE|os.O_RDWR|syscall.O_CLOEXEC, 0o600)
 	if err != nil {

@@ -103,6 +103,10 @@ func (a *app) printStatusIn(s *ipc.Status, inst string) {
 		a.printf("\n")
 		a.emit(v.notes)
 	}
+	if s.Instance == 0 && (s.HTTPS == nil || s.HTTPS.Name == "") && a.relayGranted() {
+		a.warn("juistd may bind any port below 1024, which no relay on 443 here needs")
+		a.hint("%s", asRoot(a.host.relayScript+" off"))
+	}
 	if ex := s.Exit; ex != nil && !ex.Node.IsZero() && ex.Refused == "" && ex.Failed == "" {
 		a.warnDNS(ex, dnsOverlay(s, nil))
 		a.warnStrictRP(ex)
@@ -459,7 +463,7 @@ func httpsNotes(s *ipc.Status) []line {
 		note(lineHint, "juist log upgrade")
 	case h.ListenError != "":
 		note(lineWarn, "the relay cannot take 443: %s", h.ListenError)
-		if strings.Contains(h.ListenError, "permission denied") {
+		if strings.Contains(h.ListenError, "permission denied") || strings.Contains(h.ListenError, "not granted") {
 			note(lineHint, "sudo juist set --relay-name %s, which lets the packaged juistd bind 443", h.Name)
 		} else {
 			note(lineHint, "another program holds 443 here")
@@ -762,4 +766,11 @@ func stateDirOwner(dir string) string {
 // file, or one nobody is bound to, which is what a crashed daemon leaves.
 func noDaemon(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// relayGranted reports whether relay.sh's grant of 443 to the host's
+// juistd is in place, and the juistd asked is that one.
+func (a *app) relayGranted() bool {
+	return a.host.relayGrant != "" && fileExists(a.host.relayGrant) &&
+		(!a.socketExplicit || a.socket == a.host.socket(0))
 }

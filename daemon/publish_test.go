@@ -14,6 +14,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/nning/juist/conn"
+	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
@@ -29,6 +30,13 @@ func publishFixture(t *testing.T, mutate func(*Options)) *reconcileFixture {
 		nw.devices[0].record.Published = []types.PublishedName{{Label: "immich", Port: 2283}}
 		nw.devices[1].record.Roles = []types.Role{types.RoleIngress}
 	}, mutate)
+	f.learnOthers(t)
+	return f
+}
+
+// learnOthers hands the daemon every other device's announcement.
+func (f *reconcileFixture) learnOthers(t *testing.T) {
+	t.Helper()
 	for i, dev := range f.nw.devices[1:] {
 		e, err := endpointFor(dev, uint16(7001+i))
 		if err != nil {
@@ -38,7 +46,6 @@ func publishFixture(t *testing.T, mutate func(*Options)) *reconcileFixture {
 			t.Fatal(err)
 		}
 	}
-	return f
 }
 
 func (f *reconcileFixture) peerOf(t *testing.T, dev *device) conn.Peer {
@@ -62,11 +69,11 @@ func TestAnIngressReachesWhatIsServedAlone(t *testing.T) {
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.peerOf(t, f.nw.devices[1]).Confined; got != conn.ConfineIngress {
-		t.Errorf("the ingress is confined as %v", got)
+	if got := f.peerOf(t, f.nw.devices[1]).Access; got == nil {
+		t.Error("the ingress is not confined")
 	}
-	if got := f.peerOf(t, f.nw.devices[2]).Confined; got != conn.ConfineNone {
-		t.Errorf("a member is confined as %v", got)
+	if got := f.peerOf(t, f.nw.devices[2]).Access; got != nil {
+		t.Errorf("a member is confined to %+v", got)
 	}
 	gossip := f.d.gossipPort
 	if got := f.mgr.ingressPortsNow(); !slices.Equal(got, []uint16{gossip}) {
@@ -80,7 +87,7 @@ func TestAnIngressReachesWhatIsServedAlone(t *testing.T) {
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.mgr.ingressPortsNow(); !slices.Equal(got, []uint16{gossip, 2283}) {
+	if got := f.mgr.ingressPortsNow(); !slices.Equal(got, slices.Sorted(slices.Values([]uint16{gossip, 2283}))) {
 		t.Errorf("agreed, an ingress may open %v", got)
 	}
 	if st := f.d.Status().Publish; st == nil || !slices.Equal(st.Serving, []string{"immich.pub.example.org"}) {
@@ -390,7 +397,7 @@ func TestMembersReachAPublishedNameDirectly(t *testing.T) {
 	state := f.auth.State()
 	target := f.nw.devices[1].record.Identity
 	now := time.Now().Unix()
-	z, _, _ := f.d.namesZone(state, log.Freshness{}, true, now, func(id types.Identity) bool { return id == target })
+	z, _, _ := f.d.namesZone(state, policy.View{}, log.Freshness{}, true, now, func(id types.Identity) bool { return id == target })
 	if o, ok := z.Overrides["immich.pub.example.org"]; !ok || o.Target != target.String() || len(o.Addrs) != 2 {
 		t.Errorf("the published name resolves to %+v, %v", o, ok)
 	}
@@ -400,7 +407,7 @@ func TestMembersReachAPublishedNameDirectly(t *testing.T) {
 	if _, ok := z.Overrides["docs.pub.example.org"]; ok {
 		t.Error("a name published behind --proxy resolves to its target")
 	}
-	z, _, _ = f.d.namesZone(state, log.Freshness{}, true, now, func(types.Identity) bool { return false })
+	z, _, _ = f.d.namesZone(state, policy.View{}, log.Freshness{}, true, now, func(types.Identity) bool { return false })
 	if _, ok := z.Overrides["immich.pub.example.org"]; ok {
 		t.Error("a name its target does not serve resolves to it")
 	}
@@ -535,7 +542,7 @@ func TestTheDomainGoesToJuistdWhole(t *testing.T) {
 	target := f.nw.devices[1].record.Identity
 	now := time.Now().Unix()
 	f.d.reachable.Store(&map[types.Identity]bool{target: true})
-	z, _, _ := f.d.namesZone(state, log.Freshness{}, false, now, func(id types.Identity) bool { return id == target })
+	z, _, _ := f.d.namesZone(state, policy.View{}, log.Freshness{}, false, now, func(id types.Identity) bool { return id == target })
 	for _, name := range []string{"pub.example.org", "immich.pub.example.org"} {
 		if o, ok := z.Overrides[name]; !ok || o.Target != target.String() {
 			t.Errorf("without names on, %s resolves to %+v, %v", name, o, ok)

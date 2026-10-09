@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -86,21 +87,23 @@ func TestMain(m *testing.M) {
 }
 
 // namedRelay starts a relay that answers for testName too, and serves it on a
-// second listener as on 443; hellos are the ClientHellos asking for the name.
+// second listener as on 443, and at a hand-off socket, admitting connections
+// there while admitting says; hellos are the ClientHellos asking for the name.
 type namedRelay struct {
 	*Server
-	handing atomic.Bool
-	pool    *x509.CertPool
-	https   netip.AddrPort
-	mu      sync.Mutex
-	hellos  []*tls.ClientHelloInfo
+	admitting atomic.Bool
+	handOff   string
+	pool      *x509.CertPool
+	https     netip.AddrPort
+	mu        sync.Mutex
+	hellos    []*tls.ClientHelloInfo
 }
 
 func startNamed(t *testing.T, members map[key.NodePublic]bool, rv Rendezvous, hosts ...[32]byte) *namedRelay {
 	t.Helper()
 	pool, cert := testPKI.pool, testPKI.cert
-	n := &namedRelay{pool: pool}
-	n.handing.Store(true)
+	n := &namedRelay{pool: pool, handOff: filepath.Join(t.TempDir(), "relay.sock")}
+	n.admitting.Store(true)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +119,6 @@ func startNamed(t *testing.T, members map[key.NodePublic]bool, rv Rendezvous, ho
 			return cert, nil
 		},
 		Rendezvous: rv,
-		HandedOff:  n.handing.Load,
 		Logf:       t.Logf,
 	}
 	if len(hosts) > 0 {
@@ -132,6 +134,11 @@ func startNamed(t *testing.T, members map[key.NodePublic]bool, rv Rendezvous, ho
 		t.Fatal(err)
 	}
 	s.ServeHTTPS(https)
+	handOff, err := net.Listen("unix", n.handOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.ServeHTTPS(HandedOn(handOff, func(net.Conn) bool { return n.admitting.Load() }))
 	n.Server, n.https = s, https.Addr().(*net.TCPAddr).AddrPort()
 	return n
 }
@@ -244,7 +251,9 @@ type fakeRendezvous struct {
 	held map[[32]byte][]byte
 }
 
-func (f *fakeRendezvous) Knows(k [32]byte) bool { return k[0] == 1 }
+func (f *fakeRendezvous) Knows(k [32]byte) (known, current bool) {
+	return k[0] == 1 || k[0] == 2, k[0] == 1
+}
 
 func (f *fakeRendezvous) Get(k [32]byte) ([]byte, bool) {
 	f.mu.Lock()
@@ -269,14 +278,20 @@ func (f *fakeRendezvous) Put(k [32]byte, v []byte) bool {
 func rendezvousClient(n *namedRelay, from netip.AddrPort) *http.Client {
 	return &http.Client{Transport: &http.Transport{
 		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			c, err := (&net.Dialer{}).DialContext(ctx, "tcp", n.localAddrs()[0].String())
+			if !from.IsValid() {
+				c, err := (&net.Dialer{}).DialContext(ctx, "tcp", n.localAddrs()[0].String())
+				if err != nil {
+					return nil, err
+				}
+				tc := tls.Client(c, &tls.Config{ServerName: testName, RootCAs: n.pool})
+				return tc, tc.HandshakeContext(ctx)
+			}
+			c, err := (&net.Dialer{}).DialContext(ctx, "unix", n.handOff)
 			if err != nil {
 				return nil, err
 			}
-			if from.IsValid() {
-				if _, err := c.Write(proxyproto.Header(from, n.localAddrs()[0])); err != nil {
-					return nil, err
-				}
+			if _, err := c.Write(proxyproto.Header(from, n.https)); err != nil {
+				return nil, err
 			}
 			tc := tls.Client(c, &tls.Config{ServerName: testName, RootCAs: n.pool})
 			return tc, tc.HandshakeContext(ctx)
@@ -346,35 +361,23 @@ func TestTheRendezvousLimitsEachClient(t *testing.T) {
 	}
 }
 
-// A PROXY header is read from loopback alone: from anywhere else it is the
-// start of the TLS handshake, which fails, so no client can say it is another.
-func TestAHeaderFromElsewhereIsNotRead(t *testing.T) {
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, err := New(Options{Admit: func([32]byte) bool { return false }, Listener: ln, HandedOff: func() bool { return true }, Logf: t.Logf})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	probe, err := net.Dial("udp4", "192.0.2.1:9")
-	if err != nil {
-		t.Skip("no route off this host")
-	}
-	host := probe.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
-	probe.Close()
-	at := netip.AddrPortFrom(host, s.Port())
-	c, err := net.Dial("tcp", at.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	c.Write(proxyproto.Header(netip.MustParseAddrPort("192.0.2.1:5000"), at))
-	tc := tls.Client(c, &tls.Config{InsecureSkipVerify: true})
-	_ = tc.SetDeadline(time.Now().Add(5 * time.Second))
-	if err := tc.Handshake(); err == nil {
-		t.Fatal("a handshake after a PROXY header from off loopback succeeded")
+// The relay's own port never reads a PROXY header, from loopback either: it
+// is the start of the TLS handshake, which fails, so no local program can say
+// it is another client.
+func TestTheRelaysPortReadsNoHeader(t *testing.T) {
+	n := startNamed(t, nil, nil)
+	for _, at := range []netip.AddrPort{n.localAddrs()[0], n.https} {
+		c, err := net.Dial("tcp", at.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Write(proxyproto.Header(netip.MustParseAddrPort("192.0.2.1:5000"), at))
+		tc := tls.Client(c, &tls.Config{ServerName: testName, RootCAs: n.pool})
+		_ = tc.SetDeadline(time.Now().Add(5 * time.Second))
+		if err := tc.Handshake(); err == nil {
+			t.Errorf("at %v, a handshake after a PROXY header succeeded", at)
+		}
+		c.Close()
 	}
 }
 
@@ -413,5 +416,69 @@ func TestTheRendezvousBoundsClientsByNetwork(t *testing.T) {
 	}
 	if got := h.total.Tokens(); got < rendezvousTotalBurst-1 {
 		t.Errorf("keys of no member's spent the relay's budget down to %.0f", got)
+	}
+}
+
+// A key under an older epoch, which a removed device may still derive, is
+// only ever put, and spends a budget of its own: it cannot exhaust the one
+// the network's members use.
+func TestAnOlderEpochsKeysSpendABudgetOfTheirOwn(t *testing.T) {
+	h := newRendezvousHandler(&fakeRendezvous{held: map[[32]byte][]byte{}}, t.Logf)
+	serve := func(method string, key byte, from int) int {
+		k := [32]byte{key}
+		req := httptest.NewRequest(method, RendezvousPath+hex.EncodeToString(k[:]), strings.NewReader("sealed"))
+		req.RemoteAddr = fmt.Sprintf("10.0.%d.%d:1000", from>>8, from&255)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := serve(http.MethodGet, 2, 0); code != http.StatusNotFound {
+		t.Errorf("a get under an older epoch: %d", code)
+	}
+	limited := 0
+	for i := 1; i <= 4*rendezvousOlderBurst; i++ {
+		if serve(http.MethodPut, 2, i) == http.StatusTooManyRequests {
+			limited = i
+			break
+		}
+	}
+	if limited == 0 || limited > rendezvousOlderBurst+2 {
+		t.Errorf("puts under an older epoch were turned away at the %dth", limited)
+	}
+	if code := serve(http.MethodGet, 1, 1000); code == http.StatusTooManyRequests {
+		t.Error("a member under the newest epoch was turned away for them")
+	}
+}
+
+// A relay says whose it is to a client that asked for its public name, and
+// to nobody else.
+func TestARelaySaysWhoseItIsUnderItsName(t *testing.T) {
+	pool, cert := testPKI.pool, testPKI.cert
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := [32]byte{7, 7, 7}
+	s, err := New(Options{Admit: func([32]byte) bool { return false }, Listener: ln, Name: testName, Identity: id,
+		NamedCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return cert, nil }, Logf: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	at := ln.Addr().String()
+	named := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", at)
+		},
+		TLSClientConfig: &tls.Config{RootCAs: pool},
+	}}
+	got, err := Whoami(t.Context(), named, testName)
+	if err != nil || got != id {
+		t.Fatalf("under its name, the relay says it is %x, %v", got, err)
+	}
+	pinned := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true,
+		ServerName: s.HostName()}}}
+	if _, err := Whoami(t.Context(), pinned, at); err == nil {
+		t.Error("the relay says whose it is to a client that did not ask for its name")
 	}
 }

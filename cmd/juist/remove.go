@@ -44,7 +44,7 @@ it, and one cut off from the rest at the latest when its freshness expires.`}
 	_, err = a.submit(auth, &change{
 		aum:  aum,
 		file: "remove-" + fileSafe(name) + ".rec",
-		done: fmt.Sprintf("removed %s", name),
+		done: fmt.Sprintf("removed %s%s", name, policyLoss(state.Policy(), target.Identity)),
 	})
 	return err
 }

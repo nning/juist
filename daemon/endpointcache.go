@@ -41,7 +41,8 @@ func (d *Daemon) loadEndpointCache(path string) {
 		return
 	}
 	var held []gossip.Endpoint
-	if err := gossip.DecodeCachedEndpoints(b, &held); err != nil {
+	var keys []gossip.AddrKey
+	if err := gossip.DecodeCachedEndpoints(b, &held, &keys); err != nil {
 		d.logf("daemon: the endpoint cache did not decode and was ignored: %v", err)
 		return
 	}
@@ -58,6 +59,11 @@ func (d *Daemon) loadEndpointCache(path string) {
 		}
 		if d.endpoints.Add(e) {
 			n++
+		}
+	}
+	for i := range keys {
+		if keys[i].Owner != d.self && keys[i].Verify() == nil {
+			d.endpoints.KeepKey(keys[i])
 		}
 	}
 	if n > 0 {
@@ -84,7 +90,8 @@ func (d *Daemon) saveEndpointCache(path string) {
 			break
 		}
 	}
-	b, err := gossip.EncodeCachedEndpoints(keep)
+	keys := d.endpoints.Keys()
+	b, err := gossip.EncodeCachedEndpoints(keep, keys)
 	if err != nil {
 		d.logf("daemon: encoding the endpoint cache: %v", err)
 		return
@@ -95,9 +102,10 @@ func (d *Daemon) saveEndpointCache(path string) {
 	d.mu.Lock()
 	unchanged := bytes.Equal(d.cachedEndpoints, b) ||
 		slices.EqualFunc(d.cachedList, keep, func(x, y gossip.Endpoint) bool { return x.SameAs(&y) }) &&
+			slices.EqualFunc(d.cachedKeys, keys, func(x, y gossip.AddrKey) bool { return x.Owner == y.Owner && x.ID == y.ID }) &&
 			d.now().Sub(d.cachedAt) < cacheRenewal
 	if !unchanged {
-		d.cachedEndpoints, d.cachedList, d.cachedAt = b, keep, d.now()
+		d.cachedEndpoints, d.cachedList, d.cachedKeys, d.cachedAt = b, keep, keys, d.now()
 	}
 	d.mu.Unlock()
 	if unchanged {

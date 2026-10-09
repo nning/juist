@@ -64,19 +64,20 @@ func (s *Server) ServeHTTPS(ln net.Listener) {
 	}()
 }
 
-// handOffWait bounds how long a connection from loopback may take to say
-// whose it is.
+// handOffWait bounds how long a connection handed on may take to say whose
+// it is.
 const (
 	handOffWait    = 5 * time.Second
 	maxHandingOver = 64
 )
 
-// handedOff reads the PROXY v2 header a connection from loopback may start
-// with, as the ingress's do, while now says an ingress hands on, and reports
-// the client it names as the remote address. Other connections pass as they
-// are: a header from anywhere else would let any client say it is another.
-func handedOff(ln net.Listener, now func() bool) net.Listener {
-	h := &handOffListener{Listener: ln, now: now, conns: make(chan net.Conn), done: make(chan struct{}),
+// HandedOn is the connections an ingress hands on at ln, a Unix socket, each
+// after a PROXY v2 header naming the client, which the relay reports as the
+// remote address. A connection admit refuses, as one from any other user's
+// process, is closed before a byte of it is read: a header taken from anyone
+// would let a client say it is another.
+func HandedOn(ln net.Listener, admit func(net.Conn) bool) net.Listener {
+	h := &handOffListener{Listener: ln, admit: admit, conns: make(chan net.Conn), done: make(chan struct{}),
 		slots: make(chan struct{}, maxHandingOver)}
 	go h.run()
 	return h
@@ -84,7 +85,7 @@ func handedOff(ln net.Listener, now func() bool) net.Listener {
 
 type handOffListener struct {
 	net.Listener
-	now   func() bool
+	admit func(net.Conn) bool
 	conns chan net.Conn
 	done  chan struct{}
 	err   error
@@ -107,11 +108,8 @@ func (h *handOffListener) run() {
 			return
 		}
 		pause = 0
-		ta, _ := c.RemoteAddr().(*net.TCPAddr)
-		if ta == nil || !ta.AddrPort().Addr().Unmap().IsLoopback() || !h.now() {
-			if !h.give(c) {
-				return
-			}
+		if !h.admit(c) {
+			c.Close()
 			continue
 		}
 		select {
@@ -125,16 +123,12 @@ func (h *handOffListener) run() {
 			_ = c.SetReadDeadline(time.Now().Add(handOffWait))
 			br := bufio.NewReader(c)
 			src, ok, err := proxyproto.Read(br)
-			if err != nil {
+			if err != nil || !ok || !src.IsValid() {
 				c.Close()
 				return
 			}
 			_ = c.SetReadDeadline(time.Time{})
-			out := &readerConn{Conn: c, r: br}
-			if ok && src.IsValid() {
-				out.remote = net.TCPAddrFromAddrPort(src)
-			}
-			h.give(out)
+			h.give(&readerConn{Conn: c, r: br, remote: net.TCPAddrFromAddrPort(src)})
 		}()
 	}
 }
@@ -184,13 +178,15 @@ const RendezvousPath = "/juist/rendezvous/v1/"
 // MaxRendezvousValue bounds a sealed announcement, as BEP 44 does an item.
 const MaxRendezvousValue = 1000
 
-// A Rendezvous answers for one network's members by the key each publishes
-// its sealed announcement under in the DHT, which only a holder of the
-// network's secret can derive. What it hands out is sealed under that secret,
-// so a stranger who guessed a key would learn nothing from it.
+// A Rendezvous answers for one network's members by a key derived from what
+// each publishes its sealed announcement under in the DHT, which only a
+// holder of the network's secret can derive. What it hands out is sealed
+// under that secret, so a stranger who guessed a key would learn nothing
+// from it.
 type Rendezvous interface {
-	// Knows reports whether key is one a member is published under, cheaply.
-	Knows(key [32]byte) bool
+	// Knows reports whether key is one a member is published under, and
+	// whether under the network's newest epoch, cheaply.
+	Knows(key [32]byte) (known, current bool)
 
 	// Get is the sealed announcement held for key, false where key is none
 	// of the network's or none is held.
@@ -206,13 +202,15 @@ const (
 	rendezvousSourceBurst = 16
 	rendezvousTotal       = 64
 	rendezvousTotalBurst  = 128
+	rendezvousOlder       = 4 // under an older epoch, which removed devices hold
+	rendezvousOlderBurst  = 8
 	maxRendezvousSources  = 4096
 )
 
 type rendezvousHandler struct {
-	r     Rendezvous
-	logf  func(string, ...any)
-	total *rate.Limiter
+	r            Rendezvous
+	logf         func(string, ...any)
+	total, older *rate.Limiter
 
 	mu      sync.Mutex
 	sources map[netip.Addr]*sourceLimit
@@ -225,7 +223,7 @@ type sourceLimit struct {
 
 func newRendezvousHandler(r Rendezvous, logf func(string, ...any)) *rendezvousHandler {
 	return &rendezvousHandler{r: r, logf: logf, total: rate.NewLimiter(rendezvousTotal, rendezvousTotalBurst),
-		sources: map[netip.Addr]*sourceLimit{}}
+		older: rate.NewLimiter(rendezvousOlder, rendezvousOlderBurst), sources: map[netip.Addr]*sourceLimit{}}
 }
 
 // sourceOf is whose budget a request from a takes: an IPv6 client's whole
@@ -277,12 +275,15 @@ func (h *rendezvousHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A key of no member's costs the relay's budget nothing, so strangers
-	// cannot spend it for the members.
-	if !h.r.Knows(key) {
+	// cannot spend it for the members; one under an older epoch, which a
+	// removed device may derive, spends a budget of its own, and is only
+	// ever put, by a member not yet told of the newest.
+	known, current := h.r.Knows(key)
+	if !known || !current && r.Method != http.MethodPut {
 		http.NotFound(w, r)
 		return
 	}
-	if !h.total.AllowN(now, 1) {
+	if budget := map[bool]*rate.Limiter{true: h.total, false: h.older}[current]; !budget.AllowN(now, 1) {
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
@@ -312,6 +313,47 @@ func (h *rendezvousHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "GET or PUT", http.StatusMethodNotAllowed)
 	}
+}
+
+// WhoamiPath is where a relay on 443 says whose it is, to a client that
+// asked for its public name: the hex of the member's identity.
+const WhoamiPath = "/juist/relay/v1/whoami"
+
+func whoami(name string, id [32]byte) http.Handler {
+	body := []byte(hex.EncodeToString(id[:]) + "\n")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS == nil || !strings.EqualFold(strings.TrimSuffix(r.TLS.ServerName, "."), name) {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write(body)
+	})
+}
+
+// Whoami asks the relay serving name on 443, through hc, whose it is.
+func Whoami(ctx context.Context, hc *http.Client, name string) ([32]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+name+WhoamiPath, nil)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	res, err := hc.Do(req)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return [32]byte{}, fmt.Errorf("relay: %s answered %s", name, res.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(res.Body, 128))
+	if err != nil {
+		return [32]byte{}, err
+	}
+	raw, err := hex.DecodeString(strings.TrimSpace(string(b)))
+	if err != nil || len(raw) != 32 {
+		return [32]byte{}, fmt.Errorf("relay: %s says it is no member", name)
+	}
+	return [32]byte(raw), nil
 }
 
 // ErrNotHeld is a relay's answer that it holds no announcement for a key.

@@ -37,6 +37,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nning/juist/internal/addrkey"
 	"github.com/nning/juist/internal/admit"
 	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/internal/keyring"
@@ -112,6 +113,14 @@ type Options struct {
 	// Announce returns this node's current announcement, or false if it has
 	// none yet. Called per session, so it always reflects the live one.
 	Announce func() (Endpoint, bool)
+
+	// OwnKey returns this node's address key, or false where its addresses
+	// are not sealed. Nil seals nothing.
+	OwnKey func() (AddrKey, bool)
+
+	// Underlay returns the addresses an announcement opens to, its sealed
+	// ones where this node holds their key. Nil takes [Endpoint.Addrs].
+	Underlay func(Endpoint) []netip.AddrPort
 
 	// Listener accepts inbound sessions. Required.
 	Listener net.Listener
@@ -405,7 +414,7 @@ func (n *Node) PushTo(ctx context.Context, id types.Identity, records [][]byte) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, n.timeout)
 	defer cancel()
-	addrs := e.GossipAddrs()
+	addrs := n.gossipAddrs(e)
 	if n.opts.OverlayOnly {
 		addrs = nil
 	}
@@ -538,7 +547,7 @@ func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 			// Announced addresses are tried in order and the round stops at
 			// the first that completes: they are alternative paths to one
 			// peer, not several peers.
-			addrs := e.GossipAddrs()
+			addrs := n.gossipAddrs(e)
 			if n.opts.OverlayOnly {
 				addrs = nil
 			}
@@ -685,7 +694,7 @@ func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view 
 		}
 		// Nothing about this node or the others until the peer is known to
 		// be a member; see catchup.go.
-		hello.Self, hello.Endpoints = nil, nil
+		hello.Self, hello.Endpoints, hello.Keys = nil, nil, nil
 	case so.force != 0:
 		ss.epoch = so.force
 	default:
@@ -817,7 +826,7 @@ func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame,
 		}
 		n.handed(peer, sent)
 	}
-	if n.takeEndpoints(theirs.Self, theirs.Endpoints) {
+	if n.takeEndpoints(theirs.Self, theirs.Endpoints, theirs.Keys) {
 		changed = true
 	}
 	applied, err := n.take(&theirs)
@@ -871,7 +880,7 @@ func (n *Node) finishCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *fram
 		return errors.Join(err, applyErr)
 	}
 	changed := n.heard(peer)
-	if n.takeEndpoints(theirs.Self, theirs.Endpoints) {
+	if n.takeEndpoints(theirs.Self, theirs.Endpoints, theirs.Keys) {
 		changed = true
 	}
 	if after, err := n.opts.Log.View(); err == nil {
@@ -894,7 +903,7 @@ func (n *Node) heard(peer *frame) bool {
 	if n.opts.OnHave != nil && peer.Self != nil && peer.Self.Identity != n.opts.Self && peer.Self.Verify() == nil {
 		n.opts.OnHave(peer.Self.Identity, peer.Have)
 	}
-	return n.takeEndpoints(peer.Self, peer.Endpoints)
+	return n.takeEndpoints(peer.Self, peer.Endpoints, peer.Keys)
 }
 
 // records builds the frame answering a peer's hello: what it is missing, and
@@ -1016,7 +1025,7 @@ func (n *Node) apply(raw [][]byte) (bool, error) {
 // new. One that does not verify is dropped and logged without ending the
 // session: the relaying peer is not necessarily its author, and the good ones
 // in the same frame are still good.
-func (n *Node) takeEndpoints(self *Endpoint, relayed []Endpoint) bool {
+func (n *Node) takeEndpoints(self *Endpoint, relayed []Endpoint, keys []AddrKey) bool {
 	eps := relayed
 	if self != nil {
 		eps = append([]Endpoint{*self}, relayed...)
@@ -1039,7 +1048,29 @@ func (n *Node) takeEndpoints(self *Endpoint, relayed []Endpoint) bool {
 			changed = true
 		}
 	}
+	for i := range keys {
+		k := keys[i]
+		if k.Owner == n.opts.Self {
+			continue
+		}
+		if err := k.Verify(); err != nil {
+			n.logf("gossip: dropping an address key: %v", err)
+			continue
+		}
+		if n.opts.Endpoints.AddKey(k) {
+			changed = true
+		}
+	}
 	return changed
+}
+
+// gossipAddrs is where e's node takes sessions on the underlay: each of its
+// addresses this node can open, at its gossip port.
+func (n *Node) gossipAddrs(e Endpoint) []netip.AddrPort {
+	if n.opts.Underlay == nil {
+		return e.GossipAddrs()
+	}
+	return e.gossipAddrsAt(n.opts.Underlay(e))
 }
 
 // hello builds this node's opening frame: its beacon, what it holds, and every
@@ -1069,6 +1100,21 @@ func (n *Node) hello(view *View) frame {
 		eps = eps[:MaxEndpointsPerFrame]
 	}
 	f.Endpoints = eps
+	var keys []AddrKey
+	if n.opts.OwnKey != nil {
+		if mine, ok := n.opts.OwnKey(); ok {
+			keys = append(keys, mine)
+		}
+	}
+	// In a hello alone, which both ends send each session: a records frame
+	// is filled with records.
+	size := 0
+	for _, k := range append(keys, n.opts.Endpoints.Keys()...) {
+		if size += len(k.Wraps) * addrkey.WrapSize; size > maxKeyBytesPerFrame || len(f.Keys) == MaxEndpointsPerFrame {
+			break
+		}
+		f.Keys = append(f.Keys, k)
+	}
 	return f
 }
 

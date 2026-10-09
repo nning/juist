@@ -89,6 +89,7 @@ prüfen.
 - Jeder öffentliche Name verweist auf genau ein Gerät. Ein Gerät kann bis zu 32 solcher Namen haben.
 - Ist das Gerät eines öffentlichen Namens nicht erreichbar oder ist der Stand dieses Geräts veraltet, wird der Name wieder öffentlich aufgelöst. Die Verbindung geht dann an die öffentliche Adresse, wie ohne juist.
 - Ein Gerät, dessen Name kein gültiges DNS-Label ist, bekommt keinen Namen unter `.juist`.
+- Unter [Zugriffsregeln]({{< relref "docs/access" >}}) kennt ein Gerät nur die Namen der Mitglieder, zu denen es einen Tunnel hat. Die öffentlichen Namen der anderen löst es öffentlich auf.
 - Die eigene Domain des Netzes zum [Veröffentlichen]({{< relref "docs/publishing" >}}) geht auf jedem Mitglied ganz an juistd, ob Namen eingeschaltet sind oder nicht: Ein dort auf Port 443 veröffentlichter Name führt direkt zu seinem Gerät, und jeder andere Name der Domain löst sich auf wie bisher. DNSSEC ist für diese Domain auf Mitgliedern aus.
 - `juist devices` zeigt die öffentlichen Namen eines Geräts in der Spalte `ROLES` an, etwa als `names mail.example.org`.
 

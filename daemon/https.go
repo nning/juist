@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -48,7 +50,16 @@ func proxyRoute(set string, env func(*url.URL) (*url.URL, error)) func(host stri
 		if set != "" {
 			return url.Parse(set)
 		}
-		return env(&url.URL{Scheme: "https", Host: host})
+		u, err := env(&url.URL{Scheme: "https", Host: host})
+		if err != nil || u == nil {
+			return u, err
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			// Asked for CONNECT, a SOCKS proxy would be told the
+			// credentials and nothing it speaks.
+			return nil, fmt.Errorf("HTTPS_PROXY is a %s proxy; juist speaks to an http or https one", u.Scheme)
+		}
+		return u, nil
 	}
 }
 
@@ -56,7 +67,7 @@ func proxyRoute(set string, env func(*url.URL) (*url.URL, error)) func(host stri
 // 443, verified by WebPKI, through the proxy where there is one.
 func (d *Daemon) httpsClient() *http.Client {
 	dialer := underlay.Dialer(10 * time.Second)
-	return &http.Client{Timeout: rendezvousTimeout, Transport: &http.Transport{
+	return &http.Client{Timeout: rendezvousTimeout, CheckRedirect: noRedirect, Transport: &http.Transport{
 		Proxy:               func(r *http.Request) (*url.URL, error) { return d.proxyFor(r.URL.Hostname()) },
 		DialContext:         dialer.DialContext,
 		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
@@ -65,6 +76,10 @@ func (d *Daemon) httpsClient() *http.Client {
 		IdleConnTimeout:     time.Minute,
 	}}
 }
+
+// noRedirect has a client take a redirect as the answer: followed, a relay
+// could send an HTTPS-only device anywhere, by plain HTTP.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // httpsRelayNames are the names of the relays on 443 this device holds, the
 // home relay's first.
@@ -96,7 +111,7 @@ func (r *relayItems) Put(ctx context.Context, seed [32]byte, value []byte) error
 		return errors.New("daemon: no relay on 443 to leave this device's announcement at")
 	}
 	names = names[:min(len(names), maxRendezvousRelays)]
-	key := dht.ItemKey(seed)
+	key := dht.RendezvousKey(seed)
 	errs := make([]error, len(names))
 	var wg sync.WaitGroup
 	for i, name := range names {
@@ -112,7 +127,7 @@ func (r *relayItems) Put(ctx context.Context, seed [32]byte, value []byte) error
 func (r *relayItems) Get(ctx context.Context, seed [32]byte) ([]byte, error) {
 	names := r.d.httpsRelayNames()
 	err := errors.New("daemon: no relay on 443 to ask")
-	key := dht.ItemKey(seed)
+	key := dht.RendezvousKey(seed)
 	for _, name := range names[:min(len(names), maxRendezvousRelays)] {
 		var v []byte
 		if v, err = relay.GetAnnouncement(ctx, r.hc, name, key); err == nil {
@@ -175,14 +190,21 @@ func (d *Daemon) rendezvousKey(key [32]byte) (rendezvousEntry, bool) {
 					continue
 				}
 				for _, w := range windows {
-					k.keys[dht.ItemKey(secret.TopicSeed(epoch, w, n.Identity))] = rendezvousEntry{n.Identity, epoch}
+					k.keys[dht.RendezvousKey(secret.TopicSeed(epoch, w, n.Identity))] = rendezvousEntry{n.Identity, epoch}
 				}
 			}
 		}
 		k.head, k.window, k.epochs = state.Head(), windows[1], epochs
 	}
 	e, ok := k.keys[key]
-	return e, ok
+	if !ok {
+		return rendezvousEntry{}, false
+	}
+	// Kept for the hour: a member may have expired or gone since.
+	if n, live := state.Node(e.id); !live || n.Expired(now.Unix()) {
+		return rendezvousEntry{}, false
+	}
+	return e, true
 }
 
 // relayRendezvous answers the relay's rendezvous from what this device holds.
@@ -221,10 +243,16 @@ func (r *relayRendezvous) Get(key [32]byte) ([]byte, bool) {
 	return sealed, true
 }
 
-// Knows reports whether a member is published under key.
-func (r *relayRendezvous) Knows(key [32]byte) bool {
-	_, ok := (*Daemon)(r).rendezvousKey(key)
-	return ok
+// Knows reports whether a member is published under key, and whether
+// under the newest epoch.
+func (r *relayRendezvous) Knows(key [32]byte) (known, current bool) {
+	d := (*Daemon)(r)
+	e, ok := d.rendezvousKey(key)
+	if !ok {
+		return false, false
+	}
+	latest, _, held := d.keyring.Latest()
+	return true, held && e.epoch == latest
 }
 
 // Put takes a member's announcement as one found in the DHT: sealed under an
@@ -282,9 +310,9 @@ func newRelayCertificates(name, dir, path string) (certSource, error) {
 	return terminator.NewManager(context.Background(), &acme.Client{DirectoryURL: dir}, cache, name)
 }
 
-// namedCertificate is the relay's certificate for its public name, noting
-// why there is none. Without one, a client's handshake orders none until
-// the next order is due: each would be an order, and a CA limits them.
+// namedCertificate is the relay's certificate for its public name. A
+// client's handshake orders none: keepRelayCertificate does, sparingly, as a
+// CA limits orders, and a handshake would wait on one for minutes.
 func (d *Daemon) namedCertificate(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	if relay.IsChallenge(h) || !strings.EqualFold(strings.TrimSuffix(h.ServerName, "."), d.relayName) {
 		return d.relayCerts.GetCertificate(h)
@@ -294,10 +322,10 @@ func (d *Daemon) namedCertificate(h *tls.ClientHelloInfo) (*tls.Certificate, err
 		return nil, errors.New("the relay serves an ECDSA certificate alone")
 	}
 	d.mu.Lock()
-	why, held, due := d.relayNoCert, d.relayHasCert, d.relayCertDue
+	why, held := d.relayNoCert, d.relayHasCert
 	d.mu.Unlock()
-	if why != "" && !held && d.now().Before(due) {
-		return nil, errors.New(why)
+	if !held {
+		return nil, errors.New(cmp.Or(why, "no certificate for "+d.relayName+" yet"))
 	}
 	return d.orderRelayCertificate(h)
 }
@@ -345,7 +373,8 @@ func (d *Daemon) orderRelayCertificate(h *tls.ClientHelloInfo) (*tls.Certificate
 // Gaps between orders of the relay's certificate while there is none, and
 // between asking for it once there is: autocert renews it by itself.
 const (
-	certFirstGap = time.Minute
+	// Past the CA's limit of five failed orders an hour.
+	certFirstGap = 5 * time.Minute
 	certMostGap  = time.Hour
 	certHeldGap  = 12 * time.Hour
 	certWaitGap  = 10 * time.Second
@@ -356,24 +385,9 @@ const (
 // it, and the status says why there is none.
 func (d *Daemon) keepRelayCertificate(ctx context.Context) {
 	for {
-		wait := certWaitGap
-		d.mu.Lock()
-		due := d.relayCertDue
-		d.mu.Unlock()
-		if now := d.now(); d.isRelaying() && !now.Before(due) {
-			hello := relayCertHello
-			hello.ServerName = d.relayName
-			octx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			err := d.orderRelayCertificateCtx(octx, &hello)
-			cancel()
-			switch {
-			case err == nil:
-				wait = certHeldGap
-			case ctx.Err() != nil:
-				return
-			default:
-				d.logf("daemon: no certificate for %s yet: %v", d.relayName, err)
-			}
+		wait := d.orderIfDue(ctx)
+		if ctx.Err() != nil {
+			return
 		}
 		select {
 		case <-ctx.Done():
@@ -383,6 +397,34 @@ func (d *Daemon) keepRelayCertificate(ctx context.Context) {
 		case <-time.After(wait):
 		}
 	}
+}
+
+// orderIfDue orders the relay's certificate where an order is due, and says
+// how long to wait before asking again.
+func (d *Daemon) orderIfDue(ctx context.Context) time.Duration {
+	d.mu.Lock()
+	due := d.relayCertDue
+	// Not before the ingress hands the name on: the CA's challenge would
+	// find nothing there, and a failed order costs the CA's limit.
+	unreached := d.httpsHanded && !d.handOffTaken
+	d.mu.Unlock()
+	if now := d.now(); !d.isRelaying() || now.Before(due) || unreached {
+		return certWaitGap
+	}
+	hello := relayCertHello
+	hello.ServerName = d.relayName
+	octx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if err := d.orderRelayCertificateCtx(octx, &hello); err != nil {
+		if ctx.Err() == nil {
+			d.logf("daemon: no certificate for %s yet: %v", d.relayName, err)
+		}
+		return certWaitGap
+	}
+	d.mu.Lock()
+	d.relayCertDue = d.now().Add(certHeldGap)
+	d.mu.Unlock()
+	return certHeldGap
 }
 
 // orderRelayCertificateCtx is orderRelayCertificate bounded by ctx.
@@ -427,8 +469,12 @@ func (d *Daemon) syncHTTPS(state *log.State, srv *relay.Server) {
 			}
 		}
 	}
+	handOn := ingress && srv != nil && d.relayName != ""
+	var errs []string
+	if err := d.syncHandOff(handOn, srv); err != nil {
+		errs = append(errs, err.Error())
+	}
 	d.mu.Lock()
-	d.httpsHanded = ingress && srv != nil && d.relayName != ""
 	var gone []net.Listener
 	for a, ln := range d.https443 {
 		if !want[a] {
@@ -446,7 +492,6 @@ func (d *Daemon) syncHTTPS(state *log.State, srv *relay.Server) {
 	for _, ln := range gone {
 		ln.Close()
 	}
-	var errs []string
 	for _, a := range missing {
 		ln, err := d.listenHTTPS(a)
 		if err != nil {
@@ -469,19 +514,97 @@ func (d *Daemon) syncHTTPS(state *log.State, srv *relay.Server) {
 	d.mu.Unlock()
 }
 
-// handingOn reports whether the ingress here hands the relay's name on, whose
-// PROXY header alone the relay then reads from loopback.
-func (d *Daemon) handingOn() bool {
+// syncHandOff has srv take what the ingress here hands on, at the hand-off
+// socket, where on says it does, and closes the socket where not.
+func (d *Daemon) syncHandOff(on bool, srv *relay.Server) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.httpsHanded
+	if on && d.handOff != nil && d.handOffFor == srv {
+		d.mu.Unlock()
+		return nil
+	}
+	old := d.handOff
+	d.handOff, d.handOffFor, d.httpsHanded, d.handOffTaken = nil, nil, false, false
+	d.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	if !on {
+		return nil
+	}
+	if d.handOffPath == "" || !peerCredSupported || d.ingressUID == 0 {
+		return errors.New("the ingress here has no way to hand the relay's name on")
+	}
+	ln, err := listenHandOff(d.handOffPath)
+	if err != nil {
+		return err
+	}
+	d.mu.Lock()
+	if d.relay != srv {
+		d.mu.Unlock()
+		ln.Close()
+		return nil
+	}
+	d.handOff, d.handOffFor, d.httpsHanded = ln, srv, true
+	d.mu.Unlock()
+	srv.ServeHTTPS(relay.HandedOn(ln, d.fromIngress))
+	d.logf("daemon: relaying as %s at %s, which the ingress hands it on to", d.relayName, d.handOffPath)
+	return nil
 }
 
-// closeHTTPS gives 443 back.
+// ingressTookRelay notes that the ingress was told of the hand-off socket.
+func (d *Daemon) ingressTookRelay() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.handOffTaken = d.httpsHanded
+}
+
+// HandOffSocket is where the juistd whose control socket is at sock takes
+// what the ingress hands its relay on.
+func HandOffSocket(sock string) string {
+	return strings.TrimSuffix(sock, ".sock") + ".relay.sock"
+}
+
+// listenHandOff listens at path, which any user may connect to: who did is
+// asked of the kernel, as of the control socket's callers.
+func listenHandOff(path string) (net.Listener, error) {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode().Type() == os.ModeSocket {
+		os.Remove(path)
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
+}
+
+// fromIngress reports whether c comes from the ingress's process.
+func (d *Daemon) fromIngress(c net.Conn) bool {
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return false
+	}
+	uid, err := peerUID(uc)
+	if err != nil || d.ingressUID == 0 || uid != d.ingressUID {
+		d.logOnce(fmt.Sprintf("daemon: refused a connection to the relay's hand-off socket from uid %d (%v); "+
+			"the ingress's is %d", uid, err, d.ingressUID))
+		return false
+	}
+	return true
+}
+
+// closeHTTPS gives 443 back, and the hand-off socket.
 func (d *Daemon) closeHTTPS() {
 	d.mu.Lock()
 	held := d.https443
 	d.https443 = map[netip.Addr]net.Listener{}
+	if d.handOff != nil {
+		held[netip.Addr{}] = d.handOff
+	}
+	d.handOff, d.handOffFor = nil, nil
 	d.httpsHanded, d.httpsErr = false, ""
 	d.mu.Unlock()
 	for _, ln := range held {

@@ -32,6 +32,7 @@ func systemLayout() *hostLayout {
 		ingressScript: "/usr/lib/juist/ingress.sh",
 		serveScript:   "/usr/lib/juist/serve.sh",
 		relayScript:   "/usr/lib/juist/relay.sh",
+		relayGrant:    "/etc/systemd/system/juistd.service.d/juist-relay-443.conf",
 		answers:       answersSoon,
 		answersTLS:    endsTLSSoon,
 		terminatorOn:  terminatorOnSystemd,

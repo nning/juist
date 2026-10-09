@@ -65,8 +65,13 @@ A company network may let nothing out but through its HTTP proxy. Name the
 proxy, with a user and password where it asks for one:
 
 ```sh
-sudo juist set --https-only --proxy http://user:password@proxy.example.com:3128
+sudo juist set --https-only --proxy -
 ```
+
+juist asks for the URL, such as
+`http://user:password@proxy.example.com:3128`, and does not show it as you
+type: on the command line, every user of the device could read the
+password. Without one, `--proxy http://proxy.example.com:3128` will do.
 
 The proxy is asked for `CONNECT relay.example.org:443` alone, and resolves
 the name itself, so the device needs no DNS of its own then. Without
@@ -80,7 +85,8 @@ password.
   the tunnel's TCP, which recovers slowly from loss. Two relays in different
   places keep a device reachable when one goes.
 - The relay's certificate is checked against the certificate authorities the
-  system trusts, as a browser does. A company that intercepts TLS sees no
+  system trusts, as a browser does, and a relay's name is used once the
+  server at it says it is that relay. A company that intercepts TLS sees no
   more than the relay does: WireGuard encrypts end to end, so it sees which
   devices talk to each other, not what they say.
 - It does not hide juist from a censor that probes servers or fingerprints

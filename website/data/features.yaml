@@ -7,12 +7,15 @@
   en: {title: Invites, text: "A code for the LAN or a link for anywhere. Both devices show four words to compare."}
   de: {title: Einladungen, text: "Ein Code fürs LAN oder ein Link für überall. Beide Geräte zeigen vier Wörter, die du vergleichst."}
 - doc: docs/android
-  en: {title: Android, text: "A phone joins by the invite's QR code or code, reaches every member at its address, and shows how each is reached."}
-  de: {title: Android, text: "Ein Telefon tritt per QR-Code oder Code der Einladung bei, erreicht jedes Mitglied unter seiner Adresse und zeigt, wie jedes erreicht wird."}
+  en: {title: Android, text: "A phone joins by the invite's QR code or code, reaches the members at their addresses, and shows how each is reached."}
+  de: {title: Android, text: "Ein Telefon tritt per QR-Code oder Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie jedes erreicht wird."}
   note: {en: "On Android 12 or newer, as a member without names, roles or subnets.", de: "Unter Android 12 oder neuer, als Mitglied ohne Namen, Rollen und Subnetze."}
 - doc: docs/admins
   en: {title: Admins and quorum, text: "Every change takes k of n admins. One that needs more is carried to their devices."}
   de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}
+- doc: docs/access
+  en: {title: Access policy, text: "Which device may open what on which, and use which exit node or subnet. The rest is refused."}
+  de: {title: Zugriffsregeln, text: "Welches Gerät was auf welchem öffnen und welchen Exit-Node oder welches Subnetz es nutzen darf. Alles andere wird abgewiesen."}
 - doc: docs/networks
   en: {title: Several networks, text: "One device in several networks, each with an admin key of its own."}
   de: {title: Mehrere Netze, text: "Ein Gerät in mehreren Netzen, jedes mit eigenem Admin-Schlüssel."}
@@ -20,8 +23,8 @@
   en: {title: Exit nodes, text: "A device's internet traffic and DNS through another member."}
   de: {title: Exit-Nodes, text: "Internetverkehr und DNS eines Geräts über ein anderes Mitglied."}
 - doc: docs/subnets
-  en: {title: Subnet routers, text: "The LAN behind one member, reached from all the others."}
-  de: {title: Subnet-Router, text: "Das LAN hinter einem Mitglied, erreichbar für alle anderen."}
+  en: {title: Subnet routers, text: "The LAN behind one member, reached from the others."}
+  de: {title: Subnet-Router, text: "Das LAN hinter einem Mitglied, erreichbar für die anderen."}
 - doc: docs/names
   en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
   de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}

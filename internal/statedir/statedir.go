@@ -170,7 +170,7 @@ func SeedHints(home string, endpoints, leases [][]byte) error {
 		}
 	}
 	if len(eps) > 0 {
-		b, err := gossip.EncodeCachedEndpoints(eps)
+		b, err := gossip.EncodeCachedEndpoints(eps, nil)
 		if err != nil {
 			return err
 		}

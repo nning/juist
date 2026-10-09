@@ -9,7 +9,7 @@ lead: A subnet router is a member that passes traffic from the network on to the
 
 Your NAS at home is a member, a device that belongs to your network
 ([How juist works]({{< relref "docs/how-it-works" >}})). The printer next to it
-is not; it runs no juist. A subnet router lets every member reach such devices
+is not; it runs no juist. A subnet router lets other members reach such devices
 anyway: the NAS takes their traffic out of the tunnel and passes it on to its
 LAN, `192.168.1.0/24` in this example. A subnet is such a range of addresses.
 
@@ -25,7 +25,7 @@ setting of their own.
 ## Setting up a subnet router
 
 {{< step on="an admin's device" >}}
-Have nas route its LAN for every member:
+Have nas route its LAN for the network:
 
 ```sh
 juist subnet add nas 192.168.1.0/24
@@ -77,8 +77,10 @@ printer directly and not through the NAS. `juist subnet` then says
 - Two members cannot route overlapping subnets, and a subnet cannot overlap the
   network's own addresses. For the whole internet (`0.0.0.0/0`), use an
   [exit node]({{< relref "docs/exit-nodes" >}}).
-- Every member reaches a routed subnet: there are no access rules (ACLs)
-  that limit who may.
+- Without an [access policy]({{< relref "docs/access" >}}) every member
+  reaches a routed subnet. With one, a device reaches only the addresses a
+  rule such as `pass from laptop to 192.168.1.0/24` passes it, and the router
+  forwards only that.
 - Beside an exit node, a routed subnet still goes through its router.
 - Subnet routers run on Linux, and on FreeBSD with pf.
 - Docker drops routed traffic to its containers. `juist subnet serve` warns
@@ -96,6 +98,7 @@ reach a subnet:
 | `its router cannot be reached` | bring the router back online |
 | `its router's operator has not agreed to route it` | run `juist subnet serve` on the router |
 | `subnets are off on this device` | `juist subnet on` |
+| `the access policy passes none of it to this device` | add a rule for the subnet ([Access policy]({{< relref "docs/access" >}})) |
 | `this device's view of the network is stale` | bring a voucher, a device that confirms the network's state is current, back online; see [Status]({{< relref "docs/status" >}}) |
 
 On the router itself, `not routed: not agreed to on this device` means

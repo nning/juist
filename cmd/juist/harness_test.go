@@ -50,6 +50,9 @@ type cli struct {
 	// environment; none elsewhere, whatever the test's own.
 	system map[string]string
 	env    map[string]string
+
+	// editor, where set, edits a file in place of the operator's editor.
+	editor func(path string) error
 }
 
 // noHost is a host with no juistd, and none installed.
@@ -123,6 +126,7 @@ func (c *cli) app(out *syncBuffer, in string) *app {
 	if c.admissionHold != 0 {
 		a.admissionHold = c.admissionHold
 	}
+	a.editor = c.editor
 	if c.terminal {
 		a.terminal, a.color, a.width = true, true, 80
 	}
@@ -447,8 +451,6 @@ func (stubManager) AnswersThrough() string { return "" }
 
 func (stubManager) SetServe(conn.Serve) error { return nil }
 
-func (stubManager) SetIngressPorts(conn.IngressPorts) error { return nil }
-
 func (stubManager) HostRoutes() []netip.Prefix { return nil }
 
 func (stubManager) HomeRelay() int { return 0 }
@@ -508,8 +510,6 @@ func (m *peersManager) SetEgress(e conn.Egress, _ bool) error {
 	m.egress = e
 	return nil
 }
-
-func (*peersManager) SetIngressPorts(conn.IngressPorts) error { return nil }
 
 func (m *peersManager) SetServe(s conn.Serve) error {
 	m.mu.Lock()

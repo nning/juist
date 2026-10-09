@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nning/juist/ipc"
+	"github.com/nning/juist/relay/forward"
 
 	"github.com/nning/juist/internal/host"
 	"github.com/nning/juist/trust/enroll"
@@ -37,7 +38,7 @@ func (s *Service) invite(ctx context.Context, offer *ipc.InviteOffer, events fun
 		Relays:        m.inviteRelays(state),
 		Identity:      s.keys.Identity,
 		HTTPSOnly:     m.httpsOnly,
-		Proxy:         m.proxyFor,
+		Proxy:         m.inviteProxy(),
 	}
 	if offer.DHT {
 		s.mu.Lock()
@@ -141,4 +142,13 @@ func (c *callerAdmitter) Admit(ctx context.Context, req *enroll.JoinRequest, wai
 			}
 		}
 	}
+}
+
+// inviteProxy is the proxy an invite reaches relays' names through: an
+// HTTPS-only device's alone, as a guest's.
+func (d *Daemon) inviteProxy() forward.Proxy {
+	if !d.httpsOnly {
+		return nil
+	}
+	return d.proxyFor
 }

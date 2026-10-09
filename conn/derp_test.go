@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 
 	"tailscale.com/tailcfg"
@@ -313,5 +314,22 @@ func TestTheHomeRelayMayChange(t *testing.T) {
 	n := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	if !n.mgr.(*tsManager).health.GetInPollNetMap() {
 		t.Error("the data plane believes it cannot announce a new home relay, so it will keep its first")
+	}
+}
+
+// A relay's name is a public DNS name and nothing else: an address, a host's
+// own name or a label a CA would not sign is never dialled.
+func TestARelayNameIsAPublicName(t *testing.T) {
+	for _, name := range []string{"relay.example.org", "xn--bcher-kva.example"} {
+		if !validRelayName(name) {
+			t.Errorf("%s refused", name)
+		}
+	}
+	for _, name := range []string{"127.0.0.1", "10.0.0.1", "localhost", "relay.localhost", "-relay.example.org",
+		"relay-.example.org", "relay.example.org:443", "relay.example.org.", "Relay.example.org", "relay",
+		strings.Repeat("a", 64) + ".example.org"} {
+		if validRelayName(name) {
+			t.Errorf("%s taken", name)
+		}
 	}
 }

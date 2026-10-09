@@ -48,7 +48,9 @@ func httpsAlone(t *testing.T, fb, lx *vm, work, fb4, lx4 string) {
 			out, _ := lx.try("juist status; iptables -L -v -n | head -40; /tmp/probe pcap /tmp/hotel.pcap | sort | uniq -c | head -40; "+
 				"cat /tmp/proxy.log | sort | uniq -c; journalctl -u juistd -n 40 --no-pager", 2*time.Minute)
 			t.Logf("lx:\n%s", out)
-			out, _ = fb.try("juist status; tail -40 /var/log/juistd.log; tail -20 /tmp/pebble.log", time.Minute)
+			out, _ = fb.try("juist status; tail -40 /var/log/juistd.log; tail -20 /tmp/pebble.log; "+
+				"tail -30 /var/log/juist-ingress.log; ls -la /var/run/juist; sockstat -u | grep juist; id juist-ingress",
+				time.Minute)
 			t.Logf("fb:\n%s", out)
 			hold(t, fb, lx)
 		}

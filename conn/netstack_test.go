@@ -61,7 +61,7 @@ func TestAServiceMemberAnswersAndOpensNothing(t *testing.T) {
 	member, memberNet := netstackNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	service, serviceNet := netstackNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	confined := service.peer()
-	confined.Confined = ConfineService
+	confined.Access = serviceAccess()
 	if err := member.mgr.SetPeers([]Peer{confined}); err != nil {
 		t.Fatal(err)
 	}

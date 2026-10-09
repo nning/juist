@@ -3,7 +3,6 @@ package conn
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"net/netip"
 	"net/url"
@@ -152,10 +151,8 @@ type tsManager struct {
 	serve     Serve
 	tunName   string
 
-	// confiner keeps ingresses to what they may send; ingressPorts is what
-	// SetIngressPorts last named. Guarded by apply.
-	confiner     *confiner
-	ingressPorts IngressPorts
+	// confiner keeps restricted peers to their access.
+	confiner *confiner
 
 	// stun are the public STUN servers, and stunRegions the regions they
 	// hold in the map last installed.
@@ -167,7 +164,7 @@ type tsManager struct {
 	relays []Relay
 
 	// httpsOnly and proxy are [Options.HTTPSOnly] and [Options.Proxy], and
-	// named the names of the relays last installed.
+	// named the names of the relays installed, those dropped since kept.
 	httpsOnly bool
 	proxy     func(host string) (*url.URL, error)
 	named     atomic.Pointer[[]string]
@@ -593,7 +590,7 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	// Order matters: the snapshot is swapped in before the data plane is
 	// told to resync, so a removed peer's lookup already fails by the time
 	// wireguard-go asks. A newly confined peer is confined first.
-	m.confiner.set(peers, m.self.Addrs, m.ingressPorts)
+	m.confiner.set(peers, m.self.Addrs)
 	m.state.Store(next)
 
 	// Session keys are discarded outright rather than left to expire, for a
@@ -636,6 +633,7 @@ func clonePeers(peers []Peer) []Peer {
 		out[i].Routes = slices.Clone(out[i].Routes)
 		out[i].Subnets = slices.Clone(out[i].Subnets)
 		out[i].Endpoints = slices.Clone(out[i].Endpoints)
+		out[i].Access = out[i].Access.Clone()
 	}
 	return out
 }
@@ -695,9 +693,6 @@ func validatePeers(self Self, peers []Peer) error {
 		}
 		if len(p.Addrs) == 0 {
 			return fmt.Errorf("conn: peer %v has no overlay address", p.NodeKey.ShortString())
-		}
-		if p.Confined != ConfineNone && len(p.Routes)+len(p.Subnets) > 0 {
-			return fmt.Errorf("conn: peer %v is confined and routes", p.NodeKey.ShortString())
 		}
 		for _, pfx := range p.Addrs {
 			if err := checkHostPrefix(pfx); err != nil {
@@ -1124,17 +1119,6 @@ func (m *tsManager) SetEgress(e Egress, isolate bool) error {
 	return nil
 }
 
-func (m *tsManager) SetIngressPorts(ports IngressPorts) error {
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	if m.closed {
-		return errors.New("conn: manager is closed")
-	}
-	m.ingressPorts = ports.sorted()
-	m.confiner.set(slices.Collect(maps.Values(m.state.Load().peers)), m.self.Addrs, m.ingressPorts)
-	return nil
-}
-
 func (m *tsManager) SetServe(s Serve) error {
 	s = Serve{Routes: slices.Clone(s.Routes), Subnets: slices.Clone(s.Subnets), Sources: slices.Clone(s.Sources), DNS: s.DNS}
 	m.apply.Lock()
@@ -1199,11 +1183,16 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 		return nil
 	}
 	m.relays = relays
-	var named []string
+	// Names dropped are kept, up to a bound: a dial begun under the old
+	// map still asks the proxy hook, which must not send it direct.
+	named := slices.Clone(*m.named.Load())
 	for _, r := range relays {
-		if r.Name != "" {
+		if r.Name != "" && !slices.Contains(named, r.Name) {
 			named = append(named, r.Name)
 		}
+	}
+	if len(named) > maxProxiedNames {
+		named = named[len(named)-maxProxiedNames:]
 	}
 	m.named.Store(&named)
 	m.installDERPMap(relays)
@@ -1237,8 +1226,9 @@ func (m *tsManager) followNetworks() {
 		}
 	}
 	// Held a while past the last report of them: netcheck reports a
-	// public address only where two servers agree, and an order that came
-	// and went with it would drop the home relay's connection each time.
+	// public address only some rounds, and an order that came and went
+	// with it would drop the home relay's connection each time. A server
+	// may report any address; it moves only where a relay's own come first.
 	for a, seen := range m.publicSeen {
 		if now.Sub(seen) > publicHeld {
 			delete(m.publicSeen, a)

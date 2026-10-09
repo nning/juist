@@ -10,12 +10,14 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/proxyproto"
 	"github.com/nning/juist/relay/forward"
 )
 
@@ -192,15 +194,16 @@ func (f *flakyListener) Accept() (net.Conn, error) {
 // A relay out of descriptors for a moment takes connections again after,
 // rather than refusing every one for good.
 func TestARelayOutlivesATemporaryAcceptError(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("unix", filepath.Join(t.TempDir(), "relay.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := handedOff(&flakyListener{Listener: ln}, func() bool { return false })
+	h := HandedOn(&flakyListener{Listener: ln}, func(net.Conn) bool { return true })
 	defer h.Close()
 	go func() {
-		if c, err := net.Dial("tcp", ln.Addr().String()); err == nil {
+		if c, err := net.Dial("unix", ln.Addr().String()); err == nil {
 			defer c.Close()
+			c.Write(proxyproto.Header(netip.MustParseAddrPort("192.0.2.1:5000"), netip.MustParseAddrPort("192.0.2.2:443")))
 			time.Sleep(time.Second)
 		}
 	}()
@@ -208,20 +211,42 @@ func TestARelayOutlivesATemporaryAcceptError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("after a temporary error: %v", err)
 	}
+	if got := c.RemoteAddr().String(); got != "192.0.2.1:5000" {
+		t.Errorf("the client is %s", got)
+	}
 	c.Close()
 }
 
-// While no ingress hands the name on, a PROXY header even from loopback is
-// the start of a handshake, which fails: no local program speaks for another
-// client.
-func TestNoHeaderIsReadWhileNoIngressHandsOn(t *testing.T) {
+// A connection to the hand-off socket that admit refuses, as one from
+// another user's process, is closed before a byte of it is read, and holds
+// none of the slots the ingress's connections take.
+func TestARefusedHandOffHoldsNoSlot(t *testing.T) {
 	rv := &fakeRendezvous{held: map[[32]byte][]byte{}}
 	n := startNamed(t, nil, rv)
-	n.handing.Store(false)
+	n.admitting.Store(false)
+	var idle []net.Conn
+	for range maxHandingOver + 8 {
+		c, err := net.Dial("unix", n.handOff)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle = append(idle, c)
+	}
+	for _, c := range idle {
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := c.Read(make([]byte, 1)); err == nil {
+			t.Fatal("a refused connection was answered")
+		}
+		c.Close()
+	}
 	c := rendezvousClient(n, netip.MustParseAddrPort("192.0.2.1:5000"))
 	req, _ := http.NewRequest(http.MethodGet, "https://"+testName+RendezvousPath+"01", nil)
 	if res, err := c.Do(req); err == nil {
 		res.Body.Close()
-		t.Fatal("a PROXY header was read with no ingress handing on")
+		t.Fatal("a connection admit refused was served")
+	}
+	n.admitting.Store(true)
+	if code, _ := call(t, c, http.MethodGet, [32]byte{1}, ""); code == 0 {
+		t.Fatal("no answer")
 	}
 }

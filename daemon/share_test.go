@@ -23,7 +23,9 @@ func TestADeviceSharesUnderItsName(t *testing.T) {
 	f := exitFixtureWith(t, func(nw *network) {
 		nw.domain = "pub.example.org"
 		nw.devices[0].record.Roles = []types.Role{types.RolePublish}
+		nw.devices[1].record.Roles = []types.Role{types.RoleIngress}
 	}, nil)
+	f.learnOthers(t)
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}

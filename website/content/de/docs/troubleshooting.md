@@ -127,7 +127,21 @@ sudo juist set --relay-name relay.example.org
 ```
 
 Oder, in einem Netz, das mehr hinauslässt, `sudo juist set --https-only=false`.
-Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}).
+Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}). Hat ein Relay einen
+Namen und die Warnung bleibt, sagt der Server unter dem Namen nicht, dass er
+dieses Relay ist: Prüfe das DNS des Namens.
+
+### `warning: juistd may bind any port below 1024, which no relay on 443 here needs`
+
+Das Recht, 443 zu belegen, für den öffentlichen Namen eines Relays gewährt,
+hat den Namen überdauert, etwa weil das Zurückgeben kein root fand. Nimm es
+zurück, wie der Hinweis sagt:
+
+```sh
+sudo /usr/lib/juist/relay.sh off
+```
+
+Auch `juist reset` nimmt es zurück. Siehe [Relays]({{< relref "docs/relays" >}}).
 
 ### `Freshness  expired; vouchers only`
 

@@ -112,6 +112,11 @@ wie juistd das Gerät bei der letzten Prüfung erreicht hat:
 | `not connected` | das Gerät hat sich gemeldet, aber es gibt keinen Tunnel, etwa weil der Stand dieses Geräts veraltet ist |
 | `-` | dieses Gerät selbst |
 
+Unter [Zugriffsregeln]({{< relref "docs/access" >}}) zeigen `juist devices`
+und `juist status` dieses Gerät und die Mitglieder, zu denen es einen Tunnel
+hat, und `juist devices` endet mit
+`hint: 2 more devices the access policy keeps apart from this one: juist devices --all`.
+
 `juist devices --keys` zeigt zusätzlich den Identitätsschlüssel jedes
 Geräts. Auch [`juist remove`]({{< relref "docs/remove" >}}) akzeptiert diesen
 Schlüssel.

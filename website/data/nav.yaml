@@ -5,7 +5,7 @@
 - group: everyday
   items: [docs/status, docs/operator, docs/names, docs/remove]
 - group: admins
-  items: [docs/admins, docs/networks, docs/network-changes, docs/keys]
+  items: [docs/admins, docs/networks, docs/network-changes, docs/access, docs/keys]
 - group: routing
   items: [docs/exit-nodes, docs/subnets, docs/relays, docs/https-only, docs/publishing]
 - group: design

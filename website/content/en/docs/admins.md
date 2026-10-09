@@ -192,6 +192,9 @@ change touches.
 - Run admin commands as yourself, without sudo: the keys are in your
   keystore.
 - `juist log` shows every change and who approved it.
+- The [access policy]({{< relref "docs/access" >}}) is changed the same way.
+  `juist approve policy.rec` shows the change as a diff against the current
+  policy.
 - After juist is updated, `juist status` on your device says
   `the network is at schema 9, this version at schema 10` when this version
   adds to the network's log. Once every device runs it, run

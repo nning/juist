@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"go4.org/netipx"
 
@@ -94,6 +95,7 @@ func (d *Daemon) planSubnets(s snapshot, fresh bool, held map[types.Identity]gos
 		var carried []netip.Prefix
 		for _, pfx := range n.SubnetRoutes() {
 			r := ipc.SubnetRoute{Prefix: pfx, Router: n.Identity, Name: n.Name}
+			parts := allowedRoutes(s.view, n.Identity, pfx)
 			switch {
 			case off:
 				r.Why = "subnets are off on this device"
@@ -107,8 +109,14 @@ func (d *Daemon) planSubnets(s snapshot, fresh bool, held map[types.Identity]gos
 				r.Why = "its router has no IPv4 in the network"
 			case !held[n.Identity].Subnets:
 				r.Why = "its router's operator has not agreed to route it"
+			case len(parts) == 0:
+				r.Why = "the access policy passes none of it to this device"
 			default:
-				left, kept, wider := without(pfx, host)
+				var left, kept, wider []netip.Prefix
+				for _, part := range parts {
+					l, k, w := without(part, host)
+					left, kept, wider = append(left, l...), append(kept, k...), append(wider, w...)
+				}
 				switch {
 				case len(left) == 0:
 					r.Why = "this device reaches it by a route of its own"
@@ -118,6 +126,9 @@ func (d *Daemon) planSubnets(s snapshot, fresh bool, held map[types.Identity]gos
 					r.InUse, r.Why = true, "taken from this device's own route to "+joinPrefixes(wider)
 				default:
 					r.InUse = true
+				}
+				if r.InUse && (len(parts) != 1 || parts[0] != pfx) {
+					r.Why = strings.TrimPrefix(r.Why+"; ", "; ") + "the access policy passes " + joinPrefixes(parts) + " alone"
 				}
 				carried = append(carried, left...)
 			}

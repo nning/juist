@@ -17,6 +17,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -25,12 +26,15 @@ import (
 	"syscall"
 	"time"
 
+	"tailscale.com/types/key"
+
 	"github.com/nning/juist/ipc"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/discovery/dht"
 	"github.com/nning/juist/discovery/mdns"
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/addrkey"
 	"github.com/nning/juist/internal/firewalld"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/internal/names"
@@ -163,6 +167,12 @@ type Options struct {
 	ACMEDirectory  string
 	RelayCertsPath string
 	ListenHTTPS    func(netip.Addr) (net.Listener, error)
+
+	// HandOffSocket is the Unix socket the ingress here hands the relay's
+	// name on at, which the process of IngressUID alone may connect to;
+	// "" hands nothing on.
+	HandOffSocket string
+	IngressUID    uint32
 
 	// Connect builds the data plane. Nil uses [conn.New].
 	Connect func(conn.Options) (conn.Manager, error)
@@ -352,7 +362,12 @@ type Daemon struct {
 	relayName    string
 	relayCerts   certSource
 	listenHTTPS  func(netip.Addr) (net.Listener, error)
+	handOffPath  string
+	ingressUID   uint32
 	rvKeys       rendezvousKeys
+	nameProofs   relayNameProofs
+	whoamiHTTP   *http.Client
+	askWhoami    func(context.Context, string) ([32]byte, error)
 	noV4         bool
 	cachePath    string
 	leasePath    string
@@ -446,8 +461,20 @@ type Daemon struct {
 	peerIDs    map[types.WGKey]uint64
 	nextPeerID uint64
 
-	// installed is the peer set last installed in the data plane, by name.
-	installed []namedPeer
+	// installed is the peer set last installed in the data plane, by name,
+	// and lastPeers that set as installed, routes and access included.
+	installed     []namedPeer
+	lastPeers     []conn.Peer
+	lastIngresses map[key.NodePublic]bool
+
+	// gossipTo is the members log sync may reach, where a policy restricts
+	// them; nil for every member.
+	gossipTo func(types.Identity) bool
+
+	// sealing is this device's address key, where it seals its addresses,
+	// and opened the keys of members' it unwrapped, newest last.
+	sealing *sealing
+	opened  map[types.Identity][]addrkey.Key
 
 	down        map[types.Identity]*downPeer   // installed members found down
 	unheardPlan map[types.Identity]*lookupPlan // members with no announcement held
@@ -544,6 +571,7 @@ type Daemon struct {
 	// an unchanged set does not rewrite the file on every reconcile.
 	cachedEndpoints []byte
 	cachedList      []gossip.Endpoint
+	cachedKeys      []gossip.AddrKey
 	cachedAt        time.Time
 
 	// relay is this device's own relay while the log grants it the role, and
@@ -566,6 +594,9 @@ type Daemon struct {
 	https443         map[netip.Addr]net.Listener
 	httpsErr         string
 	httpsHanded      bool
+	handOff          net.Listener // the hand-off socket, served by handOffFor
+	handOffFor       *relay.Server
+	handOffTaken     bool // the ingress has been told of it since
 	relayNameRefused string
 	relayNoCert      string
 	relayHasCert     bool
@@ -655,6 +686,8 @@ func New(opts Options) (*Daemon, error) {
 		envProxy:         envProxyFunc(),
 		relayName:        opts.RelayName,
 		listenHTTPS:      opts.ListenHTTPS,
+		handOffPath:      opts.HandOffSocket,
+		ingressUID:       opts.IngressUID,
 		https443:         map[netip.Addr]net.Listener{},
 		noV4:             opts.NoV4,
 		relayMembers:     map[types.WGKey]bool{},
@@ -681,6 +714,9 @@ func New(opts Options) (*Daemon, error) {
 	if d.listenHTTPS == nil {
 		d.listenHTTPS = defaultListenHTTPS
 	}
+	d.nameProofs.wanted = make(chan struct{}, 1)
+	d.whoamiHTTP = d.whoamiClient()
+	d.askWhoami = d.defaultAskWhoami
 	// The addresses are those of this moment: past a renumbering's deadline
 	// they change, and the service restarts the mesh on them.
 	now := d.now().Unix()
@@ -801,6 +837,8 @@ func New(opts Options) (*Daemon, error) {
 		Endpoints:    d.endpoints,
 		CatchUp:      &gossip.CatchUpKeys{Identity: opts.Identity, Recipient: opts.Recipient},
 		Announce:     d.announcement,
+		OwnKey:       d.ownAddrKey,
+		Underlay:     d.underlay,
 		Listener:     ln,
 		Dial:         d.gossipDial(opts.GossipDial),
 		OverlayAddrs: d.overlayGossipAddrs,
@@ -952,6 +990,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if !d.waits.track() {
 		return nil // closed before it ever ran
 	}
+	// Under a policy, sealed from the first announcement on.
+	d.decideSealing()
 	go func() {
 		defer d.waits.done()
 		d.gossip.Serve()
@@ -972,6 +1012,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		go func() {
 			defer d.waits.done()
 			d.keepRelayCertificate(ctx)
+		}()
+	}
+	if d.waits.track() {
+		go func() {
+			defer d.waits.done()
+			d.proveRelayNames(ctx)
 		}()
 	}
 
@@ -1125,11 +1171,14 @@ func (d *Daemon) memberList() []types.Identity {
 		return nil
 	}
 	nodes := state.Nodes()
+	d.mu.Lock()
+	to := d.gossipTo
+	d.mu.Unlock()
 	out := make([]types.Identity, 0, len(nodes))
 	for i := range nodes {
-		// Excluded for the same reason they get no peer entry: expiry must
-		// mean the same thing in every layer.
-		if nodes[i].Identity != d.self && !nodes[i].Expired(now) {
+		// Excluded for the same reason they get no peer entry: expiry and the
+		// policy must mean the same thing in every layer.
+		if nodes[i].Identity != d.self && !nodes[i].Expired(now) && (to == nil || to(nodes[i].Identity)) {
 			out = append(out, nodes[i].Identity)
 		}
 	}
@@ -1158,7 +1207,7 @@ func (d *Daemon) discovered(e gossip.Endpoint, where string) {
 	if !d.actionableSubject(e.Identity) {
 		return
 	}
-	d.logf("daemon: discovered %v %s at %v", e.Identity.ShortString(), where, e.Addrs)
+	d.logf("daemon: discovered %v %s at %v", e.Identity.ShortString(), where, d.underlay(e))
 	d.MarkDirty()
 }
 

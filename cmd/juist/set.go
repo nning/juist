@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/user"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nning/juist/internal/cliflag"
@@ -25,7 +26,7 @@ sends nothing but TLS to relays on 443, through --proxy where given;
 	var op, proxy, relayName optionalString
 	fs.Var(&op, "operator", "local `USER` who manages this device")
 	httpsOnly := fs.Bool("https-only", false, "reach relays by TLS on 443 alone; =false undoes it")
-	fs.Var(&proxy, "proxy", "HTTP proxy `URL` to reach them by; \"\" for HTTPS_PROXY")
+	fs.Var(&proxy, "proxy", "HTTP proxy `URL` to reach them by, - to read it from stdin; \"\" for HTTPS_PROXY")
 	fs.Var(&relayName, "relay-name", "public `NAME` of this device's relay on 443")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
@@ -38,6 +39,14 @@ sends nothing but TLS to relays on 443, through --proxy where given;
 	req := ipc.Request{Command: ipc.CmdSettings}
 	if setHTTPS {
 		req.HTTPSOnly = httpsOnly
+	}
+	if proxy.set && proxy.value == "-" {
+		// Off the command line, which every user may read, and sudo logs.
+		line, err := a.readSecretLine("proxy URL: ")
+		if err != nil {
+			return fmt.Errorf("--proxy -: %w", err)
+		}
+		proxy.value = strings.TrimSpace(line)
 	}
 	if proxy.set {
 		if err := ipc.ValidProxy(proxy.value); err != nil {
@@ -82,19 +91,29 @@ sends nothing but TLS to relays on 443, through --proxy where given;
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	if req.RelayName != nil && *req.RelayName != "" && a.host.relayScript != "" && n.status().Instance != 0 {
+	naming := req.RelayName != nil && *req.RelayName != "" && a.host.relayScript != ""
+	if naming && n.status().Instance != 0 {
 		return errors.New("a relay on 443 serves the default network's instance alone, for now")
+	}
+	if naming {
+		// Granted first, so the relay takes 443 as it starts under the
+		// name; nothing is set where root does not grant it.
+		if err := a.packageScript(a.host.relayScript, "on", "the relay's 443"); err != nil {
+			return err
+		}
+		// The script restarts juistd where it grants it 443.
+		if _, err := a.statusAgain(n, 15*time.Second); err != nil {
+			return err
+		}
 	}
 	st, err := n.exit(req)
 	if err != nil {
 		return err
 	}
-	if req.RelayName != nil && a.host.relayScript != "" && st.Instance == 0 {
-		action := map[bool]string{true: "on", false: "off"}[*req.RelayName != ""]
-		if err := a.packageScript(a.host.relayScript, action, "the relay's 443"); err != nil {
+	if req.RelayName != nil && *req.RelayName == "" && st.Instance == 0 && a.relayGranted() {
+		if err := a.packageScript(a.host.relayScript, "off", "giving the relay's 443 back"); err != nil {
 			return err
 		}
-		// The script restarts juistd where it grants it 443.
 		if st, err = a.statusAgain(n, 15*time.Second); err != nil {
 			return err
 		}

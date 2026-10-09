@@ -249,7 +249,8 @@ func connect(ctx context.Context, target string, via *url.URL) (net.Conn, error)
 		c.Close()
 		return nil, err
 	}
-	br := bufio.NewReader(c)
+	head := &headCap{r: c, left: maxResponseHead}
+	br := bufio.NewReader(head)
 	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
 	if err != nil {
 		c.Close()
@@ -266,6 +267,34 @@ func connect(ctx context.Context, target string, via *url.URL) (net.Conn, error)
 	}
 	return c, nil
 }
+
+// maxResponseHead bounds what a proxy's or a relay's answer may say before
+// its body, which net/http reads without bound.
+const maxResponseHead = 16 << 10
+
+// headCap reads at most left bytes from r until lifted.
+type headCap struct {
+	r      io.Reader
+	left   int
+	lifted bool
+}
+
+var errLongHead = errors.New("an answer whose head is over 16 KiB")
+
+func (h *headCap) Read(p []byte) (int, error) {
+	if h.lifted {
+		return h.r.Read(p)
+	}
+	if h.left <= 0 {
+		return 0, errLongHead
+	}
+	n, err := h.r.Read(p[:min(len(p), h.left)])
+	h.left -= n
+	return n, err
+}
+
+// lift lets every later read through.
+func (h *headCap) lift() { h.lifted = true }
 
 // joined runs a guest's side of the protocol on c, once upgraded: the relay's
 // word that the host is on the line.
@@ -315,8 +344,10 @@ func upgrade(ctx context.Context, c net.Conn, host, path string, answerIn time.D
 		c.Close()
 		return nil, nil, err
 	}
-	br := bufio.NewReader(c)
+	head := &headCap{r: c, left: maxResponseHead}
+	br := bufio.NewReader(head)
 	resp, err := http.ReadResponse(br, nil)
+	head.lift()
 	if err != nil {
 		stop()
 		c.Close()

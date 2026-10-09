@@ -31,7 +31,7 @@ const IngressPorts = "/run/juist/ingress-ports"
 // Idle says that nothing here needs the terminator, which may then stop.
 //
 // Relays are the public names this device's relay serves on 443, which the
-// ingress, holding 443, hands on by TLS alone, on loopback.
+// ingress, holding 443, hands on by TLS alone, at the relay's Socket.
 type Published struct {
 	Names     []PublishedTarget `cbor:"1,keyasint,omitempty"`
 	Ingresses []netip.Addr      `cbor:"2,keyasint,omitempty"`
@@ -43,6 +43,7 @@ type Published struct {
 // A PublishedTarget is one published name and where it goes: the target's
 // overlay addresses and port, and whether the client's address goes first in
 // a PROXY protocol v2 header; Public is the port of a name passed by TCP.
+// Socket, where set, is a Unix socket the target is reached at instead.
 //
 // Answering [CmdServing], Addrs are this device's own, to listen on, and To
 // is where the name's plain connections go.
@@ -53,6 +54,7 @@ type PublishedTarget struct {
 	Proxy  bool         `cbor:"4,keyasint,omitempty"`
 	To     string       `cbor:"5,keyasint,omitempty"`
 	Public uint16       `cbor:"6,keyasint,omitempty"`
+	Socket string       `cbor:"7,keyasint,omitempty"`
 }
 
 // An IngressReport is what an ingress tells juistd as it asks: the public

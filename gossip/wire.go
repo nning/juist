@@ -39,6 +39,10 @@ const (
 	// per member, since holding two for one member is pointless.
 	MaxEndpointsPerFrame = types.MaxNodes
 
+	// maxKeyBytesPerFrame is the wraps a hello may carry of address keys:
+	// every member of a network at the target scale peering half the rest.
+	maxKeyBytesPerFrame = 2 << 20
+
 	// MaxLeasesPerFrame caps the freshness leases one frame may carry: the
 	// newest per admin device, and a network has a handful.
 	MaxLeasesPerFrame = 64
@@ -127,6 +131,10 @@ type frame struct {
 	// hello the changes waiting for votes the sender holds, in a records
 	// frame those it hands over. Only admin devices are sent any.
 	Waiting []byte `cbor:"11,keyasint,omitempty"`
+
+	// Keys are address keys, the sender's own among them, beside the
+	// announcements whose sealed addresses they open.
+	Keys []AddrKey `cbor:"12,keyasint,omitempty"`
 }
 
 // A waitingPayload is what [frame.Waiting] carries once opened. Changes enter
@@ -157,12 +165,15 @@ func (f *frame) validate() error {
 		return fmt.Errorf("gossip: frame carries %d records, over the %d limit",
 			len(f.Records), MaxRecordsPerFrame)
 	}
-	if len(f.Endpoints) > MaxEndpointsPerFrame {
-		return fmt.Errorf("gossip: frame carries %d announcements, over the %d limit",
-			len(f.Endpoints), MaxEndpointsPerFrame)
+	if len(f.Endpoints) > MaxEndpointsPerFrame || len(f.Keys) > MaxEndpointsPerFrame {
+		return fmt.Errorf("gossip: frame carries %d announcements and %d address keys, over the %d limit",
+			len(f.Endpoints), len(f.Keys), MaxEndpointsPerFrame)
 	}
 	if f.Kind == kindHello && (len(f.Records) > 0 || len(f.Leases) > 0) {
 		return errors.New("gossip: a hello frame must not carry records or leases")
+	}
+	if f.Kind != kindHello && len(f.Keys) > 0 {
+		return errors.New("gossip: address keys travel in a hello alone")
 	}
 	if len(f.Leases) > MaxLeasesPerFrame {
 		return fmt.Errorf("gossip: frame carries %d leases, over the %d limit", len(f.Leases), MaxLeasesPerFrame)

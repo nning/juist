@@ -170,8 +170,11 @@ groups:
     rows:
       - en: Access rules
         de: Zugriffsregeln
-        marks: fyyyyyynyyn
+        marks: yyyyyyynyyn
         notes:
+          juist:
+            en: By device and table of devices, not by user.
+            de: Nach Geräten und Tabellen von Geräten, nicht nach Benutzern.
           rayfish:
             en: Each device's own firewall, with rules the coordinator suggests.
             de: Die eigene Firewall jedes Geräts, mit Regeln, die der Coordinator vorschlägt.

@@ -139,6 +139,9 @@ func (r *approval) file(path string) error {
 	for _, line := range effect(&aum, state, a.now().Unix()) {
 		a.printf("  %s\n", line)
 	}
+	if state == nil && aum.Kind == types.KindSetPolicy && !aum.Policy.Empty() {
+		a.hint("devices show by key here; juist log verify %s on a device of the network names them", path)
+	}
 	if state != nil {
 		if n, ok := voucherLost(state, &aum); ok {
 			// Asked by "approve?" below.

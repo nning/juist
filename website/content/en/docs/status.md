@@ -108,6 +108,11 @@ device at its last check:
 | `not connected` | the device was heard from, but has no tunnel, for example while this device's view is out of date |
 | `-` | this device itself |
 
+Under an [access policy]({{< relref "docs/access" >}}), `juist devices` and
+`juist status` list this device and the members it keeps a tunnel with, and
+`juist devices` ends with
+`hint: 2 more devices the access policy keeps apart from this one: juist devices --all`.
+
 `juist devices --keys` adds each device's identity key, which
 [`juist remove`]({{< relref "docs/remove" >}}) also accepts.
 

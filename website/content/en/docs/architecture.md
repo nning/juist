@@ -46,8 +46,9 @@ juist follows it in these points:
 
 Where juist falls short of the model:
 
-- Once admitted, a device reaches every port of every other member. juist has
-  no access rules, so services on members should check who connects.
+- Without an [access policy]({{< relref "docs/access" >}}), an admitted
+  device reaches every port of every other member. The policy names devices,
+  not users, so services on members should still check who connects.
 - juist knows devices, not users. It does not check who sits at a device or
   whether the device is up to date.
 

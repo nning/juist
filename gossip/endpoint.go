@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nning/juist/internal/addrkey"
+	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/types"
 )
 
@@ -184,6 +187,11 @@ type Endpoint struct {
 	// role lets it; an ingress takes it from a member holding the role alone.
 	Share *Share `cbor:"13,keyasint,omitempty"`
 
+	// Sealed holds Addrs in their stead, sealed for the node's peers under
+	// the key its [AddrKey] wraps for them, where an access policy keeps
+	// it apart from some member.
+	Sealed []byte `cbor:"14,keyasint,omitempty"`
+
 	// Sig is the author's signature over the rest of the record. CBOR key 23
 	// for the same reason [types.AUM] uses it: the highest key that still
 	// encodes in one byte, leaving room for payload fields below it.
@@ -196,7 +204,8 @@ func (e *Endpoint) SameAs(o *Endpoint) bool {
 	return e.Identity == o.Identity && e.Disco == o.Disco && slices.Equal(e.Addrs, o.Addrs) &&
 		e.GossipPort == o.GossipPort && e.HomeRelay == o.HomeRelay && sameRelay(e.Relay, o.Relay) && e.Exit == o.Exit &&
 		e.Subnets == o.Subnets && e.DNS == o.DNS && e.NoV4 == o.NoV4 && e.Published == o.Published &&
-		(e.Share == nil) == (o.Share == nil) && (e.Share == nil || *e.Share == *o.Share)
+		(e.Share == nil) == (o.Share == nil) && (e.Share == nil || *e.Share == *o.Share) &&
+		bytes.Equal(e.Sealed, o.Sealed)
 }
 
 // A Share is the port of a node's overlay addresses its own name is reached
@@ -300,6 +309,10 @@ func (e *Endpoint) StaticValidate() error {
 		return fmt.Errorf("gossip: endpoint record for %v carries %d addresses, over the %d limit",
 			e.Identity.ShortString(), len(e.Addrs), MaxEndpointAddrs)
 	}
+	if e.Sealed != nil && (len(e.Addrs) > 0 || len(e.Sealed) < aead.Overhead || len(e.Sealed) > addrkey.MaxSealedSize) {
+		return fmt.Errorf("gossip: endpoint record for %v carries %d bytes of sealed addresses beside %d open ones",
+			e.Identity.ShortString(), len(e.Sealed), len(e.Addrs))
+	}
 	if e.Share != nil && (e.Share.Port == 0 || e.Share.Until <= 0) {
 		return fmt.Errorf("gossip: endpoint record for %v shares with no port or end", e.Identity.ShortString())
 	}
@@ -317,6 +330,23 @@ func (e *Endpoint) StaticValidate() error {
 		if i > 0 && compareAddrPort(e.Addrs[i-1], ap) >= 0 {
 			return fmt.Errorf("gossip: endpoint record for %v has unsorted or duplicate addresses at %v",
 				e.Identity.ShortString(), ap)
+		}
+	}
+	return nil
+}
+
+// CheckAddrs applies the rules [Endpoint.StaticValidate] applies to its
+// addresses to a set opened from [Endpoint.Sealed].
+func CheckAddrs(addrs []netip.AddrPort) error {
+	if len(addrs) > MaxEndpointAddrs {
+		return fmt.Errorf("gossip: %d addresses, over the %d limit", len(addrs), MaxEndpointAddrs)
+	}
+	for i, ap := range addrs {
+		if err := validateEndpointAddr(ap); err != nil {
+			return fmt.Errorf("gossip: %w", err)
+		}
+		if i > 0 && compareAddrPort(addrs[i-1], ap) >= 0 {
+			return fmt.Errorf("gossip: unsorted or duplicate addresses at %v", ap)
 		}
 	}
 	return nil
@@ -372,9 +402,12 @@ func SortAddrs(addrs []netip.AddrPort) []netip.AddrPort {
 // GossipAddrs returns the addresses an anti-entropy session can be opened to:
 // each announced address, with the gossip port substituted for the data
 // plane's.
-func (e *Endpoint) GossipAddrs() []netip.AddrPort {
-	out := make([]netip.AddrPort, 0, len(e.Addrs))
-	for _, ap := range e.Addrs {
+func (e *Endpoint) GossipAddrs() []netip.AddrPort { return e.gossipAddrsAt(e.Addrs) }
+
+// gossipAddrsAt is addrs with e's gossip port for each one's.
+func (e *Endpoint) gossipAddrsAt(addrs []netip.AddrPort) []netip.AddrPort {
+	out := make([]netip.AddrPort, 0, len(addrs))
+	for _, ap := range addrs {
 		out = append(out, netip.AddrPortFrom(ap.Addr(), e.GossipPort))
 	}
 	return slices.Compact(out)
@@ -384,6 +417,7 @@ func (e *Endpoint) GossipAddrs() []netip.AddrPort {
 func (e *Endpoint) Clone() *Endpoint {
 	out := *e
 	out.Addrs = slices.Clone(e.Addrs)
+	out.Sealed = slices.Clone(e.Sealed)
 	if e.Relay != nil {
 		out.Relay = e.Relay.Clone()
 	}
@@ -409,26 +443,31 @@ func (e *Endpoint) RelayAddrs() []netip.AddrPort {
 // producing half a cache.
 type cachedEndpoints struct {
 	Endpoints []Endpoint `cbor:"1,keyasint,omitempty"`
+	Keys      []AddrKey  `cbor:"2,keyasint,omitempty"`
 }
 
-// EncodeCachedEndpoints encodes announcements for persistence.
-func EncodeCachedEndpoints(eps []Endpoint) ([]byte, error) {
-	return encode(&cachedEndpoints{Endpoints: eps})
+// EncodeCachedEndpoints encodes announcements, and the address keys their
+// sealed addresses open under, for persistence.
+func EncodeCachedEndpoints(eps []Endpoint, keys []AddrKey) ([]byte, error) {
+	return encode(&cachedEndpoints{Endpoints: eps, Keys: keys})
 }
 
 // DecodeCachedEndpoints decodes a persisted announcement set. It does not
 // verify them: the caller drops the ones that do not, since a file this node
 // wrote is no more trusted than a frame a peer sent.
-func DecodeCachedEndpoints(b []byte, out *[]Endpoint) error {
+func DecodeCachedEndpoints(b []byte, out *[]Endpoint, keys *[]AddrKey) error {
 	held, err := decodeCanonical[cachedEndpoints](b)
 	if err != nil {
 		return err
 	}
-	if len(held.Endpoints) > types.MaxNodes {
-		return fmt.Errorf("gossip: cached announcement set holds %d records, over the %d limit",
-			len(held.Endpoints), types.MaxNodes)
+	if len(held.Endpoints) > types.MaxNodes || len(held.Keys) > types.MaxNodes {
+		return fmt.Errorf("gossip: cached announcement set holds %d records and %d keys, over the %d limit",
+			len(held.Endpoints), len(held.Keys), types.MaxNodes)
 	}
 	*out = held.Endpoints
+	if keys != nil {
+		*keys = held.Keys
+	}
 	return nil
 }
 

@@ -90,11 +90,16 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
   Log des Netzes auf Schema 12 steht. Vorher meldet `juist status`
   `members are not told of relay.example.org`, und `juist log upgrade` hebt
   es an.
-- Port 443 zu belegen braucht ein Recht, das juistd sonst nicht hat.
-  `juist set` gibt ihm dafür allein `CAP_NET_BIND_SERVICE`, per
-  systemd-Drop-in, und `sudo juist set --relay-name ""` nimmt es mit dem Namen
-  zurück. Unter FreeBSD belegt der Helfer von juistd Port 443, und pf muss ihn
-  durchlassen, wo es läuft.
+- Port 443 zu belegen braucht ein Recht, das juistd sonst nicht hat und das
+  root gewährt: `sudo juist set` gibt ihm dafür allein
+  `CAP_NET_BIND_SERVICE`, per systemd-Drop-in, und
+  `sudo juist set --relay-name ""` nimmt es mit dem Namen zurück. Unter
+  FreeBSD belegt der Helfer von juistd Port 443, solange root es gewährt und
+  kein anderes Programm auf 443 antwortet, und pf muss ihn durchlassen, wo es
+  läuft. Überdauert das Recht den Namen, warnt `juist status`, und
+  `juist reset` nimmt es zurück.
+- Die Mitglieder nutzen den Namen, sobald der Server unter ihm sagt, dass er
+  dieses Relay ist: Ein Name, der woandershin führt, wird nicht genommen.
 - Auf der [Ingress]({{< relref "docs/publishing" >}}) des Netzes, die 443
   schon belegt, reicht die Ingress die Verbindungen für den Namen an das Relay
   weiter.

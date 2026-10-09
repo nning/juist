@@ -72,9 +72,10 @@ type Options struct {
 	// that can reach no DHT; nil serves none.
 	Rendezvous Rendezvous
 
-	// HandedOff says whether connections from loopback may start with a
-	// PROXY v2 header naming the client, as the ingress's do; nil never.
-	HandedOff func() bool
+	// Identity is the member whose relay this is, which a client asking for
+	// Name by SNI is told at [WhoamiPath]: a member checks it before it
+	// takes the name as that relay's.
+	Identity [32]byte
 
 	// Logf receives diagnostics. Nil discards them.
 	Logf logger.Logf
@@ -197,10 +198,10 @@ func New(opts Options) (*Server, error) {
 	if opts.Rendezvous != nil {
 		mux.Handle(RendezvousPath, newRendezvousHandler(opts.Rendezvous, logf))
 	}
-	s.tls = tlsConfig(cert, opts.Name, opts.NamedCertificate)
-	if opts.HandedOff != nil {
-		ln = handedOff(ln, opts.HandedOff)
+	if opts.Name != "" && opts.Identity != ([32]byte{}) {
+		mux.Handle(WhoamiPath, whoami(opts.Name, opts.Identity))
 	}
+	s.tls = tlsConfig(cert, opts.Name, opts.NamedCertificate)
 	s.http = &http.Server{
 		Handler:   mux,
 		TLSConfig: s.tls,

@@ -509,7 +509,7 @@ func (m *admitter) compareWords(ctx context.Context, req *enroll.JoinRequest,
 // addNode admits a device that is no member yet, and waits for the other
 // admins where they must approve.
 func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll.JoinRequest,
-	wait func(votes, quorum uint32) error) error {
+	wait func(votes, quorum uint32) error) (err error) {
 	a, o, state := m.a, m.o, auth.State()
 	name := uniqueName(state, cmp.Or(o.name, memberName(req.Name)))
 	rec := req.NodeRecord(name)
@@ -528,6 +528,14 @@ func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll
 		return fmt.Errorf("cannot admit %s: %w", name, err)
 	}
 	a.printf("admitting %s (%v)\n", name, req.Identity.ShortString())
+	// After the outcome, where it is an admission.
+	if p := state.Policy(); p != nil && !slices.ContainsFunc(p.Rules, func(r types.PolicyRule) bool { return r.From.Any || r.To.Any }) {
+		defer func() {
+			if err == nil {
+				a.hint("the access policy passes %s nothing until it names it: juist policy edit", name)
+			}
+		}()
+	}
 	c := &change{
 		aum:  aum,
 		file: "add-" + fileSafe(name) + ".rec",

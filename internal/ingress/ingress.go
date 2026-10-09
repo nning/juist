@@ -240,8 +240,9 @@ func (in *ingress) serve(ctx context.Context, p *ipc.Published) {
 		table[t.Name], relays[t.Name] = t, true
 	}
 	for _, t := range p.Names {
-		table[t.Name] = t
-		delete(relays, t.Name)
+		if !relays[t.Name] { // a relay keeps its name
+			table[t.Name] = t
+		}
 	}
 	tcp := make(map[uint16]ipc.PublishedTarget, len(p.TCP))
 	for _, t := range p.TCP {
@@ -578,6 +579,11 @@ func (w watched) CloseWrite() error {
 
 // dial reaches t on the first of its addresses that answers.
 func (in *ingress) dial(ctx context.Context, t ipc.PublishedTarget) (net.Conn, error) {
+	if t.Socket != "" {
+		dctx, cancel := context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+		return in.o.Dial(dctx, "unix", t.Socket)
+	}
 	err := errors.New("ingress: the target has no address")
 	for _, a := range t.Addrs {
 		dctx, cancel := context.WithTimeout(ctx, dialTimeout)

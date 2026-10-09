@@ -68,7 +68,10 @@ type SchemaVersion uint16
 //
 // Schema 12 adds no record field: it lets a relay's announcement name the
 // public DNS name it serves on 443/tcp too, which older builds refuse.
-const CurrentSchema SchemaVersion = 12
+//
+// Schema 13 adds the network's access policy ([KindSetPolicy],
+// [Snapshot.Policy]).
+const CurrentSchema SchemaVersion = 13
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -109,5 +112,8 @@ const SchemaTCP SchemaVersion = 11
 // SchemaRelayName is the first schema in which a relay announces a public
 // name on 443/tcp.
 const SchemaRelayName SchemaVersion = 12
+
+// SchemaPolicy is the first schema with an access policy.
+const SchemaPolicy SchemaVersion = 13
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

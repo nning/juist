@@ -53,9 +53,10 @@ Diese Grundsätze setzt juist um:
 
 Hier bleibt juist hinter dem Modell zurück:
 
-- Ein aufgenommenes Gerät erreicht jeden Port jedes anderen Mitglieds. juist
-  kennt keine Zugriffsregeln. Dienste auf den Mitgliedern sollten deshalb
-  selbst prüfen, wer sich verbindet.
+- Ohne [Zugriffsregeln]({{< relref "docs/access" >}}) erreicht ein
+  aufgenommenes Gerät jeden Port jedes anderen Mitglieds. Die Regeln nennen
+  Geräte, keine Benutzer. Dienste auf den Mitgliedern sollten deshalb
+  weiterhin selbst prüfen, wer sich verbindet.
 - juist kennt nur Geräte, keine Benutzer. Es prüft weder, wer vor einem Gerät
   sitzt, noch ob das Gerät auf dem neuesten Stand ist.
 

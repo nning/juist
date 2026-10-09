@@ -237,11 +237,17 @@ third still wait for the DHT or LAN discovery: open.
 A device on a network that passes TCP to 443 alone reaches the others as one
 HTTPS client among others. The rules:
 
-- **A relay's name is its own statement.** The relay-capable member announces
-  the public name it serves on 443 (`RelayInfo.Name`), from schema 12 on,
-  since an older member refuses an announcement with a field it does not
-  know. Two relays announcing one name: the lower identity keeps it, logged,
-  since the name binds no relay identity; a CA's certificate for it does.
+- **A relay's name is its own statement, checked at the name.** The
+  relay-capable member announces the public name it serves on 443
+  (`RelayInfo.Name`), from schema 12 on, since an older member refuses a
+  whole frame with a field it does not know: below 12, every member drops an
+  announcement carrying one, whoever signed it. A member takes the name as
+  that relay's once the server at the name, asked over TLS for it at
+  `/juist/relay/v1/whoami`, says it is that member's, and asks again every
+  six hours: a CA's certificate binds the name, not the relay, so another
+  member could otherwise claim it. An invite names a relay one relay alone
+  claims unasked, since the host may reach no name, and of a name two claim
+  only the one's its server names.
 - **The name is verified by WebPKI, the port by its pin.** The DERP map
   gives a named relay nodes for the name on 443, with no `CertName`, after
   every address on its own port, since netcheck sends STUN to a region's
@@ -256,26 +262,40 @@ HTTPS client among others. The rules:
   off UDP and off peer relays; the DERP map holds the names alone and no STUN
   server; LAN discovery and the DHT are off; the announcement carries no
   address. Magicsock still names its local addresses in call-me-maybe over
-  DERP, so members' pings may reach it on a LAN; it answers none. Log sync runs in the tunnel, so it needs a device or the netstack.
+  DERP, so members' pings may reach it on a LAN; it answers none. A flood of
+  WireGuard handshakes from where UDP reaches it, by one who knows its node
+  key, draws wireguard-go's cookie replies by UDP, which magicsock does not
+  gate. Log sync runs in the tunnel, so it needs a device or the netstack.
 - **The relays stand in for the DHT.** A device on HTTPS alone keeps its
-  sealed announcement at, and asks for the members', the relays on 443, at the
-  key the DHT would have used, which only members derive. A relay answers for
-  its own network's live members alone, with the newest announcement it
-  holds, under its newest epoch alone, as members publish: a device removed
-  since holds the older ones. It takes one put there as found in the DHT, and
-  only the member's own, under its own key. Requests are bounded per
-  client, an IPv6 one by its /56, and in all, where a key of no member's
-  costs the relay's budget nothing.
+  sealed announcement at, and asks for the members', the relays on 443, at a
+  key derived from the DHT item's seed, which only members derive; not the
+  item's public key, which every DHT message about it carries. A relay
+  answers for its own network's live members alone, with the newest
+  announcement it holds, under its newest epoch alone, as members publish: a
+  device removed since holds the older ones. It takes one put there as found
+  in the DHT, and only the member's own, under its own key. Requests are
+  bounded per client, an IPv6 one by its /56, and in all, where a key of no
+  member's costs the relay's budget nothing, and one under an older epoch,
+  only ever put, a budget of its own.
 - **443 is taken by address.** The relay binds 443 at each address of the
   host's members may reach it at, so the terminator keeps 443 of the overlay
-  addresses. On the ingress, which holds 443, the ingress hands the name's
-  connections to the relay's own port on loopback after a PROXY v2 header,
-  which the relay reads from loopback alone and only while it is the
-  ingress, and passes neither QUIC nor plain HTTP for it.
+  addresses. On FreeBSD the root helper binds it where root's grant, which
+  the package's `relay.sh` leaves, is in place, and no program answers there
+  yet: root's socket at an address would take a wildcard server's clients.
+  On the ingress, which holds 443, the ingress hands the name's connections
+  on after a PROXY v2 header at a Unix socket beside the control socket,
+  which takes the ingress user's connections alone, asked of the kernel, and
+  passes neither QUIC nor plain HTTP for it; a member's name the same as the
+  relay's is not served. Clients' handshakes order no certificate: the relay
+  does, five minutes apart at first, as a CA limits failed orders, and on the
+  ingress once the ingress was told of the name.
 - **A proxy is the HTTPS-only device's alone.** The DERP client's proxy hook
-  answers for the names of an HTTPS-only data plane's relays, never for a
-  pinned relay, and without the proxy's user, which the DERP client logs;
-  invites and the rendezvous take the same proxy.
+  answers for the names of an HTTPS-only data plane's relays, those dropped
+  since included, never for a pinned relay, and without the proxy's user,
+  which the DERP client logs; where the proxy cannot be told it fails
+  closed, since the DERP client would dial direct. Its invites and the
+  rendezvous take the same proxy; another device's invites none. Only an
+  http or https proxy is taken, and no redirect is followed.
 
 ## The hand-sealed CallMeMaybe, and why the announcement is what primes it
 

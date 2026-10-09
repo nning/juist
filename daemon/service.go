@@ -792,6 +792,10 @@ func (s *Service) startMeshLocked() error {
 	o.AcceptNames, o.ServePublished, o.ServeTo = s.acceptNames, s.servePublished, s.serveTo
 	o.HTTPSOnly, o.Proxy, o.RelayName = s.httpsOnly, s.proxy, s.relayName
 	o.RelayCertsPath = filepath.Join(s.opts.Home, statedir.RelayCertsDir)
+	if !s.opts.InProcess {
+		o.HandOffSocket = HandOffSocket(cmp.Or(s.opts.Socket, ipc.SocketPath(s.opts.Home)))
+	}
+	o.IngressUID = s.ingressUID
 	o.KeyringPath = statedir.KeyringPath(s.opts.Home)
 	if o.Logf == nil {
 		o.Logf = s.logf
@@ -1150,7 +1154,11 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 			}
 		}
 		if m := s.Mesh(); m != nil {
-			return ipc.Response{Published: m.Published()}
+			p := m.Published()
+			if s.isIngress(who) && len(p.Relays) > 0 {
+				m.ingressTookRelay()
+			}
+			return ipc.Response{Published: p}
 		}
 		return ipc.Response{Published: &ipc.Published{}}
 	case req.Command == ipc.CmdServing && (operates || s.isServe(who)):

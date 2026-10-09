@@ -55,13 +55,13 @@ func ValidProxy(s string) error {
 	u, err := url.Parse(s)
 	switch {
 	case err != nil:
-		return fmt.Errorf("%q is no URL", s)
+		return errors.New("the proxy is no URL")
 	case u.Scheme != "http" && u.Scheme != "https":
-		return fmt.Errorf("%q is no http or https URL", s)
+		return fmt.Errorf("%q is no http or https URL", RedactProxy(s))
 	case u.Hostname() == "" || strings.ContainsAny(u.Host, " \r\n"):
-		return fmt.Errorf("%q names no host", s)
+		return fmt.Errorf("%q names no host", RedactProxy(s))
 	case u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "":
-		return fmt.Errorf("%q has a path; a proxy is a host and a port", s)
+		return fmt.Errorf("%q has a path; a proxy is a host and a port", RedactProxy(s))
 	}
 	return nil
 }
@@ -69,7 +69,10 @@ func ValidProxy(s string) error {
 // RedactProxy is a proxy's URL without its password.
 func RedactProxy(s string) string {
 	u, err := url.Parse(s)
-	if err != nil || u.User == nil {
+	if err != nil {
+		return "xxxxx"
+	}
+	if u.User == nil {
 		return s
 	}
 	if _, ok := u.User.Password(); ok {

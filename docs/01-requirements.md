@@ -46,11 +46,10 @@ endpoint discovery, NAT traversal assistance — must be peer-to-peer.
 - Org-scale identity (SSO/OIDC) and fine-grained per-port ACLs.
 - No longer non-goals: exit nodes and subnet routers (M6) and MagicDNS-equivalent
   naming (M8) are in v1, and so are publishing members' services through an
-  ingress (M9) and **coarse ACLs** (M14), see [05-roadmap.md](05-roadmap.md). Exit
-  nodes come before coarse ACLs, so until M14 every member may use every exit node
-  the quorum granted (who may *use* one is an access-control question): see
-  [04-architecture.md](04-architecture.md) "Exit nodes and subnet routes". Their
-  schema — node roles and advertised-route grants, with full validation — is
+  ingress (M9) and **coarse ACLs** (M14), see [05-roadmap.md](05-roadmap.md). Who
+  may *use* an exit node or a subnet router is the access policy's to say, who may
+  serve as one the role's: see [04-architecture.md](04-architecture.md) "Exit
+  nodes and subnet routes". Their schema — node roles and advertised-route grants, with full validation — is
   reserved from M1, even though no component consumes routes before M6.
 - Anonymity/unobservability against a global passive adversary (Tor-class problem).
 - iOS, macOS, Windows clients.

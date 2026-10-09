@@ -25,8 +25,10 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
 - Dem Anfang des Netzes. Jedes Gerät prüft jede Änderung im
   [Mitgliederlog]({{< relref "docs/how-it-works" >}}#the-membership-log)
   zurück bis zur allerersten, die beim Anlegen des Netzes entstanden ist.
-- Jedem Mitglied. Ein aufgenommenes Gerät erreicht durch den Tunnel jeden Port
-  jedes anderen Mitglieds. Zugriffsregeln gibt es in juist nicht.
+- Jedem Mitglied, so weit die [Zugriffsregeln]({{< relref "docs/access" >}})
+  es hereinlassen. Ohne Zugriffsregeln erreicht ein aufgenommenes Gerät durch
+  den Tunnel jeden Port jedes anderen Mitglieds. Mit ihnen weist jedes Gerät
+  ab, was keine Regel durchlässt, egal was der Absender tut.
 - Einem Exit-Node, soweit es um den Verkehr geht, den er weiterleitet. Was du
   über einen [Exit-Node]({{< relref "docs/exit-nodes" >}}) ins Internet
   schickst, kann er mitlesen, genau wie jeder VPN-Anbieter.

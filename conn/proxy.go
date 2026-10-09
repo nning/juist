@@ -20,6 +20,13 @@ var (
 	credentials = map[string]*url.Userinfo{} // by the proxy's host
 )
 
+// maxProxiedNames bounds the relay names a manager has the proxy answer for,
+// those of relays dropped since included.
+const maxProxiedNames = 64
+
+// nowhere is a proxy no connection reaches, leaving the host by no wire.
+var nowhere = &url.URL{Scheme: "http", Host: "0.0.0.0:0"}
+
 func init() {
 	feature.HookProxyFromEnvironment.Set(proxyFor)
 	feature.HookProxyGetAuthHeader.Set(proxyAuth)
@@ -35,6 +42,9 @@ func unregisterProxied(m *tsManager) {
 	proxiedMu.Lock()
 	defer proxiedMu.Unlock()
 	delete(proxied, m)
+	if len(proxied) == 0 {
+		clear(credentials)
+	}
 }
 
 // proxyFor is the proxy the DERP client dials req's host through, or nil.
@@ -53,8 +63,12 @@ func proxyFor(req *http.Request) (*url.URL, error) {
 		return nil, nil
 	}
 	u, err := through(host)
-	if err != nil || u == nil {
-		return u, err
+	if err != nil {
+		// Failing closed: the DERP client dials direct on an error.
+		return nowhere, nil
+	}
+	if u == nil {
+		return nil, nil
 	}
 	if u.User == nil {
 		proxiedMu.Lock()

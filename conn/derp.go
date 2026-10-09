@@ -6,9 +6,10 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
-	"strings"
 
 	"tailscale.com/tailcfg"
+
+	"github.com/nning/juist/types"
 )
 
 // A Relay is one member-run relay, as the reconciler derived it: the role
@@ -328,20 +329,10 @@ func validateRelays(relays []Relay) error {
 	return nil
 }
 
-// validRelayName is a DNS name, lowercase letters, digits, hyphens and inner
-// dots, as the announcement already checked; here so that nothing else, such
-// as a port or a line break, ever reaches a dial or a proxy's CONNECT line.
-func validRelayName(name string) bool {
-	if len(name) > 253 || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || !strings.Contains(name, ".") {
-		return false
-	}
-	for _, c := range []byte(name) {
-		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '.' && c != '-' {
-			return false
-		}
-	}
-	return !strings.Contains(name, "..")
-}
+// validRelayName is a public DNS name, as the announcement already checked;
+// here so that nothing else, such as an address, a port or a line break,
+// ever reaches a dial or a proxy's CONNECT line.
+func validRelayName(name string) bool { return types.ValidateHostName(name) == nil }
 
 // sameRelays reports whether two relay sets are identical, so that an
 // unchanged one does not make the data plane re-run its latency probes.

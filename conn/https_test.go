@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/netip"
@@ -231,5 +232,45 @@ func TestAPublicAddressOfThisHostsIsHeld(t *testing.T) {
 	m.followNetworks()
 	if slices.Contains(m.local.Load().Public, public) {
 		t.Error("a public address not reported for long still counts")
+	}
+}
+
+// The proxy hook fails closed for an HTTPS-only manager's names: where the
+// proxy cannot be told, or the name was dropped while a dial ran, the DERP
+// client is given a proxy nothing reaches, not leave to dial direct.
+func TestTheProxyFailsClosed(t *testing.T) {
+	var fail atomic.Bool
+	via, _ := url.Parse("http://proxy.example:3128")
+	a := startNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128", func(o *Options) {
+		o.HTTPSOnly = true
+		o.Proxy = func(string) (*url.URL, error) {
+			if fail.Load() {
+				return nil, errors.New("HTTPS_PROXY does not parse")
+			}
+			return via, nil
+		}
+	})
+	if err := a.mgr.SetRelays([]Relay{namedRelay()}); err != nil {
+		t.Fatal(err)
+	}
+	ask := func(host string) *url.URL {
+		u, err := proxyFor(&http.Request{URL: &url.URL{Scheme: "https", Host: host, Path: "/"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	fail.Store(true)
+	if got := ask("relay.example.org"); got == nil || got.Host != nowhere.Host {
+		t.Errorf("with the proxy unknown, the relay's name goes through %v", got)
+	}
+	fail.Store(false)
+	other := testRelay()
+	other.Region = 2
+	if err := a.mgr.SetRelays([]Relay{other}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ask("relay.example.org"); got == nil || got.Host != via.Host {
+		t.Errorf("a name dropped goes through %v", got)
 	}
 }

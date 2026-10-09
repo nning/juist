@@ -85,10 +85,15 @@ Let's Encrypt issues a certificate for the name. `juist status` then says:
   network's log is at schema 12. Before, `juist status` says
   `members are not told of relay.example.org`, and `juist log upgrade` raises
   it.
-- Binding 443 takes a privilege juistd otherwise lacks. `juist set` grants
-  it `CAP_NET_BIND_SERVICE` for this alone, by a systemd drop-in, and
-  `sudo juist set --relay-name ""` takes it back along with the name. On
-  FreeBSD, juistd's helper binds 443, and pf, where it runs, must let it in.
+- Binding 443 takes a privilege juistd otherwise lacks, which root grants:
+  `sudo juist set` gives it `CAP_NET_BIND_SERVICE` for this alone, by a
+  systemd drop-in, and `sudo juist set --relay-name ""` takes it back along
+  with the name. On FreeBSD, juistd's helper binds 443 while root's grant is
+  in place, where no other program answers on 443, and pf, where it runs,
+  must let it in. Should the grant outlive the name, `juist status` warns,
+  and `juist reset` takes it back.
+- Members use the name once the server at it says it is this relay: a name
+  that leads elsewhere is not taken.
 - On the network's [ingress]({{< relref "docs/publishing" >}}), which holds
   443 already, the ingress hands the name's connections to the relay.
 - A CAA record for the name must allow Let's Encrypt.

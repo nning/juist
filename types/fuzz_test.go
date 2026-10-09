@@ -152,6 +152,9 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 	renumberedSnap.Domain = "pub.example.org"
 	renumberedSnap.Nodes = []NodeRecord{moved}
 	renumberedSnap.EpochWraps = epoch.Wraps
+	policySnap := renumberedSnap.Clone()
+	policySnap.Schema = SchemaPolicy
+	policySnap.Policy = seedPolicy(moved.Identity)
 
 	records := []AUM{
 		{Kind: KindGenesis, State: snap},
@@ -179,6 +182,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindRenameNetwork, Prev: &parent, Network: new("office")},
 		{Kind: KindSetAdminRecipient, Prev: &parent, Subject: &id,
 			Recipient: &RecipientKey{X25519: X25519Key{8}, MLKEM: MLKEMKey{9}}},
+		{Kind: KindCheckpoint, Prev: &parent, State: policySnap},
 		{Kind: KindCheckpoint, Prev: &parent, State: renumberedSnap},
 		{Kind: KindSetNodeNames, Prev: &parent, Subject: &id, Names: &NameGrant{Names: []string{"mx.example.org"}}},
 		{Kind: KindSetDomain, Prev: &parent, Domain: new("pub.example.org")},
@@ -188,6 +192,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 			Publish: &PublishGrant{Names: []PublishedName{{Label: "ssh", Port: 22, Proxy: true, Public: 2222}}}},
 		{Kind: KindRenameNode, Prev: &parent, Subject: &id, NodeName: new("laptop")},
 		{Kind: KindDisable, Prev: &parent, Secret: &DisablementSecret{2}},
+		{Kind: KindSetPolicy, Prev: &parent, Policy: seedPolicy(id)},
 	}
 	out := make([][]byte, 0, len(records))
 	for i := range records {
@@ -222,5 +227,20 @@ func TestCorpusSeedsAreValid(t *testing.T) {
 		if !bytes.Equal(re, seed) {
 			t.Fatalf("seed %d is not canonical", i)
 		}
+	}
+}
+
+// seedPolicy is a policy naming id in every place a policy names a member.
+func seedPolicy(id Identity) *Policy {
+	return &Policy{
+		Tables:   []PolicyTable{{Name: "admins", Nodes: []Identity{id}}, {Name: "staff", Tables: []string{"admins"}}},
+		Services: []PolicyService{{Name: "web", Ports: []PortRange{{Proto: ProtoTCP, First: 80, Last: 80}, {Proto: ProtoTCP, First: 443, Last: 443}}}},
+		Rules: []PolicyRule{
+			{From: PolicyRefs{Tables: []string{"staff"}}, To: PolicyRefs{Any: true}, Services: []string{"web"}},
+			{From: PolicyRefs{Nodes: []Identity{id}}, To: PolicyRefs{Internet: true, ViaNodes: []Identity{id},
+				Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.10.0/24")}}, Ports: []PortRange{{Proto: ProtoUDP, First: 53, Last: 53}}},
+		},
+		Tests: []PolicyTest{{From: id, To: PolicyRefs{Nodes: []Identity{id}}, Port: PortRange{Proto: ProtoTCP, First: 443, Last: 443}},
+			{Block: true, From: id, To: PolicyRefs{Prefixes: []netip.Prefix{netip.MustParsePrefix("192.168.10.7/32")}}}},
 	}
 }

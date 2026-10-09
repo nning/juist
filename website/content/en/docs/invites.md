@@ -160,6 +160,9 @@ for every destination. Then do one of these:
   `waiting for approval (1 of 2 votes)`. The wait counts against the invite's
   lifetime.
 - On a device in several networks, say which one: `juist invite work`.
+- Under an [access policy]({{< relref "docs/access" >}}), the new device is
+  passed nothing until a rule names it, and `juist invite` says so in a
+  `hint:` line.
 
 ## If something goes wrong
 

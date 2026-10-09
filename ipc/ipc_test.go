@@ -378,3 +378,27 @@ func TestHTTP3IsOfferedBesideAnAddress(t *testing.T) {
 		}
 	}
 }
+
+// A proxy refused is named without its password, which would otherwise
+// reach juistd's log and the terminal.
+func TestAProxyRefusedKeepsItsPassword(t *testing.T) {
+	for _, s := range []string{
+		"socks5://user:s3cret@proxy.example:1080",
+		"http://user:s3cret@proxy.example:3128/path",
+		"http://user:s3cret@:3128",
+		"http://user:s3cret@proxy.example:3128/%zz",
+		"http://user:s3cret@proxy example:3128",
+	} {
+		err := ValidProxy(s)
+		if err == nil {
+			t.Errorf("%s taken", s)
+			continue
+		}
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("the error says the password: %v", err)
+		}
+	}
+	if r := RedactProxy("http://user:s3cret@proxy example:3128"); strings.Contains(r, "s3cret") {
+		t.Errorf("redacted, a URL that does not parse is %q", r)
+	}
+}

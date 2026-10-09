@@ -438,11 +438,10 @@ then subnet routers, then the exit node's DNS.
 sections say, privileged and by hand against the packages. Untried: a
 client below systemd 256, whose resolved polkit asks without the device.
 
-**Before ACLs, unscoped.** Coarse ACLs come at M14, so until then using an exit
-node is open to every member: the quorum grants the role per exit node, and each
-client's owner chooses whether to use one, but no grant says *which* members may.
-A subnet router's prefixes are likewise reachable from every member. The
-trade is accepted in [02-threat-model.md](02-threat-model.md) item 7; M14 scopes it.
+**Scoped by the access policy.** The quorum grants the role per exit node, and
+each client's owner chooses whether to use one; which members may is the access
+policy's (M14), and without one every member may, as every member reaches a
+subnet router's prefixes ([02-threat-model.md](02-threat-model.md) item 7).
 
 ## M6a — Exit nodes
 
@@ -1675,8 +1674,9 @@ on this record, so the audit has to see it.
 
 ## M13 — HTTPS alone to the outside
 
-**Done** on 2026-10-09, as below, reviewed (M13 reviews 1 to 5) and
-validated by `make ci-vm` and `make test-freebsd` (12-validating.md).
+**Done** on 2026-10-09, as below, reviewed (M13 reviews 1 to 6, the last for
+security) and validated by `make ci-vm` and `make test-freebsd`
+(12-validating.md).
 
 A device on a network that passes TCP to 443 alone, or whose firewall
 sorts traffic by simple DPI (a hotel's, a company's, a school's), reaches
@@ -1780,21 +1780,75 @@ Not in this plan:
 
 ## M14 — Coarse ACLs
 
-Per-node allow-lists as quorum-signed log records; the netmap adapter renders them
-into `wgengine`'s packet filter, replacing the allow-all-members rule, on sender
-and receiver alike. They also scope M6: using an exit node, or a subnet router's
-routes, becomes a grant (Tailscale's `autogroup:internet`) instead of open to every
-member.
+**Done** on 2026-10-09, as below, reviewed (M14 reviews 1 to 3, two of them
+for security) and validated by `make ci-vm` and `make test-freebsd`
+(12-validating.md).
+
+A policy in the log says which member may open what on which: one
+quorum-signed record holds the whole of it, rendered by every member into
+what its tunnel takes and sends. It also scopes M6: using an exit node, or
+a subnet router's routes, takes a rule instead of being open to every
+member. Without a policy record a network behaves as before.
 
 Two members the policy keeps apart both ways are no peers at all: neither
 installs the other, so no handshake or disco passes between them, and the log
 reaches each through the members it may reach. Discovery follows the policy
-too: a member's announcement goes only to its peers, and its DHT record,
-the relay's copy of M13 included, is sealed for them, not under the group
-secret every member holds, which today shows each member every other's
-public addresses; whether keys go per pair or per group is open. Listings and `.juist` names show a member its peers
-alone. The log stays whole on every member, names, keys and overlay addresses
-included: hiding those conflicts with verifying the chain.
+too: a member's addresses are readable by its peers alone, in its
+announcement wherever that travels (gossip, the DHT, mDNS, the relay's copy
+of M13). Listings and `.juist` names show a member its peers alone. The log
+stays whole on every member, names, keys and overlay addresses included:
+hiding those conflicts with verifying the chain.
+
+- **Decided:**
+  - **One record, the whole policy.** `KindSetPolicy` (schema 13) carries
+    the policy as structs, devices by identity key: rotation carries a
+    reference along, removal drops it, and a rule left with no source or
+    destination goes. Parsing, names and evaluation stay outside the TCB,
+    which checks shape and references alone.
+  - **The language is pf's filter subset.** `table <name> { … }` groups
+    devices and tables, `service name = proto … port …` names ports, and
+    `pass from SRC to DST [proto …] [port …] [service …]` allows. Sources
+    are devices, tables or `any` (every member); destinations those, or
+    `internet [via …]` for exit nodes, or a prefix inside a subnet router's
+    routes. No `block`, `quick`, interfaces or addresses of members: what no
+    rule passes is refused, and order means nothing. `test pass|block from
+    DEVICE to …` lines are kept in the record and checked whenever it is
+    set. No comments: the record could not keep them.
+  - **One canonical text.** `juist policy` prints it from the record, with
+    current names; `juist policy fmt` writes a file in the same form, as
+    gofmt does, without the log (`-l` lists files not in it and fails).
+    `edit`, `set`, `diff` and `check` read names against the log.
+  - **Connections, enforced where they arrive.** `pass from A to B` lets A
+    open connections to B and B answer them, not the reverse. Every member
+    keeps every restricted peer to the flows it opened and the rules that
+    peer has, statefully, in the confiner that keeps service members and
+    ingresses today; Tailscale's filter takes TCP without SYN from any
+    member. A sender drops what it may not open. Ping needs `proto icmp` or
+    a rule without a protocol.
+  - **Roles stay records.** The policy says who may use an exit node or a
+    subnet; the role and the route grant say who may serve. Using an exit
+    node passes its DNS too. A service member opens nothing whatever the
+    policy says, and an ingress reaches what is published alone.
+  - **Carriers.** Relays and vouchers are peers of every member, for
+    juist's own traffic alone unless a rule passes more: they carry the
+    log and its leases to members the policy keeps apart from the rest. In
+    a network with neither, every two members stay peers for juist's own
+    traffic, since nothing else would carry a change to them.
+  - **Fails closed.** A member stale past the freshness TTL keeps its
+    vouchers alone, as before, and under a policy passes nothing but
+    juist's own traffic with them.
+  - **Addresses for peers alone.** A member that is not every member's
+    peer seals its addresses under a key of its own, derived per epoch and
+    peer set, which gossip hands each peer wrapped under a key that pair
+    derives from the X25519 keys the log holds. That pair key is classical
+    until M15 mixes ML-KEM in. A member every member peers seals them
+    under the group's key, as before.
+
+- **Built:** the record (`types`, `trust/log`), the language and its
+  evaluation (`internal/policy`), each peer's access in the confiner (`conn`),
+  the peers, exit nodes, subnets and log sync it scopes (`daemon`), the sealed
+  addresses (`internal/addrkey`, `gossip`), `juist policy`, and the lab's
+  devices kept apart.
 
 - **Exit criterion:** under a policy denying A→B, B drops A's packets even when A's
   daemon is patched to ignore its own outbound filter (receiver-side enforcement
@@ -2137,15 +2191,16 @@ gateway's address alone. What is missing:
 
 What it does not change: the servers see the gateway, not who used it, and
 every client still holds the clients' network's whole log, so it knows every
-other client's name, keys and addresses, and reaches them until M14. Hiding
+other client's name, keys and overlay addresses, and reaches them unless the
+access policy (M14) keeps them apart. Hiding
 members from each other conflicts with full replication, which verifying the
 chain rests on. An access VPN where clients know only a hub and access
 follows an SSO login is a hub-and-spoke design with a central policy, not
 this one; for owners and an identity provider see the previous section.
 
-One network under M14's policy, clients reaching the servers and not each
-other, is the direct way to the same end, IPv4 and names included; the
-gateway is for before M14, or for keeping the servers out of the clients' log.
+One network under an access policy (M14), clients reaching the servers and not
+each other, is the direct way to the same end, IPv4 and names included; the
+gateway is for keeping the servers out of the clients' log.
 
 ## Later — Networks of phones alone
 
@@ -2226,8 +2281,8 @@ only way to need none.
       handshake carries its own retransmission.
 6. **Reaching an app on a phone.** M10 tried a phone's connections out, not
    in. An app listening on the phone's overlay address takes a connection
-   from another member through `VpnService`, tested. Until M14 every member
-   reaches every port a phone's apps open.
+   from another member through `VpnService`, tested. Without an access policy
+   (M14) every member reaches every port a phone's apps open.
 
 A chat is not juist's: a separate app talks to members by their names, and
 WireGuard has already authenticated each sender by its overlay address, so it

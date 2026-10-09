@@ -1,16 +1,24 @@
 package daemon
 
 import (
+	"bytes"
+	"context"
+	"crypto/ed25519"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +29,7 @@ import (
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
+	"github.com/nning/juist/relay"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -54,6 +63,7 @@ func namedRelayFixture(t *testing.T, schema types.SchemaVersion) (*reconcileFixt
 	b := &bound{}
 	f := newReconcileFixtureOn(t, nw, func(o *Options) {
 		o.RelayName, o.ListenHTTPS = testRelayName, b.listen
+		o.HandOffSocket, o.IngressUID = filepath.Join(t.TempDir(), "relay.sock"), uint32(os.Getuid())
 	})
 	nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
 	if !f.d.Status().Relaying {
@@ -98,8 +108,8 @@ func TestARelaysNameIsAnnouncedFromItsSchema(t *testing.T) {
 
 // The relay takes 443 at this host's own addresses, each by itself so the
 // terminator keeps the overlay's; once the device is the ingress, which
-// holds 443, it gives them back and the ingress hands the name on to it, on
-// loopback, the client named.
+// holds 443, it gives them back and the ingress hands the name on to it, at
+// a socket only the ingress's user is answered at.
 func TestTheRelayTakes443UnlessTheIngressDoes(t *testing.T) {
 	f, b := namedRelayFixture(t, types.CurrentSchema)
 	scanned, _ := f.d.underlayEndpoints()
@@ -125,37 +135,44 @@ func TestTheRelayTakes443UnlessTheIngressDoes(t *testing.T) {
 		t.Errorf("a device that is no ingress hands its relay on: %+v", p.Relays)
 	}
 
+	if os.Getuid() == 0 {
+		t.Skip("as root, there is no ingress user to tell apart")
+	}
 	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable, types.RoleIngress)
 	if h := f.d.Status().HTTPS; h == nil || !slices.Equal(h.Listening, []string{ipc.HandedOn}) {
 		t.Fatalf("as the ingress, the status says %+v", h)
 	}
 	f.d.mu.Lock()
-	held, port := len(f.d.https443), f.d.relay.Port()
+	held, socket := len(f.d.https443), f.d.handOffPath
 	f.d.mu.Unlock()
 	if held != 0 {
 		t.Errorf("the relay holds %d sockets on 443 beside the ingress", held)
 	}
-	// Not before the relay reads the ingress's header.
+	p := f.d.Published()
+	if len(p.Relays) != 1 || p.Relays[0].Name != testRelayName || p.Relays[0].Socket != socket ||
+		len(p.Relays[0].Addrs) != 0 || !p.Relays[0].Proxy {
+		t.Errorf("the ingress is handed %+v, want %s at %s", p.Relays, testRelayName, socket)
+	}
+	if fi, err := os.Stat(socket); err != nil || fi.Mode().Type() != os.ModeSocket {
+		t.Fatalf("no hand-off socket: %v", err)
+	}
+	// Not before the relay takes the ingress's connections there.
 	f.d.mu.Lock()
 	f.d.httpsHanded = false
 	f.d.mu.Unlock()
 	if p := f.d.Published(); len(p.Relays) != 0 {
-		t.Errorf("handed on before the relay reads the ingress's header: %+v", p.Relays)
+		t.Errorf("handed on before the relay takes the ingress's connections: %+v", p.Relays)
 	}
 	f.d.mu.Lock()
 	f.d.httpsHanded = true
 	f.d.mu.Unlock()
-	p := f.d.Published()
-	want := ipc.PublishedTarget{Name: testRelayName, Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Port: port,
-		Proxy: true}
-	if len(p.Relays) != 1 || p.Relays[0].Name != want.Name || !slices.Equal(p.Relays[0].Addrs, want.Addrs) ||
-		p.Relays[0].Port != want.Port || !p.Relays[0].Proxy {
-		t.Errorf("the ingress is handed %+v, want %+v", p.Relays, want)
-	}
 
 	f.nw.setRoles(t, f, f.self.record.Identity)
 	if h := f.d.Status().HTTPS; h == nil || len(h.Listening) != 0 {
 		t.Errorf("no longer relaying, the status says %+v", h)
+	}
+	if _, err := os.Stat(socket); err == nil {
+		t.Error("the hand-off socket outlived the relay")
 	}
 	if p := f.d.Published(); len(p.Relays) != 0 {
 		t.Errorf("no longer relaying, the ingress is handed %+v", p.Relays)
@@ -170,7 +187,7 @@ func rendezvousKeyOf(t *testing.T, f *reconcileFixture, id types.Identity) (uint
 	if !ok {
 		t.Fatal("the relay holds no epoch secret")
 	}
-	return epoch, dht.ItemKey(secret.TopicSeed(epoch, dht.Window(time.Now()), id))
+	return epoch, dht.RendezvousKey(secret.TopicSeed(epoch, dht.Window(time.Now()), id))
 }
 
 // A relay answers for the members of its network alone, with what it holds
@@ -256,6 +273,37 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 	_, keyNewer := rendezvousKeyOf(t, f, one.record.Identity)
 	if _, ok := rv.Get(keyNewer); !ok {
 		t.Error("the relay answers nothing under its newest epoch")
+	}
+	if known, current := rv.Knows(keyOne); !known || current {
+		t.Errorf("a key under an older epoch: known %v, current %v", known, current)
+	}
+	if known, current := rv.Knows(keyNewer); !known || !current {
+		t.Errorf("a key under the newest epoch: known %v, current %v", known, current)
+	}
+}
+
+// The key a relay answers under is none a DHT message carries: an item's
+// public key is in every put and get of it, so a stranger watching the DHT
+// would learn it and could ask the relay.
+func TestTheRendezvousKeyIsNoneTheDHTShows(t *testing.T) {
+	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	rv := (*relayRendezvous)(f.d)
+	one := f.nw.devices[1]
+	f.learn(t, one, 41641)
+	epoch, secret, _ := f.d.keyring.Latest()
+	seed := secret.TopicSeed(epoch, dht.Window(time.Now()), one.record.Identity)
+	shown := [32]byte(ed25519.NewKeyFromSeed(seed[:]).Public().(ed25519.PublicKey))
+	if known, _ := rv.Knows(shown); known {
+		t.Error("the relay knows the key the DHT shows")
+	}
+	if _, ok := rv.Get(shown); ok {
+		t.Error("the relay answers under the key the DHT shows")
+	}
+	if _, ok := rv.Get(dht.RendezvousKey(seed)); !ok {
+		t.Error("the relay answers nothing under the rendezvous key")
 	}
 }
 
@@ -385,9 +433,9 @@ func (c *countingCA) count() int {
 	return c.orders
 }
 
-// A client's handshake for the relay's name orders a certificate where none
-// is held, but not again before the next order is due, the gap doubling: a
-// CA limits orders, and members retry every few seconds.
+// A client's handshake for the relay's name orders no certificate, where
+// none is held: the relay does, not again before the next order is due, the
+// gap doubling. A CA limits orders, and a handshake would wait on one.
 func TestARelayOrdersItsCertificateSparingly(t *testing.T) {
 	f, _ := namedRelayFixture(t, types.CurrentSchema)
 	now := time.Now()
@@ -397,9 +445,15 @@ func TestARelayOrdersItsCertificateSparingly(t *testing.T) {
 	hello := ecdsaHello()
 	for range 5 {
 		if _, err := f.d.namedCertificate(hello); err == nil {
-			t.Fatal("a certificate came from a CA that refuses")
+			t.Fatal("a certificate came where none is held")
 		}
 	}
+	if n := ca.count(); n != 0 {
+		t.Fatalf("handshakes ordered %d certificates", n)
+	}
+	ctx := t.Context()
+	f.d.orderIfDue(ctx)
+	f.d.orderIfDue(ctx)
 	if n := ca.count(); n != 1 {
 		t.Fatalf("%d orders within the first gap", n)
 	}
@@ -409,14 +463,16 @@ func TestARelayOrdersItsCertificateSparingly(t *testing.T) {
 	if h := f.d.Status().HTTPS; h == nil || h.NoCert != "the CA refused" {
 		t.Errorf("the status says %+v", h)
 	}
+	if _, err := f.d.namedCertificate(hello); err == nil || err.Error() != "the CA refused" {
+		t.Errorf("a client is told %v", err)
+	}
 	now = now.Add(certFirstGap)
-	f.d.namedCertificate(hello)
-	f.d.namedCertificate(hello)
+	f.d.orderIfDue(ctx)
 	if n := ca.count(); n != 2 {
 		t.Fatalf("%d orders after the first gap", n)
 	}
 	now = now.Add(certFirstGap)
-	if f.d.namedCertificate(hello); ca.count() != 2 {
+	if f.d.orderIfDue(ctx); ca.count() != 2 {
 		t.Error("the gap did not double")
 	}
 	challenge := &tls.ClientHelloInfo{ServerName: testRelayName, SupportedProtos: []string{acme.ALPNProto}}
@@ -424,12 +480,11 @@ func TestARelayOrdersItsCertificateSparingly(t *testing.T) {
 	if ca.count() != 3 {
 		t.Error("a CA's challenge waited for the next order")
 	}
-	// Offering the challenge's protocol beside another is no challenge, and
-	// orders as a client's handshake does, when due.
+	// Offering the challenge's protocol beside another is no challenge.
 	posing := &tls.ClientHelloInfo{ServerName: testRelayName, SupportedProtos: []string{acme.ALPNProto, "http/1.1"}}
 	f.d.namedCertificate(posing)
 	if ca.count() != 3 {
-		t.Error("a handshake posing as a challenge ordered before the next order was due")
+		t.Error("a handshake posing as a challenge ordered")
 	}
 }
 
@@ -440,9 +495,7 @@ func TestAFailedOrderLocksNoClientOutOfAHeldCertificate(t *testing.T) {
 	ca := &countingCA{issued: 1}
 	f.d.relayCerts = ca
 	hello := ecdsaHello()
-	if _, err := f.d.namedCertificate(hello); err != nil {
-		t.Fatal(err)
-	}
+	f.d.orderIfDue(t.Context())
 	f.d.namedCertificate(hello)
 	f.d.namedCertificate(hello)
 	if n := ca.count(); n != 3 {
@@ -462,9 +515,7 @@ func TestAHelloWithoutECDSAOrdersNothing(t *testing.T) {
 	f, _ := namedRelayFixture(t, types.CurrentSchema)
 	ca := &countingCA{issued: 1}
 	f.d.relayCerts = ca
-	if _, err := f.d.namedCertificate(ecdsaHello()); err != nil {
-		t.Fatal(err)
-	}
+	f.d.orderIfDue(t.Context())
 	rsa := &tls.ClientHelloInfo{ServerName: testRelayName, CipherSuites: []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
 		SignatureSchemes: []tls.SignatureScheme{tls.PSSWithSHA256}}
 	for range 3 {
@@ -473,6 +524,245 @@ func TestAHelloWithoutECDSAOrdersNothing(t *testing.T) {
 		}
 	}
 	if n := ca.count(); n != 1 {
-		t.Errorf("%d asks of the CA, want the ECDSA client's alone", n)
+		t.Errorf("%d asks of the CA, want the relay's own order alone", n)
+	}
+}
+
+// Below the schema that has it, an announcement naming a relay is refused,
+// whoever signed it: relayed on, it would have older members refuse every
+// frame that carries it.
+func TestARelayNameIsRefusedBelowItsSchema(t *testing.T) {
+	f, _ := namedRelayFixture(t, types.SchemaTCP)
+	var other *device
+	for _, d := range f.nw.devices {
+		if d.record.Identity != f.self.record.Identity {
+			other = d
+			break
+		}
+	}
+	named := func(seq uint64) gossip.Endpoint {
+		e, err := endpointFor(other, 41642)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Seq = seq
+		e.Relay = &gossip.RelayInfo{Port: 4443, Cert: make([]byte, gossip.RelayCertSize),
+			HostName: "abcdefgh.relay.juist.invalid", Name: "relay.example.org"}
+		if err := e.Sign(other.identity); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	if f.d.endpoints.Add(named(2)) {
+		t.Errorf("at %v an announcement naming a relay was taken", types.SchemaTCP)
+	}
+	up, err := f.auth.Builder().SchemaUpgrade(types.SchemaRelayName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := up.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Inform([]types.AUM{up}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.d.endpoints.Add(named(3)) {
+		t.Errorf("at %v an announcement naming a relay was refused", types.SchemaRelayName)
+	}
+}
+
+// A relay that answers with a redirect sends an HTTPS-only device nowhere:
+// followed, it could have it speak plain HTTP to any host and port.
+func TestARelaysRedirectIsNotFollowed(t *testing.T) {
+	var elsewhere atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { elsewhere.Add(1) }))
+	defer plain.Close()
+	redirecting := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirecting.Close()
+	d := &Daemon{envProxy: func(*url.URL) (*url.URL, error) { return nil, nil }}
+	hc := d.httpsClient()
+	hc.Transport.(*http.Transport).TLSClientConfig.RootCAs = x509.NewCertPool()
+	hc.Transport.(*http.Transport).TLSClientConfig.RootCAs.AddCert(redirecting.Certificate())
+	name := strings.TrimPrefix(redirecting.URL, "https://")
+	if _, err := relay.GetAnnouncement(t.Context(), hc, name, [32]byte{1}); err == nil {
+		t.Error("a redirect was taken for an announcement")
+	}
+	if err := relay.PutAnnouncement(t.Context(), hc, name, [32]byte{1}, []byte("sealed")); err == nil {
+		t.Error("a redirect was taken for a put")
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Errorf("the redirect was followed %d times", n)
+	}
+}
+
+// An invite goes through the proxy on an HTTPS-only device alone: another
+// reaches relays as it always did, and tells no proxy whom it invites.
+func TestAnInviteTakesTheProxyOnHTTPSAloneOnly(t *testing.T) {
+	d := &Daemon{proxy: "http://proxy.example:3128", envProxy: func(*url.URL) (*url.URL, error) { return nil, nil }}
+	if d.inviteProxy() != nil {
+		t.Error("an invite from a device reaching relays directly takes the proxy")
+	}
+	d.httpsOnly = true
+	p := d.inviteProxy()
+	if p == nil {
+		t.Fatal("an HTTPS-only device's invite takes no proxy")
+	}
+	if u, err := p("relay.example.org"); err != nil || u == nil || u.Host != "proxy.example:3128" {
+		t.Errorf("the proxy is %v, %v", u, err)
+	}
+}
+
+// HTTPS_PROXY naming a proxy that speaks no HTTP is refused, not told the
+// credentials in a CONNECT.
+func TestAnEnvironmentsSOCKSProxyIsRefused(t *testing.T) {
+	socks, _ := url.Parse("socks5://user:secret@proxy.example:1080")
+	route := proxyRoute("", func(*url.URL) (*url.URL, error) { return socks, nil })
+	if u, err := route("relay.example.org"); err == nil {
+		t.Errorf("a SOCKS proxy was taken: %s", u.Redacted())
+	}
+	plain, _ := url.Parse("http://proxy.example:3128")
+	route = proxyRoute("", func(*url.URL) (*url.URL, error) { return plain, nil })
+	if u, err := route("relay.example.org"); err != nil || u != plain {
+		t.Errorf("an http proxy is %v, %v", u, err)
+	}
+}
+
+// The hand-off socket takes the ingress user's processes alone: any other
+// user's could say, in a PROXY header, it is any client.
+func TestTheHandOffTakesTheIngressAlone(t *testing.T) {
+	ln, err := net.Listen("unix", filepath.Join(t.TempDir(), "relay.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		if c, err := net.Dial("unix", ln.Addr().String()); err == nil {
+			defer c.Close()
+			time.Sleep(time.Second)
+		}
+	}()
+	c, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	uid := uint32(os.Getuid())
+	// Root is never the ingress's user.
+	if uid != 0 && peerCredSupported && !(&Daemon{ingressUID: uid, logf: t.Logf}).fromIngress(c) {
+		t.Error("the ingress user's process was refused")
+	}
+	if (&Daemon{ingressUID: uid + 1, logf: t.Logf}).fromIngress(c) {
+		t.Error("another user's process was taken")
+	}
+	if (&Daemon{logf: t.Logf}).fromIngress(c) {
+		t.Error("a process was taken where there is no ingress user")
+	}
+}
+
+// A relay's name is taken as that relay's once the server at the name says
+// it is: a member announcing another relay's name gets nothing by it, in the
+// data plane or in an invite, and the relay keeps its own.
+func TestARelaysNameIsTakenOnceItsServerSaysWhoseItIs(t *testing.T) {
+	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	one, two := f.nw.devices[1], f.nw.devices[2]
+	f.nw.setRoles(t, f, one.record.Identity, types.RoleRelayCapable)
+	f.nw.setRoles(t, f, two.record.Identity, types.RoleRelayCapable)
+	var asked atomic.Int32
+	f.d.askWhoami = func(_ context.Context, name string) ([32]byte, error) {
+		asked.Add(1)
+		if name != "one.example.org" {
+			return [32]byte{}, errors.New("no answer")
+		}
+		return one.record.Identity, nil
+	}
+	relayOf := func(b byte) *gossip.RelayInfo {
+		r := testRelayInfo()
+		r.Name, r.Cert = "one.example.org", bytes.Repeat([]byte{b}, gossip.RelayCertSize)
+		return r
+	}
+	f.learnRelay(t, one, 41641, relayOf(1))
+	f.learnRelay(t, two, 41642, relayOf(2))
+	named := func() (out []byte) {
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		f.d.mu.Lock()
+		defer f.d.mu.Unlock()
+		for _, r := range f.d.namedRelays {
+			if r.Name == "one.example.org" {
+				out = append(out, r.CertHash[0])
+			}
+		}
+		return out
+	}
+	if got := named(); len(got) != 0 {
+		t.Errorf("the name was taken before its server was asked, for %v", got)
+	}
+	if !f.d.proveDue(t.Context()) || asked.Load() == 0 {
+		t.Fatal("the name's server was not asked, or its answer changed nothing")
+	}
+	if got := named(); !slices.Equal(got, []byte{1}) {
+		t.Errorf("the name is taken for the relays %v, want the one whose server it is", got)
+	}
+	state, err := f.d.TrustedState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range f.d.inviteRelays(state) {
+		if r.Name != "" && r.CertHash[0] != 1 {
+			t.Errorf("an invite waits at %s by the relay %d", r.Name, r.CertHash[0])
+		}
+	}
+}
+
+// On the ingress, the relay orders its certificate once the ingress was told
+// of the name: before, the CA's challenge finds nothing there, and a failed
+// order costs the CA's limit.
+func TestTheRelayOrdersOnceTheIngressHandsItsNameOn(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("as root, there is no ingress user to tell apart")
+	}
+	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable, types.RoleIngress)
+	ca := &countingCA{issued: 1}
+	f.d.relayCerts = ca
+	if f.d.orderIfDue(t.Context()); ca.count() != 0 {
+		t.Fatal("ordered before the ingress was told of the name")
+	}
+	f.d.ingressTookRelay()
+	if f.d.orderIfDue(t.Context()); ca.count() != 1 {
+		t.Errorf("%d orders once the ingress was told of the name", ca.count())
+	}
+}
+
+// A name one relay alone claims goes into an invite unasked, as the host may
+// reach no name, but into the data plane once its server says whose it is.
+func TestAnInviteNamesARelayItCouldNotAsk(t *testing.T) {
+	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	one := f.nw.devices[1]
+	f.nw.setRoles(t, f, one.record.Identity, types.RoleRelayCapable)
+	f.d.askWhoami = func(context.Context, string) ([32]byte, error) { return [32]byte{}, errors.New("no answer") }
+	r := testRelayInfo()
+	r.Name = "solo.example.org"
+	f.learnRelay(t, one, 41641, r)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	f.d.proveDue(t.Context())
+	state, err := f.d.TrustedState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relays := f.d.inviteRelays(state); len(relays) != 1 || relays[0].Name != "solo.example.org" {
+		t.Errorf("the invite waits at %+v", relays)
+	}
+	f.d.mu.Lock()
+	defer f.d.mu.Unlock()
+	for _, r := range f.d.namedRelays {
+		if r.Name == "solo.example.org" {
+			t.Error("the data plane takes a name its server did not answer for")
+		}
 	}
 }

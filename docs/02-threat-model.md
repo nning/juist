@@ -17,7 +17,7 @@
 | Evicted member | Was a member; retains all old keys and state | Signed revocation records + epoch bump (loses group secret → loses discovery) + WG peer removal + fail-closed freshness TTL |
 | Stolen/lost device | Full key material of one member | Same as evicted member, after detection; per-device keys mean no shared secrets to rotate |
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
-| Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; use open to every member until coarse ACLs (M14) scope it |
+| Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; once the network has an access policy (M14), only members it passes use one, enforced at the exit node or router |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
 | Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); signed releases (M18, after v1.0); update transparency (roadmap item, not v1) |
 
@@ -97,9 +97,11 @@ adopting this system must accept them explicitly.
    other path. A relay on 443 is verified by WebPKI, not by the hash its
    announcement pins: a certificate any CA the device trusts issued for the
    name, forged or a company's that intercepts TLS, puts its holder in the
-   relay's position, which is the one above. A device on HTTPS alone asks the
-   relays for the announcements it lacks, so they learn which members it looks
-   for, and it puts every packet through them.
+   relay's position, which is the one above, though a member cannot take
+   another relay's name: members ask the server at the name whose it is. A
+   device on HTTPS alone asks the relays for the announcements it lacks, so
+   they learn which members it looks for, and it puts every packet through
+   them.
 6. **Enrollment bottoms out at admin-device security.** One-guess PAKE invites and
    full-entropy QR tokens shrink but cannot eliminate the window in which a mis-issued
    invite or a compromised admin device admits an attacker.
@@ -114,9 +116,10 @@ adopting this system must accept them explicitly.
    never overlap the overlay space, so an exit node cannot intercept member-to-member
    traffic; an exit node carries public addresses alone, so it reaches neither its
    own LAN nor a client's; and a client uses one only when its owner chooses it
-   and its operator agreed to serve. Until ACLs (M14), though, the grant is
+   and its operator agreed to serve. Without an access policy (M14) the grant is
    network-wide: every member may use every exit node, so the quorum that grants
-   the role decides for all members at once. The exit node answers its clients' DNS
+   the role decides for all members at once; a policy scopes it, enforced by the
+   exit node itself. The exit node answers its clients' DNS
    too, where systemd-resolved runs on them, and so sees their lookups as it sees
    their traffic; names in the LAN's own domain are still asked of the LAN, and a
    hostile DHCP server can claim a wide one, `com` say, as its own domain. While no
@@ -148,9 +151,10 @@ adopting this system must accept them explicitly.
    daemon, does touch the host firewall once, in the other direction: where
    firewalld or ufw runs it lets everything in on `juist0`, as Tailscale's own
    rules do for `tailscale0`, because a host firewall that drops the overlay
-   silently breaks gossip — and with it removals. So until ACLs exist (M14),
-   **every member can reach every port the host listens on through the tunnel**;
-   the host firewall still guards every other interface, and
+   silently breaks gossip — and with it removals. So without an access policy
+   (M14) **every member can reach every port the host listens on through the
+   tunnel**; with one, what it passes; the host firewall still guards every
+   other interface, and
    `/usr/lib/juist/firewall.sh revoke` takes the rule back.
 9. **A host's networks trust one another's juistd (M5).** A host in several
    networks runs one juistd per network, all as the `juist` user. An attacker
@@ -173,6 +177,27 @@ adopting this system must accept them explicitly.
    changes and 8 MiB per signing key. Neither makes a change
    count: that still takes the quorum's signatures, each given where its
    admin was shown the change from their own log.
+11. **An access policy scopes traffic, not what members know (M14).** Every
+   member keeps the whole log, the policy in it: which members exist, their
+   names, keys, overlay addresses and roles, and who may open what on whom.
+   What a member does not learn of one the policy keeps apart from it is its
+   underlay addresses, sealed for its peers under a pair key that is X25519
+   alone until M15; mDNS still shows the LAN a beacon's source address.
+   Relays and vouchers peer every member, so each learns every member's
+   addresses, as a relay already sees its clients' from DERP; in a network
+   with neither, every two members keep a tunnel for log sync, and so learn
+   each other's addresses. A policy change is eventually consistent as a
+   role is (weakness 1): a member that has not heard of a narrowing still
+   passes what it passed, until its view is stale past the TTL, when it
+   keeps its vouchers for juist's own traffic alone. A narrowing stops what
+   may be opened next at once; a connection the receiving member itself
+   opened before goes on until it ends, and a peer set the data plane
+   refuses leaves the one before it in place, as with a removal. Each member
+   enforces what it receives: a member that ignores its own policy reaches
+   nothing the receiver does not pass, and a member that ignores the
+   receiving side lets in what it chooses, its own risk. Past the target
+   scale, address keys beyond a hello's 2 MiB travel in their owners' own
+   hellos alone.
 
 ## Security design rules derived from the above
 
@@ -187,8 +212,10 @@ adopting this system must accept them explicitly.
 - The daemon runs with the narrowest host privilege that lets it own a TUN device:
   `CAP_NET_ADMIN` as an ambient capability on a dedicated unprivileged user, never
   as root (M3a; see `packaging/systemd/juistd.service`). `CAP_NET_BIND_SERVICE`
-  joins it on a relay its operator named on 443 alone, by a drop-in
-  `juist set --relay-name` writes and takes back. This widens what a
+  joins it on a relay named on 443 alone, by a drop-in root's
+  `juist set --relay-name` writes and takes back; on FreeBSD the root helper
+  binds 443 alone, while root's grant is in place and nothing answers there.
+  This widens what a
   compromised `juistd` can do to the *host*, not to the *network*: it still holds
   no admin keys and still cannot authorize a membership change. On the host,
   `CAP_NET_ADMIN` over netlink is broad. `ProtectKernelTunables` keeps it from

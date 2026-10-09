@@ -14,6 +14,7 @@ import (
 
 	"github.com/nning/juist/internal/dnsfwd"
 	"github.com/nning/juist/internal/names"
+	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -122,7 +123,7 @@ type heldOverride struct {
 // resolved to its member where serves says the member serves it, which
 // members then reach directly, with the same certificate; the rest goes on
 // upstream.
-func (d *Daemon) namesZone(state *log.State, fresh log.Freshness, accepted bool, now int64,
+func (d *Daemon) namesZone(state *log.State, view policy.View, fresh log.Freshness, accepted bool, now int64,
 	serves func(types.Identity) bool) (*names.Zone, []heldOverride, int64) {
 	z := &names.Zone{Members: map[string][]netip.Addr{}, Overrides: map[string]names.Override{}, Public: state.Domain()}
 	if network := names.Label(state.Network()); network != "" {
@@ -131,6 +132,11 @@ func (d *Daemon) namesZone(state *log.State, fresh log.Freshness, accepted bool,
 	shared := map[string]bool{}
 	var held []heldOverride
 	for _, n := range state.Nodes() {
+		// A member the policy keeps apart from this device is none of its
+		// names: it could not be reached by them.
+		if !view.Lists(d.self, n.Identity) {
+			continue
+		}
 		for _, name := range n.Names {
 			held = append(held, heldOverride{name: name, target: n.Identity, device: n.Name})
 		}

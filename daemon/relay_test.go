@@ -560,14 +560,14 @@ func TestAnEditedEndpointCacheIsIgnored(t *testing.T) {
 	// Flip a byte in the announced address. The signature covers it, so the
 	// record must not survive the edit.
 	var held []gossip.Endpoint
-	if err := gossip.DecodeCachedEndpoints(raw, &held); err != nil {
+	if err := gossip.DecodeCachedEndpoints(raw, &held, nil); err != nil {
 		t.Fatalf("decoding what was written: %v", err)
 	}
 	if len(held) != 1 {
 		t.Fatalf("cached %d records, want 1", len(held))
 	}
 	held[0].Addrs = []netip.AddrPort{netip.MustParseAddrPort("203.0.113.5:41641")}
-	edited, err := gossip.EncodeCachedEndpoints(held)
+	edited, err := gossip.EncodeCachedEndpoints(held, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

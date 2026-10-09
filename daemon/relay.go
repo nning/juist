@@ -64,6 +64,9 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 			continue
 		}
 		name := ep.Relay.Name
+		if name != "" && !d.relayNameProven(name, n.Identity) {
+			name = ""
+		}
 		if name != "" && slices.Contains(names, name) {
 			// A name is one relay's: two would be two regions on one
 			// server. The first, by identity below, keeps it.
@@ -145,7 +148,7 @@ func (d *Daemon) syncRelay(state *log.State) {
 		}
 		srv, err := onPortOrAny(d, d.relayPort, syscall.EADDRINUSE, "relay", func(port uint16) (*relay.Server, error) {
 			o := relay.Options{Admit: d.admitToRelay, AdmitHost: d.admitHostToRelay, Port: port,
-				Certificate: cert, Rendezvous: (*relayRendezvous)(d), HandedOff: d.handingOn, Logf: d.logf}
+				Certificate: cert, Rendezvous: (*relayRendezvous)(d), Identity: d.self, Logf: d.logf}
 			if d.relayCerts != nil {
 				o.Name, o.NamedCertificate = d.relayName, d.namedCertificate
 			}
@@ -246,7 +249,9 @@ func (d *Daemon) closeRelay() {
 // announcement says where its relay is.
 func (d *Daemon) inviteRelays(state *log.State) []forward.Relay {
 	now := d.now().Unix()
-	var out []forward.Relay
+	var relays []types.NodeRecord
+	held := map[types.Identity]gossip.Endpoint{}
+	claims := map[string]int{}
 	for _, n := range state.NodesWithRole(types.RoleRelayCapable) {
 		if n.Identity == d.self || n.Expired(now) {
 			continue
@@ -255,12 +260,28 @@ func (d *Daemon) inviteRelays(state *log.State) []forward.Relay {
 		if !ok || ep.Relay == nil || len(ep.Relay.Cert) != sha256.Size {
 			continue
 		}
+		relays, held[n.Identity] = append(relays, n), ep
+		if ep.Relay.Name != "" {
+			claims[ep.Relay.Name]++
+		}
+	}
+	var out []forward.Relay
+	for _, n := range relays {
+		ep := held[n.Identity]
+		// A host waiting at a name tells its server the invite's forward
+		// ID: a name two relays claim is the one's its server names, or
+		// none's. One claimed alone is taken unasked, since the host may
+		// reach no name, as from behind its own NAT, and a guest needs one.
+		name := ep.Relay.Name
+		if name != "" && claims[name] > 1 && !d.relayNameProven(name, n.Identity) {
+			name = ""
+		}
 		addrs := ep.RelayAddrs()
-		if len(addrs) == 0 && ep.Relay.Name == "" {
+		if len(addrs) == 0 && name == "" {
 			continue
 		}
 		out = append(out, forward.Relay{Addrs: addrs, CertHash: [32]byte(ep.Relay.Cert),
-			ServerName: ep.Relay.HostName, Name: ep.Relay.Name})
+			ServerName: ep.Relay.HostName, Name: name})
 	}
 	return out
 }

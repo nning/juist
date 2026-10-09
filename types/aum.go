@@ -132,6 +132,10 @@ const (
 	// under every schema, since a network that lost its admins cannot upgrade
 	// first; a build from before it cannot read it and keeps running.
 	KindDisable Kind = 24
+
+	// KindSetPolicy replaces the network's access policy; an empty one
+	// withdraws it. Schema 13 and later.
+	KindSetPolicy Kind = 25
 )
 
 func (k Kind) String() string {
@@ -186,6 +190,8 @@ func (k Kind) String() string {
 		return "rename-node"
 	case KindDisable:
 		return "disable"
+	case KindSetPolicy:
+		return "set-policy"
 	default:
 		return fmt.Sprintf("kind?<%d>", uint8(k))
 	}
@@ -326,6 +332,9 @@ type AUM struct {
 	// like every other set. CBOR key 23 is the highest that encodes in one
 	// byte, leaving payload fields room to grow below it.
 	Signatures []Signature `cbor:"23,keyasint,omitempty"`
+
+	// Policy is the network's new access policy, for SetPolicy.
+	Policy *Policy `cbor:"24,keyasint,omitempty"`
 }
 
 // A HolderPolicy is what [KindSetHolder] states about a holder: the votes
@@ -422,6 +431,7 @@ const (
 	fPublish
 	fNodeName
 	fSecret
+	fPolicy
 )
 
 var fieldNames = []struct {
@@ -448,6 +458,7 @@ var fieldNames = []struct {
 	{fPublish, "Publish"},
 	{fNodeName, "NodeName"},
 	{fSecret, "Secret"},
+	{fPolicy, "Policy"},
 }
 
 func (f fieldSet) String() string {
@@ -496,6 +507,8 @@ var kindFields = map[Kind]fieldSet{
 	KindRenameNode: fSubject | fNodeName,
 
 	KindDisable: fSecret,
+
+	KindSetPolicy: fPolicy,
 }
 
 func (a *AUM) presentFields() fieldSet {
@@ -559,6 +572,9 @@ func (a *AUM) presentFields() fieldSet {
 	}
 	if a.Secret != nil {
 		f |= fSecret
+	}
+	if a.Policy != nil {
+		f |= fPolicy
 	}
 	return f
 }
@@ -731,6 +747,11 @@ func (a *AUM) ValidateUnsigned() error {
 		}
 		if err := ValidateName(*a.NodeName); err != nil {
 			return fmt.Errorf("node name: %w", err)
+		}
+	}
+	if a.Policy != nil {
+		if err := a.Policy.Validate(); err != nil {
+			return fmt.Errorf("policy: %w", err)
 		}
 	}
 	if a.Schema != nil && *a.Schema == 0 {
@@ -926,6 +947,9 @@ func (a *AUM) Clone() *AUM {
 			e.Wraps[i].Sealed = slices.Clone(a.Epoch.Wraps[i].Sealed)
 		}
 		out.Epoch = &e
+	}
+	if a.Policy != nil {
+		out.Policy = a.Policy.Clone()
 	}
 	out.Signatures = slices.Clone(a.Signatures)
 	return &out

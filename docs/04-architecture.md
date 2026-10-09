@@ -184,13 +184,14 @@ exit nodes (M6a), subnet routers (M6b) and the exit node's DNS (M6c). The connec
 pieces come almost free from the `wgengine` reuse decision; the new work is policy
 plumbing and the privileged helper.
 
-**Ships before coarse ACLs, unscoped.** Who may *use* an exit node is an
-access-control question (Tailscale expresses it as `autogroup:internet`), and coarse
-ACLs come later, at M14 in [05-roadmap.md](05-roadmap.md). Until then the
-`exit` role means "every member may route all their internet traffic through
-this member's uplink" — an all-or-nothing grant the quorum makes per exit node,
-with no way to scope it to some members. Accepted in
-[02-threat-model.md](02-threat-model.md) item 7; M14 scopes it.
+**Who may use one is the access policy's.** The `exit` role and a route grant
+say who may serve; who may *use* an exit node (Tailscale's `autogroup:internet`)
+or a subnet router's prefixes is the access policy's (M14 in
+[05-roadmap.md](05-roadmap.md)): `pass from … to internet via …` and `pass from …
+to PREFIX`, enforced by the exit node or router, and followed by the client,
+which routes nothing through one the policy does not pass. A network without a
+policy lets every member use every exit node and subnet, as before
+([02-threat-model.md](02-threat-model.md) item 7).
 
 What changes, layer by layer:
 
@@ -252,8 +253,9 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
   (M7a): juistd started as root keeps a process as root that creates, addresses,
   routes and destroys juist's own devices, and runs the daemon as `juist` with
   the device's descriptor (`internal/plumber`). A relay its operator named on
-  443 (M13) binds 443 at the host's addresses alone: by the helper on FreeBSD,
-  and on Linux by `CAP_NET_BIND_SERVICE`, which a drop-in grants only then.
+  443 (M13) binds 443 at the host's addresses alone, once root granted it by
+  `relay.sh`: by the helper on FreeBSD, where a file of root's says so, and
+  on Linux by `CAP_NET_BIND_SERVICE`, which a drop-in grants.
 - **Key custody:** node identity key a 0600 file on Linux and FreeBSD (sealing
   it in the kernel keyring or a TPM is post-v1; FreeBSD: document geli);
   Android: Keystore for the identity key — WG keys must live in app memory for

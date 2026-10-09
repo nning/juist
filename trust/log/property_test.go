@@ -212,8 +212,8 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	var err error
 	var devices []types.PrivateIdentity
 
-	op := g.rng.IntN(22)
-	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14, 18, 20, 21}, op) {
+	op := g.rng.IntN(23)
+	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14, 18, 20, 21, 22}, op) {
 		return types.AUM{}, nil, false
 	}
 	switch op {
@@ -317,6 +317,16 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	case 21: // rename a member, sometimes to a name another holds
 		names := []string{"laptop", "Laptop", members[g.rng.IntN(len(members))].Name}
 		aum, err = b.RenameNode(victim.Identity, names[g.rng.IntN(len(names))])
+	case 22: // let a member reach every other, use it as an exit node, or pass nothing
+		policies := []*types.Policy{
+			{Rules: []types.PolicyRule{{From: types.PolicyRefs{Nodes: []types.Identity{victim.Identity}},
+				To: types.PolicyRefs{Any: true}}}},
+			{Tables: []types.PolicyTable{{Name: "exits", Nodes: []types.Identity{victim.Identity}}},
+				Rules: []types.PolicyRule{{From: types.PolicyRefs{Any: true},
+					To: types.PolicyRefs{Internet: true, ViaTables: []string{"exits"}}}}},
+			{},
+		}
+		aum, err = b.SetPolicy(policies[g.rng.IntN(len(policies))])
 	}
 	if err != nil || !g.sign(&aum, base, devices) {
 		return types.AUM{}, nil, false

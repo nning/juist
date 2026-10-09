@@ -67,7 +67,11 @@ func parseBackupLine(line, tag string) ([]byte, error) {
 
 // readBackupLine reads an exported line from stdin, without echo on a
 // terminal: it is a secret.
-func (a *app) readBackupLine() (string, error) {
+func (a *app) readBackupLine() (string, error) { return a.readSecretLine("paste the line: ") }
+
+// readSecretLine reads a line from stdin, asking with prompt and without
+// echo on a terminal.
+func (a *app) readSecretLine(prompt string) (string, error) {
 	if f, ok := a.in.(*os.File); ok && isTerminal(f) {
 		fd := int(f.Fd())
 		old, err := unix.IoctlGetTermios(fd, ioctlGetTermios)
@@ -83,7 +87,7 @@ func (a *app) readBackupLine() (string, error) {
 			_ = unix.IoctlSetTermios(fd, ioctlSetTermios, old)
 			fmt.Fprintln(a.errOut)
 		}()
-		fmt.Fprint(a.errOut, "paste the line: ")
+		fmt.Fprint(a.errOut, prompt)
 	}
 	line, err := a.readLine(a.ctx)
 	switch {

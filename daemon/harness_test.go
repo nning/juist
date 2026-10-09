@@ -15,6 +15,7 @@ import (
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
+	"tailscale.com/types/ipproto"
 )
 
 // device is one member's key material: everything a daemon needs to be that
@@ -325,15 +326,7 @@ func (m *fakeManager) SetServe(s conn.Serve) error {
 	return nil
 }
 
-func (m *fakeManager) SetIngressPorts(ports conn.IngressPorts) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.ingressPorts = slices.Clone(ports.TCP)
-	m.ingressUDP = slices.Clone(ports.UDP)
-	return nil
-}
-
-// ingressPortsNow is the ports an ingress was last allowed.
+// ingressPortsNow is the TCP ports an ingress was last allowed.
 func (m *fakeManager) ingressPortsNow() []uint16 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -357,6 +350,21 @@ func (m *fakeManager) SetPeers(peers []conn.Peer) error {
 	}
 	m.peers = append([]conn.Peer(nil), peers...)
 	m.sets++
+	// An ingress, without a policy, is the one peer that may send anything
+	// and open ports of this device's.
+	m.ingressPorts, m.ingressUDP = nil, nil
+	for _, p := range peers {
+		if a := p.Access; a != nil && len(a.Open) > 0 && slices.Equal(a.Sends, []conn.Ports{{}}) {
+			m.ingressPorts, m.ingressUDP = nil, nil
+			for _, o := range a.Open {
+				if o.Proto == ipproto.TCP {
+					m.ingressPorts = append(m.ingressPorts, o.First)
+				} else {
+					m.ingressUDP = append(m.ingressUDP, o.First)
+				}
+			}
+		}
+	}
 	return nil
 }
 

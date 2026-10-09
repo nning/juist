@@ -450,6 +450,10 @@ type Snapshot struct {
 	// Domain is the network's public domain, under which members publish
 	// names; empty for none. Schema 9 and later.
 	Domain string `cbor:"15,keyasint,omitempty"`
+
+	// Policy is what each member may open on which; absent for every member
+	// anything. Schema 13 and later.
+	Policy *Policy `cbor:"16,keyasint,omitempty"`
 }
 
 // V4Ranges returns the ranges the network's overlay IPv4 addresses may lie in.
@@ -748,6 +752,9 @@ func (s *Snapshot) Clone() *Snapshot {
 		r := RetiringRanges{Prefixes: slices.Clone(s.V4Retiring.Prefixes), Until: s.V4Retiring.Until}
 		out.V4Retiring = &r
 	}
+	if s.Policy != nil {
+		out.Policy = s.Policy.Clone()
+	}
 	out.Disablement = slices.Clone(s.Disablement)
 	out.Admins = make([]AdminKey, len(s.Admins))
 	for i := range s.Admins {
@@ -908,6 +915,18 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 		if need, what := s.Nodes[i].NeedsSchema(); s.Schema < need {
 			return fmt.Errorf("node %v has %s, which needs %v; the state is at %v",
 				s.Nodes[i].Identity.ShortString(), what, need, s.Schema)
+		}
+	}
+
+	if s.Policy != nil {
+		if s.Schema < SchemaPolicy {
+			return fmt.Errorf("an access policy needs %v; the state is at %v", SchemaPolicy, s.Schema)
+		}
+		if err := s.Policy.Validate(); err != nil {
+			return fmt.Errorf("policy: %w", err)
+		}
+		if err := s.Policy.ValidateMembers(s.Nodes); err != nil {
+			return err
 		}
 	}
 

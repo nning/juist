@@ -956,3 +956,39 @@ func TestTheIngressProfilesLetQUICIn(t *testing.T) {
 		t.Errorf("an upgrade left ufw's profile as it was:\n%s", calls)
 	}
 }
+
+// FreeBSD's relay.sh leaves root's grant the helper binds 443 by, once, and
+// takes it back with the directory it made.
+func TestFreeBSDRelayScriptGrantsAndTakesBack443(t *testing.T) {
+	root := t.TempDir()
+	b, err := os.ReadFile("freebsd/libexec/relay.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "relay.sh")
+	b = []byte(strings.ReplaceAll(string(b), "/usr/local/etc/juist", root+"/usr/local/etc/juist"))
+	if err := os.WriteFile(script, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(arg string) {
+		t.Helper()
+		if out, err := exec.Command("/bin/sh", script, arg).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", arg, err, out)
+		}
+	}
+	grant := filepath.Join(root, "usr/local/etc/juist/relay-443")
+	run("on")
+	run("on")
+	fi, err := os.Stat(grant)
+	if err != nil || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("the grant is %v, %v", fi, err)
+	}
+	run("off")
+	if _, err := os.Stat(filepath.Dir(grant)); !os.IsNotExist(err) {
+		t.Errorf("off left %s: %v", filepath.Dir(grant), err)
+	}
+	run("off")
+	if out, err := exec.Command("/bin/sh", script, "maybe").CombinedOutput(); err == nil {
+		t.Errorf("an unknown action was taken:\n%s", out)
+	}
+}

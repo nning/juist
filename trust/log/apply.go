@@ -70,6 +70,7 @@ var kindRules = map[types.Kind]kindRule{
 	types.KindSetDomain:         {types.SchemaPublish, "a public domain", (*State).setDomain},
 	types.KindSetPublished:      {types.SchemaPublish, "published names", (*State).setPublished},
 	types.KindRenameNode:        {types.SchemaRenameNode, "renaming a device", (*State).renameNode},
+	types.KindSetPolicy:         {types.SchemaPolicy, "an access policy", (*State).setPolicy},
 }
 
 // inEffectError is a record refused because what it does is done already,
@@ -91,6 +92,7 @@ func (s *State) clone() *State {
 		v4Prefix:    s.v4Prefix,   // replaced, never mutated
 		v4Retiring:  s.v4Retiring, // replaced, never mutated
 		domain:      s.domain,
+		policy:      s.policy,
 		disablement: s.disablement, // never mutated after genesis
 		admins:      maps.Clone(s.admins),
 		nodes:       maps.Clone(s.nodes), // records are immutable once stored
@@ -187,6 +189,9 @@ func (next *State) removeNode(a *types.AUM, _ applyMode) error {
 		return err
 	}
 	delete(next.nodes, *a.Subject)
+	if next.policy != nil {
+		next.policy = next.policy.Rekeyed(*a.Subject, nil)
+	}
 	return nil
 }
 
@@ -246,6 +251,24 @@ func (next *State) setDomain(a *types.AUM, _ applyMode) error {
 	return nil
 }
 
+func (next *State) setPolicy(a *types.AUM, _ applyMode) error {
+	if a.Policy.Empty() {
+		if next.policy == nil {
+			return inEffect(errors.New("log: the network has no policy already"))
+		}
+		next.policy = nil
+		return nil
+	}
+	if next.policy != nil && bytes.Equal(next.policy.Encode(), a.Policy.Encode()) {
+		return inEffect(errors.New("log: the network has this policy already"))
+	}
+	if err := a.Policy.ValidateMembers(next.Nodes()); err != nil {
+		return fmt.Errorf("log: %w", err)
+	}
+	next.policy = a.Policy.Clone()
+	return nil
+}
+
 func (next *State) setPublished(a *types.AUM, _ applyMode) error {
 	cur, err := next.member(*a.Subject)
 	if err != nil {
@@ -294,6 +317,9 @@ func (next *State) rotateIdentity(a *types.AUM, _ applyMode) error {
 		return err
 	}
 	next.nodes[*a.NewIdentity] = updated
+	if next.policy != nil {
+		next.policy = next.policy.Rekeyed(*a.Subject, a.NewIdentity)
+	}
 	return nil
 }
 

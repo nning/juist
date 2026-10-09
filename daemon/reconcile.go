@@ -9,10 +9,13 @@ import (
 	"slices"
 	"time"
 
+	"tailscale.com/types/key"
+
 	"github.com/nning/juist/ipc"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -60,6 +63,7 @@ func (d *Daemon) Reconcile() error {
 	d.adoptEpoch(state)
 	d.noteSchema()
 	d.pruneWaiting(state)
+	d.endpoints.SetRelayNames(state.Schema() >= types.SchemaRelayName)
 	if d.onAddrsMoved != nil && state.IsMember(d.self) &&
 		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.startAddrs) {
 		d.movedOnce.Do(func() { go d.onAddrsMoved() })
@@ -90,15 +94,21 @@ func (d *Daemon) Reconcile() error {
 
 	staleKeys := d.keysAreStale(state)
 	fresh, admit := d.checkFreshness(state, s.now)
+	// Before anything below can end the reconcile early.
+	d.setGossipPeers(s.view, !fresh.Fresh(s.now), admit)
+	d.planSealing(s)
+	d.pruneOpened(s.live)
 	held, discoUsers := d.heldAnnouncements(s)
 	relays, err := d.installRelays(s, held)
 	if err != nil {
 		d.applyExit(d.exitDown("the data plane refused the relay set"))
 		// Published ports close too, as they would once the view went stale.
-		_ = d.manager.SetIngressPorts(conn.IngressPorts{TCP: []uint16{d.gossipPort}})
+		d.closeToIngresses()
 		return err
 	}
-	b := d.buildPeers(s, held, discoUsers, relays, admit)
+	ports := d.planPublish(s, fresh.Fresh(s.now))
+	ap := d.accessPlan(s, !fresh.Fresh(s.now), ports.access())
+	b := d.buildPeers(s, held, discoUsers, relays, admit, &ap)
 	d.noteNewAnnouncements(b.named)
 	d.setInstalled(b.named)
 	sub := d.planSubnets(s, fresh.Fresh(s.now), held, b.peers, b.named)
@@ -106,18 +116,12 @@ func (d *Daemon) Reconcile() error {
 	d.mu.Lock()
 	exit.accepted = d.acceptNames
 	d.mu.Unlock()
-	ports := d.planPublish(s, fresh.Fresh(s.now))
 	d.notePublishing()
 	d.noteIngressPorts(d.publicPorts(s, fresh.Fresh(s.now)))
-	exit.zone, exit.overrides, exit.namesUntil = d.namesZone(state, fresh, exit.accepted, s.now,
+	exit.zone, exit.overrides, exit.namesUntil = d.namesZone(state, s.view, fresh, exit.accepted, s.now,
 		func(id types.Identity) bool {
 			return id == d.self && d.publishing() || id != d.self && held[id].Published
 		})
-	// Before the peers, so that a name withdrawn is closed to an ingress
-	// before anything else changes.
-	if err := d.manager.SetIngressPorts(ports); err != nil {
-		d.logOnce("daemon: opening published ports to the ingresses: " + err.Error())
-	}
 	// The peer carrying the routes first, then the routing into it: the
 	// other order would send traffic into a tunnel nobody carries.
 	if err := d.manager.SetPeers(b.peers); err != nil {
@@ -126,6 +130,9 @@ func (d *Daemon) Reconcile() error {
 		d.applyExit(d.exitDown("the data plane refused the peer set"))
 		return err
 	}
+	d.mu.Lock()
+	d.lastPeers, d.lastIngresses = b.peers, b.ingresses
+	d.mu.Unlock()
 	d.applyExit(exit)
 
 	d.pruneEndpoints(s.live)
@@ -138,7 +145,7 @@ func (d *Daemon) Reconcile() error {
 	if refused {
 		d.logOnce("daemon: members refuse this device a catch-up and none answers it; it was most likely removed")
 	}
-	devices := ipc.DevicesOf(state, s.now)
+	devices := peerDevices(ipc.DevicesOf(state, s.now), d.self, s.view)
 	for i := range devices {
 		devices[i].Serving = len(devices[i].Published) > 0 && d.servesPublished(devices[i].Identity)
 	}
@@ -170,6 +177,7 @@ type snapshot struct {
 	members []types.NodeRecord
 	live    map[types.Identity]bool
 	expired int
+	view    policy.View // what the policy means for this device
 }
 
 func (d *Daemon) snapshotOf(state *log.State) snapshot {
@@ -196,6 +204,7 @@ func (d *Daemon) membersOf(state *log.State) snapshot {
 		}
 		s.live[s.members[i].Identity] = true
 	}
+	s.view = policy.NetworkOf(state, s.now).View(d.self)
 	return s
 }
 
@@ -322,6 +331,7 @@ func relayCapableIn(s snapshot) int {
 // A peerSet is the peer set a reconcile derived, and who was left out.
 type peerSet struct {
 	peers      []conn.Peer
+	ingresses  map[key.NodePublic]bool // peers kept to what is published
 	named      []namedPeer
 	silent     []string // members with no announcement held
 	conflicted int      // members left out for a disco key another uses
@@ -336,11 +346,12 @@ type peerSet struct {
 // make SetPeers refuse the whole set, a mesh kill switch. Every peer in a
 // colliding set is dropped here instead.
 func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
-	discoUsers map[gossip.DiscoKey]int, relays []conn.Relay, admit func(types.Identity) bool) peerSet {
+	discoUsers map[gossip.DiscoKey]int, relays []conn.Relay, admit func(types.Identity) bool, ap *accessPlan) peerSet {
 	out := peerSet{peers: make([]conn.Peer, 0, len(s.members))}
 	for i := range s.members {
 		n := &s.members[i]
-		if n.Identity == d.self || !s.live[n.Identity] || !admit(n.Identity) {
+		if n.Identity == d.self || !s.live[n.Identity] || !admit(n.Identity) ||
+			s.view.Restricted && !s.view.Peers[n.Identity] {
 			continue
 		}
 		ep, ok := held[n.Identity]
@@ -359,14 +370,15 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			NodeKey:   conn.NodePublicFromRaw32(n.WireGuard),
 			DiscoKey:  conn.DiscoPublicFromRaw32(ep.Disco),
 			Addrs:     d.overlayAddrs(s.state, n.Identity, s.now),
-			Endpoints: ep.Addrs,
+			Endpoints: d.underlay(ep),
 			HomeRelay: homeRelay(ep, relays),
+			Access:    ap.access(n, ep),
 		}
-		switch {
-		case n.HasRole(types.RoleIngress):
-			p.Confined = conn.ConfineIngress
-		case n.HasRole(types.RoleService):
-			p.Confined = conn.ConfineService
+		if n.HasRole(types.RoleIngress) {
+			if out.ingresses == nil {
+				out.ingresses = map[key.NodePublic]bool{}
+			}
+			out.ingresses[p.NodeKey] = true
 		}
 		out.peers = append(out.peers, p)
 		out.named = append(out.named, namedPeer{name: n.Name, id: n.Identity, wg: n.WireGuard, peer: p})

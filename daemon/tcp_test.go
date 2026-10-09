@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
@@ -112,7 +113,7 @@ func TestMembersReachANamePublishedByTCPDirectly(t *testing.T) {
 			mcByTCP, {Label: "smtp", Port: 25, Proxy: true, Public: 25}, sshByTCP}
 	}, nil)
 	target := f.nw.devices[1].record.Identity
-	z, _, _ := f.d.namesZone(f.auth.State(), log.Freshness{}, false, time.Now().Unix(),
+	z, _, _ := f.d.namesZone(f.auth.State(), policy.View{}, log.Freshness{}, false, time.Now().Unix(),
 		func(id types.Identity) bool { return id == target })
 	if o, ok := z.Overrides["mc.pub.example.org"]; !ok || o.Target != target.String() {
 		t.Errorf("a name by TCP on its own port resolves to %+v, %v", o, ok)
@@ -286,10 +287,12 @@ func TestAnIngressSendsQUICToNamesOfferedHTTP3Alone(t *testing.T) {
 		f := exitFixtureWith(t, func(nw *network) {
 			nw.domain = "pub.example.org"
 			nw.devices[0].record.Published = []types.PublishedName{immichTLS, mcByTCP}
+			nw.devices[1].record.Roles = []types.Role{types.RoleIngress}
 		}, func(o *Options) {
 			o.ServePublished = true
 			o.ServeTo = map[string]string{immichTLS.Label: c.to, mcByTCP.Label: "127.0.0.1:25565"}
 		})
+		f.learnOthers(t)
 		if err := f.d.Reconcile(); err != nil {
 			t.Fatal(err)
 		}

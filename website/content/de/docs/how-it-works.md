@@ -76,8 +76,9 @@ Admins sie mit `juist approve` bestätigen. Mehr dazu unter
 
 ## Rollen {#roles}
 
-Jedes Mitglied kann jedes andere erreichen. Mit einer **Rolle** übernimmt ein
-Gerät eine zusätzliche Aufgabe. Ein Admin vergibt sie mit
+Jedes Mitglied kann jedes andere erreichen, sofern
+[Zugriffsregeln]({{< relref "docs/access" >}}) nichts anderes festlegen. Mit
+einer **Rolle** übernimmt ein Gerät eine zusätzliche Aufgabe. Ein Admin vergibt sie mit
 `juist grant DEVICE ROLE` und entzieht sie mit `juist revoke`.
 
 | Rolle | Aufgabe des Geräts |
@@ -88,6 +89,9 @@ Gerät eine zusätzliche Aufgabe. Ein Admin vergibt sie mit
 | `ingress` | Nimmt Verbindungen aus dem Internet für die Namen an, die Geräte veröffentlichen. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
 | `service` | Ein Service-Mitglied, also ein eigener juistd neben einem veröffentlichten Dienst. Alle anderen Geräte verhindern, dass es von sich aus Verbindungen aufbaut. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
 | `publish` | Darf sofort unter dem eigenen Namen des Geräts teilen, ohne jedes Mal einen Admin zu fragen: `juist share`, `juist publish PORT`. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
+
+Eine Rolle legt fest, welches Gerät als Exit-Node oder Relay dienen darf.
+Gibt es Zugriffsregeln, legen sie fest, welche Geräte es nutzen dürfen.
 
 Admin ist keine Rolle eines Geräts. Ein Admin ist ein Mensch mit Schlüsseln.
 Ein Voucher dagegen ist ein Gerät und hat keinen Admin-Schlüssel.
@@ -155,8 +159,9 @@ Wo systemd-resolved läuft, erreichst du jedes Mitglied unter
 ssh laptop.home.juist
 ```
 
-Admins können auch öffentliche Namen wie `mail.example.org` auf Mitglieder
-verweisen lassen. Mehr dazu unter [Namen]({{< relref "docs/names" >}}).
+Unter Zugriffsregeln kennt ein Gerät nur die Namen der Mitglieder, zu denen
+es einen Tunnel hat. Admins können auch öffentliche Namen wie
+`mail.example.org` auf Mitglieder verweisen lassen. Mehr dazu unter [Namen]({{< relref "docs/names" >}}).
 
 ## Frische und Voucher {#freshness-and-vouchers}
 

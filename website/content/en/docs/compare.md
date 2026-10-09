@@ -50,8 +50,9 @@ device of their own. [Tailnet Lock](https://tailscale.com/kb/1226/tailnet-lock)
 closes that gap: devices accept a new key only if a key you hold has signed
 it. Removing a device and spreading the change still go through the server.
 
-Choose Tailscale if you want clients for every platform, user accounts and
-access rules today, and can accept a company's server at the centre.
+Choose Tailscale if you want clients for every platform and user accounts
+with access rules by user today, and can accept a company's server at the
+centre.
 
 ## Headscale {#headscale}
 
@@ -73,7 +74,7 @@ it yourself, together with its signal and relay servers. The client is
 BSD-3-Clause, the servers are AGPL-3.0.
 
 Choose NetBird if you want a self-hosted server with a dashboard, sign-in
-through your identity provider and access rules.
+through your identity provider and access rules by user.
 
 ## Netmaker {#netmaker}
 
@@ -186,10 +187,8 @@ belongs.
 - juist has not had a security audit.
 - It runs on Linux and FreeBSD, and on Android as a member without names,
   roles, exit nodes or subnets; there is nothing for Windows, macOS or iOS.
-- It has no access rules: every member reaches every port of every other
-  member.
-- It knows devices, not users, and has no sign-in through an identity
-  provider.
+- It knows devices, not users: its access rules name devices, and there is
+  no sign-in through an identity provider.
 - A removed device is taken out as soon as the other devices hear of it, but
   a cut-off device may hear of it only after up to 48 hours. A central server
   tells every device it reaches at once.

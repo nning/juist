@@ -11,4 +11,5 @@ for i in juist1 juist2 juist3 juist4 juist5 juist6 juist7 juist8 juist9 ""; do
 	$rc onestatus $i >/dev/null 2>&1 && $rc onestop $i >/dev/null 2>&1
 done
 $rc oneclear >/dev/null
+/usr/local/libexec/juist/relay.sh off
 exit 0

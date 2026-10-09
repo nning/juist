@@ -27,14 +27,18 @@ const maxCachedEndpoints = 2 * types.MaxNodes
 type Cache struct {
 	mu     sync.Mutex
 	by     map[types.Identity]Endpoint
+	keys   map[types.Identity]AddrKey // members' alone
 	renews map[types.Identity]bool
 	member map[types.Identity]bool
 	former map[types.Identity]bool
+	// noRelayNames refuses relay names, below [types.SchemaRelayName]:
+	// older members refuse a whole frame that carries one.
+	noRelayNames bool
 }
 
 // NewCache returns an empty cache.
 func NewCache() *Cache {
-	return &Cache{by: map[types.Identity]Endpoint{}, renews: map[types.Identity]bool{}}
+	return &Cache{by: map[types.Identity]Endpoint{}, keys: map[types.Identity]AddrKey{}, renews: map[types.Identity]bool{}}
 }
 
 // Renews reports whether a node has been seen signing its announcement again
@@ -63,6 +67,28 @@ func (c *Cache) SetMembership(members, former []types.Identity) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.member, c.former = m, f
+	for id := range c.keys {
+		if !m[id] {
+			delete(c.keys, id)
+		}
+	}
+}
+
+// SetRelayNames says whether the network's schema lets announcements name
+// a relay on 443; where not, those held are dropped and others refused.
+func (c *Cache) SetRelayNames(ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.noRelayNames = !ok
+	if ok {
+		return
+	}
+	for id, e := range c.by {
+		if e.Relay != nil && e.Relay.Name != "" {
+			delete(c.by, id)
+			delete(c.renews, id)
+		}
+	}
 }
 
 // Add records an announcement if it is newer than what is held, reporting
@@ -74,7 +100,7 @@ func (c *Cache) SetMembership(members, former []types.Identity) {
 func (c *Cache) Add(e Endpoint) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.former[e.Identity] {
+	if c.former[e.Identity] || c.noRelayNames && e.Relay != nil && e.Relay.Name != "" {
 		return false
 	}
 	cur, held := c.by[e.Identity]
@@ -182,4 +208,55 @@ func (c *Cache) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.by)
+}
+
+// AddKey records a member's address key if it is newer than what is held,
+// reporting whether it is. A non-member's is refused: a key opens nothing
+// before the log admits its owner, and refusing it bounds the set. The
+// record must already be verified.
+func (c *Cache) AddKey(k AddrKey) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.member[k.Owner] {
+		return false
+	}
+	if cur, held := c.keys[k.Owner]; held && k.Seq <= cur.Seq {
+		return false
+	}
+	k.Wraps = slices.Clone(k.Wraps)
+	c.keys[k.Owner] = k
+	return true
+}
+
+// KeepKey is AddKey for a key this node persisted, before it knows who is
+// a member; [Cache.SetMembership] drops it where its owner is none.
+func (c *Cache) KeepKey(k AddrKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cur, held := c.keys[k.Owner]; !held || k.Seq > cur.Seq {
+		k.Wraps = slices.Clone(k.Wraps)
+		c.keys[k.Owner] = k
+	}
+}
+
+// Key returns the address key held for a member.
+func (c *Cache) Key(id types.Identity) (AddrKey, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k, ok := c.keys[id]
+	k.Wraps = slices.Clone(k.Wraps)
+	return k, ok
+}
+
+// Keys returns every address key held, sorted by owner.
+func (c *Cache) Keys() []AddrKey {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]AddrKey, 0, len(c.keys))
+	for _, k := range c.keys {
+		k.Wraps = slices.Clone(k.Wraps)
+		out = append(out, k)
+	}
+	slices.SortFunc(out, func(a, b AddrKey) int { return a.Owner.Compare(b.Owner) })
+	return out
 }

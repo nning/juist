@@ -67,8 +67,13 @@ Ein Firmennetz lässt vielleicht nichts hinaus außer über seinen HTTP-Proxy.
 Nenne den Proxy, mit Benutzer und Passwort, wo er danach fragt:
 
 ```sh
-sudo juist set --https-only --proxy http://user:password@proxy.example.com:3128
+sudo juist set --https-only --proxy -
 ```
+
+juist fragt nach der URL, etwa
+`http://user:password@proxy.example.com:3128`, und zeigt sie beim Tippen
+nicht an: auf der Kommandozeile könnte jeder Benutzer des Geräts das Passwort
+lesen. Ohne Passwort genügt `--proxy http://proxy.example.com:3128`.
 
 Der Proxy wird nur um `CONNECT relay.example.org:443` gebeten und löst den
 Namen selbst auf; das Gerät braucht dann kein eigenes DNS. Ohne `--proxy`
@@ -82,7 +87,8 @@ zurück. `juist status` zeigt den Proxy ohne sein Passwort.
   Relays an verschiedenen Orten halten ein Gerät erreichbar, wenn eines
   ausfällt.
 - Das Zertifikat des Relays wird gegen die Zertifizierungsstellen geprüft,
-  denen das System vertraut, wie ein Browser es tut. Eine Firma, die TLS
+  denen das System vertraut, wie ein Browser es tut, und der Name eines Relays
+  wird genutzt, sobald der Server unter ihm sagt, dass er dieses Relay ist. Eine Firma, die TLS
   aufbricht, sieht nicht mehr als das Relay: WireGuard verschlüsselt von Ende
   zu Ende, sie sieht also, welche Geräte miteinander sprechen, nicht was.
 - Es verbirgt juist nicht vor einem Zensor, der Server abtastet oder TLS am

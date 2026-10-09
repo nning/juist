@@ -65,8 +65,9 @@ the other admins approve it with `juist approve`. See
 
 ## Roles {#roles}
 
-Every member reaches every other member. A **role** gives a device one more
-job. An admin gives it with `juist grant DEVICE ROLE` and takes it back with
+Every member reaches every other member, unless an
+[access policy]({{< relref "docs/access" >}}) says otherwise. A **role** gives
+a device one more job. An admin gives it with `juist grant DEVICE ROLE` and takes it back with
 `juist revoke`.
 
 | Role | What the device does |
@@ -77,6 +78,9 @@ job. An admin gives it with `juist grant DEVICE ROLE` and takes it back with
 | `ingress` | Takes connections from the internet for the names devices publish. See [Publishing services]({{< relref "docs/publishing" >}}). |
 | `service` | A service member: a juistd of its own beside one published service. Every device keeps it from opening any connection. See [Publishing services]({{< relref "docs/publishing" >}}). |
 | `publish` | Shares under the device's own name at once, without an admin each time: `juist share`, `juist publish PORT`. See [Publishing services]({{< relref "docs/publishing" >}}). |
+
+A role says which device may serve as an exit node or relay. Under an access
+policy, the policy says which devices may use it.
 
 Being an admin is not a role of a device. An admin is a person with keys, and
 a voucher is a device that holds no admin key.
@@ -140,7 +144,9 @@ Where systemd-resolved runs, every member is reachable by name as
 ssh laptop.home.juist
 ```
 
-Admins can also point public names, such as `mail.example.org`, at members.
+Under an access policy, a device has names only for the members it keeps a
+tunnel with. Admins can also point public names, such as `mail.example.org`,
+at members.
 See [Names]({{< relref "docs/names" >}}).
 
 ## Freshness and vouchers {#freshness-and-vouchers}

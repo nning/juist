@@ -67,6 +67,8 @@ var commands = []command{
 
 	{name: "grant", group: groupAdmin, summary: "give a device a role", run: cmdGrant},
 	{name: "revoke", group: groupAdmin, summary: "take a role from a device", run: cmdRevoke},
+	{name: "policy", group: groupAdmin, summary: "say which device may open what on which", run: cmdPolicy,
+		family: policyFamily},
 	{name: "approve", aliases: []string{"apply"}, group: groupAdmin, summary: "sign and apply change files", run: cmdApprove},
 	{name: "admins", group: groupAdmin, summary: "manage admin keys and quorum", run: cmdAdmins, family: adminsFamily},
 	{name: "set", group: groupAdmin, summary: "change device settings", run: cmdSet},

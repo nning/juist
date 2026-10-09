@@ -19,7 +19,8 @@ members share, so the removed device can no longer find the others.
 ## Removing a device
 
 {{< step on="an admin's device" >}}
-Remove the device by its name, its address, or its key (`juist devices --keys`):
+Remove the device by its name, its address, or its key (`juist devices --keys`,
+with `--all` where an access policy keeps it apart from this device):
 
 ```sh
 juist remove phone

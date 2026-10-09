@@ -78,6 +78,7 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | reach the network from a hotel or office that lets HTTPS alone out | `sudo juist set --relay-name relay.example.org` on a relay, `sudo juist set --https-only` here | [HTTPS alone](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |
 | let every device reach the LAN behind one | `juist subnet add nas 192.168.1.0/24`, then `juist subnet serve` on it | [subnets](https://docs.juist.nning.io/en/docs/subnets/) |
+| say which device may open what on which, and use which exit node or subnet | `juist policy edit`, or `juist policy set policy.conf` | [access policy](https://docs.juist.nning.io/en/docs/access/) |
 | publish a service on the internet, or share a file | `juist publish add immich 127.0.0.1:2283`, `juist share ~/photos` | [publishing](https://docs.juist.nning.io/en/docs/publishing/) |
 | rename or renumber the network, or rename a device | `juist network rename office`, `juist network renumber 10.7.0.0/22`, `juist rename phone tablet` | [changes](https://docs.juist.nning.io/en/docs/network-changes/) |
 | see every change, and who approved it | `juist log` | [admins](https://docs.juist.nning.io/en/docs/admins/) |
@@ -202,11 +203,11 @@ are done: the signed log with quorum, WireGuard with NAT traversal and member
 relays, invites, several networks, exit nodes, subnet routers, names,
 publishing, and Debian, Fedora and FreeBSD packages; **M11**, TCP
 services and HTTP/3 through the ingress; **M12**, ending a network with a
-break-glass secret and backing admin keys up; and **M13**, reaching the
-network from one that passes HTTPS alone.
+break-glass secret and backing admin keys up; **M13**, reaching the
+network from one that passes HTTPS alone; and **M14**, an access policy
+saying which device may open what on which.
 
-Not yet: ACLs (every member reaches every port on the others), and the
-post-quantum data plane.
+Not yet: the post-quantum data plane.
 
 ## Development
 

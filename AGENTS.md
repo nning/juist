@@ -92,6 +92,11 @@ it leaves on purpose (the `juist` user, the keys in `/var/lib/juist`) is said.
 A host running tailscaled is a normal test host; what juist must not share
 with it is in `07-embedding-notes.md`, "Sharing a host with tailscaled".
 
+A commit that raises `types.CurrentSchema` is followed by a new Android app:
+`make android`, and the signed release APK published as a GitHub release
+tagged `android-schema<N>-<short commit>`. An app on an older schema stops
+following any network upgraded past it.
+
 ## CLI
 
 Few commands, each clear on its own. Every option has a default that makes it

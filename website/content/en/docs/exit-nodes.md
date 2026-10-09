@@ -90,8 +90,10 @@ go nowhere rather than to the LAN. Going direct is your choice, with
 - A device that uses an exit node serves as none. A device in
   [several networks]({{< relref "docs/networks" >}}) sends the internet through
   one network only.
-- An exit node is open to every member: there are no access rules (ACLs)
-  that limit who may use it.
+- Without an [access policy]({{< relref "docs/access" >}}) every member may
+  use an exit node. With one, a device uses only the exit nodes a rule such
+  as `pass from laptop to internet via vps` passes it, and the exit node
+  forwards only that.
 - A firewall configured by hand on the exit node must let in UDP and TCP 41646
   on `juist0`, where it answers its members' DNS
   ([Relays, ports and firewalls]({{< relref "docs/relays" >}})).
@@ -108,6 +110,7 @@ go nowhere rather than to the LAN. Going direct is your choice, with
 |---|---|
 | `juist status`: `Exit node` says `vps, internet refused: …` | bring vps back, or `juist exit off` to go direct |
 | `juist exit use vps`: `vps does not serve as an exit node` | run `juist exit serve` on vps, or add `--force` |
+| `juist status`: `Exit node` says `vps, internet refused: the access policy does not let this device use it` | add a rule `pass from … to internet via vps` ([Access policy]({{< relref "docs/access" >}})) |
 | on vps, `juist status`: `this device does not serve: IP forwarding is off on this host` | run `juist exit serve` again, which sets it up with sudo |
 | `warning: DNS goes to …, outside the tunnel: systemd-resolved refused juistd` | install the package, whose polkit rule allows juistd that, and polkit |
 | `warning: strict reverse-path filtering on … drops the exit node's answers` | run the `sudo sysctl -w …` line the hint prints |

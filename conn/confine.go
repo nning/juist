@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go4.org/netipx"
 	"tailscale.com/net/flowtrack"
 	"tailscale.com/net/packet"
 	"tailscale.com/net/tstun"
@@ -16,23 +17,59 @@ import (
 	"tailscale.com/wgengine/filter"
 )
 
-// Confinement is what a member may send this node, decided by its role.
-type Confinement uint8
+// An Access is what a restricted peer may open on this node, and through it,
+// and what this node may open on the peer. Anything else the peer sends is
+// dropped but replies to what this node opened; anything else this node
+// would open on it, too. Without one a peer is left to the filter, which
+// takes anything from a member.
+type Access struct {
+	// Open is what the peer may open on this node's own addresses.
+	Open []Ports
 
-const (
-	// ConfineNone leaves a peer to the filter, which takes anything from a
-	// member.
-	ConfineNone Confinement = iota
+	// Through is what it may open on what this node serves: the internet, as
+	// an exit node, or its subnets; each prefix holding a destination adds
+	// its ports.
+	Through []Through
 
-	// ConfineIngress takes from a peer replies to what this node opened, and
-	// TCP and UDP to this node's own addresses on the ports
-	// [Manager.SetIngressPorts] names for each.
-	ConfineIngress
+	// Sends is what this node may open on the peer's own addresses.
+	Sends []Ports
+}
 
-	// ConfineService takes from a peer replies to what this node opened
-	// alone: a service member opens nothing.
-	ConfineService
-)
+// Ports are a protocol, zero for every one, and its ports First to Last,
+// both zero for every port.
+type Ports struct {
+	Proto       ipproto.Proto
+	First, Last uint16
+}
+
+// Through is ports on a prefix this node serves.
+type Through struct {
+	Prefix netip.Prefix
+	Ports  []Ports
+}
+
+// Clone returns a deep copy, nil for nil.
+func (a *Access) Clone() *Access {
+	if a == nil {
+		return nil
+	}
+	out := &Access{Open: slices.Clone(a.Open), Through: slices.Clone(a.Through), Sends: slices.Clone(a.Sends)}
+	for i := range out.Through {
+		out.Through[i].Ports = slices.Clone(out.Through[i].Ports)
+	}
+	return out
+}
+
+// passes reports whether ports pass a packet of proto to port, or an echo
+// request, which has none, where the protocol is passed at all.
+func passes(ports []Ports, proto ipproto.Proto, port uint16) bool {
+	for _, p := range ports {
+		if p.Proto == 0 || p.Proto == proto && (p.First == 0 || p.First <= port && port <= p.Last) {
+			return true
+		}
+	}
+	return false
+}
 
 // maxConfinedFlows bounds the flows this node opened to confined peers, and
 // maxFlowsPerAddr those to one of their addresses, so that one peer's churn
@@ -42,9 +79,9 @@ const (
 	maxFlowsPerAddr  = 4096
 )
 
-// A confiner keeps confined peers to what their [Confinement] allows. The
-// filter cannot: it takes TCP without SYN, ICMP errors and TSMP from any
-// member, to any address this node serves.
+// A confiner keeps restricted peers to their [Access]. The filter cannot: it
+// takes TCP without SYN, ICMP errors and TSMP from any member, to any
+// address this node serves.
 type confiner struct {
 	policy atomic.Pointer[confinePolicy]
 
@@ -74,26 +111,12 @@ type closingFlow struct {
 // peer's retransmissions and last ACK.
 const closedGrace = time.Minute
 
-// IngressPorts are the ports of this node's own addresses an ingress may
-// open TCP connections to, and send UDP datagrams to, sorted.
-type IngressPorts struct {
-	TCP, UDP []uint16
-}
-
-func (p IngressPorts) sorted() IngressPorts {
-	clean := func(ports []uint16) []uint16 {
-		ports = slices.Clone(ports)
-		slices.Sort(ports)
-		return slices.Compact(ports)
-	}
-	return IngressPorts{TCP: clean(p.TCP), UDP: clean(p.UDP)}
-}
-
-// confinePolicy is one immutable snapshot of who is confined and to what.
+// confinePolicy is one immutable snapshot of who is restricted and to what.
 type confinePolicy struct {
-	peers map[netip.Addr]Confinement // confined peers' overlay addresses
-	self  []netip.Addr               // this node's own overlay addresses
-	ports IngressPorts               // what an ingress may open
+	peers  map[netip.Addr]*Access        // restricted peers' overlay addresses
+	routes map[netip.Addr][]netip.Prefix // what this node routes through each
+	routed *netipx.IPSet                 // all of those
+	self   []netip.Addr                  // this node's own overlay addresses
 }
 
 // confine installs c around w's filter. It must run before w starts, since
@@ -105,18 +128,24 @@ func confine(w *tstun.Wrapper) *confiner {
 	return c
 }
 
-// set replaces the policy: peers by kind, this node's addresses and the ports
-// an ingress may open.
-func (c *confiner) set(peers []Peer, self []netip.Prefix, ports IngressPorts) {
-	p := &confinePolicy{peers: map[netip.Addr]Confinement{}, ports: ports.sorted()}
+// set replaces the policy: the restricted peers' access, and this node's
+// addresses.
+func (c *confiner) set(peers []Peer, self []netip.Prefix) {
+	p := &confinePolicy{peers: map[netip.Addr]*Access{}, routes: map[netip.Addr][]netip.Prefix{}}
+	var routed netipx.IPSetBuilder
 	for _, peer := range peers {
-		if peer.Confined == ConfineNone {
+		if peer.Access == nil {
 			continue
 		}
+		for _, r := range slices.Concat(peer.Routes, peer.Subnets) {
+			routed.AddPrefix(r)
+		}
 		for _, a := range peer.Addrs {
-			p.peers[a.Addr()] = peer.Confined
+			p.peers[a.Addr()] = peer.Access
+			p.routes[a.Addr()] = slices.Concat(peer.Routes, peer.Subnets)
 		}
 	}
+	p.routed, _ = routed.IPSet()
 	for _, a := range self {
 		p.self = append(p.self, a.Addr())
 	}
@@ -132,7 +161,12 @@ func (c *confiner) set(peers []Peer, self []netip.Prefix, ports IngressPorts) {
 
 func (c *confiner) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if pol := c.policy.Load(); pol != nil {
-		if kind, ok := pol.peers[p.Src.Addr()]; ok && !c.admits(pol, kind, p) {
+		if acc, ok := pol.peers[p.Src.Addr()]; ok && !c.admits(pol, acc, p) {
+			return filter.Drop
+		}
+		// From an address a restricted router carries, as an exit node's
+		// answers: for this node alone, which the filter keeps to answers.
+		if pol.routed != nil && pol.routed.Contains(p.Src.Addr()) && !slices.Contains(pol.self, p.Dst.Addr()) {
 			return filter.Drop
 		}
 	}
@@ -142,20 +176,41 @@ func (c *confiner) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	return filter.Accept
 }
 
-// admits reports whether a confined peer of kind may send p.
-func (c *confiner) admits(pol *confinePolicy, kind Confinement, p *packet.Parsed) bool {
-	// A fragment after the first carries no port: it passes to this node as
-	// the filter passes it, the first having been checked, and the kernel
-	// drops what has no first.
+// opens reports whether acc lets its peer open proto to dst, on this node or
+// through it.
+func (pol *confinePolicy) opens(acc *Access, proto ipproto.Proto, dst netip.AddrPort) bool {
+	if slices.Contains(pol.self, dst.Addr()) {
+		return passes(acc.Open, proto, dst.Port())
+	}
+	return slices.ContainsFunc(acc.Through, func(t Through) bool {
+		return t.Prefix.Contains(dst.Addr()) && passes(t.Ports, proto, dst.Port())
+	})
+}
+
+// admits reports whether a restricted peer may send p.
+func (c *confiner) admits(pol *confinePolicy, acc *Access, p *packet.Parsed) bool {
+	// A fragment after the first carries no port: it passes where the peer
+	// may send something, the first having been checked, and the host it is
+	// for drops what has no first.
 	if p.IPProto == ipproto.Fragment {
-		return slices.Contains(pol.self, p.Dst.Addr())
+		return slices.Contains(pol.self, p.Dst.Addr()) ||
+			slices.ContainsFunc(acc.Through, func(t Through) bool { return t.Prefix.Contains(p.Dst.Addr()) })
 	}
 	if isICMP(p.IPProto) && p.IsError() {
+		// The peer's own error about what this node sent through it, as an
+		// exit node's that the path is too narrow.
+		if _, src, dst, _, ok := quoted(p); ok && src == p.Dst.Addr() && slices.Contains(pol.self, src) &&
+			slices.ContainsFunc(pol.routes[p.Src.Addr()], func(r netip.Prefix) bool { return r.Contains(dst) }) {
+			return true
+		}
 		t, ok := erredFlow(p)
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		_, opened := c.getLocked(t)
 		return ok && opened
+	}
+	if isICMP(p.IPProto) && p.IsEchoRequest() {
+		return pol.opens(acc, p.IPProto, p.Dst)
 	}
 	if isICMP(p.IPProto) && !p.IsEchoResponse() {
 		return false
@@ -177,46 +232,46 @@ func (c *confiner) admits(pol *confinePolicy, kind Confinement, p *packet.Parsed
 	if opened {
 		return true
 	}
-	if kind != ConfineIngress || !slices.Contains(pol.self, p.Dst.Addr()) {
-		return false
-	}
-	switch p.IPProto {
-	case ipproto.TCP:
-		return slices.Contains(pol.ports.TCP, p.Dst.Port())
-	case ipproto.UDP:
-		return slices.Contains(pol.ports.UDP, p.Dst.Port())
-	}
-	return false
+	return !isICMP(p.IPProto) && pol.opens(acc, p.IPProto, p.Dst)
 }
 
 func (c *confiner) out(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if pol := c.policy.Load(); pol != nil {
-		if kind, ok := pol.peers[p.Dst.Addr()]; ok {
-			t := flowKey(p, true)
-			c.mu.Lock()
-			c.expireLocked()
-			f, known := c.getLocked(t)
-			switch {
-			// A reply opens nothing: only what this node starts is its own.
-			case !known && p.IPProto == ipproto.UDP && kind == ConfineIngress &&
-				slices.Contains(pol.ports.UDP, p.Src.Port()) && slices.Contains(pol.self, p.Src.Addr()):
-			case !known && (p.IPProto == ipproto.UDP || p.IsTCPSyn() || isICMP(p.IPProto) && p.IsEchoRequest()):
-				c.addLocked(t)
-			case known && p.IsTCPSyn():
-				*f = flowState{} // the port taken again
-			case known && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPRst != 0:
-				c.removeLocked(t)
-			case known && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPFin != 0:
-				f.finOut = true
-				c.closeLocked(t, f)
-			}
-			c.mu.Unlock()
+		if acc, ok := pol.peers[p.Dst.Addr()]; ok && !c.sends(pol, acc, p) {
+			return filter.Drop
 		}
 	}
 	if c.nextOut != nil {
 		return c.nextOut(p, w)
 	}
 	return filter.Accept
+}
+
+// sends tracks what this node opens on a restricted peer, and reports
+// whether it may: a reply, or a new flow its access passes.
+func (c *confiner) sends(pol *confinePolicy, acc *Access, p *packet.Parsed) bool {
+	t := flowKey(p, true)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.expireLocked()
+	f, known := c.getLocked(t)
+	switch {
+	// A reply opens nothing: only what this node starts is its own.
+	case !known && p.IPProto == ipproto.UDP && pol.opens(acc, p.IPProto, p.Src):
+	case !known && (p.IPProto == ipproto.UDP || p.IsTCPSyn() || isICMP(p.IPProto) && p.IsEchoRequest()):
+		if !passes(acc.Sends, p.IPProto, p.Dst.Port()) {
+			return false
+		}
+		c.addLocked(t)
+	case known && p.IsTCPSyn():
+		*f = flowState{} // the port taken again
+	case known && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPRst != 0:
+		c.removeLocked(t)
+	case known && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPFin != 0:
+		f.finOut = true
+		c.closeLocked(t, f)
+	}
+	return true
 }
 
 // closeLocked queues a flow closed both ways to go after closedGrace.
@@ -309,29 +364,31 @@ func flowKey(p *packet.Parsed, outbound bool) flowtrack.Tuple {
 // erredFlow is the flow an ICMP error from a peer is about: the packet it
 // quotes, which this node sent to that peer, or false where it is none.
 func erredFlow(p *packet.Parsed) (flowtrack.Tuple, bool) {
-	b := p.Payload()
-	if len(b) < 4 {
-		return flowtrack.Tuple{}, false
-	}
-	b = b[4:] // the unused word, or a needed MTU
-	var proto ipproto.Proto
-	var src, dst netip.Addr
-	var l4 []byte
-	switch {
-	case len(b) >= 20 && b[0]>>4 == 4:
-		ihl := int(b[0]&0x0f) * 4
-		if ihl < 20 || len(b) < ihl+4 {
-			return flowtrack.Tuple{}, false
-		}
-		proto, src, dst, l4 = ipproto.Proto(b[9]), netip.AddrFrom4([4]byte(b[12:16])), netip.AddrFrom4([4]byte(b[16:20])), b[ihl:]
-	case len(b) >= 44 && b[0]>>4 == 6:
-		proto, src, dst, l4 = ipproto.Proto(b[6]), netip.AddrFrom16([16]byte(b[8:24])), netip.AddrFrom16([16]byte(b[24:40])), b[40:]
-	default:
-		return flowtrack.Tuple{}, false
-	}
-	if (proto != ipproto.TCP && proto != ipproto.UDP) || dst != p.Src.Addr() || src != p.Dst.Addr() {
+	proto, src, dst, l4, ok := quoted(p)
+	if !ok || (proto != ipproto.TCP && proto != ipproto.UDP) || dst != p.Src.Addr() || src != p.Dst.Addr() {
 		return flowtrack.Tuple{}, false
 	}
 	sp, dp := binary.BigEndian.Uint16(l4), binary.BigEndian.Uint16(l4[2:])
 	return flowtrack.MakeTuple(proto, netip.AddrPortFrom(src, sp), netip.AddrPortFrom(dst, dp)), true
+}
+
+// quoted is the packet an ICMP error quotes: its protocol, addresses and
+// the start of its transport header.
+func quoted(p *packet.Parsed) (proto ipproto.Proto, src, dst netip.Addr, l4 []byte, ok bool) {
+	b := p.Payload()
+	if len(b) < 4 {
+		return 0, src, dst, nil, false
+	}
+	b = b[4:] // the unused word, or a needed MTU
+	switch {
+	case len(b) >= 20 && b[0]>>4 == 4:
+		ihl := int(b[0]&0x0f) * 4
+		if ihl < 20 || len(b) < ihl+4 {
+			return 0, src, dst, nil, false
+		}
+		return ipproto.Proto(b[9]), netip.AddrFrom4([4]byte(b[12:16])), netip.AddrFrom4([4]byte(b[16:20])), b[ihl:], true
+	case len(b) >= 44 && b[0]>>4 == 6:
+		return ipproto.Proto(b[6]), netip.AddrFrom16([16]byte(b[8:24])), netip.AddrFrom16([16]byte(b[24:40])), b[40:], true
+	}
+	return 0, src, dst, nil, false
 }

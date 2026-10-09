@@ -630,3 +630,25 @@ func TestTheIngressHandsARelaysNameOn(t *testing.T) {
 		t.Error("QUIC would take the relay's name")
 	}
 }
+
+// A member's name the same as the relay's is not served: the relay's
+// clients, and its certificate's challenges, stay the relay's.
+func TestARelayKeepsItsNameFromAMembers(t *testing.T) {
+	relayTarget, member := newTarget(t), newTarget(t)
+	src := &source{p: &ipc.Published{
+		Relays: []ipc.PublishedTarget{relayTarget.published("relay.example.org", true)},
+		Names:  []ipc.PublishedTarget{member.published("relay.example.org", false)},
+	}}
+	tlsAddr, _ := startIngress(t, src)
+	hello(t, tlsAddr, "relay.example.org")
+	select {
+	case got := <-relayTarget.got:
+		if !bytes.HasPrefix(got, []byte("\r\n\r\n\x00\r\nQUIT\n")) {
+			t.Errorf("the relay got %x", got)
+		}
+	case got := <-member.got:
+		t.Fatalf("the member got the relay's client, %d bytes", len(got))
+	case <-time.After(5 * time.Second):
+		t.Fatal("nobody got the client")
+	}
+}

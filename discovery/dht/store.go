@@ -3,6 +3,8 @@ package dht
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -102,11 +104,14 @@ func resolveAll(hostPorts []string) ([]anacrolix.Addr, error) {
 	return out, nil
 }
 
-// ItemKey is the public key an item at seed's address is signed by, which
-// names the address.
-func ItemKey(seed [32]byte) [32]byte {
-	_, pub, _ := storeKey(seed)
-	return pub
+// RendezvousKey is where a relay keeps the announcement published at seed.
+// Unlike the item's public key, which every DHT message about it carries, it
+// is derived from the seed alone, so only a holder of the epoch's secret
+// finds it.
+func RendezvousKey(seed [32]byte) [32]byte {
+	m := hmac.New(sha256.New, seed[:])
+	m.Write([]byte("juist relay rendezvous v1"))
+	return [32]byte(m.Sum(nil))
 }
 
 // SealAnnouncement seals e for publication under epoch, as [Node] does.

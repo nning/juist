@@ -171,6 +171,9 @@ einen neuen Port wählen. Dann hast du zwei Möglichkeiten:
   Diese Wartezeit zählt zur Laufzeit der Einladung.
 - Ist ein Gerät in mehreren Netzen, gibst du an, welches gemeint ist:
   `juist invite work`.
+- Gibt es [Zugriffsregeln]({{< relref "docs/access" >}}), lassen sie für das
+  neue Gerät nichts durch, bis eine Regel es nennt. `juist invite` weist in
+  einer `hint:`-Zeile darauf hin.
 
 ## Wenn etwas nicht klappt
 

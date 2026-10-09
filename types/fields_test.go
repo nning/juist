@@ -149,10 +149,10 @@ func TestCloneCopiesEveryField(t *testing.T) {
 
 // TestEveryPayloadIsValidated: a payload at its zero value is refused, so a
 // field that reaches the record without a rule in ValidateUnsigned shows.
-// An empty route, name or publish grant and an empty domain, which withdraw
-// everything, are the zero payloads with a meaning.
+// An empty route, name or publish grant, an empty domain and an empty
+// policy, which withdraw everything, are the zero payloads with a meaning.
 func TestEveryPayloadIsValidated(t *testing.T) {
-	meaningful := map[string]bool{"Grant": true, "Names": true, "Domain": true, "Publish": true}
+	meaningful := map[string]bool{"Grant": true, "Names": true, "Domain": true, "Publish": true, "Policy": true}
 	checked := map[string]bool{}
 	for i, seed := range corpusSeeds(t) {
 		a, err := DecodeAUM(seed)

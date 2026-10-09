@@ -124,6 +124,10 @@ type app struct {
 	system func(path string) ([]byte, error)
 	getenv func(string) string
 
+	// editor edits a file as the operator would in their editor; tests
+	// replace it.
+	editor func(path string) error
+
 	// capture, when set, receives a command's spec and flags at its parse,
 	// which then stops the command: shell completion.
 	capture func(spec, *flag.FlagSet)
@@ -322,6 +326,7 @@ var shorts = map[string]byte{
 	"admin-key":   'K',
 	"admin-name":  'u',
 	"admin-votes": 'v',
+	"all":         'a',
 	"background":  'b',
 	"device":      'n',
 	"expires":     'e',
@@ -333,6 +338,7 @@ var shorts = map[string]byte{
 	"isolate":     'i',
 	"key":         'k',
 	"keys":        'k',
+	"list":        'l',
 	"name":        'n',
 	"no-apply":    'n',
 	"no-device":   'N',
@@ -355,6 +361,7 @@ var shorts = map[string]byte{
 	"tcp":         'T',
 	"voucher":     'V',
 	"votes":       'v',
+	"write":       'w',
 	"yes":         'y',
 }
 

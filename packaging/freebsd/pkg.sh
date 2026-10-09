@@ -51,6 +51,7 @@ mkdir -p "$(dirname "$out")"
 	$p/etc/rc.d/juist_serve=packaging/freebsd/juist_serve \
 	$p/libexec/juist/ingress.sh=packaging/freebsd/libexec/ingress.sh \
 	$p/libexec/juist/serve.sh=packaging/freebsd/libexec/serve.sh \
+	$p/libexec/juist/relay.sh=packaging/freebsd/libexec/relay.sh \
 	$p/etc/newsyslog.conf.d/juistd.conf=packaging/freebsd/newsyslog.conf \
 	$p/share/man/man1/juist.1.gz="$work/juist.1" \
 	$p/share/man/man8/juistd.8.gz="$work/juistd.8" \

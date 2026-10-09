@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/addrkey"
 	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/types"
 )
@@ -58,6 +59,17 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 		NoV4:       d.announcedNoV4,
 		Published:  d.servingPublished,
 		Share:      shared,
+	}
+	switch {
+	case d.sealing != nil && d.sealing.withheld:
+		e.Addrs = nil
+	case d.sealing != nil && len(addrs) > 0:
+		sealed, err := addrkey.Seal(d.sealing.key, addrs)
+		if err != nil {
+			d.logf("daemon: sealing this node's addresses: %v", err)
+			return gossip.Endpoint{}, false
+		}
+		e.Addrs, e.Sealed = nil, sealed
 	}
 	now := d.now()
 	renewal := d.signed != nil && d.signed.SameAs(&e)

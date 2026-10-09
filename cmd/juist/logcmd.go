@@ -147,6 +147,7 @@ Raise the network to this build's record schema:
   schema 11 services published on a TCP port of their own
             (juist publish add --tcp)
   schema 12 relays on 443 under a public name (juist set --relay-name)
+  schema 13 an access policy (juist policy)
 
 Devices on older builds stop at the upgrade until updated: update them first.`}
 	fs := newFlags(s.name)

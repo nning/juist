@@ -128,6 +128,11 @@ func (b *Builder) SetDomain(domain string) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindSetDomain, Domain: &domain})
 }
 
+// SetPolicy builds a record replacing the network's access policy.
+func (b *Builder) SetPolicy(p *types.Policy) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindSetPolicy, Policy: p.Clone()})
+}
+
 // SetPublished builds a record replacing the names a member publishes, sorted
 // by label and without repeats; none withdraws them all. A label given twice
 // otherwise alike is refused.
