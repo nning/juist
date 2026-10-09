@@ -369,7 +369,14 @@ func (d *Daemon) Published() *ipc.Published {
 	}
 	now := d.now()
 	self, ok := state.Node(d.self)
-	if !ok || self.Expired(now.Unix()) || !self.HasRole(types.RoleIngress) || !d.freshness(now).Fresh(now.Unix()) {
+	if !ok || self.Expired(now.Unix()) || !self.HasRole(types.RoleIngress) {
+		return out
+	}
+	// Whatever the freshness: the relay is how members bring it back.
+	if t, ok := d.relayHandedOn(); ok {
+		out.Relays = append(out.Relays, t)
+	}
+	if !d.freshness(now).Fresh(now.Unix()) {
 		return out
 	}
 	s := d.membersOf(state)
@@ -403,6 +410,19 @@ func (d *Daemon) Published() *ipc.Published {
 	slices.SortFunc(out.Names, func(x, y ipc.PublishedTarget) int { return strings.Compare(x.Name, y.Name) })
 	slices.SortFunc(out.TCP, func(x, y ipc.PublishedTarget) int { return cmp.Compare(x.Public, y.Public) })
 	return out
+}
+
+// relayHandedOn is where the ingress here hands the relay's public name on:
+// the relay's own port, on loopback, the client named in a PROXY header.
+func (d *Daemon) relayHandedOn() (ipc.PublishedTarget, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// Only once the relay reads the ingress's PROXY header.
+	if d.relay == nil || d.relayCerts == nil || !d.httpsHanded {
+		return ipc.PublishedTarget{}, false
+	}
+	return ipc.PublishedTarget{Name: d.relayName, Addrs: []netip.Addr{netip.AddrFrom4([4]byte{127, 0, 0, 1})},
+		Port: d.relay.Port(), Proxy: true}, true
 }
 
 // addPublished puts t in p's list of the names published as t is: by TCP

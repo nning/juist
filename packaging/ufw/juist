@@ -8,6 +8,11 @@ title=juist member relay
 description=The relay (TCP) and the STUN answers members measure it by (UDP), on a relay-capable device.
 ports=41645/tcp|41645/udp
 
+[juist-relay-443]
+title=juist relay on 443
+description=A member relay under a public name, on 443/tcp, where its operator gave it one.
+ports=443/tcp
+
 [juist-invite]
 title=juist invites
 description=Invites taken directly, as a code on the LAN, while "juist invite" runs.

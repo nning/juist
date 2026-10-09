@@ -30,15 +30,19 @@ func (s *Service) invite(ctx context.Context, offer *ipc.InviteOffer, events fun
 	}
 	o := host.Options{
 		Port:          offer.Port,
-		LAN:           offer.LAN,
+		LAN:           offer.LAN && !m.httpsOnly,
 		SkipInterface: s.opts.Mesh.TunName,
 		Exclude:       []netip.Prefix{state.ULA()},
 		Addrs:         s.opts.InviteAddrs,
 		Relays:        m.inviteRelays(state),
 		Identity:      s.keys.Identity,
+		HTTPSOnly:     m.httpsOnly,
+		Proxy:         m.proxyFor,
 	}
 	if offer.DHT {
+		s.mu.Lock()
 		o.Helpers = s.helpers()
+		s.mu.Unlock()
 	}
 	noDHT := offer.DHT && o.Helpers == nil
 	h, err := host.Listen(o)
@@ -52,7 +56,11 @@ func (s *Service) invite(ctx context.Context, offer *ipc.InviteOffer, events fun
 		return err
 	}
 	if noDHT {
-		_ = events(&ipc.Event{Kind: ipc.EventInviteNoDHT, Text: "juistd is told to use no public DHT or STUN server"})
+		why := "juistd is told to use no public DHT or STUN server"
+		if m.httpsOnly {
+			why = "this device uses HTTPS alone, which no DHT is"
+		}
+		_ = events(&ipc.Event{Kind: ipc.EventInviteNoDHT, Text: why})
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(offer.Expires)*time.Second)
 	defer cancel()

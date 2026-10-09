@@ -48,7 +48,8 @@ juist is a Tailscale-like mesh VPN with a WireGuard data plane and no central
 control plane: membership, key distribution, revocation and rendezvous are
 peer-to-peer. This package installs the CLI, the node daemon, and a systemd
 unit that runs the daemon as a dedicated unprivileged user holding
-CAP_NET_ADMIN and nothing else.
+CAP_NET_ADMIN and nothing else, and CAP_NET_BIND_SERVICE on a relay its
+operator gave a name on 443.
 
 %prep
 %autosetup
@@ -71,10 +72,11 @@ install -D -m 0755 firewall.sh %{buildroot}%{_prefix}/lib/juist/firewall.sh
 install -D -m 0755 exit-node.sh %{buildroot}%{_prefix}/lib/juist/exit-node.sh
 install -D -m 0755 ingress.sh %{buildroot}%{_prefix}/lib/juist/ingress.sh
 install -D -m 0755 serve.sh %{buildroot}%{_prefix}/lib/juist/serve.sh
+install -D -m 0755 relay.sh %{buildroot}%{_prefix}/lib/juist/relay.sh
 install -D -m 0644 juist.rules %{buildroot}%{_datadir}/polkit-1/rules.d/60-juist.rules
 install -D -m 0644 juist.1 %{buildroot}%{_mandir}/man1/juist.1
 install -D -m 0644 juistd.8 %{buildroot}%{_mandir}/man8/juistd.8
-for f in juist juist-relay juist-invite juist-ingress; do
+for f in juist juist-relay juist-relay-443 juist-invite juist-ingress; do
 	install -D -m 0644 $f.xml %{buildroot}%{_prefix}/lib/firewalld/services/$f.xml
 done
 install -D -m 0644 juist.bash %{buildroot}%{_datadir}/bash-completion/completions/juist
@@ -125,6 +127,8 @@ if [ $1 -eq 0 ]; then
 	# An ingress stops, and its ports close.
 	%{_prefix}/lib/juist/ingress.sh off
 	%{_prefix}/lib/juist/serve.sh off
+	# A relay on 443 gives its capability and its port back.
+	%{_prefix}/lib/juist/relay.sh off
 	# Forwarding for an exit node goes back as it was, and nothing a
 	# juistd that failed left refusing the internet stays.
 	%{_prefix}/lib/juist/exit-node.sh off
@@ -173,11 +177,13 @@ fi
 %{_prefix}/lib/juist/exit-node.sh
 %{_prefix}/lib/juist/ingress.sh
 %{_prefix}/lib/juist/serve.sh
+%{_prefix}/lib/juist/relay.sh
 %{_datadir}/polkit-1/rules.d/60-juist.rules
 %{_mandir}/man1/juist.1*
 %{_mandir}/man8/juistd.8*
 %{_prefix}/lib/firewalld/services/juist.xml
 %{_prefix}/lib/firewalld/services/juist-relay.xml
+%{_prefix}/lib/firewalld/services/juist-relay-443.xml
 %{_prefix}/lib/firewalld/services/juist-invite.xml
 %{_prefix}/lib/firewalld/services/juist-ingress.xml
 %{_datadir}/bash-completion/completions/juist

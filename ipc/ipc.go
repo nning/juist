@@ -143,6 +143,10 @@ const (
 	// CmdPing sends a TSMP ping through the tunnel to the member
 	// [Request.Ping] names, answered in [Response.Ping].
 	CmdPing Command = 24
+
+	// CmdSettings changes this device's settings: [Request.HTTPSOnly],
+	// [Request.Proxy] and [Request.RelayName], whichever it carries.
+	CmdSettings Command = 25
 )
 
 func (c Command) String() string {
@@ -197,6 +201,8 @@ func (c Command) String() string {
 		return "status page"
 	case CmdPing:
 		return "ping"
+	case CmdSettings:
+		return "settings"
 	default:
 		return fmt.Sprintf("command?<%d>", uint8(c))
 	}
@@ -286,6 +292,14 @@ type Request struct {
 
 	// Ping is the member a [CmdPing] pings.
 	Ping types.Identity `cbor:"31,keyasint,omitempty"`
+
+	// HTTPSOnly, Proxy and RelayName are what a [CmdSettings] sets: whether
+	// this device sends nothing but TLS to relays on 443, the HTTP proxy it
+	// reaches them through, "" for its environment's, and the public name
+	// its relay serves on 443, "" for none.
+	HTTPSOnly *bool   `cbor:"32,keyasint,omitempty"`
+	Proxy     *string `cbor:"33,keyasint,omitempty"`
+	RelayName *string `cbor:"34,keyasint,omitempty"`
 }
 
 // maxTerminatorAddrs caps the addresses a terminator reports, each way.
@@ -657,6 +671,7 @@ const (
 	fShare
 	fPing
 	fListening // Listening and Unbound
+	fSettings  // HTTPSOnly, Proxy and RelayName
 )
 
 // present lists the optional fields r sets.
@@ -677,6 +692,7 @@ func (r *Request) present() reqField {
 		{r.Account != nil || len(r.NoCert) > 0 || r.Stopping, fAccount},
 		{len(r.Listening) > 0 || len(r.Unbound) > 0, fListening},
 		{r.Share != nil, fShare}, {!r.Ping.IsZero(), fPing},
+		{r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil, fSettings},
 	} {
 		if p.set {
 			f |= p.f
@@ -749,6 +765,12 @@ var requestShapes = map[Command]requestShape{
 	CmdStatusPage: {},
 	CmdPing: {takes: fPing, shape: "a ping request names a member and nothing else",
 		check: func(r *Request) bool { return !r.Ping.IsZero() }},
+	CmdSettings: {takes: fSettings, shape: "a settings request sets HTTPS alone, a proxy or a relay's name, and nothing else",
+		check: func(r *Request) bool {
+			return (r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil) &&
+				(r.Proxy == nil || ValidProxy(*r.Proxy) == nil) &&
+				(r.RelayName == nil || *r.RelayName == "" || types.ValidateHostName(*r.RelayName) == nil)
+		}},
 	CmdShare: {takes: fShare, shape: "a share request carries where to, on loopback, and an end, and nothing else",
 		check: func(r *Request) bool { return r.Share != nil && r.Share.Valid() }},
 	CmdServing: {takes: fAccount | fListening, shape: "a serving request carries the terminator's account and where it listens, and nothing else",

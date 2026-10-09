@@ -68,6 +68,8 @@ In der ersten Zeile steht einer dieser Zustände:
 - `Devices`: wie viele andere Geräte es gibt und wie viele davon sich gemeldet haben.
 - `Tunnels`: durch wie viele Tunnel bei der letzten Prüfung Verkehr floss. juistd prüft alle 30 Sekunden, fragt einen ruhigen Tunnel aber nur alle 5 Minuten, wenn beide Enden ein Relay haben, damit das Funkmodul eines Laptops schlafen kann.
 - `Relays`: wie viele Geräte Verkehr weiterleiten dürfen und welches davon dieses Gerät nutzt. Ein [Relay]({{< relref "docs/relays" >}}) leitet Verkehr zwischen zwei Geräten weiter, die sich nicht direkt erreichen.
+- `HTTPS`: auf einem Gerät, das nur HTTPS sendet, die Relays auf 443, über die es läuft, und sein Proxy. Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}).
+- `Relay name`: der öffentliche Name, den das Relay dieses Geräts auf 443 bedient, und ob schon.
 - `Exit node`: über welches Gerät der Internetverkehr dieses Geräts läuft, falls überhaupt. Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: die Domain, unter der dieses Gerät die anderen findet, etwa `home.juist`, oder der Grund, warum das nicht geht. Siehe [Namen]({{< relref "docs/names" >}}).
 - `Freshness`: wann ein Voucher zuletzt bestätigt hat, dass dieses Gerät den aktuellen Stand des Netzes kennt, und wie lange das gilt. Ein Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich ausstellt. Nach 48 Stunden ohne Bestätigung steht dort `expired; vouchers only`; einen Tag vorher sagt eine Warnung, wann. Wo kein Gerät Voucher ist, steht dort `unchecked: no voucher`, und wo zwei Geräte Verkehr weiterleiten dürfen, schlägt ein Hinweis sie als Voucher vor. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).

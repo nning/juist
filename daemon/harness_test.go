@@ -76,6 +76,9 @@ type network struct {
 	// disablement is the network's one break-glass secret.
 	disablement types.DisablementSecret
 
+	// schema, set by a mutate, founds the network at an older schema.
+	schema types.SchemaVersion
+
 	// secretsByEpoch records what each epoch's group secret is, so a test
 	// can check that a node opened the right one.
 	mu            sync.Mutex
@@ -132,6 +135,9 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 		t.Fatalf("building genesis: %v", err)
 	}
 	g.State.V4Prefix, g.State.Domain = nw.v4Prefix, nw.domain
+	if nw.schema != 0 {
+		g.State.Schema = nw.schema
+	}
 	for i := range g.State.Nodes {
 		for _, d := range nw.devices {
 			if d.record.Identity == g.State.Nodes[i].Identity {

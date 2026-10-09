@@ -6,6 +6,7 @@ import (
 	"maps"
 	"math"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tailcfg/nodecap"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
@@ -94,6 +96,15 @@ type Options struct {
 	// OnHostRoutesChange is called, possibly from another goroutine, when
 	// what [Manager.HostRoutes] says may have changed.
 	OnHostRoutesChange func()
+
+	// HTTPSOnly sends nothing but TLS to 443/tcp of relays' names: no UDP
+	// and no peer relay, and STUN is ignored. Every packet then goes through
+	// a relay.
+	HTTPSOnly bool
+
+	// Proxy, with HTTPSOnly, is the HTTP proxy a connection to a relay's
+	// name goes through, by CONNECT, or nil for none.
+	Proxy func(host string) (*url.URL, error)
 }
 
 // tsManager implements [Manager] on top of Tailscale's wgengine and magicsock.
@@ -155,6 +166,17 @@ type tsManager struct {
 	// not restart the latency probes. Guarded by apply.
 	relays []Relay
 
+	// httpsOnly and proxy are [Options.HTTPSOnly] and [Options.Proxy], and
+	// named the names of the relays last installed.
+	httpsOnly bool
+	proxy     func(host string) (*url.URL, error)
+	named     atomic.Pointer[[]string]
+
+	// local are this host's networks, which a relay's addresses on come
+	// first in the map, and skip the device it leaves out of them.
+	local atomic.Pointer[Networks]
+	skip  string
+
 	// onChange is called when the home relay or the local endpoint set moves.
 	onChange func()
 
@@ -164,6 +186,8 @@ type tsManager struct {
 	homeRelay atomic.Int64
 	epsMu     sync.Mutex
 	localEps  []netip.AddrPort
+	// publicSeen is when each public address among them was last reported.
+	publicSeen map[netip.Addr]time.Time
 
 	// done is closed by Close, and warm tracks the path warm-up goroutines
 	// so that none of them can touch the engine after it is torn down.
@@ -261,16 +285,25 @@ func New(opts Options) (_ Manager, err error) {
 	bus := eventbus.New()
 	undo.push(bus.Close)
 	m := &tsManager{
-		logf:     logf,
-		bus:      bus,
-		self:     opts.Self,
-		done:     make(chan struct{}),
-		onChange: opts.OnConnectivityChange,
-		stun:     slices.Clone(opts.STUN),
+		logf:      logf,
+		bus:       bus,
+		self:      opts.Self,
+		done:      make(chan struct{}),
+		onChange:  opts.OnConnectivityChange,
+		stun:      slices.Clone(opts.STUN),
+		httpsOnly: opts.HTTPSOnly,
+		proxy:     opts.Proxy,
+	}
+	if m.httpsOnly {
+		m.stun = nil
 	}
 	m.state.Store(&peerState{})
 	m.stunRegions.Store(&map[tailcfg.DERPRegionID]bool{})
-	if opts.Logf != nil && len(opts.STUN) > 0 {
+	m.named.Store(&[]string{})
+	m.skip = opts.TunName
+	m.publicSeen = map[netip.Addr]time.Time{}
+	m.local.Store(&Networks{Prefixes: hostNetworks(m.skip)})
+	if opts.Logf != nil && len(m.stun) > 0 {
 		logf = m.withoutSTUNHomeNoise(logf)
 		m.logf = logf
 	}
@@ -359,6 +392,7 @@ func New(opts Options) (_ Manager, err error) {
 			// the bus, which waits for this callback.
 			if d.InterfaceIPsChanged {
 				go m.refilter()
+				go m.followNetworks()
 			}
 		})
 	}
@@ -390,15 +424,26 @@ func New(opts Options) (_ Manager, err error) {
 		}
 	}
 	m.eng = eng
+	if m.httpsOnly {
+		// Before any map: netcheck and the first endpoint update read it.
+		m.magic.SetOnlyTCP443(true)
+		registerProxied(m)
+		undo.push(func() { unregisterProxied(m) })
+	}
 
 	// Self is rendered exactly like a peer, minus endpoints: nothing
-	// discovers us through our own node view.
-	m.selfNV = peerNode(Peer{
+	// discovers us through our own node view. Only TCP 443 also keeps the
+	// engine from using peer relays, which speak UDP.
+	self := peerNode(Peer{
 		ID:       opts.Self.ID,
 		NodeKey:  opts.Self.NodeKey.Public(),
 		DiscoKey: opts.Self.DiscoKey.Public(),
 		Addrs:    opts.Self.Addrs,
-	})
+	}).AsStruct()
+	if m.httpsOnly {
+		self.CapMap = tailcfg.NodeCapMap{nodecap.OnlyTCP443: nil}
+	}
+	m.selfNV = self.View()
 	eng.SetSelfNode(m.selfNV)
 
 	// The data plane learns its peer set only from these lookups, backed by
@@ -1154,6 +1199,13 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 		return nil
 	}
 	m.relays = relays
+	var named []string
+	for _, r := range relays {
+		if r.Name != "" {
+			named = append(named, r.Name)
+		}
+	}
+	m.named.Store(&named)
 	m.installDERPMap(relays)
 	if len(relays) == 0 {
 		// Nothing will report a home region again, and a stale one would be
@@ -1166,6 +1218,44 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 }
 
 func (m *tsManager) HomeRelay() int { return int(m.homeRelay.Load()) }
+
+// publicHeld is how long a public address of this host's counts after it
+// was last reported.
+const publicHeld = 30 * time.Minute
+
+// followNetworks installs the relays again where this host's networks moved,
+// which order their addresses.
+func (m *tsManager) followNetworks() {
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	local := Networks{Prefixes: hostNetworks(m.skip)}
+	now := time.Now()
+	m.epsMu.Lock()
+	for _, ap := range m.localEps {
+		if !isPrivateAddr(ap.Addr()) {
+			m.publicSeen[ap.Addr()] = now
+		}
+	}
+	// Held a while past the last report of them: netcheck reports a
+	// public address only where two servers agree, and an order that came
+	// and went with it would drop the home relay's connection each time.
+	for a, seen := range m.publicSeen {
+		if now.Sub(seen) > publicHeld {
+			delete(m.publicSeen, a)
+			continue
+		}
+		local.Public = append(local.Public, a)
+	}
+	m.epsMu.Unlock()
+	slices.SortFunc(local.Public, netip.Addr.Compare)
+	if local.equal(*m.local.Load()) {
+		return
+	}
+	m.local.Store(&local)
+	if !m.closed && len(m.relays) > 0 {
+		m.installDERPMap(m.relays)
+	}
+}
 
 // withoutSTUNHomeNoise drops what the engine logs about a STUN server it took
 // as its home. With no member relay the nearest region is always a STUN
@@ -1196,7 +1286,7 @@ func (m *tsManager) withoutSTUNHomeNoise(logf logger.Logf) logger.Logf {
 // regions are recorded first, so a report naming one is never mistaken for a
 // relay to be reached through.
 func (m *tsManager) installDERPMap(relays []Relay) {
-	dm, stunRegions := derpMap(relays, m.stun)
+	dm, stunRegions := derpMap(relays, m.stun, m.httpsOnly, *m.local.Load())
 	m.stunRegions.Store(&stunRegions)
 	m.magic.SetDERPMap(dm)
 }
@@ -1238,6 +1328,8 @@ func (m *tsManager) onStatus(st *wgengine.Status, err error) {
 	m.epsMu.Unlock()
 	if changed {
 		m.notifyChange()
+		// The public addresses among them say which relays share a site.
+		go m.followNetworks()
 	}
 }
 
@@ -1349,6 +1441,7 @@ func (m *tsManager) Close() error {
 		return nil
 	}
 	m.closed = true
+	unregisterProxied(m)
 	// Stop and drain the warm-up goroutines before the engine goes: they
 	// call into magicsock, which does not survive its engine.
 	close(m.done)

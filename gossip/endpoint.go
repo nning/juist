@@ -66,6 +66,12 @@ type RelayInfo struct {
 	// name a member must use. It is never resolved: the addresses come from
 	// the announcement.
 	HostName string `cbor:"4,keyasint"`
+
+	// Name, where set, is a public DNS name the relay serves DERP on at
+	// 443/tcp too, under a certificate a public CA issued for it, which
+	// members verify by WebPKI instead of Cert. Sent only in a network at
+	// [types.SchemaRelayName] or above: older builds refuse the field.
+	Name string `cbor:"5,keyasint,omitempty"`
 }
 
 // MaxRelayHostNameLen caps the announced TLS server name. It is a derivation
@@ -97,6 +103,11 @@ func (r *RelayInfo) validate() error {
 		// the one a certificate can be issued for and nothing wider.
 		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '.' && c != '-' {
 			return fmt.Errorf("relay host name %q holds a character a certificate name may not", r.HostName)
+		}
+	}
+	if r.Name != "" {
+		if err := types.ValidateHostName(r.Name); err != nil {
+			return fmt.Errorf("relay name: %w", err)
 		}
 	}
 	return nil
@@ -202,7 +213,8 @@ func sameRelay(a, b *RelayInfo) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.Port == b.Port && a.STUNPort == b.STUNPort && a.HostName == b.HostName && slices.Equal(a.Cert, b.Cert)
+	return a.Port == b.Port && a.STUNPort == b.STUNPort && a.HostName == b.HostName && slices.Equal(a.Cert, b.Cert) &&
+		a.Name == b.Name
 }
 
 // labelEndpoint is the domain-separation label for an endpoint record's

@@ -606,3 +606,27 @@ func TestAClientIsLoggedAsIPv4(t *testing.T) {
 		t.Errorf("logged as %s", got)
 	}
 }
+
+// A relay's name is handed on by TLS as a published name is, its client named
+// in a PROXY header, and is no name to redirect plain HTTP for.
+func TestTheIngressHandsARelaysNameOn(t *testing.T) {
+	tg := newTarget(t)
+	src := &source{p: &ipc.Published{Relays: []ipc.PublishedTarget{tg.published("relay.example.org", true)}}}
+	tlsAddr, httpAddr := startIngress(t, src)
+	hello(t, tlsAddr, "relay.example.org")
+	if got := <-tg.got; !bytes.HasPrefix(got, []byte("\r\n\r\n\x00\r\nQUIT\n")) {
+		t.Fatalf("the relay got %x", got)
+	}
+	req, _ := http.NewRequest("GET", "http://"+httpAddr+"/", nil)
+	req.Host = "relay.example.org"
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if resp, err := client.Do(req); err != nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("plain HTTP for the relay's name: %v, %v", resp, err)
+	}
+	in := &ingress{}
+	in.table.Store(&map[string]ipc.PublishedTarget{"relay.example.org": {}})
+	in.relays.Store(&map[string]bool{"relay.example.org": true})
+	if _, ok := in.lookupPublished("relay.example.org"); ok {
+		t.Error("QUIC would take the relay's name")
+	}
+}

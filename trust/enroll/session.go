@@ -156,8 +156,11 @@ func (inv *Invite) Code() Code { return inv.code }
 // Link returns the invite's copy-and-paste form.
 func (inv *Invite) Link() Link { return inv.link }
 
-// WaitAt names the relays the invite's host waits at, in its link.
-func (inv *Invite) WaitAt(relays []netip.AddrPort) { inv.link = inv.link.WithRelays(relays) }
+// WaitAt names the relays the invite's host waits at, in its link, by
+// address and by name.
+func (inv *Invite) WaitAt(relays []netip.AddrPort, named []string) {
+	inv.link = inv.link.WithRelays(relays, named)
+}
 
 // Open reports whether the invite can still admit a device.
 func (inv *Invite) Open() bool { return !inv.closed }

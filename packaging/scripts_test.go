@@ -39,7 +39,8 @@ func newSandbox(t *testing.T) *sandbox {
 	// Every stub logs how it was called. install creates the directory it
 	// is given, as the real one would, and systemctl has enabled the units
 	// the sandbox's enabled file lists.
-	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "exit-node.sh", "ingress.sh", "serve.sh", "install"} {
+	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "exit-node.sh", "ingress.sh", "serve.sh",
+		"relay.sh", "install"} {
 		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(root, "calls") + "\n"
 		switch name {
 		case "install":
@@ -69,6 +70,7 @@ func (sb *sandbox) run(script string, args ...string) {
 		"/usr/lib/juist/exit-node.sh", filepath.Join(sb.root, "bin", "exit-node.sh"),
 		"/usr/lib/juist/ingress.sh", filepath.Join(sb.root, "bin", "ingress.sh"),
 		"/usr/lib/juist/serve.sh", filepath.Join(sb.root, "bin", "serve.sh"),
+		"/usr/lib/juist/relay.sh", filepath.Join(sb.root, "bin", "relay.sh"),
 		"/var/lib/", sb.root+"/var/lib/",
 		"/run/systemd/system", filepath.Join(sb.root, "run/systemd/system"),
 	).Replace(string(b))
@@ -784,12 +786,79 @@ esac`
 	}
 }
 
-// Removing the package stops an ingress and closes its ports.
+// Removing the package stops an ingress and closes its ports, and takes a
+// relay's 443 back.
 func TestARemovalStopsTheIngress(t *testing.T) {
 	sb := newSandbox(t)
 	sb.run("prerm", "remove")
-	if calls := sb.calls(); !strings.Contains(calls, "ingress.sh off") || !strings.Contains(calls, "serve.sh off") {
-		t.Fatalf("prerm left the ingress or the terminator:\n%s", calls)
+	if calls := sb.calls(); !strings.Contains(calls, "ingress.sh off") || !strings.Contains(calls, "serve.sh off") ||
+		!strings.Contains(calls, "relay.sh off") {
+		t.Fatalf("prerm left the ingress, the terminator or the relay on 443:\n%s", calls)
+	}
+}
+
+// relay.sh grants juistd the binding of 443 by a drop-in, which takes a
+// restart once and none when it holds already, lets 443/tcp through an
+// active firewall, and takes all of it back.
+func TestRelayScriptGrantsAndTakesBack443(t *testing.T) {
+	sb := newSandbox(t)
+	for _, name := range []string{"firewall-cmd", "ufw"} {
+		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(sb.root, "calls") + "\n"
+		if name == "ufw" {
+			body += "[ \"$1\" = status ] && echo 'Status: active'\n"
+		}
+		if err := os.WriteFile(filepath.Join(sb.root, "bin", name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := os.ReadFile("relay.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropin := filepath.Join(sb.root, "etc/systemd/system/juistd.service.d/juist-relay-443.conf")
+	script := filepath.Join(sb.root, "relay.sh")
+	b = []byte(strings.ReplaceAll(string(b), "/etc/systemd/", sb.root+"/etc/systemd/"))
+	if err := os.WriteFile(script, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("/bin/sh", append([]string{script}, args...)...)
+		cmd.Env = []string{"PATH=" + filepath.Join(sb.root, "bin") + ":/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		return string(out) + sb.calls(), err
+	}
+	calls, err := run("on")
+	for _, want := range []string{"systemctl daemon-reload", "systemctl try-restart juistd.service",
+		"firewall-cmd --add-service=juist-relay-443", "firewall-cmd --permanent --add-service=juist-relay-443",
+		"ufw allow juist-relay-443"} {
+		if err != nil || !strings.Contains(calls, want) {
+			t.Fatalf("on lacks %q (%v):\n%s", want, err, calls)
+		}
+	}
+	grant, err := os.ReadFile(dropin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"\nAmbientCapabilities=CAP_NET_BIND_SERVICE\n", "\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n"} {
+		if !strings.Contains(string(grant), want) {
+			t.Errorf("the drop-in lacks %q:\n%s", want, grant)
+		}
+	}
+	if calls, err := run("on"); err != nil || strings.Contains(calls, "try-restart") {
+		t.Errorf("granting again restarted juistd (%v):\n%s", err, calls)
+	}
+	calls, err = run("off")
+	for _, want := range []string{"systemctl try-restart juistd.service", "firewall-cmd --remove-service=juist-relay-443",
+		"firewall-cmd --permanent --remove-service=juist-relay-443", "ufw delete allow juist-relay-443"} {
+		if err != nil || !strings.Contains(calls, want) {
+			t.Fatalf("off lacks %q (%v):\n%s", want, err, calls)
+		}
+	}
+	if _, err := os.Stat(filepath.Dir(dropin)); !os.IsNotExist(err) {
+		t.Errorf("the drop-in's directory stayed: %v", err)
+	}
+	if calls, err := run("off"); err != nil || strings.Contains(calls, "try-restart") {
+		t.Errorf("taking back what was not granted restarted juistd (%v):\n%s", err, calls)
 	}
 }
 

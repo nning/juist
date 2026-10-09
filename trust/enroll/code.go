@@ -194,10 +194,12 @@ const LinkPrefix = "juist:"
 const (
 	linkSecretLen = 16
 
-	// MaxLinkAddrs bounds how many host addresses a link carries, and
-	// MaxLinkRelays how many relays.
+	// MaxLinkAddrs bounds how many host addresses a link carries,
+	// MaxLinkRelays how many relays by address, and MaxLinkNamed how many by
+	// name.
 	MaxLinkAddrs  = 8
 	MaxLinkRelays = 4
+	MaxLinkNamed  = 4
 
 	// relayPrefix marks a relay's address among a link's addresses.
 	relayPrefix = "r="
@@ -218,14 +220,18 @@ type Link struct {
 
 	// Relays are member relays the inviting host waits at for a guest that
 	// cannot reach it directly ([Link.ForwardID]). A relay passes bytes and
-	// learns nothing that would let it answer in the host's place.
+	// learns nothing that would let it answer in the host's place. Named are
+	// relays by their public names, on 443.
 	Relays []netip.AddrPort
+	Named  []string
 }
 
-// WithRelays returns the link naming relays the host waits at.
-func (l Link) WithRelays(relays []netip.AddrPort) Link {
+// WithRelays returns the link naming relays the host waits at, by address
+// and by name.
+func (l Link) WithRelays(relays []netip.AddrPort, named []string) Link {
 	l.Addrs = slices.Clone(l.Addrs)
 	l.Relays = slices.Clone(relays[:min(len(relays), MaxLinkRelays)])
+	l.Named = slices.Clone(named[:min(len(named), MaxLinkNamed)])
 	return l
 }
 
@@ -244,6 +250,7 @@ func (l Link) ForwardID() [16]byte {
 func (l Link) WithAdmin(admin types.Identity) Link {
 	l.Addrs = slices.Clone(l.Addrs)
 	l.Relays = slices.Clone(l.Relays)
+	l.Named = slices.Clone(l.Named)
 	l.Admin = &admin
 	return l
 }
@@ -269,6 +276,9 @@ func (l Link) String() string {
 	}
 	for _, r := range l.Relays {
 		addrs = append(addrs, relayPrefix+r.String())
+	}
+	for _, n := range l.Named {
+		addrs = append(addrs, relayPrefix+n)
 	}
 	secret := linkEncoding.EncodeToString(l.secret[:])
 	if l.Admin != nil {
@@ -313,6 +323,16 @@ func ParseLink(s string) (Link, error) {
 	}
 	for part := range strings.SplitSeq(addrText, ",") {
 		text, isRelay := strings.CutPrefix(part, relayPrefix)
+		if isRelay && types.ValidateHostName(text) == nil {
+			if slices.Contains(l.Named, text) {
+				continue
+			}
+			if len(l.Named) == MaxLinkNamed {
+				return Link{}, fmt.Errorf("the invite link names more than %d relays by name", MaxLinkNamed)
+			}
+			l.Named = append(l.Named, text)
+			continue
+		}
 		a, err := netip.ParseAddrPort(text)
 		if err != nil || a.Port() == 0 || !a.Addr().IsValid() || a.Addr().Zone() != "" ||
 			a.Addr().IsUnspecified() || a.Addr().IsMulticast() {

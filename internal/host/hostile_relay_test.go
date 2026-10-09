@@ -9,12 +9,14 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -100,7 +102,7 @@ func TestAHostileRelayCannotStarveTheInvite(t *testing.T) {
 	if n := joins.Load(); n > 20 {
 		t.Errorf("a relay joined %d fake guests to the host in 2s; its connections are not held to one at a time", n)
 	}
-	link := h.Invite().Link().WithRelays(nil).WithAdmin(admin.Public())
+	link := h.Invite().Link().WithRelays(nil, nil).WithAdmin(admin.Public())
 	_, joinErr := guest.Join(ctx, guest.Options{Invite: link.String(), Name: "phone", Keys: g,
 		Adopt: func([]types.AUM) error { return nil }})
 	t.Logf("a direct guest's join: %v", joinErr)
@@ -109,4 +111,45 @@ func TestAHostileRelayCannotStarveTheInvite(t *testing.T) {
 	}
 	cancel()
 	<-served
+}
+
+// A host whose way to a relay's own port fails waits at the relay's name
+// next, where a guest on a network passing 443 alone comes; one on HTTPS
+// alone, at the name alone.
+func TestAHostWaitsAtARelaysNameWhereItsPortFails(t *testing.T) {
+	for _, httpsOnly := range []bool{false, true} {
+		hostID, _ := types.GenerateIdentity()
+		unreachable, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := unreachable.Addr().(*net.TCPAddr).AddrPort()
+		unreachable.Close()
+		var byName atomic.Int64
+		h, err := Listen(Options{
+			Addrs: func(port uint16) []netip.AddrPort {
+				return []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), port)}
+			},
+			Relays:    []forward.Relay{{Addrs: []netip.AddrPort{at}, CertHash: [32]byte{1}, ServerName: "x.invalid", Name: "relay.example.org"}},
+			Identity:  hostID,
+			HTTPSOnly: httpsOnly,
+			Proxy: func(name string) (*url.URL, error) {
+				if name == "relay.example.org" {
+					byName.Add(1)
+				}
+				return nil, errors.New("no way out in this test")
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		go h.Serve(ctx, admitting{func(*enroll.JoinRequest) *enroll.Admission { return nil }},
+			func() ([]types.AUM, [][]byte, [][]byte, error) { return nil, nil, nil, nil }, nil)
+		<-ctx.Done()
+		cancel()
+		if byName.Load() == 0 {
+			t.Errorf("HTTPS alone %v: the host never waited at the relay's name", httpsOnly)
+		}
+	}
 }

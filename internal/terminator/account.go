@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/acme"
@@ -19,6 +20,41 @@ import (
 
 	"github.com/nning/juist/ipc"
 )
+
+// orderUnder has client order certificates for the names served admits alone,
+// under the account whose key cache keeps, from a CA as Pebble is too.
+func orderUnder(ctx context.Context, client *acme.Client, cache autocert.Cache, served func(string) bool) error {
+	hc := http.Client{}
+	if client.HTTPClient != nil {
+		hc = *client.HTTPClient
+	}
+	hc.Transport = withOrderLocations(servedOrders{rt: hc.Transport, served: served})
+	client.HTTPClient = &hc
+	if client.Key == nil {
+		key, err := accountKey(ctx, cache)
+		if err != nil {
+			return err
+		}
+		client.Key = key
+	}
+	return nil
+}
+
+// NewManager is a certificate manager for the one name, by TLS-ALPN-01, from
+// client's CA, kept in cache with the account's key, as the terminator's.
+func NewManager(ctx context.Context, client *acme.Client, cache autocert.Cache, name string) (*autocert.Manager, error) {
+	served := func(host string) bool { return strings.EqualFold(strings.TrimSuffix(host, "."), name) }
+	if err := orderUnder(ctx, client, cache, served); err != nil {
+		return nil, err
+	}
+	return &autocert.Manager{Prompt: autocert.AcceptTOS, Cache: cache, Client: client,
+		HostPolicy: func(_ context.Context, host string) error {
+			if !served(host) {
+				return fmt.Errorf("terminator: %s is not served here", host)
+			}
+			return nil
+		}}, nil
+}
 
 // accountKeyName is where autocert keeps its account key in the cache, so
 // that the account named is the one certificates are issued to.

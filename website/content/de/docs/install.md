@@ -73,13 +73,15 @@ mit `armhf` und `i386` funktioniert es genauso.
   steht unter [So funktioniert juist]({{< relref "docs/how-it-works" >}}).
 - Unter Linux der Dienst `juistd`. Er startet sofort und wartet, bis du ein
   Netz anlegst oder einem beitrittst. Er läuft unter dem eigenen Benutzer
-  `juist` und hat nur `CAP_NET_ADMIN`. Daneben der Dienst `juist-ingress` für
+  `juist` und hat nur `CAP_NET_ADMIN`, auf einem
+  [Relay auf 443]({{< relref "docs/relays" >}}) dazu `CAP_NET_BIND_SERVICE`.
+  Daneben der Dienst `juist-ingress` für
   eine Ingress, den `juist ingress serve` startet, und `juist-serve` für juists
   eigenes TLS, den systemd ohne sudo startet, sobald `juist publish` oder
   `juist share` ihn braucht
   ([Dienste veröffentlichen]({{< relref "docs/publishing" >}})).
 - Firewall-Profile für ufw und firewalld: `juist`, `juist-relay`,
-  `juist-invite` und `juist-ingress`. Läuft ufw oder firewalld, lässt das
+  `juist-relay-443`, `juist-invite` und `juist-ingress`. Läuft ufw oder firewalld, lässt das
   Paket außerdem den Verkehr auf dem Netzwerkgerät `juist0` durch. Den braucht
   das Netz, um sein Log abzugleichen, und ein veröffentlichter Dienst, um
   erreicht zu werden. Das geschieht nur bei der ersten Installation, damit ein
@@ -114,8 +116,8 @@ pkg delete juist           # FreeBSD, als root
 
 Dabei werden alle juistd-Prozesse beendet, und alles, was juist auf dem
 Rechner eingerichtet hat, wird rückgängig gemacht. Unter Linux betrifft das
-die Firewall-Regel für `juist0`, eine Ingress und die Änderungen von
-`juist exit serve`.
+die Firewall-Regel für `juist0`, eine Ingress, ein Relay auf 443 und die
+Änderungen von `juist exit serve`.
 
 ## Gut zu wissen
 

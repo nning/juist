@@ -31,6 +31,7 @@ func systemLayout() *hostLayout {
 		exitScript:    "/usr/lib/juist/exit-node.sh",
 		ingressScript: "/usr/lib/juist/ingress.sh",
 		serveScript:   "/usr/lib/juist/serve.sh",
+		relayScript:   "/usr/lib/juist/relay.sh",
 		answers:       answersSoon,
 		answersTLS:    endsTLSSoon,
 		terminatorOn:  terminatorOnSystemd,

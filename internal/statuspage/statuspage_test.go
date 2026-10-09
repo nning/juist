@@ -229,3 +229,17 @@ func TestADisabledNetworkSaysSo(t *testing.T) {
 		t.Fatalf("alarms %q", a)
 	}
 }
+
+// A device on HTTPS alone says so, and by which relays; and one with none on
+// 443 says it reaches nobody.
+func TestThePageSaysHTTPSAlone(t *testing.T) {
+	p := sample()
+	p.Status.HTTPS = &ipc.HTTPS{Only: true, Relays: []string{"relay.example.org"}}
+	if body := serve(t, p, ipc.ShowNone, member, "/").Body.String(); !strings.Contains(body, "only, by relay.example.org") {
+		t.Errorf("the page does not say HTTPS alone:\n%s", body)
+	}
+	p.Status.HTTPS.Relays = nil
+	if body := serve(t, p, ipc.ShowNone, member, "/").Body.String(); !strings.Contains(body, "no relay on 443/tcp") {
+		t.Errorf("the page does not say no relay is on 443:\n%s", body)
+	}
+}

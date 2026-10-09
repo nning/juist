@@ -74,6 +74,16 @@ func (h *fakeHost) SetEgress(dev string, e EgressSpec, uid int) error {
 	return nil
 }
 
+func (h *fakeHost) ListenHTTPS(a netip.Addr) (*os.File, error) {
+	h.record("listen %v", a)
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return nil, err
+	}
+	defer ln.Close()
+	return ln.File()
+}
+
 func (h *fakeHost) Free(string) bool { return true }
 func (h *fakeHost) Answers() string  { return "the host's rules" }
 
@@ -413,5 +423,44 @@ func TestTheHelperKeepsToTheNetworksSpace(t *testing.T) {
 			strings.Contains(call, "/1 ") || strings.Contains(call, "127.0.0") || strings.Contains(call, "fe80::") {
 			t.Errorf("the host was asked %q", call)
 		}
+	}
+}
+
+// The relay's daemon is handed a listener on 443 at an address of the host's,
+// and only of its own device's, never on loopback, a link or the device's
+// own addresses or another juist device's, which terminators serve.
+func TestTheHelperBindsTheRelaysPortAtAHostsAddress(t *testing.T) {
+	h := &fakeHost{}
+	c, _ := pair(t, h)
+	if _, err := c.ListenHTTPS("juist0", netip.MustParseAddr("192.0.2.7")); err == nil {
+		t.Error("443 was bound for a device not opened")
+	}
+	f, err := c.OpenTUN("juist0", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := c.SetAddrs("juist0", prefixes("198.18.0.1/32")); err != nil {
+		t.Fatal(err)
+	}
+	h.took()
+	ln, err := c.ListenHTTPS("juist0", netip.MustParseAddr("192.0.2.7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	if got := h.took(); !slices.Equal(got, []string{"listen 192.0.2.7"}) {
+		t.Errorf("the host did %q", got)
+	}
+	defer func(f func() []netip.Addr) { juistAddrs = f }(juistAddrs)
+	juistAddrs = func() []netip.Addr { return []netip.Addr{netip.MustParseAddr("10.20.0.5")} }
+	for _, a := range []string{"127.0.0.1", "::1", "fe80::1", "169.254.1.1", "224.0.0.1", "198.18.0.1", "::ffff:192.0.2.7",
+		"10.20.0.5"} {
+		if _, err := c.ListenHTTPS("juist0", netip.MustParseAddr(a)); err == nil {
+			t.Errorf("443 was bound at %s", a)
+		}
+	}
+	if got := h.took(); len(got) != 0 {
+		t.Errorf("the host did %q", got)
 	}
 }

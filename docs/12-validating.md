@@ -308,6 +308,15 @@ than skip. A NAT cell can be run alone with
 | M12 — a disabled juistd drops every peer, says so, keeps handing the record to members and granting catch-ups, and is reset without `--force` | `daemon`: `TestDisableDropsEveryPeer`, `TestADisabledNodeHandsTheRecordOn`, `TestDisableReachesEveryMember` | no |
 | M12 — `juist create` shows the one break-glass secret and writes it nowhere; `juist network disable` asks, needs a juistd and a secret of the network, from a line on stdin, a file, or an older network's file in the keystore; nothing signs or applies a change after; admin keys go out and in as one checksummed line, never replacing a key | `cmd/juist`: `backup_test.go`, `TestAKeystoreFoundsSeveralNetworks` | no |
 | M12 — between hosts: fb ends the network and lx, told by fb's juistd, drops its tunnel | `make interop`: `TestLinuxAndFreeBSD/disable` | qemu |
+| M13 — HTTPS alone sends no UDP, its self node takes no peer relay, and its map holds the relays' names on 443 alone; elsewhere a name comes after a relay's public addresses | `conn`: `TestHTTPSOnlySendsNoUDP`, `TestOnlyTCP443KeepsTheNamesAlone`, `TestANamedRelayComesAfterItsPublicAddresses`, `TestUpstreamOnlyTCP443SendsNoUDP` | no |
+| M13 — a relay shows a CA's certificate to a client asking for its name and the pinned one to the rest, answers TLS-ALPN-01, and relays by the name; a PROXY header is read from loopback alone | `relay`: `TestANameIsServedUnderItsPublicCertificate`, `TestAChallengeForTheNameIsAnswered`, `TestMembersRelayThroughThePublicName`, `TestAHeaderFromElsewhereIsNotRead` | no |
+| M13 — the rendezvous answers for the network's members alone, takes a member's own announcement under its own key, bounds each client, and is reached through a proxy | `relay`: `TestTheRendezvousHoldsWhatItTakes`, `TestTheRendezvousLimitsEachClient`, `TestTheRendezvousIsReachedThroughAProxy`; `daemon`: `TestTheRendezvousAnswersForMembersAlone` | no |
+| M13 — a relay's name is announced from schema 12, 443 is taken by address unless the ingress hands the name on, and HTTPS alone announces no address, searches no LAN and looks members up at the relays | `daemon`: `TestARelaysNameIsAnnouncedFromItsSchema`, `TestTheRelayTakes443UnlessTheIngressDoes`, `TestHTTPSAloneAnnouncesNoAddressAndUsesTheRelays`; `internal/ingress`: `TestTheIngressHandsARelaysNameOn` | no |
+| M13 — links name relays by name; a host and a guest meet there through a CONNECT proxy, verified by WebPKI | `trust/enroll`: `TestLinksNameRelaysByName`; `relay`: `TestAHostAndAGuestMeetByTheRelaysNameThroughAProxy` | no |
+| M13 — `juist set` keeps the settings of 443, refuses HTTPS alone without a device, and says what it set; the root helper binds 443 at a host's address alone; relay.sh grants and takes back the capability and the port | `daemon`: `TestSettingsOf443AreKeptAndShown`; `cmd/juist`: `TestSetSaysWhatItSetOf443`; `internal/plumber`: `TestTheHelperBindsTheRelaysPortAtAHostsAddress`; `packaging`: `TestRelayScriptGrantsAndTakesBack443` | no |
+| M13 — a relay's addresses on this host's network first where it is seen from this host's public address, its name at public ones alone; the proxy's user kept from the DERP client; a relay outlives a temporary accept error, reads PROXY headers only as the ingress, bounds an IPv6 client by its /56 and spends nothing on keys of no member's; a challenge is ALPN's protocol alone and a held certificate is never locked out; a host waits at a relay's name where its port fails; the root helper binds no juist device's address | `conn`: `TestAnAddressOnThisHostsNetworkComesFirstAtOneSite`, `TestANamedRelaysAddressesArePublic`, `TestTheProxyIsForTheNamesOfHTTPSOnlyRelays`; `relay`: `TestARelayOutlivesATemporaryAcceptError`, `TestNoHeaderIsReadWhileNoIngressHandsOn`, `TestTheRendezvousBoundsClientsByNetwork`; `daemon`: `TestARelayOrdersItsCertificateSparingly`, `TestAFailedOrderLocksNoClientOutOfAHeldCertificate`; `internal/host`: `TestAHostWaitsAtARelaysNameWhereItsPortFails`; `internal/plumber`: `TestTheHelperBindsTheRelaysPortAtAHostsAddress` | no |
+| M13 — a public address of this host's is held past one report, a hello without ECDSA orders nothing, credentials taken back are sent no more, and the ingress is handed the name once the relay reads its header | `conn`: `TestAPublicAddressOfThisHostsIsHeld`, `TestTheProxyIsForTheNamesOfHTTPSOnlyRelays`; `daemon`: `TestAHelloWithoutECDSAOrdersNothing`, `TestTheRelayTakes443UnlessTheIngressDoes` | no |
+| M13 — between hosts: a device that passes TCP to 443 and DNS alone, and one behind a CONNECT proxy alone, join by a link, reach fb and lx through their relays' names by Pebble's certificates, keep reaching fb once its home relay moves and again after a restart; the first's capture holds TLS to the relays' names and DNS alone, as nDPI classifies it, the second's its proxy alone, asked for those names on 443; fb, the ingress, serves its relay on 443 beside its names | `make interop`: `TestLinuxAndFreeBSD/HTTPS_alone` | qemu |
 
 ### The last privileged run
 
@@ -321,6 +330,22 @@ whole lab passed at M9's tree in 13 minutes. What CI cannot run, Fedora with fir
 was last checked by hand, and this records the latest such run. Update it with
 each one, so it is clear how old the evidence is.
 
+- **2026-10-09, M13, at M13 after its fifth review**, run as M13
+  before its rebase onto the red team's M12. `make ci-vm` passed whole
+  in 29m9s, the privileged tests none skipped, the lab's
+  HTTPS alone among it: hotel, which passes TCP to 443 and DNS alone, and
+  office, behind a CONNECT proxy alone, join by a link and reach fb and lx
+  through their relays' names under Pebble's certificates, again once fb's
+  home relay moves and after a restart; hotel's capture holds TLS to those
+  names and DNS alone, as nDPI classifies it, and office's the proxy alone.
+  Runs before failed on the lab counting office's port unreachable, drawn by
+  lx's pings to the addresses office's magicsock still names (review 3),
+  on test races `-race` caught once each (reviews 4 and 5), and once on the
+  VM starved of CPU. `make test-freebsd` passed, all 44 packages, on the
+  freebsd-test VM repaired after a crash. No hand test on Fedora: desktop
+  was unreachable, so the firewalld profile `juist-relay-443` and the
+  drop-in rest on `packaging`'s script tests. `make android-check` did not
+  run: M13 changes neither `mobile` nor `android/`.
 - **2026-10-07, M12, at M12 after its fifth review**, which has juist
   create show one break-glass secret and write it nowhere. `make ci-vm`
   passed whole in 24m24s, the privileged tests none skipped, the lab's

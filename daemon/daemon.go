@@ -18,6 +18,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/netip"
+	"net/url"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -144,6 +145,24 @@ type Options struct {
 	// DisableRelay keeps this device from relaying even where the log grants
 	// it the role: the operator's veto over their own machine's bandwidth.
 	DisableRelay bool
+
+	// HTTPSOnly sends nothing but TLS to 443/tcp of the relays' public
+	// names, and DNS for them: no LAN discovery, DHT, STUN or other UDP, so
+	// every tunnel goes through a relay, and members are looked for at the
+	// relays. It needs TunName or Netstack, since log sync runs in the
+	// tunnel. Proxy is the HTTP proxy it goes through, "" for HTTPS_PROXY's.
+	HTTPSOnly bool
+	Proxy     string
+
+	// RelayName is the public DNS name this device's relay serves on
+	// 443/tcp too, where the log makes it a relay, under a certificate from
+	// the CA at ACMEDirectory, none where empty, kept in RelayCertsPath, in
+	// memory where empty. ListenHTTPS binds 443 at an address, which needs
+	// CAP_NET_BIND_SERVICE or root; nil binds it directly.
+	RelayName      string
+	ACMEDirectory  string
+	RelayCertsPath string
+	ListenHTTPS    func(netip.Addr) (net.Listener, error)
 
 	// Connect builds the data plane. Nil uses [conn.New].
 	Connect func(conn.Options) (conn.Manager, error)
@@ -324,6 +343,16 @@ type Daemon struct {
 	relayPort    uint16
 	portFallback bool
 	noRelay      bool
+
+	// httpsOnly, proxy, relayName and the rest are [Options.HTTPSOnly] and
+	// its neighbours; relayCerts is nil without a relay name.
+	httpsOnly    bool
+	proxy        string
+	envProxy     func(*url.URL) (*url.URL, error)
+	relayName    string
+	relayCerts   certSource
+	listenHTTPS  func(netip.Addr) (net.Listener, error)
+	rvKeys       rendezvousKeys
 	noV4         bool
 	cachePath    string
 	leasePath    string
@@ -525,7 +554,24 @@ type Daemon struct {
 	relay        *relay.Server
 	relayMembers map[types.WGKey]bool
 	relayHosts   map[types.Identity]bool
-	ownRegion    bool
+
+	// namedRelays are the relays installed that serve a name on 443;
+	// https443 the relay's own sockets on 443, by address, httpsErr why
+	// some could not be bound, and httpsHanded that the ingress takes 443
+	// instead. relayNameRefused is why its name is not announced, and
+	// relayNoCert why it has no certificate for it, relayHasCert that it
+	// has had one, and relayCertDue when to order one again, relayCertGap
+	// after the last.
+	namedRelays      []conn.Relay
+	https443         map[netip.Addr]net.Listener
+	httpsErr         string
+	httpsHanded      bool
+	relayNameRefused string
+	relayNoCert      string
+	relayHasCert     bool
+	relayCertGap     time.Duration
+	relayCertDue     time.Time
+	ownRegion        bool
 
 	// addrs caches the last interface scan; see [Daemon.underlayEndpoints].
 	addrs      []netip.AddrPort
@@ -604,6 +650,12 @@ func New(opts Options) (*Daemon, error) {
 		relayPort:        opts.RelayPort,
 		portFallback:     opts.PortFallback,
 		noRelay:          opts.DisableRelay,
+		httpsOnly:        opts.HTTPSOnly,
+		proxy:            opts.Proxy,
+		envProxy:         envProxyFunc(),
+		relayName:        opts.RelayName,
+		listenHTTPS:      opts.ListenHTTPS,
+		https443:         map[netip.Addr]net.Listener{},
 		noV4:             opts.NoV4,
 		relayMembers:     map[types.WGKey]bool{},
 		relayHosts:       map[types.Identity]bool{},
@@ -626,6 +678,9 @@ func New(opts Options) (*Daemon, error) {
 		leaseEvery:       cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
 	}
 	d.pub.consent, d.pub.to = opts.ServePublished, maps.Clone(opts.ServeTo)
+	if d.listenHTTPS == nil {
+		d.listenHTTPS = defaultListenHTTPS
+	}
 	// The addresses are those of this moment: past a renumbering's deadline
 	// they change, and the service restarts the mesh on them.
 	now := d.now().Unix()
@@ -658,6 +713,15 @@ func New(opts Options) (*Daemon, error) {
 	var undo cleanup
 	defer undo.run()
 
+	if opts.HTTPSOnly && opts.TunName == "" && !opts.Netstack {
+		return nil, errors.New("daemon: HTTPS alone needs a device or the netstack, since log sync runs in the tunnel")
+	}
+	if opts.RelayName != "" {
+		if d.relayCerts, err = newRelayCertificates(opts.RelayName, opts.ACMEDirectory, opts.RelayCertsPath); err != nil {
+			return nil, fmt.Errorf("daemon: the relay's certificates: %w", err)
+		}
+	}
+
 	connect := opts.Connect
 	if connect == nil {
 		connect = conn.New
@@ -672,11 +736,13 @@ func New(opts Options) (*Daemon, error) {
 			DiscoKey: conn.DiscoKeyFromRaw32(d.discoPrivate),
 			Addrs:    selfAddrs,
 		},
-		TunName:  opts.TunName,
-		Plumber:  opts.Plumber,
-		Instance: opts.Instance,
-		STUN:     opts.STUN,
-		Logf:     d.logf,
+		TunName:   opts.TunName,
+		Plumber:   opts.Plumber,
+		Instance:  opts.Instance,
+		STUN:      opts.STUN,
+		HTTPSOnly: opts.HTTPSOnly,
+		Proxy:     d.proxyFor,
+		Logf:      d.logf,
 		// The home relay and the reflexive addresses both belong in this
 		// node's announcement, and both are learned asynchronously once
 		// there is a relay to learn them from.
@@ -752,7 +818,7 @@ func New(opts Options) (*Daemon, error) {
 	}
 	undo.push(func() { d.gossip.Close() })
 
-	if !opts.DisableDiscovery {
+	if !opts.DisableDiscovery && !opts.HTTPSOnly {
 		mopts := mdns.Options{}
 		if opts.Discovery != nil {
 			mopts = *opts.Discovery
@@ -771,8 +837,8 @@ func New(opts Options) (*Daemon, error) {
 		undo.push(func() { d.beacon.Close() })
 	}
 
-	if !opts.DisableDHT {
-		d.dht, err = dht.New(dht.Options{
+	if !opts.DisableDHT || opts.HTTPSOnly {
+		o := dht.Options{
 			Self:      self,
 			Keyring:   d.keyring,
 			Announce:  d.publishedAnnouncement,
@@ -780,8 +846,12 @@ func New(opts Options) (*Daemon, error) {
 			OnPeer:    d.onFoundInDHT,
 			Bootstrap: opts.DHTBootstrap,
 			Logf:      d.logf,
-		})
-		if err != nil {
+		}
+		if opts.HTTPSOnly {
+			// The relays on 443 stand in for the DHT, which is UDP.
+			o.Items = &relayItems{d: d, hc: d.httpsClient()}
+		}
+		if d.dht, err = dht.New(o); err != nil {
 			return nil, err
 		}
 	}
@@ -896,6 +966,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		go func() {
 			defer d.waits.done()
 			d.dht.Run(ctx)
+		}()
+	}
+	if d.relayCerts != nil && d.waits.track() {
+		go func() {
+			defer d.waits.done()
+			d.keepRelayCertificate(ctx)
 		}()
 	}
 
@@ -1321,6 +1397,7 @@ func (d *Daemon) Close() error {
 			d.beacon.Close()
 		}
 		d.gossip.Close()
+		d.closeHTTPS()
 		d.closeRelay()
 		// Before the device goes, which resolved's routing names.
 		d.closeDNS()

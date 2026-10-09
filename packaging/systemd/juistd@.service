@@ -52,7 +52,8 @@ RuntimeDirectoryPreserve=yes
 UMask=0077
 
 # The whole privilege footprint: CAP_NET_ADMIN, ambient so the unprivileged
-# process keeps it, and nothing else in the bounding set.
+# process keeps it, and nothing else in the bounding set. A relay on 443 adds
+# CAP_NET_BIND_SERVICE by a drop-in of relay.sh's, juist set --relay-name's.
 AmbientCapabilities=CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_ADMIN
 NoNewPrivileges=yes

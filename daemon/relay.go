@@ -47,6 +47,9 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 
 	out := make([]conn.Relay, 0, 4)
 	taken := make(map[int]types.Identity, 4)
+	var names []string
+	nodes = slices.Clone(nodes)
+	slices.SortFunc(nodes, func(a, b types.NodeRecord) int { return a.Identity.Compare(b.Identity) })
 	for i := range nodes {
 		n := &nodes[i]
 		if !n.HasRole(types.RoleRelayCapable) {
@@ -57,8 +60,15 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 			continue
 		}
 		addrs := ep.RelayAddrs()
-		if len(addrs) == 0 {
+		if len(addrs) == 0 && ep.Relay.Name == "" {
 			continue
+		}
+		name := ep.Relay.Name
+		if name != "" && slices.Contains(names, name) {
+			// A name is one relay's: two would be two regions on one
+			// server. The first, by identity below, keeps it.
+			d.logOnce("daemon: two relays announce the name " + name + "; the one with the lower identity keeps it")
+			name = ""
 		}
 		region := relayRegion(network, n.Identity)
 		// Two relays in one region would share a DERP map entry, and since
@@ -79,8 +89,15 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 			HostName: ep.Relay.HostName,
 			Addrs:    addrs,
 			STUNPort: ep.Relay.STUNPort,
+			Name:     name,
 		}
 		copy(r.CertHash[:], ep.Relay.Cert)
+		if len(r.Addrs) == 0 && r.Name == "" {
+			continue
+		}
+		if name != "" {
+			names = append(names, name)
+		}
 		out = append(out, r)
 	}
 	slices.SortFunc(out, func(a, b conn.Relay) int { return a.Region - b.Region })
@@ -92,12 +109,20 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 // after its own removal, stops it: who may use it is a membership question.
 func (d *Daemon) syncRelay(state *log.State) {
 	want := !d.noRelay
+	refused := ""
 	if state != nil {
 		self, ok := state.Node(d.self)
 		want = want && ok && self.HasRole(types.RoleRelayCapable)
+		refused = schemaRefusesRelayName(state)
 	} else {
 		want = false
 	}
+	d.mu.Lock()
+	if d.relayName != "" && d.relayNameRefused != refused {
+		d.relayNameRefused = refused
+		d.announced = nil // the name enters or leaves the announcement
+	}
+	d.mu.Unlock()
 	select {
 	case <-d.closed:
 		// Shutting down. Starting one here would outlive the Close that has
@@ -119,8 +144,12 @@ func (d *Daemon) syncRelay(state *log.State) {
 			return
 		}
 		srv, err := onPortOrAny(d, d.relayPort, syscall.EADDRINUSE, "relay", func(port uint16) (*relay.Server, error) {
-			return relay.New(relay.Options{Admit: d.admitToRelay, AdmitHost: d.admitHostToRelay, Port: port,
-				Certificate: cert, Logf: d.logf})
+			o := relay.Options{Admit: d.admitToRelay, AdmitHost: d.admitHostToRelay, Port: port,
+				Certificate: cert, Rendezvous: (*relayRendezvous)(d), HandedOff: d.handingOn, Logf: d.logf}
+			if d.relayCerts != nil {
+				o.Name, o.NamedCertificate = d.relayName, d.namedCertificate
+			}
+			return relay.New(o)
 		})
 		if err != nil {
 			d.logOnce("daemon: this device holds the relay-capable role but its relay " +
@@ -133,17 +162,20 @@ func (d *Daemon) syncRelay(state *log.State) {
 		d.mu.Unlock()
 		d.logf("daemon: relaying for members on TCP port %d (STUN on UDP %d)",
 			srv.Port(), srv.STUNPort())
+		d.syncHTTPS(state, srv)
 	case !want && running != nil:
 		d.mu.Lock()
 		d.relay = nil
 		d.announced = nil
 		d.mu.Unlock()
+		d.closeHTTPS()
 		running.Close()
 		d.logf("daemon: stopped relaying; the log no longer grants this device the relay-capable role")
 	case want && running != nil:
 		// Membership moved, so a client admitted earlier may no longer be a
 		// member. Admission runs once per connection and never again.
 		running.Reauthorize()
+		d.syncHTTPS(state, running)
 	}
 }
 
@@ -184,12 +216,18 @@ func (d *Daemon) relayInfo() *gossip.RelayInfo {
 		return nil
 	}
 	sum := srv.CertHash()
-	return &gossip.RelayInfo{
+	info := &gossip.RelayInfo{
 		Port:     srv.Port(),
 		STUNPort: srv.STUNPort(),
 		Cert:     sum[:],
 		HostName: srv.HostName(),
 	}
+	d.mu.Lock()
+	if d.relayCerts != nil && d.relayNameRefused == "" {
+		info.Name = d.relayName
+	}
+	d.mu.Unlock()
+	return info
 }
 
 // closeRelay stops this device's relay, for shutdown.
@@ -218,11 +256,11 @@ func (d *Daemon) inviteRelays(state *log.State) []forward.Relay {
 			continue
 		}
 		addrs := ep.RelayAddrs()
-		if len(addrs) == 0 {
+		if len(addrs) == 0 && ep.Relay.Name == "" {
 			continue
 		}
 		out = append(out, forward.Relay{Addrs: addrs, CertHash: [32]byte(ep.Relay.Cert),
-			ServerName: ep.Relay.HostName})
+			ServerName: ep.Relay.HostName, Name: ep.Relay.Name})
 	}
 	return out
 }

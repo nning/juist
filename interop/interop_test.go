@@ -171,6 +171,9 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 			containerMember(t, fb, lx, image)
 		})
 	}
+	t.Run("HTTPS alone", func(t *testing.T) {
+		httpsAlone(t, fb, lx, work, fb4, lx4)
+	})
 	fb.try("juist publish serve --stop; juist ingress serve --stop; pkill -f '[p]ebble'; pkill -f '[p]robe answer'; "+
 		"pkill -f '[p]robe serve fb-web'; sysrc -x juist_serve_env juist_serve_args", time.Minute)
 	t.Run("rename", func(t *testing.T) {

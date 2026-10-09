@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -403,6 +404,8 @@ func startService(t *testing.T, home, sock string,
 			Logf:             func(string, ...any) {},
 			// The packaged service's, which exit nodes need.
 			EgressUser: func() string { return "" },
+			// A relay named on 443 takes loopback in its place.
+			ListenHTTPS: func(netip.Addr) (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") },
 		},
 		Find: find,
 		InviteAddrs: func(port uint16) []netip.AddrPort {

@@ -69,8 +69,16 @@ the default; the others keep their keys.`}
 	if err := a.proceed(*yes, q); err != nil {
 		return err
 	}
+	ds := n.status()
+	named := ds != nil && ds.HTTPS != nil && ds.HTTPS.Name != "" && ds.Instance == 0
 	if err := n.reset(*force); err != nil {
 		return err
+	}
+	if named && a.host.relayScript != "" {
+		// The relay's name went with the reset; its capability and port go too.
+		if err := a.packageScript(a.host.relayScript, "off", "giving the relay's 443 back"); err != nil {
+			a.warn("%v", err)
+		}
 	}
 	switch {
 	case st.network != "" && (inst > 0 || len(others) > 0):

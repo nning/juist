@@ -59,6 +59,16 @@ func (FreeBSD) OpenTUN(name string, mtu int) (*os.File, func() error, error) {
 
 // Free reports whether no helper holds name's lock, which one holds while
 // its device lives.
+// ListenHTTPS binds 443/tcp at a.
+func (FreeBSD) ListenHTTPS(a netip.Addr) (*os.File, error) {
+	ln, err := net.ListenTCP("tcp", net.TCPAddrFromAddrPort(netip.AddrPortFrom(a, 443)))
+	if err != nil {
+		return nil, err
+	}
+	defer ln.Close()
+	return ln.File()
+}
+
 func (FreeBSD) Free(name string) bool {
 	lock, err := os.OpenFile(filepath.Join(lockDir, "juistd."+name+".lock"), os.O_CREATE|os.O_RDWR|syscall.O_CLOEXEC, 0o600)
 	if err != nil {

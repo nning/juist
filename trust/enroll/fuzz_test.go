@@ -16,7 +16,7 @@ func FuzzParseInvite(f *testing.F) {
 	}
 	f.Add(inv.Code().String())
 	f.Add(inv.Link().String())
-	f.Add(inv.Link().WithRelays([]netip.AddrPort{netip.MustParseAddrPort("203.0.113.5:41645")}).String())
+	f.Add(inv.Link().WithRelays([]netip.AddrPort{netip.MustParseAddrPort("203.0.113.5:41645")}, []string{"relay.example.org"}).String())
 	f.Add("7 ACME Adviser aimless")
 	f.Fuzz(func(t *testing.T, s string) {
 		if IsLink(s) {

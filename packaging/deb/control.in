@@ -13,4 +13,5 @@ Description: peer-to-peer mesh VPN with no coordination server
  control plane: membership, key distribution, revocation and rendezvous are
  peer-to-peer. This package installs the CLI, the node daemon, and a systemd
  unit that runs the daemon as a dedicated unprivileged user holding
- CAP_NET_ADMIN and nothing else.
+ CAP_NET_ADMIN and nothing else, and CAP_NET_BIND_SERVICE on a relay its
+ operator gave a name on 443.

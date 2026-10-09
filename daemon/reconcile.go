@@ -158,6 +158,7 @@ func (d *Daemon) Reconcile() error {
 		Exit:          d.exitNow(),
 		Subnets:       d.subnetsNow(),
 		Publish:       d.publishNow(),
+		HTTPS:         d.httpsNow(relays),
 	})
 	return nil
 }
@@ -300,6 +301,10 @@ func (d *Daemon) installRelays(s snapshot, held map[types.Identity]gossip.Endpoi
 		d.setStatus(func(s *ipc.Status) { s.DataPlaneError = err.Error() })
 		return nil, err
 	}
+	named := slices.DeleteFunc(slices.Clone(relays), func(r conn.Relay) bool { return r.Name == "" })
+	d.mu.Lock()
+	d.namedRelays = named
+	d.mu.Unlock()
 	return relays, nil
 }
 

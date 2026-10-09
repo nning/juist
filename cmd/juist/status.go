@@ -193,8 +193,11 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 			v.head = append(v.head, line{text: paint("1", name) + " · joining a network"})
 			return v
 		}
-		v.head = append(v.head, line{text: paint("1", name) + " · no network"},
-			line{kind: lineHint, text: "juist join CODE, or juist create"})
+		v.head = append(v.head, line{text: paint("1", name) + " · no network"})
+		if h := s.HTTPS; h != nil && h.Only {
+			field("HTTPS", "only%s", proxied(h))
+		}
+		v.head = append(v.head, line{kind: lineHint, text: "juist join CODE, or juist create"})
 		return v
 	}
 	if s.Disabled != "" {
@@ -307,6 +310,19 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 		}
 		field("Relays", "%s", relays)
 	}
+	if h := s.HTTPS; h != nil && h.Only {
+		switch len(h.Relays) {
+		case 0:
+			field("HTTPS", "%s", paint("33", "only, and no relay on 443")+proxied(h))
+		default:
+			field("HTTPS", "only, by %s%s", strings.Join(h.Relays, ", "), proxied(h))
+		}
+	}
+	if h := s.HTTPS; h != nil && h.Name != "" && s.Relaying {
+		field("Relay name", "%s", relayNameSummary(h, paint))
+	} else if h != nil && h.Name != "" {
+		field("Relay name", "%s, %s", h.Name, paint("2", "not relaying"))
+	}
 	if ex := s.Exit; ex != nil {
 		name := exitName(ex)
 		if !ex.Node.IsZero() {
@@ -385,14 +401,21 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 		field("Freshness", "vouched%s %s, valid %s", by, since(s.FreshSince),
 			roughly(time.Unix(s.FreshUntil, 0).Sub(now)))
 	}
-	ports := fmt.Sprintf("udp/%d", s.ListenPort)
+	var open []string
+	if s.HTTPS == nil || !s.HTTPS.Only {
+		// On HTTPS alone nothing comes to the data plane's port.
+		open = append(open, fmt.Sprintf("udp/%d", s.ListenPort))
+	}
 	if !s.SyncInTunnel {
-		ports += fmt.Sprintf(", tcp/%d sync", s.GossipPort)
+		open = append(open, fmt.Sprintf("tcp/%d sync", s.GossipPort))
 	}
 	if s.Relaying && s.RelayPort != 0 {
-		ports += fmt.Sprintf(", tcp/%d and udp/%d relay", s.RelayPort, s.RelayPort)
+		open = append(open, fmt.Sprintf("tcp/%d and udp/%d relay", s.RelayPort, s.RelayPort))
+		if h := s.HTTPS; h != nil && len(h.Listening) > 0 && h.Listening[0] != ipc.HandedOn {
+			open = append(open, "tcp/443 relay")
+		}
 	}
-	field("Ports", "%s", ports)
+	field("Ports", "%s", cmp.Or(strings.Join(open, ", "), "none from outside"))
 	if s.LastReconcile > 0 {
 		field("Updated", "%s", since(s.LastReconcile))
 	}
@@ -413,6 +436,64 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	}
 	v.notes = append(v.notes, statusNotes(s, several)...)
 	return v
+}
+
+// httpsNotes are what keeps this device's use of 443 from working.
+func httpsNotes(s *ipc.Status) []line {
+	h := s.HTTPS
+	if h == nil || s.Alarm != "" {
+		return nil
+	}
+	var notes []line
+	note := func(kind lineKind, format string, args ...any) {
+		notes = append(notes, line{kind: kind, text: fmt.Sprintf(format, args...)})
+	}
+	if h.Only && len(h.Relays) == 0 {
+		note(lineWarn, "no relay on 443/tcp")
+		note(lineHint, "a relay's operator names it there: juist set --relay-name NAME")
+	}
+	switch {
+	case h.Name == "" || !s.Relaying:
+	case h.NotAnnounced != "":
+		note(lineWarn, "members are not told of %s: %s", h.Name, h.NotAnnounced)
+		note(lineHint, "juist log upgrade")
+	case h.ListenError != "":
+		note(lineWarn, "the relay cannot take 443: %s", h.ListenError)
+		if strings.Contains(h.ListenError, "permission denied") {
+			note(lineHint, "sudo juist set --relay-name %s, which lets the packaged juistd bind 443", h.Name)
+		} else {
+			note(lineHint, "another program holds 443 here")
+		}
+	case h.NoCert != "":
+		note(lineWarn, "no certificate for %s yet: %s", h.Name, h.NoCert)
+		note(lineHint, "%s must point at this device in DNS, and %s let 443/tcp in", h.Name,
+			map[bool]string{true: "the ingress", false: "every firewall in front of it"}[len(h.Listening) > 0 &&
+				h.Listening[0] == ipc.HandedOn])
+	}
+	return notes
+}
+
+// proxied is what an HTTPS-only device goes through, if anything.
+func proxied(h *ipc.HTTPS) string {
+	if h.Proxy == "" {
+		return ""
+	}
+	return " through " + h.Proxy
+}
+
+// relayNameSummary is the status line of this device's relay on 443.
+func relayNameSummary(h *ipc.HTTPS, paint func(code, s string) string) string {
+	switch {
+	case h.NotAnnounced != "":
+		return h.Name + ", " + paint("33", "not told to members")
+	case h.NoCert != "":
+		return h.Name + ", " + paint("33", "no certificate yet")
+	case len(h.Listening) == 0:
+		return h.Name + ", " + paint("33", "not on 443")
+	case h.Listening[0] == ipc.HandedOn:
+		return h.Name + ", on 443 through the ingress"
+	}
+	return h.Name + ", on 443"
 }
 
 // statusNotes are what needs attention on a connected device.
@@ -480,14 +561,19 @@ func statusNotes(s *ipc.Status, several bool) []line {
 			strings.Join(s.SyncFailing, ", "), s.GossipPort, dev)
 		note(lineHint, "on both devices: sudo ufw allow in on %s, or add %s to firewalld's trusted zone", dev, dev)
 	}
-	if len(s.Seeking) > 0 {
+	httpsOnly := s.HTTPS != nil && s.HTTPS.Only
+	if len(s.Seeking) > 0 && httpsOnly {
+		note(lineInfo, "no answer from %s: offline, or at no relay on 443", strings.Join(s.Seeking, ", "))
+	} else if len(s.Seeking) > 0 {
 		note(lineInfo, "no answer from %s: offline, or udp/%d blocked", strings.Join(s.Seeking, ", "), s.ListenPort)
 	}
 	// Only where the announcement held is known to be the device's newest is
 	// the way to it to blame.
 	if down := slices.DeleteFunc(slices.Clone(s.TunnelsDown), func(n string) bool {
 		return slices.Contains(s.Seeking, n) || slices.Contains(s.Absent, n)
-	}); len(down) > 0 {
+	}); len(down) > 0 && httpsOnly {
+		note(lineWarn, "no tunnel traffic from %s through the relays on 443", strings.Join(down, ", "))
+	} else if len(down) > 0 {
 		note(lineWarn, "no tunnel traffic from %s: udp/%d blocked, or both behind NAT with no relay",
 			strings.Join(down, ", "), s.ListenPort)
 		note(lineHint, "on a device with a public address: %s", openPorts("juist", s.ListenPort, serviceDataPort,
@@ -496,6 +582,7 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	if s.Conflicted > 0 {
 		note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))
 	}
+	notes = append(notes, httpsNotes(s)...)
 	if s.LeaseSigners == 0 {
 		var relays []string
 		for _, d := range s.Devices {

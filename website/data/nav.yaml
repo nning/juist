@@ -7,7 +7,7 @@
 - group: admins
   items: [docs/admins, docs/networks, docs/network-changes, docs/keys]
 - group: routing
-  items: [docs/exit-nodes, docs/subnets, docs/relays, docs/publishing]
+  items: [docs/exit-nodes, docs/subnets, docs/relays, docs/https-only, docs/publishing]
 - group: design
   items: [docs/architecture, docs/compare, docs/security]
 - group: help

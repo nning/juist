@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- For a relay its operator gave a public name: TLS on 443 for it, and the
+     ACME CA's TLS-ALPN-01 challenge for the name. -->
+<service>
+  <short>juist relay on 443</short>
+  <description>juist member relay under a public name, on 443/tcp.</description>
+  <port protocol="tcp" port="443"/>
+</service>

@@ -61,6 +61,21 @@ type Options struct {
 	// Nil forwards no invites.
 	AdmitHost func(identity [32]byte) bool
 
+	// Name, where set, is the public DNS name the relay answers for too,
+	// under the certificate NamedCertificate gives, which a client asking
+	// for Name by SNI is shown instead of the pinned one. NamedCertificate
+	// answers TLS-ALPN-01 challenges as well.
+	Name             string
+	NamedCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
+	// Rendezvous answers members' announcements over HTTPS, for a member
+	// that can reach no DHT; nil serves none.
+	Rendezvous Rendezvous
+
+	// HandedOff says whether connections from loopback may start with a
+	// PROXY v2 header naming the client, as the ingress's do; nil never.
+	HandedOff func() bool
+
 	// Logf receives diagnostics. Nil discards them.
 	Logf logger.Logf
 }
@@ -79,6 +94,7 @@ type Server struct {
 	derp   *derpserver.Server
 	http   *http.Server
 	ln     net.Listener
+	tls    *tls.Config
 	stun   *stunResponder
 	cert   *selfSigned
 	admit  func([32]byte) bool
@@ -178,9 +194,16 @@ func New(opts Options) (*Server, error) {
 		mux.HandleFunc(forward.HostPath, s.fwd.serveHost)
 		mux.HandleFunc(forward.GuestPath, s.fwd.serveGuest)
 	}
+	if opts.Rendezvous != nil {
+		mux.Handle(RendezvousPath, newRendezvousHandler(opts.Rendezvous, logf))
+	}
+	s.tls = tlsConfig(cert, opts.Name, opts.NamedCertificate)
+	if opts.HandedOff != nil {
+		ln = handedOff(ln, opts.HandedOff)
+	}
 	s.http = &http.Server{
 		Handler:   mux,
-		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert.tls}, MinVersion: tls.VersionTLS12},
+		TLSConfig: s.tls,
 		// The connection a request arrived on, so that a client admitted on
 		// it can be dropped later. Nothing else can reach it: a DERP session
 		// hijacks the connection and the server stops tracking it.

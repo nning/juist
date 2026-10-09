@@ -87,7 +87,7 @@ func TestUpstreamBackoffLineIsTheOneFiltered(t *testing.T) {
 // The second matches the error derphttp gives for a region with no relay in
 // it, which is what a STUN-only region is.
 func TestUpstreamSTUNOnlyRegionErrorIsTheOneFiltered(t *testing.T) {
-	dm, stunRegions := derpMap(nil, []string{"192.0.2.1:3478"})
+	dm, stunRegions := derpMap(nil, []string{"192.0.2.1:3478"}, false, Networks{})
 	var reg *tailcfg.DERPRegion
 	for id := range stunRegions {
 		reg = dm.Regions[id]
@@ -208,5 +208,79 @@ func TestReconfigReprogramsAFailedRouterOnTheRealEngine(t *testing.T) {
 	}
 	if last := r.took[len(r.took)-1]; !samePrefixSet(last.LocalAddrs, m.self.Addrs) {
 		t.Fatalf("the router ended at %v, want %v", last.LocalAddrs, m.self.Addrs)
+	}
+}
+
+// HTTPS alone rests on magicsock sending no UDP once SetOnlyTCP443 is set:
+// disco and netcheck's sends refuse, a peer's UDP path is taken only from a
+// pong to a ping that was sent, or from a peer relay the self node's
+// capability turns off, and netcheck measures relays over HTTPS alone.
+func TestUpstreamOnlyTCP443SendsNoUDP(t *testing.T) {
+	for file, wants := range map[string][]string{
+		"wgengine/magicsock/magicsock.go": {
+			"func (c *Conn) sendUDPStd(addr netip.AddrPort, b []byte) (sent bool, err error) {\n\tif c.onlyTCP443.Load() {\n\t\treturn false, nil",
+			"if !hasUDPTransport || c.onlyTCP443.Load() {\n\t\treturn 0, errors.ErrUnsupported",
+			"!self.HasCap(nodecap.OnlyTCP443)",
+			"OnlyTCP443:          c.onlyTCP443.Load(),",
+		},
+		"wgengine/magicsock/endpoint.go": {
+			"de.setBestAddrLocked(thisPong)",
+			"determined maybeBest is functional via [disco.Pong] reception",
+		},
+		"net/netcheck/netcheck.go": {
+			"if buildfeatures.HasNATTraversal && (opts == nil || !opts.OnlyTCP443) {\n\t\tplan = makeProbePlan",
+			`"https://"+node.HostName+"/derp/latency-check"`,
+		},
+	} {
+		src := upstreamSource(t, file)
+		for _, want := range wants {
+			if !strings.Contains(src, want) {
+				t.Errorf("%s no longer holds %q", file, want)
+			}
+		}
+		// Two set it, from a pong and from a peer relay, and two clear it.
+		if n := strings.Count(src, "de.setBestAddrLocked("); file == "wgengine/magicsock/endpoint.go" && n != 4 {
+			t.Errorf("%s sets a peer's UDP path in %d places, not the 4 read for HTTPS alone", file, n)
+		}
+	}
+}
+
+// A relay's name on 443 rests on derphttp dialling a node's DERPPort, at its
+// host name resolved in DNS where an address is left empty, verifying a node
+// with no CertName by WebPKI against that name, and asking the proxy hook,
+// with the name, for each dial.
+func TestUpstreamANamedNodeIsDialledByNameThroughTheProxy(t *testing.T) {
+	src := upstreamSource(t, "derp/derphttp/derphttp_client.go")
+	for _, want := range []string{
+		"if proxyFromEnv, ok := feature.HookProxyFromEnvironment.GetOk(); ok {",
+		"Host:   c.tlsServerName(n),",
+		"if n.DERPPort != 0 {\n\t\t\t\tport = fmt.Sprint(n.DERPPort)",
+		"func shouldDialProto(s string, pred func(netip.Addr) bool) bool {\n\tif s == \"\" {\n\t\treturn true",
+		"dst := cmp.Or(dstPrimary, n.HostName)",
+		"tlsConf.ServerName = c.tlsServerName(node)",
+		"if node.CertName != \"\" {",
+		"if getAuthHeader, ok := feature.HookProxyGetAuthHeader.GetOk(); ok {",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("derphttp no longer holds %q", want)
+		}
+	}
+}
+
+// Nothing in juistd maps ports or probes for captive portals, which would
+// send outside TLS on 443 whatever magicsock is told.
+func TestUpstreamNoPortMapperOrCaptivePortalIsLinked(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("lists the build's packages, which a host without Go cannot")
+	}
+	out, err := exec.Command("go", "list", "-deps", "github.com/nning/juist/cmd/juistd").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range strings.Fields(string(out)) {
+		if p == "tailscale.com/feature/portmapper" || p == "tailscale.com/net/portmapper" ||
+			strings.HasPrefix(p, "tailscale.com/feature/captiveportal") || p == "tailscale.com/net/captivedetection" {
+			t.Errorf("juistd links %s", p)
+		}
 	}
 }

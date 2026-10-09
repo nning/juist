@@ -1675,57 +1675,77 @@ on this record, so the audit has to see it.
 
 ## M13 — HTTPS alone to the outside
 
+**Done** on 2026-10-09, as below, reviewed (M13 reviews 1 to 5) and
+validated by `make ci-vm` and `make test-freebsd` (12-validating.md).
+
 A device on a network that passes TCP to 443 alone, or whose firewall
 sorts traffic by simple DPI (a hotel's, a company's, a school's), reaches
-its peers as one HTTPS client among others: with
-`juistd --https-only` it sends nothing but TLS over TCP to port 443 of
-member relays, and DNS queries for their names. Every packet then goes
-through a relay, at the relay's throughput and latency. It does not hide
-juist from a censor that probes servers or fingerprints ClientHellos
-(below). It is part of v1 and comes before the audit, so that M16 covers
-it.
+its peers as one HTTPS client among others: with `juist set --https-only`
+it sends nothing but TLS over TCP to port 443 of member relays, and DNS
+queries for their names. Every packet then goes through a relay, at the
+relay's throughput and latency. It does not hide juist from a censor that
+probes servers or fingerprints ClientHellos (below). It is part of v1 and
+comes before the audit, so that M16 covers it.
 
 ```
 member ──TLS :443, SNI relay.example.org──▶ relay (DERP) ◀──UDP or :443── peers
 ```
 
-1. **No UDP from the data plane.** magicsock's `Conn.SetOnlyTCP443(true)`,
-   not `TS_DEBUG_ALWAYS_USE_DERP`, which leaves STUN, the port mapper and
-   peer relays running against a dead socket. It sends no WireGuard, disco
-   or STUN over UDP, maps no port, uses no peer relay, and netcheck picks
-   the home region by HTTPS latency (`/derp/latency-check`). It does not
-   filter relays by port: the device's DERP map holds only relays on 443,
-   by juist's own filter.
-2. **Nothing else outside TLS.** The DHT, public STUN and mDNS are off,
-   invite hosts are not dialled directly and nothing punches. Gossip runs
-   through the tunnel, so the flag needs a TUN or the netstack and stops
-   with `--tun ""` otherwise.
-3. **A relay on 443 under a real name.** A relay member given a DNS name
-   (a new `juistd` option; the operator's record points at it) serves DERP
-   on 443/tcp beside its own port, both listeners one DERP server and one
-   region, and announces the name: a new announcement field, so a schema
-   bump. Its certificate is ACME's by TLS-ALPN-01, the
-   terminator's autocert path, and members on 443 verify it by WebPKI
-   against the system roots, not by M3b's pin, which every renewal would
-   break. A certificate forged for the name gains a relay's position:
-   WireGuard's ciphertext and which member keys connect (weakness 5 in
-   [02-threat-model.md](02-threat-model.md)). The system roots also let a
-   company's TLS interception pass. A relay that is also the ingress,
-   which holds 443, gets the connections whose SNI is the relay's name
-   from the ingress, locally rather than over the overlay. STUN stays on
-   the relay's own port, off 443/udp, which HTTP/3 uses.
-4. **Announcements through the relay.** The DHT is what finds a peer again
-   once its tunnel is gone ([10-connectivity-notes.md](10-connectivity-notes.md)).
-   The relay offers the DHT's get and put over HTTPS, for the same blinded
-   keys and sealed items, answering from its cache first. It learns
-   nothing the public DHT does not show, and bounds requests per client.
-   A relayed pair whose home relay moves is the case to test.
-5. **Invites.** A link names a relay by its name on 443 (`r=` with a host
-   name), so a guest on such a network joins through the forward the relay
-   already runs.
-6. **Saying so.** `juist status` and the status page say `https only` and
-   the relays on 443, and `warning: no relay on 443/tcp` where there is
-   none. `--help` is at its 29-line cap, so a line goes.
+- **Decided:**
+  - **Settings, not flags.** `juist set --https-only[=false]`, `--proxy URL`
+    and `--relay-name NAME` are the device's settings, kept in its state
+    directory as its other choices are and changed by its operator, so that
+    an installed package needs no unit edited. A change restarts the mesh.
+    HTTPS alone is refused where juistd runs without a device or the
+    netstack, since log sync runs in the tunnel.
+  - **No UDP from the data plane.** magicsock's `SetOnlyTCP443(true)` and the
+    self node's only-TCP-443 capability, which turns peer relays off: no
+    WireGuard, disco or STUN over UDP, no peer relay, and netcheck measures
+    by HTTPS (`/derp/latency-check`). The DERP map holds the relays' names on
+    443 alone and no STUN server. No port mapper or captive-portal probe is
+    linked at all.
+  - **Nothing else outside TLS.** LAN discovery and the public DHT are off,
+    the announcement carries no address, invite hosts are not dialled
+    directly, and no code is looked for on the LAN.
+  - **A relay on 443 under a real name.** `juist set --relay-name` names a
+    relay-capable member's relay; the announcement carries the name from
+    schema 12 on, which older members refuse; two relays announcing one
+    name, the lower identity keeps it, and the name proves no relay's
+    identity: WebPKI vouches for whoever holds the name's certificate. The relay shows a client asking for
+    the name by SNI a certificate ACME issues by TLS-ALPN-01 (the terminator's
+    path), and every other client the pinned one, so members on 443 verify it
+    by WebPKI against the system roots and the rest by M3b's pin. A
+    certificate forged for the name gains a relay's position (weakness 5 in
+    [02-threat-model.md](02-threat-model.md)); a company's TLS interception
+    passes. 443 is bound at each address members may reach the host at, not
+    the wildcard, so the terminator keeps 443 of the overlay addresses:
+    juistd gains `CAP_NET_BIND_SERVICE` for it on Linux by a drop-in
+    `relay.sh` writes and takes back, never by default, and the root helper
+    binds it on FreeBSD. On the ingress, which holds 443, the ingress hands
+    the name's connections to the relay's own port on loopback after a PROXY
+    v2 header, by TLS alone. STUN stays on the relay's own port.
+  - **Every member falls back to 443.** A named relay's node at its name
+    comes after its public addresses in every member's map, so a network
+    that blocks the relay's port and UDP works without any setting.
+  - **Announcements through the relay.** A device on HTTPS alone keeps its
+    sealed announcement at the relays on 443, and asks them for the
+    members', at the key the DHT would use. A relay answers for its
+    network's live members alone, with the newest announcement it holds; it
+    takes a member's own as found in the DHT. It learns nothing a member does
+    not hold already, and bounds requests per client and in all.
+  - **Invites.** A link names a relay by its name too (`r=` with a host
+    name); a guest on HTTPS alone dials those alone, and a host waits there
+    by name where it is on HTTPS alone or the relay's port fails it. A guest
+    on a build from before M13 cannot read such a link.
+  - **A company's proxy.** `juist set --proxy URL`, juistd's `HTTPS_PROXY`
+    otherwise. DERP dials through it by the data plane's proxy hook, which
+    answers for an HTTPS-only device's relay names alone; the rendezvous and
+    invites take the same proxy; credentials in the URL go as Basic.
+  - **Saying so.** `juist status` and the status page say `https only` and
+    the relays on 443, and `warning: no relay on 443/tcp` where there is
+    none; a relay's name, and why it is not served, has a line of its own.
+    The Android app has no switch yet (M19); it falls back to 443 as every
+    member does.
 
 Not in this plan:
 
@@ -1739,13 +1759,15 @@ Not in this plan:
 - **HTTP/3.** WireGuard in HTTP datagrams (RFC 9298) would avoid TCP in
   TCP, but magicsock has no transport hook for it, and the networks this
   serves often block 443/udp.
+- **A proxy that ends TLS.** One that passes no unknown `Upgrade` needs
+  DERP over WebSocket, which v1.104.0 builds only under a debug tag and not
+  on FreeBSD: read the pinned module again then.
 
-**Then: a company's proxy.** `--proxy URL`, HTTPS_PROXY otherwise. DERP
-dials through a CONNECT proxy once `tailscale.com/feature/useproxy` is
-linked (`derphttp`'s `dialNodeUsingProxy`), and step 4's requests take the
-same proxy. A proxy that ends TLS and passes no unknown `Upgrade` needs
-DERP over WebSocket, which v1.104.0 builds only under a debug tag and not
-on FreeBSD: read the pinned module again then.
+- **Built:** the settings (`ipc.CmdSettings`, `juist set`), HTTPS alone in
+  `conn` and `daemon`, the relay's name, certificate, 443 listeners and
+  rendezvous (`relay`, `daemon`), the ingress's hand-off, links and invites
+  by name, the proxy, `relay.sh` and the `juist-relay-443` firewall
+  profiles, the root helper's 443, and the interop lab's walled devices.
 
 - **Exit criteria:** (1) in `make interop`, a member whose namespace passes
   only TCP to 443 and DNS joins by a link, reaches its peers, keeps

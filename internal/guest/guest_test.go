@@ -3,6 +3,7 @@ package guest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/relay/forward"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/types"
 )
@@ -154,7 +156,7 @@ func TestARelayOnlyLinkFailsCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l = l.WithRelays([]netip.AddrPort{unreachable(t)})
+	l = l.WithRelays([]netip.AddrPort{unreachable(t)}, nil)
 	g, err := keys.GenerateNode()
 	if err != nil {
 		t.Fatal(err)
@@ -185,5 +187,31 @@ func TestAQuotedInviteParses(t *testing.T) {
 	}
 	if _, err := ParseInvite("'" + link.String()); err == nil {
 		t.Fatal("a link with one quote parsed")
+	}
+}
+
+// A guest asks a relay again while it says no host waits there yet, as the
+// host that just printed its link may not have registered, and gives up on
+// any other answer at once.
+func TestAGuestWaitsForTheHostAtTheRelay(t *testing.T) {
+	calls := 0
+	c, err := untilWaiting(t.Context(), func(context.Context) (net.Conn, error) {
+		if calls++; calls < 3 {
+			return nil, fmt.Errorf("the relay at relay.example.org: %w", forward.ErrNotWaiting)
+		}
+		a, b := net.Pipe()
+		b.Close()
+		return a, nil
+	})
+	if err != nil || calls != 3 {
+		t.Fatalf("after %d dials: %v", calls, err)
+	}
+	c.Close()
+	calls = 0
+	if _, err := untilWaiting(t.Context(), func(context.Context) (net.Conn, error) {
+		calls++
+		return nil, errors.New("refused")
+	}); err == nil || calls != 1 {
+		t.Errorf("another failure was dialled %d times: %v", calls, err)
 	}
 }

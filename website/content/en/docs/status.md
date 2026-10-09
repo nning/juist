@@ -66,6 +66,8 @@ The state on the first line is one of these:
 - `Devices`: how many other devices there are, and how many of them have been heard from.
 - `Tunnels`: how many tunnels carried traffic at the last check. juistd checks every 30 seconds, but where both ends have a relay it asks a quiet tunnel only every 5 minutes, so that a laptop's radio can sleep.
 - `Relays`: how many devices may relay, and which one this device uses. A [relay]({{< relref "docs/relays" >}}) passes traffic between two devices that cannot reach each other directly.
+- `HTTPS`: on a device that sends nothing but HTTPS, the relays on 443 it goes through, and its proxy. See [HTTPS alone]({{< relref "docs/https-only" >}}).
+- `Relay name`: the public name this device's relay serves on 443, and whether it does yet.
 - `Exit node`: which device carries this device's internet traffic, if any. See [Exit nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: the domain under which this device finds the others, such as `home.juist`, or why it cannot. See [Names]({{< relref "docs/names" >}}).
 - `Freshness`: when a voucher last confirmed that this device's view of the network is current, and how long that stays valid. A voucher is a device the network trusts to confirm this, every hour. After 48 hours without one, the line reads `expired; vouchers only`; a day before, a warning says when. Where no device vouches, the line reads `unchecked: no voucher`, and where two devices may relay, a hint suggests them as vouchers. See [Removing a device]({{< relref "docs/remove" >}}).

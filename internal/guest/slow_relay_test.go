@@ -55,7 +55,7 @@ func TestASlowRelayDoesNotHoldADirectWinner(t *testing.T) {
 		}
 	}()
 	inv, _ := enroll.NewInvite([]netip.AddrPort{direct.Addr().(*net.TCPAddr).AddrPort()})
-	link := inv.Link().WithRelays([]netip.AddrPort{rl.Addr().(*net.TCPAddr).AddrPort()})
+	link := inv.Link().WithRelays([]netip.AddrPort{rl.Addr().(*net.TCPAddr).AddrPort()}, nil)
 	start := time.Now()
 	dials := []func(context.Context) (net.Conn, error){
 		func(ctx context.Context) (net.Conn, error) {

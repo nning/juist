@@ -55,12 +55,53 @@ The line `Relays` in `juist status` then counts it as available.
 devices with public addresses. In a network of more than two devices,
 `juist status` warns while none may relay.
 
+## A relay on 443
+
+A relay can also serve a public name on port 443, as any HTTPS server does.
+A device on a network that lets nothing else out reaches it there, by itself
+or with [HTTPS alone]({{< relref "docs/https-only" >}}).
+
+{{< step on="your DNS" >}}
+Point a name at the relay, with an A record, and an AAAA record where it has
+IPv6: `relay.example.org`.
+{{< /step >}}
+
+{{< step on="vps" as="the relay" >}}
+Have the relay serve the name:
+
+```sh
+sudo juist set --relay-name relay.example.org
+```
+
+juistd takes 443/tcp at the relay's addresses, ufw or firewalld let it in, and
+Let's Encrypt issues a certificate for the name. `juist status` then says:
+
+```console
+  Relay name    relay.example.org, on 443
+```
+{{< /step >}}
+
+- Every device learns the name from the relay's announcement once the
+  network's log is at schema 12. Before, `juist status` says
+  `members are not told of relay.example.org`, and `juist log upgrade` raises
+  it.
+- Binding 443 takes a privilege juistd otherwise lacks. `juist set` grants
+  it `CAP_NET_BIND_SERVICE` for this alone, by a systemd drop-in, and
+  `sudo juist set --relay-name ""` takes it back along with the name. On
+  FreeBSD, juistd's helper binds 443, and pf, where it runs, must let it in.
+- On the network's [ingress]({{< relref "docs/publishing" >}}), which holds
+  443 already, the ingress hands the name's connections to the relay.
+- A CAA record for the name must allow Let's Encrypt.
+- Only the default network's juistd serves a name on 443, on a device in
+  several networks.
+
 ## Ports
 
 | Port | For | Open it where |
 |---|---|---|
 | 41643/udp | WireGuard and path discovery | a device with a public address |
 | 41645/tcp, 41645/udp | the relay, and the STUN answers members measure it by | a device granted `relay` |
+| 443/tcp | the relay under its public name | a relay given a name; `juist set --relay-name` opens it |
 | 41642/tcp | an invite taken as a code on the LAN | the inviting device, while `juist invite` runs |
 | 443/tcp, 443/udp, 80/tcp | the names devices publish, by TLS and QUIC | a device granted `ingress`; `juist ingress serve` opens them |
 | the ports names are published on by TCP | those names | every ingress; it opens and closes them as they come and go |
@@ -76,7 +117,7 @@ for each. The n-th one's ports are these plus 10·n: 41653/udp for
 ## Firewalls
 
 The packages install ufw and firewalld profiles named `juist`, `juist-relay`,
-`juist-invite` and `juist-ingress`. The profiles name the first network's
+`juist-relay-443`, `juist-invite` and `juist-ingress`. The profiles name the first network's
 ports; `juist status` gives the others' by number.
 
 Log sync, how devices pass on changes to the membership log (the signed
@@ -128,5 +169,8 @@ it. `man juistd` lists every option.
 | `no tunnel traffic from …` | open 41643/udp on a device with a public address, or grant one `relay` |
 | `no device reaches this relay` | open 41645/tcp and udp on the relay, in any firewall in front of it too |
 | `no device may relay` | `juist grant DEVICE relay`, on a device with a public address |
+| `no certificate for relay.example.org yet` | point the name at the relay, and let 443/tcp reach it |
+| `the relay cannot take 443` | another program holds 443 there, or juistd lacks the capability `juist set` grants |
+| `members are not told of …` | `juist log upgrade`, on an admin's device |
 | `log sync … fails in the tunnel` | let `juist0` in through the host firewall, as the hint says |
 | `no answer from …` | the device is offline, or its 41643/udp is closed |

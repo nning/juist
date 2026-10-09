@@ -53,6 +53,9 @@ type hostLayout struct {
 	// whether a service just started takes connections at an address.
 	exitScript, ingressScript, serveScript string
 	answers                                func(ctx context.Context, addr string) error
+	// relayScript is the package's relay.sh, which lets juistd bind 443 for
+	// its relay, "" where juistd needs no help to.
+	relayScript string
 	// answersTLS says whether what answers at addr ends TLS.
 	answersTLS func(ctx context.Context, addr string) error
 	// terminatorOn says whether the terminator's service is enabled and

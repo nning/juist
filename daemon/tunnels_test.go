@@ -320,7 +320,7 @@ func TestAnAnnouncementIsRenewed(t *testing.T) {
 func TestARestartedMeshKeepsItsSession(t *testing.T) {
 	f := newServiceFixture(t, true)
 	before := f.s.Mesh()
-	before.startAddrs = []netip.Prefix{netip.MustParsePrefix("198.18.9.9/32")}
+	startedOn(f.s, netip.MustParsePrefix("198.18.9.9/32"))
 	f.s.followAddrs()
 	after := f.s.Mesh()
 	if after == nil || after == before {
@@ -349,7 +349,7 @@ func TestARestartedMeshAnnouncesPastItsLastNumber(t *testing.T) {
 	if !ok {
 		t.Fatal("no announcement")
 	}
-	before.startAddrs = []netip.Prefix{netip.MustParsePrefix("198.18.9.9/32")}
+	startedOn(f.s, netip.MustParsePrefix("198.18.9.9/32"))
 	f.s.followAddrs()
 	after := f.s.Mesh()
 	if after == nil || after == before {

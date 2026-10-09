@@ -225,6 +225,9 @@ type Derived struct {
 	// secret. The data plane then holds no peers, for good.
 	Disabled string `cbor:"71,keyasint,omitempty"`
 
+	// HTTPS is this device's use of 443/tcp; nil where none.
+	HTTPS *HTTPS `cbor:"72,keyasint,omitempty"`
+
 	// NotMember is set when this device is no longer in the member set. The
 	// daemon has torn its own data plane down.
 	NotMember bool `cbor:"16,keyasint,omitempty"`
@@ -323,7 +326,7 @@ func (s *Status) ForReader() Status {
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
 			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted,
 			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(),
-			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(),
+			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(), HTTPS: s.HTTPS.forReader(),
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
 		},
 		Tunnels: Tunnels{

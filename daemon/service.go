@@ -111,6 +111,11 @@ type Service struct {
 	acceptNames, servePublished bool
 	// serveTo is, by label, where the names whose TLS juist ends go.
 	serveTo map[string]string
+
+	// httpsOnly, proxy and relayName are the device's settings of 443, as
+	// kept in Home.
+	httpsOnly        bool
+	proxy, relayName string
 }
 
 // ServiceOptions configures a [Service].
@@ -241,6 +246,7 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	_, err = os.Stat(filepath.Join(home, statedir.NamesFile))
 	s.acceptNames = err == nil
 	s.servePublished, s.serveTo = loadServeTo(home, s.logf)
+	s.httpsOnly, s.proxy, s.relayName = loadSettings(home, s.logf)
 	if s.opts.ServeTo != nil {
 		s.servePublished, s.serveTo = true, maps.Clone(s.opts.ServeTo)
 	}
@@ -784,6 +790,8 @@ func (s *Service) startMeshLocked() error {
 	o.Exit, o.ServeExit, o.OnExitMoved = s.exit, s.serve, s.followExit
 	o.ServeSubnets, o.SubnetsOff = s.serveSubnets, s.subnetsOff
 	o.AcceptNames, o.ServePublished, o.ServeTo = s.acceptNames, s.servePublished, s.serveTo
+	o.HTTPSOnly, o.Proxy, o.RelayName = s.httpsOnly, s.proxy, s.relayName
+	o.RelayCertsPath = filepath.Join(s.opts.Home, statedir.RelayCertsDir)
 	o.KeyringPath = statedir.KeyringPath(s.opts.Home)
 	if o.Logf == nil {
 		o.Logf = s.logf
@@ -1038,6 +1046,9 @@ func (s *Service) Status() ipc.Status {
 	}
 	st.Joining = s.busy
 	st.Rendezvous = s.helpers()
+	if st.HTTPS == nil && (s.httpsOnly || s.relayName != "") {
+		st.HTTPS = &ipc.HTTPS{Only: s.httpsOnly, Proxy: ipc.RedactProxy(s.proxy), Name: s.relayName}
+	}
 	if op := s.operator.Load(); op != 0 {
 		st.Operator = userName(op)
 	}
@@ -1048,7 +1059,7 @@ func (s *Service) Status() ipc.Status {
 // DHT and STUN switches the mesh obeys cover invites too.
 func (s *Service) helpers() *rendezvous.Helpers {
 	o := s.opts.Mesh
-	if o.DisableDHT || len(o.STUN) == 0 {
+	if o.DisableDHT || len(o.STUN) == 0 || s.httpsOnly {
 		return nil
 	}
 	return &rendezvous.Helpers{STUN: o.STUN, Bootstrap: o.DHTBootstrap}
@@ -1228,6 +1239,8 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 		err = s.setSubnet(req)
 	case ipc.CmdNames:
 		err = s.setNames(*req.AcceptNames)
+	case ipc.CmdSettings:
+		err = s.setSettings(req)
 	case ipc.CmdPublish:
 		err = s.setPublish(req)
 	case ipc.CmdExit:
@@ -1297,6 +1310,7 @@ func (s *Service) reset(force bool) error {
 	// The choice and the consent were this network's, and go with it.
 	s.exit, s.serve = ExitChoice{}, false
 	s.serveSubnets, s.subnetsOff, s.acceptNames, s.servePublished, s.serveTo = false, false, false, false, nil
+	s.httpsOnly, s.proxy, s.relayName = false, "", ""
 	s.clearEgress()
 
 	entries, err := os.ReadDir(home)
@@ -1591,7 +1605,12 @@ func (s *Service) join(ctx context.Context, req *ipc.Request, events func(*ipc.E
 	if name == "" {
 		name = k.Name
 	}
+	s.mu.Lock()
+	httpsOnly, proxy, meet := s.httpsOnly, proxyRoute(s.proxy, envProxyFunc()), s.helpers().Meeter(s.logf)
+	s.mu.Unlock()
 	res, err := guest.Join(ctx, guest.Options{
+		HTTPSOnly:     httpsOnly,
+		Proxy:         proxy,
 		Invite:        req.Invite,
 		Name:          name,
 		Keys:          k,
@@ -1600,7 +1619,7 @@ func (s *Service) join(ctx context.Context, req *ipc.Request, events func(*ipc.E
 		Elsewhere:     req.Elsewhere,
 		Find:          s.opts.Find,
 		SkipInterface: s.opts.Mesh.TunName,
-		Meet:          s.helpers().Meeter(s.logf),
+		Meet:          meet,
 		Progress: func(e guest.Event) {
 			ev := &ipc.Event{Kind: uint8(e.Kind), Votes: e.Votes, Quorum: e.Quorum, Text: e.Words}
 			if e.Relayed {

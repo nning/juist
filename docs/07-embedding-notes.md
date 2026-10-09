@@ -184,6 +184,8 @@ code directly, so they fail on the upgrade itself rather than in the field.
 | Nothing below `ipnlocal` resets a peer's sessions when its disco key changes, and `SyncDevicePeer` removes a peer whose lookup fails | the eviction in `SetPeers` | `TestARestartedPeerIsReachedAtOnce` |
 | derpserver asks its admission URL through `http.DefaultClient`, failing closed, with the context `Accept` was given | relay admission, `relay/admit.go`, `serveDERP` | `TestNonMemberCannotUseTheRelay`, `TestMembersRelayThroughAMember` |
 | magicsock reaches no relay and no STUN server without a DERP map | direct-only operation | `TestNoThirdPartyEgress` |
+| With `SetOnlyTCP443`, magicsock and netcheck send no UDP, take a peer's UDP path only from a pong or a peer relay, and the self node's only-TCP-443 capability turns peer relays off | HTTPS alone | `TestUpstreamOnlyTCP443SendsNoUDP`, `TestHTTPSOnlySendsNoUDP` |
+| derphttp dials a node's `DERPPort` at its host name in DNS where an address is empty, verifies a node without `CertName` by WebPKI, and asks `feature.HookProxyFromEnvironment` for each dial; no port mapper or captive-portal probe is linked | relays on 443, the proxy | `TestUpstreamANamedNodeIsDialledByNameThroughTheProxy`, `TestUpstreamNoPortMapperOrCaptivePortalIsLinked`, `TestMembersRelayThroughThePublicName` |
 | The router, device and MTU behave as the wiring requirements above say | the real-device path | `make test-os-plumbing` (root, not on CI's unprivileged job) |
 
 ## Answers leave the way they came (Linux)

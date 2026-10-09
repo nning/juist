@@ -102,6 +102,11 @@ type Options struct {
 	// them.
 	Relays   []forward.Relay
 	Identity types.PrivateIdentity
+
+	// HTTPSOnly waits at the relays' public names on 443 alone, through
+	// Proxy, as a device that reaches nothing else does.
+	HTTPSOnly bool
+	Proxy     forward.Proxy
 }
 
 // An Admitter admits a guest into the network. It is the side holding admin
@@ -184,8 +189,22 @@ func Listen(o Options) (*Host, error) {
 		ln.Close()
 		return nil, err
 	}
-	inv.WaitAt(relayAddrs(o.Relays))
+	if o.HTTPSOnly {
+		o.Relays = slices.DeleteFunc(slices.Clone(o.Relays), func(r forward.Relay) bool { return r.Name == "" })
+	}
+	inv.WaitAt(relayAddrs(o.Relays), relayNames(o.Relays))
 	return &Host{o: o, ln: ln, port: port, inv: inv}, nil
+}
+
+// relayNames are the relays' public names, within what a link holds.
+func relayNames(relays []forward.Relay) []string {
+	var out []string
+	for _, r := range relays {
+		if r.Name != "" && len(out) < enroll.MaxLinkNamed {
+			out = append(out, r.Name)
+		}
+	}
+	return out
 }
 
 // relayAddrs is where the link sends a guest to the relays: each relay's
@@ -239,6 +258,9 @@ func (h *Host) waitAtRelay(ctx context.Context, r forward.Relay, g *greeter, emi
 	// slot. One of its connections is greeted at a time.
 	src := source{relay: hex.EncodeToString(r.CertHash[:8])}
 	backoff, reported := time.Second, false
+	// By name where it is all the relay announces, or where the relay's own
+	// port fails this device: the guest may come either way.
+	named := h.o.HTTPSOnly || len(r.Addrs) == 0
 	pause := func() bool {
 		select {
 		case <-ctx.Done():
@@ -249,14 +271,23 @@ func (h *Host) waitAtRelay(ctx context.Context, r forward.Relay, g *greeter, emi
 		return true
 	}
 	for ctx.Err() == nil {
-		c, _, err := forward.Wait(ctx, r, id, pub, sign)
+		var c net.Conn
+		var err error
+		if named {
+			c, _, err = forward.WaitNamed(ctx, r, id, pub, sign, h.o.Proxy)
+		} else {
+			c, _, err = forward.Wait(ctx, r, id, pub, sign)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
+			if r.Name != "" && len(r.Addrs) > 0 && !h.o.HTTPSOnly {
+				named = !named
+			}
 			if !reported {
-				var at string
-				if len(r.Addrs) > 0 {
+				at := r.Name
+				if len(r.Addrs) > 0 && !h.o.HTTPSOnly {
 					at = r.Addrs[0].String()
 				}
 				emit(Event{Kind: NoRelay, Addr: at, Err: err.Error()})
@@ -344,8 +375,10 @@ func (h *Host) Serve(ctx context.Context, admit Admitter, chain Chain, events fu
 	go acceptInto(ctx, h.ln, func(c net.Conn) { g.greet(c, sourceOf(c.RemoteAddr()), false) }, failed)
 	// Only at the relays the link names: the others would learn the
 	// invite's forward id and carry no guest.
+	link := h.inv.Link()
 	for _, r := range h.o.Relays {
-		if slices.ContainsFunc(r.Addrs, func(a netip.AddrPort) bool { return slices.Contains(h.inv.Link().Relays, a) }) {
+		if slices.ContainsFunc(r.Addrs, func(a netip.AddrPort) bool { return slices.Contains(link.Relays, a) }) ||
+			r.Name != "" && slices.Contains(link.Named, r.Name) {
 			go h.waitAtRelay(ctx, r, g, emit)
 		}
 	}

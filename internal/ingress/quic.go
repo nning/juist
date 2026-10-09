@@ -382,7 +382,7 @@ func (q *quicFlows) join(f *flow, d []byte, packets []quicinitial.Packet) {
 	}
 	j.hello.Close()
 	f.joining = nil
-	t, served := q.in.lookup(name)
+	t, served := q.in.lookupPublished(name)
 	same := served && t.Port == f.t.Port && slices.Equal(t.Addrs, f.t.Addrs)
 	joined := same && f.live < maxConnections
 	if joined {
@@ -485,7 +485,7 @@ func (q *quicFlows) wait(ctx context.Context, f *flow, d []byte, packets []quici
 	}
 	f.hello.Close()
 	f.names = []string{name}
-	t, ok := q.in.lookup(name)
+	t, ok := q.in.lookupPublished(name)
 	if !ok {
 		f.mu.Unlock()
 		f.setOutcome("not served")

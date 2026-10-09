@@ -65,7 +65,10 @@ type SchemaVersion uint16
 //
 // Schema 11 lets a published name carry a public TCP port
 // ([PublishedName.Public]), which every ingress passes on by port alone.
-const CurrentSchema SchemaVersion = 11
+//
+// Schema 12 adds no record field: it lets a relay's announcement name the
+// public DNS name it serves on 443/tcp too, which older builds refuse.
+const CurrentSchema SchemaVersion = 12
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -102,5 +105,9 @@ const SchemaRenameNode SchemaVersion = 10
 // SchemaTCP is the first schema in which a published name has a public TCP
 // port.
 const SchemaTCP SchemaVersion = 11
+
+// SchemaRelayName is the first schema in which a relay announces a public
+// name on 443/tcp.
+const SchemaRelayName SchemaVersion = 12
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

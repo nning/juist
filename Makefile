@@ -400,8 +400,9 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service packaging/systemd/juist-ingress.service \
 		packaging/systemd/juist-ingress-ports.path packaging/systemd/juist-ingress-ports.service \
 		packaging/systemd/juist-serve.service packaging/systemd/juist-serve.path README.md LICENSE THIRD_PARTY_LICENSES packaging/firewall.sh packaging/exit-node.sh \
-		packaging/ingress.sh packaging/serve.sh packaging/polkit/juist.rules \
-		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml packaging/firewalld/juist-ingress.xml \
+		packaging/ingress.sh packaging/serve.sh packaging/relay.sh packaging/polkit/juist.rules \
+		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml packaging/firewalld/juist-relay-443.xml \
+		packaging/firewalld/juist-ingress.xml \
 		packaging/firewalld/juist-invite.xml packaging/completions/juist.bash \
 		packaging/completions/_juist packaging/completions/juist.fish $$stage/; \
 	tar -czf $(RPMTOP)/SOURCES/$(RPM_NAME)-$(RPM_VERSION).tar.gz \
@@ -464,8 +465,9 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	install -D -m 0755 packaging/exit-node.sh $$root/usr/lib/juist/exit-node.sh; \
 	install -D -m 0755 packaging/ingress.sh $$root/usr/lib/juist/ingress.sh; \
 	install -D -m 0755 packaging/serve.sh $$root/usr/lib/juist/serve.sh; \
+	install -D -m 0755 packaging/relay.sh $$root/usr/lib/juist/relay.sh; \
 	install -D -m 0644 packaging/polkit/juist.rules $$root/usr/share/polkit-1/rules.d/60-juist.rules; \
-	for f in juist juist-relay juist-invite juist-ingress; do \
+	for f in juist juist-relay juist-relay-443 juist-invite juist-ingress; do \
 		install -D -m 0644 packaging/firewalld/$$f.xml $$root/usr/lib/firewalld/services/$$f.xml; \
 	done; \
 	install -D -m 0644 packaging/ufw/juist $$root/etc/ufw/applications.d/juist; \

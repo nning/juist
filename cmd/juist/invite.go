@@ -344,8 +344,11 @@ func (a *app) announceInvite(network, code string, link enroll.Link, port uint16
 	// globs, and commas; pasted as printed, it must reach juist as one word.
 	a.command("juist join '%s'", link)
 	a.printf("\n")
-	if len(link.Relays) > 0 {
+	switch {
+	case len(link.Relays) > 0:
 		a.printf("%s\n", a.dim(fmt.Sprintf("meets through relay %s where this device is unreachable", link.Relays[0])))
+	case len(link.Named) > 0:
+		a.printf("%s\n", a.dim(fmt.Sprintf("meets through relay %s on 443 where this device is unreachable", link.Named[0])))
 	}
 	if cmd := invitePortHint(port); cmd != "" {
 		a.hint("the firewall may block the device: %s", cmd)

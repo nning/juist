@@ -101,6 +101,10 @@ type Options struct {
 	// Conn is the UDP socket to run on. Nil binds one.
 	Conn net.PacketConn
 
+	// Items, where set, holds the announcements instead of the public DHT,
+	// which is then not joined at all.
+	Items Items
+
 	// NoSecurity disables the DHT's node-ID-from-IP rule, which a swarm on
 	// loopback cannot satisfy. Tests only.
 	NoSecurity bool
@@ -115,10 +119,19 @@ type Options struct {
 	Logf func(format string, args ...any)
 }
 
+// Items keeps one sealed announcement at each seed's address, as [Store]
+// does in the public DHT.
+type Items interface {
+	Put(ctx context.Context, seed [32]byte, value []byte) error
+	Get(ctx context.Context, seed [32]byte) ([]byte, error)
+	Close() error
+}
+
 // A Node publishes this member's announcement and looks for others'.
 type Node struct {
 	opts     Options
-	store    *Store
+	store    *Store // the public DHT's, nil where Items replaces it
+	items    Items
 	interval time.Duration
 
 	closeOnce sync.Once
@@ -153,13 +166,19 @@ func New(opts Options) (*Node, error) {
 		opts.Logf = func(string, ...any) {}
 	}
 
-	store, err := newStore(opts.Conn, opts.Bootstrap, opts.NoSecurity)
-	if err != nil {
-		return nil, err
+	items := opts.Items
+	var store *Store
+	if items == nil {
+		var err error
+		if store, err = newStore(opts.Conn, opts.Bootstrap, opts.NoSecurity); err != nil {
+			return nil, err
+		}
+		items = store
 	}
 	n := &Node{
 		opts:     opts,
 		store:    store,
+		items:    items,
 		interval: cmp.Or(opts.Interval, DefaultInterval),
 		closed:   make(chan struct{}),
 		kick:     make(chan struct{}, 1),
@@ -179,8 +198,10 @@ func (n *Node) Run(ctx context.Context) {
 		}
 	}()
 
-	if _, err := n.store.srv.Bootstrap(); err != nil {
-		n.opts.Logf("dht: bootstrap: %v", err)
+	if n.store != nil {
+		if _, err := n.store.srv.Bootstrap(); err != nil {
+			n.opts.Logf("dht: bootstrap: %v", err)
+		}
 	}
 	t := time.NewTicker(n.interval)
 	defer t.Stop()
@@ -259,7 +280,7 @@ func (n *Node) window() uint64 {
 	if n.opts.Clock != nil {
 		now = n.opts.Clock()
 	}
-	return uint64(now.Unix()) / uint64(WindowPeriod.Seconds())
+	return Window(now)
 }
 
 // Publish puts this node's announcement at its own rendezvous address, under
@@ -288,7 +309,7 @@ func (n *Node) publish(ctx context.Context, early bool) error {
 	if err != nil {
 		return err
 	}
-	if err := n.store.Put(ctx, secret.TopicSeed(epoch, n.window(), n.opts.Self), value); err != nil {
+	if err := n.items.Put(ctx, secret.TopicSeed(epoch, n.window(), n.opts.Self), value); err != nil {
 		return fmt.Errorf("dht: putting this node's announcement: %w", err)
 	}
 	n.publishMu.Lock()
@@ -313,8 +334,13 @@ func (n *Node) Lookup(ctx context.Context, id types.Identity) (gossip.Endpoint, 
 		if !ok {
 			continue
 		}
-		for _, w := range [2]uint64{cur, cur - 1} {
-			raw, err := n.store.Get(ctx, secret.TopicSeed(epoch, w, id))
+		windows := []uint64{cur, cur - 1}
+		if n.store == nil {
+			// A relay answers for a member under each window around its own.
+			windows = windows[:1]
+		}
+		for _, w := range windows {
+			raw, err := n.items.Get(ctx, secret.TopicSeed(epoch, w, id))
 			if err != nil {
 				lastErr = err
 				continue
@@ -382,11 +408,18 @@ func (n *Node) Addr() net.Addr { return n.store.srv.Addr() }
 // ID reports this node's DHT identifier, for tests.
 func (n *Node) ID() krpc.ID { return n.store.srv.ID() }
 
+// Public reports whether n runs on the public DHT, not on [Options.Items].
+func (n *Node) Public() bool { return n.store != nil }
+
+// Window is the rendezvous window t falls in, which with an epoch and a
+// member derives where the member is published.
+func Window(t time.Time) uint64 { return uint64(t.Unix()) / uint64(WindowPeriod.Seconds()) }
+
 // Close shuts the node down. It is idempotent.
 func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
 		close(n.closed)
-		n.store.Close()
+		n.items.Close()
 	})
 	return nil
 }

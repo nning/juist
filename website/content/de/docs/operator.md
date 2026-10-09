@@ -56,7 +56,9 @@ Die Ausgabe lautet `operator cleared`.
 
 ## Gut zu wissen
 
-- Jedes Gerät hat pro Netz genau einen Operator. `juist set` braucht root.
+- Jedes Gerät hat pro Netz genau einen Operator. Ihn mit
+  `juist set --operator` zu wählen braucht root; den Rest von `juist set`,
+  etwa [nur HTTPS]({{< relref "docs/https-only" >}}), darf der Operator ändern.
 - Ein Befehl, der den Operator braucht, fragt im Terminal
   `not the operator; run sudo juist set --operator=alice? [Y/n]` und führt den
   Befehl aus, wenn du zustimmst.

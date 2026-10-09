@@ -251,7 +251,9 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
   FreeBSD, which grants no capability for the network alone, has the helper
   (M7a): juistd started as root keeps a process as root that creates, addresses,
   routes and destroys juist's own devices, and runs the daemon as `juist` with
-  the device's descriptor (`internal/plumber`).
+  the device's descriptor (`internal/plumber`). A relay its operator named on
+  443 (M13) binds 443 at the host's addresses alone: by the helper on FreeBSD,
+  and on Linux by `CAP_NET_BIND_SERVICE`, which a drop-in grants only then.
 - **Key custody:** node identity key a 0600 file on Linux and FreeBSD (sealing
   it in the kernel keyring or a TPM is post-v1; FreeBSD: document geli);
   Android: Keystore for the identity key — WG keys must live in app memory for

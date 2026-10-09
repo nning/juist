@@ -116,6 +116,19 @@ juist grant vps relay
 
 Siehe [Relays]({{< relref "docs/relays" >}}).
 
+### `warning: no relay on 443/tcp`
+
+Dieses Gerät sendet nur HTTPS, und kein Relay bedient einen öffentlichen
+Namen auf 443, den einzigen Weg, auf dem es die anderen erreicht. Gib einem
+Relay einen Namen, auf dem Relay:
+
+```sh
+sudo juist set --relay-name relay.example.org
+```
+
+Oder, in einem Netz, das mehr hinauslässt, `sudo juist set --https-only=false`.
+Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}).
+
 ### `Freshness  expired; vouchers only`
 
 48 Stunden lang waren zu wenige Voucher erreichbar. Ein Voucher ist ein

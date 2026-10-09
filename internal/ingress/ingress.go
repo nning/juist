@@ -94,6 +94,7 @@ type ingress struct {
 	o       Options
 	table   atomic.Pointer[map[string]ipc.PublishedTarget]
 	tcp     atomic.Pointer[map[uint16]ipc.PublishedTarget] // by public port
+	relays  atomic.Pointer[map[string]bool]                // in table, served by TLS alone
 	conns   chan struct{}
 	sources pipe.Sources
 	named   pipe.Named
@@ -163,6 +164,7 @@ func Serve(ctx context.Context, tlsLn, httpLn net.Listener, o Options) error {
 		listeners: map[uint16]net.Listener{}, failed: map[uint16]bool{}}
 	in.table.Store(&map[string]ipc.PublishedTarget{})
 	in.tcp.Store(&map[uint16]ipc.PublishedTarget{})
+	in.relays.Store(&map[string]bool{})
 	if o.started != nil {
 		o.started(in)
 	}
@@ -232,9 +234,14 @@ func (in *ingress) poll(ctx context.Context) {
 
 // serve takes p as what is served, closing what no longer is.
 func (in *ingress) serve(ctx context.Context, p *ipc.Published) {
-	table := make(map[string]ipc.PublishedTarget, len(p.Names))
+	table := make(map[string]ipc.PublishedTarget, len(p.Names)+len(p.Relays))
+	relays := make(map[string]bool, len(p.Relays))
+	for _, t := range p.Relays {
+		table[t.Name], relays[t.Name] = t, true
+	}
 	for _, t := range p.Names {
 		table[t.Name] = t
+		delete(relays, t.Name)
 	}
 	tcp := make(map[uint16]ipc.PublishedTarget, len(p.TCP))
 	for _, t := range p.TCP {
@@ -242,6 +249,7 @@ func (in *ingress) serve(ctx context.Context, p *ipc.Published) {
 			tcp[t.Public] = t
 		}
 	}
+	in.relays.Store(&relays)
 	in.table.Store(&table)
 	in.tcp.Store(&tcp)
 	in.named.CloseUnless(func(name string) bool {
@@ -250,7 +258,7 @@ func (in *ingress) serve(ctx context.Context, p *ipc.Published) {
 	})
 	if q := in.quic.Load(); q != nil {
 		q.closeUnless(func(name string) bool {
-			_, ok := in.lookup(name)
+			_, ok := in.lookupPublished(name)
 			return ok
 		})
 	}
@@ -366,6 +374,16 @@ func portOfKey(key string) uint16 {
 func (in *ingress) lookup(name string) (ipc.PublishedTarget, bool) {
 	t, ok := (*in.table.Load())[strings.TrimSuffix(strings.ToLower(name), ".")]
 	return t, ok
+}
+
+// lookupPublished is [ingress.lookup] for a published name alone, not a
+// relay's, which speaks neither QUIC nor plain HTTP.
+func (in *ingress) lookupPublished(name string) (ipc.PublishedTarget, bool) {
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	if (*in.relays.Load())[name] {
+		return ipc.PublishedTarget{}, false
+	}
+	return in.lookup(name)
 }
 
 func (in *ingress) accept(ctx context.Context, ln net.Listener) error {
@@ -580,7 +598,7 @@ func (in *ingress) redirect(w http.ResponseWriter, r *http.Request) {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	if _, ok := in.lookup(host); !ok {
+	if _, ok := in.lookupPublished(host); !ok {
 		in.o.Access("access: http %s %q %s %q %d %q", r.RemoteAddr, host, r.Method, r.URL.RequestURI(),
 			http.StatusNotFound, r.UserAgent())
 		http.NotFound(w, r)

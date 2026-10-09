@@ -140,21 +140,11 @@ func Serve(ctx context.Context, o Options) error {
 	}
 	getCert := o.GetCertificate
 	if getCert == nil && o.ACME != nil {
-		hc := http.Client{}
-		if o.ACME.HTTPClient != nil {
-			hc = *o.ACME.HTTPClient
-		}
-		hc.Transport = withOrderLocations(servedOrders{rt: hc.Transport, served: func(name string) bool {
+		if err := orderUnder(ctx, o.ACME, o.Cache, func(name string) bool {
 			_, ok := t.lookup(name)
 			return ok
-		}})
-		o.ACME.HTTPClient = &hc
-		if o.ACME.Key == nil {
-			key, err := accountKey(ctx, o.Cache)
-			if err != nil {
-				return err
-			}
-			o.ACME.Key = key
+		}); err != nil {
+			return err
 		}
 		go t.learnAccount(ctx)
 	}

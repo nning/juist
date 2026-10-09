@@ -584,3 +584,53 @@ func TestStatusSuggestsAlwaysOnVouchers(t *testing.T) {
 		}
 	}
 }
+
+// A device on HTTPS alone says so, by which relays and proxy, and warns where
+// no relay is on 443; one that does not reach a device blames no UDP port.
+// A relay's name has a line of its own, and what keeps it from 443 a warning.
+func TestStatusSaysHTTPSAloneAndTheRelaysName(t *testing.T) {
+	t.Parallel()
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	base := func() *ipc.Status {
+		return &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 2, RelayCapable: 1,
+			Relays: 1}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, TunnelsDown: []string{"nas"},
+			Seeking: []string{"nas"}}}
+	}
+	st := base()
+	st.HTTPS = &ipc.HTTPS{Only: true, Relays: []string{"relay.example.org"}, Proxy: "http://u:xxxxx@proxy:3128"}
+	a.printStatus(st)
+	mustContain(t, out.String(), "HTTPS         only, by relay.example.org through http://u:xxxxx@proxy:3128\n",
+		"no answer from nas: offline, or at no relay on 443")
+	if strings.Contains(out.String(), "udp/") {
+		t.Errorf("a device on HTTPS alone is told of UDP:\n%s", out.String())
+	}
+
+	out = syncBuffer{}
+	st.HTTPS.Relays = nil
+	a.printStatus(st)
+	mustContain(t, out.String(), "only, and no relay on 443", "warning: no relay on 443/tcp",
+		"hint: a relay's operator names it there: juist set --relay-name NAME")
+
+	for _, c := range []struct {
+		h    ipc.HTTPS
+		line string
+		want []string
+	}{
+		{ipc.HTTPS{Name: "relay.example.org", Listening: []string{"192.0.2.7:443"}}, "relay.example.org, on 443\n", nil},
+		{ipc.HTTPS{Name: "relay.example.org", Listening: []string{ipc.HandedOn}}, "relay.example.org, on 443 through the ingress\n", nil},
+		{ipc.HTTPS{Name: "relay.example.org", NotAnnounced: "the network is at schema 11"}, "relay.example.org, not told to members",
+			[]string{"warning: members are not told of relay.example.org: the network is at schema 11", "hint: juist log upgrade"}},
+		{ipc.HTTPS{Name: "relay.example.org", ListenError: "listen tcp 192.0.2.7:443: bind: permission denied"}, "relay.example.org, not on 443",
+			[]string{"warning: the relay cannot take 443", "hint: sudo juist set --relay-name relay.example.org"}},
+		{ipc.HTTPS{Name: "relay.example.org", Listening: []string{"192.0.2.7:443"}, NoCert: "the CA refused"},
+			"relay.example.org, no certificate yet", []string{"warning: no certificate for relay.example.org yet: the CA refused",
+				"hint: relay.example.org must point at this device in DNS, and every firewall in front of it let 443/tcp in"}},
+	} {
+		out = syncBuffer{}
+		st := base()
+		st.Relaying, st.HTTPS = true, &c.h
+		a.printStatus(st)
+		mustContain(t, out.String(), append([]string{"Relay name    " + strings.TrimSuffix(c.line, "\n")}, c.want...)...)
+	}
+}

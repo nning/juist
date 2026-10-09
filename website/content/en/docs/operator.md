@@ -55,7 +55,9 @@ It prints `operator cleared`.
 
 ## Good to know
 
-- There is one operator per device and network. `juist set` needs root.
+- There is one operator per device and network. Choosing it with
+  `juist set --operator` needs root; the operator may change the rest of
+  `juist set`, such as [HTTPS alone]({{< relref "docs/https-only" >}}).
 - A command that needs the operator asks, in a terminal,
   `not the operator; run sudo juist set --operator=alice? [Y/n]`, and runs it
   if you agree.

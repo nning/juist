@@ -31,7 +31,8 @@ const (
 // StateFiles are what a daemon keeps in its state directory beside the log
 // and the node keys, for a reset of a home no daemon runs from.
 var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, RelayCertFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
-	SubnetsFile, SubnetServeFile, NamesFile, PublishServeFile, PublishToFile}
+	SubnetsFile, SubnetServeFile, NamesFile, PublishServeFile, PublishToFile, HTTPSOnlyFile, ProxyFile, RelayNameFile,
+	RelayCertsDir}
 
 // ExitFile holds the exit node this device's owner chose, or "off"; without
 // it none was chosen. ServeFile, where it exists, is the operator's word that
@@ -55,6 +56,15 @@ const (
 	// holds where those whose TLS juist ends go.
 	PublishServeFile = "publish-serve"
 	PublishToFile    = "publish-to"
+
+	// HTTPSOnlyFile, where it exists, is the owner's word that this device
+	// speaks nothing but TLS to relays on 443; ProxyFile holds the HTTP
+	// proxy it does so through. RelayNameFile holds the public name the
+	// operator gave its relay on 443, and RelayCertsDir its certificates.
+	HTTPSOnlyFile = "https-only"
+	ProxyFile     = "proxy"
+	RelayNameFile = "relay-name"
+	RelayCertsDir = "relay-certs"
 )
 
 // WaitingFile holds the changes waiting for votes a node holds, sealed to

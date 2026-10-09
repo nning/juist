@@ -28,6 +28,10 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 	// for it.
 	scanned, internal := d.underlayEndpoints()
 	addrs := mergeEndpoints(gossip.SortAddrs(scanned), d.reachableLearned(d.manager.LocalEndpoints(), internal))
+	if d.httpsOnly {
+		// Nothing reaches it but through a relay, which needs no address.
+		addrs = nil
+	}
 	relayInfo := d.relayInfo()
 	home := uint16(d.manager.HomeRelay())
 	shared := d.shareAnnounced(d.now())

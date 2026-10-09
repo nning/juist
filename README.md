@@ -75,6 +75,7 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | remove a device, on every device at once | `juist remove phone` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
 | reach a device by name, where systemd-resolved runs | `ssh laptop.home.juist`, or `ssh laptop` | [names](https://docs.juist.nning.io/en/docs/names/) |
 | let a device with a public address relay for the others | `juist grant vps relay` | [relays](https://docs.juist.nning.io/en/docs/relays/) |
+| reach the network from a hotel or office that lets HTTPS alone out | `sudo juist set --relay-name relay.example.org` on a relay, `sudo juist set --https-only` here | [HTTPS alone](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |
 | let every device reach the LAN behind one | `juist subnet add nas 192.168.1.0/24`, then `juist subnet serve` on it | [subnets](https://docs.juist.nning.io/en/docs/subnets/) |
 | publish a service on the internet, or share a file | `juist publish add immich 127.0.0.1:2283`, `juist share ~/photos` | [publishing](https://docs.juist.nning.io/en/docs/publishing/) |
@@ -157,12 +158,13 @@ has a public address, never through a third party.
 |---|---|---|
 | 41643/udp | WireGuard and path discovery | a device with a public address |
 | 41645/tcp, 41645/udp | the relay, and the STUN answers members measure it by | a device granted `relay` |
+| 443/tcp | the relay under its public name | a relay given a name; `juist set --relay-name` opens it |
 | 41642/tcp | an invite taken as a code on the LAN | the inviting device, while `juist invite` runs |
 | 443/tcp, 443/udp, 80/tcp | the names devices publish, by TLS and QUIC | a device granted `ingress`; `juist ingress serve` opens them |
 | the ports names are published on by TCP | those names | every ingress; it opens and closes them as they come and go |
 
 The packages install ufw and firewalld profiles by the names `juist`,
-`juist-relay`, `juist-invite` and `juist-ingress`. Log sync runs inside the
+`juist-relay`, `juist-relay-443`, `juist-invite` and `juist-ingress`. Log sync runs inside the
 tunnel, on TCP 41644 on `juist0`, which a firewall configured by hand must let
 in. [Relays and ports](https://docs.juist.nning.io/en/docs/relays/) has the rest:
 further networks' ports, and running without public STUN servers or the DHT.
@@ -181,7 +183,7 @@ message means and what to do.
   transport is untrusted.
 - **Key custody:** admin keys live in the operator's keystore
   (`~/.config/juist`). juistd runs as its own user with `CAP_NET_ADMIN` only,
-  and holds no admin key.
+  and `CAP_NET_BIND_SERVICE` on a relay on 443, and holds no admin key.
 - **Invites:** SPAKE2 (RFC 9382). A code admits exactly one guess, from the LAN
   only, and a link is a 128-bit secret.
 - **Revocation** is eventually consistent; the freshness TTL (48 h) bounds how
@@ -199,8 +201,9 @@ Milestones up to **M9**, publishing, of [05-roadmap.md](docs/05-roadmap.md)
 are done: the signed log with quorum, WireGuard with NAT traversal and member
 relays, invites, several networks, exit nodes, subnet routers, names,
 publishing, and Debian, Fedora and FreeBSD packages; **M11**, TCP
-services and HTTP/3 through the ingress; and **M12**, ending a network with a
-break-glass secret and backing admin keys up.
+services and HTTP/3 through the ingress; **M12**, ending a network with a
+break-glass secret and backing admin keys up; and **M13**, reaching the
+network from one that passes HTTPS alone.
 
 Not yet: ACLs (every member reaches every port on the others), and the
 post-quantum data plane.

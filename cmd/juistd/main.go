@@ -19,6 +19,7 @@ import (
 	"io"
 	iofs "io/fs"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -127,6 +128,11 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if opts.service.Mesh.Plumber, helperGone, err = inheritedPlumber(); err != nil {
 		return err
 	}
+	if h, ok := opts.service.Mesh.Plumber.(httpsBinder); ok {
+		// The helper binds 443 for the relay, which no capability grants here.
+		tun := opts.service.Mesh.TunName
+		opts.service.Mesh.ListenHTTPS = func(a netip.Addr) (net.Listener, error) { return h.ListenHTTPS(tun, a) }
+	}
 	if helperGone != nil {
 		var cancel context.CancelCauseFunc
 		ctx, cancel = context.WithCancelCause(ctx)
@@ -177,6 +183,11 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	<-ctx.Done()
 	return context.Cause(ctx)
+}
+
+// httpsBinder binds 443 for the relay where juistd may not.
+type httpsBinder interface {
+	ListenHTTPS(dev string, a netip.Addr) (net.Listener, error)
 }
 
 type options struct {
@@ -443,6 +454,7 @@ func parse(args []string, out io.Writer) (options, error) {
 				FreshnessTTL:     *ttl,
 				TerminatorWanted: wanted,
 				IngressPorts:     ingressPorts,
+				ACMEDirectory:    *acmeDir,
 				Netstack:         serve != nil,
 				Logf:             nop,
 			},
@@ -521,7 +533,11 @@ func report(out, errOut io.Writer, st ipc.Status, tun string) {
 		field("overlay", "%v", a.Addr())
 	}
 	field("device", "%s", map[bool]string{true: "none", false: tun}[tun == ""])
-	field("data plane", "udp/%d", st.ListenPort)
+	if h := st.HTTPS; h != nil && h.Only {
+		field("https only", "by %s on 443", map[bool]string{true: "1 relay", false: fmt.Sprintf("%d relays", len(h.Relays))}[len(h.Relays) == 1])
+	} else {
+		field("data plane", "udp/%d", st.ListenPort)
+	}
 	field("log sync", "tcp/%d", st.GossipPort)
 	field("members", "%d", st.Members)
 	if st.Relaying {

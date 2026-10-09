@@ -29,11 +29,15 @@ const IngressPorts = "/run/juist/ingress-ports"
 // Answering [CmdServing], Ingresses are the ingresses' overlay addresses,
 // the only sources whose PROXY protocol header a terminator believes, and
 // Idle says that nothing here needs the terminator, which may then stop.
+//
+// Relays are the public names this device's relay serves on 443, which the
+// ingress, holding 443, hands on by TLS alone, on loopback.
 type Published struct {
 	Names     []PublishedTarget `cbor:"1,keyasint,omitempty"`
 	Ingresses []netip.Addr      `cbor:"2,keyasint,omitempty"`
 	Idle      bool              `cbor:"3,keyasint,omitempty"`
 	TCP       []PublishedTarget `cbor:"4,keyasint,omitempty"`
+	Relays    []PublishedTarget `cbor:"5,keyasint,omitempty"`
 }
 
 // A PublishedTarget is one published name and where it goes: the target's

@@ -94,6 +94,13 @@ bits. Collisions are therefore possible â€” at ten relays, under a thousandth â€
 and the lower identity keeps the region while the other simply does not relay.
 Both members compute the same answer, which is what matters.
 
+**A relay's addresses are ordered by where a member is.** Those on a network
+of the member's own come first, then public ones, then the other private
+ones, an address the member holds itself never counting as on its network.
+Once it has measured, netcheck sends STUN to a region's first node or two
+alone, so a first node the member cannot reach leaves the region unmeasured
+and never its home.
+
 ## The DHT could not use the topic M1 derived
 
 [04-architecture.md](04-architecture.md) says "blinded rotating topics", and
@@ -217,12 +224,58 @@ stays cut off. The rules:
   alone never calls it offline. A failed sync
   through a live tunnel is reported only once a retry through it failed too.
 
-**Open: a relayed pair whose home relay moves.** The home region now follows
-netcheck, and a peer reached only through a relay learns the new region from
-the announcement, which gossip carries through the very tunnel the old region
-no longer serves. Until the DHT or LAN discovery brings it, the pair is cut
-off. A test with two relays and a pair that punches through neither is what
-would show whether this needs the announcement sent over the relay as well.
+**A relayed pair whose home relay moves.** The home region follows netcheck,
+and a peer reached only through a relay learns the new region from the
+announcement, which gossip carries through the very tunnel the old region no
+longer serves. A member that holds a tunnel to both passes it on; a device on
+HTTPS alone also asks the relays for it (below), which the interop lab's
+walled devices show. Two members that punch through neither and share no
+third still wait for the DHT or LAN discovery: open.
+
+## HTTPS alone, and relays on 443
+
+A device on a network that passes TCP to 443 alone reaches the others as one
+HTTPS client among others. The rules:
+
+- **A relay's name is its own statement.** The relay-capable member announces
+  the public name it serves on 443 (`RelayInfo.Name`), from schema 12 on,
+  since an older member refuses an announcement with a field it does not
+  know. Two relays announcing one name: the lower identity keeps it, logged,
+  since the name binds no relay identity; a CA's certificate for it does.
+- **The name is verified by WebPKI, the port by its pin.** The DERP map
+  gives a named relay nodes for the name on 443, with no `CertName`, after
+  every address on its own port, since netcheck sends STUN to a region's
+  first three nodes alone: resolved in DNS first, then at its public
+  addresses, for where DNS fails, as when an exit node routes it through a
+  tunnel not up yet. The relay shows a
+  CA's certificate to a client asking for the name by SNI and the pinned one
+  to every other. So every member falls back to 443 by itself
+  where the relay's port is blocked, and nothing changes where it is not.
+- **HTTPS alone sends nothing but TLS to those names, and DNS for them.**
+  `SetOnlyTCP443` and the self node's only-TCP-443 capability keep magicsock
+  off UDP and off peer relays; the DERP map holds the names alone and no STUN
+  server; LAN discovery and the DHT are off; the announcement carries no
+  address. Magicsock still names its local addresses in call-me-maybe over
+  DERP, so members' pings may reach it on a LAN; it answers none. Log sync runs in the tunnel, so it needs a device or the netstack.
+- **The relays stand in for the DHT.** A device on HTTPS alone keeps its
+  sealed announcement at, and asks for the members', the relays on 443, at the
+  key the DHT would have used, which only members derive. A relay answers for
+  its own network's live members alone, with the newest announcement it
+  holds, under its newest epoch alone, as members publish: a device removed
+  since holds the older ones. It takes one put there as found in the DHT, and
+  only the member's own, under its own key. Requests are bounded per
+  client, an IPv6 one by its /56, and in all, where a key of no member's
+  costs the relay's budget nothing.
+- **443 is taken by address.** The relay binds 443 at each address of the
+  host's members may reach it at, so the terminator keeps 443 of the overlay
+  addresses. On the ingress, which holds 443, the ingress hands the name's
+  connections to the relay's own port on loopback after a PROXY v2 header,
+  which the relay reads from loopback alone and only while it is the
+  ingress, and passes neither QUIC nor plain HTTP for it.
+- **A proxy is the HTTPS-only device's alone.** The DERP client's proxy hook
+  answers for the names of an HTTPS-only data plane's relays, never for a
+  pinned relay, and without the proxy's user, which the DERP client logs;
+  invites and the rendezvous take the same proxy.
 
 ## The hand-sealed CallMeMaybe, and why the announcement is what primes it
 

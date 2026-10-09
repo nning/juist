@@ -403,6 +403,19 @@ func alarms(st *ipc.Status) []string {
 	if st.RelayUnreached {
 		add("no device reaches this device's relay")
 	}
+	if h := st.HTTPS; h != nil && h.Only && len(h.Relays) == 0 {
+		add("no relay on 443/tcp, the one way this device reaches the others")
+	}
+	if h := st.HTTPS; h != nil && h.Name != "" && st.Relaying {
+		switch {
+		case h.NotAnnounced != "":
+			add("members are not told of %s: %s", h.Name, h.NotAnnounced)
+		case h.ListenError != "":
+			add("the relay cannot take 443: %s", h.ListenError)
+		case h.NoCert != "":
+			add("no certificate for %s yet: %s", h.Name, h.NoCert)
+		}
+	}
 	for _, l := range st.Lost {
 		add("%s lost to a concurrent change", l)
 	}
@@ -438,6 +451,12 @@ func facts(st *ipc.Status, p *ipc.StatusPage, now time.Time) []fact {
 			text += "; this device relays for " + plural(st.RelayedFor, "device")
 		}
 		add("Relays", "%s", text)
+	}
+	if h := st.HTTPS; h != nil && h.Only {
+		add("HTTPS", "only, by %s", cmp.Or(strings.Join(h.Relays, ", "), "no relay"))
+	}
+	if h := st.HTTPS; h != nil && h.Name != "" && st.Relaying {
+		add("Relay name", "%s, on 443", h.Name)
 	}
 	var exits, subnets []string
 	for _, d := range st.Devices {

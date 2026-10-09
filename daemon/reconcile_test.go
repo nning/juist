@@ -42,7 +42,12 @@ func newReconcileFixture(t *testing.T, members int) *reconcileFixture {
 // adjusted before it starts.
 func newReconcileFixtureWith(t *testing.T, members int, mutate func(*Options)) *reconcileFixture {
 	t.Helper()
-	nw := newNetwork(t, members)
+	return newReconcileFixtureOn(t, newNetwork(t, members), mutate)
+}
+
+// newReconcileFixtureOn is [newReconcileFixtureWith] in nw.
+func newReconcileFixtureOn(t *testing.T, nw *network, mutate func(*Options)) *reconcileFixture {
+	t.Helper()
 	auth, st := nw.authorityFor(t)
 	mgr := &fakeManager{}
 	self := nw.devices[0]

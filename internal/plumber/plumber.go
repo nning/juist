@@ -51,6 +51,7 @@ const (
 	opDNS     = "dns"
 	opDestroy = "destroy"
 	opAnswers = "answers"
+	opListen  = "listen-https"
 )
 
 type request struct {
@@ -63,6 +64,7 @@ type request struct {
 	Serve  *ServeSpec     `cbor:"7,keyasint,omitempty"`
 	Egress *EgressSpec    `cbor:"8,keyasint,omitempty"`
 	DNS    []netip.Addr   `cbor:"9,keyasint,omitempty"`
+	Listen netip.Addr     `cbor:"10,keyasint,omitempty"`
 }
 
 type response struct {
@@ -171,6 +173,17 @@ func (c *Client) call(req request) (*os.File, error) {
 	return f, err
 }
 
+// ListenHTTPS binds 443/tcp at a, an address of the host's, for the relay
+// of the daemon that opened dev, which may not bind a port below 1024.
+func (c *Client) ListenHTTPS(dev string, a netip.Addr) (net.Listener, error) {
+	f, _, err := c.exchange(request{Op: opListen, Device: dev, Listen: a})
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return net.FileListener(f)
+}
+
 func (c *Client) exchange(req request) (*os.File, response, error) {
 	body, err := cbor.Marshal(req)
 	if err != nil {
@@ -196,7 +209,7 @@ func (c *Client) exchange(req request) (*os.File, response, error) {
 	if err := writeFrame(c.c, body, nil); err != nil {
 		return fail(err)
 	}
-	body, f, err := readFrame(c.c, req.Op == opOpen)
+	body, f, err := readFrame(c.c, req.Op == opOpen || req.Op == opListen)
 	if err != nil {
 		if f != nil {
 			f.Close()
@@ -317,6 +330,8 @@ type Host interface {
 	// Answers says why answers to what comes in by another device would not
 	// leave by it, "" where they would.
 	Answers() string
+	// ListenHTTPS binds 443/tcp at a and returns the listener's descriptor.
+	ListenHTTPS(a netip.Addr) (*os.File, error)
 }
 
 // device is what the helper made and installed on one device.
@@ -454,6 +469,17 @@ func handle(devs map[string]*device, h Host, req request, uid int) (*os.File, er
 		return nil, h.SetServe(req.Device, *req.Serve)
 	case opDNS:
 		return nil, setDNS(h, req.Device, req.DNS)
+	case opListen:
+		// 443 alone, at an address of the host's, never one of the
+		// device's own, which the terminator serves.
+		a := req.Listen
+		if !a.IsValid() || a.Zone() != "" || a.Is4In6() ||
+			slices.ContainsFunc(linkSpace, func(s netip.Prefix) bool { return s.Contains(a) }) ||
+			slices.ContainsFunc(d.addrs, func(p netip.Prefix) bool { return p.Addr() == a }) ||
+			slices.Contains(juistAddrs(), a) {
+			return nil, fmt.Errorf("%v is no address for a relay", a)
+		}
+		return h.ListenHTTPS(a)
 	case opEgress:
 		if req.Egress == nil {
 			return nil, errors.New("no egress")
@@ -464,6 +490,30 @@ func handle(devs map[string]*device, h Host, req request, uid int) (*os.File, er
 		return nil, h.SetEgress(req.Device, *req.Egress, uid)
 	}
 	return nil, fmt.Errorf("no operation %q", req.Op)
+}
+
+// juistAddrs are the addresses of every juist device on the host, other
+// instances' too, whose 443 is their terminators'.
+var juistAddrs = func() []netip.Addr {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []netip.Addr
+	for _, ifc := range ifs {
+		if !devicePattern.MatchString(ifc.Name) {
+			continue
+		}
+		addrs, _ := ifc.Addrs()
+		for _, ad := range addrs {
+			if ipn, ok := ad.(*net.IPNet); ok {
+				if ip, ok := netip.AddrFromSlice(ipn.IP); ok {
+					out = append(out, ip.Unmap())
+				}
+			}
+		}
+	}
+	return out
 }
 
 // overlaySpace is where a network's addresses lie: the ranges its own IPv4

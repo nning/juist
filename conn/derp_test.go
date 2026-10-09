@@ -29,7 +29,7 @@ func testRelay() Relay {
 // which fails — and on a host with a wildcard resolver, fails by connecting
 // somewhere else.
 func TestDERPMapNeverResolvesAHostName(t *testing.T) {
-	dm, _ := derpMap([]Relay{testRelay()}, nil)
+	dm, _ := derpMap([]Relay{testRelay()}, nil, false, Networks{})
 	if dm == nil {
 		t.Fatal("no map built")
 	}
@@ -70,14 +70,14 @@ func TestDERPMapNeverResolvesAHostName(t *testing.T) {
 	// netcheck spends its timeout on a port nothing answers.
 	quiet := testRelay()
 	quiet.STUNPort = 0
-	if dm, _ := derpMap([]Relay{quiet}, nil); dm.Regions[7].Nodes[0].STUNPort != -1 {
+	if dm, _ := derpMap([]Relay{quiet}, nil, false, Networks{}); dm.Regions[7].Nodes[0].STUNPort != -1 {
 		got := dm.Regions[7].Nodes[0].STUNPort
 		t.Errorf("STUNPort %d for a relay that does not reflect, want -1 (disabled)", got)
 	}
 
 	// No relays is direct-only, which is a nil map rather than an empty one:
 	// an empty map is a change the engine would act on.
-	if dm, _ := derpMap(nil, nil); dm != nil {
+	if dm, _ := derpMap(nil, nil, false, Networks{}); dm != nil {
 		t.Error("an empty relay set produced a map")
 	}
 }
@@ -182,7 +182,7 @@ func TestRelayDialOrderPutsPublicFirst(t *testing.T) {
 		netip.MustParseAddrPort("192.168.1.5:4443"),
 		netip.MustParseAddrPort("[2001:db8::1]:4443"),
 	}
-	got := relayDialOrder(in)
+	got := relayDialOrder(in, Networks{})
 	if len(got) != len(in) {
 		t.Fatalf("reordering dropped addresses: %v", got)
 	}
@@ -203,13 +203,69 @@ func TestRelayDialOrderPutsPublicFirst(t *testing.T) {
 	}
 }
 
+// Site-local IPv6 and the carriers' shared IPv4 are routed between no
+// networks, and go behind the public addresses as private ones do: netcheck
+// probes a region's first three nodes alone.
+func TestUnroutedAddressesGoBehindThePublicOnes(t *testing.T) {
+	in := []netip.AddrPort{
+		netip.MustParseAddrPort("[fec0::5054:ff:fe12:3456]:4443"),
+		netip.MustParseAddrPort("100.64.3.2:4443"),
+		netip.MustParseAddrPort("203.0.113.9:4443"),
+	}
+	if got := relayDialOrder(in, Networks{}); got[0] != in[2] {
+		t.Errorf("order %v, want the public address first", got)
+	}
+}
+
+// A relay seen from this host's own public address, as one behind the same
+// router, is dialled first on a network of this host's: netcheck, once it
+// has measured, probes a region's first node or two alone. Elsewhere its
+// public addresses come first, a private network at another site often
+// numbered as this host's own. An address this host holds itself, as every
+// Docker host holds 172.17.0.1, is none.
+func TestAnAddressOnThisHostsNetworkComesFirstAtOneSite(t *testing.T) {
+	local := Networks{Prefixes: []netip.Prefix{netip.MustParsePrefix("10.77.0.1/24"), netip.MustParsePrefix("172.17.0.1/16")},
+		Public: []netip.Addr{netip.MustParseAddr("203.0.113.9")}}
+	in := []netip.AddrPort{
+		netip.MustParseAddrPort("10.0.3.15:4443"),
+		netip.MustParseAddrPort("10.77.0.3:4443"),
+		netip.MustParseAddrPort("172.17.0.1:4443"),
+		netip.MustParseAddrPort("203.0.113.9:4443"),
+	}
+	if got, want := relayDialOrder(in, local), []netip.AddrPort{in[1], in[3], in[0], in[2]}; !slices.Equal(got, want) {
+		t.Errorf("at one site, order %v, want %v", got, want)
+	}
+	elsewhere := slices.Clone(in)
+	elsewhere[3] = netip.MustParseAddrPort("198.51.100.4:4443")
+	if got, want := relayDialOrder(elsewhere, local), []netip.AddrPort{elsewhere[3], elsewhere[0], elsewhere[1], elsewhere[2]}; !slices.Equal(got, want) {
+		t.Errorf("elsewhere, order %v, want %v", got, want)
+	}
+}
+
+// A relay's name is dialled at its public addresses, never at a private one,
+// though one on this host's network comes first among its own port's.
+func TestANamedRelaysAddressesArePublic(t *testing.T) {
+	r := namedRelay()
+	r.Addrs = []netip.AddrPort{netip.MustParseAddrPort("192.0.2.10:4443"), netip.MustParseAddrPort("10.0.0.1:4443")}
+	local := Networks{Prefixes: []netip.Prefix{netip.MustParsePrefix("10.0.0.2/24")}, Public: []netip.Addr{netip.MustParseAddr("192.0.2.10")}}
+	dm, _ := derpMap([]Relay{r}, nil, true, local)
+	for _, n := range dm.Regions[7].Nodes {
+		if n.IPv4 == "10.0.0.1" {
+			t.Errorf("the name is dialled at a private address: %+v", n)
+		}
+	}
+	if len(dm.Regions[7].Nodes) != 2 {
+		t.Errorf("%d nodes, want the name in DNS and at the public address", len(dm.Regions[7].Nodes))
+	}
+}
+
 // TestSTUNServersNeverBecomeRelays: public STUN servers are asked for this
 // node's reflexive address and nothing else. They are STUN-only, least
 // preferred as a home by far, and never take a member relay's region.
 func TestSTUNServersNeverBecomeRelays(t *testing.T) {
 	r := testRelay()
 	r.Region = MaxRegionID
-	dm, stunRegions := derpMap([]Relay{r}, []string{"stun.example:3478", "[2001:db8::1]:19302"})
+	dm, stunRegions := derpMap([]Relay{r}, []string{"stun.example:3478", "[2001:db8::1]:19302"}, false, Networks{})
 	if dm.Regions[MaxRegionID].Nodes[0].STUNOnly {
 		t.Fatal("a STUN server took a member relay's region")
 	}

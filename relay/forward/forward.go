@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,6 +19,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/nning/juist/internal/underlay"
@@ -42,6 +45,10 @@ const (
 	guestAnswer = 20 * time.Second
 )
 
+// ErrNotWaiting is a relay's answer that no host waits under the id asked
+// for, as before the host has registered.
+var ErrNotWaiting = errors.New("no invite waits at the relay under this id")
+
 // Message is what a host signs to register id at the relay whose certificate
 // hashes to certHash, answering the relay's nonce.
 func Message(certHash [32]byte, id [16]byte, nonce [32]byte) []byte {
@@ -52,12 +59,17 @@ func Message(certHash [32]byte, id [16]byte, nonce [32]byte) []byte {
 }
 
 // A Relay is where a host waits: the addresses and certificate a member
-// relay announces.
+// relay announces, and the public name it serves on 443, "" for none.
 type Relay struct {
 	Addrs      []netip.AddrPort
 	CertHash   [32]byte
 	ServerName string
+	Name       string
 }
+
+// A Proxy is the HTTP proxy a connection to a relay's public name goes
+// through, nil for none; a nil Proxy is none.
+type Proxy func(host string) (*url.URL, error)
 
 // Wait registers id at r as identity, which sign signs for, and blocks until
 // a guest is joined to the connection or ctx ends. It returns the
@@ -81,6 +93,19 @@ func Wait(ctx context.Context, r Relay, id [16]byte, identity [32]byte, sign fun
 		},
 		MinVersion: tls.VersionTLS12,
 	}, dialTimeout)
+	if err != nil {
+		return nil, "", err
+	}
+	return hold(ctx, c, br, r.CertHash, id, identity, sign)
+}
+
+// WaitNamed is [Wait] at r's public name on 443, whose certificate a public
+// CA issued, through proxy: how a host that reaches nothing but TLS on 443
+// waits. It still proves itself for r's pinned certificate, which the relay
+// checks against its own.
+func WaitNamed(ctx context.Context, r Relay, id [16]byte, identity [32]byte, sign func([]byte) ([]byte, error),
+	proxy Proxy) (net.Conn, string, error) {
+	c, br, err := dialNamed(ctx, r.Name, HostPath+hex.EncodeToString(id[:]), proxy, dialTimeout)
 	if err != nil {
 		return nil, "", err
 	}
@@ -151,6 +176,97 @@ func Dial(ctx context.Context, addr netip.AddrPort, id [16]byte) (net.Conn, erro
 	return joined(ctx, c, br)
 }
 
+// DialNamed is [Dial] at the relay serving name on 443, through proxy, its
+// certificate verified by WebPKI, as a name's can be.
+func DialNamed(ctx context.Context, name string, id [16]byte, proxy Proxy) (net.Conn, error) {
+	c, br, err := dialNamed(ctx, name, GuestPath+hex.EncodeToString(id[:]), proxy, guestAnswer)
+	if err != nil {
+		return nil, err
+	}
+	return joined(ctx, c, br)
+}
+
+// dialNamed opens TLS to name on 443, through proxy where it gives one, and
+// upgrades to path.
+func dialNamed(ctx context.Context, name, path string, proxy Proxy, answerIn time.Duration) (net.Conn, *bufio.Reader, error) {
+	target := net.JoinHostPort(name, "443")
+	var via *url.URL
+	if proxy != nil {
+		var err error
+		if via, err = proxy(name); err != nil {
+			return nil, nil, err
+		}
+	}
+	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
+	raw, err := connect(dctx, target, via)
+	cancel()
+	if err != nil {
+		return nil, nil, err
+	}
+	tc := tls.Client(raw, &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}})
+	_ = tc.SetDeadline(time.Now().Add(dialTimeout))
+	if err := tc.HandshakeContext(ctx); err != nil {
+		raw.Close()
+		return nil, nil, err
+	}
+	_ = tc.SetDeadline(time.Time{})
+	return upgrade(ctx, tc, name, path, answerIn)
+}
+
+// connect opens TCP to target, by an HTTP CONNECT through via where set.
+func connect(ctx context.Context, target string, via *url.URL) (net.Conn, error) {
+	d := underlay.Dialer(dialTimeout)
+	if via == nil {
+		return d.DialContext(ctx, "tcp", target)
+	}
+	port := via.Port()
+	if port == "" {
+		port = map[string]string{"https": "443"}[via.Scheme]
+		if port == "" {
+			port = "80"
+		}
+	}
+	c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(via.Hostname(), port))
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer stop()
+	if via.Scheme == "https" {
+		tc := tls.Client(c, &tls.Config{ServerName: via.Hostname(), MinVersion: tls.VersionTLS12})
+		if err := tc.HandshakeContext(ctx); err != nil {
+			c.Close()
+			return nil, err
+		}
+		c = tc
+	}
+	req := "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n"
+	if via.User != nil {
+		pass, _ := via.User.Password()
+		req += "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(via.User.Username()+":"+pass)) + "\r\n"
+	}
+	if _, err := io.WriteString(c, req+"\r\n"); err != nil {
+		c.Close()
+		return nil, err
+	}
+	br := bufio.NewReader(c)
+	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		c.Close()
+		return nil, fmt.Errorf("the proxy refused to connect to %s: %s", target, resp.Status)
+	}
+	if br.Buffered() > 0 {
+		c.Close()
+		return nil, errors.New("the proxy spoke before the relay")
+	}
+	return c, nil
+}
+
 // joined runs a guest's side of the protocol on c, once upgraded: the relay's
 // word that the host is on the line.
 func joined(ctx context.Context, c net.Conn, br *bufio.Reader) (net.Conn, error) {
@@ -176,42 +292,53 @@ func dial(ctx context.Context, addrs []netip.AddrPort, path string, cfg *tls.Con
 			lastErr = err
 			continue
 		}
-		// The upgrade can wait on the relay for a while; ending ctx ends it.
-		stop := context.AfterFunc(ctx, func() { c.Close() })
-		_ = c.SetDeadline(time.Now().Add(answerIn))
-		req := "GET " + path + " HTTP/1.1\r\nHost: " + a.String() + "\r\nConnection: Upgrade\r\nUpgrade: " +
-			Upgrade + "\r\n\r\n"
-		if _, err := io.WriteString(c, req); err != nil {
-			stop()
-			c.Close()
-			lastErr = err
-			continue
-		}
-		br := bufio.NewReader(c)
-		resp, err := http.ReadResponse(br, nil)
+		uc, br, err := upgrade(ctx, c, a.String(), path, answerIn)
 		if err != nil {
-			stop()
-			c.Close()
 			lastErr = err
 			continue
 		}
-		if resp.StatusCode != http.StatusSwitchingProtocols {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-			resp.Body.Close()
-			stop()
-			c.Close()
-			lastErr = fmt.Errorf("the relay at %v answered %s: %s", a, resp.Status, trimmed(body))
-			continue
-		}
-		stop()
-		if ctx.Err() != nil {
-			c.Close()
-			return nil, nil, ctx.Err()
-		}
-		_ = c.SetDeadline(time.Time{})
-		return c, br, nil
+		return uc, br, nil
 	}
 	return nil, nil, lastErr
+}
+
+// upgrade asks the relay on c, as host, to take the connection over for path,
+// waiting answerIn for its answer; it closes c where it fails.
+func upgrade(ctx context.Context, c net.Conn, host, path string, answerIn time.Duration) (net.Conn, *bufio.Reader, error) {
+	// The upgrade can wait on the relay for a while; ending ctx ends it.
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	_ = c.SetDeadline(time.Now().Add(answerIn))
+	req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: Upgrade\r\nUpgrade: " +
+		Upgrade + "\r\n\r\n"
+	if _, err := io.WriteString(c, req); err != nil {
+		stop()
+		c.Close()
+		return nil, nil, err
+	}
+	br := bufio.NewReader(c)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		stop()
+		c.Close()
+		return nil, nil, err
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		resp.Body.Close()
+		stop()
+		c.Close()
+		if resp.StatusCode == http.StatusNotFound && strings.HasPrefix(path, GuestPath) {
+			return nil, nil, fmt.Errorf("the relay at %v: %w", host, ErrNotWaiting)
+		}
+		return nil, nil, fmt.Errorf("the relay at %v answered %s: %s", host, resp.Status, trimmed(body))
+	}
+	stop()
+	if ctx.Err() != nil {
+		c.Close()
+		return nil, nil, ctx.Err()
+	}
+	_ = c.SetDeadline(time.Time{})
+	return c, br, nil
 }
 
 func trimmed(b []byte) string {

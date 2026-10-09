@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -414,20 +415,41 @@ func TestUnprovenFlowsAreBoundedBySource(t *testing.T) {
 	var l lines
 	pc, in := startQUIC(t, src, Options{Access: l.add, MaxConns: 4})
 	initials := firstInitials(t, "immich.pub.example.org")
-	for range maxUnprovenPerSource + 1 {
+	q := in.quic.Load()
+	flows := func() int {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		return len(q.flows)
+	}
+	refused := func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return slices.ContainsFunc(l.got, func(s string) bool { return strings.Contains(s, "too many unproven flows") })
+	}
+	for i := range maxUnprovenPerSource + 1 {
 		c, err := net.DialUDP("udp", nil, pc.LocalAddr().(*net.UDPAddr))
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer c.Close()
-		for _, d := range initials {
-			if _, err := c.Write(d); err != nil {
-				t.Fatal(err)
+		// Sent again until taken, as a client does: loopback drops a burst
+		// past a small receive buffer, as FreeBSD's.
+		for try := 0; ; try++ {
+			if i < maxUnprovenPerSource && flows() > i || i == maxUnprovenPerSource && refused() {
+				break
 			}
+			if try == 20 {
+				t.Fatalf("client %d: %d flows", i+1, flows())
+			}
+			for _, d := range initials {
+				if _, err := c.Write(d); err != nil {
+					t.Fatal(err)
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
 	l.find(t, "access: quic 127.0.0.1:", "refused: too many unproven flows")
-	q := in.quic.Load()
 	q.mu.Lock()
 	n, unproven := len(q.flows), (q.waiting.Len() + q.unproven.Len())
 	q.mu.Unlock()

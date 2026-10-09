@@ -71,12 +71,13 @@ The packages land in `build/deb`, `build/rpm/RPMS` and `build/freebsd`.
   [How juist works]({{< relref "docs/how-it-works" >}}) for which does what.
 - On Linux, the service `juistd`, which starts right away and waits, outside
   any network, until you create one or join one. It runs as its own user,
-  `juist`, with `CAP_NET_ADMIN` only. Beside it, the service `juist-ingress`
+  `juist`, with `CAP_NET_ADMIN` only, and `CAP_NET_BIND_SERVICE` too on a
+  [relay on 443]({{< relref "docs/relays" >}}). Beside it, the service `juist-ingress`
   for an ingress, which `juist ingress serve` starts, and `juist-serve`,
   juist's own TLS, which systemd starts without sudo whenever `juist publish`
   or `juist share` needs it ([Publishing services]({{< relref "docs/publishing" >}})).
 - Firewall profiles for ufw and firewalld: `juist`, `juist-relay`,
-  `juist-invite` and `juist-ingress`. Where ufw or firewalld runs, the package
+  `juist-relay-443`, `juist-invite` and `juist-ingress`. Where ufw or firewalld runs, the package
   also lets in traffic on the device `juist0`, which the network needs to sync
   its log, and published services to be reached. It does so at its first
   install alone, so that an upgrade leaves the firewall as you set it.
@@ -109,8 +110,8 @@ pkg delete juist           # FreeBSD, as root
 ```
 
 Removing it stops every juistd and undoes what juist set up on the host. On
-Linux that is the firewall rule for `juist0`, an ingress, and what
-`juist exit serve` changed.
+Linux that is the firewall rule for `juist0`, an ingress, a relay on 443, and
+what `juist exit serve` changed.
 
 ## Good to know
 

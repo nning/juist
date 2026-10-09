@@ -58,12 +58,57 @@ du sie zwei oder mehr Geräten mit öffentlicher Adresse. In einem Netz mit
 mehr als zwei Geräten warnt `juist status`, solange kein Gerät Relay sein
 darf.
 
+## Ein Relay auf 443
+
+Ein Relay kann auch einen öffentlichen Namen auf Port 443 bedienen, wie jeder
+HTTPS-Server. Ein Gerät in einem Netz, das nichts anderes hinauslässt,
+erreicht es dort, von selbst oder mit
+[nur HTTPS]({{< relref "docs/https-only" >}}).
+
+{{< step on="deinem DNS" >}}
+Lass einen Namen auf das Relay zeigen, mit einem A-Eintrag und, wo es IPv6
+hat, einem AAAA-Eintrag: `relay.example.org`.
+{{< /step >}}
+
+{{< step on="vps" as="dem Relay" >}}
+Lass das Relay den Namen bedienen:
+
+```sh
+sudo juist set --relay-name relay.example.org
+```
+
+juistd belegt 443/tcp an den Adressen des Relays, ufw oder firewalld lassen
+es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
+`juist status` sagt dann:
+
+```console
+  Relay name    relay.example.org, on 443
+```
+{{< /step >}}
+
+- Jedes Gerät erfährt den Namen aus der Ankündigung des Relays, sobald das
+  Log des Netzes auf Schema 12 steht. Vorher meldet `juist status`
+  `members are not told of relay.example.org`, und `juist log upgrade` hebt
+  es an.
+- Port 443 zu belegen braucht ein Recht, das juistd sonst nicht hat.
+  `juist set` gibt ihm dafür allein `CAP_NET_BIND_SERVICE`, per
+  systemd-Drop-in, und `sudo juist set --relay-name ""` nimmt es mit dem Namen
+  zurück. Unter FreeBSD belegt der Helfer von juistd Port 443, und pf muss ihn
+  durchlassen, wo es läuft.
+- Auf der [Ingress]({{< relref "docs/publishing" >}}) des Netzes, die 443
+  schon belegt, reicht die Ingress die Verbindungen für den Namen an das Relay
+  weiter.
+- Ein CAA-Eintrag für den Namen muss Let's Encrypt zulassen.
+- Auf einem Gerät in mehreren Netzen bedient nur der juistd des ersten Netzes
+  einen Namen auf 443.
+
 ## Ports
 
 | Port | Wofür | Wo öffnen |
 |---|---|---|
 | 41643/udp | WireGuard und Wegsuche | auf einem Gerät mit öffentlicher Adresse |
 | 41645/tcp, 41645/udp | das Relay und die STUN-Antworten, mit denen Mitglieder es vermessen | auf einem Gerät mit der Rolle `relay` |
+| 443/tcp | das Relay unter seinem öffentlichen Namen | auf einem Relay mit Namen; `juist set --relay-name` öffnet ihn |
 | 41642/tcp | eine Einladung, die per Code im LAN angenommen wird | auf dem einladenden Gerät, solange `juist invite` läuft |
 | 443/tcp, 443/udp, 80/tcp | die Namen, die Geräte veröffentlichen, per TLS und QUIC | auf einem Gerät mit der Rolle `ingress`; `juist ingress serve` öffnet sie |
 | die Ports, auf denen Namen per TCP veröffentlicht sind | diese Namen | auf jeder Ingress; sie öffnet und schließt sie, wie sie kommen und gehen |
@@ -80,7 +125,7 @@ obigen plus 10·n, also zum Beispiel 41653/udp für `juistd@juist1`.
 ## Firewalls
 
 Die Pakete bringen Profile für ufw und firewalld mit, die `juist`,
-`juist-relay`, `juist-invite` und `juist-ingress` heißen. Sie enthalten die
+`juist-relay`, `juist-relay-443`, `juist-invite` und `juist-ingress` heißen. Sie enthalten die
 Ports des ersten Netzes. Die Ports der anderen Netze nennt `juist status`.
 
 Über den Log-Abgleich geben Geräte Änderungen am Mitgliederlog weiter, also
@@ -135,5 +180,8 @@ Einladungen per Link laufen darüber. `man juistd` beschreibt alle Optionen.
 | `no tunnel traffic from …` | Öffne 41643/udp auf einem Gerät mit öffentlicher Adresse, oder gib einem Gerät die Rolle `relay`. |
 | `no device reaches this relay` | Öffne 41645/tcp und udp auf dem Relay, auch in jeder vorgeschalteten Firewall. |
 | `no device may relay` | Gib einem Gerät mit öffentlicher Adresse die Rolle: `juist grant DEVICE relay`. |
+| `no certificate for relay.example.org yet` | Lass den Namen auf das Relay zeigen und 443/tcp zu ihm durch. |
+| `the relay cannot take 443` | Ein anderes Programm belegt dort 443, oder juistd fehlt das Recht, das `juist set` vergibt. |
+| `members are not told of …` | `juist log upgrade`, auf dem Gerät eines Admins. |
 | `log sync … fails in the tunnel` | Lass `juist0` durch die Firewall des Rechners, wie der Hinweis vorschlägt. |
 | `no answer from …` | Das Gerät ist offline, oder sein Port 41643/udp ist gesperrt. |

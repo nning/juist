@@ -482,7 +482,7 @@ func TestLinksNameRelays(t *testing.T) {
 		t.Fatal(err)
 	}
 	relay := netip.MustParseAddrPort("203.0.113.5:41645")
-	l = l.WithRelays([]netip.AddrPort{relay})
+	l = l.WithRelays([]netip.AddrPort{relay}, nil)
 	again, err := ParseLink(l.String())
 	if err != nil {
 		t.Fatal(err)
@@ -496,5 +496,41 @@ func TestLinksNameRelays(t *testing.T) {
 	other, _ := NewLink(nil)
 	if other.ForwardID() == l.ForwardID() {
 		t.Fatal("two links share a forward id")
+	}
+}
+
+// A link names relays by their public names on 443 too, apart from those by
+// address, each name once and a few at most; a name that is no DNS name is
+// refused as an address would be.
+func TestLinksNameRelaysByName(t *testing.T) {
+	l, err := NewLink([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41642")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay := netip.MustParseAddrPort("203.0.113.5:41645")
+	l = l.WithRelays([]netip.AddrPort{relay}, []string{"relay.example.org", "r2.example.org"})
+	if !strings.HasSuffix(l.String(), ",r=203.0.113.5:41645,r=relay.example.org,r=r2.example.org") {
+		t.Errorf("the link is %s", l)
+	}
+	again, err := ParseLink(l.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(again.Relays, []netip.AddrPort{relay}) || !slices.Equal(again.Named, l.Named) {
+		t.Fatalf("%s parsed as relays %v, names %v", l, again.Relays, again.Named)
+	}
+	secret, _, _ := strings.Cut(strings.TrimPrefix(l.String(), LinkPrefix), "@")
+	twice, err := ParseLink("juist:" + secret + "@r=relay.example.org,r=relay.example.org")
+	if err != nil || !slices.Equal(twice.Named, []string{"relay.example.org"}) {
+		t.Errorf("a repeated name: %v, %v", twice.Named, err)
+	}
+	for _, bad := range []string{"r=relay", "r=relay.example.org:443", "r=Relay.example.org", "r=relay.invalid",
+		"r=a.org,r=b.org,r=c.org,r=d.org,r=e.org", "relay.example.org"} {
+		if _, err := ParseLink("juist:" + secret + "@" + bad); err == nil {
+			t.Errorf("a link naming %q was accepted", bad)
+		}
+	}
+	if got := l.WithRelays(nil, []string{"a.org", "b.org", "c.org", "d.org", "e.org"}).Named; len(got) != MaxLinkNamed {
+		t.Errorf("a link names %d relays by name", len(got))
 	}
 }

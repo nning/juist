@@ -13,6 +13,8 @@ if [ "$1" = remove ]; then
 	# An ingress stops, and its ports close.
 	/usr/lib/juist/ingress.sh off
 	/usr/lib/juist/serve.sh off
+	# A relay on 443 gives its capability and its port back.
+	/usr/lib/juist/relay.sh off
 	# Forwarding for an exit node goes back as it was, and nothing a
 	# juistd that failed left refusing the internet stays.
 	/usr/lib/juist/exit-node.sh off

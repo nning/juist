@@ -13,7 +13,10 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"golang.org/x/time/rate"
 
+	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/internal/underlay"
+	"github.com/nning/juist/trust/secrets"
 )
 
 // A Store puts and gets one opaque value at an address derived from a seed,
@@ -97,6 +100,23 @@ func resolveAll(hostPorts []string) ([]anacrolix.Addr, error) {
 		return nil, errors.New("dht: no bootstrap address resolved")
 	}
 	return out, nil
+}
+
+// ItemKey is the public key an item at seed's address is signed by, which
+// names the address.
+func ItemKey(seed [32]byte) [32]byte {
+	_, pub, _ := storeKey(seed)
+	return pub
+}
+
+// SealAnnouncement seals e for publication under epoch, as [Node] does.
+func SealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint) ([]byte, error) {
+	return sealAnnouncement(s, epoch, e)
+}
+
+// OpenAnnouncement opens and verifies a published announcement.
+func OpenAnnouncement(kr *keyring.Keyring, blob []byte) (gossip.Endpoint, error) {
+	return openAnnouncement(kr, blob)
 }
 
 func storeKey(seed [32]byte) (ed25519.PrivateKey, [32]byte, bep44.Target) {

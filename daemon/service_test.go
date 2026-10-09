@@ -878,7 +878,7 @@ func TestTheMeshRestartsOnNewOverlayAddresses(t *testing.T) {
 	if f.s.Mesh() != before {
 		t.Fatal("the mesh restarted though its addresses are the log's")
 	}
-	before.startAddrs = []netip.Prefix{netip.MustParsePrefix("198.18.9.9/32")}
+	startedOn(f.s, netip.MustParsePrefix("198.18.9.9/32"))
 	f.s.followAddrs()
 	after := f.s.Mesh()
 	if after == nil || after == before {
@@ -887,6 +887,17 @@ func TestTheMeshRestartsOnNewOverlayAddresses(t *testing.T) {
 	if after.addrsMoved() {
 		t.Errorf("the restarted mesh holds %v, not the log's addresses", after.startAddrs)
 	}
+}
+
+// startedOn has s's mesh hold that it started on addrs, as before a
+// renumbering; under s.mu and reconcileMu, as the service's watch and the
+// mesh's Run read them.
+func startedOn(s *Service, addrs ...netip.Prefix) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mesh.reconcileMu.Lock()
+	defer s.mesh.reconcileMu.Unlock()
+	s.mesh.startAddrs = addrs
 }
 
 // A state directory without node keys is not a juist home, and is not wiped:

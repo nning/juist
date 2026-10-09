@@ -94,7 +94,12 @@ adopting this system must accept them explicitly.
    the DHT. A public DERP server a network chooses (planned) sees more than
    either: every client's public address and node key, which keys exchange
    packets with which, when and how much, for as long as the pair has no
-   other path.
+   other path. A relay on 443 is verified by WebPKI, not by the hash its
+   announcement pins: a certificate any CA the device trusts issued for the
+   name, forged or a company's that intercepts TLS, puts its holder in the
+   relay's position, which is the one above. A device on HTTPS alone asks the
+   relays for the announcements it lacks, so they learn which members it looks
+   for, and it puts every packet through them.
 6. **Enrollment bottoms out at admin-device security.** One-guess PAKE invites and
    full-entropy QR tokens shrink but cannot eliminate the window in which a mis-issued
    invite or a compromised admin device admits an attacker.
@@ -181,7 +186,9 @@ adopting this system must accept them explicitly.
   data-plane security.
 - The daemon runs with the narrowest host privilege that lets it own a TUN device:
   `CAP_NET_ADMIN` as an ambient capability on a dedicated unprivileged user, never
-  as root (M3a; see `packaging/systemd/juistd.service`). This widens what a
+  as root (M3a; see `packaging/systemd/juistd.service`). `CAP_NET_BIND_SERVICE`
+  joins it on a relay its operator named on 443 alone, by a drop-in
+  `juist set --relay-name` writes and takes back. This widens what a
   compromised `juistd` can do to the *host*, not to the *network*: it still holds
   no admin keys and still cannot authorize a membership change. On the host,
   `CAP_NET_ADMIN` over netlink is broad. `ProtectKernelTunables` keeps it from

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,23 +9,51 @@ import (
 	"os/exec"
 	"os/user"
 	"strconv"
+	"time"
 
+	"github.com/nning/juist/internal/cliflag"
 	"github.com/nning/juist/ipc"
 )
 
 func cmdSet(a *app, args []string) error {
 	s := spec{name: "juist set", about: `
 Change this device's settings. --operator names the local user who may
-manage it without sudo; --operator="" clears it. Needs root.`}
+manage it without sudo, as root; --operator="" clears it. --https-only
+sends nothing but TLS to relays on 443, through --proxy where given;
+--relay-name serves this device's relay on 443 under a public name.`}
 	fs := newFlags(s.name)
-	var op optionalString
+	var op, proxy, relayName optionalString
 	fs.Var(&op, "operator", "local `USER` who manages this device")
+	httpsOnly := fs.Bool("https-only", false, "reach relays by TLS on 443 alone; =false undoes it")
+	fs.Var(&proxy, "proxy", "HTTP proxy `URL` to reach them by; \"\" for HTTPS_PROXY")
+	fs.Var(&relayName, "relay-name", "public `NAME` of this device's relay on 443")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	if !op.set {
+	setHTTPS := cliflag.IsSet(fs, "https-only")
+	if !op.set && !setHTTPS && !proxy.set && !relayName.set {
 		a.help(s, fs, a.errOut)
 		return errSilent
+	}
+	req := ipc.Request{Command: ipc.CmdSettings}
+	if setHTTPS {
+		req.HTTPSOnly = httpsOnly
+	}
+	if proxy.set {
+		if err := ipc.ValidProxy(proxy.value); err != nil {
+			return fmt.Errorf("--proxy: %w", err)
+		}
+		req.Proxy = &proxy.value
+	}
+	if relayName.set {
+		name := relayName.value
+		if name != "" {
+			var err error
+			if name, err = parseHostName(name); err != nil {
+				return fmt.Errorf("--relay-name: %w", err)
+			}
+		}
+		req.RelayName = &name
 	}
 	n, err := a.openNode()
 	if err != nil {
@@ -33,19 +62,105 @@ manage it without sudo; --operator="" clears it. Needs root.`}
 	if n.status() == nil {
 		return errNoDaemon
 	}
-	choice, err := operatorFor(op.value)
+	if op.set {
+		choice, err := operatorFor(op.value)
+		if err != nil {
+			return err
+		}
+		if err := n.setOperator(choice); err != nil {
+			return err
+		}
+		if choice.uid == 0 {
+			a.ok("operator cleared")
+		} else {
+			a.ok("operator %s", op.value)
+		}
+	}
+	if req.HTTPSOnly == nil && req.Proxy == nil && req.RelayName == nil {
+		return nil
+	}
+	if err := a.requireOperator(); err != nil {
+		return err
+	}
+	if req.RelayName != nil && *req.RelayName != "" && a.host.relayScript != "" && n.status().Instance != 0 {
+		return errors.New("a relay on 443 serves the default network's instance alone, for now")
+	}
+	st, err := n.exit(req)
 	if err != nil {
 		return err
 	}
-	if err := n.setOperator(choice); err != nil {
-		return err
+	if req.RelayName != nil && a.host.relayScript != "" && st.Instance == 0 {
+		action := map[bool]string{true: "on", false: "off"}[*req.RelayName != ""]
+		if err := a.packageScript(a.host.relayScript, action, "the relay's 443"); err != nil {
+			return err
+		}
+		// The script restarts juistd where it grants it 443.
+		if st, err = a.statusAgain(n, 15*time.Second); err != nil {
+			return err
+		}
 	}
-	if choice.uid == 0 {
-		a.ok("operator cleared")
-		return nil
-	}
-	a.ok("operator %s", op.value)
+	a.saySettings(&req, st)
 	return nil
+}
+
+// statusAgain is juistd's status once it answers again and has looked at
+// its network, within wait.
+func (a *app) statusAgain(n node, wait time.Duration) (*ipc.Status, error) {
+	until := time.Now().Add(wait)
+	for {
+		st, err := n.restatus()
+		if err == nil && (!st.InNetwork || st.LastReconcile > 0 || st.StartError != "") || time.Now().After(until) {
+			return st, err
+		}
+		select {
+		case <-a.ctx.Done():
+			return nil, a.ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// saySettings says what req set, and what keeps it from working on the
+// device whose status st is.
+func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
+	h := st.HTTPS
+	if h == nil {
+		h = &ipc.HTTPS{}
+	}
+	if req.HTTPSOnly != nil {
+		a.ok("%s", map[bool]string{true: "https only", false: "https only off"}[*req.HTTPSOnly])
+	}
+	if req.Proxy != nil {
+		if *req.Proxy == "" {
+			a.ok("proxy cleared")
+		} else {
+			a.ok("proxy %s", ipc.RedactProxy(*req.Proxy))
+		}
+	}
+	if req.RelayName != nil {
+		if *req.RelayName == "" {
+			a.ok("relay name cleared")
+		} else {
+			a.ok("relay name %s", *req.RelayName)
+		}
+	}
+	switch {
+	case !st.InNetwork:
+	case h.Only && len(h.Relays) == 0:
+		a.warn("no relay on 443/tcp")
+		a.hint("a relay's operator names it there: juist set --relay-name NAME")
+	case req.Proxy != nil && *req.Proxy != "" && !h.Only:
+		a.hint("the proxy is used with --https-only alone")
+	}
+	if req.RelayName == nil || *req.RelayName == "" || !st.InNetwork {
+		return
+	}
+	if !st.Relaying {
+		a.hint("this device serves the name once it relays: juist grant %s relay", cmp.Or(st.SelfName, st.Self.ShortString()))
+	} else if h.NotAnnounced != "" {
+		a.warn("members are not told of %s: %s", *req.RelayName, h.NotAnnounced)
+		a.hint("juist log upgrade")
+	}
 }
 
 // optionalString is a string flag that knows whether it was given, so that

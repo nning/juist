@@ -10,7 +10,9 @@
 //	probe resolve ADDR LOG            answer DNS on ADDR's port 53 as the public would, logging "TYPE NAME" to LOG
 //	probe tls NAME PORT               as serve, over TLS on PORT, with a certificate of its own
 //	probe hello ADDR:PORT SNI [CA]    as get, over TLS, asking for SNI, taking a certificate CA's file issued, or any
-//	probe answer ADDR IP              answer DNS on ADDR, over UDP and TCP, with IP for every name
+//	probe answer ADDR IP [NAME=IP]    answer DNS on ADDR, over UDP and TCP, with IP for every name, "-" for none, but NAMEs
+//	probe pcap FILE                   print each TCP flow to 443 in a capture with its SNI, each DNS query, and any other packet
+//	probe proxy ADDR USER:PASS LOG NAME=IP...  serve HTTP CONNECT on ADDR to the NAMEs' port 443 alone, logging each request
 //	probe visitors [FLAGS] URL        load a website as browsers do, over HTTP/3 with -h3, and print what came of it
 package main
 
@@ -47,9 +49,10 @@ func main() {
 		return
 	}
 	if len(os.Args) != 3 && !(len(os.Args) == 4 && slices.Contains([]string{"serve", "get", "resolve", "tls", "hello", "answer", "proxied"}, os.Args[1])) &&
-		!(len(os.Args) == 5 && (os.Args[1] == "hold" || os.Args[1] == "hello")) {
+		!(len(os.Args) == 5 && (os.Args[1] == "hold" || os.Args[1] == "hello")) && !(len(os.Args) > 4 && os.Args[1] == "answer") &&
+		!(len(os.Args) > 5 && os.Args[1] == "proxy") {
 		fmt.Fprintln(os.Stderr, "usage: probe serve NAME [PORT] | proxied NAME PORT | web PORT | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | "+
-			"dns ADDR | resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | answer ADDR IP")
+			"dns ADDR | resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | answer ADDR IP [NAME=IP...] | pcap FILE")
 		os.Exit(2)
 	}
 	var err error
@@ -73,7 +76,11 @@ func main() {
 	case "hello":
 		err = hello(os.Args[2], os.Args[3], os.Args[4:])
 	case "answer":
-		err = answerAll(os.Args[2], os.Args[3])
+		err = answerAll(os.Args[2], os.Args[3], os.Args[4:])
+	case "pcap":
+		err = pcapFlows(os.Args[2])
+	case "proxy":
+		err = proxy(os.Args[2], os.Args[3], os.Args[4], os.Args[5:])
 	default:
 		err = fmt.Errorf("no command %q", os.Args[1])
 	}
@@ -201,10 +208,19 @@ func hello(addr, sni string, ca []string) error {
 	return nil
 }
 
-func answerAll(addr, ip string) error {
+func answerAll(addr, ip string, names []string) error {
 	a, err := netip.ParseAddr(ip)
-	if err != nil || !a.Is4() {
+	if ip != "-" && (err != nil || !a.Is4()) {
 		return fmt.Errorf("%q is no IPv4 address", ip)
+	}
+	byName := map[string]netip.Addr{}
+	for _, n := range names {
+		name, at, _ := strings.Cut(n, "=")
+		na, err := netip.ParseAddr(at)
+		if err != nil || !na.Is4() {
+			return fmt.Errorf("%q is no NAME=IP", n)
+		}
+		byName[strings.ToLower(strings.TrimSuffix(name, "."))] = na
 	}
 	reply := func(q []byte) []byte {
 		var p dnsmessage.Parser
@@ -220,9 +236,13 @@ func answerAll(addr, ip string) error {
 		b.StartQuestions()
 		b.Question(question)
 		b.StartAnswers()
-		if question.Type == dnsmessage.TypeA {
+		to := a
+		if na, ok := byName[strings.ToLower(strings.TrimSuffix(question.Name.String(), "."))]; ok {
+			to = na
+		}
+		if question.Type == dnsmessage.TypeA && to.IsValid() {
 			b.AResource(dnsmessage.ResourceHeader{Name: question.Name, Class: dnsmessage.ClassINET, TTL: 5},
-				dnsmessage.AResource{A: a.As4()})
+				dnsmessage.AResource{A: to.As4()})
 		}
 		out, _ := b.Finish()
 		return out

@@ -126,7 +126,16 @@ type Options struct {
 
 	// Progress receives events. Nil discards them.
 	Progress func(Event)
+
+	// HTTPSOnly reaches the host through the relays the link names on 443
+	// alone, through Proxy: no LAN search, no DHT, no address of the host's.
+	HTTPSOnly bool
+	Proxy     forward.Proxy
 }
+
+// ErrNoNamedRelay is a link that names no relay on 443, which is all a
+// device on HTTPS alone reaches.
+var ErrNoNamedRelay = errors.New("the invite link names no relay on 443, which is all this device reaches")
 
 // A Result is a completed join.
 type Result struct {
@@ -283,6 +292,22 @@ func welcome(ch *enroll.Channel, secret enroll.Secret, records []types.AUM, w *e
 // reachHost connects to the inviting device: at the link's addresses, or at
 // whichever device answers for the code's number on the LAN.
 func reachHost(ctx context.Context, secret enroll.Secret, o Options, progress func(Event)) (net.Conn, error) {
+	if o.HTTPSOnly {
+		link, ok := secret.(enroll.Link)
+		switch {
+		case !ok:
+			return nil, errors.New("an invite code is found on the LAN, which this device does not use on HTTPS alone\n" +
+				"Use the link \"juist invite\" printed instead")
+		case len(link.Named) == 0:
+			return nil, fmt.Errorf("%w\nAsk for a new link once a relay serves a name on 443", ErrNoNamedRelay)
+		}
+		conn, err := dialFirst(ctx, named(link, o.Proxy))
+		if err != nil {
+			return nil, fmt.Errorf("cannot reach the inviting device through the relays %v: %w\n%s",
+				link.Named, err, "It may have stopped waiting")
+		}
+		return conn, nil
+	}
 	var addrs []netip.AddrPort
 	switch s := secret.(type) {
 	case enroll.Link:
@@ -349,13 +374,18 @@ func stillWaiting(addrs []netip.AddrPort) string {
 }
 
 func viaRelays(link enroll.Link) string {
+	var relays []string
+	for _, r := range link.Relays {
+		relays = append(relays, r.String())
+	}
+	relays = append(relays, link.Named...)
 	switch {
-	case len(link.Relays) == 0:
+	case len(relays) == 0:
 		return ""
 	case len(link.Addrs) == 0:
-		return fmt.Sprintf(" through the relays at %v", link.Relays)
+		return fmt.Sprintf(" through the relays at %v", relays)
 	default:
-		return fmt.Sprintf(", or through the relays at %v", link.Relays)
+		return fmt.Sprintf(", or through the relays at %v", relays)
 	}
 }
 
@@ -372,14 +402,53 @@ func dialLink(ctx context.Context, link enroll.Link) (net.Conn, error) {
 	id := link.ForwardID()
 	for _, r := range link.Relays {
 		dials = append(dials, func(ctx context.Context) (net.Conn, error) {
-			c, err := forward.Dial(ctx, r, id)
+			c, err := untilWaiting(ctx, func(ctx context.Context) (net.Conn, error) { return forward.Dial(ctx, r, id) })
 			if err != nil {
 				return nil, err
 			}
 			return relayedConn{c}, nil
 		})
 	}
-	return dialFirst(ctx, dials)
+	return dialFirst(ctx, append(dials, named(link, nil)...))
+}
+
+// named are the dials to the link's relays by their names on 443, through
+// proxy, verified by WebPKI.
+func named(link enroll.Link, proxy forward.Proxy) []func(context.Context) (net.Conn, error) {
+	id := link.ForwardID()
+	var out []func(context.Context) (net.Conn, error)
+	for _, name := range link.Named {
+		out = append(out, func(ctx context.Context) (net.Conn, error) {
+			c, err := untilWaiting(ctx, func(ctx context.Context) (net.Conn, error) {
+				return forward.DialNamed(ctx, name, id, proxy)
+			})
+			if err != nil {
+				return nil, err
+			}
+			return relayedConn{c}, nil
+		})
+	}
+	return out
+}
+
+// relayWait is how long a guest asks a relay again whose host has not
+// registered yet, as one that printed its link a moment ago may not have.
+var relayWait = 30 * time.Second
+
+// untilWaiting dials again while the relay says no host waits there yet.
+func untilWaiting(ctx context.Context, dial func(context.Context) (net.Conn, error)) (net.Conn, error) {
+	until := time.Now().Add(relayWait)
+	for {
+		c, err := dial(ctx)
+		if err == nil || !errors.Is(err, forward.ErrNotWaiting) || time.Now().After(until) {
+			return c, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // relayedConn marks a connection that runs through a member relay.

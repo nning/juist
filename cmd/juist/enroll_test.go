@@ -518,7 +518,7 @@ func TestTheInviteSetsItsCommandsApart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	link = link.WithRelays([]netip.AddrPort{netip.MustParseAddrPort("203.0.113.34:41645")})
+	link = link.WithRelays([]netip.AddrPort{netip.MustParseAddrPort("203.0.113.34:41645")}, nil)
 	var out syncBuffer
 	a := newCLI(t).app(&out, "")
 	a.announceInvite("lab", "865-endow-millionaire-blockade", link, DefaultInvitePort,

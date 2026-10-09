@@ -44,6 +44,9 @@
 - doc: docs/relays
   en: {title: Relays, text: "Where NAT wins, traffic goes through a member with a public address."}
   de: {title: Relays, text: "Wo das NAT keine direkte Verbindung zulässt, läuft der Verkehr über ein Mitglied mit öffentlicher Adresse."}
+- doc: docs/https-only
+  en: {title: HTTPS alone, text: "From a network that lets nothing out but HTTPS, through relays on 443 under public names, and a company's proxy."}
+  de: {title: Nur HTTPS, text: "Aus einem Netz, das nichts als HTTPS hinauslässt, über Relays auf 443 unter öffentlichen Namen und den Proxy einer Firma."}
 - doc: docs/network-changes
   en: {title: Renaming and renumbering, text: "The network or a device gets another name, the devices other IPv4 addresses. Nothing is set up again."}
   de: {title: Umbenennen und umnummerieren, text: "Das Netz oder ein Gerät bekommt einen anderen Namen, die Geräte andere IPv4-Adressen. Nichts wird neu eingerichtet."}
