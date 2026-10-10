@@ -213,7 +213,6 @@ Server herum, der bestimmt, wer dazugehört.
   Stunden. Ein zentraler Server teilt es jedem Gerät, das er erreicht, sofort
   mit.
 - Es ist für Netze mit 25 bis 100 Geräten und wenigen Admins gedacht.
-- Fertige Pakete gibt es nicht, du baust sie aus dem Quellcode.
 
 ## Quellen {#sources}
 

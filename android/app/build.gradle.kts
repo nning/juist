@@ -35,14 +35,17 @@ android {
 
     signingConfigs {
         // A key of one's own signs the release build where these are given, as
-        // -P or in ~/.gradle/gradle.properties.
+        // -P or in ~/.gradle/gradle.properties; passwordFile holds the one
+        // password of a PKCS12 store, or both passwords are given inline.
         val store = providers.gradleProperty("juist.signing.store").orNull
         if (store != null) {
+            val password = providers.gradleProperty("juist.signing.passwordFile").orNull
+                ?.let { file(it).readText().trim() }
             create("release") {
                 storeFile = file(store)
-                storePassword = providers.gradleProperty("juist.signing.storePassword").get()
+                storePassword = password ?: providers.gradleProperty("juist.signing.storePassword").get()
                 keyAlias = providers.gradleProperty("juist.signing.keyAlias").get()
-                keyPassword = providers.gradleProperty("juist.signing.keyPassword").get()
+                keyPassword = password ?: providers.gradleProperty("juist.signing.keyPassword").get()
             }
         }
     }

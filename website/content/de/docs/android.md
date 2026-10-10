@@ -1,7 +1,7 @@
 ---
 title: Android
 linkTitle: Android
-description: Die Android-App von juist bauen, mit einem Telefon per QR-Code oder Code einem Netz beitreten und auf dem Telefon sehen, wie jedes Gerät erreicht wird.
+description: Die Android-App von juist installieren, mit einem Telefon per QR-Code oder Code einem Netz beitreten und auf dem Telefon sehen, wie jedes Gerät erreicht wird.
 lead: Mit der Android-App wird ein Telefon Mitglied eines Netzes. Es tritt per QR-Code oder Code der Einladung bei, erreicht die anderen Geräte unter ihren Adressen und zeigt, wie jedes davon erreicht wird.
 ---
 
@@ -27,9 +27,27 @@ Was das Telefon nicht kann:
 - Es kann nicht einladen, hält keinen Admin-Schlüssel und leitet für niemanden
   weiter. Ein Admin ruft `juist invite` auf einem Rechner auf.
 
-## Bauen und installieren
+## Installieren
 
-Du baust die App aus dem Quellcode, auf einem Rechner mit einem JDK 21, dem
+Jedes [Release](https://github.com/nning/juist/releases/latest) enthält die
+App als `juist-android-arm64.apk`. Lade sie auf dem Telefon herunter und
+öffne sie. Android fragt dann, ob der Browser Apps installieren darf. Der
+Emulator nimmt `juist-android-x86_64.apk`.
+
+Die App ist mit dem Release-Schlüssel von juist signiert. Sein Zertifikat hat
+den SHA-256-Fingerabdruck
+
+```text
+51:5C:14:80:41:8A:98:4A:8B:1A:E3:69:51:7A:2C:9F:7F:48:A2:19:41:0C:AE:E6:6F:B5:82:EF:EC:AB:E5:21
+```
+
+`apksigner verify --print-certs juist-android-arm64.apk` zeigt ihn an, und
+`SHA256SUMS` führt die Datei wie auf der Seite
+[Installation]({{< relref "docs/install" >}}#den-download-prüfen).
+
+## Aus dem Quellcode bauen
+
+Du kannst die App stattdessen aus dem Quellcode bauen, auf einem Rechner mit einem JDK 21, dem
 Android-SDK mit Plattform 37.2 und dem NDK 29. `ANDROID_HOME` zeigt auf das
 SDK, `ANDROID_NDK_HOME` auf das NDK, wenn es nicht im SDK liegt.
 
@@ -71,12 +89,17 @@ juist.signing.keyAlias=juist
 juist.signing.keyPassword=…
 ```
 
+Statt der beiden Passwörter geht auch `juist.signing.passwordFile=` mit einer
+Datei, die das eine Passwort eines PKCS12-Keystores enthält, wie ihn `keytool`
+standardmäßig anlegt.
+
 Ohne sie bleibt der Release-Build unsigniert. Installier dann den Debug-Build,
 `apk/debug/app-arm64-v8a-debug.apk`. Er ist eine eigene App neben einem
 Release-Build, `io.juist.debug`.
 
 Ein Update installiert sich nur über die App, wenn derselbe Schlüssel es
-signiert hat. Heb den Schlüssel also auf: Deinstallierst du die App, um eine
+signiert hat. Ein Release installiert sich also nicht über eine selbst gebaute
+App und umgekehrt. Bleib bei einer davon: Deinstallierst du die App, um eine
 mit einem anderen Schlüssel zu installieren, sind die Schlüssel des Telefons
 weg, und es muss als neues Gerät wieder beitreten.
 

@@ -93,7 +93,7 @@ A host running tailscaled is a normal test host; what juist must not share
 with it is in `07-embedding-notes.md`, "Sharing a host with tailscaled".
 
 A commit that raises `types.CurrentSchema` is followed by a new Android app:
-`make android`, and the signed release APK published as a GitHub release
+`make android`, and the release APK, signed by the release key, published as a GitHub release
 tagged `android-schema<N>-<short commit>`. An app on an older schema stops
 following any network upgraded past it.
 

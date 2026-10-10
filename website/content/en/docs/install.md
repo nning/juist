@@ -1,56 +1,82 @@
 ---
 title: Install
 linkTitle: Install
-description: Build juist's package and install it on Debian, Ubuntu, Fedora or FreeBSD, or build it here and install it on another machine.
-lead: juist is installed as a package of your system, on every device that will be in a network. You build the package from the source with one command.
+description: Install juist's released package on Debian, Ubuntu, Fedora or FreeBSD, check the download, or build the package from the source.
+lead: juist is installed as a package of your system, on every device that will be in a network. Each release has the packages ready, with a signed list of their checksums.
 ---
 
 ## What it is
 
 juist runs on Linux and FreeBSD. On Debian and Ubuntu it is a `.deb`, on
-Fedora an RPM, and on FreeBSD a pkg package. There are no released packages,
-so you build the package from the source and then install it. A phone joins
-with the app instead, see [Android]({{< relref "docs/android" >}}).
+Fedora an RPM, and on FreeBSD a pkg package. Every
+[release](https://github.com/nning/juist/releases/latest) has them for amd64
+and arm64, the RPM for x86_64 alone. A phone joins with the app instead, see
+[Android]({{< relref "docs/android" >}}).
+
+## Installing on this device
+
+{{< step on="a Debian or Ubuntu device" >}}
+Download the package and install it:
+
+```sh
+curl -LO https://github.com/nning/juist/releases/latest/download/juist_amd64.deb
+sudo apt install ./juist_amd64.deb
+```
+
+On arm64 it is `juist_arm64.deb`.
+{{< /step >}}
+{{< step on="a Fedora device" >}}
+Install the package:
+
+```sh
+sudo dnf install https://github.com/nning/juist/releases/latest/download/juist.x86_64.rpm
+```
+{{< /step >}}
+{{< step on="a FreeBSD 14 device" >}}
+As root, install the package with pkg, then start the daemon:
+
+```sh
+pkg add https://github.com/nning/juist/releases/latest/download/juist-freebsd14-amd64.pkg
+sysrc juistd_enable=YES && service juistd start
+```
+
+On arm64 it is `juist-freebsd14-aarch64.pkg`. On Linux the package starts the
+daemon by itself; on FreeBSD you start it once, as here.
+{{< /step >}}
+
+Installing a newer release later replaces the old one, and the device keeps
+its state.
+
+## Checking a download
+
+Each release lists the SHA-256 of its files in `SHA256SUMS`, signed with the
+key in [packaging/release-signers](https://github.com/nning/juist/blob/main/packaging/release-signers).
+With that file, the download and both lists in one directory:
+
+```sh
+ssh-keygen -Y verify -f release-signers -I juist -n juist-release -s SHA256SUMS.sig < SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+The first says `Good "juist-release" signature for juist with ED25519 key
+SHA256:a2nq8txrPWVfLfF4XGzyKrFo4t71aXkcDOGZNQJABLM`, the second `OK` for each
+file you downloaded.
+
+
+## Building from the source
 
 You need Go 1.27 to build it. `make` then fetches and uses go1.27.2 itself, so
 that a commit builds to the same bytes on any machine.
 
-## Installing on this device
-
-{{< step on="every device" >}}
-Get the source:
-
 ```sh
 git clone https://github.com/nning/juist
 cd juist
-```
-{{< /step >}}
-{{< step on="a Debian, Ubuntu or Fedora device" >}}
-Build the package and install it:
-
-```sh
-make install
+make install      # gmake install, as root, on FreeBSD
 ```
 
-This builds the `.deb` on Debian and Ubuntu, or the RPM on Fedora, and
-installs it with sudo.
-{{< /step >}}
-{{< step on="a FreeBSD device" >}}
-As root, build the package and install it with pkg, then start the daemon:
-
-```sh
-gmake install
-sysrc juistd_enable=YES && service juistd start
-```
-
-On Linux the package starts the daemon by itself; on FreeBSD you start it
-once, as here.
-{{< /step >}}
-
-Running `make install` again later installs the new build over the old one,
-and the device keeps its state.
-
-## Building the package for another machine
+This builds the `.deb` on Debian and Ubuntu, the RPM on Fedora, or the pkg
+package on FreeBSD, and installs it. Running it again later installs the new
+build over the old one.
 
 To install juist on a machine that should not build it, build only the package
 and copy it there:

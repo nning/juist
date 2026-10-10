@@ -28,16 +28,29 @@ The [handbook](https://docs.juist.nning.io/en/docs/) explains every feature step
 
 ## Install
 
-On every device:
+On every device, the package of the [latest release](https://github.com/nning/juist/releases/latest):
 
 ```sh
-make install     # builds the .deb (Debian, Ubuntu) or the RPM (Fedora) and installs it with sudo
-gmake install    # on FreeBSD, as root: builds the package and installs it with pkg
+# Debian, Ubuntu (juist_arm64.deb on arm64)
+curl -LO https://github.com/nning/juist/releases/latest/download/juist_amd64.deb
+sudo apt install ./juist_amd64.deb
+
+# Fedora (x86_64)
+sudo dnf install https://github.com/nning/juist/releases/latest/download/juist.x86_64.rpm
+
+# FreeBSD 14, as root (juist-freebsd14-aarch64.pkg on arm64)
+pkg add https://github.com/nning/juist/releases/latest/download/juist-freebsd14-amd64.pkg
+sysrc juistd_enable=YES && service juistd start
 ```
 
-The package brings `juist`, the command, and `juistd`, the daemon, with shell
-completion and man pages. Building a package for another machine, and
-FreeBSD's service: [Install](https://docs.juist.nning.io/en/docs/install/).
+The Android app is `juist-android-arm64.apk` there. `SHA256SUMS` is signed
+with the key in [packaging/release-signers](packaging/release-signers).
+
+Or build the package from the source and install it: `make install`, or
+`gmake install` as root on FreeBSD. The package brings `juist`, the command,
+and `juistd`, the daemon, with shell completion and man pages. Checking a
+download, and building for another machine:
+[Install](https://docs.juist.nning.io/en/docs/install/).
 
 ## Your first network
 

@@ -483,6 +483,55 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	dpkg-deb --root-owner-group -Zxz --build $$root $(DEBTOP)/juist_$(DEB_VERSION)_$(DEB_ARCH).deb >/dev/null
 	@find $(DEBTOP) -maxdepth 1 -name '*.deb'
 
+# `make release` writes a release into build/release under stable names, so
+# that releases/latest/download/NAME is always the newest, with SHA256SUMS
+# signed by RELEASE_KEY as packaging/release-signers names. It builds the .debs
+# and FreeBSD packages itself; the RPM (make rpm on Fedora) and the APKs (make
+# android) must be built first.
+RELEASE_DIR   ?= $(BUILDDIR)/release
+RELEASE_KEY   ?= $(HOME)/.local/share/juist-signing/release-signing.key
+RELEASE_RPM   ?= $(wildcard $(RPMTOP)/RPMS/x86_64/juist-*.x86_64.rpm)
+RELEASE_APKS  ?= android/app/build/outputs/apk/release
+APKSIGNER     ?= $(lastword $(sort $(wildcard $(ANDROID_HOME)/build-tools/*/apksigner)))
+# An APK signed by another key than this certificate's, a test key say, is no release.
+ANDROID_CERT  := $(shell cat packaging/android-release.sha256)
+
+.PHONY: release
+release: ## Build a signed release into build/release: packages under stable names, SHA256SUMS and its signature
+	@test -f $(RELEASE_KEY) || { echo "release: no signing key at $(RELEASE_KEY)"; exit 1; }
+	@test "$(words $(RELEASE_RPM))" = 1 || { \
+		echo "release: want one RPM in $(RPMTOP)/RPMS/x86_64, found $(words $(RELEASE_RPM)); make rpm on Fedora, or RELEASE_RPM=FILE"; exit 1; }
+	@test -x "$(APKSIGNER)" || { echo "release: apksigner not found under ANDROID_HOME; or APKSIGNER=PATH"; exit 1; }
+	@set -e; for abi in arm64-v8a x86_64; do \
+		apk=$(RELEASE_APKS)/app-$$abi-release.apk; \
+		test -f $$apk || { echo "release: $$apk missing; make android"; exit 1; }; \
+		certs=$$($(APKSIGNER) verify --print-certs $$apk) || { echo "release: apksigner cannot verify $$apk"; exit 1; }; \
+		echo "$$certs" | grep -q "SHA-256 digest: $(ANDROID_CERT)$$" || { \
+			echo "release: $$apk is not signed by the release key (packaging/android-release.sha256)"; exit 1; }; \
+	done
+	@rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
+	@set -e; for a in amd64 arm64; do \
+		$(MAKE) --no-print-directory deb DEB_ARCH=$$a >/dev/null; \
+		cp $(DEBTOP)/juist_*_$$a.deb $(RELEASE_DIR)/juist_$$a.deb; \
+	done; \
+	for a in amd64 aarch64; do \
+		$(MAKE) --no-print-directory pkg-freebsd FREEBSD_ABI=FreeBSD:14:$$a >/dev/null; \
+		cp $(BUILDDIR)/freebsd/juist-*.pkg $(RELEASE_DIR)/juist-freebsd14-$$a.pkg; \
+	done; \
+	cp $(RELEASE_RPM) $(RELEASE_DIR)/juist.x86_64.rpm; \
+	cp $(RELEASE_APKS)/app-arm64-v8a-release.apk $(RELEASE_DIR)/juist-android-arm64.apk; \
+	cp $(RELEASE_APKS)/app-x86_64-release.apk $(RELEASE_DIR)/juist-android-x86_64.apk; \
+	cd $(RELEASE_DIR) && sha256sum -- * > SHA256SUMS
+	ssh-keygen -Y sign -q -f $(RELEASE_KEY) -n juist-release $(RELEASE_DIR)/SHA256SUMS
+	@$(MAKE) --no-print-directory release-verify
+
+.PHONY: release-verify
+release-verify: ## Check build/release against SHA256SUMS and SHA256SUMS against its signature
+	@ssh-keygen -Y verify -f packaging/release-signers -I juist -n juist-release \
+		-s $(RELEASE_DIR)/SHA256SUMS.sig < $(RELEASE_DIR)/SHA256SUMS
+	@cd $(RELEASE_DIR) && sha256sum --quiet -c SHA256SUMS
+	@ls $(RELEASE_DIR)
+
 # `make pkg-freebsd` is the FreeBSD package, written by packaging/freebsd/mkpkg
 # rather than pkg-create(8), so that any system builds it, to the same bytes
 # from one commit. FREEBSD_ABI picks the release and machine it installs on.

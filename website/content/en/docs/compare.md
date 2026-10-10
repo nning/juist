@@ -193,7 +193,6 @@ belongs.
   a cut-off device may hear of it only after up to 48 hours. A central server
   tells every device it reaches at once.
 - It is made for networks of 25 to 100 devices with a few admins.
-- There are no released packages; you build them from the source.
 
 ## Sources {#sources}
 

@@ -789,8 +789,9 @@ shipped on its own, against FreeBSD 14 in qemu:
   - **Open:** the lab's first run in CI, which waits for CI's budget.
 
 Reproducible builds, for Linux and FreeBSD alike. The rest of the release work
-— distro packages, signed releases — is M18 and the full Android app M19, after
-v1.0; a minimal Android app is M10.
+— distro repositories — is M18 and the full Android app M19, after v1.0; a
+minimal Android app is M10. Releases carry packages and a signed SHA256SUMS
+already (`make release`).
 
 - **Exit criteria:** (1) Linux/FreeBSD interop matrix green in CI (FreeBSD via
   qemu); (2) build artifacts for both reproducible byte-for-byte from two
@@ -2071,8 +2072,9 @@ of an overlay address to its member that the source check rests on.
 
 ## M18 — Packaging *(post-v1)*
 
-Distro packages and signed releases, and the readiness check that keeps an
-admin from stranding members on an upgrade.
+Distro repositories (apt, dnf, pkg) for the packages every release already
+carries, and the readiness check that keeps an admin from stranding members
+on an upgrade.
 
 - **Exit criterion:** Linux/FreeBSD interop matrix green in CI via qemu;
   release artifacts reproducible byte-for-byte from two independent builders.

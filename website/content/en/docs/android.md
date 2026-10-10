@@ -1,7 +1,7 @@
 ---
 title: Android
 linkTitle: Android
-description: Build juist's Android app, join a network with a phone by its QR code or code, and see from the phone how each device is reached.
+description: Install juist's Android app, join a network with a phone by its QR code or code, and see from the phone how each device is reached.
 lead: The Android app makes a phone a member of one network. It joins by the invite's QR code or code, reaches the other devices at their addresses, and shows how each of them is reached.
 ---
 
@@ -26,9 +26,27 @@ What the phone does not do:
 - It cannot invite, holds no admin key, and relays for nobody. An admin runs
   `juist invite` on a computer.
 
-## Building and installing
+## Installing
 
-You build the app from the source, on a computer with a JDK 21, the Android
+Every [release](https://github.com/nning/juist/releases/latest) has the app
+as `juist-android-arm64.apk`. Download it on the phone and open it; Android
+asks you to let the browser install apps. The emulator takes
+`juist-android-x86_64.apk`.
+
+The app is signed by juist's release key, whose certificate has the SHA-256
+fingerprint
+
+```text
+51:5C:14:80:41:8A:98:4A:8B:1A:E3:69:51:7A:2C:9F:7F:48:A2:19:41:0C:AE:E6:6F:B5:82:EF:EC:AB:E5:21
+```
+
+`apksigner verify --print-certs juist-android-arm64.apk` shows it, and
+`SHA256SUMS` lists the file as on the [Install]({{< relref "docs/install" >}}#checking-a-download)
+page.
+
+## Building from the source
+
+You can build the app from the source instead, on a computer with a JDK 21, the Android
 SDK with platform 37.2, and NDK 29. Point `ANDROID_HOME` at the SDK, and
 `ANDROID_NDK_HOME` at the NDK where it is not inside the SDK.
 
@@ -69,13 +87,17 @@ juist.signing.keyAlias=juist
 juist.signing.keyPassword=…
 ```
 
+Or, instead of both passwords, `juist.signing.passwordFile=` a file that
+holds the one password of a PKCS12 keystore, as `keytool` makes by default.
+
 Without them the release build stays unsigned. Install the debug build then,
 `apk/debug/app-arm64-v8a-debug.apk`, which is an app of its own beside a
 release build, `io.juist.debug`.
 
-An update installs over the app only when the same key signed it. Keep the
-key: uninstalling the app, to install one signed with another, deletes the
-phone's keys, and it has to join again as a new device.
+An update installs over the app only when the same key signed it, so a
+release does not install over an app you built, nor the reverse. Keep to one
+of them: uninstalling the app, to install one signed with another key, deletes
+the phone's keys, and it has to join again as a new device.
 
 ## Joining
 

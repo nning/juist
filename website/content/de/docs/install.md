@@ -1,58 +1,85 @@
 ---
 title: Installation
 linkTitle: Installation
-description: Das juist-Paket bauen und auf Debian, Ubuntu, Fedora oder FreeBSD installieren, oder auf einem Rechner bauen und auf einem anderen installieren.
-lead: juist installierst du als Paket deines Systems, und zwar auf jedem Gerät, das in ein Netz soll. Das Paket baust du mit einem einzigen Befehl aus dem Quellcode.
+description: Das fertige juist-Paket auf Debian, Ubuntu, Fedora oder FreeBSD installieren, den Download prüfen oder das Paket aus dem Quellcode bauen.
+lead: juist installierst du als Paket deines Systems, und zwar auf jedem Gerät, das in ein Netz soll. Jedes Release bringt die Pakete fertig mit, dazu eine signierte Liste ihrer Prüfsummen.
 ---
 
 ## Worum es geht
 
 juist läuft unter Linux und FreeBSD. Auf Debian und Ubuntu ist es ein `.deb`,
-auf Fedora ein RPM und auf FreeBSD ein pkg-Paket. Fertige Pakete gibt es
-nicht. Du baust das Paket aus dem Quellcode und installierst es dann. Ein
-Telefon tritt stattdessen mit der App bei, siehe
-[Android]({{< relref "docs/android" >}}).
+auf Fedora ein RPM und auf FreeBSD ein pkg-Paket. Jedes
+[Release](https://github.com/nning/juist/releases/latest) enthält sie für
+amd64 und arm64, das RPM nur für x86_64. Ein Telefon tritt stattdessen mit der
+App bei, siehe [Android]({{< relref "docs/android" >}}).
+
+## Auf diesem Gerät installieren
+
+{{< step on="einem Gerät mit Debian oder Ubuntu" >}}
+Lade das Paket herunter und installiere es:
+
+```sh
+curl -LO https://github.com/nning/juist/releases/latest/download/juist_amd64.deb
+sudo apt install ./juist_amd64.deb
+```
+
+Auf arm64 heißt es `juist_arm64.deb`.
+{{< /step >}}
+{{< step on="einem Gerät mit Fedora" >}}
+Installiere das Paket:
+
+```sh
+sudo dnf install https://github.com/nning/juist/releases/latest/download/juist.x86_64.rpm
+```
+{{< /step >}}
+{{< step on="einem Gerät mit FreeBSD 14" >}}
+Installiere das Paket als root mit pkg und starte dann den Daemon:
+
+```sh
+pkg add https://github.com/nning/juist/releases/latest/download/juist-freebsd14-amd64.pkg
+sysrc juistd_enable=YES && service juistd start
+```
+
+Auf arm64 heißt es `juist-freebsd14-aarch64.pkg`. Unter Linux startet das
+Paket den Daemon von selbst. Unter FreeBSD startest du ihn einmal wie oben
+gezeigt.
+{{< /step >}}
+
+Installierst du später ein neueres Release, ersetzt es das alte. Der Zustand
+des Geräts bleibt dabei erhalten.
+
+## Den Download prüfen
+
+Jedes Release führt die SHA-256-Summen seiner Dateien in `SHA256SUMS`,
+signiert mit dem Schlüssel in
+[packaging/release-signers](https://github.com/nning/juist/blob/main/packaging/release-signers).
+Liegen diese Datei, der Download und beide Listen in einem Verzeichnis, prüfst
+du so:
+
+```sh
+ssh-keygen -Y verify -f release-signers -I juist -n juist-release -s SHA256SUMS.sig < SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS
+```
+
+Der erste Befehl meldet `Good "juist-release" signature for juist with ED25519
+key SHA256:a2nq8txrPWVfLfF4XGzyKrFo4t71aXkcDOGZNQJABLM`, der zweite `OK` für
+jede heruntergeladene Datei.
+
+## Aus dem Quellcode bauen
 
 Zum Bauen brauchst du Go 1.27. `make` lädt dann selbst go1.27.2 herunter und
 verwendet es, damit ein Commit auf jedem Rechner exakt dasselbe Ergebnis
 liefert.
 
-## Auf diesem Gerät installieren
-
-{{< step on="jedem Gerät" >}}
-Hol dir den Quellcode:
-
 ```sh
 git clone https://github.com/nning/juist
 cd juist
-```
-{{< /step >}}
-{{< step on="einem Gerät mit Debian, Ubuntu oder Fedora" >}}
-Bau das Paket und installiere es:
-
-```sh
-make install
+make install      # unter FreeBSD als root: gmake install
 ```
 
-Auf Debian und Ubuntu entsteht so das `.deb`, auf Fedora das RPM, und beides
-wird gleich mit sudo installiert.
-{{< /step >}}
-{{< step on="einem Gerät mit FreeBSD" >}}
-Bau das Paket als root, installiere es mit pkg und starte dann den Daemon:
-
-```sh
-gmake install
-sysrc juistd_enable=YES && service juistd start
-```
-
-Unter Linux startet das Paket den Daemon von selbst. Unter FreeBSD startest
-du ihn einmal wie oben gezeigt.
-{{< /step >}}
-
-Rufst du `make install` später erneut auf, ersetzt der neue Build den alten.
-Der Zustand des Geräts bleibt dabei erhalten.
-
-## Das Paket für einen anderen Rechner bauen
+Auf Debian und Ubuntu entsteht so das `.deb`, auf Fedora das RPM und auf
+FreeBSD das pkg-Paket, und es wird gleich installiert. Rufst du es später
+erneut auf, ersetzt der neue Build den alten.
 
 Soll ein Rechner juist nicht selbst bauen, baust du nur das Paket und
 kopierst es hinüber:
