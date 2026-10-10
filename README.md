@@ -1,5 +1,8 @@
 # juist
 
+> [!WARNING]
+> **Vibe-coded with Opus 5.5. It has not had a security audit yet.**
+
 A peer-to-peer mesh VPN in the spirit of Tailscale, with **no coordination
 server at all**, neither a vendor's nor your own. WireGuard carries the traffic.
 Who belongs to the network is a log signed by your admins, and every device
@@ -19,7 +22,6 @@ checks that log for itself.
 ![A laptop on Debian creates a network and invites a NAS on FreeBSD, which joins and pings it](website/static/demo.gif)
 
 juist runs on Linux and FreeBSD, and an app makes an Android phone a member.
-It has not had a security audit yet.
 
 The [handbook](https://docs.juist.nning.io/en/docs/) explains every feature step by step;
 `juist help COMMAND` and `man juist` say what each command does.
