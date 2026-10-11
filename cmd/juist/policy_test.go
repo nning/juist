@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nning/juist/types"
 )
 
 // writePolicy writes a policy file to the test's working directory.
@@ -323,4 +325,49 @@ func TestTheFirstPolicyIsAskedAbout(t *testing.T) {
 	}(), "anything the policy does not pass is then refused; set it? [y/N]", "access policy set: 1 rule")
 	mustContain(t, admin.mustRun("policy", "set", writePolicy(t, "next.conf", "pass from laptop to laptop proto icmp\n")),
 		"access policy set: 1 rule")
+}
+
+// A name for members alone is opened by the members a rule names it for,
+// and the policy test says so.
+func TestAPolicyNamesANameForMembers(t *testing.T) {
+	admin := newCLI(t)
+	admin.mustRun("create", "home", "--device", "laptop")
+	enrollDevice(t, admin, "nas")
+	enrollDevice(t, admin, "phone")
+	admin.mustRun("network", "domain", "pub.example.org")
+	admin.mustRun("publish", "add", "nas", "photos", "--members")
+	admin.mustRun("policy", "set", "--yes", writePolicy(t, "p.conf", "pass from laptop to name photos\npass from phone to nas proto tcp port 443\n"))
+	mustContain(t, admin.mustRun("policy"), "pass from laptop to name photos")
+	mustContain(t, admin.mustRun("policy", "test", "from", "laptop", "to", "name", "photos"),
+		"passes: pass from laptop to name photos")
+	if out, err := admin.run("policy", "test", "from", "phone", "to", "name", "photos"); !errors.Is(err, errSilent) {
+		t.Errorf("phone, whom no rule names photos for: %v\n%s", err, out)
+	}
+	if _, err := admin.run("policy", "test", "from", "phone", "to", "name", "gone"); err == nil ||
+		!strings.Contains(err.Error(), "gone.pub.example.org is published on no device") {
+		t.Errorf("a name published nowhere: %v", err)
+	}
+	// Publishing a name a rule names says what the rule then opens.
+	auth := openLog(t, admin)
+	var phone types.NodeRecord
+	for _, n := range auth.State().Nodes() {
+		if n.Name == "phone" {
+			phone = n
+		}
+	}
+	aum, err := auth.Builder().SetPublished(phone.Identity, []types.PublishedName{{Label: "gone", Port: 443}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(effect(&aum, auth.State(), 0), "\n"); strings.Contains(got, "rules to") {
+		t.Errorf("a name no rule names:\n%s", got)
+	}
+	admin.mustRun("policy", "set", "--yes", writePolicy(t, "q.conf", "pass from laptop to { name gone, name photos }\n"))
+	auth = openLog(t, admin)
+	aum, err = auth.Builder().SetPublished(phone.Identity, []types.PublishedName{{Label: "gone", Port: 443}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, strings.Join(effect(&aum, auth.State(), 0), "\n"),
+		"so the access policy's rules to gone.pub.example.org open port 443 of phone (", ") to their sources")
 }

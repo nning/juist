@@ -188,3 +188,26 @@ func TestPublishedNamesNeedTheirDomain(t *testing.T) {
 		t.Errorf("the same state without the domain: %v", err)
 	}
 }
+
+// A name for members alone needs its schema, and is no name the ingress
+// passes by TCP or with the client's address, which members would reach
+// through it.
+func TestNamesForMembersAlone(t *testing.T) {
+	ok := []PublishedName{{Label: "photos", Port: 443, Members: true}, {Label: "wiki", Port: 443, Members: true}}
+	if err := validatePublished(ok); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []PublishedName{
+		{Label: "mc", Port: 25565, Public: 25565, Members: true},
+		{Label: "web", Port: 443, Proxy: true, Members: true},
+		{Label: "wiki", Port: 8443, Members: true},
+	} {
+		if err := validatePublished([]PublishedName{bad}); err == nil {
+			t.Errorf("%+v taken", bad)
+		}
+	}
+	n := &NodeRecord{Published: ok}
+	if need, _ := n.NeedsSchema(); need != SchemaMembers {
+		t.Errorf("a name for members alone needs %v", need)
+	}
+}

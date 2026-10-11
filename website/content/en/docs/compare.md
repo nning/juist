@@ -5,12 +5,12 @@ description: How juist differs from other mesh VPNs, with a central server and w
 lead: How juist differs from other mesh VPNs, and when one of them fits you better.
 ---
 
-## The question that tells them apart {#question}
+## What sets them apart {#question}
 
 Most mesh VPNs carry traffic in a similar way: encrypted tunnels between
-devices, direct where NAT allows, over a relay where it does not. Where they
-differ is who decides which devices belong to the network, and how a device is
-taken out again.
+devices, direct where NAT allows, over a relay where it does not. They
+differ in who decides which devices belong to the network, and in how a device
+is removed again.
 
 In juist, your admins decide, by signing changes in the
 [membership log]({{< relref "docs/how-it-works" >}}#the-membership-log), and
@@ -21,14 +21,14 @@ none has to be trusted. How that is built is on the
 Three things set juist apart from every other mesh here:
 
 - **No central infrastructure, and still WireGuard.** The other meshes
-  without a server use protocols of their own, EasyTier offers WireGuard as
-  one option, and WireGuard alone does not get through NAT.
-- **An admin quorum.** If you want, a change takes several admins, and then
-  no single person can add a device.
+  without a server use their own protocols, and EasyTier offers WireGuard only
+  as one option among several. WireGuard alone does not get through NAT.
+- **An admin quorum.** You can require several admins for each change, so
+  that no single person can add a device.
 - **Routing and names without a server.** Among the meshes without a server,
   only juist publishes services to the internet and points public names at
-  members. The others leave routes or names to each device's configuration,
-  or lack them.
+  members. In the others, routes and names are set by hand in each device's
+  configuration, or are not available at all.
 
 ## At a glance {#overview}
 
@@ -51,14 +51,13 @@ closes that gap: devices accept a new key only if a key you hold has signed
 it. Removing a device and spreading the change still go through the server.
 
 Choose Tailscale if you want clients for every platform and user accounts
-with access rules by user today, and can accept a company's server at the
-centre.
+with access rules by user, and can accept a company's server at the centre.
 
 ## Headscale {#headscale}
 
 [Headscale](https://github.com/juanfont/headscale) is an open source
-coordination server for the Tailscale clients, which you run yourself. Your
-server then holds the trust Tailscale's would. It does not support Tailnet
+coordination server for the Tailscale clients, which you run yourself. You then
+have to trust your server instead of Tailscale's. It does not support Tailnet
 Lock ([feature request](https://github.com/juanfont/headscale/issues/1307)),
 so the devices take what the server tells them without checking it.
 
@@ -69,8 +68,8 @@ and can run and protect a server of your own.
 
 [NetBird](https://docs.netbird.io/about-netbird/how-netbird-works) connects
 devices through WireGuard, coordinated by a management server that holds the
-devices, their keys and the access rules. You can use NetBird's own or run
-it yourself, together with its signal and relay servers. The client is
+devices, their keys and the access rules. You can use the one NetBird runs,
+or run it yourself together with its signal and relay servers. The client is
 BSD-3-Clause, the servers are AGPL-3.0.
 
 Choose NetBird if you want a self-hosted server with a dashboard, sign-in
@@ -91,8 +90,8 @@ Choose Netmaker if you want WireGuard in the kernel and a server of your own.
 [ZeroTier](https://docs.zerotier.com/protocol) has a protocol of its own, not
 WireGuard, and emulates an Ethernet network between devices. Who belongs is
 decided by a [network controller](https://docs.zerotier.com/controller),
-ZeroTier's or your own. Its core is MPL-2.0, the controller is source
-available under a licence of ZeroTier's own that restricts commercial use.
+ZeroTier's or your own. Its core is MPL-2.0. The controller's source is
+available, but under ZeroTier's own licence, which restricts commercial use.
 
 Choose ZeroTier if you need a layer 2 network, such as for broadcast or
 protocols other than IP.
@@ -104,11 +103,12 @@ Each device carries a certificate signed by your own CA, which names its
 address and groups, and members with a public address help the others find
 each other. It is MIT licensed and has run at large scale.
 
-What it lacks is a way to take a device out. Each device has to be given a
+What it lacks is a way to remove a device. Each device has to receive a
 [blocklist](https://nebula.defined.net/docs/config/pki/) by some other means,
-such as configuration management; until then, the device stays in until its
-certificate expires. In juist a removal is a signed change that the devices
-carry among themselves, so it needs no such means.
+such as configuration management. A device that has not received it accepts
+the removed device until its certificate expires. In juist, a removal is a signed
+change that the devices pass on among themselves, so no separate channel is
+needed.
 
 Choose Nebula if your devices are managed centrally anyway and you want
 access rules by group.
@@ -120,7 +120,7 @@ Each device holds a host file with the public key of each member it connects
 to, and the members pass on what they know of the rest. A member with a
 public address helps the others through NAT and forwards their traffic where
 needed. To remove a device, its file has to go from every device that holds
-it. Version 1.0.37 is likely the last of 1.0, and 1.1 has been a
+it. Version 1.0.37 is likely the last 1.0 release, and 1.1 has been a
 pre-release since 2021.
 
 Choose Tinc for a few devices you configure by hand, with software that has
@@ -138,11 +138,11 @@ relays and the pkarr server of n0, the company behind iroh; both can be
 replaced.
 
 Where juist differs: rayfish's co-coordinators hold one and the same network
-key, so whoever has a copy can change everything alone. In juist every admin
+key, so anyone with a copy can change anything on their own. In juist every admin
 has a key of their own, and a change takes k of them. rayfish calls itself
 experimental, before 1.0 and without a security audit.
 
-Two projects of the same year take a similar path:
+Two other projects from the same year take a similar approach:
 [nostr-vpn](https://github.com/mmalmi/nostr-vpn), whose devices accept a
 list of members only if one of its admins signed it, and the direct mode of
 [Tunnet](https://github.com/tunnetio/Tunnet), with signed members and
@@ -156,23 +156,23 @@ as Windows or macOS.
 
 Projects such as [EasyTier](https://github.com/EasyTier/EasyTier) admit
 anyone who knows the network's name and secret. That is simple to set up, but
-a device is not admitted on its own and nobody records who admitted it. To
-remove one, the secret has to change on every device that stays.
+devices are not admitted individually, and nobody records who admitted them.
+To remove one, the secret has to be changed on every device that stays.
 
 ## WireGuard alone {#wireguard}
 
 [WireGuard](https://www.wireguard.com/quickstart/) itself only connects
 devices whose keys and addresses you have written into each other's
 configuration. There is nothing in between to trust, and in the kernel it is
-faster than juist, which runs WireGuard in user space. But every new device means
-editing every other device, it does not get through NAT on both sides, and it
-has no relay.
+faster than juist, which runs WireGuard in user space. But every new device
+means editing every other device, it cannot connect two devices that are both
+behind NAT, and it has no relay.
 
 Choose WireGuard alone for a few devices with fixed public addresses.
 
 ## Not compared here {#elsewhere}
 
-Some projects named alongside these solve another problem. Pangolin,
+Some projects often named alongside these solve a different problem. Pangolin,
 Firezone, Twingate and Defguard connect devices to gateways and services
 rather than to each other, and Cloudflare Mesh carries all traffic through
 Cloudflare's network. Yggdrasil, cjdns and Mycelium are one open network
@@ -190,8 +190,8 @@ belongs.
 - It knows devices, not users: its access rules name devices, and there is
   no sign-in through an identity provider.
 - A removed device is taken out as soon as the other devices hear of it, but
-  a cut-off device may hear of it only after up to 48 hours. A central server
-  tells every device it reaches at once.
+  a device that is cut off may hear of it only after up to 48 hours. A
+  central server tells every device it reaches right away.
 - It is made for networks of 25 to 100 devices with a few admins.
 
 ## Sources {#sources}

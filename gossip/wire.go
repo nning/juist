@@ -33,7 +33,7 @@ const (
 	MaxRecordsPerFrame = 256
 
 	// MaxHashesPerFrame caps the "what I already hold" set in a hello. Past
-	// it two nodes stop converging: see docs/05-roadmap.md, M17.
+	// it two nodes stop converging: see docs/05-roadmap.md, M18.
 	MaxHashesPerFrame = 4096
 
 	// MaxEndpointsPerFrame caps the announcements one frame may carry: one
@@ -261,11 +261,18 @@ func decodeCanonical[T any](b []byte) (T, error) {
 	return v, nil
 }
 
+// errNewerFrame is a frame naming a field this build does not know: its
+// sender runs a newer one.
+var errNewerFrame = errors.New("gossip: the peer runs a newer juist")
+
 // decodeFrame decodes and shape-checks a frame's plaintext. It does not
 // verify anything the frame carries: records go through types.DecodeAUM and
 // announcements through their own signature check, both at the point of use.
 func decodeFrame(b []byte) (frame, error) {
 	f, err := decodeCanonical[frame](b)
+	if errors.As(err, new(*cbor.UnknownFieldError)) {
+		return frame{}, fmt.Errorf("%w: %w", errNewerFrame, err)
+	}
 	if err != nil {
 		return frame{}, err
 	}

@@ -19,7 +19,7 @@ Changes need your admins
 : Admitting or removing a device takes a quorum of admins, each with a key on their own devices. The keys stay in the keystore; the daemon never holds them.
 
 Fail-closed
-: Once a network has vouchers, a device that too few of them have vouched for in 48 hours keeps tunnels only to vouchers, so it cannot carry a removed device along.
+: Once a network has vouchers, a device that too few of them have vouched for in 48 hours keeps tunnels only to vouchers, so it cannot keep a removed device connected.
 {{< /rules >}}
 
 ## Your first network
@@ -80,7 +80,7 @@ Why accepted
 : There is no server that every device could ask. The freshness lease bounds it: a device no voucher has vouched for in 48 h keeps tunnels only to vouchers.
 
 What you can do
-: Make always-on devices vouchers, and require M of them, so that the bound holds against M − 1 dishonest ones. A new network has none, and no bound.
+: Make always-on devices vouchers, and require M of them, so that the bound holds against M − 1 dishonest ones. A new network has no vouchers, and so no bound.
 {{< /trade >}}
 
 {{< trade title="Losing a quorum of admin keys is final" knob="more admins than the quorum needs" >}}
@@ -91,7 +91,7 @@ Why accepted
 : A way around the quorum would be one for an attacker too.
 
 What you can do
-: Give the network more admins than the quorum needs, each on devices of their own.
+: Give the network more admins than the quorum needs, each with their own devices.
 {{< /trade >}}
 
 ### Reachability
@@ -115,18 +115,18 @@ Why accepted
 : Nothing they return is trusted. A compromised helper can delay connections, but cannot change who belongs to the network.
 
 What you can do
-: Run juistd without them, and give devices addresses they can reach.
+: Run juistd without them, and give devices addresses at which they can reach each other.
 {{< /trade >}}
 
 ### Cryptography
 
 {{< trade title="A tunnel starts on the group's key" knob="no setting" >}}
 What happens
-: Until two devices have a key of their own, a log sync after their tunnel comes up, their traffic is protected by a key any member could derive.
+: Until two devices have their own key, which takes one log sync after their tunnel comes up, their traffic is protected by a key any member could derive.
 
 Why accepted
-: Against everyone outside the network it is post-quantum from the start; only a member, or a device removed since, with a quantum computer could read those first seconds.
+: Against everyone outside the network it is quantum-safe from the start; only a member, or a device removed since, with a quantum computer could read those first seconds.
 
 What you can do
-: Nothing. `juist status` says which tunnels are on the group's key.
+: Nothing; it lasts until the next log sync between the two.
 {{< /trade >}}

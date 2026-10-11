@@ -1,38 +1,39 @@
 ---
 title: Access policy
 linkTitle: Access policy
-description: Say which device may open what on which, which exit nodes and subnets each may use, and keep the rest of the network apart.
-lead: Without an access policy, every device may open anything on every other. With one, devices open on each other only what it passes, and everything else is refused.
+description: Decide which devices may connect to which and on what ports, which exit nodes and subnets each may use, and keep the rest of the network apart.
+lead: Without an access policy, every device may open any connection to every other. With one, devices may open only the connections it passes, and everything else is refused.
 ---
 
-## What it is
+## How rules work
 
-The access policy is a list of rules that the network's log holds, the signed
+The access policy is a set of rules held in the network's log, the signed
 list of every change ([How juist works]({{< relref "docs/how-it-works" >}})).
-An admin, a person whose key approves changes, sets it, and every device
-enforces it from then on.
+An admin, a person whose key approves changes, sets it, and from then on
+every device enforces it.
 
-A rule passes connections:
+Each rule passes connections. This one:
 
 ```text
 pass from laptop to nas proto tcp port 445
 ```
 
-lets laptop open connections to port 445 on nas, and nas answer them. It
-does not let nas open anything on laptop. What no rule passes is refused.
-There are no rules that block, and their order means nothing.
+lets laptop open connections to port 445 on nas, and lets nas answer them.
+It does not let nas open anything on laptop. Anything no rule passes is
+refused. There are no rules that block, and the order of the rules does not
+matter.
 
 The policy also decides who may use an [exit node]({{< relref "docs/exit-nodes" >}})
-or reach a [subnet]({{< relref "docs/subnets" >}}). Roles still decide who
-may serve: `juist grant vps exit` makes vps an exit node, and the policy says
-which devices may send their internet traffic through it.
+or reach a [subnet]({{< relref "docs/subnets" >}}). Who may serve as one is
+still decided by roles: `juist grant vps exit` makes vps an exit node, and
+the policy says which devices may send their internet traffic through it.
 
 ## Setting a policy
 
 Say the network has two laptops, a phone, a NAS at home, and a VPS that is
-its exit node and relay. The laptops should reach the NAS by ssh and SMB, and
-ping it, and the phone its photos on port 443. The laptops go online through
-the VPS, and only laptop may log in to it.
+its exit node and relay. Both laptops should be able to reach the NAS by ssh
+and SMB and to ping it, and the phone should reach its photos on port 443.
+The laptops go online through the VPS, and only laptop may log in to it.
 
 {{< step on="an admin's device" >}}
 Write the policy to a file, `policy.conf`:
@@ -51,7 +52,8 @@ test block from phone to laptop
 ```
 
 The `test` lines say what the policy must pass and what it must refuse.
-They stay in the policy, and it is not set while one fails.
+They are saved with the policy, and the policy is not set while any of them
+fails.
 {{< /step >}}
 
 {{< step on="an admin's device" >}}
@@ -65,9 +67,9 @@ anything the policy does not pass is then refused; set it? [y/N] y
 access policy set: 4 rules
 ```
 
-Only the first policy is asked about; `--yes` answers for a script. Where a
-change needs more than one admin, it waits for the others as
-`policy.rec` ([Several admins]({{< relref "docs/admins" >}})).
+juist asks only before setting the first policy; in a script, `--yes`
+answers for you. If a change needs more than one admin, it waits for the
+others as `policy.rec` ([Several admins]({{< relref "docs/admins" >}})).
 {{< /step >}}
 
 {{< step on="laptop2" >}}
@@ -77,84 +79,95 @@ change needs more than one admin, it waits for the others as
 hint: 2 more devices the access policy keeps apart from this one: juist devices --all
 ```
 
-No rule joins laptop2 with laptop or the phone, so it keeps no tunnel to either.
-After `juist exit use vps`, laptop2 goes online through vps, and so does its
-DNS where systemd-resolved runs.
+No rule connects laptop2 with laptop or the phone, so it keeps no tunnel to
+either. After `juist exit use vps`, laptop2 goes online through vps. Where
+systemd-resolved runs, its DNS goes through vps too.
 {{< /step >}}
 
 `juist policy` prints the network's policy. `juist policy edit` opens it in
-`$VISUAL` or `$EDITOR`, or vi where neither is set, and sets what you save
-once it reads and passes its tests. `juist policy off` withdraws it: every device
-may then open anything on every other again.
+`$VISUAL` or `$EDITOR`, or in vi if neither is set. When you save, it sets
+the new policy, provided it parses and passes its tests. `juist policy off`
+withdraws the policy, and every device may again open any connection to
+every other.
 
-## The language
+## The rule language
 
-The language is the filter part of pf, the BSD packet filter:
+Policies are written in the language of pf's filter rules (pf is the BSD
+packet filter):
 
 - `table <name> { laptop, phone, <other> }` names a group of devices and
   tables.
-- `service web = proto tcp port { 80, 443 }` names ports.
-- `pass from SOURCE to DESTINATION`, then `proto`, `port` and `service` as
-  needed.
+- `service web = proto tcp port { 80, 443 }` names a set of ports.
+- `pass from SOURCE to DESTINATION`, followed by `proto`, `port` and
+  `service` as needed.
 
 A source is a device, a `<table>`, `any` for every device, or several of
-them in braces. A destination is one of those, or:
+these in braces. A destination is any of those, or:
 
-- `internet`, through every exit node, or `internet via vps` through one
+- `internet`, through any exit node, or `internet via vps`, through one
   device or table;
 - an address or prefix behind a subnet router, such as `192.168.1.0/24` or
-  `192.168.1.20`.
+  `192.168.1.20`;
+- `name photos`, a [members-only name]({{< relref "docs/publishing" >}}#names-for-members-alone),
+  given by its label under the network's domain, or `name @` for the domain
+  itself. The rule lets its sources open port 443, over TCP and UDP, on the
+  device that publishes the name and terminates its TLS, and only for that
+  name. A rule with a `name` has no other destination and no port. A rule
+  naming a public name published by TLS opens that name's port on its device
+  to the sources in the same way. If another device publishes the name
+  later, the rule opens that device instead.
 
-`proto` takes `tcp`, `udp`, `icmp` or a list in braces, and `port` takes a
-port, a range such as `8000:8080`, or a list. A rule can hold several `proto`
-clauses. A rule without `proto`, `port` or `service` passes everything. Ping
-needs `proto icmp`, or a rule without a protocol.
+`proto` takes `tcp`, `udp`, `icmp` or a list in braces. `port` takes a
+port, a range such as `8000:8080`, or a list. A rule can have several
+`proto` clauses. A rule without `proto`, `port` or `service` passes
+everything. Ping needs `proto icmp`, or a rule without a protocol.
 
-A test reads `test pass` or `test block`, from one device to one device,
-`internet via` one exit node, or one address. With a protocol and a port it
-asks for that one connection; with a protocol alone, for any port of it;
-with neither, whether anything passes at all. A rule's `proto tcp`, by
-contrast, passes every TCP port.
+A test starts with `test pass` or `test block`. It checks a connection from
+one device to a single destination: one device, `internet via` one exit
+node, one address, or one name, given without a port. With a protocol and a
+port, the test checks exactly that connection. With only a protocol, it
+checks any port of that protocol, and with neither, whether anything passes
+at all. In a rule, by contrast, `proto tcp` passes every TCP port.
 
-A device named like a keyword, such as `test`, goes in double quotes:
-`"test"`. A rule goes on past the end of a line inside braces, or after a
-`\` as in pf. The policy has no comments, and `#` is an error: the log keeps
-the policy's rules, not its text, so the reason for a rule belongs in the
-commit message.
+A device whose name is a keyword, such as `test`, goes in double quotes:
+`"test"`. A rule continues onto the next line inside braces, or after a
+`\`, as in pf. The policy has no comments, and `#` is an error: the log
+stores the policy's rules, not its text, so the reason for a rule belongs in
+the commit message.
 
-`juist policy fmt` prints a file in the policy's own form, as
-`juist policy` prints it: lists sorted, and tables, services, rules and tests
-each in a block. It needs no network.
+`juist policy fmt` prints a file in standard form, the way `juist policy`
+prints the policy: lists sorted, and tables, services, rules and tests each
+in their own block. It does not need a network.
 
-## What it means
+## How devices enforce it
 
-- Each device enforces the policy on what reaches it, and keeps track of the
-  connections it passed, so answers get back. A device that ignores the
-  policy still gets nothing through. Devices also drop what they may not
-  open themselves.
-- An exit node forwards for a device only what the policy passes it. A
-  device the policy lets use an exit node may also ask its DNS. A subnet
-  router does the same for its subnet.
+- Each device enforces the policy on the traffic it receives, and tracks the
+  connections it passed so that replies get back. Even a device that ignores
+  the policy gets nothing through. Devices also drop outgoing traffic they
+  may not open themselves.
+- An exit node forwards for a device only what the policy passes. A device
+  the policy lets use an exit node may also use its DNS. A subnet router
+  does the same for its subnet.
 - A [service member]({{< relref "docs/publishing" >}}) opens nothing,
   whatever the policy says. An ingress reaches what is published on a
-  device, whatever the policy says.
-- Two devices that no rule joins, either way, are not peers: they keep no
-  tunnel, and neither learns where the other is reached. `juist devices`,
-  `juist status` and the names `DEVICE.NETWORK.juist` show a device itself
-  and its peers.
+  device, regardless of the policy.
+- Two devices that no rule connects, in either direction, are not peers:
+  they keep no tunnel, and neither learns where the other can be reached.
+  `juist devices`, `juist status` and the names `DEVICE.NETWORK.juist` show
+  only the device itself and its peers.
 - Relays and vouchers reach every device for juist's own traffic, since
-  they carry the log. In a network with neither, every two devices keep a
-  tunnel for juist's own traffic alone.
+  they carry the log. In a network with neither, every pair of devices keeps
+  a tunnel, but only for juist's own traffic.
 - A device whose view of the network is stale keeps tunnels only to
-  vouchers, as without a policy, and passes nothing but juist's own traffic
-  through them ([freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)).
+  vouchers, as it would without a policy, and passes nothing but juist's own
+  traffic through them ([freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)).
 
 ## Why a connection does not get through
 
-What the policy refuses is dropped without an answer, so a connection to it
-hangs until it times out; a device the policy keeps apart from this one does
+Anything the policy refuses is dropped without a reply, so the connection
+hangs until it times out. A device the policy keeps apart from this one does
 not resolve as `DEVICE.NETWORK.juist` at all. `juist policy test` says what
-the policy makes of a connection, and which rule passes it:
+the policy does with a connection, and which rule passes it:
 
 ```console
 $ juist policy test from laptop to nas proto tcp port 445
@@ -164,69 +177,73 @@ refused: no rule passes it
 hint: laptop may open on nas: proto icmp proto tcp port { 22, 445 }
 ```
 
-It takes what a `test` line takes, and exits 1 where no rule passes.
+It takes the same arguments as a `test` line, and exits with status 1 if no
+rule passes the connection.
 
-## What it does not hide
+## What the policy does not hide
 
-The log stays whole on every device: every device's name, keys and address
-in the network, the roles, and the policy itself. Any member can read the
-whole policy with `juist policy`. The policy keeps devices from connecting,
-and keeps where a device is reached from those that are not its peers. It
-does not keep secret which devices the network has.
+Every device holds the whole log: every device's name, keys and network
+address, the roles, and the policy itself. Any member can read the whole
+policy with `juist policy`. The policy stops devices from connecting, and
+hides where a device can be reached from devices that are not its peers. It
+does not hide which devices the network has.
 
 ## Keeping the policy in git {#git}
 
 The file can live in a repository and be changed by merge request:
 
 - CI runs `juist policy fmt -l policy.conf`, which lists the file and fails
-  where it is not in the policy's own form. `juist policy fmt -w` rewrites
-  it.
-- `juist policy check policy.conf` reads it against the network and runs its
-  tests. It needs the network's log, so it runs on a device of the network.
-- After the merge, an admin runs `juist policy set policy.conf`. Where the
+  if it is not in standard form. `juist policy fmt -w` rewrites it.
+- `juist policy check policy.conf` checks it against the network and runs
+  its tests. It needs the network's log, so it has to run on a device in the
+  network.
+- After the merge, an admin runs `juist policy set policy.conf`. If the
   change needs more admins, `policy.rec` goes to them, and
   `juist approve policy.rec` shows the change as a diff against the current
-  policy, with any test it fails.
-- `juist policy diff policy.conf` prints both in the policy's own form, a
-  line only the network's policy has after `- `, one only the file has after
-  `+ `, and the lines both have indented, and exits 1 where they differ. It
-  finds a change made with `juist policy edit` and not in git. A device
-  removed or renamed since makes it fail on the file's line naming it.
+  policy, along with any test it fails.
+- `juist policy diff policy.conf` prints both in standard form. Lines only
+  the network's policy has start with `- `, lines only the file has start
+  with `+ `, and lines both have are indented. It exits with status 1 if
+  they differ, so it catches a change made with `juist policy edit` that
+  never went into git. If a device named in the file has since been removed
+  or renamed, it fails at the line that names it.
 
-Give no CI job an admin key that reaches the quorum alone. Whoever can push
-to the repository would then change the network.
+Never give a CI job an admin key that reaches the quorum on its own, or
+anyone who can push to the repository could change the network.
 
-## Good to know
+## Notes
 
-- `juist policy set` refuses an empty file; `juist policy off` withdraws
-  the policy. `pass from any to any` lets every device open anything on
-  every other, but not use exit nodes or subnets.
-- `juist invite` under a policy prints
+- `juist policy set` refuses an empty file; to withdraw the policy, use
+  `juist policy off`. `pass from any to any` lets every device open anything
+  on every other, but not use exit nodes or subnets.
+- Under a policy, `juist invite` prints
   `hint: the access policy passes phone nothing until it names it: juist policy edit`.
-- `juist policy check` and `set` warn of what cannot work as written, or
-  leaves something unused: an exit node without the role, a prefix no subnet
-  router routes, a device's own address where its name belongs, a service
-  member or an ingress as a source, a device in no rule, an exit node or a
-  subnet router no rule uses, a table or service no rule uses.
+- `juist policy check` and `set` warn about anything that cannot work as
+  written or leaves something unused: an exit node without the exit role, a
+  prefix no subnet router routes, a device's address where its name belongs,
+  a service member or an ingress as a source, a device no rule names, an
+  exit node or subnet router no rule uses, and a table or service no rule
+  uses.
 - `juist policy set -` reads the policy from standard input.
-- `juist log` lists each change of the policy, and who approved it;
+- `juist log` lists every change to the policy and who approved it;
   `juist log show N` shows one as a diff.
-- A removed device drops out of every rule, and a rule or test left without
-  it goes; `juist remove` says what the policy loses.
-- `juist devices --all` lists the devices the policy keeps apart from this
-  one too, as an admin needs to rename or remove them.
+- A removed device drops out of every rule. A rule left without a source or
+  a destination is dropped, and so is any test that names the device.
+  `juist remove` says what the policy loses.
+- `juist devices --all` also lists the devices the policy keeps apart from
+  this one, which an admin needs in order to rename or remove them.
 
-## If something goes wrong
+## Troubleshooting
 
 | You see | What to do |
 |---|---|
 | `juist: the network predates access policies` | update juist on every device, then run `juist log upgrade` |
-| `juist: policy.conf:3: no device "nobody" in "home"` | correct the name; `juist devices --all` lists them, and `juist log` says whether one was renamed or removed |
+| `juist: policy.conf:3: no device "nobody" in "home"` | correct the name; `juist devices --all` lists the devices, and `juist log` says whether one was renamed or removed |
 | `policy.conf:9: fails: test block from nas to laptop: pass from any to any passes it` | change the rule that passes it, or the test |
-| `juist: policy.conf:1: a policy has no comments: …` | remove the comment; say why in the commit message |
+| `juist: policy.conf:1: a policy has no comments: …` | remove the comment and give the reason in the commit message |
 | `juist: …: "test" is a word of the policy's; the device goes in double quotes: "test"` | put the device's name in double quotes |
 | ssh or SMB hangs, then times out | `juist policy test from laptop to nas proto tcp port 22` says whether the policy passes it |
-| `nas.home.juist` does not resolve | no rule joins this device and nas; `juist policy test from laptop to nas` |
+| `nas.home.juist` does not resolve | no rule connects this device and nas; check with `juist policy test from laptop to nas` |
 | ping fails, ssh works | add `proto icmp` to the rule |
 | `juist status`: `Exit node` says `vps, internet refused: the access policy does not let this device use it` | add a rule `pass from … to internet via vps` |
 | `juist subnet`: `not in use: the access policy passes none of it to this device` | add a rule for an address or prefix in the subnet |

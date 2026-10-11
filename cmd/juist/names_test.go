@@ -74,6 +74,10 @@ func TestStatusSaysHowNamesResolve(t *testing.T) {
 		{ipc.Names{Domain: "home.juist", Not: "/etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub"},
 			[]line{{kind: lineField, label: "Names", text: "home.juist not resolved: /etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub"},
 				{kind: lineHint, text: asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf")}}},
+		{ipc.Names{Domain: "home.juist", Not: "this host's resolver routes no domains", Cannot: true,
+			ForMembers: []string{"photos.pub.example.org", "wiki.pub.example.org"}},
+			[]line{{kind: lineWarn, text: "photos.pub.example.org, for members alone, is not reached from here, which resolves the network's names publicly"},
+				{kind: lineWarn, text: "wiki.pub.example.org, for members alone, is not reached from here, which resolves the network's names publicly"}}},
 	} {
 		s := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 1, Names: &tc.names}}
 		v := statusOf(s, now, noPaint)

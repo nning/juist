@@ -161,8 +161,8 @@ func TestAChosenExitNodeFailsClosed(t *testing.T) {
 		{"not serving", -1, func(t *testing.T, f *reconcileFixture) { f.learnExit(t, f.nw.devices[1], 7001, false) },
 			"has not agreed to serve"},
 		{"not reachable", -1, func(*testing.T, *reconcileFixture) {}, "cannot be reached"},
-		{"not post-quantum", -1, func(t *testing.T, f *reconcileFixture) { f.learnOld(t, f.nw.devices[1], 7001, true) },
-			"tunnel is not post-quantum"},
+		{"an older build", -1, func(t *testing.T, f *reconcileFixture) { f.learnOld(t, f.nw.devices[1], 7001, true) },
+			"it runs an older juist, or has yet to catch up"},
 		{"stale", 2, func(t *testing.T, f *reconcileFixture) { f.learnExit(t, f.nw.devices[1], 7001, true) },
 			"view of the network is stale"},
 		{"withdrawn", -1, func(t *testing.T, f *reconcileFixture) {

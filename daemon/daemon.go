@@ -257,6 +257,9 @@ type Options struct {
 	// TLS juist ends; [Daemon.SetPublishConsent] changes them.
 	ServePublished bool
 	ServeTo        map[string]string
+	// ServeMembers are the labels of ServeTo whose service is for members
+	// alone.
+	ServeMembers map[string]bool
 
 	// AcceptNames says the owner agreed that this device resolves the
 	// public names the network points at members to them;
@@ -506,6 +509,7 @@ type Daemon struct {
 	asidePlan   map[types.Identity]*lookupPlan // members a stale node keeps no tunnel to
 	probeNow    map[types.Identity]bool        // members to probe past their backoff
 	syncRetried map[types.Identity]time.Time   // when a failing sync was last retried
+	behind      map[types.Identity]time.Time   // since when live members have announced no epoch
 
 	// moving follows a renumbering while one is under way.
 	moving *renumbering
@@ -736,7 +740,7 @@ func New(opts Options) (*Daemon, error) {
 		leaseEvery:       cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
 	}
 	d.noV4.Store(opts.NoV4)
-	d.pub.consent, d.pub.to = opts.ServePublished, maps.Clone(opts.ServeTo)
+	d.pub.consent, d.pub.to, d.pub.members = opts.ServePublished, maps.Clone(opts.ServeTo), maps.Clone(opts.ServeMembers)
 	if d.listenHTTPS == nil {
 		d.listenHTTPS = defaultListenHTTPS
 	}

@@ -247,7 +247,7 @@ Instances share no state, and a TUN device routes its own network's prefixes
 only, so no packet crosses from one network into the other through juist. They
 do share the `juist` user, so one compromised instance holds every network's
 device on the host: residual weakness 9 in
-[02-threat-model.md](02-threat-model.md), and a user per instance is for M17.
+[02-threat-model.md](02-threat-model.md), and a user per instance is for M18.
 
 - **Exit criteria:** (1) one host in two networks, in the netns matrix, pings
   members of both over IPv4 and IPv6, and no route of one prefix points into
@@ -430,7 +430,7 @@ privileged-helper forwarding/NAT, client-side default-route capture with LAN byp
 and DNS handling. Design in
 [04-architecture.md](04-architecture.md#exit-nodes-and-subnet-routes-m6). It
 covers Linux; FreeBSD's side (pf) comes with M7, Android's use of an exit
-node with M10, and the rest of Android's with M20. Split
+node with M10, and the rest of Android's with M21. Split
 in three, each shipped on its own: exit nodes first, as the feature asked for,
 then subnet routers, then the exit node's DNS.
 
@@ -774,7 +774,7 @@ shipped on its own, against FreeBSD 14 in qemu:
     on FreeBSD builds and adds it. `make repro-freebsd` builds the binaries
     for both systems and the package here and on a FreeBSD host, and
     compares them. A port in the ports tree needs a release to fetch, and
-    comes with M19's. `make interop` is the lab, `interop/`: a Debian 12
+    comes with M20's. `make interop` is the lab, `interop/`: a Debian 12
     and a FreeBSD 14.5 VM in qemu without root, their packages installed,
     one network across them, each the other's exit node, subnet router and
     DNS, and both packages removed cleanly; CI's `interop` workflow runs it
@@ -789,7 +789,7 @@ shipped on its own, against FreeBSD 14 in qemu:
   - **Open:** the lab's first run in CI, which waits for CI's budget.
 
 Reproducible builds, for Linux and FreeBSD alike. The rest of the release work
-— distro repositories — is M19 and the full Android app M20, after v1.0; a
+— distro repositories — is M20 and the full Android app M21, after v1.0; a
 minimal Android app is M10. Releases carry packages and a signed SHA256SUMS
 already (`make release`).
 
@@ -1268,8 +1268,8 @@ internet, and is yet to across the VPN turned off and on and the phone
 changing networks.
 
 An Android app that joins a network as a member from anywhere, reaches the
-others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M17 covers the app's key
-custody and its in-process API; the full app is M20, after v1.
+others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M18 covers the app's key
+custody and its in-process API; the full app is M21, after v1.
 
 - **Joining.** The invite's link scanned as a QR code, which `juist invite`
   renders in the terminal beside the link; or the code typed or pasted, its
@@ -1327,7 +1327,7 @@ router, exit and holdings are left out there by build tag.
 - **Lifecycle.** A foreground service keeps the mesh up in Doze, and a
   multicast lock lets mDNS find members on the Wi-Fi.
 
-The app looks finished from M10 on, not from M20: Kotlin and Compose, with a
+The app looks finished from M10 on, not from M21: Kotlin and Compose, with a
 theme of its own (colour, type, shape, spacing and motion as tokens), light
 and dark, and every state `ipc.Status` can report designed rather than left
 to an error. A screenshot test renders every screen in both themes, at 200 %
@@ -1401,7 +1401,7 @@ Decided:
 ## M11 — More than HTTPS through the ingress
 
 M9's ingress passes TCP to 443 alone, by SNI. M11 widens what it carries,
-before the audit so that M17 covers it, in two parts shipped on their own:
+before the audit so that M18 covers it, in two parts shipped on their own:
 a TCP service on a port of its own (M11a), then HTTP/3 over 443/udp (M11b).
 Both are done.
 
@@ -1688,7 +1688,7 @@ it sends nothing but TLS over TCP to port 443 of member relays, and DNS
 queries for their names. Every packet then goes through a relay, at the
 relay's throughput and latency. It does not hide juist from a censor that
 probes servers or fingerprints ClientHellos (below). It is part of v1 and
-comes before the audit, so that M17 covers it.
+comes before the audit, so that M18 covers it.
 
 ```
 member ──TLS :443, SNI relay.example.org──▶ relay (DERP) ◀──UDP or :443── peers
@@ -1747,7 +1747,7 @@ member ──TLS :443, SNI relay.example.org──▶ relay (DERP) ◀──UDP 
   - **Saying so.** `juist status` and the status page say `https only` and
     the relays on 443, and `warning: no relay on 443/tcp` where there is
     none; a relay's name, and why it is not served, has a line of its own.
-    The Android app has no switch yet (M20); it falls back to 443 as every
+    The Android app has no switch yet (M21); it falls back to 443 as every
     member does.
 
 Not in this plan:
@@ -1875,7 +1875,7 @@ Every pair of members mixes a preshared key into WireGuard's handshake that a
 quantum computer cannot recover, so recorded tunnel traffic stays
 confidential (harvest now, decrypt later). Authentication stays X25519 and
 Ed25519; PQ authentication stays deferred, as it cannot be harvested now. It
-is part of v1 and comes before the audit, so that M17 covers it.
+is part of v1 and comes before the audit, so that M18 covers it.
 
 The engine carries a preshared key with no patch
 ([07-embedding-notes.md](07-embedding-notes.md)); what makes this a
@@ -2048,6 +2048,13 @@ seeing a new one resets the sessions a new process no longer holds.
 
 ## M16 — Names for members alone
 
+**Done** on 2026-10-11, as below, reviewed (M16 reviews 1 to 8, security
+reviews by fresh reviewers in 1, 2 and 5 to 8, the sixth over the whole
+milestone, area by area, with its completeness),
+validated by `make ci-vm` and `make test-freebsd` (12-validating.md), the
+Android app for schema 15 released. Core 9 954 lines, audit scope 30 633,
+measured after it (2026-10-11).
+
 A name published under the network's domain that the internet does not
 reach: it holds a certificate from the CA as any other, so browsers take it
 without a warning, and the access policy says which members may open it, by
@@ -2055,17 +2062,30 @@ name. A family's photos at `photos.example.org`, a team's wiki, an admin
 page: on every member that should reach them, nowhere else.
 
 - **The log** marks a published name `Members` (schema 15), set by
-  `juist publish add … --members`. Refused beside `--tcp` and `--proxy`,
-  which members reach through the ingress; a share stays public.
+  `juist publish add … --members`, and kept by a later command that leaves
+  it out until `--members=false`. On 443 by TLS alone, without `--proxy`:
+  members reach it at its device; a share stays public.
 - **The policy** takes a name as a destination, by its label under the
   domain: `pass from <family> to name photos`, and in tests and
   `juist policy test`. The rule lets its sources open the name's device on
-  its port, TCP and, offered HTTP/3, UDP, and the name alone there. Without
-  a policy every member may open every name for members. A rule naming a
-  public name, or one published nowhere, is warned of.
+  443, TCP and UDP, and the name alone there; to a public name, its port.
+  Without a policy every member may open every name for members. A name
+  published nowhere is warned of.
+- **The device's word:** `--members` where the service is named, or
+  `juistd --serve … --members` on a service member, marks it for members
+  alone, and juistd serves it under its name only while the log has the
+  name for members alone.
+- **A service of its own:** a name for members alone is not served where
+  another name's bytes, or a share's, reach its service as they are, since
+  a client of that one could ask it for the name by Host; the terminator
+  holds every name whose HTTP it proxies to its own Host. The device itself
+  is no member it is for: a client of a public service there could make it
+  ask.
 - **Three places refuse what may not come:** the ingress passes a name for
   members to nobody but the CA, a TLS hello asking `acme-tls/1` alone,
   answers QUIC and port 80 for it as for no name, and logs `members only`;
+  juistd tells the ingress and the terminator such names in a list of
+  their own, which a helper too old to know it serves to nobody;
   the device ending its TLS takes it only from the overlay addresses of the
   members the policy passes, which juistd tells it, and from the ingress
   that same hello alone, so a compromised ingress gets no further; the data
@@ -2076,8 +2096,8 @@ page: on every member that should reach them, nowhere else.
 - **Members reach it at its device**, by the name, through the tunnel, as
   juistd answers names published on 443 already. A member whose host does
   not route the domain to juistd (no systemd-resolved, FreeBSD, the Android
-  app until M20) reaches it not at all: the ingress refuses it too, and
-  `juist status` there says so for each name for members.
+  app until M21) reaches it not at all: the ingress refuses it too, and
+  `juist status`, where it runs, says so for each name for members.
 - **Out of scope:** per-name access for a name passed by TCP, which carries
   no name to check; hiding that the name exists, which its certificate in
   the CT logs shows.
@@ -2091,11 +2111,83 @@ page: on every member that should reach them, nowhere else.
   it once upgraded, older members refusing what they cannot read, and the
   Android app for schema 15 is released.
 
-## M17 — Hardening → v1
+## M17 — Faster CI
+
+`make ci-vm` takes 25 to 37 minutes, one step after the other, so a failure
+late in the lab costs a whole run, and every review round of M18 waits on
+it. It is to say where its time goes, stop at the first failure and do no
+work twice, while the run that closes a milestone still passes or fails
+wherever today's would.
+
+Where the time goes today, from the code, not yet measured:
+
+- the VM runs `make check` again, which the host passed before the push;
+- `repro` builds juist and juistd from an empty build cache, tailscale and
+  gvisor included;
+- `make interop` builds the .deb and the FreeBSD package again, and the last
+  done milestone's .deb from scratch;
+- the lab decompresses and converts the FreeBSD image every run, boots
+  Debian and FreeBSD under nested KVM, and fetches `pkg bootstrap`,
+  docker.io, tcpdump and libndpi-bin from the mirrors every run;
+- the race run lasts as long as its slowest packages: conn 142 s, daemon
+  94 s, cmd/juist 74 s, trust/log 63 s, pairkey 57 s.
+
+The plan, in order:
+
+1. **Measure.** `ci/main.go` runs each make target as a step of its own and
+   logs its time (`ci-vm: make check passed in 4m12s`), and the lab logs its
+   phases: images, boot, setup, each subtest. The rest is ordered by what
+   this shows.
+2. **Stages, cheapest first.** A run stops at the first stage that fails:
+   what only the VM shows (the host-network probes, the privileged tests),
+   then the packages and the lab, then the cross builds, `govulncheck` and
+   `repro`. `-from <stage>` resumes on the same tree after a fix.
+3. **No work twice.** A tree that passed `make check` on the host, which a
+   stamp with the tree's hash under `build/` records, runs in the VM only the
+   tests that `JUIST_REQUIRE_HOST_NET` turns from a skip into a failure.
+   `make interop` takes the packages `make ci` built. `deb-previous` is
+   kept per milestone commit, and each lab image is kept converted, with a
+   sum of its own.
+4. **A provisioned lab.** Debian and FreeBSD boot from bases that are set up
+   once, as the CI VM's are, keyed by the image's sum and the setup script;
+   a run installs only juist, and needs no package mirror.
+5. **The lab beside the VM.** `make interop` needs no root, so it can run on
+   the host under KVM while the VM runs the privileged jobs: two at once,
+   with no nested virtualization.
+6. **The slow tests.** Fixed sleeps become waits on a condition, and tests
+   that touch no shared state are made parallel, which shortens
+   `make check` on every push as well.
+
+Open decisions:
+
+- **The closing run.** Which of these shortcuts the run that closes a
+  milestone may take. Lead option: none of 3's; it runs every stage cold,
+  `make check` and `repro` included.
+- **The lab's host.** On the host it runs with the host's qemu and Chrome,
+  not the pinned VM's. Whether the closing run accepts that, or keeps the
+  lab nested.
+- **The test cache.** Whether runs before the closing one drop `-count=1`
+  for packages unchanged since a run that passed. Lead option: no, since
+  Go's cache does not see every input a test reads, such as the host's
+  network or root.
+- **Stages in parallel.** The cross builds, `govulncheck` and the packages
+  beside the lab, whose timed waits leave CPUs idle. Only if those waits do
+  not start to flake.
+
+- **Exit criteria:** (1) `build/ci`'s log gives each step's time; (2) a
+  failure planted in each stage still fails the closing run, and a failing
+  privileged test ends a run before the lab starts; (3) nothing in a run is
+  built, converted or fetched twice; (4) the closing run passes in at most
+  half of the 25 minutes recorded for it on the four-core host, and
+  [12-validating.md](12-validating.md)'s table of gates carries the new
+  times.
+
+## M18 — Hardening → v1
 
 External security audit of the audit scope, in the tiers of
-[06-verification.md](06-verification.md) §5, the trust layer and enrollment at
-its core,
+[06-verification.md](06-verification.md) §5, preceded by the internal review
+[15-security-review.md](15-security-review.md) plans, the trust layer and
+enrollment at its core,
 plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15 and M16 add to it — route consumption and its forwarding helper, the
 override record and the resolver, the published names, those for members alone, and the ingress, its QUIC Initial parser included, the
 disable record, the preshared-key exchange, the Android
@@ -2145,14 +2237,14 @@ Also open before the audit:
   names to their caps.
 
 v1 is Linux and FreeBSD with M14's ACLs, and M10's minimal Android app;
-packaging and the full app follow in M19 and M20.
+packaging and the full app follow in M20 and M21.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) a network that has authored more than
   `MaxHashesPerFrame` records still converges on a new change, with no admin
   having asked for a checkpoint; v1.0 tag.
 
-## M18 — Multicast *(post-v1)*
+## M19 — Multicast *(post-v1)*
 
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LAN games.
 The overlay counts as one link for them. Multicast routing, streaming and
@@ -2217,7 +2309,7 @@ of an overlay address to its member that the source check rests on.
   listener joined on the default interface receives a routed group's packets
   from a member.
 
-## M19 — Packaging *(post-v1)*
+## M20 — Packaging *(post-v1)*
 
 Distro repositories (apt, dnf, pkg) for the packages every release already
 carries, and the readiness check that keeps an admin from stranding members
@@ -2226,21 +2318,21 @@ on an upgrade.
 - **Exit criterion:** Linux/FreeBSD interop matrix green in CI via qemu;
   release artifacts reproducible byte-for-byte from two independent builders.
 
-## M20 — The full Android app *(post-v1)*
+## M21 — The full Android app *(post-v1)*
 
 The full Android app, on M10's: M6b's subnet routes through `VpnService`
-routes, and M8's names, released as M19 releases the rest.
+routes, and M8's names, released as M20 releases the rest.
 
 - **Exit criterion:** 3-platform interop matrix green in CI, Android by an
   emulator smoke test; the app's release artifact reproducible byte-for-byte
   from two independent builders.
 
-## M21 — A store, and a messenger on it *(post-v1)*
+## M22 — A store, and a messenger on it *(post-v1)*
 
 Members leave each other data while the other is offline, with no server: a
 key-value store replicated among the members' own devices, and a messenger on
 it with groups, pictures and files, `juistmsg` on Linux and FreeBSD and a chat
-in the app. It needs M10's app, not M20's. A device takes part if its owner
+in the app. It needs M10's app, not M21's. A device takes part if its owner
 turns it on; nothing about it is the quorum's.
 
 Not a DHT: every member holds the whole member list, so where a namespace
@@ -2446,7 +2538,7 @@ gateway is for keeping the servers out of the clients' log.
 
 ## Later — Networks of phones alone
 
-Not scheduled; after M20, whose names it uses. A network whose every member is
+Not scheduled; after M21, whose names it uses. A network whose every member is
 an Android phone, created, invited to, governed and kept fresh from the app,
 whose members reach each other without a VPS: a family's phones, and a
 peer-to-peer chat between them. A relay member stays the answer that always
@@ -2464,7 +2556,7 @@ only way to need none.
    IPv6, and each carrier's NAT mapping and filtering. Step 4 is judged by that
    table, so it is taken first.
 2. **Governing from the app.** Genesis on the phone, its admin key sealed by
-   Keystore as `node.keys` is (M10), which M17's audit did not cover for
+   Keystore as `node.keys` is (M10), which M18's audit did not cover for
    admin keys, so it wants a review of its own. The app invites (the QR code
    on its screen, the code on the Wi-Fi, a link through the DHT's
    rendezvous), shows the words, votes, approves carried changes (M5b),
@@ -2526,7 +2618,7 @@ only way to need none.
    from another member through `VpnService`, tested. Without an access policy
    (M14) every member reaches every port a phone's apps open.
 
-The chat is M21's, whose store holds a message for a phone that is off on
+The chat is M22's, whose store holds a message for a phone that is off on
 the members that are on.
 
 - **Exit criteria:** (1) in `make interop`, three emulators and no other

@@ -77,7 +77,7 @@ fun reachColor(r: Reach): Color {
         Reach.Direct -> status.direct
         Reach.Relay -> status.relay
         Reach.Sought, Reach.Unchecked -> status.sought
-        Reach.Down, Reach.Unconnected -> status.alarm
+        Reach.Down, Reach.Unconnected, Reach.Outdated -> status.alarm
         Reach.Self -> MaterialTheme.colorScheme.primary
         else -> status.absent
     }
@@ -89,6 +89,7 @@ fun reachLabel(m: Member): String = when (m.reach) {
     Reach.Self -> stringResource(R.string.reach_self)
     Reach.Direct -> stringResource(R.string.reach_direct)
     Reach.Relay -> stringResource(R.string.reach_relay)
+    Reach.Outdated -> stringResource(R.string.reach_outdated)
     Reach.Down -> stringResource(R.string.reach_down)
     Reach.Sought -> stringResource(R.string.reach_sought)
     Reach.Absent -> if (m.heard > 0) stringResource(R.string.reach_absent_heard, ago(m.heard)) else stringResource(R.string.reach_absent)
@@ -102,6 +103,7 @@ fun reachLabel(m: Member): String = when (m.reach) {
 @StringRes
 fun reachExplanation(r: Reach): Int? = when (r) {
     Reach.Relay -> R.string.reach_relay_about
+    Reach.Outdated -> R.string.reach_outdated_about
     Reach.Down -> R.string.reach_down_about
     Reach.Sought -> R.string.reach_sought_about
     Reach.Absent -> R.string.reach_absent_about
@@ -184,6 +186,8 @@ fun alarmTitle(a: Alarm): String = when (a.kind) {
     "epoch" -> stringResource(R.string.alarm_epoch)
     "dataPlane" -> stringResource(R.string.alarm_data_plane)
     "noTraffic" -> stringResource(R.string.alarm_no_traffic, names(a.names))
+    "newer" -> stringResource(R.string.alarm_newer, names(a.names))
+    "outdated" -> stringResource(R.string.alarm_outdated, names(a.names))
     "conflicted" -> pluralStringResource(R.plurals.alarm_conflicted, a.count, a.count)
     "noRelay" -> stringResource(R.string.alarm_no_relay)
     "freshnessEnding" -> pluralStringResource(R.plurals.alarm_freshness_ending, a.count, a.count)
@@ -206,6 +210,8 @@ fun alarmHint(a: Alarm): Int? = when (a.kind) {
     "staleKeys" -> R.string.alarm_stale_keys_hint
     "refused" -> R.string.alarm_refused_hint
     "noTraffic" -> R.string.alarm_no_traffic_hint
+    "newer" -> R.string.alarm_newer_hint
+    "outdated" -> R.string.alarm_outdated_hint
     "noRelay" -> R.string.alarm_no_relay_hint
     "freshnessEnding" -> R.string.alarm_freshness_ending_hint
     "unrevoked" -> R.string.alarm_unrevoked_hint

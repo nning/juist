@@ -5,11 +5,11 @@ description: Einem Gerät neue Schlüssel geben, ein Gerät von vorn beginnen la
 lead: Jedes Gerät hat eigene Schlüssel, und alle Geräte eines Netzes teilen ein gemeinsames Geheimnis. Du kannst beides ersetzen, ein Gerät aus dem Netz nehmen und von vorn beginnen lassen oder ein verlorenes Gerät aussperren.
 ---
 
-## Worum es geht
+## Welche Schlüssel es gibt
 
 Jedes Gerät hat eigene Schlüssel. Seine WireGuard- und Sealing-Schlüssel
-schützen seine Tunnel und die Nachrichten, die für es versiegelt werden. Sein
-Identitätsschlüssel bezeichnet es im Mitgliederlog, der signierten Liste
+schützen seine Tunnel und die Nachrichten, die an es versiegelt werden. Sein
+Identitätsschlüssel weist es im Mitgliederlog aus, der signierten Liste
 aller Änderungen, die jedes Gerät prüft
 ([So funktioniert juist]({{< relref "docs/how-it-works" >}})).
 
@@ -30,9 +30,9 @@ eine Änderung am Log, die Admins bestätigen ihn also wie jede andere
 | den Identitätsschlüssel dieses Geräts | `juist rotate identity` | die IPv6-Adresse ändert sich |
 | das Gruppengeheimnis des Netzes | `juist rotate group-secret` | nach einem Leck |
 
-`juist rotate` ist für ein Gerät gedacht, dem du noch vertraust und dem du
-neue Schlüssel geben willst. Liegt auf dem Gerät ein Admin-Schlüssel des
-Netzes und reicht dem Quorum eine Stimme, gilt die Änderung sofort:
+Mit `juist rotate` gibst du einem Gerät, dem du noch vertraust, neue
+Schlüssel. Liegt auf dem Gerät ein Admin-Schlüssel des Netzes und reicht dem
+Quorum eine Stimme, gilt die Änderung sofort:
 
 ```console {device="laptop"}
 $ juist rotate
@@ -41,23 +41,23 @@ new keys live
 rotated this device's keys
 ```
 
-Braucht die Änderung einen weiteren Admin, wartet sie auf ihn, und die neuen
-Schlüssel bleiben vorgemerkt, bis das Log sie enthält. Mit
+Braucht die Änderung einen weiteren Admin, wartet sie auf dessen Bestätigung,
+und die neuen Schlüssel bleiben vorgemerkt, bis das Log sie enthält. Mit
 `juist rotate abandon` verwirfst du eine Erneuerung, die noch auf
 Bestätigung wartet.
 
-Verbindungen laufen weiter, wenn das Gerät seine neuen Schlüssel übernimmt:
-Der Tunnel zu jedem Gerät wartet kurz auf einen Handshake mit ihnen. Ein
-Gerät, das ein Relay betreibt, startet seine Tunnel stattdessen neu, und
-`juist rotate identity`, das die IPv6-Adresse des Geräts ändert, beendet,
-was über die alte lief.
+Verbindungen laufen weiter, während das Gerät auf seine neuen Schlüssel
+wechselt: Der Tunnel zu jedem Gerät wartet kurz auf einen Handshake mit den
+neuen Schlüsseln. Ein Gerät, das ein Relay betreibt, startet seine Tunnel
+stattdessen neu. `juist rotate identity` ändert die IPv6-Adresse des Geräts
+und beendet damit alle Verbindungen über die alte.
 
 ## Ein Gerät von vorn beginnen lassen
 
 Mit `juist reset` verlässt ein Gerät das Netz und ist danach wie frisch
-installiert. Es vergisst das Netz und alles, was es dafür hatte: Schlüssel,
-Log, Peers und Operator. Admin-Schlüssel bleiben erhalten. Im folgenden
-Beispiel war `phone` schon aus dem Netz entfernt:
+installiert. Es vergisst das Netz und alles, was es dafür gespeichert hatte:
+Schlüssel, Log, Peers und Operator. Admin-Schlüssel bleiben erhalten. Im
+folgenden Beispiel war `phone` schon aus dem Netz entfernt:
 
 ```console {device="phone"}
 $ juist reset
@@ -68,14 +68,14 @@ reset; new keys, no network
 Liegen Admin-Schlüssel in deinem Keystore, kommt noch die Zeile
 `admin keys kept in ~/.config/juist/admins` mit dem vollständigen Pfad hinzu.
 
-Steht das Gerät im Netz noch als Mitglied, brauchst du `--force`. Entferne es
-nach Möglichkeit vorher vom Gerät eines Admins aus, damit auch die anderen
-Geräte ihm nicht mehr vertrauen.
+Führt das Netz das Gerät noch als Mitglied, braucht `juist reset` die Option
+`--force`. Entferne das Gerät nach Möglichkeit vorher vom Gerät eines Admins
+aus, damit auch die anderen Geräte ihm nicht mehr vertrauen.
 
 Ist ein Gerät in [mehreren Netzen]({{< relref "docs/networks" >}}), vergisst
-es nur das angegebene Netz: `juist reset work --force`. Dessen eigener juistd
-wird dabei mit entfernt, außer es ist das erste Netz. Die anderen Netze
-behalten ihre Schlüssel.
+es nur das angegebene Netz: `juist reset work --force`. Dessen juistd wird
+dabei mit entfernt, außer es ist das erste Netz. Die anderen Netze behalten
+ihre Schlüssel.
 
 ## Wenn ein Gerät verloren ist
 
@@ -101,7 +101,7 @@ Schlüssel dort lag:
 juist admins remove nid:…
 ```
 
-Das wird abgelehnt, wenn die übrigen Schlüssel das Quorum nicht erreichen.
+juist lehnt das ab, wenn die übrigen Schlüssel das Quorum nicht erreichen.
 {{< /step >}}
 
 Ein Ersatzgerät tritt wie jedes neue Gerät mit einer neuen Einladung bei
@@ -131,24 +131,25 @@ imported admin key "alice@home"
 it casts 1 vote in "home"
 ```
 
-Die Zeile läuft durch eine Pipe, nie über die Kommandozeile. Sie trägt eine
-Prüfsumme, deshalb wird eine abgeschnittene Zeile abgelehnt. Ein Import
-ersetzt nie einen Schlüssel und warnt mit `"home" gives it no vote`, wenn der
-Schlüssel seit der Sicherung entfernt wurde.
+Die Zeile läuft immer durch eine Pipe, nie über die Kommandozeile. Sie trägt
+eine Prüfsumme, deshalb wird eine abgeschnittene Zeile abgelehnt. Ein Import
+ersetzt nie einen vorhandenen Schlüssel. Wurde der Schlüssel seit der
+Sicherung aus dem Netz entfernt, warnt der Import mit
+`"home" gives it no vote`.
 
 Die Break-glass-Zeile, die `juist create` angezeigt hat, bewahrst du ebenso
-auf, getrennt von den Admin-Schlüsseln
+auf, aber getrennt von den Admin-Schlüsseln
 ([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
 
-Die eigenen Schlüssel eines Geräts werden nicht exportiert: Eine Kopie auf
-einem anderen Rechner wäre ein zweites Gerät unter dem Namen des ersten. Ein
-verlorenes Gerät wird entfernt und ein neues eingeladen.
+Die eigenen Schlüssel eines Geräts lassen sich nicht exportieren: Eine Kopie
+auf einem anderen Rechner wäre ein zweites Gerät unter dem Namen des ersten.
+Entferne ein verlorenes Gerät stattdessen und lade ein neues ein.
 
-## Gut zu wissen
+## Hinweise
 
-- Erneuern, Zurücksetzen und Entfernen sind root und dem
-  [Operator]({{< relref "docs/operator" >}}) des Geräts vorbehalten. Zum
-  Bestätigen braucht es einen Admin-Schlüssel.
+- Erneuern, Zurücksetzen und Entfernen dürfen nur root und der
+  [Operator]({{< relref "docs/operator" >}}) des Geräts. Zum Bestätigen
+  braucht es einen Admin-Schlüssel.
 - `juist reset` warnt, wenn das Gerät das einzige im Netz ist, denn dann
   verschwindet das Netz mit ihm.
 - `juist log` zeigt jede Erneuerung und wer sie bestätigt hat.
@@ -168,7 +169,8 @@ als das Quorum braucht, jeden mit eigenen Geräten, und halte bei
 Warum juist das in Kauf nimmt, steht unter
 [Trade-offs]({{< home "trade-offs" >}}).
 
-## Wenn etwas nicht klappt
+## Fehlersuche
+
 
 | Was du siehst | Was du tun kannst |
 |---|---|

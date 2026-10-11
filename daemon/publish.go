@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"net"
 	"net/netip"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,7 @@ type publishing struct {
 	mu      sync.Mutex
 	consent bool
 	to      map[string]string // by label, where names whose TLS juist ends go
+	members map[string]bool   // by label, where to's service is for members alone
 	account *ipc.ACMEAccount  // the terminator's, as it last said
 	asked   time.Time         // when the terminator last asked
 
@@ -55,9 +58,9 @@ const nothingPublished = "the network publishes nothing on this device"
 // SetPublishConsent records whether this device's operator agrees to serve
 // the names the log publishes on it, and where those go whose TLS juist ends,
 // by label.
-func (d *Daemon) SetPublishConsent(on bool, to map[string]string) {
+func (d *Daemon) SetPublishConsent(on bool, to map[string]string, members map[string]bool) {
 	d.pub.mu.Lock()
-	d.pub.consent, d.pub.to = on, maps.Clone(to)
+	d.pub.consent, d.pub.to, d.pub.members = on, maps.Clone(to), maps.Clone(members)
 	d.flagTerminatorLocked()
 	d.pub.mu.Unlock()
 	d.MarkDirty()
@@ -205,14 +208,21 @@ func (d *Daemon) planPublish(s snapshot, fresh bool) ingressPorts {
 	default:
 		for _, p := range self.Published {
 			ports.TCP = append(ports.TCP, p.Port)
-			to, ok := passedTo(p, d.pub.to)
-			if ok && p.Public == 0 && ipc.OffersHTTP3(to) {
+			to, ok := passedTo(p, d.pub.to, d.pub.members)
+			if ok && p.Public == 0 && ipc.OffersHTTP3(to) && !p.Members {
 				ports.UDP = append(ports.UDP, p.Port)
 			}
 			name := p.Under(s.state.Domain())
 			st.Serving = append(st.Serving, name)
+			other, shared := sharedService(self.Published, d.pub.to, rawShare(d.pub.shares, time.Unix(s.now, 0)))[p.Label]
 			switch {
+			case !ok && d.pub.members[p.Label] && d.pub.to[p.Label] != "":
+				st.Withheld = append(st.Withheld, name)
 			case !ok:
+			case shared && other == "":
+				st.Shared = append(st.Shared, name+" with this device's share")
+			case shared:
+				st.Shared = append(st.Shared, name+" with "+(types.PublishedName{Label: other}).Under(s.state.Domain()))
 			case p.Public != 0:
 				st.Passing = append(st.Passing, name+" to "+to)
 			default:
@@ -348,19 +358,138 @@ func (d *Daemon) serving(r *ipc.TerminatorReport, byTerminator bool) *ipc.Publis
 		}
 	}
 	// A share is its operator's word: it needs no other.
-	if t, ok := d.shareServed(state, addrs, now); ok {
+	// One look at the shares, so that what is served and what a name for
+	// members is checked against agree.
+	shares := d.sharesNow(now)
+	if t, ok := d.shareServed(state, addrs, shares); ok {
 		out.Names = append(out.Names, t)
 	}
 	d.pub.mu.Lock()
-	consent, to := d.pub.consent, d.pub.to
+	consent, to, members := d.pub.consent, d.pub.to, d.pub.members
 	d.pub.mu.Unlock()
 	if !consent {
 		return out
 	}
+	var s *snapshot
+	var shs []*share
+	for _, sh := range shares {
+		shs = append(shs, &sh)
+	}
+	shared := sharedService(self.Published, to, rawShare(shs, now))
 	for _, p := range self.Published {
-		if dst, ok := passedTo(p, to); ok {
-			addPublished(out, ipc.PublishedTarget{Name: p.Under(state.Domain()), Addrs: addrs, Port: p.Port, Proxy: p.Proxy,
-				To: dst, Public: p.Public})
+		dst, ok := passedTo(p, to, members)
+		if _, sh := shared[p.Label]; !ok || sh {
+			continue
+		}
+		t := ipc.PublishedTarget{Name: p.Under(state.Domain()), Addrs: addrs, Port: p.Port, Proxy: p.Proxy,
+			To: dst, Public: p.Public}
+		if !p.Members {
+			addPublished(out, t)
+			continue
+		}
+		if s == nil {
+			m := d.membersOf(state)
+			s = &m
+		}
+		t.From = d.membersFor(*s, p.Label)
+		out.Members = append(out.Members, t)
+	}
+	return out
+}
+
+// sharedService is, by label, each name for members alone of ps whose
+// service another name's bytes reach as they are, or a share's, at raw, and
+// that name, "" for the share: a service picking its site by the Host a
+// client sends would answer a client of the other for it. A name whose HTTP
+// juist proxies is held to its own Host.
+func sharedService(ps []types.PublishedName, to map[string]string, raw string) map[string]string {
+	addr := func(t string) string {
+		if _, page := ipc.StatusPageOf(t); page {
+			return ""
+		}
+		a, _ := ipc.HTTP2Of(t)
+		return sameService(a)
+	}
+	out := map[string]string{}
+	for _, p := range ps {
+		mine := addr(to[p.Label])
+		if !p.Members || mine == "" {
+			continue
+		}
+		if raw != "" && addr(raw) == mine {
+			out[p.Label] = ""
+			continue
+		}
+		for _, q := range ps {
+			t, ok := to[q.Label]
+			// HTTP/3 is proxied where juist ends TLS; by TCP, bytes pass as they are.
+			if _, h3 := ipc.HTTP3Of(t); ok && q.Label != p.Label && !(h3 && q.Public == 0) && addr(t) == mine {
+				out[p.Label] = q.Label
+				break
+			}
+		}
+	}
+	return out
+}
+
+// sameService is addr as one service is named however it is spelled: a
+// loopback or unspecified address as 127.0.0.1, localhost too, the port as
+// a number.
+func sameService(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if n, err := strconv.ParseUint(port, 10, 16); err == nil {
+		port = strconv.FormatUint(n, 10)
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if a, err := netip.ParseAddr(host); err == nil {
+		if a = a.Unmap(); a.IsLoopback() || a.IsUnspecified() {
+			host = "127.0.0.1"
+		} else {
+			host = a.String()
+		}
+	} else if host == "localhost" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
+
+// rawShare is where the shares live at now go as they are: the one without
+// a path where it is the only one, whose bytes the terminator passes on;
+// with paths it proxies their HTTP, held to the share's own Host.
+func rawShare(shs []*share, now time.Time) string {
+	var to string
+	for _, sh := range shs {
+		switch {
+		case !sh.live(now):
+		case sh.prefix != "":
+			return ""
+		default:
+			to = sh.to
+		}
+	}
+	return to
+}
+
+// membersFor are the overlay addresses of the members s lets open this
+// device's name for members alone label: every live one but an ingress and a
+// service member where the network has no policy, those it names under one,
+// and this device itself.
+func (d *Daemon) membersFor(s snapshot, label string) []netip.Addr {
+	var out []netip.Addr
+	for _, n := range s.members {
+		// Not this device itself: its own programs, one a client can make
+		// ask, would come from its overlay address.
+		switch {
+		case n.Identity == d.self, !s.live[n.Identity], n.HasRole(types.RoleIngress), n.HasRole(types.RoleService):
+			continue
+		case s.view.Restricted && !slices.Contains(s.view.In[n.Identity].Names, label):
+			continue
+		}
+		for _, a := range s.state.Addrs(n.Identity, s.now) {
+			out = append(out, a.Addr())
 		}
 	}
 	return out
@@ -426,15 +555,21 @@ func (d *Daemon) Published() *ipc.Published {
 					t.Addrs = append(t.Addrs, a.Addr())
 				}
 			}
+			if p.Members {
+				out.Members = append(out.Members, t)
+				continue
+			}
 			addPublished(out, t)
 		}
 	}
 	// The relay keeps its name: a member's name the same would be handed
 	// the relay's clients, and its certificate's challenges.
-	out.Names = slices.DeleteFunc(out.Names, func(t ipc.PublishedTarget) bool {
+	relayed := func(t ipc.PublishedTarget) bool {
 		return slices.ContainsFunc(out.Relays, func(r ipc.PublishedTarget) bool { return r.Name == t.Name })
-	})
+	}
+	out.Names, out.Members = slices.DeleteFunc(out.Names, relayed), slices.DeleteFunc(out.Members, relayed)
 	slices.SortFunc(out.Names, func(x, y ipc.PublishedTarget) int { return strings.Compare(x.Name, y.Name) })
+	slices.SortFunc(out.Members, func(x, y ipc.PublishedTarget) int { return strings.Compare(x.Name, y.Name) })
 	slices.SortFunc(out.TCP, func(x, y ipc.PublishedTarget) int { return cmp.Compare(x.Public, y.Public) })
 	return out
 }
@@ -463,9 +598,13 @@ func addPublished(p *ipc.Published, t ipc.PublishedTarget) {
 
 // passedTo is where p goes on this device, as to has it by label: for a name
 // published by TCP, an address alone, which HTTP/2 and the status page are
-// not, being TLS's.
-func passedTo(p types.PublishedName, to map[string]string) (string, bool) {
+// not, being TLS's; nowhere where members says the service is for members
+// alone and the log has p public.
+func passedTo(p types.PublishedName, to map[string]string, members map[string]bool) (string, bool) {
 	dst, ok := to[p.Label]
+	if members[p.Label] && !p.Members {
+		return "", false
+	}
 	if !ok || p.Public == 0 {
 		return dst, ok
 	}

@@ -55,8 +55,9 @@ func (n *netnsNode) setSelf(peers ...*netnsNode) {
 }
 
 // maxStall is the longest a held stream may wait across a change: a
-// handshake, retried after WireGuard's RekeyTimeout.
-const maxStall = 5 * time.Second
+// handshake, retried after WireGuard's RekeyTimeout and its jitter when two
+// initiations cross.
+const maxStall = 6 * time.Second
 
 // Exit criterion (6) of M15: a TCP stream across the tunnel survives what
 // changes on a running device, with no reset and no stall longer than a
@@ -88,6 +89,10 @@ func TestNetnsAStreamSurvivesChanges(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		for _, name := range names {
 			s := b.streamStat(name)
+			for deadline := time.Now().Add(maxStall); s.err == "-" && s.echoed <= last[name].echoed && time.Now().Before(deadline); {
+				time.Sleep(250 * time.Millisecond)
+				s = b.streamStat(name)
+			}
 			switch {
 			case s.err != "-":
 				t.Fatalf("%s: the %s stream ended: %s", what, name, s.err)

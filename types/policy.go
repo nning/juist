@@ -70,6 +70,10 @@ type PolicyRefs struct {
 	ViaNodes  []Identity     `cbor:"5,keyasint,omitempty"`
 	ViaTables []string       `cbor:"6,keyasint,omitempty"`
 	Prefixes  []netip.Prefix `cbor:"7,keyasint,omitempty"`
+	// Names are names published for members alone, by label under the
+	// network's domain, "" for the domain itself: a destination alone,
+	// from [SchemaMembers] on.
+	Names []string `cbor:"8,keyasint,omitempty"`
 }
 
 // A PolicyTest is a connection the policy must pass, or not where Block:
@@ -196,6 +200,9 @@ func (r *PolicyRule) validate(tables map[string][]string, services map[string]bo
 	if err := r.To.validate(tables, true); err != nil {
 		return fmt.Errorf("to: %w", err)
 	}
+	if len(r.To.Names) > 0 && (len(r.Ports) > 0 || len(r.Services) > 0) {
+		return errors.New("a name is opened on its own port: a rule to names names no port")
+	}
 	if len(r.Ports) > MaxPolicyPorts {
 		return fmt.Errorf("%d ports, over the %d limit", len(r.Ports), MaxPolicyPorts)
 	}
@@ -214,8 +221,24 @@ func (r *PolicyRule) validate(tables map[string][]string, services map[string]bo
 }
 
 func (r *PolicyRefs) validate(tables map[string][]string, dst bool) error {
-	if !dst && (r.Internet || len(r.Prefixes) > 0) {
-		return errors.New("the internet and prefixes are destinations alone")
+	if !dst && (r.Internet || len(r.Prefixes) > 0 || len(r.Names) > 0) {
+		return errors.New("the internet, prefixes and names are destinations alone")
+	}
+	if len(r.Names) > 0 && (r.Any || len(r.Nodes) > 0 || len(r.Tables) > 0 || r.Internet || len(r.Prefixes) > 0) {
+		return errors.New("names go with no other destination")
+	}
+	if len(r.Names) > MaxPolicyRules {
+		return fmt.Errorf("%d names, over the %d limit", len(r.Names), MaxPolicyRules)
+	}
+	if !isSortedSet(r.Names) {
+		return errors.New("names are not sorted and unique")
+	}
+	for _, n := range r.Names {
+		if n != "" {
+			if err := ValidateLabel(n); err != nil {
+				return fmt.Errorf("name %q: %w", n, err)
+			}
+		}
 	}
 	if !r.Internet && (len(r.ViaNodes) > 0 || len(r.ViaTables) > 0) {
 		return errors.New("exit nodes named for no internet")
@@ -260,7 +283,13 @@ func (p *Policy) Empty() bool {
 
 // Empty reports whether r names nothing.
 func (r *PolicyRefs) Empty() bool {
-	return !r.Any && len(r.Nodes) == 0 && len(r.Tables) == 0 && !r.Internet && len(r.Prefixes) == 0
+	return !r.Any && len(r.Nodes) == 0 && len(r.Tables) == 0 && !r.Internet && len(r.Prefixes) == 0 && len(r.Names) == 0
+}
+
+// NamesNames reports whether a rule or a test of p names a published name.
+func (p *Policy) NamesNames() bool {
+	return slices.ContainsFunc(p.Rules, func(r PolicyRule) bool { return len(r.To.Names) > 0 }) ||
+		slices.ContainsFunc(p.Tests, func(t PolicyTest) bool { return len(t.To.Names) > 0 })
 }
 
 func (t *PolicyTest) validate() error {
@@ -268,11 +297,23 @@ func (t *PolicyTest) validate() error {
 	switch {
 	case to.Any || len(to.Tables) > 0 || len(to.ViaTables) > 0:
 		return errors.New("tests name one destination, not a set")
+	case len(to.Names) > 0:
+		if len(to.Names) > 1 || len(to.Nodes) > 0 || to.Internet || len(to.ViaNodes) > 0 || len(to.Prefixes) > 0 {
+			return errors.New("tests name one member, one exit node, one address, or one name")
+		}
+		if t.Port != (PortRange{}) {
+			return errors.New("a test to a name names no port")
+		}
+		if to.Names[0] != "" {
+			if err := ValidateLabel(to.Names[0]); err != nil {
+				return fmt.Errorf("name %q: %w", to.Names[0], err)
+			}
+		}
 	case len(to.Nodes) == 1 && !to.Internet && len(to.Prefixes) == 0:
 	case to.Internet && len(to.ViaNodes) == 1 && len(to.Nodes) == 0 && len(to.Prefixes) == 0:
 	case len(to.Prefixes) == 1 && to.Prefixes[0].IsSingleIP() && len(to.Nodes) == 0 && !to.Internet:
 	default:
-		return errors.New("tests name one member, one exit node, or one address")
+		return errors.New("tests name one member, one exit node, one address, or one name")
 	}
 	if t.Port.First != t.Port.Last {
 		return errors.New("tests name one port")
@@ -438,7 +479,7 @@ func (p *Policy) Clone() *Policy {
 	refs := func(r PolicyRefs) PolicyRefs {
 		r.Nodes, r.Tables = slices.Clone(r.Nodes), slices.Clone(r.Tables)
 		r.ViaNodes, r.ViaTables = slices.Clone(r.ViaNodes), slices.Clone(r.ViaTables)
-		r.Prefixes = slices.Clone(r.Prefixes)
+		r.Prefixes, r.Names = slices.Clone(r.Prefixes), slices.Clone(r.Names)
 		return r
 	}
 	out := &Policy{

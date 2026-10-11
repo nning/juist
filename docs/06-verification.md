@@ -106,12 +106,13 @@ netfilter doing the translation rather than a simulation of it:
   the same dependency the FreeBSD interop matrix above wants; decide both at once.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
   VPS relay member + one mobile (Android on LTE, from M10); full lifecycle including
-  emergency revocation from a phone (from M20).
+  emergency revocation from a phone (from M21).
 
 ## 5. Cryptographic review gates
 
 - Internal design review of the trust layer before M3 (log rules frozen).
-- External audit at M17 of the audit scope: what [`audit-scope`](../audit-scope)
+- External audit at M18 of the audit scope, after the internal review of
+  [15-security-review.md](15-security-review.md): what [`audit-scope`](../audit-scope)
   places `core` or `in`, the code that decides who may do what, holds or derives a
   key, parses input from outside the membership, or runs as root. Every package
   is placed there, `out` ones with their reason, and `make tcb` fails on one

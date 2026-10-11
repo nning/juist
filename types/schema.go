@@ -75,7 +75,10 @@ type SchemaVersion uint16
 // Schema 14 adds no record field: every pair of members mixes a preshared
 // key into its WireGuard handshakes, and announcements name what it needs,
 // which older builds refuse.
-const CurrentSchema SchemaVersion = 14
+//
+// Schema 15 publishes names for members alone ([PublishedName.Members]),
+// which the access policy names as destinations ([PolicyRefs.Names]).
+const CurrentSchema SchemaVersion = 15
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -122,5 +125,8 @@ const SchemaPolicy SchemaVersion = 13
 
 // SchemaPQ is the first schema in which tunnels carry preshared keys.
 const SchemaPQ SchemaVersion = 14
+
+// SchemaMembers is the first schema with names published for members alone.
+const SchemaMembers SchemaVersion = 15
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

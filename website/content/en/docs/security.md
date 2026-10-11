@@ -1,44 +1,45 @@
 ---
 title: Security in short
 linkTitle: Security
-description: Whom juist trusts and whom it does not, where the keys live, and what it accepts on purpose.
+description: What juist trusts and what it does not, where the keys live, and which weaknesses it accepts on purpose.
 lead: What juist protects, what it relies on, and where its limits are, for readers who are not security experts. juist has not had a security audit.
 ---
 
-## What it is
+## Who decides
 
 juist has no server in the middle that decides who belongs to the network.
 Your admins decide, by signing changes, and every device checks those changes
-itself. This page says what follows from that: whom you have to trust, where
-the keys are, and what juist cannot do.
+itself. This page explains what follows from that: what you have to trust,
+where the keys are, and what juist cannot do.
 
-The full analysis, with every weakness that remains, is in the
+The full analysis, with every remaining weakness, is in the
 [threat model](https://github.com/nning/juist/blob/main/docs/02-threat-model.md).
 
-## Whom you trust
+## What you have to trust
 
 - Your admins, as a group. A change, such as admitting or removing a device,
   needs the quorum: as many admin votes as the network requires. An admin
-  with fewer votes than that can change nothing alone, and the log records who
-  signed each change.
-- The network's start. Every device checks each change in the
-  [membership log]({{< relref "docs/how-it-works" >}}#the-membership-log) back
-  to the first one, made when the network was created.
+  with fewer votes than that cannot change anything alone, and the log
+  records who signed each change.
+- The start of the network. Every device checks each change in the
+  [membership log]({{< relref "docs/how-it-works" >}}#the-membership-log) all
+  the way back to the first one, made when the network was created.
 - Every member, as far as the [access policy]({{< relref "docs/access" >}})
-  lets it in. Without one, an admitted device reaches every port of every
-  other member through the tunnel. With one, each device refuses what no
-  rule passes, whatever the sender does.
-- An exit node, for what it carries. The internet traffic you send through an
-  [exit node]({{< relref "docs/exit-nodes" >}}) is readable there, as it would
-  be at any VPN provider.
+  lets it in. Without a policy, an admitted device reaches every port of every
+  other member through the tunnel. With one, each device refuses whatever no
+  rule allows, no matter what the sender does.
+- An exit node, for the traffic it carries. The internet traffic you send
+  through an [exit node]({{< relref "docs/exit-nodes" >}}) can be read there,
+  just as at any VPN provider.
 
-## Whom you do not trust
+## What you don't have to trust
 
 - The paths in between. Every change is signed and checked by every device,
   however it arrived. Traffic between members is encrypted by WireGuard.
 - The public helpers. The public BitTorrent DHT and the STUN servers help
-  devices find each other. They can delay a connection, but cannot change who
-  belongs to the network or read traffic. They see the addresses that use them.
+  devices find each other. They can delay a connection, but they cannot change
+  who belongs to the network or read traffic. They do see the addresses of the
+  devices that use them.
 - The relay. A [relay]({{< relref "docs/relays" >}}) is one of your own
   members. Only members can use it, and it sees only encrypted WireGuard
   traffic.
@@ -48,17 +49,19 @@ The full analysis, with every weakness that remains, is in the
 ## Where the keys live
 
 - Admin keys are in your keystore, `~/.config/juist`, on each machine you
-  approve from. Never copy a key: an admin with two laptops makes a key on
-  each. Each network gets a key of its own, so a lost or stolen key costs one
-  network.
-- The device's own keys are held by juistd; on Linux the package keeps
-  them in `/var/lib/juist`. juistd runs as its own user, with `CAP_NET_ADMIN`
-  only. On a phone, the [Android app]({{< relref "docs/android" >}}) seals
-  them by a key that Android Keystore holds. The `juist` command signs only what it has rebuilt from its own
-  verified log, whatever juistd asks.
-- The break-glass secret `juist create` shows once, and keeps nowhere, ends
-  the network for good with no admin needed. Keep it offline, apart from the
-  admin keys: one vault holding both governs the network and ends it.
+  approve from. Never copy a key: an admin with two laptops creates a key on
+  each. Each network gets its own key, so a lost or stolen key affects only
+  one network.
+- The device's own keys are held by juistd. On Linux the package keeps them in
+  `/var/lib/juist`, and juistd runs as its own user, with only
+  `CAP_NET_ADMIN`. On a phone, the [Android app]({{< relref "docs/android" >}})
+  seals them with a key held by the Android Keystore.
+- The `juist` command signs only what it has rebuilt from its own verified
+  copy of the log, whatever juistd asks it to sign.
+- The break-glass secret, which `juist create` shows once and stores nowhere,
+  ends the network for good without any admin. Keep it offline and apart from
+  the admin keys: whoever holds a vault with both can run the network and end
+  it.
 
 ## What invites protect against
 
@@ -67,71 +70,73 @@ against three things:
 
 - Guessing. A code allows exactly one guess, and only from the LAN. A link
   holds a 128-bit secret, far too long to guess.
-- A device in between. Before anything is signed, the admin compares four
-  words with the new device. They are made so that nobody in between can
-  search for a match.
-- A compromised daemon on the inviting device. The link binds the new
-  device to the inviting admin's signature, so that daemon cannot enroll it
-  into a network of its own.
+- Someone in the middle. Before anything is signed, the admin compares four
+  words with the new device. The words are chosen so that an attacker in the
+  middle cannot search for a matching set.
+- A compromised daemon on the inviting device. The link binds the new device
+  to the inviting admin's signature, so that daemon cannot enroll it into a
+  network the daemon controls.
 
-## Removing a device, and its limit
+## Removing a device
 
 `juist remove phone` takes a device out of the network. It replaces the
-network's group secret, which members use to find each other, and every member drops its tunnel to the device on
-hearing of the removal. See [Removing a device]({{< relref "docs/remove" >}}).
+network's group secret, which members use to find each other. Every member
+drops its tunnel to the device as soon as it learns of the removal. See
+[Removing a device]({{< relref "docs/remove" >}}).
 
-The limit: a member that is cut off from the rest hears of it late, and until
-then keeps its tunnel to the removed device. Freshness bounds that to 48
-hours: a member that no voucher has vouched for in 48 hours keeps tunnels only
-to vouchers. A **voucher** is a device that confirms every hour that the
-network's state is current. With `juist admins vouchers M`, that bound holds
-even if M − 1 vouchers lie. See
+The limit: a member that is cut off from the rest learns of the removal late,
+and until then keeps its tunnel to the removed device. Freshness limits that
+to 48 hours: a member that no voucher has vouched for in 48 hours keeps
+tunnels only to vouchers. A **voucher** is a device that confirms every hour
+that the network's state is current. With `juist admins vouchers M`, that
+limit holds even if M − 1 vouchers lie. See
 [freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
 
-A lost or stolen device is a member until you remove it. Remove it as soon as
-you notice.
+A lost or stolen device stays a member until you remove it. Remove it as soon
+as you notice.
 
-## What juist accepts
+## Accepted trade-offs
 
 Some things are weaker without a server in the middle. The
-[trade-offs]({{< home "trade-offs" >}}) say for each what can happen, why
-it is accepted, and what you can change. In short:
+[trade-offs]({{< home "trade-offs" >}}) explain for each one what can happen,
+why it is accepted, and what you can change. In short:
 
-- Losing the admin keys of a quorum makes the network unrecoverable. Give it
-  more admins than the quorum needs.
+- If the admin keys of a quorum are lost, the network cannot be recovered.
+  Give it more admins than the quorum needs.
 - A network where every device sits behind symmetric NAT needs a relay member.
-- The public DHT and STUN servers see the addresses that use them, and nothing
-  more. With a relay of your own, juistd can run without them.
+- The public DHT and STUN servers see the addresses of the devices that use
+  them, and nothing more. With a relay of your own, juistd can run without
+  them.
 
-## Post-quantum
+## Quantum-safe tunnels
 
 A future quantum computer could break today's common encryption, and traffic
 recorded now could be decrypted then. juist protects against that:
 
-- Every WireGuard handshake mixes in a preshared key. Two devices first use
-  one derived from the network's group secret, then, within a log sync, one
-  the two alone hold: each encapsulates a secret to the other's ML-KEM-768
-  key. It is renewed with every change to the members.
-- Group secrets are sealed with X25519 together with ML-KEM-768.
-- Signatures are Ed25519. A quantum computer could forge them only once it
-  exists, so recording traffic today gains nothing there.
+- Every WireGuard handshake mixes in a preshared key. Two devices first use a
+  key derived from the network's group secret. Once they have synced their
+  logs, they switch to a key that only the two of them hold: each encapsulates
+  a secret to the other's ML-KEM-768 key. This key is renewed with every
+  change to the members.
+- Group secrets are sealed with X25519 combined with ML-KEM-768.
+- Signatures use Ed25519. A quantum computer could forge them only once it
+  exists, so recording traffic today gains an attacker nothing there.
 
-`juist status` says how many tunnels are post-quantum, and by which key. A
-device on an older version, or one not yet caught up with the network, gets a
-tunnel without a preshared key, and juist passes only its own traffic through
-it, which it seals itself, until the device announces one. A network created
-with an older version gets post-quantum tunnels once every device runs this
-one and `juist log upgrade` raises it to schema 14.
+Every tunnel between devices on the current version is quantum-safe. A device
+on an older version gets none of your traffic, and `juist status` and
+`juist devices` show it as outdated until it is updated. A network created
+with an older version gets quantum-safe tunnels once every device runs the
+current version and `juist log upgrade` has raised it to schema 14.
 
-## Good to know
+## Notes
 
-- juist has not had a security audit.
-- On Linux, juist drops what reaches a device's juist addresses other than
-  through the tunnel, and what claims to come from a member but arrives from
-  the LAN. So a container on the device no longer reaches the device's own
-  juist address. On FreeBSD a service that listens only on a device's juist
-  address can still be reached from that device's LAN. Either way, have
-  services check who connects.
+- On Linux, juist drops traffic that reaches a device's juist addresses
+  without coming through the tunnel, and traffic that claims to come from a
+  member but arrives from the LAN. As a result, a container on the device can
+  no longer reach the device's own juist address.
+- On FreeBSD, a service that listens only on a device's juist address can
+  still be reached from that device's LAN. On either system, have services
+  check who connects.
 - Every change to the network, and who approved it, is in `juist log`.
 
 ## Reporting a vulnerability

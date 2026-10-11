@@ -323,6 +323,7 @@ func parse(args []string, out io.Writer) (options, error) {
 	var serve serveFlag
 	fs.Var(&serve, "serve", "be a service member, on no device, ending TLS for NAME, @ for the domain itself, and sending it to ADDR, or passing it by TCP where published so, or serving status-page[:WHAT]; repeatable")
 	http3 := fs.Bool("http3", false, "with --serve, offer clients HTTP/3 too, proxying each service's HTTP")
+	members := fs.Bool("members", false, "with --serve, each service is for members alone: never served under a name the log has public")
 	acmeDir := fs.String("acme", autocert.DefaultACMEDirectory, "the ACME directory TLS certificates are taken from")
 	join := fs.String("join", "", "join the network LINK invites to once started, unless in one (default $JUIST_JOIN)")
 	maxConns := fs.Uint("max-conns", 0, fmt.Sprintf("connections served at once: %d by an ingress, %d ending TLS, unless given",
@@ -418,12 +419,19 @@ func parse(args []string, out io.Writer) (options, error) {
 		}
 		*tun = ""
 	}
-	if *http3 && serve == nil {
-		return options{}, fmt.Errorf("--http3 is for a service member, beside --serve\n%s", synopsis)
+	if (*http3 || *members) && serve == nil {
+		return options{}, fmt.Errorf("--http3 and --members are for a service member, beside --serve\n%s", synopsis)
 	}
+	var serveMembers map[string]bool
 	for label, to := range serve {
 		if _, page := ipc.StatusPageOf(to); *http3 && !page {
 			serve[label] = ipc.HTTP3To(to)
+		}
+		if *members {
+			if serveMembers == nil {
+				serveMembers = map[string]bool{}
+			}
+			serveMembers[label] = true
 		}
 	}
 	// systemd starts the terminator by this file (juist-serve.path), which
@@ -436,7 +444,7 @@ func parse(args []string, out io.Writer) (options, error) {
 	}
 	return options{verbose: *verbose, helper: *helper, acmeDirectory: *acmeDir,
 		maxConns: int(*maxConns), maxPerSource: int(*maxPerSource),
-		service: daemon.ServiceOptions{ServeTo: serve, Join: *join,
+		service: daemon.ServiceOptions{ServeTo: serve, ServeMembers: serveMembers, Join: *join,
 			Home:   *home,
 			Socket: *socket,
 			Mesh: daemon.Options{
@@ -472,7 +480,7 @@ var optionOrder = []struct {
 	{'i', "instance", "NAME"}, {'H', "home", "DIR"}, {'s', "socket", "PATH"}, {'p', "port", "N"}, {'g', "gossip-port", "N"},
 	{'r', "relay-port", "N"}, {'t', "tun", "NAME"}, {'R', "no-relay", ""}, {'l', "no-discovery", ""},
 	{'d', "no-dht", ""}, {'u', "stun", "LIST"}, {'U', "no-stun", ""}, {'f', "freshness-ttl", "D"},
-	{'v', "verbose", ""}, {'S', "serve", "NAME=ADDR"}, {'3', "http3", ""}, {'j', "join", "LINK"}, {'I', "helper", "KIND"}, {'A', "acme", "URL"},
+	{'v', "verbose", ""}, {'S', "serve", "NAME=ADDR"}, {'3', "http3", ""}, {'O', "members", ""}, {'j', "join", "LINK"}, {'I', "helper", "KIND"}, {'A', "acme", "URL"},
 	{'M', "max-conns", "N"}, {'m', "max-per-source", "N"},
 }
 

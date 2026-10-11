@@ -13,7 +13,7 @@ h2 small { font: 400 13px var(--mono); color: var(--muted); margin-left: 8px; le
 .pill { display: inline-flex; align-items: center; gap: 6px; font: 500 12.5px var(--mono); white-space: nowrap; }
 .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .direct { color: var(--direct); } .relay { color: var(--relay); } .sought { color: var(--sought); }
-.absent { color: var(--absent); } .alarm { color: var(--alarm); } .self { color: var(--accent); }
+.absent { color: var(--absent); } .alarm, .outdated { color: var(--alarm); } .self { color: var(--accent); }
 .absent.pill::before { background: none; border: 1.5px solid currentColor; width: 7px; height: 7px; }
 td.name { font-weight: 600; overflow-wrap: anywhere; }
 td.name a { color: var(--text); text-decoration: none; }
@@ -29,7 +29,7 @@ dl.facts { margin: 12px 0 0; display: grid; grid-template-columns: 9.5rem minmax
 dl.facts dt, dl.facts dd { padding: 9px 0; border-bottom: 1px solid var(--line); margin: 0; font-size: 15px; }
 dl.facts dt { color: var(--muted); padding-right: 16px; }
 dl.facts dd { overflow-wrap: anywhere; }
-.narrow { display: none; }
+.narrow, td .sub.narrow { display: none; }
 .unavailable { margin: 32px 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--alarm); }
 footer p { margin: 0 0 6px; }
 @media (max-width: 640px) {
@@ -57,7 +57,7 @@ footer p { margin: 0 0 6px; }
 <table>
 <thead><tr><th>Name</th>{{if .ShowNetwork}}<th class="wide">Device</th>{{end}}<th>State</th></tr></thead>
 <tbody>
-{{range .Services}}<tr><td class="name">{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td>{{if $.ShowNetwork}}<td class="dim wide">{{.Device}}</td>{{end}}<td class="state"><span class="pill {{.Class}}">{{.State}}</span></td></tr>
+{{range .Services}}<tr><td class="name">{{if .Href}}<a href="{{.Href}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}{{if .Members}}<span class="sub">members only</span>{{end}}</td>{{if $.ShowNetwork}}<td class="dim wide">{{.Device}}</td>{{end}}<td class="state"><span class="pill {{.Class}}">{{.State}}</span></td></tr>
 {{else}}<tr><td class="empty" colspan="3">Nothing is published or shared.</td></tr>
 {{end}}</tbody>
 </table>

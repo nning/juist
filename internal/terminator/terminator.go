@@ -86,6 +86,9 @@ type what struct {
 	names     map[string]ipc.PublishedTarget
 	tcp       map[uint16]ipc.PublishedTarget
 	ingresses []netip.Addr
+	// members are the names for members alone, each with the addresses it
+	// is taken from.
+	members map[string]map[netip.Addr]bool
 }
 
 type terminator struct {
@@ -97,6 +100,9 @@ type terminator struct {
 	account atomic.Pointer[ipc.ACMEAccount]
 	named   pipe.Named
 	passed  pipe.Named // by passKey
+	// byPeer are the connections by memberKey, which end once a name is for
+	// members alone their peer is not.
+	byPeer  pipe.Named
 	pages   *statuspage.Server
 	quic    *quicServer
 	quicTLS *tls.Config
@@ -165,6 +171,19 @@ func Serve(ctx context.Context, o Options) error {
 	// ALPN only where the service's protocol is known: a server's list the
 	// client's does not meet fails the handshake.
 	t.tls = &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
+		// A name for members alone is refused to whoever it is not for, and
+		// from an ingress taken for the CA's validation alone, which asks
+		// acme-tls/1 and nothing else. By the connection's own source,
+		// never the PROXY header's.
+		var peer netip.Addr
+		if h.Conn != nil {
+			peer = addrPort(h.Conn.RemoteAddr()).Addr().Unmap()
+		}
+		if forMembers, ok := t.admits(h.ServerName, peer); forMembers && !ok {
+			if !slices.Contains(t.now.Load().ingresses, peer) || !slices.Equal(h.SupportedProtos, []string{acme.ALPNProto}) {
+				return nil, errForMembers
+			}
+		}
 		if slices.Contains(h.SupportedProtos, acme.ALPNProto) {
 			return challenge, nil
 		}
@@ -263,10 +282,19 @@ const maxNoCert = 64
 // set serves p: its names, on the addresses and ports it says, and ends the
 // connections for names it no longer holds.
 func (t *terminator) set(ctx context.Context, p *ipc.Published) {
-	w := &what{names: map[string]ipc.PublishedTarget{}, tcp: map[uint16]ipc.PublishedTarget{}, ingresses: p.Ingresses}
+	w := &what{names: map[string]ipc.PublishedTarget{}, tcp: map[uint16]ipc.PublishedTarget{}, ingresses: p.Ingresses,
+		members: map[string]map[netip.Addr]bool{}}
 	want := map[netip.AddrPort]bool{}
 	redirect := map[netip.AddrPort]bool{}
-	for _, n := range p.Names {
+	for _, n := range p.Members {
+		from := map[netip.Addr]bool{}
+		for _, a := range n.From {
+			from[a.Unmap()] = true
+		}
+		w.members[n.Name] = from
+	}
+	names := slices.Concat(p.Names, p.Members)
+	for _, n := range names {
 		w.names[n.Name] = n
 		for _, a := range n.Addrs {
 			want[netip.AddrPortFrom(a, n.Port)] = true
@@ -282,7 +310,7 @@ func (t *terminator) set(ctx context.Context, p *ipc.Published) {
 		}
 	}
 	quic := map[netip.AddrPort]bool{}
-	for _, n := range p.Names {
+	for _, n := range names {
 		for _, a := range n.Addrs {
 			if HTTP3(n) {
 				quic[netip.AddrPortFrom(a, n.Port)] = true
@@ -307,6 +335,12 @@ func (t *terminator) set(ctx context.Context, p *ipc.Published) {
 	t.passed.CloseUnless(func(key string) bool {
 		_, ok := t.passing(key)
 		return ok
+	})
+	t.byPeer.CloseUnless(func(key string) bool {
+		name, peer, _ := strings.Cut(key, " ")
+		from, forMembers := w.members[name]
+		a, err := netip.ParseAddr(peer)
+		return !forMembers || err == nil && from[a]
 	})
 	t.quic.set(quic, t.quicTLS)
 	t.mu.Lock()
@@ -418,9 +452,34 @@ func truncate(s string, n int) string {
 }
 
 func (t *terminator) lookup(name string) (ipc.PublishedTarget, bool) {
-	n, ok := t.now.Load().names[strings.TrimSuffix(strings.ToLower(name), ".")]
+	n, ok := t.now.Load().names[canonicalName(name)]
 	return n, ok
 }
+
+func canonicalName(name string) string { return strings.TrimSuffix(strings.ToLower(name), ".") }
+
+// sameHost reports whether a request's Host names name.
+func sameHost(host, name string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return canonicalName(host) == canonicalName(name)
+}
+
+// admits reports whether a connection from peer may have name: any where the
+// name is not for members alone, and else one from a member it is for.
+func (t *terminator) admits(name string, peer netip.Addr) (forMembers, ok bool) {
+	from, forMembers := t.now.Load().members[canonicalName(name)]
+	return forMembers, !forMembers || from[peer.Unmap()]
+}
+
+// memberKey is a connection to a name for members alone, from peer.
+func memberKey(name string, peer netip.Addr) string {
+	return canonicalName(name) + " " + peer.Unmap().String()
+}
+
+// errForMembers refuses a name for members alone to whoever it is not for.
+var errForMembers = errors.New("terminator: the name is for members alone")
 
 // accept serves what ln takes until it fails, then lets the next answer
 // listen at ap again: a network stack restarted leaves its listeners failing.
@@ -528,6 +587,7 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 			client = src
 		}
 	}
+	peer := addrPort(c.RemoteAddr()).Addr().Unmap()
 	tc := tls.Server(bufferedConn{Conn: c, r: r}, t.tls)
 	if err := tc.HandshakeContext(ctx); err != nil {
 		return
@@ -538,6 +598,13 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 	}
 	n, ok := t.lookup(st.ServerName)
 	if !ok {
+		return
+	}
+	// Every connection, so that a name made for members alone ends those
+	// of whoever it is not for, though opened while it was public.
+	t.byPeer.Add(c, memberKey(n.Name, peer), func() { c.Close() })
+	defer t.byPeer.Remove(c)
+	if _, ok := t.admits(n.Name, peer); !ok {
 		return
 	}
 	if HTTP3(n) || len(n.Paths) > 0 {
@@ -559,8 +626,14 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 		defer px.close()
 		var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			now, ok := t.lookup(n.Name)
-			if !ok {
+			switch {
+			case !ok:
 				http.NotFound(w, r)
+				return
+			case !sameHost(r.Host, n.Name):
+				// A service picking its site by Host would hand this one
+				// another name's, perhaps one for members alone.
+				http.Error(w, "", http.StatusMisdirectedRequest)
 				return
 			}
 			t.serveName(w, r, now, px)

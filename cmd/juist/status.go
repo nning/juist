@@ -292,9 +292,6 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	case s.Peers > 0:
 		field("Tunnels", "%s", paint("2", "not checked yet"))
 	}
-	if t := pqSummary(s, paint); t != "" {
-		field("Post-quantum", "%s", t)
-	}
 	if s.RelayCapable > 0 || s.Relaying {
 		relays := fmt.Sprintf("%d available", s.RelayCapable)
 		switch {
@@ -362,6 +359,17 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	if t := publishSummary(s.Publish, paint); t != "" {
 		field("Published", "%s", t)
 	}
+	if s.Publish != nil {
+		for _, sh := range s.Publish.Shared {
+			v.head = append(v.head, line{kind: lineWarn, text: sharedWarning(sh)})
+		}
+		if len(s.Publish.Shared) > 0 {
+			v.head = append(v.head, line{kind: lineHint, text: sharedHint})
+		}
+		for _, name := range s.Publish.Withheld {
+			v.head = append(v.head, line{kind: lineWarn, text: withheldWarning(name)})
+		}
+	}
 	if t := ingressSummary(s.Ingress, paint); t != "" {
 		field("Ingress", "%s", t)
 	}
@@ -371,6 +379,12 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	if s.Names != nil {
 		text, hint := namesSummary(s.Names, paint)
 		field("Names", "%s", text)
+		if !s.Names.Resolved {
+			for _, name := range s.Names.ForMembers {
+				v.head = append(v.head, line{kind: lineWarn, text: fmt.Sprintf(
+					"%s, for members alone, is not reached from here, which resolves the network's names publicly", name)})
+			}
+		}
 		if hint != "" {
 			v.head = append(v.head, line{kind: lineHint, text: hint})
 		}
@@ -438,44 +452,6 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	}
 	v.notes = append(v.notes, statusNotes(s, several)...)
 	return v
-}
-
-// pqSummary says how many of the installed peers' tunnels are post-quantum,
-// and by what key.
-func pqSummary(s *ipc.Status, paint func(code, s string) string) string {
-	if s.PQ == nil {
-		return ""
-	}
-	pq := s.PQ.Pair + s.PQ.Group
-	n := pq + len(s.PQ.None) + len(s.PQ.NoKey)
-	switch {
-	case n == 0:
-		return ""
-	case s.Schema < types.SchemaPQ:
-		return paint("33", "no, the network predates it")
-	}
-	var by []string
-	switch s.PQ.Pair {
-	case 0:
-	case 1:
-		by = append(by, "1 by a pair key")
-	default:
-		by = append(by, fmt.Sprintf("%d by pair keys", s.PQ.Pair))
-	}
-	if s.PQ.Group > 0 {
-		by = append(by, fmt.Sprintf("%d by the group key", s.PQ.Group))
-	}
-	text := fmt.Sprintf("%d of %d tunnels", pq, n)
-	if pq == n {
-		text = "every tunnel"
-	}
-	if len(by) > 0 {
-		text += ": " + strings.Join(by, ", ")
-	}
-	if pq < n {
-		return paint("33", text)
-	}
-	return text
 }
 
 // httpsNotes are what keeps this device's use of 443 from working.
@@ -604,6 +580,17 @@ func statusNotes(s *ipc.Status, several bool) []line {
 			strings.Join(s.SyncFailing, ", "), s.GossipPort, dev)
 		note(lineHint, "on both devices: sudo ufw allow in on %s, or add %s to firewalld's trusted zone", dev, dev)
 	}
+	if len(s.SyncNewer) > 0 {
+		note(lineWarn, "log sync fails: %s a newer juist", runs(s.SyncNewer))
+		note(lineHint, "update juist on this device")
+	}
+	if len(s.SyncBroken) > 0 {
+		note(lineWarn, "log sync to %s fails", strings.Join(s.SyncBroken, ", "))
+		note(lineHint, "juistd's log says why")
+	}
+	if len(s.Outdated) > 0 {
+		note(lineWarn, "%s an older juist, unreachable until updated", runs(s.Outdated))
+	}
 	httpsOnly := s.HTTPS != nil && s.HTTPS.Only
 	if len(s.Seeking) > 0 && httpsOnly {
 		note(lineInfo, "no answer from %s: offline, or at no relay on 443", strings.Join(s.Seeking, ", "))
@@ -625,13 +612,8 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	if s.Conflicted > 0 {
 		note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))
 	}
-	if s.PQ != nil && len(s.PQ.None) > 0 && s.Schema >= types.SchemaPQ {
-		note(lineWarn, "not post-quantum, so juist's own traffic alone: %s, on an older build or behind the network",
-			strings.Join(s.PQ.None, ", "))
-	}
-	if s.PQ != nil && len(s.PQ.NoKey) > 0 {
-		note(lineWarn, "no preshared key in common with %s, behind by more changes than this device keeps",
-			strings.Join(s.PQ.NoKey, ", "))
+	if len(s.NoKey) > 0 {
+		note(lineWarn, "%s fell too far behind to reach this device", strings.Join(s.NoKey, ", "))
 		note(lineHint, "it catches up from a device that has been away as long, or joins again with a new invite")
 	}
 	notes = append(notes, httpsNotes(s)...)
@@ -821,4 +803,12 @@ func noDaemon(err error) bool {
 func (a *app) relayGranted() bool {
 	return a.host.relayGrant != "" && fileExists(a.host.relayGrant) &&
 		(!a.socketExplicit || a.socket == a.host.socket(0))
+}
+
+// runs is "a runs", or "a, b run".
+func runs(names []string) string {
+	if len(names) == 1 {
+		return names[0] + " runs"
+	}
+	return strings.Join(names, ", ") + " run"
 }

@@ -149,7 +149,7 @@ func startIngressWith(t *testing.T, src *source, o Options) (tlsAddr, httpAddr s
 
 // hello sends a ClientHello for name and returns what came back, read by
 // nothing else.
-func hello(t *testing.T, addr, name string) []byte {
+func hello(t *testing.T, addr, name string, protos ...string) []byte {
 	t.Helper()
 	c, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -157,7 +157,7 @@ func hello(t *testing.T, addr, name string) []byte {
 	}
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := c.Write(clientHello(t, name)); err != nil {
+	if _, err := c.Write(clientHello(t, name, protos...)); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := io.ReadAll(c)
@@ -165,12 +165,12 @@ func hello(t *testing.T, addr, name string) []byte {
 }
 
 // clientHello is the record a TLS client opens with, asking for name.
-func clientHello(t *testing.T, name string) []byte {
+func clientHello(t *testing.T, name string, protos ...string) []byte {
 	t.Helper()
 	client, server := net.Pipe()
 	defer server.Close()
 	go func() {
-		_ = tls.Client(client, &tls.Config{ServerName: name, InsecureSkipVerify: true}).Handshake()
+		_ = tls.Client(client, &tls.Config{ServerName: name, InsecureSkipVerify: true, NextProtos: protos}).Handshake()
 		client.Close()
 	}()
 	head := make([]byte, 5)
@@ -650,5 +650,56 @@ func TestARelayKeepsItsNameFromAMembers(t *testing.T) {
 		t.Fatalf("the member got the relay's client, %d bytes", len(got))
 	case <-time.After(5 * time.Second):
 		t.Fatal("nobody got the client")
+	}
+}
+
+// A name for members alone reaches its target from the CA's validation
+// alone, which asks acme-tls/1 and nothing else; anyone else, a client
+// asking the CA's protocol among others too, gets nothing, and is logged.
+func TestANameForMembersPassesTheCAAlone(t *testing.T) {
+	tg := newTarget(t)
+	src := &source{p: &ipc.Published{Members: []ipc.PublishedTarget{tg.published("photos.pub.example.org", false)}}}
+	var l lines
+	tlsAddr, httpAddr := startIngressWith(t, src, Options{Access: l.add})
+	for _, protos := range [][]string{nil, {"h2", "http/1.1"}, {"h2", acmeALPN}} {
+		if got := hello(t, tlsAddr, "photos.pub.example.org", protos...); len(got) != 0 {
+			t.Errorf("asking %q got %q", protos, got)
+		}
+	}
+	select {
+	case b := <-tg.got:
+		t.Fatalf("the target got %x from a client", b)
+	case <-time.After(100 * time.Millisecond):
+	}
+	l.find(t, `"photos.pub.example.org" members only up=0 down=0`)
+	if got := hello(t, tlsAddr, "photos.pub.example.org", acmeALPN); !bytes.Equal(got, []byte("ok")) {
+		t.Fatalf("the CA got %q", got)
+	}
+	<-tg.got
+	hc, err := net.Dial("tcp", httpAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hc.Close()
+	_, _ = hc.Write([]byte("GET / HTTP/1.1\r\nHost: photos.pub.example.org\r\nConnection: close\r\n\r\n"))
+	if b, _ := io.ReadAll(hc); !bytes.Contains(b, []byte(" 404 ")) {
+		t.Errorf("port 80 answered %q", b)
+	}
+}
+
+// A name made for members alone ends the connections spliced for it while
+// it was public.
+func TestANameMadeForMembersEndsItsConnections(t *testing.T) {
+	h := newHolder(t, false)
+	src := &source{p: &ipc.Published{Names: []ipc.PublishedTarget{h.published("photos.pub.example.org")}}}
+	tlsAddr, _ := startIngress(t, src)
+	c := helloAndHold(t, tlsAddr, "photos.pub.example.org")
+	waitFor(t, "the connection", func() bool { return h.accepted.Load() == 1 })
+	src.mu.Lock()
+	src.p = &ipc.Published{Members: []ipc.PublishedTarget{h.published("photos.pub.example.org")}}
+	src.mu.Unlock()
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("a connection opened while the name was public: %v", err)
 	}
 }

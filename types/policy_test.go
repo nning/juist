@@ -46,6 +46,21 @@ func TestAPolicyMeansWhatItSays(t *testing.T) {
 		{"a test of a network", &Policy{Tests: []PolicyTest{{From: a, To: PolicyRefs{Prefixes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}}}}},
 			"one address"},
 		{"a test of a port range", &Policy{Tests: []PolicyTest{{From: a, To: nodes, Port: tcp(80, 81)}}}, "one port"},
+		{"a name as a source", rule(PolicyRule{From: PolicyRefs{Names: []string{"photos"}}, To: nodes}), "destinations alone"},
+		{"a name beside a member", rule(PolicyRule{From: nodes, To: PolicyRefs{Nodes: []Identity{b}, Names: []string{"photos"}}}),
+			"no other destination"},
+		{"a name with a port", rule(PolicyRule{From: nodes, To: PolicyRefs{Names: []string{"photos"}}, Ports: []PortRange{tcp(443, 443)}}),
+			"names no port"},
+		{"names unsorted", rule(PolicyRule{From: nodes, To: PolicyRefs{Names: []string{"wiki", "photos"}}}), "sorted"},
+		{"a name of two labels", rule(PolicyRule{From: nodes, To: PolicyRefs{Names: []string{"a.b"}}}), "name"},
+		{"a test of two names", &Policy{Tests: []PolicyTest{{From: a, To: PolicyRefs{Names: []string{"a", "b"}}}}}, "one name"},
+		{"a test of a member and a name", &Policy{Tests: []PolicyTest{{From: a, To: PolicyRefs{Nodes: []Identity{b}, Names: []string{"a"}}}}}, "one name"},
+		{"a test of an address and a name", &Policy{Tests: []PolicyTest{{From: a,
+			To: PolicyRefs{Prefixes: []netip.Prefix{netip.MustParsePrefix("10.0.0.1/32")}, Names: []string{"a"}}}}}, "one name"},
+		{"a test of a name by an exit node", &Policy{Tests: []PolicyTest{{From: a, To: PolicyRefs{Names: []string{"a"}, ViaNodes: []Identity{b}}}}}, "one name"},
+		{"a test of a name no label", &Policy{Tests: []PolicyTest{{From: a, To: PolicyRefs{Names: []string{"Bad!"}}}}}, "name"},
+		{"a test of a name by port", &Policy{Tests: []PolicyTest{{From: a, To: PolicyRefs{Names: []string{"a"}}, Port: tcp(443, 443)}}},
+			"names no port"},
 	} {
 		err := c.p.Validate()
 		if err == nil || !strings.Contains(err.Error(), c.want) {
@@ -103,5 +118,18 @@ func TestDenselyNestedTablesValidateQuickly(t *testing.T) {
 	}
 	if took := time.Since(start); took > time.Second {
 		t.Fatalf("validating took %v", took)
+	}
+}
+
+// A policy naming a published name needs the schema that has them, and the
+// domain itself is the empty label.
+func TestAPolicyNamingNamesNeedsItsSchema(t *testing.T) {
+	p := &Policy{Rules: []PolicyRule{{From: PolicyRefs{Any: true}, To: PolicyRefs{Names: []string{"", "photos"}}}},
+		Tests: []PolicyTest{{From: Identity{1}, To: PolicyRefs{Names: []string{"photos"}}}}}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !p.NamesNames() || (&Policy{}).NamesNames() {
+		t.Error("NamesNames says otherwise")
 	}
 }

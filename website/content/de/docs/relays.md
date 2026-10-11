@@ -5,7 +5,7 @@ description: Ein Relay für Geräte einrichten, die sich nicht direkt erreichen,
 lead: Können sich zwei Geräte nicht direkt erreichen, leitet ein Mitglied deines eigenen Netzes ihren Verkehr weiter. Außerdem erfährst du hier, welche Ports juist nutzt und was du wo öffnen musst.
 ---
 
-## Worum es geht
+## Was ein Relay tut
 
 Die meisten Geräte stehen hinter einem Router mit NAT. Sie teilen sich eine
 öffentliche Adresse und sind von außen nicht erreichbar. Meist bekommt juist
@@ -19,9 +19,9 @@ erreichen ([So funktioniert juist]({{< relref "docs/how-it-works" >}})).
 Fremde leiten deinen Verkehr nie weiter. Nur Mitglieder können das Relay
 nutzen, und es sieht nur verschlüsselten WireGuard-Verkehr.
 
-Ein Relay vermittelt auch Einladungen. Rufst du `juist invite` auf einem
+Ein Relay hilft auch bei Einladungen. Rufst du `juist invite` auf einem
 Laptop hinter NAT auf, wartet die Einladung zusätzlich beim Relay, und der
-Link verweist darauf. So kann ein neues Gerät von überall beitreten
+Link nennt das Relay. So kann ein neues Gerät von überall beitreten
 ([Einladungen]({{< relref "docs/invites" >}})). Das Geheimnis der Einladung
 bekommt das Relay nie zu sehen.
 
@@ -62,12 +62,12 @@ darf.
 
 Ein Relay kann auch einen öffentlichen Namen auf Port 443 bedienen, wie jeder
 HTTPS-Server. Ein Gerät in einem Netz, das nichts anderes hinauslässt,
-erreicht es dort, von selbst oder mit
-[nur HTTPS]({{< relref "docs/https-only" >}}).
+erreicht das Relay dort, entweder von selbst oder im
+[Nur-HTTPS-Modus]({{< relref "docs/https-only" >}}).
 
 {{< step on="deinem DNS" >}}
-Lass einen Namen auf das Relay zeigen, mit einem A-Eintrag und, wo es IPv6
-hat, einem AAAA-Eintrag: `relay.example.org`.
+Lass einen Namen wie `relay.example.org` auf das Relay zeigen, mit einem
+A-Eintrag und, falls das Relay IPv6 hat, einem AAAA-Eintrag.
 {{< /step >}}
 
 {{< step on="vps" as="dem Relay" >}}
@@ -87,22 +87,24 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
 {{< /step >}}
 
 - Jedes Gerät erfährt den Namen aus der Ankündigung des Relays, sobald das
-  Log des Netzes auf Schema 12 steht. Vorher meldet `juist status`
+  Log des Netzes auf Schema 12 steht. Bis dahin meldet `juist status`
   `members are not told of relay.example.org`, und `juist log upgrade` hebt
-  es an.
-- Port 443 zu belegen braucht ein Recht, das juistd sonst nicht hat und das
-  root gewährt: `sudo juist set` gibt ihm dafür allein
-  `CAP_NET_BIND_SERVICE`, per systemd-Drop-in, und
-  `sudo juist set --relay-name ""` nimmt es mit dem Namen zurück. Unter
-  FreeBSD belegt der Helfer von juistd Port 443, solange root es gewährt und
-  kein anderes Programm auf 443 antwortet, und pf muss ihn durchlassen, wo es
-  läuft. Überdauert das Recht den Namen, warnt `juist status`, und
-  `juist reset` nimmt es zurück.
-- Die Mitglieder nutzen den Namen, sobald der Server unter ihm sagt, dass er
-  dieses Relay ist: Ein Name, der woandershin führt, wird nicht genommen.
-- Auf der [Ingress]({{< relref "docs/publishing" >}}) des Netzes, die 443
-  schon belegt, reicht die Ingress die Verbindungen für den Namen an das Relay
-  weiter.
+  das Schema an.
+- Um Port 443 zu belegen, braucht juistd ein Recht, das es sonst nicht hat und
+  das nur root vergeben kann. `sudo juist set` gibt ihm
+  `CAP_NET_BIND_SERVICE` nur für diesen Zweck, per systemd-Drop-in, und
+  `sudo juist set --relay-name ""` nimmt es zusammen mit dem Namen zurück.
+- Unter FreeBSD belegt der Helfer von juistd Port 443 nur, solange root es
+  erlaubt und kein anderes Programm auf 443 lauscht. Läuft pf, muss es den
+  Verkehr durchlassen.
+- Überdauert das Recht den Namen, warnt `juist status`, und `juist reset`
+  nimmt es zurück.
+- Die Mitglieder nutzen den Namen erst, wenn der Server unter diesem Namen
+  bestätigt, dass er dieses Relay ist. Ein Name, der woandershin führt, wird
+  nicht genutzt.
+- Ist das Relay zugleich die [Ingress]({{< relref "docs/publishing" >}})
+  des Netzes, die 443 schon belegt, reicht die Ingress die Verbindungen für
+  den Namen an das Relay weiter.
 - Ein CAA-Eintrag für den Namen muss Let's Encrypt zulassen.
 - Auf einem Gerät in mehreren Netzen bedient nur der juistd des ersten Netzes
   einen Namen auf 443.
@@ -111,21 +113,21 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
 
 | Port | Wofür | Wo öffnen |
 |---|---|---|
-| 41643/udp | WireGuard und Wegsuche | auf einem Gerät mit öffentlicher Adresse |
+| 41643/udp | WireGuard und Pfadsuche | auf einem Gerät mit öffentlicher Adresse |
 | 41645/tcp, 41645/udp | das Relay und die STUN-Antworten, mit denen Mitglieder es vermessen | auf einem Gerät mit der Rolle `relay` |
 | 443/tcp | das Relay unter seinem öffentlichen Namen | auf einem Relay mit Namen; `juist set --relay-name` öffnet ihn |
-| 41642/tcp | eine Einladung, die per Code im LAN angenommen wird | auf dem einladenden Gerät, solange `juist invite` läuft |
+| 41642/tcp | eine Einladung per Code im LAN annehmen | auf dem einladenden Gerät, solange `juist invite` läuft |
 | 443/tcp, 443/udp, 80/tcp | die Namen, die Geräte veröffentlichen, per TLS und QUIC | auf einem Gerät mit der Rolle `ingress`; `juist ingress serve` öffnet sie |
-| die Ports, auf denen Namen per TCP veröffentlicht sind | diese Namen | auf jeder Ingress; sie öffnet und schließt sie, wie sie kommen und gehen |
+| die Ports, auf denen Namen per TCP veröffentlicht sind | diese Namen | auf jeder Ingress; sie öffnet und schließt sie, wenn Namen hinzukommen oder wegfallen |
 
 Hinter NAT musst du nichts öffnen. Auch eine Einladung per Link braucht
 keinen offenen Port: Erreicht das neue Gerät das einladende nicht direkt,
-findet es dieses sofort über ein Relay oder nach etwa einer Minute über den
-öffentlichen DHT.
+treffen sich die beiden sofort über ein Relay oder nach etwa einer Minute
+über den öffentlichen DHT.
 
 Ein Gerät in [mehreren Netzen]({{< relref "docs/networks" >}}) betreibt für
-jedes Netz einen eigenen juistd. Dessen Ports sind beim n-ten juistd die
-obigen plus 10·n, also zum Beispiel 41653/udp für `juistd@juist1`.
+jedes Netz einen eigenen juistd. Der n-te juistd nutzt die obigen Ports plus 10·n,
+zum Beispiel 41653/udp für `juistd@juist1`.
 
 ## Firewalls
 
@@ -133,9 +135,9 @@ Die Pakete bringen Profile für ufw und firewalld mit, die `juist`,
 `juist-relay`, `juist-relay-443`, `juist-invite` und `juist-ingress` heißen. Sie enthalten die
 Ports des ersten Netzes. Die Ports der anderen Netze nennt `juist status`.
 
-Über den Log-Abgleich geben Geräte Änderungen am Mitgliederlog weiter, also
-an der signierten Liste, wer zum Netz gehört. Er läuft im Tunnel, über TCP
-41644 auf `juist0` (41654 auf `juist1` und so weiter). Was dort ankommt, hat
+Der Log-Abgleich läuft im Tunnel, über TCP 41644 auf `juist0` (41654 auf
+`juist1` und so weiter). Über ihn geben Geräte Änderungen am Mitgliederlog
+weiter, also an der signierten Liste, wer zum Netz gehört. Was dort ankommt, hat
 WireGuard und juists eigenen Filter schon passiert, und wo ufw oder firewalld
 läuft, lassen die Pakete es durch. Eine von Hand eingerichtete Firewall muss
 es ebenfalls durchlassen. Sonst behält das Gerät zwar seine Tunnel, verpasst
@@ -160,7 +162,7 @@ Mitglieder wiederzufinden, die es aus den Augen verloren hat. Beide sehen nur
 Adressen, nie Inhalte.
 
 Mit einem eigenen Relay kommt das Netz ohne beide aus. Führe dazu auf jedem
-Gerät aus:
+Gerät Folgendes aus:
 
 ```sh
 sudo systemctl edit juistd
@@ -178,7 +180,7 @@ Die Geräte finden sich dann im LAN und über Mitglieder, die sie schon
 kennen. Das Relay teilt jedem Gerät seine öffentliche Adresse mit, und
 Einladungen per Link laufen darüber. `man juistd` beschreibt alle Optionen.
 
-## Wenn etwas nicht klappt
+## Fehlersuche
 
 | `juist status` meldet | Was du tun kannst |
 |---|---|

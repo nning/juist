@@ -1,31 +1,31 @@
 ---
-title: Networks that pass HTTPS alone
-linkTitle: HTTPS alone
-description: Reach your network from a hotel's, a company's or a school's network that lets nothing out but HTTPS, through your relays on 443, and through a proxy where there is one.
-lead: Some networks let nothing out but HTTPS, and some sort what passes by how it looks. A device on one reaches the others through your relays on port 443, as one HTTPS client among others.
+title: Networks that only allow HTTPS
+linkTitle: HTTPS only
+description: Reach your network from a hotel, company or school network that lets nothing out but HTTPS, through your relays on port 443, and through a proxy if there is one.
+lead: Some networks let nothing out but HTTPS, and some inspect traffic to check that it looks like HTTPS. A device on such a network reaches the others through your relays on port 443, looking like any other HTTPS client.
 ---
 
-## What it is
+## How it works
 
-On a hotel's, a company's or a school's network often only TCP to port 443
-gets out. WireGuard, path discovery and the relay's own port 41645 do not.
+On hotel, company or school networks, often only TCP to port 443 gets out.
+WireGuard, path discovery and the relay's usual port 41645 are blocked.
 
-A [relay]({{< relref "docs/relays" >}}) that serves a public name on 443 is
-the way out. Every device learns the name, and one that cannot reach the
-relay's own port falls back to the name by itself. Nothing needs setting up
-on the device for that.
+The way out is a [relay]({{< relref "docs/relays" >}}) that serves a public
+name on port 443. Every device learns that name, and a device that cannot
+reach the relay's usual port switches to the name by itself. Nothing needs to
+be set up on the device for this.
 
-A network that looks closer, and blocks or reports what is not HTTPS, needs
-more: with `juist set --https-only` a device sends nothing but TLS to the
-relays' names on 443, and DNS queries for those names. No WireGuard over UDP,
-no path discovery, no search of the LAN, no public DHT and no STUN server.
-Every packet then goes through a relay.
+A network that inspects traffic, and blocks or reports anything that is not
+HTTPS, needs more. With `juist set --https-only`, a device sends only TLS to
+the relays' names on port 443, plus DNS queries for those names. It sends no
+WireGuard over UDP, does no path discovery and no LAN search, and uses neither
+the public DHT nor STUN servers. Every packet then goes through a relay.
 
 ## Setting it up
 
 {{< step on="the relay" >}}
-Give a relay a public name on 443, as [Relays]({{< relref "docs/relays" >}})
-describes:
+Give a relay a public name on port 443, as described in
+[Relays]({{< relref "docs/relays" >}}):
 
 ```sh
 sudo juist set --relay-name relay.example.org
@@ -33,13 +33,13 @@ sudo juist set --relay-name relay.example.org
 {{< /step >}}
 
 {{< step on="laptop" as="the device in the hotel" >}}
-Send nothing but HTTPS from now on:
+Send only HTTPS from now on:
 
 ```sh
 sudo juist set --https-only
 ```
 
-It prints `https only`. `juist status` then says which relays it goes
+It prints `https only`. `juist status` then shows which relays it goes
 through:
 
 ```console
@@ -47,9 +47,10 @@ through:
 ```
 {{< /step >}}
 
-To join a network from such a place, set it before `juist join`, and use the
-invite's link: it names the relays on 443, as `r=relay.example.org`. A code
-typed in is found on the LAN, which a device on HTTPS alone does not search.
+To join a network from such a place, set this before `juist join`, and use the
+invite link, not the code. The link names the relays on 443, for example
+`r=relay.example.org`. A typed code is looked up on the LAN, which a device in
+HTTPS-only mode does not search.
 
 ```sh
 sudo juist set --https-only
@@ -61,48 +62,50 @@ direct again.
 
 ## Through a proxy
 
-A company network may let nothing out but through its HTTP proxy. Name the
-proxy, with a user and password where it asks for one:
+Some company networks let traffic out only through their HTTP proxy. Give
+juist the proxy, with a user name and password if it requires them:
 
 ```sh
 sudo juist set --https-only --proxy -
 ```
 
-juist asks for the URL, such as
+juist then asks for the URL, such as
 `http://user:password@proxy.example.com:3128`, and does not show it as you
-type: on the command line, every user of the device could read the
-password. Without one, `--proxy http://proxy.example.com:3128` will do.
+type. On the command line, every user of the device could read the password.
+For a proxy without a password, `--proxy http://proxy.example.com:3128` is
+enough.
 
-The proxy is asked for `CONNECT relay.example.org:443` alone, and resolves
-the name itself, so the device needs no DNS of its own then. Without
-`--proxy`, juistd takes the `HTTPS_PROXY` of its environment, and
+juist asks the proxy only for `CONNECT relay.example.org:443`, and the proxy
+resolves the name itself, so the device does not need DNS of its own. Without
+`--proxy`, juistd uses the `HTTPS_PROXY` from its environment, and
 `--proxy ""` goes back to that. `juist status` shows the proxy without its
 password.
 
-## Good to know
+## Notes
 
-- Every packet goes through a relay, at the relay's speed, and TCP carries
-  the tunnel's TCP, which recovers slowly from loss. Two relays in different
-  places keep a device reachable when one goes.
+- Every packet goes through a relay, so the relay limits the speed. The
+  tunnel's TCP connections then run inside TCP, which recovers slowly from
+  packet loss. Two relays in different places keep a device reachable if one
+  goes down.
 - The relay's certificate is checked against the certificate authorities the
-  system trusts, as a browser does, and a relay's name is used once the
-  server at it says it is that relay. A company that intercepts TLS sees no
-  more than the relay does: WireGuard encrypts end to end, so it sees which
-  devices talk to each other, not what they say.
-- It does not hide juist from a censor that probes servers or fingerprints
-  TLS: a probe of the relay's name finds a relay, and the TLS handshake is that
-  of a Go program, not a browser.
-- The Android app has no switch for it yet. It falls back to a relay's name on
-  443 by itself where UDP and the relay's port are blocked.
+  system trusts, as a browser does. A device uses a relay's name only once the
+  server at that name confirms it is that relay. A company that intercepts TLS
+  sees no more than the relay does: WireGuard encrypts end to end, so it sees
+  which devices talk to each other, but not what they say.
+- HTTPS-only mode does not hide juist from a censor that probes servers or
+  fingerprints TLS. Probing the relay's name reveals a relay, and the TLS
+  handshake is that of a Go program, not a browser.
+- The Android app has no setting for HTTPS-only mode. It does switch to a
+  relay's name on 443 by itself where UDP and the relay's port are blocked.
 
-## If something goes wrong
+## Troubleshooting
 
 | `juist status` says | What to do |
 |---|---|
-| `HTTPS  only, and no relay on 443` | give a relay a public name: `sudo juist set --relay-name NAME` on it |
+| `HTTPS  only, and no relay on 443` | give a relay a public name: run `sudo juist set --relay-name NAME` on it |
 | `warning: no relay on 443/tcp` | the same |
-| `no answer from …: offline, or at no relay on 443` | the device is offline, or reaches no relay with a name |
-| `no tunnel traffic from … through the relays on 443` | check the relays' names in DNS, and that 443 reaches them |
+| `no answer from …: offline, or at no relay on 443` | the device is offline, or cannot reach any relay that has a name |
+| `no tunnel traffic from … through the relays on 443` | check the relays' names in DNS, and that port 443 reaches them |
 
-A join that says `the invite link names no relay on 443` needs a new link,
-made once a relay serves a name on 443.
+If joining says `the invite link names no relay on 443`, you need a new invite
+link, made after a relay serves a name on 443.

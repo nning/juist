@@ -5,7 +5,7 @@ description: Wem juist vertraut und wem nicht, wo die Schlüssel liegen und welc
 lead: Was juist schützt, worauf es sich verlässt und wo seine Grenzen liegen, verständlich auch ohne Sicherheitswissen. Ein Sicherheitsaudit gab es für juist bisher nicht.
 ---
 
-## Worum es geht
+## Wer entscheidet
 
 Bei juist entscheidet kein Server in der Mitte, wer zum Netz gehört. Das tun
 deine Admins, indem sie Änderungen signieren, und jedes Gerät prüft diese
@@ -16,7 +16,7 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
 [Bedrohungsmodell](https://github.com/nning/juist/blob/main/docs/02-threat-model.md)
 (auf Englisch).
 
-## Wem du vertraust
+## Wem du vertrauen musst
 
 - Deinen Admins, aber nur gemeinsam. Jede Änderung, etwa das Aufnehmen oder
   Entfernen eines Geräts, braucht das Quorum, also so viele Admin-Stimmen, wie
@@ -43,7 +43,7 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
   verzögern, aber weder ändern, wer zum Netz gehört, noch Verkehr mitlesen.
   Sie sehen allerdings die Adressen der Geräte, die sie nutzen.
 - Dem Relay. Ein [Relay]({{< relref "docs/relays" >}}) ist eines deiner
-  eigenen Mitglieder, nur Mitglieder können es nutzen, und es sieht nur
+  eigenen Mitglieder. Nur Mitglieder können es nutzen, und es sieht nur
   verschlüsselten WireGuard-Verkehr.
 - Dem Daemon, wenn es ums Signieren geht. juistd bekommt nie einen
   Admin-Schlüssel. Auch ein kompromittierter juistd kann also keine Änderungen
@@ -57,16 +57,16 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
   Netz bekommt seinen eigenen Schlüssel, ein verlorener oder gestohlener
   Schlüssel betrifft also nur ein Netz.
 - Die Schlüssel des Geräts selbst verwahrt juistd. Unter Linux legt das Paket
-  sie in `/var/lib/juist` ab. juistd läuft unter einem eigenen Benutzer und
-  hat nur `CAP_NET_ADMIN`. Auf einem Telefon versiegelt die
+  sie in `/var/lib/juist` ab, und juistd läuft unter einem eigenen Benutzer
+  und hat nur `CAP_NET_ADMIN`. Auf einem Telefon versiegelt die
   [Android-App]({{< relref "docs/android" >}}) sie mit einem Schlüssel, den
-  der Android-Keystore hält. Der Befehl `juist` signiert nur, was er aus seinem
-  eigenen geprüften Log nachvollzogen hat, ganz gleich, worum juistd ihn
-  bittet.
+  der Android-Keystore hält.
+- Der Befehl `juist` signiert nur, was er aus seiner eigenen geprüften Kopie
+  des Logs nachvollzogen hat, ganz gleich, worum juistd ihn bittet.
 - Das Break-glass-Geheimnis, das `juist create` einmal anzeigt und nirgends
   speichert, beendet das Netz endgültig, ganz ohne Admin. Bewahre es offline
-  auf, getrennt von den Admin-Schlüsseln: Ein Tresor mit beidem regiert das
-  Netz und beendet es.
+  auf, getrennt von den Admin-Schlüsseln: Wer einen Tresor mit beidem hat,
+  kann das Netz lenken und es beenden.
 
 ## Wovor Einladungen schützen
 
@@ -76,19 +76,19 @@ bei. Sie schützt vor drei Dingen:
 - Vor Raten. Mit einem Code gibt es genau einen Versuch, und der muss aus dem
   LAN kommen. Ein Link enthält ein 128-Bit-Geheimnis, das viel zu lang zum
   Raten ist.
-- Vor einem Gerät, das sich dazwischenschaltet. Bevor etwas signiert wird,
+- Vor jemandem, der sich dazwischenschaltet. Bevor etwas signiert wird,
   vergleicht der Admin vier Wörter mit dem neuen Gerät. Sie sind so gewählt,
   dass ein Angreifer dazwischen nicht nach passenden Wörtern suchen kann.
 - Vor einem kompromittierten Daemon auf dem einladenden Gerät. Der Link bindet
   das neue Gerät an die Signatur des einladenden Admins. Dieser Daemon kann es
-  also nicht in ein eigenes Netz locken.
+  also nicht in ein Netz locken, das er selbst kontrolliert.
 
-## Ein Gerät entfernen, und wo das an Grenzen stößt
+## Ein Gerät entfernen
 
 `juist remove phone` nimmt ein Gerät aus dem Netz. Dabei wird das
-Gruppengeheimnis erneuert, mit dessen Hilfe die Mitglieder einander finden,
-und jedes Mitglied baut seinen Tunnel zu dem Gerät ab, sobald es davon
-erfährt. Mehr dazu unter [Ein Gerät entfernen]({{< relref "docs/remove" >}}).
+Gruppengeheimnis erneuert, mit dessen Hilfe die Mitglieder einander finden.
+Jedes Mitglied baut seinen Tunnel zu dem Gerät ab, sobald es davon erfährt.
+Mehr dazu unter [Ein Gerät entfernen]({{< relref "docs/remove" >}}).
 
 Die Grenze: Ein Mitglied, das vom Rest abgeschnitten ist, erfährt erst spät
 davon und behält bis dahin seinen Tunnel zum entfernten Gerät. Die Frische
@@ -102,7 +102,7 @@ lügen. Mehr dazu unter
 Ein verlorenes oder gestohlenes Gerät bleibt Mitglied, bis du es entfernst.
 Entferne es also, sobald du den Verlust bemerkst.
 
-## Was juist in Kauf nimmt
+## Was juist bewusst in Kauf nimmt
 
 Ohne Server in der Mitte ist manches schwächer. Unter
 [Trade-offs]({{< home "trade-offs" >}}) steht zu jedem Punkt, was passieren
@@ -117,40 +117,38 @@ kann, warum juist das hinnimmt und was du dagegen tun kannst. Kurz gefasst:
   sie nutzen, und sonst nichts. Mit einem eigenen Relay kommt juistd ohne sie
   aus.
 
-## Quantencomputer
+## Quantensichere Tunnel
 
 Ein künftiger Quantencomputer könnte heute übliche Verschlüsselung brechen,
 und heute mitgeschnittener Verkehr ließe sich dann entschlüsseln. juist
 schützt davor:
 
 - Jeder WireGuard-Handshake mischt einen Preshared Key ein. Zwei Geräte nutzen
-  zuerst einen aus dem Gruppengeheimnis des Netzes, nach einem Log-Abgleich
-  dann einen, den nur die beiden haben: Jedes kapselt ein Geheimnis an den
-  ML-KEM-768-Schlüssel des anderen. Er erneuert sich mit jeder Änderung der
-  Mitglieder.
+  zuerst einen, der aus dem Gruppengeheimnis des Netzes abgeleitet ist. Sobald
+  sie ihre Logs abgeglichen haben, wechseln sie zu einem, den nur die beiden
+  haben: Jedes kapselt ein Geheimnis an den ML-KEM-768-Schlüssel des anderen.
+  Dieser Schlüssel erneuert sich mit jeder Änderung der Mitglieder.
 - Gruppengeheimnisse sind mit X25519 und ML-KEM-768 zusammen versiegelt.
 - Signaturen verwenden Ed25519. Fälschen könnte sie ein Quantencomputer erst,
-  wenn es ihn gibt; heute mitzuschneiden bringt dabei nichts.
+  wenn es ihn gibt. Heute mitzuschneiden bringt einem Angreifer dabei nichts.
 
-`juist status` sagt, wie viele Tunnel quantensicher sind und mit welchem
-Schlüssel. Ein Gerät mit einer älteren Version, oder eines, das das Netz noch
-nicht eingeholt hat, bekommt einen Tunnel ohne Preshared Key, und juist lässt
-nur seinen eigenen Verkehr durch, den es selbst versiegelt, bis das Gerät
-einen ankündigt. Ein Netz, das mit einer älteren Version angelegt wurde,
-bekommt quantensichere Tunnel, sobald jedes Gerät diese Version nutzt und
-`juist log upgrade` es auf Schema 14 hebt.
+Jeder Tunnel zwischen Geräten mit der aktuellen Version ist quantensicher.
+Ein Gerät mit einer älteren Version bekommt nichts von deinem Verkehr, und
+`juist status` und `juist devices` zeigen es als veraltet, bis es
+aktualisiert ist. Ein Netz, das mit einer älteren Version angelegt wurde,
+bekommt quantensichere Tunnel, sobald jedes Gerät die aktuelle Version nutzt
+und `juist log upgrade` es auf Schema 14 gehoben hat.
 
-## Gut zu wissen
+## Hinweise
 
-- Ein Sicherheitsaudit gab es für juist bisher nicht.
-- Unter Linux verwirft juist, was die juist-Adressen eines Geräts nicht durch
-  den Tunnel erreicht, und was vorgibt, von einem Mitglied zu kommen, aber aus
-  dem LAN eintrifft. Ein Container auf dem Gerät erreicht dessen eigene
-  juist-Adresse deshalb nicht mehr. Unter FreeBSD ist ein Dienst, der nur auf
-  der juist-Adresse eines Geräts lauscht, weiterhin aus dem LAN dieses Geräts
-  erreichbar. Dienste sollten in jedem Fall selbst prüfen, wer sich verbindet.
-- Jede Änderung am Netz steht mit den Namen derer, die sie bestätigt haben, in
-  `juist log`.
+- Unter Linux verwirft juist Verkehr, der die juist-Adressen eines Geräts
+  nicht durch den Tunnel erreicht, und Verkehr, der vorgibt, von einem
+  Mitglied zu kommen, aber aus dem LAN eintrifft. Ein Container auf dem Gerät
+  erreicht dessen eigene juist-Adresse deshalb nicht mehr.
+- Unter FreeBSD ist ein Dienst, der nur auf der juist-Adresse eines Geräts
+  lauscht, weiterhin aus dem LAN dieses Geräts erreichbar. Dienste sollten in
+  jedem Fall selbst prüfen, wer sich verbindet.
+- `juist log` zeigt jede Änderung am Netz und wer sie bestätigt hat.
 
 ## Eine Schwachstelle melden
 

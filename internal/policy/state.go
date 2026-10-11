@@ -21,6 +21,12 @@ func NetworkOf(state *log.State, now int64) *Network {
 		for _, a := range state.Addrs(rec.Identity, now) {
 			addrs = append(addrs, a.Addr())
 		}
+		var names []Name
+		for _, p := range rec.Published {
+			if p.Public == 0 {
+				names = append(names, Name{Label: p.Label, Port: p.Port, Members: p.Members})
+			}
+		}
 		n.Members = append(n.Members, Member{
 			ID:        rec.Identity,
 			Addrs:     addrs,
@@ -30,6 +36,7 @@ func NetworkOf(state *log.State, now int64) *Network {
 			Service:   rec.HasRole(types.RoleService),
 			Ingress:   rec.HasRole(types.RoleIngress),
 			Publishes: len(rec.Published) > 0 || rec.HasRole(types.RolePublish),
+			Names:     names,
 		})
 	}
 	return n

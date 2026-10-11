@@ -20,6 +20,9 @@ type PublishedName struct {
 	Port   uint16 `cbor:"2,keyasint"`
 	Proxy  bool   `cbor:"3,keyasint,omitempty"`
 	Public uint16 `cbor:"4,keyasint,omitempty"`
+	// Members keeps the name from the internet, from [SchemaMembers] on:
+	// the members the access policy names it for reach it alone.
+	Members bool `cbor:"5,keyasint,omitempty"`
 }
 
 // juist's own ports, every instance's: none is a public port.
@@ -81,6 +84,11 @@ func validatePublished(ps []PublishedName) error {
 		}
 		if i > 0 && ps[i-1].Label >= p.Label {
 			return fmt.Errorf("published names are not sorted and unique at %s", p.shown())
+		}
+		if p.Members && (p.Public != 0 || p.Proxy || p.Port != 443) {
+			// Members reach it at its device on 443 alone: the ingress,
+			// where they would reach it otherwise, passes it nobody.
+			return fmt.Errorf("published name %s is for members alone, and not on 443 by TLS", p.shown())
 		}
 		if p.Public == 0 {
 			continue

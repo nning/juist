@@ -56,6 +56,11 @@ const relayUnreachedAfter = 3 * time.Minute
 // is tried again before the status blames a firewall for it.
 const syncRetryGap = 5 * time.Minute
 
+// outdatedAfter is how long a live peer may announce no epoch in a network
+// past [types.SchemaPQ] before it is called outdated: one back from sleeping
+// through the upgrade announces one a sync round after it catches up.
+const outdatedAfter = 3 * time.Minute
+
 // A running device signs its announcement again every announceRenewal, and
 // for each DHT publication, though nothing in it changed: its sequence number
 // is its clock, so a signature made after a peer's tunnel went down is what
@@ -286,12 +291,12 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	reach := make([]ipc.PeerReach, len(checks))
 	now := d.now()
 	var live int
-	var down, seeking, absent, syncFailing []string
+	var down, seeking, absent, syncFailing, syncNewer, syncBroken, outdated []string
 	var resync []types.Identity
 	lookup := false
-	failing := map[types.Identity]bool{}
+	failed := make(map[types.Identity]gossip.Failure, len(checks))
 	for _, c := range checks {
-		failing[c.id] = d.gossip.Failing(c.id)
+		failed[c.id] = d.gossip.Failed(c.id)
 	}
 	held := make(map[types.Identity]gossip.Endpoint, len(checks))
 	for _, c := range checks {
@@ -342,6 +347,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		reachable[c.id] = c.reach.Live
 	}
 	d.reachable.Store(&reachable)
+	behind := map[types.Identity]time.Time{}
 	for i, c := range checks {
 		reach[i] = c.reach
 		if c.reach.Live {
@@ -349,8 +355,21 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 			// Back up, or up with a sync that failed: sync now, so the log
 			// and the announcements catch up, and so that a failure the
 			// status reports is one through the tunnel as it is.
-			if _, was := d.down[c.id]; was || failing[c.id] && now.Sub(d.syncRetried[c.id]) >= syncRetryGap {
+			if _, was := d.down[c.id]; was || failed[c.id] != 0 && now.Sub(d.syncRetried[c.id]) >= syncRetryGap {
 				resync = append(resync, c.id)
+			}
+			// Its tunnel carries juist's own traffic alone. Only a sync that
+			// works shows it is not catching up.
+			if d.pq && c.stage == pairkey.StageNone {
+				since, was := d.behind[c.id]
+				if !was {
+					since = now
+				}
+				behind[c.id] = since
+				if now.Sub(since) >= outdatedAfter && failed[c.id] == 0 {
+					reach[i].Outdated = true
+					outdated = append(outdated, c.name)
+				}
 			}
 			continue
 		}
@@ -379,6 +398,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		}
 	}
 	d.down = downs
+	d.behind = behind
 	if d.syncRetried == nil {
 		d.syncRetried = map[types.Identity]time.Time{}
 	}
@@ -392,11 +412,17 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	if len(resync) > 0 {
 		d.gossip.Sync(ctx, resync)
 	}
-	for _, c := range checks {
-		// The tunnel carries traffic, yet the session through it did not
-		// come up: a firewall drops the sync port on juist0 on one side.
-		if c.reach.Live && d.tunName != "" && d.gossip.Failing(c.id) {
+	for i, c := range checks {
+		if !c.reach.Live || reach[i].Outdated {
+			continue
+		}
+		switch syncVerdict(d.gossip.Failed(c.id), d.tunName != "") {
+		case syncFirewalled:
 			syncFailing = append(syncFailing, c.name)
+		case syncNewerBuild:
+			syncNewer = append(syncNewer, c.name)
+		case syncBrokenElse:
+			syncBroken = append(syncBroken, c.name)
 		}
 	}
 	var firewalled string
@@ -411,6 +437,9 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	slices.Sort(seeking)
 	slices.Sort(absent)
 	slices.Sort(syncFailing)
+	slices.Sort(syncNewer)
+	slices.Sort(syncBroken)
+	slices.Sort(outdated)
 	home := d.homeRelayName()
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -425,11 +454,37 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		d.status.Tunnels = ipc.Tunnels{
 			TunnelsChecked: true, TunnelsLive: live, TunnelsDown: down,
 			Reach: reach, ReachChecked: now.Unix(), HomeRelay: home,
-			Seeking: seeking, Absent: absent, SyncFailing: syncFailing,
+			Seeking: seeking, Absent: absent, SyncFailing: syncFailing, SyncNewer: syncNewer,
+			SyncBroken: syncBroken, Outdated: outdated,
 			Firewalled: firewalled, FirewallUnsure: firewallUnsure,
 			RelayedFor: relayedFor, RelayUnreached: unreached, RelayPort: relayPort,
 		}
 	}
+}
+
+// What a failing log sync through a live tunnel is put down to.
+const (
+	syncNone = iota
+	syncFirewalled
+	syncNewerBuild
+	syncBrokenElse
+)
+
+// syncVerdict is what the last round's failure f with a live peer is put
+// down to, tun saying a host firewall stands before the tunnel.
+func syncVerdict(f gossip.Failure, tun bool) int {
+	switch {
+	case f == 0 || f == gossip.FailRefused:
+		// A refusal is the network's word on this device, said apart.
+		return syncNone
+	case f == gossip.FailNewer:
+		return syncNewerBuild
+	case f == gossip.FailUnconnected && tun:
+		// The tunnel carries traffic, yet no session through it came up:
+		// a firewall drops the sync port on juist0 on one side.
+		return syncFirewalled
+	}
+	return syncBrokenElse
 }
 
 // noteNewAnnouncements compares the peers about to be installed with those

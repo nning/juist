@@ -110,6 +110,69 @@ func TestWhatAClientSees(t *testing.T) {
 	}
 }
 
+// A name for members alone is marked so for members and left out for the
+// public, who reach none of it.
+func TestANameForMembersAloneIsShownToMembers(t *testing.T) {
+	p := sample()
+	p.Status.Devices[0].Members = []string{"immich.pub.example.org"}
+	body := serve(t, p, ipc.ShowServices, member, "/").Body.String()
+	if !strings.Contains(body, `immich.pub.example.org</a><span class="sub">members only</span>`) {
+		t.Errorf("a member is not told immich is for members alone:\n%s", body)
+	}
+	if strings.Count(body, "members only") != 1 {
+		t.Errorf("a public name is marked for members alone:\n%s", body)
+	}
+	for _, from := range []string{public, ingres} {
+		body := serve(t, p, ipc.ShowAll, from, "/").Body.String()
+		if strings.Contains(body, "immich") {
+			t.Errorf("from %s, the public is shown a name for members alone", from)
+		}
+		if !strings.Contains(body, "files.pub.example.org") {
+			t.Errorf("from %s, the public names are gone too", from)
+		}
+	}
+	body = serve(t, p, ipc.ShowServices, public, "/").Body.String()
+	if !strings.Contains(body, "2 of 3 services up") {
+		t.Errorf("the public's count includes the name for members alone:\n%s", body)
+	}
+}
+
+// The page calls a device outdated whose tunnel is up and carries nothing
+// of the user's, says why, and calls its services unreached.
+func TestThePageMarksOutdatedDevices(t *testing.T) {
+	p := sample()
+	p.Status.Schema = types.SchemaPQ
+	p.Status.Reach[0].Outdated = true
+	p.Status.Reach[2].Live, p.Status.Reach[2].Outdated = true, true
+	p.Status.Outdated = []string{"nas", "vps"}
+	for _, s := range services(p) {
+		if s.Name == "files.pub.example.org" && s.State != "unreached" {
+			t.Errorf("a service on an outdated device reads %s", s.State)
+		}
+	}
+	body := serve(t, p, ipc.ShowNetwork, member, "/").Body.String()
+	for _, want := range []string{`<span class="pill outdated">outdated</span>`,
+		"nas, vps run an older juist, unreachable until updated"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page does not say %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(strings.ToLower(body), "quantum") {
+		t.Errorf("the page speaks of quantum:\n%s", body)
+	}
+}
+
+// When a peer was last heard from shows once: in its column on a wide
+// screen, under the state on a narrow one. The copy under the state is a
+// td .sub, so the rule hiding it outside the narrow layout must be as
+// specific.
+func TestTheLastHeardShowsOnce(t *testing.T) {
+	css := pageHTML[:strings.Index(pageHTML, "@media")]
+	if !strings.Contains(css, "td .sub.narrow { display: none; }") {
+		t.Error("the narrow copy of when a peer was last heard from shows on a wide screen too")
+	}
+}
+
 // A member is told what the public sees, and the page says whose view it
 // is.
 func TestThePageSaysWhoseViewItIs(t *testing.T) {

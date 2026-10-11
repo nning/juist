@@ -340,6 +340,7 @@ var shorts = map[string]byte{
 	"key":         'k',
 	"keys":        'k',
 	"list":        'l',
+	"members":     'm',
 	"name":        'n',
 	"no-apply":    'n',
 	"no-device":   'N',

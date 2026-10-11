@@ -228,11 +228,10 @@ func (d *Daemon) renewShare(last *int64) bool {
 	return true
 }
 
-// shareServed is this device's shares as its terminator ends TLS for them,
-// on addrs, while state grants the role: the one without a path as the
+// shareServed is shs, this device's shares, as its terminator ends TLS for
+// them, on addrs, while state grants the role: the one without a path as the
 // name's To, the others by their paths.
-func (d *Daemon) shareServed(state *log.State, addrs []netip.Addr, now time.Time) (ipc.PublishedTarget, bool) {
-	shs := d.sharesNow(now)
+func (d *Daemon) shareServed(state *log.State, addrs []netip.Addr, shs []share) (ipc.PublishedTarget, bool) {
 	if len(shs) == 0 {
 		return ipc.PublishedTarget{}, false
 	}

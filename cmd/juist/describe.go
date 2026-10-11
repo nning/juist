@@ -311,6 +311,14 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		for _, p := range aum.Publish.Names {
 			if !slices.Contains(had, p) {
 				add("%s", publishedLine("publishes", p, domain, member(*aum.Subject)))
+				if state != nil && p.Public == 0 && namedByRules(state.Policy(), p.Label) {
+					add("so the access policy's rules to %s open port %d of %s to their sources",
+						publishedPhrase(p, domain), p.Port, member(*aum.Subject))
+				}
+			}
+			if i := slices.IndexFunc(had, func(q types.PublishedName) bool { return q.Label == p.Label }); i >= 0 &&
+				had[i].Members && !p.Members {
+				add("makes %s public, for the internet: it was for members alone", publishedPhrase(p, domain))
 			}
 		}
 		for _, p := range had {
@@ -547,7 +555,15 @@ func publishedLine(verb string, p types.PublishedName, domain, it string) string
 	if p.Proxy {
 		line += ", with PROXY protocol"
 	}
+	if p.Members {
+		line += ", for members alone"
+	}
 	return line
+}
+
+// namedByRules reports whether a rule of p names the published name label.
+func namedByRules(p *types.Policy, label string) bool {
+	return p != nil && slices.ContainsFunc(p.Rules, func(r types.PolicyRule) bool { return slices.Contains(r.To.Names, label) })
 }
 
 // publishedPhrase is p's name under domain as an approval says it, the

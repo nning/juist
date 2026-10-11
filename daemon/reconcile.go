@@ -176,7 +176,7 @@ func (d *Daemon) Reconcile() error {
 		Vouchers: fresh.Needed, Vouching: fresh.Vouching, Stale: !fresh.Fresh(s.now),
 		Relays: len(relays), Relaying: d.isRelaying(), RelayCapable: relayCapableIn(s),
 		Conflicted:    b.conflicted,
-		PQ:            b.pq(),
+		NoKey:         b.noKey,
 		StaleKeys:     staleKeys,
 		LastReconcile: d.now().Unix(),
 		Exit:          d.exitNow(),
@@ -363,11 +363,8 @@ type peerSet struct {
 	silent     []string // members with no announcement held
 	conflicted int      // members left out for a disco key another uses
 
-	// What the peers' handshakes mix in: a key the pair alone holds, one
-	// from the group secret; the peers given none, and those given one
-	// nobody holds.
-	pairKeys, groupKeys int
-	notPQ, noKey        []string
+	// noKey are the peers given a preshared key nobody holds.
+	noKey []string
 }
 
 // buildPeers renders the live members admit allows into peers: the log says
@@ -413,15 +410,8 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			// juist's own traffic alone, which seals itself.
 			p.Access = ap.ownOnly(n, ep)
 		}
-		switch stage {
-		case pairkey.StageNone:
-			out.notPQ = append(out.notPQ, n.Name)
-		case pairkey.StageUnknown:
+		if stage == pairkey.StageUnknown {
 			out.noKey = append(out.noKey, n.Name)
-		case pairkey.StageGroup:
-			out.groupKeys++
-		case pairkey.StagePair:
-			out.pairKeys++
 		}
 		if n.HasRole(types.RoleIngress) {
 			if out.ingresses == nil {
@@ -433,14 +423,6 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 		out.named = append(out.named, namedPeer{name: n.Name, id: n.Identity, wg: n.WireGuard, peer: p, stage: stage})
 	}
 	return out
-}
-
-// pq is what the peers' handshakes mix in, nil where there are none.
-func (b *peerSet) pq() *ipc.PQ {
-	if len(b.peers) == 0 {
-		return nil
-	}
-	return &ipc.PQ{Pair: b.pairKeys, Group: b.groupKeys, None: b.notPQ, NoKey: b.noKey}
 }
 
 // namedIn reports whether s's log names this device, by its identity or,

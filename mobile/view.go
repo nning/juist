@@ -43,8 +43,8 @@ type member struct {
 	Retiring      string `json:"retiring,omitempty"`
 	RetiringUntil int64  `json:"retiringUntil,omitempty"`
 
-	// Reach is self, direct, relay, down, sought, absent, silent,
-	// unchecked or unconnected; see [reachOf].
+	// Reach is self, direct, relay, outdated, down, sought, absent,
+	// silent, unchecked or unconnected; see [reachOf].
 	Reach string `json:"reach"`
 	// Heard is when it last signed its announcement, and Since when its
 	// tunnel was first found down, Unix seconds.
@@ -210,6 +210,8 @@ func reachOf(r ipc.PeerReach, installed, silent, checked bool) string {
 		return "unchecked"
 	case !installed:
 		return "unconnected"
+	case r.Live && r.Outdated:
+		return "outdated"
 	case r.Live && r.Direct:
 		return "direct"
 	case r.Live:
@@ -250,6 +252,12 @@ func alarmsOf(s *ipc.Status) []alarm {
 		return slices.Contains(s.Seeking, n) || slices.Contains(s.Absent, n)
 	}); len(down) > 0 {
 		add(alarm{Kind: "noTraffic", Severity: "warn", Names: down})
+	}
+	if len(s.SyncNewer) > 0 {
+		add(alarm{Kind: "newer", Severity: "warn", Names: s.SyncNewer})
+	}
+	if len(s.Outdated) > 0 {
+		add(alarm{Kind: "outdated", Severity: "warn", Names: s.Outdated})
 	}
 	if s.Conflicted > 0 {
 		add(alarm{Kind: "conflicted", Severity: "warn", Count: s.Conflicted})

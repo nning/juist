@@ -219,9 +219,9 @@ type Derived struct {
 	// only those keeps one announcement from costing everyone their data plane.
 	Conflicted int `cbor:"18,keyasint,omitempty"`
 
-	// PQ is what the installed peers' handshakes mix in; nil where none
-	// is installed.
-	PQ *PQ `cbor:"74,keyasint,omitempty"`
+	// NoKey names the peers whose handshakes mix in a preshared key
+	// nobody holds, as behind by more epochs than this device keeps.
+	NoKey []string `cbor:"78,keyasint,omitempty"`
 
 	// Alarm is the fork alarm's text while one is raised, and empty
 	// otherwise. While it is set the data plane holds no peers at all.
@@ -278,8 +278,18 @@ type Tunnels struct {
 	Absent []string `cbor:"51,keyasint,omitempty"`
 
 	// SyncFailing names the members whose tunnel is live but whose last log
-	// sync through it did not come up.
+	// sync connected to none of their addresses; SyncNewer those whose
+	// frames this build cannot read, as they run a newer one; SyncBroken
+	// those whose sync failed otherwise.
 	SyncFailing []string `cbor:"46,keyasint,omitempty"`
+	SyncNewer   []string `cbor:"75,keyasint,omitempty"`
+	SyncBroken  []string `cbor:"76,keyasint,omitempty"`
+
+	// Outdated names the members whose tunnel is live, whose log sync
+	// works, and who still announce no epoch minutes into a network past
+	// [types.SchemaPQ]: they run an older build, which gets none of the
+	// user's traffic.
+	Outdated []string `cbor:"77,keyasint,omitempty"`
 
 	// Firewalled names the TUN device when a running firewalld lets log sync
 	// in on it neither by its zone accepting everything nor by the port.
@@ -330,7 +340,7 @@ func (s *Status) ForReader() Status {
 			Silent: s.Silent, Unrevoked: s.Unrevoked, Lost: s.Lost, Refused: s.Refused, SelfName: s.SelfName,
 			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
-			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, PQ: s.PQ,
+			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, NoKey: s.NoKey,
 			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(),
 			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(), HTTPS: s.HTTPS.forReader(),
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
@@ -338,8 +348,8 @@ func (s *Status) ForReader() Status {
 		Tunnels: Tunnels{
 			TunnelsChecked: s.TunnelsChecked, TunnelsLive: s.TunnelsLive, TunnelsDown: s.TunnelsDown,
 			Reach: s.Reach, ReachChecked: s.ReachChecked, HomeRelay: s.HomeRelay,
-			Seeking: s.Seeking, Absent: s.Absent, SyncFailing: s.SyncFailing,
-			Firewalled: s.Firewalled, FirewallUnsure: s.FirewallUnsure,
+			Seeking: s.Seeking, Absent: s.Absent, SyncFailing: s.SyncFailing, SyncNewer: s.SyncNewer,
+			SyncBroken: s.SyncBroken, Outdated: s.Outdated, Firewalled: s.Firewalled, FirewallUnsure: s.FirewallUnsure,
 			RelayedFor: s.RelayedFor, RelayUnreached: s.RelayUnreached, RelayPort: s.RelayPort,
 		},
 		SyncInTunnel: s.SyncInTunnel, Rendezvous: s.Rendezvous,
@@ -366,18 +376,6 @@ func coarseClaims(claims []netip.Prefix) []netip.Prefix {
 	return out
 }
 
-// A PQ counts the installed peers by the preshared key their handshakes mix
-// in, which keeps recorded traffic from a quantum computer: one the pair
-// alone holds, or one from the group secret, which any member could derive.
-// None names the peers given none, NoKey those given one nobody holds, as a
-// peer behind by more epochs than this device keeps.
-type PQ struct {
-	Pair  int      `cbor:"1,keyasint,omitempty"`
-	Group int      `cbor:"2,keyasint,omitempty"`
-	None  []string `cbor:"3,keyasint,omitempty"`
-	NoKey []string `cbor:"4,keyasint,omitempty"`
-}
-
 // A PeerReach is what the last check found for one installed peer.
 type PeerReach struct {
 	Identity types.Identity `cbor:"1,keyasint"`
@@ -398,6 +396,9 @@ type PeerReach struct {
 	// peer last signed its announcement, as its clock has it; Unix seconds.
 	Since int64 `cbor:"6,keyasint,omitempty"`
 	Heard int64 `cbor:"7,keyasint,omitempty"`
+
+	// Outdated says the peer is one of [Tunnels.Outdated].
+	Outdated bool `cbor:"9,keyasint,omitempty"`
 }
 
 // A Device is a member as the log lists it.
@@ -424,6 +425,9 @@ type Device struct {
 	// unset.
 	Published []string `cbor:"10,keyasint,omitempty"`
 	Serving   bool     `cbor:"11,keyasint,omitempty"`
+
+	// Members are those of Published that are for members alone.
+	Members []string `cbor:"12,keyasint,omitempty"`
 }
 
 // Exit is a device's use of exit nodes, and its serving as one.
@@ -483,6 +487,9 @@ type Names struct {
 	Accepted  bool           `cbor:"5,keyasint,omitempty"`
 	Overrides []NameOverride `cbor:"6,keyasint,omitempty"`
 	Public    string         `cbor:"7,keyasint,omitempty"`
+	// ForMembers are the names for members alone this device may open,
+	// which it reaches where Resolved alone.
+	ForMembers []string `cbor:"9,keyasint,omitempty"`
 }
 
 // A NameOverride is a public name pointed at Device, and Not why this device
@@ -543,6 +550,15 @@ type Publish struct {
 	// Passing are the names served by TCP whose bytes juist passes on, as
 	// "NAME to ADDR".
 	Passing []string `cbor:"9,keyasint,omitempty"`
+
+	// Shared are names for members alone not served, as "NAME with OTHER":
+	// their service is OTHER's too, a name or this device's share, whose
+	// bytes juist passes on as they are, so that a client of OTHER could ask
+	// it for NAME by Host.
+	Shared []string `cbor:"10,keyasint,omitempty"`
+	// Withheld are the names whose service is for members alone, which the
+	// log has public, so not served.
+	Withheld []string `cbor:"11,keyasint,omitempty"`
 }
 
 // A Terminator says whether this device's terminator asked lately, where it
@@ -642,6 +658,9 @@ func DevicesOf(state *log.State, now int64) []Device {
 				name = net.JoinHostPort(name, strconv.Itoa(int(p.Public)))
 			}
 			dev.Published = append(dev.Published, name)
+			if p.Members {
+				dev.Members = append(dev.Members, name)
+			}
 		}
 		if n.V4 != nil {
 			dev.V4 = n.V4.String()

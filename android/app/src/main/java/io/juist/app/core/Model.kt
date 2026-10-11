@@ -64,6 +64,7 @@ enum class Reach {
     @SerialName("self") Self,
     @SerialName("direct") Direct,
     @SerialName("relay") Relay,
+    @SerialName("outdated") Outdated,
     @SerialName("down") Down,
     @SerialName("sought") Sought,
     @SerialName("absent") Absent,

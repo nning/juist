@@ -109,8 +109,10 @@ type Service struct {
 	// acceptNames is the owner's word on the network's public names, and
 	// servePublished the operator's on serving what is published here.
 	acceptNames, servePublished bool
-	// serveTo is, by label, where the names whose TLS juist ends go.
-	serveTo map[string]string
+	// serveTo is, by label, where the names whose TLS juist ends go, and
+	// serveMembers the labels whose service is for members alone.
+	serveTo      map[string]string
+	serveMembers map[string]bool
 
 	// httpsOnly, proxy and relayName are the device's settings of 443, as
 	// kept in Home.
@@ -145,6 +147,9 @@ type ServiceOptions struct {
 	// published here and where it goes, by label, given on the command line
 	// of a service member rather than kept.
 	ServeTo map[string]string
+	// ServeMembers are the labels of ServeTo whose service is for members
+	// alone.
+	ServeMembers map[string]bool
 
 	// Join, where set, is an invite this node joins by once started, unless
 	// it is in a network; Say receives how that goes.
@@ -245,10 +250,10 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	s.subnetsOff = err == nil
 	_, err = os.Stat(filepath.Join(home, statedir.NamesFile))
 	s.acceptNames = err == nil
-	s.servePublished, s.serveTo = loadServeTo(home, s.logf)
+	s.servePublished, s.serveTo, s.serveMembers = loadServeTo(home, s.logf)
 	s.httpsOnly, s.proxy, s.relayName = loadSettings(home, s.logf)
 	if s.opts.ServeTo != nil {
-		s.servePublished, s.serveTo = true, maps.Clone(s.opts.ServeTo)
+		s.servePublished, s.serveTo, s.serveMembers = true, maps.Clone(s.opts.ServeTo), maps.Clone(s.opts.ServeMembers)
 	}
 	s.clearEgressUnlessChosen()
 	s.holdExitLocked()
@@ -534,18 +539,26 @@ func (s *Service) setSubnet(req *ipc.Request) error {
 func (s *Service) setPublish(req *ipc.Request) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	on, to := s.servePublished, maps.Clone(s.serveTo)
+	on, to, members := s.servePublished, maps.Clone(s.serveTo), maps.Clone(s.serveMembers)
 	if req.ServePublished != nil {
 		on = *req.ServePublished
 	}
 	for _, label := range req.Unserve {
 		delete(to, label)
+		delete(members, label)
 	}
 	for _, t := range req.ServeTo {
 		if to == nil {
 			to = map[string]string{}
 		}
 		to[t.Label] = t.To
+		delete(members, t.Label)
+		if t.Members {
+			if members == nil {
+				members = map[string]bool{}
+			}
+			members[t.Label] = true
+		}
 	}
 	if len(to) > ipc.MaxServeTo {
 		return fmt.Errorf("this device says where %d names go, the most it may", ipc.MaxServeTo)
@@ -554,7 +567,11 @@ func (s *Service) setPublish(req *ipc.Request) error {
 	if len(to) > 0 {
 		var b strings.Builder
 		for _, label := range slices.Sorted(maps.Keys(to)) {
-			fmt.Fprintf(&b, "%s %s\n", cmp.Or(label, domainItself), to[label])
+			fmt.Fprintf(&b, "%s %s", cmp.Or(label, domainItself), to[label])
+			if members[label] {
+				b.WriteString(" " + forMembers)
+			}
+			b.WriteString("\n")
 		}
 		if err := statedir.WriteFilePrivate(toPath, []byte(b.String())); err != nil {
 			return err
@@ -569,24 +586,29 @@ func (s *Service) setPublish(req *ipc.Request) error {
 		if err := setFlagFile(s.opts.Home, statedir.PublishToFile, false); err != nil {
 			return err
 		}
-		to = nil
+		to, members = nil, nil
 	}
-	s.servePublished, s.serveTo = on, to
+	s.servePublished, s.serveTo, s.serveMembers = on, to, members
 	if s.mesh != nil {
-		s.mesh.SetPublishConsent(on, to)
+		s.mesh.SetPublishConsent(on, to, members)
 		_ = s.mesh.Reconcile() // so that the status answered says what came of it
 	}
 	return nil
 }
 
-// domainItself is the domain's own empty label as the names' file holds it.
-const domainItself = "@"
+// domainItself is the domain's own empty label as the names' file holds it,
+// and forMembers the word after a line's address for a service for members
+// alone, which an older version, reading no such line, serves to nobody.
+const (
+	domainItself = "@"
+	forMembers   = "members"
+)
 
 // loadServeTo reads the operator's word on serving what is published here,
 // and where to: from home's names' file, or, without one, from the lines an
 // older version kept in the word's. A line it cannot read is left out, and
 // said so.
-func loadServeTo(home string, logf func(string, ...any)) (bool, map[string]string) {
+func loadServeTo(home string, logf func(string, ...any)) (bool, map[string]string, map[string]bool) {
 	consent := fileExists(filepath.Join(home, statedir.PublishServeFile))
 	path := filepath.Join(home, statedir.PublishToFile)
 	b, err := os.ReadFile(path)
@@ -595,14 +617,16 @@ func loadServeTo(home string, logf func(string, ...any)) (bool, map[string]strin
 		b, err = os.ReadFile(path)
 	}
 	if err != nil {
-		return consent, nil
+		return consent, nil, nil
 	}
 	var to map[string]string
+	var members map[string]bool
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		if line == "" {
 			continue
 		}
 		label, addr, ok := strings.Cut(line, " ")
+		addr, mine := strings.CutSuffix(addr, " "+forMembers)
 		if label == domainItself {
 			label = ""
 		}
@@ -614,8 +638,14 @@ func loadServeTo(home string, logf func(string, ...any)) (bool, map[string]strin
 			to = map[string]string{}
 		}
 		to[label] = addr
+		if mine {
+			if members == nil {
+				members = map[string]bool{}
+			}
+			members[label] = true
+		}
 	}
-	return consent, to
+	return consent, to, members
 }
 
 // setNames records the owner's word on resolving the network's public names,
@@ -789,7 +819,7 @@ func (s *Service) startMeshLocked() error {
 	o.OnAddrsMoved, o.OnKeysNamed = s.followAddrs, s.adoptRotation
 	o.Exit, o.ServeExit, o.OnExitMoved = s.exit, s.serve, s.followExit
 	o.ServeSubnets, o.SubnetsOff = s.serveSubnets, s.subnetsOff
-	o.AcceptNames, o.ServePublished, o.ServeTo = s.acceptNames, s.servePublished, s.serveTo
+	o.AcceptNames, o.ServePublished, o.ServeTo, o.ServeMembers = s.acceptNames, s.servePublished, s.serveTo, s.serveMembers
 	o.HTTPSOnly, o.Proxy, o.RelayName = s.httpsOnly, s.proxy, s.relayName
 	o.RelayCertsPath = filepath.Join(s.opts.Home, statedir.RelayCertsDir)
 	if !s.opts.InProcess {
@@ -1084,7 +1114,7 @@ func (s *Service) Status() ipc.Status {
 			p.NotServing = nothingPublished
 		}
 		for _, label := range slices.Sorted(maps.Keys(s.serveTo)) {
-			p.To = append(p.To, ipc.ServeTo{Label: label, To: s.serveTo[label]})
+			p.To = append(p.To, ipc.ServeTo{Label: label, To: s.serveTo[label], Members: s.serveMembers[label]})
 		}
 		st.Publish = &p
 	}
@@ -1154,7 +1184,7 @@ func (s *Service) reset(force bool) error {
 	s.auth, s.meshErr, s.hostConflict = nil, nil, nil
 	// The choice and the consent were this network's, and go with it.
 	s.exit, s.serve = ExitChoice{}, false
-	s.serveSubnets, s.subnetsOff, s.acceptNames, s.servePublished, s.serveTo = false, false, false, false, nil
+	s.serveSubnets, s.subnetsOff, s.acceptNames, s.servePublished, s.serveTo, s.serveMembers = false, false, false, false, nil, nil
 	s.httpsOnly, s.proxy, s.relayName = false, "", ""
 	s.clearEgress()
 

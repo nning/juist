@@ -31,7 +31,7 @@ func accessPolicy(t *testing.T, fb, lx *vm, lx4 string) {
 juist policy set --yes /tmp/open.conf; juist remove east --yes; juist remove west --yes; juist revoke lx exit --yes`,
 			3*time.Minute)
 		lx.try(`pkill -f '[j]uistd --home /tmp/east'; pkill -f '[j]uistd --home /tmp/west'
-pkill -f '[t]cpdump -i ea0'; pkill -f '[p]robe serve lx-alt'; pkill -f '[p]robe serve lx-other'
+pkill -f '[t]cpdump -i ea0'; pkill -f '[p]robe serve lx-alt'; pkill -f '[p]robe serve lx-other'; pkill -f '[p]robe serve lx-secret'
 ip netns del east; ip netns del west; rm -rf /etc/netns/east /etc/netns/west
 iptables -t nat -D POSTROUTING -s 10.86.0.0/24 -j MASQUERADE; iptables -t nat -D POSTROUTING -s 10.87.0.0/24 -j MASQUERADE
 iptables -D FORWARD -i ea0 -j ACCEPT; iptables -D FORWARD -o ea0 -j ACCEPT
@@ -72,11 +72,14 @@ sleep 2`)
 	fb.run(t, `cat > /tmp/policy.conf <<'EOF'
 pass from { fb, lx } to any
 pass from east to lx proto tcp port 8080
+pass from east to name secret
 pass from west to { lx, internet via lx }
 test block from east to west
 test block from west to east
 test pass from east to lx proto tcp port 8080
 test block from east to internet via lx
+test pass from east to name secret
+test block from west to name secret
 EOF
 juist grant lx exit && juist policy set --yes /tmp/policy.conf`)
 	lx.eventually(t, "serving as exit node", 3*time.Minute, "juist exit serve", func(string) bool { return true })
@@ -96,6 +99,18 @@ juist grant lx exit && juist policy set --yes /tmp/policy.conf`)
 		t.Errorf("east opened lx's port 8081, which the policy does not pass:\n%s", out)
 	}
 	lx.eventually(t, "west reaching lx on any port", 2*time.Minute, west.in("/tmp/probe get "+lx4+":8081"), has("lx-other from"))
+
+	// M16 (2): east opens lx's name for members alone, which a rule names
+	// for it; west, which may open any port of lx's, is refused it at lx.
+	lx.eventually(t, "east opening the name for members", 2*time.Minute,
+		east.in("/tmp/probe hello "+lx4+":443 secret.pub.example.org /tmp/root.pem"), has("lx-secret from"))
+	// (3): its certificate, ordered on east's hello, issued through the ingress.
+	if out := lx.run(t, "openssl x509 -noout -issuer -in "+membersCert); !has("Pebble")(out) {
+		t.Errorf("the name for members has no certificate from Pebble:\n%s", out)
+	}
+	if out, err := lx.try(west.in("timeout 10 /tmp/probe hello "+lx4+":443 secret.pub.example.org /tmp/root.pem"), time.Minute); err == nil {
+		t.Errorf("west opened the name for members no rule names for it:\n%s", out)
+	}
 
 	// lx carries west's internet traffic, which the policy passes it, and
 	// not east's.

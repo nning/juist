@@ -651,9 +651,9 @@ func TestJuistdSaysWhenTheTerminatorIsNeeded(t *testing.T) {
 	needed(true)
 	f.d.EndShare(sh)
 	needed(false)
-	f.d.SetPublishConsent(true, map[string]string{"immich": "127.0.0.1:2283"})
+	f.d.SetPublishConsent(true, map[string]string{"immich": "127.0.0.1:2283"}, nil)
 	needed(true)
-	f.d.SetPublishConsent(true, nil)
+	f.d.SetPublishConsent(true, nil, nil)
 	needed(false)
 	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)

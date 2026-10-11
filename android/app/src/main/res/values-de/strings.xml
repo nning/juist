@@ -154,6 +154,7 @@
     <string name="reach_self">Dieses Telefon</string>
     <string name="reach_direct">Direkt</string>
     <string name="reach_relay">Über ein Relay</string>
+    <string name="reach_outdated">Veraltet</string>
     <string name="reach_down">Keine Antwort</string>
     <string name="reach_sought">Wird gesucht</string>
     <string name="reach_absent">Offline</string>
@@ -164,6 +165,7 @@
     <string name="reach_unknown">Unbekannt</string>
     <string name="reach_off">Aus</string>
     <string name="reach_relay_about">Der Verkehr läuft über ein Relay, eines deiner Geräte, und bleibt durchgehend verschlüsselt.</string>
+    <string name="reach_outdated_about">Dort läuft ein älteres juist. Bis es aktualisiert ist, ist das Gerät nicht erreichbar.</string>
     <string name="reach_down_about">Das Gerät ist offline, oder eine Firewall blockiert den Tunnel.</string>
     <string name="reach_sought_about">Das Gerät wurde vielleicht neu gestartet oder hat das Netz gewechselt. juist sucht es.</string>
     <string name="reach_absent_about">Wahrscheinlich offline.</string>
@@ -190,6 +192,10 @@
     <string name="alarm_data_plane">Die Tunnel haben die aktuelle Geräteliste abgelehnt</string>
     <string name="alarm_no_traffic">Kein Tunnelverkehr von %1$s</string>
     <string name="alarm_no_traffic_hint">Vielleicht sind beide hinter NAT, ohne Relay dazwischen.</string>
+    <string name="alarm_newer">Auf %1$s läuft ein neueres juist als diese App</string>
+    <string name="alarm_newer_hint">Bis du juist aktualisierst, kann dieses Telefon dem Netz nicht folgen.</string>
+    <string name="alarm_outdated">Auf %1$s läuft ein älteres juist</string>
+    <string name="alarm_outdated_hint">Bis juist dort aktualisiert ist, ist es nicht erreichbar.</string>
     <plurals name="alarm_conflicted">
         <item quantity="one">%d Gerät meldet den Schlüssel eines anderen und wird ignoriert</item>
         <item quantity="other">%d Geräte melden den Schlüssel eines anderen und werden ignoriert</item>

@@ -262,6 +262,9 @@ func (next *State) setPolicy(a *types.AUM, _ applyMode) error {
 	if next.policy != nil && bytes.Equal(next.policy.Encode(), a.Policy.Encode()) {
 		return inEffect(errors.New("log: the network has this policy already"))
 	}
+	if a.Policy.NamesNames() && next.schema < types.SchemaMembers {
+		return fmt.Errorf("log: a policy naming published names needs %v; the network is at %v", types.SchemaMembers, next.schema)
+	}
 	if err := a.Policy.ValidateMembers(next.Nodes()); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}

@@ -155,7 +155,18 @@ func (f formatter) refs(r types.PolicyRefs) []string {
 	for _, p := range r.Prefixes {
 		out = append(out, prefix(p))
 	}
+	for _, l := range r.Names {
+		out = append(out, nameRef(l))
+	}
 	return out
+}
+
+// nameRef is a published name as the policy's text names it.
+func nameRef(label string) string {
+	if label == "" {
+		return "name @"
+	}
+	return "name " + label
 }
 
 func (f formatter) list(items []string) string { return list(items) }

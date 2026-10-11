@@ -32,12 +32,17 @@ const IngressPorts = "/run/juist/ingress-ports"
 //
 // Relays are the public names this device's relay serves on 443, which the
 // ingress, holding 443, hands on by TLS alone, at the relay's Socket.
+//
+// Members are names for members alone, a list of their own, so that a helper
+// too old to know it serves none of them: an ingress passes them the CA's
+// validation alone, and a terminator takes each from its From alone.
 type Published struct {
 	Names     []PublishedTarget `cbor:"1,keyasint,omitempty"`
 	Ingresses []netip.Addr      `cbor:"2,keyasint,omitempty"`
 	Idle      bool              `cbor:"3,keyasint,omitempty"`
 	TCP       []PublishedTarget `cbor:"4,keyasint,omitempty"`
 	Relays    []PublishedTarget `cbor:"5,keyasint,omitempty"`
+	Members   []PublishedTarget `cbor:"6,keyasint,omitempty"`
 }
 
 // A PublishedTarget is one published name and where it goes: the target's
@@ -57,6 +62,9 @@ type PublishedTarget struct {
 	Public uint16       `cbor:"6,keyasint,omitempty"`
 	Socket string       `cbor:"7,keyasint,omitempty"`
 	Paths  []PathTarget `cbor:"8,keyasint,omitempty"`
+	// From, answering [CmdServing] for a name for members alone, are the
+	// overlay addresses of the members it is for.
+	From []netip.Addr `cbor:"9,keyasint,omitempty"`
 }
 
 // A PathTarget is where a name's requests under Prefix, "/SEGMENT/", go.

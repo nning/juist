@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,6 +96,7 @@ func (c *connProxy) make() {
 		c.trs = append(c.trs, up)
 		rt = upgrades{tr, up}
 	}
+	rt = noH2C{rt}
 	c.service.keep(c.trs...)
 	c.h = &httputil.ReverseProxy{
 		// As TLS's bytes reached the service before: its own Host, and no
@@ -231,6 +233,21 @@ func (u upgrades) RoundTrip(r *http.Request) (*http.Response, error) {
 		return u.up.RoundTrip(r)
 	}
 	return u.rt.RoundTrip(r)
+}
+
+// noH2C refuses a request to upgrade to h2c: the service would take the
+// connection's HTTP/2 as it is, any Host in it.
+type noH2C struct{ rt http.RoundTripper }
+
+func (n noH2C) RoundTrip(r *http.Request) (*http.Response, error) {
+	for _, v := range r.Header.Values("Upgrade") {
+		for p := range strings.SplitSeq(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(p), "h2c") {
+				return nil, errors.New("terminator: no upgrade to h2c")
+			}
+		}
+	}
+	return n.rt.RoundTrip(r)
 }
 
 // withAltSvc adds the Alt-Svc header to h's answers.

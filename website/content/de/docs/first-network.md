@@ -5,7 +5,7 @@ description: Ein Netz auf einem Gerät anlegen, ein zweites einladen und prüfen
 lead: Zwei Geräte, ein Netz, ein paar Minuten. Du legst das Netz auf dem einen Gerät an, lädst das andere ein, vergleichst vier Wörter und schickst einen Ping.
 ---
 
-## Worum es geht
+## Was du einrichtest
 
 Angenommen, du hast zu Hause einen Laptop und ein NAS, und auf beiden ist
 juist [installiert]({{< relref "docs/install" >}}). Der Laptop wird das erste
@@ -19,7 +19,7 @@ signiert. Mehr dazu unter [So funktioniert juist]({{< relref "docs/how-it-works"
 ## Das Netz anlegen und ein Gerät einladen
 
 {{< step on="laptop" as="das erste Gerät" >}}
-Leg das Netz als du selbst an, ohne sudo. Dein Admin-Schlüssel gehört in
+Leg das Netz mit deinem eigenen Benutzer an, ohne sudo. Dein Admin-Schlüssel gehört in
 deinen eigenen Keystore, also ins Verzeichnis `~/.config/juist` in deinem
 Home-Verzeichnis.
 
@@ -55,9 +55,9 @@ invite to "home", expires in 1h; on the new device:
   juist join 42-drumbeat-tolerance-glucose  # same LAN
 ```
 
-Du bekommst einen Link für ein Gerät, das woanders steht, darüber den Link
-als QR-Code, der hier fehlt, und zuletzt einen Code für ein Gerät im selben
-LAN. Danach wartet die Einladung.
+Du bekommst einen Link, der für ein Gerät an jedem Ort funktioniert, darüber
+denselben Link als QR-Code (hier weggelassen). Zuletzt folgt ein Code für ein
+Gerät im selben LAN. Danach wartet die Einladung.
 {{< /step >}}
 {{< step on="nas" as="das neue Gerät" >}}
 Tritt mit dem Code bei, oder mit dem Link, falls das NAS woanders steht:
@@ -70,7 +70,8 @@ tell the inviting admin these words:
   atlas-amulet-banjo-asteroid
 ```
 
-Mit sudo wird der Benutzer, der sudo aufgerufen hat, Operator des NAS.
+Weil der Befehl mit sudo läuft, wird der Benutzer, der sudo aufgerufen hat,
+Operator des NAS.
 {{< /step >}}
 {{< step on="laptop" >}}
 Auch die Einladung zeigt nun vier Wörter. Antworte nur mit `y`, wenn es
@@ -130,16 +131,16 @@ Einzelheiten stehen unter
 [Geräte einladen]({{< relref "docs/invites" >}}).
 
 Hinter NAT musst du keine Firewall-Ports öffnen. Ein Gerät mit öffentlicher
-Adresse, etwa ein VPS, braucht 41643/udp.
+Adresse, etwa ein VPS, braucht den offenen Port 41643/udp.
 
-## Gut zu wissen
+## Hinweise
 
 - `juist create home` nennt das Netz `home`. Das Gerät bekommt den
   Rechnernamen, es sei denn, du gibst `--device` an.
 - Der IPv4-Bereich ist ein zufälliges `/22` aus `198.18.0.0/15`, etwa
   `198.18.36.0/22`. Mit `--ipv4` legst du ihn selbst fest.
 - Der Code funktioniert nur im selben LAN, und schon ein falscher Versuch
-  macht ihn ungültig. Der Link bleibt dann trotzdem gültig.
+  macht ihn ungültig. Der Link funktioniert dann weiterhin.
 - Eine Einladung gilt eine Stunde und für genau ein Gerät. Für das nächste
   rufst du `juist invite` erneut auf.
 - Die Zeile `Break-glass` erscheint nur dieses eine Mal und wird nirgends
@@ -147,14 +148,15 @@ Adresse, etwa ein VPS, braucht 41643/udp.
   von den Admin-Schlüsseln: Mit ihr beendest du das Netz, wenn nicht mehr
   genug Admin-Schlüssel übrig sind, um es zu ändern
   ([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
-- Das Netz hat noch keinen **Voucher**, also kein Gerät, das stündlich
-  bestätigt, dass der Stand des Netzes aktuell ist. Das begrenzt, wie lange
-  ein abgeschnittenes Gerät noch mit einem entfernten sprechen kann. Gib die
+- Das Netz hat noch keinen **Voucher**. Ein Voucher ist ein Gerät, das
+  stündlich bestätigt, dass der Stand des Netzes aktuell ist. Das begrenzt,
+  wie lange ein von den anderen abgeschnittenes Gerät noch mit einem
+  entfernten sprechen kann. Gib die
   Rolle nur Geräten, die ständig laufen (`juist grant GERÄT voucher`);
   `juist create --voucher` macht schon das erste Gerät dazu. Mehr dazu unter
   [Frische]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
 
-## Wenn etwas nicht klappt
+## Fehlersuche
 
 | Was du siehst | Was du tun kannst |
 |---|---|

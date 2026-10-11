@@ -5,7 +5,7 @@ description: Create a network on one device, invite a second one, and check that
 lead: Two devices, one network, a few minutes. You create the network on one device, invite the other, compare four words, and ping it.
 ---
 
-## What it is
+## What you will set up
 
 Say you have a laptop and a NAS at home, both with juist
 [installed]({{< relref "docs/install" >}}). You make the laptop the first
@@ -19,8 +19,8 @@ and each of them is a **member**. Whoever creates the network is its first
 ## Creating the network and inviting a device
 
 {{< step on="laptop" as="the first device" >}}
-Create the network, as yourself and without sudo: your admin key belongs in
-your own keystore, the directory `~/.config/juist` in your home.
+Create the network as your own user, without sudo. Your admin key belongs in
+your own keystore, the directory `~/.config/juist` in your home directory.
 
 ```console
 $ juist create home
@@ -53,8 +53,9 @@ invite to "home", expires in 1h; on the new device:
   juist join 42-drumbeat-tolerance-glucose  # same LAN
 ```
 
-It prints a link, for a device anywhere, with a QR code of the link above it,
-left out here, and last a code, for a device on the same LAN. Then it waits.
+It prints a link that works for a device anywhere, with the same link as a QR
+code above it (left out here). Last comes a code for a device on the same LAN.
+Then it waits.
 {{< /step >}}
 {{< step on="nas" as="the new device" >}}
 Join with the code, or with the link if the NAS is somewhere else:
@@ -67,7 +68,8 @@ tell the inviting admin these words:
   atlas-amulet-banjo-asteroid
 ```
 
-Under sudo, the user who ran sudo becomes the NAS's operator.
+Because the command runs under sudo, the user who ran sudo becomes the NAS's
+operator.
 {{< /step >}}
 {{< step on="laptop" >}}
 The invite shows four words too. Answer `y` only if they are the same as on
@@ -111,7 +113,7 @@ nas                   198.18.36.2  direct   -
 $ ping 198.18.36.2
 ```
 
-`juist devices` lists the devices. Where systemd-resolved runs,
+`juist devices` lists the devices. If systemd-resolved is running,
 `ping nas.home.juist` works too.
 {{< /step >}}
 
@@ -119,36 +121,36 @@ $ ping 198.18.36.2
 
 The link also works when the two devices sit behind NAT in different places,
 for example the laptop at home and the NAS at a friend's. They meet
-through the public BitTorrent DHT, which takes about a minute. It fails only
-where both NATs are symmetric. Then join from an internet connection that can
-reach the inviting device, or give the network a [relay]({{< relref "docs/relays" >}})
+through the public BitTorrent DHT, which takes about a minute. This fails only
+if both NATs are symmetric. In that case, join from an internet connection that
+can reach the inviting device, or give the network a [relay]({{< relref "docs/relays" >}})
 first. [Inviting devices]({{< relref "docs/invites" >}}) has the details.
 
-Behind NAT, nothing needs opening in a firewall. A device with a public
-address, such as a VPS, needs 41643/udp open.
+Behind NAT, you do not need to open anything in a firewall. A device with a
+public address, such as a VPS, needs port 41643/udp open.
 
-## Good to know
+## Notes
 
-- `juist create home` names the network `home`; the device is named after its
-  host unless you give `--device`.
+- `juist create home` names the network `home`. The device is named after its
+  host unless you pass `--device`.
 - The IPv4 range is a random `/22` in `198.18.0.0/15`, such as
-  `198.18.36.0/22`. `--ipv4` chooses one.
-- The code works only on the same LAN, and one wrong guess voids it. The link
-  still works then.
+  `198.18.36.0/22`. `--ipv4` sets a specific one.
+- The code works only on the same LAN, and a single wrong guess invalidates
+  it. The link keeps working.
 - An invite admits one device and lasts an hour. Run `juist invite` again for
   the next one.
 - The `Break-glass` line is shown only this once and kept nowhere. Put it in
-  a password manager or on paper, apart from the admin keys: it is what ends
-  the network once too few admin keys are left to change it
+  a password manager or on paper, apart from the admin keys. With it, you can
+  end the network if too few admin keys are left to change it
   ([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
-- The network has no **voucher** yet: a device that confirms every hour that
-  the network's state is current, which limits how long a cut-off device can
-  keep talking to one you removed. Give the role only to devices that are
+- The network has no **voucher** yet. A voucher is a device that confirms
+  every hour that the network's state is current. This limits how long a
+  device that is cut off from the others can keep talking to one you removed. Give the role only to devices that are
   always on (`juist grant DEVICE voucher`); `juist create --voucher` makes the
   first device one. See
   [freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
 
-## If something goes wrong
+## Troubleshooting
 
 | What you see | What to do |
 |---|---|
@@ -157,7 +159,7 @@ address, such as a VPS, needs 41643/udp open.
 | `read-only; to manage this device …` | `sudo juist set --operator=$USER`, once |
 | `warning: code voided: wrong guess from …` | Join with the link, which still works. If that was not your device, someone else knows the invite. |
 | `juist: words not confirmed; nothing signed` | If the words differed, the device asking is not the one you invited. Start a new invite. |
-| `no answer from a device` in `juist status` | It is offline, or its 41643/udp is closed. |
+| `no answer from a device` in `juist status` | It is offline, or its port 41643/udp is closed. |
 | `no tunnel traffic from a device` | Open 41643/udp on a device with a public address, or grant one `relay`. |
 
 More cases are on the [Troubleshooting]({{< relref "docs/troubleshooting" >}})

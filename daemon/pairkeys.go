@@ -331,8 +331,8 @@ func (d *Daemon) prunePSKs(installed []namedPeer) {
 }
 
 // errNotPQ is why a peer whose tunnel mixes in no preshared key both hold
-// carries nothing routed.
-const errNotPQ = "tunnel is not post-quantum"
+// carries nothing routed: it announces none.
+const errNotPQ = "runs an older juist, or has yet to catch up"
 
 // notPQ reports whether state is at [types.SchemaPQ] and a peer's tunnel,
 // at stage, mixes in no preshared key both hold: nothing is routed through

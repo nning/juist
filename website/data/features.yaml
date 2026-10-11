@@ -4,58 +4,62 @@
   en: {title: Mesh and NAT traversal, text: "WireGuard tunnels between every pair of devices, direct where NAT allows."}
   de: {title: Mesh und NAT-Traversal, text: "WireGuard-Tunnel zwischen allen Geräten, direkt, wo das NAT es zulässt."}
 - doc: docs/security
-  en: {title: Post-quantum tunnels, text: "Every handshake mixes in a key a quantum computer cannot recover, one each two devices hold alone."}
-  de: {title: Quantensichere Tunnel, text: "Jeder Handshake mischt einen Schlüssel ein, den ein Quantencomputer nicht herausfinden kann, einen, den je zwei Geräte allein haben."}
+  en: {title: Quantum-safe tunnels, text: "Every handshake mixes in a key a quantum computer cannot recover, and each pair of devices has its own."}
+  de: {title: Quantensichere Tunnel, text: "Jeder Handshake mischt einen Schlüssel ein, den ein Quantencomputer nicht herausfinden kann, und jedes Gerätepaar hat seinen eigenen."}
 - doc: docs/invites
   en: {title: Invites, text: "A code for the LAN or a link for anywhere. Both devices show four words to compare."}
   de: {title: Einladungen, text: "Ein Code fürs LAN oder ein Link für überall. Beide Geräte zeigen vier Wörter, die du vergleichst."}
 - doc: docs/android
-  en: {title: Android, text: "A phone joins by the invite's QR code or code, reaches the members at their addresses, and shows how each is reached."}
-  de: {title: Android, text: "Ein Telefon tritt per QR-Code oder Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie jedes erreicht wird."}
+  en: {title: Android, text: "A phone joins with the invite's QR code or code, reaches the members at their addresses, and shows how each one is reached."}
+  de: {title: Android, text: "Ein Telefon tritt mit dem QR-Code oder dem Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie es jedes erreicht."}
   note: {en: "On Android 12 or newer, as a member without names, roles or subnets.", de: "Unter Android 12 oder neuer, als Mitglied ohne Namen, Rollen und Subnetze."}
 - doc: docs/admins
-  en: {title: Admins and quorum, text: "Every change takes k of n admins. One that needs more is carried to their devices."}
+  en: {title: Admins and quorum, text: "Every change needs k of n admins. If it needs more approvals, it is passed on to the other admins' devices."}
   de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}
 - doc: docs/access
-  en: {title: Access policy, text: "Which device may open what on which, and use which exit node or subnet. The rest is refused."}
+  en: {title: Access policy, text: "Which device may open what on which other device, and which exit node or subnet it may use. Everything else is refused."}
   de: {title: Zugriffsregeln, text: "Welches Gerät was auf welchem öffnen und welchen Exit-Node oder welches Subnetz es nutzen darf. Alles andere wird abgewiesen."}
 - doc: docs/networks
-  en: {title: Several networks, text: "One device in several networks, each with an admin key of its own."}
+  en: {title: Several networks, text: "One device in several networks, each with its own admin key."}
   de: {title: Mehrere Netze, text: "Ein Gerät in mehreren Netzen, jedes mit eigenem Admin-Schlüssel."}
 - doc: docs/exit-nodes
-  en: {title: Exit nodes, text: "A device's internet traffic and DNS through another member."}
+  en: {title: Exit nodes, text: "A device's internet traffic and DNS, sent through another member."}
   de: {title: Exit-Nodes, text: "Internetverkehr und DNS eines Geräts über ein anderes Mitglied."}
 - doc: docs/subnets
-  en: {title: Subnet routers, text: "The LAN behind one member, reached from the others."}
+  en: {title: Subnet routers, text: "The LAN behind one member, reachable from the others."}
   de: {title: Subnet-Router, text: "Das LAN hinter einem Mitglied, erreichbar für die anderen."}
 - doc: docs/names
   en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
   de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}
   note: {en: "Only on Linux with systemd-resolved.", de: "Nur unter Linux mit systemd-resolved."}
 - doc: docs/publishing
-  en: {title: Publishing services, text: "A member's service reached from the internet by name, through an ingress."}
+  en: {title: Publishing services, text: "A member's service, reachable from the internet by name through an ingress."}
   de: {title: Dienste veröffentlichen, text: "Dienste auf Mitgliedern, über eine Ingress unter einem Namen aus dem Internet erreichbar."}
 - doc: docs/publishing
-  en: {title: HTTP/3, text: "Published names over QUIC, through the ingress, for browsers that find it or are told of it by DNS."}
-  de: {title: HTTP/3, text: "Veröffentlichte Namen über QUIC, durch die Ingress, für Browser, die es finden oder per DNS davon erfahren."}
+  en: {title: HTTP/3, text: "Published names over QUIC through the ingress, for browsers that discover it themselves or learn of it from DNS."}
+  de: {title: HTTP/3, text: "Veröffentlichte Namen über QUIC durch die Ingress, für Browser, die es selbst entdecken oder per DNS davon erfahren."}
 - doc: docs/publishing
-  en: {title: TCP services, text: "A game server or any other TCP service on a port of its own on every ingress, passed on unread."}
-  de: {title: TCP-Dienste, text: "Ein Spieleserver oder jeder andere TCP-Dienst auf einem eigenen Port jeder Ingress, ungelesen weitergereicht."}
+  en: {title: Members-only names, text: "A published name with a certificate from the CA that the internet cannot reach. Only the members the access policy allows can open it."}
+  de: {title: Namen nur für Mitglieder, text: "Ein veröffentlichter Name mit einem Zertifikat der CA, den das Internet nicht erreicht. Öffnen können ihn nur die Mitglieder, denen die Zugriffsregeln es erlauben."}
+  note: {en: "Reached from Linux with systemd-resolved.", de: "Erreichbar von Linux mit systemd-resolved."}
 - doc: docs/publishing
-  en: {title: Sharing, text: "A file, a directory or a web server, from the internet at once, under a device's own name. A directory downloads as a ZIP."}
+  en: {title: TCP services, text: "A game server or any other TCP service on its own port on every ingress, passed on without being read."}
+  de: {title: TCP-Dienste, text: "Ein Spieleserver oder jeder andere TCP-Dienst auf einem eigenen Port jeder Ingress, weitergereicht, ohne mitzulesen."}
+- doc: docs/publishing
+  en: {title: Sharing, text: "A file, a directory or a web server, on the internet right away under the device's own name. A directory downloads as a ZIP."}
   de: {title: Teilen, text: "Eine Datei, ein Verzeichnis oder einen Webserver sofort im Internet teilen, unter dem eigenen Namen des Geräts. Ein Verzeichnis lädt sich auch als ZIP."}
 - doc: docs/publishing
-  en: {title: Status page, text: "Devices, their reach, published names and the log's changes on one page, for members, and as much for anyone else as you choose."}
+  en: {title: Status page, text: "Devices, how they are reached, published names and the log's changes on one page for members, and as much of it for everyone else as you choose."}
   de: {title: Statusseite, text: "Geräte, ihre Erreichbarkeit, veröffentlichte Namen und die Änderungen im Log auf einer Seite, für Mitglieder, und so viel davon für alle anderen, wie du willst."}
 - doc: docs/relays
-  en: {title: Relays, text: "Where NAT wins, traffic goes through a member with a public address."}
+  en: {title: Relays, text: "Where NAT prevents a direct connection, traffic goes through a member with a public address."}
   de: {title: Relays, text: "Wo das NAT keine direkte Verbindung zulässt, läuft der Verkehr über ein Mitglied mit öffentlicher Adresse."}
 - doc: docs/https-only
-  en: {title: HTTPS alone, text: "From a network that lets nothing out but HTTPS, through relays on 443 under public names, and a company's proxy."}
-  de: {title: Nur HTTPS, text: "Aus einem Netz, das nichts als HTTPS hinauslässt, über Relays auf 443 unter öffentlichen Namen und den Proxy einer Firma."}
+  en: {title: HTTPS only, text: "From a network that lets only HTTPS out, through relays on port 443 under public names, and through a company's proxy."}
+  de: {title: Nur HTTPS, text: "Aus einem Netz, das nur HTTPS hinauslässt, über Relays auf Port 443 unter öffentlichen Namen und über den Proxy einer Firma."}
 - doc: docs/network-changes
-  en: {title: Renaming and renumbering, text: "The network or a device gets another name, the devices other IPv4 addresses. Nothing is set up again."}
-  de: {title: Umbenennen und umnummerieren, text: "Das Netz oder ein Gerät bekommt einen anderen Namen, die Geräte andere IPv4-Adressen. Nichts wird neu eingerichtet."}
+  en: {title: Renaming and renumbering, text: "Give the network or a device a new name, or the devices new IPv4 addresses, without setting anything up again."}
+  de: {title: Umbenennen und umnummerieren, text: "Das Netz oder ein Gerät bekommt einen neuen Namen, die Geräte neue IPv4-Adressen, ohne dass etwas neu eingerichtet wird."}
 - doc: docs/keys
   en: {title: Key backups, text: "An admin key as one line, for a password manager."}
   de: {title: Schlüssel sichern, text: "Ein Admin-Schlüssel als eine Zeile, für den Passwortmanager."}
@@ -63,5 +67,5 @@
   en: {title: Break-glass, text: "A secret shown once at creation and kept offline ends the network for good, with no admin needed."}
   de: {title: Break-glass, text: "Ein Geheimnis, beim Anlegen einmal angezeigt und offline verwahrt, beendet das Netz endgültig, ganz ohne Admin."}
 - doc: docs/remove
-  en: {title: Freshness and removal, text: "A removed device is told. With vouchers, one cut off for 48 h keeps tunnels only to vouchers."}
+  en: {title: Freshness and removal, text: "A removed device learns that it was removed. With vouchers, a device cut off for 48 hours keeps tunnels only to vouchers."}
   de: {title: Frische und Entfernen, text: "Ein entferntes Gerät erfährt davon. Mit Vouchern behält ein Gerät, das 48 Stunden abgeschnitten ist, nur Tunnel zu Vouchern."}

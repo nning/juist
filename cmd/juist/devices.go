@@ -14,9 +14,10 @@ import (
 
 func cmdDevices(a *app, args []string) error {
 	s := spec{name: "juist devices", about: `
-List the network's devices and how juistd last reached each: directly, or
-through a relay. juistd checks every 30s. On a device in several networks,
-each network's, unless NETWORK names one.`}
+List the network's devices and how juistd last reached each: directly,
+through a relay, or not; outdated where one runs an older juist and is
+unreachable until updated. juistd checks every 30s. On a device in several
+networks, each network's, unless NETWORK names one.`}
 	fs := newFlags(s.name)
 	long := fs.Bool("keys", false, "show identity keys")
 	v6 := fs.Bool("ipv6", false, "show IPv6 addresses")
@@ -250,6 +251,8 @@ func (a *app) reachWord(r ipc.PeerReach) string {
 	switch {
 	case !r.Live:
 		return a.paint("33", "no answer")
+	case r.Outdated:
+		return a.paint("33", "outdated")
 	case r.Direct:
 		return "direct"
 	default:

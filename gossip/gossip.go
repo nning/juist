@@ -33,6 +33,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -245,12 +246,10 @@ type Node struct {
 	// SetRecipient.
 	recipient atomic.Pointer[secrets.PrivateKeys]
 
-	// failing holds the peers whose last outbound round reached none of
-	// their addresses, and refused those of them whose catch-up refused this
-	// node, both under mu. Entered only for peers Sync was asked to reach,
+	// failing holds, under mu, why the last outbound round to a peer
+	// completed no session. Entered only for peers Sync was asked to reach,
 	// which the caller draws from the membership.
-	failing map[types.Identity]bool
-	refused map[types.Identity]bool
+	failing map[types.Identity]Failure
 
 	// silent counts the inbound connections that have not yet opened a frame
 	// under the group secret.
@@ -278,8 +277,7 @@ func New(opts Options) (*Node, error) {
 		slots:     make(chan struct{}, maxInboundSessions),
 		closed:    make(chan struct{}),
 		peerEpoch: map[types.Identity]uint64{},
-		failing:   map[types.Identity]bool{},
-		refused:   map[types.Identity]bool{},
+		failing:   map[types.Identity]Failure{},
 		silent:    admit.New[netip.Addr](admit.Limits{PerSource: maxUnauthPerSource, OnSource: admit.EvictOldest}),
 	}
 	n.dialTimeout = min(DialTimeout, n.timeout/4)
@@ -486,8 +484,12 @@ func (n *Node) catchUpWith(ctx context.Context, addr netip.AddrPort, peerID type
 		return unanswered
 	}
 	_, err := n.syncOnce(ctx, addr, sessionOpts{initiator: true, peerID: peerID, catchUp: true})
-	if err != nil && unanswered != nil && errors.Is(err, errNoCatchUp) {
+	switch {
+	case err != nil && unanswered != nil && errors.Is(err, errNoCatchUp):
 		return fmt.Errorf("%w, nor a catch-up", unanswered)
+	case unanswered != nil && errors.As(err, new(dialError)):
+		// The session before it connected.
+		return fmt.Errorf("%w; the catch-up: %v", unanswered, err)
 	}
 	return err
 }
@@ -500,12 +502,18 @@ var errNoEpochHeld = errors.New("this node holds no epoch secret, so it cannot g
 // errNoHelloBack is a peer that closed after this node's hello, unanswered.
 var errNoHelloBack = errors.New("the peer did not answer the hello")
 
+// A dialError is a session that never connected.
+type dialError struct{ err error }
+
+func (e dialError) Error() string { return e.err.Error() }
+func (e dialError) Unwrap() error { return e.err }
+
 func (n *Node) syncOnce(ctx context.Context, addr netip.AddrPort, so sessionOpts) (uint64, error) {
 	dctx, cancel := context.WithTimeout(ctx, n.dialTimeout)
 	c, err := n.opts.Dial(dctx, addr)
 	cancel()
 	if err != nil {
-		return 0, fmt.Errorf("gossip: dialing %v: %w", addr, err)
+		return 0, fmt.Errorf("gossip: dialing %v: %w", addr, dialError{err})
 	}
 	defer c.Close()
 	// Unblock the session's blocking reads and writes when the context ends;
@@ -578,22 +586,33 @@ func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 				// than failing.
 				addrs = append(addrs, n.opts.OverlayAddrs(id)...)
 			}
-			reached, refused := false, false
-			defer func() { n.noteRound(id, reached, refused) }()
+			why := FailUnconnected
+			defer func() { n.noteRound(id, why) }()
 			for _, addr := range addrs {
 				if pctx.Err() != nil {
 					return
 				}
 				if err := n.SyncWith(pctx, addr, id); err != nil {
 					n.logf("%v", err)
-					if errors.Is(err, ErrCatchUpRefused) {
+					// The last address, the overlay's where there is one,
+					// says how the round failed, unless a peer said it is
+					// newer.
+					switch {
+					case errors.Is(err, ErrCatchUpRefused):
 						// Its log's answer, whichever address it came by.
-						refused = true
+						why = FailRefused
 						return
+					case errors.Is(err, errNewerFrame):
+						why = FailNewer
+					case why == FailNewer:
+					case errors.As(err, new(dialError)):
+						why = FailUnconnected
+					default:
+						why = FailOther
 					}
 					continue
 				}
-				reached = true
+				why = 0
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -605,37 +624,45 @@ func (n *Node) Sync(ctx context.Context, peers []types.Identity) int {
 	return ok
 }
 
-func (n *Node) noteRound(id types.Identity, reached, refused bool) {
+// A Failure is why a round completed no session with a peer; zero for one
+// that did.
+type Failure uint8
+
+const (
+	FailOther Failure = iota + 1
+	// FailUnconnected: the last address tried took no connection.
+	FailUnconnected
+	// FailNewer: the peer sent a frame this build cannot read.
+	FailNewer
+	// FailRefused: its log refused this node a catch-up.
+	FailRefused
+)
+
+func (n *Node) noteRound(id types.Identity, why Failure) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	switch {
-	case reached:
+	if why == 0 {
 		delete(n.failing, id)
-		delete(n.refused, id)
-	case refused:
-		n.failing[id] = true
-		n.refused[id] = true
-	default:
-		n.failing[id] = true
-		delete(n.refused, id)
+		return
 	}
+	n.failing[id] = why
 }
 
-// Failing reports whether the last round Sync ran against the peer reached
-// none of its addresses.
-func (n *Node) Failing(id types.Identity) bool {
+// Failed is why the last round Sync ran against the peer completed no
+// session; zero where it completed one.
+func (n *Node) Failed(id types.Identity) Failure {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.failing[id]
 }
 
+// Failing reports whether the last round Sync ran against the peer completed
+// no session.
+func (n *Node) Failing(id types.Identity) bool { return n.Failed(id) != 0 }
+
 // Refused reports whether the last round Sync ran against the peer ended in
-// its log refusing this node a catch-up. Such a peer is also [Node.Failing].
-func (n *Node) Refused(id types.Identity) bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.refused[id]
-}
+// its log refusing this node a catch-up.
+func (n *Node) Refused(id types.Identity) bool { return n.Failed(id) == FailRefused }
 
 // sessionOpts are one session's parameters. An initiator seals under force
 // when it is set, and asks for a catch-up instead of sealing under an epoch
@@ -680,8 +707,10 @@ func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 		return fmt.Errorf("reading local log state: %w", err)
 	}
 	var peer frame
+	epochs := false
 	if so.initiator {
-		peer, err = n.initiatorHello(c, so, ss, &view)
+		epochs = n.readsEpochs(nil, so.peerID, false)
+		peer, err = n.initiatorHello(c, so, ss, &view, epochs)
 	} else {
 		peer, err = n.responderHello(c, so.authed, ss, &view)
 	}
@@ -697,7 +726,10 @@ func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 		if so.initiator {
 			n.takePair(&peer)
 		}
-		return n.swapRecords(c, ss, &view, &peer, so.initiator, n.heard(&peer), so.extra)
+		changed := n.heard(&peer)
+		// What the hello held back from a peer that turns out to read it.
+		announce := so.initiator && !epochs && n.readsEpochs(&peer, so.peerID, false)
+		return n.swapRecords(c, ss, &view, &peer, so.initiator, changed, announce, so.extra)
 	case so.initiator:
 		return n.finishCatchUp(c, ss, &view, &peer)
 	default:
@@ -707,8 +739,8 @@ func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 
 // initiatorHello chooses what the session is sealed under, asking for a
 // catch-up where so says to, sends this node's hello and returns the peer's.
-func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view *View) (frame, error) {
-	hello := n.hello(view)
+func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view *View, epochs bool) (frame, error) {
+	hello := n.hello(view, epochs)
 	var err error
 	switch {
 	case so.catchUp:
@@ -744,7 +776,6 @@ func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view 
 // that is behind stays able to read this node for the whole session. authed
 // is called once the peer has proved it may speak.
 func (n *Node) responderHello(c net.Conn, authed func(), ss *sessionSeal, view *View) (frame, error) {
-	hello := n.hello(view)
 	// A connection that has said nothing has proved nothing, so it gets a
 	// short deadline, covering a catch-up's proof too; the full one starts
 	// once its hello is in.
@@ -756,6 +787,8 @@ func (n *Node) responderHello(c net.Conn, authed func(), ss *sessionSeal, view *
 		return frame{}, err
 	}
 	var peer frame
+	var waiting []byte
+	var pair *pairkey.Msg
 	if isCatchUp(first) {
 		if ss.catchUp, ss.with, err = n.grantCatchUp(c, first, view); err != nil {
 			return frame{}, err
@@ -777,10 +810,13 @@ func (n *Node) responderHello(c net.Conn, authed func(), ss *sessionSeal, view *
 		}
 		if id, ok := n.claimed(&peer); ok && peer.Network == view.Network {
 			n.takePair(&peer)
-			hello.Waiting = n.heldFor(view.Network, id)
-			hello.Pair = n.pairFor(id)
+			waiting, pair = n.heldFor(view.Network, id), n.pairFor(id)
 		}
 	}
+	// A hello without the sender's own announcement is one that held it
+	// back, as only a build reading epochs does, or a catch-up's.
+	hello := n.hello(view, n.readsEpochs(&peer, ss.with, ss.catchUp == nil))
+	hello.Waiting, hello.Pair = waiting, pair
 	if err := n.writeSealed(c, ss, &hello); err != nil {
 		return frame{}, err
 	}
@@ -821,11 +857,14 @@ func (n *Node) checkHello(peer *frame, view *View) error {
 // records it sends back, writing first where writeFirst says to and reading
 // first otherwise. changed reports that the session already cached a new
 // announcement.
-func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame, writeFirst, changed bool,
+func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame, writeFirst, changed, announce bool,
 	extra [][]byte) error {
-	reply, err := n.records(view, peer, false)
+	reply, err := n.records(view, peer)
 	if err != nil {
 		return err
+	}
+	if announce {
+		n.announceIn(&reply, view, true)
 	}
 	if len(extra) > 0 {
 		if err := withExtra(&reply, extra); err != nil {
@@ -914,7 +953,7 @@ func (n *Node) answerCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *fram
 	if err := n.stillMember(ss.with); err != nil {
 		return err
 	}
-	return n.swapRecords(c, ss, view, peer, true, changed, nil)
+	return n.swapRecords(c, ss, view, peer, true, changed, false, nil)
 }
 
 // finishCatchUp is the initiator's side of a catch-up session past the
@@ -939,10 +978,11 @@ func (n *Node) finishCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *fram
 	if after, err := n.opts.Log.View(); err == nil {
 		view = &after
 	}
-	reply, err := n.records(view, peer, true)
+	reply, err := n.records(view, peer)
 	if err != nil {
 		return err
 	}
+	n.announceIn(&reply, view, n.readsEpochs(peer, ss.with, false))
 	err = n.writeSealed(c, ss, &reply)
 	if applied || changed {
 		n.onRecords()
@@ -960,9 +1000,8 @@ func (n *Node) heard(peer *frame) bool {
 }
 
 // records builds the frame answering a peer's hello: what it is missing, and
-// the leases. withAnnouncements adds this node's own and the ones it holds,
-// for a peer that has not had them in a hello.
-func (n *Node) records(view *View, peer *frame, withAnnouncements bool) (frame, error) {
+// the leases.
+func (n *Node) records(view *View, peer *frame) (frame, error) {
 	// What the peer is missing is computed from the hello it just sent, so
 	// this is the same question in both directions.
 	records, err := n.opts.Log.Missing(peer.Have, peer.Anchor)
@@ -1000,11 +1039,14 @@ func (n *Node) records(view *View, peer *frame, withAnnouncements bool) (frame, 
 			reply.Leases = reply.Leases[:MaxLeasesPerFrame]
 		}
 	}
-	if withAnnouncements {
-		h := n.hello(view)
-		reply.Self, reply.Endpoints = h.Self, h.Endpoints
-	}
 	return reply, nil
+}
+
+// announceIn adds this node's announcement and those it holds to f, for a
+// peer that has not had them in a hello; epochs as for [Node.hello].
+func (n *Node) announceIn(f *frame, view *View, epochs bool) {
+	h := n.hello(view, epochs)
+	f.Self, f.Endpoints = h.Self, h.Endpoints
 }
 
 // readRecords reads the peer's records frame.
@@ -1127,8 +1169,9 @@ func (n *Node) gossipAddrs(e Endpoint) []netip.AddrPort {
 }
 
 // hello builds this node's opening frame: its beacon, what it holds, and every
-// announcement it knows including its own.
-func (n *Node) hello(view *View) frame {
+// announcement it knows including its own; those naming an epoch only where
+// epochs says the peer reads them.
+func (n *Node) hello(view *View, epochs bool) frame {
 	f := frame{
 		Kind:    kindHello,
 		Network: view.Network,
@@ -1144,11 +1187,14 @@ func (n *Node) hello(view *View) frame {
 		f.Have = f.Have[:MaxHashesPerFrame]
 	}
 	if n.opts.Announce != nil {
-		if mine, ok := n.opts.Announce(); ok {
+		if mine, ok := n.opts.Announce(); ok && (epochs || !mine.PQ()) {
 			f.Self = &mine
 		}
 	}
 	eps := n.opts.Endpoints.All()
+	if !epochs {
+		eps = slices.DeleteFunc(eps, func(e Endpoint) bool { return e.PQ() })
+	}
 	if len(eps) > MaxEndpointsPerFrame {
 		eps = eps[:MaxEndpointsPerFrame]
 	}
@@ -1169,6 +1215,20 @@ func (n *Node) hello(view *View) frame {
 		f.Keys = append(f.Keys, k)
 	}
 	return f
+}
+
+// readsEpochs reports whether a peer reads announcements naming an epoch, as
+// its own in its hello says, else the one held for id, else guess: builds
+// before them refuse a whole frame that carries one, and so would never hear
+// of the upgrade that stops them.
+func (n *Node) readsEpochs(peer *frame, id types.Identity, guess bool) bool {
+	if peer != nil && peer.Self != nil && peer.Self.Verify() == nil {
+		return peer.Self.PQ()
+	}
+	if e, held := n.opts.Endpoints.Get(id); held && !id.IsZero() {
+		return e.PQ()
+	}
+	return guess
 }
 
 // notePeer records the epoch this session ran under against the peer that

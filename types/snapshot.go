@@ -76,6 +76,9 @@ func (n *NodeRecord) NeedsSchema() (SchemaVersion, string) {
 	if slices.ContainsFunc(n.Published, func(p PublishedName) bool { return p.Public != 0 }) && SchemaTCP > need {
 		need, what = SchemaTCP, "names published by TCP"
 	}
+	if slices.ContainsFunc(n.Published, func(p PublishedName) bool { return p.Members }) && SchemaMembers > need {
+		need, what = SchemaMembers, "names for members alone"
+	}
 	return need, what
 }
 
@@ -921,6 +924,9 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	if s.Policy != nil {
 		if s.Schema < SchemaPolicy {
 			return fmt.Errorf("an access policy needs %v; the state is at %v", SchemaPolicy, s.Schema)
+		}
+		if s.Policy.NamesNames() && s.Schema < SchemaMembers {
+			return fmt.Errorf("a policy naming published names needs %v; the state is at %v", SchemaMembers, s.Schema)
 		}
 		if err := s.Policy.Validate(); err != nil {
 			return fmt.Errorf("policy: %w", err)

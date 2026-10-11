@@ -13,80 +13,82 @@ encrypted tunnels, wherever they are: a laptop, a NAS at home, a VPS.
 Each device in a network is a **member**. You create a network on one device
 with `juist create`, and add the others with an
 [invite]({{< relref "docs/invites" >}}). A network has a name, such as `home`.
-If you give none, juist picks two random words, such as `belfast-hazardous`.
+If you don't give one, juist picks two random words, such as
+`belfast-hazardous`.
 
-A device can be in several networks at once, for example a home network and a
-work one. See [Several networks]({{< relref "docs/networks" >}}).
+A device can be in several networks at the same time, for example a home
+network and a work network. See [Several networks]({{< relref "docs/networks" >}}).
 
 ## Two programs: juist and juistd {#programs}
 
 juist comes as two programs.
 
 `juistd` is the daemon. It runs in the background on every device, holds
-the device's own keys and its copy of the network's log, and keeps the tunnels
+the device's keys and its copy of the network's log, and keeps the tunnels
 up. On Linux the package starts it when you install it, and it waits until you
 create or join a network.
 
-`juist` is the command you type. It asks juistd to do things, and it holds
+`juist` is the command you type. It tells juistd what to do, and it holds
 your admin keys if you are an admin.
 
-Any local user may run `juist status`. Every other command is for root and for
-the device's **operator**: one local user, named with `juist set --operator`,
-who then manages the device without sudo. See
+Any local user can run `juist status`. All other commands need root or the
+device's **operator**: a local user, set with `juist set --operator`, who can
+then manage the device without sudo. See
 [The operator]({{< relref "docs/operator" >}}).
 
 ## The membership log {#the-membership-log}
 
-Who belongs to the network is written in the **membership log**: a list of
+Who belongs to the network is recorded in the **membership log**: a list of
 signed changes, such as "admit nas" or "remove phone". Each change is chained
 to the one before it, so nobody can quietly rewrite or reorder the history.
 
-Every device holds a copy of the log and checks every change itself. It does
-not trust the device that sent the change, or the path it came by. A change
+Every device holds a copy of the log and checks every change itself. It
+trusts neither the device that sent the change nor the path it took. A change
 counts only when enough admins have signed it.
 
-`juist log` lists the changes, and who approved each one.
+`juist log` lists the changes and who approved each one.
 
 ## Admins and the quorum {#admins}
 
 An **admin** is a person who may change the network: admit or remove devices,
-give roles, rename it. Whoever runs `juist create` is its first admin.
+assign roles, rename it. Whoever runs `juist create` becomes its first admin.
 
 An admin signs changes with an admin key. The keys live in the admin's
 keystore, `~/.config/juist` in their home directory, on each machine they
-approve from. juistd never holds them. A key leaves the machine it was made
-on only as a backup line, so an admin with two laptops has a key on each.
+approve from. juistd never holds them. A key leaves the machine it was created
+on only as a backup line, so an admin with two laptops has a separate key on
+each.
 
-The **quorum** is how many admin votes a change needs. It is 1 by default, so
-one admin decides alone. After `juist admins quorum 2`, every change needs two
-votes, for example from two people. A change that needs more votes waits until
-the other admins approve it with `juist approve`. See
+The **quorum** is the number of admin votes a change needs. It is 1 by
+default, so a single admin can decide. After `juist admins quorum 2`, every
+change needs two votes, for example from two people. A change that still
+needs votes waits until other admins approve it with `juist approve`. See
 [Admins]({{< relref "docs/admins" >}}).
 
 ## Roles {#roles}
 
-Every member reaches every other member, unless an
+Every member can reach every other member, unless an
 [access policy]({{< relref "docs/access" >}}) says otherwise. A **role** gives
-a device one more job. An admin gives it with `juist grant DEVICE ROLE` and takes it back with
-`juist revoke`.
+a device an extra job. An admin grants it with `juist grant DEVICE ROLE` and
+takes it back with `juist revoke`.
 
 | Role | What the device does |
 |---|---|
 | `voucher` | Confirms every hour that the network's state is current, so that cut-off devices notice. See [freshness](#freshness-and-vouchers) below. |
 | `relay` | Passes traffic between devices that cannot reach each other directly. See [Relays]({{< relref "docs/relays" >}}). |
 | `exit` | Carries other devices' internet traffic, once its operator agrees. See [Exit nodes]({{< relref "docs/exit-nodes" >}}). |
-| `ingress` | Takes connections from the internet for the names devices publish. See [Publishing services]({{< relref "docs/publishing" >}}). |
-| `service` | A service member: a juistd of its own beside one published service. Every device keeps it from opening any connection. See [Publishing services]({{< relref "docs/publishing" >}}). |
-| `publish` | Shares under the device's own name at once, without an admin each time: `juist share`, `juist publish PORT`. See [Publishing services]({{< relref "docs/publishing" >}}). |
+| `ingress` | Accepts connections from the internet for the names that devices publish. See [Publishing services]({{< relref "docs/publishing" >}}). |
+| `service` | A service member: a separate juistd running beside one published service. No device accepts a connection it opens. See [Publishing services]({{< relref "docs/publishing" >}}). |
+| `publish` | Shares under the device's own name right away, without asking an admin each time: `juist share`, `juist publish PORT`. See [Publishing services]({{< relref "docs/publishing" >}}). |
 
-A role says which device may serve as an exit node or relay. Under an access
-policy, the policy says which devices may use it.
+A role decides which device may serve as an exit node or relay. If there is
+an access policy, the policy decides which devices may use it.
 
-Being an admin is not a role of a device. An admin is a person with keys, and
-a voucher is a device that holds no admin key.
+Admin is not a device role. An admin is a person with keys, while a voucher
+is a device and holds no admin key.
 
-A device can also route the LAN behind it for the other members. That is set
-with `juist subnet add` rather than a role. See
+A device can also route the LAN behind it for the other members. You set
+that up with `juist subnet add`, not with a role. See
 [Subnet routers]({{< relref "docs/subnets" >}}).
 
 ## How devices find each other {#discovery}
@@ -96,32 +98,32 @@ There is no server to ask, so juist looks in three places:
 
 - on the local network (LAN), where devices announce themselves;
 - through other members, which pass on where they last reached a device;
-- through the public BitTorrent DHT, a large public directory on the internet,
+- in the public BitTorrent DHT, a large public directory on the internet,
   for members a device has lost track of.
 
-What devices leave in the DHT is encrypted. The DHT sees addresses, never
+What devices store in the DHT is encrypted. The DHT sees addresses, never
 contents, and nothing it returns can change who belongs to the network.
 
 ## How devices connect {#connections}
 
 Traffic between two members goes through a WireGuard tunnel. WireGuard is the
-VPN protocol that encrypts it, end to end between the two devices.
+VPN protocol that encrypts it end to end between the two devices.
 
-Most devices sit behind a router that does NAT, which keeps connections from
-outside away. juist punches through it, so that the two devices connect
+Most devices sit behind a router that does NAT, which blocks incoming
+connections. juist punches through it so that the two devices connect
 directly. To learn its own public address, juistd asks public STUN servers by
 default.
 
-Where the two devices cannot reach each other directly, they relay through a
-member the network granted `relay`, never through a third party. The relay
-sees only encrypted WireGuard traffic.
+Where two devices cannot reach each other directly, their traffic goes
+through a member that has the `relay` role, never through a third party. The
+relay sees only encrypted WireGuard traffic.
 
-Behind NAT, nothing needs opening in a firewall. A device with a public
-address needs 41643/udp open. The other ports are on the
+Behind NAT, you don't need to open anything in a firewall. A device with a
+public address needs 41643/udp open. The other ports are listed on the
 [Relays]({{< relref "docs/relays" >}}) page.
 
-How the tunnels are built, and what juist takes from WireGuard and Tailscale
-for them, is on the [Architecture]({{< relref "docs/architecture" >}}) page.
+The [Architecture]({{< relref "docs/architecture" >}}) page explains how the
+tunnels are built and what juist takes from WireGuard and Tailscale for them.
 
 ## Addresses in the network {#addresses}
 
@@ -129,16 +131,16 @@ Each member has two addresses in the network, and `juist devices` lists them.
 
 - An IPv4 address, such as `198.18.36.2`. `juist create` picks a random block
   in `198.18.0.0/15`, such as `198.18.36.0/22`. The first device gets the
-  first address, and each device admitted after it the next free one. Admins
-  can move these addresses with `juist network renumber`.
-- An IPv6 address, such as `fd84:7a1f:97ee:21a8:2ab0:e8e:caa0:b306`, worked
-  out from the device's identity key. Renumbering does not move it; only
+  first address, and each device admitted after it gets the next free one.
+  Admins can move these addresses with `juist network renumber`.
+- An IPv6 address, such as `fd84:7a1f:97ee:21a8:2ab0:e8e:caa0:b306`, derived
+  from the device's identity key. Renumbering does not change it; only
   `juist rotate identity` does.
 
 ## Names {#names}
 
-Where systemd-resolved runs, every member is reachable by name as
-`DEVICE.NETWORK.juist`, such as `laptop.home.juist`, or as `laptop` alone:
+Where systemd-resolved runs, every member can be reached by name as
+`DEVICE.NETWORK.juist`, such as `laptop.home.juist`, or simply as `laptop`:
 
 ```sh
 ssh laptop.home.juist
@@ -146,38 +148,38 @@ ssh laptop.home.juist
 
 Under an access policy, a device has names only for the members it keeps a
 tunnel with. Admins can also point public names, such as `mail.example.org`,
-at members.
-See [Names]({{< relref "docs/names" >}}).
+at members. See [Names]({{< relref "docs/names" >}}).
 
 ## Freshness and vouchers {#freshness-and-vouchers}
 
-When an admin removes a device, each member drops its tunnel to that device on
-hearing of the removal. A member that is cut off from the rest may not hear of
-it, and would keep talking to the removed device.
+When an admin removes a device, each member drops its tunnel to that device as
+soon as it learns of the removal. A member that is cut off from the rest may
+not learn of it, and would keep talking to the removed device.
 
 **Freshness** puts a limit on that. Every hour, each voucher signs a short
 statement of how the network looked at that moment. A member holding such a
 statement from the last 48 hours is fresh. A member without one is stale: it
 keeps tunnels only to vouchers until it hears from one again. So a removed
-device can be carried along for 48 hours at most.
+device stays connected for 48 hours at most.
 
 This has four consequences:
 
 - A new network has no voucher, so it does not check freshness at all.
   A removal still reaches every device once it is in touch with one that
-  knows; there is just no limit on how long a cut-off device can take.
+  knows about it, but there is no limit on how long a cut-off device can take.
   `juist create --voucher` makes the first device a voucher.
-- Make only devices vouchers that are always on, such as a VPS or a home
+- Only make devices vouchers that are always on, such as a VPS or a home
   server. If too few vouchers are online for 48 hours, every other member
-  falls back to tunnels with vouchers only. A network of laptops and phones
-  that are often off is better without vouchers.
-- With one voucher, you trust that it is honest. After
+  falls back to tunnels to vouchers only. A network of laptops and phones
+  that are often off is better off without vouchers.
+- With a single voucher, you trust that it is honest. After
   `juist admins vouchers 2`, a member is fresh only with statements from two
   vouchers, so one lying voucher is not enough. Keep a spare: two of three
-  vouchers on hosts that fail apart, not two machines at one provider.
-- A relay can cut a device off from the others. With one voucher needed, do
-  not make a relay the voucher, or that one machine can both cut a device off
-  and keep it fresh.
+  vouchers, on hosts that fail independently, not two machines at the same
+  provider.
+- A relay can cut a device off from the others. If one voucher is enough, do
+  not make a relay the voucher, or that one machine could both cut a device
+  off and keep it fresh.
 
 `juist status` shows the state in its `Freshness` line, for example
 `vouched just now, valid 48h`, `expired; vouchers only` or `unchecked: no

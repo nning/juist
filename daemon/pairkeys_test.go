@@ -51,15 +51,6 @@ func TestTunnelsMoveToPairKeys(t *testing.T) {
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
 	took := waitFor(t, 30*time.Second, "every pair to hold a pair key", m.paired)
 	t.Logf("pair keys in %v", took)
-	// The status follows at the end of the reconcile that gave the keys.
-	waitFor(t, 5*time.Second, "every member to report two pair keys", func() bool {
-		for _, n := range m.nodes {
-			if pq := n.d.Status().PQ; pq == nil || pq.Pair != 2 || pq.Group != 0 || len(pq.None)+len(pq.NoKey) != 0 {
-				return false
-			}
-		}
-		return true
-	})
 	if !pingUntil(m.nodes[0], m.nodes[2].overlayV4(), 20*time.Second) {
 		t.Fatal("no overlay reachability on pair keys")
 	}

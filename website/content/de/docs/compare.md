@@ -21,15 +21,15 @@ erklärt die Seite [Architektur]({{< relref "docs/architecture" >}}).
 Drei Dinge hat von den Meshes hier nur juist:
 
 - **Keine zentrale Infrastruktur, und trotzdem WireGuard.** Die anderen
-  Meshes ohne Server nutzen eigene Protokolle, EasyTier bietet WireGuard als
-  eine Möglichkeit unter mehreren, und WireGuard allein kommt nicht durchs
+  Meshes ohne Server nutzen eigene Protokolle, und EasyTier bietet WireGuard
+  nur als eine Möglichkeit unter mehreren. WireGuard allein kommt nicht durchs
   NAT.
-- **Ein Admin-Quorum.** Wenn du willst, braucht eine Änderung mehrere
-  Admins. Dann kann keine einzelne Person ein Gerät aufnehmen.
+- **Ein Admin-Quorum.** Du kannst für jede Änderung mehrere Admins verlangen.
+  Dann kann keine einzelne Person ein Gerät aufnehmen.
 - **Routing und Namen ohne Server.** Von den Meshes ohne Server
   veröffentlicht nur juist Dienste im Internet und lässt öffentliche Namen
-  auf Mitglieder zeigen. Bei den anderen stehen Routen oder Namen in der
-  Konfiguration jedes Geräts, oder es gibt sie nicht.
+  auf Mitglieder zeigen. Bei den anderen werden Routen und Namen von Hand in
+  der Konfiguration jedes Geräts eingetragen, oder es gibt sie nicht.
 
 ## Auf einen Blick {#overview}
 
@@ -53,15 +53,15 @@ Lücke: Geräte nehmen einen neuen Schlüssel nur an, wenn ein Schlüssel in
 deiner Hand ihn signiert hat. Das Entfernen eines Geräts und das Verteilen der
 Änderung laufen aber weiterhin über den Server.
 
-Tailscale passt, wenn du schon heute Clients für alle Plattformen und
+Tailscale passt, wenn du Clients für alle Plattformen und
 Benutzerkonten mit Zugriffsregeln nach Benutzern brauchst und damit leben
 kannst, dass der Server einer Firma in der Mitte steht.
 
 ## Headscale {#headscale}
 
 [Headscale](https://github.com/juanfont/headscale) ist ein quelloffener
-Koordinationsserver für die Tailscale-Clients, den du selbst betreibst. Das
-Vertrauen, das sonst Tailscales Server genießt, liegt dann bei deinem.
+Koordinationsserver für die Tailscale-Clients, den du selbst betreibst. Du
+musst dann deinem eigenen Server vertrauen statt dem von Tailscale.
 Tailnet Lock unterstützt Headscale nicht
 ([Feature-Request](https://github.com/juanfont/headscale/issues/1307)). Die
 Geräte übernehmen also ungeprüft, was der Server ihnen mitteilt.
@@ -116,10 +116,11 @@ läuft auch in großen Installationen.
 
 Was fehlt, ist ein Weg, ein Gerät wieder hinauszuwerfen. Jedes Gerät muss
 eine [Sperrliste](https://nebula.defined.net/docs/config/pki/) auf anderem
-Weg bekommen, etwa über ein Konfigurationsmanagement. Bis dahin bleibt das
-Gerät im Netz, bis sein Zertifikat abläuft. Bei juist ist das Entfernen eine
-signierte Änderung, die die Geräte untereinander weitergeben. Einen solchen
-zusätzlichen Weg braucht es also nicht.
+Weg bekommen, etwa über ein Konfigurationsmanagement. Ein Gerät, das sie
+nicht bekommen hat, akzeptiert das entfernte Gerät, bis dessen Zertifikat
+abläuft. Bei juist ist das Entfernen eine
+signierte Änderung, die die Geräte untereinander weitergeben. Ein
+zusätzlicher Weg ist also nicht nötig.
 
 Nebula passt, wenn deine Geräte ohnehin zentral verwaltet werden und du
 Zugriffsregeln nach Gruppen willst.
@@ -156,7 +157,7 @@ denselben Netzschlüssel. Wer eine Kopie davon hat, kann also allein alles
 braucht k von ihnen. rayfish nennt sich selbst experimentell, vor 1.0 und
 ohne Sicherheitsaudit.
 
-Zwei Projekte aus demselben Jahr gehen einen ähnlichen Weg:
+Zwei weitere Projekte aus demselben Jahr gehen einen ähnlichen Weg:
 [nostr-vpn](https://github.com/mmalmi/nostr-vpn), dessen Geräte eine Liste
 der Mitglieder nur annehmen, wenn einer seiner Admins sie signiert hat, und
 der Direct-Modus von [Tunnet](https://github.com/tunnetio/Tunnet), mit
@@ -187,7 +188,7 @@ es nicht.
 
 Reines WireGuard passt für wenige Geräte mit festen öffentlichen Adressen.
 
-## Was hier fehlt {#elsewhere}
+## Nicht verglichen {#elsewhere}
 
 Manche Projekte, die oft in einem Atemzug mit diesen genannt werden, lösen
 eine andere Aufgabe. Pangolin, Firezone, Twingate und Defguard verbinden

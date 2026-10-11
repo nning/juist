@@ -28,7 +28,7 @@ endpoint discovery, NAT traversal assistance — must be peer-to-peer.
 |---|---|---|
 | Audience / scale | Small team: 25–100 devices, a few admins | Full state replication on every node is cheap; k-of-n admin quorum instead of SSO; basic ACLs sufficient. Raising the target later is *not* free: the O(n) epoch wrap fan-out is only cheap in this range, and the record schema freezes at M3b ([08-trust-layer-notes.md](08-trust-layer-notes.md)) |
 | P2P strictness | Zero **trusted** infra; untrusted public helpers (public STUN, BitTorrent DHT) allowed for reachability | DHT/STUN must be *trust-free by construction*: their compromise may delay connectivity, never corrupt membership |
-| Platforms v1 | Linux desktop, FreeBSD, and a minimal Android app (M10); the full Android app after v1 (M20) | Tailscale's wireguard-go fork + magicsock on all three (gomobile + VpnService on Android); kernel WG (Linux netlink, FreeBSD if_wg) post-v1 |
+| Platforms v1 | Linux desktop, FreeBSD, and a minimal Android app (M10); the full Android app after v1 (M21) | Tailscale's wireguard-go fork + magicsock on all three (gomobile + VpnService on Android); kernel WG (Linux netlink, FreeBSD if_wg) post-v1 |
 | Stack | Go, reusing Tailscale's BSD-3 OSS parts | disco/magicsock NAT traversal and the DERP relay protocol are importable and production-tested. The membership log follows `tailscale.com/tka`'s *design* and shares none of its code — reading it against what M1 needed decided that; see [08-trust-layer-notes.md](08-trust-layer-notes.md) |
 
 ## Functional requirements

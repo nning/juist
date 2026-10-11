@@ -436,6 +436,9 @@ func (d *Daemon) namesNow() *ipc.Names {
 	n := *d.namesStatus
 	n.Accepted = d.namesAccepted
 	for _, h := range d.overrides {
+		if h.members {
+			n.ForMembers = append(n.ForMembers, h.name)
+		}
 		if h.published {
 			continue // the network's own domain's, which the publish lines say
 		}

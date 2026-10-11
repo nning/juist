@@ -82,7 +82,7 @@ Warum juist das hinnimmt
 : Es gibt keinen Server, den jedes Gerät fragen könnte. Die Frische setzt dem eine Grenze: Hat sich 48 Stunden lang kein Voucher für ein Gerät verbürgt, behält es nur noch Tunnel zu Vouchern.
 
 Was du tun kannst
-: Geräte, die ständig laufen, zu Vouchern machen und M von ihnen verlangen. Dann hält die Grenze auch, wenn M − 1 von ihnen lügen. Ein neues Netz hat keine Voucher und keine Grenze.
+: Geräte, die ständig laufen, zu Vouchern machen und M von ihnen verlangen. Dann hält die Grenze auch, wenn M − 1 von ihnen lügen. Ein neues Netz hat keine Voucher und damit keine Grenze.
 {{< /trade >}}
 
 {{< trade title="Ein verlorenes Quorum ist endgültig" knob="mehr Admins, als das Quorum braucht" >}}
@@ -124,11 +124,11 @@ Was du tun kannst
 
 {{< trade title="Ein Tunnel beginnt mit dem Schlüssel der Gruppe" knob="keine Einstellung" >}}
 Was passiert
-: Bis zwei Geräte einen eigenen Schlüssel haben, einen Log-Abgleich nachdem ihr Tunnel steht, schützt ihren Verkehr ein Schlüssel, den jedes Mitglied ableiten könnte.
+: Bis zwei Geräte einen eigenen Schlüssel haben, was einen Log-Abgleich nach dem Aufbau ihres Tunnels dauert, schützt ihren Verkehr ein Schlüssel, den jedes Mitglied ableiten könnte.
 
 Warum juist das hinnimmt
 : Gegen alle außerhalb des Netzes ist er von Anfang an quantensicher; nur ein Mitglied, oder ein seither entferntes Gerät, mit einem Quantencomputer könnte diese ersten Sekunden lesen.
 
 Was du tun kannst
-: Nichts. `juist status` sagt, welche Tunnel den Schlüssel der Gruppe nutzen.
+: Nichts; es dauert bis zum nächsten Log-Abgleich der beiden.
 {{< /trade >}}

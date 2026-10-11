@@ -5,34 +5,35 @@ description: Add admins and admin keys, set how many must approve a change, and 
 lead: An admin is a person whose key approves changes to the network. With several admins, you decide how many of them must agree before a device joins, leaves or gets a role.
 ---
 
-## What it is
+## Admins, keys and the quorum
 
 Every change to the network, such as admitting a device, removing one or
 giving it a role, is a record in the membership log. The log is the signed
 list of every change, and every device checks it for itself
-([How juist works]({{< relref "docs/how-it-works" >}})). A change counts once
-enough admins have signed it.
+([How juist works]({{< relref "docs/how-it-works" >}})). A change takes
+effect once enough admins have signed it.
 
 An **admin** is a person. An **admin key** is the key that person signs with.
 It lives in their keystore, `~/.config/juist`, as a file such as
-`admins/alice@home.key`. An admin holds one key on each device they approve
+`admins/alice@home.key`. An admin has one key on each device they approve
 from. Never copy a key to another device; create a new one there instead.
 
-The **quorum** is how many votes a change needs. Each admin key has a vote,
-and a person's keys cast that person's votes once, whichever of them signs.
-Say alice, bob and carol are admins with one vote each, and the quorum is 2.
-Then any two of them can approve a change, and one of them can be on holiday.
-One of them alone can change nothing.
+The **quorum** is the number of votes a change needs. Each admin key has a
+vote, but all of one person's keys together count as that person's votes
+only once, whichever of them signs. Say alice, bob and carol are admins with
+one vote each, and the quorum is 2. Then any two of them can approve a
+change, so one of them can be on holiday, and none of them can change
+anything on their own.
 
 An admin is not the same as a voucher. A voucher is a device with the role
 `voucher` that confirms every hour that the network's state is current. A
 voucher holds no admin key.
 
-## Approving from both of your laptops
+## Approving from two laptops
 
-Your admin name is what `juist create` printed on the line `Admin`, and what
+Your admin name is what `juist create` printed on the `Admin` line, and what
 `juist admins` lists. It is your login name, unless you gave `--admin-name`.
-Use that name for the second laptop's key; under any other name the key
+Use that name for the second laptop's key; under any other name, the key
 becomes a second admin.
 
 {{< step on="laptop2" as="your second laptop" >}}
@@ -46,7 +47,7 @@ It prints the command that adds the key, with the key itself in it.
 {{< /step >}}
 
 {{< step on="laptop" as="your first laptop" >}}
-Run the command as printed:
+Run that command exactly as printed:
 
 ```sh
 juist admins add alice nid:… --on laptop2
@@ -55,17 +56,18 @@ juist admins add alice nid:… --on laptop2
 It prints `added a key of alice's; 2 keys, 1 signing`.
 {{< /step >}}
 
-`juist admins` then lists which machine each key is on. A change that waits
-for approval says where the keys are that can give it.
+`juist admins` then lists which machine each key is on. A change waiting for
+approval says where the keys that can approve it are.
 
 ## One key per network
 
-Each network gets an admin key of its own, such as `admins/alice@home.key`.
-A lost or stolen key then costs one network, and two networks' logs share no
-key.
+Each network gets its own admin key, such as `admins/alice@home.key`. A lost
+or stolen key then affects only one network, and no two networks' logs share
+a key.
 
 - A key from `juist admins new` is filed under the first network whose log
-  names it. `juist admins new alice --network home` names the network at once.
+  names it. `juist admins new alice --network home` names the network right
+  away.
 - To govern a new network with a key you already have, say so:
   `juist create lab --admin-key alice@home`.
 - `juist admins` lists the keys on this machine and the networks each one
@@ -73,26 +75,25 @@ key.
 - On a machine in no network, `juist approve --key alice@home FILE` says which
   key signs.
 
-## Two admins, and neither decides alone
+## Two admins who must both agree
 
-Say alice and bob each have two devices, and every change should need both of
-them.
+Say alice and bob each have two devices, and every change should need both
+of them.
 
 {{< step on="an admin's device" >}}
-Add each of bob's keys, once for each device of his. Bob creates them with
+Add each of bob's keys, one per device. Bob creates them with
 `juist admins new bob`, which prints the line to run:
 
 ```sh
 juist admins add bob nid:…
 ```
 
-Bob now holds two keys, which cast one vote between them.
+Bob now has two keys, which share one vote.
 {{< /step >}}
 
 {{< step on="an admin's device" >}}
-Make three devices that are always on vouchers, require two of them to
-confirm that the network's state is current, and both admins for every
-change:
+Make three always-on devices vouchers, require two of them to confirm that
+the network's state is current, and require both admins for every change:
 
 ```sh
 juist grant nas voucher
@@ -105,20 +106,21 @@ juist admins quorum 2
 `juist admins` now shows `Quorum  2 of 2 votes`.
 {{< /step >}}
 
-With `juist admins vouchers 2`, one voucher that lies about the network's
-state cannot fool a device alone. It needs one accomplice. Two vouchers must
-then be online, which the third keeps true while one is down.
+With `juist admins vouchers 2`, a voucher that lies about the network's
+state cannot fool a device on its own; it would need an accomplice. In
+return, two vouchers must be online. The third keeps that true while one is
+down.
 
-## Alone, with two devices for every change
+## One admin, two devices per change
 
-You can also be the only admin and still want every change to need two of
-your devices:
+Even as the only admin, you can require every change to be approved from
+two of your devices:
 
 ```sh
 juist admins require alice 2
 ```
 
-Hold three keys for that. With exactly two, losing one device may lock the
+Keep three keys for this. With exactly two, losing one device may lock the
 network.
 
 ## When a change needs another admin
@@ -146,72 +148,74 @@ signed as bob's key on nas
 applied
 ```
 
-`juist approve` asks about each change waiting for your vote. It shows what
-the change does from the record and the log, never from the file's name.
-Once the change has its votes, it applies on every device.
+`juist approve` asks about each change waiting for your vote. It works out
+what the change does from the record and the log, never from the file name.
+Once the change has enough votes, it takes effect on every device.
 
-For a waiting change to reach an admin's devices, each admin runs
-`juist admins receive` once. The founder of a new network already has. It is
-a change like any other.
+For waiting changes to reach an admin's devices, each admin runs
+`juist admins receive` once. Whoever creates a network has already done so.
+`juist admins receive` is itself a change, approved like any other.
 
 ## Change files
 
-The change is saved as a file too, such as `remove-phone.rec`, in the
-directory you ran the command in. You can send it to an admin, who runs on a
-device in the network:
+Each change is also saved as a file, such as `remove-phone.rec`, in the
+directory you ran the command in. You can send it to another admin, who runs
+this on a device in the network:
 
 ```sh
 juist approve remove-phone.rec
 ```
 
-It shows what the change does, asks, signs the file in place, and applies the
-change once it is complete. `juist apply` does the same.
+It shows what the change does, asks for confirmation, signs the file in
+place, and applies the change once it has enough votes. `juist apply` does
+the same.
 
-On a machine in no network, an admin can approve the admission of a device.
-They cannot approve anything that may change who approves or vouches: a
-removal, a role, an admin key, or the quorum. Only the log says whom such a
-change touches.
+On a machine in no network, an admin can approve the admission of a device,
+but nothing that may change who approves or vouches: a removal, a role, an
+admin key, or the quorum. Only the log shows who such a change affects.
 
-## Good to know
+## Notes
 
-- `juist admins` lists every admin, their votes, the machines their keys are
-  on, the quorum and the vouchers needed.
+- `juist admins` lists every admin with their votes and the machines their
+  keys are on, as well as the quorum and the number of vouchers needed.
 - `juist admins add NAME KEY --votes N` gives a key more than one vote.
   `juist create --admin-votes N` does the same for the key `juist create`
   makes.
 - `juist admins remove NAME|KEY` takes a key's vote away. It is refused if
-  the rest cannot reach the quorum.
-- `juist admins quorum` warns when every change needs every admin, since then
-  losing one admin's keys locks the network. Above 1 in a network with no
-  voucher, it says that changes waiting for votes travel through vouchers, as
-  `juist create --quorum` does.
+  the remaining keys cannot reach the quorum.
+- `juist admins quorum` warns when every change needs every admin, since
+  losing one admin's keys would then lock the network. If you set a quorum
+  above 1 in a network without a voucher, it points out that changes waiting
+  for votes travel through vouchers. `juist create --quorum` does the same.
 - Admin keys leave their machine only as a backup line
-  ([Keys]({{< relref "docs/keys" >}}#backing-up-admin-keys)), and that machine
-  needs no network of its own. `juist create --no-device` makes a network from a machine that
-  only signs.
+  ([Keys]({{< relref "docs/keys" >}}#backing-up-admin-keys)). The machine
+  holding them does not have to be in a network:
+  `juist create --no-device` creates a network from a machine that only
+  signs.
 - Run admin commands as yourself, without sudo: the keys are in your
   keystore.
-- `juist log` shows every change and who approved it, `juist log show 3`
+- `juist log` shows every change and who approved it, and `juist log show 3`
   what change 3 did.
 - The [access policy]({{< relref "docs/access" >}}) is changed the same way.
   `juist approve policy.rec` shows the change as a diff against the current
   policy.
-- After juist is updated, `juist status` on your device says
-  `the network is at schema 9, this version at schema 10` when this version
-  adds to the network's log. Once every device runs it, run
-  `juist log upgrade`. Devices on older versions stop applying changes at
-  the upgrade until they are updated; from schema 14 on, their tunnels also
-  carry nothing but juist's own traffic, as they are not post-quantum.
+- When an update of juist adds to the network's log, `juist status` on your
+  device says `the network is at schema 9, this version at schema 10`. Once
+  every device runs the new version, run `juist log upgrade`. From the
+  upgrade on, devices on older versions stop applying changes until they are
+  updated, and `juist status` on them says so. From schema 14 on, they are
+  also unreachable until then, and `juist devices` shows them as `outdated`.
 
 {{< note danger >}}
-Losing every key of the admins a change needs locks the network for good.
-The break-glass secret `juist create` shows only ends it
+If so many admin keys are lost that no change can get the votes it needs,
+the network is locked for good. The break-glass secret that `juist create`
+shows can then only end it
 ([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
-Back each admin key up, and give the network more admins than the quorum
-needs, each on devices of their own ([Keys]({{< relref "docs/keys" >}}#backing-up-admin-keys)).
+Back up each admin key, and give the network more admins than the quorum
+needs, each with their own devices ([Keys]({{< relref "docs/keys" >}}#backing-up-admin-keys)).
 {{< /note >}}
 
-## If something goes wrong
+## Troubleshooting
 
 | You see | What to do |
 |---|---|

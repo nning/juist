@@ -1,31 +1,32 @@
 ---
 title: Netze, die nur HTTPS durchlassen
 linkTitle: Nur HTTPS
-description: Dein Netz aus einem Hotel-, Firmen- oder Schulnetz erreichen, das nichts als HTTPS hinauslässt, über deine Relays auf 443 und über einen Proxy, wo es einen gibt.
-lead: Manche Netze lassen nichts als HTTPS hinaus, und manche sortieren, was durchgeht, nach seinem Aussehen. Ein Gerät dort erreicht die anderen über deine Relays auf Port 443, als ein HTTPS-Client unter vielen.
+description: Dein Netz aus einem Hotel-, Firmen- oder Schulnetz erreichen, das nichts als HTTPS hinauslässt, über deine Relays auf Port 443 und über einen Proxy, falls es einen gibt.
+lead: Manche Netze lassen nichts als HTTPS hinaus, und manche prüfen, ob der Verkehr wie HTTPS aussieht. Ein Gerät in einem solchen Netz erreicht die anderen über deine Relays auf Port 443, wie ein HTTPS-Client unter vielen.
 ---
 
-## Was es ist
+## So funktioniert es
 
 Im Netz eines Hotels, einer Firma oder einer Schule kommt oft nur TCP zu
-Port 443 hinaus. WireGuard, die Pfadsuche und der eigene Port 41645 des
-Relays nicht.
+Port 443 hinaus. WireGuard, die Pfadsuche und der übliche Port 41645 des
+Relays sind gesperrt.
 
-Ein [Relay]({{< relref "docs/relays" >}}), das einen öffentlichen Namen auf
-443 bedient, ist der Weg hinaus. Jedes Gerät erfährt den Namen, und eines, das
-den eigenen Port des Relays nicht erreicht, weicht von selbst auf den Namen
-aus. Dafür ist auf dem Gerät nichts einzurichten.
+Der Weg hinaus ist ein [Relay]({{< relref "docs/relays" >}}), das einen
+öffentlichen Namen auf Port 443 bedient. Jedes Gerät erfährt diesen Namen, und
+ein Gerät, das den üblichen Port des Relays nicht erreicht, weicht von selbst
+auf den Namen aus. Dafür musst du auf dem Gerät nichts einrichten.
 
-Ein Netz, das genauer hinsieht und blockiert oder meldet, was kein HTTPS ist,
-braucht mehr: Mit `juist set --https-only` schickt ein Gerät nichts als TLS
-an die Namen der Relays auf 443 und DNS-Anfragen nach diesen Namen. Kein
-WireGuard über UDP, keine Pfadsuche, keine Suche im LAN, keine öffentliche
-DHT und kein STUN-Server. Jedes Paket läuft dann über ein Relay.
+Ein Netz, das den Verkehr genauer prüft und alles blockiert oder meldet, was
+kein HTTPS ist, verlangt mehr. Mit `juist set --https-only` schickt ein Gerät
+nur noch TLS an die Namen der Relays auf Port 443, dazu DNS-Anfragen nach
+diesen Namen. Es schickt kein WireGuard über UDP, sucht keine Pfade,
+durchsucht nicht das LAN und nutzt weder die öffentliche DHT noch STUN-Server.
+Jedes Paket läuft dann über ein Relay.
 
 ## Einrichten
 
 {{< step on="dem Relay" >}}
-Gib einem Relay einen öffentlichen Namen auf 443, wie unter
+Gib einem Relay einen öffentlichen Namen auf Port 443, wie unter
 [Relays]({{< relref "docs/relays" >}}) beschrieben:
 
 ```sh
@@ -40,18 +41,18 @@ Ab jetzt nur noch HTTPS senden:
 sudo juist set --https-only
 ```
 
-Es gibt `https only` aus. `juist status` nennt dann die Relays, über die es
-läuft:
+Die Ausgabe lautet `https only`. `juist status` zeigt dann, über welche Relays
+der Verkehr läuft:
 
 ```console
   HTTPS         only, by relay.example.org
 ```
 {{< /step >}}
 
-Um von dort aus einem Netz beizutreten, setze es vor `juist join` und nimm
-den Link der Einladung: Er nennt die Relays auf 443, als `r=relay.example.org`.
-Ein eingetippter Code wird im LAN gesucht, das ein Gerät mit nur HTTPS nicht
-durchsucht.
+Um von dort aus einem Netz beizutreten, setze die Option vor `juist join` und
+nimm den Einladungslink, nicht den Code. Der Link nennt die Relays auf 443,
+etwa `r=relay.example.org`. Ein eingetippter Code wird im LAN gesucht, und das
+durchsucht ein Gerät im Nur-HTTPS-Modus nicht.
 
 ```sh
 sudo juist set --https-only
@@ -63,49 +64,53 @@ Tunnel wieder direkt laufen.
 
 ## Über einen Proxy
 
-Ein Firmennetz lässt vielleicht nichts hinaus außer über seinen HTTP-Proxy.
-Nenne den Proxy, mit Benutzer und Passwort, wo er danach fragt:
+Manche Firmennetze lassen Verkehr nur über ihren HTTP-Proxy hinaus. Gib juist
+den Proxy an, mit Benutzername und Passwort, falls er welche verlangt:
 
 ```sh
 sudo juist set --https-only --proxy -
 ```
 
-juist fragt nach der URL, etwa
+juist fragt dann nach der URL, etwa
 `http://user:password@proxy.example.com:3128`, und zeigt sie beim Tippen
-nicht an: auf der Kommandozeile könnte jeder Benutzer des Geräts das Passwort
-lesen. Ohne Passwort genügt `--proxy http://proxy.example.com:3128`.
+nicht an. Auf der Kommandozeile könnte jeder Benutzer des Geräts das Passwort
+lesen. Für einen Proxy ohne Passwort genügt
+`--proxy http://proxy.example.com:3128`.
 
-Der Proxy wird nur um `CONNECT relay.example.org:443` gebeten und löst den
-Namen selbst auf; das Gerät braucht dann kein eigenes DNS. Ohne `--proxy`
-nimmt juistd das `HTTPS_PROXY` seiner Umgebung, und `--proxy ""` kehrt dazu
-zurück. `juist status` zeigt den Proxy ohne sein Passwort.
+juist bittet den Proxy nur um `CONNECT relay.example.org:443`, und der Proxy
+löst den Namen selbst auf. Das Gerät braucht dann also kein eigenes DNS. Ohne
+`--proxy` nimmt juistd das `HTTPS_PROXY` aus seiner Umgebung, und
+`--proxy ""` kehrt dazu zurück. `juist status` zeigt den Proxy ohne sein
+Passwort.
 
-## Gut zu wissen
+## Hinweise
 
-- Jedes Paket läuft über ein Relay, mit dessen Geschwindigkeit, und TCP
-  trägt das TCP des Tunnels, das sich von Verlusten nur langsam erholt. Zwei
-  Relays an verschiedenen Orten halten ein Gerät erreichbar, wenn eines
-  ausfällt.
+- Jedes Paket läuft über ein Relay, das damit die Geschwindigkeit begrenzt.
+  Die TCP-Verbindungen des Tunnels laufen dann in TCP, das sich von
+  Paketverlusten nur langsam erholt. Zwei Relays an verschiedenen Orten halten
+  ein Gerät erreichbar, wenn eines ausfällt.
 - Das Zertifikat des Relays wird gegen die Zertifizierungsstellen geprüft,
-  denen das System vertraut, wie ein Browser es tut, und der Name eines Relays
-  wird genutzt, sobald der Server unter ihm sagt, dass er dieses Relay ist. Eine Firma, die TLS
-  aufbricht, sieht nicht mehr als das Relay: WireGuard verschlüsselt von Ende
-  zu Ende, sie sieht also, welche Geräte miteinander sprechen, nicht was.
-- Es verbirgt juist nicht vor einem Zensor, der Server abtastet oder TLS am
-  Fingerabdruck erkennt: Wer den Namen des Relays abfragt, findet ein Relay,
-  und der TLS-Handshake ist der eines Go-Programms, nicht eines Browsers.
-- Die Android-App hat dafür noch keinen Schalter. Sie weicht von selbst auf
-  den Namen eines Relays auf 443 aus, wo UDP und der Port des Relays gesperrt
-  sind.
+  denen das System vertraut, wie ein Browser es tut. Ein Gerät nutzt den Namen
+  eines Relays erst, wenn der Server unter diesem Namen bestätigt, dass er
+  dieses Relay ist. Eine Firma, die TLS aufbricht, sieht nicht mehr als das
+  Relay: WireGuard verschlüsselt von Ende zu Ende. Sie sieht also, welche
+  Geräte miteinander sprechen, aber nicht, was sie sagen.
+- Der Nur-HTTPS-Modus verbirgt juist nicht vor einem Zensor, der Server
+  abtastet oder TLS am Fingerabdruck erkennt. Wer den Namen des Relays
+  abfragt, findet ein Relay, und der TLS-Handshake ist der eines Go-Programms,
+  nicht eines Browsers.
+- Die Android-App hat keine Einstellung für den Nur-HTTPS-Modus. Sie weicht
+  aber von selbst auf den Namen eines Relays auf 443 aus, wo UDP und der Port
+  des Relays gesperrt sind.
 
-## Wenn etwas nicht klappt
+## Fehlersuche
 
 | `juist status` sagt | Was zu tun ist |
 |---|---|
 | `HTTPS  only, and no relay on 443` | gib einem Relay einen öffentlichen Namen: `sudo juist set --relay-name NAME` auf ihm |
 | `warning: no relay on 443/tcp` | dasselbe |
 | `no answer from …: offline, or at no relay on 443` | das Gerät ist offline oder erreicht kein Relay mit Namen |
-| `no tunnel traffic from … through the relays on 443` | prüfe die Namen der Relays im DNS, und dass 443 sie erreicht |
+| `no tunnel traffic from … through the relays on 443` | prüfe die Namen der Relays im DNS, und ob Port 443 sie erreicht |
 
-Ein Beitritt, der `the invite link names no relay on 443` meldet, braucht
-einen neuen Link, erstellt, sobald ein Relay einen Namen auf 443 bedient.
+Meldet der Beitritt `the invite link names no relay on 443`, brauchst du einen
+neuen Einladungslink, erstellt, nachdem ein Relay einen Namen auf 443 bedient.

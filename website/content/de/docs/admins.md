@@ -5,7 +5,7 @@ description: Admins und Admin-Schlüssel hinzufügen, festlegen, wie viele eine 
 lead: Ein Admin ist eine Person, deren Schlüssel Änderungen am Netz bestätigt. Mit mehreren Admins legst du fest, wie viele zustimmen müssen, bevor ein Gerät beitritt, das Netz verlässt oder eine Rolle bekommt.
 ---
 
-## Worum es geht
+## Admins, Schlüssel und Quorum
 
 Jede Änderung am Netz ist ein Eintrag im Mitgliederlog, egal ob ein Gerät
 aufgenommen, entfernt oder mit einer Rolle versehen wird. Das Log ist die
@@ -20,11 +20,11 @@ er Änderungen bestätigt, einen eigenen Schlüssel. Kopiere nie einen Schlüsse
 auf ein anderes Gerät, sondern leg dort einen neuen an.
 
 Das **Quorum** ist die Zahl der Stimmen, die eine Änderung braucht. Jeder
-Admin-Schlüssel hat eine Stimme. Die Schlüssel einer Person zählen aber
+Admin-Schlüssel hat eine Stimme. Alle Schlüssel einer Person zählen aber
 zusammen nur einmal, egal mit welchem sie signiert. Angenommen, alice, bob und
 carol sind Admins mit je einer Stimme, und das Quorum ist 2. Dann reichen zwei
-beliebige von ihnen, um eine Änderung zu bestätigen, und einer darf im Urlaub
-sein. Allein kann niemand etwas ändern.
+beliebige von ihnen, um eine Änderung zu bestätigen. Einer darf also im
+Urlaub sein, und allein kann niemand etwas ändern.
 
 Ein Admin ist nicht dasselbe wie ein Voucher. Ein Voucher ist ein Gerät mit
 der Rolle `voucher`, das stündlich bestätigt, dass der Stand des Netzes
@@ -60,14 +60,14 @@ Die Ausgabe lautet `added a key of alice's; 2 keys, 1 signing`.
 {{< /step >}}
 
 `juist admins` zeigt dann, auf welchem Rechner welcher Schlüssel liegt. Wartet
-eine Änderung auf Bestätigung, erfährst du dort auch, wo die Schlüssel liegen,
-die sie bestätigen können.
+eine Änderung auf Bestätigung, sagt sie, wo die Schlüssel liegen, die sie
+bestätigen können.
 
 ## Ein Schlüssel pro Netz
 
 Jedes Netz bekommt einen eigenen Admin-Schlüssel, etwa
 `admins/alice@home.key`. Geht ein Schlüssel verloren oder wird er gestohlen,
-ist also nur ein Netz betroffen, und zwei Netze teilen sich nie einen
+ist nur ein Netz betroffen, und zwei Netze teilen sich nie einen
 Schlüssel.
 
 - Ein Schlüssel aus `juist admins new` wird unter dem ersten Netz abgelegt,
@@ -93,7 +93,7 @@ Füge jeden von bobs Schlüsseln hinzu, einen pro Gerät. Bob legt sie mit
 juist admins add bob nid:…
 ```
 
-Bob hat jetzt zwei Schlüssel, die zusammen eine Stimme haben.
+Bob hat jetzt zwei Schlüssel, die sich eine Stimme teilen.
 {{< /step >}}
 
 {{< step on="dem Gerät eines Admins" >}}
@@ -112,11 +112,11 @@ juist admins quorum 2
 {{< /step >}}
 
 Mit `juist admins vouchers 2` kann ein Voucher, der über den Stand des Netzes
-lügt, kein Gerät mehr allein täuschen. Er bräuchte einen Komplizen. Dafür
-müssen aber auch zwei Voucher online sein; der dritte sorgt dafür, wenn einer
-ausfällt.
+lügt, kein Gerät mehr ohne Hilfe täuschen; er bräuchte einen Komplizen.
+Dafür müssen aber zwei Voucher online sein. Fällt einer aus, sorgt der
+dritte dafür.
 
-## Allein, aber mit zwei Geräten für jede Änderung
+## Ein Admin, zwei Geräte pro Änderung
 
 Auch als einziger Admin kannst du verlangen, dass jede Änderung von zwei
 deiner Geräte bestätigt wird:
@@ -160,33 +160,35 @@ Dateinamen. Sobald eine Änderung genug Stimmen hat, gilt sie auf jedem Gerät.
 
 Damit wartende Änderungen die Geräte eines Admins erreichen, führt jeder
 Admin einmal `juist admins receive` aus. Wer ein Netz gegründet hat, hat das
-bereits getan. Auch das ist eine Änderung wie jede andere.
+bereits getan. `juist admins receive` ist selbst eine Änderung und wird wie
+jede andere bestätigt.
 
 ## Änderungsdateien
 
 Jede Änderung wird zusätzlich als Datei gespeichert, etwa
-`remove-phone.rec`, und zwar in dem Verzeichnis, in dem du den Befehl
-aufgerufen hast. Du kannst sie einem anderen Admin schicken, der auf einem
-Gerät im Netz Folgendes aufruft:
+`remove-phone.rec`, in dem Verzeichnis, in dem du den Befehl aufgerufen hast.
+Du kannst sie einem anderen Admin schicken, der auf einem Gerät im Netz
+Folgendes aufruft:
 
 ```sh
 juist approve remove-phone.rec
 ```
 
 Der Befehl zeigt, was die Änderung bewirkt, fragt nach, signiert die Datei an
-Ort und Stelle und wendet die Änderung an, sobald sie vollständig ist.
+Ort und Stelle und wendet die Änderung an, sobald sie genug Stimmen hat.
 `juist apply` macht dasselbe.
 
 Auf einem Rechner, der zu keinem Netz gehört, kann ein Admin die Aufnahme
 eines Geräts bestätigen. Änderungen, die beeinflussen können, wer bestätigt
 oder wer Voucher ist, kann er dort aber nicht bestätigen: kein Entfernen,
 keine Rolle, keinen Admin-Schlüssel und kein Quorum. Wen eine solche Änderung
-betrifft, verrät nämlich nur das Log.
+betrifft, zeigt nur das Log.
 
-## Gut zu wissen
+## Hinweise
 
-- `juist admins` listet alle Admins mit ihren Stimmen auf, die Rechner, auf
-  denen ihre Schlüssel liegen, das Quorum und die Zahl der nötigen Voucher.
+- `juist admins` listet alle Admins mit ihren Stimmen und den Rechnern auf,
+  auf denen ihre Schlüssel liegen, dazu das Quorum und die Zahl der nötigen
+  Voucher.
 - `juist admins add NAME KEY --votes N` gibt einem Schlüssel mehr als eine
   Stimme. `juist create --admin-votes N` macht dasselbe für den Schlüssel, den
   `juist create` anlegt.
@@ -194,13 +196,14 @@ betrifft, verrät nämlich nur das Log.
   wird abgelehnt, wenn die übrigen Schlüssel das Quorum nicht mehr erreichen.
 - `juist admins quorum` warnt, wenn jede Änderung alle Admins braucht, denn
   dann sperrt schon der Verlust der Schlüssel eines einzigen Admins das Netz.
-  Ist das Quorum größer als 1 und hat das Netz keinen Voucher, weist es
-  darauf hin, dass Änderungen, die auf Stimmen warten, über Voucher laufen;
-  `juist create --quorum` ebenso.
+  Setzt du in einem Netz ohne Voucher ein Quorum über 1, weist es darauf
+  hin, dass Änderungen, die auf Stimmen warten, über Voucher laufen.
+  `juist create --quorum` tut das ebenso.
 - Admin-Schlüssel verlassen ihren Rechner nur als Sicherungszeile
-  ([Schlüssel]({{< relref "docs/keys" >}}#admin-schlüssel-sichern)), und dieser
-  Rechner muss selbst zu keinem Netz gehören. Mit `juist create --no-device` legst du ein Netz von
-  einem Rechner aus an, der nur signiert.
+  ([Schlüssel]({{< relref "docs/keys" >}}#admin-schlüssel-sichern)). Der
+  Rechner, auf dem sie liegen, muss zu keinem Netz gehören: Mit
+  `juist create --no-device` legst du ein Netz von einem Rechner aus an, der
+  nur signiert.
 - Führe Admin-Befehle als du selbst aus, ohne sudo, denn die Schlüssel liegen
   in deinem Keystore.
 - `juist log` zeigt jede Änderung und wer sie bestätigt hat, `juist log show 3`,
@@ -208,25 +211,26 @@ betrifft, verrät nämlich nur das Log.
 - [Zugriffsregeln]({{< relref "docs/access" >}}) änderst du genauso.
   `juist approve policy.rec` zeigt die Änderung als Diff gegen die geltenden
   Regeln.
-- Nach einem Update von juist meldet `juist status` auf deinem Gerät
-  `the network is at schema 9, this version at schema 10`, wenn diese Version
-  dem Log des Netzes etwas hinzufügt. Sobald alle Geräte sie haben, führe
-  `juist log upgrade` aus. Geräte mit älteren Versionen übernehmen ab dem
-  Upgrade keine Änderungen mehr, bis sie aktualisiert sind; ab Schema 14
-  tragen ihre Tunnel zudem nur noch juists eigenen Verkehr, weil sie nicht
-  quantensicher sind.
+- Fügt ein Update von juist dem Log des Netzes etwas hinzu, meldet
+  `juist status` auf deinem Gerät
+  `the network is at schema 9, this version at schema 10`. Sobald alle Geräte
+  die neue Version haben, führe `juist log upgrade` aus. Geräte mit älteren
+  Versionen übernehmen ab dem Upgrade keine Änderungen mehr, bis sie
+  aktualisiert sind, und `juist status` meldet das dort. Ab Schema 14 sind
+  sie bis dahin auch nicht erreichbar, und `juist devices` zeigt sie als
+  `outdated`.
 
 {{< note danger >}}
 Gehen so viele Admin-Schlüssel verloren, dass keine Änderung mehr genug
 Stimmen bekommt, ist das Netz für immer gesperrt. Das Break-glass-Geheimnis,
-das `juist create` anzeigt, kann es nur beenden
+das `juist create` anzeigt, kann es dann nur noch beenden
 ([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
 Sichere jeden Admin-Schlüssel, und setze mehr Admins ein, als das Quorum
 braucht, jeden mit eigenen Geräten
 ([Schlüssel]({{< relref "docs/keys" >}}#admin-schlüssel-sichern)).
 {{< /note >}}
 
-## Wenn etwas nicht klappt
+## Fehlersuche
 
 | Was du siehst | Was du tun kannst |
 |---|---|

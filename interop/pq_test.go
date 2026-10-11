@@ -12,11 +12,12 @@ import (
 )
 
 // previousRelease is exit criterion (4) of M15: lx on the previous release
-// creates a network, fb on this one joins, and the two reach each other,
-// fb saying the network predates post-quantum tunnels. Upgraded, and the
-// network with it, every tunnel is post-quantum. The network then goes, so
+// creates a network, fb on this one joins, and the two reach each other.
+// fb, made an admin, upgrades the network while lx is stopped: lx, back on
+// the previous release, says to install a newer juist, and fb calls it
+// outdated. Upgraded, lx reaches fb on a pair key. The network then goes, so
 // the lab's own starts from nothing; a keystore of its own keeps its admin
-// key out of the lab's.
+// keys out of the lab's.
 func previousRelease(t *testing.T, fb, lx *vm) {
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -39,8 +40,9 @@ func previousRelease(t *testing.T, fb, lx *vm) {
 	lx4 := strings.TrimSpace(lx.run(t, `ip -4 -br addr show juist0 | awk '{print $3}' | cut -d/ -f1`))
 	lx.eventually(t, "reaching fb, on the previous release", 3*time.Minute, "ping -c1 -W2 "+fb4, ok)
 	fb.eventually(t, "reaching lx on the previous release", time.Minute, "ping -c1 -t2 "+lx4, ok)
-	fb.eventually(t, "saying the network predates post-quantum tunnels", 2*time.Minute, "juist status",
-		has("Post-quantum  no, the network predates it"))
+	if out := fb.run(t, "juist devices"); strings.Contains(out, "outdated") {
+		t.Fatalf("a network before preshared keys calls a device outdated:\n%s", out)
+	}
 	// The same ping across an epoch bump, with no preshared key: what the
 	// lab's network does without them.
 	out, bump := pingAcrossBump(t, lx, fb4, func() { lx.run(t, env+"juist rotate group-secret") })
@@ -48,13 +50,32 @@ func previousRelease(t *testing.T, fb, lx *vm) {
 	t.Logf("without preshared keys, across the bump at %s: lost %d%s %s", bump, len(lost),
 		map[bool]string{true: ", a gap", false: ""}[gap], strings.Join(lost, ", "))
 
+	key := regexp.MustCompile(`juist admins add fb (nid:\S+)`).FindStringSubmatch(
+		fb.run(t, env+"juist admins new fb"))
+	if key == nil {
+		t.Fatal("juist admins new printed no key to add")
+	}
+	lx.run(t, env+"juist admins add fb "+key[1])
+	fb.eventually(t, "holding its admin key's addition", 2*time.Minute, env+"juist admins", has("fb"))
+	lx.run(t, "systemctl stop juistd")
+	fb.eventually(t, "upgrading the network with lx asleep", 2*time.Minute, env+"juist log upgrade --yes",
+		has("upgraded to"))
+	lx.run(t, "systemctl start juistd")
+	lx.eventually(t, "saying to install a newer juist", 3*time.Minute, "juist status",
+		has("install a newer juist"))
+	fb.eventually(t, "calling lx outdated", 6*time.Minute, "juist devices", has("outdated"))
+	out = fb.eventually(t, "saying lx runs an older juist", time.Minute, "juist status",
+		has("runs an older juist, unreachable until updated"))
+	if strings.Contains(out, "firewall") {
+		t.Fatalf("an older build is blamed on a firewall:\n%s", out)
+	}
+
 	lx.run(t, "dpkg -i /tmp/juist.deb >/dev/null && systemctl is-active juistd >/dev/null")
 	lx.eventually(t, "juistd answers, upgraded", 2*time.Minute, "juist status", ok)
-	lx.run(t, env+"juist log upgrade --yes")
-	for _, v := range []*vm{fb, lx} {
-		v.eventually(t, "every tunnel on a pair key", 3*time.Minute, "juist status",
-			has("Post-quantum  every tunnel: 1 by a pair key"))
-	}
+	lx.eventually(t, "the tunnel on a pair key", 3*time.Minute, pairsCmd, newer(0))
+	fb.eventually(t, "lx no longer outdated", 2*time.Minute, "juist devices", func(out string) bool {
+		return !strings.Contains(out, "outdated")
+	})
 	lx.eventually(t, "reaching fb on a pair key", time.Minute, "ping -c1 -W2 "+fb4, ok)
 	fb.eventually(t, "reaching lx on a pair key", time.Minute, "ping -c1 -t2 "+lx4, ok)
 	for _, v := range []*vm{fb, lx} {
@@ -82,10 +103,7 @@ func postQuantum(t *testing.T, fb, lx *vm, fb4, lx4 string) {
 		}
 		lx.try("systemctl start juistd", time.Minute)
 	})
-	for _, v := range []*vm{fb, lx} {
-		v.eventually(t, "every tunnel on a pair key", 3*time.Minute, "juist status",
-			has("Post-quantum  every tunnel: 1 by a pair key"))
-	}
+	lx.eventually(t, "the tunnel on a pair key", 3*time.Minute, pairsCmd, newer(0))
 	before := generation(t, lx)
 	var moved string
 	out, bump := pingAcrossBump(t, lx, fb4, func() {
@@ -109,8 +127,6 @@ func postQuantum(t *testing.T, fb, lx *vm, fb4, lx4 string) {
 	lx.eventually(t, "reaching fb again", 3*time.Minute, "ping -c1 -W2 "+fb4, ok)
 	fb.eventually(t, "reaching lx again", time.Minute, "ping -c1 -t2 "+lx4, ok)
 	lx.eventually(t, "a pair key past the bumps", 3*time.Minute, pairsCmd, newer(asleep))
-	lx.eventually(t, "every tunnel on a pair key", time.Minute, "juist status",
-		has("Post-quantum  every tunnel: 1 by a pair key"))
 }
 
 // pingAcrossBump pings fb4 from lx every 200 ms for three minutes, bump

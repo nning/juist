@@ -239,3 +239,52 @@ func TestAPortTheTerminatorCannotHoldIsSaid(t *testing.T) {
 		t.Errorf("notes %v", notes)
 	}
 }
+
+// A service meant for members alone goes to no name the log has public:
+// juistd holds it back, also when said again without --members, until
+// --members=false; once the log has the name for members, it is served.
+func TestAServiceForMembersGoesToNoPublicName(t *testing.T) {
+	t.Parallel()
+	laptop, vps := homeAndVPS(t)
+	layout := *noHost
+	layout.serveScript = filepath.Join(t.TempDir(), "serve.sh")
+	if err := os.WriteFile(layout.serveScript, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	vps.cli.host, vps.cli.root = &layout, true
+	laptop.mustRun("network", "domain", "pub.example.org")
+	mustContain(t, vps.mustRun("publish", "add", "wiki", "127.0.0.1:2343", "--members"),
+		"wiki.pub.example.org goes to 127.0.0.1:2343 once published on this device for members alone")
+	laptop.mustRun("publish", "add", "vps", "photos")
+	eventually(t, "the vps learns photos", func() bool { return strings.Contains(vps.mustRun("publish"), "photos.pub.example.org") })
+	withheld := "warning: not serving photos.pub.example.org, its service meant for members alone: the log has the name public"
+	mustContain(t, vps.mustRun("publish", "add", "photos", "127.0.0.1:2342", "--members"), withheld,
+		"hint: an admin publishes it: juist publish add vps photos.pub.example.org --members")
+	mustContain(t, vps.mustRun("status"), withheld)
+	mustContain(t, vps.mustRun("publish", "add", "photos", "127.0.0.1:2342"), withheld)
+	if out := vps.mustRun("publish", "add", "photos", "127.0.0.1:2342", "--members=false"); strings.Contains(out, withheld) {
+		t.Errorf("--members=false still held it back:\n%s", out)
+	}
+	vps.mustRun("publish", "add", "photos", "127.0.0.1:2342", "--members")
+	mustContain(t, vps.mustRun("publish"), "127.0.0.1:2342 (members)")
+	laptop.mustRun("publish", "add", "vps", "photos", "--members")
+	eventually(t, "the vps serves photos for members", func() bool { return !strings.Contains(vps.mustRun("status"), withheld) })
+
+	// On an admin's device, the mark changes nothing in the log by itself.
+	admin := layout
+	admin.serveScript = filepath.Join(t.TempDir(), "serve.sh")
+	if err := os.WriteFile(admin.serveScript, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	laptop.cli.host, laptop.cli.root = &admin, true
+	laptop.mustRun("publish", "add", "blog", "127.0.0.1:9", "--members")
+	laptop.mustRun("publish", "add", "laptop", "blog", "--members=false")
+	mustContain(t, laptop.mustRun("publish", "add", "blog", "127.0.0.1:9"),
+		"warning: not serving blog.pub.example.org, its service meant for members alone: the log has the name public",
+		"hint: an admin publishes it: juist publish add laptop blog.pub.example.org --members")
+	for _, l := range strings.Split(laptop.mustRun("publish"), "\n") {
+		if strings.HasPrefix(l, "blog.") && (strings.Contains(l, "443 (members)") || !strings.Contains(l, "127.0.0.1:9 (members)")) {
+			t.Errorf("the device's mark changed the log, or went: %q", l)
+		}
+	}
+}

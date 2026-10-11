@@ -156,7 +156,7 @@ func TestARouterThatIsNotPostQuantumCarriesNothingElse(t *testing.T) {
 	if got := f.peerSubnets(t, router); len(got) != 0 {
 		t.Errorf("the router carries %v", got)
 	}
-	if r := f.subnetRoute(t, "192.168.50.0/24"); r.InUse || !strings.Contains(r.Why, "tunnel is not post-quantum") {
+	if r := f.subnetRoute(t, "192.168.50.0/24"); r.InUse || !strings.Contains(r.Why, "its router runs an older juist") {
 		t.Errorf("the status says %+v", r)
 	}
 	p := f.peerOf(t, router)
@@ -166,9 +166,6 @@ func TestARouterThatIsNotPostQuantumCarriesNothingElse(t *testing.T) {
 	if a := p.Access; a == nil || !slices.Equal(a.Open, []conn.Ports{tcp(f.d.gossipPort)}) ||
 		!slices.Equal(a.Sends, []conn.Ports{tcp(7001)}) || a.Through != nil {
 		t.Errorf("it may open %+v", a)
-	}
-	if pq := f.d.Status().PQ; pq == nil || !slices.Equal(pq.None, []string{router.record.Name}) {
-		t.Errorf("the status counts %+v", pq)
 	}
 }
 

@@ -5,12 +5,12 @@ description: Dem Netz oder einem Gerät einen anderen Namen geben, die IPv4-Adre
 lead: Du kannst ein Netz oder ein Gerät umbenennen und die IPv4-Adressen in einen anderen Bereich verschieben, ohne etwas neu einzurichten. Die alten Adressen funktionieren noch eine Woche lang, damit ein Gerät, das in dieser Zeit offline ist, nicht den Anschluss verliert.
 ---
 
-## Worum es geht
+## Namen und Adressen
 
 Der Name eines Netzes ist nur eine Bezeichnung. Er steht in `juist status`,
 und mit ihm sprichst du das Netz in Befehlen an. Sonst ändert ein neuer Name
-nichts. Für den Namen eines Geräts gilt dasselbe, dazu kommt sein Name im DNS:
-`laptop.home.juist`.
+nichts. Für den Namen eines Geräts gilt dasselbe, nur ergibt er zusätzlich
+den DNS-Namen des Geräts: `laptop.home.juist`.
 
 Jedes Gerät hat im Netz eine IPv4- und eine IPv6-Adresse. Beim
 Umnummerieren verschiebst du die IPv4-Adressen, entweder die aller Geräte
@@ -50,13 +50,15 @@ Schlüssel, Adressen, Rollen und veröffentlichte Namen bleiben, wie sie waren.
 {{< /step >}}
 
 Das Gerät gibst du an wie bei `juist remove`: mit Namen, Adresse oder
-Schlüssel. Einen Namen, den schon ein anderes Gerät hat, egal in welcher
-Schreibweise, lehnt juist ab. Ein Gerät, das
-[Dateien teilt]({{< relref "docs/publishing" >}}), teilt unter dem neuen
-Namen, `tablet.pub.example.org`; deshalb lehnt juist auch einen Namen ab, den
-ein anderes Gerät veröffentlicht, einen, den das Gerät selbst veröffentlicht
-oder auf sich zeigen lässt, und einen, der kein DNS-Label ergibt. Ein
-laufendes `juist share` gibt seinen neuen Link aus.
+Schlüssel. Einen Namen, den schon ein anderes Gerät hat, lehnt juist ab,
+unabhängig von Groß- und Kleinschreibung.
+
+Ein Gerät, das [Dateien teilt]({{< relref "docs/publishing" >}}), teilt sie
+unter seinem neuen Namen, etwa `tablet.pub.example.org`. Bei einem solchen
+Gerät lehnt juist außerdem einen Namen ab, den ein anderes Gerät
+veröffentlicht, einen, den das Gerät selbst schon veröffentlicht oder auf
+sich zeigen lässt, und einen, der kein gültiges DNS-Label ist. Ein laufendes
+`juist share` gibt seinen neuen Link aus.
 
 ## Die Adressen aller Geräte verschieben
 
@@ -92,8 +94,8 @@ etwa `10.7.0.2 (was 198.18.36.2)`.
 {{< /step >}}
 
 Bis zum Ablauf der Frist sind die Geräte unter beiden Adressen erreichbar.
-Danach gelten nur noch die neuen. Verbindungen laufen beim Umzug weiter,
-außer solchen von oder zu einer alten Adresse, die mit ihr enden.
+Danach gelten nur noch die neuen. Verbindungen laufen beim Umzug weiter.
+Nur Verbindungen von oder zu einer alten Adresse enden, wenn diese wegfällt.
 
 ## Die Adresse eines einzelnen Geräts verschieben
 
@@ -101,10 +103,11 @@ außer solchen von oder zu einer alten Adresse, die mit ihr enden.
 juist network renumber phone 10.7.0.9
 ```
 
-Damit bekommt `phone` die Adresse `10.7.0.9` innerhalb des Netzbereichs. Die
-alte Adresse funktioniert wie oben bis zum Ablauf der Frist weiter.
+Damit bekommt `phone` die Adresse `10.7.0.9`, die im Bereich des Netzes
+liegen muss. Die alte Adresse funktioniert wie oben bis zum Ablauf der Frist
+weiter.
 
-## Alte Adressen sofort stilllegen
+## Alte Adressen vorzeitig stilllegen
 
 Haben alle Geräte vom Umzug erfahren, musst du nicht auf die Frist warten:
 
@@ -120,9 +123,9 @@ alte Adresse verlieren.
 
 `juist create` zeigt das Break-glass-Geheimnis des Netzes einmal an, als
 Zeile `Break-glass   juist-break-glass-1.…`, und speichert es nirgends. Mit
-ihm endet das Netz endgültig, ganz ohne Admin: der Ausweg, wenn nicht mehr
-genug Admin-Schlüssel übrig sind, um es zu ändern, weil sie verloren oder
-gestohlen sind.
+ihm beendest du das Netz endgültig, ganz ohne Admin. Das ist der Ausweg, wenn
+nicht mehr genug Admin-Schlüssel übrig sind, um das Netz zu ändern, weil sie
+verloren gegangen oder gestohlen worden sind.
 
 {{< step on="einem Gerät des Netzes" >}}
 ```console {device="laptop"}
@@ -131,19 +134,19 @@ disabled "home"; every device stops as the record reaches it
 ```
 {{< /step >}}
 
-Ohne Pipe fragt `juist network disable` nach der Zeile, die es nicht anzeigt,
-und dann, ob es das Netz beenden soll. `--secrets FILE` liest die Zeile aus
-einer Datei.
+Ohne Pipe fragt `juist network disable` nach der Zeile, ohne sie bei der
+Eingabe anzuzeigen, und dann, ob es das Netz beenden soll. `--secrets FILE`
+liest die Zeile aus einer Datei.
 
-Jedes Gerät gibt den Record weiter und baut seine Tunnel ab, sobald es davon
-erfährt, und sein `juist status` meldet `disabled`. Jedes beginnt dann mit
-`juist reset` von vorn und tritt einem Netz bei, das mit `juist create` neu
-entsteht.
+Jedes Gerät gibt den Record weiter und baut seine Tunnel ab, sobald es ihn
+erhält, und sein `juist status` meldet dann `disabled`. Um weiterzumachen,
+setzt du jedes Gerät mit `juist reset` zurück und lässt es einem neuen Netz
+beitreten, das du mit `juist create` anlegst.
 
-Bewahre die Zeile getrennt von den Admin-Schlüsseln auf: Ein Tresor mit
-beidem regiert das Netz und beendet es.
+Bewahre die Zeile getrennt von den Admin-Schlüsseln auf: Wer einen Tresor mit
+beidem erbeutet, kann das Netz verwalten und auch beenden.
 
-## Gut zu wissen
+## Hinweise
 
 - Alte IPv4-Adressen funktionieren in der Voreinstellung noch 7 Tage. Mit
   `--for 12h` oder `--for 14d` wählst du eine andere Frist. Sie sollte lang
@@ -171,15 +174,16 @@ beidem regiert das Netz und beendet es.
   teilt.
 - Ein Admin-Schlüssel behält den Gerätenamen, unter dem er abgelegt wurde;
   `juist admins` zeigt ihn.
-- Wer die Break-glass-Zeile hat, kann das Netz beenden. Ein Gerät mit einem
-  juist, das älter ist als `juist network disable`, hält erst an, wenn es
-  aktualisiert ist, und ein Gerät, das gerade offline ist, findet danach
-  kein Gerät mehr, das es erreicht.
+- Wer die Break-glass-Zeile hat, kann das Netz beenden. Ein Gerät mit einer
+  juist-Version, die älter ist als `juist network disable`, hält erst an, wenn
+  es aktualisiert ist. Ein Gerät, das in dem Moment offline ist, findet
+  danach kein Gerät mehr, mit dem es sich verbinden kann.
 - Netze, die entstanden sind, bevor juist die Zeile anzeigte, haben ihre
   Geheimnisse im Schlüsselspeicher, als `break-glass-NETZ.secrets`.
   `juist network disable` liest diese Datei dort; bring sie offline.
 
-## Wenn etwas nicht klappt
+## Fehlersuche
+
 
 | Was du siehst | Was du tun kannst |
 |---|---|

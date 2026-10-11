@@ -209,7 +209,9 @@ Raise the network to this build's record schema:
             (juist publish add --tcp)
   schema 12 relays on 443 under a public name (juist set --relay-name)
   schema 13 an access policy (juist policy)
-  schema 14 post-quantum tunnels: a preshared key in every handshake
+  schema 14 quantum-safe tunnels: a preshared key in every handshake
+  schema 15 names for members alone, by name in the access policy
+            (juist publish add --members, pass from … to name NAME)
 
 Devices on older builds stop at the upgrade until updated: update them first.`}
 	fs := newFlags(s.name)

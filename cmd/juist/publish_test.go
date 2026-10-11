@@ -345,3 +345,79 @@ func TestAStartedTerminatorIsWaitedFor(t *testing.T) {
 		t.Fatalf("waiting for the terminator: %v\n%s", err, out)
 	}
 }
+
+// A name is published for members alone on 443, by TLS, and stays so where
+// a later command leaves it out, until --members=false makes it public.
+func TestPublishANameForMembersAlone(t *testing.T) {
+	t.Parallel()
+	admin := newCLI(t)
+	admin.mustRun("create", "home", "--device", "laptop")
+	enrollDevice(t, admin, "nas")
+	admin.mustRun("network", "domain", "pub.example.org")
+	mustContain(t, admin.mustRun("publish", "add", "nas", "photos", "--members"), "nas: publishes photos.pub.example.org:443 (members)")
+	mustContain(t, admin.mustRun("publish"), "photos.pub.example.org", "443 (members)")
+	members := func() bool {
+		t.Helper()
+		for _, n := range openLog(t, admin).State().Nodes() {
+			for _, p := range n.Published {
+				if p.Label == "photos" {
+					return p.Members
+				}
+			}
+		}
+		t.Fatal("photos is published nowhere")
+		return false
+	}
+	admin.mustRun("publish", "add", "nas", "photos")
+	if !members() {
+		t.Fatal("a command leaving --members out made the name public")
+	}
+	for _, args := range [][]string{
+		{"publish", "add", "nas", "wiki", "--members", "--tcp=2222", "22"},
+		{"publish", "add", "nas", "wiki", "--members", "--proxy"},
+		{"publish", "add", "nas", "wiki", "8443", "--members"},
+		{"publish", "add", "nas", "photos", "--proxy"},
+	} {
+		if out, err := admin.run(args...); err == nil {
+			t.Errorf("juist %q taken:\n%s", args, out)
+		}
+	}
+	auth := openLog(t, admin)
+	var nas types.NodeRecord
+	for _, n := range auth.State().Nodes() {
+		if n.Name == "nas" {
+			nas = n
+		}
+	}
+	aum, err := auth.Builder().SetPublished(nas.Identity, []types.PublishedName{{Label: "photos", Port: 443}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, strings.Join(effect(&aum, auth.State(), 0), "\n"),
+		"makes photos.pub.example.org public, for the internet: it was for members alone")
+	if out := admin.mustRun("publish", "add", "nas", "photos", "--members=false"); strings.Contains(out, "(members)") ||
+		!strings.Contains(out, "nas: publishes photos.pub.example.org:443") {
+		t.Errorf("made public, it says:\n%s", out)
+	}
+	if members() {
+		t.Fatal("--members=false left the name for members")
+	}
+}
+
+// A name for members alone not served for sharing its service is warned of
+// in the status, and what to do is a hint of its own.
+func TestTheStatusWarnsOfANameSharingItsService(t *testing.T) {
+	t.Parallel()
+	s := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 1,
+		Publish: &ipc.Publish{Shared: []string{"photos.pub.example.org with web.pub.example.org"}}}}
+	v := statusOf(s, time.Unix(1_000_000, 0), noPaint)
+	for _, want := range []line{
+		{kind: lineWarn, text: "not serving photos.pub.example.org, which is for members alone: web.pub.example.org " +
+			"reaches its service as it is, whose clients could ask it for photos.pub.example.org by Host"},
+		{kind: lineHint, text: sharedHint},
+	} {
+		if !slices.Contains(v.head, want) {
+			t.Errorf("head %v lacks %v", v.head, want)
+		}
+	}
+}

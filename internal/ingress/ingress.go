@@ -95,6 +95,7 @@ type ingress struct {
 	table   atomic.Pointer[map[string]ipc.PublishedTarget]
 	tcp     atomic.Pointer[map[uint16]ipc.PublishedTarget] // by public port
 	relays  atomic.Pointer[map[string]bool]                // in table, served by TLS alone
+	members atomic.Pointer[map[string]ipc.PublishedTarget] // not in table: for members alone
 	conns   chan struct{}
 	sources pipe.Sources
 	named   pipe.Named
@@ -163,6 +164,7 @@ func Serve(ctx context.Context, tlsLn, httpLn net.Listener, o Options) error {
 	in := &ingress{o: o, conns: make(chan struct{}, o.MaxConns), sources: pipe.Sources{Max: o.MaxPerSource},
 		listeners: map[uint16]net.Listener{}, failed: map[uint16]bool{}}
 	in.table.Store(&map[string]ipc.PublishedTarget{})
+	in.members.Store(&map[string]ipc.PublishedTarget{})
 	in.tcp.Store(&map[uint16]ipc.PublishedTarget{})
 	in.relays.Store(&map[string]bool{})
 	if o.started != nil {
@@ -244,6 +246,13 @@ func (in *ingress) serve(ctx context.Context, p *ipc.Published) {
 			table[t.Name] = t
 		}
 	}
+	members := make(map[string]ipc.PublishedTarget, len(p.Members))
+	for _, t := range p.Members {
+		if _, ok := table[t.Name]; !ok {
+			members[t.Name] = t
+		}
+	}
+	in.members.Store(&members)
 	tcp := make(map[uint16]ipc.PublishedTarget, len(p.TCP))
 	for _, t := range p.TCP {
 		if t.Public != 0 {
@@ -253,10 +262,7 @@ func (in *ingress) serve(ctx context.Context, p *ipc.Published) {
 	in.relays.Store(&relays)
 	in.table.Store(&table)
 	in.tcp.Store(&tcp)
-	in.named.CloseUnless(func(name string) bool {
-		_, ok := in.lookup(name)
-		return ok
-	})
+	in.named.CloseUnless(in.stillPassed)
 	if q := in.quic.Load(); q != nil {
 		q.closeUnless(func(name string) bool {
 			_, ok := in.lookupPublished(name)
@@ -377,6 +383,34 @@ func (in *ingress) lookup(name string) (ipc.PublishedTarget, bool) {
 	return t, ok
 }
 
+// validationKey is how a connection passed for the CA's validation alone is
+// named, apart from those passed by name.
+const validationKey = "acme "
+
+// stillPassed reports whether a connection keyed so may go on: one passed
+// by name while the name is served so, one for the CA's validation while
+// the name is served at all.
+func (in *ingress) stillPassed(key string) bool {
+	if name, ok := strings.CutPrefix(key, validationKey); ok {
+		_, served := in.lookup(name)
+		_, members := in.lookupMembers(name)
+		return served || members
+	}
+	_, ok := in.lookup(key)
+	return ok
+}
+
+// acmeALPN is the protocol the CA asks for to validate a name by
+// TLS-ALPN-01 (RFC 8737).
+const acmeALPN = "acme-tls/1"
+
+// lookupMembers is where name goes, if it is a name for members alone, for
+// the CA's validation.
+func (in *ingress) lookupMembers(name string) (ipc.PublishedTarget, bool) {
+	t, ok := (*in.members.Load())[strings.TrimSuffix(strings.ToLower(name), ".")]
+	return t, ok
+}
+
 // lookupPublished is [ingress.lookup] for a published name alone, not a
 // relay's, which speaks neither QUIC nor plain HTTP.
 func (in *ingress) lookupPublished(name string) (ipc.PublishedTarget, bool) {
@@ -492,15 +526,26 @@ func (in *ingress) splice(ctx context.Context, c net.Conn) {
 			time.Since(start).Round(time.Millisecond))
 	}()
 	_ = c.SetDeadline(time.Now().Add(in.o.helloTimeout))
-	name, hello, err := peekServerName(c)
+	name, protos, hello, err := peekServerName(c)
 	if err != nil {
 		outcome = "no hello"
 		return
 	}
 	t, ok := in.lookup(name)
+	key := t.Name
 	if !ok {
-		outcome = "not served"
-		return
+		mt, members := in.lookupMembers(name)
+		switch {
+		case !members:
+			outcome = "not served"
+			return
+		case !slices.Equal(protos, []string{acmeALPN}):
+			// The CA's validation alone, which asks acme-tls/1 and nothing
+			// else, and gets nothing but its challenge's answer there.
+			outcome = "members only"
+			return
+		}
+		t, ok, key = mt, true, validationKey+mt.Name
 	}
 	target, err := in.dial(ctx, t)
 	if err != nil {
@@ -517,10 +562,10 @@ func (in *ingress) splice(ctx context.Context, c net.Conn) {
 		return
 	}
 	up.Add(int64(len(hello)))
-	in.named.Add(c, t.Name, func() { c.Close(); target.Close() })
+	in.named.Add(c, key, func() { c.Close(); target.Close() })
 	defer in.named.Remove(c)
-	if _, ok := in.lookup(t.Name); !ok {
-		return // withdrawn meanwhile
+	if !in.stillPassed(key) {
+		return // withdrawn, or made for members alone, meanwhile
 	}
 	h := &handshake{c: c, wait: in.o.answer}
 	pipe.Join(ctx, watched{c, func(n int) { up.Add(int64(n)); h.fromClient(n) }},
@@ -656,19 +701,21 @@ func (c *givenBack) Close() error {
 var errPeeked = errors.New("ingress: client hello read")
 
 // peekServerName reads c's ClientHello with crypto/tls's own parser, and
-// returns the name it asks for and every byte read, to replay to the target.
-func peekServerName(c net.Conn) (string, []byte, error) {
+// returns the name and the protocols it asks for and every byte read, to
+// replay to the target.
+func peekServerName(c net.Conn) (string, []string, []byte, error) {
 	var buf bytes.Buffer
 	var name string
+	var protos []string
 	cfg := &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
-		name = h.ServerName
+		name, protos = h.ServerName, slices.Clone(h.SupportedProtos)
 		return nil, errPeeked
 	}}
 	err := tls.Server(readOnlyConn{Conn: c, r: io.TeeReader(c, &buf)}, cfg).Handshake()
 	if name == "" {
-		return "", nil, fmt.Errorf("ingress: no server name: %w", err)
+		return "", nil, nil, fmt.Errorf("ingress: no server name: %w", err)
 	}
-	return name, buf.Bytes(), nil
+	return name, protos, buf.Bytes(), nil
 }
 
 // readOnlyConn reads through r and writes nothing, so that the handshake

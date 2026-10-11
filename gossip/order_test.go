@@ -44,7 +44,7 @@ func TestAnOrdinaryResponderSpeaksLast(t *testing.T) {
 
 	ss := &sessionSeal{epoch: 1}
 	view, _ := us.log.View()
-	hello := us.node.hello(&view)
+	hello := us.node.hello(&view, true)
 	if err := us.node.writeSealed(c, ss, &hello); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestAnOrdinaryResponderSpeaksLast(t *testing.T) {
 		t.Fatalf("read %v, %v; want a hello", f.Kind, err)
 	}
 	sendsNothingFor(t, c, 300*time.Millisecond, "after the hellos")
-	ours, err := us.node.records(&view, &frame{Anchor: view.Anchor}, false)
+	ours, err := us.node.records(&view, &frame{Anchor: view.Anchor})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestAnOrdinaryInitiatorSpeaksFirst(t *testing.T) {
 			return
 		}
 		view, _ := them.log.View()
-		hello := them.node.hello(&view)
+		hello := them.node.hello(&view, true)
 		if err := them.node.writeSealed(c, ss, &hello); err != nil {
 			got <- kindInvalid
 			return
@@ -117,7 +117,7 @@ func TestACatchUpResponderSpeaksFirst(t *testing.T) {
 		t.Fatal("granted by someone else")
 	}
 	ss := &sessionSeal{catchUp: key, with: from}
-	hello := p.sleeper.node.hello(&view)
+	hello := p.sleeper.node.hello(&view, true)
 	hello.Self, hello.Endpoints = nil, nil
 	if err := p.sleeper.node.writeSealed(c, ss, &hello); err != nil {
 		t.Fatal(err)

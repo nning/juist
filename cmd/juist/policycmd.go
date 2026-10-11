@@ -242,8 +242,9 @@ tests, setting nothing.`}
 func policyTest(a *app, args []string) error {
 	s := spec{name: "juist policy test", args: "from DEVICE to DEST [proto P [port N]]", min: 4, max: -1, about: `
 Say whether the network's access policy lets DEVICE open DEST, a device,
-internet via DEVICE or an address, and which rule passes it; exits 1 where
-none does. It takes what a test line in a policy takes.`}
+internet via DEVICE, an address or name NAME, a published name, and which
+rule passes it; exits 1 where none does. It takes what a test line in a
+policy takes.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -261,6 +262,11 @@ none does. It takes what a test line in a policy takes.`}
 	}
 	t := p.Tests[0]
 	n := policy.NetworkOf(state, a.now().Unix())
+	if len(t.To.Names) == 1 {
+		if _, _, ok := n.Publisher(t.To.Names[0]); !ok {
+			return fmt.Errorf("%s is published on no device by TLS", nameUnder(t.To.Names[0], state.Domain()))
+		}
+	}
 	names := policy.Names(state)
 	passes, by := n.Explain(t)
 	switch {

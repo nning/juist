@@ -5,13 +5,13 @@ description: Ein Gerät in mehrere Netze gleichzeitig bringen und juist mitteile
 lead: Ein Gerät kann mehreren Netzen gleichzeitig angehören, etwa einem privaten und einem für die Arbeit. Die Netze laufen nebeneinander, jedes mit eigenem Daemon, eigener Adresse und eigenen Schlüsseln.
 ---
 
-## Worum es geht
+## Ein juistd pro Netz
 
 Dein Laptop gehört vielleicht zu deinem privaten Netz und zum Netz deines
 Teams. Beide haben verschiedene Admins, verschiedene Geräte und verschiedene
 Regeln. juist hält sie auf dem Laptop getrennt, indem jedes Netz seinen
-eigenen juistd bekommt. juistd ist der Daemon, also der Dienst im
-Hintergrund, der die Tunnel aufrecht hält
+eigenen juistd bekommt, den Daemon, der im Hintergrund die Tunnel aufrecht
+hält
 ([So funktioniert juist]({{< relref "docs/how-it-works" >}})).
 
 Das erste Netz läuft in `juistd.service`. Jedes weitere läuft daneben in
@@ -29,9 +29,10 @@ ersten:
 sudo juist join 'juist:…'
 ```
 
-Das neue Netz, etwa `work`, läuft dann neben `home`. Mit `juist create work`
-legst du auf dieselbe Weise ein eigenes Netz an. Rufst du den Befehl ohne
-sudo auf, fragt `juist` einmal nach sudo, um den neuen juistd zu starten.
+Das neue Netz, etwa `work`, läuft dann neben `home`. Willst du stattdessen
+ein eigenes Netz anlegen, geht das mit `juist create work` genauso. Rufst du
+den Befehl ohne sudo auf, fragt `juist` einmal nach sudo, um den neuen juistd
+zu starten.
 {{< /step >}}
 
 {{< step on="laptop" >}}
@@ -42,14 +43,14 @@ juist status
 juist devices
 ```
 
-`juist status` zeigt beide Netze nacheinander, jedes mit seinem juistd als
-Überschrift. `juist devices` listet die Geräte aller Netze auf.
+`juist status` zeigt beide Netze nacheinander, jedes unter einer Überschrift
+mit seinem juistd. `juist devices` listet die Geräte aller Netze auf.
 {{< /step >}}
 
-## Angeben, welches Netz gemeint ist
+## Das Netz auswählen
 
-Befehle, die ein Netz betreffen, nehmen es als erstes Argument, entweder mit
-seinem Namen oder mit dem Namen seines juistd:
+Befehle, die ein einzelnes Netz betreffen, nehmen es als erstes Argument,
+entweder mit seinem Namen oder mit dem Namen seines juistd:
 
 ```sh
 juist devices work                      # über den Namen
@@ -80,9 +81,9 @@ davor. Um ein Gerät namens `home` ins Netz `home` einzuladen, rufst du also
 ## Überlappende Adressbereiche
 
 Die IPv4-Bereiche zweier Netze dürfen sich überschneiden. Beide laufen
-trotzdem auf einem Gerät, das Netz mit dem höher nummerierten juistd dann
-aber nur über IPv6. `juist status` weist darauf hin und sagt, welches Netz du
-umnummerieren solltest:
+trotzdem auf demselben Gerät, das Netz mit dem höher nummerierten juistd dann
+aber nur über IPv6. `juist status` weist darauf hin und schlägt vor, welches
+Netz du umnummerieren solltest:
 
 ```console
 $ juist status
@@ -95,12 +96,12 @@ Sobald eines der beiden Netze
 [umnummeriert]({{< relref "docs/network-changes" >}}) ist, funktioniert IPv4
 von selbst wieder.
 
-## Jedes Netz hat seinen eigenen Admin-Schlüssel
+## Ein Admin-Schlüssel pro Netz
 
 Ein Admin-Schlüssel ist der Schlüssel, mit dem ein Admin Änderungen
 signiert. Jedes Netz bekommt einen eigenen, etwa `admins/alice@home.key` und
 `admins/alice@work.key`. Geht ein Schlüssel verloren oder wird er gestohlen,
-ist also nur ein Netz betroffen. Soll ein neues Netz mit einem Schlüssel
+ist daher nur ein Netz betroffen. Soll ein neues Netz mit einem Schlüssel
 verwaltet werden, den du schon hast, gibst du ihn an:
 `juist create lab --admin-key alice@home`. Mehr dazu unter
 [Mehrere Admins]({{< relref "docs/admins" >}}).
@@ -113,17 +114,17 @@ juist reset work --force
 
 Damit verlässt das Gerät `work`, und der zugehörige juistd wird entfernt.
 `home` bleibt mit seinen Schlüsseln unverändert. `--force` ist nötig,
-solange `work` das Gerät noch als Mitglied führt. Entferne das Gerät dort
-nach Möglichkeit vorher ([Schlüssel]({{< relref "docs/keys" >}})).
+solange `work` das Gerät noch als Mitglied führt. Entferne das Gerät nach
+Möglichkeit vorher aus `work` ([Schlüssel]({{< relref "docs/keys" >}})).
 
-## Gut zu wissen
+## Hinweise
 
 - Auf einem Host laufen höchstens zehn juistd: `juistd.service` und
   `juistd@juist1` bis `juistd@juist9`.
 - Die Ports des n-ten juistd sind die des ersten plus 10·n, also 41653/udp
   für `juistd@juist1` und für den Log-Abgleich TCP 41654 auf `juist1`. Die
-  Firewall-Profile der Pakete enthalten die Ports des ersten Netzes, die der
-  anderen nennt `juist status`
+  Firewall-Profile, die die Pakete installieren, enthalten nur die Ports des
+  ersten Netzes. Die der anderen nennt `juist status`
   ([Relays, Ports und Firewalls]({{< relref "docs/relays" >}})).
 - Läuft der juistd des zweiten Netzes nicht, startest du ihn mit
   `sudo systemctl enable --now juistd@juist1`. Sein Log zeigt
@@ -132,13 +133,14 @@ nach Möglichkeit vorher ([Schlüssel]({{< relref "docs/keys" >}})).
   rc.conf-Variable `juistd_instances`, und `service juistd start juist1`
   startet eine davon.
 - Ein Gerät kann demselben Netz nur einmal angehören. Weil eine Einladung
-  nicht verrät, für welches Netz sie gilt, wird ein zweiter Beitritt zunächst
-  angenommen. Der neue juistd lehnt das Netz dann aber ab und nennt die
-  Aufnahme, die ein Admin wieder entfernen soll.
-- Ein Gerät in mehreren Netzen leitet seinen Internetverkehr nur über
-  [einen Exit-Node]({{< relref "docs/exit-nodes" >}}) eines dieser Netze.
+  nicht verrät, für welches Netz sie gilt, wird ein zweiter Beitritt zum
+  selben Netz zunächst angenommen. Der neue juistd lehnt das Netz dann aber ab
+  und nennt die Aufnahme, die ein Admin wieder entfernen sollte.
+- Ein Gerät in mehreren Netzen leitet seinen Internetverkehr über
+  [einen Exit-Node]({{< relref "docs/exit-nodes" >}}) nur eines dieser Netze.
 - Alle juistd laufen unter demselben Benutzer `juist`. Wer einen davon
   übernimmt, hat die Geräteschlüssel aller Netze auf dem Host.
-- Die Mitglieder eines Netzes können herausfinden, welche Adressen dieser
-  Host in seinen anderen Netzen hat, und damit, in welchen Adressbereichen er
-  sich bewegt.
+- Die Mitglieder eines Netzes können erfahren, welche Adressen dieser Host in
+  seinen anderen Netzen hat, und damit, welche Adressbereiche diese Netze
+  nutzen.
+

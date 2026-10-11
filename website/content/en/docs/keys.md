@@ -2,18 +2,18 @@
 title: Keys, rotating and resetting
 linkTitle: Keys
 description: Give a device new keys, start a device over, deal with a lost device, back up admin keys, and know what cannot be undone.
-lead: Each device has keys of its own, and the network shares one secret. You can replace them, take a device out and start it over, and cut off a device you have lost.
+lead: Each device has its own keys, and all devices in a network share one secret. You can replace both, take a device out and start it over, and cut off a device you have lost.
 ---
 
-## What it is
+## Which keys there are
 
-Each device holds its own keys. Its WireGuard and sealing keys protect its
-tunnels and the messages sealed to it. Its identity key names it in the
+Each device has its own keys. Its WireGuard and sealing keys protect its
+tunnels and the messages sealed to it. Its identity key identifies it in the
 membership log, the signed list of every change that every device checks
 ([How juist works]({{< relref "docs/how-it-works" >}})).
 
-The network also has a group secret, which every member shares and uses to
-find the others. Admin keys are different again: they belong to people and
+The network also has a group secret, which all members share and use to find
+each other. Admin keys are something else again: they belong to people and
 approve changes ([Several admins]({{< relref "docs/admins" >}})).
 
 Replacing keys is called rotating them. A new key is a change to the log, so
@@ -21,15 +21,15 @@ the admins approve it like any other change.
 
 ## Rotating keys
 
-| To replace … | run | note |
+| To replace | Run | Note |
 |---|---|---|
 | this device's WireGuard and sealing keys | `juist rotate` | its name and addresses stay |
 | this device's identity key | `juist rotate identity` | its IPv6 address changes |
 | the network's group secret | `juist rotate group-secret` | after a leak |
 
-Use `juist rotate` when you want new keys on a device you still trust. Where
-an admin key of the network is on the device and the quorum needs one vote,
-it applies at once:
+Use `juist rotate` to give new keys to a device you still trust. If the device
+holds an admin key of the network and the quorum needs only one vote, the
+change takes effect immediately:
 
 ```console {device="laptop"}
 $ juist rotate
@@ -38,20 +38,22 @@ new keys live
 rotated this device's keys
 ```
 
-Where the change needs another admin, it waits for them, and the new keys
-stay staged until the log names them. `juist rotate abandon` drops a rotation
-that still waits for approval.
+If the change needs another admin, it waits for their approval, and the new
+keys stay staged until the log contains them. `juist rotate abandon` drops a
+rotation that is still waiting for approval.
 
-Connections keep running when the device takes its new keys: each peer's
-tunnel waits a moment for a handshake under them. A device that runs a relay
-restarts its tunnels instead, and `juist rotate identity`, which moves the
-device's IPv6 address, ends what ran over the old one.
+Connections keep running while the device switches to its new keys: the
+tunnel to each peer waits briefly for a handshake with the new keys. A device
+that runs a relay restarts its tunnels instead. `juist rotate identity`
+changes the device's IPv6 address, which ends any connections that used the
+old one.
 
 ## Starting a device over
 
-`juist reset` makes a device leave the network, as on a fresh install. It
-forgets the network, and this device's keys, log, peers and operator for it.
-Admin keys are kept. Here `phone` was removed from the network already:
+`juist reset` takes a device out of the network and leaves it as if freshly
+installed. It forgets the network along with everything it kept for it: its
+keys, log, peers and operator. Admin keys are kept. In this example, `phone`
+had already been removed from the network:
 
 ```console {device="phone"}
 $ juist reset
@@ -59,15 +61,17 @@ forget "home" and reset this device, with new keys? [y/N] y
 reset; new keys, no network
 ```
 
-Where your keystore holds admin keys, it adds the line
+If your keystore holds admin keys, it adds the line
 `admin keys kept in ~/.config/juist/admins`, with the full path.
 
-A device the network still lists needs `--force`. Remove it first where you
-can, from an admin's device, so that the others stop trusting it too.
+If the network still lists the device, `juist reset` needs `--force`. Where
+you can, remove the device from an admin's device first, so that the other
+devices stop trusting it too.
 
 On a device in [several networks]({{< relref "docs/networks" >}}), only the
-network you name is forgotten, with its own juistd unless that is the first
-one: `juist reset work --force`. The other networks keep their keys.
+network you name is forgotten: `juist reset work --force`. Its juistd is
+removed too, unless it is the first network's. The other networks keep their
+keys.
 
 ## When a device is lost
 
@@ -78,32 +82,32 @@ Remove the lost device:
 juist remove phone
 ```
 
-This also rotates the group secret. Every device drops phone's tunnel as soon
-as it hears of the removal. A device cut off from the rest drops it at the
-latest when its freshness expires, after 48 hours without a voucher.
+This also rotates the group secret. Every device drops its tunnel to phone as
+soon as it hears of the removal. A device that is cut off from the rest drops
+it when its freshness expires at the latest, after 48 hours without a voucher.
 {{< /step >}}
 
 {{< step on="an admin's device" >}}
-If the lost device held an admin key, take that key's vote away too. The
-column `ON` of `juist admins` shows which key was on it:
+If the lost device held an admin key, remove that key's vote too. The `ON`
+column of `juist admins` shows which key was on it:
 
 ```sh
 juist admins remove nid:…
 ```
 
-This is refused if the remaining keys cannot reach the quorum.
+juist refuses this if the remaining keys cannot reach the quorum.
 {{< /step >}}
 
-A replacement device joins with a new invite, as any new device does
-([Invites]({{< relref "docs/invites" >}})). If you find the old device again,
+A replacement device joins with a new invite, like any new device
+([Invites]({{< relref "docs/invites" >}})). If the old device turns up again,
 its `juist status` says `removed`. Join it again with a new invite, or run
-`juist reset` there.
+`juist reset` on it.
 
 ## Backing up admin keys
 
-An admin key exists only in the keystore of the machine it was made on. To
-keep a copy in a password manager, print it as one line and pipe it there.
-`juist admins` lists the keys on this machine under `KEY HERE`:
+An admin key exists only in the keystore of the machine it was created on. To
+keep a copy in a password manager, print it as a single line and pipe it
+there. `juist admins` lists the keys on this machine under `KEY HERE`:
 
 {{< step on="an admin's machine" >}}
 ```sh
@@ -111,7 +115,7 @@ juist admins export alice@home | pass insert -m juist/alice
 ```
 {{< /step >}}
 
-To have it back, on any machine, pipe the line in again:
+To restore it on any machine, pipe the line back in:
 
 ```console {device="laptop"}
 $ pass show juist/alice | juist admins import alice@home
@@ -119,46 +123,47 @@ imported admin key "alice@home"
 it casts 1 vote in "home"
 ```
 
-The line goes through a pipe, never onto the command line. It carries a
-checksum, so a line cut short is refused. An import never replaces a key,
-and warns `"home" gives it no vote` where the key was removed since the
-backup.
+The line always goes through a pipe, never onto the command line. It carries
+a checksum, so a truncated line is refused. An import never replaces an
+existing key. If the key has been removed from the network since the backup,
+the import warns `"home" gives it no vote`.
 
-The break-glass line `juist create` showed is kept the same way, apart from
-the admin keys
+Keep the break-glass line that `juist create` showed the same way, but
+separately from the admin keys
 ([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
 
-A device's own keys are not exported: a copy on another machine would be a
-second device under the first one's name. A lost device is removed, and a new
-one invited.
+A device's own keys cannot be exported: a copy on another machine would be a
+second device under the first one's name. Instead, remove a lost device and
+invite a new one.
 
-## Good to know
+## Notes
 
-- Rotating, resetting and removing are for root and the device's
-  [operator]({{< relref "docs/operator" >}}). Approving takes an admin key.
-- `juist reset` warns when this device is the only one in the network: the
-  network ends with it.
+- Only root and the device's [operator]({{< relref "docs/operator" >}}) can
+  rotate, reset and remove. Approving takes an admin key.
+- `juist reset` warns when this device is the only one in the network, since
+  the network ends with it.
 - `juist log` shows every rotation and who approved it.
 
 {{< note danger >}}
 Losing a quorum of admin keys is final. With fewer admin keys left than a
-change needs, no change can be signed again: no device can be added or
-removed. The break-glass secret `juist create` shows does not give the
-network new admins: it ends it for good
+change needs, no change can ever be signed again: no device can be added or
+removed. The break-glass secret that `juist create` shows does not give the
+network new admins; it ends the network for good
 ([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
-What helps is a backup of each admin key, more admins than the quorum needs,
-each on devices of their own, and for `juist admins require`, one key more
-than it requires.
+To guard against this, back up every admin key, have more admins than the
+quorum needs, each on their own devices, and with `juist admins require`,
+hold one key more than it requires.
 {{< /note >}}
 
-Why juist accepts this is under
+Why juist accepts this is explained under
 [trade-offs]({{< home "trade-offs" >}}).
 
-## If something goes wrong
+## Troubleshooting
 
-| You see | What to do |
+| What you see | What to do |
 |---|---|
-| `juist: still a member of "home"` | `juist remove phone` on an admin's device first, or add `--force` |
-| `juist status`: `removed` | this device is out of the network: join again with a new invite, or `juist reset` |
-| `hint: the new keys stay staged until the log names them or: juist rotate abandon` | wait for the approval, or drop the rotation with `juist rotate abandon` |
-| `juist: no admin key of this network in …` | run it where an admin's key is |
+| `juist: still a member of "home"` | Run `juist remove phone` on an admin's device first, or add `--force`. |
+| `juist status`: `removed` | This device is no longer in the network. Join again with a new invite, or run `juist reset`. |
+| `hint: the new keys stay staged until the log names them or: juist rotate abandon` | Wait for the approval, or drop the rotation with `juist rotate abandon`. |
+| `juist: no admin key of this network in …` | Run the command where an admin's key is. |
+

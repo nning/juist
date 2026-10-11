@@ -45,6 +45,10 @@ func (n *Network) Failures(name Namer) []Failure {
 // pass, and the first rule that does; that rule is nil without a policy.
 func (n *Network) Explain(t types.PolicyTest) (bool, *types.PolicyRule) {
 	if n.Policy == nil {
+		if len(t.To.Names) == 1 {
+			m, name, ok := n.Publisher(t.To.Names[0])
+			return ok && (!name.Members || n.mayOpen(t.From, m)), nil
+		}
 		return true, nil
 	}
 	c := n.compile()
@@ -104,6 +108,16 @@ func (n *Network) passes(out func(types.Identity) Access, t types.PolicyTest) bo
 		return open(out(t.To.Nodes[0]).Own)
 	case t.To.Internet:
 		return open(out(t.To.ViaNodes[0]).Exit)
+	case len(t.To.Names) == 1:
+		m, name, ok := n.Publisher(t.To.Names[0])
+		if !ok {
+			return false
+		}
+		a := out(m.ID)
+		if name.Members {
+			return n.mayOpen(t.From, m) && slices.Contains(a.Names, name.Label)
+		}
+		return Allows(a.Own, types.ProtoTCP, name.Port)
 	}
 	addr := t.To.Prefixes[0].Addr()
 	for _, m := range n.Members {
@@ -114,6 +128,25 @@ func (n *Network) passes(out func(types.Identity) Access, t types.PolicyTest) bo
 		}
 	}
 	return false
+}
+
+// mayOpen reports whether from is a member a name for members alone on m may
+// be for, as the device takes it: no ingress, no service member, not m.
+func (n *Network) mayOpen(from types.Identity, m Member) bool {
+	i := slices.IndexFunc(n.Members, func(o Member) bool { return o.ID == from })
+	return i >= 0 && from != m.ID && !n.Members[i].Ingress && !n.Members[i].Service
+}
+
+// Publisher is the member publishing label by TLS, and the name.
+func (n *Network) Publisher(label string) (Member, Name, bool) {
+	for _, m := range n.Members {
+		for _, nm := range m.Names {
+			if nm.Label == label {
+				return m, nm, true
+			}
+		}
+	}
+	return Member{}, Name{}, false
 }
 
 // Warnings are what the policy names that cannot be meant as written: a
@@ -152,6 +185,11 @@ func (n *Network) Warnings(name Namer) []string {
 				out = append(out, fmt.Sprintf("%s is an ingress, which opens what is published alone", f.node(id)))
 			}
 		}
+		for _, l := range r.To.Names {
+			if _, _, ok := n.Publisher(l); !ok {
+				out = append(out, fmt.Sprintf("%s is published on no device by TLS", nameRef(l)))
+			}
+		}
 		for _, id := range r.To.ViaNodes {
 			if !byID[id].Exit {
 				out = append(out, fmt.Sprintf("%s is no exit node: juist grant %s exit", f.node(id), f.node(id)))
@@ -177,6 +215,11 @@ func (n *Network) Warnings(name Namer) []string {
 		for _, set := range []map[types.Identity]bool{r.from, r.to, r.via} {
 			for id := range set {
 				named[id] = true
+			}
+		}
+		for _, l := range r.names {
+			if m, _, ok := n.Publisher(l); ok {
+				named[m.ID] = true
 			}
 		}
 	}

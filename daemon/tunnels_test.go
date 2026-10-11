@@ -47,6 +47,111 @@ func TestTunnelsCountFreshHandshakesAndAnswers(t *testing.T) {
 	}
 }
 
+// A live peer naming no epoch is called outdated once it has had the time
+// to catch up, and no longer once it names one.
+func TestACheckCallsAnOlderBuildOutdated(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	pq, old := f.nw.devices[1], f.nw.devices[2]
+	f.learn(t, pq, 4001)
+	f.learnOld(t, old, 4002, false)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	answers := map[netip.Addr]bool{f.installed(t, 1).Addrs[0].Addr(): true, f.installed(t, 2).Addrs[0].Addr(): true}
+	f.mgr.mu.Lock()
+	f.mgr.answers = answers
+	f.mgr.mu.Unlock()
+	now := time.Now()
+	f.d.clock = func() time.Time { return now }
+	outdated := func() []string {
+		f.d.refreshReach(t.Context())
+		st := f.d.Status()
+		var marked []string
+		for _, r := range st.Reach {
+			if r.Outdated {
+				marked = append(marked, r.Identity.ShortString())
+			}
+		}
+		if len(marked) != len(st.Outdated) {
+			t.Fatalf("%d marked, %d named: %v", len(marked), len(st.Outdated), st.Outdated)
+		}
+		return st.Outdated
+	}
+	if got := outdated(); len(got) != 0 {
+		t.Fatalf("outdated at once: %v", got)
+	}
+	now = now.Add(outdatedAfter)
+	if got := outdated(); !slices.Equal(got, []string{old.record.Name}) {
+		t.Fatalf("outdated after %v: %v", outdatedAfter, got)
+	}
+	e, err := endpointFor(old, 4002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Seq, e.Epoch, e.PairStore = 3, f.auth.State().Epoch(), 1
+	if err := e.Sign(old.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if got := outdated(); len(got) != 0 {
+		t.Fatalf("outdated though it names an epoch: %v", got)
+	}
+}
+
+// A failing sync is put down to a firewall only where no connection came up
+// and a host firewall stands before the tunnel.
+func TestSyncVerdicts(t *testing.T) {
+	for _, c := range []struct {
+		f    gossip.Failure
+		tun  bool
+		want int
+	}{
+		{0, true, syncNone}, {gossip.FailRefused, true, syncNone},
+		{gossip.FailNewer, true, syncNewerBuild}, {gossip.FailNewer, false, syncNewerBuild},
+		{gossip.FailUnconnected, true, syncFirewalled}, {gossip.FailUnconnected, false, syncBrokenElse},
+		{gossip.FailOther, true, syncBrokenElse},
+	} {
+		if got := syncVerdict(c.f, c.tun); got != c.want {
+			t.Errorf("failure %d, tun %v: %d, want %d", c.f, c.tun, got, c.want)
+		}
+	}
+}
+
+// A live peer whose log sync connects nowhere is blamed on a firewall, an
+// older build among them, since nothing shows it is not catching up.
+func TestASyncThatConnectsNowhereIsBlamedOnAFirewall(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	f.d.tunName = "juist0"
+	pq, old := f.nw.devices[1], f.nw.devices[2]
+	f.learn(t, pq, 4001)
+	f.learnOld(t, old, 4002, false)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	answers := map[netip.Addr]bool{f.installed(t, 1).Addrs[0].Addr(): true, f.installed(t, 2).Addrs[0].Addr(): true}
+	f.mgr.mu.Lock()
+	f.mgr.answers = answers
+	f.mgr.mu.Unlock()
+	f.d.gossip.Sync(t.Context(), []types.Identity{pq.record.Identity, old.record.Identity})
+	now := time.Now()
+	f.d.clock = func() time.Time { return now }
+	f.d.refreshReach(t.Context())
+	now = now.Add(outdatedAfter)
+	f.d.refreshReach(t.Context())
+	st := f.d.Status()
+	want := []string{pq.record.Name, old.record.Name}
+	slices.Sort(want)
+	if !slices.Equal(st.SyncFailing, want) || len(st.Outdated)+len(st.SyncNewer)+len(st.SyncBroken) != 0 {
+		t.Fatalf("failing %v, outdated %v, newer %v, broken %v", st.SyncFailing, st.Outdated, st.SyncNewer,
+			st.SyncBroken)
+	}
+}
+
 // magicsock names a direct path only for a few seconds after its last pong,
 // so a quiet tunnel read before its probe looks relayed. The path is read
 // after the probe, which renews it.

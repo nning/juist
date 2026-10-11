@@ -38,6 +38,11 @@ class CoreTest {
     }
 
     @Test
+    fun readsAnOutdatedMember() {
+        assertEquals(Reach.Outdated, parseView("""{"self":{"reach":"outdated"}}""").self.reach)
+    }
+
+    @Test
     fun saysWhatIsWrongWithACode() {
         val c = FakeInviteChecks
         assertNull(InviteCode.problem(c, "42 Drumbeat tolerance-GLUCOSE"))

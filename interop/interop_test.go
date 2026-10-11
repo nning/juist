@@ -81,6 +81,9 @@ ifconfig vtnet1 inet 10.77.0.1/24 up
 pkg -N >/dev/null 2>&1 || env ASSUME_ALWAYS_YES=yes pkg bootstrap -f >/dev/null
 pkg add /tmp/juist.pkg >/dev/null
 sysrc -q juistd_enable=YES >/dev/null; service juistd start >/dev/null
+# On the console, which a failed run shows: whether the kernel still runs
+# when ssh no longer answers, and what its network then holds.
+daemon -f sh -c 'while :; do echo "watch $(date +%T) load $(sysctl -n vm.loadavg) default $(route -n get default 2>/dev/null | awk "/interface/ {print \$2}") routes $(netstat -rn | grep -c .) pf $(pfctl -sr 2>/dev/null | grep -c .) $(netstat -m | awk "NR==1 || /denied/" | tr "\n" " ") juistd $(pgrep -x juistd | wc -l)"; sleep 10; done > /dev/console 2>&1'
 # the target: a VNET jail on an epair, the subnet on it, 9.9.9.9 routed to it
 a=$(ifconfig epair create); b=${a%a}b
 ifconfig $a inet 10.99.1.1/30 up; ifconfig $a inet 192.168.71.1/24 alias
@@ -169,6 +172,9 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	})
 	t.Run("TLS at the target", func(t *testing.T) {
 		tlsAtTheTarget(t, fb, lx, work, pebble)
+	})
+	t.Run("members alone", func(t *testing.T) {
+		membersAlone(t, fb, lx, work, lx4)
 	})
 	t.Run("service member", func(t *testing.T) {
 		serviceMember(t, fb, lx)

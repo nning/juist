@@ -124,6 +124,13 @@ func (q *quicServer) opened(ctx context.Context, c *quic.Conn) context.Context {
 		_ = c.CloseWithError(0, "")
 		return ctx
 	}
+	peer := addrPortUDP(c.RemoteAddr()).Addr()
+	q.t.byPeer.Add(c, memberKey(n.Name, peer), func() { _ = c.CloseWithError(0, "") })
+	context.AfterFunc(c.Context(), func() { q.t.byPeer.Remove(c) })
+	if _, ok := q.t.admits(n.Name, peer); !ok {
+		_ = c.CloseWithError(0, "")
+		return ctx
+	}
 	px := q.t.proxiesFor(q.clientOf(addrPortUDP(c.RemoteAddr())), addrPortUDP(c.LocalAddr()))
 	q.t.named.Add(c, n.Name, func() { _ = c.CloseWithError(0, "") })
 	context.AfterFunc(c.Context(), func() {
@@ -144,6 +151,13 @@ func (q *quicServer) tlsConfig(getCert func(*tls.ClientHelloInfo) (*tls.Certific
 		GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
 			if n, ok := q.t.lookup(h.ServerName); !ok || !HTTP3(n) {
 				return nil, fmt.Errorf("terminator: %s is offered no HTTP/3 here", h.ServerName)
+			}
+			var peer netip.Addr
+			if h.Conn != nil {
+				peer = addrPortUDP(h.Conn.RemoteAddr()).Addr()
+			}
+			if _, ok := q.t.admits(h.ServerName, peer); !ok {
+				return nil, errForMembers
 			}
 			return cfg, nil
 		}})

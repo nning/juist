@@ -31,6 +31,17 @@ type Member struct {
 
 	// Addrs are its overlay addresses.
 	Addrs []netip.Addr
+
+	// Names are the names it publishes by TLS.
+	Names []Name
+}
+
+// A Name is a name published by TLS: its label under the network's domain,
+// "" for the domain itself, its port, and whether it is for members alone.
+type Name struct {
+	Label   string
+	Port    uint16
+	Members bool
 }
 
 // A Network is what a policy is evaluated against: the policy, nil for
@@ -47,6 +58,9 @@ type Access struct {
 	Own    []types.PortRange
 	Exit   []types.PortRange
 	Routes []Route
+	// Names are the labels of the names it may open there, as TLS asks for
+	// them, sorted.
+	Names []string
 }
 
 // A Route is ports on a prefix behind a subnet router.
@@ -56,7 +70,9 @@ type Route struct {
 }
 
 // Empty reports whether a grants nothing.
-func (a Access) Empty() bool { return len(a.Own) == 0 && len(a.Exit) == 0 && len(a.Routes) == 0 }
+func (a Access) Empty() bool {
+	return len(a.Own) == 0 && len(a.Exit) == 0 && len(a.Routes) == 0 && len(a.Names) == 0
+}
 
 // Everything is the port set that is every protocol and port.
 var Everything = []types.PortRange{{}}
@@ -155,6 +171,7 @@ type compiledRule struct {
 	via      map[types.Identity]bool // nil: every exit node
 	prefixes []netip.Prefix
 	ports    []types.PortRange
+	names    []string
 }
 
 func (n *Network) compile() *compiled {
@@ -207,6 +224,7 @@ func (n *Network) compile() *compiled {
 			internet: r.To.Internet,
 			prefixes: r.To.Prefixes,
 			ports:    slices.Clone(r.Ports),
+			names:    r.To.Names,
 		}
 		if len(r.To.ViaNodes)+len(r.To.ViaTables) > 0 {
 			cr.via = expand(false, r.To.ViaNodes, r.To.ViaTables)
@@ -232,6 +250,14 @@ func (r *compiledRule) grant(m Member) Access {
 	if r.internet && m.Exit && (r.via == nil || r.via[m.ID]) {
 		a.Exit = r.ports
 	}
+	for _, n := range m.Names {
+		if slices.Contains(r.names, n.Label) {
+			a.Own = normalize(append(slices.Clone(a.Own),
+				types.PortRange{Proto: types.ProtoTCP, First: n.Port, Last: n.Port},
+				types.PortRange{Proto: types.ProtoUDP, First: n.Port, Last: n.Port}))
+			a.Names = append(a.Names, n.Label)
+		}
+	}
 	for _, p := range r.prefixes {
 		for _, s := range m.Subnets {
 			if in, ok := intersect(p, s); ok {
@@ -256,6 +282,9 @@ func intersect(a, b netip.Prefix) (netip.Prefix, bool) {
 }
 
 func merge(a, b Access) Access {
+	if len(b.Names) > 0 {
+		a.Names = slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(a.Names), b.Names...))))
+	}
 	a.Own = normalize(append(slices.Clone(a.Own), b.Own...))
 	a.Exit = normalize(append(slices.Clone(a.Exit), b.Exit...))
 	for _, r := range b.Routes {

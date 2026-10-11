@@ -87,14 +87,14 @@ einer **Rolle** übernimmt ein Gerät eine zusätzliche Aufgabe. Ein Admin vergi
 | `relay` | Leitet Verkehr zwischen Geräten weiter, die sich nicht direkt erreichen. Siehe [Relays]({{< relref "docs/relays" >}}). |
 | `exit` | Leitet den Internetverkehr anderer Geräte weiter, sobald sein Operator zugestimmt hat. Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}). |
 | `ingress` | Nimmt Verbindungen aus dem Internet für die Namen an, die Geräte veröffentlichen. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
-| `service` | Ein Service-Mitglied, also ein eigener juistd neben einem veröffentlichten Dienst. Alle anderen Geräte verhindern, dass es von sich aus Verbindungen aufbaut. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
+| `service` | Ein Service-Mitglied, also ein eigener juistd neben einem veröffentlichten Dienst. Kein Gerät nimmt eine Verbindung an, die es aufbaut. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
 | `publish` | Darf sofort unter dem eigenen Namen des Geräts teilen, ohne jedes Mal einen Admin zu fragen: `juist share`, `juist publish PORT`. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
 
 Eine Rolle legt fest, welches Gerät als Exit-Node oder Relay dienen darf.
 Gibt es Zugriffsregeln, legen sie fest, welche Geräte es nutzen dürfen.
 
-Admin ist keine Rolle eines Geräts. Ein Admin ist ein Mensch mit Schlüsseln.
-Ein Voucher dagegen ist ein Gerät und hat keinen Admin-Schlüssel.
+Admin ist keine Rolle eines Geräts. Ein Admin ist ein Mensch mit Schlüsseln,
+ein Voucher dagegen ein Gerät ohne Admin-Schlüssel.
 
 Ein Gerät kann außerdem das LAN hinter sich für die anderen Mitglieder
 erreichbar machen. Das legst du mit `juist subnet add` fest, nicht über eine
@@ -130,8 +130,8 @@ Erreichen sich zwei Geräte nicht direkt, nehmen sie den Umweg über ein
 Mitglied mit der Rolle `relay`, nie über Fremde. Das Relay sieht nur
 verschlüsselten WireGuard-Verkehr.
 
-Hinter NAT musst du keine Firewall-Ports öffnen. Ein Gerät mit öffentlicher
-Adresse braucht 41643/udp. Die übrigen Ports stehen unter
+Hinter NAT musst du keine Firewall-Ports öffnen. Bei einem Gerät mit
+öffentlicher Adresse muss 41643/udp offen sein. Die übrigen Ports stehen unter
 [Relays]({{< relref "docs/relays" >}}).
 
 Wie die Tunnel aufgebaut sind und was juist dafür von WireGuard und Tailscale
@@ -159,9 +159,10 @@ Wo systemd-resolved läuft, erreichst du jedes Mitglied unter
 ssh laptop.home.juist
 ```
 
-Unter Zugriffsregeln kennt ein Gerät nur die Namen der Mitglieder, zu denen
-es einen Tunnel hat. Admins können auch öffentliche Namen wie
-`mail.example.org` auf Mitglieder verweisen lassen. Mehr dazu unter [Namen]({{< relref "docs/names" >}}).
+Gibt es Zugriffsregeln, kennt ein Gerät nur die Namen der Mitglieder, zu
+denen es einen Tunnel hat. Admins können auch öffentliche Namen wie
+`mail.example.org` auf Mitglieder verweisen lassen. Mehr dazu unter
+[Namen]({{< relref "docs/names" >}}).
 
 ## Frische und Voucher {#freshness-and-vouchers}
 
@@ -176,25 +177,25 @@ Bestätigung aus den letzten 48 Stunden hat, ist frisch. Hat es keine, ist es
 abgelaufen: Dann behält es nur noch Tunnel zu Vouchern, bis es wieder von
 einem hört. Ein entferntes Gerät bleibt so höchstens 48 Stunden verbunden.
 
-Daraus ergibt sich viererlei:
+Das hat vier Folgen:
 
 - Ein neues Netz hat keinen Voucher und prüft die Frische deshalb gar nicht.
-  Ein Entfernen erreicht trotzdem jedes Gerät, sobald es Kontakt zu einem
-  hat, das davon weiß; nur ist nicht begrenzt, wie lange das bei einem
-  abgeschnittenen Gerät dauert. `juist create --voucher` macht schon das
+  Dass ein Gerät entfernt wurde, erfährt trotzdem jedes Gerät, sobald es
+  Kontakt zu einem hat, das davon weiß. Nur ist nicht begrenzt, wie lange das
+  bei einem abgeschnittenen Gerät dauert. `juist create --voucher` macht schon das
   erste Gerät zum Voucher.
 - Mach nur Geräte zu Vouchern, die ständig laufen, etwa einen VPS oder einen
   Heimserver. Sind 48 Stunden lang zu wenige Voucher online, haben alle
   anderen Mitglieder nur noch Tunnel zu Vouchern. Ein Netz aus Laptops und
   Telefonen, die oft aus sind, fährt ohne Voucher besser.
-- Einem Voucher musst du vertrauen. Nach `juist admins vouchers 2` braucht ein
+- Bei nur einem Voucher musst du darauf vertrauen, dass er ehrlich ist. Nach `juist admins vouchers 2` braucht ein
   Mitglied Bestätigungen von zwei Vouchern, um frisch zu sein. Ein einzelner
   Voucher, der lügt, reicht dann nicht mehr. Halte einen in Reserve: zwei von
   drei Vouchern auf Hosts, die unabhängig voneinander ausfallen, nicht zwei
   Maschinen beim selben Anbieter.
-- Ein Relay kann ein Gerät von den anderen abschneiden. Reicht ein Voucher,
-  mach kein Relay zum Voucher, sonst kann diese eine Maschine ein Gerät
-  abschneiden und zugleich frisch halten.
+- Ein Relay kann ein Gerät von den anderen abschneiden. Reicht ein einziger
+  Voucher, mach kein Relay zum Voucher, sonst könnte diese eine Maschine ein
+  Gerät abschneiden und zugleich frisch halten.
 
 `juist status` zeigt den Stand in der Zeile `Freshness`, zum Beispiel
 `vouched just now, valid 48h`, `expired; vouchers only` oder `unchecked: no

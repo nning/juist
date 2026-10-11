@@ -407,12 +407,21 @@ extension bucket and no ignorable-unknown-field path** — either would reintrod
 the split view by letting two builds act on different subsets of the same
 record.
 
-What is still open, and belongs with M19's packaging: the
-gossip hello does not carry the versions a node supports, `juist status` cannot
-say which members would be stranded, and nothing stops an admin authoring an
-upgrade before the network is ready for it. Until those exist, raising the
-schema is an operation whose blast radius the operator has to know by other
-means.
+**A stopped build must still read the upgrade.** Gossip frames decode
+strictly, so a field an older build does not know makes it refuse the whole
+frame, and with it the records that would tell it to update. What a schema
+adds to the wire therefore goes only to a peer that announces it reads it:
+an announcement naming an epoch only to a peer whose own names one. The next
+schema that adds to the wire also has every member announce the newest
+schema its build implements, so that the rule, and `juist status` calling a
+member outdated, rest on what a build says of itself rather than on what an
+announcement happens to lack.
+
+What is still open, and belongs with M20's packaging: `juist status` cannot
+say which members would be stranded before an upgrade, and nothing stops an
+admin authoring one before the network is ready for it. Until those exist,
+raising the schema is an operation whose blast radius the operator has to
+know by other means.
 
 ## The freeze: what the fan-out measurement decided
 
@@ -491,7 +500,7 @@ carries the rest. The same reasoning has not been carried through
 `Have`, the peer re-offers records it already holds, and the two make no
 progress. That is unreachable until a network has authored 4096 records without
 a checkpoint, and closing it is part of deciding **when compaction runs without
-an admin asking** — undecided, and the decision this binds; M17 makes it.
+an admin asking** — undecided, and the decision this binds; M18 makes it.
 
 ## Storage
 

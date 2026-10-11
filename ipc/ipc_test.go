@@ -258,21 +258,21 @@ func TestAPublishRequestNamesWhereTo(t *testing.T) {
 		on   *bool
 		want bool
 	}{
-		{[]ServeTo{{"immich", "127.0.0.1:2283"}, {"photos", "[::1]:80"}}, &on, true},
-		{[]ServeTo{{"immich", "immich-server:2283"}}, &on, true},
-		{[]ServeTo{{"immich", "127.0.0.1:2283"}}, &off, false},
-		{[]ServeTo{{"photos", "127.0.0.1:1"}, {"immich", "127.0.0.1:2"}}, &on, false},
-		{[]ServeTo{{"immich", "127.0.0.1:1"}, {"immich", "127.0.0.1:2"}}, &on, false},
-		{[]ServeTo{{"Immich", "127.0.0.1:2283"}}, &on, false},
-		{[]ServeTo{{"immich", "127.0.0.1"}}, &on, false},
-		{[]ServeTo{{"immich", ":2283"}}, &on, false},
-		{[]ServeTo{{"immich", "127.0.0.1:0"}}, &on, false},
-		{[]ServeTo{{"immich", "a b:1"}}, &on, false},
-		{[]ServeTo{{"status", "status-page"}}, &on, true},
-		{[]ServeTo{{"status", "status-page:all"}}, &on, true},
-		{[]ServeTo{{"status", "status-page:everything"}}, &on, false},
-		{[]ServeTo{{"status", "status-page:"}}, &on, false},
-		{[]ServeTo{{"status", "status-pages"}}, &on, false},
+		{[]ServeTo{{Label: "immich", To: "127.0.0.1:2283"}, {Label: "photos", To: "[::1]:80"}}, &on, true},
+		{[]ServeTo{{Label: "immich", To: "immich-server:2283"}}, &on, true},
+		{[]ServeTo{{Label: "immich", To: "127.0.0.1:2283"}}, &off, false},
+		{[]ServeTo{{Label: "photos", To: "127.0.0.1:1"}, {Label: "immich", To: "127.0.0.1:2"}}, &on, false},
+		{[]ServeTo{{Label: "immich", To: "127.0.0.1:1"}, {Label: "immich", To: "127.0.0.1:2"}}, &on, false},
+		{[]ServeTo{{Label: "Immich", To: "127.0.0.1:2283"}}, &on, false},
+		{[]ServeTo{{Label: "immich", To: "127.0.0.1"}}, &on, false},
+		{[]ServeTo{{Label: "immich", To: ":2283"}}, &on, false},
+		{[]ServeTo{{Label: "immich", To: "127.0.0.1:0"}}, &on, false},
+		{[]ServeTo{{Label: "immich", To: "a b:1"}}, &on, false},
+		{[]ServeTo{{Label: "status", To: "status-page"}}, &on, true},
+		{[]ServeTo{{Label: "status", To: "status-page:all"}}, &on, true},
+		{[]ServeTo{{Label: "status", To: "status-page:everything"}}, &on, false},
+		{[]ServeTo{{Label: "status", To: "status-page:"}}, &on, false},
+		{[]ServeTo{{Label: "status", To: "status-pages"}}, &on, false},
 	} {
 		r := Request{Command: CmdPublish, ServePublished: tc.on, ServeTo: tc.to}
 		if err := r.validate(); (err == nil) != tc.want {
@@ -289,7 +289,7 @@ func TestAPublishRequestNamesWhereTo(t *testing.T) {
 		{Request{Unserve: []string{"docs", "docs"}}, false},
 		{Request{Unserve: []string{"docs.pub.example.org"}}, false},
 		{Request{Unserve: []string{"docs"}, ServePublished: &on}, false},
-		{Request{Unserve: []string{"docs"}, ServePublished: &on, ServeTo: []ServeTo{{"immich", "127.0.0.1:1"}}}, false},
+		{Request{Unserve: []string{"docs"}, ServePublished: &on, ServeTo: []ServeTo{{Label: "immich", To: "127.0.0.1:1"}}}, false},
 	} {
 		tc.r.Command = CmdPublish
 		if err := tc.r.validate(); (err == nil) != tc.want {

@@ -5,12 +5,12 @@ description: Ein Gerät auf allen Geräten aus dem Netz nehmen, und wissen, wie 
 lead: juist remove nimmt ein Gerät aus dem Netz, etwa ein verlorenes Handy. Jedes Gerät baut seinen Tunnel dorthin ab, sobald es davon erfährt. Ein Gerät, das von den anderen abgeschnitten ist, tut das spätestens, wenn seine Frische abläuft.
 ---
 
-## Worum es geht
+## Wie das Entfernen funktioniert
 
 Ein Gerät zu entfernen ist eine Änderung am Log des Netzes, also an der
 signierten Liste, wer dazugehört (siehe
 [So funktioniert juist]({{< relref "docs/how-it-works" >}})). Wie jede
-Änderung muss sie von deinen Admins bestätigt werden, den Personen, deren
+Änderung müssen deine Admins sie bestätigen, also die Personen, deren
 Schlüssel Änderungen bestätigen.
 
 Sobald die Entfernung im Log steht, baut jedes Gerät, das davon erfährt,
@@ -21,9 +21,9 @@ Dadurch findet das entfernte Gerät die anderen nicht mehr.
 ## Ein Gerät entfernen
 
 {{< step on="dem Gerät eines Admins" >}}
-Entferne das Gerät über seinen Namen, seine Adresse oder seinen Schlüssel
-(siehe `juist devices --keys`, mit `--all`, wo Zugriffsregeln es von diesem
-Gerät trennen):
+Entferne das Gerät über seinen Namen, seine Adresse oder seinen Schlüssel.
+`juist devices --keys` zeigt die Schlüssel; nimm `--all` dazu, wenn
+Zugriffsregeln jenes Gerät von diesem trennen:
 
 ```sh
 juist remove phone
@@ -54,15 +54,15 @@ home · removed
 hint: rejoin with a new invite, or start over: juist reset
 ```
 
-Willst du es weiter nutzen, [lade es neu ein]({{< relref "docs/invites" >}}),
-oder führe `juist reset` aus. Dann gehört es zu keinem Netz mehr und ist wie
-frisch installiert.
+Willst du es weiter nutzen, [lade es erneut ein]({{< relref "docs/invites" >}}),
+oder führe `juist reset` aus. Dann gehört es zu keinem Netz mehr, wie nach
+einer frischen Installation.
 
 War das Gerät in diesem Moment offline, erfährt es nichts davon. Es zeigt
 sich womöglich weiter als verbunden, obwohl kein Mitglied es mehr annimmt,
 oder meldet `the network's devices refuse this one: most likely it was removed`.
 
-## Warum es nicht überall sofort wirkt
+## Warum das Entfernen nicht sofort wirkt
 
 Es gibt keinen Server, der allen Geräten gleichzeitig Bescheid gibt. Die
 Geräte geben Änderungen untereinander weiter. Ein Gerät, das offline oder von
@@ -73,8 +73,8 @@ Gerät halten.
 Die Frische setzt dem eine Grenze. Ein **Voucher** ist ein Gerät, das
 stündlich bestätigt, dass der Stand des Netzes aktuell ist. Ein neues Netz
 hat keinen, die Grenze gilt also erst, wenn du einen ernennst. Hat ein Gerät
-48 Stunden lang keine
-Bestätigung von einem Voucher bekommen, hält es nur noch Tunnel zu Vouchern.
+48 Stunden lang keine Bestätigung von einem Voucher bekommen, hält es nur noch
+Tunnel zu Vouchern.
 So kann es keine Verbindung zu einem entfernten Gerät aufrechterhalten. Sein
 `juist status` zeigt dann den Zustand `limited` und
 `Freshness  expired; vouchers only`.
@@ -105,11 +105,11 @@ juist admins vouchers 2
 Jetzt hält ein Gerät seinen Stand nur dann für aktuell, wenn zwei Voucher ihn
 innerhalb von 48 Stunden bestätigt haben. Ein einzelner unehrlicher Voucher
 reicht dann nicht mehr, dafür müssen aber zwei Voucher online sein. Gib die
-Rolle deshalb einem dritten als Reserve. `juist grant` und `juist admins
-vouchers` warnen, wenn keine Reserve da ist und wenn der eine nötige Voucher
-auch Relay ist.
+Rolle deshalb einem dritten Gerät als Reserve. `juist grant` und
+`juist admins vouchers` warnen, wenn es keine Reserve gibt, und wenn nur ein
+Voucher verlangt wird und ein Voucher zugleich Relay ist.
 
-## Gut zu wissen
+## Hinweise
 
 - `juist remove` weigert sich, einen der Voucher zu entfernen, die `juist admins vouchers` verlangt, und erklärt, wie du die Zahl vorher senkst.
 - Wer den letzten Voucher entfernt, bekommt eine Warnung, dass die Frische dann nicht mehr geprüft wird.
@@ -117,7 +117,7 @@ auch Relay ist.
 - Rufst du `juist remove` auf dem Gerät selbst auf, warnt es, dass das Gerät das Netz endgültig verlässt.
 - `juist reset` braucht `--force`, solange das Netz das Gerät noch als Mitglied führt. Entferne es nach Möglichkeit vorher.
 
-## Wenn etwas nicht klappt
+## Fehlersuche
 
 `Freshness  expired; vouchers only` bedeutet, dass 48 Stunden lang zu wenige
 Voucher erreichbar waren. `juist status` warnt einen Tag vorher mit

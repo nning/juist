@@ -12,11 +12,11 @@ keys, tells each device which others it may talk to, and is where an admin
 adds or removes devices. Whoever runs that server, or breaks into it, decides
 who belongs to the network.
 
-juist has no such server. Its place is taken by the
+juist has no such server. In its place is the
 [membership log]({{< relref "docs/how-it-works" >}}#the-membership-log),
-which your admins sign and every device checks itself. Everything else,
-finding devices, getting through NAT and carrying the traffic, may go through
-paths and helpers that juist does not trust.
+which your admins sign and every device checks for itself. Everything else
+(finding devices, getting through NAT, carrying traffic) can go through paths
+and helpers that juist does not trust.
 
 The terms used here are explained in
 [How juist works]({{< relref "docs/how-it-works" >}}); how juist differs from
@@ -38,11 +38,12 @@ juist follows it in these points:
   LAN, or one that claims a member's address, gets nothing through.
 - No server and no path is trusted. Every device checks every change to the
   network against the admins' signatures, however it arrived.
-- No single key decides. With a quorum of two or more, one stolen admin key
-  changes nothing alone, and juistd never holds an admin key at all.
-- Trust ends. A removed device loses its tunnels as soon as members hear of
-  it, and [freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
-  bounds that to 48 hours for members that are cut off.
+- No single key decides. With a quorum of two or more, a stolen admin key
+  cannot change anything on its own, and juistd never holds an admin key.
+- Trust expires. A removed device loses its tunnels as soon as the members
+  hear of it. For members that are cut off,
+  [freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
+  limits this to 48 hours.
 
 Where juist falls short of the model:
 
@@ -70,8 +71,8 @@ WireGuard enforces that at the bottom: juistd configures its peers from the
 membership log and from nothing else.
 
 juistd turns the state of the log into everything the operating system sees:
-the WireGuard peers, the packet filter, the routes and the names. When a new
-change arrives, it does so again.
+the WireGuard peers, the packet filter, the routes and the names. It does this
+again whenever a new change arrives.
 
 ## WireGuard {#wireguard}
 
@@ -86,8 +87,8 @@ Curve25519, ChaCha20-Poly1305 and BLAKE2s; the
 juist relies on what WireGuard calls cryptokey routing. Each peer is a public
 key together with the addresses it may use. A packet from a peer is accepted
 only if its source address belongs to that key, and a packet to an address
-goes only to the key that owns it. juist fills that table from the membership
-log alone, so:
+goes only to the key that owns it. juist fills that table only from the
+membership log, so:
 
 - a key the log does not admit cannot complete a handshake;
 - a member cannot send from another member's address;
@@ -99,49 +100,50 @@ told to accept.
 
 juist runs WireGuard in user space on every platform, in
 [the version Tailscale maintains](https://github.com/tailscale/wireguard-go)
-of [wireguard-go](https://git.zx2c4.com/wireguard-go/). Tailscale's NAT
-traversal, below, needs it there. Kernel WireGuard would be faster on Linux
-and FreeBSD.
+of [wireguard-go](https://git.zx2c4.com/wireguard-go/), because Tailscale's
+NAT traversal (see below) requires it. Kernel WireGuard would be faster on
+Linux and FreeBSD.
 
 Every WireGuard handshake mixes in a preshared key that a future quantum
 computer cannot recover, so traffic recorded today stays secret. Two devices
-start on a key derived from the group secret below; in the log sync between
-them each then encapsulates a secret to the other's ML-KEM-768 key, and they
-move to a key the two alone hold, renewed with every change to the members.
+start with a key derived from the [group secret](#log). When they sync the
+log, each encapsulates a secret to the other's ML-KEM-768 key, and they switch
+to a key that only the two of them hold. That key is renewed with every change
+to the members.
 
 ## What juist takes from Tailscale {#tailscale}
 
 [Tailscale](https://tailscale.com/blog/how-tailscale-works) is a mesh VPN
 on WireGuard, with a coordination server run by Tailscale Inc. Its client is
 [open source](https://github.com/tailscale/tailscale) under the BSD-3-Clause
-licence. juist builds parts of that client in, pinned to version 1.104.0:
+licence. juist includes parts of that client, pinned to version 1.104.0:
 
 - **magicsock and disco** find a direct path between two devices and get
   through NAT. Tailscale explains how in
   [How NAT traversal works](https://tailscale.com/blog/how-nat-traversal-works).
 - **DERP** passes traffic where no direct path forms; see
-  [DERP servers](https://tailscale.com/kb/1232/derp-servers). In juist it runs
-  on a member granted `relay` and serves only members of the log, where
-  Tailscale runs DERP servers for all its users.
+  [DERP servers](https://tailscale.com/kb/1232/derp-servers). Tailscale runs
+  DERP servers for all its users. In juist, DERP runs on a member granted
+  `relay` and serves only members of the log.
 - **wgengine** connects WireGuard to the operating system: the network
   device, the packet filter, routes and DNS.
 - **STUN** lets a device learn its public address.
 
-juist leaves out the part that talks to a coordination server. Where
-Tailscale's client takes its peers and their keys from that server, juist
-gives the same code peers built from the membership log. You need no
+juist leaves out the part that talks to a coordination server. Tailscale's
+client gets its peers and their keys from that server; juist gives the same
+code peers built from the membership log instead. You need no
 Tailscale account, and no traffic goes to Tailscale.
 
-A bug in the reused connectivity code can cost connections, or show
-addresses, but cannot admit a device: WireGuard below it checks every packet
-against keys from the log.
+A bug in the reused connectivity code can break connections or expose
+addresses, but it cannot admit a device: WireGuard, below it, checks every
+packet against keys from the log.
 
 ### Tailnet Lock {#tailnet-lock}
 
 [Tailnet Lock](https://tailscale.com/kb/1226/tailnet-lock) is Tailscale's
 own answer to a coordination server that should not be trusted with keys:
-trusted devices sign which keys may join. The membership log takes its design
-from it, a chain of signed records, but is juist's own code. It differs in
+trusted devices sign which keys may join. The membership log borrows its
+design, a chain of signed records, but is juist's own code. It differs in
 three ways:
 
 - the log holds the members themselves, not only the keys that sign them;
@@ -151,39 +153,41 @@ three ways:
 
 ## The membership log {#log}
 
-Each change, such as "admit nas", is a record. It names the record before it
-by hash, and it counts only when enough admins have signed it with their
-Ed25519 keys. Every device replays the log from the network's first record
+Each change, such as "admit nas", is a record. It contains the hash of the
+record before it, and it counts only once enough admins have signed it with
+their Ed25519 keys. Every device replays the log from the network's first record
 and checks each signature itself.
 
-Changes made at the same time on different devices are put in one order that
-every device works out the same way. Changes that contradict each other are
-never settled silently, with one exception: a removal wins. A real fork, two
-histories that disagree about who is a member, raises an alarm that an admin
-has to settle.
+Changes made at the same time on different devices are put into one order,
+and every device works out the same order. Changes that contradict each other
+are never resolved silently, with one exception: a removal wins. A real fork,
+where two histories disagree about who is a member, raises an alarm that an
+admin has to resolve.
 
-Every change to the members replaces the network's group secret. It is sealed
-to each member with [HPKE](https://www.rfc-editor.org/rfc/rfc9180), using
-X25519 together with [ML-KEM-768](https://doi.org/10.6028/NIST.FIPS.203), so
-that a removed device cannot read what is protected with the new one.
+Every change to the members replaces the network's group secret. The new
+secret is sealed to each member with
+[HPKE](https://www.rfc-editor.org/rfc/rfc9180), using X25519 together with
+[ML-KEM-768](https://doi.org/10.6028/NIST.FIPS.203), so a removed device
+cannot read anything protected with it.
 
 ## Finding devices without a server {#discovery}
 
-The group secret protects what devices publish to find each other:
+To find each other, devices publish their addresses. The group secret
+protects what they publish:
 
-- On the LAN, devices answer multicast DNS under a name derived from the
-  group secret, with an encrypted answer. Others on the LAN learn that juist
-  is in use, and nothing more.
+- On the LAN, devices answer multicast DNS queries for a name derived from the
+  group secret, and the answer is encrypted. Others on the LAN learn that
+  juist is in use, and nothing more.
 - In the public BitTorrent DHT, each member publishes its signed address as a
-  mutable item ([BEP 44](https://www.bittorrent.org/beps/bep_0044.html)),
-  under a key only members can compute and encrypted so only members can read
-  it.
+  mutable item ([BEP 44](https://www.bittorrent.org/beps/bep_0044.html)).
+  Only members can compute the key it is stored under, and only members can
+  decrypt it.
 - Members pass on to each other where they last reached a device.
 
 An invite works before the new device holds any secret. Both sides run
 [SPAKE2](https://www.rfc-editor.org/rfc/rfc9382), a key exchange based on a
-short password, so that the code or link cannot be guessed offline and a
-device in between gives itself away in the four words both sides compare.
+short password. The code or link cannot be guessed offline, and a device that
+places itself in between is revealed by the four words both sides compare.
 
 ## Sources {#sources}
 

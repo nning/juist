@@ -110,7 +110,7 @@ func (d *Daemon) planSubnets(s snapshot, fresh bool, held map[types.Identity]gos
 			case !held[n.Identity].Subnets:
 				r.Why = "its router's operator has not agreed to route it"
 			case notPQ(s.state, named[i].stage):
-				r.Why = "its router's " + errNotPQ
+				r.Why = "its router " + errNotPQ
 			case len(parts) == 0:
 				r.Why = "the access policy passes none of it to this device"
 			default:

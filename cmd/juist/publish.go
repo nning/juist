@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"net/netip"
@@ -86,8 +87,14 @@ func (a *app) listPublished() error {
 			if p.Proxy {
 				r.port += " (proxy protocol)"
 			}
+			if p.Members {
+				r.port += " (members)"
+			}
 			if i := slices.IndexFunc(to, func(t ipc.ServeTo) bool { return t.Label == p.Label }); i >= 0 && n.Identity == self.Identity {
 				r.to = describeTo(to[i].To)
+				if to[i].Members {
+					r.to += " (members)"
+				}
 			}
 			rows = append(rows, r)
 		}
@@ -131,13 +138,16 @@ Publish NAME.DOMAIN, or DOMAIN itself. Given HOST:PORT, such as
 certificate of its own and sends the connection on to HOST:PORT. Given
 DEVICE, on DEVICE's PORT, 443 unless given, where the service ends TLS once
 DEVICE's operator agrees. With --tcp, every ingress passes TCP on a port of
-its own to the device instead, for a service that speaks no TLS.`}
+its own to the device instead, for a service that speaks no TLS. With
+--members, the internet does not reach it: members do, at the device, as
+the access policy names it for them.`}
 	fs := newFlags(s.name)
 	proxy := fs.Bool("proxy", false, "send the client's address in a PROXY protocol v2 header")
 	http2 := fs.Bool("http2", false, "offer clients HTTP/2; the service at HOST:PORT takes it without TLS (h2c)")
 	http3 := fs.Bool("http3", false, "offer clients HTTP/3 too; juist proxies the HTTP of the service at HOST:PORT")
 	tcp := &tcpFlag{}
 	fs.Var(tcp, "tcp", "publish by TCP on PORT of every ingress, the device's port unless given, not by TLS on 443")
+	membersOn := fs.Bool("members", false, "for members alone, whom the access policy names: not for the internet; =false makes it public")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		first, _, _ := strings.Cut(err.Error(), "\n")
@@ -156,6 +166,17 @@ its own to the device instead, for a service that speaks no TLS.`}
 	if (*http2 || *http3) && tcp.on {
 		return fmt.Errorf("%s is for a name whose TLS juist ends, not one published by TCP\n%s", httpFlag, s.usage(fs))
 	}
+	// Kept where not given, so that a name for members alone is not made
+	// public by a command that leaves it out.
+	var members *bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "members" {
+			members = membersOn
+		}
+	})
+	if *membersOn && (tcp.on || *proxy) {
+		return fmt.Errorf("--members is for a name by TLS on 443, which members reach at its device\n%s", s.usage(fs))
+	}
 	if _, err := strconv.ParseUint(pos[len(pos)-1], 10, 16); err == nil && len(pos) == 3 && strings.Contains(pos[1], ":") &&
 		tcp.on && tcp.port == 0 {
 		return fmt.Errorf("unexpected argument %q\nhint: a public port goes with the option: --tcp=%s", pos[2], pos[2])
@@ -167,7 +188,7 @@ its own to the device instead, for a service that speaks no TLS.`}
 		if *http3 {
 			pos[len(pos)-1] = ipc.HTTP3To(pos[len(pos)-1])
 		}
-		return a.publishHere(pos, *proxy, tcp)
+		return a.publishHere(pos, *proxy, members, tcp)
 	}
 	if *http2 || *http3 {
 		return fmt.Errorf("%s is for a service whose TLS juist ends, given as HOST:PORT\n%s", httpFlag, s.usage(fs))
@@ -196,8 +217,11 @@ its own to the device instead, for a service that speaks no TLS.`}
 		return fmt.Errorf("a name published by TCP needs the device's port\nhint: juist publish add %s %s PORT --tcp",
 			pos[0], pos[1])
 	}
-	p := types.PublishedName{Label: label, Port: port, Proxy: *proxy}
+	p := types.PublishedName{Label: label, Port: port, Proxy: *proxy, Members: keptMembers(target, label, members)}
 	if p.Public, err = tcp.public(state, target, label, port, ""); err != nil {
+		return err
+	}
+	if err := membersAllowed(state, p); err != nil {
 		return err
 	}
 	next, err := publishedWith(state, target, p)
@@ -224,7 +248,7 @@ func (a *app) domainItselfHint(label, domain string) {
 // one: NAME published here, on the port it is already or 443, and its TLS
 // ended here and sent on; by TCP, on the public port, and passed on as it
 // is.
-func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
+func (a *app) publishHere(pos []string, proxy bool, members *bool, tcp *tcpFlag) error {
 	st, err := a.daemonStatus()
 	if err != nil {
 		return err
@@ -247,6 +271,9 @@ func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
 	}
 	if proxy {
 		flags += " --proxy"
+	}
+	if members != nil && *members {
+		flags += " --members"
 	}
 	hostPort, h2c := ipc.HTTP2Of(pos[len(pos)-1])
 	if h2c {
@@ -281,7 +308,11 @@ func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
 		addr, _ := ipc.HTTP2Of(pos[1])
 		return fmt.Errorf("%q is no HOST:PORT, such as 127.0.0.1:2283", addr)
 	}
-	p := types.PublishedName{Label: label, Port: 443, Proxy: proxy}
+	p := types.PublishedName{Label: label, Port: 443, Proxy: proxy, Members: keptMembers(self, label, members)}
+	// Its service's mark is kept too, until --members=false; the log is
+	// changed by the flag alone.
+	marked := p.Members || members == nil && st.Publish != nil &&
+		slices.ContainsFunc(st.Publish.To, func(s ipc.ServeTo) bool { return s.Label == label && s.Members })
 	i := slices.IndexFunc(self.Published, func(q types.PublishedName) bool { return q.Label == label })
 	if i >= 0 {
 		p.Port = self.Published[i].Port
@@ -305,6 +336,9 @@ func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
 	if p.Public, err = tcp.public(state, self, label, p.Port, again); err != nil {
 		return err
 	}
+	if err := membersAllowed(state, p); err != nil {
+		return err
+	}
 	next, err := publishedWith(state, self, p)
 	if err != nil {
 		return err
@@ -321,6 +355,9 @@ func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
 			a.domainItselfHint(label, state.Domain())
 		}
 	}
+	// juistd holds a service meant for members alone from the name while the
+	// log has it public.
+	t.Members = marked
 	agreed := st.Publish != nil && st.Publish.Consent
 	n, err := a.openNode()
 	if err != nil {
@@ -340,6 +377,8 @@ func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
 	}
 	name := p.Under(state.Domain())
 	switch {
+	case slices.Contains(pub.Withheld, name):
+		a.warn("%s", withheldWarning(name))
 	case slices.Contains(pub.Passing, name+" to "+t.To):
 		a.ok("passing %s to %s", name, t.To)
 	case slices.Contains(pub.Ending, name+" to "+t.To):
@@ -349,6 +388,12 @@ func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
 		if label == "" {
 			a.warn("a CAA record at %s holds for every name under it without one of its own: give each device's names theirs", name)
 		}
+	case slices.ContainsFunc(pub.Shared, func(s string) bool { return strings.HasPrefix(s, name+" with ") }):
+		i := slices.IndexFunc(pub.Shared, func(s string) bool { return strings.HasPrefix(s, name+" with ") })
+		a.warn("%s", sharedWarning(pub.Shared[i]))
+		a.hint("%s", sharedHint)
+	case !published && t.Members:
+		a.ok("%s goes to %s once published on this device for members alone", name, describeTo(t.To))
 	case !published:
 		a.ok("%s goes to %s once published on this device", name, describeTo(t.To))
 	default:
@@ -360,11 +405,13 @@ func (a *app) publishHere(pos []string, proxy bool, tcp *tcpFlag) error {
 	if len(pub.Serving) > 0 {
 		a.warnFirewalled(st, publishedPorts(next)...)
 	}
-	if !canPublish {
+	if withheld := slices.Contains(pub.Withheld, name); !canPublish || withheld {
 		if p.Public != 0 && i >= 0 && self.Published[i].Public == 0 {
 			a.warn("until an admin publishes it by TCP, juist ends TLS for %s", name)
 		}
-		a.hint("an admin publishes it: juist publish add %s %s", displayMember(self), publishArgs(p, state.Domain()))
+		asked := p
+		asked.Members = asked.Members || withheld
+		a.hint("an admin publishes it: juist publish add %s %s", displayMember(self), publishArgs(asked, state.Domain()))
 	}
 	if !agreed {
 		a.warnServing()
@@ -388,7 +435,7 @@ else sees: none, services, network (all but the changes) or all.`}
 	if err != nil {
 		return fmt.Errorf("--public: %v\n%s", err, s.usage(fs))
 	}
-	return a.publishHere([]string{pos[0], ipc.StatusPageTo(vis)}, false, &tcpFlag{})
+	return a.publishHere([]string{pos[0], ipc.StatusPageTo(vis)}, false, nil, &tcpFlag{})
 }
 
 // tcpFlag is --tcp, or --tcp=PORT: a name published by TCP, on the public
@@ -478,7 +525,38 @@ func publishArgs(p types.PublishedName, domain string) string {
 	if p.Proxy {
 		how += " --proxy"
 	}
+	if p.Members {
+		how += " --members"
+	}
 	return how
+}
+
+// keptMembers is whether label, published on n, is for members alone: as
+// given, or as it is already.
+func keptMembers(n types.NodeRecord, label string, given *bool) bool {
+	if given != nil {
+		return *given
+	}
+	i := slices.IndexFunc(n.Published, func(q types.PublishedName) bool { return q.Label == label })
+	return i >= 0 && n.Published[i].Members
+}
+
+// membersAllowed refuses a name for members alone the network cannot hold:
+// before its schema, or on another port than 443, where members would reach
+// it through the ingress, which passes it nobody.
+func membersAllowed(state *log.State, p types.PublishedName) error {
+	switch {
+	case !p.Members:
+		return nil
+	case state.Schema() < types.SchemaMembers:
+		return needsUpgrade("names for members alone")
+	case p.Proxy || p.Public != 0:
+		return fmt.Errorf("%s is for members alone, which takes neither --proxy nor --tcp\nhint: --members=false makes it public first",
+			p.Under(state.Domain()))
+	case p.Port != 443:
+		return fmt.Errorf("a name for members alone is on port 443, where members reach it at its device")
+	}
+	return nil
 }
 
 // portShown is where p is published, as a listing says it.
@@ -976,6 +1054,22 @@ const notPublishedHere = "the network publishes nothing on this device"
 
 // publishSummary is the status line of what this device serves of what is
 // published on it; paint colours what it does not.
+// sharedWarning says why a name for members alone, "NAME with OTHER", is
+// not served.
+func sharedWarning(shared string) string {
+	name, other, _ := strings.Cut(shared, " with ")
+	return fmt.Sprintf("not serving %s, which is for members alone: %s reaches its service as it is, "+
+		"whose clients could ask it for %s by Host", name, other, name)
+}
+
+const sharedHint = "give a name for members alone a service of its own"
+
+// withheldWarning says why name, its service meant for members alone, is
+// not served.
+func withheldWarning(name string) string {
+	return fmt.Sprintf("not serving %s, its service meant for members alone: the log has the name public", name)
+}
+
 func publishSummary(pub *ipc.Publish, paint func(code, s string) string) string {
 	switch {
 	case pub == nil:
@@ -1039,6 +1133,9 @@ func publishedList(ps []types.PublishedName, domain string) string {
 	out := make([]string, len(ps))
 	for i, p := range ps {
 		out[i] = p.Under(domain) + ":" + portShown(p)
+		if p.Members {
+			out[i] += " (members)"
+		}
 	}
 	return strings.Join(out, ", ")
 }

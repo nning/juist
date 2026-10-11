@@ -160,6 +160,7 @@ type view struct {
 
 type service struct {
 	Name, Href, Device, State, Class string
+	Members                          bool
 }
 
 type device struct {
@@ -196,6 +197,10 @@ func build(p *ipc.StatusPage, err error, name string, public ipc.Visibility, mem
 	v.From = cmp.Or(st.SelfName, st.Self.ShortString())
 	v.State, v.StateClass = state(st)
 	v.Services = services(p)
+	if !member {
+		// The public reaches none of them.
+		v.Services = slices.DeleteFunc(v.Services, func(s service) bool { return s.Members })
+	}
 	if member {
 		v.Public = publicWords[public]
 	}
@@ -281,6 +286,8 @@ func devices(st *ipc.Status, now time.Time) []device {
 			dev.Reach, dev.Class = "no tunnel", "absent"
 		case !st.TunnelsChecked:
 			dev.Reach, dev.Class = "not checked yet", "absent"
+		case r.Live && r.Outdated:
+			dev.Reach, dev.Class = "outdated", "outdated"
 		case r.Live && r.Direct:
 			dev.Reach, dev.Class = "direct", "direct"
 		case r.Live:
@@ -323,14 +330,14 @@ func services(p *ipc.StatusPage) []service {
 		}
 		r, _ := reachOf(st, d.Identity)
 		for _, name := range d.Published {
-			s := service{Name: name, Device: cmp.Or(d.Name, d.Identity.ShortString())}
+			s := service{Name: name, Device: cmp.Or(d.Name, d.Identity.ShortString()), Members: slices.Contains(d.Members, name)}
 			if !strings.Contains(name, ":") {
 				s.Href = "https://" + name + "/" // one published by TCP, NAME:PORT, is no web page
 			}
 			switch {
 			case !served:
 				s.State, s.Class = "not served", "absent"
-			case self || r.Live:
+			case self || r.Live && !r.Outdated:
 				s.State, s.Class = "up", "direct"
 			default:
 				s.State, s.Class = "unreached", "alarm"
@@ -388,6 +395,18 @@ func alarms(st *ipc.Status) []string {
 	}
 	if len(st.SyncFailing) > 0 {
 		add("log sync to %s fails in the tunnel", strings.Join(st.SyncFailing, ", "))
+	}
+	if len(st.SyncNewer) > 0 {
+		add("log sync fails: %s a newer juist, so this device needs an update", runs(st.SyncNewer))
+	}
+	if len(st.SyncBroken) > 0 {
+		add("log sync to %s fails", strings.Join(st.SyncBroken, ", "))
+	}
+	if len(st.Outdated) > 0 {
+		add("%s an older juist, unreachable until updated", runs(st.Outdated))
+	}
+	if len(st.NoKey) > 0 {
+		add("%s fell too far behind to reach this device", strings.Join(st.NoKey, ", "))
 	}
 	if down := slices.DeleteFunc(slices.Clone(st.TunnelsDown), func(n string) bool {
 		return slices.Contains(st.Seeking, n) || slices.Contains(st.Absent, n)
@@ -525,4 +544,12 @@ func roughly(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// runs is "a runs", or "a, b run".
+func runs(names []string) string {
+	if len(names) == 1 {
+		return names[0] + " runs"
+	}
+	return strings.Join(names, ", ") + " run"
 }

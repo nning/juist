@@ -266,3 +266,32 @@ func TestNamesPublishedByTCP(t *testing.T) {
 		h.signed(types.AUM{Kind: types.KindSetNodeRoutes, Subject: &box.Identity,
 			Grant: &types.RouteGrant{Roles: []types.Role{types.RoleIngress}}}))
 }
+
+// A name for members alone, and a policy naming a name, are schema 15's.
+func TestNamesForMembersNeedTheirSchema(t *testing.T) {
+	for _, at := range []types.SchemaVersion{types.SchemaPQ, types.SchemaMembers} {
+		h := newHarnessAt(t, 1, 1, at)
+		nas, laptop := h.addNode("nas"), h.addNode("laptop")
+		h.apply(h.auth.Builder().SetDomain("pub.example.org"))
+		photos := types.PublishedName{Label: "photos", Port: 443, Members: true}
+		publish := func() types.AUM {
+			return h.signed(types.AUM{Kind: types.KindSetPublished, Subject: &nas.Identity,
+				Publish: &types.PublishGrant{Names: []types.PublishedName{photos}}})
+		}
+		policy := func() types.AUM {
+			return h.signed(types.AUM{Kind: types.KindSetPolicy, Policy: &types.Policy{Rules: []types.PolicyRule{{
+				From: types.PolicyRefs{Nodes: []types.Identity{laptop.Identity}}, To: types.PolicyRefs{Names: []string{"photos"}}}}}})
+		}
+		if at < types.SchemaMembers {
+			h.mustReject("a name for members alone at schema 14", RuleState, publish())
+			h.mustReject("a policy naming a name at schema 14", RuleState, policy())
+			continue
+		}
+		h.apply(h.auth.Builder().SetPublished(nas.Identity, []types.PublishedName{photos}))
+		h.apply(h.auth.Builder().SetPolicy(&types.Policy{Rules: []types.PolicyRule{{
+			From: types.PolicyRefs{Nodes: []types.Identity{laptop.Identity}}, To: types.PolicyRefs{Names: []string{"photos"}}}}}))
+		if got := publishedOf(t, h.fork().State(), nas.Identity); !slices.Equal(got, []types.PublishedName{photos}) {
+			t.Fatalf("reopened, nas publishes %+v", got)
+		}
+	}
+}

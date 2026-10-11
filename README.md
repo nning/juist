@@ -92,7 +92,7 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | remove a device, on every device at once | `juist remove phone` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
 | reach a device by name, where systemd-resolved runs | `ssh laptop.home.juist`, or `ssh laptop` | [names](https://docs.juist.nning.io/en/docs/names/) |
 | let a device with a public address relay for the others | `juist grant vps relay` | [relays](https://docs.juist.nning.io/en/docs/relays/) |
-| reach the network from a hotel or office that lets HTTPS alone out | `sudo juist set --relay-name relay.example.org` on a relay, `sudo juist set --https-only` here | [HTTPS alone](https://docs.juist.nning.io/en/docs/https-only/) |
+| reach the network from a hotel or office that only lets HTTPS out | `sudo juist set --relay-name relay.example.org` on a relay, `sudo juist set --https-only` here | [HTTPS only](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |
 | let every device reach the LAN behind one | `juist subnet add nas 192.168.1.0/24`, then `juist subnet serve` on it | [subnets](https://docs.juist.nning.io/en/docs/subnets/) |
 | say which device may open what on which, and use which exit node or subnet | `juist policy edit`, or `juist policy set policy.conf` | [access policy](https://docs.juist.nning.io/en/docs/access/) |
@@ -121,6 +121,7 @@ juist network domain pub.example.org    # DNS: *.pub.example.org points at the v
 juist grant vps ingress                 # then juist ingress serve, on the vps
 juist publish add immich 127.0.0.1:2283 # on the nas: https://immich.pub.example.org
 juist publish add nas mc 25565 --tcp    # a service without TLS on a port of its own: mc.pub.example.org:25565
+juist publish add nas photos --members  # members only; the access policy says which: pass from <family> to name photos
 juist share ~/photos/2026               # with the publish role: a directory under this device's name
 juist share                             # what this device shares, and where
 ```
@@ -207,7 +208,7 @@ message means and what to do.
   only, and a link is a 128-bit secret.
 - **Revocation** is eventually consistent; the freshness TTL (48 h) bounds how
   long a partitioned device can keep a removed peer.
-- **Post-quantum:** every WireGuard handshake mixes in a preshared key, one
+- **Quantum-safe:** every WireGuard handshake mixes in a preshared key, one
   each two devices exchange by ML-KEM-768; group secrets are hybrid
   X25519 + ML-KEM-768. Signatures are Ed25519.
 
@@ -230,12 +231,12 @@ What works:
 - several networks on one device
 - exit nodes and subnet routers
 - names for devices, and services published to the internet, over HTTPS,
-  HTTP/3 or plain TCP
+  HTTP/3 or plain TCP, or to members only, by name in the access policy
 - a way in from networks that let nothing but HTTPS out
 - an access policy: which device may reach what on which
 - ending a network with a break-glass secret, and a backup of admin keys
-- a post-quantum preshared key in every WireGuard handshake, so that traffic
-  recorded now cannot be decrypted later
+- quantum-safe tunnels: a preshared key in every WireGuard handshake, so that
+  traffic recorded now cannot be decrypted later
 - connections that stay up while a device's keys, addresses or routes change
 - packages for Debian, Ubuntu, Fedora and FreeBSD
 

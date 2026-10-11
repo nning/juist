@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/types/ipproto"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/internal/policy"
@@ -83,7 +84,7 @@ func TestAnIngressReachesWhatIsServedAlone(t *testing.T) {
 		t.Errorf("not agreed, the status says %+v", st)
 	}
 
-	f.d.SetPublishConsent(true, nil)
+	f.d.SetPublishConsent(true, nil, nil)
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +331,7 @@ func TestWhereToServeIsKept(t *testing.T) {
 	if st.Publish == nil || st.Publish.Consent || len(st.Publish.To) != 1 || st.Publish.NotServing == "" {
 		t.Errorf("stopped, the status says %+v", st.Publish)
 	}
-	if consent, to := loadServeTo(f.home, t.Logf); consent || to["immich"] != "127.0.0.1:2283" {
+	if consent, to, _ := loadServeTo(f.home, t.Logf); consent || to["immich"] != "127.0.0.1:2283" {
 		t.Errorf("read back %v %v", consent, to)
 	}
 	call(ipc.Request{Command: ipc.CmdPublish, Unserve: []string{"immich"}})
@@ -349,14 +350,14 @@ func TestWhereToServeMovesOutOfTheWord(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, statedir.PublishServeFile), []byte("immich 127.0.0.1:2283\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if consent, to := loadServeTo(home, t.Logf); !consent || to["immich"] != "127.0.0.1:2283" {
+	if consent, to, _ := loadServeTo(home, t.Logf); !consent || to["immich"] != "127.0.0.1:2283" {
 		t.Fatalf("read %v %v", consent, to)
 	}
 	s := &Service{opts: ServiceOptions{Home: home}, servePublished: true, serveTo: map[string]string{"immich": "127.0.0.1:2283"}}
 	if err := s.setPublish(&ipc.Request{Unserve: []string{"immich"}}); err != nil {
 		t.Fatal(err)
 	}
-	if consent, to := loadServeTo(home, t.Logf); !consent || len(to) != 0 {
+	if consent, to, _ := loadServeTo(home, t.Logf); !consent || len(to) != 0 {
 		t.Errorf("the older lines came back: %v %v", consent, to)
 	}
 }
@@ -410,6 +411,44 @@ func TestMembersReachAPublishedNameDirectly(t *testing.T) {
 	z, _, _ = f.d.namesZone(state, policy.View{}, log.Freshness{}, true, now, func(types.Identity) bool { return false })
 	if _, ok := z.Overrides["immich.pub.example.org"]; ok {
 		t.Error("a name its target does not serve resolves to it")
+	}
+}
+
+// A name for members alone resolves to its device for a member the policy
+// names it for, or every member without one, never for the device itself;
+// for anyone else as the internet resolves it.
+func TestANameForMembersResolvesForThoseItIsFor(t *testing.T) {
+	f := exitFixtureWith(t, func(nw *network) {
+		nw.domain = "pub.example.org"
+		nw.devices[0].record.Published = []types.PublishedName{{Label: "own", Port: 443, Members: true}}
+		nw.devices[1].record.Published = []types.PublishedName{{Label: "photos", Port: 443, Members: true}}
+	}, nil)
+	state := f.auth.State()
+	self, target := f.nw.devices[0].record.Identity, f.nw.devices[1].record.Identity
+	now := time.Now().Unix()
+	serves := func(types.Identity) bool { return true }
+	resolves := func(v policy.View) (photos, own bool, held []heldOverride) {
+		z, held, _ := f.d.namesZone(state, v, log.Freshness{}, true, now, serves)
+		_, photos = z.Overrides["photos.pub.example.org"]
+		_, own = z.Overrides["own.pub.example.org"]
+		return photos, own, held
+	}
+	photos, own, held := resolves(policy.View{})
+	if !photos || own {
+		t.Errorf("without a policy: photos %v, the device's own %v", photos, own)
+	}
+	if !slices.ContainsFunc(held, func(h heldOverride) bool { return h.name == "photos.pub.example.org" && h.members }) {
+		t.Errorf("photos is not held as for members: %+v", held)
+	}
+	peers := map[types.Identity]bool{target: true}
+	for _, c := range []struct {
+		names []string
+		want  bool
+	}{{[]string{"photos"}, true}, {nil, false}, {[]string{"other"}, false}} {
+		v := policy.View{Restricted: true, Peers: peers, Out: map[types.Identity]policy.Access{target: {Names: c.names}}, In: map[types.Identity]policy.Access{self: {}}}
+		if photos, own, _ := resolves(v); photos != c.want || own {
+			t.Errorf("names %q: photos %v, the device's own %v", c.names, photos, own)
+		}
 	}
 }
 
@@ -584,7 +623,234 @@ func TestWhereTheDomainItselfGoesIsKept(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(home, statedir.PublishToFile)); string(b) != "@ 127.0.0.1:80\nimmich 127.0.0.1:2283\n" {
 		t.Errorf("kept %q", b)
 	}
-	if _, to := loadServeTo(home, t.Logf); to[""] != "127.0.0.1:80" || to["immich"] != "127.0.0.1:2283" {
+	if _, to, _ := loadServeTo(home, t.Logf); to[""] != "127.0.0.1:80" || to["immich"] != "127.0.0.1:2283" {
 		t.Errorf("read back %v", to)
+	}
+}
+
+// A name for members alone goes to the terminator apart from the others,
+// with the addresses of the members it is for: without a policy every member
+// but an ingress, under one those it names, and never this device, whose
+// own programs a client could make ask; the ingress may open its port by
+// TCP alone, for the CA.
+func TestANameForMembersGoesToTheTerminatorApart(t *testing.T) {
+	f := exitFixtureWith(t, func(nw *network) {
+		nw.domain = "pub.example.org"
+		nw.devices[0].record.Published = []types.PublishedName{{Label: "photos", Port: 443, Members: true}}
+		nw.devices[2].record.Roles = []types.Role{types.RoleIngress}
+	}, func(o *Options) {
+		o.ServePublished, o.ServeTo = true, map[string]string{"photos": ipc.HTTP3To("127.0.0.1:2342")}
+	})
+	f.learnOthers(t)
+	addrs := func(devs ...*device) []netip.Addr {
+		var out []netip.Addr
+		for _, d := range devs {
+			for _, a := range f.auth.State().Addrs(d.record.Identity, time.Now().Unix()) {
+				out = append(out, a.Addr())
+			}
+		}
+		slices.SortFunc(out, netip.Addr.Compare)
+		return out
+	}
+	from := func() []netip.Addr {
+		t.Helper()
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		got := f.d.Serving(nil)
+		if len(got.Names) != 0 || len(got.Members) != 1 || got.Members[0].Name != "photos.pub.example.org" {
+			t.Fatalf("the terminator is told %+v", got)
+		}
+		out := slices.Clone(got.Members[0].From)
+		slices.SortFunc(out, netip.Addr.Compare)
+		return out
+	}
+	n1 := f.nw.devices[1]
+	if got, want := from(), addrs(n1); !slices.Equal(got, want) {
+		t.Errorf("without a policy, from %v, want %v", got, want)
+	}
+	if a := f.peerOf(t, f.nw.devices[2]).Access; a == nil || !slices.Contains(a.Open, tcp(443)) ||
+		slices.Contains(a.Open, conn.Ports{Proto: ipproto.UDP, First: 443, Last: 443}) {
+		t.Errorf("the ingress may open %+v", a)
+	}
+	f.nw.setPolicy(t, f, "pass from n1 to n0 proto tcp port 22\n")
+	if got := from(); len(got) != 0 {
+		t.Errorf("under a policy naming no name, from %v", got)
+	}
+	f.nw.setPolicy(t, f, "pass from n1 to name photos\n")
+	if got, want := from(), addrs(n1); !slices.Equal(got, want) {
+		t.Errorf("under a policy naming it, from %v, want %v", got, want)
+	}
+	if a := f.peerOf(t, n1).Access; a == nil || !slices.Contains(a.Open, tcp(443)) {
+		t.Errorf("n1, which may open photos, may open %+v here", a)
+	}
+}
+
+// An ingress is told a name for members alone apart, so that one too old to
+// know the list passes it to nobody.
+func TestAnIngressIsToldANameForMembersApart(t *testing.T) {
+	f := exitFixtureWith(t, func(nw *network) {
+		nw.domain = "pub.example.org"
+		nw.devices[0].record.Roles = []types.Role{types.RoleIngress}
+		nw.devices[1].record.Published = []types.PublishedName{{Label: "photos", Port: 443, Members: true}}
+	}, nil)
+	e, err := endpointFor(f.nw.devices[1], 7001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Published = true
+	if err := e.Sign(f.nw.devices[1].identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatal(err)
+	}
+	got := f.d.Published()
+	if len(got.Names) != 0 || len(got.Members) != 1 || got.Members[0].Name != "photos.pub.example.org" ||
+		len(got.Members[0].Addrs) == 0 || len(got.Members[0].From) != 0 {
+		t.Fatalf("the ingress is told %+v", got)
+	}
+}
+
+// A name for members alone whose service another name's bytes reach as they
+// are is not served, which the status says: a client of the other could ask
+// the service for it by Host. Where juist proxies the other's HTTP, holding
+// it to its own Host, it is.
+func TestANameForMembersSharesNoServicePassedOnAsItIs(t *testing.T) {
+	serving := func(blog string) (*ipc.Published, *ipc.Publish) {
+		f := exitFixtureWith(t, func(nw *network) {
+			nw.domain = "pub.example.org"
+			nw.devices[0].record.Published = []types.PublishedName{{Label: "blog", Port: 443}, {Label: "photos", Port: 443, Members: true}}
+		}, func(o *Options) {
+			o.ServePublished, o.ServeTo = true, map[string]string{"photos": "127.0.0.1:80", "blog": blog}
+		})
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		return f.d.Serving(nil), f.d.Status().Publish
+	}
+	got, st := serving("127.0.0.1:80")
+	if len(got.Members) != 0 || st == nil || !slices.Equal(st.Shared, []string{"photos.pub.example.org with blog.pub.example.org"}) {
+		t.Errorf("sharing a service passed on as it is: served %+v, status %+v", got.Members, st)
+	}
+	got, st = serving(ipc.HTTP3To("127.0.0.1:80"))
+	if len(got.Members) != 1 || len(st.Shared) != 0 {
+		t.Errorf("sharing a service whose HTTP juist proxies: served %+v, status %+v", got.Members, st)
+	}
+}
+
+// A service is one however its address is spelled, and a share passing
+// bytes on as they are shares it too.
+func TestAServiceIsOneHoweverSpelledAndAShareSharesIt(t *testing.T) {
+	ps := []types.PublishedName{{Label: "blog", Port: 443}, {Label: "photos", Port: 443, Members: true}}
+	for _, blog := range []string{"localhost:80", "[::1]:80", "0.0.0.0:80", "LocalHost:80", "127.0.0.1:080",
+		"[::ffff:0.0.0.0]:80", "[::ffff:127.0.0.1]:80", "localhost.:80"} {
+		if got := sharedService(ps, map[string]string{"photos": "127.0.0.1:80", "blog": blog}, ""); got["photos"] != "blog" {
+			t.Errorf("photos at 127.0.0.1:80 and blog at %s: %v", blog, got)
+		}
+	}
+	if got := sharedService(ps, map[string]string{"photos": "127.0.0.1:80"}, "localhost:80"); got["photos"] != "" || len(got) != 1 {
+		t.Errorf("a share passing on to the same service: %v", got)
+	}
+	byTCP := []types.PublishedName{{Label: "blog", Port: 8080, Public: 8080}, {Label: "photos", Port: 443, Members: true}}
+	if got := sharedService(byTCP, map[string]string{"photos": "127.0.0.1:80", "blog": ipc.HTTP3To("127.0.0.1:80")}, ""); got["photos"] != "blog" {
+		t.Errorf("a name passed by TCP, its target offered HTTP/3, to the same service: %v", got)
+	}
+	if got := sharedService(ps, map[string]string{"photos": "127.0.0.1:80", "blog": ipc.HTTP3To("127.0.0.1:80")}, ""); len(got) != 0 {
+		t.Errorf("a name whose HTTP juist proxies: %v", got)
+	}
+	if got := sharedService(ps, map[string]string{"photos": "127.0.0.1:80", "blog": "127.0.0.1:81"}, ""); len(got) != 0 {
+		t.Errorf("two services: %v", got)
+	}
+	now := time.Now()
+	raw := &share{to: "127.0.0.1:80"}
+	if got := rawShare([]*share{raw}, now); got != "127.0.0.1:80" {
+		t.Errorf("a share without a path passes on to %q", got)
+	}
+	if got := rawShare([]*share{raw, {to: "x", prefix: "/abc/"}}, now); got != "" {
+		t.Errorf("shares with paths, which juist proxies, pass on to %q", got)
+	}
+}
+
+// A service meant for members alone is served under its name only while the
+// log has the name for members alone, and is said withheld otherwise.
+func TestAServiceForMembersIsWithheldFromAPublicName(t *testing.T) {
+	serving := func(members bool) (*ipc.Published, *ipc.Publish) {
+		f := exitFixtureWith(t, func(nw *network) {
+			nw.domain = "pub.example.org"
+			nw.devices[0].record.Published = []types.PublishedName{{Label: "photos", Port: 443, Members: members}}
+		}, func(o *Options) {
+			o.ServePublished, o.ServeTo = true, map[string]string{"photos": "127.0.0.1:2342"}
+			o.ServeMembers = map[string]bool{"photos": true}
+		})
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		return f.d.Serving(nil), f.d.Status().Publish
+	}
+	got, st := serving(false)
+	if len(got.Names)+len(got.Members) != 0 || st == nil || !slices.Equal(st.Withheld, []string{"photos.pub.example.org"}) ||
+		len(st.Ending) != 0 {
+		t.Errorf("public in the log: served %+v, status %+v", got, st)
+	}
+	got, st = serving(true)
+	if len(got.Names) != 0 || len(got.Members) != 1 || len(st.Withheld) != 0 {
+		t.Errorf("for members in the log: served %+v, status %+v", got, st)
+	}
+}
+
+// The mark that a service is for members alone outlives a restart, goes with
+// its label, and is a line an older version reads as none.
+func TestTheMarkOfAServiceForMembersIsKept(t *testing.T) {
+	home := t.TempDir()
+	s := &Service{opts: ServiceOptions{Home: home}}
+	if err := s.setPublish(&ipc.Request{ServeTo: []ipc.ServeTo{{Label: "photos", To: "127.0.0.1:2342", Members: true},
+		{Label: "blog", To: "127.0.0.1:80"}}}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(home, statedir.PublishToFile))
+	if string(b) != "blog 127.0.0.1:80\nphotos 127.0.0.1:2342 members\n" {
+		t.Errorf("written %q", b)
+	}
+	if (ipc.ServeTo{Label: "photos", To: "127.0.0.1:2342 members"}).Valid() {
+		t.Error("an older version would take the line")
+	}
+	if _, to, members := loadServeTo(home, t.Logf); to["photos"] != "127.0.0.1:2342" || !members["photos"] || members["blog"] {
+		t.Errorf("read back %v %v", to, members)
+	}
+	if err := s.setPublish(&ipc.Request{ServeTo: []ipc.ServeTo{{Label: "photos", To: "127.0.0.1:2342"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, members := loadServeTo(home, t.Logf); members["photos"] {
+		t.Error("said again without the mark, the service kept it")
+	}
+	if err := s.setPublish(&ipc.Request{ServeTo: []ipc.ServeTo{{Label: "photos", To: "127.0.0.1:2342", Members: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.setPublish(&ipc.Request{Unserve: []string{"photos"}}); err != nil {
+		t.Fatal(err)
+	}
+	if s.serveMembers["photos"] {
+		t.Error("the mark outlived its label")
+	}
+}
+
+// A service member's services are marked as its command line says, not as a
+// file left from before says.
+func TestAServiceMembersMarkIsItsCommandLines(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, statedir.PublishToFile), []byte("photos 127.0.0.1:1 members\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, marked := range []map[string]bool{nil, {"photos": true}} {
+		s, err := NewService(ServiceOptions{Home: home, Socket: filepath.Join(home, "s.sock"),
+			ServeTo: map[string]string{"photos": "immich:2283"}, ServeMembers: marked})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.serveMembers["photos"] != marked["photos"] {
+			t.Errorf("given %v, marked %v", marked, s.serveMembers)
+		}
+		s.Close()
 	}
 }

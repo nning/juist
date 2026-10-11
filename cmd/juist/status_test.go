@@ -221,47 +221,38 @@ func TestStatusNamesTheDeadTunnels(t *testing.T) {
 	}
 }
 
-// status says by what key each tunnel is post-quantum, and names those that
-// are not.
-func TestStatusSaysWhichTunnelsArePostQuantum(t *testing.T) {
+// status names devices on an older juist, and says why a log sync fails
+// without blaming a firewall for what is not one.
+func TestStatusSaysWhoNeedsAnUpdate(t *testing.T) {
 	t.Parallel()
-	base := ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 4, Peers: 3,
-		Schema: types.SchemaPQ}}
 	for _, c := range []struct {
-		pq   ipc.PQ
+		st   func(*ipc.Status)
 		want []string
-		not  []string
 	}{
-		{ipc.PQ{Pair: 3}, []string{"Post-quantum  every tunnel: 3 by pair keys"}, []string{"not post-quantum", "no preshared key"}},
-		{ipc.PQ{Pair: 1, Group: 2}, []string{"every tunnel: 1 by a pair key, 2 by the group key"}, []string{"not post-quantum", "no preshared key"}},
-		{ipc.PQ{Pair: 2, None: []string{"lx"}}, []string{"2 of 3 tunnels: 2 by pair keys",
-			"warning: not post-quantum, so juist's own traffic alone: lx, on an older build"}, nil},
-		{ipc.PQ{Group: 2, NoKey: []string{"phone"}}, []string{"2 of 3 tunnels: 2 by the group key",
-			"warning: no preshared key in common with phone", "hint: it catches up"}, nil},
+		{func(s *ipc.Status) { s.Outdated = []string{"mac"} },
+			[]string{"warning: mac runs an older juist, unreachable until updated"}},
+		{func(s *ipc.Status) { s.Outdated = []string{"mac", "phone"} },
+			[]string{"warning: mac, phone run an older juist, unreachable until updated"}},
+		{func(s *ipc.Status) { s.SyncNewer = []string{"edge01"} },
+			[]string{"warning: log sync fails: edge01 runs a newer juist", "hint: update juist on this device"}},
+		{func(s *ipc.Status) { s.SyncBroken = []string{"exit"} },
+			[]string{"warning: log sync to exit fails\n", "hint: juistd's log says why"}},
+		{func(s *ipc.Status) { s.NoKey = []string{"phone"} },
+			[]string{"warning: phone fell too far behind to reach this device", "hint: it catches up"}},
 	} {
 		var out syncBuffer
 		a := newApp(strings.NewReader(""), &out, &out)
 		a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
-		s := base
-		s.PQ = &c.pq
+		s := ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 4, Peers: 3,
+			Schema: types.SchemaPQ}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 3}}
+		c.st(&s)
 		a.printStatus(&s)
 		mustContain(t, out.String(), c.want...)
-		for _, n := range c.not {
-			if strings.Contains(out.String(), n) {
-				t.Errorf("%+v: says %q:\n%s", c.pq, n, out.String())
+		for _, n := range []string{"firewall", "quantum"} {
+			if strings.Contains(strings.ToLower(out.String()), n) {
+				t.Errorf("says %q:\n%s", n, out.String())
 			}
 		}
-	}
-
-	var out syncBuffer
-	a := newApp(strings.NewReader(""), &out, &out)
-	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
-	s := base
-	s.Schema, s.PQ = types.SchemaPQ-1, &ipc.PQ{None: []string{"a", "b", "c"}}
-	a.printStatus(&s)
-	mustContain(t, out.String(), "Post-quantum  no, the network predates it")
-	if strings.Contains(out.String(), "warning: not post-quantum") {
-		t.Errorf("a network before post-quantum tunnels names every device:\n%s", out.String())
 	}
 }
 
@@ -305,6 +296,26 @@ func TestDevicesSayHowEachWasReached(t *testing.T) {
 		if got := a.describeReach(n, i == 0, st, reach); got != want {
 			t.Errorf("%s: %q, want %q", n.Name, got, want)
 		}
+	}
+}
+
+// juist devices calls a device outdated whose tunnel is up and carries
+// nothing of the user's, and marks no other.
+func TestDevicesMarkOutdatedDevices(t *testing.T) {
+	t.Parallel()
+	self, a1, b1 := types.Identity{1}, types.Identity{2}, types.Identity{3}
+	devs := []ipc.Device{{Identity: self, Name: "self", V4: "10.0.0.1"}, {Identity: a1, Name: "a", V4: "10.0.0.2"},
+		{Identity: b1, Name: "b", V4: "10.0.0.3"}}
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	st := &ipc.Status{InNetwork: true, Tunnels: ipc.Tunnels{ReachChecked: time.Now().Unix(), Reach: []ipc.PeerReach{
+		{Identity: a1, Live: true, Direct: true, Outdated: true}, {Identity: b1, Live: true}}}}
+	if err := a.printDevices(devs, self, st, false, false); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out.String(), "10.0.0.2  outdated", "10.0.0.3  relayed")
+	if strings.Contains(out.String(), "*") {
+		t.Errorf("a device is marked:\n%s", out.String())
 	}
 }
 

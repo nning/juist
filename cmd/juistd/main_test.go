@@ -41,7 +41,7 @@ func TestHelpListsEveryOptionWithItsDefault(t *testing.T) {
 			t.Errorf("help lacks %q:\n%s", want, got)
 		}
 	}
-	if n := strings.Count(got, "\n"); n > 29 {
+	if n := strings.Count(got, "\n"); n > 30 {
 		t.Errorf("help is %d lines", n)
 	}
 	if _, err := parse([]string{"--help"}, io.Discard); !errors.Is(err, errHelp) {
@@ -365,5 +365,23 @@ func TestHTTP3IsForAServiceMember(t *testing.T) {
 	}
 	if _, err := parse([]string{"--http3"}, io.Discard); err == nil || !strings.Contains(err.Error(), "beside --serve") {
 		t.Errorf("--http3 alone: %v", err)
+	}
+}
+
+// --members marks every service a service member serves for members alone,
+// the mark its daemon then holds, and is for a service member alone.
+func TestMembersMarksAServiceMembersServices(t *testing.T) {
+	o, err := parse([]string{"--serve", "photos=immich:2283", "-S", "wiki=wiki:80", "--members"}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := o.service.ServeMembers; !m["photos"] || !m["wiki"] || len(m) != 2 {
+		t.Errorf("marked %v", m)
+	}
+	if o, err := parse([]string{"--serve", "photos=immich:2283"}, io.Discard); err != nil || o.service.ServeMembers != nil {
+		t.Errorf("unmarked: %v, %v", o.service.ServeMembers, err)
+	}
+	if _, err := parse([]string{"--members"}, io.Discard); err == nil || !strings.Contains(err.Error(), "beside --serve") {
+		t.Errorf("--members alone: %v", err)
 	}
 }

@@ -27,7 +27,7 @@ German from the start, built statically and published through juist itself.
   named device), good to know, if something goes wrong.
 - **Trade-offs** take each residual weakness from
   [02-threat-model.md](02-threat-model.md) as what happens, why it is accepted
-  and what moves it; this is M17's documentation of the acceptances.
+  and what moves it; this is M18's documentation of the acceptances.
 - **Writing.** Every command, flag, default and output line is checked
   against the README, the commands' help or the code, and left out if it
   cannot be. Each juist term is explained where a page first uses it. Short

@@ -456,6 +456,9 @@ const MaxServeTo = types.MaxPublishedPerNode
 type ServeTo struct {
 	Label string `cbor:"1,keyasint"`
 	To    string `cbor:"2,keyasint"`
+	// Members says the service is for members alone: never served under a
+	// name the log has public.
+	Members bool `cbor:"3,keyasint,omitempty"`
 }
 
 // Valid reports whether s names one label and one HOST:PORT or status page.
@@ -953,14 +956,11 @@ func (r *Response) makePrintable() {
 			&st.Alarm, &st.Disabled, &st.EpochError, &st.SchemaAlarm, &st.DataPlaneError, &st.HomeRelay} {
 			*f = printable(*f)
 		}
-		for i := range st.Silent {
-			st.Silent[i] = printable(st.Silent[i])
-		}
-		for i := range st.TunnelsDown {
-			st.TunnelsDown[i] = printable(st.TunnelsDown[i])
-		}
-		for i := range st.SyncFailing {
-			st.SyncFailing[i] = printable(st.SyncFailing[i])
+		for _, names := range [][]string{st.Silent, st.TunnelsDown, st.SyncFailing, st.SyncNewer, st.SyncBroken,
+			st.Outdated, st.NoKey, st.Unrevoked, st.Lost, st.Seeking, st.Absent, st.Unmoved} {
+			for i := range names {
+				names[i] = printable(names[i])
+			}
 		}
 		for i := range st.Devices {
 			d := &st.Devices[i]
@@ -969,21 +969,6 @@ func (r *Response) makePrintable() {
 			for j := range d.Roles {
 				d.Roles[j] = types.Role(printable(string(d.Roles[j])))
 			}
-		}
-		for i := range st.Unrevoked {
-			st.Unrevoked[i] = printable(st.Unrevoked[i])
-		}
-		for i := range st.Lost {
-			st.Lost[i] = printable(st.Lost[i])
-		}
-		for i := range st.Seeking {
-			st.Seeking[i] = printable(st.Seeking[i])
-		}
-		for i := range st.Absent {
-			st.Absent[i] = printable(st.Absent[i])
-		}
-		for i := range st.Unmoved {
-			st.Unmoved[i] = printable(st.Unmoved[i])
 		}
 		for i := range st.Shares {
 			sh := &st.Shares[i]

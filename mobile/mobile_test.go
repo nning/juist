@@ -238,6 +238,25 @@ func TestTheViewJudgesAsJuistStatusDoes(t *testing.T) {
 	}
 }
 
+// A device on an older juist reads as outdated, and the alarms name it, and
+// a device on a newer one this device cannot follow.
+func TestTheViewNamesWhoNeedsAnUpdate(t *testing.T) {
+	s := sampleStatus()
+	s.Reach[0].Outdated = true
+	s.Outdated, s.SyncNewer = []string{"anna"}, []string{"bert"}
+	v := viewOf(s)
+	if v.Members[0].Name != "anna" || v.Members[0].Reach != "outdated" {
+		t.Errorf("members %+v", v.Members)
+	}
+	var kinds []string
+	for _, a := range v.Alarms {
+		kinds = append(kinds, a.Kind+":"+strings.Join(a.Names, ","))
+	}
+	if !slices.Contains(kinds, "outdated:anna") || !slices.Contains(kinds, "newer:bert") {
+		t.Errorf("alarms %v", kinds)
+	}
+}
+
 // The app reads what viewOf writes; android/app's unit tests read this file
 // too, so the two sides cannot drift apart unnoticed. JUIST_UPDATE_GOLDEN=1
 // writes it anew.

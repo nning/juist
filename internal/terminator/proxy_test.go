@@ -95,6 +95,37 @@ func TestAnUpgradeIsProxied(t *testing.T) {
 	}
 }
 
+// A request to upgrade to h2c reaches no service, which would take any Host
+// in the HTTP/2 that follows.
+func TestNoUpgradeToH2C(t *testing.T) {
+	var got atomic.Int32
+	addr, _ := serveBackend(t, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.Add(1)
+		w.Header().Set("Connection", "Upgrade")
+		w.Header().Set("Upgrade", r.Header.Get("Upgrade"))
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	_, at := startOpts(t, ipc.HTTP3To(addr), false, func(*Options) {})
+	for _, up := range []string{"h2c", "H2C", "websocket, h2c"} {
+		c, err := tls.Dial("tcp", at, &tls.Config{ServerName: "immich.pub.example.org", InsecureSkipVerify: true,
+			NextProtos: []string{"http/1.1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		fmt.Fprintf(c, "GET / HTTP/1.1\r\nHost: immich.pub.example.org\r\nConnection: Upgrade, HTTP2-Settings\r\n"+
+			"Upgrade: %s\r\nHTTP2-Settings: AAMAAABkAARAAAAAAAIAAAAA\r\n\r\n", up)
+		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+		c.Close()
+		if err != nil || resp.StatusCode == http.StatusSwitchingProtocols {
+			t.Errorf("Upgrade: %s: %v, %v", up, resp, err)
+		}
+	}
+	if n := got.Load(); n != 0 {
+		t.Errorf("the service got %d requests to upgrade to h2c", n)
+	}
+}
+
 // What a client connection held of the service goes once it ends.
 func TestTheServicesConnectionsGoWithTheClients(t *testing.T) {
 	addr, open := serveBackend(t, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))

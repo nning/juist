@@ -14,9 +14,9 @@ in ihn einbricht, bestimmt also, wer zum Netz gehört.
 
 juist kommt ohne einen solchen Server aus. Seine Aufgabe übernimmt das
 [Mitgliederlog]({{< relref "docs/how-it-works" >}}#the-membership-log): Deine
-Admins signieren es, und jedes Gerät prüft es selbst. Für alles andere, also
-um Geräte zu finden, durch NAT zu kommen und Verkehr zu übertragen, darf juist
-Wege und Helfer nutzen, denen es nicht vertraut.
+Admins signieren es, und jedes Gerät prüft es selbst. Für alles andere
+(Geräte finden, durch NAT kommen, Verkehr übertragen) kann juist Wege und
+Helfer nutzen, denen es nicht vertraut.
 
 Die Begriffe auf dieser Seite erklärt
 [So funktioniert juist]({{< relref "docs/how-it-works" >}}). Worin sich juist
@@ -43,7 +43,7 @@ Diese Grundsätze setzt juist um:
   Änderung am Netz anhand der Signaturen der Admins, egal auf welchem Weg sie
   kam.
 - Kein Schlüssel entscheidet allein. Ab einem Quorum von zwei kann ein
-  gestohlener Admin-Schlüssel nichts ändern, und juistd hat nie einen
+  gestohlener Admin-Schlüssel für sich nichts ändern, und juistd hat nie einen
   Admin-Schlüssel.
 - Vertrauen ist nicht von Dauer. Ein entferntes Gerät verliert seine Tunnel,
   sobald die anderen Mitglieder davon erfahren. Bei abgeschnittenen
@@ -109,24 +109,25 @@ ausdrücklich annehmen soll.
 
 juist betreibt WireGuard auf allen Plattformen im Userspace, und zwar mit
 [Tailscales Fassung](https://github.com/tailscale/wireguard-go) von
-[wireguard-go](https://git.zx2c4.com/wireguard-go/). Tailscales
-NAT-Traversal (siehe unten) setzt das voraus. Unter Linux und FreeBSD wäre
+[wireguard-go](https://git.zx2c4.com/wireguard-go/), weil Tailscales
+NAT-Traversal (siehe unten) das voraussetzt. Unter Linux und FreeBSD wäre
 WireGuard im Kernel schneller.
 
 Jeder WireGuard-Handshake mischt einen Preshared Key ein, den ein künftiger
-Quantencomputer nicht herausfinden kann; heute mitgeschnittener Verkehr bleibt
-also geheim. Zwei Geräte beginnen mit einem Schlüssel aus dem Gruppengeheimnis
-unten; im Log-Abgleich zwischen ihnen kapselt dann jedes ein Geheimnis an den
-ML-KEM-768-Schlüssel des anderen, und sie wechseln zu einem Schlüssel, den nur
-die beiden haben und der sich mit jeder Änderung der Mitglieder erneuert.
+Quantencomputer nicht herausfinden kann. Heute mitgeschnittener Verkehr bleibt
+also geheim. Zwei Geräte beginnen mit einem Schlüssel, der aus dem
+[Gruppengeheimnis](#log) abgeleitet ist. Beim Log-Abgleich kapselt dann jedes
+ein Geheimnis an den ML-KEM-768-Schlüssel des anderen, und sie wechseln zu
+einem Schlüssel, den nur die beiden haben. Dieser Schlüssel wird mit jeder
+Änderung der Mitglieder erneuert.
 
 ## Was juist von Tailscale übernimmt {#tailscale}
 
 [Tailscale](https://tailscale.com/blog/how-tailscale-works) ist ein Mesh-VPN
 auf Basis von WireGuard. Den Koordinationsserver betreibt Tailscale Inc., der
 Client ist [Open Source](https://github.com/tailscale/tailscale) unter der
-BSD-3-Clause-Lizenz. juist enthält Teile dieses Clients, fest in Version
-1.104.0:
+BSD-3-Clause-Lizenz. juist enthält Teile dieses Clients, festgelegt auf
+Version 1.104.0:
 
 - **magicsock und disco** finden einen direkten Weg zwischen zwei Geräten und
   kommen dabei durch NAT. Wie das geht, erklärt Tailscale in
@@ -140,7 +141,7 @@ BSD-3-Clause-Lizenz. juist enthält Teile dieses Clients, fest in Version
 - **STUN** verrät einem Gerät seine öffentliche Adresse.
 
 Den Teil, der mit einem Koordinationsserver spricht, lässt juist weg.
-Tailscales Client bekommt seine Peers und deren Schlüssel von diesem Server.
+Tailscales Client bekommt seine Peers und deren Schlüssel von diesem Server,
 juist übergibt demselben Code stattdessen Peers, die es aus dem Mitgliederlog
 erzeugt hat. Du brauchst kein Tailscale-Konto, und es geht kein Verkehr an
 Tailscale.
@@ -155,7 +156,7 @@ Mit [Tailnet Lock](https://tailscale.com/kb/1226/tailnet-lock) antwortet
 Tailscale selbst auf das Problem, dass man dem Koordinationsserver keine
 Schlüssel anvertrauen möchte: Vertrauenswürdige Geräte signieren, welche
 Schlüssel beitreten dürfen. Das Mitgliederlog übernimmt diesen Entwurf, eine
-Kette signierter Einträge, besteht aber aus juists eigenem Code. Es
+Kette signierter Einträge, ist aber juists eigener Code. Es
 unterscheidet sich in drei Punkten:
 
 - Im Log stehen die Mitglieder selbst, nicht nur die Schlüssel, die sie
@@ -167,9 +168,9 @@ unterscheidet sich in drei Punkten:
 
 ## Das Mitgliederlog {#log}
 
-Jede Änderung, etwa „nas aufnehmen“, ist ein Eintrag. Er verweist über
-dessen Hash auf den vorigen Eintrag und gilt erst, wenn genug Admins ihn mit
-ihren Ed25519-Schlüsseln signiert haben. Jedes Gerät geht das Log vom ersten
+Jede Änderung, etwa „nas aufnehmen“, ist ein Eintrag. Er enthält den Hash
+des vorigen Eintrags und gilt erst, wenn genug Admins ihn mit ihren
+Ed25519-Schlüsseln signiert haben. Jedes Gerät geht das Log vom ersten
 Eintrag des Netzes an durch und prüft jede Signatur selbst.
 
 Entstehen Änderungen gleichzeitig auf verschiedenen Geräten, bringt jedes
@@ -191,22 +192,21 @@ geschützt ist.
 Damit Geräte einander finden, veröffentlichen sie ihre Adressen. Das
 Gruppengeheimnis schützt diese Angaben:
 
-- Im LAN antworten Geräte per Multicast-DNS auf einen Namen, der aus dem
-  Gruppengeheimnis abgeleitet ist, und zwar verschlüsselt. Andere Geräte im
+- Im LAN beantworten Geräte Multicast-DNS-Anfragen nach einem Namen, der aus
+  dem Gruppengeheimnis abgeleitet ist, und die Antwort ist verschlüsselt. Andere Geräte im
   LAN erfahren nur, dass dort juist läuft.
 - Im öffentlichen BitTorrent-DHT legt jedes Mitglied seine signierte Adresse
   als veränderlichen Eintrag ab
-  ([BEP 44](https://www.bittorrent.org/beps/bep_0044.html)). Den Schlüssel
-  dafür können nur Mitglieder berechnen, und lesen können den Eintrag auch nur
-  sie.
+  ([BEP 44](https://www.bittorrent.org/beps/bep_0044.html)). Nur Mitglieder
+  können den Schlüssel berechnen, unter dem er liegt, und nur sie können ihn
+  entschlüsseln.
 - Mitglieder teilen einander mit, wo sie ein Gerät zuletzt erreicht haben.
 
 Eine Einladung funktioniert schon, bevor das neue Gerät irgendein Geheimnis
 kennt. Beide Seiten führen dazu [SPAKE2](https://www.rfc-editor.org/rfc/rfc9382)
 aus, einen Schlüsselaustausch auf Basis eines kurzen Passworts. Code oder Link
-lassen sich deshalb nicht offline erraten, und ein Gerät, das sich
-dazwischenschaltet, verrät sich durch die vier Wörter, die beide Seiten
-vergleichen.
+lassen sich nicht offline erraten, und ein Gerät, das sich dazwischenschaltet,
+verrät sich durch die vier Wörter, die beide Seiten vergleichen.
 
 ## Quellen {#sources}
 

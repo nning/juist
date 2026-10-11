@@ -155,6 +155,7 @@
     <string name="reach_self">This phone</string>
     <string name="reach_direct">Direct</string>
     <string name="reach_relay">Through a relay</string>
+    <string name="reach_outdated">Outdated</string>
     <string name="reach_down">No answer</string>
     <string name="reach_sought">Searching</string>
     <string name="reach_absent">Offline</string>
@@ -165,6 +166,7 @@
     <string name="reach_unknown">Unknown</string>
     <string name="reach_off">Off</string>
     <string name="reach_relay_about">Traffic passes through a relay, one of your devices, and stays encrypted end to end.</string>
+    <string name="reach_outdated_about">It runs an older juist, and is unreachable until juist is updated there.</string>
     <string name="reach_down_about">The device is offline, or a firewall blocks the tunnel.</string>
     <string name="reach_sought_about">The device may have restarted or changed networks. juist is looking for it.</string>
     <string name="reach_absent_about">Probably offline.</string>
@@ -191,6 +193,10 @@
     <string name="alarm_data_plane">The tunnels rejected the current device list</string>
     <string name="alarm_no_traffic">No tunnel traffic from %1$s</string>
     <string name="alarm_no_traffic_hint">Both may be behind NAT with no relay between them.</string>
+    <string name="alarm_newer">%1$s runs a newer juist than this app</string>
+    <string name="alarm_newer_hint">This phone cannot follow the network until you update juist.</string>
+    <string name="alarm_outdated">%1$s runs an older juist</string>
+    <string name="alarm_outdated_hint">Unreachable until juist is updated there.</string>
     <plurals name="alarm_conflicted">
         <item quantity="one">%d device announces another’s key and is ignored</item>
         <item quantity="other">%d devices announce another’s key and are ignored</item>

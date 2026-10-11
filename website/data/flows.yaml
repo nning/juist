@@ -12,13 +12,13 @@ publish:
     - name: nas
       role: {en: target, de: Ziel}
       via: WireGuard
-      en: Ends TLS, with a certificate from Let's Encrypt.
+      en: Terminates TLS with a certificate from Let's Encrypt.
       de: Entschlüsselt TLS mit einem Zertifikat von Let's Encrypt.
     - name: 127.0.0.1:8080
       end: true
       role: {en: service, de: Dienst}
       via: HTTP
-      en: Gets the plain connection.
+      en: Receives the decrypted connection.
       de: Bekommt die entschlüsselte Verbindung.
   legend:
     en: "The ingress sees the name, the client's address, sizes and timing, not the content."

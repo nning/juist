@@ -538,3 +538,102 @@ func TestTestLines(t *testing.T) {
 		t.Errorf("tests start on %v, want 3 and 6", got)
 	}
 }
+
+func family() *lab {
+	return newLab(
+		member("anna", Member{}),
+		member("ben", Member{}),
+		member("carl", Member{}),
+		member("nas", Member{Names: []Name{{Label: "photos", Port: 443, Members: true},
+			{Label: "wiki", Port: 8443}, {Label: "blog", Port: 443}}}),
+		member("site", Member{Names: []Name{{Label: "", Port: 443, Members: true}}}),
+		member("ing", Member{Ingress: true}),
+		member("svc", Member{Service: true}),
+	)
+}
+
+// A rule to a name lets its sources open the name's device on its port,
+// and the name alone there; the device knows whom by the name.
+func TestARuleToANameLetsItsSourcesOpenIt(t *testing.T) {
+	l := family()
+	src := "table <family> { anna, ben }\n\npass from <family> to { name @, name photos }\npass from carl to name blog\n\n" +
+		"test pass from anna to name photos\ntest block from carl to name photos\ntest pass from ben to name @\n" +
+		"test pass from carl to name blog\n"
+	n := l.network(t, src)
+	if got := Format(n.Policy, l.name); got != src {
+		t.Fatalf("formatted:\n%s\nwant:\n%s", got, src)
+	}
+	if f := n.Failures(l.name); len(f) != 0 {
+		t.Fatalf("fails %+v", f)
+	}
+	anna := n.View(l.ids["anna"]).Out[l.ids["nas"]]
+	if !slices.Equal(anna.Names, []string{"photos"}) || !Allows(anna.Own, types.ProtoTCP, 443) ||
+		!Allows(anna.Own, types.ProtoUDP, 443) || Allows(anna.Own, types.ProtoTCP, 8443) {
+		t.Errorf("anna may open %+v on nas", anna)
+	}
+	nas := n.View(l.ids["nas"]).In
+	if !slices.Equal(nas[l.ids["ben"]].Names, []string{"photos"}) || len(nas[l.ids["carl"]].Names) != 1 {
+		t.Errorf("nas takes %+v", nas)
+	}
+	// A rule opening the device's port is no rule to the name for members.
+	n = l.network(t, "pass from carl to nas proto tcp port 443\ntest pass from carl to name blog\ntest block from carl to name photos\n")
+	if f := n.Failures(l.name); len(f) != 0 {
+		t.Fatalf("fails %+v", f)
+	}
+	ok, by := n.Explain(types.PolicyTest{From: l.ids["carl"], To: types.PolicyRefs{Names: []string{"photos"}}})
+	if ok || by != nil {
+		t.Errorf("carl to photos: passes %v by %v", ok, by)
+	}
+}
+
+// A rule to a public name opens its port; a name for members alone passes
+// to no ingress, service member or its own device, as the device takes it,
+// with a policy or without.
+func TestANameForMembersPassesWhomTheDeviceTakes(t *testing.T) {
+	l := family()
+	n := l.network(t, "pass from carl to name wiki\ntest pass from carl to name wiki\n")
+	if f := n.Failures(l.name); len(f) != 0 {
+		t.Fatalf("fails %+v", f)
+	}
+	if carl := n.View(l.ids["carl"]).Out[l.ids["nas"]]; !Allows(carl.Own, types.ProtoTCP, 8443) || Allows(carl.Own, types.ProtoTCP, 443) {
+		t.Errorf("carl may open %+v on nas", carl)
+	}
+	n = l.network(t, "pass from any to name photos\n")
+	none := l.network(t, "")
+	none.Policy = nil
+	for _, who := range []string{"ing", "svc", "nas"} {
+		test := types.PolicyTest{From: l.ids[who], To: types.PolicyRefs{Names: []string{"photos"}}}
+		for _, net := range []*Network{n, none} {
+			if ok, _ := net.Explain(test); ok {
+				t.Errorf("%s passes to photos, policy %v", who, net.Policy != nil)
+			}
+		}
+		n.Policy.Tests = []types.PolicyTest{{From: l.ids[who], To: test.To}}
+		if f := n.Failures(l.name); len(f) != 1 {
+			t.Errorf("test pass from %s to name photos: %+v", who, f)
+		}
+	}
+	if ok, _ := none.Explain(types.PolicyTest{From: l.ids["anna"], To: types.PolicyRefs{Names: []string{"photos"}}}); !ok {
+		t.Error("without a policy, anna does not pass to photos")
+	}
+}
+
+func TestNamesAreReadAsTheyMayBe(t *testing.T) {
+	l := family()
+	for _, c := range []struct{ src, want string }{
+		{"pass from anna to name photos proto tcp port 443\n", "no port"},
+		{"pass from anna to { nas, name photos }\n", "nothing else"},
+		{"pass from anna to { name photos, name photos }\n", "named twice"},
+		{"pass from name photos to anna\n", "where a device belongs"},
+		{"pass from anna to name Photos.x\n", "no published name"},
+		{"test pass from anna to name photos proto tcp port 443\n", "no port"},
+	} {
+		if _, err := Parse(c.src, l.resolve); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q: %v, want %q", c.src, err, c.want)
+		}
+	}
+	n := l.network(t, "pass from anna to name gone\n")
+	if w := n.Warnings(l.name); !slices.Contains(w, "name gone is published on no device by TLS") {
+		t.Errorf("warnings %q", w)
+	}
+}

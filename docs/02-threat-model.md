@@ -19,7 +19,7 @@
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
 | Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; once the network has an access policy (M14), only members it passes use one, enforced at the exit node or router |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
-| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M19, after v1.0); update transparency (roadmap item, not v1) |
+| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M20, after v1.0); update transparency (roadmap item, not v1) |
 
 ## Out of scope / consciously accepted
 
@@ -167,7 +167,7 @@ adopting this system must accept them explicitly.
    is the device keys. Bounded by: a device is still removed from each network
    by that network's quorum. A user per instance, which would close it, needs
    the packaging and each instance's view of the one below reworked, and is
-   left for the hardening before the audit (M17).
+   left for the hardening before the audit (M18).
 10. **Admin devices see what waits for the admins (M5b).** A change waiting
    for votes is sealed to the admin keys, but the juistd of every admin device
    that carries it sees its outside: which admin key handed it on, when it

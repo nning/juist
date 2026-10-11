@@ -75,7 +75,7 @@ func (t token) String() string {
 
 func isWordByte(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-		c == '.' || c == '_' || c == ':' || c == '/' || c == '-'
+		c == '.' || c == '_' || c == ':' || c == '/' || c == '-' || c == '@'
 }
 
 func lex(src string) ([]token, error) {
@@ -174,7 +174,7 @@ func TestLines(src string) []int {
 }
 
 // keywords may not stand for a device unquoted.
-var keywords = []string{"any", "block", "from", "icmp", "internet", "pass", "port", "proto",
+var keywords = []string{"any", "block", "from", "icmp", "internet", "name", "pass", "port", "proto",
 	"service", "table", "tcp", "test", "to", "udp", "via"}
 
 type parser struct {
@@ -429,6 +429,9 @@ func (p *parser) test() (types.PolicyTest, error) {
 	if err != nil {
 		return tst, err
 	}
+	if len(tst.To.Names) == 1 && len(ports) > 0 {
+		return tst, p.errorf(at, "a test to a name names no port: it is opened on its own")
+	}
 	switch {
 	case len(ports) > 1 || len(ports) == 1 && ports[0].First != ports[0].Last:
 		return tst, p.errorf(at, "a test names one protocol and one port")
@@ -471,6 +474,19 @@ func (p *parser) ref(r *types.PolicyRefs, dst bool) error {
 			return p.errorf(t, "any named twice")
 		}
 		r.Any = true
+		return nil
+	case dst && p.keyword("name"):
+		n := p.next()
+		if n.kind != tWord && n.kind != tQuote {
+			return p.errorf(n, "%s where a published name belongs", n)
+		}
+		label := n.text
+		if label == "@" {
+			label = ""
+		} else if err := types.ValidateLabel(label); err != nil {
+			return p.errorf(n, "%s is no published name: one label under the domain, or @ for the domain itself", n)
+		}
+		r.Names = append(r.Names, label)
 		return nil
 	case dst && p.keyword("internet"):
 		if r.Internet {
@@ -623,6 +639,13 @@ func sortRefs(r *types.PolicyRefs, at token) error {
 		if i := dupString(names); i >= 0 {
 			return &Error{Line: at.line, Msg: fmt.Sprintf("<%s> named twice", names[i])}
 		}
+	}
+	slices.Sort(r.Names)
+	if i := dupString(r.Names); i >= 0 {
+		return &Error{Line: at.line, Msg: fmt.Sprintf("%s named twice", nameRef(r.Names[i]))}
+	}
+	if len(r.Names) > 0 && (r.Any || len(r.Nodes)+len(r.Tables)+len(r.Prefixes) > 0 || r.Internet) {
+		return &Error{Line: at.line, Msg: "a rule to names names nothing else"}
 	}
 	slices.SortFunc(r.Prefixes, func(a, b netip.Prefix) int {
 		if c := a.Addr().Compare(b.Addr()); c != 0 {

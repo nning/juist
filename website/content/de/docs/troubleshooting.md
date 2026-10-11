@@ -45,8 +45,8 @@ FreeBSD startest du ihn mit `service juistd start`. Siehe
 ### `read-only; to manage this device …`
 
 Du bist weder root noch der Operator des Geräts, also der lokale Benutzer,
-der es ohne sudo verwalten darf. Du siehst nur den Status. Mach dich einmalig
-zum Operator:
+der es ohne sudo verwalten darf. Du siehst den Status, mehr nicht. Mach dich
+einmalig zum Operator:
 
 ```sh
 sudo juist set --operator=$USER
@@ -79,8 +79,8 @@ Oder mach ein solches Gerät mit `juist grant vps relay` zum Relay. Siehe
 ### `no device reaches this relay`
 
 Dieses Gerät ist ein Relay, aber kein anderes Gerät kommt bei ihm an.
-Wahrscheinlich ist Port 41645 für TCP oder UDP geschlossen. Öffne beide auf
-dem Relay und in jeder vorgeschalteten Firewall, etwa der deines
+Wahrscheinlich ist Port 41645 für TCP oder UDP geschlossen. Öffne ihn für
+beide auf dem Relay und in jeder vorgeschalteten Firewall, etwa der deines
 Hosting-Anbieters:
 
 ```sh {device="vps"}
@@ -93,9 +93,9 @@ Siehe [Relays]({{< relref "docs/relays" >}}).
 ### `log sync to nas fails in the tunnel`
 
 Der Tunnel steht, aber eine Firewall auf diesem Rechner verwirft den
-Log-Abgleich, der darin läuft, also TCP 41644 auf `juist0`. Das Gerät
-verpasst dann Änderungen am Netz, auch das Entfernen von Geräten. Lass
-`juist0` auf beiden Geräten durch, wie der Hinweis vorschlägt:
+Log-Abgleich, der darin läuft (TCP 41644 auf `juist0`). Das Gerät verpasst
+dann Änderungen am Netz, auch das Entfernen von Geräten. Lass eingehenden
+Verkehr auf `juist0` auf beiden Geräten durch, wie der Hinweis vorschlägt:
 
 ```console
 hint: on both devices: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
@@ -104,11 +104,22 @@ hint: on both devices: sudo ufw allow in on juist0, or add juist0 to firewalld's
 Liegt es an firewalld, meldet `juist status` `firewalld blocks juist0` und
 nennt den passenden Befehl. Siehe [Relays]({{< relref "docs/relays" >}}).
 
+### `warning: log sync fails: nas runs a newer juist`
+
+Auf nas läuft eine neuere Version von juist, deren Änderungen diese nicht
+lesen kann. Bis du juist auf diesem Gerät aktualisierst, verpasst es
+Änderungen am Netz.
+
+### `warning: log sync to nas fails`
+
+Der Tunnel steht und der Log-Abgleich erreicht nas, scheitert aber. Warum,
+steht im Log von juistd.
+
 ### `no device may relay`
 
-In einem Netz mit mehr als zwei Geräten darf kein Gerät Verkehr
-weiterleiten. Geräte hinter strengen NATs brauchen aber ein Relay. Gib auf
-dem Gerät eines Admins einem Gerät mit öffentlicher Adresse die Rolle:
+Das Netz hat mehr als zwei Geräte, aber keines davon darf Verkehr
+weiterleiten. Geräte hinter strengen NATs brauchen ein Relay. Gib auf dem
+Gerät eines Admins einem Gerät mit öffentlicher Adresse die Rolle:
 
 ```sh
 juist grant vps relay
@@ -118,30 +129,33 @@ Siehe [Relays]({{< relref "docs/relays" >}}).
 
 ### `warning: no relay on 443/tcp`
 
-Dieses Gerät sendet nur HTTPS, und kein Relay bedient einen öffentlichen
-Namen auf 443, den einzigen Weg, auf dem es die anderen erreicht. Gib einem
-Relay einen Namen, auf dem Relay:
+Dieses Gerät sendet nur HTTPS und erreicht die anderen deshalb nur über ein
+Relay, das einen öffentlichen Namen auf Port 443 bedient. Ein solches gibt es
+nicht. Gib einem Relay einen öffentlichen Namen, indem du auf dem Relay
+Folgendes ausführst:
 
 ```sh
 sudo juist set --relay-name relay.example.org
 ```
 
-Oder, in einem Netz, das mehr hinauslässt, `sudo juist set --https-only=false`.
-Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}). Hat ein Relay einen
-Namen und die Warnung bleibt, sagt der Server unter dem Namen nicht, dass er
-dieses Relay ist: Prüfe das DNS des Namens.
+Lässt das Netz mehr als HTTPS hinaus, genügt auch
+`sudo juist set --https-only=false`. Siehe
+[Nur HTTPS]({{< relref "docs/https-only" >}}). Hat ein Relay einen Namen und
+die Warnung bleibt, gibt sich der Server unter diesem Namen nicht als dieses
+Relay zu erkennen. Prüfe das DNS des Namens.
 
 ### `warning: juistd may bind any port below 1024, which no relay on 443 here needs`
 
-Das Recht, 443 zu belegen, für den öffentlichen Namen eines Relays gewährt,
-hat den Namen überdauert, etwa weil das Zurückgeben kein root fand. Nimm es
-zurück, wie der Hinweis sagt:
+juistd durfte Port 443 belegen, damit ein Relay seinen öffentlichen Namen
+bedienen kann. Der Name ist weg, das Recht aber geblieben, etwa weil der Name
+ohne root entfernt wurde und das Recht deshalb nicht entzogen werden konnte.
+Entzieh es, wie der Hinweis sagt:
 
 ```sh
 sudo /usr/lib/juist/relay.sh off
 ```
 
-Auch `juist reset` nimmt es zurück. Siehe [Relays]({{< relref "docs/relays" >}}).
+Auch `juist reset` entzieht es. Siehe [Relays]({{< relref "docs/relays" >}}).
 
 ### `Freshness  expired; vouchers only`
 
@@ -149,33 +163,29 @@ Auch `juist reset` nimmt es zurück. Siehe [Relays]({{< relref "docs/relays" >}}
 Gerät, das stündlich bestätigt, dass der Stand des Netzes aktuell ist. Bis
 wieder genug bestätigen, hält dieses Gerät nur Tunnel zu Vouchern, und sein
 Zustand lautet `limited`. Bring einen Voucher wieder online. Damit es nicht
-wieder passiert, mach nur Geräte zu Vouchern, die ständig laufen, und halte
-einen in Reserve. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
+wieder passiert, mach nur Geräte zu Vouchern, die ständig laufen, und nimm
+einen mehr, als du brauchst. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
 
 ### `warning: freshness ends in 20h unless 2 vouchers vouch again`
 
-Seit einem Tag haben weniger Voucher bestätigt als nötig. Nach der genannten
-Zeit wird dieses Gerät wie oben `limited`. Bring vorher einen Voucher wieder
+Seit einem Tag haben weniger Voucher bestätigt als nötig. Ist die genannte
+Zeit abgelaufen, wird dieses Gerät wie oben beschrieben `limited`. Bring vorher einen Voucher wieder
 online.
 
-### `warning: not post-quantum, so juist's own traffic alone: nas, …`
+### `warning: nas runs an older juist, unreachable until updated`
 
-nas kündigt keinen Preshared Key an: Es nutzt eine ältere Version von juist,
-oder hat das Netz noch nicht eingeholt. Bis dahin trägt sein Tunnel nur
-juists eigenen Verkehr, der sich selbst versiegelt, damit der Stand des Netzes
-es erreicht. Aktualisiere juist auf nas.
+Das Netz wurde aktualisiert, und auf nas läuft noch eine Version von juist
+von vor dem Upgrade. Bis du juist auf nas aktualisierst, erreicht nichts von
+deinem Verkehr nas, und nichts von seinem dich. Sein Tunnel trägt nur die
+Änderungen am Netz, damit nas dir dasselbe melden kann. `juist devices` zeigt
+es als `outdated`.
 
-### `warning: no preshared key in common with nas, …`
+### `warning: nas fell too far behind to reach this device`
 
-nas ist um mehr Änderungen zurück, als dieses Gerät Schlüssel aufbewahrt, und
-die beiden hatten nie einen eigenen. Es holt das Netz von einem Gerät nach,
-das sie aufbewahrt hat, meist einem, das ebenso lange weg war; sonst tritt es
-mit einer neuen Einladung wieder bei.
-
-### `Post-quantum  no, the network predates it`
-
-Das Netz wurde mit einer älteren Version von juist angelegt. Sobald jedes
-Gerät diese Version nutzt, hebt ein Admin es mit `juist log upgrade` an.
+nas war für mehr Änderungen offline, als dieses Gerät Schlüssel aufbewahrt.
+nas kann den Stand von einem Gerät nachholen, das diese Schlüssel noch hat,
+meist von einem, das ebenso lange offline war. Sonst nimm nas mit einer neuen
+Einladung wieder ins Netz auf.
 
 ### `removed`
 
@@ -217,7 +227,7 @@ Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
 ### `this device does not serve: IP forwarding is off …`
 
 Dieses Gerät soll ein Exit-Node sein, aber der Rechner leitet keinen Verkehr
-weiter. Führe dort noch einmal folgenden Befehl aus, er richtet den Rechner
+weiter. Führe dort noch einmal folgenden Befehl aus. Er richtet den Rechner
 mit sudo ein:
 
 ```sh
@@ -230,8 +240,8 @@ Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
 
 Du nutzt einen Exit-Node, aber systemd-resolved hat juistd nicht erlaubt,
 DNS durch den Tunnel zu leiten. Die Anfragen gehen also direkt ins Internet.
-Das juist-Paket bringt eine polkit-Regel mit, die juistd das erlaubt, wo
-polkit läuft. Installiere juist deshalb als Paket, und polkit, wo es dem Host
-fehlt. Siehe
+Das juist-Paket bringt eine polkit-Regel mit, die juistd das erlaubt, sofern
+polkit läuft. Installiere juist deshalb als Paket, und polkit, falls es auf
+dem Rechner fehlt. Siehe
 [Installation]({{< relref "docs/install" >}}) und
 [Namen]({{< relref "docs/names" >}}).

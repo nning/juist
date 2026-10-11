@@ -109,6 +109,7 @@ type heldOverride struct {
 	target    types.Identity
 	device    string
 	published bool
+	members   bool // a name for members alone
 }
 
 // namesZone is what the host resolves of state's network: each member by its
@@ -141,8 +142,13 @@ func (d *Daemon) namesZone(state *log.State, view policy.View, fresh log.Freshne
 			held = append(held, heldOverride{name: name, target: n.Identity, device: n.Name})
 		}
 		for _, p := range n.Published {
-			if reachedDirectly(p) && state.Domain() != "" && serves(n.Identity) {
-				held = append(held, heldOverride{name: p.Under(state.Domain()), target: n.Identity, device: n.Name, published: true})
+			// A name for members alone the policy does not name for this
+			// device is resolved as by the internet, which reaches nothing.
+			mine := !p.Members || n.Identity != d.self && (!view.Restricted ||
+				slices.Contains(view.Out[n.Identity].Names, p.Label))
+			if reachedDirectly(p) && state.Domain() != "" && serves(n.Identity) && mine {
+				held = append(held, heldOverride{name: p.Under(state.Domain()), target: n.Identity, device: n.Name,
+					published: true, members: p.Members})
 			}
 		}
 		if name, err := shareName(state, n.Identity); err == nil && d.sharing(n.Identity, time.Unix(now, 0)) {

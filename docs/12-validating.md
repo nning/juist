@@ -341,12 +341,23 @@ than skip. A NAT cell can be run alone with
 | M15 (2, 5) — the group key is the pair's in its epoch; an exchange gives both the pair key, which a third member cannot derive; messages are bound to sender, receiver, stores and network, replays and stale or runaway follower messages move nothing, lost ones never leave the two apart; generations are paced and follow every epoch, seeds reach a peer far behind, the store survives a restart and decodes what it encodes | `internal/pairkey`: `TestTheGroupKeyIsThePairsInItsEpoch`, `TestAnExchangeGivesBothThePairKey`, `TestAThirdMemberCannotDeriveThePairKey`, `TestAMessageIsBoundToItsSenderAndNetwork`, `TestAReplayedMessageMovesNothingBack`, `TestAStaleFollowerMessageStartsNothing`, `TestAFollowerCannotRunTheCountOut`, `TestLostMessagesNeverLeaveTheTwoApart`, `TestAnOfferForAPairStartedOverIsIgnored`, `TestAPairStartedOverOnOneSideMeetsAgain`, `TestAPairKeyFollowsItsBinding`, `TestAnIdentityRotationKeepsThePairKey`, `TestGenerationsArePaced`, `TestSeedsReachAPeerFarBehind`, `TestTheStoreSurvivesARestart`, `FuzzTake`, `FuzzDecodeStore` | no |
 | M15 (2, 3, 4) — tunnels move to pair keys and to new ones at an epoch bump; a sleeper reaches the peer it paired with; blocked handshakes never leave a pair without a key; a change not kept is undone; a removed device gives its pairs up; the first announcement names the epoch; a peer without post-quantum keys is refused announcements, routes nothing else, and `juist status` says which tunnels are post-quantum | `daemon`: `TestTunnelsMoveToPairKeys`, `TestAnEpochBumpMovesThePairKeys`, `TestASleeperReachesThePeerItPairedWith`, `TestBlockedHandshakesNeverLeaveAPairWithoutAKey`, `TestAPairChangeNotKeptIsUndone`, `TestARemovedDeviceGivesItsPairsUp`, `TestTheFirstAnnouncementNamesTheEpoch`, `TestARouterThatIsNotPostQuantumCarriesNothingElse`; `gossip`: `TestACacheRefusesPQAnnouncementsItIsToldOf`; `cmd/juist`: `TestStatusSaysWhichTunnelsArePostQuantum` | no |
 | M15 (2, 3) — between hosts: the previous release's network upgraded, every tunnel is on a pair key; an epoch bump moves both to a new one without a gap in a ping; a juistd stopped across two bumps reaches its peer again | `make interop`: `TestLinuxAndFreeBSD/post-quantum`, `TestLinuxAndFreeBSD/previous_release` | qemu |
-| M15 (6) — a TCP stream, over IPv4 and IPv6, survives a new preshared key with a handshake under it, egress refused and back, serving as an exit node and not, a new key and a renumbering, its longest stall under five seconds; the IPv4 one ends with its old address | `conn`: `TestNetnsAStreamSurvivesChanges` | yes |
+| M15 (6) — a TCP stream, over IPv4 and IPv6, survives a new preshared key with a handshake under it, egress refused and back, serving as an exit node and not, a new key and a renumbering, its longest stall under six seconds, a handshake retried once crossed; the IPv4 one ends with its old address | `conn`: `TestNetnsAStreamSurvivesChanges` | yes |
 | M15 (6) — the running data plane takes a new key and new addresses, refuses another ID, disco key or a peer's key or address, and guards new addresses before they go on the device; a peer that took a new key with no relay is reached as disco proves the path, held at most a bound and forgotten once removed; a failed router is retried on the router, without an empty config | `conn`: `TestANewKeyInPlace`, `TestNewAddressesInPlace`, `TestSetSelfRefuses`, `TestNewAddressesAreGuardedAhead`, `TestANewKeyIsReachedAtOnce`, `TestWhatWaitsForAProvenPath`, `TestAnUnprovenPeerIsHeldForAWhileAlone`, `TestReconfigRetriesAfterAFailedRouter`, `TestReconfigReprogramsAFailedRouterOnTheRealEngine` | no |
 | M15 (6) — new addresses go on before routes take the new source and the old come off, so no route to a peer goes for a moment; on FreeBSD a route's new source goes in beside the old where the kernel takes both | `conn`: `TestNetnsRouterLeavesTailscaleAlone`; `internal/plumber`: `TestARouteFromANewSourceGoesInFirst`; `conn` on FreeBSD: `TestAPlumbedDeviceCarriesTheOverlay` | yes, FreeBSD |
 | M15 (6) — the running mesh takes a rotation of its keys and moves onto new overlay addresses, a move at once too, and a move said late is forgotten; a host conflict drops IPv4 and takes it back without a restart; log sync's listener moves, and binds an address once it can | `daemon`: `TestRotationIsAdoptedWithoutARestart`, `TestTheMeshMovesOntoNewOverlayAddresses`, `TestAMovedDeviceMovesOntoItsNewAddressAtOnce`, `TestAMoveSaidLateIsForgotten`, `TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt`, `TestRebindMovesTheListener`, `TestRebindTakesAnAddressOnceItCan` | no |
 | M15 (7) — a service member's stack takes UDP, and drops a datagram whose checksum fails; between hosts it serves HTTP/3 at its overlay address | `internal/netstack`: `TestTheStackTakesUDP`; `make interop`: `TestLinuxAndFreeBSD/service_member` | no, qemu |
 | M15 (8) — the confiner takes packets of many flows at once, its count of flows right; serving sets UDP GRO forwarding on the uplink and gives it back; TCP to TCP splices within the kernel, a quiet join holding no pipe; each path's throughput | `conn`: `TestTheConfinerTakesPacketsAtOnce`, `TestServingForwardsUDPInBatchesWhileItServes`; `internal/pipe`: `TestTCPToTCPIsSpliced`, `TestAQuietSplicedJoinHoldsNoPipe`; `make throughput`: `TestNetnsThroughput` | no, yes |
+| M16 (4) — a name for members alone and a policy naming a name are schema 15's, on 443 by TLS alone; a rule to names names nothing else and no port, a test one name | `types`: `TestNamesForMembersAlone`, `TestAPolicyMeansWhatItSays`, `TestAPolicyNamingNamesNeedsItsSchema`; `trust/log`: `TestNamesForMembersNeedTheirSchema` | no |
+| M16 (2) — a rule to a name lets its sources open its device on its port and the name alone there, which the device learns by name; a rule to the device's port is none to a name for members; the text reads back, and says what is wrong | `internal/policy`: `TestARuleToANameLetsItsSourcesOpenIt`, `TestNamesAreReadAsTheyMayBe` | no |
+| M16 (1) — the ingress passes a name for members to the CA's validation alone, says so, and answers port 80 for it as for no name; the device takes it from the members it is for and from the ingress the CA's validation alone, and ends the connection of a member it is no longer for | `internal/ingress`: `TestANameForMembersPassesTheCAAlone`; `internal/terminator`: `TestANameForMembersIsTheirsAlone` | no |
+| M16 (1, 2) — juistd tells the terminator and the ingress names for members apart, with the members each is for, as the policy says; `juist publish add --members` keeps the mark, and `juist policy test` takes a name | `daemon`: `TestANameForMembersGoesToTheTerminatorApart`, `TestAnIngressIsToldANameForMembersApart`; `cmd/juist`: `TestPublishANameForMembersAlone`, `TestAPolicyNamesANameForMembers` | no |
+| M16 reviews 1, 2 — a name made for members alone ends the connections others opened while it was public, at the ingress and the device, over TCP and QUIC, and a member it is no longer for loses its QUIC connection; a request for another Host is misdirected; sessions resume; a name for members alone shares no service another name or a share passes on as it is, however its address is spelled; the device itself is none of its members | `internal/terminator`: `TestANameMadeForMembersEndsWhatOthersOpened`, `TestHTTP3ForMembersAlone`, `TestAMemberNoLongerForANameLosesItsQUIC`, `TestARequestForAnotherNameIsMisdirected`, `TestATLSSessionIsResumed`; `internal/ingress`: `TestANameMadeForMembersEndsItsConnections`; `daemon`: `TestANameForMembersSharesNoServicePassedOnAsItIs`, `TestAServiceIsOneHoweverSpelledAndAShareSharesIt`, `TestANameForMembersGoesToTheTerminatorApart` | no |
+| M16 review 4 — a hello refused a name for members, over TCP or QUIC, has no certificate ordered; the member's does | `internal/terminator`: `TestARefusedHelloOrdersNoCertificate` | no |
+| M16 review 5 — a request to upgrade to h2c reaches no service; a service is one with its port written with a leading zero, its address mapped or ending in a dot | `internal/terminator`: `TestNoUpgradeToH2C`; `daemon`: `TestAServiceIsOneHoweverSpelledAndAShareSharesIt` | no |
+| M16 review 6 — a name passed by TCP shares its service though its target offers HTTP/3; a policy test of a name for members passes no ingress, service member or its own device, with a policy or without; a test names one name alone, a label; a name for members resolves for those it is for, never on its own device; the status names each one not reached, and a shared service's warning has its hint; the publish line marks a name for members; an approval says which rules a name it publishes opens | `cmd/juist`: `TestAServiceForMembersGoesToNoPublicName`, `TestStatusSaysHowNamesResolve`, `TestTheStatusWarnsOfANameSharingItsService`, `TestPublishANameForMembersAlone`, `TestAPolicyNamesANameForMembers`; `daemon`: `TestAServiceIsOneHoweverSpelledAndAShareSharesIt`, `TestANameForMembersResolvesForThoseItIsFor`; `internal/policy`: `TestANameForMembersPassesWhomTheDeviceTakes`; `types`: `TestAPolicyMeansWhatItSays` | no |
+| M16 review 7 — juistd holds a service meant for members alone from its name while the log has it public, a mark it keeps across restarts and later commands until `--members=false`, in a line an older version leaves out; a test to a name names no exit node | `daemon`: `TestAServiceForMembersIsWithheldFromAPublicName`, `TestTheMarkOfAServiceForMembersIsKept`; `cmd/juist`: `TestAServiceForMembersGoesToNoPublicName`; `types`: `TestAPolicyMeansWhatItSays` | no |
+| M16 review 8 — a service member marks its services for members alone by `--members`, as its command line says and not a file left from before; `juist publish` shows the mark; on an admin's device the mark changes nothing in the log by itself | `cmd/juistd`: `TestMembersMarksAServiceMembersServices`, `TestHelpListsEveryOptionWithItsDefault`; `daemon`: `TestAServiceMembersMarkIsItsCommandLines`; `cmd/juist`: `TestAServiceForMembersGoesToNoPublicName` | no |
+| M16 (1, 2, 3) — between hosts: the internet and the ingress itself through the tunnel are refused, and none of their hellos has the name's certificate ordered; Pebble issues it through the ingress on the hello of a member it is for, which opens it by it; east, which a rule names it for, opens it, west, which may open any port of lx's, does not | `make interop`: `TestLinuxAndFreeBSD/members_alone`, `TestLinuxAndFreeBSD/access_policy` | qemu |
 
 ### The last privileged run
 
@@ -360,6 +371,39 @@ whole lab passed at M9's tree in 13 minutes. What CI cannot run, Fedora with fir
 was last checked by hand, and this records the latest such run. Update it with
 each one, so it is clear how old the evidence is.
 
+- **2026-10-11, a build that sleeps through an upgrade**, run as b82c536
+  before its rebase onto M16, which changed plans and comments alone.
+  `make ci-vm CI_MAKE=interop` passed whole in 25m19s, `make interop` alone,
+  as the change is to what passes between hosts: Debian on M14's package,
+  its juistd stopped while FreeBSD, made an admin, raised the network to
+  schema 15, said to install a newer juist once back; FreeBSD called it
+  outdated and blamed no firewall, and upgraded it reached FreeBSD on a pair
+  key. The run before failed in HTTPS alone only, hotel reaching fb once
+  fb's home relay moved, the case left open in
+  [10-connectivity-notes.md](10-connectivity-notes.md); the one before that
+  on the lab's own check, which read a key from FreeBSD's juistd log, where
+  it is written with `--verbose` alone. `make check` and
+  `make android-check` passed. The privileged tests did not run: nothing of
+  devices, routes or the firewall changed. No hand test on Fedora.
+- **2026-10-11, M16 done, at M16 after its eighth review**, the sixth
+  over the whole milestone and its completeness, the seventh and eighth
+  over a service meant for members alone that juistd holds from a public
+  name. `make ci-vm` passed `make ci` whole at 1b04fcf, the privileged
+  tests none skipped, the held stream's longest stall 24 ms; at M16 it
+  had stalled there once, two handshakes crossing after the new key, which
+  the test now waits out (review 4). The commits since changed no
+  privileged path. `make interop` passed whole at M16, M16 and
+  M16: Pebble issued the name for members' certificate through the
+  ingress on east's hello, none of those refused had it ordered, the
+  internet was refused at the ingress, which logged `members only`, lx
+  itself and the ingress through the tunnel at lx, and west, which may open
+  any port of lx's, by the policy. Two runs, at M16 and M16, lost
+  fb around its exit node parts, ssh and tunnel alike, its console showing
+  no panic, and every part after failed with it; the lab's FreeBSD console
+  now says every ten seconds whether its kernel runs and what its network
+  holds, for the next. `make test-freebsd` passed, all 48 packages, at
+  M16, M16 and M16. No hand test on Fedora; the app not by
+  hand.
 - **2026-10-11, M15 done, at M15 after its seventh review**, run as
   51c48b9 before its rebase onto M15, which changed the website and the
   README alone; so are the commits named below. `make ci-vm` passed `make ci` whole at ab6f434, the privileged tests none
@@ -1002,9 +1046,10 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   deliberately. The invite rendezvous has one test that uses the real DHT and
   STUN servers, skipped unless asked for:
   `JUIST_PUBLIC_TESTS=1 go test -run PublicDHT -v ./internal/rendezvous`.
-- **Upgrades.** Nothing yet tests a network whose members run different builds;
-  the schema version exists so that case fails loudly rather than silently, but
-  the readiness check that would stop an admin stranding members is M19's
+- **Upgrades.** `make interop` tests one network of two builds: the previous
+  release's device, stopped while the other upgrades the network, says to
+  install a newer juist when it comes back, and the other calls it outdated.
+  The readiness check that would stop an admin stranding members is M20's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)). Mixed builds do not
   sync at all across M4, whose gossip frames carry leases older builds reject,
   nor across M5b between two admin devices while either holds waiting
