@@ -1,7 +1,8 @@
 // Package addrkey hides a member's underlay addresses from members that are
 // not its peers. A member seals them under an address key of its own, which
 // it hands each peer wrapped under a key the two derive from the X25519 keys
-// the log holds for them, X25519 alone.
+// the log holds for them, and the pair's preshared key once it has one of
+// its own, which a quantum computer cannot recover.
 package addrkey
 
 import (
@@ -34,10 +35,10 @@ const WrapSize = 32 + chacha20poly1305.Overhead
 // addresses with ports.
 const MaxSealedSize = aead.Overhead + 16*(1+19+3) + 3
 
-// Derive is the address key a member with X25519 scalar holds in network at
-// epoch for exactly peers: a peer gone, or an epoch later, a key that peer
-// cannot derive.
-func Derive(scalar []byte, network types.Hash, epoch uint64, peers []types.Identity) (Key, error) {
+// Derive is the address key a member whose recipient keys' secret halves are
+// secret holds in network at epoch for exactly peers: a peer gone, or an
+// epoch later, a key that peer cannot derive.
+func Derive(secret []byte, network types.Hash, epoch uint64, peers []types.Identity) (Key, error) {
 	h := sha256.New()
 	for _, p := range peers {
 		h.Write(p[:])
@@ -46,7 +47,7 @@ func Derive(scalar []byte, network types.Hash, epoch uint64, peers []types.Ident
 	info = append(info, "juist/addr-key/v1\x00"...)
 	info = binary.BigEndian.AppendUint64(info, epoch)
 	info = h.Sum(info)
-	b, err := hkdf.Key(sha256.New, scalar, network[:], string(info), 32)
+	b, err := hkdf.Key(sha256.New, secret, network[:], string(info), 32)
 	if err != nil {
 		return Key{}, fmt.Errorf("addrkey: deriving: %w", err)
 	}
@@ -84,6 +85,16 @@ func Pair(scalar []byte, self types.Identity, peer types.Identity, public types.
 		return [32]byte{}, fmt.Errorf("addrkey: deriving: %w", err)
 	}
 	return [32]byte(b), nil
+}
+
+// WithPSK is pair with the pair's preshared key psk mixed in, for a pair
+// that has one of its own.
+func WithPSK(pair, psk [32]byte) [32]byte {
+	b, err := hkdf.Key(sha256.New, append(pair[:], psk[:]...), nil, "juist/pair-key-psk/v1", 32)
+	if err != nil {
+		panic(fmt.Sprintf("addrkey: deriving: %v", err))
+	}
+	return [32]byte(b)
 }
 
 // Wrap seals owner's key k for the peer pair names. The nonce follows from

@@ -160,6 +160,13 @@ func (d *Daemon) syncRelay(state *log.State) {
 			return
 		}
 		d.mu.Lock()
+		if !d.session.holds(cert) {
+			// A rotation came between: the next reconcile starts it on
+			// the certificate for the new keys.
+			d.mu.Unlock()
+			srv.Close()
+			return
+		}
 		d.relay = srv
 		d.announced = nil // the announcement now has a relay to name
 		d.mu.Unlock()

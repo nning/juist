@@ -15,6 +15,7 @@ import (
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/pairkey"
 	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
@@ -61,12 +62,14 @@ func (d *Daemon) Reconcile() error {
 	}
 
 	d.adoptEpoch(state)
+	d.keepSeeds()
 	d.noteSchema()
 	d.pruneWaiting(state)
 	d.endpoints.SetRelayNames(state.Schema() >= types.SchemaRelayName)
+	d.setPQ(state.Schema() >= types.SchemaPQ)
 	if d.onAddrsMoved != nil && state.IsMember(d.self) &&
-		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.startAddrs) {
-		d.movedOnce.Do(func() { go d.onAddrsMoved() })
+		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.heldAddrs()) && d.movedSaid.CompareAndSwap(false, true) {
+		go d.onAddrsMoved()
 	}
 
 	s := d.snapshotOf(state)
@@ -88,10 +91,22 @@ func (d *Daemon) Reconcile() error {
 		}
 		d.noteIngressPorts(nil)
 		d.pruneEndpoints(s.live)
+		if !d.namedIn(s) {
+			// Removed: should the same keys come back, under a store of its
+			// own, which every member reads as the pairs it held given up.
+			d.changePairs(func(p *pairkey.Store) bool { return p.Reset() })
+		}
 		d.logOnce("daemon: this device is not in the member set (removed, or past its expiry); tunnels are down")
 		return nil
 	}
 
+	// By the keys the log names, expired members' too: a pair dropped while
+	// its peer kept it would start over unseen.
+	named := make(map[types.WGKey]bool, len(s.members))
+	for i := range s.members {
+		named[s.members[i].WireGuard] = true
+	}
+	d.changePairs(func(p *pairkey.Store) bool { return p.Prune(func(k types.WGKey) bool { return named[k] }) })
 	staleKeys := d.keysAreStale(state)
 	fresh, admit := d.checkFreshness(state, s.now)
 	// Before anything below can end the reconcile early.
@@ -109,6 +124,7 @@ func (d *Daemon) Reconcile() error {
 	ports := d.planPublish(s, fresh.Fresh(s.now))
 	ap := d.accessPlan(s, !fresh.Fresh(s.now), ports.access())
 	b := d.buildPeers(s, held, discoUsers, relays, admit, &ap)
+	d.prunePSKs(b.named)
 	d.noteNewAnnouncements(b.named)
 	d.setInstalled(b.named)
 	sub := d.planSubnets(s, fresh.Fresh(s.now), held, b.peers, b.named)
@@ -160,6 +176,7 @@ func (d *Daemon) Reconcile() error {
 		Vouchers: fresh.Needed, Vouching: fresh.Vouching, Stale: !fresh.Fresh(s.now),
 		Relays: len(relays), Relaying: d.isRelaying(), RelayCapable: relayCapableIn(s),
 		Conflicted:    b.conflicted,
+		PQ:            b.pq(),
 		StaleKeys:     staleKeys,
 		LastReconcile: d.now().Unix(),
 		Exit:          d.exitNow(),
@@ -208,17 +225,27 @@ func (d *Daemon) membersOf(state *log.State) snapshot {
 	return s
 }
 
+// keysNamedElsewhere reports whether state names other keys for this
+// device than the mesh runs on.
+func (d *Daemon) keysNamedElsewhere(state *log.State) bool {
+	self, ok := state.Node(d.self)
+	return ok && self.WireGuard != d.own.Load().wg
+}
+
 // keysAreStale reports a rotation applied while this daemon runs, which leaves
 // the log naming keys the process does not hold. Peers move to them at once, so
 // everything fails from here and looks like a network problem unless something
 // says so.
 func (d *Daemon) keysAreStale(state *log.State) bool {
-	self, ok := state.Node(d.self)
-	if !ok || self.WireGuard == d.wgPublic {
+	if !d.keysNamedElsewhere(state) {
 		return false
 	}
-	d.logOnce("daemon: the log names different keys for this device than this daemon holds; " +
-		"restart juistd to pick up the promoted key file")
+	if d.onKeysNamed == nil {
+		d.logOnce("daemon: the log names different keys for this device than this daemon holds; " +
+			"restart juistd to pick up the promoted key file")
+	} else if d.keysSaid.CompareAndSwap(false, true) {
+		go d.onKeysNamed()
+	}
 	return true
 }
 
@@ -335,6 +362,12 @@ type peerSet struct {
 	named      []namedPeer
 	silent     []string // members with no announcement held
 	conflicted int      // members left out for a disco key another uses
+
+	// What the peers' handshakes mix in: a key the pair alone holds, one
+	// from the group secret; the peers given none, and those given one
+	// nobody holds.
+	pairKeys, groupKeys int
+	notPQ, noKey        []string
 }
 
 // buildPeers renders the live members admit allows into peers: the log says
@@ -374,6 +407,22 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			HomeRelay: homeRelay(ep, relays),
 			Access:    ap.access(n, ep),
 		}
+		psk, stage := d.psk(s.state, n, ep)
+		p.PSK = psk
+		if notPQ(s.state, stage) {
+			// juist's own traffic alone, which seals itself.
+			p.Access = ap.ownOnly(n, ep)
+		}
+		switch stage {
+		case pairkey.StageNone:
+			out.notPQ = append(out.notPQ, n.Name)
+		case pairkey.StageUnknown:
+			out.noKey = append(out.noKey, n.Name)
+		case pairkey.StageGroup:
+			out.groupKeys++
+		case pairkey.StagePair:
+			out.pairKeys++
+		}
 		if n.HasRole(types.RoleIngress) {
 			if out.ingresses == nil {
 				out.ingresses = map[key.NodePublic]bool{}
@@ -381,9 +430,25 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			out.ingresses[p.NodeKey] = true
 		}
 		out.peers = append(out.peers, p)
-		out.named = append(out.named, namedPeer{name: n.Name, id: n.Identity, wg: n.WireGuard, peer: p})
+		out.named = append(out.named, namedPeer{name: n.Name, id: n.Identity, wg: n.WireGuard, peer: p, stage: stage})
 	}
 	return out
+}
+
+// pq is what the peers' handshakes mix in, nil where there are none.
+func (b *peerSet) pq() *ipc.PQ {
+	if len(b.peers) == 0 {
+		return nil
+	}
+	return &ipc.PQ{Pair: b.pairKeys, Group: b.groupKeys, None: b.notPQ, NoKey: b.noKey}
+}
+
+// namedIn reports whether s's log names this device, by its identity or,
+// where that rotated, by its WireGuard key.
+func (d *Daemon) namedIn(s snapshot) bool {
+	return slices.ContainsFunc(s.members, func(n types.NodeRecord) bool {
+		return n.Identity == d.self || n.WireGuard == d.own.Load().wg
+	})
 }
 
 // selfName is this device's member name in state, or the last one known.

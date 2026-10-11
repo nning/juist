@@ -197,6 +197,9 @@ func endpointFor(d *device, port uint16) (gossip.Endpoint, error) {
 		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("192.0.2.50:41641")},
 		GossipPort: port,
 		Seq:        1,
+		// Ahead of any test's log, so the pair speaks the other's epoch.
+		Epoch:     1 << 32,
+		PairStore: 1,
 	}
 	return e, e.Sign(d.identity)
 }
@@ -265,6 +268,7 @@ type fakeManager struct {
 	isolate  bool   // as SetEgress was last told
 	through  string // what AnswersThrough says
 	peers    []conn.Peer
+	self     []conn.Self // as SetSelf was told, in order
 	relays   []conn.Relay
 	relaySet int
 	sets     int
@@ -366,6 +370,20 @@ func (m *fakeManager) SetPeers(peers []conn.Peer) error {
 		}
 	}
 	return nil
+}
+
+func (m *fakeManager) SetSelf(s conn.Self) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.self = append(m.self, s)
+	return nil
+}
+
+// selfSet is what SetSelf was told, in order.
+func (m *fakeManager) selfSet() []conn.Self {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.self)
 }
 
 func (m *fakeManager) SetRelays(relays []conn.Relay) error {

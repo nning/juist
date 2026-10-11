@@ -74,8 +74,10 @@ func TestDemo(t *testing.T) {
 
 	addr := strings.TrimSpace(laptop.run(t, `ip -4 -br addr show juist0 | awk '{print $3}' | cut -d/ -f1`))
 	time.Sleep(time.Second)
-	r.run(t, nas, right, "juist status", nil)
 	r.run(t, nas, right, "ping -c 3 "+addr, nil)
+	// Off camera: the recorder cuts the wait to a second.
+	nas.eventually(t, "reaching the laptop directly", 3*time.Minute, "juist devices", has("direct"))
+	r.run(t, nas, right, "juist devices", nil)
 	time.Sleep(4 * time.Second)
 	r.mark()
 

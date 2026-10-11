@@ -50,6 +50,10 @@ const (
 	envInstance  = "JUIST_NETNS_INSTANCE"
 	envTCPDial   = "JUIST_NETNS_TCP_DIAL"
 	envTCPBytes  = "JUIST_NETNS_TCP_BYTES"
+	// envNetstack, "port>target", runs a node on a network stack of its own,
+	// as a service member does, passing what reaches port on its addresses
+	// to target.
+	envNetstack = "JUIST_NETNS_NETSTACK"
 
 	// The NAT matrix adds three more. envServeRelay makes a node run a relay
 	// and report where it listens; envRelays gives a node the relay set to

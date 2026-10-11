@@ -36,9 +36,9 @@ created network "home"
 $ juist invite
 invite to "home", expires in 1h; on the new device:
 
-  juist join 42-drumbeat-tolerance-glucose  # same LAN
-
   juist join 'juist:Kx7q…@192.168.1.20:41642'
+
+  juist join 42-drumbeat-tolerance-glucose  # same LAN
 
 nas wants to join; compare with the words it shows:
   atlas-amulet-banjo-asteroid
@@ -122,13 +122,13 @@ Was du tun kannst
 
 ### Kryptographie
 
-{{< trade title="Tunnelverkehr ist nicht quantensicher" knob="keine Einstellung" >}}
+{{< trade title="Ein Tunnel beginnt mit dem Schlüssel der Gruppe" knob="keine Einstellung" >}}
 Was passiert
-: Ein künftiger Quantencomputer könnte mitgeschnittenen WireGuard-Verkehr entschlüsseln.
+: Bis zwei Geräte einen eigenen Schlüssel haben, einen Log-Abgleich nachdem ihr Tunnel steht, schützt ihren Verkehr ein Schlüssel, den jedes Mitglied ableiten könnte.
 
 Warum juist das hinnimmt
-: WireGuard hat keinen Schlüsselaustausch, der gegen Quantencomputer sicher ist. Die Gruppengeheimnisse sind dagegen hybrid geschützt, mit X25519 und ML-KEM-768.
+: Gegen alle außerhalb des Netzes ist er von Anfang an quantensicher; nur ein Mitglied, oder ein seither entferntes Gerät, mit einem Quantencomputer könnte diese ersten Sekunden lesen.
 
 Was du tun kannst
-: Nichts. Für Verkehr, der Jahrzehnte geheim bleiben muss, solltest du dich nicht auf juist verlassen.
+: Nichts. `juist status` sagt, welche Tunnel den Schlüssel der Gruppe nutzen.
 {{< /trade >}}

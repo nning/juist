@@ -21,6 +21,10 @@ type fakeHost struct {
 	mu        sync.Mutex
 	calls     []string
 	destroyed []string
+	// onePath refuses a second route to a prefix, as a kernel without
+	// multipath routing does; routes are those held then.
+	onePath bool
+	routes  map[netip.Prefix]int
 }
 
 func (h *fakeHost) record(format string, a ...any) {
@@ -55,13 +59,35 @@ func (h *fakeHost) DelAddr(dev string, p netip.Prefix) error {
 }
 
 func (h *fakeHost) AddRoute(dev string, p netip.Prefix, src netip.Addr) error {
+	h.mu.Lock()
+	if h.routes == nil {
+		h.routes = map[netip.Prefix]int{}
+	}
+	if h.onePath && h.routes[p] > 0 {
+		h.mu.Unlock()
+		return unix.EEXIST
+	}
+	h.routes[p]++
+	h.mu.Unlock()
 	h.record("route+ %s %v %v", dev, p, src)
 	return nil
 }
 
 func (h *fakeHost) DelRoute(dev string, p netip.Prefix, _ netip.Addr) error {
+	h.mu.Lock()
+	h.routes[p]--
+	h.mu.Unlock()
 	h.record("route- %s %v", dev, p)
 	return nil
+}
+
+// inOrder is what the helper did since the last look, in order.
+func (h *fakeHost) inOrder() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c := h.calls
+	h.calls = nil
+	return c
 }
 
 func (h *fakeHost) SetServe(dev string, s ServeSpec) error {
@@ -181,6 +207,39 @@ func TestTheHelperPlumbsWhatItIsAsked(t *testing.T) {
 	}
 	if !slices.Equal(h.destroyed, []string{"juist0"}) {
 		t.Errorf("hung up on, the helper destroyed %q", h.destroyed)
+	}
+}
+
+// A route taking a new source goes in before the old one goes, where the
+// kernel holds both, so the prefix is never without a route; where it holds
+// one, the old goes first.
+func TestARouteFromANewSourceGoesInFirst(t *testing.T) {
+	for _, onePath := range []bool{false, true} {
+		h := &fakeHost{onePath: onePath}
+		c, _ := pair(t, h)
+		f, err := c.OpenTUN("juist0", 1280)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		peer := prefixes("10.11.11.12/32")
+		if err := c.SetAddrs("juist0", prefixes("10.11.11.11/32", "10.11.12.11/32")); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.SetRoutes("juist0", peer, netip.MustParseAddr("10.11.11.11")); err != nil {
+			t.Fatal(err)
+		}
+		h.inOrder()
+		if err := c.SetRoutes("juist0", peer, netip.MustParseAddr("10.11.12.11")); err != nil {
+			t.Fatalf("one path %v: %v", onePath, err)
+		}
+		want := []string{"route+ juist0 10.11.11.12/32 10.11.12.11", "route- juist0 10.11.11.12/32"}
+		if onePath {
+			want[0], want[1] = want[1], want[0]
+		}
+		if got := h.inOrder(); !slices.Equal(got, want) {
+			t.Errorf("one path %v: %q, want %q", onePath, got, want)
+		}
 	}
 }
 

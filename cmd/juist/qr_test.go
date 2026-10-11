@@ -112,3 +112,25 @@ func TestQRCodeOnlyOnATerminal(t *testing.T) {
 	}
 	mustContain(t, narrow.String(), "no qr code: the terminal is narrower than")
 }
+
+// The code comes last, below the QR code and the link, so that a window
+// shorter than the invite still shows it.
+func TestTheInviteEndsWithTheCode(t *testing.T) {
+	t.Parallel()
+	link, err := enroll.NewLink([]netip.AddrPort{netip.MustParseAddrPort("192.168.1.20:41642")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newCLI(t)
+	c.terminal = true
+	var out syncBuffer
+	c.app(&out, "").announceInvite("home", "42-drumbeat-tolerance-glucose", link, DefaultInvitePort,
+		inviteOptions{expires: time.Hour, lan: true})
+	got := out.String()
+	qr := strings.LastIndexAny(got, "█▀▄")
+	byLink := strings.Index(got, "juist join '")
+	byCode := strings.Index(got, "juist join 42-drumbeat-tolerance-glucose")
+	if qr < 0 || byLink < 0 || byCode < 0 || !(qr < byLink && byLink < byCode) {
+		t.Fatalf("want the qr code, the link, then the code:\n%s", got)
+	}
+}

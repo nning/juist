@@ -32,20 +32,39 @@ func freePort(t *testing.T) uint16 {
 	return uint16(ln.Addr().(*net.TCPAddr).Port)
 }
 
+// freeUDPPort returns a UDP port nothing listens on.
+func freeUDPPort(t *testing.T) uint16 {
+	t.Helper()
+	c, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	return uint16(c.LocalAddr().(*net.UDPAddr).Port)
+}
+
 // persisted is what a restart keeps: the log, the gossip port, the endpoint
-// cache.
+// cache, the epoch secrets and the preshared keys.
 type persisted struct {
 	auth  *log.Authority
 	st    log.Storage
 	port  uint16
 	cache string
+	home  string
+
+	// session and udp, where set, are kept across restarts too, as by a
+	// process that was suspended rather than restarted: its NAT-traversal
+	// key and its data plane's port.
+	session *Session
+	udp     uint16
 }
 
 func keep(t *testing.T, nw *network) *persisted {
 	t.Helper()
 	auth, st := nw.authorityFor(t)
+	home := t.TempDir()
 	return &persisted{auth: auth, st: st, port: freePort(t),
-		cache: filepath.Join(t.TempDir(), statedir.EndpointCacheFile)}
+		cache: filepath.Join(home, statedir.EndpointCacheFile), home: home}
 }
 
 // passing is a clock the whole mesh shares, which a test moves on while a
@@ -60,9 +79,16 @@ func (m *mesh) startKept(t *testing.T, i int, dev *device, p *persisted, clock *
 	return m.startOn(t, i, dev, p.auth, p.st, func(o *Options) {
 		o.GossipPort = p.port
 		o.EndpointCachePath = p.cache
+		o.KeyringPath = statedir.KeyringPath(p.home)
+		o.PairsPath = statedir.PairsPath(p.home)
+		o.Session = p.session
+		o.ListenPort = p.udp
 		o.Clock = clock.now
 		// A first round that misses is retried well inside a test's wait.
 		o.SyncInterval = 3 * time.Second
+		if m.mutate != nil {
+			m.mutate(o)
+		}
 	})
 }
 

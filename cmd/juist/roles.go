@@ -335,9 +335,9 @@ var roleNames = []struct {
 	{"publish", types.RolePublish},
 }
 
-// describeGrant is roles, and the subnets routed and names answered beside
-// them.
-func describeGrant(roles []types.Role, subnets []netip.Prefix, names, published []string) string {
+// describeGrant is roles, the subnets routed beside them, and whether the
+// device answers names or publishes any.
+func describeGrant(roles []types.Role, subnets []netip.Prefix, names, publishes bool) string {
 	var parts []string
 	if len(roles) > 0 {
 		parts = append(parts, describeRoles(roles))
@@ -348,17 +348,11 @@ func describeGrant(roles []types.Role, subnets []netip.Prefix, names, published 
 	case len(subnets) > 0:
 		parts = append(parts, "routes "+listPrefixes(subnets))
 	}
-	switch {
-	case len(names) > 2:
-		parts = append(parts, fmt.Sprintf("%d names", len(names)))
-	case len(names) > 0:
-		parts = append(parts, "names "+strings.Join(names, ", "))
+	if names {
+		parts = append(parts, "names")
 	}
-	switch {
-	case len(published) > 2:
-		parts = append(parts, fmt.Sprintf("publishes %d names", len(published)))
-	case len(published) > 0:
-		parts = append(parts, "publishes "+strings.Join(published, ", "))
+	if publishes {
+		parts = append(parts, "publishes")
 	}
 	if len(parts) == 0 {
 		return describeRoles(nil)

@@ -86,7 +86,8 @@ as `10.7.0.2 (was 198.18.36.2)`.
 {{< /step >}}
 
 Until the deadline, devices answer at both addresses. After it, only the new
-ones work.
+ones work. Connections keep running through the move, except those made to
+or from an old address, which end with it.
 
 ## Moving one device's address
 

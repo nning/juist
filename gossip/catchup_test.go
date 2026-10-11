@@ -388,7 +388,7 @@ func TestAGrantOpensOnlyUnderTheListedKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.sleeper.node.opts.CatchUp.Recipient = other
+	p.sleeper.node.SetRecipient(other)
 	if err := p.sleeper.node.CatchUpWith(t.Context(), p.peer.addr()); err == nil {
 		t.Fatal("a grant sealed to the listed keys opened under others")
 	}

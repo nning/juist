@@ -3,6 +3,7 @@ package conn
 import (
 	"cmp"
 	"encoding/binary"
+	"maps"
 	"net/netip"
 	"slices"
 	"sync"
@@ -33,6 +34,9 @@ type Access struct {
 
 	// Sends is what this node may open on the peer's own addresses.
 	Sends []Ports
+
+	// Nothing passes nothing either way, replies and errors included.
+	Nothing bool
 }
 
 // Ports are a protocol, zero for every one, and its ports First to Last,
@@ -53,7 +57,7 @@ func (a *Access) Clone() *Access {
 	if a == nil {
 		return nil
 	}
-	out := &Access{Open: slices.Clone(a.Open), Through: slices.Clone(a.Through), Sends: slices.Clone(a.Sends)}
+	out := &Access{Open: slices.Clone(a.Open), Through: slices.Clone(a.Through), Sends: slices.Clone(a.Sends), Nothing: a.Nothing}
 	for i := range out.Through {
 		out.Through[i].Ports = slices.Clone(out.Through[i].Ports)
 	}
@@ -85,10 +89,16 @@ const (
 type confiner struct {
 	policy atomic.Pointer[confinePolicy]
 
-	mu      sync.Mutex
-	flows   map[netip.Addr]*flowtrack.Cache[flowState] // opened by this node, as it sent them, by the peer's address
-	closing []closingFlow                              // TCP flows closed both ways, oldest first
+	// flows are those this node opened, as it sent them, by the peer's
+	// address; replaced whole under flowsMu, read without it.
+	flows   atomic.Pointer[map[netip.Addr]*flowSet]
+	flowsMu sync.Mutex
+	held    atomic.Int64  // flows in all sets
+	gen     atomic.Uint64 // advanced by each flow added, which use stamps
 	now     func() time.Time
+
+	baseOnce sync.Once
+	base     time.Time
 
 	// Zero is maxConfinedFlows and maxFlowsPerAddr.
 	maxFlows, maxFlowsPerAddr int
@@ -97,9 +107,24 @@ type confiner struct {
 	nextIn, nextOut tstun.FilterFunc
 }
 
-// flowState is how far a TCP flow has closed: FIN sent each way, and both.
+// A flowSet is the flows to one peer address. A packet of a flow takes its
+// lock for reading; one that opens, closes or ends a flow, for writing.
+type flowSet struct {
+	mu      sync.RWMutex
+	flows   map[flowtrack.Tuple]*flow
+	closing []closingFlow // TCP flows closed both ways, oldest first
+	gone    bool          // its address is no longer confined
+}
+
+type flow struct {
+	used     atomic.Uint64 // the gen when last used
+	closedAt atomic.Int64  // when closed both ways, as [confiner.since]; zero while open
+	state    flowState     // under the set's mu
+}
+
+// flowState is how far a TCP flow has closed: FIN sent each way.
 type flowState struct {
-	finOut, finIn, closed bool
+	finOut, finIn bool
 }
 
 type closingFlow struct {
@@ -116,6 +141,7 @@ type confinePolicy struct {
 	peers  map[netip.Addr]*Access        // restricted peers' overlay addresses
 	routes map[netip.Addr][]netip.Prefix // what this node routes through each
 	routed *netipx.IPSet                 // all of those
+	none   *netipx.IPSet                 // what peers passing nothing route
 	self   []netip.Addr                  // this node's own overlay addresses
 }
 
@@ -132,13 +158,16 @@ func confine(w *tstun.Wrapper) *confiner {
 // addresses.
 func (c *confiner) set(peers []Peer, self []netip.Prefix) {
 	p := &confinePolicy{peers: map[netip.Addr]*Access{}, routes: map[netip.Addr][]netip.Prefix{}}
-	var routed netipx.IPSetBuilder
+	var routed, none netipx.IPSetBuilder
 	for _, peer := range peers {
 		if peer.Access == nil {
 			continue
 		}
 		for _, r := range slices.Concat(peer.Routes, peer.Subnets) {
 			routed.AddPrefix(r)
+			if peer.Access.Nothing {
+				none.AddPrefix(r)
+			}
 		}
 		for _, a := range peer.Addrs {
 			p.peers[a.Addr()] = peer.Access
@@ -146,22 +175,33 @@ func (c *confiner) set(peers []Peer, self []netip.Prefix) {
 		}
 	}
 	p.routed, _ = routed.IPSet()
+	p.none, _ = none.IPSet()
 	for _, a := range self {
 		p.self = append(p.self, a.Addr())
 	}
 	c.policy.Store(p)
-	c.mu.Lock()
-	for a := range c.flows {
+	c.flowsMu.Lock()
+	defer c.flowsMu.Unlock()
+	if c.flows.Load() == nil {
+		return
+	}
+	next := maps.Clone(*c.flows.Load())
+	for a, fs := range next {
 		if _, ok := p.peers[a]; !ok {
-			delete(c.flows, a)
+			fs.mu.Lock()
+			c.held.Add(-int64(len(fs.flows)))
+			fs.flows, fs.gone = nil, true
+			fs.mu.Unlock()
+			delete(next, a)
 		}
 	}
-	c.mu.Unlock()
+	c.flows.Store(&next)
 }
 
 func (c *confiner) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if pol := c.policy.Load(); pol != nil {
-		if acc, ok := pol.peers[p.Src.Addr()]; ok && !c.admits(pol, acc, p) {
+		if acc, ok := pol.peers[p.Src.Addr()]; ok && (acc.Nothing || !c.admits(pol, acc, p)) ||
+			pol.none != nil && pol.none.Contains(p.Src.Addr()) {
 			return filter.Drop
 		}
 		// From an address a restricted router carries, as an exit node's
@@ -204,10 +244,7 @@ func (c *confiner) admits(pol *confinePolicy, acc *Access, p *packet.Parsed) boo
 			return true
 		}
 		t, ok := erredFlow(p)
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		_, opened := c.getLocked(t)
-		return ok && opened
+		return ok && c.opened(t)
 	}
 	if isICMP(p.IPProto) && p.IsEchoRequest() {
 		return pol.opens(acc, p.IPProto, p.Dst)
@@ -216,19 +253,19 @@ func (c *confiner) admits(pol *confinePolicy, acc *Access, p *packet.Parsed) boo
 		return false
 	}
 	t := flowKey(p, false)
-	c.mu.Lock()
-	c.expireLocked()
-	f, opened := c.getLocked(t)
-	if opened && p.IPProto == ipproto.TCP {
-		switch {
-		case p.TCPFlags&packet.TCPRst != 0:
-			c.removeLocked(t)
-		case p.TCPFlags&packet.TCPFin != 0:
-			f.finIn = true
-			c.closeLocked(t, f)
-		}
+	opened := c.opened(t)
+	if opened && p.IPProto == ipproto.TCP && p.TCPFlags&(packet.TCPRst|packet.TCPFin) != 0 {
+		c.change(t, func(fs *flowSet, f *flow) {
+			switch {
+			case f == nil:
+			case p.TCPFlags&packet.TCPRst != 0:
+				c.removeLocked(fs, t)
+			default:
+				f.state.finIn = true
+				c.closeLocked(fs, t, f)
+			}
+		})
 	}
-	c.mu.Unlock()
 	if opened {
 		return true
 	}
@@ -237,7 +274,8 @@ func (c *confiner) admits(pol *confinePolicy, acc *Access, p *packet.Parsed) boo
 
 func (c *confiner) out(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if pol := c.policy.Load(); pol != nil {
-		if acc, ok := pol.peers[p.Dst.Addr()]; ok && !c.sends(pol, acc, p) {
+		if acc, ok := pol.peers[p.Dst.Addr()]; ok && (acc.Nothing || !c.sends(pol, acc, p)) ||
+			pol.none != nil && pol.none.Contains(p.Dst.Addr()) {
 			return filter.Drop
 		}
 	}
@@ -251,88 +289,195 @@ func (c *confiner) out(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 // whether it may: a reply, or a new flow its access passes.
 func (c *confiner) sends(pol *confinePolicy, acc *Access, p *packet.Parsed) bool {
 	t := flowKey(p, true)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.expireLocked()
-	f, known := c.getLocked(t)
+	known := c.opened(t)
+	tcpFlags := p.IPProto == ipproto.TCP && p.TCPFlags&(packet.TCPSyn|packet.TCPRst|packet.TCPFin) != 0
 	switch {
+	case known && !tcpFlags:
+		return true
 	// A reply opens nothing: only what this node starts is its own.
 	case !known && p.IPProto == ipproto.UDP && pol.opens(acc, p.IPProto, p.Src):
+		return true
 	case !known && (p.IPProto == ipproto.UDP || p.IsTCPSyn() || isICMP(p.IPProto) && p.IsEchoRequest()):
 		if !passes(acc.Sends, p.IPProto, p.Dst.Port()) {
 			return false
 		}
-		c.addLocked(t)
-	case known && p.IsTCPSyn():
-		*f = flowState{} // the port taken again
-	case known && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPRst != 0:
-		c.removeLocked(t)
-	case known && p.IPProto == ipproto.TCP && p.TCPFlags&packet.TCPFin != 0:
-		f.finOut = true
-		c.closeLocked(t, f)
+		c.add(t)
+		return true
+	case !known:
+		return true
+	}
+	c.change(t, func(fs *flowSet, f *flow) {
+		switch {
+		case f == nil:
+		case p.IsTCPSyn():
+			// The port taken again.
+			f.state = flowState{}
+			f.closedAt.Store(0)
+		case p.TCPFlags&packet.TCPRst != 0:
+			c.removeLocked(fs, t)
+		case p.TCPFlags&packet.TCPFin != 0:
+			f.state.finOut = true
+			c.closeLocked(fs, t, f)
+		}
+	})
+	return true
+}
+
+// opened reports whether this node opened t and it has not ended, marking
+// it used.
+func (c *confiner) opened(t flowtrack.Tuple) bool {
+	fs := c.flowSet(t.DstAddr())
+	if fs == nil {
+		return false
+	}
+	fs.mu.RLock()
+	f := fs.flows[t]
+	fs.mu.RUnlock()
+	if f == nil {
+		return false
+	}
+	if at := f.closedAt.Load(); at != 0 && c.since()-at > int64(closedGrace) {
+		return false
+	}
+	if g := c.gen.Load(); f.used.Load() != g {
+		f.used.Store(g)
 	}
 	return true
 }
 
+func (c *confiner) flowSet(a netip.Addr) *flowSet {
+	if m := c.flows.Load(); m != nil {
+		return (*m)[a]
+	}
+	return nil
+}
+
+// change runs fn on t's set, and t if held, under the set's lock, after
+// removing the flows closed longer than closedGrace ago.
+func (c *confiner) change(t flowtrack.Tuple, fn func(*flowSet, *flow)) {
+	fs := c.flowSet(t.DstAddr())
+	if fs == nil {
+		return
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	c.expireLocked(fs)
+	fn(fs, fs.flows[t])
+}
+
 // closeLocked queues a flow closed both ways to go after closedGrace.
-func (c *confiner) closeLocked(t flowtrack.Tuple, f *flowState) {
-	if f.finIn && f.finOut && !f.closed {
-		f.closed = true
-		c.closing = append(c.closing, closingFlow{t, c.clock()})
+func (c *confiner) closeLocked(fs *flowSet, t flowtrack.Tuple, f *flow) {
+	if f.state.finIn && f.state.finOut && f.closedAt.Load() == 0 {
+		f.closedAt.Store(c.since())
+		fs.closing = append(fs.closing, closingFlow{t, c.clock()})
 	}
 }
 
-// expireLocked removes the flows closed longer than closedGrace ago that no
-// SYN took again since.
-func (c *confiner) expireLocked() {
+// expireLocked removes the flows of fs closed longer than closedGrace ago
+// that no SYN took again since.
+func (c *confiner) expireLocked(fs *flowSet) {
 	now := c.clock()
-	for len(c.closing) > 0 && now.Sub(c.closing[0].at) > closedGrace {
-		if f, ok := c.getLocked(c.closing[0].t); ok && f.closed {
-			c.removeLocked(c.closing[0].t)
+	for len(fs.closing) > 0 && now.Sub(fs.closing[0].at) > closedGrace {
+		if f := fs.flows[fs.closing[0].t]; f != nil && f.closedAt.Load() != 0 {
+			c.removeLocked(fs, fs.closing[0].t)
 		}
-		c.closing = c.closing[1:]
+		fs.closing = fs.closing[1:]
 	}
 }
 
-func (c *confiner) getLocked(t flowtrack.Tuple) (*flowState, bool) {
-	if fc := c.flows[t.DstAddr()]; fc != nil {
-		return fc.Get(t)
-	}
-	return nil, false
-}
-
-func (c *confiner) removeLocked(t flowtrack.Tuple) {
-	if fc := c.flows[t.DstAddr()]; fc != nil {
-		fc.Remove(t)
-		if fc.Len() == 0 {
-			delete(c.flows, t.DstAddr())
-		}
+func (c *confiner) removeLocked(fs *flowSet, t flowtrack.Tuple) {
+	if _, ok := fs.flows[t]; ok {
+		delete(fs.flows, t)
+		c.held.Add(-1)
 	}
 }
 
-// addLocked records a flow, evicting the oldest of its address's past their
-// bound, and past the whole bound the oldest of the address holding most.
-func (c *confiner) addLocked(t flowtrack.Tuple) {
+// add records a flow, evicting the least used of its address's past their
+// bound, and past the whole bound that of the address holding most.
+func (c *confiner) add(t flowtrack.Tuple) {
 	perAddr, total := cmp.Or(c.maxFlowsPerAddr, maxFlowsPerAddr), cmp.Or(c.maxFlows, maxConfinedFlows)
-	if c.flows == nil {
-		c.flows = map[netip.Addr]*flowtrack.Cache[flowState]{}
+	fs := c.flowSet(t.DstAddr())
+	if fs == nil {
+		c.flowsMu.Lock()
+		next := map[netip.Addr]*flowSet{}
+		if m := c.flows.Load(); m != nil {
+			next = maps.Clone(*m)
+		}
+		if fs = next[t.DstAddr()]; fs == nil {
+			fs = &flowSet{flows: map[flowtrack.Tuple]*flow{}}
+			next[t.DstAddr()] = fs
+			c.flows.Store(&next)
+		}
+		c.flowsMu.Unlock()
 	}
-	fc := c.flows[t.DstAddr()]
-	if fc == nil {
-		fc = &flowtrack.Cache[flowState]{MaxEntries: perAddr}
-		c.flows[t.DstAddr()] = fc
+	fs.mu.Lock()
+	if fs.gone {
+		fs.mu.Unlock()
+		return
 	}
-	fc.Add(t, flowState{})
-	n, most := 0, fc
-	for _, other := range c.flows {
-		n += other.Len()
-		if other.Len() > most.Len() {
-			most = other
+	c.expireLocked(fs)
+	if f, ok := fs.flows[t]; ok {
+		// Closed past its grace, and not expired yet: open again.
+		f.state = flowState{}
+		f.closedAt.Store(0)
+		f.used.Store(c.gen.Add(1))
+	} else {
+		f := &flow{}
+		f.used.Store(c.gen.Add(1))
+		fs.flows[t] = f
+		c.held.Add(1)
+	}
+	if len(fs.flows) > perAddr {
+		c.evictLocked(fs)
+	}
+	fs.mu.Unlock()
+	if c.held.Load() > int64(total) {
+		c.evictFromLargest()
+	}
+}
+
+// evictLocked removes the flow of fs used least lately.
+func (c *confiner) evictLocked(fs *flowSet) {
+	var oldest flowtrack.Tuple
+	var at uint64
+	found := false
+	for t, f := range fs.flows {
+		if u := f.used.Load(); !found || u < at {
+			oldest, at, found = t, u, true
 		}
 	}
-	if n > total {
-		most.RemoveOldest()
+	if found {
+		c.removeLocked(fs, oldest)
 	}
+}
+
+// evictFromLargest has the address holding most flows give one up.
+func (c *confiner) evictFromLargest() {
+	m := c.flows.Load()
+	if m == nil {
+		return
+	}
+	var most *flowSet
+	n := 0
+	for _, fs := range *m {
+		fs.mu.RLock()
+		if l := len(fs.flows); l > n {
+			most, n = fs, l
+		}
+		fs.mu.RUnlock()
+	}
+	if most != nil {
+		most.mu.Lock()
+		c.evictLocked(most)
+		most.mu.Unlock()
+	}
+}
+
+// since is nanoseconds since the confiner first asked, by the monotonic
+// clock where it reads the system's; never zero.
+func (c *confiner) since() int64 {
+	c.baseOnce.Do(func() { c.base = c.clock() })
+	return max(int64(c.clock().Sub(c.base)), 1)
 }
 
 func (c *confiner) clock() time.Time {

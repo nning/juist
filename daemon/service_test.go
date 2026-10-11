@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -353,10 +354,12 @@ func TestAServiceOutsideANetworkCreatesOne(t *testing.T) {
 
 // TestRotationIsAdoptedWithoutARestart: the device stages its keys and signs
 // its part, an admin completes the record, and once the log names the new
-// keys the service restarts the mesh on them by itself.
+// keys the running mesh takes them by itself, keeping its NAT-traversal key.
 func TestRotationIsAdoptedWithoutARestart(t *testing.T) {
 	f := newServiceFixture(t, true)
 	before := f.nw.devices[0].record.WireGuard
+	mesh := f.s.Mesh()
+	disco := mesh.discoPublic
 	resp, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdRotate})
 	if err != nil {
 		t.Fatal(err)
@@ -387,6 +390,17 @@ func TestRotationIsAdoptedWithoutARestart(t *testing.T) {
 	k, err := keys.LoadNode(filepath.Join(f.home, keys.NodeKeysFile))
 	if err != nil || !k.NamedBy(&self) {
 		t.Fatalf("the live key file does not hold the keys the log names: %v", err)
+	}
+	if f.s.Mesh() != mesh || mesh.discoPublic != disco {
+		t.Fatal("the mesh restarted to take the new keys")
+	}
+	set := f.mgr.selfSet()
+	if len(set) != 1 || !set[0].NodeKey.Equal(conn.NodeKeyFromRaw32([32]byte(k.WGPrivate.Bytes()))) {
+		t.Fatalf("the data plane was given %d new selves, not the key the log names", len(set))
+	}
+	x, m, err := mesh.own.Load().recipient.Public()
+	if err != nil || mesh.own.Load().wg != self.WireGuard || x != self.X25519 || m != self.MLKEM {
+		t.Fatal("the mesh runs on keys the log does not name")
 	}
 }
 
@@ -865,39 +879,68 @@ func TestServiceResetsARemovedDevice(t *testing.T) {
 	}
 }
 
-// When the log gives this device other overlay addresses than the mesh
-// started on, the mesh restarts on them: the tunnel device and the log sync
-// listener hold the old ones, and through the tunnel nothing could fix it.
-func TestTheMeshRestartsOnNewOverlayAddresses(t *testing.T) {
+// When the log gives this device other overlay addresses than the data plane
+// holds, the running mesh moves onto them: the device, and the log sync
+// listener, through which nothing else could fix it.
+func TestTheMeshMovesOntoNewOverlayAddresses(t *testing.T) {
 	f := newServiceFixture(t, true)
 	before := f.s.Mesh()
 	if before == nil {
 		t.Fatal("no mesh")
 	}
 	f.s.followAddrs()
-	if f.s.Mesh() != before {
-		t.Fatal("the mesh restarted though its addresses are the log's")
+	if len(f.mgr.selfSet()) != 0 {
+		t.Fatal("the data plane was given addresses it holds")
 	}
-	startedOn(f.s, netip.MustParsePrefix("198.18.9.9/32"))
+	logs := before.heldAddrs()
+	holds(f.s, netip.MustParsePrefix("198.18.9.9/32"))
 	f.s.followAddrs()
-	after := f.s.Mesh()
-	if after == nil || after == before {
-		t.Fatal("the mesh did not restart on the log's addresses")
+	if f.s.Mesh() != before {
+		t.Fatal("the mesh restarted to move onto new addresses")
 	}
-	if after.addrsMoved() {
-		t.Errorf("the restarted mesh holds %v, not the log's addresses", after.startAddrs)
+	set := f.mgr.selfSet()
+	if len(set) != 1 || !slices.Equal(set[0].Addrs, logs) {
+		t.Fatalf("the data plane was given %+v, want the log's %v", set, logs)
+	}
+	if before.addrsMoved() || !slices.Equal(before.Status().Addrs, logs) {
+		t.Errorf("the mesh holds %v and says %v, not the log's %v", before.heldAddrs(), before.Status().Addrs, logs)
 	}
 }
 
-// startedOn has s's mesh hold that it started on addrs, as before a
-// renumbering; under s.mu and reconcileMu, as the service's watch and the
-// mesh's Run read them.
-func startedOn(s *Service, addrs ...netip.Prefix) {
+// A move said by a reconcile that read the addresses before the last one
+// does not keep the next from being said.
+func TestAMoveSaidLateIsForgotten(t *testing.T) {
+	f := newServiceFixture(t, true)
+	f.s.Mesh().movedSaid.Store(true)
+	f.s.followAddrs()
+	if f.s.Mesh().movedSaid.Load() {
+		t.Fatal("a move said with nothing moved keeps the next from being said")
+	}
+}
+
+// A rotation said by a reconcile that read the keys before the last one
+// does not keep the next from being said.
+func TestARotationSaidLateIsForgotten(t *testing.T) {
+	f := newServiceFixture(t, true)
+	f.s.Mesh().keysSaid.Store(true)
+	f.s.adoptRotation()
+	if f.s.Mesh().keysSaid.Load() {
+		t.Fatal("a rotation said with nothing rotated keeps the next from being said")
+	}
+}
+
+// holds has s's mesh hold addrs, as before a renumbering.
+func holds(s *Service, addrs ...netip.Prefix) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.mesh.reconcileMu.Lock()
-	defer s.mesh.reconcileMu.Unlock()
-	s.mesh.startAddrs = addrs
+	s.mesh.held.Store(&addrs)
+}
+
+// restartMesh restarts s's mesh as a change of keys does.
+func restartMesh(s *Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restartMeshLocked(nil, "a test")
 }
 
 // A state directory without node keys is not a juist home, and is not wiped:
@@ -970,9 +1013,9 @@ func TestServiceInformOffersARemovalToTheRemoved(t *testing.T) {
 	t.Fatalf("the removed device was not offered its removal:\n%s", strings.Join(lines, "\n"))
 }
 
-// A device moved at once starts on its new address as the move applies, not
+// A device moved at once moves onto its new address as the move applies, not
 // at the next look at its addresses.
-func TestAMovedDeviceRestartsOnItsNewAddressAtOnce(t *testing.T) {
+func TestAMovedDeviceMovesOntoItsNewAddressAtOnce(t *testing.T) {
 	f := newServiceFixture(t, true)
 	before := f.s.Mesh()
 	auth, _ := f.nw.authorityFor(t)
@@ -993,11 +1036,12 @@ func TestAMovedDeviceRestartsOnItsNewAddressAtOnce(t *testing.T) {
 	}
 	deadline := time.Now().Add(rotationCheckInterval / 2)
 	for {
-		if m := f.s.Mesh(); m != nil && m != before && !m.addrsMoved() {
+		if m := f.s.Mesh(); m == before && !m.addrsMoved() &&
+			slices.Contains(m.heldAddrs(), netip.MustParsePrefix("198.18.0.99/32")) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the moved device did not start on its new address before its next look")
+			t.Fatal("the moved device did not move onto its new address before its next look")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -192,6 +192,14 @@ type Endpoint struct {
 	// it apart from some member.
 	Sealed []byte `cbor:"14,keyasint,omitempty"`
 
+	// Epoch is the newest epoch the node holds and PairStore its store of
+	// pair keys: where set, every handshake with it mixes in a preshared
+	// key, the group key of the lower of the two epochs until the pair has
+	// one of its own. Sent only in a network at [types.SchemaPQ] or above:
+	// older builds refuse both.
+	Epoch     uint64 `cbor:"15,keyasint,omitempty"`
+	PairStore uint64 `cbor:"16,keyasint,omitempty"`
+
 	// Sig is the author's signature over the rest of the record. CBOR key 23
 	// for the same reason [types.AUM] uses it: the highest key that still
 	// encodes in one byte, leaving room for payload fields below it.
@@ -205,8 +213,11 @@ func (e *Endpoint) SameAs(o *Endpoint) bool {
 		e.GossipPort == o.GossipPort && e.HomeRelay == o.HomeRelay && sameRelay(e.Relay, o.Relay) && e.Exit == o.Exit &&
 		e.Subnets == o.Subnets && e.DNS == o.DNS && e.NoV4 == o.NoV4 && e.Published == o.Published &&
 		(e.Share == nil) == (o.Share == nil) && (e.Share == nil || *e.Share == *o.Share) &&
-		bytes.Equal(e.Sealed, o.Sealed)
+		bytes.Equal(e.Sealed, o.Sealed) && e.Epoch == o.Epoch && e.PairStore == o.PairStore
 }
+
+// PQ reports whether the node's handshakes mix in a preshared key.
+func (e *Endpoint) PQ() bool { return e.Epoch != 0 }
 
 // A Share is the port of a node's overlay addresses its own name is reached
 // on, until Until, in Unix seconds.
@@ -312,6 +323,10 @@ func (e *Endpoint) StaticValidate() error {
 	if e.Sealed != nil && (len(e.Addrs) > 0 || len(e.Sealed) < aead.Overhead || len(e.Sealed) > addrkey.MaxSealedSize) {
 		return fmt.Errorf("gossip: endpoint record for %v carries %d bytes of sealed addresses beside %d open ones",
 			e.Identity.ShortString(), len(e.Sealed), len(e.Addrs))
+	}
+	if (e.Epoch == 0) != (e.PairStore == 0) {
+		return fmt.Errorf("gossip: endpoint record for %v names an epoch without a pair store, or one without the other",
+			e.Identity.ShortString())
 	}
 	if e.Share != nil && (e.Share.Port == 0 || e.Share.Until <= 0) {
 		return fmt.Errorf("gossip: endpoint record for %v shares with no port or end", e.Identity.ShortString())

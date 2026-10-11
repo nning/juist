@@ -38,7 +38,9 @@ func TestPublishAddAndRemove(t *testing.T) {
 	mustContain(t, admin.mustRun("publish", "add", "nas", "photos.pub.example.org", "2283", "--proxy"),
 		"immich.pub.example.org:443, photos.pub.example.org:2283")
 	mustContain(t, admin.mustRun("publish"), "photos.pub.example.org", "2283 (proxy protocol)")
-	mustContain(t, admin.mustRun("devices"), "publishes immich.pub.example.org, photos.pub.example.org")
+	if out := admin.mustRun("devices"); !strings.Contains(out, "publishes") || strings.Contains(out, "immich") {
+		t.Errorf("devices does not say nas publishes, or names what, which juist publish lists:\n%s", out)
+	}
 	for _, tc := range []struct {
 		args []string
 		want string

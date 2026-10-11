@@ -1,7 +1,8 @@
 #!/bin/sh
 # Sets up juist-follow-main on a Debian, Ubuntu or FreeBSD host: run as root
-# from this directory, with GOROOT of a Go to copy when the system has none recent.
-#   sudo sh setup [GOROOT]
+# from this directory, with GOROOT of a Go to copy when the system has none
+# recent, and JUIST_REPO of another repository to follow than nning/juist.
+#   sudo [JUIST_REPO=URL] sh setup [GOROOT]
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo "setup: run as root" >&2; exit 1; }
 if [ "$(uname)" = FreeBSD ]; then
@@ -40,7 +41,10 @@ else
 		useradd --system --user-group --home-dir "$home" --create-home \
 			--shell /usr/sbin/nologin juist-build
 fi
-# The repository is private: juist-build reads it with a deploy key of its own.
+if [ -n "${JUIST_REPO:-}" ]; then
+	as_build sh -c 'echo "$1" > ~/repo' repo "$JUIST_REPO"
+fi
+# A private repository is read with a deploy key of juist-build's own.
 if [ ! -e "$home/.git-credentials" ]; then
 	as_build sh -eu -c '
 		cd
@@ -64,7 +68,7 @@ if [ ! -e "$home/.git-credentials" ]; then
 	# Read as juist-build: root must not follow links in its home.
 	as_build cat "$home/.ssh/id_ed25519.pub" > "$lib/deploy-key.pub"
 	chmod 644 "$lib/deploy-key.pub"
-	echo "setup: add $lib/deploy-key.pub to nning/juist as a read-only deploy key:"
+	echo "setup: for a private repository, add $lib/deploy-key.pub to it as a read-only deploy key:"
 	cat "$lib/deploy-key.pub"
 fi
 if [ -n "$freebsd" ]; then

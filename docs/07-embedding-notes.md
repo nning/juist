@@ -52,25 +52,36 @@ gates are worth keeping: M2's exit criterion is satisfied by either alone.
 
 ## The preshared-key path
 
-The per-pair ML-KEM-768 PSK of [04-architecture.md](04-architecture.md) is M15
-([05-roadmap.md](05-roadmap.md)). Against `tailscale.com v1.104.0` and
-`tailscale/wireguard-go v0.0.0-20260928213032`, the engine carries it with no
-patch, and a design has to respect what it does:
+M15's preshared keys ([05-roadmap.md](05-roadmap.md)) go to the engine as
+`conn.Peer.PSK`. Against `tailscale.com v1.104.0` and
+`tailscale/wireguard-go v0.0.0-20260928213032` it carries them with no patch,
+and the design respects what it does:
 
 - **Both peer states have a path, and need one.** Peers are created lazily, so
   a PSK reaches a new peer through the config lookup (`wgcfg.PeerConfig.PresharedKey`,
   passed on by `wgcfg.NewPeerLookupFunc`, `wgcfg/device.go:60`) and an active one
-  through `SyncDevicePeer` (`wgengine/userspace.go:714`). One without the other
-  leaves a gap.
+  through `SyncDevicePeer` (`wgengine/userspace.go:714`), which `SetPeers`
+  calls for every kept peer. One without the other leaves a gap.
 - **A change keeps the session.** `Peer.SetPresharedKey` (`device/peer.go:197`)
   writes under the handshake mutex: the session runs on its derived keys and the
-  next handshake mixes in the new value.
+  next handshake mixes in the new value. A session made without a key would
+  so carry traffic for minutes after one is given, which is why `SetPeers`
+  resets a peer newly given one, and, as `LookupPeer` reads the config and
+  creates the peer with no lock between, keeps it passing nothing and resets
+  it again 2 s later.
+- **Each role reads the key at its own moment.** The responder mixes it into
+  the response it creates, the initiator when it consumes the response
+  (`device/noise-protocol.go`), and a mismatch fails the initiator's
+  decryption, retried after `RekeyTimeout`, 5 s. A handshake that completed
+  says little of which key it used, as the key may change between the two
+  moments and the session outlives it; juist confirms keys by message.
 - **Rotation is bounded by the rekey window.** `RekeyAfterTime` is 120 s and
   `RejectAfterTime` 180 s (`device/constants.go`), and a peer holds one PSK, so
-  both ends need the new key before the next handshake or it fails.
+  both ends need the new key before the next handshake or it fails, while
+  the old session still carries traffic.
 - **The ciphertext does not travel in the log.** ML-KEM is a KEM, so a
-  per-pair secret means a ciphertext sent over gossip or the sealed sideband;
-  the public keys it is built from are already in `NodeRecord.MLKEM`
+  per-pair secret means a ciphertext sent in log sync; the public keys it is
+  built from are already in `NodeRecord.MLKEM`
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
 
 ## Wiring requirements that nothing documents
@@ -133,7 +144,7 @@ Each fails silently or confusingly.
   install no rules. The runner reports IPv6 only where `disable_ipv6` and
   `disable_policy` are 0 and IPv6 policy routing works — and, in its iptables mode,
   only where the `ip6tables` binary exists. A host missing `ip6tables` therefore
-  loses the overlay's *primary* family with nothing but a log line. Packaging (M18)
+  loses the overlay's *primary* family with nothing but a log line. Packaging (M19)
   must declare that dependency, and an operator report of "no v6 on the overlay"
   should start here.
 - **`router.CleanUp` is not worth calling here**, though `tailscaled` calls it at
@@ -159,6 +170,19 @@ Each fails silently or confusingly.
   reply takes the region it came from. It is what lets a device whose juistd
   restarted, announcing its new disco key under an epoch its peers no longer hold,
   reach them through a shared relay for a catch-up.
+- **A router config that failed is never handed to the router again.**
+  `Reconfig` records it as the last one before calling `router.Set`, so asking
+  again returns `ErrNoChanges`. `conn` retries a failed one on the OS router
+  itself, which redoes only what failed (v1.104.0, `userspace.go:855`).
+- **A new private key goes through `Reconfig`.** A changed `PrivateKey` is set
+  on magicsock, which redials its relays under it, and on the device, which
+  expires every peer's session. The disco key and the device stay, so a
+  rotation needs no new engine (v1.104.0, `userspace.go:886`).
+- **A first handshake sent on no path costs five seconds.** With no relay and
+  no path disco has proven yet, magicsock fails the send ("no UDP or DERP
+  addr"), and wireguard-go sends no other initiation within `RekeyTimeout`,
+  failed or not. `conn` holds what is sent to a peer installed without a relay
+  until disco's first pong, for at most two seconds.
 - **A real device joins LAN discovery unless told not to.** A Linux TUN carries
   `IFF_MULTICAST`, so anything enumerating multicast-capable interfaces picks it up
   and starts sending into the tunnel. Discovery is an underlay function; the overlay
@@ -186,6 +210,7 @@ code directly, so they fail on the upgrade itself rather than in the field.
 | magicsock reaches no relay and no STUN server without a DERP map | direct-only operation | `TestNoThirdPartyEgress` |
 | With `SetOnlyTCP443`, magicsock and netcheck send no UDP, take a peer's UDP path only from a pong or a peer relay, and the self node's only-TCP-443 capability turns peer relays off | HTTPS alone | `TestUpstreamOnlyTCP443SendsNoUDP`, `TestHTTPSOnlySendsNoUDP` |
 | derphttp dials a node's `DERPPort` at its host name in DNS where an address is empty, verifies a node without `CertName` by WebPKI, and asks `feature.HookProxyFromEnvironment` for each dial; no port mapper or captive-portal probe is linked | relays on 443, the proxy | `TestUpstreamANamedNodeIsDialledByNameThroughTheProxy`, `TestUpstreamNoPortMapperOrCaptivePortalIsLinked`, `TestMembersRelayThroughThePublicName` |
+| A preshared key reaches a peer created on first contact through the config lookup and an active one in place through `SyncDevicePeer`, which keeps its session; a peer holding another completes no handshake | `conn.Peer.PSK`, M15, and the resets of a peer newly keyed | `TestHandshakesCarryThePresharedKey`, `TestAKeyWhereThereWasNoneEndsTheSession`, `TestAPeerCreatedWithTheKeyItHadPassesNothing` |
 | The router, device and MTU behave as the wiring requirements above say | the real-device path | `make test-os-plumbing` (root, not on CI's unprivileged job) |
 
 ## Answers leave the way they came (Linux)
@@ -431,7 +456,7 @@ tailcat pins a v1.103.0-pre, but adopting these techniques needs no upgrade.
 ### What tailcat does not solve
 
 The preshared key. `grep -rn preshared` over tailcat returns nothing: it runs the
-same PSK-less Noise IKpsk2 as stock Tailscale, so M15 has no prior art to take.
+same PSK-less Noise IKpsk2 as stock Tailscale, so M15 had no prior art to take.
 
 ### Where ours differs on purpose
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/pairkey"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -32,7 +33,7 @@ const (
 	MaxRecordsPerFrame = 256
 
 	// MaxHashesPerFrame caps the "what I already hold" set in a hello. Past
-	// it two nodes stop converging: see docs/05-roadmap.md, M16.
+	// it two nodes stop converging: see docs/05-roadmap.md, M17.
 	MaxHashesPerFrame = 4096
 
 	// MaxEndpointsPerFrame caps the announcements one frame may carry: one
@@ -135,6 +136,11 @@ type frame struct {
 	// Keys are address keys, the sender's own among them, beside the
 	// announcements whose sealed addresses they open.
 	Keys []AddrKey `cbor:"12,keyasint,omitempty"`
+
+	// Pair is the sender's state of the exchange of a preshared key with
+	// the receiver, signed. Sent only to a peer whose announcement says it
+	// sets preshared keys: older builds refuse the field.
+	Pair *pairkey.Msg `cbor:"13,keyasint,omitempty"`
 }
 
 // A waitingPayload is what [frame.Waiting] carries once opened. Changes enter
@@ -185,6 +191,11 @@ func (f *frame) validate() error {
 	}
 	if f.Anchor.IsZero() {
 		return errors.New("gossip: frame names no anchor")
+	}
+	if f.Pair != nil {
+		if err := f.Pair.StaticValidate(); err != nil {
+			return fmt.Errorf("gossip: %w", err)
+		}
 	}
 	if len(f.Waiting) > maxRecordBytesPerFrame {
 		return fmt.Errorf("gossip: frame carries %d bytes of waiting changes", len(f.Waiting))

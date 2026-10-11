@@ -133,7 +133,8 @@ const (
 	// the response comes at the share's end.
 	CmdShare Command = 21
 
-	// CmdUnshare ends this device's share, whichever call holds it.
+	// CmdUnshare ends the share [Request.Share] names by its Path, whichever
+	// call holds it, and every share where it names none.
 	CmdUnshare Command = 22
 
 	// CmdStatusPage asks what a status page served here shows, answered in
@@ -287,7 +288,7 @@ type Request struct {
 	Stopping  bool         `cbor:"29,keyasint,omitempty"`
 	NoCert    []NoCert     `cbor:"30,keyasint,omitempty"`
 
-	// Share is what a [CmdShare] publishes.
+	// Share is what a [CmdShare] publishes, or a [CmdUnshare] ends.
 	Share *ShareRequest `cbor:"26,keyasint,omitempty"`
 
 	// Ping is the member a [CmdPing] pings.
@@ -383,11 +384,23 @@ type ShareRequest struct {
 // maxSharePath bounds a [ShareRequest]'s What and Path.
 const maxSharePath = 4096
 
-// Valid reports whether s goes to a port on loopback and ends after the epoch.
+// Valid reports whether s goes to a port on loopback, ends after the epoch,
+// and has a path, if any, under a segment of its own.
 func (s *ShareRequest) Valid() bool {
 	ap, err := netip.ParseAddrPort(s.To)
 	return err == nil && ap.Addr().IsLoopback() && ap.Port() != 0 && s.Until >= 0 &&
-		len(s.What) <= maxSharePath && len(s.Path) <= maxSharePath && (s.Path == "" || s.Path[0] == '/')
+		len(s.What) <= maxSharePath && len(s.Path) <= maxSharePath && (s.Path == "" || SharePrefix(s.Path) != "")
+}
+
+// SharePrefix is the first segment of a share's path, as "/SEGMENT/", which
+// the terminator sends the share's requests by; empty where it has none.
+func SharePrefix(path string) string {
+	rest, ok := strings.CutPrefix(path, "/")
+	seg, _, ok2 := strings.Cut(rest, "/")
+	if !ok || !ok2 || seg == "" {
+		return ""
+	}
+	return "/" + seg + "/"
 }
 
 // An ACMEAccount is the account a terminator takes its certificates under,
@@ -761,7 +774,11 @@ var requestShapes = map[Command]requestShape{
 		}},
 	CmdPublished: {takes: fListening, shape: "a published request carries the ingress's ports and nothing else",
 		check: func(r *Request) bool { return validPorts(r.Listening) && validPorts(r.Unbound) }},
-	CmdUnshare:    {},
+	CmdUnshare: {takes: fShare, shape: "an unshare request names a share by its path, or nothing",
+		check: func(r *Request) bool {
+			return r.Share == nil || r.Share.To == "" && r.Share.Until == 0 && r.Share.What == "" &&
+				len(r.Share.Path) <= maxSharePath
+		}},
 	CmdStatusPage: {},
 	CmdPing: {takes: fPing, shape: "a ping request names a member and nothing else",
 		check: func(r *Request) bool { return !r.Ping.IsZero() }},
@@ -968,7 +985,8 @@ func (r *Response) makePrintable() {
 		for i := range st.Unmoved {
 			st.Unmoved[i] = printable(st.Unmoved[i])
 		}
-		if sh := st.Share; sh != nil {
+		for i := range st.Shares {
+			sh := &st.Shares[i]
 			for _, f := range []*string{&sh.Name, &sh.To, &sh.NotShared, &sh.What, &sh.Path} {
 				*f = printable(*f)
 			}

@@ -80,6 +80,24 @@ func (f *reconcileFixture) learnExit(t *testing.T, dev *device, port uint16, ser
 	}
 }
 
+// learnOld hands the daemon dev's announcement as a build before schema 14
+// makes it, naming no epoch, saying it serves as an exit node and router or
+// not.
+func (f *reconcileFixture) learnOld(t *testing.T, dev *device, port uint16, serving bool) {
+	t.Helper()
+	e, err := endpointFor(dev, port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Exit, e.Subnets, e.Epoch, e.PairStore, e.Seq = serving, serving, 0, 0, e.Seq+1
+	if err := e.Sign(dev.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (f *reconcileFixture) peerRoutes(t *testing.T, dev *device) []netip.Prefix {
 	t.Helper()
 	f.mgr.mu.Lock()
@@ -143,6 +161,8 @@ func TestAChosenExitNodeFailsClosed(t *testing.T) {
 		{"not serving", -1, func(t *testing.T, f *reconcileFixture) { f.learnExit(t, f.nw.devices[1], 7001, false) },
 			"has not agreed to serve"},
 		{"not reachable", -1, func(*testing.T, *reconcileFixture) {}, "cannot be reached"},
+		{"not post-quantum", -1, func(t *testing.T, f *reconcileFixture) { f.learnOld(t, f.nw.devices[1], 7001, true) },
+			"tunnel is not post-quantum"},
 		{"stale", 2, func(t *testing.T, f *reconcileFixture) { f.learnExit(t, f.nw.devices[1], 7001, true) },
 			"view of the network is stale"},
 		{"withdrawn", -1, func(t *testing.T, f *reconcileFixture) {

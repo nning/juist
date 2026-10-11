@@ -386,6 +386,86 @@ func TestANameNoLongerServedEndsItsConnections(t *testing.T) {
 	}
 }
 
+// A connection piped to a name's service ends once the name goes elsewhere,
+// as one to a port shared beside files does once that share stops, or once
+// the name is proxied by path, as when a file is shared beside the port.
+func TestANameGoneElsewhereEndsItsPipedConnections(t *testing.T) {
+	service := holding(t)
+	src, addr := startWith(t, service, false, nil, nil, nil)
+	p := netip.MustParseAddrPort(addr).Port()
+	for _, n := range []ipc.PublishedTarget{{To: holding(t)},
+		{To: service, Paths: []ipc.PathTarget{{Prefix: "/tok/", To: holding(t)}}}} {
+		src.set(&ipc.Published{Names: []ipc.PublishedTarget{{Name: "immich.pub.example.org",
+			Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Port: p, To: service}}}, false)
+		tc := connect(t, addr)
+		time.Sleep(50 * time.Millisecond)
+		n.Name, n.Addrs, n.Port = "immich.pub.example.org", []netip.Addr{netip.MustParseAddr("127.0.0.1")}, p
+		src.set(&ipc.Published{Names: []ipc.PublishedTarget{n}}, false)
+		if _, err := tc.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("the connection for a name now %+v: %v", n, err)
+		}
+	}
+}
+
+// A name with paths is proxied: a request under a path reaches that path's
+// service, any other the name's; each request goes as the name does now, on
+// a connection kept open across a change.
+func TestANamesPathsReachTheirOwnServices(t *testing.T) {
+	serve := func(says string) string {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, says+" "+r.URL.Path)
+		})}
+		go srv.Serve(ln)
+		t.Cleanup(func() { srv.Close() })
+		return ln.Addr().String()
+	}
+	app, a, b := serve("app"), serve("a"), serve("b")
+	src, addr := startWith(t, app, false, nil, nil, nil)
+	p := netip.MustParseAddrPort(addr).Port()
+	withPaths := func(paths ...ipc.PathTarget) *ipc.Published {
+		return &ipc.Published{Names: []ipc.PublishedTarget{{Name: "immich.pub.example.org",
+			Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}, Port: p, To: app, Paths: paths}}}
+	}
+	src.set(withPaths(ipc.PathTarget{Prefix: "/tokA/", To: a}, ipc.PathTarget{Prefix: "/tokB/", To: b}), false)
+	dials := 0
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{
+		DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			dials++
+			return tls.Dial("tcp", addr, &tls.Config{ServerName: "immich.pub.example.org", InsecureSkipVerify: true})
+		}}}
+	get := func(path string) string {
+		t.Helper()
+		resp, err := client.Get("https://immich.pub.example.org" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return string(body)
+	}
+	for path, want := range map[string]string{"/tokA/x.pdf": "a /tokA/x.pdf", "/tokB/": "b /tokB/", "/tokA": "app /tokA",
+		"/": "app /", "/tokC/x": "app /tokC/x"} {
+		if got := get(path); got != want {
+			t.Errorf("%s reached %q, want %q", path, got, want)
+		}
+	}
+	src.set(withPaths(ipc.PathTarget{Prefix: "/tokB/", To: b}), false)
+	if got := get("/tokA/x.pdf"); got != "app /tokA/x.pdf" {
+		t.Errorf("a path stopped reached %q", got)
+	}
+	if got := get("/tokB/y"); got != "b /tokB/y" {
+		t.Errorf("a path kept reached %q", got)
+	}
+	if dials != 1 {
+		t.Errorf("the client dialled %d times, so no connection was kept across the change", dials)
+	}
+}
+
 // A juistd that takes asks and answers none ends serving within two polls.
 func TestAJuistdThatHangsEndsServing(t *testing.T) {
 	b := newBackend(t)

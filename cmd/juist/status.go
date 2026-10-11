@@ -25,8 +25,9 @@ import (
 
 func cmdStatus(a *app, args []string) error {
 	s := spec{name: "juist status", about: `
-Show this device's network, which devices it reaches, and what needs
-attention; every network, where it is in several. Any local user may run it.`}
+Show this device's network, how many devices it reaches, and what needs
+attention; every network, where it is in several. Any local user may run it.
+juist devices lists the devices.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
@@ -95,10 +96,6 @@ func (a *app) printStatusIn(s *ipc.Status, inst string) {
 		v.head[0].text += " · " + a.dim(inst)
 	}
 	a.emit(v.head)
-	if v.devices {
-		a.printf("\n")
-		_ = a.printDevices(s.Devices, s.Self, s, false)
-	}
 	if len(v.notes) > 0 {
 		a.printf("\n")
 		a.emit(v.notes)
@@ -157,12 +154,11 @@ func (a *app) emit(lines []line) {
 	}
 }
 
-// A statusView is "juist status" of a daemon's report: head, then the device
-// table where devices is set, then the notes on what needs attention.
+// A statusView is "juist status" of a daemon's report: head, then the notes
+// on what needs attention.
 type statusView struct {
-	head    []line
-	devices bool
-	notes   []line
+	head  []line
+	notes []line
 }
 
 // checkStale is how old the last tunnel check may grow before its age is
@@ -296,6 +292,9 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	case s.Peers > 0:
 		field("Tunnels", "%s", paint("2", "not checked yet"))
 	}
+	if t := pqSummary(s, paint); t != "" {
+		field("Post-quantum", "%s", t)
+	}
 	if s.RelayCapable > 0 || s.Relaying {
 		relays := fmt.Sprintf("%d available", s.RelayCapable)
 		switch {
@@ -323,7 +322,7 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 		}
 	}
 	if h := s.HTTPS; h != nil && h.Name != "" && s.Relaying {
-		field("Relay name", "%s", relayNameSummary(h, paint))
+		field("Relay name", "%s", relayNameSummary(h, s.CanOperate, paint))
 	} else if h != nil && h.Name != "" {
 		field("Relay name", "%s, %s", h.Name, paint("2", "not relaying"))
 	}
@@ -366,7 +365,7 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	if t := ingressSummary(s.Ingress, paint); t != "" {
 		field("Ingress", "%s", t)
 	}
-	if t := shareSummary(s.Share, paint); t != "" {
+	if t := shareSummary(s.Shares, paint); t != "" {
 		field("Sharing", "%s", t)
 	}
 	if s.Names != nil {
@@ -423,7 +422,6 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	if s.LastReconcile > 0 {
 		field("Updated", "%s", since(s.LastReconcile))
 	}
-	v.devices = len(s.Devices) > 0
 	if c := s.HostConflict; c != nil && c.Unanswered {
 		v.notes = append(v.notes, line{kind: lineInfo, text: fmt.Sprintf("no IPv4 yet: %s holds a network "+
 			"here and has not answered; IPv4 follows once it has, if the two do not overlap", other(c.Instance))})
@@ -440,6 +438,44 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	}
 	v.notes = append(v.notes, statusNotes(s, several)...)
 	return v
+}
+
+// pqSummary says how many of the installed peers' tunnels are post-quantum,
+// and by what key.
+func pqSummary(s *ipc.Status, paint func(code, s string) string) string {
+	if s.PQ == nil {
+		return ""
+	}
+	pq := s.PQ.Pair + s.PQ.Group
+	n := pq + len(s.PQ.None) + len(s.PQ.NoKey)
+	switch {
+	case n == 0:
+		return ""
+	case s.Schema < types.SchemaPQ:
+		return paint("33", "no, the network predates it")
+	}
+	var by []string
+	switch s.PQ.Pair {
+	case 0:
+	case 1:
+		by = append(by, "1 by a pair key")
+	default:
+		by = append(by, fmt.Sprintf("%d by pair keys", s.PQ.Pair))
+	}
+	if s.PQ.Group > 0 {
+		by = append(by, fmt.Sprintf("%d by the group key", s.PQ.Group))
+	}
+	text := fmt.Sprintf("%d of %d tunnels", pq, n)
+	if pq == n {
+		text = "every tunnel"
+	}
+	if len(by) > 0 {
+		text += ": " + strings.Join(by, ", ")
+	}
+	if pq < n {
+		return paint("33", text)
+	}
+	return text
 }
 
 // httpsNotes are what keeps this device's use of 443 from working.
@@ -485,9 +521,12 @@ func proxied(h *ipc.HTTPS) string {
 	return " through " + h.Proxy
 }
 
-// relayNameSummary is the status line of this device's relay on 443.
-func relayNameSummary(h *ipc.HTTPS, paint func(code, s string) string) string {
+// relayNameSummary is the status line of this device's relay on 443; a
+// caller who may not operate is not told how the relay holds it.
+func relayNameSummary(h *ipc.HTTPS, operator bool, paint func(code, s string) string) string {
 	switch {
+	case !operator:
+		return h.Name
 	case h.NotAnnounced != "":
 		return h.Name + ", " + paint("33", "not told to members")
 	case h.NoCert != "":
@@ -585,6 +624,15 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	}
 	if s.Conflicted > 0 {
 		note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))
+	}
+	if s.PQ != nil && len(s.PQ.None) > 0 && s.Schema >= types.SchemaPQ {
+		note(lineWarn, "not post-quantum, so juist's own traffic alone: %s, on an older build or behind the network",
+			strings.Join(s.PQ.None, ", "))
+	}
+	if s.PQ != nil && len(s.PQ.NoKey) > 0 {
+		note(lineWarn, "no preshared key in common with %s, behind by more changes than this device keeps",
+			strings.Join(s.PQ.NoKey, ", "))
+		note(lineHint, "it catches up from a device that has been away as long, or joins again with a new invite")
 	}
 	notes = append(notes, httpsNotes(s)...)
 	if s.LeaseSigners == 0 {

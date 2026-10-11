@@ -35,20 +35,25 @@ func main() {
 	root := flag.String("root", "/site", "directory to serve")
 	addr := flag.String("addr", ":8080", "address to listen on")
 	idle := flag.Duration("idle", defaultIdle, "how long a quiet connection stays open")
+	noindex := flag.Bool("noindex", false, "ask search engines not to index the site")
 	flag.Parse()
-	log.Fatal(newServer(os.DirFS(*root), *addr, *idle, os.Stderr).ListenAndServe())
+	log.Fatal(newServer(os.DirFS(*root), *addr, *idle, *noindex, os.Stderr).ListenAndServe())
 }
 
-func newServer(site fs.FS, addr string, idle time.Duration, logTo io.Writer) *http.Server {
+func newServer(site fs.FS, addr string, idle time.Duration, noindex bool, logTo io.Writer) *http.Server {
 	// HTTP/2 without TLS as well, which the terminator offers clients where
 	// the site is published with --http2.
 	var protocols http.Protocols
 	protocols.SetHTTP1(true)
 	protocols.SetUnencryptedHTTP2(true)
+	h := handler(site)
+	if noindex {
+		h = noindexed(h)
+	}
 	return &http.Server{
 		Addr:              addr,
 		Protocols:         &protocols,
-		Handler:           logged(handler(site), logTo),
+		Handler:           logged(h, logTo),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -115,6 +120,14 @@ func handler(site fs.FS) http.Handler {
 			}
 		}
 		files.ServeHTTP(w, r)
+	})
+}
+
+// noindexed asks search engines to index none of h's answers.
+func noindexed(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Robots-Tag", "noindex")
+		h.ServeHTTP(w, r)
 	})
 }
 

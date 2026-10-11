@@ -61,7 +61,7 @@ Check it against the network, then set it:
 $ juist policy check policy.conf
 policy.conf: passes its 3 tests
 $ juist policy set policy.conf
-devices then open on each other only what the policy passes; set it? [y/N] y
+anything the policy does not pass is then refused; set it? [y/N] y
 access policy set: 4 rules
 ```
 
@@ -209,7 +209,8 @@ to the repository would then change the network.
   member or an ingress as a source, a device in no rule, an exit node or a
   subnet router no rule uses, a table or service no rule uses.
 - `juist policy set -` reads the policy from standard input.
-- `juist log` lists each change of the policy, and who approved it.
+- `juist log` lists each change of the policy, and who approved it;
+  `juist log show N` shows one as a diff.
 - A removed device drops out of every rule, and a rule or test left without
   it goes; `juist remove` says what the policy loses.
 - `juist devices --all` lists the devices the policy keeps apart from this

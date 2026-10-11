@@ -27,7 +27,7 @@ German from the start, built statically and published through juist itself.
   named device), good to know, if something goes wrong.
 - **Trade-offs** take each residual weakness from
   [02-threat-model.md](02-threat-model.md) as what happens, why it is accepted
-  and what moves it; this is M16's documentation of the acceptances.
+  and what moves it; this is M17's documentation of the acceptances.
 - **Writing.** Every command, flag, default and output line is checked
   against the README, the commands' help or the code, and left out if it
   cannot be. Each juist term is explained where a page first uses it. Short
@@ -46,7 +46,9 @@ German from the start, built statically and published through juist itself.
 - **Following main:** `website/deploy` builds the site on a member whenever
   `website/` or `design/` changed on `main`, as the user that builds the
   deb there, and serves it on `127.0.0.1:8181` with a `DynamicUser`; it is
-  pulled, not pushed, because `[skip ci]` would stop a CI deploy.
+  pulled, not pushed, because `[skip ci]` would stop a CI deploy. Each
+  instance builds from a repository of its own; a preview of unpublished
+  work is served with `-noindex`.
 - **Under load:** the site is published with `--http2` and its server
   takes h2c, so a browser holds one connection rather than six of the
   ingress's 16384 slots (256 per address, 1024 per /24); the server closes a

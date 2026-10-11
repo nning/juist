@@ -493,7 +493,7 @@ func TestADaemonOnANetworkStack(t *testing.T) {
 	if !f.d.Status().SyncInTunnel {
 		t.Error("log sync is not in the tunnel")
 	}
-	addr := f.d.startAddrs[0].Addr()
+	addr := f.d.heldAddrs()[0].Addr()
 	ln, err := f.d.ListenOverlay(netip.AddrPortFrom(addr, 8443).String())
 	if err != nil {
 		t.Fatalf("listening on an overlay address: %v", err)

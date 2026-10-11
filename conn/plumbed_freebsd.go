@@ -122,15 +122,26 @@ func (r *plumbedRouter) Set(cfg *router.Config) error {
 		cfg = &router.Config{}
 	}
 	var errs []error
-	errs = append(errs, r.p.SetAddrs(r.dev, cfg.LocalAddrs))
+	// New addresses, then the routes from a new source, then the old
+	// addresses, so no packet meanwhile leaves by the host's default route.
 	r.mu.Lock()
-	r.addrs = slices.Clone(cfg.LocalAddrs)
+	held := r.addrs
 	r.mu.Unlock()
+	both := slices.Concat(cfg.LocalAddrs, slices.DeleteFunc(slices.Clone(held), func(p netip.Prefix) bool {
+		return slices.Contains(cfg.LocalAddrs, p)
+	}))
+	if slices.ContainsFunc(cfg.LocalAddrs, func(p netip.Prefix) bool { return !slices.Contains(held, p) }) {
+		errs = append(errs, r.p.SetAddrs(r.dev, both))
+	}
 	// A route to an address of the device's own is the device's already.
 	routes := slices.DeleteFunc(slices.Clone(cfg.Routes), func(p netip.Prefix) bool {
 		return slices.ContainsFunc(cfg.LocalAddrs, func(a netip.Prefix) bool { return a.Addr() == p.Addr() && p.IsSingleIP() })
 	})
 	errs = append(errs, r.p.SetRoutes(r.dev, routes, preferredSrc4(cfg.LocalAddrs)))
+	errs = append(errs, r.p.SetAddrs(r.dev, cfg.LocalAddrs))
+	r.mu.Lock()
+	r.addrs = slices.Clone(cfg.LocalAddrs)
+	r.mu.Unlock()
 	return errors.Join(errs...)
 }
 

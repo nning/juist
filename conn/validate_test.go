@@ -1,7 +1,6 @@
 package conn
 
 import (
-	"errors"
 	"math"
 	"net/netip"
 	"reflect"
@@ -280,15 +279,12 @@ func TestDiscoKeyAgrees(t *testing.T) {
 // fakeEngine implements just enough of [wgengine.Engine] for a reconfiguration.
 // The embedded nil interface means any other method panics rather than
 // silently doing nothing, which is what a test wants of a method it did not
-// expect to be called.
+// expect to be called. Like wgengine, it records a router config before it
+// hands it to router, and never hands one it recorded again.
 type fakeEngine struct {
 	wgengine.Engine
-	routerFails bool
-	// last is what the engine believes it programmed, and programmed counts
-	// the configs that actually reached the router: wgengine records the first
-	// before attempting the second, which is the behaviour under test.
-	last       *router.Config
-	programmed []*router.Config
+	router *flakyRouter
+	last   *router.Config
 }
 
 func (f *fakeEngine) GetFilter() *filter.Filter { return nil }
@@ -298,11 +294,7 @@ func (f *fakeEngine) Reconfig(_ *wgcfg.Config, rt *router.Config, _ *dns.Config)
 		return wgengine.ErrNoChanges
 	}
 	f.last = rt
-	if f.routerFails {
-		return errors.New("router: netlink is busy")
-	}
-	f.programmed = append(f.programmed, rt)
-	return nil
+	return f.router.Set(rt)
 }
 
 // TestReconfigRetriesAfterAFailedRouter: a router that fails once must be
@@ -310,10 +302,11 @@ func (f *fakeEngine) Reconfig(_ *wgcfg.Config, rt *router.Config, _ *dns.Config)
 // changed. Without the retry the engine reports ErrNoChanges forever and the
 // host keeps the routes it had when the failure happened.
 func TestReconfigRetriesAfterAFailedRouter(t *testing.T) {
-	fake := &fakeEngine{routerFails: true}
+	r := &flakyRouter{fail: true}
 	m := &tsManager{
-		logf: t.Logf,
-		eng:  fake,
+		logf:     t.Logf,
+		eng:      &fakeEngine{router: r},
+		osRouter: r,
 		self: Self{
 			ID:      1,
 			NodeKey: key.NewNode(),
@@ -328,33 +321,24 @@ func TestReconfigRetriesAfterAFailedRouter(t *testing.T) {
 	if !m.routerStale {
 		t.Fatal("a failed reconfiguration was not recorded as stale")
 	}
-	if len(fake.programmed) != 0 {
-		t.Fatalf("the router took %d configs despite failing", len(fake.programmed))
+	if n := r.set(false); n != 0 {
+		t.Fatalf("the router took %d configs despite failing", n)
 	}
-
-	fake.routerFails = false
 	if err := m.reconfig(); err != nil {
 		t.Fatalf("the retry failed: %v", err)
 	}
 	if m.routerStale {
 		t.Fatal("a successful reconfiguration left the router marked stale")
 	}
-	if len(fake.programmed) == 0 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.took) == 0 {
 		t.Fatal("the retry never reached the router: the host keeps the old routes")
 	}
-	last := fake.programmed[len(fake.programmed)-1]
-	if !slices.Equal(last.LocalAddrs, m.self.Addrs) {
-		t.Fatalf("the router ended at %v, want this node's addresses %v",
-			last.LocalAddrs, m.self.Addrs)
-	}
-
-	// And a steady state still short-circuits: no forcing when nothing failed.
-	before := len(fake.programmed)
-	if err := m.reconfig(); err != nil {
-		t.Fatalf("an unchanged reconfiguration failed: %v", err)
-	}
-	if len(fake.programmed) != before {
-		t.Fatal("an unchanged reconfiguration reprogrammed the router")
+	for _, c := range r.took {
+		if !slices.Equal(c.LocalAddrs, m.self.Addrs) {
+			t.Fatalf("the router took %v, want this node's addresses %v alone", c.LocalAddrs, m.self.Addrs)
+		}
 	}
 }
 

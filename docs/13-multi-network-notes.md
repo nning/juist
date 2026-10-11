@@ -84,8 +84,8 @@ deadlock.
 - **An instance below that is not routing yields nothing:** one the network
   removed, one without a device, one whose mesh did not start, or one that
   runs without IPv4 itself. For the same network, only membership counts.
-- **Rechecked every five seconds**, and the mesh restarts when the answer
-  changes. Two instances starting together both see an empty host, and the
+- **Rechecked every five seconds**, and the running mesh drops IPv4 or takes
+  it back when the answer changes; one in this very network stops it. Two instances starting together both see an empty host, and the
   check afterwards sorts them out. Until it does, the lower instance's routes
   already win. A host that cannot be read is no verdict: the mode stays as it
   was, and the failure is logged once. Nor is a lower instance that is not
@@ -209,7 +209,7 @@ device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
   instance. Then an instance's home cannot sit in the default's 0700 one,
   each needs a runtime directory of its own, and the instance above has to be
   allowed to read the exact claims of the one below. That is for the
-  hardening before the audit (M16).
+  hardening before the audit (M17).
 - **Other networks' addresses in path discovery.** magicsock learns this
   host's addresses from every interface but Tailscale's own, and sends them to
   peers in the call-me-maybe it relays. A network's members may therefore be

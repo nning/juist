@@ -148,7 +148,7 @@ status: The network, this phone and what needs attention
 member: One device, with a ping through the tunnel
 {{< /screens >}}
 
-The app shows what `juist status` shows on a computer (see
+The app shows what `juist status` and `juist devices` show on a computer (see
 [Status and devices]({{< relref "docs/status" >}})):
 
 - The network's name and its state, such as **Connected**, with a line

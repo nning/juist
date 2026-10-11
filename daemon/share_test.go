@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,8 +18,8 @@ import (
 // A device holding the publish role shares under its own name: it announces
 // the share with an end at most a lease ahead, or the share's own, its
 // terminator ends TLS for the name without the word published names need,
-// and an ingress may open its port while the view is fresh; one share at a
-// time, and none without the role.
+// and an ingress may open its port while the view is fresh; one share of a
+// port at a time, and none without the role.
 func TestADeviceSharesUnderItsName(t *testing.T) {
 	f := exitFixtureWith(t, func(nw *network) {
 		nw.domain = "pub.example.org"
@@ -33,7 +34,7 @@ func TestADeviceSharesUnderItsName(t *testing.T) {
 	if err != nil || name != "n0.pub.example.org" {
 		t.Fatalf("sharing as %q: %v", name, err)
 	}
-	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8001"}, time.Time{}); !errors.Is(err, ErrSharing) {
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8001"}, time.Time{}); !errors.Is(err, ErrPortShared) {
 		t.Errorf("a second share: %v", err)
 	}
 	now := f.d.now()
@@ -53,7 +54,7 @@ func TestADeviceSharesUnderItsName(t *testing.T) {
 	if ports := f.mgr.ingressPortsNow(); !slices.Contains(ports, 443) {
 		t.Errorf("an ingress may open %v", ports)
 	}
-	if st := f.d.shareStatus(f.auth.State(), true, now); st == nil || st.Name != name || st.NotShared != "" {
+	if st := f.d.sharesStatus(f.auth.State(), true, now); len(st) != 1 || st[0].Name != name || st[0].NotShared != "" {
 		t.Errorf("the status says %+v", st)
 	}
 
@@ -81,6 +82,116 @@ func TestADeviceSharesUnderItsName(t *testing.T) {
 	g := exitFixtureWith(t, func(nw *network) { nw.domain = "pub.example.org" }, nil)
 	if _, _, err := g.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); !errors.Is(err, ErrNoPublishRole) {
 		t.Errorf("sharing without the role: %v", err)
+	}
+}
+
+// A device holds several shares under its one name: a file's under its own
+// path, and one port's beside them, which takes what no path does, else the
+// first path's server does; announced to the last end, each stopped by its
+// path alone, and no more than maxShares.
+func TestADeviceHoldsSeveralShares(t *testing.T) {
+	f := exitFixtureWith(t, func(nw *network) {
+		nw.domain = "pub.example.org"
+		nw.devices[0].record.Roles = []types.Role{types.RolePublish}
+	}, nil)
+	f.learnOthers(t)
+	now := f.d.now()
+	served := func() ipc.PublishedTarget {
+		t.Helper()
+		got := f.d.Serving(nil)
+		i := slices.IndexFunc(got.Names, func(n ipc.PublishedTarget) bool { return n.Name == "n0.pub.example.org" })
+		if i < 0 {
+			t.Fatalf("the terminator is told %+v", got.Names)
+		}
+		return got.Names[i]
+	}
+	shared := func() []string {
+		var out []string
+		for _, sh := range f.d.sharesStatus(f.auth.State(), true, f.d.now()) {
+			out = append(out, sh.To)
+		}
+		return out
+	}
+	a := &ipc.ShareRequest{To: "127.0.0.1:9001", What: "/srv/a", Path: "/tokA/"}
+	b := &ipc.ShareRequest{To: "127.0.0.1:9002", What: "/srv/b.pdf", Path: "/tokB/b.pdf"}
+	if _, _, err := f.d.StartShare(a, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.d.StartShare(b, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	paths := []ipc.PathTarget{{Prefix: "/tokA/", To: "127.0.0.1:9001"}, {Prefix: "/tokB/", To: "127.0.0.1:9002"}}
+	if n := served(); n.To != "127.0.0.1:9001" || !slices.Equal(n.Paths, paths) {
+		t.Errorf("without a port, the terminator is told %+v", n)
+	}
+	if e, _ := f.d.announce(0); e.Share == nil || e.Share.Until != now.Add(2*time.Minute).Unix() {
+		t.Errorf("two shares are announced as %+v", e.Share)
+	}
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:9003", Path: "/tokA/x"}, time.Time{}); !errors.Is(err, ErrPathShared) {
+		t.Errorf("a second share under a path: %v", err)
+	}
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := served(); n.To != "127.0.0.1:8000" || !slices.Equal(n.Paths, paths) {
+		t.Errorf("beside a port, the terminator is told %+v", n)
+	}
+	if e, _ := f.d.announce(0); e.Share == nil || e.Share.Until > now.Add(shareLease).Unix() {
+		t.Errorf("shares one of which has no end are announced as %+v", e.Share)
+	}
+	if got := shared(); !slices.Equal(got, []string{"127.0.0.1:9001", "127.0.0.1:9002", "127.0.0.1:8000"}) {
+		t.Errorf("the status lists %v", got)
+	}
+
+	if err := f.d.StopShare("/tokB/b.pdf", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.StopShare("", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := shared(); !slices.Equal(got, []string{"127.0.0.1:9001"}) {
+		t.Errorf("stopped by path, the status lists %v", got)
+	}
+	if err := f.d.StopShare("/tokB/b.pdf", false); !errors.Is(err, ErrNotSharing) {
+		t.Errorf("stopping a stopped share: %v", err)
+	}
+
+	for i := len(shared()); i < maxShares; i++ {
+		if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:9100", Path: fmt.Sprintf("/t%d/", i)}, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:9100", Path: "/more/"}, time.Time{}); !errors.Is(err, ErrTooManyShares) {
+		t.Errorf("a share past %d: %v", maxShares, err)
+	}
+}
+
+// juistd stops the share an unshare request names by its path, and every
+// share for one that names none.
+func TestAnUnshareStopsTheShareItNames(t *testing.T) {
+	nw := newNetworkMutated(t, 2, func(nw *network) {
+		nw.domain = "pub.example.org"
+		nw.devices[0].record.Roles = []types.Role{types.RolePublish}
+	})
+	f := serviceWithChoice(t, nw, nw.devices[0], "")
+	waitFor(t, 10*time.Second, "the mesh", func() bool { return f.s.Mesh() != nil })
+	for _, req := range []*ipc.ShareRequest{{To: "127.0.0.1:9001", Path: "/tokA/"}, {To: "127.0.0.1:9002", Path: "/tokB/"},
+		{To: "127.0.0.1:8000"}} {
+		if _, _, err := f.s.Mesh().StartShare(req, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdUnshare, Share: &ipc.ShareRequest{Path: "/tokA/"}}); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.s.Status(); len(st.Shares) != 2 || st.Shares[0].Path != "/tokB/" || st.Shares[1].To != "127.0.0.1:8000" {
+		t.Errorf("one stopped, the status lists %+v", st.Shares)
+	}
+	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdUnshare}); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.s.Status(); len(st.Shares) != 0 {
+		t.Errorf("all stopped, the status lists %+v", st.Shares)
 	}
 }
 
@@ -151,12 +262,12 @@ func TestAShareLastsAsLongAsTheCall(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no word of the share")
 	}
-	if st := f.s.Status(); st.Share == nil || st.Share.To != "127.0.0.1:8000" {
-		t.Errorf("sharing, the status says %+v", st.Share)
+	if st := f.s.Status(); len(st.Shares) != 1 || st.Shares[0].To != "127.0.0.1:8000" {
+		t.Errorf("sharing, the status says %+v", st.Shares)
 	}
 	cancel()
 	<-done
-	waitFor(t, 10*time.Second, "the share's end", func() bool { return f.s.Status().Share == nil })
+	waitFor(t, 10*time.Second, "the share's end", func() bool { return len(f.s.Status().Shares) == 0 })
 }
 
 // A share is stopped from another call: the call holding it ends without
@@ -202,8 +313,8 @@ func TestAShareIsStoppedFromAnotherCall(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the call holding a stopped share goes on")
 	}
-	if st := f.s.Status(); st.Share != nil {
-		t.Errorf("stopped, the status says %+v", st.Share)
+	if st := f.s.Status(); len(st.Shares) != 0 {
+		t.Errorf("stopped, the status says %+v", st.Shares)
 	}
 }
 
@@ -217,7 +328,7 @@ func TestAShareIsAnnouncedWhileItCanBeServed(t *testing.T) {
 	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if st := f.d.shareStatus(f.auth.State(), true, f.d.now()); st == nil || st.NotShared != "the terminator does not run" {
+	if st := f.d.sharesStatus(f.auth.State(), true, f.d.now()); len(st) != 1 || st[0].NotShared != "the terminator does not run" {
 		t.Errorf("before the terminator asked, the status says %+v", st)
 	}
 	rec, err := f.auth.Builder().SetNodeRoutes(f.nw.devices[0].record.Identity, nil, nil)
@@ -322,7 +433,7 @@ func TestAShareOutlivesARestart(t *testing.T) {
 	f.s.mu.Unlock()
 	waitFor(t, 10*time.Second, "the share in the restarted network", func() bool {
 		m := f.s.Mesh()
-		return m != nil && m != before && m.shareNow(time.Now()) != nil
+		return m != nil && m != before && len(m.sharesNow(time.Now())) == 1
 	})
 }
 
@@ -433,8 +544,8 @@ func TestAShareEndsItselfAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.d.EndShare(first)
-	if sh := f.d.shareNow(f.d.now()); sh == nil || sh.to != "127.0.0.1:8001" {
-		t.Errorf("an ended share's end ended the next: %+v", sh)
+	if shs := f.d.sharesNow(f.d.now()); len(shs) != 1 || shs[0].to != "127.0.0.1:8001" {
+		t.Errorf("an ended share's end ended the next: %+v", shs)
 	}
 }
 
@@ -472,8 +583,8 @@ func TestARestartedShareLeavesAnothers(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the restarted share does not end beside another's")
 	}
-	if sh := f.s.Mesh().shareNow(time.Now()); sh == nil || sh.to != "127.0.0.1:9000" {
-		t.Errorf("the other share is %+v", sh)
+	if shs := f.s.Mesh().sharesNow(time.Now()); len(shs) != 1 || shs[0].to != "127.0.0.1:9000" {
+		t.Errorf("the other share is %+v", shs)
 	}
 }
 
@@ -547,7 +658,7 @@ func TestJuistdSaysWhenTheTerminatorIsNeeded(t *testing.T) {
 	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.d.StopShare(); err != nil {
+	if err := f.d.StopShare("", true); err != nil {
 		t.Fatal(err)
 	}
 	needed(false)

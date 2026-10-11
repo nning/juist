@@ -30,7 +30,7 @@ const (
 
 // StateFiles are what a daemon keeps in its state directory beside the log
 // and the node keys, for a reset of a home no daemon runs from.
-var StateFiles = []string{EndpointCacheFile, KeyringFile, LeaseFile, RelayCertFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
+var StateFiles = []string{EndpointCacheFile, KeyringFile, PairsFile, LeaseFile, RelayCertFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
 	SubnetsFile, SubnetServeFile, NamesFile, PublishServeFile, PublishToFile, HTTPSOnlyFile, ProxyFile, RelayNameFile,
 	RelayCertsDir}
 
@@ -98,6 +98,13 @@ func KeyringPath(home string) string { return filepath.Join(home, KeyringFile) }
 // own keys would otherwise cost it: the chain's older wraps are sealed to the
 // keys it had.
 const KeyringFile = "epochs.secret"
+
+// PairsPath returns where a home directory keeps its preshared keys.
+func PairsPath(home string) string { return filepath.Join(home, PairsFile) }
+
+// PairsFile holds the preshared key this device holds with each peer and
+// the seeds of the epochs it held, as secret as its keys.
+const PairsFile = "pairs.secret"
 
 // LeasePath returns where a home directory keeps its leases.
 func LeasePath(home string) string { return filepath.Join(home, LeaseFile) }

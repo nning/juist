@@ -63,6 +63,11 @@ type Peer struct {
 	// Access is what the peer may open on this node and this node on it;
 	// nil leaves it to the filter, which takes anything from a member.
 	Access *Access
+
+	// PSK is the preshared key every handshake with the peer mixes in, zero
+	// for none. A change keeps the session and takes effect at the next
+	// handshake, which fails unless the peer holds the same key.
+	PSK [32]byte
 }
 
 // Self is the local node's identity and overlay addressing. Addrs follows the
@@ -82,6 +87,12 @@ type Manager interface {
 	// may include the local node itself; that entry must match Self and is
 	// otherwise ignored. After Close it returns an error.
 	SetPeers(peers []Peer) error
+
+	// SetSelf gives the running data plane this node's new key or
+	// addresses; its ID and disco key stay. Under a new key every peer
+	// handshakes again; what comes under its old sessions is taken until
+	// they expire.
+	SetSelf(s Self) error
 
 	// SetEgress says where traffic bound outside the overlay goes, and with
 	// isolate, answers to connections that came in by another device too.

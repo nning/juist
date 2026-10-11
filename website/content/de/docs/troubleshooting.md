@@ -13,7 +13,7 @@ Führe auf dem Gerät, das das Problem hat, Folgendes aus:
 juist status
 ```
 
-Warnungen beginnen mit `warning:` und stehen unter der Gerätetabelle. Auf jede
+Warnungen beginnen mit `warning:` und stehen unter den Einzelheiten. Auf jede
 folgt eine Zeile `hint:` mit dem Befehl, der weiterhilft. Jeder lokale
 Benutzer darf `juist status` ausführen. Was die einzelnen Zeilen bedeuten,
 steht unter [Status und Geräte]({{< relref "docs/status" >}}).
@@ -157,6 +157,25 @@ einen in Reserve. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
 Seit einem Tag haben weniger Voucher bestätigt als nötig. Nach der genannten
 Zeit wird dieses Gerät wie oben `limited`. Bring vorher einen Voucher wieder
 online.
+
+### `warning: not post-quantum, so juist's own traffic alone: nas, …`
+
+nas kündigt keinen Preshared Key an: Es nutzt eine ältere Version von juist,
+oder hat das Netz noch nicht eingeholt. Bis dahin trägt sein Tunnel nur
+juists eigenen Verkehr, der sich selbst versiegelt, damit der Stand des Netzes
+es erreicht. Aktualisiere juist auf nas.
+
+### `warning: no preshared key in common with nas, …`
+
+nas ist um mehr Änderungen zurück, als dieses Gerät Schlüssel aufbewahrt, und
+die beiden hatten nie einen eigenen. Es holt das Netz von einem Gerät nach,
+das sie aufbewahrt hat, meist einem, das ebenso lange weg war; sonst tritt es
+mit einer neuen Einladung wieder bei.
+
+### `Post-quantum  no, the network predates it`
+
+Das Netz wurde mit einer älteren Version von juist angelegt. Sobald jedes
+Gerät diese Version nutzt, hebt ein Admin es mit `juist log upgrade` an.
 
 ### `removed`
 

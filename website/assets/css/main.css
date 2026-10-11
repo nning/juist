@@ -57,10 +57,12 @@ h1, h2, h3 { font-weight: 600; line-height: 1.2; letter-spacing: -0.015em; }
 .hero .in { position: relative; z-index: 2; max-width: var(--wide); margin: 0 auto; padding: 104px 24px 120px; }
 .hero h1 { font-size: clamp(34px, 4.6vw, 52px); line-height: 1.08; letter-spacing: -0.03em; margin: 0 0 20px; max-width: 15ch; }
 .hero .lead { font-size: 18.5px; line-height: 1.6; color: var(--text-2); max-width: 33rem; margin: 0 0 28px; }
-.hero .install { display: inline-block; margin: 0 0 28px; padding: 9px 14px; font: 400 14px var(--mono); color: var(--code-text); background: var(--code-bg); border-radius: 6px; }
-.hero .install::before { content: "$ "; color: var(--accent); }
+.hero .install { display: inline-block; margin: 0 0 28px; padding: 9px 14px; font: 400 14px var(--mono); color: var(--code-text); background: var(--code-bg); border-radius: 6px; text-decoration: none; }
+.hero .install:hover { color: var(--accent); }
 .hero .links { display: flex; flex-wrap: wrap; gap: 10px 26px; font-size: 16px; }
 .hero .links a { font-weight: 500; }
+.tour { max-width: var(--wide); margin: 48px auto 0; padding: 0 24px; }
+.tour video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 12px; background: #0a1317; }
 
 /* The chart */
 .chart .c-line { fill: none; stroke: var(--c-contour); stroke-linejoin: round; }

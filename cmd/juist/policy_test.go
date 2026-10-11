@@ -320,7 +320,7 @@ func TestTheFirstPolicyIsAskedAbout(t *testing.T) {
 			t.Fatal(err)
 		}
 		return out
-	}(), "set it?", "access policy set: 1 rule")
+	}(), "anything the policy does not pass is then refused; set it? [y/N]", "access policy set: 1 rule")
 	mustContain(t, admin.mustRun("policy", "set", writePolicy(t, "next.conf", "pass from laptop to laptop proto icmp\n")),
 		"access policy set: 1 rule")
 }

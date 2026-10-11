@@ -110,6 +110,48 @@ func (c *connProxy) make() {
 	}
 }
 
+// connProxies are one client connection's proxies, one to each service its
+// requests went to, so that each request goes where its name sends it now.
+type connProxies struct {
+	t             *terminator
+	client, local netip.AddrPort
+
+	mu     sync.Mutex
+	by     map[proxyKey]*connProxy
+	closed bool
+}
+
+type proxyKey struct {
+	to    string
+	proxy bool
+}
+
+// to is the connection's proxy to n's service.
+func (c *connProxies) to(n ipc.PublishedTarget) *connProxy {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := proxyKey{n.To, n.Proxy}
+	px := c.by[k]
+	if px == nil {
+		px = c.t.proxyFor(n, c.client, c.local)
+		if c.closed {
+			px.close()
+		}
+		c.by[k] = px
+	}
+	return px
+}
+
+// close lets go of what every proxy of the connection keeps.
+func (c *connProxies) close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	for _, px := range c.by {
+		px.close()
+	}
+}
+
 // serviceConns bounds the connections all proxies open to one service:
 // past the bound, the idle ones go, and a request waits dialTimeout at most.
 type serviceConns struct {

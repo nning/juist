@@ -524,9 +524,9 @@ func TestTheInviteSetsItsCommandsApart(t *testing.T) {
 	a.announceInvite("lab", "865-endow-millionaire-blockade", link, DefaultInvitePort,
 		inviteOptions{expires: time.Hour, lan: true})
 	want := "invite to \"lab\", expires in 1h; on the new device:\n\n" +
-		"  juist join 865-endow-millionaire-blockade  # same LAN\n\n" +
 		"  juist join '" + link.String() + "'\n\n" +
-		"meets through relay 203.0.113.34:41645 where this device is unreachable\n"
+		"meets through relay 203.0.113.34:41645 where this device is unreachable\n\n" +
+		"  juist join 865-endow-millionaire-blockade  # same LAN\n\n"
 	if got := out.String(); !strings.HasPrefix(got, want) {
 		t.Fatalf("the invite reads\n%s\nwant\n%s", got, want)
 	}

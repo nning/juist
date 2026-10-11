@@ -82,8 +82,14 @@ address skips too.
 
 **`make interop` is where Linux and FreeBSD meet** (`interop/`): a Debian 12
 and a FreeBSD 14.5 VM in qemu, their LAN a pair of UDP sockets on the host's
-loopback, each with its package installed. FreeBSD creates a network and
-Linux joins it by link; each reaches the other over both families. Then each
+loopback, each with its package installed. Debian starts on the previous
+release, the last done milestone's package `make deb-previous` builds: it
+creates a network FreeBSD joins, the two reach each other, and once Debian is
+upgraded and the network with it, every tunnel is on a pair key. That network
+gone, FreeBSD creates one and Linux joins it by link; each reaches the other
+over both families, an epoch bump moves them to a new pair key under three
+minutes of pings with no gap, and Debian, its juistd stopped across two
+bumps, reaches FreeBSD again. Then each
 serves the other as exit node and subnet router: a target on a public
 address behind the server, in a VNET jail or a network namespace, must see
 the server's masquerade as its source, the subnet's target must answer, the
@@ -179,7 +185,7 @@ than skip. A NAT cell can be run alone with
 | M5b — no device without the admin role, nor the one a change is about, receives it | `gossip`: `TestWaitingChangesReachNoOtherDevice`; `daemon`: `TestADaemonHandsChangesToAdminDevicesAlone`, `TestHeldChangesAreSaidToAdminDevicesAlone`; `cmd/juist`: `TestAChangeNeverReachesTheDeviceItIsAbout` | no |
 | M5b — nothing is signed unasked | `cmd/juist`: `TestAChangeWaitsOnTheOtherAdminDevice`, `TestAChangeThatExpiresWhileAskedIsNotSigned` | no |
 | M5b — a change sealed to its admins opens for no other key | `internal/waiting`: `TestAChangeOpensForItsAdminsAlone`; `trust/secrets`: `TestSealKeyToOpensForItsReaderAlone`; `trust/log`: `TestSetAdminRecipient`, `TestAGenesisRecipientIsSignedForByItsKey` | no |
-| M5c — a device moved at once is reached at its new address only, and other transitions run on | `cmd/juist`: `TestAMoveAtOnceReachesEveryDevice`, `TestMovingADeviceAtOnce`, `TestAMoveAtOnceReadsAsOne`, `TestHeldAddressesRead`, `TestStatusNamesTheDevicesNotYetMoved`; `daemon`: `TestAMovedDeviceRestartsOnItsNewAddressAtOnce`; `trust/log`: `TestRenumberNodeAtOnce` | no |
+| M5c — a device moved at once is reached at its new address only, and other transitions run on | `cmd/juist`: `TestAMoveAtOnceReachesEveryDevice`, `TestMovingADeviceAtOnce`, `TestAMoveAtOnceReadsAsOne`, `TestHeldAddressesRead`, `TestStatusNamesTheDevicesNotYetMoved`; `daemon`: `TestAMovedDeviceMovesOntoItsNewAddressAtOnce`; `trust/log`: `TestRenumberNodeAtOnce` | no |
 | M6a (1) — only the chosen exit node carries the internet, and a member without a grant is dropped sending from it | `conn`: `TestRoutesCarryTrafficToAndFromTheirPeer`, `TestSetPeersRefusesRoutesThatClash`, `TestAServingNodeAcceptsWhatItServesAlone`, `TestByRouteAtTheEdges`; `daemon`: `TestAClientRoutesThroughItsExitNode` | no |
 | M6a (2) — no grant overlaps the overlay, and the internet leaves out the overlay, private and special ranges | `trust/log`: `TestRejectsOverlayOverlappingRoutes`, `TestDefaultRouteRequiresExitNodeRole`; `conn`: `TestInternetIsPublicSpaceAlone` | no |
 | M6a (3) — with a full tunnel up nothing but the LAN is reached outside it, pushed routes, bound sockets and a flushed table notwithstanding, and a lost exit node is refused, not gone around | `conn`: `TestNetnsExitNode`, `TestNetnsARefusingClientHearsItsExitNode`, `TestTheExitTable`, `TestTheGuardDropsWhatElseWouldLeave`, `TestTheGuardLetsTheHostsOwnLinkTrafficOut`, `TestAddrInReadsTheRightAddress`, `TestOtherEgress`; `daemon`: `TestAChosenExitNodeFailsClosed`, `TestNoExitNodeGoesDirect`, `TestAnUnreadableChoiceIsRefused`, `TestAChoiceWithoutAMeshIsRefused`, `TestAnEgressThatFailsIsNotCalledRefused`, `TestAnExitNodeNeedsASystemUser`; `cmd/juist`: `TestDNSOutsideTheTunnel`, `TestOneNetworkAHostUsesAnExitNodeThrough`, `TestTwoNetworksServingAndUsing`, `TestStrictReversePathFiltering`, `TestFirewalldStrictReversePath`; `conn`: `TestExitRoutesReadBack`, `TestTheExitRuleLeavesBypassMarkedPackets`, `TestAStrictReversePathRuleIsToldApart`, `TestNetnsAStrictReversePathFilterIsFound`, `TestAnUnmarkedExitRuleIsFound`, `TestNetnsAFamilyNoExitNodeCarriesIsRefused`; `daemon`: `TestTheStatusSaysAStrictReversePathFilter`, `TestAnUnreadableReversePathFilterIsLogged` | for the first two and the `Netns` ones |
@@ -232,9 +238,10 @@ than skip. A NAT cell can be run alone with
 | M9 review 3 — a name behind `--proxy` is not resolved to its device; the domain itself is answered with its device's address through the reachability check; the status names the public domain; `juist network domain` warns that every member resolves it through juistd; `juistd --serve @=ADDR` serves the domain itself | `daemon`: `TestMembersReachAPublishedNameDirectly`, `TestTheDomainGoesToJuistdWhole`, `TestTheStatusNamesThePublicDomain`; `cmd/juist`: `TestTheNamesLineIsNeverEmpty`, `TestPublishAddAndRemove`; `ipc`: `TestAReaderSeesNoPublicNames`; `cmd/juistd`: `TestServeMakesAServiceMember` | — |
 | M9 review 4 — the CLI waits for a terminator it just started by what juistd says then, and a terminator that stops says so, so the status counts it down at once; the terminator orders no certificate for a name it no longer serves; the ingress lets go a client that does not answer its target's hello within a minute, bounds a site's connections and port 80's by source, and redirects by the path alone; a spliced connection whose source fails ends both ways, one that cannot write leaves the other way to finish, on FreeBSD too; the confiner takes echo replies and ICMP errors on what this node opened, and ends a TCP flow at an RST, or a minute after FINs both ways; the RPM owns `/usr/lib/juist`, and both packages recommend polkit; `juist grant` names the role that excludes the one granted | `cmd/juist`: `TestAStartedTerminatorIsWaitedFor`, `TestARoleThatExcludesAnotherIsSaid`, `TestGrantAnIngress`; `internal/terminator`: `TestANameNotServedIsNotOrdered`, `TestATerminatorSaysItStops`; `daemon`: `TestTheStatusSaysWhereTheTerminatorListens`; `internal/ingress`: `TestAClientThatStopsAfterItsHelloIsLetGo`, `TestTheRedirectNamesItsHostAndBoundsASource`; `internal/pipe`: `TestSourcesBoundHostsAndSites`, `TestAFailedWayEndsBoth`, `TestAWayThatCannotWriteLetsTheOtherFinish`; `conn`: `TestAConfinedPeerAnswersPingsAndErrors`, `TestAConfinedFlowEndsWithItsConnection`; `packaging`: `TestTheRPMOwnsItsDirectories`, `TestThePackagesRecommendPolkit` | — |
 | M9 review 6 — where firewalld keeps the port a device serves on from arriving on its juist device, `juist share`, `juist publish add` and `serve` say so, with the command that puts the device in the trusted zone, and say nothing where it lets the port in; an interface counts as blocked as log sync's check counts it | `cmd/juist`: `TestAFirewallKeepingOutWhatIsServedIsSaid`; `internal/firewalld`: `TestBlocksAsksFirewalldOnTheSystemBus`, `TestAZoneWhosePortsCannotBeAskedCountsAsFirewalled` | — |
-| M9c — a share in the background: the command returns once the share is up, which serves on until `juist share --stop`, a foreground share heeds that too, a second share is refused, stopping none says so, and the share is taken up again under its path after juistd restarts; juistd ends a share from another call, whose call ends without error | `cmd/juist`: `TestAShareInTheBackground`, `TestABackgroundShareOutlivesJuistd`, `TestTheShareWordsAreJuistds`; `daemon`: `TestAShareIsStoppedFromAnotherCall` | — |
+| M9c — a share in the background: the command returns once the share is up, which serves on until `juist share --stop`, a foreground share heeds that too, stopping none says so, and the share is taken up again under its path after juistd restarts; juistd ends a share from another call, whose call ends without error | `cmd/juist`: `TestAShareInTheBackground`, `TestABackgroundShareOutlivesJuistd`, `TestTheShareWordsAreJuistds`; `daemon`: `TestAShareIsStoppedFromAnotherCall` | — |
 | M9c — a shared directory is listed folders first and sorted as asked, its links kept under the token whatever a name holds, its dot-entries left out, running nothing and free to download, while what is shared stays sandboxed; a folder with an `index.html` is that page; a directory, or a folder in it, is sent as a ZIP under its name, without dot-entries or what a link reaches outside | `cmd/juist`: `TestASharedDirectoryIsListed`, `TestASharedDirectoryIsZipped` | — |
 | M9c — the listing looks as the website does, its colours, wordmark and fonts the website's own, the fonts reached under the token alone and not beside a shared file | `internal/webstyle`: `TestThePagesLookAsTheWebsiteDoes`; `cmd/juist`: `TestTheListingLooksAsTheWebsiteDoes`, `TestTheListingsFontsAreUnderTheToken` | — |
+| Several shares — juistd holds up to 16 at once, each file's under its own path and one port's beside them, tells the terminator the paths and announces the last end, and stops one by its path or all; the terminator sends a request under a path to that path's service and any other to the name's, as the name goes at each request on a connection kept open, and ends a piped connection once its name goes elsewhere; `juist share` lists them, `--stop` takes the one named by its file, port or link and names one where several run, and `juist status` counts them | `ipc`: `TestAShareRequestIsBounded`, `TestAnUnshareRequestNamesAShareByItsPath`; `daemon`: `TestADeviceHoldsSeveralShares`, `TestAnUnshareStopsTheShareItNames`; `internal/terminator`: `TestANamesPathsReachTheirOwnServices`, `TestANameGoneElsewhereEndsItsPipedConnections`; `cmd/juist`: `TestAShareInTheBackground`, `TestPublishAPort`, `TestShareUntilStopped` | — |
 | M9b — a name served that a client found no certificate for is said by the terminator, with why, until one is found, the CA's challenge and a name not served changing nothing; juistd keeps it for the status, which warns of it while the terminator runs | `internal/terminator`: `TestTheTerminatorSaysWhichNamesHaveNoCertificate`; `ipc`: `TestAServingRequestCarriesAnAccountThatFitsCAA`; `daemon`: `TestTheStatusSaysWhereTheTerminatorListens`; `cmd/juist`: `TestTheStatusWarnsOfANameWithoutACertificate` | — |
 | M9b — systemd starts the terminator by juistd's file: juistd keeps it while a share or a name whose TLS juist ends needs the terminator, and tells the terminator when nothing does, which then stops, though not while it has a name to serve; where systemd starts it, sharing runs no script; a fresh install enables `juist-serve.path`, an upgrade moves a terminator enabled the old way to it and enables nothing else, and `serve.sh` turns the path on and off | `daemon`: `TestJuistdSaysWhenTheTerminatorIsNeeded`; `internal/terminator`: `TestAnIdleTerminatorStops`; `cmd/juist`: `TestAShareWhereSystemdStartsTheTerminatorTakesNoRoot`; `packaging`: `TestTheTerminatorStartsByItsPath`, `TestServeScriptStartsAndStops` | — |
 | M9b — `juistd --join LINK`, or `$JUIST_JOIN`, which `--help` does not show and a helper ignores: once started, a juistd in no network joins by it and says how it went, and one in a network ignores it | `cmd/juist`: `TestAJuistdJoinsByTheInviteItWasGiven`; `cmd/juistd`: `TestJoinTakesTheInviteFromTheEnvironment`, `TestHelpListsEveryOptionWithItsDefault` | — |
@@ -330,6 +337,16 @@ than skip. A NAT cell can be run alone with
 | M14 review 2 — a restricted router's other sources reach this node alone, and its ICMP errors are about what this node sent and addressed to it; a device that cannot make its address key withholds its addresses; juist policy test says which rule passes a connection, and a failing test which rule passes it; names are said by their line; warnings name devices in no rule, exit nodes and routers no rule uses, and a device's address for its name; remove says what the policy loses; devices --all lists every device | `conn`: `TestARoutersOtherSourcesReachThisNodeAlone`; `daemon`: `TestAddressesAreWithheldWithoutAKey`; `internal/policy`: `TestParseSaysWhatIsWrong`, `TestALineGoesOnAfterABackslash`, `TestTestsAreChecked`, `TestWarningsOfWhatIsUnused`, `TestDiff`; `cmd/juist`: `TestAPolicyIsAsked`, `TestRemovingADeviceSaysWhatThePolicyLoses`, `TestADeviceListsItsPeersAlone`, `TestAnInviteUnderAPolicySaysSo` | no |
 | M14 review 3 — tests are checked against the whole policy's view, at its limits in a moment; a failing test is said by its line; the invite's hint follows an admission alone; arguments of juist policy test that are no word go in quotes, and a character the text cannot hold is named whole; a relay or voucher alone is no device in no rule, and a warning is said once; the first policy is asked about, and approving without the log hints where names show | `internal/policy`: `TestTestsAreCheckedQuickly`, `TestTestLines`, `TestWords`, `TestADeviceNamedLikeAKeyword`, `TestWarningsOfCarriersAndRepeats`, `TestParseSaysWhatIsWrong`; `cmd/juist`: `TestABadPolicyIsRefused`, `TestTheFirstPolicyIsAskedAbout`, `TestAPolicyWaitsForVotes` | no |
 | M14 (1, 3, 4) — between hosts: east and west, kept apart, exchange no packet and hold no address of each other's; east opens on lx the port passed alone; fb carries west's internet traffic and not east's | `make interop`: `TestLinuxAndFreeBSD/access_policy` | qemu |
+| M15 (1) — handshakes mix in the preshared key, by both paths into the engine; a peer newly keyed loses the session it had, passes nothing until no session without its key is left, and holding another key completes no handshake | `conn`: `TestHandshakesCarryThePresharedKey`, `TestAKeyWhereThereWasNoneEndsTheSession`, `TestAPeerCreatedWithTheKeyItHadPassesNothing`, `TestAPeerPassingNothingPassesNothing` | no |
+| M15 (2, 5) — the group key is the pair's in its epoch; an exchange gives both the pair key, which a third member cannot derive; messages are bound to sender, receiver, stores and network, replays and stale or runaway follower messages move nothing, lost ones never leave the two apart; generations are paced and follow every epoch, seeds reach a peer far behind, the store survives a restart and decodes what it encodes | `internal/pairkey`: `TestTheGroupKeyIsThePairsInItsEpoch`, `TestAnExchangeGivesBothThePairKey`, `TestAThirdMemberCannotDeriveThePairKey`, `TestAMessageIsBoundToItsSenderAndNetwork`, `TestAReplayedMessageMovesNothingBack`, `TestAStaleFollowerMessageStartsNothing`, `TestAFollowerCannotRunTheCountOut`, `TestLostMessagesNeverLeaveTheTwoApart`, `TestAnOfferForAPairStartedOverIsIgnored`, `TestAPairStartedOverOnOneSideMeetsAgain`, `TestAPairKeyFollowsItsBinding`, `TestAnIdentityRotationKeepsThePairKey`, `TestGenerationsArePaced`, `TestSeedsReachAPeerFarBehind`, `TestTheStoreSurvivesARestart`, `FuzzTake`, `FuzzDecodeStore` | no |
+| M15 (2, 3, 4) — tunnels move to pair keys and to new ones at an epoch bump; a sleeper reaches the peer it paired with; blocked handshakes never leave a pair without a key; a change not kept is undone; a removed device gives its pairs up; the first announcement names the epoch; a peer without post-quantum keys is refused announcements, routes nothing else, and `juist status` says which tunnels are post-quantum | `daemon`: `TestTunnelsMoveToPairKeys`, `TestAnEpochBumpMovesThePairKeys`, `TestASleeperReachesThePeerItPairedWith`, `TestBlockedHandshakesNeverLeaveAPairWithoutAKey`, `TestAPairChangeNotKeptIsUndone`, `TestARemovedDeviceGivesItsPairsUp`, `TestTheFirstAnnouncementNamesTheEpoch`, `TestARouterThatIsNotPostQuantumCarriesNothingElse`; `gossip`: `TestACacheRefusesPQAnnouncementsItIsToldOf`; `cmd/juist`: `TestStatusSaysWhichTunnelsArePostQuantum` | no |
+| M15 (2, 3) — between hosts: the previous release's network upgraded, every tunnel is on a pair key; an epoch bump moves both to a new one without a gap in a ping; a juistd stopped across two bumps reaches its peer again | `make interop`: `TestLinuxAndFreeBSD/post-quantum`, `TestLinuxAndFreeBSD/previous_release` | qemu |
+| M15 (6) — a TCP stream, over IPv4 and IPv6, survives a new preshared key with a handshake under it, egress refused and back, serving as an exit node and not, a new key and a renumbering, its longest stall under five seconds; the IPv4 one ends with its old address | `conn`: `TestNetnsAStreamSurvivesChanges` | yes |
+| M15 (6) — the running data plane takes a new key and new addresses, refuses another ID, disco key or a peer's key or address, and guards new addresses before they go on the device; a peer that took a new key with no relay is reached as disco proves the path, held at most a bound and forgotten once removed; a failed router is retried on the router, without an empty config | `conn`: `TestANewKeyInPlace`, `TestNewAddressesInPlace`, `TestSetSelfRefuses`, `TestNewAddressesAreGuardedAhead`, `TestANewKeyIsReachedAtOnce`, `TestWhatWaitsForAProvenPath`, `TestAnUnprovenPeerIsHeldForAWhileAlone`, `TestReconfigRetriesAfterAFailedRouter`, `TestReconfigReprogramsAFailedRouterOnTheRealEngine` | no |
+| M15 (6) — new addresses go on before routes take the new source and the old come off, so no route to a peer goes for a moment; on FreeBSD a route's new source goes in beside the old where the kernel takes both | `conn`: `TestNetnsRouterLeavesTailscaleAlone`; `internal/plumber`: `TestARouteFromANewSourceGoesInFirst`; `conn` on FreeBSD: `TestAPlumbedDeviceCarriesTheOverlay` | yes, FreeBSD |
+| M15 (6) — the running mesh takes a rotation of its keys and moves onto new overlay addresses, a move at once too, and a move said late is forgotten; a host conflict drops IPv4 and takes it back without a restart; log sync's listener moves, and binds an address once it can | `daemon`: `TestRotationIsAdoptedWithoutARestart`, `TestTheMeshMovesOntoNewOverlayAddresses`, `TestAMovedDeviceMovesOntoItsNewAddressAtOnce`, `TestAMoveSaidLateIsForgotten`, `TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt`, `TestRebindMovesTheListener`, `TestRebindTakesAnAddressOnceItCan` | no |
+| M15 (7) — a service member's stack takes UDP, and drops a datagram whose checksum fails; between hosts it serves HTTP/3 at its overlay address | `internal/netstack`: `TestTheStackTakesUDP`; `make interop`: `TestLinuxAndFreeBSD/service_member` | no, qemu |
+| M15 (8) — the confiner takes packets of many flows at once, its count of flows right; serving sets UDP GRO forwarding on the uplink and gives it back; TCP to TCP splices within the kernel, a quiet join holding no pipe; each path's throughput | `conn`: `TestTheConfinerTakesPacketsAtOnce`, `TestServingForwardsUDPInBatchesWhileItServes`; `internal/pipe`: `TestTCPToTCPIsSpliced`, `TestAQuietSplicedJoinHoldsNoPipe`; `make throughput`: `TestNetnsThroughput` | no, yes |
 
 ### The last privileged run
 
@@ -343,6 +360,64 @@ whole lab passed at M9's tree in 13 minutes. What CI cannot run, Fedora with fir
 was last checked by hand, and this records the latest such run. Update it with
 each one, so it is clear how old the evidence is.
 
+- **2026-10-11, M15 done, at M15 after its seventh review**, run as
+  51c48b9 before its rebase onto M15, which changed the website and the
+  README alone; so are the commits named below. `make ci-vm` passed `make ci` whole at ab6f434, the privileged tests none
+  skipped: a TCP stream over IPv4 and IPv6 outlived a new preshared key
+  with a handshake under it, egress refused and back, serving as an exit
+  node and not, a new key and a renumbering, its longest stall 36 ms, the
+  IPv4 one ending with its old address alone. `make interop` passed there
+  but the service member, which the test itself killed (review 7), and at
+  51c48b9 every part but HTTPS alone, which had passed at ab6f434: hotel
+  again lost fb once fb's home relay moved, the case left open in
+  [10-connectivity-notes.md](10-connectivity-notes.md). The service member
+  served HTTP/3 at its overlay address. `make test-freebsd` passed, all 48
+  packages, at f462204, after its loopback tests were moved to the
+  addresses FreeBSD has. Throughput, by `make throughput` in the CI VM, the
+  build before the steps (907135b) and after (51c48b9) alternated three
+  times in one session, each the median of three runs of 5 s, in Mbit/s:
+  a proxy on the host, the tunnel out of the way, 11 151, 11 208, 10 930
+  before and 24 127, 23 924, 24 337 after, splice; a service member's
+  netstack 1 758, 1 474, 1 741 and 2 494, 2 466, 2 431; a proxy through the
+  tunnel 3 206, 3 184, 3 208 and 3 340, 3 331, 3 296; a confined peer
+  3 304, 3 340, 3 357 and 3 419, 3 299, 3 418, the tunnel itself 3 460 to
+  3 519 both ways; TCP through an exit node 2 941 to 2 969 and 2 906 to
+  3 032; UDP through it 301 to 309 and 288 to 301. UDP GRO forwarding was
+  set on the exit node's uplink and given back, and changed nothing there:
+  the lab's UDP stops at the tunnel, about 300 Mbit/s of the 4 Gbit/s
+  offered. A run beside another session's builds on the same four cores
+  read half of these. `make android-check` passed at 51c48b9, as
+  the app's router retry changed with conn's. No hand test on Fedora.
+- **2026-10-11, M15's post-quantum part, at M15 after its fourth review**,
+  run as b224756 before its rebase onto M15, which changed the roadmap
+  alone; so are the commits named below. `make ci-vm` passed whole in 37m24s, the privileged tests none skipped, as it had at
+  M15 after the third review in 32m34s, with the lab's new parts:
+  Debian on the previous release, M14's package, created a network FreeBSD
+  on this one joined, the two reached each other and FreeBSD said the
+  network predates post-quantum tunnels; upgraded, the network with it,
+  every tunnel was on a pair key. In the lab's own network an epoch bump
+  moved the two to a new pair key under three minutes of pings at 200 ms
+  with no gap, and Debian, its juistd stopped across two bumps, reached
+  FreeBSD again on a later pair key. That ping lost one echo alone in some
+  runs. Measured beside it, across a bump in the previous release's network
+  with no preshared key, it lost one in both runs that did (M15,
+  M15), each over 40 s from the bump and from any handshake, while the
+  ping with preshared keys lost none in those runs, a rekey under the new
+  key among them: the loss is the lab's network's, so one echo lost alone is
+  logged and a gap fails. HTTPS alone failed in three of nine runs, hotel
+  reaching fb once fb's home relay moved: hotel held pair keys with every
+  peer and no newly keyed one, but log sync through its relayed tunnels to
+  fb timed out and it never heard fb's relay go, the case
+  [10-connectivity-notes.md](10-connectivity-notes.md) leaves open for a
+  relayed pair whose home relay moves, as in M14's run. One run failed in
+  `TestNetnsExitNode`, one ping right after the test's hostile routes; the
+  privileged tests then passed twice at once. Runs before failed on the lab
+  itself: `juist reset` asking where nothing answers, the generation read
+  from a log juistd writes only with `--verbose`, and the ping waited out
+  before the bump. `make test-freebsd` passed, all 48 packages, at M15
+  and at M15's tree. No hand test on Fedora; `make android-check` did
+  not run: M15 changes neither `mobile` nor `android/`, and the app built
+  for schema 14 is a release of its own.
 - **2026-10-09, M14, at M14 after its third review.** `make ci-vm`
   passed `make ci` whole, the privileged tests none skipped; its
   `make interop` failed once in HTTPS alone, where hotel heard lx's
@@ -929,7 +1004,7 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   `JUIST_PUBLIC_TESTS=1 go test -run PublicDHT -v ./internal/rendezvous`.
 - **Upgrades.** Nothing yet tests a network whose members run different builds;
   the schema version exists so that case fails loudly rather than silently, but
-  the readiness check that would stop an admin stranding members is M18's
+  the readiness check that would stop an admin stranding members is M19's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)). Mixed builds do not
   sync at all across M4, whose gossip frames carry leases older builds reject,
   nor across M5b between two admin devices while either holds waiting

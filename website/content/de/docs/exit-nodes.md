@@ -110,6 +110,11 @@ entscheidest du selbst, mit `juist exit off`.
   Tailscale fragt er nie, denn der lieferte für Namen aus dem Tailnet
   Adressen, die seine Mitglieder nicht erreichen.
 - Unter FreeBSD arbeiten Exit-Nodes mit pf, und DNS läuft über resolvconf.
+- Unter Linux schaltet ein Exit-Node oder Subnet-Router auf dem
+  Netzwerkgerät seiner Standardroute UDP-GRO-Forwarding ein, wie es
+  `ethtool -K eth0 rx-udp-gro-forwarding on rx-gro-list off` tut, damit er
+  UDP wie QUIC gebündelt weiterleitet. Hört er auf zu dienen, stellt er das
+  Gerät zurück, wie er es vorfand, und schreibt beides ins Log.
 - Wird juistd ordentlich beendet, hebt er die Blockade auf. Während eines
   Neustarts des Dienstes geht der Verkehr also kurz direkt ins Internet.
 

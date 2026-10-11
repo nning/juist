@@ -651,7 +651,7 @@ func setRoutes(h Host, dev string, d *device, want []netip.Prefix, src4 netip.Ad
 		wanted[p.Masked()] = src
 	}
 	for p, src := range d.routes {
-		if s, ok := wanted[p]; ok && s == src {
+		if _, ok := wanted[p]; ok {
 			continue
 		}
 		if err := h.DelRoute(dev, p, src); err != nil {
@@ -661,8 +661,24 @@ func setRoutes(h Host, dev string, d *device, want []netip.Prefix, src4 netip.Ad
 		delete(d.routes, p)
 	}
 	for p, src := range wanted {
-		if _, ok := d.routes[p]; ok {
+		old, ok := d.routes[p]
+		switch {
+		case ok && old == src:
 			continue
+		case ok && h.AddRoute(dev, p, src) == nil:
+			// From a new source, beside the old route where the kernel
+			// takes several, so the prefix is never without one.
+			d.routes[p] = src
+			if err := h.DelRoute(dev, p, old); err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		case ok:
+			if err := h.DelRoute(dev, p, old); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			delete(d.routes, p)
 		}
 		if err := h.AddRoute(dev, p, src); err != nil {
 			errs = append(errs, err)

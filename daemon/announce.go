@@ -36,6 +36,7 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 	relayInfo := d.relayInfo()
 	home := uint16(d.manager.HomeRelay())
 	shared := d.shareAnnounced(d.now())
+	epoch, store := d.pqEpoch()
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -59,6 +60,8 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 		NoV4:       d.announcedNoV4,
 		Published:  d.servingPublished,
 		Share:      shared,
+		Epoch:      epoch,
+		PairStore:  store,
 	}
 	switch {
 	case d.sealing != nil && d.sealing.withheld:

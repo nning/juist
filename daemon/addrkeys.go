@@ -6,14 +6,18 @@ import (
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/addrkey"
+	"github.com/nning/juist/internal/pairkey"
+	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
-// A sealing is this device's address key, and the record handing it to its
-// peers, where the policy keeps it apart from some member; or, where neither
-// could be made, none, and its addresses are withheld.
+// A sealing is this device's address key, the keys it is wrapped under for
+// each peer, and the record handing it to them, where the policy keeps it
+// apart from some member; or, where neither could be made, none, and its
+// addresses are withheld.
 type sealing struct {
 	key      addrkey.Key
+	under    [][32]byte
 	rec      gossip.AddrKey
 	withheld bool
 }
@@ -37,21 +41,15 @@ func (d *Daemon) planSealing(s snapshot) {
 		d.mu.Unlock()
 		return
 	}
-	scalar, _ := d.recipient.Bytes()
+	scalar, seed := d.own.Load().recipient.Bytes()
 	network := s.state.GenesisHash()
-	k, err := addrkey.Derive(scalar, network, s.state.Epoch(), peers)
+	k, err := addrkey.Derive(append(slices.Clone(scalar), seed...), network, s.state.Epoch(), peers)
 	if err != nil {
 		d.logOnce("daemon: deriving this device's address key: " + err.Error())
 		d.withholdAddrs()
 		return
 	}
-	d.mu.Lock()
-	same := d.sealing != nil && d.sealing.key == k
-	d.mu.Unlock()
-	if same {
-		return
-	}
-	rec := gossip.AddrKey{Owner: d.self, ID: k.ID(), Seq: uint64(d.now().UnixNano())}
+	var under [][32]byte
 	for _, id := range peers {
 		n, ok := s.state.Node(id)
 		if !ok {
@@ -62,6 +60,23 @@ func (d *Daemon) planSealing(s snapshot) {
 			d.logOnce("daemon: deriving a pair key with " + n.Name + ": " + err.Error())
 			continue
 		}
+		if env, ok := d.pairEnvOf(s.state, &n); ok {
+			d.readPairs(func(p *pairkey.Store) {
+				if psk, ok, _ := p.Held(env); ok {
+					pair = addrkey.WithPSK(pair, psk)
+				}
+			})
+		}
+		under = append(under, pair)
+	}
+	d.mu.Lock()
+	same := d.sealing != nil && d.sealing.key == k && slices.Equal(d.sealing.under, under)
+	d.mu.Unlock()
+	if same {
+		return
+	}
+	rec := gossip.AddrKey{Owner: d.self, ID: k.ID(), Seq: uint64(d.now().UnixNano())}
+	for _, pair := range under {
 		rec.Wraps = append(rec.Wraps, addrkey.Wrap(pair, d.self, k))
 	}
 	d.mu.Lock()
@@ -74,7 +89,7 @@ func (d *Daemon) planSealing(s snapshot) {
 		d.sealing = &sealing{withheld: true}
 		return
 	}
-	d.sealing = &sealing{key: k, rec: rec}
+	d.sealing = &sealing{key: k, under: under, rec: rec}
 }
 
 // withholdAddrs has this device announce no address, rather than one
@@ -153,13 +168,26 @@ func (d *Daemon) openKey(owner types.Identity, id addrkey.ID) (addrkey.Key, bool
 	if !ok {
 		return addrkey.Key{}, false
 	}
-	scalar, _ := d.recipient.Bytes()
+	scalar, _ := d.own.Load().recipient.Bytes()
 	pair, err := addrkey.Pair(scalar, d.self, owner, n.X25519, state.GenesisHash())
 	if err != nil {
 		return addrkey.Key{}, false
 	}
+	var under [][32]byte
+	if env, ok := d.pairEnvOf(state, &n); ok {
+		d.readPairs(func(p *pairkey.Store) {
+			_, _, all := p.Held(env)
+			for _, psk := range all {
+				under = append(under, addrkey.WithPSK(pair, psk))
+			}
+		})
+	}
 	for _, w := range rec.Wraps {
-		if k, ok := addrkey.Unwrap(pair, owner, id, w); ok {
+		for _, pair := range append(under, pair) {
+			k, ok := addrkey.Unwrap(pair, owner, id, w)
+			if !ok {
+				continue
+			}
 			d.mu.Lock()
 			if d.opened == nil {
 				d.opened = map[types.Identity][]addrkey.Key{}
@@ -171,6 +199,16 @@ func (d *Daemon) openKey(owner types.Identity, id addrkey.ID) (addrkey.Key, bool
 		}
 	}
 	return addrkey.Key{}, false
+}
+
+// pairEnvOf is [Daemon.pairEnv] for member n, with the announcement held for
+// it.
+func (d *Daemon) pairEnvOf(state *log.State, n *types.NodeRecord) (*pairkey.Env, bool) {
+	ep, ok := d.endpoints.Get(n.Identity)
+	if !ok {
+		return nil, false
+	}
+	return d.pairEnv(state, n, ep)
 }
 
 // pruneOpened forgets the keys of members no longer live.

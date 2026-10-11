@@ -1,28 +1,32 @@
 #!/bin/sh
-# Builds the website of nning/juist's main into ~/site-out when website/,
-# design/ or the app's screenshots changed since the last build. Runs as
-# juist-build.
+# Builds the website instance $1 into ~/site/$1/out when website/, design/ or
+# the app's screenshots changed on main since its last build. Runs as
+# juist-build; REPO names another repository to build from than nning/juist.
 set -eu
+name=$1
 export GOTOOLCHAIN=go1.26.8
 # /tmp may be a small tmpfs; compiling Hugo needs more.
 export GOTMPDIR="$HOME/.cache/go-tmp"
-cd "$HOME"
-mkdir -p "$GOTMPDIR"
-[ -d site-src/.git ] || git clone -q --branch main https://github.com/nning/juist.git site-src
-cd site-src
+dir="$HOME/site/$name"
+mkdir -p "$GOTMPDIR" "$dir"
+cd "$dir"
+repo=${REPO:-https://github.com/nning/juist.git}
+[ -d src/.git ] || git clone -q --branch main "$repo" src
+cd src
+git remote set-url origin "$repo"
 git fetch -q origin main
 new=$(git rev-parse FETCH_HEAD)
-built=$(cat "$HOME/site-built" 2>/dev/null || true)
+built=$(cat "$dir/built" 2>/dev/null || true)
 [ "$new" != "$built" ] || exit 0
 if [ -n "$built" ] && git cat-file -e "$built^{commit}" 2>/dev/null &&
 	git diff --quiet "$built" "$new" -- website design android/app/screenshots; then
-	echo "$new" > "$HOME/site-built"
+	echo "$new" > "$dir/built"
 	exit 0
 fi
 git reset -q --hard "$new"
 git clean -qfdx
-rm -rf "$HOME/site-out"
-make -C website check OUT="$HOME/site-out/site"
-(cd website && CGO_ENABLED=0 go build -trimpath -ldflags=-s -o "$HOME/site-out/server" ./server)
-echo "$new" > "$HOME/site-out/commit"
-echo "$new" > "$HOME/site-built"
+rm -rf "$dir/out"
+make -C website check OUT="$dir/out/site"
+(cd website && CGO_ENABLED=0 go build -trimpath -ldflags=-s -o "$dir/out/server" ./server)
+echo "$new" > "$dir/out/commit"
+echo "$new" > "$dir/built"

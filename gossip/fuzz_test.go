@@ -2,11 +2,13 @@ package gossip
 
 import (
 	"bytes"
+	"crypto/mlkem"
 	"net"
 	"net/netip"
 	"testing"
 
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/pairkey"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -29,7 +31,23 @@ func seedFrames(f *testing.F) {
 	if err := ep.Sign(priv); err != nil {
 		f.Fatal(err)
 	}
+	pq := ep
+	pq.Epoch, pq.PairStore = 5, 6
+	if err := pq.Sign(priv); err != nil {
+		f.Fatal(err)
+	}
+	to, err := types.GenerateIdentity()
+	if err != nil {
+		f.Fatal(err)
+	}
+	pair := &pairkey.Msg{From: priv.Public(), To: to.Public(), Store: 6, ToStore: 7, FromWG: types.WGKey{1},
+		ToWG: types.WGKey{2}, Gen: 2, Epoch: 5,
+		CT: make([]byte, mlkem.CiphertextSize768), Use: 1}
+	if err := pair.Sign(priv, types.Hash{1}); err != nil {
+		f.Fatal(err)
+	}
 	frames := []frame{
+		{Kind: kindHello, Network: types.Hash{1}, Epoch: 5, Anchor: types.Hash{9}, Self: &pq, Pair: pair},
 		{Kind: kindHello, Network: types.Hash{1}, Anchor: types.Hash{9}},
 		{Kind: kindHello, Network: types.Hash{1}, Epoch: 4, Head: types.Hash{2},
 			Anchor: types.Hash{9}, Have: []types.Hash{{3}, {4}}, Self: &ep},
@@ -85,6 +103,9 @@ func FuzzDecodeFrame(f *testing.F) {
 		}
 		if fr.Self != nil {
 			_ = fr.Self.Verify()
+		}
+		if fr.Pair != nil {
+			_ = fr.Pair.Verify(fr.Network)
 		}
 		for _, raw := range fr.Records {
 			_, _ = types.DecodeAUM(raw)

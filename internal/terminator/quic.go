@@ -116,15 +116,15 @@ func newQUICServer(t *terminator, getCert func(*tls.ClientHelloInfo) (*tls.Certi
 
 type connKey struct{}
 
-// opened readies c, a client's connection for one name: its proxy to the
-// name's service, and its end once the name is withdrawn.
+// opened readies c, a client's connection for one name: its proxies to the
+// name's services, and its end once the name is withdrawn.
 func (q *quicServer) opened(ctx context.Context, c *quic.Conn) context.Context {
 	n, ok := q.t.lookup(c.ConnectionState().TLS.ServerName)
 	if !ok {
 		_ = c.CloseWithError(0, "")
 		return ctx
 	}
-	px := q.t.proxyFor(n, q.clientOf(addrPortUDP(c.RemoteAddr())), addrPortUDP(c.LocalAddr()))
+	px := q.t.proxiesFor(q.clientOf(addrPortUDP(c.RemoteAddr())), addrPortUDP(c.LocalAddr()))
 	q.t.named.Add(c, n.Name, func() { _ = c.CloseWithError(0, "") })
 	context.AfterFunc(c.Context(), func() {
 		q.t.named.Remove(c)
@@ -267,7 +267,7 @@ func (q *quicServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusMisdirectedRequest)
 		return
 	}
-	px, _ := r.Context().Value(connKey{}).(*connProxy)
+	px, _ := r.Context().Value(connKey{}).(*connProxies)
 	if px == nil {
 		http.Error(w, "", http.StatusNotFound)
 		return

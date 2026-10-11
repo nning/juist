@@ -9,13 +9,15 @@ push to `main` is root on such a host within minutes.
 As root, from this directory, once per host (Debian, Ubuntu or FreeBSD):
 
 ```sh
-sudo sh setup [GOROOT]
+sudo [JUIST_REPO=URL] sh setup [GOROOT]
 ```
 
 GOROOT names a Go to copy when the system's is missing or too old to fetch
-the toolchain `go.mod` asks for (Go 1.21 or later can). Without
-`~juist-build/.git-credentials`, setup gives juist-build an SSH key and prints
-it: add it to nning/juist as a read-only deploy key. The first build takes
+the toolchain `go.mod` asks for (Go 1.21 or later can). JUIST_REPO names
+another repository to follow than `https://github.com/nning/juist.git`; it is
+kept in `~juist-build/repo`.
+Without `~juist-build/.git-credentials`, setup gives juist-build an SSH key
+and prints it: add it to a private repository as a read-only deploy key. The first build takes
 a while; `journalctl -fu juist-follow-main` shows it, on FreeBSD
 `/var/log/juist-follow-main.log`. A build needs about 2.5 GB in
 `~juist-build`, which is `/var/lib/juist-build`, on FreeBSD

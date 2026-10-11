@@ -68,9 +68,9 @@ FUZZTIME ?= 30s
 FUZZLONGTIME    ?= 6h
 FUZZLONGWORKERS ?= 4
 
-# The trusted computing base: the audit scope in docs/06-verification.md, whose
-# size is a tracked regression metric with a 10k-line budget.
-TCB_PKGS ?= ./types ./trust/...
+# The trusted computing base's core is held to a budget; audit-scope places
+# every package in or out of the audit (docs/06-verification.md §5, §6).
+TCB_BUDGET ?= 10000
 
 .DEFAULT_GOAL := help
 
@@ -176,6 +176,14 @@ test-os-plumbing-sudo: ## Build the privileged tests as you, run them with sudo
 	cd conn && sudo JUIST_REQUIRE_OS_PLUMBING=1 $(abspath $(BUILDDIR))/conn.test \
 		-test.count=1 -test.timeout=15m -test.v -test.run '$(PLUMBING_TESTS)'
 
+# What each path through the tunnel carries, by iperf3 in the netns lab:
+# numbers for docs/12-validating.md rather than a gate.
+.PHONY: throughput
+throughput: ## Measure each path's throughput with iperf3 in the netns lab (needs sudo, iperf3)
+	$(GO) test $(GOFLAGS) -c -o $(abspath $(BUILDDIR))/conn.test ./conn
+	cd conn && sudo JUIST_THROUGHPUT=1 JUIST_REQUIRE_OS_PLUMBING=1 $(abspath $(BUILDDIR))/conn.test \
+		-test.count=1 -test.timeout=10m -test.v -test.run '^TestNetnsThroughput$$'
+
 # Every package's tests, built here for FreeBSD and run on a FreeBSD host as
 # root, the OS plumbing required. FREEBSD_SSH reaches it; the default is a
 # qemu VM with its ssh forwarded to 2222, as docs/12-validating.md sets up.
@@ -195,10 +203,25 @@ INTEROP_CACHE ?= $(HOME)/.cache/juist-interop
 # The browser the lab fetches over HTTP/3 with, headless.
 INTEROP_CHROME ?= $(firstword $(shell command -v chromium chromium-browser google-chrome chrome 2>/dev/null))
 
+# The last done milestone, which the lab upgrades Debian from: the previous
+# release.
+PREVIOUS ?= $(shell git rev-list -1 --grep='^M[0-9]* done' HEAD 2>/dev/null)
+PREVTOP  ?= $(abspath $(BUILDDIR)/previous)
+
+.PHONY: deb-previous
+deb-previous: ## Build the last done milestone's .deb into build/previous/deb, which make interop upgrades from
+	@test -n "$(PREVIOUS)" || { echo "deb-previous: no done milestone in this history"; exit 1; }
+	@rm -rf $(PREVTOP) && mkdir -p $(PREVTOP)/src
+	git archive $(PREVIOUS) | tar -x -C $(PREVTOP)/src
+	$(MAKE) -C $(PREVTOP)/src deb DEBTOP=$(PREVTOP)/deb RPM_DIRTY= \
+		RPM_COMMIT=$$(git rev-parse --short $(PREVIOUS)) \
+		RPM_STAMP=$$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S $(PREVIOUS))
+
 .PHONY: interop
-interop: deb pkg-freebsd image ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh, Chrome)
+interop: deb deb-previous pkg-freebsd image ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh, Chrome)
 	cd interop && JUIST_INTEROP_WORK=$(abspath $(BUILDDIR))/interop \
 		JUIST_INTEROP_DEB=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb') \
+		JUIST_INTEROP_PREVIOUS_DEB=$$(find $(PREVTOP)/deb -maxdepth 1 -name '*.deb') \
 		JUIST_INTEROP_PKG=$$(find $(abspath $(BUILDDIR))/freebsd -name '*.pkg') \
 		JUIST_INTEROP_IMAGE=$$(find $(abspath $(BUILDDIR))/image -name 'juist-*-$(IMAGE_ARCH).tar' | head -1) \
 		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) JUIST_INTEROP_CHROME=$(INTEROP_CHROME) GO=$(GO) \
@@ -216,6 +239,11 @@ demo: deb pkg-freebsd ## Record the README's demo in the lab, into website/stati
 		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) JUIST_DEMO_CAST=$(abspath website/static/demo.cast) GO=$(GO) \
 		$(GO) test $(GOFLAGS) -tags interop -count=1 -timeout 60m -run TestDemo -v .
 	$(AGG) $(AGG_FLAGS) --theme asciinema website/static/demo.cast website/static/demo.gif
+
+.PHONY: video
+video: ## Render the tour, from the demo's cast and the app's screenshots, into website/static/tour.{mp4,webm,jpg} (needs Chrome, ffmpeg)
+	cd website/video && $(GO) run . -chrome $(INTEROP_CHROME) -out $(abspath website/static)
+	ffmpeg -v error -y -ss 20 -i website/static/tour.mp4 -frames:v 1 -q:v 3 website/static/tour.jpg
 
 # The website under load: visitors as browsers come, LOAD_RATE a second for
 # LOAD_FOR. load-site loads its server alone, here; load-lab loads it in the
@@ -315,14 +343,8 @@ fuzz-matrix: ## Emit the fuzz targets as a JSON matrix (one object per target)
 	printf ']\n'
 
 .PHONY: tcb
-tcb: ## Report the trusted computing base's size against its budget
-	@lines=$$($(GO) list -f '{{$$d := .Dir}}{{range .GoFiles}}{{$$d}}/{{.}} {{end}}' $(TCB_PKGS) \
-		| tr ' ' '\n' | grep -v '^$$' | xargs cat | wc -l); \
-	echo "TCB: $$lines lines across $(TCB_PKGS) (budget 10000, docs/06-verification.md)"; \
-	if [ "$$lines" -gt 10000 ]; then \
-		echo "over budget: the audit scope has grown past what docs/06-verification.md plans for"; \
-		exit 1; \
-	fi
+tcb: ## Report the core's and the audit scope's sizes; fail past the core's budget or on an unplaced package
+	@sh ci/tcb.sh "$(GO)" audit-scope $(TCB_BUDGET)
 
 ## --- android -------------------------------------------------------------
 
@@ -352,7 +374,7 @@ android-check: android-core ## Test the Android app: unit and screenshot tests, 
 	$(GRADLE) testDebugUnitTest verifyRoborazziDebug lintDebug
 
 .PHONY: android-screenshots
-android-screenshots: android-core ## Record the Android app's screenshots anew, into android/app/screenshots
+android-screenshots: android-core ## Record the Android app's screenshots anew, into android/app/screenshots and website/video/phone
 	$(GRADLE) recordRoborazziDebug
 
 ## --- packaging -----------------------------------------------------------
@@ -691,3 +713,6 @@ clean: ## Remove build and test artifacts
 	rm -rf $(BUILDDIR)
 	rm -f $(COVERPROFILE)
 	$(GO) clean -testcache
+
+# The private repository alone has it: publishing milestones to the public one.
+-include private/publish.mk

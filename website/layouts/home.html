@@ -4,9 +4,15 @@
   <div class="in">
     <h1>{{ .Params.headline }}</h1>
     <p class="lead">{{ .Params.lead }}</p>
-    <code class="install">make install</code>
+    {{ with site.GetPage "docs/install" }}<a class="install" href="{{ .RelPermalink }}">{{ i18n "packages" }} →</a>{{ end }}
     <div class="links">{{ range .Params.links }}{{ if .page }}{{ with site.GetPage .page }}<a href="{{ .RelPermalink }}">{{ .LinkTitle }} →</a>{{ end }}{{ else }}<a href="#{{ .anchor }}">{{ .label }}</a>{{ end }}{{ end }}</div>
   </div>
+</section>
+<section class="tour" id="tour">
+  <video controls muted autoplay loop playsinline preload="metadata" poster="{{ "tour.jpg" | relURL }}" aria-label="{{ i18n "tour" }}">
+    <source src="{{ "tour.webm" | relURL }}" type="video/webm">
+    <source src="{{ "tour.mp4" | relURL }}" type="video/mp4">
+  </video>
 </section>
 <div class="home-body">{{ .Content }}</div>
 {{ end }}

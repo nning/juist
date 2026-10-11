@@ -191,7 +191,7 @@ func TestUpstreamEngineSkipsARouterItFailedToProgram(t *testing.T) {
 // And reconfig reaches the router anyway, whatever the engine answers.
 func TestReconfigReprogramsAFailedRouterOnTheRealEngine(t *testing.T) {
 	r := &flakyRouter{fail: true}
-	m := &tsManager{logf: t.Logf, eng: newRouterEngine(t, r),
+	m := &tsManager{logf: t.Logf, eng: newRouterEngine(t, r), osRouter: r,
 		self: Self{ID: 1, NodeKey: key.NewNode(), Addrs: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}}}
 	m.state.Store(&peerState{})
 	if err := m.reconfig(); err == nil {
@@ -208,6 +208,13 @@ func TestReconfigReprogramsAFailedRouterOnTheRealEngine(t *testing.T) {
 	}
 	if last := r.took[len(r.took)-1]; !samePrefixSet(last.LocalAddrs, m.self.Addrs) {
 		t.Fatalf("the router ended at %v, want %v", last.LocalAddrs, m.self.Addrs)
+	}
+	// Never by an empty config, which takes every address and route off
+	// the device for a call.
+	for _, c := range r.took {
+		if len(c.LocalAddrs) == 0 {
+			t.Fatal("the retry handed the router an empty config")
+		}
 	}
 }
 

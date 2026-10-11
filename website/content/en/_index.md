@@ -35,9 +35,9 @@ created network "home"
 $ juist invite
 invite to "home", expires in 1h; on the new device:
 
-  juist join 42-drumbeat-tolerance-glucose  # same LAN
-
   juist join 'juist:Kx7q…@192.168.1.20:41642'
+
+  juist join 42-drumbeat-tolerance-glucose  # same LAN
 
 nas wants to join; compare with the words it shows:
   atlas-amulet-banjo-asteroid
@@ -120,13 +120,13 @@ What you can do
 
 ### Cryptography
 
-{{< trade title="Tunnel traffic is not post-quantum" knob="no setting" >}}
+{{< trade title="A tunnel starts on the group's key" knob="no setting" >}}
 What happens
-: Recorded WireGuard traffic could be decrypted by a future quantum computer.
+: Until two devices have a key of their own, a log sync after their tunnel comes up, their traffic is protected by a key any member could derive.
 
 Why accepted
-: WireGuard has no post-quantum key exchange. Group secrets are hybrid X25519 + ML-KEM-768.
+: Against everyone outside the network it is post-quantum from the start; only a member, or a device removed since, with a quantum computer could read those first seconds.
 
 What you can do
-: Nothing. Do not rely on juist for traffic that must stay secret for decades.
+: Nothing. `juist status` says which tunnels are on the group's key.
 {{< /trade >}}

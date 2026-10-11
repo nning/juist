@@ -32,3 +32,23 @@ func TestRestartedRelayKeepsItsCertificate(t *testing.T) {
 		t.Fatal("new device keys kept the old relay certificate")
 	}
 }
+
+// A certificate drawn before the keys were rotated in place is no longer
+// the session's: a relay starting on it gives way.
+func TestARotationTakesTheRelaysCertificate(t *testing.T) {
+	s, err := NewStoredSession(t.TempDir(), types.Identity{1}, types.NodeKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.relayCertificate(t.Logf)
+	if err != nil || !s.holds(c) {
+		t.Fatalf("the certificate drawn is not held: %v", err)
+	}
+	s.rebind(types.Identity{1}, types.NodeKeys{WireGuard: types.WGKey{2}})
+	if s.holds(c) {
+		t.Fatal("the certificate for the keys before is held after a rotation")
+	}
+	if again, _ := s.relayCertificate(t.Logf); again == c {
+		t.Fatal("a rotation keeps the relay's certificate")
+	}
+}

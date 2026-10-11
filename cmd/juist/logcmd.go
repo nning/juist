@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/nning/juist/internal/changelog"
@@ -15,7 +16,8 @@ import (
 func logFamily() family {
 	return family{name: "juist log", intro: `Inspect the membership log: the signed, hash-chained record of every change,
 held and verified by each device.`, subs: []subcommand{
-		{name: "show", run: logShow, forms: [][2]string{{"", "list the changes"}}},
+		{name: "show", run: logShow, forms: [][2]string{{"", "list the changes"},
+			{"show N|HASH", "what one change did, and who signed it"}}},
 		{name: "verify", run: logVerify, forms: [][2]string{{"verify [FILE]", "re-verify the log, or check a change file"}}},
 		{name: "checkpoint", run: logCheckpoint, forms: [][2]string{{"checkpoint", "record the whole current state as one change"}}},
 		{name: "upgrade", run: logUpgrade, forms: [][2]string{{"upgrade", "raise the network to this build's record schema"}}},
@@ -25,8 +27,9 @@ held and verified by each device.`, subs: []subcommand{
 func cmdLog(a *app, args []string) error { return logFamily().run(a, args) }
 
 func logShow(a *app, args []string) error {
-	s := spec{name: "juist log", args: "[SUBCOMMAND]", about: logFamily().about()}
-	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
+	s := spec{name: "juist log", args: "[SUBCOMMAND] | show N|HASH", max: 1, about: logFamily().about()}
+	pos, err := a.parse(s, newFlags(s.name), args)
+	if err != nil {
 		return err
 	}
 	auth, err := a.networkLog()
@@ -37,13 +40,71 @@ func logShow(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	for i, e := range changelog.Of(chain, auth.State().Admins()) {
+	entries := changelog.Of(chain, auth.State().Admins())
+	if len(pos) == 1 {
+		return a.showChange(chain, entries, pos[0])
+	}
+	for i, e := range entries {
 		a.printf("%4d  %-44s %s\n", i, e.What, a.dim(e.Hash.String()[:12]))
 		a.printf("      %s\n", a.dim("approved by "+strings.Join(e.Signers, ", ")))
 	}
 	a.printf("%s\n", a.dim(count(len(chain), "change")))
 	a.reportLogHealth(auth)
 	return nil
+}
+
+// showChange says what the change arg names did, to the state before it.
+func (a *app) showChange(chain []types.AUM, entries []changelog.Entry, arg string) error {
+	i, err := findChange(entries, arg)
+	if err != nil {
+		return err
+	}
+	var before *log.State
+	if i > 0 {
+		prior, err := log.FromRecords(log.NewMemStorage(), chain[:i])
+		if err != nil {
+			return err
+		}
+		before = prior.State()
+	}
+	e := entries[i]
+	a.printf("%4d  %s\n", i, e.What)
+	for _, line := range effect(&chain[i], before, a.now().Unix()) {
+		a.printf("      %s\n", line)
+	}
+	if len(e.Signers) > 0 {
+		keys := make([]string, len(chain[i].Signatures))
+		for j, sig := range chain[i].Signatures {
+			keys[j] = sig.KeyID.ShortString()
+		}
+		a.printf("      approved by %s, with %s\n", strings.Join(e.Signers, ", "), strings.Join(keys, ", "))
+	}
+	a.printf("      %s\n", a.dim("hash "+e.Hash.String()))
+	return nil
+}
+
+// findChange is the index of the change arg names: its number as juist log
+// lists it, or the start of its hash.
+func findChange(entries []changelog.Entry, arg string) (int, error) {
+	if i, err := strconv.Atoi(arg); err == nil {
+		if i < 0 || i >= len(entries) {
+			return 0, fmt.Errorf("no change %d: the log lists 0 to %d", i, len(entries)-1)
+		}
+		return i, nil
+	}
+	found := -1
+	for i, e := range entries {
+		if arg != "" && strings.HasPrefix(e.Hash.String(), strings.ToUpper(arg)) {
+			if found >= 0 {
+				return 0, fmt.Errorf("%s starts the hash of more than one change: give more of it", arg)
+			}
+			found = i
+		}
+	}
+	if found < 0 {
+		return 0, fmt.Errorf("no change %s in the log", arg)
+	}
+	return found, nil
 }
 
 func logVerify(a *app, args []string) error {
@@ -148,6 +209,7 @@ Raise the network to this build's record schema:
             (juist publish add --tcp)
   schema 12 relays on 443 under a public name (juist set --relay-name)
   schema 13 an access policy (juist policy)
+  schema 14 post-quantum tunnels: a preshared key in every handshake
 
 Devices on older builds stop at the upgrade until updated: update them first.`}
 	fs := newFlags(s.name)

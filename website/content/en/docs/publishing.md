@@ -237,19 +237,23 @@ each time:
 juist share ~/photos/2026          # at https://laptop.example.org/RANDOM/, until Ctrl-C
 juist publish 8000 --for 2h        # this device's web server on port 8000, for two hours
 juist share -b --for 7d ~/talk.pdf # in the background, for a week
-juist share --stop                 # ends this device's share, whichever command holds it
+juist share                        # lists this device's shares, with their links
+juist share --stop ~/talk.pdf      # ends one, by its file, port or link, whichever command holds it
 ```
 
 A share is read under its random path alone; anywhere else on the name answers
-404, and entries such as `.git` stay hidden. A directory is listed, sortable
+404, unless `juist publish PORT` takes it, and entries such as `.git` stay hidden. A directory is listed, sortable
 by name, size or date, and downloads whole, or any folder in it, as a ZIP; a
 folder holding an `index.html` shows that page instead. It ends with the command or at
 `--for`, seven days at most, and where the device goes away, ten minutes
 later at most. With `--background` (`-b`), the command returns once the share
 is up, and the share goes on, under the same link even across a restart of
-juistd, until `juist share --stop` or `--for`; `juist status` shows it,
-with its link, as `Sharing`. One certificate for the device's name covers every share, so
-their paths reach no certificate log. A device shares one thing at a time.
+juistd, until `juist share --stop` or `--for`; `juist share` lists it
+with its link, and `juist status` counts it under `Sharing`. One certificate for the device's name covers every share, so
+their paths reach no certificate log. A device holds up to 16 shares at
+once, each under a path of its own, and one `juist publish PORT` beside them,
+which answers what no share's path does. `juist share --stop` without a name
+ends the only share; where several run, it says to name one.
 [Renamed]({{< relref "docs/network-changes" >}}), it shares under its new
 name, and `juist share` prints the new link.
 
@@ -413,7 +417,8 @@ prints it, and the terminator's log names it for a service member.
 | HTTP/3 slower than HTTP/2 under load | the host's UDP buffers are small: `sysctl -w net.core.rmem_max=7500000 net.core.wmem_max=7500000` on the device ending TLS |
 | `another program holds port 25565 on …, where juist would pass NAME by TCP` | the service listens on every address, the device's overlay addresses too: publish its port instead, as the hint says, and agree with `juist publish serve` |
 | on vps, `juist status`: `Ingress` says `…; another program holds port 22` | a program on the ingress, often its sshd, holds a port a name is published on by TCP, which juist then leaves to that program and to the firewall's rules: publish the name on another port with `--tcp=PORT` |
-| `this device shares already` | stop the other `juist share` or `juist publish PORT` first, in the background too: `juist share --stop` |
+| `this device publishes a port already` | another `juist publish PORT` runs, perhaps in the background: `juist share` lists it, `juist share --stop PORT` ends it |
+| `this device holds 16 shares already` | `juist share` lists them; end one with `juist share --stop` |
 | `this device is no ingress` | an admin runs `juist grant DEVICE ingress` |
 | `warning: the network has no ingress, so nothing reaches it from the internet` | grant a device with a public address the role `ingress` |
 | `warning: nothing answers on 127.0.0.1:8000 yet` | start the web server that `juist publish 8000` points at |

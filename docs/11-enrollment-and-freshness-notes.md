@@ -43,8 +43,9 @@ and against the keystore's own anchor (`networks/`: the head it last verified,
 and the admins and threshold that governed it), signs against that, and hands
 back only signed records. It signs nothing the daemon built without
 rebuilding it: a rotation record must be the one the CLI's log produces for
-the staged keys. The daemon switches to new keys, restarting the mesh, once
-the log names them — however the record arrived.
+the staged keys. The daemon switches to new keys once the log names them —
+however the record arrived: in place, or by restarting the mesh where the
+identity changed or the device runs a relay.
 
 **The inviting half runs in the daemon too.** `juist invite` asks juistd to
 offer the invite (`CmdInvite`, `internal/host`): the TCP listener, the LAN
@@ -260,8 +261,8 @@ the epoch bump and the rotated group secret. Where they are on:
 
 **Two tiers of revocation collapse into one.** The plan's emergency tier was an
 epoch bump plus a forced re-handshake. Every removal already bumps the epoch
-([08-trust-layer-notes.md](08-trust-layer-notes.md)), and a re-handshake has
-nothing to rotate until per-pair preshared keys exist, which is M15
+([08-trust-layer-notes.md](08-trust-layer-notes.md)), and since M15 the bump
+renews every pair's preshared key, which the next handshake takes up
 ([05-roadmap.md](05-roadmap.md)). `juist rotate group-secret`
 remains for a suspected leak of the group secret with no one to remove.
 

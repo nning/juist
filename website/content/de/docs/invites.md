@@ -46,9 +46,10 @@ Geräts und den Schlüssel des einladenden Admins, der das neue Gerät an dessen
 Signatur bindet. Kopiere ihn vollständig samt Anführungszeichen, denn er
 enthält Zeichen, die eine Shell sonst verändern würde.
 
-Im Terminal zeichnet `juist invite` den Link zusätzlich als QR-Code, über der
-Zeile mit `juist join`. Eine Kamera liest darin den Text des Links, ohne den
-Befehl. Geht die Ausgabe nicht in ein Terminal, fehlt der QR-Code, ebenso in
+Im Terminal zeichnet `juist invite` den Link zusätzlich als QR-Code, über
+seiner Zeile mit `juist join`. Eine Kamera liest darin den Text des Links,
+ohne den Befehl. Der Code fürs LAN steht zuletzt, damit ihn auch ein Fenster
+zeigt, das kürzer ist als der QR-Code. Geht die Ausgabe nicht in ein Terminal, fehlt der QR-Code, ebenso in
 einem Fenster, das zu schmal für ihn ist. Das sagt juist dann:
 `no qr code: the terminal is narrower than 59 columns`.
 

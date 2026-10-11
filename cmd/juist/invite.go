@@ -336,9 +336,6 @@ func (a *app) announceInvite(network, code string, link enroll.Link, port uint16
 	// Each command on a line of its own, set apart, so that a long link is
 	// easy to select whole.
 	a.printf("invite to %q%s, expires in %s; on the new device:\n\n", network, as, shortDuration(o.expires))
-	if o.lan {
-		a.printf("  %s  %s\n\n", a.bold("juist join "+code), a.dim("# same LAN"))
-	}
 	a.showQR(link.String())
 	// Quoted: a link holds brackets around IPv6 addresses, which zsh
 	// globs, and commas; pasted as printed, it must reach juist as one word.
@@ -346,9 +343,13 @@ func (a *app) announceInvite(network, code string, link enroll.Link, port uint16
 	a.printf("\n")
 	switch {
 	case len(link.Relays) > 0:
-		a.printf("%s\n", a.dim(fmt.Sprintf("meets through relay %s where this device is unreachable", link.Relays[0])))
+		a.printf("%s\n\n", a.dim(fmt.Sprintf("meets through relay %s where this device is unreachable", link.Relays[0])))
 	case len(link.Named) > 0:
-		a.printf("%s\n", a.dim(fmt.Sprintf("meets through relay %s on 443 where this device is unreachable", link.Named[0])))
+		a.printf("%s\n\n", a.dim(fmt.Sprintf("meets through relay %s on 443 where this device is unreachable", link.Named[0])))
+	}
+	// Last, so that a window shorter than the QR code still shows it.
+	if o.lan {
+		a.printf("  %s  %s\n\n", a.bold("juist join "+code), a.dim("# same LAN"))
 	}
 	if cmd := invitePortHint(port); cmd != "" {
 		a.hint("the firewall may block the device: %s", cmd)

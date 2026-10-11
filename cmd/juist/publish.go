@@ -728,7 +728,7 @@ it, and keeps where names go.`}
 	pub := cmp.Or(st.Publish, &ipc.Publish{})
 	if *stop {
 		// A terminator a share left running stops here too.
-		running := st.Terminator != nil && st.Terminator.Running && st.Share == nil
+		running := st.Terminator != nil && st.Terminator.Running && len(st.Shares) == 0
 		if !pub.Consent && !running {
 			a.ok("unchanged: not serving")
 			return nil
@@ -925,7 +925,7 @@ func (a *app) stopTerminator() error {
 		return nil
 	}
 	if n, err := a.openNode(); err == nil {
-		if st := n.status(); st != nil && st.Share != nil {
+		if st := n.status(); st != nil && len(st.Shares) > 0 {
 			return nil
 		}
 	}

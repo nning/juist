@@ -43,9 +43,10 @@ Copy it whole, with its quotes, since it contains characters a shell would
 otherwise change.
 
 In a terminal, `juist invite` also draws the link as a QR code, above the
-`juist join` line; a camera reads it as the link's text, without the
-command. The code is left out where the output is not a terminal, and in a
-window too narrow for it, which says so:
+link's `juist join` line; a camera reads it as the link's text, without the
+command. The code for the LAN comes last, so that a window shorter than the
+QR code still shows it. The QR code is left out where the output is not a
+terminal, and in a window too narrow for it, which says so:
 `no qr code: the terminal is narrower than 59 columns`.
 
 A phone joins by scanning the QR code with the

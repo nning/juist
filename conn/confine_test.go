@@ -392,11 +392,7 @@ func TestOnePeersFlowsEvictNoOthers(t *testing.T) {
 	for port := range uint16(4) {
 		c.out(parsed(udpPacket(self(42000+port), ap("100.64.0.5:53"))), nil)
 	}
-	n := 0
-	for _, fc := range c.flows {
-		n += fc.Len()
-	}
-	if n > 8 {
+	if n := c.held.Load(); n > 8 {
 		t.Errorf("%d flows held, past the bound of 8", n)
 	}
 	if got := c.in(parsed(udpPacket(quiet, self(40000))), nil); got != filter.Accept {
@@ -405,8 +401,8 @@ func TestOnePeersFlowsEvictNoOthers(t *testing.T) {
 
 	// A peer no longer confined leaves no flows behind.
 	c.set(nil, []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")})
-	if len(c.flows) != 0 {
-		t.Errorf("flows kept for %d addresses no longer confined", len(c.flows))
+	if n := len(*c.flows.Load()); n != 0 || c.held.Load() != 0 {
+		t.Errorf("flows kept for %d addresses no longer confined", n)
 	}
 }
 
@@ -493,3 +489,84 @@ func ingressAccess(tcp, udp []uint16) *Access {
 
 // serviceAccess is a service member's: replies alone.
 func serviceAccess() *Access { return &Access{Sends: []Ports{{}}} }
+
+// A peer passing nothing gets nothing through either way, replies to flows
+// this node opened and what it routes included.
+func TestAPeerPassingNothingPassesNothing(t *testing.T) {
+	c := &confiner{}
+	self := []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}
+	peer := Peer{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")},
+		Routes: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}, Access: &Access{Sends: []Ports{{}}}}
+	c.set([]Peer{peer}, self)
+	opened := tcpPacket(ap("100.64.0.1:40000"), ap("100.64.0.2:22"), tcpSyn)
+	if got := c.out(parsed(opened), nil); got != filter.Accept {
+		t.Fatalf("a flow its access passes: %v", got)
+	}
+	peer.Access = &Access{Sends: []Ports{{}}, Nothing: true}
+	c.set([]Peer{peer}, self)
+	for _, v := range []struct {
+		what string
+		in   bool
+		pkt  []byte
+	}{
+		{"the reply to a flow opened before", true, tcpPacket(ap("100.64.0.2:22"), ap("100.64.0.1:40000"), tcpSyn|tcpAck)},
+		{"more of that flow", false, tcpPacket(ap("100.64.0.1:40000"), ap("100.64.0.2:22"), tcpAck)},
+		{"a new flow", false, tcpPacket(ap("100.64.0.1:40001"), ap("100.64.0.2:22"), tcpSyn)},
+		{"what it routes", false, udpPacket(ap("100.64.0.1:40002"), ap("9.9.9.9:53"))},
+		{"an answer from what it routes", true, udpPacket(ap("9.9.9.9:53"), ap("100.64.0.1:40002"))},
+	} {
+		got := filter.Accept
+		if v.in {
+			got = c.in(parsed(v.pkt), nil)
+		} else {
+			got = c.out(parsed(v.pkt), nil)
+		}
+		if got != filter.Drop {
+			t.Errorf("%s: %v", v.what, got)
+		}
+	}
+}
+
+// Packets of many flows at once, while the policy changes, keep the
+// confiner's count of flows to what it holds.
+func TestTheConfinerTakesPacketsAtOnce(t *testing.T) {
+	c := &confiner{maxFlows: 64, maxFlowsPerAddr: 16}
+	peers := []Peer{
+		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.2/32")}, Access: serviceAccess()},
+		{Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.3/32")}, Access: serviceAccess()},
+	}
+	self := []netip.Prefix{netip.MustParsePrefix("100.64.0.1/32")}
+	c.set(peers, self)
+	var wg sync.WaitGroup
+	for g := range 8 {
+		wg.Go(func() {
+			for i := range 2000 {
+				port := uint16(40000 + g*1000 + i%500)
+				me := netip.AddrPortFrom(netip.MustParseAddr("100.64.0.1"), port)
+				peer := ap("100.64.0.2:53")
+				if i%2 == 1 {
+					peer = ap("100.64.0.3:53")
+				}
+				c.out(parsed(udpPacket(me, peer)), nil)
+				c.in(parsed(udpPacket(peer, me)), nil)
+				c.out(parsed(tcpPacket(me, peer, tcpSyn)), nil)
+				c.in(parsed(tcpPacket(peer, me, tcpAck)), nil)
+				c.out(parsed(tcpPacket(me, peer, 0x04)), nil)
+			}
+		})
+	}
+	wg.Go(func() {
+		for i := range 200 {
+			c.set(peers[:1+i%2], self)
+		}
+	})
+	wg.Wait()
+	c.set(peers, self)
+	n := 0
+	for _, fs := range *c.flows.Load() {
+		n += len(fs.flows)
+	}
+	if held := c.held.Load(); held != int64(n) || n > 64 {
+		t.Errorf("the confiner counts %d flows and holds %d, of at most 64", held, n)
+	}
+}

@@ -119,14 +119,26 @@ kann, warum juist das hinnimmt und was du dagegen tun kannst. Kurz gefasst:
 
 ## Quantencomputer
 
-Ein künftiger Quantencomputer könnte heute übliche Verschlüsselung brechen.
-Die Gruppengeheimnisse des Netzes sind dagegen geschützt, weil sie X25519 mit
-ML-KEM-768 kombinieren. Für WireGuard-Verkehr gilt das nicht. Signaturen
-verwenden Ed25519.
+Ein künftiger Quantencomputer könnte heute übliche Verschlüsselung brechen,
+und heute mitgeschnittener Verkehr ließe sich dann entschlüsseln. juist
+schützt davor:
 
-Verkehr, der heute mitgeschnitten wird, könnte also eines Tages entschlüsselt
-werden. Für Verkehr, der jahrzehntelang geheim bleiben muss, solltest du dich
-nicht auf juist verlassen.
+- Jeder WireGuard-Handshake mischt einen Preshared Key ein. Zwei Geräte nutzen
+  zuerst einen aus dem Gruppengeheimnis des Netzes, nach einem Log-Abgleich
+  dann einen, den nur die beiden haben: Jedes kapselt ein Geheimnis an den
+  ML-KEM-768-Schlüssel des anderen. Er erneuert sich mit jeder Änderung der
+  Mitglieder.
+- Gruppengeheimnisse sind mit X25519 und ML-KEM-768 zusammen versiegelt.
+- Signaturen verwenden Ed25519. Fälschen könnte sie ein Quantencomputer erst,
+  wenn es ihn gibt; heute mitzuschneiden bringt dabei nichts.
+
+`juist status` sagt, wie viele Tunnel quantensicher sind und mit welchem
+Schlüssel. Ein Gerät mit einer älteren Version, oder eines, das das Netz noch
+nicht eingeholt hat, bekommt einen Tunnel ohne Preshared Key, und juist lässt
+nur seinen eigenen Verkehr durch, den es selbst versiegelt, bis das Gerät
+einen ankündigt. Ein Netz, das mit einer älteren Version angelegt wurde,
+bekommt quantensichere Tunnel, sobald jedes Gerät diese Version nutzt und
+`juist log upgrade` es auf Schema 14 hebt.
 
 ## Gut zu wissen
 

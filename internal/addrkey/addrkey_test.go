@@ -83,6 +83,20 @@ func TestAPeerAloneOpensTheAddresses(t *testing.T) {
 	if _, err := Open(Key{1}, sealed); err == nil {
 		t.Error("another key opens the addresses")
 	}
+
+	// Under the pair's preshared key, the wrap opens with that key alone:
+	// the X25519 keys the log holds no longer suffice.
+	psk := [32]byte{5}
+	pq := Wrap(WithPSK(ownerSide, psk), owner.id, k)
+	if got, ok := Unwrap(WithPSK(peerSide, psk), owner.id, k.ID(), pq); !ok || got != k {
+		t.Error("the peer does not unwrap under the pair's preshared key")
+	}
+	if _, ok := Unwrap(peerSide, owner.id, k.ID(), pq); ok {
+		t.Error("the X25519 pair key alone unwraps a wrap under the preshared key")
+	}
+	if _, ok := Unwrap(WithPSK(peerSide, [32]byte{6}), owner.id, k.ID(), pq); ok {
+		t.Error("another preshared key unwraps it")
+	}
 }
 
 // The key follows the epoch and the peer set, so a peer gone or a removal

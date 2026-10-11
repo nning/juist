@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/nning/juist/internal/webstyle"
@@ -28,29 +29,30 @@ import (
 const maxShare = 7 * 24 * time.Hour
 
 func cmdShare(a *app, args []string) error {
-	s := spec{name: "juist share", args: "FILE|DIR | --stop", min: 1, max: 1, about: `
+	s := spec{name: "juist share", args: "[FILE|DIR] | --stop [FILE|DIR|PORT|URL]", max: 1, about: `
 Share FILE or DIR read-only from the internet, under this device's own name
-and a random path, until Ctrl-C or for --for; nothing else is reached
-there. A directory is listed, and downloads whole as a ZIP. With
---background, it shares on until juist share --stop or --for. The device
-needs the publish role.`}
+and a random path, until Ctrl-C or --for; with --background, until juist
+share --stop. A directory is listed, and downloads whole as a ZIP. Without
+FILE or DIR, it lists this device's shares, juist publish PORT's too. The
+device needs the publish role.`}
 	fs := newFlags(s.name)
 	var dur longDuration
 	fs.Var(&dur, "for", "share for `DURATION`, like 2h or 7d")
 	bg := fs.Bool("background", false, "share in the background")
-	stop := fs.Bool("stop", false, "stop this device's share, juist publish PORT's too")
-	if slices.ContainsFunc(args, func(w string) bool { return w == "--stop" || w == "-stop" || w == "-S" }) {
-		s.min = 0
-	}
+	stop := fs.Bool("stop", false, "stop a share, the only one where none is named")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
 	}
-	if *stop {
-		if len(pos) > 0 || *bg || dur != 0 {
-			return fmt.Errorf("--stop takes nothing else\n%s", s.usage(fs))
-		}
-		return a.stopShare()
+	switch {
+	case *stop && (*bg || dur != 0):
+		return fmt.Errorf("--stop takes nothing else\n%s", s.usage(fs))
+	case *stop:
+		return a.stopShare(strings.Join(pos, ""))
+	case len(pos) == 0 && (*bg || dur != 0):
+		return fmt.Errorf("--for and --background take FILE or DIR\n%s", s.usage(fs))
+	case len(pos) == 0:
+		return a.listShares()
 	}
 	if time.Duration(dur) < 0 || time.Duration(dur) > maxShare {
 		return errors.New("--for must be between 1s and 7d")
@@ -213,6 +215,8 @@ func (a *app) shareLocal(req ipc.ShareRequest, dur time.Duration, background boo
 		return fmt.Errorf("%v\nhint: an admin grants it: juist grant %s publish", err, self)
 	case err != nil && err.Error() == errNoDomain:
 		return fmt.Errorf("%v\nhint: juist network domain pub.example.org", err)
+	case err != nil && (err.Error() == errPortShared || err.Error() == errTooManyShares):
+		return fmt.Errorf("%v\nhint: juist share lists them", err)
 	case err != nil && a.ctx.Err() != nil && !said:
 		return nil // stopped before it started
 	case err != nil && a.ctx.Err() == nil && said:
@@ -236,33 +240,125 @@ var (
 // asking again does not change.
 func juistdRefused(err error) bool {
 	switch err.Error() {
-	case errNoPublishRole, errNoDomain, errSharing:
+	case errNoPublishRole, errNoDomain, errPortShared, errPathShared, errTooManyShares:
 		return true
 	}
 	return false
 }
 
-// stopShare ends this device's share, whichever command holds it.
-func (a *app) stopShare() error {
+// shares is this device's shares, in the order they started.
+func (a *app) shares() (node, []ipc.Share, error) {
 	if _, err := a.daemonStatus(); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if err := a.requireOperator(); err != nil {
-		return err
+		return nil, nil, err
 	}
 	n, err := a.openNode()
 	if err != nil {
+		return nil, nil, err
+	}
+	st, err := n.restatus()
+	if err != nil {
+		return nil, nil, err
+	}
+	return n, st.Shares, nil
+}
+
+// listShares is "juist share": what this device shares, where and until when.
+func (a *app) listShares() error {
+	_, shs, err := a.shares()
+	if err != nil {
 		return err
 	}
-	if _, err := ipc.Call(n.socket(), ipc.Request{Command: ipc.CmdUnshare}); err != nil {
-		if err.Error() == errNotSharing {
-			a.ok("unchanged: not sharing")
-			return nil
+	if len(shs) == 0 {
+		a.ok("not sharing")
+		return nil
+	}
+	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "WHAT\tURL\tUNTIL")
+	for _, sh := range shs {
+		link := "-"
+		if sh.Name != "" {
+			link = "https://" + sh.Name + sh.Path
 		}
+		end := "stopped"
+		if sh.Until != 0 {
+			end = time.Unix(sh.Until, 0).Format("Jan 2 15:04")
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", sharedWhat(sh), link, end)
+	}
+	if err := tw.Flush(); err != nil {
 		return err
 	}
-	a.ok("stopped sharing")
+	if why := shs[0].NotShared; why != "" {
+		a.warn("reached by nobody: %s", why)
+	}
 	return nil
+}
+
+// stopShare ends the share arg names, as juist share lists it, whichever
+// command holds it; the only one where arg is empty.
+func (a *app) stopShare(arg string) error {
+	n, shs, err := a.shares()
+	if err != nil {
+		return err
+	}
+	var stop []ipc.Share
+	for _, sh := range shs {
+		if arg == "" || namesShare(arg, sh) {
+			stop = append(stop, sh)
+		}
+	}
+	switch {
+	case len(shs) == 0:
+		a.ok("unchanged: not sharing")
+		return nil
+	case arg == "" && len(stop) > 1:
+		return fmt.Errorf("this device holds %d shares\nhint: name one as juist share lists it: juist share --stop FILE|DIR|PORT|URL",
+			len(stop))
+	case len(stop) == 0:
+		return fmt.Errorf("%s is not shared\nhint: juist share lists what is", arg)
+	}
+	for _, sh := range stop {
+		_, err := ipc.Call(n.socket(), ipc.Request{Command: ipc.CmdUnshare, Share: &ipc.ShareRequest{Path: sh.Path}})
+		switch {
+		case err != nil && err.Error() == errNotSharing:
+			a.ok("unchanged: not sharing %s", sharedWhat(sh))
+		case err != nil:
+			return err
+		default:
+			a.ok("stopped sharing %s", sharedWhat(sh))
+		}
+	}
+	return nil
+}
+
+// sharedWhat is what sh shares: a file or directory, or a server's address.
+func sharedWhat(sh ipc.Share) string { return cmp.Or(sh.What, sh.To) }
+
+// namesShare reports whether arg names sh: its file or directory, the port
+// juist publish PORT published, or a link into it.
+func namesShare(arg string, sh ipc.Share) bool {
+	if u, err := url.Parse(arg); err == nil && u.Scheme == "https" {
+		if !strings.EqualFold(strings.TrimSuffix(u.Hostname(), "."), sh.Name) {
+			return false
+		}
+		if sh.Path == "" {
+			return u.Path == "" || u.Path == "/"
+		}
+		return ipc.SharePrefix(u.Path) == ipc.SharePrefix(sh.Path)
+	}
+	if sh.Path == "" {
+		_, port, err := net.SplitHostPort(sh.To)
+		return err == nil && port == arg
+	}
+	abs, err := filepath.Abs(arg)
+	if err != nil {
+		return false
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	return abs == sh.What || err == nil && real == sh.What
 }
 
 // terminatorDown reports whether no terminator runs, as st says.
@@ -298,7 +394,9 @@ const sharePort = 443
 const (
 	errNoPublishRole     = "this device holds no publish role"
 	errNoDomain          = "the network has no domain to publish under"
-	errSharing           = "this device shares already"
+	errPortShared        = "this device publishes a port already"
+	errPathShared        = "this device shares under this path already"
+	errTooManyShares     = "this device holds 16 shares already"
 	errNotSharing        = "this device shares nothing"
 	terminatorNotRunning = "the terminator does not run"
 )
@@ -422,8 +520,11 @@ func (d dotless) Open(name string) (fs.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if dir, ok := f.(fs.ReadDirFile); ok {
-		return dotlessDir{dir}, nil
+	// Every *os.File is a ReadDirFile; wrapping a plain file would hide its Seek.
+	if info, err := f.Stat(); err == nil && info.IsDir() {
+		if dir, ok := f.(fs.ReadDirFile); ok {
+			return dotlessDir{dir}, nil
+		}
 	}
 	return f, nil
 }
@@ -435,25 +536,15 @@ func (d dotlessDir) ReadDir(n int) ([]fs.DirEntry, error) {
 	return slices.DeleteFunc(entries, func(e fs.DirEntry) bool { return strings.HasPrefix(e.Name(), ".") }), err
 }
 
-// shareSummary is the status line of what this device publishes under its
-// own name; paint colours one that reaches nobody.
-func shareSummary(sh *ipc.Share, paint func(code, s string) string) string {
-	if sh == nil {
+// shareSummary is how many shares this device holds, and why they reach
+// nobody, if they do; juist share lists them.
+func shareSummary(shs []ipc.Share, paint func(code, s string) string) string {
+	if len(shs) == 0 {
 		return ""
 	}
-	end := "until stopped"
-	if sh.Until != 0 {
-		end = "until " + time.Unix(sh.Until, 0).Format("Jan 2 15:04")
-	}
-	line := fmt.Sprintf("%s to %s, %s", cmp.Or(sh.Name, "this device's name"), sh.To, end)
-	switch {
-	case sh.What != "" && sh.Name != "":
-		line = fmt.Sprintf("%s at https://%s%s, %s", sh.What, sh.Name, sh.Path, end)
-	case sh.What != "":
-		line = fmt.Sprintf("%s, %s", sh.What, end)
-	}
-	if sh.NotShared != "" {
-		return paint("33", line+", reached by nobody: "+sh.NotShared)
+	line := count(len(shs), "share")
+	if why := shs[0].NotShared; why != "" {
+		return paint("33", line+", reached by nobody: "+why)
 	}
 	return line
 }

@@ -56,7 +56,7 @@ func (d *Daemon) namesAddrNow() (netip.AddrPort, error) {
 			})
 		}
 	}
-	if at, ok := namesAddrOf(d.startAddrs, held); ok {
+	if at, ok := namesAddrOf(d.heldAddrs(), held); ok {
 		return at, nil
 	}
 	return netip.AddrPort{}, errors.New("juist's device holds no overlay address yet")

@@ -65,6 +65,14 @@ func TestLinuxAndFreeBSD(t *testing.T) {
 	fb.put(t, pkg, "/tmp/juist.pkg", 0o644)
 	fb.put(t, filepath.Join(work, "probe-freebsd"), "/tmp/probe", 0o755)
 	lx.put(t, deb, "/tmp/juist.deb", 0o644)
+	// Debian starts on the previous release, where the lab has it, and is
+	// upgraded in "previous release".
+	previous := os.Getenv("JUIST_INTEROP_PREVIOUS_DEB")
+	first := "/tmp/juist.deb"
+	if previous != "" {
+		lx.put(t, previous, "/tmp/juist-previous.deb", 0o644)
+		first = "/tmp/juist-previous.deb"
+	}
 	lx.put(t, filepath.Join(work, "probe-linux"), "/tmp/probe", 0o755)
 	both(t, vms, func(v *vm) error {
 		script := `set -e
@@ -89,7 +97,7 @@ dev=$(ip -br link | awk '$3 == "52:54:00:77:00:03" {print $1}')
 ip link set $dev up; ip addr add 10.77.0.3/24 dev $dev
 # conntrack follows connections from the start, as beside firewalld or Docker
 iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-dpkg -i /tmp/juist.deb >/dev/null
+dpkg -i ` + first + ` >/dev/null
 systemctl is-active juistd >/dev/null
 ip netns add tgt; ip link add vt0 type veth peer name vt1 netns tgt
 ip addr add 10.99.2.1/30 dev vt0; ip addr add 192.168.72.1/24 dev vt0; ip link set vt0 up
@@ -114,6 +122,14 @@ setsid -f /tmp/probe serve lx-host >/dev/null 2>&1 < /dev/null`
 zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; cmp /tmp/a /tmp/b`)
 	})
 
+	if previous != "" {
+		t.Run("previous release", func(t *testing.T) {
+			previousRelease(t, fb, lx)
+		})
+	} else {
+		t.Log("JUIST_INTEROP_PREVIOUS_DEB is unset, so no device runs the previous release")
+	}
+
 	t.Log("joining")
 	fb.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
 	lx.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
@@ -135,6 +151,9 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 		lx.eventually(t, "reaching fb over IPv6", time.Minute, "ping -c1 -W2 "+fb6, ok)
 		fb.eventually(t, "reaching lx over IPv4", time.Minute, "ping -c1 -t2 "+lx4, ok)
 		fb.eventually(t, "reaching lx over IPv6", time.Minute, "timeout 5 ping6 -c1 "+lx6, ok)
+	})
+	t.Run("post-quantum", func(t *testing.T) {
+		postQuantum(t, fb, lx, fb4, lx4)
 	})
 	t.Run("FreeBSD serves Linux", func(t *testing.T) {
 		serve(t, fb, fb, lx, fbSide, lxSide, fb4, fb6)
@@ -442,12 +461,15 @@ func hold(t *testing.T, vms ...*vm) {
 
 // invite has inviter invite a device and joiner run join, a command with %s
 // for the link, until the invite ends.
-func invite(t *testing.T, inviter, joiner *vm, join string) {
+func invite(t *testing.T, inviter, joiner *vm, join string) { inviteAs(t, inviter, joiner, "", join) }
+
+// inviteAs is invite with env before the inviter's command.
+func inviteAs(t *testing.T, inviter, joiner *vm, env, join string) {
 	t.Helper()
 	link := make(chan string, 1)
 	invited := make(chan error, 1)
 	go func() {
-		cmd := exec.Command("ssh", inviter.sshArgs("juist invite --yes --no-dht --expires 15m")...)
+		cmd := exec.Command("ssh", inviter.sshArgs(env+"juist invite --yes --no-dht --expires 15m")...)
 		stdout, _ := cmd.StdoutPipe()
 		cmd.Stderr = cmd.Stdout
 		if err := cmd.Start(); err != nil {

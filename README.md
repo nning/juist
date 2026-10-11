@@ -19,7 +19,9 @@ checks that log for itself.
   in 48 h keeps tunnels only to vouchers, so it cannot carry a removed device
   along indefinitely.
 
-![A laptop on Debian creates a network and invites a NAS on FreeBSD, which joins and pings it](website/static/demo.gif)
+![A laptop on Debian creates a network and invites a NAS on FreeBSD, which joins, pings it and reaches it directly](website/static/demo.gif)
+
+[Watch the tour](https://docs.juist.nning.io/en/#tour): a network made, a device invited and a phone joining, in under a minute.
 
 juist runs on Linux and FreeBSD, and an app makes an Android phone a member.
 
@@ -96,7 +98,7 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | say which device may open what on which, and use which exit node or subnet | `juist policy edit`, or `juist policy set policy.conf` | [access policy](https://docs.juist.nning.io/en/docs/access/) |
 | publish a service on the internet, or share a file | `juist publish add immich 127.0.0.1:2283`, `juist share ~/photos` | [publishing](https://docs.juist.nning.io/en/docs/publishing/) |
 | rename or renumber the network, or rename a device | `juist network rename office`, `juist network renumber 10.7.0.0/22`, `juist rename phone tablet` | [changes](https://docs.juist.nning.io/en/docs/network-changes/) |
-| see every change, and who approved it | `juist log` | [admins](https://docs.juist.nning.io/en/docs/admins/) |
+| see every change, who approved it, and what it did | `juist log`, `juist log show 3` | [admins](https://docs.juist.nning.io/en/docs/admins/) |
 | manage this device without sudo from now on | `sudo juist set --operator=$USER` | [operator](https://docs.juist.nning.io/en/docs/operator/) |
 | give this device new keys | `juist rotate` | [keys](https://docs.juist.nning.io/en/docs/keys/) |
 | back an admin key up in a password manager | `juist admins export alice@home \| pass insert -m juist/alice` | [keys](https://docs.juist.nning.io/en/docs/keys/) |
@@ -120,6 +122,7 @@ juist grant vps ingress                 # then juist ingress serve, on the vps
 juist publish add immich 127.0.0.1:2283 # on the nas: https://immich.pub.example.org
 juist publish add nas mc 25565 --tcp    # a service without TLS on a port of its own: mc.pub.example.org:25565
 juist share ~/photos/2026               # with the publish role: a directory under this device's name
+juist share                             # what this device shares, and where
 ```
 
 Each step names the next and the device it is run on.
@@ -204,8 +207,9 @@ message means and what to do.
   only, and a link is a 128-bit secret.
 - **Revocation** is eventually consistent; the freshness TTL (48 h) bounds how
   long a partitioned device can keep a removed peer.
-- **Post-quantum:** group secrets are hybrid X25519 + ML-KEM-768. WireGuard
-  traffic is not hedged yet. Signatures are Ed25519.
+- **Post-quantum:** every WireGuard handshake mixes in a preshared key, one
+  each two devices exchange by ML-KEM-768; group secrets are hybrid
+  X25519 + ML-KEM-768. Signatures are Ed25519.
 
 [Security](https://docs.juist.nning.io/en/docs/security/) explains it, and
 [02-threat-model.md](docs/02-threat-model.md) lists every residual weakness.
@@ -213,16 +217,32 @@ Report a vulnerability privately, as [SECURITY.md](SECURITY.md) says.
 
 ## Status
 
-Milestones up to **M9**, publishing, of [05-roadmap.md](docs/05-roadmap.md)
-are done: the signed log with quorum, WireGuard with NAT traversal and member
-relays, invites, several networks, exit nodes, subnet routers, names,
-publishing, and Debian, Fedora and FreeBSD packages; **M11**, TCP
-services and HTTP/3 through the ingress; **M12**, ending a network with a
-break-glass secret and backing admin keys up; **M13**, reaching the
-network from one that passes HTTPS alone; and **M14**, an access policy
-saying which device may open what on which.
+juist is usable on Linux and FreeBSD, but it is not v1 yet and has not had
+a security audit.
 
-Not yet: the post-quantum data plane.
+What works:
+
+- a network whose members are a log your admins sign, a quorum of them for
+  each change
+- WireGuard tunnels through NAT, and a relay on one of your own devices where
+  that fails
+- invites by a code on the LAN or a link from anywhere
+- several networks on one device
+- exit nodes and subnet routers
+- names for devices, and services published to the internet, over HTTPS,
+  HTTP/3 or plain TCP
+- a way in from networks that let nothing but HTTPS out
+- an access policy: which device may reach what on which
+- ending a network with a break-glass secret, and a backup of admin keys
+- a post-quantum preshared key in every WireGuard handshake, so that traffic
+  recorded now cannot be decrypted later
+- connections that stay up while a device's keys, addresses or routes change
+- packages for Debian, Ubuntu, Fedora and FreeBSD
+
+Still open before v1, as [05-roadmap.md](docs/05-roadmap.md) plans it:
+
+- the Android app, which joins and reaches the network but is not finished
+- the external security audit
 
 ## Development
 
@@ -230,7 +250,7 @@ Go 1.27; `make` fetches and uses go1.27.2, so that a commit builds to the
 same bytes anywhere, and lists the targets.
 
 ```sh
-make check                      # what CI gates on: lint, tidy, race tests, TCB budget
+make check                      # what CI gates on: lint, tidy, race tests, TCB and audit budgets
 sudo -E make test-os-plumbing   # real TUN devices, namespaces, the NAT matrix (root)
 make build cross deb rpm        # binaries, all platforms, packages
 ```

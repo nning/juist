@@ -191,7 +191,8 @@ change touches.
   only signs.
 - Run admin commands as yourself, without sudo: the keys are in your
   keystore.
-- `juist log` shows every change and who approved it.
+- `juist log` shows every change and who approved it, `juist log show 3`
+  what change 3 did.
 - The [access policy]({{< relref "docs/access" >}}) is changed the same way.
   `juist approve policy.rec` shows the change as a diff against the current
   policy.
@@ -199,7 +200,8 @@ change touches.
   `the network is at schema 9, this version at schema 10` when this version
   adds to the network's log. Once every device runs it, run
   `juist log upgrade`. Devices on older versions stop applying changes at
-  the upgrade until they are updated.
+  the upgrade until they are updated; from schema 14 on, their tunnels also
+  carry nothing but juist's own traffic, as they are not post-quantum.
 
 {{< note danger >}}
 Losing every key of the admins a change needs locks the network for good.

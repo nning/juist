@@ -264,8 +264,8 @@ A node's recipient key is recorded as **two fields** (`X25519`, `MLKEM`) rather
 than one opaque hybrid blob, so each half is validated as the key it is, and so
 the ML-KEM half is a first-class field for the per-pair preshared-key hedge
 of M15 ([05-roadmap.md](05-roadmap.md)). Domain separation
-between the two uses comes from HPKE's own suite labelling and from a distinct
-HKDF label on the reserved side.
+between the two uses comes from HPKE's own suite labelling and from the pair
+key's own HKDF label.
 
 Each epoch's secret is **fresh randomness, not a derivation from the last**, so
 producing a bump never requires reading the previous secret. An admin can rekey
@@ -407,7 +407,7 @@ extension bucket and no ignorable-unknown-field path** — either would reintrod
 the split view by letting two builds act on different subsets of the same
 record.
 
-What is still open, and belongs with M18's packaging: the
+What is still open, and belongs with M19's packaging: the
 gossip hello does not carry the versions a node supports, `juist status` cannot
 say which members would be stranded, and nothing stops an admin authoring an
 upgrade before the network is ready for it. Until those exist, raising the
@@ -491,7 +491,7 @@ carries the rest. The same reasoning has not been carried through
 `Have`, the peer re-offers records it already holds, and the two make no
 progress. That is unreachable until a network has authored 4096 records without
 a checkpoint, and closing it is part of deciding **when compaction runs without
-an admin asking** — undecided, and the decision this binds; M16 makes it.
+an admin asking** — undecided, and the decision this binds; M17 makes it.
 
 ## Storage
 
@@ -716,8 +716,9 @@ no default route, are held to the overlap rule by the validator itself.
 - `TestTCBDependencies` keeps the audit scope's dependency closure to the
   standard library plus two small modules, and keeps the clock and the
   filesystem out of the packages that decide validity.
-- `make tcb` reports the audit scope's size against the 10k-line budget
-  [06-verification.md](06-verification.md) §6 sets. It is ~8 k lines.
+- `make tcb` holds the core to the 10k-line budget
+  [06-verification.md](06-verification.md) §6 sets, and reports the whole audit
+  scope's size beside it.
 
 - Fork-choice tests that need one record to beat another on the hash tiebreak must
   redraw *both* sides each attempt, or assign the roles after drawing. Redrawing

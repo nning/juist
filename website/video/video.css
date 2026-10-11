@@ -1,0 +1,47 @@
+@font-face { font-family: "Plex Sans"; src: url("fonts/ibm-plex-sans-var-latin1.woff2") format("woff2"); font-weight: 100 700; }
+@font-face { font-family: "Plex Mono"; src: url("fonts/ibm-plex-mono-var-latin1.woff2") format("woff2"); font-weight: 100 700; }
+@font-face { font-family: "Plex Mono"; src: url("fonts/ibm-plex-mono-var-latin2.woff2") format("woff2"); font-weight: 100 700; unicode-range: U+0100-024F, U+2000-27FF; }
+
+:root {
+  --bg: #0a1317; --panel: #102127; --panel-2: #142a31; --line: #1d363e; --muted: #7d9192;
+  --text: #e4dccb; --text-2: #a9b8b4; --accent: #46d1bf; --sand: #e8c98e; --red: #f0644f;
+  --code-bg: #071014; --code-text: #d5dfdb;
+}
+
+html, body { margin: 0; background: var(--bg); overflow: hidden; }
+#stage { position: relative; width: 1920px; height: 1080px; background: var(--bg); color: var(--text); font-family: "Plex Sans", sans-serif; }
+.scene { position: absolute; inset: 0; opacity: 0; }
+
+#caption { position: absolute; left: 0; right: 0; top: 56px; text-align: center; }
+#caption h1 { margin: 0; font-size: 60px; font-weight: 600; letter-spacing: -0.01em; }
+#caption p { margin: 14px 0 0; font-size: 32px; color: var(--text-2); }
+
+#term { display: flex; gap: 32px; justify-content: center; align-items: flex-start; padding-top: 236px; box-sizing: border-box; }
+.win { background: var(--code-bg); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45); }
+.bar { height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 18px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar i { width: 13px; height: 13px; border-radius: 50%; background: var(--line); }
+.bar span { margin-left: 14px; font: 500 20px "Plex Mono", monospace; color: var(--text-2); }
+.screen { padding: 18px 20px; font: 18px/27px "Plex Mono", monospace; color: var(--code-text); white-space: pre; }
+.screen div { height: 27px; }
+.screen .b1 { font-weight: 600; color: #fff; }
+.screen .b2 { color: var(--muted); }
+.screen .b4 { background: var(--code-text); color: var(--code-bg); }
+.screen .q { display: inline-block; width: 1ch; height: 27px; vertical-align: top; }
+.screen .qt { background: linear-gradient(var(--code-text) 50%, transparent 50%); }
+.screen .qb { background: linear-gradient(transparent 50%, var(--code-text) 50%); }
+.screen .qf { background: var(--code-text); }
+.screen .hl { color: var(--bg); background: var(--accent); border-radius: 4px; box-shadow: 0 0 0 4px var(--accent), 0 0 32px 8px rgba(70, 209, 191, 0.55); }
+.screen .p { color: var(--accent); font-weight: 600; }
+
+#phone { display: flex; justify-content: center; align-items: flex-start; padding-top: 214px; box-sizing: border-box; }
+.device { padding: 14px; background: #1a2c33; border-radius: 58px; box-shadow: 0 0 0 2px #2b4a52, 0 30px 80px rgba(0, 0, 0, 0.55); }
+.glass { position: relative; width: 367px; height: 816px; border-radius: 44px; overflow: hidden; background: var(--bg); }
+.glass img { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+.glass .tap { position: absolute; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%; background: rgba(228, 220, 203, 0.55); opacity: 0; }
+
+#outro { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+#outro .mark svg { display: block; width: 620px; color: var(--text); overflow: visible; }
+#outro .tag { margin: 48px 0 0; font-size: 40px; color: var(--text); }
+#outro .url { margin: 28px 0 0; font: 500 32px "Plex Mono", monospace; color: var(--accent); }
+
+#intro text { font-family: "Plex Mono", monospace; }

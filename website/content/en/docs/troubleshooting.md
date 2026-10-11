@@ -13,7 +13,7 @@ Run this on the device that has the problem:
 juist status
 ```
 
-Warnings start with `warning:` and come below the device table. Each is
+Warnings start with `warning:` and come below the details. Each is
 followed by a `hint:` line with the command to run. Any local user may run
 `juist status`; see [Status and devices]({{< relref "docs/status" >}}) for what
 each line means.
@@ -149,6 +149,24 @@ vouchers only of devices that are always on, with a spare. See
 
 Fewer vouchers than needed have vouched for a day. In the time shown, this
 device becomes `limited` as above. Bring a voucher back online before then.
+
+### `warning: not post-quantum, so juist's own traffic alone: nas, …`
+
+nas announces no preshared key: it runs an older version of juist, or has
+not yet caught up with the network. Until it does, its tunnel carries only
+juist's own traffic, which seals itself, so the network's state reaches it.
+Update juist on nas.
+
+### `warning: no preshared key in common with nas, …`
+
+nas is behind by more changes than this device keeps the keys of, and the
+two never had a key of their own. It catches up from a device that kept them,
+usually one that was away as long; otherwise join it again with a new invite.
+
+### `Post-quantum  no, the network predates it`
+
+The network was created with an older version of juist. Once every device
+runs this one, an admin raises it with `juist log upgrade`.
 
 ### `removed`
 

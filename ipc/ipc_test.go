@@ -101,7 +101,7 @@ func TestRepliesArePrintableText(t *testing.T) {
 		Status: &Status{
 			Derived: Derived{Alarm: "\x1b[2Jcleared", NetworkName: "home\u202egnp.exe",
 				Devices: []Device{{Name: "b\x1b[0m", V4: "\u202e1"}},
-				Share:   &Share{What: "/home/a\x1b[2J", Path: "/t/\u202eb"}},
+				Shares:  []Share{{To: "x", What: "/home/b"}, {What: "/home/a\x1b[2J", Path: "/t/\u202eb"}}},
 			Tunnels: Tunnels{HomeRelay: "\x1b[1mvps", TunnelsDown: []string{"a\x07"}}}}, MaxResponse)
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestRepliesArePrintableText(t *testing.T) {
 	}
 	r.makePrintable()
 	for _, s := range []string{r.Err, r.Status.Alarm, r.Status.NetworkName, r.Status.HomeRelay,
-		r.Status.TunnelsDown[0], r.Status.Devices[0].Name, r.Status.Devices[0].V4, r.Status.Share.What, r.Status.Share.Path} {
+		r.Status.TunnelsDown[0], r.Status.Devices[0].Name, r.Status.Devices[0].V4, r.Status.Shares[1].What, r.Status.Shares[1].Path} {
 		if strings.ContainsAny(s, "\x1b\x07\u202e") {
 			t.Errorf("%q reached the CLI", s)
 		}
@@ -122,8 +122,9 @@ func TestRepliesArePrintableText(t *testing.T) {
 	}
 }
 
-// A share's URL path is absolute, and neither it nor what is shared is
-// longer than a path may be.
+// A share's URL path is absolute under a segment of its own, which the
+// terminator sends it by, and neither it nor what is shared is longer than a
+// path may be.
 func TestAShareRequestIsBounded(t *testing.T) {
 	long := "/" + strings.Repeat("a", maxSharePath)
 	for _, tc := range []struct {
@@ -135,9 +136,35 @@ func TestAShareRequestIsBounded(t *testing.T) {
 		{ShareRequest{To: "127.0.0.1:8000", Path: "tok/x"}, false},
 		{ShareRequest{To: "127.0.0.1:8000", Path: long}, false},
 		{ShareRequest{To: "127.0.0.1:8000", What: long}, false},
+		{ShareRequest{To: "127.0.0.1:8000", Path: "/tok/"}, true},
+		{ShareRequest{To: "127.0.0.1:8000", Path: "/tok"}, false},
+		{ShareRequest{To: "127.0.0.1:8000", Path: "//x"}, false},
+		{ShareRequest{To: "127.0.0.1:8000", Path: "/"}, false},
 	} {
 		if got := tc.req.Valid(); got != tc.want {
 			t.Errorf("%+v valid: %v, want %v", tc.req, got, tc.want)
+		}
+	}
+	for path, want := range map[string]string{"/tok/x%20y": "/tok/", "/tok/": "/tok/", "/tok": "", "": "", "//x": ""} {
+		if got := SharePrefix(path); got != want {
+			t.Errorf("%q is shared under %q, want %q", path, got, want)
+		}
+	}
+}
+
+// An unshare request names a share by its path alone, or none for every one.
+func TestAnUnshareRequestNamesAShareByItsPath(t *testing.T) {
+	for _, tc := range []struct {
+		share *ShareRequest
+		want  bool
+	}{
+		{nil, true}, {&ShareRequest{}, true}, {&ShareRequest{Path: "/tok/x"}, true},
+		{&ShareRequest{To: "127.0.0.1:8000"}, false}, {&ShareRequest{Path: "/tok/", What: "/srv"}, false},
+		{&ShareRequest{Until: 1}, false},
+	} {
+		req := Request{Command: CmdUnshare, Share: tc.share}
+		if err := req.validate(); (err == nil) != tc.want {
+			t.Errorf("%+v: %v, want valid %v", tc.share, err, tc.want)
 		}
 	}
 }

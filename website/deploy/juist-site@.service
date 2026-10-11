@@ -1,10 +1,11 @@
 [Unit]
-Description=juist website on 127.0.0.1:8181
+Description=juist website %i
 After=network.target
-ConditionPathExists=/var/lib/juist-site/current/server
+ConditionPathExists=/var/lib/juist-site/%i/current/server
 
 [Service]
-ExecStart=/var/lib/juist-site/current/server -root /var/lib/juist-site/current/site -addr 127.0.0.1:8181
+EnvironmentFile=/etc/juist-site/%i
+ExecStart=/var/lib/juist-site/%i/current/server -root /var/lib/juist-site/%i/current/site -addr ${ADDR} $FLAGS
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=yes

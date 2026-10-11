@@ -258,11 +258,13 @@ Ein Gerät, dem ein Admin die Rolle `publish` gegeben hat
 juist share ~/photos/2026          # unter https://laptop.example.org/ZUFALL/, bis Strg-C
 juist publish 8000 --for 2h        # den Webserver dieses Geräts auf Port 8000, zwei Stunden lang
 juist share -b --for 7d ~/talk.pdf # im Hintergrund, eine Woche lang
-juist share --stop                 # beendet die Freigabe dieses Geräts, egal welcher Befehl sie hält
+juist share                        # listet die Freigaben dieses Geräts samt Links
+juist share --stop ~/talk.pdf      # beendet eine, nach Datei, Port oder Link, egal welcher Befehl sie hält
 ```
 
 Eine Freigabe ist nur unter ihrem zufälligen Pfad abrufbar. Überall sonst
-unter dem Namen kommt 404, und Einträge wie `.git` bleiben verborgen. Ein
+unter dem Namen kommt 404, außer `juist publish PORT` beantwortet es, und
+Einträge wie `.git` bleiben verborgen. Ein
 Verzeichnis erscheint als Liste, sortierbar nach Name, Größe oder Datum, und
 lässt sich ganz oder ordnerweise als ZIP herunterladen; ein Ordner mit einer
 `index.html` zeigt stattdessen diese Seite. Die
@@ -271,10 +273,13 @@ Tagen. Verschwindet das Gerät, endet sie spätestens zehn Minuten später.
 Mit `--background` (`-b`) kehrt der Befehl zurück, sobald die Freigabe steht.
 Sie läuft dann weiter, auch über einen Neustart von juistd hinweg unter
 demselben Link, bis `juist share --stop` oder bis `--for` abläuft;
-`juist status` zeigt sie samt Link als `Sharing`. Ein
+`juist share` listet sie samt Link, `juist status` zählt sie unter `Sharing`. Ein
 einziges Zertifikat für den Namen des Geräts deckt alle Freigaben ab, ihre
-Pfade landen also in keinem Zertifikats-Log. Ein Gerät kann immer nur eine
-Sache gleichzeitig teilen. Wird es
+Pfade landen also in keinem Zertifikats-Log. Ein Gerät hält bis zu 16
+Freigaben gleichzeitig, jede unter ihrem eigenen Pfad, und daneben ein
+`juist publish PORT`, das beantwortet, was kein Pfad einer Freigabe trifft.
+`juist share --stop` ohne Namen beendet die einzige Freigabe; laufen mehrere,
+sagt es, dass eine zu nennen ist. Wird es
 [umbenannt]({{< relref "docs/network-changes" >}}), teilt es unter dem neuen
 Namen, und `juist share` gibt den neuen Link aus.
 
@@ -452,7 +457,8 @@ Service-Mitglied steht er im Log des Terminators.
 | HTTP/3 unter Last langsamer als HTTP/2 | Die UDP-Puffer des Hosts sind klein: `sysctl -w net.core.rmem_max=7500000 net.core.wmem_max=7500000` auf dem Gerät, das TLS beendet. |
 | `another program holds port 25565 on …, where juist would pass NAME by TCP` | Der Dienst lauscht auf allen Adressen, auch auf den Overlay-Adressen des Geräts: Veröffentliche stattdessen seinen Port, wie der Hinweis sagt, und stimme mit `juist publish serve` zu. |
 | auf vps, `juist status`: `Ingress` zeigt `…; another program holds port 22` | Ein Programm auf der Ingress, oft ihr sshd, belegt einen Port, auf dem ein Name per TCP veröffentlicht ist; juist überlässt ihn dann diesem Programm und den Regeln der Firewall. Veröffentliche den Namen mit `--tcp=PORT` auf einem anderen Port. |
-| `this device shares already` | Beende zuerst das andere `juist share` oder `juist publish PORT`, auch eines im Hintergrund: `juist share --stop`. |
+| `this device publishes a port already` | Ein anderes `juist publish PORT` läuft, vielleicht im Hintergrund: `juist share` listet es, `juist share --stop PORT` beendet es. |
+| `this device holds 16 shares already` | `juist share` listet sie; beende eine mit `juist share --stop`. |
 | `this device is no ingress` | Ein Admin führt `juist grant GERÄT ingress` aus. |
 | `warning: the network has no ingress, so nothing reaches it from the internet` | Gib einem Gerät mit öffentlicher Adresse die Rolle `ingress`. |
 | `warning: nothing answers on 127.0.0.1:8000 yet` | Starte den Webserver, auf den `juist publish 8000` zeigt. |

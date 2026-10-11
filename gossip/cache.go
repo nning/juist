@@ -31,9 +31,11 @@ type Cache struct {
 	renews map[types.Identity]bool
 	member map[types.Identity]bool
 	former map[types.Identity]bool
-	// noRelayNames refuses relay names, below [types.SchemaRelayName]:
-	// older members refuse a whole frame that carries one.
+	// noRelayNames refuses relay names, below [types.SchemaRelayName], and
+	// noPQ an epoch and pair store, below [types.SchemaPQ]: older members
+	// refuse a whole frame that carries one.
 	noRelayNames bool
+	noPQ         bool
 }
 
 // NewCache returns an empty cache.
@@ -91,6 +93,23 @@ func (c *Cache) SetRelayNames(ok bool) {
 	}
 }
 
+// SetPQ says whether the network's schema lets announcements name an epoch
+// and a pair store; where not, those held are dropped and others refused.
+func (c *Cache) SetPQ(ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.noPQ = !ok
+	if ok {
+		return
+	}
+	for id, e := range c.by {
+		if e.PQ() {
+			delete(c.by, id)
+			delete(c.renews, id)
+		}
+	}
+}
+
 // Add records an announcement if it is newer than what is held, reporting
 // whether it says anything new. One that only renews the signature is kept,
 // so what is held stays as fresh as its author made it, but reported as
@@ -100,7 +119,7 @@ func (c *Cache) SetRelayNames(ok bool) {
 func (c *Cache) Add(e Endpoint) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.former[e.Identity] || c.noRelayNames && e.Relay != nil && e.Relay.Name != "" {
+	if c.former[e.Identity] || c.noRelayNames && e.Relay != nil && e.Relay.Name != "" || c.noPQ && e.PQ() {
 		return false
 	}
 	cur, held := c.by[e.Identity]

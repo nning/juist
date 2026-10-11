@@ -103,7 +103,7 @@ func TestAListenerTakenDownIsOpenedAgain(t *testing.T) {
 	dead := &deadListener{addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}}
 	var again net.Listener
 	m := newMultiListener([]net.Listener{dead})
-	m.reopen = func(int) (net.Listener, error) {
+	m.listen = func(netip.AddrPort) (net.Listener, error) {
 		var err error
 		again, err = net.Listen("tcp", "127.0.0.1:0")
 		return again, err
@@ -128,7 +128,7 @@ func TestAListenerTakenDownIsOpenedAgain(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		m.mu.Lock()
-		ln := m.lns[0]
+		ln := m.lns[0].ln
 		m.mu.Unlock()
 		if ln != dead {
 			c, err := net.Dial("tcp", ln.Addr().String())
@@ -172,3 +172,96 @@ func (d *deadListener) Accept() (net.Conn, error) {
 
 func (d *deadListener) Close() error   { d.closed.Store(true); return nil }
 func (d *deadListener) Addr() net.Addr { return d.addr }
+
+// Rebinding opens the new addresses on the port and closes the old ones,
+// while what was accepted stays connected.
+func TestRebindMovesTheListener(t *testing.T) {
+	ln, err := listenOverlay([]netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := strconv.Itoa(portOf(ln.Addr()))
+	held, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	accepted, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer accepted.Close()
+
+	// Of the loopback, FreeBSD holds 127.0.0.1 alone.
+	if err := ln.(*multiListener).rebind([]netip.Prefix{netip.MustParsePrefix("::1/128")}); err != nil {
+		t.Skipf("no IPv6 loopback here: %v", err)
+	}
+	c, err := net.Dial("tcp", net.JoinHostPort("::1", port))
+	if err != nil {
+		t.Fatalf("the new address: %v", err)
+	}
+	defer c.Close()
+	if a, err := ln.Accept(); err != nil {
+		t.Fatal(err)
+	} else {
+		a.Close()
+	}
+	if c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", port)); err == nil {
+		c.Close()
+		t.Error("the old address still listens")
+	}
+	if _, err := held.Write([]byte("x")); err != nil {
+		t.Errorf("a connection accepted before: %v", err)
+	}
+	b := make([]byte, 1)
+	accepted.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := accepted.Read(b); err != nil {
+		t.Errorf("a connection accepted before: %v", err)
+	}
+}
+
+// An address rebind cannot bind yet, as one the device does not hold yet, is
+// listened at once it can be.
+func TestRebindTakesAnAddressOnceItCan(t *testing.T) {
+	var ready atomic.Bool
+	later := netip.MustParseAddr("::1")
+	listen := func(ap netip.AddrPort) (net.Listener, error) {
+		if ap.Addr() == later && !ready.Load() {
+			return nil, syscall.EADDRNOTAVAIL
+		}
+		return net.Listen("tcp", ap.String())
+	}
+	m, err := listenEach(listen, []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if ln, err := net.Listen("tcp", "[::1]:0"); err != nil {
+		t.Skipf("no IPv6 loopback here: %v", err)
+	} else {
+		ln.Close()
+	}
+	if err := m.rebind([]netip.Prefix{netip.MustParsePrefix("127.0.0.1/32"), netip.PrefixFrom(later, 128)}); err == nil {
+		t.Fatal("an address that could not be bound was not reported")
+	}
+	ready.Store(true)
+	at := net.JoinHostPort(later.String(), strconv.Itoa(portOf(m.Addr())))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := net.Dial("tcp", at)
+		if err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never listened at %s: %v", at, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if a, err := m.Accept(); err != nil {
+		t.Fatal(err)
+	} else {
+		a.Close()
+	}
+}

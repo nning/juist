@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/nning/juist/gossip"
@@ -13,14 +15,18 @@ import (
 )
 
 // A share is what this device publishes under its own name while a call
-// holds it open: where its connections go, and its end, zero for none but
-// the call's.
+// holds it open: where its connections go, under prefix, the first segment
+// of its path, or the whole name where that is empty; and its end, zero for
+// none but the call's.
 type share struct {
-	to, what, path string
-	end            time.Time
+	to, what, path, prefix string
+	end                    time.Time
 	// stopped is closed once [Daemon.StopShare] ends the share.
 	stopped chan struct{}
 }
+
+// live reports whether sh has not ended at now.
+func (sh *share) live(now time.Time) bool { return sh.end.IsZero() || now.Before(sh.end) }
 
 // sharePort is the port of this device's overlay addresses its own name is
 // reached on.
@@ -30,21 +36,27 @@ const sharePort = 443
 // renewed while the share lasts, so one whose device is gone ends with it.
 const shareLease = 10 * time.Minute
 
+// maxShares bounds the shares a device holds at once.
+const maxShares = 16
+
 // TerminatorNotRunning is why a share reaches nobody where no terminator
 // asks what to serve.
 const TerminatorNotRunning = "the terminator does not run"
 
-// Why a share does not start.
+// Why a share does not start, or stop.
 var (
 	ErrNoPublishRole = errors.New("this device holds no publish role")
 	ErrNoDomain      = errors.New("the network has no domain to publish under")
-	ErrSharing       = errors.New("this device shares already")
+	ErrPortShared    = errors.New("this device publishes a port already")
+	ErrPathShared    = errors.New("this device shares under this path already")
+	ErrTooManyShares = fmt.Errorf("this device holds %d shares already", maxShares)
 	ErrNotSharing    = errors.New("this device shares nothing")
 )
 
 // StartShare publishes this device under its own name, its connections
 // going where req says, until end where not zero, and returns the name and
-// the share, which [Daemon.EndShare] ends.
+// the share, which [Daemon.EndShare] ends. A share without a path is the
+// one that takes what no other's path does.
 func (d *Daemon) StartShare(req *ipc.ShareRequest, end time.Time) (string, *share, error) {
 	d.authMu.Lock()
 	state, err := d.authority.TrustedState()
@@ -56,24 +68,31 @@ func (d *Daemon) StartShare(req *ipc.ShareRequest, end time.Time) (string, *shar
 	if err != nil {
 		return "", nil, err
 	}
+	prefix := ipc.SharePrefix(req.Path)
 	d.pub.mu.Lock()
 	defer d.pub.mu.Unlock()
-	if d.pub.share != nil {
-		return "", nil, ErrSharing
+	switch {
+	case slices.ContainsFunc(d.pub.shares, func(o *share) bool { return o.prefix == prefix }) && prefix == "":
+		return "", nil, ErrPortShared
+	case slices.ContainsFunc(d.pub.shares, func(o *share) bool { return o.prefix == prefix }):
+		return "", nil, ErrPathShared
+	case len(d.pub.shares) >= maxShares:
+		return "", nil, ErrTooManyShares
 	}
-	sh := &share{to: req.To, what: req.What, path: req.Path, end: end, stopped: make(chan struct{})}
-	d.pub.share = sh
+	sh := &share{to: req.To, what: req.What, path: req.Path, prefix: prefix, end: end, stopped: make(chan struct{})}
+	d.pub.shares = append(d.pub.shares, sh)
 	d.flagTerminatorLocked()
 	d.MarkDirty()
 	return name, sh, nil
 }
 
-// EndShare ends sh, where it is still this device's share and no later one.
+// EndShare ends sh, where it is still one of this device's shares.
 func (d *Daemon) EndShare(sh *share) {
 	d.pub.mu.Lock()
-	ended := d.pub.share == sh
+	n := len(d.pub.shares)
+	d.pub.shares = slices.DeleteFunc(d.pub.shares, func(o *share) bool { return o == sh })
+	ended := len(d.pub.shares) < n
 	if ended {
-		d.pub.share = nil
 		d.flagTerminatorLocked()
 	}
 	d.pub.mu.Unlock()
@@ -82,17 +101,26 @@ func (d *Daemon) EndShare(sh *share) {
 	}
 }
 
-// StopShare ends this device's share, and the call that holds it.
-func (d *Daemon) StopShare() error {
+// StopShare ends the share under path, the one without a path where path
+// is empty, or every share where all, and the calls that hold them.
+func (d *Daemon) StopShare(path string, all bool) error {
 	d.pub.mu.Lock()
-	sh := d.pub.share
-	d.pub.share = nil
+	var stopped []*share
+	d.pub.shares = slices.DeleteFunc(d.pub.shares, func(sh *share) bool {
+		if all || sh.path == path {
+			stopped = append(stopped, sh)
+			return true
+		}
+		return false
+	})
 	d.flagTerminatorLocked()
 	d.pub.mu.Unlock()
-	if sh == nil {
+	if len(stopped) == 0 {
 		return ErrNotSharing
 	}
-	close(sh.stopped)
+	for _, sh := range stopped {
+		close(sh.stopped)
+	}
 	d.MarkDirty()
 	return nil
 }
@@ -124,24 +152,26 @@ func shareName(state *log.State, id types.Identity) (string, error) {
 	return l + "." + state.Domain(), nil
 }
 
-// shareNow is this device's share, nil for none or one past its end.
-func (d *Daemon) shareNow(now time.Time) *share {
+// sharesNow is this device's shares not past their end, in the order they
+// started.
+func (d *Daemon) sharesNow(now time.Time) []share {
 	d.pub.mu.Lock()
 	defer d.pub.mu.Unlock()
-	sh := d.pub.share
-	if sh == nil || !sh.end.IsZero() && !now.Before(sh.end) {
-		return nil
+	var out []share
+	for _, sh := range d.pub.shares {
+		if sh.live(now) {
+			out = append(out, *sh)
+		}
 	}
-	c := *sh
-	return &c
+	return out
 }
 
 // shareAnnounced is the share this device announces at now, while it can
-// serve it: an end half a lease to a lease ahead, so that it changes once
-// each half lease, or the share's own where sooner.
+// serve one: an end half a lease to a lease ahead, so that it changes once
+// each half lease, or the last share's own where sooner.
 func (d *Daemon) shareAnnounced(now time.Time) *gossip.Share {
-	sh := d.shareNow(now)
-	if sh == nil || !d.freshness(now).Fresh(now.Unix()) {
+	shs := d.sharesNow(now)
+	if len(shs) == 0 || !d.freshness(now).Fresh(now.Unix()) {
 		return nil
 	}
 	d.authMu.Lock()
@@ -155,8 +185,18 @@ func (d *Daemon) shareAnnounced(now time.Time) *gossip.Share {
 	}
 	half := int64(shareLease / 2 / time.Second)
 	until := (now.Unix()/half + 2) * half
-	if !sh.end.IsZero() && sh.end.Unix() < until {
-		until = sh.end.Unix()
+	var last time.Time
+	for _, sh := range shs {
+		if sh.end.IsZero() {
+			last = time.Time{}
+			break
+		}
+		if sh.end.After(last) {
+			last = sh.end
+		}
+	}
+	if !last.IsZero() && last.Unix() < until {
+		until = last.Unix()
 	}
 	return &gossip.Share{Port: sharePort, Until: until}
 }
@@ -166,14 +206,14 @@ func (d *Daemon) shareAnnounced(now time.Time) *gossip.Share {
 // lease, so that a share whose device is gone ends with it.
 func (d *Daemon) sharing(id types.Identity, now time.Time) bool {
 	if id == d.self {
-		return d.shareNow(now) != nil
+		return len(d.sharesNow(now)) > 0
 	}
 	ep, ok := d.endpoints.Get(id)
 	return ok && ep.Share.Live(now) && ep.Share.Port == sharePort &&
 		ep.Share.Until <= now.Add(shareLease+clockSkew).Unix()
 }
 
-// renewShare has this device's announcement go out where its share's end
+// renewShare has this device's announcement go out where its shares' end
 // moved since last, which it updates.
 func (d *Daemon) renewShare(last *int64) bool {
 	var until int64
@@ -188,63 +228,85 @@ func (d *Daemon) renewShare(last *int64) bool {
 	return true
 }
 
-// shareServed is this device's share as its terminator ends TLS for it, on
-// addrs, while state grants the role.
+// shareServed is this device's shares as its terminator ends TLS for them,
+// on addrs, while state grants the role: the one without a path as the
+// name's To, the others by their paths.
 func (d *Daemon) shareServed(state *log.State, addrs []netip.Addr, now time.Time) (ipc.PublishedTarget, bool) {
-	sh := d.shareNow(now)
-	if sh == nil {
+	shs := d.sharesNow(now)
+	if len(shs) == 0 {
 		return ipc.PublishedTarget{}, false
 	}
 	name, err := shareName(state, d.self)
 	if err != nil {
 		return ipc.PublishedTarget{}, false
 	}
-	return ipc.PublishedTarget{Name: name, Addrs: addrs, Port: sharePort, To: sh.to}, true
+	t := ipc.PublishedTarget{Name: name, Addrs: addrs, Port: sharePort}
+	for _, sh := range shs {
+		if sh.prefix == "" {
+			t.To = sh.to
+		} else {
+			t.Paths = append(t.Paths, ipc.PathTarget{Prefix: sh.prefix, To: sh.to})
+		}
+	}
+	// Outside its path a file's share answers 404; a terminator that knows
+	// no paths sends everything there.
+	if t.To == "" {
+		t.To = t.Paths[0].To
+	}
+	return t, true
 }
 
-// shareStatus is what the status says of this device's share, nil for none.
-func (d *Daemon) shareStatus(state *log.State, fresh bool, now time.Time) *ipc.Share {
-	sh := d.shareNow(now)
-	if sh == nil {
+// sharesStatus is what the status says of this device's shares.
+func (d *Daemon) sharesStatus(state *log.State, fresh bool, now time.Time) []ipc.Share {
+	shs := d.sharesNow(now)
+	if len(shs) == 0 {
 		return nil
 	}
-	st := &ipc.Share{To: sh.to, What: sh.what, Path: sh.path}
-	if !sh.end.IsZero() {
-		st.Until = sh.end.Unix()
-	}
 	name, err := shareName(state, d.self)
+	var why string
 	switch {
 	case err != nil:
-		st.NotShared = err.Error()
+		why = err.Error()
 	case !fresh:
-		st.NotShared = "this device's view of the network is stale"
+		why = "this device's view of the network is stale"
 	case d.terminatorSilent():
-		st.NotShared = TerminatorNotRunning
+		why = TerminatorNotRunning
 	}
-	st.Name = name
+	var caa []string
 	if name != "" {
 		d.pub.mu.Lock()
-		st.CAA = d.pub.account.CAA(name)
+		caa = d.pub.account.CAA(name)
 		d.pub.mu.Unlock()
 	}
-	return st
+	out := make([]ipc.Share, 0, len(shs))
+	for _, sh := range shs {
+		st := ipc.Share{Name: name, To: sh.to, What: sh.what, Path: sh.path, NotShared: why, CAA: caa}
+		if !sh.end.IsZero() {
+			st.Until = sh.end.Unix()
+		}
+		out = append(out, st)
+	}
+	return out
 }
 
 // shareCheck is how often a running share checks the network it is in,
 // which a restart replaces, and has its announcement renewed.
 var shareCheck = 15 * time.Second
 
-// share publishes this device under its own name until the caller hangs
-// up or the share's end, telling events the name first.
-// unshare ends this device's share.
-func (s *Service) unshare() error {
+// unshare ends the share req names by its path, or every share for none.
+func (s *Service) unshare(req *ipc.ShareRequest) error {
 	m := s.Mesh()
 	if m == nil {
 		return errNoNetwork
 	}
-	return m.StopShare()
+	if req == nil {
+		return m.StopShare("", true)
+	}
+	return m.StopShare(req.Path, false)
 }
 
+// share publishes this device under its own name until the caller hangs
+// up or the share's end, telling events the name first.
 func (s *Service) share(ctx context.Context, req *ipc.ShareRequest, events func(*ipc.Event) error) error {
 	var end time.Time
 	if req.Until != 0 {

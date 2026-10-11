@@ -545,7 +545,7 @@ func TestARelayNameIsRefusedBelowItsSchema(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e.Seq = seq
+		e.Seq, e.Epoch, e.PairStore = seq, 0, 0
 		e.Relay = &gossip.RelayInfo{Port: 4443, Cert: make([]byte, gossip.RelayCertSize),
 			HostName: "abcdefgh.relay.juist.invalid", Name: "relay.example.org"}
 		if err := e.Sign(other.identity); err != nil {

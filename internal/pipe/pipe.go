@@ -22,16 +22,20 @@ func Join(ctx context.Context, a, b net.Conn, idle time.Duration) {
 	stop := context.AfterFunc(ctx, closeBoth)
 	defer stop()
 	defer closeBoth()
-	var last atomic.Int64
-	last.Store(time.Now().UnixNano())
+	// Each way says it moved, and the check below what time that was.
+	var moved [2]atomic.Bool
 	done := make(chan struct{}, 2)
-	half := func(dst, src net.Conn) {
-		r := &reading{Reader: active{src, &last}}
-		err := copyAdaptive(active{dst, &last}, r)
+	half := func(dst, src net.Conn, moved *atomic.Bool) {
+		rerr, werr, ok := splice(dst, src, moved)
+		if !ok {
+			r := &reading{Reader: active{src, moved}}
+			werr = copyAdaptive(active{dst, moved}, r)
+			rerr = r.err
+		}
 		switch cw, ok := dst.(interface{ CloseWrite() error }); {
-		case r.err != nil:
+		case rerr != nil:
 			closeBoth()
-		case err != nil: // dst failed
+		case werr != nil: // dst failed
 			// FreeBSD disconnects a socket shut for writing a second time.
 		case ok:
 			_ = cw.CloseWrite()
@@ -40,16 +44,19 @@ func Join(ctx context.Context, a, b net.Conn, idle time.Duration) {
 		}
 		done <- struct{}{}
 	}
-	go half(b, a)
-	go half(a, b)
+	go half(b, a, &moved[0])
+	go half(a, b, &moved[1])
 	check := time.NewTicker(max(idle/4, 10*time.Millisecond))
 	defer check.Stop()
+	last := time.Now()
 	for ended := 0; ended < 2; {
 		select {
 		case <-done:
 			ended++
-		case <-check.C:
-			if time.Since(time.Unix(0, last.Load())) > idle {
+		case now := <-check.C:
+			if a, b := moved[0].Swap(false), moved[1].Swap(false); a || b {
+				last = now
+			} else if now.Sub(last) > idle {
 				closeBoth()
 			}
 		}
@@ -130,16 +137,16 @@ func (r *reading) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// active notes when a connection last moved.
+// active notes that a connection moved.
 type active struct {
 	net.Conn
-	last *atomic.Int64
+	moved *atomic.Bool
 }
 
 func (c active) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
-		c.last.Store(time.Now().UnixNano())
+		c.moved.Store(true)
 	}
 	return n, err
 }
@@ -147,7 +154,7 @@ func (c active) Read(p []byte) (int, error) {
 func (c active) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
-		c.last.Store(time.Now().UnixNano())
+		c.moved.Store(true)
 	}
 	return n, err
 }

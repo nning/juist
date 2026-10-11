@@ -442,7 +442,7 @@ func (a *app) submitPolicy(auth *log.Authority, p *types.Policy, yes bool) error
 		a.warn("the access policy passes nothing")
 	}
 	if state.Policy() == nil {
-		if err := a.proceed(yes, "devices then open on each other only what the policy passes; set it?"); err != nil {
+		if err := a.proceed(yes, "anything the policy does not pass is then refused; set it?"); err != nil {
 			return err
 		}
 	}

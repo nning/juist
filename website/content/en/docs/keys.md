@@ -42,6 +42,11 @@ Where the change needs another admin, it waits for them, and the new keys
 stay staged until the log names them. `juist rotate abandon` drops a rotation
 that still waits for approval.
 
+Connections keep running when the device takes its new keys: each peer's
+tunnel waits a moment for a handshake under them. A device that runs a relay
+restarts its tunnels instead, and `juist rotate identity`, which moves the
+device's IPv6 address, ends what ran over the old one.
+
 ## Starting a device over
 
 `juist reset` makes a device leave the network, as on a fresh install. It

@@ -297,9 +297,12 @@ func (t *terminator) set(ctx context.Context, p *ipc.Published) {
 		}
 	}
 	t.now.Store(w)
-	t.named.CloseUnless(func(name string) bool {
-		_, ok := t.lookup(name)
-		return ok
+	// A connection piped as it is ends once its name goes elsewhere, or is
+	// proxied by path.
+	t.named.CloseUnless(func(key string) bool {
+		name, to, piped := strings.Cut(key, " ")
+		n, ok := t.lookup(name)
+		return ok && (!piped || n.To == to && len(n.Paths) == 0)
 	})
 	t.passed.CloseUnless(func(key string) bool {
 		_, ok := t.passing(key)
@@ -537,7 +540,7 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 	if !ok {
 		return
 	}
-	if HTTP3(n) {
+	if HTTP3(n) || len(n.Paths) > 0 {
 		_, page := ipc.StatusPageOf(n.To)
 		if page && t.pages == nil {
 			return
@@ -552,11 +555,20 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 		if page {
 			timeout, headerBytes = pageTimeout, pageHeaderBytes
 		}
-		px := t.proxyFor(n, client, addrPort(c.LocalAddr()))
+		px := t.proxiesFor(client, addrPort(c.LocalAddr()))
 		defer px.close()
-		t.serveHTTP(ctx, tc, withAltSvc(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			t.serveName(w, r, n, px)
-		})), timeout, headerBytes)
+		var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			now, ok := t.lookup(n.Name)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			t.serveName(w, r, now, px)
+		})
+		if HTTP3(n) {
+			h = withAltSvc(h)
+		}
+		t.serveHTTP(ctx, tc, h, timeout, headerBytes)
 		return
 	}
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
@@ -573,10 +585,10 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 			return
 		}
 	}
-	t.named.Add(c, n.Name, func() { c.Close(); backend.Close() })
+	t.named.Add(c, n.Name+" "+n.To, func() { c.Close(); backend.Close() })
 	defer t.named.Remove(c)
-	if _, ok := t.lookup(n.Name); !ok {
-		return // no longer served
+	if now, ok := t.lookup(n.Name); !ok || now.To != n.To || len(now.Paths) > 0 {
+		return // no longer served so
 	}
 	pipe.Join(ctx, tc, backend, idleTimeout)
 }
@@ -619,6 +631,11 @@ func (t *terminator) toHTTPS(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, to.String(), http.StatusPermanentRedirect)
 }
 
+// proxiesFor is a client connection's proxies, made as its requests need them.
+func (t *terminator) proxiesFor(client, local netip.AddrPort) *connProxies {
+	return &connProxies{t: t, client: client, local: local, by: map[proxyKey]*connProxy{}}
+}
+
 // proxyFor is a client connection's proxy to n's service.
 func (t *terminator) proxyFor(n ipc.PublishedTarget, client, local netip.AddrPort) *connProxy {
 	addr, _ := ipc.HTTP2Of(n.To)
@@ -632,10 +649,11 @@ func (t *terminator) proxyFor(n ipc.PublishedTarget, client, local netip.AddrPor
 	return &connProxy{dial: t.o.Dial, service: s, n: n, client: client, local: local}
 }
 
-// serveName answers r for n, offered HTTP/3: by the status page, or by the
-// service, through px. The page tells members from the public by the
-// connection's peer, never by what an ingress says, which it could forge.
-func (t *terminator) serveName(w http.ResponseWriter, r *http.Request, n ipc.PublishedTarget, px *connProxy) {
+// serveName answers r for n, offered HTTP/3 or served by path: by the
+// status page, or by the service, or the path's, through px. The page tells
+// members from the public by the connection's peer, never by what an
+// ingress says, which it could forge.
+func (t *terminator) serveName(w http.ResponseWriter, r *http.Request, n ipc.PublishedTarget, px *connProxies) {
 	if public, ok := ipc.StatusPageOf(n.To); ok {
 		if t.pages == nil {
 			http.NotFound(w, r)
@@ -644,7 +662,18 @@ func (t *terminator) serveName(w http.ResponseWriter, r *http.Request, n ipc.Pub
 		t.pages.Handler(n.Name, public).ServeHTTP(w, r)
 		return
 	}
-	px.ServeHTTP(w, r)
+	px.to(underPath(n, r.URL.Path)).ServeHTTP(w, r)
+}
+
+// underPath is where a request for path goes of n: under one of its paths,
+// to that path's service.
+func underPath(n ipc.PublishedTarget, path string) ipc.PublishedTarget {
+	for _, p := range n.Paths {
+		if strings.HasPrefix(path, p.Prefix) {
+			return ipc.PublishedTarget{Name: n.Name, To: p.To}
+		}
+	}
+	return n
 }
 
 // serveHTTP serves h on c, until its client is done with it and with what

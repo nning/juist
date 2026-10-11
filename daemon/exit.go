@@ -173,7 +173,7 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 	slices.SortFunc(p.status.Offering, func(x, y types.Identity) int { return strings.Compare(x.String(), y.String()) })
 	self, _ := s.state.Node(d.self)
 	p.routed = len(self.Routes) > 0
-	if serves := exitRoutesOf(s.state, self, d.noV4); consent {
+	if serves := exitRoutesOf(s.state, self, d.noV4.Load()); consent {
 		switch {
 		case serves == nil:
 			p.status.NotServing = "the network has not made this device an exit node"
@@ -218,12 +218,12 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 		p.dns = exitDNS(d.overlayAddrs(s.state, n.Identity, s.now), held[n.Identity])
 		p.keepDNS = false
 	}
-	routes := exitRoutesOf(s.state, n, d.noV4 || held[choice.Node].NoV4)
+	routes := exitRoutesOf(s.state, n, d.noV4.Load() || held[choice.Node].NoV4)
 	i := slices.IndexFunc(named, func(np namedPeer) bool { return np.id == choice.Node })
 	switch {
 	case !member || !s.live[choice.Node]:
 		p.status.Refused = "it is no member of the network"
-	case routes == nil && exitRoutesOf(s.state, n, false) != nil && d.noV4:
+	case routes == nil && exitRoutesOf(s.state, n, false) != nil && d.noV4.Load():
 		p.status.Refused = "it carries IPv4 alone, and this device has no IPv4 in the network"
 	case routes == nil && exitRoutesOf(s.state, n, false) != nil:
 		p.status.Refused = "it carries IPv4 alone, and has no IPv4 in the network"
@@ -237,6 +237,8 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 		p.status.Refused = "it cannot be reached"
 	case !held[choice.Node].Exit:
 		p.status.Refused = "its operator has not agreed to serve"
+	case notPQ(s.state, named[i].stage):
+		p.status.Refused = "its " + errNotPQ
 	case d.userEgress != "":
 		p.status.Refused = d.userEgress
 	default:
@@ -253,7 +255,7 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 			p.status.Partly = "IPv6 refused: " + name + " carries IPv4 alone"
 		case !slices.Contains(n.Routes, netip.MustParsePrefix("0.0.0.0/0")):
 			p.status.Partly = "IPv4 refused: " + name + " carries IPv6 alone"
-		case d.noV4:
+		case d.noV4.Load():
 			p.status.Partly = "IPv4 refused: this device has no IPv4 in the network"
 		case held[choice.Node].NoV4:
 			p.status.Partly = "IPv4 refused: " + name + " has no IPv4 in the network"
@@ -311,7 +313,7 @@ func (d *Daemon) applyExit(p exitPlan) {
 	if !through && !p.status.Node.IsZero() && p.status.DNSNot == "" {
 		p.status.DNSNot = why
 	}
-	noV4 := d.noV4 && p.routed
+	noV4 := d.noV4.Load() && p.routed
 	d.mu.Lock()
 	changed := d.servingExit != p.status.Serving || d.servingSubnets != (len(p.serve.Subnets) > 0) ||
 		d.dnsPort != port || d.announcedNoV4 != noV4

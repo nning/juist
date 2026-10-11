@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -86,8 +87,8 @@ func TestAShareIsReadUnderItsTokenAlone(t *testing.T) {
 }
 
 // juist share holds the share open until Ctrl-C: the device needs the
-// publish role and a domain, the terminator starts, the status says what is
-// shared, and once stopped nothing is.
+// publish role and a domain, the terminator starts, the status and juist
+// share say what is shared, and once stopped nothing is.
 func TestShareUntilStopped(t *testing.T) {
 	t.Parallel()
 	h := newHost(t)
@@ -112,15 +113,16 @@ func TestShareUntilStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, h.mustRun("status"), "Sharing", shared+" at "+link.FindStringSubmatch(r.out.String())[1]+", until")
-	if _, err := h.run("publish", "8000"); err == nil || !strings.Contains(err.Error(), "shares already") {
-		t.Errorf("a second share: %v", err)
+	if out := h.mustRun("status"); !strings.Contains(out, "Sharing       1 share,") || strings.Contains(out, "https://") {
+		t.Errorf("status does not count the share, or says more of it than juist share:\n%s", out)
 	}
+	mustContain(t, h.mustRun("share"), "WHAT", shared+"  "+link.FindStringSubmatch(r.out.String())[1]+"  ")
 	r.cancel()
 	if out, err := r.wait(t); err != nil || !strings.Contains(out, "stopped sharing") {
 		t.Errorf("stopping: %v\n%s", err, out)
 	}
 	eventually(t, "the share's end", func() bool { return !strings.Contains(h.mustRun("status"), "Sharing") })
+	mustContain(t, h.mustRun("share"), "not sharing")
 	if b, _ := os.ReadFile(calls); !strings.HasPrefix(string(b), "on\n") {
 		t.Errorf("the terminator was not started: %q", b)
 	}
@@ -157,7 +159,9 @@ func TestTheShareWordsAreJuistds(t *testing.T) {
 		errNoPublishRole:     daemon.ErrNoPublishRole.Error(),
 		errNoDomain:          daemon.ErrNoDomain.Error(),
 		terminatorNotRunning: daemon.TerminatorNotRunning,
-		errSharing:           daemon.ErrSharing.Error(),
+		errPortShared:        daemon.ErrPortShared.Error(),
+		errPathShared:        daemon.ErrPathShared.Error(),
+		errTooManyShares:     daemon.ErrTooManyShares.Error(),
 		errNotSharing:        daemon.ErrNotSharing.Error(),
 	} {
 		if got != want {
@@ -255,7 +259,14 @@ func TestPublishAPort(t *testing.T) {
 	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
 	r := h.cli.start("publish", port)
 	r.waitFor(t, regexp.MustCompile(`publishing \[::1\]:`+port+` at https://laptop\.pub\.example\.org, until Ctrl-C`))
-	r.cancel()
+	if _, err := h.run("publish", port); err == nil || !strings.Contains(err.Error(), "publishes a port already\nhint: juist share lists them") {
+		t.Errorf("a second port: %v", err)
+	}
+	mustContain(t, h.mustRun("share"), "[::1]:"+port+"  https://laptop.pub.example.org  stopped")
+	if _, err := h.run("share", "--stop", "1"); err == nil || !strings.Contains(err.Error(), "1 is not shared") {
+		t.Errorf("stopping another port: %v", err)
+	}
+	mustContain(t, h.mustRun("share", "--stop", port), "stopped sharing [::1]:"+port)
 	if out, err := r.wait(t); err != nil || !strings.Contains(out, "stopped sharing") {
 		t.Errorf("stopping: %v\n%s", err, out)
 	}
@@ -352,8 +363,10 @@ func TestAFirewallKeepingOutWhatIsServedIsSaid(t *testing.T) {
 }
 
 // A share in the background serves on once the command has returned, until
-// juist share --stop, which a share in the foreground heeds too; a second
-// share is refused, and stopping none says so.
+// juist share --stop, which a share in the foreground heeds too; another
+// share goes beside it, juist share lists both, --stop takes the one named
+// by its link or its file, and names one where several run, and stopping
+// none says so.
 func TestAShareInTheBackground(t *testing.T) {
 	t.Parallel()
 	h := newHost(t)
@@ -364,38 +377,66 @@ func TestAShareInTheBackground(t *testing.T) {
 	}
 	h.mustRun("network", "domain", "pub.example.org")
 	h.mustRun("grant", "laptop", "publish")
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
+	dir, other := t.TempDir(), t.TempDir()
+	for _, d := range []string{dir, other} {
+		if err := os.WriteFile(filepath.Join(d, "a.txt"), []byte("hello"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	out := h.mustRun("share", "--background", dir)
-	m := regexp.MustCompile(`https://laptop\.pub\.example\.org(/[^/]+/), until juist share --stop`).FindStringSubmatch(out)
-	if m == nil {
-		t.Fatalf("a background share says:\n%s", out)
+	linked := regexp.MustCompile(`(https://laptop\.pub\.example\.org(/[^/]+/)), until juist share --stop`)
+	shareOf := func(dir string) []string {
+		t.Helper()
+		out := h.mustRun("share", "--background", dir)
+		m := linked.FindStringSubmatch(out)
+		if m == nil {
+			t.Fatalf("a background share says:\n%s", out)
+		}
+		return m
 	}
-	get := func() (int, error) {
+	get := func(path string) (int, error) {
 		st := hostStatus(t, h)
-		if st.Share == nil {
+		i := slices.IndexFunc(st.Shares, func(sh ipc.Share) bool { return strings.HasPrefix(sh.Path, path) })
+		if i < 0 {
 			return 0, errors.New("no share")
 		}
-		resp, err := http.Get("http://" + st.Share.To + m[1] + "a.txt")
+		resp, err := http.Get("http://" + st.Shares[i].To + path + "a.txt")
 		if err != nil {
 			return 0, err
 		}
 		resp.Body.Close()
 		return resp.StatusCode, nil
 	}
-	if code, err := get(); code != 200 {
-		t.Fatalf("the background share, once the command returned: %d, %v", code, err)
+	first, second := shareOf(dir), shareOf(other)
+	for _, m := range [][]string{first, second} {
+		if code, err := get(m[2]); code != 200 {
+			t.Fatalf("a background share, once the command returned: %d, %v", code, err)
+		}
 	}
-	if out, err := h.run("share", "--background", dir); err == nil || !strings.Contains(out, "this device shares already") {
-		t.Errorf("a second share: %v\n%s", err, out)
+	otherShared, err := filepath.EvalSymlinks(other)
+	if err != nil {
+		t.Fatal(err)
 	}
-	mustContain(t, h.mustRun("share", "--stop"), "stopped sharing")
-	if code, err := get(); err == nil {
+	mustContain(t, h.mustRun("share"), first[1], otherShared+"  "+second[1])
+	mustContain(t, h.mustRun("status"), "Sharing       2 shares,")
+	if _, err := h.run("share", "--stop"); err == nil ||
+		!strings.Contains(err.Error(), "this device holds 2 shares\nhint: name one") {
+		t.Errorf("stopping one of two: %v", err)
+	}
+	if _, err := h.run("share", "--stop", t.TempDir()); err == nil || !strings.Contains(err.Error(), "is not shared") {
+		t.Errorf("stopping what is not shared: %v", err)
+	}
+	mustContain(t, h.mustRun("share", "--stop", first[1]+"a.txt"), "stopped sharing")
+	if code, err := get(first[2]); err == nil {
 		t.Errorf("a stopped share still serves: %d", code)
 	}
+	if code, err := get(second[2]); code != 200 {
+		t.Errorf("stopping one share stopped the other: %d, %v", code, err)
+	}
+	mustContain(t, h.mustRun("share", "--stop", other), "stopped sharing "+otherShared)
 	mustContain(t, h.mustRun("share", "--stop"), "unchanged: not sharing")
+	if _, err := h.run("share", "--for", "1h"); err == nil || !strings.Contains(err.Error(), "take FILE or DIR") {
+		t.Errorf("--for without a file: %v", err)
+	}
 
 	r := h.cli.start("share", dir)
 	r.waitFor(t, regexp.MustCompile(`sharing .* until Ctrl-C`))
@@ -417,15 +458,16 @@ func TestABackgroundShareOutlivesJuistd(t *testing.T) {
 	h.mustRun("network", "domain", "pub.example.org")
 	h.mustRun("grant", "laptop", "publish")
 	h.mustRun("share", "--background", "--for", "1h", t.TempDir())
-	before := hostStatus(t, h).Share
-	if before == nil {
-		t.Fatal("no share")
+	shares := hostStatus(t, h).Shares
+	if len(shares) != 1 {
+		t.Fatalf("shares %+v", shares)
 	}
+	before := shares[0]
 	h.stops[0]()
 	h.stops[0] = startInstanceService(t, h.layout.home(0), h.layout.socket(0), 0)
 	eventually(t, "the share is taken up again", func() bool {
 		st := hostStatus(t, h)
-		return st.Share != nil && st.Share.To == before.To
+		return len(st.Shares) == 1 && st.Shares[0].To == before.To
 	})
 	mustContain(t, h.mustRun("share", "--stop"), "stopped sharing")
 }
@@ -495,6 +537,31 @@ func TestASharedDirectoryIsListed(t *testing.T) {
 	}
 	if _, _, hdr := get("/tok/small.txt"); hdr.Get("Content-Security-Policy") != "sandbox" {
 		t.Errorf("a shared file: %v", hdr)
+	}
+}
+
+// A file in a shared directory is served whole or in part, whatever its name.
+func TestAFileInASharedDirectoryIsServed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "LICENSE"), []byte("license text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(dir)
+	h, _, err := shareHandler(dir, info, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/tok/LICENSE", nil))
+	if w.Code != 200 || w.Body.String() != "license text" {
+		t.Errorf("a file without an extension: %d %q", w.Code, w.Body.String())
+	}
+	r := httptest.NewRequest("GET", "/tok/LICENSE", nil)
+	r.Header.Set("Range", "bytes=8-")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusPartialContent || w.Body.String() != "text" {
+		t.Errorf("a range: %d %q", w.Code, w.Body.String())
 	}
 }
 
@@ -623,6 +690,26 @@ func TestTheListingLooksAsTheWebsiteDoes(t *testing.T) {
 	for _, want := range []string{"--accent: #46d1bf;", "url(/tok/.juist/plex-sans-400.woff2)", `viewBox="80 -770 2860 980"`} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("the listing lacks %s", want)
+		}
+	}
+}
+
+// Status counts the shares and says why they reach nobody, never what or
+// where they are, which juist share lists.
+func TestStatusCountsTheShares(t *testing.T) {
+	t.Parallel()
+	one := ipc.Share{What: "/srv/photos", Name: "laptop.pub.example.org", Path: "/abc/", To: "8080"}
+	for _, c := range []struct {
+		shs  []ipc.Share
+		want string
+	}{
+		{nil, ""},
+		{[]ipc.Share{one}, "1 share"},
+		{[]ipc.Share{one, one}, "2 shares"},
+		{[]ipc.Share{{What: "/srv/photos", NotShared: "the terminator does not run"}}, "1 share, reached by nobody: the terminator does not run"},
+	} {
+		if got := shareSummary(c.shs, noPaint); got != c.want {
+			t.Errorf("%d shares: %q, want %q", len(c.shs), got, c.want)
 		}
 	}
 }

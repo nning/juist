@@ -42,7 +42,9 @@ func httpsAlone(t *testing.T, fb, lx *vm, work, fb4, lx4 string) {
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, w := range []walled{hotel, office} {
-				out, _ := lx.try(w.juist("status")+"; tail -60 "+w.home+"/juistd.log", time.Minute)
+				out, _ := lx.try(w.juist("status")+"; tail -60 "+w.home+"/juistd.log; grep -E "+
+					"'preshared key with|newly given a preshared key|keyed:|log sync|gossip' "+w.home+"/juistd.log | tail -60",
+					time.Minute)
 				t.Logf("%s:\n%s", w.name, out)
 			}
 			out, _ := lx.try("juist status; iptables -L -v -n | head -40; /tmp/probe pcap /tmp/hotel.pcap | sort | uniq -c | head -40; "+

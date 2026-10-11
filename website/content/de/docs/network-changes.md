@@ -92,7 +92,8 @@ etwa `10.7.0.2 (was 198.18.36.2)`.
 {{< /step >}}
 
 Bis zum Ablauf der Frist sind die Geräte unter beiden Adressen erreichbar.
-Danach gelten nur noch die neuen.
+Danach gelten nur noch die neuen. Verbindungen laufen beim Umzug weiter,
+außer solchen von oder zu einer alten Adresse, die mit ihr enden.
 
 ## Die Adresse eines einzelnen Geräts verschieben
 

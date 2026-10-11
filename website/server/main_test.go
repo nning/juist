@@ -189,7 +189,7 @@ func TestTheServerTakesH2C(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newServer(fstest.MapFS{"index.html": {Data: []byte("root")}}, "", time.Second, io.Discard)
+	srv := newServer(fstest.MapFS{"index.html": {Data: []byte("root")}}, "", time.Second, false, io.Discard)
 	go srv.Serve(ln)
 	defer srv.Close()
 	for _, h2 := range []bool{true, false} {
@@ -219,7 +219,7 @@ func TestAQuietConnectionIsClosedSoon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := newServer(fstest.MapFS{"index.html": {Data: []byte("root")}}, "", 200*time.Millisecond, io.Discard)
+	srv := newServer(fstest.MapFS{"index.html": {Data: []byte("root")}}, "", 200*time.Millisecond, false, io.Discard)
 	go srv.Serve(ln)
 	defer srv.Close()
 	c, err := net.Dial("tcp", ln.Addr().String())
@@ -237,5 +237,20 @@ func TestAQuietConnectionIsClosedSoon(t *testing.T) {
 	c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := br.ReadByte(); err != io.EOF {
 		t.Errorf("the quiet connection was not closed: %v", err)
+	}
+}
+
+func TestANoindexSiteSaysSoOnEveryAnswer(t *testing.T) {
+	site := fstest.MapFS{"index.html": {Data: []byte("root")}, "404.html": {Data: []byte("gone")}}
+	for _, noindex := range []bool{false, true} {
+		h := newServer(site, "", time.Second, noindex, io.Discard).Handler
+		for _, p := range []string{"/", "/nothing", "/index.html"} {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+			got := rec.Header().Get("X-Robots-Tag")
+			if want := map[bool]string{true: "noindex"}[noindex]; got != want {
+				t.Errorf("noindex %v, GET %s: X-Robots-Tag %q, want %q", noindex, p, got, want)
+			}
+		}
 	}
 }

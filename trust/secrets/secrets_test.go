@@ -242,7 +242,12 @@ func TestDerivationsAreSeparated(t *testing.T) {
 	seedE1W1A := s.TopicSeed(1, 1, alice)
 	seedE2W0A := s.TopicSeed(2, 0, alice)
 	seedE1W0B := s.TopicSeed(1, 0, bob)
+	psk1, psk2 := s.PSKSeed(1), s.PSKSeed(2)
+	gk := s.GossipKey(1)
 	seen := map[string]string{
+		"psk e1":    string(psk1[:]),
+		"psk e2":    string(psk2[:]),
+		"gossip e1": string(gk[:]),
 		// Every axis a topic must separate on: two members, two windows and
 		// two epochs must never land on one another's item.
 		"topic e1 w0 alice": string(seedE1W0A[:]),

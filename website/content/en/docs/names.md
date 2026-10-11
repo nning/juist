@@ -85,7 +85,7 @@ control: juist cannot tell whether you do.
 - A device whose name is not a valid DNS label has no name under `.juist`.
 - Under an [access policy]({{< relref "docs/access" >}}), a device has names only for the members it keeps a tunnel with. The public names of the others resolve publicly there.
 - The network's own domain for [publishing]({{< relref "docs/publishing" >}}) goes to juistd whole on every member, names on or not: a name published there on port 443 leads straight to its device, and every other name of the domain resolves as before. DNSSEC is off for that domain on members.
-- `juist devices` shows a device's public names under `ROLES`, as `names mail.example.org`.
+- `juist devices` shows `names` under `ROLES` for a device public names point at; `juist names` lists them.
 
 ## If something goes wrong
 

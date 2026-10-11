@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/safchain/ethtool"
 	"github.com/tailscale/netlink"
 	"github.com/tailscale/netlink/nl"
 	"go4.org/netipx"
@@ -733,6 +734,10 @@ func (r *linuxRouter) setServe(s Serve) error {
 // overlay from a public one: forwarding is on for the whole host, and neither
 // is a peer's.
 func (r *linuxRouter) setServeLocked(s Serve) error {
+	if !s.serving() {
+		// Before anything below can fail.
+		r.restoreUplink()
+	}
 	if s.serving() {
 		// Any other instance's egress, higher ones' too: its table would take
 		// what this one's peers send out. Refused, nothing is served.
@@ -794,7 +799,87 @@ func (r *linuxRouter) setServeLocked(s Serve) error {
 		return fmt.Errorf("conn: setting up masquerade: %w", err)
 	}
 	r.serving = s.serving()
+	if r.serving {
+		r.forwardUDPInBatches()
+	}
 	return nil
+}
+
+// The features UDP GRO forwarding is: the uplink's to set, and the
+// device's without which it gains nothing.
+const (
+	rxUDPGROForwarding = "rx-udp-gro-forwarding"
+	rxGROList          = "rx-gro-list"
+	txUDPSegmentation  = "tx-udp-segmentation"
+)
+
+// nicFeatures reads and changes a device's offload features, as ethtool -k
+// and -K do.
+type nicFeatures interface {
+	Features(dev string) (map[string]bool, error)
+	Change(dev string, features map[string]bool) error
+	Close()
+}
+
+var openNICFeatures = func() (nicFeatures, error) { return ethtool.NewEthtool() }
+
+// forwardUDPInBatches has the uplink coalesce the UDP it forwards into the
+// device, as tailscaled advises a node that serves: without it every datagram
+// passes alone. What it changes is kept, for restoreUplink. The caller holds
+// r.mu.
+func (r *linuxRouter) forwardUDPInBatches() {
+	if r.mon != nil {
+		r.forwardUDPInBatchesOn(r.mon.InterfaceState().DefaultRouteInterface)
+	}
+}
+
+// forwardUDPInBatchesOn is forwardUDPInBatches with up the uplink.
+func (r *linuxRouter) forwardUDPInBatchesOn(up string) {
+	if up == "" || up == r.groFor {
+		return
+	}
+	r.restoreUplink()
+	r.groFor = up
+	e, err := openNICFeatures()
+	if err != nil {
+		r.logf("UDP GRO forwarding on %s: %v", up, err)
+		return
+	}
+	defer e.Close()
+	dev, err := e.Features(r.link.Attrs().Name)
+	if err != nil || !dev[txUDPSegmentation] {
+		return
+	}
+	had, err := e.Features(up)
+	if _, ok := had[rxUDPGROForwarding]; err != nil || !ok || had[rxUDPGROForwarding] && !had[rxGROList] {
+		return
+	}
+	if err := e.Change(up, map[string]bool{rxUDPGROForwarding: true, rxGROList: false}); err != nil {
+		r.logf("UDP GRO forwarding on %s: %v; UDP passes through more slowly", up, err)
+		return
+	}
+	r.groWas = map[string]bool{rxUDPGROForwarding: had[rxUDPGROForwarding], rxGROList: had[rxGROList]}
+	r.logf("set UDP GRO forwarding on %s while serving", up)
+}
+
+// restoreUplink gives the uplink back the features forwardUDPInBatches
+// changed. The caller holds r.mu.
+func (r *linuxRouter) restoreUplink() {
+	up, was := r.groFor, r.groWas
+	r.groFor, r.groWas = "", nil
+	if was == nil {
+		return
+	}
+	e, err := openNICFeatures()
+	if err == nil {
+		defer e.Close()
+		err = e.Change(up, was)
+	}
+	if err != nil {
+		r.logf("restoring %s's UDP GRO forwarding: %v", up, err)
+		return
+	}
+	r.logf("gave %s its UDP GRO forwarding back", up)
 }
 
 // serveRules are the serving table's forward chain: "iifname != juist*

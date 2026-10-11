@@ -36,7 +36,7 @@ type publishing struct {
 	listening, unbound []string
 	noCert             []ipc.NoCert
 	status             *ipc.Publish
-	share              *share // what this device publishes under its own name
+	shares             []*share // what this device publishes under its own name, in the order they started
 
 	// flagged is whether the terminator's file was last left to exist,
 	// once flagSet.
@@ -66,7 +66,7 @@ func (d *Daemon) SetPublishConsent(on bool, to map[string]string) {
 // wantsTerminatorLocked reports whether this device needs its terminator: a
 // name whose TLS juist ends, or a share. d.pub.mu is held.
 func (d *Daemon) wantsTerminatorLocked() bool {
-	return d.pub.consent && len(d.pub.to) > 0 || d.pub.share != nil
+	return d.pub.consent && len(d.pub.to) > 0 || len(d.pub.shares) > 0
 }
 
 // flagTerminatorLocked has [Options.TerminatorWanted] exist while this
@@ -179,14 +179,14 @@ func (p ingressPorts) access() []conn.Ports {
 
 // planPublish is the ports an ingress may open on this device: log sync's,
 // and those of the names the log publishes on it, once its operator agreed,
-// and its share's, while its view is fresh, so that a withdrawn name ends at
+// and its shares', while its view is fresh, so that a withdrawn name ends at
 // the freshness TTL; by UDP too, those of names offered HTTP/3, for QUIC.
 func (d *Daemon) planPublish(s snapshot, fresh bool) ingressPorts {
 	d.pub.mu.Lock()
 	defer d.pub.mu.Unlock()
 	self, _ := s.state.Node(d.self)
 	ports := ingressPorts{TCP: []uint16{d.gossipPort}}
-	if sh := d.pub.share; sh != nil && fresh && (sh.end.IsZero() || s.now < sh.end.Unix()) {
+	if fresh && slices.ContainsFunc(d.pub.shares, func(sh *share) bool { return sh.live(time.Unix(s.now, 0)) }) {
 		if _, err := shareName(s.state, d.self); err == nil {
 			ports.TCP = append(ports.TCP, sharePort)
 		}

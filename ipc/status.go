@@ -177,8 +177,10 @@ type Derived struct {
 	// Ingress is this device's serving as an ingress; nil where it is none.
 	Ingress *Ingress `cbor:"67,keyasint,omitempty"`
 
-	// Share is what this device publishes under its own name; nil for none.
-	Share *Share `cbor:"68,keyasint,omitempty"`
+	// Shares are what this device publishes under its own name, in the
+	// order they started. Key 68 held a single share: an older CLI fails on
+	// anything else there.
+	Shares []Share `cbor:"73,keyasint,omitempty"`
 
 	// Terminator is what this device's terminator last said; nil where it
 	// never asked.
@@ -216,6 +218,10 @@ type Derived struct {
 	// NAT-traversal key another member or this device already uses. Dropping
 	// only those keeps one announcement from costing everyone their data plane.
 	Conflicted int `cbor:"18,keyasint,omitempty"`
+
+	// PQ is what the installed peers' handshakes mix in; nil where none
+	// is installed.
+	PQ *PQ `cbor:"74,keyasint,omitempty"`
 
 	// Alarm is the fork alarm's text while one is raised, and empty
 	// otherwise. While it is set the data plane holds no peers at all.
@@ -324,7 +330,7 @@ func (s *Status) ForReader() Status {
 			Silent: s.Silent, Unrevoked: s.Unrevoked, Lost: s.Lost, Refused: s.Refused, SelfName: s.SelfName,
 			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
-			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted,
+			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, PQ: s.PQ,
 			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(),
 			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(), HTTPS: s.HTTPS.forReader(),
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
@@ -358,6 +364,18 @@ func coarseClaims(claims []netip.Prefix) []netip.Prefix {
 		}
 	}
 	return out
+}
+
+// A PQ counts the installed peers by the preshared key their handshakes mix
+// in, which keeps recorded traffic from a quantum computer: one the pair
+// alone holds, or one from the group secret, which any member could derive.
+// None names the peers given none, NoKey those given one nobody holds, as a
+// peer behind by more epochs than this device keeps.
+type PQ struct {
+	Pair  int      `cbor:"1,keyasint,omitempty"`
+	Group int      `cbor:"2,keyasint,omitempty"`
+	None  []string `cbor:"3,keyasint,omitempty"`
+	NoKey []string `cbor:"4,keyasint,omitempty"`
 }
 
 // A PeerReach is what the last check found for one installed peer.
@@ -549,9 +567,9 @@ func (t *Terminator) HTTPHeldOn() []string {
 	return on
 }
 
-// A Share is this device's own name, published while a call holds it open:
-// where it goes, its end in Unix seconds, zero for the call's, and why it
-// reaches nobody, where it does not.
+// A Share is this device's own name, or a path under it, published while a
+// call holds it open: where it goes, its end in Unix seconds, zero for the
+// call's, and why it reaches nobody, where it does not.
 type Share struct {
 	Name      string `cbor:"1,keyasint,omitempty"`
 	To        string `cbor:"2,keyasint"`

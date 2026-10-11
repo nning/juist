@@ -105,13 +105,23 @@ it is accepted, and what you can change. In short:
 
 ## Post-quantum
 
-A future quantum computer could break today's common encryption. juist
-protects the network's group secrets against that: they use X25519 together
-with ML-KEM-768. WireGuard traffic is not protected that way. Signatures are
-Ed25519.
+A future quantum computer could break today's common encryption, and traffic
+recorded now could be decrypted then. juist protects against that:
 
-So traffic recorded today could one day be decrypted. Do not rely on juist for
-traffic that must stay secret for decades.
+- Every WireGuard handshake mixes in a preshared key. Two devices first use
+  one derived from the network's group secret, then, within a log sync, one
+  the two alone hold: each encapsulates a secret to the other's ML-KEM-768
+  key. It is renewed with every change to the members.
+- Group secrets are sealed with X25519 together with ML-KEM-768.
+- Signatures are Ed25519. A quantum computer could forge them only once it
+  exists, so recording traffic today gains nothing there.
+
+`juist status` says how many tunnels are post-quantum, and by which key. A
+device on an older version, or one not yet caught up with the network, gets a
+tunnel without a preshared key, and juist passes only its own traffic through
+it, which it seals itself, until the device announces one. A network created
+with an older version gets post-quantum tunnels once every device runs this
+one and `juist log upgrade` raises it to schema 14.
 
 ## Good to know
 

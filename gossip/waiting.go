@@ -61,7 +61,7 @@ func (n *Node) openWaiting(network types.Hash, sealed []byte) waitingPayload {
 	if len(sealed) == 0 || n.opts.CatchUp == nil {
 		return waitingPayload{}
 	}
-	b, err := secrets.OpenFromPeer(network, n.opts.Self, n.opts.CatchUp.Recipient, sealed)
+	b, err := secrets.OpenFromPeer(network, n.opts.Self, n.recipient.Load(), sealed)
 	if err != nil {
 		n.logf("gossip: waiting changes not sealed to this device: %v", err)
 		return waitingPayload{}

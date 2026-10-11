@@ -39,6 +39,7 @@ import (
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/internal/names"
 	"github.com/nning/juist/internal/netstack"
+	"github.com/nning/juist/internal/pairkey"
 	"github.com/nning/juist/internal/resolved"
 	"github.com/nning/juist/relay"
 	"github.com/nning/juist/trust/log"
@@ -216,6 +217,10 @@ type Options struct {
 	// anyone. Empty keeps the cache in memory only.
 	EndpointCachePath string
 
+	// PairsPath is where the preshared keys this node holds with its peers
+	// are kept across restarts; empty keeps them in memory alone.
+	PairsPath string
+
 	// KeyringPath is where the epoch secrets this node holds are kept across
 	// a restart. Empty keeps them in memory only.
 	KeyringPath string
@@ -228,9 +233,11 @@ type Options struct {
 	// kept across a restart. Empty keeps them in memory only.
 	WaitingPath string
 
-	// OnAddrsMoved is called, once and on a goroutine of its own, when the
-	// log gives this device other overlay addresses than the mesh started on.
-	OnAddrsMoved func()
+	// OnAddrsMoved is called, on a goroutine of its own, when the log gives
+	// this device other overlay addresses than the data plane holds, and
+	// OnKeysNamed when it names other keys than the mesh runs on; each once,
+	// until the mesh follows.
+	OnAddrsMoved, OnKeysNamed func()
 
 	// Exit is the exit node this device's owner chose, and ServeExit whether
 	// its operator agreed to serve as one; [Daemon.SetExitChoice] and
@@ -338,10 +345,10 @@ type Options struct {
 // authMu, mu, leaseMu and waitMu are never held together, and the function
 // passed to setStatus runs under mu, so it must take no lock of the daemon's.
 type Daemon struct {
-	self      types.Identity
-	identity  types.PrivateIdentity
-	recipient *secrets.PrivateKeys
-	ula       netip.Prefix
+	self     types.Identity
+	identity types.PrivateIdentity
+	own      atomic.Pointer[ownKeys]
+	ula      netip.Prefix
 
 	manager   conn.Manager
 	gossip    *gossip.Node
@@ -368,12 +375,14 @@ type Daemon struct {
 	nameProofs   relayNameProofs
 	whoamiHTTP   *http.Client
 	askWhoami    func(context.Context, string) ([32]byte, error)
-	noV4         bool
+	noV4         atomic.Bool
 	cachePath    string
 	leasePath    string
 	waitingPath  string
 	onAddrsMoved func()
-	movedOnce    sync.Once
+	movedSaid    atomic.Bool // onAddrsMoved was called since the last move
+	onKeysNamed  func()
+	keysSaid     atomic.Bool // onKeysNamed was called since the last rotation
 	keyringPath  string
 	// terminatorWanted is [Options.TerminatorWanted], ingressPorts
 	// [Options.IngressPorts].
@@ -382,13 +391,29 @@ type Daemon struct {
 	session      *Session
 	discoPrivate [32]byte
 	discoPublic  gossip.DiscoKey
-	wgPublic     types.WGKey
 	gossipPort   uint16
-	overlayOnly  bool           // log sync through the tunnel alone
-	handedOn     types.Hash     // the disable record handOnDisable gave members
-	stack        *netstack.Net  // the overlay's network stack, nil on a device
-	startAddrs   []netip.Prefix // this device's overlay addresses as the mesh started
+	overlayOnly  bool          // log sync through the tunnel alone
+	handedOn     types.Hash    // the disable record handOnDisable gave members
+	stack        *netstack.Net // the overlay's network stack, nil on a device
 	tunName      string
+	gossipLn     net.Listener
+
+	// selfMu serializes changes to the data plane's Self, connSelf, whose
+	// addresses held follows.
+	selfMu   sync.Mutex
+	connSelf conn.Self
+	held     atomic.Pointer[[]netip.Prefix]
+
+	// pairs are the preshared keys this node holds with its peers, under
+	// pairsMu, pairsPath where they are kept and pairsKept what was last
+	// kept there; psks what each installed peer was last given, under mu.
+	pairs      *pairkey.Store
+	pairsPath  string
+	pairsMu    sync.Mutex
+	pairsKept  []byte
+	psks       map[types.Identity]pskGiven
+	pq         bool                    // the network is at types.SchemaPQ or above, under mu
+	pairWanted map[types.Identity]bool // peers an exchange waits on, under mu
 
 	// kept are the epoch secrets read from the keyring file at start, before
 	// anything could overwrite it: those whose wraps this node can no longer
@@ -657,7 +682,6 @@ func New(opts Options) (*Daemon, error) {
 		authority:        opts.Authority,
 		storage:          opts.Storage,
 		identity:         opts.Identity,
-		recipient:        opts.Recipient,
 		self:             self,
 		ula:              state.ULA(),
 		endpoints:        gossip.NewCache(),
@@ -689,13 +713,13 @@ func New(opts Options) (*Daemon, error) {
 		handOffPath:      opts.HandOffSocket,
 		ingressUID:       opts.IngressUID,
 		https443:         map[netip.Addr]net.Listener{},
-		noV4:             opts.NoV4,
 		relayMembers:     map[types.WGKey]bool{},
 		relayHosts:       map[types.Identity]bool{},
 		leases:           map[types.Identity]types.Lease{},
 		leasePath:        opts.LeasePath,
 		waitingPath:      opts.WaitingPath,
 		onAddrsMoved:     opts.OnAddrsMoved,
+		onKeysNamed:      opts.OnKeysNamed,
 		exitChoice:       opts.Exit,
 		serveConsent:     opts.ServeExit,
 		subnetConsent:    opts.ServeSubnets,
@@ -705,11 +729,13 @@ func New(opts Options) (*Daemon, error) {
 		userEgress:       egressUserOf(opts.EgressUser),
 		waiting:          map[types.Hash]heldChange{},
 		keyringPath:      opts.KeyringPath,
+		pairsPath:        opts.PairsPath,
 		terminatorWanted: opts.TerminatorWanted,
 		ingressPorts:     opts.IngressPorts,
 		ttl:              cmp.Or(opts.FreshnessTTL, DefaultFreshnessTTL),
 		leaseEvery:       cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
 	}
+	d.noV4.Store(opts.NoV4)
 	d.pub.consent, d.pub.to = opts.ServePublished, maps.Clone(opts.ServeTo)
 	if d.listenHTTPS == nil {
 		d.listenHTTPS = defaultListenHTTPS
@@ -723,6 +749,10 @@ func New(opts Options) (*Daemon, error) {
 	selfAddrs := d.overlayAddrs(state, self, now)
 	d.v4 = state.V4RangesAt(now)
 	d.kept = d.loadKeyring()
+	d.pairs = d.loadPairs()
+	// Before anything announces this device: an announcement naming no
+	// epoch has its peers drop the keys they give it.
+	d.pq = state.Schema() >= types.SchemaPQ
 	if d.logf == nil {
 		d.logf = func(string, ...any) {}
 	}
@@ -734,7 +764,7 @@ func New(opts Options) (*Daemon, error) {
 	if err != nil {
 		return nil, err
 	}
-	d.wgPublic = wgPub
+	d.own.Store(&ownKeys{recipient: opts.Recipient, wg: wgPub})
 
 	// Never persisted: it is connectivity material, and a peer seeing a new
 	// one is meant to read it as a restart of the process.
@@ -794,7 +824,7 @@ func New(opts Options) (*Daemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("daemon: starting the data plane: %w", err)
 	}
-	d.manager = mgr
+	d.manager, d.connSelf = mgr, connOpts.Self
 	undo.push(func() { mgr.Close() })
 
 	// With a TUN device, log sync runs through the tunnel alone: the port is
@@ -822,13 +852,13 @@ func New(opts Options) (*Daemon, error) {
 		}
 	}
 	d.startNames, d.namesFixed = opts.ServeNames, opts.NamesAddr
-	d.startAddrs = selfAddrs
+	d.held.Store(&selfAddrs)
 	ln, err := d.listenGossip(opts, selfAddrs)
 	if err != nil {
 		return nil, err
 	}
 	undo.push(func() { ln.Close() })
-	d.gossipPort = uint16(portOf(ln.Addr()))
+	d.gossipLn, d.gossipPort = ln, uint16(portOf(ln.Addr()))
 
 	d.gossip, err = gossip.New(gossip.Options{
 		Self:         self,
@@ -849,6 +879,8 @@ func New(opts Options) (*Daemon, error) {
 		OnLeases:     d.offerLeases,
 		OnHave:       d.onHave,
 		Waiting:      (*waitingAdapter)(d),
+		Pair:         d.pairMsg,
+		OnPair:       d.onPair,
 		Logf:         d.logf,
 	})
 	if err != nil {
@@ -970,7 +1002,7 @@ func (d *Daemon) listenGossip(opts Options, overlay []netip.Prefix) (net.Listene
 	switch {
 	case d.stack != nil:
 		listen = func(port uint16) (net.Listener, error) {
-			return listenEach(func(ap netip.AddrPort) (net.Listener, error) { return d.stack.ListenTCPAddrPort(ap) }, overlay, port)
+			return asListener(listenEach(func(ap netip.AddrPort) (net.Listener, error) { return d.stack.ListenTCPAddrPort(ap) }, overlay, port))
 		}
 	case d.overlayOnly:
 		listen = func(port uint16) (net.Listener, error) { return listenOverlay(overlay, port) }
@@ -1131,6 +1163,7 @@ const PushFanout = 8
 // pushAll runs one anti-entropy round with up to [PushFanout] members. It
 // terminates because OnRecords fires only when something was actually new.
 func (d *Daemon) pushAll(ctx context.Context) {
+	wanted := d.takePairWanted()
 	peers := d.memberList()
 	if len(peers) == 0 {
 		return
@@ -1139,6 +1172,9 @@ func (d *Daemon) pushAll(ctx context.Context) {
 		// Shuffle rather than take a prefix: a fixed slice would leave the
 		// rest reachable only through whoever happened to be in it.
 		rand.Shuffle(len(peers), func(i, j int) { peers[i], peers[j] = peers[j], peers[i] })
+		// An exchange of preshared keys waits on its peer alone.
+		first := slices.DeleteFunc(slices.Clone(peers), func(id types.Identity) bool { return !wanted[id] })
+		peers = append(first, slices.DeleteFunc(peers, func(id types.Identity) bool { return wanted[id] })...)
 		peers = peers[:PushFanout]
 	}
 	d.gossip.Sync(ctx, peers)
@@ -1272,21 +1308,29 @@ func (d *Daemon) checkInBackground(ctx context.Context) {
 }
 
 // addrsMoved reports whether the log gives this device other overlay
-// addresses than the mesh started on, as a renumbering does when it applies
+// addresses than the data plane holds, as a renumbering does when it applies
 // and again at its deadline.
 func (d *Daemon) addrsMoved() bool {
 	state, err := d.TrustedState()
 	if err != nil || !state.IsMember(d.self) {
 		return false
 	}
-	return !slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.startAddrs)
+	return !slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.heldAddrs())
+}
+
+// heldAddrs is the overlay addresses the data plane holds.
+func (d *Daemon) heldAddrs() []netip.Prefix {
+	if p := d.held.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // overlayAddrs is [log.State.Addrs] as this mesh uses them: without IPv4
 // where it runs without.
 func (d *Daemon) overlayAddrs(state *log.State, id types.Identity, now int64) []netip.Prefix {
 	addrs := state.Addrs(id, now)
-	if d.noV4 {
+	if d.noV4.Load() {
 		addrs = slices.DeleteFunc(addrs, func(p netip.Prefix) bool { return p.Addr().Is4() })
 	}
 	return addrs

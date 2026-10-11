@@ -10,7 +10,9 @@
 //	probe resolve ADDR LOG            answer DNS on ADDR's port 53 as the public would, logging "TYPE NAME" to LOG
 //	probe tls NAME PORT               as serve, over TLS on PORT, with a certificate of its own
 //	probe hello ADDR:PORT SNI [CA]    as get, over TLS, asking for SNI, taking a certificate CA's file issued, or any
+//	probe h3get ADDR:PORT NAME CA     fetch https://NAME/ from ADDR:PORT over HTTP/3, and print the protocol and status
 //	probe answer ADDR IP [NAME=IP]    answer DNS on ADDR, over UDP and TCP, with IP for every name, "-" for none, but NAMEs
+//	probe pairs FILE                  print the newest generation of a pair key in use in juistd's pairs file
 //	probe pcap FILE                   print each TCP flow to 443 in a capture with its SNI, each DNS query, and any other packet
 //	probe proxy ADDR USER:PASS LOG NAME=IP...  serve HTTP CONNECT on ADDR to the NAMEs' port 443 alone, logging each request
 //	probe visitors [FLAGS] URL        load a website as browsers do, over HTTP/3 with -h3, and print what came of it
@@ -18,6 +20,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -35,6 +38,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/nning/juist/internal/proxyproto"
@@ -49,10 +54,10 @@ func main() {
 		return
 	}
 	if len(os.Args) != 3 && !(len(os.Args) == 4 && slices.Contains([]string{"serve", "get", "resolve", "tls", "hello", "answer", "proxied"}, os.Args[1])) &&
-		!(len(os.Args) == 5 && (os.Args[1] == "hold" || os.Args[1] == "hello")) && !(len(os.Args) > 4 && os.Args[1] == "answer") &&
+		!(len(os.Args) == 5 && (os.Args[1] == "hold" || os.Args[1] == "hello" || os.Args[1] == "h3get")) && !(len(os.Args) > 4 && os.Args[1] == "answer") &&
 		!(len(os.Args) > 5 && os.Args[1] == "proxy") {
 		fmt.Fprintln(os.Stderr, "usage: probe serve NAME [PORT] | proxied NAME PORT | web PORT | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | "+
-			"dns ADDR | resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | answer ADDR IP [NAME=IP...] | pcap FILE")
+			"dns ADDR | resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | h3get ADDR:PORT NAME CA | answer ADDR IP [NAME=IP...] | pairs FILE | pcap FILE")
 		os.Exit(2)
 	}
 	var err error
@@ -75,10 +80,14 @@ func main() {
 		err = serveTLS(os.Args[2], os.Args[3])
 	case "hello":
 		err = hello(os.Args[2], os.Args[3], os.Args[4:])
+	case "h3get":
+		err = h3get(os.Args[2], os.Args[3], os.Args[4])
 	case "answer":
 		err = answerAll(os.Args[2], os.Args[3], os.Args[4:])
 	case "pcap":
 		err = pcapFlows(os.Args[2])
+	case "pairs":
+		err = pairs(os.Args[2])
 	case "proxy":
 		err = proxy(os.Args[2], os.Args[3], os.Args[4], os.Args[5:])
 	default:
@@ -205,6 +214,33 @@ func hello(addr, sni string, ca []string) error {
 		return err
 	}
 	fmt.Print(line)
+	return nil
+}
+
+// h3get fetches https://name/ over HTTP/3 from addr, by a certificate ca
+// issued, and says by which protocol and with what status.
+func h3get(addr, name, ca string) error {
+	pem, err := os.ReadFile(ca)
+	if err != nil {
+		return err
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem) {
+		return fmt.Errorf("%s holds no certificate", ca)
+	}
+	tr := &http3.Transport{TLSClientConfig: &tls.Config{ServerName: name, RootCAs: roots},
+		Dial: func(ctx context.Context, _ string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
+			return quic.DialAddr(ctx, addr, tlsCfg, cfg)
+		}}
+	defer tr.Close()
+	c := http.Client{Transport: tr, Timeout: 10 * time.Second}
+	resp, err := c.Get("https://" + name + "/")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	fmt.Println(resp.Proto, resp.StatusCode)
 	return nil
 }
 

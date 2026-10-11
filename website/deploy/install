@@ -1,8 +1,10 @@
 #!/bin/sh
-# Serves juist-build's website build when it is not the one served already.
+# Serves juist-build's build of the website instance $1 when it is not the
+# one served already.
 set -eu
-src=/var/lib/juist-build/site-out
-dst=/var/lib/juist-site
+name=$1
+src=/var/lib/juist-build/site/$name/out
+dst=/var/lib/juist-site/$name
 [ -f "$src/commit" ] || exit 0
 commit=$(cat "$src/commit")
 old=$(cat "$dst/current/commit" 2>/dev/null || true)
@@ -22,7 +24,7 @@ oldserver=$(readlink -f "$dst/current/server" 2>/dev/null || true)
 ln -sfn "releases/$commit" "$dst/current.tmp"
 mv -T "$dst/current.tmp" "$dst/current"
 if [ -z "$oldserver" ] || ! cmp -s "$oldserver" "$rel/server"; then
-	systemctl restart juist-site.service
+	systemctl restart "juist-site@$name.service"
 fi
 # Keep the release served and the one before it.
 ls -1t "$dst/releases" | tail -n +3 | while read -r r; do rm -rf "$dst/releases/$r"; done

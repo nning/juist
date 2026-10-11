@@ -171,7 +171,7 @@ juist publish add fb fbweb 8443`)
 // overlay address answers no port but the one it publishes and log sync's,
 // exit criterion (4).
 func serviceMember(t *testing.T, fb, lx *vm) {
-	t.Cleanup(func() { lx.try("pkill -f '[j]uistd --serve'", time.Minute) })
+	t.Cleanup(func() { lx.try("pkill -f '[j]uistd --serve'; pkill -f '[p]robe web 8091'", time.Minute) })
 	t.Cleanup(func() {
 		if t.Failed() {
 			out, _ := lx.try("tail -40 /tmp/svc/juistd.log; juist --socket /tmp/svc/juistd.sock status", time.Minute)
@@ -181,12 +181,13 @@ func serviceMember(t *testing.T, fb, lx *vm) {
 			hold(t, fb, lx)
 		}
 	})
-	lx.run(t, `set -e
-install -d -o nobody -g nogroup -m 700 /tmp/svc
-setsid -f setpriv --reuid=nobody --regid=nogroup --clear-groups --inh-caps=-all \
-  env SSL_CERT_FILE=/etc/juist-test-ca.pem /usr/bin/juistd --serve svc=127.0.0.1:80 --home /tmp/svc \
+	member := func(serve string) string {
+		return `setsid -f setpriv --reuid=nobody --regid=nogroup --clear-groups --inh-caps=-all \
+  env SSL_CERT_FILE=/etc/juist-test-ca.pem /usr/bin/juistd --serve ` + serve + ` --home /tmp/svc \
   --socket /tmp/svc/juistd.sock --port 41700 --gossip-port 41701 --relay-port 41702 --no-dht \
-  --acme https://`+fb.lanAddr+`:14000/dir >/tmp/svc/juistd.log 2>&1 < /dev/null`)
+  --acme https://` + fb.lanAddr + `:14000/dir >>/tmp/svc/juistd.log 2>&1 < /dev/null`
+	}
+	lx.run(t, "set -e\ninstall -d -o nobody -g nogroup -m 700 /tmp/svc\n"+member("svc=127.0.0.1:80"))
 	lx.eventually(t, "the service member answering", time.Minute, "juist --socket /tmp/svc/juistd.sock status",
 		func(string) bool { return true })
 	invite(t, fb, lx, "juist --socket /tmp/svc/juistd.sock join '%s' --name svc")
@@ -197,4 +198,14 @@ juist publish add svc svc 443`)
 		"/tmp/probe hello "+fb.lanAddr+":443 svc.pub.example.org /tmp/root.pem", has("lx-web from 127.0.0.1"))
 	svc4 := strings.TrimSpace(fb.run(t, `juist devices | awk '$1 == "svc" {print $2}'`))
 	fb.run(t, "! /tmp/probe get "+svc4+":80")
+
+	// M15's exit criterion (7): serving HTTP with --http3, it answers
+	// HTTP/3 at its overlay address, on its own network stack.
+	// Apart from the start, whose shell pkill would match too.
+	lx.run(t, `pkill -f '[j]uistd --serve'; while pgrep -f '[j]uistd --serve' >/dev/null; do sleep 0.2; done`)
+	lx.run(t, `set -e
+setsid -f sh -c '/tmp/probe web 8091 >/dev/null 2>&1' </dev/null >/dev/null 2>&1
+`+member("svc=127.0.0.1:8091 --http3"))
+	fb.eventually(t, "HTTP/3 at the service member's overlay address", 4*time.Minute,
+		"/tmp/probe h3get "+svc4+":443 svc.pub.example.org /tmp/root.pem", has("HTTP/3.0 200"))
 }

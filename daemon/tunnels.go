@@ -11,6 +11,7 @@ import (
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/discovery/dht"
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/pairkey"
 	"github.com/nning/juist/types"
 )
 
@@ -118,12 +119,14 @@ func (d *Daemon) settles() time.Duration {
 // signedAt reads an announcement's sequence number as the signer's clock.
 func signedAt(e gossip.Endpoint) time.Time { return time.Unix(int64(min(e.Seq, 1<<62)), 0) }
 
-// A namedPeer is an installed peer under its member name.
+// A namedPeer is an installed peer under its member name, and what its
+// handshakes mix in.
 type namedPeer struct {
-	name string
-	id   types.Identity
-	wg   types.WGKey
-	peer conn.Peer
+	name  string
+	id    types.Identity
+	wg    types.WGKey
+	peer  conn.Peer
+	stage pairkey.Stage
 }
 
 // setInstalled records the peer set about to be installed. Set before
@@ -265,6 +268,11 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		}
 	}
 	d.answered = answers
+	handshakes := make(map[uint64]time.Time, len(tunnels))
+	for id, t := range tunnels {
+		handshakes[id] = t.LastHandshake
+	}
+	d.probePairs(out, probed, handshakes)
 	return out
 }
 

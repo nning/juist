@@ -1,0 +1,66 @@
+# Every package of the module, placed for the audit (docs/06-verification.md §5):
+#   core PKG           the trust layer, held to a budget
+#   in   PKG [FILE…]   audited; with files, those alone and the rest outside
+#   out  PKG REASON    outside, and why
+# In is what decides who may do what, holds or derives a key, parses input
+# from outside the membership, or runs as root. make tcb fails on a package
+# placed nowhere and on a listed package or file that is gone.
+
+core types
+core trust/enroll
+core trust/log
+core trust/secrets
+core trust/store
+
+in gossip
+in internal/aead
+in internal/addrkey
+in internal/dnsfwd
+in internal/ingress
+in internal/keyring
+in internal/keys
+in internal/names
+in internal/pairkey
+in internal/plumber
+in internal/policy
+in internal/quicinitial
+in internal/statuspage
+in internal/waiting
+in mobile
+in cmd/juist changes.go describe.go pin.go rotate.go waiting.go
+in cmd/juistd helpers_unix.go privsep_freebsd.go
+in conn confine.go
+in daemon addrkeys.go control.go ipc.go pairkeys.go peercred.go peercred_bsd.go peercred_linux.go peercred_other.go policy.go reconcile.go
+in ipc ipc.go status.go
+in relay admit.go cert.go https.go
+
+out ci                               the CI harness, not shipped
+out cmd/internal/defaults            packaging defaults
+out discovery/dht                    an untrusted transport; what it carries internal/aead seals
+out discovery/mdns                   an untrusted transport; what it carries internal/aead seals
+out internal/admit                   bounds connections before they speak: availability alone
+out internal/changelog               says the log's changes for juist log
+out internal/cliflag                 parses the CLI's own arguments
+out internal/firewalld               asks firewalld to open juist's ports
+out internal/firewalld/firewalldtest tests
+out internal/guest                   carries trust/enroll's messages and holds no key
+out internal/host                    carries trust/enroll's messages and asks the CLI for every signature
+out internal/instance                numbers a host's instances and their ports
+out internal/netstack                glue to the userspace stack
+out internal/nettest                 tests
+out internal/pipe                    copies bytes between two connections
+out internal/proxyproto              reads a header the ingress alone writes
+out internal/rendezvous              an untrusted meeting point; the link's secret seals what passes
+out internal/resolved                tells systemd-resolved where to ask
+out internal/statedir                the state directory's layout
+out internal/terminator              TLS by crypto/tls behind the ingress; holds no member's key
+out internal/underlay                picks the addresses a device announces
+out internal/webstyle                the served pages' look
+out interop                          the test lab
+out interop/probe                    the test lab
+out packaging                        build tooling
+out packaging/freebsd/mkpkg          build tooling
+out packaging/image/mkimage          build tooling
+out packaging/licenses               build tooling
+out private/publish                  publishing tooling
+out relay/forward                    carries enrollment between host and guest, sealed by the link's secret

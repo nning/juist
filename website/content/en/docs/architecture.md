@@ -103,8 +103,11 @@ of [wireguard-go](https://git.zx2c4.com/wireguard-go/). Tailscale's NAT
 traversal, below, needs it there. Kernel WireGuard would be faster on Linux
 and FreeBSD.
 
-WireGuard traffic is not protected against a future quantum computer; see
-the [trade-offs]({{< home "trade-offs" >}}).
+Every WireGuard handshake mixes in a preshared key that a future quantum
+computer cannot recover, so traffic recorded today stays secret. Two devices
+start on a key derived from the group secret below; in the log sync between
+them each then encapsulates a secret to the other's ML-KEM-768 key, and they
+move to a key the two alone hold, renewed with every change to the members.
 
 ## What juist takes from Tailscale {#tailscale}
 

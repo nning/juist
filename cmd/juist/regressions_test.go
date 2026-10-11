@@ -303,9 +303,8 @@ func TestAnOlderNetworkIsNotRenumberedAlready(t *testing.T) {
 var _ = mrand.IntN
 var _ = fmt.Sprint
 
-// A device that went offline reads so in the table, with when it was last
-// heard from, and is neither counted as heard from, nor blamed on a firewall,
-// nor repeated beneath the table; one not decided yet is said to be either.
+// A device that went offline is neither counted as heard from, nor blamed on
+// a firewall, nor named in status; one not decided yet is said to be either.
 func TestStatusCallsAnOfflineDeviceOffline(t *testing.T) {
 	t.Parallel()
 	desktop, laptop := types.Identity{1}, types.Identity{2}
@@ -323,10 +322,9 @@ func TestStatusCallsAnOfflineDeviceOffline(t *testing.T) {
 	var out syncBuffer
 	(&cli{t: t, home: t.TempDir()}).app(&out, "").printStatus(st)
 	got := out.String()
-	mustContain(t, got, "2 others, 1 of them heard from",
-		"offline, heard 25m ago", "no answer from laptop1: offline, or udp/41643 blocked")
-	if strings.Contains(got, "desktop offline") {
-		t.Errorf("an offline device is repeated beneath the table:\n%s", got)
+	mustContain(t, got, "2 others, 1 of them heard from", "no answer from laptop1: offline, or udp/41643 blocked")
+	if strings.Contains(got, "desktop") {
+		t.Errorf("status names an offline device:\n%s", got)
 	}
 	if strings.Contains(got, "ufw") || strings.Contains(got, "firewall-cmd") {
 		t.Errorf("an offline device, or one not decided yet, is blamed on a firewall:\n%s", got)

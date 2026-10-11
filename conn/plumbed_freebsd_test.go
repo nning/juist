@@ -7,11 +7,13 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
 	"tailscale.com/wgengine/router"
 
@@ -78,9 +80,14 @@ func TestAPlumbedDeviceCarriesTheOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Renumbering, the new address comes first: it is the one every peer
-	// accepts, and the kernel would choose the one it had before.
+	// accepts, and the kernel would choose the one it had before. The route
+	// from it goes in before the one from the old address goes.
+	changes := watchRoutes(t, peer.Addr())
 	if err := rtr.Set(&router.Config{LocalAddrs: []netip.Prefix{renumbered, old, self6}, Routes: routes}); err != nil {
 		t.Fatal(err)
+	}
+	if got := changes(); len(got) == 0 || got[0] != syscall.RTM_ADD {
+		t.Errorf("the peer's route changed by %v, want an addition first", got)
 	}
 	out, err := exec.Command("/sbin/route", "-n", "get", peer.Addr().String()).CombinedOutput()
 	if err != nil || !slices.Contains(fieldsOf(out), "juist9") {
@@ -143,6 +150,54 @@ func TestAPlumbedDeviceCarriesTheOverlay(t *testing.T) {
 }
 
 func fieldsOf(b []byte) []string { return strings.Fields(string(b)) }
+
+// watchRoutes follows the routing socket for additions and deletions of
+// routes to dst; the function returned stops and reports them in order.
+func watchRoutes(t *testing.T, dst netip.Addr) func() []int {
+	t.Helper()
+	fd, err := syscall.Socket(syscall.AF_ROUTE, syscall.SOCK_RAW|syscall.SOCK_CLOEXEC, syscall.AF_UNSPEC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Closing does not wake a read; a timeout does.
+	tv := syscall.Timeval{Usec: 100_000}
+	if err := syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv); err != nil {
+		t.Fatal(err)
+	}
+	var got []int
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b := make([]byte, 1<<16)
+		for !stop.Load() {
+			n, err := syscall.Read(fd, b)
+			if err != nil || n == 0 {
+				continue
+			}
+			msgs, err := route.ParseRIB(route.RIBTypeRoute, b[:n])
+			if err != nil {
+				continue
+			}
+			for _, m := range msgs {
+				rm, ok := m.(*route.RouteMessage)
+				if !ok || rm.Type != syscall.RTM_ADD && rm.Type != syscall.RTM_DELETE || len(rm.Addrs) <= syscall.RTAX_DST {
+					continue
+				}
+				if a, ok := rm.Addrs[syscall.RTAX_DST].(*route.Inet4Addr); ok && netip.AddrFrom4(a.IP) == dst {
+					got = append(got, rm.Type)
+				}
+			}
+		}
+	}()
+	return func() []int {
+		time.Sleep(200 * time.Millisecond)
+		stop.Store(true)
+		<-done
+		syscall.Close(fd)
+		return got
+	}
+}
 
 // A packet the node writes into its device reaches the host, whose answer
 // comes back out of it.

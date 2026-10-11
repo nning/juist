@@ -32,22 +32,16 @@ home · connected
   This device   laptop  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0
   Devices       3 others, all heard from
   Tunnels       3 of 3 live
+  Post-quantum  every tunnel: 3 by pair keys
   Relays        1 available, via vps
   Names         home.juist
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
   Updated       just now
-
-NAME                  IPV4         IPV6                                    ROLES                            REACHED
-laptop (this device)  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0  -                                -
-nas                   198.18.36.2  fd4c:8a21:e3f:77c0:1e4b:a923:6d05:f18e  voucher, names mail.example.org  direct
-vps                   198.18.36.3  fd4c:8a21:e3f:c2d9:84f1:3b6a:e057:29dc  voucher, relay                   direct
-phone                 198.18.36.4  fd4c:8a21:e3f:e83:5a7d:f12c:9b46:d371   -                                relayed
 ```
 
 Die erste Zeile nennt das Netz und seinen Zustand. Darunter folgen die
-Einzelheiten, die Gerätetabelle und zuletzt etwaige Warnungen, jede mit einem
-Hinweis.
+Einzelheiten und zuletzt etwaige Warnungen, jede mit einem Hinweis.
 {{< /step >}}
 
 In der ersten Zeile steht einer dieser Zustände:
@@ -67,9 +61,15 @@ In der ersten Zeile steht einer dieser Zustände:
 - `This device`: Name und Adressen dieses Geräts im Netz, erst IPv4, dann IPv6.
 - `Devices`: wie viele andere Geräte es gibt und wie viele davon sich gemeldet haben.
 - `Tunnels`: durch wie viele Tunnel bei der letzten Prüfung Verkehr floss. juistd prüft alle 30 Sekunden, fragt einen ruhigen Tunnel aber nur alle 5 Minuten, wenn beide Enden ein Relay haben, damit das Funkmodul eines Laptops schlafen kann.
+- `Post-quantum`: wie viele Tunnel einen Schlüssel in ihre Handshakes
+  mischen, den ein Quantencomputer nicht herausfinden kann, und welchen: einen
+  Pair Key, den nur die beiden Geräte haben, oder den Gruppenschlüssel, den
+  jedes Mitglied ableiten könnte, wie in den ersten Sekunden eines Tunnels und
+  zu einem Gerät, das hinter dem Netz zurück ist. Eine Warnung nennt einen
+  Tunnel ohne. Siehe [Sicherheit]({{< relref "docs/security" >}}).
 - `Relays`: wie viele Geräte Verkehr weiterleiten dürfen und welches davon dieses Gerät nutzt. Ein [Relay]({{< relref "docs/relays" >}}) leitet Verkehr zwischen zwei Geräten weiter, die sich nicht direkt erreichen.
 - `HTTPS`: auf einem Gerät, das nur HTTPS sendet, die Relays auf 443, über die es läuft, und sein Proxy. Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}).
-- `Relay name`: der öffentliche Name, den das Relay dieses Geräts auf 443 bedient, und ob schon.
+- `Relay name`: der öffentliche Name, den das Relay dieses Geräts auf 443 bedient, und, für root und den Operator, ob schon.
 - `Exit node`: über welches Gerät der Internetverkehr dieses Geräts läuft, falls überhaupt. Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: die Domain, unter der dieses Gerät die anderen findet, etwa `home.juist`, oder der Grund, warum das nicht geht. Siehe [Namen]({{< relref "docs/names" >}}).
 - `Freshness`: wann ein Voucher zuletzt bestätigt hat, dass dieses Gerät den aktuellen Stand des Netzes kennt, und wie lange das gilt. Ein Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich ausstellt. Nach 48 Stunden ohne Bestätigung steht dort `expired; vouchers only`; einen Tag vorher sagt eine Warnung, wann. Wo kein Gerät Voucher ist, steht dort `unchecked: no voucher`, und wo zwei Geräte Verkehr weiterleiten dürfen, schlägt ein Hinweis sie als Voucher vor. Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
@@ -78,9 +78,8 @@ In der ersten Zeile steht einer dieser Zustände:
 - `Ingress`: auf einer Ingress, ob sie läuft, welche Namen sie bedient,
   welche Ports sie per TCP weiterreicht und welche ein anderes Programm
   belegt.
-- `Sharing`: was dieses Gerät unter seinem eigenen Namen teilt, eine Datei
-  oder ein Verzeichnis mit seinem Link, bis wann, oder warum es niemand
-  erreicht.
+- `Sharing`: wie viele Freigaben dieses Gerät hält, die `juist share`
+  auflistet, oder warum sie niemand erreicht.
 - `Ports`: die Ports, auf denen juistd lauscht. `udp/41643` ist der für die Tunnel.
 - `Updated`: wann juistd zuletzt einen neuen Stand des Netzes übernommen hat.
 
@@ -89,17 +88,25 @@ die jeweilige Funktion genutzt wird.
 
 ## Die Geräte auflisten
 
-`juist devices` gibt nur die Tabelle aus:
+`juist devices` listet alle Geräte in einer Tabelle auf:
 
-```sh
-juist devices
+```console
+$ juist devices
+NAME                  IPV4         REACHED  ROLES
+laptop (this device)  198.18.36.1  -        -
+nas                   198.18.36.2  direct   voucher, names, publishes
+vps                   198.18.36.3  direct   voucher, relay
+phone                 198.18.36.4  relayed  -
 ```
 
 `ROLES` zeigt, welche Rollen das Netz einem Gerät gegeben hat, etwa
-`voucher`, `relay` oder `exit`, dazu seine Subnetze, Namen und die Namen, die
-es veröffentlicht, als `publishes docs.example.org` oder, ab drei,
-`publishes 3 names`, und `-`, wenn es nichts davon hat. `REACHED` gibt an,
-wie juistd das Gerät bei der letzten Prüfung erreicht hat:
+`voucher`, `relay` oder `exit`, dazu seine Subnetze, `names`, wenn
+öffentliche Namen auf es zeigen, die [`juist names`]({{< relref "docs/names" >}})
+auflistet, `publishes`, wenn es Namen veröffentlicht, die
+[`juist publish`]({{< relref "docs/publishing" >}}) auflistet, und `-`, wenn es nichts davon hat. In einem schmalen Terminal
+brechen die Rollen unter ihrer Spalte um, in einem noch schmaleren, etwa auf
+dem Handy, bekommt jedes Gerät ein paar eigene Zeilen. `REACHED` gibt an, wie juistd das
+Gerät bei der letzten Prüfung erreicht hat:
 
 | `REACHED` | Bedeutung |
 |---|---|
@@ -112,14 +119,13 @@ wie juistd das Gerät bei der letzten Prüfung erreicht hat:
 | `not connected` | das Gerät hat sich gemeldet, aber es gibt keinen Tunnel, etwa weil der Stand dieses Geräts veraltet ist |
 | `-` | dieses Gerät selbst |
 
-Unter [Zugriffsregeln]({{< relref "docs/access" >}}) zeigen `juist devices`
-und `juist status` dieses Gerät und die Mitglieder, zu denen es einen Tunnel
-hat, und `juist devices` endet mit
+Unter [Zugriffsregeln]({{< relref "docs/access" >}}) zeigt `juist devices`
+dieses Gerät und die Mitglieder, zu denen es einen Tunnel hat, und endet mit
 `hint: 2 more devices the access policy keeps apart from this one: juist devices --all`.
 
-`juist devices --keys` zeigt zusätzlich den Identitätsschlüssel jedes
-Geräts. Auch [`juist remove`]({{< relref "docs/remove" >}}) akzeptiert diesen
-Schlüssel.
+`juist devices -6` zeigt zusätzlich die IPv6-Adresse jedes Geräts,
+`juist devices --keys` seinen Identitätsschlüssel. Auch
+[`juist remove`]({{< relref "docs/remove" >}}) akzeptiert diesen Schlüssel.
 
 ## Alle Änderungen ansehen
 
@@ -139,6 +145,22 @@ $ juist log
 Jeder Eintrag ist eine Änderung, darunter stehen die Admins, die sie mit
 ihrem Schlüssel bestätigt haben. Ein Admin ist eine Person, deren Schlüssel
 Änderungen bestätigen darf (siehe [Admins]({{< relref "docs/admins" >}})).
+
+`juist log show` sagt, was eine einzelne Änderung bewirkt hat, und welche
+Schlüssel sie signiert haben. Du gibst sie mit ihrer Nummer oder dem Anfang
+ihres Hashes an:
+
+```console
+$ juist log show 3
+   3  change of a device's roles or subnets: vps
+      gives vps (nid:QH4T7MWD…) the role relay
+      approved by alice, with nid:Kc3vR8dE…
+      hash MMOPGHJRKJ7DTZ2QWLQ6N5LXGZ4VQ3RJ4M2B7ZPXS2YQFG6C5WDA
+```
+
+Jede Änderung wird gegen das Netz beschrieben, wie es direkt davor war;
+eine Änderung der Zugriffsregeln erscheint deshalb als Diff. Eine Uhrzeit
+enthält das Log nicht, denn keine Änderung trägt ein signiertes Datum.
 `juist log verify` prüft das gesamte Log noch einmal.
 
 ## Das Log des Daemons
@@ -154,7 +176,7 @@ hat einen eigenen Daemon, `juistd@juist1`, mit eigenem Log.
 
 - Jeder lokale Benutzer darf `juist status` ausführen. Wer weder root noch
   [Operator]({{< relref "docs/operator" >}}) des Geräts ist, sieht die Ausgabe
-  ohne Gerätetabelle und darunter einen Hinweis `read-only`.
+  mit einem Hinweis `read-only` darunter.
 - `juist devices`, `juist log` und alle anderen Befehle sind root und dem Operator vorbehalten.
 - Ist ein Gerät in [mehreren Netzen]({{< relref "docs/networks" >}}), zeigen
   `juist status` und `juist devices` alle Netze nacheinander.
@@ -162,6 +184,6 @@ hat einen eigenen Daemon, `juistd@juist1`, mit eigenem Log.
 
 ## Wenn etwas nicht klappt
 
-`juist status` gibt Warnungen unter der Tabelle aus, jeweils mit einer Zeile
+`juist status` gibt Warnungen unter den Einzelheiten aus, jeweils mit einer Zeile
 `hint:` darunter. Die häufigsten und was du dagegen tun kannst, stehen unter
 [Fehlersuche]({{< relref "docs/troubleshooting" >}}).

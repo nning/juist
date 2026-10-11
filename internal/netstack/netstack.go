@@ -2,9 +2,9 @@
  *
  * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
  *
- * Adapted from wireguard-go's tun/netstack to TCP alone, and to the gVisor
- * Tailscale pins, whose packet buffers wireguard-go's copy no longer builds
- * against.
+ * Adapted from wireguard-go's tun/netstack to TCP and UDP alone, and to the
+ * gVisor Tailscale pins, whose packet buffers wireguard-go's copy no longer
+ * builds against.
  */
 
 // Package netstack is a TUN device whose other end is a TCP/IP stack in this
@@ -18,7 +18,7 @@ import (
 	"net/netip"
 	"os"
 	"sync"
-	"syscall"
+	"sync/atomic"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -30,14 +30,28 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+	"tailscale.com/net/packet"
+	"tailscale.com/wgengine/netstack/gro"
+)
+
+// batchSize is how many packets a Read or Write takes at most.
+const batchSize = 128
+
+// TCP's buffer bounds, tailscaled's: what a path of high bandwidth and delay
+// needs in flight.
+const (
+	rxBufMax = 8 << 20
+	txBufMax = 6 << 20
 )
 
 // A Device is the TUN end, and Net the stack's.
 type Device struct {
-	ep       *channel.Endpoint
+	ep       *link
 	stack    *stack.Stack
 	events   chan tun.Event
 	incoming chan *buffer.View
+	pending  *buffer.View // read and not yet given, as it did not fit
 	mtu      int
 
 	closeOnce sync.Once
@@ -49,23 +63,46 @@ type Net struct{ d *Device }
 
 var _ tun.Device = (*Device)(nil)
 
+// A link is the stack's NIC, which keeps the dispatcher the stack attaches,
+// for what is written to go to it through GRO.
+type link struct {
+	*channel.Endpoint
+	d atomic.Pointer[stack.NetworkDispatcher]
+}
+
+func (l *link) Attach(d stack.NetworkDispatcher) {
+	l.Endpoint.Attach(d)
+	if d == nil {
+		l.d.Store(nil)
+		return
+	}
+	l.d.Store(&d)
+}
+
 // New is a device of mtu with addrs, and the stack behind it.
 func New(addrs []netip.Addr, mtu int) (*Device, *Net, error) {
 	d := &Device{
-		ep: channel.New(1024, uint32(mtu), ""),
+		ep: &link{Endpoint: channel.New(1024, uint32(mtu), "")},
 		stack: stack.New(stack.Options{
 			NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
-			TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
+			TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 			HandleLocal:        true,
 		}),
 		events:   make(chan tun.Event, 10),
-		incoming: make(chan *buffer.View),
+		incoming: make(chan *buffer.View, 4*batchSize),
 		mtu:      mtu,
 		closed:   make(chan struct{}),
 	}
+	// Write validates every checksum the stack would, before GRO.
+	d.ep.LinkEPCapabilities |= stack.CapabilityRXChecksumOffload
 	sack := tcpip.TCPSACKEnabled(true)
-	if err := d.stack.SetTransportProtocolOption(tcp.ProtocolNumber, &sack); err != nil {
-		return nil, nil, fmt.Errorf("netstack: enabling SACK: %v", err)
+	cubic := tcpip.CongestionControlOption("cubic")
+	rx := tcpip.TCPReceiveBufferSizeRangeOption{Min: tcp.MinBufferSize, Default: tcp.DefaultReceiveBufferSize, Max: rxBufMax}
+	tx := tcpip.TCPSendBufferSizeRangeOption{Min: tcp.MinBufferSize, Default: tcp.DefaultSendBufferSize, Max: txBufMax}
+	for _, o := range []tcpip.SettableTransportProtocolOption{&sack, &cubic, &rx, &tx} {
+		if err := d.stack.SetTransportProtocolOption(tcp.ProtocolNumber, o); err != nil {
+			return nil, nil, fmt.Errorf("netstack: setting TCP's %T: %v", o, err)
+		}
 	}
 	d.ep.AddNotify(d)
 	if err := d.stack.CreateNIC(1, d.ep); err != nil {
@@ -98,43 +135,66 @@ func (d *Device) Name() (string, error)    { return "netstack", nil }
 func (d *Device) File() *os.File           { return nil }
 func (d *Device) Events() <-chan tun.Event { return d.events }
 func (d *Device) MTU() (int, error)        { return d.mtu, nil }
-func (d *Device) BatchSize() int           { return 1 }
+func (d *Device) BatchSize() int           { return batchSize }
 
-// Read is a packet the stack sends.
+// Read is the packets the stack sends, as many as wait and fit. It is called
+// by one goroutine at a time.
 func (d *Device) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
-	select {
-	case v := <-d.incoming:
-		n, err := v.Read(slab[tun.ReadPacketSpacing : len(slab)-tun.ReadPacketSpacing])
-		v.Release()
-		if err != nil {
-			return 0, err
+	v := d.pending
+	d.pending = nil
+	if v == nil {
+		select {
+		case v = <-d.incoming:
+		case <-d.closed:
+			return 0, os.ErrClosed
 		}
-		packets[0] = tun.ReadPacket{Offset: tun.ReadPacketSpacing, Size: n}
-		return 1, nil
-	case <-d.closed:
-		return 0, os.ErrClosed
+	}
+	n, off := 0, tun.ReadPacketSpacing
+	for {
+		size := int(v.Size())
+		if off+size+tun.ReadPacketSpacing > len(slab) {
+			if n == 0 {
+				v.Release()
+				return 0, tun.ErrTooManySegments
+			}
+			d.pending = v
+			return n, nil
+		}
+		m, _ := v.Read(slab[off : off+size])
+		v.Release()
+		packets[n] = tun.ReadPacket{Offset: off, Size: m}
+		n, off = n+1, off+m+tun.ReadPacketSpacing
+		if n == len(packets) {
+			return n, nil
+		}
+		select {
+		case v = <-d.incoming:
+		default:
+			return n, nil
+		}
 	}
 }
 
-// Write hands packets to the stack.
+// Write hands packets to the stack, a flow's segments coalesced, and drops
+// what is no IP packet or fails a checksum.
 func (d *Device) Write(bufs [][]byte, offset int) (int, error) {
+	disp := d.ep.d.Load()
+	if disp == nil {
+		return 0, os.ErrClosed
+	}
+	g := gro.NewGRO()
+	g.SetDispatcher(*disp)
+	var p packet.Parsed
 	for _, b := range bufs {
-		p := b[offset:]
-		if len(p) == 0 {
+		if len(b) <= offset {
 			continue
 		}
-		pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(p)})
-		switch p[0] >> 4 {
-		case 4:
-			d.ep.InjectInbound(header.IPv4ProtocolNumber, pkb)
-		case 6:
-			d.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
-		default:
-			pkb.DecRef()
-			return 0, syscall.EAFNOSUPPORT
+		p.Decode(b[offset:])
+		if p.IPVersion == 4 || p.IPVersion == 6 {
+			g.Enqueue(&p)
 		}
-		pkb.DecRef()
 	}
+	g.Flush()
 	return len(bufs), nil
 }
 

@@ -58,6 +58,22 @@ func NewStoredSession(home string, id types.Identity, keys types.NodeKeys) (*Ses
 	return s, nil
 }
 
+// rebind has the relay's certificate be one for keys from now on, as after
+// a rotation of the device's keys in place.
+func (s *Session) rebind(id types.Identity, keys types.NodeKeys) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.certOwner, s.cert = relayCertOwner(id, keys), nil
+}
+
+// holds reports whether c is the relay's certificate still, rebind not
+// having come between.
+func (s *Session) holds(c *relay.Certificate) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cert == c
+}
+
 // relayCertOwner binds a stored certificate to the device keys it was drawn
 // for, so a rotation draws a new one.
 func relayCertOwner(id types.Identity, keys types.NodeKeys) [32]byte {

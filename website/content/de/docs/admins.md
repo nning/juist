@@ -203,7 +203,8 @@ betrifft, verrät nämlich nur das Log.
   einem Rechner aus an, der nur signiert.
 - Führe Admin-Befehle als du selbst aus, ohne sudo, denn die Schlüssel liegen
   in deinem Keystore.
-- `juist log` zeigt jede Änderung und wer sie bestätigt hat.
+- `juist log` zeigt jede Änderung und wer sie bestätigt hat, `juist log show 3`,
+  was Änderung 3 bewirkt hat.
 - [Zugriffsregeln]({{< relref "docs/access" >}}) änderst du genauso.
   `juist approve policy.rec` zeigt die Änderung als Diff gegen die geltenden
   Regeln.
@@ -211,7 +212,9 @@ betrifft, verrät nämlich nur das Log.
   `the network is at schema 9, this version at schema 10`, wenn diese Version
   dem Log des Netzes etwas hinzufügt. Sobald alle Geräte sie haben, führe
   `juist log upgrade` aus. Geräte mit älteren Versionen übernehmen ab dem
-  Upgrade keine Änderungen mehr, bis sie aktualisiert sind.
+  Upgrade keine Änderungen mehr, bis sie aktualisiert sind; ab Schema 14
+  tragen ihre Tunnel zudem nur noch juists eigenen Verkehr, weil sie nicht
+  quantensicher sind.
 
 {{< note danger >}}
 Gehen so viele Admin-Schlüssel verloren, dass keine Änderung mehr genug

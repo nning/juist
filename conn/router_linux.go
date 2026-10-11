@@ -5,9 +5,11 @@ package conn
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,12 +120,17 @@ type linuxRouter struct {
 	// of this instance left there.
 	exitListed bool
 	serving    bool // the serving table is installed
+	// groFor is the uplink serving last looked at, and groWas its features
+	// as they were where it changed them.
+	groFor string
+	groWas map[string]bool
+	mon    *netmon.Monitor
 	// inOwn and inPeers are what the in table guards, where inInstalled.
 	inOwn, inPeers []netip.Addr
 	inInstalled    bool
 }
 
-func newOSRouter(logf logger.Logf, dev tun.Device, _ *netmon.Monitor, _ *health.Tracker, bus *eventbus.Bus,
+func newOSRouter(logf logger.Logf, dev tun.Device, mon *netmon.Monitor, _ *health.Tracker, bus *eventbus.Bus,
 	inst int) (router.Router, error) {
 	name, err := dev.Name()
 	if err != nil {
@@ -143,6 +150,7 @@ func newOSRouter(logf logger.Logf, dev tun.Device, _ *netmon.Monitor, _ *health.
 		restoreLimit: rate.NewLimiter(rate.Every(5*time.Second), 10),
 		exit:         map[exitRoute]bool{},
 		done:         make(chan struct{}),
+		mon:          mon,
 	}
 	r.ec = bus.Client("juist-router")
 	eventbus.SubscribeFunc(r.ec, func(d netmon.RuleDeleted) { r.onRuleDeleted(d.Priority) })
@@ -177,10 +185,12 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		r.logf("no IPv6 on %s; skipping its IPv6 addresses and routes", r.link.Attrs().Name)
 	}
 	var errs []error
-	r.addrs = reconcile(r.addrs, usable(cfg.LocalAddrs, v6, false), r.addAddr, r.delAddr, &errs)
+	// New addresses, then the routes naming a new source, then the old
+	// addresses: deleting an address deletes the routes naming it, and a
+	// packet routed meanwhile leaves by the host's default route.
+	addrs := usable(cfg.LocalAddrs, v6, false)
+	r.addrs = reconcile(r.addrs, slices.Concat(addrs, slices.Collect(maps.Keys(r.addrs))), r.addAddr, r.delAddr, &errs)
 	if src := preferredSrc4(cfg.LocalAddrs); src != r.src4 {
-		// Every route names its source, and removing an address took those
-		// naming it with it: install them all again.
 		r.src4 = src
 		for p := range r.routes {
 			r.routes[p] = false
@@ -190,6 +200,7 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		}
 	}
 	r.routes = reconcile(r.routes, usable(cfg.Routes, v6, true), r.addRoute, r.delRoute, &errs)
+	r.addrs = reconcile(r.addrs, addrs, r.addAddr, r.delAddr, &errs)
 	return errors.Join(errs...)
 }
 

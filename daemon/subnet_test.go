@@ -143,6 +143,35 @@ func TestASubnetIsLeftOutWhereItMustBe(t *testing.T) {
 	}
 }
 
+// A router on a build before schema 14, in a network at it, routes nothing
+// for this device and is given no preshared key: its tunnel carries juist's
+// own traffic alone, which seals itself.
+func TestARouterThatIsNotPostQuantumCarriesNothingElse(t *testing.T) {
+	f := subnetFixture(t, 1, -1, prefixList("192.168.50.0/24"), nil)
+	router := f.nw.devices[1]
+	f.learnOld(t, router, 7001, true)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.peerSubnets(t, router); len(got) != 0 {
+		t.Errorf("the router carries %v", got)
+	}
+	if r := f.subnetRoute(t, "192.168.50.0/24"); r.InUse || !strings.Contains(r.Why, "tunnel is not post-quantum") {
+		t.Errorf("the status says %+v", r)
+	}
+	p := f.peerOf(t, router)
+	if p.PSK != ([32]byte{}) {
+		t.Error("a peer naming no epoch is given a preshared key")
+	}
+	if a := p.Access; a == nil || !slices.Equal(a.Open, []conn.Ports{tcp(f.d.gossipPort)}) ||
+		!slices.Equal(a.Sends, []conn.Ports{tcp(7001)}) || a.Through != nil {
+		t.Errorf("it may open %+v", a)
+	}
+	if pq := f.d.Status().PQ; pq == nil || !slices.Equal(pq.None, []string{router.record.Name}) {
+		t.Errorf("the status counts %+v", pq)
+	}
+}
+
 // A router routes its granted subnets while its operator agrees and its view
 // is fresh, and says so in its announcement; without a grant, or stale, it
 // routes none and says why.

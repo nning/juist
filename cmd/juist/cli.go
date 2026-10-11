@@ -335,6 +335,7 @@ var shorts = map[string]byte{
 	"force":       'f',
 	"ingress":     'i',
 	"ipv4":        '4',
+	"ipv6":        '6',
 	"isolate":     'i',
 	"key":         'k',
 	"keys":        'k',

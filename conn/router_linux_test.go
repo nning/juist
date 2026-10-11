@@ -358,9 +358,24 @@ func TestHelperNetnsRouter(t *testing.T) {
 	if got := routeSrc(peerV4.Addr()); got != retiring.Addr() {
 		t.Errorf("with a retiring address the peer is sent to from %v, want %v", got, retiring.Addr())
 	}
+	updates, stop := make(chan netlink.RouteUpdate, 64), make(chan struct{})
+	if err := netlink.RouteSubscribe(updates, stop); err != nil {
+		t.Fatalf("following routes: %v", err)
+	}
 	if err := r.Set(cfg); err != nil {
 		t.Fatalf("Set without the retiring address: %v", err)
 	}
+	for wait := time.After(500 * time.Millisecond); wait != nil; {
+		select {
+		case u := <-updates:
+			if u.Type == unix.RTM_DELROUTE && u.Dst != nil && u.Dst.String() == peerV4.String() {
+				t.Errorf("dropping the retiring address left %v without a route for a moment", peerV4)
+			}
+		case <-wait:
+			wait = nil
+		}
+	}
+	close(stop)
 	if got := routeSrc(peerV4.Addr()); got != selfV4.Addr() || !routedVia(peerV4.Addr(), link) {
 		t.Errorf("after the retiring address went the peer is sent to from %v (routed into %s: %v), want %v",
 			got, name, routedVia(peerV4.Addr(), link), selfV4.Addr())

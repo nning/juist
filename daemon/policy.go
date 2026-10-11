@@ -55,15 +55,11 @@ func (d *Daemon) accessPlan(s snapshot, stale bool, ingress []conn.Ports) access
 // its role and the policy; nil where it may open anything, as every member
 // may without a policy.
 func (ap *accessPlan) access(n *types.NodeRecord, ep gossip.Endpoint) *conn.Access {
+	if ap.stale {
+		return ap.ownOnly(n, ep)
+	}
 	own := []conn.Ports{{Proto: ipproto.TCP, First: ap.gossipPort, Last: ap.gossipPort}}
 	theirs := []conn.Ports{{Proto: ipproto.TCP, First: ep.GossipPort, Last: ep.GossipPort}}
-	if ap.stale {
-		a := &conn.Access{Open: own, Sends: theirs}
-		if n.HasRole(types.RoleService) {
-			a.Open = nil
-		}
-		return a
-	}
 	if !ap.view.Restricted {
 		switch {
 		case n.HasRole(types.RoleIngress):
@@ -100,6 +96,19 @@ func (ap *accessPlan) access(n *types.NodeRecord, ep gossip.Endpoint) *conn.Acce
 		// What it publishes, which is the ingress's whole purpose; the
 		// member keeps the ingress to it.
 		a.Sends = everything
+	}
+	return a
+}
+
+// ownOnly keeps peer n, whose announcement is ep, to juist's own traffic:
+// log sync, which a service member does not open.
+func (ap *accessPlan) ownOnly(n *types.NodeRecord, ep gossip.Endpoint) *conn.Access {
+	a := &conn.Access{
+		Open:  []conn.Ports{{Proto: ipproto.TCP, First: ap.gossipPort, Last: ap.gossipPort}},
+		Sends: []conn.Ports{{Proto: ipproto.TCP, First: ep.GossipPort, Last: ep.GossipPort}},
+	}
+	if n.HasRole(types.RoleService) {
+		a.Open = nil
 	}
 	return a
 }

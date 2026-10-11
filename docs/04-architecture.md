@@ -65,7 +65,7 @@ connection manager over plain wireguard-go / kernel WireGuard.
 |---|---|---|---|
 | `types` | Node identity (Ed25519), record schemas, deterministic CBOR wire encoding | — | ~500 LOC (schema validation) |
 | `trust/log` | Membership log: AUM chain, k-of-n quorum verification, checkpoints, fork choice, address-collision validation | TKA's *design*, not its code — see [08-trust-layer-notes.md](08-trust-layer-notes.md) | ~2–3 k LOC (P2P additions: fork choice, freshness, validation rules) |
-| `trust/secrets` | Epoch group secret: HPKE fan-out, derivations (blinded topic IDs, discovery AEAD keys, ML-KEM per-pair PSKs) | stdlib `crypto/ecdh`, `crypto/mlkem`, HPKE lib | ~1 k LOC |
+| `trust/secrets` | Epoch group secret: HPKE fan-out, derivations (blinded topic IDs, discovery AEAD keys, the seed of the group's preshared keys) | stdlib `crypto/ecdh`, `crypto/mlkem`, HPKE lib | ~1 k LOC |
 | `trust/store` | Persisted log, highest-seen epoch (rollback protection), key material | — | ~1 k LOC |
 | `trust/enroll` | Invite issue/redeem: full-entropy link and wormhole-style code, both over SPAKE2 (RFC 9382); join protocol → AddNode AUM; see [11-enrollment-and-freshness-notes.md](11-enrollment-and-freshness-notes.md) | `filippo.io/edwards25519` | ~0.9 k LOC |
 | `gossip` | Anti-entropy AUM/endpoint-record sync; log-head beacons; fork alarm | — | ~1–2 k LOC (records self-certifying; transport untrusted) |
@@ -77,7 +77,9 @@ connection manager over plain wireguard-go / kernel WireGuard.
 | `internal/host` | The inviting half of an enrollment: listener, LAN answers, DHT rendezvous, serial sessions; asks an admitter (the CLI) for every signature | — | not TCB (holds no key) |
 | `cli` | `create`, `invite`, `join`, `status`, `devices`, `remove`, `rotate`; for admins `grant`, `revoke`, `approve`, `apply`, `admins`, `log`. Holds the admin keys and a per-network anchor; signs only what it rebuilt from its own verified log | — | thin |
 
-New trust-critical code target: **≈ 7–9 k LOC** — a realistic external-audit scope.
+The trust-critical core (`types`, `trust/`) is held to **10 k lines**; the audit
+scope around it is measured, and [`audit-scope`](../audit-scope) places every
+package in or out of it ([06-verification.md](06-verification.md) §5).
 Everything else is glue around production-tested imports.
 
 ## Log schema (extends TKA's AUM set)
@@ -271,12 +273,14 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
 
 - wireguard-go (Tailscale fork) on all platforms in v1; kernel WG post-v1 for
   public-endpoint nodes.
-- Per-pair PSK: `HKDF(ML-KEM-768 encap between the pair's log-recorded static PQ keys,
-  epoch)` — post-quantum harvest-now-decrypt-later hedge using stdlib `crypto/mlkem`.
-  Rotated on epoch bump via WG reconfig (next handshake picks it up; tunnels stay up).
-  The key is in the schema from M1 and consumed for the epoch HPKE fan-out; the
-  data plane takes it in M15 ([05-roadmap.md](05-roadmap.md)), the engine's PSK
-  path in [07-embedding-notes.md](07-embedding-notes.md).
+- Per-pair PSK (M15, `internal/pairkey`): first a group key from the group
+  secret of the lower of the pair's two epochs, then a key of the pair's own,
+  HKDF over an ML-KEM-768 encapsulation each way to the pair's log-recorded
+  keys, salted with the group key — the post-quantum harvest-now-decrypt-later
+  hedge, using stdlib `crypto/mlkem`. Renewed at every rise of the pair's
+  epoch through log sync; the next handshake picks it up and tunnels stay up.
+  The decisions are in [05-roadmap.md](05-roadmap.md), the engine's PSK path in
+  [07-embedding-notes.md](07-embedding-notes.md).
 - Addressing: v6 ULA `fd<40 bits from genesis hash>::/48`, host bits =
   `truncate(SHA-256(identity pubkey))`; v4 assigned explicitly in AddNode, from the prefix
   the network chose at genesis or last renumbered to. `juist create` draws a random

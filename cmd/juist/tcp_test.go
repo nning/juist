@@ -50,7 +50,6 @@ func TestPublishByTCP(t *testing.T) {
 		}
 	}
 	mustContain(t, admin.mustRun("publish", "rm", "nas", "mc"), "nas: publishes immich.pub.example.org:443, ssh.pub.example.org:2222/tcp to 22")
-	mustContain(t, admin.mustRun("devices"), "publishes immich.pub.example.org, ssh.pub.example.org:2222")
 	mustContain(t, admin.mustRun("publish", "add", "nas", "mc", "25565"), "mc.pub.example.org:25565,")
 
 	// An ingress holds every public port: none of its own names goes to one.

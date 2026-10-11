@@ -2,11 +2,9 @@ package main
 
 import (
 	"cmp"
-	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/nning/juist/internal/policy"
@@ -21,18 +19,19 @@ through a relay. juistd checks every 30s. On a device in several networks,
 each network's, unless NETWORK names one.`}
 	fs := newFlags(s.name)
 	long := fs.Bool("keys", false, "show identity keys")
+	v6 := fs.Bool("ipv6", false, "show IPv6 addresses")
 	all := fs.Bool("all", false, "list the devices the access policy keeps apart from this one too")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	if listed, err := a.forEachNetwork(func() error { return a.listDevices(*long, *all) }); listed {
+	if listed, err := a.forEachNetwork(func() error { return a.listDevices(*long, *v6, *all) }); listed {
 		return err
 	}
-	return a.listDevices(*long, *all)
+	return a.listDevices(*long, *v6, *all)
 }
 
 // listDevices is "juist devices" for one network.
-func (a *app) listDevices(long, all bool) error {
+func (a *app) listDevices(long, v6, all bool) error {
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
@@ -70,7 +69,7 @@ func (a *app) listDevices(long, all bool) error {
 		devs = slices.DeleteFunc(devs, func(d ipc.Device) bool { return !view.Lists(self, d.Identity) })
 		apart = listed - len(devs)
 	}
-	if err := a.printDevices(devs, self, st, long); err != nil {
+	if err := a.printDevices(devs, self, st, long, v6); err != nil {
 		return err
 	}
 	if apart > 0 {
@@ -83,25 +82,27 @@ func (a *app) listDevices(long, all bool) error {
 	return nil
 }
 
-// printDevices prints the device table juist devices and juist status share,
-// as a list where the table is wider than the terminal. st, where a daemon
-// runs, adds how its last check reached each device.
-func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Status, long bool) error {
+// printDevices prints the device table, ROLES last and wrapped where the
+// table is wider than the terminal, and a list where even that does not fit.
+// st, where a daemon runs, adds how its last check reached each device.
+func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Status, keys, v6 bool) error {
 	reach := map[types.Identity]ipc.PeerReach{}
 	if st != nil {
 		for _, r := range st.Reach {
 			reach[r.Identity] = r
 		}
 	}
-	// REACHED last: its colour codes would count as width in any column
-	// after it.
-	rows := [][]string{{"NAME", "IPV4", "IPV6", "ROLES"}}
-	if long {
+	rows := [][]string{{"NAME", "IPV4"}}
+	if v6 {
+		rows[0] = append(rows[0], "IPV6")
+	}
+	if keys {
 		rows[0] = append(rows[0], "KEY")
 	}
 	if st != nil {
 		rows[0] = append(rows[0], "REACHED")
 	}
+	rows[0] = append(rows[0], "ROLES")
 	for _, d := range byAddress(devs) {
 		name := cmp.Or(d.Name, d.Identity.ShortString())
 		if d.Identity == self {
@@ -111,25 +112,20 @@ func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Statu
 		if d.Retiring != "" {
 			v4 += " (was " + d.Retiring + ")"
 		}
-		row := []string{name, v4, d.V6, describeGrant(d.Roles, d.Subnets, d.Names, d.Published)}
-		if long {
+		row := []string{name, v4}
+		if v6 {
+			row = append(row, cmp.Or(d.V6, "-"))
+		}
+		if keys {
 			row = append(row, d.Identity.String())
 		}
 		if st != nil {
 			row = append(row, a.describeReach(d, d.Identity == self, st, reach))
 		}
-		rows = append(rows, row)
+		rows = append(rows, append(row, describeGrant(d.Roles, d.Subnets, len(d.Names) > 0, len(d.Published) > 0)))
 	}
-	if a.width > 0 && tableWidth(rows) > a.width {
-		a.printDeviceList(rows[1:], st != nil)
-	} else {
-		tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
-		for _, row := range rows {
-			fmt.Fprintln(tw, strings.Join(row, "\t"))
-		}
-		if err := tw.Flush(); err != nil {
-			return err
-		}
+	if !a.printTable(rows) {
+		a.printDeviceList(rows[1:])
 	}
 	if st != nil && stale(st, time.Now()) {
 		a.printf("%s\n", a.paint("33", "checked "+ago(time.Since(time.Unix(st.ReachChecked, 0)))))
@@ -137,40 +133,67 @@ func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Statu
 	return nil
 }
 
-// tableWidth is how many columns rows take as a table two spaces apart.
-func tableWidth(rows [][]string) int {
-	var widths []int
+// minLastColumn is the narrowest the table's last column wraps to before
+// the table gives way to a list.
+const minLastColumn = 12
+
+// printTable prints rows as columns two spaces apart, aligned by visible
+// width, wrapping the last column to the terminal; false, printing nothing,
+// where the last column would be narrower than [minLastColumn] or a word in it.
+func (a *app) printTable(rows [][]string) bool {
+	last := len(rows[0]) - 1
+	widths := make([]int, last+1)
+	word := minLastColumn
 	for _, row := range rows {
 		for i, cell := range row {
-			if i == len(widths) {
-				widths = append(widths, 0)
-			}
 			widths[i] = max(widths[i], visibleWidth(cell))
 		}
+		for _, w := range strings.Fields(row[last]) {
+			word = max(word, visibleWidth(w))
+		}
 	}
-	total := 2 * (len(widths) - 1)
-	for _, w := range widths {
-		total += w
+	indent := 0
+	for _, w := range widths[:last] {
+		indent += w + 2
 	}
-	return total
+	room := 0
+	if a.width > 0 && indent+widths[last] > a.width {
+		if room = a.width - indent; room < word {
+			return false
+		}
+	}
+	for _, row := range rows {
+		var b strings.Builder
+		for i, cell := range row[:last] {
+			b.WriteString(cell + strings.Repeat(" ", widths[i]-visibleWidth(cell)+2))
+		}
+		for k, part := range wrap(row[last], room) {
+			if k > 0 {
+				b.WriteString("\n" + strings.Repeat(" ", indent))
+			}
+			b.WriteString(part)
+		}
+		a.printf("%s\n", b.String())
+	}
+	return true
 }
 
 // printDeviceList prints the device table's rows a device to a paragraph:
-// name, IPv4 and how it was reached, then the IPv6 address, roles and key
-// indented beneath.
-func (a *app) printDeviceList(rows [][]string, reached bool) {
+// name and IPv4, or IPv4 beneath where both do not fit, then the other
+// columns but "-" indented beneath, each wrapped to the terminal.
+func (a *app) printDeviceList(rows [][]string) {
 	for _, row := range rows {
-		head := a.bold(row[0]) + "  " + row[1]
-		if reached {
-			if r := row[len(row)-1]; r != "-" {
-				head += "  " + r
-			}
-			row = row[:len(row)-1]
+		head, rest := a.bold(row[0]), row[1:]
+		if a.width <= 0 || visibleWidth(row[0])+2+visibleWidth(row[1]) <= a.width {
+			head, rest = head+"  "+row[1], row[2:]
 		}
 		a.printf("%s\n", head)
-		for _, more := range row[2:] {
-			if more != "-" {
-				a.printf("  %s\n", more)
+		for _, more := range rest {
+			if more == "-" {
+				continue
+			}
+			for k, l := range wrap(more, a.width-4) {
+				a.printf("%s%s\n", map[bool]string{true: "  ", false: "    "}[k == 0], l)
 			}
 		}
 	}

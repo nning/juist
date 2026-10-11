@@ -90,6 +90,8 @@ func (f *reconcileFixture) learn(t *testing.T, dev *device, port uint16) gossip.
 		Addrs:      []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("192.0.2.10"), port)},
 		GossipPort: port,
 		Seq:        1,
+		Epoch:      f.auth.State().Epoch(),
+		PairStore:  1,
 	}
 	if err := e.Sign(dev.identity); err != nil {
 		t.Fatal(err)
@@ -268,6 +270,9 @@ func TestExpiredMembershipIsNotAPeer(t *testing.T) {
 	if !mgr.has([32]byte(expiring.record.WireGuard)) {
 		t.Fatal("a member inside its expiry is not a peer")
 	}
+	if _, held := d.pairs.Generations()[expiring.record.WireGuard]; !held {
+		t.Fatal("no pair with a member that announces preshared keys")
+	}
 
 	now = base.Add(2 * time.Hour)
 	if err := d.Reconcile(); err != nil {
@@ -289,6 +294,11 @@ func TestExpiredMembershipIsNotAPeer(t *testing.T) {
 	}
 	if st := d.Status(); st.Expired != 1 {
 		t.Errorf("status reports %d expired memberships, want 1", st.Expired)
+	}
+	// Its pair stays, as on its own side: one dropped while the other
+	// kept it would meet again on different keys.
+	if _, kept := d.pairs.Generations()[expiring.record.WireGuard]; !kept {
+		t.Error("the pair with an expired member was dropped")
 	}
 }
 

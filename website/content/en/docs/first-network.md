@@ -48,13 +48,13 @@ Invite the new device:
 $ juist invite
 invite to "home", expires in 1h; on the new device:
 
-  juist join 42-drumbeat-tolerance-glucose  # same LAN
-
   juist join 'juist:Kx7…@192.168.1.20:41642'
+
+  juist join 42-drumbeat-tolerance-glucose  # same LAN
 ```
 
-It prints a code, for a device on the same LAN, and a link, for a device
-anywhere, with a QR code of the link above it, left out here. Then it waits.
+It prints a link, for a device anywhere, with a QR code of the link above it,
+left out here, and last a code, for a device on the same LAN. Then it waits.
 {{< /step >}}
 {{< step on="nas" as="the new device" >}}
 Join with the code, or with the link if the NAS is somewhere else:
@@ -104,15 +104,15 @@ home · connected
   Freshness     unchecked: no voucher
   Ports         udp/41643
   Updated       just now
-
-NAME                  IPV4         IPV6                                     ROLES  REACHED
-laptop (this device)  198.18.36.1  fd84:7a1f:97ee:5630:7c56:12b6:971f:2222  -      -
-nas                   198.18.36.2  fd84:7a1f:97ee:21a8:2ab0:e8e:caa0:b306   -      direct
+$ juist devices
+NAME                  IPV4         REACHED  ROLES
+laptop (this device)  198.18.36.1  -        -
+nas                   198.18.36.2  direct   -
 $ ping 198.18.36.2
 ```
 
-`juist devices` prints the same list of devices alone. Where systemd-resolved
-runs, `ping nas.home.juist` works too.
+`juist devices` lists the devices. Where systemd-resolved runs,
+`ping nas.home.juist` works too.
 {{< /step >}}
 
 ## Behind NAT, or with a public address

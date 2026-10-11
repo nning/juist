@@ -109,7 +109,7 @@ func (d *Daemon) adoptEpoch(state *log.State) {
 		// and there is not supposed to be one. Nothing to report.
 		return
 	}
-	s, err := secrets.Open(state.EpochRecord(), d.self, d.recipient)
+	s, err := secrets.Open(state.EpochRecord(), d.self, d.own.Load().recipient)
 	if err != nil {
 		d.logf("daemon: cannot open the epoch %d group secret: %v", epoch, err)
 		d.setStatus(func(st *ipc.Status) { st.EpochError = err.Error() })
@@ -168,7 +168,7 @@ func (d *Daemon) backfillEpochs() {
 		if _, held := d.keyring.Secret(rec.Epoch); held {
 			continue
 		}
-		s, err := secrets.Open(rec, d.self, d.recipient)
+		s, err := secrets.Open(rec, d.self, d.own.Load().recipient)
 		if err != nil {
 			// Ordinary: every epoch older than this device's enrollment has
 			// no wrap for it, and after a rotation the older wraps are sealed

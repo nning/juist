@@ -113,8 +113,12 @@ juist betreibt WireGuard auf allen Plattformen im Userspace, und zwar mit
 NAT-Traversal (siehe unten) setzt das voraus. Unter Linux und FreeBSD wäre
 WireGuard im Kernel schneller.
 
-Vor einem künftigen Quantencomputer ist WireGuard-Verkehr nicht geschützt,
-siehe die [Trade-offs]({{< home "trade-offs" >}}).
+Jeder WireGuard-Handshake mischt einen Preshared Key ein, den ein künftiger
+Quantencomputer nicht herausfinden kann; heute mitgeschnittener Verkehr bleibt
+also geheim. Zwei Geräte beginnen mit einem Schlüssel aus dem Gruppengeheimnis
+unten; im Log-Abgleich zwischen ihnen kapselt dann jedes ein Geheimnis an den
+ML-KEM-768-Schlüssel des anderen, und sie wechseln zu einem Schlüssel, den nur
+die beiden haben und der sich mit jeder Änderung der Mitglieder erneuert.
 
 ## Was juist von Tailscale übernimmt {#tailscale}
 

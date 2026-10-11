@@ -12,6 +12,7 @@ require (
 	github.com/google/nftables v0.3.0
 	github.com/mdlayher/netlink v1.11.2
 	github.com/quic-go/quic-go v0.63.0
+	github.com/safchain/ethtool v0.7.0
 	github.com/tailscale/netlink v1.1.1-0.20240822203006-4d49adab4de7
 	github.com/tailscale/wireguard-go v0.0.0-20260928213032-417aef361226
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745

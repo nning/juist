@@ -247,7 +247,7 @@ Instances share no state, and a TUN device routes its own network's prefixes
 only, so no packet crosses from one network into the other through juist. They
 do share the `juist` user, so one compromised instance holds every network's
 device on the host: residual weakness 9 in
-[02-threat-model.md](02-threat-model.md), and a user per instance is for M16.
+[02-threat-model.md](02-threat-model.md), and a user per instance is for M17.
 
 - **Exit criteria:** (1) one host in two networks, in the netns matrix, pings
   members of both over IPv4 and IPv6, and no route of one prefix points into
@@ -430,7 +430,7 @@ privileged-helper forwarding/NAT, client-side default-route capture with LAN byp
 and DNS handling. Design in
 [04-architecture.md](04-architecture.md#exit-nodes-and-subnet-routes-m6). It
 covers Linux; FreeBSD's side (pf) comes with M7, Android's use of an exit
-node with M10, and the rest of Android's with M19. Split
+node with M10, and the rest of Android's with M20. Split
 in three, each shipped on its own: exit nodes first, as the feature asked for,
 then subnet routers, then the exit node's DNS.
 
@@ -774,7 +774,7 @@ shipped on its own, against FreeBSD 14 in qemu:
     on FreeBSD builds and adds it. `make repro-freebsd` builds the binaries
     for both systems and the package here and on a FreeBSD host, and
     compares them. A port in the ports tree needs a release to fetch, and
-    comes with M18's. `make interop` is the lab, `interop/`: a Debian 12
+    comes with M19's. `make interop` is the lab, `interop/`: a Debian 12
     and a FreeBSD 14.5 VM in qemu without root, their packages installed,
     one network across them, each the other's exit node, subnet router and
     DNS, and both packages removed cleanly; CI's `interop` workflow runs it
@@ -789,7 +789,7 @@ shipped on its own, against FreeBSD 14 in qemu:
   - **Open:** the lab's first run in CI, which waits for CI's budget.
 
 Reproducible builds, for Linux and FreeBSD alike. The rest of the release work
-— distro repositories — is M18 and the full Android app M19, after v1.0; a
+— distro repositories — is M19 and the full Android app M20, after v1.0; a
 minimal Android app is M10. Releases carry packages and a signed SHA256SUMS
 already (`make release`).
 
@@ -1063,7 +1063,9 @@ Split in four, each shipped on its own:
     share's own end where sooner; an ingress takes it from a live member
     holding the role, before the expiry. `juist share` and `juist publish
     PORT` hold a call to juistd open, which shares while it lasts and to
-    `--for` at most, one at a time per device. The terminator ends TLS for
+    `--for` at most; a device holds up to 16, each file's under its own
+    path, which the terminator sends its requests by, and one port's beside
+    them. The terminator ends TLS for
     the device's name and sends it to the CLI's server on loopback, which
     `juist share` runs as the user, from an `os.Root`, under a random
     128-bit path, and 404 outside it.
@@ -1266,8 +1268,8 @@ internet, and is yet to across the VPN turned off and on and the phone
 changing networks.
 
 An Android app that joins a network as a member from anywhere, reaches the
-others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M16 covers the app's key
-custody and its in-process API; the full app is M19, after v1.
+others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M17 covers the app's key
+custody and its in-process API; the full app is M20, after v1.
 
 - **Joining.** The invite's link scanned as a QR code, which `juist invite`
   renders in the terminal beside the link; or the code typed or pasted, its
@@ -1325,7 +1327,7 @@ router, exit and holdings are left out there by build tag.
 - **Lifecycle.** A foreground service keeps the mesh up in Doze, and a
   multicast lock lets mDNS find members on the Wi-Fi.
 
-The app looks finished from M10 on, not from M19: Kotlin and Compose, with a
+The app looks finished from M10 on, not from M20: Kotlin and Compose, with a
 theme of its own (colour, type, shape, spacing and motion as tokens), light
 and dark, and every state `ipc.Status` can report designed rather than left
 to an error. A screenshot test renders every screen in both themes, at 200 %
@@ -1399,7 +1401,7 @@ Decided:
 ## M11 — More than HTTPS through the ingress
 
 M9's ingress passes TCP to 443 alone, by SNI. M11 widens what it carries,
-before the audit so that M16 covers it, in two parts shipped on their own:
+before the audit so that M17 covers it, in two parts shipped on their own:
 a TCP service on a port of its own (M11a), then HTTP/3 over 443/udp (M11b).
 Both are done.
 
@@ -1686,7 +1688,7 @@ it sends nothing but TLS over TCP to port 443 of member relays, and DNS
 queries for their names. Every packet then goes through a relay, at the
 relay's throughput and latency. It does not hide juist from a censor that
 probes servers or fingerprints ClientHellos (below). It is part of v1 and
-comes before the audit, so that M16 covers it.
+comes before the audit, so that M17 covers it.
 
 ```
 member ──TLS :443, SNI relay.example.org──▶ relay (DERP) ◀──UDP or :443── peers
@@ -1745,7 +1747,7 @@ member ──TLS :443, SNI relay.example.org──▶ relay (DERP) ◀──UDP 
   - **Saying so.** `juist status` and the status page say `https only` and
     the relays on 443, and `warning: no relay on 443/tcp` where there is
     none; a relay's name, and why it is not served, has a line of its own.
-    The Android app has no switch yet (M19); it falls back to 443 as every
+    The Android app has no switch yet (M20); it falls back to 443 as every
     member does.
 
 Not in this plan:
@@ -1783,7 +1785,8 @@ Not in this plan:
 
 **Done** on 2026-10-09, as below, reviewed (M14 reviews 1 to 3, two of them
 for security) and validated by `make ci-vm` and `make test-freebsd`
-(12-validating.md).
+(12-validating.md). Core 9 868 lines, audit scope 28 601, measured after it
+(2026-10-10).
 
 A policy in the log says which member may open what on which: one
 quorum-signed record holds the whole of it, rendered by every member into
@@ -1860,76 +1863,101 @@ hiding those conflicts with verifying the chain.
 
 ## M15 — Post-quantum WireGuard
 
+**Done** on 2026-10-11, as below. The post-quantum part, exit criteria (1)
+to (5), reviewed (M15 reviews 1 to 4, the first three security reviews by
+fresh reviewers); changes without a break and throughput, criteria (6) to
+(8), reviewed (M15 reviews 5 to 7, two security reviews by fresh
+reviewers). Both validated by `make ci-vm` and `make test-freebsd`, each
+throughput step measured before and after (12-validating.md). Core 9 890
+lines, audit scope 30 378, measured after it (2026-10-11).
+
 Every pair of members mixes a preshared key into WireGuard's handshake that a
 quantum computer cannot recover, so recorded tunnel traffic stays
 confidential (harvest now, decrypt later). Authentication stays X25519 and
 Ed25519; PQ authentication stays deferred, as it cannot be harvested now. It
-is part of v1 and comes before the audit, so that M16 covers it.
+is part of v1 and comes before the audit, so that M17 covers it.
 
-What it builds on:
+The engine carries a preshared key with no patch
+([07-embedding-notes.md](07-embedding-notes.md)); what makes this a
+milestone is agreeing on it. WireGuard holds one key per peer, the responder
+cannot tell a wrong one from a lost packet, and a key held by one side alone
+fails every handshake. Not Rosenpass: a daemon per link and no audit, where
+juist's own key distribution and stdlib `crypto/mlkem` do the same
+([research/building-blocks.md](research/building-blocks.md)).
 
-- **The keys.** Every `NodeRecord` carries an ML-KEM-768 public key, and the
-  epoch's group secret is already sealed to it with hybrid HPKE; no new record
-  field is needed ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
-- **The engine.** Since Tailscale 1.104, `wgcfg.PeerConfig.PresharedKey`
-  reaches a peer created lazily through the config lookup, and
-  `SyncDevicePeer` sets it in place on an active one, keeping its session
-  ([07-embedding-notes.md](07-embedding-notes.md)). Setting a PSK is a few
-  dozen lines in `conn`, with no patch to the pinned modules.
-- **Not Rosenpass:** a daemon per link and no audit, where juist's own key
-  distribution and stdlib `crypto/mlkem` do the same
-  ([research/building-blocks.md](research/building-blocks.md)).
+- **Decided:**
+  - **Schema 14, no record field.** At `types.SchemaPQ` every member sets a
+    preshared key towards every peer, and its announcement names the newest
+    epoch it holds and its store of pair keys (`Endpoint.Epoch`,
+    `Endpoint.PairStore`), which older builds refuse; the gossip frame's
+    `Pair` goes only to a peer that announces them. Below the schema nothing
+    changes, so a member of the previous release and one of this one reach
+    each other as before, and `juist status` says the network predates
+    post-quantum tunnels.
+  - **A group key first.** A pair's first key is `HKDF(seed, epoch, both
+    WireGuard keys)`, the seed derived from the group secret of the lower of
+    the two epochs the pair announce: the one both hold, so a member behind
+    is reached without a message, and one that catches up moves the pair on
+    by announcing. Seeds are kept for the last 64 epochs
+    (`pairkey.SeedDepth`) apart from the keyring, since a seed answers no
+    gossip or discovery; a peer further behind gets a key nobody holds and
+    catches up from another member.
+  - **A pair key next.** In the log sync between the two, the member with the
+    lower WireGuard key leads four messages, each signed and naming both
+    members, their WireGuard keys and both stores, so that none counts for
+    a pair started over since: it encapsulates to the follower's ML-KEM key, the
+    follower encapsulates back and confirms the key it derived, the leader
+    commits with its own confirmation, and the follower takes it up. One
+    session carries all four. The key is HKDF over both ML-KEM secrets, salted
+    with the group key of the epoch the leader names, bound to the network,
+    both WireGuard keys and both ciphertexts: no third member derives it, the
+    group secret included. Every rise of the pair's epoch starts a new
+    generation, so an epoch bump changes every key within a log sync; a
+    change keeps the session and takes effect at the next handshake.
+  - **Bound to WireGuard keys.** A pair key holds while both WireGuard keys
+    and the peer's store are those it was made with: a rotation of node
+    keys, or a store given up, takes the pair back to its group key. An
+    identity rotation keeps it, and the leader is the lower WireGuard key, so
+    a member that slept through one reaches the rotated device on the key the
+    two had, which its catch-up needs. A pair goes once the log names
+    neither key, not at an expiry, and a device the log no longer names,
+    by identity or WireGuard key, starts a store of its own. No generation number is used twice in a
+    store, and a follower names none past it: a leader whose follower says
+    it uses a later generation, or none, starts one past both.
+  - **No downgrade.** The follower uses one key, the last it took up, and
+    moves only on the leader's confirmed commit. The leader, whose commit or
+    its confirmation may be lost, uses the committed key, and tries the one
+    before it where the tunnel is found down and the session gone, until the
+    follower's message says it moved. Every key either side may use is a pair
+    key or the group key, so blocking handshakes never takes a pair to none,
+    and the probing cannot reach a key the follower does not use. A peer
+    given a key where it had none loses the session it had, which mixes in
+    none, passes nothing for 2 s and loses it again, past a peer the engine
+    made from the lookup before. Towards a peer
+    whose announcement names no epoch, an older build or one behind the
+    upgrade, a member sets no key and keeps the peer to juist's own traffic,
+    which seals itself: under schema 14 no traffic of the user's crosses a
+    tunnel without a preshared key.
+  - **Kept before told.** The pair keys and seeds live in `pairs.secret`,
+    sealed as the keys are. A change is written and synced before any message
+    shows it, and undone where it cannot be. A store lost or unreadable
+    starts over under a new ID, which every peer reads as its pair keys given
+    up.
+  - **Paced.** A pair starts or answers one generation per 5 s
+    (`pairkey.Pace`): what a peer can make a member encapsulate and write.
+  - **Addresses too.** An address key derives from the X25519 scalar and the
+    ML-KEM seed, and its wrap for a peer mixes in the pair key once the pair
+    has one, so M14's sealed addresses are as post-quantum as the tunnels.
+  - **Status.** `juist status` says how many tunnels are post-quantum and by
+    which key, names those that are not and those with no key in common, and
+    juistd logs each key a peer is given.
 
-The engine is the small part. What makes this a milestone is agreeing on the
-key: WireGuard holds one PSK per peer, the responder cannot tell a wrong one
-from a lost packet, and a key held by one side alone fails every handshake.
-
-Two stages, the first standing on its own:
-
-1. **A PSK from the group secret.** `HKDF(epoch group secret, both WireGuard
-   keys, epoch)`: no message to send, and it rotates with every epoch bump,
-   that is every membership change. Outsiders who record traffic are held off,
-   as the group secret reaches members only through the hybrid KEM. Every
-   member can derive every pair's key, though, so a member, or one removed
-   later, who recorded the traffic of others could read it with a quantum
-   computer.
-2. **A PSK per pair from ML-KEM.** Each side encapsulates once to the other's
-   key; the PSK is HKDF over both secrets and the stage-1 key, so neither side
-   picks it alone and no third member can derive it. The 1088-byte
-   ciphertexts travel on the sealed DERP or disco sideband, or by gossip; not
-   in the log.
-
-Open, to decide in this order:
-
-- **Catching up.** Gossip runs through the tunnel alone
-  ([10-connectivity-notes.md](10-connectivity-notes.md)), so a member that
-  missed an epoch bump cannot handshake with the key that would bring it the
-  bump. Proposed: a pair uses the key of the lower of their two epochs, each
-  learning the other's outside the tunnel, as DHT and mDNS records are
-  published under the newest epoch and looked up under every one held; a
-  member past `keyring.Depth` is invited again, as today (M4b).
-- **No downgrade.** Falling back to no PSK at all would let an active
-  attacker who blocks handshakes strip the protection. Towards a peer whose
-  signed announcement says it uses PSKs, a member never handshakes without
-  one; a fallback goes to an older epoch's key and nothing weaker.
-- **Mixed versions.** A member that sets a PSK cannot reach one that does
-  not, and the announcement's decoder refuses unknown fields
-  (`types.StrictDecOptions`), so saying "I use PSKs" is a schema change every
-  member must understand before any member sends it. Which schema gate, and
-  whether a network can then require PSKs. The whole network's reach
-  ("Later") waits for the same gate.
-- **Switching keys.** On an epoch bump both sides change within the gossip's
-  convergence, but a handshake in that window fails and is retried only after
-  the 5 s `RekeyTimeout`. Whether the key changes at the next rekey (120 s)
-  instead, and when a pair moves from stage 1 to stage 2 and back.
-- **Status.** `juist status` names each tunnel that is not post-quantum, and
-  says which stage the others are at.
-- **The upgrade guard.** Both PSK paths get a row in 07's upgrade table and a
-  test that reads the pinned engine.
-
-Size: stage 1 is the derivation and the catch-up and downgrade rules; stage 2
-adds a message with its own parser and fuzz target, and the derivation in
-`trust/`, which `make tcb` counts. Together about as large as M9e and M9f.
+- **Built:** the derivations, the message, each pair's exchange and the store
+  (`internal/pairkey`), the seed (`trust/secrets`), `conn.Peer.PSK` through
+  both engine paths, the announcement's fields and the frame's (`gossip`), the
+  store, the seeds, the exchange through log sync and the leader's probing
+  (`daemon/pairkeys.go`), the address keys (`internal/addrkey`), and
+  `juist status`.
 
 - **Exit criteria:** (1) two members' handshakes carry a PSK, and a peer
   holding the right WireGuard key but the wrong PSK cannot complete one;
@@ -1941,11 +1969,135 @@ adds a message with its own parser and fuzz target, and the derivation in
   `juist status` says which tunnels are post-quantum; (5) with stage 2, a
   third member holding the group secret cannot derive a pair's PSK.
 
-## M16 — Hardening → v1
+**Last in M15: changes without a break, and throughput.** The PSK is the
+first change that reaches the data plane on every epoch bump, so M15 closes
+by making every change to the device keep the tunnels running, and by tuning
+the paths still slower than tailscaled's. Peers, endpoints, routes, the
+filter and the nftables tables already change in place: peers through
+`SyncDevicePeer`, routes as a diff, each table in one transaction, conntrack
+never flushed. What still breaks connections, in this order:
 
-External security audit of the trust layer + enrollment (the ≈7–9 k LOC TCB),
-plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14 and M15 add to it — route consumption and its forwarding helper, the
-override record and the resolver, the published names and the ingress, its QUIC Initial parser included, the
+1. **A test that holds a connection.** No test keeps a TCP stream open
+   across a change; the existing ones check that a peer is reachable
+   afterwards. A netns-lab test (`make ci-vm`) streams across `SetPeers`,
+   egress and serve changes, a rotation and a renumbering, and counts
+   resets and the longest stall. It is the measure for the steps below,
+   so it comes first.
+2. **A rotation in place.** `adoptRotation` restarts the whole mesh
+   (`restartMeshLocked`): engine, magicsock, TUN, gossip, relay, HTTPS and
+   DNS, refusing egress meanwhile and re-establishing Android's VPN. Instead
+   the new key goes to `Reconfig`, which sets it on magicsock and the
+   device, and `self` becomes replaceable in `conn`; peers re-handshake, as
+   a new static key needs, and nothing else goes down. The rotation is
+   noticed by the 5 s poll, which a log-change signal replaces.
+3. **A renumbering in place.** `followAddrs` restarts the mesh twice per
+   renumbering on every member, when the new address applies and when the
+   old one expires. Instead the addresses change on the running device and
+   the gossip listener rebinds. `linuxRouter.Set` deletes an address before
+   reinstalling the routes naming it as source, a window without routes:
+   routes with the new source go first.
+4. **A router retry without an empty config.** After a failed `Reconfig`,
+   `routerStale` hands the engine an empty router config to force a real
+   retry, taking every overlay address and route off for one call; a
+   recurring error would do that at every reconcile. The retry goes to the
+   OS router directly instead, which retries only what failed.
+5. **Fewer restarts for settings.** `--https-only`, `--proxy` and host
+   conflicts restart the mesh in-process, `juist set --relay-name` and a
+   package upgrade the process. Each applies in place where the test of
+   step 1 shows it can; the disco key, drawn fresh at every start, is kept
+   across a restart if that saves the gossip round before direct paths.
+
+Throughput, where it lags tailscaled's defaults:
+
+6. **The service member's netstack** (`internal/netstack`, all of a
+   `juistd --serve` member's traffic): cubic and tailscaled's TCP buffer
+   sizes instead of reno and 4 MiB, batches instead of `BatchSize` 1 and an
+   unbuffered channel, RX checksum offload and GSO, GRO inbound. It
+   registers TCP alone, so `ListenUDPAddrPort` fails with "unknown
+   protocol" and `--serve … --http3` gets no UDP listener: fixed with a
+   regression test.
+7. **Confined peers without a global lock.** `confine.go` takes one mutex,
+   `time.Now` and the LRU per packet in both directions for every confined
+   peer, which every service member is: sharded by peer, flow state touched
+   on SYN, FIN, RST and new UDP flows alone.
+8. **UDP GRO forwarding on exit nodes and subnet routers.** tailscaled
+   checks the uplink's `rx-udp-gro-forwarding` and `rx-gro-list`
+   (`net/netkernelconf`); juist neither checks nor sets them. `juist status`
+   warns on a serving node, or the exit-node setup sets them.
+9. **Proxies that splice.** `internal/pipe` hides `*net.TCPConn`, so TCP to
+   TCP in the ingress and terminator cannot use `splice(2)`, copies through
+   32 KiB buffers and reads the clock per call.
+
+Each throughput step is measured before and after, with `iperf3` across the
+tunnel in the netns lab, and its numbers go into `12-validating.md`.
+
+- **Exit criteria, this part:** (6) a TCP stream across the tunnel survives
+  a peer change, an egress change, a rotation and a renumbering without a
+  reset, and stalls no longer than a handshake; (7) a service member serves
+  HTTP/3 on its overlay address; (8) steps 6 to 9 each show their
+  measurement, before and after.
+
+What still restarts, and binds a later change: the settings of 443
+(`--https-only`, `--proxy`, `--relay-name`) restart the mesh in-process, as
+each changes how every relay connection is made; a device that runs a relay
+restarts on a rotation, its certificate going with the keys; `juist rotate
+identity` restarts, its IPv6 address moving; a renumbering on the netstack
+restarts, its listeners holding the addresses they were opened at; an
+upgrade restarts the process. The disco key stays drawn per process: a peer
+seeing a new one resets the sessions a new process no longer holds.
+
+## M16 — Names for members alone
+
+A name published under the network's domain that the internet does not
+reach: it holds a certificate from the CA as any other, so browsers take it
+without a warning, and the access policy says which members may open it, by
+name. A family's photos at `photos.example.org`, a team's wiki, an admin
+page: on every member that should reach them, nowhere else.
+
+- **The log** marks a published name `Members` (schema 15), set by
+  `juist publish add … --members`. Refused beside `--tcp` and `--proxy`,
+  which members reach through the ingress; a share stays public.
+- **The policy** takes a name as a destination, by its label under the
+  domain: `pass from <family> to name photos`, and in tests and
+  `juist policy test`. The rule lets its sources open the name's device on
+  its port, TCP and, offered HTTP/3, UDP, and the name alone there. Without
+  a policy every member may open every name for members. A rule naming a
+  public name, or one published nowhere, is warned of.
+- **Three places refuse what may not come:** the ingress passes a name for
+  members to nobody but the CA, a TLS hello asking `acme-tls/1` alone,
+  answers QUIC and port 80 for it as for no name, and logs `members only`;
+  the device ending its TLS takes it only from the overlay addresses of the
+  members the policy passes, which juistd tells it, and from the ingress
+  that same hello alone, so a compromised ingress gets no further; the data
+  plane keeps everyone else from the device's port, as for any rule.
+- **Certificates** come by TLS-ALPN-01 through the ingress, as for any
+  published name: the name's public DNS points at the ingress for issuance
+  and renewal, and the ingress learns nothing more of it than now.
+- **Members reach it at its device**, by the name, through the tunnel, as
+  juistd answers names published on 443 already. A member whose host does
+  not route the domain to juistd (no systemd-resolved, FreeBSD, the Android
+  app until M20) reaches it not at all: the ingress refuses it too, and
+  `juist status` there says so for each name for members.
+- **Out of scope:** per-name access for a name passed by TCP, which carries
+  no name to check; hiding that the name exists, which its certificate in
+  the CT logs shows.
+- **Exit criteria:** (1) from the internet, through the ingress and at the
+  device's port through a compromised ingress, a name for members answers
+  nothing but the CA's validation; (2) a member the policy passes opens it
+  by its name with the CA's certificate, a member it does not is refused at
+  the device though it send the right name, and the policy's tests and
+  `juist policy test` say which passes; (3) the certificate is issued and
+  renewed while it is for members alone; (4) a network on schema 14 takes
+  it once upgraded, older members refusing what they cannot read, and the
+  Android app for schema 15 is released.
+
+## M17 — Hardening → v1
+
+External security audit of the audit scope, in the tiers of
+[06-verification.md](06-verification.md) §5, the trust layer and enrollment at
+its core,
+plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15 and M16 add to it — route consumption and its forwarding helper, the
+override record and the resolver, the published names, those for members alone, and the ingress, its QUIC Initial parser included, the
 disable record, the preshared-key exchange, the Android
 app's key custody and in-process API, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate — fix findings, mature fuzz corpus (consider
 OSS-Fuzz), implementation-vs-threat-model review, documentation of the
@@ -1976,17 +2128,12 @@ that outlives the freeze"). Open, to decide in this order:
 
 Also open before the audit:
 
-- **The scope the gate measures.** `make tcb` counts `types` and `trust/`.
-  The CLI's checks against a compromised juistd (`pin.go`, `rotate.go`,
-  `changes.go`, `waiting.go`, `describe.go`, about 1 k lines), the filter
-  and the resolver are audited too: they move into `trust/`, or the gate
-  counts them against a budget that holds them.
 - **Fuzzing.** `waiting.Decode`, `types.DecodeLease`, the helper's protocol
   and the resolver's input have no target, and no `fuzz-long` run is
   recorded in [12-validating.md](12-validating.md).
 - **The read tier.** `ForReader` passes members' identities in `Reach` and
-  their names in `Silent` and `TunnelsDown`, which the tier was narrowed to
-  keep from any local user.
+  their names in `Silent`, `TunnelsDown` and `PQ`, which the tier was
+  narrowed to keep from any local user.
 - **The FreeBSD helper's routes.** It refuses the host's links, loopback and
   multicast, but not a route over the host's own LAN, which a subnet route
   looks like; whether it checks the host's connected routes itself.
@@ -1998,14 +2145,14 @@ Also open before the audit:
   names to their caps.
 
 v1 is Linux and FreeBSD with M14's ACLs, and M10's minimal Android app;
-packaging and the full app follow in M18 and M19.
+packaging and the full app follow in M19 and M20.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) a network that has authored more than
   `MaxHashesPerFrame` records still converges on a new change, with no admin
   having asked for a checkpoint; v1.0 tag.
 
-## M17 — Multicast *(post-v1)*
+## M18 — Multicast *(post-v1)*
 
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LAN games.
 The overlay counts as one link for them. Multicast routing, streaming and
@@ -2070,7 +2217,7 @@ of an overlay address to its member that the source check rests on.
   listener joined on the default interface receives a routed group's packets
   from a member.
 
-## M18 — Packaging *(post-v1)*
+## M19 — Packaging *(post-v1)*
 
 Distro repositories (apt, dnf, pkg) for the packages every release already
 carries, and the readiness check that keeps an admin from stranding members
@@ -2079,21 +2226,114 @@ on an upgrade.
 - **Exit criterion:** Linux/FreeBSD interop matrix green in CI via qemu;
   release artifacts reproducible byte-for-byte from two independent builders.
 
-## M19 — The full Android app *(post-v1)*
+## M20 — The full Android app *(post-v1)*
 
 The full Android app, on M10's: M6b's subnet routes through `VpnService`
-routes, and M8's names, released as M18 releases the rest.
+routes, and M8's names, released as M19 releases the rest.
 
 - **Exit criterion:** 3-platform interop matrix green in CI, Android by an
   emulator smoke test; the app's release artifact reproducible byte-for-byte
   from two independent builders.
+
+## M21 — A store, and a messenger on it *(post-v1)*
+
+Members leave each other data while the other is offline, with no server: a
+key-value store replicated among the members' own devices, and a messenger on
+it with groups, pictures and files, `juistmsg` on Linux and FreeBSD and a chat
+in the app. It needs M10's app, not M20's. A device takes part if its owner
+turns it on; nothing about it is the quorum's.
+
+Not a DHT: every member holds the whole member list, so where a namespace
+lives is rendezvous hashing over it, with no routing to attack. Not the
+BitTorrent DHT either, whose items hold 1000 bytes, lapse within hours and
+show strangers the traffic. Nothing here enters the trust layer: the store
+can delay or lose data, never change membership.
+
+1. **The store.** A Go package serving on the overlay, on Linux and FreeBSD
+   as a daemon of its own (`juiststore`, its own user and unit), in the app
+   inside its process. It holds none of juistd's keys and takes the members
+   from juistd's read tier.
+   - **Namespaces.** A namespace is an Ed25519 key, of two kinds: an
+     *inbox*, which every member writes to and its owner alone lists, reads
+     and deletes; and an *owned* namespace, which its owner alone writes and
+     deletes and every member reads. The owner signs each request over a
+     challenge of the holder's; a writer needs the public key alone. Values
+     are sealed by their writer (HPKE to the reader, or under a key carried
+     elsewhere), so a holder that ignores the rules learns nothing it holds.
+   - **Entries.** In an inbox an entry's key is its hash, and the entries a
+     set. In an owned namespace a key holds the value of the highest version
+     the owner signed. Deleting is a signed tombstone, never a side effect
+     of reading; every entry expires, after 30 days by default.
+   - **Placement.** Three holders by rendezvous hashing over the members
+     that announce a store, and the owner's own devices besides, so data for
+     a device that is on reaches it at once. A holder coming back catches up
+     from the others by anti-entropy, tombstones included.
+   - **Limits.** Writes from current members alone; a removed member's
+     namespaces are dropped. Quotas per holder, set by its operator, and per
+     writer and namespace within it; values in chunks of 1 MiB.
+   - **Announcement.** It gains a field of services, a name to a port and a
+     key, which every member's decoder must take before any sends it: one
+     schema bump, a new app with it, and no bump for a later service.
+2. **Identities.** A chat identity is a key of its own that certifies the
+   devices it speaks from; one device each at first. A person's phone and
+   laptop are then one certificate more, linked by QR code between the two
+   without the quorum, and every message goes to each device of an identity.
+   Binding identities to device owners (the optional idea below) stays
+   possible and is not needed.
+3. **Messages.** Written to each recipient device's inbox, sealed to it and
+   signed by the sender's identity; the recipient deletes what it has. Signed
+   prekeys in the identity's owned namespace, rotated weekly, give forward
+   secrecy across weeks, not per message; MLS may replace them.
+4. **Groups.** A group's state (name, members, admins) is an owned namespace
+   whose key its admins share, versioned like any value. A message is sealed
+   once, its key wrapped to every member device, and written to each one's
+   inbox. A device removed from the network leaves every group, and the next
+   message is wrapped without it.
+5. **Pictures and files.** Encrypted under a random key, in chunks in the
+   sender's owned namespace; the message carries the key and the chunks'
+   hashes. Above a cap, sent directly while both devices are on.
+6. **`juistmsg`.** A TUI (Bubble Tea) on the local store: conversations,
+   groups, sending and saving files, pictures inline where the terminal
+   speaks the kitty or sixel protocol, `xdg-open` elsewhere. A binary and
+   package of its own, depending on `juiststore`.
+7. **The app.** A chat screen, notifications from the foreground service,
+   the store on for its own namespaces; holding others' on unmetered Wi-Fi
+   and mains power alone, by default.
+
+Open decisions:
+
+- **Beside juistd or in it.** Beside is the lead: a parser of members' data
+  away from the device keys, and an optional package. It needs juistd to
+  announce the store's port and key, and M14's filter to let members reach
+  that port as juist's own traffic. In juistd it would reuse the gossip
+  listener and announcement as they are.
+- **A linked device's history:** none, from the other device, or from the
+  store while it lasts.
+- **Defaults:** the holder quota, the file cap for the store, the expiry.
+- **The name** users see; `trust/store` is taken in the code.
+
+A holder sees which namespace receives how much and when, and from which
+member; it can delay, drop, or keep what it holds past a deletion until
+expiry, but neither read nor forge it. That goes into
+[02-threat-model.md](02-threat-model.md) as a residual weakness with the
+code.
+
+- **Exit criteria:** (1) in the netns matrix, A writes to B's inbox while B
+  is off, B comes up after A has gone and reads it from a holder, and every
+  holder drops it once B deletes; (2) a fetch or delete not signed by the
+  owner, and a write by a removed member, are refused; (3) a group of three
+  exchanges text and a picture, and a member removed from the network gets
+  nothing written after; (4) in `make interop`, an emulator and `juistmsg`
+  exchange messages and a file both ways; (5) a member writing past its
+  quota is cut at a holder, and the others' writes still land.
 
 ## Later — The whole network's reach
 
 Not scheduled. The status page, and `juist status`, show reach from the
 device asked alone. Each member's own, live, direct or relayed per peer,
 needs a field every member understands before any sends it, gated by a
-schema, as the announcements' decoders are strict: the gate M15 needs too.
+schema, as the announcements' decoders are strict, as M15's epoch and pair
+store were.
 A summary in the announcement would re-sign and re-gossip it, and its copy
 in the DHT, at every change of reach.
 
@@ -2206,7 +2446,7 @@ gateway is for keeping the servers out of the clients' log.
 
 ## Later — Networks of phones alone
 
-Not scheduled; after M19, whose names it uses. A network whose every member is
+Not scheduled; after M20, whose names it uses. A network whose every member is
 an Android phone, created, invited to, governed and kept fresh from the app,
 whose members reach each other without a VPS: a family's phones, and a
 peer-to-peer chat between them. A relay member stays the answer that always
@@ -2224,7 +2464,7 @@ only way to need none.
    IPv6, and each carrier's NAT mapping and filtering. Step 4 is judged by that
    table, so it is taken first.
 2. **Governing from the app.** Genesis on the phone, its admin key sealed by
-   Keystore as `node.keys` is (M10), which M16's audit did not cover for
+   Keystore as `node.keys` is (M10), which M17's audit did not cover for
    admin keys, so it wants a review of its own. The app invites (the QR code
    on its screen, the code on the Wi-Fi, a link through the DHT's
    rendezvous), shows the words, votes, approves carried changes (M5b),
@@ -2286,10 +2526,8 @@ only way to need none.
    from another member through `VpnService`, tested. Without an access policy
    (M14) every member reaches every port a phone's apps open.
 
-A chat is not juist's: a separate app talks to members by their names, and
-WireGuard has already authenticated each sender by its overlay address, so it
-needs no keys of its own. A message waits on the sender until the pair has a
-path.
+The chat is M21's, whose store holds a message for a phone that is off on
+the members that are on.
 
 - **Exit criteria:** (1) in `make interop`, three emulators and no other
   member: one creates the network, invites the others by QR code and by code,

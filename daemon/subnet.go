@@ -64,7 +64,7 @@ func (d *Daemon) planSubnets(s snapshot, fresh bool, held map[types.Identity]gos
 		// Without overlay IPv4 no peer's IPv4 reaches it from a source it
 		// accepts.
 		carried := own
-		if d.noV4 {
+		if d.noV4.Load() {
 			carried = slices.DeleteFunc(slices.Clone(own), func(p netip.Prefix) bool { return p.Addr().Is4() })
 		}
 		switch {
@@ -101,7 +101,7 @@ func (d *Daemon) planSubnets(s snapshot, fresh bool, held map[types.Identity]gos
 				r.Why = "subnets are off on this device"
 			case !fresh:
 				r.Why = "this device's view of the network is stale"
-			case pfx.Addr().Is4() && d.noV4:
+			case pfx.Addr().Is4() && d.noV4.Load():
 				r.Why = "this device has no IPv4 in the network"
 			case i < 0:
 				r.Why = "its router cannot be reached"
@@ -109,6 +109,8 @@ func (d *Daemon) planSubnets(s snapshot, fresh bool, held map[types.Identity]gos
 				r.Why = "its router has no IPv4 in the network"
 			case !held[n.Identity].Subnets:
 				r.Why = "its router's operator has not agreed to route it"
+			case notPQ(s.state, named[i].stage):
+				r.Why = "its router's " + errNotPQ
 			case len(parts) == 0:
 				r.Why = "the access policy passes none of it to this device"
 			default:

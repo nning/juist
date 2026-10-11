@@ -101,6 +101,11 @@ go nowhere rather than to the LAN. Going direct is your choice, with
   internet does. It never asks Tailscale's resolver, which would answer
   names of its tailnet with addresses its members cannot reach.
 - On FreeBSD, exit nodes work with pf, and DNS goes through resolvconf.
+- On Linux, an exit node or subnet router turns on UDP GRO forwarding on the
+  network device of its default route, as `ethtool -K eth0
+  rx-udp-gro-forwarding on rx-gro-list off` does, so that it forwards UDP
+  such as QUIC in batches. It sets the device back as it found it when it
+  stops serving, and logs both.
 - A clean stop of juistd lifts the refusal, so during a restart of the service
   traffic goes direct for a moment.
 

@@ -3,6 +3,7 @@ package conn
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/netip"
 	"net/url"
@@ -30,6 +31,7 @@ import (
 	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/usermetric"
+	"tailscale.com/version"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/filter"
 	"tailscale.com/wgengine/filter/filtertype"
@@ -110,12 +112,16 @@ type Options struct {
 // It is the only place in this project that touches Tailscale's types, and it
 // uses no controlclient, tsnet or ipn: all three assume a coordination server.
 type tsManager struct {
-	logf   logger.Logf
-	eng    wgengine.Engine
-	magic  *magicsock.Conn
-	bus    *eventbus.Bus
-	self   Self
-	selfNV tailcfg.NodeView
+	logf  logger.Logf
+	eng   wgengine.Engine
+	magic *magicsock.Conn
+	bus   *eventbus.Bus
+
+	// self and selfNV change under apply; selfOnPath is both for the lookups
+	// the engine makes on packet paths.
+	self       Self
+	selfNV     tailcfg.NodeView
+	selfOnPath atomic.Pointer[selfLookup]
 
 	// netMon is shared with the engine on the real-device path, nil on the
 	// fake one. The engine never closes a monitor it was handed, so Close does.
@@ -130,9 +136,22 @@ type tsManager struct {
 	apply  sync.Mutex
 	closed bool // guarded by apply: Close has run, the engine is gone
 
+	// unproven are peers installed with no relay to fall back on, each until
+	// when nothing is sent to it before disco proves a path: a first
+	// handshake sent on none is lost, and its retry waits five seconds.
+	unproven sync.Map // key.NodePublic → time.Time
+
+	// keying are the peers newly given a preshared key, and since when:
+	// each passes nothing until its reset is repeated, as a peer the engine
+	// created concurrently may hold the key it had. Guarded by apply.
+	keying map[key.NodePublic]time.Time
+
 	// routerStale records that the last reconfiguration failed, so the OS may
-	// not match what the engine believes it programmed. Guarded by apply.
+	// not match what the engine believes it programmed, and osRouter is the
+	// router a retry goes to directly.
+	// Guarded by apply.
 	routerStale bool
+	osRouter    router.Router
 
 	// exits is the OS router's side of egress and serving, nil without a
 	// device of this node's own; egress and serve are what it was last given.
@@ -208,6 +227,12 @@ type peerState struct {
 	nodes   map[key.NodePublic]tailcfg.NodeView // prebuilt views for peerForIP
 	allowed map[key.NodePublic][]netip.Prefix   // each peer's addresses and routes
 	routes  []routeEntry                        // every peer's routes, by first address
+}
+
+// A selfLookup is this node's addresses and view, as one.
+type selfLookup struct {
+	addrs []netip.Prefix
+	node  tailcfg.NodeView
 }
 
 // A routeEntry is one peer's route as a range of addresses.
@@ -372,6 +397,11 @@ func New(opts Options) (_ Manager, err error) {
 		// One monitor for both, rather than letting the engine start a second.
 		cfg.Tun = dev
 		cfg.Router = osRtr
+		m.osRouter = osRtr
+		if version.IsMobile() {
+			// What the engine hands Android's VPN.
+			m.osRouter = router.ConsolidatingRoutes(m.logf, osRtr)
+		}
 		m.exits, _ = osRtr.(exitRouter)
 		m.hostRouter, _ = osRtr.(interface{ hostRoutes() []netip.Prefix })
 		m.inGuard, _ = osRtr.(overlayGuard)
@@ -428,26 +458,15 @@ func New(opts Options) (_ Manager, err error) {
 		undo.push(func() { unregisterProxied(m) })
 	}
 
-	// Self is rendered exactly like a peer, minus endpoints: nothing
-	// discovers us through our own node view. Only TCP 443 also keeps the
-	// engine from using peer relays, which speak UDP.
-	self := peerNode(Peer{
-		ID:       opts.Self.ID,
-		NodeKey:  opts.Self.NodeKey.Public(),
-		DiscoKey: opts.Self.DiscoKey.Public(),
-		Addrs:    opts.Self.Addrs,
-	}).AsStruct()
-	if m.httpsOnly {
-		self.CapMap = tailcfg.NodeCapMap{nodecap.OnlyTCP443: nil}
-	}
-	m.selfNV = self.View()
+	m.selfNV = m.selfNode(opts.Self)
+	m.selfOnPath.Store(&selfLookup{addrs: opts.Self.Addrs, node: m.selfNV})
 	eng.SetSelfNode(m.selfNV)
 
 	// The data plane learns its peer set only from these lookups, backed by
 	// the snapshot SetPeers stores. A key absent from it has no peer entry and
 	// no allowed IPs, so it cannot handshake: default-deny lives here.
 	eng.SetPeerConfigFunc(m.peerConfig)
-	eng.SetPeerByIPPacketFunc(m.peerByIP)
+	eng.SetPeerByIPPacketFunc(m.sendTo)
 	eng.SetPeerForIPFunc(m.peerForIP)
 
 	// Where reflexive addresses come from. Without a relay the engine reports
@@ -478,32 +497,31 @@ func New(opts Options) (_ Manager, err error) {
 	return m, nil
 }
 
+// selfNode renders s exactly like a peer, minus endpoints: nothing discovers
+// us through our own node view. Only TCP 443 also keeps the engine from using
+// peer relays, which speak UDP.
+func (m *tsManager) selfNode(s Self) tailcfg.NodeView {
+	self := peerNode(Peer{
+		ID:       s.ID,
+		NodeKey:  s.NodeKey.Public(),
+		DiscoKey: s.DiscoKey.Public(),
+		Addrs:    s.Addrs,
+	}).AsStruct()
+	if m.httpsOnly {
+		self.CapMap = tailcfg.NodeCapMap{nodecap.OnlyTCP443: nil}
+	}
+	return self.View()
+}
+
 // checkOptions refuses options New cannot start from.
 func checkOptions(opts *Options) error {
-	if opts.Self.NodeKey.IsZero() {
-		return errors.New("conn: Self.NodeKey is required")
-	}
 	for _, s := range opts.STUN {
 		if _, err := parseSTUNServer(s); err != nil {
 			return err
 		}
 	}
-	// A zero disco key makes magicsock generate an ephemeral one that no peer
-	// can match against the log, failing every exchange with no symptom but
-	// pings that get no pong.
-	if opts.Self.DiscoKey.IsZero() {
-		return errors.New("conn: Self.DiscoKey is required")
-	}
-	if err := checkNodeID(opts.Self.ID); err != nil {
-		return fmt.Errorf("conn: Self.ID: %w", err)
-	}
-	if len(opts.Self.Addrs) == 0 {
-		return errors.New("conn: Self.Addrs must not be empty")
-	}
-	for _, pfx := range opts.Self.Addrs {
-		if err := checkHostPrefix(pfx); err != nil {
-			return fmt.Errorf("conn: Self address: %w", err)
-		}
+	if err := checkSelf(opts.Self); err != nil {
+		return err
 	}
 	if opts.Tun == nil && opts.TunName != "" {
 		if err := checkTunName(opts.TunName); err != nil {
@@ -512,6 +530,31 @@ func checkOptions(opts *Options) error {
 	}
 	if opts.Instance < 0 || opts.Instance > instance.Max {
 		return fmt.Errorf("conn: Instance %d is not between 0 and %d", opts.Instance, instance.Max)
+	}
+	return nil
+}
+
+// checkSelf refuses a Self the data plane cannot run as.
+func checkSelf(s Self) error {
+	if s.NodeKey.IsZero() {
+		return errors.New("conn: Self.NodeKey is required")
+	}
+	// A zero disco key makes magicsock generate an ephemeral one that no peer
+	// can match against the log, failing every exchange with no symptom but
+	// pings that get no pong.
+	if s.DiscoKey.IsZero() {
+		return errors.New("conn: Self.DiscoKey is required")
+	}
+	if err := checkNodeID(s.ID); err != nil {
+		return fmt.Errorf("conn: Self.ID: %w", err)
+	}
+	if len(s.Addrs) == 0 {
+		return errors.New("conn: Self.Addrs must not be empty")
+	}
+	for _, pfx := range s.Addrs {
+		if err := checkHostPrefix(pfx); err != nil {
+			return fmt.Errorf("conn: Self address: %w", err)
+		}
 	}
 	return nil
 }
@@ -535,8 +578,9 @@ func (m *tsManager) peerConfig(nk key.NodePublic) (wgcfg.PeerConfig, bool) {
 	if e := m.evicting.Load(); e != nil && *e == nk {
 		return wgcfg.PeerConfig{}, false
 	}
-	a, ok := m.state.Load().allowed[nk]
-	return wgcfg.PeerConfig{AllowedIPs: a}, ok
+	st := m.state.Load()
+	a, ok := st.allowed[nk]
+	return wgcfg.PeerConfig{AllowedIPs: a, PresharedKey: st.peers[nk].PSK}, ok
 }
 
 // peerByIP routes every outbound packet to a peer, so it stays lock-free:
@@ -550,10 +594,48 @@ func (m *tsManager) peerByIP(ip netip.Addr) (key.NodePublic, bool) {
 	return nk, ok
 }
 
+// sendTo is the peer what is sent to ip goes to: none while it is unproven.
+func (m *tsManager) sendTo(ip netip.Addr) (key.NodePublic, bool) {
+	nk, ok := m.peerByIP(ip)
+	if ok && m.isUnproven(nk) {
+		return key.NodePublic{}, false
+	}
+	return nk, ok
+}
+
+// unprovenWait bounds how long a peer waits for a path to be proven: past
+// the last of [warmSchedule]'s pings, whose delays follow one another.
+var unprovenWait = func() time.Duration {
+	d := 500 * time.Millisecond
+	for _, w := range warmSchedule {
+		d += w
+	}
+	return d
+}()
+
+// heldUnproven reports whether what is sent to p waits for disco to prove a
+// path: where it has an address to try and no relay to fall back on.
+func heldUnproven(p Peer, haveRelays bool) bool {
+	return (p.HomeRelay == 0 || !haveRelays) && len(p.Endpoints) > 0
+}
+
+func (m *tsManager) isUnproven(nk key.NodePublic) bool {
+	until, ok := m.unproven.Load(nk)
+	if !ok {
+		return false
+	}
+	if time.Now().Before(until.(time.Time)) {
+		return true
+	}
+	m.unproven.CompareAndDelete(nk, until)
+	return false
+}
+
 func (m *tsManager) peerForIP(ip netip.Addr) (wgengine.PeerForIP, bool) {
-	for _, p := range m.self.Addrs {
+	self := m.selfOnPath.Load()
+	for _, p := range self.addrs {
 		if p.Addr() == ip {
-			return wgengine.PeerForIP{Node: m.selfNV, IsSelf: true, Route: p}, true
+			return wgengine.PeerForIP{Node: self.node, IsSelf: true, Route: p}, true
 		}
 	}
 	st := m.state.Load()
@@ -586,11 +668,24 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	prev := m.state.Load().peers
 	resets := peerDelta(prev, next.peers)
 	fresh := newPaths(prev, next.peers)
+	m.noteKeying(prev, next.peers)
+	m.unproven.Range(func(k, _ any) bool {
+		if _, ok := next.peers[k.(key.NodePublic)]; !ok {
+			m.unproven.Delete(k)
+		}
+		return true
+	})
+	for _, nk := range fresh {
+		if heldUnproven(next.peers[nk], len(m.relays) > 0) {
+			m.unproven.Store(nk, time.Now().Add(unprovenWait))
+		}
+	}
 
 	// Order matters: the snapshot is swapped in before the data plane is
 	// told to resync, so a removed peer's lookup already fails by the time
-	// wireguard-go asks. A newly confined peer is confined first.
-	m.confiner.set(peers, m.self.Addrs)
+	// wireguard-go asks. A newly confined peer is confined first, and one
+	// newly keyed passes nothing until no session without its key is left.
+	m.confiner.set(m.keptConfined(peers), m.self.Addrs)
 	m.state.Store(next)
 
 	// Session keys are discarded outright rather than left to expire, for a
@@ -623,6 +718,107 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	}
 	m.warmPaths(fresh)
 	return err
+}
+
+func (m *tsManager) SetSelf(s Self) error {
+	s.Addrs = slices.Clone(s.Addrs)
+	if err := checkSelf(s); err != nil {
+		return err
+	}
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	switch {
+	case m.closed:
+		return errors.New("conn: manager is closed")
+	case s.ID != m.self.ID || !s.DiscoKey.Equal(m.self.DiscoKey):
+		return errors.New("conn: SetSelf changes only the node key and the addresses")
+	}
+	peers := slices.Collect(maps.Values(m.state.Load().peers))
+	if err := validatePeers(s, peers); err != nil {
+		return err
+	}
+	if err := m.guardAhead(m.self.Addrs, s.Addrs); err != nil {
+		return err
+	}
+	// The new addresses are ours before the router puts them on the device,
+	// so the filter and the confiner never drop what arrives for them.
+	m.self = s
+	m.selfNV = m.selfNode(s)
+	m.selfOnPath.Store(&selfLookup{addrs: s.Addrs, node: m.selfNV})
+	m.eng.SetSelfNode(m.selfNV)
+	_, nodeList := newPeerState(s.NodeKey.Public(), peers)
+	m.confiner.set(m.keptConfined(peers), s.Addrs)
+	m.magic.SetNetworkMap(m.selfNV, nodeList)
+	return m.reconfig()
+}
+
+// keyingSettle is how long after a peer is given a preshared key its reset
+// is repeated: past any lookup the engine made with the key it had.
+const keyingSettle = 2 * time.Second
+
+// noteKeying records the peers next gives a key prev gave none, forgets
+// those gone or keyless again, and has their resets repeated. The caller
+// holds m.apply.
+func (m *tsManager) noteKeying(prev, next map[key.NodePublic]Peer) {
+	for nk := range m.keying {
+		if p, ok := next[nk]; !ok || p.PSK == [32]byte{} {
+			delete(m.keying, nk)
+		}
+	}
+	added := false
+	for nk, p := range next {
+		if old, ok := prev[nk]; ok && keyed(old, p) {
+			if m.keying == nil {
+				m.keying = map[key.NodePublic]time.Time{}
+			}
+			m.keying[nk], added = time.Now(), true
+			m.logf("conn: %v newly given a preshared key: nothing passes until it is reset again", nk.ShortString())
+		}
+	}
+	if added {
+		time.AfterFunc(keyingSettle, m.settleKeying)
+	}
+}
+
+// settleKeying resets again each peer keyed keyingSettle ago, so no session
+// made without its key outlives the first, and gives it its access.
+func (m *tsManager) settleKeying() {
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	if m.closed {
+		return
+	}
+	for nk, since := range m.keying {
+		if time.Since(since) < keyingSettle {
+			continue
+		}
+		m.evicting.Store(&nk)
+		m.eng.SyncDevicePeer(nk)
+		m.evicting.Store(nil)
+		m.eng.SyncDevicePeer(nk)
+		delete(m.keying, nk)
+		m.logf("conn: %v keyed: reset again", nk.ShortString())
+	}
+	m.confiner.set(m.keptConfined(slices.Collect(maps.Values(m.state.Load().peers))), m.self.Addrs)
+}
+
+// keptConfined is peers with each one newly keyed passing nothing, for as
+// long as a session without its key may still carry traffic. The caller
+// holds m.apply.
+func (m *tsManager) keptConfined(peers []Peer) []Peer {
+	var out []Peer
+	for i, p := range peers {
+		if _, ok := m.keying[p.NodeKey]; ok {
+			if out == nil {
+				out = slices.Clone(peers)
+			}
+			out[i].Access = &Access{Nothing: true}
+		}
+	}
+	if out == nil {
+		return peers
+	}
+	return out
 }
 
 // clonePeers copies peers and the slices they hold.
@@ -812,7 +1008,11 @@ func (m *tsManager) warmPaths(fresh []key.NodePublic) {
 				if !ok {
 					continue
 				}
-				m.magic.Ping(nv, new(ipnstate.PingResult), 0, func(*ipnstate.PingResult) {})
+				m.magic.Ping(nv, new(ipnstate.PingResult), 0, func(r *ipnstate.PingResult) {
+					if r.Err == "" {
+						m.unproven.Delete(nk)
+					}
+				})
 			}
 		}
 	}()
@@ -836,16 +1036,22 @@ func newPaths(prev, next map[key.NodePublic]Peer) (fresh []key.NodePublic) {
 }
 
 // peerDelta reports which device peers must be reset, discarding session keys:
-// those that left the set, and those whose disco key rotated, since that means
-// a restart and waiting out the rekey timers would blackhole traffic.
+// those that left the set, those whose disco key rotated, since that means
+// a restart and waiting out the rekey timers would blackhole traffic, and
+// those newly given a preshared key, whose session mixes in none.
 func peerDelta(prev, next map[key.NodePublic]Peer) (resets []key.NodePublic) {
 	for nk, old := range prev {
-		if cur, still := next[nk]; !still || cur.DiscoKey != old.DiscoKey {
+		if cur, still := next[nk]; !still || cur.DiscoKey != old.DiscoKey || keyed(old, cur) {
 			resets = append(resets, nk)
 		}
 	}
 	return resets
 }
+
+// keyed reports whether a peer that had no preshared key is given one: its
+// session carries none, so it goes, and what the peer may open widens only
+// once it has.
+func keyed(old, cur Peer) bool { return old.PSK == [32]byte{} && cur.PSK != [32]byte{} }
 
 // samePrefixSet reports whether a and b hold the same prefixes, ignoring
 // order.
@@ -934,20 +1140,18 @@ func (m *tsManager) reconfig() error {
 		Routes:        m.peerRoutes(),
 		NetfilterMode: preftype.NetfilterOff,
 	}
-	if m.routerStale {
-		// The engine records a router config before it programs it, so after
-		// a failure it never hands that config to the router again: it
-		// reports ErrNoChanges, or nil where anything else in the call moved,
-		// as the listen port of an engine given none always does. A config
-		// that differs in between makes the retry real. Our addresses are off
-		// the device for one call, and only where the router is known broken;
-		// whether that call succeeds does not matter.
-		_ = m.eng.Reconfig(wg, &router.Config{NetfilterMode: preftype.NetfilterOff}, &dns.Config{})
-	}
 	err = m.eng.Reconfig(wg, rt, &dns.Config{})
 	if err != nil && !errors.Is(err, wgengine.ErrNoChanges) {
 		m.routerStale = true
 		return fmt.Errorf("conn: reconfig: %w", err)
+	}
+	if m.routerStale && m.osRouter != nil {
+		// The engine records a router config before it programs it, so it
+		// never hands a config that failed to the router again: the retry
+		// goes to the router itself, which redoes only what failed.
+		if err := m.osRouter.Set(rt); err != nil {
+			return fmt.Errorf("conn: reconfig: %w", err)
+		}
 	}
 	m.routerStale = false
 	if m.inGuard != nil {
@@ -964,6 +1168,25 @@ func (m *tsManager) peerAddrs() []netip.Addr {
 	}
 	slices.SortFunc(addrs, netip.Addr.Compare)
 	return slices.Compact(addrs)
+}
+
+// guardAhead keeps to the tunnel the addresses next adds to prev before
+// the router puts them on the device, where they are reached by any
+// device until the guard names them. The caller holds m.apply.
+func (m *tsManager) guardAhead(prev, next []netip.Prefix) error {
+	if m.inGuard == nil {
+		return nil
+	}
+	both := slices.Clone(prev)
+	for _, p := range next {
+		if !slices.Contains(both, p) {
+			both = append(both, p)
+		}
+	}
+	if len(both) == len(prev) {
+		return nil
+	}
+	return m.inGuard.guardOverlay(hostAddrs(both), m.peerAddrs())
 }
 
 // hostAddrs is the addresses of single-address prefixes.

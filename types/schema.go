@@ -71,7 +71,11 @@ type SchemaVersion uint16
 //
 // Schema 13 adds the network's access policy ([KindSetPolicy],
 // [Snapshot.Policy]).
-const CurrentSchema SchemaVersion = 13
+//
+// Schema 14 adds no record field: every pair of members mixes a preshared
+// key into its WireGuard handshakes, and announcements name what it needs,
+// which older builds refuse.
+const CurrentSchema SchemaVersion = 14
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -115,5 +119,8 @@ const SchemaRelayName SchemaVersion = 12
 
 // SchemaPolicy is the first schema with an access policy.
 const SchemaPolicy SchemaVersion = 13
+
+// SchemaPQ is the first schema in which tunnels carry preshared keys.
+const SchemaPQ SchemaVersion = 14
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

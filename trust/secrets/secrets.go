@@ -105,6 +105,11 @@ func (p *PrivateKeys) Bytes() (x25519Scalar, mlkemSeed []byte) {
 	return p.x25519.Bytes(), p.mlkem.Bytes()
 }
 
+// Decapsulate recovers what a peer encapsulated to this node's ML-KEM key.
+func (p *PrivateKeys) Decapsulate(ciphertext []byte) ([]byte, error) {
+	return p.mlkem.Decapsulate(ciphertext)
+}
+
 // Public returns the public halves, as they appear in a node record.
 func (p *PrivateKeys) Public() (types.X25519Key, types.MLKEMKey, error) {
 	var xk types.X25519Key
@@ -405,6 +410,7 @@ const (
 	labelAdminMLKEM   = "juist/admin-recipient-mlkem/v1"
 	labelWaitingKey   = "juist/waiting-key/v1"
 	labelPeer         = "juist/peer-seal/v1"
+	labelPSK          = "juist/wg-psk/v1"
 )
 
 // derive expands the secret into keying material for one labelled use:
@@ -465,6 +471,15 @@ func (s Secret) DiscoveryKey(epoch uint64) [32]byte {
 // who is on it.
 func (s Secret) MDNSName(epoch uint64) []byte {
 	return s.derive(labelMDNS, epoch, nil, TopicIDSize)
+}
+
+// PSKSeed returns what an epoch's WireGuard preshared keys are derived from:
+// a member keeps it longer than the secret, which answers gossip and
+// discovery, so as to reach a peer still behind.
+func (s Secret) PSKSeed(epoch uint64) [32]byte {
+	var out [32]byte
+	copy(out[:], s.derive(labelPSK, epoch, nil, len(out)))
+	return out
 }
 
 // GossipKey returns the AEAD key protecting gossip frames on the underlay.

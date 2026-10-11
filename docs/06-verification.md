@@ -106,13 +106,25 @@ netfilter doing the translation rather than a simulation of it:
   the same dependency the FreeBSD interop matrix above wants; decide both at once.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
   VPS relay member + one mobile (Android on LTE, from M10); full lifecycle including
-  emergency revocation from a phone (from M19).
+  emergency revocation from a phone (from M20).
 
 ## 5. Cryptographic review gates
 
 - Internal design review of the trust layer before M3 (log rules frozen).
-- External audit at M16 scoped to `trust/*`, `enroll`, `gossip` (~7–9 k LOC) plus the
-  reconciler's default-deny property, M6's route consumption and M8's resolver.
+- External audit at M17 of the audit scope: what [`audit-scope`](../audit-scope)
+  places `core` or `in`, the code that decides who may do what, holds or derives a
+  key, parses input from outside the membership, or runs as root. Every package
+  is placed there, `out` ones with their reason, and `make tcb` fails on one
+  placed nowhere. The scope is audited in tiers, so the deep part stays the core:
+  - **The core** (`types`, `trust/`): line by line, the cryptography included.
+  - **Parsers of input from outside** (gossip, the IPC wire, the QUIC Initial,
+    waiting changes, the resolver, the policy): fuzzed first, then reviewed where
+    the fuzzer cannot judge.
+  - **The rest** (reconciler, filter, root helpers, key custody, the app's API):
+    reviewed for their invariants (default deny, dropped privileges, keys that
+    stay where they are put), not line by line.
+- After v1, each milestone that grows the audit scope gets an audit of what it
+  added, scoped by the sizes its "Done" line records.
 - A short machine-checkable model (e.g. Tamarin/ProVerif sketch or TLA+ for the
   epoch/freshness state machine) is a stretch goal — valuable for the freshness and
   fork-choice rules, which are where novel logic lives.
@@ -121,8 +133,10 @@ netfilter doing the translation rather than a simulation of it:
 
 Tracked per commit in CI: direct-connection rate per NAT class, revocation
 convergence time (connected case), sync time after 1-week offline, encoded size
-of an epoch record and of a checkpoint at `MaxNodes` members, TCB LOC count
-(`trust/*` + `enroll` — budget alarm if it grows past 10 k). Fuzz corpus coverage
+of an epoch record and of a checkpoint at `MaxNodes` members, the core's LOC
+count (`types`, `trust/`), held to 10 k by `make tcb`, and the audit scope's, which
+is measured, not budgeted: features grow it, and each milestone's "Done" line in
+[05-roadmap.md](05-roadmap.md) records both. Fuzz corpus coverage
 is tracked per milestone instead, from the manual runs above.
 
 The record-size metric exists because the O(n) epoch wrap fan-out is the term

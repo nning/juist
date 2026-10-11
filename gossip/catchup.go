@@ -256,7 +256,7 @@ func (n *Node) askCatchUp(c net.Conn, network types.Hash, own uint64) (*[secrets
 	case !from.Verify(catchUpGrantBytes(network, ch.Nonce, self, ans.Sealed), *ans.Sig):
 		return nil, from, errors.New("gossip: a catch-up grant is not signed by the key it names")
 	}
-	key, err := secrets.OpenCatchUp(network, self, keys.Recipient, ch.Nonce, ans.Sealed)
+	key, err := secrets.OpenCatchUp(network, self, n.recipient.Load(), ch.Nonce, ans.Sealed)
 	if err != nil {
 		return nil, from, fmt.Errorf("gossip: %w", err)
 	}

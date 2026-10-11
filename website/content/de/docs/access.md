@@ -65,7 +65,7 @@ Prüf die Datei gegen das Netz und leg sie dann fest:
 $ juist policy check policy.conf
 policy.conf: passes its 3 tests
 $ juist policy set policy.conf
-devices then open on each other only what the policy passes; set it? [y/N] y
+anything the policy does not pass is then refused; set it? [y/N] y
 access policy set: 4 rules
 ```
 
@@ -228,7 +228,7 @@ Sonst könnte jeder, der ins Repository pushen darf, das Netz ändern.
   eine Tabelle oder ein Dienst, den keine Regel nutzt.
 - `juist policy set -` liest die Zugriffsregeln von der Standardeingabe.
 - `juist log` listet jede Änderung der Zugriffsregeln auf, und wer sie
-  bestätigt hat.
+  bestätigt hat; `juist log show N` zeigt eine davon als Diff.
 - Ein entferntes Gerät fällt aus allen Regeln heraus, und eine Regel oder
   ein Test, dem es dann fehlt, entfällt; `juist remove` sagt, was die
   Zugriffsregeln dabei verlieren.

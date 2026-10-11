@@ -34,6 +34,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 	"github.com/nning/juist/internal/admit"
 	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/pairkey"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -162,6 +164,13 @@ type Options struct {
 	// admin devices beside the log. Nil hands none.
 	Waiting Waiting
 
+	// Pair returns this node's message to a peer in the exchange of a
+	// preshared key, signed, or nil for none; OnPair takes a peer's, which
+	// it verifies, before the frame answering it is built. Nil sends and
+	// takes none.
+	Pair   func(to types.Identity) *pairkey.Msg
+	OnPair func(m *pairkey.Msg)
+
 	// OnHave receives the record hashes a peer's hello says it holds, under
 	// the identity its announcement names. Any member can forge that, so it
 	// is for display only. It runs on the session's goroutine.
@@ -232,6 +241,10 @@ type Node struct {
 	mu        sync.Mutex
 	peerEpoch map[types.Identity]uint64
 
+	// recipient opens what is sealed to this device: CatchUp's, until
+	// SetRecipient.
+	recipient atomic.Pointer[secrets.PrivateKeys]
+
 	// failing holds the peers whose last outbound round reached none of
 	// their addresses, and refused those of them whose catch-up refused this
 	// node, both under mu. Entered only for peers Sync was asked to reach,
@@ -270,6 +283,9 @@ func New(opts Options) (*Node, error) {
 		silent:    admit.New[netip.Addr](admit.Limits{PerSource: maxUnauthPerSource, OnSource: admit.EvictOldest}),
 	}
 	n.dialTimeout = min(DialTimeout, n.timeout/4)
+	if opts.CatchUp != nil {
+		n.recipient.Store(opts.CatchUp.Recipient)
+	}
 	if n.logf == nil {
 		n.logf = func(string, ...any) {}
 	}
@@ -449,6 +465,10 @@ func withExtra(f *frame, extra [][]byte) error {
 	f.Records = append(f.Records, extra...)
 	return nil
 }
+
+// SetRecipient has the node open what is sealed to this device with r from
+// now on, as after a rotation of its keys.
+func (n *Node) SetRecipient(r *secrets.PrivateKeys) { n.recipient.Store(r) }
 
 // CatchUpWith runs one catch-up session against a peer, whatever epochs this
 // node holds.
@@ -674,6 +694,9 @@ func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 	switch {
 	case ss.catchUp == nil:
 		n.notePeer(&peer, ss.epoch)
+		if so.initiator {
+			n.takePair(&peer)
+		}
 		return n.swapRecords(c, ss, &view, &peer, so.initiator, n.heard(&peer), so.extra)
 	case so.initiator:
 		return n.finishCatchUp(c, ss, &view, &peer)
@@ -702,6 +725,9 @@ func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view 
 			return frame{}, err
 		}
 		hello.Waiting = n.heldFor(view.Network, so.peerID)
+	}
+	if !so.catchUp {
+		hello.Pair = n.pairFor(so.peerID)
 	}
 	if err := n.writeSealed(c, ss, &hello); err != nil {
 		return frame{}, err
@@ -750,7 +776,9 @@ func (n *Node) responderHello(c net.Conn, authed func(), ss *sessionSeal, view *
 			return frame{}, err
 		}
 		if id, ok := n.claimed(&peer); ok && peer.Network == view.Network {
+			n.takePair(&peer)
 			hello.Waiting = n.heldFor(view.Network, id)
+			hello.Pair = n.pairFor(id)
 		}
 	}
 	if err := n.writeSealed(c, ss, &hello); err != nil {
@@ -809,7 +837,12 @@ func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame,
 		reply.Waiting, sent = n.waitingFor(view.Network, peer, maxRecordBytesPerFrame-recordBytes(&reply))
 	}
 	var theirs frame
+	with, _ := n.claimed(peer)
+	if ss.catchUp != nil {
+		with = types.Identity{}
+	}
 	if writeFirst {
+		reply.Pair = n.pairFor(with)
 		if err := n.writeSealed(c, ss, &reply); err != nil {
 			return err
 		}
@@ -817,10 +850,13 @@ func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame,
 		if theirs, err = n.readRecords(c, ss, view); err != nil {
 			return err
 		}
+		n.takePair(&theirs)
 	} else {
 		if theirs, err = n.readRecords(c, ss, view); err != nil {
 			return err
 		}
+		n.takePair(&theirs)
+		reply.Pair = n.pairFor(with)
 		if err := n.writeSealed(c, ss, &reply); err != nil {
 			return err
 		}
@@ -838,6 +874,23 @@ func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame,
 		n.onRecords()
 	}
 	return err
+}
+
+// pairFor is this node's message to id in the exchange of a preshared key,
+// or nil.
+func (n *Node) pairFor(id types.Identity) *pairkey.Msg {
+	if n.opts.Pair == nil || id.IsZero() || id == n.opts.Self {
+		return nil
+	}
+	return n.opts.Pair(id)
+}
+
+// takePair hands the daemon a peer's message to this node in the exchange of
+// a preshared key.
+func (n *Node) takePair(f *frame) {
+	if f.Pair != nil && f.Pair.To == n.opts.Self && n.opts.OnPair != nil {
+		n.opts.OnPair(f.Pair)
+	}
 }
 
 // recordBytes is what a records frame's records and leases take of its

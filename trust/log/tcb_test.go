@@ -7,9 +7,8 @@ import (
 	"testing"
 )
 
-// The trusted computing base: the packages docs/06-verification.md scopes the
-// external audit to. Everything else in the tree is glue around production-
-// tested imports and can be wrong without membership being wrong.
+// The trusted computing base's core: the packages audit-scope places core.
+// Everything else can be wrong without membership being wrong.
 var tcbPackages = []string{
 	"github.com/nning/juist/types",
 	"github.com/nning/juist/trust/log",

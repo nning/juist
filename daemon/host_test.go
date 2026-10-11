@@ -209,6 +209,16 @@ func (h *hostFixture) lastStart() ([]netip.Prefix, int) {
 	return h.starts[len(h.starts)-1], len(h.starts)
 }
 
+// holding is the addresses the data plane holds now, and how many meshes
+// started.
+func (h *hostFixture) holding() ([]netip.Prefix, int) {
+	addrs, n := h.lastStart()
+	if set := h.mgr.selfSet(); len(set) > 0 {
+		addrs = set[len(set)-1].Addrs
+	}
+	return addrs, n
+}
+
 // learnPeer has the running mesh hear the other member's announcement.
 func (h *hostFixture) learnPeer(t *testing.T) {
 	t.Helper()
@@ -278,8 +288,8 @@ func TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt(t *testing.T) {
 
 	// The same conflict again is no restart.
 	h.s.checkHost()
-	if _, again := h.lastStart(); again != 1 {
-		t.Fatalf("an unchanged conflict restarted the mesh")
+	if _, again := h.lastStart(); again != 1 || len(h.mgr.selfSet()) != 0 {
+		t.Fatalf("an unchanged conflict restarted or moved the mesh")
 	}
 	// Gone once is not gone: a lower instance restarting holds nothing for
 	// a moment. Seen gone a few checks in a row, it is.
@@ -287,13 +297,13 @@ func TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt(t *testing.T) {
 	for range conflictClearChecks - 1 {
 		h.s.checkHost()
 	}
-	if _, n := h.lastStart(); n != 1 {
+	if addrs, n := h.holding(); n != 1 || hasV4(addrs) {
 		t.Fatalf("IPv4 came back on the first check that found the conflict gone")
 	}
 	h.s.checkHost()
-	addrs, n = h.lastStart()
-	if n != 2 || !hasV4(addrs) {
-		t.Fatalf("with the conflict gone the mesh started %d times, last on %v; want again, with IPv4", n, addrs)
+	addrs, n = h.holding()
+	if n != 1 || !hasV4(addrs) {
+		t.Fatalf("with the conflict gone the mesh started %d times and holds %v; want it running on, with IPv4", n, addrs)
 	}
 	h.learnPeer(t)
 	if peers := h.installed(); len(peers) != 1 || !hasV4(peers[0].Addrs) {
@@ -306,8 +316,12 @@ func TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt(t *testing.T) {
 	// A lower instance coming to hold it later takes IPv4 away again.
 	h.setHeld(conn.Holding{Instance: 0, Device: "juist0", Prefixes: []netip.Prefix{p("100.64.0.0/16")}})
 	h.s.checkHost()
-	if addrs, n := h.lastStart(); n != 3 || hasV4(addrs) {
-		t.Fatalf("a new conflict: the mesh started %d times, last on %v", n, addrs)
+	if addrs, n := h.holding(); n != 1 || hasV4(addrs) {
+		t.Fatalf("a new conflict: the mesh started %d times and holds %v", n, addrs)
+	}
+	h.learnPeer(t)
+	if peers := h.installed(); len(peers) != 1 || hasV4(peers[0].Addrs) {
+		t.Fatalf("installed peers %+v; want the other member, on IPv6 alone", peers)
 	}
 }
 
@@ -323,8 +337,8 @@ func TestALowerInstanceIsAskedFirst(t *testing.T) {
 		V4Claims: []netip.Prefix{p("100.64.0.0/16")}}
 	h.mu.Unlock()
 	h.s.checkHost()
-	if addrs, n := h.lastStart(); n != 2 || hasV4(addrs) {
-		t.Fatalf("claims that overlap: the mesh started %d times, last on %v", n, addrs)
+	if addrs, n := h.holding(); n != 1 || hasV4(addrs) {
+		t.Fatalf("claims that overlap: the mesh started %d times and holds %v", n, addrs)
 	}
 	if c := h.s.Status().HostConflict; c == nil || c.Held != p("100.64.0.0/16") || c.Device != "juist0" {
 		t.Fatalf("conflict %+v", c)
@@ -417,8 +431,8 @@ func TestAnInstanceWaitsForOneBelowThatIsNotUpYet(t *testing.T) {
 	for range conflictClearChecks {
 		h.s.checkHost()
 	}
-	if addrs, n := h.lastStart(); n != 2 || !hasV4(addrs) {
-		t.Fatalf("once it answered the mesh started %d times, last on %v; want with IPv4", n, addrs)
+	if addrs, n := h.holding(); n != 1 || !hasV4(addrs) {
+		t.Fatalf("once it answered the mesh started %d times and holds %v; want with IPv4", n, addrs)
 	}
 
 	// Once a mesh has run, one below that goes quiet is no reason to drop
@@ -427,8 +441,8 @@ func TestAnInstanceWaitsForOneBelowThatIsNotUpYet(t *testing.T) {
 	h.lower = nil
 	h.mu.Unlock()
 	h.s.checkHost()
-	if _, n := h.lastStart(); n != 2 {
-		t.Fatalf("a lower instance going quiet restarted the mesh")
+	if addrs, n := h.holding(); n != 1 || !hasV4(addrs) {
+		t.Fatalf("a lower instance going quiet restarted the mesh or took IPv4")
 	}
 }
 

@@ -46,6 +46,12 @@ Schlüssel bleiben vorgemerkt, bis das Log sie enthält. Mit
 `juist rotate abandon` verwirfst du eine Erneuerung, die noch auf
 Bestätigung wartet.
 
+Verbindungen laufen weiter, wenn das Gerät seine neuen Schlüssel übernimmt:
+Der Tunnel zu jedem Gerät wartet kurz auf einen Handshake mit ihnen. Ein
+Gerät, das ein Relay betreibt, startet seine Tunnel stattdessen neu, und
+`juist rotate identity`, das die IPv6-Adresse des Geräts ändert, beendet,
+was über die alte lief.
+
 ## Ein Gerät von vorn beginnen lassen
 
 Mit `juist reset` verlässt ein Gerät das Netz und ist danach wie frisch

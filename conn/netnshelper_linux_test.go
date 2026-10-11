@@ -4,6 +4,7 @@ package conn
 
 import (
 	"bufio"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -12,13 +13,18 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/net/stun"
+	"tailscale.com/types/ipproto"
 
 	"github.com/nning/juist/internal/dnsfwd"
+	"github.com/nning/juist/internal/netstack"
+	"github.com/nning/juist/internal/pipe"
 	"github.com/nning/juist/relay"
 )
 
@@ -78,6 +84,17 @@ func TestHelperNetnsNode(t *testing.T) {
 	}
 
 	var hostRouteChanges atomic.Int64
+	tunName, dev, stack := os.Getenv(envTun), tun.Device(nil), (*netstack.Net)(nil)
+	if os.Getenv(envNetstack) != "" {
+		var own []netip.Addr
+		for _, p := range addrs {
+			own = append(own, p.Addr())
+		}
+		if dev, stack, err = netstack.New(own, 1280); err != nil {
+			t.Fatalf("netstack: %v", err)
+		}
+		tunName = ""
+	}
 	mgr, err := New(Options{
 		OnHostRoutesChange: func() { hostRouteChanges.Add(1) },
 		Self: Self{
@@ -87,7 +104,8 @@ func TestHelperNetnsNode(t *testing.T) {
 			Addrs:    addrs,
 		},
 		ListenPort: uint16(port),
-		TunName:    os.Getenv(envTun),
+		Tun:        dev,
+		TunName:    tunName,
 		Instance:   inst,
 		Debug:      os.Getenv(envDebug) != "",
 		// Engine logs go to stderr as they happen. The test framework's own
@@ -173,11 +191,25 @@ func TestHelperNetnsNode(t *testing.T) {
 	if p := os.Getenv(envTCPListen); p != "" {
 		serveTCPEcho(t, p)
 	}
+	if v := os.Getenv(envNetstack); v != "" {
+		port, target, _ := strings.Cut(v, ">")
+		for _, p := range addrs {
+			ap := netip.AddrPortFrom(p.Addr(), uint16(mustAtoi(t, port)))
+			ln, err := stack.ListenTCPAddrPort(ap)
+			if err != nil {
+				t.Fatalf("netstack: listening at %v: %v", ap, err)
+			}
+			defer ln.Close()
+			go passOn(ln, target)
+		}
+	}
 
 	say("READY %d", mgr.LocalPort())
 	if relayLine != "" {
 		say("%s", relayLine)
 	}
+	streams := map[string]*heldStream{}
+	var psk [32]byte
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
 		cmd := strings.TrimSpace(sc.Text())
@@ -226,6 +258,96 @@ func TestHelperNetnsNode(t *testing.T) {
 			say("OK")
 			continue
 		}
+		if rest, ok := strings.CutPrefix(cmd, "STREAM "); ok {
+			name, to, _ := strings.Cut(rest, " ")
+			streams[name] = startStream(t, to)
+			say("OK")
+			continue
+		}
+		if name, ok := strings.CutPrefix(cmd, "STREAMSTAT "); ok {
+			say("STREAM %s", streams[name].stat())
+			continue
+		}
+		if rest, ok := strings.CutPrefix(cmd, "SELF "); ok {
+			hexKey, addrList, _ := strings.Cut(rest, " ")
+			k, err := unrawHex(hexKey)
+			if err != nil {
+				t.Fatalf("SELF: %v", err)
+			}
+			if addrs, err = splitPrefixes(addrList); err != nil {
+				t.Fatalf("SELF: %v", err)
+			}
+			if err := mgr.SetSelf(Self{ID: id, NodeKey: NodeKeyFromRaw32(k), DiscoKey: DiscoKeyFromRaw32(discoRaw), Addrs: addrs}); err != nil {
+				t.Fatalf("SetSelf: %v", err)
+			}
+			say("OK")
+			continue
+		}
+		if rest, ok := strings.CutPrefix(cmd, "PROXY "); ok {
+			at, target, _ := strings.Cut(rest, " ")
+			ln, err := net.Listen("tcp", at)
+			if err != nil {
+				t.Fatalf("PROXY: %v", err)
+			}
+			defer ln.Close()
+			go passOn(ln, target)
+			say("OK")
+			continue
+		}
+		if port, ok := strings.CutPrefix(cmd, "ACCESS "); ok {
+			for i := range peers {
+				p := uint16(mustAtoi(t, port))
+				peers[i].Access = &Access{Open: []Ports{{Proto: ipproto.TCP, First: p, Last: p}}}
+			}
+			if err := mgr.SetPeers(peers); err != nil {
+				t.Fatalf("SetPeers: %v", err)
+			}
+			say("OK")
+			continue
+		}
+		if enc, ok := strings.CutPrefix(cmd, "PEERSET "); ok {
+			if peers, err = decodePeers(enc); err != nil {
+				t.Fatalf("PEERSET: %v", err)
+			}
+			for i := range peers {
+				peers[i].PSK = psk
+			}
+			if err := mgr.SetPeers(peers); err != nil {
+				t.Fatalf("SetPeers: %v", err)
+			}
+			say("OK")
+			continue
+		}
+		if hexKey, ok := strings.CutPrefix(cmd, "PSK "); ok {
+			k, err := unrawHex(hexKey)
+			if err != nil {
+				t.Fatalf("PSK: %v", err)
+			}
+			psk = k
+			for i := range peers {
+				peers[i].PSK = k
+			}
+			if err := mgr.SetPeers(peers); err != nil {
+				t.Fatalf("SetPeers after PSK: %v", err)
+			}
+			say("OK")
+			continue
+		}
+		if srcs, ok := strings.CutPrefix(cmd, "SERVE "); ok {
+			s := Serve{}
+			if srcs != "none" {
+				var err error
+				if s.Sources, err = splitPrefixes(srcs); err != nil {
+					t.Fatalf("SERVE: %v", err)
+				}
+				s.Routes = Internet(true, true, nil)
+			}
+			if err := mgr.SetServe(s); err != nil {
+				t.Fatalf("SetServe: %v", err)
+			}
+			say("OK")
+			continue
+		}
 		switch cmd {
 		case "PEERS all":
 			if err := mgr.SetPeers(peers); err != nil {
@@ -254,6 +376,30 @@ func TestHelperNetnsNode(t *testing.T) {
 				out = append(out, ap.String())
 			}
 			say("ENDPOINTS %s", strings.Join(out, ","))
+		case "REKEY":
+			// Each peer's next packet starts a handshake; the answer is how
+			// long until every one completed, or that one did not in 15 s.
+			start := time.Now()
+			for _, p := range peers {
+				mgr.(*tsManager).eng.MarkDevicePeerForHandshake(p.NodeKey)
+			}
+			done := func() bool {
+				tun := mgr.Tunnels()
+				for _, p := range peers {
+					if !tun[p.ID].LastHandshake.After(start) {
+						return false
+					}
+				}
+				return true
+			}
+			for !done() && time.Since(start) < 15*time.Second {
+				time.Sleep(50 * time.Millisecond)
+			}
+			if done() {
+				say("REKEYED %d", time.Since(start).Milliseconds())
+			} else {
+				say("REKEYED none")
+			}
 		case "EXIT":
 			return
 		default:
@@ -495,4 +641,117 @@ func TestHelperNetnsRPFilter(t *testing.T) {
 	}
 	strict, err := StrictRP6()
 	say("RPFILTER %v %v", strict, err)
+}
+
+// passOn joins what ln accepts to target, as a service member or an ingress
+// passes a connection on.
+func passOn(ln net.Listener, target string) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			d, err := net.Dial("tcp", target)
+			if err != nil {
+				c.Close()
+				return
+			}
+			pipe.Join(context.Background(), c, d, time.Minute)
+		}()
+	}
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A heldStream is one TCP connection kept streaming to an echo server across
+// whatever the lab changes meanwhile: how much came back, the longest wait
+// for any of it, and what ended it, if anything did.
+type heldStream struct {
+	mu     sync.Mutex
+	echoed int64
+	gap    time.Duration
+	last   time.Time
+	err    error
+}
+
+// startStream dials to and writes 16 KiB every 10 ms, checking the echo.
+func startStream(t *testing.T, to string) *heldStream {
+	c, err := net.DialTimeout("tcp", to, 30*time.Second)
+	if err != nil {
+		t.Fatalf("STREAM: dialing %s: %v", to, err)
+	}
+	h := &heldStream{last: time.Now()}
+	block := make([]byte, 16*1024)
+	for i := range block {
+		block[i] = byte(i)
+	}
+	go func() {
+		for {
+			if _, err := c.Write(block); err != nil {
+				h.end(fmt.Errorf("writing: %w", err))
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	go func() {
+		buf := make([]byte, 64*1024)
+		var off int64
+		for {
+			n, err := c.Read(buf)
+			for i := range n {
+				if buf[i] != byte(off+int64(i)) {
+					h.end(fmt.Errorf("byte %d came back as %d", off+int64(i), buf[i]))
+					return
+				}
+			}
+			off += int64(n)
+			h.read(n)
+			if err != nil {
+				h.end(fmt.Errorf("reading: %w", err))
+				return
+			}
+		}
+	}()
+	return h
+}
+
+func (h *heldStream) read(n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	now := time.Now()
+	h.gap = max(h.gap, now.Sub(h.last))
+	h.last = now
+	h.echoed += int64(n)
+}
+
+func (h *heldStream) end(err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.err == nil {
+		h.err = err
+	}
+}
+
+// stat is the stream's bytes echoed, its longest wait in milliseconds, the
+// current wait included, and what ended it, "-" for nothing.
+func (h *heldStream) stat() string {
+	if h == nil {
+		return "0 0 no-stream"
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	gap := max(h.gap, time.Since(h.last))
+	why := "-"
+	if h.err != nil {
+		why = strings.ReplaceAll(h.err.Error(), " ", "_")
+	}
+	return fmt.Sprintf("%d %d %s", h.echoed, gap.Milliseconds(), why)
 }

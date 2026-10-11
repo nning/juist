@@ -445,6 +445,8 @@ func (stubManager) SetPeers([]conn.Peer) error { return nil }
 
 func (stubManager) SetRelays([]conn.Relay) error { return nil }
 
+func (stubManager) SetSelf(conn.Self) error { return nil }
+
 func (stubManager) SetEgress(conn.Egress, bool) error { return nil }
 
 func (stubManager) AnswersThrough() string { return "" }

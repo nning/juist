@@ -46,7 +46,8 @@ type Published struct {
 // Socket, where set, is a Unix socket the target is reached at instead.
 //
 // Answering [CmdServing], Addrs are this device's own, to listen on, and To
-// is where the name's plain connections go.
+// is where the name's plain connections go; where Paths are set, the
+// terminator proxies the name's requests, those under a path to its To.
 type PublishedTarget struct {
 	Name   string       `cbor:"1,keyasint"`
 	Addrs  []netip.Addr `cbor:"2,keyasint,omitempty"`
@@ -55,6 +56,13 @@ type PublishedTarget struct {
 	To     string       `cbor:"5,keyasint,omitempty"`
 	Public uint16       `cbor:"6,keyasint,omitempty"`
 	Socket string       `cbor:"7,keyasint,omitempty"`
+	Paths  []PathTarget `cbor:"8,keyasint,omitempty"`
+}
+
+// A PathTarget is where a name's requests under Prefix, "/SEGMENT/", go.
+type PathTarget struct {
+	Prefix string `cbor:"1,keyasint"`
+	To     string `cbor:"2,keyasint"`
 }
 
 // An IngressReport is what an ingress tells juistd as it asks: the public

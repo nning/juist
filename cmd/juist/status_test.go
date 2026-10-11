@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -90,7 +91,7 @@ func TestStatusNotesComeFromTheReport(t *testing.T) {
 	}
 
 	v = statusOf(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", NotMember: true}}, now, noPaint)
-	if len(v.notes) != 0 || v.devices || v.head[0].text != "home · removed" {
+	if len(v.notes) != 0 || v.head[0].text != "home · removed" {
 		t.Errorf("a removed device's status: %+v", v)
 	}
 }
@@ -110,6 +111,26 @@ func TestLogShow(t *testing.T) {
 	c := newCLI(t)
 	c.mustRun("create", "home", "--device", "laptop")
 	mustContain(t, c.mustRun("log"), "network creation", "approved by")
+}
+
+// One change is said against the state before it, by number or by hash.
+func TestLogShowsOneChange(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home", "--device", "laptop")
+	c.mustRun("policy", "set", "--yes", writePolicy(t, "p1.conf", "pass from laptop to laptop\n"))
+	c.mustRun("policy", "set", "--yes", writePolicy(t, "p2.conf", "pass from laptop to laptop proto tcp port 22\n"))
+	out := c.mustRun("log", "show", "2")
+	mustContain(t, out, "change of the access policy", "replaces the access policy:",
+		"- pass from laptop to laptop\n", "+ pass from laptop to laptop proto tcp port 22", "approved by ", "hash ")
+	hash := regexp.MustCompile(`hash (\S+)`).FindStringSubmatch(out)[1]
+	if got := c.mustRun("log", "show", strings.ToLower(hash[:6])); got != out {
+		t.Errorf("by its hash:\n%s", got)
+	}
+	mustContain(t, c.mustRun("log", "show", "0"), "creates the network \"home\"", "device laptop")
+	if _, err := c.run("log", "show", "3"); err == nil || err.Error() != "no change 3: the log lists 0 to 2" {
+		t.Errorf("past the end: %v", err)
+	}
 }
 
 func TestStatusWithoutADaemon(t *testing.T) {
@@ -197,6 +218,50 @@ func TestStatusNamesTheDeadTunnels(t *testing.T) {
 	mustContain(t, out.String(), "connected", "1 of 1 live")
 	if strings.Contains(out.String(), "No answer") {
 		t.Fatalf("all tunnels live, yet one is reported dead:\n%s", out.String())
+	}
+}
+
+// status says by what key each tunnel is post-quantum, and names those that
+// are not.
+func TestStatusSaysWhichTunnelsArePostQuantum(t *testing.T) {
+	t.Parallel()
+	base := ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 4, Peers: 3,
+		Schema: types.SchemaPQ}}
+	for _, c := range []struct {
+		pq   ipc.PQ
+		want []string
+		not  []string
+	}{
+		{ipc.PQ{Pair: 3}, []string{"Post-quantum  every tunnel: 3 by pair keys"}, []string{"not post-quantum", "no preshared key"}},
+		{ipc.PQ{Pair: 1, Group: 2}, []string{"every tunnel: 1 by a pair key, 2 by the group key"}, []string{"not post-quantum", "no preshared key"}},
+		{ipc.PQ{Pair: 2, None: []string{"lx"}}, []string{"2 of 3 tunnels: 2 by pair keys",
+			"warning: not post-quantum, so juist's own traffic alone: lx, on an older build"}, nil},
+		{ipc.PQ{Group: 2, NoKey: []string{"phone"}}, []string{"2 of 3 tunnels: 2 by the group key",
+			"warning: no preshared key in common with phone", "hint: it catches up"}, nil},
+	} {
+		var out syncBuffer
+		a := newApp(strings.NewReader(""), &out, &out)
+		a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
+		s := base
+		s.PQ = &c.pq
+		a.printStatus(&s)
+		mustContain(t, out.String(), c.want...)
+		for _, n := range c.not {
+			if strings.Contains(out.String(), n) {
+				t.Errorf("%+v: says %q:\n%s", c.pq, n, out.String())
+			}
+		}
+	}
+
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
+	s := base
+	s.Schema, s.PQ = types.SchemaPQ-1, &ipc.PQ{None: []string{"a", "b", "c"}}
+	a.printStatus(&s)
+	mustContain(t, out.String(), "Post-quantum  no, the network predates it")
+	if strings.Contains(out.String(), "warning: not post-quantum") {
+		t.Errorf("a network before post-quantum tunnels names every device:\n%s", out.String())
 	}
 }
 
@@ -303,9 +368,8 @@ func TestARemovedDeviceListsNoDevices(t *testing.T) {
 	phone.mustRun("reset", "--yes")
 }
 
-// juist status lists the devices as juist devices does: every member, this
-// device marked, with how the last check reached each of the others.
-func TestStatusListsTheDevices(t *testing.T) {
+// juist status counts the devices and lists none, which juist devices does.
+func TestStatusListsNoDevices(t *testing.T) {
 	t.Parallel()
 	var out syncBuffer
 	a := newApp(strings.NewReader(""), &out, &out)
@@ -317,20 +381,17 @@ func TestStatusListsTheDevices(t *testing.T) {
 		}
 		ids[i] = priv.Public()
 	}
-	a.printStatus(&ipc.Status{InNetwork: true, Self: ids[0], Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 2, Devices: []ipc.Device{
+	a.printStatus(&ipc.Status{InNetwork: true, Self: ids[0], Derived: ipc.Derived{NetworkName: "home", SelfName: "desk", Members: 3, Peers: 2, Devices: []ipc.Device{
 		{Identity: ids[0], Name: "desk", V4: "10.11.11.4", V6: "fd89::4"},
 		{Identity: ids[1], Name: "laptop", V4: "10.11.11.5", V6: "fd89::5"},
 		{Identity: ids[2], Name: "vps", V4: "10.11.11.6", V6: "fd89::6", Roles: []types.Role{types.RoleRelayCapable}},
-	}}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, TunnelsDown: []string{"vps"}, ReachChecked: time.Now().Unix(), Reach: []ipc.PeerReach{{Identity: ids[1], Live: true, Direct: true}, {Identity: ids[2]}}}})
+	}}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 2, ReachChecked: time.Now().Unix(), Reach: []ipc.PeerReach{{Identity: ids[1], Live: true, Direct: true}, {Identity: ids[2], Live: true}}}})
 	got := out.String()
-	for _, want := range []string{"NAME", "REACHED", "desk (this device)", "laptop", "direct", "vps",
-		"relay", "no answer"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("status lacks %q:\n%s", want, got)
+	mustContain(t, got, "Devices       2 others, all heard from\n")
+	for _, absent := range []string{"NAME", "REACHED", "laptop", "10.11.11.6"} {
+		if strings.Contains(got, absent) {
+			t.Errorf("status lists the devices (%q):\n%s", absent, got)
 		}
-	}
-	if strings.Contains(got, "checked just now") {
-		t.Errorf("a check just now is dated:\n%s", got)
 	}
 }
 
@@ -411,8 +472,8 @@ func TestStatusNamesALostChange(t *testing.T) {
 	mustContain(t, out.String(), "the admission of phone lost to a concurrent change", "redo it")
 }
 
-// On a terminal narrower than the device table, as a phone's over ssh, status
-// wraps its fields and lists the devices instead, and every line fits.
+// On a narrow terminal, as a phone's over ssh, status wraps its fields, and
+// every line fits.
 func TestStatusFitsANarrowTerminal(t *testing.T) {
 	t.Parallel()
 	self, desktop := types.Identity{1}, types.Identity{2}
@@ -441,17 +502,117 @@ func TestStatusFitsANarrowTerminal(t *testing.T) {
 			t.Errorf("%d columns on a terminal of %d: %q", len(l), a.width, l)
 		}
 	}
-	mustContain(t, got, "  This device   edge01  10.11.11.254\n                fd12:345:6789:9783:7a4:513e:505f:60a0\n",
-		"desktop  10.11.11.10  offline, heard 1h ago\n  fd12:345:6789:27ef:8e2b:1889:2553:4ba2\n  voucher\n",
-		"edge01 (this device)  10.11.11.254\n  fd12:345:6789:9783:7a4:513e:505f:60a0\n  voucher, relay\n")
+	mustContain(t, got, "  This device   edge01  10.11.11.254\n                fd12:345:6789:9783:7a4:513e:505f:60a0\n")
+}
+
+// juist devices leaves IPv6 out unless asked for it, says that a device
+// answers names or publishes some without naming them, and on a terminal too
+// narrow for its table wraps the roles beneath their column, and gives way
+// to a list only where they would be split within a word, or narrower than
+// [minLastColumn].
+func TestDevicesTable(t *testing.T) {
+	t.Parallel()
+	self, desktop := types.Identity{1}, types.Identity{2}
+	devs := []ipc.Device{
+		{Identity: self, Name: "edge01", V4: "10.11.11.254", V6: "fd12:345:6789:9783:7a4:513e:505f:60a0",
+			Roles: []types.Role{types.RoleAdmin, types.RoleRelayCapable}, Names: []string{"mail.example.org"},
+			Published: []string{"immich.pub.example.org"}},
+		{Identity: desktop, Name: "desktop", V4: "10.11.11.10", V6: "fd12:345:6789:27ef:8e2b:1889:2553:4ba2",
+			Roles: []types.Role{types.RoleAdmin}},
+	}
+	st := &ipc.Status{InNetwork: true, Tunnels: ipc.Tunnels{ReachChecked: time.Now().Unix(),
+		Reach: []ipc.PeerReach{{Identity: desktop, Absent: true, Heard: time.Now().Add(-time.Hour).Unix()}}}}
+	print := func(width int, v6 bool) string {
+		var out syncBuffer
+		a := newApp(strings.NewReader(""), &out, &out)
+		a.width = width
+		if err := a.printDevices(devs, self, st, false, v6); err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(out.String(), "\n") {
+			if width > 0 && len(l) > width {
+				t.Errorf("%d columns on a terminal of %d: %q", len(l), width, l)
+			}
+		}
+		return out.String()
+	}
+
+	got := print(0, false)
+	want := "NAME                  IPV4          REACHED                ROLES\n" +
+		"desktop               10.11.11.10   offline, heard 1h ago  voucher\n" +
+		"edge01 (this device)  10.11.11.254  -                      voucher, relay, names, publishes\n"
+	if got != want {
+		t.Errorf("devices:\n%s\nwant:\n%s", got, want)
+	}
+	mustContain(t, print(0, true), "IPV6", "fd12:345:6789:27ef:8e2b:1889:2553:4ba2  offline")
+
+	mustContain(t, print(78, false), "edge01 (this device)  10.11.11.254  -                      voucher, relay,\n"+
+		strings.Repeat(" ", 59)+"names, publishes\n")
+	mustContain(t, print(72, false), "-                      voucher,\n"+strings.Repeat(" ", 59)+"relay, names,\n"+
+		strings.Repeat(" ", 59)+"publishes\n")
+	got = print(60, false)
+	mustContain(t, got, "desktop  10.11.11.10\n  offline, heard 1h ago\n  voucher\n",
+		"edge01 (this device)  10.11.11.254\n  voucher, relay, names, publishes\n")
 	if strings.Contains(got, "NAME") {
 		t.Errorf("the table is printed though it does not fit:\n%s", got)
 	}
+}
 
-	out = syncBuffer{}
-	a.width = 0
-	a.printStatus(st)
-	mustContain(t, out.String(), "NAME", "desktop ")
+// juist devices fits a terminal of any width: every line but one word wider
+// than the terminal is as wide as it at most, and no device is lost.
+func TestDevicesFitEveryWidth(t *testing.T) {
+	t.Parallel()
+	ids := []types.Identity{{1}, {2}, {3}, {4}}
+	devs := []ipc.Device{
+		{Identity: ids[0], Name: "edge01", V4: "10.11.11.254", V6: "fd12:345:6789:9783:7a4:513e:505f:60a0",
+			Roles: []types.Role{types.RoleAdmin, types.RoleRelayCapable, types.RoleExit}, Names: []string{"mail.example.org"},
+			Published: []string{"immich.pub.example.org"}},
+		{Identity: ids[1], Name: "desktop", V4: "10.7.0.2", Retiring: "198.18.4.2", V6: "fd12:345:6789:27ef:8e2b:1889:2553:4ba2",
+			Roles: []types.Role{types.RoleAdmin}},
+		{Identity: ids[2], Name: "nas-im-keller", V4: "10.11.11.3", V6: "fd90::3",
+			Subnets: []netip.Prefix{netip.MustParsePrefix("192.168.178.0/24"), netip.MustParsePrefix("10.20.0.0/16")}},
+		{Identity: ids[3], Name: "phone", V4: "10.11.11.4", V6: "fd90::4"},
+	}
+	st := &ipc.Status{InNetwork: true, Tunnels: ipc.Tunnels{ReachChecked: time.Now().Unix(), Reach: []ipc.PeerReach{
+		{Identity: ids[1], Absent: true, Heard: time.Now().Add(-time.Hour).Unix()},
+		{Identity: ids[2], Live: true, Direct: true}, {Identity: ids[3], Live: true}}}}
+	for _, v6 := range []bool{false, true} {
+		for _, keys := range []bool{false, true} {
+			for width := 20; width <= 160; width++ {
+				var out syncBuffer
+				a := newApp(strings.NewReader(""), &out, &out)
+				a.width = width
+				if err := a.printDevices(devs, ids[0], st, keys, v6); err != nil {
+					t.Fatal(err)
+				}
+				got := out.String()
+				for _, l := range strings.Split(got, "\n") {
+					if len(l) > width && strings.Contains(strings.TrimSpace(l), " ") {
+						t.Errorf("-6=%v --keys=%v: %d columns on a terminal of %d: %q", v6, keys, len(l), width, l)
+					}
+				}
+				for _, d := range devs {
+					if !strings.Contains(got, d.Name) {
+						t.Errorf("-6=%v --keys=%v, %d columns: %s is missing:\n%s", v6, keys, width, d.Name, got)
+					}
+				}
+			}
+		}
+	}
+
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	a.width = 32
+	if err := a.printDevices(devs, ids[0], st, false, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "desktop\n  10.7.0.2 (was 198.18.4.2)\n  offline, heard 1h ago\n  voucher\n" +
+		"nas-im-keller  10.11.11.3\n  direct\n  routes 192.168.178.0/24,\n    10.20.0.0/16\n" +
+		"phone  10.11.11.4\n  relayed\n" +
+		"edge01 (this device)\n  10.11.11.254\n  voucher, relay, exit, names,\n    publishes\n"
+	if got := out.String(); got != want {
+		t.Errorf("32 columns:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 func TestWrap(t *testing.T) {
@@ -629,8 +790,20 @@ func TestStatusSaysHTTPSAloneAndTheRelaysName(t *testing.T) {
 	} {
 		out = syncBuffer{}
 		st := base()
-		st.Relaying, st.HTTPS = true, &c.h
+		st.Relaying, st.HTTPS, st.CanOperate = true, &c.h, true
 		a.printStatus(st)
 		mustContain(t, out.String(), append([]string{"Relay name    " + strings.TrimSuffix(c.line, "\n")}, c.want...)...)
+	}
+
+	// A reader's status holds none of how the relay takes 443.
+	out = syncBuffer{}
+	st = base()
+	full := ipc.Status{Derived: ipc.Derived{Relaying: true, HTTPS: &ipc.HTTPS{Name: "relay.example.org",
+		Listening: []string{ipc.HandedOn}}}}
+	st.Relaying, st.HTTPS = true, full.ForReader().HTTPS
+	a.printStatus(st)
+	mustContain(t, out.String(), "Relay name    relay.example.org\n")
+	if strings.Contains(out.String(), "not on 443") {
+		t.Errorf("a reader is told the relay is not on 443:\n%s", out.String())
 	}
 }

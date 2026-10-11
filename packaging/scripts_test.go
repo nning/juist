@@ -38,9 +38,11 @@ func newSandbox(t *testing.T) *sandbox {
 	}
 	// Every stub logs how it was called. install creates the directory it
 	// is given, as the real one would, and systemctl has enabled the units
-	// the sandbox's enabled file lists.
+	// the sandbox's enabled file lists. A firewall tool left unstubbed is
+	// the host's: firewalld's has polkit ask whoever is logged in for a
+	// password.
 	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "exit-node.sh", "ingress.sh", "serve.sh",
-		"relay.sh", "install"} {
+		"relay.sh", "install", "firewall-cmd", "ufw"} {
 		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(root, "calls") + "\n"
 		switch name {
 		case "install":
@@ -156,6 +158,16 @@ func TestAReinstallIsAFreshInstall(t *testing.T) {
 	sb.run("postrm", "purge")
 	if entries, _ := filepath.Glob(filepath.Join(sb.root, "var/lib/*")); len(entries) != 0 {
 		t.Fatalf("a purge left %v", entries)
+	}
+}
+
+// A removal has an active firewalld forget the service files, asking the
+// sandbox's firewall-cmd, not the host's.
+func TestARemovalReloadsFirewalld(t *testing.T) {
+	sb := newSandbox(t)
+	sb.run("postrm", "remove")
+	if calls := sb.calls(); !strings.Contains(calls, "firewall-cmd --state\nfirewall-cmd --reload\n") {
+		t.Fatalf("postrm did not reload firewalld through the sandbox's firewall-cmd:\n%s", calls)
 	}
 }
 

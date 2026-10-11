@@ -33,8 +33,8 @@ Milestones still to come carry whole numbers, no letters: a new one takes
 its place in the order, those after it move up, and every reference in the
 repository moves with them. Done milestones keep their names.
 
-The state of the project lives here too: which milestone is done and what
-it was validated with (`05-roadmap.md`), and the latest run of the gates CI
+The state of the project lives here too: which milestone is done, what
+it was validated with and the sizes `make tcb` reports (`05-roadmap.md`), and the latest run of the gates CI
 cannot run (`12-validating.md`, "The last privileged run"). Record it in the
 same commit as the work, not only in an agent's own notes.
 
@@ -59,6 +59,22 @@ commit each, `M<N> review <k>: …`.
 A fix for a finding comes with a regression test that fails against the code
 before the fix: revert the fix, watch the test fail, restore it. A test that
 exists for a scenario is not evidence that the scenario works.
+
+## Publishing
+
+Work happens in `nning/juist-dev`; the public repository, which `public` in
+`private/publish/scrub.txt` names, gets one commit per done milestone. `make
+publish M=M<N>` builds it in `build/public` from the milestone's `M<N> done`
+commit, scrubbed as `scrub.txt` says, and stops on an address or domain the
+public tree has not shown; `PUSH=1` publishes it, only when the user says
+so. `private/` is never published. An own host, domain or address enters
+`scrub.txt` in the commit that brings it.
+
+A release on the public repository is `make release` from the public tree,
+uploaded whole from `build/release`, and not marked a pre-release, since the
+handbook's download links follow `releases/latest`. Its keys live in
+`~/.local/share/juist-signing` and never enter the repository or an agent's
+context: refer to the files, never print them.
 
 ## Gates
 

@@ -554,7 +554,9 @@ func TestTheNamesAddressIsOneTheDeviceHolds(t *testing.T) {
 			t.Errorf("holding %v, answers at %q, want %q", tc.held, got, tc.want)
 		}
 	}
-	if at, err := (&Daemon{tunName: "lo", startAddrs: addrs}).namesAddrNow(); err == nil {
+	d := &Daemon{tunName: "lo"}
+	d.held.Store(&addrs)
+	if at, err := d.namesAddrNow(); err == nil {
 		t.Errorf("answers at %v, which the device does not hold", at)
 	}
 }
