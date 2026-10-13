@@ -79,7 +79,9 @@ func (d *Daemon) saveEndpointCache(path string) {
 	if path == "" {
 		return
 	}
-	all := d.endpoints.All()
+	// Hints too: an address is worth dialing after a restart however it was
+	// signed.
+	all := d.endpoints.WithHints()
 	keep := make([]gossip.Endpoint, 0, len(all))
 	for i := range all {
 		if all[i].Identity == d.self || !d.endpoints.IsMember(all[i].Identity) {

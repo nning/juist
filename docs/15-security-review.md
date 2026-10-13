@@ -1,7 +1,7 @@
 # 15 — The security review before the audit
 
 An internal review of the whole audit scope against
-[02-threat-model.md](02-threat-model.md), before M18's external audit, so
+[02-threat-model.md](02-threat-model.md), before M24's external audit, so
 the auditor's hours go to what a reader cannot find. It answers, for every
 defense the threat model claims, where the code enforces it and which test
 fails without it. It attests nothing: a review by a model, like one by a
@@ -34,16 +34,15 @@ evidence for a property, never line by line.
 
 Compute first, reading after:
 
-- The fuzz targets M18 lists as missing (`waiting.Decode`,
+- The fuzz targets M23 lists as missing (`waiting.Decode`,
   `types.DecodeLease`, the helper's protocol, the resolver's input) exist,
   and `make fuzz-long` has run over every target and is recorded in
   [12-validating.md](12-validating.md). A parser the fuzzer has not seen
   costs a reader's time on what a machine finds for free.
 - `make lint` and `make govulncheck` pass.
-- The review takes the tree as it is. What M18's work before the audit
-  changes afterwards (a user per instance, pf on FreeBSD, checkpoints) is
-  reviewed as a diff by the same protocol, scoped by its size, as §5 says
-  of every milestone after v1.
+- The review takes the tree after M17 to M22, whose changes it reads
+  whole. What lands after it is reviewed as a diff by the same protocol,
+  scoped by its size, as §5 says of every milestone after v1.
 
 ## 3. The inventory
 
@@ -128,7 +127,7 @@ In this order, each step in a context of its own:
 2. **The test that fails.** Written before the fix, as
    [AGENTS.md](../AGENTS.md) requires of every fix; reverted fix, failing
    test, restored fix.
-3. **The fix**, one commit per round, `M18 review <k>: …`, through `make
+3. **The fix**, one commit per round, `M23 review <k>: …`, through `make
    check`, and through the privileged gate where it touches one.
 4. **The fix read again** by the tier's reviewer, for high findings: the
    diff alone.
@@ -147,7 +146,7 @@ Two sessions over the whole, with the inventory and every finding in view:
   defense the row claims that no code enforces; for each residual
   weakness, is it still bounded as described; and is there a weakness the
   list lacks.
-- **The operator's reading** of the residual weaknesses, which M18 owes:
+- **The operator's reading** of the residual weaknesses, which M24 owes:
   drafted from the threat model, checked against the findings.
 
 The closing commit records in [12-validating.md](12-validating.md), as the

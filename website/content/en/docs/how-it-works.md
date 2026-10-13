@@ -98,11 +98,13 @@ There is no server to ask, so juist looks in three places:
 
 - on the local network (LAN), where devices announce themselves;
 - through other members, which pass on where they last reached a device;
-- in the public BitTorrent DHT, a large public directory on the internet,
-  for members a device has lost track of.
+- at the network's relays, and only then in the public BitTorrent DHT, a
+  large public directory on the internet, for members a device has lost
+  track of.
 
-What devices store in the DHT is encrypted. The DHT sees addresses, never
-contents, and nothing it returns can change who belongs to the network.
+What devices store in the DHT is encrypted, and in a network at schema 16
+every entry is the same size. The DHT sees addresses, never contents, and
+nothing it returns can change who belongs to the network.
 
 ## How devices connect {#connections}
 

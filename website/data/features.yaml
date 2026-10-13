@@ -4,8 +4,8 @@
   en: {title: Mesh and NAT traversal, text: "WireGuard tunnels between every pair of devices, direct where NAT allows."}
   de: {title: Mesh und NAT-Traversal, text: "WireGuard-Tunnel zwischen allen Geräten, direkt, wo das NAT es zulässt."}
 - doc: docs/security
-  en: {title: Quantum-safe tunnels, text: "Every handshake mixes in a key a quantum computer cannot recover, and each pair of devices has its own."}
-  de: {title: Quantensichere Tunnel, text: "Jeder Handshake mischt einen Schlüssel ein, den ein Quantencomputer nicht herausfinden kann, und jedes Gerätepaar hat seinen eigenen."}
+  en: {title: Quantum-safe, text: "Every handshake mixes in a key a quantum computer cannot recover, each pair of devices has its own, and every change is signed with ML-DSA."}
+  de: {title: Quantensicher, text: "Jeder Handshake mischt einen Schlüssel ein, den ein Quantencomputer nicht herausfinden kann, jedes Gerätepaar hat seinen eigenen, und jede Änderung ist mit ML-DSA signiert."}
 - doc: docs/invites
   en: {title: Invites, text: "A code for the LAN or a link for anywhere. Both devices show four words to compare."}
   de: {title: Einladungen, text: "Ein Code fürs LAN oder ein Link für überall. Beide Geräte zeigen vier Wörter, die du vergleichst."}

@@ -80,6 +80,9 @@ func TestRetiringAddressesInState(t *testing.T) {
 		v4 := moved
 		s.Nodes[0].V4, s.Nodes[0].Retiring = &v4, &RetiringV4{Addr: *old, Until: 9}
 		s.Nodes[0].Routes = nil
+		a := mustIdentity(t)
+		ak, nk := a.SigningKey(), mustIdentity(t).SigningKey()
+		s.Admins[0].Public, s.Admins[0].Signing, s.Admins[0].Endorsement, s.Nodes[0].Signing = a.Public(), &ak, a.Endorsement(), &nk
 		return s
 	}
 	if err := renumbered().StaticValidate(false); err != nil {

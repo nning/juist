@@ -24,7 +24,8 @@ func fixedIdentity(n byte) types.PrivateIdentity {
 
 func fixedNode(n byte) types.NodeRecord {
 	id := fixedIdentity(100 + n)
-	rec := types.NodeRecord{Identity: id.Public()}
+	key := id.SigningKey()
+	rec := types.NodeRecord{Identity: id.Public(), Signing: &key}
 	wg := sha256.Sum256([]byte{'w', n})
 	copy(rec.WireGuard[:], wg[:])
 	x := sha256.Sum256([]byte{'x', n})
@@ -43,13 +44,23 @@ func fixedNode(n byte) types.NodeRecord {
 // fixedGenesis returns a one-admin, quorum-of-one network with no members,
 // together with the admin's private key.
 func fixedGenesis() (types.AUM, types.PrivateIdentity, error) {
+	return fixedGenesisAt(types.CurrentSchema)
+}
+
+// fixedGenesisAt is [fixedGenesis] at schema.
+func fixedGenesisAt(schema types.SchemaVersion) (types.AUM, types.PrivateIdentity, error) {
 	admin := fixedIdentity(0)
 	commit := types.DisablementCommit(fixedDisablementSecret())
 	genesis, err := Genesis("fuzz-net", 1,
-		[]types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin", Holder: "admin"}},
+		[]types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "admin", Holder: "admin"}},
 		[]types.Hash{commit}, nil, testSealer())
 	if err != nil {
 		return types.AUM{}, admin, err
+	}
+	genesis.State.Schema = schema
+	if schema < types.SchemaMLDSA {
+		genesis.State.Admins[0].Signing = nil
+		genesis.State.Admins[0].Endorsement = nil
 	}
 	if err := genesis.Sign(admin); err != nil {
 		return types.AUM{}, admin, err

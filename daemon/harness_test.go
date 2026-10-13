@@ -49,12 +49,14 @@ func newDevice(t *testing.T, name string, v4 netip.Addr) *device {
 		t.Fatal(err)
 	}
 	d.wgPrivate = priv
+	key := id.SigningKey()
 	d.record = types.NodeRecord{
 		Identity:  id.Public(),
 		Name:      name,
 		WireGuard: types.WGKey(pub),
 		X25519:    x,
 		MLKEM:     m,
+		Signing:   &key,
 	}
 	if v4.IsValid() {
 		d.record.V4 = &v4
@@ -129,7 +131,7 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 		records = append(records, r)
 	}
 	g, err := log.Genesis("m2-testnet", 1,
-		[]types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin"}},
+		[]types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "admin"}},
 		[]types.Hash{types.DisablementCommit(nw.disablement[:])},
 		records, nw.sealer())
 	if err != nil {
@@ -138,6 +140,13 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 	g.State.V4Prefix, g.State.Domain = nw.v4Prefix, nw.domain
 	if nw.schema != 0 {
 		g.State.Schema = nw.schema
+	}
+	if g.State.Schema < types.SchemaMLDSA {
+		for i := range g.State.Nodes {
+			g.State.Nodes[i].Signing = nil
+		}
+		g.State.Admins[0].Signing = nil
+		g.State.Admins[0].Endorsement = nil
 	}
 	for i := range g.State.Nodes {
 		for _, d := range nw.devices {
@@ -201,7 +210,7 @@ func endpointFor(d *device, port uint16) (gossip.Endpoint, error) {
 		Epoch:     1 << 32,
 		PairStore: 1,
 	}
-	return e, e.Sign(d.identity)
+	return e, e.SignPQ(d.identity)
 }
 
 // removeNode builds and signs a record revoking a member, against the state
@@ -213,7 +222,7 @@ func (nw *network) removeNode(t *testing.T, auth *log.Authority, id types.Identi
 	if err != nil {
 		t.Fatalf("building the removal: %v", err)
 	}
-	if err := rec.Sign(nw.admin); err != nil {
+	if err := rec.SignUnder(nw.admin, auth.State().Schema()); err != nil {
 		t.Fatalf("signing the removal: %v", err)
 	}
 	return rec
@@ -228,7 +237,7 @@ func (nw *network) conflictingFork(t *testing.T, auth *log.Authority, id types.I
 	if err != nil {
 		t.Fatalf("building the grant: %v", err)
 	}
-	if err := grant.Sign(nw.admin); err != nil {
+	if err := grant.SignUnder(nw.admin, auth.State().Schema()); err != nil {
 		t.Fatalf("signing the grant: %v", err)
 	}
 	return nw.removeNode(t, auth, id), grant

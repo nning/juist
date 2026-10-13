@@ -38,7 +38,7 @@ func (nw *network) renumberNode(t *testing.T, id types.Identity, v4 string, unti
 	if err != nil {
 		t.Fatalf("building the renumbering: %v", err)
 	}
-	if err := aum.Sign(nw.admin); err != nil {
+	if err := aum.SignUnder(nw.admin, auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	return aum

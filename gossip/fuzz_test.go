@@ -43,7 +43,7 @@ func seedFrames(f *testing.F) {
 	pair := &pairkey.Msg{From: priv.Public(), To: to.Public(), Store: 6, ToStore: 7, FromWG: types.WGKey{1},
 		ToWG: types.WGKey{2}, Gen: 2, Epoch: 5,
 		CT: make([]byte, mlkem.CiphertextSize768), Use: 1}
-	if err := pair.Sign(priv, types.Hash{1}); err != nil {
+	if err := pair.Sign(priv, types.Hash{1}, false); err != nil {
 		f.Fatal(err)
 	}
 	frames := []frame{
@@ -105,7 +105,7 @@ func FuzzDecodeFrame(f *testing.F) {
 			_ = fr.Self.Verify()
 		}
 		if fr.Pair != nil {
-			_ = fr.Pair.Verify(fr.Network)
+			_ = fr.Pair.Verify(fr.Network, nil)
 		}
 		for _, raw := range fr.Records {
 			_, _ = types.DecodeAUM(raw)
@@ -256,6 +256,6 @@ func FuzzAskCatchUp(f *testing.F) {
 			}
 			_ = writeBlob(theirs, answer, "fuzzed")
 		}()
-		_, _, _ = n.askCatchUp(mine, types.Hash{1}, 2)
+		_, _, _ = n.askCatchUp(mine, &View{Network: types.Hash{1}, Epoch: 2}, reads{})
 	})
 }

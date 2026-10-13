@@ -54,7 +54,7 @@ func (d *Daemon) offerLeases(raw [][]byte) {
 		d.leaseMu.Lock()
 		held, ok := d.leases[l.Signer]
 		d.leaseMu.Unlock()
-		if ok && held == l {
+		if ok && sameLease(&held, &l) {
 			continue
 		}
 		d.authMu.Lock()
@@ -153,7 +153,7 @@ func (d *Daemon) maybeIssueLease(state *log.State, now time.Time) {
 		stamp = last.Issued + 1
 	}
 	l := types.Lease{Network: state.GenesisHash(), Head: state.Head(), Issued: stamp}
-	if err := l.Sign(d.identity); err != nil {
+	if err := l.Sign(d.identity, state.PQ()); err != nil {
 		d.logf("daemon: signing a freshness lease: %v", err)
 		return
 	}
@@ -275,4 +275,10 @@ func (d *Daemon) bootstrapHints() *ipc.Bootstrap {
 		}
 	}
 	return &ipc.Bootstrap{Endpoints: eps, Leases: d.encodedLeases()}
+}
+
+// sameLease reports whether a and b are one lease, signatures and all.
+func sameLease(a, b *types.Lease) bool {
+	return a.Network == b.Network && a.Head == b.Head && a.Issued == b.Issued && a.Signer == b.Signer &&
+		a.Sig == b.Sig && (a.MLDSA == nil) == (b.MLDSA == nil) && (a.MLDSA == nil || *a.MLDSA == *b.MLDSA)
 }

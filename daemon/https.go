@@ -23,11 +23,11 @@ import (
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/discovery/dht"
 	"github.com/nning/juist/gossip"
-	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/pqtls"
 	"github.com/nning/juist/internal/terminator"
-	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/relay"
+	"github.com/nning/juist/relay/forward"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -64,13 +64,23 @@ func proxyRoute(set string, env func(*url.URL) (*url.URL, error)) func(host stri
 }
 
 // httpsClient is how an HTTPS-only device speaks to relays' names: TLS on
-// 443, verified by WebPKI, through the proxy where there is one.
+// 443, verified by WebPKI, through the proxy where there is one. The proxy
+// is dialed here rather than by the transport, whose TLS settings would be
+// the proxy's too.
 func (d *Daemon) httpsClient() *http.Client {
-	dialer := underlay.Dialer(10 * time.Second)
 	return &http.Client{Timeout: rendezvousTimeout, CheckRedirect: noRedirect, Transport: &http.Transport{
-		Proxy:               func(r *http.Request) (*url.URL, error) { return d.proxyFor(r.URL.Hostname()) },
-		DialContext:         dialer.DialContext,
-		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			via, err := d.proxyFor(host)
+			if err != nil {
+				return nil, err
+			}
+			return forward.Connect(ctx, addr, via)
+		},
+		TLSClientConfig:     pqtls.Config(&tls.Config{}),
 		TLSHandshakeTimeout: 10 * time.Second,
 		MaxIdleConnsPerHost: 1,
 		IdleConnTimeout:     time.Minute,
@@ -236,7 +246,7 @@ func (r *relayRendezvous) Get(key [32]byte) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	sealed, err := dht.SealAnnouncement(secret, e.epoch, ep)
+	sealed, err := dht.SealAnnouncement(secret, e.epoch, ep, d.paddedItems())
 	if err != nil {
 		return nil, false
 	}
@@ -264,10 +274,7 @@ func (r *relayRendezvous) Put(key [32]byte, sealed []byte) bool {
 	if !ok || e.id == d.self {
 		return false
 	}
-	if epoch, err := aead.Epoch(sealed); err != nil || epoch != e.epoch {
-		return false
-	}
-	ep, err := dht.OpenAnnouncement(d.keyring, sealed)
+	ep, err := dht.OpenAnnouncement(d.keyring, e.epoch, sealed)
 	if err != nil || ep.Identity != e.id {
 		return false
 	}

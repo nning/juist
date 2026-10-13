@@ -188,6 +188,7 @@ fun alarmTitle(a: Alarm): String = when (a.kind) {
     "noTraffic" -> stringResource(R.string.alarm_no_traffic, names(a.names))
     "newer" -> stringResource(R.string.alarm_newer, names(a.names))
     "outdated" -> stringResource(R.string.alarm_outdated, names(a.names))
+    "older" -> stringResource(R.string.alarm_older, names(a.names))
     "conflicted" -> pluralStringResource(R.plurals.alarm_conflicted, a.count, a.count)
     "noRelay" -> stringResource(R.string.alarm_no_relay)
     "freshnessEnding" -> pluralStringResource(R.plurals.alarm_freshness_ending, a.count, a.count)
@@ -212,6 +213,7 @@ fun alarmHint(a: Alarm): Int? = when (a.kind) {
     "noTraffic" -> R.string.alarm_no_traffic_hint
     "newer" -> R.string.alarm_newer_hint
     "outdated" -> R.string.alarm_outdated_hint
+    "older" -> R.string.alarm_older_hint
     "noRelay" -> R.string.alarm_no_relay_hint
     "freshnessEnding" -> R.string.alarm_freshness_ending_hint
     "unrevoked" -> R.string.alarm_unrevoked_hint

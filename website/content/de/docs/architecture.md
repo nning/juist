@@ -170,8 +170,10 @@ unterscheidet sich in drei Punkten:
 
 Jede Änderung, etwa „nas aufnehmen“, ist ein Eintrag. Er enthält den Hash
 des vorigen Eintrags und gilt erst, wenn genug Admins ihn mit ihren
-Ed25519-Schlüsseln signiert haben. Jedes Gerät geht das Log vom ersten
-Eintrag des Netzes an durch und prüft jede Signatur selbst.
+[ML-DSA-44](https://doi.org/10.6028/NIST.FIPS.204)-Schlüsseln signiert
+haben, die auch ein Quantencomputer nicht fälschen kann. Jedes Gerät geht
+das Log vom ersten Eintrag des Netzes an durch und prüft jede Signatur
+selbst.
 
 Entstehen Änderungen gleichzeitig auf verschiedenen Geräten, bringt jedes
 Gerät sie auf dieselbe Weise in eine Reihenfolge. Widersprechen sich zwei
@@ -204,8 +206,9 @@ Gruppengeheimnis schützt diese Angaben:
 
 Eine Einladung funktioniert schon, bevor das neue Gerät irgendein Geheimnis
 kennt. Beide Seiten führen dazu [SPAKE2](https://www.rfc-editor.org/rfc/rfc9382)
-aus, einen Schlüsselaustausch auf Basis eines kurzen Passworts. Code oder Link
-lassen sich nicht offline erraten, und ein Gerät, das sich dazwischenschaltet,
+aus, einen Schlüsselaustausch auf Basis eines kurzen Passworts, und
+vereinbaren danach einen Schlüssel mit ML-KEM-768. Code oder Link lassen
+sich nicht offline erraten, und ein Gerät, das sich dazwischenschaltet,
 verrät sich durch die vier Wörter, die beide Seiten vergleichen.
 
 ## Quellen {#sources}
@@ -243,6 +246,7 @@ Weitere Standards
 - [RFC 9180, HPKE](https://www.rfc-editor.org/rfc/rfc9180)
 - [FIPS 203, ML-KEM](https://doi.org/10.6028/NIST.FIPS.203)
 - [RFC 9382, SPAKE2](https://www.rfc-editor.org/rfc/rfc9382)
+- [FIPS 204, ML-DSA](https://doi.org/10.6028/NIST.FIPS.204)
 - [BEP 44, Daten im BitTorrent-DHT ablegen](https://www.bittorrent.org/beps/bep_0044.html)
 
 Den vollständigen Entwurf mit den Gründen für jede Entscheidung findest du im

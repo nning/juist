@@ -37,7 +37,7 @@ func newNetwork(t *testing.T) *network {
 	n.admin = admin
 	secret := sha256.Sum256([]byte("disablement"))
 	genesis, err := log.Genesis("store-net", 1,
-		[]types.AdminKey{{Public: admin.Public(), Votes: 1}},
+		[]types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1}},
 		[]types.Hash{types.DisablementCommit(secret[:])}, nil, n.sealer())
 	if err != nil {
 		t.Fatalf("building genesis: %v", err)
@@ -85,14 +85,15 @@ func (n *network) addNode(name string) types.NodeRecord {
 		n.t.Fatalf("public keys: %v", err)
 	}
 	wg := sha256.Sum256([]byte(name))
-	rec := types.NodeRecord{Identity: id.Public(), Name: name, X25519: x, MLKEM: m}
+	key := id.SigningKey()
+	rec := types.NodeRecord{Identity: id.Public(), Name: name, X25519: x, MLKEM: m, Signing: &key}
 	copy(rec.WireGuard[:], wg[:])
 
 	aum, err := n.auth.Builder().AddNode(rec, n.sealer())
 	if err != nil {
 		n.t.Fatalf("AddNode: %v", err)
 	}
-	if err := aum.Sign(n.admin); err != nil {
+	if err := aum.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
 		n.t.Fatalf("signing: %v", err)
 	}
 	if err := n.auth.Inform(aum); err != nil {
@@ -320,7 +321,7 @@ func TestCompactionRemovesFilesAndSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if err := cp.Sign(n.admin); err != nil {
+	if err := cp.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	if err := n.auth.Inform(cp); err != nil {
@@ -481,13 +482,14 @@ func TestStagingFollowsNoLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := types.NodeRecord{Identity: id.Public(), Name: "alpha", X25519: x, MLKEM: m}
+	key := id.SigningKey()
+	rec := types.NodeRecord{Identity: id.Public(), Name: "alpha", X25519: x, MLKEM: m, Signing: &key}
 	rec.WireGuard[0] = 1
 	aum, err := n.auth.Builder().AddNode(rec, n.sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := aum.Sign(n.admin); err != nil {
+	if err := aum.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	precious := filepath.Join(t.TempDir(), "precious")
@@ -543,7 +545,7 @@ func TestABatchCutShortIsFinishedAtOpen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := bump.Sign(n.admin); err != nil {
+		if err := bump.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
 			t.Fatal(err)
 		}
 		if err := n.auth.Inform(bump); err != nil {
@@ -560,7 +562,7 @@ func TestABatchCutShortIsFinishedAtOpen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := rec.Sign(n.admin); err != nil {
+		if err := rec.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
 			t.Fatal(err)
 		}
 		st, err := b.Dry(&rec)

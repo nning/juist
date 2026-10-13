@@ -591,12 +591,14 @@ func schema0Log(t *testing.T, auth *log.Authority, self types.Identity) *log.Aut
 	rec, _ := auth.State().Node(self)
 	legacy := netip.MustParseAddr("100.64.0.1")
 	rec.V4 = &legacy
-	genesis, err := log.Genesis("old", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin"}},
+	genesis, err := log.Genesis("old", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "admin"}},
 		[]types.Hash{{1}}, []types.NodeRecord{rec}, sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
 	genesis.State.Schema = 0
+	genesis.State.Nodes[0].Signing, genesis.State.Admins[0].Signing = nil, nil
+	genesis.State.Admins[0].Endorsement = nil
 	if err := genesis.Sign(admin); err != nil {
 		t.Fatal(err)
 	}

@@ -133,7 +133,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 
 	holderSnap := snap.Clone()
 	holderSnap.Schema = CurrentSchema
-	holderSnap.Admins = []AdminKey{{Public: priv.Public(), Votes: 1, Holder: "h"}}
+	holderSnap.Admins = []AdminKey{{Public: priv.Public(), Votes: 1, Holder: "h", Signing: new(priv.SigningKey()), Endorsement: priv.Endorsement()}}
 
 	checkpointSnap := snap.Clone()
 	gh := Hash{9}
@@ -149,12 +149,23 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 	moved.V4, moved.Retiring = &newV4, &RetiringV4{Addr: v4, Until: 99}
 	moved.Names = []string{"imap.example.org", "mx.example.org"}
 	moved.Published = []PublishedName{{Label: "immich", Port: 443, Proxy: true}, {Label: "mc", Port: 25565, Public: 25565}}
+	adminKey, nodeKey := priv.SigningKey(), node.SigningKey()
+	renumberedSnap.Admins[0].Signing, renumberedSnap.Admins[0].Endorsement = &adminKey, priv.Endorsement()
+	moved.Signing = &nodeKey
 	renumberedSnap.Domain = "pub.example.org"
 	renumberedSnap.Nodes = []NodeRecord{moved}
 	renumberedSnap.EpochWraps = epoch.Wraps
 	policySnap := renumberedSnap.Clone()
 	policySnap.Schema = SchemaPolicy
 	policySnap.Policy = seedPolicy(moved.Identity)
+	policySnap.Admins[0].Signing, policySnap.Nodes[0].Signing = nil, nil
+	policySnap.Admins[0].Endorsement = nil
+	endorsed, err := node.Endorse()
+	if err != nil {
+		t.Fatalf("endorsing: %v", err)
+	}
+	signed := rec
+	signed.Signing = &nodeKey
 
 	records := []AUM{
 		{Kind: KindGenesis, State: snap},
@@ -193,6 +204,22 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindRenameNode, Prev: &parent, Subject: &id, NodeName: new("laptop")},
 		{Kind: KindDisable, Prev: &parent, Secret: &DisablementSecret{2}},
 		{Kind: KindSetPolicy, Prev: &parent, Policy: seedPolicy(id)},
+		{Kind: KindSetSigningKeys, Prev: &parent, Signing: &SigningKeys{Members: []MemberKey{
+			{Identity: id, Key: nodeKey, Endorsement: endorsed}}}, Epoch: epoch},
+	}
+	// Past the cut-over: signed by ML-DSA, an admin key added bringing its
+	// own key.
+	pq := []AUM{
+		{Kind: KindAddNode, Prev: &parent, Node: &signed, Epoch: epoch},
+		{Kind: KindAddAdminKey, Prev: &parent, Admin: &AdminKey{Public: freshPub, Votes: 3}},
+	}
+	for i := range pq {
+		if err := pq[i].SignUnder(priv, CurrentSchema); err != nil {
+			t.Fatalf("signing seed %v: %v", pq[i].Kind, err)
+		}
+	}
+	if err := pq[1].SignUnder(fresh, CurrentSchema); err != nil {
+		t.Fatalf("signing seed %v: %v", pq[1].Kind, err)
 	}
 	out := make([][]byte, 0, len(records))
 	for i := range records {
@@ -205,6 +232,13 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		b, err := a.Encode()
 		if err != nil {
 			t.Fatalf("encoding seed %v: %v", a.Kind, err)
+		}
+		out = append(out, b)
+	}
+	for i := range pq {
+		b, err := pq[i].Encode()
+		if err != nil {
+			t.Fatalf("encoding seed %v: %v", pq[i].Kind, err)
 		}
 		out = append(out, b)
 	}

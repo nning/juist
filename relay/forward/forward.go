@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nning/juist/internal/pqtls"
 	"github.com/nning/juist/internal/underlay"
 )
 
@@ -76,27 +77,31 @@ type Proxy func(host string) (*url.URL, error)
 // connection, carrying the guest's bytes from there, and the guest's address
 // as the relay saw it.
 func Wait(ctx context.Context, r Relay, id [16]byte, identity [32]byte, sign func([]byte) ([]byte, error)) (net.Conn, string, error) {
-	c, br, err := dial(ctx, r.Addrs, HostPath+hex.EncodeToString(id[:]), &tls.Config{
-		ServerName: r.ServerName,
-		// The relay's certificate is self-signed, and its hash is what the
-		// log's members announce; nothing else vouches for it.
+	c, br, err := dial(ctx, r.Addrs, HostPath+hex.EncodeToString(id[:]), PinnedConfig(r.ServerName, r.CertHash), dialTimeout)
+	if err != nil {
+		return nil, "", err
+	}
+	return hold(ctx, c, br, r.CertHash, id, identity, sign)
+}
+
+// PinnedConfig is TLS to a member relay at its own addresses: its
+// certificate is self-signed, and only the hash its announcement pins
+// vouches for it.
+func PinnedConfig(serverName string, cert [32]byte) *tls.Config {
+	return pqtls.Config(&tls.Config{
+		ServerName:         serverName,
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
 				return errors.New("the relay showed no certificate")
 			}
 			sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
-			if subtle.ConstantTimeCompare(sum[:], r.CertHash[:]) != 1 {
+			if subtle.ConstantTimeCompare(sum[:], cert[:]) != 1 {
 				return errors.New("the relay's certificate is not the one it announced")
 			}
 			return nil
 		},
-		MinVersion: tls.VersionTLS12,
-	}, dialTimeout)
-	if err != nil {
-		return nil, "", err
-	}
-	return hold(ctx, c, br, r.CertHash, id, identity, sign)
+	})
 }
 
 // WaitNamed is [Wait] at r's public name on 443, whose certificate a public
@@ -169,7 +174,7 @@ func Dial(ctx context.Context, addr netip.AddrPort, id [16]byte) (net.Conn, erro
 	c, br, err := dial(ctx, []netip.AddrPort{addr}, GuestPath+hex.EncodeToString(id[:]),
 		// The relay answers once the host's next connection is there, which
 		// it waits some seconds for.
-		&tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, guestAnswer)
+		pqtls.Config(&tls.Config{InsecureSkipVerify: true}), guestAnswer)
 	if err != nil {
 		return nil, err
 	}
@@ -198,12 +203,12 @@ func dialNamed(ctx context.Context, name, path string, proxy Proxy, answerIn tim
 		}
 	}
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
-	raw, err := connect(dctx, target, via)
+	raw, err := Connect(dctx, target, via)
 	cancel()
 	if err != nil {
 		return nil, nil, err
 	}
-	tc := tls.Client(raw, &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}})
+	tc := tls.Client(raw, pqtls.Config(&tls.Config{ServerName: name, NextProtos: []string{"http/1.1"}}))
 	_ = tc.SetDeadline(time.Now().Add(dialTimeout))
 	if err := tc.HandshakeContext(ctx); err != nil {
 		raw.Close()
@@ -213,8 +218,9 @@ func dialNamed(ctx context.Context, name, path string, proxy Proxy, answerIn tim
 	return upgrade(ctx, tc, name, path, answerIn)
 }
 
-// connect opens TCP to target, by an HTTP CONNECT through via where set.
-func connect(ctx context.Context, target string, via *url.URL) (net.Conn, error) {
+// Connect opens TCP to target, by an HTTP CONNECT through via where set:
+// TLS to an https proxy is the proxy's, and takes TLS 1.2.
+func Connect(ctx context.Context, target string, via *url.URL) (net.Conn, error) {
 	d := underlay.Dialer(dialTimeout)
 	if via == nil {
 		return d.DialContext(ctx, "tcp", target)

@@ -253,8 +253,13 @@ func TestAServiceForMembersGoesToNoPublicName(t *testing.T) {
 	}
 	vps.cli.host, vps.cli.root = &layout, true
 	laptop.mustRun("network", "domain", "pub.example.org")
-	mustContain(t, vps.mustRun("publish", "add", "wiki", "127.0.0.1:2343", "--members"),
-		"wiki.pub.example.org goes to 127.0.0.1:2343 once published on this device for members alone")
+	var wiki string
+	eventually(t, "the vps learns the domain", func() bool {
+		out, err := vps.run("publish", "add", "wiki", "127.0.0.1:2343", "--members")
+		wiki = out
+		return err == nil
+	})
+	mustContain(t, wiki, "wiki.pub.example.org goes to 127.0.0.1:2343 once published on this device for members alone")
 	laptop.mustRun("publish", "add", "vps", "photos")
 	eventually(t, "the vps learns photos", func() bool { return strings.Contains(vps.mustRun("publish"), "photos.pub.example.org") })
 	withheld := "warning: not serving photos.pub.example.org, its service meant for members alone: the log has the name public"

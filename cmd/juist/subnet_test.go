@@ -205,6 +205,10 @@ func TestTheStatusSaysWhereDNSGoes(t *testing.T) {
 		"hint: the package's polkit rule allows juistd that")
 	out = &syncBuffer{}
 	a = c.app(out, "")
+	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNSNot: "systemd-resolved refused juistd: polkit is not installed"}, nil)
+	mustContain(t, out.String(), "hint: "+asRoot("apt install polkitd")+", or "+asRoot("dnf install polkit"))
+	out = &syncBuffer{}
+	a = c.app(out, "")
 	a.warnDNS(&ipc.Exit{Node: id, Name: "vps",
 		DNSNot: "/etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub"}, nil)
 	mustContain(t, out.String(), "hint: "+asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"))

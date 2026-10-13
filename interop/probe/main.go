@@ -55,9 +55,10 @@ func main() {
 	}
 	if len(os.Args) != 3 && !(len(os.Args) == 4 && slices.Contains([]string{"serve", "get", "resolve", "tls", "hello", "answer", "proxied"}, os.Args[1])) &&
 		!(len(os.Args) == 5 && (os.Args[1] == "hold" || os.Args[1] == "hello" || os.Args[1] == "h3get")) && !(len(os.Args) > 4 && os.Args[1] == "answer") &&
-		!(len(os.Args) > 5 && os.Args[1] == "proxy") {
+		!(len(os.Args) > 5 && os.Args[1] == "proxy") && !(len(os.Args) == 6 && os.Args[1] == "pqget") {
 		fmt.Fprintln(os.Stderr, "usage: probe serve NAME [PORT] | proxied NAME PORT | web PORT | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | "+
-			"dns ADDR | resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | h3get ADDR:PORT NAME CA | answer ADDR IP [NAME=IP...] | pairs FILE | pcap FILE")
+			"dns ADDR | resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | h3get ADDR:PORT NAME CA | pqget ADDR:PORT NAME CA PATH | "+
+			"answer ADDR IP [NAME=IP...] | pairs FILE | pcap FILE")
 		os.Exit(2)
 	}
 	var err error
@@ -82,6 +83,8 @@ func main() {
 		err = hello(os.Args[2], os.Args[3], os.Args[4:])
 	case "h3get":
 		err = h3get(os.Args[2], os.Args[3], os.Args[4])
+	case "pqget":
+		err = pqget(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
 	case "answer":
 		err = answerAll(os.Args[2], os.Args[3], os.Args[4:])
 	case "pcap":
@@ -241,6 +244,36 @@ func h3get(addr, name, ca string) error {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	fmt.Println(resp.Proto, resp.StatusCode)
+	return nil
+}
+
+// pqget fetches https://name/path from addr as juist's own ends do, over TLS
+// 1.3 with X25519MLKEM768 alone, by a certificate ca issued, and says the
+// status and the issuer.
+func pqget(addr, name, ca, path string) error {
+	pem, err := os.ReadFile(ca)
+	if err != nil {
+		return err
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem) {
+		return fmt.Errorf("%s holds no certificate", ca)
+	}
+	cfg := &tls.Config{ServerName: name, RootCAs: roots, MinVersion: tls.VersionTLS13,
+		CurvePreferences: []tls.CurveID{tls.X25519MLKEM768}}
+	d := net.Dialer{Timeout: 10 * time.Second}
+	tr := &http.Transport{TLSClientConfig: cfg,
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return d.DialContext(ctx, network, addr)
+		}}
+	defer tr.CloseIdleConnections()
+	resp, err := (&http.Client{Transport: tr, Timeout: 10 * time.Second}).Get("https://" + name + path)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	fmt.Println(resp.StatusCode, resp.TLS.PeerCertificates[0].Issuer)
 	return nil
 }
 

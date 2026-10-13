@@ -1,9 +1,7 @@
 // Package cliflag holds juist's and juistd's options to one spelling: a long
-// option is --name or --name=value, a one-letter one is -n. Go's flag
-// package accepts either dash before any name, so without this "-home"
-// would work and "--v" too; elsewhere a single dash before several letters
-// means several one-letter options, and a tool that reads it otherwise
-// surprises everyone who knows that. It also puts the dashes back into the
+// option is --name or --name=value, a one-letter one is -n, and -fy is -f -y.
+// Go's flag package accepts either dash before any name, so without this
+// "-home" would work and "--v" too. It also puts the dashes back into the
 // flag package's errors, which always print one.
 package cliflag
 
@@ -34,15 +32,18 @@ func IsSet(fs *flag.FlagSet, long string) bool {
 }
 
 // Check refuses args that spell an option the wrong way, naming the right
-// spelling, and options that do not exist, naming the closest that does.
-// Everything after "--" is left alone.
-func Check(fs *flag.FlagSet, args []string) error {
+// spelling, and options that do not exist, naming the closest that does. It
+// returns args with each bundle of one-letter options, as -fy, written out as
+// -f -y for fs.Parse. Everything after "--" is left alone.
+func Check(fs *flag.FlagSet, args []string) ([]string, error) {
+	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			return nil
+			return append(out, args[i:]...), nil
 		}
 		if len(arg) < 2 || arg[0] != '-' {
+			out = append(out, arg)
 			continue
 		}
 		long := strings.HasPrefix(arg, "--")
@@ -51,33 +52,54 @@ func Check(fs *flag.FlagSet, args []string) error {
 			name = name[1:]
 		}
 		if name == "" || strings.HasPrefix(name, "-") {
-			return fmt.Errorf("%s is not an option", arg)
+			return nil, fmt.Errorf("%s is not an option", arg)
 		}
 		f := fs.Lookup(name)
 		known := f != nil || name == "help" || name == "h"
 		switch {
 		case long && len(name) == 1:
 			if known {
-				return fmt.Errorf("%s: a one-letter option takes one dash, as -%s", arg, name)
+				return nil, fmt.Errorf("%s: a one-letter option takes one dash, as -%s", arg, name)
 			}
 		case !long && len(name) > 1:
 			if known {
-				return fmt.Errorf("%s: an option's full name takes two dashes, as --%s", arg, name)
+				return nil, fmt.Errorf("%s: an option's full name takes two dashes, as --%s", arg, name)
 			}
-			return fmt.Errorf("%s is not an option; options are written --name or -n", arg)
+			if hasValue || !isBundle(fs, name) {
+				return nil, fmt.Errorf("%s is not an option; options are written --name or -n", arg)
+			}
+			for j := range len(name) - 1 {
+				out = append(out, "-"+name[j:j+1])
+			}
+			arg = "-" + name[len(name)-1:]
+			f, known = fs.Lookup(arg[1:]), true
 		}
 		if !known {
 			msg := fmt.Sprintf("unknown option %s", arg)
 			if s := suggest(fs, name); s != "" {
 				msg += fmt.Sprintf("; did you mean %s?", s)
 			}
-			return errors.New(msg)
+			return nil, errors.New(msg)
 		}
-		if f != nil && !hasValue && !isBool(f) {
+		out = append(out, arg)
+		if f != nil && !hasValue && !isBool(f) && i+1 < len(args) {
 			i++ // its value, which may itself start with a dash
+			out = append(out, args[i])
 		}
 	}
-	return nil
+	return out, nil
+}
+
+// isBundle reports whether each letter of name is a one-letter option of fs,
+// each but the last a switch.
+func isBundle(fs *flag.FlagSet, name string) bool {
+	for i := range len(name) {
+		f := fs.Lookup(name[i : i+1])
+		if f == nil || i < len(name)-1 && !isBool(f) {
+			return false
+		}
+	}
+	return true
 }
 
 func isBool(f *flag.Flag) bool {

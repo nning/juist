@@ -118,19 +118,12 @@ fun Readable(modifier: Modifier = Modifier, content: @Composable ColumnScope.() 
 }
 
 @Composable
-fun SectionTitle(text: String, modifier: Modifier = Modifier, trailing: String? = null) {
-    Row(
-        modifier.fillMaxWidth().padding(start = Space.l, end = Space.l, top = Space.xl, bottom = Space.s),
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        Text(
-            text, Modifier.weight(1f).semantics { heading() },
-            style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (trailing != null) {
-            Text(trailing, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier.fillMaxWidth().padding(start = Space.l, end = Space.l, top = Space.xl, bottom = Space.s).semantics { heading() },
+        style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /** A card on the background, outlined rather than raised, as the website draws its panels. */

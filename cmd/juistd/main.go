@@ -339,7 +339,7 @@ func parse(args []string, out io.Writer) (options, error) {
 		}
 		return options{}, errHelp
 	}
-	err := cliflag.Check(fs, args)
+	args, err := cliflag.Check(fs, args)
 	if err == nil {
 		err = cliflag.TidyIn(fs, fs.Parse(args))
 	}

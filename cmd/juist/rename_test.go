@@ -74,7 +74,7 @@ func TestARenameGivesASharedLabelToTheOther(t *testing.T) {
 	twin := testNode(t, "NAS")
 	add, err := auth.Builder().AddNode(twin, sealer())
 	if err == nil {
-		err = add.Sign(keys[0])
+		err = add.SignUnder(keys[0], auth.State().Schema())
 	}
 	if err == nil {
 		err = auth.Inform(add)

@@ -89,7 +89,7 @@ func TestACheckCallsAnOlderBuildOutdated(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Seq, e.Epoch, e.PairStore = 3, f.auth.State().Epoch(), 1
-	if err := e.Sign(old.identity); err != nil {
+	if err := e.SignPQ(old.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -251,7 +251,7 @@ func (f *reconcileFixture) signedBy(t *testing.T, dev *device, at time.Time) gos
 		e.Disco = held.Disco // the same announcement, renewed
 	}
 	e.Seq = uint64(at.Unix())
-	if err := e.Sign(dev.identity); err != nil {
+	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -355,6 +355,59 @@ func TestARunningDeviceBehindAFirewallReadsAsBlocked(t *testing.T) {
 	}
 }
 
+// A device that runs while its tunnel is down, on a build from before the
+// network's upgrade, knows no member that joined since: it is called
+// outdated once its newer announcement had the time to arrive, and only one
+// on a current build is blamed on the way.
+func TestARunningDeviceOnAnOlderBuildIsOutdatedNotBlocked(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	c := &clock{now: t0}
+	f := newReconcileFixtureWith(t, 4, func(o *Options) { o.Clock = c.get })
+	current, noEpoch, olderSchema := f.nw.devices[1], f.nw.devices[2], f.nw.devices[3]
+	announce := func(at time.Time) {
+		for _, dev := range []*device{current, noEpoch, olderSchema} {
+			e := f.signedBy(t, dev, at)
+			e.Epoch, e.Schema = f.auth.State().Epoch(), types.CurrentSchema
+			switch dev {
+			case noEpoch:
+				e.Epoch, e.PairStore, e.Schema = 0, 0, 0
+			case olderSchema:
+				e.Schema = 0 // builds before types.SchemaPadded name none
+			}
+			if err := e.SignPQ(dev.identity); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.d.Learn(e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		f.d.refreshReach(t.Context())
+	}
+	announce(t0.Add(-3 * time.Minute))
+	c.set(t0.Add(3 * time.Minute))
+	announce(c.get())
+	st := f.d.Status()
+	if len(st.Outdated) != 0 || !slices.Equal(st.Blocked(), []string{current.record.Name, noEpoch.record.Name,
+		olderSchema.record.Name}) {
+		t.Fatalf("at once: outdated %v, blocked %v", st.Outdated, st.Blocked())
+	}
+	c.set(t0.Add(3*time.Minute + max(outdatedAfter, f.d.settles())))
+	announce(c.get())
+	st = f.d.Status()
+	if want := []string{noEpoch.record.Name, olderSchema.record.Name}; !slices.Equal(st.Outdated, want) ||
+		!slices.Equal(st.Blocked(), []string{current.record.Name}) {
+		t.Fatalf("later: outdated %v, blocked %v; want %v outdated", st.Outdated, st.Blocked(), want)
+	}
+	for _, r := range st.Reach {
+		if r.Outdated != (r.Identity != current.record.Identity) {
+			t.Errorf("%v marked outdated: %v", r.Identity.ShortString(), r.Outdated)
+		}
+	}
+}
+
 // A device that restarted or moved says something new: it runs, and is
 // probed at once, past the probe backoff.
 func TestANewAnnouncementIsProbedAtOnce(t *testing.T) {
@@ -384,7 +437,7 @@ func TestANewAnnouncementIsProbedAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	newer.Seq = held.Seq + 1
-	if err := newer.Sign(peer.identity); err != nil {
+	if err := newer.SignPQ(peer.identity); err != nil {
 		t.Fatal(err)
 	}
 	f.d.onFoundInDHT(newer)
@@ -492,6 +545,16 @@ func TestAnEchoOfAPreviousRunIsAnnouncedPast(t *testing.T) {
 	if again, _ := f.d.announcement(); again.Seq != mine.Seq {
 		t.Fatal("an echo that does not verify had the announcement signed again")
 	}
+	// Past the cut-over, Ed25519 alone is what a quantum computer forges.
+	ed := previous
+	ed.Seq += 1000
+	if err := ed.Sign(f.self.identity); err != nil {
+		t.Fatal(err)
+	}
+	f.d.ownEchoed(ed)
+	if again, _ := f.d.announcement(); again.Seq != mine.Seq {
+		t.Fatal("an echo signed by Ed25519 alone had the announcement numbered past it")
+	}
 	f.d.ownEchoed(previous)
 	if next, _ := f.d.announcement(); next.Seq <= previous.Seq {
 		t.Fatalf("announced %d after a previous run's %d", next.Seq, previous.Seq)
@@ -532,7 +595,7 @@ func TestAPeerGoneFromThisRelayIsOffline(t *testing.T) {
 	peer := f.nw.devices[1]
 	e := f.signedBy(t, peer, t0.Add(-time.Minute))
 	e.HomeRelay = uint16(relayRegion(f.auth.State().GenesisHash(), f.self.record.Identity))
-	if err := e.Sign(peer.identity); err != nil {
+	if err := e.SignPQ(peer.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -623,7 +686,7 @@ func TestARelayNobodyReachesIsReported(t *testing.T) {
 		t.Helper()
 		e := f.signedBy(t, dev, at)
 		e.HomeRelay = home
-		if err := e.Sign(dev.identity); err != nil {
+		if err := e.SignPQ(dev.identity); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.d.Learn(e); err != nil {
@@ -681,7 +744,7 @@ func TestAQuietPeerARelayCanWakeIsProbedRarely(t *testing.T) {
 	dev := f.nw.devices[1]
 	e := f.signedBy(t, dev, t0)
 	e.HomeRelay = region
-	if err := e.Sign(dev.identity); err != nil {
+	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -731,5 +794,83 @@ func TestAQuietPeerARelayCanWakeIsProbedRarely(t *testing.T) {
 	checks(3)
 	if got := probes(); got != 5 {
 		t.Fatalf("with no relay of its own, the peer was probed in %d of 3 checks", got-2)
+	}
+}
+
+// A live peer naming an older schema than the network's, or none, is called
+// a build that applies no changes once it has had the time to catch up, and
+// no longer once it names the network's.
+func TestACheckNamesAnOlderSchema(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	current, older := f.nw.devices[1], f.nw.devices[2]
+	f.learn(t, current, 4001)
+	announce := func(seq uint64, schema types.SchemaVersion) {
+		e, err := endpointFor(older, 4002)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Seq, e.Epoch, e.Schema = seq, f.auth.State().Epoch(), schema
+		if err := e.SignPQ(older.identity); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Learn(e); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	announce(2, 0)
+	answers := map[netip.Addr]bool{f.installed(t, 1).Addrs[0].Addr(): true, f.installed(t, 2).Addrs[0].Addr(): true}
+	f.mgr.mu.Lock()
+	f.mgr.answers = answers
+	f.mgr.mu.Unlock()
+	now := time.Now()
+	f.d.clock = func() time.Time { return now }
+	olderBuild := func() []string {
+		f.d.refreshReach(t.Context())
+		st := f.d.Status()
+		var marked []string
+		for _, r := range st.Reach {
+			if r.OlderBuild {
+				marked = append(marked, r.Identity.ShortString())
+			}
+		}
+		if len(marked) != len(st.OlderBuild) || len(st.Outdated) != 0 {
+			t.Fatalf("%d marked, %d named: %v; outdated %v", len(marked), len(st.OlderBuild), st.OlderBuild, st.Outdated)
+		}
+		return st.OlderBuild
+	}
+	if got := olderBuild(); len(got) != 0 {
+		t.Fatalf("named at once: %v", got)
+	}
+	now = now.Add(outdatedAfter)
+	if got := olderBuild(); !slices.Equal(got, []string{older.record.Name}) {
+		t.Fatalf("named after %v: %v", outdatedAfter, got)
+	}
+	announce(3, types.CurrentSchema)
+	if got := olderBuild(); len(got) != 0 {
+		t.Fatalf("named though it names the network's schema: %v", got)
+	}
+}
+
+// From [types.SchemaPadded] on, a device names its build's schema and seals
+// what it publishes padded; before, neither, as older members refuse both.
+func TestAnAnnouncementNamesItsBuildFromItsSchema(t *testing.T) {
+	for _, c := range []struct {
+		schema types.SchemaVersion
+		want   types.SchemaVersion
+	}{{types.SchemaMembers, 0}, {types.SchemaPadded, types.CurrentSchema}} {
+		f := newReconcileFixtureOn(t, newNetworkMutated(t, 2, func(nw *network) { nw.schema = c.schema }), nil)
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		e, ok := f.d.announcement()
+		if !ok || e.Schema != c.want {
+			t.Errorf("at %v the announcement names %v, want %v", c.schema, e.Schema, c.want)
+		}
+		if padded := f.d.paddedItems(); padded != (c.want != 0) {
+			t.Errorf("at %v items are padded: %v", c.schema, padded)
+		}
 	}
 }

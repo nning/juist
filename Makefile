@@ -70,7 +70,7 @@ FUZZLONGWORKERS ?= 4
 
 # The trusted computing base's core is held to a budget; audit-scope places
 # every package in or out of the audit (docs/06-verification.md §5, §6).
-TCB_BUDGET ?= 10000
+TCB_BUDGET ?= 11000
 
 .DEFAULT_GOAL := help
 
@@ -203,9 +203,9 @@ INTEROP_CACHE ?= $(HOME)/.cache/juist-interop
 # The browser the lab fetches over HTTP/3 with, headless.
 INTEROP_CHROME ?= $(firstword $(shell command -v chromium chromium-browser google-chrome chrome 2>/dev/null))
 
-# The last done milestone, which the lab upgrades Debian from: the previous
-# release.
-PREVIOUS ?= $(shell git rev-list -1 --grep='^M[0-9]* done' HEAD 2>/dev/null)
+# The last done milestone, which the lab upgrades Debian and FreeBSD from:
+# the previous release.
+PREVIOUS ?= $(shell git rev-list -1 -E --grep='^M[0-9]+:? done' HEAD 2>/dev/null)
 PREVTOP  ?= $(abspath $(BUILDDIR)/previous)
 
 .PHONY: deb-previous
@@ -217,11 +217,18 @@ deb-previous: ## Build the last done milestone's .deb into build/previous/deb, w
 		RPM_COMMIT=$$(git rev-parse --short $(PREVIOUS)) \
 		RPM_STAMP=$$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S $(PREVIOUS))
 
+.PHONY: pkg-freebsd-previous
+pkg-freebsd-previous: deb-previous ## Build the last done milestone's FreeBSD package into build/previous/build/freebsd
+	$(MAKE) -C $(PREVTOP)/src pkg-freebsd BUILDDIR=$(PREVTOP)/build RPM_DIRTY= \
+		RPM_COMMIT=$$(git rev-parse --short $(PREVIOUS)) \
+		RPM_STAMP=$$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S $(PREVIOUS))
+
 .PHONY: interop
-interop: deb deb-previous pkg-freebsd image ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh, Chrome)
+interop: deb deb-previous pkg-freebsd-previous pkg-freebsd image ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh, Chrome)
 	cd interop && JUIST_INTEROP_WORK=$(abspath $(BUILDDIR))/interop \
 		JUIST_INTEROP_DEB=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb') \
 		JUIST_INTEROP_PREVIOUS_DEB=$$(find $(PREVTOP)/deb -maxdepth 1 -name '*.deb') \
+		JUIST_INTEROP_PREVIOUS_PKG=$$(find $(PREVTOP)/build/freebsd -name '*.pkg' 2>/dev/null) \
 		JUIST_INTEROP_PKG=$$(find $(abspath $(BUILDDIR))/freebsd -name '*.pkg') \
 		JUIST_INTEROP_IMAGE=$$(find $(abspath $(BUILDDIR))/image -name 'juist-*-$(IMAGE_ARCH).tar' | head -1) \
 		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) JUIST_INTEROP_CHROME=$(INTEROP_CHROME) GO=$(GO) \
@@ -489,6 +496,7 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	install -D -m 0755 packaging/serve.sh $$root/usr/lib/juist/serve.sh; \
 	install -D -m 0755 packaging/relay.sh $$root/usr/lib/juist/relay.sh; \
 	install -D -m 0644 packaging/polkit/juist.rules $$root/usr/share/polkit-1/rules.d/60-juist.rules; \
+	install -D -m 0644 packaging/polkit/juist.pkla $$root/usr/lib/juist/juist.pkla; \
 	for f in juist juist-relay juist-relay-443 juist-invite juist-ingress; do \
 		install -D -m 0644 packaging/firewalld/$$f.xml $$root/usr/lib/firewalld/services/$$f.xml; \
 	done; \
@@ -499,6 +507,7 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	install -d -m 0755 $$root/DEBIAN; \
 	install -m 0755 packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm $$root/DEBIAN/; \
 	echo /etc/ufw/applications.d/juist > $$root/DEBIAN/conffiles; \
+	install -m 0644 packaging/deb/triggers $$root/DEBIAN/; \
 	size=$$(du -sk --exclude=DEBIAN $$root | cut -f1); \
 	sed -e 's|@VERSION@|$(DEB_VERSION)|' -e 's|@ARCH@|$(DEB_ARCH)|' -e "s|@SIZE@|$$size|" \
 		packaging/deb/control.in > $$root/DEBIAN/control; \

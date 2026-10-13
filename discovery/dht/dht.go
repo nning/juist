@@ -61,8 +61,9 @@ const (
 	// random order, tells it much less and still converges.
 	MaxLookupsPerRound = 4
 
-	// MaxValueSize is BEP 44's limit on an item's value.
-	MaxValueSize = 1000
+	// MaxValueSize is BEP 44's limit on an item's value: 1000 bytes
+	// bencoded, the "996:" before it included.
+	MaxValueSize = 996
 
 	// sendRate and sendBurst bound what this node puts on the wire, matching
 	// the library's own defaults. Rendezvous is a handful of queries every
@@ -85,6 +86,11 @@ type Options struct {
 	// it has none to make.
 	Announce func() (gossip.Endpoint, bool)
 
+	// Padded reports whether to publish announcements padded and without
+	// their epoch, which builds before [types.SchemaPadded] cannot open. Nil
+	// is never. Lookups open either.
+	Padded func() bool
+
 	// Wanted returns the members to look up: those this node has no
 	// announcement for or cannot reach. Only these are looked up: a query is
 	// visible to whichever storage node answers it, so asking for a member
@@ -93,6 +99,15 @@ type Options struct {
 
 	// OnPeer receives each announcement found, already verified.
 	OnPeer func(gossip.Endpoint)
+
+	// Ask, where set, is asked for each wanted member before the DHT, and
+	// reports whether it found news of it: a member relay, which learns
+	// from the question nothing it does not hold.
+	Ask func(ctx context.Context, id types.Identity) bool
+
+	// Seeks, where set, reports whether this node asks the DHT after
+	// members this round; nil is always. It still publishes.
+	Seeks func() bool
 
 	// Bootstrap overrides the public DHT routers a fresh node starts from.
 	// Tests pass a private swarm's addresses.
@@ -261,9 +276,13 @@ func (n *Node) round(ctx context.Context, early bool) {
 	if len(wanted) > MaxLookupsPerRound {
 		wanted = wanted[:MaxLookupsPerRound]
 	}
+	seeks := n.opts.Seeks == nil || n.opts.Seeks()
 	for _, id := range wanted {
 		if ctx.Err() != nil {
 			return
+		}
+		if n.opts.Ask != nil && n.opts.Ask(ctx, id) || !seeks {
+			continue
 		}
 		e, err := n.Lookup(ctx, id)
 		if err != nil {
@@ -305,7 +324,7 @@ func (n *Node) publish(ctx context.Context, early bool) error {
 	if same {
 		return nil
 	}
-	value, err := sealAnnouncement(secret, epoch, e)
+	value, err := sealAnnouncement(secret, epoch, e, n.opts.Padded != nil && n.opts.Padded())
 	if err != nil {
 		return err
 	}
@@ -345,7 +364,7 @@ func (n *Node) Lookup(ctx context.Context, id types.Identity) (gossip.Endpoint, 
 				lastErr = err
 				continue
 			}
-			e, err := openAnnouncement(n.opts.Keyring, raw)
+			e, err := openAnnouncement(n.opts.Keyring, epoch, raw)
 			if err != nil {
 				lastErr = err
 				continue
@@ -366,15 +385,24 @@ func (n *Node) Lookup(ctx context.Context, id types.Identity) (gossip.Endpoint, 
 	return gossip.Endpoint{}, lastErr
 }
 
-// sealAnnouncement encodes and seals an announcement for publication. The
-// size check is not a formality: a member whose announcement grew past BEP
-// 44's limit would be silently unpublishable.
-func sealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint) ([]byte, error) {
-	body, err := e.Encode()
+// sealAnnouncement encodes and seals an announcement for publication, padded
+// to [MaxValueSize] where padded says, as a hint: without its ML-DSA
+// signature and signing key, which do not fit. The size check is not a
+// formality: a member whose announcement grew past BEP 44's limit would be
+// silently unpublishable.
+func sealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint, padded bool) ([]byte, error) {
+	hint := e.Hint()
+	body, err := hint.Encode()
 	if err != nil {
 		return nil, err
 	}
-	value, err := aead.Seal(s.DiscoveryKey(epoch), epoch, body)
+	seal := aead.Seal
+	if padded {
+		seal = func(key [32]byte, epoch uint64, body []byte) ([]byte, error) {
+			return aead.SealPadded(key, epoch, body, MaxValueSize)
+		}
+	}
+	value, err := seal(s.DiscoveryKey(epoch), epoch, body)
 	if err != nil {
 		return nil, fmt.Errorf("dht: sealing an announcement: %w", err)
 	}
@@ -385,19 +413,22 @@ func sealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint) ([]byte
 	return value, nil
 }
 
-// openAnnouncement opens and verifies a published announcement.
-func openAnnouncement(kr *keyring.Keyring, blob []byte) (gossip.Endpoint, error) {
-	epoch, err := aead.Epoch(blob)
-	if err != nil {
-		return gossip.Endpoint{}, fmt.Errorf("dht: %w", err)
-	}
+// openAnnouncement opens and verifies an announcement published under epoch,
+// padded or not.
+func openAnnouncement(kr *keyring.Keyring, epoch uint64, blob []byte) (gossip.Endpoint, error) {
 	s, ok := kr.Secret(epoch)
 	if !ok {
-		return gossip.Endpoint{}, fmt.Errorf("dht: item is sealed under epoch %d, which this node does not hold", epoch)
+		return gossip.Endpoint{}, fmt.Errorf("dht: no secret for epoch %d", epoch)
 	}
-	body, err := aead.Open(s.DiscoveryKey(epoch), blob)
+	key := s.DiscoveryKey(epoch)
+	body, err := aead.OpenPadded(key, epoch, blob)
 	if err != nil {
-		return gossip.Endpoint{}, fmt.Errorf("dht: opening a published announcement: %w", err)
+		if labelled, lerr := aead.Epoch(blob); lerr != nil || labelled != epoch {
+			return gossip.Endpoint{}, fmt.Errorf("dht: opening a published announcement: %w", err)
+		}
+		if body, err = aead.Open(key, blob); err != nil {
+			return gossip.Endpoint{}, fmt.Errorf("dht: opening a published announcement: %w", err)
+		}
 	}
 	return gossip.DecodeEndpoint(body)
 }

@@ -79,13 +79,27 @@ func TestNamesNeedTheirSchema(t *testing.T) {
 	if err := snap.StaticValidate(false); err != nil {
 		t.Fatal(err)
 	}
-	old := snap.Clone()
+	old := withoutSigning(snap)
 	old.Schema = SchemaSealing
 	old.V4Retiring, old.V4Prefix, old.Domain = nil, nil, ""
 	old.Nodes[0].Retiring, old.Nodes[0].Published = nil, nil
 	if err := old.StaticValidate(false); err == nil || !strings.Contains(err.Error(), "names") {
 		t.Errorf("a state before schema 8 with names: %v", err)
 	}
+}
+
+// withoutSigning is a copy of s without its signing keys, as a state below
+// the cut-over has.
+func withoutSigning(s *Snapshot) *Snapshot {
+	out := s.Clone()
+	for i := range out.Admins {
+		out.Admins[i].Signing = nil
+		out.Admins[i].Endorsement = nil
+	}
+	for i := range out.Nodes {
+		out.Nodes[i].Signing = nil
+	}
+	return out
 }
 
 // A role arrives at a schema, as a kind does: a state below it may not grant
@@ -111,6 +125,7 @@ func TestRolesNeedTheirSchema(t *testing.T) {
 	if snap == nil {
 		t.Fatal("no seed state has a member")
 	}
+	snap = withoutSigning(snap)
 	snap.Schema = SchemaSealing
 	snap.V4Retiring, snap.V4Prefix, snap.Domain = nil, nil, ""
 	for i := range snap.Nodes {

@@ -92,7 +92,7 @@ func (f *reconcileFixture) learnExitDNS(t *testing.T, dev *device, port uint16, 
 		t.Fatal(err)
 	}
 	e.Exit, e.DNS, e.Seq = serving, dns, e.Seq+1
-	if err := e.Sign(dev.identity); err != nil {
+	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -147,6 +147,7 @@ func TestDNSOutsideTheTunnelIsSaid(t *testing.T) {
 	}{
 		{"no resolver", 0, nil, "n1 answers no DNS"},
 		{"polkit", DefaultDNSPort, resolved.ErrNotAuthorized, "systemd-resolved refused juistd"},
+		{"no polkit", DefaultDNSPort, resolved.ErrNoPolkit, "systemd-resolved refused juistd: polkit is not installed"},
 		{"no resolved", DefaultDNSPort, resolved.ErrNotRunning, "systemd-resolved does not run"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -240,7 +241,7 @@ func TestDNSFollowsTheChoiceWhateverTheNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -338,7 +339,7 @@ func TestAnExitNodeOfOneFamilyIsSaid(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Exit, e.DNS, e.NoV4, e.Seq = true, DefaultDNSPort, true, e.Seq+1
-	if err := e.Sign(exit.identity); err != nil {
+	if err := e.SignPQ(exit.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {

@@ -3,6 +3,7 @@ package dht
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"math"
 	"net"
 	"net/netip"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/addrkey"
+	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
@@ -355,7 +357,11 @@ func TestAnnouncementFitsTheItemLimit(t *testing.T) {
 			Port: 4443, STUNPort: 4443,
 			Cert:     make([]byte, gossip.RelayCertSize),
 			HostName: strings.Repeat("a", gossip.MaxRelayHostNameLen),
+			Name:     strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61),
 		},
+		Exit: true, Subnets: true, DNS: 65535, NoV4: true, Published: true,
+		Share: &gossip.Share{Port: 65535, Until: math.MaxInt64},
+		Epoch: math.MaxUint64, PairStore: math.MaxUint64, Schema: math.MaxUint16,
 	}
 	// The worst case the schema admits: every address slot filled with the
 	// longer family.
@@ -368,7 +374,7 @@ func TestAnnouncementFitsTheItemLimit(t *testing.T) {
 	if err := e.Sign(priv); err != nil {
 		t.Fatal(err)
 	}
-	value, err := sealAnnouncement(s, 1, e)
+	value, err := sealAnnouncement(s, 1, e, true)
 	if err != nil {
 		t.Fatalf("the largest announcement the schema admits is not publishable: %v", err)
 	}
@@ -381,14 +387,72 @@ func TestAnnouncementFitsTheItemLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Relay, e.Addrs, e.Sealed = nil, nil, sealed
-	e.Share = &gossip.Share{Port: 65535, Until: math.MaxInt64}
 	if err := e.Sign(priv); err != nil {
 		t.Fatal(err)
 	}
-	if value, err = sealAnnouncement(s, 1, e); err != nil {
+	if value, err = sealAnnouncement(s, 1, e, true); err != nil {
 		t.Fatalf("the largest announcement with sealed addresses is not publishable: %v", err)
 	}
 	t.Logf("largest announcement with sealed addresses: %d bytes", len(value))
+}
+
+// TestAPaddedItemShowsNeitherEpochNorSize: every item a storage node is
+// given is as long as any other and does not begin with the epoch, which
+// would show it the network's count of changes and link its members' items.
+// A member still finds one that publishes unpadded, as a build before
+// [types.SchemaPadded] does.
+func TestAPaddedItemShowsNeitherEpochNorSize(t *testing.T) {
+	sw := newSwarm(t, 3)
+	const epoch = 9
+	kr := testKeyring(t, epoch)
+	small := newMember(t, sw, kr, 1, nil)
+	large := newMember(t, sw, kr, 2, nil)
+	for i := range 6 {
+		large.ann.Addrs = append(large.ann.Addrs, netip.AddrPortFrom(
+			netip.AddrFrom16([16]byte{0x20, 0x01, 0xd, 0xb8, 15: byte(i + 1)}), 41641))
+	}
+	large.ann.Addrs = gossip.SortAddrs(large.ann.Addrs)
+	if err := large.ann.Sign(large.priv); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []*member{small, large} {
+		m.node.opts.Padded = func() bool { return true }
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	for _, m := range []*member{small, large} {
+		if err := m.node.Publish(ctx); err != nil {
+			t.Fatalf("publishing: %v", err)
+		}
+	}
+
+	sizes := map[int]bool{}
+	for _, q := range sw.seen() {
+		if q.Q != "put" || q.A == nil {
+			continue
+		}
+		v, ok := q.A.V.(string)
+		if !ok {
+			t.Fatalf("a put carries a %T", q.A.V)
+		}
+		sizes[len(v)] = true
+		if len(v) >= aead.EpochLen && binary.BigEndian.Uint64([]byte(v)) == epoch {
+			t.Error("a put item begins with its epoch")
+		}
+	}
+	if len(sizes) != 1 {
+		t.Errorf("put items come in %d sizes, want one", len(sizes))
+	}
+
+	old := newMember(t, sw, kr, 3, nil)
+	if err := old.node.Publish(ctx); err != nil {
+		t.Fatalf("publishing unpadded: %v", err)
+	}
+	for _, id := range []types.Identity{large.id, old.id} {
+		if _, err := small.node.Lookup(ctx, id); err != nil {
+			t.Errorf("looking up %v: %v", id.ShortString(), err)
+		}
+	}
 }
 
 // queryBytes renders the parts of a query a storage node actually holds.
@@ -458,16 +522,18 @@ func FuzzOpenItem(f *testing.F) {
 	if err := e.Sign(priv); err != nil {
 		f.Fatal(err)
 	}
-	good, err := sealAnnouncement(s, 3, e)
-	if err != nil {
-		f.Fatal(err)
+	for _, padded := range []bool{false, true} {
+		good, err := sealAnnouncement(s, 3, e, padded)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(good)
 	}
-	f.Add(good)
 	f.Add([]byte{})
 	f.Add(make([]byte, 64))
 
 	f.Fuzz(func(t *testing.T, in []byte) {
-		got, err := openAnnouncement(kr, in)
+		got, err := openAnnouncement(kr, 3, in)
 		if err != nil {
 			return
 		}
@@ -641,5 +707,55 @@ func TestAnUnchangedAnnouncementIsNotPutAgainSoon(t *testing.T) {
 			}()
 			_ = n.publish(t.Context(), tc.early)
 		}()
+	}
+}
+
+// A node that does not seek this round, or whose Ask found the member, puts
+// no question to the DHT, which would link its address to the one sought;
+// it still publishes its own.
+func TestANodeThatDoesNotSeekAsksTheDHTNothing(t *testing.T) {
+	sw := newSwarm(t, 3)
+	kr := testKeyring(t, 4)
+	a := newMember(t, sw, kr, 1, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := a.node.Publish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name  string
+		ask   func(context.Context, types.Identity) bool
+		seeks func() bool
+	}{
+		{"not seeking", nil, func() bool { return false }},
+		{"found by Ask", func(context.Context, types.Identity) bool { return true }, nil},
+	} {
+		b := newMember(t, sw, kr, 2, func() []types.Identity { return []types.Identity{a.id} })
+		b.node.opts.Ask, b.node.opts.Seeks = c.ask, c.seeks
+		before := len(sw.seen())
+		b.node.Round(ctx)
+		b.mu.Lock()
+		_, found := b.found[a.id]
+		b.mu.Unlock()
+		if found {
+			t.Errorf("%s: found a through the DHT", c.name)
+		}
+		epoch, secret, _ := kr.Latest()
+		_, _, sought := storeKey(secret.TopicSeed(epoch, b.node.window(), a.id))
+		var asked, puts int
+		for _, q := range sw.seen()[before:] {
+			switch {
+			case q.Q == "put":
+				puts++
+			case q.Q == "get" && q.A != nil && q.A.Target == krpc.ID(sought):
+				asked++
+			}
+		}
+		if asked > 0 {
+			t.Errorf("%s: asked the DHT %d times where a is published", c.name, asked)
+		}
+		if puts == 0 {
+			t.Errorf("%s: published nothing", c.name)
+		}
 	}
 }

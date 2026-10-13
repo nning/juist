@@ -148,7 +148,7 @@ func (a *app) inviteHere(ctx context.Context, auth *log.Authority, adm *admitter
 		return err
 	}
 	inv := h.Invite()
-	a.announceInvite(auth.State().Network(), inv.Code().String(), inv.Link().WithAdmin(adm.key.Public()), h.Port(), o)
+	a.announceInvite(auth.State().Network(), inv.Code().String(), inv.Link().WithAdmin(adm.key.Public(), new(adm.key.SigningKey())), h.Port(), o)
 	chain := func() ([]types.AUM, [][]byte, [][]byte, error) {
 		records, err := a.node.chain()
 		return records, nil, nil, err
@@ -214,7 +214,7 @@ func (d *daemonInvite) handle(ctx context.Context, e *ipc.Event, reply func(ipc.
 		}
 		// The admin's key goes into the link here, where the daemon cannot
 		// change what is printed.
-		a.announceInvite(d.auth.State().Network(), code.String(), link.WithAdmin(d.adm.key.Public()), e.Port, d.o)
+		a.announceInvite(d.auth.State().Network(), code.String(), link.WithAdmin(d.adm.key.Public(), new(d.adm.key.SigningKey())), e.Port, d.o)
 	case ipc.EventInviteAdmit:
 		// One invite admits one device. A daemon that asks again, or before
 		// it offered the invite, is not running the protocol.

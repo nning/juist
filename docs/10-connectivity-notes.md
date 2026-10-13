@@ -121,15 +121,30 @@ node publishes under its newest epoch and looks under every epoch in its
 keyring: whichever of the two is behind is the one that finds the other, and one
 direction is enough, because everything after rendezvous is bidirectional.
 
-**Queries are the leak, not the items.** A storage node sees each query name one
-opaque address, so no query says who is being looked for — but a node that
-asked after all of its missing peers at once would turn that into a count.
-Lookups are capped per round, shuffled, and only for members this node holds no
-address for. Recorded as residual weakness 5 in
-[02-threat-model.md](02-threat-model.md), together with the fact that running
-the DHT at all says this host speaks the BitTorrent DHT. `juistd --no-dht` is
-the answer for a deployment that would rather not, at the cost of off-LAN cold
-start.
+**Who asks links who puts.** A storage node holding a member's item sees the
+address that put it and each address that asks for it, which links the two as
+one network's. Lookups are capped per round, shuffled, and only for members
+unheard, down or set aside by a stale node, so a working mesh asks nothing.
+A lookup asks the member relays first, at their addresses by the certificate
+their announcements pin, or at their names on 443, and takes an answer newer
+than what it holds. The DHT is asked only by a device that reaches no member,
+is stale, or has the lowest identity among those it reaches; the rest wait
+for gossip. Two groups that reach no one in common each keep one seeker, so
+they still meet. Recorded as residual weakness 5 in [02-threat-model.md](02-threat-model.md),
+together with the fact that running the DHT at all says this host speaks the
+BitTorrent DHT. `juistd --no-dht` is the answer for a deployment that would
+rather not, at the cost of off-LAN cold start.
+
+**Items without their epoch, all of one size.** The sealed-blob framing puts
+the epoch in the clear, which every item of a network would share, and an
+item as long as its announcement would show its author's addresses and roles.
+A member looking up knows which epoch it derived the address under, and a
+beacon which epoch its name belongs to, so from schema 16 on items carry
+nonce and ciphertext alone, under the epoch as additional data
+(`aead.SealPadded`): an item padded to the 996 bytes BEP 44 takes once
+bencoded, as is a relay's answer, and a beacon to the next multiple of 256 up
+to the 864 one datagram carries. Builds before it open neither, which the
+schema bounds; every build opens both.
 
 **One library detail worth keeping.** `anacrolix/dht`'s default send limiter is
 a package global. Two servers in one process share a budget sized for a torrent

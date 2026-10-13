@@ -288,8 +288,16 @@ type Tunnels struct {
 	// Outdated names the members whose tunnel is live, whose log sync
 	// works, and who still announce no epoch minutes into a network past
 	// [types.SchemaPQ]: they run an older build, which gets none of the
-	// user's traffic.
+	// user's traffic. It names too those without a tunnel that run and
+	// announce no epoch there, or an older schema than the network's past
+	// [types.SchemaPadded]: their build knows no member that joined since.
 	Outdated []string `cbor:"77,keyasint,omitempty"`
+
+	// OlderBuild names the members whose tunnel is live and whose log sync
+	// works, and who still announce an older schema than the network's
+	// minutes into a network past [types.SchemaPadded]: they run an older
+	// build, which applies no change past its schema.
+	OlderBuild []string `cbor:"79,keyasint,omitempty"`
 
 	// Firewalled names the TUN device when a running firewalld lets log sync
 	// in on it neither by its zone accepting everything nor by the port.
@@ -305,6 +313,22 @@ type Tunnels struct {
 	RelayedFor     int    `cbor:"55,keyasint,omitempty"`
 	RelayUnreached bool   `cbor:"56,keyasint,omitempty"`
 	RelayPort      uint16 `cbor:"57,keyasint,omitempty"`
+}
+
+// Blocked names the members in TunnelsDown that run a build that could have a
+// tunnel: neither offline nor outdated, so the way to them is to blame.
+func (t *Tunnels) Blocked() []string {
+	return slices.DeleteFunc(slices.Clone(t.TunnelsDown), func(n string) bool {
+		return slices.Contains(t.Seeking, n) || slices.Contains(t.Absent, n) || slices.Contains(t.Outdated, n)
+	})
+}
+
+// Behind names the members in NoKey that are neither offline, read from an
+// announcement they may since have outgrown, nor outdated.
+func (s *Status) Behind() []string {
+	return slices.DeleteFunc(slices.Clone(s.NoKey), func(n string) bool {
+		return slices.Contains(s.Seeking, n) || slices.Contains(s.Absent, n) || slices.Contains(s.Outdated, n)
+	})
 }
 
 // FreshnessEnding returns how long a fresh node stays fresh, where the lease
@@ -349,8 +373,9 @@ func (s *Status) ForReader() Status {
 			TunnelsChecked: s.TunnelsChecked, TunnelsLive: s.TunnelsLive, TunnelsDown: s.TunnelsDown,
 			Reach: s.Reach, ReachChecked: s.ReachChecked, HomeRelay: s.HomeRelay,
 			Seeking: s.Seeking, Absent: s.Absent, SyncFailing: s.SyncFailing, SyncNewer: s.SyncNewer,
-			SyncBroken: s.SyncBroken, Outdated: s.Outdated, Firewalled: s.Firewalled, FirewallUnsure: s.FirewallUnsure,
-			RelayedFor: s.RelayedFor, RelayUnreached: s.RelayUnreached, RelayPort: s.RelayPort,
+			SyncBroken: s.SyncBroken, Outdated: s.Outdated, OlderBuild: s.OlderBuild, Firewalled: s.Firewalled,
+			FirewallUnsure: s.FirewallUnsure, RelayedFor: s.RelayedFor, RelayUnreached: s.RelayUnreached,
+			RelayPort: s.RelayPort,
 		},
 		SyncInTunnel: s.SyncInTunnel, Rendezvous: s.Rendezvous,
 		InNetwork: s.InNetwork, StartError: s.StartError, Joining: s.Joining,
@@ -397,8 +422,10 @@ type PeerReach struct {
 	Since int64 `cbor:"6,keyasint,omitempty"`
 	Heard int64 `cbor:"7,keyasint,omitempty"`
 
-	// Outdated says the peer is one of [Tunnels.Outdated].
-	Outdated bool `cbor:"9,keyasint,omitempty"`
+	// Outdated says the peer is one of [Tunnels.Outdated], OlderBuild one
+	// of [Tunnels.OlderBuild].
+	Outdated   bool `cbor:"9,keyasint,omitempty"`
+	OlderBuild bool `cbor:"10,keyasint,omitempty"`
 }
 
 // A Device is a member as the log lists it.

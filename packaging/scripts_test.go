@@ -67,12 +67,17 @@ func (sb *sandbox) run(script string, args ...string) {
 	if err != nil {
 		sb.t.Fatal(err)
 	}
+	pkla, err := filepath.Abs(filepath.Join("polkit", "juist.pkla"))
+	if err != nil {
+		sb.t.Fatal(err)
+	}
 	s := strings.NewReplacer(
 		"/usr/lib/juist/firewall.sh", filepath.Join(sb.root, "bin", "firewall.sh"),
 		"/usr/lib/juist/exit-node.sh", filepath.Join(sb.root, "bin", "exit-node.sh"),
 		"/usr/lib/juist/ingress.sh", filepath.Join(sb.root, "bin", "ingress.sh"),
 		"/usr/lib/juist/serve.sh", filepath.Join(sb.root, "bin", "serve.sh"),
 		"/usr/lib/juist/relay.sh", filepath.Join(sb.root, "bin", "relay.sh"),
+		"/usr/lib/juist/juist.pkla", pkla,
 		"/var/lib/", sb.root+"/var/lib/",
 		"/run/systemd/system", filepath.Join(sb.root, "run/systemd/system"),
 	).Replace(string(b))
@@ -528,6 +533,85 @@ console.log(JSON.stringify(out));
 		if got[i] != c.want {
 			t.Errorf("%s asking %s on %v: %s, want %s", c.User, c.Action, c.Details, got[i], c.want)
 		}
+	}
+}
+
+// The .pkla allows what the rule does, for a polkit that reads no rules.
+func TestThePklaAllowsWhatTheRuleDoes(t *testing.T) {
+	actions := regexp.MustCompile(`org\.freedesktop\.[a-z0-9]+\.[a-z-]+`)
+	rule, err := os.ReadFile(filepath.Join("polkit", "juist.rules"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkla, err := os.ReadFile(filepath.Join("polkit", "juist.pkla"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action string
+	for l := range strings.Lines(string(pkla)) {
+		if a, ok := strings.CutPrefix(strings.TrimSpace(l), "Action="); ok {
+			action = a
+		}
+	}
+	want, got := actions.FindAllString(string(rule), -1), strings.Split(action, ";")
+	slices.Sort(want)
+	slices.Sort(got)
+	if len(want) != 5 || !slices.Equal(got, want) {
+		t.Errorf("the .pkla allows %v, the rule %v", got, want)
+	}
+	if !strings.Contains(string(pkla), "\nIdentity=unix-user:juist\n") ||
+		!strings.Contains(string(pkla), "\nResultAny=yes\n") {
+		t.Errorf("the .pkla is not juistd's, or not for a service:\n%s", pkla)
+	}
+}
+
+// The .pkla stands in for the rule where polkit is older than 0.106, and is
+// nowhere else: a later polkit with polkitd-pkla would read it ahead of the
+// rule's check of the device. The trigger brings it as polkit comes or goes.
+func TestThePklaIsForAnOldPolkitAlone(t *testing.T) {
+	if _, err := exec.LookPath("dpkg"); err != nil {
+		t.Skip("no dpkg to compare versions with")
+	}
+	sb := newSandbox(t)
+	stub := "#!/bin/sh\nfor last; do :; done; grep \"^$last \" " + filepath.Join(sb.root, "dpkg") +
+		" | cut -d' ' -f2- | grep . || exit 1\n"
+	if err := os.WriteFile(filepath.Join(sb.root, "bin", "dpkg-query"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pkla := filepath.Join(sb.root, "var/lib/polkit-1/localauthority/10-vendor.d/60-juist.pkla")
+	triggered := []string{"triggered", "/usr/share/polkit-1/actions"}
+	for _, c := range []struct {
+		dpkg string
+		args []string
+		want bool
+	}{
+		{"polkitd installed 0.105-33ubuntu0.2", []string{"configure"}, true}, // Ubuntu 22.04
+		{"polkitd installed 122-3", triggered, false},                        // Debian 12
+		{"policykit-1 installed 0.105-26ubuntu1", triggered, true},           // Ubuntu 20.04
+		{"", []string{"configure", "0.9"}, false},
+		{"polkitd unpacked 0.105-33", triggered, true},
+		{"polkitd config-files 0.105-33", triggered, false},
+		{"polkitd installed 124-2ubuntu1\npolicykit-1 installed 124-2ubuntu1", triggered, false}, // Ubuntu 24.04
+	} {
+		if err := os.WriteFile(filepath.Join(sb.root, "dpkg"), []byte(c.dpkg+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sb.run("postinst", c.args...)
+		b, err := os.ReadFile(pkla)
+		if got := err == nil; got != c.want {
+			t.Errorf("%q, postinst %v: .pkla there %v, want %v", c.dpkg, c.args, got, c.want)
+		}
+		if err == nil && !strings.Contains(string(b), "Identity=unix-user:juist") {
+			t.Errorf("the .pkla installed reads:\n%s", b)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sb.root, "dpkg"), []byte("polkitd installed 0.105-33\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sb.run("postinst", "configure", "0.9")
+	sb.run("postrm", "remove")
+	if _, err := os.Stat(pkla); err == nil {
+		t.Error("a removal kept the .pkla")
 	}
 }
 

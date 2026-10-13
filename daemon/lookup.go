@@ -2,10 +2,17 @@ package daemon
 
 import (
 	"cmp"
+	"context"
+	"errors"
+	"net/http"
 	"slices"
 	"time"
 
+	"github.com/nning/juist/conn"
 	"github.com/nning/juist/discovery/dht"
+	"github.com/nning/juist/internal/underlay"
+	"github.com/nning/juist/relay"
+	"github.com/nning/juist/relay/forward"
 	"github.com/nning/juist/types"
 )
 
@@ -177,3 +184,87 @@ const (
 	firstLookupGap = 30 * time.Second
 	maxLookupGap   = time.Hour
 )
+
+// seeksInDHT reports whether this device asks the public DHT after members:
+// where it reaches none, is stale, or holds the lowest identity among those
+// it reaches. What one device of a group finds, gossip hands the others, so
+// storage nodes link the members sought to one address rather than to each.
+func (d *Daemon) seeksInDHT() bool {
+	if d.Status().Stale {
+		return true
+	}
+	r := d.reachable.Load()
+	if r == nil {
+		return true
+	}
+	for id, live := range *r {
+		if live && id.Compare(d.self) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// askTimeout bounds one relay's answer, at each of its addresses.
+const askTimeout = 5 * time.Second
+
+// askRelays asks the member relays, the home relay's first, for id's
+// announcement under the newest epoch, and reports whether one held one
+// newer than this device's.
+func (d *Daemon) askRelays(ctx context.Context, id types.Identity) bool {
+	epoch, secret, ok := d.keyring.Latest()
+	if !ok {
+		return false
+	}
+	key := dht.RendezvousKey(secret.TopicSeed(epoch, dht.Window(d.now()), id))
+	held, _ := d.endpoints.Get(id)
+	for _, r := range d.askable() {
+		raw, err := d.askRelay(ctx, r, key)
+		if err != nil {
+			continue
+		}
+		e, err := dht.OpenAnnouncement(d.keyring, epoch, raw)
+		if err != nil || e.Identity != id || e.Seq <= held.Seq {
+			continue
+		}
+		d.discovered(e, "at a member relay")
+		return true
+	}
+	return false
+}
+
+// askable are the relays worth asking: not this device's own, the home
+// relay's first, a few.
+func (d *Daemon) askable() []conn.Relay {
+	home := d.manager.HomeRelay()
+	d.mu.Lock()
+	own := relayRegion(d.status.Network, d.self)
+	relays := slices.DeleteFunc(slices.Clone(d.relays), func(r conn.Relay) bool { return r.Region == own })
+	d.mu.Unlock()
+	slices.SortStableFunc(relays, func(a, b conn.Relay) int { return cmp.Compare(boolInt(a.Region != home), boolInt(b.Region != home)) })
+	return relays[:min(len(relays), maxRendezvousRelays)]
+}
+
+// askRelay asks one relay for the item at key: at its addresses, by the
+// certificate its announcement pins, then at its name on 443.
+func (d *Daemon) askRelay(ctx context.Context, r conn.Relay, key [32]byte) ([]byte, error) {
+	err := errors.New("daemon: the relay has no address to ask")
+	if len(r.Addrs) > 0 {
+		hc := &http.Client{Timeout: askTimeout, CheckRedirect: noRedirect, Transport: &http.Transport{
+			DialContext:         underlay.Dialer(askTimeout).DialContext,
+			TLSClientConfig:     forward.PinnedConfig(r.HostName, r.CertHash),
+			TLSHandshakeTimeout: askTimeout,
+			DisableKeepAlives:   true,
+		}}
+		for _, ap := range r.Addrs {
+			var v []byte
+			if v, err = relay.GetAnnouncement(ctx, hc, ap.String(), key); err == nil || errors.Is(err, relay.ErrNotHeld) {
+				return v, err
+			}
+		}
+	}
+	if r.Name != "" {
+		return relay.GetAnnouncement(ctx, d.httpsClient(), r.Name, key)
+	}
+	return nil, err
+}

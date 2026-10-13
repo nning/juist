@@ -72,7 +72,7 @@ func (f *reconcileFixture) learnExit(t *testing.T, dev *device, port uint16, ser
 		t.Fatal(err)
 	}
 	e.Exit, e.Seq = serving, e.Seq+1
-	if err := e.Sign(dev.identity); err != nil {
+	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -90,7 +90,7 @@ func (f *reconcileFixture) learnOld(t *testing.T, dev *device, port uint16, serv
 		t.Fatal(err)
 	}
 	e.Exit, e.Subnets, e.Epoch, e.PairStore, e.Seq = serving, serving, 0, 0, e.Seq+1
-	if err := e.Sign(dev.identity); err != nil {
+	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -171,7 +171,7 @@ func TestAChosenExitNodeFailsClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := rec.Sign(f.nw.admin); err != nil {
+			if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 				t.Fatal(err)
 			}
 			if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -253,7 +253,7 @@ func TestAnExitNodeServesWhenGrantedAndAgreed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -382,7 +382,7 @@ func TestTheChoiceFollowsARotatedExitNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []types.PrivateIdentity{exit.identity, fresh, f.nw.admin} {
-		if err := rec.Sign(k); err != nil {
+		if err := rec.SignUnder(k, f.auth.State().Schema()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -428,7 +428,7 @@ func TestARefusedRelaySetEndsServing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	_ = f.d.Inform([]types.AUM{rec})

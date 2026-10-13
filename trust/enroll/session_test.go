@@ -440,7 +440,7 @@ func TestLinksNameTheAdminAndAdmissionsBindTheGuest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := newTestInvite(t).Link().WithAdmin(admin.Public())
+	l := newTestInvite(t).Link().WithAdmin(admin.Public(), new(admin.SigningKey()))
 	again, err := ParseLink(l.String())
 	if err != nil || again.Admin == nil || *again.Admin != admin.Public() || again.String() != l.String() {
 		t.Fatalf("round trip: %v, %v", again, err)
@@ -457,19 +457,41 @@ func TestLinksNameTheAdminAndAdmissionsBindTheGuest(t *testing.T) {
 	var network, head types.Hash
 	network[0], head[0] = 1, 2
 	a, err := SignAdmission(admin, network, head, guest.Public())
-	if err != nil || a.Verify() != nil {
+	if err != nil || a.Verify(*again.AdminSigning, nil) != nil {
 		t.Fatalf("an honest admission: %v", err)
+	}
+	if key := admin.SigningKey(); a.Verify(*again.AdminSigning, &key) != nil {
+		t.Fatal("an honest admission refused against the key the log names")
+	}
+	other, _ := types.GenerateIdentity()
+	forged, err := SignAdmission(other, network, head, guest.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.Admin, forged.Sig = admin.Public(), a.Sig
+	if forged.Verify(*again.AdminSigning, nil) == nil {
+		t.Error("an admission by another signing key than the link names verified")
 	}
 	for _, tamper := range []func(*Admission){
 		func(x *Admission) { x.Head[0] ^= 1 },
 		func(x *Admission) { x.Network[0] ^= 1 },
 		func(x *Admission) { x.Guest[0] ^= 1 },
+		func(x *Admission) { x.MLDSA[0] ^= 1 },
+		func(x *Admission) { x.Sig[0] ^= 1 },
 	} {
 		b := *a
 		tamper(&b)
-		if b.Verify() == nil {
+		if b.Verify(*again.AdminSigning, nil) == nil {
 			t.Error("a tampered admission verified")
 		}
+	}
+	if key := other.SigningKey(); a.Verify(*again.AdminSigning, &key) == nil {
+		t.Error("an admission verified against another key than the log names")
+	}
+	// A link from before signing keys names the admin alone.
+	old := strings.Replace(l.String(), "."+linkEncoding.EncodeToString(again.AdminSigning[:]), "", 1)
+	if _, err := ParseLink(old); err == nil || !strings.Contains(err.Error(), "older juist") {
+		t.Errorf("a link naming its admin without a signing key: %v", err)
 	}
 }
 
@@ -532,5 +554,121 @@ func TestLinksNameRelaysByName(t *testing.T) {
 	}
 	if got := l.WithRelays(nil, []string{"a.org", "b.org", "c.org", "d.org", "e.org"}).Named; len(got) != MaxLinkNamed {
 		t.Errorf("a link names %d relays by name", len(got))
+	}
+}
+
+// recorder keeps a copy of every frame written through it.
+type recorder struct {
+	io.Writer
+	frames *[][]byte
+}
+
+func (r recorder) Write(b []byte) (int, error) {
+	*r.frames = append(*r.frames, bytes.Clone(b[4:]))
+	return r.Writer.Write(b)
+}
+
+// A session recorded, with SPAKE2's Ke handed to the attacker as a quantum
+// computer would, stays closed past the ML-KEM exchange: what Ke opens is
+// the encapsulation key and its ciphertext alone. Exit criterion (3).
+func TestARecordedEnrollmentStaysClosedWithItsSPAKE2Key(t *testing.T) {
+	gk, hk := runSpake(t, "code", "code")
+	h, g, closeAll := pipePair()
+	defer closeAll()
+	var toHost, toGuest [][]byte
+	g.Writer = recorder{g.Writer, &toHost}
+	h.Writer = recorder{h.Writer, &toGuest}
+	secret := []byte("what the log and the welcome carry")
+	got := make(chan Message, 1)
+	go func() {
+		c, err := newChannel(h, hk, false)
+		if err == nil {
+			err = c.encapsulate()
+		}
+		if err != nil {
+			t.Error(err)
+			close(got)
+			return
+		}
+		m, err := c.Receive()
+		if err != nil {
+			t.Error(err)
+		}
+		got <- m
+	}()
+	c, err := newChannel(g, gk, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.decapsulate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Send(&Message{Kind: KindJoined, Announcement: secret}); err != nil {
+		t.Fatal(err)
+	}
+	if m := <-got; !bytes.Equal(m.Announcement, secret) {
+		t.Fatalf("the host received %+v", m)
+	}
+	if len(toHost) != 2 || len(toGuest) != 1 {
+		t.Fatalf("recorded %d frames to the host and %d to the guest", len(toHost), len(toGuest))
+	}
+
+	// The attacker's channel, from Ke and the transcript alone.
+	attacker, err := newChannel(pipe{}, gk, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ek, err := attacker.recv.Open(nil, counterNonce(0), toHost[0], nil)
+	if err != nil {
+		t.Fatalf("Ke does not open the encapsulation key, so this test proves nothing: %v", err)
+	}
+	if _, err := attacker.send.Open(nil, counterNonce(0), toGuest[0], nil); err != nil {
+		t.Fatalf("Ke does not open the ciphertext, so this test proves nothing: %v", err)
+	}
+	for n := range uint64(3) {
+		if _, err := attacker.recv.Open(nil, counterNonce(n), toHost[1], nil); err == nil {
+			t.Fatal("Ke opened a message sent after the ML-KEM exchange")
+		}
+	}
+	// Nor does anything short of the ML-KEM secret: the keys a guessed one
+	// gives open nothing.
+	guess := &Channel{guest: false, ke: gk.ke, transcript: gk.transcript}
+	if err := guess.agreed(make([]byte, 32), ek, toGuest[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := guess.recv.Open(nil, counterNonce(0), toHost[1], nil); err == nil {
+		t.Fatal("a guessed ML-KEM secret opened the session")
+	}
+}
+
+// A join request proves its ML-DSA key as it does its identity: one whose
+// ML-DSA proof is another session's, or another key's, does not verify.
+func TestAJoinRequestProvesItsSigningKey(t *testing.T) {
+	inv := newTestInvite(t)
+	h, g := session(t, inv, inv.Code())
+	if h.err != nil || g.err != nil {
+		t.Fatalf("session: %v, %v", h.err, g.err)
+	}
+	id, _ := types.GenerateIdentity()
+	req, err := NewJoinRequest(g.ch, "phone", id, types.NodeKeys{}, Nonce{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := req.Verify(h.ch); err != nil {
+		t.Fatalf("an honest request: %v", err)
+	}
+	other, _ := types.GenerateIdentity()
+	swapped := *req
+	swapped.Signing = other.SigningKey()
+	if swapped.Verify(h.ch) == nil {
+		t.Fatal("a request naming another signing key verified")
+	}
+	damaged := *req
+	damaged.SigningProof[0] ^= 1
+	if damaged.Verify(h.ch) == nil {
+		t.Fatal("a request with a damaged ML-DSA proof verified")
+	}
+	if req.NodeRecord("phone").Signing == nil || *req.NodeRecord("phone").Signing != id.SigningKey() {
+		t.Fatal("the membership asked for names no signing key")
 	}
 }

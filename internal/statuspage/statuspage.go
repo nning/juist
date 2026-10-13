@@ -143,7 +143,7 @@ func (s *Server) Handler(name string, public ipc.Visibility) http.Handler {
 // A view is the page as rendered.
 type view struct {
 	Assets, Name, Title, From, Updated string
-	State, StateClass, Summary         string
+	State, StateClass                  string
 	Unavailable                        string
 	Member                             bool
 	Public                             string
@@ -207,24 +207,12 @@ func build(p *ipc.StatusPage, err error, name string, public ipc.Visibility, mem
 	if !v.ShowNetwork {
 		// Which devices there are is the network's to show.
 		v.From = ""
-		up := 0
-		for i, s := range v.Services {
+		for i := range v.Services {
 			v.Services[i].Device = ""
-			if s.Class == "direct" {
-				up++
-			}
 		}
-		v.Summary = fmt.Sprintf("%d of %s up", up, plural(len(v.Services), "service"))
 		return v
 	}
 	v.Devices = devices(st, now)
-	live := 0
-	for _, d := range v.Devices {
-		if d.Self || d.Class == "direct" || d.Class == "relay" {
-			live++
-		}
-	}
-	v.Summary = fmt.Sprintf("%s, %d reached", plural(len(v.Devices), "device"), live)
 	v.Alarms = alarms(st)
 	v.Facts = facts(st, p, now)
 	if v.ShowChanges {
@@ -405,12 +393,10 @@ func alarms(st *ipc.Status) []string {
 	if len(st.Outdated) > 0 {
 		add("%s an older juist, unreachable until updated", runs(st.Outdated))
 	}
-	if len(st.NoKey) > 0 {
-		add("%s fell too far behind to reach this device", strings.Join(st.NoKey, ", "))
+	if behind := st.Behind(); len(behind) > 0 {
+		add("%s fell too far behind to reach this device", strings.Join(behind, ", "))
 	}
-	if down := slices.DeleteFunc(slices.Clone(st.TunnelsDown), func(n string) bool {
-		return slices.Contains(st.Seeking, n) || slices.Contains(st.Absent, n)
-	}); len(down) > 0 {
+	if down := st.Blocked(); len(down) > 0 {
 		add("no tunnel traffic from %s", strings.Join(down, ", "))
 	}
 	if st.Conflicted > 0 {
@@ -454,13 +440,6 @@ func facts(st *ipc.Status, p *ipc.StatusPage, now time.Time) []fact {
 		addrs = append(addrs, a.Addr().String())
 	}
 	add("Seen from", "%s  %s", cmp.Or(st.SelfName, st.Self.ShortString()), strings.Join(addrs, "  "))
-	if st.TunnelsChecked && st.Peers > 0 {
-		text := fmt.Sprintf("%d of %d live", st.TunnelsLive, st.TunnelsLive+len(st.TunnelsDown))
-		if st.ReachChecked > 0 {
-			text += ", checked " + ago(now.Sub(time.Unix(st.ReachChecked, 0)))
-		}
-		add("Tunnels", "%s", text)
-	}
 	if st.RelayCapable > 0 || st.Relaying {
 		text := fmt.Sprintf("%d available", st.RelayCapable)
 		if st.HomeRelay != "" && !st.Relaying {

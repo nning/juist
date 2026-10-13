@@ -119,6 +119,9 @@ Prozessorarchitektur, mit `armhf` und `i386` funktioniert es genauso.
 - Eine polkit-Regel, die juistd erlaubt, das DNS des Netzes über
   systemd-resolved einzurichten. Die Regel braucht polkit, das das Paket
   empfiehlt; Minimalinstallationen wie Fedora Cloud haben es sonst nicht.
+  polkit vor 0.106, etwa unter Ubuntu 22.04, liest keine Regeln: Dort legt
+  das .deb dieselbe Erlaubnis in
+  `/var/lib/polkit-1/localauthority/10-vendor.d/60-juist.pkla` ab.
 - Shell-Vervollständigung für bash, zsh und fish sowie die Man-Pages
   `juist(1)` und `juistd(8)`.
 

@@ -209,7 +209,7 @@ func TestAnIngressServesMembersShares(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.Share = &gossip.Share{Port: 443, Until: f.d.now().Add(until).Unix()}
-		if err := e.Sign(f.nw.devices[1].identity); err != nil {
+		if err := e.SignPQ(f.nw.devices[1].identity); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.d.Learn(e); err != nil {
@@ -335,7 +335,7 @@ func TestAShareIsAnnouncedWhileItCanBeServed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -396,7 +396,7 @@ func TestAnIngressTakesNoShareEndingFarAhead(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Share = &gossip.Share{Port: 443, Until: f.d.now().Add(time.Hour).Unix()}
-	if err := e.Sign(f.nw.devices[1].identity); err != nil {
+	if err := e.SignPQ(f.nw.devices[1].identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -465,7 +465,7 @@ func TestARenamedShareIsSaidAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(nw.admin); err != nil {
+	if err := rec.SignUnder(nw.admin, m.authority.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Inform([]types.AUM{rec}); err != nil {
@@ -513,7 +513,7 @@ func TestAShareEndsWithItsRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(nw.admin); err != nil {
+	if err := rec.SignUnder(nw.admin, m.authority.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Inform([]types.AUM{rec}); err != nil {

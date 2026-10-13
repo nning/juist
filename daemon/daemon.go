@@ -416,7 +416,17 @@ type Daemon struct {
 	pairsKept  []byte
 	psks       map[types.Identity]pskGiven
 	pq         bool                    // the network is at types.SchemaPQ or above, under mu
+	padded     bool                    // the network is at types.SchemaPadded or above, under mu
 	pairWanted map[types.Identity]bool // peers an exchange waits on, under mu
+
+	// claim is this node's signing key with its endorsement, which it
+	// announces while claiming, at types.SchemaSigning; past the cut-over it
+	// signs by ML-DSA, mldsa, and signingKeys are the members' keys the
+	// announcement cache holds them to. Under mu.
+	claim       *gossip.SigningClaim
+	claiming    bool
+	mldsa       bool
+	signingKeys map[types.Identity]types.SigningKey
 
 	// kept are the epoch secrets read from the keyring file at start, before
 	// anything could overwrite it: those whose wraps this node can no longer
@@ -509,7 +519,8 @@ type Daemon struct {
 	asidePlan   map[types.Identity]*lookupPlan // members a stale node keeps no tunnel to
 	probeNow    map[types.Identity]bool        // members to probe past their backoff
 	syncRetried map[types.Identity]time.Time   // when a failing sync was last retried
-	behind      map[types.Identity]time.Time   // since when live members have announced no epoch
+	behind      map[types.Identity]time.Time   // since when live members have announced no epoch, or running ones without a tunnel an older build
+	olderBuild  map[types.Identity]time.Time   // since when live members have announced an older schema
 
 	// moving follows a renumbering while one is under way.
 	moving *renumbering
@@ -620,6 +631,7 @@ type Daemon struct {
 	// has had one, and relayCertDue when to order one again, relayCertGap
 	// after the last.
 	namedRelays      []conn.Relay
+	relays           []conn.Relay // every relay installed, asked for announcements before the DHT
 	https443         map[netip.Addr]net.Listener
 	httpsErr         string
 	httpsHanded      bool
@@ -740,6 +752,7 @@ func New(opts Options) (*Daemon, error) {
 		leaseEvery:       cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
 	}
 	d.noV4.Store(opts.NoV4)
+	d.endpoints.SetClock(d.now)
 	d.pub.consent, d.pub.to, d.pub.members = opts.ServePublished, maps.Clone(opts.ServeTo), maps.Clone(opts.ServeMembers)
 	if d.listenHTTPS == nil {
 		d.listenHTTPS = defaultListenHTTPS
@@ -757,6 +770,13 @@ func New(opts Options) (*Daemon, error) {
 	// Before anything announces this device: an announcement naming no
 	// epoch has its peers drop the keys they give it.
 	d.pq = state.Schema() >= types.SchemaPQ
+	d.padded = state.Schema() >= types.SchemaPadded
+	claim, err := gossip.ClaimSigningKey(d.identity)
+	if err != nil {
+		return nil, err
+	}
+	d.claim = claim
+	d.claiming, d.mldsa = state.Schema() == types.SchemaSigning, state.PQ()
 	if d.logf == nil {
 		d.logf = func(string, ...any) {}
 	}
@@ -899,6 +919,7 @@ func New(opts Options) (*Daemon, error) {
 		}
 		mopts.Keyring = d.keyring
 		mopts.Announce = d.announcement
+		mopts.Padded = d.paddedItems
 		mopts.OnPeer = d.onDiscovered
 		mopts.NeedsPeers = d.needsPeers
 		mopts.Logf = d.logf
@@ -916,6 +937,7 @@ func New(opts Options) (*Daemon, error) {
 			Self:      self,
 			Keyring:   d.keyring,
 			Announce:  d.publishedAnnouncement,
+			Padded:    d.paddedItems,
 			Wanted:    d.wanted,
 			OnPeer:    d.onFoundInDHT,
 			Bootstrap: opts.DHTBootstrap,
@@ -924,6 +946,8 @@ func New(opts Options) (*Daemon, error) {
 		if opts.HTTPSOnly {
 			// The relays on 443 stand in for the DHT, which is UDP.
 			o.Items = &relayItems{d: d, hc: d.httpsClient()}
+		} else {
+			o.Ask, o.Seeks = d.askRelays, d.seeksInDHT
 		}
 		if d.dht, err = dht.New(o); err != nil {
 			return nil, err

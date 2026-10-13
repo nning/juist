@@ -124,7 +124,8 @@ func TestIncrementalDeliveryNeverRegresses(t *testing.T) {
 // generator builds random but valid record sets, including forks, by keeping
 // every state it has produced and sometimes building against an old one. It
 // draws every kind but genesis and schema upgrades: the network starts at the
-// current schema.
+// current schema, or for an odd seed the one before the cut-over, which it
+// draws too.
 type generator struct {
 	t        *testing.T
 	rng      *rand.Rand
@@ -139,7 +140,11 @@ type generator struct {
 
 func newGenerator(t *testing.T, seed uint64) *generator {
 	t.Helper()
-	genesis, admin, err := fixedGenesis()
+	schema := types.CurrentSchema
+	if seed%2 == 1 {
+		schema = types.SchemaSigning
+	}
+	genesis, admin, err := fixedGenesisAt(schema)
 	if err != nil {
 		t.Fatalf("building genesis: %v", err)
 	}
@@ -212,7 +217,7 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	var err error
 	var devices []types.PrivateIdentity
 
-	op := g.rng.IntN(23)
+	op := g.rng.IntN(25)
 	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14, 18, 20, 21, 22}, op) {
 		return types.AUM{}, nil, false
 	}
@@ -260,7 +265,8 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 		n := g.next()
 		priv := fixedIdentity(200 + n)
 		g.adminIDs[priv.Public()] = priv
-		k := types.AdminKey{Public: priv.Public(), Votes: 1, Holder: fmt.Sprintf("h%d", n)}
+		devices = []types.PrivateIdentity{priv}
+		k := types.AdminKey{Public: priv.Public(), Signing: new(priv.SigningKey()), Endorsement: priv.Endorsement(), Votes: 1, Holder: fmt.Sprintf("h%d", n)}
 		if g.rng.IntN(2) == 0 && holder.Holder != "" {
 			k.Holder, k.Votes, k.Needed = holder.Holder, holder.Votes, holder.Needed
 		}
@@ -327,6 +333,26 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 			{},
 		}
 		aum, err = b.SetPolicy(policies[g.rng.IntN(len(policies))])
+	case 23: // cut over, sometimes leaving a member out
+		var keys []types.MemberKey
+		for _, m := range members {
+			priv := g.nodeIDs[m.Identity]
+			e, err := priv.Endorse()
+			if err != nil {
+				g.t.Fatal(err)
+			}
+			keys = append(keys, types.MemberKey{Identity: m.Identity, Key: priv.SigningKey(), Endorsement: e})
+		}
+		if len(keys) > 0 && g.rng.IntN(4) == 0 {
+			keys = keys[1:]
+		}
+		aum, err = b.SetSigningKeys(keys, fixedSealer())
+	case 24: // register an admin key's signing key ahead of the cut-over
+		priv, ok := g.adminIDs[holder.Public]
+		if !ok {
+			return types.AUM{}, nil, false
+		}
+		aum, err = b.SetAdminSigning(types.MemberKey{Identity: holder.Public, Key: priv.SigningKey(), Endorsement: *priv.Endorsement()})
 	}
 	if err != nil || !g.sign(&aum, base, devices) {
 		return types.AUM{}, nil, false
@@ -343,7 +369,7 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 func (g *generator) sign(aum *types.AUM, base *State, devices []types.PrivateIdentity) bool {
 	for _, k := range base.Admins() {
 		if priv, ok := g.adminIDs[k.Public]; ok {
-			if err := aum.Sign(priv); err != nil {
+			if err := aum.SignUnder(priv, base.Schema()); err != nil {
 				g.t.Fatalf("signing: %v", err)
 			}
 		}

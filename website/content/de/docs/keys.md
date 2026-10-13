@@ -132,8 +132,9 @@ it casts 1 vote in "home"
 ```
 
 Die Zeile läuft immer durch eine Pipe, nie über die Kommandozeile. Sie trägt
-eine Prüfsumme, deshalb wird eine abgeschnittene Zeile abgelehnt. Ein Import
-ersetzt nie einen vorhandenen Schlüssel. Wurde der Schlüssel seit der
+eine Prüfsumme, deshalb wird eine abgeschnittene Zeile abgelehnt. Sie deckt
+auch den quantensicheren Signaturschlüssel ab, der sich aus ihr ableitet. Ein
+Import ersetzt nie einen vorhandenen Schlüssel. Wurde der Schlüssel seit der
 Sicherung aus dem Netz entfernt, warnt der Import mit
 `"home" gives it no vote`.
 

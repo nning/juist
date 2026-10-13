@@ -204,13 +204,15 @@ message means and what to do.
 - **Key custody:** admin keys live in the operator's keystore
   (`~/.config/juist`). juistd runs as its own user with `CAP_NET_ADMIN` only,
   and `CAP_NET_BIND_SERVICE` on a relay on 443, and holds no admin key.
-- **Invites:** SPAKE2 (RFC 9382). A code admits exactly one guess, from the LAN
-  only, and a link is a 128-bit secret.
+- **Invites:** SPAKE2 (RFC 9382), then ML-KEM-768. A code admits exactly one
+  guess, from the LAN only, and a link is a 128-bit secret.
 - **Revocation** is eventually consistent; the freshness TTL (48 h) bounds how
   long a partitioned device can keep a removed peer.
 - **Quantum-safe:** every WireGuard handshake mixes in a preshared key, one
   each two devices exchange by ML-KEM-768; group secrets are hybrid
-  X25519 + ML-KEM-768. Signatures are Ed25519.
+  X25519 + ML-KEM-768; every change and message is signed with ML-DSA-44,
+  from schema 18 on; joining agrees a key by ML-KEM-768; TLS between juist's
+  own ends is 1.3 with X25519MLKEM768 alone.
 
 [Security](https://docs.juist.nning.io/en/docs/security/) explains it, and
 [02-threat-model.md](docs/02-threat-model.md) lists every residual weakness.
@@ -236,7 +238,8 @@ What works:
 - an access policy: which device may reach what on which
 - ending a network with a break-glass secret, and a backup of admin keys
 - quantum-safe tunnels: a preshared key in every WireGuard handshake, so that
-  traffic recorded now cannot be decrypted later
+  traffic recorded now cannot be decrypted later; and quantum-safe signatures,
+  so that a quantum computer cannot forge a change to the network
 - connections that stay up while a device's keys, addresses or routes change
 - packages for Debian, Ubuntu, Fedora and FreeBSD
 

@@ -136,6 +136,15 @@ const (
 	// KindSetPolicy replaces the network's access policy; an empty one
 	// withdraws it. Schema 13 and later.
 	KindSetPolicy Kind = 25
+
+	// KindSetSigningKeys gives every member its ML-DSA key and cuts the
+	// network over to [SchemaMLDSA], once every admin key has registered its
+	// own. It bumps the epoch, so no sibling it beats is ahead of it.
+	KindSetSigningKeys Kind = 26
+
+	// KindSetAdminSigning registers an admin key's ML-DSA key, endorsed by
+	// it, which the key must sign too. Schema 17, before the cut-over.
+	KindSetAdminSigning Kind = 27
 )
 
 func (k Kind) String() string {
@@ -192,6 +201,10 @@ func (k Kind) String() string {
 		return "disable"
 	case KindSetPolicy:
 		return "set-policy"
+	case KindSetSigningKeys:
+		return "set-signing-keys"
+	case KindSetAdminSigning:
+		return "set-admin-signing"
 	default:
 		return fmt.Sprintf("kind?<%d>", uint8(k))
 	}
@@ -335,6 +348,45 @@ type AUM struct {
 
 	// Policy is the network's new access policy, for SetPolicy.
 	Policy *Policy `cbor:"24,keyasint,omitempty"`
+
+	// Signing is the members' signing keys, for SetSigningKeys, or the one
+	// admin key's, for SetAdminSigning.
+	Signing *SigningKeys `cbor:"25,keyasint,omitempty"`
+}
+
+// SigningKeys are the members' ML-DSA keys [KindSetSigningKeys] gives them,
+// sorted by identity, one for every member.
+type SigningKeys struct {
+	Members []MemberKey `cbor:"1,keyasint"`
+}
+
+// A MemberKey is a member's ML-DSA key, with the member's endorsement of it.
+type MemberKey struct {
+	Identity    Identity   `cbor:"1,keyasint"`
+	Key         SigningKey `cbor:"2,keyasint"`
+	Endorsement Sig        `cbor:"3,keyasint"`
+}
+
+func (k *SigningKeys) validate() error {
+	if len(k.Members) > MaxNodes {
+		return fmt.Errorf("%d signing keys, over the %d limit", len(k.Members), MaxNodes)
+	}
+	for i := range k.Members {
+		m := &k.Members[i]
+		if err := m.Identity.Validate(); err != nil {
+			return fmt.Errorf("signing key's member: %w", err)
+		}
+		if i > 0 && k.Members[i-1].Identity.Compare(m.Identity) >= 0 {
+			return fmt.Errorf("signing keys are not sorted and unique at %v", m.Identity.ShortString())
+		}
+		if err := m.Key.Validate(); err != nil {
+			return fmt.Errorf("member %v: %w", m.Identity.ShortString(), err)
+		}
+		if m.Endorsement.IsZero() {
+			return fmt.Errorf("member %v's signing key is not endorsed", m.Identity.ShortString())
+		}
+	}
+	return nil
 }
 
 // A HolderPolicy is what [KindSetHolder] states about a holder: the votes
@@ -432,6 +484,7 @@ const (
 	fNodeName
 	fSecret
 	fPolicy
+	fSigning
 )
 
 var fieldNames = []struct {
@@ -459,6 +512,7 @@ var fieldNames = []struct {
 	{fNodeName, "NodeName"},
 	{fSecret, "Secret"},
 	{fPolicy, "Policy"},
+	{fSigning, "Signing"},
 }
 
 func (f fieldSet) String() string {
@@ -509,6 +563,9 @@ var kindFields = map[Kind]fieldSet{
 	KindDisable: fSecret,
 
 	KindSetPolicy: fPolicy,
+
+	KindSetSigningKeys:  fSigning | fEpoch,
+	KindSetAdminSigning: fSigning,
 }
 
 func (a *AUM) presentFields() fieldSet {
@@ -575,6 +632,9 @@ func (a *AUM) presentFields() fieldSet {
 	}
 	if a.Policy != nil {
 		f |= fPolicy
+	}
+	if a.Signing != nil {
+		f |= fSigning
 	}
 	return f
 }
@@ -754,6 +814,14 @@ func (a *AUM) ValidateUnsigned() error {
 			return fmt.Errorf("policy: %w", err)
 		}
 	}
+	if a.Signing != nil {
+		if err := a.Signing.validate(); err != nil {
+			return err
+		}
+		if a.Kind == KindSetAdminSigning && len(a.Signing.Members) != 1 {
+			return fmt.Errorf("%v record names %d keys, not one", a.Kind, len(a.Signing.Members))
+		}
+	}
 	if a.Schema != nil && *a.Schema == 0 {
 		// Zero is the schema every network starts under, so an upgrade to it
 		// raises nothing. Which versions this build can act on is deliberately
@@ -786,8 +854,11 @@ func (a *AUM) validateSignatureShape() error {
 		if s.KeyID.IsZero() {
 			return fmt.Errorf("signature %d has a zero key ID", i)
 		}
-		if s.Sig.IsZero() {
-			return fmt.Errorf("signature %d by %v is zero", i, s.KeyID.ShortString())
+		if err := s.validate(); err != nil {
+			return fmt.Errorf("signature %d by %v: %w", i, s.KeyID.ShortString(), err)
+		}
+		if i > 0 && (a.Signatures[i-1].PQ == nil) != (s.PQ == nil) {
+			return errors.New("record is signed by both Ed25519 and ML-DSA")
 		}
 		// Sorted and duplicate-free: a set with two orderings would be a
 		// record with two encodings, and a repeated key must not be able to
@@ -817,9 +888,15 @@ func (a *AUM) SigHash() Hash {
 	return hashLabeled(labelAUMSig, mustEncode(&unsigned))
 }
 
-// Sign appends a signature by priv, keeping the signature set sorted. Signing
+// Sign is [AUM.SignUnder] for a record whose parent state is below
+// [SchemaMLDSA], or a genesis or checkpoint, whose own state decides.
+func (a *AUM) Sign(priv PrivateIdentity) error { return a.SignUnder(priv, 0) }
+
+// SignUnder appends a signature by priv, sorted, as the parent state's schema
+// says (a genesis's or checkpoint's own): by ML-DSA from [SchemaMLDSA] on,
+// carrying the key where the record introduces it, by Ed25519 below. Signing
 // twice with one key is an error: vote counting must not double-count.
-func (a *AUM) Sign(priv PrivateIdentity) error {
+func (a *AUM) SignUnder(priv PrivateIdentity, schema SchemaVersion) error {
 	if a.Kind == KindDisable {
 		return errors.New("types: a disable record is not signed")
 	}
@@ -830,25 +907,64 @@ func (a *AUM) Sign(priv PrivateIdentity) error {
 	if len(a.Signatures)+1 > MaxSignatures {
 		return fmt.Errorf("types: record already has the maximum %d signatures", MaxSignatures)
 	}
+	if (a.Kind == KindGenesis || a.Kind == KindCheckpoint) && a.State != nil {
+		schema = a.State.Schema
+	}
 	// SigHash covers everything but the signatures, so gathering them in any
 	// order — and on different machines, which is the point of a quorum —
 	// signs the same value.
-	sig, err := priv.Sign(a.SigHash().bytes())
-	if err != nil {
+	msg := a.SigHash().bytes()
+	sig := Signature{KeyID: id}
+	var err error
+	if schema >= SchemaMLDSA {
+		var pq PQSig
+		if pq, err = priv.SignPQ(msg); err != nil {
+			return err
+		}
+		sig.PQ = &pq
+		if a.Introduces(id) {
+			k := priv.SigningKey()
+			sig.Key = &k
+		}
+	} else if sig.Sig, err = priv.Sign(msg); err != nil {
 		return err
 	}
-	a.Signatures = append(a.Signatures, Signature{KeyID: id, Sig: sig})
+	a.Signatures = append(a.Signatures, sig)
 	slices.SortFunc(a.Signatures, func(x, y Signature) int { return x.KeyID.Compare(y.KeyID) })
 	return nil
 }
 
-// VerifySignature reports whether the record carries a valid signature by id.
-func (a *AUM) VerifySignature(id Identity) bool {
+// Introduces reports whether the record, past the cut-over to [SchemaMLDSA],
+// is where id's signing key enters the log in id's own signature: an
+// identity rotated to.
+func (a *AUM) Introduces(id Identity) bool {
+	return a.Kind == KindRotateIdentity && a.NewIdentity != nil && *a.NewIdentity == id
+}
+
+// Signature returns the signature by id, if the record carries one.
+func (a *AUM) Signature(id Identity) (*Signature, bool) {
 	i := slices.IndexFunc(a.Signatures, func(s Signature) bool { return s.KeyID == id })
 	if i < 0 {
+		return nil, false
+	}
+	return &a.Signatures[i], true
+}
+
+// VerifySignature reports whether the record carries a valid signature by
+// id: by ML-DSA against key where it is set, as past the cut-over, and by
+// Ed25519 where not. Whether id may sign it is the log's to say.
+func (a *AUM) VerifySignature(id Identity, key *SigningKey) bool {
+	s, ok := a.Signature(id)
+	if !ok {
 		return false
 	}
-	return id.Verify(a.SigHash().bytes(), a.Signatures[i].Sig)
+	if s.PQ == nil {
+		return key == nil && id.Verify(a.SigHash().bytes(), s.Sig)
+	}
+	if s.Key != nil && a.Introduces(id) {
+		key = s.Key
+	}
+	return key != nil && key.Verify(a.SigHash().bytes(), s.PQ)
 }
 
 // Clone returns a deep copy, so that a caller holding a record cannot observe
@@ -951,7 +1067,15 @@ func (a *AUM) Clone() *AUM {
 	if a.Policy != nil {
 		out.Policy = a.Policy.Clone()
 	}
-	out.Signatures = slices.Clone(a.Signatures)
+	if a.Signing != nil {
+		out.Signing = &SigningKeys{Members: slices.Clone(a.Signing.Members)}
+	}
+	if a.Signatures != nil {
+		out.Signatures = make([]Signature, len(a.Signatures))
+		for i := range a.Signatures {
+			out.Signatures[i] = *a.Signatures[i].clone()
+		}
+	}
 	return &out
 }
 

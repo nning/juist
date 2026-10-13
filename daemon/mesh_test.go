@@ -445,7 +445,7 @@ func TestNewMemberJoinsAConvergedMesh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.Sign(m.nw.admin); err != nil {
+	if err := add.SignUnder(m.nw.admin, admin.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := admin.d.Inform([]types.AUM{add}); err != nil {
@@ -565,7 +565,7 @@ func TestAPeerThatRotatedItsIdentityStaysAPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Seq = uint64(time.Now().Unix())
-	if err := e.Sign(fresh); err != nil {
+	if err := e.SignPQ(fresh); err != nil {
 		t.Fatal(err)
 	}
 	peer.d.Endpoints().Add(e)
@@ -575,7 +575,7 @@ func TestAPeerThatRotatedItsIdentityStaysAPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []types.PrivateIdentity{rotating.dev.identity, fresh, m.nw.admin} {
-		if err := rec.Sign(k); err != nil {
+		if err := rec.SignUnder(k, peer.auth.State().Schema()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -647,7 +647,7 @@ func TestAFarewellIsOnlyForTheRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bump.Sign(m.nw.admin); err != nil {
+	if err := bump.SignUnder(m.nw.admin, admin.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if told := admin.d.farewell(t.Context(), []types.AUM{bump}); len(told) != 0 {

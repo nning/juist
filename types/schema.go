@@ -78,7 +78,16 @@ type SchemaVersion uint16
 //
 // Schema 15 publishes names for members alone ([PublishedName.Members]),
 // which the access policy names as destinations ([PolicyRefs.Names]).
-const CurrentSchema SchemaVersion = 15
+//
+// Schema 16 adds no record field: announcements in the DHT, at a relay and
+// on the LAN are sealed without their epoch and padded, and announcements
+// name the newest schema their build implements, which older builds refuse.
+//
+// Schema 17 caps a member's name bytes ([MaxNameBytes]); members announce
+// ML-DSA keys and admin keys register theirs ([KindSetAdminSigning]).
+//
+// Schema 18 signs by ML-DSA alone. Only [KindSetSigningKeys] reaches it.
+const CurrentSchema SchemaVersion = 18
 
 // SchemaVouchers is the first schema with a vouching threshold.
 const SchemaVouchers SchemaVersion = 1
@@ -128,5 +137,16 @@ const SchemaPQ SchemaVersion = 14
 
 // SchemaMembers is the first schema with names published for members alone.
 const SchemaMembers SchemaVersion = 15
+
+// SchemaPadded is the first schema in which discovery items are padded and
+// show no epoch, and announcements name their build's schema.
+const SchemaPadded SchemaVersion = 16
+
+// SchemaSigning is the first schema in which members announce ML-DSA keys and
+// a member's names are capped by bytes.
+const SchemaSigning SchemaVersion = 17
+
+// SchemaMLDSA is the first schema signed by ML-DSA alone.
+const SchemaMLDSA SchemaVersion = 18
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

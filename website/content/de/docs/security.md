@@ -41,7 +41,10 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
 - Den öffentlichen Helfern. Der öffentliche BitTorrent-DHT und die
   STUN-Server helfen Geräten, einander zu finden. Sie können eine Verbindung
   verzögern, aber weder ändern, wer zum Netz gehört, noch Verkehr mitlesen.
-  Sie sehen allerdings die Adressen der Geräte, die sie nutzen.
+  Sie sehen allerdings die Adressen der Geräte, die sie nutzen, und der DHT
+  sieht, welche davon einander suchen. Geräte fragen zuerst die Relays des
+  Netzes, und von den Geräten, die einander erreichen, fragt nur eines den
+  DHT.
 - Dem Relay. Ein [Relay]({{< relref "docs/relays" >}}) ist eines deiner
   eigenen Mitglieder. Nur Mitglieder können es nutzen, und es sieht nur
   verschlüsselten WireGuard-Verkehr.
@@ -114,14 +117,17 @@ kann, warum juist das hinnimmt und was du dagegen tun kannst. Kurz gefasst:
 - Stehen alle Geräte eines Netzes hinter symmetrischem NAT, braucht es ein
   Mitglied als Relay.
 - Der öffentliche DHT und die STUN-Server sehen die Adressen der Geräte, die
-  sie nutzen, und sonst nichts. Mit einem eigenen Relay kommt juistd ohne sie
-  aus.
+  sie nutzen. Ein Gerät sucht ein anderes im DHT, wenn es dessen Spur
+  verloren hat und keines der Relays des Netzes weiß, wo es ist. Dann sieht
+  der DHT, dass beide Adressen zu einem Netz gehören, aber nicht zu welchem
+  und nicht, wem sie gehören. Von den Geräten, die einander erreichen, fragt
+  nur eines. Mit einem eigenen Relay kommt juistd ohne sie aus.
 
-## Quantensichere Tunnel
+## Quantensicher
 
-Ein künftiger Quantencomputer könnte heute übliche Verschlüsselung brechen,
-und heute mitgeschnittener Verkehr ließe sich dann entschlüsseln. juist
-schützt davor:
+Ein künftiger Quantencomputer könnte heute übliche Verschlüsselung brechen
+und heute übliche Signaturen fälschen, und heute mitgeschnittener Verkehr
+ließe sich dann entschlüsseln. juist schützt vor beidem:
 
 - Jeder WireGuard-Handshake mischt einen Preshared Key ein. Zwei Geräte nutzen
   zuerst einen, der aus dem Gruppengeheimnis des Netzes abgeleitet ist. Sobald
@@ -129,15 +135,39 @@ schützt davor:
   haben: Jedes kapselt ein Geheimnis an den ML-KEM-768-Schlüssel des anderen.
   Dieser Schlüssel erneuert sich mit jeder Änderung der Mitglieder.
 - Gruppengeheimnisse sind mit X25519 und ML-KEM-768 zusammen versiegelt.
-- Signaturen verwenden Ed25519. Fälschen könnte sie ein Quantencomputer erst,
-  wenn es ihn gibt. Heute mitzuschneiden bringt einem Angreifer dabei nichts.
+- Jede Änderung am Netz und jede Nachricht, die Geräte füreinander signieren,
+  ist mit ML-DSA-44 signiert, und eine Signatur allein mit Ed25519 wird
+  abgewiesen. Der ML-DSA-Schlüssel jedes Geräts und jedes Admin-Schlüssels
+  leitet sich aus dem Schlüssel ab, den es schon hat, also deckt dessen
+  Backup ihn mit ab.
+- Der Beitritt vereinbart nach der Prüfung von Code oder Link einen Schlüssel
+  mit ML-KEM-768. Wer einen Beitritt mitschneidet und später einen
+  Quantencomputer hat, erfährt daraus nichts.
+- Verbindungen zwischen juists eigenen Enden, zu Relays und von Geräten, die
+  nur HTTPS erreichen, verlangen TLS 1.3 mit X25519 und ML-KEM-768.
+  Verbindungen durch den Ingress vereinbaren ihren Schlüssel so, wo immer die
+  Gegenseite es anbietet, wie aktuelle Browser es tun.
 
 Jeder Tunnel zwischen Geräten mit der aktuellen Version ist quantensicher.
 Ein Gerät mit einer älteren Version bekommt nichts von deinem Verkehr, und
 `juist status` und `juist devices` zeigen es als veraltet, bis es
-aktualisiert ist. Ein Netz, das mit einer älteren Version angelegt wurde,
-bekommt quantensichere Tunnel, sobald jedes Gerät die aktuelle Version nutzt
-und `juist log upgrade` es auf Schema 14 gehoben hat.
+aktualisiert ist.
+
+Ein Netz, das mit einer älteren Version angelegt wurde, wechselt in zwei
+Schritten zu quantensicheren Signaturen. Sobald jedes Gerät die aktuelle
+Version nutzt, hebt `juist log upgrade` es auf Schema 17, in dem die Geräte
+ihre ML-DSA-Schlüssel ankündigen und jeder Admin seine mit
+`juist admins receive` registriert. Haben das alle getan, führst du es noch
+einmal aus, und der Wechsel auf Schema 18 wird freigegeben wie jede Änderung.
+Ein Gerät, das offline war, holt danach auf.
+
+Was bleibt, wie es war: Die Änderungen vor dem Wechsel behalten ihre
+Ed25519-Signaturen. Geräte im Netz weisen jede neue Änderung unterhalb des
+Wechsels ab, aber ein Gerät, das den Wechsel erst sieht, wenn es einen
+Quantencomputer gibt, vertraut der Geschichte davor, wie sie ihm gegeben
+wird. Ein Relay weist sich mit einem klassischen Zertifikat aus, da ihm nur
+das Weiterreichen von Verkehr anvertraut ist, und ein Proxy, der TLS ohne
+ML-KEM beendet, kann ein Gerät, das nur HTTPS erreicht, nicht mehr tragen.
 
 ## Hinweise
 

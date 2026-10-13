@@ -179,10 +179,10 @@ func (h *home) expectNetwork(sock string, genesis types.Hash) error {
 //
 // A pin this keystore already holds for the network stays: it was verified
 // here, and may be later than the admission.
-func (h *home) expectAdmitted(sock string, admin types.Identity, a *enroll.Admission, self types.Identity) error {
+func (h *home) expectAdmitted(sock string, link enroll.Link, a *enroll.Admission, self types.Identity) error {
 	// The admission is of this device: an older one of another device by the
 	// same admin would anchor the keystore at its older head.
-	if a == nil || a.Admin != admin || a.Verify() != nil || a.Guest != self {
+	if a == nil || a.Admin != *link.Admin || a.Verify(*link.AdminSigning, nil) != nil || a.Guest != self {
 		return errors.New("juistd returned no admission by the link's admin; log not trusted, juistd may be " +
 			"compromised")
 	}

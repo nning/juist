@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,18 +20,28 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/time/rate"
 
+	"github.com/nning/juist/internal/pqtls"
 	"github.com/nning/juist/internal/proxyproto"
 )
 
 // tlsConfig shows a client asking for name, by SNI, the certificate named
 // gives, and every other client the pinned one.
 func tlsConfig(cert *selfSigned, name string, named func(*tls.ClientHelloInfo) (*tls.Certificate, error)) *tls.Config {
-	pinned := &tls.Config{Certificates: []tls.Certificate{cert.tls}, MinVersion: tls.VersionTLS12}
+	pinned := pqtls.Config(&tls.Config{Certificates: []tls.Certificate{cert.tls}})
 	if name == "" || named == nil {
 		return pinned
 	}
 	// HTTP/1.1 alone: DERP takes the connection over, which HTTP/2 cannot.
-	public := &tls.Config{GetCertificate: named, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
+	// autocert gives an ECDSA certificate only to a client offering P-256
+	// and an ECDSA suite of TLS 1.2; in 1.3, which this config requires, the
+	// signature schemes alone decide, and a juist client offers neither.
+	ecdsa := func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		h2 := *h
+		h2.SupportedCurves = append(slices.Clone(h.SupportedCurves), tls.CurveP256)
+		h2.CipherSuites = append(slices.Clone(h.CipherSuites), tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
+		return named(&h2)
+	}
+	public := pqtls.Config(&tls.Config{GetCertificate: ecdsa, NextProtos: []string{"http/1.1"}})
 	challenge := &tls.Config{GetCertificate: named, NextProtos: []string{acme.ALPNProto}}
 	return &tls.Config{MinVersion: tls.VersionTLS12, GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
 		if !strings.EqualFold(strings.TrimSuffix(h.ServerName, "."), name) {

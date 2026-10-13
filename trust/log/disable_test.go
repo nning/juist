@@ -81,7 +81,7 @@ func TestDisableNeedsABreakGlassSecret(t *testing.T) {
 func TestDisableCarriesNoSignature(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	aum := h.disable(0, h.auth.State())
-	if err := aum.Sign(h.admins[0]); err == nil {
+	if err := h.sign(&aum, h.admins[0]); err == nil {
 		t.Fatal("a disable record was signed")
 	}
 	sig := types.Signature{KeyID: h.admins[0].Public(), Sig: types.Sig{1}}

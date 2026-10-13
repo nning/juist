@@ -23,6 +23,7 @@ in internal/names
 in internal/pairkey
 in internal/plumber
 in internal/policy
+in internal/pqtls
 in internal/quicinitial
 in internal/statuspage
 in internal/waiting

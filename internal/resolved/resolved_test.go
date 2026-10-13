@@ -142,6 +142,23 @@ func TestWhatResolvedCannotDoIsSaid(t *testing.T) {
 	}
 }
 
+// A refusal on a host without polkit says so, since no rule turns it there.
+func TestARefusalSaysWherePolkitIsMissing(t *testing.T) {
+	bus := startResolvedBus(t, &fake{refuse: true})
+	c, err := Open(bus.Connect(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := func() error { return c.Route(7, []netip.AddrPort{netip.MustParseAddrPort("198.18.4.2:41646")}) }
+	if err := route(); !errors.Is(err, ErrNoPolkit) {
+		t.Errorf("without polkit: %v", err)
+	}
+	bus.Polkit(t)
+	if err := route(); !errors.Is(err, ErrNotAuthorized) || errors.Is(err, ErrNoPolkit) {
+		t.Errorf("with polkit: %v", err)
+	}
+}
+
 // A link routed for some domains alone takes them, a search domain among
 // them, and is no default route; with everything, "." is added once. Its
 // own domains are kept from DNSSEC validation, which answers from juistd

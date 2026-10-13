@@ -28,8 +28,7 @@ juist status
 $ juist status
 home · connected
   This device   laptop  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0
-  Devices       3 others, all heard from
-  Tunnels       3 of 3 live
+  Devices       3 others
   Relays        1 available, via vps
   Names         home.juist
   Freshness     vouched 12m ago, valid 48h
@@ -56,8 +55,8 @@ In der ersten Zeile steht einer dieser Zustände:
 ## Was die Zeilen bedeuten
 
 - `This device`: Name und Adressen dieses Geräts im Netz, erst IPv4, dann IPv6.
-- `Devices`: wie viele andere Geräte es gibt und wie viele davon sich gemeldet haben.
-- `Tunnels`: durch wie viele Tunnel bei der letzten Prüfung Verkehr floss.
+- `Devices`: wie viele andere Geräte es gibt und zu wie vielen davon bei der
+  letzten Prüfung kein Tunnel Verkehr trug; `juist devices` sagt, warum.
   juistd prüft alle 30 Sekunden. Haben beide Enden ein Relay, prüft es einen
   ruhigen Tunnel nur alle 5 Minuten, damit das Funkmodul eines Laptops
   schlafen kann.
@@ -153,8 +152,8 @@ ihrem Schlüssel bestätigt haben. Ein Admin ist eine Person, deren Schlüssel
 Änderungen bestätigen darf (siehe [Admins]({{< relref "docs/admins" >}})).
 
 `juist log show` zeigt, was eine einzelne Änderung bewirkt hat und welche
-Schlüssel sie signiert haben. Du gibst sie mit ihrer Nummer oder dem Anfang
-ihres Hashes an:
+Schlüssel sie signiert haben. Du gibst sie mit ihrer Nummer an, mit -N vom
+Ende her gezählt (`-1` ist die neueste) oder mit dem Anfang ihres Hashes:
 
 ```console
 $ juist log show 3

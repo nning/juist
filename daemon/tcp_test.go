@@ -34,7 +34,7 @@ func TestAnIngressIsToldTheNamesPublishedByTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Published = true
-	if err := e.Sign(f.nw.devices[1].identity); err != nil {
+	if err := e.SignPQ(f.nw.devices[1].identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -53,7 +53,7 @@ func TestAnIngressIsToldTheNamesPublishedByTCP(t *testing.T) {
 	// nowhere to go, and one by TLS goes.
 	e.Published = false
 	e.Seq++
-	if err := e.Sign(f.nw.devices[1].identity); err != nil {
+	if err := e.SignPQ(f.nw.devices[1].identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {

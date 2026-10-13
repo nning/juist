@@ -32,7 +32,8 @@ func (a *logAdapter) View() (gossip.View, error) {
 		Head:    state.Head(),
 		Epoch:   state.Epoch(),
 		Anchor:  d.authority.Anchor(),
-		Have:    have,
+		Have:    append(have, d.authority.Dropped()...),
+		Schema:  state.Schema(),
 	}, nil
 }
 
@@ -112,6 +113,14 @@ func (a *logAdapter) Member(id types.Identity) (types.NodeRecord, bool, error) {
 		return types.NodeRecord{}, false, nil
 	}
 	return n, true, nil
+}
+
+func (a *logAdapter) SigningKey(id types.Identity) *types.SigningKey {
+	state, err := a.daemon().gossipState()
+	if err != nil {
+		return nil
+	}
+	return state.SigningKey(id)
 }
 
 func (a *logAdapter) Inform(records []types.AUM) error {

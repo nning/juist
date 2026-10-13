@@ -306,6 +306,9 @@ type spec struct {
 	// anyNetwork is set on a command about no network the device is in —
 	// one it founds or joins, or none — which takes no NETWORK argument.
 	anyNetwork bool
+
+	// backwards lets a positional argument be -N, which counts from the end.
+	backwards bool
 }
 
 // synopsis is the command's arguments as usage shows them: a command about
@@ -410,7 +413,19 @@ func (a *app) parse(s spec, fs *flag.FlagSet, args []string) ([]string, error) {
 		a.capture(s, fs)
 		return nil, errCompleting
 	}
-	if err := cliflag.Check(fs, args); err != nil {
+	if s.backwards {
+		args = slices.Clone(args)
+		for i, arg := range args {
+			if arg == "--" {
+				break
+			}
+			if isBackwards(arg) {
+				args[i] = backwardsMark + arg
+			}
+		}
+	}
+	args, err := cliflag.Check(fs, args)
+	if err != nil {
 		return nil, fmt.Errorf("%v\n%s", err, s.usage(fs))
 	}
 	var pos, tail []string
@@ -433,6 +448,9 @@ func (a *app) parse(s spec, fs *flag.FlagSet, args []string) ([]string, error) {
 		args = args[1:]
 	}
 	pos = append(pos, tail...)
+	for i := range pos {
+		pos[i] = strings.TrimPrefix(pos[i], backwardsMark)
+	}
 	a.spec = s
 	// A first argument that names one of the device's networks is that
 	// network, where what follows still makes the command. With one network
@@ -455,6 +473,14 @@ func (a *app) parse(s spec, fs *flag.FlagSet, args []string) ([]string, error) {
 		return nil, fmt.Errorf("unexpected argument %q\n%s", pos[s.max], s.usage(fs))
 	}
 	return pos, nil
+}
+
+// backwardsMark hides -N from the flag parser; no argument holds a NUL.
+const backwardsMark = "\x00"
+
+func isBackwards(arg string) bool {
+	_, err := strconv.ParseUint(strings.TrimPrefix(arg, "-"), 10, 32)
+	return strings.HasPrefix(arg, "-") && err == nil
 }
 
 // usage is the one-line synopsis errors end with; fs, if any, adds options.

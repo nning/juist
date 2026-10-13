@@ -3,6 +3,30 @@
 # and waits, so "sudo juist join CODE" or "juist create" is the next step.
 set -e
 
+# polkit before 0.106 reads .pkla files alone. A later one may read them too,
+# through polkitd-pkla, ahead of juist.rules and its check of the device, so
+# only an older one gets the file. The trigger runs this again as polkit comes,
+# goes or is upgraded, unpacked perhaps not yet configured.
+polkit_pkla() {
+	pkla=/var/lib/polkit-1/localauthority/10-vendor.d/60-juist.pkla
+	for p in polkitd policykit-1; do
+		set -- $(dpkg-query -W -f '${db:Status-Status} ${Version}' "$p" 2>/dev/null) ""
+		case "$1" in
+		installed | unpacked | half-configured | triggers-*) ;;
+		*) continue ;;
+		esac
+		if dpkg --compare-versions "$2" lt 0.106; then
+			mkdir -p "${pkla%/*}"
+			cp /usr/lib/juist/juist.pkla "$pkla"
+			chmod 0644 "$pkla"
+			return
+		fi
+		break
+	done
+	rm -f "$pkla"
+}
+
+polkit_pkla
 if [ "$1" = configure ]; then
 	if command -v systemd-sysusers >/dev/null 2>&1; then
 		systemd-sysusers /usr/lib/sysusers.d/juist.conf

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/changelog"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/trust/log"
@@ -17,7 +20,7 @@ func logFamily() family {
 	return family{name: "juist log", intro: `Inspect the membership log: the signed, hash-chained record of every change,
 held and verified by each device.`, subs: []subcommand{
 		{name: "show", run: logShow, forms: [][2]string{{"", "list the changes"},
-			{"show N|HASH", "what one change did, and who signed it"}}},
+			{"show N|HASH", "what one change did, and who signed it; -1 is the last"}}},
 		{name: "verify", run: logVerify, forms: [][2]string{{"verify [FILE]", "re-verify the log, or check a change file"}}},
 		{name: "checkpoint", run: logCheckpoint, forms: [][2]string{{"checkpoint", "record the whole current state as one change"}}},
 		{name: "upgrade", run: logUpgrade, forms: [][2]string{{"upgrade", "raise the network to this build's record schema"}}},
@@ -27,7 +30,7 @@ held and verified by each device.`, subs: []subcommand{
 func cmdLog(a *app, args []string) error { return logFamily().run(a, args) }
 
 func logShow(a *app, args []string) error {
-	s := spec{name: "juist log", args: "[SUBCOMMAND] | show N|HASH", max: 1, about: logFamily().about()}
+	s := spec{name: "juist log", args: "[SUBCOMMAND] | show N|HASH", max: 1, backwards: true, about: logFamily().about()}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -84,11 +87,15 @@ func (a *app) showChange(chain []types.AUM, entries []changelog.Entry, arg strin
 }
 
 // findChange is the index of the change arg names: its number as juist log
-// lists it, or the start of its hash.
+// lists it, -N counting back from the last, or the start of its hash.
 func findChange(entries []changelog.Entry, arg string) (int, error) {
-	if i, err := strconv.Atoi(arg); err == nil {
+	if n, err := strconv.Atoi(arg); err == nil {
+		i := n
+		if strings.HasPrefix(arg, "-") {
+			i += len(entries)
+		}
 		if i < 0 || i >= len(entries) {
-			return 0, fmt.Errorf("no change %d: the log lists 0 to %d", i, len(entries)-1)
+			return 0, fmt.Errorf("no change %s: the log lists 0 to %d, or %d to -1", arg, len(entries)-1, -len(entries))
 		}
 		return i, nil
 	}
@@ -212,6 +219,13 @@ Raise the network to this build's record schema:
   schema 14 quantum-safe tunnels: a preshared key in every handshake
   schema 15 names for members alone, by name in the access policy
             (juist publish add --members, pass from … to name NAME)
+  schema 16 discovery items that show no epoch and no size; devices on
+            an older build shown as outdated
+  schema 17 devices announce quantum-safe signing keys; a device's names
+            take at most 2048 bytes
+  schema 18 every change and message signed by ML-DSA: quantum-safe
+            signatures. Run again at 17 once every device announces its
+            key and every admin key has its own (admins receive)
 
 Devices on older builds stop at the upgrade until updated: update them first.`}
 	fs := newFlags(s.name)
@@ -223,24 +237,101 @@ Devices on older builds stop at the upgrade until updated: update them first.`}
 	if err != nil {
 		return err
 	}
-	if cur := auth.State().Schema(); cur >= types.CurrentSchema {
+	cur := auth.State().Schema()
+	switch {
+	case cur >= types.CurrentSchema:
 		a.ok("unchanged: at %v", cur)
 		return nil
+	case cur == types.SchemaSigning:
+		return a.cutOver(auth, *yes)
 	}
-	a.warn("raising %v to %v; devices on older builds stop until updated", auth.State().Schema(), types.CurrentSchema)
+	// The cut-over to ML-DSA takes every device's key, which devices
+	// announce from the schema before it.
+	to := min(types.CurrentSchema, types.SchemaSigning)
+	a.warn("raising %v to %v; devices on older builds stop until updated", cur, to)
 	if err := a.proceed(*yes, "continue?"); err != nil {
 		return err
 	}
-	aum, err := auth.Builder().SchemaUpgrade(types.CurrentSchema)
+	aum, err := auth.Builder().SchemaUpgrade(to)
 	if err != nil {
 		return err
 	}
 	applied, err := a.submit(auth, &change{aum: aum, file: "schema-upgrade.rec",
-		done: fmt.Sprintf("upgraded to %v", types.CurrentSchema)})
-	if applied && auth.State().Schema() < types.SchemaSealing {
+		done: fmt.Sprintf("upgraded to %v", to)})
+	if applied && cur < types.SchemaSealing {
 		a.hint("for changes waiting for your vote to reach you: juist admins receive")
 	}
+	if applied && to == types.SchemaSigning {
+		a.hint("once every device announces its signing key, for quantum-safe signatures: juist log upgrade")
+	}
 	return err
+}
+
+// cutOver authors the record that gives every member and admin key its
+// signing key and cuts the network over to ML-DSA signatures.
+func (a *app) cutOver(auth *log.Authority, yes bool) error {
+	state := auth.State()
+	var unregistered []string
+	for _, p := range adminPeople(state.Admins()) {
+		for _, k := range p.keys {
+			if k.Signing == nil {
+				unregistered = append(unregistered, cmp.Or(keyMachine(k), k.Public.ShortString())+" of "+p.name)
+			}
+		}
+	}
+	if len(unregistered) > 0 {
+		return fmt.Errorf("no signing key registered yet by %s: %s\n"+
+			"hint: on each, juist admins receive; or remove it: juist admins remove",
+			count(len(unregistered), "admin key"), strings.Join(unregistered, ", "))
+	}
+	keys, missing := a.memberSigningKeys(state)
+	if len(missing) > 0 {
+		return fmt.Errorf("no signing key announced yet by %s: %s\n"+
+			"hint: each needs this version of juist, online; or remove it: juist remove NAME",
+			count(len(missing), "device"), strings.Join(missing, ", "))
+	}
+	// Two cut-overs from one head split the network for good: each device
+	// keeps the one it adopted first.
+	if changes, err := a.waitingChanges(auth); err == nil &&
+		slices.ContainsFunc(changes, func(w waitingChange) bool { return w.aum.Kind == types.KindSetSigningKeys }) {
+		return errors.New("a cut-over waits for votes already\nhint: juist approve")
+	}
+	a.warn("cutting %v over to ML-DSA signatures, for good", state.Network())
+	if err := a.proceed(yes, "continue?"); err != nil {
+		return err
+	}
+	aum, err := auth.Builder().SetSigningKeys(keys, sealer())
+	if err != nil {
+		return err
+	}
+	_, err = a.submit(auth, &change{aum: aum, file: "signing-keys.rec",
+		done: fmt.Sprintf("upgraded to %v: signed by ML-DSA", types.SchemaMLDSA)})
+	return err
+}
+
+// memberSigningKeys gathers every member's signing key as its announcement
+// claims it, endorsed, and names the members whose announcement claims none.
+func (a *app) memberSigningKeys(state *log.State) ([]types.MemberKey, []string) {
+	claims := map[types.Identity]*gossip.SigningClaim{}
+	if a.node != nil {
+		eps, _ := a.node.hints()
+		for _, b := range eps {
+			if e, err := gossip.DecodeEndpoint(b); err == nil && e.Signing != nil {
+				claims[e.Identity] = e.Signing
+			}
+		}
+	}
+	var keys []types.MemberKey
+	var missing []string
+	for _, n := range state.Nodes() {
+		c, ok := claims[n.Identity]
+		if !ok {
+			missing = append(missing, n.Name)
+			continue
+		}
+		keys = append(keys, types.MemberKey{Identity: n.Identity, Key: c.Key, Endorsement: c.Endorsement})
+	}
+	return keys, missing
 }
 
 // upgradeNote says the network's schema is below this build's, where a key
@@ -266,6 +357,34 @@ func (a *app) upgradeNote(several bool) {
 		cmd += " " + a.network
 	}
 	a.printf("\nthe network is at %v, this version at %v\n", state.Schema(), types.CurrentSchema)
+	if state.Schema() == types.SchemaSigning {
+		registered := 0
+		for _, k := range state.Admins() {
+			if k.Signing != nil {
+				registered++
+			}
+		}
+		mine := slices.ContainsFunc(files, func(f adminKeyFile) bool {
+			k, ok := state.Admin(f.priv.Public())
+			return ok && k.Signing == nil
+		})
+		switch total := len(state.Admins()); {
+		case mine:
+			a.hint("for quantum-safe signatures, first: juist admins receive")
+			return
+		case registered < total:
+			a.hint("%d of %s have a signing key; once all do (juist admins receive): %s", registered,
+				count(total, "admin key"), cmd)
+			return
+		}
+		if _, missing := a.memberSigningKeys(state); len(missing) > 0 {
+			a.hint("%s of %s announce a signing key; once all do: %s", strconv.Itoa(len(state.Nodes())-len(missing)),
+				count(len(state.Nodes()), "device"), cmd)
+			return
+		}
+		a.hint("every device announces a signing key: %s", cmd)
+		return
+	}
 	a.hint("once every device runs this version: %s", cmd)
 }
 

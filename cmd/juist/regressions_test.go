@@ -37,7 +37,7 @@ func testNode(t *testing.T, name string) types.NodeRecord {
 	if _, err := rand.Read(wg[:]); err != nil {
 		t.Fatal(err)
 	}
-	return types.NodeRecord{Identity: id.Public(), Name: name, WireGuard: wg, X25519: x, MLKEM: m}
+	return types.NodeRecord{Identity: id.Public(), Name: name, WireGuard: wg, X25519: x, MLKEM: m, Signing: new(id.SigningKey())}
 }
 
 // Whatever sequence of admissions, removals, moves and renumberings a network
@@ -55,7 +55,7 @@ func TestAllocationsTheLogAccepts(t *testing.T) {
 			first := testNode(t, "n0")
 			v4 := netip.MustParseAddr("198.18.0.1")
 			first.V4 = &v4
-			g, err := log.Genesis("net", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "a", Holder: "a"}},
+			g, err := log.Genesis("net", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "a", Holder: "a"}},
 				[]types.Hash{{1}}, []types.NodeRecord{first}, sealer())
 			if err != nil {
 				t.Fatal(err)
@@ -81,7 +81,7 @@ func TestAllocationsTheLogAccepts(t *testing.T) {
 				if err != nil {
 					t.Fatalf("seed %d: building %s: %v", seed, what, err)
 				}
-				if err := a.Sign(admin); err != nil {
+				if err := a.SignUnder(admin, auth.State().Schema()); err != nil {
 					t.Fatal(err)
 				}
 				if err := auth.Inform(a); err != nil {
@@ -272,12 +272,14 @@ func TestAnOlderNetworkIsNotRenumberedAlready(t *testing.T) {
 	}
 	n := testNode(t, "old")
 	n.V4 = new(netip.MustParseAddr("100.64.0.1"))
-	g, err := log.Genesis("net", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "a", Holder: "a"}},
+	g, err := log.Genesis("net", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "a", Holder: "a"}},
 		[]types.Hash{{1}}, []types.NodeRecord{n}, sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
 	g.State.Schema = types.SchemaHolders
+	g.State.Admins[0].Signing, g.State.Nodes[0].Signing = nil, nil
+	g.State.Admins[0].Endorsement = nil
 	if err := g.Sign(admin); err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +287,7 @@ func TestAnOlderNetworkIsNotRenumberedAlready(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	up, err := auth.Builder().SchemaUpgrade(types.CurrentSchema)
+	up, err := auth.Builder().SchemaUpgrade(types.SchemaSigning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,8 +305,8 @@ func TestAnOlderNetworkIsNotRenumberedAlready(t *testing.T) {
 var _ = mrand.IntN
 var _ = fmt.Sprint
 
-// A device that went offline is neither counted as heard from, nor blamed on
-// a firewall, nor named in status; one not decided yet is said to be either.
+// A device that went offline is counted without a tunnel, but neither blamed
+// on a firewall nor named in status; one not decided yet is said to be either.
 func TestStatusCallsAnOfflineDeviceOffline(t *testing.T) {
 	t.Parallel()
 	desktop, laptop := types.Identity{1}, types.Identity{2}
@@ -322,7 +324,7 @@ func TestStatusCallsAnOfflineDeviceOffline(t *testing.T) {
 	var out syncBuffer
 	(&cli{t: t, home: t.TempDir()}).app(&out, "").printStatus(st)
 	got := out.String()
-	mustContain(t, got, "2 others, 1 of them heard from", "no answer from laptop1: offline, or udp/41643 blocked")
+	mustContain(t, got, "2 others, 2 without a tunnel", "no answer from laptop1: offline, or udp/41643 blocked")
 	if strings.Contains(got, "desktop") {
 		t.Errorf("status names an offline device:\n%s", got)
 	}
@@ -363,7 +365,7 @@ func TestARangeFullByHistorySaysHowToGrow(t *testing.T) {
 	v4 := netip.MustParseAddr("10.7.0.1")
 	first.V4 = &v4
 	prefix := netip.MustParsePrefix("10.7.0.0/28")
-	g, err := log.Genesis("net", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "a", Holder: "a"}},
+	g, err := log.Genesis("net", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "a", Holder: "a"}},
 		[]types.Hash{{1}}, []types.NodeRecord{first}, sealer())
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +390,7 @@ func TestARangeFullByHistorySaysHowToGrow(t *testing.T) {
 	inform := func(a types.AUM, err error) {
 		t.Helper()
 		if err == nil {
-			err = a.Sign(admin)
+			err = a.SignUnder(admin, auth.State().Schema())
 		}
 		if err == nil {
 			err = auth.Inform(a)

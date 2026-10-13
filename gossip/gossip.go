@@ -65,9 +65,19 @@ type View struct {
 	Anchor types.Hash
 
 	// Have is every record hash this node holds, including branches that lost
-	// fork choice: both sides must see a fork in full to alarm on it.
+	// fork choice: both sides must see a fork in full to alarm on it. It
+	// names the records it dropped below the cut-over too, so that no peer
+	// offers them again.
 	Have []types.Hash
+
+	// Schema is this node's log's: past the cut-over to [types.SchemaMLDSA]
+	// a catch-up is signed by ML-DSA, and from [types.SchemaSigning] every
+	// peer reads one.
+	Schema types.SchemaVersion
 }
+
+// pq reports whether the log is past the cut-over.
+func (v *View) pq() bool { return v.Schema >= types.SchemaMLDSA }
 
 // A Log is the membership log as gossip needs it. An interface, so the trust
 // layer stays usable without a network and the daemon is what joins the two.
@@ -89,6 +99,10 @@ type Log interface {
 	// this node, which a catch-up is granted to. An error means this node
 	// answers no catch-up at all: it is under an alarm, or no member itself.
 	Member(id types.Identity) (rec types.NodeRecord, listed bool, err error)
+
+	// SigningKey returns the signing key the log names for id, past the
+	// cut-over, or nil.
+	SigningKey(id types.Identity) *types.SigningKey
 }
 
 // Options configures a [Node].
@@ -483,7 +497,14 @@ func (n *Node) catchUpWith(ctx context.Context, addr netip.AddrPort, peerID type
 		}
 		return unanswered
 	}
-	_, err := n.syncOnce(ctx, addr, sessionOpts{initiator: true, peerID: peerID, catchUp: true})
+	so := sessionOpts{initiator: true, peerID: peerID, catchUp: true}
+	_, err := n.syncOnce(ctx, addr, so)
+	if errors.Is(err, errProofByEd25519) {
+		// A node that slept through the schema before the cut-over cannot
+		// tell that the peer reads ML-DSA.
+		so.signing = true
+		_, err = n.syncOnce(ctx, addr, so)
+	}
 	switch {
 	case err != nil && unanswered != nil && errors.Is(err, errNoCatchUp):
 		return fmt.Errorf("%w, nor a catch-up", unanswered)
@@ -674,6 +695,7 @@ type sessionOpts struct {
 	authed    func()
 	force     uint64
 	catchUp   bool
+	signing   bool // sign the catch-up by ML-DSA too, whatever the peer reads
 	// extra are records this node holds but has not applied, sent after
 	// what the peer lacks of its log; see [Node.PushTo].
 	extra [][]byte
@@ -707,10 +729,11 @@ func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 		return fmt.Errorf("reading local log state: %w", err)
 	}
 	var peer frame
-	epochs := false
+	var assumed reads
 	if so.initiator {
-		epochs = n.readsEpochs(nil, so.peerID, false)
-		peer, err = n.initiatorHello(c, so, ss, &view, epochs)
+		assumed = n.peerReads(&view, nil, so.peerID, false)
+		assumed.signing = assumed.signing || so.signing
+		peer, err = n.initiatorHello(c, so, ss, &view, assumed)
 	} else {
 		peer, err = n.responderHello(c, so.authed, ss, &view)
 	}
@@ -728,7 +751,10 @@ func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 		}
 		changed := n.heard(&peer)
 		// What the hello held back from a peer that turns out to read it.
-		announce := so.initiator && !epochs && n.readsEpochs(&peer, so.peerID, false)
+		var announce *reads
+		if got := n.peerReads(&view, &peer, so.peerID, false); so.initiator && !assumed.covers(got) {
+			announce = &got
+		}
 		return n.swapRecords(c, ss, &view, &peer, so.initiator, changed, announce, so.extra)
 	case so.initiator:
 		return n.finishCatchUp(c, ss, &view, &peer)
@@ -739,12 +765,12 @@ func (n *Node) runSession(c net.Conn, so sessionOpts, ss *sessionSeal) error {
 
 // initiatorHello chooses what the session is sealed under, asking for a
 // catch-up where so says to, sends this node's hello and returns the peer's.
-func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view *View, epochs bool) (frame, error) {
-	hello := n.hello(view, epochs)
+func (n *Node) initiatorHello(c net.Conn, so sessionOpts, ss *sessionSeal, view *View, r reads) (frame, error) {
+	hello := n.hello(view, r)
 	var err error
 	switch {
 	case so.catchUp:
-		if ss.catchUp, ss.with, err = n.askCatchUp(c, view.Network, view.Epoch); err != nil {
+		if ss.catchUp, ss.with, err = n.askCatchUp(c, view, r); err != nil {
 			return frame{}, err
 		}
 		// Nothing about this node or the others until the peer is known to
@@ -815,7 +841,7 @@ func (n *Node) responderHello(c net.Conn, authed func(), ss *sessionSeal, view *
 	}
 	// A hello without the sender's own announcement is one that held it
 	// back, as only a build reading epochs does, or a catch-up's.
-	hello := n.hello(view, n.readsEpochs(&peer, ss.with, ss.catchUp == nil))
+	hello := n.hello(view, n.peerReads(view, &peer, ss.with, ss.catchUp == nil))
 	hello.Waiting, hello.Pair = waiting, pair
 	if err := n.writeSealed(c, ss, &hello); err != nil {
 		return frame{}, err
@@ -856,15 +882,16 @@ func (n *Node) checkHello(peer *frame, view *View) error {
 // swapRecords sends the peer what its hello shows it missing and takes the
 // records it sends back, writing first where writeFirst says to and reading
 // first otherwise. changed reports that the session already cached a new
-// announcement.
-func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame, writeFirst, changed, announce bool,
+// announcement; announce, where set, what the peer reads of what the hello
+// held back.
+func (n *Node) swapRecords(c net.Conn, ss *sessionSeal, view *View, peer *frame, writeFirst, changed bool, announce *reads,
 	extra [][]byte) error {
 	reply, err := n.records(view, peer)
 	if err != nil {
 		return err
 	}
-	if announce {
-		n.announceIn(&reply, view, true)
+	if announce != nil {
+		n.announceIn(&reply, view, *announce)
 	}
 	if len(extra) > 0 {
 		if err := withExtra(&reply, extra); err != nil {
@@ -953,7 +980,7 @@ func (n *Node) answerCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *fram
 	if err := n.stillMember(ss.with); err != nil {
 		return err
 	}
-	return n.swapRecords(c, ss, view, peer, true, changed, false, nil)
+	return n.swapRecords(c, ss, view, peer, true, changed, nil, nil)
 }
 
 // finishCatchUp is the initiator's side of a catch-up session past the
@@ -982,7 +1009,7 @@ func (n *Node) finishCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *fram
 	if err != nil {
 		return err
 	}
-	n.announceIn(&reply, view, n.readsEpochs(peer, ss.with, false))
+	n.announceIn(&reply, view, n.peerReads(view, peer, ss.with, false))
 	err = n.writeSealed(c, ss, &reply)
 	if applied || changed {
 		n.onRecords()
@@ -1043,9 +1070,9 @@ func (n *Node) records(view *View, peer *frame) (frame, error) {
 }
 
 // announceIn adds this node's announcement and those it holds to f, for a
-// peer that has not had them in a hello; epochs as for [Node.hello].
-func (n *Node) announceIn(f *frame, view *View, epochs bool) {
-	h := n.hello(view, epochs)
+// peer that has not had them in a hello; r as for [Node.hello].
+func (n *Node) announceIn(f *frame, view *View, r reads) {
+	h := n.hello(view, r)
 	f.Self, f.Endpoints = h.Self, h.Endpoints
 }
 
@@ -1169,9 +1196,8 @@ func (n *Node) gossipAddrs(e Endpoint) []netip.AddrPort {
 }
 
 // hello builds this node's opening frame: its beacon, what it holds, and every
-// announcement it knows including its own; those naming an epoch only where
-// epochs says the peer reads them.
-func (n *Node) hello(view *View, epochs bool) frame {
+// announcement it knows including its own, those r admits.
+func (n *Node) hello(view *View, r reads) frame {
 	f := frame{
 		Kind:    kindHello,
 		Network: view.Network,
@@ -1187,16 +1213,17 @@ func (n *Node) hello(view *View, epochs bool) frame {
 		f.Have = f.Have[:MaxHashesPerFrame]
 	}
 	if n.opts.Announce != nil {
-		if mine, ok := n.opts.Announce(); ok && (epochs || !mine.PQ()) {
+		if mine, ok := n.opts.Announce(); ok && r.admits(&mine) {
+			mine = r.shaped(mine)
 			f.Self = &mine
 		}
 	}
-	eps := n.opts.Endpoints.All()
-	if !epochs {
-		eps = slices.DeleteFunc(eps, func(e Endpoint) bool { return e.PQ() })
-	}
+	eps := slices.DeleteFunc(n.opts.Endpoints.All(), func(e Endpoint) bool { return !r.admits(&e) })
 	if len(eps) > MaxEndpointsPerFrame {
 		eps = eps[:MaxEndpointsPerFrame]
+	}
+	for i := range eps {
+		eps[i] = r.shaped(eps[i])
 	}
 	f.Endpoints = eps
 	var keys []AddrKey
@@ -1212,23 +1239,57 @@ func (n *Node) hello(view *View, epochs bool) frame {
 		if size += len(k.Wraps) * addrkey.WrapSize; size > maxKeyBytesPerFrame || len(f.Keys) == MaxEndpointsPerFrame {
 			break
 		}
+		if !r.signing {
+			k.MLDSA = nil
+		}
 		f.Keys = append(f.Keys, k)
 	}
 	return f
 }
 
-// readsEpochs reports whether a peer reads announcements naming an epoch, as
-// its own in its hello says, else the one held for id, else guess: builds
-// before them refuse a whole frame that carries one, and so would never hear
-// of the upgrade that stops them.
-func (n *Node) readsEpochs(peer *frame, id types.Identity, guess bool) bool {
+// reads is what a peer's build reads of announcements: one naming an epoch
+// ([types.SchemaPQ]), one naming a build's schema ([types.SchemaPadded]),
+// and one carrying a signing key or an ML-DSA signature
+// ([types.SchemaSigning]). Builds before either refuse a whole frame that
+// carries one, and so would never hear of the upgrade that stops them; the
+// last is sent to them without what they cannot read, which its Ed25519
+// signature does not cover.
+type reads struct{ epochs, schemas, signing bool }
+
+func readsOf(e *Endpoint) reads {
+	return reads{epochs: e.PQ(), schemas: e.Schema != 0, signing: e.Schema >= types.SchemaSigning}
+}
+
+func (r reads) admits(e *Endpoint) bool { return (r.epochs || !e.PQ()) && (r.schemas || e.Schema == 0) }
+
+// shaped is e as the peer reads it.
+func (r reads) shaped(e Endpoint) Endpoint {
+	if r.signing {
+		return e
+	}
+	return e.Hint()
+}
+
+// covers reports whether r admits all that o does.
+func (r reads) covers(o reads) bool {
+	return (r.epochs || !o.epochs) && (r.schemas || !o.schemas) && (r.signing || !o.signing)
+}
+
+// peerReads reports what a peer reads, as its own announcement in its hello
+// says, else the one held for id, else guess for both: a hello without its
+// sender's announcement is one held back, as builds reading epochs do. One
+// of them that reads no schemas takes the answer for a newer build's, which
+// it then is, and syncs with the peers it holds announcements of. A peer of
+// a network at [types.SchemaSigning] or above, which no announcement names,
+// is taken to read signing keys, as every member that follows it does.
+func (n *Node) peerReads(view *View, peer *frame, id types.Identity, guess bool) reads {
 	if peer != nil && peer.Self != nil && peer.Self.Verify() == nil {
-		return peer.Self.PQ()
+		return readsOf(peer.Self)
 	}
 	if e, held := n.opts.Endpoints.Get(id); held && !id.IsZero() {
-		return e.PQ()
+		return readsOf(&e)
 	}
-	return guess
+	return reads{epochs: guess, schemas: guess, signing: guess || view.Schema >= types.SchemaSigning}
 }
 
 // notePeer records the epoch this session ran under against the peer that

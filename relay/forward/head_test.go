@@ -41,7 +41,7 @@ func TestAnEndlessAnswerIsCutOff(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	via := &url.URL{Scheme: "http", Host: ln.Addr().String()}
-	if _, err := connect(ctx, "relay.example.org:443", via); !errors.Is(err, errLongHead) {
+	if _, err := Connect(ctx, "relay.example.org:443", via); !errors.Is(err, errLongHead) {
 		t.Errorf("the endless answer ended in %v", err)
 	}
 }

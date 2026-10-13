@@ -116,7 +116,8 @@ func TestAlreadyRevoked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.apply(h.auth.Builder().AddAdminKey(types.AdminKey{Public: alice.Public(), Votes: 1, Holder: "alice"}))
+	added, err := h.auth.Builder().AddAdminKey(types.AdminKey{Public: alice.Public(), Signing: new(alice.SigningKey()), Endorsement: alice.Endorsement(), Votes: 1, Holder: "alice"})
+	h.apply(added, err)
 	s := h.auth.State()
 
 	stranger := h.newNode("stranger").Identity

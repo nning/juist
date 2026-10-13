@@ -262,7 +262,7 @@ func TestRotationRecordsFromTheDaemonAreChecked(t *testing.T) {
 		t.Helper()
 		a.Signatures = nil
 		for _, k := range keys {
-			if err := a.Sign(k); err != nil {
+			if err := a.SignUnder(k, auth.State().Schema()); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -304,7 +304,7 @@ func TestRotationRecordsFromTheDaemonAreChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	admit, err := auth.Builder().AddNode(types.NodeRecord{Identity: other.Public(), Name: "intruder",
-		WireGuard: fresh.Public.WireGuard, X25519: fresh.Public.X25519, MLKEM: fresh.Public.MLKEM}, sealer())
+		WireGuard: fresh.Public.WireGuard, X25519: fresh.Public.X25519, MLKEM: fresh.Public.MLKEM, Signing: new(other.SigningKey())}, sealer())
 	if err != nil {
 		t.Fatal(err)
 	}

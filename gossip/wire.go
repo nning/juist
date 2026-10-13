@@ -21,12 +21,13 @@ const (
 	// batch containing a checkpoint, at most [types.MaxRecordSize].
 	MaxFrameSize = 8 << 20
 
-	// maxRecordBytesPerFrame is the byte budget a records frame's payload may
-	// fill, leaving room for the frame's own fields. A batch is truncated to
-	// it: at [types.MaxNodes] members an epoch record is ~600 KiB, so a node
-	// far behind would otherwise be sent a batch that cannot be encoded at
-	// all.
-	maxRecordBytesPerFrame = MaxFrameSize - (1 << 20)
+	// maxRecordBytesPerFrame is the byte budget a records frame's records
+	// and waiting changes may fill, leaving room for its announcements,
+	// leases and pair message, up to 1.74 MiB past the cut-over. A batch is
+	// truncated to it: at [types.MaxNodes] members an epoch record is ~750
+	// KiB, so a node far behind would otherwise be sent a batch that cannot
+	// be encoded at all.
+	maxRecordBytesPerFrame = MaxFrameSize - (2 << 20)
 
 	// MaxRecordsPerFrame caps the log records one frame may carry. Anti-
 	// entropy sends what a peer is missing in as many frames as it takes.

@@ -50,7 +50,7 @@ func TestHostClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := renumber.Sign(own.admin); err != nil {
+	if err := renumber.SignUnder(own.admin, auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Inform(renumber); err != nil {

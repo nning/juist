@@ -31,6 +31,10 @@ var (
 	// ErrNotAuthorized is returned where resolved, or polkit for it, refused.
 	ErrNotAuthorized = errors.New("systemd-resolved refused juistd")
 
+	// ErrNoPolkit is the [ErrNotAuthorized] of a host without polkit, which
+	// no rule can turn.
+	ErrNoPolkit = fmt.Errorf("%w: polkit is not installed", ErrNotAuthorized)
+
 	// ErrTooOld is returned by a resolved that cannot take a server's port,
 	// which is older than systemd 246.
 	ErrTooOld = errors.New("systemd-resolved is too old to take a resolver's port")
@@ -158,6 +162,9 @@ func (c *Client) call(method string, args ...any) error {
 	if errors.As(err, &de) {
 		switch de.Name {
 		case "org.freedesktop.DBus.Error.AccessDenied", "org.freedesktop.DBus.Error.InteractiveAuthorizationRequired":
+			if !c.polkit() {
+				return fmt.Errorf("%w: %s", ErrNoPolkit, method)
+			}
 			return fmt.Errorf("%w: %s", ErrNotAuthorized, method)
 		}
 	}
@@ -165,6 +172,24 @@ func (c *Client) call(method string, args ...any) error {
 		return fmt.Errorf("systemd-resolved: %s: %w", method, err)
 	}
 	return nil
+}
+
+// polkit reports whether polkit runs on the bus or can be started there, and
+// true where that cannot be told.
+func (c *Client) polkit() bool {
+	const name = "org.freedesktop.PolicyKit1"
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	bus := c.conn.BusObject()
+	var running bool
+	if err := bus.CallWithContext(ctx, "org.freedesktop.DBus.NameHasOwner", 0, name).Store(&running); err != nil || running {
+		return true
+	}
+	var startable []string
+	if err := bus.CallWithContext(ctx, "org.freedesktop.DBus.ListActivatableNames", 0).Store(&startable); err != nil {
+		return true
+	}
+	return slices.Contains(startable, name)
 }
 
 func isUnknownMethod(err error) bool {

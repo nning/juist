@@ -155,7 +155,7 @@ func TestApproveShowsWhatItSigns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aum, err := auth.Builder().AddAdminKey(types.AdminKey{Public: intruder.Public(), Votes: 1, Name: "phone"})
+	aum, err := auth.Builder().AddAdminKey(types.AdminKey{Public: intruder.Public(), Signing: new(intruder.SigningKey()), Endorsement: intruder.Endorsement(), Votes: 1, Name: "phone"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestEffectShowsRoutesTakenAway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := with.Sign(admins[0]); err != nil {
+	if err := with.SignUnder(admins[0], types.CurrentSchema); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Inform(with); err != nil {

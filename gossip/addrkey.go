@@ -17,16 +17,20 @@ type AddrKey struct {
 	ID    addrkey.ID     `cbor:"2,keyasint"`
 
 	// Seq orders an owner's keys, as [Endpoint.Seq] its announcements.
-	Seq   uint64    `cbor:"3,keyasint"`
-	Wraps [][]byte  `cbor:"4,keyasint,omitempty"`
-	Sig   types.Sig `cbor:"23,keyasint"`
+	Seq   uint64   `cbor:"3,keyasint"`
+	Wraps [][]byte `cbor:"4,keyasint,omitempty"`
+
+	// MLDSA is the owner's ML-DSA signature, past the cut-over, which a
+	// member there requires; sent only to builds that read it.
+	MLDSA *types.PQSig `cbor:"22,keyasint,omitempty"`
+	Sig   types.Sig    `cbor:"23,keyasint"`
 }
 
 const labelAddrKey = "juist/addr-key/v1"
 
 func (k *AddrKey) signingBytes() ([]byte, error) {
 	unsigned := *k
-	unsigned.Sig = types.Sig{}
+	unsigned.Sig, unsigned.MLDSA = types.Sig{}, nil
 	body, err := encode(&unsigned)
 	if err != nil {
 		return nil, err
@@ -50,8 +54,40 @@ func (k *AddrKey) Sign(priv types.PrivateIdentity) error {
 	if err != nil {
 		return err
 	}
+	k.MLDSA = nil
 	k.Sig, err = priv.Sign(msg)
 	return err
+}
+
+// SignPQ is [AddrKey.Sign], adding the ML-DSA signature a network past the
+// cut-over asks for.
+func (k *AddrKey) SignPQ(priv types.PrivateIdentity) error {
+	if err := k.Sign(priv); err != nil {
+		return err
+	}
+	msg, err := k.signingBytes()
+	if err != nil {
+		return err
+	}
+	pq, err := priv.SignPQ(msg)
+	if err != nil {
+		return err
+	}
+	k.MLDSA = &pq
+	return nil
+}
+
+// VerifyPQ checks the record's ML-DSA signature against key, the signing
+// key the log names for its owner.
+func (k *AddrKey) VerifyPQ(key *types.SigningKey) error {
+	msg, err := k.signingBytes()
+	if err != nil {
+		return err
+	}
+	if key == nil || !key.Verify(msg, k.MLDSA) {
+		return fmt.Errorf("gossip: address key of %v carries no valid ML-DSA signature", k.Owner.ShortString())
+	}
+	return nil
 }
 
 // Verify checks the record's shape and its signature.
@@ -82,6 +118,9 @@ func (k *AddrKey) StaticValidate() error {
 		if len(w) != addrkey.WrapSize {
 			return fmt.Errorf("gossip: address key of %v has a wrap of %d bytes", k.Owner.ShortString(), len(w))
 		}
+	}
+	if k.MLDSA != nil && k.MLDSA.IsZero() {
+		return fmt.Errorf("gossip: address key of %v carries a zero ML-DSA signature", k.Owner.ShortString())
 	}
 	return nil
 }

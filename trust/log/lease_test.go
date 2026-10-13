@@ -1,6 +1,7 @@
 package log
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -25,7 +26,7 @@ func (h *harness) grantAdmin(id types.Identity) {
 func (h *harness) lease(signer types.Identity, head types.Hash, issued uint64) types.Lease {
 	h.t.Helper()
 	l := types.Lease{Network: h.auth.State().GenesisHash(), Head: head, Issued: issued}
-	if err := l.Sign(h.nodeIDs[signer]); err != nil {
+	if err := l.Sign(h.nodeIDs[signer], h.auth.State().PQ()); err != nil {
 		h.t.Fatal(err)
 	}
 	return l
@@ -34,18 +35,36 @@ func (h *harness) lease(signer types.Identity, head types.Hash, issued uint64) t
 func TestLeaseRoundTrip(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	a := h.addNode("admin-device")
+	h.grantAdmin(a.Identity)
 	l := h.lease(a.Identity, h.auth.Head(), 1000)
 	b, err := l.Encode()
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := types.DecodeLease(b)
-	if err != nil || got != l {
+	if again, _ := got.Encode(); err != nil || !bytes.Equal(again, b) {
 		t.Fatalf("decoded %+v, %v", got, err)
 	}
-	b[len(b)-1] ^= 1
-	if _, err := types.DecodeLease(b); err == nil {
+	damaged := bytes.Clone(b)
+	damaged[bytes.Index(damaged, l.Sig[:])] ^= 1
+	if _, err := types.DecodeLease(damaged); err == nil {
 		t.Fatal("a lease with a damaged signature decoded")
+	}
+	// Past the cut-over the log holds a lease to its ML-DSA signature, which
+	// decoding alone cannot check.
+	if err := h.auth.CheckLease(&got, 1000); err != nil {
+		t.Fatalf("an honest lease: %v", err)
+	}
+	pqDamaged := got
+	pqDamaged.MLDSA = new(*got.MLDSA)
+	pqDamaged.MLDSA[0] ^= 1
+	if err := h.auth.CheckLease(&pqDamaged, 1000); err == nil {
+		t.Fatal("a lease with a damaged ML-DSA signature vouched")
+	}
+	edOnly := got
+	edOnly.MLDSA = nil
+	if err := h.auth.CheckLease(&edOnly, 1000); err == nil {
+		t.Fatal("a lease signed by Ed25519 alone vouched past the cut-over")
 	}
 }
 

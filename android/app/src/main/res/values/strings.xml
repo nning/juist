@@ -112,7 +112,6 @@
         <item quantity="one">%d other device</item>
         <item quantity="other">%d other devices</item>
     </plurals>
-    <string name="members_reached">%1$d of %2$d reached</string>
     <string name="members_none">No other devices yet</string>
     <string name="members_checked">Checked %1$s</string>
     <string name="label_name">Name</string>
@@ -166,7 +165,7 @@
     <string name="reach_unknown">Unknown</string>
     <string name="reach_off">Off</string>
     <string name="reach_relay_about">Traffic passes through a relay, one of your devices, and stays encrypted end to end.</string>
-    <string name="reach_outdated_about">It runs an older juist, and is unreachable until juist is updated there.</string>
+    <string name="reach_outdated_about">It runs an older juist. Until juist is updated there, the tunnel carries juist\'s own traffic alone: a ping gets through, other apps do not.</string>
     <string name="reach_down_about">The device is offline, or a firewall blocks the tunnel.</string>
     <string name="reach_sought_about">The device may have restarted or changed networks. juist is looking for it.</string>
     <string name="reach_absent_about">Probably offline.</string>
@@ -196,7 +195,9 @@
     <string name="alarm_newer">%1$s runs a newer juist than this app</string>
     <string name="alarm_newer_hint">This phone cannot follow the network until you update juist.</string>
     <string name="alarm_outdated">%1$s runs an older juist</string>
-    <string name="alarm_outdated_hint">Unreachable until juist is updated there.</string>
+    <string name="alarm_outdated_hint">Other apps reach it once juist is updated there.</string>
+    <string name="alarm_older">%1$s runs an older juist</string>
+    <string name="alarm_older_hint">It applies no changes, removals included, until juist is updated there.</string>
     <plurals name="alarm_conflicted">
         <item quantity="one">%d device announces another’s key and is ignored</item>
         <item quantity="other">%d devices announce another’s key and are ignored</item>
@@ -224,6 +225,7 @@
     <string name="section_reach">Reach it</string>
     <string name="section_identity">Identity</string>
     <string name="ping_about">Other apps reach the device at these addresses while the VPN is on.</string>
+    <string name="ping_about_outdated">Other apps reach the device at these addresses once juist is updated there.</string>
     <string name="action_ping">Ping</string>
     <string name="action_open_web">Open in browser</string>
     <string name="ping_ms">%1$.1f ms</string>
@@ -242,10 +244,6 @@
 
     <!-- Notification -->
     <string name="notification_channel">Connection</string>
-    <plurals name="notification_reached">
-        <item quantity="one">%1$s · %2$d of %3$d device reached</item>
-        <item quantity="other">%1$s · %2$d of %3$d devices reached</item>
-    </plurals>
 
     <!-- Time -->
     <string name="just_now">just now</string>

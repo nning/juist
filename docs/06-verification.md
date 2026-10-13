@@ -106,12 +106,12 @@ netfilter doing the translation rather than a simulation of it:
   the same dependency the FreeBSD interop matrix above wants; decide both at once.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
   VPS relay member + one mobile (Android on LTE, from M10); full lifecycle including
-  emergency revocation from a phone (from M21).
+  emergency revocation from a phone (from M27).
 
 ## 5. Cryptographic review gates
 
 - Internal design review of the trust layer before M3 (log rules frozen).
-- External audit at M18 of the audit scope, after the internal review of
+- External audit at M24 of the audit scope, after the internal review of
   [15-security-review.md](15-security-review.md): what [`audit-scope`](../audit-scope)
   places `core` or `in`, the code that decides who may do what, holds or derives a
   key, parses input from outside the membership, or runs as root. Every package
@@ -135,7 +135,8 @@ netfilter doing the translation rather than a simulation of it:
 Tracked per commit in CI: direct-connection rate per NAT class, revocation
 convergence time (connected case), sync time after 1-week offline, encoded size
 of an epoch record and of a checkpoint at `MaxNodes` members, the core's LOC
-count (`types`, `trust/`), held to 10 k by `make tcb`, and the audit scope's, which
+count (`types`, `trust/`), held to 11 k by `make tcb` since M17's post-quantum
+signatures took it past 10 k, and the audit scope's, which
 is measured, not budgeted: features grow it, and each milestone's "Done" line in
 [05-roadmap.md](05-roadmap.md) records both. Fuzz corpus coverage
 is tracked per milestone instead, from the manual runs above.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,14 @@ func testSet() *flag.FlagSet {
 	fs.String("name", "", "")
 	fs.Uint("port", 0, "")
 	Short(fs, 'y', "yes")
+	return fs
+}
+
+func bundleSet() *flag.FlagSet {
+	fs := testSet()
+	fs.Bool("force", false, "")
+	Short(fs, 'p', "port")
+	Short(fs, 'f', "force")
 	return fs
 }
 
@@ -38,12 +47,38 @@ func TestCheckHoldsOptionsToOneSpelling(t *testing.T) {
 		{[]string{"-q"}, "unknown option -q"},
 		{[]string{"---yes"}, "not an option"},
 	} {
-		err := Check(testSet(), tc.args)
+		_, err := Check(testSet(), tc.args)
 		switch {
 		case tc.want == "" && err != nil:
 			t.Errorf("%q: %v, want accepted", tc.args, err)
 		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 			t.Errorf("%q: %v, want %q", tc.args, err, tc.want)
+		}
+	}
+}
+
+func TestCheckWritesOutBundles(t *testing.T) {
+	for _, tc := range []struct{ args, want []string }{
+		{[]string{"pos", "-fy"}, []string{"pos", "-f", "-y"}},
+		{[]string{"-yfp", "3", "pos"}, []string{"-y", "-f", "-p", "3", "pos"}},
+		{[]string{"--name", "-fy", "-f"}, []string{"--name", "-fy", "-f"}},
+		{[]string{"--", "-fy"}, []string{"--", "-fy"}},
+	} {
+		fs := bundleSet()
+		got, err := Check(fs, tc.args)
+		if err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%q: %q, %v, want %q", tc.args, got, err, tc.want)
+		}
+		if err := fs.Parse(got); err != nil {
+			t.Errorf("%q: parsing %q: %v", tc.args, got, err)
+		}
+	}
+}
+
+func TestCheckRefusesWhatIsNoBundle(t *testing.T) {
+	for _, args := range [][]string{{"-yx"}, {"-py", "3"}, {"-fy=true"}, {"-fh"}} {
+		if _, err := Check(bundleSet(), args); err == nil || !strings.Contains(err.Error(), "not an option") {
+			t.Errorf("%q: %v, want not an option", args, err)
 		}
 	}
 }

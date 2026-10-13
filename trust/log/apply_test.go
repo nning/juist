@@ -37,7 +37,7 @@ func TestApplyLeavesItsParentUnchanged(t *testing.T) {
 	seen := map[types.Kind]*outcomes{}
 	for seed := uint64(1); seed <= 16; seed++ {
 		g := newGenerator(t, seed)
-		g.run(40)
+		g.run(48)
 		for _, s := range g.states {
 			head := s.Head()
 			for i := range g.records {

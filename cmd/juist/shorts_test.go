@@ -88,6 +88,8 @@ func TestOneLetterOptions(t *testing.T) {
 		t.Fatalf("invite -V and join -n phone admitted %q with %v", n.Name, n.Roles)
 	}
 	mustContain(t, c.mustRun("network", "renumber", "10.7.0.0/22", "-t", "2d", "-y"), "moving to 10.7.0.0/22")
+	mustContain(t, c.mustRun("network", "renumber", "laptop", "10.7.0.9", "-fy"), "laptop moved to 10.7.0.9")
+	mustContain(t, c.mustRun("network", "renumber", "10.8.0.0/22", "-yt", "2d"), "moving to 10.8.0.0/22")
 	mustContain(t, c.mustRun("network", "renumber", "--help"), "-y, --yes", "-t, --for")
 	if _, err := c.run("-H"); err == nil || !strings.Contains(err.Error(), "-H needs a path") {
 		t.Errorf("juist -H with no path: %v", err)

@@ -136,6 +136,11 @@ type JoinRequest struct {
 	// Commit is [CommitNonce] of the nonce the guest reveals once it holds
 	// the admin's salt.
 	Commit [32]byte `cbor:"5,keyasint"`
+
+	// Signing is the guest's ML-DSA key, and SigningProof its signature over
+	// what Proof covers: the guest holds it, in this session.
+	Signing      types.SigningKey `cbor:"6,keyasint"`
+	SigningProof types.PQSig      `cbor:"7,keyasint"`
 }
 
 // Waiting reports an admission that needs more approvals than the host holds.
@@ -177,32 +182,45 @@ type Admission struct {
 	Head    types.Hash     `cbor:"3,keyasint"`
 	Guest   types.Identity `cbor:"4,keyasint"`
 	Sig     types.Sig      `cbor:"5,keyasint"`
+
+	// Signing is the admin key's signing key, which the link names by
+	// fingerprint, and MLDSA its signature.
+	MLDSA   types.PQSig      `cbor:"6,keyasint"`
+	Signing types.SigningKey `cbor:"7,keyasint"`
 }
 
 // SignAdmission states that guest is a member of network as of head.
 func SignAdmission(admin types.PrivateIdentity, network, head types.Hash, guest types.Identity) (*Admission, error) {
-	a := &Admission{Admin: admin.Public(), Network: network, Head: head, Guest: guest}
-	sig, err := admin.Sign(a.message())
+	a := &Admission{Admin: admin.Public(), Network: network, Head: head, Guest: guest, Signing: admin.SigningKey()}
+	sig, pq, err := admin.SignBoth(a.message(), true)
 	if err != nil {
 		return nil, err
 	}
-	a.Sig = sig
+	a.Sig, a.MLDSA = sig, *pq
 	return a, nil
 }
 
-// Verify checks the admission's signature by the key it names.
-func (a *Admission) Verify() error {
-	if !a.Admin.Verify(a.message(), a.Sig) {
+// Verify checks the admission's signatures by the key it names, whose
+// signing key fingerprint names, as a link does; and, where the log names
+// one for the admin key, as past the cut-over, that it is key.
+func (a *Admission) Verify(fingerprint [fingerprintLen]byte, key *types.SigningKey) error {
+	switch {
+	case SigningFingerprint(&a.Signing) != fingerprint:
+		return errors.New("enroll: the admission is signed by another signing key than the link names")
+	case key != nil && *key != a.Signing:
+		return errors.New("enroll: the admission is signed by another signing key than the log names")
+	case !a.Admin.Verify(a.message(), a.Sig) || !a.Signing.Verify(a.message(), &a.MLDSA):
 		return errors.New("enroll: the admission's signature does not verify")
 	}
 	return nil
 }
 
 func (a *Admission) message() []byte {
-	b := append([]byte("juist enroll admission v1\x00"), a.Admin[:]...)
+	b := append([]byte("juist enroll admission v2\x00"), a.Admin[:]...)
 	b = append(b, a.Network[:]...)
 	b = append(b, a.Head[:]...)
 	b = append(b, a.Guest[:]...)
+	b = append(b, a.Signing[:]...)
 	sum := sha256.Sum256(b)
 	return sum[:]
 }
@@ -248,6 +266,9 @@ func (m *Message) validate() error {
 		if err := m.Join.Identity.Validate(); err != nil {
 			return fmt.Errorf("enroll: join request: %w", err)
 		}
+		if err := m.Join.Signing.Validate(); err != nil {
+			return fmt.Errorf("enroll: join request: %w", err)
+		}
 	case m.Welcome != nil:
 		if m.Welcome.Name != "" {
 			if err := types.ValidateName(m.Welcome.Name); err != nil {
@@ -262,6 +283,9 @@ func (m *Message) validate() error {
 		}
 		if a := m.Welcome.Admission; a != nil {
 			if err := a.Admin.Validate(); err != nil {
+				return fmt.Errorf("enroll: admission: %w", err)
+			}
+			if err := a.Signing.Validate(); err != nil {
 				return fmt.Errorf("enroll: admission: %w", err)
 			}
 		}
@@ -291,19 +315,22 @@ func DecodeMessage(b []byte) (Message, error) {
 }
 
 // NewJoinRequest builds a join request for the given keys, proving
-// possession of the identity key in this session.
+// possession of the identity key and its signing key in this session.
 func NewJoinRequest(c *Channel, name string, id types.PrivateIdentity, keys types.NodeKeys,
 	nonce Nonce) (*JoinRequest, error) {
-	proof, err := id.Sign(proofMessage(c.Binding()))
+	msg := proofMessage(c.Binding())
+	proof, pq, err := id.SignBoth(msg, true)
 	if err != nil {
 		return nil, err
 	}
-	return &JoinRequest{Name: name, Identity: id.Public(), Keys: keys, Proof: proof, Commit: CommitNonce(nonce)}, nil
+	return &JoinRequest{Name: name, Identity: id.Public(), Keys: keys, Proof: proof, Commit: CommitNonce(nonce),
+		Signing: id.SigningKey(), SigningProof: *pq}, nil
 }
 
-// Verify checks a join request's proof of possession against this session.
+// Verify checks a join request's proofs of possession against this session.
 func (r *JoinRequest) Verify(c *Channel) error {
-	if !r.Identity.Verify(proofMessage(c.Binding()), r.Proof) {
+	msg := proofMessage(c.Binding())
+	if !r.Identity.Verify(msg, r.Proof) || !r.Signing.Verify(msg, &r.SigningProof) {
 		return errors.New("enroll: the join request's proof of key possession does not verify")
 	}
 	return nil
@@ -316,12 +343,14 @@ func proofMessage(binding [32]byte) []byte {
 
 // NodeRecord is the membership the request asks for, under the given name.
 func (r *JoinRequest) NodeRecord(name string) types.NodeRecord {
+	key := r.Signing
 	return types.NodeRecord{
 		Identity:  r.Identity,
 		Name:      name,
 		WireGuard: r.Keys.WireGuard,
 		X25519:    r.Keys.X25519,
 		MLKEM:     r.Keys.MLKEM,
+		Signing:   &key,
 	}
 }
 

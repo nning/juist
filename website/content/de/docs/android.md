@@ -183,8 +183,8 @@ Die App zeigt, was `juist status` und `juist devices` auf einem Rechner zeigen (
 Ein Gerät wird **Direkt** erreicht, **Über ein Relay** oder gerade nicht:
 **Keine Antwort**, **Wird gesucht** (es wurde vielleicht neu gestartet oder
 hat das Netz gewechselt), **Offline**, **Noch nicht gemeldet**,
-**Noch nicht geprüft** oder **Veraltet** (darauf läuft ein älteres juist, und
-bis es aktualisiert ist, ist es nicht erreichbar).
+**Noch nicht geprüft** oder **Veraltet** (darauf läuft ein älteres juist; bis
+es aktualisiert ist, kommt ein Ping durch, andere Apps nicht).
 
 Tippe auf ein Gerät, um seine Adressen, seine Rollen und seine letzte Meldung
 zu sehen. **Ping** schickt ein Echo durch den Tunnel. juist auf dem Gerät
@@ -211,8 +211,7 @@ Die App verlinkt diese Einstellungen.
 ## Das VPN aus- und einschalten
 
 Der Schalter neben dem Zustand schaltet das VPN aus und ein. Solange es an
-ist, zeigt eine Benachrichtigung, wie viele Geräte das Telefon erreicht, mit
-der Aktion **Ausschalten**.
+ist, zeigt eine Benachrichtigung den Zustand, mit der Aktion **Ausschalten**.
 
 War das VPN an, schaltet juist es nach einem Neustart des Telefons oder einem
 Update der App wieder ein. Auch die Android-Einstellung **Durchgehend aktives

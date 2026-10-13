@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,25 @@ type node struct {
 	addrs    []netip.Prefix
 	endpoint netip.Addr
 	mgr      Manager
+}
+
+// quietLogf is t.Logf under prefix, silent once the test has cleaned up: a
+// data-plane timer can still fire after Close, and t.Logf then panics.
+func quietLogf(t *testing.T, prefix string) logger.Logf {
+	var mu sync.Mutex
+	gone := false
+	t.Cleanup(func() {
+		mu.Lock()
+		gone = true
+		mu.Unlock()
+	})
+	return func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !gone {
+			t.Logf(prefix+format, args...)
+		}
+	}
 }
 
 func newNode(t *testing.T, id uint64, v4, v6 string) *node {
@@ -53,7 +73,7 @@ func startNode(t *testing.T, id uint64, v4, v6 string, mutate func(*Options)) *n
 		},
 		RespondToPing: true,
 		Debug:         true,
-		Logf:          logger.WithPrefix(t.Logf, fmt.Sprintf("n%d: ", id)),
+		Logf:          quietLogf(t, fmt.Sprintf("n%d: ", id)),
 	}
 	if mutate != nil {
 		mutate(&opts)
@@ -180,7 +200,7 @@ func TestARestartedPeerIsReachedAtOnce(t *testing.T) {
 	mgr, err := New(Options{
 		Self:          Self{ID: b.id, NodeKey: b.nodeKey, DiscoKey: b.discoKey, Addrs: b.addrs},
 		RespondToPing: true,
-		Logf:          logger.WithPrefix(t.Logf, "n2': "),
+		Logf:          quietLogf(t, "n2': "),
 	})
 	if err != nil {
 		t.Fatal(err)

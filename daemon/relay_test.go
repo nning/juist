@@ -22,7 +22,7 @@ func (nw *network) setRoles(t *testing.T, f *reconcileFixture, id types.Identity
 	if err != nil {
 		t.Fatalf("building the grant: %v", err)
 	}
-	if err := rec.Sign(nw.admin); err != nil {
+	if err := rec.SignUnder(nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatalf("signing the grant: %v", err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -46,7 +46,7 @@ func (f *reconcileFixture) learnRelay(t *testing.T, dev *device, port uint16, in
 		Seq:        2,
 		Relay:      info,
 	}
-	if err := e.Sign(dev.identity); err != nil {
+	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -130,7 +130,7 @@ func TestHomeRelayNamingNothingIsDropped(t *testing.T) {
 		Seq:        3,
 		HomeRelay:  4242,
 	}
-	if err := e.Sign(other.identity); err != nil {
+	if err := e.SignPQ(other.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -470,7 +470,7 @@ func TestAnAnnouncementFoundInTheDHTIsActedOn(t *testing.T) {
 		GossipPort: 41641,
 		Seq:        7,
 	}
-	if err := e.Sign(other.identity); err != nil {
+	if err := e.SignPQ(other.identity); err != nil {
 		t.Fatal(err)
 	}
 	f.d.onFoundInDHT(e)

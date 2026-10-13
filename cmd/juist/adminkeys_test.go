@@ -53,7 +53,7 @@ func TestEachNetworkHasAnAdminKeyOfItsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aum, err := workLog.Builder().AddAdminKey(types.AdminKey{Public: intruder.Public(), Votes: 1, Name: "x"})
+	aum, err := workLog.Builder().AddAdminKey(types.AdminKey{Public: intruder.Public(), Signing: new(intruder.SigningKey()), Endorsement: intruder.Endorsement(), Votes: 1, Name: "x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,8 @@ func TestEachNetworkHasAnAdminKeyOfItsOwn(t *testing.T) {
 		t.Fatalf("home's key on a change to work: %+v", st)
 	}
 	// The CLI signs a change to work with work's key alone.
-	mustContain(t, h.mustRun("admins", "add", "work", "bob", intruder.Public().String()), "added bob's key")
+	mustContain(t, h.mustRun("admins", "add", "work", "bob",
+		adminKeyText(t, intruder)), "added bob's key")
 
 	if _, err := h.run("create", "lab", "--device", "laptop", "--admin-key", "alice@nowhere"); err == nil ||
 		!strings.Contains(err.Error(), `no admin key "alice@nowhere"`) {
@@ -101,7 +102,8 @@ func TestAKeyFromBeforeKeysPerNetworkSignsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, c.mustRun("admins", "add", "bob", bob.Public().String()), "added bob's key")
+	mustContain(t, c.mustRun("admins", "add", "bob", adminKeyText(t, bob)),
+		"added bob's key")
 	if _, ok := openLog(t, c).State().Admin(bob.Public()); !ok {
 		t.Fatal("the change signed with the old key did not apply")
 	}
@@ -228,4 +230,13 @@ func TestKeysAreFiledOnlyInOnesOwnKeystore(t *testing.T) {
 	if !ownedByUs(t.TempDir()) || ownedByUs("/") {
 		t.Fatal("ownership is not told apart")
 	}
+}
+
+func adminKeyText(t *testing.T, priv types.PrivateIdentity) string {
+	t.Helper()
+	s, err := types.AdminKeyText(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

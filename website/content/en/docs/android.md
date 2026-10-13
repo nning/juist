@@ -177,7 +177,8 @@ The app shows what `juist status` and `juist devices` show on a computer (see
 A device is reached **Direct**, **Through a relay**, or not at the moment:
 **No answer**, **Searching** (it may have restarted or changed networks),
 **Offline**, **Not heard from**, **Not checked yet**, or **Outdated** (it
-runs an older juist, and is unreachable until that is updated).
+runs an older juist; until that is updated, a ping gets through, other apps
+do not).
 
 Tap a device to see its addresses, its roles and when it was last heard from.
 **Ping** sends an echo through the tunnel. juist on that device answers it
@@ -201,8 +202,7 @@ juist in Android's VPN settings. The app links to them.
 ## Turning the VPN off and on
 
 The switch beside the state turns the VPN off and on. While it is on, a
-notification says how many devices the phone reaches, with a **Turn off**
-action.
+notification shows the state, with a **Turn off** action.
 
 If the VPN was on, juist turns it on again after the phone restarts or the
 app is updated. Android's own setting **Always-on VPN**, under the VPN

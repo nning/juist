@@ -61,7 +61,7 @@ func TestAGenesisRetiresNothing(t *testing.T) {
 	founder := founderRecord(t)
 	founder.V4 = new(netip.MustParseAddr("10.9.0.1"))
 	own, old := netip.MustParsePrefix("10.7.0.0/22"), netip.MustParsePrefix("10.9.0.0/22")
-	g, err := Genesis("test-net", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1}},
+	g, err := Genesis("test-net", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1}},
 		[]types.Hash{{1}}, []types.NodeRecord{founder}, testSealer())
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +91,8 @@ func founderRecord(t *testing.T) types.NodeRecord {
 	}
 	var wg types.WGKey
 	wg[0] = 1
-	return types.NodeRecord{Identity: id.Public(), Name: "founder", WireGuard: wg, X25519: x, MLKEM: m}
+	k := id.SigningKey()
+	return types.NodeRecord{Identity: id.Public(), Name: "founder", WireGuard: wg, X25519: x, MLKEM: m, Signing: &k}
 }
 
 // A snapshot is a copy: changing it leaves the state as it was.

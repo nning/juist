@@ -94,7 +94,7 @@ func newFreshFixtureWith(t *testing.T, leasePath string, mutate func(*network)) 
 func (f *freshFixture) leaseFrom(t *testing.T, i int, head types.Hash, at time.Time) []byte {
 	t.Helper()
 	l := types.Lease{Network: f.auth.State().GenesisHash(), Head: head, Issued: uint64(at.Unix())}
-	if err := l.Sign(f.nw.devices[i].identity); err != nil {
+	if err := l.Sign(f.nw.devices[i].identity, f.auth.State().PQ()); err != nil {
 		t.Fatal(err)
 	}
 	b, err := l.Encode()
@@ -352,7 +352,7 @@ func TestAnAdminDeviceStoppedAtASchemaUpgradeStopsVouching(t *testing.T) {
 	prev := f.auth.Head()
 	v := types.CurrentSchema + 1
 	up := types.AUM{Kind: types.KindSchemaUpgrade, Prev: &prev, Schema: &v}
-	if err := up.Sign(f.nw.admin); err != nil {
+	if err := up.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{up}); err != nil {
@@ -412,5 +412,20 @@ func TestANewHeadInTheSameSecondIsVouchedFor(t *testing.T) {
 	f.d.leaseMu.Unlock()
 	if l.Head != f.auth.Head() {
 		t.Fatal("the admin device's lease still names the head before the removal")
+	}
+}
+
+// A lease decoded again past the cut-over is the one held, though its ML-DSA
+// signature sits elsewhere in memory: it is not checked again on every frame.
+func TestALeaseDecodedAgainIsTheOneHeld(t *testing.T) {
+	a := types.Lease{Issued: 7, Sig: types.Sig{1}, MLDSA: &types.PQSig{2}}
+	b := a
+	b.MLDSA = &types.PQSig{2}
+	if !sameLease(&a, &b) {
+		t.Fatal("one lease, decoded twice, reads as two")
+	}
+	b.MLDSA[0] = 3
+	if sameLease(&a, &b) {
+		t.Fatal("leases with different ML-DSA signatures read as one")
 	}
 }

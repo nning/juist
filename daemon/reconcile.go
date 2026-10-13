@@ -67,6 +67,8 @@ func (d *Daemon) Reconcile() error {
 	d.pruneWaiting(state)
 	d.endpoints.SetRelayNames(state.Schema() >= types.SchemaRelayName)
 	d.setPQ(state.Schema() >= types.SchemaPQ)
+	d.setPadded(state.Schema() >= types.SchemaPadded)
+	d.setSigning(state)
 	if d.onAddrsMoved != nil && state.IsMember(d.self) &&
 		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.heldAddrs()) && d.movedSaid.CompareAndSwap(false, true) {
 		go d.onAddrsMoved()
@@ -339,7 +341,7 @@ func (d *Daemon) installRelays(s snapshot, held map[types.Identity]gossip.Endpoi
 	}
 	named := slices.DeleteFunc(slices.Clone(relays), func(r conn.Relay) bool { return r.Name == "" })
 	d.mu.Lock()
-	d.namedRelays = named
+	d.namedRelays, d.relays = named, relays
 	d.mu.Unlock()
 	return relays, nil
 }

@@ -238,7 +238,7 @@ func TestAJoinAnchorsTheAdmittedNetwork(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if keystore.expectAdmitted(sock, admin.Public(), a, guest.Public()) == nil {
+		if keystore.expectAdmitted(sock, enroll.Link{}.WithAdmin(admin.Public(), new(admin.SigningKey())), a, guest.Public()) == nil {
 			t.Errorf("an admission %v not by the link's admin was taken", a)
 		}
 	}
@@ -248,10 +248,10 @@ func TestAJoinAnchorsTheAdmittedNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	stranger2, _ := types.GenerateIdentity()
-	if keystore.expectAdmitted(sock, admin.Public(), admitted, stranger2.Public()) == nil {
+	if keystore.expectAdmitted(sock, enroll.Link{}.WithAdmin(admin.Public(), new(admin.SigningKey())), admitted, stranger2.Public()) == nil {
 		t.Fatal("another device's admission anchored this keystore")
 	}
-	if err := keystore.expectAdmitted(sock, admin.Public(), admitted, guest.Public()); err != nil {
+	if err := keystore.expectAdmitted(sock, enroll.Link{}.WithAdmin(admin.Public(), new(admin.SigningKey())), admitted, guest.Public()); err != nil {
 		t.Fatal(err)
 	}
 	if err := keystore.checkPin(sock, oauth, orecs, noOrphans); err == nil {

@@ -36,9 +36,13 @@ const (
 	// role holds.
 	MaxNameLen = 64
 
+	// MaxNameBytes caps a member's public names and published labels
+	// together, from [SchemaSigning] on, so that a checkpoint at MaxNodes
+	// fits MaxRecordSize.
+	MaxNameBytes = 2048
+
 	// MaxRecordSize caps a record's encoded size. The largest is a checkpoint
-	// at MaxNodes members, which names and published names at their caps push
-	// past it (docs/05-roadmap.md, M18).
+	// at MaxNodes members.
 	MaxRecordSize = 4 << 20
 
 	// maxArrayElements bounds any CBOR array during decoding. It has to

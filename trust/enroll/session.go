@@ -13,6 +13,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
+	"crypto/mlkem"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
@@ -20,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"slices"
 
 	"github.com/fxamacker/cbor/v2"
 
@@ -30,8 +32,9 @@ import (
 // any message a peer of the other version could not decode, so the two
 // devices refuse at the hello, with a reason a person can act on, instead of
 // failing on a field one of them does not know. 2: a join request commits to
-// the nonce the words are made from.
-const ProtocolVersion = 2
+// the nonce the words are made from. 3: the channel is rekeyed by ML-KEM-768
+// after SPAKE2, and a join request brings its ML-DSA key.
+const ProtocolVersion = 3
 
 // Frame size limits. A handshake frame is a few dozen bytes; a channel frame
 // carries at most one log record and its envelope.
@@ -277,7 +280,11 @@ func (inv *Invite) AcceptHello(h *Hello, rw io.ReadWriter) (*Channel, error) {
 	if err := writeHandshake(rw, &hsFrame{Kind: hsConfirm, MAC: keys.confirmHost}); err != nil {
 		return nil, err
 	}
-	return newChannel(rw, keys, false)
+	c, err := newChannel(rw, keys, false)
+	if err != nil {
+		return nil, err
+	}
+	return c, c.encapsulate()
 }
 
 // Join runs the guest's half of the handshake.
@@ -322,7 +329,11 @@ func Join(rw io.ReadWriter, secret Secret) (*Channel, error) {
 	if confirm.Kind != hsConfirm || subtle.ConstantTimeCompare(confirm.MAC, keys.confirmHost) != 1 {
 		return nil, ErrImpostor
 	}
-	return newChannel(rw, keys, true)
+	c, err := newChannel(rw, keys, true)
+	if err != nil {
+		return nil, err
+	}
+	return c, c.decapsulate()
 }
 
 func aadFor(m mode) []byte { return []byte{'j', 'u', 'i', 's', 't', ProtocolVersion, byte(m)} }
@@ -438,35 +449,48 @@ func writeHandshake(w io.Writer, f *hsFrame) error {
 // --- the channel -----------------------------------------------------------
 
 // A Channel is the encrypted session a completed handshake yields: AES-256-GCM
-// in each direction under keys derived from SPAKE2's Ke, with counter nonces,
-// so a frame cannot be replayed, reordered or reflected.
+// in each direction, with counter nonces, so a frame cannot be replayed,
+// reordered or reflected, keyed by SPAKE2's Ke and an ML-KEM-768 exchange.
 type Channel struct {
 	rw         io.ReadWriter
+	guest      bool
 	send, recv cipher.AEAD
 	sent, rcvd uint64
+	ke         []byte
+	transcript []byte
 	binding    [32]byte
 }
 
 func newChannel(rw io.ReadWriter, keys spakeKeys, guest bool) (*Channel, error) {
-	g2h, err := directionKey(keys.ke, "guest to host")
-	if err != nil {
+	c := &Channel{rw: rw, guest: guest, ke: keys.ke, transcript: keys.transcript}
+	if err := c.rekey(keys.ke, nil, "juist enroll v1 "); err != nil {
 		return nil, err
-	}
-	h2g, err := directionKey(keys.ke, "host to guest")
-	if err != nil {
-		return nil, err
-	}
-	c := &Channel{rw: rw, binding: sha256.Sum256(append([]byte("juist enroll binding v1\x00"), keys.transcript...))}
-	if guest {
-		c.send, c.recv = g2h, h2g
-	} else {
-		c.send, c.recv = h2g, g2h
 	}
 	return c, nil
 }
 
-func directionKey(ke []byte, label string) (cipher.AEAD, error) {
-	k, err := hkdf.Key(sha256.New, ke, nil, "juist enroll v1 "+label, 32)
+// rekey sets the channel's keys from secret and salt under label, and
+// restarts its counters, which the new keys make safe.
+func (c *Channel) rekey(secret, salt []byte, label string) error {
+	g2h, err := directionKey(secret, salt, label+"guest to host")
+	if err != nil {
+		return err
+	}
+	h2g, err := directionKey(secret, salt, label+"host to guest")
+	if err != nil {
+		return err
+	}
+	if c.guest {
+		c.send, c.recv = g2h, h2g
+	} else {
+		c.send, c.recv = h2g, g2h
+	}
+	c.sent, c.rcvd = 0, 0
+	return nil
+}
+
+func directionKey(secret, salt []byte, label string) (cipher.AEAD, error) {
+	k, err := hkdf.Key(sha256.New, secret, salt, label, 32)
 	if err != nil {
 		return nil, fmt.Errorf("enroll: deriving a channel key: %w", err)
 	}
@@ -475,6 +499,87 @@ func directionKey(ke []byte, label string) (cipher.AEAD, error) {
 		return nil, err
 	}
 	return cipher.NewGCM(block)
+}
+
+// decapsulate is the guest's half of the ML-KEM exchange: it sends a fresh
+// encapsulation key and takes the ciphertext the host returns.
+func (c *Channel) decapsulate() error {
+	dk, err := mlkem.GenerateKey768()
+	if err != nil {
+		return fmt.Errorf("enroll: drawing an ML-KEM key: %w", err)
+	}
+	ek := dk.EncapsulationKey().Bytes()
+	if err := c.sendRaw(ek); err != nil {
+		return err
+	}
+	ct, err := c.receiveRaw(mlkem.CiphertextSize768)
+	if err != nil {
+		return err
+	}
+	ss, err := dk.Decapsulate(ct)
+	if err != nil {
+		return fmt.Errorf("enroll: %w", err)
+	}
+	return c.agreed(ss, ek, ct)
+}
+
+// encapsulate is the host's half of the ML-KEM exchange.
+func (c *Channel) encapsulate() error {
+	b, err := c.receiveRaw(mlkem.EncapsulationKeySize768)
+	if err != nil {
+		return err
+	}
+	ek, err := mlkem.NewEncapsulationKey768(b)
+	if err != nil {
+		return fmt.Errorf("enroll: the guest's ML-KEM key: %w", err)
+	}
+	ss, ct := ek.Encapsulate()
+	if err := c.sendRaw(ct); err != nil {
+		return err
+	}
+	return c.agreed(ss, b, ct)
+}
+
+// agreed takes the channel's keys from Ke and the ML-KEM secret, salted by
+// the whole transcript, which the session's binding covers too.
+func (c *Channel) agreed(ss, ek, ct []byte) error {
+	th := sha256.New()
+	for _, part := range [][]byte{c.transcript, ek, ct} {
+		th.Write(binary.BigEndian.AppendUint64(nil, uint64(len(part))))
+		th.Write(part)
+	}
+	transcript := th.Sum(nil)
+	if err := c.rekey(append(slices.Clone(c.ke), ss...), transcript, "juist enroll v3 "); err != nil {
+		return err
+	}
+	c.binding = sha256.Sum256(append([]byte("juist enroll binding v3\x00"), transcript...))
+	c.ke, c.transcript = nil, nil
+	return nil
+}
+
+// sendRaw sends b, a fixed-size ML-KEM value, as one channel frame.
+func (c *Channel) sendRaw(b []byte) error {
+	nonce := counterNonce(c.sent)
+	c.sent++
+	return writeFrame(c.rw, c.send.Seal(nil, nonce, b, nil))
+}
+
+// receiveRaw reads one channel frame of exactly size bytes.
+func (c *Channel) receiveRaw(size int) ([]byte, error) {
+	b, err := readFrame(c.rw, size+c.recv.Overhead())
+	if err != nil {
+		return nil, err
+	}
+	nonce := counterNonce(c.rcvd)
+	c.rcvd++
+	pt, err := c.recv.Open(nil, nonce, b, nil)
+	if err != nil {
+		return nil, errors.New("enroll: a message failed authentication")
+	}
+	if len(pt) != size {
+		return nil, fmt.Errorf("enroll: an ML-KEM value of %d bytes, want %d", len(pt), size)
+	}
+	return pt, nil
 }
 
 // Binding identifies this session: both ends compute the same value and no

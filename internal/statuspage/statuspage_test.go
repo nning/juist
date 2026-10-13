@@ -80,12 +80,13 @@ func TestWhatAClientSees(t *testing.T) {
 		code       int
 		has, lacks []string
 	}{
-		{"a member, the public seeing nothing", member, ipc.ShowNone, 200, everything, nil},
+		// The lists say device by device what a count of them would.
+		{"a member, the public seeing nothing", member, ipc.ShowNone, 200, everything, []string{"3 reached", "2 of 3 live"}},
 		{"the public, seeing nothing", public, ipc.ShowNone, 404, nil, []string{"immich"}},
 		{"the public through an ingress, seeing nothing", ingres, ipc.ShowNone, 404, nil, []string{"immich"}},
 		{"the public, seeing services", public, ipc.ShowServices, 200,
-			[]string{"immich.pub.example.org", "phone.pub.example.org", "3 of 4 services up"},
-			[]string{"mailer", "vps", ">nas<", "100.80.", "device admission", "Devices", "the public sees"}},
+			[]string{"immich.pub.example.org", "phone.pub.example.org"},
+			[]string{"mailer", "vps", ">nas<", "100.80.", "device admission", "Devices", "the public sees", "services up"}},
 		{"the public through an ingress, seeing the network", ingres, ipc.ShowNetwork, 200,
 			[]string{"immich.pub.example.org", "vps", "100.80.0.2", "log sync to phone fails"},
 			[]string{"device admission", "Changes"}},
@@ -130,10 +131,6 @@ func TestANameForMembersAloneIsShownToMembers(t *testing.T) {
 		if !strings.Contains(body, "files.pub.example.org") {
 			t.Errorf("from %s, the public names are gone too", from)
 		}
-	}
-	body = serve(t, p, ipc.ShowServices, public, "/").Body.String()
-	if !strings.Contains(body, "2 of 3 services up") {
-		t.Errorf("the public's count includes the name for members alone:\n%s", body)
 	}
 }
 

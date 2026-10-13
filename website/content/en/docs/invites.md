@@ -179,3 +179,5 @@ every destination. In that case, do one of these:
 | `juist: invite expired` | Start a new invite, with a longer `--expires` if the wait was for other admins. |
 | `juist: cannot reach the inviting device, …` | Check that the invite still runs. If both devices are behind NAT, join from an internet connection that can reach the inviting device, or add a relay first. |
 | `juist: comparing the device's words needs a terminal; pass --yes to skip` | Run `juist invite` in a terminal, or pass `--yes` where you cannot compare. |
+| `juist: … the inviting device runs an incompatible version of juist` | Update juist on both devices, then invite again. |
+| `juist: the invite link is from an older juist; ask for a new one` | Update juist on the inviting device and start a new invite. |

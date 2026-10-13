@@ -24,31 +24,44 @@ type Lease struct {
 	// Signer is the identity key of the admin device that signed it.
 	Signer Identity `cbor:"4,keyasint"`
 
-	// Sig is Signer's signature over everything above.
-	Sig Sig `cbor:"5,keyasint"`
+	// Sig is Signer's signature over everything above, and MLDSA its ML-DSA
+	// one, past the cut-over.
+	Sig   Sig    `cbor:"5,keyasint"`
+	MLDSA *PQSig `cbor:"6,keyasint,omitempty"`
 }
 
 // MaxLeaseSize bounds an encoded lease.
-const MaxLeaseSize = 256
+const MaxLeaseSize = 4096
 
 // sigHash is what a lease's signature covers: its encoding without the
 // signature, under its own label, so a lease signature can be no other
 // signature by the same device key.
 func (l *Lease) sigHash() Hash {
 	unsigned := *l
-	unsigned.Sig = Sig{}
+	unsigned.Sig, unsigned.MLDSA = Sig{}, nil
 	return hashLabeled(labelLease, mustEncode(&unsigned))
 }
 
-// Sign signs the lease with the signer's identity key, setting Signer.
-func (l *Lease) Sign(priv PrivateIdentity) error {
+// Sign signs the lease with the signer's identity key, setting Signer; by
+// ML-DSA too where pq, as past the cut-over.
+func (l *Lease) Sign(priv PrivateIdentity, pq bool) error {
 	l.Signer = priv.Public()
 	h := l.sigHash()
-	sig, err := priv.Sign(h[:])
+	sig, mldsa, err := priv.SignBoth(h[:], pq)
 	if err != nil {
 		return err
 	}
-	l.Sig = sig
+	l.Sig, l.MLDSA = sig, mldsa
+	return nil
+}
+
+// VerifyPQ checks the lease's ML-DSA signature against key, the signing key
+// the log names for Signer.
+func (l *Lease) VerifyPQ(key *SigningKey) error {
+	h := l.sigHash()
+	if key == nil || !key.Verify(h[:], l.MLDSA) {
+		return errors.New("the lease carries no valid ML-DSA signature")
+	}
 	return nil
 }
 
@@ -79,6 +92,9 @@ func DecodeLease(b []byte) (Lease, error) {
 	}
 	if l.Network.IsZero() || l.Head.IsZero() || l.Issued == 0 {
 		return Lease{}, errors.New("types: a lease must name a network, a head and a time")
+	}
+	if l.MLDSA != nil && l.MLDSA.IsZero() {
+		return Lease{}, errors.New("types: a lease carries a zero ML-DSA signature")
 	}
 	if err := l.Verify(); err != nil {
 		return Lease{}, err

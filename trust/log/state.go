@@ -65,6 +65,25 @@ func (s *State) Policy() *types.Policy {
 // Schema returns the record schema this network is written under.
 func (s *State) Schema() types.SchemaVersion { return s.schema }
 
+// PQ reports whether the network is past the cut-over to
+// [types.SchemaMLDSA], where everything is signed by ML-DSA.
+func (s *State) PQ() bool { return s.schema >= types.SchemaMLDSA }
+
+// SigningKey returns the ML-DSA key the log names for an admin key or a
+// member, or nil below the cut-over or for an identity it does not name.
+func (s *State) SigningKey(id types.Identity) *types.SigningKey {
+	if !s.PQ() {
+		return nil
+	}
+	if k, ok := s.admins[id]; ok && k.Signing != nil {
+		return new(*k.Signing)
+	}
+	if n, ok := s.nodes[id]; ok && n.Signing != nil {
+		return new(*n.Signing)
+	}
+	return nil
+}
+
 // Vouchers returns how many admin devices must vouch for a node's view within
 // the freshness TTL.
 func (s *State) Vouchers() uint32 { return max(s.vouchers, 1) }

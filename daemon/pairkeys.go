@@ -143,14 +143,15 @@ func (d *Daemon) pairEnv(state *log.State, n *types.NodeRecord, ep gossip.Endpoi
 		return nil, false
 	}
 	return &pairkey.Env{
-		Network:   state.GenesisHash(),
-		Self:      pairkey.Side{ID: d.self, WG: self.WireGuard},
-		Peer:      pairkey.Side{ID: n.Identity, WG: n.WireGuard},
-		PeerMLKEM: n.MLKEM,
-		PeerStore: ep.PairStore,
-		Epoch:     min(own, ep.Epoch),
-		Decap:     d.own.Load().recipient.Decapsulate,
-		Now:       d.now(),
+		Network:     state.GenesisHash(),
+		Self:        pairkey.Side{ID: d.self, WG: self.WireGuard},
+		Peer:        pairkey.Side{ID: n.Identity, WG: n.WireGuard},
+		PeerMLKEM:   n.MLKEM,
+		PeerStore:   ep.PairStore,
+		PeerSigning: n.Signing, // none below the cut-over
+		Epoch:       min(own, ep.Epoch),
+		Decap:       d.own.Load().recipient.Decapsulate,
+		Now:         d.now(),
 	}, true
 }
 
@@ -180,7 +181,7 @@ func (d *Daemon) pairMsg(to types.Identity) *pairkey.Msg {
 	d.advancePair(env, to.ShortString())
 	var m pairkey.Msg
 	d.readPairs(func(s *pairkey.Store) { m = s.Outgoing(env) })
-	if err := m.Sign(d.identity, env.Network); err != nil {
+	if err := m.Sign(d.identity, env.Network, env.PeerSigning != nil); err != nil {
 		d.logf("daemon: signing a preshared key's message: %v", err)
 		return nil
 	}
@@ -193,7 +194,7 @@ func (d *Daemon) onPair(m *pairkey.Msg) {
 	if !ok {
 		return
 	}
-	if err := m.Verify(env.Network); err != nil {
+	if err := m.Verify(env.Network, env.PeerSigning); err != nil {
 		d.logf("daemon: dropping a preshared key's message: %v", err)
 		return
 	}
@@ -298,6 +299,50 @@ func (d *Daemon) setPQ(on bool) {
 	d.mu.Lock()
 	d.pq = on
 	d.mu.Unlock()
+}
+
+// setPadded says whether the network is at [types.SchemaPadded] or above,
+// where discovery items are padded and announcements name their build's
+// schema.
+func (d *Daemon) setPadded(on bool) {
+	d.endpoints.SetSchemas(on)
+	d.mu.Lock()
+	d.padded = on
+	d.mu.Unlock()
+}
+
+// setSigning follows the network to the cut-over: at [types.SchemaSigning]
+// this node announces its signing key, and past the cut-over it signs by
+// ML-DSA and holds announcements to the keys the log names.
+func (d *Daemon) setSigning(state *log.State) {
+	var keys map[types.Identity]types.SigningKey
+	if state.PQ() {
+		keys = make(map[types.Identity]types.SigningKey, len(state.Nodes()))
+		for _, n := range state.Nodes() {
+			if n.Signing != nil {
+				keys[n.Identity] = *n.Signing
+			}
+		}
+	}
+	claiming, mldsa := state.Schema() == types.SchemaSigning, state.PQ()
+	d.mu.Lock()
+	changed := (keys == nil) != (d.signingKeys == nil) || !maps.Equal(keys, d.signingKeys)
+	if claiming != d.claiming || mldsa != d.mldsa {
+		// Signed again, with what the network now asks for.
+		d.announced, d.signed = nil, nil
+	}
+	d.claiming, d.mldsa, d.signingKeys = claiming, mldsa, keys
+	d.mu.Unlock()
+	if changed {
+		d.endpoints.SetSigningKeys(keys)
+	}
+}
+
+// paddedItems reports whether discovery items are sealed padded.
+func (d *Daemon) paddedItems() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.padded
 }
 
 // wantPair has the next push reach id, whom an exchange waits on.

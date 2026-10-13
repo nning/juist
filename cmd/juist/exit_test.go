@@ -519,7 +519,7 @@ func TestAFileIsHandedOnByItsSigner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := aum.Sign(keys[0]); err != nil {
+	if err := aum.SignUnder(keys[0], auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	bobCLI := newCLI(t)
@@ -533,9 +533,14 @@ func TestAFileIsHandedOnByItsSigner(t *testing.T) {
 	if got := own.handedOn(auth.State(), &aum); !got.IsZero() {
 		t.Errorf("alice's own file is handed on by %v", got)
 	}
-	aum.Signatures[0].Sig[0] ^= 1
+	aum.Signatures[0].PQ[0] ^= 1
 	if got := bob.handedOn(auth.State(), &aum); !got.IsZero() {
 		t.Errorf("a forged signature made %v the proposer", got)
+	}
+	aum.Signatures[0].PQ[0] ^= 1
+	aum.Signatures[0].Sig[0] = 1
+	if got := bob.handedOn(auth.State(), &aum); !got.IsZero() {
+		t.Errorf("a signature carrying an Ed25519 one beside its ML-DSA one made %v the proposer", got)
 	}
 }
 

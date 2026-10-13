@@ -105,7 +105,7 @@ func (m *mesh) apply(t *testing.T, on *meshNode, build func(*log.Builder) (types
 		t.Fatal(err)
 	}
 	for _, k := range append(extra, m.nw.admin) {
-		if err := rec.Sign(k); err != nil {
+		if err := rec.SignUnder(k, on.auth.State().Schema()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -259,7 +259,7 @@ func TestSkippedEpochsAreFilledIn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := rec.Sign(f.nw.admin); err != nil {
+		if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
 			t.Fatal(err)
 		}
 		next, err := b.Dry(&rec)

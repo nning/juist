@@ -287,7 +287,7 @@ func TestSigHashExcludesSignatures(t *testing.T) {
 	if a.SigHash() != before {
 		t.Error("adding a signature changed the signing hash")
 	}
-	if !a.VerifySignature(second.Public()) {
+	if !a.VerifySignature(second.Public(), nil) {
 		t.Error("signature added second does not verify")
 	}
 	stripped := AUM{Kind: KindGenesis, State: a.State}

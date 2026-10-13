@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"tailscale.com/types/key"
-	"tailscale.com/types/logger"
 
 	"github.com/nning/juist/internal/instance"
 )
@@ -34,7 +33,7 @@ func TestTunNameYieldsToInjectedDevice(t *testing.T) {
 		},
 		Tun:     newEchoTUN(),
 		TunName: name,
-		Logf:    logger.WithPrefix(t.Logf, "n1: "),
+		Logf:    quietLogf(t, "n1: "),
 	})
 	if err != nil {
 		t.Fatalf("New with an injected Tun and a TunName: %v", err)
@@ -118,7 +117,7 @@ func TestRealDevicePlumbsOverlayIntoHost(t *testing.T) {
 		},
 		TunName:  name,
 		Instance: inst,
-		Logf:     logger.WithPrefix(t.Logf, "n1: "),
+		Logf:     quietLogf(t, "n1: "),
 	})
 	if err != nil {
 		// euid 0 without CAP_NET_ADMIN (some containers), or no /dev/net/tun:

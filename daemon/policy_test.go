@@ -31,7 +31,7 @@ func (nw *network) setPolicy(t *testing.T, f *reconcileFixture, src string) {
 	if err != nil {
 		t.Fatalf("building the policy: %v", err)
 	}
-	if err := rec.Sign(nw.admin); err != nil {
+	if err := rec.SignUnder(nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -309,7 +309,7 @@ func TestAPeersSealedAddressesOpenWithItsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Seq++
-	if err := e.Sign(n1.identity); err != nil {
+	if err := e.SignPQ(n1.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -326,7 +326,7 @@ func TestAPeersSealedAddressesOpenWithItsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := gossip.AddrKey{Owner: n1.record.Identity, ID: k.ID(), Seq: 1, Wraps: [][]byte{addrkey.Wrap(pair, n1.record.Identity, k)}}
-	if err := rec.Sign(n1.identity); err != nil {
+	if err := rec.SignPQ(n1.identity); err != nil {
 		t.Fatal(err)
 	}
 	if !f.d.endpoints.AddKey(rec) {

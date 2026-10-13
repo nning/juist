@@ -22,6 +22,10 @@ type Env struct {
 	// PeerMLKEM is the peer's ML-KEM key as the log names it.
 	PeerMLKEM types.MLKEMKey
 
+	// PeerSigning is the peer's signing key as the log names it past the
+	// cut-over, nil before it: messages are signed by ML-DSA there.
+	PeerSigning *types.SigningKey
+
 	// PeerStore is the store the peer's announcement names; a pair key made
 	// with another is dropped.
 	PeerStore uint64

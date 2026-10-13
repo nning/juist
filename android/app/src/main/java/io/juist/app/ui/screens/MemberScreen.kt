@@ -131,9 +131,11 @@ fun MemberScreen(
                 }
 
                 SectionTitle(stringResource(R.string.section_reach))
+                // A ping passes an outdated member's filter; no other app does.
+                val outdated = member.reach == Reach.Outdated
                 Panel(Modifier.animateContentSize()) {
                     Text(
-                        stringResource(R.string.ping_about),
+                        stringResource(if (outdated) R.string.ping_about_outdated else R.string.ping_about),
                         Modifier.padding(Space.l),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -157,7 +159,7 @@ fun MemberScreen(
                         }
                         val address = member.v4.ifEmpty { member.v6.takeIf { it.isNotEmpty() }?.let { "[$it]" } }
                         if (address != null) {
-                            OutlinedButton({ onOpen("http://$address/") }, Modifier.fillMaxWidth(), enabled = on) {
+                            OutlinedButton({ onOpen("http://$address/") }, Modifier.fillMaxWidth(), enabled = on && !outdated) {
                                 Icon(painterResource(R.drawable.ic_open), null, Modifier.size(18.dp))
                                 Spacer(Modifier.width(Space.s))
                                 Text(stringResource(R.string.action_open_web))

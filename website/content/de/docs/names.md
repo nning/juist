@@ -105,17 +105,25 @@ wie dieses Gerät die Namen des Netzes auflöst:
 | `home.juist; mail.example.org at nas` | die Namen der Mitglieder und die öffentlichen Namen funktionieren |
 | `home.juist; 1 public name, off on this device` | es gibt einen öffentlichen Namen, aber dieses Gerät hat öffentliche Namen nicht eingeschaltet |
 | `home.juist not resolved: systemd-resolved refused juistd` | systemd-resolved hat juistd nicht erlaubt, das DNS einzurichten |
+| `home.juist not resolved: systemd-resolved refused juistd: polkit is not installed` | dasselbe, auf einem Host ohne polkit, das die Regel des Pakets ausführt |
 | `home.juist not resolved: /etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub` | Programme auf diesem Gerät umgehen systemd-resolved |
 
 Hat systemd-resolved juistd abgewiesen, ergänzt `juist status`:
 
 ```console
-hint: the package's polkit rule allows juistd that, where polkit runs: /usr/share/polkit-1/rules.d/60-juist.rules
+hint: the package's polkit rule allows juistd that: /usr/share/polkit-1/rules.d/60-juist.rules
 ```
 
 Installiere juist als Paket (siehe
-[Installation]({{< relref "docs/install" >}})). Das Paket bringt diese Regel
-mit, und auch polkit, wo es dem Host fehlt. Im Uplink-Modus nennt der Hinweis
+[Installation]({{< relref "docs/install" >}})), das diese Regel mitbringt.
+Fehlt polkit, etwa nach `dpkg -i`, das die von juist empfohlenen Pakete
+auslässt, installiert der Hinweis es:
+
+```console
+hint: sudo apt install polkitd, or sudo dnf install polkit
+```
+
+juistd versucht es binnen einer Minute erneut, ohne Neustart. Im Uplink-Modus nennt der Hinweis
 den Befehl, mit dem `/etc/resolv.conf` auf den Stub verweist:
 
 ```sh

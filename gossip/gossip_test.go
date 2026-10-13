@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ type fakeLog struct {
 	head    types.Hash
 	epoch   uint64
 	have    []types.Hash
+	schema  atomic.Uint32 // a types.SchemaVersion, which a test moves while sessions read it
 
 	// missing overrides what this log offers a peer. Nil offers nothing.
 	missing func([]types.Hash, types.Hash) ([]types.AUM, error)
@@ -34,7 +36,7 @@ type fakeLog struct {
 }
 
 func (l *fakeLog) View() (View, error) {
-	return View{Network: l.network, Head: l.head, Epoch: l.epoch, Anchor: types.Hash{0xa}, Have: l.have}, nil
+	return View{Network: l.network, Head: l.head, Epoch: l.epoch, Anchor: types.Hash{0xa}, Have: l.have, Schema: types.SchemaVersion(l.schema.Load())}, nil
 }
 
 func (l *fakeLog) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM, error) {
@@ -49,6 +51,16 @@ func (l *fakeLog) Member(id types.Identity) (types.NodeRecord, bool, error) {
 		return types.NodeRecord{}, false, nil
 	}
 	return l.member(id)
+}
+
+func (l *fakeLog) SigningKey(id types.Identity) *types.SigningKey {
+	if types.SchemaVersion(l.schema.Load()) < types.SchemaMLDSA {
+		return nil
+	}
+	if rec, ok, _ := l.Member(id); ok {
+		return rec.Signing
+	}
+	return nil
 }
 
 func (l *fakeLog) Inform(records []types.AUM) error {
@@ -129,7 +141,7 @@ func newTestNodeTimeout(t *testing.T, network types.Hash, epoch uint64, s secret
 	tn := &testNode{
 		priv:    priv,
 		id:      priv.Public(),
-		record:  types.NodeRecord{Identity: priv.Public(), X25519: x, MLKEM: m},
+		record:  types.NodeRecord{Identity: priv.Public(), X25519: x, MLKEM: m, Signing: new(priv.SigningKey())},
 		keyring: kr,
 		cache:   NewCache(),
 		log:     &fakeLog{network: network, epoch: epoch},

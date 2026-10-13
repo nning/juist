@@ -24,7 +24,6 @@ class CoreTest {
         assertEquals(State.Connected, v.state)
         assertEquals("fd00::5", v.self.v6)
         assertEquals(listOf(Reach.Direct, Reach.Relay, Reach.Sought, Reach.Silent), v.members.map { it.reach })
-        assertEquals(2, v.reached)
         assertEquals(FreshState.Fresh, v.fresh.state)
         assertEquals(listOf("epoch", "silent", "seeking"), v.alarms.map { it.kind })
         assertEquals(Severity.Warn, v.alarms[0].severity)

@@ -178,14 +178,25 @@ Das Netz wurde aktualisiert, und auf nas läuft noch eine Version von juist
 von vor dem Upgrade. Bis du juist auf nas aktualisierst, erreicht nichts von
 deinem Verkehr nas, und nichts von seinem dich. Sein Tunnel trägt nur die
 Änderungen am Netz, damit nas dir dasselbe melden kann. `juist devices` zeigt
-es als `outdated`.
+es als `outdated`. Hat nas gar keinen Tunnel zu diesem Gerät, weil seine
+Version kein Gerät kennt, das nach dem Upgrade beigetreten ist, zeigt es
+`no answer`.
+
+### `warning: nas runs an older juist, which applies no changes until updated`
+
+Das Netz wurde aktualisiert, und auf nas läuft noch eine Version von juist
+von vor dem Upgrade. nas bleibt erreichbar, übernimmt aber keine Änderung am
+Netz, bis du juist auf nas aktualisierst, auch kein Entfernen.
+`juist status` auf nas meldet dasselbe.
 
 ### `warning: nas fell too far behind to reach this device`
 
 nas war für mehr Änderungen offline, als dieses Gerät Schlüssel aufbewahrt.
 nas kann den Stand von einem Gerät nachholen, das diese Schlüssel noch hat,
 meist von einem, das ebenso lange offline war. Sonst nimm nas mit einer neuen
-Einladung wieder ins Netz auf.
+Einladung wieder ins Netz auf. Das wird nur über ein Gerät gesagt, das läuft:
+Von einem, das offline ist, hat dieses Gerät womöglich nur eine Ankündigung
+von vor seinem eigenen Beitritt.
 
 ### `removed`
 
@@ -241,7 +252,7 @@ Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
 Du nutzt einen Exit-Node, aber systemd-resolved hat juistd nicht erlaubt,
 DNS durch den Tunnel zu leiten. Die Anfragen gehen also direkt ins Internet.
 Das juist-Paket bringt eine polkit-Regel mit, die juistd das erlaubt, sofern
-polkit läuft. Installiere juist deshalb als Paket, und polkit, falls es auf
-dem Rechner fehlt. Siehe
+polkit läuft. Installiere juist deshalb als Paket, und polkit, wo die Zeile
+auf `polkit is not installed` endet, wie der Hinweis sagt. Siehe
 [Installation]({{< relref "docs/install" >}}) und
 [Namen]({{< relref "docs/names" >}}).

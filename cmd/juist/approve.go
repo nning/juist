@@ -297,12 +297,11 @@ func (a *app) handedOn(state *log.State, aum *types.AUM) types.Identity {
 		return types.Identity{}
 	}
 	var other types.Identity
-	hash := aum.SigHash()
 	for _, s := range aum.Signatures {
 		_, admin := state.Admin(s.KeyID)
 		mine := slices.ContainsFunc(files, func(k adminKeyFile) bool { return k.priv.Public() == s.KeyID })
 		switch {
-		case !admin || mine || !s.KeyID.Verify(hash[:], s.Sig):
+		case !admin || mine || !state.ValidSignature(aum, &s):
 		case !other.IsZero():
 			return types.Identity{}
 		default:

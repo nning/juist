@@ -156,7 +156,11 @@ log names it here files it under that network.`}
 		return err
 	}
 	a.ok("created admin key %q; an admin of the network runs:", name)
-	a.command("juist admins add %s %v --on %s", pos[0], priv.Public(), *on)
+	text, err := types.AdminKeyText(priv)
+	if err != nil {
+		return err
+	}
+	a.command("juist admins add %s %s --on %s", pos[0], text, *on)
 	a.hint("an admin already? add it under your admin name, or it gets a vote of its own")
 	return nil
 }
@@ -173,7 +177,7 @@ an unverified label.`}
 	if err != nil {
 		return err
 	}
-	key, err := types.ParseIdentity(pos[1])
+	key, signing, endorsement, err := types.ParseAdminKey(pos[1])
 	if err != nil {
 		return fmt.Errorf("bad key %q; want the nid:… \"juist admins new\" printed", pos[1])
 	}
@@ -216,7 +220,11 @@ an unverified label.`}
 			return fmt.Errorf("admin key %q exists; pick another name%s", k.Name, hint)
 		}
 	}
-	add := types.AdminKey{Public: key, Votes: uint32(*votes), Name: pos[0]}
+	if signing == nil && state.PQ() {
+		return errors.New("the key names no signing key, which the network needs; it is from an older juist\n" +
+			"hint: juist admins new prints it whole")
+	}
+	add := types.AdminKey{Public: key, Votes: uint32(*votes), Name: pos[0], Signing: signing, Endorsement: endorsement}
 	done := fmt.Sprintf("added %s's key, %s", pos[0], count(*votes, "vote"))
 	if holders {
 		// With a holder naming the person, the key's own name is its machine.
@@ -252,8 +260,9 @@ an unverified label.`}
 func adminsReceive(a *app, args []string) error {
 	s := spec{name: "juist admins receive", about: `
 Give this keystore's admin keys the encryption keys that changes waiting for
-their votes are sealed to, so that they reach you on the admin devices. It
-is a change like any other, which each key signs for itself.`}
+their votes are sealed to, so that they reach you on the admin devices, and
+from schema 17 on the signing keys the cut-over to ML-DSA needs. Each is a
+change like any other, which the key signs for itself.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
@@ -268,44 +277,65 @@ is a change like any other, which each key signs for itself.`}
 	if err != nil {
 		return err
 	}
-	governs, changed := false, false
-	for i, f := range files {
+	type step struct {
+		build      func(*log.Builder) (types.AUM, error)
+		file, done string
+	}
+	var steps []step
+	governs := false
+	for _, f := range files {
 		k, ok := auth.State().Admin(f.priv.Public())
 		if !ok {
 			continue
 		}
 		governs = true
+		name := cmp.Or(keyPerson(k), k.Public.ShortString())
 		r, err := adminRecipient(f.priv)
 		if err != nil {
 			return err
 		}
-		if k.Recipient != nil && *k.Recipient == r {
-			continue
+		if k.Recipient == nil || *k.Recipient != r {
+			steps = append(steps, step{
+				build: func(b *log.Builder) (types.AUM, error) { return b.SetAdminRecipient(k.Public, r) },
+				file:  "admin-receive-" + fileSafe(f.name) + ".rec",
+				done:  fmt.Sprintf("changes waiting for %s reach key %s", name, f.name)})
 		}
-		aum, err := auth.Builder().SetAdminRecipient(k.Public, r)
+		if st := auth.State(); st.Schema() >= types.SchemaSigning && !st.PQ() &&
+			(k.Signing == nil || *k.Signing != f.priv.SigningKey()) {
+			e, err := f.priv.Endorse()
+			if err != nil {
+				return err
+			}
+			m := types.MemberKey{Identity: k.Public, Key: f.priv.SigningKey(), Endorsement: e}
+			steps = append(steps, step{
+				build: func(b *log.Builder) (types.AUM, error) { return b.SetAdminSigning(m) },
+				file:  "admin-signing-" + fileSafe(f.name) + ".rec",
+				done:  fmt.Sprintf("key %s of %s has its signing key", f.name, name)})
+		}
+	}
+	if !governs {
+		return errors.New("no admin key of this network here\nhint: run it where an admin's key is")
+	}
+	if len(steps) == 0 {
+		a.ok("unchanged: your keys here receive changes and have their signing keys")
+		return nil
+	}
+	for i, st := range steps {
+		aum, err := st.build(auth.Builder())
 		if err != nil {
 			return err
 		}
-		name := cmp.Or(keyPerson(k), k.Public.ShortString())
-		applied, err := a.submit(auth, &change{aum: aum, file: "admin-receive-" + fileSafe(f.name) + ".rec",
-			done: fmt.Sprintf("changes waiting for %s reach key %s", name, f.name)})
+		applied, err := a.submit(auth, &change{aum: aum, file: st.file, done: st.done})
 		if err != nil || !applied {
 			// Another from this head would fork the one pending.
-			if err == nil && i < len(files)-1 {
-				a.hint("once that is applied, run it again for the other keys here")
+			if err == nil && i < len(steps)-1 {
+				a.hint("once that is applied, run it again for the rest")
 			}
 			return err
 		}
 		if auth, err = a.freshLog(); err != nil {
 			return err
 		}
-		changed = true
-	}
-	switch {
-	case !governs:
-		return errors.New("no admin key of this network here\nhint: run it where an admin's key is")
-	case !changed:
-		a.ok("unchanged: changes waiting for your vote reach your keys here")
 	}
 	return nil
 }
@@ -401,8 +431,12 @@ Take an admin key's vote away; refused if the rest cannot reach the quorum.`}
 		return err
 	}
 	name := cmp.Or(keyPerson(key), key.Public.ShortString())
-	_, err = a.submit(auth, &change{aum: aum, file: "admin-remove-" + fileSafe(name) + ".rec",
+	applied, err := a.submit(auth, &change{aum: aum, file: "admin-remove-" + fileSafe(name) + ".rec",
 		done: removedKeyText(state, key, name)})
+	if applied && state.Schema() == types.SchemaSigning {
+		// A removed key holding the quorum could race this with a cut-over.
+		a.hint("cut over soon, so the removed key cannot: juist log upgrade")
+	}
 	return err
 }
 
@@ -604,6 +638,10 @@ func holderKeys(state *log.State, name string) []types.AdminKey {
 }
 
 func resolveAdmin(state *log.State, arg string) (types.AdminKey, error) {
+	// A key as juist admins new printed it names its identity first.
+	if id, _, _, err := types.ParseAdminKey(arg); err == nil {
+		arg = id.String()
+	}
 	var matches []types.AdminKey
 	for _, k := range state.Admins() {
 		if strings.EqualFold(k.Name, arg) || k.Holder != "" && strings.EqualFold(k.Holder, arg) || k.Public.String() == arg ||

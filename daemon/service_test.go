@@ -371,10 +371,10 @@ func TestRotationIsAdoptedWithoutARestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rec.VerifySignature(f.nw.devices[0].record.Identity) {
+	if !rec.VerifySignature(f.nw.devices[0].record.Identity, f.nw.devices[0].record.Signing) {
 		t.Fatal("the device did not sign its own rotation")
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := rec.Encode()
@@ -602,7 +602,7 @@ func TestAnAbandonedRotationApprovedAnywayIsAdopted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := rec.Encode()
@@ -635,7 +635,7 @@ func TestAbandoningTwiceKeepsBothKeySets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := rec.Encode()
@@ -674,7 +674,7 @@ func TestAnIdentityRotationApprovedWhileDownIsAdopted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
 		t.Fatal(err)
 	}
 	st, err := store.Open(filepath.Join(f.home, keys.LogDir))
@@ -1024,7 +1024,7 @@ func TestAMovedDeviceMovesOntoItsNewAddressAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := move.Sign(f.nw.admin); err != nil {
+	if err := move.SignUnder(f.nw.admin, auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	body, err := move.Encode()
@@ -1125,7 +1125,7 @@ func TestTheDisableRecordComesFirstOffTheChain(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := rec.Sign(f.nw.admin); err != nil {
+		if err := rec.SignUnder(f.nw.admin, mesh.authority.State().Schema()); err != nil {
 			t.Fatal(err)
 		}
 		admissions = append(admissions, rec)

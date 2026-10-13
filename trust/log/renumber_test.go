@@ -26,12 +26,17 @@ func (h *harness) admitAt(name, v4 string) types.NodeRecord {
 }
 
 // apply signs a built record and informs the harness of it.
-func (h *harness) apply(aum types.AUM, err error) types.AUM {
+func (h *harness) apply(aum types.AUM, err error, also ...types.PrivateIdentity) types.AUM {
 	h.t.Helper()
 	if err != nil {
 		h.t.Fatalf("building a record: %v", err)
 	}
 	h.signQuorum(&aum)
+	for _, k := range also {
+		if err := h.sign(&aum, k); err != nil {
+			h.t.Fatalf("signing: %v", err)
+		}
+	}
 	if err := h.auth.Inform(aum); err != nil {
 		h.t.Fatalf("%v: %v", aum.Kind, err)
 	}
@@ -313,7 +318,7 @@ func TestConcurrentLikeRenumberingsDoNotAlarm(t *testing.T) {
 	}
 	signedBy := func(i int, aum types.AUM) types.AUM {
 		t.Helper()
-		if err := aum.Sign(h.admins[i]); err != nil {
+		if err := h.sign(&aum, h.admins[i]); err != nil {
 			t.Fatal(err)
 		}
 		return aum

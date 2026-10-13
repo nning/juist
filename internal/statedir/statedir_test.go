@@ -144,7 +144,7 @@ func TestSeedHintsKeepsOnlyWhatVerifies(t *testing.T) {
 
 	lease := func(issued uint64) []byte {
 		l := types.Lease{Network: types.Hash{1}, Head: types.Hash{2}, Issued: issued}
-		if err := l.Sign(id); err != nil {
+		if err := l.Sign(id, false); err != nil {
 			t.Fatal(err)
 		}
 		b, err := l.Encode()

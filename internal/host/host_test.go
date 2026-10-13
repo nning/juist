@@ -29,7 +29,7 @@ func sealer(epoch uint64, members []types.NodeRecord) (*types.EpochRecord, error
 func network(t *testing.T, admin types.PrivateIdentity, g *keys.Node) []types.AUM {
 	t.Helper()
 	secret := make([]byte, types.DisablementSecretSize)
-	genesis, err := log.Genesis("home", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin"}},
+	genesis, err := log.Genesis("home", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "admin"}},
 		[]types.Hash{types.DisablementCommit(secret)}, nil, sealer)
 	if err != nil {
 		t.Fatal(err)
@@ -43,11 +43,11 @@ func network(t *testing.T, admin types.PrivateIdentity, g *keys.Node) []types.AU
 	}
 	v4 := netip.MustParseAddr("100.64.0.2")
 	add, err := auth.Builder().AddNode(types.NodeRecord{Identity: g.Identity.Public(), Name: "phone",
-		WireGuard: g.Public.WireGuard, X25519: g.Public.X25519, MLKEM: g.Public.MLKEM, V4: &v4}, sealer)
+		WireGuard: g.Public.WireGuard, X25519: g.Public.X25519, MLKEM: g.Public.MLKEM, V4: &v4, Signing: new(g.Identity.SigningKey())}, sealer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.Sign(admin); err != nil {
+	if err := add.SignUnder(admin, types.CurrentSchema); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Inform(add); err != nil {
@@ -114,7 +114,7 @@ func TestTheGuestRequiresTheAdminsAdmission(t *testing.T) {
 			}()
 			stored := false
 			_, err = guest.Join(ctx, guest.Options{
-				Invite: h.Invite().Link().WithAdmin(admin.Public()).String(),
+				Invite: h.Invite().Link().WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
 				Name:   "phone",
 				Keys:   g,
 				Adopt:  func([]types.AUM) error { stored = true; return nil },
@@ -165,7 +165,7 @@ func TestSilentConnectionsDoNotHoldTheInvite(t *testing.T) {
 		defer c.Close()
 	}
 	start := time.Now()
-	if _, err := guest.Join(ctx, guest.Options{Invite: h.Invite().Link().WithAdmin(admin.Public()).String(),
+	if _, err := guest.Join(ctx, guest.Options{Invite: h.Invite().Link().WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
 		Name: "phone", Keys: g, Adopt: func([]types.AUM) error { return nil }}); err != nil {
 		t.Fatalf("the guest was kept out: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestAGuestJoinsThroughTheRelay(t *testing.T) {
 	var joinErr error
 	relayed := false
 	for range 20 { // until the host's wait has registered at the relay
-		if _, joinErr = guest.Join(ctx, guest.Options{Invite: link.WithAdmin(admin.Public()).String(),
+		if _, joinErr = guest.Join(ctx, guest.Options{Invite: link.WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
 			Name: "phone", Keys: g, Adopt: func([]types.AUM) error { return nil },
 			Progress: func(e guest.Event) { relayed = relayed || e.Kind == guest.Connected && e.Relayed },
 		}); joinErr == nil {
@@ -289,7 +289,7 @@ func TestBothSidesShowTheSameWords(t *testing.T) {
 	}}
 	go h.Serve(ctx, host, func() ([]types.AUM, [][]byte, [][]byte, error) { return records, nil, nil, nil }, nil)
 	var guestWords string
-	if _, err := guest.Join(ctx, guest.Options{Invite: h.Invite().Link().WithAdmin(admin.Public()).String(),
+	if _, err := guest.Join(ctx, guest.Options{Invite: h.Invite().Link().WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
 		Name: "phone", Keys: g, Adopt: func([]types.AUM) error { return nil },
 		Progress: func(e guest.Event) {
 			if e.Kind == guest.Compare {
@@ -438,7 +438,7 @@ func TestTheHostIsHandedTheGuestsAnnouncement(t *testing.T) {
 	announcement := []byte("signed endpoint record")
 	started := false
 	if _, err := guest.Join(ctx, guest.Options{
-		Invite: h.Invite().Link().WithAdmin(admin.Public()).String(),
+		Invite: h.Invite().Link().WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
 		Name:   "phone",
 		Keys:   g,
 		Adopt:  func([]types.AUM) error { return nil },

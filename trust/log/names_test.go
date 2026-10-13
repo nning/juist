@@ -48,7 +48,7 @@ func TestNamesFollowTheMember(t *testing.T) {
 	}
 	h.signQuorum(&rot)
 	for _, k := range []types.PrivateIdentity{fresh, h.nodeIDs[mailer.Identity]} {
-		if err := rot.Sign(k); err != nil {
+		if err := h.sign(&rot, k); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -92,7 +92,7 @@ func TestNamesAreRefused(t *testing.T) {
 	id := zeus.Identity
 	short := types.AUM{Kind: types.KindSetNodeNames, Prev: new(h.auth.Head()), Subject: &id,
 		Names: &types.NameGrant{Names: []string{"www.example.net"}}}
-	if err := short.Sign(h.admins[0]); err != nil {
+	if err := h.sign(&short, h.admins[0]); err != nil {
 		t.Fatal(err)
 	}
 	h.mustReject("names one vote short", RuleUnauthorized, short)

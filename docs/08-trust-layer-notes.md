@@ -411,13 +411,14 @@ record.
 strictly, so a field an older build does not know makes it refuse the whole
 frame, and with it the records that would tell it to update. What a schema
 adds to the wire therefore goes only to a peer that announces it reads it:
-an announcement naming an epoch only to a peer whose own names one. The next
-schema that adds to the wire also has every member announce the newest
-schema its build implements, so that the rule, and `juist status` calling a
-member outdated, rest on what a build says of itself rather than on what an
-announcement happens to lack.
+an announcement naming an epoch only to a peer whose own names one, and from
+schema 16 on, when every member announces the newest schema its build
+implements, one naming a schema only to a peer whose own names one, and
+`juist status` names a live member announcing an older one. A peer whose
+hello holds its announcement back is guessed to read both: one that reads
+no schema takes the answer for a newer build's.
 
-What is still open, and belongs with M20's packaging: `juist status` cannot
+What is still open, and belongs with M26's packaging: `juist status` cannot
 say which members would be stranded before an upgrade, and nothing stops an
 admin authoring one before the network is ready for it. Until those exist,
 raising the schema is an operation whose blast radius the operator has to
@@ -725,7 +726,7 @@ no default route, are held to the overlap rule by the validator itself.
 - `TestTCBDependencies` keeps the audit scope's dependency closure to the
   standard library plus two small modules, and keeps the clock and the
   filesystem out of the packages that decide validity.
-- `make tcb` holds the core to the 10k-line budget
+- `make tcb` holds the core to the 11k-line budget
   [06-verification.md](06-verification.md) §6 sets, and reports the whole audit
   scope's size beside it.
 

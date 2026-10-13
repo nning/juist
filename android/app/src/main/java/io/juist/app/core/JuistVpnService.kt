@@ -271,20 +271,13 @@ internal class UnderlayFollower(
     }
 }
 
-/** What the notification says of view: the network, and one line about it. */
+/** What the notification says of view: the network, and its state. */
 internal data class NotificationLines(val title: String, val text: String) {
     companion object {
         fun of(context: Context, view: NetworkView?): NotificationLines {
             val title = view?.network?.takeIf { it.isNotEmpty() } ?: context.getString(R.string.app_name)
             if (view == null) return NotificationLines(title, context.getString(R.string.state_starting))
-            val state = context.getString(stateLabel(view.state))
-            val total = view.members.size
-            val text = if (view.inNetwork && total > 0) {
-                context.resources.getQuantityString(R.plurals.notification_reached, total, state, view.reached, total)
-            } else {
-                state
-            }
-            return NotificationLines(title, text)
+            return NotificationLines(title, context.getString(stateLabel(view.state)))
         }
     }
 }

@@ -58,7 +58,7 @@ func (a *app) carry(auth *log.Authority, aum *types.AUM, ttl time.Duration, prop
 	}
 	i := slices.IndexFunc(files, func(k adminKeyFile) bool {
 		_, admin := state.Admin(k.priv.Public())
-		return admin && aum.VerifySignature(k.priv.Public())
+		return admin && state.SignedBy(aum, k.priv.Public())
 	})
 	if i < 0 {
 		return false, nil, nil
@@ -78,7 +78,7 @@ func (a *app) carry(auth *log.Authority, aum *types.AUM, ttl time.Duration, prop
 			now = next
 		}
 	}
-	c, err := waiting.Seal(state.GenesisHash(), aum, state.Admins(), signer, proposer, now, ttl)
+	c, err := waiting.Seal(state.GenesisHash(), aum, state.Admins(), state.SigningKey, signer, proposer, now, ttl)
 	if errors.Is(err, waiting.ErrNoReaders) {
 		return false, unreadable(state, aum, nil), nil
 	}
@@ -103,7 +103,7 @@ func unreadable(state *log.State, aum *types.AUM, c *waiting.Change) []string {
 		signed := 0
 		sealed := false
 		for _, k := range p.keys {
-			if aum.VerifySignature(k.Public) {
+			if aum.VerifySignature(k.Public, k.Signing) {
 				signed++
 			}
 			sealed = sealed || c != nil && c.SealedTo(k.Public)
@@ -142,11 +142,14 @@ func (a *app) waitingChanges(auth *log.Authority) ([]waitingChange, error) {
 		if _, ok := state.Admin(c.Signer); !ok {
 			continue
 		}
+		if state.PQ() && c.VerifyPQ(state.SigningKey(c.Signer)) != nil {
+			continue
+		}
 		for _, k := range files {
 			if !c.SealedTo(k.priv.Public()) {
 				continue
 			}
-			aum, err := c.Open(k.priv)
+			aum, err := c.Open(k.priv, state.SigningKey)
 			if err != nil {
 				break
 			}
@@ -171,13 +174,12 @@ func (a *app) waitingChanges(auth *log.Authority) ([]waitingChange, error) {
 func mergeSignatures(state *log.State, aum *types.AUM, sigs []types.Signature) []types.Signature {
 	out := slices.Clone(aum.Signatures)
 	self := log.SelfSigners(aum, state.Schema())
-	hash := aum.SigHash()
 	for _, s := range sigs {
 		_, admin := state.Admin(s.KeyID)
 		switch {
 		case slices.ContainsFunc(out, func(o types.Signature) bool { return o.KeyID == s.KeyID }):
 		case !admin && !slices.Contains(self, s.KeyID):
-		case !s.KeyID.Verify(hash[:], s.Sig):
+		case !state.ValidSignature(aum, &s):
 		default:
 			out = append(out, s)
 		}

@@ -144,7 +144,7 @@ Each fails silently or confusingly.
   install no rules. The runner reports IPv6 only where `disable_ipv6` and
   `disable_policy` are 0 and IPv6 policy routing works — and, in its iptables mode,
   only where the `ip6tables` binary exists. A host missing `ip6tables` therefore
-  loses the overlay's *primary* family with nothing but a log line. Packaging (M20)
+  loses the overlay's *primary* family with nothing but a log line. Packaging (M26)
   must declare that dependency, and an operator report of "no v6 on the overlay"
   should start here.
 - **`router.CleanUp` is not worth calling here**, though `tailscaled` calls it at

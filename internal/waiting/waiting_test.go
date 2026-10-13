@@ -54,7 +54,7 @@ func TestAChangeOpensForItsAdminsAlone(t *testing.T) {
 	carol, _ := adminKey(t)
 	network := types.Hash{9}
 	aum := removal(t, alice)
-	c, err := Seal(network, aum, []types.AdminKey{aliceKey, bobKey, {Public: carol.Public(), Votes: 1}}, alice, types.Identity{},
+	c, err := Seal(network, aum, []types.AdminKey{aliceKey, bobKey, {Public: carol.Public(), Votes: 1}}, keysOf([]types.AdminKey{aliceKey, bobKey, {Public: carol.Public(), Votes: 1}}), alice, types.Identity{},
 		time.Unix(1000, 0), time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -71,14 +71,14 @@ func TestAChangeOpensForItsAdminsAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []types.PrivateIdentity{alice, bob} {
-		rec, err := got.Open(k)
-		if err != nil || rec.SigHash() != aum.SigHash() || !rec.VerifySignature(alice.Public()) {
+		rec, err := got.Open(k, noKeys)
+		if err != nil || rec.SigHash() != aum.SigHash() || !rec.VerifySignature(alice.Public(), nil) {
 			t.Fatalf("%v opened %v, %v", k.Public().ShortString(), rec.Kind, err)
 		}
 	}
 	// Carol has no encryption key in the log, so nothing is sealed to her;
 	// a device's keys, which hold the group secret, open nothing either.
-	if _, err := got.Open(carol); err == nil {
+	if _, err := got.Open(carol, noKeys); err == nil {
 		t.Fatal("a key the change is not sealed to opened it")
 	}
 	device, err := secrets.GenerateKeys()
@@ -96,7 +96,7 @@ func TestAChangeOpensForItsAdminsAlone(t *testing.T) {
 // one its signer signed but that breaks the bounds on a copy.
 func TestAChangedCopyIsRefused(t *testing.T) {
 	alice, aliceKey := adminKey(t)
-	c, err := Seal(types.Hash{9}, removal(t, alice), []types.AdminKey{aliceKey}, alice, types.Identity{}, time.Unix(1000, 0), time.Hour)
+	c, err := Seal(types.Hash{9}, removal(t, alice), []types.AdminKey{aliceKey}, keysOf([]types.AdminKey{aliceKey}), alice, types.Identity{}, time.Unix(1000, 0), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,8 @@ func TestAnUnusableReaderIsLeftOut(t *testing.T) {
 		bad.MLKEM[i] = 0xff
 	}
 	c, err := Seal(types.Hash{9}, removal(t, alice), []types.AdminKey{aliceKey,
-		{Public: subject, Votes: 1, Recipient: &bad}}, alice, types.Identity{}, time.Unix(1000, 0), time.Hour)
+		{Public: subject, Votes: 1, Recipient: &bad}}, keysOf([]types.AdminKey{aliceKey,
+		{Public: subject, Votes: 1, Recipient: &bad}}), alice, types.Identity{}, time.Unix(1000, 0), time.Hour)
 	if err != nil {
 		t.Fatalf("a reader with an unusable key stopped the change: %v", err)
 	}
@@ -178,7 +179,7 @@ func TestAnUnusableReaderIsLeftOut(t *testing.T) {
 func TestASignerLyingAboutItsChangeIsFoundOut(t *testing.T) {
 	alice, aliceKey := adminKey(t)
 	aum := removal(t, alice)
-	c, err := Seal(types.Hash{9}, aum, []types.AdminKey{aliceKey}, alice, types.Identity{}, time.Unix(1000, 0), time.Hour)
+	c, err := Seal(types.Hash{9}, aum, []types.AdminKey{aliceKey}, keysOf([]types.AdminKey{aliceKey}), alice, types.Identity{}, time.Unix(1000, 0), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,19 +187,19 @@ func TestASignerLyingAboutItsChangeIsFoundOut(t *testing.T) {
 	if c.Sig, err = alice.Sign(c.signed()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Open(alice); err == nil || !strings.Contains(err.Error(), "other devices") {
+	if _, err := c.Open(alice, noKeys); err == nil || !strings.Contains(err.Error(), "other devices") {
 		t.Fatalf("a copy hiding whom it is about: %v", err)
 	}
 	unsigned := *aum
 	unsigned.Signatures = nil
-	c, err = Seal(types.Hash{9}, &unsigned, []types.AdminKey{aliceKey}, alice, types.Identity{}, time.Unix(1000, 0), time.Hour)
+	c, err = Seal(types.Hash{9}, &unsigned, []types.AdminKey{aliceKey}, keysOf([]types.AdminKey{aliceKey}), alice, types.Identity{}, time.Unix(1000, 0), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Open(alice); err == nil {
+	if _, err := c.Open(alice, noKeys); err == nil {
 		t.Fatal("a copy of a record its signer did not sign opened")
 	}
-	if _, err := Seal(types.Hash{9}, aum, []types.AdminKey{{Public: alice.Public(), Votes: 1}}, alice, types.Identity{},
+	if _, err := Seal(types.Hash{9}, aum, []types.AdminKey{{Public: alice.Public(), Votes: 1}}, keysOf([]types.AdminKey{{Public: alice.Public(), Votes: 1}}), alice, types.Identity{},
 		time.Unix(1000, 0), time.Hour); err != ErrNoReaders {
 		t.Fatalf("sealed to admins without encryption keys: %v", err)
 	}
@@ -209,11 +210,11 @@ func TestASignerLyingAboutItsChangeIsFoundOut(t *testing.T) {
 func TestAProposerWhoDidNotSignIsFoundOut(t *testing.T) {
 	alice, aliceKey := adminKey(t)
 	bob, _ := adminKey(t)
-	if _, err := Seal(types.Hash{9}, removal(t, alice), []types.AdminKey{aliceKey}, alice, bob.Public(),
+	if _, err := Seal(types.Hash{9}, removal(t, alice), []types.AdminKey{aliceKey}, keysOf([]types.AdminKey{aliceKey}), alice, bob.Public(),
 		time.Unix(1000, 0), time.Hour); err == nil {
 		t.Fatal("sealed a copy naming a proposer who did not sign the record")
 	}
-	c, err := Seal(types.Hash{9}, removal(t, alice), []types.AdminKey{aliceKey}, alice, types.Identity{},
+	c, err := Seal(types.Hash{9}, removal(t, alice), []types.AdminKey{aliceKey}, keysOf([]types.AdminKey{aliceKey}), alice, types.Identity{},
 		time.Unix(1000, 0), time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +223,7 @@ func TestAProposerWhoDidNotSignIsFoundOut(t *testing.T) {
 	if c.Sig, err = alice.Sign(c.signed()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Open(alice); err == nil {
+	if _, err := c.Open(alice, noKeys); err == nil {
 		t.Fatal("a copy naming a proposer who did not sign it opened")
 	}
 }
@@ -240,5 +241,63 @@ func TestEveryKindIsDecidedOnWhomItIsAbout(t *testing.T) {
 	id := types.Identity{1}
 	if got := AboutOf(&types.AUM{Kind: types.KindRenameNode, Subject: &id}); len(got) != 1 || got[0] != id {
 		t.Errorf("a rename is about %v", got)
+	}
+}
+
+// noKeys is the log below the cut-over, which names no signing keys.
+func noKeys(types.Identity) *types.SigningKey { return nil }
+
+// keysOf names admins' signing keys, as a state past the cut-over does.
+func keysOf(admins []types.AdminKey) func(types.Identity) *types.SigningKey {
+	return func(id types.Identity) *types.SigningKey {
+		for _, k := range admins {
+			if k.Public == id {
+				return k.Signing
+			}
+		}
+		return nil
+	}
+}
+
+// At schema 17 admin keys hold registered signing keys while records are
+// still signed by Ed25519: a change proposed by another admin is handed on.
+func TestAChangeIsHandedOnBeforeTheCutOver(t *testing.T) {
+	alice, aliceKey := adminKey(t)
+	bob, bobKey := adminKey(t)
+	ka, kb := alice.SigningKey(), bob.SigningKey()
+	aliceKey.Signing, bobKey.Signing = &ka, &kb
+	aum := removal(t, alice)
+	if err := aum.Sign(bob); err != nil {
+		t.Fatal(err)
+	}
+	below := func(types.Identity) *types.SigningKey { return nil }
+	c, err := Seal(types.Hash{9}, aum, []types.AdminKey{aliceKey, bobKey}, below, bob, alice.Public(), time.Unix(1000, 0), time.Hour)
+	if err != nil {
+		t.Fatalf("handing on a change at schema 17: %v", err)
+	}
+	if c.PQ != nil {
+		t.Fatal("a change below the cut-over was signed by ML-DSA")
+	}
+}
+
+// Past the cut-over a copy is held to its signer's ML-DSA signature: one
+// signed by Ed25519 alone, which a quantum computer forges, is refused.
+// Exit criterion (1) of M17 for waiting changes.
+func TestPastTheCutOverACopySignedByEd25519AloneIsRefused(t *testing.T) {
+	alice, aliceKey := adminKey(t)
+	key := alice.SigningKey()
+	aliceKey.Signing = &key
+	c, err := Seal(types.Hash{9}, removal(t, alice), []types.AdminKey{aliceKey}, keysOf([]types.AdminKey{aliceKey}), alice,
+		types.Identity{}, time.Unix(1000, 0), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.VerifyPQ(&key); err != nil {
+		t.Fatalf("a copy signed by both keys: %v", err)
+	}
+	edOnly := *c
+	edOnly.PQ = nil
+	if err := edOnly.VerifyPQ(&key); err == nil {
+		t.Fatal("past the cut-over a copy signed by Ed25519 alone verified")
 	}
 }

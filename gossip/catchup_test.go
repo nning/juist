@@ -97,7 +97,7 @@ func aRecord(t *testing.T, member types.NodeRecord) types.AUM {
 	if _, err := rand.Read(member.WireGuard[:]); err != nil {
 		t.Fatal(err)
 	}
-	g, err := log.Genesis("catch-up", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin"}},
+	g, err := log.Genesis("catch-up", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "admin"}},
 		[]types.Hash{types.DisablementCommit(disablement)}, []types.NodeRecord{member},
 		func(epoch uint64, nodes []types.NodeRecord) (*types.EpochRecord, error) {
 			_, rec, err := secrets.NewEpoch(epoch, nodes)

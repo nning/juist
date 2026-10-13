@@ -2,8 +2,13 @@ package gossip
 
 import (
 	"context"
+	"crypto/mlkem"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/nning/juist/internal/addrkey"
+	"github.com/nning/juist/internal/pairkey"
 
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
@@ -136,5 +141,113 @@ func TestUndecodableTailStillDeliversItsPrefix(t *testing.T) {
 	if len(n.log.informed) != 1 || len(n.log.informed[0]) != 1 ||
 		n.log.informed[0][0].Kind != types.KindSchemaUpgrade {
 		t.Fatalf("applied %v; want just the schema upgrade", n.log.informed)
+	}
+}
+
+// largestEndpoint is an announcement with every field at its cap, signed by
+// both keys as past the cut-over.
+func largestEndpoint(t *testing.T, priv types.PrivateIdentity) Endpoint {
+	t.Helper()
+	label := strings.Repeat("a", 63)
+	e := Endpoint{
+		Identity: priv.Public(), Disco: DiscoKey{1}, GossipPort: 65535, Seq: 1 << 62,
+		Relay: &RelayInfo{Port: 65535, STUNPort: 65535, Cert: make([]byte, RelayCertSize),
+			HostName: strings.Repeat("a", MaxRelayHostNameLen), Name: label + "." + label + "." + label + "." + label[:61]},
+		HomeRelay: 65535, Exit: true, Subnets: true, DNS: 65535, NoV4: true, Published: true,
+		Share: &Share{Port: 65535, Until: 1 << 62}, Epoch: 1 << 62, PairStore: 1 << 62, Schema: types.CurrentSchema,
+		Sealed: make([]byte, addrkey.MaxSealedSize),
+	}
+	if err := e.SignPQ(priv); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func mustEncode(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := encode(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// Every frame at its caps, past the cut-over, encodes within [MaxFrameSize]:
+// a frame over it fails to encode in every round, and wedges the pair's
+// sync for good. Exit criterion (5) for frames.
+func TestFramesAtTheirCapsFit(t *testing.T) {
+	priv, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := largestEndpoint(t, priv)
+	claiming := ep
+	if claiming.Signing, err = ClaimSigningKey(priv); err != nil {
+		t.Fatal(err)
+	}
+	if claiming.StaticValidate() == nil {
+		t.Fatal("an announcement claiming its signing key and signed by it validated")
+	}
+	if claiming.MLDSA = nil; len(mustEncode(t, &claiming)) > len(mustEncode(t, &ep)) {
+		t.Fatal("an announcement claiming its signing key is the larger; the frames below are not at their caps")
+	}
+	eps := make([]Endpoint, MaxEndpointsPerFrame)
+	for i := range eps {
+		eps[i] = ep
+	}
+	lease := types.Lease{Network: types.Hash{1}, Head: types.Hash{2}, Issued: 1 << 62}
+	if err := lease.Sign(priv, true); err != nil {
+		t.Fatal(err)
+	}
+	lb, err := lease.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lb) > types.MaxLeaseSize {
+		t.Fatalf("a lease signed by ML-DSA is %d bytes, over the %d limit", len(lb), types.MaxLeaseSize)
+	}
+	peer, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair := &pairkey.Msg{From: priv.Public(), To: peer.Public(), Store: 1 << 62, ToStore: 1 << 62, Gen: 1 << 62,
+		Epoch: 1 << 62, Use: 1 << 62, CT: make([]byte, mlkem.CiphertextSize768), Check: make([]byte, 16),
+		FromWG: types.WGKey{1}, ToWG: types.WGKey{2}}
+	if err := pair.Sign(priv, types.Hash{1}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	hello := frame{Kind: kindHello, Network: types.Hash{1}, Epoch: 1 << 62, Head: types.Hash{1}, Anchor: types.Hash{1},
+		Self: &ep, Endpoints: eps, Pair: pair, Waiting: make([]byte, MaxWaitingPerFrame*40+64)}
+	for i := range MaxHashesPerFrame {
+		hello.Have = append(hello.Have, types.Hash{byte(i), byte(i >> 8), 1})
+	}
+	wraps := maxKeyBytesPerFrame / addrkey.WrapSize / MaxEndpointsPerFrame
+	for i := range MaxEndpointsPerFrame {
+		k := AddrKey{Owner: priv.Public(), Seq: uint64(i)}
+		for range wraps {
+			k.Wraps = append(k.Wraps, make([]byte, addrkey.WrapSize))
+		}
+		if err := k.SignPQ(priv); err != nil {
+			t.Fatal(err)
+		}
+		hello.Keys = append(hello.Keys, k)
+	}
+
+	records := frame{Kind: kindRecords, Network: types.Hash{1}, Epoch: 1 << 62, Head: types.Hash{1},
+		Anchor: types.Hash{1}, Self: &ep, Endpoints: eps, Pair: pair}
+	for range MaxLeasesPerFrame {
+		records.Leases = append(records.Leases, lb)
+	}
+	// Records and waiting changes fill their budget whole.
+	records.Records = [][]byte{make([]byte, maxRecordBytesPerFrame-recordBytes(&records)-1024)}
+	records.Waiting = make([]byte, 1024)
+
+	for _, f := range []*frame{&hello, &records} {
+		b, err := encode(f)
+		if err != nil {
+			t.Fatalf("a %v frame at its caps: %v", f.Kind, err)
+		}
+		t.Logf("a %v frame at its caps: %.2f MiB of %d", f.Kind, float64(len(b))/(1<<20), MaxFrameSize>>20)
 	}
 }

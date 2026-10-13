@@ -102,7 +102,7 @@ func TestAHostileRelayCannotStarveTheInvite(t *testing.T) {
 	if n := joins.Load(); n > 20 {
 		t.Errorf("a relay joined %d fake guests to the host in 2s; its connections are not held to one at a time", n)
 	}
-	link := h.Invite().Link().WithRelays(nil, nil).WithAdmin(admin.Public())
+	link := h.Invite().Link().WithRelays(nil, nil).WithAdmin(admin.Public(), new(admin.SigningKey()))
 	_, joinErr := guest.Join(ctx, guest.Options{Invite: link.String(), Name: "phone", Keys: g,
 		Adopt: func([]types.AUM) error { return nil }})
 	t.Logf("a direct guest's join: %v", joinErr)

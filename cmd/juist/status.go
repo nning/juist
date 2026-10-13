@@ -262,36 +262,22 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	}
 	field("This device", "%s  %s", cmp.Or(s.SelfName, s.Self.ShortString()),
 		strings.Join(append(append(v4, old...), v6...), "  "))
-	// An offline device's announcement is held, but it has said nothing
-	// since it went quiet.
-	heard := s.Peers - len(s.Absent)
-	switch others := s.Members - 1 - s.Expired; {
-	case others == 1 && heard == 1:
-		field("Devices", "1 other, heard from")
-	case others == 1 && len(s.Absent) == 1:
-		field("Devices", "1 other, offline")
-	case others == 1:
-		field("Devices", "1 other, not heard from yet")
-	case others > 1 && heard == others:
-		field("Devices", "%d others, all heard from", others)
-	case others > 1:
-		field("Devices", "%d others, %d of them heard from", others, heard)
-	default:
-		field("Devices", "no others")
+	devices := "no others"
+	if others := s.Members - 1 - s.Expired; others > 0 {
+		devices = count(others, "other")
 	}
+	// Devices the access policy keeps apart are in neither, and need no tunnel.
+	without := s.Unreachable + len(s.TunnelsDown)
 	switch {
-	case s.TunnelsChecked && s.Peers > 0:
-		live := fmt.Sprintf("%d of %d live", s.TunnelsLive, s.TunnelsLive+len(s.TunnelsDown))
-		if len(s.TunnelsDown) > 0 {
-			live = paint("33", live)
-		}
-		if stale(s, now) {
-			live += ", " + paint("33", "checked "+since(s.ReachChecked))
-		}
-		field("Tunnels", "%s", live)
-	case s.Peers > 0:
-		field("Tunnels", "%s", paint("2", "not checked yet"))
+	case s.Peers > 0 && !s.TunnelsChecked:
+		devices += ", " + paint("2", "not checked yet")
+	case without > 0:
+		devices += ", " + paint("33", fmt.Sprintf("%d without a tunnel", without))
 	}
+	if s.Peers > 0 && s.TunnelsChecked && stale(s, now) {
+		devices += ", " + paint("33", "checked "+since(s.ReachChecked))
+	}
+	field("Devices", "%s", devices)
 	if s.RelayCapable > 0 || s.Relaying {
 		relays := fmt.Sprintf("%d available", s.RelayCapable)
 		switch {
@@ -591,17 +577,16 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	if len(s.Outdated) > 0 {
 		note(lineWarn, "%s an older juist, unreachable until updated", runs(s.Outdated))
 	}
+	if len(s.OlderBuild) > 0 {
+		note(lineWarn, "%s an older juist, which applies no changes until updated", runs(s.OlderBuild))
+	}
 	httpsOnly := s.HTTPS != nil && s.HTTPS.Only
 	if len(s.Seeking) > 0 && httpsOnly {
 		note(lineInfo, "no answer from %s: offline, or at no relay on 443", strings.Join(s.Seeking, ", "))
 	} else if len(s.Seeking) > 0 {
 		note(lineInfo, "no answer from %s: offline, or udp/%d blocked", strings.Join(s.Seeking, ", "), s.ListenPort)
 	}
-	// Only where the announcement held is known to be the device's newest is
-	// the way to it to blame.
-	if down := slices.DeleteFunc(slices.Clone(s.TunnelsDown), func(n string) bool {
-		return slices.Contains(s.Seeking, n) || slices.Contains(s.Absent, n)
-	}); len(down) > 0 && httpsOnly {
+	if down := s.Blocked(); len(down) > 0 && httpsOnly {
 		note(lineWarn, "no tunnel traffic from %s through the relays on 443", strings.Join(down, ", "))
 	} else if len(down) > 0 {
 		note(lineWarn, "no tunnel traffic from %s: udp/%d blocked, or both behind NAT with no relay",
@@ -612,8 +597,8 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	if s.Conflicted > 0 {
 		note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))
 	}
-	if len(s.NoKey) > 0 {
-		note(lineWarn, "%s fell too far behind to reach this device", strings.Join(s.NoKey, ", "))
+	if behind := s.Behind(); len(behind) > 0 {
+		note(lineWarn, "%s fell too far behind to reach this device", strings.Join(behind, ", "))
 		note(lineHint, "it catches up from a device that has been away as long, or joins again with a new invite")
 	}
 	notes = append(notes, httpsNotes(s)...)

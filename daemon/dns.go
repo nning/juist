@@ -362,6 +362,8 @@ func (d *Daemon) routeDNSLocked(exit []netip.AddrPort, keep bool) (bool, string)
 		switch {
 		case errors.Is(err, resolved.ErrNotRunning):
 			d.dnsWhy = "systemd-resolved does not run on this host"
+		case errors.Is(err, resolved.ErrNoPolkit):
+			d.dnsWhy = "systemd-resolved refused juistd: polkit is not installed"
 		case errors.Is(err, resolved.ErrNotAuthorized):
 			d.dnsWhy = "systemd-resolved refused juistd"
 		default:

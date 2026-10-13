@@ -103,11 +103,12 @@ systemctl daemon-reload; systemctl restart juistd`)
 	// (4) and (3)'s certificate: each relay's name is Pebble's, fb's beside
 	// what fb's ingress passes on for the names published.
 	for _, r := range []struct{ name, at string }{{relayFB, fb.lanAddr}, {relayLX, lx.lanAddr}} {
+		// Over TLS 1.3 with X25519MLKEM768, which a relay requires and
+		// Debian 12's curl and openssl do not offer.
 		lx.eventually(t, "answering for "+r.name+" by Pebble's certificate", 2*time.Minute,
-			"curl -s -o /dev/null -w '%{http_code}' --cacert /tmp/pebble-root.pem --resolve "+r.name+":443:"+r.at+
-				" https://"+r.name+"/derp/probe", has("200"))
-		mustHave(t, lx.run(t, "echo | openssl s_client -connect "+r.at+":443 -servername "+r.name+
-			" 2>/dev/null | openssl x509 -noout -issuer"), "Pebble")
+			"/tmp/probe pqget "+r.at+":443 "+r.name+" /tmp/pebble-root.pem /derp/probe", func(out string) bool {
+				return strings.HasPrefix(out, "200 ") && strings.Contains(out, "Pebble")
+			})
 	}
 	fb.eventually(t, "passing on a name it publishes beside", 3*time.Minute,
 		"/tmp/probe hello 127.0.0.1:443 fbweb.pub.example.org /tmp/root.pem", has("fb-web from"))

@@ -288,6 +288,7 @@ func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) (err error) {
 		return err
 	}
 	p.admins[0].Public = localAdmin.Public()
+	p.admins[0].Signing, p.admins[0].Endorsement = new(localAdmin.SigningKey()), localAdmin.Endorsement()
 	r, err := adminRecipient(localAdmin)
 	if err != nil {
 		return err
@@ -362,6 +363,9 @@ func founderRecord(n node, p *initPlan) (types.NodeRecord, error) {
 	if err != nil {
 		return types.NodeRecord{}, err
 	}
+	if self.Signing == nil {
+		return types.NodeRecord{}, errors.New("juistd runs an older juist than this command\nhint: restart it")
+	}
 	v4, err := firstFreeV4(types.V4Range(types.CurrentSchema, p.v4), nil)
 	if err != nil {
 		return types.NodeRecord{}, err
@@ -381,6 +385,7 @@ func founderRecord(n node, p *initPlan) (types.NodeRecord, error) {
 		MLKEM:     self.Keys.MLKEM,
 		V4:        &v4,
 		Roles:     sortRoles(roles),
+		Signing:   self.Signing,
 	}, nil
 }
 
@@ -453,9 +458,13 @@ func parseAdminSpec(spec string) (types.AdminKey, error) {
 			rest = rest[:i]
 		}
 	}
-	key, err := types.ParseIdentity(rest)
+	key, signing, endorsement, err := types.ParseAdminKey(rest)
 	if err != nil {
 		return types.AdminKey{}, fmt.Errorf("--admin %q: %w", name, err)
+	}
+	if signing == nil {
+		return types.AdminKey{}, fmt.Errorf("--admin %q: a key with no signing key, from an older juist\n"+
+			"hint: juist admins new prints it whole", name)
 	}
 	if votes == 0 || votes > types.MaxVotes {
 		return types.AdminKey{}, fmt.Errorf("--admin %q: votes must be between 1 and %d", name, types.MaxVotes)
@@ -463,7 +472,7 @@ func parseAdminSpec(spec string) (types.AdminKey, error) {
 	if err := checkName("--admin", name); err != nil {
 		return types.AdminKey{}, err
 	}
-	return types.AdminKey{Public: key, Votes: uint32(votes), Name: name}, nil
+	return types.AdminKey{Public: key, Votes: uint32(votes), Name: name, Signing: signing, Endorsement: endorsement}, nil
 }
 
 // defaultAdminName names the admin key after the person creating it.

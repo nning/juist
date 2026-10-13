@@ -180,6 +180,9 @@ func fits(c *waiting.Change, state *log.State, now time.Time) error {
 	if _, ok := state.Admin(c.Signer); !ok {
 		return fmt.Errorf("a change handed on by %v, which is no admin key", c.Signer.ShortString())
 	}
+	if state.PQ() {
+		return c.VerifyPQ(state.SigningKey(c.Signer))
+	}
 	return nil
 }
 

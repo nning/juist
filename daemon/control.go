@@ -135,7 +135,8 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 		err = s.appoint(req)
 	case ipc.CmdSelf:
 		s.mu.Lock()
-		self := &ipc.Self{Identity: s.keys.Identity.Public(), Keys: s.keys.Public, Name: s.keys.Name}
+		self := &ipc.Self{Identity: s.keys.Identity.Public(), Keys: s.keys.Public, Name: s.keys.Name,
+			Signing: new(s.keys.Identity.SigningKey())}
 		s.mu.Unlock()
 		return ipc.Response{Self: self}
 	case ipc.CmdLog:

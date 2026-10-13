@@ -3,6 +3,7 @@ package types
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -44,7 +45,7 @@ var b64 = base64.RawURLEncoding
 // attributes — and its overlay v6 address derives from it.
 type Identity [IdentitySize]byte
 
-// A Sig is an Ed25519 signature over an [AUM]'s signing hash.
+// A Sig is an Ed25519 signature.
 type Sig [SigSize]byte
 
 // A WGKey is a WireGuard static public key (Curve25519).
@@ -62,12 +63,46 @@ type MLKEMKey [MLKEMKeySize]byte
 // design: the log doubles as the audit trail that identifies a malicious
 // admin, which an aggregated or threshold signature would hide.
 type Signature struct {
-	// KeyID is the public key that produced Sig. Both node identity keys
-	// and admin keys sign records, so which of the two a KeyID must be is
-	// decided per record kind by trust/log.
+	// KeyID is the identity that signed. Both node identity keys and admin
+	// keys sign records, so which of the two a KeyID must be is decided per
+	// record kind by trust/log.
 	KeyID Identity `cbor:"1,keyasint"`
 
-	Sig Sig `cbor:"2,keyasint"`
+	// Sig is the Ed25519 signature, below [SchemaMLDSA], and PQ the ML-DSA
+	// one, from it on: exactly one of the two.
+	Sig Sig    `cbor:"2,keyasint,omitzero"`
+	PQ  *PQSig `cbor:"3,keyasint,omitempty"`
+
+	// Key is the signer's signing key, where the record is where it enters
+	// the log in the signer's own signature: an identity rotated to.
+	Key *SigningKey `cbor:"4,keyasint,omitempty"`
+}
+
+func (s *Signature) validate() error {
+	switch {
+	case s.Sig.IsZero() == (s.PQ == nil):
+		return errors.New("carries no signature, or two")
+	case s.PQ != nil && s.PQ.IsZero():
+		return errors.New("is zero")
+	case s.Key != nil && s.PQ == nil:
+		return errors.New("brings a signing key beside an Ed25519 signature")
+	case s.Key != nil:
+		return s.Key.Validate()
+	}
+	return nil
+}
+
+func (s *Signature) clone() *Signature {
+	out := *s
+	if s.PQ != nil {
+		pq := *s.PQ
+		out.PQ = &pq
+	}
+	if s.Key != nil {
+		k := *s.Key
+		out.Key = &k
+	}
+	return &out
 }
 
 // IsZero reports whether i is the zero value.
@@ -187,6 +222,7 @@ func (s *Sig) UnmarshalBinary(b []byte) error {
 // never in the daemon, so this is held only for a signing operation.
 type PrivateIdentity struct {
 	priv ed25519.PrivateKey
+	pq   *mldsa.PrivateKey // derived from priv's seed
 }
 
 // GenerateIdentity creates a new identity keypair from the system CSPRNG.
@@ -195,7 +231,7 @@ func GenerateIdentity() (PrivateIdentity, error) {
 	if err != nil {
 		return PrivateIdentity{}, fmt.Errorf("types: generating identity: %w", err)
 	}
-	return PrivateIdentity{priv: priv}, nil
+	return NewPrivateIdentity(priv.Seed())
 }
 
 // NewPrivateIdentity reconstructs an identity from its 32-byte seed, the form
@@ -204,7 +240,11 @@ func NewPrivateIdentity(seed []byte) (PrivateIdentity, error) {
 	if len(seed) != SeedSize {
 		return PrivateIdentity{}, fmt.Errorf("types: identity seed is %d bytes, want %d", len(seed), SeedSize)
 	}
-	return PrivateIdentity{priv: ed25519.NewKeyFromSeed(seed)}, nil
+	pq, err := signingKeyFromSeed(seed)
+	if err != nil {
+		return PrivateIdentity{}, fmt.Errorf("types: deriving the signing key: %w", err)
+	}
+	return PrivateIdentity{priv: ed25519.NewKeyFromSeed(seed), pq: pq}, nil
 }
 
 // IsZero reports whether p holds no key.

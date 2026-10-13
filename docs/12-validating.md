@@ -358,6 +358,12 @@ than skip. A NAT cell can be run alone with
 | M16 review 7 — juistd holds a service meant for members alone from its name while the log has it public, a mark it keeps across restarts and later commands until `--members=false`, in a line an older version leaves out; a test to a name names no exit node | `daemon`: `TestAServiceForMembersIsWithheldFromAPublicName`, `TestTheMarkOfAServiceForMembersIsKept`; `cmd/juist`: `TestAServiceForMembersGoesToNoPublicName`; `types`: `TestAPolicyMeansWhatItSays` | no |
 | M16 review 8 — a service member marks its services for members alone by `--members`, as its command line says and not a file left from before; `juist publish` shows the mark; on an admin's device the mark changes nothing in the log by itself | `cmd/juistd`: `TestMembersMarksAServiceMembersServices`, `TestHelpListsEveryOptionWithItsDefault`; `daemon`: `TestAServiceMembersMarkIsItsCommandLines`; `cmd/juist`: `TestAServiceForMembersGoesToNoPublicName` | no |
 | M16 (1, 2, 3) — between hosts: the internet and the ingress itself through the tunnel are refused, and none of their hellos has the name's certificate ordered; Pebble issues it through the ingress on the hello of a member it is for, which opens it by it; east, which a rule names it for, opens it, west, which may open any port of lx's, does not | `make interop`: `TestLinuxAndFreeBSD/members_alone`, `TestLinuxAndFreeBSD/access_policy` | qemu |
+| M17 (1) — past the cut-over each signed thing is refused signed by Ed25519 alone: records, announcements (held as hints), address keys, catch-up, leases, waiting changes, pair-key messages, admissions; below it an ML-DSA signature is refused | `trust/log`: `TestTheCutOverTakesEveryKey`, `TestBelowTheCutOverMLDSAIsRefused`, `TestCheckLease`; `gossip`: `TestPastTheCutOverEd25519AnnouncementsAreHints`, `TestPastTheCutOverAddressKeysAreSignedByMLDSA`, `TestPastTheCutOverACatchUpIsSignedByMLDSA`; `internal/waiting`: `TestPastTheCutOverACopySignedByEd25519AloneIsRefused`; `internal/pairkey`: `TestPastTheCutOverAMessageSignedByEd25519AloneIsRefused`; `trust/enroll`: `TestLinksNameTheAdminAndAdmissionsBindTheGuest`, `TestAJoinRequestProvesItsSigningKey` | no |
+| M17 — admin keys register their endorsed signing keys at 17, the cut-over waits for them and a quorum signs it; keys enter with their identities, no two alike; a genesis past it names them all; an upgrade cannot cut over; a member's names take at most 2048 bytes | `types`: `TestAnAdminKeyTokenIsEndorsed`, `TestARegistrationNamesOneKey`; `trust/log`: `TestAnAdminKeyRegistersItsSigningKey`, `TestKeysEnterWithTheirIdentities`, `TestAGenesisPastTheCutOver`, `TestAnUpgradeCannotCutOver`, `TestNameBytesAreCapped`; `cmd/juist`: `TestStatusTellsAnAdminToUpgradeTheLog` | no |
+| M17 (6) — a device past the cut-over drops a branch below it unstored, names it so peers stop offering it, keeps a copy of the cut-over and settles copies on the one built on; for one behind, the cut-over wins fork choice after a removed key's loss and not in a contested fork | `trust/log`: `TestABranchBelowTheCutOverIsDropped`, `TestTheCutOverWinsForkChoice`, `TestCopiesOfTheCutOverSettle`, `TestARemovedKeyCannotCutOverPastItsRemoval`, `TestAContestedForkIsNotDecidedByTheCutOver` | no |
+| M17 (2) — a member asleep across the cut-over catches up, one from before 17 asking again signed by both; an echo signed by Ed25519 alone moves no numbering; between hosts the previous release upgrades, registers its admin keys and cuts over without a gap in a ping | `daemon`: `TestAMemberAsleepAcrossTheCutOverCatchesUp`, `TestAnEchoOfAPreviousRunIsAnnouncedPast`; `gossip`: `TestASleeperFromBeforeTheSigningSchemaCatchesUp`; `make interop`: `TestLinuxAndFreeBSD/previous_release` | qemu |
+| M17 (3, 4) — a recorded enrollment whose SPAKE2 key is handed over stays closed; juist's own TLS refuses 1.2 and no ML-KEM, and a relay's public name answers a juist client by the certificate autocert holds | `trust/enroll`: `TestARecordedEnrollmentStaysClosedWithItsSPAKE2Key`; `relay`: `TestARelayRefusesTLSWithoutMLKEM`, `TestARelaysPublicNameAnswersAJuistClient`; `make interop`: `TestLinuxAndFreeBSD/HTTPS_alone` | qemu |
+| M17 (5) — a record and a checkpoint at their caps, and every frame at its caps, stay within the limits | `trust/log`: `TestRecordsPastTheCutOverFitAtTheCaps`; `gossip`: `TestFramesAtTheirCapsFit` | no |
 
 ### The last privileged run
 
@@ -371,6 +377,38 @@ whole lab passed at M9's tree in 13 minutes. What CI cannot run, Fedora with fir
 was last checked by hand, and this records the latest such run. Update it with
 each one, so it is clear how old the evidence is.
 
+- **2026-10-13, M17: post-quantum signatures**, run as M17. `make
+  ci-vm` passed whole in 46m18s, the privileged tests among them: a network
+  of M16's package upgraded to schema 17, its admin keys registered their
+  signing keys, and it cut over to 18 with no gap in a ping. The runs before
+  found two faults the change exposed, both fixed in its reviews: FreeBSD
+  serving as an exit node took pf state for its own connections through
+  juist0 from the answer, and so dropped juistd's larger frames past the
+  window pf assumed (review 3); and a relay's public name gave a juist
+  client, which offers X25519MLKEM768 alone, no certificate, autocert
+  asking for P-256 and an ECDSA suite of TLS 1.2 (review 4). `make
+  test-freebsd` passed, all 49 packages, at M17; `make check`, `make
+  cross`, `make android-check` and `make -C website check` passed. No hand
+  test on Fedora; the app not by hand.
+- **2026-10-12, lookups at the member relays first and one seeker a
+  group**, run as f1eebdd before its rebase onto M17, which brought
+  the status of an older build and polkit 0.105. `make ci-vm
+  CI_MAKE=interop` passed whole in 30m35s, the change being to what passes
+  between hosts; `make check` passed after the rebase too. The
+  privileged tests did not run: nothing of devices, routes or the firewall
+  changed. No hand test on Fedora.
+- **2026-10-12, schema 16: padded discovery items and builds' schemas**,
+  run as 9957b5b before its rebase onto M17, which brought plans, the
+  website, the app's wording and `juist log show`. `make ci-vm
+  CI_MAKE=interop` passed whole in 29m10s, as the
+  change is to what passes between hosts: Debian on M14's package, stopped
+  while FreeBSD raised the network to schema 16, was called outdated and,
+  upgraded, reached FreeBSD on a pair key. The run before failed in HTTPS
+  alone only, fb's relay certificate not issued through its ingress within
+  four minutes ("no viable challenge type found"), a path the change does
+  not touch. `make check` and `make android-check` passed. The privileged
+  tests did not run: nothing of devices, routes or the firewall changed. No
+  hand test on Fedora; the app not by hand.
 - **2026-10-11, a build that sleeps through an upgrade**, run as b82c536
   before its rebase onto M16, which changed plans and comments alone.
   `make ci-vm CI_MAKE=interop` passed whole in 25m19s, `make interop` alone,
@@ -1049,7 +1087,7 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
 - **Upgrades.** `make interop` tests one network of two builds: the previous
   release's device, stopped while the other upgrades the network, says to
   install a newer juist when it comes back, and the other calls it outdated.
-  The readiness check that would stop an admin stranding members is M20's
+  The readiness check that would stop an admin stranding members is M26's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)). Mixed builds do not
   sync at all across M4, whose gossip frames carry leases older builds reject,
   nor across M5b between two admin devices while either holds waiting

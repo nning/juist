@@ -40,7 +40,7 @@ func TestRenameNetwork(t *testing.T) {
 		t.Error("the builder authored a rename to the name the network has")
 	}
 	short := types.AUM{Kind: types.KindRenameNetwork, Prev: new(h.auth.Head()), Network: new("lab")}
-	if err := short.Sign(h.admins[0]); err != nil {
+	if err := h.sign(&short, h.admins[0]); err != nil {
 		t.Fatal(err)
 	}
 	h.mustReject("a rename one vote short", RuleUnauthorized, short)
@@ -117,10 +117,10 @@ func TestConcurrentRenames(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := first.Sign(h.admins[0]); err != nil {
+		if err := h.sign(&first, h.admins[0]); err != nil {
 			t.Fatal(err)
 		}
-		if err := second.Sign(h.admins[1]); err != nil {
+		if err := h.sign(&second, h.admins[1]); err != nil {
 			t.Fatal(err)
 		}
 		auth := h.fork()

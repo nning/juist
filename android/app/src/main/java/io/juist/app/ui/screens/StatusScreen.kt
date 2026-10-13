@@ -310,11 +310,7 @@ private fun ThisDevice(view: NetworkView, on: Boolean, copied: (String) -> Unit)
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun Members(view: NetworkView, on: Boolean, onMember: (Member) -> Unit) {
-    val trailing = when {
-        !on || view.members.isEmpty() -> null
-        else -> stringResource(R.string.members_reached, view.reached, view.members.size)
-    }
-    SectionTitle(pluralStringResource(R.plurals.section_devices, view.members.size, view.members.size), trailing = trailing)
+    SectionTitle(pluralStringResource(R.plurals.section_devices, view.members.size, view.members.size))
     if (view.members.isEmpty()) {
         Panel {
             Text(

@@ -1,6 +1,8 @@
 package mdns
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"net"
 	"net/netip"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/nning/juist/gossip"
+	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/internal/nettest"
 	"github.com/nning/juist/trust/secrets"
@@ -87,6 +90,13 @@ type beaconNode struct {
 
 func newBeaconNode(t *testing.T, h *hub, kr *keyring.Keyring, port uint16) *beaconNode {
 	t.Helper()
+	return newBeaconNodeWith(t, h, kr, port, 1, false)
+}
+
+// newBeaconNodeWith is [newBeaconNode] announcing addrs addresses, padded
+// where padded says.
+func newBeaconNodeWith(t *testing.T, h *hub, kr *keyring.Keyring, port uint16, addrs int, padded bool) *beaconNode {
+	t.Helper()
 	priv, err := types.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
@@ -96,9 +106,11 @@ func newBeaconNode(t *testing.T, h *hub, kr *keyring.Keyring, port uint16) *beac
 		e := gossip.Endpoint{
 			Identity:   priv.Public(),
 			Disco:      gossip.DiscoKey{4, 2},
-			Addrs:      []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), port)},
 			GossipPort: port,
 			Seq:        1,
+		}
+		for i := range addrs {
+			e.Addrs = append(e.Addrs, netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 0, 2, byte(i + 1)}), port))
 		}
 		if err := e.Sign(priv); err != nil {
 			t.Errorf("signing an announcement: %v", err)
@@ -109,6 +121,7 @@ func newBeaconNode(t *testing.T, h *hub, kr *keyring.Keyring, port uint16) *beac
 	b, err := New(Options{
 		Keyring:  kr,
 		Announce: announce,
+		Padded:   func() bool { return padded },
 		OnPeer: func(e gossip.Endpoint) {
 			select {
 			case n.seen <- e:
@@ -221,20 +234,118 @@ func TestDiscoverySurvivesAnEpochBump(t *testing.T) {
 // in gossip.
 func TestAnnouncementSealIsBoundToItsEpoch(t *testing.T) {
 	s := mustSecret(t)
-	sealed, err := sealPayload(s, 3, []byte("announcement"))
+	for _, padded := range []bool{false, true} {
+		sealed, err := sealPayload(s, 3, []byte("announcement"), padded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := openPayload(s, 4, sealed); err == nil {
+			t.Fatal("a payload sealed under epoch 3 opened as epoch 4")
+		}
+		got, err := openPayload(s, 3, sealed)
+		if err != nil {
+			t.Fatalf("opening at the right epoch: %v", err)
+		}
+		if string(got) != "announcement" {
+			t.Errorf("payload came back as %q", got)
+		}
+	}
+}
+
+// TestTheLargestPaddedAnswerFitsADatagram: past the last multiple of padTo
+// that fits, a padded payload is padded to what one answer still carries.
+func TestTheLargestPaddedAnswerFitsADatagram(t *testing.T) {
+	kr := keyringAt(t, 1, mustSecret(t))
+	priv, err := types.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := openPayload(s, 4, sealed); err == nil {
-		t.Fatal("a payload sealed under epoch 3 opened as epoch 4")
+	e := gossip.Endpoint{Identity: priv.Public(), Disco: gossip.DiscoKey{1}, GossipPort: 1, Seq: 1,
+		Relay: &gossip.RelayInfo{Port: 1, Cert: make([]byte, gossip.RelayCertSize), HostName: "a.relay.juist.invalid"}}
+	for i := range gossip.MaxEndpointAddrs {
+		e.Addrs = append(e.Addrs, netip.AddrPortFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 15: byte(i + 1)}), 1))
 	}
-	got, err := openPayload(s, 3, sealed)
+	e.Addrs = gossip.SortAddrs(e.Addrs)
+	// A relay name long enough to take it past the last multiple of padTo
+	// that fits, and short enough to fit at all.
+	for labels := "a."; ; labels += "a." {
+		e.Relay.Name = labels + "example.org"
+		if err := e.Sign(priv); err != nil {
+			t.Fatal(err)
+		}
+		if body, _ := e.Encode(); len(body)+aead.PaddedOverhead > 3*padTo {
+			break
+		}
+	}
+	b, err := New(Options{
+		Keyring:  kr,
+		Announce: func() (gossip.Endpoint, bool) { return e, true },
+		Padded:   func() bool { return true },
+		Conn:     (&hub{}).join(),
+		Dst:      netip.MustParseAddrPort("224.0.0.251:5353"),
+	})
 	if err != nil {
-		t.Fatalf("opening at the right epoch: %v", err)
+		t.Fatal(err)
 	}
-	if string(got) != "announcement" {
-		t.Errorf("payload came back as %q", got)
+	defer b.Close()
+	raw, err := b.answerFor(b.names()[0])
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(raw) > maxMessageSize {
+		t.Errorf("a padded answer is %d bytes, over the %d a datagram carries", len(raw), maxMessageSize)
+	}
+}
+
+// TestAPaddedBeaconShowsNeitherEpochNorSize: on the LAN, as in the DHT, a
+// beacon's payload does not begin with its epoch, and two announcements of
+// different lengths are sent alike. A padded beacon still hears one that is
+// not, as a build before [types.SchemaPadded] sends.
+func TestAPaddedBeaconShowsNeitherEpochNorSize(t *testing.T) {
+	h := &hub{}
+	const epoch = 5
+	kr := keyringAt(t, epoch, mustSecret(t))
+	listen := h.join()
+	t.Cleanup(func() { listen.Close() })
+	one := newBeaconNodeWith(t, h, kr, 4001, 1, true)
+	newBeaconNodeWith(t, h, kr, 4002, 3, true)
+	old := newBeaconNode(t, h, kr, 4003)
+	waitFor(t, one, old.id, 5*time.Second)
+
+	sizes := map[int]bool{}
+	deadline := time.After(2 * time.Second)
+	for len(sizes) < 2 {
+		var pkt []byte
+		select {
+		case pkt = <-listen.in:
+		case <-deadline:
+			if len(sizes) != 1 {
+				t.Fatalf("payloads came in %d sizes, want one beside the unpadded one's", len(sizes))
+			}
+			return
+		}
+		var p dnsmessage.Parser
+		if _, err := p.Start(pkt); err != nil || p.SkipAllQuestions() != nil {
+			continue
+		}
+		h, err := p.AnswerHeader()
+		if err != nil || h.Type != dnsmessage.TypeTXT {
+			continue
+		}
+		txt, err := p.TXTResource()
+		if err != nil {
+			continue
+		}
+		sealed, err := base64.RawStdEncoding.DecodeString(strings.Join(txt.TXT, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sealed) >= 8 && binary.BigEndian.Uint64(sealed) == epoch {
+			continue // the unpadded beacon's
+		}
+		sizes[len(sealed)] = true
+	}
+	t.Errorf("padded payloads came in sizes %v, want one", sizes)
 }
 
 // TestNameIsAValidBlindedLabel pins the two properties the naming has to keep:

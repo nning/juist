@@ -29,7 +29,7 @@ const (
 
 	// MaxSize caps an encoded change: the largest record, sealed, and a key
 	// for every admin.
-	MaxSize = types.MaxRecordSize + types.MaxAdmins*(secrets.SealedKeySize+64) + 4096
+	MaxSize = types.MaxRecordSize + types.MaxAdmins*(secrets.SealedKeySize+64) + types.SigSize + types.PQSigSize + 4096
 
 	// MaxAbout caps the devices a change is about.
 	MaxAbout = 16
@@ -62,13 +62,15 @@ type Change struct {
 	Readers []Reader `cbor:"8,keyasint"`
 
 	// Signer is the admin key that hands the change on, and Sig its
-	// signature over everything else.
+	// signature over everything else; PQ its ML-DSA one, past the cut-over.
 	Signer types.Identity `cbor:"9,keyasint"`
 	Sig    types.Sig      `cbor:"10,keyasint"`
 
 	// Proposer is the admin key that handed the change on first, which the
 	// record is signed by too.
 	Proposer types.Identity `cbor:"11,keyasint"`
+
+	PQ *types.PQSig `cbor:"12,keyasint,omitempty"`
 }
 
 // A Reader is an admin key the change is sealed to, and its key to the body.
@@ -84,13 +86,15 @@ var ErrNoReaders = errors.New("no admin key has an encryption key to seal the ch
 // Seal hands on aum, a change to network, as signer, for proposer, or the
 // signer where that is zero: sealed to every admin key of admins with an
 // encryption key it can be sealed to, and expiring after ttl, at most
-// [MaxLifetime].
-func Seal(network types.Hash, aum *types.AUM, admins []types.AdminKey, signer types.PrivateIdentity,
-	proposer types.Identity, now time.Time, ttl time.Duration) (*Change, error) {
+// [MaxLifetime]. keyOf names the signing keys records are verified against,
+// nil below the cut-over; where it names the signer's, the copy is signed by
+// ML-DSA too.
+func Seal(network types.Hash, aum *types.AUM, admins []types.AdminKey, keyOf func(types.Identity) *types.SigningKey,
+	signer types.PrivateIdentity, proposer types.Identity, now time.Time, ttl time.Duration) (*Change, error) {
 	if aum.Prev == nil {
 		return nil, errors.New("waiting: a genesis does not wait in a network")
 	}
-	if !proposer.IsZero() && !aum.VerifySignature(proposer) {
+	if !proposer.IsZero() && !aum.VerifySignature(proposer, keyOf(proposer)) {
 		return nil, errors.New("waiting: the proposer has not signed the record")
 	}
 	c := &Change{
@@ -127,7 +131,7 @@ func Seal(network types.Hash, aum *types.AUM, admins []types.AdminKey, signer ty
 		return nil, ErrNoReaders
 	}
 	slices.SortFunc(c.Readers, func(a, b Reader) int { return a.Admin.Compare(b.Admin) })
-	if c.Sig, err = signer.Sign(c.signed()); err != nil {
+	if c.Sig, c.PQ, err = signer.SignBoth(c.signed(), keyOf(signer.Public()) != nil); err != nil {
 		return nil, err
 	}
 	return c, c.validate()
@@ -170,11 +174,14 @@ var aboutSubject = map[types.Kind]bool{
 	types.KindRenameNode:        true,
 	types.KindDisable:           false,
 	types.KindSetPolicy:         false,
+	types.KindSetSigningKeys:    false,
+	types.KindSetAdminSigning:   false,
 }
 
 // Open reads the change as the admin key admin, and checks that it is what
-// its signer said: the record it names, carrying the signer's signature.
-func (c *Change) Open(admin types.PrivateIdentity) (types.AUM, error) {
+// its signer said: the record it names, carrying the signer's signature,
+// checked against the signing key keyOf names, nil below the cut-over.
+func (c *Change) Open(admin types.PrivateIdentity, keyOf func(types.Identity) *types.SigningKey) (types.AUM, error) {
 	id := admin.Public()
 	i := slices.IndexFunc(c.Readers, func(r Reader) bool { return r.Admin == id })
 	if i < 0 {
@@ -198,7 +205,7 @@ func (c *Change) Open(admin types.PrivateIdentity) (types.AUM, error) {
 		return types.AUM{}, fmt.Errorf("waiting: %w", err)
 	case aum.Prev == nil || *aum.Prev != c.Prev || aum.SigHash() != c.ID:
 		return types.AUM{}, errors.New("waiting: the record is not the change its copy names")
-	case !aum.VerifySignature(c.Signer) || !aum.VerifySignature(c.Proposer):
+	case !aum.VerifySignature(c.Signer, keyOf(c.Signer)) || !aum.VerifySignature(c.Proposer, keyOf(c.Proposer)):
 		return types.AUM{}, errors.New("waiting: the record does not carry its signer's and proposer's signatures")
 	case !slices.Equal(AboutOf(&aum), c.About):
 		return types.AUM{}, errors.New("waiting: the change is about other devices than its copy says")
@@ -226,9 +233,10 @@ func (c *Change) Encode() ([]byte, error) {
 // Hash names one copy of a change, by its encoding.
 func Hash(encoded []byte) types.Hash { return sha256.Sum256(encoded) }
 
-// Decode decodes a change and checks its shape and its signer's signature.
-// Whether the signer is an admin, and whether the change still fits the log,
-// the caller decides against the log.
+// Decode decodes a change and checks its shape and its signer's Ed25519
+// signature, which every copy carries. Whether the signer is an admin, its
+// ML-DSA signature past the cut-over ([Change.VerifyPQ]), and whether the
+// change still fits the log, the caller decides against the log.
 func Decode(b []byte) (*Change, error) {
 	if len(b) == 0 || len(b) > MaxSize {
 		return nil, fmt.Errorf("waiting: a change of %d bytes", len(b))
@@ -247,6 +255,15 @@ func Decode(b []byte) (*Change, error) {
 		return nil, errors.New("waiting: the signer's signature does not verify")
 	}
 	return &c, nil
+}
+
+// VerifyPQ checks the signer's ML-DSA signature against key, the signing key
+// the log names for it.
+func (c *Change) VerifyPQ(key *types.SigningKey) error {
+	if key == nil || !key.Verify(c.signed(), c.PQ) {
+		return errors.New("waiting: the signer's ML-DSA signature does not verify")
+	}
+	return nil
 }
 
 func (c *Change) validate() error {
@@ -281,7 +298,7 @@ func (c *Change) validate() error {
 // a label of its own.
 func (c *Change) signed() []byte {
 	unsigned := *c
-	unsigned.Sig = types.Sig{}
+	unsigned.Sig, unsigned.PQ = types.Sig{}, nil
 	b, err := encMode.Marshal(&unsigned)
 	if err != nil {
 		panic(fmt.Sprintf("waiting: encoding a change: %v", err))

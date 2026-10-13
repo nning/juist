@@ -77,7 +77,7 @@ connection manager over plain wireguard-go / kernel WireGuard.
 | `internal/host` | The inviting half of an enrollment: listener, LAN answers, DHT rendezvous, serial sessions; asks an admitter (the CLI) for every signature | — | not TCB (holds no key) |
 | `cli` | `create`, `invite`, `join`, `status`, `devices`, `remove`, `rotate`; for admins `grant`, `revoke`, `approve`, `apply`, `admins`, `log`. Holds the admin keys and a per-network anchor; signs only what it rebuilt from its own verified log | — | thin |
 
-The trust-critical core (`types`, `trust/`) is held to **10 k lines**; the audit
+The trust-critical core (`types`, `trust/`) is held to **11 k lines**; the audit
 scope around it is measured, and [`audit-scope`](../audit-scope) places every
 package in or out of it ([06-verification.md](06-verification.md) §5).
 Everything else is glue around production-tested imports.

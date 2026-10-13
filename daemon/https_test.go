@@ -88,7 +88,7 @@ func TestARelaysNameIsAnnouncedFromItsSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := up.Sign(f.nw.admin); err != nil {
+	if err := up.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{up}); err != nil {
@@ -207,9 +207,12 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 	if !ok {
 		t.Fatal("the relay answers nothing for a member it holds")
 	}
-	got, err := dht.OpenAnnouncement(f.d.keyring, sealed)
+	got, err := dht.OpenAnnouncement(f.d.keyring, epoch, sealed)
 	if err != nil || got.Identity != one.record.Identity || got.Seq != held.Seq {
 		t.Fatalf("the relay answered %+v, %v", got, err)
+	}
+	if len(sealed) != dht.MaxValueSize {
+		t.Errorf("the relay answered %d bytes, not padded to %d", len(sealed), dht.MaxValueSize)
 	}
 	if _, ok := rv.Get([32]byte{1, 2, 3}); ok {
 		t.Error("the relay answers for a key no member is published under")
@@ -221,7 +224,7 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 	_, keySelf := rendezvousKeyOf(t, f, f.self.record.Identity)
 	if sealed, ok := rv.Get(keySelf); !ok {
 		t.Error("the relay does not answer for itself")
-	} else if own, err := dht.OpenAnnouncement(f.d.keyring, sealed); err != nil || own.Identity != f.self.record.Identity {
+	} else if own, err := dht.OpenAnnouncement(f.d.keyring, epoch, sealed); err != nil || own.Identity != f.self.record.Identity {
 		t.Errorf("for itself, the relay answered %+v, %v", own, err)
 	}
 
@@ -233,13 +236,13 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 		}
 		e := gossip.Endpoint{Identity: dev.record.Identity, Disco: gossip.DiscoKey(disco), GossipPort: 41644, Seq: seq,
 			HomeRelay: 7}
-		if err := e.Sign(dev.identity); err != nil {
+		if err := e.SignPQ(dev.identity); err != nil {
 			t.Fatal(err)
 		}
 		return e
 	}
 	seal := func(e gossip.Endpoint) []byte {
-		b, err := dht.SealAnnouncement(secret, epoch, e)
+		b, err := dht.SealAnnouncement(secret, epoch, e, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -251,7 +254,7 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 	if rv.Put([32]byte{1, 2, 3}, seal(announce(two, 5))) {
 		t.Error("the relay took an announcement under a key no member is published under")
 	}
-	if other, err := dht.SealAnnouncement(secret, epoch+1, announce(two, 5)); err == nil && rv.Put(keyTwo, other) {
+	if other, err := dht.SealAnnouncement(secret, epoch+1, announce(two, 5), true); err == nil && rv.Put(keyTwo, other) {
 		t.Error("the relay took an announcement sealed under an epoch it does not hold")
 	}
 	if rv.Put(keySelf, seal(announce(f.self, 5))) {
@@ -262,6 +265,9 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 	}
 	if e, ok := f.d.endpoints.Get(two.record.Identity); !ok || e.Seq != 5 || e.HomeRelay != 7 {
 		t.Errorf("the relay holds %+v for the member", e)
+	}
+	if unpadded, err := dht.SealAnnouncement(secret, epoch, announce(two, 6), false); err != nil || !rv.Put(keyTwo, unpadded) {
+		t.Errorf("the relay refused an announcement sealed as an older build seals it: %v", err)
 	}
 
 	// A device removed since holds the older epochs, under which the relay
@@ -548,7 +554,7 @@ func TestARelayNameIsRefusedBelowItsSchema(t *testing.T) {
 		e.Seq, e.Epoch, e.PairStore = seq, 0, 0
 		e.Relay = &gossip.RelayInfo{Port: 4443, Cert: make([]byte, gossip.RelayCertSize),
 			HostName: "abcdefgh.relay.juist.invalid", Name: "relay.example.org"}
-		if err := e.Sign(other.identity); err != nil {
+		if err := e.SignPQ(other.identity); err != nil {
 			t.Fatal(err)
 		}
 		return e
@@ -560,7 +566,7 @@ func TestARelayNameIsRefusedBelowItsSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := up.Sign(f.nw.admin); err != nil {
+	if err := up.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{up}); err != nil {

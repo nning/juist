@@ -573,7 +573,7 @@ func TestARenamedDeviceIsAnsweredByItsNewName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {

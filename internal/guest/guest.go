@@ -263,11 +263,11 @@ func welcome(ch *enroll.Channel, secret enroll.Secret, records []types.AUM, w *e
 	if int(w.Records) != len(records) {
 		return nil, fmt.Errorf("the inviting device announced %d records and sent %d", w.Records, len(records))
 	}
-	var admin *types.Identity
-	if l, ok := secret.(enroll.Link); ok {
-		admin = l.Admin
+	var link *enroll.Link
+	if l, ok := secret.(enroll.Link); ok && l.Admin != nil {
+		link = &l
 	}
-	sent, err := adopt(records, o, admin, w.Admission)
+	sent, err := adopt(records, o, link, w.Admission)
 	if err != nil {
 		_ = ch.Send(&enroll.Message{Kind: enroll.KindRefused, Reason: enroll.ReasonText(err)})
 		return nil, err
@@ -283,7 +283,7 @@ func welcome(ch *enroll.Channel, secret enroll.Secret, records []types.AUM, w *e
 	// is stored: the join succeeded either way.
 	_ = ch.Send(&enroll.Message{Kind: enroll.KindJoined, Announcement: announcement})
 	res := &Result{Log: sent, Endpoints: w.Endpoints, Leases: leases}
-	if admin != nil {
+	if link != nil {
 		res.Admission = w.Admission
 	}
 	return res, nil
@@ -603,7 +603,7 @@ func explain(err error) error {
 // admission of this device, on the chain it was sent: the device that ran the
 // invite chose the log, and only the admin's signature says it is the
 // admin's network.
-func adopt(records []types.AUM, o Options, admin *types.Identity, admission *enroll.Admission) (*log.Authority, error) {
+func adopt(records []types.AUM, o Options, link *enroll.Link, admission *enroll.Admission) (*log.Authority, error) {
 	sent, err := log.FromRecords(log.NewMemStorage(), records)
 	if err != nil {
 		return nil, fmt.Errorf("the log the inviting device sent does not verify: %w", err)
@@ -619,8 +619,8 @@ func adopt(records []types.AUM, o Options, admin *types.Identity, admission *enr
 	if _, err := secrets.Open(state.EpochRecord(), o.Keys.Identity.Public(), o.Keys.Recipient); err != nil {
 		return nil, fmt.Errorf("the log admits this device, but its group secret is unreadable here: %w", err)
 	}
-	if admin != nil {
-		if err := checkAdmission(sent, *admin, admission, o.Keys.Identity.Public()); err != nil {
+	if link != nil {
+		if err := checkAdmission(sent, link, admission, o.Keys.Identity.Public()); err != nil {
 			return nil, err
 		}
 	}
@@ -639,13 +639,16 @@ func adopt(records []types.AUM, o Options, admin *types.Identity, admission *enr
 	return sent, nil
 }
 
-func checkAdmission(sent *log.Authority, admin types.Identity, a *enroll.Admission, self types.Identity) error {
+func checkAdmission(sent *log.Authority, link *enroll.Link, a *enroll.Admission, self types.Identity) error {
 	const hint = "\nThe device that ran the invite may be compromised; ask the admin for a new invite"
 	if a == nil {
 		return errors.New("the invite link names the admin who admits this device, and the inviting " +
 			"device sent no admission by that admin" + hint)
 	}
-	if a.Admin != admin || a.Verify() != nil || a.Guest != self || a.Network != sent.State().GenesisHash() {
+	state := sent.State()
+	key := state.SigningKey(*link.Admin)
+	if state.PQ() && key == nil || a.Admin != *link.Admin || a.Verify(*link.AdminSigning, key) != nil ||
+		a.Guest != self || a.Network != state.GenesisHash() {
 		return errors.New("the admission the inviting device sent is not the admin's admission of this " +
 			"device into this network" + hint)
 	}

@@ -46,7 +46,8 @@ juist admins new alice
 ```
 
 Die Ausgabe enthält den Befehl, der den Schlüssel hinzufügt, mitsamt dem
-Schlüssel.
+Schlüssel. Der ist lang, weil er seinen quantensicheren Signaturschlüssel
+mitträgt: Kopiere den Befehl ganz.
 {{< /step >}}
 
 {{< step on="laptop" as="deinem ersten Laptop" >}}
@@ -218,7 +219,16 @@ betrifft, zeigt nur das Log.
   Versionen übernehmen ab dem Upgrade keine Änderungen mehr, bis sie
   aktualisiert sind, und `juist status` meldet das dort. Ab Schema 14 sind
   sie bis dahin auch nicht erreichbar, und `juist devices` zeigt sie als
-  `outdated`.
+  `outdated`. Ab Schema 16 nennt `juist status` sie auch auf allen anderen
+  Geräten.
+- Der Wechsel zu quantensicheren Signaturen braucht zwei Upgrades. Das erste
+  hebt das Netz auf Schema 17, in dem die Geräte ihre Signaturschlüssel
+  ankündigen, und jeder Admin führt `juist admins receive` noch einmal aus,
+  auf jedem Rechner mit einem seiner Schlüssel, um dessen Signaturschlüssel
+  zu registrieren; `juist status` sagt dann, wie viele das getan haben.
+  Haben es alle, führe `juist log upgrade` noch einmal aus, freigegeben wie
+  jede andere Änderung, und von da an signiert das Netz mit ML-DSA
+  ([Sicherheit]({{< relref "docs/security" >}}#quantensicher)).
 
 {{< note danger >}}
 Gehen so viele Admin-Schlüssel verloren, dass keine Änderung mehr genug
@@ -236,6 +246,13 @@ braucht, jeden mit eigenen Geräten
 |---|---|
 | `hint: for changes waiting for your vote to reach you: juist admins receive` | Führe einmal `juist admins receive` aus. |
 | `hint: once every device runs this version: juist log upgrade` | Aktualisiere juist auf allen Geräten, dann führe `juist log upgrade` aus. |
+| `hint: for quantum-safe signatures, first: juist admins receive` | Führe auf diesem Rechner `juist admins receive` aus. |
+| `hint: 1 of 2 admin keys have a signing key; once all do (juist admins receive): juist log upgrade` | Jeder andere Admin führt `juist admins receive` dort aus, wo seine Schlüssel liegen. |
+| `hint: cut over soon, so the removed key cannot: juist log upgrade` | Führe bei Schema 17 `juist log upgrade` aus, sobald jedes Gerät seinen Signaturschlüssel ankündigt, bevor ein entfernter Schlüssel, der das Quorum hielt, selbst den Wechsel vollzieht. |
+| `juist: no signing key registered yet by 1 admin key: laptop of bob` | bob führt auf laptop `juist admins receive` aus, oder der Schlüssel wird mit `juist admins remove` entfernt. |
+| `hint: 3 of 5 devices announce a signing key; once all do: juist log upgrade` | Aktualisiere und starte die übrigen Geräte, dann führe `juist log upgrade` noch einmal aus. |
+| `juist: no signing key announced yet by 2 devices: phone, nas` | Aktualisiere und starte sie, oder entferne eines, das du nicht mehr nutzt, mit `juist remove NAME`. |
+| `--admin "bob": a key with no signing key, from an older juist` | bob ruft `juist admins new bob` mit dieser Version noch einmal auf und schickt die neue Zeile. |
 | `hint: bob cannot read it on an admin device yet; send them the file` | Schick bob die `.rec`-Datei, er ruft damit `juist approve FILE` auf. |
 | `juist: no admin key of this network in …` | Führe den Befehl dort aus, wo der Schlüssel eines Admins liegt. |
 | `juist: run as alice, without sudo: …` | Führe den Befehl noch einmal ohne sudo aus. |

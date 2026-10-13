@@ -29,7 +29,7 @@ func TestSetAdminRecipient(t *testing.T) {
 	set := func(subject types.Identity, r types.RecipientKey, by ...types.PrivateIdentity) types.AUM {
 		aum := types.AUM{Kind: types.KindSetAdminRecipient, Prev: new(h.auth.Head()), Subject: &subject, Recipient: &r}
 		for _, k := range by {
-			if err := aum.Sign(k); err != nil {
+			if err := h.sign(&aum, k); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -48,9 +48,11 @@ func TestSetAdminRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.mustReject("a key that is no admin's", RuleState, set(stranger.Public(), r, first, stranger))
-	h.mustReject("an admin key added with an encryption key", RuleState, h.signed(types.AUM{Kind: types.KindAddAdminKey,
-		Admin: &types.AdminKey{Public: stranger.Public(), Votes: 1, Recipient: &r}}))
+	// Past the cut-over a key the log names no signing key for cannot sign.
+	h.mustReject("a key that is no admin's", RuleUnauthorized, set(stranger.Public(), r, first, stranger))
+	added := h.signed(types.AUM{Kind: types.KindAddAdminKey,
+		Admin: &types.AdminKey{Public: stranger.Public(), Signing: new(stranger.SigningKey()), Endorsement: stranger.Endorsement(), Votes: 1, Recipient: &r}})
+	h.mustReject("an admin key added with an encryption key", RuleState, added)
 
 	cp := h.apply(h.auth.Builder().Checkpoint())
 	boot, err := Bootstrap(NewMemStorage(), cp)
@@ -71,8 +73,8 @@ func TestAGenesisRecipientIsSignedForByItsKey(t *testing.T) {
 	founder, other := fixedIdentity(1), fixedIdentity(2)
 	r := newRecipient(t)
 	genesis, err := Genesis("net", 1, []types.AdminKey{
-		{Public: founder.Public(), Votes: 1},
-		{Public: other.Public(), Votes: 1, Recipient: &r},
+		{Public: founder.Public(), Votes: 1, Signing: new(founder.SigningKey()), Endorsement: founder.Endorsement()},
+		{Public: other.Public(), Votes: 1, Recipient: &r, Signing: new(other.SigningKey()), Endorsement: other.Endorsement()},
 	}, []types.Hash{{1}}, nil, fixedSealer())
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +107,7 @@ func TestAnAdminEncryptionKeyIsAKey(t *testing.T) {
 	}
 	aum := types.AUM{Kind: types.KindSetAdminRecipient, Prev: new(h.auth.Head()), Subject: new(admin.Public()),
 		Recipient: &bad}
-	if err := aum.Sign(admin); err != nil {
+	if err := h.sign(&aum, admin); err != nil {
 		t.Fatal(err)
 	}
 	h.mustReject("an encryption key that does not parse", RuleMalformed, aum)
@@ -113,7 +115,7 @@ func TestAnAdminEncryptionKeyIsAKey(t *testing.T) {
 	r := newRecipient(t)
 	aum.Recipient = &r
 	aum.Signatures = nil
-	if err := aum.Sign(admin); err != nil {
+	if err := h.sign(&aum, admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.auth.Inform(aum); err != nil {

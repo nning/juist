@@ -155,8 +155,9 @@ three ways:
 
 Each change, such as "admit nas", is a record. It contains the hash of the
 record before it, and it counts only once enough admins have signed it with
-their Ed25519 keys. Every device replays the log from the network's first record
-and checks each signature itself.
+their [ML-DSA-44](https://doi.org/10.6028/NIST.FIPS.204) keys, which a
+quantum computer cannot forge either. Every device replays the log from the
+network's first record and checks each signature itself.
 
 Changes made at the same time on different devices are put into one order,
 and every device works out the same order. Changes that contradict each other
@@ -186,8 +187,9 @@ protects what they publish:
 
 An invite works before the new device holds any secret. Both sides run
 [SPAKE2](https://www.rfc-editor.org/rfc/rfc9382), a key exchange based on a
-short password. The code or link cannot be guessed offline, and a device that
-places itself in between is revealed by the four words both sides compare.
+short password, and then agree a key with ML-KEM-768. The code or link
+cannot be guessed offline, and a device that places itself in between is
+revealed by the four words both sides compare.
 
 ## Sources {#sources}
 
@@ -224,6 +226,7 @@ Other standards
 - [RFC 9180, HPKE](https://www.rfc-editor.org/rfc/rfc9180)
 - [FIPS 203, ML-KEM](https://doi.org/10.6028/NIST.FIPS.203)
 - [RFC 9382, SPAKE2](https://www.rfc-editor.org/rfc/rfc9382)
+- [FIPS 204, ML-DSA](https://doi.org/10.6028/NIST.FIPS.204)
 - [BEP 44, storing data in the BitTorrent DHT](https://www.bittorrent.org/beps/bep_0044.html)
 
 The design in full, with the reasons for each decision, is in the

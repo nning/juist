@@ -623,6 +623,10 @@ type Self struct {
 
 	// Name is the member name this device proposes.
 	Name string `cbor:"3,keyasint,omitempty"`
+
+	// Signing is the device's signing key, which a network past the cut-over
+	// names it by.
+	Signing *types.SigningKey `cbor:"4,keyasint,omitempty"`
 }
 
 // An Event reports progress of a [CmdJoin] or a [CmdInvite].
@@ -957,7 +961,7 @@ func (r *Response) makePrintable() {
 			*f = printable(*f)
 		}
 		for _, names := range [][]string{st.Silent, st.TunnelsDown, st.SyncFailing, st.SyncNewer, st.SyncBroken,
-			st.Outdated, st.NoKey, st.Unrevoked, st.Lost, st.Seeking, st.Absent, st.Unmoved} {
+			st.Outdated, st.OlderBuild, st.NoKey, st.Unrevoked, st.Lost, st.Seeking, st.Absent, st.Unmoved} {
 			for i := range names {
 				names[i] = printable(names[i])
 			}

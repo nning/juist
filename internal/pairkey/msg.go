@@ -41,11 +41,14 @@ type Msg struct {
 	// for the group key; from the leader, a generation it commits to.
 	Use uint64 `cbor:"8,keyasint,omitempty"`
 
-	Sig types.Sig `cbor:"23,keyasint"`
+	// MLDSA is the sender's ML-DSA signature, past the cut-over.
+	MLDSA *types.PQSig `cbor:"22,keyasint,omitempty"`
+	Sig   types.Sig    `cbor:"23,keyasint"`
 }
 
 // MaxMsgSize bounds an encoded message.
-const MaxMsgSize = 2*types.IdentitySize + 2*types.WGKeySize + 5*9 + mlkem.CiphertextSize768 + checkSize + types.SigSize + 32
+const MaxMsgSize = 2*types.IdentitySize + 2*types.WGKeySize + 5*9 + mlkem.CiphertextSize768 + checkSize + types.SigSize +
+	types.PQSigSize + 40
 
 const labelMsg = "juist/pair-msg/v1"
 
@@ -59,7 +62,7 @@ var encMode = func() cbor.EncMode {
 
 func (m *Msg) signingBytes(network types.Hash) ([]byte, error) {
 	unsigned := *m
-	unsigned.Sig = types.Sig{}
+	unsigned.Sig, unsigned.MLDSA = types.Sig{}, nil
 	body, err := encMode.Marshal(&unsigned)
 	if err != nil {
 		return nil, fmt.Errorf("pairkey: encoding: %w", err)
@@ -72,8 +75,9 @@ func (m *Msg) signingBytes(network types.Hash) ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
-// Sign fills in the signature, by the sender's identity key, for network.
-func (m *Msg) Sign(priv types.PrivateIdentity, network types.Hash) error {
+// Sign fills in the signature, by the sender's identity key, for network;
+// by ML-DSA too where pq, as past the cut-over.
+func (m *Msg) Sign(priv types.PrivateIdentity, network types.Hash, pq bool) error {
 	if priv.Public() != m.From {
 		return fmt.Errorf("pairkey: a message from %v would be signed by %v", m.From.ShortString(), priv.Public().ShortString())
 	}
@@ -84,13 +88,14 @@ func (m *Msg) Sign(priv types.PrivateIdentity, network types.Hash) error {
 	if err != nil {
 		return err
 	}
-	m.Sig, err = priv.Sign(msg)
+	m.Sig, m.MLDSA, err = priv.SignBoth(msg, pq)
 	return err
 }
 
 // Verify checks the message's shape and that its sender signed it for
-// network.
-func (m *Msg) Verify(network types.Hash) error {
+// network: by ML-DSA against key where it is set, as past the cut-over, and
+// by Ed25519 always.
+func (m *Msg) Verify(network types.Hash, key *types.SigningKey) error {
 	if err := m.StaticValidate(); err != nil {
 		return err
 	}
@@ -98,7 +103,7 @@ func (m *Msg) Verify(network types.Hash) error {
 	if err != nil {
 		return err
 	}
-	if !m.From.Verify(msg, m.Sig) {
+	if !m.From.Verify(msg, m.Sig) || key != nil && !key.Verify(msg, m.MLDSA) {
 		return fmt.Errorf("pairkey: a message from %v is not signed by it", m.From.ShortString())
 	}
 	return nil

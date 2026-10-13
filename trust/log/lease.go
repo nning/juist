@@ -52,6 +52,11 @@ func (a *Authority) CheckLease(l *types.Lease, now int64) error {
 	if !a.onChain[l.Head] {
 		return errors.New("log: the lease names a head this node's chain does not contain")
 	}
+	if state.PQ() {
+		if err := l.VerifyPQ(state.SigningKey(l.Signer)); err != nil {
+			return fmt.Errorf("log: %w", err)
+		}
+	}
 	return l.Verify()
 }
 

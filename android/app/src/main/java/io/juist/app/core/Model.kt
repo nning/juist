@@ -19,9 +19,6 @@ data class NetworkView(
     val updated: Long = 0,
 ) {
     val inNetwork get() = state != State.None && state != State.Joining && state != State.Unknown
-
-    /** Members with a tunnel up, direct or relayed. */
-    val reached get() = members.count { it.reach == Reach.Direct || it.reach == Reach.Relay }
 }
 
 /** How the device stands, in the order `juist status` lets one win over the next. */

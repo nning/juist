@@ -33,6 +33,10 @@ const (
 	//     than being refused ([inEffect]): a concurrent record doing the same
 	//     won.
 	applyProbe
+
+	// applyDraft is a real application of a record not yet signed: what its
+	// signatures would bring, an introduced signing key, is taken as given.
+	applyDraft
 )
 
 // A kindRule is how one kind of record changes the state: from which schema
@@ -71,6 +75,8 @@ var kindRules = map[types.Kind]kindRule{
 	types.KindSetPublished:      {types.SchemaPublish, "published names", (*State).setPublished},
 	types.KindRenameNode:        {types.SchemaRenameNode, "renaming a device", (*State).renameNode},
 	types.KindSetPolicy:         {types.SchemaPolicy, "an access policy", (*State).setPolicy},
+	types.KindSetSigningKeys:    {types.SchemaSigning, "signing keys", (*State).setSigningKeys},
+	types.KindSetAdminSigning:   {types.SchemaSigning, "signing keys", (*State).setAdminSigning},
 }
 
 // inEffectError is a record refused because what it does is done already,
@@ -105,7 +111,7 @@ func (s *State) clone() *State {
 // subject exists, whether an address or key collides, whether the epoch bump
 // covers the right members — so the replay probe can reuse them alone.
 func (s *State) apply(a *types.AUM, hash types.Hash, mode applyMode) (*State, error) {
-	if mode == applyChain && a.Kind != types.KindGenesis {
+	if mode != applyProbe && a.Kind != types.KindGenesis {
 		if a.Prev == nil || *a.Prev != s.head {
 			return nil, reject(RuleParent, fmt.Errorf("log: record %v does not chain to head %v", hash, s.head))
 		}
@@ -178,6 +184,9 @@ func (next *State) addNode(a *types.AUM, mode applyMode) error {
 		return fmt.Errorf("log: the member set is at the %d-node limit", types.MaxNodes)
 	}
 	if err := next.checkNodeAdmissible(n, types.Identity{}); err != nil {
+		return err
+	}
+	if err := next.checkNodeSigning(n, applyChain); err != nil {
 		return err
 	}
 	next.nodes[n.Identity] = n.Clone()
@@ -305,7 +314,7 @@ func (next *State) rotateNodeKey(a *types.AUM, _ applyMode) error {
 	return nil
 }
 
-func (next *State) rotateIdentity(a *types.AUM, _ applyMode) error {
+func (next *State) rotateIdentity(a *types.AUM, mode applyMode) error {
 	cur, err := next.member(*a.Subject)
 	if err != nil {
 		return err
@@ -315,8 +324,18 @@ func (next *State) rotateIdentity(a *types.AUM, _ applyMode) error {
 	}
 	updated := cur.Clone()
 	updated.Identity = *a.NewIdentity
+	if next.PQ() {
+		key, err := introduced(a, *a.NewIdentity, mode)
+		if err != nil {
+			return err
+		}
+		updated.Signing = key
+	}
 	delete(next.nodes, *a.Subject)
 	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+		return err
+	}
+	if err := next.checkNodeSigning(updated, mode); err != nil {
 		return err
 	}
 	next.nodes[*a.NewIdentity] = updated
@@ -331,17 +350,24 @@ func (next *State) addAdminKey(a *types.AUM, _ applyMode) error {
 		return fmt.Errorf("log: %v comes with an encryption key, which only the key itself sets",
 			a.Admin.Public.ShortString())
 	}
+	switch {
+	case next.PQ() && a.Admin.Signing == nil:
+		return fmt.Errorf("log: %v comes with no signing key, which the network needs", a.Admin.Public.ShortString())
+	case next.schema < types.SchemaSigning && a.Admin.Signing != nil:
+		return fmt.Errorf("log: %v comes with a signing key, which needs %v", a.Admin.Public.ShortString(), types.SchemaSigning)
+	}
 	if _, exists := next.admins[a.Admin.Public]; exists {
 		return fmt.Errorf("log: %v is already an admin key", a.Admin.Public.ShortString())
 	}
 	if len(next.admins) >= types.MaxAdmins {
 		return fmt.Errorf("log: the admin set is at the %d-key limit", types.MaxAdmins)
 	}
-	next.admins[a.Admin.Public] = *a.Admin
+	added := *a.Admin.Clone()
+	next.admins[added.Public] = added
 	if err := types.ValidateAdmins(next.Admins(), next.schema); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
-	return nil
+	return next.checkSigningKeys()
 }
 
 func (next *State) removeAdminKey(a *types.AUM, _ applyMode) error {
@@ -444,8 +470,16 @@ func (next *State) schemaUpgrade(a *types.AUM, _ applyMode) error {
 		// leave a node that only observed sync stopping.
 		return &SchemaTooNewError{Version: *a.Schema, Implemented: types.CurrentSchema, At: next.head}
 	}
+	if *a.Schema >= types.SchemaMLDSA && next.schema < types.SchemaMLDSA {
+		return fmt.Errorf("log: %v is reached by setting every signing key, not by an upgrade", types.SchemaMLDSA)
+	}
 	if next.schema < types.SchemaHolders && *a.Schema >= types.SchemaHolders {
 		next.nameHolders()
+	}
+	for _, n := range next.Nodes() {
+		if err := n.ValidateNameBytes(*a.Schema); err != nil {
+			return fmt.Errorf("log: cannot adopt %v: %w", *a.Schema, err)
+		}
 	}
 	// A schema that reserves more overlay space must not leave a granted route
 	// inside it, or no checkpoint of the state would validate.
@@ -459,6 +493,105 @@ func (next *State) schemaUpgrade(a *types.AUM, _ applyMode) error {
 		}
 	}
 	next.schema = *a.Schema
+	return nil
+}
+
+// introduced returns the signing key id's signature on a brings, which a
+// verified record carries; a draft may not carry it yet.
+func introduced(a *types.AUM, id types.Identity, mode applyMode) (*types.SigningKey, error) {
+	if s, ok := a.Signature(id); ok && s.Key != nil {
+		return new(*s.Key), nil
+	}
+	if mode == applyDraft {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("log: %v brings no signing key", id.ShortString())
+}
+
+// setSigningKeys gives every member its signing key, each endorsed by its
+// identity, and cuts the network over to [types.SchemaMLDSA]. Every admin key
+// has registered its own before.
+func (next *State) setSigningKeys(a *types.AUM, _ applyMode) error {
+	if next.PQ() {
+		return inEffect(errors.New("log: the network has its signing keys already"))
+	}
+	members := a.Signing.Members
+	if len(members) != len(next.nodes) {
+		return fmt.Errorf("log: %d signing keys for %d members; every member needs one", len(members), len(next.nodes))
+	}
+	for i := range members {
+		m := &members[i]
+		cur, ok := next.nodes[m.Identity]
+		if !ok {
+			return fmt.Errorf("log: a signing key for %v, which is not a member", m.Identity.ShortString())
+		}
+		if !m.Identity.VerifyEndorsement(&m.Key, m.Endorsement) {
+			return fmt.Errorf("log: %v did not endorse the signing key named for it", m.Identity.ShortString())
+		}
+		updated := cur.Clone()
+		updated.Signing = new(m.Key)
+		next.nodes[m.Identity] = updated
+	}
+	for id, k := range next.admins {
+		if k.Signing == nil {
+			return fmt.Errorf("log: admin key %v has registered no signing key", id.ShortString())
+		}
+	}
+	next.schema = types.SchemaMLDSA
+	return next.checkSigningKeys()
+}
+
+// setAdminSigning registers an admin key's endorsed signing key.
+func (next *State) setAdminSigning(a *types.AUM, _ applyMode) error {
+	m := a.Signing.Members[0]
+	k, ok := next.admins[m.Identity]
+	switch {
+	case next.PQ():
+		return fmt.Errorf("log: the network is past the cut-over; %v's signing key is set", m.Identity.ShortString())
+	case !ok:
+		return fmt.Errorf("log: %v is not an admin key", m.Identity.ShortString())
+	case !m.Identity.VerifyEndorsement(&m.Key, m.Endorsement):
+		return fmt.Errorf("log: %v did not endorse the signing key named for it", m.Identity.ShortString())
+	case k.Signing != nil && *k.Signing == m.Key:
+		return inEffect(fmt.Errorf("log: %v has that signing key already", m.Identity.ShortString()))
+	}
+	k.Signing, k.Endorsement = new(m.Key), new(m.Endorsement)
+	next.admins[m.Identity] = k
+	return next.checkSigningKeys()
+}
+
+// checkSigningKeys refuses a state where two identities name one signing key.
+func (s *State) checkSigningKeys() error {
+	if err := types.ValidateSigningKeys(s.Admins(), s.Nodes()); err != nil {
+		return fmt.Errorf("log: %w", err)
+	}
+	return nil
+}
+
+// checkNodeSigning checks a member's signing key: none below the cut-over,
+// past it one no other identity names, unless a draft has yet to bring it.
+func (s *State) checkNodeSigning(n *types.NodeRecord, mode applyMode) error {
+	switch {
+	case !s.PQ() && n.Signing != nil:
+		return fmt.Errorf("log: %v has a signing key, which needs %v", n.Identity.ShortString(), types.SchemaMLDSA)
+	case n.Signing == nil && (!s.PQ() || mode == applyDraft):
+		return nil
+	case n.Signing == nil:
+		return fmt.Errorf("log: %v has no signing key", n.Identity.ShortString())
+	}
+	for id, other := range s.nodes {
+		if id != n.Identity && other.Signing != nil && *other.Signing == *n.Signing {
+			return fmt.Errorf("log: %v and %v name one signing key", id.ShortString(), n.Identity.ShortString())
+		}
+	}
+	if k, ok := s.admins[n.Identity]; ok && k.Signing != nil && *k.Signing != *n.Signing {
+		return fmt.Errorf("log: %v names two signing keys", n.Identity.ShortString())
+	}
+	for id, k := range s.admins {
+		if id != n.Identity && k.Signing != nil && *k.Signing == *n.Signing {
+			return fmt.Errorf("log: %v and %v name one signing key", id.ShortString(), n.Identity.ShortString())
+		}
+	}
 	return nil
 }
 
@@ -540,7 +673,7 @@ func (next *State) renumberNetwork(a *types.AUM, mode applyMode) error {
 	if next.v4Prefix != nil && *next.v4Prefix == *r.Prefix {
 		return inEffect(fmt.Errorf("log: the network is numbered from %v already", *r.Prefix))
 	}
-	if mode == applyChain {
+	if mode != applyProbe {
 		if err := next.checkRenumbering(r); err != nil {
 			return err
 		}
@@ -663,7 +796,7 @@ func (next *State) renumberNode(a *types.AUM, mode applyMode) error {
 // was applied to, for the sequencing rule; the member set is read from next,
 // since a bump must cover the set as it will be, not as it was.
 func (next *State) applyEpoch(prev *State, rec *types.EpochRecord, mode applyMode) error {
-	if mode == applyChain {
+	if mode != applyProbe {
 		// Exactly one past the current epoch. Strict sequencing means a node's
 		// persisted epoch floor has an exact meaning, and no record can jump
 		// the counter — toward exhaustion, or past a floor a node is holding.
@@ -715,6 +848,9 @@ func (s *State) checkNodeAdmissible(n *types.NodeRecord, excluding types.Identit
 	}
 	if need, what := n.NeedsSchema(); s.schema < need {
 		return fmt.Errorf("log: %s needs %v; the network is at %v", what, need, s.schema)
+	}
+	if err := n.ValidateNameBytes(s.schema); err != nil {
+		return fmt.Errorf("log: %w", err)
 	}
 	if len(n.Published) > 0 && s.domain == "" {
 		return errors.New("log: the network has no domain to publish names under")

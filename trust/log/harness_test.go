@@ -64,7 +64,7 @@ func newHarnessWith(t *testing.T, numAdmins int, quorum uint32, mutate func(*typ
 		}
 		h.admins = append(h.admins, priv)
 		adminKeys = append(adminKeys, types.AdminKey{
-			Public: priv.Public(), Votes: 1, Name: fmt.Sprintf("admin%d", i),
+			Public: priv.Public(), Votes: 1, Name: fmt.Sprintf("admin%d", i), Signing: new(priv.SigningKey()), Endorsement: priv.Endorsement(),
 		})
 	}
 	var commitments []types.Hash
@@ -82,6 +82,12 @@ func newHarnessWith(t *testing.T, numAdmins int, quorum uint32, mutate func(*typ
 		t.Fatalf("building genesis: %v", err)
 	}
 	mutate(genesis.State)
+	if genesis.State.Schema < types.SchemaMLDSA {
+		for i := range genesis.State.Admins {
+			genesis.State.Admins[i].Signing = nil
+			genesis.State.Admins[i].Endorsement = nil
+		}
+	}
 	h.signQuorum(&genesis)
 	auth, err := Create(h.storage, genesis)
 	if err != nil {
@@ -111,11 +117,20 @@ func (h *harness) signQuorum(a *types.AUM) {
 		if votes >= h.quorum {
 			break
 		}
-		if err := a.Sign(admin); err != nil {
+		if err := h.sign(a, admin); err != nil {
 			h.t.Fatalf("signing: %v", err)
 		}
 		votes++
 	}
+}
+
+// sign signs a record with key, as the network's current schema says.
+func (h *harness) sign(a *types.AUM, key types.PrivateIdentity) error {
+	var schema types.SchemaVersion
+	if h.auth != nil {
+		schema = h.auth.State().Schema()
+	}
+	return a.SignUnder(key, schema)
 }
 
 // newNode generates a member record together with its private keys.
@@ -139,12 +154,14 @@ func (h *harness) newNode(name string) types.NodeRecord {
 	}
 	h.nodeKeys[id.Public()] = priv
 	h.nodeIDs[id.Public()] = id
+	k := id.SigningKey()
 	return types.NodeRecord{
 		Identity:  id.Public(),
 		Name:      name,
 		WireGuard: wg,
 		X25519:    x,
 		MLKEM:     m,
+		Signing:   &k,
 	}
 }
 
@@ -261,7 +278,7 @@ func (h *harness) adminKeys() []types.AdminKey {
 	out := make([]types.AdminKey, 0, len(h.admins))
 	for i, priv := range h.admins {
 		out = append(out, types.AdminKey{
-			Public: priv.Public(), Votes: 1, Name: fmt.Sprintf("admin%d", i),
+			Public: priv.Public(), Votes: 1, Name: fmt.Sprintf("admin%d", i), Signing: new(priv.SigningKey()), Endorsement: priv.Endorsement(),
 		})
 	}
 	return out

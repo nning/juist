@@ -79,7 +79,23 @@ func (n *NodeRecord) NeedsSchema() (SchemaVersion, string) {
 	if slices.ContainsFunc(n.Published, func(p PublishedName) bool { return p.Members }) && SchemaMembers > need {
 		need, what = SchemaMembers, "names for members alone"
 	}
+	if n.Signing != nil && SchemaMLDSA > need {
+		need, what = SchemaMLDSA, "a signing key"
+	}
 	return need, what
+}
+
+// NameBytes is what n's public names and published labels take, which
+// [MaxNameBytes] caps.
+func (n *NodeRecord) NameBytes() int {
+	total := 0
+	for _, name := range n.Names {
+		total += len(name)
+	}
+	for _, p := range n.Published {
+		total += len(p.Label)
+	}
+	return total
 }
 
 // An AdminKey is one member of the admin quorum: a signing key and the vote
@@ -113,6 +129,12 @@ type AdminKey struct {
 	// only the key itself sets: a genesis naming one is signed by the key,
 	// and so is a [KindSetAdminRecipient].
 	Recipient *RecipientKey `cbor:"6,keyasint,omitempty"`
+
+	// Signing is the key's ML-DSA key, which every admin key has from
+	// [SchemaMLDSA] on, and Endorsement the key's Ed25519 endorsement of it,
+	// which binds it to Public as the key's holder made them.
+	Signing     *SigningKey `cbor:"7,keyasint,omitempty"`
+	Endorsement *Sig        `cbor:"8,keyasint,omitempty"`
 }
 
 // Clone returns a deep copy of k.
@@ -121,6 +143,14 @@ func (k *AdminKey) Clone() *AdminKey {
 	if k.Recipient != nil {
 		r := *k.Recipient
 		out.Recipient = &r
+	}
+	if k.Signing != nil {
+		s := *k.Signing
+		out.Signing = &s
+	}
+	if k.Endorsement != nil {
+		e := *k.Endorsement
+		out.Endorsement = &e
 	}
 	return &out
 }
@@ -274,6 +304,10 @@ type NodeRecord struct {
 	// Published are the names this node publishes under the network's
 	// domain, each a label held by no other node. Schema 9 and later.
 	Published []PublishedName `cbor:"12,keyasint,omitempty"`
+
+	// Signing is the node's ML-DSA key, which every member has from
+	// [SchemaMLDSA] on.
+	Signing *SigningKey `cbor:"13,keyasint,omitempty"`
 }
 
 // A RetiringV4 is an overlay IPv4 address a renumbering replaced, live until
@@ -527,6 +561,10 @@ func (n *NodeRecord) Clone() *NodeRecord {
 	out.Routes = slices.Clone(n.Routes)
 	out.Names = slices.Clone(n.Names)
 	out.Published = slices.Clone(n.Published)
+	if n.Signing != nil {
+		k := *n.Signing
+		out.Signing = &k
+	}
 	return &out
 }
 
@@ -585,6 +623,11 @@ func (n *NodeRecord) StaticValidate() error {
 	}
 	if err := validatePublished(n.Published); err != nil {
 		return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
+	}
+	if n.Signing != nil {
+		if err := n.Signing.Validate(); err != nil {
+			return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
+		}
 	}
 	return n.ValidatePublishing()
 }
@@ -655,6 +698,18 @@ func (a *AdminKey) StaticValidate() error {
 	if a.Recipient != nil {
 		if err := a.Recipient.validate(); err != nil {
 			return fmt.Errorf("admin key %v: %w", a.Public.ShortString(), err)
+		}
+	}
+	if (a.Signing == nil) != (a.Endorsement == nil) {
+		return fmt.Errorf("admin key %v has a signing key without its endorsement, or one without the other",
+			a.Public.ShortString())
+	}
+	if a.Signing != nil {
+		if err := a.Signing.Validate(); err != nil {
+			return fmt.Errorf("admin key %v: %w", a.Public.ShortString(), err)
+		}
+		if !a.Public.VerifyEndorsement(a.Signing, *a.Endorsement) {
+			return fmt.Errorf("admin key %v did not endorse its signing key", a.Public.ShortString())
 		}
 	}
 	return ValidateName(a.Name)
@@ -919,6 +974,12 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 			return fmt.Errorf("node %v has %s, which needs %v; the state is at %v",
 				s.Nodes[i].Identity.ShortString(), what, need, s.Schema)
 		}
+		if err := s.Nodes[i].ValidateNameBytes(s.Schema); err != nil {
+			return err
+		}
+	}
+	if err := s.validateSigning(); err != nil {
+		return err
 	}
 
 	if s.Policy != nil {
@@ -961,6 +1022,72 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 		if w.Recipient != s.Nodes[i].Identity {
 			return fmt.Errorf("epoch wrap %d addresses %v but member %d is %v",
 				i, w.Recipient.ShortString(), i, s.Nodes[i].Identity.ShortString())
+		}
+	}
+	return nil
+}
+
+// ValidateNameBytes checks n's names against [MaxNameBytes], from
+// [SchemaSigning] on.
+func (n *NodeRecord) ValidateNameBytes(schema SchemaVersion) error {
+	if b := n.NameBytes(); schema >= SchemaSigning && b > MaxNameBytes {
+		return fmt.Errorf("node %v's names take %d bytes, over the %d limit", n.Identity.ShortString(), b, MaxNameBytes)
+	}
+	return nil
+}
+
+// validateSigning checks the signing keys: one for everyone from [SchemaMLDSA]
+// on; below it none for a member, an admin key's from [SchemaSigning] on.
+func (s *Snapshot) validateSigning() error {
+	pq := s.Schema >= SchemaMLDSA
+	for i := range s.Admins {
+		k := &s.Admins[i]
+		switch {
+		case k.Signing != nil && s.Schema < SchemaSigning:
+			return fmt.Errorf("admin key %v has a signing key, which needs %v; the state is at %v",
+				k.Public.ShortString(), SchemaSigning, s.Schema)
+		case k.Signing == nil && pq:
+			return fmt.Errorf("admin key %v has no signing key; the state is at %v", k.Public.ShortString(), s.Schema)
+		}
+	}
+	for i := range s.Nodes {
+		switch n := &s.Nodes[i]; {
+		case n.Signing == nil && pq:
+			return fmt.Errorf("node %v has no signing key; the state is at %v", n.Identity.ShortString(), s.Schema)
+		case n.Signing != nil && !pq:
+			return fmt.Errorf("node %v has a signing key, which needs %v; the state is at %v",
+				n.Identity.ShortString(), SchemaMLDSA, s.Schema)
+		}
+	}
+	return ValidateSigningKeys(s.Admins, s.Nodes)
+}
+
+// ValidateSigningKeys checks that no signing key is named by two identities,
+// and that an identity both an admin key and a member names one.
+func ValidateSigningKeys(admins []AdminKey, nodes []NodeRecord) error {
+	by := make(map[SigningKey]Identity, len(admins)+len(nodes))
+	named := make(map[Identity]*SigningKey, len(admins)+len(nodes))
+	check := func(id Identity, k *SigningKey) error {
+		if k == nil {
+			return nil
+		}
+		if other, ok := by[*k]; ok && other != id {
+			return fmt.Errorf("%v and %v name one signing key", other.ShortString(), id.ShortString())
+		}
+		if prev, ok := named[id]; ok && *prev != *k {
+			return fmt.Errorf("%v names two signing keys", id.ShortString())
+		}
+		by[*k], named[id] = id, k
+		return nil
+	}
+	for i := range admins {
+		if err := check(admins[i].Public, admins[i].Signing); err != nil {
+			return err
+		}
+	}
+	for i := range nodes {
+		if err := check(nodes[i].Identity, nodes[i].Signing); err != nil {
+			return err
 		}
 	}
 	return nil

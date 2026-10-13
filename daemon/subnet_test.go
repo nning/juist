@@ -45,7 +45,7 @@ func (f *reconcileFixture) learnRouter(t *testing.T, dev *device, port uint16, r
 		t.Fatal(err)
 	}
 	e.Subnets, e.Seq = routing, e.Seq+1
-	if err := e.Sign(dev.identity); err != nil {
+	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -332,7 +332,7 @@ func TestAPeerWithoutIPv4IsSentNoIPv4(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Subnets, e.NoV4, e.Seq = true, true, e.Seq+1
-	if err := e.Sign(router.identity); err != nil {
+	if err := e.SignPQ(router.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {

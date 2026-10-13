@@ -30,7 +30,7 @@ func newHolders(t *testing.T, quorum uint32, people map[string]int) *holders {
 				t.Fatal(err)
 			}
 			hs.keys[name] = append(hs.keys[name], k)
-			admins = append(admins, types.AdminKey{Public: k.Public(), Votes: 1, Name: name, Holder: name})
+			admins = append(admins, types.AdminKey{Public: k.Public(), Signing: new(k.SigningKey()), Endorsement: k.Endorsement(), Votes: 1, Name: name, Holder: name})
 		}
 	}
 	genesis, err := Genesis("people", quorum, admins, h.commitments(), nil, h.sealer())
@@ -54,7 +54,7 @@ func newHolders(t *testing.T, quorum uint32, people map[string]int) *holders {
 func (hs *holders) signed(aum types.AUM, by ...types.PrivateIdentity) types.AUM {
 	hs.t.Helper()
 	for _, k := range by {
-		if err := aum.Sign(k); err != nil {
+		if err := aum.SignUnder(k, hs.auth.State().Schema()); err != nil {
 			hs.t.Fatal(err)
 		}
 	}
@@ -141,7 +141,7 @@ func TestHoldersNeedTheirSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.auth.Builder().AddAdminKey(types.AdminKey{Public: k.Public(), Votes: 1, Holder: "alice"}); err == nil ||
+	if _, err := h.auth.Builder().AddAdminKey(types.AdminKey{Public: k.Public(), Signing: new(k.SigningKey()), Endorsement: k.Endorsement(), Votes: 1, Holder: "alice"}); err == nil ||
 		!strings.Contains(err.Error(), "needs schema 3") {
 		t.Fatalf("a holder at schema 2: %v", err)
 	}
@@ -180,12 +180,12 @@ func TestHoldersDifferingOnlyInCaseAreRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := hs.auth.Builder().AddAdminKey(types.AdminKey{Public: k.Public(), Votes: 1, Name: "Alice",
+	if _, err := hs.auth.Builder().AddAdminKey(types.AdminKey{Public: k.Public(), Signing: new(k.SigningKey()), Endorsement: k.Endorsement(), Votes: 1, Name: "Alice",
 		Holder: "Alice"}); err == nil || !strings.Contains(err.Error(), "only in case") {
 		t.Fatalf("a holder differing only in case: %v", err)
 	}
 	// One key needed is written one way only.
-	if _, err := hs.auth.Builder().AddAdminKey(types.AdminKey{Public: k.Public(), Votes: 1, Holder: "alice",
+	if _, err := hs.auth.Builder().AddAdminKey(types.AdminKey{Public: k.Public(), Signing: new(k.SigningKey()), Endorsement: k.Endorsement(), Votes: 1, Holder: "alice",
 		Needed: 1}); err == nil {
 		t.Fatal("a key needing one key, written as one, was accepted")
 	}
@@ -245,7 +245,7 @@ func TestARemovedKeyCannotUndoItsRemoval(t *testing.T) {
 			if removal, err = b.RemoveAdminKey(mallory.Public()); err != nil {
 				t.Fatal(err)
 			}
-			if err := removal.Sign(honest); err != nil {
+			if err := h.sign(&removal, honest); err != nil {
 				t.Fatal(err)
 			}
 			// Mallory's move at the same parent, signed by her alone: a
@@ -253,7 +253,7 @@ func TestARemovedKeyCannotUndoItsRemoval(t *testing.T) {
 			if counter, err = b.RemoveNode(victim.Identity, h.sealer()); err != nil {
 				t.Fatal(err)
 			}
-			if err := counter.Sign(mallory); err != nil {
+			if err := h.sign(&counter, mallory); err != nil {
 				t.Fatal(err)
 			}
 			if counter.Hash().Compare(removal.Hash()) < 0 {
@@ -289,14 +289,14 @@ func TestKeysRemovingEachOtherAlarm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := one.Sign(a); err != nil {
+	if err := h.sign(&one, a); err != nil {
 		t.Fatal(err)
 	}
 	other, err := builder.RemoveAdminKey(a.Public())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := other.Sign(b); err != nil {
+	if err := h.sign(&other, b); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.auth.Inform(one, other); err != nil {
@@ -365,7 +365,7 @@ func TestForkChoiceIgnoresTheStoreOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := aum.Sign(by); err != nil {
+		if err := h.sign(&aum, by); err != nil {
 			t.Fatal(err)
 		}
 		return aum
@@ -387,7 +387,7 @@ func TestForkChoiceIgnoresTheStoreOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := removal.Sign(h.admins[0]); err != nil {
+	if err := h.sign(&removal, h.admins[0]); err != nil {
 		t.Fatal(err)
 	}
 

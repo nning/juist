@@ -56,7 +56,7 @@ func (m *member) env(peer *member) *Env {
 func (m *member) send(t *testing.T, peer *member) Msg {
 	t.Helper()
 	msg := m.store.Outgoing(m.env(peer))
-	if err := msg.Sign(m.priv, network); err != nil {
+	if err := msg.Sign(m.priv, network, false); err != nil {
 		t.Fatal(err)
 	}
 	b, err := encMode.Marshal(&msg)
@@ -71,7 +71,7 @@ func (m *member) send(t *testing.T, peer *member) Msg {
 
 func (m *member) take(t *testing.T, from *member, msg Msg) bool {
 	t.Helper()
-	if err := msg.Verify(network); err != nil {
+	if err := msg.Verify(network, nil); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := m.store.Take(m.env(from), &msg)
@@ -406,11 +406,11 @@ func TestAMessageIsBoundToItsSenderAndNetwork(t *testing.T) {
 	group, _ := secrets.NewSecret()
 	l, f := pair(t, group, 1)
 	m := l.send(t, f)
-	if err := m.Verify(types.Hash{8}); err == nil {
+	if err := m.Verify(types.Hash{8}, nil); err == nil {
 		t.Error("a message verified for another network")
 	}
 	m.From = f.side.ID
-	if err := m.Verify(network); err == nil {
+	if err := m.Verify(network, nil); err == nil {
 		t.Error("a message verified as another member's")
 	}
 }
@@ -512,5 +512,27 @@ func TestAStaleFollowerMessageStartsNothing(t *testing.T) {
 	l.take(t, f, stale)
 	if changed, _ := l.store.Advance(l.env(f)); changed {
 		t.Error("a stale message started a generation")
+	}
+}
+
+// Past the cut-over a message is held to its sender's ML-DSA signature: one
+// signed by Ed25519 alone, which a quantum computer forges, is refused.
+// Exit criterion (1) of M17 for pair-key messages.
+func TestPastTheCutOverAMessageSignedByEd25519AloneIsRefused(t *testing.T) {
+	group, _ := secrets.NewSecret()
+	a, b := newMember(t, group, 1), newMember(t, group, 1)
+	key := a.priv.SigningKey()
+	msg := a.store.Outgoing(a.env(b))
+	if err := msg.Sign(a.priv, network, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := msg.Verify(network, &key); err == nil {
+		t.Fatal("past the cut-over a message signed by Ed25519 alone verified")
+	}
+	if err := msg.Sign(a.priv, network, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := msg.Verify(network, &key); err != nil {
+		t.Fatalf("a message signed by both keys: %v", err)
 	}
 }

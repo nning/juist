@@ -99,6 +99,11 @@ type Options struct {
 	// none yet.
 	Announce func() (gossip.Endpoint, bool)
 
+	// Padded reports whether to seal announcements padded and without their
+	// epoch, which builds before [types.SchemaPadded] cannot
+	// open. Nil is never. Either is opened.
+	Padded func() bool
+
 	// OnPeer receives each verified announcement learned from the LAN. It
 	// runs on the beacon's read goroutine, so it must not block for long.
 	OnPeer func(gossip.Endpoint)
@@ -611,7 +616,9 @@ func (b *Beacon) answerFor(n blindedName) ([]byte, error) {
 	if !ok {
 		return nil, nil
 	}
-	body, err := ep.Encode()
+	// A hint: the ML-DSA signature and signing key do not fit one answer.
+	hint := ep.Hint()
+	body, err := hint.Encode()
 	if err != nil {
 		return nil, err
 	}
@@ -619,7 +626,7 @@ func (b *Beacon) answerFor(n blindedName) ([]byte, error) {
 	if !ok {
 		return nil, nil
 	}
-	sealed, err := sealPayload(s, n.epoch, body)
+	sealed, err := sealPayload(s, n.epoch, body, b.opts.Padded != nil && b.opts.Padded())
 	if err != nil {
 		return nil, err
 	}
@@ -658,11 +665,25 @@ func (b *Beacon) openAnnouncement(epoch uint64, txt []string) (gossip.Endpoint, 
 	return gossip.DecodeEndpoint(body)
 }
 
+// A padded announcement's size is a multiple of padTo, or maxSealed where
+// that is past it: one padded to the DHT's size would not fit a datagram.
+const (
+	padTo     = 256
+	maxSealed = 864 // the most one answer of [maxMessageSize] carries
+)
+
 // sealPayload and openPayload wrap an announcement in the shared sealed-blob
 // format under [secrets.Secret.DiscoveryKey] — a different key from the one
 // gossip frames use, so an announcement cannot be replayed as a frame.
-func sealPayload(s secrets.Secret, epoch uint64, body []byte) ([]byte, error) {
+func sealPayload(s secrets.Secret, epoch uint64, body []byte, padded bool) ([]byte, error) {
 	key := s.DiscoveryKey(epoch)
+	if padded {
+		size := (len(body) + aead.PaddedOverhead + padTo - 1) / padTo * padTo
+		if size > maxSealed {
+			size = max(maxSealed, len(body)+aead.PaddedOverhead)
+		}
+		return aead.SealPadded(key, epoch, body, size)
+	}
 	return aead.Seal(key, epoch, body)
 }
 
@@ -670,6 +691,9 @@ func openPayload(s secrets.Secret, epoch uint64, sealed []byte) ([]byte, error) 
 	// The epoch is chosen by the name the announcement arrived under, and it
 	// is also the blob's additional data, so a blob relabelled to a different
 	// epoch fails to authenticate rather than being opened with the wrong key.
+	if pt, err := aead.OpenPadded(s.DiscoveryKey(epoch), epoch, sealed); err == nil {
+		return pt, nil
+	}
 	got, err := aead.Epoch(sealed)
 	if err != nil {
 		return nil, fmt.Errorf("mdns: %w", err)

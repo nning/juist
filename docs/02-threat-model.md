@@ -12,14 +12,14 @@
 
 | Adversary | Capability assumed | Primary defense |
 |---|---|---|
-| Network observer (on-path) | Read/inject/drop packets anywhere between members, and record them for a quantum computer later | WireGuard (Noise IKpsk2) with a preshared key from ML-KEM-768 (M15); all control traffic signed and/or inside tunnels |
+| Network observer (on-path) | Read/inject/drop packets anywhere between members, and record them for a quantum computer later | WireGuard (Noise IKpsk2) with a preshared key from ML-KEM-768 (M15); all control traffic signed and/or inside tunnels; enrollment by code and signatures not yet post-quantum (residual weakness 13) |
 | Malicious rendezvous infra | Controls public DHT nodes / STUN servers we query | Trust-free construction: DHT/STUN can delay discovery (DoS), never alter membership; announcements AEAD-encrypted, topics blinded |
 | Evicted member | Was a member; retains all old keys and state | Signed revocation records + epoch bump (loses group secret → loses discovery) + WG peer removal + fail-closed freshness TTL |
 | Stolen/lost device | Full key material of one member | Same as evicted member, after detection; per-device keys mean no shared secrets to rotate |
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
 | Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; once the network has an access policy (M14), only members it passes use one, enforced at the exit node or router |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
-| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M20, after v1.0); update transparency (roadmap item, not v1) |
+| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M26, after v1.0); update transparency (roadmap item, not v1) |
 
 ## Out of scope / consciously accepted
 
@@ -78,12 +78,29 @@ adopting this system must accept them explicitly.
    naming, since neither is removable at this layer. Running the DHT at all tells a
    passive observer that this host speaks the BitTorrent DHT, which is the
    internet-scale twin of the mDNS leak above — `juistd --no-dht` is the answer for a
-   deployment that would rather not, at the cost of off-LAN cold start. And a node's
-   *queries* are visible to whichever storage node answers them: each names one
-   opaque address, so no query says who is being looked for, but a node that asked
-   after all of its missing peers at once would turn that into a count. Lookups are
-   therefore capped per round and shuffled, and only members this node holds no
-   address for are asked after at all. Public STUN servers (Google's and
+   deployment that would rather not, at the cost of off-LAN cold start. And the
+   DHT **links members' addresses**: an item's address is one member's for an
+   hour, and the storage nodes closest to it, among which anyone can place
+   nodes of their own, see the address that puts it and every address that
+   asks for it, and so learn that these are in one network, though not which
+   network or who. A member is asked after while it is unheard, while its
+   tunnel does not answer (every 30 s at first, backing off to an hour), and
+   by a stale node, so what a storage node gathers is cold starts, moves and
+   broken paths, never a mesh that works. The member relays are asked first,
+   as members they learn nothing new from it, and the DHT only by a device
+   that reaches no member, is stale, or holds the lowest identity among
+   those it reaches: what it finds, gossip hands the others, so a storage
+   node links the members sought to one address of a group, not to each.
+   Asking after every missing peer at
+   once would add a count, so lookups are capped at four a round and
+   shuffled. Whoever sees a query on its way can fetch the item for the rest
+   of the hour, and learns from it what a storage node does, less the
+   address that put it. Without an item's address the DHT tells a stranger
+   nothing: it keeps no index to ask. Below schema 16 each item shows the
+   epoch it is sealed under, which counts the network's admissions, removals
+   and rotations and is the same in every member's item, and its length,
+   which grows with its author's addresses and roles; from it on, neither
+   ([10-connectivity-notes.md](10-connectivity-notes.md)). Public STUN servers (Google's and
    Cloudflare's by default, `juistd --stun`/`--no-stun`) see every node's public
    address and how often it asks, which is what lets two nodes behind NAT find a
    direct path without a relay member. An invite whose link does not reach
@@ -167,7 +184,7 @@ adopting this system must accept them explicitly.
    is the device keys. Bounded by: a device is still removed from each network
    by that network's quorum. A user per instance, which would close it, needs
    the packaging and each instance's view of the one below reworked, and is
-   left for the hardening before the audit (M18).
+   left for the boundaries on a host, before the audit (M22).
 10. **Admin devices see what waits for the admins (M5b).** A change waiting
    for votes is sealed to the admin keys, but the juistd of every admin device
    that carries it sees its outside: which admin key handed it on, when it
@@ -215,6 +232,35 @@ adopting this system must accept them explicitly.
    traffic, which seals itself. A pairs file restored from an older copy can
    leave its device on a key its peer has moved past, cutting that tunnel
    until the file is removed and the device starts a store of its own.
+
+13. **What a quantum computer still forges.** Past the cut-over to schema 18
+   every record, announcement, address key, lease, waiting change, pair-key
+   and catch-up message and admission is signed by ML-DSA-44, and a verifier
+   refuses one signed by Ed25519 alone. The records below the cut-over keep
+   their Ed25519 signatures: a device past it takes no new record below it,
+   but one that first adopts it once a quantum computer exists trusts that
+   history as a member hands it over, until M18's checkpoints anchor it past
+   the cut-over. The DHT, a relay's rendezvous and the LAN carry announcements
+   as hints, Ed25519-signed under the epoch's key: a member, or a device
+   removed since the last epoch, with a quantum computer points another
+   member's hints elsewhere, which costs dials, since a hint says nothing its
+   author agrees to, takes no full announcement's place, and the WireGuard
+   handshake is keyed by the log; one naming no epoch makes its device look
+   outdated, which carries none of a member's traffic, rather than drop the
+   preshared key. A copy of the cut-over with forged
+   signatures says what the cut-over says and loses to the copy built on.
+   Two different cut-overs from one head, which only admins who each hold
+   the quorum write at once, split the network for good; so does a removed
+   admin key holding the quorum that races its removal with a cut-over, for
+   the devices that adopt that first. A device behind
+   the cut-over reads Ed25519 until it catches up. Enrollment
+   adds ML-KEM-768 to SPAKE2, so a recorded one opens to nobody. juist's TLS
+   between its own ends is 1.3 with X25519MLKEM768 alone. A relay proves
+   itself by an ECDSA certificate and a host to its relay by an Ed25519
+   proof, which a quantum computer forges, but a relay is trusted for
+   liveness alone and SPAKE2 authenticates what passes through it. A release
+   is signed by ssh-ed25519 alone until the OpenSSH that Debian stable and
+   FreeBSD install verifies ML-DSA.
 
 ## Security design rules derived from the above
 

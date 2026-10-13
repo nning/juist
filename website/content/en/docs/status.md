@@ -27,8 +27,7 @@ juist status
 $ juist status
 home · connected
   This device   laptop  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0
-  Devices       3 others, all heard from
-  Tunnels       3 of 3 live
+  Devices       3 others
   Relays        1 available, via vps
   Names         home.juist
   Freshness     vouched 12m ago, valid 48h
@@ -55,9 +54,9 @@ The state on the first line is one of these:
 ## What each line means
 
 - `This device`: its name and its addresses in the network, IPv4 first, then IPv6.
-- `Devices`: how many other devices there are, and how many of them have been heard from.
-- `Tunnels`: how many tunnels carried traffic at the last check. juistd
-  checks every 30 seconds. If both ends have a relay, it checks a quiet
+- `Devices`: how many other devices there are, and how many of them had no
+  tunnel carrying traffic at the last check; `juist devices` says why.
+  juistd checks every 30 seconds. If both ends have a relay, it checks a quiet
   tunnel only every 5 minutes, so that a laptop's radio can sleep.
 - `Relays`: how many devices may relay, and which one this device uses. A [relay]({{< relref "docs/relays" >}}) passes traffic between two devices that cannot reach each other directly.
 - `HTTPS`: on a device that sends only HTTPS, the relays on port 443 it uses, and its proxy. See [HTTPS only]({{< relref "docs/https-only" >}}).
@@ -150,7 +149,8 @@ admin is a person whose key may approve changes (see
 [Admins]({{< relref "docs/admins" >}})).
 
 `juist log show` shows what a single change did and which keys signed it.
-Give the change by its number or the start of its hash:
+Give the change by its number, by -N counting back from the last (`-1` is the
+latest), or by the start of its hash:
 
 ```console
 $ juist log show 3

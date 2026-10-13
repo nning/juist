@@ -35,6 +35,7 @@ func TestServingRules(t *testing.T) {
 		"block in quick on { vtnet0 vtnet1 } proto { tcp udp } to { 198.19.44.1, fdc6:6d7a:fd03::1 } port { 53 41646 }",
 		"pass in on juist0 all flags any keep state",
 		"block out quick on juist0 from ! <juist_local>",
+		"pass out on juist0 all keep state",
 	} {
 		if !strings.Contains(got, want+"\n") {
 			t.Errorf("the rules lack %q:\n%s", want, got)

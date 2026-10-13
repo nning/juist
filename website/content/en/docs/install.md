@@ -112,7 +112,9 @@ and `i386` work the same way.
   install, so an upgrade leaves your firewall settings alone.
 - A polkit rule that lets juistd set the network's DNS through
   systemd-resolved. The rule needs polkit, which the package recommends;
-  minimal installs such as Fedora Cloud do not have it otherwise.
+  minimal installs such as Fedora Cloud do not have it otherwise. polkit
+  before 0.106, as on Ubuntu 22.04, reads no rules: there the .deb puts the
+  same permission in `/var/lib/polkit-1/localauthority/10-vendor.d/60-juist.pkla`.
 - Shell completion for bash, zsh and fish, and the man pages `juist(1)` and
   `juistd(8)`.
 

@@ -37,7 +37,7 @@ func TestRejectsSignatureByUnknownKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if err := aum.Sign(outsider); err != nil {
+	if err := h.sign(&aum, outsider); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("AddNode signed by a key the network never trusted", RuleUnauthorized, aum)
@@ -57,7 +57,7 @@ func TestRejectsExtraSignatureByUntrustedKey(t *testing.T) {
 		t.Fatalf("AddNode: %v", err)
 	}
 	h.signQuorum(&aum)
-	if err := aum.Sign(outsider); err != nil {
+	if err := h.sign(&aum, outsider); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("authorized AddNode with an extra untrusted signature", RuleUnauthorized, aum)
@@ -85,7 +85,7 @@ func TestRejectsTamperedSignatureBits(t *testing.T) {
 		t.Fatalf("AddNode: %v", err)
 	}
 	h.signQuorum(&aum)
-	aum.Signatures[0].Sig[0] ^= 0x01
+	aum.Signatures[0].PQ[0] ^= 0x01
 	h.mustReject("AddNode with a corrupted signature", RuleUnauthorized, aum)
 }
 
@@ -99,14 +99,14 @@ func TestRejectsSubQuorumChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if err := aum.Sign(h.admins[0]); err != nil {
+	if err := h.sign(&aum, h.admins[0]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("AddNode with one of two required votes", RuleUnauthorized, aum)
 
 	// The same record becomes valid once a second admin signs it, which is
 	// what makes the rejection above about quorum and not about something else.
-	if err := aum.Sign(h.admins[1]); err != nil {
+	if err := h.sign(&aum, h.admins[1]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	if err := h.auth.Inform(aum); err != nil {
@@ -120,7 +120,7 @@ func TestRejectsDuplicateSignatureForVotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if err := aum.Sign(h.admins[0]); err != nil {
+	if err := h.sign(&aum, h.admins[0]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	// One admin, two copies of its signature: the cheapest way to fake a
@@ -175,7 +175,7 @@ func TestRemoveAdminKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if err := next.Sign(h.admins[2]); err != nil {
+	if err := h.sign(&next, h.admins[2]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	status := st.SignatureStatus(&next)
@@ -187,12 +187,12 @@ func TestRemoveAdminKey(t *testing.T) {
 	// And the removed key cannot re-add itself: restoring it would need
 	// quorum of the set that no longer contains it.
 	restore, err := h.auth.Builder().AddAdminKey(types.AdminKey{
-		Public: h.admins[2].Public(), Votes: 1,
+		Public: h.admins[2].Public(), Votes: 1, Signing: new(h.admins[2].SigningKey()), Endorsement: h.admins[2].Endorsement(),
 	})
 	if err != nil {
 		t.Fatalf("AddAdminKey: %v", err)
 	}
-	if err := restore.Sign(h.admins[2]); err != nil {
+	if err := h.sign(&restore, h.admins[2]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("AddAdminKey re-adding the removed key, signed by that key", RuleUnauthorized, restore)
@@ -207,7 +207,7 @@ func TestOneAdminCanRemoveTheOtherAtQuorumOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveAdminKey: %v", err)
 	}
-	if err := aum.Sign(h.admins[0]); err != nil {
+	if err := h.sign(&aum, h.admins[0]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	if err := h.auth.Inform(aum); err != nil {
@@ -682,14 +682,14 @@ func TestRejectsSelfAssertedRoute(t *testing.T) {
 		t.Fatalf("SetNodeRoutes: %v", err)
 	}
 	// The node signs for itself, with its own identity key.
-	if err := aum.Sign(h.nodeIDs[n.Identity]); err != nil {
+	if err := h.sign(&aum, h.nodeIDs[n.Identity]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("SetNodeRoutes signed only by the node it grants", RuleUnauthorized, aum)
 
 	// One admin short of quorum is equally not enough.
 	aum.Signatures = nil
-	if err := aum.Sign(h.admins[0]); err != nil {
+	if err := h.sign(&aum, h.admins[0]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("SetNodeRoutes with one of two required votes", RuleUnauthorized, aum)
@@ -937,7 +937,7 @@ func TestConflictingConcurrentRecordsAlarm(t *testing.T) {
 		t.Fatalf("RotateNodeKey: %v", err)
 	}
 	h.signQuorum(&rotate)
-	if err := rotate.Sign(h.nodeIDs[victim.Identity]); err != nil {
+	if err := h.sign(&rotate, h.nodeIDs[victim.Identity]); err != nil {
 		t.Fatalf("node self-signature: %v", err)
 	}
 
@@ -1215,7 +1215,7 @@ func TestRotateNodeKeyRequiresNodeSignature(t *testing.T) {
 	h.signQuorum(&aum)
 	h.mustReject("RotateNodeKey with quorum but no node signature", RuleUnauthorized, aum)
 
-	if err := aum.Sign(h.nodeIDs[n.Identity]); err != nil {
+	if err := h.sign(&aum, h.nodeIDs[n.Identity]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	if err := h.auth.Inform(aum); err != nil {
@@ -1245,7 +1245,7 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 	// device holds the new one.
 	aum.Signatures = nil
 	h.signQuorum(&aum)
-	if err := aum.Sign(h.nodeIDs[n.Identity]); err != nil {
+	if err := h.sign(&aum, h.nodeIDs[n.Identity]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("RotateIdentity signed by the old key", RuleUnauthorized, aum)
@@ -1255,12 +1255,12 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 	// and role to a key of their choosing.
 	aum.Signatures = nil
 	h.signQuorum(&aum)
-	if err := aum.Sign(fresh); err != nil {
+	if err := h.sign(&aum, fresh); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("RotateIdentity without the old key's signature", RuleUnauthorized, aum)
 
-	if err := aum.Sign(h.nodeIDs[n.Identity]); err != nil {
+	if err := h.sign(&aum, h.nodeIDs[n.Identity]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	if err := h.auth.Inform(aum); err != nil {
@@ -1289,7 +1289,7 @@ func TestRotateIdentityAtSchemaZeroNeedsOnlyTheNewKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.signQuorum(&aum)
-	if err := aum.Sign(fresh); err != nil {
+	if err := h.sign(&aum, fresh); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.auth.Inform(aum); err != nil {

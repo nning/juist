@@ -85,7 +85,7 @@ func TestFuzzSeedsReachTheStateMachine(t *testing.T) {
 			t.Errorf("%v seed refused before its substance was judged: %v", aum.Kind, err)
 		}
 	}
-	if accepted < len(fx.seeds)-2 {
+	if accepted < len(fx.seeds)-3 {
 		t.Errorf("only %d of %d seeds apply", accepted, len(fx.seeds))
 	}
 }
@@ -133,7 +133,7 @@ func (fx *fuzzNetwork) sign(auth *Authority, aum *types.AUM) {
 			aum.Prev = &head
 		}
 	}
-	_ = aum.Sign(fx.admin)
+	_ = aum.SignUnder(fx.admin, auth.State().Schema())
 	_ = SignAsDevice(aum, auth.State().Schema(), fx.devices...)
 }
 
@@ -146,6 +146,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 	for n := byte(1); n <= 8; n++ {
 		fx.devices = append(fx.devices, fixedIdentity(100+n))
 	}
+	fx.devices = append(fx.devices, fixedIdentity(10)) // the admin key a seed adds
 	auth, err := Create(NewMemStorage(), genesis)
 	if err != nil {
 		return nil, err
@@ -160,7 +161,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := aum.Sign(admin); err != nil {
+		if err := aum.SignUnder(admin, auth.State().Schema()); err != nil {
 			return nil, err
 		}
 		if err := auth.Inform(aum); err != nil {
@@ -176,7 +177,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := domain.Sign(admin); err != nil {
+	if err := domain.SignUnder(admin, auth.State().Schema()); err != nil {
 		return nil, err
 	}
 	if err := auth.Inform(domain); err != nil {
@@ -201,7 +202,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 		},
 		func() (types.AUM, error) { return b.RotateIdentity(first, fixedIdentity(105).Public(), seal) },
 		func() (types.AUM, error) {
-			return b.AddAdminKey(types.AdminKey{Public: fixedIdentity(10).Public(), Votes: 1, Holder: "other"})
+			return b.AddAdminKey(types.AdminKey{Public: fixedIdentity(10).Public(), Signing: new(fixedIdentity(10).SigningKey()), Endorsement: fixedIdentity(10).Endorsement(), Votes: 1, Holder: "other"})
 		},
 		func() (types.AUM, error) { return b.SetQuorum(1) },
 		func() (types.AUM, error) { return b.SetHolder(types.HolderPolicy{Name: "admin", Votes: 2, Needed: 1}) },
@@ -231,10 +232,15 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 	// Refused on their substance, which is what a seed for these can show.
 	head := auth.Head()
 	tooNew := types.CurrentSchema + 1
+	bumped, err := seal(auth.State().Epoch()+1, auth.State().Nodes())
+	if err != nil {
+		return nil, err
+	}
 	unsigned := []types.AUM{
 		{Kind: types.KindRetireAddresses, Prev: &head},
 		{Kind: types.KindSchemaUpgrade, Prev: &head, Schema: &tooNew},
 		{Kind: types.KindRemoveAdminKey, Prev: &head, Subject: new(admin.Public())},
+		{Kind: types.KindSetSigningKeys, Prev: &head, Signing: &types.SigningKeys{}, Epoch: bumped},
 	}
 	for _, f := range build {
 		aum, err := f()

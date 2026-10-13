@@ -316,11 +316,13 @@ func (k *Node) Lines(header string) []string {
 }
 
 // NamedBy reports whether a member record names exactly this key set's public
-// halves — the condition under which staged keys may replace live ones.
+// halves — the condition under which staged keys may replace live ones —
+// and its signing key, where it names one.
 func (k *Node) NamedBy(rec *types.NodeRecord) bool {
 	return rec.WireGuard == k.Public.WireGuard &&
 		rec.X25519 == k.Public.X25519 &&
-		rec.MLKEM == k.Public.MLKEM
+		rec.MLKEM == k.Public.MLKEM &&
+		(rec.Signing == nil || *rec.Signing == k.Identity.SigningKey())
 }
 
 // MaybePromote promotes whichever staged or abandoned key set the log names,

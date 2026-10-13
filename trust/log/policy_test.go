@@ -49,7 +49,7 @@ func TestThePolicyFollowsItsMembers(t *testing.T) {
 	}
 	h.signQuorum(&rot)
 	for _, k := range []types.PrivateIdentity{fresh, h.nodeIDs[laptop.Identity]} {
-		if err := rot.Sign(k); err != nil {
+		if err := h.sign(&rot, k); err != nil {
 			t.Fatal(err)
 		}
 	}

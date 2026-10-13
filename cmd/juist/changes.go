@@ -85,10 +85,11 @@ func (a *app) submit(auth *log.Authority, c *change) (applied bool, err error) {
 		a.warn("%v", err)
 	}
 	needs := approvalsNeeded(st, auth.State().Admins(), &c.aum)
-	if carried {
+	switch {
+	case carried:
 		a.printf("pending %s: needs %s; another admin runs, on an admin device or with the file:\n", path, needs)
 		a.commands("juist approve", "juist approve "+filepath.Base(path))
-	} else {
+	default:
 		a.printf("pending %s: needs %s; another admin runs:\n", path, needs)
 		a.command("juist approve %s", filepath.Base(path))
 	}
@@ -108,7 +109,7 @@ func approvalsNeeded(st log.SignatureStatus, keys []types.AdminKey, aum *types.A
 		signed := 0
 		var on []string
 		for _, k := range p.keys {
-			if aum.VerifySignature(k.Public) {
+			if aum.VerifySignature(k.Public, k.Signing) {
 				signed++
 			} else if m := keyMachine(k); m != "" {
 				on = append(on, m)
@@ -132,12 +133,30 @@ func approvalsNeeded(st log.SignatureStatus, keys []types.AdminKey, aum *types.A
 	}
 	switch n := missing(st); {
 	case n == 0 && len(st.Unsigned) > 0:
-		return "the device's own signature"
+		return ownNeeded(st, keys)
 	case len(st.Unsigned) > 0:
-		return votes + ", and the device's own signature"
+		return votes + ", and " + ownNeeded(st, keys)
 	default:
 		return votes
 	}
+}
+
+// ownNeeded names the signatures a record needs beyond the votes: an admin
+// key's own, or a device's.
+func ownNeeded(st log.SignatureStatus, keys []types.AdminKey) string {
+	var names []string
+	for _, id := range st.Unsigned {
+		i := slices.IndexFunc(keys, func(k types.AdminKey) bool { return k.Public == id })
+		if i < 0 {
+			return "the device's own signature"
+		}
+		name := cmp.Or(keyPerson(keys[i]), id.ShortString())
+		if m := keyMachine(keys[i]); m != "" {
+			name += " on " + m
+		}
+		names = append(names, name)
+	}
+	return "the key's own signature: " + strings.Join(names, ", ")
 }
 
 func missing(st log.SignatureStatus) uint32 {
@@ -182,10 +201,10 @@ func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity
 	var added []types.Identity
 	for _, key := range admins {
 		id := key.Public()
-		if aum.VerifySignature(id) || !wanted(aum, id, auth) {
+		if signedBy(auth, aum, key) || !wanted(aum, id, auth) {
 			continue
 		}
-		if aum.Sign(key) == nil {
+		if aum.SignUnder(key, signingSchema(aum, auth)) == nil {
 			added = append(added, id)
 		}
 	}
@@ -239,7 +258,7 @@ func (a *app) partIn(aum *types.AUM, auth *log.Authority) (part, signed bool, er
 	for _, key := range admins {
 		if id := key.Public(); wanted(aum, id, auth) {
 			part = true
-			signed = signed && (aum.VerifySignature(id) || auth != nil && votedAlready(auth.State(), aum, id))
+			signed = signed && (signedBy(auth, aum, key) || auth != nil && votedAlready(auth.State(), aum, id))
 		}
 	}
 	return part, part && signed, nil
@@ -254,7 +273,7 @@ func votedAlready(state *log.State, aum *types.AUM, id types.Identity) bool {
 	}
 	signed := 0
 	for _, other := range holderKeys(state, k.Holder) {
-		if aum.VerifySignature(other.Public) {
+		if state.SignedBy(aum, other.Public) {
 			signed++
 		}
 	}
@@ -331,7 +350,39 @@ func wanted(aum *types.AUM, id types.Identity, auth *log.Authority) bool {
 		return true
 	}
 	_, isAdmin := auth.State().Admin(id)
-	return isAdmin
+	return isAdmin || slices.Contains(log.SelfSigners(aum, auth.State().Schema()), id)
+}
+
+// signingSchema is the schema aum is signed under: the log's, or without
+// one, the record's own, as the signatures it carries say.
+func signingSchema(aum *types.AUM, auth *log.Authority) types.SchemaVersion {
+	if auth != nil {
+		return auth.State().Schema()
+	}
+	if slices.ContainsFunc(aum.Signatures, func(s types.Signature) bool { return s.PQ != nil }) {
+		return types.SchemaMLDSA
+	}
+	return 0
+}
+
+// signedBy reports whether aum carries a valid signature by the local key
+// priv, by the rules of auth's state, of a genesis's own, or with no log, of
+// the signatures aum carries.
+func signedBy(auth *log.Authority, aum *types.AUM, priv types.PrivateIdentity) bool {
+	id := priv.Public()
+	switch {
+	case aum.Kind == types.KindGenesis && aum.State != nil:
+		var key *types.SigningKey
+		if k, ok := aum.State.Admin(id); ok {
+			key = k.Signing
+		}
+		return aum.VerifySignature(id, key)
+	case auth == nil && signingSchema(aum, nil) >= types.SchemaMLDSA:
+		return aum.VerifySignature(id, new(priv.SigningKey()))
+	case auth == nil:
+		return aum.VerifySignature(id, nil)
+	}
+	return auth.State().SignedBy(aum, id)
 }
 
 // adminKeys loads this user's admin keys. Run under sudo, the keystore is

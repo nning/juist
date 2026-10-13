@@ -128,8 +128,16 @@ func TestLogShowsOneChange(t *testing.T) {
 		t.Errorf("by its hash:\n%s", got)
 	}
 	mustContain(t, c.mustRun("log", "show", "0"), "creates the network \"home\"", "device laptop")
-	if _, err := c.run("log", "show", "3"); err == nil || err.Error() != "no change 3: the log lists 0 to 2" {
+	if _, err := c.run("log", "show", "3"); err == nil || err.Error() != "no change 3: the log lists 0 to 2, or -3 to -1" {
 		t.Errorf("past the end: %v", err)
+	}
+	if got := c.mustRun("log", "show", "-1"); got != out {
+		t.Errorf("-1:\n%s", got)
+	}
+	mustContain(t, c.mustRun("log", "show", "-3"), "creates the network \"home\"")
+	mustContain(t, c.mustRun("log", "-2"), "   1  change of the access policy")
+	if _, err := c.run("log", "show", "-4"); err == nil || err.Error() != "no change -4: the log lists 0 to 2, or -3 to -1" {
+		t.Errorf("before the start: %v", err)
 	}
 }
 
@@ -198,8 +206,8 @@ func TestStatusNamesTheSilentDevices(t *testing.T) {
 	var out syncBuffer
 	a := newApp(strings.NewReader(""), &out, &out)
 	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
-	a.printStatus(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 1, Unreachable: 1, Silent: []string{"phone"}}})
-	mustContain(t, out.String(), "2 others, 1 of them heard from", "not heard from: phone")
+	a.printStatus(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 1, Unreachable: 1, Silent: []string{"phone"}}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1}})
+	mustContain(t, out.String(), "2 others, 1 without a tunnel\n", "not heard from: phone")
 }
 
 // status says which tunnels are live, and names a device heard from whose
@@ -210,12 +218,12 @@ func TestStatusNamesTheDeadTunnels(t *testing.T) {
 	a := newApp(strings.NewReader(""), &out, &out)
 	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
 	a.printStatus(&ipc.Status{InNetwork: true, ListenPort: 41643, Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsDown: []string{"homebox1"}}})
-	mustContain(t, out.String(), "no tunnel up", "0 of 1 live", "no tunnel traffic from homebox1",
+	mustContain(t, out.String(), "no tunnel up", "1 other, 1 without a tunnel", "no tunnel traffic from homebox1",
 		"udp/41643")
 
 	out = syncBuffer{}
 	a.printStatus(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1}})
-	mustContain(t, out.String(), "connected", "1 of 1 live")
+	mustContain(t, out.String(), "connected", "Devices       1 other\n")
 	if strings.Contains(out.String(), "No answer") {
 		t.Fatalf("all tunnels live, yet one is reported dead:\n%s", out.String())
 	}
@@ -233,6 +241,8 @@ func TestStatusSaysWhoNeedsAnUpdate(t *testing.T) {
 			[]string{"warning: mac runs an older juist, unreachable until updated"}},
 		{func(s *ipc.Status) { s.Outdated = []string{"mac", "phone"} },
 			[]string{"warning: mac, phone run an older juist, unreachable until updated"}},
+		{func(s *ipc.Status) { s.OlderBuild = []string{"mac"} },
+			[]string{"warning: mac runs an older juist, which applies no changes until updated"}},
 		{func(s *ipc.Status) { s.SyncNewer = []string{"edge01"} },
 			[]string{"warning: log sync fails: edge01 runs a newer juist", "hint: update juist on this device"}},
 		{func(s *ipc.Status) { s.SyncBroken = []string{"exit"} },
@@ -252,6 +262,26 @@ func TestStatusSaysWhoNeedsAnUpdate(t *testing.T) {
 			if strings.Contains(strings.ToLower(out.String()), n) {
 				t.Errorf("says %q:\n%s", n, out.String())
 			}
+		}
+	}
+}
+
+// A device without a tunnel is blamed on neither a firewall nor a lag where
+// it is offline or on an older juist: new to the network, this device keeps
+// no key of the epoch an offline one last announced.
+func TestStatusBlamesNoWayToAnOfflineOrOutdatedDevice(t *testing.T) {
+	t.Parallel()
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
+	a.printStatus(&ipc.Status{InNetwork: true, ListenPort: 41643,
+		Derived: ipc.Derived{NetworkName: "home", Members: 4, Peers: 3, NoKey: []string{"iophon", "machu-pichu"}},
+		Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, TunnelsDown: []string{"iophon", "machu-pichu"},
+			Absent: []string{"machu-pichu"}, Outdated: []string{"iophon"}}})
+	mustContain(t, out.String(), "warning: iophon runs an older juist, unreachable until updated")
+	for _, n := range []string{"no tunnel traffic", "fell too far behind", "ufw"} {
+		if strings.Contains(out.String(), n) {
+			t.Errorf("says %q:\n%s", n, out.String())
 		}
 	}
 }
@@ -398,7 +428,7 @@ func TestStatusListsNoDevices(t *testing.T) {
 		{Identity: ids[2], Name: "vps", V4: "10.11.11.6", V6: "fd89::6", Roles: []types.Role{types.RoleRelayCapable}},
 	}}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 2, ReachChecked: time.Now().Unix(), Reach: []ipc.PeerReach{{Identity: ids[1], Live: true, Direct: true}, {Identity: ids[2], Live: true}}}})
 	got := out.String()
-	mustContain(t, got, "Devices       2 others, all heard from\n")
+	mustContain(t, got, "Devices       2 others\n")
 	for _, absent := range []string{"NAME", "REACHED", "laptop", "10.11.11.6"} {
 		if strings.Contains(got, absent) {
 			t.Errorf("status lists the devices (%q):\n%s", absent, got)
@@ -415,7 +445,7 @@ func TestStatusSaysOnlyWhatIsNotTheDefault(t *testing.T) {
 		Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1},
 		Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, ReachChecked: now.Add(-checkStale).Unix()}}
 	v := statusOf(s, now, noPaint)
-	for _, want := range []line{{kind: lineField, label: "Tunnels", text: "1 of 1 live"}, {kind: lineField, label: "Ports", text: "udp/41643"}} {
+	for _, want := range []line{{kind: lineField, label: "Devices", text: "1 other"}, {kind: lineField, label: "Ports", text: "udp/41643"}} {
 		if !slices.Contains(v.head, want) {
 			t.Errorf("head %v lacks %v", v.head, want)
 		}
@@ -424,7 +454,7 @@ func TestStatusSaysOnlyWhatIsNotTheDefault(t *testing.T) {
 	s.ReachChecked = now.Add(-5 * time.Minute).Unix()
 	s.SyncInTunnel = false
 	v = statusOf(s, now, noPaint)
-	for _, want := range []line{{kind: lineField, label: "Tunnels", text: "1 of 1 live, checked 5m ago"}, {kind: lineField, label: "Ports", text: "udp/41643, tcp/41644 sync"}} {
+	for _, want := range []line{{kind: lineField, label: "Devices", text: "1 other, checked 5m ago"}, {kind: lineField, label: "Ports", text: "udp/41643, tcp/41644 sync"}} {
 		if !slices.Contains(v.head, want) {
 			t.Errorf("head %v lacks %v", v.head, want)
 		}
@@ -680,6 +710,13 @@ func TestStatusTellsAnAdminToUpgradeTheLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	genesis.State.Schema = types.CurrentSchema - 1
+	for i := range genesis.State.Admins {
+		genesis.State.Admins[i].Signing = nil
+		genesis.State.Admins[i].Endorsement = nil
+	}
+	for i := range genesis.State.Nodes {
+		genesis.State.Nodes[i].Signing = nil
+	}
 	if p, ok := cur.V4Prefix(); ok {
 		genesis.State.V4Prefix = &p
 	}
@@ -706,7 +743,19 @@ func TestStatusTellsAnAdminToUpgradeTheLog(t *testing.T) {
 	startService(t, d.state, d.sock, nil, d.mgr)
 
 	mustContain(t, d.mustRun("status"), fmt.Sprintf("the network is at %v, this version at %v",
-		types.CurrentSchema-1, types.CurrentSchema), "hint: once every device runs this version: juist log upgrade")
+		types.CurrentSchema-1, types.CurrentSchema), "hint: for quantum-safe signatures, first: juist admins receive")
+	if _, err := d.run("log", "upgrade", "--yes"); err == nil || !strings.Contains(err.Error(), "no signing key registered yet") {
+		t.Fatalf("a cut-over before the admin keys registered theirs: %v", err)
+	}
+	mustContain(t, d.mustRun("admins", "receive"), "has its signing key")
+	bob, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.mustRun("admins", "add", "bob", adminKeyText(t, bob))
+	mustContain(t, d.mustRun("admins", "remove", "bob"),
+		"hint: cut over soon, so the removed key cannot: juist log upgrade")
+	mustContain(t, d.mustRun("status"), "hint: every device announces a signing key: juist log upgrade")
 	other := &daemonDevice{cli: newCLI(t), state: d.state, sock: d.sock}
 	if out := other.mustRun("status"); strings.Contains(out, "log upgrade") {
 		t.Errorf("a keystore without an admin key is told to upgrade:\n%s", out)
@@ -816,5 +865,26 @@ func TestStatusSaysHTTPSAloneAndTheRelaysName(t *testing.T) {
 	mustContain(t, out.String(), "Relay name    relay.example.org\n")
 	if strings.Contains(out.String(), "not on 443") {
 		t.Errorf("a reader is told the relay is not on 443:\n%s", out.String())
+	}
+}
+
+// Devices counts the others without a tunnel, not those the access policy
+// keeps apart, and says when no check has run.
+func TestStatusCountsTheDevicesWithoutATunnel(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_000_000, 0)
+	s := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 4, Peers: 1}}
+	for _, tc := range []struct {
+		tunnels ipc.Tunnels
+		want    string
+	}{
+		{ipc.Tunnels{}, "3 others, not checked yet"},
+		{ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, ReachChecked: now.Unix()}, "3 others"},
+		{ipc.Tunnels{TunnelsChecked: true, TunnelsDown: []string{"nas"}, ReachChecked: now.Unix()}, "3 others, 1 without a tunnel"},
+	} {
+		s.Tunnels = tc.tunnels
+		if want := (line{kind: lineField, label: "Devices", text: tc.want}); !slices.Contains(statusOf(s, now, noPaint).head, want) {
+			t.Errorf("%+v: head lacks %v", tc.tunnels, want)
+		}
 	}
 }

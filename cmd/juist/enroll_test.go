@@ -308,7 +308,8 @@ func TestAnInviteThroughTheDaemonAdmitsOneDevice(t *testing.T) {
 			t.Fatal(err)
 		}
 		return &ipc.Event{Kind: ipc.EventInviteAdmit,
-			Join: &enroll.JoinRequest{Name: "evil", Identity: g.Identity.Public(), Keys: g.Public}}
+			Join: &enroll.JoinRequest{Name: "evil", Identity: g.Identity.Public(), Keys: g.Public,
+				Signing: g.Identity.SigningKey()}}
 	}
 	var mu sync.Mutex
 	replies := 0

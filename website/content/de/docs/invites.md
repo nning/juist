@@ -189,3 +189,5 @@ einen neuen Port wählen. Dann hast du zwei Möglichkeiten:
 | `juist: invite expired` | Starte eine neue Einladung. Musstest du auf andere Admins warten, gib ein längeres `--expires` an. |
 | `juist: cannot reach the inviting device, …` | Prüfe, ob die Einladung noch läuft. Stehen beide Geräte hinter NAT, tritt über einen Internetanschluss bei, von dem aus das einladende Gerät erreichbar ist, oder richte zuerst ein Relay ein. |
 | `juist: comparing the device's words needs a terminal; pass --yes to skip` | Ruf `juist invite` in einem Terminal auf, oder gib `--yes` an, wenn du nicht vergleichen kannst. |
+| `juist: … the inviting device runs an incompatible version of juist` | Aktualisiere juist auf beiden Geräten und lade dann neu ein. |
+| `juist: the invite link is from an older juist; ask for a new one` | Aktualisiere juist auf dem einladenden Gerät und starte eine neue Einladung. |

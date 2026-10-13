@@ -88,6 +88,10 @@ func serveRules(dev string, s ServeSpec, uplinks []uplink) string {
 	// own rules on the device still have their say.
 	fmt.Fprintf(&b, "pass in on %s all flags any keep state\n", dev)
 	fmt.Fprintf(&b, "block out quick on %s from ! <juist_local>\n", dev)
+	// What the host opens through the device takes its state going out: one
+	// taken from the answer knows no window scaling, and pf drops the
+	// segments past the window it assumes.
+	fmt.Fprintf(&b, "pass out on %s all keep state\n", dev)
 	return b.String()
 }
 

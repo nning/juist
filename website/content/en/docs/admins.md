@@ -43,7 +43,9 @@ Create a key under your admin name:
 juist admins new alice
 ```
 
-It prints the command that adds the key, with the key itself in it.
+It prints the command that adds the key, with the key itself in it. The key
+is long, since it carries its quantum-safe signing key too: copy the command
+whole.
 {{< /step >}}
 
 {{< step on="laptop" as="your first laptop" >}}
@@ -205,6 +207,14 @@ admin key, or the quorum. Only the log shows who such a change affects.
   upgrade on, devices on older versions stop applying changes until they are
   updated, and `juist status` on them says so. From schema 14 on, they are
   also unreachable until then, and `juist devices` shows them as `outdated`.
+  From schema 16 on, `juist status` on every other device names them too.
+- The switch to quantum-safe signatures takes two upgrades. The first raises
+  the network to schema 17, where devices announce their signing keys and
+  each admin runs `juist admins receive` once more, on every machine that
+  holds one of their keys, to register its signing key; `juist status` then
+  says how many have. Once all have, run `juist log upgrade` again, approved
+  like any other change, and from then on the network signs with ML-DSA
+  ([Security]({{< relref "docs/security" >}}#quantum-safe)).
 
 {{< note danger >}}
 If so many admin keys are lost that no change can get the votes it needs,
@@ -221,6 +231,13 @@ needs, each with their own devices ([Keys]({{< relref "docs/keys" >}}#backing-up
 |---|---|
 | `hint: for changes waiting for your vote to reach you: juist admins receive` | run `juist admins receive` once |
 | `hint: once every device runs this version: juist log upgrade` | update juist on every device, then run `juist log upgrade` |
+| `hint: for quantum-safe signatures, first: juist admins receive` | run `juist admins receive` on this machine |
+| `hint: 1 of 2 admin keys have a signing key; once all do (juist admins receive): juist log upgrade` | each other admin runs `juist admins receive` where their keys are |
+| `hint: cut over soon, so the removed key cannot: juist log upgrade` | at schema 17, run `juist log upgrade` once every device announces its signing key, before a removed key that held the quorum can cut over on its own |
+| `juist: no signing key registered yet by 1 admin key: laptop of bob` | bob runs `juist admins receive` on laptop, or the key is removed with `juist admins remove` |
+| `hint: 3 of 5 devices announce a signing key; once all do: juist log upgrade` | update and start the other devices, then run `juist log upgrade` again |
+| `juist: no signing key announced yet by 2 devices: phone, nas` | update and start them, or remove one you no longer use with `juist remove NAME` |
+| `--admin "bob": a key with no signing key, from an older juist` | bob runs `juist admins new bob` again with this version and sends the new line |
 | `hint: bob cannot read it on an admin device yet; send them the file` | send bob the `.rec` file; he runs `juist approve FILE` |
 | `juist: no admin key of this network in …` | run the command where an admin's key is |
 | `juist: run as alice, without sudo: …` | run it again without sudo |

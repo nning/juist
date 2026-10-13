@@ -93,7 +93,10 @@ func (f *reconcileFixture) learn(t *testing.T, dev *device, port uint16) gossip.
 		Epoch:      f.auth.State().Epoch(),
 		PairStore:  1,
 	}
-	if err := e.Sign(dev.identity); err != nil {
+	if f.auth.State().Schema() >= types.SchemaPadded {
+		e.Schema = types.CurrentSchema
+	}
+	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -188,7 +191,7 @@ func TestAnEarlyAnnouncementSurvivesUntilTheRecordArrives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.Sign(f.nw.admin); err != nil {
+	if err := add.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{add}); err != nil {
@@ -238,7 +241,7 @@ func TestExpiredMembershipIsNotAPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.Sign(nw.admin); err != nil {
+	if err := add.SignUnder(nw.admin, auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Inform(add); err != nil {
@@ -478,7 +481,7 @@ func TestMissingRespectsThePeersAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cp.Sign(f.nw.admin); err != nil {
+	if err := cp.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{cp}); err != nil {
@@ -489,7 +492,7 @@ func TestMissingRespectsThePeersAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := grant.Sign(f.nw.admin); err != nil {
+	if err := grant.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{grant}); err != nil {
@@ -598,10 +601,10 @@ func TestRotationAppliedElsewhereIsReportedStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A rotation needs the device's own signature as well as quorum.
-	if err := rec.Sign(f.self.identity); err != nil {
+	if err := rec.SignUnder(f.self.identity, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Sign(f.nw.admin); err != nil {
+	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -664,7 +667,7 @@ func TestRestartRecoversPastEpochs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bump.Sign(f.nw.admin); err != nil {
+	if err := bump.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{bump}); err != nil {
@@ -778,7 +781,7 @@ func TestDiscoveryOfANonMemberDoesNotWakeTheLoop(t *testing.T) {
 		GossipPort: 5001,
 		Seq:        1,
 	}
-	if err := nonMember.Sign(stranger); err != nil {
+	if err := nonMember.SignPQ(stranger); err != nil {
 		t.Fatal(err)
 	}
 
@@ -796,7 +799,7 @@ func TestDiscoveryOfANonMemberDoesNotWakeTheLoop(t *testing.T) {
 	// A rising Seq for the same non-member — the sustained-churn shape — still
 	// does not wake it.
 	nonMember.Seq = 2
-	if err := nonMember.Sign(stranger); err != nil {
+	if err := nonMember.SignPQ(stranger); err != nil {
 		t.Fatal(err)
 	}
 	f.d.onDiscovered(nonMember)
@@ -819,7 +822,7 @@ func TestDiscoveryOfANonMemberDoesNotWakeTheLoop(t *testing.T) {
 		GossipPort: 5002,
 		Seq:        1,
 	}
-	if err := memberEndpoint.Sign(member.identity); err != nil {
+	if err := memberEndpoint.SignPQ(member.identity); err != nil {
 		t.Fatal(err)
 	}
 	f.d.onDiscovered(memberEndpoint)
@@ -849,7 +852,7 @@ func TestADuplicateDiscoKeyDropsOnlyTheColliders(t *testing.T) {
 		GossipPort: 4002,
 		Seq:        1,
 	}
-	if err := copycat.Sign(attacker.identity); err != nil {
+	if err := copycat.SignPQ(attacker.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(copycat); err != nil {
@@ -1005,7 +1008,7 @@ func TestALostAdmissionIsNamed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := rec.Sign(f.nw.admin); err != nil {
+		if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
 			t.Fatal(err)
 		}
 		records = append(records, rec)

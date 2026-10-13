@@ -39,7 +39,9 @@ The full analysis, with every remaining weakness, is in the
 - The public helpers. The public BitTorrent DHT and the STUN servers help
   devices find each other. They can delay a connection, but they cannot change
   who belongs to the network or read traffic. They do see the addresses of the
-  devices that use them.
+  devices that use them, and the DHT sees which of them look each other up.
+  Devices ask the network's relays first, and of the devices that reach one
+  another only one asks the DHT.
 - The relay. A [relay]({{< relref "docs/relays" >}}) is one of your own
   members. Only members can use it, and it sees only encrypted WireGuard
   traffic.
@@ -105,13 +107,17 @@ why it is accepted, and what you can change. In short:
   Give it more admins than the quorum needs.
 - A network where every device sits behind symmetric NAT needs a relay member.
 - The public DHT and STUN servers see the addresses of the devices that use
-  them, and nothing more. With a relay of your own, juistd can run without
-  them.
+  them. A device looks up another in the DHT when it has lost track of it
+  and none of the network's relays knows where it is, so the DHT sees that
+  the two addresses belong to one network, though not to which, nor whose
+  they are. Of the devices that reach one another, only one asks. With a
+  relay of your own, juistd can run without them.
 
-## Quantum-safe tunnels
+## Quantum-safe
 
-A future quantum computer could break today's common encryption, and traffic
-recorded now could be decrypted then. juist protects against that:
+A future quantum computer could break today's common encryption and forge
+today's common signatures, and traffic recorded now could be decrypted then.
+juist protects against both:
 
 - Every WireGuard handshake mixes in a preshared key. Two devices first use a
   key derived from the network's group secret. Once they have synced their
@@ -119,14 +125,36 @@ recorded now could be decrypted then. juist protects against that:
   a secret to the other's ML-KEM-768 key. This key is renewed with every
   change to the members.
 - Group secrets are sealed with X25519 combined with ML-KEM-768.
-- Signatures use Ed25519. A quantum computer could forge them only once it
-  exists, so recording traffic today gains an attacker nothing there.
+- Every change to the network, and every message devices sign for one
+  another, is signed with ML-DSA-44, and a signature with Ed25519 alone is
+  refused. Each device's and admin key's ML-DSA key derives from the key it
+  already has, so its backup covers it.
+- Joining agrees a key with ML-KEM-768 after the code or link is checked, so
+  someone who records a join and later has a quantum computer learns
+  nothing from it.
+- Connections between juist's own ends, to relays and from devices that
+  reach only HTTPS, require TLS 1.3 with X25519 and ML-KEM-768. Connections
+  through the ingress agree their key that way wherever the other end offers
+  it, as current browsers do.
 
 Every tunnel between devices on the current version is quantum-safe. A device
 on an older version gets none of your traffic, and `juist status` and
-`juist devices` show it as outdated until it is updated. A network created
-with an older version gets quantum-safe tunnels once every device runs the
-current version and `juist log upgrade` has raised it to schema 14.
+`juist devices` show it as outdated until it is updated.
+
+A network created with an older version switches to quantum-safe signatures
+in two steps. Once every device runs the current version,
+`juist log upgrade` raises it to schema 17, where devices announce their
+ML-DSA keys, and each admin registers theirs with `juist admins receive`.
+Run it again once all have, and the switch to schema 18 is approved like any
+change. A device that was offline catches up afterwards.
+
+What stays as it was: the changes made before the switch keep their Ed25519
+signatures. Devices on the network refuse any new change below the switch,
+but a device that first sees the switch only once a quantum computer exists
+trusts the history before it as it was handed. A relay proves itself with a
+classical certificate, since it is trusted only to pass traffic, and a
+proxy that ends TLS without ML-KEM can no longer carry a device that reaches
+only HTTPS.
 
 ## Notes
 

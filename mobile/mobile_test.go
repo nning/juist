@@ -243,7 +243,7 @@ func TestTheViewJudgesAsJuistStatusDoes(t *testing.T) {
 func TestTheViewNamesWhoNeedsAnUpdate(t *testing.T) {
 	s := sampleStatus()
 	s.Reach[0].Outdated = true
-	s.Outdated, s.SyncNewer = []string{"anna"}, []string{"bert"}
+	s.Outdated, s.SyncNewer, s.OlderBuild = []string{"anna"}, []string{"bert"}, []string{"carl"}
 	v := viewOf(s)
 	if v.Members[0].Name != "anna" || v.Members[0].Reach != "outdated" {
 		t.Errorf("members %+v", v.Members)
@@ -252,7 +252,7 @@ func TestTheViewNamesWhoNeedsAnUpdate(t *testing.T) {
 	for _, a := range v.Alarms {
 		kinds = append(kinds, a.Kind+":"+strings.Join(a.Names, ","))
 	}
-	if !slices.Contains(kinds, "outdated:anna") || !slices.Contains(kinds, "newer:bert") {
+	if !slices.Contains(kinds, "outdated:anna") || !slices.Contains(kinds, "newer:bert") || !slices.Contains(kinds, "older:carl") {
 		t.Errorf("alarms %v", kinds)
 	}
 }

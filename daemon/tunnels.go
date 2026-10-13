@@ -57,8 +57,9 @@ const relayUnreachedAfter = 3 * time.Minute
 const syncRetryGap = 5 * time.Minute
 
 // outdatedAfter is how long a live peer may announce no epoch in a network
-// past [types.SchemaPQ] before it is called outdated: one back from sleeping
-// through the upgrade announces one a sync round after it catches up.
+// past [types.SchemaPQ], or an older schema than the network's past
+// [types.SchemaPadded], before it is called outdated: one back from sleeping
+// through the upgrade announces it a sync round after it catches up.
 const outdatedAfter = 3 * time.Minute
 
 // A running device signs its announcement again every announceRenewal, and
@@ -291,7 +292,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	reach := make([]ipc.PeerReach, len(checks))
 	now := d.now()
 	var live int
-	var down, seeking, absent, syncFailing, syncNewer, syncBroken, outdated []string
+	var down, seeking, absent, syncFailing, syncNewer, syncBroken, outdated, olderBuild []string
 	var resync []types.Identity
 	lookup := false
 	failed := make(map[types.Identity]gossip.Failure, len(checks))
@@ -299,9 +300,12 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		failed[c.id] = d.gossip.Failed(c.id)
 	}
 	held := make(map[types.Identity]gossip.Endpoint, len(checks))
+	announced := make(map[types.Identity]types.SchemaVersion, len(checks))
 	for _, c := range checks {
 		if !c.reach.Live {
 			held[c.id], _ = d.endpoints.Get(c.id)
+		} else if ep, ok := d.endpoints.Get(c.id); ok {
+			announced[c.id] = ep.Schema
 		}
 	}
 	settle := d.settles()
@@ -347,7 +351,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		reachable[c.id] = c.reach.Live
 	}
 	d.reachable.Store(&reachable)
-	behind := map[types.Identity]time.Time{}
+	behind, older := map[types.Identity]time.Time{}, map[types.Identity]time.Time{}
 	for i, c := range checks {
 		reach[i] = c.reach
 		if c.reach.Live {
@@ -369,6 +373,19 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 				if now.Sub(since) >= outdatedAfter && failed[c.id] == 0 {
 					reach[i].Outdated = true
 					outdated = append(outdated, c.name)
+				}
+			}
+			// It reaches this device, and applies no change past what its
+			// build implements.
+			if d.padded && !reach[i].Outdated && announced[c.id] < d.status.Schema {
+				since, was := d.olderBuild[c.id]
+				if !was {
+					since = now
+				}
+				older[c.id] = since
+				if now.Sub(since) >= outdatedAfter && failed[c.id] == 0 {
+					reach[i].OlderBuild = true
+					olderBuild = append(olderBuild, c.name)
 				}
 			}
 			continue
@@ -395,10 +412,25 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		case stateAbsent:
 			reach[i].Absent = true
 			absent = append(absent, c.name)
+		case stateBlocked:
+			// Running a build from before the network's upgrade, which knows
+			// no member that joined after it. Given longer than a live peer:
+			// its announcement from after the upgrade comes by the DHT.
+			if d.pq && c.stage == pairkey.StageNone || d.padded && ep.Schema < d.status.Schema {
+				since, was := d.behind[c.id]
+				if !was {
+					since = now
+				}
+				behind[c.id] = since
+				if now.Sub(since) >= max(outdatedAfter, settle) {
+					reach[i].Outdated = true
+					outdated = append(outdated, c.name)
+				}
+			}
 		}
 	}
 	d.down = downs
-	d.behind = behind
+	d.behind, d.olderBuild = behind, older
 	if d.syncRetried == nil {
 		d.syncRetried = map[types.Identity]time.Time{}
 	}
@@ -440,6 +472,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	slices.Sort(syncNewer)
 	slices.Sort(syncBroken)
 	slices.Sort(outdated)
+	slices.Sort(olderBuild)
 	home := d.homeRelayName()
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -455,7 +488,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 			TunnelsChecked: true, TunnelsLive: live, TunnelsDown: down,
 			Reach: reach, ReachChecked: now.Unix(), HomeRelay: home,
 			Seeking: seeking, Absent: absent, SyncFailing: syncFailing, SyncNewer: syncNewer,
-			SyncBroken: syncBroken, Outdated: outdated,
+			SyncBroken: syncBroken, Outdated: outdated, OlderBuild: olderBuild,
 			Firewalled: firewalled, FirewallUnsure: firewallUnsure,
 			RelayedFor: relayedFor, RelayUnreached: unreached, RelayPort: relayPort,
 		}

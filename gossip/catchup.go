@@ -35,8 +35,8 @@ import (
 const catchUpEpoch = 0
 
 // maxCatchUpMsg caps a catch-up message; a grant, the largest, is about
-// 1.2 KiB.
-const maxCatchUpMsg = 4 << 10
+// 3.6 KiB past the cut-over.
+const maxCatchUpMsg = 8 << 10
 
 const catchUpNonceSize = 32
 
@@ -80,7 +80,8 @@ func (s catchUpStep) String() string {
 }
 
 // A catchUpMsg is one step of the exchange. Each step carries exactly its own
-// fields: a proof, a grant and a refusal are signed by their sender.
+// fields: a proof, a grant and a refusal are signed by their sender, by
+// ML-DSA too where its network is past the cut-over and the peer reads it.
 type catchUpMsg struct {
 	Step     catchUpStep     `cbor:"1,keyasint"`
 	Nonce    []byte          `cbor:"2,keyasint,omitempty"`
@@ -88,12 +89,16 @@ type catchUpMsg struct {
 	Sig      *types.Sig      `cbor:"4,keyasint,omitempty"`
 	Sealed   []byte          `cbor:"5,keyasint,omitempty"`
 	Epoch    uint64          `cbor:"6,keyasint,omitempty"`
+	MLDSA    *types.PQSig    `cbor:"7,keyasint,omitempty"`
 }
 
 func (m *catchUpMsg) validate() error {
 	nonce, sealed, epoch := m.Nonce != nil, m.Sealed != nil, m.Epoch != 0
 	signed := m.Identity != nil && m.Sig != nil
-	unsigned := m.Identity == nil && m.Sig == nil
+	unsigned := m.Identity == nil && m.Sig == nil && m.MLDSA == nil
+	if m.MLDSA != nil && m.MLDSA.IsZero() {
+		return errors.New("gossip: a catch-up message carries a zero ML-DSA signature")
+	}
 	switch m.Step {
 	case stepAsk:
 		if nonce || sealed || epoch || !unsigned {
@@ -204,9 +209,12 @@ func parseCatchUp(blob []byte) (catchUpMsg, error) {
 
 // askCatchUp runs the initiator's half of the exchange and returns the
 // session key the grant carried, and who signed it — which the caller does not
-// yet know to be a member. own is this node's epoch: a refusal from a peer
+// yet know to be a member. view's epoch is this node's: a refusal from a peer
 // that is not past it is a peer that is behind, not a verdict on this node.
-func (n *Node) askCatchUp(c net.Conn, network types.Hash, own uint64) (*[secrets.CatchUpKeySize]byte, types.Identity, error) {
+// The proof is signed by ML-DSA too where the peer reads it; past the
+// cut-over, the answer must be, by a key this node's log names.
+func (n *Node) askCatchUp(c net.Conn, view *View, r reads) (*[secrets.CatchUpKeySize]byte, types.Identity, error) {
+	network, own := view.Network, view.Epoch
 	keys := n.opts.CatchUp
 	if err := writeCatchUp(c, &catchUpMsg{Step: stepAsk}); err != nil {
 		return nil, types.Identity{}, err
@@ -219,25 +227,40 @@ func (n *Node) askCatchUp(c net.Conn, network types.Hash, own uint64) (*[secrets
 		return nil, types.Identity{}, fmt.Errorf("gossip: expected a catch-up challenge, got a %v", ch.Step)
 	}
 	self := n.opts.Self
-	sig, err := keys.Identity.Sign(catchUpProofBytes(network, ch.Nonce, self))
+	sig, pq, err := keys.Identity.SignBoth(catchUpProofBytes(network, ch.Nonce, self),
+		r.signing || view.Schema >= types.SchemaSigning)
 	if err != nil {
 		return nil, types.Identity{}, err
 	}
-	if err := writeCatchUp(c, &catchUpMsg{Step: stepProof, Identity: &self, Sig: &sig}); err != nil {
+	if err := writeCatchUp(c, &catchUpMsg{Step: stepProof, Identity: &self, Sig: &sig, MLDSA: pq}); err != nil {
 		return nil, types.Identity{}, err
 	}
 	ans, err := readCatchUp(c)
+	if err != nil && pq == nil {
+		err = fmt.Errorf("%w: %w", errProofByEd25519, err)
+	}
 	if err != nil {
 		return nil, types.Identity{}, fmt.Errorf("gossip: the peer took the catch-up proof and answered nothing: %w", err)
 	}
 	if ans.Step != stepGrant && ans.Step != stepRefused {
 		return nil, types.Identity{}, fmt.Errorf("gossip: expected a catch-up grant, got a %v", ans.Step)
 	}
-	// Both steps are signed, which validate guarantees.
+	// Both steps are signed, which validate guarantees. Past the cut-over one
+	// by a key the log names is held to its ML-DSA signature; one by an
+	// identity it does not name, as a member rotated to while this node
+	// slept, is taken on no authority: this node speaks only once its log
+	// lists it.
 	from := *ans.Identity
+	var key *types.SigningKey
+	if view.pq() {
+		key = n.opts.Log.SigningKey(from)
+	}
+	signedBy := func(msg []byte) bool {
+		return from.Verify(msg, *ans.Sig) && (key == nil || key.Verify(msg, ans.MLDSA))
+	}
 	switch {
 	case ans.Step == stepRefused:
-		if !from.Verify(catchUpRefusalBytes(network, ch.Nonce, self, ans.Epoch), *ans.Sig) {
+		if !signedBy(catchUpRefusalBytes(network, ch.Nonce, self, ans.Epoch)) {
 			return nil, from, errors.New("gossip: a catch-up refusal is not signed by the key it names")
 		}
 		// Only a member this node knows, and one ahead of it, speaks for the
@@ -253,18 +276,22 @@ func (n *Node) askCatchUp(c net.Conn, network types.Hash, own uint64) (*[secrets
 		return nil, from, ErrCatchUpRefused
 	case from == self:
 		return nil, from, errors.New("gossip: a catch-up grant names this node")
-	case !from.Verify(catchUpGrantBytes(network, ch.Nonce, self, ans.Sealed), *ans.Sig):
+	case !signedBy(catchUpGrantBytes(network, ch.Nonce, self, ans.Sealed)):
 		return nil, from, errors.New("gossip: a catch-up grant is not signed by the key it names")
 	}
-	key, err := secrets.OpenCatchUp(network, self, n.recipient.Load(), ch.Nonce, ans.Sealed)
+	session, err := secrets.OpenCatchUp(network, self, n.recipient.Load(), ch.Nonce, ans.Sealed)
 	if err != nil {
 		return nil, from, fmt.Errorf("gossip: %w", err)
 	}
-	return &key, from, nil
+	return &session, from, nil
 }
 
 // errNoCatchUp is a peer that hung up on the ask: a build without catch-up.
 var errNoCatchUp = errors.New("the peer does not answer a catch-up")
+
+// errProofByEd25519 is a peer that hung up on a proof signed by Ed25519
+// alone, as one past the cut-over does.
+var errProofByEd25519 = errors.New("the proof was signed by Ed25519 alone")
 
 // grantCatchUp runs the responder's half, given the ask already read, and
 // returns the session key it granted and to whom. A proof that does not
@@ -296,7 +323,8 @@ func (n *Node) grantCatchUp(c net.Conn, ask []byte, view *View) (*[secrets.Catch
 		return nil, types.Identity{}, fmt.Errorf("gossip: expected a catch-up proof, got a %v", proof.Step)
 	}
 	id, network := *proof.Identity, view.Network
-	if !id.Verify(catchUpProofBytes(network, nonce, id), *proof.Sig) {
+	msg := catchUpProofBytes(network, nonce, id)
+	if !id.Verify(msg, *proof.Sig) {
 		return nil, id, fmt.Errorf("gossip: a catch-up proof for %v does not verify", id.ShortString())
 	}
 	if id == n.opts.Self {
@@ -307,25 +335,32 @@ func (n *Node) grantCatchUp(c net.Conn, ask []byte, view *View) (*[secrets.Catch
 		return nil, id, fmt.Errorf("gossip: not answering the catch-up of %v: %w", id.ShortString(), err)
 	}
 	self := n.opts.Self
+	// An initiator that signed by ML-DSA reads an answer signed so.
+	pq := view.pq() && proof.MLDSA != nil
 	if !listed {
-		sig, err := keys.Identity.Sign(catchUpRefusalBytes(network, nonce, id, view.Epoch))
+		sig, mldsa, err := keys.Identity.SignBoth(catchUpRefusalBytes(network, nonce, id, view.Epoch), pq)
 		if err != nil {
 			return nil, id, err
 		}
-		if err := writeCatchUp(c, &catchUpMsg{Step: stepRefused, Identity: &self, Sig: &sig, Epoch: view.Epoch}); err != nil {
+		if err := writeCatchUp(c, &catchUpMsg{Step: stepRefused, Identity: &self, Sig: &sig, Epoch: view.Epoch,
+			MLDSA: mldsa}); err != nil {
 			return nil, id, err
 		}
 		return nil, id, fmt.Errorf("gossip: refused the catch-up of %v, which the log does not list", id.ShortString())
+	}
+	if view.pq() && (rec.Signing == nil || !rec.Signing.Verify(msg, proof.MLDSA)) {
+		return nil, id, fmt.Errorf("gossip: a catch-up proof for %v carries no valid ML-DSA signature", id.ShortString())
 	}
 	key, sealed, err := secrets.SealCatchUp(network, &rec, nonce)
 	if err != nil {
 		return nil, id, fmt.Errorf("gossip: %w", err)
 	}
-	sig, err := keys.Identity.Sign(catchUpGrantBytes(network, nonce, id, sealed))
+	sig, mldsa, err := keys.Identity.SignBoth(catchUpGrantBytes(network, nonce, id, sealed), pq)
 	if err != nil {
 		return nil, id, err
 	}
-	if err := writeCatchUp(c, &catchUpMsg{Step: stepGrant, Sealed: sealed, Identity: &self, Sig: &sig}); err != nil {
+	if err := writeCatchUp(c, &catchUpMsg{Step: stepGrant, Sealed: sealed, Identity: &self, Sig: &sig,
+		MLDSA: mldsa}); err != nil {
 		return nil, id, err
 	}
 	n.logf("gossip: granted %v a catch-up", id.ShortString())

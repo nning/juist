@@ -172,14 +172,23 @@ The network was upgraded, and nas still runs a version of juist from before
 the upgrade. Until you update juist on nas, none of your traffic reaches it,
 and none of its traffic reaches you. Its tunnel carries only the network's
 changes, so that nas can tell you the same. `juist devices` shows it as
-`outdated`.
+`outdated`. Where nas has no tunnel to this device at all, since its version
+knows no device that joined after the upgrade, it shows `no answer`.
+
+### `warning: nas runs an older juist, which applies no changes until updated`
+
+The network was upgraded, and nas still runs a version of juist from before
+the upgrade. nas stays reachable, but it applies no change to the network
+until you update juist on it, a removal included. `juist status` on nas
+says the same.
 
 ### `warning: nas fell too far behind to reach this device`
 
 nas was offline for more changes than this device keeps keys for. nas can
 catch up from a device that still has those keys, usually one that was
 offline for as long. Otherwise, join it to the network again with a new
-invite.
+invite. Only a device that runs is said to have fallen behind: of one that is
+offline, this device may hold only an announcement from before it joined.
 
 ### `removed`
 
@@ -233,5 +242,6 @@ See [Exit nodes]({{< relref "docs/exit-nodes" >}}).
 You are using an exit node, but systemd-resolved did not allow juistd to send
 DNS through the tunnel, so lookups go out directly. The juist package includes
 a polkit rule that allows this, wherever polkit runs. Install juist from the
-package, and install polkit if the host does not have it. See
+package, and install polkit where the line ends in `polkit is not installed`,
+as the hint says. See
 [Install]({{< relref "docs/install" >}}) and [Names]({{< relref "docs/names" >}}).

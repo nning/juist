@@ -177,7 +177,7 @@ func TestPublishedNamesNeedTheirDomain(t *testing.T) {
 	if err := without.StaticValidate(false); err == nil || !strings.Contains(err.Error(), "no domain") {
 		t.Errorf("published names without a domain: %v", err)
 	}
-	old := snap.Clone()
+	old := withoutSigning(snap)
 	old.Schema = SchemaNames
 	old.Nodes[0].Published = nil
 	if err := old.StaticValidate(false); err == nil || !strings.Contains(err.Error(), "domain") {

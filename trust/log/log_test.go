@@ -168,7 +168,7 @@ func TestCheckIsDryWithoutTheQuorum(t *testing.T) {
 		t.Fatal(err)
 	}
 	spoiled := add
-	if err := spoiled.Sign(stranger); err != nil {
+	if err := h.sign(&spoiled, stranger); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.auth.Builder().Check(&spoiled); err == nil {

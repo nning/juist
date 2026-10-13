@@ -248,9 +248,7 @@ func alarmsOf(s *ipc.Status) []alarm {
 	if s.DataPlaneError != "" {
 		add(alarm{Kind: "dataPlane", Severity: "warn", Text: s.DataPlaneError})
 	}
-	if down := slices.DeleteFunc(slices.Clone(s.TunnelsDown), func(n string) bool {
-		return slices.Contains(s.Seeking, n) || slices.Contains(s.Absent, n)
-	}); len(down) > 0 {
+	if down := s.Blocked(); len(down) > 0 {
 		add(alarm{Kind: "noTraffic", Severity: "warn", Names: down})
 	}
 	if len(s.SyncNewer) > 0 {
@@ -258,6 +256,9 @@ func alarmsOf(s *ipc.Status) []alarm {
 	}
 	if len(s.Outdated) > 0 {
 		add(alarm{Kind: "outdated", Severity: "warn", Names: s.Outdated})
+	}
+	if len(s.OlderBuild) > 0 {
+		add(alarm{Kind: "older", Severity: "warn", Names: s.OlderBuild})
 	}
 	if s.Conflicted > 0 {
 		add(alarm{Kind: "conflicted", Severity: "warn", Count: s.Conflicted})

@@ -109,11 +109,13 @@ an drei Stellen:
 - im LAN, wo sich die Geräte gegenseitig bemerkbar machen,
 - bei anderen Mitgliedern, die weitergeben, wo sie ein Gerät zuletzt erreicht
   haben,
-- im öffentlichen BitTorrent-DHT, einem großen öffentlichen Verzeichnis im
-  Internet, falls ein Gerät ein Mitglied aus den Augen verloren hat.
+- bei den Relays des Netzes und erst danach im öffentlichen BitTorrent-DHT,
+  einem großen öffentlichen Verzeichnis im Internet, falls ein Gerät ein
+  Mitglied aus den Augen verloren hat.
 
-Was die Geräte im DHT ablegen, ist verschlüsselt. Der DHT sieht nur Adressen,
-nie Inhalte. Nichts, was er liefert, kann ändern, wer zum Netz gehört.
+Was die Geräte im DHT ablegen, ist verschlüsselt, und in einem Netz auf
+Schema 16 ist jeder Eintrag gleich groß. Der DHT sieht nur Adressen, nie
+Inhalte. Nichts, was er liefert, kann ändern, wer zum Netz gehört.
 
 ## Wie Geräte sich verbinden {#connections}
 

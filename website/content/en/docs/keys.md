@@ -124,7 +124,8 @@ it casts 1 vote in "home"
 ```
 
 The line always goes through a pipe, never onto the command line. It carries
-a checksum, so a truncated line is refused. An import never replaces an
+a checksum, so a truncated line is refused. It covers the key's quantum-safe
+signing key too, which derives from it. An import never replaces an
 existing key. If the key has been removed from the network since the backup,
 the import warns `"home" gives it no vote`.
 

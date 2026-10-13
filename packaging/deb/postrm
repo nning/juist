@@ -15,6 +15,9 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 		firewall-cmd --reload >/dev/null 2>&1 || true
 	fi
 fi
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+	rm -f /var/lib/polkit-1/localauthority/10-vendor.d/60-juist.pkla
+fi
 if [ "$1" = purge ]; then
 	rm -f /var/lib/juist.removed
 fi

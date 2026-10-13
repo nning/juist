@@ -65,13 +65,18 @@ func TestLinuxAndFreeBSD(t *testing.T) {
 	fb.put(t, pkg, "/tmp/juist.pkg", 0o644)
 	fb.put(t, filepath.Join(work, "probe-freebsd"), "/tmp/probe", 0o755)
 	lx.put(t, deb, "/tmp/juist.deb", 0o644)
-	// Debian starts on the previous release, where the lab has it, and is
-	// upgraded in "previous release".
-	previous := os.Getenv("JUIST_INTEROP_PREVIOUS_DEB")
-	first := "/tmp/juist.deb"
+	// Both start on the previous release, where the lab has it, and are
+	// upgraded in "previous release": a device of this one joins none of an
+	// older one's invites, whose handshake has no ML-KEM.
+	previous, previousPkg := os.Getenv("JUIST_INTEROP_PREVIOUS_DEB"), os.Getenv("JUIST_INTEROP_PREVIOUS_PKG")
+	if previous == "" || previousPkg == "" {
+		previous, previousPkg = "", ""
+	}
+	first, firstPkg := "/tmp/juist.deb", "/tmp/juist.pkg"
 	if previous != "" {
 		lx.put(t, previous, "/tmp/juist-previous.deb", 0o644)
-		first = "/tmp/juist-previous.deb"
+		fb.put(t, previousPkg, "/tmp/juist-previous.pkg", 0o644)
+		first, firstPkg = "/tmp/juist-previous.deb", "/tmp/juist-previous.pkg"
 	}
 	lx.put(t, filepath.Join(work, "probe-linux"), "/tmp/probe", 0o755)
 	both(t, vms, func(v *vm) error {
@@ -79,7 +84,7 @@ func TestLinuxAndFreeBSD(t *testing.T) {
 hostname fb; sysrc -q hostname=fb >/dev/null
 ifconfig vtnet1 inet 10.77.0.1/24 up
 pkg -N >/dev/null 2>&1 || env ASSUME_ALWAYS_YES=yes pkg bootstrap -f >/dev/null
-pkg add /tmp/juist.pkg >/dev/null
+pkg add ` + firstPkg + ` >/dev/null
 sysrc -q juistd_enable=YES >/dev/null; service juistd start >/dev/null
 # On the console, which a failed run shows: whether the kernel still runs
 # when ssh no longer answers, and what its network then holds.
@@ -130,7 +135,7 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 			previousRelease(t, fb, lx)
 		})
 	} else {
-		t.Log("JUIST_INTEROP_PREVIOUS_DEB is unset, so no device runs the previous release")
+		t.Log("JUIST_INTEROP_PREVIOUS_DEB or _PKG is unset, so no device runs the previous release")
 	}
 
 	t.Log("joining")

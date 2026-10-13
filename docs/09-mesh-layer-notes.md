@@ -155,7 +155,8 @@ that means anything, and the sealed payload already carries the port. A LAN
 observer sees that some host is asking about some opaque 32-character label
 under `_juist._udp.local` — enough to conclude that juist is in use, which
 [02-threat-model.md](02-threat-model.md) accepts as residual weakness 5 — and
-cannot tell which network, who is on it, or how many.
+cannot tell which network or who is on it, though the hosts answering one
+label are one network's members on that LAN.
 
 Two consequences fall out, both wanted: a revoked device stops being able to
 compute the name (subject to the keyring window above), and two juist networks

@@ -212,11 +212,11 @@ type Link struct {
 	secret [linkSecretLen]byte
 	Addrs  []netip.AddrPort
 
-	// Admin, where set, is the admin key the guest requires the admission
-	// to be signed by ([Admission]). It travels in the link, which the
-	// inviting admin prints and the device running the invite never
-	// touches.
-	Admin *types.Identity
+	// Admin, where set, is the admin key the guest requires the admission to
+	// be signed by ([Admission]), and AdminSigning its signing key's
+	// fingerprint; the inviting device never touches either.
+	Admin        *types.Identity
+	AdminSigning *[fingerprintLen]byte
 
 	// Relays are member relays the inviting host waits at for a guest that
 	// cannot reach it directly ([Link.ForwardID]). A relay passes bytes and
@@ -246,13 +246,24 @@ func (l Link) ForwardID() [16]byte {
 	return [16]byte(k)
 }
 
-// WithAdmin returns the link naming admin as the one who admits.
-func (l Link) WithAdmin(admin types.Identity) Link {
+// WithAdmin returns the link naming admin, with its signing key, as the one
+// who admits.
+func (l Link) WithAdmin(admin types.Identity, signing *types.SigningKey) Link {
 	l.Addrs = slices.Clone(l.Addrs)
 	l.Relays = slices.Clone(l.Relays)
 	l.Named = slices.Clone(l.Named)
-	l.Admin = &admin
+	fp := SigningFingerprint(signing)
+	l.Admin, l.AdminSigning = &admin, &fp
 	return l
+}
+
+const fingerprintLen = 16
+
+// SigningFingerprint names a signing key in a link: long enough that no
+// other key is found to match it, short enough to copy.
+func SigningFingerprint(k *types.SigningKey) [fingerprintLen]byte {
+	sum := sha256.Sum256(append([]byte("juist link signing key v1\x00"), k[:]...))
+	return [fingerprintLen]byte(sum[:fingerprintLen])
 }
 
 // NewLink draws a link secret for a host at addrs.
@@ -281,8 +292,8 @@ func (l Link) String() string {
 		addrs = append(addrs, relayPrefix+n)
 	}
 	secret := linkEncoding.EncodeToString(l.secret[:])
-	if l.Admin != nil {
-		secret += "." + linkEncoding.EncodeToString(l.Admin[:])
+	if l.Admin != nil && l.AdminSigning != nil {
+		secret += "." + linkEncoding.EncodeToString(l.Admin[:]) + "." + linkEncoding.EncodeToString(l.AdminSigning[:])
 	}
 	return LinkPrefix + secret + "@" + strings.Join(addrs, ",")
 }
@@ -303,6 +314,7 @@ func ParseLink(s string) (Link, error) {
 			"it may have been cut off when it was copied")
 	}
 	secretText, adminText, hasAdmin := strings.Cut(secretText, ".")
+	adminText, fpText, hasFingerprint := strings.Cut(adminText, ".")
 	secret, err := linkEncoding.DecodeString(secretText)
 	if err != nil || len(secret) != linkSecretLen {
 		return Link{}, errors.New("the invite link is damaged; copy it again")
@@ -319,7 +331,14 @@ func ParseLink(s string) (Link, error) {
 		if err := admin.Validate(); err != nil {
 			return Link{}, errors.New("the invite link is damaged; copy it again")
 		}
-		l.Admin = &admin
+		if !hasFingerprint {
+			return Link{}, errors.New("the invite link is from an older juist; ask for a new one")
+		}
+		fp, err := linkEncoding.DecodeString(fpText)
+		if err != nil || len(fp) != fingerprintLen {
+			return Link{}, errors.New("the invite link is damaged; copy it again")
+		}
+		l.Admin, l.AdminSigning = &admin, (*[fingerprintLen]byte)(fp)
 	}
 	for part := range strings.SplitSeq(addrText, ",") {
 		text, isRelay := strings.CutPrefix(part, relayPrefix)

@@ -103,7 +103,7 @@ func TestSchemaUpgradeStillNeedsQuorum(t *testing.T) {
 	prev := h.auth.Head()
 	v := types.CurrentSchema + 1
 	aum := types.AUM{Kind: types.KindSchemaUpgrade, Prev: &prev, Schema: &v}
-	if err := aum.Sign(h.admins[0]); err != nil {
+	if err := h.sign(&aum, h.admins[0]); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	h.mustReject("schema upgrade below quorum", RuleUnauthorized, aum)
@@ -334,7 +334,7 @@ func TestOwnV4PrefixIsChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	genesisWith := func(schema types.SchemaVersion, prefix string) error {
-		g, err := Genesis("test-net", 1, []types.AdminKey{{Public: admin.Public(), Votes: 1, Name: "admin"}},
+		g, err := Genesis("test-net", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "admin"}},
 			[]types.Hash{{1}}, nil, newHarness(t, 1, 1).sealer())
 		if err != nil {
 			t.Fatal(err)

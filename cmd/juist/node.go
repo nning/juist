@@ -353,7 +353,7 @@ func (n *daemonNode) join(ctx context.Context, invite, name string, op operatorC
 	}
 	if secret, _ := guest.ParseInvite(invite); secret != nil {
 		if link, ok := secret.(enroll.Link); ok && link.Admin != nil {
-			if err := n.home.expectAdmitted(n.sock, *link.Admin, resp.Admission, n.st.Self); err != nil {
+			if err := n.home.expectAdmitted(n.sock, link, resp.Admission, n.st.Self); err != nil {
 				return nil, err
 			}
 		}
@@ -566,7 +566,8 @@ func (n *localNode) self() (*ipc.Self, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ipc.Self{Identity: k.Identity.Public(), Keys: k.Public, Name: displayName(k)}, nil
+	return &ipc.Self{Identity: k.Identity.Public(), Keys: k.Public, Name: displayName(k),
+		Signing: new(k.Identity.SigningKey())}, nil
 }
 
 func (n *localNode) create(genesis types.AUM, _ operatorChoice) error {

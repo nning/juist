@@ -172,12 +172,14 @@ func TestAnAdminGivesItsEncryptionKeyAfterTheUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	genesis, err := log.Genesis("home", 1, []types.AdminKey{{Public: alice.Public(), Votes: 1, Holder: "alice"}},
+	genesis, err := log.Genesis("home", 1, []types.AdminKey{{Public: alice.Public(), Signing: new(alice.SigningKey()), Endorsement: alice.Endorsement(), Votes: 1, Holder: "alice"}},
 		[]types.Hash{{1}}, nil, sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
 	genesis.State.Schema = types.SchemaRename
+	genesis.State.Admins[0].Signing = nil
+	genesis.State.Admins[0].Endorsement = nil
 	if err := genesis.Sign(alice); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +193,7 @@ func TestAnAdminGivesItsEncryptionKeyAfterTheUpgrade(t *testing.T) {
 	if _, err := c.run("admins", "receive"); err == nil || !strings.Contains(err.Error(), "juist log upgrade") {
 		t.Fatalf("receive before the upgrade: %v", err)
 	}
-	mustContain(t, c.mustRun("log", "upgrade", "--yes"), "upgraded to "+types.CurrentSchema.String(), "juist admins receive")
+	mustContain(t, c.mustRun("log", "upgrade", "--yes"), "upgraded to "+types.SchemaSigning.String(), "juist admins receive")
 	mustContain(t, c.mustRun("admins"), "hint: for changes waiting for your vote to reach you: juist admins receive")
 	mustContain(t, c.mustRun("admins", "receive"), "changes waiting for alice reach key alice@home")
 	if k, _ := openLog(t, c).State().Admin(alice.Public()); k.Recipient == nil {

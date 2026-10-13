@@ -233,7 +233,7 @@ func TestAnIngressServesWhatIsPublishedWhileFresh(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.Published = served
-		if err := e.Sign(f.nw.devices[1].identity); err != nil {
+		if err := e.SignPQ(f.nw.devices[1].identity); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.d.Learn(e); err != nil {
@@ -496,7 +496,7 @@ func TestTheStatusSaysWhoServesWhatTheyPublish(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.Published = served
-		if err := e.Sign(f.nw.devices[i].identity); err != nil {
+		if err := e.SignPQ(f.nw.devices[i].identity); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.d.Learn(e); err != nil {
@@ -699,7 +699,7 @@ func TestAnIngressIsToldANameForMembersApart(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Published = true
-	if err := e.Sign(f.nw.devices[1].identity); err != nil {
+	if err := e.SignPQ(f.nw.devices[1].identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {

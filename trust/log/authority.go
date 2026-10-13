@@ -19,6 +19,7 @@ package log
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -154,7 +155,15 @@ type Authority struct {
 
 	// onChain is the active chain of the last adopted resolution.
 	onChain map[types.Hash]bool
+
+	// pq are the records of the last adopted resolution whose state is past
+	// the cut-over to [types.SchemaMLDSA].
+	pq map[types.Hash]bool
+
+	dropped map[types.Hash]bool // see [Authority.Dropped]
 }
+
+const maxDropped = 1024 // past it [Authority.Dropped] starts over
 
 // Create initializes a new network from a genesis record and makes it the
 // anchor. The storage must be empty: a node that has lost its log must be
@@ -297,6 +306,14 @@ func (a *Authority) Inform(aums ...types.AUM) error {
 		return err
 	}
 	pending := ov.pending()
+	if kept, err := a.pastCutOver(pending); err != nil {
+		return err
+	} else if len(kept) < len(pending) {
+		if ov, err = newOverlay(a.storage, kept); err != nil {
+			return err
+		}
+		pending = ov.pending()
+	}
 	if len(pending) == 0 {
 		return nil // everything offered is already held
 	}
@@ -379,6 +396,91 @@ func (a *Authority) Inform(aums ...types.AUM) error {
 	return nil
 }
 
+// pastCutOver drops, on a node past the cut-over to [types.SchemaMLDSA], every
+// offered record not descending from one past it, which a quantum computer
+// could have signed by Ed25519. A disable record is kept wherever it hangs.
+func (a *Authority) pastCutOver(pending []types.AUM) ([]types.AUM, error) {
+	floor, err := a.storage.SchemaFloor()
+	if err != nil || floor < types.SchemaMLDSA {
+		return pending, err
+	}
+	// A parent held below the cut-over drops a record, one not held is left
+	// to the rules that refuse it, and a copy of the adopted cut-over signed
+	// by other keys is kept for fork choice.
+	hashes := make([]types.Hash, len(pending))
+	inBatch := make(map[types.Hash]bool, len(pending))
+	children := make(map[types.Hash][]int, len(pending))
+	for i := range pending {
+		hashes[i] = pending[i].Hash()
+		inBatch[hashes[i]] = true
+		if pending[i].Prev != nil {
+			children[*pending[i].Prev] = append(children[*pending[i].Prev], i)
+		}
+	}
+	kept := make(map[types.Hash]bool, len(pending))
+	memo := map[types.Hash][]types.Hash{}
+	var next []int
+	for i := range pending {
+		p := &pending[i]
+		keep := p.Kind == types.KindDisable
+		if p.Prev != nil && !inBatch[*p.Prev] {
+			pq, held := a.pq[*p.Prev]
+			keep = keep || pq || !held
+		}
+		if !keep && p.Kind == types.KindSetSigningKeys {
+			adopted, read := memo[*p.Prev]
+			if !read {
+				siblings, err := a.storage.Children(*p.Prev)
+				if err != nil {
+					return nil, err
+				}
+				for _, c := range slices.DeleteFunc(siblings, func(c types.Hash) bool { return !a.pq[c] }) {
+					aum, err := a.storage.AUM(c)
+					if err != nil {
+						return nil, err
+					}
+					adopted = append(adopted, aum.SigHash())
+				}
+				memo[*p.Prev] = adopted
+			}
+			keep = slices.Contains(adopted, p.SigHash())
+		}
+		if keep {
+			kept[hashes[i]] = true
+			next = append(next, i)
+		}
+	}
+	for len(next) > 0 {
+		i := next[len(next)-1]
+		next = next[:len(next)-1]
+		for _, c := range children[hashes[i]] {
+			if !kept[hashes[c]] {
+				kept[hashes[c]] = true
+				next = append(next, c)
+			}
+		}
+	}
+	out := make([]types.AUM, 0, len(kept))
+	for i := range pending {
+		h := hashes[i]
+		if kept[h] {
+			out = append(out, pending[i])
+			continue
+		}
+		if a.dropped == nil || len(a.dropped) >= maxDropped {
+			a.dropped = map[types.Hash]bool{}
+		}
+		a.dropped[h] = true
+	}
+	return out, nil
+}
+
+// Dropped returns records below the cut-over this node dropped lately, which
+// it tells peers it holds so that they stop offering them.
+func (a *Authority) Dropped() []types.Hash {
+	return slices.SortedFunc(maps.Keys(a.dropped), types.Hash.Compare)
+}
+
 // Preview returns the state aums would lead to if informed now, storing
 // nothing: what a change does before it does it, such as whom it removes. It
 // refuses what Inform would refuse for being unreachable from the anchor; the
@@ -405,6 +507,7 @@ func (a *Authority) adopt(res *resolution) {
 	a.state = res.state
 	a.orphans = res.orphans
 	a.reachable = res.reachable
+	a.pq = res.pq
 	a.onChain = make(map[types.Hash]bool, len(res.chain))
 	for _, h := range res.chain {
 		a.onChain[h] = true
@@ -566,6 +669,10 @@ type resolution struct {
 
 	// disabled is the first disable record the walk met, chain first.
 	disabled *DisabledError
+
+	// pq are the records, the anchor among them, whose state is past the
+	// cut-over to [types.SchemaMLDSA].
+	pq map[types.Hash]bool
 }
 
 // resolve computes the active chain and the branches off it. It is a pure
@@ -602,6 +709,7 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 	res := &resolution{
 		chain:     []types.Hash{anchor},
 		reachable: map[types.Hash]bool{anchor: true},
+		pq:        map[types.Hash]bool{anchor: state.PQ()},
 	}
 	// A branch is recorded with the state it forks from; the state it is
 	// probed against is the chain's, which is not known until the walk below.
@@ -676,6 +784,7 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 		cur = primary.hash
 		res.chain = append(res.chain, primary.hash)
 		res.reachable[primary.hash] = true
+		res.pq[primary.hash] = next.PQ()
 	}
 	if len(res.chain) >= maxChainLength {
 		return nil, fmt.Errorf("log: chain exceeds %d records; refusing to resolve", maxChainLength)
@@ -767,13 +876,17 @@ type candidate struct {
 // admin key removed at some point could otherwise sign a sibling rooted
 // before its removal, win on the revocation bias or a ground hash, and undo
 // its own removal with everything after it.
+//
+// After it, a branch reaching the cut-over to [types.SchemaMLDSA] beats one
+// that does not, unless both are undone; of copies of the cut-over the one
+// built on further wins.
 func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, error) {
 	// Walking each branch on a chain without forks makes resolution quadratic.
 	if len(candidates) == 1 {
 		return candidates[0], nil
 	}
 	var keys []branchKeys
-	if parent.schema >= types.SchemaHolders {
+	if parent.schema >= types.SchemaHolders || !parent.PQ() {
 		keys = make([]branchKeys, len(candidates))
 		budget := maxOrphanRecords
 		for i := range candidates {
@@ -787,7 +900,7 @@ func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, er
 	// undone reports whether the branch at i signs with a key the branch at
 	// j removes.
 	undone := func(i, j int) bool {
-		if keys == nil {
+		if keys == nil || parent.schema < types.SchemaHolders {
 			return false
 		}
 		for id := range keys[i].signers {
@@ -797,14 +910,31 @@ func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, er
 		}
 		return false
 	}
+	cutOver := func(i int) bool { return keys != nil && !parent.PQ() && keys[i].cutOver }
 	best := 0
 	for i := 1; i < len(candidates); i++ {
 		c, b := &candidates[i], &candidates[best]
 		cUndone, bUndone := undone(i, best), undone(best, i)
 		rev, bestRev := parent.Revokes(&c.aum), parent.Revokes(&b.aum)
+		// No Ed25519 forger extends a copy of the cut-over.
+		twins := keys != nil && c.aum.Kind == types.KindSetSigningKeys && b.aum.Kind == types.KindSetSigningKeys &&
+			c.aum.SigHash() == b.aum.SigHash()
 		switch {
+		case twins && keys[i].records != keys[best].records:
+			if keys[i].records > keys[best].records {
+				best = i
+			}
 		case cUndone != bUndone:
 			if bUndone {
+				best = i
+			}
+		case cUndone && cutOver(i) != cutOver(best):
+			// Contested: the cut-over, which no device undoes, does not decide.
+			if !cutOver(i) {
+				best = i
+			}
+		case cutOver(i) != cutOver(best):
+			if cutOver(i) {
 				best = i
 			}
 		case rev != bestRev:
@@ -819,9 +949,12 @@ func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, er
 }
 
 // branchKeys are the admin keys that signed a branch's records, and those
-// its records remove.
+// its records remove; whether the branch cuts over to [types.SchemaMLDSA];
+// and how many records it holds.
 type branchKeys struct {
 	signers, removed map[types.Identity]bool
+	cutOver          bool
+	records          int
 }
 
 // keysOfBranch collects branchKeys over every stored record from root on,
@@ -839,11 +972,15 @@ func keysOfBranch(r reader, root types.Hash, budget *int) (branchKeys, error) {
 		if err != nil {
 			return k, fmt.Errorf("log: reading %v: %w", h, err)
 		}
+		k.records++
 		for i := range aum.Signatures {
 			k.signers[aum.Signatures[i].KeyID] = true
 		}
 		if aum.Kind == types.KindRemoveAdminKey {
 			k.removed[*aum.Subject] = true
+		}
+		if aum.Kind == types.KindSetSigningKeys {
+			k.cutOver = true
 		}
 		children, err := r.Children(h)
 		if err != nil {
@@ -886,6 +1023,7 @@ func walkOrphan(r reader, h types.Hash, branch, probe *State, o *Orphan, budget 
 	}
 	o.Records = append(o.Records, h)
 	res.reachable[h] = true
+	res.pq[h] = nextBranch.PQ()
 
 	var nextProbe *State
 	switch {

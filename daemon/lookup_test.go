@@ -1,11 +1,19 @@
 package daemon
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/nning/juist/conn"
 	"github.com/nning/juist/discovery/dht"
+	"github.com/nning/juist/ipc"
+	"github.com/nning/juist/relay"
 	"github.com/nning/juist/types"
 )
 
@@ -184,5 +192,91 @@ func TestAStaleNodeLooksUpTheDownBeforeTheSetAside(t *testing.T) {
 	slices.SortFunc(got, types.Identity.Compare)
 	if !slices.Equal(got, down) {
 		t.Fatalf("looked up %v, want the members found down %v", got, down)
+	}
+}
+
+// One device of those that reach one another asks the DHT, the lowest
+// identity among them, and so does one that reaches none or is stale.
+func TestOneDeviceOfAGroupSeeksInTheDHT(t *testing.T) {
+	f := newReconcileFixture(t, 1)
+	var lower, higher types.Identity
+	higher[0] = 0xff
+	if lower.Compare(f.d.self) >= 0 || higher.Compare(f.d.self) <= 0 {
+		t.Fatal("the identities do not lie either side of this device's")
+	}
+	for _, c := range []struct {
+		name  string
+		live  map[types.Identity]bool
+		stale bool
+		want  bool
+	}{
+		{"reaching none", map[types.Identity]bool{lower: false, higher: false}, false, true},
+		{"reaching a higher one", map[types.Identity]bool{higher: true}, false, true},
+		{"reaching a lower one", map[types.Identity]bool{lower: true, higher: true}, false, false},
+		{"stale, reaching a lower one", map[types.Identity]bool{lower: true}, true, true},
+	} {
+		f.d.reachable.Store(&c.live)
+		f.d.setStatus(func(s *ipc.Status) { s.Stale = c.stale })
+		if got := f.d.seeksInDHT(); got != c.want {
+			t.Errorf("%s: seeks %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A member relay is asked first, at the address and by the certificate its
+// announcement pins, and what it holds counts only where it is newer.
+func TestAMemberRelayIsAskedBeforeTheDHT(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	sought := f.nw.devices[2]
+	epoch, secret, ok := f.d.keyring.Latest()
+	if !ok {
+		t.Fatal("no epoch secret")
+	}
+	key := dht.RendezvousKey(secret.TopicSeed(epoch, dht.Window(f.d.now()), sought.record.Identity))
+	e, err := endpointFor(sought, 4002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Seq = 7
+	if err := e.SignPQ(sought.identity); err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := dht.SealAnnouncement(secret, epoch, e, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != relay.RendezvousPath+hex.EncodeToString(key[:]) {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(sealed)
+	}))
+	defer srv.Close()
+	at := netip.MustParseAddrPort(srv.Listener.Addr().String())
+	pin := sha256.Sum256(srv.Certificate().Raw)
+	set := func(cert [32]byte) {
+		f.d.mu.Lock()
+		own := relayRegion(f.d.status.Network, f.d.self)
+		f.d.relays = []conn.Relay{{Region: own + 1, HostName: "r.relay.juist.invalid", Addrs: []netip.AddrPort{at}, CertHash: cert}}
+		f.d.mu.Unlock()
+	}
+
+	set([32]byte{1})
+	if f.d.askRelays(t.Context(), sought.record.Identity) {
+		t.Error("took an answer from a relay whose certificate is not the one pinned")
+	}
+	set(pin)
+	if !f.d.askRelays(t.Context(), sought.record.Identity) {
+		t.Fatal("the relay's answer was not taken")
+	}
+	if got, ok := f.d.endpoints.Get(sought.record.Identity); !ok || got.Seq != 7 {
+		t.Fatalf("holds %+v", got)
+	}
+	if f.d.askRelays(t.Context(), sought.record.Identity) {
+		t.Error("an answer no newer than the one held counts as found")
 	}
 }
