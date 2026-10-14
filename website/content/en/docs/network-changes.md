@@ -177,11 +177,9 @@ both can both govern the network and end it.
 
 | What you see | What to do |
 |---|---|
-| `juist status`: `no IPv4 on this host: …` | Two networks on this device overlap. Renumber one of them, as the hint says. |
+| `juist health`: `no IPv4 on this host: …` | Two networks on this device overlap. Renumber one of them, as the hint says. |
 | `juist: 10.7.0.9 is taken by nas` | Pick a free address. |
 | `juist: 10.7.0.9 is outside the network's range …` | Pick one in the range that `juist network` shows. |
-| `juist: the network predates renumbering` | Once every device runs this version, run `juist log upgrade`. |
-| `juist: the network predates renaming a device` | The same. |
 | `juist: another device is named "tablet" already` | Pick another name, or rename that device first. |
 | `juist: no line on stdin` | Pipe the break-glass line in, or give its file with `--secrets FILE`. |
 | `juist: no break-glass secret of "home" there` | The line belongs to another network. |

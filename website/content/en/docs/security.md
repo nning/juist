@@ -73,11 +73,13 @@ against three things:
 - Guessing. A code allows exactly one guess, and only from the LAN. A link
   holds a 128-bit secret, far too long to guess.
 - Someone in the middle. Before anything is signed, the admin compares four
-  words with the new device. The words are chosen so that an attacker in the
-  middle cannot search for a matching set.
+  words with the new device. The words cover every key of the new device, and
+  are chosen so that an attacker in the middle cannot search for a matching
+  set. Both devices need the same version of juist for the words to match.
 - A compromised daemon on the inviting device. The link binds the new device
   to the inviting admin's signature, so that daemon cannot enroll it into a
-  network the daemon controls.
+  network the daemon controls. A code has no such anchor: the new device
+  trusts the network its daemon shows the first time.
 
 ## Removing a device
 
@@ -127,34 +129,33 @@ juist protects against both:
 - Group secrets are sealed with X25519 combined with ML-KEM-768.
 - Every change to the network, and every message devices sign for one
   another, is signed with ML-DSA-44, and a signature with Ed25519 alone is
-  refused. Each device's and admin key's ML-DSA key derives from the key it
+  refused. Only copies of a device's announcement found in the DHT, at a
+  relay or on the LAN are taken on Ed25519 alone, and they say no more than
+  where to reach the device. Each device's and admin key's ML-DSA key derives from the key it
   already has, so its backup covers it.
 - Joining agrees a key with ML-KEM-768 after the code or link is checked, so
   someone who records a join and later has a quantum computer learns
   nothing from it.
-- Connections between juist's own ends, to relays and from devices that
-  reach only HTTPS, require TLS 1.3 with X25519 and ML-KEM-768. Connections
+- Relays and juist's other ends accept TLS 1.3 with X25519 and ML-KEM-768
+  alone, and devices that reach only HTTPS require it. Connections
   through the ingress agree their key that way wherever the other end offers
   it, as current browsers do.
 
 Every tunnel between devices on the current version is quantum-safe. A device
-on an older version gets none of your traffic, and `juist status` and
+on an older version gets none of your traffic, and `juist health` and
 `juist devices` show it as outdated until it is updated.
 
-A network created with an older version switches to quantum-safe signatures
-in two steps. Once every device runs the current version,
-`juist log upgrade` raises it to schema 17, where devices announce their
-ML-DSA keys, and each admin registers theirs with `juist admins receive`.
-Run it again once all have, and the switch to schema 18 is approved like any
-change. A device that was offline catches up afterwards.
+The limit: whoever steals a device and later has a quantum computer reads what
+that device could read, its own tunnels' traffic recorded today included. Remove
+a lost device at once.
 
-What stays as it was: the changes made before the switch keep their Ed25519
-signatures. Devices on the network refuse any new change below the switch,
-but a device that first sees the switch only once a quantum computer exists
-trusts the history before it as it was handed. A relay proves itself with a
-classical certificate, since it is trusted only to pass traffic, and a
-proxy that ends TLS without ML-KEM can no longer carry a device that reaches
-only HTTPS.
+juist reads networks whose log is at schema 18 or later, where every change
+is signed this way. A network created with an older version is read no
+more: its admins create it again, and its devices join the new one.
+
+What stays classical: a relay proves itself with a classical certificate,
+since it is trusted only to pass traffic, and a proxy that ends TLS without
+ML-KEM cannot carry a device that reaches only HTTPS.
 
 ## Notes
 

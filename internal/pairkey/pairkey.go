@@ -30,8 +30,7 @@ func (k Key) IsZero() bool { return k == Key{} }
 type Stage uint8
 
 const (
-	// StageNone is no preshared key: below [types.SchemaPQ], or towards a
-	// peer that announces none.
+	// StageNone is no preshared key: towards a peer that announces none.
 	StageNone Stage = iota
 	// StageUnknown is a key nobody holds: the pair's epoch is one this node
 	// keeps nothing of, so no handshake completes.

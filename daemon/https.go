@@ -246,7 +246,7 @@ func (r *relayRendezvous) Get(key [32]byte) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	sealed, err := dht.SealAnnouncement(secret, e.epoch, ep, d.paddedItems())
+	sealed, err := dht.SealAnnouncement(secret, e.epoch, ep)
 	if err != nil {
 		return nil, false
 	}
@@ -449,16 +449,6 @@ func (d *Daemon) orderRelayCertificateCtx(ctx context.Context, h *tls.ClientHell
 	}
 }
 
-// schemaRefusesRelayName says why the relay's name is not in its
-// announcement, "" where it is: a network below the schema that has it,
-// whose older members would refuse the announcement.
-func schemaRefusesRelayName(state *log.State) string {
-	if state.Schema() < types.SchemaRelayName {
-		return fmt.Sprintf("the network is at %v; members learn the name from %v on", state.Schema(), types.SchemaRelayName)
-	}
-	return ""
-}
-
 // syncHTTPS has the relay take 443 itself, at each address of this host's
 // members may reach it at, unless this device is the ingress, which holds
 // 443 and hands the name's connections on. Bound by address, not on the
@@ -650,7 +640,6 @@ func (d *Daemon) httpsNow(relays []conn.Relay) *ipc.HTTPS {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	h.NotAnnounced = d.relayNameRefused
 	if d.relay == nil {
 		h.NotAnnounced = "this device does not relay"
 	}

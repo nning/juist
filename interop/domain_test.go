@@ -18,7 +18,7 @@ import (
 func domainItself(t *testing.T, fb, lx *vm) {
 	t.Cleanup(func() {
 		if t.Failed() {
-			out, _ := lx.try("juist status; juist publish; resolvectl status juist0; journalctl -u juist-serve --no-pager | tail -20",
+			out, _ := lx.try("juist status; juist health; juist publish; resolvectl status juist0; journalctl -u juist-serve --no-pager | tail -20",
 				time.Minute)
 			t.Logf("lx:\n%s", out)
 			hold(t, fb, lx)

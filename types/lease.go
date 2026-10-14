@@ -25,7 +25,7 @@ type Lease struct {
 	Signer Identity `cbor:"4,keyasint"`
 
 	// Sig is Signer's signature over everything above, and MLDSA its ML-DSA
-	// one, past the cut-over.
+	// one.
 	Sig   Sig    `cbor:"5,keyasint"`
 	MLDSA *PQSig `cbor:"6,keyasint,omitempty"`
 }
@@ -42,12 +42,12 @@ func (l *Lease) sigHash() Hash {
 	return hashLabeled(labelLease, mustEncode(&unsigned))
 }
 
-// Sign signs the lease with the signer's identity key, setting Signer; by
-// ML-DSA too where pq, as past the cut-over.
-func (l *Lease) Sign(priv PrivateIdentity, pq bool) error {
+// Sign signs the lease with the signer's identity key, by Ed25519 and
+// ML-DSA, setting Signer.
+func (l *Lease) Sign(priv PrivateIdentity) error {
 	l.Signer = priv.Public()
 	h := l.sigHash()
-	sig, mldsa, err := priv.SignBoth(h[:], pq)
+	sig, mldsa, err := priv.SignBoth(h[:])
 	if err != nil {
 		return err
 	}

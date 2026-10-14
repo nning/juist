@@ -206,8 +206,9 @@ member marks its services the same way with `juistd --serve NAME=ADDR --members`
 {{< /step >}}
 
 Without an [access policy]({{< relref "docs/access" >}}), every member can open
-the name. With one, only the members a rule allows can, for example with
-`pass from <family> to name photos`.
+the name. With one, only the members a rule names it for can, as
+`pass from <family> to name photos` does; a rule to the device, or to `any`,
+does not open the name.
 
 - The ingress passes the name to nobody except the CA, which connects to it by
   TLS on 443 to check the name when it issues or renews the certificate.
@@ -233,10 +234,6 @@ the name. With one, only the members a rule allows can, for example with
   program on it would get in, including one that a client of a public service
   on the same device could make send requests. On that device, reach the
   service at its own address.
-- Members-only names need a log upgrade (`juist log upgrade`). Update the
-  device that ends the name's TLS, and every ingress, before running it: a
-  device on an older version stops applying changes at the upgrade and keeps
-  serving its names as before until its view goes stale.
 - A members-only name is always on 443, by TLS, without `--proxy`. Running
   `juist publish add nas photos` again without `--members` keeps it
   members-only; `--members=false` makes it public.
@@ -413,7 +410,7 @@ shows is then that of a device the others accept no connections from.
   ([Names]({{< relref "docs/names" >}})).
 - `http://` to such a name goes to the device's port 80, where juist redirects
   it to https. If another program listens there on all addresses, that program
-  answers instead, and `juist status` warns about it.
+  answers instead, and `juist health` warns about it.
 
 ## More options
 
@@ -515,8 +512,8 @@ terminator's log shows it.
 | `juist status`: `Sharing` says `reached by nobody: the terminator does not run` | `juist share` starts it; `journalctl -u juist-serve` shows why it stopped |
 | `juist status`: `Published` says `…, but ends TLS for none: the terminator does not run (juist publish serve)` | run `juist publish serve`; `journalctl -u juist-serve` shows why it stopped |
 | `the terminator does not say it listens on …` | it did not start in time; `journalctl -u juist-serve` shows why |
-| `juist status`: `warning: another program holds port 80 on …` | members opening `http://NAME` reach that program instead of a redirect to https. Make it listen only on the addresses it serves, and open the name with `https://` until then |
-| `juist status`: `warning: no certificate for NAME: …` | the CA issued none, for the reason given. Most often it cannot reach NAME, whose public DNS must point at a running ingress. Until then, clients' TLS fails |
+| `juist health`: `warning: another program holds port 80 on …` | members opening `http://NAME` reach that program instead of a redirect to https. Make it listen only on the addresses it serves, and open the name with `https://` until then |
+| `juist health`: `warning: no certificate for NAME: …` | the CA issued none, for the reason given. Most often it cannot reach NAME, whose public DNS must point at a running ingress. Until then, clients' TLS fails |
 | `juist status`: `warning: not serving NAME, which is for members alone: OTHER reaches its service as it is, …` | OTHER goes to the same service by TCP, or without being proxied, so its clients could ask the service for NAME. Give NAME a service of its own |
 | `juist status`: `warning: not serving NAME, its service meant for members alone: the log has the name public` | to publish it for members, an admin runs `juist publish add DEVICE NAME --members`; to make it public, run `juist publish add NAME HOST:PORT --members=false` on the device |
 | `juist status`: `warning: NAME, for members alone, is not reached from here, …` | this device resolves the network's names through public DNS, so NAME leads to the ingress, which refuses it. On Linux, use systemd-resolved |

@@ -187,11 +187,9 @@ beidem erbeutet, kann das Netz verwalten und auch beenden.
 
 | Was du siehst | Was du tun kannst |
 |---|---|
-| `juist status`: `no IPv4 on this host: …` | Zwei Netze auf diesem Gerät überschneiden sich. Nummeriere eines um, wie der Hinweis vorschlägt. |
+| `juist health`: `no IPv4 on this host: …` | Zwei Netze auf diesem Gerät überschneiden sich. Nummeriere eines um, wie der Hinweis vorschlägt. |
 | `juist: 10.7.0.9 is taken by nas` | Wähl eine freie Adresse. |
 | `juist: 10.7.0.9 is outside the network's range …` | Wähl eine Adresse aus dem Bereich, den `juist network` anzeigt. |
-| `juist: the network predates renumbering` | Sobald alle Geräte diese Version haben: `juist log upgrade`. |
-| `juist: the network predates renaming a device` | Ebenso. |
 | `juist: another device is named "tablet" already` | Wähl einen anderen Namen, oder benenne zuerst das andere Gerät um. |
 | `juist: no line on stdin` | Leite die Break-glass-Zeile hinein, oder gib ihre Datei mit `--secrets FILE` an. |
 | `juist: no break-glass secret of "home" there` | Die Zeile gehört zu einem anderen Netz. |

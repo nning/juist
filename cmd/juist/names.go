@@ -214,9 +214,6 @@ func (a *app) submitNames(auth *log.Authority, target types.NodeRecord, next []s
 		a.ok("%s: unchanged", name)
 		return nil
 	}
-	if auth.State().Schema() < types.SchemaNames {
-		return needsUpgrade("names")
-	}
 	aum, err := auth.Builder().SetNodeNames(target.Identity, next)
 	if err != nil {
 		return err

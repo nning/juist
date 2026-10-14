@@ -85,13 +85,15 @@ func serveRules(dev string, s ServeSpec, uplinks []uplink) string {
 	// Nothing from the internet reaches into the overlay unasked; answers
 	// to what peers sent follow the state it takes coming in, which the
 	// NAT's, taken going out, is not for the device. Not quick: the host's
-	// own rules on the device still have their say.
-	fmt.Fprintf(&b, "pass in on %s all flags any keep state\n", dev)
+	// own rules on the device still have their say. Both states are bound to
+	// the device: a floating one would pass an uplink's packet spoofing an
+	// overlay 4-tuple before the blocks above see it.
+	fmt.Fprintf(&b, "pass in on %s all flags any keep state (if-bound)\n", dev)
 	fmt.Fprintf(&b, "block out quick on %s from ! <juist_local>\n", dev)
 	// What the host opens through the device takes its state going out: one
 	// taken from the answer knows no window scaling, and pf drops the
 	// segments past the window it assumes.
-	fmt.Fprintf(&b, "pass out on %s all keep state\n", dev)
+	fmt.Fprintf(&b, "pass out on %s all keep state (if-bound)\n", dev)
 	return b.String()
 }
 

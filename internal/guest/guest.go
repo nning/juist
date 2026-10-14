@@ -236,7 +236,7 @@ func Join(ctx context.Context, o Options) (*Result, error) {
 				return nil, err
 			}
 			progress(Event{Kind: Compare,
-				Words: enroll.Fingerprint(*msg.Compare, nonce, o.Keys.Identity.Public(), o.Keys.Public)})
+				Words: enroll.Fingerprint(*msg.Compare, nonce, req)})
 		case enroll.KindRecord:
 			received += len(msg.Record)
 			if len(records) >= enroll.MaxRecords || received > maxLogBytes {
@@ -296,15 +296,15 @@ func reachHost(ctx context.Context, secret enroll.Secret, o Options, progress fu
 		link, ok := secret.(enroll.Link)
 		switch {
 		case !ok:
-			return nil, errors.New("an invite code is found on the LAN, which this device does not use on HTTPS alone\n" +
-				"Use the link \"juist invite\" printed instead")
+			return nil, errors.New("an invite code is found on the LAN, which this device does not use on HTTPS alone; " +
+				"use the link \"juist invite\" printed instead")
 		case len(link.Named) == 0:
-			return nil, fmt.Errorf("%w\nAsk for a new link once a relay serves a name on 443", ErrNoNamedRelay)
+			return nil, fmt.Errorf("%w; ask for a new link once a relay serves a name on 443", ErrNoNamedRelay)
 		}
 		conn, err := dialFirst(ctx, named(link, o.Proxy))
 		if err != nil {
-			return nil, fmt.Errorf("cannot reach the inviting device through the relays %v: %w\n%s",
-				link.Named, err, "It may have stopped waiting")
+			return nil, fmt.Errorf("cannot reach the inviting device through the relays %v: %w; it may have stopped waiting",
+				link.Named, err)
 		}
 		return conn, nil
 	}
@@ -322,20 +322,20 @@ func reachHost(ctx context.Context, secret enroll.Secret, o Options, progress fu
 		}
 		hosts, err := find(ctx, s.Nameplate)
 		if err != nil {
-			return nil, fmt.Errorf("cannot search this network for the inviting device: %w\n"+
-				"Use the link \"juist invite\" printed instead of the code", err)
+			return nil, fmt.Errorf("cannot search this network for the inviting device: %w; "+
+				"use the link \"juist invite\" printed instead of the code", err)
 		}
 		switch len(hosts) {
 		case 0:
-			return nil, fmt.Errorf("no device on this network has an invite numbered %d\n"+
-				"Check that the inviting device is on the same network and still waiting, "+
+			return nil, fmt.Errorf("no device on this network has an invite numbered %d; "+
+				"check that the inviting device is on the same network and still waiting, "+
 				"or use the link it printed", s.Nameplate)
 		case 1:
 			addrs = hosts[0].Addrs
 		default:
 			// Trying one would spend a guess on an invite that may not be ours.
-			return nil, fmt.Errorf("%d devices on this network have an invite numbered %d\n"+
-				"Ask for a new invite, or use the link it printed", len(hosts), s.Nameplate)
+			return nil, fmt.Errorf("%d devices on this network have an invite numbered %d; "+
+				"ask for a new invite, or use the link it printed", len(hosts), s.Nameplate)
 		}
 	}
 	link, isLink := secret.(enroll.Link)
@@ -345,14 +345,14 @@ func reachHost(ctx context.Context, secret enroll.Secret, o Options, progress fu
 	if isLink {
 		conn, err := dialLink(ctx, link)
 		if err != nil {
-			return nil, fmt.Errorf("cannot reach the inviting device%s%s: %w\n%s", at(addrs), viaRelays(link), err,
+			return nil, fmt.Errorf("cannot reach the inviting device%s%s: %w; %s", at(addrs), viaRelays(link), err,
 				stillWaiting(addrs))
 		}
 		return conn, nil
 	}
 	conn, err := dialAny(ctx, addrs)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reach the inviting device%s: %w\n%s", at(addrs), err, stillWaiting(addrs))
+		return nil, fmt.Errorf("cannot reach the inviting device%s: %w; %s", at(addrs), err, stillWaiting(addrs))
 	}
 	return conn, nil
 }
@@ -368,9 +368,9 @@ func at(addrs []netip.AddrPort) string {
 
 func stillWaiting(addrs []netip.AddrPort) string {
 	if len(addrs) == 0 {
-		return "It may have stopped waiting"
+		return "it may have stopped waiting"
 	}
-	return fmt.Sprintf("It may have stopped waiting, or a firewall may block TCP port %d", addrs[0].Port())
+	return fmt.Sprintf("it may have stopped waiting, or a firewall may block TCP port %d", addrs[0].Port())
 }
 
 func viaRelays(link enroll.Link) string {
@@ -569,11 +569,11 @@ func dialOrMeet(ctx context.Context, link enroll.Link, meet func(context.Context
 		}
 	}
 	if len(link.Addrs) == 0 {
-		return nil, fmt.Errorf("cannot reach the inviting device through the public DHT: %w\n"+
-			"Is it still waiting?", meetErr)
+		return nil, fmt.Errorf("cannot reach the inviting device through the public DHT: %w; "+
+			"it may have stopped waiting", meetErr)
 	}
 	return nil, fmt.Errorf("cannot reach the inviting device, neither at %v%s (%v) nor through the "+
-		"public DHT (%v)\nIs it still waiting? If both devices are behind NAT, running \"juist join\" "+
+		"public DHT (%v); it may have stopped waiting, and where both devices are behind NAT, \"juist join\" "+
 		"on a network that can reach one of those addresses works around it", link.Addrs, viaRelays(link),
 		dialErr, meetErr)
 }
@@ -582,14 +582,14 @@ func explain(err error) error {
 	var refused *enroll.RefusedError
 	switch {
 	case errors.As(err, &refused) && refused.Reason == enroll.RefusedWrongCode:
-		return fmt.Errorf("the inviting device refused: %s\nIf the code was typed correctly, tell the "+
+		return fmt.Errorf("the inviting device refused: %s; if the code was typed correctly, tell the "+
 			"admin: something on this network may be impersonating the inviting device", refused.Reason)
 	case errors.As(err, &refused):
 		return fmt.Errorf("the inviting device refused: %s", refused.Reason)
 	case errors.Is(err, enroll.ErrImpostor):
 		return errors.New("the device that answered does not know the invite code, so it is not the " +
-			"one that invited you\nSomeone on this network may be impersonating it. Do not retry " +
-			"blindly: tell the admin, and ask for a new invite")
+			"one that invited you; someone on this network may be impersonating it: do not retry " +
+			"blindly, tell the admin and ask for a new invite")
 	default:
 		return fmt.Errorf("could not complete the invite: %w", err)
 	}
@@ -626,11 +626,11 @@ func adopt(records []types.AUM, o Options, link *enroll.Link, admission *enroll.
 	}
 	if !o.Network.IsZero() && state.GenesisHash() != o.Network {
 		return nil, fmt.Errorf("this device still holds the log of %q, and the invite is for another "+
-			"network\nhint: juist reset --force forgets %q; then join again", o.NetworkName, o.NetworkName)
+			"network; juist reset --force forgets %q, then join again", o.NetworkName, o.NetworkName)
 	}
 	if slices.Contains(o.Elsewhere, state.GenesisHash()) {
 		return nil, fmt.Errorf("this host is in %q already, through another juistd, so it did not join it "+
-			"again\nhint: the invite admitted it as %q all the same; an admin removes that: juist remove %s",
+			"again; the invite admitted it as %q all the same, which an admin removes: juist remove %s",
 			state.Network(), self.Name, self.Name)
 	}
 	if err := o.Adopt(records); err != nil {
@@ -640,14 +640,14 @@ func adopt(records []types.AUM, o Options, link *enroll.Link, admission *enroll.
 }
 
 func checkAdmission(sent *log.Authority, link *enroll.Link, a *enroll.Admission, self types.Identity) error {
-	const hint = "\nThe device that ran the invite may be compromised; ask the admin for a new invite"
+	const hint = "; the device that ran the invite may be compromised: ask the admin for a new invite"
 	if a == nil {
 		return errors.New("the invite link names the admin who admits this device, and the inviting " +
 			"device sent no admission by that admin" + hint)
 	}
 	state := sent.State()
 	key := state.SigningKey(*link.Admin)
-	if state.PQ() && key == nil || a.Admin != *link.Admin || a.Verify(*link.AdminSigning, key) != nil ||
+	if key == nil || a.Admin != *link.Admin || a.Verify(*link.AdminSigning, key) != nil ||
 		a.Guest != self || a.Network != state.GenesisHash() {
 		return errors.New("the admission the inviting device sent is not the admin's admission of this " +
 			"device into this network" + hint)

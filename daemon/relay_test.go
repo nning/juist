@@ -22,7 +22,7 @@ func (nw *network) setRoles(t *testing.T, f *reconcileFixture, id types.Identity
 	if err != nil {
 		t.Fatalf("building the grant: %v", err)
 	}
-	if err := rec.SignUnder(nw.admin, f.auth.State().Schema()); err != nil {
+	if err := rec.Sign(nw.admin); err != nil {
 		t.Fatalf("signing the grant: %v", err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -45,6 +45,7 @@ func (f *reconcileFixture) learnRelay(t *testing.T, dev *device, port uint16, in
 		GossipPort: port,
 		Seq:        2,
 		Relay:      info,
+		Schema:     types.CurrentSchema,
 	}
 	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
@@ -129,6 +130,7 @@ func TestHomeRelayNamingNothingIsDropped(t *testing.T) {
 		GossipPort: 41641,
 		Seq:        3,
 		HomeRelay:  4242,
+		Schema:     types.CurrentSchema,
 	}
 	if err := e.SignPQ(other.identity); err != nil {
 		t.Fatal(err)
@@ -469,6 +471,7 @@ func TestAnAnnouncementFoundInTheDHTIsActedOn(t *testing.T) {
 		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("198.51.100.9:41641")},
 		GossipPort: 41641,
 		Seq:        7,
+		Schema:     types.CurrentSchema,
 	}
 	if err := e.SignPQ(other.identity); err != nil {
 		t.Fatal(err)
@@ -680,6 +683,9 @@ func TestThisNodesOwnRelayIsInItsOwnMap(t *testing.T) {
 		t.Errorf("the installed relay is %q, this node announces %q",
 			relays[0].HostName, e.Relay.HostName)
 	}
+	if !relays[0].Own {
+		t.Error("this node's own relay is installed as another's, to be dialled at its public address first")
+	}
 
 	// And it goes away with the grant, rather than lingering as a region
 	// nothing serves.
@@ -775,5 +781,34 @@ func TestLookupsPreferTheUnheardAndBackOffTheDown(t *testing.T) {
 	}
 	if len(asked) < 5 || asked[len(asked)-1] < 2*time.Hour {
 		t.Fatalf("lookups after %v: a member down for hours is still looked up", asked)
+	}
+}
+
+// A hint alone, as forged, adds no relay, and takes no relay's name from the
+// member whose announcement claims it.
+func TestAHintAloneAddsNoRelayAndTakesNoName(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	member, forged := f.nw.devices[1], f.nw.devices[2]
+	named := testRelayInfo()
+	named.Name = "relay.example.org"
+	f.learnRelay(t, member, 41641, named)
+	e, err := endpointFor(forged, 7002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.learnHint(t, forged, e, func(h *gossip.Endpoint) {
+		h.Seq, h.Relay = 2, &gossip.RelayInfo{Port: 4443, Cert: bytes.Repeat([]byte{9}, gossip.RelayCertSize),
+			HostName: "forged.relay.juist.invalid", Name: named.Name}
+	})
+	f.nw.setRoles(t, f, member.record.Identity, types.RoleRelayCapable)
+	f.nw.setRoles(t, f, forged.record.Identity, types.RoleRelayCapable)
+
+	relays := f.mgr.relaySnapshot()
+	if len(relays) != 1 || relays[0].Region != relayRegion(f.auth.State().GenesisHash(), member.record.Identity) {
+		t.Fatalf("installed relays %+v, want the member's alone", relays)
+	}
+	invite := f.d.inviteRelays(f.auth.State())
+	if len(invite) != 1 || invite[0].Name != named.Name {
+		t.Fatalf("an invite would wait at %+v, want the member's relay under its name", invite)
 	}
 }

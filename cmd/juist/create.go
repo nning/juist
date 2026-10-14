@@ -218,7 +218,7 @@ func (a *app) checkInit(p *initPlan) error {
 		key.Holder = key.Name
 		p.admins = append(p.admins, key)
 	}
-	if err := types.ValidateAdmins(p.admins, types.CurrentSchema); err != nil {
+	if err := types.ValidateAdmins(p.admins); err != nil {
 		return fmt.Errorf("%w; give one person's keys the same votes", err)
 	}
 	total := types.AchievableVotes(p.admins)
@@ -366,7 +366,7 @@ func founderRecord(n node, p *initPlan) (types.NodeRecord, error) {
 	if self.Signing == nil {
 		return types.NodeRecord{}, errors.New("juistd runs an older juist than this command\nhint: restart it")
 	}
-	v4, err := firstFreeV4(types.V4Range(types.CurrentSchema, p.v4), nil)
+	v4, err := firstFreeV4(types.V4Range(p.v4), nil)
 	if err != nil {
 		return types.NodeRecord{}, err
 	}

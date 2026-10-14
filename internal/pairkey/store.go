@@ -96,6 +96,17 @@ func (s *Store) pair(env *Env, keep bool) *Pair {
 	return p
 }
 
+// PeerStore is the store the pair held with peer is bound to, zero for
+// none.
+func (s *Store) PeerStore(peer types.WGKey) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p := s.pairs[peer]; p != nil {
+		return p.PeerStore
+	}
+	return 0
+}
+
 // Key is the preshared key for env's peer and what it is.
 func (s *Store) Key(env *Env) (Key, Stage) {
 	s.mu.Lock()
@@ -162,6 +173,27 @@ func (s *Store) Take(env *Env, m *Msg) (bool, error) {
 	p := s.pair(env, true)
 	changed, err := p.take(env, m, s.seed)
 	return changed || p != held, err
+}
+
+// Due reports, once, whether an offer from env's peer that this node put
+// off within [Pace] may now be answered: the peer is to be reached for it.
+// Nothing of it is kept.
+func (s *Store) Due(env *Env) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pairs[env.Peer.WG]
+	return p != nil && p.boundTo(env) && p.due(env.Now)
+}
+
+// Describe says where the exchange with env's peer stands, naming no key.
+func (s *Store) Describe(env *Env) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pairs[env.Peer.WG]
+	if p == nil || !p.boundTo(env) {
+		return "no exchange"
+	}
+	return p.describe(env)
 }
 
 // Probe says env's peer's session is gone and its tunnel down, reporting
@@ -235,7 +267,7 @@ func (s *Store) Restore(b []byte) error {
 	defer s.mu.Unlock()
 	for k, p := range kept.pairs {
 		if held := s.pairs[k]; held != nil && held.Self == p.Self && held.PeerStore == p.PeerStore {
-			p.paced, p.redo, p.Flip = held.paced, held.redo, held.Flip
+			p.paced, p.redo, p.putOff, p.Flip = held.paced, held.redo, held.putOff, held.Flip
 		}
 	}
 	s.id, s.pairs, s.seeds, s.last = kept.id, kept.pairs, kept.seeds, kept.last

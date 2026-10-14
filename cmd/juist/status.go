@@ -25,9 +25,9 @@ import (
 
 func cmdStatus(a *app, args []string) error {
 	s := spec{name: "juist status", about: `
-Show this device's network, how many devices it reaches, and what needs
-attention; every network, where it is in several. Any local user may run it.
-juist devices lists the devices.`}
+Show this device's network and how many devices it reaches; every network,
+where it is in several. Any local user may run it. juist health says what
+needs attention, juist devices lists the devices.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
@@ -44,22 +44,48 @@ juist devices lists the devices.`}
 		return a.offlineStatus(n)
 	}
 	a.printStatus(st)
-	a.adminNotes(st, false)
+	a.healthHint(st, "", false)
 	return nil
 }
 
-// adminNotes says what waits for an admin key in this keystore: changes for
-// its vote, and a network to upgrade; several names the network in the hint.
-func (a *app) adminNotes(st *ipc.Status, several bool) {
-	if !st.CanOperate {
+// healthHint points at juist health where it has warnings to print, and at
+// juist approve where changes wait for this keystore's vote.
+func (a *app) healthHint(st *ipc.Status, inst string, several bool) {
+	warnings, votes := a.healthWarnings(st, inst, several)
+	if warnings+votes == 0 {
 		return
 	}
+	a.printf("\n")
+	if votes > 0 {
+		verb := "waits"
+		if votes > 1 {
+			verb = "wait"
+		}
+		a.hint("%s %s for your vote: juist approve", count(votes, "change"), verb)
+	}
+	if warnings > 0 {
+		cmd := "juist health"
+		if several {
+			cmd += " " + inst
+		}
+		a.hint("%s: %s", count(warnings, "warning"), cmd)
+	}
+}
+
+// adminNotes says what waits for an admin key in this keystore: changes for
+// its vote, which it counts, and a network to upgrade; several names the
+// network in the hint.
+func (a *app) adminNotes(st *ipc.Status, several bool) (votes int) {
+	if !st.CanOperate {
+		return 0
+	}
 	if st.Waiting > 0 {
-		a.waitingNote()
+		votes = a.waitingNote()
 	}
 	if st.InNetwork && !st.NotMember && st.SchemaAlarm == "" && st.Schema < types.CurrentSchema {
 		a.upgradeNote(several)
 	}
+	return votes
 }
 
 // offlineStatus reports what the log says when no daemon is there to ask.
@@ -96,24 +122,11 @@ func (a *app) printStatusIn(s *ipc.Status, inst string) {
 		v.head[0].text += " · " + a.dim(inst)
 	}
 	a.emit(v.head)
-	if len(v.notes) > 0 {
+	// What stops the network is said here too; the rest, juist health says.
+	alarms := slices.DeleteFunc(slices.Clone(v.notes), func(l line) bool { return l.kind != lineAlarm })
+	if len(alarms) > 0 {
 		a.printf("\n")
-		a.emit(v.notes)
-	}
-	if s.Instance == 0 && (s.HTTPS == nil || s.HTTPS.Name == "") && a.relayGranted() {
-		a.warn("juistd may bind any port below 1024, which no relay on 443 here needs")
-		a.hint("%s", asRoot(a.host.relayScript+" off"))
-	}
-	if ex := s.Exit; ex != nil && !ex.Node.IsZero() && ex.Refused == "" && ex.Failed == "" {
-		a.warnDNS(ex, dnsOverlay(s, nil))
-		a.warnStrictRP(ex)
-	}
-	if !s.CanOperate {
-		network := ""
-		if inst != "" {
-			network = inst + " "
-		}
-		a.hint("read-only; to manage this device: %s", asRoot("juist set "+network+"--operator="+currentUser()))
+		a.emit(alarms)
 	}
 }
 
@@ -347,13 +360,13 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	}
 	if s.Publish != nil {
 		for _, sh := range s.Publish.Shared {
-			v.head = append(v.head, line{kind: lineWarn, text: sharedWarning(sh)})
+			v.notes = append(v.notes, line{kind: lineWarn, text: sharedWarning(sh)})
 		}
 		if len(s.Publish.Shared) > 0 {
-			v.head = append(v.head, line{kind: lineHint, text: sharedHint})
+			v.notes = append(v.notes, line{kind: lineHint, text: sharedHint})
 		}
 		for _, name := range s.Publish.Withheld {
-			v.head = append(v.head, line{kind: lineWarn, text: withheldWarning(name)})
+			v.notes = append(v.notes, line{kind: lineWarn, text: withheldWarning(name)})
 		}
 	}
 	if t := ingressSummary(s.Ingress, paint); t != "" {
@@ -367,12 +380,12 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 		field("Names", "%s", text)
 		if !s.Names.Resolved {
 			for _, name := range s.Names.ForMembers {
-				v.head = append(v.head, line{kind: lineWarn, text: fmt.Sprintf(
+				v.notes = append(v.notes, line{kind: lineWarn, text: fmt.Sprintf(
 					"%s, for members alone, is not reached from here, which resolves the network's names publicly", name)})
 			}
 		}
 		if hint != "" {
-			v.head = append(v.head, line{kind: lineHint, text: hint})
+			v.notes = append(v.notes, line{kind: lineHint, text: hint})
 		}
 	}
 	switch {
@@ -419,6 +432,13 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 		}
 	}
 	field("Ports", "%s", cmp.Or(strings.Join(open, ", "), "none from outside"))
+	if s.Schema != 0 {
+		schema := strconv.Itoa(int(s.Schema))
+		if s.Schema < types.CurrentSchema {
+			schema += paint("33", fmt.Sprintf(" (%d)", types.CurrentSchema))
+		}
+		field("Schema", "%s", schema)
+	}
 	if s.LastReconcile > 0 {
 		field("Updated", "%s", since(s.LastReconcile))
 	}
@@ -458,13 +478,13 @@ func httpsNotes(s *ipc.Status) []line {
 	case h.Name == "" || !s.Relaying:
 	case h.NotAnnounced != "":
 		note(lineWarn, "members are not told of %s: %s", h.Name, h.NotAnnounced)
-		note(lineHint, "juist log upgrade")
 	case h.ListenError != "":
 		note(lineWarn, "the relay cannot take 443: %s", h.ListenError)
-		if strings.Contains(h.ListenError, "permission denied") || strings.Contains(h.ListenError, "not granted") {
-			note(lineHint, "sudo juist set --relay-name %s, which lets the packaged juistd bind 443", h.Name)
-		} else {
+		switch {
+		case !strings.Contains(h.ListenError, "permission denied") && !strings.Contains(h.ListenError, "not granted"):
 			note(lineHint, "another program holds 443 here")
+		case types.ValidateHostName(h.Name) == nil:
+			note(lineHint, "sudo juist set --relay-name %s, which lets the packaged juistd bind 443", h.Name)
 		}
 	case h.NoCert != "":
 		note(lineWarn, "no certificate for %s yet: %s", h.Name, h.NoCert)
@@ -524,8 +544,10 @@ func statusNotes(s *ipc.Status, several bool) []line {
 		} else {
 			note(lineWarn, "firewalld blocks %s, so log sync in the tunnel fails", s.Firewalled)
 		}
-		note(lineHint, "sudo firewall-cmd --permanent --zone=trusted --change-interface=%s && sudo firewall-cmd --reload",
-			s.Firewalled)
+		if pastableIfName(s.Firewalled) {
+			note(lineHint, "sudo firewall-cmd --permanent --zone=trusted --change-interface=%s && sudo firewall-cmd --reload",
+				s.Firewalled)
+		}
 	}
 	if s.DataPlaneError != "" {
 		note(lineWarn, "data plane refused the device set: %s", s.DataPlaneError)
@@ -562,9 +584,13 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	}
 	dev := cmp.Or(s.Device, instance.Name(s.Instance))
 	if len(s.SyncFailing) > 0 {
-		note(lineWarn, "log sync to %s fails in the tunnel: a firewall drops tcp/%d on %s",
-			strings.Join(s.SyncFailing, ", "), s.GossipPort, dev)
-		note(lineHint, "on both devices: sudo ufw allow in on %s, or add %s to firewalld's trusted zone", dev, dev)
+		// Which system the other end runs no announcement says: a phone has
+		// no firewall to open.
+		note(lineWarn, "log sync to %s fails in the tunnel: tcp/%d does not answer there",
+			strings.Join(s.SyncFailing, ", "), s.GossipPort)
+		if pastableIfName(dev) {
+			note(lineHint, "where it runs Linux: sudo ufw allow in on %s, or add %s to firewalld's trusted zone", dev, dev)
+		}
 	}
 	if len(s.SyncNewer) > 0 {
 		note(lineWarn, "log sync fails: %s a newer juist", runs(s.SyncNewer))
@@ -588,6 +614,8 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	}
 	if down := s.Blocked(); len(down) > 0 && httpsOnly {
 		note(lineWarn, "no tunnel traffic from %s through the relays on 443", strings.Join(down, ", "))
+	} else if len(down) > 0 && s.Relays > 0 {
+		note(lineWarn, "no tunnel traffic from %s, though it announces itself", strings.Join(down, ", "))
 	} else if len(down) > 0 {
 		note(lineWarn, "no tunnel traffic from %s: udp/%d blocked, or both behind NAT with no relay",
 			strings.Join(down, ", "), s.ListenPort)

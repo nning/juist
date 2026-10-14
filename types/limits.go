@@ -37,7 +37,7 @@ const (
 	MaxNameLen = 64
 
 	// MaxNameBytes caps a member's public names and published labels
-	// together, from [SchemaSigning] on, so that a checkpoint at MaxNodes
+	// together, so that a checkpoint at MaxNodes
 	// fits MaxRecordSize.
 	MaxNameBytes = 2048
 

@@ -14,7 +14,7 @@ Auf jedem Gerät erledigt der Daemon `juistd` die Arbeit, und der Befehl
 |---|---|
 | root | alles, auch den Operator festlegen |
 | der Operator | alles andere, etwa Geräte auflisten, einladen, Änderungen bestätigen oder einen Exit-Node nutzen |
-| jeder andere lokale Benutzer | nur `juist status` |
+| jeder andere lokale Benutzer | nur `juist status` und `juist health` |
 
 Der **Operator** ist der lokale Benutzer, der für dieses Gerät festgelegt
 ist, meist du, also die Person, die das Gerät benutzt. Gibt es einen
@@ -73,10 +73,10 @@ Die Ausgabe lautet `operator cleared`.
 
 ## Fehlersuche
 
-Ruft jemand `juist status` auf, der nicht Operator ist, endet die Ausgabe so:
+Ruft jemand `juist health` auf, der nicht Operator ist, endet die Ausgabe so:
 
 ```console
-$ juist status
+$ juist health
 …
 hint: read-only; to manage this device: sudo juist set --operator=alice
 ```

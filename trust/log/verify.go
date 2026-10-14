@@ -39,16 +39,13 @@ func (s SignatureStatus) Authorized() bool {
 }
 
 // SelfSigners returns the non-admin keys a record must additionally be signed
-// by, under a network at schema. A key rotation is signed by the node whose
-// keys change, which is what shows they came from the device. An identity
-// rotation is signed by the new key, proving some device holds it, and from
-// schema 1 by the old one too: otherwise admins alone could move a member's
-// slot — an admin device's, with its role — to a key of their choosing, and
-// the device it belonged to would have had no say. Schema 0 networks keep the
-// rule they were written under. An admin key signs for its own encryption key,
-// in a genesis as in [types.KindSetAdminRecipient], and for its signing key
-// ([types.KindSetAdminSigning]).
-func SelfSigners(a *types.AUM, schema types.SchemaVersion) []types.Identity {
+// by. A key rotation is signed by the node whose keys change, which is what
+// shows they came from the device. An identity rotation is signed by the new
+// key, proving some device holds it, and by the old one too: otherwise admins
+// alone could move a member's slot to a key of their choosing. An admin key
+// signs for its own encryption key, in a genesis as in
+// [types.KindSetAdminRecipient].
+func SelfSigners(a *types.AUM) []types.Identity {
 	switch a.Kind {
 	case types.KindGenesis:
 		var out []types.Identity
@@ -60,15 +57,10 @@ func SelfSigners(a *types.AUM, schema types.SchemaVersion) []types.Identity {
 		return out
 	case types.KindSetAdminRecipient:
 		return []types.Identity{*a.Subject}
-	case types.KindSetAdminSigning:
-		return []types.Identity{a.Signing.Members[0].Identity}
 	case types.KindRotateNodeKey:
 		return []types.Identity{*a.Subject}
 	case types.KindRotateIdentity:
-		if schema >= types.SchemaVouchers {
-			return []types.Identity{*a.Subject, *a.NewIdentity}
-		}
-		return []types.Identity{*a.NewIdentity}
+		return []types.Identity{*a.Subject, *a.NewIdentity}
 	default:
 		return nil
 	}
@@ -76,11 +68,11 @@ func SelfSigners(a *types.AUM, schema types.SchemaVersion) []types.Identity {
 
 // SignAsDevice adds every signature of a device's that a record needs: those
 // of the keys held, old and new, that it names as its self-signers.
-func SignAsDevice(a *types.AUM, schema types.SchemaVersion, held ...types.PrivateIdentity) error {
-	for _, want := range SelfSigners(a, schema) {
+func SignAsDevice(a *types.AUM, held ...types.PrivateIdentity) error {
+	for _, want := range SelfSigners(a) {
 		for _, k := range held {
 			if k.Public() == want {
-				if err := a.SignUnder(k, schema); err != nil {
+				if err := a.Sign(k); err != nil {
 					return err
 				}
 				break
@@ -92,13 +84,13 @@ func SignAsDevice(a *types.AUM, schema types.SchemaVersion, held ...types.Privat
 
 // SignatureStatus evaluates a record's signatures against this state.
 func (s *State) SignatureStatus(a *types.AUM) SignatureStatus {
-	return signatureStatus(a, s.admins, s.quorum, SelfSigners(a, s.schema), s.PQ(), s.SigningKey)
+	return signatureStatus(a, s.admins, s.quorum, SelfSigners(a), s.SigningKey)
 }
 
-// signatureStatus evaluates a record's signatures: by ML-DSA where pq, against
-// the key keyOf names or that the signature introduces; by Ed25519 where not.
+// signatureStatus evaluates a record's signatures, by ML-DSA, against the key
+// the record names for the signer or else keyOf does.
 func signatureStatus(a *types.AUM, admins map[types.Identity]types.AdminKey, quorum uint32,
-	selfSigners []types.Identity, pq bool, keyOf func(types.Identity) *types.SigningKey) SignatureStatus {
+	selfSigners []types.Identity, keyOf func(types.Identity) *types.SigningKey) SignatureStatus {
 	st := SignatureStatus{Quorum: quorum, SelfSigners: selfSigners}
 	signed := map[types.Identity]bool{}
 	voted := map[types.Identity]bool{}
@@ -116,7 +108,7 @@ func signatureStatus(a *types.AUM, admins map[types.Identity]types.AdminKey, quo
 		}
 		// Trust first, verify second: an untrusted key ID is a map lookup,
 		// while a signature check is not, and a record may carry dozens.
-		if !verifyEntry(a, sig, sigHash, pq, keyOf) {
+		if !verifyEntry(a, sig, sigHash, keyOf) {
 			st.Invalid = append(st.Invalid, sig.KeyID)
 			continue
 		}
@@ -191,8 +183,7 @@ func GenesisStatus(a *types.AUM) (SignatureStatus, error) {
 	if err := a.ValidateUnsigned(); err != nil {
 		return SignatureStatus{}, fmt.Errorf("log: %w", err)
 	}
-	return signatureStatus(a, genesisAdmins(a), a.State.Quorum, SelfSigners(a, a.State.Schema),
-		a.State.Schema >= types.SchemaMLDSA, stateKeys(a.State)), nil
+	return signatureStatus(a, genesisAdmins(a), a.State.Quorum, SelfSigners(a), stateKeys(a.State)), nil
 }
 
 // stateKeys looks signing keys up in a genesis's or checkpoint's own state.
@@ -232,10 +223,9 @@ func verifySelfSigned(a *types.AUM, kind types.Kind) error {
 	}
 	var self []types.Identity
 	if kind == types.KindGenesis {
-		self = SelfSigners(a, a.State.Schema)
+		self = SelfSigners(a)
 	}
-	return checkStatus(a, signatureStatus(a, genesisAdmins(a), a.State.Quorum, self,
-		a.State.Schema >= types.SchemaMLDSA, stateKeys(a.State)))
+	return checkStatus(a, signatureStatus(a, genesisAdmins(a), a.State.Quorum, self, stateKeys(a.State)))
 }
 
 // SignedBy reports whether a carries a valid signature by id, under this
@@ -248,20 +238,16 @@ func (s *State) SignedBy(a *types.AUM, id types.Identity) bool {
 // ValidSignature reports whether sig is a valid signature of a under this
 // state's rules.
 func (s *State) ValidSignature(a *types.AUM, sig *types.Signature) bool {
-	return verifyEntry(a, sig, a.SigHash(), s.PQ(), s.SigningKey)
+	return verifyEntry(a, sig, a.SigHash(), s.SigningKey)
 }
 
-// verifyEntry checks one signature of a record: past the cut-over by ML-DSA,
-// carrying the key where the record introduces it alone; below, by Ed25519.
-func verifyEntry(a *types.AUM, sig *types.Signature, sigHash types.Hash, pq bool,
+// verifyEntry checks one signature of a record by ML-DSA.
+func verifyEntry(a *types.AUM, sig *types.Signature, sigHash types.Hash,
 	keyOf func(types.Identity) *types.SigningKey) bool {
-	if !pq {
-		return sig.PQ == nil && sig.Key == nil && sig.KeyID.Verify(sigHash[:], sig.Sig)
-	}
-	if sig.PQ == nil || !sig.Sig.IsZero() || (sig.Key != nil) != a.Introduces(sig.KeyID) {
+	if sig.PQ == nil {
 		return false
 	}
-	key := sig.Key
+	key := a.NamedSigningKey(sig.KeyID)
 	if key == nil {
 		key = keyOf(sig.KeyID)
 	}

@@ -114,10 +114,9 @@ func RendezvousKey(seed [32]byte) [32]byte {
 	return [32]byte(m.Sum(nil))
 }
 
-// SealAnnouncement seals e for publication under epoch, padded where padded
-// says, as [Node] does.
-func SealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint, padded bool) ([]byte, error) {
-	return sealAnnouncement(s, epoch, e, padded)
+// SealAnnouncement seals e for publication under epoch, as [Node] does.
+func SealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint) ([]byte, error) {
+	return sealAnnouncement(s, epoch, e)
 }
 
 // OpenAnnouncement opens and verifies an announcement published under epoch.

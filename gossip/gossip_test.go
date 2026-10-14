@@ -23,7 +23,6 @@ type fakeLog struct {
 	head    types.Hash
 	epoch   uint64
 	have    []types.Hash
-	schema  atomic.Uint32 // a types.SchemaVersion, which a test moves while sessions read it
 
 	// missing overrides what this log offers a peer. Nil offers nothing.
 	missing func([]types.Hash, types.Hash) ([]types.AUM, error)
@@ -31,12 +30,21 @@ type fakeLog struct {
 	// member answers [Log.Member]. Nil lists nobody.
 	member func(types.Identity) (types.NodeRecord, bool, error)
 
-	mu       sync.Mutex
-	informed [][]types.AUM
+	// signing answers [Log.SigningKey] where set, as for an expired member;
+	// nil names the keys of those member lists.
+	signing atomic.Pointer[func(types.Identity) *types.SigningKey]
+
+	// listed answers [Log.ListedSigningKey] where set, as for a removed
+	// member; nil answers as SigningKey does.
+	listed atomic.Pointer[func(types.Identity) *types.SigningKey]
+
+	mu        sync.Mutex
+	informed  [][]types.AUM
+	informErr error // what Inform answers
 }
 
 func (l *fakeLog) View() (View, error) {
-	return View{Network: l.network, Head: l.head, Epoch: l.epoch, Anchor: types.Hash{0xa}, Have: l.have, Schema: types.SchemaVersion(l.schema.Load())}, nil
+	return View{Network: l.network, Head: l.head, Epoch: l.epoch, Anchor: types.Hash{0xa}, Have: l.have}, nil
 }
 
 func (l *fakeLog) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM, error) {
@@ -54,8 +62,8 @@ func (l *fakeLog) Member(id types.Identity) (types.NodeRecord, bool, error) {
 }
 
 func (l *fakeLog) SigningKey(id types.Identity) *types.SigningKey {
-	if types.SchemaVersion(l.schema.Load()) < types.SchemaMLDSA {
-		return nil
+	if f := l.signing.Load(); f != nil {
+		return (*f)(id)
 	}
 	if rec, ok, _ := l.Member(id); ok {
 		return rec.Signing
@@ -63,11 +71,31 @@ func (l *fakeLog) SigningKey(id types.Identity) *types.SigningKey {
 	return nil
 }
 
+func (l *fakeLog) ListedSigningKey(id types.Identity) *types.SigningKey {
+	if f := l.listed.Load(); f != nil {
+		return (*f)(id)
+	}
+	return l.SigningKey(id)
+}
+
+// onceListed has the log name these nodes' signing keys as once listed.
+func (l *fakeLog) onceListed(nodes ...*testNode) {
+	f := func(id types.Identity) *types.SigningKey {
+		for _, n := range nodes {
+			if n.id == id {
+				return n.record.Signing
+			}
+		}
+		return nil
+	}
+	l.listed.Store(&f)
+}
+
 func (l *fakeLog) Inform(records []types.AUM) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.informed = append(l.informed, records)
-	return nil
+	return l.informErr
 }
 
 // testNode is a gossip node wired to a loopback listener.
@@ -194,6 +222,7 @@ func (tn *testNode) announce() (Endpoint, bool) {
 		Addrs:      []netip.AddrPort{tn.addr()},
 		GossipPort: tn.port,
 		Seq:        1,
+		Schema:     types.CurrentSchema,
 	}
 	if err := e.Sign(tn.priv); err != nil {
 		panic(err)
@@ -513,6 +542,7 @@ func TestAnUnansweredAddressLeavesTimeForTheNext(t *testing.T) {
 		Addrs:      SortAddrs([]netip.AddrPort{netip.AddrPortFrom(blackhole, b.port), b.addr()}),
 		GossipPort: b.port,
 		Seq:        1,
+		Schema:     types.CurrentSchema,
 	}
 	if e.Addrs[0].Addr() != blackhole {
 		t.Fatalf("the unanswered address must come first: %v", e.Addrs)
@@ -542,6 +572,7 @@ func mintedSelfFrame(t *testing.T, network types.Hash, beaconEpoch uint64, seq u
 		Disco:      DiscoKey{1},
 		GossipPort: 1024,
 		Seq:        seq,
+		Schema:     types.CurrentSchema,
 	}
 	if err := e.Sign(priv); err != nil {
 		t.Fatal(err)
@@ -779,7 +810,7 @@ func TestPushToHandsOverRecordsNotApplied(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 	prev := types.Hash{9}
-	v := types.SchemaVersion(3)
+	v := types.CurrentSchema + 1
 	pending := types.AUM{Kind: types.KindSchemaUpgrade, Prev: &prev, Schema: &v}
 	signer, err := types.GenerateIdentity()
 	if err != nil {

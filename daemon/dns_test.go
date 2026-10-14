@@ -241,7 +241,7 @@ func TestDNSFollowsTheChoiceWhateverTheNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -316,10 +316,10 @@ func TestAClosedDaemonLeavesDNSAlone(t *testing.T) {
 	host := &fakeHostDNS{}
 	f := exitFixture(t, 0, -1, func(o *Options) { o.HostDNS, o.ServeDNS = host, server.start })
 	f.d.closeDNS()
-	if port := f.d.serveDNS(true, []netip.Addr{netip.MustParseAddr("100.64.0.1")}, nil); port != 0 {
+	if port := f.d.serveDNS(true, []netip.Addr{netip.MustParseAddr("198.18.0.1")}, nil); port != 0 {
 		t.Error("a closed daemon answers DNS again")
 	}
-	if through, _ := f.d.routeDNS([]netip.AddrPort{netip.MustParseAddrPort("100.64.0.2:41646")}, false); through {
+	if through, _ := f.d.routeDNS([]netip.AddrPort{netip.MustParseAddrPort("198.18.0.2:41646")}, false); through {
 		t.Error("a closed daemon routes the host's DNS again")
 	}
 	if _, calls := host.now(); len(calls) != 0 {

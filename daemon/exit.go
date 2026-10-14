@@ -237,7 +237,7 @@ func (d *Daemon) planExit(s snapshot, fresh bool, held map[types.Identity]gossip
 		p.status.Refused = "it cannot be reached"
 	case !held[choice.Node].Exit:
 		p.status.Refused = "its operator has not agreed to serve"
-	case notPQ(s.state, named[i].stage):
+	case notPQ(named[i].stage):
 		p.status.Refused = "it " + errNotPQ
 	case d.userEgress != "":
 		p.status.Refused = d.userEgress

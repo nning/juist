@@ -121,6 +121,7 @@ func newMember(t *testing.T, sw *swarm, kr *keyring.Keyring, name byte, wanted f
 		Addrs:      []netip.AddrPort{netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 51, 100, name}), 41641)},
 		GossipPort: 41641,
 		Seq:        1,
+		Schema:     types.CurrentSchema,
 	}
 	if err := m.ann.Sign(priv); err != nil {
 		t.Fatal(err)
@@ -374,7 +375,7 @@ func TestAnnouncementFitsTheItemLimit(t *testing.T) {
 	if err := e.Sign(priv); err != nil {
 		t.Fatal(err)
 	}
-	value, err := sealAnnouncement(s, 1, e, true)
+	value, err := sealAnnouncement(s, 1, e)
 	if err != nil {
 		t.Fatalf("the largest announcement the schema admits is not publishable: %v", err)
 	}
@@ -390,18 +391,16 @@ func TestAnnouncementFitsTheItemLimit(t *testing.T) {
 	if err := e.Sign(priv); err != nil {
 		t.Fatal(err)
 	}
-	if value, err = sealAnnouncement(s, 1, e, true); err != nil {
+	if value, err = sealAnnouncement(s, 1, e); err != nil {
 		t.Fatalf("the largest announcement with sealed addresses is not publishable: %v", err)
 	}
 	t.Logf("largest announcement with sealed addresses: %d bytes", len(value))
 }
 
-// TestAPaddedItemShowsNeitherEpochNorSize: every item a storage node is
+// TestAnItemShowsNeitherEpochNorSize: every item a storage node is
 // given is as long as any other and does not begin with the epoch, which
 // would show it the network's count of changes and link its members' items.
-// A member still finds one that publishes unpadded, as a build before
-// [types.SchemaPadded] does.
-func TestAPaddedItemShowsNeitherEpochNorSize(t *testing.T) {
+func TestAnItemShowsNeitherEpochNorSize(t *testing.T) {
 	sw := newSwarm(t, 3)
 	const epoch = 9
 	kr := testKeyring(t, epoch)
@@ -414,9 +413,6 @@ func TestAPaddedItemShowsNeitherEpochNorSize(t *testing.T) {
 	large.ann.Addrs = gossip.SortAddrs(large.ann.Addrs)
 	if err := large.ann.Sign(large.priv); err != nil {
 		t.Fatal(err)
-	}
-	for _, m := range []*member{small, large} {
-		m.node.opts.Padded = func() bool { return true }
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -443,15 +439,8 @@ func TestAPaddedItemShowsNeitherEpochNorSize(t *testing.T) {
 	if len(sizes) != 1 {
 		t.Errorf("put items come in %d sizes, want one", len(sizes))
 	}
-
-	old := newMember(t, sw, kr, 3, nil)
-	if err := old.node.Publish(ctx); err != nil {
-		t.Fatalf("publishing unpadded: %v", err)
-	}
-	for _, id := range []types.Identity{large.id, old.id} {
-		if _, err := small.node.Lookup(ctx, id); err != nil {
-			t.Errorf("looking up %v: %v", id.ShortString(), err)
-		}
+	if _, err := small.node.Lookup(ctx, large.id); err != nil {
+		t.Errorf("looking up %v: %v", large.id.ShortString(), err)
 	}
 }
 
@@ -518,17 +507,16 @@ func FuzzOpenItem(f *testing.F) {
 		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("198.51.100.1:41641")},
 		GossipPort: 41641,
 		Seq:        1,
+		Schema:     types.CurrentSchema,
 	}
 	if err := e.Sign(priv); err != nil {
 		f.Fatal(err)
 	}
-	for _, padded := range []bool{false, true} {
-		good, err := sealAnnouncement(s, 3, e, padded)
-		if err != nil {
-			f.Fatal(err)
-		}
-		f.Add(good)
+	good, err := sealAnnouncement(s, 3, e)
+	if err != nil {
+		f.Fatal(err)
 	}
+	f.Add(good)
 	f.Add([]byte{})
 	f.Add(make([]byte, 64))
 

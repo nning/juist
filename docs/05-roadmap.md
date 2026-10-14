@@ -167,7 +167,11 @@ under an identity since rotated — so it speaks last: it takes the grantor's
 records first and sends its own, its announcements and its leases only once
 its log lists the grantor. A node its peer's log does not list is refused — a
 removed one at once, where an ordinary session is answered for four more
-epochs — and one that is not yet listed tries another peer. A refusal is
+epochs — and one that is not yet listed tries another peer; the refusal goes
+only to a node the peer's chain has named as a member since its anchor, whose
+proof verifies under the ML-DSA key it was named with, so a restart forgets no
+one, but a node removed before a compacted log's anchor is hung up on; anyone
+else is hung up on, learning nothing. A refusal is
 signed too, and counts only from a member the asking node's log lists that is
 past its epoch: from anyone else it is noise, and from a member behind it only
 means that member has not seen the node admitted. An unproved ask counts
@@ -247,7 +251,7 @@ Instances share no state, and a TUN device routes its own network's prefixes
 only, so no packet crosses from one network into the other through juist. They
 do share the `juist` user, so one compromised instance holds every network's
 device on the host: residual weakness 9 in
-[02-threat-model.md](02-threat-model.md), and a user per instance is for M22.
+[02-threat-model.md](02-threat-model.md), and a user per instance is for M23.
 
 - **Exit criteria:** (1) one host in two networks, in the netns matrix, pings
   members of both over IPv4 and IPv6, and no route of one prefix points into
@@ -430,7 +434,7 @@ privileged-helper forwarding/NAT, client-side default-route capture with LAN byp
 and DNS handling. Design in
 [04-architecture.md](04-architecture.md#exit-nodes-and-subnet-routes-m6). It
 covers Linux; FreeBSD's side (pf) comes with M7, Android's use of an exit
-node with M10, and the rest of Android's with M27. Split
+node with M10, and the rest of Android's with M28. Split
 in three, each shipped on its own: exit nodes first, as the feature asked for,
 then subnet routers, then the exit node's DNS.
 
@@ -774,7 +778,7 @@ shipped on its own, against FreeBSD 14 in qemu:
     on FreeBSD builds and adds it. `make repro-freebsd` builds the binaries
     for both systems and the package here and on a FreeBSD host, and
     compares them. A port in the ports tree needs a release to fetch, and
-    comes with M26's. `make interop` is the lab, `interop/`: a Debian 12
+    comes with M27's. `make interop` is the lab, `interop/`: a Debian 12
     and a FreeBSD 14.5 VM in qemu without root, their packages installed,
     one network across them, each the other's exit node, subnet router and
     DNS, and both packages removed cleanly; CI's `interop` workflow runs it
@@ -789,7 +793,7 @@ shipped on its own, against FreeBSD 14 in qemu:
   - **Open:** the lab's first run in CI, which waits for CI's budget.
 
 Reproducible builds, for Linux and FreeBSD alike. The rest of the release work
-— distro repositories — is M26 and the full Android app M27, after v1.0; a
+— distro repositories — is M27 and the full Android app M28, after v1.0; a
 minimal Android app is M10. Releases carry packages and a signed SHA256SUMS
 already (`make release`).
 
@@ -1268,8 +1272,8 @@ internet, and is yet to across the VPN turned off and on and the phone
 changing networks.
 
 An Android app that joins a network as a member from anywhere, reaches the
-others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M24 covers the app's key
-custody and its in-process API; the full app is M27, after v1.
+others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M25 covers the app's key
+custody and its in-process API; the full app is M28, after v1.
 
 - **Joining.** The invite's link scanned as a QR code, which `juist invite`
   renders in the terminal beside the link; or the code typed or pasted, its
@@ -1327,7 +1331,7 @@ router, exit and holdings are left out there by build tag.
 - **Lifecycle.** A foreground service keeps the mesh up in Doze, and a
   multicast lock lets mDNS find members on the Wi-Fi.
 
-The app looks finished from M10 on, not from M27: Kotlin and Compose, with a
+The app looks finished from M10 on, not from M28: Kotlin and Compose, with a
 theme of its own (colour, type, shape, spacing and motion as tokens), light
 and dark, and every state `ipc.Status` can report designed rather than left
 to an error. A screenshot test renders every screen in both themes, at 200 %
@@ -1401,7 +1405,7 @@ Decided:
 ## M11 — More than HTTPS through the ingress
 
 M9's ingress passes TCP to 443 alone, by SNI. M11 widens what it carries,
-before the audit so that M24 covers it, in two parts shipped on their own:
+before the audit so that M25 covers it, in two parts shipped on their own:
 a TCP service on a port of its own (M11a), then HTTP/3 over 443/udp (M11b).
 Both are done.
 
@@ -1688,7 +1692,7 @@ it sends nothing but TLS over TCP to port 443 of member relays, and DNS
 queries for their names. Every packet then goes through a relay, at the
 relay's throughput and latency. It does not hide juist from a censor that
 probes servers or fingerprints ClientHellos (below). It is part of v1 and
-comes before the audit, so that M24 covers it.
+comes before the audit, so that M25 covers it.
 
 ```
 member ──TLS :443, SNI relay.example.org──▶ relay (DERP) ◀──UDP or :443── peers
@@ -1747,7 +1751,7 @@ member ──TLS :443, SNI relay.example.org──▶ relay (DERP) ◀──UDP 
   - **Saying so.** `juist status` and the status page say `https only` and
     the relays on 443, and `warning: no relay on 443/tcp` where there is
     none; a relay's name, and why it is not served, has a line of its own.
-    The Android app has no switch yet (M27); it falls back to 443 as every
+    The Android app has no switch yet (M28); it falls back to 443 as every
     member does.
 
 Not in this plan:
@@ -1875,7 +1879,7 @@ Every pair of members mixes a preshared key into WireGuard's handshake that a
 quantum computer cannot recover, so recorded tunnel traffic stays
 confidential (harvest now, decrypt later). Authentication stays X25519 and
 Ed25519; PQ authentication, which cannot be harvested now, is M17's. It
-is part of v1 and comes before the audit, so that M24 covers it.
+is part of v1 and comes before the audit, so that M25 covers it.
 
 The engine carries a preshared key with no patch
 ([07-embedding-notes.md](07-embedding-notes.md)); what makes this a
@@ -2096,7 +2100,7 @@ page: on every member that should reach them, nowhere else.
 - **Members reach it at its device**, by the name, through the tunnel, as
   juistd answers names published on 443 already. A member whose host does
   not route the domain to juistd (no systemd-resolved, FreeBSD, the Android
-  app until M21) reaches it not at all: the ingress refuses it too, and
+  app until M22) reaches it not at all: the ingress refuses it too, and
   `juist status`, where it runs, says so for each name for members.
 - **Out of scope:** per-name access for a name passed by TCP, which carries
   no name to check; hiding that the name exists, which its certificate in
@@ -2127,7 +2131,7 @@ so a quorum of admin keys would admit whom it likes. Recording traffic
 today does not help it, but the switch must reach every member before such
 a computer exists, and the consensus target for the migration is 2029
 ([Valsorda, "Post-Quantum Cryptographic Right Answers"](https://words.filippo.io/right-answers/)).
-That is why it comes first of what is left, and before the audit, so that M24
+That is why it comes first of what is left, and before the audit, so that M25
 covers it. Closing the same gap, enrollment by code and juist's own TLS
 connections become post-quantum too.
 
@@ -2161,7 +2165,8 @@ introduces the new keys, then stops counting.
     quorum's word as its identity always did, in a genesis or an added
     admin key; a member
     admitted brings its key in its join request, which proves it holds it;
-    an identity rotated to brings its own in its own signature. A member's
+    an identity rotated to brings its own in the rotation, which the
+    quorum, the old key and the new one sign (schema 19). A member's
     key changes with its identity alone, which it signs, so no quorum moves
     a member's slot to a key of its own.
   - **One key, one identity.** No ML-DSA key is named by two identities,
@@ -2199,8 +2204,8 @@ introduces the new keys, then stops counting.
     refuses to write one while another waits for votes. The cut-over's own
     epoch bump keeps that from moving a device's chain back an epoch. A
     device that adopts the cut-over only after such a computer exists is
-    exposed to a forged branch from a member that holds one, until M18's
-    checkpoints anchor it past the cut-over.
+    exposed to a forged branch from a member that holds one, until M18
+    anchors it past the cut-over.
   - **Messages carry both.** Announcements, address keys, leases, waiting
     changes, pair-key and catch-up messages and admissions keep their
     Ed25519 signature and add an ML-DSA one once their signer's network
@@ -2278,14 +2283,95 @@ introduces the new keys, then stops counting.
   above; (6) a branch below the cut-over is dropped by a device past it;
   (7) the Android app for the new schema is released.
 
-## M18 — Log checkpoints
+## M18 — Schema 18 alone
+
+**Done** on 2026-10-14, as below, reviewed (M18 reviews 1 to 4: an
+adversarial review of M17 and M18 by six reviewers, signatures and the log,
+gossip and discovery, enrollment and key exchange, TLS and the data plane,
+the CLI, and the cryptographic design, its fixes attacked again three times),
+validated by `make ci-vm` and `make test-freebsd` (12-validating.md). The
+review's fixes raise the schema to 19 and want a new Android app. Core
+10 845 lines, audit scope 32 340, measured after it (2026-10-14).
+
+M17 left every rule of schemas 0 to 17 in place, and the way up from each
+to 18: a cut-over record, a ratchet against branches below it, fork rules
+around it, records verified by Ed25519 below it, and what gossip holds back
+from builds that read less. Each is code to audit and a source of residual
+risk (a removed admin key racing its removal with a cut-over, two cut-overs
+from one head). The one network there is moves to 18 with M17's build; then
+juist reads schema 18 and above alone.
+
+- **Decided:**
+  - **The move first.** The network is upgraded to 17, its admin keys
+    register their signing keys, it cuts over to 18 and an admin writes a
+    checkpoint (`juist log checkpoint`). A device whose log starts below 18
+    then moves its anchor to that checkpoint and drops what lies below,
+    once it has seen every live member hold the checkpoint, so that none
+    still behind is left without a peer to catch up from; a peer asking from
+    an anchor this device dropped is answered from its own. This lands
+    before the network moves, in M17's build, and goes with the rest below.
+  - **Nothing below 18.** A genesis, checkpoint or record below 18 is
+    refused, and so is a log whose anchor is below it: such a device says to
+    join again. The schemas' rules below 18 go, with the kinds only they
+    wrote: `KindSetSigningKeys` and `KindSetAdminSigning`, whose numbers stay
+    reserved; the steps up to 17 and 18 and their CLI (`juist admins
+    receive` keeps setting the encryption key); the ratchet against branches
+    below the cut-over, the copies-of-the-cut-over and cut-over fork rules
+    and the dropped-records set; record verification by Ed25519; and what
+    gossip holds back from older builds (relay names, epochs, schemas,
+    signing claims, the second catch-up try for a sleeper from before 17).
+    A network without a prefix of its own holds no address in 100.64/10,
+    which members admitted before schema 4 kept. `KindSchemaUpgrade` stays,
+    for 19 on, and so does telling a build that reads an older schema
+    outdated.
+  - **What the review of M17 and M18 found closes at schema 19.** An
+    identity rotation names the new identity's signing key in what the
+    quorum, the old key and the new one sign, and is refused below 19.
+    Copies of one record, siblings with one `SigHash` and other signature
+    sets, are that record: the lowest hash stands for them, and what hangs
+    from any copy, the anchor's included, hangs from it; fork choice ties on
+    the `SigHash`, and a key is a branch's signer only where the union of the
+    copies' signatures needed it; a store keeps the two lowest copies, those
+    bringing a key's signature no other carries, and those something hangs
+    from. A hint says where to dial alone, never a key, relay pin, epoch or
+    pair store. The enrollment words cover every key of the new device, its
+    ML-DSA key included. The CLI makes every string juistd gives it
+    printable text on no line of its own, and names juistd's device or relay
+    name in a root command only where it is an interface or host name.
+  - **Messages keep both signatures.** Announcements need Ed25519 as long as
+    discovery carries them as hints; the others keep it too, since dropping
+    it changes what builds at 18 send each other.
+  - **Interop's previous release** is M17's, at 18: its network and this
+    build's devices run together, and this build takes the device over.
+  - **A chain below the epoch floor alarms.** Where fork choice over
+    verified records moves the chain below the floor, a concurrent branch
+    or a copy's late signature winning, the node holds the records and
+    raises a rollback alarm naming the lost branch until the chain is back
+    at the floor.
+
+- **Open, for M19 to decide:** whether a switch fork choice demands is
+  followed below the floor. The floor cannot tell it from a quorum-signed
+  sibling withheld and released later, so nodes shown the same records in
+  another order stay apart until an admin acts. Finality by a node's leases
+  does not close it, since two nodes hold different leases and split
+  again; one every node shares, such as the anchor a checkpoint sets, would.
+
+- **Exit criteria:** (1) a genesis, checkpoint, record or anchor below 18 is
+  refused, and no rule of a schema below 18 is left (no schema constant
+  below 18 outside `types/schema.go`'s history); (2) a device whose log
+  starts below 18 moves its anchor to a checkpoint past the cut-over once
+  every member holds it, which a daemon test shows, and with the network
+  past that the following build starts from there; (3) `make interop` runs
+  M17's release beside this build; (4) the core is smaller by what goes.
+
+## M19 — Log checkpoints
 
 Only `juist log checkpoint` writes a checkpoint and nothing calls
 `Authority.Compact`, so every log grows for good, and past
 `MaxHashesPerFrame` records two nodes stop converging
 ([08-trust-layer-notes.md](08-trust-layer-notes.md), "The size constraint
 that outlives the freeze"). Right after M17, which decided the record
-sizes a checkpoint has to fit, and before the audit, so that M24 covers it.
+sizes a checkpoint has to fit, and before the audit, so that M25 covers it.
 Open, to decide in this order:
 
 - **Proposing.** What prompts a checkpoint — a record count, a log size, an
@@ -2296,23 +2382,23 @@ Open, to decide in this order:
   A store that is not empty cannot yet move its anchor to a checkpoint it
   receives (`Bootstrap` takes an empty one), so a device behind a peer that
   compacted does not catch up. Every `Inform` also verifies the whole chain
-  again, about a second at 4096 records.
+  again, about a second at 4096 records. A keystore's pin (`cmd/juist/pin.go`) names the head it
+  last verified, which compaction drops: the CLI then refuses juistd's log
+  until the pin is deleted, as on every machine after the move to 18. A pin
+  has to carry what lets a checkpoint stand in for its head, such as the
+  admin keys it was verified under.
 - **Joining.** Whether a device joining is handed the anchor instead of the
   whole chain.
-- **Joining past the cut-over.** A device that joins, or catches up,
-  verifies the history below M17's cut-over by Ed25519; anchored at a
-  checkpoint past it, it would not need to.
 
 - **Exit criteria:** (1) a network that has authored more than
   `MaxHashesPerFrame` records still converges on a new change, with no admin
   having asked for a checkpoint; (2) a device behind a peer that compacted
-  catches up; (3) a device joining a network past the cut-over verifies no
-  Ed25519 signature.
+  catches up.
 
-## M19 — Faster CI
+## M20 — Faster CI
 
 `make ci-vm` takes 25 to 37 minutes, one step after the other, so a failure
-late in the lab costs a whole run, and every review round of M23 and M24 waits on
+late in the lab costs a whole run, and every review round of M24 and M25 waits on
 it. It is to say where its time goes, stop at the first failure and do no
 work twice, while the run that closes a milestone still passes or fails
 wherever today's would.
@@ -2380,14 +2466,14 @@ Open decisions:
   [12-validating.md](12-validating.md)'s table of gates carries the new
   times.
 
-## M20 — Battery life on Android
+## M21 — Battery life on Android
 
 A day with the app connected, the phone in neither battery nor data saver,
 put juist at 65 % of the phone's battery use by the afternoon (2026-10-12):
 too much to leave it on, which is what a VPN is for. The core runs on a
 phone at a laptop's pace, and some of what it does costs more there. Before
-the names on Android (M21), which are of little use on an app that cannot
-stay on, and before the audit, so that M24 covers what changes.
+the names on Android (M22), which are of little use on an app that cannot
+stay on, and before the audit, so that M25 covers what changes.
 
 Suspects, from the code, not yet measured:
 
@@ -2436,14 +2522,14 @@ The plan, in order:
   a member within the stretched interval, and a phone woken by a packet
   answers it; (4) the app is released.
 
-## M21 — Names on Android
+## M22 — Names on Android
 
 The Android app resolves none of the network's names. With a DNS server set,
 `VpnService` sends every lookup of the phone to it, so the core sets one only
 for an exit node, which then answers them all (`mobile.errNoNames`). A name
 for members alone (M16) is out of the phone's reach, and a published name
-resolves to the ingress, not the tunnel. Taken from the full app (M27), and
-before the audit, so that M24 covers a resolver that sees every lookup the
+resolves to the ingress, not the tunnel. Taken from the full app (M28), and
+before the audit, so that M25 covers a resolver that sees every lookup the
 phone makes.
 
 - **Lead options:**
@@ -2488,10 +2574,10 @@ phone makes.
   name cannot be reached where Private DNS passes the resolver by; (6) the
   app is released.
 
-## M22 — Boundaries on a host
+## M23 — Boundaries on a host
 
 What one network's daemon, the LAN and a local user can reach on a host
-running juist, closed before the audit, so that M24 covers it.
+running juist, closed before the audit, so that M25 covers it.
 
 - **A user per juistd instance,** so that one network's compromised daemon
   on a host no longer holds the others' device keys (residual weakness 9 in
@@ -2516,10 +2602,10 @@ running juist, closed before the audit, so that M24 covers it.
   (5) residual weaknesses 8 and 9 leave the threat model or say what
   remains of them.
 
-## M23 — The internal security review
+## M24 — The internal security review
 
 The review [15-security-review.md](15-security-review.md) plans, over the
-audit scope as M17 to M22 leave it, so that the auditor's hours go to what a
+audit scope as M17 to M23 leave it, so that the auditor's hours go to what a
 reader cannot find. It starts from the fuzzing:
 
 - **Fuzzing.** `waiting.Decode`, `types.DecodeLease`, the helper's protocol
@@ -2533,12 +2619,12 @@ reader cannot find. It starts from the fuzzing:
   and medium finding fixed with a test that fails without the fix, or
   accepted as a numbered residual weakness.
 
-## M24 — External audit → v1
+## M25 — External audit → v1
 
 External security audit of the audit scope, in the tiers of
-[06-verification.md](06-verification.md) §5, after M23's internal review:
+[06-verification.md](06-verification.md) §5, after M24's internal review:
 the trust layer and enrollment at its core,
-plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M18, M20, M21 and M22 add to it — route consumption and its forwarding helper, the
+plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22 and M23 add to it — route consumption and its forwarding helper, the
 override record and the resolver, the published names, those for members alone, and the ingress, its QUIC Initial parser included, the
 disable record, the preshared-key exchange, the ML-DSA cut-over and
 enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, a user per instance and FreeBSD's pf — fix findings, mature fuzz corpus (consider
@@ -2547,12 +2633,12 @@ residual-weakness acceptances for operators, which the handbook's
 trade-offs carry ([14-website.md](14-website.md)).
 
 v1 is Linux and FreeBSD with M14's ACLs, and M10's minimal Android app;
-packaging and the full app follow in M26 and M27.
+packaging and the full app follow in M27 and M28.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) the acceptances documented for operators; v1.0 tag.
 
-## M25 — Multicast *(post-v1)*
+## M26 — Multicast *(post-v1)*
 
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LAN games.
 The overlay counts as one link for them. Multicast routing, streaming and
@@ -2617,7 +2703,7 @@ of an overlay address to its member that the source check rests on.
   listener joined on the default interface receives a routed group's packets
   from a member.
 
-## M26 — Packaging *(post-v1)*
+## M27 — Packaging *(post-v1)*
 
 Distro repositories (apt, dnf, pkg) for the packages every release already
 carries, and the readiness check that keeps an admin from stranding members
@@ -2626,21 +2712,21 @@ on an upgrade.
 - **Exit criterion:** Linux/FreeBSD interop matrix green in CI via qemu;
   release artifacts reproducible byte-for-byte from two independent builders.
 
-## M27 — The full Android app *(post-v1)*
+## M28 — The full Android app *(post-v1)*
 
 The full Android app, on M10's: M6b's subnet routes through `VpnService`
-routes, released as M26 releases the rest.
+routes, released as M27 releases the rest.
 
 - **Exit criterion:** 3-platform interop matrix green in CI, Android by an
   emulator smoke test; the app's release artifact reproducible byte-for-byte
   from two independent builders.
 
-## M28 — A store, and a messenger on it *(post-v1)*
+## M29 — A store, and a messenger on it *(post-v1)*
 
 Members leave each other data while the other is offline, with no server: a
 key-value store replicated among the members' own devices, and a messenger on
 it with groups, pictures and files, `juistmsg` on Linux and FreeBSD and a chat
-in the app. It needs M10's app, not M27's. A device takes part if its owner
+in the app. It needs M10's app, not M28's. A device takes part if its owner
 turns it on; nothing about it is the quorum's.
 
 Not a DHT: every member holds the whole member list, so where a namespace
@@ -2742,7 +2828,7 @@ in the DHT, at every change of reach.
 Not scheduled. Done (M9): a quiet tunnel to a peer a relay can wake is
 probed every 5 minutes rather than every 30 s, and mDNS slows from 2 s to a
 minute while nothing changes; validated by unit tests alone. Events instead
-of polls and a keepalive that lets magicsock rest are M20's. Open, in this
+of polls and a keepalive that lets magicsock rest are M21's. Open, in this
 order:
 
 1. **Measure.** Datagrams per minute on the underlay (magicsock's port, 5353,
@@ -2832,7 +2918,7 @@ gateway is for keeping the servers out of the clients' log.
 
 ## Later — Networks of phones alone
 
-Not scheduled; after M27, whose names it uses. A network whose every member is
+Not scheduled; after M28, whose names it uses. A network whose every member is
 an Android phone, created, invited to, governed and kept fresh from the app,
 whose members reach each other without a VPS: a family's phones, and a
 peer-to-peer chat between them. A relay member stays the answer that always
@@ -2850,7 +2936,7 @@ only way to need none.
    IPv6, and each carrier's NAT mapping and filtering. Step 4 is judged by that
    table, so it is taken first.
 2. **Governing from the app.** Genesis on the phone, its admin key sealed by
-   Keystore as `node.keys` is (M10), which M24's audit did not cover for
+   Keystore as `node.keys` is (M10), which M25's audit did not cover for
    admin keys, so it wants a review of its own. The app invites (the QR code
    on its screen, the code on the Wi-Fi, a link through the DHT's
    rendezvous), shows the words, votes, approves carried changes (M5b),
@@ -2912,7 +2998,7 @@ only way to need none.
    from another member through `VpnService`, tested. Without an access policy
    (M14) every member reaches every port a phone's apps open.
 
-The chat is M28's, whose store holds a message for a phone that is off on
+The chat is M29's, whose store holds a message for a phone that is off on
 the members that are on.
 
 - **Exit criteria:** (1) in `make interop`, three emulators and no other

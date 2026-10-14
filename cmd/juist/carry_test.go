@@ -94,10 +94,11 @@ func TestAChangeWaitsOnTheOtherAdminDevice(t *testing.T) {
 	mustContain(t, alice.mustRun("network", "rename", "office"), "needs 1 more vote, from bob",
 		"on an admin device or with the file", "juist approve\n")
 	eventually(t, "the rename waits on bob's device", func() bool {
-		out, _ := bob.run("status")
+		out, _ := bob.run("health")
 		return strings.Contains(out, "1 change waits for your vote: renames the network \"home\" to \"office\", "+
 			"proposed by alice")
 	})
+	mustContain(t, bob.mustRun("status"), "hint: 1 change waits for your vote: juist approve")
 	// Nothing is signed unasked: without a terminal, or answered no.
 	if _, err := bob.run("approve"); err == nil || !strings.Contains(err.Error(), "needs an answer from a terminal") {
 		t.Fatalf("approve without a terminal: %v", err)
@@ -136,7 +137,7 @@ func TestAnInviteGoesOnWithAVoteFromAnotherAdminDevice(t *testing.T) {
 	guest := newDaemonDevice(t, nil)
 	joined := guest.start("join", link, "--name", "phone")
 	eventually(t, "the admission waits on bob's device", func() bool {
-		out, _ := bob.run("status")
+		out, _ := bob.run("health")
 		return strings.Contains(out, `admits the device "phone"`)
 	})
 	out, err := bob.answer("y", "approve")
@@ -163,9 +164,9 @@ func TestAnInviteGoesOnWithAVoteFromAnotherAdminDevice(t *testing.T) {
 	}
 }
 
-// A network from before admin keys had encryption keys is upgraded, and
-// then each admin gives theirs, once.
-func TestAnAdminGivesItsEncryptionKeyAfterTheUpgrade(t *testing.T) {
+// An admin key without an encryption key is hinted at, and then given one,
+// once.
+func TestAnAdminGivesItsEncryptionKeyOnce(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
 	alice, err := c.home2().createAdminKey("alice@home", false)
@@ -177,9 +178,6 @@ func TestAnAdminGivesItsEncryptionKeyAfterTheUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	genesis.State.Schema = types.SchemaRename
-	genesis.State.Admins[0].Signing = nil
-	genesis.State.Admins[0].Endorsement = nil
 	if err := genesis.Sign(alice); err != nil {
 		t.Fatal(err)
 	}
@@ -190,10 +188,6 @@ func TestAnAdminGivesItsEncryptionKeyAfterTheUpgrade(t *testing.T) {
 	if _, err := log.Create(st, genesis); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.run("admins", "receive"); err == nil || !strings.Contains(err.Error(), "juist log upgrade") {
-		t.Fatalf("receive before the upgrade: %v", err)
-	}
-	mustContain(t, c.mustRun("log", "upgrade", "--yes"), "upgraded to "+types.SchemaSigning.String(), "juist admins receive")
 	mustContain(t, c.mustRun("admins"), "hint: for changes waiting for your vote to reach you: juist admins receive")
 	mustContain(t, c.mustRun("admins", "receive"), "changes waiting for alice reach key alice@home")
 	if k, _ := openLog(t, c).State().Admin(alice.Public()); k.Recipient == nil {

@@ -13,7 +13,7 @@
 //	probe h3get ADDR:PORT NAME CA     fetch https://NAME/ from ADDR:PORT over HTTP/3, and print the protocol and status
 //	probe answer ADDR IP [NAME=IP]    answer DNS on ADDR, over UDP and TCP, with IP for every name, "-" for none, but NAMEs
 //	probe pairs FILE                  print the newest generation of a pair key in use in juistd's pairs file
-//	probe pcap FILE                   print each TCP flow to 443 in a capture with its SNI, each DNS query, and any other packet
+//	probe pcap FILE                   print each TCP flow to 443 in a capture with its SNI, or empty, each DNS query, and any other packet
 //	probe proxy ADDR USER:PASS LOG NAME=IP...  serve HTTP CONNECT on ADDR to the NAMEs' port 443 alone, logging each request
 //	probe visitors [FLAGS] URL        load a website as browsers do, over HTTP/3 with -h3, and print what came of it
 package main

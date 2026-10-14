@@ -11,7 +11,8 @@ import (
 // Serving masquerades each family's sources onto each uplink's address of
 // that family, redirects DNS on the device's own addresses to the forwarder,
 // takes overlay sources and the forwarder by the tunnel alone, and lets
-// nothing from the internet into the overlay unasked.
+// nothing from the internet into the overlay unasked; the tunnel's states
+// hold on the tunnel alone.
 func TestServingRules(t *testing.T) {
 	s := ServeSpec{
 		Sources: prefixes("198.19.44.0/22", "fdc6:6d7a:fd03::/48"),
@@ -33,9 +34,9 @@ func TestServingRules(t *testing.T) {
 		"rdr on juist0 inet6 proto { tcp udp } from any to fdc6:6d7a:fd03::1 port 53 -> fdc6:6d7a:fd03::1 port 41646",
 		"block in quick on { vtnet0 vtnet1 } from { 198.19.44.0/22, fdc6:6d7a:fd03::/48 }",
 		"block in quick on { vtnet0 vtnet1 } proto { tcp udp } to { 198.19.44.1, fdc6:6d7a:fd03::1 } port { 53 41646 }",
-		"pass in on juist0 all flags any keep state",
+		"pass in on juist0 all flags any keep state (if-bound)",
 		"block out quick on juist0 from ! <juist_local>",
-		"pass out on juist0 all keep state",
+		"pass out on juist0 all keep state (if-bound)",
 	} {
 		if !strings.Contains(got, want+"\n") {
 			t.Errorf("the rules lack %q:\n%s", want, got)

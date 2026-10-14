@@ -18,7 +18,7 @@ import (
 func membersAlone(t *testing.T, fb, lx *vm, work, lx4 string) {
 	t.Cleanup(func() {
 		if t.Failed() {
-			out, _ := lx.try("juist publish; juist status; journalctl -u juist-serve --no-pager | tail -30", time.Minute)
+			out, _ := lx.try("juist publish; juist status; juist health; journalctl -u juist-serve --no-pager | tail -30", time.Minute)
 			t.Logf("lx:\n%s", out)
 			out, _ = fb.try("juist publish; tail -20 /var/log/juist-ingress.log; tail -20 /tmp/pebble.log", time.Minute)
 			t.Logf("fb:\n%s", out)

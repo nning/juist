@@ -244,7 +244,7 @@ func TestAMemberRelayIsAskedBeforeTheDHT(t *testing.T) {
 	if err := e.SignPQ(sought.identity); err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := dht.SealAnnouncement(secret, epoch, e, true)
+	sealed, err := dht.SealAnnouncement(secret, epoch, e)
 	if err != nil {
 		t.Fatal(err)
 	}

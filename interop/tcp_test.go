@@ -17,9 +17,9 @@ func tcpPorts(t *testing.T, fb, lx *vm) {
 	t.Cleanup(func() {
 		lx.try("pkill -f '[p]robe serve lx-tcp'; pkill -f '[p]robe proxied lx-proxied'", time.Minute)
 		if t.Failed() {
-			out, _ := fb.try("juist ingress; juist status; tail -30 /var/log/juist-ingress.log; sockstat -4 -6 -l", time.Minute)
+			out, _ := fb.try("juist ingress; juist status; juist health; tail -30 /var/log/juist-ingress.log; sockstat -4 -6 -l", time.Minute)
 			t.Logf("fb:\n%s", out)
-			out, _ = lx.try("juist publish; juist status; journalctl -u juist-serve --no-pager | tail -20", time.Minute)
+			out, _ = lx.try("juist publish; juist status; juist health; journalctl -u juist-serve --no-pager | tail -20", time.Minute)
 			t.Logf("lx:\n%s", out)
 			hold(t, fb, lx)
 		}

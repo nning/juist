@@ -3,18 +3,19 @@
 // record and replaced whenever membership changes.
 //
 // It gates discovery and gossip confidentiality — blinded DHT topics, AEAD
-// announcement payloads, blinded mDNS beacons — and never the data plane,
-// which WireGuard secures end to end. A leak costs discovery privacy and
-// nothing else. Against a revoked member it buys what removing a WireGuard
-// peer does not: the device can no longer recognize the network's topics or
-// read its announcements, so it cannot find members whose stale state might
-// still trust it. MLS was evaluated and rejected in
-// docs/research/building-blocks.md §3.
+// announcement payloads, blinded mDNS beacons — and seeds the WireGuard
+// preshared keys of pairs without a pair key of their own. A leak costs
+// discovery privacy and, for those pairs, the post-quantum hedge of their
+// tunnels; their X25519 handshakes still hold. Against a revoked member it
+// buys what removing a WireGuard peer does not: the device can no longer
+// recognize the network's topics or read its announcements, so it cannot find
+// members whose stale state might still trust it. MLS was evaluated and
+// rejected in docs/research/building-blocks.md §3.
 //
-// The ciphersuite is HPKE (RFC 9180) in base mode with
-// DHKEM(X25519)+ML-KEM-768, HKDF-SHA256 and ChaCha20-Poly1305. The hybrid KEM
-// is the post-quantum hedge, at about 1.2 KiB per member per epoch — which is
-// where the schema's size limits come from.
+// The ciphersuite is HPKE (RFC 9180) in base mode with the MLKEM768-X25519
+// hybrid KEM (X-Wing, KEM ID 0x647a), HKDF-SHA256 and ChaCha20-Poly1305. The
+// hybrid KEM is the post-quantum hedge, at about 1.2 KiB per member per epoch
+// — which is where the schema's size limits come from.
 package secrets
 
 import (

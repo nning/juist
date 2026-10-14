@@ -68,14 +68,6 @@ func TestNamesPublishedByTCP(t *testing.T) {
 			t.Errorf("%+v taken", bad)
 		}
 	}
-	n := &NodeRecord{Published: []PublishedName{{Label: "mc", Port: 25565, Public: 25565}}}
-	if need, _ := n.NeedsSchema(); need != SchemaTCP {
-		t.Errorf("a name by TCP needs %v", need)
-	}
-	n.Published[0].Public = 0
-	if need, _ := n.NeedsSchema(); need != SchemaPublish {
-		t.Errorf("a name by TLS needs %v", need)
-	}
 }
 
 // An ingress holds every public port: none of its own names goes to one,
@@ -154,7 +146,7 @@ func TestAnIngressIsNothingElse(t *testing.T) {
 	}
 }
 
-// A state publishes names only under a domain of its own, from schema 9.
+// A state publishes names only under a domain of its own.
 func TestPublishedNamesNeedTheirDomain(t *testing.T) {
 	var snap *Snapshot
 	for _, b := range corpusSeeds(t) {
@@ -177,19 +169,13 @@ func TestPublishedNamesNeedTheirDomain(t *testing.T) {
 	if err := without.StaticValidate(false); err == nil || !strings.Contains(err.Error(), "no domain") {
 		t.Errorf("published names without a domain: %v", err)
 	}
-	old := withoutSigning(snap)
-	old.Schema = SchemaNames
-	old.Nodes[0].Published = nil
-	if err := old.StaticValidate(false); err == nil || !strings.Contains(err.Error(), "domain") {
-		t.Errorf("a domain at schema 8: %v", err)
-	}
-	old.Domain = ""
-	if err := old.StaticValidate(false); err != nil {
-		t.Errorf("the same state without the domain: %v", err)
+	without.Nodes[0].Published = nil
+	if err := without.StaticValidate(false); err != nil {
+		t.Errorf("the same state publishing nothing: %v", err)
 	}
 }
 
-// A name for members alone needs its schema, and is no name the ingress
+// A name for members alone is no name the ingress
 // passes by TCP or with the client's address, which members would reach
 // through it.
 func TestNamesForMembersAlone(t *testing.T) {
@@ -205,9 +191,5 @@ func TestNamesForMembersAlone(t *testing.T) {
 		if err := validatePublished([]PublishedName{bad}); err == nil {
 			t.Errorf("%+v taken", bad)
 		}
-	}
-	n := &NodeRecord{Published: ok}
-	if need, _ := n.NeedsSchema(); need != SchemaMembers {
-		t.Errorf("a name for members alone needs %v", need)
 	}
 }

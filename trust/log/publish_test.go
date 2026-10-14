@@ -83,7 +83,7 @@ func TestPublishedNamesAreOneMembers(t *testing.T) {
 		h.signed(types.AUM{Kind: types.KindSetDomain, Domain: new("example.net")}))
 }
 
-// The ingress role is schema 9's, and never beside admin or exit.
+// The ingress role is never beside admin or exit.
 func TestTheIngressRole(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	vps := h.addNode("vps")
@@ -93,13 +93,6 @@ func TestTheIngressRole(t *testing.T) {
 			t.Errorf("an ingress granted %v", roles)
 		}
 	}
-
-	old := newHarnessAt(t, 1, 1, types.SchemaNames)
-	n := old.addNode("vps")
-	old.mustReject("the ingress role at schema 8", RuleState, old.signed(types.AUM{Kind: types.KindSetNodeRoutes,
-		Subject: &n.Identity, Grant: &types.RouteGrant{Roles: []types.Role{types.RoleIngress}}}))
-	old.mustReject("a domain at schema 8", RuleState, old.signed(types.AUM{Kind: types.KindSetDomain,
-		Domain: new("pub.example.org")}))
 }
 
 // A member admitted with published names needs the domain, as one granted
@@ -168,7 +161,7 @@ func TestAnIngressPublishesNothingOnItsOwnPorts(t *testing.T) {
 		Subject: &nas.Identity, Grant: &types.RouteGrant{Roles: []types.Role{types.RoleIngress}}}))
 }
 
-// The publish role is schema 9's, never beside the ingress role, and for a
+// The publish role is never beside the ingress role, and for a
 // member whose name gives a label, which is then its alone: no other member
 // publishes it, holds the role under it, or points a name of it elsewhere.
 func TestThePublishRole(t *testing.T) {
@@ -194,11 +187,6 @@ func TestThePublishRole(t *testing.T) {
 
 	twin := h.addNode("mailer")
 	h.mustReject("the publish role for a second name that gives the same label", RuleState, grant(twin.Identity, types.RolePublish))
-
-	old := newHarnessAt(t, 1, 1, types.SchemaNames)
-	n := old.addNode("mailer")
-	old.mustReject("the publish role at schema 8", RuleState, old.signed(types.AUM{Kind: types.KindSetNodeRoutes,
-		Subject: &n.Identity, Grant: &types.RouteGrant{Roles: []types.Role{types.RolePublish}}}))
 }
 
 // The domain itself is published by one member at most, and never also a
@@ -228,18 +216,13 @@ func TestTheDomainItselfIsOneMembers(t *testing.T) {
 	h.mustReject("the domain a name points elsewhere at", RuleState, apex(nas.Identity))
 }
 
-// A name published by TCP is schema 11's; its public port is one member's,
-// and no ingress's own name goes to it, whichever comes first.
+// A name published by TCP has a public port that is one member's, and no
+// ingress's own name goes to it, whichever comes first.
 func TestNamesPublishedByTCP(t *testing.T) {
-	old := newHarnessAt(t, 1, 1, types.SchemaRenameNode)
-	nas := old.addNode("nas")
-	old.apply(old.auth.Builder().SetDomain("pub.example.org"))
 	tcp := func(h *harness, id types.Identity, ps ...types.PublishedName) types.AUM {
 		return h.signed(types.AUM{Kind: types.KindSetPublished, Subject: &id, Publish: &types.PublishGrant{Names: ps}})
 	}
 	mc := types.PublishedName{Label: "mc", Port: 25565, Public: 25565}
-	old.mustReject("a name by TCP at schema 10", RuleState, tcp(old, nas.Identity, mc))
-
 	h := newHarness(t, 1, 1)
 	nas, vps, pi := h.addNode("nas"), h.addNode("vps"), h.addNode("pi")
 	h.apply(h.auth.Builder().SetDomain("pub.example.org"))
@@ -267,31 +250,16 @@ func TestNamesPublishedByTCP(t *testing.T) {
 			Grant: &types.RouteGrant{Roles: []types.Role{types.RoleIngress}}}))
 }
 
-// A name for members alone, and a policy naming a name, are schema 15's.
-func TestNamesForMembersNeedTheirSchema(t *testing.T) {
-	for _, at := range []types.SchemaVersion{types.SchemaPQ, types.SchemaMembers} {
-		h := newHarnessAt(t, 1, 1, at)
-		nas, laptop := h.addNode("nas"), h.addNode("laptop")
-		h.apply(h.auth.Builder().SetDomain("pub.example.org"))
-		photos := types.PublishedName{Label: "photos", Port: 443, Members: true}
-		publish := func() types.AUM {
-			return h.signed(types.AUM{Kind: types.KindSetPublished, Subject: &nas.Identity,
-				Publish: &types.PublishGrant{Names: []types.PublishedName{photos}}})
-		}
-		policy := func() types.AUM {
-			return h.signed(types.AUM{Kind: types.KindSetPolicy, Policy: &types.Policy{Rules: []types.PolicyRule{{
-				From: types.PolicyRefs{Nodes: []types.Identity{laptop.Identity}}, To: types.PolicyRefs{Names: []string{"photos"}}}}}})
-		}
-		if at < types.SchemaMembers {
-			h.mustReject("a name for members alone at schema 14", RuleState, publish())
-			h.mustReject("a policy naming a name at schema 14", RuleState, policy())
-			continue
-		}
-		h.apply(h.auth.Builder().SetPublished(nas.Identity, []types.PublishedName{photos}))
-		h.apply(h.auth.Builder().SetPolicy(&types.Policy{Rules: []types.PolicyRule{{
-			From: types.PolicyRefs{Nodes: []types.Identity{laptop.Identity}}, To: types.PolicyRefs{Names: []string{"photos"}}}}}))
-		if got := publishedOf(t, h.fork().State(), nas.Identity); !slices.Equal(got, []types.PublishedName{photos}) {
-			t.Fatalf("reopened, nas publishes %+v", got)
-		}
+// A name for members alone is published, and a policy names it.
+func TestNamesForMembers(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	nas, laptop := h.addNode("nas"), h.addNode("laptop")
+	h.apply(h.auth.Builder().SetDomain("pub.example.org"))
+	photos := types.PublishedName{Label: "photos", Port: 443, Members: true}
+	h.apply(h.auth.Builder().SetPublished(nas.Identity, []types.PublishedName{photos}))
+	h.apply(h.auth.Builder().SetPolicy(&types.Policy{Rules: []types.PolicyRule{{
+		From: types.PolicyRefs{Nodes: []types.Identity{laptop.Identity}}, To: types.PolicyRefs{Names: []string{"photos"}}}}}))
+	if got := publishedOf(t, h.fork().State(), nas.Identity); !slices.Equal(got, []types.PublishedName{photos}) {
+		t.Fatalf("reopened, nas publishes %+v", got)
 	}
 }

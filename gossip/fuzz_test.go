@@ -27,6 +27,7 @@ func seedFrames(f *testing.F) {
 		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41641")},
 		GossipPort: 41642,
 		Seq:        7,
+		Schema:     types.CurrentSchema,
 	}
 	if err := ep.Sign(priv); err != nil {
 		f.Fatal(err)
@@ -43,7 +44,7 @@ func seedFrames(f *testing.F) {
 	pair := &pairkey.Msg{From: priv.Public(), To: to.Public(), Store: 6, ToStore: 7, FromWG: types.WGKey{1},
 		ToWG: types.WGKey{2}, Gen: 2, Epoch: 5,
 		CT: make([]byte, mlkem.CiphertextSize768), Use: 1}
-	if err := pair.Sign(priv, types.Hash{1}, false); err != nil {
+	if err := pair.Sign(priv, types.Hash{1}); err != nil {
 		f.Fatal(err)
 	}
 	frames := []frame{
@@ -256,6 +257,6 @@ func FuzzAskCatchUp(f *testing.F) {
 			}
 			_ = writeBlob(theirs, answer, "fuzzed")
 		}()
-		_, _, _ = n.askCatchUp(mine, &View{Network: types.Hash{1}, Epoch: 2}, reads{})
+		_, _, _ = n.askCatchUp(mine, &View{Network: types.Hash{1}, Epoch: 2})
 	})
 }

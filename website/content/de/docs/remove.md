@@ -120,7 +120,7 @@ Voucher verlangt wird und ein Voucher zugleich Relay ist.
 ## Fehlersuche
 
 `Freshness  expired; vouchers only` bedeutet, dass 48 Stunden lang zu wenige
-Voucher erreichbar waren. `juist status` warnt einen Tag vorher mit
+Voucher erreichbar waren. `juist health` warnt einen Tag vorher mit
 `freshness ends in …`. Bring einen Voucher wieder online. Sobald seine
 Bestätigung ankommt, ist das Gerät wieder auf dem aktuellen Stand. Siehe
 [Fehlersuche]({{< relref "docs/troubleshooting" >}}).

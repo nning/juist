@@ -79,11 +79,14 @@ before it. To invite a device named `home` into the network `home`, run
 
 Two networks may use overlapping IPv4 ranges. Both still work on the same
 device, but the one with the higher-numbered juistd runs over IPv6 only.
-`juist status` says so, and suggests which one to renumber:
+`juist health` says so, and suggests which one to renumber:
 
 ```console
-$ juist status
-…
+$ juist health
+home
+nothing needs attention
+
+work
 warning: no IPv4 on this host: "home" (juist0) holds 198.18.36.2, which "work" claims too (198.18.36.0/22)
 hint: renumber one of the two networks: juist network renumber juist1 PREFIX, or the other
 ```

@@ -80,11 +80,15 @@ bei. Sie schützt vor drei Dingen:
   LAN kommen. Ein Link enthält ein 128-Bit-Geheimnis, das viel zu lang zum
   Raten ist.
 - Vor jemandem, der sich dazwischenschaltet. Bevor etwas signiert wird,
-  vergleicht der Admin vier Wörter mit dem neuen Gerät. Sie sind so gewählt,
-  dass ein Angreifer dazwischen nicht nach passenden Wörtern suchen kann.
+  vergleicht der Admin vier Wörter mit dem neuen Gerät. Sie decken jeden
+  Schlüssel des neuen Geräts ab und sind so gewählt, dass ein Angreifer
+  dazwischen nicht nach passenden Wörtern suchen kann. Damit sie
+  übereinstimmen, brauchen beide Geräte dieselbe Version von juist.
 - Vor einem kompromittierten Daemon auf dem einladenden Gerät. Der Link bindet
   das neue Gerät an die Signatur des einladenden Admins. Dieser Daemon kann es
-  also nicht in ein Netz locken, das er selbst kontrolliert.
+  also nicht in ein Netz locken, das er selbst kontrolliert. Ein Code hat
+  keinen solchen Anker: Das neue Gerät vertraut dem Netz, das sein Daemon ihm
+  beim ersten Mal zeigt.
 
 ## Ein Gerät entfernen
 
@@ -137,37 +141,37 @@ ließe sich dann entschlüsseln. juist schützt vor beidem:
 - Gruppengeheimnisse sind mit X25519 und ML-KEM-768 zusammen versiegelt.
 - Jede Änderung am Netz und jede Nachricht, die Geräte füreinander signieren,
   ist mit ML-DSA-44 signiert, und eine Signatur allein mit Ed25519 wird
-  abgewiesen. Der ML-DSA-Schlüssel jedes Geräts und jedes Admin-Schlüssels
+  abgewiesen. Nur Kopien der Ankündigung eines Geräts aus dem DHT, von einem
+  Relay oder aus dem LAN werden mit Ed25519 allein angenommen, und sie sagen
+  nicht mehr, als wo das Gerät zu erreichen ist. Der ML-DSA-Schlüssel jedes Geräts und jedes Admin-Schlüssels
   leitet sich aus dem Schlüssel ab, den es schon hat, also deckt dessen
   Backup ihn mit ab.
 - Der Beitritt vereinbart nach der Prüfung von Code oder Link einen Schlüssel
   mit ML-KEM-768. Wer einen Beitritt mitschneidet und später einen
   Quantencomputer hat, erfährt daraus nichts.
-- Verbindungen zwischen juists eigenen Enden, zu Relays und von Geräten, die
-  nur HTTPS erreichen, verlangen TLS 1.3 mit X25519 und ML-KEM-768.
+- Relays und juists übrige Enden nehmen nur TLS 1.3 mit X25519 und
+  ML-KEM-768 an, und Geräte, die nur HTTPS erreichen, verlangen es.
   Verbindungen durch den Ingress vereinbaren ihren Schlüssel so, wo immer die
   Gegenseite es anbietet, wie aktuelle Browser es tun.
 
 Jeder Tunnel zwischen Geräten mit der aktuellen Version ist quantensicher.
 Ein Gerät mit einer älteren Version bekommt nichts von deinem Verkehr, und
-`juist status` und `juist devices` zeigen es als veraltet, bis es
+`juist health` und `juist devices` zeigen es als veraltet, bis es
 aktualisiert ist.
 
-Ein Netz, das mit einer älteren Version angelegt wurde, wechselt in zwei
-Schritten zu quantensicheren Signaturen. Sobald jedes Gerät die aktuelle
-Version nutzt, hebt `juist log upgrade` es auf Schema 17, in dem die Geräte
-ihre ML-DSA-Schlüssel ankündigen und jeder Admin seine mit
-`juist admins receive` registriert. Haben das alle getan, führst du es noch
-einmal aus, und der Wechsel auf Schema 18 wird freigegeben wie jede Änderung.
-Ein Gerät, das offline war, holt danach auf.
+Die Grenze: Wer ein Gerät stiehlt und später einen Quantencomputer hat, liest,
+was dieses Gerät lesen konnte, auch heute mitgeschnittenen Verkehr seiner
+eigenen Tunnel. Entferne ein verlorenes Gerät sofort.
 
-Was bleibt, wie es war: Die Änderungen vor dem Wechsel behalten ihre
-Ed25519-Signaturen. Geräte im Netz weisen jede neue Änderung unterhalb des
-Wechsels ab, aber ein Gerät, das den Wechsel erst sieht, wenn es einen
-Quantencomputer gibt, vertraut der Geschichte davor, wie sie ihm gegeben
-wird. Ein Relay weist sich mit einem klassischen Zertifikat aus, da ihm nur
-das Weiterreichen von Verkehr anvertraut ist, und ein Proxy, der TLS ohne
-ML-KEM beendet, kann ein Gerät, das nur HTTPS erreicht, nicht mehr tragen.
+juist liest Netze, deren Log auf Schema 18 oder später steht, in denen jede
+Änderung so signiert ist. Ein Netz, das mit einer älteren Version angelegt
+wurde, liest es nicht mehr: Seine Admins legen es neu an, und seine Geräte
+treten dem neuen bei.
+
+Was klassisch bleibt: Ein Relay weist sich mit einem klassischen Zertifikat
+aus, da ihm nur das Weiterreichen von Verkehr anvertraut ist, und ein Proxy,
+der TLS ohne ML-KEM beendet, kann ein Gerät, das nur HTTPS erreicht, nicht
+tragen.
 
 ## Hinweise
 

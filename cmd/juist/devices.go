@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,9 +15,10 @@ import (
 
 func cmdDevices(a *app, args []string) error {
 	s := spec{name: "juist devices", about: `
-List the network's devices and how juistd last reached each: directly,
-through a relay, or not; outdated where one runs an older juist and is
-unreachable until updated. juistd checks every 30s. On a device in several
+List the network's devices, how juistd last reached each (directly, through
+a relay, or not; outdated where one runs an older juist and is unreachable
+until updated), and the newest schema each one's juist implements, yellow
+where older than this one's. juistd checks every 30s. On a device in several
 networks, each network's, unless NETWORK names one.`}
 	fs := newFlags(s.name)
 	long := fs.Bool("keys", false, "show identity keys")
@@ -88,11 +90,18 @@ func (a *app) listDevices(long, v6, all bool) error {
 // st, where a daemon runs, adds how its last check reached each device.
 func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Status, keys, v6 bool) error {
 	reach := map[types.Identity]ipc.PeerReach{}
+	builds := map[types.Identity]types.SchemaVersion{}
 	if st != nil {
 		for _, r := range st.Reach {
 			reach[r.Identity] = r
 		}
+		for _, d := range st.Devices {
+			if d.Build != 0 {
+				builds[d.Identity] = d.Build
+			}
+		}
 	}
+	showBuilds := len(builds) > 0
 	rows := [][]string{{"NAME", "IPV4"}}
 	if v6 {
 		rows[0] = append(rows[0], "IPV6")
@@ -102,6 +111,9 @@ func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Statu
 	}
 	if st != nil {
 		rows[0] = append(rows[0], "REACHED")
+	}
+	if showBuilds {
+		rows[0] = append(rows[0], "SCHEMA")
 	}
 	rows[0] = append(rows[0], "ROLES")
 	for _, d := range byAddress(devs) {
@@ -123,6 +135,9 @@ func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Statu
 		if st != nil {
 			row = append(row, a.describeReach(d, d.Identity == self, st, reach))
 		}
+		if showBuilds {
+			row = append(row, a.buildWord(builds[d.Identity]))
+		}
 		rows = append(rows, append(row, describeGrant(d.Roles, d.Subnets, len(d.Names) > 0, len(d.Published) > 0)))
 	}
 	if !a.printTable(rows) {
@@ -132,6 +147,18 @@ func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Statu
 		a.printf("%s\n", a.paint("33", "checked "+ago(time.Since(time.Unix(st.ReachChecked, 0)))))
 	}
 	return nil
+}
+
+// buildWord is a device's juist by the newest schema it implements, marked
+// where older than this one's.
+func (a *app) buildWord(b types.SchemaVersion) string {
+	switch {
+	case b == 0:
+		return "-"
+	case b < types.CurrentSchema:
+		return a.paint("33", strconv.Itoa(int(b)))
+	}
+	return strconv.Itoa(int(b))
 }
 
 // minLastColumn is the narrowest the table's last column wraps to before

@@ -153,7 +153,7 @@ func (d *Daemon) maybeIssueLease(state *log.State, now time.Time) {
 		stamp = last.Issued + 1
 	}
 	l := types.Lease{Network: state.GenesisHash(), Head: state.Head(), Issued: stamp}
-	if err := l.Sign(d.identity, state.PQ()); err != nil {
+	if err := l.Sign(d.identity); err != nil {
 		d.logf("daemon: signing a freshness lease: %v", err)
 		return
 	}

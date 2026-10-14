@@ -42,7 +42,7 @@ func TestNamesFollowTheMember(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rot, err := h.auth.Builder().RotateIdentity(mailer.Identity, fresh.Public(), h.sealer())
+	rot, err := h.auth.Builder().RotateIdentity(mailer.Identity, fresh.Public(), fresh.SigningKey(), h.sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,8 +75,7 @@ func TestNamesFollowTheMember(t *testing.T) {
 }
 
 // A name another member holds, a non-member, the names a member has already,
-// a quorum short, a network before schema 8, and a name that is no public
-// DNS name are refused.
+// a quorum short, and a name that is no public DNS name are refused.
 func TestNamesAreRefused(t *testing.T) {
 	h := newHarness(t, 2, 2)
 	mailer, zeus := h.addNode("mailer"), h.addNode("zeus")
@@ -107,15 +106,4 @@ func TestNamesAreRefused(t *testing.T) {
 			t.Errorf("a record pointing %q decodes", bad)
 		}
 	}
-
-	old := newHarnessAt(t, 1, 1, types.SchemaSealing)
-	n := old.addNode("mailer")
-	old.mustReject("names at schema 7", RuleState, old.signed(types.AUM{Kind: types.KindSetNodeNames, Subject: &n.Identity,
-		Names: &types.NameGrant{Names: []string{"mx.example.net"}}}))
-	withNames := old.newNode("zeus")
-	withNames.Names = []string{"www.example.net"}
-	if _, err := old.auth.Builder().AddNode(withNames, old.sealer()); err == nil {
-		t.Error("the builder authored an admission with names at schema 7")
-	}
-	old.mustReject("a member admitted with names at schema 7", RuleState, old.handAssembledAddNode(withNames))
 }

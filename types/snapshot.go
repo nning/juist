@@ -38,52 +38,20 @@ const (
 	// RoleIngress marks an ingress: a member with a public address that
 	// takes connections for the names members publish and splices them to
 	// their targets, terminating nothing. Never beside admin or exit, so a
-	// compromised ingress holds no other authority. Schema 9 and later.
+	// compromised ingress holds no other authority.
 	RoleIngress Role = "ingress"
 
 	// RoleService marks a service member: a juistd that publishes a service
 	// beside it, and that every member confines with no port open to it, so
 	// that a compromised service reaches none of them. Alone, and routing
-	// nothing. Schema 9 and later.
+	// nothing.
 	RoleService Role = "service"
 
 	// RolePublish lets a member publish under its own name, the label its
 	// name gives, without a vote each time: what and until when, it
-	// announces itself. Never beside ingress. Schema 9 and later.
+	// announces itself. Never beside ingress.
 	RolePublish Role = "publish"
 )
-
-// roleSchemas is every role, with the schema a network must be at to grant it.
-var roleSchemas = map[Role]SchemaVersion{RoleAdmin: 0, RoleExit: 0, RoleRelayCapable: 0, RoleIngress: SchemaPublish,
-	RoleService: SchemaPublish, RolePublish: SchemaPublish}
-
-// NeedsSchema returns the schema a network must be at to hold n, and what in
-// n needs it; zero where the first schema does.
-func (n *NodeRecord) NeedsSchema() (SchemaVersion, string) {
-	var need SchemaVersion
-	what := ""
-	for _, r := range n.Roles {
-		if v := roleSchemas[r]; v > need {
-			need, what = v, fmt.Sprintf("the role %q", r)
-		}
-	}
-	if len(n.Names) > 0 && SchemaNames > need {
-		need, what = SchemaNames, "names"
-	}
-	if len(n.Published) > 0 && SchemaPublish > need {
-		need, what = SchemaPublish, "published names"
-	}
-	if slices.ContainsFunc(n.Published, func(p PublishedName) bool { return p.Public != 0 }) && SchemaTCP > need {
-		need, what = SchemaTCP, "names published by TCP"
-	}
-	if slices.ContainsFunc(n.Published, func(p PublishedName) bool { return p.Members }) && SchemaMembers > need {
-		need, what = SchemaMembers, "names for members alone"
-	}
-	if n.Signing != nil && SchemaMLDSA > need {
-		need, what = SchemaMLDSA, "a signing key"
-	}
-	return need, what
-}
 
 // NameBytes is what n's public names and published labels take, which
 // [MaxNameBytes] caps.
@@ -108,16 +76,15 @@ type AdminKey struct {
 	// laptop keys.
 	Votes uint32 `cbor:"2,keyasint"`
 
-	// Name is a human label. The trust layer reads it once: the upgrade to
-	// [SchemaHolders] makes it the Holder of a key whose name no other folds to.
+	// Name is a human label.
 	Name string `cbor:"3,keyasint,omitempty"`
 
-	// Holder names the person the key belongs to, from [SchemaHolders] on.
+	// Holder names the person the key belongs to.
 	// The keys of one holder are one voter: they carry the holder's Votes and
 	// Needed alike, and the holder's votes count once, when at least Needed
 	// of its keys signed. So a person with a key on each of two devices
 	// casts one vote with either, and can be made to need both. Without a
-	// holder a key is a voter of its own, as before schema 3.
+	// holder a key is a voter of its own.
 	Holder string `cbor:"4,keyasint,omitempty"`
 
 	// Needed is how many of the holder's keys must sign for its votes to
@@ -125,14 +92,14 @@ type AdminKey struct {
 	// has one encoding.
 	Needed uint32 `cbor:"5,keyasint,omitempty"`
 
-	// Recipient is the key's encryption key, from [SchemaSealing] on, which
-	// only the key itself sets: a genesis naming one is signed by the key,
-	// and so is a [KindSetAdminRecipient].
+	// Recipient is the key's encryption key, which only the key itself
+	// sets: a genesis naming one is signed by the key, and so is a
+	// [KindSetAdminRecipient].
 	Recipient *RecipientKey `cbor:"6,keyasint,omitempty"`
 
-	// Signing is the key's ML-DSA key, which every admin key has from
-	// [SchemaMLDSA] on, and Endorsement the key's Ed25519 endorsement of it,
-	// which binds it to Public as the key's holder made them.
+	// Signing is the key's ML-DSA key, which every admin key has, and
+	// Endorsement the key's Ed25519 endorsement of it, which binds it to
+	// Public as the key's holder made them.
 	Signing     *SigningKey `cbor:"7,keyasint,omitempty"`
 	Endorsement *Sig        `cbor:"8,keyasint,omitempty"`
 }
@@ -213,10 +180,9 @@ func CountVotes(keys []AdminKey, signed func(Identity) bool) uint32 {
 	return total
 }
 
-// ValidateAdmins checks what the keys say about their holders: holders only
-// from [SchemaHolders] on, and one holder's keys agreeing on its votes and
-// the keys it needs.
-func ValidateAdmins(keys []AdminKey, schema SchemaVersion) error {
+// ValidateAdmins checks what the keys say about their holders: one holder's
+// keys agree on its votes and the keys it needs.
+func ValidateAdmins(keys []AdminKey) error {
 	type policy struct {
 		name          string
 		votes, needed uint32
@@ -224,14 +190,6 @@ func ValidateAdmins(keys []AdminKey, schema SchemaVersion) error {
 	holders := map[string]policy{}
 	for i := range keys {
 		k := &keys[i]
-		if (k.Holder != "" || k.Needed != 0) && schema < SchemaHolders {
-			return fmt.Errorf("admin key %v names a holder, which needs %v; the network is at %v",
-				k.Public.ShortString(), SchemaHolders, schema)
-		}
-		if k.Recipient != nil && schema < SchemaSealing {
-			return fmt.Errorf("admin key %v has an encryption key, which needs %v; the network is at %v",
-				k.Public.ShortString(), SchemaSealing, schema)
-		}
 		if k.Holder == "" {
 			if k.Needed != 0 {
 				return fmt.Errorf("admin key %v needs %d keys and belongs to no holder", k.Public.ShortString(), k.Needed)
@@ -293,20 +251,19 @@ type NodeRecord struct {
 	Expiry uint64 `cbor:"9,keyasint,omitempty"`
 
 	// Retiring is the IPv4 address a renumbering moved the node from, which
-	// it still holds until the deadline. Schema 5 and later.
+	// it still holds until the deadline.
 	Retiring *RetiringV4 `cbor:"10,keyasint,omitempty"`
 
 	// Names are the public DNS names quorum points at this node, which
 	// members that accept them resolve to its overlay addresses. Sorted, and
-	// held by no other node. Schema 8 and later; see [ValidateHostName].
+	// held by no other node. See [ValidateHostName].
 	Names []string `cbor:"11,keyasint,omitempty"`
 
 	// Published are the names this node publishes under the network's
-	// domain, each a label held by no other node. Schema 9 and later.
+	// domain, each a label held by no other node.
 	Published []PublishedName `cbor:"12,keyasint,omitempty"`
 
-	// Signing is the node's ML-DSA key, which every member has from
-	// [SchemaMLDSA] on.
+	// Signing is the node's ML-DSA key, which every member has.
 	Signing *SigningKey `cbor:"13,keyasint,omitempty"`
 }
 
@@ -346,7 +303,7 @@ const (
 	DisablementSecretSize = 32
 
 	// SealedSecretSize is the exact length of [EpochWrap.Sealed]: an HPKE
-	// single-shot ciphertext under DHKEM(X25519)+ML-KEM-768 with
+	// single-shot ciphertext under MLKEM768-X25519 (X-Wing) with
 	// ChaCha20-Poly1305 over a GroupSecretSize plaintext. Pinning it lets a
 	// malformed wrap be rejected by shape, before any cryptographic work.
 	SealedSecretSize = 1088 + // ML-KEM-768 ciphertext
@@ -364,15 +321,15 @@ const (
 type EpochSuite uint64
 
 // SuiteHybridX25519MLKEM768 is the only suite v1 implements: HPKE base mode
-// with DHKEM(X25519)+ML-KEM-768, HKDF-SHA256 and ChaCha20-Poly1305. It is
-// zero, and therefore absent from the encoding, so naming the suite costs
-// nothing until there is a second one.
+// with the MLKEM768-X25519 hybrid KEM (X-Wing, KEM ID 0x647a), HKDF-SHA256
+// and ChaCha20-Poly1305. It is zero, and therefore absent from the encoding,
+// so naming the suite costs nothing until there is a second one.
 const SuiteHybridX25519MLKEM768 EpochSuite = 0
 
 // String names the suite, so an error about an unimplemented one is readable.
 func (s EpochSuite) String() string {
 	if s == SuiteHybridX25519MLKEM768 {
-		return "DHKEM(X25519)+ML-KEM-768/HKDF-SHA256/ChaCha20-Poly1305"
+		return "MLKEM768-X25519/HKDF-SHA256/ChaCha20-Poly1305"
 	}
 	return fmt.Sprintf("suite?<%d>", uint64(s))
 }
@@ -466,36 +423,36 @@ type Snapshot struct {
 	EpochSuite EpochSuite `cbor:"10,keyasint,omitempty"`
 
 	// Schema is the record schema this network is written under, raised by
-	// [KindSchemaUpgrade]. Absent means schema 0, the schema frozen at M3b.
+	// [KindSchemaUpgrade]; [Snapshot.StaticValidate] refuses one below [MinSchema].
 	// Whether the version is one this build can act on is decided in
 	// trust/log, not here: a snapshot at a newer schema must still decode, so
 	// that a node too old for it can store and relay the record carrying it.
 	Schema SchemaVersion `cbor:"11,keyasint,omitempty"`
 
 	// Vouchers is how many admin devices must vouch for a node's view within
-	// the freshness TTL; absent means one. Schema 1 and later.
+	// the freshness TTL; absent means one.
 	Vouchers uint32 `cbor:"12,keyasint,omitempty"`
 
 	// V4Prefix is the network's own overlay IPv4 prefix, fixed at genesis;
-	// absent means the schema's range. Schema 4 and later.
+	// absent means [OverlayV4].
 	V4Prefix *netip.Prefix `cbor:"13,keyasint,omitempty"`
 
 	// V4Retiring are the ranges a network renumbering moved away from, while
-	// members may still hold addresses in them. Schema 5 and later.
+	// members may still hold addresses in them.
 	V4Retiring *RetiringRanges `cbor:"14,keyasint,omitempty"`
 
 	// Domain is the network's public domain, under which members publish
-	// names; empty for none. Schema 9 and later.
+	// names; empty for none.
 	Domain string `cbor:"15,keyasint,omitempty"`
 
 	// Policy is what each member may open on which; absent for every member
-	// anything. Schema 13 and later.
+	// anything.
 	Policy *Policy `cbor:"16,keyasint,omitempty"`
 }
 
 // V4Ranges returns the ranges the network's overlay IPv4 addresses may lie in.
 func (s *Snapshot) V4Ranges() []netip.Prefix {
-	out := V4Ranges(s.Schema, s.V4Prefix)
+	out := V4Ranges(s.V4Prefix)
 	if s.V4Retiring != nil {
 		out = append(out, s.V4Retiring.Prefixes...)
 	}
@@ -840,6 +797,8 @@ func (s *Snapshot) Encode() []byte { return mustEncode(s) }
 // the genesis record cannot name its own hash, a checkpoint must.
 func (s *Snapshot) StaticValidate(genesis bool) error {
 	switch {
+	case s.Schema < MinSchema:
+		return fmt.Errorf("the state is at %v; this juist reads %v and later", s.Schema, MinSchema)
 	case genesis && s.GenesisHash != nil:
 		return errors.New("genesis record must not carry a genesis hash")
 	case !genesis && s.GenesisHash == nil:
@@ -853,14 +812,7 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	if s.Vouchers > MaxAdmins {
 		return fmt.Errorf("a vouching threshold of %d exceeds the %d-admin limit", s.Vouchers, MaxAdmins)
 	}
-	if s.Vouchers != 0 && s.Schema < SchemaVouchers {
-		return fmt.Errorf("a vouching threshold needs %v; the state is at %v", SchemaVouchers, s.Schema)
-	}
 	if s.V4Prefix != nil {
-		if s.Schema < SchemaOverlayV4 {
-			return fmt.Errorf("an IPv4 prefix of the network's own needs %v; the state is at %v",
-				SchemaOverlayV4, s.Schema)
-		}
 		if err := ValidateV4Prefix(*s.V4Prefix); err != nil {
 			return err
 		}
@@ -869,8 +821,6 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 		switch {
 		case genesis:
 			return errors.New("a genesis retires IPv4 ranges it never had")
-		case s.Schema < SchemaRenumber:
-			return fmt.Errorf("retiring IPv4 ranges need %v; the state is at %v", SchemaRenumber, s.Schema)
 		case s.V4Prefix == nil:
 			return errors.New("retiring IPv4 ranges, but no prefix they were renumbered to")
 		case len(r.Prefixes) == 0:
@@ -891,10 +841,8 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	}
 	// A genesis is held to what a SetVouchers record is. A checkpoint is
 	// not: it states a chain's state, where admin devices removed after the
-	// threshold was set may have left fewer, which fails closed. Only from
-	// schema 3, the newest when the bound came in, so that no genesis stored
-	// before it changes its verdict.
-	if genesis && s.Vouchers > 0 && s.Schema >= SchemaHolders {
+	// threshold was set may have left fewer, which fails closed.
+	if genesis && s.Vouchers > 0 {
 		if err := ValidateVouchers(s.Vouchers, s.Nodes); err != nil {
 			return err
 		}
@@ -903,9 +851,6 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 		return errors.New("network name is empty")
 	}
 	if s.Domain != "" {
-		if s.Schema < SchemaPublish {
-			return fmt.Errorf("a public domain needs %v; the state is at %v", SchemaPublish, s.Schema)
-		}
 		if err := ValidateHostName(s.Domain); err != nil {
 			return fmt.Errorf("domain: %w", err)
 		}
@@ -938,7 +883,7 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 			return fmt.Errorf("admin keys are not sorted and unique at %v", s.Admins[i].Public.ShortString())
 		}
 	}
-	if err := ValidateAdmins(s.Admins, s.Schema); err != nil {
+	if err := ValidateAdmins(s.Admins); err != nil {
 		return err
 	}
 	if s.Quorum == 0 {
@@ -960,21 +905,13 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 			return fmt.Errorf("node %v retires an address in a genesis, which never gave it one",
 				s.Nodes[i].Identity.ShortString())
 		}
-		if s.Nodes[i].Retiring != nil && s.Schema < SchemaRenumber {
-			return fmt.Errorf("node %v retires an address, which needs %v; the state is at %v",
-				s.Nodes[i].Identity.ShortString(), SchemaRenumber, s.Schema)
-		}
 		if i > 0 && s.Nodes[i-1].Identity.Compare(s.Nodes[i].Identity) >= 0 {
 			return fmt.Errorf("nodes are not sorted and unique at %v", s.Nodes[i].Identity.ShortString())
 		}
 		if len(s.Nodes[i].Published) > 0 && s.Domain == "" {
 			return fmt.Errorf("node %v publishes names, and the network has no domain", s.Nodes[i].Identity.ShortString())
 		}
-		if need, what := s.Nodes[i].NeedsSchema(); s.Schema < need {
-			return fmt.Errorf("node %v has %s, which needs %v; the state is at %v",
-				s.Nodes[i].Identity.ShortString(), what, need, s.Schema)
-		}
-		if err := s.Nodes[i].ValidateNameBytes(s.Schema); err != nil {
+		if err := s.Nodes[i].ValidateNameBytes(); err != nil {
 			return err
 		}
 	}
@@ -983,12 +920,6 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	}
 
 	if s.Policy != nil {
-		if s.Schema < SchemaPolicy {
-			return fmt.Errorf("an access policy needs %v; the state is at %v", SchemaPolicy, s.Schema)
-		}
-		if s.Policy.NamesNames() && s.Schema < SchemaMembers {
-			return fmt.Errorf("a policy naming published names needs %v; the state is at %v", SchemaMembers, s.Schema)
-		}
 		if err := s.Policy.Validate(); err != nil {
 			return fmt.Errorf("policy: %w", err)
 		}
@@ -1027,36 +958,25 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 	return nil
 }
 
-// ValidateNameBytes checks n's names against [MaxNameBytes], from
-// [SchemaSigning] on.
-func (n *NodeRecord) ValidateNameBytes(schema SchemaVersion) error {
-	if b := n.NameBytes(); schema >= SchemaSigning && b > MaxNameBytes {
+// ValidateNameBytes checks n's names against [MaxNameBytes].
+func (n *NodeRecord) ValidateNameBytes() error {
+	if b := n.NameBytes(); b > MaxNameBytes {
 		return fmt.Errorf("node %v's names take %d bytes, over the %d limit", n.Identity.ShortString(), b, MaxNameBytes)
 	}
 	return nil
 }
 
-// validateSigning checks the signing keys: one for everyone from [SchemaMLDSA]
-// on; below it none for a member, an admin key's from [SchemaSigning] on.
+// validateSigning checks that every admin key and member names a signing key,
+// no two alike.
 func (s *Snapshot) validateSigning() error {
-	pq := s.Schema >= SchemaMLDSA
 	for i := range s.Admins {
-		k := &s.Admins[i]
-		switch {
-		case k.Signing != nil && s.Schema < SchemaSigning:
-			return fmt.Errorf("admin key %v has a signing key, which needs %v; the state is at %v",
-				k.Public.ShortString(), SchemaSigning, s.Schema)
-		case k.Signing == nil && pq:
-			return fmt.Errorf("admin key %v has no signing key; the state is at %v", k.Public.ShortString(), s.Schema)
+		if k := &s.Admins[i]; k.Signing == nil {
+			return fmt.Errorf("admin key %v has no signing key", k.Public.ShortString())
 		}
 	}
 	for i := range s.Nodes {
-		switch n := &s.Nodes[i]; {
-		case n.Signing == nil && pq:
-			return fmt.Errorf("node %v has no signing key; the state is at %v", n.Identity.ShortString(), s.Schema)
-		case n.Signing != nil && !pq:
-			return fmt.Errorf("node %v has a signing key, which needs %v; the state is at %v",
-				n.Identity.ShortString(), SchemaMLDSA, s.Schema)
+		if n := &s.Nodes[i]; n.Signing == nil {
+			return fmt.Errorf("node %v has no signing key", n.Identity.ShortString())
 		}
 	}
 	return ValidateSigningKeys(s.Admins, s.Nodes)
@@ -1118,7 +1038,7 @@ func (s *Snapshot) ValidateInNetwork() error {
 		return errors.New("snapshot has no genesis hash")
 	}
 	ula := s.ULA()
-	current := V4Ranges(s.Schema, s.V4Prefix)
+	current := V4Ranges(s.V4Prefix)
 	seated := NewMemberIndex(*s.GenesisHash, len(s.Nodes))
 	seated.SetDomain(s.Domain)
 	for i := range s.Nodes {
@@ -1344,12 +1264,15 @@ func validateGrant(roles []Role, routes []netip.Prefix) error {
 	return nil
 }
 
+// knownRoles is every role.
+var knownRoles = []Role{RoleAdmin, RoleExit, RoleRelayCapable, RoleIngress, RoleService, RolePublish}
+
 func validateRoles(roles []Role) error {
 	if len(roles) > MaxRolesPerNode {
 		return fmt.Errorf("%d roles, over the %d limit", len(roles), MaxRolesPerNode)
 	}
 	for i, r := range roles {
-		if _, ok := roleSchemas[r]; !ok {
+		if !slices.Contains(knownRoles, r) {
 			return fmt.Errorf("unknown role %q", r)
 		}
 		if i > 0 && roles[i-1] >= r {

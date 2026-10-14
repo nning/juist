@@ -711,7 +711,7 @@ func (s *Service) setExit(req *ipc.Request) error {
 	if req.ExitOff {
 		c = ExitChoice{Chosen: true}
 	} else if why := egressUserOf(s.opts.Mesh.EgressUser); why != "" {
-		return errors.New(why + "\nhint: run the packaged service, as its own user")
+		return errors.New(why + "; the packaged service runs it as its own user")
 	}
 	if err := SaveExitChoice(filepath.Join(home, statedir.ExitFile), c); err != nil {
 		return err
@@ -1585,14 +1585,14 @@ func (s *Service) rotate(identity bool) ([]byte, *types.Sig, error) {
 	b := log.NewBuilder(state)
 	var aum types.AUM
 	if identity {
-		aum, err = b.RotateIdentity(cur.Identity.Public(), staged.Identity.Public(), seal)
+		aum, err = b.RotateIdentity(cur.Identity.Public(), staged.Identity.Public(), staged.Identity.SigningKey(), seal)
 	} else {
 		aum, err = b.RotateNodeKey(cur.Identity.Public(), staged.Public, seal)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := log.SignAsDevice(&aum, state.Schema(), cur.Identity, staged.Identity); err != nil {
+	if err := log.SignAsDevice(&aum, cur.Identity, staged.Identity); err != nil {
 		return nil, nil, err
 	}
 	proof, err := cur.Identity.Sign(ipc.RotationProof(&aum))

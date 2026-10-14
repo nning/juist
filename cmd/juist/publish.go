@@ -492,9 +492,6 @@ func (f *tcpFlag) public(state *log.State, target types.NodeRecord, label string
 		}
 		return 0, nil
 	}
-	if state.Schema() < types.SchemaTCP {
-		return 0, needsUpgrade("names published by TCP")
-	}
 	public := cmp.Or(f.port, port)
 	if err := types.ValidatePublicPort(public); err != nil {
 		return 0, fmt.Errorf("a name is not published by TCP on %v", err)
@@ -548,8 +545,6 @@ func membersAllowed(state *log.State, p types.PublishedName) error {
 	switch {
 	case !p.Members:
 		return nil
-	case state.Schema() < types.SchemaMembers:
-		return needsUpgrade("names for members alone")
 	case p.Proxy || p.Public != 0:
 		return fmt.Errorf("%s is for members alone, which takes neither --proxy nor --tcp\nhint: --members=false makes it public first",
 			p.Under(state.Domain()))
@@ -622,9 +617,6 @@ func nameUnder(label, domain string) string {
 
 // publishableLabel reads arg as a name to publish in state's network.
 func publishableLabel(state *log.State, arg string) (string, error) {
-	if state.Schema() < types.SchemaPublish {
-		return "", needsUpgrade("published names")
-	}
 	if state.Domain() == "" {
 		return "", fmt.Errorf("the network has no domain to publish under\nhint: juist network domain pub.example.org")
 	}

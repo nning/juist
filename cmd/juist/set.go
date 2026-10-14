@@ -178,7 +178,6 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 		a.hint("this device serves the name once it relays: juist grant %s relay", cmp.Or(st.SelfName, st.Self.ShortString()))
 	} else if h.NotAnnounced != "" {
 		a.warn("members are not told of %s: %s", *req.RelayName, h.NotAnnounced)
-		a.hint("juist log upgrade")
 	}
 }
 

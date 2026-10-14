@@ -118,8 +118,9 @@ func DecodePublished(b []byte) (*Published, error) {
 	if err := publishedDec.Unmarshal(b, &f); err != nil {
 		return nil, fmt.Errorf("ipc: decoding what is published: %w", err)
 	}
+	makePrintable(&f)
 	if f.Err != "" {
-		return nil, errors.New(printable(f.Err))
+		return nil, errors.New(f.Err)
 	}
 	switch {
 	case f.Published != nil:

@@ -1,15 +1,18 @@
 package daemon
 
 import (
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nning/juist/conn"
+	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/internal/pairkey"
 	"github.com/nning/juist/trust/log"
@@ -43,13 +46,74 @@ func (m *mesh) paired() bool {
 	return true
 }
 
+// describePairs says where every pair stands, from each end.
+func (m *mesh) describePairs() string {
+	var b strings.Builder
+	for i, from := range m.nodes {
+		for j, to := range m.nodes {
+			if i == j {
+				continue
+			}
+			g := from.pskOf(to.id())
+			state := "no exchange"
+			if env, ok := from.d.pairEnvFor(to.id()); ok {
+				from.d.readPairs(func(s *pairkey.Store) { state = s.Describe(env) })
+			}
+			fmt.Fprintf(&b, "\nn%d to n%d: gives the %v %x, %s", i, j, g.stage, g.key[:4], state)
+		}
+	}
+	return b.String()
+}
+
+// waitForPairs is waitFor, saying where every pair stands if it times out.
+func (m *mesh) waitForPairs(t *testing.T, d time.Duration, what string, cond func() bool) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for !cond() {
+		if time.Since(start) > d {
+			t.Fatalf("timed out after %v waiting for %s:%s", d, what, m.describePairs())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return time.Since(start)
+}
+
+// pairKeys is the key each member gives each other one, by their indices.
+func (m *mesh) pairKeys() map[[2]int]pairkey.Key {
+	out := map[[2]int]pairkey.Key{}
+	for i, from := range m.nodes {
+		for j, to := range m.nodes {
+			if i != j {
+				out[[2]int{i, j}] = from.pskOf(to.id()).key
+			}
+		}
+	}
+	return out
+}
+
+// movedOn reports whether every pair holds a pair key, none of them one of
+// before.
+func (m *mesh) movedOn(before map[[2]int]pairkey.Key) func() bool {
+	return func() bool {
+		if !m.paired() {
+			return false
+		}
+		for k, key := range m.pairKeys() {
+			if key == before[k] {
+				return false
+			}
+		}
+		return true
+	}
+}
+
 // A mesh whose log sync runs through the tunnels moves every pair from the
 // group key to a key of its own, which both hold, and the tunnels carry
 // traffic throughout.
 func TestTunnelsMoveToPairKeys(t *testing.T) {
 	m := startMeshWith(t, 3, inTunnel)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
-	took := waitFor(t, 30*time.Second, "every pair to hold a pair key", m.paired)
+	took := m.waitForPairs(t, 30*time.Second, "every pair to hold a pair key", m.paired)
 	t.Logf("pair keys in %v", took)
 	if !pingUntil(m.nodes[0], m.nodes[2].overlayV4(), 20*time.Second) {
 		t.Fatal("no overlay reachability on pair keys")
@@ -61,9 +125,9 @@ func TestTunnelsMoveToPairKeys(t *testing.T) {
 func TestAnEpochBumpMovesThePairKeys(t *testing.T) {
 	m := startMeshWith(t, 3, inTunnel)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
-	waitFor(t, 30*time.Second, "every pair to hold a pair key", m.paired)
+	m.waitForPairs(t, 30*time.Second, "every pair to hold a pair key", m.paired)
 	a, b := m.nodes[0], m.nodes[1]
-	before := a.pskOf(b.id()).key
+	before := m.pairKeys()
 
 	var lost atomic.Int32
 	stop := make(chan struct{})
@@ -81,14 +145,89 @@ func TestAnEpochBumpMovesThePairKeys(t *testing.T) {
 		}
 	})
 	m.apply(t, a, func(b *log.Builder) (types.AUM, error) { return b.EpochBump(m.nw.sealer()) })
-	waitFor(t, 30*time.Second, "every pair to move to a new pair key", func() bool {
-		return m.paired() && a.pskOf(b.id()).key != before
-	})
+	took := m.waitForPairs(t, 30*time.Second, "every pair to move to a new pair key", m.movedOn(before))
+	t.Logf("moved in %v", took)
 	close(stop)
 	wg.Wait()
 	if n := lost.Load(); n > 0 {
 		t.Errorf("%d pings lost across the epoch bump", n)
 	}
+}
+
+// A stoppable clock passes with the real one, ahead by what it was advanced,
+// and stands still while stopped.
+type stoppable struct {
+	mu      sync.Mutex
+	offset  time.Duration
+	stopped time.Time
+}
+
+func (c *stoppable) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.stopped.IsZero() {
+		return c.stopped
+	}
+	return time.Now().Add(c.offset)
+}
+
+func (c *stoppable) stop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopped = time.Now().Add(c.offset)
+}
+
+func (c *stoppable) resume() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopped = time.Time{}
+}
+
+func (c *stoppable) advance(by time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offset += by
+}
+
+// A follower that puts an offer off, because it answered one within
+// [pairkey.Pace], reaches the leader for it once the pace has passed: no
+// anti-entropy round is needed to move the pair on.
+func TestAnOfferPutOffByThePaceIsAnsweredOnceItPasses(t *testing.T) {
+	m := &mesh{t: t, nw: newNetworkWithAdminDevices(t, 2, 0), hub: &lanHub{}}
+	clocks := []*stoppable{{}, {}}
+	for i, c := range clocks {
+		auth, st := m.nw.authorityFor(t)
+		m.nodes = append(m.nodes, m.startOn(t, i, m.nw.devices[i], auth, st, func(o *Options) {
+			inTunnel(o)
+			o.Clock = c.now
+			o.SyncInterval = time.Hour
+		}))
+	}
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	m.waitForPairs(t, 30*time.Second, "the two to hold a pair key", m.paired)
+	leader, follower := 0, 1
+	if !pairkey.Leads(m.nw.devices[0].record.WireGuard, m.nw.devices[1].record.WireGuard) {
+		leader, follower = 1, 0
+	}
+	// The follower stays within the pace of its answer, the leader is past
+	// its own, so it offers at once.
+	clocks[follower].stop()
+	clocks[leader].advance(pairkey.Pace)
+	before := m.pairKeys()
+	m.apply(t, m.nodes[0], func(b *log.Builder) (types.AUM, error) { return b.EpochBump(m.nw.sealer()) })
+	f, l := m.nodes[follower], m.nodes[leader]
+	m.waitForPairs(t, 30*time.Second, "the follower to put the leader's offer off", func() bool {
+		env, ok := f.d.pairEnvFor(l.id())
+		if !ok {
+			return false
+		}
+		var state string
+		f.d.readPairs(func(s *pairkey.Store) { state = s.Describe(env) })
+		return strings.Contains(state, "an offer put off")
+	})
+	clocks[follower].resume()
+	took := m.waitForPairs(t, 15*time.Second, "the pair to move to a new pair key", m.movedOn(before))
+	t.Logf("moved in %v once the pace passed", took)
 }
 
 // Exit criterion (2) of M15, the rest: a member whose log sync runs through
@@ -125,7 +264,7 @@ func TestASleeperReachesThePeerItPairedWith(t *testing.T) {
 	}
 	rotated.identity, rotated.record.Identity = fresh, fresh.Public()
 	m.apply(t, admin, func(b *log.Builder) (types.AUM, error) {
-		return b.RotateIdentity(m.nw.devices[0].record.Identity, fresh.Public(), m.nw.sealer())
+		return b.RotateIdentity(m.nw.devices[0].record.Identity, fresh.Public(), fresh.SigningKey(), m.nw.sealer())
 	}, m.nw.devices[0].identity, fresh)
 	admin.halt()
 	admin = m.startKept(t, 0, &rotated, kept[0], clock)
@@ -322,5 +461,132 @@ func TestTheFirstAnnouncementNamesTheEpoch(t *testing.T) {
 	e, ok := f.d.announcement()
 	if !ok || e.Epoch == 0 || e.PairStore != f.d.pairs.ID() {
 		t.Fatalf("the first announcement names epoch %d, store %d", e.Epoch, e.PairStore)
+	}
+}
+
+// forgedHint is dev's announcement e as a quantum computer forges it, signed
+// by Ed25519 alone, numbered ahead by ahead seconds and naming a later epoch
+// and another pair store.
+func forgedHint(t *testing.T, dev *device, e gossip.Endpoint, ahead uint64) gossip.Endpoint {
+	t.Helper()
+	h := e.Hint()
+	h.Seq, h.Epoch, h.PairStore = e.Seq+ahead, e.Epoch+1, e.PairStore+1
+	if err := h.Sign(dev.identity); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// From its start, before its first reconcile, a device holds what gossip and
+// discovery hand it to the signing keys its log names: an announcement signed
+// by Ed25519 alone is a hint.
+func TestAnnouncementsAreHeldToTheSigningKeysFromTheStart(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	dev := f.nw.devices[1]
+	e, err := endpointFor(dev, 7001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(forgedHint(t, dev, e, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if !f.d.endpoints.IsHint(dev.record.Identity) {
+		t.Fatal("before the first reconcile an announcement signed by Ed25519 alone was held as full")
+	}
+}
+
+// A forged hint newer than a member's announcement, naming a later epoch and
+// another pair store, costs the pair nothing: both keep the pair key they
+// hold, and the tunnel carries traffic on it.
+func TestAForgedHintLeavesThePairKey(t *testing.T) {
+	m := startMeshWith(t, 2, inTunnel)
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	m.waitForPairs(t, 30*time.Second, "the pair to hold a pair key", m.paired)
+	a, b := m.nodes[0], m.nodes[1]
+	before := a.pskOf(b.id())
+	own, _ := b.d.Announcement()
+	if err := a.d.Learn(forgedHint(t, b.dev, own, 300)); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.pskOf(b.id()); got != before || !m.paired() {
+		t.Fatalf("after a forged hint the peer is given the %v %x, was the %v %x:%s",
+			got.stage, got.key[:4], before.stage, before.key[:4], m.describePairs())
+	}
+	if !pingUntil(a, b.overlayV4(), 20*time.Second) {
+		t.Fatal("no overlay reachability after a forged hint")
+	}
+}
+
+// Where a hint alone is held for a member, as forged, no exchange with it
+// moves and the pair held stays bound to the store its announcement named.
+func TestAHintAloneMovesNoPair(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	dev := f.nw.devices[1]
+	e := f.learn(t, dev, 7001)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	env, ok := f.d.pairEnvFor(dev.record.Identity)
+	if !ok {
+		t.Fatal("no pair with the member")
+	}
+	bound := func() bool {
+		var said string
+		f.d.readPairs(func(s *pairkey.Store) { said = s.Describe(env) })
+		return said != "no exchange"
+	}
+	if !bound() {
+		t.Fatal("the pair is not bound to the member's store")
+	}
+
+	f.d.endpoints.Forget(dev.record.Identity)
+	if err := f.d.Learn(forgedHint(t, dev, e, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if !bound() {
+		t.Fatal("a hint alone bound the pair to the store it names")
+	}
+	if _, ok := f.d.pairEnvFor(dev.record.Identity); ok {
+		t.Fatal("an exchange moves against a hint alone")
+	}
+}
+
+// A hint alone, as forged, picks nothing of its member's preshared key: naming
+// no epoch leaves the member keyed, and naming another store or epoch leaves
+// the pair's.
+func TestAHintAlonePicksNoPresharedKey(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	dev := f.nw.devices[1]
+	id := dev.record.Identity
+	e := f.learn(t, dev, 7001)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	keyed := f.installed(t, 1).PSK
+	if keyed == [32]byte{} {
+		t.Fatal("the member is given no preshared key")
+	}
+	f.d.endpoints.Forget(id)
+	for i, forged := range []struct{ epoch, store uint64 }{{0, 0}, {e.Epoch + 1, e.PairStore + 1}} {
+		f.learnHint(t, dev, e, func(h *gossip.Endpoint) {
+			h.Seq, h.Epoch, h.PairStore = e.Seq+uint64(i)+1, forged.epoch, forged.store
+		})
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.installed(t, 1).PSK; got != keyed {
+			t.Fatalf("a hint naming epoch %d, store %d changed the preshared key", forged.epoch, forged.store)
+		}
+		n, _ := f.auth.State().Node(id)
+		env, ok := f.d.pairEnvOf(f.auth.State(), &n)
+		if !ok || env.PeerStore != e.PairStore || env.Epoch != e.Epoch {
+			t.Fatalf("a hint naming epoch %d, store %d is paired as %+v", forged.epoch, forged.store, env)
+		}
 	}
 }

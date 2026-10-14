@@ -262,7 +262,7 @@ func TestRotationRecordsFromTheDaemonAreChecked(t *testing.T) {
 		t.Helper()
 		a.Signatures = nil
 		for _, k := range keys {
-			if err := a.SignUnder(k, auth.State().Schema()); err != nil {
+			if err := a.Sign(k); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -328,19 +328,16 @@ func TestRotationRecordsFromTheDaemonAreChecked(t *testing.T) {
 		t.Error("a rotation on another head passed")
 	}
 
-	// Which device this is, is the daemon's word. Under schema 0 an identity
-	// rotation carries only the new key's signature, so one claiming to be
-	// this device could move its slot to a key of its own, were it not for
-	// the proof by the key it claims.
-	auth = schema0Log(t, auth, self)
-	taken, err := auth.Builder().RotateIdentity(self, other.Public(), sealer())
+	// Which device this is, is the daemon's word: only the proof by the key
+	// it claims ties a rotation signed by both keys to this device.
+	taken, err := auth.Builder().RotateIdentity(self, other.Public(), other.SigningKey(), sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check(true, signed(taken, other, other)) == nil {
+	if check(true, signed(taken, other, me, other)) == nil {
 		t.Error("an identity rotation proved by another key passed")
 	}
-	if err := check(true, signed(taken, me, other)); err != nil {
+	if err := check(true, signed(taken, me, me, other)); err != nil {
 		t.Errorf("the honest identity rotation was refused: %v", err)
 	}
 }

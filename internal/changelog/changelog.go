@@ -42,8 +42,6 @@ var kindNames = map[types.Kind]string{
 	types.KindRenameNode:        "renaming of a device",
 	types.KindDisable:           "end of the network",
 	types.KindSetPolicy:         "change of the access policy",
-	types.KindSetSigningKeys:    "quantum-safe signing keys for every device",
-	types.KindSetAdminSigning:   "quantum-safe signing key of an admin key",
 }
 
 // An Entry is one change: what it did, who approved it, and its hash.

@@ -54,7 +54,7 @@ The `Relays` line in `juist status` then counts it as available.
 
 `juist revoke vps relay` takes the role away. It is best to give the role to
 two or more devices with public addresses. In a network of more than two
-devices, `juist status` warns as long as no device may relay.
+devices, `juist health` warns as long as no device may relay.
 
 ## A relay on 443
 
@@ -83,17 +83,14 @@ says:
 ```
 {{< /step >}}
 
-- Every device learns the name from the relay's announcement once the
-  network's log is at schema 12. Until then, `juist status` says
-  `members are not told of relay.example.org`, and `juist log upgrade` raises
-  the schema.
+- Every device learns the name from the relay's announcement.
 - Listening on port 443 needs a privilege that juistd otherwise lacks and that
   only root can grant. `sudo juist set` grants it `CAP_NET_BIND_SERVICE` for
   this purpose only, through a systemd drop-in, and
   `sudo juist set --relay-name ""` takes it away together with the name.
 - On FreeBSD, juistd's helper binds 443 only while root's grant is in place and
   no other program listens on 443. If pf runs, it must let the traffic in.
-- If the grant outlives the name, `juist status` warns, and `juist reset` takes
+- If the grant outlives the name, `juist health` warns, and `juist reset` takes
   it away.
 - Members use the name only once the server at that name confirms it is this
   relay. A name that points elsewhere is not used.
@@ -135,7 +132,7 @@ signed record of who belongs to the network. Traffic there has already passed
 WireGuard and juist's own filter, and the packages let it in where ufw or
 firewalld runs. A firewall you configured by hand must let it in too.
 Otherwise the device keeps its tunnels but misses changes to the network,
-including removals; `juist status` reports this. An
+including removals; `juist health` reports this. An
 [exit node]({{< relref "docs/exit-nodes" >}}) also answers its members' DNS
 queries there, on UDP and TCP 41646, which such a firewall must let in as well.
 
@@ -173,13 +170,13 @@ it. `man juistd` lists every option.
 
 ## Troubleshooting
 
-| `juist status` says | What to do |
+| `juist health` says | What to do |
 |---|---|
 | `no tunnel traffic from …` | open 41643/udp on a device with a public address, or grant one `relay` |
 | `no device reaches this relay` | open 41645/tcp and udp on the relay, and in any firewall in front of it |
 | `no device may relay` | run `juist grant DEVICE relay` for a device with a public address |
 | `no certificate for relay.example.org yet` | point the name at the relay, and let 443/tcp reach it |
 | `the relay cannot take 443` | another program holds 443 there, or juistd lacks the capability `juist set` grants |
-| `members are not told of …` | run `juist log upgrade` on an admin's device |
-| `log sync … fails in the tunnel` | let `juist0` through the host firewall, as the hint says |
+| `members are not told of …: this device does not relay` | grant the device `relay`: `juist grant DEVICE relay` |
+| `log sync … fails in the tunnel` | let `juist0` through the other device's firewall, as the hint says |
 | `no answer from …` | the device is offline, or its 41643/udp is closed |

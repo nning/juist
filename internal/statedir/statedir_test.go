@@ -126,7 +126,7 @@ func TestSeedHintsKeepsOnlyWhatVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	good := gossip.Endpoint{Identity: id.Public(), Disco: gossip.DiscoKey{1}, GossipPort: 41644, Seq: 1,
+	good := gossip.Endpoint{Identity: id.Public(), Disco: gossip.DiscoKey{1}, GossipPort: 41644, Seq: 1, Schema: types.CurrentSchema,
 		Addrs: []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41643")}}
 	if err := good.Sign(id); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestSeedHintsKeepsOnlyWhatVerifies(t *testing.T) {
 
 	lease := func(issued uint64) []byte {
 		l := types.Lease{Network: types.Hash{1}, Head: types.Hash{2}, Issued: issued}
-		if err := l.Sign(id, false); err != nil {
+		if err := l.Sign(id); err != nil {
 			t.Fatal(err)
 		}
 		b, err := l.Encode()

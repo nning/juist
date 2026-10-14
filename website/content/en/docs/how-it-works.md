@@ -31,9 +31,9 @@ create or join a network.
 `juist` is the command you type. It tells juistd what to do, and it holds
 your admin keys if you are an admin.
 
-Any local user can run `juist status`. All other commands need root or the
-device's **operator**: a local user, set with `juist set --operator`, who can
-then manage the device without sudo. See
+Any local user can run `juist status` and `juist health`. All other commands
+need root or the device's **operator**: a local user, set with
+`juist set --operator`, who can then manage the device without sudo. See
 [The operator]({{< relref "docs/operator" >}}).
 
 ## The membership log {#the-membership-log}
@@ -102,8 +102,8 @@ There is no server to ask, so juist looks in three places:
   large public directory on the internet, for members a device has lost
   track of.
 
-What devices store in the DHT is encrypted, and in a network at schema 16
-every entry is the same size. The DHT sees addresses, never contents, and
+What devices store in the DHT is encrypted, and every entry is the same
+size. The DHT sees addresses, never contents, and
 nothing it returns can change who belongs to the network.
 
 ## How devices connect {#connections}
@@ -185,8 +185,8 @@ This has four consequences:
 
 `juist status` shows the state in its `Freshness` line, for example
 `vouched just now, valid 48h`, `expired; vouchers only` or `unchecked: no
-voucher`. It warns a day ahead: `freshness ends in 20h unless 2 vouchers vouch
-again`.
+voucher`. `juist health` warns a day ahead: `freshness ends in 20h unless 2
+vouchers vouch again`.
 
 ## Terms {#terms}
 

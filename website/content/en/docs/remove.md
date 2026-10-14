@@ -109,7 +109,7 @@ needed and a voucher also relays.
 ## Troubleshooting
 
 `Freshness  expired; vouchers only` means too few vouchers have been
-reachable for 48 hours. `juist status` warns a day before, with `freshness
+reachable for 48 hours. `juist health` warns a day before, with `freshness
 ends in …`. Bring a voucher back online; the device is current again once the
 voucher's confirmation arrives. See
 [Troubleshooting]({{< relref "docs/troubleshooting" >}}).

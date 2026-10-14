@@ -93,6 +93,7 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 			Addrs:    addrs,
 			STUNPort: ep.Relay.STUNPort,
 			Name:     name,
+			Own:      n.Identity == d.self,
 		}
 		copy(r.CertHash[:], ep.Relay.Cert)
 		if len(r.Addrs) == 0 && r.Name == "" {
@@ -112,20 +113,12 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 // after its own removal, stops it: who may use it is a membership question.
 func (d *Daemon) syncRelay(state *log.State) {
 	want := !d.noRelay
-	refused := ""
 	if state != nil {
 		self, ok := state.Node(d.self)
 		want = want && ok && self.HasRole(types.RoleRelayCapable)
-		refused = schemaRefusesRelayName(state)
 	} else {
 		want = false
 	}
-	d.mu.Lock()
-	if d.relayName != "" && d.relayNameRefused != refused {
-		d.relayNameRefused = refused
-		d.announced = nil // the name enters or leaves the announcement
-	}
-	d.mu.Unlock()
 	select {
 	case <-d.closed:
 		// Shutting down. Starting one here would outlive the Close that has
@@ -233,7 +226,7 @@ func (d *Daemon) relayInfo() *gossip.RelayInfo {
 		HostName: srv.HostName(),
 	}
 	d.mu.Lock()
-	if d.relayCerts != nil && d.relayNameRefused == "" {
+	if d.relayCerts != nil {
 		info.Name = d.relayName
 	}
 	d.mu.Unlock()

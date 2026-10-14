@@ -10,8 +10,8 @@ import (
 
 // pcapFlows reads a capture tcpdump wrote of an Ethernet link and prints a
 // line for each TCP flow to port 443, with the server name its first
-// ClientHello asks for, one for each DNS query, and one for every packet that
-// is neither.
+// ClientHello asks for, or "empty" where it carried no byte, one for each DNS
+// query, and one for every packet that is neither.
 func pcapFlows(file string) error {
 	b, err := os.ReadFile(file)
 	if err != nil {
@@ -96,6 +96,10 @@ func pcapFlows(file string) error {
 		}
 	}
 	for _, f := range flows {
+		if len(f.hello) == 0 {
+			fmt.Printf("tcp %s empty\n", f.key)
+			continue
+		}
 		fmt.Printf("tls %s sni %s\n", f.key, cmpOr(f.sni, "-"))
 	}
 	return nil

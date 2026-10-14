@@ -10,7 +10,7 @@ import (
 )
 
 // logAdapter presents the authority and its store as a [gossip.Log]. A
-// distinct type over the same struct, so gossip can reach those three methods
+// distinct type over the same struct, so gossip can reach those methods
 // and nothing else.
 type logAdapter Daemon
 
@@ -32,25 +32,26 @@ func (a *logAdapter) View() (gossip.View, error) {
 		Head:    state.Head(),
 		Epoch:   state.Epoch(),
 		Anchor:  d.authority.Anchor(),
-		Have:    append(have, d.authority.Dropped()...),
-		Schema:  state.Schema(),
+		Have:    have,
 	}, nil
 }
 
 // Missing returns records the peer lacks and can accept, parents first. The
 // walk starts at the *peer's* anchor: after a compaction a record below it is
 // one the peer's log refuses, and Inform is atomic, so one refused record
-// poisons the whole batch. Children are visited in hash order, so two nodes
+// poisons the whole batch. A peer anchored where this node holds nothing, below
+// its own anchor, is walked from that. Children are visited in hash order, so two nodes
 // holding the same store offer the same batch; losing fork branches are
 // included, since a peer must see a fork in full to alarm on it.
 func (a *logAdapter) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM, error) {
 	d := a.daemon()
 	d.authMu.Lock()
 	defer d.authMu.Unlock()
-	if _, err := d.storage.AUM(anchor); err != nil {
-		if errors.Is(err, log.ErrNotFound) {
-			return nil, nil
-		}
+	if _, err := d.storage.AUM(anchor); errors.Is(err, log.ErrNotFound) {
+		// A peer anchored below this node's anchor, as one that has not
+		// compacted yet, takes what hangs from it where it holds its parent.
+		anchor = d.authority.Anchor()
+	} else if err != nil {
 		return nil, err
 	}
 	held := make(map[types.Hash]bool, len(have))
@@ -69,7 +70,19 @@ func (a *logAdapter) Missing(have []types.Hash, anchor types.Hash) ([]types.AUM,
 		held[dis.At] = true
 	}
 	queue := []types.Hash{anchor}
-	visited := map[types.Hash]bool{anchor: true}
+	// The anchor stands for its content; a build that predates the schema
+	// refuses a copy of it, and with it the whole batch.
+	if d.authority.State().Schema() >= types.SchemaContentForkChoice {
+		copies, err := d.authority.Copies(anchor)
+		if err != nil {
+			return nil, err
+		}
+		queue = copies
+	}
+	visited := map[types.Hash]bool{}
+	for _, h := range queue {
+		visited[h] = true
+	}
 	for len(queue) > 0 && len(out) < gossip.MaxRecordsPerFrame {
 		h := queue[0]
 		queue = queue[1:]
@@ -123,9 +136,20 @@ func (a *logAdapter) SigningKey(id types.Identity) *types.SigningKey {
 	return state.SigningKey(id)
 }
 
+func (a *logAdapter) ListedSigningKey(id types.Identity) *types.SigningKey {
+	d := a.daemon()
+	d.authMu.Lock()
+	defer d.authMu.Unlock()
+	return d.authority.ListedSigningKey(id)
+}
+
 func (a *logAdapter) Inform(records []types.AUM) error {
 	d := a.daemon()
 	d.authMu.Lock()
 	defer d.authMu.Unlock()
-	return d.authority.Inform(records...)
+	news, err := d.authority.Learn(records...)
+	if err == nil && !news {
+		return gossip.ErrNothingNew
+	}
+	return err
 }

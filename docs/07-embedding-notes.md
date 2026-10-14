@@ -144,7 +144,7 @@ Each fails silently or confusingly.
   install no rules. The runner reports IPv6 only where `disable_ipv6` and
   `disable_policy` are 0 and IPv6 policy routing works — and, in its iptables mode,
   only where the `ip6tables` binary exists. A host missing `ip6tables` therefore
-  loses the overlay's *primary* family with nothing but a log line. Packaging (M26)
+  loses the overlay's *primary* family with nothing but a log line. Packaging (M27)
   must declare that dependency, and an operator report of "no v6 on the overlay"
   should start here.
 - **`router.CleanUp` is not worth calling here**, though `tailscaled` calls it at
@@ -232,7 +232,7 @@ juist must hold nothing tailscaled also holds, since both run on one host:
 
 - **Not its address range.** tailscaled's `ts-input` chain drops every packet
   from 100.64.0.0/10 that arrives on an interface other than `tailscale0`, local
-  ones included. Overlay IPv4 therefore comes from 198.18.0.0/15 from schema 4 on.
+  ones included. Overlay IPv4 therefore comes from 198.18.0.0/15.
 - **Not its routing table or rule priorities.** Tailscale's Linux router hard-codes
   table 52 and rules at 5210–5270, and deletes those rules when it closes. juist
   programs its own table and priorities (`conn/router_linux.go`), below

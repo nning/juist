@@ -172,9 +172,6 @@ func (a *app) submitRoutes(auth *log.Authority, target types.NodeRecord, next []
 		a.ok("%s: unchanged", name)
 		return false, nil
 	}
-	if need, what := (&types.NodeRecord{Roles: next}).NeedsSchema(); auth.State().Schema() < need {
-		return false, needsUpgrade(what)
-	}
 	aum, err := auth.Builder().SetNodeRoutes(target.Identity, next, routes)
 	if err != nil {
 		return false, err

@@ -143,13 +143,13 @@ func TestASubnetIsLeftOutWhereItMustBe(t *testing.T) {
 	}
 }
 
-// A router on a build before schema 14, in a network at it, routes nothing
-// for this device and is given no preshared key: its tunnel carries juist's
-// own traffic alone, which seals itself.
+// A router naming no epoch routes nothing for this device and is given no
+// preshared key: its tunnel carries juist's own traffic alone, which seals
+// itself.
 func TestARouterThatIsNotPostQuantumCarriesNothingElse(t *testing.T) {
 	f := subnetFixture(t, 1, -1, prefixList("192.168.50.0/24"), nil)
 	router := f.nw.devices[1]
-	f.learnOld(t, router, 7001, true)
+	f.learnNoEpoch(t, router, 7001, true)
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}

@@ -1,8 +1,8 @@
 ---
 title: Status and devices
 linkTitle: Status and devices
-description: See whether a device is connected, which devices are in the network, and every change made to it.
-lead: Three commands tell you how things stand. juist status shows this device and what needs attention, juist devices lists every device, and juist log shows every change and who approved it.
+description: See whether a device is connected, what needs attention, which devices are in the network, and every change made to it.
+lead: Four commands tell you how things stand. juist status shows this device, juist health says what needs attention, juist devices lists every device, and juist log shows every change and who approved it.
 ---
 
 Your network is a group of devices that belong together, and each of them is
@@ -11,13 +11,13 @@ list of every change (see [How juist works]({{< relref "docs/how-it-works" >}}))
 The commands on this page read that log, and ask the daemon `juistd`, the
 program that keeps the tunnels up, about the current state.
 
-Whenever something seems wrong, start with `juist status`. It names the problem
+Whenever something seems wrong, start with `juist health`. It names each problem
 and prints a `hint:` line with the command that fixes it.
 
 ## Checking a device
 
 {{< step on="laptop" >}}
-See whether this device is connected, and what needs attention:
+See whether this device is connected:
 
 ```sh
 juist status
@@ -32,12 +32,22 @@ home · connected
   Names         home.juist
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
+  Schema        18
   Updated       just now
 ```
 
-The first line shows the network's name and its state. The details follow,
-then any warnings, each with a hint.
+The first line shows the network's name and its state; the details follow.
+Where something needs attention, at most two hints point on:
+
+```console
+hint: 1 change waits for your vote: juist approve
+hint: 3 warnings: juist health
+```
 {{< /step >}}
+
+On a device in several networks, the second hint names the network, as in
+`juist health work`. `juist status` itself says only what stops the network:
+a fork or rollback alarm, or a schema this version of juist cannot read.
 
 The state on the first line is one of these:
 
@@ -67,9 +77,9 @@ The state on the first line is one of these:
   network is current, and how long that confirmation stays valid. A voucher
   is a device the network trusts to confirm this every hour. After 48 hours
   without a confirmation, the line reads `expired; vouchers only`. A warning
-  appears a day before that. If no device vouches, the line reads
-  `unchecked: no voucher`, and if at least two devices may relay, a hint
-  suggests making them vouchers. See
+  appears in `juist health` a day before that. If no device vouches, the line
+  reads `unchecked: no voucher`, and if at least two devices may relay,
+  `juist health` suggests making them vouchers. See
   [Removing a device]({{< relref "docs/remove" >}}).
 - `Published`: the published names this device serves, or why it does not
   serve them. See [Publishing services]({{< relref "docs/publishing" >}}).
@@ -78,10 +88,40 @@ The state on the first line is one of these:
 - `Sharing`: how many shares this device has (`juist share` lists them), or
   why nobody can reach them.
 - `Ports`: the ports juistd listens on. `udp/41643` is the one for the tunnels.
+- `Schema`: the version of the record format the network's log is at. Where
+  this version of juist implements a newer one, it follows in yellow, as in
+  `18 (19)`; on a device with an admin key, `juist health` then says how to
+  upgrade (see [Admins]({{< relref "docs/admins" >}})).
 - `Updated`: when juistd last applied the network's state.
 
 Lines such as `Subnets`, `Published` or `Renumbering` appear only while those
 features are in use.
+
+## What needs attention
+
+`juist health` says what needs attention on this device, each warning with a
+`hint:` that fixes it, and which devices it does not reach:
+
+```console
+$ juist health
+warning: log sync to vps fails in the tunnel: tcp/41644 does not answer there
+hint: where it runs Linux: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
+no answer from phone: offline, or udp/41643 blocked
+```
+
+A plain line such as `no answer from phone` needs nothing done while that
+device is off. Below the warnings follow the changes that wait for your
+vote (see [Admins]({{< relref "docs/admins" >}})) and, on a device with an
+admin key, how to upgrade the network's schema. Where nothing needs
+attention it says so:
+
+```console
+$ juist health
+nothing needs attention
+```
+
+On a device in several networks, `juist health` prints each network's under
+its name.
 
 ## Listing the devices
 
@@ -89,11 +129,11 @@ features are in use.
 
 ```console
 $ juist devices
-NAME                  IPV4         REACHED  ROLES
-laptop (this device)  198.18.36.1  -        -
-nas                   198.18.36.2  direct   voucher, names, publishes
-vps                   198.18.36.3  direct   voucher, relay
-phone                 198.18.36.4  relayed  -
+NAME                  IPV4         REACHED  SCHEMA  ROLES
+laptop (this device)  198.18.36.1  -        18      -
+nas                   198.18.36.2  direct   18      voucher, names, publishes
+vps                   198.18.36.3  direct   18      voucher, relay
+phone                 198.18.36.4  relayed  18      -
 ```
 
 `ROLES` lists, for each device:
@@ -120,6 +160,11 @@ one, such as a phone's, each device takes up several lines.
 | `not checked yet` | juistd has not checked yet |
 | `not connected` | the device was heard from, but has no tunnel, for example while this device's view is out of date |
 | `-` | this device itself |
+
+`SCHEMA` is the newest schema each device's juist implements, as the device
+announces it. It is yellow where older than this device's, and `-` where
+this device has heard no announcement of it yet. Where juistd does not run
+or has heard none, the column is left out.
 
 With an [access policy]({{< relref "docs/access" >}}), `juist devices`
 lists only this device and the members it has a tunnel with, and ends with
@@ -176,17 +221,17 @@ its own daemon, `juistd@juist1`, with its own log.
 
 ## Notes
 
-- Any local user may run `juist status`. A user who is neither root nor the
-  device's [operator]({{< relref "docs/operator" >}}) sees a `read-only`
-  hint below the output.
+- Any local user may run `juist status` and `juist health`. A user who is
+  neither root nor the device's [operator]({{< relref "docs/operator" >}})
+  sees a `read-only` hint in `juist health`.
 - `juist devices`, `juist log` and all other commands are only for root and
   the operator.
 - On a device in [several networks]({{< relref "docs/networks" >}}),
-  `juist status` and `juist devices` show each network in turn.
+  `juist status`, `juist health` and `juist devices` show each network in turn.
   `juist devices work` shows just one.
 
 ## Troubleshooting
 
-`juist status` lists warnings below the details, each followed by a `hint:`
-line. [Troubleshooting]({{< relref "docs/troubleshooting" >}}) explains the
-common ones and what to do about them.
+`juist health` lists warnings, each followed by a `hint:` line.
+[Troubleshooting]({{< relref "docs/troubleshooting" >}}) explains the common
+ones and what to do about them.

@@ -133,8 +133,8 @@ func (fx *fuzzNetwork) sign(auth *Authority, aum *types.AUM) {
 			aum.Prev = &head
 		}
 	}
-	_ = aum.SignUnder(fx.admin, auth.State().Schema())
-	_ = SignAsDevice(aum, auth.State().Schema(), fx.devices...)
+	_ = aum.Sign(fx.admin)
+	_ = SignAsDevice(aum, fx.devices...)
 }
 
 func buildFuzzNetwork() (*fuzzNetwork, error) {
@@ -161,7 +161,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := aum.SignUnder(admin, auth.State().Schema()); err != nil {
+		if err := aum.Sign(admin); err != nil {
 			return nil, err
 		}
 		if err := auth.Inform(aum); err != nil {
@@ -177,7 +177,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := domain.SignUnder(admin, auth.State().Schema()); err != nil {
+	if err := domain.Sign(admin); err != nil {
 		return nil, err
 	}
 	if err := auth.Inform(domain); err != nil {
@@ -200,7 +200,9 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 			return b.RotateNodeKey(first, types.NodeKeys{WireGuard: fourth.WireGuard,
 				X25519: fourth.X25519, MLKEM: fourth.MLKEM}, seal)
 		},
-		func() (types.AUM, error) { return b.RotateIdentity(first, fixedIdentity(105).Public(), seal) },
+		func() (types.AUM, error) {
+			return b.RotateIdentity(first, fixedIdentity(105).Public(), fixedIdentity(105).SigningKey(), seal)
+		},
 		func() (types.AUM, error) {
 			return b.AddAdminKey(types.AdminKey{Public: fixedIdentity(10).Public(), Signing: new(fixedIdentity(10).SigningKey()), Endorsement: fixedIdentity(10).Endorsement(), Votes: 1, Holder: "other"})
 		},
@@ -232,15 +234,10 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 	// Refused on their substance, which is what a seed for these can show.
 	head := auth.Head()
 	tooNew := types.CurrentSchema + 1
-	bumped, err := seal(auth.State().Epoch()+1, auth.State().Nodes())
-	if err != nil {
-		return nil, err
-	}
 	unsigned := []types.AUM{
 		{Kind: types.KindRetireAddresses, Prev: &head},
 		{Kind: types.KindSchemaUpgrade, Prev: &head, Schema: &tooNew},
 		{Kind: types.KindRemoveAdminKey, Prev: &head, Subject: new(admin.Public())},
-		{Kind: types.KindSetSigningKeys, Prev: &head, Signing: &types.SigningKeys{}, Epoch: bumped},
 	}
 	for _, f := range build {
 		aum, err := f()

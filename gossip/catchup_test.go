@@ -137,7 +137,7 @@ func signedEndpoint(t *testing.T, addr netip.AddrPort) (types.Identity, Endpoint
 		t.Fatal(err)
 	}
 	e := Endpoint{Identity: priv.Public(), Disco: DiscoKey{9}, Addrs: []netip.AddrPort{addr},
-		GossipPort: addr.Port(), Seq: 1}
+		GossipPort: addr.Port(), Seq: 1, Schema: types.CurrentSchema}
 	if err := e.Sign(priv); err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +233,7 @@ func TestAGrantFromANonMemberGetsNothing(t *testing.T) {
 func TestOnlyAMemberAheadRefuses(t *testing.T) {
 	p := newCatchUpPair(t)
 	p.setPeerMember(lists())
+	p.peer.log.onceListed(p.sleeper)
 
 	p.setSleeperMember(lists())
 	if err := p.sleeper.node.CatchUpWith(t.Context(), p.peer.addr()); err == nil || errors.Is(err, ErrCatchUpRefused) {
@@ -343,6 +344,7 @@ func TestACatchUpForAnUnlistedDeviceIsRefused(t *testing.T) {
 	p.setPeerMember(func(id types.Identity) (types.NodeRecord, bool, error) {
 		return p.sleeper.record, listed.Load(), nil
 	})
+	p.peer.log.onceListed(p.sleeper)
 	err := p.sleeper.node.SyncWith(t.Context(), p.peer.addr(), p.peer.id)
 	if !errors.Is(err, ErrCatchUpRefused) {
 		t.Fatalf("an unlisted device's sync ended in %v, want a refusal", err)
@@ -363,6 +365,65 @@ func TestACatchUpForAnUnlistedDeviceIsRefused(t *testing.T) {
 	p.sleeper.node.Sync(t.Context(), []types.Identity{p.peer.id})
 	if p.sleeper.node.Refused(p.peer.id) || p.sleeper.node.Failing(p.peer.id) {
 		t.Fatal("a granted round left the peer refused or failing")
+	}
+}
+
+// A refusal says who refuses, so it goes only to a device the log's chain
+// once named, expired or removed, proving itself by the ML-DSA key it had.
+// Anyone else is hung up on, even one this node saw as a member.
+func TestOnlyADeviceOnceListedIsToldItWasRefused(t *testing.T) {
+	p := newCatchUpPair(t)
+	p.setPeerMember(lists())
+	refused := func() bool {
+		t.Helper()
+		err := p.sleeper.node.CatchUpWith(t.Context(), p.peer.addr())
+		if err == nil {
+			t.Fatal("an unlisted device was granted a catch-up")
+		}
+		return errors.Is(err, ErrCatchUpRefused)
+	}
+	if refused() {
+		t.Error("a device the log never listed was told who refused it")
+	}
+	c, nonce := rawAsk(t, p.peer)
+	sig, pq, err := p.sleeper.priv.SignBoth(catchUpProofBytes(p.peer.log.network, nonce, p.sleeper.id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCatchUp(c, &catchUpMsg{Step: stepProof, Identity: &p.sleeper.id, Sig: &sig, MLDSA: pq}); err != nil {
+		t.Fatal(err)
+	}
+	hangsUp(t, c, "a proof by a device the log never listed")
+
+	other, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyOf := func(priv types.PrivateIdentity) func(types.Identity) *types.SigningKey {
+		return func(id types.Identity) *types.SigningKey {
+			if id == p.sleeper.id {
+				return new(priv.SigningKey())
+			}
+			return nil
+		}
+	}
+	misnamed, expired := keyOf(other), keyOf(p.sleeper.priv)
+	p.peer.log.signing.Store(&misnamed)
+	if refused() {
+		t.Error("a proof whose ML-DSA signature fails the named key drew a refusal")
+	}
+	p.peer.log.signing.Store(&expired)
+	if !refused() {
+		t.Error("an expired member was not told it was refused")
+	}
+	p.peer.log.signing.Store(nil)
+	p.peer.cache.SetMembership(nil, []types.Identity{p.sleeper.id})
+	if refused() {
+		t.Error("a device seen as a member, under no key the log names, was told who refused it")
+	}
+	p.peer.log.onceListed(p.sleeper)
+	if !refused() {
+		t.Error("a removed member was not told it was refused")
 	}
 }
 
@@ -474,12 +535,12 @@ func TestACatchUpProofMustBeFreshAndOwn(t *testing.T) {
 	p := newCatchUpPair(t)
 	network := p.peer.log.network
 	id := p.sleeper.id
-	sign := func(priv types.PrivateIdentity, net types.Hash, nonce []byte) *types.Sig {
-		sig, err := priv.Sign(catchUpProofBytes(net, nonce, id))
+	sign := func(priv types.PrivateIdentity, net types.Hash, nonce []byte) *catchUpMsg {
+		sig, pq, err := priv.SignBoth(catchUpProofBytes(net, nonce, id))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &sig
+		return &catchUpMsg{Step: stepProof, Identity: &id, Sig: &sig, MLDSA: pq}
 	}
 	stranger, err := types.GenerateIdentity()
 	if err != nil {
@@ -489,7 +550,7 @@ func TestACatchUpProofMustBeFreshAndOwn(t *testing.T) {
 	// Recorded from a session that was granted.
 	c, nonce := rawAsk(t, p.peer)
 	replayed := sign(p.sleeper.priv, network, nonce)
-	if err := writeCatchUp(c, &catchUpMsg{Step: stepProof, Identity: &id, Sig: replayed}); err != nil {
+	if err := writeCatchUp(c, replayed); err != nil {
 		t.Fatal(err)
 	}
 	if m, err := readCatchUp(c); err != nil || m.Step != stepGrant {
@@ -498,20 +559,20 @@ func TestACatchUpProofMustBeFreshAndOwn(t *testing.T) {
 	p.asked.Store(0)
 
 	cases := []struct {
-		name string
-		sig  func(nonce []byte) *types.Sig
+		name  string
+		proof func(nonce []byte) *catchUpMsg
 	}{
-		{"a replayed proof", func([]byte) *types.Sig { return replayed }},
-		{"a foreign signature", func(n []byte) *types.Sig { return sign(stranger, network, n) }},
-		{"a nonce the peer did not draw", func([]byte) *types.Sig {
+		{"a replayed proof", func([]byte) *catchUpMsg { return replayed }},
+		{"a foreign signature", func(n []byte) *catchUpMsg { return sign(stranger, network, n) }},
+		{"a nonce the peer did not draw", func([]byte) *catchUpMsg {
 			return sign(p.sleeper.priv, network, make([]byte, catchUpNonceSize))
 		}},
-		{"another network's proof", func(n []byte) *types.Sig { return sign(p.sleeper.priv, types.Hash{2}, n) }},
+		{"another network's proof", func(n []byte) *catchUpMsg { return sign(p.sleeper.priv, types.Hash{2}, n) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, nonce := rawAsk(t, p.peer)
-			if err := writeCatchUp(c, &catchUpMsg{Step: stepProof, Identity: &id, Sig: tc.sig(nonce)}); err != nil {
+			if err := writeCatchUp(c, tc.proof(nonce)); err != nil {
 				t.Fatal(err)
 			}
 			hangsUp(t, c, tc.name)
@@ -551,11 +612,11 @@ func TestACatchUpSessionCannotMoveToAnEpoch(t *testing.T) {
 	p := newCatchUpPair(t)
 	c, nonce := rawAsk(t, p.peer)
 	id := p.sleeper.id
-	sig, err := p.sleeper.priv.Sign(catchUpProofBytes(p.peer.log.network, nonce, id))
+	sig, pq, err := p.sleeper.priv.SignBoth(catchUpProofBytes(p.peer.log.network, nonce, id))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCatchUp(c, &catchUpMsg{Step: stepProof, Identity: &id, Sig: &sig}); err != nil {
+	if err := writeCatchUp(c, &catchUpMsg{Step: stepProof, Identity: &id, Sig: &sig, MLDSA: pq}); err != nil {
 		t.Fatal(err)
 	}
 	if m, err := readCatchUp(c); err != nil || m.Step != stepGrant {

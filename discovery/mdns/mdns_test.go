@@ -90,12 +90,11 @@ type beaconNode struct {
 
 func newBeaconNode(t *testing.T, h *hub, kr *keyring.Keyring, port uint16) *beaconNode {
 	t.Helper()
-	return newBeaconNodeWith(t, h, kr, port, 1, false)
+	return newBeaconNodeWith(t, h, kr, port, 1)
 }
 
-// newBeaconNodeWith is [newBeaconNode] announcing addrs addresses, padded
-// where padded says.
-func newBeaconNodeWith(t *testing.T, h *hub, kr *keyring.Keyring, port uint16, addrs int, padded bool) *beaconNode {
+// newBeaconNodeWith is [newBeaconNode] announcing addrs addresses.
+func newBeaconNodeWith(t *testing.T, h *hub, kr *keyring.Keyring, port uint16, addrs int) *beaconNode {
 	t.Helper()
 	priv, err := types.GenerateIdentity()
 	if err != nil {
@@ -108,6 +107,7 @@ func newBeaconNodeWith(t *testing.T, h *hub, kr *keyring.Keyring, port uint16, a
 			Disco:      gossip.DiscoKey{4, 2},
 			GossipPort: port,
 			Seq:        1,
+			Schema:     types.CurrentSchema,
 		}
 		for i := range addrs {
 			e.Addrs = append(e.Addrs, netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 0, 2, byte(i + 1)}), port))
@@ -121,7 +121,6 @@ func newBeaconNodeWith(t *testing.T, h *hub, kr *keyring.Keyring, port uint16, a
 	b, err := New(Options{
 		Keyring:  kr,
 		Announce: announce,
-		Padded:   func() bool { return padded },
 		OnPeer: func(e gossip.Endpoint) {
 			select {
 			case n.seen <- e:
@@ -234,21 +233,19 @@ func TestDiscoverySurvivesAnEpochBump(t *testing.T) {
 // in gossip.
 func TestAnnouncementSealIsBoundToItsEpoch(t *testing.T) {
 	s := mustSecret(t)
-	for _, padded := range []bool{false, true} {
-		sealed, err := sealPayload(s, 3, []byte("announcement"), padded)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := openPayload(s, 4, sealed); err == nil {
-			t.Fatal("a payload sealed under epoch 3 opened as epoch 4")
-		}
-		got, err := openPayload(s, 3, sealed)
-		if err != nil {
-			t.Fatalf("opening at the right epoch: %v", err)
-		}
-		if string(got) != "announcement" {
-			t.Errorf("payload came back as %q", got)
-		}
+	sealed, err := sealPayload(s, 3, []byte("announcement"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openPayload(s, 4, sealed); err == nil {
+		t.Fatal("a payload sealed under epoch 3 opened as epoch 4")
+	}
+	got, err := openPayload(s, 3, sealed)
+	if err != nil {
+		t.Fatalf("opening at the right epoch: %v", err)
+	}
+	if string(got) != "announcement" {
+		t.Errorf("payload came back as %q", got)
 	}
 }
 
@@ -260,7 +257,7 @@ func TestTheLargestPaddedAnswerFitsADatagram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := gossip.Endpoint{Identity: priv.Public(), Disco: gossip.DiscoKey{1}, GossipPort: 1, Seq: 1,
+	e := gossip.Endpoint{Identity: priv.Public(), Disco: gossip.DiscoKey{1}, GossipPort: 1, Seq: 1, Schema: types.CurrentSchema,
 		Relay: &gossip.RelayInfo{Port: 1, Cert: make([]byte, gossip.RelayCertSize), HostName: "a.relay.juist.invalid"}}
 	for i := range gossip.MaxEndpointAddrs {
 		e.Addrs = append(e.Addrs, netip.AddrPortFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 15: byte(i + 1)}), 1))
@@ -280,7 +277,6 @@ func TestTheLargestPaddedAnswerFitsADatagram(t *testing.T) {
 	b, err := New(Options{
 		Keyring:  kr,
 		Announce: func() (gossip.Endpoint, bool) { return e, true },
-		Padded:   func() bool { return true },
 		Conn:     (&hub{}).join(),
 		Dst:      netip.MustParseAddrPort("224.0.0.251:5353"),
 	})
@@ -297,20 +293,18 @@ func TestTheLargestPaddedAnswerFitsADatagram(t *testing.T) {
 	}
 }
 
-// TestAPaddedBeaconShowsNeitherEpochNorSize: on the LAN, as in the DHT, a
+// TestABeaconShowsNeitherEpochNorSize: on the LAN, as in the DHT, a
 // beacon's payload does not begin with its epoch, and two announcements of
-// different lengths are sent alike. A padded beacon still hears one that is
-// not, as a build before [types.SchemaPadded] sends.
-func TestAPaddedBeaconShowsNeitherEpochNorSize(t *testing.T) {
+// different lengths are sent alike.
+func TestABeaconShowsNeitherEpochNorSize(t *testing.T) {
 	h := &hub{}
 	const epoch = 5
 	kr := keyringAt(t, epoch, mustSecret(t))
 	listen := h.join()
 	t.Cleanup(func() { listen.Close() })
-	one := newBeaconNodeWith(t, h, kr, 4001, 1, true)
-	newBeaconNodeWith(t, h, kr, 4002, 3, true)
-	old := newBeaconNode(t, h, kr, 4003)
-	waitFor(t, one, old.id, 5*time.Second)
+	one := newBeaconNodeWith(t, h, kr, 4001, 1)
+	other := newBeaconNodeWith(t, h, kr, 4002, 3)
+	waitFor(t, one, other.id, 5*time.Second)
 
 	sizes := map[int]bool{}
 	deadline := time.After(2 * time.Second)
@@ -320,7 +314,7 @@ func TestAPaddedBeaconShowsNeitherEpochNorSize(t *testing.T) {
 		case pkt = <-listen.in:
 		case <-deadline:
 			if len(sizes) != 1 {
-				t.Fatalf("payloads came in %d sizes, want one beside the unpadded one's", len(sizes))
+				t.Fatalf("payloads came in %d sizes, want one", len(sizes))
 			}
 			return
 		}
@@ -341,11 +335,11 @@ func TestAPaddedBeaconShowsNeitherEpochNorSize(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(sealed) >= 8 && binary.BigEndian.Uint64(sealed) == epoch {
-			continue // the unpadded beacon's
+			t.Fatal("a payload begins with its epoch")
 		}
 		sizes[len(sealed)] = true
 	}
-	t.Errorf("padded payloads came in sizes %v, want one", sizes)
+	t.Errorf("payloads came in sizes %v, want one", sizes)
 }
 
 // TestNameIsAValidBlindedLabel pins the two properties the naming has to keep:
@@ -385,7 +379,7 @@ func TestRealMulticastSocket(t *testing.T) {
 				e := gossip.Endpoint{
 					Identity: priv.Public(), Disco: gossip.DiscoKey{1},
 					Addrs:      []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("192.0.2.1"), port)},
-					GossipPort: port, Seq: 1,
+					GossipPort: port, Seq: 1, Schema: types.CurrentSchema,
 				}
 				return e, e.Sign(priv) == nil
 			},
@@ -434,7 +428,7 @@ func TestAnswersAreRateLimited(t *testing.T) {
 		Announce: func() (gossip.Endpoint, bool) {
 			e := gossip.Endpoint{
 				Identity: priv.Public(), Disco: gossip.DiscoKey{4, 2},
-				GossipPort: 4001, Seq: 1,
+				GossipPort: 4001, Seq: 1, Schema: types.CurrentSchema,
 			}
 			return e, e.Sign(priv) == nil
 		},

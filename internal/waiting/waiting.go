@@ -62,7 +62,7 @@ type Change struct {
 	Readers []Reader `cbor:"8,keyasint"`
 
 	// Signer is the admin key that hands the change on, and Sig its
-	// signature over everything else; PQ its ML-DSA one, past the cut-over.
+	// signature over everything else; PQ its ML-DSA one.
 	Signer types.Identity `cbor:"9,keyasint"`
 	Sig    types.Sig      `cbor:"10,keyasint"`
 
@@ -86,9 +86,8 @@ var ErrNoReaders = errors.New("no admin key has an encryption key to seal the ch
 // Seal hands on aum, a change to network, as signer, for proposer, or the
 // signer where that is zero: sealed to every admin key of admins with an
 // encryption key it can be sealed to, and expiring after ttl, at most
-// [MaxLifetime]. keyOf names the signing keys records are verified against,
-// nil below the cut-over; where it names the signer's, the copy is signed by
-// ML-DSA too.
+// [MaxLifetime], and signed by both of signer's keys. keyOf names the signing
+// keys records are verified against.
 func Seal(network types.Hash, aum *types.AUM, admins []types.AdminKey, keyOf func(types.Identity) *types.SigningKey,
 	signer types.PrivateIdentity, proposer types.Identity, now time.Time, ttl time.Duration) (*Change, error) {
 	if aum.Prev == nil {
@@ -131,7 +130,7 @@ func Seal(network types.Hash, aum *types.AUM, admins []types.AdminKey, keyOf fun
 		return nil, ErrNoReaders
 	}
 	slices.SortFunc(c.Readers, func(a, b Reader) int { return a.Admin.Compare(b.Admin) })
-	if c.Sig, c.PQ, err = signer.SignBoth(c.signed(), keyOf(signer.Public()) != nil); err != nil {
+	if c.Sig, c.PQ, err = signer.SignBoth(c.signed()); err != nil {
 		return nil, err
 	}
 	return c, c.validate()
@@ -174,13 +173,11 @@ var aboutSubject = map[types.Kind]bool{
 	types.KindRenameNode:        true,
 	types.KindDisable:           false,
 	types.KindSetPolicy:         false,
-	types.KindSetSigningKeys:    false,
-	types.KindSetAdminSigning:   false,
 }
 
 // Open reads the change as the admin key admin, and checks that it is what
 // its signer said: the record it names, carrying the signer's signature,
-// checked against the signing key keyOf names, nil below the cut-over.
+// checked against the signing key keyOf names.
 func (c *Change) Open(admin types.PrivateIdentity, keyOf func(types.Identity) *types.SigningKey) (types.AUM, error) {
 	id := admin.Public()
 	i := slices.IndexFunc(c.Readers, func(r Reader) bool { return r.Admin == id })
@@ -235,7 +232,7 @@ func Hash(encoded []byte) types.Hash { return sha256.Sum256(encoded) }
 
 // Decode decodes a change and checks its shape and its signer's Ed25519
 // signature, which every copy carries. Whether the signer is an admin, its
-// ML-DSA signature past the cut-over ([Change.VerifyPQ]), and whether the
+// ML-DSA signature ([Change.VerifyPQ]), and whether the
 // change still fits the log, the caller decides against the log.
 func Decode(b []byte) (*Change, error) {
 	if len(b) == 0 || len(b) > MaxSize {

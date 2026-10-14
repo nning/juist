@@ -188,18 +188,6 @@ func TestInitWithItsOwnIPv4Prefix(t *testing.T) {
 	}
 }
 
-// A network below schema 4 keeps handing out 100.64/10 addresses, the only
-// ones its older members accept.
-func TestAnOlderNetworkKeepsItsV4Range(t *testing.T) {
-	t.Parallel()
-	c := newCLI(t)
-	c.mustRun("create", "home")
-	old := schema0Log(t, openLog(t, c), nodeKeysOf(t, c).Identity.Public())
-	if got, err := nextV4(old.State(), nil); err != nil || got != netip.MustParseAddr("100.64.0.2") {
-		t.Fatalf("a schema 0 network hands out %v (%v), want 100.64.0.2", got, err)
-	}
-}
-
 // "juist init", the command's name before it was create, still founds a
 // network, and help and usage name it create.
 func TestInitIsCreate(t *testing.T) {

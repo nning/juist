@@ -415,17 +415,10 @@ type Daemon struct {
 	pairsMu    sync.Mutex
 	pairsKept  []byte
 	psks       map[types.Identity]pskGiven
-	pq         bool                    // the network is at types.SchemaPQ or above, under mu
-	padded     bool                    // the network is at types.SchemaPadded or above, under mu
 	pairWanted map[types.Identity]bool // peers an exchange waits on, under mu
 
-	// claim is this node's signing key with its endorsement, which it
-	// announces while claiming, at types.SchemaSigning; past the cut-over it
-	// signs by ML-DSA, mldsa, and signingKeys are the members' keys the
-	// announcement cache holds them to. Under mu.
-	claim       *gossip.SigningClaim
-	claiming    bool
-	mldsa       bool
+	// signingKeys are the members' signing keys the announcement cache holds
+	// them to, under mu.
 	signingKeys map[types.Identity]types.SigningKey
 
 	// kept are the epoch secrets read from the keyring file at start, before
@@ -514,13 +507,14 @@ type Daemon struct {
 	sealing *sealing
 	opened  map[types.Identity][]addrkey.Key
 
-	down        map[types.Identity]*downPeer   // installed members found down
-	unheardPlan map[types.Identity]*lookupPlan // members with no announcement held
-	asidePlan   map[types.Identity]*lookupPlan // members a stale node keeps no tunnel to
-	probeNow    map[types.Identity]bool        // members to probe past their backoff
-	syncRetried map[types.Identity]time.Time   // when a failing sync was last retried
-	behind      map[types.Identity]time.Time   // since when live members have announced no epoch, or running ones without a tunnel an older build
-	olderBuild  map[types.Identity]time.Time   // since when live members have announced an older schema
+	down        map[types.Identity]*downPeer       // installed members found down
+	unheardPlan map[types.Identity]*lookupPlan     // members with no announcement held
+	asidePlan   map[types.Identity]*lookupPlan     // members a stale node keeps no tunnel to
+	probeNow    map[types.Identity]bool            // members to probe past their backoff
+	doubtedOn   map[types.Identity]gossip.DiscoKey // the hint's disco key each doubted member was checked for
+	syncRetried map[types.Identity]time.Time       // when a failing sync was last retried
+	behind      map[types.Identity]time.Time       // since when live members have announced no epoch, or running ones without a tunnel an older build
+	olderBuild  map[types.Identity]time.Time       // since when live members have announced an older schema
 
 	// moving follows a renumbering while one is under way.
 	moving *renumbering
@@ -626,24 +620,22 @@ type Daemon struct {
 	// namedRelays are the relays installed that serve a name on 443;
 	// https443 the relay's own sockets on 443, by address, httpsErr why
 	// some could not be bound, and httpsHanded that the ingress takes 443
-	// instead. relayNameRefused is why its name is not announced, and
-	// relayNoCert why it has no certificate for it, relayHasCert that it
-	// has had one, and relayCertDue when to order one again, relayCertGap
-	// after the last.
-	namedRelays      []conn.Relay
-	relays           []conn.Relay // every relay installed, asked for announcements before the DHT
-	https443         map[netip.Addr]net.Listener
-	httpsErr         string
-	httpsHanded      bool
-	handOff          net.Listener // the hand-off socket, served by handOffFor
-	handOffFor       *relay.Server
-	handOffTaken     bool // the ingress has been told of it since
-	relayNameRefused string
-	relayNoCert      string
-	relayHasCert     bool
-	relayCertGap     time.Duration
-	relayCertDue     time.Time
-	ownRegion        bool
+	// instead. relayNoCert is why the relay has no certificate for its
+	// name, relayHasCert that it has had one, and relayCertDue when to order
+	// one again, relayCertGap after the last.
+	namedRelays  []conn.Relay
+	relays       []conn.Relay // every relay installed, asked for announcements before the DHT
+	https443     map[netip.Addr]net.Listener
+	httpsErr     string
+	httpsHanded  bool
+	handOff      net.Listener // the hand-off socket, served by handOffFor
+	handOffFor   *relay.Server
+	handOffTaken bool // the ingress has been told of it since
+	relayNoCert  string
+	relayHasCert bool
+	relayCertGap time.Duration
+	relayCertDue time.Time
+	ownRegion    bool
 
 	// addrs caches the last interface scan; see [Daemon.underlayEndpoints].
 	addrs      []netip.AddrPort
@@ -767,16 +759,6 @@ func New(opts Options) (*Daemon, error) {
 	d.v4 = state.V4RangesAt(now)
 	d.kept = d.loadKeyring()
 	d.pairs = d.loadPairs()
-	// Before anything announces this device: an announcement naming no
-	// epoch has its peers drop the keys they give it.
-	d.pq = state.Schema() >= types.SchemaPQ
-	d.padded = state.Schema() >= types.SchemaPadded
-	claim, err := gossip.ClaimSigningKey(d.identity)
-	if err != nil {
-		return nil, err
-	}
-	d.claim = claim
-	d.claiming, d.mldsa = state.Schema() == types.SchemaSigning, state.PQ()
 	if d.logf == nil {
 		d.logf = func(string, ...any) {}
 	}
@@ -919,7 +901,6 @@ func New(opts Options) (*Daemon, error) {
 		}
 		mopts.Keyring = d.keyring
 		mopts.Announce = d.announcement
-		mopts.Padded = d.paddedItems
 		mopts.OnPeer = d.onDiscovered
 		mopts.NeedsPeers = d.needsPeers
 		mopts.Logf = d.logf
@@ -937,7 +918,6 @@ func New(opts Options) (*Daemon, error) {
 			Self:      self,
 			Keyring:   d.keyring,
 			Announce:  d.publishedAnnouncement,
-			Padded:    d.paddedItems,
 			Wanted:    d.wanted,
 			OnPeer:    d.onFoundInDHT,
 			Bootstrap: opts.DHTBootstrap,
@@ -957,7 +937,8 @@ func New(opts Options) (*Daemon, error) {
 
 	// Before the loop starts, so the first reconcile already has somewhere to
 	// reach the peers this device knew about when it stopped, and knows how
-	// fresh its state was.
+	// fresh its state was. The keys first, so nothing is held unchecked.
+	d.setSigning(state)
 	d.loadEndpointCache(d.cachePath)
 	d.loadLeases()
 	d.loadWaiting()

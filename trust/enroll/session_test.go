@@ -672,3 +672,31 @@ func TestAJoinRequestProvesItsSigningKey(t *testing.T) {
 		t.Fatal("the membership asked for names no signing key")
 	}
 }
+
+// The device running the session holds its binding, so it can swap in an
+// ML-DSA key of its own with a proof that verifies; the words show the swap.
+func TestTheWordsCoverTheSigningKey(t *testing.T) {
+	inv := newTestInvite(t)
+	h, g := session(t, inv, inv.Code())
+	if h.err != nil || g.err != nil {
+		t.Fatalf("session: %v, %v", h.err, g.err)
+	}
+	id, _ := types.GenerateIdentity()
+	req, err := NewJoinRequest(g.ch, "phone", id, types.NodeKeys{}, Nonce{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mitm, _ := types.GenerateIdentity()
+	forged, err := NewJoinRequest(h.ch, "phone", mitm, types.NodeKeys{}, Nonce{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapped := *req
+	swapped.Signing, swapped.SigningProof = forged.Signing, forged.SigningProof
+	if err := swapped.Verify(h.ch); err != nil {
+		t.Fatalf("the swapped proof, made over the session's own binding: %v", err)
+	}
+	if Fingerprint(Salt{2}, Nonce{1}, req) == Fingerprint(Salt{2}, Nonce{1}, &swapped) {
+		t.Fatal("the words are the same with another signing key")
+	}
+}

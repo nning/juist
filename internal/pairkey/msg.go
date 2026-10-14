@@ -41,7 +41,7 @@ type Msg struct {
 	// for the group key; from the leader, a generation it commits to.
 	Use uint64 `cbor:"8,keyasint,omitempty"`
 
-	// MLDSA is the sender's ML-DSA signature, past the cut-over.
+	// MLDSA is the sender's ML-DSA signature.
 	MLDSA *types.PQSig `cbor:"22,keyasint,omitempty"`
 	Sig   types.Sig    `cbor:"23,keyasint"`
 }
@@ -75,9 +75,9 @@ func (m *Msg) signingBytes(network types.Hash) ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
-// Sign fills in the signature, by the sender's identity key, for network;
-// by ML-DSA too where pq, as past the cut-over.
-func (m *Msg) Sign(priv types.PrivateIdentity, network types.Hash, pq bool) error {
+// Sign fills in the signatures, by the sender's identity key, for network,
+// by Ed25519 and ML-DSA.
+func (m *Msg) Sign(priv types.PrivateIdentity, network types.Hash) error {
 	if priv.Public() != m.From {
 		return fmt.Errorf("pairkey: a message from %v would be signed by %v", m.From.ShortString(), priv.Public().ShortString())
 	}
@@ -88,13 +88,12 @@ func (m *Msg) Sign(priv types.PrivateIdentity, network types.Hash, pq bool) erro
 	if err != nil {
 		return err
 	}
-	m.Sig, m.MLDSA, err = priv.SignBoth(msg, pq)
+	m.Sig, m.MLDSA, err = priv.SignBoth(msg)
 	return err
 }
 
 // Verify checks the message's shape and that its sender signed it for
-// network: by ML-DSA against key where it is set, as past the cut-over, and
-// by Ed25519 always.
+// network, by Ed25519 and by ML-DSA against key, the one the log names.
 func (m *Msg) Verify(network types.Hash, key *types.SigningKey) error {
 	if err := m.StaticValidate(); err != nil {
 		return err
@@ -103,7 +102,7 @@ func (m *Msg) Verify(network types.Hash, key *types.SigningKey) error {
 	if err != nil {
 		return err
 	}
-	if !m.From.Verify(msg, m.Sig) || key != nil && !key.Verify(msg, m.MLDSA) {
+	if !m.From.Verify(msg, m.Sig) || key == nil || !key.Verify(msg, m.MLDSA) {
 		return fmt.Errorf("pairkey: a message from %v is not signed by it", m.From.ShortString())
 	}
 	return nil

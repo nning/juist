@@ -94,6 +94,9 @@ func rotateKeys(a *app, identity bool) error {
 	if !ok {
 		return errors.New("this device is not a member")
 	}
+	if identity && auth.State().Schema() < types.SchemaSignedRotation {
+		return needsUpgrade("rotating an identity key")
+	}
 	aum, proof, err := n.rotate(identity)
 	if err != nil {
 		return err
@@ -131,12 +134,11 @@ func rotateKeys(a *app, identity bool) error {
 // the admin sign that instead, and an attacker who owns juistd would own the
 // network rather than one member. Only the new keys and the sealed epoch are
 // taken from the daemon's record; the log checks the epoch's wraps cover the
-// members exactly.
+// members exactly, and the new identity's signature its signing key.
 //
 // Which device this is, is the daemon's word too, so the record must come
 // with proof by that device's current identity key: without it, a daemon
-// could rotate any member's slot to a key of its own, and under schema 0 the
-// record itself carries no signature by the old key. The device's own
+// could rotate any member's slot to a key of its own. The device's own
 // signatures on the record must be there and valid, so that what the admins
 // sign can apply.
 func checkRotation(auth *log.Authority, self types.Identity, identity bool, aum *types.AUM, proof types.Sig) error {
@@ -153,8 +155,8 @@ func checkRotation(auth *log.Authority, self types.Identity, identity bool, aum 
 	var want types.AUM
 	var err error
 	switch {
-	case identity && aum.Kind == types.KindRotateIdentity && aum.NewIdentity != nil:
-		want, err = auth.Builder().RotateIdentity(self, *aum.NewIdentity, epoch)
+	case identity && aum.Kind == types.KindRotateIdentity && aum.NewIdentity != nil && aum.NewSigning != nil:
+		want, err = auth.Builder().RotateIdentity(self, *aum.NewIdentity, *aum.NewSigning, epoch)
 	case !identity && aum.Kind == types.KindRotateNodeKey && aum.Keys != nil:
 		want, err = auth.Builder().RotateNodeKey(self, *aum.Keys, epoch)
 	default:

@@ -335,7 +335,7 @@ func TestAShareIsAnnouncedWhileItCanBeServed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -465,7 +465,7 @@ func TestARenamedShareIsSaidAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(nw.admin, m.authority.State().Schema()); err != nil {
+	if err := rec.Sign(nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Inform([]types.AUM{rec}); err != nil {
@@ -513,7 +513,7 @@ func TestAShareEndsWithItsRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(nw.admin, m.authority.State().Schema()); err != nil {
+	if err := rec.Sign(nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Inform([]types.AUM{rec}); err != nil {
@@ -675,12 +675,12 @@ func TestTheStatusSaysWhereTheTerminatorListens(t *testing.T) {
 		t.Fatalf("before the terminator asked: %+v", st)
 	}
 	noCert := []ipc.NoCert{{Name: "immich.pub.example.org", Why: "no viable challenge type found"}}
-	f.d.Serving(&ipc.TerminatorReport{Listening: []string{"100.64.0.1:443"}, Unbound: []string{"100.64.0.1:8443"},
+	f.d.Serving(&ipc.TerminatorReport{Listening: []string{"198.18.0.1:443"}, Unbound: []string{"198.18.0.1:8443"},
 		NoCert: noCert})
 	f.d.serving(&ipc.TerminatorReport{}, false)
 	st := f.d.terminatorStatus()
-	if st == nil || !st.Running || !slices.Equal(st.Listening, []string{"100.64.0.1:443"}) ||
-		!slices.Equal(st.Unbound, []string{"100.64.0.1:8443"}) || !slices.Equal(st.NoCert, noCert) {
+	if st == nil || !st.Running || !slices.Equal(st.Listening, []string{"198.18.0.1:443"}) ||
+		!slices.Equal(st.Unbound, []string{"198.18.0.1:8443"}) || !slices.Equal(st.NoCert, noCert) {
 		t.Errorf("the status says %+v", st)
 	}
 	if p := f.d.Serving(&ipc.TerminatorReport{Stopping: true}); len(p.Names) != 0 {

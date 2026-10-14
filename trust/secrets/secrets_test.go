@@ -39,8 +39,8 @@ func TestCiphersuiteIsTheIntendedOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recipientKey: %v", err)
 	}
-	if got, want := pub.KEM().ID(), hpke.MLKEM768X25519().ID(); got != want {
-		t.Fatalf("recipient key uses KEM %d, want DHKEM(X25519)+ML-KEM-768 (%d)", got, want)
+	if got, want := pub.KEM().ID(), uint16(0x647a); got != want || hpke.MLKEM768X25519().ID() != want {
+		t.Fatalf("recipient key uses KEM %#x, want MLKEM768-X25519 (%#x)", got, want)
 	}
 	if got, want := len(pub.Bytes()), types.X25519KeySize+types.MLKEMKeySize; got != want {
 		t.Fatalf("serialized recipient key is %d bytes, want %d", got, want)

@@ -100,12 +100,14 @@ func (n *meshNode) halt() {
 // apply signs and applies one change on a running admin's daemon.
 func (m *mesh) apply(t *testing.T, on *meshNode, build func(*log.Builder) (types.AUM, error), extra ...types.PrivateIdentity) {
 	t.Helper()
+	on.d.authMu.Lock()
 	rec, err := build(on.auth.Builder())
+	on.d.authMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range append(extra, m.nw.admin) {
-		if err := rec.SignUnder(k, on.auth.State().Schema()); err != nil {
+		if err := rec.Sign(k); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -147,7 +149,7 @@ func TestAMemberThatSleptThroughManyChangesCatchesUp(t *testing.T) {
 	}
 	rotated.identity, rotated.record.Identity = fresh, fresh.Public()
 	m.apply(t, admin, func(b *log.Builder) (types.AUM, error) {
-		return b.RotateIdentity(m.nw.devices[0].record.Identity, fresh.Public(), m.nw.sealer())
+		return b.RotateIdentity(m.nw.devices[0].record.Identity, fresh.Public(), fresh.SigningKey(), m.nw.sealer())
 	}, m.nw.devices[0].identity, fresh)
 	admin.halt()
 	admin = m.startKept(t, 0, &rotated, kept[0], clock)
@@ -211,6 +213,16 @@ func TestARemovedDeviceIsRefusedACatchUp(t *testing.T) {
 // by every member it reaches, and says so instead of showing peers it merely
 // cannot reach.
 func TestARemovedSleeperSaysItWasRefused(t *testing.T) {
+	removedSleeperIsRefused(t, false)
+}
+
+// A member restarted since the removal refuses the removed device too, which
+// it knows only from its log.
+func TestARemovedSleeperIsRefusedByMembersRestartedSince(t *testing.T) {
+	removedSleeperIsRefused(t, true)
+}
+
+func removedSleeperIsRefused(t *testing.T, restart bool) {
 	m := &mesh{t: t, nw: newNetwork(t, 3), hub: &lanHub{}}
 	kept := []*persisted{keep(t, m.nw), keep(t, m.nw), keep(t, m.nw)}
 	clock := &passing{}
@@ -233,6 +245,17 @@ func TestARemovedSleeperSaysItWasRefused(t *testing.T) {
 	waitFor(t, 10*time.Second, "the other member to follow", func() bool {
 		return m.nodes[1].d.Status().Epoch == admin.d.Status().Epoch
 	})
+	if restart {
+		for i := range 2 {
+			m.nodes[i].halt()
+			auth, err := log.Open(kept[i].st)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kept[i].auth = auth
+			m.nodes[i] = m.startKept(t, i, m.nw.devices[i], kept[i], clock)
+		}
+	}
 
 	clock.advance(time.Hour)
 	victim = m.startKept(t, 2, m.nw.devices[2], kept[2], clock)
@@ -259,7 +282,7 @@ func TestSkippedEpochsAreFilledIn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
+		if err := rec.Sign(f.nw.admin); err != nil {
 			t.Fatal(err)
 		}
 		next, err := b.Dry(&rec)

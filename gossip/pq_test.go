@@ -4,6 +4,7 @@ import (
 	"math"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/nning/juist/internal/addrkey"
 	"github.com/nning/juist/types"
@@ -13,17 +14,17 @@ import (
 func pqEndpoint(t *testing.T, priv types.PrivateIdentity, seq uint64, addr string) Endpoint {
 	t.Helper()
 	e := Endpoint{Identity: priv.Public(), Disco: DiscoKey{9}, Addrs: []netip.AddrPort{netip.MustParseAddrPort(addr)},
-		GossipPort: 41641, Seq: seq}
+		GossipPort: 41641, Seq: seq, Schema: types.CurrentSchema}
 	if err := e.SignPQ(priv); err != nil {
 		t.Fatal(err)
 	}
 	return e
 }
 
-// Past the cut-over an announcement signed by Ed25519 alone is a hint: held
-// beside the full announcement, never in its place, dialed where newer and
-// relayed to no one. Exit criterion (1) for announcements.
-func TestPastTheCutOverEd25519AnnouncementsAreHints(t *testing.T) {
+// Once the log names signing keys an announcement signed by Ed25519 alone is
+// a hint: held beside the full announcement, never in its place, dialed where
+// newer and relayed to no one.
+func TestEd25519AnnouncementsAreHints(t *testing.T) {
 	member, _ := types.GenerateIdentity()
 	id := member.Public()
 	c := NewCache()
@@ -103,6 +104,56 @@ func TestPastTheCutOverEd25519AnnouncementsAreHints(t *testing.T) {
 	if e, _ := c.Get(id); e.Epoch != 7 {
 		t.Fatalf("a hint lowered the epoch to %d", e.Epoch)
 	}
+	// Nor raise it, nor name another pair store, disco key or relay: only
+	// where to dial is a hint's to say.
+	upward := hintOf(full, 10_001, "198.51.100.3:41641")
+	upward.Epoch, upward.PairStore, upward.Disco, upward.HomeRelay = 8, 99, DiscoKey{66}, 7
+	upward.Relay = &RelayInfo{Port: 443, Cert: make([]byte, RelayCertSize), HostName: "forged"}
+	if err := upward.Sign(member); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Add(upward) {
+		t.Fatal("a newer hint was not taken")
+	}
+	switch e, _ := c.Get(id); {
+	case e.Epoch != 7 || e.PairStore != 3:
+		t.Fatalf("a hint moved the preshared key to epoch %d, store %d", e.Epoch, e.PairStore)
+	case e.Disco != full.Disco:
+		t.Fatal("a hint replaced the disco key")
+	case e.Relay != nil:
+		t.Fatal("a hint announced a relay")
+	case e.Addrs[0] != upward.Addrs[0] || e.HomeRelay != 7 || e.HintAlone():
+		t.Fatalf("not dialed where the newer hint says: %v, home relay %d", e.Addrs, e.HomeRelay)
+	}
+	if k, ok := c.HintDisco(id); !ok || k != upward.Disco {
+		t.Fatal("the newer hint's disco key is not given apart")
+	}
+	// Its disco key alone is news: a member restarted says no more.
+	rerun := hintOf(full, 10_001, "198.51.100.3:41641")
+	rerun.Seq, rerun.Disco, rerun.HomeRelay = 10_002, DiscoKey{67}, 7
+	if err := rerun.Sign(member); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Add(rerun) {
+		t.Fatal("a newer hint naming another disco key alone is no news")
+	}
+	relaying := full
+	relaying.Seq, relaying.Relay = 10_002, &RelayInfo{Port: 8443, Cert: make([]byte, RelayCertSize), HostName: "relay"}
+	if err := relaying.SignPQ(member); err != nil {
+		t.Fatal(err)
+	}
+	c.Add(relaying)
+	unannounced := hintOf(relaying, 10_003, "198.51.100.4:41641")
+	unannounced.Relay = nil
+	if err := unannounced.Sign(member); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Add(unannounced) {
+		t.Fatal("a newer hint was not taken")
+	}
+	if e, _ := c.Get(id); e.Relay == nil || e.Relay.Port != 8443 {
+		t.Fatal("a hint took a member's relay away")
+	}
 	pinned := hintOf(full, math.MaxUint64, "198.51.100.2:41641")
 	if c.Add(pinned) {
 		t.Fatal("a hint numbered far past now was taken")
@@ -115,11 +166,11 @@ func TestPastTheCutOverEd25519AnnouncementsAreHints(t *testing.T) {
 		t.Fatal("a newer full announcement did not displace the older hint")
 	}
 
-	// Below the cut-over the same is a full announcement, as before; one held
-	// so, as from the cache a restart reads, is a hint once the keys arrive.
+	// Before the keys, as in the cache a restart reads, the same is a full
+	// announcement, and a hint once they arrive.
 	before := NewCache()
 	if !before.Add(moved) || before.IsHint(id) || len(before.All()) != 1 {
-		t.Fatal("below the cut-over an announcement signed by Ed25519 is a hint")
+		t.Fatal("before the keys an announcement signed by Ed25519 is a hint")
 	}
 	consenting := hintOf(full, 12, "192.0.2.12:41641")
 	consenting.Exit, consenting.Share = true, &Share{Port: 22, Until: 1 << 40}
@@ -129,12 +180,83 @@ func TestPastTheCutOverEd25519AnnouncementsAreHints(t *testing.T) {
 	if e, _ := before.Get(id); !before.IsHint(id) || e.Exit || e.Share != nil {
 		t.Fatalf("an announcement held from before the keys kept what only its author may say: %+v", e)
 	}
+	if e, _ := before.Get(id); !e.HintAlone() {
+		t.Fatal("a hint alone does not say it is one")
+	}
 }
 
-// Past the cut-over an address key is held only signed by ML-DSA: a forged
-// one would have members open its owner's addresses under a key of the
-// forger's.
-func TestPastTheCutOverAddressKeysAreSignedByMLDSA(t *testing.T) {
+// A hint alone is read as where to dial its member: no relay, overlay IPv4
+// or preshared key's epoch and store. It is kept as signed, so the copy a
+// restart reads back still verifies.
+func TestAHintAloneSaysWhereToDialAlone(t *testing.T) {
+	member, _ := types.GenerateIdentity()
+	id := member.Public()
+	c := NewCache()
+	c.SetMembership([]types.Identity{id}, nil)
+	c.SetSigningKeys(map[types.Identity]types.SigningKey{id: member.SigningKey()})
+	e := pqEndpoint(t, member, 1, "192.0.2.1:41641")
+	h := e.Hint()
+	h.Relay = &RelayInfo{Port: 443, Cert: make([]byte, RelayCertSize), HostName: "forged", Name: "relay.example.org"}
+	h.NoV4, h.Epoch, h.PairStore, h.Exit = true, 7, 3, true
+	if err := h.Sign(member); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Add(h) || !c.IsHint(id) {
+		t.Fatal("a hint alone was not held as one")
+	}
+	got, _ := c.Get(id)
+	if got.Relay != nil || got.NoV4 || got.Epoch != 0 || got.PairStore != 0 || got.Exit {
+		t.Fatalf("a hint alone says more than where to dial: %+v", got)
+	}
+	if got.Addrs[0] != h.Addrs[0] || got.Disco != h.Disco || !got.HintAlone() {
+		t.Fatalf("a hint alone does not say where to dial: %+v", got)
+	}
+	kept := c.WithHints()
+	if len(kept) != 1 || kept[0].Verify() != nil {
+		t.Fatal("a hint alone is not kept as signed")
+	}
+}
+
+// Before the keys an announcement is not shown signed by ML-DSA, so it is
+// numbered no further ahead than a hint, and one held from then that runs
+// further is dropped once the keys show it a hint.
+func TestAnAnnouncementBeforeTheKeysIsNumberedLikeAHint(t *testing.T) {
+	member, _ := types.GenerateIdentity()
+	id := member.Public()
+	now := time.Unix(1_000_000, 0)
+	keys := map[types.Identity]types.SigningKey{id: member.SigningKey()}
+
+	c := NewCache()
+	c.SetClock(func() time.Time { return now })
+	signed := pqEndpoint(t, member, math.MaxUint64, "192.0.2.9:41641")
+	forged := signed.Hint()
+	if c.Add(forged) {
+		t.Fatal("before the keys an announcement numbered far past now was taken")
+	}
+	c.SetSigningKeys(keys)
+	if !c.Add(signed) {
+		t.Fatal("an announcement signed by ML-DSA was held to a hint's bound")
+	}
+
+	// Taken while a clock ran a year ahead.
+	ahead := pqEndpoint(t, member, uint64(now.Add(365*24*time.Hour).Unix()), "198.51.100.9:41641")
+	ahead = ahead.Hint()
+	held := NewCache()
+	held.SetClock(func() time.Time { return now.Add(365 * 24 * time.Hour) })
+	if !held.Add(ahead) {
+		t.Fatal("an announcement was refused")
+	}
+	held.SetClock(func() time.Time { return now })
+	held.SetSigningKeys(keys)
+	if _, ok := held.Get(id); ok {
+		t.Fatal("a demoted announcement numbered far past now was kept as a hint")
+	}
+}
+
+// Once the log names signing keys an address key is held only signed by
+// ML-DSA: a forged one would have members open its owner's addresses under a
+// key of the forger's.
+func TestAddressKeysAreHeldOnlySignedByMLDSA(t *testing.T) {
 	member, _ := types.GenerateIdentity()
 	c := NewCache()
 	c.SetMembership([]types.Identity{member.Public()}, nil)
@@ -143,82 +265,57 @@ func TestPastTheCutOverAddressKeysAreSignedByMLDSA(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !c.AddKey(k) {
-		t.Fatal("below the cut-over an address key signed by Ed25519 was refused")
+		t.Fatal("before the keys an address key signed by Ed25519 was refused")
 	}
 	c.SetSigningKeys(map[types.Identity]types.SigningKey{member.Public(): member.SigningKey()})
 	if len(c.Keys()) != 0 {
-		t.Fatal("an address key signed by Ed25519 alone was kept past the cut-over")
+		t.Fatal("an address key signed by Ed25519 alone was kept once the keys arrived")
 	}
 	k.Seq = 2
 	_ = k.Sign(member)
 	if c.AddKey(k) {
-		t.Fatal("past the cut-over an address key signed by Ed25519 alone was taken")
+		t.Fatal("an address key signed by Ed25519 alone was taken")
 	}
 	if err := k.SignPQ(member); err != nil {
 		t.Fatal(err)
 	}
 	if !c.AddKey(k) {
-		t.Fatal("past the cut-over an address key signed by ML-DSA was refused")
+		t.Fatal("an address key signed by ML-DSA was refused")
 	}
 }
 
-// A build that reads no signing keys is sent announcements without them and
-// without their ML-DSA signatures, whose Ed25519 signature still verifies,
-// rather than a frame it would refuse whole.
-func TestAnOlderBuildIsSentHints(t *testing.T) {
-	member, _ := types.GenerateIdentity()
-	signed := pqEndpoint(t, member, 1, "192.0.2.1:41641")
-	e := signed.Hint()
-	claim, err := ClaimSigningKey(member)
+// A catch-up is signed by ML-DSA both ways, each side holding the other to
+// the signing key its log names.
+func TestACatchUpIsSignedByMLDSA(t *testing.T) {
+	p := newCatchUpPair(t)
+	other, err := types.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.Signing = claim
-	if err := e.Verify(); err != nil {
-		t.Fatalf("an announcement claiming its signing key: %v", err)
+	misnamed := func(n *testNode) memberFunc {
+		rec := n.record
+		rec.Signing = new(other.SigningKey())
+		return lists(&testNode{id: n.id, record: rec})
 	}
-	for _, e := range []Endpoint{e, signed} {
-		old := reads{epochs: true, schemas: true}.shaped(e)
-		if old.Signing != nil || old.MLDSA != nil || old.Verify() != nil {
-			t.Fatalf("an older build is sent %+v", old)
+	ask := func() error {
+		view, _ := p.sleeper.log.View()
+		key, from, err := p.sleeper.node.askCatchUp(dialRaw(t, p.peer), &view)
+		if err == nil && (key == nil || from != p.peer.id) {
+			t.Fatalf("granted by %v", from.ShortString())
 		}
-		if now := (reads{epochs: true, schemas: true, signing: true}).shaped(e); now.MLDSA != e.MLDSA || now.Signing != e.Signing {
-			t.Fatal("a build that reads them is not sent the signing key or ML-DSA signature")
-		}
+		return err
 	}
-	other, _ := types.GenerateIdentity()
-	stolen := e
-	stolen.Signing = &SigningClaim{Key: other.SigningKey(), Endorsement: claim.Endorsement}
-	if stolen.Verify() == nil {
-		t.Fatal("an announcement claiming a signing key it did not endorse verified")
+	p.setPeerMember(misnamed(p.sleeper))
+	if ask() == nil {
+		t.Fatal("a proof whose ML-DSA signature fails the listed key was granted")
 	}
-}
-
-// Past the cut-over a catch-up is signed by ML-DSA both ways: a responder
-// takes no proof signed by Ed25519 alone, and grants one signed by both.
-func TestPastTheCutOverACatchUpIsSignedByMLDSA(t *testing.T) {
-	p := newCatchUpPair(t)
-	p.peer.log.schema.Store(uint32(types.SchemaMLDSA))
-	view, _ := p.sleeper.log.View()
-	if _, _, err := p.sleeper.node.askCatchUp(dialRaw(t, p.peer), &view, reads{}); err == nil {
-		t.Fatal("a catch-up proved by Ed25519 alone was granted past the cut-over")
+	p.setPeerMember(lists(p.sleeper))
+	p.setSleeperMember(misnamed(p.peer))
+	if ask() == nil {
+		t.Fatal("a grant whose ML-DSA signature fails the listed key was taken")
 	}
-	p.sleeper.log.schema.Store(uint32(types.SchemaMLDSA))
-	view, _ = p.sleeper.log.View()
-	key, from, err := p.sleeper.node.askCatchUp(dialRaw(t, p.peer), &view, reads{signing: true})
-	if err != nil || key == nil || from != p.peer.id {
-		t.Fatalf("a catch-up proved by ML-DSA: %v", err)
-	}
-}
-
-// A device that slept through the schema before the cut-over cannot tell
-// that its peer reads ML-DSA; a peer past it hangs up on a proof by Ed25519
-// alone, and the device asks again signing by both.
-func TestASleeperFromBeforeTheSigningSchemaCatchesUp(t *testing.T) {
-	p := newCatchUpPair(t)
-	p.peer.log.schema.Store(uint32(types.SchemaMLDSA))
-	p.sleeper.log.schema.Store(uint32(types.SchemaPadded))
-	if err := p.sleeper.node.CatchUpWith(t.Context(), p.peer.addr()); err != nil {
-		t.Fatalf("a sleeper from before the signing schema was not caught up: %v", err)
+	p.setSleeperMember(lists(p.peer))
+	if err := ask(); err != nil {
+		t.Fatalf("a catch-up signed by both keys: %v", err)
 	}
 }

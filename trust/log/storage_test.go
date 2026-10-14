@@ -36,7 +36,7 @@ func TestStorageFailureIsNotARejection(t *testing.T) {
 // is its own; changing it must not change the record stored under its hash.
 func TestMemStorageIsolatesRecords(t *testing.T) {
 	h := newHarness(t, 1, 1)
-	schema := types.SchemaHolders
+	schema := types.CurrentSchema + 1
 	vouchers := uint32(1)
 	prev := h.auth.Head()
 	for _, rec := range []types.AUM{

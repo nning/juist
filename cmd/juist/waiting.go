@@ -49,7 +49,7 @@ type waitingChange struct {
 func (a *app) carry(auth *log.Authority, aum *types.AUM, ttl time.Duration, proposer types.Identity) (bool, []string,
 	error) {
 	state := auth.State()
-	if state.Schema() < types.SchemaSealing || a.node == nil || a.node.status() == nil {
+	if a.node == nil || a.node.status() == nil {
 		return false, nil, nil
 	}
 	files, err := a.adminKeyFiles()
@@ -121,7 +121,7 @@ func unreadable(state *log.State, aum *types.AUM, c *waiting.Change) []string {
 // is dropped unseen.
 func (a *app) waitingChanges(auth *log.Authority) ([]waitingChange, error) {
 	n, err := a.openNode()
-	if err != nil || n.status() == nil || auth.State().Schema() < types.SchemaSealing {
+	if err != nil || n.status() == nil {
 		return nil, err
 	}
 	files, err := a.adminKeyFiles()
@@ -142,7 +142,7 @@ func (a *app) waitingChanges(auth *log.Authority) ([]waitingChange, error) {
 		if _, ok := state.Admin(c.Signer); !ok {
 			continue
 		}
-		if state.PQ() && c.VerifyPQ(state.SigningKey(c.Signer)) != nil {
+		if c.VerifyPQ(state.SigningKey(c.Signer)) != nil {
 			continue
 		}
 		for _, k := range files {
@@ -173,7 +173,7 @@ func (a *app) waitingChanges(auth *log.Authority) ([]waitingChange, error) {
 // the network trusts for it: anything else would spoil it.
 func mergeSignatures(state *log.State, aum *types.AUM, sigs []types.Signature) []types.Signature {
 	out := slices.Clone(aum.Signatures)
-	self := log.SelfSigners(aum, state.Schema())
+	self := log.SelfSigners(aum)
 	for _, s := range sigs {
 		_, admin := state.Admin(s.KeyID)
 		switch {
@@ -214,18 +214,18 @@ func (a *app) summary(auth *log.Authority, w *waitingChange) string {
 
 // waitingNote says in a status which changes wait for this keystore's vote.
 // It says nothing where it cannot tell.
-func (a *app) waitingNote() {
+func (a *app) waitingNote() int {
 	auth, err := a.networkLog()
 	if err != nil {
-		return
+		return 0
 	}
 	changes, err := a.waitingChanges(auth)
 	if err != nil {
-		return
+		return 0
 	}
 	mine, err := a.forMyVote(auth, changes)
 	if err != nil || len(mine) == 0 {
-		return
+		return 0
 	}
 	var what []string
 	for i := range mine {
@@ -235,8 +235,9 @@ func (a *app) waitingNote() {
 	if len(mine) > 1 {
 		verb = "wait"
 	}
-	a.printf("\n%s %s for your vote: %s\n", count(len(mine), "change"), verb, strings.Join(what, "; "))
+	a.printf("%s %s for your vote: %s\n", count(len(mine), "change"), verb, strings.Join(what, "; "))
 	a.hint("juist approve")
+	return len(mine)
 }
 
 // approveWaiting asks about each change waiting for this keystore's vote,

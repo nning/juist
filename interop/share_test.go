@@ -20,7 +20,7 @@ func share(t *testing.T, fb, lx *vm, work string) {
 	t.Cleanup(func() {
 		lx.try("pkill -f '[j]uist share'", time.Minute)
 		if t.Failed() {
-			out, _ := lx.try("cat /tmp/share.log; juist status; journalctl -u juist-serve --no-pager | tail -20", time.Minute)
+			out, _ := lx.try("cat /tmp/share.log; juist status; juist health; journalctl -u juist-serve --no-pager | tail -20", time.Minute)
 			t.Logf("lx:\n%s", out)
 			hold(t, fb, lx)
 		}

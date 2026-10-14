@@ -232,10 +232,11 @@ func TestStoredUpgradeRecordIsStillOfferedToPeers(t *testing.T) {
 	}
 }
 
-// Overlay IPv4 leaves Tailscale's range at schema 4: before it an address in
-// the new range is refused, and the upgrade leaves members their old ones.
-func TestOverlayV4MovesAtItsSchema(t *testing.T) {
-	h := newHarnessAt(t, 1, 1, types.SchemaHolders)
+// Without a prefix of its own, a network holds overlay IPv4 addresses in
+// 198.18/15 alone, and no route in it or 100.64/10 is granted: other networks'
+// overlays on a member's host are there.
+func TestTheOverlayV4Ranges(t *testing.T) {
+	h := newHarness(t, 1, 1)
 	admit := func(name, v4 string) (types.NodeRecord, error) {
 		n := h.newNode(name)
 		a := netip.MustParseAddr(v4)
@@ -247,41 +248,26 @@ func TestOverlayV4MovesAtItsSchema(t *testing.T) {
 		h.signQuorum(&aum)
 		return n, h.auth.Inform(aum)
 	}
-	if _, err := admit("early", "198.18.0.1"); err == nil {
-		t.Fatal("an address in 198.18/15 was admitted at schema 3")
+	if got := h.auth.State().V4Range(); got != types.OverlayV4 {
+		t.Errorf("new addresses come from %v, want %v", got, types.OverlayV4)
 	}
-	legacy, err := admit("legacy", "100.64.0.1")
+	r, err := admit("new", "198.18.0.1")
 	if err != nil {
-		t.Fatalf("admitting at 100.64.0.1: %v", err)
+		t.Fatalf("an address in 198.18/15 was refused: %v", err)
 	}
-	if err := h.auth.Inform(h.handAssembledSchemaUpgrade(types.SchemaOverlayV4)); err != nil {
-		t.Fatalf("upgrading: %v", err)
+	for _, v4 := range []string{"100.64.0.1", "10.0.0.1"} {
+		if _, err := admit("outside", v4); err == nil {
+			t.Errorf("%s was admitted", v4)
+		}
 	}
-	if _, ok := h.auth.State().Node(legacy.Identity); !ok {
-		t.Fatal("the upgrade dropped a member at 100.64.0.1")
-	}
-	if _, err := admit("new", "198.18.0.1"); err != nil {
-		t.Fatalf("an address in 198.18/15 was refused at schema 4: %v", err)
-	}
-	if _, err := admit("outside", "10.0.0.1"); err == nil {
-		t.Fatal("an address outside both ranges was admitted")
-	}
-}
-
-// No route in the range schema 4 reserves is granted, at any schema: other
-// networks' overlays on a member's host are there.
-func TestOverlayV4UpgradeRefusesAGrantedRouteInItsRange(t *testing.T) {
-	inside := []netip.Prefix{netip.MustParsePrefix("198.18.5.0/24")}
-	for _, schema := range []types.SchemaVersion{types.SchemaHolders, types.CurrentSchema} {
-		h := newHarnessAt(t, 1, 1, schema)
-		r := h.addNode("router")
-		if _, err := h.auth.Builder().SetNodeRoutes(r.Identity, nil, inside); err == nil {
-			t.Errorf("a route in 198.18/15 was granted at %v", schema)
+	for _, p := range []string{"198.18.5.0/24", "100.64.5.0/24"} {
+		if _, err := h.auth.Builder().SetNodeRoutes(r.Identity, nil, []netip.Prefix{netip.MustParsePrefix(p)}); err == nil {
+			t.Errorf("a route in %s was granted", p)
 		}
 	}
 }
 
-// A network's own IPv4 prefix replaces the schema's range: addresses and
+// A network's own IPv4 prefix replaces the overlay ranges: addresses and
 // routes are held to it, and it travels in every state statement.
 func TestOwnV4Prefix(t *testing.T) {
 	own := netip.MustParsePrefix("10.111.0.0/24")
@@ -326,36 +312,30 @@ func TestOwnV4Prefix(t *testing.T) {
 	}
 }
 
-// A prefix of the network's own is schema 4, and must be one a network may
-// choose.
+// A prefix of the network's own must be one a network may choose.
 func TestOwnV4PrefixIsChecked(t *testing.T) {
 	admin, err := types.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
-	genesisWith := func(schema types.SchemaVersion, prefix string) error {
+	genesisWith := func(prefix string) error {
 		g, err := Genesis("test-net", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "admin"}},
 			[]types.Hash{{1}}, nil, newHarness(t, 1, 1).sealer())
 		if err != nil {
 			t.Fatal(err)
 		}
 		p := netip.MustParsePrefix(prefix)
-		g.State.Schema, g.State.V4Prefix = schema, &p
+		g.State.V4Prefix = &p
 		return g.State.StaticValidate(true)
 	}
-	if err := genesisWith(types.CurrentSchema, "10.111.0.0/24"); err != nil {
+	if err := genesisWith("10.111.0.0/24"); err != nil {
 		t.Fatalf("a genesis with its own prefix was refused: %v", err)
 	}
-	for _, tc := range []struct {
-		name   string
-		schema types.SchemaVersion
-		prefix string
-	}{
-		{"below schema 4", types.SchemaHolders, "10.111.0.0/24"},
-		{"public", types.CurrentSchema, "8.8.8.0/24"},
-		{"unmasked", types.CurrentSchema, "10.111.0.1/24"},
+	for _, tc := range []struct{ name, prefix string }{
+		{"public", "8.8.8.0/24"},
+		{"unmasked", "10.111.0.1/24"},
 	} {
-		if err := genesisWith(tc.schema, tc.prefix); err == nil {
+		if err := genesisWith(tc.prefix); err == nil {
 			t.Errorf("a genesis with a prefix %s passed", tc.name)
 		}
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/fxamacker/cbor/v2"
 
@@ -29,8 +31,9 @@ import (
 // in it for good.
 //
 // So the keystore remembers, per network, the head it last verified, and per
-// daemon socket which network it held. A later log must contain that head —
-// or, if the head lost fork choice since, as it does to a concurrent
+// daemon socket which network it held. A later log must contain that head or
+// a copy of it, its content under other signatures — or, if the head lost
+// fork choice since, as it does to a concurrent
 // removal, the daemon must hand over the branch it lost on, and this side's
 // own fork choice over the chain and that branch must pick the same winner.
 // A daemon that truncated the log to an older head fails that: the later
@@ -42,6 +45,10 @@ const pinsDir = "networks"
 // A pin is what the keystore last verified of one network.
 type pin struct {
 	Head types.Hash `cbor:"1,keyasint"`
+
+	// Content is the head's [types.AUM.SigHash]: a log whose chain holds
+	// another copy of the head continues it.
+	Content *types.Hash `cbor:"2,keyasint,omitempty"`
 }
 
 func (h *home) pinPath(genesis types.Hash) string {
@@ -109,13 +116,24 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 	if err != nil {
 		return err
 	}
-	if p != nil {
-		chain, err := auth.Chain()
-		if err != nil {
-			return err
+	chain, err := auth.Chain()
+	if err != nil {
+		return err
+	}
+	byHash := make(map[types.Hash]*types.AUM, len(records))
+	for i := range records {
+		byHash[records[i].Hash()] = &records[i]
+	}
+	if p != nil && !slices.Contains(chain, p.Head) {
+		offChain := sync.OnceValues(orphans)
+		content := p.Content
+		if content == nil {
+			if off, err := offChain(); err == nil {
+				content = contentOf(p.Head, append(slices.Clip(records), off...))
+			}
 		}
-		if !slices.Contains(chain, p.Head) {
-			lost, err := lostForkChoice(p.Head, auth, records, orphans)
+		if !holdsContent(chain, byHash, content) {
+			lost, err := lostForkChoice(p.Head, auth, records, offChain)
 			if err != nil {
 				return fmt.Errorf("juistd's log for %q lacks the head this keystore verified, and does not "+
 					"say where it went: %w", state.Network(), err)
@@ -128,6 +146,9 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 		}
 	}
 	next := pin{Head: auth.Head()}
+	if head, ok := byHash[next.Head]; ok {
+		next.Content = new(head.SigHash())
+	}
 	b, err := cbor.Marshal(next)
 	if err != nil {
 		return err
@@ -139,6 +160,96 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 		return err
 	}
 	return writeFileAtomic(dpath, []byte(fmt.Sprintf("%x\n", genesis[:])))
+}
+
+// holdsContent reports whether a record on chain, the verified active chain
+// whose records byHash holds, has the signed content content: a copy of the
+// pinned head, which the daemon need not hold any more.
+func holdsContent(chain []types.Hash, byHash map[types.Hash]*types.AUM, content *types.Hash) bool {
+	if content == nil {
+		return false
+	}
+	for _, h := range chain {
+		if a, ok := byHash[h]; ok && a.SigHash() == *content {
+			return true
+		}
+	}
+	return false
+}
+
+// contentOf is the [types.AUM.SigHash] of the record hashing to head, found
+// among records or rebuilt from the content of copies there and a subset of
+// the signatures they carry, as a pruned copy's are; nil where neither is
+// had. Only the record verified as head hashes to it, so whatever records
+// came from, the content is that record's.
+func contentOf(head types.Hash, records []types.AUM) *types.Hash {
+	groups := map[types.Hash][]types.Signature{}
+	byContent := map[types.Hash]*types.AUM{}
+	var order []types.Hash
+	for i := range records {
+		r := &records[i]
+		sh := r.SigHash()
+		if r.Hash() == head {
+			return &sh
+		}
+		if _, ok := byContent[sh]; !ok {
+			byContent[sh] = r
+			order = append(order, sh)
+		}
+		for _, s := range r.Signatures {
+			if !slices.ContainsFunc(groups[sh], func(o types.Signature) bool { return sameSignature(&o, &s) }) {
+				groups[sh] = append(groups[sh], s)
+			}
+		}
+	}
+	budget := maxRebuilds
+	// Latest first: a pin is a head, so its content is likely near the end.
+	for i := len(order) - 1; i >= 0; i-- {
+		sigs := groups[order[i]]
+		if len(sigs) == 0 || len(sigs) > 16 || 1<<len(sigs) > budget {
+			continue
+		}
+		budget -= 1 << len(sigs)
+		slices.SortFunc(sigs, func(a, b types.Signature) int {
+			if c := a.KeyID.Compare(b.KeyID); c != 0 {
+				return c
+			}
+			return bytes.Compare(pqBytes(a.PQ), pqBytes(b.PQ))
+		})
+		c := byContent[order[i]].Clone()
+		buf := make([]types.Signature, 0, len(sigs))
+	subsets:
+		for set := 1; set < 1<<len(sigs); set++ {
+			c.Signatures = buf[:0]
+			for j, s := range sigs {
+				if set&(1<<j) == 0 {
+					continue
+				}
+				if n := len(c.Signatures); n > 0 && c.Signatures[n-1].KeyID == s.KeyID {
+					continue subsets
+				}
+				c.Signatures = append(c.Signatures, s)
+			}
+			if c.Hash() == head {
+				return new(c.SigHash())
+			}
+		}
+	}
+	return nil
+}
+
+// maxRebuilds bounds the signature subsets [contentOf] hashes.
+const maxRebuilds = 1 << 12
+
+func sameSignature(a, b *types.Signature) bool {
+	return a.KeyID == b.KeyID && bytes.Equal(pqBytes(a.PQ), pqBytes(b.PQ))
+}
+
+func pqBytes(s *types.PQSig) []byte {
+	if s == nil {
+		return nil
+	}
+	return s[:]
 }
 
 // pinsReady creates the pins directory, and refuses one others could write
@@ -178,8 +289,10 @@ func (h *home) expectNetwork(sock string, genesis types.Hash) error {
 // in which its admins' signatures would then admit whoever it liked.
 //
 // A pin this keystore already holds for the network stays: it was verified
-// here, and may be later than the admission.
-func (h *home) expectAdmitted(sock string, link enroll.Link, a *enroll.Admission, self types.Identity) error {
+// here, and may be later than the admission. held fetches the daemon's
+// records, among which the admitted head's content is looked up.
+func (h *home) expectAdmitted(sock string, link enroll.Link, a *enroll.Admission, self types.Identity,
+	held func() ([]types.AUM, error)) error {
 	// The admission is of this device: an older one of another device by the
 	// same admin would anchor the keystore at its older head.
 	if a == nil || a.Admin != *link.Admin || a.Verify(*link.AdminSigning, nil) != nil || a.Guest != self {
@@ -194,7 +307,13 @@ func (h *home) expectAdmitted(sock string, link enroll.Link, a *enroll.Admission
 		return err
 	}
 	if p == nil {
-		b, err := cbor.Marshal(pin{Head: a.Head})
+		next := pin{Head: a.Head}
+		// Without its content the pin may be refused once the daemon holds
+		// other copies of the head alone.
+		if records, err := held(); err == nil {
+			next.Content = contentOf(a.Head, records)
+		}
+		b, err := cbor.Marshal(next)
 		if err != nil {
 			return err
 		}

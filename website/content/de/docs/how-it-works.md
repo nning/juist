@@ -33,10 +33,10 @@ bis du ein Netz anlegst oder einem beitrittst.
 `juist` ist der Befehl, den du eintippst. Er gibt juistd Aufträge und
 verwahrt deine Admin-Schlüssel, falls du Admin bist.
 
-`juist status` darf jeder lokale Benutzer aufrufen. Alle anderen Befehle sind
-root vorbehalten und dem **Operator** des Geräts. Das ist ein lokaler
-Benutzer, den du mit `juist set --operator` festlegst und der das Gerät dann
-ohne sudo verwalten kann. Mehr dazu unter
+`juist status` und `juist health` darf jeder lokale Benutzer aufrufen. Alle
+anderen Befehle sind root vorbehalten und dem **Operator** des Geräts. Das ist
+ein lokaler Benutzer, den du mit `juist set --operator` festlegst und der das
+Gerät dann ohne sudo verwalten kann. Mehr dazu unter
 [Der Operator]({{< relref "docs/operator" >}}).
 
 ## Das Mitgliederlog {#the-membership-log}
@@ -113,8 +113,8 @@ an drei Stellen:
   einem großen öffentlichen Verzeichnis im Internet, falls ein Gerät ein
   Mitglied aus den Augen verloren hat.
 
-Was die Geräte im DHT ablegen, ist verschlüsselt, und in einem Netz auf
-Schema 16 ist jeder Eintrag gleich groß. Der DHT sieht nur Adressen, nie
+Was die Geräte im DHT ablegen, ist verschlüsselt, und jeder Eintrag ist
+gleich groß. Der DHT sieht nur Adressen, nie
 Inhalte. Nichts, was er liefert, kann ändern, wer zum Netz gehört.
 
 ## Wie Geräte sich verbinden {#connections}
@@ -201,8 +201,8 @@ Das hat vier Folgen:
 
 `juist status` zeigt den Stand in der Zeile `Freshness`, zum Beispiel
 `vouched just now, valid 48h`, `expired; vouchers only` oder `unchecked: no
-voucher`. Einen Tag vorher warnt es: `freshness ends in 20h unless 2 vouchers
-vouch again`.
+voucher`. Einen Tag vorher warnt `juist health`: `freshness ends in 20h unless
+2 vouchers vouch again`.
 
 ## Begriffe {#terms}
 

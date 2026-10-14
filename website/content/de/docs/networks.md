@@ -82,12 +82,15 @@ davor. Um ein Gerät namens `home` ins Netz `home` einzuladen, rufst du also
 
 Die IPv4-Bereiche zweier Netze dürfen sich überschneiden. Beide laufen
 trotzdem auf demselben Gerät, das Netz mit dem höher nummerierten juistd dann
-aber nur über IPv6. `juist status` weist darauf hin und schlägt vor, welches
+aber nur über IPv6. `juist health` weist darauf hin und schlägt vor, welches
 Netz du umnummerieren solltest:
 
 ```console
-$ juist status
-…
+$ juist health
+home
+nothing needs attention
+
+work
 warning: no IPv4 on this host: "home" (juist0) holds 198.18.36.2, which "work" claims too (198.18.36.0/22)
 hint: renumber one of the two networks: juist network renumber juist1 PREFIX, or the other
 ```

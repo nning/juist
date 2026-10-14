@@ -68,26 +68,17 @@ type Signature struct {
 	// record kind by trust/log.
 	KeyID Identity `cbor:"1,keyasint"`
 
-	// Sig is the Ed25519 signature, below [SchemaMLDSA], and PQ the ML-DSA
-	// one, from it on: exactly one of the two.
-	Sig Sig    `cbor:"2,keyasint,omitzero"`
-	PQ  *PQSig `cbor:"3,keyasint,omitempty"`
-
-	// Key is the signer's signing key, where the record is where it enters
-	// the log in the signer's own signature: an identity rotated to.
-	Key *SigningKey `cbor:"4,keyasint,omitempty"`
+	// PQ is the ML-DSA signature. CBOR key 2 held the Ed25519 one before
+	// schema 18, and key 4 a rotated-to identity's signing key at schema 18.
+	PQ *PQSig `cbor:"3,keyasint"`
 }
 
 func (s *Signature) validate() error {
 	switch {
-	case s.Sig.IsZero() == (s.PQ == nil):
-		return errors.New("carries no signature, or two")
-	case s.PQ != nil && s.PQ.IsZero():
+	case s.PQ == nil:
+		return errors.New("carries no signature")
+	case s.PQ.IsZero():
 		return errors.New("is zero")
-	case s.Key != nil && s.PQ == nil:
-		return errors.New("brings a signing key beside an Ed25519 signature")
-	case s.Key != nil:
-		return s.Key.Validate()
 	}
 	return nil
 }
@@ -97,10 +88,6 @@ func (s *Signature) clone() *Signature {
 	if s.PQ != nil {
 		pq := *s.PQ
 		out.PQ = &pq
-	}
-	if s.Key != nil {
-		k := *s.Key
-		out.Key = &k
 	}
 	return &out
 }

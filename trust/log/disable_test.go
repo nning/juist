@@ -84,7 +84,7 @@ func TestDisableCarriesNoSignature(t *testing.T) {
 	if err := h.sign(&aum, h.admins[0]); err == nil {
 		t.Fatal("a disable record was signed")
 	}
-	sig := types.Signature{KeyID: h.admins[0].Public(), Sig: types.Sig{1}}
+	sig := types.Signature{KeyID: h.admins[0].Public(), PQ: &types.PQSig{1}}
 	aum.Signatures = []types.Signature{sig}
 	h.mustReject("a signed disable record", RuleMalformed, aum)
 	b, err := aum.Encode()
@@ -271,16 +271,6 @@ func TestDisableWhereverItHangs(t *testing.T) {
 			}
 		})
 	}
-}
-
-// A network whose admins are lost cannot raise its schema first.
-func TestDisableAtEverySchema(t *testing.T) {
-	h := newHarnessAt(t, 1, 1, 0)
-	aum := h.disable(0, h.auth.State())
-	if err := h.auth.Inform(aum); err != nil {
-		t.Fatalf("Inform at schema 0: %v", err)
-	}
-	mustBeDisabled(t, "at schema 0", h.auth, h.storage, aum.Hash())
 }
 
 // A node joining from a checkpoint still holds the commitments the secret

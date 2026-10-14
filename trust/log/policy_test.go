@@ -43,7 +43,7 @@ func TestThePolicyFollowsItsMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rot, err := h.auth.Builder().RotateIdentity(laptop.Identity, fresh.Public(), h.sealer())
+	rot, err := h.auth.Builder().RotateIdentity(laptop.Identity, fresh.Public(), fresh.SigningKey(), h.sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,9 +84,6 @@ func TestThePolicyFollowsItsMembers(t *testing.T) {
 	if got := boot.State().Policy(); !reflect.DeepEqual(got, left) {
 		t.Fatalf("bootstrapped from a checkpoint, the policy is %+v", got)
 	}
-
-	old := newHarnessAt(t, 1, 1, types.SchemaRelayName)
-	old.mustReject("a policy at schema 12", RuleState, old.signed(types.AUM{Kind: types.KindSetPolicy, Policy: &types.Policy{}}))
 }
 
 // A removed member that was a rule's only exit node takes the internet out

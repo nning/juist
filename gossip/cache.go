@@ -28,9 +28,8 @@ const maxHintAhead = 10 * time.Minute
 // could otherwise fill the cache with signature-valid records for invented
 // identities. Membership decides eviction, never entry.
 //
-// Past the cut-over it holds hints apart: announcements whose ML-DSA
-// signature does not verify, which a quantum computer forges. See
-// [Cache.Add].
+// It holds hints apart: announcements whose ML-DSA signature does not verify,
+// which a quantum computer forges. See [Cache.Add].
 //
 // Safe for concurrent use.
 type Cache struct {
@@ -41,16 +40,8 @@ type Cache struct {
 	renews map[types.Identity]bool
 	member map[types.Identity]bool
 	former map[types.Identity]bool
-	// noRelayNames refuses relay names, below [types.SchemaRelayName], noPQ
-	// an epoch and pair store, below [types.SchemaPQ], and noSchemas a
-	// build's schema, below [types.SchemaPadded]: older members refuse a
-	// whole frame that carries one.
-	noRelayNames bool
-	noPQ         bool
-	noSchemas    bool
 
-	// signing are the members' signing keys, past the cut-over to
-	// [types.SchemaMLDSA]; nil before it.
+	// signing are the members' signing keys; nil before the log names them.
 	signing map[types.Identity]types.SigningKey
 
 	now func() time.Time
@@ -102,10 +93,10 @@ func (c *Cache) SetMembership(members, former []types.Identity) {
 	}
 }
 
-// SetSigningKeys gives the cache the members' signing keys, once the network
-// is past the cut-over, nil before it. Past it an announcement is held as a
-// hint unless its ML-DSA signature verifies against its author's key, and an
-// address key is refused unless it does.
+// SetSigningKeys gives the cache the members' signing keys. An announcement
+// is held as a hint unless its ML-DSA signature verifies against its
+// author's key, and an address key is refused unless it does; before the
+// keys are given, nothing is held to them.
 func (c *Cache) SetSigningKeys(keys map[types.Identity]types.SigningKey) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -113,8 +104,8 @@ func (c *Cache) SetSigningKeys(keys map[types.Identity]types.SigningKey) {
 	for id, e := range c.by {
 		if c.hintLocked(&e) {
 			delete(c.by, id)
-			if h, held := c.hints[id]; !held || h.Seq < e.Seq {
-				c.hints[id] = asHint(e)
+			if h, held := c.hints[id]; (!held || h.Seq < e.Seq) && !c.tooFarAheadLocked(&e) {
+				c.hints[id] = e.Hint()
 			}
 		}
 	}
@@ -125,9 +116,8 @@ func (c *Cache) SetSigningKeys(keys map[types.Identity]types.SigningKey) {
 	}
 }
 
-// hintLocked reports whether e is no more than a hint: past the cut-over,
-// one whose ML-DSA signature does not verify against its author's key. The
-// caller holds c.mu.
+// hintLocked reports whether e is no more than a hint: one whose ML-DSA
+// signature does not verify against its author's key. The caller holds c.mu.
 func (c *Cache) hintLocked(e *Endpoint) bool {
 	if c.signing == nil {
 		return false
@@ -136,18 +126,27 @@ func (c *Cache) hintLocked(e *Endpoint) bool {
 	return !ok || e.VerifyPQ(&key) != nil
 }
 
-// asHint is e without what only its author may say: its ML-DSA signature,
-// and its consent to serve as an exit, route subnets, answer DNS, serve
-// published names or share.
+// tooFarAheadLocked reports whether e, not shown signed by ML-DSA, numbers
+// itself past [maxHintAhead]. The caller holds c.mu.
+func (c *Cache) tooFarAheadLocked(e *Endpoint) bool {
+	return e.Seq > uint64(c.now().Add(maxHintAhead).Unix())
+}
+
+// asHint is the hint e as read: where to dial its author, without what only
+// its author may say, its consent to serve as an exit, route subnets, answer
+// DNS, serve published names or share, its relay, its overlay IPv4 and its
+// preshared key's epoch and store.
 func asHint(e Endpoint) Endpoint {
 	h := *e.Clone()
 	h.MLDSA = nil
 	h.Exit, h.Subnets, h.DNS, h.Published, h.Share = false, false, 0, false, nil
+	h.Relay, h.NoV4, h.Epoch, h.PairStore = nil, false, 0, 0
+	h.hint = true
 	return h
 }
 
-// keyVerifiesLocked reports whether an address key may be held: past the
-// cut-over, only one its owner signed by ML-DSA. The caller holds c.mu.
+// keyVerifiesLocked reports whether an address key may be held: one its owner
+// signed by ML-DSA. The caller holds c.mu.
 func (c *Cache) keyVerifiesLocked(k *AddrKey) bool {
 	if c.signing == nil {
 		return true
@@ -166,55 +165,6 @@ func (c *Cache) IsHint(id types.Identity) bool {
 	return hint && !full
 }
 
-// dropLocked drops what is held for id where drop says so. The caller holds
-// c.mu.
-func (c *Cache) dropLocked(drop func(*Endpoint) bool) {
-	for id, e := range c.by {
-		if drop(&e) {
-			delete(c.by, id)
-			delete(c.renews, id)
-		}
-	}
-	for id, e := range c.hints {
-		if drop(&e) {
-			delete(c.hints, id)
-		}
-	}
-}
-
-// SetRelayNames says whether the network's schema lets announcements name
-// a relay on 443; where not, those held are dropped and others refused.
-func (c *Cache) SetRelayNames(ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.noRelayNames = !ok
-	if !ok {
-		c.dropLocked(func(e *Endpoint) bool { return e.Relay != nil && e.Relay.Name != "" })
-	}
-}
-
-// SetPQ says whether the network's schema lets announcements name an epoch
-// and a pair store; where not, those held are dropped and others refused.
-func (c *Cache) SetPQ(ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.noPQ = !ok
-	if !ok {
-		c.dropLocked((*Endpoint).PQ)
-	}
-}
-
-// SetSchemas says whether the network's schema lets announcements name
-// their build's schema; where not, those held are dropped and others refused.
-func (c *Cache) SetSchemas(ok bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.noSchemas = !ok
-	if !ok {
-		c.dropLocked(func(e *Endpoint) bool { return e.Schema != 0 })
-	}
-}
-
 // Add records an announcement if it is newer than what is held, reporting
 // whether it says anything new. One that only renews the signature is kept,
 // so what is held stays as fresh as its author made it, but reported as
@@ -222,16 +172,16 @@ func (c *Cache) SetSchemas(ok bool) {
 // for each renewal. The record must already be verified ([Endpoint.Verify]):
 // passing an unverified one would let any peer speak for any node.
 //
-// Past the cut-over one whose ML-DSA signature does not verify is a hint: a
-// quantum computer forges its Ed25519 one. A hint is held beside the
-// announcement, never in its place, and is relayed to no one. Where it is
-// newer, [Cache.Get] dials where it says; what only its author may say
-// ([asHint]) comes from the announcement alone.
+// One whose ML-DSA signature does not verify is a hint: a quantum computer
+// forges its Ed25519 one. A hint is held beside the announcement, never in
+// its place, and is relayed to no one. Where it is newer, [Cache.Get] dials
+// where it says; everything else comes from the announcement alone. One not
+// shown signed by ML-DSA, as before the keys are given, is refused where it
+// numbers itself past [maxHintAhead].
 func (c *Cache) Add(e Endpoint) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.former[e.Identity] || c.noRelayNames && e.Relay != nil && e.Relay.Name != "" || c.noPQ && e.PQ() ||
-		c.noSchemas && e.Schema != 0 {
+	if c.former[e.Identity] {
 		return false
 	}
 	if full, held := c.by[e.Identity]; held && e.Seq <= full.Seq {
@@ -239,11 +189,13 @@ func (c *Cache) Add(e Endpoint) bool {
 		return false
 	}
 	before, _ := c.getLocked(e.Identity)
-	if c.hintLocked(&e) {
-		h := asHint(e)
-		if h.Seq > uint64(c.now().Add(maxHintAhead).Unix()) {
-			return false
-		}
+	beforeDisco, _ := c.hintDiscoLocked(e.Identity)
+	hint := c.hintLocked(&e)
+	if (hint || c.signing == nil) && c.tooFarAheadLocked(&e) {
+		return false
+	}
+	if hint {
+		h := e.Hint()
 		if cur, held := c.hints[e.Identity]; held && h.Seq <= cur.Seq {
 			return false
 		} else if !held && !c.roomLocked(c.hints, e.Identity) {
@@ -264,7 +216,8 @@ func (c *Cache) Add(e Endpoint) bool {
 		}
 	}
 	after, _ := c.getLocked(e.Identity)
-	return !before.SameAs(&after)
+	afterDisco, _ := c.hintDiscoLocked(e.Identity)
+	return !before.SameAs(&after) || afterDisco != beforeDisco
 }
 
 // roomLocked reports whether m has room for id: below the bound, or full
@@ -307,7 +260,8 @@ func (c *Cache) IsFormer(id types.Identity) bool {
 }
 
 // Get returns the announcement held for a node, dialed where a newer hint
-// says ([Cache.Add]), or the hint alone where no announcement is held.
+// says ([Cache.Add]), or the hint alone ([Endpoint.HintAlone]) where no
+// announcement is held.
 func (c *Cache) Get(id types.Identity) (Endpoint, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -319,22 +273,39 @@ func (c *Cache) getLocked(id types.Identity) (Endpoint, bool) {
 	h, hint := c.hints[id]
 	switch {
 	case full && hint && h.Seq > e.Seq:
+		// Where to dial alone, and its number, which maxHintAhead bounds. The
+		// keys, the relay's pin and the preshared key's epoch and store stay
+		// the announcement's: a forged disco key wins disco's path checks,
+		// and a forged store makes this node drop the pair's key.
 		out := *e.Clone()
-		// Its number too, the newest heard, which maxHintAhead bounds.
-		out.Seq, out.Disco, out.Addrs, out.Sealed, out.GossipPort = h.Seq, h.Disco, slices.Clone(h.Addrs), slices.Clone(h.Sealed), h.GossipPort
-		out.Relay, out.HomeRelay = h.Clone().Relay, h.HomeRelay
-		// A hint never lowers the epoch a pair's preshared key comes from.
-		if h.Epoch > e.Epoch {
-			out.Epoch, out.PairStore = h.Epoch, h.PairStore
-		}
+		out.Seq, out.Addrs, out.Sealed, out.GossipPort, out.HomeRelay = h.Seq, slices.Clone(h.Addrs), slices.Clone(h.Sealed), h.GossipPort, h.HomeRelay
 		out.MLDSA = nil // what it signed is not this
 		return out, true
 	case full:
 		return *e.Clone(), true
 	case hint:
-		return *h.Clone(), true
+		return asHint(h), true
 	}
 	return Endpoint{}, false
+}
+
+// HintDisco is the disco key a hint newer than id's announcement names where
+// it differs from the announcement's, which [Cache.Get] keeps: a member's
+// disco key is new each run, and until its tunnel is up a hint may be all
+// that says it.
+func (c *Cache) HintDisco(id types.Identity) (DiscoKey, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hintDiscoLocked(id)
+}
+
+func (c *Cache) hintDiscoLocked(id types.Identity) (DiscoKey, bool) {
+	e, full := c.by[id]
+	h, hint := c.hints[id]
+	if !full || !hint || h.Seq <= e.Seq || h.Disco == e.Disco {
+		return DiscoKey{}, false
+	}
+	return h.Disco, true
 }
 
 // All returns every announcement held but hints: members first, then the
@@ -345,7 +316,7 @@ func (c *Cache) getLocked(id types.Identity) (Endpoint, bool) {
 func (c *Cache) All() []Endpoint { return c.all(false) }
 
 // WithHints is [Cache.All] with the hints held for nodes it holds no
-// announcement of.
+// announcement of, each as signed.
 func (c *Cache) WithHints() []Endpoint { return c.all(true) }
 
 func (c *Cache) all(hints bool) []Endpoint {

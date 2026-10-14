@@ -112,8 +112,9 @@ these in braces. A destination is any of those, or:
   given by its label under the network's domain, or `name @` for the domain
   itself. The rule lets its sources open port 443, over TCP and UDP, on the
   device that publishes the name and terminates its TLS, and only for that
-  name. A rule with a `name` has no other destination and no port. A rule
-  naming a public name published by TLS opens that name's port on its device
+  name. A members-only name needs such a rule: a rule to its device, or to
+  `any`, opens the port but not the name. A rule with a `name` has no other
+  destination and no port. A rule naming a public name published by TLS opens that name's port on its device
   to the sources in the same way. If another device publishes the name
   later, the rule opens that device instead.
 
@@ -215,7 +216,7 @@ anyone who can push to the repository could change the network.
 
 - `juist policy set` refuses an empty file; to withdraw the policy, use
   `juist policy off`. `pass from any to any` lets every device open anything
-  on every other, but not use exit nodes or subnets.
+  on every other, but not use exit nodes, subnets or members-only names.
 - Under a policy, `juist invite` prints
   `hint: the access policy passes phone nothing until it names it: juist policy edit`.
 - `juist policy check` and `set` warn about anything that cannot work as
@@ -237,7 +238,6 @@ anyone who can push to the repository could change the network.
 
 | You see | What to do |
 |---|---|
-| `juist: the network predates access policies` | update juist on every device, then run `juist log upgrade` |
 | `juist: policy.conf:3: no device "nobody" in "home"` | correct the name; `juist devices --all` lists the devices, and `juist log` says whether one was renamed or removed |
 | `policy.conf:9: fails: test block from nas to laptop: pass from any to any passes it` | change the rule that passes it, or the test |
 | `juist: policy.conf:1: a policy has no comments: …` | remove the comment and give the reason in the commit message |

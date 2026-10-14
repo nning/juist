@@ -26,7 +26,7 @@ func (h *harness) grantAdmin(id types.Identity) {
 func (h *harness) lease(signer types.Identity, head types.Hash, issued uint64) types.Lease {
 	h.t.Helper()
 	l := types.Lease{Network: h.auth.State().GenesisHash(), Head: head, Issued: issued}
-	if err := l.Sign(h.nodeIDs[signer], h.auth.State().PQ()); err != nil {
+	if err := l.Sign(h.nodeIDs[signer]); err != nil {
 		h.t.Fatal(err)
 	}
 	return l
@@ -50,8 +50,8 @@ func TestLeaseRoundTrip(t *testing.T) {
 	if _, err := types.DecodeLease(damaged); err == nil {
 		t.Fatal("a lease with a damaged signature decoded")
 	}
-	// Past the cut-over the log holds a lease to its ML-DSA signature, which
-	// decoding alone cannot check.
+	// The log holds a lease to its ML-DSA signature, which decoding alone
+	// cannot check.
 	if err := h.auth.CheckLease(&got, 1000); err != nil {
 		t.Fatalf("an honest lease: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestLeaseRoundTrip(t *testing.T) {
 	edOnly := got
 	edOnly.MLDSA = nil
 	if err := h.auth.CheckLease(&edOnly, 1000); err == nil {
-		t.Fatal("a lease signed by Ed25519 alone vouched past the cut-over")
+		t.Fatal("a lease signed by Ed25519 alone vouched")
 	}
 }
 
@@ -175,20 +175,9 @@ func TestNoSignersMeansNotEnforced(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-// setVouchers raises the network to the vouching schema if it is not there,
-// then sets the threshold.
+// setVouchers sets the vouching threshold.
 func (h *harness) setVouchers(m uint32) error {
 	h.t.Helper()
-	if h.auth.State().Schema() < types.SchemaVouchers {
-		up, err := h.auth.Builder().SchemaUpgrade(types.SchemaVouchers)
-		if err != nil {
-			h.t.Fatal(err)
-		}
-		h.signQuorum(&up)
-		if err := h.auth.Inform(up); err != nil {
-			h.t.Fatal(err)
-		}
-	}
 	aum, err := h.auth.Builder().SetVouchers(m)
 	if err != nil {
 		return err
@@ -239,22 +228,6 @@ func TestAVouchingThresholdIsBoundedByTheAdminDevices(t *testing.T) {
 	}
 	if err := h.setVouchers(1); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// A schema-0 network has no vouching threshold: the record is refused until
-// the network is raised to the schema that defines it.
-func TestSetVouchersNeedsItsSchema(t *testing.T) {
-	h := newHarnessAt(t, 1, 1, 0)
-	a := h.addNode("admin-a")
-	h.grantAdmin(a.Identity)
-	aum, err := h.auth.Builder().SetVouchers(1)
-	if err == nil {
-		h.signQuorum(&aum)
-		err = h.auth.Inform(aum)
-	}
-	if err == nil || !strings.Contains(err.Error(), "needs schema 1") {
-		t.Fatalf("SetVouchers at schema 0: %v", err)
 	}
 }
 

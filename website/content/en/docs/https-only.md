@@ -100,12 +100,12 @@ password.
 
 ## Troubleshooting
 
-| `juist status` says | What to do |
+| What you see | What to do |
 |---|---|
-| `HTTPS  only, and no relay on 443` | give a relay a public name: run `sudo juist set --relay-name NAME` on it |
-| `warning: no relay on 443/tcp` | the same |
-| `no answer from …: offline, or at no relay on 443` | the device is offline, or cannot reach any relay that has a name |
-| `no tunnel traffic from … through the relays on 443` | check the relays' names in DNS, and that port 443 reaches them |
+| `juist status`: `HTTPS  only, and no relay on 443` | give a relay a public name: run `sudo juist set --relay-name NAME` on it |
+| `juist health`: `warning: no relay on 443/tcp` | the same |
+| `juist health`: `no answer from …: offline, or at no relay on 443` | the device is offline, or cannot reach any relay that has a name |
+| `juist health`: `no tunnel traffic from … through the relays on 443` | check the relays' names in DNS, and that port 443 reaches them |
 
 If joining says `the invite link names no relay on 443`, you need a new invite
 link, made after a relay serves a name on 443.

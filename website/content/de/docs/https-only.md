@@ -105,12 +105,12 @@ Passwort.
 
 ## Fehlersuche
 
-| `juist status` sagt | Was zu tun ist |
+| Was du siehst | Was zu tun ist |
 |---|---|
-| `HTTPS  only, and no relay on 443` | gib einem Relay einen öffentlichen Namen: `sudo juist set --relay-name NAME` auf ihm |
-| `warning: no relay on 443/tcp` | dasselbe |
-| `no answer from …: offline, or at no relay on 443` | das Gerät ist offline oder erreicht kein Relay mit Namen |
-| `no tunnel traffic from … through the relays on 443` | prüfe die Namen der Relays im DNS, und ob Port 443 sie erreicht |
+| `juist status`: `HTTPS  only, and no relay on 443` | gib einem Relay einen öffentlichen Namen: `sudo juist set --relay-name NAME` auf ihm |
+| `juist health`: `warning: no relay on 443/tcp` | dasselbe |
+| `juist health`: `no answer from …: offline, or at no relay on 443` | das Gerät ist offline oder erreicht kein Relay mit Namen |
+| `juist health`: `no tunnel traffic from … through the relays on 443` | prüfe die Namen der Relays im DNS, und ob Port 443 sie erreicht |
 
 Meldet der Beitritt `the invite link names no relay on 443`, brauchst du einen
 neuen Einladungslink, erstellt, nachdem ein Relay einen Namen auf 443 bedient.

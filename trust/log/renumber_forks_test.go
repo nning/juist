@@ -31,7 +31,7 @@ func TestAnAdmissionBesideAFinishedRenumberingNeedsOnlyReissuing(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.signQuorum(&admit)
-		if renumber.Hash().Compare(admit.Hash()) > 0 {
+		if renumber.SigHash().Compare(admit.SigHash()) > 0 {
 			continue // the admission wins; redraw both
 		}
 		retire, err := NewBuilder(h.project(renumber)).RetireAddresses()
@@ -128,7 +128,7 @@ func TestANodeMoveBesideANetworkRenumberingNeedsOnlyReissuing(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.signQuorum(&node)
-		if net.Hash().Compare(node.Hash()) > 0 {
+		if net.SigHash().Compare(node.SigHash()) > 0 {
 			continue
 		}
 		auth := h.fork()

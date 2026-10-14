@@ -62,12 +62,12 @@ func TestAGrantOf443WithoutANameIsTakenBack(t *testing.T) {
 	if err := os.WriteFile(h.layout.relayGrant, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, h.mustRun("status"), "warning: juistd may bind any port below 1024",
+	mustContain(t, h.mustRun("health"), "warning: juistd may bind any port below 1024",
 		h.layout.relayScript+" off")
 	// Another juistd, by its socket, is none of the grant's.
 	other := newDaemonDevice(t, nil)
 	other.cli.host = h.layout
-	if out := other.mustRun("status"); strings.Contains(out, "below 1024") {
+	if out := other.mustRun("health"); strings.Contains(out, "below 1024") {
 		t.Errorf("another juistd is warned of the host's grant:\n%s", out)
 	}
 	h.mustRun("reset", "--yes", "--force")

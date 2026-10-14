@@ -374,7 +374,7 @@ func TestRotationIsAdoptedWithoutARestart(t *testing.T) {
 	if !rec.VerifySignature(f.nw.devices[0].record.Identity, f.nw.devices[0].record.Signing) {
 		t.Fatal("the device did not sign its own rotation")
 	}
-	if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := rec.Encode()
@@ -602,7 +602,7 @@ func TestAnAbandonedRotationApprovedAnywayIsAdopted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := rec.Encode()
@@ -635,7 +635,7 @@ func TestAbandoningTwiceKeepsBothKeySets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	body, _ := rec.Encode()
@@ -674,7 +674,7 @@ func TestAnIdentityRotationApprovedWhileDownIsAdopted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(f.nw.admin, types.CurrentSchema); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	st, err := store.Open(filepath.Join(f.home, keys.LogDir))
@@ -1024,7 +1024,7 @@ func TestAMovedDeviceMovesOntoItsNewAddressAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := move.SignUnder(f.nw.admin, auth.State().Schema()); err != nil {
+	if err := move.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	body, err := move.Encode()
@@ -1120,12 +1120,12 @@ func TestTheDisableRecordComesFirstOffTheChain(t *testing.T) {
 	var lost types.Hash
 	var admissions []types.AUM
 	for i, name := range []string{"one", "two"} {
-		dev := newDevice(t, name, netip.AddrFrom4([4]byte{100, 64, 0, byte(50 + i)}))
+		dev := newDevice(t, name, netip.AddrFrom4([4]byte{198, 18, 0, byte(50 + i)}))
 		rec, err := b.AddNode(dev.record, f.nw.sealer())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := rec.SignUnder(f.nw.admin, mesh.authority.State().Schema()); err != nil {
+		if err := rec.Sign(f.nw.admin); err != nil {
 			t.Fatal(err)
 		}
 		admissions = append(admissions, rec)

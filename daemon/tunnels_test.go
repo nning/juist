@@ -17,7 +17,7 @@ import (
 
 // A peer that answers its probe is live, and so is one with a handshake just
 // now; one whose probes go unanswered twice in a row is down, though its last
-// handshake is only a minute old — as a peer that restarted leaves it. One
+// handshake is only a minute behind — as a peer that restarted leaves it. One
 // lost probe is not enough.
 func TestTunnelsCountFreshHandshakesAndAnswers(t *testing.T) {
 	f := newReconcileFixture(t, 5)
@@ -49,11 +49,11 @@ func TestTunnelsCountFreshHandshakesAndAnswers(t *testing.T) {
 
 // A live peer naming no epoch is called outdated once it has had the time
 // to catch up, and no longer once it names one.
-func TestACheckCallsAnOlderBuildOutdated(t *testing.T) {
+func TestACheckCallsAPeerNamingNoEpochOutdated(t *testing.T) {
 	f := newReconcileFixture(t, 3)
-	pq, old := f.nw.devices[1], f.nw.devices[2]
+	pq, behind := f.nw.devices[1], f.nw.devices[2]
 	f.learn(t, pq, 4001)
-	f.learnOld(t, old, 4002, false)
+	f.learnNoEpoch(t, behind, 4002, false)
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -81,15 +81,15 @@ func TestACheckCallsAnOlderBuildOutdated(t *testing.T) {
 		t.Fatalf("outdated at once: %v", got)
 	}
 	now = now.Add(outdatedAfter)
-	if got := outdated(); !slices.Equal(got, []string{old.record.Name}) {
+	if got := outdated(); !slices.Equal(got, []string{behind.record.Name}) {
 		t.Fatalf("outdated after %v: %v", outdatedAfter, got)
 	}
-	e, err := endpointFor(old, 4002)
+	e, err := endpointFor(behind, 4002)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e.Seq, e.Epoch, e.PairStore = 3, f.auth.State().Epoch(), 1
-	if err := e.SignPQ(old.identity); err != nil {
+	if err := e.SignPQ(behind.identity); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Learn(e); err != nil {
@@ -122,14 +122,14 @@ func TestSyncVerdicts(t *testing.T) {
 	}
 }
 
-// A live peer whose log sync connects nowhere is blamed on a firewall, an
-// older build among them, since nothing shows it is not catching up.
+// A live peer whose log sync connects nowhere is blamed on a firewall, one
+// naming no epoch among them, since nothing shows it is not catching up.
 func TestASyncThatConnectsNowhereIsBlamedOnAFirewall(t *testing.T) {
 	f := newReconcileFixture(t, 3)
 	f.d.tunName = "juist0"
-	pq, old := f.nw.devices[1], f.nw.devices[2]
+	pq, behind := f.nw.devices[1], f.nw.devices[2]
 	f.learn(t, pq, 4001)
-	f.learnOld(t, old, 4002, false)
+	f.learnNoEpoch(t, behind, 4002, false)
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -137,14 +137,14 @@ func TestASyncThatConnectsNowhereIsBlamedOnAFirewall(t *testing.T) {
 	f.mgr.mu.Lock()
 	f.mgr.answers = answers
 	f.mgr.mu.Unlock()
-	f.d.gossip.Sync(t.Context(), []types.Identity{pq.record.Identity, old.record.Identity})
+	f.d.gossip.Sync(t.Context(), []types.Identity{pq.record.Identity, behind.record.Identity})
 	now := time.Now()
 	f.d.clock = func() time.Time { return now }
 	f.d.refreshReach(t.Context())
 	now = now.Add(outdatedAfter)
 	f.d.refreshReach(t.Context())
 	st := f.d.Status()
-	want := []string{pq.record.Name, old.record.Name}
+	want := []string{pq.record.Name, behind.record.Name}
 	slices.Sort(want)
 	if !slices.Equal(st.SyncFailing, want) || len(st.Outdated)+len(st.SyncNewer)+len(st.SyncBroken) != 0 {
 		t.Fatalf("failing %v, outdated %v, newer %v, broken %v", st.SyncFailing, st.Outdated, st.SyncNewer,
@@ -355,24 +355,21 @@ func TestARunningDeviceBehindAFirewallReadsAsBlocked(t *testing.T) {
 	}
 }
 
-// A device that runs while its tunnel is down, on a build from before the
-// network's upgrade, knows no member that joined since: it is called
-// outdated once its newer announcement had the time to arrive, and only one
-// on a current build is blamed on the way.
-func TestARunningDeviceOnAnOlderBuildIsOutdatedNotBlocked(t *testing.T) {
+// A device that runs while its tunnel is down and names no epoch has yet to
+// catch up, and knows no member that joined since: it is called outdated once
+// its newer announcement had the time to arrive, and only one that names an
+// epoch is blamed on the way.
+func TestARunningDeviceThatNamesNoEpochIsOutdatedNotBlocked(t *testing.T) {
 	t0 := time.Unix(1_700_000_000, 0)
 	c := &clock{now: t0}
-	f := newReconcileFixtureWith(t, 4, func(o *Options) { o.Clock = c.get })
-	current, noEpoch, olderSchema := f.nw.devices[1], f.nw.devices[2], f.nw.devices[3]
+	f := newReconcileFixtureWith(t, 3, func(o *Options) { o.Clock = c.get })
+	current, noEpoch := f.nw.devices[1], f.nw.devices[2]
 	announce := func(at time.Time) {
-		for _, dev := range []*device{current, noEpoch, olderSchema} {
+		for _, dev := range []*device{current, noEpoch} {
 			e := f.signedBy(t, dev, at)
-			e.Epoch, e.Schema = f.auth.State().Epoch(), types.CurrentSchema
-			switch dev {
-			case noEpoch:
-				e.Epoch, e.PairStore, e.Schema = 0, 0, 0
-			case olderSchema:
-				e.Schema = 0 // builds before types.SchemaPadded name none
+			e.Epoch = f.auth.State().Epoch()
+			if dev == noEpoch {
+				e.Epoch, e.PairStore = 0, 0
 			}
 			if err := e.SignPQ(dev.identity); err != nil {
 				t.Fatal(err)
@@ -390,14 +387,13 @@ func TestARunningDeviceOnAnOlderBuildIsOutdatedNotBlocked(t *testing.T) {
 	c.set(t0.Add(3 * time.Minute))
 	announce(c.get())
 	st := f.d.Status()
-	if len(st.Outdated) != 0 || !slices.Equal(st.Blocked(), []string{current.record.Name, noEpoch.record.Name,
-		olderSchema.record.Name}) {
+	if len(st.Outdated) != 0 || !slices.Equal(st.Blocked(), []string{current.record.Name, noEpoch.record.Name}) {
 		t.Fatalf("at once: outdated %v, blocked %v", st.Outdated, st.Blocked())
 	}
 	c.set(t0.Add(3*time.Minute + max(outdatedAfter, f.d.settles())))
 	announce(c.get())
 	st = f.d.Status()
-	if want := []string{noEpoch.record.Name, olderSchema.record.Name}; !slices.Equal(st.Outdated, want) ||
+	if want := []string{noEpoch.record.Name}; !slices.Equal(st.Outdated, want) ||
 		!slices.Equal(st.Blocked(), []string{current.record.Name}) {
 		t.Fatalf("later: outdated %v, blocked %v; want %v outdated", st.Outdated, st.Blocked(), want)
 	}
@@ -405,6 +401,66 @@ func TestARunningDeviceOnAnOlderBuildIsOutdatedNotBlocked(t *testing.T) {
 		if r.Outdated != (r.Identity != current.record.Identity) {
 			t.Errorf("%v marked outdated: %v", r.Identity.ShortString(), r.Outdated)
 		}
+	}
+}
+
+// A hint alone naming an older build has no say in whether its member is
+// outdated, nor in the build the status shows for it.
+func TestAHintAloneNamingAnOlderBuildIsNotOutdated(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	c := &clock{now: t0}
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
+	dev := f.nw.devices[1]
+	announce := func(at time.Time) {
+		e := f.signedBy(t, dev, at)
+		e.Epoch = f.auth.State().Epoch()
+		f.learnHint(t, dev, e, func(h *gossip.Endpoint) { h.Schema = types.MinSchema })
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		f.d.refreshReach(t.Context())
+	}
+	announce(t0.Add(-3 * time.Minute))
+	c.set(t0.Add(3 * time.Minute))
+	announce(c.get())
+	c.set(t0.Add(3*time.Minute + max(outdatedAfter, f.d.settles())))
+	announce(c.get())
+	st := f.d.Status()
+	if len(st.Outdated) != 0 || len(st.OlderBuild) != 0 {
+		t.Fatalf("outdated %v, older build %v", st.Outdated, st.OlderBuild)
+	}
+	for _, d := range st.Devices {
+		if d.Identity == dev.record.Identity && d.Build != 0 {
+			t.Fatalf("the status shows build %d for a member held by a hint alone", d.Build)
+		}
+	}
+}
+
+// A live member held by a hint alone naming an older build is not said to
+// run one.
+func TestALiveMemberHeldByAHintIsNoOlderBuild(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	dev := f.nw.devices[1]
+	e, err := endpointFor(dev, 4001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Epoch = f.auth.State().Epoch()
+	f.learnHint(t, dev, e, func(h *gossip.Endpoint) { h.Schema = types.MinSchema })
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	answers := map[netip.Addr]bool{f.installed(t, 1).Addrs[0].Addr(): true}
+	f.mgr.mu.Lock()
+	f.mgr.answers = answers
+	f.mgr.mu.Unlock()
+	now := time.Now()
+	f.d.clock = func() time.Time { return now }
+	f.d.refreshReach(t.Context())
+	now = now.Add(outdatedAfter)
+	f.d.refreshReach(t.Context())
+	if st := f.d.Status(); len(st.Reach) != 1 || !st.Reach[0].Live || len(st.OlderBuild) != 0 || len(st.Outdated) != 0 {
+		t.Fatalf("reach %+v, older build %v, outdated %v", st.Reach, st.OlderBuild, st.Outdated)
 	}
 }
 
@@ -491,7 +547,7 @@ func TestARestartedMeshKeepsItsSession(t *testing.T) {
 	f.s.restartMeshLocked(nil, "a test")
 	f.s.mu.Unlock()
 	if f.s.Mesh().discoPublic == after.discoPublic {
-		t.Error("a mesh restarted on new keys kept the old NAT-traversal key")
+		t.Error("a mesh restarted on new keys kept the behind NAT-traversal key")
 	}
 }
 
@@ -545,7 +601,7 @@ func TestAnEchoOfAPreviousRunIsAnnouncedPast(t *testing.T) {
 	if again, _ := f.d.announcement(); again.Seq != mine.Seq {
 		t.Fatal("an echo that does not verify had the announcement signed again")
 	}
-	// Past the cut-over, Ed25519 alone is what a quantum computer forges.
+	// Ed25519 alone is what a quantum computer forges.
 	ed := previous
 	ed.Seq += 1000
 	if err := ed.Sign(f.self.identity); err != nil {
@@ -797,80 +853,158 @@ func TestAQuietPeerARelayCanWakeIsProbedRarely(t *testing.T) {
 	}
 }
 
-// A live peer naming an older schema than the network's, or none, is called
-// a build that applies no changes once it has had the time to catch up, and
-// no longer once it names the network's.
-func TestACheckNamesAnOlderSchema(t *testing.T) {
-	f := newReconcileFixture(t, 3)
-	current, older := f.nw.devices[1], f.nw.devices[2]
-	f.learn(t, current, 4001)
-	announce := func(seq uint64, schema types.SchemaVersion) {
-		e, err := endpointFor(older, 4002)
-		if err != nil {
-			t.Fatal(err)
-		}
-		e.Seq, e.Epoch, e.Schema = seq, f.auth.State().Epoch(), schema
-		if err := e.SignPQ(older.identity); err != nil {
+// A relay gone, as one whose role was revoked, wakes nothing: a peer homed
+// there is probed, found down and looked up for its next home, which a device
+// reaching it through relays alone has no other way to learn.
+func TestAnAnswerStandsOnlyWhereThePeersRelayIsReached(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	c := &clock{now: t0}
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	region := uint16(relayRegion(f.auth.State().GenesisHash(), f.self.record.Identity))
+	dev := f.nw.devices[1]
+	e := f.signedBy(t, dev, t0)
+	e.HomeRelay = region
+	if err := e.SignPQ(dev.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	peer := f.installed(t, 1)
+	if peer.HomeRelay != int(region) {
+		t.Fatalf("the peer is installed homed at %d, want %d", peer.HomeRelay, region)
+	}
+	addr := peer.Addrs[0].Addr()
+	f.mgr.mu.Lock()
+	f.mgr.home = int(region)
+	f.mgr.answers = map[netip.Addr]bool{addr: true}
+	f.mgr.mu.Unlock()
+	for range 2 {
+		f.d.refreshReach(t.Context())
+		c.set(c.get().Add(reachEvery))
+	}
+	if got := f.mgr.probes(); got != 1 {
+		t.Fatalf("a quiet peer homed at this device's relay was probed in %d of 2 checks, want 1", got)
+	}
+
+	// This device moves home and reaches the peer's relay no more; the peer,
+	// homed there as far as this device knows, answers nothing.
+	f.mgr.mu.Lock()
+	f.mgr.home = int(region) + 1
+	f.mgr.answers = nil
+	f.mgr.mu.Unlock()
+	f.d.refreshReach(t.Context())
+	if got := f.mgr.probes(); got != 2 {
+		t.Fatalf("the peer's relay is not reached, yet its answer stood: %d probes", got)
+	}
+	if r := f.d.Status().Reach; len(r) != 1 || r[0].Live {
+		t.Fatalf("the peer reads %+v, want down", r)
+	}
+	if !slices.Contains(f.d.wanted(), dev.record.Identity) {
+		t.Fatal("the peer is not looked up for its next home")
+	}
+}
+
+func TestAnAnnouncementNamesItsBuildsSchema(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := f.d.announcement(); !ok || e.Schema != types.CurrentSchema {
+		t.Errorf("the announcement names %v, want %v", e.Schema, types.CurrentSchema)
+	}
+}
+
+// A member that restarts, on a new disco key a hint alone brings, while its
+// answer stands and its last handshake is fresh, is probed at once, found
+// down by two probes missed in a row and installed on the hint's key within
+// seconds, not once its answer has stood its time. A member whose tunnel
+// answers keeps its key against a hint, which may be forged.
+func TestARestartedMembersHintMovesItsDiscoKeyWithinSeconds(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	c := &clock{now: t0}
+	f := newReconcileFixtureWith(t, 3, func(o *Options) { o.Clock = c.get })
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	region := uint16(relayRegion(f.auth.State().GenesisHash(), f.self.record.Identity))
+	restarted, up := f.nw.devices[1], f.nw.devices[2]
+	var held []gossip.Endpoint
+	for _, dev := range []*device{restarted, up} {
+		e := f.signedBy(t, dev, t0)
+		e.HomeRelay = region
+		if err := e.SignPQ(dev.identity); err != nil {
 			t.Fatal(err)
 		}
 		if err := f.d.Learn(e); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.d.Reconcile(); err != nil {
-			t.Fatal(err)
-		}
+		held = append(held, e)
 	}
-	announce(2, 0)
-	answers := map[netip.Addr]bool{f.installed(t, 1).Addrs[0].Addr(): true, f.installed(t, 2).Addrs[0].Addr(): true}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	gone, answering := f.installed(t, 1), f.installed(t, 2)
 	f.mgr.mu.Lock()
-	f.mgr.answers = answers
+	f.mgr.home = int(region)
+	f.mgr.answers = map[netip.Addr]bool{gone.Addrs[0].Addr(): true, answering.Addrs[0].Addr(): true}
+	f.mgr.tunnels = map[uint64]conn.Tunnel{
+		gone.ID:      {LastHandshake: time.Now().Add(-10 * time.Second)},
+		answering.ID: {LastHandshake: time.Now().Add(-10 * time.Second)},
+	}
 	f.mgr.mu.Unlock()
-	now := time.Now()
-	f.d.clock = func() time.Time { return now }
-	olderBuild := func() []string {
-		f.d.refreshReach(t.Context())
-		st := f.d.Status()
-		var marked []string
-		for _, r := range st.Reach {
-			if r.OlderBuild {
-				marked = append(marked, r.Identity.ShortString())
-			}
-		}
-		if len(marked) != len(st.OlderBuild) || len(st.Outdated) != 0 {
-			t.Fatalf("%d marked, %d named: %v; outdated %v", len(marked), len(st.OlderBuild), st.OlderBuild, st.Outdated)
-		}
-		return st.OlderBuild
-	}
-	if got := olderBuild(); len(got) != 0 {
-		t.Fatalf("named at once: %v", got)
-	}
-	now = now.Add(outdatedAfter)
-	if got := olderBuild(); !slices.Equal(got, []string{older.record.Name}) {
-		t.Fatalf("named after %v: %v", outdatedAfter, got)
-	}
-	announce(3, types.CurrentSchema)
-	if got := olderBuild(); len(got) != 0 {
-		t.Fatalf("named though it names the network's schema: %v", got)
-	}
-}
+	f.d.refreshReach(t.Context())
+	c.set(c.get().Add(reachEvery))
 
-// From [types.SchemaPadded] on, a device names its build's schema and seals
-// what it publishes padded; before, neither, as older members refuse both.
-func TestAnAnnouncementNamesItsBuildFromItsSchema(t *testing.T) {
-	for _, c := range []struct {
-		schema types.SchemaVersion
-		want   types.SchemaVersion
-	}{{types.SchemaMembers, 0}, {types.SchemaPadded, types.CurrentSchema}} {
-		f := newReconcileFixtureOn(t, newNetworkMutated(t, 2, func(nw *network) { nw.schema = c.schema }), nil)
+	f.mgr.mu.Lock()
+	delete(f.mgr.answers, gone.Addrs[0].Addr())
+	f.mgr.mu.Unlock()
+	var hinted []gossip.DiscoKey
+	for i, dev := range []*device{restarted, up} {
+		h := held[i].Hint()
+		_, k, err := conn.NewDiscoKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.Seq, h.Disco = uint64(c.get().Unix()), gossip.DiscoKey(k)
+		if err := h.Sign(dev.identity); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Learn(h); err != nil {
+			t.Fatal(err)
+		}
+		hinted = append(hinted, h.Disco)
+	}
+	for len(f.d.recheck) > 0 {
+		<-f.d.recheck
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	// Each check asks for the next: the hint, then the first probe missed.
+	asked := 0
+	on := func(i int, k gossip.DiscoKey) bool { return f.installed(t, i).DiscoKey == conn.DiscoPublicFromRaw32(k) }
+	for range 2 {
+		select {
+		case <-f.d.recheck:
+			asked++
+		default:
+		}
+		c.set(c.get().Add(recheckGap))
+		f.d.refreshReach(t.Context())
 		if err := f.d.Reconcile(); err != nil {
 			t.Fatal(err)
 		}
-		e, ok := f.d.announcement()
-		if !ok || e.Schema != c.want {
-			t.Errorf("at %v the announcement names %v, want %v", c.schema, e.Schema, c.want)
-		}
-		if padded := f.d.paddedItems(); padded != (c.want != 0) {
-			t.Errorf("at %v items are padded: %v", c.schema, padded)
-		}
+	}
+	if !on(1, hinted[0]) {
+		t.Fatalf("%v after the hint, the restarted member is not on its key", 2*recheckGap)
+	}
+	if !on(2, held[1].Disco) || on(2, hinted[1]) {
+		t.Fatal("a hint moved the disco key of a member whose tunnel answers")
+	}
+	if asked != 2 {
+		t.Fatalf("%d of the 2 checks were asked for", asked)
 	}
 }

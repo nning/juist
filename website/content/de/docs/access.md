@@ -114,7 +114,9 @@ mehrere davon in geschweiften Klammern. Ein Ziel ist eines davon oder:
   angegeben über sein Label unter der Domain des Netzes, oder `name @` für
   die Domain selbst. Die Regel erlaubt ihren Quellen, Port 443 per TCP und
   UDP auf dem Gerät zu öffnen, das den Namen veröffentlicht und sein TLS
-  beendet, und zwar nur für diesen Namen. Eine Regel mit `name` hat kein
+  beendet, und zwar nur für diesen Namen. Ein Name nur für Mitglieder
+  braucht eine solche Regel: Eine Regel zu seinem Gerät oder zu `any` öffnet
+  den Port, aber nicht den Namen. Eine Regel mit `name` hat kein
   weiteres Ziel und keinen Port. Nennt eine Regel einen öffentlichen, per
   TLS veröffentlichten Namen, öffnet sie den Quellen ebenso den Port dieses
   Namens auf seinem Gerät. Veröffentlicht später ein anderes Gerät den Namen,
@@ -225,8 +227,8 @@ Sonst könnte jeder, der ins Repository pushen darf, das Netz ändern.
 
 - `juist policy set` weist eine leere Datei ab; zurücknehmen kannst du die
   Zugriffsregeln mit `juist policy off`. Mit `pass from any to any` darf jedes
-  Gerät zu jedem anderen jede Verbindung aufbauen, aber keine Exit-Nodes oder
-  Subnetze nutzen.
+  Gerät zu jedem anderen jede Verbindung aufbauen, aber keine Exit-Nodes,
+  Subnetze oder Namen nur für Mitglieder nutzen.
 - Gibt es Zugriffsregeln, meldet `juist invite`:
   `hint: the access policy passes phone nothing until it names it: juist policy edit`.
 - `juist policy check` und `set` warnen vor allem, was so nicht funktionieren
@@ -249,7 +251,6 @@ Sonst könnte jeder, der ins Repository pushen darf, das Netz ändern.
 
 | Was du siehst | Was du tun kannst |
 |---|---|
-| `juist: the network predates access policies` | Aktualisiere juist auf allen Geräten und führe dann `juist log upgrade` aus. |
 | `juist: policy.conf:3: no device "nobody" in "home"` | Korrigiere den Namen; `juist devices --all` listet die Geräte auf, und `juist log` sagt, ob eines umbenannt oder entfernt wurde. |
 | `policy.conf:9: fails: test block from nas to laptop: pass from any to any passes it` | Ändere die Regel, die das durchlässt, oder den Test. |
 | `juist: policy.conf:1: a policy has no comments: …` | Entferne den Kommentar und schreib die Begründung in die Commit-Nachricht. |

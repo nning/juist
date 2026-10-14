@@ -1,8 +1,8 @@
 ---
 title: Status und Geräte
 linkTitle: Status und Geräte
-description: Nachsehen, ob ein Gerät verbunden ist, welche Geräte im Netz sind und welche Änderungen es gab.
-lead: Drei Befehle zeigen dir, wie es um dein Netz steht. juist status zeigt dieses Gerät und alles, worum du dich kümmern solltest, juist devices listet alle Geräte auf, und juist log zeigt jede Änderung und wer sie bestätigt hat.
+description: Nachsehen, ob ein Gerät verbunden ist, was zu tun ist, welche Geräte im Netz sind und welche Änderungen es gab.
+lead: Vier Befehle zeigen dir, wie es um dein Netz steht. juist status zeigt dieses Gerät, juist health alles, worum du dich kümmern solltest, juist devices listet alle Geräte auf, und juist log zeigt jede Änderung und wer sie bestätigt hat.
 ---
 
 Dein Netz besteht aus Geräten, die zusammengehören, und jedes davon ist ein
@@ -12,13 +12,13 @@ signierten Liste aller Änderungen (siehe
 dieser Seite lesen dieses Log und fragen den Daemon `juistd`, das Programm,
 das die Tunnel aufrecht hält, nach dem aktuellen Stand.
 
-Scheint etwas nicht zu stimmen, fang mit `juist status` an. Der Befehl nennt
-das Problem und gibt in einer Zeile `hint:` den Befehl aus, der es behebt.
+Scheint etwas nicht zu stimmen, fang mit `juist health` an. Der Befehl nennt
+jedes Problem und gibt in einer Zeile `hint:` den Befehl aus, der es behebt.
 
 ## Ein Gerät prüfen
 
 {{< step on="laptop" >}}
-Sieh nach, ob dieses Gerät verbunden ist und ob etwas zu tun ist:
+Sieh nach, ob dieses Gerät verbunden ist:
 
 ```sh
 juist status
@@ -33,12 +33,23 @@ home · connected
   Names         home.juist
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
+  Schema        18
   Updated       just now
 ```
 
-Die erste Zeile nennt das Netz und seinen Zustand. Darunter folgen die
-Einzelheiten und zuletzt etwaige Warnungen, jede mit einem Hinweis.
+Die erste Zeile nennt das Netz und seinen Zustand, darunter folgen die
+Einzelheiten. Ist etwas zu tun, verweisen höchstens zwei Hinweise weiter:
+
+```console
+hint: 1 change waits for your vote: juist approve
+hint: 3 warnings: juist health
+```
 {{< /step >}}
+
+Ist das Gerät in mehreren Netzen, nennt der zweite Hinweis das Netz, etwa
+`juist health work`. `juist status` selbst meldet nur, was das Netz anhält:
+einen Fork- oder Rollback-Alarm oder ein Schema, das diese Version von juist nicht lesen
+kann.
 
 In der ersten Zeile steht einer dieser Zustände:
 
@@ -69,9 +80,9 @@ In der ersten Zeile steht einer dieser Zustände:
   aktuellen Stand des Netzes kennt, und wie lange diese Bestätigung gilt. Ein
   Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich
   ausstellt. Nach 48 Stunden ohne Bestätigung steht dort
-  `expired; vouchers only`. Einen Tag vorher erscheint eine Warnung. Ist kein
+  `expired; vouchers only`. Einen Tag vorher warnt `juist health`. Ist kein
   Gerät Voucher, steht dort `unchecked: no voucher`, und dürfen mindestens
-  zwei Geräte Verkehr weiterleiten, schlägt ein Hinweis sie als Voucher vor.
+  zwei Geräte Verkehr weiterleiten, schlägt `juist health` sie als Voucher vor.
   Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
 - `Published`: die veröffentlichten Namen, die dieses Gerät bedient, oder
   warum es sie nicht bedient. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}).
@@ -81,10 +92,41 @@ In der ersten Zeile steht einer dieser Zustände:
 - `Sharing`: wie viele Freigaben dieses Gerät hat (`juist share` listet sie
   auf), oder warum niemand sie erreicht.
 - `Ports`: die Ports, auf denen juistd lauscht. `udp/41643` ist der für die Tunnel.
+- `Schema`: die Version des Formats, in dem das Log des Netzes steht. Kennt
+  diese Version von juist eine neuere, folgt sie gelb in Klammern, etwa
+  `18 (19)`; auf einem Gerät mit Admin-Schlüssel sagt `juist health` dann,
+  wie du es anhebst (siehe [Admins]({{< relref "docs/admins" >}})).
 - `Updated`: wann juistd zuletzt einen neuen Stand des Netzes übernommen hat.
 
 Zeilen wie `Subnets`, `Published` oder `Renumbering` erscheinen nur, wenn
 die jeweilige Funktion genutzt wird.
+
+## Was zu tun ist
+
+`juist health` sagt, worum du dich auf diesem Gerät kümmern solltest, jede
+Warnung mit einem `hint:`, der sie behebt, und welche Geräte es nicht
+erreicht:
+
+```console
+$ juist health
+warning: log sync to vps fails in the tunnel: tcp/41644 does not answer there
+hint: where it runs Linux: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
+no answer from phone: offline, or udp/41643 blocked
+```
+
+Eine schlichte Zeile wie `no answer from phone` verlangt nichts, solange das
+Gerät aus ist. Nach den Warnungen folgen die Änderungen, die auf deine Stimme
+warten (siehe [Admins]({{< relref "docs/admins" >}})), und auf einem Gerät
+mit Admin-Schlüssel, wie du das Schema des Netzes anhebst. Ist nichts zu tun,
+sagt der Befehl das:
+
+```console
+$ juist health
+nothing needs attention
+```
+
+Ist das Gerät in mehreren Netzen, gibt `juist health` jedes Netz unter seinem
+Namen aus.
 
 ## Die Geräte auflisten
 
@@ -92,11 +134,11 @@ die jeweilige Funktion genutzt wird.
 
 ```console
 $ juist devices
-NAME                  IPV4         REACHED  ROLES
-laptop (this device)  198.18.36.1  -        -
-nas                   198.18.36.2  direct   voucher, names, publishes
-vps                   198.18.36.3  direct   voucher, relay
-phone                 198.18.36.4  relayed  -
+NAME                  IPV4         REACHED  SCHEMA  ROLES
+laptop (this device)  198.18.36.1  -        18      -
+nas                   198.18.36.2  direct   18      voucher, names, publishes
+vps                   198.18.36.3  direct   18      voucher, relay
+phone                 198.18.36.4  relayed  18      -
 ```
 
 `ROLES` zeigt für jedes Gerät:
@@ -123,6 +165,11 @@ einem noch schmaleren, etwa auf dem Handy, belegt jedes Gerät mehrere Zeilen.
 | `not checked yet` | juistd hat noch nicht nachgesehen |
 | `not connected` | das Gerät hat sich gemeldet, aber es gibt keinen Tunnel, etwa weil der Stand dieses Geräts veraltet ist |
 | `-` | dieses Gerät selbst |
+
+`SCHEMA` ist das neueste Schema, das das juist eines Geräts kennt, so wie das
+Gerät es ankündigt. Es ist gelb, wo es älter ist als das dieses Geräts, und
+`-`, wo dieses Gerät noch keine Ankündigung von ihm gehört hat. Läuft juistd
+nicht oder hat es keine gehört, fehlt die Spalte.
 
 Gelten [Zugriffsregeln]({{< relref "docs/access" >}}), zeigt `juist devices`
 nur dieses Gerät und die Mitglieder, zu denen es einen Tunnel hat, und endet mit
@@ -179,16 +226,16 @@ hat einen eigenen Daemon, `juistd@juist1`, mit eigenem Log.
 
 ## Hinweise
 
-- Jeder lokale Benutzer darf `juist status` ausführen. Wer weder root noch
-  [Operator]({{< relref "docs/operator" >}}) des Geräts ist, sieht unter der
-  Ausgabe einen Hinweis `read-only`.
+- Jeder lokale Benutzer darf `juist status` und `juist health` ausführen. Wer
+  weder root noch [Operator]({{< relref "docs/operator" >}}) des Geräts ist,
+  sieht in `juist health` einen Hinweis `read-only`.
 - `juist devices`, `juist log` und alle anderen Befehle sind root und dem Operator vorbehalten.
 - Ist ein Gerät in [mehreren Netzen]({{< relref "docs/networks" >}}), zeigen
-  `juist status` und `juist devices` alle Netze nacheinander.
+  `juist status`, `juist health` und `juist devices` alle Netze nacheinander.
   `juist devices work` zeigt nur eines.
 
 ## Fehlersuche
 
-`juist status` gibt Warnungen unter den Einzelheiten aus, jeweils mit einer Zeile
-`hint:` darunter. Die häufigsten und was du dagegen tun kannst, stehen unter
+`juist health` gibt Warnungen aus, jeweils mit einer Zeile `hint:` darunter.
+Die häufigsten und was du dagegen tun kannst, stehen unter
 [Fehlersuche]({{< relref "docs/troubleshooting" >}}).

@@ -147,10 +147,15 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	}
 	invite(t, fb, lx, "juist join '%s'")
 
-	fb4 := strings.TrimSpace(fb.run(t, `ifconfig juist0 inet | awk '/inet / {print $2; exit}'`))
-	fb6 := strings.TrimSpace(fb.run(t, `ifconfig juist0 inet6 | awk '/inet6 / && !/fe80/ {print $2; exit}'`))
-	lx4 := strings.TrimSpace(lx.run(t, `ip -4 -br addr show juist0 | awk '{print $3}' | cut -d/ -f1`))
-	lx6 := strings.TrimSpace(lx.run(t, `ip -6 -br addr show juist0 scope global | awk '{print $3}' | cut -d/ -f1`))
+	// The overlay addresses arrive with the join, not at once.
+	addr := func(v *vm, what, script string) string {
+		return strings.TrimSpace(v.eventually(t, what, time.Minute, script,
+			func(out string) bool { return strings.TrimSpace(out) != "" }))
+	}
+	fb4 := addr(fb, "its overlay IPv4 address", `ifconfig juist0 inet | awk '/inet / {print $2; exit}'`)
+	fb6 := addr(fb, "its overlay IPv6 address", `ifconfig juist0 inet6 | awk '/inet6 / && !/fe80/ {print $2; exit}'`)
+	lx4 := addr(lx, "its overlay IPv4 address", `ip -4 -br addr show juist0 | awk '{print $3}' | cut -d/ -f1`)
+	lx6 := addr(lx, "its overlay IPv6 address", `ip -6 -br addr show juist0 scope global | awk '{print $3}' | cut -d/ -f1`)
 	t.Logf("fb %s %s, lx %s %s", fb4, fb6, lx4, lx6)
 
 	t.Run("tunnel", func(t *testing.T) {
@@ -355,9 +360,9 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 	if !client.freebsd {
 		// Debian's cloud image has resolv.conf list every link's servers,
 		// which leaks; resolved's stub, as the hint says, does not.
-		client.eventually(t, "hinting at resolved's stub", time.Minute, "juist status 2>&1", has("stub-resolv.conf"))
+		client.eventually(t, "hinting at resolved's stub", time.Minute, "juist health 2>&1", has("stub-resolv.conf"))
 		client.run(t, "ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf")
-		client.eventually(t, "its DNS through the exit node, unwarned", 3*time.Minute, "juist status 2>&1",
+		client.eventually(t, "its DNS through the exit node, unwarned", 3*time.Minute, "juist health 2>&1",
 			func(out string) bool { return !strings.Contains(out, "warning: DNS") })
 	}
 	client.run(t, "juist exit off")
@@ -442,11 +447,11 @@ func mustHave(t *testing.T, out string, want ...string) {
 // diagnose is what says why v did not carry or reach what it should.
 func diagnose(v *vm) string {
 	if v.freebsd {
-		return `juist status; netstat -rn | head -40; for a in $(pfctl -a juist -s Anchors 2>/dev/null); do
+		return `juist status; juist health; netstat -rn | head -40; for a in $(pfctl -a juist -s Anchors 2>/dev/null); do
 echo "== $a"; pfctl -a $a -s nat; pfctl -a $a -s rules; done; pfctl -s info | head -2
 sysctl net.inet.ip.forwarding; cat /etc/resolv.conf; tail -30 /var/log/juistd.log`
 	}
-	return `juist status; ip rule; ip route show table all | grep -v -e '^local' -e '^broadcast' -e '^multicast' | head -40
+	return `juist status; juist health; ip rule; ip route show table all | grep -v -e '^local' -e '^broadcast' -e '^multicast' | head -40
 sysctl net.ipv4.ip_forward; iptables-save | head -60; resolvectl status juist0; journalctl -u juistd -n 30 --no-pager`
 }
 

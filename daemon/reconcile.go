@@ -65,9 +65,6 @@ func (d *Daemon) Reconcile() error {
 	d.keepSeeds()
 	d.noteSchema()
 	d.pruneWaiting(state)
-	d.endpoints.SetRelayNames(state.Schema() >= types.SchemaRelayName)
-	d.setPQ(state.Schema() >= types.SchemaPQ)
-	d.setPadded(state.Schema() >= types.SchemaPadded)
 	d.setSigning(state)
 	if d.onAddrsMoved != nil && state.IsMember(d.self) &&
 		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.heldAddrs()) && d.movedSaid.CompareAndSwap(false, true) {
@@ -115,7 +112,7 @@ func (d *Daemon) Reconcile() error {
 	d.setGossipPeers(s.view, !fresh.Fresh(s.now), admit)
 	d.planSealing(s)
 	d.pruneOpened(s.live)
-	held, discoUsers := d.heldAnnouncements(s)
+	held, discoUsers, hinted := d.heldAnnouncements(s)
 	relays, err := d.installRelays(s, held)
 	if err != nil {
 		d.applyExit(d.exitDown("the data plane refused the relay set"))
@@ -125,10 +122,11 @@ func (d *Daemon) Reconcile() error {
 	}
 	ports := d.planPublish(s, fresh.Fresh(s.now))
 	ap := d.accessPlan(s, !fresh.Fresh(s.now), ports.access())
-	b := d.buildPeers(s, held, discoUsers, relays, admit, &ap)
+	b := d.buildPeers(s, held, discoUsers, hinted, relays, admit, &ap)
 	d.prunePSKs(b.named)
 	d.noteNewAnnouncements(b.named)
 	d.setInstalled(b.named)
+	d.checkDoubted(b.named)
 	sub := d.planSubnets(s, fresh.Fresh(s.now), held, b.peers, b.named)
 	exit := d.planExit(s, fresh.Fresh(s.now), held, b.peers, b.named, sub.taken).withSubnets(sub, overlaySpace(state))
 	d.mu.Lock()
@@ -165,7 +163,13 @@ func (d *Daemon) Reconcile() error {
 	}
 	devices := peerDevices(ipc.DevicesOf(state, s.now), d.self, s.view)
 	for i := range devices {
-		devices[i].Serving = len(devices[i].Published) > 0 && d.servesPublished(devices[i].Identity)
+		id := devices[i].Identity
+		devices[i].Serving = len(devices[i].Published) > 0 && d.servesPublished(id)
+		if id == d.self {
+			devices[i].Build = types.CurrentSchema
+		} else if e, ok := d.endpoints.Get(id); ok && !e.HintAlone() {
+			devices[i].Build = e.Schema
+		}
 	}
 	d.setDerived(ipc.Derived{
 		NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(), Schema: state.Schema(),
@@ -277,21 +281,71 @@ func (d *Daemon) checkFreshness(state *log.State, now int64) (log.Freshness, fun
 // heldAnnouncements reads each live member's announcement once, and counts
 // the members announcing each disco key. Gossip and discovery write the cache
 // concurrently, and reading twice lets one added between the passes be
-// counted zero times and installed once.
-func (d *Daemon) heldAnnouncements(s snapshot) (map[types.Identity]gossip.Endpoint, map[gossip.DiscoKey]int) {
-	held := make(map[types.Identity]gossip.Endpoint, len(s.members))
-	discoUsers := make(map[gossip.DiscoKey]int, len(s.members))
+// counted zero times and installed once. hinted names the members whose disco
+// key is a hint's ([Daemon.hintDisco]).
+func (d *Daemon) heldAnnouncements(s snapshot) (held map[types.Identity]gossip.Endpoint,
+	discoUsers map[gossip.DiscoKey]discoUse, hinted map[types.Identity]bool) {
+	held = make(map[types.Identity]gossip.Endpoint, len(s.members))
+	discoUsers = make(map[gossip.DiscoKey]discoUse, len(s.members))
+	hinted = map[types.Identity]bool{}
+	d.mu.Lock()
+	installed := make(map[types.Identity]conn.Peer, len(d.installed))
+	for _, p := range d.installed {
+		installed[p.id] = p.peer
+	}
+	d.mu.Unlock()
+	reached := d.reachable.Load()
 	for i := range s.members {
 		id := s.members[i].Identity
 		if id == d.self || !s.live[id] {
 			continue
 		}
 		if ep, ok := d.endpoints.Get(id); ok {
+			hinted[id] = ep.HintAlone()
+			if k, ok := d.hintDisco(id, reached, installed); ok {
+				ep.Disco, hinted[id] = k, true
+			}
 			held[id] = ep
-			discoUsers[ep.Disco]++
+			u := discoUsers[ep.Disco]
+			if hinted[id] {
+				u.hints++
+			} else {
+				u.full++
+			}
+			discoUsers[ep.Disco] = u
 		}
 	}
-	return held, discoUsers
+	return held, discoUsers, hinted
+}
+
+// hintDisco is the disco key a hint newer than id's announcement names
+// ([gossip.Cache.HintDisco]), where it is installed in the announcement's:
+// while id is not reached, or is reached on it. Log sync runs through the
+// tunnel, so a member's key from a run after the announcement held comes by
+// hints alone until the tunnel is up; a tunnel up keeps the key it came up
+// on until it misses two probes in a row ([Daemon.doubted]), so a forged
+// hint takes none down.
+func (d *Daemon) hintDisco(id types.Identity, reached *map[types.Identity]bool,
+	installed map[types.Identity]conn.Peer) (gossip.DiscoKey, bool) {
+	k, ok := d.endpoints.HintDisco(id)
+	if !ok || reached != nil && (*reached)[id] && installed[id].DiscoKey != conn.DiscoPublicFromRaw32(k) {
+		return gossip.DiscoKey{}, false
+	}
+	return k, true
+}
+
+// discoUse counts the members announcing one disco key, by announcement and
+// by hint.
+type discoUse struct{ full, hints int }
+
+// conflicts reports whether a member's disco key, a hint's where hinted, is
+// another member's too. A hint yields to an announcement, never the other
+// way: a forged hint may name any member's key.
+func (u discoUse) conflicts(hinted bool) bool {
+	if hinted {
+		return u.full > 0 || u.hints > 1
+	}
+	return u.full > 1
 }
 
 // installRelays derives the relay set from the same snapshot as the peer set
@@ -376,9 +430,10 @@ type peerSet struct {
 // The disco key is the one field a peer chooses for itself, and conn requires
 // them distinct — left to conn, one member announcing another's key would
 // make SetPeers refuse the whole set, a mesh kill switch. Every peer in a
-// colliding set is dropped here instead.
+// colliding set is dropped here instead, except that a hint yields to
+// an announcement ([discoUse.conflicts]).
 func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
-	discoUsers map[gossip.DiscoKey]int, relays []conn.Relay, admit func(types.Identity) bool, ap *accessPlan) peerSet {
+	discoUsers map[gossip.DiscoKey]discoUse, hinted map[types.Identity]bool, relays []conn.Relay, admit func(types.Identity) bool, ap *accessPlan) peerSet {
 	out := peerSet{peers: make([]conn.Peer, 0, len(s.members))}
 	for i := range s.members {
 		n := &s.members[i]
@@ -391,10 +446,15 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			out.silent = append(out.silent, n.Name)
 			continue
 		}
-		if discoUsers[ep.Disco] > 1 || ep.Disco == d.discoPublic {
+		if discoUsers[ep.Disco].conflicts(hinted[n.Identity]) || ep.Disco == d.discoPublic {
 			out.conflicted++
-			d.logOnce("daemon: two members announce the same NAT-traversal key, or one announces this " +
-				"device's; none of them gets a peer entry until that is resolved")
+			if hinted[n.Identity] {
+				d.logOnce("daemon: a hint names a NAT-traversal key another member or this device announces; " +
+					"its member gets no peer entry until its own announcement arrives")
+			} else {
+				d.logOnce("daemon: two members announce the same NAT-traversal key, or one announces this " +
+					"device's; none of them gets a peer entry until that is resolved")
+			}
 			continue
 		}
 		p := conn.Peer{
@@ -408,7 +468,7 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 		}
 		psk, stage := d.psk(s.state, n, ep)
 		p.PSK = psk
-		if notPQ(s.state, stage) {
+		if notPQ(stage) {
 			// juist's own traffic alone, which seals itself.
 			p.Access = ap.ownOnly(n, ep)
 		}

@@ -1,8 +1,8 @@
 ---
 title: Troubleshooting
 linkTitle: Troubleshooting
-description: What juist status says when something is wrong, what it means, and the command that fixes it.
-lead: When something does not work, run juist status first. It says what needs attention and prints a hint with the fix. This page lists the common cases.
+description: What juist health says when something is wrong, what it means, and the command that fixes it.
+lead: When something does not work, run juist health first. It says what needs attention and prints a hint with the fix. This page lists the common cases.
 ---
 
 ## Where to look
@@ -10,13 +10,15 @@ lead: When something does not work, run juist status first. It says what needs a
 Run this on the device that has the problem:
 
 ```sh
-juist status
+juist health
 ```
 
-Warnings start with `warning:` and appear below the details. Each one is
-followed by a `hint:` line with the command to run. Any local user may run
-`juist status`. [Status and devices]({{< relref "docs/status" >}}) explains
-what each line means.
+Warnings start with `warning:`, and each one is followed by a `hint:` line
+with the command to run. Plain lines name the devices this one does not
+reach. Where nothing is wrong, it says `nothing needs attention`.
+`juist status` shows the network's state and details. Any local user may run
+both. [Status and devices]({{< relref "docs/status" >}}) explains what each
+line means.
 
 For more detail, read the daemon's own log:
 
@@ -73,6 +75,11 @@ hint: on a device with a public address: sudo ufw allow juist, or firewall-cmd -
 Or make such a device a relay with `juist grant vps relay`. See
 [Relays]({{< relref "docs/relays" >}}).
 
+Where a relay is available, the warning reads
+`no tunnel traffic from nas, though it announces itself`, without a hint:
+nas runs and says where to reach it, yet neither a direct path nor a relay
+carries its traffic.
+
 ### `no device reaches this relay`
 
 This device is a relay, but no other device gets through to it. Port 41645 is
@@ -88,17 +95,18 @@ See [Relays]({{< relref "docs/relays" >}}).
 
 ### `log sync to nas fails in the tunnel`
 
-The tunnel works, but a firewall on this host drops the log sync that runs
-inside it (TCP 41644 on `juist0`). The device then misses changes to the
-network, including removals. Allow incoming traffic on `juist0` on both
-devices, as the hint says:
+The tunnel works, but the log sync that runs inside it (TCP 41644 on
+`juist0`) gets no answer from nas, most often because a firewall there drops
+it. The devices then miss changes to the network, including removals. Where
+nas runs Linux, allow incoming traffic on `juist0` there, as the hint says:
 
 ```console
-hint: on both devices: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
+hint: where it runs Linux: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
 ```
 
-If firewalld is the cause, `juist status` says `firewalld blocks juist0`
-and gives the command to fix it. See [Relays]({{< relref "docs/relays" >}}).
+If firewalld on this device is the cause, `juist health` says
+`firewalld blocks juist0` and gives the command to fix it. See
+[Relays]({{< relref "docs/relays" >}}).
 
 ### `warning: log sync fails: nas runs a newer juist`
 
@@ -182,6 +190,15 @@ the upgrade. nas stays reachable, but it applies no change to the network
 until you update juist on it, a removal included. `juist status` on nas
 says the same.
 
+### `warning: this change builds on juistd's view of the log, …`
+
+You are removing a device or an admin key, or taking authority away, while
+juistd's view of the network is stale: no voucher has vouched for it lately.
+A change that withdraws authority wins over changes made meanwhile that this
+device has not seen, and undoes them. Where the change can wait, bring the
+device back in touch with a voucher first. Where it cannot, as for a stolen
+device, go ahead, and redo what it undoes.
+
 ### `warning: nas fell too far behind to reach this device`
 
 nas was offline for more changes than this device keeps keys for. nas can
@@ -189,6 +206,16 @@ catch up from a device that still has those keys, usually one that was
 offline for as long. Otherwise, join it to the network again with a new
 invite. Only a device that runs is said to have fallen behind: of one that is
 offline, this device may hold only an announcement from before it joined.
+
+### `alarm: log: rollback alarm: the chain went back from epoch 4 to 3, …`
+
+Two admins changed the network at the same time, and the changes this device
+applied first lost to the others. Taking the winning changes would move the
+network's group secret back to an older one, which this device never does,
+since a removed device may hold it. So every tunnel stays down, though the
+device keeps receiving changes, removals included. An admin redoes the lost
+changes, or runs `juist rotate group-secret`. Once that change reaches this
+device, it connects again.
 
 ### `removed`
 

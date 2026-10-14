@@ -1,8 +1,8 @@
 ---
 title: Fehlersuche
 linkTitle: Fehlersuche
-description: Was juist status meldet, wenn etwas nicht stimmt, was das bedeutet und mit welchem Befehl du es behebst.
-lead: Funktioniert etwas nicht, führe zuerst juist status aus. Der Befehl zeigt, worum du dich kümmern musst, und gibt einen Hinweis zur Lösung aus. Hier findest du die häufigsten Fälle.
+description: Was juist health meldet, wenn etwas nicht stimmt, was das bedeutet und mit welchem Befehl du es behebst.
+lead: Funktioniert etwas nicht, führe zuerst juist health aus. Der Befehl zeigt, worum du dich kümmern musst, und gibt einen Hinweis zur Lösung aus. Hier findest du die häufigsten Fälle.
 ---
 
 ## Wo du nachsiehst
@@ -10,13 +10,15 @@ lead: Funktioniert etwas nicht, führe zuerst juist status aus. Der Befehl zeigt
 Führe auf dem Gerät, das das Problem hat, Folgendes aus:
 
 ```sh
-juist status
+juist health
 ```
 
-Warnungen beginnen mit `warning:` und stehen unter den Einzelheiten. Auf jede
-folgt eine Zeile `hint:` mit dem Befehl, der weiterhilft. Jeder lokale
-Benutzer darf `juist status` ausführen. Was die einzelnen Zeilen bedeuten,
-steht unter [Status und Geräte]({{< relref "docs/status" >}}).
+Warnungen beginnen mit `warning:`, und auf jede folgt eine Zeile `hint:` mit
+dem Befehl, der weiterhilft. Schlichte Zeilen nennen die Geräte, die dieses
+nicht erreicht. Ist nichts zu tun, steht dort `nothing needs attention`.
+`juist status` zeigt den Zustand des Netzes und die Einzelheiten. Jeder lokale
+Benutzer darf beide ausführen. Was die einzelnen Zeilen bedeuten, steht unter
+[Status und Geräte]({{< relref "docs/status" >}}).
 
 Weitere Einzelheiten stehen im Log des Daemons:
 
@@ -76,6 +78,11 @@ hint: on a device with a public address: sudo ufw allow juist, or firewall-cmd -
 Oder mach ein solches Gerät mit `juist grant vps relay` zum Relay. Siehe
 [Relays]({{< relref "docs/relays" >}}).
 
+Gibt es ein Relay, lautet die Warnung
+`no tunnel traffic from nas, though it announces itself`, ohne Hinweis: nas
+läuft und teilt mit, wo es erreichbar ist, und doch trägt weder ein direkter
+Weg noch ein Relay seinen Verkehr.
+
 ### `no device reaches this relay`
 
 Dieses Gerät ist ein Relay, aber kein anderes Gerät kommt bei ihm an.
@@ -92,17 +99,19 @@ Siehe [Relays]({{< relref "docs/relays" >}}).
 
 ### `log sync to nas fails in the tunnel`
 
-Der Tunnel steht, aber eine Firewall auf diesem Rechner verwirft den
-Log-Abgleich, der darin läuft (TCP 41644 auf `juist0`). Das Gerät verpasst
-dann Änderungen am Netz, auch das Entfernen von Geräten. Lass eingehenden
-Verkehr auf `juist0` auf beiden Geräten durch, wie der Hinweis vorschlägt:
+Der Tunnel steht, aber der Log-Abgleich, der darin läuft (TCP 41644 auf
+`juist0`), bekommt von nas keine Antwort, meist weil eine Firewall dort ihn
+verwirft. Die Geräte verpassen dann Änderungen am Netz, auch das Entfernen
+von Geräten. Läuft auf nas Linux, lass dort eingehenden Verkehr auf `juist0`
+durch, wie der Hinweis vorschlägt:
 
 ```console
-hint: on both devices: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
+hint: where it runs Linux: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
 ```
 
-Liegt es an firewalld, meldet `juist status` `firewalld blocks juist0` und
-nennt den passenden Befehl. Siehe [Relays]({{< relref "docs/relays" >}}).
+Liegt es an firewalld auf diesem Gerät, meldet `juist health`
+`firewalld blocks juist0` und nennt den passenden Befehl. Siehe
+[Relays]({{< relref "docs/relays" >}}).
 
 ### `warning: log sync fails: nas runs a newer juist`
 
@@ -189,6 +198,16 @@ von vor dem Upgrade. nas bleibt erreichbar, übernimmt aber keine Änderung am
 Netz, bis du juist auf nas aktualisierst, auch kein Entfernen.
 `juist status` auf nas meldet dasselbe.
 
+### `warning: this change builds on juistd's view of the log, …`
+
+Du entfernst ein Gerät oder einen Admin-Schlüssel oder entziehst Befugnisse,
+während juistds Sicht auf das Netz veraltet ist: Kein Voucher hat sie zuletzt
+bestätigt. Eine Änderung, die Befugnisse entzieht, setzt sich gegen
+Änderungen durch, die inzwischen gemacht wurden und die dieses Gerät nicht
+kennt, und macht sie rückgängig. Kann die Änderung warten, bring das Gerät
+zuerst wieder in Kontakt mit einem Voucher. Kann sie es nicht, etwa bei einem
+gestohlenen Gerät, führe sie aus und wiederhole, was sie rückgängig macht.
+
 ### `warning: nas fell too far behind to reach this device`
 
 nas war für mehr Änderungen offline, als dieses Gerät Schlüssel aufbewahrt.
@@ -197,6 +216,18 @@ meist von einem, das ebenso lange offline war. Sonst nimm nas mit einer neuen
 Einladung wieder ins Netz auf. Das wird nur über ein Gerät gesagt, das läuft:
 Von einem, das offline ist, hat dieses Gerät womöglich nur eine Ankündigung
 von vor seinem eigenen Beitritt.
+
+### `alarm: log: rollback alarm: the chain went back from epoch 4 to 3, …`
+
+Zwei Admins haben das Netz gleichzeitig geändert, und die Änderungen, die
+dieses Gerät zuerst übernommen hat, sind den anderen unterlegen. Die
+Änderungen zu übernehmen, die sich durchgesetzt haben, brächte das
+Gruppengeheimnis des Netzes auf ein älteres zurück. Das tut dieses Gerät nie,
+denn ein entferntes Gerät kann es kennen. Darum bleiben alle Tunnel unten,
+doch das Gerät empfängt weiter Änderungen, Entfernungen eingeschlossen. Ein
+Admin wiederholt die verlorenen Änderungen oder führt
+`juist rotate group-secret` aus. Sobald diese Änderung
+das Gerät erreicht, verbindet es sich wieder.
 
 ### `removed`
 

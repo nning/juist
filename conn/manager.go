@@ -126,6 +126,10 @@ type Manager interface {
 	// in this node's announcement.
 	HomeRelay() int
 
+	// ReachesRelay reports whether region is this node's home relay, or one
+	// its last measurement of the relays reached.
+	ReachesRelay(region int) bool
+
 	// LocalEndpoints reports the underlay addresses the NAT-traversal layer
 	// believes this node can be reached at, including reflexive ones learned
 	// from a relay's STUN responder. It is empty until there is a relay to

@@ -117,9 +117,10 @@ func CallStatusPage(ctx context.Context, path string) (*StatusPage, error) {
 	if err := publishedDec.Unmarshal(b, &f); err != nil {
 		return nil, fmt.Errorf("ipc: decoding the status page: %w", err)
 	}
+	makePrintable(&f)
 	switch {
 	case f.Err != "":
-		return nil, errors.New(printable(f.Err))
+		return nil, errors.New(f.Err)
 	case f.StatusPage == nil:
 		return nil, errors.New("ipc: juistd sent no status page")
 	}

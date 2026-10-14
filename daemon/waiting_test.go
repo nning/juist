@@ -52,7 +52,7 @@ func sealedChange(t *testing.T, nw *network, auth *log.Authority, i int, signer 
 // sealedAUM hands on aum as signer, sealed to an admin key of its own.
 func sealedAUM(t *testing.T, auth *log.Authority, aum types.AUM, signer types.PrivateIdentity, now time.Time) []byte {
 	t.Helper()
-	if err := aum.SignUnder(signer, auth.State().Schema()); err != nil {
+	if err := aum.Sign(signer); err != nil {
 		t.Fatal(err)
 	}
 	reader, err := secrets.AdminRecipient(signer.Seed())
@@ -116,7 +116,7 @@ func TestADaemonHoldsOnlyChangesThatFit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bump.SignUnder(nw.admin, auth.State().Schema()); err != nil {
+	if err := bump.Sign(nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Inform([]types.AUM{bump}); err != nil {
@@ -184,7 +184,7 @@ func TestOneSignerCannotFillTheRoom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.SignUnder(nw.admin, auth.State().Schema()); err != nil {
+	if err := add.Sign(nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Inform([]types.AUM{add}); err != nil {

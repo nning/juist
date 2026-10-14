@@ -217,8 +217,8 @@ chain, so one admin device that lies can keep any node it reaches fresh on a
 view from before every removal. Naming heads cannot tell a liar from one that
 is behind. That is not like an admin key below quorum, which can do nothing
 alone: with the default threshold of one, a single dishonest admin device turns
-fail-closed off for everyone it reaches. Schema 1 therefore adds a threshold to
-the log (`KindSetVouchers`, `juist admins vouchers M`). A node is fresh while M
+fail-closed off for everyone it reaches. The log therefore holds a
+threshold (`KindSetVouchers`, `juist admins vouchers M`). A node is fresh while M
 distinct admin devices have each vouched within the TTL, and it is fresh from
 the M-th newest of their leases. The threshold cannot exceed the admin devices
 there are. With M = 1 the rule is "every admin device is honest", and the docs
@@ -291,8 +291,9 @@ The rules behind the fixes, so they survive the next change:
   the guest's place. The CLI answers one admission per invite. Through a
   daemon, it shows the joining device as four words, which "juist join"
   shows on the device, and asks before it signs. The words hash the
-  identity, every key, a salt the admin draws, and a nonce the guest
-  draws. The daemon in between carries both, so each is fixed before the
+  identity, every key, the ML-DSA key included, a salt the admin draws, and
+  a nonce the guest draws; builds hashing a different set show different
+  words, so a join between them is refused. The daemon in between carries both, so each is fixed before the
   other is known, as in Bluetooth's numeric comparison: the join request
   commits to the nonce, the admin draws the salt after it, the guest
   accepts one salt and only then reveals the nonce, and the CLI holds it
@@ -301,14 +302,13 @@ The rules behind the fixes, so they survive the next change:
   nonce: one try at 32 bits on either screen, not a search. (Salting alone
   was not enough: the daemon relays the salt, and could grind the one it
   gave the guest until the words matched.)
-- **An identity rotation needs both keys (schema 1).** Otherwise admins alone
+- **An identity rotation needs both keys.** Otherwise admins alone
   could move a member's slot, and an admin device's role with it, to a key
-  of their choosing. Schema 0 networks keep the old rule until "juist log
-  upgrade".
+  of their choosing.
 - **Which device the daemon is, is proved, not told.** A rotation comes with a
   signature by the rotated device's current identity key, which the CLI checks
-  before it signs; under schema 0 nothing else would stop a daemon from moving
-  another member's slot to a key of its own.
+  before it signs, so that a daemon cannot have it move another member's slot
+  to a key of its own.
 - **A join by link anchors the keystore in the admin's admission.** The CLI
   checks the admission the daemon hands back against the link's admin key and
   pins that network and head before it reads the daemon's log, so a juistd

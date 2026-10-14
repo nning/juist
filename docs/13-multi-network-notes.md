@@ -29,7 +29,7 @@ needs a registry:
 The roadmap had instances named after their network. They are numbered
 instead, because the name is needed before the join that learns the network's
 name, a device name has to fit IFNAMSIZ, two networks may share a name, and
-a network can be renamed (schema 6). People never type the number unless they
+a network can be renamed. People never type the number unless they
 want to: the CLI finds a network by its name (below).
 
 Ports are fixed per instance rather than taken free at start, as the roadmap
@@ -209,7 +209,7 @@ device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
   instance. Then an instance's home cannot sit in the default's 0700 one,
   each needs a runtime directory of its own, and the instance above has to be
   allowed to read the exact claims of the one below. That is for the
-  boundaries on a host, before the audit (M22).
+  boundaries on a host, before the audit (M23).
 - **Other networks' addresses in path discovery.** magicsock learns this
   host's addresses from every interface but Tailscale's own, and sends them to
   peers in the call-me-maybe it relays. A network's members may therefore be

@@ -257,7 +257,7 @@ func TestEffectShowsRoutesTakenAway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := with.SignUnder(admins[0], types.CurrentSchema); err != nil {
+	if err := with.Sign(admins[0]); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Inform(with); err != nil {

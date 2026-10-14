@@ -1,7 +1,6 @@
 package types
 
 import (
-	"slices"
 	"strings"
 	"testing"
 )
@@ -57,90 +56,5 @@ func TestNameSets(t *testing.T) {
 	other.Names = []string{"imap.org"}
 	if err := ix.Check(other); err != nil {
 		t.Error(err)
-	}
-}
-
-// A state names members only from the schema that has names.
-func TestNamesNeedTheirSchema(t *testing.T) {
-	seeds := corpusSeeds(t)
-	var snap *Snapshot
-	for _, b := range seeds {
-		a, err := DecodeAUM(b)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if a.Kind == KindCheckpoint && a.State.Schema >= SchemaNames && len(a.State.Nodes) > 0 && len(a.State.Nodes[0].Names) > 0 {
-			snap = a.State
-		}
-	}
-	if snap == nil {
-		t.Fatal("no seed state names a member")
-	}
-	if err := snap.StaticValidate(false); err != nil {
-		t.Fatal(err)
-	}
-	old := withoutSigning(snap)
-	old.Schema = SchemaSealing
-	old.V4Retiring, old.V4Prefix, old.Domain = nil, nil, ""
-	old.Nodes[0].Retiring, old.Nodes[0].Published = nil, nil
-	if err := old.StaticValidate(false); err == nil || !strings.Contains(err.Error(), "names") {
-		t.Errorf("a state before schema 8 with names: %v", err)
-	}
-}
-
-// withoutSigning is a copy of s without its signing keys, as a state below
-// the cut-over has.
-func withoutSigning(s *Snapshot) *Snapshot {
-	out := s.Clone()
-	for i := range out.Admins {
-		out.Admins[i].Signing = nil
-		out.Admins[i].Endorsement = nil
-	}
-	for i := range out.Nodes {
-		out.Nodes[i].Signing = nil
-	}
-	return out
-}
-
-// A role arrives at a schema, as a kind does: a state below it may not grant
-// it, or a build that knows the role and one that does not would part.
-func TestRolesNeedTheirSchema(t *testing.T) {
-	const late Role = "late"
-	roleSchemas[late] = SchemaNames
-	t.Cleanup(func() { delete(roleSchemas, late) })
-	n := &NodeRecord{Roles: []Role{RoleExit, late}}
-	if need, what := n.NeedsSchema(); need != SchemaNames || !strings.Contains(what, "late") {
-		t.Fatalf("a role of schema 8 needs %v, for %q", need, what)
-	}
-	var snap *Snapshot
-	for _, b := range corpusSeeds(t) {
-		a, err := DecodeAUM(b)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if a.Kind == KindCheckpoint && a.State.Schema >= SchemaNames && len(a.State.Nodes) > 0 {
-			snap = a.State.Clone()
-		}
-	}
-	if snap == nil {
-		t.Fatal("no seed state has a member")
-	}
-	snap = withoutSigning(snap)
-	snap.Schema = SchemaSealing
-	snap.V4Retiring, snap.V4Prefix, snap.Domain = nil, nil, ""
-	for i := range snap.Nodes {
-		snap.Nodes[i].Retiring, snap.Nodes[i].Names, snap.Nodes[i].Published = nil, nil, nil
-	}
-	if err := snap.StaticValidate(false); err != nil {
-		t.Fatal(err)
-	}
-	snap.Nodes[0].Roles = append(snap.Nodes[0].Roles, late)
-	slices.Sort(snap.Nodes[0].Roles)
-	if err := snap.StaticValidate(false); err == nil || !strings.Contains(err.Error(), `"late"`) {
-		t.Errorf("a state at schema 7 granting a role of schema 8: %v", err)
-	}
-	snap.Schema = SchemaNames
-	if err := snap.StaticValidate(false); err != nil {
-		t.Errorf("a state at schema 8 granting a role of schema 8: %v", err)
 	}
 }

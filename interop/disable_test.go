@@ -21,7 +21,7 @@ func disable(t *testing.T, fb, lx *vm, fb4, glass string) {
 				if v.freebsd {
 					logs = "tail -40 /var/log/juistd.log"
 				}
-				out, _ := v.try("juist status; juist log | tail -4; "+logs, time.Minute)
+				out, _ := v.try("juist status; juist health; juist log | tail -4; "+logs, time.Minute)
 				t.Logf("%s:\n%s", v.name, out)
 			}
 			hold(t, fb, lx)

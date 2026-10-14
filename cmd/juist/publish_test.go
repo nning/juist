@@ -416,8 +416,8 @@ func TestTheStatusWarnsOfANameSharingItsService(t *testing.T) {
 			"reaches its service as it is, whose clients could ask it for photos.pub.example.org by Host"},
 		{kind: lineHint, text: sharedHint},
 	} {
-		if !slices.Contains(v.head, want) {
-			t.Errorf("head %v lacks %v", v.head, want)
+		if !slices.Contains(v.head, want) && !slices.Contains(v.notes, want) {
+			t.Errorf("status %v %v lacks %v", v.head, v.notes, want)
 		}
 	}
 }

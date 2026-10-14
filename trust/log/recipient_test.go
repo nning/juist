@@ -48,7 +48,7 @@ func TestSetAdminRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Past the cut-over a key the log names no signing key for cannot sign.
+	// A key the log names no signing key for cannot sign.
 	h.mustReject("a key that is no admin's", RuleUnauthorized, set(stranger.Public(), r, first, stranger))
 	added := h.signed(types.AUM{Kind: types.KindAddAdminKey,
 		Admin: &types.AdminKey{Public: stranger.Public(), Signing: new(stranger.SigningKey()), Endorsement: stranger.Endorsement(), Votes: 1, Recipient: &r}})
@@ -62,10 +62,6 @@ func TestSetAdminRecipient(t *testing.T) {
 	if k, _ := boot.State().Admin(first.Public()); k.Recipient == nil || *k.Recipient != r {
 		t.Fatal("a checkpoint lost the encryption key")
 	}
-
-	old := newHarnessAt(t, 1, 1, types.SchemaRename)
-	old.mustReject("an encryption key at schema 6", RuleState,
-		old.signed(types.AUM{Kind: types.KindSetAdminRecipient, Subject: new(old.admins[0].Public()), Recipient: &r}))
 }
 
 // A genesis gives an admin key an encryption key only where the key signs it.

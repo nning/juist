@@ -117,15 +117,15 @@ Record types, all hash-chained, all carrying signer IDs + signatures:
   must equal the state that ancestry produces.
 - `EpochBump` — rotates the group secret with no membership change: the routine tier
   of the two-tier revocation response.
-- `RenumberNetwork` / `RenumberNode` / `RetireAddresses` (schema 5) — move the
+- `RenumberNetwork` / `RenumberNode` / `RetireAddresses` — move the
   network to another v4 prefix with every member to an address in it, or one member
   to another address in the prefix. The address a member leaves stays its own until
   the record's deadline, and the ranges the network leaves with such addresses in
   them stay reserved until a `RetireAddresses` or the next network renumbering: see
   [08-trust-layer-notes.md](08-trust-layer-notes.md#renumbering).
-- `RenameNetwork` (schema 6) — gives the network another name. The name is a label;
+- `RenameNetwork` — gives the network another name. The name is a label;
   the genesis hash is what identifies the network, so nothing else changes.
-- `Disable` (every schema) — reveals a break-glass secret the genesis committed to and
+- `Disable` — reveals a break-glass secret the genesis committed to and
   ends the network for good; unsigned, and in effect wherever it hangs (M12).
 - `Lease` — an admin device's signed statement "head H at time T", the delegated
   signer being a member the quorum grants the `admin` role; not chained into the
@@ -286,7 +286,7 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
   the network chose at genesis or last renumbered to. `juist create` draws a random
   /22 in 198.18/15 unless told one, so two networks on one host rarely collide; a
   network without a prefix of its own, founded before that, uses all of 198.18/15
-  (100.64/10 before schema 4) and numbers from its start, which the draw leaves out.
+  and numbers from its start, which the draw leaves out.
   No address is handed out twice, so a /22 serves 1022 admissions over the
   network's life; renumbering into a larger prefix makes room. The log validator rejects collisions deterministically on every node,
   counting the addresses renumberings leave. While one is live a member has two v4

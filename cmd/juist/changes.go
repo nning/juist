@@ -93,7 +93,7 @@ func (a *app) submit(auth *log.Authority, c *change) (applied bool, err error) {
 		a.printf("pending %s: needs %s; another admin runs:\n", path, needs)
 		a.command("juist approve %s", filepath.Base(path))
 	}
-	if len(unread) > 0 && auth.State().Schema() >= types.SchemaSealing && a.node != nil && a.node.status() != nil {
+	if len(unread) > 0 && a.node != nil && a.node.status() != nil {
 		a.hint("%s cannot read it on an admin device yet; send them the file", strings.Join(unread, " or "))
 	}
 	return false, nil
@@ -198,13 +198,16 @@ func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity
 	if err != nil {
 		return nil, err
 	}
+	if auth != nil {
+		a.warnStaleRevocation(auth.State(), aum)
+	}
 	var added []types.Identity
 	for _, key := range admins {
 		id := key.Public()
 		if signedBy(auth, aum, key) || !wanted(aum, id, auth) {
 			continue
 		}
-		if aum.SignUnder(key, signingSchema(aum, auth)) == nil {
+		if aum.Sign(key) == nil {
 			added = append(added, id)
 		}
 	}
@@ -212,6 +215,27 @@ func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity
 		a.home.fileAdminKeys(aum.State.Network, func(id types.Identity) bool { return slices.Contains(added, id) })
 	}
 	return added, nil
+}
+
+// warnStaleRevocation warns where aum withdraws authority on a view juistd
+// says is stale or refused: revoked wins fork choice, so it undoes whatever
+// later change that view lacks.
+func (a *app) warnStaleRevocation(state *log.State, aum *types.AUM) {
+	if a.node == nil {
+		return
+	}
+	st := a.node.status()
+	if st == nil || !st.Stale && !st.Refused || !state.Revokes(aum) {
+		return
+	}
+	if st.FreshSince > 0 {
+		a.warn("this change builds on juistd's view of the log, last vouched for %s, and undoes any later change "+
+			"it lacks", ago(a.now().Sub(time.Unix(st.FreshSince, 0))))
+	} else {
+		a.warn("this change builds on juistd's view of the log, which no admin device vouches for, " +
+			"and undoes any later change it lacks")
+	}
+	a.hint("where it can wait, let this device catch up first")
 }
 
 // signingKeys are the admin keys here that may sign aum: the one --key
@@ -350,24 +374,12 @@ func wanted(aum *types.AUM, id types.Identity, auth *log.Authority) bool {
 		return true
 	}
 	_, isAdmin := auth.State().Admin(id)
-	return isAdmin || slices.Contains(log.SelfSigners(aum, auth.State().Schema()), id)
-}
-
-// signingSchema is the schema aum is signed under: the log's, or without
-// one, the record's own, as the signatures it carries say.
-func signingSchema(aum *types.AUM, auth *log.Authority) types.SchemaVersion {
-	if auth != nil {
-		return auth.State().Schema()
-	}
-	if slices.ContainsFunc(aum.Signatures, func(s types.Signature) bool { return s.PQ != nil }) {
-		return types.SchemaMLDSA
-	}
-	return 0
+	return isAdmin || slices.Contains(log.SelfSigners(aum), id)
 }
 
 // signedBy reports whether aum carries a valid signature by the local key
-// priv, by the rules of auth's state, of a genesis's own, or with no log, of
-// the signatures aum carries.
+// priv, by the rules of auth's state, of a genesis's own, or with no log,
+// against priv's own signing key.
 func signedBy(auth *log.Authority, aum *types.AUM, priv types.PrivateIdentity) bool {
 	id := priv.Public()
 	switch {
@@ -377,10 +389,8 @@ func signedBy(auth *log.Authority, aum *types.AUM, priv types.PrivateIdentity) b
 			key = k.Signing
 		}
 		return aum.VerifySignature(id, key)
-	case auth == nil && signingSchema(aum, nil) >= types.SchemaMLDSA:
-		return aum.VerifySignature(id, new(priv.SigningKey()))
 	case auth == nil:
-		return aum.VerifySignature(id, nil)
+		return aum.VerifySignature(id, new(priv.SigningKey()))
 	}
 	return auth.State().SignedBy(aum, id)
 }

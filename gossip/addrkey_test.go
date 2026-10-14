@@ -82,7 +82,7 @@ func TestSealedAddressesStandAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := Endpoint{Identity: priv.Public(), Disco: DiscoKey{1}, GossipPort: 1, Sealed: make([]byte, 60)}
+	e := Endpoint{Identity: priv.Public(), Disco: DiscoKey{1}, GossipPort: 1, Sealed: make([]byte, 60), Schema: types.CurrentSchema}
 	if err := e.Sign(priv); err != nil {
 		t.Fatalf("sealed addresses alone: %v", err)
 	}

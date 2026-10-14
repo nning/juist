@@ -43,14 +43,17 @@ func httpsAlone(t *testing.T, fb, lx *vm, work, fb4, lx4 string) {
 		if t.Failed() {
 			for _, w := range []walled{hotel, office} {
 				out, _ := lx.try(w.juist("status")+"; tail -60 "+w.home+"/juistd.log; grep -E "+
-					"'preshared key with|newly given a preshared key|keyed:|log sync|gossip' "+w.home+"/juistd.log | tail -60",
+					"'preshared key with|newly given a preshared key|keyed:|log sync|gossip' "+w.home+"/juistd.log | tail -60; "+
+					w.juist("devices")+"; grep -E 'discovered|dht:|home is now|^lab:' "+w.home+"/juistd.log | tail -60",
 					time.Minute)
 				t.Logf("%s:\n%s", w.name, out)
 			}
-			out, _ := lx.try("juist status; iptables -L -v -n | head -40; /tmp/probe pcap /tmp/hotel.pcap | sort | uniq -c | head -40; "+
+			out, _ := lx.try("juist devices; journalctl -u juistd --no-pager | grep -E 'home is now|report:|discovered' | tail -40; "+
+				"juist status; juist health; iptables -L -v -n | head -40; /tmp/probe pcap /tmp/hotel.pcap | sort | uniq -c | head -40; "+
 				"cat /tmp/proxy.log | sort | uniq -c; journalctl -u juistd -n 40 --no-pager", 2*time.Minute)
 			t.Logf("lx:\n%s", out)
-			out, _ = fb.try("juist status; tail -40 /var/log/juistd.log; tail -20 /tmp/pebble.log; "+
+			out, _ = fb.try("juist devices; grep -E 'home is now|report:|discovered' /var/log/juistd.log | tail -40; "+
+				"juist status; juist health; tail -40 /var/log/juistd.log; tail -20 /tmp/pebble.log; "+
 				"tail -30 /var/log/juist-ingress.log; ls -la /var/run/juist; sockstat -u | grep juist; id juist-ingress",
 				time.Minute)
 			t.Logf("fb:\n%s", out)
@@ -73,14 +76,16 @@ pkill -f '[p]robe answer'; daemon -f /tmp/probe answer 127.0.0.1:5399 127.0.0.1`
 	})
 
 	// Pebble finds lx's relay by its name; the rest of its names are fb's.
+	// Both log verbosely, so that a failure shows where each is homed and
+	// which relays its measurements reach.
 	fb.run(t, `pkill -f '[p]robe answer'
 daemon -f /tmp/probe answer 127.0.0.1:5399 127.0.0.1 `+relayLX+`=`+lx.lanAddr+`
-sysrc -q juistd_env=SSL_CERT_FILE=/tmp/ca.pem juistd_args="--acme https://`+fb.lanAddr+`:14000/dir"
+sysrc -q juistd_env=SSL_CERT_FILE=/tmp/ca.pem juistd_args="--verbose --acme https://`+fb.lanAddr+`:14000/dir"
 service juistd restart >/dev/null`)
 	lx.run(t, `set -e
 mkdir -p /etc/systemd/system/juistd.service.d
 printf '%s\n' '[Service]' 'Environment=SSL_CERT_FILE=/etc/juist-test-ca.pem' 'ExecStart=' \
-  'ExecStart=/usr/bin/juistd --home /var/lib/juist --socket /run/juist/juistd.sock --tun juist0 --acme https://`+
+  'ExecStart=/usr/bin/juistd --verbose --home /var/lib/juist --socket /run/juist/juistd.sock --tun juist0 --acme https://`+
 		fb.lanAddr+`:14000/dir' > /etc/systemd/system/juistd.service.d/pebble.conf
 systemctl daemon-reload; systemctl restart juistd`)
 	for _, v := range []*vm{fb, lx} {
@@ -191,8 +196,14 @@ sleep 2`)
 
 	// fb's relay goes, and with it fb's home: the walled devices learn its
 	// next home from the relay left, at lx.
+	// The walled devices' logs carry no time: they are marked as fb's relay goes.
+	mark := func(what string) {
+		lx.try("for f in /tmp/hotel/juistd.log /tmp/office/juistd.log; do echo \"lab: "+what+" $(date +%T)\" >> $f; done", time.Minute)
+	}
+	mark("revoking fb's relay")
 	fb.run(t, "juist revoke fb relay")
 	fb.eventually(t, "homed at lx's relay", 3*time.Minute, "juist status", has("via lx"))
+	mark("fb homed at lx's relay")
 	reach("once fb's home relay moved")
 
 	for _, w := range []walled{hotel, office} {
@@ -203,7 +214,8 @@ sleep 2`)
 
 	lx.run(t, "pkill -f '[t]cpdump -i ht0'; pkill -f '[t]cpdump -i of0'; sleep 1")
 	// (2) and (3): TLS and DNS alone, each TLS flow asking for a relay by
-	// its public name.
+	// its public name. A connection given up before its hello, as a dial
+	// to a relay that went, carries nothing.
 	flows := lx.run(t, "/tmp/probe pcap /tmp/hotel.pcap")
 	tls := 0
 	for _, l := range strings.Split(strings.TrimSpace(flows), "\n") {
@@ -212,6 +224,7 @@ sleep 2`)
 		case len(f) == 0 || f[0] == "dns" && strings.HasSuffix(l, "> 10.88.0.1"):
 		case f[0] == "tls" && slices.Contains([]string{relayFB, relayLX}, f[len(f)-1]):
 			tls++
+		case f[0] == "tcp" && f[len(f)-1] == "empty":
 		default:
 			t.Errorf("hotel sent %q", l)
 		}

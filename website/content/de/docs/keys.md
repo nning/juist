@@ -50,7 +50,10 @@ Verbindungen laufen weiter, während das Gerät auf seine neuen Schlüssel
 wechselt: Der Tunnel zu jedem Gerät wartet kurz auf einen Handshake mit den
 neuen Schlüsseln. Ein Gerät, das ein Relay betreibt, startet seine Tunnel
 stattdessen neu. `juist rotate identity` ändert die IPv6-Adresse des Geräts
-und beendet damit alle Verbindungen über die alte.
+und beendet damit alle Verbindungen über die alte. Dafür muss das Netz auf
+Schema 19 stehen: Darunter bricht er mit
+`juist: the network predates rotating an identity key` ab, bis ein Admin
+`juist log upgrade` ausführt.
 
 ## Ein Gerät von vorn beginnen lassen
 

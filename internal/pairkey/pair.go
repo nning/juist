@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nning/juist/types"
@@ -22,8 +23,8 @@ type Env struct {
 	// PeerMLKEM is the peer's ML-KEM key as the log names it.
 	PeerMLKEM types.MLKEMKey
 
-	// PeerSigning is the peer's signing key as the log names it past the
-	// cut-over, nil before it: messages are signed by ML-DSA there.
+	// PeerSigning is the peer's signing key as the log names it, which its
+	// messages are held to.
 	PeerSigning *types.SigningKey
 
 	// PeerStore is the store the peer's announcement names; a pair key made
@@ -104,9 +105,12 @@ type Pair struct {
 	Prev *Gen `cbor:"10,keyasint,omitempty"`
 
 	// paced is when this side last started or answered a generation, and
-	// redo has the leader start one, the follower saying it uses another.
-	paced time.Time
-	redo  bool
+	// redo has the leader start one, the follower saying it uses another;
+	// putOff says the follower let an offer wait out the pace, which only
+	// another log sync with the leader brings again.
+	paced  time.Time
+	redo   bool
+	putOff bool
 }
 
 // pacing reports whether a generation may not be started or answered at now.
@@ -230,7 +234,11 @@ func (p *Pair) takeAsLeader(env *Env, m *Msg, seed func(uint64) ([32]byte, bool)
 
 func (p *Pair) takeAsFollower(env *Env, m *Msg, seed func(uint64) ([32]byte, bool)) (bool, error) {
 	changed := false
-	if m.CT != nil && m.Gen > p.Cur.N && (p.Offered == nil || m.Gen > p.Offered.N) && !p.pacing(env.Now) {
+	offer := m.CT != nil && m.Gen > p.Cur.N && (p.Offered == nil || m.Gen > p.Offered.N)
+	if offer && p.pacing(env.Now) {
+		p.putOff = true
+	}
+	if offer && !p.pacing(env.Now) {
 		if m.Epoch == 0 {
 			return false, errors.New("pairkey: an offer mixing in no epoch")
 		}
@@ -248,7 +256,7 @@ func (p *Pair) takeAsFollower(env *Env, m *Msg, seed func(uint64) ([32]byte, boo
 		}
 		k := derive(env.Network, env.Peer.WG, env.Self.WG, m.Gen, m.Epoch, Group(s, m.Epoch, env.Self.WG, env.Peer.WG),
 			sharedL, m.CT, sharedF, ct)
-		p.Offered, p.paced, changed = &Gen{N: m.Gen, Epoch: m.Epoch, Key: k, CT: ct}, env.Now, true
+		p.Offered, p.paced, p.putOff, changed = &Gen{N: m.Gen, Epoch: m.Epoch, Key: k, CT: ct}, env.Now, false, true
 	}
 	if o := p.Offered; o != nil && m.Use == o.N && hmac.Equal(m.Check, check(o.Key, "leader")) {
 		p.use(*o)
@@ -266,6 +274,45 @@ func (p *Pair) held() (agreed Key, ok bool, all []Key) {
 		}
 	}
 	return p.Cur.Key, p.Cur.N != 0, all
+}
+
+// due reports, once, whether the follower put off an offer it may now
+// answer.
+func (p *Pair) due(now time.Time) bool {
+	if !p.putOff || p.pacing(now) {
+		return false
+	}
+	p.putOff = false
+	return true
+}
+
+func (p *Pair) describe(env *Env) string {
+	gen := func(g *Gen) string { return fmt.Sprintf("%d of epoch %d", g.N, g.Epoch) }
+	role := "follower"
+	if env.leads() {
+		role = "leader"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s in epoch %d, using generation %s", role, env.Epoch, gen(&p.Cur))
+	if p.Next != nil {
+		fmt.Fprintf(&b, ", committed to %s", gen(p.Next))
+		if p.Flip {
+			b.WriteString(" (probing the one before)")
+		}
+	}
+	if p.Pend != nil {
+		fmt.Fprintf(&b, ", offering %d of epoch %d", p.Pend.N, p.Pend.Epoch)
+	}
+	if p.Offered != nil {
+		fmt.Fprintf(&b, ", answered %s", gen(p.Offered))
+	}
+	if p.putOff {
+		b.WriteString(", an offer put off")
+	}
+	if !p.paced.IsZero() {
+		fmt.Fprintf(&b, ", paced %v ago", env.Now.Sub(p.paced).Round(time.Millisecond))
+	}
+	return b.String()
 }
 
 // probe has a leader whose commit is unconfirmed, and whose tunnel to the

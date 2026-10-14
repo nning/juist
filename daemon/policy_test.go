@@ -31,7 +31,7 @@ func (nw *network) setPolicy(t *testing.T, f *reconcileFixture, src string) {
 	if err != nil {
 		t.Fatalf("building the policy: %v", err)
 	}
-	if err := rec.SignUnder(nw.admin, f.auth.State().Schema()); err != nil {
+	if err := rec.Sign(nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -154,7 +154,7 @@ func TestAnExitNodeTakesWhatThePolicyPasses(t *testing.T) {
 		t.Fatalf("the member the policy passes may use n0 as %+v", user)
 	}
 	for _, th := range user.Through {
-		if !slices.Equal(th.Ports, []conn.Ports{tcp(443)}) || th.Prefix.Contains(netip.MustParseAddr("100.64.0.2")) {
+		if !slices.Equal(th.Ports, []conn.Ports{tcp(443)}) || th.Prefix.Contains(netip.MustParseAddr("198.18.0.2")) {
 			t.Errorf("the member the policy passes may open %+v", th)
 		}
 	}

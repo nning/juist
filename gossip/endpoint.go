@@ -72,8 +72,7 @@ type RelayInfo struct {
 
 	// Name, where set, is a public DNS name the relay serves DERP on at
 	// 443/tcp too, under a certificate a public CA issued for it, which
-	// members verify by WebPKI instead of Cert. Sent only in a network at
-	// [types.SchemaRelayName] or above: older builds refuse the field.
+	// members verify by WebPKI instead of Cert.
 	Name string `cbor:"5,keyasint,omitempty"`
 }
 
@@ -195,46 +194,30 @@ type Endpoint struct {
 	// Epoch is the newest epoch the node holds and PairStore its store of
 	// pair keys: where set, every handshake with it mixes in a preshared
 	// key, the group key of the lower of the two epochs until the pair has
-	// one of its own. Sent only in a network at [types.SchemaPQ] or above:
-	// older builds refuse both.
+	// one of its own.
 	Epoch     uint64 `cbor:"15,keyasint,omitempty"`
 	PairStore uint64 `cbor:"16,keyasint,omitempty"`
 
-	// Schema is the newest schema the node's build implements. Sent only in
-	// a network at [types.SchemaPadded] or above: older builds refuse it.
+	// Schema is the newest schema the node's build implements.
 	Schema types.SchemaVersion `cbor:"17,keyasint,omitempty"`
 
-	// Signing is the node's ML-DSA key, endorsed by its identity, which a
-	// network at [types.SchemaSigning] gathers to cut over. Outside what
-	// Sig covers, as its endorsement is its own proof; sent only to builds
-	// that read it.
-	Signing *SigningClaim `cbor:"18,keyasint,omitempty"`
-
-	// MLDSA is the author's ML-DSA signature over what Sig covers, once its
-	// network is past the cut-over; sent only to builds that read it. An
-	// announcement without one is a hint there ([Cache.Add]).
+	// MLDSA is the author's ML-DSA signature over what Sig covers. An
+	// announcement without one, as discovery carries it, is a hint
+	// ([Cache.Add]). CBOR key 18 held a signing key claimed at schema 17.
 	MLDSA *types.PQSig `cbor:"22,keyasint,omitempty"`
 
 	// Sig is the author's signature over the rest of the record. CBOR key 23
 	// for the same reason [types.AUM] uses it: the highest key that still
 	// encodes in one byte, leaving room for payload fields below it.
 	Sig types.Sig `cbor:"23,keyasint"`
+
+	hint bool
 }
 
-// A SigningClaim is a node's ML-DSA key and its identity's endorsement of it.
-type SigningClaim struct {
-	Key         types.SigningKey `cbor:"1,keyasint"`
-	Endorsement types.Sig        `cbor:"2,keyasint"`
-}
-
-// ClaimSigningKey returns priv's signing key with its endorsement.
-func ClaimSigningKey(priv types.PrivateIdentity) (*SigningClaim, error) {
-	e, err := priv.Endorse()
-	if err != nil {
-		return nil, err
-	}
-	return &SigningClaim{Key: priv.SigningKey(), Endorsement: e}, nil
-}
+// HintAlone reports whether [Cache.Get] returned e as a hint with no
+// announcement beside it: its disco key may be forged, and it names no
+// relay, epoch or pair store.
+func (e *Endpoint) HintAlone() bool { return e.hint }
 
 // SameAs reports whether two announcements say the same, whatever their
 // sequence numbers and signatures: one renews the other.
@@ -243,8 +226,7 @@ func (e *Endpoint) SameAs(o *Endpoint) bool {
 		e.GossipPort == o.GossipPort && e.HomeRelay == o.HomeRelay && sameRelay(e.Relay, o.Relay) && e.Exit == o.Exit &&
 		e.Subnets == o.Subnets && e.DNS == o.DNS && e.NoV4 == o.NoV4 && e.Published == o.Published &&
 		(e.Share == nil) == (o.Share == nil) && (e.Share == nil || *e.Share == *o.Share) &&
-		bytes.Equal(e.Sealed, o.Sealed) && e.Epoch == o.Epoch && e.PairStore == o.PairStore && e.Schema == o.Schema &&
-		(e.Signing == nil) == (o.Signing == nil) && (e.Signing == nil || *e.Signing == *o.Signing)
+		bytes.Equal(e.Sealed, o.Sealed) && e.Epoch == o.Epoch && e.PairStore == o.PairStore && e.Schema == o.Schema
 }
 
 // PQ reports whether the node's handshakes mix in a preshared key.
@@ -277,7 +259,7 @@ const labelEndpoint = "juist/endpoint/v1"
 // digest of the record with the signature field cleared.
 func (e *Endpoint) signingBytes() ([]byte, error) {
 	unsigned := *e
-	unsigned.Sig, unsigned.MLDSA, unsigned.Signing = types.Sig{}, nil, nil
+	unsigned.Sig, unsigned.MLDSA = types.Sig{}, nil
 	body, err := encode(&unsigned)
 	if err != nil {
 		return nil, err
@@ -312,8 +294,7 @@ func (e *Endpoint) Sign(priv types.PrivateIdentity) error {
 	return nil
 }
 
-// SignPQ is [Endpoint.Sign], adding the ML-DSA signature a network past the
-// cut-over asks for.
+// SignPQ is [Endpoint.Sign], adding the ML-DSA signature members require.
 func (e *Endpoint) SignPQ(priv types.PrivateIdentity) error {
 	if err := e.Sign(priv); err != nil {
 		return err
@@ -330,9 +311,8 @@ func (e *Endpoint) SignPQ(priv types.PrivateIdentity) error {
 	return nil
 }
 
-// Verify checks the record's shape, its Ed25519 signature and the
-// endorsement of a signing key it claims. Past the cut-over that makes it a
-// hint; [Endpoint.VerifyPQ] makes it more.
+// Verify checks the record's shape and its Ed25519 signature, which makes it
+// a hint; [Endpoint.VerifyPQ] makes it more.
 func (e *Endpoint) Verify() error {
 	if err := e.StaticValidate(); err != nil {
 		return err
@@ -343,10 +323,6 @@ func (e *Endpoint) Verify() error {
 	}
 	if !e.Identity.Verify(msg, e.Sig) {
 		return fmt.Errorf("gossip: endpoint record for %v is not signed by that key",
-			e.Identity.ShortString())
-	}
-	if c := e.Signing; c != nil && !e.Identity.VerifyEndorsement(&c.Key, c.Endorsement) {
-		return fmt.Errorf("gossip: endpoint record for %v claims a signing key it did not endorse",
 			e.Identity.ShortString())
 	}
 	return nil
@@ -366,10 +342,10 @@ func (e *Endpoint) VerifyPQ(key *types.SigningKey) error {
 }
 
 // Hint is the record without what a discovery item cannot carry: its ML-DSA
-// signature and signing key. Its Ed25519 signature still verifies.
+// signature. Its Ed25519 signature still verifies.
 func (e *Endpoint) Hint() Endpoint {
 	h := *e.Clone()
-	h.MLDSA, h.Signing = nil, nil
+	h.MLDSA = nil
 	return h
 }
 
@@ -400,8 +376,8 @@ func (e *Endpoint) StaticValidate() error {
 		return fmt.Errorf("gossip: endpoint record for %v carries %d bytes of sealed addresses beside %d open ones",
 			e.Identity.ShortString(), len(e.Sealed), len(e.Addrs))
 	}
-	if e.Schema != 0 && e.Schema < types.SchemaPadded {
-		return fmt.Errorf("gossip: endpoint record for %v names %v, older than any build that names one",
+	if e.Schema < types.MinSchema {
+		return fmt.Errorf("gossip: endpoint record for %v names %v, older than this juist reads",
 			e.Identity.ShortString(), e.Schema)
 	}
 	if (e.Epoch == 0) != (e.PairStore == 0) {
@@ -413,16 +389,6 @@ func (e *Endpoint) StaticValidate() error {
 	}
 	if e.MLDSA != nil && e.MLDSA.IsZero() {
 		return fmt.Errorf("gossip: endpoint record for %v carries a zero ML-DSA signature", e.Identity.ShortString())
-	}
-	if e.MLDSA != nil && e.Signing != nil {
-		// A key is claimed before the cut-over and signed with after it:
-		// both would push a full frame of announcements past its budget.
-		return fmt.Errorf("gossip: endpoint record for %v claims a signing key and signs by it", e.Identity.ShortString())
-	}
-	if c := e.Signing; c != nil {
-		if err := c.Key.Validate(); err != nil {
-			return fmt.Errorf("gossip: endpoint record for %v: %w", e.Identity.ShortString(), err)
-		}
 	}
 	if e.Relay != nil {
 		if err := e.Relay.validate(); err != nil {
@@ -528,10 +494,6 @@ func (e *Endpoint) Clone() *Endpoint {
 	out.Sealed = slices.Clone(e.Sealed)
 	if e.Relay != nil {
 		out.Relay = e.Relay.Clone()
-	}
-	if e.Signing != nil {
-		c := *e.Signing
-		out.Signing = &c
 	}
 	if e.MLDSA != nil {
 		pq := *e.MLDSA

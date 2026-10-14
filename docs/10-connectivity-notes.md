@@ -96,7 +96,9 @@ Both members compute the same answer, which is what matters.
 
 **A relay's addresses are ordered by where a member is.** Those on a network
 of the member's own come first, then public ones, then the other private
-ones, an address the member holds itself never counting as on its network.
+ones, an address the member holds itself never counting as on its network,
+but for its own relay, which comes first at an address this host holds: behind
+a NAT that does not hairpin, its own public address answers it nothing.
 Once it has measured, netcheck sends STUN to a region's first node or two
 alone, so a first node the member cannot reach leaves the region unmeasured
 and never its home.
@@ -139,12 +141,11 @@ rather not, at the cost of off-LAN cold start.
 the epoch in the clear, which every item of a network would share, and an
 item as long as its announcement would show its author's addresses and roles.
 A member looking up knows which epoch it derived the address under, and a
-beacon which epoch its name belongs to, so from schema 16 on items carry
+beacon which epoch its name belongs to, so items carry
 nonce and ciphertext alone, under the epoch as additional data
 (`aead.SealPadded`): an item padded to the 996 bytes BEP 44 takes once
 bencoded, as is a relay's answer, and a beacon to the next multiple of 256 up
-to the 864 one datagram carries. Builds before it open neither, which the
-schema bounds; every build opens both.
+to the 864 one datagram carries.
 
 **One library detail worth keeping.** `anacrolix/dht`'s default send limiter is
 a package global. Two servers in one process share a budget sized for a torrent
@@ -217,10 +218,13 @@ stays cut off. The rules:
 - A new announcement for an installed peer is probed at once, past the probe
   backoff, and a tunnel back up is synced at once.
 - A peer that answered is probed again only after 5 minutes where both ends
-  have a home relay, its answer standing meanwhile: a probe keeps magicsock
-  pinging the peer every 3 s for 45 s, so probing every check never lets a
-  tunnel go quiet. A relay brings it back by CallMeMaybe; without one, every
-  check probes, since that is what keeps the NAT mappings open.
+  have a home relay and this device reaches the peer's, its answer standing
+  meanwhile: a probe keeps magicsock pinging the peer every 3 s for 45 s, so
+  probing every check never lets a tunnel go quiet. A relay brings it back by
+  CallMeMaybe; without one, every check probes, since that is what keeps the
+  NAT mappings open. A peer's relay this device's last measurement did not
+  reach, as one whose role was revoked, wakes nothing: the peer is probed,
+  and once found down, looked up for its next home.
 - A running device signs its announcement again every 5 minutes, and for
   each DHT publication, though nothing in it changed. The sequence number is
   the signer's clock, so a signature made after a peer's tunnel went down is
@@ -254,9 +258,7 @@ HTTPS client among others. The rules:
 
 - **A relay's name is its own statement, checked at the name.** The
   relay-capable member announces the public name it serves on 443
-  (`RelayInfo.Name`), from schema 12 on, since an older member refuses a
-  whole frame with a field it does not know: below 12, every member drops an
-  announcement carrying one, whoever signed it. A member takes the name as
+  (`RelayInfo.Name`). A member takes the name as
   that relay's once the server at the name, asked over TLS for it at
   `/juist/relay/v1/whoami`, says it is that member's, and asks again every
   six hours: a CA's certificate binds the name, not the relay, so another
@@ -356,8 +358,7 @@ approximation.
 - Symmetric masquerades with `--random-fully`, so the kernel picks a fresh
   external port per destination.
 - Double NAT is a port-restricted NAT behind a second one, with the carrier
-  segment in 100.64/10 — the range carriers actually use, and the overlay's
-  own v4 range before schema 4. A juist node never holds an address there,
+  segment in 100.64/10 — the range carriers actually use. A juist node never holds an address there,
   because it is behind the inner NAT, but it is worth knowing that
   `daemon.usableUnderlay` refuses to announce a 100.64/10 address: a node addressed there directly would have
   nothing but reflexive addresses to offer.

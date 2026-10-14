@@ -157,16 +157,14 @@ tie-break that invites grinding and explains nothing to an operator reading the
 log.
 
 What counts as a revocation grew with M4. Removing a device or an admin key
-always did. Since the admin role carries vouching authority, schema 2 adds
+always did. Since the admin role carries vouching authority, it includes
 taking a device's admin role away and raising the vouching threshold
 (`State.Revokes`): otherwise a concurrent change with a lower hash could orphan
-the withdrawal and keep a distrusted admin device vouching. It is a rule of
-fork choice, which every node must apply alike, so it waits for the schema:
-networks at schema 1 keep the old rule until `juist log upgrade`.
+the withdrawal and keep a distrusted admin device vouching.
 
-**Votes belong to people (schema 3).** A quorum of k meant k keys, and a person
+**Votes belong to people.** A quorum of k meant k keys, and a person
 with a key on each of two laptops was two votes, so "two admins must agree"
-could be met by one. From schema 3 an admin key can name its holder, and a
+could be met by one. An admin key can name its holder, and a
 holder's keys are one voter: they carry its votes and cast them once, when at
 least `Needed` of them signed (`types.CountVotes`). One person can so hold a
 key per device, lose one without the others losing anything, and be made to
@@ -175,19 +173,36 @@ alone asks for two devices per change. What the network can still cast is
 counted per holder too (`types.AchievableVotes`): a holder needing more keys
 than it holds casts nothing, and a change that would leave the quorum out of
 reach is refused, as removing a key already was. Asking more keys of a holder,
-or giving it fewer votes, is a revocation for fork choice. Keys without a
-holder, which is every key before schema 3, stay voters of their own. The
-upgrade to schema 3 names each such key's holder after the key, where no other
-key's name folds to the same, so every holder has one key, no vote changes,
-and an admin's further keys join under the name they already have.
+or giving it fewer votes, is a revocation for fork choice.
 
-**A removed key cannot undo its removal (schema 3).** A sibling is verified
+**A removed key cannot undo its removal.** A sibling is verified
 against its parent's state, where a key removed later still votes, so the key
 could sign a branch rooted before its removal and win on the revocation bias or
 a ground hash, undoing its removal and everything after. So one rule comes
 before both: a branch loses to a sibling whose branch removes an admin key that
 signed anything on it. Two keys removing each other at once are symmetric,
 since at the quorum they had either could do anything, and alarm.
+
+**Copies of one record are that record.** Siblings with one `SigHash` and
+other signature sets say the same thing: a minority key adding its signature,
+or a relayer dropping one, makes a copy, not a fork. Fork choice must not
+depend on which copies a node holds, so from schema 19 on it reads what they
+say and the union of their signatures: siblings tie on the lower `SigHash`,
+and a key is a signer for the rule above only where the record needed it — a
+self-signature its kind requires, or a vote without which the union falls
+short of quorum; a surplus signature undoes nothing. Below 19 any signature
+counts and the lower hash wins, as M17's build has it. The lowest hash stands
+for the copies, and what hangs from any of them, the anchor's included, hangs
+from it. A store keeps a copy while it is one of the two lowest, brings a
+key's signature no other carries, or something hangs from it: copies stay
+bounded by the signers, while every node keeps every signature and the same
+lowest copy. One that adds nothing is left out without an error and is no
+news to gossip. A checkpoint's copies are kept, up to eight, whatever they
+carry, so a peer anchored at any of them is served; a key below quorum can
+fill those eight. The CLI pins a head with its `SigHash`, so a copy continues
+it; a pin written without one continues where the pinned copy is held or can
+be rebuilt from the signatures the held copies carry, and gains its `SigHash`
+at its first check.
 
 The branch that loses is not lost, but it is not applied either — its author
 reissues it against the new head. Two cases are not left to a deterministic rule
@@ -233,15 +248,28 @@ adopted. Chain resolution starts there and never walks past it, so a branch
 forking before it is not outvoted — it is not considered at all. That is "never
 drop a checkpoint you hold", enforced structurally.
 
-**The epoch floor** is the highest epoch ever adopted. `Inform` *rejects* a
-batch that would resolve below it, stores nothing, and returns a `RollbackError`
-carrying the refused records. Reaching an older epoch through individually valid
-records takes admin signatures, so this is what a quorum rewriting history looks
-like from a node that saw the earlier version.
+**The epoch floor** is the highest epoch ever adopted, and it is never lowered.
+A chain that resolves below it is stored, but held under a *rollback alarm*:
+`Authority.TrustedState` refuses until the chain is back at the floor, and the
+alarm is derived from what is stored, so a restart keeps it. Reaching an older
+epoch through individually valid records takes admin signatures, so this is
+what a quorum rewriting history looks like from a node that saw the earlier
+version — and it is also what a branch this node applied first looks like when
+a concurrent one at a lower epoch wins fork choice, or when a copy's late
+signature makes a record no longer need a key its sibling removes. The two
+cannot be told apart, so both fail closed, the alarm naming the lost branch
+that reached the floor ([05-roadmap.md](05-roadmap.md), M18, says what is
+open). Refusing the records instead would leave the node
+serving the losing branch, and, since sync sends a branch parents first in one
+batch, refusing every later batch with it, removals included, with no alarm.
+Held, the records keep coming in, and the alarm clears in whatever batch brings
+the record that lifts the chain to the floor: a lost change redone, or `juist
+rotate group-secret`. An admin's CLI resolves the chain without a floor, so it
+signs on the winning head even from a device that is stuck.
 
 The cost is real and worth stating: two nodes offered the same fork in different
-orders can end up in different states — one alarmed, one refusing the records.
-Both fail closed. This is the CAP-style limit
+orders can end up in different states — one following the winner, one alarmed
+until the chain passes its floor. Both fail closed. This is the CAP-style limit
 [02-threat-model.md](02-threat-model.md) already accepts, surfacing in a new
 place.
 
@@ -411,14 +439,11 @@ record.
 strictly, so a field an older build does not know makes it refuse the whole
 frame, and with it the records that would tell it to update. What a schema
 adds to the wire therefore goes only to a peer that announces it reads it:
-an announcement naming an epoch only to a peer whose own names one, and from
-schema 16 on, when every member announces the newest schema its build
-implements, one naming a schema only to a peer whose own names one, and
-`juist status` names a live member announcing an older one. A peer whose
-hello holds its announcement back is guessed to read both: one that reads
-no schema takes the answer for a newer build's.
+every member announces the newest schema its build implements, and `juist
+devices` shows a live member announcing an older one. A field a later schema
+adds to the wire must go only to a peer whose announced schema reads it.
 
-What is still open, and belongs with M26's packaging: `juist status` cannot
+What is still open, and belongs with M27's packaging: `juist status` cannot
 say which members would be stranded before an upgrade, and nothing stops an
 admin authoring one before the network is ready for it. Until those exist,
 raising the schema is an operation whose blast radius the operator has to
@@ -501,7 +526,7 @@ carries the rest. The same reasoning has not been carried through
 `Have`, the peer re-offers records it already holds, and the two make no
 progress. That is unreachable until a network has authored 4096 records without
 a checkpoint, and closing it is part of deciding **when compaction runs without
-an admin asking** — undecided, and the decision this binds; M18 makes it.
+an admin asking** — undecided, and the decision this binds; M19 makes it.
 
 ## Storage
 
@@ -518,8 +543,8 @@ so resolution never looks at it and the sender offers it again.
 
 `Inform` re-resolves from storage after writing rather than adopting the
 in-memory result, so the epoch floor is never raised above a chain storage can
-actually reproduce — otherwise a dropped write would leave a node that refuses
-to start.
+actually reproduce. A store that lost records and resolves below its floor
+opens under the rollback alarm until sync brings them back.
 
 Corruption makes the store refuse to open, with an error naming the file and
 telling the operator to recover from another member. It never repairs itself and

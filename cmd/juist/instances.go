@@ -776,9 +776,7 @@ func (a *app) printHostStatus(insts []hostInstance) {
 			continue
 		}
 		a.printStatusIn(i.st, i.name())
-		a.network, a.node, a.instance = i.name(), nil, nil
-		a.adminNotes(i.st, true)
-		a.network, a.node, a.instance = "", nil, nil
+		a.healthHint(i.st, i.name(), true)
 	}
 }
 

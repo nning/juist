@@ -55,7 +55,7 @@ In der Zeile `Relays` von `juist status` zählt der VPS dann als verfügbar.
 
 Mit `juist revoke vps relay` entziehst du die Rolle wieder. Am besten gibst
 du sie zwei oder mehr Geräten mit öffentlicher Adresse. In einem Netz mit
-mehr als zwei Geräten warnt `juist status`, solange kein Gerät Relay sein
+mehr als zwei Geräten warnt `juist health`, solange kein Gerät Relay sein
 darf.
 
 ## Ein Relay auf 443
@@ -86,10 +86,7 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
 ```
 {{< /step >}}
 
-- Jedes Gerät erfährt den Namen aus der Ankündigung des Relays, sobald das
-  Log des Netzes auf Schema 12 steht. Bis dahin meldet `juist status`
-  `members are not told of relay.example.org`, und `juist log upgrade` hebt
-  das Schema an.
+- Jedes Gerät erfährt den Namen aus der Ankündigung des Relays.
 - Um Port 443 zu belegen, braucht juistd ein Recht, das es sonst nicht hat und
   das nur root vergeben kann. `sudo juist set` gibt ihm
   `CAP_NET_BIND_SERVICE` nur für diesen Zweck, per systemd-Drop-in, und
@@ -97,7 +94,7 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
 - Unter FreeBSD belegt der Helfer von juistd Port 443 nur, solange root es
   erlaubt und kein anderes Programm auf 443 lauscht. Läuft pf, muss es den
   Verkehr durchlassen.
-- Überdauert das Recht den Namen, warnt `juist status`, und `juist reset`
+- Überdauert das Recht den Namen, warnt `juist health`, und `juist reset`
   nimmt es zurück.
 - Die Mitglieder nutzen den Namen erst, wenn der Server unter diesem Namen
   bestätigt, dass er dieses Relay ist. Ein Name, der woandershin führt, wird
@@ -141,7 +138,7 @@ weiter, also an der signierten Liste, wer zum Netz gehört. Was dort ankommt, ha
 WireGuard und juists eigenen Filter schon passiert, und wo ufw oder firewalld
 läuft, lassen die Pakete es durch. Eine von Hand eingerichtete Firewall muss
 es ebenfalls durchlassen. Sonst behält das Gerät zwar seine Tunnel, verpasst
-aber Änderungen am Netz, auch das Entfernen von Geräten. `juist status`
+aber Änderungen am Netz, auch das Entfernen von Geräten. `juist health`
 weist darauf hin. Ein [Exit-Node]({{< relref "docs/exit-nodes" >}})
 beantwortet dort außerdem die DNS-Anfragen seiner Mitglieder, auf UDP und TCP
 41646. Auch das muss eine solche Firewall durchlassen.
@@ -182,13 +179,13 @@ Einladungen per Link laufen darüber. `man juistd` beschreibt alle Optionen.
 
 ## Fehlersuche
 
-| `juist status` meldet | Was du tun kannst |
+| `juist health` meldet | Was du tun kannst |
 |---|---|
 | `no tunnel traffic from …` | Öffne 41643/udp auf einem Gerät mit öffentlicher Adresse, oder gib einem Gerät die Rolle `relay`. |
 | `no device reaches this relay` | Öffne 41645/tcp und udp auf dem Relay, auch in jeder vorgeschalteten Firewall. |
 | `no device may relay` | Gib einem Gerät mit öffentlicher Adresse die Rolle: `juist grant DEVICE relay`. |
 | `no certificate for relay.example.org yet` | Lass den Namen auf das Relay zeigen und 443/tcp zu ihm durch. |
 | `the relay cannot take 443` | Ein anderes Programm belegt dort 443, oder juistd fehlt das Recht, das `juist set` vergibt. |
-| `members are not told of …` | `juist log upgrade`, auf dem Gerät eines Admins. |
-| `log sync … fails in the tunnel` | Lass `juist0` durch die Firewall des Rechners, wie der Hinweis vorschlägt. |
+| `members are not told of …: this device does not relay` | Gib dem Gerät die Rolle `relay`: `juist grant DEVICE relay`. |
+| `log sync … fails in the tunnel` | Lass `juist0` durch die Firewall des anderen Geräts, wie der Hinweis vorschlägt. |
 | `no answer from …` | Das Gerät ist offline, oder sein Port 41643/udp ist gesperrt. |

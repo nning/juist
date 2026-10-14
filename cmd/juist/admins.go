@@ -112,7 +112,7 @@ func (a *app) listAdmins(governs map[types.Identity][]string) error {
 	if devices := len(state.NodesWithRole(types.RoleAdmin)); devices > 0 {
 		a.field("Vouchers", "%d of %d", max(state.Vouchers(), 1), devices)
 	}
-	if state.Schema() >= types.SchemaSealing && slices.ContainsFunc(state.Admins(), func(k types.AdminKey) bool {
+	if slices.ContainsFunc(state.Admins(), func(k types.AdminKey) bool {
 		return here[k.Public] && k.Recipient == nil
 	}) {
 		a.hint("for changes waiting for your vote to reach you: juist admins receive")
@@ -201,45 +201,35 @@ an unverified label.`}
 		return err
 	}
 	state := auth.State()
-	holders := state.Schema() >= types.SchemaHolders
-	if !holders && onGiven {
-		return needsUpgrade("--on")
-	}
 	for _, k := range state.Admins() {
 		switch {
 		case k.Public == key:
 			a.ok("unchanged: key has %s, as %s", count(k.Votes, "vote"), orDash(cmp.Or(k.Holder, k.Name)))
 			return nil
-		// Without holders, names are how single keys are removed and shown;
-		// two alike would make both ambiguous. With them, a name is a person.
+		// A key without a holder is shown and removed by its name; two alike
+		// would make both ambiguous.
 		case k.Holder == "" && foldName(k.Name) == foldName(pos[0]):
-			hint := ""
-			if !holders {
-				hint = "\nhint: for several keys per person: juist log upgrade"
-			}
-			return fmt.Errorf("admin key %q exists; pick another name%s", k.Name, hint)
+			return fmt.Errorf("admin key %q exists; pick another name", k.Name)
 		}
 	}
-	if signing == nil && state.PQ() {
+	if signing == nil {
 		return errors.New("the key names no signing key, which the network needs; it is from an older juist\n" +
 			"hint: juist admins new prints it whole")
 	}
 	add := types.AdminKey{Public: key, Votes: uint32(*votes), Name: pos[0], Signing: signing, Endorsement: endorsement}
 	done := fmt.Sprintf("added %s's key, %s", pos[0], count(*votes, "vote"))
-	if holders {
-		// With a holder naming the person, the key's own name is its machine.
-		add.Holder, add.Name = pos[0], *on
-		if same := holderKeys(state, pos[0]); len(same) > 0 {
-			p := same[0]
-			if votesSet && uint32(*votes) != p.Votes {
-				return fmt.Errorf("--votes: %s's keys all cast %s", p.Holder, count(p.Votes, "vote"))
-			}
-			add.Holder, add.Votes, add.Needed = p.Holder, p.Votes, p.Needed
-			done = fmt.Sprintf("added a key of %s's; %s, %d signing", p.Holder, count(len(same)+1, "key"),
-				p.NeededKeys())
+	// With a holder naming the person, the key's own name is its machine.
+	add.Holder, add.Name = pos[0], *on
+	if same := holderKeys(state, pos[0]); len(same) > 0 {
+		p := same[0]
+		if votesSet && uint32(*votes) != p.Votes {
+			return fmt.Errorf("--votes: %s's keys all cast %s", p.Holder, count(p.Votes, "vote"))
 		}
+		add.Holder, add.Votes, add.Needed = p.Holder, p.Votes, p.Needed
+		done = fmt.Sprintf("added a key of %s's; %s, %d signing", p.Holder, count(len(same)+1, "key"),
+			p.NeededKeys())
 	}
-	if holders && add.Needed == 0 && len(holderKeys(state, pos[0])) == 0 {
+	if add.Needed == 0 && len(holderKeys(state, pos[0])) == 0 {
 		// A new person gets a vote of their own; a device of an admin's
 		// added under another name would give that admin a second one.
 		var others []string
@@ -260,18 +250,14 @@ an unverified label.`}
 func adminsReceive(a *app, args []string) error {
 	s := spec{name: "juist admins receive", about: `
 Give this keystore's admin keys the encryption keys that changes waiting for
-their votes are sealed to, so that they reach you on the admin devices, and
-from schema 17 on the signing keys the cut-over to ML-DSA needs. Each is a
-change like any other, which the key signs for itself.`}
+their votes are sealed to, so that they reach you on the admin devices. It
+is a change like any other, which each key signs for itself.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
-	}
-	if auth.State().Schema() < types.SchemaSealing {
-		return needsUpgrade("changes carried to the admins")
 	}
 	files, err := a.adminKeyFiles()
 	if err != nil {
@@ -300,24 +286,12 @@ change like any other, which the key signs for itself.`}
 				file:  "admin-receive-" + fileSafe(f.name) + ".rec",
 				done:  fmt.Sprintf("changes waiting for %s reach key %s", name, f.name)})
 		}
-		if st := auth.State(); st.Schema() >= types.SchemaSigning && !st.PQ() &&
-			(k.Signing == nil || *k.Signing != f.priv.SigningKey()) {
-			e, err := f.priv.Endorse()
-			if err != nil {
-				return err
-			}
-			m := types.MemberKey{Identity: k.Public, Key: f.priv.SigningKey(), Endorsement: e}
-			steps = append(steps, step{
-				build: func(b *log.Builder) (types.AUM, error) { return b.SetAdminSigning(m) },
-				file:  "admin-signing-" + fileSafe(f.name) + ".rec",
-				done:  fmt.Sprintf("key %s of %s has its signing key", f.name, name)})
-		}
 	}
 	if !governs {
 		return errors.New("no admin key of this network here\nhint: run it where an admin's key is")
 	}
 	if len(steps) == 0 {
-		a.ok("unchanged: your keys here receive changes and have their signing keys")
+		a.ok("unchanged: changes waiting for your vote reach your keys here")
 		return nil
 	}
 	for i, st := range steps {
@@ -359,9 +333,6 @@ exactly N, losing one device may lock the network.`}
 		return err
 	}
 	state := auth.State()
-	if state.Schema() < types.SchemaHolders {
-		return needsUpgrade("admins holding several keys")
-	}
 	keys := holderKeys(state, pos[0])
 	if len(keys) == 0 {
 		return fmt.Errorf("no admin %q\nhint: juist admins", pos[0])
@@ -431,12 +402,8 @@ Take an admin key's vote away; refused if the rest cannot reach the quorum.`}
 		return err
 	}
 	name := cmp.Or(keyPerson(key), key.Public.ShortString())
-	applied, err := a.submit(auth, &change{aum: aum, file: "admin-remove-" + fileSafe(name) + ".rec",
+	_, err = a.submit(auth, &change{aum: aum, file: "admin-remove-" + fileSafe(name) + ".rec",
 		done: removedKeyText(state, key, name)})
-	if applied && state.Schema() == types.SchemaSigning {
-		// A removed key holding the quorum could race this with a cut-over.
-		a.hint("cut over soon, so the removed key cannot: juist log upgrade")
-	}
 	return err
 }
 
@@ -510,9 +477,6 @@ must be online.`}
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
-	}
-	if auth.State().Schema() < types.SchemaVouchers {
-		return needsUpgrade("voucher thresholds")
 	}
 	if devices := len(auth.State().NodesWithRole(types.RoleAdmin)); m > uint64(devices) {
 		return fmt.Errorf("only %s\nhint: juist grant DEVICE voucher", count(devices, "voucher"))

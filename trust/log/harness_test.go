@@ -11,7 +11,7 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// harness builds real networks for the tests: real Ed25519 keys, real HPKE
+// harness builds real networks for the tests: real ML-DSA keys, real HPKE
 // fan-out, real chain. Nothing here is stubbed, because the properties under
 // test are exactly the ones a stub would define away.
 type harness struct {
@@ -35,13 +35,7 @@ type harness struct {
 // given quorum, and no members.
 func newHarness(t *testing.T, numAdmins int, quorum uint32) *harness {
 	t.Helper()
-	return newHarnessAt(t, numAdmins, quorum, types.CurrentSchema)
-}
-
-// newHarnessAt is [newHarness] for a network created at an older schema.
-func newHarnessAt(t *testing.T, numAdmins int, quorum uint32, schema types.SchemaVersion) *harness {
-	t.Helper()
-	return newHarnessWith(t, numAdmins, quorum, func(s *types.Snapshot) { s.Schema = schema })
+	return newHarnessWith(t, numAdmins, quorum, func(*types.Snapshot) {})
 }
 
 // newHarnessWith is [newHarness] with the genesis state adjusted before it is
@@ -82,12 +76,6 @@ func newHarnessWith(t *testing.T, numAdmins int, quorum uint32, mutate func(*typ
 		t.Fatalf("building genesis: %v", err)
 	}
 	mutate(genesis.State)
-	if genesis.State.Schema < types.SchemaMLDSA {
-		for i := range genesis.State.Admins {
-			genesis.State.Admins[i].Signing = nil
-			genesis.State.Admins[i].Endorsement = nil
-		}
-	}
 	h.signQuorum(&genesis)
 	auth, err := Create(h.storage, genesis)
 	if err != nil {
@@ -124,14 +112,8 @@ func (h *harness) signQuorum(a *types.AUM) {
 	}
 }
 
-// sign signs a record with key, as the network's current schema says.
-func (h *harness) sign(a *types.AUM, key types.PrivateIdentity) error {
-	var schema types.SchemaVersion
-	if h.auth != nil {
-		schema = h.auth.State().Schema()
-	}
-	return a.SignUnder(key, schema)
-}
+// sign signs a record with key.
+func (h *harness) sign(a *types.AUM, key types.PrivateIdentity) error { return a.Sign(key) }
 
 // newNode generates a member record together with its private keys.
 func (h *harness) newNode(name string) types.NodeRecord {
@@ -334,6 +316,48 @@ func (h *harness) handAssembledAddNode(n types.NodeRecord) types.AUM {
 	aum := types.AUM{Kind: types.KindAddNode, Prev: &prev, Node: n.Clone(), Epoch: epoch}
 	h.signQuorum(&aum)
 	return aum
+}
+
+// rotation builds the record rotating member n's identity to fresh, signed by
+// quorum and both identities.
+func (h *harness) rotation(n types.NodeRecord, fresh types.PrivateIdentity) types.AUM {
+	h.t.Helper()
+	rot, err := h.auth.Builder().RotateIdentity(n.Identity, fresh.Public(), fresh.SigningKey(), h.sealer())
+	if err != nil {
+		h.t.Fatalf("RotateIdentity: %v", err)
+	}
+	h.signRotation(&rot, n, fresh)
+	return rot
+}
+
+// handAssembledRotation is [harness.rotation] past the builder, which refuses
+// one below schema 19.
+func (h *harness) handAssembledRotation(n types.NodeRecord, fresh types.PrivateIdentity) types.AUM {
+	h.t.Helper()
+	members := h.auth.State().Nodes()
+	for i := range members {
+		if members[i].Identity == n.Identity {
+			members[i].Identity = fresh.Public()
+		}
+	}
+	slices.SortFunc(members, func(x, y types.NodeRecord) int { return x.Identity.Compare(y.Identity) })
+	epoch, err := h.sealer()(h.auth.State().Epoch()+1, members)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	prev := h.auth.Head()
+	rot := types.AUM{Kind: types.KindRotateIdentity, Prev: &prev, Subject: &n.Identity,
+		NewIdentity: new(fresh.Public()), NewSigning: new(fresh.SigningKey()), Epoch: epoch}
+	h.signRotation(&rot, n, fresh)
+	return rot
+}
+
+func (h *harness) signRotation(rot *types.AUM, n types.NodeRecord, fresh types.PrivateIdentity) {
+	h.t.Helper()
+	h.signQuorum(rot)
+	if err := SignAsDevice(rot, h.nodeIDs[n.Identity], fresh); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 // handAssembledSchemaUpgrade builds a quorum-signed record raising the network

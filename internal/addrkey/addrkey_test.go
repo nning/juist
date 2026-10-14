@@ -1,12 +1,18 @@
 package addrkey
 
 import (
+	"bytes"
 	"crypto/ecdh"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"net/netip"
 	"slices"
 	"testing"
 
+	"github.com/fxamacker/cbor/v2"
+
+	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/types"
 )
 
@@ -116,5 +122,28 @@ func TestTheKeyFollowsEpochAndPeers(t *testing.T) {
 	}
 	if k, _ := Derive(owner.scalar, types.Hash{9}, 4, []types.Identity{a, b}); k != base {
 		t.Error("the same epoch and peers derive another key")
+	}
+}
+
+// The sealing key is not the nonce's MAC key: the nonce is no HMAC under it.
+func TestASealsNonceIsNoMACUnderItsKey(t *testing.T) {
+	k := Key{7}
+	addrs := []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41641")}
+	sealed, err := Seal(k, addrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := cbor.Marshal(addrs)
+	mac := hmac.New(sha256.New, k[:])
+	mac.Write(body)
+	if bytes.Equal(sealed[aead.EpochLen:aead.EpochLen+aead.NonceLen], mac.Sum(nil)[:aead.NonceLen]) {
+		t.Fatal("the nonce is an HMAC under the sealing key")
+	}
+	again, _ := Seal(k, addrs)
+	if !bytes.Equal(sealed, again) {
+		t.Fatal("the same addresses seal differently")
+	}
+	if got, err := Open(k, sealed); err != nil || !slices.Equal(got, addrs) {
+		t.Fatalf("open: %v, %v", got, err)
 	}
 }

@@ -72,19 +72,3 @@ func TestApplyLeavesItsParentUnchanged(t *testing.T) {
 		}
 	}
 }
-
-// TestKindsBeforeTheirSchema: a record of a kind a later schema introduced is
-// refused by a network written under an earlier one, whatever it carries.
-func TestKindsBeforeTheirSchema(t *testing.T) {
-	for k, rule := range kindRules {
-		if rule.since == 0 {
-			continue
-		}
-		h := newHarnessAt(t, 1, 1, rule.since-1)
-		head := h.auth.Head()
-		_, err := h.auth.State().apply(&types.AUM{Kind: k, Prev: &head}, types.Hash{1}, applyChain)
-		if err == nil || !strings.Contains(err.Error(), "needs "+rule.since.String()) {
-			t.Errorf("%v at %v: %v, want a refusal naming %v", k, rule.since-1, err, rule.since)
-		}
-	}
-}

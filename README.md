@@ -74,7 +74,8 @@ sudo juist join 'juist:Kx7…@192.168.1.20:41642'  # or the link: from anywhere
 ones. Answering yes admits it. Then, on either device:
 
 ```sh
-juist status          # connected? anything wrong?
+juist status          # connected?
+juist health          # anything wrong?
 juist devices         # who is in the network, with their addresses
 ping 198.18.36.2      # the second device, at the address juist devices lists
 ```
@@ -87,7 +88,8 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 
 | To … | run | more |
 |---|---|---|
-| see whether this device is connected, and what needs attention | `juist status` | [status](https://docs.juist.nning.io/en/docs/status/) |
+| see whether this device is connected | `juist status` | [status](https://docs.juist.nning.io/en/docs/status/) |
+| see what needs attention, and how to fix it | `juist health` | [status](https://docs.juist.nning.io/en/docs/status/) |
 | add a device | `juist invite`, then `sudo juist join …` on it | [invites](https://docs.juist.nning.io/en/docs/invites/) |
 | remove a device, on every device at once | `juist remove phone` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
 | reach a device by name, where systemd-resolved runs | `ssh laptop.home.juist`, or `ssh laptop` | [names](https://docs.juist.nning.io/en/docs/names/) |
@@ -105,9 +107,9 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | end the network for good, with a break-glass secret | `juist network disable` | [changes](https://docs.juist.nning.io/en/docs/network-changes/) |
 | leave the network, as on a fresh install | `juist reset` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
 
-Any local user may run `juist status`; everything else is for root and the
-device's operator. Commands never ask which network or device you mean: where
-that is unclear they stop and say what to add.
+Any local user may run `juist status` and `juist health`; everything else is
+for root and the device's operator. Commands never ask which network or device
+you mean: where that is unclear they stop and say what to add.
 
 ## Publishing services
 
@@ -191,7 +193,7 @@ further networks' ports, and running without public STUN servers or the DHT.
 
 ## When something is wrong
 
-`juist status` says what needs attention, and prints a hint to fix it;
+`juist health` says what needs attention, and prints a hint to fix it;
 `journalctl -u juistd` shows the daemon's log.
 [Troubleshooting](https://docs.juist.nning.io/en/docs/troubleshooting/) lists what each
 message means and what to do.
@@ -210,8 +212,8 @@ message means and what to do.
   long a partitioned device can keep a removed peer.
 - **Quantum-safe:** every WireGuard handshake mixes in a preshared key, one
   each two devices exchange by ML-KEM-768; group secrets are hybrid
-  X25519 + ML-KEM-768; every change and message is signed with ML-DSA-44,
-  from schema 18 on; joining agrees a key by ML-KEM-768; TLS between juist's
+  X25519 + ML-KEM-768; every change and message is signed with ML-DSA-44;
+  joining agrees a key by ML-KEM-768; TLS between juist's
   own ends is 1.3 with X25519MLKEM768 alone.
 
 [Security](https://docs.juist.nning.io/en/docs/security/) explains it, and

@@ -116,14 +116,8 @@ func (d *Daemon) keepSeeds() {
 }
 
 // pqEpoch is what this node announces of its preshared keys: the newest
-// epoch it holds and its pair store, zero where its handshakes mix in none.
+// epoch it holds and its pair store, zero where it holds no epoch.
 func (d *Daemon) pqEpoch() (epoch, store uint64) {
-	d.mu.Lock()
-	pq := d.pq
-	d.mu.Unlock()
-	if !pq {
-		return 0, 0
-	}
 	e, _, ok := d.keyring.Latest()
 	if !ok {
 		return 0, 0
@@ -133,8 +127,11 @@ func (d *Daemon) pqEpoch() (epoch, store uint64) {
 
 // pairEnv is the pair this node and member n form, as state and n's
 // announcement ep say, or false where their handshakes mix in no key at all.
+// Where ep is a hint alone, this node's newest epoch and the store of the
+// pair held stand in for what n's announcement names: a forged hint would
+// pick a key its author holds.
 func (d *Daemon) pairEnv(state *log.State, n *types.NodeRecord, ep gossip.Endpoint) (*pairkey.Env, bool) {
-	if state.Schema() < types.SchemaPQ || !ep.PQ() || ep.Identity != n.Identity {
+	if !ep.PQ() && !ep.HintAlone() || ep.Identity != n.Identity {
 		return nil, false
 	}
 	own, _, ok := d.keyring.Latest()
@@ -142,21 +139,27 @@ func (d *Daemon) pairEnv(state *log.State, n *types.NodeRecord, ep gossip.Endpoi
 	if !ok || !member {
 		return nil, false
 	}
+	epoch, store := min(own, ep.Epoch), ep.PairStore
+	if ep.HintAlone() {
+		epoch = own
+		d.readPairs(func(s *pairkey.Store) { store = s.PeerStore(n.WireGuard) })
+	}
 	return &pairkey.Env{
 		Network:     state.GenesisHash(),
 		Self:        pairkey.Side{ID: d.self, WG: self.WireGuard},
 		Peer:        pairkey.Side{ID: n.Identity, WG: n.WireGuard},
 		PeerMLKEM:   n.MLKEM,
-		PeerStore:   ep.PairStore,
-		PeerSigning: n.Signing, // none below the cut-over
-		Epoch:       min(own, ep.Epoch),
+		PeerStore:   store,
+		PeerSigning: n.Signing,
+		Epoch:       epoch,
 		Decap:       d.own.Load().recipient.Decapsulate,
 		Now:         d.now(),
 	}, true
 }
 
 // pairEnvFor is [Daemon.pairEnv] for the live member id, as the log and the
-// announcements held stand now.
+// announcements held stand now, and false where a hint alone is held: an
+// exchange moves only against its peer's own announcement.
 func (d *Daemon) pairEnvFor(id types.Identity) (*pairkey.Env, bool) {
 	d.authMu.Lock()
 	state, err := d.authority.TrustedState()
@@ -168,7 +171,11 @@ func (d *Daemon) pairEnvFor(id types.Identity) (*pairkey.Env, bool) {
 	if !ok || n.Expired(d.now().Unix()) {
 		return nil, false
 	}
-	return d.pairEnvOf(state, &n)
+	ep, ok := d.endpoints.Get(id)
+	if !ok || ep.HintAlone() {
+		return nil, false
+	}
+	return d.pairEnv(state, &n, ep)
 }
 
 // pairMsg is this node's message to the member to in the exchange of a
@@ -181,7 +188,7 @@ func (d *Daemon) pairMsg(to types.Identity) *pairkey.Msg {
 	d.advancePair(env, to.ShortString())
 	var m pairkey.Msg
 	d.readPairs(func(s *pairkey.Store) { m = s.Outgoing(env) })
-	if err := m.Sign(d.identity, env.Network, env.PeerSigning != nil); err != nil {
+	if err := m.Sign(d.identity, env.Network); err != nil {
 		d.logf("daemon: signing a preshared key's message: %v", err)
 		return nil
 	}
@@ -212,15 +219,18 @@ func (d *Daemon) onPair(m *pairkey.Msg) {
 
 // advancePair starts a generation with env's peer, named who, where this
 // node leads and has none in the pair's epoch, and has the next push reach
-// the peer.
+// the peer; so does an offer it put off that is now due.
 func (d *Daemon) advancePair(env *pairkey.Env, who string) {
-	if d.changePairs(func(s *pairkey.Store) bool {
+	changed := d.changePairs(func(s *pairkey.Store) bool {
 		changed, err := s.Advance(env)
 		if err != nil {
 			d.logf("daemon: a preshared key with %v: %v", who, err)
 		}
 		return changed
-	}) {
+	})
+	due := false
+	d.readPairs(func(s *pairkey.Store) { due = s.Due(env) })
+	if changed || due {
 		d.wantPair(env.Peer.ID)
 		d.MarkDirty()
 	}
@@ -228,14 +238,16 @@ func (d *Daemon) advancePair(env *pairkey.Env, who string) {
 
 // psk is the preshared key for member n, whose announcement is ep, and what
 // it is, starting the exchange of a pair key where this node leads it, and
-// noting what n is given.
+// noting what n is given. A hint alone changes no pair.
 func (d *Daemon) psk(state *log.State, n *types.NodeRecord, ep gossip.Endpoint) (pairkey.Key, pairkey.Stage) {
 	env, ok := d.pairEnv(state, n, ep)
 	if !ok {
 		d.notePSK(n, pairkey.Key{}, pairkey.StageNone, "")
 		return pairkey.Key{}, pairkey.StageNone
 	}
-	d.advancePair(env, n.Name)
+	if !ep.HintAlone() {
+		d.advancePair(env, n.Name)
+	}
 	var k pairkey.Key
 	var stage pairkey.Stage
 	var gen uint64
@@ -292,57 +304,22 @@ func (d *Daemon) probePairs(checks []tunnelCheck, probed []bool, handshakes map[
 	}
 }
 
-// setPQ says whether the network is at [types.SchemaPQ] or above, where
-// handshakes mix in preshared keys and announcements say what they need.
-func (d *Daemon) setPQ(on bool) {
-	d.endpoints.SetPQ(on)
-	d.mu.Lock()
-	d.pq = on
-	d.mu.Unlock()
-}
-
-// setPadded says whether the network is at [types.SchemaPadded] or above,
-// where discovery items are padded and announcements name their build's
-// schema.
-func (d *Daemon) setPadded(on bool) {
-	d.endpoints.SetSchemas(on)
-	d.mu.Lock()
-	d.padded = on
-	d.mu.Unlock()
-}
-
-// setSigning follows the network to the cut-over: at [types.SchemaSigning]
-// this node announces its signing key, and past the cut-over it signs by
-// ML-DSA and holds announcements to the keys the log names.
+// setSigning holds announcements to the members' signing keys, as the log
+// names them.
 func (d *Daemon) setSigning(state *log.State) {
-	var keys map[types.Identity]types.SigningKey
-	if state.PQ() {
-		keys = make(map[types.Identity]types.SigningKey, len(state.Nodes()))
-		for _, n := range state.Nodes() {
-			if n.Signing != nil {
-				keys[n.Identity] = *n.Signing
-			}
+	keys := make(map[types.Identity]types.SigningKey, len(state.Nodes()))
+	for _, n := range state.Nodes() {
+		if n.Signing != nil {
+			keys[n.Identity] = *n.Signing
 		}
 	}
-	claiming, mldsa := state.Schema() == types.SchemaSigning, state.PQ()
 	d.mu.Lock()
-	changed := (keys == nil) != (d.signingKeys == nil) || !maps.Equal(keys, d.signingKeys)
-	if claiming != d.claiming || mldsa != d.mldsa {
-		// Signed again, with what the network now asks for.
-		d.announced, d.signed = nil, nil
-	}
-	d.claiming, d.mldsa, d.signingKeys = claiming, mldsa, keys
+	changed := !maps.Equal(keys, d.signingKeys)
+	d.signingKeys = keys
 	d.mu.Unlock()
 	if changed {
 		d.endpoints.SetSigningKeys(keys)
 	}
-}
-
-// paddedItems reports whether discovery items are sealed padded.
-func (d *Daemon) paddedItems() bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.padded
 }
 
 // wantPair has the next push reach id, whom an exchange waits on.
@@ -379,9 +356,7 @@ func (d *Daemon) prunePSKs(installed []namedPeer) {
 // carries nothing routed: it announces none.
 const errNotPQ = "runs an older juist, or has yet to catch up"
 
-// notPQ reports whether state is at [types.SchemaPQ] and a peer's tunnel,
-// at stage, mixes in no preshared key both hold: nothing is routed through
-// it, and it carries juist's own traffic alone.
-func notPQ(state *log.State, stage pairkey.Stage) bool {
-	return state.Schema() >= types.SchemaPQ && stage < pairkey.StageGroup
-}
+// notPQ reports whether a peer's tunnel, at stage, mixes in no preshared key
+// both hold: nothing is routed through it, and it carries juist's own
+// traffic alone.
+func notPQ(stage pairkey.Stage) bool { return stage < pairkey.StageGroup }

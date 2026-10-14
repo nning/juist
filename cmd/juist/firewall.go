@@ -69,6 +69,21 @@ func firewalldAdmitsInvite(c *firewalld.Client, port uint16) bool {
 	return err == nil && open
 }
 
+// pastableIfName reports whether dev, as juistd names its device, is an
+// interface name Linux and FreeBSD both take and a shell reads as one word:
+// what the daemon reports goes into commands run as root.
+func pastableIfName(dev string) bool {
+	if len(dev) == 0 || len(dev) > 15 || dev == "." || dev == ".." || dev[0] == '-' {
+		return false
+	}
+	for _, c := range []byte(dev) {
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
 // warnFirewalled warns where the host firewall keeps ports, which this
 // device serves on, from arriving on its juist device: the package lets the
 // device through at its first install alone.
@@ -77,6 +92,9 @@ func (a *app) warnFirewalled(st *ipc.Status, ports ...uint16) {
 		return
 	}
 	dev := cmp.Or(st.Device, instance.Name(st.Instance))
+	if !pastableIfName(dev) {
+		return
+	}
 	ports = slices.Compact(slices.Sorted(slices.Values(ports)))
 	var blocked []string
 	unsure := false

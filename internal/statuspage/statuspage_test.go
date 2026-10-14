@@ -29,7 +29,7 @@ func sample() *ipc.StatusPage {
 	mailer, vps, phone, nas := id(1), id(2), id(3), id(4)
 	st := ipc.Status{Self: mailer, Addrs: []netip.Prefix{netip.MustParsePrefix("100.80.0.1/32"),
 		netip.MustParsePrefix("fd7a:1::1/128")}, InNetwork: true}
-	st.NetworkName, st.SelfName, st.Members, st.Peers, st.Schema = "home", "mailer", 4, 3, 10
+	st.NetworkName, st.SelfName, st.Members, st.Peers, st.Schema = "home", "mailer", 4, 3, types.CurrentSchema
 	st.Devices = []ipc.Device{
 		{Identity: mailer, Name: "mailer", V4: "100.80.0.1", V6: "fd7a:1::1", Roles: []types.Role{types.RoleAdmin},
 			Published: []string{"status.pub.example.org", "immich.pub.example.org"}},
@@ -138,7 +138,6 @@ func TestANameForMembersAloneIsShownToMembers(t *testing.T) {
 // of the user's, says why, and calls its services unreached.
 func TestThePageMarksOutdatedDevices(t *testing.T) {
 	p := sample()
-	p.Status.Schema = types.SchemaPQ
 	p.Status.Reach[0].Outdated = true
 	p.Status.Reach[2].Live, p.Status.Reach[2].Outdated = true, true
 	p.Status.Outdated = []string{"nas", "vps"}

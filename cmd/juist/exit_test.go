@@ -180,7 +180,7 @@ func TestAnExitNodeFromGrantToOff(t *testing.T) {
 	if strings.Contains(out, "9.9.9.9") {
 		t.Errorf("a resolver the exit node carries was named:\n%s", out)
 	}
-	mustContain(t, laptop.mustRun("status"), "DNS goes to 192.168.1.1")
+	mustContain(t, laptop.mustRun("health"), "DNS goes to 192.168.1.1")
 	if e, _ := laptop.mgr.exitState(); e != conn.EgressTunnel {
 		t.Fatalf("egress %v, want the tunnel", e)
 	}
@@ -519,7 +519,7 @@ func TestAFileIsHandedOnByItsSigner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := aum.SignUnder(keys[0], auth.State().Schema()); err != nil {
+	if err := aum.Sign(keys[0]); err != nil {
 		t.Fatal(err)
 	}
 	bobCLI := newCLI(t)
@@ -536,11 +536,6 @@ func TestAFileIsHandedOnByItsSigner(t *testing.T) {
 	aum.Signatures[0].PQ[0] ^= 1
 	if got := bob.handedOn(auth.State(), &aum); !got.IsZero() {
 		t.Errorf("a forged signature made %v the proposer", got)
-	}
-	aum.Signatures[0].PQ[0] ^= 1
-	aum.Signatures[0].Sig[0] = 1
-	if got := bob.handedOn(auth.State(), &aum); !got.IsZero() {
-		t.Errorf("a signature carrying an Ed25519 one beside its ML-DSA one made %v the proposer", got)
 	}
 }
 

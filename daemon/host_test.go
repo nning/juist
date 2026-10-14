@@ -28,18 +28,18 @@ func TestHostClaims(t *testing.T) {
 	auth, _ := legacy.authorityFor(t)
 	v4, ula := hostClaims(auth.State(), 0)
 	slices.SortFunc(v4, comparePrefixes)
-	if want := []netip.Prefix{p("100.64.0.1/32"), p("100.64.0.2/32")}; !slices.Equal(v4, want) {
+	if want := []netip.Prefix{p("198.18.0.1/32"), p("198.18.0.2/32")}; !slices.Equal(v4, want) {
 		t.Errorf("a network without a prefix of its own claims %v, want %v", v4, want)
 	}
 	if ula != auth.State().ULA() {
 		t.Errorf("claims %v, not its ULA", ula)
 	}
 	own := newNetworkMutated(t, 2, func(nw *network) {
-		prefix := p("100.64.0.0/24")
+		prefix := p("198.18.0.0/24")
 		nw.v4Prefix = &prefix
 	})
 	auth, _ = own.authorityFor(t)
-	if v4, _ := hostClaims(auth.State(), 0); !slices.Equal(v4, []netip.Prefix{p("100.64.0.0/24")}) {
+	if v4, _ := hostClaims(auth.State(), 0); !slices.Equal(v4, []netip.Prefix{p("198.18.0.0/24")}) {
 		t.Errorf("a network with a prefix of its own claims %v, not the prefix alone", v4)
 	}
 	var moves []types.MemberV4
@@ -50,7 +50,7 @@ func TestHostClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := renumber.SignUnder(own.admin, auth.State().Schema()); err != nil {
+	if err := renumber.Sign(own.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Inform(renumber); err != nil {
@@ -58,7 +58,7 @@ func TestHostClaims(t *testing.T) {
 	}
 	v4, _ = hostClaims(auth.State(), 999)
 	slices.SortFunc(v4, comparePrefixes)
-	if want := []netip.Prefix{p("10.7.0.0/24"), p("100.64.0.0/24")}; !slices.Equal(v4, want) {
+	if want := []netip.Prefix{p("10.7.0.0/24"), p("198.18.0.0/24")}; !slices.Equal(v4, want) {
 		t.Errorf("moving, the network claims %v, want %v", v4, want)
 	}
 	if v4, _ := hostClaims(auth.State(), 1001); !slices.Equal(v4, []netip.Prefix{p("10.7.0.0/24")}) {
@@ -97,34 +97,34 @@ func TestFindHostConflict(t *testing.T) {
 	}{
 		{"nothing below", nil, nil},
 		{"elsewhere", []lowerInstance{kernel(0, "juist0", "198.18.4.1/32")}, nil},
-		{"a member's address", []lowerInstance{kernel(0, "juist0", "100.64.0.2/32")},
-			&ipc.HostConflict{Instance: 0, Device: "juist0", Held: p("100.64.0.2/32"), Claim: p("100.64.0.2/32")}},
-		{"a route over a member", []lowerInstance{kernel(1, "juist1", "100.64.0.0/30")},
-			&ipc.HostConflict{Instance: 1, Device: "juist1", Held: p("100.64.0.0/30")}}, // either member's
+		{"a member's address", []lowerInstance{kernel(0, "juist0", "198.18.0.2/32")},
+			&ipc.HostConflict{Instance: 0, Device: "juist0", Held: p("198.18.0.2/32"), Claim: p("198.18.0.2/32")}},
+		{"a route over a member", []lowerInstance{kernel(1, "juist1", "198.18.0.0/30")},
+			&ipc.HostConflict{Instance: 1, Device: "juist1", Held: p("198.18.0.0/30")}}, // either member's
 		{"this network", []lowerInstance{kernel(0, "juist0", ownV6.String())},
 			&ipc.HostConflict{Instance: 0, Device: "juist0", SameNetwork: true, Held: ownV6, Claim: ula}},
 		{"a default route is no network", []lowerInstance{kernel(0, "juist0", "::/0")}, nil},
-		{"this network, past an IPv4 conflict", []lowerInstance{kernel(0, "juist0", "100.64.0.1/32"),
+		{"this network, past an IPv4 conflict", []lowerInstance{kernel(0, "juist0", "198.18.0.1/32"),
 			kernel(1, "juist1", ownV6.String())},
 			&ipc.HostConflict{Instance: 1, Device: "juist1", SameNetwork: true, Held: ownV6, Claim: ula}},
 		{"claims that overlap", []lowerInstance{answering(0, ipc.Status{InNetwork: true, Network: types.Hash{9},
-			V4Claims: []netip.Prefix{p("100.64.0.0/16")}})},
-			&ipc.HostConflict{Instance: 0, Device: "juist0", Held: p("100.64.0.0/16")}},
+			V4Claims: []netip.Prefix{p("198.18.0.0/16")}})},
+			&ipc.HostConflict{Instance: 0, Device: "juist0", Held: p("198.18.0.0/16")}},
 		{"claims elsewhere", []lowerInstance{answering(0, ipc.Status{InNetwork: true, Network: types.Hash{9},
 			V4Claims: []netip.Prefix{p("198.18.4.0/22")}})}, nil},
 		{"this network, answering", []lowerInstance{answering(0, ipc.Status{InNetwork: true, Network: state.GenesisHash()})},
 			&ipc.HostConflict{Instance: 0, Device: "juist0", SameNetwork: true, Held: ula, Claim: ula}},
 		{"removed from it", []lowerInstance{answering(0, ipc.Status{InNetwork: true, Network: state.GenesisHash(),
-			Derived: ipc.Derived{NotMember: true}, V4Claims: []netip.Prefix{p("100.64.0.0/16")}})}, nil},
+			Derived: ipc.Derived{NotMember: true}, V4Claims: []netip.Prefix{p("198.18.0.0/16")}})}, nil},
 		{"itself without IPv4", []lowerInstance{answering(0, ipc.Status{InNetwork: true, Network: types.Hash{9},
-			V4Claims: []netip.Prefix{p("100.64.0.0/16")}, HostConflict: &ipc.HostConflict{}})}, nil},
+			V4Claims: []netip.Prefix{p("198.18.0.0/16")}, HostConflict: &ipc.HostConflict{}})}, nil},
 		{"its mesh not up", []lowerInstance{answering(0, ipc.Status{InNetwork: true, Network: types.Hash{9},
-			V4Claims: []netip.Prefix{p("100.64.0.0/16")}, StartError: "no device"})}, nil},
+			V4Claims: []netip.Prefix{p("198.18.0.0/16")}, StartError: "no device"})}, nil},
 		{"this network, its mesh not up", []lowerInstance{answering(0, ipc.Status{InNetwork: true,
 			Network: state.GenesisHash(), StartError: "no device"})},
 			&ipc.HostConflict{Instance: 0, Device: "juist0", SameNetwork: true, Held: ula, Claim: ula}},
 		{"no device", []lowerInstance{{n: 0, st: &ipc.Status{InNetwork: true, Network: types.Hash{9},
-			V4Claims: []netip.Prefix{p("100.64.0.0/16")}}}}, nil},
+			V4Claims: []netip.Prefix{p("198.18.0.0/16")}}}}, nil},
 	} {
 		got := findHostConflict(state, 0, tc.lower)
 		if got != nil && tc.want != nil && !tc.want.Claim.IsValid() && got.Claim.Overlaps(got.Held) {
@@ -251,7 +251,7 @@ func hasV4(addrs []netip.Prefix) bool {
 // step; it takes IPv4 back once the conflict is gone.
 func TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt(t *testing.T) {
 	p := netip.MustParsePrefix
-	h := newHostFixture(t, conn.Holding{Instance: 0, Device: "juist0", Prefixes: []netip.Prefix{p("100.64.0.2/32")}})
+	h := newHostFixture(t, conn.Holding{Instance: 0, Device: "juist0", Prefixes: []netip.Prefix{p("198.18.0.2/32")}})
 	addrs, n := h.lastStart()
 	if n != 1 || hasV4(addrs) || len(addrs) == 0 {
 		t.Fatalf("the mesh started %d times, last on %v; want once, on IPv6 alone", n, addrs)
@@ -314,7 +314,7 @@ func TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt(t *testing.T) {
 	}
 
 	// A lower instance coming to hold it later takes IPv4 away again.
-	h.setHeld(conn.Holding{Instance: 0, Device: "juist0", Prefixes: []netip.Prefix{p("100.64.0.0/16")}})
+	h.setHeld(conn.Holding{Instance: 0, Device: "juist0", Prefixes: []netip.Prefix{p("198.18.0.0/16")}})
 	h.s.checkHost()
 	if addrs, n := h.holding(); n != 1 || hasV4(addrs) {
 		t.Fatalf("a new conflict: the mesh started %d times and holds %v", n, addrs)
@@ -334,13 +334,13 @@ func TestALowerInstanceIsAskedFirst(t *testing.T) {
 	h := newHostFixture(t)
 	h.mu.Lock()
 	h.lower = &ipc.Status{InNetwork: true, Network: types.Hash{9}, Device: "juist0",
-		V4Claims: []netip.Prefix{p("100.64.0.0/16")}}
+		V4Claims: []netip.Prefix{p("198.18.0.0/16")}}
 	h.mu.Unlock()
 	h.s.checkHost()
 	if addrs, n := h.holding(); n != 1 || hasV4(addrs) {
 		t.Fatalf("claims that overlap: the mesh started %d times and holds %v", n, addrs)
 	}
-	if c := h.s.Status().HostConflict; c == nil || c.Held != p("100.64.0.0/16") || c.Device != "juist0" {
+	if c := h.s.Status().HostConflict; c == nil || c.Held != p("198.18.0.0/16") || c.Device != "juist0" {
 		t.Fatalf("conflict %+v", c)
 	}
 
@@ -389,7 +389,7 @@ func TestTheLowerInstanceKeepsItsAddresses(t *testing.T) {
 	var starts [][]netip.Prefix
 	f := newServiceFixtureWith(t, func(o *Options) {
 		o.HostHoldings = func(int, string) ([]conn.Holding, error) {
-			return []conn.Holding{{Instance: 4, Device: "juist4", Prefixes: []netip.Prefix{p("100.64.0.0/10")}}}, nil
+			return []conn.Holding{{Instance: 4, Device: "juist4", Prefixes: []netip.Prefix{p("198.18.0.0/15")}}}, nil
 		}
 		connect := o.Connect
 		o.Connect = func(co conn.Options) (conn.Manager, error) {

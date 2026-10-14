@@ -56,7 +56,7 @@ func (m *member) env(peer *member) *Env {
 func (m *member) send(t *testing.T, peer *member) Msg {
 	t.Helper()
 	msg := m.store.Outgoing(m.env(peer))
-	if err := msg.Sign(m.priv, network, false); err != nil {
+	if err := msg.Sign(m.priv, network); err != nil {
 		t.Fatal(err)
 	}
 	b, err := encMode.Marshal(&msg)
@@ -71,7 +71,7 @@ func (m *member) send(t *testing.T, peer *member) Msg {
 
 func (m *member) take(t *testing.T, from *member, msg Msg) bool {
 	t.Helper()
-	if err := msg.Verify(network, nil); err != nil {
+	if err := msg.Verify(network, new(from.priv.SigningKey())); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := m.store.Take(m.env(from), &msg)
@@ -406,17 +406,19 @@ func TestAMessageIsBoundToItsSenderAndNetwork(t *testing.T) {
 	group, _ := secrets.NewSecret()
 	l, f := pair(t, group, 1)
 	m := l.send(t, f)
-	if err := m.Verify(types.Hash{8}, nil); err == nil {
+	key := l.priv.SigningKey()
+	if err := m.Verify(types.Hash{8}, &key); err == nil {
 		t.Error("a message verified for another network")
 	}
 	m.From = f.side.ID
-	if err := m.Verify(network, nil); err == nil {
+	if err := m.Verify(network, &key); err == nil {
 		t.Error("a message verified as another member's")
 	}
 }
 
 // A peer cannot make this node encapsulate and write faster than [Pace]: a
-// follower answers one new generation per Pace, a leader starts one.
+// follower answers one new generation per Pace, a leader starts one. An
+// offer the follower put off is due once the pace has passed.
 func TestGenerationsArePaced(t *testing.T) {
 	group, _ := secrets.NewSecret()
 	l, f := pair(t, group, 1, 2, 3)
@@ -448,7 +450,16 @@ func TestGenerationsArePaced(t *testing.T) {
 	if changed, _ := f.store.Take(envAt(f, l), &offer2); changed {
 		t.Error("a follower answered a second generation within the pace")
 	}
+	if f.store.Due(envAt(f, l)) {
+		t.Error("an offer put off is due within the pace")
+	}
 	at = at.Add(Pace)
+	if !f.store.Due(envAt(f, l)) {
+		t.Error("an offer put off is not due after the pace: nothing has the follower reach the leader for it")
+	}
+	if f.store.Due(envAt(f, l)) {
+		t.Error("an offer put off is due twice")
+	}
 	if changed, _ := f.store.Take(envAt(f, l), &offer2); !changed {
 		t.Error("a follower answered no generation after the pace")
 	}
@@ -515,24 +526,29 @@ func TestAStaleFollowerMessageStartsNothing(t *testing.T) {
 	}
 }
 
-// Past the cut-over a message is held to its sender's ML-DSA signature: one
-// signed by Ed25519 alone, which a quantum computer forges, is refused.
-// Exit criterion (1) of M17 for pair-key messages.
-func TestPastTheCutOverAMessageSignedByEd25519AloneIsRefused(t *testing.T) {
+// A message is held to its sender's ML-DSA signature, by the key the log
+// names: one signed by Ed25519 alone, which a quantum computer forges, is
+// refused, and so is one checked against no key.
+func TestAMessageSignedByEd25519AloneIsRefused(t *testing.T) {
 	group, _ := secrets.NewSecret()
 	a, b := newMember(t, group, 1), newMember(t, group, 1)
 	key := a.priv.SigningKey()
 	msg := a.store.Outgoing(a.env(b))
-	if err := msg.Sign(a.priv, network, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := msg.Verify(network, &key); err == nil {
-		t.Fatal("past the cut-over a message signed by Ed25519 alone verified")
-	}
-	if err := msg.Sign(a.priv, network, true); err != nil {
+	if err := msg.Sign(a.priv, network); err != nil {
 		t.Fatal(err)
 	}
 	if err := msg.Verify(network, &key); err != nil {
 		t.Fatalf("a message signed by both keys: %v", err)
+	}
+	if err := msg.Verify(network, nil); err == nil {
+		t.Fatal("a message verified against no signing key")
+	}
+	other := b.priv.SigningKey()
+	if err := msg.Verify(network, &other); err == nil {
+		t.Fatal("a message verified against another member's signing key")
+	}
+	msg.MLDSA = nil
+	if err := msg.Verify(network, &key); err == nil {
+		t.Fatal("a message signed by Ed25519 alone verified")
 	}
 }

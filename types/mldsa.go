@@ -17,7 +17,7 @@ const (
 )
 
 // A SigningKey is an ML-DSA-44 public key: what verifies an identity's
-// signatures from [SchemaMLDSA] on.
+// signatures.
 type SigningKey [SigningKeySize]byte
 
 // A PQSig is an ML-DSA-44 signature.
@@ -127,10 +127,10 @@ func endorsement(id Identity, key *SigningKey) Hash {
 	return hashLabeled(labelEndorsement, id[:], key[:])
 }
 
-// SignBoth signs msg by Ed25519 and, where pq, by ML-DSA too.
-func (p PrivateIdentity) SignBoth(msg []byte, pq bool) (Sig, *PQSig, error) {
+// SignBoth signs msg by Ed25519 and by ML-DSA.
+func (p PrivateIdentity) SignBoth(msg []byte) (Sig, *PQSig, error) {
 	sig, err := p.Sign(msg)
-	if err != nil || !pq {
+	if err != nil {
 		return sig, nil, err
 	}
 	s, err := p.SignPQ(msg)

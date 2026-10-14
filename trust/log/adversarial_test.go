@@ -358,10 +358,10 @@ func TestRejectsOutOfOrderBatch(t *testing.T) {
 	}
 }
 
-// TestRejectsEpochRollback: a chain resolving to an epoch this node has passed
-// takes admin signatures to build, so it models a compromised quorum rewriting
-// history. The node refuses rather than following.
-func TestRejectsEpochRollback(t *testing.T) {
+// A chain resolving to an epoch this node has passed takes admin signatures to
+// build, so it may be a compromised quorum rewriting history: the node does not
+// follow it, and says so, also after a restart.
+func TestAnEpochRollbackIsNotFollowed(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	victim := h.newNode("victim")
 
@@ -387,7 +387,7 @@ func TestRejectsEpochRollback(t *testing.T) {
 			t.Fatalf("AddNode: %v", err)
 		}
 		h.signQuorum(&rogue)
-		if rogue.Hash().Compare(add.Hash()) < 0 {
+		if rogue.SigHash().Compare(add.SigHash()) < 0 {
 			break
 		}
 	}
@@ -407,27 +407,24 @@ func TestRejectsEpochRollback(t *testing.T) {
 		t.Fatalf("epoch floor is %d, want 3", floor)
 	}
 
-	err = h.auth.Inform(rogue)
-	var rb *RollbackError
-	if !asRollback(err, &rb) {
-		t.Fatalf("expected a rollback error, got %v", err)
+	if err := h.auth.Inform(rogue); err != nil {
+		t.Fatalf("Inform: %v", err)
 	}
-	if rb.Floor != floor || rb.Offered != 2 {
-		t.Fatalf("rollback error reports floor %d offered %d, want 3 and 2", rb.Floor, rb.Offered)
-	}
-	if h.auth.State().Epoch() != floor {
-		t.Fatalf("epoch changed to %d despite the rejection", h.auth.State().Epoch())
-	}
-	if len(rb.Records) != 1 {
-		t.Fatalf("rollback error carries %d records, want the 1 it refused", len(rb.Records))
-	}
-	// Nothing was stored, so reopening the store gives the same chain back.
-	reopened, err := Open(h.storage)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	if reopened.Head() != h.auth.Head() || reopened.State().Epoch() != floor {
-		t.Fatal("the refused record left a trace in storage")
+	for _, auth := range []*Authority{h.auth, h.fork()} {
+		_, err := auth.TrustedState()
+		var rb *RollbackAlarm
+		if !asRollback(err, &rb) {
+			t.Fatalf("trusted state under a rollback: %v, want a rollback alarm", err)
+		}
+		if rb.Floor != floor || rb.Epoch != 2 {
+			t.Fatalf("rollback alarm reports floor %d epoch %d, want 3 and 2", rb.Floor, rb.Epoch)
+		}
+		if got, _ := h.storage.EpochFloor(); got != floor {
+			t.Fatalf("epoch floor moved to %d", got)
+		}
+		if _, err := auth.Compact(); err == nil {
+			t.Fatal("compacted under a rollback alarm")
+		}
 	}
 }
 
@@ -520,7 +517,7 @@ func TestRejectsDuplicateMember(t *testing.T) {
 
 func TestRejectsCollidingV4Address(t *testing.T) {
 	h := newHarness(t, 1, 1)
-	addr := netip.MustParseAddr("100.64.0.5")
+	addr := netip.MustParseAddr("198.18.0.5")
 	first := h.newNode("alpha")
 	first.V4 = &addr
 	aum, err := h.auth.Builder().AddNode(first, h.sealer())
@@ -565,7 +562,7 @@ func TestRejectsCollidingDerivedAddress(t *testing.T) {
 // tool produces a fully authorized record, and only the receiving node's own
 // validation stands between it and the member set.
 func TestRejectsCollisionsFromAQuorumSignedRecord(t *testing.T) {
-	addr := netip.MustParseAddr("100.64.0.5")
+	addr := netip.MustParseAddr("198.18.0.5")
 	first := func(h *harness) types.NodeRecord {
 		n := h.newNode("alpha")
 		n.V4 = &addr
@@ -861,8 +858,8 @@ func TestConcurrentNonConflictingRecordsResolveDeterministically(t *testing.T) {
 	if one.Head() != two.Head() {
 		t.Fatal("two nodes with the same records chose different heads")
 	}
-	if one.Head().Compare(max2(left.Hash(), right.Hash())) == 0 {
-		t.Fatal("fork choice did not prefer the lower record hash")
+	if want := minBySigHash(left, right); one.Head() != want.Hash() {
+		t.Fatal("fork choice did not prefer the lower signed content")
 	}
 	if one.Alarm() != nil {
 		t.Fatalf("benign concurrent AddNodes raised an alarm: %v", one.Alarm())
@@ -984,7 +981,7 @@ func TestAnOrphanedRevocationIsNamed(t *testing.T) {
 	}
 	h.signQuorum(&second)
 	a1, b1 := first, second
-	if b1.Hash().Compare(a1.Hash()) < 0 {
+	if b1.SigHash().Compare(a1.SigHash()) < 0 {
 		a1, b1 = b1, a1
 	}
 
@@ -1234,7 +1231,7 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generating identity: %v", err)
 	}
-	aum, err := h.auth.Builder().RotateIdentity(n.Identity, fresh.Public(), h.sealer())
+	aum, err := h.auth.Builder().RotateIdentity(n.Identity, fresh.Public(), fresh.SigningKey(), h.sealer())
 	if err != nil {
 		t.Fatalf("RotateIdentity: %v", err)
 	}
@@ -1250,7 +1247,7 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 	}
 	h.mustReject("RotateIdentity signed by the old key", RuleUnauthorized, aum)
 
-	// Nor, from schema 1, is the new key alone: the device whose slot it is
+	// Nor is the new key alone: the device whose slot it is
 	// has to agree, or admins alone could move an admin device's membership
 	// and role to a key of their choosing.
 	aum.Signatures = nil
@@ -1272,28 +1269,6 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 	}
 	if st.Addr6(fresh.Public()) == st.Addr6(n.Identity) {
 		t.Fatal("the rotated identity kept the old overlay address")
-	}
-}
-
-// A schema-0 network keeps the rule it was written under: the new key's
-// signature is enough.
-func TestRotateIdentityAtSchemaZeroNeedsOnlyTheNewKey(t *testing.T) {
-	h := newHarnessAt(t, 1, 1, 0)
-	n := h.addNode("alpha")
-	fresh, err := types.GenerateIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	aum, err := h.auth.Builder().RotateIdentity(n.Identity, fresh.Public(), h.sealer())
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.signQuorum(&aum)
-	if err := h.sign(&aum, fresh); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.auth.Inform(aum); err != nil {
-		t.Fatalf("a schema-0 identity rotation signed by the new key: %v", err)
 	}
 }
 
@@ -1321,9 +1296,9 @@ func TestDisablementCommitments(t *testing.T) {
 
 // --- helpers ---------------------------------------------------------------
 
-func asRollback(err error, target **RollbackError) bool {
+func asRollback(err error, target **RollbackAlarm) bool {
 	for err != nil {
-		if rb, ok := err.(*RollbackError); ok {
+		if rb, ok := err.(*RollbackAlarm); ok {
 			*target = rb
 			return true
 		}
@@ -1336,11 +1311,12 @@ func asRollback(err error, target **RollbackError) bool {
 	return false
 }
 
-func max2(a, b types.Hash) types.Hash {
-	if a.Compare(b) > 0 {
-		return a
+// minBySigHash returns the sibling fork choice prefers, all else equal.
+func minBySigHash(a, b types.AUM) types.AUM {
+	if b.SigHash().Compare(a.SigHash()) < 0 {
+		return b
 	}
-	return b
+	return a
 }
 
 func sortSnapshot(s *types.Snapshot) {
@@ -1356,49 +1332,46 @@ func sortByIdentity[T any](items []T, key func(T) types.Identity) {
 	}
 }
 
-// Withdrawing vouching authority is a revocation from schema 2 on: taking an
-// admin device's role away, or raising the threshold, lands whichever hash is
-// lower, where at schema 1 a concurrent change could orphan it on its hash
-// and keep a distrusted admin device vouching.
+// Withdrawing vouching authority is a revocation: taking an admin device's
+// role away, or raising the threshold, lands whichever hash is lower, so a
+// concurrent change cannot orphan it and keep a distrusted admin device
+// vouching.
 func TestWithdrawingVouchingAuthorityWinsForkChoice(t *testing.T) {
-	for _, schema := range []types.SchemaVersion{1, 2} {
-		h := newHarnessAt(t, 1, 1, schema)
-		a, b := h.addNode("admin-a"), h.addNode("admin-b")
-		h.grantAdmin(a.Identity)
-		h.grantAdmin(b.Identity)
-		builder := h.auth.Builder()
-		demote, err := builder.SetNodeRoutes(b.Identity, nil, nil)
-		if err != nil {
+	h := newHarness(t, 1, 1)
+	a, b := h.addNode("admin-a"), h.addNode("admin-b")
+	h.grantAdmin(a.Identity)
+	h.grantAdmin(b.Identity)
+	builder := h.auth.Builder()
+	demote, err := builder.SetNodeRoutes(b.Identity, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.signQuorum(&demote)
+	raise, err := builder.SetVouchers(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.signQuorum(&raise)
+	for _, withdraw := range []types.AUM{demote, raise} {
+		// A sibling that would win on its hash: added under names until
+		// its hash is lower than the withdrawal's.
+		var other types.AUM
+		for i := 0; ; i++ {
+			other, err = builder.AddNode(h.newNode(fmt.Sprintf("n%d", i)), h.sealer())
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.signQuorum(&other)
+			if other.SigHash().Compare(withdraw.SigHash()) < 0 {
+				break
+			}
+		}
+		auth := h.fork()
+		if err := auth.Inform(other, withdraw); err != nil {
 			t.Fatal(err)
 		}
-		h.signQuorum(&demote)
-		raise, err := builder.SetVouchers(2)
-		if err != nil {
-			t.Fatal(err)
-		}
-		h.signQuorum(&raise)
-		for _, withdraw := range []types.AUM{demote, raise} {
-			// A sibling that would win on its hash: added under names until
-			// its hash is lower than the withdrawal's.
-			var other types.AUM
-			for i := 0; ; i++ {
-				other, err = builder.AddNode(h.newNode(fmt.Sprintf("n%d", i)), h.sealer())
-				if err != nil {
-					t.Fatal(err)
-				}
-				h.signQuorum(&other)
-				if other.Hash().Compare(withdraw.Hash()) < 0 {
-					break
-				}
-			}
-			auth := h.fork()
-			if err := auth.Inform(other, withdraw); err != nil {
-				t.Fatalf("schema %d: %v", schema, err)
-			}
-			won := auth.Head() == withdraw.Hash()
-			if won != (schema >= types.SchemaRevokingRoles) {
-				t.Errorf("schema %d, %v: the withdrawal won fork choice: %v", schema, withdraw.Kind, won)
-			}
+		if auth.Head() != withdraw.Hash() {
+			t.Errorf("%v: the withdrawal lost fork choice", withdraw.Kind)
 		}
 	}
 }

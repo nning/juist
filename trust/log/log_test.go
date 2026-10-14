@@ -175,3 +175,53 @@ func TestCheckIsDryWithoutTheQuorum(t *testing.T) {
 		t.Fatal("a record signed by a key the network does not trust passed")
 	}
 }
+
+// The chain names the signing key of every member it listed from the anchor
+// on, removed or rotated away, after a reopen too; a compaction past a removal
+// forgets it.
+func TestTheChainNamesTheKeyOfEveryMemberItListed(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	kept, removed, rotated := h.addNode("kept"), h.addNode("removed"), h.addNode("rotated")
+	h.removeNode(removed.Identity)
+	fresh, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.auth.Inform(h.rotation(rotated, fresh)); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(h.storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for what, n := range map[string]types.NodeRecord{"a member": kept, "a removed member": removed,
+		"an identity rotated away": rotated} {
+		if k := reopened.ListedSigningKey(n.Identity); k == nil || *k != *n.Signing {
+			t.Errorf("the reopened log names %v for %s, want the key it was listed with", k, what)
+		}
+	}
+	if k := reopened.ListedSigningKey(fresh.Public()); k == nil || *k != fresh.SigningKey() {
+		t.Error("the reopened log does not name the key an identity was rotated to")
+	}
+	if k := reopened.ListedSigningKey(h.newNode("stranger").Identity); k != nil {
+		t.Error("the log names a key for an identity it never listed")
+	}
+
+	cp, err := h.auth.Builder().Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.signQuorum(&cp)
+	if err := h.auth.Inform(cp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.auth.Compact(); err != nil {
+		t.Fatal(err)
+	}
+	if h.auth.ListedSigningKey(removed.Identity) != nil {
+		t.Error("a log compacted past a removal still names the removed member's key")
+	}
+	if h.auth.ListedSigningKey(kept.Identity) == nil {
+		t.Error("a compacted log no longer names a member's key")
+	}
+}

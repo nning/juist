@@ -40,26 +40,3 @@ func TestAnAdminKeyTokenIsEndorsed(t *testing.T) {
 		t.Fatal("an admin key with a signing key and no endorsement validated")
 	}
 }
-
-// A registration names one admin key's signing key, no more.
-func TestARegistrationNamesOneKey(t *testing.T) {
-	a, b := mustIdentity(t), mustIdentity(t)
-	member := func(p PrivateIdentity) MemberKey {
-		return MemberKey{Identity: p.Public(), Key: p.SigningKey(), Endorsement: *p.Endorsement()}
-	}
-	prev := Hash{1}
-	rec := AUM{Kind: KindSetAdminSigning, Prev: &prev, Signing: &SigningKeys{Members: []MemberKey{member(a)}}}
-	if err := rec.Sign(a); err != nil {
-		t.Fatal(err)
-	}
-	if err := rec.StaticValidate(); err != nil {
-		t.Fatalf("a registration: %v", err)
-	}
-	two := AUM{Kind: KindSetAdminSigning, Prev: &prev, Signing: &SigningKeys{Members: []MemberKey{member(a), member(b)}}}
-	if err := two.Sign(a); err != nil {
-		t.Fatal(err)
-	}
-	if err := two.StaticValidate(); err == nil {
-		t.Fatal("a registration of two keys validated")
-	}
-}

@@ -20,8 +20,7 @@ type AddrKey struct {
 	Seq   uint64   `cbor:"3,keyasint"`
 	Wraps [][]byte `cbor:"4,keyasint,omitempty"`
 
-	// MLDSA is the owner's ML-DSA signature, past the cut-over, which a
-	// member there requires; sent only to builds that read it.
+	// MLDSA is the owner's ML-DSA signature, which members require.
 	MLDSA *types.PQSig `cbor:"22,keyasint,omitempty"`
 	Sig   types.Sig    `cbor:"23,keyasint"`
 }
@@ -59,8 +58,7 @@ func (k *AddrKey) Sign(priv types.PrivateIdentity) error {
 	return err
 }
 
-// SignPQ is [AddrKey.Sign], adding the ML-DSA signature a network past the
-// cut-over asks for.
+// SignPQ is [AddrKey.Sign], adding the ML-DSA signature members require.
 func (k *AddrKey) SignPQ(priv types.PrivateIdentity) error {
 	if err := k.Sign(priv); err != nil {
 		return err

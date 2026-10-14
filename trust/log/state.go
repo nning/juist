@@ -65,16 +65,9 @@ func (s *State) Policy() *types.Policy {
 // Schema returns the record schema this network is written under.
 func (s *State) Schema() types.SchemaVersion { return s.schema }
 
-// PQ reports whether the network is past the cut-over to
-// [types.SchemaMLDSA], where everything is signed by ML-DSA.
-func (s *State) PQ() bool { return s.schema >= types.SchemaMLDSA }
-
 // SigningKey returns the ML-DSA key the log names for an admin key or a
-// member, or nil below the cut-over or for an identity it does not name.
+// member, or nil for an identity it does not name.
 func (s *State) SigningKey(id types.Identity) *types.SigningKey {
-	if !s.PQ() {
-		return nil
-	}
 	if k, ok := s.admins[id]; ok && k.Signing != nil {
 		return new(*k.Signing)
 	}
@@ -118,16 +111,13 @@ func (s *State) alreadyRevoked(a *types.AUM) bool {
 
 // Revokes reports whether a record applied to s withdraws authority, which
 // fork choice prefers over its siblings and never silently orphans:
-// "revoked wins". Removals always do. From [types.SchemaRevokingRoles] on, so
-// does withdrawing vouching authority — taking a device's admin role away,
-// or raising the vouching threshold — which a concurrent change could
-// otherwise orphan on its hash, keeping a distrusted admin device vouching.
+// "revoked wins". Removals always do, and so does withdrawing vouching
+// authority — taking a device's admin role away, or raising the vouching
+// threshold — which a concurrent change could otherwise orphan on its hash,
+// keeping a distrusted admin device vouching.
 func (s *State) Revokes(a *types.AUM) bool {
 	if a.Kind.IsRevocation() {
 		return true
-	}
-	if s.schema < types.SchemaRevokingRoles {
-		return false
 	}
 	switch a.Kind {
 	case types.KindSetNodeRoutes:
@@ -147,8 +137,8 @@ func (s *State) Revokes(a *types.AUM) bool {
 		}
 	case types.KindSetQuorum:
 		// A higher threshold takes from every coalition that met the old
-		// one; from schema 3, like the vouching threshold.
-		return s.schema >= types.SchemaHolders && *a.Quorum > s.quorum
+		// one, like the vouching threshold.
+		return *a.Quorum > s.quorum
 	}
 	return false
 }
@@ -171,12 +161,12 @@ func (s *State) V4Prefix() (netip.Prefix, bool) {
 }
 
 // V4Range returns the range new overlay IPv4 addresses are assigned from.
-func (s *State) V4Range() netip.Prefix { return types.V4Range(s.schema, s.v4Prefix) }
+func (s *State) V4Range() netip.Prefix { return types.V4Range(s.v4Prefix) }
 
 // V4Ranges returns every range an overlay IPv4 address may lie in, the
 // retiring ones included until a record retires them.
 func (s *State) V4Ranges() []netip.Prefix {
-	out := types.V4Ranges(s.schema, s.v4Prefix)
+	out := types.V4Ranges(s.v4Prefix)
 	if s.v4Retiring != nil {
 		out = append(out, s.v4Retiring.Prefixes...)
 	}
@@ -186,7 +176,7 @@ func (s *State) V4Ranges() []netip.Prefix {
 // V4RangesAt returns the ranges in use at unix time now: [State.V4Ranges]
 // without retiring ones past their deadline.
 func (s *State) V4RangesAt(now int64) []netip.Prefix {
-	out := types.V4Ranges(s.schema, s.v4Prefix)
+	out := types.V4Ranges(s.v4Prefix)
 	if s.v4Retiring.Live(now) {
 		out = append(out, s.v4Retiring.Prefixes...)
 	}

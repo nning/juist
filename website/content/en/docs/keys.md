@@ -46,7 +46,9 @@ Connections keep running while the device switches to its new keys: the
 tunnel to each peer waits briefly for a handshake with the new keys. A device
 that runs a relay restarts its tunnels instead. `juist rotate identity`
 changes the device's IPv6 address, which ends any connections that used the
-old one.
+old one. It needs the network at schema 19: below it, it stops with
+`juist: the network predates rotating an identity key` until an admin runs
+`juist log upgrade`.
 
 ## Starting a device over
 

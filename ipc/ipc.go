@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -563,8 +564,7 @@ type Response struct {
 
 	// Proof answers [CmdRotate]: the rotated device's current identity key
 	// signs [RotationProof] of the record. It is what shows the CLI that the
-	// daemon holds the key of the device it claims to be, which a schema 0
-	// identity rotation does not otherwise carry.
+	// daemon holds the key of the device it claims to be.
 	Proof *types.Sig `cbor:"8,keyasint,omitempty"`
 
 	// Admission answers [CmdJoin] by a link that names its admin: that
@@ -624,8 +624,7 @@ type Self struct {
 	// Name is the member name this device proposes.
 	Name string `cbor:"3,keyasint,omitempty"`
 
-	// Signing is the device's signing key, which a network past the cut-over
-	// names it by.
+	// Signing is the device's signing key, which the network names it by.
 	Signing *types.SigningKey `cbor:"4,keyasint,omitempty"`
 }
 
@@ -949,63 +948,82 @@ func DecodeResponse(b []byte) (Response, error) {
 	return decode[Response](responseDec, b, MaxResponse)
 }
 
-// makePrintable makes every string in a reply safe to print. The daemon is
-// the less trusted side of the socket, and a reply is printed to the
-// operator's terminal: one that carried escape sequences could rewrite what
-// the operator sees, or what the terminal does.
-func (r *Response) makePrintable() {
-	r.Err = printable(r.Err)
-	if st := r.Status; st != nil {
-		for _, f := range []*string{&st.NetworkName, &st.SelfName, &st.StartError, &st.Operator,
-			&st.Alarm, &st.Disabled, &st.EpochError, &st.SchemaAlarm, &st.DataPlaneError, &st.HomeRelay} {
-			*f = printable(*f)
+// makePrintable makes every string v points to, however deeply nested, safe
+// to print. The daemon is the less trusted side of the socket, and what it
+// says reaches the operator's terminal, hints to paste included.
+func makePrintable(v any) { printableValue(reflect.ValueOf(v)) }
+
+var (
+	addrType     = reflect.TypeFor[netip.Addr]()
+	addrPortType = reflect.TypeFor[netip.AddrPort]()
+)
+
+func printableValue(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.String:
+		if s := v.String(); v.CanSet() && printable(s) != s {
+			v.SetString(printable(s))
 		}
-		for _, names := range [][]string{st.Silent, st.TunnelsDown, st.SyncFailing, st.SyncNewer, st.SyncBroken,
-			st.Outdated, st.OlderBuild, st.NoKey, st.Unrevoked, st.Lost, st.Seeking, st.Absent, st.Unmoved} {
-			for i := range names {
-				names[i] = printable(names[i])
+	case reflect.Pointer:
+		if !v.IsNil() {
+			printableValue(v.Elem())
+		}
+	case reflect.Interface:
+		if !v.IsNil() && v.CanSet() {
+			c := reflect.New(v.Elem().Type()).Elem()
+			c.Set(v.Elem())
+			printableValue(c)
+			v.Set(c)
+		}
+	case reflect.Struct:
+		switch t := v.Type(); {
+		case !v.CanSet():
+		case t == addrType:
+			// A zone is the one string an address carries.
+			if a := v.Interface().(netip.Addr); printable(a.Zone()) != a.Zone() {
+				v.Set(reflect.ValueOf(a.WithZone("")))
+			}
+		case t == addrPortType:
+			if ap := v.Interface().(netip.AddrPort); printable(ap.Addr().Zone()) != ap.Addr().Zone() {
+				v.Set(reflect.ValueOf(netip.AddrPortFrom(ap.Addr().WithZone(""), ap.Port())))
+			}
+		default:
+			for i := range t.NumField() {
+				if t.Field(i).IsExported() {
+					printableValue(v.Field(i))
+				}
 			}
 		}
-		for i := range st.Devices {
-			d := &st.Devices[i]
-			d.Name, d.V4, d.V6 = printable(d.Name), printable(d.V4), printable(d.V6)
-			d.Retiring = printable(d.Retiring)
-			for j := range d.Roles {
-				d.Roles[j] = types.Role(printable(string(d.Roles[j])))
-			}
+	case reflect.Slice, reflect.Array:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return
 		}
-		for i := range st.Shares {
-			sh := &st.Shares[i]
-			for _, f := range []*string{&sh.Name, &sh.To, &sh.NotShared, &sh.What, &sh.Path} {
-				*f = printable(*f)
-			}
+		for i := range v.Len() {
+			printableValue(v.Index(i))
 		}
-	}
-	if e := r.Event; e != nil {
-		for _, f := range []*string{&e.Addr, &e.Code, &e.Link, &e.Name, &e.Text} {
-			*f = printable(*f)
+	case reflect.Map:
+		for _, k := range v.MapKeys() {
+			nk := reflect.New(k.Type()).Elem()
+			nk.Set(k)
+			printableValue(nk)
+			nv := reflect.New(v.Type().Elem()).Elem()
+			nv.Set(v.MapIndex(k))
+			printableValue(nv)
+			v.SetMapIndex(k, reflect.Value{})
+			v.SetMapIndex(nk, nv)
 		}
-		if e.Join != nil {
-			e.Join.Name = printable(e.Join.Name)
-		}
-	}
-	if r.Self != nil {
-		r.Self.Name = printable(r.Self.Name)
-	}
-	if r.Ping != nil {
-		r.Ping.Err = printable(r.Ping.Err)
 	}
 }
 
-// printable replaces control, format and bidirectional-override characters,
-// and line and paragraph separators, keeping newlines, which the daemon's
-// errors use to add a hint.
+// printable turns line breaks into spaces, so that nothing the daemon says
+// starts a line of its own, such as one that reads as the CLI's hint, and
+// replaces other control, format and bidirectional-override characters.
 func printable(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch {
-		case r == '\n':
-			return r
-		case unicode.IsControl(r), unicode.Is(unicode.Bidi_Control, r), unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp),
+		case r == '\n', r == '\r', r == '\v', r == '\f', r == '\u0085', unicode.In(r, unicode.Zl, unicode.Zp):
+			return ' '
+		case unicode.IsControl(r), unicode.Is(unicode.Bidi_Control, r), unicode.In(r, unicode.Cf),
 			r == utf8.RuneError:
 			return '\uFFFD'
 		}
@@ -1184,7 +1202,7 @@ func converse(ctx context.Context, dial Dialer, req Request,
 		if err != nil {
 			return Response{}, err
 		}
-		resp.makePrintable()
+		makePrintable(&resp)
 		if resp.Event == nil {
 			if resp.Err != "" {
 				return resp, errors.New(resp.Err)

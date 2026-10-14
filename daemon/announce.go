@@ -40,10 +40,6 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	var schema types.SchemaVersion
-	if d.padded {
-		schema = types.CurrentSchema
-	}
 	if d.status.NotMember {
 		// A removed device goes quiet on the LAN too: no beacons, no answers
 		// to queries, no Self in a gossip hello. Re-enrollment arrives over
@@ -66,10 +62,7 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 		Share:      shared,
 		Epoch:      epoch,
 		PairStore:  store,
-		Schema:     schema,
-	}
-	if d.claiming {
-		e.Signing = d.claim
+		Schema:     types.CurrentSchema,
 	}
 	switch {
 	case d.sealing != nil && d.sealing.withheld:
@@ -98,11 +91,7 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 		}
 	}
 	e.Seq = d.nextSeq()
-	sign := e.Sign
-	if d.mldsa {
-		sign = e.SignPQ
-	}
-	if err := sign(d.identity); err != nil {
+	if err := e.SignPQ(d.identity); err != nil {
 		d.logf("daemon: signing this node's announcement: %v", err)
 		return gossip.Endpoint{}, false
 	}
@@ -119,18 +108,14 @@ func (d *Daemon) nextSeq() uint64 {
 
 // ownEchoed takes this node's announcement as a peer holds it. One numbered
 // at or past this run's that says something else is a previous run's, which
-// peers keep over this run's until the next one is numbered past it. Past the
-// cut-over only one signed by ML-DSA counts: a forged one could number it
-// where no later one passes.
+// peers keep over this run's until the next one is numbered past it. Only
+// one signed by ML-DSA counts: a forged one could number it where no later
+// one passes.
 func (d *Daemon) ownEchoed(e gossip.Endpoint) {
 	d.mu.Lock()
 	behind := e.Seq >= d.seq && (d.signed == nil || !d.signed.SameAs(&e))
-	mldsa := d.mldsa
 	d.mu.Unlock()
-	if !behind || e.Verify() != nil {
-		return
-	}
-	if key := d.identity.SigningKey(); mldsa && e.VerifyPQ(&key) != nil {
+	if key := d.identity.SigningKey(); !behind || e.Verify() != nil || e.VerifyPQ(&key) != nil {
 		return
 	}
 	d.mu.Lock()

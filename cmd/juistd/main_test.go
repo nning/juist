@@ -188,8 +188,8 @@ func TestTheStartReportSpeaksLikeTheCLI(t *testing.T) {
 		{ipc.Status{Derived: ipc.Derived{SelfName: "laptop"}}, "juist0", []string{"juistd: laptop ("}, []string{"hint: juist create, or juist join CODE"}},
 		{ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", NotMember: true}}, "juist0",
 			[]string{`network "home"`}, []string{"warning: not a member", "hint: rejoin with a new invite"}},
-		{ipc.Status{InNetwork: true, SchemaAlarm: "schema 9", Addrs: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}, ListenPort: 41643, Derived: ipc.Derived{NetworkName: "home", Alarm: "fork"}}, "",
-			[]string{"overlay     198.18.0.1", "device      none", "udp/41643"}, []string{"warning: schema 9", "warning: fork"}},
+		{ipc.Status{InNetwork: true, SchemaAlarm: "schema 19", Addrs: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}, ListenPort: 41643, Derived: ipc.Derived{NetworkName: "home", Alarm: "fork"}}, "",
+			[]string{"overlay     198.18.0.1", "device      none", "udp/41643"}, []string{"warning: schema 19", "warning: fork"}},
 		{ipc.Status{InNetwork: true, StartError: "open /dev/net/tun: permission denied", Derived: ipc.Derived{NetworkName: "home"}}, "juist0",
 			nil, []string{"warning: tunnels cannot start yet, retrying: open", fmt.Sprintf("hint: "+permHint, "juist0")}},
 	} {

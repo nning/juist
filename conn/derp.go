@@ -40,6 +40,11 @@ type Relay struct {
 	// Name, where set, is a public DNS name the relay also serves on
 	// 443/tcp, resolved in DNS and verified by WebPKI rather than the pin.
 	Name string
+
+	// Own says the relay is this device's, which it reaches first at the
+	// addresses this host holds: behind a NAT that does not hairpin, its own
+	// public address answers it nothing.
+	Own bool
 }
 
 // HTTPSPort is where a relay's [Relay.Name] is served.
@@ -83,6 +88,11 @@ func derpMap(relays []Relay, stun []string, httpsOnly bool, local Networks) (*ta
 			RegionName: r.HostName,
 		}
 		ordered := relayDialOrder(r.Addrs, local)
+		if r.Own {
+			slices.SortStableFunc(ordered, func(a, b netip.AddrPort) int {
+				return boolRank(!local.holds(a.Addr())) - boolRank(!local.holds(b.Addr()))
+			})
+		}
 		public := slices.DeleteFunc(slices.Clone(ordered), func(ap netip.AddrPort) bool { return isPrivateAddr(ap.Addr()) })
 		if !httpsOnly {
 			reg.Nodes = pinnedNodes(r, ordered, 0)
@@ -241,6 +251,18 @@ func (n Networks) equal(o Networks) bool {
 	return slices.Equal(n.Prefixes, o.Prefixes) && slices.Equal(n.Public, o.Public)
 }
 
+// holds reports whether a is one of this host's own addresses.
+func (n Networks) holds(a netip.Addr) bool {
+	return slices.ContainsFunc(n.Prefixes, func(p netip.Prefix) bool { return p.Addr() == a })
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // onLink reports whether a is on one of n's networks and none of n's own
 // addresses: another host's on a shared link, never one this host holds,
 // as every Docker host holds 172.17.0.1.
@@ -342,7 +364,7 @@ func sameRelays(a, b []Relay) bool {
 	}
 	for i := range a {
 		if a[i].Region != b[i].Region || a[i].HostName != b[i].HostName ||
-			a[i].STUNPort != b[i].STUNPort || a[i].CertHash != b[i].CertHash || a[i].Name != b[i].Name ||
+			a[i].STUNPort != b[i].STUNPort || a[i].CertHash != b[i].CertHash || a[i].Name != b[i].Name || a[i].Own != b[i].Own ||
 			!slices.Equal(a[i].Addrs, b[i].Addrs) {
 			return false
 		}

@@ -93,7 +93,7 @@ func (n *network) addNode(name string) types.NodeRecord {
 	if err != nil {
 		n.t.Fatalf("AddNode: %v", err)
 	}
-	if err := aum.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
+	if err := aum.Sign(n.admin); err != nil {
 		n.t.Fatalf("signing: %v", err)
 	}
 	if err := n.auth.Inform(aum); err != nil {
@@ -270,7 +270,7 @@ func TestMissingAnchorTargetRefusesToOpen(t *testing.T) {
 
 // TestLostRecordsDoNotRegressTheEpoch is the case the epoch floor exists for on
 // the storage side: if records vanish, the node refuses to serve the older
-// state they resolve to.
+// state they resolve to, and says why.
 func TestLostRecordsDoNotRegressTheEpoch(t *testing.T) {
 	n := newNetwork(t)
 	a := n.addNode("alpha")
@@ -283,8 +283,12 @@ func TestLostRecordsDoNotRegressTheEpoch(t *testing.T) {
 		t.Fatalf("removing the head record: %v", err)
 	}
 	n.reopen()
-	if _, err := log.Open(n.store); err == nil {
-		t.Fatal("served a shorter chain after records were lost")
+	auth, err := log.Open(n.store)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := auth.TrustedState(); err == nil || auth.Rollback() == nil {
+		t.Fatalf("served a shorter chain after records were lost: %v", err)
 	}
 }
 
@@ -321,7 +325,7 @@ func TestCompactionRemovesFilesAndSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	if err := cp.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
+	if err := cp.Sign(n.admin); err != nil {
 		t.Fatalf("signing: %v", err)
 	}
 	if err := n.auth.Inform(cp); err != nil {
@@ -489,7 +493,7 @@ func TestStagingFollowsNoLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := aum.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
+	if err := aum.Sign(n.admin); err != nil {
 		t.Fatal(err)
 	}
 	precious := filepath.Join(t.TempDir(), "precious")
@@ -545,7 +549,7 @@ func TestABatchCutShortIsFinishedAtOpen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := bump.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
+		if err := bump.Sign(n.admin); err != nil {
 			t.Fatal(err)
 		}
 		if err := n.auth.Inform(bump); err != nil {
@@ -562,7 +566,7 @@ func TestABatchCutShortIsFinishedAtOpen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := rec.SignUnder(n.admin, n.auth.State().Schema()); err != nil {
+		if err := rec.Sign(n.admin); err != nil {
 			t.Fatal(err)
 		}
 		st, err := b.Dry(&rec)

@@ -52,7 +52,7 @@ func FuzzBeaconHandle(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	ep := gossip.Endpoint{Identity: priv.Public(), Disco: gossip.DiscoKey{4, 2}, GossipPort: 4001, Seq: 1,
+	ep := gossip.Endpoint{Identity: priv.Public(), Disco: gossip.DiscoKey{4, 2}, GossipPort: 4001, Seq: 1, Schema: types.CurrentSchema,
 		Addrs: []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41641")}}
 	if err := ep.Sign(priv); err != nil {
 		f.Fatal(err)

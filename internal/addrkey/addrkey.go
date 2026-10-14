@@ -124,8 +124,8 @@ func wrapNonce(owner types.Identity, id ID) (nonce, ad []byte) {
 	return h[:chacha20poly1305.NonceSizeX], ad
 }
 
-// Seal seals addrs under k, in [aead]'s format. The nonce follows from the
-// key and the addresses, so the same addresses seal alike and a renewed
+// Seal seals addrs under k, in [aead]'s format. The nonce follows from a
+// subkey of k and the addresses, so the same addresses seal alike and a renewed
 // announcement reads as nothing new.
 func Seal(k Key, addrs []netip.AddrPort) ([]byte, error) {
 	body, err := cbor.Marshal(addrs)
@@ -133,7 +133,11 @@ func Seal(k Key, addrs []netip.AddrPort) ([]byte, error) {
 		return nil, fmt.Errorf("addrkey: encoding: %w", err)
 	}
 	a, _ := chacha20poly1305.NewX(k[:])
-	mac := hmac.New(sha256.New, k[:])
+	nk, err := hkdf.Key(sha256.New, k[:], nil, "juist/addr-nonce/v1", 32)
+	if err != nil {
+		return nil, fmt.Errorf("addrkey: deriving: %w", err)
+	}
+	mac := hmac.New(sha256.New, nk)
 	mac.Write(body)
 	out := binary.BigEndian.AppendUint64(nil, uint64(k.ID()))
 	out = append(out, mac.Sum(nil)[:aead.NonceLen]...)

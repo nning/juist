@@ -43,11 +43,9 @@ func TestEveryKindIsDescribed(t *testing.T) {
 		types.KindSetDomain:         {Domain: &name},
 		types.KindSetPublished: {Subject: &id, Publish: &types.PublishGrant{
 			Names: []types.PublishedName{{Label: "immich", Port: 443}}}},
-		types.KindRenameNode:      {Subject: &id, NodeName: &name},
-		types.KindDisable:         {Secret: &types.DisablementSecret{1}},
-		types.KindSetPolicy:       {Policy: &types.Policy{}},
-		types.KindSetSigningKeys:  {Signing: &types.SigningKeys{Members: []types.MemberKey{{Identity: id}}}},
-		types.KindSetAdminSigning: {Signing: &types.SigningKeys{Members: []types.MemberKey{{Identity: id}}}},
+		types.KindRenameNode: {Subject: &id, NodeName: &name},
+		types.KindDisable:    {Secret: &types.DisablementSecret{1}},
+		types.KindSetPolicy:  {Policy: &types.Policy{}},
 	}
 	if !changesAuthority(&types.AUM{Kind: types.Kind(255)}) {
 		t.Error("a kind not decided on is approved without the log")

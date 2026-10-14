@@ -265,7 +265,7 @@ func TestAServiceForMembersGoesToNoPublicName(t *testing.T) {
 	withheld := "warning: not serving photos.pub.example.org, its service meant for members alone: the log has the name public"
 	mustContain(t, vps.mustRun("publish", "add", "photos", "127.0.0.1:2342", "--members"), withheld,
 		"hint: an admin publishes it: juist publish add vps photos.pub.example.org --members")
-	mustContain(t, vps.mustRun("status"), withheld)
+	mustContain(t, vps.mustRun("health"), withheld)
 	mustContain(t, vps.mustRun("publish", "add", "photos", "127.0.0.1:2342"), withheld)
 	if out := vps.mustRun("publish", "add", "photos", "127.0.0.1:2342", "--members=false"); strings.Contains(out, withheld) {
 		t.Errorf("--members=false still held it back:\n%s", out)

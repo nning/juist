@@ -15,138 +15,22 @@ import "fmt"
 // prevent.
 type SchemaVersion uint16
 
-// CurrentSchema is the schema this build implements. Zero is the schema frozen
-// at M3b, so it is absent from every encoding and costs nothing until there is
-// a second one.
-//
-// Version numbers are the numbers, not the project's release names: there is
-// no "v1 schema", only schema 0, schema 1, and so on.
-//
-// Schema 1 adds how many admin devices must vouch for a node's view before it
-// counts as fresh ([KindSetVouchers], and the state's [Snapshot.Vouchers]),
-// and requires an identity rotation to be signed by the old key as well as
-// the new one.
-//
-// Schema 2 adds no field, only a rule of fork choice: taking a device's admin
-// role away, and raising the vouching threshold, count as revocations, as
-// removing a device does. Both withdraw vouching authority, and a concurrent
-// change must not orphan them on its hash.
-//
-// Schema 3 lets admin keys belong to a holder, a person whose keys cast one
-// vote between them ([AdminKey.Holder], [KindSetHolder]).
-//
-// Schema 4 assigns overlay IPv4 addresses from [OverlayV4] instead of
-// [CGNAT], which Tailscale owns on any host running it, or from a prefix the
-// network chose at genesis ([Snapshot.V4Prefix]). Addresses assigned before
-// the upgrade stay valid.
-//
-// Schema 5 moves overlay IPv4 addresses after admission: the network to
-// another prefix ([KindRenumberNetwork]) or one member to another address
-// ([KindRenumberNode]), each keeping the addresses it replaces live until a
-// deadline ([NodeRecord.Retiring], [Snapshot.V4Retiring]).
-//
-// Schema 6 renames the network ([KindRenameNetwork]). The name is a label:
-// the genesis hash stays what identifies the network.
-//
-// Schema 7 gives admin keys an encryption key ([AdminKey.Recipient],
-// [KindSetAdminRecipient]), which changes waiting for their votes are sealed
-// to.
-//
-// Schema 8 points public DNS names at members ([NodeRecord.Names],
-// [KindSetNodeNames]), which members that accept them resolve to the
-// member's overlay addresses.
-//
-// Schema 9 publishes members' services through an ingress: the role
-// [RoleIngress], the network's public domain ([Snapshot.Domain],
-// [KindSetDomain]) and a member's published names under it
-// ([NodeRecord.Published], [KindSetPublished]).
-//
-// Schema 10 renames members ([KindRenameNode]).
-//
-// Schema 11 lets a published name carry a public TCP port
-// ([PublishedName.Public]), which every ingress passes on by port alone.
-//
-// Schema 12 adds no record field: it lets a relay's announcement name the
-// public DNS name it serves on 443/tcp too, which older builds refuse.
-//
-// Schema 13 adds the network's access policy ([KindSetPolicy],
-// [Snapshot.Policy]).
-//
-// Schema 14 adds no record field: every pair of members mixes a preshared
-// key into its WireGuard handshakes, and announcements name what it needs,
-// which older builds refuse.
-//
-// Schema 15 publishes names for members alone ([PublishedName.Members]),
-// which the access policy names as destinations ([PolicyRefs.Names]).
-//
-// Schema 16 adds no record field: announcements in the DHT, at a relay and
-// on the LAN are sealed without their epoch and padded, and announcements
-// name the newest schema their build implements, which older builds refuse.
-//
-// Schema 17 caps a member's name bytes ([MaxNameBytes]); members announce
-// ML-DSA keys and admin keys register theirs ([KindSetAdminSigning]).
-//
-// Schema 18 signs by ML-DSA alone. Only [KindSetSigningKeys] reaches it.
-const CurrentSchema SchemaVersion = 18
+// CurrentSchema is the schema this build implements.
+const CurrentSchema SchemaVersion = 19
 
-// SchemaVouchers is the first schema with a vouching threshold.
-const SchemaVouchers SchemaVersion = 1
+// SchemaSignedRotation is the first schema in which an identity rotation
+// names the new signing key in what its signers sign ([AUM.NewSigning]); below
+// it, identities do not rotate.
+const SchemaSignedRotation SchemaVersion = 19
 
-// SchemaRevokingRoles is the first schema in which withdrawing vouching
-// authority is a revocation for fork choice.
-const SchemaRevokingRoles SchemaVersion = 2
+// SchemaContentForkChoice is the first schema in which fork choice orders
+// siblings by [AUM.SigHash], not by which copy a node holds, and counts a key
+// as a branch's signer only where the record needed its signature.
+const SchemaContentForkChoice SchemaVersion = 19
 
-// SchemaHolders is the first schema in which admin keys have holders.
-const SchemaHolders SchemaVersion = 3
-
-// SchemaOverlayV4 is the first schema assigning overlay IPv4 addresses from
-// [OverlayV4].
-const SchemaOverlayV4 SchemaVersion = 4
-
-// SchemaRenumber is the first schema in which overlay IPv4 addresses move.
-const SchemaRenumber SchemaVersion = 5
-
-// SchemaRename is the first schema in which the network's name changes.
-const SchemaRename SchemaVersion = 6
-
-// SchemaSealing is the first schema in which admin keys have encryption keys.
-const SchemaSealing SchemaVersion = 7
-
-// SchemaNames is the first schema in which members answer for public names.
-const SchemaNames SchemaVersion = 8
-
-// SchemaPublish is the first schema in which members publish services.
-const SchemaPublish SchemaVersion = 9
-
-// SchemaRenameNode is the first schema in which a member's name changes.
-const SchemaRenameNode SchemaVersion = 10
-
-// SchemaTCP is the first schema in which a published name has a public TCP
-// port.
-const SchemaTCP SchemaVersion = 11
-
-// SchemaRelayName is the first schema in which a relay announces a public
-// name on 443/tcp.
-const SchemaRelayName SchemaVersion = 12
-
-// SchemaPolicy is the first schema with an access policy.
-const SchemaPolicy SchemaVersion = 13
-
-// SchemaPQ is the first schema in which tunnels carry preshared keys.
-const SchemaPQ SchemaVersion = 14
-
-// SchemaMembers is the first schema with names published for members alone.
-const SchemaMembers SchemaVersion = 15
-
-// SchemaPadded is the first schema in which discovery items are padded and
-// show no epoch, and announcements name their build's schema.
-const SchemaPadded SchemaVersion = 16
-
-// SchemaSigning is the first schema in which members announce ML-DSA keys and
-// a member's names are capped by bytes.
-const SchemaSigning SchemaVersion = 17
-
-// SchemaMLDSA is the first schema signed by ML-DSA alone.
-const SchemaMLDSA SchemaVersion = 18
+// MinSchema is the lowest schema this build reads, where every record is
+// signed by ML-DSA alone. Networks below it moved up with M17's build; the
+// rules of schemas 0 to 17 are in git's history and docs/05-roadmap.md.
+const MinSchema SchemaVersion = 18
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

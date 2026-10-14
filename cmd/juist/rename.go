@@ -39,9 +39,6 @@ name follow the name; keys, addresses, roles and public names stay.`}
 			return fmt.Errorf("another device is named %q already", n.Name)
 		}
 	}
-	if state.Schema() < types.SchemaRenameNode {
-		return needsUpgrade("renaming a device")
-	}
 	if target.HasRole(types.RolePublish) {
 		renamed := target.Clone()
 		renamed.Name = name

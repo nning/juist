@@ -402,7 +402,7 @@ func TestNonMemberIsNeverAPeer(t *testing.T) {
 	m := startMesh(t, 3)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
 
-	outsider := newDevice(t, "outsider", netip.AddrFrom4([4]byte{100, 64, 7, 7}))
+	outsider := newDevice(t, "outsider", netip.AddrFrom4([4]byte{198, 18, 7, 7}))
 	// Give it the strongest hand it could have short of the log: a correctly
 	// signed announcement, handed straight to a member's daemon, skipping
 	// discovery and the group secret entirely.
@@ -439,13 +439,13 @@ func TestNewMemberJoinsAConvergedMesh(t *testing.T) {
 	m := startMesh(t, 2)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
 
-	joiner := newDevice(t, "joiner", netip.AddrFrom4([4]byte{100, 64, 0, 9}))
+	joiner := newDevice(t, "joiner", netip.AddrFrom4([4]byte{198, 18, 0, 9}))
 	admin := m.nodes[0]
 	add, err := admin.auth.Builder().AddNode(joiner.record, m.nw.sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.SignUnder(m.nw.admin, admin.auth.State().Schema()); err != nil {
+	if err := add.Sign(m.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := admin.d.Inform([]types.AUM{add}); err != nil {
@@ -570,12 +570,12 @@ func TestAPeerThatRotatedItsIdentityStaysAPeer(t *testing.T) {
 	}
 	peer.d.Endpoints().Add(e)
 
-	rec, err := peer.auth.Builder().RotateIdentity(rotating.id(), fresh.Public(), m.nw.sealer())
+	rec, err := peer.auth.Builder().RotateIdentity(rotating.id(), fresh.Public(), fresh.SigningKey(), m.nw.sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []types.PrivateIdentity{rotating.dev.identity, fresh, m.nw.admin} {
-		if err := rec.SignUnder(k, peer.auth.State().Schema()); err != nil {
+		if err := rec.Sign(k); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -647,7 +647,7 @@ func TestAFarewellIsOnlyForTheRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bump.SignUnder(m.nw.admin, admin.auth.State().Schema()); err != nil {
+	if err := bump.Sign(m.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if told := admin.d.farewell(t.Context(), []types.AUM{bump}); len(told) != 0 {
@@ -673,4 +673,25 @@ func TestPingAnswersWithTheRoundTrip(t *testing.T) {
 	if _, err := a.d.Ping(ctx, a.id()); !errors.Is(err, errNotInstalled) {
 		t.Errorf("pinging itself: %v, want %v", err, errNotInstalled)
 	}
+}
+
+// Each device lists the others with the newest schema their juist
+// implements, as their announcements say, so a stale build stands out.
+func TestDevicesNameTheirBuild(t *testing.T) {
+	m := startMesh(t, 2)
+	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
+	waitFor(t, 10*time.Second, "each device to list the other's build", func() bool {
+		for _, n := range m.nodes {
+			devs := n.d.Status().Devices
+			if len(devs) != 2 {
+				return false
+			}
+			for _, d := range devs {
+				if d.Build != types.CurrentSchema {
+					return false
+				}
+			}
+		}
+		return true
+	})
 }

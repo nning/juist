@@ -205,21 +205,6 @@ func effect(aum *types.AUM, state *log.State, now int64) []string {
 		add("rotates the network's group secret")
 	case types.KindSchemaUpgrade:
 		add("moves the network to record schema %d; devices on older builds stop there", *aum.Schema)
-	case types.KindSetAdminSigning:
-		id := aum.Signing.Members[0].Identity
-		name := "the admin key " + id.ShortString()
-		if state != nil {
-			if k, ok := state.Admin(id); ok {
-				name = orDash(keyPerson(k)) + "'s admin key " + id.ShortString()
-				if m := keyMachine(k); m != "" {
-					name += " on " + m
-				}
-			}
-		}
-		add("gives %s its quantum-safe signing key, for the cut-over to ML-DSA", name)
-	case types.KindSetSigningKeys:
-		add("gives %s a quantum-safe signing key", count(len(aum.Signing.Members), "device"))
-		add("signs every change by ML-DSA from then on, for good, at record schema %d", types.SchemaMLDSA)
 	case types.KindSetVouchers:
 		if state != nil {
 			add("requires %d vouchers, not %d", *aum.Vouchers, max(state.Vouchers(), 1))
@@ -463,8 +448,6 @@ var kindChangesAuthority = map[types.Kind]bool{
 	types.KindRenameNode:        false,
 	types.KindDisable:           true,
 	types.KindSetPolicy:         false,
-	types.KindSetSigningKeys:    true,
-	types.KindSetAdminSigning:   true,
 }
 
 // policyEffect is the policy p as a diff against the one in state, with the

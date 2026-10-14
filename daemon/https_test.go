@@ -56,10 +56,10 @@ func (b *bound) took() []netip.Addr {
 }
 
 // namedRelayFixture is a member granted the relay role whose operator named
-// its relay, in a network founded at schema.
-func namedRelayFixture(t *testing.T, schema types.SchemaVersion) (*reconcileFixture, *bound) {
+// its relay.
+func namedRelayFixture(t *testing.T) (*reconcileFixture, *bound) {
 	t.Helper()
-	nw := newNetworkMutated(t, 3, func(nw *network) { nw.schema = schema })
+	nw := newNetwork(t, 3)
 	b := &bound{}
 	f := newReconcileFixtureOn(t, nw, func(o *Options) {
 		o.RelayName, o.ListenHTTPS = testRelayName, b.listen
@@ -72,31 +72,11 @@ func namedRelayFixture(t *testing.T, schema types.SchemaVersion) (*reconcileFixt
 	return f, b
 }
 
-// A relay's name enters its announcement once the network is at the schema
-// every member then reads it at: before, an older member would refuse the
-// whole announcement, and the relay with it.
-func TestARelaysNameIsAnnouncedFromItsSchema(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.SchemaTCP)
+func TestARelaysNameIsAnnounced(t *testing.T) {
+	f, _ := namedRelayFixture(t)
 	e, ok := f.d.Announcement()
-	if !ok || e.Relay == nil || e.Relay.Name != "" {
-		t.Fatalf("at %v the announcement's relay is %+v", types.SchemaTCP, e.Relay)
-	}
-	if h := f.d.Status().HTTPS; h == nil || !strings.Contains(h.NotAnnounced, "schema 11") {
-		t.Errorf("the status does not say why the name is not announced: %+v", h)
-	}
-	up, err := f.auth.Builder().SchemaUpgrade(types.SchemaRelayName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := up.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.d.Inform([]types.AUM{up}); err != nil {
-		t.Fatal(err)
-	}
-	e, ok = f.d.Announcement()
 	if !ok || e.Relay == nil || e.Relay.Name != testRelayName {
-		t.Fatalf("at %v the announcement's relay is %+v", types.SchemaRelayName, e.Relay)
+		t.Fatalf("the announcement's relay is %+v", e.Relay)
 	}
 	if err := e.Verify(); err != nil {
 		t.Fatal(err)
@@ -111,7 +91,7 @@ func TestARelaysNameIsAnnouncedFromItsSchema(t *testing.T) {
 // holds 443, it gives them back and the ingress hands the name on to it, at
 // a socket only the ingress's user is answered at.
 func TestTheRelayTakes443UnlessTheIngressDoes(t *testing.T) {
-	f, b := namedRelayFixture(t, types.CurrentSchema)
+	f, b := namedRelayFixture(t)
 	scanned, _ := f.d.underlayEndpoints()
 	if len(scanned) == 0 {
 		t.Skip("this host has no address a member could reach")
@@ -195,7 +175,7 @@ func rendezvousKeyOf(t *testing.T, f *reconcileFixture, id types.Identity) (uint
 // one found in the DHT, but no other member's under its key, nor one sealed
 // under another epoch.
 func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f, _ := namedRelayFixture(t)
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -235,14 +215,14 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 			t.Fatal(err)
 		}
 		e := gossip.Endpoint{Identity: dev.record.Identity, Disco: gossip.DiscoKey(disco), GossipPort: 41644, Seq: seq,
-			HomeRelay: 7}
+			HomeRelay: 7, Schema: types.CurrentSchema}
 		if err := e.SignPQ(dev.identity); err != nil {
 			t.Fatal(err)
 		}
 		return e
 	}
 	seal := func(e gossip.Endpoint) []byte {
-		b, err := dht.SealAnnouncement(secret, epoch, e, true)
+		b, err := dht.SealAnnouncement(secret, epoch, e)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -254,7 +234,7 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 	if rv.Put([32]byte{1, 2, 3}, seal(announce(two, 5))) {
 		t.Error("the relay took an announcement under a key no member is published under")
 	}
-	if other, err := dht.SealAnnouncement(secret, epoch+1, announce(two, 5), true); err == nil && rv.Put(keyTwo, other) {
+	if other, err := dht.SealAnnouncement(secret, epoch+1, announce(two, 5)); err == nil && rv.Put(keyTwo, other) {
 		t.Error("the relay took an announcement sealed under an epoch it does not hold")
 	}
 	if rv.Put(keySelf, seal(announce(f.self, 5))) {
@@ -265,9 +245,6 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 	}
 	if e, ok := f.d.endpoints.Get(two.record.Identity); !ok || e.Seq != 5 || e.HomeRelay != 7 {
 		t.Errorf("the relay holds %+v for the member", e)
-	}
-	if unpadded, err := dht.SealAnnouncement(secret, epoch, announce(two, 6), false); err != nil || !rv.Put(keyTwo, unpadded) {
-		t.Errorf("the relay refused an announcement sealed as an older build seals it: %v", err)
 	}
 
 	// A device removed since holds the older epochs, under which the relay
@@ -292,7 +269,7 @@ func TestTheRendezvousAnswersForMembersAlone(t *testing.T) {
 // public key is in every put and get of it, so a stranger watching the DHT
 // would learn it and could ask the relay.
 func TestTheRendezvousKeyIsNoneTheDHTShows(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f, _ := namedRelayFixture(t)
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +420,7 @@ func (c *countingCA) count() int {
 // none is held: the relay does, not again before the next order is due, the
 // gap doubling. A CA limits orders, and a handshake would wait on one.
 func TestARelayOrdersItsCertificateSparingly(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f, _ := namedRelayFixture(t)
 	now := time.Now()
 	f.d.clock = func() time.Time { return now }
 	ca := &countingCA{}
@@ -497,7 +474,7 @@ func TestARelayOrdersItsCertificateSparingly(t *testing.T) {
 // Once a certificate is held, an order that fails for another client, as an
 // RSA one autocert orders anew, locks out none: the held one is asked for.
 func TestAFailedOrderLocksNoClientOutOfAHeldCertificate(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f, _ := namedRelayFixture(t)
 	ca := &countingCA{issued: 1}
 	f.d.relayCerts = ca
 	hello := ecdsaHello()
@@ -518,7 +495,7 @@ func ecdsaHello() *tls.ClientHelloInfo {
 // A hello taking no ECDSA certificate orders nothing, though one is held:
 // autocert would order an RSA certificate for it, and anyone can send one.
 func TestAHelloWithoutECDSAOrdersNothing(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f, _ := namedRelayFixture(t)
 	ca := &countingCA{issued: 1}
 	f.d.relayCerts = ca
 	f.d.orderIfDue(t.Context())
@@ -531,49 +508,6 @@ func TestAHelloWithoutECDSAOrdersNothing(t *testing.T) {
 	}
 	if n := ca.count(); n != 1 {
 		t.Errorf("%d asks of the CA, want the relay's own order alone", n)
-	}
-}
-
-// Below the schema that has it, an announcement naming a relay is refused,
-// whoever signed it: relayed on, it would have older members refuse every
-// frame that carries it.
-func TestARelayNameIsRefusedBelowItsSchema(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.SchemaTCP)
-	var other *device
-	for _, d := range f.nw.devices {
-		if d.record.Identity != f.self.record.Identity {
-			other = d
-			break
-		}
-	}
-	named := func(seq uint64) gossip.Endpoint {
-		e, err := endpointFor(other, 41642)
-		if err != nil {
-			t.Fatal(err)
-		}
-		e.Seq, e.Epoch, e.PairStore = seq, 0, 0
-		e.Relay = &gossip.RelayInfo{Port: 4443, Cert: make([]byte, gossip.RelayCertSize),
-			HostName: "abcdefgh.relay.juist.invalid", Name: "relay.example.org"}
-		if err := e.SignPQ(other.identity); err != nil {
-			t.Fatal(err)
-		}
-		return e
-	}
-	if f.d.endpoints.Add(named(2)) {
-		t.Errorf("at %v an announcement naming a relay was taken", types.SchemaTCP)
-	}
-	up, err := f.auth.Builder().SchemaUpgrade(types.SchemaRelayName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := up.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.d.Inform([]types.AUM{up}); err != nil {
-		t.Fatal(err)
-	}
-	if !f.d.endpoints.Add(named(3)) {
-		t.Errorf("at %v an announcement naming a relay was refused", types.SchemaRelayName)
 	}
 }
 
@@ -671,7 +605,7 @@ func TestTheHandOffTakesTheIngressAlone(t *testing.T) {
 // it is: a member announcing another relay's name gets nothing by it, in the
 // data plane or in an invite, and the relay keeps its own.
 func TestARelaysNameIsTakenOnceItsServerSaysWhoseItIs(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f, _ := namedRelayFixture(t)
 	one, two := f.nw.devices[1], f.nw.devices[2]
 	f.nw.setRoles(t, f, one.record.Identity, types.RoleRelayCapable)
 	f.nw.setRoles(t, f, two.record.Identity, types.RoleRelayCapable)
@@ -730,7 +664,7 @@ func TestTheRelayOrdersOnceTheIngressHandsItsNameOn(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("as root, there is no ingress user to tell apart")
 	}
-	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f, _ := namedRelayFixture(t)
 	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable, types.RoleIngress)
 	ca := &countingCA{issued: 1}
 	f.d.relayCerts = ca
@@ -746,7 +680,7 @@ func TestTheRelayOrdersOnceTheIngressHandsItsNameOn(t *testing.T) {
 // A name one relay alone claims goes into an invite unasked, as the host may
 // reach no name, but into the data plane once its server says whose it is.
 func TestAnInviteNamesARelayItCouldNotAsk(t *testing.T) {
-	f, _ := namedRelayFixture(t, types.CurrentSchema)
+	f, _ := namedRelayFixture(t)
 	one := f.nw.devices[1]
 	f.nw.setRoles(t, f, one.record.Identity, types.RoleRelayCapable)
 	f.d.askWhoami = func(context.Context, string) ([32]byte, error) { return [32]byte{}, errors.New("no answer") }

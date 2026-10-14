@@ -69,6 +69,10 @@ func (d *Daemon) renumberingAt(head types.Hash) (*renumbering, types.Hash, error
 	r := &renumbering{head: head, since: map[types.Hash]bool{}, seen: map[types.Identity]bool{}}
 	d.authMu.Lock()
 	defer d.authMu.Unlock()
+	anchors, err := d.authority.Copies(d.authority.Anchor())
+	if err != nil {
+		return nil, types.Hash{}, err
+	}
 	h := head
 	for {
 		aum, err := d.storage.AUM(h)
@@ -77,7 +81,7 @@ func (d *Daemon) renumberingAt(head types.Hash) (*renumbering, types.Hash, error
 		}
 		r.since[h] = true
 		if aum.Kind == types.KindRenumberNetwork || aum.Kind == types.KindRenumberNode ||
-			aum.Prev == nil || h == d.authority.Anchor() {
+			aum.Prev == nil || slices.Contains(anchors, h) {
 			return r, h, nil
 		}
 		h = *aum.Prev

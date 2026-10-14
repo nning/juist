@@ -7,13 +7,13 @@ import (
 	"strings"
 )
 
-// CGNAT is the overlay IPv4 range before [SchemaOverlayV4] (RFC 6598). It is
-// Tailscale's too, and tailscaled drops packets from it that arrive on any
-// interface but its own, so juist cannot use it on a host running both.
+// CGNAT is Tailscale's IPv4 range (RFC 6598): tailscaled drops packets from it
+// that arrive on any interface but its own, so juist assigns no address there
+// unless a network chooses it as its own prefix.
 var CGNAT = netip.MustParsePrefix("100.64.0.0/10")
 
-// OverlayV4 is the overlay IPv4 range from [SchemaOverlayV4] on: RFC 2544's
-// benchmarking block, which no public network routes and neither LANs nor
+// OverlayV4 is the overlay IPv4 range of a network without a prefix of its
+// own: RFC 2544's benchmarking block, which no public network routes and neither LANs nor
 // Tailscale use. Unlike the v6 address a v4 one is assigned explicitly in the
 // record, since 17 host bits are too few for hash-derived addresses.
 var OverlayV4 = netip.MustParsePrefix("198.18.0.0/15")
@@ -54,32 +54,21 @@ func ValidateV4Prefix(p netip.Prefix) error {
 }
 
 // V4Range returns the range new overlay IPv4 addresses are assigned from: the
-// network's own prefix where it has one, else the schema's range.
-func V4Range(schema SchemaVersion, own *netip.Prefix) netip.Prefix {
-	switch {
-	case own != nil:
+// network's own prefix where it has one, else [OverlayV4].
+func V4Range(own *netip.Prefix) netip.Prefix {
+	if own != nil {
 		return *own
-	case schema >= SchemaOverlayV4:
-		return OverlayV4
 	}
-	return CGNAT
+	return OverlayV4
 }
 
-// V4Ranges returns every range an overlay IPv4 address may hold. Without a
-// prefix of its own, the upgrade to [SchemaOverlayV4] leaves existing members
-// their addresses.
-func V4Ranges(schema SchemaVersion, own *netip.Prefix) []netip.Prefix {
-	switch {
-	case own != nil:
-		return []netip.Prefix{*own}
-	case schema >= SchemaOverlayV4:
-		return []netip.Prefix{CGNAT, OverlayV4}
-	}
-	return []netip.Prefix{CGNAT}
+// V4Ranges returns every range an overlay IPv4 address may hold.
+func V4Ranges(own *netip.Prefix) []netip.Prefix {
+	return []netip.Prefix{V4Range(own)}
 }
 
-// IsOverlayV4 reports whether a lies in a range any schema assigns overlay
-// IPv4 addresses from, and so is never an underlay address.
+// IsOverlayV4 reports whether a lies in juist's or Tailscale's overlay IPv4
+// range, and so is never an underlay address.
 func IsOverlayV4(a netip.Addr) bool {
 	return CGNAT.Contains(a) || OverlayV4.Contains(a)
 }

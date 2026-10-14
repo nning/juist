@@ -156,7 +156,8 @@ status: Das Netz, dieses Telefon und alles, worum du dich kümmern solltest
 member: Ein Gerät, mit einem Ping durch den Tunnel
 {{< /screens >}}
 
-Die App zeigt, was `juist status` und `juist devices` auf einem Rechner zeigen (siehe
+Die App zeigt, was `juist status`, `juist health` und `juist devices` auf einem
+Rechner zeigen (siehe
 [Status und Geräte]({{< relref "docs/status" >}})):
 
 - Den Namen des Netzes und seinen Zustand, etwa **Verbunden**. Jeden

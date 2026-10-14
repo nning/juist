@@ -23,7 +23,7 @@ const (
 
 	// maxRecordBytesPerFrame is the byte budget a records frame's records
 	// and waiting changes may fill, leaving room for its announcements,
-	// leases and pair message, up to 1.74 MiB past the cut-over. A batch is
+	// leases and pair message, up to 1.74 MiB. A batch is
 	// truncated to it: at [types.MaxNodes] members an epoch record is ~750
 	// KiB, so a node far behind would otherwise be sent a batch that cannot
 	// be encoded at all.
@@ -34,7 +34,7 @@ const (
 	MaxRecordsPerFrame = 256
 
 	// MaxHashesPerFrame caps the "what I already hold" set in a hello. Past
-	// it two nodes stop converging: see docs/05-roadmap.md, M18.
+	// it two nodes stop converging: see docs/05-roadmap.md, M19.
 	MaxHashesPerFrame = 4096
 
 	// MaxEndpointsPerFrame caps the announcements one frame may carry: one
@@ -140,7 +140,7 @@ type frame struct {
 
 	// Pair is the sender's state of the exchange of a preshared key with
 	// the receiver, signed. Sent only to a peer whose announcement says it
-	// sets preshared keys: older builds refuse the field.
+	// sets preshared keys.
 	Pair *pairkey.Msg `cbor:"13,keyasint,omitempty"`
 }
 

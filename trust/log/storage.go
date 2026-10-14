@@ -34,8 +34,8 @@ type Storage interface {
 	// its content.
 	Add(aums ...types.AUM) error
 
-	// Delete removes records. Used only by compaction, after the anchor has
-	// advanced past them.
+	// Delete removes records: by compaction, after the anchor has advanced
+	// past them, and copies of a record that earn no place.
 	Delete(hashes ...types.Hash) error
 
 	// Hashes returns every stored record's hash. Compaction needs it to find
@@ -194,11 +194,20 @@ type overlay struct {
 	children map[types.Hash][]types.Hash
 }
 
+// newOverlay layers aums on base, leaving out those base holds and copies of
+// a record that earn no place beside those held ([earnsPlace]), unless
+// something in aums hangs from them.
 func newOverlay(base reader, aums []types.AUM) (*overlay, error) {
 	o := &overlay{
 		base:     base,
 		added:    make(map[types.Hash]types.AUM, len(aums)),
 		children: map[types.Hash][]types.Hash{},
+	}
+	parents := make(map[types.Hash]bool, len(aums))
+	for i := range aums {
+		if aums[i].Prev != nil {
+			parents[*aums[i].Prev] = true
+		}
 	}
 	for i := range aums {
 		if err := aums[i].StaticValidate(); err != nil {
@@ -214,12 +223,123 @@ func newOverlay(base reader, aums []types.AUM) (*overlay, error) {
 		if _, err := base.AUM(h); err == nil {
 			continue
 		}
+		if a.Prev != nil && !parents[h] {
+			held, err := copiesOf(o, a)
+			if err != nil {
+				return nil, err
+			}
+			if earns, err := earnsPlace(o, a, h, held); err != nil {
+				return nil, err
+			} else if !earns {
+				continue
+			}
+		}
 		o.added[h] = *a
 		if a.Prev != nil {
 			o.children[*a.Prev] = append(o.children[*a.Prev], h)
 		}
 	}
 	return o, nil
+}
+
+// earnsPlace reports whether a, hashing to h, earns a place beside others,
+// copies of it: it is one of the two lowest hashes, or carries a signature by
+// a key none of others carries, or is a checkpoint with fewer than
+// [maxCheckpointCopies] others. Copies of a record are thus bounded by its
+// signers, however many a key or a relay mints, while every node keeps the
+// lowest two it is shown, so their heads agree, and every key any copy brings.
+func earnsPlace(r reader, a *types.AUM, h types.Hash, others []types.Hash) (bool, error) {
+	// A peer may be anchored at any copy of a checkpoint, and refuses what a
+	// node that does not hold that copy sends it.
+	if a.Kind == types.KindCheckpoint && len(others)-count(others, h) < maxCheckpointCopies {
+		return true, nil
+	}
+	lower := 0
+	carried := map[types.Identity]bool{}
+	for _, c := range others {
+		if c == h {
+			continue
+		}
+		if c.Compare(h) < 0 {
+			lower++
+		}
+		aum, err := r.AUM(c)
+		if err != nil {
+			return false, fmt.Errorf("log: reading %v: %w", c, err)
+		}
+		for i := range aum.Signatures {
+			carried[aum.Signatures[i].KeyID] = true
+		}
+	}
+	if lower < 2 {
+		return true, nil
+	}
+	for i := range a.Signatures {
+		if !carried[a.Signatures[i].KeyID] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// maxCheckpointCopies is as many copies of a checkpoint as a store keeps
+// whatever they carry.
+const maxCheckpointCopies = 8
+
+func count(hashes []types.Hash, h types.Hash) int {
+	n := 0
+	for _, x := range hashes {
+		if x == h {
+			n++
+		}
+	}
+	return n
+}
+
+// pruneCopies deletes from st the copies of added records that no longer earn
+// a place beside the others ([earnsPlace]), highest hash first, keeping the
+// anchor and any copy something hangs from.
+func pruneCopies(st Storage, anchor types.Hash, added []types.AUM) error {
+	seen := map[types.Hash]bool{}
+	for i := range added {
+		a := &added[i]
+		if a.Prev == nil {
+			continue
+		}
+		copies, err := copiesOf(st, a)
+		if err != nil {
+			return err
+		}
+		if len(copies) <= 2 || seen[copies[0]] {
+			continue
+		}
+		seen[copies[0]] = true
+		for j := len(copies) - 1; j >= 2; j-- {
+			h := copies[j]
+			if h == anchor {
+				continue
+			}
+			if ch, err := st.Children(h); err != nil {
+				return err
+			} else if len(ch) > 0 {
+				continue
+			}
+			c, err := st.AUM(h)
+			if err != nil {
+				return err
+			}
+			if earns, err := earnsPlace(st, &c, h, copies); err != nil {
+				return err
+			} else if earns {
+				continue
+			}
+			if err := st.Delete(h); err != nil {
+				return err
+			}
+			copies = slices.Delete(copies, j, j+1)
+		}
+	}
+	return nil
 }
 
 func (o *overlay) AUM(h types.Hash) (types.AUM, error) {

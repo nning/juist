@@ -92,9 +92,7 @@ func (f *reconcileFixture) learn(t *testing.T, dev *device, port uint16) gossip.
 		Seq:        1,
 		Epoch:      f.auth.State().Epoch(),
 		PairStore:  1,
-	}
-	if f.auth.State().Schema() >= types.SchemaPadded {
-		e.Schema = types.CurrentSchema
+		Schema:     types.CurrentSchema,
 	}
 	if err := e.SignPQ(dev.identity); err != nil {
 		t.Fatal(err)
@@ -152,7 +150,7 @@ func TestMemberWithoutAnAnnouncementIsNotAPeer(t *testing.T) {
 // no peer entry and so nothing to handshake against.
 func TestAnnouncementAloneGrantsNothing(t *testing.T) {
 	f := newReconcileFixture(t, 2)
-	outsider := newDevice(t, "outsider", netip.AddrFrom4([4]byte{100, 64, 9, 9}))
+	outsider := newDevice(t, "outsider", netip.AddrFrom4([4]byte{198, 18, 9, 9}))
 	f.learn(t, outsider, 4009)
 
 	if err := f.d.Reconcile(); err != nil {
@@ -174,7 +172,7 @@ func TestAnnouncementAloneGrantsNothing(t *testing.T) {
 // delivers the record admitting it.
 func TestAnEarlyAnnouncementSurvivesUntilTheRecordArrives(t *testing.T) {
 	f := newReconcileFixture(t, 1)
-	joiner := newDevice(t, "joiner", netip.AddrFrom4([4]byte{100, 64, 0, 5}))
+	joiner := newDevice(t, "joiner", netip.AddrFrom4([4]byte{198, 18, 0, 5}))
 	f.learn(t, joiner, 4005)
 
 	// Several reconciles pass while the record is still in flight.
@@ -191,7 +189,7 @@ func TestAnEarlyAnnouncementSurvivesUntilTheRecordArrives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := add.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{add}); err != nil {
@@ -232,7 +230,7 @@ func TestRemovalDropsThePeer(t *testing.T) {
 func TestExpiredMembershipIsNotAPeer(t *testing.T) {
 	nw := newNetwork(t, 1)
 	// A second member whose membership expires an hour from the fixed clock.
-	expiring := newDevice(t, "expiring", netip.AddrFrom4([4]byte{100, 64, 0, 2}))
+	expiring := newDevice(t, "expiring", netip.AddrFrom4([4]byte{198, 18, 0, 2}))
 	base := time.Unix(1_700_000_000, 0)
 	expiring.record.Expiry = uint64(base.Add(time.Hour).Unix())
 
@@ -241,7 +239,7 @@ func TestExpiredMembershipIsNotAPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.SignUnder(nw.admin, auth.State().Schema()); err != nil {
+	if err := add.Sign(nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Inform(add); err != nil {
@@ -341,6 +339,55 @@ func TestForkAlarmDropsEveryPeer(t *testing.T) {
 	}
 	if st := f.d.Status(); !strings.Contains(st.Alarm, "fork alarm") {
 		t.Errorf("status alarm is %q, want it to mention the fork", st.Alarm)
+	}
+}
+
+// A branch this node applied that lost fork choice to one below its epoch floor
+// takes the mesh down and says so, rather than the node staying on the loser
+// and refusing what sync brings, the winner's removals included.
+func TestAForkSwitchBelowTheEpochFloorDropsEveryPeer(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	a, b := f.nw.devices[1], f.nw.devices[2]
+	f.learn(t, a, 4001)
+	f.learn(t, b, 4002)
+	winner, _ := f.nw.authorityFor(t)
+	var won []types.AUM
+	for _, id := range []types.Identity{a.record.Identity, b.record.Identity} {
+		rec := f.nw.removeNode(t, winner, id)
+		if err := winner.Inform(rec); err != nil {
+			t.Fatal(err)
+		}
+		won = append(won, rec)
+	}
+	for range 3 {
+		rec, err := f.auth.Builder().EpochBump(f.nw.sealer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rec.Sign(f.nw.admin); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Inform([]types.AUM{rec}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(f.mgr.snapshot()); got != 2 {
+		t.Fatalf("installed %d peers, want 2", got)
+	}
+
+	synced := (*logAdapter)(f.d).Inform(won)
+	if err := f.d.Reconcile(); err == nil {
+		t.Fatalf("%d peers stay up, alarm %q, after sync of the winning branch answered %v",
+			len(f.mgr.snapshot()), f.d.Status().Alarm, synced)
+	}
+	if synced != nil {
+		t.Fatalf("sync of the winning branch: %v", synced)
+	}
+	if got := len(f.mgr.snapshot()); got != 0 {
+		t.Fatalf("%d peers survived a rollback alarm", got)
+	}
+	if st := f.d.Status(); !strings.Contains(st.Alarm, "rollback alarm") {
+		t.Errorf("status alarm is %q, want it to name the rollback", st.Alarm)
 	}
 }
 
@@ -481,7 +528,7 @@ func TestMissingRespectsThePeersAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cp.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := cp.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{cp}); err != nil {
@@ -492,7 +539,7 @@ func TestMissingRespectsThePeersAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := grant.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := grant.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{grant}); err != nil {
@@ -532,17 +579,180 @@ func TestMissingRespectsThePeersAnchor(t *testing.T) {
 	}
 
 	// The mirror case: once this node compacts, a peer anchored at the genesis
-	// it no longer holds gets nothing — that peer is the one with history to
-	// offer.
+	// it no longer holds is offered what hangs from this node's anchor, which
+	// it takes where it holds the checkpoint's parent.
 	if _, err := f.auth.Compact(); err != nil {
 		t.Fatalf("compacting: %v", err)
 	}
-	batch, err = adapter.Missing(nil, f.nw.genesis.Hash())
+	batch, err = adapter.Missing([]types.Hash{f.nw.genesis.Hash()}, f.nw.genesis.Hash())
 	if err != nil {
 		t.Fatalf("Missing after compaction: %v", err)
 	}
-	if len(batch) != 0 {
-		t.Fatalf("a compacted node offered %d records below an anchor it does not hold", len(batch))
+	if len(batch) != 2 || batch[0].Hash() != cp.Hash() || batch[1].Hash() != grant.Hash() {
+		t.Fatalf("a compacted node offered %d records, not those from its anchor on", len(batch))
+	}
+}
+
+// A peer anchored at one copy of a checkpoint is offered the others, and
+// what hangs from them.
+func TestMissingOffersWhatHangsFromAnotherCopyOfThePeersAnchor(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	second, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	add, err := f.auth.Builder().AddAdminKey(types.AdminKey{Public: second.Public(), Votes: 1, Name: "second",
+		Signing: new(second.SigningKey()), Endorsement: second.Endorsement()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := add.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Inform([]types.AUM{add}); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := f.auth.Builder().Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cp.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	both := *cp.Clone()
+	if err := both.Sign(second); err != nil {
+		t.Fatal(err)
+	}
+	low, high := cp, both
+	if high.Hash().Compare(low.Hash()) < 0 {
+		low, high = high, low
+	}
+	onHigh, err := log.Bootstrap(log.NewMemStorage(), high)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := onHigh.Builder().SetNodeRoutes(f.nw.devices[1].record.Identity,
+		[]types.Role{types.RoleRelayCapable}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := grant.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Inform([]types.AUM{low, high, grant}); err != nil {
+		t.Fatal(err)
+	}
+
+	peerSt := log.NewMemStorage()
+	peer, err := log.Bootstrap(peerSt, low)
+	if err != nil {
+		t.Fatal(err)
+	}
+	have, err := peerSt.Hashes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (*logAdapter)(f.d).Missing(have, peer.Anchor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Inform(batch...); err != nil {
+		t.Fatalf("the peer refused the batch: %v", err)
+	}
+	if peer.Head() != grant.Hash() || f.auth.Head() != grant.Hash() {
+		t.Fatalf("the peer is at %v, this node at %v, want %v", peer.Head(), f.auth.Head(), grant.Hash())
+	}
+}
+
+// A peer anchored at a copy of a checkpoint above the two lowest, which
+// carries no key's signature they lack, is sent what it can take: this node,
+// anchored below, keeps that copy.
+func TestMissingServesAPeerAnchoredAtAThirdCopyOfACheckpoint(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	second, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	add, err := f.auth.Builder().AddAdminKey(types.AdminKey{Public: second.Public(), Votes: 1, Name: "second",
+		Signing: new(second.SigningKey()), Endorsement: second.Endorsement()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := add.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Inform([]types.AUM{add}); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := f.auth.Builder().Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copies []types.AUM
+	for _, keys := range [][]types.PrivateIdentity{{f.nw.admin}, {second}, {f.nw.admin, second}} {
+		c := *cp.Clone()
+		for _, k := range keys {
+			if err := c.Sign(k); err != nil {
+				t.Fatal(err)
+			}
+		}
+		copies = append(copies, c)
+	}
+	slices.SortFunc(copies, func(a, b types.AUM) int { return a.Hash().Compare(b.Hash()) })
+	if err := f.d.Inform(copies); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := f.auth.Builder().SetNodeRoutes(f.nw.devices[1].record.Identity,
+		[]types.Role{types.RoleRelayCapable}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := grant.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Inform([]types.AUM{grant}); err != nil {
+		t.Fatal(err)
+	}
+
+	peerSt := log.NewMemStorage()
+	peer, err := log.Bootstrap(peerSt, copies[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	have, err := peerSt.Hashes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := (*logAdapter)(f.d).Missing(have, peer.Anchor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Inform(batch...); err != nil {
+		t.Fatalf("the peer refused the batch: %v", err)
+	}
+	if peer.Head() != grant.Hash() {
+		t.Fatalf("the peer is at %v, want %v", peer.Head(), grant.Hash())
+	}
+}
+
+// Records the log holds already are no news to gossip, which relays news
+// alone.
+func TestRecordsTheLogHoldsAreNoNewsToGossip(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	grant, err := f.auth.Builder().SetNodeRoutes(f.nw.devices[1].record.Identity,
+		[]types.Role{types.RoleRelayCapable}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := grant.Sign(f.nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	adapter := (*logAdapter)(f.d)
+	if err := adapter.Inform([]types.AUM{grant}); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Inform([]types.AUM{grant}); !errors.Is(err, gossip.ErrNothingNew) {
+		t.Fatalf("a record held already: %v", err)
 	}
 }
 
@@ -601,10 +811,10 @@ func TestRotationAppliedElsewhereIsReportedStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A rotation needs the device's own signature as well as quorum.
-	if err := rec.SignUnder(f.self.identity, f.auth.State().Schema()); err != nil {
+	if err := rec.Sign(f.self.identity); err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -667,7 +877,7 @@ func TestRestartRecoversPastEpochs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bump.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := bump.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{bump}); err != nil {
@@ -780,6 +990,7 @@ func TestDiscoveryOfANonMemberDoesNotWakeTheLoop(t *testing.T) {
 		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("192.0.2.99:5001")},
 		GossipPort: 5001,
 		Seq:        1,
+		Schema:     types.CurrentSchema,
 	}
 	if err := nonMember.SignPQ(stranger); err != nil {
 		t.Fatal(err)
@@ -821,6 +1032,7 @@ func TestDiscoveryOfANonMemberDoesNotWakeTheLoop(t *testing.T) {
 		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("192.0.2.11:5002")},
 		GossipPort: 5002,
 		Seq:        1,
+		Schema:     types.CurrentSchema,
 	}
 	if err := memberEndpoint.SignPQ(member.identity); err != nil {
 		t.Fatal(err)
@@ -851,6 +1063,7 @@ func TestADuplicateDiscoKeyDropsOnlyTheColliders(t *testing.T) {
 		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("192.0.2.20:4002")},
 		GossipPort: 4002,
 		Seq:        1,
+		Schema:     types.CurrentSchema,
 	}
 	if err := copycat.SignPQ(attacker.identity); err != nil {
 		t.Fatal(err)
@@ -1008,7 +1221,7 @@ func TestALostAdmissionIsNamed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+		if err := rec.Sign(f.nw.admin); err != nil {
 			t.Fatal(err)
 		}
 		records = append(records, rec)
@@ -1028,5 +1241,108 @@ func TestALostRenameIsSaid(t *testing.T) {
 	got := describeLost(types.AUM{Kind: types.KindRenameNode, Subject: &id, NodeName: new("desk")}, "laptop")
 	if got != `the renaming of laptop to "desk"` {
 		t.Errorf("a lost rename is %q", got)
+	}
+}
+
+// learnHint hands the daemon e as a quantum computer forges it, signed by
+// Ed25519 alone, with change made, and checks it is held as a hint alone.
+func (f *reconcileFixture) learnHint(t *testing.T, dev *device, e gossip.Endpoint, change func(*gossip.Endpoint)) {
+	t.Helper()
+	h := e.Hint()
+	change(&h)
+	if err := h.Sign(dev.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(h); err != nil {
+		t.Fatal(err)
+	}
+	if !f.d.endpoints.IsHint(dev.record.Identity) {
+		t.Fatal("the forged announcement is not held as a hint alone")
+	}
+}
+
+// A hint alone naming another member's disco key, as forged, costs that
+// member nothing: it keeps its peer entry, and the hint's member gets none.
+func TestAHintAloneNamingAMembersDiscoKeyLeavesThatMembersPeer(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	member, forged := f.nw.devices[1], f.nw.devices[2]
+	full := f.learn(t, member, 7001)
+	e, err := endpointFor(forged, 7002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.learnHint(t, forged, e, func(h *gossip.Endpoint) { h.Seq, h.Disco = 2, full.Disco })
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	f.installed(t, 1)
+	for _, p := range f.mgr.snapshot() {
+		if p.NodeKey == conn.NodePublicFromRaw32([32]byte(forged.record.WireGuard)) {
+			t.Fatal("a hint alone naming another member's disco key got a peer entry")
+		}
+	}
+}
+
+// A member that restarted announces a new disco key, which reaches this
+// device by a hint alone until their tunnel is up, log sync running through
+// it: installed on the announcement's stale key, the two would never meet.
+// One whose tunnel is up on the announcement's key keeps it against a hint,
+// which may be forged, until it is found down.
+func TestANewerHintsDiscoKeyIsInstalledWhileItsMemberIsNotReached(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	restarted, up := f.nw.devices[1], f.nw.devices[2]
+	before := []gossip.Endpoint{f.learn(t, restarted, 7001), f.learn(t, up, 7002)}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	answering := f.installed(t, 2).Addrs[0].Addr()
+	f.mgr.mu.Lock()
+	f.mgr.answers = map[netip.Addr]bool{answering: true}
+	f.mgr.mu.Unlock()
+	f.d.refreshReach(t.Context())
+
+	var rerun []gossip.DiscoKey
+	for i, dev := range []*device{restarted, up} {
+		h := before[i].Hint()
+		_, k, err := conn.NewDiscoKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.Seq, h.Disco = 2, gossip.DiscoKey(k)
+		if err := h.Sign(dev.identity); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Learn(h); err != nil {
+			t.Fatal(err)
+		}
+		rerun = append(rerun, h.Disco)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	on := func(i int, k gossip.DiscoKey) bool { return f.installed(t, i).DiscoKey == conn.DiscoPublicFromRaw32(k) }
+	if !on(1, rerun[0]) {
+		t.Fatal("a member not reached is installed on its announcement's disco key, not the newer hint's")
+	}
+	if !on(2, before[1].Disco) {
+		t.Fatal("a hint moved the disco key of a member reached on its announcement's")
+	}
+
+	// Found down, the member reached moves to the hint's key too.
+	f.mgr.mu.Lock()
+	f.mgr.answers = nil
+	f.mgr.mu.Unlock()
+	for len(f.d.dirty) > 0 {
+		<-f.d.dirty
+	}
+	f.d.refreshReach(t.Context())
+	if len(f.d.dirty) == 0 {
+		t.Fatal("a member found down with a newer hint's disco key held asks for no reconcile")
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if !on(2, rerun[1]) {
+		t.Fatal("a member found down is not installed on the newer hint's disco key")
 	}
 }

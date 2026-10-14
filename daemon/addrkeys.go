@@ -70,8 +70,7 @@ func (d *Daemon) planSealing(s snapshot) {
 		under = append(under, pair)
 	}
 	d.mu.Lock()
-	same := d.sealing != nil && d.sealing.key == k && slices.Equal(d.sealing.under, under) &&
-		(d.sealing.rec.MLDSA != nil) == d.mldsa
+	same := d.sealing != nil && d.sealing.key == k && slices.Equal(d.sealing.under, under)
 	d.mu.Unlock()
 	if same {
 		return
@@ -85,11 +84,7 @@ func (d *Daemon) planSealing(s snapshot) {
 	if d.sealing != nil && rec.Seq <= d.sealing.rec.Seq {
 		rec.Seq = d.sealing.rec.Seq + 1
 	}
-	sign := rec.Sign
-	if d.mldsa {
-		sign = rec.SignPQ
-	}
-	if err := sign(d.identity); err != nil {
+	if err := rec.SignPQ(d.identity); err != nil {
 		d.logf("daemon: signing this device's address key: %v", err)
 		d.sealing = &sealing{withheld: true}
 		return

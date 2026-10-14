@@ -41,13 +41,13 @@ func network(t *testing.T, admin types.PrivateIdentity, g *keys.Node) []types.AU
 	if err != nil {
 		t.Fatal(err)
 	}
-	v4 := netip.MustParseAddr("100.64.0.2")
+	v4 := netip.MustParseAddr("198.18.0.2")
 	add, err := auth.Builder().AddNode(types.NodeRecord{Identity: g.Identity.Public(), Name: "phone",
 		WireGuard: g.Public.WireGuard, X25519: g.Public.X25519, MLKEM: g.Public.MLKEM, V4: &v4, Signing: new(g.Identity.SigningKey())}, sealer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := add.SignUnder(admin, types.CurrentSchema); err != nil {
+	if err := add.Sign(admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := auth.Inform(add); err != nil {
@@ -262,7 +262,7 @@ func (c comparing) Admit(_ context.Context, req *enroll.JoinRequest, _ func(uint
 	if enroll.CommitNonce(nonce) != req.Commit {
 		return "", nil, errors.New("the nonce is not the committed one")
 	}
-	c.words <- enroll.Fingerprint(salt, nonce, req.Identity, req.Keys)
+	c.words <- enroll.Fingerprint(salt, nonce, req)
 	return "phone", c.admission(req), nil
 }
 

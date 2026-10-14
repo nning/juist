@@ -44,9 +44,6 @@ func TestRenameNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.mustReject("a rename one vote short", RuleUnauthorized, short)
-
-	old := newHarnessAt(t, 1, 1, types.SchemaRenumber)
-	old.mustReject("a rename at schema 5", RuleState, old.signed(types.AUM{Kind: types.KindRenameNetwork, Network: new("lab")}))
 }
 
 // A device's rename changes its name and nothing else about it, survives
@@ -92,11 +89,6 @@ func TestRenameNode(t *testing.T) {
 	h.mustReject("a share label another member publishes", RuleState, rename(nas.Identity, "photos"))
 	h.apply(h.auth.Builder().RenameNode(nas.Identity, "nas"))
 	h.apply(h.auth.Builder().RenameNode(vps.Identity, "storage"))
-
-	old := newHarnessAt(t, 1, 1, types.SchemaPublish)
-	n := old.addNode("nas")
-	old.mustReject("a rename at schema 9", RuleState, old.signed(types.AUM{Kind: types.KindRenameNode,
-		Subject: &n.Identity, NodeName: new("storage")}))
 }
 
 // Two admins renaming at once are a fork like any other: one name wins, and
@@ -130,12 +122,16 @@ func TestConcurrentRenames(t *testing.T) {
 		if alarm := auth.Alarm(); alarm != nil {
 			t.Fatalf("renames to office and %s stopped the network: %v", tc.other, alarm)
 		}
-		winner := map[bool]string{true: "office", false: tc.other}[first.Hash().Compare(second.Hash()) < 0]
+		winner := map[bool]string{true: "office", false: tc.other}[first.SigHash().Compare(second.SigHash()) < 0]
 		if got := auth.State().Network(); got != winner {
 			t.Errorf("renames to office and %s: the network is named %q, want %q", tc.other, got, winner)
 		}
+		// Two renames to one name are copies of one record.
 		orphans := auth.Orphans()
-		if len(orphans) != 1 || orphans[0].Conflict != "" {
+		switch {
+		case !tc.reissuing && len(orphans) != 0:
+			t.Fatalf("renames to office and %s left %+v, want none", tc.other, orphans)
+		case tc.reissuing && (len(orphans) != 1 || orphans[0].Conflict != ""):
 			t.Fatalf("renames to office and %s left %+v, want one branch to reissue", tc.other, orphans)
 		}
 		// The probe of the loser is what "start it again" rests on.

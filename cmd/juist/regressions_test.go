@@ -81,7 +81,7 @@ func TestAllocationsTheLogAccepts(t *testing.T) {
 				if err != nil {
 					t.Fatalf("seed %d: building %s: %v", seed, what, err)
 				}
-				if err := a.SignUnder(admin, auth.State().Schema()); err != nil {
+				if err := a.Sign(admin); err != nil {
 					t.Fatal(err)
 				}
 				if err := auth.Inform(a); err != nil {
@@ -262,9 +262,9 @@ func TestMovingBackIsNoLoss(t *testing.T) {
 	}
 }
 
-// A network from before schema 4 with members in 100.64/10 is not numbered
-// from 198.18.0.0/15 already, whatever its range for new members is.
-func TestAnOlderNetworkIsNotRenumberedAlready(t *testing.T) {
+// A network without a prefix of its own holds no address in 100.64/10,
+// tailscaled's range.
+func TestAMemberIn100_64IsRefused(t *testing.T) {
 	t.Parallel()
 	admin, err := types.GenerateIdentity()
 	if err != nil {
@@ -274,31 +274,14 @@ func TestAnOlderNetworkIsNotRenumberedAlready(t *testing.T) {
 	n.V4 = new(netip.MustParseAddr("100.64.0.1"))
 	g, err := log.Genesis("net", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "a", Holder: "a"}},
 		[]types.Hash{{1}}, []types.NodeRecord{n}, sealer())
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		if err = g.Sign(admin); err != nil {
+			t.Fatal(err)
+		}
+		_, err = log.Create(log.NewMemStorage(), g)
 	}
-	g.State.Schema = types.SchemaHolders
-	g.State.Admins[0].Signing, g.State.Nodes[0].Signing = nil, nil
-	g.State.Admins[0].Endorsement = nil
-	if err := g.Sign(admin); err != nil {
-		t.Fatal(err)
-	}
-	auth, err := log.Create(log.NewMemStorage(), g)
-	if err != nil {
-		t.Fatal(err)
-	}
-	up, err := auth.Builder().SchemaUpgrade(types.SchemaSigning)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := up.Sign(admin); err != nil {
-		t.Fatal(err)
-	}
-	if err := auth.Inform(up); err != nil {
-		t.Fatal(err)
-	}
-	if numberedFrom(auth.State(), types.OverlayV4) {
-		t.Error("a network with members in 100.64/10 reads as numbered from 198.18.0.0/15 already")
+	if err == nil || !strings.Contains(err.Error(), "outside 198.18.0.0/15") {
+		t.Fatalf("a member at 100.64.0.1 without a prefix of its own: %v", err)
 	}
 }
 
@@ -322,7 +305,7 @@ func TestStatusCallsAnOfflineDeviceOffline(t *testing.T) {
 			}},
 	}
 	var out syncBuffer
-	(&cli{t: t, home: t.TempDir()}).app(&out, "").printStatus(st)
+	printStatusAndHealth((&cli{t: t, home: t.TempDir()}).app(&out, ""), st)
 	got := out.String()
 	mustContain(t, got, "2 others, 2 without a tunnel", "no answer from laptop1: offline, or udp/41643 blocked")
 	if strings.Contains(got, "desktop") {
@@ -390,7 +373,7 @@ func TestARangeFullByHistorySaysHowToGrow(t *testing.T) {
 	inform := func(a types.AUM, err error) {
 		t.Helper()
 		if err == nil {
-			err = a.SignUnder(admin, auth.State().Schema())
+			err = a.Sign(admin)
 		}
 		if err == nil {
 			err = auth.Inform(a)

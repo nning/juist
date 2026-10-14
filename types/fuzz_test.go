@@ -61,7 +61,7 @@ func FuzzValidateAUM(f *testing.F) {
 		}
 		if a.Node != nil {
 			_ = a.Node.StaticValidate()
-			_ = a.Node.ValidateInNetwork(ULA(Hash{}), V4Ranges(CurrentSchema, nil))
+			_ = a.Node.ValidateInNetwork(ULA(Hash{}), V4Ranges(nil))
 			_ = a.Node.Clone()
 		}
 		if a.Epoch != nil {
@@ -97,6 +97,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		t.Fatalf("generating identity: %v", err)
 	}
 	v4 := netip.MustParseAddr("100.64.0.1")
+	nodeKey := node.SigningKey()
 	rec := NodeRecord{
 		Identity:  node.Public(),
 		Name:      "n",
@@ -107,6 +108,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		Roles:     []Role{RoleExit},
 		Routes:    []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")},
 		Expiry:    99,
+		Signing:   &nodeKey,
 	}
 	epoch := &EpochRecord{
 		Epoch:  2,
@@ -114,12 +116,13 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		Wraps:  []EpochWrap{{Recipient: node.Public(), Sealed: bytes.Repeat([]byte{7}, SealedSecretSize)}},
 	}
 	snap := &Snapshot{
+		Schema:      CurrentSchema,
 		Network:     "net",
 		Quorum:      1,
 		Epoch:       1,
 		EpochCommit: EpochCommit([]byte("g")),
 		Disablement: []Hash{DisablementCommit(bytes.Repeat([]byte{2}, DisablementSecretSize))},
-		Admins:      []AdminKey{{Public: priv.Public(), Votes: 1}},
+		Admins:      []AdminKey{{Public: priv.Public(), Votes: 1, Signing: new(priv.SigningKey()), Endorsement: priv.Endorsement()}},
 	}
 	parent := Hash{1, 2, 3}
 	id := node.Public()
@@ -132,8 +135,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 	freshPub := fresh.Public()
 
 	holderSnap := snap.Clone()
-	holderSnap.Schema = CurrentSchema
-	holderSnap.Admins = []AdminKey{{Public: priv.Public(), Votes: 1, Holder: "h", Signing: new(priv.SigningKey()), Endorsement: priv.Endorsement()}}
+	holderSnap.Admins[0].Holder = "h"
 
 	checkpointSnap := snap.Clone()
 	gh := Hash{9}
@@ -141,7 +143,6 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 
 	renumberTo := netip.MustParsePrefix("10.7.0.0/22")
 	renumberedSnap := checkpointSnap.Clone()
-	renumberedSnap.Schema = CurrentSchema
 	renumberedSnap.V4Prefix = &renumberTo
 	renumberedSnap.V4Retiring = &RetiringRanges{Prefixes: []netip.Prefix{OverlayV4}, Until: 99}
 	moved := rec
@@ -149,23 +150,15 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 	moved.V4, moved.Retiring = &newV4, &RetiringV4{Addr: v4, Until: 99}
 	moved.Names = []string{"imap.example.org", "mx.example.org"}
 	moved.Published = []PublishedName{{Label: "immich", Port: 443, Proxy: true}, {Label: "mc", Port: 25565, Public: 25565}}
-	adminKey, nodeKey := priv.SigningKey(), node.SigningKey()
-	renumberedSnap.Admins[0].Signing, renumberedSnap.Admins[0].Endorsement = &adminKey, priv.Endorsement()
-	moved.Signing = &nodeKey
 	renumberedSnap.Domain = "pub.example.org"
 	renumberedSnap.Nodes = []NodeRecord{moved}
 	renumberedSnap.EpochWraps = epoch.Wraps
 	policySnap := renumberedSnap.Clone()
-	policySnap.Schema = SchemaPolicy
 	policySnap.Policy = seedPolicy(moved.Identity)
-	policySnap.Admins[0].Signing, policySnap.Nodes[0].Signing = nil, nil
-	policySnap.Admins[0].Endorsement = nil
-	endorsed, err := node.Endorse()
-	if err != nil {
-		t.Fatalf("endorsing: %v", err)
+	freshAdmin := func(holder string, needed uint32) *AdminKey {
+		return &AdminKey{Public: freshPub, Votes: 3, Holder: holder, Needed: needed,
+			Signing: new(fresh.SigningKey()), Endorsement: fresh.Endorsement()}
 	}
-	signed := rec
-	signed.Signing = &nodeKey
 
 	records := []AUM{
 		{Kind: KindGenesis, State: snap},
@@ -175,8 +168,9 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 			Grant: &RouteGrant{Roles: []Role{RoleRelayCapable}}},
 		{Kind: KindRotateNodeKey, Prev: &parent, Subject: &id,
 			Keys: &NodeKeys{WireGuard: WGKey{4}, X25519: X25519Key{5}, MLKEM: MLKEMKey{6}}, Epoch: epoch},
-		{Kind: KindRotateIdentity, Prev: &parent, Subject: &id, NewIdentity: &freshPub, Epoch: epoch},
-		{Kind: KindAddAdminKey, Prev: &parent, Admin: &AdminKey{Public: freshPub, Votes: 3}},
+		{Kind: KindRotateIdentity, Prev: &parent, Subject: &id, NewIdentity: &freshPub,
+			NewSigning: new(fresh.SigningKey()), Epoch: epoch},
+		{Kind: KindAddAdminKey, Prev: &parent, Admin: freshAdmin("", 0)},
 		{Kind: KindRemoveAdminKey, Prev: &parent, Subject: &id},
 		{Kind: KindSetQuorum, Prev: &parent, Quorum: &quorum},
 		{Kind: KindCheckpoint, Prev: &parent, State: checkpointSnap},
@@ -184,7 +178,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindSchemaUpgrade, Prev: &parent, Schema: &schema},
 		{Kind: KindSetVouchers, Prev: &parent, Vouchers: &quorum},
 		{Kind: KindSetHolder, Prev: &parent, Holder: &HolderPolicy{Name: "h", Votes: 1, Needed: 2}},
-		{Kind: KindAddAdminKey, Prev: &parent, Admin: &AdminKey{Public: freshPub, Votes: 3, Holder: "h", Needed: 2}},
+		{Kind: KindAddAdminKey, Prev: &parent, Admin: freshAdmin("h", 2)},
 		{Kind: KindGenesis, State: holderSnap},
 		{Kind: KindRenumberNetwork, Prev: &parent, Renumber: &Renumbering{Until: 99, Prefix: &renumberTo,
 			Addrs: []MemberV4{{Identity: id, V4: netip.MustParseAddr("10.7.0.1")}}}},
@@ -204,23 +198,14 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindRenameNode, Prev: &parent, Subject: &id, NodeName: new("laptop")},
 		{Kind: KindDisable, Prev: &parent, Secret: &DisablementSecret{2}},
 		{Kind: KindSetPolicy, Prev: &parent, Policy: seedPolicy(id)},
-		{Kind: KindSetSigningKeys, Prev: &parent, Signing: &SigningKeys{Members: []MemberKey{
-			{Identity: id, Key: nodeKey, Endorsement: endorsed}}}, Epoch: epoch},
 	}
-	// Past the cut-over: signed by ML-DSA, an admin key added bringing its
-	// own key.
-	pq := []AUM{
-		{Kind: KindAddNode, Prev: &parent, Node: &signed, Epoch: epoch},
-		{Kind: KindAddAdminKey, Prev: &parent, Admin: &AdminKey{Public: freshPub, Votes: 3}},
+	// An identity rotation signed by the identity rotated to.
+	rotated := AUM{Kind: KindRotateIdentity, Prev: &parent, Subject: &id, NewIdentity: &freshPub,
+		NewSigning: new(fresh.SigningKey()), Epoch: epoch}
+	if err := rotated.Sign(fresh); err != nil {
+		t.Fatalf("signing seed %v: %v", rotated.Kind, err)
 	}
-	for i := range pq {
-		if err := pq[i].SignUnder(priv, CurrentSchema); err != nil {
-			t.Fatalf("signing seed %v: %v", pq[i].Kind, err)
-		}
-	}
-	if err := pq[1].SignUnder(fresh, CurrentSchema); err != nil {
-		t.Fatalf("signing seed %v: %v", pq[1].Kind, err)
-	}
+	records = append(records, rotated)
 	out := make([][]byte, 0, len(records))
 	for i := range records {
 		a := records[i]
@@ -232,13 +217,6 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		b, err := a.Encode()
 		if err != nil {
 			t.Fatalf("encoding seed %v: %v", a.Kind, err)
-		}
-		out = append(out, b)
-	}
-	for i := range pq {
-		b, err := pq[i].Encode()
-		if err != nil {
-			t.Fatalf("encoding seed %v: %v", pq[i].Kind, err)
 		}
 		out = append(out, b)
 	}

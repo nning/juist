@@ -121,10 +121,8 @@ func atCaps(n types.NodeRecord, i int) types.NodeRecord {
 }
 
 // A checkpoint at MaxNodes, its members' names, published names and routes
-// at their caps, past the cut-over and signed by every admin key, stays
-// within MaxRecordSize; and so does the cut-over at MaxNodes, with every
-// admin key's signature. Exit criterion (5) for records.
-func TestRecordsPastTheCutOverFitAtTheCaps(t *testing.T) {
+// at their caps, signed by every admin key, stays within MaxRecordSize.
+func TestACheckpointFitsAtTheCaps(t *testing.T) {
 	h := newHarnessWith(t, types.MaxAdmins, types.MaxAdmins, func(s *types.Snapshot) { s.Domain = "example.org" })
 	members := make([]types.NodeRecord, 0, types.MaxNodes)
 	for i := range types.MaxNodes {
@@ -145,34 +143,4 @@ func TestRecordsPastTheCutOverFitAtTheCaps(t *testing.T) {
 	}
 	t.Logf("a checkpoint at the caps: %.2f MiB of %d", float64(len(checkpoint))/(1<<20), types.MaxRecordSize>>20)
 
-	// The cut-over, as a network at the schema before it would author it.
-	var keys []types.MemberKey
-	for _, n := range members {
-		priv := h.nodeIDs[n.Identity]
-		e, err := priv.Endorse()
-		if err != nil {
-			t.Fatal(err)
-		}
-		keys = append(keys, types.MemberKey{Identity: n.Identity, Key: priv.SigningKey(), Endorsement: e})
-	}
-	slices.SortFunc(keys, func(x, y types.MemberKey) int { return x.Identity.Compare(y.Identity) })
-	epoch, err := h.sealer()(2, cp.State.Nodes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cut := types.AUM{Kind: types.KindSetSigningKeys, Prev: &types.Hash{1}, Signing: &types.SigningKeys{Members: keys},
-		Epoch: epoch}
-	for _, a := range h.admins {
-		if err := cut.SignUnder(a, types.SchemaSigning); err != nil {
-			t.Fatal(err)
-		}
-	}
-	b, err := cut.Encode()
-	if err != nil {
-		t.Fatalf("encoding the cut-over at the caps: %v", err)
-	}
-	t.Logf("a cut-over at the caps: %.2f MiB of %d", float64(len(b))/(1<<20), types.MaxRecordSize>>20)
-	if _, err := types.DecodeAUM(b); err != nil {
-		t.Fatalf("the cut-over at the caps: %v", err)
-	}
 }

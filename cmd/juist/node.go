@@ -262,12 +262,26 @@ func (n *daemonNode) informDisabled(auth *log.Authority) error {
 
 // orphans returns the daemon's records off the active chain.
 func (n *daemonNode) orphans() ([]types.AUM, error) {
+	return n.logRecords(false)
+}
+
+// held returns every record the daemon holds, on the active chain or off it,
+// unverified.
+func (n *daemonNode) held() ([]types.AUM, error) {
+	return n.logRecords(true)
+}
+
+func (n *daemonNode) logRecords(chain bool) ([]types.AUM, error) {
 	resp, err := n.call(ipc.Request{Command: ipc.CmdLog, Orphans: true})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]types.AUM, 0, len(resp.Orphans))
-	for _, b := range resp.Orphans {
+	bodies := resp.Orphans
+	if chain {
+		bodies = append(slices.Clip(resp.Records), bodies...)
+	}
+	out := make([]types.AUM, 0, len(bodies))
+	for _, b := range bodies {
 		aum, err := types.DecodeAUM(b)
 		if err != nil {
 			return nil, fmt.Errorf("juistd sent an invalid record: %w", err)
@@ -353,7 +367,7 @@ func (n *daemonNode) join(ctx context.Context, invite, name string, op operatorC
 	}
 	if secret, _ := guest.ParseInvite(invite); secret != nil {
 		if link, ok := secret.(enroll.Link); ok && link.Admin != nil {
-			if err := n.home.expectAdmitted(n.sock, link, resp.Admission, n.st.Self); err != nil {
+			if err := n.home.expectAdmitted(n.sock, link, resp.Admission, n.st.Self, n.held); err != nil {
 				return nil, err
 			}
 		}
@@ -634,7 +648,7 @@ func (n *localNode) rotate(identity bool) (types.AUM, types.Sig, error) {
 	b := auth.Builder()
 	if identity {
 		if staged, err = n.h.rotatedIdentity(); err == nil {
-			aum, err = b.RotateIdentity(cur.Identity.Public(), staged.Identity.Public(), sealer())
+			aum, err = b.RotateIdentity(cur.Identity.Public(), staged.Identity.Public(), staged.Identity.SigningKey(), sealer())
 		}
 	} else if staged, err = n.h.rotatedKeys(); err == nil {
 		aum, err = b.RotateNodeKey(staged.Identity.Public(), staged.Public, sealer())
@@ -642,7 +656,7 @@ func (n *localNode) rotate(identity bool) (types.AUM, types.Sig, error) {
 	if err != nil {
 		return types.AUM{}, types.Sig{}, err
 	}
-	if err := log.SignAsDevice(&aum, auth.State().Schema(), cur.Identity, staged.Identity); err != nil {
+	if err := log.SignAsDevice(&aum, cur.Identity, staged.Identity); err != nil {
 		return types.AUM{}, types.Sig{}, err
 	}
 	proof, err := cur.Identity.Sign(ipc.RotationProof(&aum))

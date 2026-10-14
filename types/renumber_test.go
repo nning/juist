@@ -66,7 +66,6 @@ func TestRenumberingShape(t *testing.T) {
 func TestRetiringAddressesInState(t *testing.T) {
 	rec, _ := testAUM(t)
 	base := rec.State
-	base.Schema = CurrentSchema
 	own := netip.MustParsePrefix("10.7.0.0/22")
 	old := base.Nodes[0].V4
 	moved := netip.MustParseAddr("10.7.0.1")
@@ -80,9 +79,6 @@ func TestRetiringAddressesInState(t *testing.T) {
 		v4 := moved
 		s.Nodes[0].V4, s.Nodes[0].Retiring = &v4, &RetiringV4{Addr: *old, Until: 9}
 		s.Nodes[0].Routes = nil
-		a := mustIdentity(t)
-		ak, nk := a.SigningKey(), mustIdentity(t).SigningKey()
-		s.Admins[0].Public, s.Admins[0].Signing, s.Admins[0].Endorsement, s.Nodes[0].Signing = a.Public(), &ak, a.Endorsement(), &nk
 		return s
 	}
 	if err := renumbered().StaticValidate(false); err != nil {
@@ -99,8 +95,6 @@ func TestRetiringAddressesInState(t *testing.T) {
 		name   string
 		mutate func(*Snapshot)
 	}{
-		{"below schema 5", func(s *Snapshot) { s.Schema = SchemaOverlayV4 }},
-		{"a node retiring below schema 5", func(s *Snapshot) { s.Schema = SchemaOverlayV4; s.V4Retiring = nil }},
 		{"retiring ranges with no prefix", func(s *Snapshot) { s.V4Prefix = nil }},
 		{"retiring ranges with no deadline", func(s *Snapshot) { s.V4Retiring.Until = 0 }},
 		{"no retiring ranges named", func(s *Snapshot) { s.V4Retiring.Prefixes = nil }},

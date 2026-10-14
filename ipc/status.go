@@ -286,17 +286,16 @@ type Tunnels struct {
 	SyncBroken  []string `cbor:"76,keyasint,omitempty"`
 
 	// Outdated names the members whose tunnel is live, whose log sync
-	// works, and who still announce no epoch minutes into a network past
-	// [types.SchemaPQ]: they run an older build, which gets none of the
-	// user's traffic. It names too those without a tunnel that run and
-	// announce no epoch there, or an older schema than the network's past
-	// [types.SchemaPadded]: their build knows no member that joined since.
+	// works, and who still announce no epoch after minutes: they run an
+	// older build, which gets none of the user's traffic. It names too those
+	// without a tunnel that run and announce no epoch, or an older schema
+	// than the network's: their build knows no member that joined since.
 	Outdated []string `cbor:"77,keyasint,omitempty"`
 
 	// OlderBuild names the members whose tunnel is live and whose log sync
-	// works, and who still announce an older schema than the network's
-	// minutes into a network past [types.SchemaPadded]: they run an older
-	// build, which applies no change past its schema.
+	// works, and who still announce an older schema than the network's after
+	// minutes: they run an older build, which applies no change past its
+	// schema.
 	OlderBuild []string `cbor:"79,keyasint,omitempty"`
 
 	// Firewalled names the TUN device when a running firewalld lets log sync
@@ -455,6 +454,10 @@ type Device struct {
 
 	// Members are those of Published that are for members alone.
 	Members []string `cbor:"12,keyasint,omitempty"`
+
+	// Build is the newest schema the member's juist implements, as its
+	// announcement says; zero where none says. [DevicesOf] leaves it unset.
+	Build types.SchemaVersion `cbor:"13,keyasint,omitempty"`
 }
 
 // Exit is a device's use of exit nodes, and its serving as one.

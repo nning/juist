@@ -76,15 +76,11 @@ func Genesis(network string, quorum uint32, admins []types.AdminKey,
 	return aum, nil
 }
 
-// AddNode builds a record admitting a member.
-// Below the cut-over to [types.SchemaMLDSA] it leaves out n's signing key,
-// which [Builder.SetSigningKeys] brings; past it n must have one.
+// AddNode builds a record admitting a member, which must name its signing
+// key.
 func (b *Builder) AddNode(n types.NodeRecord, sealer Sealer) (types.AUM, error) {
 	n = *n.Clone()
-	switch {
-	case !b.state.PQ():
-		n.Signing = nil
-	case n.Signing == nil:
+	if n.Signing == nil {
 		return types.AUM{}, fmt.Errorf("log: %v brings no signing key, which the network needs", n.Identity.ShortString())
 	}
 	members := b.state.Nodes()
@@ -175,10 +171,11 @@ func (b *Builder) RotateNodeKey(id types.Identity, keys types.NodeKeys, sealer S
 	return b.finish(types.AUM{Kind: types.KindRotateNodeKey, Subject: &id, Keys: &keys, Epoch: epoch})
 }
 
-// RotateIdentity builds a record replacing a member's identity key, and with
-// it the member's derived overlay address. The record needs a signature by the
-// new key as well as quorum.
-func (b *Builder) RotateIdentity(old, new types.Identity, sealer Sealer) (types.AUM, error) {
+// RotateIdentity builds a record replacing a member's identity key with new,
+// whose signing key is signing, and with it the member's derived overlay
+// address. The record needs signatures by the old key and the new as well as
+// quorum.
+func (b *Builder) RotateIdentity(old, new types.Identity, signing types.SigningKey, sealer Sealer) (types.AUM, error) {
 	members := b.state.Nodes()
 	i := slices.IndexFunc(members, func(m types.NodeRecord) bool { return m.Identity == old })
 	if i < 0 {
@@ -191,38 +188,15 @@ func (b *Builder) RotateIdentity(old, new types.Identity, sealer Sealer) (types.
 		return types.AUM{}, err
 	}
 	return b.finish(types.AUM{
-		Kind: types.KindRotateIdentity, Subject: &old, NewIdentity: &new, Epoch: epoch,
+		Kind: types.KindRotateIdentity, Subject: &old, NewIdentity: &new, NewSigning: &signing, Epoch: epoch,
 	})
 }
 
-// SetSigningKeys builds the record that gives every member its signing key
-// and cuts the network over to [types.SchemaMLDSA], bumping the epoch; every
-// admin key then signs it, bringing its own.
-func (b *Builder) SetSigningKeys(members []types.MemberKey, sealer Sealer) (types.AUM, error) {
-	m := slices.Clone(members)
-	slices.SortFunc(m, func(x, y types.MemberKey) int { return x.Identity.Compare(y.Identity) })
-	epoch, err := b.seal(sealer, b.state.Nodes())
-	if err != nil {
-		return types.AUM{}, err
-	}
-	return b.finish(types.AUM{Kind: types.KindSetSigningKeys, Signing: &types.SigningKeys{Members: m}, Epoch: epoch})
-}
-
-// SetAdminSigning builds the record registering an admin key's signing key,
-// which the key signs too.
-func (b *Builder) SetAdminSigning(k types.MemberKey) (types.AUM, error) {
-	return b.finish(types.AUM{Kind: types.KindSetAdminSigning, Signing: &types.SigningKeys{Members: []types.MemberKey{k}}})
-}
-
-// AddAdminKey builds a record adding an admin signing key. Below
-// [types.SchemaSigning] it leaves out k's signing key and endorsement; past
-// the cut-over k must have them.
+// AddAdminKey builds a record adding an admin signing key, which must name its
+// signing key.
 func (b *Builder) AddAdminKey(k types.AdminKey) (types.AUM, error) {
 	k = *k.Clone()
-	switch {
-	case b.state.Schema() < types.SchemaSigning:
-		k.Signing, k.Endorsement = nil, nil
-	case b.state.PQ() && k.Signing == nil:
+	if k.Signing == nil {
 		return types.AUM{}, fmt.Errorf("log: %v brings no signing key, which the network needs", k.Public.ShortString())
 	}
 	return b.finish(types.AUM{Kind: types.KindAddAdminKey, Admin: &k})
@@ -345,7 +319,7 @@ func (b *Builder) finish(aum types.AUM) (types.AUM, error) {
 	if err := aum.ValidateUnsigned(); err != nil {
 		return types.AUM{}, reject(RuleMalformed, fmt.Errorf("log: %w", err))
 	}
-	if _, err := b.state.apply(&aum, types.Hash{}, applyDraft); err != nil {
+	if _, err := b.state.apply(&aum, types.Hash{}, applyChain); err != nil {
 		return types.AUM{}, err
 	}
 	return aum, nil
@@ -376,7 +350,7 @@ func (b *Builder) Check(aum *types.AUM) (*State, error) {
 	if err := verify(aum, b.state, true); err != nil {
 		return nil, err
 	}
-	return b.state.apply(aum, aum.Hash(), applyDraft)
+	return b.state.apply(aum, aum.Hash(), applyChain)
 }
 
 // Disable builds the record that ends the network by revealing one of its

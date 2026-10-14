@@ -141,8 +141,7 @@ func sortedMoves(m []types.MemberV4) []types.MemberV4 {
 }
 
 // Every node rejects a network renumbering that leaves a member behind, moves
-// a non-member, reuses the prefix, or overlaps a granted route; and one before
-// schema 5.
+// a non-member, reuses the prefix, or overlaps a granted route.
 func TestRenumberNetworkRejects(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	a, b := h.admitAt("a", "198.18.0.1"), h.admitAt("b", "198.18.0.2")
@@ -167,13 +166,6 @@ func TestRenumberNetworkRejects(t *testing.T) {
 	other := netip.MustParsePrefix("10.9.0.0/22")
 	h.apply(h.auth.Builder().RenumberNetwork(other, moves(a, "10.9.0.1", b, "10.9.0.2"), 9))
 	h.mustReject("a renumbering to the prefix it has", RuleState, renumber(other, moves(a, "10.9.0.5", b, "10.9.0.6")))
-
-	old := newHarnessAt(t, 1, 1, types.SchemaOverlayV4)
-	n := old.admitAt("n", "198.18.0.1")
-	aum := old.signed(types.AUM{Kind: types.KindRenumberNetwork,
-		Renumber: &types.Renumbering{Until: 9, Prefix: &to, Addrs: moves(n, "10.7.0.1")}})
-	old.mustReject("a renumbering at schema 4", RuleState, aum)
-	old.mustReject("a retirement at schema 4", RuleState, old.signed(types.AUM{Kind: types.KindRetireAddresses}))
 }
 
 // One member moves on its own, to an address in the network's range that no
@@ -213,12 +205,12 @@ func TestRenumberNode(t *testing.T) {
 
 	// An identity rotation takes the retiring address along.
 	rotated := h.newNode("a2")
-	rot, err := h.auth.Builder().RotateIdentity(a.Identity, rotated.Identity, h.sealer())
+	rot, err := h.auth.Builder().RotateIdentity(a.Identity, rotated.Identity, *rotated.Signing, h.sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.signQuorum(&rot)
-	if err := SignAsDevice(&rot, h.auth.State().Schema(), h.nodeIDs[a.Identity], h.nodeIDs[rotated.Identity]); err != nil {
+	if err := SignAsDevice(&rot, h.nodeIDs[a.Identity], h.nodeIDs[rotated.Identity]); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.auth.Inform(rot); err != nil {

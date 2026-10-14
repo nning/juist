@@ -48,6 +48,7 @@ var commands = []command{
 	{name: "join", group: groupStart, summary: "join a network", run: cmdJoin},
 
 	{name: "status", group: groupDaily, summary: "show this device's connection", run: cmdStatus},
+	{name: "health", group: groupDaily, summary: "say what needs attention", run: cmdHealth},
 	{name: "devices", aliases: []string{"ls"}, group: groupDaily, summary: "list devices", run: cmdDevices},
 	{name: "remove", aliases: []string{"rm"}, group: groupDaily, summary: "remove a device", run: cmdRemove},
 	{name: "rename", group: groupDaily, summary: "rename a device", run: cmdRename},

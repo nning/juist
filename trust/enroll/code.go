@@ -120,7 +120,8 @@ func (c Code) password() []byte {
 // a person to compare between its screen and the inviting admin's. The device
 // that runs the invite runs the session too, and could put a device of its
 // own in the guest's place, or the guest's identity with keys of its own; the
-// words cover the identity and every key, so either shows as other words.
+// words cover the identity and every key the request names, its signing key
+// too, so either shows as other words.
 //
 // Four words are 32 bits, enough only if nobody can search them, and the
 // device in the middle carries both the admin's salt and the guest's nonce.
@@ -129,15 +130,16 @@ func (c Code) password() []byte {
 // once it holds the salt. A device in the middle has to fix its own request's
 // nonce before it sees the admin's salt, and hand the guest a salt before it
 // sees the guest's nonce: one try at 32 bits on either screen, not a search.
-func Fingerprint(salt Salt, nonce Nonce, id types.Identity, keys types.NodeKeys) string {
+func Fingerprint(salt Salt, nonce Nonce, req *JoinRequest) string {
 	h := sha256.New()
-	h.Write([]byte("juist device words v2\x00"))
+	h.Write([]byte("juist device words v3\x00"))
 	h.Write(salt[:])
 	h.Write(nonce[:])
-	h.Write(id[:])
-	h.Write(keys.WireGuard[:])
-	h.Write(keys.X25519[:])
-	h.Write(keys.MLKEM[:])
+	h.Write(req.Identity[:])
+	h.Write(req.Keys.WireGuard[:])
+	h.Write(req.Keys.X25519[:])
+	h.Write(req.Keys.MLKEM[:])
+	h.Write(req.Signing[:])
 	sum := h.Sum(nil)
 	words := make([]string, 4)
 	for i := range words {

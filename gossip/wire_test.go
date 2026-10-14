@@ -33,6 +33,7 @@ func testEndpoint(t *testing.T) (Endpoint, types.PrivateIdentity) {
 		Addrs:      []netip.AddrPort{netip.MustParseAddrPort("192.0.2.7:41641")},
 		GossipPort: 41642,
 		Seq:        12,
+		Schema:     types.CurrentSchema,
 	}
 	if err := e.Sign(priv); err != nil {
 		t.Fatalf("signing: %v", err)
@@ -94,7 +95,7 @@ func TestEndpointRejectsBadShape(t *testing.T) {
 	}
 	base := func() Endpoint {
 		return Endpoint{
-			Identity: priv.Public(), Disco: DiscoKey{1}, GossipPort: 7,
+			Identity: priv.Public(), Disco: DiscoKey{1}, GossipPort: 7, Schema: types.CurrentSchema,
 			Addrs: []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:1")},
 		}
 	}
@@ -105,6 +106,8 @@ func TestEndpointRejectsBadShape(t *testing.T) {
 	}{
 		{"no disco key", func() Endpoint { e := base(); e.Disco = DiscoKey{}; return e }, "no disco key"},
 		{"no gossip port", func() Endpoint { e := base(); e.GossipPort = 0; return e }, "no gossip port"},
+		{"no schema", func() Endpoint { e := base(); e.Schema = 0; return e }, "older than this juist reads"},
+		{"an older schema", func() Endpoint { e := base(); e.Schema = types.MinSchema - 1; return e }, "older than this juist reads"},
 		{"unspecified address", func() Endpoint {
 			e := base()
 			e.Addrs = []netip.AddrPort{netip.MustParseAddrPort("0.0.0.0:1")}

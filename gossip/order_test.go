@@ -44,7 +44,7 @@ func TestAnOrdinaryResponderSpeaksLast(t *testing.T) {
 
 	ss := &sessionSeal{epoch: 1}
 	view, _ := us.log.View()
-	hello := us.node.hello(&view, reads{epochs: true})
+	hello := us.node.hello(&view)
 	if err := us.node.writeSealed(c, ss, &hello); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestAnOrdinaryInitiatorSpeaksFirst(t *testing.T) {
 			return
 		}
 		view, _ := them.log.View()
-		hello := them.node.hello(&view, reads{epochs: true})
+		hello := them.node.hello(&view)
 		if err := them.node.writeSealed(c, ss, &hello); err != nil {
 			got <- kindInvalid
 			return
@@ -109,7 +109,7 @@ func TestACatchUpResponderSpeaksFirst(t *testing.T) {
 	p := newCatchUpPair(t)
 	c := dialRaw(t, p.peer)
 	view, _ := p.sleeper.log.View()
-	key, from, err := p.sleeper.node.askCatchUp(c, &view, reads{})
+	key, from, err := p.sleeper.node.askCatchUp(c, &view)
 	if err != nil {
 		t.Fatalf("asking: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestACatchUpResponderSpeaksFirst(t *testing.T) {
 		t.Fatal("granted by someone else")
 	}
 	ss := &sessionSeal{catchUp: key, with: from}
-	hello := p.sleeper.node.hello(&view, reads{epochs: true})
+	hello := p.sleeper.node.hello(&view)
 	hello.Self, hello.Endpoints = nil, nil
 	if err := p.sleeper.node.writeSealed(c, ss, &hello); err != nil {
 		t.Fatal(err)

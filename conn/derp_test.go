@@ -243,6 +243,27 @@ func TestAnAddressOnThisHostsNetworkComesFirstAtOneSite(t *testing.T) {
 	}
 }
 
+// This device's own relay leads with an address this host holds: behind a
+// NAT that does not hairpin, its public address answers this host nothing,
+// and netcheck, once it has measured, probes a region's first node alone, so
+// the relay could not be this device's home.
+func TestThisDevicesOwnRelayLeadsWithAnAddressItHolds(t *testing.T) {
+	local := Networks{Prefixes: []netip.Prefix{netip.MustParsePrefix("10.77.0.3/24")},
+		Public: []netip.Addr{netip.MustParseAddr("203.0.113.9")}}
+	r := testRelay()
+	r.Addrs = []netip.AddrPort{netip.MustParseAddrPort("203.0.113.9:4443"), netip.MustParseAddrPort("10.77.0.3:4443")}
+	r.Own = true
+	dm, _ := derpMap([]Relay{r}, nil, false, local)
+	if n := dm.Regions[7].Nodes[0]; n.IPv4 != "10.77.0.3" {
+		t.Errorf("this device's own relay is dialled first at %s, want the address it holds", n.IPv4)
+	}
+	r.Own = false
+	dm, _ = derpMap([]Relay{r}, nil, false, local)
+	if n := dm.Regions[7].Nodes[0]; n.IPv4 != "203.0.113.9" {
+		t.Errorf("another's relay is dialled first at %s, an address this host holds", n.IPv4)
+	}
+}
+
 // A relay's name is dialled at its public addresses, never at a private one,
 // though one on this host's network comes first among its own port's.
 func TestANamedRelaysAddressesArePublic(t *testing.T) {

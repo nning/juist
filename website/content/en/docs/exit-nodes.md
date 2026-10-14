@@ -118,8 +118,8 @@ your decision: run `juist exit off`.
 | `juist exit use vps`: `vps does not serve as an exit node` | run `juist exit serve` on vps, or add `--force` |
 | `juist status`: `Exit node` says `vps, internet refused: the access policy does not let this device use it` | add a rule `pass from … to internet via vps` ([Access policy]({{< relref "docs/access" >}})) |
 | on vps, `juist status`: `this device does not serve: IP forwarding is off on this host` | run `juist exit serve` again, which sets it up with sudo |
-| `warning: DNS goes to …, outside the tunnel: systemd-resolved refused juistd` | install juist from the package, whose polkit rule allows juistd this, and install polkit |
-| `warning: strict reverse-path filtering on … drops the exit node's answers` | run the `sudo sysctl -w …` line from the hint |
+| `juist health`: `warning: DNS goes to …, outside the tunnel: systemd-resolved refused juistd` | install juist from the package, whose polkit rule allows juistd this, and install polkit |
+| `juist health`: `warning: strict reverse-path filtering on … drops the exit node's answers` | run the `sudo sysctl -w …` line from the hint |
 
 After `internet refused:`, the status gives the reason, such as
 `it cannot be reached`, `its operator has not agreed to serve` or

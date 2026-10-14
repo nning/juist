@@ -79,9 +79,6 @@ type network struct {
 	// disablement is the network's one break-glass secret.
 	disablement types.DisablementSecret
 
-	// schema, set by a mutate, founds the network at an older schema.
-	schema types.SchemaVersion
-
 	// secretsByEpoch records what each epoch's group secret is, so a test
 	// can check that a node opened the right one.
 	mu            sync.Mutex
@@ -117,7 +114,7 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 	}
 	nw := &network{t: t, admin: admin, secretByEpoch: map[uint64]secrets.Secret{}}
 	for i := range n {
-		v4 := netip.AddrFrom4([4]byte{100, 64, 0, byte(i + 1)})
+		v4 := netip.AddrFrom4([4]byte{198, 18, 0, byte(i + 1)})
 		nw.devices = append(nw.devices, newDevice(t, fmt.Sprintf("n%d", i), v4))
 	}
 	mutate(nw)
@@ -138,16 +135,6 @@ func newNetworkMutated(t *testing.T, n int, mutate func(*network)) *network {
 		t.Fatalf("building genesis: %v", err)
 	}
 	g.State.V4Prefix, g.State.Domain = nw.v4Prefix, nw.domain
-	if nw.schema != 0 {
-		g.State.Schema = nw.schema
-	}
-	if g.State.Schema < types.SchemaMLDSA {
-		for i := range g.State.Nodes {
-			g.State.Nodes[i].Signing = nil
-		}
-		g.State.Admins[0].Signing = nil
-		g.State.Admins[0].Endorsement = nil
-	}
 	for i := range g.State.Nodes {
 		for _, d := range nw.devices {
 			if d.record.Identity == g.State.Nodes[i].Identity {
@@ -209,6 +196,7 @@ func endpointFor(d *device, port uint16) (gossip.Endpoint, error) {
 		// Ahead of any test's log, so the pair speaks the other's epoch.
 		Epoch:     1 << 32,
 		PairStore: 1,
+		Schema:    types.CurrentSchema,
 	}
 	return e, e.SignPQ(d.identity)
 }
@@ -222,7 +210,7 @@ func (nw *network) removeNode(t *testing.T, auth *log.Authority, id types.Identi
 	if err != nil {
 		t.Fatalf("building the removal: %v", err)
 	}
-	if err := rec.SignUnder(nw.admin, auth.State().Schema()); err != nil {
+	if err := rec.Sign(nw.admin); err != nil {
 		t.Fatalf("signing the removal: %v", err)
 	}
 	return rec
@@ -237,7 +225,7 @@ func (nw *network) conflictingFork(t *testing.T, auth *log.Authority, id types.I
 	if err != nil {
 		t.Fatalf("building the grant: %v", err)
 	}
-	if err := grant.SignUnder(nw.admin, auth.State().Schema()); err != nil {
+	if err := grant.Sign(nw.admin); err != nil {
 		t.Fatalf("signing the grant: %v", err)
 	}
 	return nw.removeNode(t, auth, id), grant
@@ -289,8 +277,9 @@ type fakeManager struct {
 	// egressErr is what SetEgress returns for each egress.
 	egressErr map[conn.Egress]error
 
-	home int
-	eps  []netip.AddrPort
+	home    int
+	reached map[int]bool // relay regions a measurement reached, the home aside
+	eps     []netip.AddrPort
 
 	tunnels map[uint64]conn.Tunnel
 	answers map[netip.Addr]bool // whether a probe to the address is answered
@@ -410,6 +399,12 @@ func (m *fakeManager) HomeRelay() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.home
+}
+
+func (m *fakeManager) ReachesRelay(region int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return region != 0 && (region == m.home || m.reached[region])
 }
 
 func (m *fakeManager) LocalEndpoints() []netip.AddrPort {

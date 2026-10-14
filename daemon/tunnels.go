@@ -56,10 +56,9 @@ const relayUnreachedAfter = 3 * time.Minute
 // is tried again before the status blames a firewall for it.
 const syncRetryGap = 5 * time.Minute
 
-// outdatedAfter is how long a live peer may announce no epoch in a network
-// past [types.SchemaPQ], or an older schema than the network's past
-// [types.SchemaPadded], before it is called outdated: one back from sleeping
-// through the upgrade announces it a sync round after it catches up.
+// outdatedAfter is how long a live peer may announce no epoch, or an older
+// schema than the network's, before it is called outdated: one back from
+// sleeping through an upgrade announces it a sync round after it catches up.
 const outdatedAfter = 3 * time.Minute
 
 // A running device signs its announcement again every announceRenewal, and
@@ -178,8 +177,10 @@ type tunnelCheck struct {
 }
 
 // checkTunnels checks every installed peer's tunnel. Each is probed, fresh
-// handshake or not, unless both ends have a relay and it answered within
-// [quietProbeEvery], when its last answer stands: the path is read after the
+// handshake or not, unless both ends have a relay, this device reaches the
+// peer's, and it answered within [quietProbeEvery]: its last answer then
+// stands. A relay not reached wakes nothing, and only a probe finds a peer
+// homed there down, to be looked up for its next home. The path is read after the
 // probes, since magicsock names a direct path only for a few seconds after its
 // last pong, and a quiet tunnel would otherwise read as relayed.
 func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
@@ -195,6 +196,7 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 
 	out := make([]tunnelCheck, len(peers))
 	probed, answered, kept := make([]bool, len(peers)), make([]bool, len(peers)), make([]bool, len(peers))
+	doubted := make([]bool, len(peers))
 	answers := make(map[types.Identity]probeAnswer, len(peers))
 	var wg sync.WaitGroup
 	for i, p := range peers {
@@ -202,7 +204,9 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		if len(p.peer.Addrs) == 0 {
 			continue
 		}
-		if a, ok := d.answered[p.id]; ok && homed && p.peer.HomeRelay != 0 && !now[p.id] && a.standsAt(at) {
+		// Neither an answer standing nor a backoff spares it a probe.
+		doubted[i] = d.doubted(p)
+		if a, ok := d.answered[p.id]; ok && homed && d.manager.ReachesRelay(p.peer.HomeRelay) && !now[p.id] && !doubted[i] && a.standsAt(at) {
 			out[i].reach.Live, out[i].reach.Direct, kept[i] = true, a.direct, true
 			answers[p.id] = a
 			continue
@@ -211,7 +215,7 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		// few checks: every device probing every one gone for good costs
 		// traffic through the relays and battery on laptops, for nothing.
 		// One with a new announcement is probed at once.
-		if n := d.probeMisses[p.id]; !now[p.id] && n >= probeMissesBeforeBackoff && n%probeBackoff != 0 {
+		if n := d.probeMisses[p.id]; !now[p.id] && !doubted[i] && n >= probeMissesBeforeBackoff && n%probeBackoff != 0 {
 			continue
 		}
 		probed[i] = true
@@ -233,6 +237,9 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		fresh := tunnelFresh
 		if probed[i] && d.unanswered[out[i].id] > 0 {
 			fresh = reachEvery
+			if doubted[i] {
+				fresh = 0
+			}
 		}
 		if hs := t.LastHandshake; !hs.IsZero() && time.Since(hs) < fresh {
 			out[i].reach.Live = true
@@ -252,6 +259,9 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		switch {
 		case probed[i] && !answered[i]:
 			unanswered[c.id] = d.unanswered[c.id] + 1
+			if doubted[i] && unanswered[c.id] == 1 {
+				d.checkSoon() // the second miss decides
+			}
 		case !probed[i] && d.unanswered[c.id] > 0:
 			unanswered[c.id] = d.unanswered[c.id]
 		}
@@ -304,7 +314,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	for _, c := range checks {
 		if !c.reach.Live {
 			held[c.id], _ = d.endpoints.Get(c.id)
-		} else if ep, ok := d.endpoints.Get(c.id); ok {
+		} else if ep, ok := d.endpoints.Get(c.id); ok && !ep.HintAlone() {
 			announced[c.id] = ep.Schema
 		}
 	}
@@ -364,7 +374,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 			}
 			// Its tunnel carries juist's own traffic alone. Only a sync that
 			// works shows it is not catching up.
-			if d.pq && c.stage == pairkey.StageNone {
+			if c.stage == pairkey.StageNone {
 				since, was := d.behind[c.id]
 				if !was {
 					since = now
@@ -377,7 +387,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 			}
 			// It reaches this device, and applies no change past what its
 			// build implements.
-			if d.padded && !reach[i].Outdated && announced[c.id] < d.status.Schema {
+			if build, ok := announced[c.id]; ok && !reach[i].Outdated && build < d.status.Schema {
 				since, was := d.olderBuild[c.id]
 				if !was {
 					since = now
@@ -416,7 +426,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 			// Running a build from before the network's upgrade, which knows
 			// no member that joined after it. Given longer than a live peer:
 			// its announcement from after the upgrade comes by the DHT.
-			if d.pq && c.stage == pairkey.StageNone || d.padded && ep.Schema < d.status.Schema {
+			if c.stage == pairkey.StageNone || !ep.HintAlone() && ep.Schema < d.status.Schema {
 				since, was := d.behind[c.id]
 				if !was {
 					since = now
@@ -438,6 +448,13 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		d.syncRetried[id] = now
 	}
 	d.mu.Unlock()
+	// A peer found down is installed on the disco key a newer hint names.
+	for _, c := range checks {
+		if k, ok := d.endpoints.HintDisco(c.id); ok && !c.reach.Live && c.peer.DiscoKey != conn.DiscoPublicFromRaw32(k) {
+			d.MarkDirty()
+			break
+		}
+	}
 	if lookup && d.dht != nil {
 		d.dht.Kick()
 	}
@@ -543,6 +560,36 @@ func (d *Daemon) noteNewAnnouncements(next []namedPeer) {
 	}
 	d.mu.Unlock()
 	if changed {
+		d.checkSoon()
+	}
+}
+
+// doubted reports whether a hint newer than p's announcement names another
+// disco key than p is installed on: its member restarted, or the hint is
+// forged. A probe tells which, two missed in a row; a
+// handshake from before the restart says nothing.
+func (d *Daemon) doubted(p namedPeer) bool {
+	k, ok := d.endpoints.HintDisco(p.id)
+	return ok && p.peer.DiscoKey != conn.DiscoPublicFromRaw32(k)
+}
+
+// checkDoubted asks for a check at once where a member in peers is newly
+// doubted, so a restarted one moves to its new disco key within seconds.
+func (d *Daemon) checkDoubted(peers []namedPeer) {
+	kick := false
+	d.mu.Lock()
+	seen := make(map[types.Identity]gossip.DiscoKey, len(d.doubtedOn))
+	for _, p := range peers {
+		k, ok := d.endpoints.HintDisco(p.id)
+		if !ok || p.peer.DiscoKey == conn.DiscoPublicFromRaw32(k) {
+			continue
+		}
+		seen[p.id] = k
+		kick = kick || d.doubtedOn[p.id] != k
+	}
+	d.doubtedOn = seen
+	d.mu.Unlock()
+	if kick {
 		d.checkSoon()
 	}
 }

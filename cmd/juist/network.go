@@ -67,11 +67,6 @@ func (a *app) showNetwork() error {
 		a.printf("%s\n", a.bold(state.Network()))
 	}
 	line := state.V4Range().String()
-	for _, r := range types.V4Ranges(state.Schema(), nil) {
-		if r != state.V4Range() && !state.V4Range().Overlaps(r) && holdsIn(state, r) {
-			line += a.dim(fmt.Sprintf(", %v (before schema %d)", r, types.SchemaOverlayV4))
-		}
-	}
 	if r, ok := state.V4Retiring(); ok && r.Live(now) {
 		line += a.dim(fmt.Sprintf(", %s until %s", joinPrefixes(r.Prefixes), deadline(r.Until)))
 	}
@@ -142,9 +137,6 @@ Rename the network on every device. Nothing else changes.`}
 		a.ok("unchanged: named %q", name)
 		return nil
 	}
-	if state.Schema() < types.SchemaRename {
-		return needsUpgrade("renaming")
-	}
 	aum, err := auth.Builder().RenameNetwork(name)
 	if err != nil {
 		return err
@@ -177,9 +169,6 @@ then resolves DOMAIN through juistd, with DNSSEC off for it.`}
 	if state.Domain() == domain {
 		a.ok("unchanged: %s", cmp.Or(domain, "no domain"))
 		return nil
-	}
-	if state.Schema() < types.SchemaPublish {
-		return needsUpgrade("a public domain")
 	}
 	if domain == "" {
 		for _, n := range state.Nodes() {
@@ -268,9 +257,6 @@ names old addresses is not moved.`}
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
-	}
-	if auth.State().Schema() < types.SchemaRenumber {
-		return needsUpgrade("renumbering")
 	}
 	until := uint64(a.now().Add(time.Duration(keep)).Unix())
 	switch len(pos) {
@@ -497,11 +483,6 @@ func (a *app) warnTransitionEnds(moving []types.NodeRecord, to map[types.Identit
 	if len(cut) > 0 {
 		a.warn("old addresses retire now, not at their deadline: %s", strings.Join(cut, ", "))
 	}
-}
-
-// holdsIn reports whether a member's IPv4 address lies in r.
-func holdsIn(state *log.State, r netip.Prefix) bool {
-	return slices.ContainsFunc(state.Nodes(), func(n types.NodeRecord) bool { return n.V4 != nil && r.Contains(*n.V4) })
 }
 
 // numberedFrom reports whether the network is numbered from p already: new

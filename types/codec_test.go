@@ -3,6 +3,7 @@ package types
 import (
 	"bytes"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
@@ -16,12 +17,14 @@ func testAUM(t *testing.T) (AUM, PrivateIdentity) {
 	node := mustIdentity(t)
 	v4 := netip.MustParseAddr("100.64.0.7")
 	snap := Snapshot{
+		Schema:      CurrentSchema,
 		Network:     "test-net",
 		Quorum:      1,
 		Epoch:       1,
 		EpochCommit: EpochCommit([]byte("secret")),
 		Disablement: []Hash{DisablementCommit(bytes.Repeat([]byte{1}, DisablementSecretSize))},
-		Admins:      []AdminKey{{Public: admin.Public(), Votes: 1, Name: "root"}},
+		Admins: []AdminKey{{Public: admin.Public(), Votes: 1, Name: "root",
+			Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement()}},
 		Nodes: []NodeRecord{{
 			Identity:  node.Public(),
 			Name:      "laptop",
@@ -32,6 +35,7 @@ func testAUM(t *testing.T) (AUM, PrivateIdentity) {
 			Roles:     []Role{RoleAdmin, RoleExit},
 			Routes:    []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("10.0.0.0/8")},
 			Expiry:    1 << 40,
+			Signing:   new(node.SigningKey()),
 		}},
 		EpochWraps: []EpochWrap{{Recipient: node.Public(), Sealed: bytes.Repeat([]byte{4}, SealedSecretSize)}},
 	}
@@ -103,8 +107,8 @@ func TestSchemaUsesByteStrings(t *testing.T) {
 	}
 	// A 1184-byte ML-KEM key encoded as a CBOR array of integers would be
 	// well over 1184 bytes on its own; catch that shape change by size.
-	if len(b) > 4096 {
-		t.Errorf("encoding is %d bytes; expected roughly 2.5 KiB, so some field is not a byte string", len(b))
+	if len(b) > 8192 {
+		t.Errorf("encoding is %d bytes; expected roughly 7.7 KiB, so some field is not a byte string", len(b))
 	}
 }
 
@@ -287,7 +291,7 @@ func TestSigHashExcludesSignatures(t *testing.T) {
 	if a.SigHash() != before {
 		t.Error("adding a signature changed the signing hash")
 	}
-	if !a.VerifySignature(second.Public(), nil) {
+	if !a.VerifySignature(second.Public(), new(second.SigningKey())) {
 		t.Error("signature added second does not verify")
 	}
 	stripped := AUM{Kind: KindGenesis, State: a.State}
@@ -407,7 +411,8 @@ func TestSchemaUpgradeRecordDecodesInEveryBuild(t *testing.T) {
 // history.
 func TestSnapshotSchemaRoundTrips(t *testing.T) {
 	a, admin := testAUM(t)
-	a.State.Schema = 7
+	next := CurrentSchema + 1
+	a.State.Schema = next
 	a.Signatures = nil
 	if err := a.Sign(admin); err != nil {
 		t.Fatalf("signing: %v", err)
@@ -420,23 +425,16 @@ func TestSnapshotSchemaRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decoding: %v", err)
 	}
-	if got.State.Schema != 7 {
-		t.Errorf("decoded schema %v, want 7", got.State.Schema)
+	if got.State.Schema != next {
+		t.Errorf("decoded schema %v, want %v", got.State.Schema, next)
 	}
-	// Schema 0 is the one in force today, so it must stay absent from the
-	// encoding: a version that costs bytes before there is a second one would
-	// have been a poor trade.
-	a.State.Schema = 0
-	a.Signatures = nil
-	if err := a.Sign(admin); err != nil {
-		t.Fatalf("signing: %v", err)
-	}
-	small, err := a.Encode()
-	if err != nil {
-		t.Fatalf("encoding: %v", err)
-	}
-	if len(small) >= len(b) {
-		t.Errorf("schema 0 encodes to %d bytes and schema 7 to %d; the default must be absent",
-			len(small), len(b))
+}
+
+// A state below MinSchema is refused, whatever else it says.
+func TestAStateBelowTheMinimumSchemaIsRefused(t *testing.T) {
+	a, _ := testAUM(t)
+	a.State.Schema = MinSchema - 1
+	if err := a.State.StaticValidate(true); err == nil || !strings.Contains(err.Error(), "reads schema 18") {
+		t.Fatalf("a state at %v: %v", a.State.Schema, err)
 	}
 }

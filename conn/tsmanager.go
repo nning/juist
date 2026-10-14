@@ -1,6 +1,7 @@
 package conn
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -1430,6 +1431,24 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 }
 
 func (m *tsManager) HomeRelay() int { return int(m.homeRelay.Load()) }
+
+func (m *tsManager) ReachesRelay(region int) bool {
+	if region == 0 {
+		return false
+	}
+	if region == m.HomeRelay() {
+		return true
+	}
+	if m.magic == nil {
+		return false
+	}
+	r := m.magic.GetLastNetcheckReport(context.Background())
+	if r == nil {
+		return false
+	}
+	_, ok := r.RegionLatency[tailcfg.DERPRegionID(region)]
+	return ok
+}
 
 // publicHeld is how long a public address of this host's counts after it
 // was last reported.

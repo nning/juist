@@ -144,8 +144,39 @@ func TestUndecodableTailStillDeliversItsPrefix(t *testing.T) {
 	}
 }
 
+// Records the log takes nothing in from are no news: neither applied nor an
+// error, so they set off no round of relaying, which a peer offering a copy
+// the log leaves out every session would otherwise keep going for good.
+func TestRecordsTheLogTakesNothingFromAreNoNews(t *testing.T) {
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := newTestNode(t, types.Hash{5}, 1, s)
+	signer, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := types.Hash{1}
+	v := types.CurrentSchema
+	rec := types.AUM{Kind: types.KindSchemaUpgrade, Prev: &prev, Schema: &v}
+	if err := rec.Sign(signer); err != nil {
+		t.Fatal(err)
+	}
+	b, err := rec.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.log.mu.Lock()
+	n.log.informErr = ErrNothingNew
+	n.log.mu.Unlock()
+	if applied, err := n.node.apply([][]byte{b}); applied || err != nil {
+		t.Fatalf("applied %v, err %v", applied, err)
+	}
+}
+
 // largestEndpoint is an announcement with every field at its cap, signed by
-// both keys as past the cut-over.
+// both keys.
 func largestEndpoint(t *testing.T, priv types.PrivateIdentity) Endpoint {
 	t.Helper()
 	label := strings.Repeat("a", 63)
@@ -163,16 +194,7 @@ func largestEndpoint(t *testing.T, priv types.PrivateIdentity) Endpoint {
 	return e
 }
 
-func mustEncode(t *testing.T, v any) []byte {
-	t.Helper()
-	b, err := encode(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
-// Every frame at its caps, past the cut-over, encodes within [MaxFrameSize]:
+// Every frame at its caps encodes within [MaxFrameSize]:
 // a frame over it fails to encode in every round, and wedges the pair's
 // sync for good. Exit criterion (5) for frames.
 func TestFramesAtTheirCapsFit(t *testing.T) {
@@ -181,22 +203,12 @@ func TestFramesAtTheirCapsFit(t *testing.T) {
 		t.Fatal(err)
 	}
 	ep := largestEndpoint(t, priv)
-	claiming := ep
-	if claiming.Signing, err = ClaimSigningKey(priv); err != nil {
-		t.Fatal(err)
-	}
-	if claiming.StaticValidate() == nil {
-		t.Fatal("an announcement claiming its signing key and signed by it validated")
-	}
-	if claiming.MLDSA = nil; len(mustEncode(t, &claiming)) > len(mustEncode(t, &ep)) {
-		t.Fatal("an announcement claiming its signing key is the larger; the frames below are not at their caps")
-	}
 	eps := make([]Endpoint, MaxEndpointsPerFrame)
 	for i := range eps {
 		eps[i] = ep
 	}
 	lease := types.Lease{Network: types.Hash{1}, Head: types.Hash{2}, Issued: 1 << 62}
-	if err := lease.Sign(priv, true); err != nil {
+	if err := lease.Sign(priv); err != nil {
 		t.Fatal(err)
 	}
 	lb, err := lease.Encode()
@@ -213,7 +225,7 @@ func TestFramesAtTheirCapsFit(t *testing.T) {
 	pair := &pairkey.Msg{From: priv.Public(), To: peer.Public(), Store: 1 << 62, ToStore: 1 << 62, Gen: 1 << 62,
 		Epoch: 1 << 62, Use: 1 << 62, CT: make([]byte, mlkem.CiphertextSize768), Check: make([]byte, 16),
 		FromWG: types.WGKey{1}, ToWG: types.WGKey{2}}
-	if err := pair.Sign(priv, types.Hash{1}, true); err != nil {
+	if err := pair.Sign(priv, types.Hash{1}); err != nil {
 		t.Fatal(err)
 	}
 

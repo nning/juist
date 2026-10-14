@@ -54,7 +54,7 @@ func newHolders(t *testing.T, quorum uint32, people map[string]int) *holders {
 func (hs *holders) signed(aum types.AUM, by ...types.PrivateIdentity) types.AUM {
 	hs.t.Helper()
 	for _, k := range by {
-		if err := aum.SignUnder(k, hs.auth.State().Schema()); err != nil {
+		if err := aum.Sign(k); err != nil {
 			hs.t.Fatal(err)
 		}
 	}
@@ -133,23 +133,6 @@ func TestAHolderCanNeedSeveralOfItsKeys(t *testing.T) {
 	}
 }
 
-// Holders are schema 3: before it, a key naming one is refused, since older
-// builds would count its votes apart.
-func TestHoldersNeedTheirSchema(t *testing.T) {
-	h := newHarnessAt(t, 1, 1, types.SchemaRevokingRoles)
-	k, err := types.GenerateIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.auth.Builder().AddAdminKey(types.AdminKey{Public: k.Public(), Signing: new(k.SigningKey()), Endorsement: k.Endorsement(), Votes: 1, Holder: "alice"}); err == nil ||
-		!strings.Contains(err.Error(), "needs schema 3") {
-		t.Fatalf("a holder at schema 2: %v", err)
-	}
-	if _, err := h.auth.Builder().SetHolder(types.HolderPolicy{Name: "admin0", Votes: 1, Needed: 1}); err == nil {
-		t.Fatal("a holder policy applied at schema 2")
-	}
-}
-
 // Asking more of a holder's keys is a revocation: a concurrent change does
 // not orphan it on its hash.
 func TestNeedingMoreKeysWinsForkChoice(t *testing.T) {
@@ -192,7 +175,7 @@ func TestHoldersDifferingOnlyInCaseAreRefused(t *testing.T) {
 }
 
 // A policy that grants authority as well as taking some is no revocation,
-// and a raised quorum is one from schema 3.
+// and a raised quorum is one.
 func TestWhatCountsAsWithdrawingAuthority(t *testing.T) {
 	hs := newHolders(t, 1, map[string]int{"alice": 3})
 	mixed := types.AUM{Kind: types.KindSetHolder, Holder: &types.HolderPolicy{Name: "alice", Votes: 4096, Needed: 2}}
@@ -202,80 +185,53 @@ func TestWhatCountsAsWithdrawingAuthority(t *testing.T) {
 	q := uint32(2)
 	raise := types.AUM{Kind: types.KindSetQuorum, Quorum: &q}
 	if !hs.auth.State().Revokes(&raise) {
-		t.Fatal("a raised quorum is not a revocation at schema 3")
-	}
-}
-
-// Raising a network to schema 3 makes each named key its own holder, so an
-// admin's further keys can be added under the name they know, and no vote
-// changes; keys whose names collide stay voters of their own.
-func TestTheUpgradeNamesHolders(t *testing.T) {
-	h := newHarnessAt(t, 3, 1, types.SchemaRevokingRoles)
-	up, err := h.auth.Builder().SchemaUpgrade(types.SchemaHolders)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.signQuorum(&up)
-	before := h.auth.State().TotalVotes()
-	if err := h.auth.Inform(up); err != nil {
-		t.Fatal(err)
-	}
-	for _, k := range h.auth.State().Admins() {
-		if k.Holder != k.Name {
-			t.Errorf("key %q holds for %q after the upgrade", k.Name, k.Holder)
-		}
-	}
-	if after := h.auth.State().TotalVotes(); after != before {
-		t.Fatalf("the upgrade changed the votes from %d to %d", before, after)
+		t.Fatal("a raised quorum is not a revocation")
 	}
 }
 
 // A removed admin key cannot undo its own removal: a branch it signed, rooted
 // before the removal, loses to the branch that removes it, whatever its hash
-// and even as a revocation. At schema 2 it wins on a lower hash.
+// and even as a revocation.
 func TestARemovedKeyCannotUndoItsRemoval(t *testing.T) {
-	for _, schema := range []types.SchemaVersion{types.SchemaRevokingRoles, types.SchemaHolders} {
-		h := newHarnessAt(t, 2, 1, schema)
-		mallory, honest := h.admins[0], h.admins[1]
-		victim := h.addNode("victim")
-		var removal, counter types.AUM
-		for {
-			b := h.auth.Builder()
-			var err error
-			if removal, err = b.RemoveAdminKey(mallory.Public()); err != nil {
-				t.Fatal(err)
-			}
-			if err := h.sign(&removal, honest); err != nil {
-				t.Fatal(err)
-			}
-			// Mallory's move at the same parent, signed by her alone: a
-			// revocation too, so the bias alone does not decide.
-			if counter, err = b.RemoveNode(victim.Identity, h.sealer()); err != nil {
-				t.Fatal(err)
-			}
-			if err := h.sign(&counter, mallory); err != nil {
-				t.Fatal(err)
-			}
-			if counter.Hash().Compare(removal.Hash()) < 0 {
-				break
-			}
-			bump, err := b.EpochBump(h.sealer())
-			if err != nil {
-				t.Fatal(err)
-			}
-			h.signQuorum(&bump)
-			if err := h.auth.Inform(bump); err != nil {
-				t.Fatal(err)
-			}
+	h := newHarness(t, 2, 1)
+	mallory, honest := h.admins[0], h.admins[1]
+	victim := h.addNode("victim")
+	var removal, counter types.AUM
+	for {
+		b := h.auth.Builder()
+		var err error
+		if removal, err = b.RemoveAdminKey(mallory.Public()); err != nil {
+			t.Fatal(err)
 		}
-		auth := h.fork()
-		if err := auth.Inform(removal, counter); err != nil {
-			t.Fatalf("schema %d: %v", schema, err)
+		if err := h.sign(&removal, honest); err != nil {
+			t.Fatal(err)
 		}
-		_, malloryStays := auth.State().Admin(mallory.Public())
-		if want := schema < types.SchemaHolders; malloryStays != want {
-			t.Errorf("schema %d: the removed key is an admin after the fork: %v", schema, malloryStays)
+		// Mallory's move at the same parent, signed by her alone: a
+		// revocation too, so the bias alone does not decide.
+		if counter, err = b.RemoveNode(victim.Identity, h.sealer()); err != nil {
+			t.Fatal(err)
 		}
+		if err := h.sign(&counter, mallory); err != nil {
+			t.Fatal(err)
+		}
+		if counter.SigHash().Compare(removal.SigHash()) < 0 {
+			break
+		}
+		bump, err := b.EpochBump(h.sealer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.signQuorum(&bump)
+		if err := h.auth.Inform(bump); err != nil {
+			t.Fatal(err)
+		}
+	}
+	auth := h.fork()
+	if err := auth.Inform(removal, counter); err != nil {
+		t.Fatal(err)
+	}
+	if _, malloryStays := auth.State().Admin(mallory.Public()); malloryStays {
+		t.Error("the removed key is an admin after the fork")
 	}
 }
 
@@ -375,7 +331,7 @@ func TestForkChoiceIgnoresTheStoreOrder(t *testing.T) {
 		a = rename(fmt.Sprintf("a%d", i), h.admins[0])
 		bb = rename(fmt.Sprintf("b%d", i), h.admins[1])
 		c = rename(fmt.Sprintf("c%d", i), h.admins[2])
-		if c.Hash().Compare(bb.Hash()) < 0 && bb.Hash().Compare(a.Hash()) < 0 {
+		if c.SigHash().Compare(bb.SigHash()) < 0 && bb.SigHash().Compare(a.SigHash()) < 0 {
 			break
 		}
 	}

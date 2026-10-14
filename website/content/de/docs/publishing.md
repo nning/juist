@@ -220,8 +220,9 @@ zeigt den Dienst mit `(members)`. Spätere Befehle behalten die Markierung bis
 {{< /step >}}
 
 Ohne [Zugriffsregeln]({{< relref "docs/access" >}}) darf jedes Mitglied den
-Namen öffnen. Gibt es Regeln, dürfen es nur die Mitglieder, die eine Regel
-zulässt, etwa mit `pass from <family> to name photos`.
+Namen öffnen. Gibt es Regeln, dürfen es nur die Mitglieder, für die eine
+Regel den Namen nennt, etwa `pass from <family> to name photos`; eine Regel
+zum Gerät oder zu `any` öffnet den Namen nicht.
 
 - Die Ingress reicht den Namen an niemanden weiter außer an die CA, die ihn
   beim Ausstellen und Erneuern des Zertifikats per TLS auf 443 prüft. Alle
@@ -249,11 +250,6 @@ zulässt, etwa mit `pass from <family> to name photos`.
   Programm darauf an ihn heran, auch eines, das ein Client eines öffentlichen
   Dienstes auf demselben Gerät Anfragen schicken lassen kann. Auf diesem Gerät
   erreichst du den Dienst unter seiner eigenen Adresse.
-- Namen nur für Mitglieder brauchen ein Log-Upgrade (`juist log upgrade`).
-  Aktualisiere vorher das Gerät, das das TLS des Namens beendet, und jede
-  Ingress: Ein Gerät mit älterer Version übernimmt ab dem Upgrade keine
-  Änderungen mehr und bedient seine Namen wie zuvor, bis sein Stand des Netzes
-  veraltet.
 - Ein Name nur für Mitglieder liegt immer auf 443, per TLS, ohne `--proxy`.
   Ein erneutes `juist publish add nas photos` ohne `--members` lässt ihn so;
   erst `--members=false` macht ihn öffentlich.
@@ -442,7 +438,7 @@ ist dann die eines Geräts, von dem die anderen keine Verbindungen annehmen.
   Domain auf Mitgliedern aus ([Namen]({{< relref "docs/names" >}})).
 - `http://` zu einem solchen Namen geht an Port 80 des Geräts, wo juist auf
   https umleitet. Lauscht dort ein anderes Programm auf allen Adressen,
-  antwortet stattdessen dieses, und `juist status` warnt davor.
+  antwortet stattdessen dieses, und `juist health` warnt davor.
 
 ## Weitere Optionen
 
@@ -554,8 +550,8 @@ Service-Mitglied steht er im Log des Terminators.
 | `juist status`: `Sharing` zeigt `reached by nobody: the terminator does not run` | `juist share` startet ihn. Warum er stand, zeigt `journalctl -u juist-serve`. |
 | `juist status`: `Published` zeigt `…, but ends TLS for none: the terminator does not run (juist publish serve)` | Führe `juist publish serve` aus. Warum er stand, zeigt `journalctl -u juist-serve`. |
 | `the terminator does not say it listens on …` | Er ist nicht rechtzeitig gestartet. Den Grund zeigt `journalctl -u juist-serve`. |
-| `juist status`: `warning: another program holds port 80 on …` | Mitglieder, die `http://NAME` öffnen, landen bei diesem Programm statt bei der Umleitung auf https. Lass es nur auf den Adressen lauschen, die es bedient, und öffne den Namen bis dahin mit `https://`. |
-| `juist status`: `warning: no certificate for NAME: …` | Die CA hat keines ausgestellt, aus dem genannten Grund. Meist erreicht sie NAME nicht: Das öffentliche DNS von NAME muss auf eine laufende Ingress zeigen. Bis dahin scheitert TLS bei jedem Client. |
+| `juist health`: `warning: another program holds port 80 on …` | Mitglieder, die `http://NAME` öffnen, landen bei diesem Programm statt bei der Umleitung auf https. Lass es nur auf den Adressen lauschen, die es bedient, und öffne den Namen bis dahin mit `https://`. |
+| `juist health`: `warning: no certificate for NAME: …` | Die CA hat keines ausgestellt, aus dem genannten Grund. Meist erreicht sie NAME nicht: Das öffentliche DNS von NAME muss auf eine laufende Ingress zeigen. Bis dahin scheitert TLS bei jedem Client. |
 | `juist status`: `warning: not serving NAME, which is for members alone: OTHER reaches its service as it is, …` | OTHER geht per TCP oder ohne Proxy an denselben Dienst, dessen Clients ihn also nach NAME fragen könnten. Gib NAME einen eigenen Dienst. |
 | `juist status`: `warning: not serving NAME, its service meant for members alone: the log has the name public` | Soll er nur für Mitglieder sein, führt ein Admin `juist publish add GERÄT NAME --members` aus. Soll er öffentlich sein, führst du auf dem Gerät `juist publish add NAME HOST:PORT --members=false` aus. |
 | `juist status`: `warning: NAME, for members alone, is not reached from here, …` | Dieses Gerät löst die Namen des Netzes über öffentliches DNS auf, NAME führt also zur Ingress, die ihn abweist. Unter Linux hilft systemd-resolved. |

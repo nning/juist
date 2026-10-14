@@ -14,7 +14,7 @@ sends it requests. The daemon decides who may ask for what:
 |---|---|
 | root | everything, including choosing the operator |
 | the operator | everything else: list devices, invite, approve, use an exit node, and so on |
-| any other local user | only `juist status` |
+| any other local user | only `juist status` and `juist health` |
 
 The **operator** is the local user chosen for this device, usually you, the
 person who uses it. Once there is an operator, you no longer type `sudo`
@@ -70,10 +70,10 @@ It prints `operator cleared`.
 
 ## Troubleshooting
 
-`juist status`, run by a user who is not the operator, ends with:
+`juist health`, run by a user who is not the operator, ends with:
 
 ```console
-$ juist status
+$ juist health
 …
 hint: read-only; to manage this device: sudo juist set --operator=alice
 ```

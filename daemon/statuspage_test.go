@@ -39,7 +39,7 @@ func TestTheTerminatorIsToldTheStatusPage(t *testing.T) {
 		p = resp.StatusPage
 		return resp.Err == "" && p != nil && len(p.Members) > 0
 	})
-	for addr, want := range map[string]bool{"100.64.0.1": true, "100.64.0.2": true, "100.64.0.3": false} {
+	for addr, want := range map[string]bool{"198.18.0.1": true, "198.18.0.2": true, "198.18.0.3": false} {
 		if got := slices.Contains(p.Members, netip.MustParseAddr(addr)); got != want {
 			t.Errorf("%s a member's: %v", addr, got)
 		}

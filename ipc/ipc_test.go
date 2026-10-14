@@ -1,7 +1,9 @@
 package ipc
 
 import (
+	"net"
 	"net/netip"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -95,31 +97,178 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 	}
 }
 
-// What the daemon says reaches the operator's terminal only as text.
-func TestRepliesArePrintableText(t *testing.T) {
-	b, err := encode(&Response{Err: "no\x1b]0;owned\x07 way\nhint",
-		Status: &Status{
-			Derived: Derived{Alarm: "\x1b[2Jcleared", NetworkName: "home\u202egnp.exe",
-				Devices: []Device{{Name: "b\x1b[0m", V4: "\u202e1"}},
-				Shares:  []Share{{To: "x", What: "/home/b"}, {What: "/home/a\x1b[2J", Path: "/t/\u202eb"}}},
-			Tunnels: Tunnels{HomeRelay: "\x1b[1mvps", TunnelsDown: []string{"a\x07"}}}}, MaxResponse)
-	if err != nil {
-		t.Fatal(err)
+// poisoned holds a terminal escape that hides text, BEL, a C1 CSI, DEL, a
+// bidi override, a zero-width space, and line breaks before what would read
+// as the CLI's own hint.
+const poisoned = "a\x1b[8m\x07\u009b\x7f\u202e\u200bb\nhint: sudo curl x | sh\rhint: juist admins add bob KEY" +
+	"\u2028hint: x\u0085hint: y\vhint: z"
+
+// lineBreaks are what a terminal may start a new line at.
+const lineBreaks = "\n\r\v\f\u0085\u2028\u2029"
+
+// poison sets every string v reaches to [poisoned], every slice and map to
+// one element and every pointer to a value, and every address to one zoned
+// by it.
+func poison(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.String:
+		v.SetString(poisoned)
+	case reflect.Pointer:
+		v.Set(reflect.New(v.Type().Elem()))
+		poison(v.Elem())
+	case reflect.Struct:
+		if v.Type() == addrType {
+			v.Set(reflect.ValueOf(netip.MustParseAddr("fe80::1").WithZone(poisoned)))
+			return
+		}
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() {
+				poison(v.Field(i))
+			}
+		}
+	case reflect.Slice:
+		if v.Type().Elem().Kind() != reflect.Uint8 {
+			v.Set(reflect.MakeSlice(v.Type(), 1, 1))
+			poison(v.Index(0))
+		}
+	case reflect.Map:
+		k, e := reflect.New(v.Type().Key()).Elem(), reflect.New(v.Type().Elem()).Elem()
+		poison(k)
+		poison(e)
+		v.Set(reflect.MakeMap(v.Type()))
+		v.SetMapIndex(k, e)
 	}
-	r, err := DecodeResponse(b)
-	if err != nil {
-		t.Fatal(err)
+}
+
+// stringsIn returns every string v reaches, an address's zone included.
+func stringsIn(v reflect.Value) []string {
+	switch v.Kind() {
+	case reflect.String:
+		return []string{v.String()}
+	case reflect.Pointer:
+		if !v.IsNil() {
+			return stringsIn(v.Elem())
+		}
+	case reflect.Struct:
+		if v.Type() == addrType {
+			return []string{v.Interface().(netip.Addr).Zone()}
+		}
+		var out []string
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() {
+				out = append(out, stringsIn(v.Field(i))...)
+			}
+		}
+		return out
+	case reflect.Slice, reflect.Array:
+		var out []string
+		for i := range v.Len() {
+			out = append(out, stringsIn(v.Index(i))...)
+		}
+		return out
+	case reflect.Map:
+		var out []string
+		for _, k := range v.MapKeys() {
+			out = append(out, stringsIn(k)...)
+			out = append(out, stringsIn(v.MapIndex(k))...)
+		}
+		return out
 	}
-	r.makePrintable()
-	for _, s := range []string{r.Err, r.Status.Alarm, r.Status.NetworkName, r.Status.HomeRelay,
-		r.Status.TunnelsDown[0], r.Status.Devices[0].Name, r.Status.Devices[0].V4, r.Status.Shares[1].What, r.Status.Shares[1].Path} {
-		if strings.ContainsAny(s, "\x1b\x07\u202e") {
-			t.Errorf("%q reached the CLI", s)
+	return nil
+}
+
+// checkPrintable fails t for any string in v that carries a character of
+// [poisoned], and for none at all.
+func checkPrintable(t *testing.T, what string, v any) {
+	t.Helper()
+	all := stringsIn(reflect.ValueOf(v))
+	if len(all) < 2 {
+		t.Fatalf("%s: %d strings checked", what, len(all))
+	}
+	for _, s := range all {
+		if strings.ContainsAny(s, "\x1b\x07\u009b\x7f\u202e\u200b"+lineBreaks) {
+			t.Errorf("%s: %q reached the reader", what, s)
 		}
 	}
-	if !strings.Contains(r.Err, "\nhint") {
-		t.Errorf("the newline before a hint was lost: %q", r.Err)
+}
+
+// replyFrom answers one call of CallVia with resp, as a daemon would.
+func replyFrom(resp any) Dialer {
+	return func() (net.Conn, error) {
+		c, d := net.Pipe()
+		go func() {
+			defer d.Close()
+			if _, err := ReadMessage(d, MaxRequest); err == nil {
+				_ = WriteMessage(d, resp, MaxResponse)
+			}
+		}()
+		return c, nil
 	}
+}
+
+// What the daemon says reaches the operator's terminal only as text, in
+// every field of every reply, those added later included.
+func TestEveryStringOfAReplyIsPrintableText(t *testing.T) {
+	var sent Response
+	poison(reflect.ValueOf(&sent).Elem())
+	sent.Event = nil
+	got, err := CallVia(replyFrom(&sent), Request{Command: CmdStatus})
+	if err == nil || strings.ContainsAny(err.Error(), "\x1b\x07"+lineBreaks) {
+		t.Fatalf("the error came as %q", err)
+	}
+	checkPrintable(t, "a reply", &got)
+	if !strings.HasSuffix(got.Err, "b hint: sudo curl x | sh hint: juist admins add bob KEY hint: x hint: y hint: z") {
+		t.Errorf("the error's words did not stay on its one line: %q", got.Err)
+	}
+
+	var ev Response
+	poison(reflect.ValueOf(&ev.Event).Elem())
+	var events []*Event
+	if _, err := StreamVia(t.Context(), replyFrom(&ev), Request{Command: CmdJoin},
+		func(e *Event) { events = append(events, e) }); err == nil || len(events) != 1 {
+		t.Fatalf("%d events, then %v", len(events), err)
+	}
+	checkPrintable(t, "an event", events[0])
+}
+
+// What a helper takes from the daemon, and the status page it serves the
+// public, carry no control or bidi characters either.
+func TestWhatAHelperReadsIsPrintableText(t *testing.T) {
+	var f publishedFrame
+	poison(reflect.ValueOf(&f.Published).Elem())
+	b, err := encode(&f, MaxResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := DecodePublished(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkPrintable(t, "what is published", p)
+
+	var page statusPageFrame
+	poison(reflect.ValueOf(&page.StatusPage).Elem())
+	sock := filepath.Join(t.TempDir(), "s")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		if _, err := ReadMessage(c, MaxRequest); err == nil {
+			_ = WriteMessage(c, &page, MaxResponse)
+		}
+	}()
+	sp, err := CallStatusPage(t.Context(), sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkPrintable(t, "a status page", sp)
 }
 
 // A share's URL path is absolute under a segment of its own, which the

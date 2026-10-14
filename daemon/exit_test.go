@@ -80,10 +80,10 @@ func (f *reconcileFixture) learnExit(t *testing.T, dev *device, port uint16, ser
 	}
 }
 
-// learnOld hands the daemon dev's announcement as a build before schema 14
-// makes it, naming no epoch, saying it serves as an exit node and router or
-// not.
-func (f *reconcileFixture) learnOld(t *testing.T, dev *device, port uint16, serving bool) {
+// learnNoEpoch hands the daemon dev's announcement as a device holding no
+// group key makes it, naming no epoch, saying it serves as an exit node and
+// router or not.
+func (f *reconcileFixture) learnNoEpoch(t *testing.T, dev *device, port uint16, serving bool) {
 	t.Helper()
 	e, err := endpointFor(dev, port)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestAChosenExitNodeFailsClosed(t *testing.T) {
 		{"not serving", -1, func(t *testing.T, f *reconcileFixture) { f.learnExit(t, f.nw.devices[1], 7001, false) },
 			"has not agreed to serve"},
 		{"not reachable", -1, func(*testing.T, *reconcileFixture) {}, "cannot be reached"},
-		{"an older build", -1, func(t *testing.T, f *reconcileFixture) { f.learnOld(t, f.nw.devices[1], 7001, true) },
+		{"naming no epoch", -1, func(t *testing.T, f *reconcileFixture) { f.learnNoEpoch(t, f.nw.devices[1], 7001, true) },
 			"it runs an older juist, or has yet to catch up"},
 		{"stale", 2, func(t *testing.T, f *reconcileFixture) { f.learnExit(t, f.nw.devices[1], 7001, true) },
 			"view of the network is stale"},
@@ -171,7 +171,7 @@ func TestAChosenExitNodeFailsClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+			if err := rec.Sign(f.nw.admin); err != nil {
 				t.Fatal(err)
 			}
 			if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -253,7 +253,7 @@ func TestAnExitNodeServesWhenGrantedAndAgreed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
@@ -377,12 +377,12 @@ func TestTheChoiceFollowsARotatedExitNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, err := f.auth.Builder().RotateIdentity(exit.record.Identity, fresh.Public(), f.nw.sealer())
+	rec, err := f.auth.Builder().RotateIdentity(exit.record.Identity, fresh.Public(), fresh.SigningKey(), f.nw.sealer())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []types.PrivateIdentity{exit.identity, fresh, f.nw.admin} {
-		if err := rec.SignUnder(k, f.auth.State().Schema()); err != nil {
+		if err := rec.Sign(k); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -428,7 +428,7 @@ func TestARefusedRelaySetEndsServing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.SignUnder(f.nw.admin, f.auth.State().Schema()); err != nil {
+	if err := rec.Sign(f.nw.admin); err != nil {
 		t.Fatal(err)
 	}
 	_ = f.d.Inform([]types.AUM{rec})

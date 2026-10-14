@@ -97,9 +97,6 @@ than one admin must approve, the invite waits for them.`}
 	if err != nil {
 		return err
 	}
-	if need, what := (&types.NodeRecord{Roles: o.roles()}).NeedsSchema(); auth.State().Schema() < need {
-		return needsUpgrade(what)
-	}
 	if o.service != "" {
 		if auth.State().Domain() == "" {
 			return fmt.Errorf("the network has no domain to publish under\nhint: juist network domain pub.example.org")
@@ -223,7 +220,7 @@ func (d *daemonInvite) handle(ctx context.Context, e *ipc.Event, reply func(ipc.
 				"signed. juistd on this device may be compromised")
 		}
 		d.asked = true
-		if e.Join == nil || e.Join.Identity.Validate() != nil ||
+		if e.Join == nil || e.Join.Identity.Validate() != nil || e.Join.Signing.Validate() != nil ||
 			(e.Join.Name != "" && types.ValidateName(e.Join.Name) != nil) {
 			return errors.New("juistd asked to admit a malformed request")
 		}
@@ -469,7 +466,8 @@ func (m *admitter) Admit(ctx context.Context, req *enroll.JoinRequest, wait func
 }
 
 func sameKeys(n types.NodeRecord, req *enroll.JoinRequest) bool {
-	return n.WireGuard == req.Keys.WireGuard && n.X25519 == req.Keys.X25519 && n.MLKEM == req.Keys.MLKEM
+	return n.WireGuard == req.Keys.WireGuard && n.X25519 == req.Keys.X25519 && n.MLKEM == req.Keys.MLKEM &&
+		n.Signing != nil && *n.Signing == req.Signing
 }
 
 // compareWords has the person compare the words the device shows with those
@@ -495,7 +493,7 @@ func (m *admitter) compareWords(ctx context.Context, req *enroll.JoinRequest,
 			"juistd here may be compromised")
 	}
 	a.printf("%s wants to join; compare with the words it shows:\n", cmp.Or(m.o.name, memberName(req.Name)))
-	a.command("%s", enroll.Fingerprint(salt, nonce, req.Identity, req.Keys))
+	a.command("%s", enroll.Fingerprint(salt, nonce, req))
 	ok, err := a.askNow(ctx, "same?")
 	if err != nil {
 		return fmt.Errorf("not admitted: %w", err)

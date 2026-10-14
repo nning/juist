@@ -33,50 +33,35 @@ const (
 	//     than being refused ([inEffect]): a concurrent record doing the same
 	//     won.
 	applyProbe
-
-	// applyDraft is a real application of a record not yet signed: what its
-	// signatures would bring, an introduced signing key, is taken as given.
-	applyDraft
 )
 
-// A kindRule is how one kind of record changes the state: from which schema
-// on, and what it does to next, a copy of the parent state with the record's
-// hash as its head.
-type kindRule struct {
-	since types.SchemaVersion
-	what  string // names the change, for a network older than since
-	apply func(next *State, a *types.AUM, mode applyMode) error
-}
-
-// kindRules holds every kind but genesis, which starts a state rather than
-// changing one.
-var kindRules = map[types.Kind]kindRule{
-	types.KindAddNode:         {apply: (*State).addNode},
-	types.KindRemoveNode:      {apply: (*State).removeNode},
-	types.KindSetNodeRoutes:   {apply: (*State).setNodeRoutes},
-	types.KindRotateNodeKey:   {apply: (*State).rotateNodeKey},
-	types.KindRotateIdentity:  {apply: (*State).rotateIdentity},
-	types.KindAddAdminKey:     {apply: (*State).addAdminKey},
-	types.KindRemoveAdminKey:  {apply: (*State).removeAdminKey},
-	types.KindSetQuorum:       {apply: (*State).setQuorum},
-	types.KindCheckpoint:      {apply: (*State).checkpoint},
-	types.KindEpochBump:       {apply: func(*State, *types.AUM, applyMode) error { return nil }},
-	types.KindSchemaUpgrade:   {apply: (*State).schemaUpgrade},
-	types.KindSetVouchers:     {types.SchemaVouchers, "a vouching threshold", (*State).setVouchers},
-	types.KindSetHolder:       {types.SchemaHolders, "a holder policy", (*State).setHolder},
-	types.KindRenumberNetwork: {types.SchemaRenumber, "renumbering", (*State).renumberNetwork},
-	types.KindRenumberNode:    {types.SchemaRenumber, "renumbering", (*State).renumberNode},
-	types.KindRetireAddresses: {types.SchemaRenumber, "retiring addresses", (*State).retireAddresses},
-	types.KindRenameNetwork:   {types.SchemaRename, "renaming the network", (*State).renameNetwork},
-
-	types.KindSetAdminRecipient: {types.SchemaSealing, "admin encryption keys", (*State).setAdminRecipient},
-	types.KindSetNodeNames:      {types.SchemaNames, "names", (*State).setNodeNames},
-	types.KindSetDomain:         {types.SchemaPublish, "a public domain", (*State).setDomain},
-	types.KindSetPublished:      {types.SchemaPublish, "published names", (*State).setPublished},
-	types.KindRenameNode:        {types.SchemaRenameNode, "renaming a device", (*State).renameNode},
-	types.KindSetPolicy:         {types.SchemaPolicy, "an access policy", (*State).setPolicy},
-	types.KindSetSigningKeys:    {types.SchemaSigning, "signing keys", (*State).setSigningKeys},
-	types.KindSetAdminSigning:   {types.SchemaSigning, "signing keys", (*State).setAdminSigning},
+// kindRules holds, for every kind but genesis, which starts a state rather
+// than changing one, what it does to next, a copy of the parent state with
+// the record's hash as its head.
+var kindRules = map[types.Kind]func(next *State, a *types.AUM, mode applyMode) error{
+	types.KindAddNode:           (*State).addNode,
+	types.KindRemoveNode:        (*State).removeNode,
+	types.KindSetNodeRoutes:     (*State).setNodeRoutes,
+	types.KindRotateNodeKey:     (*State).rotateNodeKey,
+	types.KindRotateIdentity:    (*State).rotateIdentity,
+	types.KindAddAdminKey:       (*State).addAdminKey,
+	types.KindRemoveAdminKey:    (*State).removeAdminKey,
+	types.KindSetQuorum:         (*State).setQuorum,
+	types.KindCheckpoint:        (*State).checkpoint,
+	types.KindEpochBump:         func(*State, *types.AUM, applyMode) error { return nil },
+	types.KindSchemaUpgrade:     (*State).schemaUpgrade,
+	types.KindSetVouchers:       (*State).setVouchers,
+	types.KindSetHolder:         (*State).setHolder,
+	types.KindRenumberNetwork:   (*State).renumberNetwork,
+	types.KindRenumberNode:      (*State).renumberNode,
+	types.KindRetireAddresses:   (*State).retireAddresses,
+	types.KindRenameNetwork:     (*State).renameNetwork,
+	types.KindSetAdminRecipient: (*State).setAdminRecipient,
+	types.KindSetNodeNames:      (*State).setNodeNames,
+	types.KindSetDomain:         (*State).setDomain,
+	types.KindSetPublished:      (*State).setPublished,
+	types.KindRenameNode:        (*State).renameNode,
+	types.KindSetPolicy:         (*State).setPolicy,
 }
 
 // inEffectError is a record refused because what it does is done already,
@@ -125,12 +110,10 @@ func (s *State) apply(a *types.AUM, hash types.Hash, mode applyMode) (*State, er
 	case !ok:
 		// Unreachable: StaticValidate rejects unknown kinds before this.
 		return nil, reject(RuleMalformed, fmt.Errorf("log: unhandled record kind %v", a.Kind))
-	case s.schema < rule.since:
-		return nil, reject(RuleState, fmt.Errorf("log: %s needs %v; the network is at %v", rule.what, rule.since, s.schema))
 	}
 	next := s.clone()
 	next.head = hash
-	if err := rule.apply(next, a, mode); err != nil {
+	if err := rule(next, a, mode); err != nil {
 		switch {
 		case errors.As(err, new(*SchemaTooNewError)):
 			return nil, err
@@ -163,7 +146,7 @@ func (next *State) addNode(a *types.AUM, mode applyMode) error {
 	// A renumbering keeps the ranges it moved from until they retire; an
 	// address given out in one would be left behind when they do.
 	retiring := n.V4 != nil && next.v4Retiring != nil &&
-		!slices.ContainsFunc(types.V4Ranges(next.schema, next.v4Prefix), func(r netip.Prefix) bool { return r.Contains(*n.V4) })
+		!slices.ContainsFunc(types.V4Ranges(next.v4Prefix), func(r netip.Prefix) bool { return r.Contains(*n.V4) })
 	if mode == applyProbe && n.V4 != nil &&
 		(next.v4Holder(*n.V4) || retiring || types.ValidateV4(*n.V4, next.V4Ranges()) != nil) {
 		// Reissued, the admission is allocated a free address.
@@ -186,7 +169,7 @@ func (next *State) addNode(a *types.AUM, mode applyMode) error {
 	if err := next.checkNodeAdmissible(n, types.Identity{}); err != nil {
 		return err
 	}
-	if err := next.checkNodeSigning(n, applyChain); err != nil {
+	if err := next.checkNodeSigning(n); err != nil {
 		return err
 	}
 	next.nodes[n.Identity] = n.Clone()
@@ -271,9 +254,6 @@ func (next *State) setPolicy(a *types.AUM, _ applyMode) error {
 	if next.policy != nil && bytes.Equal(next.policy.Encode(), a.Policy.Encode()) {
 		return inEffect(errors.New("log: the network has this policy already"))
 	}
-	if a.Policy.NamesNames() && next.schema < types.SchemaMembers {
-		return fmt.Errorf("log: a policy naming published names needs %v; the network is at %v", types.SchemaMembers, next.schema)
-	}
 	if err := a.Policy.ValidateMembers(next.Nodes()); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
@@ -314,7 +294,11 @@ func (next *State) rotateNodeKey(a *types.AUM, _ applyMode) error {
 	return nil
 }
 
-func (next *State) rotateIdentity(a *types.AUM, mode applyMode) error {
+func (next *State) rotateIdentity(a *types.AUM, _ applyMode) error {
+	if next.schema < types.SchemaSignedRotation {
+		return fmt.Errorf("log: an identity rotation needs %v; the network is at %v",
+			types.SchemaSignedRotation, next.schema)
+	}
 	cur, err := next.member(*a.Subject)
 	if err != nil {
 		return err
@@ -324,18 +308,12 @@ func (next *State) rotateIdentity(a *types.AUM, mode applyMode) error {
 	}
 	updated := cur.Clone()
 	updated.Identity = *a.NewIdentity
-	if next.PQ() {
-		key, err := introduced(a, *a.NewIdentity, mode)
-		if err != nil {
-			return err
-		}
-		updated.Signing = key
-	}
+	updated.Signing = new(*a.NewSigning)
 	delete(next.nodes, *a.Subject)
 	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
 		return err
 	}
-	if err := next.checkNodeSigning(updated, mode); err != nil {
+	if err := next.checkNodeSigning(updated); err != nil {
 		return err
 	}
 	next.nodes[*a.NewIdentity] = updated
@@ -350,11 +328,8 @@ func (next *State) addAdminKey(a *types.AUM, _ applyMode) error {
 		return fmt.Errorf("log: %v comes with an encryption key, which only the key itself sets",
 			a.Admin.Public.ShortString())
 	}
-	switch {
-	case next.PQ() && a.Admin.Signing == nil:
+	if a.Admin.Signing == nil {
 		return fmt.Errorf("log: %v comes with no signing key, which the network needs", a.Admin.Public.ShortString())
-	case next.schema < types.SchemaSigning && a.Admin.Signing != nil:
-		return fmt.Errorf("log: %v comes with a signing key, which needs %v", a.Admin.Public.ShortString(), types.SchemaSigning)
 	}
 	if _, exists := next.admins[a.Admin.Public]; exists {
 		return fmt.Errorf("log: %v is already an admin key", a.Admin.Public.ShortString())
@@ -364,7 +339,7 @@ func (next *State) addAdminKey(a *types.AUM, _ applyMode) error {
 	}
 	added := *a.Admin.Clone()
 	next.admins[added.Public] = added
-	if err := types.ValidateAdmins(next.Admins(), next.schema); err != nil {
+	if err := types.ValidateAdmins(next.Admins()); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
 	return next.checkSigningKeys()
@@ -470,94 +445,8 @@ func (next *State) schemaUpgrade(a *types.AUM, _ applyMode) error {
 		// leave a node that only observed sync stopping.
 		return &SchemaTooNewError{Version: *a.Schema, Implemented: types.CurrentSchema, At: next.head}
 	}
-	if *a.Schema >= types.SchemaMLDSA && next.schema < types.SchemaMLDSA {
-		return fmt.Errorf("log: %v is reached by setting every signing key, not by an upgrade", types.SchemaMLDSA)
-	}
-	if next.schema < types.SchemaHolders && *a.Schema >= types.SchemaHolders {
-		next.nameHolders()
-	}
-	for _, n := range next.Nodes() {
-		if err := n.ValidateNameBytes(*a.Schema); err != nil {
-			return fmt.Errorf("log: cannot adopt %v: %w", *a.Schema, err)
-		}
-	}
-	// A schema that reserves more overlay space must not leave a granted route
-	// inside it, or no checkpoint of the state would validate.
-	ranges := types.V4Ranges(*a.Schema, next.v4Prefix)
-	if next.v4Retiring != nil {
-		ranges = append(ranges, next.v4Retiring.Prefixes...)
-	}
-	for _, n := range next.nodes {
-		if err := n.ValidateInNetwork(next.ULA(), ranges); err != nil {
-			return fmt.Errorf("log: cannot adopt %v: %w", *a.Schema, err)
-		}
-	}
 	next.schema = *a.Schema
 	return nil
-}
-
-// introduced returns the signing key id's signature on a brings, which a
-// verified record carries; a draft may not carry it yet.
-func introduced(a *types.AUM, id types.Identity, mode applyMode) (*types.SigningKey, error) {
-	if s, ok := a.Signature(id); ok && s.Key != nil {
-		return new(*s.Key), nil
-	}
-	if mode == applyDraft {
-		return nil, nil
-	}
-	return nil, fmt.Errorf("log: %v brings no signing key", id.ShortString())
-}
-
-// setSigningKeys gives every member its signing key, each endorsed by its
-// identity, and cuts the network over to [types.SchemaMLDSA]. Every admin key
-// has registered its own before.
-func (next *State) setSigningKeys(a *types.AUM, _ applyMode) error {
-	if next.PQ() {
-		return inEffect(errors.New("log: the network has its signing keys already"))
-	}
-	members := a.Signing.Members
-	if len(members) != len(next.nodes) {
-		return fmt.Errorf("log: %d signing keys for %d members; every member needs one", len(members), len(next.nodes))
-	}
-	for i := range members {
-		m := &members[i]
-		cur, ok := next.nodes[m.Identity]
-		if !ok {
-			return fmt.Errorf("log: a signing key for %v, which is not a member", m.Identity.ShortString())
-		}
-		if !m.Identity.VerifyEndorsement(&m.Key, m.Endorsement) {
-			return fmt.Errorf("log: %v did not endorse the signing key named for it", m.Identity.ShortString())
-		}
-		updated := cur.Clone()
-		updated.Signing = new(m.Key)
-		next.nodes[m.Identity] = updated
-	}
-	for id, k := range next.admins {
-		if k.Signing == nil {
-			return fmt.Errorf("log: admin key %v has registered no signing key", id.ShortString())
-		}
-	}
-	next.schema = types.SchemaMLDSA
-	return next.checkSigningKeys()
-}
-
-// setAdminSigning registers an admin key's endorsed signing key.
-func (next *State) setAdminSigning(a *types.AUM, _ applyMode) error {
-	m := a.Signing.Members[0]
-	k, ok := next.admins[m.Identity]
-	switch {
-	case next.PQ():
-		return fmt.Errorf("log: the network is past the cut-over; %v's signing key is set", m.Identity.ShortString())
-	case !ok:
-		return fmt.Errorf("log: %v is not an admin key", m.Identity.ShortString())
-	case !m.Identity.VerifyEndorsement(&m.Key, m.Endorsement):
-		return fmt.Errorf("log: %v did not endorse the signing key named for it", m.Identity.ShortString())
-	case k.Signing != nil && *k.Signing == m.Key:
-		return inEffect(fmt.Errorf("log: %v has that signing key already", m.Identity.ShortString()))
-	}
-	k.Signing, k.Endorsement = new(m.Key), new(m.Endorsement)
-	next.admins[m.Identity] = k
-	return next.checkSigningKeys()
 }
 
 // checkSigningKeys refuses a state where two identities name one signing key.
@@ -568,15 +457,10 @@ func (s *State) checkSigningKeys() error {
 	return nil
 }
 
-// checkNodeSigning checks a member's signing key: none below the cut-over,
-// past it one no other identity names, unless a draft has yet to bring it.
-func (s *State) checkNodeSigning(n *types.NodeRecord, mode applyMode) error {
-	switch {
-	case !s.PQ() && n.Signing != nil:
-		return fmt.Errorf("log: %v has a signing key, which needs %v", n.Identity.ShortString(), types.SchemaMLDSA)
-	case n.Signing == nil && (!s.PQ() || mode == applyDraft):
-		return nil
-	case n.Signing == nil:
+// checkNodeSigning checks a member's signing key: one no other identity
+// names.
+func (s *State) checkNodeSigning(n *types.NodeRecord) error {
+	if n.Signing == nil {
 		return fmt.Errorf("log: %v has no signing key", n.Identity.ShortString())
 	}
 	for id, other := range s.nodes {
@@ -593,25 +477,6 @@ func (s *State) checkNodeSigning(n *types.NodeRecord, mode applyMode) error {
 		}
 	}
 	return nil
-}
-
-// nameHolders makes each admin key from before [types.SchemaHolders] the key
-// of a holder named as the key is, where no other key's name folds to the
-// same: every holder then has the one key, so every vote stays as it was,
-// and an admin's further keys can be added under the name they know.
-func (s *State) nameHolders() {
-	names := map[string]int{}
-	for _, k := range s.admins {
-		if k.Name != "" {
-			names[types.FoldName(k.Name)]++
-		}
-	}
-	for id, k := range s.admins {
-		if k.Holder == "" && k.Name != "" && names[types.FoldName(k.Name)] == 1 {
-			k.Holder = k.Name
-			s.admins[id] = k
-		}
-	}
 }
 
 func (next *State) renameNetwork(a *types.AUM, _ applyMode) error {
@@ -693,7 +558,7 @@ func (next *State) renumberNetwork(a *types.AUM, mode applyMode) error {
 		next.nodes[e.Identity] = updated
 	}
 	var retiring []netip.Prefix
-	for _, p := range types.V4Ranges(next.schema, next.v4Prefix) {
+	for _, p := range types.V4Ranges(next.v4Prefix) {
 		for _, n := range next.nodes {
 			if n.Retiring != nil && p.Contains(n.Retiring.Addr) && !r.Prefix.Contains(n.Retiring.Addr) {
 				retiring = append(retiring, p)
@@ -846,10 +711,7 @@ func (s *State) checkNodeAdmissible(n *types.NodeRecord, excluding types.Identit
 	if err := n.ValidateInNetwork(s.ULA(), s.V4Ranges()); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
-	if need, what := n.NeedsSchema(); s.schema < need {
-		return fmt.Errorf("log: %s needs %v; the network is at %v", what, need, s.schema)
-	}
-	if err := n.ValidateNameBytes(s.schema); err != nil {
+	if err := n.ValidateNameBytes(); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
 	if len(n.Published) > 0 && s.domain == "" {

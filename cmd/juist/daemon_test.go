@@ -145,6 +145,6 @@ func TestANonOperatorIsToldHowToBecomeOne(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("got %v, want %q", err, want)
 	}
-	a.printStatus(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home"}})
+	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home"}})
 	mustContain(t, out.String(), "read-only", "juist set --operator=")
 }

@@ -199,7 +199,8 @@ func (d *Dir) readRecord(h types.Hash) (types.AUM, error) {
 	}
 	aum, err := types.DecodeAUM(b)
 	if err != nil {
-		return types.AUM{}, fmt.Errorf("store: %s does not hold a valid record: %w", name, err)
+		return types.AUM{}, fmt.Errorf("store: %s does not hold a valid record: %w; it is damaged, "+
+			"or written before schema 18, which this juist reads no more", name, err)
 	}
 	// The file name is the claim; this is the check. Without it a single
 	// flipped bit — or an edit — would be indistinguishable from a record the

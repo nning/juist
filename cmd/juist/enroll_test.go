@@ -338,6 +338,61 @@ func TestAnInviteThroughTheDaemonAdmitsOneDevice(t *testing.T) {
 	}
 }
 
+// A request naming no valid ML-DSA key is refused before anything is asked
+// or signed, and a member asking again under another ML-DSA key is not sent
+// an admission for the keys it holds.
+func TestAnAdmissionHoldsTheGuestToItsSigningKey(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home")
+	var out syncBuffer
+	a := c.app(&out, "")
+	a.home, _ = openHome(c.home)
+	auth := openLog(t, c)
+	key, err := a.admittingKey(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.node = &localNode{h: a.home}
+	g, err := keys.GenerateNode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adm := &admitter{a: a, key: key}
+	d := &daemonInvite{a: a, auth: auth, adm: adm, o: inviteOptions{expires: time.Minute}}
+	inv, err := enroll.NewInvite([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41642")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := func(ipc.Request) error { return nil }
+	ctx := context.Background()
+	if err := d.handle(ctx, &ipc.Event{Kind: ipc.EventInviteReady, Code: inv.Code().String(),
+		Link: inv.Link().String()}, reply); err != nil {
+		t.Fatal(err)
+	}
+	unsigned := &enroll.JoinRequest{Name: "phone", Identity: g.Identity.Public(), Keys: g.Public}
+	if err := d.handle(ctx, &ipc.Event{Kind: ipc.EventInviteAdmit, Join: unsigned}, reply); err == nil {
+		t.Fatal("a request without a signing key was taken up")
+	}
+	d.admitting.Wait()
+
+	req := &enroll.JoinRequest{Name: "phone", Identity: g.Identity.Public(), Keys: g.Public,
+		Signing: g.Identity.SigningKey()}
+	noWait := func(uint32, uint32) error { return nil }
+	if _, _, err := adm.Admit(ctx, req, noWait, nil); err != nil {
+		t.Fatal(err)
+	}
+	other, err := keys.GenerateNode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	swapped := *req
+	swapped.Signing = other.Identity.SigningKey()
+	if _, adm, err := adm.Admit(ctx, &swapped, noWait, nil); err == nil || adm != nil {
+		t.Fatalf("a member asking under another signing key: %v", err)
+	}
+}
+
 // With the words compared, a "no" admits nobody.
 func TestAdmissionWaitsForTheWordsToMatch(t *testing.T) {
 	t.Parallel()
@@ -365,7 +420,7 @@ func TestAdmissionWaitsForTheWordsToMatch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not confirmed") {
 		t.Fatalf("admit after a no: %v", err)
 	}
-	mustContain(t, out.String(), enroll.Fingerprint(salt, nonce, g.Identity.Public(), g.Public))
+	mustContain(t, out.String(), enroll.Fingerprint(salt, nonce, req))
 	if len(openLog(t, c).State().Nodes()) != 1 {
 		t.Fatal("the device was admitted anyway")
 	}

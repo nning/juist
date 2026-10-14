@@ -192,7 +192,7 @@ type Admission struct {
 // SignAdmission states that guest is a member of network as of head.
 func SignAdmission(admin types.PrivateIdentity, network, head types.Hash, guest types.Identity) (*Admission, error) {
 	a := &Admission{Admin: admin.Public(), Network: network, Head: head, Guest: guest, Signing: admin.SigningKey()}
-	sig, pq, err := admin.SignBoth(a.message(), true)
+	sig, pq, err := admin.SignBoth(a.message())
 	if err != nil {
 		return nil, err
 	}
@@ -201,8 +201,8 @@ func SignAdmission(admin types.PrivateIdentity, network, head types.Hash, guest 
 }
 
 // Verify checks the admission's signatures by the key it names, whose
-// signing key fingerprint names, as a link does; and, where the log names
-// one for the admin key, as past the cut-over, that it is key.
+// signing key fingerprint names, as a link does, and that it is key, the one
+// the log names for the admin key.
 func (a *Admission) Verify(fingerprint [fingerprintLen]byte, key *types.SigningKey) error {
 	switch {
 	case SigningFingerprint(&a.Signing) != fingerprint:
@@ -319,7 +319,7 @@ func DecodeMessage(b []byte) (Message, error) {
 func NewJoinRequest(c *Channel, name string, id types.PrivateIdentity, keys types.NodeKeys,
 	nonce Nonce) (*JoinRequest, error) {
 	msg := proofMessage(c.Binding())
-	proof, pq, err := id.SignBoth(msg, true)
+	proof, pq, err := id.SignBoth(msg)
 	if err != nil {
 		return nil, err
 	}

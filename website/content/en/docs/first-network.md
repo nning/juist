@@ -104,11 +104,12 @@ home · connected
   Names         home.juist
   Freshness     unchecked: no voucher
   Ports         udp/41643
+  Schema        18
   Updated       just now
 $ juist devices
-NAME                  IPV4         REACHED  ROLES
-laptop (this device)  198.18.36.1  -        -
-nas                   198.18.36.2  direct   -
+NAME                  IPV4         REACHED  SCHEMA  ROLES
+laptop (this device)  198.18.36.1  -        18      -
+nas                   198.18.36.2  direct   18      -
 $ ping 198.18.36.2
 ```
 
@@ -158,7 +159,7 @@ public address, such as a VPS, needs port 41643/udp open.
 | `read-only; to manage this device …` | `sudo juist set --operator=$USER`, once |
 | `warning: code voided: wrong guess from …` | Join with the link, which still works. If that was not your device, someone else knows the invite. |
 | `juist: words not confirmed; nothing signed` | If the words differed, the device asking is not the one you invited. Start a new invite. |
-| `no answer from a device` in `juist status` | It is offline, or its port 41643/udp is closed. |
+| `no answer from a device` in `juist health` | It is offline, or its port 41643/udp is closed. |
 | `no tunnel traffic from a device` | Open 41643/udp on a device with a public address, or grant one `relay`. |
 
 More cases are on the [Troubleshooting]({{< relref "docs/troubleshooting" >}})

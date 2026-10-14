@@ -457,6 +457,8 @@ func (stubManager) HostRoutes() []netip.Prefix { return nil }
 
 func (stubManager) HomeRelay() int { return 0 }
 
+func (stubManager) ReachesRelay(int) bool { return false }
+
 func (stubManager) LocalEndpoints() []netip.AddrPort { return nil }
 
 func (stubManager) LocalPort() uint16 { return 41641 }
@@ -578,35 +580,6 @@ func (d *daemonDevice) answer(reply string, args ...string) (string, error) {
 func (d *daemonDevice) start(args ...string) *running {
 	d.t.Helper()
 	return d.cli.start(append([]string{"--socket", d.sock}, args...)...)
-}
-
-// schema0Log returns a network at schema 0 whose one member is self, as it
-// is in auth.
-func schema0Log(t *testing.T, auth *log.Authority, self types.Identity) *log.Authority {
-	t.Helper()
-	admin, err := types.GenerateIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec, _ := auth.State().Node(self)
-	legacy := netip.MustParseAddr("100.64.0.1")
-	rec.V4 = &legacy
-	genesis, err := log.Genesis("old", 1, []types.AdminKey{{Public: admin.Public(), Signing: new(admin.SigningKey()), Endorsement: admin.Endorsement(), Votes: 1, Name: "admin"}},
-		[]types.Hash{{1}}, []types.NodeRecord{rec}, sealer())
-	if err != nil {
-		t.Fatal(err)
-	}
-	genesis.State.Schema = 0
-	genesis.State.Nodes[0].Signing, genesis.State.Admins[0].Signing = nil, nil
-	genesis.State.Admins[0].Endorsement = nil
-	if err := genesis.Sign(admin); err != nil {
-		t.Fatal(err)
-	}
-	old, err := log.Create(log.NewMemStorage(), genesis)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return old
 }
 
 // adminKeyOf creates an admin key for person in a keystore of its own, as on

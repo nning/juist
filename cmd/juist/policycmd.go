@@ -422,9 +422,6 @@ func (a *app) readPolicy(state *log.State, src, name string) (*types.Policy, err
 }
 
 func needsPolicySchema(state *log.State) error {
-	if state.Schema() < types.SchemaPolicy {
-		return needsUpgrade("access policies")
-	}
 	return nil
 }
 

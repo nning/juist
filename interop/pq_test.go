@@ -11,28 +11,38 @@ import (
 	"time"
 )
 
-// previousRelease is exit criterion (4) of M15 and (2) of M17: on the
+// previousRelease is exit criterion (4) of M15 and (3) of M18: on the
 // previous release lx creates a network, fb joins, and the two reach each
-// other. fb, made an admin and upgraded, upgrades the network while lx is
-// stopped: lx, back on the previous release, says to install a newer juist,
-// and fb says it applies no changes, still reaching it. Upgraded, lx reaches
-// fb on a pair key. Once both
-// announce their signing keys and both admin keys have registered theirs, fb
-// cuts the network over while lx pings fb with no gap. The network then goes, so
-// the lab's own starts from nothing; a keystore of its own keeps its admin
-// keys out of the lab's.
+// other. fb, made an admin and upgraded while lx is stopped, and lx, back on
+// the previous release, reach each other; upgraded, lx reaches fb on a pair
+// key, and an epoch bump leaves no gap in a ping. The network then goes,
+// failed or not, so the lab's own starts from nothing; a keystore of its own
+// keeps its admin keys out of the lab's.
 func previousRelease(t *testing.T, fb, lx *vm) {
+	const env = "HOME=/tmp/previous "
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, v := range []*vm{fb, lx} {
 				out, _ := v.try(diagnose(v), 2*time.Minute)
 				t.Logf("%s:\n%s", v.name, out)
+				out, _ = v.try(previousDump(v), 2*time.Minute)
+				t.Logf("%s, since lx's juistd stopped for the upgrade:\n%s", v.name, out)
 			}
 			hold(t, fb, lx)
 		}
+		for _, v := range []*vm{fb, lx} {
+			v.try(env+"juist reset --force --yes", 2*time.Minute)
+		}
+		fb.try("pkill -f '[t]cpdump -n -tt -l -c 400'; sysrc -q -x juistd_args; service juistd restart", 2*time.Minute)
+		lx.try("pkill -f '[t]cpdump -n -tt -l -c 400'; rm -f "+verboseDropIn+
+			"; systemctl daemon-reload; systemctl restart juistd", 2*time.Minute)
 	})
-	const env = "HOME=/tmp/previous "
 	ok := func(string) bool { return true }
+	// Both log verbosely, so that a failure shows what each heard of the other.
+	fb.run(t, "sysrc -q juistd_args=--verbose >/dev/null && service juistd restart >/dev/null")
+	lx.run(t, "mkdir -p /etc/systemd/system/juistd.service.d && printf '%s\\n' '[Service]' 'ExecStart=' "+
+		"'ExecStart=/usr/bin/juistd --verbose --home /var/lib/juist --socket /run/juist/juistd.sock --tun juist0' > "+
+		verboseDropIn+" && systemctl daemon-reload && systemctl restart juistd")
 	for _, v := range []*vm{fb, lx} {
 		v.run(t, "mkdir -p /tmp/previous")
 		v.eventually(t, "juistd answers", 2*time.Minute, "juist status", ok)
@@ -52,66 +62,56 @@ func previousRelease(t *testing.T, fb, lx *vm) {
 	t.Logf("on the previous release, across the bump at %s: lost %d%s %s", bump, len(lost),
 		map[bool]string{true: ", a gap", false: ""}[gap], strings.Join(lost, ", "))
 
-	// The previous release reads a key without its signing key alone.
-	key := regexp.MustCompile(`juist admins add fb (nid:[^.\s]+)`).FindStringSubmatch(
-		fb.run(t, env+"juist admins new fb"))
+	key := regexp.MustCompile(`juist admins add fb (nid:\S+)`).FindStringSubmatch(fb.run(t, env+"juist admins new fb"))
 	if key == nil {
 		t.Fatal("juist admins new printed no key to add")
 	}
 	lx.run(t, env+"juist admins add fb "+key[1])
 	fb.eventually(t, "holding its admin key's addition", 2*time.Minute, env+"juist admins", has("fb"))
+	lx.run(t, "systemctl stop juistd")
+	// The data plane between the two on their LAN from here, for a failure.
+	fb.run(t, "daemon -f sh -c 'exec tcpdump -n -tt -l -c 400 -i vtnet1 udp port 41643 > /tmp/pq.udp 2>/dev/null'")
+	lx.run(t, "date +%s > /tmp/pq.restart; setsid -f sh -c 'exec tcpdump -n -tt -l -c 400 -i any udp port 41643 "+
+		"and host 10.77.0.1 > /tmp/pq.udp 2>/dev/null' >/dev/null 2>&1 < /dev/null")
 	fb.run(t, "pkg add -f /tmp/juist.pkg >/dev/null && service juistd restart >/dev/null")
 	fb.eventually(t, "juistd answers, upgraded", 2*time.Minute, "juist status", ok)
-	lx.run(t, "systemctl stop juistd")
-	fb.eventually(t, "upgrading the network with lx asleep", 2*time.Minute, env+"juist log upgrade --yes",
-		has("upgraded to"))
 	lx.run(t, "systemctl start juistd")
-	lx.eventually(t, "saying to install a newer juist", 3*time.Minute, "juist status",
-		has("install a newer juist"))
-	// The previous release mixes in preshared keys: lx stays reachable.
-	out = fb.eventually(t, "saying lx applies no changes", 6*time.Minute, "juist status",
-		has("runs an older juist, which applies no changes until updated"))
-	if strings.Contains(out, "firewall") {
-		t.Fatalf("an older build is blamed on a firewall:\n%s", out)
+	lx.eventually(t, "reaching fb, upgraded, from the previous release", 3*time.Minute, "ping -c1 -W2 "+fb4, ok)
+	fb.eventually(t, "reaching lx on the previous release, upgraded", time.Minute, "ping -c1 -t2 "+lx4, ok)
+	if out := fb.run(t, "juist health"); strings.Contains(out, "older juist") || strings.Contains(out, "firewall") {
+		t.Fatalf("an upgraded device blames the previous release:\n%s", out)
 	}
 
 	lx.run(t, "dpkg -i /tmp/juist.deb >/dev/null && systemctl is-active juistd >/dev/null")
 	lx.eventually(t, "juistd answers, upgraded", 2*time.Minute, "juist status", ok)
 	lx.eventually(t, "the tunnel on a pair key", 3*time.Minute, pairsCmd, newer(0))
-	fb.eventually(t, "lx no longer on an older juist", 2*time.Minute, "juist status", func(out string) bool {
-		return !strings.Contains(out, "older juist")
-	})
 	lx.eventually(t, "reaching fb on a pair key", time.Minute, "ping -c1 -W2 "+fb4, ok)
 	fb.eventually(t, "reaching lx on a pair key", time.Minute, "ping -c1 -t2 "+lx4, ok)
-
-	// Each admin key registers its signing key on its own machine, one after
-	// the other, since two from one head would fork; then the quorum, fb's
-	// key alone, cuts over.
-	fb.eventually(t, "asking its admin to register a signing key", 3*time.Minute, env+"juist status",
-		has("juist admins receive"))
-	fb.run(t, "cd /tmp/previous && "+env+"juist admins receive")
-	lx.eventually(t, "holding fb's signing key", 2*time.Minute, env+"juist log",
-		has("quantum-safe signing key of an admin key"))
-	lx.run(t, "cd /tmp/previous && "+env+"juist admins receive")
-	fb.eventually(t, "every device announcing its signing key", 3*time.Minute, env+"juist status",
-		has("every device announces a signing key"))
-	out, cut := pingAcrossBump(t, lx, fb4, func() {
-		fb.run(t, "cd /tmp/previous && "+env+"juist log upgrade --yes")
-		for _, v := range []*vm{lx, fb} {
-			v.eventually(t, "past the cut-over", 2*time.Minute, env+"juist log", has("quantum-safe signing keys"))
-		}
-	})
+	out, bump = pingAcrossBump(t, lx, fb4, func() { fb.run(t, env+"juist rotate group-secret") })
 	if lost, gap := lostPings(out, 900); gap {
-		t.Fatalf("a gap across the cut-over at %s: lost %s\n%s", cut, strings.Join(lost, ", "), out[max(0, len(out)-300):])
+		t.Fatalf("a gap across the bump at %s, both upgraded: lost %s\n%s", bump, strings.Join(lost, ", "),
+			out[max(0, len(out)-300):])
 	} else if len(lost) > 0 {
-		t.Logf("lost alone across the cut-over at %s, as the lab's network does: %s", cut, strings.Join(lost, ", "))
+		t.Logf("lost alone across the bump at %s, as the lab's network does: %s", bump, strings.Join(lost, ", "))
 	}
-	lx.eventually(t, "reaching fb past the cut-over", time.Minute, "ping -c1 -W2 "+fb4, ok)
-	fb.eventually(t, "reaching lx past the cut-over", time.Minute, "ping -c1 -t2 "+lx4, ok)
 	for _, v := range []*vm{fb, lx} {
 		v.run(t, env+"juist reset --force --yes")
 		v.eventually(t, "in no network", 2*time.Minute, "juist status", has("no network"))
 	}
+}
+
+// verboseDropIn has Debian's juistd log verbosely, the previous release's too.
+const verboseDropIn = "/etc/systemd/system/juistd.service.d/verbose.conf"
+
+// previousDump is the devices v holds, the datagrams between fb and lx on
+// their LAN since lx's juistd stopped for fb's upgrade, and the last of what
+// v's juistd logged.
+func previousDump(v *vm) string {
+	logs := "tail -600 /var/log/juistd.log"
+	if !v.freebsd {
+		logs = "journalctl -u juistd --no-pager -o short-unix --since @$(cat /tmp/pq.restart) | tail -600"
+	}
+	return "juist devices; echo '== udp/41643 between fb and lx'; head -150 /tmp/pq.udp; echo '== juistd'; " + logs
 }
 
 // postQuantum is exit criterion (2) of M15: an epoch bump moves the two to a
