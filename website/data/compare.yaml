@@ -59,6 +59,25 @@ groups:
           rayfish:
             en: Through a pkarr server, and from the coordinator over the mesh.
             de: Über einen pkarr-Server, und vom Coordinator über das Mesh.
+  - en: Against a quantum computer
+    de: Gegen einen Quantencomputer
+    rows:
+      - en: Tunnel traffic recorded today stays unreadable
+        de: Heute mitgeschnittener Tunnelverkehr bleibt unlesbar
+        marks: ynnpnnnnnnp
+        notes:
+          netbird:
+            en: With Rosenpass, an experimental option, not on phones.
+            de: Mit Rosenpass, einer experimentellen Option, nicht auf Handys.
+          zerotier:
+            en: Not ZeroTier One; ZeroTier Quantum, a separate commercial platform, claims it.
+            de: ZeroTier One nicht; ZeroTier Quantum, eine eigene kommerzielle Plattform, verspricht es.
+          wireguard:
+            en: With a preshared key set by hand, or Rosenpass.
+            de: Mit einem von Hand gesetzten Preshared Key, oder Rosenpass.
+      - en: Membership signed so that it cannot be forged
+        de: Mitgliedschaft so signiert, dass sie sich nicht fälschen lässt
+        marks: ynnnnnnnnnn
   - en: Connections
     de: Verbindungen
     rows:
@@ -68,6 +87,25 @@ groups:
       - en: A relay where direct fails
         de: Ein Relay, wo es direkt nicht geht
         marks: yyyyyyyyyyn
+      - en: From a network that lets only HTTPS out
+        de: Aus einem Netz, das nur HTTPS hinauslässt
+        marks: yyyyypnpyyn
+        notes:
+          netmaker:
+            en: Since 1.7, through a gateway set up for it.
+            de: Seit 1.7, über ein dafür eingerichtetes Gateway.
+          zerotier:
+            en: A relay over TCP on port 443, without TLS.
+            de: Ein Relay über TCP auf Port 443, ohne TLS.
+          tinc:
+            en: Over TCP to port 443 or an HTTP proxy, without TLS.
+            de: Über TCP auf Port 443 oder einen HTTP-Proxy, ohne TLS.
+          shared-secret:
+            en: Over WebSocket with TLS, to a node listening on port 443.
+            de: Über WebSocket mit TLS, zu einem Knoten auf Port 443.
+      - en: Ethernet (layer 2) between devices
+        de: Ethernet (Layer 2) zwischen den Geräten
+        marks: nnnnnynynnn
       - en: Runs without its maker's servers
         de: Läuft ohne Server des Herstellers
         marks: ynyyynyyyyy

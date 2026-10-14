@@ -18,7 +18,7 @@ every device checks those changes itself. No server is needed for that, and
 none has to be trusted. How that is built is on the
 [Architecture]({{< relref "docs/architecture" >}}) page.
 
-Three things set juist apart from every other mesh here:
+Four things set juist apart from every other mesh here:
 
 - **No central infrastructure, and still WireGuard.** The other meshes
   without a server use their own protocols, and EasyTier offers WireGuard only
@@ -29,6 +29,10 @@ Three things set juist apart from every other mesh here:
   only juist publishes services to the internet and points public names at
   members. In the others, routes and names are set by hand in each device's
   configuration, or are not available at all.
+- **Quantum-safe throughout.** Every tunnel mixes in a key a quantum
+  computer cannot recover, and every change to the network is signed with
+  ML-DSA. None of the others signs its members that way, and of the others
+  only NetBird offers post-quantum tunnels, as an experimental option.
 
 ## At a glance {#overview}
 
@@ -49,6 +53,8 @@ knows every device and hands out the keys, so whoever controls it could add a
 device of their own. [Tailnet Lock](https://tailscale.com/kb/1226/tailnet-lock)
 closes that gap: devices accept a new key only if a key you hold has signed
 it. Removing a device and spreading the change still go through the server.
+Its tunnels are not post-quantum: it sets no preshared key and lets you set
+none.
 
 Choose Tailscale if you want clients for every platform and user accounts
 with access rules by user, and can accept a company's server at the centre.
@@ -70,7 +76,10 @@ and can run and protect a server of your own.
 devices through WireGuard, coordinated by a management server that holds the
 devices, their keys and the access rules. You can use the one NetBird runs,
 or run it yourself together with its signal and relay servers. The client is
-BSD-3-Clause, the servers are AGPL-3.0.
+BSD-3-Clause, the servers are AGPL-3.0. With
+[Rosenpass](https://docs.netbird.io/client/post-quantum-cryptography), an
+experimental option not available on phones, its tunnels become
+post-quantum.
 
 Choose NetBird if you want a self-hosted server with a dashboard, sign-in
 through your identity provider and access rules by user.
@@ -92,6 +101,8 @@ WireGuard, and emulates an Ethernet network between devices. Who belongs is
 decided by a [network controller](https://docs.zerotier.com/controller),
 ZeroTier's or your own. Its core is MPL-2.0. The controller's source is
 available, but under ZeroTier's own licence, which restricts commercial use.
+ZeroTier One, the open source client, is not post-quantum; ZeroTier Quantum,
+a separate commercial platform launched in 2026, promises to be.
 
 Choose ZeroTier if you need a layer 2 network, such as for broadcast or
 protocols other than IP.
@@ -166,7 +177,8 @@ devices whose keys and addresses you have written into each other's
 configuration. There is nothing in between to trust, and in the kernel it is
 faster than juist, which runs WireGuard in user space. But every new device
 means editing every other device, it cannot connect two devices that are both
-behind NAT, and it has no relay.
+behind NAT, and it has no relay. A preshared key, set by hand or rotated by
+Rosenpass, makes its tunnels post-quantum.
 
 Choose WireGuard alone for a few devices with fixed public addresses.
 
@@ -186,7 +198,8 @@ belongs.
 
 - juist has not had a security audit.
 - It runs on Linux and FreeBSD, and on Android as a member without names,
-  roles, exit nodes or subnets; there is nothing for Windows, macOS or iOS.
+  roles or subnets that cannot be an exit node; there is nothing for
+  Windows, macOS or iOS.
 - It knows devices, not users: its access rules name devices, and there is
   no sign-in through an identity provider.
 - A removed device is taken out as soon as the other devices hear of it, but
@@ -241,6 +254,22 @@ belongs.
   [Tinc as a gateway](https://www.tinc-vpn.org/examples/redirect-gateway/);
   [rayfish's exit nodes](https://rayfish.xyz/docs/11-exit-nodes);
   [EasyTier's magic DNS](https://easytier.rs/en/guide/network/magic-dns.html)
+- Against a quantum computer:
+  [Tailscale](https://tailscale.com/docs/concepts/post-quantum-cryptography),
+  [NetBird with Rosenpass](https://docs.netbird.io/client/post-quantum-cryptography),
+  [ZeroTier Quantum](https://www.zerotier.com/news/rsac-2026-zerotier-launches-zerotier-quantum-the-worlds-first-end-to-end-quantum-secure-networking-platform/),
+  [Nebula's request](https://github.com/slackhq/nebula/issues/1446),
+  [iroh's handshakes](https://iroh.computer/blog/iroh-post-quantum-handshakes),
+  [WireGuard's known limitations](https://www.wireguard.com/known-limitations/)
+- HTTPS only and layer 2:
+  [Tailscale's DERP servers](https://tailscale.com/kb/1232/derp-servers),
+  [NetBird's relays](https://docs.netbird.io/about-netbird/understanding-nat-and-connectivity),
+  [Netmaker 1.7](https://github.com/gravitl/netmaker/releases/tag/v1.7.0),
+  [ZeroTier's TCP relay](https://docs.zerotier.com/relay/),
+  [Tinc's configuration](https://www.tinc-vpn.org/documentation-1.1/Main-configuration-variables.html),
+  [iroh's relays](https://docs.iroh.computer/configuring-networks),
+  [Nebula on layer 2](https://github.com/slackhq/nebula/issues/1452),
+  [EasyTier on layer 2](https://github.com/EasyTier/EasyTier/issues/184)
 
 The survey behind this page, with about 25 projects, is in the repository:
 [control-plane options](https://github.com/nning/juist/blob/main/docs/03-control-plane-options.md)

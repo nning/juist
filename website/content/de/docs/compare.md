@@ -18,7 +18,7 @@ signieren, und jedes Gerät prüft diese Änderungen selbst. Dafür ist kein
 Server nötig, und man muss niemandem vertrauen. Wie das aufgebaut ist,
 erklärt die Seite [Architektur]({{< relref "docs/architecture" >}}).
 
-Drei Dinge hat von den Meshes hier nur juist:
+Vier Dinge hat von den Meshes hier nur juist:
 
 - **Keine zentrale Infrastruktur, und trotzdem WireGuard.** Die anderen
   Meshes ohne Server nutzen eigene Protokolle, und EasyTier bietet WireGuard
@@ -30,6 +30,11 @@ Drei Dinge hat von den Meshes hier nur juist:
   veröffentlicht nur juist Dienste im Internet und lässt öffentliche Namen
   auf Mitglieder zeigen. Bei den anderen werden Routen und Namen von Hand in
   der Konfiguration jedes Geräts eingetragen, oder es gibt sie nicht.
+- **Durchgehend quantensicher.** Jeder Tunnel mischt einen Schlüssel ein,
+  den ein Quantencomputer nicht herausfinden kann, und jede Änderung am Netz
+  ist mit ML-DSA signiert. Keines der anderen signiert seine Mitglieder so,
+  und von den anderen bietet nur NetBird quantensichere Tunnel an, als
+  experimentelle Option.
 
 ## Auf einen Blick {#overview}
 
@@ -51,7 +56,8 @@ kontrolliert, könnte also ein eigenes Gerät einschleusen.
 [Tailnet Lock](https://tailscale.com/kb/1226/tailnet-lock) schließt diese
 Lücke: Geräte nehmen einen neuen Schlüssel nur an, wenn ein Schlüssel in
 deiner Hand ihn signiert hat. Das Entfernen eines Geräts und das Verteilen der
-Änderung laufen aber weiterhin über den Server.
+Änderung laufen aber weiterhin über den Server. Seine Tunnel sind nicht
+quantensicher: Es setzt keinen Preshared Key und lässt dich keinen setzen.
 
 Tailscale passt, wenn du Clients für alle Plattformen und
 Benutzerkonten mit Zugriffsregeln nach Benutzern brauchst und damit leben
@@ -76,7 +82,10 @@ Geräte über WireGuard. Koordiniert wird das von einem Management-Server, der
 die Geräte, ihre Schlüssel und die Zugriffsregeln verwaltet. Du kannst den
 Server von NetBird nutzen oder ihn mitsamt seinen Signal- und Relay-Servern
 selbst betreiben. Der Client steht unter BSD-3-Clause, die Server unter
-AGPL-3.0.
+AGPL-3.0. Mit
+[Rosenpass](https://docs.netbird.io/client/post-quantum-cryptography), einer
+experimentellen Option, die es auf Handys nicht gibt, werden seine Tunnel
+quantensicher.
 
 NetBird passt, wenn du einen selbst betriebenen Server mit Dashboard,
 Anmeldung über deinen Identitätsanbieter und Zugriffsregeln nach Benutzern
@@ -101,7 +110,9 @@ nach. Wer dazugehört, bestimmt ein
 [Netzwerk-Controller](https://docs.zerotier.com/controller), entweder der von
 ZeroTier oder dein eigener. Der Kern steht unter MPL-2.0. Der Quellcode des
 Controllers ist zwar einsehbar, steht aber unter einer eigenen Lizenz von
-ZeroTier, die die kommerzielle Nutzung einschränkt.
+ZeroTier, die die kommerzielle Nutzung einschränkt. ZeroTier One, der
+quelloffene Client, ist nicht quantensicher; ZeroTier Quantum, eine eigene
+kommerzielle Plattform von 2026, verspricht es zu sein.
 
 ZeroTier passt, wenn du ein Layer-2-Netz brauchst, etwa für Broadcasts oder
 für andere Protokolle als IP.
@@ -184,7 +195,8 @@ anderen eingetragen hast. Dazwischen gibt es nichts, dem man vertrauen müsste,
 und im Kernel ist es schneller als juist, das WireGuard im Userspace
 betreibt. Dafür musst du für jedes neue Gerät alle anderen anpassen, stehen
 beide Seiten hinter NAT, kommt keine Verbindung zustande, und ein Relay gibt
-es nicht.
+es nicht. Ein Preshared Key, von Hand gesetzt oder von Rosenpass erneuert,
+macht seine Tunnel quantensicher.
 
 Reines WireGuard passt für wenige Geräte mit festen öffentlichen Adressen.
 
@@ -205,8 +217,8 @@ Server herum, der bestimmt, wer dazugehört.
 
 - Ein Sicherheitsaudit gab es für juist bisher nicht.
 - Es läuft unter Linux und FreeBSD, und unter Android als Mitglied ohne
-  Namen, Rollen, Exit-Nodes und Subnetze. Für Windows, macOS und iOS gibt es
-  nichts.
+  Namen, Rollen und Subnetze, das kein Exit-Node sein kann. Für Windows,
+  macOS und iOS gibt es nichts.
 - Es kennt nur Geräte, keine Benutzer: Seine Zugriffsregeln nennen Geräte,
   und eine Anmeldung über einen Identitätsanbieter gibt es nicht.
 - Ein entferntes Gerät ist draußen, sobald die anderen Geräte davon erfahren.
@@ -262,6 +274,22 @@ Server herum, der bestimmt, wer dazugehört.
   [Tinc als Gateway](https://www.tinc-vpn.org/examples/redirect-gateway/);
   [Exit-Nodes bei rayfish](https://rayfish.xyz/docs/11-exit-nodes);
   [Magic DNS bei EasyTier](https://easytier.rs/en/guide/network/magic-dns.html)
+- Gegen einen Quantencomputer:
+  [Tailscale](https://tailscale.com/docs/concepts/post-quantum-cryptography),
+  [NetBird mit Rosenpass](https://docs.netbird.io/client/post-quantum-cryptography),
+  [ZeroTier Quantum](https://www.zerotier.com/news/rsac-2026-zerotier-launches-zerotier-quantum-the-worlds-first-end-to-end-quantum-secure-networking-platform/),
+  [Nebulas Feature-Request](https://github.com/slackhq/nebula/issues/1446),
+  [Handshakes bei iroh](https://iroh.computer/blog/iroh-post-quantum-handshakes),
+  [Grenzen von WireGuard](https://www.wireguard.com/known-limitations/)
+- Nur HTTPS und Layer 2:
+  [DERP-Server bei Tailscale](https://tailscale.com/kb/1232/derp-servers),
+  [Relays bei NetBird](https://docs.netbird.io/about-netbird/understanding-nat-and-connectivity),
+  [Netmaker 1.7](https://github.com/gravitl/netmaker/releases/tag/v1.7.0),
+  [TCP-Relay bei ZeroTier](https://docs.zerotier.com/relay/),
+  [Konfiguration von Tinc](https://www.tinc-vpn.org/documentation-1.1/Main-configuration-variables.html),
+  [Relays bei iroh](https://docs.iroh.computer/configuring-networks),
+  [Nebula und Layer 2](https://github.com/slackhq/nebula/issues/1452),
+  [EasyTier und Layer 2](https://github.com/EasyTier/EasyTier/issues/184)
 
 Die Recherche hinter dieser Seite umfasst rund 25 Projekte und steht im
 Repository (auf Englisch):
