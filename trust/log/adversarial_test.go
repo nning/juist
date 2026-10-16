@@ -1,6 +1,8 @@
 package log
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -1020,6 +1022,18 @@ func TestAnOrphanedRevocationIsNamed(t *testing.T) {
 	if !slices.Equal(unrevoked, []types.Hash{b2.Hash()}) {
 		t.Fatalf("the orphaned removal is not named as not in effect: %v", unrevoked)
 	}
+
+	// Compaction would drop the branch, and with it the notice, until the
+	// removal is redone.
+	h.checkpoint()
+	if _, err := h.auth.Compact(); err == nil {
+		t.Fatal("compaction dropped a revocation still to be redone")
+	}
+	h.removeNode(victim.Identity)
+	h.checkpoint()
+	if _, err := h.auth.Compact(); err != nil {
+		t.Fatalf("compacting once the removal is redone: %v", err)
+	}
 }
 
 // TestConcurrentAdmissionsOfOneAddressNeedOnlyReissuing: two admins admit
@@ -1138,20 +1152,54 @@ func TestBootstrapFromCheckpointAndCompact(t *testing.T) {
 		t.Fatal("bootstrapping from a checkpoint produced different state")
 	}
 
-	// Compaction advances the anchor to the checkpoint and drops what precedes
-	// it, without changing the state.
+	// A checkpoint alone moves no anchor: it stays one behind the newest.
+	if _, err := h.auth.Compact(); err != nil || h.auth.Anchor() == cp.Hash() {
+		t.Fatalf("compacted to the newest checkpoint: %v", err)
+	}
+	next := h.checkpoint()
+
+	// Then compaction advances the anchor to the checkpoint without changing
+	// the state, and keeps the chain leading up to it from the anchor before.
 	removed, err := h.auth.Compact()
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
-	if removed == 0 {
-		t.Fatal("compaction removed nothing despite a checkpoint on the chain")
+	if removed != 0 {
+		t.Fatalf("compaction removed %d records of the chain up to the checkpoint", removed)
 	}
 	if h.auth.Anchor() != cp.Hash() {
 		t.Fatal("compaction did not advance the anchor to the checkpoint")
 	}
-	if string(h.auth.State().Snapshot().Encode()) != string(want) {
+	if !bytes.Equal(h.auth.State().Snapshot().Encode(), next.State.Encode()) {
 		t.Fatal("compaction changed the state")
+	}
+	if held := h.auth.Held(); len(held) != 2 || !slices.Contains(held, next.Hash()) {
+		t.Fatalf("the log serves %d records past its anchor, want the two checkpoints", len(held))
+	}
+
+	// The next compaction drops it.
+	h.addNode("charlie")
+	cp2, err := h.auth.Builder().Checkpoint()
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	h.signQuorum(&cp2)
+	if err := h.auth.Inform(cp2); err != nil {
+		t.Fatalf("Inform: %v", err)
+	}
+	if _, err := h.auth.Compact(); err != nil || h.auth.Anchor() != next.Hash() {
+		t.Fatalf("the second compaction: %v", err)
+	}
+	h.checkpoint()
+	want = h.auth.State().Snapshot().Encode()
+	if removed, err := h.auth.Compact(); err != nil || removed == 0 {
+		t.Fatalf("the third compaction removed %d records: %v", removed, err)
+	}
+	if _, err := h.storage.AUM(h.auth.State().GenesisHash()); !errors.Is(err, ErrNotFound) {
+		t.Fatal("the genesis outlived a second compaction")
+	}
+	if _, err := h.storage.AUM(next.Hash()); err != nil {
+		t.Fatalf("the anchor before went with it: %v", err)
 	}
 	reopened, err := Open(h.storage)
 	if err != nil {
@@ -1167,26 +1215,23 @@ func TestBootstrapFromCheckpointAndCompact(t *testing.T) {
 }
 
 // TestCompactedAnchorRejectsPreCheckpointFork is the "never drop a checkpoint
-// you hold" rule: once the anchor has advanced, a branch that forks before it
-// is not merely outvoted, it is not considered at all.
+// you hold" rule: once the anchor has advanced past the chain a compaction
+// keeps, a branch that forks before it is not merely outvoted, it is not
+// considered at all. Within the kept chain it is taken as by a device that
+// never compacted (TestACompactedDeviceTakesARevocationBesideItsCheckpoint).
 func TestCompactedAnchorRejectsPreCheckpointFork(t *testing.T) {
 	h := newHarness(t, 1, 1)
 	victim := h.addNode("victim")
 	preFork := h.auth.State()
-
-	cp, err := h.auth.Builder().Checkpoint()
-	if err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-	h.signQuorum(&cp)
-	if err := h.auth.Inform(cp); err != nil {
-		t.Fatalf("Inform: %v", err)
-	}
-	if _, err := h.auth.Compact(); err != nil {
-		t.Fatalf("Compact: %v", err)
+	for range 2 {
+		h.addNode("filler")
+		h.checkpoint()
+		if _, err := h.auth.Compact(); err != nil {
+			t.Fatalf("Compact: %v", err)
+		}
 	}
 
-	// A record forking from before the checkpoint, re-admitting a device on a
+	// A record forking from before both checkpoints, removing a device on a
 	// history this node has compacted away.
 	fork, err := NewBuilder(preFork).RemoveNode(victim.Identity, h.sealer())
 	if err != nil {

@@ -58,10 +58,13 @@ responder → records  what the initiator turned out to be missing
 ```
 
 Symmetric, because one round making both sides whole halves the rounds a
-revocation needs to cross a five-node mesh. "What I hold" is the full hash set
-rather than a walk back to a common ancestor: at this scale a whole log is a
-few kilobytes of hashes, and sending it makes the exchange stateless and immune
-to branch bookkeeping. `MaxHashesPerFrame` is where that stops being true.
+revocation needs to cross a five-node mesh. "What I hold" is the hash set the
+sender resolves from its anchor rather than a walk back to a common ancestor:
+at this scale a whole log is a few kilobytes of hashes, and sending it makes
+the exchange stateless and immune to branch bookkeeping. A peer holds a record
+only with its ancestors, so each side answers as if the other held the
+ancestors of what it lists; past `MaxHashesPerFrame` a hello lists the records
+nothing hangs from first, and the exchange still converges.
 
 Every frame also names the sender's **anchor** — its genesis, or the newest
 checkpoint it has compacted to — and each side answers "what are you missing"
@@ -69,9 +72,11 @@ by walking the *peer's* anchor, not its own roots. That is what keeps sync
 alive across compaction asymmetry: a record below the receiver's anchor is one
 its log refuses, and because `Inform` is atomic, a single refused record would
 poison every acceptable one in the same batch — a node with longer history
-would never again teach a compacted peer anything. A peer whose anchor this
-node does not hold gets nothing, correctly: that peer is the one with history
-to offer, and the other half of the same session is where it offers it.
+would never again teach a compacted peer anything. A device that compacts
+keeps the chain leading up to its new anchor from its old one, so a peer
+anchored there is still answered from its own anchor; one anchored where this
+node holds nothing is answered from this node's anchor, which it takes where it
+holds that checkpoint's parent.
 
 ## Epoch skew, and the keyring
 

@@ -229,6 +229,18 @@ Admin wiederholt die verlorenen Änderungen oder führt
 `juist rotate group-secret` aus. Sobald diese Änderung
 das Gerät erreicht, verbindet es sich wieder.
 
+### `warning: this device's log is older than what the network's devices keep`
+
+Das Gerät war offline, während sich das Netz änderte, und die anderen Geräte
+haben den Teil des Logs verworfen, den es noch gebraucht hätte. Das tun sie,
+sobald sie jedes Gerät darüber hinaus gesehen haben. Lade es neu ein: Ein
+Admin ruft `juist invite` auf, und das Gerät tritt mit dem Link bei, den
+das ausgibt. Seine Schlüssel und sein Name bleiben. Ein getippter Code kann
+das Log des Geräts nicht ersetzen. Meldet der Beitritt, dass die
+Kette dieses Log nicht fortsetzt, hat nichts von dem Verpassten das
+Gruppengeheimnis gewechselt, und das Gerät kann nicht erkennen, dass das Log
+der Einladung neuer ist: Führe `juist reset` aus und tritt dann bei.
+
 ### `removed`
 
 Dieses Gerät gehört nicht mehr zum Netz. Willst du es weiter nutzen, tritt

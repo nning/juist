@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -543,5 +544,176 @@ func TestAnAdmissionPinsTheAdmittedHeadsContent(t *testing.T) {
 	}
 	if err := keystore.checkPin(sock, auth, records, noOrphans); err != nil {
 		t.Fatalf("a copy of the admitted head: %v", err)
+	}
+}
+
+// A pinned head juistd compacted away is stood in for by the checkpoint its
+// log starts from, where a quorum of the pinned keys signed it and juistd
+// holds the records leading to it from the head; not where the way is gone,
+// at a later epoch neither, nor for a checkpoint other keys signed.
+func TestAPinGoesOnPastACompaction(t *testing.T) {
+	t.Parallel()
+	real := newCLI(t)
+	real.mustRun("create", "home")
+	pinned := func() *home {
+		t.Helper()
+		h, err := openHome(filepath.Join(shortTempDir(t), "keystore"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		recs, auth := chainOf(t, real)
+		if err := h.checkPin("/run/juist/juistd.sock", auth, recs, noOrphans); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	check := func(h *home) error {
+		t.Helper()
+		recs, auth := chainOf(t, real)
+		return h.checkPin("/run/juist/juistd.sock", auth, recs, orphansOf(t, real))
+	}
+	n := 0
+	compact := func() {
+		t.Helper()
+		real.mustRun("log", "checkpoint")
+		n++
+		real.mustRun("network", "rename", fmt.Sprintf("between-%d", n))
+		real.mustRun("log", "checkpoint")
+		if _, err := openLog(t, real).Compact(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	once, twice := pinned(), pinned()
+
+	real.mustRun("network", "rename", "a")
+	compact()
+	if err := check(once); err != nil {
+		t.Fatalf("a head juistd holds the way to: %v", err)
+	}
+	real.mustRun("network", "rename", "b")
+	compact()
+	if err := check(twice); err == nil || !strings.Contains(err.Error(), "does not continue") {
+		t.Fatalf("a head no longer led to, at the same epoch: %v", err)
+	}
+
+	// A counterfeit at a later epoch, signed by keys of its own.
+	other := newCLI(t)
+	other.mustRun("create", "elsewhere")
+	for range 3 {
+		other.mustRun("rotate", "group-secret")
+	}
+	_, oauth := chainOf(t, other)
+	fake, err := oauth.Builder().Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := openLog(t, real).State().GenesisHash()
+	fake.State.GenesisHash = &g
+	oh, err := openHome(other.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admins, err := oh.adminKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range admins {
+		if err := fake.Sign(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fauth, err := log.FromRecords(log.NewMemStorage(), []types.AUM{fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := twice.checkPin("/run/juist/juistd.sock", fauth, []types.AUM{fake}, noOrphans); err == nil {
+		t.Fatal("a counterfeit checkpoint at a later epoch stood in for the pinned head")
+	}
+
+	// Nor does a later epoch make up for the way to the head.
+	real.mustRun("rotate", "group-secret")
+	compact()
+	if err := check(twice); err == nil {
+		t.Fatal("a checkpoint at a later epoch stood in for a head it is not shown to descend from")
+	}
+}
+
+// A checkpoint the pinned keys signed on a branch that lost to the pinned
+// head, at a later epoch, does not stand in for it: it would undo a removal.
+func TestALosingCheckpointDoesNotStandIn(t *testing.T) {
+	t.Parallel()
+	real := newCLI(t)
+	real.mustRun("create", "home")
+	phone := enrollDevice(t, real, "phone")
+	recs, auth := chainOf(t, real)
+	h, err := openHome(real.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admins, err := h.adminKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := func(a *types.AUM) {
+		t.Helper()
+		for _, k := range admins {
+			if err := a.Sign(k); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	rm, err := auth.Builder().RemoveNode(nodeKeysOf(t, phone).Identity.Public(), sealer())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign(&rm)
+	b := auth.Builder()
+	var lost []types.AUM
+	for range 2 {
+		r, err := b.EpochBump(sealer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sign(&r)
+		next, err := b.Dry(&r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, lost = log.NewBuilder(next), append(lost, r)
+	}
+	cp, err := b.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign(&cp)
+	both, err := log.FromRecords(log.NewMemStorage(), recs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := both.Inform(append([]types.AUM{rm}, lost...)...); err != nil {
+		t.Fatal(err)
+	}
+	if both.Head() != rm.Hash() || cp.State.Epoch <= both.State().Epoch() {
+		t.Fatal("the removal did not win against a later epoch")
+	}
+	keystore, err := openHome(filepath.Join(shortTempDir(t), "keystore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sock := "/run/juist/juistd.sock"
+	won := append(recs[:len(recs):len(recs)], rm)
+	wauth, err := log.FromRecords(log.NewMemStorage(), won)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keystore.checkPin(sock, wauth, won, noOrphans); err != nil {
+		t.Fatal(err)
+	}
+	fauth, err := log.FromRecords(log.NewMemStorage(), []types.AUM{cp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keystore.checkPin(sock, fauth, []types.AUM{cp}, noOrphans); err == nil {
+		t.Fatal("a checkpoint on a branch that lost to the pinned head stood in for it")
 	}
 }

@@ -48,6 +48,12 @@ counts only when enough admins have signed it.
 
 `juist log` lists the changes and who approved each one.
 
+Every 256 changes, juist records a **checkpoint** after the admin's change:
+the whole state as one change, which each device checks against its own copy.
+Once every device has it, the devices drop what lies before the checkpoint
+before it, so the log stays short. Where the quorum is more than one vote,
+the checkpoint waits for the other admins' votes like any change.
+
 ## Admins and the quorum {#admins}
 
 An **admin** is a person who may change the network: admit or remove devices,

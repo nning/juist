@@ -104,7 +104,7 @@ func TestAHostileRelayCannotStarveTheInvite(t *testing.T) {
 	}
 	link := h.Invite().Link().WithRelays(nil, nil).WithAdmin(admin.Public(), new(admin.SigningKey()))
 	_, joinErr := guest.Join(ctx, guest.Options{Invite: link.String(), Name: "phone", Keys: g,
-		Adopt: func([]types.AUM) error { return nil }})
+		Adopt: func([]types.AUM, bool) error { return nil }})
 	t.Logf("a direct guest's join: %v", joinErr)
 	if joinErr != nil {
 		t.Errorf("a hostile relay kept a direct guest from joining")

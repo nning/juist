@@ -210,7 +210,11 @@ func main() {
 // main runs one invocation. Help that was asked for is a success.
 func (a *app) main(args []string) error {
 	a.argv = args
-	if err := a.dispatch(args); !errors.Is(err, errHelp) {
+	err := a.dispatch(args)
+	if err == nil {
+		a.checkpointIfDue()
+	}
+	if !errors.Is(err, errHelp) {
 		return err
 	}
 	return nil

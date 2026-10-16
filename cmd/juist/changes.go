@@ -446,6 +446,9 @@ func (a *app) applyRecords(records []types.AUM, report bool) error {
 	if err := n.apply(records); err != nil {
 		return err
 	}
+	a.applied = a.applied || slices.ContainsFunc(records, func(r types.AUM) bool {
+		return r.Kind != types.KindCheckpoint && r.Kind != types.KindDisable
+	})
 	if before != nil {
 		if after, err := n.self(); err == nil && (after.Keys != before.Keys || after.Identity != before.Identity) {
 			a.ok("new keys live")
@@ -463,6 +466,91 @@ func (a *app) applyRecords(records []types.AUM, report bool) error {
 		a.ok("applied %s; %s", count(len(records), "change"), count(len(st.Nodes()), "device"))
 	}
 	return nil
+}
+
+// A checkpoint is drafted where the chain holds checkpointEvery records, or
+// checkpointBytes, since its newest checkpoint or its anchor.
+const (
+	checkpointEvery = 256
+	checkpointBytes = 32 << 20
+)
+
+// checkpointIfDue drafts a checkpoint on the head where the changes this
+// invocation applied leave one due, and submits it: applied where the keys
+// here reach the quorum, otherwise carried to the admin devices for the
+// other votes. Where neither is possible, the next change tries again.
+func (a *app) checkpointIfDue() {
+	if !a.applied {
+		return
+	}
+	a.applied = false
+	auth, err := a.freshLog()
+	if err != nil || unsettled(a.node, auth) != nil {
+		return
+	}
+	chain, err := a.node.chain()
+	if err != nil || !checkpointDue(chain) {
+		return
+	}
+	aum, err := auth.Builder().Checkpoint()
+	if err != nil {
+		return
+	}
+	if _, err := a.signLocally(&aum, auth); err != nil || len(aum.Signatures) == 0 {
+		return
+	}
+	st := auth.State().SignatureStatus(&aum)
+	if st.Authorized() {
+		if err := a.applyRecords([]types.AUM{aum}, false); err != nil {
+			a.warn("checkpoint not recorded: %v", err)
+			return
+		}
+		a.ok("checkpoint recorded")
+		return
+	}
+	if carried, _, err := a.carry(auth, &aum, waiting.MaxLifetime, types.Identity{}); err == nil && carried {
+		a.printf("checkpoint pending: needs %s\n", approvalsNeeded(st, auth.State().Admins(), &aum))
+	}
+}
+
+// unsettled refuses a checkpoint of a log under an alarm, here or in juistd:
+// devices compact to it, after which what the alarm is about is out of reach.
+func unsettled(n node, auth *log.Authority) error {
+	if st, err := n.restatus(); err != nil {
+		return err
+	} else if st != nil {
+		switch {
+		case st.Alarm != "":
+			return fmt.Errorf("the log is under an alarm: %s", st.Alarm)
+		case st.SchemaAlarm != "":
+			return fmt.Errorf("the log is under an alarm: %s", st.SchemaAlarm)
+		}
+	}
+	switch {
+	case auth.Disabled() != nil:
+		return auth.Disabled()
+	case auth.Alarm() != nil:
+		return auth.Alarm()
+	case auth.Rollback() != nil:
+		return auth.Rollback()
+	case auth.SchemaAlarm() != nil:
+		return auth.SchemaAlarm()
+	}
+	return nil
+}
+
+// checkpointDue reports whether chain, anchor first, holds a checkpoint's
+// worth of records past its newest checkpoint or its anchor.
+func checkpointDue(chain []types.AUM) bool {
+	n, size := 0, 0
+	for i := len(chain) - 1; i > 0 && chain[i].Kind != types.KindCheckpoint; i-- {
+		b, err := chain[i].Encode()
+		if err != nil {
+			return false
+		}
+		n, size = n+1, size+len(b)
+	}
+	return n >= checkpointEvery || size >= checkpointBytes
 }
 
 // networkLog is this device's verified log. The member list is the

@@ -72,6 +72,7 @@ type app struct {
 	keyName        string // the one admin key to sign with, where one is named
 	spec           spec   // the command's, as parsed, for hints that name it
 	ownRecordsSaid bool   // see hintOwnRecords
+	applied        bool   // a change other than a checkpoint was applied; see checkpointIfDue
 
 	// listing is the instance a listing of every network is at, and
 	// listingHeads says the listing heads each network itself.

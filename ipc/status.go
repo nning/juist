@@ -155,6 +155,10 @@ type Derived struct {
 	// no member it tried has answered since: most likely it was removed.
 	Refused bool `cbor:"52,keyasint,omitempty"`
 
+	// Overtaken is set when peers have long answered this device only from a
+	// checkpoint past all its log holds: it is invited again.
+	Overtaken bool `cbor:"80,keyasint,omitempty"`
+
 	// Unmoved names the other members not yet seen holding the newest
 	// renumbering, while an old address is still recorded.
 	Unmoved []string `cbor:"49,keyasint,omitempty"`
@@ -360,7 +364,7 @@ func (s *Status) ForReader() Status {
 		Derived: Derived{
 			NetworkName: s.NetworkName, Head: s.Head, Epoch: s.Epoch, Schema: s.Schema,
 			Members: s.Members, Peers: s.Peers, Unreachable: s.Unreachable, Expired: s.Expired,
-			Silent: s.Silent, Unrevoked: s.Unrevoked, Lost: s.Lost, Refused: s.Refused, SelfName: s.SelfName,
+			Silent: s.Silent, Unrevoked: s.Unrevoked, Lost: s.Lost, Refused: s.Refused, Overtaken: s.Overtaken, SelfName: s.SelfName,
 			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
 			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, NoKey: s.NoKey,

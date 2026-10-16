@@ -65,6 +65,7 @@ func (d *Daemon) Reconcile() error {
 	d.keepSeeds()
 	d.noteSchema()
 	d.pruneWaiting(state)
+	d.compactWhenSettled(state)
 	d.setSigning(state)
 	if d.onAddrsMoved != nil && state.IsMember(d.self) &&
 		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.heldAddrs()) && d.movedSaid.CompareAndSwap(false, true) {
@@ -177,7 +178,7 @@ func (d *Daemon) Reconcile() error {
 		Peers: len(b.peers), Unreachable: len(b.silent), Silent: b.silent,
 		Unrevoked: unrevoked, Lost: lost,
 		Devices: devices, Unmoved: unmoved,
-		Refused: refused, SelfName: d.selfName(state),
+		Refused: refused, Overtaken: d.overtaken(), SelfName: d.selfName(state),
 		LeaseSigners: fresh.Signers, FreshSince: fresh.Since, FreshUntil: fresh.Until,
 		Vouchers: fresh.Needed, Vouching: fresh.Vouching, Stale: !fresh.Fresh(s.now),
 		Relays: len(relays), Relaying: d.isRelaying(), RelayCapable: relayCapableIn(s),
@@ -564,7 +565,8 @@ func (d *Daemon) orphansLocked() (unrevoked, lost []string) {
 			if slices.Contains(o.Unrevoked, h) {
 				continue
 			}
-			if aum, who, ok := d.orphanLocked(state, h); ok {
+			// A checkpoint has nothing to redo.
+			if aum, who, ok := d.orphanLocked(state, h); ok && aum.Kind != types.KindCheckpoint {
 				lost = append(lost, describeLost(aum, who))
 			}
 		}

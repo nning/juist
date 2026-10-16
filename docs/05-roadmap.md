@@ -2349,12 +2349,8 @@ juist reads schema 18 and above alone.
     raises a rollback alarm naming the lost branch until the chain is back
     at the floor.
 
-- **Open, for M19 to decide:** whether a switch fork choice demands is
-  followed below the floor. The floor cannot tell it from a quorum-signed
-  sibling withheld and released later, so nodes shown the same records in
-  another order stay apart until an admin acts. Finality by a node's leases
-  does not close it, since two nodes hold different leases and split
-  again; one every node shares, such as the anchor a checkpoint sets, would.
+- **Whether a switch fork choice demands is followed below the floor** is
+  M19's to decide, and it decides it there.
 
 - **Exit criteria:** (1) a genesis, checkpoint, record or anchor below 18 is
   refused, and no rule of a schema below 18 is left (no schema constant
@@ -2366,34 +2362,94 @@ juist reads schema 18 and above alone.
 
 ## M19 — Log checkpoints
 
+**Done** on 2026-10-14, as below, reviewed (M19 reviews 1 to 7: an
+adversarial review of the trust core, sync and compaction, and the CLI and
+its pin, each round's fixes attacked again; twice a fix went again, a rule
+of fork choice and an alarm, for opening worse than it closed), validated by
+`make ci-vm` (12-validating.md). The schema stays at 19. Core 10 933 lines,
+audit scope 32 805, measured after it (2026-10-14).
+
 Only `juist log checkpoint` writes a checkpoint and nothing calls
 `Authority.Compact`, so every log grows for good, and past
 `MaxHashesPerFrame` records two nodes stop converging
 ([08-trust-layer-notes.md](08-trust-layer-notes.md), "The size constraint
 that outlives the freeze"). Right after M17, which decided the record
 sizes a checkpoint has to fit, and before the audit, so that M25 covers it.
-Open, to decide in this order:
+Every `Inform` also verifies the whole chain again, about a second at 4096
+records, and a keystore's pin (`cmd/juist/pin.go`) names a head compaction
+drops.
 
-- **Proposing.** What prompts a checkpoint — a record count, a log size, an
-  epoch bump — and which device drafts it, since it takes a quorum like any
-  change and the admins must be asked to sign.
-- **Compacting.** When a device compacts to a checkpoint it holds, and
-  whether it keeps any history below the anchor for peers still behind it.
-  A store that is not empty cannot yet move its anchor to a checkpoint it
-  receives (`Bootstrap` takes an empty one), so a device behind a peer that
-  compacted does not catch up. Every `Inform` also verifies the whole chain
-  again, about a second at 4096 records. A keystore's pin (`cmd/juist/pin.go`) names the head it
-  last verified, which compaction drops: the CLI then refuses juistd's log
-  until the pin is deleted, as on every machine after the move to 18. A pin
-  has to carry what lets a checkpoint stand in for its head, such as the
-  admin keys it was verified under.
-- **Joining.** Whether a device joining is handed the anchor instead of the
-  whole chain.
+- **Decided:**
+  - **Sync whatever the size.** A hello lists the records a device resolves
+    from its anchor, not leftovers or what lies below it, and past
+    `MaxHashesPerFrame` those nothing hangs from first. A device answers a
+    peer as holding the ancestors of what it lists, down to the peer's
+    anchor. Two devices so converge however long the log is; checkpoints
+    keep it short, they are not what keeps sync working.
+  - **Proposing.** The admin's CLI that applies a change drafts a checkpoint
+    on the new head where the chain holds 256 records or 32 MiB since its
+    newest checkpoint or anchor, and submits it as any change: applied where
+    the local keys reach the quorum, otherwise carried to the admin devices
+    for the other votes, with no file left in the working directory. One
+    that went stale before its votes is not approved (`Builder.Check`), and
+    the next change drafts another. `juist log checkpoint` stays. A
+    checkpoint that loses fork choice has nothing to reissue: it raises no
+    alarm and asks no one to redo it. Fork choice is otherwise unchanged, so
+    the schema stays at 19; a build before M19 still alarms on a lost
+    checkpoint until updated, which takes a change made in the same moment.
+  - **Compacting.** juistd moves its anchor to the checkpoint before the
+    newest one on its chain once no alarm is up and every other live member
+    has been heard with a head on or past the newest, or one heard has
+    compacted to that checkpoint or past it, as a device an access policy
+    keeps from hearing every member must. It keeps the chain from its
+    previous anchor up to the new one, so a peer anchored there catches up
+    from it, and deletes the rest below, but not while a revocation that
+    lost fork choice waits to be redone; another lost change is named no
+    more once it is compacted past. A hello's head and anchor are not
+    signed, so a member that lies about others can have devices compact
+    early; that costs a device further behind its catch-up (below), never a
+    record it accepts.
+  - **Finality, M18's open question.** A switch fork choice demands below
+    the epoch floor still alarms. The anchor stays a checkpoint behind the
+    newest, so what hangs from the chain past it, a removal drafted beside
+    the newest checkpoint or from a device a lying member had reported past
+    it, is decided on a device that compacted as on one that did not, by
+    sync as it is. What hangs below the anchor is refused there, and taken
+    by fork choice where a device has not compacted, and neither side
+    alarms; a record released from below takes a member every device was
+    heard past while it slept, a lying member, a device restored from a
+    backup, or an admin key signing on a log two checkpoints old. No rule of
+    fork choice can settle it: two checkpoints are as cheap to a quorum at
+    the fork as a revocation, and a rule ranking them above one let a
+    coalition a revocation stripped undo it (review 5); an alarm on a left
+    branch holding two checkpoints let such a key take every device down
+    for good (review 7). Moving the anchor back where such a record arrives
+    would need sync to know where each peer's kept chain ends. Open for M24.
+  - **Joining.** A device joining is handed the chain from the inviting
+    device's anchor, as before, not from a newer checkpoint, which would be
+    final for the newcomer before it is for the network. A device holding a
+    log older than its peers keep is invited again by a link that names its
+    admin: the chain the invite brings replaces its log on that admission,
+    only where its anchor carries a quorum of the admins the log trusts and
+    it is at a later epoch, and its ratchets stay; a chain that holds the
+    log's anchor is taken from there instead. A
+    typed code names no admin, so the device that answers one cannot replace
+    a log; such a device starts over.
+  - **The pin** keeps the admin keys and quorum of its head. Where that head
+    is gone from juistd's log, the checkpoint the log starts from stands in
+    for it if a quorum of those keys signed it and juistd holds the records
+    leading to it from the pinned head. A later epoch alone would not do: a
+    checkpoint on a branch that lost to the head can be at one.
+  - **No checkpoint under an alarm,** drafted or asked for: devices would
+    compact to it, past what the alarm is about.
 
 - **Exit criteria:** (1) a network that has authored more than
   `MaxHashesPerFrame` records still converges on a new change, with no admin
   having asked for a checkpoint; (2) a device behind a peer that compacted
-  catches up.
+  catches up, and one further behind than its peers keep is invited again;
+  (3) a CLI whose pinned head juistd compacted away goes on, and refuses a
+  checkpoint the pinned keys did not sign; (4) a checkpoint that loses fork
+  choice raises no alarm.
 
 ## M20 — Faster CI
 
@@ -2611,6 +2667,28 @@ reader cannot find. It starts from the fuzzing:
 - **Fuzzing.** `waiting.Decode`, `types.DecodeLease`, the helper's protocol
   and the resolver's input, the Android app's included, have no target, and
   no `fuzz-long` run is recorded in [12-validating.md](12-validating.md).
+- **A settled orphan that alarms later,** found in M19's review: a change
+  that lost fork choice and was redone is probed against the head as it is
+  now, so once a later change removes its subject it reads as a conflict,
+  and every device that holds it alarms for good, a compaction included,
+  which an alarm refuses. To decide: what an orphan is probed against, so
+  that a later change settles nothing it already settled, while two changes
+  made at once that disagree still alarm
+  (`TestConflictingConcurrentRecordsAlarm`).
+- **A record released below a compaction,** found in M19's review: refused
+  where devices compacted, taken by fork choice where they did not, with no
+  alarm on either side. To decide: how the split is made known on both
+  sides without giving a key that lost its quorum a way to raise it at will;
+  no rule of fork choice may rank a count of checkpoints above a revocation
+  (`TestMintedCheckpointsDoNotUndoARevocation`).
+- **A raise undone by a ground revocation,** found in M19's review: of two
+  revocations at one parent the lower `SigHash` wins, so the keys a raised
+  quorum or a holder's fewer votes stripped can sign a removal beside the
+  raise, redraw its epoch secret until it sorts lower, and undo the raise
+  and what followed it; only a removed key's own signatures are ruled out
+  ("A removed key cannot undo its removal"). A removed key can also sign a
+  revocation beside its removal, which loses yet is named to be redone and
+  holds compaction back until an admin does.
 
 - **Exit criteria:** (1) every parser of input from outside the membership
   has a fuzz target, and a `make fuzz-long` over each is recorded; (2) the

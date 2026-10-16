@@ -49,7 +49,7 @@ type Storage interface {
 	Anchor() (types.Hash, bool, error)
 
 	// SetAnchor records a new anchor. Callers only ever move it forward,
-	// along the active chain.
+	// along the active chain, or onto the chain a rebase takes.
 	SetAnchor(h types.Hash) error
 
 	// EpochFloor returns the highest group-secret epoch this node has ever

@@ -564,20 +564,48 @@ func (a *Authority) Copies(h types.Hash) ([]types.Hash, error) {
 	return copiesOf(a.storage, &aum)
 }
 
-// Unreachable reports how many stored records the anchor cannot reach —
-// leftovers from an interrupted compaction, cleaned up by [Authority.Compact].
-func (a *Authority) Unreachable() (int, error) {
-	stored, err := a.storage.Hashes()
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, h := range stored {
-		if !a.reachable[h] {
-			n++
+// Held returns the records the resolution covers, in hash order.
+func (a *Authority) Held() []types.Hash {
+	out := slices.Collect(maps.Keys(a.reachable))
+	slices.SortFunc(out, types.Hash.Compare)
+	return out
+}
+
+// Record returns the stored record h.
+func (a *Authority) Record(h types.Hash) (types.AUM, error) { return a.storage.AUM(h) }
+
+// below returns the stored records the anchor descends from, with their
+// copies, down to and including stop or a copy of it, or as far as they are
+// stored, and the lowest of them, or the anchor where there is none.
+func (a *Authority) below(stop types.Hash) (map[types.Hash]bool, types.Hash, error) {
+	out := map[types.Hash]bool{}
+	h := a.anchor
+	for !out[stop] {
+		rec, err := a.storage.AUM(h)
+		if err != nil {
+			return nil, h, err
+		}
+		if rec.Prev == nil {
+			break
+		}
+		parent, err := a.storage.AUM(*rec.Prev)
+		if errors.Is(err, ErrNotFound) {
+			break
+		} else if err != nil {
+			return nil, h, err
+		}
+		h = *rec.Prev
+		copies := []types.Hash{h}
+		if parent.Prev != nil {
+			if copies, err = copiesOf(a.storage, &parent); err != nil {
+				return nil, h, err
+			}
+		}
+		for _, c := range copies {
+			out[c] = true
 		}
 	}
-	return n, nil
+	return out, h, nil
 }
 
 // Chain returns the active chain's record hashes, anchor first.
@@ -589,14 +617,15 @@ func (a *Authority) Chain() ([]types.Hash, error) {
 	return res.chain, nil
 }
 
-// Compact advances the anchor to the newest checkpoint on the active chain and
-// deletes what the new anchor cannot reach, returning how many were removed.
-// The anchor is a ratchet: afterwards a chain that does not descend from it is
-// not considered at all. Refused while any alarm is raised: a schema this
-// build cannot read leaves records above the chain's end, and compaction
-// deletes what the anchor cannot reach — which is exactly the records a newer
-// build would need to resume from. Refused once the network is disabled too,
-// since the disable record may hang below the newest checkpoint.
+// Compact advances the anchor to the checkpoint before the newest one on the
+// active chain, so that what hangs from the chain past it is decided as on a
+// device that did not compact, and deletes what it cannot reach but the chain
+// up to it from the anchor before, returning how many were removed. The
+// anchor is a ratchet: a chain that does not descend from it is not
+// considered at all. Refused while any alarm is raised: a
+// schema this build cannot read leaves records above the chain's end, which a
+// newer build resumes from; and once the network is disabled, since the
+// disable record may hang below the newest checkpoint.
 func (a *Authority) Compact() (int, error) {
 	if a.disabled != nil {
 		return 0, a.disabled
@@ -612,38 +641,47 @@ func (a *Authority) Compact() (int, error) {
 	if a.tooNew != nil {
 		return 0, a.tooNew
 	}
+	// It would delete the notice that a revocation is to be redone.
+	if slices.ContainsFunc(a.orphans, func(o Orphan) bool { return len(o.Unrevoked) > 0 }) {
+		return 0, errors.New("log: a revocation that lost fork choice is to be redone first")
+	}
 	res, err := resolve(a.storage, a.anchor)
 	if err != nil {
 		return 0, err
 	}
-	newAnchor := a.anchor
-	for _, h := range res.chain {
+	newAnchor, newest := a.anchor, a.anchor
+	for _, h := range res.chain[1:] {
 		rec, err := a.storage.AUM(h)
 		if err != nil {
 			return 0, err
 		}
 		if rec.Kind == types.KindCheckpoint {
-			newAnchor = h
+			newAnchor, newest = newest, h
 		}
 	}
+	var stop types.Hash
 	if newAnchor != a.anchor {
 		if err := a.storage.SetAnchor(newAnchor); err != nil {
 			return 0, err
 		}
-		a.anchor = newAnchor
+		stop, a.anchor = a.anchor, newAnchor
 		if res, err = resolve(a.storage, newAnchor); err != nil {
 			return 0, err
 		}
 	}
-	// Anything the anchor cannot reach is unreachable for good: resolution
-	// starts there and never walks past it.
+	// Anything else the anchor cannot reach is unreachable for good:
+	// resolution starts there and never walks past it.
+	below, _, err := a.below(stop)
+	if err != nil {
+		return 0, err
+	}
 	stored, err := a.storage.Hashes()
 	if err != nil {
 		return 0, err
 	}
 	var stale []types.Hash
 	for _, h := range stored {
-		if !res.reachable[h] {
+		if !res.reachable[h] && !below[h] {
 			stale = append(stale, h)
 		}
 	}
@@ -1330,4 +1368,51 @@ func FromRecords(st Storage, records []types.AUM) (*Authority, error) {
 		}
 	}
 	return auth, nil
+}
+
+// Rebase moves the log to a chain handed over whole, as [FromRecords] takes
+// it, for a device invited again that its peers no longer reach, at a later
+// epoch and anchored at a record a quorum of this log's admins signed. The
+// caller must hold something that vouches for it, as an admission does.
+func (a *Authority) Rebase(records []types.AUM) error {
+	if a.disabled != nil {
+		return a.disabled
+	}
+	fresh, err := FromRecords(NewMemStorage(), records)
+	if err != nil {
+		return err
+	}
+	floor, err := a.storage.EpochFloor()
+	if err != nil {
+		return err
+	}
+	schemaFloor, err := a.storage.SchemaFloor()
+	switch s := fresh.state; {
+	case err != nil:
+		return err
+	case s.genesisHash != a.state.genesisHash || types.CountVotes(a.state.Admins(),
+		func(id types.Identity) bool { return a.state.SignedBy(&records[0], id) }) < a.state.quorum:
+		return errors.New("log: the chain does not start at a record this log's admins signed")
+	case s.schema < schemaFloor:
+		return fmt.Errorf("log: the chain is at %v, below this log's %v", s.schema, schemaFloor)
+	case s.epoch <= a.state.epoch || s.epoch < floor:
+		return fmt.Errorf("log: the chain does not continue this log, and is at epoch %d, not past its %d",
+			s.epoch, max(a.state.epoch, floor))
+	}
+	keep := slices.DeleteFunc(slices.Clone(records), func(r types.AUM) bool { return !fresh.reachable[r.Hash()] })
+	if err := a.storage.Add(keep...); err != nil {
+		return err
+	}
+	if err := a.storage.SetAnchor(records[0].Hash()); err != nil {
+		return err
+	}
+	a.anchor = records[0].Hash()
+	res, err := resolve(a.storage, a.anchor)
+	if err != nil {
+		return err
+	}
+	if err := checkFloors(a.storage, res); err != nil {
+		return err
+	}
+	return a.settle(res)
 }

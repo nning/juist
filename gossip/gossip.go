@@ -15,9 +15,9 @@
 // Every frame carries the sender's (epoch, head) whether or not anything needs
 // transferring, and one round makes both sides whole. The "what I hold" set is
 // sent outright rather than walked back to a common ancestor, which keeps the
-// exchange stateless up to [MaxHashesPerFrame]. A node that holds no epoch
-// its peer speaks asks for a catch-up first, and runs the same exchange under
-// the key it grants.
+// exchange stateless; a record listed stands for its ancestors. A node that
+// holds no epoch its peer speaks asks for a catch-up first, and runs the same
+// exchange under the key it grants.
 //
 // Gossip runs on the underlay, since reaching a peer over the overlay needs
 // the tunnel gossip brings up; [seal] covers the metadata that costs.
@@ -63,8 +63,11 @@ type View struct {
 	// relative to it, since records below it are ones this log refuses.
 	Anchor types.Hash
 
-	// Have is every record hash this node holds, including branches that lost
-	// fork choice: both sides must see a fork in full to alarm on it.
+	// Have is every record hash this node resolves from its anchor, including
+	// branches that lost fork choice: both sides must see a fork in full to
+	// alarm on it. A peer takes each as standing for its ancestors, so where
+	// there are more than [MaxHashesPerFrame], those nothing hangs from come
+	// first.
 	Have []types.Hash
 }
 
@@ -80,9 +83,9 @@ type Log interface {
 	View() (View, error)
 
 	// Missing returns records this node holds that the peer lacks and can
-	// accept: descendants of the peer's anchor absent from have, parents
-	// first, at most [MaxRecordsPerFrame]. A peer whose anchor this node does
-	// not hold gets nothing.
+	// accept: descendants of the peer's anchor that are neither in have nor
+	// ancestors of a record in it, parents first, at most
+	// [MaxRecordsPerFrame].
 	Missing(have []types.Hash, anchor types.Hash) ([]types.AUM, error)
 
 	// Inform hands received records to the log, oldest first. An error is
@@ -184,10 +187,11 @@ type Options struct {
 	Pair   func(to types.Identity) *pairkey.Msg
 	OnPair func(m *pairkey.Msg)
 
-	// OnHave receives the record hashes a peer's hello says it holds, under
-	// the identity its announcement names. Any member can forge that, so it
-	// is for display only. It runs on the session's goroutine.
-	OnHave func(from types.Identity, have []types.Hash)
+	// OnHave receives the head, the anchor and the record hashes a peer's
+	// hello says it holds, under the identity its announcement names. Any
+	// member can forge that, so it decides nothing a record is needed for. It
+	// runs on the session's goroutine.
+	OnHave func(from types.Identity, head, anchor types.Hash, have []types.Hash)
 
 	// Logf receives diagnostics. Nil discards them.
 	Logf func(format string, args ...any)
@@ -993,11 +997,11 @@ func (n *Node) finishCatchUp(c net.Conn, ss *sessionSeal, view *View, peer *fram
 	return errors.Join(err, applyErr)
 }
 
-// heard takes what a peer's hello says: which records it holds, for display,
-// and its announcements, reporting whether any were new.
+// heard takes what a peer's hello says: its head, its anchor and which records
+// it holds, and its announcements, reporting whether any were new.
 func (n *Node) heard(peer *frame) bool {
 	if n.opts.OnHave != nil && peer.Self != nil && peer.Self.Identity != n.opts.Self && peer.Self.Verify() == nil {
-		n.opts.OnHave(peer.Self.Identity, peer.Have)
+		n.opts.OnHave(peer.Self.Identity, peer.Head, peer.Anchor, peer.Have)
 	}
 	return n.takeEndpoints(peer.Self, peer.Endpoints, peer.Keys)
 }
@@ -1187,9 +1191,6 @@ func (n *Node) hello(view *View) frame {
 		Have:    view.Have,
 	}
 	if len(f.Have) > MaxHashesPerFrame {
-		// Which ones survive is arbitrary, by hash and not by chain position:
-		// the peer resends from the anchor what it cannot see we hold, a frame
-		// at a time, and may never reach what we lack.
 		f.Have = f.Have[:MaxHashesPerFrame]
 	}
 	if n.opts.Announce != nil {

@@ -215,7 +215,8 @@ func TestTheChainNamesTheKeyOfEveryMemberItListed(t *testing.T) {
 	if err := h.auth.Inform(cp); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.auth.Compact(); err != nil {
+	h.checkpoint()
+	if _, err := h.auth.Compact(); err != nil || h.auth.Anchor() != cp.Hash() {
 		t.Fatal(err)
 	}
 	if h.auth.ListedSigningKey(removed.Identity) != nil {

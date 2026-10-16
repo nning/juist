@@ -85,8 +85,8 @@ func TestARenumberedPeerIsReachedAtBothAddressesUntilTheDeadline(t *testing.T) {
 		t.Errorf("the device list has the peer retiring %q until %d", d.Retiring, d.RetiringUntil)
 	}
 
-	f.d.onHave(other.record.Identity, []types.Hash{{1}})
-	f.d.onHave(peer.record.Identity, []types.Hash{rec.Hash()})
+	f.d.onHave(other.record.Identity, types.Hash{}, types.Hash{}, []types.Hash{{1}})
+	f.d.onHave(peer.record.Identity, types.Hash{}, types.Hash{}, []types.Hash{rec.Hash()})
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestARenumberedPeerIsReachedAtBothAddressesUntilTheDeadline(t *testing.T) {
 		t.Errorf("after the deadline the status has %v not moved, the peer retiring %q; want %v and none",
 			st.Unmoved, st.Devices[i].Retiring, other.record.Name)
 	}
-	f.d.onHave(other.record.Identity, []types.Hash{rec.Hash()})
+	f.d.onHave(other.record.Identity, types.Hash{}, types.Hash{}, []types.Hash{rec.Hash()})
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}

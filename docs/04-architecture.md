@@ -151,8 +151,9 @@ ratchets — the anchor and the epoch floor — that carry the last sentence.
   of walking back to a common ancestor is simpler — each side sends the hash set it
   holds and answers from the *peer's* anchor, which is what keeps sync alive across
   compaction asymmetry (see [09-mesh-layer-notes.md](09-mesh-layer-notes.md)). At a
-  few kilobytes of hashes it costs less than the bookkeeping a walk needs;
-  `MaxHashesPerFrame` is where that stops being true. AUMs are self-certifying, so
+  few kilobytes of hashes it costs less than the bookkeeping a walk needs, and a
+  peer is taken to hold the ancestors of what it lists, so a hello past
+  `MaxHashesPerFrame` lists the records nothing hangs from. AUMs are self-certifying, so
   they may arrive over *any* transport — the underlay at M2, WG tunnels once M3a
   gives them somewhere to run, the enrollment channel, even DHT-published head
   pointers.

@@ -325,14 +325,18 @@ func TestSessionReportsWhatThePeerHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	type heard struct {
-		from types.Identity
-		have []types.Hash
+		from         types.Identity
+		head, anchor types.Hash
+		have         []types.Hash
 	}
 	got := make(chan heard, 2)
 	holding := func(h types.Hash) func(*Options) {
 		return func(o *Options) {
 			o.Log.(*fakeLog).have = []types.Hash{h}
-			o.OnHave = func(from types.Identity, have []types.Hash) { got <- heard{from, have} }
+			o.Log.(*fakeLog).head = types.Hash{h[0] + 1}
+			o.OnHave = func(from types.Identity, head, anchor types.Hash, have []types.Hash) {
+				got <- heard{from, head, anchor, have}
+			}
 		}
 	}
 	a := newTestNodeTimeout(t, net1, 3, s, 2*time.Second, holding(types.Hash{0xa}))
@@ -343,10 +347,12 @@ func TestSessionReportsWhatThePeerHolds(t *testing.T) {
 	for range 2 {
 		h := <-got
 		switch {
-		case h.from == a.id && slices.Equal(h.have, a.log.have):
-		case h.from == b.id && slices.Equal(h.have, b.log.have):
+		case h.anchor != types.Hash{0xa}:
+			t.Errorf("heard %v anchored at %v", h.from.ShortString(), h.anchor)
+		case h.from == a.id && slices.Equal(h.have, a.log.have) && h.head == a.log.head:
+		case h.from == b.id && slices.Equal(h.have, b.log.have) && h.head == b.log.head:
 		default:
-			t.Errorf("heard %v holding %v", h.from.ShortString(), h.have)
+			t.Errorf("heard %v at %v holding %v", h.from.ShortString(), h.head, h.have)
 		}
 	}
 }

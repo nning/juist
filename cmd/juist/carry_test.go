@@ -328,9 +328,15 @@ func TestAnAdmissionGathersVotesWhileItsInviteRuns(t *testing.T) {
 	}
 	eventually(t, "bob's copy reaches carol", bobs)
 	eventually(t, "bob's copy lapses on carol's device", func() bool { return !bobs() })
-	out, err = carol.answer("y", "approve")
-	if err != nil {
-		t.Fatalf("carol approves: %v\n%s", err, out)
+	// Alice's copy renewed with bob's vote may reach carol a round later.
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(time.Second) {
+		out, err = carol.answer("y", "approve")
+		if err != nil {
+			t.Fatalf("carol approves: %v\n%s", err, out)
+		}
+		if strings.Contains(out, "applied") || time.Now().After(deadline) {
+			break
+		}
 	}
 	mustContain(t, out, "device admission, proposed by alice", "applied")
 	if out, err := joined.wait(t); err != nil {

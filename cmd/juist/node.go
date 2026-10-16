@@ -227,7 +227,7 @@ func (n *daemonNode) log() (*log.Authority, error) {
 }
 
 // informDisabled verifies the record the daemon says disabled the network,
-// which hangs off the active chain, with the records between them.
+// which counts wherever it hangs, off the active chain or below its anchor.
 func (n *daemonNode) informDisabled(auth *log.Authority) error {
 	at, err := types.ParseHash(n.st.Disabled)
 	if err != nil {
@@ -237,21 +237,11 @@ func (n *daemonNode) informDisabled(auth *log.Authority) error {
 	if err != nil {
 		return err
 	}
-	byHash := make(map[types.Hash]types.AUM, len(off))
-	for _, a := range off {
-		byHash[a.Hash()] = a
+	i := slices.IndexFunc(off, func(a types.AUM) bool { return a.Hash() == at })
+	if i < 0 {
+		return errors.New("juistd says the network is disabled, and sends no record that disabled it")
 	}
-	var path []types.AUM
-	for h := at; len(path) <= len(off); {
-		a, ok := byHash[h]
-		if !ok || a.Prev == nil {
-			break
-		}
-		path = append(path, a)
-		h = *a.Prev
-	}
-	slices.Reverse(path)
-	if err := auth.Inform(path...); err != nil {
+	if err := auth.Inform(off[i]); err != nil {
 		return fmt.Errorf("juistd's record disabling the network does not verify: %w", err)
 	}
 	if auth.Disabled() == nil {
@@ -610,9 +600,14 @@ func (n *localNode) join(ctx context.Context, invite, name string, _ operatorCho
 	if have {
 		o.Network, o.NetworkName = prior.State().GenesisHash(), prior.State().Network()
 	}
-	o.Adopt = func(records []types.AUM) error {
+	o.Adopt = func(records []types.AUM, admitted bool) error {
 		if have {
-			return prior.Inform(records...)
+			anchor, err := prior.Record(prior.Anchor())
+			if err != nil {
+				return err
+			}
+			return guest.Extend(anchor, func(r []types.AUM) error { return prior.Inform(r...) },
+				prior.Rebase, records, admitted)
 		}
 		st, err := store.Open(n.h.join(logDir))
 		if err != nil {

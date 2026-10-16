@@ -139,7 +139,7 @@ func TestASecondSaltIsRefused(t *testing.T) {
 	}
 	compares := 0
 	_, err = Join(context.Background(), Options{Invite: inv.Link().String(), Name: "phone", Keys: g,
-		Adopt:    func([]types.AUM) error { return nil },
+		Adopt:    func([]types.AUM, bool) error { return nil },
 		Progress: func(e Event) { compares += map[bool]int{true: 1}[e.Kind == Compare] }})
 	if err == nil || !strings.Contains(err.Error(), "twice") {
 		t.Fatalf("a second salt: %v", err)
@@ -163,7 +163,7 @@ func TestARelayOnlyLinkFailsCleanly(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if _, err := Join(ctx, Options{Invite: l.String(), Keys: g, Adopt: func([]types.AUM) error { return nil }}); err == nil ||
+	if _, err := Join(ctx, Options{Invite: l.String(), Keys: g, Adopt: func([]types.AUM, bool) error { return nil }}); err == nil ||
 		!strings.Contains(err.Error(), "cannot reach the inviting device") {
 		t.Fatalf("a relay-only link: %v", err)
 	}

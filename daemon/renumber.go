@@ -88,10 +88,9 @@ func (d *Daemon) renumberingAt(head types.Hash) (*renumbering, types.Hash, error
 	}
 }
 
-// onHave notes a peer holding the newest renumbering.
-func (d *Daemon) onHave(from types.Identity, have []types.Hash) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// seenRenumbering notes a peer holding the newest renumbering. The caller
+// holds mu.
+func (d *Daemon) seenRenumbering(from types.Identity, have []types.Hash) {
 	if d.moving == nil || d.moving.seen[from] {
 		return
 	}

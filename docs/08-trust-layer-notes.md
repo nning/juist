@@ -226,7 +226,8 @@ at all, and raise a persistent alarm instead:
   both take the lowest free one, and treating that as a conflict stopped every
   tunnel of a network over a record whose device no longer existed. The CLI
   counts the addresses of orphaned admissions as taken, so a reissue does not
-  collide again.
+  collide again. A checkpoint has no substance: one that lost has nothing to
+  reissue, and is neither a conflict nor a change to redo.
 
 While an alarm is raised, `Authority.TrustedState` refuses to hand out
 membership. That is the same trade as the freshness TTL: where security and
@@ -246,7 +247,22 @@ rather than something to average away.
 **The anchor** is the genesis record, or the newest checkpoint this node has
 adopted. Chain resolution starts there and never walks past it, so a branch
 forking before it is not outvoted — it is not considered at all. That is "never
-drop a checkpoint you hold", enforced structurally.
+drop a checkpoint you hold", enforced structurally, and it is what makes a
+chain final. juistd compacts to the checkpoint before the newest one on its
+chain, once every other live member has been heard with a head on or past the
+newest, or once a member heard has compacted to that checkpoint or past it,
+which some device did on that condition. So what hangs from the chain past
+the anchor is decided as on a device that never compacted, and what hangs
+below it is refused everywhere alike. The chain up to the new anchor from the
+one before is kept, for a device behind to catch up along. No device compacts
+while a revocation that lost fork choice waits to be redone, which would take
+the notice with the branch. A hello's head is unsigned, so a member that lies
+about others makes devices compact early; a device then behind is answered
+from the kept chain, and one further behind is invited again by a link naming
+its admin, which moves its log to the invite's chain (`Authority.Rebase`) only
+where its anchor carries a quorum of the admins the log trusts and it is at a
+later epoch; the device answering a typed code could hand over a chain of its
+own, so a code never replaces a log.
 
 **The epoch floor** is the highest epoch ever adopted, and it is never lowered.
 A chain that resolves below it is stored, but held under a *rollback alarm*:
@@ -258,8 +274,8 @@ version — and it is also what a branch this node applied first looks like when
 a concurrent one at a lower epoch wins fork choice, or when a copy's late
 signature makes a record no longer need a key its sibling removes. The two
 cannot be told apart, so both fail closed, the alarm naming the lost branch
-that reached the floor ([05-roadmap.md](05-roadmap.md), M18, says what is
-open). Refusing the records instead would leave the node
+that reached the floor; a switch below the floor is not followed, and
+compaction, above, is what settles one for good. Refusing the records instead would leave the node
 serving the losing branch, and, since sync sends a branch parents first in one
 batch, refusing every later batch with it, removals included, with no alarm.
 Held, the records keep coming in, and the alarm clears in whatever batch brings
@@ -521,12 +537,13 @@ bytes, not only by record count, because at these sizes
 batch that cannot be encoded, produced identically every round, which wedges
 that pair's sync rather than converging over more rounds. A batch is a
 parents-first prefix, so truncating it stays applicable, and the next round
-carries the rest. The same reasoning has not been carried through
-`MaxHashesPerFrame`: a node holding more than 4096 records sends a truncated
-`Have`, the peer re-offers records it already holds, and the two make no
-progress. That is unreachable until a network has authored 4096 records without
-a checkpoint, and closing it is part of deciding **when compaction runs without
-an admin asking** — undecided, and the decision this binds; M19 makes it.
+carries the rest. `MaxHashesPerFrame` binds the same way: a `Have` cut short
+by hash has the peer re-offer records the sender holds, a frame at a time, and
+the two make no progress. So a hello lists only what the sender resolves from its anchor,
+those nothing hangs from first, and a peer is taken to hold the ancestors of
+what it lists: two nodes converge however long the log is. Checkpoints keep it
+short: the admin's CLI that applies a change drafts one every 256 records or
+32 MiB, which needs the quorum like any change.
 
 ## Storage
 

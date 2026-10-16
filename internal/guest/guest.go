@@ -105,8 +105,9 @@ type Options struct {
 	Elsewhere []types.Hash
 
 	// Adopt stores the chain once it has been verified to admit this device,
-	// anchor first. It is the only thing that writes.
-	Adopt func(records []types.AUM) error
+	// anchor first. It is the only thing that writes. admitted says an
+	// admin's admission named a head on the chain; see [Extend].
+	Adopt func(records []types.AUM, admitted bool) error
 
 	// Announce, after Adopt, starts the device in the network with the
 	// member announcements and leases the host sent, and returns its own
@@ -633,7 +634,7 @@ func adopt(records []types.AUM, o Options, link *enroll.Link, admission *enroll.
 			"again; the invite admitted it as %q all the same, which an admin removes: juist remove %s",
 			state.Network(), self.Name, self.Name)
 	}
-	if err := o.Adopt(records); err != nil {
+	if err := o.Adopt(records, link != nil); err != nil {
 		return nil, err
 	}
 	return sent, nil
@@ -674,4 +675,29 @@ func vouching(auth *log.Authority, leases [][]byte, now int64) [][]byte {
 		}
 	}
 	return keep
+}
+
+// Extend takes records, a chain an invite brought, anchor first, into a log
+// this device holds already, anchored at anchor: from that anchor or a copy
+// of it on where the chain holds one, else whole where it continues the log,
+// and where it does not, in place of the log, but only on an admin's
+// admission. The device that answered a typed code could otherwise replace a
+// verified log with one of its own.
+func Extend(anchor types.AUM, inform, rebase func([]types.AUM) error, records []types.AUM, admitted bool) error {
+	if i := slices.IndexFunc(records, func(r types.AUM) bool {
+		return r.Hash() == anchor.Hash() || r.Prev != nil && anchor.Prev != nil && *r.Prev == *anchor.Prev &&
+			r.SigHash() == anchor.SigHash()
+	}); i >= 0 {
+		return inform(records[i:])
+	}
+	err := inform(records)
+	var r *log.RejectError
+	if !errors.As(err, &r) || r.Rule != log.RuleParent {
+		return err
+	}
+	if !admitted {
+		return errors.New("this device's log is older than the inviting device's, which only an invite " +
+			"link naming its admin can replace; ask for one, or start over: juist reset")
+	}
+	return rebase(records)
 }

@@ -217,6 +217,16 @@ device keeps receiving changes, removals included. An admin redoes the lost
 changes, or runs `juist rotate group-secret`. Once that change reaches this
 device, it connects again.
 
+### `warning: this device's log is older than what the network's devices keep`
+
+The device was offline while the network changed and the other devices
+dropped the part of the log it still needed, which they do once they have seen
+every device past it. Invite it again: an admin runs `juist invite`, and the
+device joins with the link it prints, keeping its keys and name. A typed code
+cannot replace the device's log. If the join says the chain does not continue
+this log, nothing it missed moved the group secret, so it cannot tell the
+invite's log is newer: run `juist reset`, then join.
+
 ### `removed`
 
 This device is no longer in the network. To use it again, join with a new

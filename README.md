@@ -1,7 +1,7 @@
 # juist
 
 > [!WARNING]
-> **Developed with Opus 5.5, no human (security) audit yet!**
+> **Vibe-coded with Opus 5.5. It has not had a security audit yet.**
 
 A peer-to-peer mesh VPN in the spirit of Tailscale, with **no coordination
 server at all**, neither a vendor's nor your own. WireGuard carries the traffic.

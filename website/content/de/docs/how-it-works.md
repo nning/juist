@@ -54,6 +54,13 @@ haben.
 `juist log` listet die Änderungen auf und zeigt zu jeder, wer sie bestätigt
 hat.
 
+Alle 256 Änderungen hält juist nach der Änderung eines Admins einen
+**Checkpoint** fest. Das ist der ganze Stand als eine einzige Änderung, die
+jedes Gerät mit seiner eigenen Kopie abgleicht. Sobald alle Geräte ihn
+haben, verwerfen sie, was vor dem Checkpoint davor liegt, und das Log bleibt
+kurz. Braucht das Quorum mehr als eine Stimme, wartet der Checkpoint wie jede
+Änderung auf die Stimmen der anderen Admins.
+
 ## Admins und das Quorum {#admins}
 
 Ein **Admin** ist ein Mensch, der das Netz ändern darf. Er kann Geräte

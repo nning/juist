@@ -419,7 +419,10 @@ func (next *State) setVouchers(a *types.AUM, _ applyMode) error {
 	return nil
 }
 
-func (next *State) checkpoint(a *types.AUM, _ applyMode) error {
+func (next *State) checkpoint(a *types.AUM, mode applyMode) error {
+	if mode == applyProbe {
+		return nil // one that lost fork choice has nothing to reissue
+	}
 	if a.State.GenesisHash == nil || *a.State.GenesisHash != next.genesisHash {
 		return errors.New("log: checkpoint belongs to a different network")
 	}

@@ -117,7 +117,7 @@ func TestTheGuestRequiresTheAdminsAdmission(t *testing.T) {
 				Invite: h.Invite().Link().WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
 				Name:   "phone",
 				Keys:   g,
-				Adopt:  func([]types.AUM) error { stored = true; return nil },
+				Adopt:  func([]types.AUM, bool) error { stored = true; return nil },
 			})
 			switch {
 			case tc.want == "" && err != nil:
@@ -166,7 +166,7 @@ func TestSilentConnectionsDoNotHoldTheInvite(t *testing.T) {
 	}
 	start := time.Now()
 	if _, err := guest.Join(ctx, guest.Options{Invite: h.Invite().Link().WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
-		Name: "phone", Keys: g, Adopt: func([]types.AUM) error { return nil }}); err != nil {
+		Name: "phone", Keys: g, Adopt: func([]types.AUM, bool) error { return nil }}); err != nil {
 		t.Fatalf("the guest was kept out: %v", err)
 	}
 	if d := time.Since(start); d > 3*time.Second {
@@ -227,7 +227,7 @@ func TestAGuestJoinsThroughTheRelay(t *testing.T) {
 	relayed := false
 	for range 20 { // until the host's wait has registered at the relay
 		if _, joinErr = guest.Join(ctx, guest.Options{Invite: link.WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
-			Name: "phone", Keys: g, Adopt: func([]types.AUM) error { return nil },
+			Name: "phone", Keys: g, Adopt: func([]types.AUM, bool) error { return nil },
 			Progress: func(e guest.Event) { relayed = relayed || e.Kind == guest.Connected && e.Relayed },
 		}); joinErr == nil {
 			break
@@ -290,7 +290,7 @@ func TestBothSidesShowTheSameWords(t *testing.T) {
 	go h.Serve(ctx, host, func() ([]types.AUM, [][]byte, [][]byte, error) { return records, nil, nil, nil }, nil)
 	var guestWords string
 	if _, err := guest.Join(ctx, guest.Options{Invite: h.Invite().Link().WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
-		Name: "phone", Keys: g, Adopt: func([]types.AUM) error { return nil },
+		Name: "phone", Keys: g, Adopt: func([]types.AUM, bool) error { return nil },
 		Progress: func(e guest.Event) {
 			if e.Kind == guest.Compare {
 				guestWords = e.Words
@@ -441,7 +441,7 @@ func TestTheHostIsHandedTheGuestsAnnouncement(t *testing.T) {
 		Invite: h.Invite().Link().WithAdmin(admin.Public(), new(admin.SigningKey())).String(),
 		Name:   "phone",
 		Keys:   g,
-		Adopt:  func([]types.AUM) error { return nil },
+		Adopt:  func([]types.AUM, bool) error { return nil },
 		Announce: func(endpoints, leases [][]byte) []byte {
 			started = true
 			return announcement

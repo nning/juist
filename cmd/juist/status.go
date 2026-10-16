@@ -244,6 +244,8 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 		head(paint("1;31", "disconnected"))
 	case s.Refused:
 		head(paint("1;31", "refused"))
+	case s.Overtaken:
+		head(paint("1;31", "behind"))
 	case s.Stale:
 		head(paint("33", "limited"))
 	case s.Members > 1 && s.Peers == 0:
@@ -533,6 +535,9 @@ func statusNotes(s *ipc.Status, several bool) []line {
 	if s.Refused {
 		note(lineWarn, "the network's devices refuse this one: most likely it was removed")
 		note(lineHint, "rejoin with a new invite, or start over: %s", resetCommand(s, several))
+	} else if s.Overtaken {
+		note(lineWarn, "this device's log is older than what the network's devices keep")
+		note(lineHint, "rejoin with a new invite link")
 	}
 	if s.EpochError != "" {
 		note(lineWarn, "cannot open the group secret, so no discovery or log updates: %s", s.EpochError)

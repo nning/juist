@@ -33,8 +33,8 @@ const (
 	// entropy sends what a peer is missing in as many frames as it takes.
 	MaxRecordsPerFrame = 256
 
-	// MaxHashesPerFrame caps the "what I already hold" set in a hello. Past
-	// it two nodes stop converging: see docs/05-roadmap.md, M19.
+	// MaxHashesPerFrame caps the "what I already hold" set in a hello; past
+	// it a hello lists what stands for its ancestors first.
 	MaxHashesPerFrame = 4096
 
 	// MaxEndpointsPerFrame caps the announcements one frame may carry: one

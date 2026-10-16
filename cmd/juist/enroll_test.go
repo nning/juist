@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/enroll"
+	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/store"
 	"github.com/nning/juist/types"
 )
@@ -256,6 +258,35 @@ func TestARemovedDeviceCanRejoin(t *testing.T) {
 		t.Fatal("a device in one network joined another without being asked to leave it")
 	}
 	inv.cancel()
+}
+
+// A device whose log starts below what the inviting device keeps is invited
+// again, and its log moves to the chain the invite brings.
+func TestADeviceBehindWhatItsPeersKeepIsInvitedAgain(t *testing.T) {
+	t.Parallel()
+	admin := newCLI(t)
+	admin.mustRun("create", "home")
+	phone := enrollDevice(t, admin, "phone")
+	compact := func() {
+		t.Helper()
+		admin.mustRun("log", "checkpoint")
+		if _, err := openLog(t, admin).Compact(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin.mustRun("rotate", "group-secret")
+	compact()
+	admin.mustRun("network", "rename", "house")
+	compact()
+
+	inv, link := startInvite(t, admin)
+	mustContain(t, phone.mustRun("join", link), `joined "house"`)
+	if _, err := inv.wait(t); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := openLog(t, phone), openLog(t, admin); got.Head() != want.Head() || got.Anchor() != want.Anchor() {
+		t.Fatal("the device invited again does not follow the inviting device's chain")
+	}
 }
 
 // TestUniqueNameFitsTheLimit: a name at the length limit that is already
@@ -585,5 +616,81 @@ func TestTheInviteSetsItsCommandsApart(t *testing.T) {
 		"  juist join 865-endow-millionaire-blockade  # same LAN\n\n"
 	if got := out.String(); !strings.HasPrefix(got, want) {
 		t.Fatalf("the invite reads\n%s\nwant\n%s", got, want)
+	}
+}
+
+// The change that leaves a checkpoint's worth of records past the last one
+// is followed by a checkpoint, with no admin asking; the next is not.
+func TestAChangePastTheIntervalIsFollowedByACheckpoint(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home")
+	if out := c.mustRun("network", "rename", "first"); strings.Contains(out, "checkpoint") {
+		t.Fatalf("the first change drafted a checkpoint:\n%s", out)
+	}
+	h, err := openHome(c.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := h.adminKeyFiles()
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("admin keys: %d, %v", len(keys), err)
+	}
+	auth := openLog(t, c)
+	b := auth.Builder()
+	var records []types.AUM
+	for i := range checkpointEvery - 2 {
+		rec, err := b.RenameNetwork(fmt.Sprintf("home-%d", i))
+		if err == nil {
+			err = rec.Sign(keys[0].priv)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		next, err := b.Dry(&rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, records = log.NewBuilder(next), append(records, rec)
+	}
+	if err := auth.Inform(records...); err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, c.mustRun("network", "rename", "last"), "checkpoint recorded")
+	auth = openLog(t, c)
+	head, err := auth.Record(auth.Head())
+	if err != nil || head.Kind != types.KindCheckpoint {
+		t.Fatalf("the head is no checkpoint: %v", err)
+	}
+	if out := c.mustRun("network", "rename", "after"); strings.Contains(out, "checkpoint") {
+		t.Fatalf("the change after a checkpoint drafted another:\n%s", out)
+	}
+}
+
+type statusNode struct {
+	*localNode
+	st *ipc.Status
+}
+
+func (n statusNode) restatus() (*ipc.Status, error) { return n.st, nil }
+
+// No checkpoint is drafted of a log juistd holds under an alarm: devices
+// would compact to it, past what the alarm is about.
+func TestNoCheckpointOfALogUnderAnAlarm(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home")
+	h, err := openHome(c.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := openLog(t, c)
+	for _, st := range []*ipc.Status{{Derived: ipc.Derived{Alarm: "log: fork alarm"}}, {SchemaAlarm: "too new"}} {
+		if unsettled(statusNode{&localNode{h: h}, st}, auth) == nil {
+			t.Fatalf("a checkpoint of a log under %+v", st)
+		}
+	}
+	if err := unsettled(statusNode{&localNode{h: h}, &ipc.Status{}}, auth); err != nil {
+		t.Fatalf("a settled log: %v", err)
 	}
 }

@@ -136,11 +136,6 @@ group secret. With FILEs, say what each change needs and whether it applies.`}
 	a.field("Quorum", "%d of %s", state.Quorum(), count(state.TotalVotes(), "vote"))
 	a.field("Schema", "%v", state.Schema())
 	a.field("Devices", "%d", len(state.Nodes()))
-	if n, err := auth.Unreachable(); err != nil {
-		return err
-	} else if n > 0 {
-		a.field("Leftover", "%s off the chain (rejected forks)", count(n, "record"))
-	}
 	if st := a.node.status(); st != nil {
 		// The daemon holds this device's keys and has already tried.
 		if st.EpochError != "" {
@@ -254,12 +249,15 @@ func (a *app) upgradeNote(several bool) {
 func logCheckpoint(a *app, args []string) error {
 	s := spec{name: "juist log checkpoint", about: `
 Record the whole current state as one change, which every device checks
-against its own history.`}
+against its own history. juist records one by itself every 256 changes.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
 	auth, err := a.networkLog()
 	if err != nil {
+		return err
+	}
+	if err := unsettled(a.node, auth); err != nil {
 		return err
 	}
 	aum, err := auth.Builder().Checkpoint()
@@ -276,9 +274,13 @@ func (a *app) reportLogHealth(auth *log.Authority) {
 			a.warn("%s lost to a concurrent change, not in effect; an admin redoes it",
 				count(len(o.Unrevoked), "revocation"))
 		}
-		if o.Conflict == "" && len(o.Records) > len(o.Unrevoked) {
-			a.warn("%s lost to a concurrent change, not applied; redo if wanted",
-				count(len(o.Records)-len(o.Unrevoked), "change"))
+		// A checkpoint has nothing to redo.
+		lost := slices.DeleteFunc(slices.Clone(o.Records), func(h types.Hash) bool {
+			r, err := auth.Record(h)
+			return slices.Contains(o.Unrevoked, h) || err == nil && r.Kind == types.KindCheckpoint
+		})
+		if o.Conflict == "" && len(lost) > 0 {
+			a.warn("%s lost to a concurrent change, not applied; redo if wanted", count(len(lost), "change"))
 		}
 	}
 	if alarm := auth.Alarm(); alarm != nil {

@@ -578,17 +578,48 @@ func TestMissingRespectsThePeersAnchor(t *testing.T) {
 			bootAuth.Head(), f.auth.Head())
 	}
 
-	// The mirror case: once this node compacts, a peer anchored at the genesis
-	// it no longer holds is offered what hangs from this node's anchor, which
-	// it takes where it holds the checkpoint's parent.
-	if _, err := f.auth.Compact(); err != nil {
+	checkpoint := func() types.AUM {
+		t.Helper()
+		cp, err := f.auth.Builder().Checkpoint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cp.Sign(f.nw.admin); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Inform([]types.AUM{cp}); err != nil {
+			t.Fatal(err)
+		}
+		return cp
+	}
+
+	// The mirror case: once this node compacts, to the checkpoint before the
+	// newest, it keeps the chain up to its anchor, and a peer anchored at the
+	// genesis is offered what hangs from it.
+	cp2 := checkpoint()
+	if _, err := f.auth.Compact(); err != nil || f.auth.Anchor() != cp.Hash() {
 		t.Fatalf("compacting: %v", err)
 	}
 	batch, err = adapter.Missing([]types.Hash{f.nw.genesis.Hash()}, f.nw.genesis.Hash())
 	if err != nil {
 		t.Fatalf("Missing after compaction: %v", err)
 	}
-	if len(batch) != 2 || batch[0].Hash() != cp.Hash() || batch[1].Hash() != grant.Hash() {
+	if len(batch) != 3 || batch[0].Hash() != cp.Hash() || batch[1].Hash() != grant.Hash() || batch[2].Hash() != cp2.Hash() {
+		t.Fatalf("a compacted node offered %d records, not those from the genesis on", len(batch))
+	}
+
+	// Once a second compaction drops the genesis, such a peer is offered
+	// what hangs from this node's anchor, which it takes where it holds the
+	// checkpoint's parent.
+	cp3 := checkpoint()
+	if _, err := f.auth.Compact(); err != nil || f.auth.Anchor() != cp2.Hash() {
+		t.Fatalf("compacting: %v", err)
+	}
+	batch, err = adapter.Missing([]types.Hash{f.nw.genesis.Hash()}, f.nw.genesis.Hash())
+	if err != nil {
+		t.Fatalf("Missing after compaction: %v", err)
+	}
+	if len(batch) != 2 || batch[0].Hash() != cp2.Hash() || batch[1].Hash() != cp3.Hash() {
 		t.Fatalf("a compacted node offered %d records, not those from its anchor on", len(batch))
 	}
 }

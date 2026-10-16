@@ -458,9 +458,10 @@ type Daemon struct {
 	reconcileMu sync.Mutex
 
 	// authMu guards the authority and its store.
-	authMu    sync.Mutex
-	authority *log.Authority
-	storage   log.Storage
+	authMu     sync.Mutex
+	authority  *log.Authority
+	storage    log.Storage
+	compacting compaction
 
 	// probeMu serializes tunnel checks, so asking twice does not probe twice.
 	probeMu     sync.Mutex
@@ -518,6 +519,11 @@ type Daemon struct {
 
 	// moving follows a renumbering while one is under way.
 	moving *renumbering
+
+	// peerBeacons is what each member's last hello said of its log, and
+	// behindSince since when peers answer only from beyond it.
+	peerBeacons map[types.Identity]peerBeacon
+	behindSince time.Time
 
 	// everMember records every identity seen as a live member, so a cached
 	// announcement can be told from a former member's.
@@ -709,6 +715,7 @@ func New(opts Options) (*Daemon, error) {
 		closed:           make(chan struct{}),
 		peerIDs:          map[types.WGKey]uint64{},
 		everMember:       map[types.Identity]bool{},
+		peerBeacons:      map[types.Identity]peerBeacon{},
 		cachePath:        opts.EndpointCachePath,
 		relayPort:        opts.RelayPort,
 		portFallback:     opts.PortFallback,

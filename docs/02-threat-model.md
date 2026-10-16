@@ -271,6 +271,20 @@ adopting this system must accept them explicitly.
    and whoever ends TLS as the relay learns nothing a relay does not. A
    release is signed by ssh-ed25519 alone until the OpenSSH that Debian
    stable and FreeBSD install verifies ML-DSA.
+14. **A member can have devices compact early (M19).** juistd compacts its log
+   to the checkpoint before the newest once every live member has been heard
+   with a head past the newest, or one has compacted that far, and a hello's
+   head and anchor are not signed: a member, or a device removed within the
+   keyring's window, that lies about the others makes devices drop what lies
+   below that checkpoint before a member behind has it. That member catches
+   up from the chain each compaction keeps, and one further behind is invited
+   again. A change made below the anchor, as a removal of the liar from an
+   admin device that slept through two checkpoints, is refused where devices
+   compacted and taken by fork choice where they did not: the two hold
+   different members, and neither alarms. A lying member that has devices on
+   both sides of a long partition compact on their own side splits them for
+   good, each refusing the other's records. No record is ever accepted on
+   that word.
 
 ## Security design rules derived from the above
 

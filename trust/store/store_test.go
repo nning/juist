@@ -319,18 +319,31 @@ func TestRefusesToCreateOverExistingNetwork(t *testing.T) {
 
 func TestCompactionRemovesFilesAndSurvivesReopen(t *testing.T) {
 	n := newNetwork(t)
+	checkpoint := func() {
+		t.Helper()
+		cp, err := n.auth.Builder().Checkpoint()
+		if err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		if err := cp.Sign(n.admin); err != nil {
+			t.Fatalf("signing: %v", err)
+		}
+		if err := n.auth.Inform(cp); err != nil {
+			t.Fatalf("Inform: %v", err)
+		}
+	}
 	n.addNode("alpha")
 	n.addNode("bravo")
-	cp, err := n.auth.Builder().Checkpoint()
-	if err != nil {
-		t.Fatalf("Checkpoint: %v", err)
+	checkpoint()
+	n.addNode("charlie")
+	checkpoint()
+	// The first compaction, to the checkpoint before the newest, keeps the
+	// chain from the genesis, its anchor before, and the second drops it.
+	if removed, err := n.auth.Compact(); err != nil || removed != 0 {
+		t.Fatalf("Compact: %d removed, %v", removed, err)
 	}
-	if err := cp.Sign(n.admin); err != nil {
-		t.Fatalf("signing: %v", err)
-	}
-	if err := n.auth.Inform(cp); err != nil {
-		t.Fatalf("Inform: %v", err)
-	}
+	n.addNode("delta")
+	checkpoint()
 	want := n.auth.State().Snapshot().Encode()
 
 	before, err := n.store.Hashes()

@@ -454,6 +454,7 @@ func TestCompactingToOneCopyKeepsWhatHangsFromAnother(t *testing.T) {
 	mustInform(t, peer, child)
 
 	mustInform(t, h.auth, high, low)
+	next := h.checkpoint()
 	if _, err := h.auth.Compact(); err != nil {
 		t.Fatal(err)
 	}
@@ -464,9 +465,10 @@ func TestCompactingToOneCopyKeepsWhatHangsFromAnother(t *testing.T) {
 		t.Fatalf("the other copy did not survive compaction: %v", err)
 	}
 	mustInform(t, h.auth, child)
-	mustInform(t, peer, low)
-	if h.auth.Head() != child.Hash() || peer.Head() != child.Hash() {
-		t.Fatalf("heads %v and %v, want %v", h.auth.Head(), peer.Head(), child.Hash())
+	mustInform(t, peer, low, next)
+	if !slices.Contains(h.auth.Held(), child.Hash()) || h.auth.Head() != peer.Head() {
+		t.Fatalf("heads %v and %v, and what hangs from the other copy held: %v", h.auth.Head(), peer.Head(),
+			slices.Contains(h.auth.Held(), child.Hash()))
 	}
 }
 

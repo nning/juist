@@ -1460,7 +1460,7 @@ func (s *Service) join(ctx context.Context, req *ipc.Request, events func(*ipc.E
 			}
 			_ = events(ev)
 		},
-		Adopt: func(records []types.AUM) (err error) {
+		Adopt: func(records []types.AUM, admitted bool) (err error) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			// The operator is appointed by a join that succeeds, and only
@@ -1476,9 +1476,18 @@ func (s *Service) join(ctx context.Context, req *ipc.Request, events func(*ipc.E
 			}()
 			switch {
 			case s.mesh != nil:
-				return s.mesh.Inform(records)
+				anchor, err := s.mesh.AnchorRecord()
+				if err != nil {
+					return err
+				}
+				return guest.Extend(anchor, s.mesh.Inform, s.mesh.Rebase, records, admitted)
 			case s.auth != nil:
-				return s.auth.Inform(records...)
+				anchor, err := s.auth.Record(s.auth.Anchor())
+				if err != nil {
+					return err
+				}
+				return guest.Extend(anchor, func(r []types.AUM) error { return s.auth.Inform(r...) },
+					s.auth.Rebase, records, admitted)
 			default:
 				auth, err := log.FromRecords(s.store, records)
 				if err != nil {

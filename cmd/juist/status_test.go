@@ -285,6 +285,18 @@ func TestStatusSaysTheNetworkRefusesThisDevice(t *testing.T) {
 		"hint: rejoin with a new invite")
 }
 
+// status says a device whose log is older than what its peers keep, and that
+// a new invite brings it back.
+func TestStatusSaysThisDeviceIsBehindWhatItsPeersKeep(t *testing.T) {
+	t.Parallel()
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
+	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2, Overtaken: true}})
+	mustContain(t, out.String(), "home · behind",
+		"warning: this device's log is older than what the network's devices keep", "hint: rejoin with a new invite link")
+}
+
 // juist devices says per device how the daemon's last check reached it, and
 // tells a device never heard from apart from one that stopped answering.
 func TestDevicesSayHowEachWasReached(t *testing.T) {

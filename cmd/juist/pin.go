@@ -49,6 +49,12 @@ type pin struct {
 	// Content is the head's [types.AUM.SigHash]: a log whose chain holds
 	// another copy of the head continues it.
 	Content *types.Hash `cbor:"2,keyasint,omitempty"`
+
+	// Admins and Quorum are the head's: a checkpoint a quorum of those keys
+	// signed, which descends from the head, stands in for it once compacted
+	// away.
+	Admins []types.AdminKey `cbor:"3,keyasint,omitempty"`
+	Quorum uint32           `cbor:"4,keyasint,omitempty"`
 }
 
 func (h *home) pinPath(genesis types.Hash) string {
@@ -138,6 +144,9 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 				return fmt.Errorf("juistd's log for %q lacks the head this keystore verified, and does not "+
 					"say where it went: %w", state.Network(), err)
 			}
+			if !lost && len(records) > 0 {
+				lost = standsIn(p, &records[0], offChain)
+			}
 			if !lost {
 				return fmt.Errorf("juistd's log for %q does not continue the one this keystore verified "+
 					"(head %v); juistd is behind, or compromised\nhint: retry once it caught up; to accept "+
@@ -145,7 +154,7 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 			}
 		}
 	}
-	next := pin{Head: auth.Head()}
+	next := pin{Head: auth.Head(), Admins: state.Admins(), Quorum: state.Quorum()}
 	if head, ok := byHash[next.Head]; ok {
 		next.Content = new(head.SigHash())
 	}
@@ -160,6 +169,45 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 		return err
 	}
 	return writeFileAtomic(dpath, []byte(fmt.Sprintf("%x\n", genesis[:])))
+}
+
+// standsIn reports whether cp, the checkpoint juistd's log starts from, stands
+// in for the pinned head it compacted away: a quorum of the pin's admin keys
+// signed it, and it descends from the head through records juistd holds off
+// its chain. A later epoch alone would not do: a checkpoint on a branch that
+// lost to the head can be at one.
+func standsIn(p *pin, cp *types.AUM, offChain func() ([]types.AUM, error)) bool {
+	if cp.Kind != types.KindCheckpoint || len(p.Admins) == 0 {
+		return false
+	}
+	sh := cp.SigHash()
+	votes := types.CountVotes(p.Admins, func(id types.Identity) bool {
+		i := slices.IndexFunc(p.Admins, func(k types.AdminKey) bool { return k.Public == id })
+		s, ok := cp.Signature(id)
+		return ok && p.Admins[i].Signing != nil && p.Admins[i].Signing.Verify(sh[:], s.PQ)
+	})
+	if votes < p.Quorum || p.Quorum == 0 {
+		return false
+	}
+	off, err := offChain()
+	if err != nil {
+		return false
+	}
+	byHash := make(map[types.Hash]*types.AUM, len(off))
+	for i := range off {
+		byHash[off[i].Hash()] = &off[i]
+	}
+	for at, n := cp, 0; at.Prev != nil && n <= len(off); n++ {
+		next, ok := byHash[*at.Prev]
+		if *at.Prev == p.Head || ok && p.Content != nil && next.SigHash() == *p.Content {
+			return true
+		}
+		if !ok {
+			return false
+		}
+		at = next
+	}
+	return false
 }
 
 // holdsContent reports whether a record on chain, the verified active chain
