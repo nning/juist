@@ -150,10 +150,10 @@ func TestAVPNPlumberServesNothing(t *testing.T) {
 	if err := p.SetServe("juist0", plumber.ServeSpec{DNSPort: 53}); err == nil {
 		t.Error("a VPN device served")
 	}
-	if err := p.SetDNS("juist0", []netip.Addr{netip.MustParseAddr("10.0.0.1")}); err == nil {
+	if err := p.SetDNS("juist0", []netip.Addr{netip.MustParseAddr("10.0.0.1")}, nil); err == nil {
 		t.Error("DNS was taken with no device up")
 	}
-	if err := p.SetDNS("juist0", nil); err != nil {
+	if err := p.SetDNS("juist0", nil, nil); err != nil {
 		t.Errorf("setting no DNS: %v", err)
 	}
 }
@@ -214,7 +214,7 @@ func TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS(t *testing.T) {
 		t.Error("the network is no longer routed")
 	}
 	dns := []netip.Addr{netip.MustParseAddr("10.0.0.1")}
-	if err := p.SetDNS("juist0", dns); err != nil || !slices.Equal(last().DNS, dns) {
+	if err := p.SetDNS("juist0", dns, nil); err != nil || !slices.Equal(last().DNS, dns) {
 		t.Errorf("DNS established: %v, %v", last().DNS, err)
 	}
 	if err := exits.setEgress(EgressDirect, tunnelled{}); err != nil {
@@ -224,7 +224,7 @@ func TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS(t *testing.T) {
 		t.Error("the internet is still routed into the tunnel with no exit node")
 	}
 	n := v.established()
-	if err := p.SetDNS("juist0", dns); err != nil || v.established() != n {
+	if err := p.SetDNS("juist0", dns, nil); err != nil || v.established() != n {
 		t.Errorf("the same DNS again established the device again: %v", err)
 	}
 	if err := exits.setServe(Serve{Routes: Internet(true, true, nil)}); err == nil {

@@ -51,6 +51,9 @@ func (r DNSRouting) equal(o DNSRouting) bool {
 		slices.Equal(r.Search, o.Search) && r.Everything == o.Everything
 }
 
+// dnsOffWhy is why juistd leaves the host's DNS alone, as its owner said.
+const dnsOffWhy = "DNS is off on this device"
+
 // errNoDomains is a host resolver that routes no domains, only every name.
 var errNoDomains = errors.New("this host's resolver routes no domains")
 
@@ -138,10 +141,10 @@ func (r plumbedDNS) Route(rt DNSRouting) error {
 		}
 		addrs = append(addrs, s.Addr())
 	}
-	return r.p.SetDNS(r.dev, addrs)
+	return r.p.SetDNS(r.dev, addrs, rt.Search)
 }
 
-func (r plumbedDNS) Revert() error { return r.p.SetDNS(r.dev, nil) }
+func (r plumbedDNS) Revert() error { return r.p.SetDNS(r.dev, nil, nil) }
 
 // VPNDNS is the host's DNS through a VPN device's own servers, as Android's
 // VpnService sets them, which every program's lookups then go to.
@@ -154,16 +157,7 @@ func (vpnDNS) through(string, []netip.AddrPort) (bool, string) { return true, ""
 // through reports whether the host's programs ask servers, whose resolver
 // resolvconf wrote.
 func (r plumbedDNS) through(path string, servers []netip.AddrPort) (bool, string) {
-	got, why := nameservers(path)
-	if why != "" {
-		return false, why
-	}
-	for _, s := range got {
-		if !slices.ContainsFunc(servers, func(ap netip.AddrPort) bool { return ap.Addr().String() == s }) {
-			return false, path + " asks " + s + ", not the exit node"
-		}
-	}
-	return true, ""
+	return asksOnly(path, servers, "the exit node")
 }
 
 // defaultDNSServer answers on the device named dev. A name this device's own
@@ -197,9 +191,14 @@ var PreTailscaleResolvConf = "/etc/resolv.pre-tailscale-backup.conf"
 
 // uplinkFor is who a member's query q is asked of where no override is
 // answered: those the host asks, by resolved's routing where resolv.conf
-// names its stub alone, but never tailscaled's resolvers; nil, the
-// forwarder's own, where they are all there is.
+// names its stub alone, its own where it asks juistd alone, but never
+// tailscaled's resolvers; nil, the forwarder's own, where they are all there
+// is.
 func (d *Daemon) uplinkFor(q []byte) []netip.AddrPort {
+	if s, ok := d.hostDNS.(soleResolver); ok {
+		// Never resolv.conf, which names juistd's own resolver.
+		return d.soleUpstream(s)
+	}
 	ups := dnsfwd.HostResolvers()
 	stubOnly := len(ups) > 0 && !slices.ContainsFunc(ups, func(a netip.AddrPort) bool { return !a.Addr().IsLoopback() })
 	if r := d.hostRouting.Load(); r != nil && stubOnly {
@@ -237,8 +236,11 @@ func (d *Daemon) namesUpstreamFor(q []byte) []netip.AddrPort {
 
 // hostUpstreamFor is the host's resolvers resolved asks q's name of, but on
 // juist's device, never none-nil; the host's resolvers in turn where its
-// routing could not be read.
+// routing could not be read, or where the host asks juistd alone.
 func (d *Daemon) hostUpstreamFor(q []byte) []netip.AddrPort {
+	if s, ok := d.hostDNS.(soleResolver); ok {
+		return append([]netip.AddrPort{}, d.soleUpstream(s)...)
+	}
 	if r := d.hostRouting.Load(); r != nil {
 		if name, ok := names.Question(q); ok {
 			return r.Servers(name)
@@ -340,7 +342,15 @@ func (d *Daemon) routeDNSLocked(exit []netip.AddrPort, keep bool) (bool, string)
 			}
 		}
 		d.dnsRouting, d.dnsWhy = DNSRouting{}, ""
+		off := d.dnsOff.Load()
+		if off && d.names != nil {
+			d.names.Close()
+			d.names = nil
+		}
 		d.namesStatus = d.namesNotLocked()
+		if off && len(exit) > 0 {
+			return false, dnsOffWhy
+		}
 		return false, ""
 	}
 	if d.hostDNS == nil {
@@ -360,6 +370,8 @@ func (d *Daemon) routeDNSLocked(exit []netip.AddrPort, keep bool) (bool, string)
 	if err := d.hostDNS.Route(want); err != nil {
 		d.logOnce("daemon: routing the host's DNS: " + err.Error())
 		switch {
+		case errors.Is(err, resolved.ErrNotRunning) && tailscaledWrote(cmp.Or(d.resolvConf, "/etc/resolv.conf")):
+			d.dnsWhy = "tailscaled writes " + cmp.Or(d.resolvConf, "/etc/resolv.conf")
 		case errors.Is(err, resolved.ErrNotRunning):
 			d.dnsWhy = "systemd-resolved does not run on this host"
 		case errors.Is(err, resolved.ErrNoPolkit):
@@ -408,6 +420,8 @@ func (d *Daemon) namesNotLocked() *ipc.Names {
 		return nil
 	case z.Domain == "" && z.Public == "":
 		return &ipc.Names{Not: "the network's name is no DNS label", Cannot: true}
+	case d.dnsOff.Load():
+		return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: dnsOffWhy, Cannot: true, Off: true}
 	case d.hostDNS == nil || d.startNames == nil:
 		return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: "juistd runs without a device of its own", Cannot: true}
 	case !routesDomains(d.hostDNS):
@@ -453,6 +467,13 @@ func (d *Daemon) namesNow() *ipc.Names {
 	return &n
 }
 
+// SetDNSOff records whether this device's owner had juistd leave the host's
+// DNS alone: the network's names and an exit node's DNS alike.
+func (d *Daemon) SetDNSOff(off bool) {
+	d.dnsOff.Store(off)
+	d.MarkDirty()
+}
+
 // SetAcceptNames records whether this device's owner agreed that it
 // resolves the public names the network points at members to them.
 func (d *Daemon) SetAcceptNames(on bool) {
@@ -471,12 +492,13 @@ func routesDomains(h HostDNS) bool {
 // resolvers or none: juist's resolver for the names it answers, and for
 // every name with an exit node; else the exit node's resolvers, or none.
 func (d *Daemon) wantRoutingLocked(exit []netip.AddrPort) DNSRouting {
-	if d.dnsClosed {
+	if d.dnsClosed || d.dnsOff.Load() {
 		return DNSRouting{}
 	}
 	z := d.zone.Load()
 	if domains := routedDomains(z); len(domains) > 0 && d.namesServingLocked() {
-		r := DNSRouting{Servers: []netip.AddrPort{d.namesAt}, Domains: domains, Everything: len(exit) > 0}
+		_, sole := d.hostDNS.(soleResolver)
+		r := DNSRouting{Servers: []netip.AddrPort{d.namesAt}, Domains: domains, Everything: len(exit) > 0 || sole}
 		if z.Domain != "" {
 			r.Search = []string{z.Domain}
 		}
@@ -517,6 +539,7 @@ func (d *Daemon) namesServingLocked() bool {
 		return false
 	}
 	d.names, d.namesAt, d.namesFailedAt, d.namesWhy = s, at, time.Time{}, ""
+	d.soleAnswersAt(at.Addr())
 	return true
 }
 
@@ -528,7 +551,7 @@ func (d *Daemon) throughStub() (bool, string) {
 	if t, ok := d.hostDNS.(interface {
 		through(string, []netip.AddrPort) (bool, string)
 	}); ok {
-		return t.through(path, d.dnsExit)
+		return t.through(path, d.dnsRouting.Servers)
 	}
 	servers, why := nameservers(path)
 	if why != "" {

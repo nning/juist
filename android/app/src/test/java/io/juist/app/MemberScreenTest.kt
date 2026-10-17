@@ -21,10 +21,10 @@ class MemberScreenTest {
 
     private fun text(id: Int) = compose.activity.getString(id)
 
-    private fun show(reach: Reach) = compose.setContent {
+    private fun show(reach: Reach, relay: String = "") = compose.setContent {
         JuistTheme {
             MemberScreen(
-                sampleView.members[1].copy(reach = reach), on = true, pings = listOf(PingResult(157.3)),
+                sampleView.members[1].copy(reach = reach, relay = relay), on = true, pings = listOf(PingResult(157.3)),
                 pinging = false, onPing = {}, onOpen = {}, onBack = {},
             )
         }
@@ -45,5 +45,19 @@ class MemberScreenTest {
         show(Reach.Direct)
         compose.onNodeWithText(text(R.string.ping_about)).assertExists()
         compose.onNodeWithText(text(R.string.action_open_web)).assertIsEnabled()
+    }
+
+    /** A relayed member's screen names the device whose relay carries the traffic, where the core knows it. */
+    @Test
+    fun aRelayedMemberNamesItsRelay() {
+        show(Reach.Relay, relay = "vps")
+        compose.onNodeWithText(compose.activity.getString(R.string.reach_relay_about_named, "vps")).assertExists()
+        compose.onNodeWithText(text(R.string.reach_relay_about)).assertDoesNotExist()
+    }
+
+    @Test
+    fun aRelayedMemberWithNoRelayNamedSaysARelay() {
+        show(Reach.Relay)
+        compose.onNodeWithText(text(R.string.reach_relay_about)).assertExists()
     }
 }

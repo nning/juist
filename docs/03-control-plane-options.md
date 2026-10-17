@@ -3,6 +3,8 @@
 The control plane answers one question: **who holds membership truth?** Five
 architectures were evaluated security-first, against a survey of ~25 projects
 (see [research/project-survey.md](research/project-survey.md), verified Aug 2026).
+This is the record of that choice; where the project later decided otherwise, it
+says so.
 
 ## A. Self-hosted coordinator — rejected
 
@@ -49,7 +51,8 @@ independently verified by every node; membership changes require signatures from
 k-of-n admin quorum (vote weights); the transport that moves records is untrusted **by
 construction** — Tailscale built TKA precisely so its *own* coordination server would
 not need to be trusted, and ships it as an importable, production-tested, BSD-3 Go
-package (`tailscale.com/tka`).
+package (`tailscale.com/tka`). Superseded in part: juist follows tka's design and
+imports none of its code ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
 
 What TKA lacks for a fully-P2P deployment is ordering and distribution of AUMs (it
 leans on the coordination server for both). Those are addressable with well-understood
@@ -103,7 +106,8 @@ Tailscale-parts decision changes.
 
 No existing project combines: (a) kernel-WireGuard data plane, (b) a multi-writer
 verifiable membership log as sole truth, (c) serverless rendezvous, and (d) first-class
-decentralized revocation. The closest attempt is **rayfish** (Rust mesh VPN on iroh,
+decentralized revocation; juist meets (b) to (d), on wireguard-go in v1
+([04-architecture.md](04-architecture.md)). The closest attempt is **rayfish** (Rust mesh VPN on iroh,
 DHT-published network records) — experimental, unaudited, dependent on coordinator-peer
 liveness, and not WireGuard. Every other surveyed system evicts devices via central
 push, out-of-band config distribution, or shared-secret rotation. That gap is this

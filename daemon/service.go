@@ -109,6 +109,7 @@ type Service struct {
 	// acceptNames is the owner's word on the network's public names, and
 	// servePublished the operator's on serving what is published here.
 	acceptNames, servePublished bool
+	dnsOff                      bool // the owner's word that juistd leaves the host's DNS alone
 	// serveTo is, by label, where the names whose TLS juist ends go, and
 	// serveMembers the labels whose service is for members alone.
 	serveTo      map[string]string
@@ -250,6 +251,8 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	s.subnetsOff = err == nil
 	_, err = os.Stat(filepath.Join(home, statedir.NamesFile))
 	s.acceptNames = err == nil
+	_, err = os.Stat(filepath.Join(home, statedir.DNSOffFile))
+	s.dnsOff = err == nil
 	s.servePublished, s.serveTo, s.serveMembers = loadServeTo(home, s.logf)
 	s.httpsOnly, s.proxy, s.relayName = loadSettings(home, s.logf)
 	if s.opts.ServeTo != nil {
@@ -740,11 +743,16 @@ func (s *Service) Mesh() *Daemon {
 func (s *Service) watch(ctx context.Context) {
 	t := time.NewTicker(rotationCheckInterval)
 	defer t.Stop()
+	var looked time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if time.Since(looked) < s.opts.Mesh.Pace.every(0, savingWatchEvery) {
+				continue
+			}
+			looked = time.Now()
 			s.adoptRotation()
 			s.followAddrs()
 			s.checkHost()
@@ -820,6 +828,7 @@ func (s *Service) startMeshLocked() error {
 	o.Exit, o.ServeExit, o.OnExitMoved = s.exit, s.serve, s.followExit
 	o.ServeSubnets, o.SubnetsOff = s.serveSubnets, s.subnetsOff
 	o.AcceptNames, o.ServePublished, o.ServeTo, o.ServeMembers = s.acceptNames, s.servePublished, s.serveTo, s.serveMembers
+	o.DNSOff = s.dnsOff
 	o.HTTPSOnly, o.Proxy, o.RelayName = s.httpsOnly, s.proxy, s.relayName
 	o.RelayCertsPath = filepath.Join(s.opts.Home, statedir.RelayCertsDir)
 	if !s.opts.InProcess {

@@ -1,9 +1,7 @@
 package conn
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -11,15 +9,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"tailscale.com/derp/derphttp"
 	"tailscale.com/health"
 	"tailscale.com/net/dns"
-	"tailscale.com/net/netmon"
-	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
-	"tailscale.com/util/backoff"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/usermetric"
 	"tailscale.com/wgengine"
@@ -51,61 +44,6 @@ func upstreamSource(t *testing.T, rel string) string {
 		t.Fatalf("reading upstream %s: %v", rel, err)
 	}
 	return string(b)
-}
-
-// filtered runs one line through the STUN-home filter, reporting whether it
-// was kept.
-func filtered(format string, args ...any) bool {
-	m := &tsManager{}
-	m.stunRegions.Store(&map[tailcfg.DERPRegionID]bool{65534: true})
-	kept := false
-	m.withoutSTUNHomeNoise(func(string, ...any) { kept = true })(format, args...)
-	return kept
-}
-
-// The filter's first rule matches what util/backoff logs, under the name
-// magicsock gives a relay region's backoff.
-func TestUpstreamBackoffLineIsTheOneFiltered(t *testing.T) {
-	src := upstreamSource(t, "wgengine/magicsock/derp.go")
-	if !strings.Contains(src, `backoff.NewBackoff(fmt.Sprintf("derp-%d", regionID), c.logf,`) {
-		t.Fatal(`magicsock no longer names a region's backoff "derp-<region>" with its own logf`)
-	}
-	var lines []string
-	for _, region := range []int{65534, 7} {
-		bo := backoff.NewBackoff(fmt.Sprintf("derp-%d", region), func(format string, args ...any) {
-			if filtered(format, args...) {
-				lines = append(lines, fmt.Sprintf(format, args...))
-			}
-		}, time.Second)
-		bo.BackOff(t.Context(), errors.New("connect failed"))
-	}
-	if len(lines) != 1 || !strings.HasPrefix(lines[0], "derp-7: ") {
-		t.Fatalf("kept %q; want only the real relay's backoff", lines)
-	}
-}
-
-// The second matches the error derphttp gives for a region with no relay in
-// it, which is what a STUN-only region is.
-func TestUpstreamSTUNOnlyRegionErrorIsTheOneFiltered(t *testing.T) {
-	dm, stunRegions := derpMap(nil, []string{"192.0.2.1:3478"}, false, Networks{})
-	var reg *tailcfg.DERPRegion
-	for id := range stunRegions {
-		reg = dm.Regions[id]
-	}
-	if reg == nil {
-		t.Fatal("the map holds no STUN region")
-	}
-	c := derphttp.NewRegionClient(key.NewNode(), t.Logf, netmon.NewStatic(), func() *tailcfg.DERPRegion { return reg })
-	defer c.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	err := c.Connect(ctx)
-	if err == nil {
-		t.Fatal("connected to a STUN-only region")
-	}
-	if filtered("magicsock: [%p] derp.Recv(derp-%d): %v", c, reg.RegionID, err) {
-		t.Fatalf("derphttp's error for a STUN-only region is no longer the one filtered: %v", err)
-	}
 }
 
 // magicsock moves its home relay only while the health tracker says a map

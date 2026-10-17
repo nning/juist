@@ -245,6 +245,7 @@ func (n *meshNode) overlayV4() netip.Addr { return *n.dev.record.V4 }
 // LAN with no internet, nothing configured about where anyone is, and the mesh
 // forms from blinded multicast plus a log every node verified for itself.
 func TestMeshFormsOnTheLanAlone(t *testing.T) {
+	t.Parallel()
 	m := startMesh(t, 5)
 	took := waitFor(t, 30*time.Second, "every node to hold a full peer set", m.converged)
 	t.Logf("five nodes converged on a full mesh in %v", took)
@@ -263,6 +264,7 @@ func TestMeshFormsOnTheLanAlone(t *testing.T) {
 // dropped the peer — which ends data-plane access — and moved to the new epoch
 // — which ends the device's ability to find the network.
 func TestRevocationConvergesWithinTheBudget(t *testing.T) {
+	// Not parallel: it bounds a latency, which contention stretches.
 	m := startMesh(t, 5)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
 
@@ -436,6 +438,7 @@ func TestNonMemberIsNeverAPeer(t *testing.T) {
 // the network is already running is discovered, configured and reachable
 // without anyone restarting anything.
 func TestNewMemberJoinsAConvergedMesh(t *testing.T) {
+	t.Parallel()
 	m := startMesh(t, 2)
 	waitFor(t, 30*time.Second, "the mesh to converge", m.converged)
 

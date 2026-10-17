@@ -15,12 +15,13 @@
 // Every frame carries the sender's (epoch, head) whether or not anything needs
 // transferring, and one round makes both sides whole. The "what I hold" set is
 // sent outright rather than walked back to a common ancestor, which keeps the
-// exchange stateless; a record listed stands for its ancestors. A node that
-// holds no epoch its peer speaks asks for a catch-up first, and runs the same
-// exchange under the key it grants.
+// exchange stateless; where the set is cut short, a record listed stands for
+// its ancestors. A node that holds no epoch its peer speaks asks for a
+// catch-up first, and runs the same exchange under the key it grants.
 //
-// Gossip runs on the underlay, since reaching a peer over the overlay needs
-// the tunnel gossip brings up; [seal] covers the metadata that costs.
+// Sessions run through the tunnel where the daemon listens on its overlay
+// addresses alone, and on the underlay otherwise; [seal] covers the metadata
+// the underlay shows.
 package gossip
 
 import (
@@ -65,9 +66,9 @@ type View struct {
 
 	// Have is every record hash this node resolves from its anchor, including
 	// branches that lost fork choice: both sides must see a fork in full to
-	// alarm on it. A peer takes each as standing for its ancestors, so where
-	// there are more than [MaxHashesPerFrame], those nothing hangs from come
-	// first.
+	// alarm on it. Where there are more than [MaxHashesPerFrame], those
+	// nothing hangs from come first, and a peer takes each as standing for its
+	// ancestors.
 	Have []types.Hash
 }
 

@@ -233,11 +233,11 @@ zum Gerät oder zu `any` öffnet den Namen nicht.
   die er gedacht ist. Es erkennt sie an der Adresse im Netz, von der ihre
   Verbindung kommt. Von der Ingress nimmt es nur die Prüfung der CA an, eine
   übernommene Ingress kommt also nicht weiter.
-- Unter Linux mit systemd-resolved erreichen Mitglieder den Namen direkt an
-  seinem Gerät, wie jeden Namen auf 443. Geräte, die die Namen des Netzes über
-  öffentliches DNS auflösen, erreichen ihn gar nicht: FreeBSD, Linux ohne
-  systemd-resolved (dort warnt `juist status` vor jedem solchen Namen) und die
-  Android-App.
+- Unter Linux und FreeBSD erreichen Mitglieder den Namen direkt an seinem
+  Gerät, wie jeden Namen auf 443. Geräte, die die Namen des Netzes über
+  öffentliches DNS auflösen, erreichen ihn gar nicht: solche, auf denen
+  `juist health` sagt, dass die Namen nicht aufgelöst werden, und vor jedem
+  solchen Namen warnt, und die Android-App.
 - Der Name braucht einen eigenen Dienst. juist bedient einen Namen nur für
   Mitglieder nicht, wenn ein anderer Name oder eine Freigabe auf demselben
   Gerät denselben Dienst erreicht und juist deren Bytes unverändert
@@ -428,7 +428,7 @@ ist dann die eines Geräts, von dem die anderen keine Verbindungen annehmen.
 - Ein Name mit einem eigenen Eintrag, etwa dem CAA- oder HTTPS-Eintrag, den
   juist ausgibt, bekommt von `*.example.org` keine Adresse mehr. Gib ihm auch
   eigene A- und AAAA-Einträge, die auf die Ingress zeigen.
-- Jedes Mitglied unter Linux mit systemd-resolved schickt Anfragen zur ganzen
+- Jedes Mitglied unter Linux und FreeBSD schickt Anfragen zur ganzen
   Domain an juistd. juistd beantwortet einen auf 443 veröffentlichten oder
   geteilten Namen mit der Adresse seines Geräts, solange es erreichbar ist.
   So erreichen Mitglieder ihn direkt durch den Tunnel, mit demselben
@@ -528,8 +528,9 @@ ist dann die eines Geräts, von dem die anderen keine Verbindungen annehmen.
 Wer die Ingress kontrolliert, kann sich ein Zertifikat für deine Namen
 ausstellen lassen und öffentliche Clients abfangen, ebenso Mitglieder, die
 einen Namen über sie erreichen: auf einem anderen Port als 443, hinter
-`--proxy` oder ohne systemd-resolved. Mitglieder, die einen Namen auf 443 zu
-seinem Gerät auflösen, verbinden sich direkt mit ihm. Diese Lücke schließt ein
+`--proxy` oder auf Geräten, die die Namen des Netzes nicht auflösen.
+Mitglieder, die einen Namen auf 443 zu seinem Gerät auflösen, verbinden sich
+direkt mit ihm. Diese Lücke schließt ein
 CAA-Eintrag, also ein DNS-Eintrag, der festlegt, wer Zertifikate für einen
 Namen ausstellen darf, hier gebunden an das ACME-Konto des Ziels.
 `juist publish add NAME HOST:PORT` gibt diesen Eintrag aus, bei einem
@@ -554,7 +555,7 @@ Service-Mitglied steht er im Log des Terminators.
 | `juist health`: `warning: no certificate for NAME: …` | Die CA hat keines ausgestellt, aus dem genannten Grund. Meist erreicht sie NAME nicht: Das öffentliche DNS von NAME muss auf eine laufende Ingress zeigen. Bis dahin scheitert TLS bei jedem Client. |
 | `juist status`: `warning: not serving NAME, which is for members alone: OTHER reaches its service as it is, …` | OTHER geht per TCP oder ohne Proxy an denselben Dienst, dessen Clients ihn also nach NAME fragen könnten. Gib NAME einen eigenen Dienst. |
 | `juist status`: `warning: not serving NAME, its service meant for members alone: the log has the name public` | Soll er nur für Mitglieder sein, führt ein Admin `juist publish add GERÄT NAME --members` aus. Soll er öffentlich sein, führst du auf dem Gerät `juist publish add NAME HOST:PORT --members=false` aus. |
-| `juist status`: `warning: NAME, for members alone, is not reached from here, …` | Dieses Gerät löst die Namen des Netzes über öffentliches DNS auf, NAME führt also zur Ingress, die ihn abweist. Unter Linux hilft systemd-resolved. |
+| `juist status`: `warning: NAME, for members alone, is not reached from here, …` | Dieses Gerät löst die Namen des Netzes über öffentliches DNS auf, NAME führt also zur Ingress, die ihn abweist. Warum, sagt der Rest von `juist health`. |
 | `another program holds port 443 on …, where juist would end TLS` | Beende dieses Programm oder veröffentliche auf einem anderen Port. |
 | auf vps, `juist status`: `Ingress` zeigt `…; another program holds port 443/udp` | Ein anderes Programm, oft das HTTP/3 eines Webservers, belegt 443/udp auf der Ingress. Browser bleiben bei TCP, bis es den Port freigibt; dann übernimmt ihn die Ingress. |
 | `access: quic … refused: another name's flow from its address` | Ein Client hat sich von einem UDP-Socket aus mit Namen auf zwei Geräten verbunden, und die Ingress reicht diesen Socket nur an eines davon weiter. Browser nehmen für jede Verbindung einen eigenen Socket. |

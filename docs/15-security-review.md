@@ -13,20 +13,20 @@ What [`audit-scope`](../audit-scope) places `core` or `in`, in the tiers of
 [06-verification.md](06-verification.md) §5, with one change: the root
 boundary (`internal/plumber`, `cmd/juistd`'s privsep, `daemon`'s peercred,
 `conn/confine.go`) and the key glue (`internal/aead`, `pairkey`, `addrkey`,
-`keys`, `keyring`) are read line by line as the core is, though §5 places
+`keys`, `keyring`, `pqtls`) are read line by line as the core is, though §5 places
 them in the third tier, since a bug in a root helper or a key derivation is
 as grave as one in the core.
 
 | Tier | Packages | Lines | How |
 |---|---|---|---|
-| 1, the core | `types`, `trust/enroll`, `trust/log`, `trust/secrets`, `trust/store` | 9 954 | line by line |
-| 1, the boundary | `internal/plumber`, `cmd/juistd`, `daemon` (peercred, control, ipc), `conn/confine.go`; `internal/aead`, `pairkey`, `addrkey`, `keys`, `keyring` | ~5 500 | line by line |
-| 2, parsers of outside input | `gossip`, `ipc`, `internal/quicinitial`, `waiting`, `dnsfwd`, `policy`, `names`, `relay` | ~9 000 | fuzzed first, then read for what the fuzzer cannot judge |
-| 3, invariants | the rest of `daemon`, `cmd/juist`, `internal/ingress`, `statuspage`, `mobile` | ~6 200 | default deny, dropped privileges, keys that stay where they are put |
+| 1, the core | `types`, `trust/enroll`, `trust/log`, `trust/secrets`, `trust/store` | 10 933 | line by line |
+| 1, the boundary | `internal/plumber`, `cmd/juistd`'s helpers and privsep, `daemon` (peercred, control, ipc), `conn/confine.go`; `internal/aead`, `pairkey`, `addrkey`, `keys`, `keyring`, `pqtls` | 5 623 | line by line |
+| 2, parsers of outside input | `gossip`, `ipc`, `internal/quicinitial`, `waiting`, `dnsfwd`, `policy`, `names`, `relay` | 9 386 | fuzzed first, then read for what the fuzzer cannot judge |
+| 3, invariants | the rest of `daemon`, `cmd/juist`, `internal/ingress`, `statuspage`, `mobile` | 6 863 | default deny, dropped privileges, keys that stay where they are put |
 
-Sizes are `make tcb`'s at M16; the review records its own when it
-closes. The embedded Tailscale stack is reviewed at its boundary alone: what
-juist hands it and what it trusts from it
+Sizes are `audit-scope`'s files at M19's close (M19), 32 805 lines in
+all; the review records its own when it closes. The embedded Tailscale
+stack is reviewed at its boundary alone: what juist hands it and what it trusts from it
 ([07-embedding-notes.md](07-embedding-notes.md)). Tests are read as
 evidence for a property, never line by line.
 
@@ -42,7 +42,8 @@ Compute first, reading after:
 - `make lint` and `make govulncheck` pass.
 - The review takes the tree after M17 to M23, whose changes it reads
   whole. What lands after it is reviewed as a diff by the same protocol,
-  scoped by its size, as §5 says of every milestone after v1.
+  scoped by its size, as [06-verification.md](06-verification.md) §5 says
+  of every milestone after v1.
 
 ## 3. The inventory
 
@@ -159,7 +160,7 @@ and what did not run.
 - Whether the inventory joins [06-verification.md](06-verification.md)
   once the findings it points at are fixed, as the map the external
   auditor starts from.
-- Whether a machine-checked sketch of freshness and fork choice (§5's
-  stretch goal) is worth writing before the external audit, which is where
+- Whether a machine-checked sketch of freshness and fork choice
+  ([06-verification.md](06-verification.md) §5's stretch goal) is worth writing before the external audit, which is where
   the novel logic lives and where a reader is least reliable.
 - Who the external auditor is; unchanged by this review.

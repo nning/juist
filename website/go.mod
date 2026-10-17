@@ -1,6 +1,6 @@
 module juist/website
 
-go 1.26.0
+go 1.27.2
 
 tool github.com/gohugoio/hugo
 

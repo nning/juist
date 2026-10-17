@@ -21,7 +21,8 @@ import (
 )
 
 // freePort returns a TCP port nothing listens on, so a member restarted on it
-// is where its peers' cached announcements say.
+// is where its peers' cached announcements say. Not for parallel tests: the
+// port is free only until another test binds it.
 func freePort(t *testing.T) uint16 {
 	t.Helper()
 	ln, err := net.Listen("tcp", ":0")
@@ -32,7 +33,7 @@ func freePort(t *testing.T) uint16 {
 	return uint16(ln.Addr().(*net.TCPAddr).Port)
 }
 
-// freeUDPPort returns a UDP port nothing listens on.
+// freeUDPPort returns a UDP port nothing listens on; not for parallel tests.
 func freeUDPPort(t *testing.T) uint16 {
 	t.Helper()
 	c, err := net.ListenPacket("udp", ":0")

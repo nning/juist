@@ -152,6 +152,24 @@ func TestStatusShowsFreshness(t *testing.T) {
 	mustContain(t, d.mustRun("status"), "home · ", "laptop", "Freshness", "vouched")
 }
 
+// juist status -d prints what juist status && echo && juist devices does,
+// with juistd running or not.
+func TestStatusWithDevices(t *testing.T) {
+	t.Parallel()
+	offline := newCLI(t)
+	offline.mustRun("create", "home", "--device", "laptop")
+	d := newDaemonDevice(t, nil)
+	d.mustRun("create", "home", "--device", "laptop")
+	for _, run := range []func(...string) string{offline.mustRun, d.mustRun} {
+		want := run("status") + "\n" + run("devices")
+		for _, flag := range []string{"-d", "--devices"} {
+			if got := run("status", flag); got != want {
+				t.Errorf("juist status %s:\n%s\nwant:\n%s", flag, got, want)
+			}
+		}
+	}
+}
+
 // TestStatusRefusedByPermission: a packaged daemon runs as its own account,
 // so a socket the caller may not reach is an ordinary answer, and the message
 // names the account to run as.
@@ -833,4 +851,34 @@ func TestStatusCountsTheDevicesWithoutATunnel(t *testing.T) {
 func printStatusAndHealth(a *app, s *ipc.Status) {
 	a.printStatus(s)
 	a.healthNotes(s, "")
+}
+
+// juist status -v names the relay of each relayed device under Relays, and
+// plain juist status none.
+func TestStatusVerboseNamesEachDevicesRelay(t *testing.T) {
+	t.Parallel()
+	self, laptop, phone, nas := types.Identity{1}, types.Identity{2}, types.Identity{3}, types.Identity{4}
+	st := &ipc.Status{
+		InNetwork: true, Self: self,
+		Derived: ipc.Derived{NetworkName: "home", SelfName: "desk", Members: 4, Peers: 3, Relays: 1, RelayCapable: 1,
+			Devices: []ipc.Device{{Identity: self, Name: "desk"}, {Identity: laptop, Name: "laptop"},
+				{Identity: phone, Name: "phone"}, {Identity: nas, Name: "nas"}}},
+		Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 3, ReachChecked: testNow().Unix(), HomeRelay: "vps",
+			Reach: []ipc.PeerReach{{Identity: phone, Live: true, Relay: "vps"}, {Identity: nas, Live: true, Direct: true},
+				{Identity: laptop, Live: true}}},
+	}
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	a.now = testNow
+	a.printStatusIn(st, "", true)
+	mustContain(t, out.String(), "  Relays        1 available, via vps\n                laptop via a relay\n                phone via vps\n")
+	if strings.Contains(out.String(), "nas via") {
+		t.Errorf("a direct device is listed as relayed:\n%s", out.String())
+	}
+	var plain syncBuffer
+	b := newApp(strings.NewReader(""), &plain, &plain)
+	b.printStatus(st)
+	if strings.Contains(plain.String(), "phone") {
+		t.Errorf("plain status lists relayed devices:\n%s", plain.String())
+	}
 }

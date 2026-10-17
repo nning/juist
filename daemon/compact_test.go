@@ -38,6 +38,7 @@ func (nw *network) renames(t *testing.T, n int) []types.AUM {
 // A log longer than a hello lists, with no checkpoint, still converges on a
 // change: a peer stands what it lists for the ancestors it holds.
 func TestALogPastWhatAHelloListsConverges(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("builds a log past the hello's cap")
 	}
@@ -71,6 +72,7 @@ func (n *meshNode) holds(h types.Hash) bool {
 // live member is heard past the newest, so that one away is not left behind
 // it; then they all do, and go on taking changes.
 func TestDevicesCompactOnceEveryMemberIsPastTheCheckpoint(t *testing.T) {
+	t.Parallel()
 	m := &mesh{t: t, nw: newNetwork(t, 3), hub: &lanHub{}}
 	for i := range 3 {
 		m.nodes = append(m.nodes, m.start(t, i))
@@ -124,6 +126,7 @@ func TestDevicesCompactOnceEveryMemberIsPastTheCheckpoint(t *testing.T) {
 // A device behind a peer that compacted catches up from what the peer kept
 // below its anchor.
 func TestADeviceBehindACompactedPeerCatchesUp(t *testing.T) {
+	t.Parallel()
 	m := &mesh{t: t, nw: newNetwork(t, 2), hub: &lanHub{}}
 	for i := range 2 {
 		m.nodes = append(m.nodes, m.start(t, i))

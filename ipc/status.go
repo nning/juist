@@ -414,6 +414,10 @@ type PeerReach struct {
 	// public address is nothing a local user sees otherwise.
 	Direct bool `cbor:"3,keyasint,omitempty"`
 
+	// Relay names the member whose relay carries a relayed tunnel's packets
+	// to the peer: the peer's home, empty where it has none of the network's.
+	Relay string `cbor:"11,keyasint,omitempty"`
+
 	// Seeking says a tunnel that is down may be so because the peer
 	// restarted or moved, and its new announcement is being looked for;
 	// Absent that the lookup found none newer, so it is likely offline.
@@ -524,6 +528,8 @@ type Names struct {
 	// ForMembers are the names for members alone this device may open,
 	// which it reaches where Resolved alone.
 	ForMembers []string `cbor:"9,keyasint,omitempty"`
+	// Off says the owner had juistd leave this host's DNS alone.
+	Off bool `cbor:"10,keyasint,omitempty"`
 }
 
 // A NameOverride is a public name pointed at Device, and Not why this device

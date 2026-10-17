@@ -160,7 +160,7 @@ Jedes Mitglied hat zwei Adressen im Netz. `juist devices` zeigt sie an.
 
 ## Namen {#names}
 
-Wo systemd-resolved läuft, erreichst du jedes Mitglied unter
+Unter Linux und FreeBSD erreichst du jedes Mitglied unter
 `DEVICE.NETWORK.juist`, etwa `laptop.home.juist`, oder einfach unter
 `laptop`:
 

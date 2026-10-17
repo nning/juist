@@ -1,12 +1,7 @@
 # 13 — Several networks on one host
 
-M5 lets one host be a member of several networks. Before it, a juistd held one
-network and `juist join` on a device in one refused the next. The keystore
-already kept admin keys, anchors and break-glass files per network; what was
-missing was the device side, and three things broke when a second juistd was
-run by hand: every network numbered from the start of 198.18/15, the Linux
-router's table and rule priorities were fixed, and the packaging knew one unit.
-This file records how M5 resolved them and the rules a later change must keep.
+How one host is a member of several networks (M5): instances, address
+prefixes, which instance yields, and the rules a later change must keep.
 
 ## One juistd per network, numbered
 
@@ -26,16 +21,15 @@ needs a registry:
 | routing table | 0x6a75 | 0x6a75 + n |
 | rule priorities | 5110, 5130, 5150, 5170 | the same plus n |
 
-The roadmap had instances named after their network. They are numbered
-instead, because the name is needed before the join that learns the network's
-name, a device name has to fit IFNAMSIZ, two networks may share a name, and
-a network can be renamed. People never type the number unless they
-want to: the CLI finds a network by its name (below).
+Instances are numbered, not named after their network: the name is needed
+before the join that learns the network's name, a device name has to fit
+IFNAMSIZ, two networks may share a name, and a network can be renamed. People
+never type the number unless they want to: the CLI finds a network by its name
+(below).
 
-Ports are fixed per instance rather than taken free at start, as the roadmap
-planned. A firewall can then be told them before the instance runs, and
-peers' endpoint caches stay right across restarts. Ports another program
-holds still give way to OS-chosen ones, as the default's do.
+Ports are fixed per instance, not taken free at start, so a firewall can be
+told them before the instance runs and peers' endpoint caches stay right across
+restarts. Ports another program holds still give way to OS-chosen ones.
 
 `/run/juist` is preserved (`RuntimeDirectoryPreserve=yes` on both units):
 every instance's socket is in it, and systemd would otherwise delete the
@@ -70,11 +64,10 @@ deadlock.
 - **Only a lower instance conflicts.** A higher one's routes never win, so it
   is the one to yield.
 - **IPv4 overlap: run without IPv4.** No IPv4 address on the device and none of
-  the members' in the data plane, so none is routed or accepted. The roadmap
-  said to refuse to start. Refusing stops log sync too, and then the
-  renumbering that ends the conflict never reaches this host: a network
-  renumbered on another device would leave this one stuck on its old log.
-  IPv6 carries log sync, so the fix arrives and IPv4 comes back by itself.
+  the members' in the data plane, so none is routed or accepted. Refusing to
+  start would stop log sync too, and the renumbering that ends the conflict
+  would never reach this host. IPv6 carries log sync, so the fix arrives and
+  IPv4 comes back by itself.
 - **The same network: do not start.** An instance below in this very network,
   by its genesis hash or, read from the kernel, an address in this network's
   ULA, is this device's membership already; a second would be a second device
@@ -85,8 +78,9 @@ deadlock.
   removed, one without a device, one whose mesh did not start, or one that
   runs without IPv4 itself. For the same network, only membership counts.
 - **Rechecked every five seconds**, and the running mesh drops IPv4 or takes
-  it back when the answer changes; one in this very network stops it. Two instances starting together both see an empty host, and the
-  check afterwards sorts them out. Until it does, the lower instance's routes
+  it back when the answer changes; one in this very network stops it. Two
+  instances starting together both see an empty host, and the check afterwards
+  sorts them out. Until it does, the lower instance's routes
   already win. A host that cannot be read is no verdict: the mode stays as it
   was, and the failure is logged once. Nor is a lower instance that is not
   there for a moment, as while it restarts: IPv4 comes back only once three
@@ -104,13 +98,18 @@ deadlock.
 `juist status` names both networks and says how to end it: renumber one, or,
 for the same network twice, reset the higher instance.
 
+On FreeBSD every instance shares the host's one routing table, with no FIB of
+its own: `conn.InstanceHoldings` knows an instance by its device's name and
+holds its addresses and the routes into it, so the IPv4 yield works as on
+Linux. A route pins its source by naming it as the gateway.
+
 ## Prefixes: a /22 each, drawn
 
 `juist create` without `--ipv4` draws a random /22 in 198.18/15, one of the 127
-after the first (`drawV4Prefix`). It never draws the first one, where networks without a
-prefix of their own number from. It skips any /22 that this host's interfaces
-or its other networks' claims overlap, and it questions an `--ipv4` that
-overlaps them. Status carries each network's claims (`V4Claims`) for this.
+after the first (`drawV4Prefix`). It never draws the first, where networks
+without a prefix of their own number from. It skips any /22 that this host's
+interfaces or its other networks' claims overlap, and it questions an `--ipv4`
+that overlaps them. Status carries each network's claims (`V4Claims`) for this.
 
 A /22 holds 1022 addresses. That is about twice MaxNodes at once, and 1022
 admissions over the network's life, since no address is handed out twice
@@ -146,11 +145,11 @@ and picks the one a command is about:
   an instance is enabled but not running they refuse, saying how to start
   it, since it may already be some network's device. They ignore
   `$JUIST_NETWORK`, which names a network the device is in, not the new one.
-  `juist create --no-device` starts nothing. As root
-  this happens at once. Otherwise the CLI asks, and runs a hidden
-  `sudo juist __instance new` once. That enables the unit, lets its device
-  through the host firewall the way the package does for `juist0`, and
-  appoints the user as the instance's operator. On a device in a single
+  Making an instance happens at once as root; otherwise the CLI asks and
+  runs a hidden `sudo juist __instance new` once, which enables the unit,
+  lets its device through the host firewall as the package does for
+  `juist0`, and appoints the user as the instance's operator. `juist create
+  --no-device` starts nothing. On a device in a single
   network, one that network removed, a join still goes to that instance,
   which may take it back in. With several networks the join goes to a new
   instance.
@@ -172,20 +171,18 @@ and picks the one a command is about:
 until the device has been admitted. A device already in that network,
 through another instance, is therefore admitted a second time before it can
 tell. The new instance refuses the log (`guest.Options.Elsewhere`) and says
-which admission an admin should remove. Before M5 the same join was refused
-before admission, because it was made under the same keys. Doing that again
-needs the join request to carry the networks the device is in, blinded by the
-session so that the host learns only whether its own is among them. That
-changes the enrollment protocol and is left for later.
+which admission an admin should remove. Refusing before admission needs the
+join request to carry the networks the device is in, blinded by the session so
+that the host learns only whether its own is among them; that changes the
+enrollment protocol and is left open.
 
-## Admin keys, one per network (M5a)
-
-Rules a later change must keep:
+## Admin keys, one per network
 
 - A network's own key is `admins/PERSON@NETWORK.key`, NETWORK as the network
   was named when the key was filed; nothing renames it afterwards.
-- A key named without `@` is either from before M5a, and keeps its name, or
-  carries `juist-unfiled-v1`, and the first log naming it files it. A key
+- A key named without `@` is either from before keys were filed per network,
+  and keeps its name, or carries `juist-unfiled-v1`, and the first log naming
+  it files it. A key
   without the mark is never filed.
 - Without a log, keys filed under different networks never sign one record
   together.
@@ -200,7 +197,7 @@ every instance and revokes every device's firewall rule, and leaves their
 homes, which hold keys, as it leaves the default's. `firewall.sh` takes the
 device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
 
-## Not built in M5
+## Still open
 
 - **A user per instance.** Every instance runs as `juist`, so one taken over
   holds the device keys of every network on the host and can operate the
@@ -208,22 +205,16 @@ device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
   [02-threat-model.md](02-threat-model.md). Closing it needs a user per
   instance. Then an instance's home cannot sit in the default's 0700 one,
   each needs a runtime directory of its own, and the instance above has to be
-  allowed to read the exact claims of the one below. That is for the
-  boundaries on a host, before the audit (M23).
+  allowed to read the exact claims of the one below. That is M23's.
 - **Other networks' addresses in path discovery.** magicsock learns this
   host's addresses from every interface but Tailscale's own, and sends them to
   peers in the call-me-maybe it relays. A network's members may therefore be
   told this host's addresses in its other networks, and try them as paths.
   They lead nowhere for them, but they say which ranges the host is in.
-
-- **FreeBSD** (M7a) keeps every instance in the host's one table, with no
-  FIB of its own: `conn.InstanceHoldings` knows an instance by its device's
-  name, and holds its addresses and the routes into it, so the IPv4 yield
-  works as on Linux. A route pins its source by naming it as the gateway.
 - **Renumbering's deadline** is fixed when the change is proposed, so every
-  approval after that leaves less of the transition. Approvers now see how
-  much is left, with a warning under the freshness TTL. Moving the deadline
-  after signing would take a new record.
+  approval after that leaves less of the transition. Approvers see how much is
+  left, with a warning under the freshness TTL; moving the deadline after
+  signing would take a new record.
 
 ## Verification
 
@@ -235,11 +226,9 @@ default that never yields), `cmd/juist/instances_test.go` (a host in-process
 with the default instance and the instances the CLI starts), `cmd/juistd`
 (`--instance`), `packaging` (the units, the scripts, `firewall.sh`).
 
-Privileged, run by `make test-os-plumbing` and not on this project's own dev
-box, which is a container: `TestNetnsInstancesLeaveEachOtherAlone` (two
-routers side by side, each seeing the other's holdings),
-`TestNetnsAHostInTwoNetworks` (criteria 1 and 3) and
-`TestNetnsRenumberingKeepsEveryPairReachable` (criteria 5 and 6, as the data
-plane sees them). All three passed on 2026-09-27, the first time they ran, on a
-Fedora desktop beside a running juistd
-([12-validating.md](12-validating.md#the-last-privileged-run)).
+Privileged, run by `make test-os-plumbing` and skipped without root, TUN and
+network namespaces: `TestNetnsInstancesLeaveEachOtherAlone` (two routers side
+by side, each seeing the other's holdings), `TestNetnsAHostInTwoNetworks` (two
+networks on one host) and `TestNetnsRenumberingKeepsEveryPairReachable` (a
+renumbering, as the data plane sees it). The latest run is in
+[12-validating.md](12-validating.md#the-last-privileged-run).

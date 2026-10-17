@@ -64,6 +64,7 @@ const maxStall = 6 * time.Second
 // handshake. Each change is made while the streams run, and they are checked
 // after it; the IPv4 one ends with the address it was opened from.
 func TestNetnsAStreamSurvivesChanges(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	a := lab.addNode("a", 1)
 	b := lab.addNode("b", 2)

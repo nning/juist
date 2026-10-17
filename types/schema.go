@@ -30,7 +30,7 @@ const SchemaContentForkChoice SchemaVersion = 19
 
 // MinSchema is the lowest schema this build reads, where every record is
 // signed by ML-DSA alone. Networks below it moved up with M17's build; the
-// rules of schemas 0 to 17 are in git's history and docs/05-roadmap.md.
+// rules of schemas 0 to 17 are in git's history.
 const MinSchema SchemaVersion = 18
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

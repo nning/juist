@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -178,6 +177,12 @@ type tsManager struct {
 	// hold in the map last installed.
 	stun        []string
 	stunRegions atomic.Pointer[map[tailcfg.DERPRegionID]bool]
+	// homeless is whether the map last installed holds STUN servers alone,
+	// and tun the wrapper whose idleness paces STUN then.
+	homeless atomic.Bool
+	tun      *tstun.Wrapper
+	// saving is [tsManager.SetSaving]'s.
+	saving atomic.Bool
 
 	// relays is the relay set last installed, kept so an unchanged one does
 	// not restart the latency probes. Guarded by apply.
@@ -326,10 +331,6 @@ func New(opts Options) (_ Manager, err error) {
 	m.skip = opts.TunName
 	m.publicSeen = map[netip.Addr]time.Time{}
 	m.local.Store(&Networks{Prefixes: hostNetworks(m.skip)})
-	if opts.Logf != nil && len(m.stun) > 0 {
-		logf = m.withoutSTUNHomeNoise(logf)
-		m.logf = logf
-	}
 
 	// Shared with the OS router on the real-device path. Marked as in a map
 	// poll for good: magicsock keeps the first home relay it picks unless it
@@ -438,6 +439,7 @@ func New(opts Options) (_ Manager, err error) {
 		return nil, errors.New("conn: engine did not surface its magicsock conn or TUN wrapper")
 	}
 	m.confiner = confine(tundev)
+	m.tun = tundev
 	// magicsock treats ListenPort as a preference: a port it cannot bind
 	// silently becomes an OS-assigned one, and nothing downstream repairs
 	// that, since our endpoints come from an interface scan. Only the initial
@@ -480,6 +482,8 @@ func New(opts Options) (_ Manager, err error) {
 	m.magic.SetNetInfoCallback(m.onNetInfo)
 	if len(m.stun) > 0 {
 		m.installDERPMap(nil)
+		m.warm.Add(1)
+		go m.stunWhileHomeless()
 	}
 
 	m.apply.Lock()
@@ -1432,6 +1436,14 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 
 func (m *tsManager) HomeRelay() int { return int(m.homeRelay.Load()) }
 
+// SetSaving stops, or resumes, magicsock pinging every peer it sent to in
+// the last 45 s every 3 s: while saving battery a path is trusted while the
+// peer's traffic arrives on it, and probed when sending finds it stale.
+func (m *tsManager) SetSaving(saving bool) {
+	m.saving.Store(saving)
+	m.magic.SetSilentDisco(saving)
+}
+
 func (m *tsManager) ReachesRelay(region int) bool {
 	if region == 0 {
 		return false
@@ -1489,38 +1501,44 @@ func (m *tsManager) followNetworks() {
 	}
 }
 
-// withoutSTUNHomeNoise drops what the engine logs about a STUN server it took
-// as its home. With no member relay the nearest region is always a STUN
-// server's, since netcheck picks a home among every region it measured, and
-// the engine then tries to connect to it every few seconds. Each try fails
-// before anything is sent — a STUN-only node carries no relay — and peers are
-// told of no home (see onNetInfo), so what is left is log lines saying a relay
-// is down that never existed. The alternative, SetHomeless, would also stop
-// the periodic STUN that keeps this node's public address current.
-func (m *tsManager) withoutSTUNHomeNoise(logf logger.Logf) logger.Logf {
-	stunRetry := func(args []any) bool {
-		name, _ := args[0].(string)
-		region, err := strconv.Atoi(strings.TrimPrefix(name, "derp-"))
-		return err == nil && (*m.stunRegions.Load())[tailcfg.DERPRegionID(region)]
-	}
-	return func(format string, args ...any) {
-		switch {
-		case strings.HasSuffix(format, "[v1] backoff: %d msec") && len(args) == 2 && stunRetry(args):
-			return
-		case strings.Contains(fmt.Sprintf(format, args...), "no non-STUNOnly nodes"):
-			return
-		}
-		logf(format, args...)
-	}
-}
-
 // installDERPMap renders the relays and the STUN servers as one map. The STUN
 // regions are recorded first, so a report naming one is never mistaken for a
 // relay to be reached through.
 func (m *tsManager) installDERPMap(relays []Relay) {
 	dm, stunRegions := derpMap(relays, m.stun, m.httpsOnly, *m.local.Load())
 	m.stunRegions.Store(&stunRegions)
+	// With no relay to home at, the engine takes the nearest STUN server
+	// for its home and, failing to connect to it, asks every STUN server
+	// again every few seconds, idle or not.
+	homeless := dm != nil && len(dm.Regions) == len(stunRegions)
+	if m.homeless.Swap(homeless) != homeless {
+		m.magic.SetHomeless(homeless)
+	}
 	m.magic.SetDERPMap(dm)
+}
+
+// stunEvery is how often a homeless node asks STUN while its tunnels carry
+// traffic, as the engine does for a node with a home.
+const stunEvery = 25 * time.Second
+
+// stunWhileHomeless asks STUN every [stunEvery] while homeless, active and
+// not saving battery, which the engine stops doing for a homeless node: an
+// idle one asks again once traffic resumes or the network changes. A peer's
+// probes keep it active.
+func (m *tsManager) stunWhileHomeless() {
+	defer m.warm.Done()
+	t := time.NewTicker(stunEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-m.done:
+			return
+		case <-t.C:
+			if m.homeless.Load() && !m.saving.Load() && m.tun.IdleDuration() < 45*time.Second {
+				m.magic.ReSTUN("juist-homeless")
+			}
+		}
+	}
 }
 
 func (m *tsManager) LocalEndpoints() []netip.AddrPort {

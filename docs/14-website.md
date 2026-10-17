@@ -2,26 +2,27 @@
 
 A documentation site for users, beside these planning documents: what juist
 does, feature by feature, how it is designed, and what it trades. English and
-German from the start, built statically and published through juist itself.
+German, built statically and published through juist itself at
+docs.juist.nning.io.
 
 ## Decided
 
-- **Hugo**, pinned in `website/go.mod` as a tool and run with the
-  repository's `GOTOOLCHAIN`. v0.165.0 is the last release that builds with
-  Go 1.26; v0.166 needs 1.27, so Hugo moves with the toolchain.
+- **Hugo** v0.165.0, pinned in `website/go.mod` as a tool and built with the
+  repository's toolchain, which `website/Makefile` and `website/Containerfile`
+  name too.
 - **A theme of its own:** a paper chart by day, a night chart by night,
   around a chart of Juist on the home page. Plain CSS, two small scripts and
   no inline script, so a strict CSP holds; no request leaves the site, fonts
   included (IBM Plex, OFL, in `static/fonts`). The fonts are IBM's files,
   unchanged: the OFL reserves the name Plex for them, so a subset of our own
   would need another name. The site loads IBM's variable fonts, Latin1 and
-  Latin2, one file each for every weight; the pages juist serves itself carry
-  the three static weights they use.
+  Latin2; the pages juist serves itself (`internal/webstyle`) carry the three
+  static weights they use.
 - **Languages:** `content/en` and `content/de`, with the same slugs, so the
   switcher and links stay stable; CLI output stays English on every page.
-- **Two parts.** The home page is one page: what juist is, its rules, a
-  first network, the features, publishing in short, every trade-off, and the
-  status. *Documentation* is the handbook, a page per task in the order of
+- **Two parts.** The home page is one page: what juist is, its rules, the
+  tour, a first network, the features, publishing in short, and the
+  trade-offs. *Documentation* is the handbook, a page per task in the order of
   `data/nav.yaml`; its sidebar lists only pages that exist.
 - **Handbook pages** follow one shape: what it is, how to (steps, each on a
   named device), good to know, if something goes wrong.
@@ -38,30 +39,33 @@ German from the start, built statically and published through juist itself.
 - **The current state only.** Pages say what juist does today; no
   milestones, plans, or work in progress, and nothing promised for a later
   version. The one exception is the comparison matrix's "planned" mark.
-- **Hosting:** the image serves plain HTTP on a member's `127.0.0.1`,
-  published with `juist publish add NAME 127.0.0.1:PORT` through an
-  ingress on a VPS of its own; TLS ends at `juist-serve`. The apex of a
-  domain needs M9d. A service member in front of it is the stricter form,
-  once it has a recipe for a container.
+- **Checks:** `make -C website check` builds the site, tests `website/server`
+  and fails on inline script or style, which the CSP refuses; `make -C website
+  test-browser` checks the built site in headless Chrome.
+- **Serving:** `website/server`, in an image from scratch
+  (`website/Containerfile`, `make -C website image`) or under systemd, serves
+  plain HTTP on a member's `127.0.0.1` as an unprivileged user, every answer
+  with the CSP and no listing, a line for each on stderr. It is published with
+  `juist publish add NAME 127.0.0.1:PORT --http2` through an ingress on a VPS of
+  its own; TLS ends at `juist-serve`. A service member in front of it is the
+  stricter form, once it has a recipe for a container.
 - **Following main:** `website/deploy` builds the site on a member whenever
-  `website/` or `design/` changed on `main`, as the user that builds the
-  deb there, and serves it on `127.0.0.1:8181` with a `DynamicUser`; it is
+  `website/`, `design/` or the app's screenshots changed on `main`, as the user
+  `juist-build`, and serves it on `127.0.0.1:8181` with a `DynamicUser`; it is
   pulled, not pushed, because `[skip ci]` would stop a CI deploy. Each
-  instance builds from a repository of its own; a preview of unpublished
+  instance may build from a repository of its own; a preview of unpublished
   work is served with `-noindex`.
-- **Under load:** the site is published with `--http2` and its server
-  takes h2c, so a browser holds one connection rather than six of the
-  ingress's 16384 slots (256 per address, 1024 per /24); the server closes a
-  quiet one after 10 s and sends text as Brotli, zstd or gzip, whichever is
-  smallest. `make load-lab` loads it along the published path and fails
-  where a visitor is lost.
+- **Under load:** the server takes h2c, so a browser holds one connection
+  rather than six of the ingress's 16384 slots (256 per address, 1024 per /24);
+  it closes a quiet one after 10 s and sends text as Brotli, zstd or gzip,
+  whichever is smallest. `make load-lab` loads it along the published path and
+  fails where a visitor is lost; `make load-site` loads the server alone.
 - The home page's chart is drawn from OpenStreetMap's outline of Juist
   (`data/juist_outline.json`), which ODbL requires the footer to credit.
 
 ## Shared with the Android app
 
-M10 wants a theme of its own as tokens, light and dark. The website and the
-app take it from one place, `design/`:
+The website and the app take their look from one place, `design/`:
 
 - `tokens.json` holds the colours by Material 3 role for day and night, the
   status colours of a member's reach and of an alarm, the chart's colours and
@@ -81,34 +85,14 @@ app take it from one place, `design/`:
   languages; the website's Android pages take their pictures from them, and
   the invite page shows the words to compare as the app does.
 
-## Phases
+## Still to come
 
-- **W0 — the look.** Done on the branch `website`: the home page, the
-  features section, *Publishing services* and *Trade-offs*, in both
-  languages, both palettes, desktop and phone, checked in headless Chrome;
-  the tokens and the logo in `design/`.
-- **W1 — the frame.** Built: `website/Containerfile`, an image of the pages
-  and `website/server` from scratch, as an unprivileged user, every answer
-  with the CSP and no listing, and a line for each on stderr: host, path,
-  status, bytes, referrer and User-Agent, the client's address being the
-  terminator's; `make -C website check` fails on inline
-  script or style, which that CSP refuses; `website/compose.yml` builds and
-  runs it on `127.0.0.1:8181`, read-only and without capabilities, with
-  `docker compose up -d`. Still to come: the root Makefile's targets and a
-  CI job.
-- **W2 — the handbook.** Eighteen pages on the branch, from how juist works
-  to troubleshooting, in both languages, each command and flag checked
-  against the commands' help; still to come, the command reference generated
-  as `__manpage` is.
-- **W3 — design and security.** Begun: *Architecture*, *Compared with
-  others* and *Security* under *Design* in the sidebar; the comparison takes
-  its facts from [research/project-survey.md](research/project-survey.md),
-  rechecked against each project's sources; the architecture page explains the layers,
-  zero trust and where juist falls short of it, and what WireGuard and
-  Tailscale contribute, with sources. Still to come: every trade-off,
-  cryptography, diagrams drawn at build time.
-- **W4 — search and staleness.** Pagefind; a check that every page exists in
-  both languages and that a translation is not older than its source.
+- **Every trade-off.** The home page carries five; the rest of
+  [02-threat-model.md](02-threat-model.md)'s list, for M25.
+- **A command reference** generated as `juist __manpage` is.
+- **Search and staleness.** Pagefind; a check that every page exists in both
+  languages and that a translation is not older than its source.
+- **A CI job** for the site.
 
 ## Open
 
@@ -116,16 +100,15 @@ app take it from one place, `design/`:
   behind a home line or reaches the ingress through a relay.
 - **The source language**, which the other follows and the staleness check
   measures against.
-- **The domain**, and an imprint if the site is published under a
-  person's or a company's name.
-- **`baseURL`**: `hreflang` and canonical links need the absolute one.
-- **The generators** of the chart and the logo are Python and a throwaway
-  Go program; whether they become Go in the tree, since their output is
+- **An imprint**, if the site is published under a person's or a company's
+  name.
+- **`baseURL`** is `/`: `hreflang` and canonical links need the absolute one.
+- **The generators** of the chart and the logo are Python beside a Go program
+  (`website/tools`); whether they all become Go, since their output is
   committed.
 - **`[skip ci]`** skips every workflow: a website job in CI must not depend
   on a commit that carries it.
 - **What the handbook could not say**, because neither the README nor the
-  help does: how to get the source and what a build needs; uninstalling and
-  what stays; running a service member in a container; how to learn the
-  ACME account for a CAA record, which juist does not print yet; FreeBSD's
-  daemon log, its instances and running without the DHT and STUN.
+  help does: running a service member in a container; how to learn the ACME
+  account for a CAA record a relay needs, which juist does not print yet;
+  FreeBSD's daemon log, and running it there without the DHT and STUN.

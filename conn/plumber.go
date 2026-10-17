@@ -21,9 +21,9 @@ type Plumber interface {
 	SetServe(dev string, s plumber.ServeSpec) error
 	// SetEgress sends the host's traffic outside the overlay as e asks.
 	SetEgress(dev string, e plumber.EgressSpec) error
-	// SetDNS makes servers, on port 53, the host's resolvers by dev, or no
-	// longer where there are none.
-	SetDNS(dev string, servers []netip.Addr) error
+	// SetDNS makes servers, on port 53, the host's resolvers by dev, with
+	// search its search domains, or no longer where there are none.
+	SetDNS(dev string, servers []netip.Addr, search []string) error
 	// Answers says why answers to what comes in by another device would not
 	// leave by it, "" where they would.
 	Answers(dev string) (string, error)

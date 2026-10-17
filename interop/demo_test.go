@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -264,23 +263,25 @@ func labPair(t *testing.T, fbName, lxName string) (fb, lx *vm) {
 	work := need(t, "JUIST_INTEROP_WORK")
 	deb := need(t, "JUIST_INTEROP_DEB")
 	pkg := need(t, "JUIST_INTEROP_PKG")
-	cache := need(t, "JUIST_INTEROP_CACHE")
 	os.RemoveAll(work)
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	key := filepath.Join(work, "key")
-	sh(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key)
-	pub, _ := os.ReadFile(key + ".pub")
-	fbBase, lxBase := base(t, cache, work, freebsdImage), base(t, cache, work, debianImage)
+	d := labDisks(t)
+	pub, _ := os.ReadFile(d.key + ".pub")
 
-	fb = &vm{name: fbName, freebsd: true, lanAddr: "10.77.0.1", mac: "52:54:00:77:00:01", net: "10.0.4.0/24", dir: work, key: key}
-	lx = &vm{name: lxName, lanAddr: "10.77.0.3", mac: "52:54:00:77:00:03", net: "10.0.3.0/24", dir: work, key: key}
+	fb = &vm{name: fbName, freebsd: true, lanAddr: "10.77.0.1", mac: "52:54:00:77:00:01", net: "10.0.4.0/24", dir: work, key: d.key}
+	lx = &vm{name: lxName, lanAddr: "10.77.0.3", mac: "52:54:00:77:00:03", net: "10.0.3.0/24", dir: work, key: d.key}
 	vms := []*vm{fb, lx}
 	pa, pb := freePort(t, "udp"), freePort(t, "udp")
-	fb.boot(t, fbBase, pa, pb, "")
-	lx.boot(t, lxBase, pb, pa, fmt.Sprintf("http://10.0.3.2:%d/", seedServer(t, lxName, string(pub))))
-	both(t, vms, func(v *vm) error { return v.up(20 * time.Minute) })
+	fb.boot(t, d.fb, pa, pb, "")
+	lx.boot(t, d.lx, pb, pa, fmt.Sprintf("http://10.0.3.2:%d/", seedServer(t, lxName, string(pub))))
+	both(t, vms, func(v *vm) error {
+		if err := v.up(20 * time.Minute); err != nil {
+			return err
+		}
+		return v.multiplex(t)
+	})
 
 	fb.put(t, pkg, "/tmp/juist.pkg", 0o644)
 	lx.put(t, deb, "/tmp/juist.deb", 0o644)

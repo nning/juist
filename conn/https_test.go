@@ -102,6 +102,7 @@ func TestARelayNameIsADNSName(t *testing.T) {
 // mode none of it may leave: the peer's announced address hears nothing,
 // where an ordinary manager's handshake reaches it at once.
 func TestHTTPSOnlySendsNoUDP(t *testing.T) {
+	t.Parallel()
 	for _, httpsOnly := range []bool{false, true} {
 		pc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: hostAddr(t).AsSlice()})
 		if err != nil {

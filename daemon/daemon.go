@@ -265,6 +265,9 @@ type Options struct {
 	// public names the network points at members to them;
 	// [Daemon.SetAcceptNames] changes it.
 	AcceptNames bool
+	// DNSOff has juistd leave the host's DNS alone; [Daemon.SetDNSOff]
+	// changes it.
+	DNSOff bool
 
 	// OnExitMoved is called, on a goroutine of its own, where the exit node
 	// chosen rotated its identity from one to another.
@@ -280,10 +283,12 @@ type Options struct {
 	HostDNS  HostDNS
 	ServeDNS DNSServer
 	// ServeNames answers the host's DNS for the network's names at
-	// NamesAddr, an address the device holds on [NamesPort] where zero:
-	// [dnsfwd] with a TUN device, and nothing without one.
+	// NamesAddr, an address the device holds on [NamesPort] where zero, on
+	// 53 where the host asks juistd alone: [dnsfwd] with a TUN device, and
+	// nothing without one. ListenDNS binds 53 where juistd may not.
 	ServeNames NamesServer
 	NamesAddr  netip.AddrPort
+	ListenDNS  func(netip.AddrPort) (net.PacketConn, net.Listener, error)
 	// ResolvConf is what the host's programs read their resolvers from,
 	// /etc/resolv.conf where empty; it must name resolved's stub for
 	// resolved's routing to be theirs.
@@ -314,6 +319,10 @@ type Options struct {
 	// SyncInterval and ReconcileInterval override the defaults above.
 	SyncInterval      time.Duration
 	ReconcileInterval time.Duration
+
+	// Pace, where set, slows the mesh while it saves battery; it outlives a
+	// restart of the mesh.
+	Pace *Pace
 
 	// ReachDelay is how long after start the tunnels are first checked. Zero
 	// uses [DefaultReachDelay].
@@ -426,6 +435,8 @@ type Daemon struct {
 	// open, after a rotation of its own keys.
 	kept map[uint64]secrets.Secret
 
+	pace           *Pace
+	saving         savingPace
 	syncEvery      time.Duration
 	reachEvery     time.Duration
 	reachDelay     time.Duration
@@ -598,6 +609,13 @@ type Daemon struct {
 	zone          atomic.Pointer[names.Zone]
 	namesExit     atomic.Pointer[[]netip.AddrPort] // the exit node's resolvers, which names asks
 	namesRouted   atomic.Bool                      // whether the host's resolver asks names
+
+	dnsOff      atomic.Bool // [Options.DNSOff]
+	soleMu      sync.Mutex
+	soleReadAt  time.Time
+	soleServers []netip.AddrPort // the host's own, where it asks juistd alone
+	soleOwn     netip.Addr       // where juistd's resolver answers
+
 	hostRouting   atomic.Pointer[resolved.Routing] // how the host routes names but to juist's device
 	hostRoutingAt time.Time
 	resolvConf    string
@@ -700,6 +718,8 @@ func New(opts Options) (*Daemon, error) {
 		ula:              state.ULA(),
 		endpoints:        gossip.NewCache(),
 		keyring:          keyring.New(),
+		pace:             opts.Pace,
+		saving:           savingPace{reach: savingReachEvery, sync: savingSyncEvery, reconcile: savingReconcileEvery},
 		syncEvery:        cmp.Or(opts.SyncInterval, DefaultSyncInterval),
 		reachEvery:       reachEvery,
 		greetAfter:       defaultGreetAfter,
@@ -848,11 +868,14 @@ func New(opts Options) (*Daemon, error) {
 	d.hostDNS, d.startDNS, d.resolvConf = opts.HostDNS, opts.ServeDNS, opts.ResolvConf
 	d.strictRP6 = opts.StrictRP6
 	if opts.Plumber != nil && d.hostDNS == nil {
-		d.hostDNS = plumbedDNS{p: opts.Plumber, dev: opts.TunName}
+		d.hostDNS = resolvconfDNS{plumbedDNS{p: opts.Plumber, dev: opts.TunName}}
 	}
 	if opts.TunName != "" {
 		if d.strictRP6 == nil {
 			d.strictRP6 = d.loggedStrictRP6(conn.StrictRP6)
+		}
+		if d.hostDNS == nil && opts.Instance == 0 && resolvConfIsOwn(cmp.Or(opts.ResolvConf, "/etc/resolv.conf")) {
+			d.hostDNS = fileDNS{own: OwnResolvConf, saved: SavedResolvConf, redirect: conn.RedirectLocalDNS}
 		}
 		if d.hostDNS == nil {
 			d.hostDNS = resolvedDNS{dev: opts.TunName}
@@ -861,9 +884,10 @@ func New(opts Options) (*Daemon, error) {
 			d.startDNS = d.defaultDNSServer(opts.TunName)
 		}
 		if opts.ServeNames == nil {
-			opts.ServeNames = defaultNamesServer(opts.TunName)
+			opts.ServeNames = defaultNamesServer(opts.TunName, opts.ListenDNS)
 		}
 	}
+	d.dnsOff.Store(opts.DNSOff)
 	d.startNames, d.namesFixed = opts.ServeNames, opts.NamesAddr
 	d.held.Store(&selfAddrs)
 	ln, err := d.listenGossip(opts, selfAddrs)
@@ -1085,6 +1109,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	reconcileTick := time.NewTicker(d.reconcileEvery)
 	defer reconcileTick.Stop()
 
+	// While saving, ticks come at the normal pace and those due sooner than
+	// the saving one are skipped.
+	reconciled, synced := time.Now(), time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -1095,12 +1122,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 			if err := d.Reconcile(); err != nil {
 				d.logf("daemon: reconcile: %v", err)
 			}
+			reconciled = time.Now()
 			d.inBackground(ctx, d.pushAll)
 		case <-reconcileTick.C:
+			if !d.due(reconciled, d.saving.reconcile) {
+				continue
+			}
 			if err := d.Reconcile(); err != nil {
 				d.logf("daemon: reconcile: %v", err)
 			}
+			reconciled = time.Now()
 		case <-syncTick.C:
+			if !d.due(synced, d.saving.sync) {
+				continue
+			}
+			synced = time.Now()
 			d.inBackground(ctx, d.syncOne)
 		}
 	}
@@ -1296,6 +1332,7 @@ func (d *Daemon) checkInBackground(ctx context.Context) {
 		wait := time.NewTimer(d.reachDelay)
 		var last time.Time
 		defer wait.Stop()
+		d.followPace()
 		for {
 			select {
 			case <-ctx.Done():
@@ -1303,6 +1340,25 @@ func (d *Daemon) checkInBackground(ctx context.Context) {
 			case <-d.closed:
 				return
 			case <-wait.C:
+			case <-d.pace.Changed():
+				d.followPace()
+				if d.pace.Saving() {
+					// The next check comes at the saving pace.
+					wait.Stop()
+					wait.Reset(max(d.reachEvery, d.saving.reach-time.Since(last)))
+					continue
+				}
+				// Back from saving, the tunnels are checked at once.
+				wait.Stop()
+				if gap := recheckGap - time.Since(last); gap > 0 {
+					select {
+					case <-ctx.Done():
+						return
+					case <-d.closed:
+						return
+					case <-time.After(gap):
+					}
+				}
 			case <-d.recheck:
 				wait.Stop()
 				// However often announcements ask, checks keep their distance.
@@ -1318,7 +1374,7 @@ func (d *Daemon) checkInBackground(ctx context.Context) {
 			}
 			d.refreshReach(ctx)
 			last = time.Now()
-			wait.Reset(d.reachEvery)
+			wait.Reset(d.pace.every(d.reachEvery, d.saving.reach))
 		}
 	}()
 }

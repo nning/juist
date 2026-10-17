@@ -147,7 +147,7 @@ Each member has two addresses in the network, and `juist devices` lists them.
 
 ## Names {#names}
 
-Where systemd-resolved runs, every member can be reached by name as
+On Linux and FreeBSD, every member can be reached by name as
 `DEVICE.NETWORK.juist`, such as `laptop.home.juist`, or simply as `laptop`:
 
 ```sh

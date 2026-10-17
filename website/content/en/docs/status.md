@@ -29,7 +29,7 @@ home · connected
   This device   laptop  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0
   Devices       3 others
   Relays        1 available, via vps
-  Names         home.juist
+  Names         laptop.home.juist
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
   Schema        18
@@ -72,7 +72,7 @@ The state on the first line is one of these:
 - `HTTPS`: on a device that sends only HTTPS, the relays on port 443 it uses, and its proxy. See [HTTPS only]({{< relref "docs/https-only" >}}).
 - `Relay name`: the public name this device's relay serves on port 443. Root and the operator also see whether it serves it yet.
 - `Exit node`: which device carries this device's internet traffic, if any. See [Exit nodes]({{< relref "docs/exit-nodes" >}}).
-- `Names`: the domain under which this device finds the others, such as `home.juist`, or why it cannot. See [Names]({{< relref "docs/names" >}}).
+- `Names`: this device's own names, such as `laptop.home.juist`; `juist names` lists the network's, and `juist health` says why where they are not resolved. See [Names]({{< relref "docs/names" >}}).
 - `Freshness`: when a voucher last confirmed that this device's view of the
   network is current, and how long that confirmation stays valid. A voucher
   is a device the network trusts to confirm this every hour. After 48 hours
@@ -173,6 +173,18 @@ lists only this device and the members it has a tunnel with, and ends with
 `juist devices -6` adds each device's IPv6 address. `juist devices --keys`
 adds its identity key, which [`juist remove`]({{< relref "docs/remove" >}})
 also accepts.
+
+`juist status -d` (`--devices`) prints the status and, after an empty line,
+the device table, as `juist status` and `juist devices` one after the other.
+
+`juist status -v` (`--verbose`) adds a line under `Relays` for each device
+the last check reached through a relay, naming the device whose relay
+carries the traffic to it:
+
+```console
+  Relays        1 available, via vps
+                phone via vps
+```
 
 ## Seeing every change
 

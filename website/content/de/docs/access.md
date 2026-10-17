@@ -83,7 +83,7 @@ hint: 2 more devices the access policy keeps apart from this one: juist devices 
 
 Keine Regel verbindet laptop2 mit laptop oder dem Telefon, also hat es zu
 keinem der beiden einen Tunnel. Nach `juist exit use vps` geht laptop2 über
-vps ins Internet. Wo systemd-resolved läuft, geht auch sein DNS über vps.
+vps ins Internet, und auch sein DNS geht über vps.
 {{< /step >}}
 
 `juist policy` zeigt die Zugriffsregeln des Netzes. `juist policy edit` öffnet

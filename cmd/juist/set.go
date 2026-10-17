@@ -21,24 +21,30 @@ func cmdSet(a *app, args []string) error {
 Change this device's settings. --operator names the local user who may
 manage it without sudo, as root; --operator="" clears it. --https-only
 sends nothing but TLS to relays on 443, through --proxy where given;
---relay-name serves this device's relay on 443 under a public name.`}
+--relay-name serves this device's relay on 443 under a public name.
+--dns=false leaves this host's DNS alone: no network names, and no DNS
+through an exit node.`}
 	fs := newFlags(s.name)
 	var op, proxy, relayName optionalString
 	fs.Var(&op, "operator", "local `USER` who manages this device")
 	httpsOnly := fs.Bool("https-only", false, "reach relays by TLS on 443 alone; =false undoes it")
 	fs.Var(&proxy, "proxy", "HTTP proxy `URL` to reach them by, - to read it from stdin; \"\" for HTTPS_PROXY")
 	fs.Var(&relayName, "relay-name", "public `NAME` of this device's relay on 443")
+	dns := fs.Bool("dns", true, "take this host's DNS for the network's names and the exit node; =false leaves it alone")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	setHTTPS := cliflag.IsSet(fs, "https-only")
-	if !op.set && !setHTTPS && !proxy.set && !relayName.set {
+	setHTTPS, setDNS := cliflag.IsSet(fs, "https-only"), cliflag.IsSet(fs, "dns")
+	if !op.set && !setHTTPS && !proxy.set && !relayName.set && !setDNS {
 		a.help(s, fs, a.errOut)
 		return errSilent
 	}
 	req := ipc.Request{Command: ipc.CmdSettings}
 	if setHTTPS {
 		req.HTTPSOnly = httpsOnly
+	}
+	if setDNS {
+		req.DNS = dns
 	}
 	if proxy.set && proxy.value == "-" {
 		// Off the command line, which every user may read, and sudo logs.
@@ -85,7 +91,7 @@ sends nothing but TLS to relays on 443, through --proxy where given;
 			a.ok("operator %s", op.value)
 		}
 	}
-	if req.HTTPSOnly == nil && req.Proxy == nil && req.RelayName == nil {
+	if req.HTTPSOnly == nil && req.Proxy == nil && req.RelayName == nil && req.DNS == nil {
 		return nil
 	}
 	if err := a.requireOperator(); err != nil {
@@ -162,6 +168,9 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 		} else {
 			a.ok("relay name %s", *req.RelayName)
 		}
+	}
+	if req.DNS != nil {
+		a.ok("%s", map[bool]string{true: "dns on", false: "dns off"}[*req.DNS])
 	}
 	switch {
 	case !st.InNetwork:

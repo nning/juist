@@ -549,7 +549,7 @@ func TestTheNamesAddressIsOneTheDeviceHolds(t *testing.T) {
 		{nil, ""},
 	} {
 		held := func(a netip.Addr) bool { return slices.Contains(tc.held, a.String()) }
-		at, ok := namesAddrOf(addrs, held)
+		at, ok := namesAddrOf(addrs, held, NamesPort)
 		if got := map[bool]string{true: at.String(), false: ""}[ok]; got != tc.want {
 			t.Errorf("holding %v, answers at %q, want %q", tc.held, got, tc.want)
 		}
@@ -635,7 +635,7 @@ func TestTheNamesServerPassesOnShortTTLs(t *testing.T) {
 		}
 	}()
 	up := netip.MustParseAddrPort(pc.LocalAddr().String())
-	s, err := defaultNamesServer("")(netip.MustParseAddrPort("127.0.0.1:0"),
+	s, err := defaultNamesServer("", nil)(netip.MustParseAddrPort("127.0.0.1:0"),
 		func([]byte) []byte { return nil }, func([]byte) []netip.AddrPort { return []netip.AddrPort{up} })
 	if err != nil {
 		t.Fatal(err)

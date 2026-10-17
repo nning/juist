@@ -31,7 +31,7 @@ const (
 // StateFiles are what a daemon keeps in its state directory beside the log
 // and the node keys, for a reset of a home no daemon runs from.
 var StateFiles = []string{EndpointCacheFile, KeyringFile, PairsFile, LeaseFile, RelayCertFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
-	SubnetsFile, SubnetServeFile, NamesFile, PublishServeFile, PublishToFile, HTTPSOnlyFile, ProxyFile, RelayNameFile,
+	SubnetsFile, SubnetServeFile, NamesFile, DNSOffFile, PublishServeFile, PublishToFile, HTTPSOnlyFile, ProxyFile, RelayNameFile,
 	RelayCertsDir}
 
 // ExitFile holds the exit node this device's owner chose, or "off"; without
@@ -50,6 +50,10 @@ const (
 	// NamesFile, where it exists, is the owner's word that this device
 	// resolves the public names the network points at members to them.
 	NamesFile = "accept-names"
+
+	// DNSOffFile, where it exists, is the owner's word that juistd leaves
+	// the host's DNS alone; the package's resolv.sh reads it too.
+	DNSOffFile = "dns-off"
 
 	// PublishServeFile, where it exists, is the operator's word that this
 	// device serves the names the network publishes on it; PublishToFile

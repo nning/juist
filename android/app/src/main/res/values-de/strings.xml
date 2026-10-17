@@ -164,6 +164,7 @@
     <string name="reach_unknown">Unbekannt</string>
     <string name="reach_off">Aus</string>
     <string name="reach_relay_about">Der Verkehr läuft über ein Relay, eines deiner Geräte, und bleibt durchgehend verschlüsselt.</string>
+    <string name="reach_relay_about_named">Der Verkehr läuft über das Relay auf %1$s, eines deiner Geräte, und bleibt durchgehend verschlüsselt.</string>
     <string name="reach_outdated_about">Dort läuft ein älteres juist. Bis es aktualisiert ist, trägt der Tunnel nur juists eigenen Verkehr: Ein Ping kommt durch, andere Apps nicht.</string>
     <string name="reach_down_about">Das Gerät ist offline, oder eine Firewall blockiert den Tunnel.</string>
     <string name="reach_sought_about">Das Gerät wurde vielleicht neu gestartet oder hat das Netz gewechselt. juist sucht es.</string>
@@ -206,6 +207,8 @@
         <item quantity="other">Zu wenige Voucher haben bestätigt: eingeschränkt in %d Stunden</item>
     </plurals>
     <string name="alarm_freshness_ending_hint">Ein Voucher bestätigt, solange er läuft und dieses Telefon erreicht. Bestätigen nicht wieder genug, erreicht das Telefon nur noch Voucher.</string>
+    <string name="saving">Akku wird geschont</string>
+    <string name="saving_hint">Der Energiesparmodus ist an: Mitglieder werden alle 5 Minuten geprüft, das Netz alle 30 abgeglichen, und Wege werden nicht warm gehalten.</string>
     <string name="alarm_no_relay">Kein Gerät darf weiterleiten</string>
     <string name="alarm_no_relay_hint">Im Mobilfunk braucht ein Telefon oft eines. Ein Admin kann die Rolle an ein Gerät mit öffentlicher Adresse vergeben.</string>
     <string name="alarm_lost">Eine Änderung ist einer gleichzeitigen unterlegen</string>

@@ -9,6 +9,10 @@
 GO      ?= go
 GOFLAGS ?=
 
+# make's one-letter flags, and whether they make it show rather than run.
+MAKE_LETTERS = $(filter-out -%,$(firstword $(MAKEFLAGS)))
+MAKE_DRY     = $(strip $(foreach f,n t q,$(findstring $(f),$(MAKE_LETTERS))))
+
 # One toolchain for every target, so a commit builds to the same bytes anywhere
 # and local runs match CI's GO_VERSION.
 export GOTOOLCHAIN ?= go1.27.2
@@ -37,9 +41,8 @@ GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 BUILDDIR ?= build
 CMDS     ?= juist juistd
 
-# Platforms the roadmap commits to (docs/05-roadmap.md M7, M10). Building for each catches
-# build-tag rot in the embedded Tailscale stack long before the platform work
-# starts.
+# Platforms v1 commits to (docs/05-roadmap.md M25). Building for each catches
+# build-tag rot in the embedded Tailscale stack.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
 # Platforms kept compiling though nothing ships for them: macOS, deferred past v1.
 CROSS_UNSHIPPED ?= darwin/arm64
@@ -150,6 +153,16 @@ test: ## Run tests
 test-race: ## Run tests under the race detector
 	CGO_ENABLED=1 $(GO) test $(GOFLAGS) ./... $(TEST_FLAGS) -race
 
+# The packages whose tests the host's network features gate
+# (internal/nettest), run with the gates required: what make ci-vm runs of
+# make check where this host's stamp says it passed.
+HOST_NET_PKGS = $(shell $(GO) list -test -f '{{if .ForTest}}{{.ForTest}} {{join .Deps " "}}{{end}}' ./... | \
+	awk '/ github.com\/nning\/juist\/internal\/nettest( |$$)/ {print $$1}')
+
+.PHONY: test-host-net
+test-host-net: ## Run the tests gated on the host's network features, the gates required
+	JUIST_REQUIRE_HOST_NET=1 CGO_ENABLED=1 $(GO) test $(GOFLAGS) $(sort $(HOST_NET_PKGS)) $(TEST_FLAGS) -race
+
 # The privileged tests — M3a's real device and netns harness, and M3b's NAT
 # matrix on top of it (conn/osplumbing_test.go, conn/netns*_linux_test.go) —
 # need root, /dev/net/tun, iproute2 and iptables, and skip without them — which
@@ -200,31 +213,46 @@ repro-freebsd: ## Fail unless a FreeBSD host builds HEAD to the same binaries as
 # opens, TCG, far slower, elsewhere; the images are fetched into
 # INTEROP_CACHE once and checked against their pinned sums.
 INTEROP_CACHE ?= $(HOME)/.cache/juist-interop
+# The lab's pairs of VMs that run at once, 2 GiB each VM: 1 runs one after
+# the other.
+INTEROP_PAIRS ?= 2
+# make ci-vm sets -failfast: a part that failed ends the lab.
+INTEROP_FLAGS ?=
 # The browser the lab fetches over HTTP/3 with, headless.
 INTEROP_CHROME ?= $(firstword $(shell command -v chromium chromium-browser google-chrome chrome 2>/dev/null))
 
 # The last done milestone, which the lab upgrades Debian and FreeBSD from:
-# the previous release.
+# the previous release. Its packages are built once per commit and
+# toolchain, into PREVTOP, as its own Makefile builds them in an environment
+# that holds none of this make's variables.
 PREVIOUS ?= $(shell git rev-list -1 -E --grep='^M[0-9]+:? done' HEAD 2>/dev/null)
-PREVTOP  ?= $(abspath $(BUILDDIR)/previous)
+PREVTOP  ?= $(INTEROP_CACHE)/previous/$(shell git rev-parse --short=12 $(PREVIOUS) 2>/dev/null)-$(GOTOOLCHAIN)
 
-.PHONY: deb-previous
-deb-previous: ## Build the last done milestone's .deb into build/previous/deb, which make interop upgrades from
-	@test -n "$(PREVIOUS)" || { echo "deb-previous: no done milestone in this history"; exit 1; }
-	@rm -rf $(PREVTOP) && mkdir -p $(PREVTOP)/src
-	git archive $(PREVIOUS) | tar -x -C $(PREVTOP)/src
-	$(MAKE) -C $(PREVTOP)/src deb DEBTOP=$(PREVTOP)/deb RPM_DIRTY= \
-		RPM_COMMIT=$$(git rev-parse --short $(PREVIOUS)) \
-		RPM_STAMP=$$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S $(PREVIOUS))
+.PHONY: previous
+previous: ## Build the last done milestone's .deb and FreeBSD package, which make interop upgrades from
+	@test -n "$(PREVIOUS)" || { echo "previous: no done milestone in this history"; exit 1; }
+	@if [ -n "$(MAKE_DRY)" ]; then echo "==> the previous release, built into $(PREVTOP) unless there"; exit 0; fi; \
+	if [ -f $(PREVTOP)/built ]; then echo "==> the previous release, $$(git rev-parse --short $(PREVIOUS)), in $(PREVTOP)"; exit 0; fi; \
+	set -e; mkdir -p $(dir $(PREVTOP)); tmp=$$(mktemp -d $(PREVTOP).XXXXXX); trap 'rm -rf "$$tmp"' EXIT; \
+	git clone -q --shared --no-checkout . $$tmp/src; git -C $$tmp/src checkout -q --detach $(PREVIOUS); \
+	commit=$$(git rev-parse --short $(PREVIOUS)); \
+	stamp=$$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S $(PREVIOUS)); \
+	clean="env -i PATH=$$PATH HOME=$$HOME TMPDIR=$${TMPDIR:-/tmp} GOTOOLCHAIN=$(GOTOOLCHAIN) CGO_ENABLED=$(CGO_ENABLED)"; \
+	$$clean $(MAKE) -C $$tmp/src deb DEBTOP=$$tmp/deb BUILDDIR=$$tmp/build RPM_DIRTY= RPM_COMMIT=$$commit RPM_STAMP=$$stamp; \
+	$$clean $(MAKE) -C $$tmp/src pkg-freebsd BUILDDIR=$$tmp/build RPM_DIRTY= RPM_COMMIT=$$commit RPM_STAMP=$$stamp; \
+	rm -rf $$tmp/src; touch $$tmp/built; mv -T $$tmp $(PREVTOP) 2>/dev/null || test -f $(PREVTOP)/built
 
-.PHONY: pkg-freebsd-previous
-pkg-freebsd-previous: deb-previous ## Build the last done milestone's FreeBSD package into build/previous/build/freebsd
-	$(MAKE) -C $(PREVTOP)/src pkg-freebsd BUILDDIR=$(PREVTOP)/build RPM_DIRTY= \
-		RPM_COMMIT=$$(git rev-parse --short $(PREVIOUS)) \
-		RPM_STAMP=$$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S $(PREVIOUS))
+# What the lab installs; make ci-vm builds it while the VM tests.
+.PHONY: interop-packages
+interop-packages: deb previous pkg-freebsd image ## Build what make interop installs
 
 .PHONY: interop
-interop: deb deb-previous pkg-freebsd-previous pkg-freebsd image ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh, Chrome)
+interop: interop-packages ## Run the Linux/FreeBSD lab in qemu, without root (needs qemu, xz, ssh, Chrome)
+	@$(MAKE) --no-print-directory interop-run
+
+# The lab on the packages interop-packages left.
+.PHONY: interop-run
+interop-run:
 	cd interop && JUIST_INTEROP_WORK=$(abspath $(BUILDDIR))/interop \
 		JUIST_INTEROP_DEB=$$(find $(DEBTOP) -maxdepth 1 -name '*.deb') \
 		JUIST_INTEROP_PREVIOUS_DEB=$$(find $(PREVTOP)/deb -maxdepth 1 -name '*.deb') \
@@ -232,7 +260,7 @@ interop: deb deb-previous pkg-freebsd-previous pkg-freebsd image ## Run the Linu
 		JUIST_INTEROP_PKG=$$(find $(abspath $(BUILDDIR))/freebsd -name '*.pkg') \
 		JUIST_INTEROP_IMAGE=$$(find $(abspath $(BUILDDIR))/image -name 'juist-*-$(IMAGE_ARCH).tar' | head -1) \
 		JUIST_INTEROP_CACHE=$(INTEROP_CACHE) JUIST_INTEROP_CHROME=$(INTEROP_CHROME) GO=$(GO) \
-		$(GO) test $(GOFLAGS) -tags interop -count=1 -timeout 150m -v .
+		$(GO) test $(GOFLAGS) -tags interop -count=1 -timeout 150m -parallel $(INTEROP_PAIRS) $(INTEROP_FLAGS) -v .
 
 # agg renders the cast as a GIF: https://github.com/asciinema/agg
 AGG       ?= agg
@@ -429,7 +457,7 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service packaging/systemd/juist-ingress.service \
 		packaging/systemd/juist-ingress-ports.path packaging/systemd/juist-ingress-ports.service \
 		packaging/systemd/juist-serve.service packaging/systemd/juist-serve.path README.md LICENSE THIRD_PARTY_LICENSES packaging/firewall.sh packaging/exit-node.sh \
-		packaging/ingress.sh packaging/serve.sh packaging/relay.sh packaging/polkit/juist.rules \
+		packaging/ingress.sh packaging/serve.sh packaging/relay.sh packaging/resolv.sh packaging/polkit/juist.rules \
 		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml packaging/firewalld/juist-relay-443.xml \
 		packaging/firewalld/juist-ingress.xml \
 		packaging/firewalld/juist-invite.xml packaging/completions/juist.bash \
@@ -495,18 +523,20 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	install -D -m 0755 packaging/ingress.sh $$root/usr/lib/juist/ingress.sh; \
 	install -D -m 0755 packaging/serve.sh $$root/usr/lib/juist/serve.sh; \
 	install -D -m 0755 packaging/relay.sh $$root/usr/lib/juist/relay.sh; \
+	install -D -m 0755 packaging/resolv.sh $$root/usr/lib/juist/resolv.sh; \
 	install -D -m 0644 packaging/polkit/juist.rules $$root/usr/share/polkit-1/rules.d/60-juist.rules; \
 	install -D -m 0644 packaging/polkit/juist.pkla $$root/usr/lib/juist/juist.pkla; \
 	for f in juist juist-relay juist-relay-443 juist-invite juist-ingress; do \
 		install -D -m 0644 packaging/firewalld/$$f.xml $$root/usr/lib/firewalld/services/$$f.xml; \
 	done; \
 	install -D -m 0644 packaging/ufw/juist $$root/etc/ufw/applications.d/juist; \
+	install -D -m 0644 packaging/dhclient/juist $$root/etc/dhcp/dhclient-enter-hooks.d/juist; \
 	install -D -m 0644 packaging/completions/juist.bash $$root/usr/share/bash-completion/completions/juist; \
 	install -D -m 0644 packaging/completions/_juist $$root/usr/share/zsh/vendor-completions/_juist; \
 	install -D -m 0644 packaging/completions/juist.fish $$root/usr/share/fish/vendor_completions.d/juist.fish; \
 	install -d -m 0755 $$root/DEBIAN; \
 	install -m 0755 packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm $$root/DEBIAN/; \
-	echo /etc/ufw/applications.d/juist > $$root/DEBIAN/conffiles; \
+	printf '%s\n' /etc/ufw/applications.d/juist /etc/dhcp/dhclient-enter-hooks.d/juist > $$root/DEBIAN/conffiles; \
 	install -m 0644 packaging/deb/triggers $$root/DEBIAN/; \
 	size=$$(du -sk --exclude=DEBIAN $$root | cut -f1); \
 	sed -e 's|@VERSION@|$(DEB_VERSION)|' -e 's|@ARCH@|$(DEB_ARCH)|' -e "s|@SIZE@|$$size|" \
@@ -585,14 +615,14 @@ IMAGE_CERTS ?= $(firstword $(wildcard /etc/ssl/certs/ca-certificates.crt \
 
 .PHONY: image
 image: ## Build the service member's container image into build/image
-	@mkdir -p $(BUILDDIR)/image/linux-$(IMAGE_ARCH) && rm -f $(BUILDDIR)/image/juist-*-$(IMAGE_ARCH).tar
-	@for c in juist juistd; do \
-		GOOS=linux GOARCH=$(IMAGE_ARCH) CGO_ENABLED=0 $(GO) build -trimpath -o $(BUILDDIR)/image/linux-$(IMAGE_ARCH)/$$c ./cmd/$$c || exit 1; \
+	@mkdir -p $(BUILDDIR)/image && rm -f $(BUILDDIR)/image/juist-*-$(IMAGE_ARCH).tar
+	@bin=$(call bindir,linux,$(IMAGE_ARCH)); for c in juist juistd; do \
+		GOOS=linux GOARCH=$(IMAGE_ARCH) $(GOBUILD) -o $$bin/$$c ./cmd/$$c || exit 1; \
 	done
-	@$(GO) run ./packaging/image/mkimage -o $(BUILDDIR)/image/juist-$(FREEBSD_VERSION)-$(IMAGE_ARCH).tar \
+	@bin=$(call bindir,linux,$(IMAGE_ARCH)); $(GO) run ./packaging/image/mkimage -o $(BUILDDIR)/image/juist-$(FREEBSD_VERSION)-$(IMAGE_ARCH).tar \
 		-tag juist:$(FREEBSD_VERSION) -arch $(IMAGE_ARCH) -mtime $$(git log -1 --format=%ct) -certs $(IMAGE_CERTS) \
 		-license LICENSE -third-party THIRD_PARTY_LICENSES \
-		-juistd $(BUILDDIR)/image/linux-$(IMAGE_ARCH)/juistd -juist $(BUILDDIR)/image/linux-$(IMAGE_ARCH)/juist
+		-juistd $$bin/juistd -juist $$bin/juist
 	@echo $(BUILDDIR)/image/juist-$(FREEBSD_VERSION)-$(IMAGE_ARCH).tar
 
 # `make install` builds the package this system's package manager takes and
@@ -683,8 +713,31 @@ tidy-check: ## Fail if go.mod / go.sum are untidy (does not modify them)
 
 ## --- aggregate -----------------------------------------------------------
 
+# What make check runs, in order; make ci-vm makes each a step of its own.
+CHECK_STEPS = fmt-check vet staticcheck actionlint tidy-check build-test test-race tcb repro
+
+# A pass is stamped with the tree's hash, unless the tree changed meanwhile,
+# a variable came from the command line or the environment rather than this
+# file, or make ran with -n, -t, -q, -i or -e: make ci-vm FAST=1 takes make
+# check from it. The stamp is written by a line of its own, which -n does
+# not run, from the tree this run hashed, which no other run shares.
+CHECK_AS_IS = $(if $(MAKEOVERRIDES)$(filter-out file,$(foreach v,$(CHECK_VARS),$(origin $(v))))$(strip \
+	$(foreach f,i e,$(findstring $(f),$(MAKE_LETTERS))))$(MAKE_DRY),,yes)
+CHECK_VARS  = CHECK_STEPS TEST_FLAGS GO GOFLAGS GOTOOLCHAIN CGO_ENABLED ACTIONLINT_VERSION CMDS TCB_BUDGET
+CHECK_TREE := $(BUILDDIR)/check.tree.$(shell echo $$PPID)
+
 .PHONY: check
-check: lint tidy-check build-test test-race tcb repro ## Everything CI gates on; run before pushing
+check: ## Everything CI gates on; run before pushing
+	@rm -f $(BUILDDIR)/check.stamp $(CHECK_TREE); mkdir -p $(BUILDDIR); \
+	find $(BUILDDIR) -maxdepth 1 -name 'check.tree.*' -mmin +1440 -delete; \
+	if [ -n "$(CHECK_AS_IS)" ]; then sh ci/tree.sh > $(CHECK_TREE) 2>/dev/null || rm -f $(CHECK_TREE); fi
+	@$(MAKE) --no-print-directory $(CHECK_STEPS)
+	@if [ -s $(CHECK_TREE) ] && [ "$$(sh ci/tree.sh 2>/dev/null)" = "$$(cat $(CHECK_TREE))" ]; then \
+		mv $(CHECK_TREE) $(BUILDDIR)/check.stamp; else rm -f $(CHECK_TREE); fi
+
+.PHONY: print-%
+print-%:
+	@echo $($*)
 
 # `make ci` is every job .github/workflows/ci.yml runs, on this machine: what
 # check gates, with the host-feature probes failing rather than skipping as on
@@ -699,12 +752,20 @@ ci: ci-deps ## Run every CI job locally (asks for sudo for the privileged tests)
 	$(MAKE) --no-print-directory test-os-plumbing-sudo
 	@echo "ci: every job passed"
 
-# `make ci-vm` is CI without a hosted runner: make ci and make interop in a
-# Fedora VM under KVM, which ci/main.go sets up in ~/.cache/juist-ci on first
-# use, from the working tree as it is. It logs to build/ci.
+# `make ci-vm` is CI without a hosted runner, in stages, from a snapshot of
+# the working tree: what only a VM shows, make check, the lab and the builds
+# in a Fedora VM under KVM, which ci/main.go sets up in ~/.cache/juist-ci on
+# first use, the lab beside it on this host. It logs to build/ci. STAGES
+# runs some alone, FROM those from one on, FAST=1 takes make check from this
+# host's stamp, LAB=vm nests the lab, CI_MAKE makes targets in the VM alone.
+# The runner is run by exec, so that a signal to make reaches it, which go
+# run would pass on to none.
 .PHONY: ci-vm
-ci-vm: ## Run every CI job in a KVM VM it sets up itself (needs qemu, ssh); logs to build/ci
-	$(GO) run ./ci $(if $(CI_MAKE),-make "$(CI_MAKE)")
+ci-vm: ## Run CI in stages, in a KVM VM it sets up itself and the lab here (needs qemu, ssh); logs to build/ci
+	@mkdir -p $(BUILDDIR)
+	$(GO) build -o $(BUILDDIR)/ci-runner ./ci
+	exec $(BUILDDIR)/ci-runner $(if $(CI_MAKE),-make "$(CI_MAKE)") $(if $(STAGES),-stages $(STAGES)) $(if $(FROM),-from $(FROM)) \
+		$(if $(FAST),-fast) $(if $(LAB),-lab $(LAB))
 
 .PHONY: ci-deps
 ci-deps: ## Check the tools make ci needs, and say how to install them

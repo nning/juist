@@ -19,9 +19,14 @@ tunnel, not over the internet. The name stays the same, so the server's
 certificate still matches. The rest of the internet still gets the public
 record.
 
-Both work on Linux, on devices where systemd-resolved runs. FreeBSD's
-resolver cannot route these names, so they do not work there, and
-`juist status` says so.
+Both work on Linux and FreeBSD. Where systemd-resolved runs, it sends these
+names to juistd. Elsewhere juistd answers the device's DNS
+itself while it runs: the network's names, and every other name from the
+resolvers the device had before. On Linux the package's service points
+`/etc/resolv.conf` at a file juistd writes, and back when juistd stops; on
+FreeBSD juistd gives its resolver to resolvconf. A `/etc/resolv.conf` that
+Tailscale wrote stays Tailscale's, and the network's names are not resolved
+on that device.
 
 ## Reaching a device by name
 
@@ -56,7 +61,8 @@ juist names on
 It prints `public names on: mail.example.org at nas`.
 {{< /step >}}
 
-`juist names` lists the public names and how this device resolves each one.
+`juist names` lists the network's names, the public ones among them, and how
+this device resolves each one.
 `juist names off` makes this device resolve them publicly again, and
 `juist names remove nas mail.example.org` takes the name away from the device.
 
@@ -82,6 +88,18 @@ before. `juist network domain` warns about this, and admins see it when they
 approve the change. Only set it to a domain you control: juist cannot check that
 you do.
 
+## Leaving this device's DNS alone
+
+```sh
+sudo juist set --dns=false
+```
+
+It prints `dns off`. juistd then leaves this device's DNS as it found it: no
+names of the network, and no DNS through an exit node, which then goes to the
+device's own resolvers outside the tunnel. The `Names` line in `juist status`
+then ends in `(DNS off)`, and `juist health` says what that means. `sudo juist
+set --dns` turns it on again. Neither needs a restart.
+
 ## Notes
 
 - A public name has at least two labels, such as `example.org`, and is not under `.juist`.
@@ -93,19 +111,26 @@ you do.
 
 ## Troubleshooting
 
-The `Names` line in [`juist status`]({{< relref "docs/status" >}}) says how
-this device resolves the network's names:
+The `Names` line in [`juist status`]({{< relref "docs/status" >}}) lists this
+device's own names, such as `nas.home.juist, mail.example.org`, and ends in
+`(DNS off)` where DNS is off. `juist names` lists every name of the network,
+its domains among them, and how this device resolves each. Where they are not
+resolved, or a public name is off, [`juist health`]({{< relref "docs/status" >}})
+says why:
 
-| `Names` says | Meaning |
+| `juist health` says | Meaning |
 |---|---|
-| `home.juist` | members' names work |
-| `home.juist; mail.example.org at nas` | members' names and the public names work |
-| `home.juist; 1 public name, off on this device` | there is a public name, but this device has not turned names on |
-| `home.juist not resolved: systemd-resolved refused juistd` | systemd-resolved did not let juistd set up DNS |
-| `home.juist not resolved: systemd-resolved refused juistd: polkit is not installed` | the same, on a host without polkit, which runs the package's rule |
-| `home.juist not resolved: /etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub` | programs here bypass systemd-resolved |
+| `1 public name, off on this device` | there is a public name, but this device has not turned names on |
+| `mail.example.org resolved publicly: nas is not reachable` | the public name leads to its public address for now |
+| `warning: home.juist not resolved here: systemd-resolved refused juistd` | systemd-resolved did not let juistd set up DNS |
+| `warning: home.juist not resolved here: systemd-resolved refused juistd: polkit is not installed` | the same, on a host without polkit, which runs the package's rule |
+| `warning: home.juist not resolved here: /etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub` | programs here bypass systemd-resolved |
+| `warning: home.juist not resolved here: systemd-resolved does not run on this host` | juistd runs without the package's service, which hands it `/etc/resolv.conf` |
+| `warning: home.juist not resolved here: tailscaled writes /etc/resolv.conf` | Tailscale answers this device's DNS; `sudo tailscale set --accept-dns=false` and `sudo systemctl restart juistd` hand it to juistd, without the tailnet's names |
+| `warning: home.juist not resolved here: /etc/resolv.conf is no longer juistd's` | another program, such as a DHCP client, wrote `/etc/resolv.conf`; `sudo systemctl restart juistd` hands it back |
+| `warning: home.juist not resolved here: /etc/resolv.conf asks …, not juistd` | on FreeBSD, resolvconf leaves alone a `resolv.conf` it did not write |
 
-Where systemd-resolved refused juistd, `juist status` adds:
+Where systemd-resolved refused juistd, `juist health` adds:
 
 ```console
 hint: the package's polkit rule allows juistd that: /usr/share/polkit-1/rules.d/60-juist.rules

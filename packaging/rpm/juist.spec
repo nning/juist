@@ -24,22 +24,10 @@ Source1:        juist.sysusers
 BuildRequires:  systemd-rpm-macros
 %{?sysusers_requires_compat}
 
-# The daemon programs addresses and routes over netlink, so it needs no
-# iproute2 at runtime. ip6tables is a real dependency and an easy one to miss:
-# the embedded router asks its firewall runner whether IPv6 is usable at all,
-# and that runner decides by looking the ip6tables binary up on PATH. Without
-# it the router silently skips every v6 address and route — and the overlay's
-# primary family is the v6 ULA, so the package would install a half-working
-# tunnel and say nothing.
-# See docs/07-embedding-notes.md, "IPv6 is programmed conditionally".
-#
-# Depend on the virtual `iptables` provide rather than on the binary's path:
-# both backends carry that provide and both ship ip6tables beside iptables,
-# whereas a path is not portable across releases. Fedora 42 merged /usr/sbin
-# into /usr/bin, so the binary is /usr/bin/ip6tables there, and the compat
-# `Provides: /usr/sbin/...` that iptables-nft carries covers iptables only —
-# `Requires: /usr/sbin/ip6tables` fails to resolve on Fedora 42 and later.
-Requires:       iptables
+# The daemon programs addresses, routes and nftables over netlink, so it needs
+# neither iproute2 nor iptables; exit-node.sh opens Docker's DOCKER-USER chain
+# with the iptables a Docker host has.
+
 # Runs the rule that lets juistd route the network's DNS through resolved.
 Recommends:     polkit
 
@@ -73,6 +61,7 @@ install -D -m 0755 exit-node.sh %{buildroot}%{_prefix}/lib/juist/exit-node.sh
 install -D -m 0755 ingress.sh %{buildroot}%{_prefix}/lib/juist/ingress.sh
 install -D -m 0755 serve.sh %{buildroot}%{_prefix}/lib/juist/serve.sh
 install -D -m 0755 relay.sh %{buildroot}%{_prefix}/lib/juist/relay.sh
+install -D -m 0755 resolv.sh %{buildroot}%{_prefix}/lib/juist/resolv.sh
 install -D -m 0644 juist.rules %{buildroot}%{_datadir}/polkit-1/rules.d/60-juist.rules
 install -D -m 0644 juist.1 %{buildroot}%{_mandir}/man1/juist.1
 install -D -m 0644 juistd.8 %{buildroot}%{_mandir}/man8/juistd.8
@@ -178,6 +167,7 @@ fi
 %{_prefix}/lib/juist/ingress.sh
 %{_prefix}/lib/juist/serve.sh
 %{_prefix}/lib/juist/relay.sh
+%{_prefix}/lib/juist/resolv.sh
 %{_datadir}/polkit-1/rules.d/60-juist.rules
 %{_mandir}/man1/juist.1*
 %{_mandir}/man8/juistd.8*

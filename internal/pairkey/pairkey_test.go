@@ -2,6 +2,7 @@ package pairkey
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math"
 	"math/big"
 	"testing"
@@ -183,55 +184,58 @@ func TestAThirdMemberCannotDeriveThePairKey(t *testing.T) {
 func TestLostMessagesNeverLeaveTheTwoApart(t *testing.T) {
 	group, _ := secrets.NewSecret()
 	for round := range 200 {
-		l, f := pair(t, group, 1, 2, 3)
-		l.epoch, f.epoch = 1, 1
-		drop := func() bool {
-			n, _ := rand.Int(rand.Reader, big.NewInt(3))
-			return n.Int64() == 0
-		}
-		var old Key
-		for step := range 40 {
-			if step == 10 {
-				l.epoch, f.epoch = 2, 2
+		t.Run(fmt.Sprint(round), func(t *testing.T) {
+			t.Parallel()
+			l, f := pair(t, group, 1, 2, 3)
+			l.epoch, f.epoch = 1, 1
+			drop := func() bool {
+				n, _ := rand.Int(rand.Reader, big.NewInt(3))
+				return n.Int64() == 0
 			}
-			if step == 20 {
-				l.epoch, f.epoch = 3, 3
+			var old Key
+			for step := range 40 {
+				if step == 10 {
+					l.epoch, f.epoch = 2, 2
+				}
+				if step == 20 {
+					l.epoch, f.epoch = 3, 3
+				}
+				if _, err := l.store.Advance(l.env(f)); err != nil {
+					t.Fatal(err)
+				}
+				if !drop() {
+					f.take(t, l, l.send(t, f))
+				}
+				if !drop() {
+					l.take(t, f, f.send(t, l))
+				}
+				kf, sf := f.key(l)
+				if kf.IsZero() || sf < StageGroup {
+					t.Fatalf("round %d step %d: the follower uses %v", round, step, sf)
+				}
+				kl, _ := l.key(f)
+				if kl == kf {
+					old = kl
+					continue
+				}
+				// Apart: the leader's other key is the follower's, which
+				// probing finds.
+				l.store.Probe(l.env(f))
+				if k, _ := l.key(f); k != kf {
+					t.Fatalf("round %d step %d: the follower uses a key the leader cannot probe for", round, step)
+				}
+				l.store.Probe(l.env(f))
 			}
-			if _, err := l.store.Advance(l.env(f)); err != nil {
-				t.Fatal(err)
+			for range 3 {
+				exchange(t, l, f)
 			}
-			if !drop() {
-				f.take(t, l, l.send(t, f))
+			kl, sl := l.key(f)
+			kf, _ := f.key(l)
+			if kl != kf || sl != StagePair {
+				t.Fatalf("round %d: after messages got through, %v and apart: %v", round, sl, kl != kf)
 			}
-			if !drop() {
-				l.take(t, f, f.send(t, l))
-			}
-			kf, sf := f.key(l)
-			if kf.IsZero() || sf < StageGroup {
-				t.Fatalf("round %d step %d: the follower uses %v", round, step, sf)
-			}
-			kl, _ := l.key(f)
-			if kl == kf {
-				old = kl
-				continue
-			}
-			// Apart: the leader's other key is the follower's, which
-			// probing finds.
-			l.store.Probe(l.env(f))
-			if k, _ := l.key(f); k != kf {
-				t.Fatalf("round %d step %d: the follower uses a key the leader cannot probe for", round, step)
-			}
-			l.store.Probe(l.env(f))
-		}
-		for range 3 {
-			exchange(t, l, f)
-		}
-		kl, sl := l.key(f)
-		kf, _ := f.key(l)
-		if kl != kf || sl != StagePair {
-			t.Fatalf("round %d: after messages got through, %v and apart: %v", round, sl, kl != kf)
-		}
-		_ = old
+			_ = old
+		})
 	}
 }
 

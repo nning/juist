@@ -58,6 +58,7 @@ func askOn(stack *netstack.Net, ap netip.AddrPort, timeout time.Duration) (strin
 // Over two network stacks a member opens a connection to a service member
 // and is answered; the service member opens none to the member.
 func TestAServiceMemberAnswersAndOpensNothing(t *testing.T) {
+	t.Parallel()
 	member, memberNet := netstackNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	service, serviceNet := netstackNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	confined := service.peer()

@@ -30,7 +30,7 @@ home · connected
   This device   laptop  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0
   Devices       3 others
   Relays        1 available, via vps
-  Names         home.juist
+  Names         laptop.home.juist
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
   Schema        18
@@ -75,7 +75,7 @@ In der ersten Zeile steht einer dieser Zustände:
 - `HTTPS`: auf einem Gerät, das nur HTTPS sendet, die Relays auf Port 443, über die es läuft, und sein Proxy. Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}).
 - `Relay name`: der öffentliche Name, den das Relay dieses Geräts auf Port 443 bedient. root und der Operator sehen außerdem, ob es ihn schon bedient.
 - `Exit node`: über welches Gerät der Internetverkehr dieses Geräts läuft, falls überhaupt. Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
-- `Names`: die Domain, unter der dieses Gerät die anderen findet, etwa `home.juist`, oder der Grund, warum das nicht geht. Siehe [Namen]({{< relref "docs/names" >}}).
+- `Names`: die eigenen Namen dieses Geräts, etwa `laptop.home.juist`; `juist names` listet die des Netzes, und warum sie nicht aufgelöst werden, sagt `juist health`. Siehe [Namen]({{< relref "docs/names" >}}).
 - `Freshness`: wann ein Voucher zuletzt bestätigt hat, dass dieses Gerät den
   aktuellen Stand des Netzes kennt, und wie lange diese Bestätigung gilt. Ein
   Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich
@@ -178,6 +178,18 @@ nur dieses Gerät und die Mitglieder, zu denen es einen Tunnel hat, und endet mi
 `juist devices -6` zeigt zusätzlich die IPv6-Adresse jedes Geräts,
 `juist devices --keys` seinen Identitätsschlüssel. Auch
 [`juist remove`]({{< relref "docs/remove" >}}) akzeptiert diesen Schlüssel.
+
+`juist status -d` (`--devices`) zeigt den Status und nach einer Leerzeile die
+Gerätetabelle, wie `juist status` und `juist devices` nacheinander.
+
+`juist status -v` (`--verbose`) fügt unter `Relays` eine Zeile für jedes
+Gerät hinzu, das die letzte Prüfung über ein Relay erreicht hat, und nennt
+das Gerät, dessen Relay den Verkehr dorthin trägt:
+
+```console
+  Relays        1 available, via vps
+                phone via vps
+```
 
 ## Alle Änderungen ansehen
 

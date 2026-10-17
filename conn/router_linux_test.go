@@ -253,6 +253,7 @@ func TestLinkV6Usable(t *testing.T) {
 // win for peer addresses, restore themselves, and go on Close without taking
 // Tailscale's along — nor lose ours when Tailscale removes its own.
 func TestNetnsRouterLeavesTailscaleAlone(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	n := lab.newDetachedNode("r", 1)
 	self, err := os.Executable()
@@ -434,6 +435,7 @@ func TestHelperNetnsRouter(t *testing.T) {
 // peers into its own device, the lower instance wins an address both claim,
 // and stopping either leaves the other's routes and rules in place.
 func TestNetnsInstancesLeaveEachOtherAlone(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	n := lab.newDetachedNode("i", 1)
 	self, err := os.Executable()

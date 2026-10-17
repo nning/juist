@@ -164,10 +164,11 @@ type probeAnswer struct {
 	direct bool
 }
 
-// standsAt reports whether a needs no new probe at at.
-func (a probeAnswer) standsAt(at time.Time) bool {
+// standsAt reports whether a needs no new probe at at, standing for as long
+// as stands.
+func (a probeAnswer) standsAt(at time.Time, stands time.Duration) bool {
 	age := at.Sub(a.at)
-	return age >= 0 && age < quietProbeEvery
+	return age >= 0 && age < stands
 }
 
 // A tunnelCheck is one installed peer and what checking it found.
@@ -178,9 +179,10 @@ type tunnelCheck struct {
 
 // checkTunnels checks every installed peer's tunnel. Each is probed, fresh
 // handshake or not, unless both ends have a relay, this device reaches the
-// peer's, and it answered within [quietProbeEvery]: its last answer then
-// stands. A relay not reached wakes nothing, and only a probe finds a peer
-// homed there down, to be looked up for its next home. The path is read after the
+// peer's, and it answered within [quietProbeEvery], or [savingProbeStands]
+// while saving battery: its last answer then stands. A relay not reached
+// wakes nothing, and only a probe finds a peer homed there down, to be
+// looked up for its next home. The path is read after the
 // probes, since magicsock names a direct path only for a few seconds after its
 // last pong, and a quiet tunnel would otherwise read as relayed.
 func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
@@ -193,6 +195,7 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 	d.mu.Unlock()
 	at := d.now().Round(0)
 	homed := d.manager.HomeRelay() != 0
+	stands := d.pace.every(quietProbeEvery, savingProbeStands)
 
 	out := make([]tunnelCheck, len(peers))
 	probed, answered, kept := make([]bool, len(peers)), make([]bool, len(peers)), make([]bool, len(peers))
@@ -206,7 +209,7 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		}
 		// Neither an answer standing nor a backoff spares it a probe.
 		doubted[i] = d.doubted(p)
-		if a, ok := d.answered[p.id]; ok && homed && d.manager.ReachesRelay(p.peer.HomeRelay) && !now[p.id] && !doubted[i] && a.standsAt(at) {
+		if a, ok := d.answered[p.id]; ok && homed && d.manager.ReachesRelay(p.peer.HomeRelay) && !now[p.id] && !doubted[i] && a.standsAt(at, stands) {
 			out[i].reach.Live, out[i].reach.Direct, kept[i] = true, a.direct, true
 			answers[p.id] = a
 			continue
@@ -319,6 +322,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		}
 	}
 	settle := d.settles()
+	relays := d.relayOwners()
 	// Asked before d.mu is taken: the relay asks the daemon who may use it
 	// under its own lock.
 	d.mu.Lock()
@@ -366,6 +370,9 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		reach[i] = c.reach
 		if c.reach.Live {
 			live++
+			if !c.reach.Direct {
+				reach[i].Relay = relays[c.peer.HomeRelay]
+			}
 			// Back up, or up with a sync that failed: sync now, so the log
 			// and the announcements catch up, and so that a failure the
 			// status reports is one through the tunnel as it is.
@@ -490,7 +497,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	slices.Sort(syncBroken)
 	slices.Sort(outdated)
 	slices.Sort(olderBuild)
-	home := d.homeRelayName()
+	home := relays[d.manager.HomeRelay()]
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.reachGen == gen {
@@ -607,26 +614,21 @@ func (d *Daemon) checkSoon() {
 	}
 }
 
-// homeRelayName is the member whose relay the data plane keeps its home
-// connection to, empty where it has none.
-func (d *Daemon) homeRelayName() string {
-	region := d.manager.HomeRelay()
-	if region == 0 {
-		return ""
-	}
+// relayOwners names each relay region by the member whose relay it is.
+func (d *Daemon) relayOwners() map[int]string {
 	state, err := d.TrustedState()
 	if err != nil {
-		return ""
+		return nil
 	}
 	// Of two members deriving one region, the lower identity holds it; see
 	// [Daemon.relaySet].
-	var name string
-	var holder types.Identity
+	names := map[int]string{}
+	holders := map[int]types.Identity{}
 	for _, n := range state.NodesWithRole(types.RoleRelayCapable) {
-		if relayRegion(state.GenesisHash(), n.Identity) == region &&
-			(name == "" || n.Identity.Compare(holder) < 0) {
-			name, holder = n.Name, n.Identity
+		region := relayRegion(state.GenesisHash(), n.Identity)
+		if h, ok := holders[region]; !ok || n.Identity.Compare(h) < 0 {
+			names[region], holders[region] = n.Name, n.Identity
 		}
 	}
-	return name
+	return names
 }

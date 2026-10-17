@@ -23,6 +23,7 @@ import (
 // STUN would leave through an unconnected socket, which /proc/net shows with
 // no remote address. The netns harness watches the wire instead.
 func TestNoThirdPartyEgress(t *testing.T) {
+	// Not parallel: it reads every socket of the process.
 	// Self-check: prove the detector can see an external remote before
 	// trusting its silence. Connecting a UDP socket records the address in
 	// /proc/net without sending anything.

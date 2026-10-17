@@ -383,6 +383,7 @@ func hold(addr, from, secs string) error {
 	if _, err := r.ReadString('\n'); err != nil {
 		return err
 	}
+	fmt.Println("held")
 	time.Sleep(time.Duration(n) * time.Second)
 	c.SetDeadline(time.Now().Add(30 * time.Second))
 	if _, err := fmt.Fprintln(c, "again"); err != nil {

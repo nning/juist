@@ -503,6 +503,7 @@ func TestABootstrapFromOneCopyTakesWhatHangsFromAnother(t *testing.T) {
 // admin key a sibling removes, a relay's stripped copy, and changes made on
 // different copies among them.
 func TestCopiesInAnyOrderLeaveOneHeadAndState(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, 5, 2)
 	adm, mallory := h.admins, h.admins[4]
 	victim := h.addNode("victim")

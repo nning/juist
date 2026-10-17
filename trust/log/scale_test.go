@@ -21,6 +21,7 @@ import (
 // inside a single gossip frame, or a network at the schema's ceiling could
 // author a record its own members refuse.
 func TestRecordSizeAtMaxNodes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, 1, 1)
 	members := make([]types.NodeRecord, 0, types.MaxNodes)
 	for i := range types.MaxNodes {
@@ -75,6 +76,7 @@ func (c *readCounting) AUM(h types.Hash) (types.AUM, error) {
 // of the persisted store decodes and verifies from disk, and the daemon
 // resolves holding the lock reconciliation and IPC wait on.
 func TestResolutionReadsEachRecordBoundedTimes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, 1, 1)
 	const n = 100
 	for i := range n {
@@ -123,6 +125,7 @@ func atCaps(n types.NodeRecord, i int) types.NodeRecord {
 // A checkpoint at MaxNodes, its members' names, published names and routes
 // at their caps, signed by every admin key, stays within MaxRecordSize.
 func TestACheckpointFitsAtTheCaps(t *testing.T) {
+	t.Parallel()
 	h := newHarnessWith(t, types.MaxAdmins, types.MaxAdmins, func(s *types.Snapshot) { s.Domain = "example.org" })
 	members := make([]types.NodeRecord, 0, types.MaxNodes)
 	for i := range types.MaxNodes {

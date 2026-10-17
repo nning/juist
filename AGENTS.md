@@ -80,14 +80,16 @@ context: refer to the files, never print them.
 
 `make check` gates every push; it must pass before pushing. `make cross` builds
 every v1 target platform; run it whenever a build-tagged file changes, which
-`make check` does not compile for other platforms. CI is `make ci-vm`: `make
-ci` and `make interop` in a KVM VM it sets up itself, about 25 minutes, logged
-to `build/ci`; GitHub's workflows run by hand alone. Run it whole, in the
-background, when a milestone or the review round closing it is done, and
-record it in `12-validating.md`. A change to what `make check` skips runs the
-part that covers it: devices, routes, firewall or NAT `make ci-vm
-CI_MAKE=test-os-plumbing-sudo`, packages, units or what passes between hosts
-`make ci-vm CI_MAKE=interop`. Say its result, or that it did not run.
+`make check` does not compile for other platforms. CI is `make ci-vm`: the
+privileged tests and `make check` in a KVM VM it sets up itself, the lab
+beside it, then the cross builds, about 18 minutes, logged to `build/ci`; the
+first failure ends it. GitHub's workflows run by hand alone. Run it whole, in
+the background, when a milestone or the review round closing it is done, and
+record it in `12-validating.md`; `make ci-vm FAST=1` takes `make check` from
+the stamp the last pass left, for the rounds before. A change to what `make
+check` skips runs the stage that covers it: devices, routes, firewall or NAT
+`make ci-vm STAGES=vm`, packages, units or what passes between hosts `make
+ci-vm STAGES=lab`. Say its result, or that it did not run.
 `12-validating.md`, "When each gate runs", has the whole table. Claims about the
 embedded Tailscale stack are verified against the pinned module cache
 (`~/go/pkg/mod/tailscale.com@<version>`), not from memory.
@@ -108,10 +110,11 @@ it leaves on purpose (the `juist` user, the keys in `/var/lib/juist`) is said.
 A host running tailscaled is a normal test host; what juist must not share
 with it is in `07-embedding-notes.md`, "Sharing a host with tailscaled".
 
-A commit that raises `types.CurrentSchema` is followed by a new Android app:
-`make android`, and the release APK, signed by the release key, published as a GitHub release
-tagged `android-schema<N>-<short commit>`. An app on an older schema stops
-following any network upgraded past it.
+A done milestone, and a commit that raises `types.CurrentSchema`, is followed
+by a new Android app: `make android` and `make android-check` at that commit,
+and the release APKs, signed by the release key, published on this
+repository as a pre-release tagged `android-schema<N>-<short commit>`. An
+app on an older schema stops following any network upgraded past it.
 
 ## CLI
 
@@ -130,3 +133,11 @@ both on stderr; errors are `juist: …` with at most one `hint:` line, or a
 `usage:` line for bad arguments. Say what happened, not what to do next unless
 it is needed to act; explanations belong in `--help` and `docs/`, and `--help`
 text stays a few lines.
+
+`juist status` says the state, without errors, warnings or hints: what needs
+attention is a warning in `juist health`, and status only counts them and
+points there. A status line names what is, never why: `Names` lists the
+names, and at most a word or two in brackets for a state chosen on purpose,
+as `home.juist (DNS off)`. Reasons, errors (a socket that cannot be bound, a
+resolver that refused) and what they mean are `juist health`'s, which may
+take a sentence.

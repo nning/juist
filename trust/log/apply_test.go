@@ -33,6 +33,7 @@ func TestEveryKindHasARule(t *testing.T) {
 // nothing a holder of it can see. Every generated record is applied to every
 // generated state, re-parented so the chain mode reaches the kind's rules.
 func TestApplyLeavesItsParentUnchanged(t *testing.T) {
+	t.Parallel()
 	type outcomes struct{ accepted, refused int }
 	seen := map[types.Kind]*outcomes{}
 	for seed := uint64(1); seed <= 16; seed++ {

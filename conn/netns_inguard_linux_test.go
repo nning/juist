@@ -16,6 +16,7 @@ import (
 // A device's overlay addresses are its tunnel's: a host on its LAN reaches
 // neither them nor, with a member's address as the source, the device at all.
 func TestNetnsTheLANReachesNoOverlayAddress(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	a := lab.addNode("a", 1)
 	b := lab.addNode("b", 2)

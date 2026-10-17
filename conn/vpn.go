@@ -125,7 +125,7 @@ func (p *vpnPlumber) SetServe(_ string, s plumber.ServeSpec) error {
 func (p *vpnPlumber) SetEgress(string, plumber.EgressSpec) error { return nil }
 
 // SetDNS has the device take the host's lookups to servers, or none.
-func (p *vpnPlumber) SetDNS(_ string, servers []netip.Addr) error {
+func (p *vpnPlumber) SetDNS(_ string, servers []netip.Addr, _ []string) error {
 	r := p.router()
 	if r == nil {
 		if len(servers) > 0 {

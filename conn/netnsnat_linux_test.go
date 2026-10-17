@@ -598,8 +598,10 @@ var natMatrix = []natCase{
 // peer's private address, which means something else on its own segment.
 // Everything that follows is disco doing its job.
 func TestNetnsNATMatrix(t *testing.T) {
+	t.Parallel()
 	for _, tc := range natMatrix {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			lab := newNATLab(t)
 			relayNode := lab.addNode("r", 10)
 			// Two more addresses on the relay, used only for classifying the
@@ -691,6 +693,7 @@ func TestNetnsNATMatrix(t *testing.T) {
 // and the relay is a member. Everything that makes a direct path is gone here
 // — no STUN answer, no disco probe, no hole to punch.
 func TestNetnsRelayCarriesWhatUDPCannot(t *testing.T) {
+	t.Parallel()
 	lab := newNATLab(t)
 	relayNode := lab.addNode("r", 10)
 	a := lab.addNATNode("a", 21, natPortRestricted)

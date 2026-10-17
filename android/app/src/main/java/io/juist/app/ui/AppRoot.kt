@@ -41,7 +41,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import io.juist.app.BuildConfig
 import io.juist.app.R
 import io.juist.app.core.Connection
@@ -107,6 +110,7 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
     val context = LocalContext.current
     val connection by Juist.connection.collectAsStateWithLifecycle()
     val join by Juist.join.collectAsStateWithLifecycle()
+    val pace by Juist.pace.collectAsStateWithLifecycle()
     val inNetwork = connection.lastView?.inNetwork == true
     val home = if (inNetwork) Route.Status else Route.Welcome
     var stack by rememberSaveable(stateSaver = stackSaver) { mutableStateOf(listOf(home)) }
@@ -165,11 +169,14 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
     val pings = remember { mutableStateMapOf<String, List<PingResult>>() }
     val pinging = remember { mutableStateSetOf<String>() }
     val deviceName = remember { Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME) }
-    // Relative times count from a clock that moves.
+    // Relative times count from a clock that moves while the app is seen.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val now by produceState(System.currentTimeMillis() / 1000) {
-        while (true) {
-            delay(30_000)
-            value = System.currentTimeMillis() / 1000
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                value = System.currentTimeMillis() / 1000
+                delay(30_000)
+            }
         }
     }
     val scope = rememberCoroutineScope()
@@ -240,6 +247,7 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                     }
                 },
                 onVpnSettings = { runCatching { context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) } },
+                saving = pace.saving,
             )
             is Route.MemberOf -> {
                 val view = Juist.last

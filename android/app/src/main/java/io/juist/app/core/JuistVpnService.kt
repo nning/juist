@@ -4,8 +4,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LinkProperties
@@ -17,11 +19,13 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.PowerManager
 import android.util.Log
 import io.juist.app.BuildConfig
 import io.juist.app.MainActivity
 import io.juist.app.R
 import io.juist.app.ui.stateLabel
+import androidx.core.content.ContextCompat
 import io.juist.mobile.Core
 import io.juist.mobile.Mobile
 import io.juist.mobile.Platform
@@ -32,6 +36,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
@@ -39,9 +44,10 @@ import kotlinx.coroutines.launch
 
 /**
  * Runs the core while the VPN is on: in the foreground, so that the mesh stays
- * up in Doze, and holding a multicast lock, so that mDNS finds members on the
- * Wi-Fi. Its device carries the network's addresses, and the phone's internet
- * and DNS only while an exit node is used.
+ * up in Doze, at the pace the phone allows, and holding a multicast lock while
+ * not saving battery, so that mDNS finds members on the Wi-Fi. Its device
+ * carries the network's addresses, and the phone's internet and DNS only
+ * while an exit node is used.
  */
 class JuistVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -52,6 +58,8 @@ class JuistVpnService : VpnService() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var networkThread: HandlerThread? = null
     private var notifier: Job? = null
+    private var multicastHolder: Job? = null
+    private var paceReceiver: BroadcastReceiver? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -74,6 +82,7 @@ class JuistVpnService : VpnService() {
             val home = Juist.home(this).apply { mkdirs() }
             val c = Mobile.start(home.path, platform)
             core = c
+            followPace(c)
             holdMulticast()
             followNetworks()
             Juist.attached(GoCore(c))
@@ -120,22 +129,56 @@ class JuistVpnService : VpnService() {
         val c = core ?: return false
         notifier?.cancel()
         notifier = null
+        paceReceiver?.let { unregisterReceiver(it) }
+        paceReceiver = null
+        multicastHolder?.cancel()
+        multicastHolder = null
         networkCallback?.let { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) }
         networkCallback = null
         networkThread?.quitSafely()
         networkThread = null
         core = null
         c.close()
-        multicast?.takeIf { it.isHeld }?.release()
-        multicast = null
+        multicast?.let { lock ->
+            multicast = null
+            synchronized(lock) { if (lock.isHeld) lock.release() }
+        }
         return true
     }
 
     private fun holdMulticast() {
-        multicast = getSystemService(WifiManager::class.java)?.createMulticastLock("juist-mdns")?.apply {
+        val lock = getSystemService(WifiManager::class.java)?.createMulticastLock("juist-mdns")?.apply {
             setReferenceCounted(false)
-            acquire()
+        } ?: return
+        multicast = lock
+        multicastHolder = scope.launch {
+            combine(Juist.pace, Juist.join, ::holdsMulticast).distinctUntilChanged().collect { hold ->
+                synchronized(lock) { if (hold && multicast === lock) lock.acquire() else if (lock.isHeld) lock.release() }
+            }
         }
+    }
+
+    /** Tells the core to save battery while the screen is off, the phone dozes or battery saver is on. */
+    private fun followPace(c: Core) {
+        val power = getSystemService(PowerManager::class.java)
+        fun read() {
+            if (core !== c) return
+            val p = Pace(power.isInteractive, power.isDeviceIdleMode, power.isPowerSaveMode)
+            c.setSaving(p.saving)
+            Juist.paced(p)
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) = read()
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
+            addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+        }
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        paceReceiver = receiver
+        read()
     }
 
     /**

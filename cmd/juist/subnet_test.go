@@ -214,6 +214,11 @@ func TestTheStatusSaysWhereDNSGoes(t *testing.T) {
 	mustContain(t, out.String(), "hint: "+asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"))
 	out = &syncBuffer{}
 	a = c.app(out, "")
+	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNSNot: "DNS is off on this device"}, nil)
+	mustContain(t, out.String(), "warning: DNS goes to 192.168.1.1, outside the tunnel: DNS is off on this device",
+		"hint: juist set --dns takes it again")
+	out = &syncBuffer{}
+	a = c.app(out, "")
 	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNS: true}, nil)
 	if out.String() != "" {
 		t.Errorf("DNS through vps, still warned:\n%s", out.String())

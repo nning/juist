@@ -384,14 +384,27 @@ func TestAnExitNodeOfOneFamilyIsSaid(t *testing.T) {
 	}
 }
 
-// dnsPlumber records the resolvers a helper is asked for.
+// dnsPlumber records the resolvers a helper is asked for, and the search
+// domains, and writes them to conf where set, as resolvconf would.
 type dnsPlumber struct {
 	conn.Plumber
-	set [][]netip.Addr
+	mu     sync.Mutex
+	set    [][]netip.Addr
+	search [][]string
+	conf   string
 }
 
-func (p *dnsPlumber) SetDNS(_ string, servers []netip.Addr) error {
-	p.set = append(p.set, servers)
+func (p *dnsPlumber) SetDNS(_ string, servers []netip.Addr, search []string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.set, p.search = append(p.set, servers), append(p.search, search)
+	if p.conf != "" {
+		var b strings.Builder
+		for _, s := range servers {
+			b.WriteString("nameserver " + s.String() + "\n")
+		}
+		return os.WriteFile(p.conf, []byte(b.String()), 0o644)
+	}
 	return nil
 }
 

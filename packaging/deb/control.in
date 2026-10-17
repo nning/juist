@@ -3,7 +3,7 @@ Version: @VERSION@
 Architecture: @ARCH@
 Maintainer: juist developers <noreply@github.com>
 Installed-Size: @SIZE@
-Depends: iptables, systemd
+Depends: systemd
 Recommends: polkitd
 Section: net
 Priority: optional

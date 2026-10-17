@@ -5,7 +5,8 @@
 // A pair starts on a group key, which every member holding the epoch's group
 // secret can derive ([Group]), and moves to a pair key once the two have each
 // encapsulated to the other's ML-KEM key ([Pair]), which no third member can.
-// docs/05-roadmap.md, M15, says why the exchange runs as it does.
+// docs/07-embedding-notes.md, "The preshared-key path", says why the exchange
+// runs as it does.
 package pairkey
 
 import (

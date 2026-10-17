@@ -49,6 +49,10 @@ type Options struct {
 	Port   uint16
 	Device string
 
+	// Listen, where set, binds each address in its place, as a helper
+	// binds a port the forwarder may not; Device does not apply to it.
+	Listen func(netip.AddrPort) (net.PacketConn, net.Listener, error)
+
 	// Allowed says whether a source may ask: the network's overlay.
 	Allowed func(netip.Addr) bool
 
@@ -105,6 +109,22 @@ func Start(opts Options) (*Forwarder, error) {
 	lc := net.ListenConfig{Control: control(opts.Device)}
 	for _, a := range opts.Addrs {
 		ap := netip.AddrPortFrom(a, opts.Port)
+		if opts.Listen != nil {
+			pc, ln, err := opts.Listen(ap)
+			if err != nil {
+				f.Close()
+				return nil, fmt.Errorf("dnsfwd: %w", err)
+			}
+			uc, ok := pc.(*net.UDPConn)
+			if !ok {
+				pc.Close()
+				ln.Close()
+				f.Close()
+				return nil, fmt.Errorf("dnsfwd: %v is no UDP socket", ap)
+			}
+			f.udp, f.tcp = append(f.udp, uc), append(f.tcp, ln)
+			continue
+		}
 		pc, err := lc.ListenPacket(context.Background(), "udp", ap.String())
 		if err != nil {
 			f.Close()

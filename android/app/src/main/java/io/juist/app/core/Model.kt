@@ -51,6 +51,8 @@ data class Member(
     val retiring: String = "",
     val retiringUntil: Long = 0,
     val reach: Reach = Reach.Unknown,
+    /** The member whose relay carries the traffic to it, where [reach] is [Reach.Relay]. */
+    val relay: String = "",
     val heard: Long = 0,
     val since: Long = 0,
 )

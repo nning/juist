@@ -1,28 +1,28 @@
 # 06 — Verification strategy
 
 Security claims are tested, not asserted. Every property in
-[02-threat-model.md](02-threat-model.md) maps to at least one automated test below.
+[02-threat-model.md](02-threat-model.md) maps to at least one automated test below;
+what has none yet is listed as open where its section says so.
+[12-validating.md](12-validating.md) says which gate runs which test, and records
+the runs.
 
 ## 1. Trust-layer unit & property tests
 
-- Adversarial cases, one test per attack: forged/missing/duplicate signatures,
-  sub-quorum changes, replay, reorder, rollback to lower epoch, dropped checkpoints,
-  address and key collisions, conflicting concurrent AUMs, fork injection. Each
-  builds its record from live keys rather than replaying a checked-in vector: a
-  frozen vector stops testing the validator the moment a schema field moves, and
-  every one of these attacks is cheaper to construct than to store. A whole state
-  arriving at once — a genesis naming founders, a checkpoint adopted as an anchor —
-  is covered as its own path, since it is admitted on a quorum's word rather than
-  record by record.
-- Property-based tests over generated valid+invalid AUM sequences ⇒ all honest
-  validators converge to identical state or identical alarm; no sequence reaches a
-  state that skips quorum policy. The generator is ours and each case is a numbered
-  seed rather than `pgregory.net/rapid` drawing fresh: a failure is replayed by
-  running the subtest it names, with no shrinking step and no recorded corpus to
-  keep. Reconsider if the sequences ever get complex enough that shrinking earns
-  the dependency.
-- Determinism check: two independent validation orders of the same AUM set produce
-  byte-identical state (fork choice is deterministic).
+- Adversarial cases, one test per attack (`trust/log/adversarial_test.go` and
+  beside it): forged/missing/duplicate signatures, sub-quorum changes, replay,
+  reorder, rollback to a lower epoch, lost checkpoints, address and key
+  collisions, conflicting concurrent records, forks below the anchor. Each builds
+  its record from live keys rather than replaying a checked-in vector, so a schema
+  change cannot leave a frozen vector testing nothing. A whole state arriving at
+  once — a genesis naming founders, a checkpoint adopted as an anchor — is covered
+  as its own path, since it is admitted on a quorum's word.
+- Property tests (`trust/log/property_test.go`) over generated valid record sets
+  delivered in different orders and increments ⇒ all validators converge to an
+  identical state or an identical alarm, the epoch never regresses, and a refused
+  record changes nothing. Each case is a numbered seed of our own generator, not
+  `pgregory.net/rapid`: a failure is replayed by running the subtest it names.
+- Determinism: several topological orders of one record set produce byte-identical
+  state (fork choice is deterministic).
 
 ## 2. Fuzzing (native `go test -fuzz`, run off CI)
 
@@ -30,89 +30,95 @@ Targets, added the milestone their input surface appears:
 
 | Target | Input | Milestone |
 |---|---|---|
-| AUM/record decoder | raw CBOR | M1 |
-| Chain validator | AUM sequences | M1 |
-| Gossip frame parser | raw frames | M2 |
-| Gossip catch-up messages, and the asking side's reading of them | raw frames | M4b |
-| DHT payload decrypt/parse | BEP44 values | M3 |
-| Invite code and link parser | strings | M4 |
-| Enrollment handshake and message decoder | raw frames | M4 |
-| Invite rendezvous stream | UDP packets on a punched path | M4 |
+| Record decoder and validator (`FuzzDecodeAUM`, `FuzzValidateAUM`) | raw CBOR | M1 |
+| Chain validator (`FuzzChainValidate`) | record sequences | M1 |
+| Gossip frames and announcements (`FuzzDecodeFrame`, `FuzzOpenFrame`, `FuzzDecodeEndpoint`) | raw frames | M2 |
+| IPC wire (`FuzzDecodeIPCRequest`, `FuzzDecodeIPCResponse`, `FuzzDecodePublished`) | socket payloads | M2 |
 | LAN discovery beacon (`FuzzBeaconHandle`) | multicast DNS datagrams | M2 |
+| DHT item (`FuzzOpenItem`) | BEP 44 values | M3 |
+| Invite code and link (`FuzzParseInvite`) | strings | M4 |
+| Enrollment messages (`FuzzDecodeEnrollFrames`) | raw frames | M4 |
+| Invite rendezvous stream (`FuzzStreamPackets`) | UDP packets on a punched path | M4 |
 | Invite nameplate question and answer (`FuzzInviteMessages`) | multicast DNS datagrams | M4 |
 | Relay invite forwarding (`FuzzForwardRequests`, `FuzzRelayAnswers`) | upgrade requests; a relay's answers to host and guest | M4 |
-| IPC request decoder | socket payloads | M2 |
-| QUIC Initial parser and ClientHello reassembly (`FuzzParse`, `FuzzPayloads`, `FuzzHello`) | a client's datagrams at the ingress | M11b |
-| PROXY v2 header for UDP, and its LOCAL form (`FuzzReadUDP`) | an ingress's datagrams at the terminator, a terminator's at the ingress | M11b |
+| Gossip catch-up, and the asking side's reading of it (`FuzzDecodeCatchUp`, `FuzzAskCatchUp`) | raw frames | M4b |
+| QUIC Initial and ClientHello reassembly (`FuzzParse`, `FuzzPayloads`, `FuzzHello`) | a client's datagrams at the ingress | M11b |
+| PROXY v2 header, TCP and UDP (`FuzzRead`, `FuzzReadUDP`) | a terminator's input from the ingress, and back | M11b |
+| Access policy text (`internal/policy` `FuzzParse`) | policy files | M14 |
+| Pair-key messages and store (`FuzzTake`, `FuzzDecodeStore`) | signed messages; the pairs file | M15 |
 
-72 CPU-hour clean runs gate each milestone; corpus is preserved and grows. This
-does not run on CI — hours per input surface is far more hosted-runner time than
-the project wants to spend — so the gate is run by hand before a milestone
-closes (`make fuzz-long`, or `make fuzz-one` per target to fan it out), against
-a corpus kept outside the repository. `make fuzz` smoke-runs every target in
-seconds and belongs in the pre-push routine. OSS-Fuzz application once public
+Open (M24): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`), the
+root helper's protocol and the resolver's input.
+
+The gate is 72 clean CPU-hours per input surface before a milestone closes, run
+by hand with `make fuzz-long` or `make fuzz-one` per target (`make fuzz-matrix`
+lists them; 6 h on 4 workers a run), against a corpus kept outside the repository.
+It does not run on CI: hours per input surface is far more hosted-runner time than
+the project wants to spend. So far it is recorded for `FuzzPayloads` alone (M11b,
+[12-validating.md](12-validating.md)); M24 runs it over every target. `make fuzz`
+smoke-runs every target for 30 s each. OSS-Fuzz, once the project qualifies,
 would move the long runs onto someone else's hardware.
 
 ## 3. Multi-node integration harness
 
-Go test driver orchestrating **network namespaces** (Linux CI), with Linux
-netfilter doing the translation rather than a simulation of it:
+Network namespaces with Linux netfilter where the kernel's part is what is
+tested (NAT, devices, exit nodes), in-process meshes of daemons
+(`daemon/mesh_test.go`) elsewhere:
 
-- **NAT matrix (M3b, `conn/netnsnat_linux_test.go`):** full-cone,
-  address-restricted, port-restricted, symmetric (endpoint-dependent), CGNAT
-  double-NAT, UDP-blocked. Whether a path ended up direct is asked by stopping the
-  relay — a pair that keeps reaching each other was never relying on it — and the
-  lab classifies its own NATs with two reflectors before testing anything, so a
-  rule that did not do what its name says cannot make a cell pass for the wrong
+- **NAT matrix (`conn/netnsnat_linux_test.go`):** full-cone, address-restricted,
+  port-restricted, symmetric (endpoint-dependent), CGNAT double-NAT; UDP-blocked in
+  its own test. Whether a path ended up direct is asked by stopping the relay, and
+  the lab classifies its own NATs with two reflectors before testing anything, so
+  a rule that did not do what its name says cannot make a cell pass for the wrong
   reason.
-- **Membership scenarios:** enrollment (QR + code paths), routine removal, emergency
-  revocation (epoch bump), key rotation, admin add/remove, break-glass disablement.
-- **Partition & freshness:** iptables-partition a victim with a revoked peer; with an
-  injectable fake clock verify fail-open window ends at exactly TTL; verify a stale
-  node refuses to *initiate* as well as accept; verify startup gate blocks tunnels
-  until sync when state is stale.
-- **Fork / split-view:** a simulated malicious quorum feeds divergent chains to
-  disjoint node sets; assert both sides alarm on first cross-contact and refuse
-  silent adoption of either head.
-- **DHT adversary:** local mainline-DHT swarm; an eclipse of the topic delays cold
-  start but never yields a false member; a crawler on the swarm cannot link
-  announcements to the network or count members.
-- **Relay abuse:** non-member and *revoked* member attempt relay use ⇒ rejected.
+- **Membership scenarios:** enrollment by link and by code, removal, epoch bump,
+  key and identity rotation, admin add/remove, break-glass disablement.
+- **Partition & freshness:** with an injectable fake clock, a victim the removal
+  does not reach refuses the removed peer at exactly the TTL; the startup gate
+  keeps tunnels down until sync when state is stale.
+- **Fork alarm:** a forked or rolled-back chain drops every peer and clears every
+  derived field.
+- **DHT adversary:** on a private DHT swarm, a crawler cannot link items to the
+  network, count members, or read an item's epoch or size.
+- **Relay abuse:** a non-member and a *removed* member are refused relay use.
 - **Exit nodes and subnet routes (M6):** a node forwarding traffic it holds no
-  grant for is dropped by every peer; a full-tunnel client leaks no DNS query and no
-  non-LAN packet outside the tunnel (capture on the physical interface) while LAN
-  destinations keep resolving and routing locally; withdrawing the `exit` role cuts
-  egress at gossip convergence (reachable) and at the TTL boundary (partitioned).
-- **Coarse ACLs (M14):** a peer denied by ACL is dropped by the *receiver* even with a
-  sender patched to ignore its own filter; a member without a grant for an exit node
-  gets nothing forwarded by it.
-- **Chaos:** packet loss/reorder/duplication on gossip paths; node kill/restart
-  mid-sync; clock skew between members (±minutes) — assert convergence and no
-  state corruption (fsync/rollback tests with `kill -9`).
+  grant for is dropped; a full-tunnel client leaks no DNS query and no non-LAN
+  packet outside the tunnel (capture on the physical interface) while LAN
+  destinations stay local; a stale exit node serves nothing.
+- **Access policy (M14):** a peer the policy denies is dropped by the *receiver*
+  even from a sender patched to ignore its own filter; a stale view under a policy
+  fails closed.
+- **Crash consistency:** a store write cut short at any point is finished or
+  cleaned up at open.
+
+Open: a multi-node split view (a malicious quorum feeding divergent chains to
+disjoint sets, both sides alarming on first contact); an eclipse of the DHT
+delaying cold start without yielding a false member; egress cut at gossip
+convergence when an `exit` role is withdrawn across a mesh; chaos on gossip paths
+(loss, reorder, duplication, `kill -9` mid-sync, clock skew between members).
 
 ## 4. End-to-end / platform
 
-- CI interop matrix: Linux + FreeBSD (qemu VMs), and from M10 an Android emulator
-  smoke test — enrollment by QR and by code, ping over tunnel, revocation.
-- Egress assertion on every E2E run: **zero packets to any third-party service**
-  except declared untrusted helpers (DHT bootstrap, optional public STUN) — catches
-  accidental Tailscale-infra dependencies from vendored code.
-- Packaged-privilege drill, manual for now: install the RPM, start the unit, and
-  assert from `/proc` that the daemon runs as the dedicated user with
-  `CAP_NET_ADMIN` as its whole bounding set and a real device up (README, "Check
-  the privilege footprint"). The privileged CI job proves the device and the
-  namespaces, not the packaging — a hosted runner is the wrong place to install
-  a package and create a system user. Automating it needs a VM in CI, which is
-  the same dependency the FreeBSD interop matrix above wants; decide both at once.
+- Interop (`interop/`, `make interop`, part of `make ci-vm`): Debian and FreeBSD in
+  qemu, each installed from its package, through the lifecycle and an upgrade from
+  the previous release. The Android app is tested by hand in an emulator.
+- Egress: `conn/egress_test.go` and the namespace captures assert **zero packets
+  to any third-party service** except declared untrusted helpers (DHT bootstrap,
+  public STUN), which catches Tailscale-infra dependencies from vendored code. The
+  interop run has no blanket capture yet.
+- Packaged privilege: that the daemon runs as the dedicated user with
+  `CAP_NET_ADMIN` as its whole bounding set is checked by hand
+  ([12-validating.md](12-validating.md), "Check the privilege footprint"), and so
+  is the RPM on Fedora; interop could assert it from `/proc`.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
-  VPS relay member + one mobile (Android on LTE, from M10); full lifecycle including
-  emergency revocation from a phone (from M28).
+  VPS relay member + one Android phone on LTE; full lifecycle including emergency
+  revocation from a phone (from M28).
 
 ## 5. Cryptographic review gates
 
-- Internal design review of the trust layer before M3 (log rules frozen).
-- External audit at M25 of the audit scope, after the internal review of
-  [15-security-review.md](15-security-review.md): what [`audit-scope`](../audit-scope)
+- Internal review of the audit scope before the external audit (M24,
+  [15-security-review.md](15-security-review.md)).
+- External audit at M25 of the audit scope: what [`audit-scope`](../audit-scope)
   places `core` or `in`, the code that decides who may do what, holds or derives a
   key, parses input from outside the membership, or runs as root. Every package
   is placed there, `out` ones with their reason, and `make tcb` fails on one
@@ -126,25 +132,20 @@ netfilter doing the translation rather than a simulation of it:
     stay where they are put), not line by line.
 - After v1, each milestone that grows the audit scope gets an audit of what it
   added, scoped by the sizes its "Done" line records.
-- A short machine-checkable model (e.g. Tamarin/ProVerif sketch or TLA+ for the
+- A short machine-checkable model (Tamarin/ProVerif, or TLA+ for the
   epoch/freshness state machine) is a stretch goal — valuable for the freshness and
   fork-choice rules, which are where novel logic lives.
 
 ## 6. Continuous regression metrics
 
-Tracked per commit in CI: direct-connection rate per NAT class, revocation
-convergence time (connected case), sync time after 1-week offline, encoded size
-of an epoch record and of a checkpoint at `MaxNodes` members, the core's LOC
-count (`types`, `trust/`), held to 11 k by `make tcb` since M17's post-quantum
-signatures took it past 10 k, and the audit scope's, which
-is measured, not budgeted: features grow it, and each milestone's "Done" line in
-[05-roadmap.md](05-roadmap.md) records both. Fuzz corpus coverage
-is tracked per milestone instead, from the manual runs above.
+`make tcb`, in `make check`, holds the core (`types`, `trust/`) to 11 k lines and
+reports the audit scope's size, which is measured, not budgeted: features grow it,
+and each milestone's "Done" line in [05-roadmap.md](05-roadmap.md) records both.
 
-The record-size metric exists because the O(n) epoch wrap fan-out is the term
-that grows fastest with membership, and every figure written about it so far is
-struct sizes multiplied out rather than anything measured. Before the M3 freeze
-it is paired with a one-off: a gossip round against a `MaxNodes` log, timed.
-Those two numbers are what the pre-freeze schema hedges in
-[08-trust-layer-notes.md](08-trust-layer-notes.md) are decided against — they
-either confirm the fan-out is the binding constraint or point at whatever is.
+Bounded by tests, pass or fail rather than tracked as a series: direct paths per
+NAT class (the matrix above), revocation convergence in the connected case (5 s,
+`TestRevocationConvergesWithinTheBudget`), and the encoded size of an epoch record
+and of a checkpoint at `MaxNodes` members under `MaxRecordSize`
+(`trust/log/scale_test.go`), the term that grows fastest with membership. Open:
+sync time after a week offline, and a record of these figures per milestone. Fuzz
+corpus coverage is tracked per milestone, from the manual runs above.

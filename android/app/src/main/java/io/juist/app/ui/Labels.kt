@@ -99,9 +99,15 @@ fun reachLabel(m: Member): String = when (m.reach) {
     Reach.Unknown -> stringResource(R.string.reach_unknown)
 }
 
-/** What a reach means, for a member's own screen; null where its name says it all. */
+/** What a member's reach means, for its own screen; null where its name says it all. */
+@Composable
+fun reachExplanation(m: Member): String? = when {
+    m.reach == Reach.Relay && m.relay.isNotEmpty() -> stringResource(R.string.reach_relay_about_named, m.relay)
+    else -> reachExplanationOf(m.reach)?.let { stringResource(it) }
+}
+
 @StringRes
-fun reachExplanation(r: Reach): Int? = when (r) {
+private fun reachExplanationOf(r: Reach): Int? = when (r) {
     Reach.Relay -> R.string.reach_relay_about
     Reach.Outdated -> R.string.reach_outdated_about
     Reach.Down -> R.string.reach_down_about

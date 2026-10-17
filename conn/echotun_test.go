@@ -126,6 +126,7 @@ func newEchoNode(t *testing.T, id uint64, v4, v6 string) *node {
 // families, direct-only. The v6 address goes first, so it is the one that
 // primes disco and the handshake.
 func TestTwoNodeOverlayPingBothFamilies(t *testing.T) {
+	t.Parallel()
 	a := newEchoNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newEchoNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 

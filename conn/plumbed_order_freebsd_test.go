@@ -24,11 +24,11 @@ func (p *orderPlumber) SetRoutes(_ string, _ []netip.Prefix, src netip.Addr) err
 	p.calls = append(p.calls, fmt.Sprint("routes from ", src))
 	return nil
 }
-func (p *orderPlumber) SetServe(string, plumber.ServeSpec) error   { return nil }
-func (p *orderPlumber) SetEgress(string, plumber.EgressSpec) error { return nil }
-func (p *orderPlumber) SetDNS(string, []netip.Addr) error          { return nil }
-func (p *orderPlumber) Answers(string) (string, error)             { return "", nil }
-func (p *orderPlumber) Destroy(string) error                       { return nil }
+func (p *orderPlumber) SetServe(string, plumber.ServeSpec) error    { return nil }
+func (p *orderPlumber) SetEgress(string, plumber.EgressSpec) error  { return nil }
+func (p *orderPlumber) SetDNS(string, []netip.Addr, []string) error { return nil }
+func (p *orderPlumber) Answers(string) (string, error)              { return "", nil }
+func (p *orderPlumber) Destroy(string) error                        { return nil }
 
 // An address the device takes is on it before a route's source names it,
 // whether or not one goes, and one that goes comes off after.

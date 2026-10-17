@@ -362,12 +362,21 @@ func (a *app) warnDNS(ex *ipc.Exit, overlay []netip.Prefix) {
 // where nothing on this host would.
 func dnsHint(why string) string {
 	switch {
+	case strings.Contains(why, "DNS is off on this device"):
+		return "juist set --dns takes it again"
 	case strings.Contains(why, "polkit is not installed"):
 		return asRoot("apt install polkitd") + ", or " + asRoot("dnf install polkit")
 	case strings.Contains(why, "refused juistd"):
 		return "the package's polkit rule allows juistd that: /usr/share/polkit-1/rules.d/60-juist.rules"
 	case strings.Contains(why, "uplink mode"):
 		return asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf")
+	case strings.Contains(why, "tailscaled writes"):
+		return asRoot("tailscale set --accept-dns=false") + " and " + asRoot("systemctl restart juistd") +
+			" hand it to juistd, without the tailnet's names"
+	case strings.Contains(why, "is no longer juistd's"):
+		return "another program wrote it; " + asRoot("systemctl restart juistd") + " hands it back"
+	case strings.Contains(why, "systemd-resolved does not run"):
+		return "the package's juistd.service hands juistd /etc/resolv.conf, to answer this host's DNS itself"
 	}
 	return ""
 }

@@ -80,8 +80,8 @@ hint: 2 more devices the access policy keeps apart from this one: juist devices 
 ```
 
 No rule connects laptop2 with laptop or the phone, so it keeps no tunnel to
-either. After `juist exit use vps`, laptop2 goes online through vps. Where
-systemd-resolved runs, its DNS goes through vps too.
+either. After `juist exit use vps`, laptop2 goes online through vps, and its DNS
+goes through vps too.
 {{< /step >}}
 
 `juist policy` prints the network's policy. `juist policy edit` opens it in

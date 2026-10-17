@@ -43,7 +43,7 @@ clear)
 			done
 		fi
 		if command -v nft >/dev/null 2>&1; then
-			for t in juist$i juist${i}guard juist${i}in; do
+			for t in juist$i juist${i}guard juist${i}in juist${i}dns; do
 				nft delete table ip $t 2>/dev/null
 				nft delete table ip6 $t 2>/dev/null
 			done

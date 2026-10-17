@@ -125,6 +125,7 @@ func TestSyncVerdicts(t *testing.T) {
 // A live peer whose log sync connects nowhere is blamed on a firewall, one
 // naming no epoch among them, since nothing shows it is not catching up.
 func TestASyncThatConnectsNowhereIsBlamedOnAFirewall(t *testing.T) {
+	t.Parallel()
 	f := newReconcileFixture(t, 3)
 	f.d.tunName = "juist0"
 	pq, behind := f.nw.devices[1], f.nw.devices[2]
@@ -1006,5 +1007,47 @@ func TestARestartedMembersHintMovesItsDiscoKeyWithinSeconds(t *testing.T) {
 	}
 	if asked != 2 {
 		t.Fatalf("%d of the 2 checks were asked for", asked)
+	}
+}
+
+// A relayed peer is reported with the member whose relay is its home, a
+// direct one with none.
+func TestARelayedPeerNamesItsHomeRelay(t *testing.T) {
+	f := newReconcileFixture(t, 2)
+	f.nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	region := uint16(relayRegion(f.auth.State().GenesisHash(), f.self.record.Identity))
+	dev := f.nw.devices[1]
+	e := f.signedBy(t, dev, time.Now())
+	e.HomeRelay = region
+	if err := e.SignPQ(dev.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	self, _ := f.auth.State().Node(f.self.record.Identity)
+	if self.Name == "" {
+		t.Fatal("this device has no name")
+	}
+	addr := f.installed(t, 1).Addrs[0].Addr()
+	f.mgr.mu.Lock()
+	f.mgr.home = int(region)
+	f.mgr.answers = map[netip.Addr]bool{addr: true}
+	f.mgr.mu.Unlock()
+	f.d.refreshReach(t.Context())
+	if r := f.d.Status().Reach; len(r) != 1 || !r[0].Live || r[0].Direct || r[0].Relay != self.Name {
+		t.Fatalf("relayed: reach %+v, want live through %q", r, self.Name)
+	}
+
+	f.mgr.mu.Lock()
+	f.mgr.paths = map[netip.Addr]netip.AddrPort{addr: netip.MustParseAddrPort("192.0.2.7:41641")}
+	f.mgr.mu.Unlock()
+	f.d.probeNow = map[types.Identity]bool{dev.record.Identity: true}
+	f.d.refreshReach(t.Context())
+	if r := f.d.Status().Reach; len(r) != 1 || !r[0].Direct || r[0].Relay != "" {
+		t.Fatalf("direct: reach %+v, want no relay named", r)
 	}
 }

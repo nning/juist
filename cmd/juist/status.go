@@ -28,11 +28,22 @@ func cmdStatus(a *app, args []string) error {
 Show this device's network and how many devices it reaches; every network,
 where it is in several. Any local user may run it. juist health says what
 needs attention, juist devices lists the devices.`}
-	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
+	fs := newFlags(s.name)
+	devices := fs.Bool("devices", false, "list the devices too, as juist devices does")
+	verbose := fs.Bool("verbose", false, "name the relay that carries the traffic to each relayed device")
+	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
+	if err := a.showStatus(*verbose); err != nil || !*devices {
+		return err
+	}
+	a.printf("\n")
+	return cmdDevices(a, nil)
+}
+
+func (a *app) showStatus(verbose bool) error {
 	if insts := a.statusInstances(); len(insts) > 1 || len(insts) == 1 && insts[0].st == nil {
-		a.printHostStatus(insts)
+		a.printHostStatus(insts, verbose)
 		return nil
 	}
 	n, err := a.openNode()
@@ -43,7 +54,7 @@ needs attention, juist devices lists the devices.`}
 	if st == nil {
 		return a.offlineStatus(n)
 	}
-	a.printStatus(st)
+	a.printStatusIn(st, "", verbose)
 	a.healthHint(st, "", false)
 	return nil
 }
@@ -112,14 +123,17 @@ func (a *app) offlineStatus(n node) error {
 	return nil
 }
 
-func (a *app) printStatus(s *ipc.Status) { a.printStatusIn(s, "") }
+func (a *app) printStatus(s *ipc.Status) { a.printStatusIn(s, "", false) }
 
 // printStatusIn is printStatus with the head naming the instance, on a host
-// in several networks.
-func (a *app) printStatusIn(s *ipc.Status, inst string) {
+// in several networks; verbose adds the relay of each relayed device.
+func (a *app) printStatusIn(s *ipc.Status, inst string, verbose bool) {
 	v := statusOfOn(s, a.now(), a.paint, a.instanceLabel, inst != "")
 	if inst != "" && len(v.head) > 0 {
 		v.head[0].text += " · " + a.dim(inst)
+	}
+	if verbose {
+		v.head = withRelayed(v.head, s)
 	}
 	a.emit(v.head)
 	// What stops the network is said here too; the rest, juist health says.
@@ -128,6 +142,29 @@ func (a *app) printStatusIn(s *ipc.Status, inst string) {
 		a.printf("\n")
 		a.emit(alarms)
 	}
+}
+
+// withRelayed is head with a line per relayed device under its Relays
+// field, naming the relay that carries the traffic to it.
+func withRelayed(head []line, s *ipc.Status) []line {
+	names := map[types.Identity]string{}
+	for _, d := range s.Devices {
+		names[d.Identity] = d.Name
+	}
+	var relayed []line
+	for _, r := range s.Reach {
+		if !r.Live || r.Direct {
+			continue
+		}
+		via := cmp.Or(r.Relay, "a relay")
+		relayed = append(relayed, line{kind: lineField, text: cmp.Or(names[r.Identity], r.Identity.ShortString()) + " via " + via})
+	}
+	slices.SortFunc(relayed, func(x, y line) int { return cmp.Compare(x.text, y.text) })
+	at := slices.IndexFunc(head, func(l line) bool { return l.kind == lineField && l.label == "Relays" })
+	if at < 0 {
+		return append(head, relayed...)
+	}
+	return slices.Insert(head, at+1, relayed...)
 }
 
 // A line is one line of output, of a kind that says how it is printed.
@@ -378,17 +415,10 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 		field("Sharing", "%s", t)
 	}
 	if s.Names != nil {
-		text, hint := namesSummary(s.Names, paint)
-		field("Names", "%s", text)
-		if !s.Names.Resolved {
-			for _, name := range s.Names.ForMembers {
-				v.notes = append(v.notes, line{kind: lineWarn, text: fmt.Sprintf(
-					"%s, for members alone, is not reached from here, which resolves the network's names publicly", name)})
-			}
+		if text := namesLine(s.Names, s.SelfName, paint); text != "" {
+			field("Names", "%s", text)
 		}
-		if hint != "" {
-			v.notes = append(v.notes, line{kind: lineHint, text: hint})
-		}
+		v.notes = append(v.notes, namesNotes(s.Names)...)
 	}
 	switch {
 	case until > 0:

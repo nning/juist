@@ -21,8 +21,14 @@ func accessPolicy(t *testing.T, fb, lx *vm, lx4 string) {
 				out, _ := lx.try(w.juist("status")+"; "+w.juist("devices")+"; tail -40 "+w.home+"/juistd.log", time.Minute)
 				t.Logf("%s:\n%s", w.name, out)
 			}
-			out, _ := fb.try("juist policy; juist status", time.Minute)
+			out, _ := fb.try("juist policy; juist status; juist ingress; tail -30 /var/log/juist-ingress.log; tail -30 /tmp/pebble.log",
+				time.Minute)
 			t.Logf("fb:\n%s", out)
+			// Where a hello for the name for members fails: its certificate's
+			// order and the terminator's view of it.
+			out, _ = lx.try("juist publish; ls -l /var/lib/juist-serve/certs; journalctl -u juist-serve --no-pager | tail -60",
+				time.Minute)
+			t.Logf("lx:\n%s", out)
 			hold(t, fb, lx)
 		}
 		// What follows runs as without a policy.

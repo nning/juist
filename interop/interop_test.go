@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -29,144 +30,27 @@ var (
 	lxSide = side{target: "9.9.8.9", nat: "10.99.2.1", subnet: "192.168.72.0/24", inner: "192.168.72.2"}
 )
 
+// TestLinuxAndFreeBSD is the lab on this build's packages: one network
+// carries every part, and the packages are removed, leaving nothing behind.
 func TestLinuxAndFreeBSD(t *testing.T) {
-	work := need(t, "JUIST_INTEROP_WORK")
-	deb := need(t, "JUIST_INTEROP_DEB")
-	pkg := need(t, "JUIST_INTEROP_PKG")
-	cache := need(t, "JUIST_INTEROP_CACHE")
-	os.RemoveAll(work)
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	key := filepath.Join(work, "key")
-	sh(t, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key)
-	pub, _ := os.ReadFile(key + ".pub")
-	for _, goos := range []string{"linux", "freebsd"} {
-		cmd := exec.Command(env("GO", "go"), "build", "-trimpath", "-o", filepath.Join(work, "probe-"+goos), "./probe")
-		cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH=amd64", "CGO_ENABLED=0")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("building the probe: %v\n%s", err, out)
-		}
-	}
-	pebble := buildPebble(t)
-	fbBase, lxBase := base(t, cache, work, freebsdImage), base(t, cache, work, debianImage)
-
+	t.Parallel()
+	l := labShared(t)
 	chrome := need(t, "JUIST_INTEROP_CHROME")
-	fb := &vm{name: "fb", freebsd: true, lanAddr: "10.77.0.1", mac: "52:54:00:77:00:01", net: "10.0.4.0/24", dir: work, key: key,
-		https: freePort(t, "both"), tcpOnly: freePort(t, "tcp")}
-	lx := &vm{name: "lx", lanAddr: "10.77.0.3", mac: "52:54:00:77:00:03", net: "10.0.3.0/24", dir: work, key: key}
-	vms := []*vm{fb, lx}
-	pa, pb := freePort(t, "udp"), freePort(t, "udp")
-	fb.boot(t, fbBase, pa, pb, "")
-	lx.boot(t, lxBase, pb, pa, fmt.Sprintf("http://10.0.3.2:%d/", seedServer(t, "lx", string(pub))))
-	both(t, vms, func(v *vm) error { return v.up(20 * time.Minute) })
-
-	t.Log("installing the packages")
-	fb.put(t, pkg, "/tmp/juist.pkg", 0o644)
-	fb.put(t, filepath.Join(work, "probe-freebsd"), "/tmp/probe", 0o755)
-	lx.put(t, deb, "/tmp/juist.deb", 0o644)
-	// Both start on the previous release, where the lab has it, and are
-	// upgraded in "previous release": a device of this one joins none of an
-	// older one's invites, whose handshake has no ML-KEM.
-	previous, previousPkg := os.Getenv("JUIST_INTEROP_PREVIOUS_DEB"), os.Getenv("JUIST_INTEROP_PREVIOUS_PKG")
-	if previous == "" || previousPkg == "" {
-		previous, previousPkg = "", ""
-	}
-	first, firstPkg := "/tmp/juist.deb", "/tmp/juist.pkg"
-	if previous != "" {
-		lx.put(t, previous, "/tmp/juist-previous.deb", 0o644)
-		fb.put(t, previousPkg, "/tmp/juist-previous.pkg", 0o644)
-		first, firstPkg = "/tmp/juist-previous.deb", "/tmp/juist-previous.pkg"
-	}
-	lx.put(t, filepath.Join(work, "probe-linux"), "/tmp/probe", 0o755)
-	both(t, vms, func(v *vm) error {
-		script := `set -e
-hostname fb; sysrc -q hostname=fb >/dev/null
-ifconfig vtnet1 inet 10.77.0.1/24 up
-pkg -N >/dev/null 2>&1 || env ASSUME_ALWAYS_YES=yes pkg bootstrap -f >/dev/null
-pkg add ` + firstPkg + ` >/dev/null
-sysrc -q juistd_enable=YES >/dev/null; service juistd start >/dev/null
-# On the console, which a failed run shows: whether the kernel still runs
-# when ssh no longer answers, and what its network then holds.
-daemon -f sh -c 'while :; do echo "watch $(date +%T) load $(sysctl -n vm.loadavg) default $(route -n get default 2>/dev/null | awk "/interface/ {print \$2}") routes $(netstat -rn | grep -c .) pf $(pfctl -sr 2>/dev/null | grep -c .) $(netstat -m | awk "NR==1 || /denied/" | tr "\n" " ") juistd $(pgrep -x juistd | wc -l)"; sleep 10; done > /dev/console 2>&1'
-# the target: a VNET jail on an epair, the subnet on it, 9.9.9.9 routed to it
-a=$(ifconfig epair create); b=${a%a}b
-ifconfig $a inet 10.99.1.1/30 up; ifconfig $a inet 192.168.71.1/24 alias
-jail -c name=tgt vnet persist path=/ host.hostname=tgt vnet.interface=$b
-jexec tgt ifconfig lo0 up; jexec tgt ifconfig lo0 inet 9.9.9.9/32 alias
-jexec tgt ifconfig $b inet 10.99.1.2/30 up; jexec tgt ifconfig $b inet 192.168.71.2/24 alias
-route -q add -net 9.9.9.0/24 10.99.1.2
-jexec tgt daemon -f /tmp/probe serve fb-target
-daemon -f /tmp/probe serve fb-host`
-		if !v.freebsd {
-			script = `set -e
-cloud-init status --wait >/dev/null || true
-dev=$(ip -br link | awk '$3 == "52:54:00:77:00:03" {print $1}')
-ip link set $dev up; ip addr add 10.77.0.3/24 dev $dev
-# conntrack follows connections from the start, as beside firewalld or Docker
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-dpkg -i ` + first + ` >/dev/null
-systemctl is-active juistd >/dev/null
-ip netns add tgt; ip link add vt0 type veth peer name vt1 netns tgt
-ip addr add 10.99.2.1/30 dev vt0; ip addr add 192.168.72.1/24 dev vt0; ip link set vt0 up
-ip -n tgt link set lo up; ip -n tgt addr add 9.9.8.9/32 dev lo
-ip -n tgt addr add 10.99.2.2/30 dev vt1; ip -n tgt addr add 192.168.72.2/24 dev vt1; ip -n tgt link set vt1 up
-ip route add 9.9.8.0/24 via 10.99.2.2
-ip netns exec tgt setsid -f /tmp/probe serve lx-target >/dev/null 2>&1 < /dev/null
-setsid -f /tmp/probe serve lx-host >/dev/null 2>&1 < /dev/null`
-		}
-		out, err := v.try(script, 15*time.Minute)
-		if err != nil {
-			return fmt.Errorf("%s: setting up: %v\n%s", v.name, err, out)
-		}
-		return nil
-	})
-	fb.eventually(t, "its target answers", time.Minute, "/tmp/probe get 9.9.9.9:80", has("fb-target from 10.99.1.1"))
-	lx.eventually(t, "its target answers", time.Minute, "/tmp/probe get 9.9.8.9:80", has("lx-target from 10.99.2.1"))
+	work := pairDir(t, "lab")
+	fb, lx := setUpPair(t, work, l, need(t, "JUIST_INTEROP_PKG"), need(t, "JUIST_INTEROP_DEB"), true)
 
 	t.Run("pages", func(t *testing.T) {
 		// Rendered on Linux by the freebsdman tag, as FreeBSD's binaries write them.
 		fb.run(t, `zcat /usr/local/share/man/man1/juist.1.gz > /tmp/a; juist __manpage > /tmp/b; cmp /tmp/a /tmp/b
 zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; cmp /tmp/a /tmp/b`)
 	})
-
-	if previous != "" {
-		t.Run("previous release", func(t *testing.T) {
-			previousRelease(t, fb, lx)
-		})
-	} else {
-		t.Log("JUIST_INTEROP_PREVIOUS_DEB or _PKG is unset, so no device runs the previous release")
-	}
-
-	t.Log("joining")
-	fb.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
-	lx.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
-	glass := breakGlassLine.FindString(fb.run(t, "juist create interop --device fb --voucher"))
-	if glass == "" {
-		t.Fatal("juist create showed no break-glass line")
-	}
-	invite(t, fb, lx, "juist join '%s'")
-
-	// The overlay addresses arrive with the join, not at once.
-	addr := func(v *vm, what, script string) string {
-		return strings.TrimSpace(v.eventually(t, what, time.Minute, script,
-			func(out string) bool { return strings.TrimSpace(out) != "" }))
-	}
-	fb4 := addr(fb, "its overlay IPv4 address", `ifconfig juist0 inet | awk '/inet / {print $2; exit}'`)
-	fb6 := addr(fb, "its overlay IPv6 address", `ifconfig juist0 inet6 | awk '/inet6 / && !/fe80/ {print $2; exit}'`)
-	lx4 := addr(lx, "its overlay IPv4 address", `ip -4 -br addr show juist0 | awk '{print $3}' | cut -d/ -f1`)
-	lx6 := addr(lx, "its overlay IPv6 address", `ip -6 -br addr show juist0 scope global | awk '{print $3}' | cut -d/ -f1`)
-	t.Logf("fb %s %s, lx %s %s", fb4, fb6, lx4, lx6)
-
+	glass, fb4, fb6, lx4, lx6 := joinPair(t, fb, lx)
 	t.Run("tunnel", func(t *testing.T) {
-		ok := func(string) bool { return true }
-		lx.eventually(t, "reaching fb over IPv4", 3*time.Minute, "ping -c1 -W2 "+fb4, ok)
-		lx.eventually(t, "reaching fb over IPv6", time.Minute, "ping -c1 -W2 "+fb6, ok)
-		fb.eventually(t, "reaching lx over IPv4", time.Minute, "ping -c1 -t2 "+lx4, ok)
-		fb.eventually(t, "reaching lx over IPv6", time.Minute, "timeout 5 ping6 -c1 "+lx6, ok)
+		tunnel(t, fb, lx, fb4, fb6, lx4, lx6)
 	})
-	t.Run("post-quantum", func(t *testing.T) {
-		postQuantum(t, fb, lx, fb4, lx4)
+	// What follows runs on a network past epoch bumps, as one in use is.
+	t.Run("epoch bumps", func(t *testing.T) {
+		epochBumps(t, fb, lx, fb4, lx4)
 	})
 	t.Run("FreeBSD serves Linux", func(t *testing.T) {
 		serve(t, fb, fb, lx, fbSide, lxSide, fb4, fb6)
@@ -175,13 +59,13 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 		serve(t, fb, lx, fb, lxSide, fbSide, lx4, lx6)
 	})
 	t.Run("names", func(t *testing.T) {
-		names(t, fb, lx, fb4, fb6)
+		names(t, fb, lx, fb4, fb6, lx6)
 	})
 	t.Run("ingress", func(t *testing.T) {
 		ingress(t, fb, lx, fb4)
 	})
 	t.Run("TLS at the target", func(t *testing.T) {
-		tlsAtTheTarget(t, fb, lx, work, pebble)
+		tlsAtTheTarget(t, fb, lx, work, l.pebble)
 	})
 	t.Run("members alone", func(t *testing.T) {
 		membersAlone(t, fb, lx, work, lx4)
@@ -217,23 +101,245 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	t.Run("rename", func(t *testing.T) {
 		rename(t, fb, lx, fb4, fb6)
 	})
+	// Last that needs the lab's DNS: resolved, restarted, has lost it.
+	t.Run("names without resolved", func(t *testing.T) {
+		withoutResolved(t, lx, "bsd", fb4, fb6)
+	})
 	t.Run("disable", func(t *testing.T) {
 		disable(t, fb, lx, fb4, glass)
 	})
 	t.Run("removal", func(t *testing.T) {
-		fb.run(t, "pkg delete -y juist")
-		fb.run(t, `! ifconfig juist0 >/dev/null 2>&1
+		removal(t, fb, lx)
+	})
+}
+
+// TestLinuxAndFreeBSDUpgraded is the lab beside it, on its own two VMs,
+// which start on the previous release and are upgraded beside each other:
+// a network of this build then carries the epoch bumps, which take minutes
+// on their own, exit nodes, subnets, names and an ingress on the upgraded
+// packages, which are removed as cleanly.
+func TestLinuxAndFreeBSDUpgraded(t *testing.T) {
+	t.Parallel()
+	previous, previousPkg := os.Getenv("JUIST_INTEROP_PREVIOUS_DEB"), os.Getenv("JUIST_INTEROP_PREVIOUS_PKG")
+	if previous == "" || previousPkg == "" {
+		t.Skip("JUIST_INTEROP_PREVIOUS_DEB or _PKG is unset, so no device runs the previous release")
+	}
+	l := labShared(t)
+	work := pairDir(t, "upgraded")
+	fb, lx := setUpPair(t, work, l, previousPkg, previous, false)
+	// A device of this build joins none of an older one's invites, whose
+	// handshake has no ML-KEM: the two upgrade in "previous release".
+	fb.put(t, need(t, "JUIST_INTEROP_PKG"), "/tmp/juist.pkg", 0o644)
+	lx.put(t, need(t, "JUIST_INTEROP_DEB"), "/tmp/juist.deb", 0o644)
+	t.Run("previous release", func(t *testing.T) {
+		previousRelease(t, fb, lx)
+	})
+	_, fb4, fb6, lx4, lx6 := joinPair(t, fb, lx)
+	t.Run("tunnel", func(t *testing.T) {
+		tunnel(t, fb, lx, fb4, fb6, lx4, lx6)
+	})
+	t.Run("post-quantum", func(t *testing.T) {
+		postQuantum(t, fb, lx, fb4, lx4)
+	})
+	// What the packages' upgrade enables, as their install does.
+	t.Run("FreeBSD serves Linux", func(t *testing.T) {
+		serve(t, fb, fb, lx, fbSide, lxSide, fb4, fb6)
+	})
+	t.Run("Linux serves FreeBSD", func(t *testing.T) {
+		serve(t, fb, lx, fb, lxSide, fbSide, lx4, lx6)
+	})
+	t.Run("names", func(t *testing.T) {
+		names(t, fb, lx, fb4, fb6, lx6)
+	})
+	t.Run("ingress", func(t *testing.T) {
+		ingress(t, fb, lx, fb4)
+	})
+	t.Run("names without resolved", func(t *testing.T) {
+		withoutResolved(t, lx, "fb", fb4, fb6)
+	})
+	t.Run("removal", func(t *testing.T) {
+		removal(t, fb, lx)
+	})
+}
+
+// The lab's parts both pairs share, made once.
+type shared struct {
+	disks
+	work   string // the probes, for Linux and FreeBSD
+	pebble string
+}
+
+var (
+	sharedMu   sync.Mutex
+	sharedDone *shared
+)
+
+// labShared is what both pairs need: JUIST_INTEROP_WORK made anew, the probes
+// built into it, Pebble and the disks. Each test logs its longest waits.
+func labShared(t *testing.T) shared {
+	t.Helper()
+	t.Cleanup(func() { logWaits(t) })
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if sharedDone != nil {
+		return *sharedDone
+	}
+	work := need(t, "JUIST_INTEROP_WORK")
+	os.RemoveAll(work)
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, goos := range []string{"linux", "freebsd"} {
+		cmd := exec.Command(env("GO", "go"), "build", "-trimpath", "-o", filepath.Join(work, "probe-"+goos), "./probe")
+		cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH=amd64", "CGO_ENABLED=0")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("building the probe: %v\n%s", err, out)
+		}
+	}
+	sharedDone = &shared{disks: labDisks(t), work: work, pebble: buildPebble(t)}
+	return *sharedDone
+}
+
+// pairDir is a directory of JUIST_INTEROP_WORK's for a pair's disks and
+// consoles.
+func pairDir(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(need(t, "JUIST_INTEROP_WORK"), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// setUpPair boots fb and lx in work, on a LAN of their own, and installs pkg
+// and deb: each with its target a hop behind it and a subnet, and juistd up.
+// fb's 443 is forwarded from this host where https is set.
+func setUpPair(t *testing.T, work string, l shared, pkg, deb string, https bool) (fb, lx *vm) {
+	t.Helper()
+	fb = &vm{name: "fb", freebsd: true, lanAddr: "10.77.0.1", mac: "52:54:00:77:00:01", net: "10.0.4.0/24", dir: work, key: l.key}
+	if https {
+		fb.https, fb.tcpOnly = freePort(t, "both"), freePort(t, "tcp")
+	}
+	lx = &vm{name: "lx", lanAddr: "10.77.0.3", mac: "52:54:00:77:00:03", net: "10.0.3.0/24", dir: work, key: l.key}
+	vms := []*vm{fb, lx}
+	pub, err := os.ReadFile(l.key + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	pa, pb := freePort(t, "udp"), freePort(t, "udp")
+	fb.boot(t, l.fb, pa, pb, "")
+	lx.boot(t, l.lx, pb, pa, fmt.Sprintf("http://10.0.3.2:%d/", seedServer(t, "lx", string(pub))))
+	both(t, vms, func(v *vm) error {
+		if err := v.up(20 * time.Minute); err != nil {
+			return err
+		}
+		return v.multiplex(t)
+	})
+	t.Logf("lab: both up in %v", time.Since(start).Round(100*time.Millisecond))
+
+	fb.put(t, pkg, "/tmp/juist-first.pkg", 0o644)
+	fb.put(t, filepath.Join(l.work, "probe-freebsd"), "/tmp/probe", 0o755)
+	lx.put(t, deb, "/tmp/juist-first.deb", 0o644)
+	lx.put(t, filepath.Join(l.work, "probe-linux"), "/tmp/probe", 0o755)
+	both(t, vms, func(v *vm) error {
+		script := `set -e
+hostname fb; sysrc -q hostname=fb >/dev/null
+ifconfig vtnet1 inet 10.77.0.1/24 up
+pkg -N >/dev/null 2>&1 || env ASSUME_ALWAYS_YES=yes pkg bootstrap -f >/dev/null
+pkg add /tmp/juist-first.pkg >/dev/null
+sysrc -q juistd_enable=YES >/dev/null; service juistd start >/dev/null
+# On the console, which a failed run shows: whether the kernel still runs
+# when ssh no longer answers, and what its network then holds.
+daemon -f sh -c 'while :; do echo "watch $(date +%T) load $(sysctl -n vm.loadavg) default $(route -n get default 2>/dev/null | awk "/interface/ {print \$2}") routes $(netstat -rn | grep -c .) pf $(pfctl -sr 2>/dev/null | grep -c .) $(netstat -m | awk "NR==1 || /denied/" | tr "\n" " ") juistd $(pgrep -x juistd | wc -l)"; sleep 10; done > /dev/console 2>&1'
+# the target: a VNET jail on an epair, the subnet on it, 9.9.9.9 routed to it
+a=$(ifconfig epair create); b=${a%a}b
+ifconfig $a inet 10.99.1.1/30 up; ifconfig $a inet 192.168.71.1/24 alias
+jail -c name=tgt vnet persist path=/ host.hostname=tgt vnet.interface=$b
+jexec tgt ifconfig lo0 up; jexec tgt ifconfig lo0 inet 9.9.9.9/32 alias
+jexec tgt ifconfig $b inet 10.99.1.2/30 up; jexec tgt ifconfig $b inet 192.168.71.2/24 alias
+route -q add -net 9.9.9.0/24 10.99.1.2
+jexec tgt daemon -f /tmp/probe serve fb-target
+daemon -f /tmp/probe serve fb-host`
+		if !v.freebsd {
+			script = `set -e
+cloud-init status --wait >/dev/null || true
+dev=$(ip -br link | awk '$3 == "52:54:00:77:00:03" {print $1}')
+ip link set $dev up; ip addr add 10.77.0.3/24 dev $dev
+# conntrack follows connections from the start, as beside firewalld or Docker
+iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+dpkg -i /tmp/juist-first.deb >/dev/null
+systemctl is-active juistd >/dev/null
+ip netns add tgt; ip link add vt0 type veth peer name vt1 netns tgt
+ip addr add 10.99.2.1/30 dev vt0; ip addr add 192.168.72.1/24 dev vt0; ip link set vt0 up
+ip -n tgt link set lo up; ip -n tgt addr add 9.9.8.9/32 dev lo
+ip -n tgt addr add 10.99.2.2/30 dev vt1; ip -n tgt addr add 192.168.72.2/24 dev vt1; ip -n tgt link set vt1 up
+ip route add 9.9.8.0/24 via 10.99.2.2
+ip netns exec tgt setsid -f /tmp/probe serve lx-target >/dev/null 2>&1 < /dev/null
+setsid -f /tmp/probe serve lx-host >/dev/null 2>&1 < /dev/null`
+		}
+		out, err := v.try(script, 15*time.Minute)
+		if err != nil {
+			return fmt.Errorf("%s: setting up: %v\n%s", v.name, err, out)
+		}
+		return nil
+	})
+	fb.eventually(t, "its target answers", time.Minute, "/tmp/probe get 9.9.9.9:80", has("fb-target from 10.99.1.1"))
+	lx.eventually(t, "its target answers", time.Minute, "/tmp/probe get 9.9.8.9:80", has("lx-target from 10.99.2.1"))
+	t.Logf("lab: set up in %v", time.Since(start).Round(100*time.Millisecond))
+	return fb, lx
+}
+
+// joinPair has fb create a network and lx join it, and returns fb's
+// break-glass line and the overlay addresses.
+func joinPair(t *testing.T, fb, lx *vm) (glass, fb4, fb6, lx4, lx6 string) {
+	t.Helper()
+	t.Log("joining")
+	fb.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
+	lx.eventually(t, "juistd answers", 2*time.Minute, "juist status", func(string) bool { return true })
+	glass = breakGlassLine.FindString(fb.run(t, "juist create interop --device fb --voucher"))
+	if glass == "" {
+		t.Fatal("juist create showed no break-glass line")
+	}
+	invite(t, fb, lx, "juist join '%s'")
+
+	// The overlay addresses arrive with the join, not at once.
+	addr := func(v *vm, what, script string) string {
+		return strings.TrimSpace(v.eventually(t, what, time.Minute, script,
+			func(out string) bool { return strings.TrimSpace(out) != "" }))
+	}
+	fb4 = addr(fb, "its overlay IPv4 address", `ifconfig juist0 inet | awk '/inet / {print $2; exit}'`)
+	fb6 = addr(fb, "its overlay IPv6 address", `ifconfig juist0 inet6 | awk '/inet6 / && !/fe80/ {print $2; exit}'`)
+	lx4 = addr(lx, "its overlay IPv4 address", `ip -4 -br addr show juist0 | awk '{print $3}' | cut -d/ -f1`)
+	lx6 = addr(lx, "its overlay IPv6 address", `ip -6 -br addr show juist0 scope global | awk '{print $3}' | cut -d/ -f1`)
+	t.Logf("fb %s %s, lx %s %s", fb4, fb6, lx4, lx6)
+	return glass, fb4, fb6, lx4, lx6
+}
+
+// tunnel has fb and lx reach each other over both families.
+func tunnel(t *testing.T, fb, lx *vm, fb4, fb6, lx4, lx6 string) {
+	ok := func(string) bool { return true }
+	lx.eventually(t, "reaching fb over IPv4", 3*time.Minute, "ping -c1 -W2 "+fb4, ok)
+	lx.eventually(t, "reaching fb over IPv6", time.Minute, "ping -c1 -W2 "+fb6, ok)
+	fb.eventually(t, "reaching lx over IPv4", time.Minute, "ping -c1 -t2 "+lx4, ok)
+	fb.eventually(t, "reaching lx over IPv6", time.Minute, "timeout 5 ping6 -c1 "+lx6, ok)
+}
+
+// removal removes both packages, which leave no device, rule, forwarding or
+// juistd.
+func removal(t *testing.T, fb, lx *vm) {
+	fb.run(t, "pkg delete -y juist")
+	fb.run(t, `! ifconfig juist0 >/dev/null 2>&1
 pfctl -s info | grep -q 'Status: Disabled'
 [ "$(sysctl -n net.inet.ip.forwarding)" = 0 ]
 ! pgrep -x juistd`)
-		lx.run(t, "dpkg --purge juist")
-		lx.run(t, `! ip link show juist0 >/dev/null 2>&1
+	lx.run(t, "dpkg --purge juist")
+	lx.run(t, `! ip link show juist0 >/dev/null 2>&1
 ! systemctl is-active --quiet juist-ingress
 getent passwd juist-ingress >/dev/null
 [ "$(sysctl -n net.ipv4.ip_forward)" = 0 ]
 ! ip rule | grep -q -E '^5(1[89]|2[0-9])[0-9]:'
 ! pgrep -x juistd`)
-	})
 }
 
 // ingress has lx, granted the role, take connections on 443 for a name fb
@@ -321,9 +427,14 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 	if client.freebsd {
 		detach = "/usr/sbin/daemon -f"
 	}
-	client.run(t, fmt.Sprintf("rm -f /tmp/hold.out; %s %s sh -c '/tmp/probe hold %s:80 %s 40 > /tmp/hold.out 2>&1'",
-		inTarget, detach, back.nat, back.target))
+	client.run(t, fmt.Sprintf("rm -f /tmp/hold.out; %s %s sh -c '/tmp/probe hold %s:80 %s 40 > /tmp/hold.out 2>&1' "+
+		">/dev/null 2>&1 < /dev/null", inTarget, detach, back.nat, back.target))
+	client.eventually(t, "holding a connection from the internet", time.Minute, "cat /tmp/hold.out", has("held"))
 	client.run(t, "juist exit use "+server.name)
+	// Detached, or the command would have waited the connection out.
+	if out := strings.TrimSpace(client.run(t, "cat /tmp/hold.out")); out != "held" {
+		t.Fatalf("the connection older than the choice was done before it: %s", out)
+	}
 
 	name := server.name + "-target from "
 	client.eventually(t, "reaching the internet through it", 2*time.Minute,
@@ -332,12 +443,13 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 		"/tmp/probe get "+s.inner+":80", has(name))
 	client.eventually(t, "its DNS answered on 53", 2*time.Minute, "/tmp/probe dns "+addr4, ok)
 	// resolved asks juistd's own resolver on juist0 for every name, which
-	// asks the exit node; FreeBSD's resolv.conf names the exit node itself.
+	// asks the exit node; so does FreeBSD's resolv.conf, for the names'
+	// sake, and juistd says it does.
 	route, dns := "ip route get "+s.target, "resolvectl domain juist0"
 	through := func(out string) bool { return strings.Contains(out, "~.") }
 	if client.freebsd {
-		route, dns = "route -n get "+s.target, "cat /etc/resolv.conf"
-		through = func(out string) bool { return strings.Contains(out, addr4) || strings.Contains(out, addr6) }
+		route, dns = "route -n get "+s.target, "juist status"
+		through = func(out string) bool { return strings.Contains(out, ", DNS too") }
 	}
 	client.eventually(t, "routing the internet into the tunnel", time.Minute, route, has("juist0"))
 
@@ -371,9 +483,10 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 
 // names has lx, whose resolved routes domains, resolve fb by its name, and a
 // public name the network points at fb to fb, once agreed and while fb is
-// reachable, without asking the public resolver for it; fb's resolvconf
-// routes no domains. The public resolver is lx's target, for lab.example.
-func names(t *testing.T, fb, lx *vm, fb4, fb6 string) {
+// reachable, without asking the public resolver for it; fb, whose resolvconf
+// asks juistd alone, resolves lx by its name. The public resolver is lx's
+// target, for lab.example.
+func names(t *testing.T, fb, lx *vm, fb4, fb6, lx6 string) {
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, v := range []*vm{fb, lx} {
@@ -392,11 +505,16 @@ resolvectl dns vt0 10.99.2.2; resolvectl domain vt0 '~lab.example'`)
 	})
 	lx.eventually(t, "resolving fb by its name alone", time.Minute, "getent hosts fb", has(fb6))
 	mustHave(t, lx.run(t, "juist status"), "Names", "interop.juist")
-	mustHave(t, fb.run(t, "juist status"), "not resolved here: this host's resolver routes no domains")
+	fb.eventually(t, "resolving lx by its name", 2*time.Minute, "getent hosts lx.interop.juist", has(lx6))
+	fb.eventually(t, "resolving lx by its name alone", time.Minute, "getent hosts lx", has(lx6))
+	mustHave(t, fb.run(t, "cat /etc/resolv.conf"), "search interop.juist")
+	if out := fb.run(t, "juist health"); strings.Contains(out, "not resolved") {
+		t.Errorf("fb resolves no names:\n%s", out)
+	}
 
 	public := "203.0.113.7"
 	fb.run(t, "juist names add fb svc.lab.example")
-	lx.eventually(t, "hearing of the public name", 2*time.Minute, "juist status", has("1 public name, off on this device"))
+	lx.eventually(t, "hearing of the public name", 2*time.Minute, "juist health", has("1 public name, off on this device"))
 	lx.eventually(t, "not agreed, resolving it publicly", time.Minute, "getent ahosts svc.lab.example", has(public))
 	if !slices.Contains(strings.Split(lx.run(t, "cat /tmp/dns.log"), "\n"), "A svc.lab.example.") {
 		t.Error("not agreed, the public resolver was not asked for the name")
@@ -424,7 +542,8 @@ resolvectl dns vt0 10.99.2.2; resolvectl domain vt0 '~lab.example'`)
 	fb.run(t, "service juistd stop")
 	lx.eventually(t, "fb gone, resolving it publicly", 4*time.Minute,
 		"resolvectl flush-caches; getent ahosts svc.lab.example", has(public))
-	mustHave(t, lx.run(t, "juist status"), "svc.lab.example at fb (resolved publicly: fb is not reachable)")
+	mustHave(t, lx.run(t, "juist names"), "svc.lab.example", "fb")
+	mustHave(t, lx.run(t, "juist health"), "svc.lab.example resolved publicly: fb is not reachable")
 	fb.run(t, "service juistd start")
 	lx.eventually(t, "fb back, resolving it to fb", 4*time.Minute,
 		"resolvectl flush-caches; getent ahosts svc.lab.example", has(fb4))
@@ -433,6 +552,64 @@ resolvectl dns vt0 10.99.2.2; resolvectl domain vt0 '~lab.example'`)
 	lx.eventually(t, "withdrawn, resolving it publicly", 3*time.Minute,
 		"resolvectl flush-caches; getent ahosts svc.lab.example", has(public))
 	lx.run(t, "juist names off")
+}
+
+// withoutResolved has lx, its resolved stopped and resolv.conf a file of its
+// own, resolve the device fb is by its name through juistd, which resolv.sh
+// hands resolv.conf for as long as it runs, and every other name from lx's
+// own resolver, the lab's target; stopped, resolv.conf is lx's own again.
+func withoutResolved(t *testing.T, lx *vm, device, fb4, fb6 string) {
+	const own = "nameserver 10.99.2.2\nsearch lab.example\n"
+	t.Cleanup(func() {
+		if t.Failed() {
+			out, _ := lx.try(diagnose(lx)+"; ls -l /etc/resolv.conf /run/juist; cat /run/juist/resolv.conf; nft list table ip6 juist0dns",
+				2*time.Minute)
+			t.Logf("lx:\n%s", out)
+			hold(t, lx)
+		}
+		lx.try(`systemctl stop juistd; systemctl unmask --runtime systemd-resolved
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf; systemctl start systemd-resolved
+resolvectl dns vt0 10.99.2.2; resolvectl domain vt0 '~lab.example'; systemctl start juistd`, 2*time.Minute)
+	})
+	// One after the other, and masked: juistd stopping gives resolved its
+	// DNS back over D-Bus, which would start resolved again.
+	lx.run(t, `systemctl stop juistd; systemctl mask --runtime --now systemd-resolved
+rm -f /etc/resolv.conf; printf '`+own+`' > /etc/resolv.conf; systemctl start juistd`)
+	mustHave(t, lx.run(t, "systemctl is-active systemd-resolved || true; readlink /etc/resolv.conf || true; cat /etc/resolv.pre-juist.conf || true"),
+		"/run/juist/resolv.conf", "10.99.2.2")
+	name := device + ".interop.juist"
+	lx.eventually(t, "resolving fb by its name without resolved", 2*time.Minute, "getent ahosts "+name,
+		func(out string) bool { return strings.Contains(out, fb4) && strings.Contains(out, fb6) })
+	lx.eventually(t, "resolving fb by its name alone without resolved", time.Minute, "getent hosts "+device, has(fb6))
+	mustHave(t, lx.run(t, "cat /etc/resolv.conf"), "search interop.juist lab.example")
+	lx.eventually(t, "resolving other names from its own resolver", time.Minute, "getent ahosts other.lab.example",
+		has("203.0.113.7"))
+	if out := lx.run(t, "juist health"); strings.Contains(out, "not resolved") {
+		t.Errorf("lx resolves no names:\n%s", out)
+	}
+
+	// Turned off, juistd gives the host's DNS back at once, and resolv.sh
+	// resolv.conf at the next start; on again, both take it again.
+	mustHave(t, lx.run(t, "juist set --dns=false"), "dns off")
+	lx.eventually(t, "not resolving fb by its name with DNS off", time.Minute, "getent ahosts "+name+" || true",
+		func(out string) bool { return !strings.Contains(out, fb4) })
+	lx.eventually(t, "resolving other names with DNS off", time.Minute, "getent ahosts other.lab.example", has("203.0.113.7"))
+	mustHave(t, lx.run(t, "juist status"), "(DNS off)")
+	mustHave(t, lx.run(t, "juist health"), "DNS is off on this device")
+	lx.run(t, "systemctl restart juistd")
+	if out := lx.run(t, "test -f /etc/resolv.conf && ! test -L /etc/resolv.conf && cat /etc/resolv.conf"); strings.TrimSpace(out) != strings.TrimSpace(own) {
+		t.Errorf("restarted with DNS off, resolv.conf reads %q", out)
+	}
+	lx.eventually(t, "juistd answering after the restart", time.Minute, "juist status", has("Names"))
+	mustHave(t, lx.run(t, "juist set --dns"), "dns on")
+	lx.run(t, "systemctl restart juistd")
+	mustHave(t, lx.run(t, "readlink /etc/resolv.conf || true"), "/run/juist/resolv.conf")
+	lx.eventually(t, "resolving fb by its name with DNS on again", 2*time.Minute, "getent ahosts "+name, has(fb4))
+
+	lx.run(t, "systemctl stop juistd")
+	if out := lx.run(t, "test -f /etc/resolv.conf && ! test -L /etc/resolv.conf && cat /etc/resolv.conf"); strings.TrimSpace(out) != strings.TrimSpace(own) {
+		t.Errorf("stopped, resolv.conf reads %q", out)
+	}
 }
 
 func mustHave(t *testing.T, out string, want ...string) {

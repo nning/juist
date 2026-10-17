@@ -1,6 +1,6 @@
 module juist/website/browsertest
 
-go 1.26.0
+go 1.27.2
 
 require github.com/chromedp/chromedp v0.16.0
 

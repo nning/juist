@@ -41,11 +41,24 @@ func loadSettings(home string, logf func(string, ...any)) (httpsOnly bool, proxy
 	return httpsOnly, proxy, relayName
 }
 
-// setSettings records what req sets of the device's settings of 443 and
-// restarts the mesh on them where they changed.
+// setSettings records what req sets of the device's settings, and restarts
+// the mesh on those of 443 where they changed; DNS it hands the running mesh.
 func (s *Service) setSettings(req *ipc.Request) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if req.DNS != nil {
+		if err := setFlagFile(s.opts.Home, statedir.DNSOffFile, !*req.DNS); err != nil {
+			return err
+		}
+		s.dnsOff = !*req.DNS
+		if s.mesh != nil {
+			s.mesh.SetDNSOff(s.dnsOff)
+			_ = s.mesh.Reconcile() // so that the status answered says what came of it
+		}
+	}
+	if req.HTTPSOnly == nil && req.Proxy == nil && req.RelayName == nil {
+		return nil
+	}
 	httpsOnly, proxy, relayName := s.httpsOnly, s.proxy, s.relayName
 	if req.HTTPSOnly != nil {
 		httpsOnly = *req.HTTPSOnly

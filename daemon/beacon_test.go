@@ -46,6 +46,7 @@ func (c *sendCounter) count() int {
 // discovery back to its first interval, which it has slowed down from while
 // nothing changed.
 func TestAChangeWakesTheBeacon(t *testing.T) {
+	// Not parallel: it counts datagrams in a window, which contention stretches.
 	const interval = 20 * time.Millisecond
 	sock := &sendCounter{closed: make(chan struct{})}
 	f := newReconcileFixtureWith(t, 2, func(o *Options) {

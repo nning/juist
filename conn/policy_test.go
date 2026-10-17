@@ -84,6 +84,7 @@ func TestAPeerIsKeptToItsAccess(t *testing.T) {
 // side restricts nothing. As an exit node, it forwards that peer nothing
 // until its access passes the internet.
 func TestTheReceiverEnforcesWhateverTheSenderSends(t *testing.T) {
+	t.Parallel()
 	bTUN, aTUN := newPipeTUN(), newPipeTUN()
 	b := startNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128", func(o *Options) {
 		o.Tun, o.RespondToPing = bTUN, false

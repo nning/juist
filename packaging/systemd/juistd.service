@@ -1,7 +1,7 @@
 # juistd, running as a dedicated unprivileged user with exactly the one host
 # privilege M3a requires: CAP_NET_ADMIN, to create a TUN device and program the
-# overlay's addresses and routes (docs/05-roadmap.md, M3a exit criterion). No
-# part of this runs as root. A compromised juistd can reconfigure host
+# overlay's addresses and routes (docs/05-roadmap.md, M3a exit criterion). Of juistd
+# nothing runs as root; resolv.sh alone does, before and after it. A compromised juistd can reconfigure host
 # networking; it still holds no admin keys and cannot change who is a member
 # (docs/02-threat-model.md, docs/04-architecture.md key custody).
 #
@@ -27,6 +27,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Where systemd-resolved does not run, resolv.sh points /etc/resolv.conf at
+# what juistd writes, as root, and back; an instance's leaves it be.
+ExecStartPre=-+/usr/lib/juist/resolv.sh start %i
+ExecStopPost=-+/usr/lib/juist/resolv.sh stop %i
 ExecStart=/usr/local/bin/juistd --home /var/lib/juist --socket /run/juist/juistd.sock --tun juist0
 Restart=on-failure
 RestartSec=2

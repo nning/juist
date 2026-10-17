@@ -147,7 +147,8 @@ const (
 	CmdPing Command = 24
 
 	// CmdSettings changes this device's settings: [Request.HTTPSOnly],
-	// [Request.Proxy] and [Request.RelayName], whichever it carries.
+	// [Request.Proxy], [Request.RelayName] and [Request.DNS], whichever it
+	// carries.
 	CmdSettings Command = 25
 )
 
@@ -302,6 +303,9 @@ type Request struct {
 	HTTPSOnly *bool   `cbor:"32,keyasint,omitempty"`
 	Proxy     *string `cbor:"33,keyasint,omitempty"`
 	RelayName *string `cbor:"34,keyasint,omitempty"`
+	// DNS, which a [CmdSettings] sets too, is whether juistd takes the
+	// host's DNS: for the network's names, and through an exit node.
+	DNS *bool `cbor:"35,keyasint,omitempty"`
 }
 
 // maxTerminatorAddrs caps the addresses a terminator reports, each way.
@@ -690,7 +694,7 @@ const (
 	fShare
 	fPing
 	fListening // Listening and Unbound
-	fSettings  // HTTPSOnly, Proxy and RelayName
+	fSettings  // HTTPSOnly, Proxy, RelayName and DNS
 )
 
 // present lists the optional fields r sets.
@@ -711,7 +715,7 @@ func (r *Request) present() reqField {
 		{r.Account != nil || len(r.NoCert) > 0 || r.Stopping, fAccount},
 		{len(r.Listening) > 0 || len(r.Unbound) > 0, fListening},
 		{r.Share != nil, fShare}, {!r.Ping.IsZero(), fPing},
-		{r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil, fSettings},
+		{r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil || r.DNS != nil, fSettings},
 	} {
 		if p.set {
 			f |= p.f
@@ -788,9 +792,9 @@ var requestShapes = map[Command]requestShape{
 	CmdStatusPage: {},
 	CmdPing: {takes: fPing, shape: "a ping request names a member and nothing else",
 		check: func(r *Request) bool { return !r.Ping.IsZero() }},
-	CmdSettings: {takes: fSettings, shape: "a settings request sets HTTPS alone, a proxy or a relay's name, and nothing else",
+	CmdSettings: {takes: fSettings, shape: "a settings request sets HTTPS alone, a proxy, a relay's name or DNS, and nothing else",
 		check: func(r *Request) bool {
-			return (r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil) &&
+			return (r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil || r.DNS != nil) &&
 				(r.Proxy == nil || ValidProxy(*r.Proxy) == nil) &&
 				(r.RelayName == nil || *r.RelayName == "" || types.ValidateHostName(*r.RelayName) == nil)
 		}},

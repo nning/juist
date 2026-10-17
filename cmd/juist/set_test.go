@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nning/juist/internal/statedir"
 )
 
 // juist set says what it set of 443, and what keeps it from working: HTTPS
@@ -74,4 +76,35 @@ func TestAGrantOf443WithoutANameIsTakenBack(t *testing.T) {
 	if b, _ := os.ReadFile(calls); string(b) != "off\n" {
 		t.Errorf("relay.sh ran %q, want off", b)
 	}
+}
+
+// juist set --dns=false has juistd leave the host's DNS alone, kept in its
+// state; the status says so in two words, health what it means without a
+// warning, and --dns takes it again.
+func TestSetTurnsDNSOffAndOn(t *testing.T) {
+	t.Parallel()
+	laptop, _ := homeAndVPS(t)
+	mustContain(t, laptop.mustRun("set", "--dns=false"), "dns off")
+	if _, err := os.Stat(filepath.Join(laptop.state, statedir.DNSOffFile)); err != nil {
+		t.Errorf("DNS off was not kept: %v", err)
+	}
+	eventually(t, "the status says DNS is off", func() bool {
+		n := statusOfDaemon(t, laptop).Names
+		return n != nil && n.Not == "DNS is off on this device"
+	})
+	if out := laptop.mustRun("status"); !strings.Contains(out, "home.juist (DNS off)") || strings.Contains(out, "not resolved") {
+		t.Errorf("the status says more than that DNS is off:\n%s", out)
+	}
+	if out := laptop.mustRun("health"); !strings.Contains(out, "DNS is off on this device: the network's names are not resolved here") ||
+		strings.Contains(out, "warning: home.juist") {
+		t.Errorf("health does not say what DNS off means, or warns of it:\n%s", out)
+	}
+	mustContain(t, laptop.mustRun("set", "--dns"), "dns on")
+	if _, err := os.Stat(filepath.Join(laptop.state, statedir.DNSOffFile)); !os.IsNotExist(err) {
+		t.Errorf("DNS on, the word stays: %v", err)
+	}
+	eventually(t, "the status no longer says DNS is off", func() bool {
+		n := statusOfDaemon(t, laptop).Names
+		return n == nil || n.Not != "DNS is off on this device"
+	})
 }

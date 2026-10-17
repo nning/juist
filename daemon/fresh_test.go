@@ -375,6 +375,7 @@ func TestAnAdminDeviceStoppedAtASchemaUpgradeStopsVouching(t *testing.T) {
 
 // Two sessions delivering one signer's leases at once must leave the newer.
 func TestConcurrentOffersKeepTheNewerLease(t *testing.T) {
+	t.Parallel()
 	f := newFreshFixture(t, "")
 	older := f.leaseFrom(t, 1, f.auth.Head(), f.start)
 	newer := f.leaseFrom(t, 1, f.auth.Head(), f.start.Add(10*time.Second))

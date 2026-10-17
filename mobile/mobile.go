@@ -59,6 +59,7 @@ const tunName = "juist0"
 type Core struct {
 	s      *daemon.Service
 	cancel context.CancelFunc
+	pace   *daemon.Pace
 	// cover is the network's prefixes, as the status last named them, which
 	// the VPN routes whole.
 	cover atomic.Pointer[[]netip.Prefix]
@@ -89,7 +90,7 @@ func Start(home string, p Platform) (*Core, error) {
 	protectBy(p)
 	netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) { return interfaces(p) })
 	logf := func(format string, args ...any) { p.Log(fmt.Sprintf(format, args...)) }
-	c := &Core{}
+	c := &Core{pace: daemon.NewPace()}
 	plumber := conn.NewVPNPlumber(vpn{p}, c.networkPrefixes)
 	s, err := daemon.NewService(daemon.ServiceOptions{
 		Home:      home,
@@ -113,6 +114,7 @@ func Start(home string, p Platform) (*Core, error) {
 			EgressUser: func() string { return "" },
 			// Before the VPN routes the overlay, a dial would leave by the LAN.
 			GossipDial: conn.VPNDial(plumber),
+			Pace:       c.pace,
 			Logf:       logf,
 		},
 	})
@@ -274,6 +276,10 @@ func (c *Core) NetworkChanged(iface string) {
 		m.NetworkChanged()
 	}
 }
+
+// SetSaving slows the mesh down to save battery, as while the screen is off,
+// or brings it back to its pace.
+func (c *Core) SetSaving(saving bool) { c.pace.SetSaving(saving) }
 
 // CheckInvite says what is wrong with s as an invite, "" where nothing is.
 func CheckInvite(s string) string {

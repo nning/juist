@@ -2,6 +2,10 @@
 
 *Compiled Aug 2026, extended Oct 2026; project status claims verified against live sources at those times.*
 
+Where this names `tailscale.com/tka` as reusable, juist took its design and none of
+its code ([08-trust-layer-notes.md](../08-trust-layer-notes.md)); its v1 runs
+wireguard-go, not kernel WireGuard ([04-architecture.md](../04-architecture.md)).
+
 ## Tailscale
 
 1. **Control plane:** Central proprietary SaaS coordination server holds membership

@@ -22,6 +22,7 @@ import (
 // TestNetnsInstancesLeaveEachOtherAlone's, which looks at once rather than
 // after a ping that the restore would have outwaited.
 func TestNetnsAHostInTwoNetworks(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	home := lab.addNode("h", 1) // instance 0, in network "home" with x
 	work := lab.addInstance(home, "w", 21, 3)
@@ -108,6 +109,7 @@ func TestNetnsAHostInTwoNetworks(t *testing.T) {
 // remain. Then c alone moves once more, and is reached at both of its
 // addresses until that deadline, and at the new one only after it.
 func TestNetnsRenumberingKeepsEveryPairReachable(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	a, b, c := lab.addNode("a", 1), lab.addNode("b", 2), lab.addNode("c", 3)
 	oldV4 := func(n *netnsNode) netip.Prefix { return netip.MustParsePrefix(fmt.Sprintf("100.64.0.%d/32", n.id)) }

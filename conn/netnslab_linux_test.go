@@ -197,11 +197,7 @@ func newNetnsLab(t *testing.T) *netnsLab {
 		skipUnlessRequired(t, "the kernel has no IPv6; the overlay's primary family cannot be asserted")
 	}
 
-	var seed [2]byte
-	if _, err := rand.Read(seed[:]); err != nil {
-		t.Fatalf("drawing a lab tag: %v", err)
-	}
-	l := &netnsLab{t: t, ip: ipCmd, tag: hex.EncodeToString(seed[:])}
+	l := &netnsLab{t: t, ip: ipCmd, tag: labTag(t)}
 	l.bridge = "jbr" + l.tag
 	// Root is not enough: a container can hold CAP_NET_ADMIN and still refuse
 	// to create a namespace or a bridge. Probe both, so an incapable host
@@ -219,6 +215,29 @@ func newNetnsLab(t *testing.T) *netnsLab {
 	t.Cleanup(l.cleanup)
 	l.run("link", "set", l.bridge, "up")
 	return l
+}
+
+// labTags are the tags this process drew, so that labs running at once
+// never share one.
+var (
+	labTagsMu sync.Mutex
+	labTags   = map[string]bool{}
+)
+
+// labTag draws a tag no other lab of this process holds.
+func labTag(t *testing.T) string {
+	labTagsMu.Lock()
+	defer labTagsMu.Unlock()
+	for {
+		var seed [2]byte
+		if _, err := rand.Read(seed[:]); err != nil {
+			t.Fatalf("drawing a lab tag: %v", err)
+		}
+		if tag := hex.EncodeToString(seed[:]); !labTags[tag] {
+			labTags[tag] = true
+			return tag
+		}
+	}
 }
 
 // gateway is the LAN address every node routes through. Nothing holds it: each

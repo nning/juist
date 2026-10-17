@@ -173,7 +173,7 @@ func sampleStatus() *ipc.Status {
 			}},
 		Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 2, TunnelsDown: []string{"cleo"}, ReachChecked: 150,
 			Seeking: []string{"cleo"},
-			Reach: []ipc.PeerReach{{Identity: a, Live: true, Direct: true}, {Identity: b, Live: true},
+			Reach: []ipc.PeerReach{{Identity: a, Live: true, Direct: true}, {Identity: b, Live: true, Relay: "anna"},
 				{Identity: c, Seeking: true, Since: 140}}},
 	}
 }

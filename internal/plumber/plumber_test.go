@@ -113,9 +113,31 @@ func (h *fakeHost) ListenHTTPS(a netip.Addr) (*os.File, error) {
 func (h *fakeHost) Free(string) bool { return true }
 func (h *fakeHost) Answers() string  { return "the host's rules" }
 
-func (h *fakeHost) SetDNS(dev string, servers []netip.Addr) error {
+func (h *fakeHost) SetDNS(dev string, servers []netip.Addr, search []string) error {
+	if len(search) > 0 {
+		h.record("dns %s %v search %v", dev, servers, search)
+		return nil
+	}
 	h.record("dns %s %v", dev, servers)
 	return nil
+}
+
+func (h *fakeHost) ListenDNS(a netip.Addr, proto string) (*os.File, error) {
+	h.record("listen dns %v %s", a, proto)
+	if proto == "udp" {
+		c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		return c.File()
+	}
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return nil, err
+	}
+	defer ln.Close()
+	return ln.File()
 }
 
 func (h *fakeHost) took() []string {
@@ -423,10 +445,10 @@ func TestTheHelperSaysWhereAnswersGo(t *testing.T) {
 func TestTheHelperKeepsToTheNetworksSpace(t *testing.T) {
 	h := &fakeHost{}
 	c, _ := pair(t, h)
-	if err := c.SetDNS("juist1", []netip.Addr{netip.MustParseAddr("198.19.44.1")}); err == nil {
+	if err := c.SetDNS("juist1", []netip.Addr{netip.MustParseAddr("198.19.44.1")}, nil); err == nil {
 		t.Error("DNS set for a device not opened")
 	}
-	if err := c.SetDNS("juist1", nil); err != nil {
+	if err := c.SetDNS("juist1", nil, nil); err != nil {
 		t.Errorf("DNS given back without a device: %v", err)
 	}
 	e := EgressSpec{Mode: EgressRefused, Capture: prefixes("8.0.0.0/7")}
@@ -470,11 +492,11 @@ func TestTheHelperKeepsToTheNetworksSpace(t *testing.T) {
 		t.Errorf("a member's routes refused: %v", err)
 	}
 	for _, a := range []string{"8.8.8.8", "127.0.0.1", "192.0.2.53", "fe80::1", "2001:4860:4860::8888"} {
-		if err := c.SetDNS("juist0", []netip.Addr{netip.MustParseAddr(a)}); err == nil {
+		if err := c.SetDNS("juist0", []netip.Addr{netip.MustParseAddr(a)}, nil); err == nil {
 			t.Errorf("took the resolver %s", a)
 		}
 	}
-	if err := c.SetDNS("juist0", []netip.Addr{netip.MustParseAddr("198.19.44.2")}); err != nil {
+	if err := c.SetDNS("juist0", []netip.Addr{netip.MustParseAddr("198.19.44.2")}, nil); err != nil {
 		t.Errorf("the exit node's resolver refused: %v", err)
 	}
 	for _, call := range h.took() {
@@ -521,5 +543,71 @@ func TestTheHelperBindsTheRelaysPortAtAHostsAddress(t *testing.T) {
 	}
 	if got := h.took(); len(got) != 0 {
 		t.Errorf("the host did %q", got)
+	}
+}
+
+// The daemon's own resolver is handed 53 at an address of its device's
+// alone; resolv.conf takes its search domains only where they are domains;
+// and once the daemon is gone, the host's resolvers are given back where they
+// were the daemon's own, and an exit node's are kept.
+func TestTheHelperServesTheDaemonsOwnResolver(t *testing.T) {
+	h := &fakeHost{}
+	c, done := pair(t, h)
+	f, err := c.OpenTUN("juist0", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := c.SetAddrs("juist0", prefixes("198.18.0.1/32")); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"192.0.2.7", "127.0.0.1", "198.18.0.2"} {
+		if _, _, err := c.ListenDNS("juist0", netip.MustParseAddr(a)); err == nil {
+			t.Errorf("53 was bound at %s", a)
+		}
+	}
+	h.took()
+	pc, ln, err := c.ListenDNS("juist0", netip.MustParseAddr("198.18.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc.Close()
+	ln.Close()
+	if got := h.took(); !slices.Equal(got, []string{"listen dns 198.18.0.1 tcp", "listen dns 198.18.0.1 udp"}) {
+		t.Errorf("the host did %q", got)
+	}
+	own := []netip.Addr{netip.MustParseAddr("198.18.0.1")}
+	for _, s := range []string{"a b", "lan\nnameserver 8.8.8.8", "-lan", "lan.", "LAN", ""} {
+		if err := c.SetDNS("juist0", own, []string{s}); err == nil {
+			t.Errorf("searched %q", s)
+		}
+	}
+	if err := c.SetDNS("juist0", own, []string{"home.juist", "lan"}); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := h.took(); !slices.Equal(got, []string{"dns juist0 [198.18.0.1] search [home.juist lan]", "dns juist0 []"}) {
+		t.Errorf("the host did %q", got)
+	}
+
+	h = &fakeHost{}
+	c, done = pair(t, h)
+	if f, err = c.OpenTUN("juist0", 1280); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := c.SetAddrs("juist0", prefixes("198.18.0.1/32")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetDNS("juist0", []netip.Addr{netip.MustParseAddr("198.18.0.2")}, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	<-done
+	if got := h.took(); slices.Contains(got, "dns juist0 []") {
+		t.Errorf("the exit node's resolvers were given back: %q", got)
 	}
 }

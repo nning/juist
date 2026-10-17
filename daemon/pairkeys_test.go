@@ -21,6 +21,8 @@ import (
 
 // inTunnel runs a member on a network stack of its own, so its log sync runs
 // through the tunnels alone, as on a device.
+// Tests on it stay serial: under CPU contention a pair's exchange can stall
+// past their deadlines.
 func inTunnel(o *Options) { o.Netstack = true }
 
 // pskOf is what n gave its peer id last, and what it is.

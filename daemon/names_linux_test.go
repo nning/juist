@@ -25,12 +25,12 @@ func TestTheNamesServerIsBoundToTheDevice(t *testing.T) {
 		m, _ := b.Finish()
 		return m
 	}
-	if s, err := defaultNamesServer("juist-none")(netip.MustParseAddrPort("127.0.0.1:0"), answer, nil); err == nil {
+	if s, err := defaultNamesServer("juist-none", nil)(netip.MustParseAddrPort("127.0.0.1:0"), answer, nil); err == nil {
 		s.Close()
 		t.Fatal("started on a device there is none of")
 	}
 	dev, addr := deviceWithAddress(t)
-	s, err := defaultNamesServer(dev)(netip.AddrPortFrom(addr, 0), answer, nil)
+	s, err := defaultNamesServer(dev, nil)(netip.AddrPortFrom(addr, 0), answer, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -188,9 +188,10 @@ hat das Netz gewechselt), **Offline**, **Noch nicht gemeldet**,
 es aktualisiert ist, kommt ein Ping durch, andere Apps nicht).
 
 Tippe auf ein Gerät, um seine Adressen, seine Rollen und seine letzte Meldung
-zu sehen. **Ping** schickt ein Echo durch den Tunnel. juist auf dem Gerät
-beantwortet es selbst, also kommt die Antwort auch dann, wenn die Firewall des
-Geräts Pings verwirft.
+zu sehen. Bei einem Gerät, das über ein Relay erreicht wird, steht dort auch,
+auf welchem Gerät dieses Relay läuft. **Ping** schickt ein Echo durch den
+Tunnel. juist auf dem Gerät beantwortet es selbst, also kommt die Antwort auch
+dann, wenn die Firewall des Geräts Pings verwirft.
 **Im Browser öffnen** öffnet `http://` an seiner Adresse. Jede andere App
 erreicht das Gerät unter denselben Adressen, etwa ein SSH-Client unter
 `198.18.36.2`.
@@ -219,6 +220,21 @@ Update der App wieder ein. Auch die Android-Einstellung **Durchgehend aktives
 VPN** in den VPN-Einstellungen funktioniert mit juist. Android betreibt immer
 nur ein VPN: Eine andere VPN-App schaltet juist aus, und die App weist darauf
 hin.
+
+## Akku
+
+Solange der Bildschirm aus ist, das Telefon ruht oder der Energiesparmodus
+an ist, schont juist den Akku. Es prüft Mitglieder alle 5 Minuten statt alle
+30 Sekunden, gleicht das Netz alle 30 Minuten statt alle 2 ab und pingt
+ruhende Mitglieder nicht mehr, um ihre Wege warm zu halten. Es hört dann
+auch nicht mehr auf das Multicast-DNS des WLANs, das das Telefon für jedes
+solche Paket im Netz wecken würde. Änderungen kommen weiter sofort an, und
+Verkehr durch den Tunnel läuft im gewohnten Takt. Ist der Bildschirm an und
+der Energiesparmodus ebenfalls, sagt der Statusbildschirm es.
+
+Ohne Relay kann es bis zu diesen 5 Minuten dauern, bis ein Mitglied ein
+Telefon hinter NAT mit ausgeschaltetem Bildschirm erreicht. Mit einem Relay
+erreicht es das Telefon sofort über das Relay.
 
 ## Wenn das Telefon entfernt wird
 

@@ -33,8 +33,8 @@
 
 ## Residual weaknesses — fundamental, tunable, not removable
 
-These were identified in research and confirmed against deployed prior art. Anyone
-adopting this system must accept them explicitly.
+Bounded, not removable: anyone adopting juist accepts them. Other documents cite
+them by number.
 
 1. **Revocation is eventually-consistent.** A revoked device keeps access to any peer
    it can still reach until that peer learns of the revocation. Mitigation stack:
@@ -62,15 +62,15 @@ adopting this system must accept them explicitly.
 3. **Split-view window under a malicious quorum.** A colluding quorum can briefly show
    divergent logs to disjoint node sets. Cross-gossiped log heads (fork detection)
    expose this after the fact; nothing prevents it in real time short of global
-   consensus. Against sub-quorum attackers the hash chain prevents split views
-   entirely.
+   consensus. Against sub-quorum attackers the hash chain prevents split views,
+   except the one compaction leaves (weakness 14).
 4. **Cold-start availability.** First contact requires the public DHT or one reachable
    member. A network that is 100 % hard-NAT with zero relay-capable members cannot
    form, unless it chooses a public DERP server (planned, see
    [05-roadmap.md](05-roadmap.md), "Networks of phones alone"). DHT eclipse/Sybil
    attacks can *delay* cold start; they can never corrupt membership. Mitigation:
    cache last-known endpoints, advertise "relay-capable" as a first-class role, warn
-   when fewer than two exist.
+   when none exists.
 5. **Metadata leakage.** Public DHT storage nodes observe that some IP stored an opaque
    record; member relays observe timing/volume between member IPs; LAN observers see
    blinded-but-present mDNS announcements. Full unobservability requires Tor-class
@@ -135,9 +135,9 @@ adopting this system must accept them explicitly.
    network-wide: every member may use every exit node, so the quorum that grants
    the role decides for all members at once; a policy scopes it, enforced by the
    exit node itself. The exit node answers its clients' DNS
-   too, where systemd-resolved runs on them, and so sees their lookups as it sees
-   their traffic; names in the LAN's own domain are still asked of the LAN, and a
-   hostile DHCP server can claim a wide one, `com` say, as its own domain. While no
+   too, and so sees their lookups as it sees their traffic; where
+   systemd-resolved runs, names in the LAN's own domain are still asked of the
+   LAN, and a hostile DHCP server can claim a wide one, `com` say, as its own domain. While no
    mesh runs, as on a device the network removed, the host's own resolvers answer,
    though its traffic stays refused. A clean restart of the client's juistd lets
    its traffic out directly for the moment in between. Answers to connections
@@ -158,7 +158,7 @@ adopting this system must accept them explicitly.
    member's overlay address by a device that is no juist device. Tailscale drops
    only the second. What this costs: a container or VM on a bridge of the host no
    longer reaches the host's own overlay address, and a LAN host no longer reaches
-   a subnet router's. **FreeBSD is still open**: it takes an address by any
+   a subnet router's. **FreeBSD is still open** (M23): it takes an address by any
    interface too, and pf, which juist runs only to serve or use an exit node, is
    where the same two rules belong. There a service bound only to an overlay
    address stays LAN-reachable, and an overlay source is no evidence that a packet
@@ -214,7 +214,6 @@ adopting this system must accept them explicitly.
    receiving side lets in what it chooses, its own risk. Past the target
    scale, address keys beyond a hello's 2 MiB travel in their owners' own
    hellos alone.
-
 12. **A tunnel is post-quantum against outsiders at once, against members
    once its pair has a key (M15).** A pair's first preshared key comes from
    the group secret, so a member holding that epoch's secret, one removed
@@ -312,7 +311,7 @@ adopting this system must accept them explicitly.
   host's nftables rules, and mirror traffic from other interfaces with `tc`.
   Treat a compromised `juistd` as one that controls the host's network
   configuration. Attacker-facing parsers (gossip, IPC,
-  later the DHT) get no privilege from this. FreeBSD has no such capability, so
+  the DHT) get no privilege from this. FreeBSD has no such capability, so
   there juistd splits (M7a): a helper stays root and does four things, for
   devices named `juist0`–`juist9` it made itself and holds a lock on —
   create, address with single hosts, route, destroy — and the daemon runs as

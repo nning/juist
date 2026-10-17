@@ -1,9 +1,9 @@
 # 08 — Trust layer notes
 
-What M1 actually built, where it diverges from the plan in
-[04-architecture.md](04-architecture.md), and what it deliberately left open.
-Companion to [07-embedding-notes.md](07-embedding-notes.md), which does the same
-for the connectivity layer.
+The rules the membership log enforces, why, and what a later change has to
+keep. Companion to [07-embedding-notes.md](07-embedding-notes.md), which does
+the same for the connectivity layer; freshness leases are in
+[11-enrollment-and-freshness-notes.md](11-enrollment-and-freshness-notes.md).
 
 Packages: `types` (record schema, canonical encoding, addressing), `trust/log`
 (chain, quorum, fork choice, alarms), `trust/secrets` (epoch group secret),
@@ -11,769 +11,522 @@ Packages: `types` (record schema, canonical encoding, addressing), `trust/log`
 
 ## Decision: the log is ours; `tka` is the design, not the dependency
 
-[03-control-plane-options.md](03-control-plane-options.md) and the module map in
-[04-architecture.md](04-architecture.md) both say `tailscale.com/tka`,
-"adapted/vendored". Reading it against what this milestone needs, importing or
-forking it turned out to buy little:
+[03-control-plane-options.md](03-control-plane-options.md) chose `tailscale.com/tka`
+as the model; importing or forking it buys little:
 
-- **Its records are about the wrong thing.** tka is a *key* authority: its AUM
-  set is `AddKey`/`RemoveKey`/`UpdateKey`/`Checkpoint`/`NoOp`, and nodes are
-  authorized out-of-band by node-key signatures its `sig.go` verifies. Our log
-  holds the members themselves. Of tka's five record types, the two that
-  correspond to anything here are the admin-key ones.
-- **Its authorization rule is weaker than ours.** `aumVerify` requires that
-  every signature come from a trusted key; it does *not* require a quorum.
-  Vote weight is used only to resolve forks, and its retroactive-revocation
-  path leans on out-weighing a compromised key. We need k-of-n on every change,
-  which is a different check in a different place.
-- **The parts we would keep are small.** Chain walking, checkpoint semantics and
-  fork resolution are a few hundred lines each, and they are exactly the lines
-  that must change: tka gets ordering and distribution from the coordination
-  server it was built to distrust for everything else, and supplying those is
-  the new security-critical code
-  [03-control-plane-options.md](03-control-plane-options.md) predicted.
-- **The coupling is real.** `tka` sits behind a `ts_omit_tailnetlock` build tag
-  and threads `tailscale.com/types/{key,tkatype}` through its API. Vendoring it
-  would put the connectivity stack's types in the trust layer's audit scope —
-  the opposite of the layering rule.
+- **Its records are about the wrong thing.** tka is a *key* authority
+  (`AddKey`/`RemoveKey`/`UpdateKey`/`Checkpoint`/`NoOp`) and authorizes nodes
+  out of band; our log holds the members themselves.
+- **Its authorization rule is weaker.** `aumVerify` requires trusted signers,
+  not a quorum; weight only resolves forks. We need k-of-n on every change.
+- **The parts worth keeping are the parts that must change.** tka gets
+  ordering and distribution from the coordination server; supplying those is
+  the new security-critical code.
+- **The coupling is real.** It threads `tailscale.com/types/{key,tkatype}`
+  through its API, which would put the connectivity stack in the trust layer's
+  audit scope.
 
-**Adopted from tka, deliberately and by name:** the hash-chained record with a
-canonical CBOR encoding in CTAP2 mode (their reasoning about signed formats is
-quoted in `types/cbor.go`); the discipline for evolving the schema (CBOR key
-numbers never reused, new fields optional and absent-by-default, no floats);
-keys carrying vote weights with policy checked at verification time rather than
-in threshold crypto; checkpoints as quorum-signed compactions; pre-committed
-break-glass preimages; and the convention of putting signatures at CBOR key 23.
+**Adopted from tka by name:** the hash-chained record in canonical CBOR (CTAP2
+mode, reasoning quoted in `types/cbor.go`); schema evolution by never reusing
+CBOR key numbers, optional absent-by-default fields and no floats; vote weights
+checked at verification rather than threshold crypto; checkpoints as
+quorum-signed compactions; pre-committed break-glass preimages; signatures at
+CBOR key 23.
 
 `TestTCBHasNoTailscaleDependency` enforces the layering: nothing in `types` or
-`trust/*` may reach `tailscale.com`, so a vendored-engine upgrade can never
-change who is a member.
+`trust/*` may reach `tailscale.com`, so an engine upgrade can never change who
+is a member.
+
+## Signatures
+
+Every signature that changes or carries state is ML-DSA-44, so a quantum
+computer forges no change to the network; what it still forges is weakness 13
+in [02-threat-model.md](02-threat-model.md).
+
+- **ML-DSA-44 from `crypto/mldsa`,** pure, never HashML-DSA, signing
+  deterministically what Ed25519 signs; keys kept as 32-byte seeds, derived
+  by HKDF from the Ed25519 seed, so `node.keys`, admin key files and M12's
+  backups cover them. No composite with Ed25519.
+- **One key, one identity.** No ML-DSA key is named by two identities, so a
+  signature by one key never counts as another's. `types.Identity`, the
+  Ed25519 public key, still names a member, derives its IPv6 address and keys
+  every map; no record is verified against it.
+- **Where a key enters.** An admin key enters as `juist admins new` prints
+  it, identity, signing key and endorsement in one token; a member brings its
+  key in its join request, which proves it holds it; an identity rotation
+  names the new identity's key in what the quorum, the old key and the new
+  one sign.
+- **Messages carry both.** Announcements, address keys, leases, waiting
+  changes, pair-key and catch-up messages and admissions carry an Ed25519 and
+  an ML-DSA signature, and the ML-DSA one is required. Discovery (the DHT, a
+  relay's rendezvous, mDNS) carries announcements without it, sealed under
+  the epoch's key, as hints that say where to dial and nothing else.
+- **Enrollment** adds an ML-KEM-768 exchange inside the SPAKE2 channel, which
+  the session's binding covers (protocol version 3, no fallback).
+- **TLS 1.3 with X25519MLKEM768 alone** between juist's own ends: the relay,
+  the HTTPS-only client and `relay/forward`. ACME's challenge, the terminator
+  and the TLS to an HTTPS proxy keep 1.2.
+- **Sizes.** `MaxRecordSize` (4 MiB) and `MaxFrameSize` (8 MiB); a records
+  frame keeps 2 MiB beside its records, a lease takes up to 4 KiB, a catch-up
+  message 8 KiB. A member's public names and published labels take at most
+  2048 bytes between them, so a checkpoint at `MaxNodes` fits.
+- **Still classical, on purpose:** the DHT's BEP 44 item key (it guards
+  liveness alone), WireGuard's static keys (a pair's preshared key holds),
+  the relay's certificate and a host's forward proof (a relay is trusted for
+  liveness alone), the CLI's rotation proof on the local socket, and the APK
+  signature, which Android keeps to RSA and EC.
 
 ## Encoding: one record, one byte string
 
-A record's identity is the hash of its serialization, and a signature is over
-the hash of its serialization minus the signatures. A record with two valid
-encodings would therefore have two hashes, and one gathered quorum could
-authorize two distinct chain entries. The rule the codec enforces is:
+A record's identity is the hash of its serialization, and a signature covers
+the hash of its serialization minus the signatures. Two valid encodings would
+give two hashes, and one quorum could authorize two chain entries. So:
 
 > Decode is injective: for every byte string `Decode` accepts,
 > `Encode(Decode(b)) == b`.
 
-Strict decoder options (no duplicate map keys, no indefinite lengths, no tags,
-no unknown fields) rule out the ambiguities they know about; the re-encode
-comparison in `decodeCanonical` proves the rest, including non-minimal integers
-and misordered keys, and removes any need to reason about which lenient
-behaviours the CBOR library has. Every field holding a set — admin keys, nodes,
-signatures, epoch wraps, roles, routes — must be sorted and duplicate-free for
-the same reason. `FuzzDecodeAUM` asserts the property directly.
+Strict decoder options rule out the known ambiguities; the re-encode
+comparison in `decodeCanonical` proves the rest, so nothing depends on which
+lenient behaviours the CBOR library has. Every set-valued field (admin keys,
+nodes, signatures, wraps, roles, routes) must be sorted and duplicate-free for
+the same reason. `FuzzDecodeAUM` asserts the property.
 
-**Closed sets, not forward compatibility.** Unknown record kinds and unknown
-role names are rejected, where tka ignores what it does not understand.
-Tailscale can afford that because their coordination server orders the log and
-decides what it means. Here every node must reach the same verdict on the same
-bytes from the bytes alone, and a node that ignores a record its peers act on
-holds a different view of who is a member — the split-view failure the log
-exists to prevent. Adding a kind or a role is a schema change, subject to the
-M3 freeze.
+**Closed sets, not forward compatibility.** Unknown record kinds and role names
+are rejected. Every node must reach the same verdict from the bytes alone, and
+a node that ignores a record its peers act on holds a different view of who is
+a member. Adding a kind or a role is a schema change (below).
 
-**SHA-256, not BLAKE2s.** No deep reason: it is in the standard library,
-hardware-accelerated everywhere, and already the hash
-[04-architecture.md](04-architecture.md) specifies for address derivation. One
-hash function for the whole project is one less thing to get wrong. Every digest
-and derived key is computed over a NUL-terminated domain-separation label, so no
-digest can be reinterpreted as a digest of another kind.
+**SHA-256, not BLAKE2s:** standard library, hardware-accelerated, and already
+the address-derivation hash. Every digest and derived key is computed over a
+NUL-terminated domain-separation label, so no digest can be reinterpreted as
+another kind.
 
-## Rules that came out stricter than the plan
+## Validation rules
 
-Each of these closes a gap found while writing the validator. All are
-*tightenings*: a record the plan allowed and this rejects.
+Each rejects a record that is well formed and signed.
 
-**Every membership or key change carries an epoch bump, not just
-`RemoveNode`.** [04-architecture.md](04-architecture.md) requires one on
-removal. Making it uniform buys a state invariant worth having: the current
-epoch's wrap set covers exactly the current member set, always. That in turn is
-what makes the two attacks below checkable.
+**Every membership or key change bumps the epoch**, not only `RemoveNode`, so
+the current epoch's wraps always cover exactly the current members.
 
-**The wrap set must match the member set exactly.** One wrap per member, none
-for a non-member. Without it an epoch bump could quietly exclude a member —
-taking discovery away from a device with nothing in the log saying it was
-removed — or hand the group secret to a device that is not a member.
+**The wrap set matches the member set exactly**, one wrap per member and none
+for a non-member. Otherwise a bump could quietly cut a member off discovery or
+hand the group secret to a non-member.
 
-**Epochs are strictly sequential (`+1`), not merely increasing.** A record
-cannot jump the counter, which keeps a node's persisted epoch floor an exact
-statement rather than a lower bound.
+**Epochs are strictly sequential (`+1`)**, so a node's epoch floor is exact.
 
-**The epoch record commits to its secret.** `EpochRecord.Commit` is a labelled
-hash of the group secret, and each recipient checks what it decrypts against it.
-Without the commitment nothing ties the wraps to one another and a malicious
-quorum could seal a *different* secret to each member, partitioning discovery
-invisibly. This is a new field, not in the plan's schema.
+**The epoch record commits to its secret** (`EpochRecord.Commit`), and each
+recipient checks what it decrypts against it; otherwise a quorum could seal a
+different secret to each member and partition discovery invisibly.
 
-**Small-order identity keys are rejected.** A small-order Ed25519 public key
-admits a signature for any message that anyone can compute. Quorum guards who
-gets added to the log; it cannot notice that what was added is a key with no
-owner. Admitting one as an admin key would silently convert that key's votes
-from "held by an admin" to "held by anybody" — a way to launder authority past a
-ceremony. This, and the group SPAKE2 runs in at enrollment, are why
-`filippo.io/edwards25519` is a dependency.
+**Small-order identity keys are rejected** (`Identity.Validate`). Anyone can
+compute an Ed25519 signature by one, and identities still sign their ML-DSA
+key's endorsement and their leases with Ed25519; quorum cannot notice a key
+with no owner. This and SPAKE2 are why `filippo.io/edwards25519` is a
+dependency.
 
-**Members may not share WireGuard, X25519 or ML-KEM keys.** Two members with one
-WireGuard key collide in the data plane, where a peer is keyed by exactly that,
-and one would silently displace the other. Duplicate encryption keys are
-rejected on the same principle: one device's state copied onto a second and
-applying for a second membership is the stolen-device case from
-[02-threat-model.md](02-threat-model.md), and it should not be admissible by
-accident.
+**Members may not share WireGuard, X25519 or ML-KEM keys.** One WireGuard key
+on two members would let one displace the other in the data plane; duplicate
+encryption keys are the stolen-device case of
+[02-threat-model.md](02-threat-model.md).
 
-**A checkpoint must equal the state its ancestry produces.** Where the parent
-state is known — everywhere except bootstrapping from a checkpoint handed to you
-— the claimed snapshot is compared byte for byte against the derived one.
-Otherwise a quorum could rewrite membership by *asserting* a state instead of
-authoring the changes that reach it, leaving no record of what it altered.
+**A checkpoint must equal the state its ancestry produces**, byte for byte,
+wherever the parent state is known, so a quorum cannot rewrite membership by
+asserting a state.
 
-**Removing an admin key that strands the quorum is rejected**, since it would
-leave a network nobody can ever change again, including to undo it.
+**Removing an admin key that strands the quorum is rejected**: nobody could
+ever change the network again.
 
-**Route grants may not cover loopback, link-local or multicast space**, on top
-of the no-overlay-overlap rule the plan states. None is a plausible
-subnet-router target, and pointing a client's own local traffic at another
-member's host is the same class of attack as intercepting overlay traffic. The
-one exemption is the exact default route (`0.0.0.0/0`, `::/0`), which is legal
-only with the `exit` role and which by construction covers everything —
-see the obligation this puts on M6 below.
+**Route grants may not cover loopback, link-local or multicast space**, nor the
+overlay. The exact default route is the one exemption, legal only with the
+`exit` role; see "Default routes" below.
 
-**Names are checked for control and bidi-formatting characters.** They are
-attacker-supplied strings that end up in operator-facing output; rejecting them
-once at admission beats escaping at every print site.
+**Names are checked for control and bidi-formatting characters** once, at
+admission, rather than escaped at every print site.
 
 ## Fork choice, and what it refuses to decide
 
-Fork choice is `(1)` a revocation beats a non-revocation, `(2)` otherwise the
-lower record hash wins — exactly what
-[04-architecture.md](04-architecture.md) specifies, and deliberately *without*
-tka's signature-weight rule. Every change here already needs quorum, so weight
-would only let one quorum outbid another by collecting extra signatures: a
-tie-break that invites grinding and explains nothing to an operator reading the
-log.
+Of two siblings, `(1)` a revocation beats a non-revocation, `(2)` otherwise the
+lower hash wins — without tka's signature-weight rule, which would let one
+quorum outbid another by collecting signatures and invites grinding.
 
-What counts as a revocation grew with M4. Removing a device or an admin key
-always did. Since the admin role carries vouching authority, it includes
-taking a device's admin role away and raising the vouching threshold
-(`State.Revokes`): otherwise a concurrent change with a lower hash could orphan
-the withdrawal and keep a distrusted admin device vouching.
+A revocation is any record that withdraws authority (`State.Revokes`):
+removing a device or an admin key, taking a device's admin role away, raising
+the quorum or the vouching threshold, and asking more keys of a holder or giving
+it fewer votes without granting it any. Otherwise a concurrent change with a
+lower hash could orphan the withdrawal.
 
-**Votes belong to people.** A quorum of k meant k keys, and a person
-with a key on each of two laptops was two votes, so "two admins must agree"
-could be met by one. An admin key can name its holder, and a
-holder's keys are one voter: they carry its votes and cast them once, when at
-least `Needed` of them signed (`types.CountVotes`). One person can so hold a
-key per device, lose one without the others losing anything, and be made to
-need two of them (`KindSetHolder`), which is how one person running a network
-alone asks for two devices per change. What the network can still cast is
-counted per holder too (`types.AchievableVotes`): a holder needing more keys
-than it holds casts nothing, and a change that would leave the quorum out of
-reach is refused, as removing a key already was. Asking more keys of a holder,
-or giving it fewer votes, is a revocation for fork choice.
+**Votes belong to people.** An admin key can name its holder; a holder's keys
+are one voter and cast its votes once, when at least `Needed` of them signed
+(`types.CountVotes`, `KindSetHolder`). What the network can still cast is
+counted per holder (`types.AchievableVotes`), and a change leaving the quorum
+out of reach is refused.
 
-**A removed key cannot undo its removal.** A sibling is verified
-against its parent's state, where a key removed later still votes, so the key
-could sign a branch rooted before its removal and win on the revocation bias or
-a ground hash, undoing its removal and everything after. So one rule comes
-before both: a branch loses to a sibling whose branch removes an admin key that
-signed anything on it. Two keys removing each other at once are symmetric,
-since at the quorum they had either could do anything, and alarm.
+**A removed key cannot undo its removal.** A sibling is verified against its
+parent's state, where the key still votes, so before both rules above: a branch
+loses to a sibling whose branch removes an admin key that signed anything on
+it. Two keys removing each other at once alarm.
 
-**Copies of one record are that record.** Siblings with one `SigHash` and
-other signature sets say the same thing: a minority key adding its signature,
-or a relayer dropping one, makes a copy, not a fork. Fork choice must not
-depend on which copies a node holds, so from schema 19 on it reads what they
-say and the union of their signatures: siblings tie on the lower `SigHash`,
-and a key is a signer for the rule above only where the record needed it — a
-self-signature its kind requires, or a vote without which the union falls
-short of quorum; a surplus signature undoes nothing. Below 19 any signature
-counts and the lower hash wins, as M17's build has it. The lowest hash stands
-for the copies, and what hangs from any of them, the anchor's included, hangs
-from it. A store keeps a copy while it is one of the two lowest, brings a
-key's signature no other carries, or something hangs from it: copies stay
-bounded by the signers, while every node keeps every signature and the same
-lowest copy. One that adds nothing is left out without an error and is no
-news to gossip. A checkpoint's copies are kept, up to eight, whatever they
-carry, so a peer anchored at any of them is served; a key below quorum can
-fill those eight. The CLI pins a head with its `SigHash`, so a copy continues
-it; a pin written without one continues where the pinned copy is held or can
-be rebuilt from the signatures the held copies carry, and gains its `SigHash`
-at its first check.
+**Copies of one record are that record.** Siblings with one `SigHash` and other
+signature sets are copies, not a fork, and fork choice must not depend on which
+copies a node holds. From schema 19 it reads what they say and the union of
+their signatures: copies tie on the lower `SigHash`, and a key is a signer for
+the rule above only where the record needed it (a required self-signature, or a
+vote without which the union falls short of quorum). At schema 18 any signature
+counts and the lower hash wins. The lowest hash stands for the copies, and what
+hangs from any of them hangs from it. A store keeps a copy while it is one of
+the two lowest, carries a signature no other does, or something hangs from it;
+of a checkpoint it keeps up to eight, so a peer anchored at any is served. The
+CLI pins a head with its `SigHash`, so a copy continues it.
 
-The branch that loses is not lost, but it is not applied either — its author
-reissues it against the new head. Two cases are not left to a deterministic rule
-at all, and raise a persistent alarm instead:
+The losing branch is kept but not applied; its author reissues it. Two cases
+raise a persistent alarm instead:
 
 - **An orphaned revocation that cannot be reissued.** The revocation bias only
-  compares immediate siblings, so a removal buried deeper on a losing branch,
-  or one of two removals made at once, would vanish silently. One that the
-  chosen chain could take as it is is named instead, as not in effect, on
-  every device's status and in "juist log", for an admin to run again;
-  stopping the network at every two concurrent removals would be an outage for
-  what is a routine race. One already in effect on the chosen chain is
-  nothing. One the chosen chain cannot take alarms.
-- **An orphan that cannot be reissued.** Each orphaned record is replayed
-  against the winning head with the position-dependent rules relaxed (epoch
-  sequencing, wrap coverage, an admission's IPv4 address — all things
-  reissuing would fix). If its *substance* no longer applies, the two branches
-  disagree about something concrete, and no rule should be picking between
-  them. The address belongs in that list because it is allocated from the
-  chain the admission was built on: two admins admitting two devices at once
-  both take the lowest free one, and treating that as a conflict stopped every
-  tunnel of a network over a record whose device no longer existed. The CLI
-  counts the addresses of orphaned admissions as taken, so a reissue does not
-  collide again. A checkpoint has no substance: one that lost has nothing to
-  reissue, and is neither a conflict nor a change to redo.
+  compares immediate siblings, so a deeper removal on a losing branch would
+  vanish. One the chosen chain could take is shown as not in effect, on every
+  device's status and in `juist log`, for an admin to run again; one already in
+  effect is nothing; one the chosen chain cannot take alarms.
+- **An orphan that cannot be reissued.** Each orphan is replayed against the
+  winning head with position-dependent rules relaxed (epoch sequencing, wrap
+  coverage, an admission's or renumbering's IPv4 address). If its substance no
+  longer applies, the branches disagree about something concrete. Addresses are
+  relaxed because two concurrent admissions both take the lowest free one; the
+  CLI counts orphaned admissions' addresses as taken so a reissue does not
+  collide again. A checkpoint has no substance and never conflicts.
 
-While an alarm is raised, `Authority.TrustedState` refuses to hand out
-membership. That is the same trade as the freshness TTL: where security and
-availability conflict, deny. `Authority.State` still returns the state, so an
-operator can see what the fork did.
-
-Nothing prevents a colluding quorum from creating such a fork —
-[02-threat-model.md](02-threat-model.md) residual weakness 3 — and nothing here
-claims to.
+While an alarm is raised, `Authority.TrustedState` refuses membership — the
+same trade as the freshness TTL — and `Authority.State` still shows what the
+fork did. Nothing stops a colluding quorum from forking
+([02-threat-model.md](02-threat-model.md), residual weakness 3).
 
 ## The two ratchets, and what they cost
 
-Both are node-local by design: two nodes that have seen different histories
-refuse different things, and that divergence is what a fork alarm surfaces
-rather than something to average away.
+Both are node-local: nodes that saw different histories refuse different
+things, and a fork alarm surfaces that rather than averaging it away.
 
-**The anchor** is the genesis record, or the newest checkpoint this node has
-adopted. Chain resolution starts there and never walks past it, so a branch
-forking before it is not outvoted — it is not considered at all. That is "never
-drop a checkpoint you hold", enforced structurally, and it is what makes a
-chain final. juistd compacts to the checkpoint before the newest one on its
-chain, once every other live member has been heard with a head on or past the
-newest, or once a member heard has compacted to that checkpoint or past it,
-which some device did on that condition. So what hangs from the chain past
-the anchor is decided as on a device that never compacted, and what hangs
-below it is refused everywhere alike. The chain up to the new anchor from the
-one before is kept, for a device behind to catch up along. No device compacts
-while a revocation that lost fork choice waits to be redone, which would take
-the notice with the branch. A hello's head is unsigned, so a member that lies
-about others makes devices compact early; a device then behind is answered
-from the kept chain, and one further behind is invited again by a link naming
-its admin, which moves its log to the invite's chain (`Authority.Rebase`) only
-where its anchor carries a quorum of the admins the log trusts and it is at a
-later epoch; the device answering a typed code could hand over a chain of its
-own, so a code never replaces a log.
+**The anchor** is the genesis, or the checkpoint this node's log starts from.
+Resolution never walks past it, so a branch forking below it is not considered
+at all. juistd compacts to the checkpoint before the newest on its chain, once
+every other live member has been heard with a head on or past the newest, or
+once a member heard has compacted to that checkpoint or past it; so what hangs
+past the anchor is decided as on a device that never compacted. The chain from
+the previous anchor up to the new one is kept for a device behind to catch up
+along. No device compacts while an alarm is raised or a revocation that lost
+fork choice waits to be redone. A hello's head is unsigned, so a lying member
+can make devices compact early; a device further behind than the kept chain is
+invited again by a link naming its admin, which moves its log to the invite's
+chain (`Authority.Rebase`) only where that chain's anchor carries a quorum of
+the admins the log trusts and is at a later epoch. A typed code never replaces
+a log, since the device answering it could hand over a chain of its own.
 
-**The epoch floor** is the highest epoch ever adopted, and it is never lowered.
-A chain that resolves below it is stored, but held under a *rollback alarm*:
-`Authority.TrustedState` refuses until the chain is back at the floor, and the
-alarm is derived from what is stored, so a restart keeps it. Reaching an older
-epoch through individually valid records takes admin signatures, so this is
-what a quorum rewriting history looks like from a node that saw the earlier
-version — and it is also what a branch this node applied first looks like when
-a concurrent one at a lower epoch wins fork choice, or when a copy's late
-signature makes a record no longer need a key its sibling removes. The two
-cannot be told apart, so both fail closed, the alarm naming the lost branch
-that reached the floor; a switch below the floor is not followed, and
-compaction, above, is what settles one for good. Refusing the records instead would leave the node
-serving the losing branch, and, since sync sends a branch parents first in one
-batch, refusing every later batch with it, removals included, with no alarm.
-Held, the records keep coming in, and the alarm clears in whatever batch brings
-the record that lifts the chain to the floor: a lost change redone, or `juist
-rotate group-secret`. An admin's CLI resolves the chain without a floor, so it
-signs on the winning head even from a device that is stuck.
+**The epoch floor** is the highest epoch adopted, never lowered. A chain that
+resolves below it is stored but held under a *rollback alarm*, derived from what
+is stored so a restart keeps it, until the chain is back at the floor. A quorum
+rewriting history and a concurrent branch at a lower epoch winning fork choice
+look the same from here, so both fail closed. Refusing the records instead would
+leave the node serving the losing branch and, since sync sends a branch parents
+first in one batch, refusing later batches, removals included, with no alarm.
+The alarm clears with the record that lifts the chain to the floor: a lost
+change redone, or `juist rotate group-secret`. An admin's CLI resolves without
+a floor, so it signs on the winning head even from a stuck device.
 
-The cost is real and worth stating: two nodes offered the same fork in different
-orders can end up in different states — one following the winner, one alarmed
-until the chain passes its floor. Both fail closed. This is the CAP-style limit
-[02-threat-model.md](02-threat-model.md) already accepts, surfacing in a new
-place.
+The cost: two nodes offered one fork in different orders can end in different
+states, one following the winner, one alarmed. Both fail closed — the CAP-style
+limit [02-threat-model.md](02-threat-model.md) accepts.
 
 ## Group secret: hybrid HPKE, and its size
 
 HPKE (RFC 9180) base mode, `DHKEM(X25519)+ML-KEM-768`, HKDF-SHA256,
-ChaCha20-Poly1305. The hybrid KEM is the harvest-now-decrypt-later hedge: an
-adversary recording epoch records today and breaking X25519 later still faces
-ML-KEM-768. `TestCiphersuiteIsTheIntendedOne` pins the KEM, so a change in what
-the standard library assembles cannot quietly cost the property.
+ChaCha20-Poly1305: the harvest-now-decrypt-later hedge.
+`TestCiphersuiteIsTheIntendedOne` pins the KEM.
 
-Cost: **1168 bytes per member per epoch**, so an epoch bump on a 100-member
-network is a ~120 KB record, and so is the checkpoint that carries the current
-epoch. Accepted at the target scale of 25–100 devices; it is the reason the
-schema's `MaxNodes` is 512 rather than something larger, and the reason
-checkpoint compaction is implemented in this milestone rather than deferred.
-What it forecloses above that range, and by when, is a section of its own below.
+Cost: **1168 bytes per member per epoch**, so an epoch bump or checkpoint on a
+100-member network is ~120 KB. It is why `MaxNodes` is 512; see "The freeze"
+below.
 
-A node's recipient key is recorded as **two fields** (`X25519`, `MLKEM`) rather
-than one opaque hybrid blob, so each half is validated as the key it is, and so
-the ML-KEM half is a first-class field for the per-pair preshared-key hedge
-of M15 ([05-roadmap.md](05-roadmap.md)). Domain separation
-between the two uses comes from HPKE's own suite labelling and from the pair
-key's own HKDF label.
+A node's recipient key is **two fields** (`X25519`, `MLKEM`), each validated as
+the key it is; the ML-KEM half also feeds the per-pair preshared key. Each
+epoch's secret is **fresh randomness**, not derived from the last, so an admin
+can rekey holding only a signing key, which keeps group secrets off admin
+devices.
 
-Each epoch's secret is **fresh randomness, not a derivation from the last**, so
-producing a bump never requires reading the previous secret. An admin can rekey
-the network holding only a signing key, which is what keeps admin keys off
-member devices.
+The HPKE `info` binds each wrap to one epoch and one recipient. It does not bind
+the network, which would be circular for the genesis; the signatures do that.
 
-The HPKE `info` string binds each wrap to one epoch and one recipient, so a wrap
-cannot be lifted between epochs or re-addressed. It does *not* bind the network:
-that would be circular for the genesis record, whose own hash names the network.
-Network binding comes from the signatures over the record instead.
+`juist rotate` rotates **all** of a device's rotatable keys at once and
+generates them locally: a record naming a key whose private half the device
+lacks would apply fine and leave the device unable to handshake or read the
+group secret. All of a device's secrets live in **one file**, so promotion is a
+single rename, and promotion follows **what the adopted state names**, not
+which records were in the batch, since an authorized rotation can still lose
+fork choice.
 
-`juist rotate` therefore rotates *all* of a device's rotatable keys
-at once and generates them locally: a record naming a public key whose private
-half the device does not hold would be applied happily by the log and would
-leave the device unable to handshake or to read the group secret.
+**Known limitation.** Nothing in the log proves a wrap was sealed to the right
+key. A member that cannot open its wrap reports it; the commitment makes that
+report unambiguous.
 
-Two details of that are load-bearing. All of a device's secrets live in **one
-file**, so promoting a rotation is a single rename and there is no state in
-which the device holds a new encryption key and an old WireGuard key — a device
-that either cannot handshake or cannot read the group secret, and would stay
-that way until someone noticed. And promotion is conditional on **what the log
-ends up naming**, not on which record kinds were in the batch: a rotation record
-can be fully authorized and still lose fork choice, so `apply` promotes only
-after checking that the adopted state names the staged keys.
+**A keystore refuses at the point of choice, not of use.** Replacement keys are
+staged only once their record exists, and a name is checked against
+`types.ValidateName` where it is chosen; `create` validates every name before
+writing any file a ceremony cannot be re-run over.
 
-**Known limitation.** Nothing in the log can prove a wrap was sealed to the
-*right* key — a wrap is opaque to everyone but its recipient. After a
-`RotateNodeKey`, a member that finds its wrap unopenable reports it; the log
-cannot reject it. The commitment makes that report unambiguous, which is as far
-as this design goes.
+**The genesis ceremony is completable by the tool that starts it.** Where the
+local keys do not reach k, `create` writes the record to `genesis-NETWORK.rec`
+and stops; the other admins `juist approve` it on keystores with no network
+(`log.GenesisStatus` reports it against the policy it declares), and `juist
+apply` creates the network.
 
-Two review findings sit on the same rule: **a keystore refuses at the point of
-choice, not at the point of use.** Staging replacement keys before the record
-was built meant a proposal the log went on to reject still wrote `node.keys.next`
-— and since staging refuses to write over an earlier rotation, one failed
-command made every later rotation fail too, over a file the tool never named.
-Staging now happens only once the record exists. Likewise a member name is
-checked against `types.ValidateName` where the device chooses it, because the
-alternative is that the device persists a name the schema will not accept, prints
-an enrollment command built around it, and the limit is discovered by a different
-operator on a different machine. `create` (then `init`) validates every name it was given before
-writing any of the three files a ceremony cannot simply be re-run over.
+**`sign` refuses to guess.** A record whose parent is not the head is judged
+against the state at that parent, where the admin set may differ, so `sign`
+warns and withholds the verdict.
 
-**The genesis ceremony has to be completable by the tool that starts it.** A
-k-of-n genesis cannot be authorized on the machine that builds it — that is what
-the threshold means — so `create` builds the record, signs it with whatever local
-key exists, and, if that does not reach k, writes it to `genesis-NETWORK.rec` and stops.
-The other admins sign it where their keys are (`juist approve` works on a keystore
-with no network, and reports a genesis against the policy the record itself
-declares, via `log.GenesisStatus`), and `juist apply` on a home directory with
-no network creates it. Previously the record was built in memory and discarded
-on failure, so the one artefact that had to travel was the one thing thrown
-away — while the admin key and break-glass secrets it commits to were already on
-disk under files a second `create` refuses to overwrite. The ceremony could be
-neither finished nor restarted, and the error advised performing it "where the
-keys are", which is the one place a threshold guarantees they are not.
-
-**A signature is irrevocable, so `sign` refuses to guess.** A record whose
-parent is no longer the head is judged against the state at that parent. Usually
-that is benign — it forks, and its author reissues it. It stops being benign
-when the admin set moved in between: a key that is an admin now was not one
-there, and an untrusted signature does not merely fail to count, it invalidates
-the record outright. `sign` therefore warns when the parent is not the head and
-withholds the verdict rather than reporting one computed against a state the
-record will never be judged by.
-
-The same distinction applies to reading key material: a key file that is
-**absent** is an ordinary state — a signing-only keystore has no node keys — but
-one that is **present and unloadable** is a fault. Conflating them turned a
-wrong file mode into "this device has no keys": `key` sent the operator to
-`-create`, which then refused to overwrite; `sign` quietly omitted the signature
-a rotation needed; `apply` reported success while silently declining to promote
-the keys the log had just started naming. The two cases are now told apart by
-`errors.Is(err, fs.ErrNotExist)` and only the first is treated as absence.
+**Absent is not unloadable.** A missing key file is an ordinary state; one that
+is present but cannot be loaded is a fault (`errors.Is(err, fs.ErrNotExist)`
+alone means absence).
 
 ## The schema is versioned, so the freeze is a price rather than a wall
 
-[05-roadmap.md](05-roadmap.md) froze the record schema at the end of M3. Taken
-literally that means a new record kind, a new role or a new field is
-unavailable for the life of the network — and the cost of being wrong is not a
-bad release but a network that has to be recreated. So M3b spends its last
-opportunity on the thing that makes every later opportunity possible.
-
 The state every genesis and checkpoint states carries a `Schema` version, and
-`KindSchemaUpgrade` raises it under the same k-of-n quorum as any other
-authority change. The version is `types.CurrentSchema`, which is 0 and
-`omitempty`, so it costs nothing to encode until there is a second one. Version
-numbers are numbers: there is no "schema v1", only schema 0 and schema 1, and
-they are unrelated to the project's release names.
+`KindSchemaUpgrade` raises it under the usual quorum. A build implements
+`types.CurrentSchema` (19) and reads from `types.MinSchema` (18) up; raising
+`MinSchema` drops the rules below it, so a network below has to move up with an
+older build first. Version numbers are unrelated to release names.
 
-**What a build too old for the network does.** It stops, and says so. The chain
-resolves up to the upgrade record and no further; `Authority.SchemaAlarm`
-reports the version and the record, and `juist status` prints it. It does not
-ignore the record — a node acting on the subset of the log it understands holds
-a different view of who is a member, which is the split the closed record set
-exists to prevent — and it does not treat it as invalid, because it is not.
-
-Three consequences follow, and each is a rule:
+**A build too old for the network stops, and says so.** The chain resolves up
+to the upgrade record and no further; `Authority.SchemaAlarm` reports it and
+`juist status` prints it. It neither ignores the record (a split view) nor
+treats it as invalid.
 
 - **The upgrade record is stored and relayed; nothing after it is.** A stopped
-  node must not swallow the one record that explains why its peers have gone
-  quiet, so that record is kept and offered on. What comes after it cannot be
-  verified — this build does not know the rules those records are judged by —
-  and storing unverified records would let any member fill a stopped node's
-  disk. `Inform` therefore drops them from the batch rather than failing it,
-  and gossip applies the readable prefix of a frame rather than refusing the
-  whole. Both are the same rule: never discard the explanation along with the
-  thing it explains.
-- **A schema alarm does not withdraw membership state.** Unlike a fork alarm,
-  the state below the upgrade was correct, and taking every tunnel down the
-  moment an admin raises the schema would turn a planned change into an outage
-  on every device that has not been updated yet. The cost is that a stopped
-  node will not apply a revocation authored after the upgrade. What bounds how
-  long it may act on that state is the freshness TTL, which is M4's — the same
-  bound that already covers a partitioned node, arrived at from a new
-  direction.
-- **Fork choice is not taught to prefer the upgrade.** "No lower-version branch
-  may win" is enforced by a node-local ratchet — a schema floor beside the epoch
-  floor, persisted and never lowered — and not by a second bias in
-  `pickPrimary`. A preference there could let a schema upgrade orphan a
-  revocation, which is exactly the ordering "revoked wins" exists to prevent. A
-  node offered a branch below its floor refuses it and fails closed, which is
-  the answer this design gives everywhere else the same tension appears.
+  node must not drop the record that explains why its peers went quiet, and
+  must not store records it cannot verify. `Inform` drops them from the batch
+  and gossip applies a frame's readable prefix.
+- **A schema alarm does not withdraw membership**, unlike a fork alarm, so a
+  planned upgrade is not an outage on every device not yet updated. A stopped
+  node will not apply later revocations; the freshness TTL bounds that.
+- **Fork choice is not taught to prefer the upgrade.** A persisted schema floor
+  beside the epoch floor refuses lower-version branches; a bias in fork choice
+  could let an upgrade orphan a revocation.
 
-Compaction is refused while the alarm is up, because it deletes what the anchor
-cannot reach and that is precisely the set a newer build resumes from. The
-checkpoint rule needs nothing new: a checkpoint must equal the state its
-ancestry produces, and the version is part of that state, so a checkpoint can
-never be the record that changes it.
+Compaction is refused while the schema alarm is up: it would delete what a
+newer build resumes from. A checkpoint can never change the version, since it
+must equal the state its ancestry produces.
 
-**What this buys, and what it does not.** New kinds, new roles and new optional
-fields become reachable after the freeze, at the price of a quorum-signed
-record and an upgrade window in which old devices are stopped and visible.
-It does not rescue the shape changes declined below: a Merkle root over the
-wrap set still costs a second transport for the record a member cannot read
-without, and an addition that does not bump the epoch stays foreclosed by
-admin-key custody, not by the schema. And it deliberately provides **no
-extension bucket and no ignorable-unknown-field path** — either would reintroduce
-the split view by letting two builds act on different subsets of the same
-record.
+There is **no extension bucket and no ignorable-unknown-field path**: either
+would let two builds act on different subsets of one record. A schema bump does
+not rescue the shape changes declined below.
 
-**A stopped build must still read the upgrade.** Gossip frames decode
-strictly, so a field an older build does not know makes it refuse the whole
-frame, and with it the records that would tell it to update. What a schema
-adds to the wire therefore goes only to a peer that announces it reads it:
-every member announces the newest schema its build implements, and `juist
-devices` shows a live member announcing an older one. A field a later schema
-adds to the wire must go only to a peer whose announced schema reads it.
+**A stopped build must still read the upgrade.** Gossip frames decode strictly,
+so a field a schema adds to the wire goes only to a peer whose announced schema
+reads it. Every member announces the newest schema its build implements, and
+`juist devices` shows a live member announcing an older one.
 
-What is still open, and belongs with M27's packaging: `juist status` cannot
-say which members would be stranded before an upgrade, and nothing stops an
-admin authoring one before the network is ready for it. Until those exist,
-raising the schema is an operation whose blast radius the operator has to
-know by other means.
+Open, for M27: nothing says before an upgrade which members it would strand,
+or stops an admin authoring one too early.
 
 ## The freeze: what the fan-out measurement decided
 
-The 1168 bytes per member per epoch above are accepted at 25–100 devices, but
-`MaxNodes` is 512, so the schema admits a network five times the target. The
-M3 freeze required measuring that before spending schema space on it rather
-than reasoning from the struct sizes, so `TestRecordSizeAtMaxNodes` encodes
-both records at the ceiling and `TestRecordsBatchIsBoundedByBytes` puts a
-gossip round against them. At 512 members:
+The wrap set is inline in every epoch record and checkpoint.
+`TestRecordSizeAtMaxNodes` and `TestRecordsBatchIsBoundedByBytes` measure it at
+`MaxNodes` = 512:
 
 | | bytes | per member per change | network-wide per change |
 |---|---|---|---|
 | epoch bump | 618 682 | 604 KiB | 302 MiB |
 | checkpoint | 1 284 375 | 1254 KiB | — |
 
-Sealing, opening, encoding and decoding a frame carrying the epoch bump is
-about 2.6 ms in total, and decoding and validating the checkpoint 6.4 ms. So
-**the fan-out costs bandwidth and not CPU, and only at a scale the project does
-not target.** A member on a 512-device network pays 604 KiB for a change that
-happens when someone joins or leaves; at the 100-device target it is 118 KiB.
-Nothing in that range makes the inline wrap set the binding constraint.
+Processing either costs milliseconds, so **the fan-out costs bandwidth, not
+CPU, and only above the target scale** (118 KiB per member at 100 devices).
+What each decision binds:
 
-Four of the five candidate hedges are therefore **declined**, and the fifth
-taken. What each decision now binds:
-
-- **A Merkle root over the wrap set: declined.** It would take a node's cost
-  from O(n) to O(log n), which the measurement says the network is not short
-  of, and in exchange every member would need a second transport to fetch the
-  one record the trust layer cares most about — the wrap it cannot read
-  without. Recovering this later means a coordinated upgrade, and the number
-  that would force it is a member count around 2000, where a change costs each
-  member a megabyte. `MaxNodes` stays at 512 so that ceiling is stated in the
-  schema and not only here.
-- **Batched membership changes: declined.** `KindAddNode` and `KindRemoveNode`
-  keep carrying one node each. A set-valued record would amortise the fan-out
-  over an enrollment run, but it multiplies the cases fork choice has to decide
-  between — two batches that overlap in one member are neither identical nor
-  independent — and the ceremony it would save is not the expensive part: k
-  admins signing ten records in one sitting is ten invocations of `juist approve`,
-  not ten ceremonies. **M4 enrolls one device per record**, and that is now a
-  constraint on its design rather than a preference.
-- **An addition that does not bump the epoch: declined, and it could not have
-  been taken.** Appending one wrap for the current epoch would make an add
-  O(1), but whoever authors the record must hold the *current group secret* to
-  seal that wrap — and the design deliberately keeps group secrets off admin
-  devices, so that an admin can rekey the network holding only a signing key.
-  The only author who could produce such a record is a member, which would mean
-  a record kind that changes the member set without quorum. The trade in
-  [05-roadmap.md](05-roadmap.md) was stated as metadata against O(1); the real
-  trade is admin-key custody, and it is not one this design can make.
-- **Reserved space for logarithmic rekey: declined.** TreeKEM-style wrapping
-  removes the fan-out outright and costs the property that one wrap has one
-  recipient and is opaque to everyone else, which is what makes the epoch
-  record auditable. Reserving space for a shape nobody has designed reserves
-  the wrong shape. It is a v2 design and a coordinated upgrade.
-- **A ciphersuite identifier: taken.** `EpochRecord.Suite` and
-  `Snapshot.EpochSuite` name the HPKE suite the wraps are sealed under. It is
-  the one hedge that is a *value* rather than a field: `SuiteHybridX25519MLKEM768`
-  is zero and `omitempty`, so it costs nothing to encode today, and a future
-  suite is a number an existing decoder already understands. A node meeting one
-  it does not implement rejects the record — the pinned `SealedSecretSize` is a
-  per-suite rule, so accepting an unknown suite would mean accepting a length
-  rule that does not exist. 1088 of the 1168 bytes are the ML-KEM-768
-  ciphertext, and dropping the hybrid is not on the table
-  ([01-requirements.md](01-requirements.md)), so a more compact hybrid is the
-  change this exists for.
+- **A Merkle root over the wrap set: declined.** It would need a second
+  transport for the one record a member cannot do without. It becomes necessary
+  around 2000 members (a megabyte per member per change), which is why
+  `MaxNodes` stays at 512 in the schema.
+- **Batched membership changes: declined.** Overlapping batches multiply fork
+  choice's cases. One device per `KindAddNode` / `KindRemoveNode`.
+- **An addition that does not bump the epoch: impossible.** Its author would
+  need the current group secret, which admin devices do not hold; only a member
+  could write it, without quorum.
+- **Reserved space for logarithmic rekey: declined.** TreeKEM costs the
+  auditable one-wrap-one-recipient property; it is a v2 design.
+- **A ciphersuite identifier: taken.** `EpochRecord.Suite` /
+  `Snapshot.EpochSuite`, zero (`SuiteHybridX25519MLKEM768`) and omitted today.
+  An unknown suite is rejected, since `SealedSecretSize` is per suite. It exists
+  for a more compact hybrid; dropping the hybrid is not on the table.
 
 **The size constraint that outlives the freeze.** A records frame is bounded by
-bytes, not only by record count, because at these sizes
-`MaxRecordsPerFrame`-many epoch records are several times `MaxFrameSize` — a
-batch that cannot be encoded, produced identically every round, which wedges
-that pair's sync rather than converging over more rounds. A batch is a
-parents-first prefix, so truncating it stays applicable, and the next round
-carries the rest. `MaxHashesPerFrame` binds the same way: a `Have` cut short
-by hash has the peer re-offer records the sender holds, a frame at a time, and
-the two make no progress. So a hello lists only what the sender resolves from its anchor,
-those nothing hangs from first, and a peer is taken to hold the ancestors of
-what it lists: two nodes converge however long the log is. Checkpoints keep it
-short: the admin's CLI that applies a change drafts one every 256 records or
-32 MiB, which needs the quorum like any change.
+bytes, not only by count: `MaxRecordsPerFrame` epoch records exceed
+`MaxFrameSize`, and a batch that cannot be encoded, rebuilt identically every
+round, wedges the pair. A batch is a parents-first prefix, so truncating it
+stays applicable. `MaxHashesPerFrame` binds the same way, so a hello lists only
+what the sender resolves from its anchor, those nothing hangs from first, and
+from a list so cut short a peer is taken to hold the ancestors of what it lists:
+two nodes converge however
+long the log is. Checkpoints keep it short: the admin's CLI that applies a
+change drafts one every 256 records or 32 MiB, which needs the quorum like any
+change.
 
 ## Storage
 
-Records are content-addressed: the file name is the hash, and every read checks
-that the bytes still hash to the name. That catches bit rot and editing alike,
-and it is the only integrity check available when the file is the only copy.
+Records are content-addressed and every read checks the bytes still hash to the
+name, catching bit rot and editing alike.
 
-The anchor and the epoch floor are fsynced before anything acts on them. Record
-writes are staged and fsynced before any is renamed into place, so a crash
-cannot publish a half-written record under a name claiming to hash to it. A
-crash *between* renames can store part of a batch, which is safe by
-construction: a record whose parent is missing does not descend from the anchor,
-so resolution never looks at it and the sender offers it again.
+The anchor and floors are fsynced before anything acts on them. Records are
+staged and fsynced before any is renamed into place; a crash between renames
+leaves records whose parent is missing, which resolution ignores and the sender
+offers again. `Inform` re-resolves from storage after writing, so the floor is
+never raised above what storage can reproduce.
 
-`Inform` re-resolves from storage after writing rather than adopting the
-in-memory result, so the epoch floor is never raised above a chain storage can
-actually reproduce. A store that lost records and resolves below its floor
-opens under the rollback alarm until sync brings them back.
+Corruption makes the store refuse to open, naming the file; it never repairs
+itself or re-genesises, which would turn a disk fault into two histories. A
+store directory writable by group or other is refused, since it would let
+anyone lower the ratchets.
 
-Corruption makes the store refuse to open, with an error naming the file and
-telling the operator to recover from another member. It never repairs itself and
-never re-genesises: that is what turns a disk fault into a network with two
-histories. A store directory writable by group or other is refused too — anyone
-who can write there can lower the ratchets.
+Every temporary-file prefix a crash can leave is swept on open, and a test
+covers every prefix the package can produce: an unrecognized leftover would
+otherwise read as corruption after an ordinary power loss.
 
-Refusing everything unexplained has one sharp edge, and M1's review found the
-store on the wrong side of it: an interrupted write leaves a temporary file, and
-a temporary file the sweep does not recognize is an unexplained entry. The store
-then refuses to open — permanently, from an ordinary power loss, with an error
-that reads like corruption and points at recovery the node does not need. The
-two categories have to be told apart by name, and the set of names a crash can
-leave has to be the set the sweep covers. Record bodies are therefore staged
-under one prefix, written directly rather than through the atomic-replace helper
-that would interpose a second one, and both prefixes are swept on open so a
-store written by an earlier build still opens. A test asserts the sweep for
-every prefix this package can produce, rather than for the one the staging code
-happens to use today.
+## Kinds with a rule of their own
 
-## Schema additions beyond the plan's record list
-
-Flagged here for the M3 freeze review:
-
-- **`SetQuorum`.** [04-architecture.md](04-architecture.md) follows tka in
-  treating the quorum policy as fixed at genesis. Without a way to change it, a
-  network that grows from three admins to ten keeps whatever *k* it chose on day
-  one, and policy can never be tightened short of recreating the network.
-- **`EpochBump`.** Rotates the group secret without a membership change: the
-  routine half of the two-tier revocation response in
-  [research/building-blocks.md](research/building-blocks.md) §5, and the answer
-  to a suspected group-secret leak.
-
-`RotateIdentity` is implemented as the plan names it, requiring quorum plus a
-signature by the **new** key. The old key is deliberately not required: a
-planned rotation away from a key being retired is exactly the case where it may
-already be gone. It is otherwise equivalent to remove-then-add, and exists to
-preserve a member's roles, routes, v4 address and name across the change.
+- **`SetQuorum`**, so a network can change *k* as it grows.
+- **`EpochBump`**, rotating the group secret without a membership change: the
+  answer to a suspected group-secret leak.
+- **`RotateIdentity`** requires quorum plus signatures by the old identity and
+  the new, and from schema 19 names the new signing key in what is signed; at
+  schema 18 identities do not rotate. It keeps a member's roles, routes, v4
+  address and name.
 
 ## Renumbering
 
-Schema 5 moves v4 addresses after admission. The rules a later change has to
-keep:
+v4 addresses move after admission. The rules a later change has to keep:
 
 - **The log stays time-free.** A renumbering's deadline is data, applied by
-  whoever renders addresses (`State.Addrs(id, now)`), never by `apply`: every
-  node must reach the same state from the same records, whatever its clock. A
-  skewed clock only keeps an old address live a little longer, which is safe
-  because the address stays bound to its member's key and is held against
-  collisions until a record retires it.
-- **A retiring address is held like a current one.** No admission, rotation or
-  renumbering — a network renumbering included — may give it to another
-  member while it is recorded, and a range a network renumbering leaves with
-  such addresses in it rejects admissions and overlapping route grants until
-  it retires. Only a retiring address may lie in such a range, and a genesis
-  retires nothing, so every state still validates once the range is gone. After that, the CLI's allocator still skips every
-  address the history gave out, as it does a removed member's.
+  whoever renders addresses (`State.Addrs(id, now)`), never by `apply`. A
+  skewed clock only keeps an old address live longer, which is safe because it
+  stays bound to its member's key and held against collisions.
+- **A retiring address is held like a current one.** Nothing may give it to
+  another member while it is recorded, and a range a network renumbering leaves
+  with such addresses rejects admissions and overlapping route grants until it
+  retires. Only a retiring address may lie in such a range, and a genesis
+  retires nothing, so every state validates once the range is gone. The CLI's
+  allocator still skips every address the history gave out.
 - **A member keeps one old address.** A second renumbering replaces the first
-  one's, dropping it before its deadline; the CLI asks before doing so.
-- **A network renumbering covers the member set exactly**, as an epoch's wraps
-  do, so none is left in a range that is going away. The addresses a
-  renumbering or an admission gives are where it sits, not what it says:
-  replayed against another chain it is a change to start again, never a
-  conflict, since a fork alarm takes every tunnel down for what is routine.
-  An admission's address is reallocated then; a single member's move has an
-  operator choose again.
-- **IPv6 does not move.** It follows from the identity key, so no record can
-  claim one; `RotateIdentity` is the only way to change it.
-- **A deadline of `RetireAtOnce` is a move at once**, not a transition that
-  ran out: the log treats it as any past deadline, and what is shown to an
-  admin must say which it is.
+  one's; the CLI asks first.
+- **A network renumbering covers the member set exactly.** The addresses a
+  renumbering or admission gives are where it sits: replayed against another
+  chain it is a change to start again, never a conflict. An admission's address
+  is reallocated then; a single member's move has an operator choose again.
+- **IPv6 does not move.** It follows from the identity key; only
+  `RotateIdentity` changes it.
+- **A deadline of `RetireAtOnce` is a move at once**, treated as any past
+  deadline; what an admin is shown must say which it is.
 
 ## Renaming
 
-Schema 6 changes the network's name. The rule a later change has to keep:
-**nothing identifies a network by its name.** Records, pins, invites and
-admissions name it by its genesis hash, and so must anything added later. A
-name keyed on locally, as the keystore's admin key and genesis files are,
-is the one it had when that was written, and stays so.
+**Nothing identifies a network by its name.** Records, pins, invites and
+admissions use the genesis hash, and so must anything added. A name keyed on
+locally, as the keystore's admin key and genesis files are, keeps the name it
+had when written.
 
 ## Admin encryption keys
 
-Schema 7 gives admin keys an encryption key, which changes waiting for votes
-are sealed to (M5b). The rules a later change has to keep:
+Admin keys carry an encryption key, to which changes waiting for votes are
+sealed (M5b):
 
-- **Only the key sets its own.** A `SetAdminRecipient` needs the subject key's
-  signature as well as the quorum, and a genesis naming one is signed by that
-  key; `AddAdminKey` carries none. Otherwise a quorum could have what is sealed
-  to an admin sealed to a key of its own choosing. A checkpoint a device
-  bootstraps from is the exception, taken on its signers' word like the rest
-  of what it states.
-- **It is derived from the admin key's seed**, under a label of its own, so no
-  file holds one without the other.
+- **Only the key sets its own.** `SetAdminRecipient`, and a genesis naming one,
+  need the subject key's signature; `AddAdminKey` carries none. A checkpoint a
+  device bootstraps from is taken on its signers' word.
+- **It is derived from the admin key's seed** under its own label.
 - **Nothing in the log is sealed to it.** It decides who can read a change
   before it counts, never whether it counts.
 
 ## Names
 
-Schema 8 points public DNS names at members (M8): a node record's `Names`,
-replaced by `SetNodeNames`. The rules a later change has to keep:
+A node record's `Names` (set by `SetNodeNames`) are public DNS names for it
+(M8):
 
 - **A name points at a member, never at an address**, so it follows
-  renumbering and an identity rotation, and goes with the member. No name
-  can send traffic outside the network.
-- **One form of a name alone:** lowercase ASCII, a Unicode name as xn--,
-  checked in the TCB without IDNA tables, which the CLI applies before. Two
-  spellings are never two names.
-- **One member per name**, as for subnet routes, and no name of juist's
-  own domain, `.juist`, nor of a domain the host keeps to itself (`local`,
-  `localhost`, `arpa`, `onion`, `invalid`), nor one that is an address.
-- **The log only says what may be answered.** Whether a device answers, it
-  decides itself: it has to agree to, and stops while its view is stale or
-  the member is out of reach (docs/05-roadmap.md, M8).
+  renumbering and rotation and goes with the member.
+- **One form of a name:** lowercase ASCII, Unicode as xn--, checked in the TCB
+  without IDNA tables, which the CLI applies before.
+- **One member per name**, and none under `.juist`, a host-reserved domain
+  (`local`, `localhost`, `arpa`, `onion`, `invalid`), or that is an address.
+- **The log only says what may be answered.** A device decides whether it
+  answers, and stops while stale or the member is out of reach.
 
 ## Published names
 
-Schema 9 publishes members' services through an ingress (M9): the roles
-`ingress`, `service` and `publish`, the network's `Domain` set by
-`SetDomain`, and a node record's `Published`, replaced by `SetPublished`.
-The rules a later change has to keep:
+Roles `ingress`, `service` and `publish`, the network's `Domain`
+(`SetDomain`) and a node's `Published` (`SetPublished`) publish members'
+services through an ingress (M9):
 
-- **An ingress holds nothing else:** never beside `admin` or `exit`, and
-  routing no subnet, so a compromised one vouches for no view, carries no
-  traffic but spliced connections, and sends from its overlay addresses
-  alone, by which its peers confine it.
-- **A service member holds no other role and routes nothing**, and neither
-  does a holder of `publish` hold `ingress`, whose port 443 it would share.
-- **A published name is one label under the domain, on one member**, or
-  the domain itself, the empty label, and never also a name pointed at a
-  member, the domain itself included, checked again whenever the domain
-  moves. Publishing needs the domain, and the domain is withdrawn only once
-  nothing is published under it; shares under members' names then end.
-- **A holder of `publish` holds the label its name gives**, lowercased, as a
-  published label: no other member's published label, share label or name,
-  and a name that gives none is refused the role. Anything that changes a
-  member's name, as M9e's rename, checks it again (`checkNodeAdmissible`).
-- **Withdrawing is no revocation**, as for the exit role and names: an
-  ingress or a name taken away converges at gossip speed, and a partitioned
-  ingress stops at the freshness TTL.
-- **The log only says what may be published.** Whether a device serves a
-  name, its operator decides (docs/05-roadmap.md, M9a).
+- **An ingress holds nothing else:** never beside `admin` or `exit`, routing no
+  subnet, so a compromised one vouches for nothing and carries only spliced
+  connections from its overlay addresses.
+- **A service member holds no other role and routes nothing**, and a holder of
+  `publish` does not hold `ingress`, whose port 443 it would share.
+- **A published name is one label under the domain, on one member**, or the
+  domain itself, never also a name pointed at a member, rechecked whenever the
+  domain moves. The domain is withdrawn only once nothing is published under
+  it.
+- **A holder of `publish` holds the label its name gives** as a published
+  label; a name that gives none is refused the role, and anything changing a
+  member's name checks it again (`checkNodeAdmissible`).
+- **Withdrawing is no revocation**: it converges at gossip speed, and a
+  partitioned ingress stops at the freshness TTL.
+- **The log only says what may be published**; the operator decides what a
+  device serves.
 
 ## Renamed members
 
-Schema 10 renames a member by `RenameNode`, which replaces its name alone.
-The rules a later change has to keep:
+`RenameNode` replaces a member's name alone:
 
-- **No two members' names fold alike**, which the log refuses for a rename
-  as it does for holders; admissions are numbered apart by the CLI alone,
-  so a state may hold two from before, and neither is renamed to the other.
-- **A rename is checked as an admission is** (`checkNodeAdmissible`), since
-  a holder of `publish` shares under the label its name gives.
+- **No two members' names fold alike.** Admissions are numbered apart by the
+  CLI alone, so a state may hold two such names, and neither is renamed to the
+  other.
+- **A rename is checked as an admission is** (`checkNodeAdmissible`).
 
 ## Disable records
 
-A `Disable` record reveals a break-glass secret and ends the network (M12).
-The rules a later change has to keep:
+A `Disable` record reveals a break-glass secret and ends the network (M12):
 
-- **Its secret is its whole authority.** It carries no signature, which
-  could only give it a second encoding, and is checked against the
-  commitments fixed at genesis, which every checkpoint restates unchanged.
-- **It counts wherever it hangs.** Resolution takes in every stored disable
-  record the walk does not reach, below the anchor, past the orphan budget or
-  past a schema this build stops at, and gossip hands it to every peer that
-  lacks it; a device hands it to every member before it drops the tunnels
-  log sync runs through. Nothing follows it.
+- **Its secret is its whole authority.** It carries no signature, which could
+  only give it a second encoding, and is checked against the genesis
+  commitments every checkpoint restates.
+- **It counts wherever it hangs**: below the anchor, past the orphan budget or
+  past a schema this build stops at. Gossip hands it to every peer lacking it,
+  and a device hands it to every member before dropping the tunnels log sync
+  runs through. Nothing follows it.
 - **It is valid under every schema**, since a network that lost its admins
-  cannot upgrade first. A build that predates it cannot decode it and keeps
-  running.
-- **It disables, it never recovers.** A secret in the log is read by every
-  member that relays it, so a record that gave authority to someone would be
-  one any of them could issue again for themselves.
+  cannot upgrade first.
+- **It disables, it never recovers.** Every relaying member reads the secret,
+  so a record granting authority could be reissued by any of them.
 
-## Not built in M1, on purpose
+## Default routes
 
-- **Freshness leases.** Built at M4, outside the record schema: see
-  [11-enrollment-and-freshness-notes.md](11-enrollment-and-freshness-notes.md).
-- **Route consumption.** Validated from M1, read by nothing until M6.
-
-### The obligation M1 hands to M6
-
-The default route is exempt from the no-overlay-overlap rule, because it covers
-everything by construction. Whoever consumes route grants **must subtract the
-overlay space** — the genesis-derived ULA /48 and the overlay v4 ranges — when rendering
-`AllowedIPs` and filter destinations. Without that subtraction, an exit
-grant would re-open exactly the member-to-member interception the overlap rule
-exists to prevent. The rule is stated in `types.ValidateRoute`; exit nodes
-subtract the overlay in `conn.Internet`, and M6b's subnet routes, which carry
-no default route, are held to the overlap rule by the validator itself.
+The default route is exempt from the overlay-overlap rule, so whoever consumes
+route grants **must subtract the overlay space** (the ULA /48 and the overlay v4
+ranges) from `AllowedIPs` and filter destinations, or an exit grant reopens
+member-to-member interception. `types.ValidateRoute` states it; exit nodes
+subtract in `conn.Internet`, and subnet routes carry no default route.
 
 ## Verification
 
-- `trust/log/adversarial_test.go` is the milestone's exit criterion, one test
-  per attack, each stated in the terms an attacker would use.
-- `TestResolutionIsOrderIndependent` and `TestIncrementalDeliveryNeverRegresses`
-  are the property tests from [06-verification.md](06-verification.md) §1,
-  seeded rather than randomized so a failure can be replayed.
-- Fuzz targets: `FuzzDecodeAUM` (asserts injectivity, not just absence of
-  crashes), `FuzzValidateAUM`, `FuzzChainValidate` (signs what it mutates, so
-  the input reaches the state machine; asserts that a rejected record changes
-  nothing and that the epoch never regresses). `make fuzz` is the
-  seconds-long smoke run; `make fuzz-long` is the gate. Neither runs on CI —
-  see [06-verification.md](06-verification.md) §2.
-- `TestTCBDependencies` keeps the audit scope's dependency closure to the
-  standard library plus two small modules, and keeps the clock and the
-  filesystem out of the packages that decide validity.
-- `make tcb` holds the core to the 11k-line budget
-  [06-verification.md](06-verification.md) §6 sets, and reports the whole audit
-  scope's size beside it.
-
-- Fork-choice tests that need one record to beat another on the hash tiebreak must
-  redraw *both* sides each attempt, or assign the roles after drawing. Redrawing
-  against a fixed target makes the per-attempt chance `target/2^256` — itself
-  uniform, and sometimes tiny — so a 65-attempt budget fails 1/66 of the time
-  rather than 2^-65.
+- `trust/log/adversarial_test.go`: one test per attack, in an attacker's terms.
+- `TestResolutionIsOrderIndependent`, `TestIncrementalDeliveryNeverRegresses`:
+  the property tests of [06-verification.md](06-verification.md) §1, seeded so
+  a failure replays.
+- Fuzz targets `FuzzDecodeAUM` (injectivity), `FuzzValidateAUM`,
+  `FuzzChainValidate` (signs what it mutates; a rejected record changes nothing
+  and the epoch never regresses). `make fuzz` is the smoke run, `make
+  fuzz-long` the gate; neither runs on CI
+  ([06-verification.md](06-verification.md) §2).
+- `TestTCBDependencies` keeps the audit scope to the standard library plus two
+  small modules, and the clock and filesystem out of the packages that decide
+  validity.
+- `make tcb` holds the core to its 11k-line budget
+  ([06-verification.md](06-verification.md) §6).
+- A fork-choice test that needs one record to beat another on the hash
+  redraws *both* sides each attempt; redrawing against a fixed target can fail
+  far more often than the budget suggests.

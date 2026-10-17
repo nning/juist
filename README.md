@@ -1,7 +1,7 @@
 # juist
 
 > [!WARNING]
-> **Vibe-coded with Opus 5.5. It has not had a security audit yet.**
+> **Developed with Opus 5.5, no human (security) audit yet!**
 
 A peer-to-peer mesh VPN in the spirit of Tailscale, with **no coordination
 server at all**, neither a vendor's nor your own. WireGuard carries the traffic.
@@ -74,7 +74,7 @@ sudo juist join 'juist:Kx7…@192.168.1.20:41642'  # or the link: from anywhere
 ones. Answering yes admits it. Then, on either device:
 
 ```sh
-juist status          # connected?
+juist status          # connected? -d lists the devices too
 juist health          # anything wrong?
 juist devices         # who is in the network, with their addresses
 ping 198.18.36.2      # the second device, at the address juist devices lists
@@ -92,7 +92,8 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | see what needs attention, and how to fix it | `juist health` | [status](https://docs.juist.nning.io/en/docs/status/) |
 | add a device | `juist invite`, then `sudo juist join …` on it | [invites](https://docs.juist.nning.io/en/docs/invites/) |
 | remove a device, on every device at once | `juist remove phone` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
-| reach a device by name, where systemd-resolved runs | `ssh laptop.home.juist`, or `ssh laptop` | [names](https://docs.juist.nning.io/en/docs/names/) |
+| reach a device by name | `ssh laptop.home.juist`, or `ssh laptop` | [names](https://docs.juist.nning.io/en/docs/names/) |
+| leave this device's DNS alone, names and exit node alike | `sudo juist set --dns=false` | [names](https://docs.juist.nning.io/en/docs/names/) |
 | let a device with a public address relay for the others | `juist grant vps relay` | [relays](https://docs.juist.nning.io/en/docs/relays/) |
 | reach the network from a hotel or office that only lets HTTPS out | `sudo juist set --relay-name relay.example.org` on a relay, `sudo juist set --https-only` here | [HTTPS only](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |
@@ -284,7 +285,7 @@ export JUIST_HOME=/tmp/K     # a keystore for the demo, not your own
 | [04-architecture.md](docs/04-architecture.md) | Components, protocols, local security |
 | [05-roadmap.md](docs/05-roadmap.md) | Milestones and their security exit criteria |
 | [06-verification.md](docs/06-verification.md) | Test and fuzzing strategy |
-| [07](docs/07-embedding-notes.md)–[11](docs/11-enrollment-and-freshness-notes.md), [13](docs/13-multi-network-notes.md) | What each milestone decided: embedding, trust log, mesh, connectivity, enrollment and freshness, several networks |
+| [07](docs/07-embedding-notes.md)–[11](docs/11-enrollment-and-freshness-notes.md), [13](docs/13-multi-network-notes.md) | The rules each layer keeps, and why: embedding, trust log, mesh, connectivity, enrollment and freshness, several networks |
 | [12-validating.md](docs/12-validating.md) | Running the gates, and what each claim is checked by |
 
 ## License

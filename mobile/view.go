@@ -46,6 +46,9 @@ type member struct {
 	// Reach is self, direct, relay, outdated, down, sought, absent,
 	// silent, unchecked or unconnected; see [reachOf].
 	Reach string `json:"reach"`
+	// Relay names the member whose relay carries the traffic to it, where
+	// Reach is relay.
+	Relay string `json:"relay,omitempty"`
 	// Heard is when it last signed its announcement, and Since when its
 	// tunnel was first found down, Unix seconds.
 	Heard int64 `json:"heard,omitempty"`
@@ -158,6 +161,9 @@ func viewOf(s *ipc.Status) view {
 		}
 		r, installed := reach[d.Identity]
 		m.Reach, m.Heard, m.Since = reachOf(r, installed, slices.Contains(s.Silent, d.Name), s.ReachChecked != 0), r.Heard, r.Since
+		if m.Reach == "relay" {
+			m.Relay = r.Relay
+		}
 		v.Members = append(v.Members, m)
 	}
 	slices.SortStableFunc(v.Members, func(a, b member) int { return cmp.Compare(a.Name, b.Name) })

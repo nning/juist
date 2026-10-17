@@ -25,6 +25,7 @@ import (
 // is not reached through it; and with the exit node gone or refused, the
 // internet is unreachable rather than reached directly.
 func TestNetnsExitNode(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	client := lab.addNode("c", 1)
 	exit := lab.addNode("x", 2)
@@ -134,6 +135,7 @@ func TestNetnsExitNode(t *testing.T) {
 // to IPv4 needs, rather than dropped unsaid, and outside the tunnel still. An
 // unmarked exit rule an earlier build left is replaced by the marked one.
 func TestNetnsAFamilyNoExitNodeCarriesIsRefused(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	client := lab.addNode("c", 1)
 	exit := lab.addNode("x", 2)
@@ -189,6 +191,7 @@ func (l *netnsLab) forwardBoth(n *netnsNode) {
 // reverse-path rule, as nft writes it, is read as strict, and its loose one
 // as loose, from the kernel's own encoding.
 func TestNetnsAStrictReversePathFilterIsFound(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	n := lab.addNode("r", 1)
 	self, err := os.Executable()
@@ -241,6 +244,7 @@ func (l *netnsLab) dump(n *netnsNode, argvs ...[]string) {
 // up and the refusal can end. The kernel checks an answer's source by a
 // lookup without juistd's mark or user, which lands in the exit table.
 func TestNetnsARefusingClientHearsItsExitNode(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	client := lab.addNode("c", 1)
 	exit := lab.addNode("x", 2)
@@ -255,7 +259,7 @@ func TestNetnsARefusingClientHearsItsExitNode(t *testing.T) {
 	if err != nil {
 		skipUnlessRequired(t, "iptables not installed; the test keeps the exit node's LAN address from the client with it")
 	}
-	lab.must(lab.exec(client, iptables, "-A", "INPUT", "-p", "udp", "-s", exit.underlay.String(), "-j", "DROP"))
+	lab.must(lab.exec(client, iptables, "-w", "5", "-A", "INPUT", "-p", "udp", "-s", exit.underlay.String(), "-j", "DROP"))
 	lab.must(lab.exec(client, "sh", "-c", "for f in /proc/sys/net/ipv4/conf/*/rp_filter; do echo 2 >$f; done"))
 	defer func() {
 		if t.Failed() {
@@ -287,6 +291,7 @@ func TestNetnsARefusingClientHearsItsExitNode(t *testing.T) {
 // route, it is not reached at all. The member knows nothing of the subnet but
 // what its router's peer entry says.
 func TestNetnsASubnetThroughItsRouter(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	client := lab.addNode("c", 1)
 	router := lab.addNode("r", 2)
@@ -437,6 +442,7 @@ func (n *netnsNode) ask(at netip.AddrPort) string {
 // Pointing the host's resolver at it is systemd-resolved's, which runs one
 // per host, not per namespace, and is checked by hand.
 func TestNetnsExitNodeAnswersDNS(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	client := lab.addNode("c", 1)
 	exit := lab.addNode("x", 2)

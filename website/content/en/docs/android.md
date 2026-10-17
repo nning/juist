@@ -182,6 +182,8 @@ runs an older juist; until that is updated, a ping gets through, other apps
 do not).
 
 Tap a device to see its addresses, its roles and when it was last heard from.
+For a device reached through a relay, it names the device whose relay
+carries the traffic.
 **Ping** sends an echo through the tunnel. juist on that device answers it
 itself, so the ping is answered even if the device's firewall drops pings.
 **Open in browser** opens `http://` at its address. Every other app reaches the device
@@ -209,6 +211,21 @@ If the VPN was on, juist turns it on again after the phone restarts or the
 app is updated. Android's own setting **Always-on VPN**, under the VPN
 settings, works with juist too. Android runs only one VPN at a time: another
 VPN app turns juist off, and the app tells you so.
+
+## Battery
+
+While the screen is off, the phone dozes or battery saver is on, juist
+saves battery. It checks members every 5 minutes instead of every 30
+seconds, syncs the network every 30 minutes instead of every 2, and stops
+pinging idle members to keep their paths warm. It also stops listening for
+members on the Wi-Fi's multicast DNS, which would wake the phone for every
+such packet on the network. Changes still arrive at once, and traffic
+through the tunnel goes at its usual pace. With the screen on and battery
+saver on, the status screen says so.
+
+Without a relay, a member may take up to those 5 minutes to reach a phone
+behind NAT whose screen is off. With a relay, it is reached through the
+relay at once.
 
 ## When the phone is removed
 

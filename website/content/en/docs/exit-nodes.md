@@ -54,8 +54,8 @@ Send this device's internet traffic through the VPS:
 juist exit use vps
 ```
 
-It prints `internet via vps`. Where systemd-resolved runs, the `Exit node`
-line in `juist status` now says `vps, DNS too`.
+It prints `internet via vps`. The `Exit node` line in `juist status` now
+says `vps, DNS too`.
 {{< /step >}}
 
 Back on your own network, `juist exit off` sends the traffic directly again
@@ -64,8 +64,9 @@ and prints `internet direct`.
 ## What goes through the exit node
 
 - Traffic to public internet addresses goes through the exit node.
-- DNS goes through it too, if systemd-resolved runs on the device. Names in the
-  LAN's own domain, such as your router's, are still resolved on the LAN.
+- DNS goes through it too, unless `juist set --dns=false` turned it off. Where
+  systemd-resolved runs, names in the LAN's own domain, such as your
+  router's, are still resolved on the LAN.
 - Traffic to your LAN and to the network's devices stays direct.
 - Replies to connections from the internet, such as an ssh session to this
   device, also stay direct, so the device stays reachable at its own address.

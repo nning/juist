@@ -254,17 +254,17 @@ func TestDNSGoesByResolvconf(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := FreeBSD{}
-	if err := h.SetDNS("juist7", []netip.Addr{netip.MustParseAddr("198.18.244.1")}); err != nil {
+	if err := h.SetDNS("juist7", []netip.Addr{netip.MustParseAddr("198.18.244.1")}, nil); err != nil {
 		t.Fatal(err)
 	}
 	now, _ := os.ReadFile("/etc/resolv.conf")
 	if !strings.Contains(string(now), "nameserver 198.18.244.1") || strings.Count(string(now), "nameserver") != 1 {
 		t.Errorf("routed, resolv.conf reads:\n%s", now)
 	}
-	if err := h.SetDNS("juist7", nil); err != nil {
+	if err := h.SetDNS("juist7", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.SetDNS("juist7", nil); err != nil {
+	if err := h.SetDNS("juist7", nil, nil); err != nil {
 		t.Errorf("giving back what is back: %v", err)
 	}
 	if after, _ := os.ReadFile("/etc/resolv.conf"); string(after) != string(was) {

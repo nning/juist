@@ -92,10 +92,10 @@ fun MemberScreen(
                             style = MaterialTheme.typography.titleLarge,
                         )
                     }
-                    val about = reachExplanation(member.reach)
+                    val about = reachExplanation(member)
                     if (on && about != null) {
                         Text(
-                            stringResource(about),
+                            about,
                             Modifier.padding(start = Space.l, end = Space.l, bottom = Space.l),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

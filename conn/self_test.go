@@ -26,6 +26,7 @@ func setPeer(t *testing.T, n, other *node) {
 // A node given a new key on its running data plane is reached under it as
 // soon as its peer holds it, and no longer under the old one.
 func TestANewKeyInPlace(t *testing.T) {
+	t.Parallel()
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	setPeer(t, a, b)
@@ -59,6 +60,7 @@ func TestANewKeyInPlace(t *testing.T) {
 // A node given new addresses on its running data plane answers on them,
 // and no longer on the ones it gave up.
 func TestNewAddressesInPlace(t *testing.T) {
+	t.Parallel()
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	setPeer(t, a, b)
@@ -113,6 +115,7 @@ func TestSetSelfRefuses(t *testing.T) {
 // soon as disco proves the path: the first handshake waits for it rather
 // than going nowhere and waiting out WireGuard's five-second retry.
 func TestANewKeyIsReachedAtOnce(t *testing.T) {
+	// Not parallel: it bounds a latency, which contention stretches.
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	setPeer(t, a, b)

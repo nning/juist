@@ -274,22 +274,21 @@ func TestPublishTheDomainItself(t *testing.T) {
 	}
 }
 
-// The Names line says something where the network's name gives no label and
-// only its public domain is resolved, and names that domain.
-func TestTheNamesLineIsNeverEmpty(t *testing.T) {
+// The Names line names this device's own names, under the network's domain
+// and the public ones pointed at it, nothing of the others' nor of why they
+// are not resolved.
+func TestTheNamesLineNamesThisDevice(t *testing.T) {
 	plain := func(_, s string) string { return s }
-	if text, _ := namesSummary(&ipc.Names{Resolved: true}, plain); text == "" {
-		t.Error("resolved, the line is empty")
-	}
-	if text, _ := namesSummary(&ipc.Names{Not: "juistd does not answer them"}, plain); strings.HasPrefix(text, " ") {
-		t.Errorf("unresolved, the line is %q", text)
-	}
+	o := []ipc.NameOverride{{Name: "mail.example.org", Device: "laptop"}, {Name: "www.example.org", Device: "nas"}}
 	for n, want := range map[*ipc.Names]string{
-		{Domain: "home.juist", Public: "pub.example.org", Resolved: true}: "home.juist, pub.example.org",
-		{Public: "pub.example.org", Resolved: true}:                       "pub.example.org",
-		{Public: "pub.example.org", Not: "juistd does not answer them"}:   "pub.example.org not resolved: juistd does not answer them",
+		{Domain: "home.juist", Public: "pub.example.org", Resolved: true}:    "laptop.home.juist",
+		{Domain: "home.juist", Resolved: true, Accepted: true, Overrides: o}: "laptop.home.juist, mail.example.org",
+		{Domain: "home.juist", Overrides: o}:                                 "laptop.home.juist, mail.example.org",
+		{Domain: "home.juist", Not: "juistd does not answer them"}:           "laptop.home.juist",
+		{Public: "pub.example.org", Resolved: true}:                          "",
+		{Domain: "home.juist", Off: true, Not: "DNS is off on this device"}:  "laptop.home.juist (DNS off)",
 	} {
-		if text, _ := namesSummary(n, plain); text != want {
+		if text := namesLine(n, "laptop", plain); text != want {
 			t.Errorf("%+v is said as %q, want %q", *n, text, want)
 		}
 	}

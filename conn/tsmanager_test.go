@@ -157,6 +157,7 @@ func pingUntil(t *testing.T, from *node, to netip.Addr, deadline time.Duration) 
 // bring up a WireGuard tunnel through the embedded engine and exchange an
 // overlay ICMP echo, with no coordination server and no relay of any kind.
 func TestTwoNodeOverlayPing(t *testing.T) {
+	t.Parallel()
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 
@@ -184,6 +185,7 @@ func TestTwoNodeOverlayPing(t *testing.T) {
 // them but conn. Without that, a's traffic to it goes nowhere until the
 // sessions expire minutes later.
 func TestARestartedPeerIsReachedAtOnce(t *testing.T) {
+	// Not parallel: it bounds a latency, which contention stretches.
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	for _, n := range []*node{a, b} {
@@ -247,6 +249,7 @@ func TestSetPeersAfterClose(t *testing.T) {
 // absent from the peer set cannot exchange an overlay packet, even knowing a
 // member's address and endpoint.
 func TestNonMemberIsDenied(t *testing.T) {
+	t.Parallel()
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	outsider := newNode(t, 3, "100.64.0.3/32", "fd7a:115c:a1e0::3/128")
@@ -279,6 +282,7 @@ func TestNonMemberIsDenied(t *testing.T) {
 // operator who passes a port has usually opened it in a firewall, and the
 // symptom of the move is that nothing connects.
 func TestListenPortInUse(t *testing.T) {
+	// Not parallel: it counts every socket of the process.
 	// Held on udp4 because that is the socket magicsock.LocalPort reports,
 	// and the port the endpoint announcements are built from.
 	held, err := net.ListenPacket("udp4", ":0")
@@ -332,6 +336,7 @@ func TestListenPortInUse(t *testing.T) {
 // where the peer answers no ICMP, and the handshake it causes shows in
 // Tunnels. A peer that is gone leaves it unanswered.
 func TestProbeProvesTheTunnel(t *testing.T) {
+	t.Parallel()
 	quiet := func(o *Options) { o.RespondToPing = false }
 	a := startNode(t, 1, "198.18.0.1/32", "fd7a:115c:a1e0::1/128", quiet)
 	b := startNode(t, 2, "198.18.0.2/32", "fd7a:115c:a1e0::2/128", quiet)

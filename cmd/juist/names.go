@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/net/idna"
 
+	"github.com/nning/juist/internal/names"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
@@ -17,14 +18,14 @@ import (
 func namesFamily() family {
 	return family{name: "juist names", intro: "Point public names at devices, which members then reach through the tunnel.",
 		subs: []subcommand{
-			{name: "list", aliases: []string{"ls"}, run: namesList, forms: [][2]string{{"", "the public names, and how this device resolves them"}}},
+			{name: "list", aliases: []string{"ls"}, run: namesList, forms: [][2]string{{"", "the network's names, public ones too, and how this device resolves each"}}},
 			{name: "add", run: namesAdd, forms: [][2]string{{"add DEVICE NAME...", "point NAME at DEVICE"}}},
 			{name: "remove", aliases: []string{"rm"}, run: namesRemove,
 				forms: [][2]string{{"remove DEVICE NAME...", "take NAME from DEVICE"}}},
 			{name: "on", run: namesOn, forms: [][2]string{{"on", "resolve them to their devices on this device"}}},
 			{name: "off", run: namesOff, forms: [][2]string{{"off", "resolve them publicly again"}}},
-		}, footer: `Every device is DEVICE.NETWORK.juist to the others, where systemd-resolved
-runs. A public name, such as mail.example.org, resolves to its device on each
+		}, footer: `Every device is DEVICE.NETWORK.juist to the others on Linux and FreeBSD.
+A public name, such as mail.example.org, resolves to its device on each
 device that turned names on, and publicly elsewhere and while its device is
 out of reach.`}
 }
@@ -56,17 +57,39 @@ func (a *app) listNames() error {
 		return err
 	}
 	n := cmp.Or(st.Names, &ipc.Names{})
-	if len(n.Overrides) == 0 {
-		a.ok("no public names")
-		a.hint("an admin adds one: juist names add DEVICE mail.example.org")
+	if n.Domain == "" && n.Public == "" && len(n.Overrides) == 0 {
+		a.ok("no names")
 		return nil
 	}
 	tw := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tDEVICE\tSTATE")
+	if n.Domain != "" {
+		fmt.Fprintf(tw, "*.%s\t%s\t%s\n", n.Domain, "every member", domainState(n, a.paint))
+	}
+	if n.Public != "" {
+		fmt.Fprintf(tw, "*.%s\t%s\t%s\n", n.Public, "what is published", domainState(n, a.paint))
+	}
 	for _, o := range n.Overrides {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", o.Name, o.Device, nameState(n, o, a.paint))
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if len(n.Overrides) == 0 {
+		a.hint("an admin points a public name at a device: juist names add DEVICE mail.example.org")
+	}
+	return nil
+}
+
+// domainState is how this device resolves the network's domains.
+func domainState(n *ipc.Names, paint func(code, s string) string) string {
+	switch {
+	case n.Resolved:
+		return paint("32", "resolved")
+	case n.Off:
+		return paint("2", "DNS off on this device")
+	}
+	return paint("33", "not resolved here: "+n.Not)
 }
 
 // nameState is how this device resolves o, one of n's public names.
@@ -260,42 +283,69 @@ func overridesList(n *ipc.Names, paint func(code, s string) string) string {
 	return strings.Join(out, ", ")
 }
 
-// namesSummary is the status line of how the host resolves the network's
-// names, and the hint that would let it where the host could.
-func namesSummary(n *ipc.Names, paint func(code, s string) string) (string, string) {
-	var text, hint string
-	var domains []string
-	for _, d := range []string{n.Domain, n.Public} {
-		if d != "" {
-			domains = append(domains, d)
+// namesLine is the status line of this device's own names: its name under
+// the network's domain and the public names pointed at it, and "(DNS off)"
+// where it resolves none; the network's others are juist names's.
+func namesLine(n *ipc.Names, self string, paint func(code, s string) string) string {
+	var own []string
+	if l := names.Label(self); l != "" && n.Domain != "" {
+		own = append(own, l+"."+n.Domain)
+	}
+	for _, o := range n.Overrides {
+		if o.Device == self && self != "" {
+			own = append(own, o.Name)
+		}
+	}
+	text := strings.Join(own, ", ")
+	if n.Off {
+		text = strings.TrimSpace(text + " " + paint("2", "(DNS off)"))
+	}
+	return text
+}
+
+// noDevice is why a juistd without a TUN device of its own resolves nothing.
+const noDevice = "juistd runs without a device of its own"
+
+// namesNotes is what juist health says of the network's names: why they are
+// not resolved here, a warning where the host could, with what would let it,
+// and why a public name is resolved publicly or not at all.
+func namesNotes(n *ipc.Names) []line {
+	what := cmp.Or(strings.Join(slices.DeleteFunc([]string{n.Domain, n.Public}, func(s string) bool { return s == "" }), ", "),
+		"the network's names")
+	var out []line
+	switch {
+	case n.Resolved:
+	case n.Off:
+		out = append(out, line{kind: lineInfo, text: "DNS is off on this device: the network's names are " +
+			"not resolved here, and no DNS goes through an exit node; juist set --dns takes it again"})
+	case n.Cannot && n.Not == noDevice:
+		// The setup itself, as a service member's, not a state of DNS.
+	case n.Cannot:
+		out = append(out, line{kind: lineInfo, text: what + " not resolved here: " + n.Not})
+	default:
+		out = append(out, line{kind: lineWarn, text: what + " not resolved here: " + n.Not})
+		if h := dnsHint(n.Not); h != "" {
+			out = append(out, line{kind: lineHint, text: h})
+		}
+	}
+	if !n.Resolved {
+		for _, name := range n.ForMembers {
+			out = append(out, line{kind: lineWarn, text: fmt.Sprintf(
+				"%s, for members alone, is not reached from here, which resolves the network's names publicly", name)})
 		}
 	}
 	switch {
-	case n.Resolved:
-		text = strings.Join(domains, ", ")
-	case n.Cannot:
-		text = paint("2", "not resolved here: "+n.Not)
+	case len(n.Overrides) == 0 || n.Off:
+	case !n.Accepted && len(n.Overrides) == 1:
+		out = append(out, line{kind: lineInfo, text: "1 public name, off on this device"})
+	case !n.Accepted:
+		out = append(out, line{kind: lineInfo, text: fmt.Sprintf("%d public names, off on this device", len(n.Overrides))})
 	default:
-		text = paint("33", cmp.Or(strings.Join(domains, ", "), "names")+" not resolved: "+n.Not)
-		hint = dnsHint(n.Not)
+		for _, o := range n.Overrides {
+			if o.Not != "" {
+				out = append(out, line{kind: lineInfo, text: fmt.Sprintf("%s resolved publicly: %s", o.Name, o.Not)})
+			}
+		}
 	}
-	var more string
-	switch {
-	case len(n.Overrides) == 0:
-	case n.Accepted:
-		more = overridesList(n, paint)
-	case len(n.Overrides) == 1:
-		more = paint("2", "1 public name, off on this device")
-	default:
-		more = paint("2", fmt.Sprintf("%d public names, off on this device", len(n.Overrides)))
-	}
-	switch {
-	case text == "":
-		// A network whose name is no label has public names alone, or its
-		// public domain.
-		text = cmp.Or(more, "resolved")
-	case more != "":
-		text += "; " + more
-	}
-	return text, hint
+	return out
 }

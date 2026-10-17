@@ -43,6 +43,7 @@ func handshakeAgain(t *testing.T, n, other *node, since time.Time, wait time.Dur
 // holding the right WireGuard key but another preshared key completes no
 // handshake.
 func TestHandshakesCarryThePresharedKey(t *testing.T) {
+	t.Parallel()
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	k1, k2, k3 := [32]byte{1}, [32]byte{2}, [32]byte{3}
@@ -91,6 +92,7 @@ func TestHandshakesCarryThePresharedKey(t *testing.T) {
 // A peer given a preshared key where it had none loses the session it had,
 // which mixes in none: what it carries next takes a handshake under the key.
 func TestAKeyWhereThereWasNoneEndsTheSession(t *testing.T) {
+	t.Parallel()
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	withPSK(t, a, b, [32]byte{})
@@ -116,6 +118,7 @@ func TestAKeyWhereThereWasNoneEndsTheSession(t *testing.T) {
 // SetPeers gave it one, passes nothing, and loses whatever session it made
 // once the reset is repeated.
 func TestAPeerCreatedWithTheKeyItHadPassesNothing(t *testing.T) {
+	t.Parallel()
 	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	withPSK(t, a, b, [32]byte{})

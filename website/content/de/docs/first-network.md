@@ -103,7 +103,7 @@ $ juist status
 home · connected
   This device   laptop  198.18.36.1  fd84:7a1f:97ee:5630:7c56:12b6:971f:2222
   Devices       1 other
-  Names         home.juist
+  Names         laptop.home.juist
   Freshness     unchecked: no voucher
   Ports         udp/41643
   Schema        18
@@ -115,8 +115,8 @@ nas                   198.18.36.2  direct   18      -
 $ ping 198.18.36.2
 ```
 
-`juist devices` listet die Geräte auf. Wo systemd-resolved läuft, klappt
-auch `ping nas.home.juist`.
+`juist devices` listet die Geräte auf, und auch `ping nas.home.juist`
+klappt.
 {{< /step >}}
 
 ## Hinter NAT oder mit öffentlicher Adresse

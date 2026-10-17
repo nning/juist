@@ -133,6 +133,13 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		tun := opts.service.Mesh.TunName
 		opts.service.Mesh.ListenHTTPS = func(a netip.Addr) (net.Listener, error) { return h.ListenHTTPS(tun, a) }
 	}
+	if h, ok := opts.service.Mesh.Plumber.(dnsBinder); ok {
+		// And 53 for the resolver the host asks.
+		tun := opts.service.Mesh.TunName
+		opts.service.Mesh.ListenDNS = func(a netip.AddrPort) (net.PacketConn, net.Listener, error) {
+			return h.ListenDNS(tun, a.Addr())
+		}
+	}
 	if helperGone != nil {
 		var cancel context.CancelCauseFunc
 		ctx, cancel = context.WithCancelCause(ctx)
@@ -188,6 +195,11 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 // httpsBinder binds 443 for the relay where juistd may not.
 type httpsBinder interface {
 	ListenHTTPS(dev string, a netip.Addr) (net.Listener, error)
+}
+
+// dnsBinder binds 53 for juistd's resolver where juistd may not.
+type dnsBinder interface {
+	ListenDNS(dev string, a netip.Addr) (net.PacketConn, net.Listener, error)
 }
 
 type options struct {

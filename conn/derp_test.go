@@ -1,14 +1,10 @@
 package conn
 
 import (
-	"errors"
-	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
 	"testing"
-
-	"tailscale.com/tailcfg"
 )
 
 func testRelay() Relay {
@@ -308,21 +304,6 @@ func TestSTUNServersNeverBecomeRelays(t *testing.T) {
 	}
 	if _, err := parseSTUNServer("no-port"); err == nil {
 		t.Fatal("accepted a STUN server without a port")
-	}
-}
-
-func TestOnlyTheSTUNHomeRetriesAreDropped(t *testing.T) {
-	var got []string
-	m := &tsManager{}
-	m.stunRegions.Store(&map[tailcfg.DERPRegionID]bool{65534: true})
-	logf := m.withoutSTUNHomeNoise(func(format string, args ...any) { got = append(got, fmt.Sprintf(format, args...)) })
-	logf("%s: [v1] backoff: %d msec", "derp-65534", 900)
-	logf("derp.Recv(derp-65534): %v", errors.New("connect to region 65534 (stun1): no non-STUNOnly nodes for region 65534"))
-	logf("%s: [v1] backoff: %d msec", "derp-7", 900)
-	logf("magicsock: endpoints changed: %s", "192.0.2.1:41643 (stun)")
-	want := []string{"derp-7: [v1] backoff: 900 msec", "magicsock: endpoints changed: 192.0.2.1:41643 (stun)"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("kept %q, want %q", got, want)
 	}
 }
 

@@ -1,6 +1,6 @@
 module juist/website/video
 
-go 1.26.0
+go 1.27.2
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f

@@ -56,16 +56,20 @@ func (d *Daemon) namesAddrNow() (netip.AddrPort, error) {
 			})
 		}
 	}
-	if at, ok := namesAddrOf(d.heldAddrs(), held); ok {
+	port := uint16(NamesPort)
+	if _, ok := d.hostDNS.(interface{ on53() bool }); ok {
+		port = 53
+	}
+	if at, ok := namesAddrOf(d.heldAddrs(), held, port); ok {
 		return at, nil
 	}
 	return netip.AddrPort{}, errors.New("juist's device holds no overlay address yet")
 }
 
-// namesAddrOf is the first of addrs held says the device holds on
-// [NamesPort]: IPv6 first, then the current IPv4 address before one
-// retiring, which addrs lists before it.
-func namesAddrOf(addrs []netip.Prefix, held func(netip.Addr) bool) (netip.AddrPort, bool) {
+// namesAddrOf is the first of addrs held says the device holds on port:
+// IPv6 first, then the current IPv4 address before one retiring, which addrs
+// lists before it.
+func namesAddrOf(addrs []netip.Prefix, held func(netip.Addr) bool, port uint16) (netip.AddrPort, bool) {
 	var v6, v4 []netip.Addr
 	for _, p := range addrs {
 		if p.Addr().Is6() {
@@ -76,7 +80,7 @@ func namesAddrOf(addrs []netip.Prefix, held func(netip.Addr) bool) (netip.AddrPo
 	}
 	for _, a := range append(v6, v4...) {
 		if held(a) {
-			return netip.AddrPortFrom(a, NamesPort), true
+			return netip.AddrPortFrom(a, port), true
 		}
 	}
 	return netip.AddrPort{}, false
@@ -85,13 +89,17 @@ func namesAddrOf(addrs []netip.Prefix, held func(netip.Addr) bool) (netip.AddrPo
 // defaultNamesServer answers the host alone, on the device named dev: what
 // comes from the host's own address or the loopback, which nothing through
 // the tunnel does, and bound to the device, which the host's own traffic to
-// it is taken to come in by, and nothing sent by another's.
-func defaultNamesServer(dev string) NamesServer {
+// it is taken to come in by, and nothing sent by another's. listen, where
+// set, binds port 53.
+func defaultNamesServer(dev string, listen func(netip.AddrPort) (net.PacketConn, net.Listener, error)) NamesServer {
 	return func(addr netip.AddrPort, answer func([]byte) []byte, upstream func([]byte) []netip.AddrPort) (io.Closer, error) {
 		own := func(a netip.Addr) bool { return a == addr.Addr() || a.IsLoopback() }
 		// Never the host's resolv.conf, whose stub would route it back here.
 		none := func() []netip.AddrPort { return nil }
-		return dnsfwd.Start(dnsfwd.Options{Addrs: []netip.Addr{addr.Addr()}, Port: addr.Port(), Device: dev,
+		if addr.Port() != 53 {
+			listen = nil
+		}
+		return dnsfwd.Start(dnsfwd.Options{Addrs: []netip.Addr{addr.Addr()}, Port: addr.Port(), Device: dev, Listen: listen,
 			Allowed: own, Local: true, Answer: answer, Upstream: none, UpstreamFor: upstream,
 			// A public name newly pointed at a member replaces its public
 			// address in the host's cache as soon as its own answers expire.

@@ -4,6 +4,27 @@
 Structure: per block — what it provides / security properties & caveats / maturity /
 Rust & Go libraries.*
 
+**Since decided otherwise** (the recommendations below stay as researched):
+
+- tka is followed as a design, not imported
+  ([08-trust-layer-notes.md](../08-trust-layer-notes.md)).
+- Every signature is ML-DSA-44 since M17/M18, not Ed25519 with PQ cosigning
+  later ([02-threat-model.md](../02-threat-model.md), residual weakness 13).
+- Freshness leases are signed by admin devices, M of them required
+  (`juist admins vouchers`), not by the quorum; the TTL defaults to 48 h.
+- The log head rides gossip frames, not disco keepalives
+  ([04-architecture.md](../04-architecture.md)).
+- The DHT blinds the item's key, not a topic ID
+  ([10-connectivity-notes.md](../10-connectivity-notes.md)).
+- IPv4 is assigned in the log from the network's prefix, by default a /22 in
+  198.18/15, not from 100.64/10.
+- wireguard-go on every platform in v1, kernel WireGuard after it; a pair's PSK is
+  first a group key, then a key of the pair's own from ML-KEM-768 encapsulations
+  (M15), so the group secret seeds a pair's first PSK, though the WireGuard
+  handshake holds without it.
+- The residual weaknesses juist accepts are those of
+  [02-threat-model.md](../02-threat-model.md).
+
 ## 1. Signed append-only membership logs
 
 ### Tailscale tailnet lock (TKA) — the deployed prior art

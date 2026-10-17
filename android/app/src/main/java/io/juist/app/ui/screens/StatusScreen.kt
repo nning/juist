@@ -103,6 +103,7 @@ fun StatusScreen(
     onStartOver: () -> Unit = {},
     onExit: (String?) -> Unit = {},
     onVpnSettings: () -> Unit = {},
+    saving: Boolean = false,
 ) {
     val view = connection.lastView
     val on = connection is Connection.On
@@ -137,6 +138,7 @@ fun StatusScreen(
             Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = Space.xxl)) {
                 Hero(connection, view, onConnect, onDisconnect, onForget, onStartOver)
                 if (on && view != null) {
+                    if (saving) NoteCard(Severity.Info, stringResource(R.string.saving), stringResource(R.string.saving_hint))
                     for (a in view.alarms) AlarmCard(a)
                 }
                 // A removed device, or one in a disabled network, has nothing
@@ -251,13 +253,17 @@ private fun Hero(
 }
 
 @Composable
-private fun AlarmCard(a: Alarm) {
-    val (container, content) = when (a.severity) {
+private fun AlarmCard(a: Alarm) =
+    NoteCard(a.severity, alarmTitle(a), alarmHint(a)?.let { stringResource(it) }, a.text)
+
+@Composable
+private fun NoteCard(severity: Severity, title: String, hint: String?, text: String = "") {
+    val (container, content) = when (severity) {
         Severity.Alarm -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
         Severity.Warn -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
         Severity.Info -> MaterialTheme.colorScheme.surfaceContainer to MaterialTheme.colorScheme.onSurface
     }
-    val dot = when (a.severity) {
+    val dot = when (severity) {
         Severity.Alarm -> LocalStatusColors.current.alarm
         Severity.Warn -> LocalStatusColors.current.relay
         Severity.Info -> LocalStatusColors.current.sought
@@ -271,13 +277,11 @@ private fun AlarmCard(a: Alarm) {
             StatusDot(dot, Modifier.padding(top = 6.dp))
             Spacer(Modifier.width(Space.m))
             Column {
-                Text(alarmTitle(a), style = MaterialTheme.typography.titleSmall, color = content)
-                alarmHint(a)?.let {
-                    Text(stringResource(it), style = MaterialTheme.typography.bodyMedium, color = content)
-                }
-                if (a.text.isNotEmpty()) {
+                Text(title, style = MaterialTheme.typography.titleSmall, color = content)
+                hint?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = content) }
+                if (text.isNotEmpty()) {
                     Spacer(Modifier.height(Space.xs))
-                    Text(a.text, style = MaterialTheme.typography.bodySmall, color = content.copy(alpha = 0.8f))
+                    Text(text, style = MaterialTheme.typography.bodySmall, color = content.copy(alpha = 0.8f))
                 }
             }
         }

@@ -20,7 +20,8 @@
     {
       "identity": "nid:AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "name": "bert",
-      "reach": "relay"
+      "reach": "relay",
+      "relay": "anna"
     },
     {
       "identity": "nid:BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

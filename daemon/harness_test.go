@@ -289,6 +289,9 @@ type fakeManager struct {
 	// on, by the probed address, as a disco pong does.
 	paths map[netip.Addr]netip.AddrPort
 
+	// saving is what SetSaving was last told.
+	saving bool
+
 	// hold, when set, keeps every probe's answer back until it is closed.
 	hold chan struct{}
 
@@ -449,6 +452,18 @@ func (m *fakeManager) Probe(ip netip.Addr, _ time.Duration, cb func(bool)) {
 		}
 		cb(ok)
 	}()
+}
+
+func (m *fakeManager) SetSaving(saving bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saving = saving
+}
+
+func (m *fakeManager) isSaving() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.saving
 }
 
 func (m *fakeManager) probes() int {

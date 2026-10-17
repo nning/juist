@@ -765,7 +765,7 @@ func (a *app) instanceStatusAt(sock string) bool {
 
 // printHostStatus is "juist status" for a host in several networks: each
 // one's, apart, headed by the instance it runs in.
-func (a *app) printHostStatus(insts []hostInstance) {
+func (a *app) printHostStatus(insts []hostInstance, verbose bool) {
 	for k, i := range insts {
 		if k > 0 {
 			a.printf("\n")
@@ -775,7 +775,7 @@ func (a *app) printHostStatus(insts []hostInstance) {
 			a.hint("%s", startCmd(i.n))
 			continue
 		}
-		a.printStatusIn(i.st, i.name())
+		a.printStatusIn(i.st, i.name(), verbose)
 		a.healthHint(i.st, i.name(), true)
 	}
 }

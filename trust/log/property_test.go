@@ -15,8 +15,10 @@ import (
 // byte-identical state, head and alarm whatever order they arrived in. Seeded,
 // so a failure can be replayed.
 func TestResolutionIsOrderIndependent(t *testing.T) {
+	t.Parallel()
 	for seed := uint64(1); seed <= 24; seed++ {
 		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
+			t.Parallel()
 			g := newGenerator(t, seed)
 			// Enough records whatever path the seed takes, as a step that
 			// draws a refused record adds none.
@@ -71,8 +73,10 @@ func TestGeneratorIsReproducible(t *testing.T) {
 // record must leave nothing behind, and the store must reopen to what it
 // serves.
 func TestIncrementalDeliveryNeverRegresses(t *testing.T) {
+	t.Parallel()
 	for seed := uint64(1); seed <= 16; seed++ {
 		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
+			t.Parallel()
 			g := newGenerator(t, seed)
 			g.run(20)
 			rng := rand.New(rand.NewPCG(seed, 7))

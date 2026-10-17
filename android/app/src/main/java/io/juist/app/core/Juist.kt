@@ -113,6 +113,14 @@ object Juist {
     /** Whether a screen is showing, which makes the status poll fast. */
     @Volatile var visible = false
 
+    private val _pace = MutableStateFlow(Pace())
+    /** The phone's pace as [JuistVpnService] last read it; the screen off pauses the status poll. */
+    val pace: StateFlow<Pace> = _pace.asStateFlow()
+
+    internal fun paced(p: Pace) {
+        _pace.value = p
+    }
+
     fun init(context: Context) {
         cacheFile = File(context.noBackupFilesDir, "last-status.json")
         val last = runCatching { parseView(cacheFile.readText()) }.getOrNull()
@@ -158,6 +166,8 @@ object Juist {
         poller?.cancel()
         poller = scope.launch {
             while (isActive) {
+                // Nothing shows the status while the screen is off, the notification included.
+                pace.first { it.interactive }
                 refresh()
                 delay(if (visible) 2_000 else 15_000)
             }

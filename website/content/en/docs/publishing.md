@@ -218,11 +218,10 @@ does not open the name.
   for, recognized by the network address their connection comes from. From the
   ingress it accepts only the CA's check, so a compromised ingress gets no
   further.
-- On Linux with systemd-resolved, members reach the name directly at its
-  device, like any name on 443. Devices that resolve the network's names
-  through public DNS cannot reach it at all: FreeBSD, Linux without
-  systemd-resolved (where `juist status` warns about each such name), and the
-  Android app.
+- On Linux and FreeBSD, members reach the name directly at its device, like
+  any name on 443. Devices that resolve the network's names through public
+  DNS cannot reach it at all: those where `juist health` says the names are
+  not resolved, and warns about each such name, and the Android app.
 - The name needs a service of its own. juist does not serve a members-only name
   if another name or a share on the same device reaches the same service with
   its bytes passed through unchanged, because a client of the other name could
@@ -400,7 +399,7 @@ shows is then that of a device the others accept no connections from.
 - A name with a record of its own, such as the CAA or HTTPS record juist
   prints, no longer gets an address from `*.example.org`. Give it its own A and
   AAAA records too, pointing at the ingress.
-- Every member on Linux with systemd-resolved sends queries for the whole
+- Every member on Linux and FreeBSD sends queries for the whole
   domain to juistd. juistd answers a name published on 443, or a shared one,
   with its device's address while that device is reachable, so that members
   reach it directly through the tunnel, with the same certificate. All other
@@ -490,7 +489,8 @@ shows is then that of a device the others accept no connections from.
 {{< note caution >}}
 Whoever controls the ingress can get a certificate for your names and intercept
 public clients, as well as members that reach a name through the ingress:
-those on a port other than 443, behind `--proxy`, or without systemd-resolved.
+those on a port other than 443, behind `--proxy`, or on devices that do not
+resolve the network's names.
 Members that resolve a name on 443 to its device connect to it directly. A CAA
 record closes this gap. It is a DNS record that says who may issue
 certificates for a name, here bound to the target's ACME account.
@@ -516,7 +516,7 @@ terminator's log shows it.
 | `juist health`: `warning: no certificate for NAME: …` | the CA issued none, for the reason given. Most often it cannot reach NAME, whose public DNS must point at a running ingress. Until then, clients' TLS fails |
 | `juist status`: `warning: not serving NAME, which is for members alone: OTHER reaches its service as it is, …` | OTHER goes to the same service by TCP, or without being proxied, so its clients could ask the service for NAME. Give NAME a service of its own |
 | `juist status`: `warning: not serving NAME, its service meant for members alone: the log has the name public` | to publish it for members, an admin runs `juist publish add DEVICE NAME --members`; to make it public, run `juist publish add NAME HOST:PORT --members=false` on the device |
-| `juist status`: `warning: NAME, for members alone, is not reached from here, …` | this device resolves the network's names through public DNS, so NAME leads to the ingress, which refuses it. On Linux, use systemd-resolved |
+| `juist status`: `warning: NAME, for members alone, is not reached from here, …` | this device resolves the network's names through public DNS, so NAME leads to the ingress, which refuses it. The rest of `juist health` says why |
 | `another program holds port 443 on …, where juist would end TLS` | stop that program, or publish on another port |
 | on vps, `juist status`: `Ingress` says `…; another program holds port 443/udp` | another program, often a web server's own HTTP/3, holds 443/udp on the ingress. Browsers stay on TCP until it lets go; then the ingress takes the port |
 | `access: quic … refused: another name's flow from its address` | a client connected from one UDP socket to names on two devices, and the ingress passes that socket on to only one of them. Browsers use a separate socket for each |

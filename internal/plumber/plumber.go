@@ -52,6 +52,7 @@ const (
 	opDestroy = "destroy"
 	opAnswers = "answers"
 	opListen  = "listen-https"
+	opDNS53   = "listen-dns"
 )
 
 type request struct {
@@ -65,6 +66,8 @@ type request struct {
 	Egress *EgressSpec    `cbor:"8,keyasint,omitempty"`
 	DNS    []netip.Addr   `cbor:"9,keyasint,omitempty"`
 	Listen netip.Addr     `cbor:"10,keyasint,omitempty"`
+	Search []string       `cbor:"11,keyasint,omitempty"`
+	Proto  string         `cbor:"12,keyasint,omitempty"`
 }
 
 type response struct {
@@ -145,10 +148,37 @@ func (c *Client) SetEgress(dev string, e EgressSpec) error {
 }
 
 // SetDNS makes servers, on port 53, the host's resolvers for every name, by
-// dev, or gives the host its own back where there are none.
-func (c *Client) SetDNS(dev string, servers []netip.Addr) error {
-	_, err := c.call(request{Op: opDNS, Device: dev, DNS: servers})
+// dev, with search its search domains, or gives the host its own back where
+// there are none.
+func (c *Client) SetDNS(dev string, servers []netip.Addr, search []string) error {
+	_, err := c.call(request{Op: opDNS, Device: dev, DNS: servers, Search: search})
 	return err
+}
+
+// ListenDNS binds 53, UDP and TCP, at a, an address of dev's, for the
+// resolver that answers the host, which may not bind a port below 1024.
+func (c *Client) ListenDNS(dev string, a netip.Addr) (net.PacketConn, net.Listener, error) {
+	uf, _, err := c.exchange(request{Op: opDNS53, Device: dev, Listen: a, Proto: "udp"})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer uf.Close()
+	pc, err := net.FilePacketConn(uf)
+	if err != nil {
+		return nil, nil, err
+	}
+	tf, _, err := c.exchange(request{Op: opDNS53, Device: dev, Listen: a, Proto: "tcp"})
+	if err != nil {
+		pc.Close()
+		return nil, nil, err
+	}
+	defer tf.Close()
+	ln, err := net.FileListener(tf)
+	if err != nil {
+		pc.Close()
+		return nil, nil, err
+	}
+	return pc, ln, nil
 }
 
 // Answers says why answers to connections that came in by another device
@@ -209,7 +239,7 @@ func (c *Client) exchange(req request) (*os.File, response, error) {
 	if err := writeFrame(c.c, body, nil); err != nil {
 		return fail(err)
 	}
-	body, f, err := readFrame(c.c, req.Op == opOpen || req.Op == opListen)
+	body, f, err := readFrame(c.c, req.Op == opOpen || req.Op == opListen || req.Op == opDNS53)
 	if err != nil {
 		if f != nil {
 			f.Close()
@@ -323,8 +353,9 @@ type Host interface {
 	// SetEgress sends the host's traffic as e asks, uid being juistd's, whose
 	// own goes by the host's routes. Refusing outlasts the device.
 	SetEgress(dev string, e EgressSpec, uid int) error
-	// SetDNS makes servers the host's resolvers by dev, or no longer.
-	SetDNS(dev string, servers []netip.Addr) error
+	// SetDNS makes servers the host's resolvers by dev, with search its
+	// search domains, or no longer.
+	SetDNS(dev string, servers []netip.Addr, search []string) error
 	// Free reports whether no helper holds dev.
 	Free(dev string) bool
 	// Answers says why answers to what comes in by another device would not
@@ -332,6 +363,9 @@ type Host interface {
 	Answers() string
 	// ListenHTTPS binds 443/tcp at a and returns the listener's descriptor.
 	ListenHTTPS(a netip.Addr) (*os.File, error)
+	// ListenDNS binds 53 at a by proto, "udp" or "tcp", and returns the
+	// socket's descriptor.
+	ListenDNS(a netip.Addr, proto string) (*os.File, error)
 }
 
 // device is what the helper made and installed on one device.
@@ -339,6 +373,18 @@ type device struct {
 	destroy func() error
 	addrs   []netip.Prefix
 	routes  map[netip.Prefix]netip.Addr
+	ownDNS  bool // the host's resolver is the daemon's own, at the device
+}
+
+// destroyed destroys d, and gives the host its resolvers back where they
+// were the daemon's, which no longer answers; an exit node's stay, so that
+// lookups go nowhere rather than to the LAN until juistd is back.
+func (d *device) destroyed(h Host, name string) error {
+	var err error
+	if d.ownDNS {
+		err = h.SetDNS(name, nil, nil)
+	}
+	return errors.Join(err, d.destroy())
 }
 
 // Serve answers the daemon on c until it hangs up, or sends what no helper
@@ -350,7 +396,7 @@ func Serve(c *net.UnixConn, h Host, uid int, logf func(string, ...any)) (destroy
 	devs := map[string]*device{}
 	destroy = func() {
 		for name, d := range devs {
-			if err := d.destroy(); err != nil {
+			if err := d.destroyed(h, name); err != nil {
 				logf("plumber: destroying %s: %v", name, err)
 			}
 			delete(devs, name)
@@ -410,7 +456,7 @@ func handle(devs map[string]*device, h Host, req request, uid int) (*os.File, er
 	}
 	if req.Op == opDNS && d == nil && len(req.DNS) == 0 && h.Free(req.Device) {
 		// Given back while no device runs; set only with one.
-		return nil, h.SetDNS(req.Device, nil)
+		return nil, h.SetDNS(req.Device, nil, nil)
 	}
 	if req.Op == opEgress && d == nil && req.Egress != nil && h.Free(req.Device) && len(req.Egress.Capture) == 0 &&
 		(req.Egress.Mode == EgressDirect || req.Egress.Mode == EgressRefused) {
@@ -440,7 +486,7 @@ func handle(devs map[string]*device, h Host, req request, uid int) (*os.File, er
 	switch req.Op {
 	case opDestroy:
 		delete(devs, req.Device)
-		return nil, d.destroy()
+		return nil, d.destroyed(h, req.Device)
 	case opAddrs:
 		return nil, setAddrs(h, req.Device, d, req.Addrs)
 	case opRoutes:
@@ -468,7 +514,24 @@ func handle(devs map[string]*device, h Host, req request, uid int) (*os.File, er
 		}
 		return nil, h.SetServe(req.Device, *req.Serve)
 	case opDNS:
-		return nil, setDNS(h, req.Device, req.DNS)
+		err := setDNS(h, req.Device, req.DNS, req.Search)
+		if err == nil {
+			d.ownDNS = len(req.DNS) > 0 && !slices.ContainsFunc(req.DNS, func(a netip.Addr) bool {
+				return !slices.ContainsFunc(d.addrs, func(p netip.Prefix) bool { return p.Addr() == a })
+			})
+		}
+		return nil, err
+	case opDNS53:
+		// One of the device's own addresses alone, which the host's
+		// resolver is pointed at.
+		a := req.Listen
+		if !a.IsValid() || a.Zone() != "" || !slices.ContainsFunc(d.addrs, func(p netip.Prefix) bool { return p.Addr() == a }) {
+			return nil, fmt.Errorf("%v is no address of %s", a, req.Device)
+		}
+		if req.Proto != "udp" && req.Proto != "tcp" {
+			return nil, fmt.Errorf("no protocol %q", req.Proto)
+		}
+		return h.ListenDNS(a, req.Proto)
 	case opListen:
 		// 443 alone, at an address of the host's, never one of the
 		// device's own, which the terminator serves.
@@ -578,9 +641,10 @@ func checkEgress(e EgressSpec) error {
 	return validPrefixes(e.Subnets)
 }
 
-func setDNS(h Host, dev string, servers []netip.Addr) error {
+func setDNS(h Host, dev string, servers []netip.Addr, search []string) error {
 	for _, s := range servers {
-		// An exit node's, the only resolvers a device is given.
+		// An exit node's or juistd's own, the only resolvers a device is
+		// given.
 		if !s.IsValid() || s.Zone() != "" || !within(netip.PrefixFrom(s, s.BitLen()), overlaySpace) {
 			return fmt.Errorf("a resolver %v", s)
 		}
@@ -589,8 +653,22 @@ func setDNS(h Host, dev string, servers []netip.Addr) error {
 		// All the host's resolver takes.
 		servers = servers[:3]
 	}
-	return h.SetDNS(dev, servers)
+	for _, d := range search {
+		// Written into resolv.conf, where a space or a newline would say
+		// more than a domain.
+		if !searchDomain.MatchString(d) || len(d) > 253 {
+			return fmt.Errorf("a search domain %q", d)
+		}
+	}
+	if len(search) > 6 {
+		// As many as the host's resolver takes.
+		search = search[:6]
+	}
+	return h.SetDNS(dev, servers, search)
 }
+
+// searchDomain is a domain resolv.conf may search.
+var searchDomain = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$`)
 
 func setAddrs(h Host, dev string, d *device, want []netip.Prefix) error {
 	var errs []error

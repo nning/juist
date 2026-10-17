@@ -20,6 +20,7 @@ import (
 // by ordinary host tools rather than the engine's internal ping. The tap also
 // closes the M0 egress criterion's gap, by watching what actually left.
 func TestNetnsOverlayCarriesTraffic(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	a := lab.addNode("a", 1)
 	b := lab.addNode("b", 2)
@@ -60,6 +61,7 @@ func TestNetnsOverlayCarriesTraffic(t *testing.T) {
 // gets no route and no handshake, against a real device and routing table.
 // The filter entry the criterion also names is asserted in filter_test.go.
 func TestNetnsDefaultDenySurvivesTheRouter(t *testing.T) {
+	t.Parallel()
 	lab := newNetnsLab(t)
 	a := lab.addNode("a", 1)
 	b := lab.addNode("b", 2)
@@ -178,6 +180,7 @@ func unreachableWithin(from *netnsNode, to netip.Addr, within time.Duration) err
 // only in the privileged job: a typo would show up there as a node coming up
 // with the wrong peers.
 func TestNetnsPeerEncoding(t *testing.T) {
+	t.Parallel()
 	discoPriv, discoPub, err := NewDiscoKey()
 	if err != nil {
 		t.Fatalf("generating a disco key: %v", err)
@@ -238,6 +241,7 @@ func TestNetnsPeerEncoding(t *testing.T) {
 // wrong offset would not fail — it would report a plausible wrong address, or
 // silently see no traffic at all and pass.
 func TestNetnsFrameDsts(t *testing.T) {
+	t.Parallel()
 	v4 := make([]byte, 34)
 	copy(v4[12:], []byte{0x08, 0x00})
 	copy(v4[30:], []byte{93, 184, 216, 34})
