@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -554,5 +555,39 @@ func TestABeaconSlowsDownUntilWoken(t *testing.T) {
 	time.Sleep(10 * interval)
 	if n := c.count() - before; n < 3 {
 		t.Fatalf("%d datagrams in %v after waking, want the first interval's pace", n, 10*interval)
+	}
+}
+
+// A quiet beacon sends nothing unasked, and woken once no longer quiet, it
+// announces at its first interval's pace.
+func TestAQuietBeaconSendsNothing(t *testing.T) {
+	c := &countConn{closed: make(chan struct{})}
+	const interval = 20 * time.Millisecond
+	var quiet atomic.Bool
+	quiet.Store(true)
+	b, err := New(Options{
+		Keyring:  keyringAt(t, 1, mustSecret(t)),
+		Interval: interval,
+		Conn:     c,
+		Dst:      netip.MustParseAddrPort("224.0.0.251:5353"),
+		Quiet:    quiet.Load,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go b.Run(t.Context())
+	t.Cleanup(func() { b.Close() })
+	time.Sleep(5 * interval) // the query at the start
+	before := c.count()
+	b.Wake()
+	time.Sleep(20 * interval)
+	if n := c.count() - before; n > 0 {
+		t.Fatalf("a quiet beacon sent %d datagrams in %v", n, 20*interval)
+	}
+	quiet.Store(false)
+	b.Wake()
+	time.Sleep(10 * interval)
+	if n := c.count() - before; n < 3 {
+		t.Fatalf("%d datagrams in %v once no longer quiet", n, 10*interval)
 	}
 }

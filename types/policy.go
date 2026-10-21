@@ -71,8 +71,7 @@ type PolicyRefs struct {
 	ViaTables []string       `cbor:"6,keyasint,omitempty"`
 	Prefixes  []netip.Prefix `cbor:"7,keyasint,omitempty"`
 	// Names are names published for members alone, by label under the
-	// network's domain, "" for the domain itself: a destination alone,
-	// from [SchemaMembers] on.
+	// network's domain, "" for the domain itself: a destination alone.
 	Names []string `cbor:"8,keyasint,omitempty"`
 }
 
@@ -268,7 +267,7 @@ func (r *PolicyRefs) validate(tables map[string][]string, dst bool) error {
 		if !pfx.IsValid() || pfx != pfx.Masked() || pfx.Addr().Zone() != "" {
 			return fmt.Errorf("prefix %v is not a network address", pfx)
 		}
-		if i > 0 && comparePrefix(r.Prefixes[i-1], pfx) >= 0 {
+		if i > 0 && ComparePrefix(r.Prefixes[i-1], pfx) >= 0 {
 			return fmt.Errorf("prefixes are not sorted and unique at %v", pfx)
 		}
 	}

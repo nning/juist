@@ -35,6 +35,7 @@ import (
 
 	"github.com/nning/juist/discovery/dht"
 	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/types"
@@ -187,7 +188,8 @@ func seal(key [32]byte, role uint64, it item) ([]byte, error) {
 	return aead.Seal(key, role, body)
 }
 
-func open(key [32]byte, role uint64, blob []byte) (item, error) {
+func open(key [32]byte, role uint64, blob []byte) (_ item, err error) {
+	defer malformed.Recover(&err)
 	var it item
 	if r, err := aead.Epoch(blob); err != nil {
 		return it, err

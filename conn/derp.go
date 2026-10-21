@@ -9,6 +9,7 @@ import (
 
 	"tailscale.com/tailcfg"
 
+	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/types"
 )
 
@@ -102,38 +103,40 @@ func derpMap(relays []Relay, stun []string, httpsOnly bool, local Networks) (*ta
 		}
 		dm.Regions[id] = reg
 	}
-	// STUN servers take the highest free regions, below which member relays
-	// derive theirs; a collision gives the relay the region.
+	// The STUN servers share one region, the highest free one, below which
+	// member relays derive theirs; a collision gives the relay the region.
+	// One: netcheck measures the three nearest regions and the home, and
+	// stops once three answered, which STUN servers of their own would leave
+	// no relay among.
 	next := tailcfg.DERPRegionID(MaxRegionID)
+	for dm.Regions[next] != nil {
+		next--
+	}
+	reg := &tailcfg.DERPRegion{RegionID: next, RegionCode: "stun", RegionName: "STUN"}
 	for i, s := range stun {
 		hp, err := parseSTUNServer(s)
 		if err != nil {
 			continue // checked when the manager was built
 		}
-		for dm.Regions[next] != nil {
-			next--
-		}
-		dm.Regions[next] = &tailcfg.DERPRegion{
-			RegionID:   next,
-			RegionCode: fmt.Sprintf("stun%d", i),
-			RegionName: hp.host,
-			Nodes: []*tailcfg.DERPNode{{
-				Name:     fmt.Sprintf("stun%d", i),
-				RegionID: next,
-				HostName: hp.host,
-				STUNPort: int(hp.port),
-				STUNOnly: true,
-			}},
-		}
+		reg.Nodes = append(reg.Nodes, &tailcfg.DERPNode{
+			Name:     fmt.Sprintf("stun%d", i),
+			RegionID: next,
+			HostName: hp.host,
+			STUNPort: int(hp.port),
+			STUNOnly: true,
+		})
+	}
+	if len(reg.Nodes) > 0 {
+		dm.Regions[next] = reg
 		stunRegions[next] = true
-		if dm.HomeParams == nil {
-			dm.HomeParams = &tailcfg.DERPHomeParams{RegionScore: map[tailcfg.DERPRegionID]float64{}}
-		}
-		dm.HomeParams.RegionScore[next] = stunRegionScore
-		next--
+		dm.HomeParams = &tailcfg.DERPHomeParams{RegionScore: map[tailcfg.DERPRegionID]float64{next: stunRegionScore}}
 	}
 	return dm, stunRegions
 }
+
+// CertPin is what a DERP node's CertName takes to pin a certificate by its
+// hash.
+func CertPin(sum [32]byte) string { return fmt.Sprintf("sha256-raw:%x", sum) }
 
 // pinnedNodes are r's nodes at addrs on its own port, its certificate
 // pinned, numbered from first.
@@ -144,7 +147,7 @@ func pinnedNodes(r Relay, addrs []netip.AddrPort, first int) []*tailcfg.DERPNode
 			Name:     fmt.Sprintf("j%d-%d", r.Region, first+i),
 			RegionID: tailcfg.DERPRegionID(r.Region),
 			HostName: r.HostName,
-			CertName: fmt.Sprintf("sha256-raw:%x", r.CertHash),
+			CertName: CertPin(r.CertHash),
 			DERPPort: int(ap.Port()),
 			STUNPort: -1,
 		}
@@ -279,34 +282,11 @@ func (n Networks) onLink(a netip.Addr) bool {
 
 // hostNetworks are the networks of this host's interfaces but skip's.
 func hostNetworks(skip string) []netip.Prefix {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
 	var out []netip.Prefix
-	for _, ifc := range ifs {
-		if ifc.Name == skip || ifc.Flags&net.FlagUp == 0 {
-			continue
-		}
-		addrs, err := ifc.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			if ipn, ok := a.(*net.IPNet); ok {
-				if ip, ok := netip.AddrFromSlice(ipn.IP); ok {
-					bits, _ := ipn.Mask.Size()
-					out = append(out, netip.PrefixFrom(ip.Unmap(), bits))
-				}
-			}
-		}
+	for _, ifc := range underlay.Interfaces(underlay.Filter{Up: true, Skip: skip}) {
+		out = append(out, ifc.Prefixes...)
 	}
-	slices.SortFunc(out, func(a, b netip.Prefix) int {
-		if c := a.Addr().Compare(b.Addr()); c != 0 {
-			return c
-		}
-		return a.Bits() - b.Bits()
-	})
+	slices.SortFunc(out, types.ComparePrefix)
 	return out
 }
 

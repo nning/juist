@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/fxamacker/cbor/v2"
+
+	"github.com/nning/juist/internal/malformed"
 )
 
 // ErrNonCanonical is returned when input decodes but is not the encoding this
@@ -45,7 +47,7 @@ func StrictDecOptions(maxNested, maxArray, maxPairs int) cbor.DecOptions {
 
 // decMode rejects everything a permissive CBOR decoder would repair: duplicate
 // map keys, indefinite lengths, tags, and unknown fields. Each is a way for two
-// byte strings to mean one record. [decodeCanonical]'s re-encode check catches
+// byte strings to mean one record. [DecodeCanonical]'s re-encode check catches
 // the rest, including non-minimal integers and misordered keys.
 var decMode = func() cbor.DecMode {
 	m, err := StrictDecOptions(maxNestedLevels, maxArrayElements, maxMapPairs).DecMode()
@@ -78,29 +80,20 @@ func mustEncode(v any) []byte {
 	return b
 }
 
-// decodeCanonical decodes b into a T and rejects it unless b is exactly what
-// encoding that T produces. Only the round trip proves the mapping from bytes
-// to records is injective, and it removes any need to reason about which
-// lenient behaviours the CBOR library has.
-func decodeCanonical[T any](b []byte) (T, error) {
+// DecodeCanonical decodes b, of at most limit bytes, by dec into a T and
+// refuses it unless b is exactly what encoding that T produces: only the round
+// trip proves the mapping from bytes to values injective.
+func DecodeCanonical[T any](dec cbor.DecMode, b []byte, limit int) (_ T, err error) {
+	defer malformed.Recover(&err)
 	var zero, v T
-	if len(b) == 0 {
-		return zero, errors.New("types: empty input")
+	if len(b) == 0 || len(b) > limit {
+		return zero, fmt.Errorf("types: an input of %d bytes, empty or over the %d limit", len(b), limit)
 	}
-	if len(b) > MaxRecordSize {
-		return zero, fmt.Errorf("types: input is %d bytes, over the %d limit", len(b), MaxRecordSize)
-	}
-	// Unmarshal, not a streaming Decoder: Unmarshal treats bytes after the
-	// first item as an error, and trailing bytes are exactly the kind of
-	// thing that must not be silently dropped from something we hash.
-	if err := decMode.Unmarshal(b, &v); err != nil {
+	// Unmarshal, not a streaming Decoder, refuses bytes after the first item.
+	if err := dec.Unmarshal(b, &v); err != nil {
 		return zero, fmt.Errorf("types: decoding: %w", err)
 	}
-	re, err := encMode.Marshal(v)
-	if err != nil {
-		return zero, fmt.Errorf("types: re-encoding to check canonicality: %w", err)
-	}
-	if !bytes.Equal(re, b) {
+	if re, err := encMode.Marshal(v); err != nil || !bytes.Equal(re, b) {
 		return zero, ErrNonCanonical
 	}
 	return v, nil

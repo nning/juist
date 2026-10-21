@@ -286,14 +286,14 @@ func writeFrame(c *net.UnixConn, body []byte, f *os.File) error {
 // come.
 func readFrame(c *net.UnixConn, fd bool) ([]byte, *os.File, error) {
 	head := make([]byte, 4)
-	oob := make([]byte, unix.CmsgSpace(4))
-	n, oobn, _, _, err := c.ReadMsgUnix(head, oob)
+	oob := make([]byte, unix.CmsgSpace(8*4)) // room for extras, to be closed
+	n, oobn, flags, _, err := c.ReadMsgUnix(head, oob)
 	if err != nil {
 		return nil, nil, err
 	}
 	var f *os.File
 	if oobn > 0 {
-		f, err = descriptor(oob[:oobn])
+		f, err = descriptor(oob[:oobn], flags)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -316,24 +316,51 @@ func readFrame(c *net.UnixConn, fd bool) ([]byte, *os.File, error) {
 	return body, f, nil
 }
 
-func descriptor(oob []byte) (*os.File, error) {
-	msgs, err := unix.ParseSocketControlMessage(oob)
-	if err != nil || len(msgs) != 1 {
-		return nil, errors.New("an unreadable control message")
-	}
-	fds, err := unix.ParseUnixRights(&msgs[0])
-	if err != nil || len(fds) != 1 {
-		for _, fd := range fds {
-			unix.Close(fd)
-		}
-		return nil, errors.New("not one descriptor")
-	}
-	// Non-blocking, so that the runtime's poller serves it.
-	if err := unix.SetNonblock(fds[0], true); err != nil {
-		unix.Close(fds[0])
+func descriptor(oob []byte, flags int) (*os.File, error) {
+	fd, err := ReceivedFD(oob, flags)
+	if err != nil {
 		return nil, err
 	}
-	return os.NewFile(uintptr(fds[0]), "tun"), nil
+	// Non-blocking, so that the runtime's poller serves it.
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), "tun"), nil
+}
+
+// ReceivedFD is the one descriptor carried by oob, the control messages a
+// read returned with flags. Unless they are one message of one descriptor,
+// whole, it closes every descriptor it finds in them.
+func ReceivedFD(oob []byte, flags int) (int, error) {
+	var fds []int
+	var err error
+	msgs := 0
+	for len(oob) >= unix.CmsgLen(0) {
+		hdr, data, rest, perr := unix.ParseOneSocketControlMessage(oob)
+		if perr != nil {
+			err = errors.New("an unreadable control message")
+			break
+		}
+		msgs++
+		if got, perr := unix.ParseUnixRights(&unix.SocketControlMessage{Header: hdr, Data: data}); perr == nil {
+			fds = append(fds, got...)
+		}
+		oob = rest
+	}
+	switch {
+	case err != nil:
+	case flags&unix.MSG_CTRUNC != 0:
+		err = errors.New("a truncated control message")
+	case msgs != 1 || len(fds) != 1:
+		err = errors.New("not one descriptor")
+	default:
+		return fds[0], nil
+	}
+	for _, fd := range fds {
+		unix.Close(fd)
+	}
+	return -1, err
 }
 
 // A Host is what the helper does to the host's network, as root.

@@ -6,7 +6,6 @@
 package waiting
 
 import (
-	"bytes"
 	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
@@ -16,8 +15,9 @@ import (
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
-	"golang.org/x/crypto/chacha20poly1305"
 
+	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -178,7 +178,8 @@ var aboutSubject = map[types.Kind]bool{
 // Open reads the change as the admin key admin, and checks that it is what
 // its signer said: the record it names, carrying the signer's signature,
 // checked against the signing key keyOf names.
-func (c *Change) Open(admin types.PrivateIdentity, keyOf func(types.Identity) *types.SigningKey) (types.AUM, error) {
+func (c *Change) Open(admin types.PrivateIdentity, keyOf func(types.Identity) *types.SigningKey) (_ types.AUM, err error) {
+	defer malformed.Recover(&err)
 	id := admin.Public()
 	i := slices.IndexFunc(c.Readers, func(r Reader) bool { return r.Admin == id })
 	if i < 0 {
@@ -234,16 +235,11 @@ func Hash(encoded []byte) types.Hash { return sha256.Sum256(encoded) }
 // signature, which every copy carries. Whether the signer is an admin, its
 // ML-DSA signature ([Change.VerifyPQ]), and whether the
 // change still fits the log, the caller decides against the log.
-func Decode(b []byte) (*Change, error) {
-	if len(b) == 0 || len(b) > MaxSize {
-		return nil, fmt.Errorf("waiting: a change of %d bytes", len(b))
-	}
-	var c Change
-	if err := decMode.Unmarshal(b, &c); err != nil {
-		return nil, fmt.Errorf("waiting: decoding: %w", err)
-	}
-	if re, err := c.Encode(); err != nil || !bytes.Equal(re, b) {
-		return nil, errors.New("waiting: not the canonical encoding")
+func Decode(b []byte) (_ *Change, err error) {
+	defer malformed.Recover(&err)
+	c, err := types.DecodeCanonical[Change](decMode, b, MaxSize)
+	if err != nil {
+		return nil, err
 	}
 	if err := c.validate(); err != nil {
 		return nil, err
@@ -300,38 +296,23 @@ func (c *Change) signed() []byte {
 	if err != nil {
 		panic(fmt.Sprintf("waiting: encoding a change: %v", err))
 	}
-	h := sha256.Sum256(append([]byte("juist/waiting-change/v1\x00"), b...))
+	h := sha256.Sum256(append([]byte(types.LabelWaitingChange+"\x00"), b...))
 	return h[:]
 }
 
 // context binds the sealed body and its keys to one network and one change.
 func (c *Change) context() []byte {
-	return append(append([]byte("juist/waiting-body/v1\x00"), c.Network[:]...), c.ID[:]...)
+	return append(append([]byte(types.LabelWaitingBody+"\x00"), c.Network[:]...), c.ID[:]...)
 }
 
-// sealBody encrypts the record under key, a fresh one per change:
-// XChaCha20-Poly1305 with a random nonce, the context as additional data.
+// sealBody encrypts the record under key, a fresh one per change, the context
+// as additional data.
 func sealBody(key [secrets.KeySize]byte, context, plaintext []byte) ([]byte, error) {
-	a, err := chacha20poly1305.NewX(key[:])
-	if err != nil {
-		return nil, err
-	}
-	out := make([]byte, a.NonceSize(), a.NonceSize()+len(plaintext)+a.Overhead())
-	if _, err := rand.Read(out); err != nil {
-		return nil, fmt.Errorf("waiting: drawing a nonce: %w", err)
-	}
-	return a.Seal(out, out, plaintext, context), nil
+	return aead.SealAD(key, context, plaintext)
 }
 
 func openBody(key [secrets.KeySize]byte, context, body []byte) ([]byte, error) {
-	a, err := chacha20poly1305.NewX(key[:])
-	if err != nil {
-		return nil, err
-	}
-	if len(body) < a.NonceSize()+a.Overhead() {
-		return nil, errors.New("waiting: a sealed record shorter than its nonce")
-	}
-	pt, err := a.Open(nil, body[:a.NonceSize()], body[a.NonceSize():], context)
+	pt, err := aead.OpenAD(key, context, body)
 	if err != nil {
 		return nil, fmt.Errorf("waiting: opening the record: %w", err)
 	}

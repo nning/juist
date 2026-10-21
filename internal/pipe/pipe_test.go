@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"io"
 	"net"
-	"net/netip"
 	"runtime"
 	"testing"
 	"time"
@@ -68,31 +67,6 @@ func TestJoinIdlesBothWaysAtOnce(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("a connection quiet both ways stays")
-	}
-}
-
-// One host's connections are bounded, and one site's, its hosts together.
-func TestSourcesBoundHostsAndSites(t *testing.T) {
-	s := Sources{Max: 2}
-	for _, tc := range []struct {
-		addr string
-		ok   bool
-	}{
-		{"2001:db8:1:1::1", true}, {"2001:db8:1:1::2", true}, {"2001:db8:1:1::3", false},
-		{"2001:db8:1:2::1", true}, {"2001:db8:1:3::1", true}, {"2001:db8:1:4::1", true},
-		{"2001:db8:1:5::1", true}, {"2001:db8:1:6::1", true}, {"2001:db8:1:6::2", true},
-		{"2001:db8:1:7::1", false}, {"2001:db8:2::1", true},
-		{"192.0.2.1", true}, {"192.0.2.1", true}, {"192.0.2.1", false},
-		{"192.0.2.2", true}, {"192.0.2.2", true}, {"192.0.2.3", true}, {"192.0.2.3", true},
-		{"192.0.2.4", true}, {"192.0.2.4", true}, {"192.0.2.5", false}, {"198.51.100.1", true},
-	} {
-		if got := s.Take(netip.MustParseAddr(tc.addr)); got != tc.ok {
-			t.Errorf("a connection from %s taken %v, want %v", tc.addr, got, tc.ok)
-		}
-	}
-	s.Done(netip.MustParseAddr("192.0.2.4"))
-	if !s.Take(netip.MustParseAddr("192.0.2.5")) {
-		t.Error("a site's connection given back is not taken again")
 	}
 }
 

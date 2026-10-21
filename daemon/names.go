@@ -20,8 +20,9 @@ import (
 )
 
 // A NamesServer answers the host's DNS at addr: what answer has a word on,
-// the rest from the resolvers upstream names for each query, until closed.
-type NamesServer func(addr netip.AddrPort, answer func([]byte) []byte, upstream func([]byte) []netip.AddrPort) (io.Closer, error)
+// the rest from the resolvers upstream names for each query, SERVFAIL where
+// it fails, until closed.
+type NamesServer func(addr netip.AddrPort, answer func([]byte) []byte, upstream func([]byte) ([]netip.AddrPort, error)) (io.Closer, error)
 
 // NamesPort is where juistd answers the host's own DNS, on an overlay
 // address of the device's.
@@ -57,8 +58,8 @@ func (d *Daemon) namesAddrNow() (netip.AddrPort, error) {
 		}
 	}
 	port := uint16(NamesPort)
-	if _, ok := d.hostDNS.(interface{ on53() bool }); ok {
-		port = 53
+	if p, ok := d.hostDNS.(namesPorter); ok {
+		port = p.namesPort()
 	}
 	if at, ok := namesAddrOf(d.heldAddrs(), held, port); ok {
 		return at, nil
@@ -92,7 +93,7 @@ func namesAddrOf(addrs []netip.Prefix, held func(netip.Addr) bool, port uint16) 
 // it is taken to come in by, and nothing sent by another's. listen, where
 // set, binds port 53.
 func defaultNamesServer(dev string, listen func(netip.AddrPort) (net.PacketConn, net.Listener, error)) NamesServer {
-	return func(addr netip.AddrPort, answer func([]byte) []byte, upstream func([]byte) []netip.AddrPort) (io.Closer, error) {
+	return func(addr netip.AddrPort, answer func([]byte) []byte, upstream func([]byte) ([]netip.AddrPort, error)) (io.Closer, error) {
 		own := func(a netip.Addr) bool { return a == addr.Addr() || a.IsLoopback() }
 		// Never the host's resolv.conf, whose stub would route it back here.
 		none := func() []netip.AddrPort { return nil }

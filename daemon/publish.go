@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -54,17 +53,6 @@ type publishing struct {
 
 // nothingPublished is why a device the log publishes nothing on serves none.
 const nothingPublished = "the network publishes nothing on this device"
-
-// SetPublishConsent records whether this device's operator agrees to serve
-// the names the log publishes on it, and where those go whose TLS juist ends,
-// by label.
-func (d *Daemon) SetPublishConsent(on bool, to map[string]string, members map[string]bool) {
-	d.pub.mu.Lock()
-	d.pub.consent, d.pub.to, d.pub.members = on, maps.Clone(to), maps.Clone(members)
-	d.flagTerminatorLocked()
-	d.pub.mu.Unlock()
-	d.MarkDirty()
-}
 
 // wantsTerminatorLocked reports whether this device needs its terminator: a
 // name whose TLS juist ends, or a share. d.pub.mu is held.
@@ -580,7 +568,7 @@ func (d *Daemon) relayHandedOn() (ipc.PublishedTarget, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	// Only once the relay takes them at the hand-off socket.
-	if d.relay == nil || d.relayCerts == nil || !d.httpsHanded {
+	if d.ownRelay.server == nil || d.relayCerts == nil || !d.ownRelay.httpsHanded {
 		return ipc.PublishedTarget{}, false
 	}
 	return ipc.PublishedTarget{Name: d.relayName, Socket: d.handOffPath, Proxy: true}, true

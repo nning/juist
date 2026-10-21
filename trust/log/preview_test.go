@@ -2,6 +2,7 @@ package log
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/nning/juist/types"
@@ -49,5 +50,27 @@ func TestPreviewStoresNothing(t *testing.T) {
 	var rej *RejectError
 	if _, err := h.auth.Preview(stray); !errors.As(err, &rej) {
 		t.Fatalf("a stray record previewed: %v", err)
+	}
+}
+
+// Preview refuses a record following a disable record for that, as Inform
+// does.
+func TestPreviewRefusesWhatFollowsADisable(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	aum := h.disable(0, h.auth.State())
+	if err := h.auth.Inform(aum); err != nil {
+		t.Fatalf("Inform: %v", err)
+	}
+	after := h.auth.State().clone()
+	after.head = aum.Hash()
+	next, err := NewBuilder(after).SetQuorum(1)
+	if err != nil {
+		t.Fatalf("SetQuorum: %v", err)
+	}
+	h.signQuorum(&next)
+	var rej *RejectError
+	_, err = h.auth.Preview(next)
+	if !errors.As(err, &rej) || rej.Rule != RuleParent || !strings.Contains(err.Error(), "follows a disable record") {
+		t.Fatalf("a record on top of a disable record previewed: %v", err)
 	}
 }

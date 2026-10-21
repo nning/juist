@@ -29,6 +29,10 @@ const (
 	envDump = "JUISTD_TEST_ENV"
 )
 
+// unready has the daemon never set up its handler for a stop, as one
+// stopped at once has not yet.
+const unready = "JUISTD_TEST_UNREADY"
+
 func garbled(pidfile string) {
 	raw, _ := syscall.Dup(3)
 	c, err := plumber.NewClient(os.NewFile(3, "helper"))
@@ -53,6 +57,10 @@ func TestMain(m *testing.M) {
 		if pidfile := os.Getenv(garble); pidfile != "" && os.Getenv(plumber.EnvFD) != "" {
 			garbled(pidfile)
 			return
+		}
+		if os.Getenv(unready) != "" && os.Getenv(plumber.EnvFD) != "" {
+			time.Sleep(time.Minute)
+			os.Exit(4)
 		}
 		if envfile := os.Getenv(envDump); envfile != "" && os.Getenv(plumber.EnvFD) != "" {
 			sid, _ := unix.Getsid(0)
@@ -98,9 +106,9 @@ func start(t *testing.T, env ...string) *exec.Cmd {
 }
 
 // started is [start]ed juistd with the daemon it split off.
-func started(t *testing.T) (*exec.Cmd, int) {
+func started(t *testing.T, env ...string) (*exec.Cmd, int) {
 	t.Helper()
-	cmd := start(t)
+	cmd := start(t, env...)
 	u, _ := user.Lookup(runAs)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
@@ -124,6 +132,21 @@ func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 // Started as root, juistd runs the daemon as juist; asked to stop, both do.
 func TestRootSplitsOffTheDaemon(t *testing.T) {
 	cmd, daemon := started(t)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Errorf("stopping: %v", err)
+	}
+	if alive(daemon) {
+		t.Error("the daemon outlived juistd")
+	}
+}
+
+// A daemon stopped before it handles a stop dies of it, which is no
+// failure of juistd's.
+func TestADaemonStoppedAtOnceStopsCleanly(t *testing.T) {
+	cmd, daemon := started(t, unready+"=1")
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}

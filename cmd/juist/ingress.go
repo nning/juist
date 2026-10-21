@@ -40,10 +40,11 @@ func ingressList(a *app, args []string) error {
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return err
 	}
+	st := d.st
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
@@ -95,10 +96,11 @@ firewalld or ufw where one runs. --stop undoes it.`}
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return err
 	}
+	st := d.st
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
@@ -229,10 +231,7 @@ func (c teeConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 // device, for its operator, it serves at once where it can ask for root;
 // elsewhere a hint names the command.
 func (a *app) serveIngressNext(target types.NodeRecord) error {
-	var st *ipc.Status
-	if a.node != nil {
-		st = a.node.status()
-	}
+	st := liveStatus(a.node)
 	switch {
 	case st == nil || st.Self != target.Identity || !st.CanOperate:
 		a.hint("on %s, juist ingress serve", displayMember(target))
@@ -313,15 +312,11 @@ func isIngress(st *ipc.Status) bool {
 
 // published is what this device's juistd tells its ingress.
 func (a *app) published() (*ipc.Published, error) {
-	n, err := a.openNode()
+	d, err := a.daemon()
 	if err != nil {
 		return nil, err
 	}
-	resp, err := ipc.Call(n.socket(), ipc.Request{Command: ipc.CmdPublished})
-	if err != nil {
-		return nil, err
-	}
-	return cmp.Or(resp.Published, &ipc.Published{}), nil
+	return d.published()
 }
 
 // hasSudo reports whether sudo is there to ask for root by.

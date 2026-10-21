@@ -5,19 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/ipc"
-
-	"go4.org/netipx"
 
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/secrets"
@@ -69,7 +65,7 @@ func (a *app) submit(auth *log.Authority, c *change) (applied bool, err error) {
 	}
 	st := auth.State().SignatureStatus(&c.aum)
 	if st.Authorized() {
-		if err := a.applyRecords([]types.AUM{c.aum}, false); err != nil {
+		if err := a.applyRecords([]types.AUM{c.aum}); err != nil {
 			return false, err
 		}
 		a.ok("%s", c.done)
@@ -93,7 +89,7 @@ func (a *app) submit(auth *log.Authority, c *change) (applied bool, err error) {
 		a.printf("pending %s: needs %s; another admin runs:\n", path, needs)
 		a.command("juist approve %s", filepath.Base(path))
 	}
-	if len(unread) > 0 && a.node != nil && a.node.status() != nil {
+	if len(unread) > 0 && liveStatus(a.node) != nil {
 		a.hint("%s cannot read it on an admin device yet; send them the file", strings.Join(unread, " or "))
 	}
 	return false, nil
@@ -194,6 +190,7 @@ func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity
 	if auth != nil && auth.Disabled() != nil {
 		return nil, fmt.Errorf("%q is disabled; nothing changes it any more", auth.State().Network())
 	}
+	a.fileAdminKeys(auth)
 	admins, err := a.signingKeys(aum, auth)
 	if err != nil {
 		return nil, err
@@ -221,10 +218,7 @@ func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity
 // says is stale or refused: revoked wins fork choice, so it undoes whatever
 // later change that view lacks.
 func (a *app) warnStaleRevocation(state *log.State, aum *types.AUM) {
-	if a.node == nil {
-		return
-	}
-	st := a.node.status()
+	st := liveStatus(a.node)
 	if st == nil || !st.Stale && !st.Refused || !state.Revokes(aum) {
 		return
 	}
@@ -426,7 +420,7 @@ func (a *app) sudoUser() string {
 
 // applyRecords commits authorized records to this device's node: through the
 // daemon if one runs, which owns the log and gossips them at once.
-func (a *app) applyRecords(records []types.AUM, report bool) error {
+func (a *app) applyRecords(records []types.AUM) error {
 	n, err := a.openNode()
 	if err != nil {
 		return err
@@ -460,10 +454,6 @@ func (a *app) applyRecords(records []types.AUM, report bool) error {
 	}
 	if alarm := auth.Alarm(); alarm != nil {
 		a.alarm("%v", alarm)
-	}
-	if report {
-		st := auth.State()
-		a.ok("applied %s; %s", count(len(records), "change"), count(len(st.Nodes()), "device"))
 	}
 	return nil
 }
@@ -501,7 +491,7 @@ func (a *app) checkpointIfDue() {
 	}
 	st := auth.State().SignatureStatus(&aum)
 	if st.Authorized() {
-		if err := a.applyRecords([]types.AUM{aum}, false); err != nil {
+		if err := a.applyRecords([]types.AUM{aum}); err != nil {
 			a.warn("checkpoint not recorded: %v", err)
 			return
 		}
@@ -516,15 +506,24 @@ func (a *app) checkpointIfDue() {
 // unsettled refuses a checkpoint of a log under an alarm, here or in juistd:
 // devices compact to it, after which what the alarm is about is out of reach.
 func unsettled(n node, auth *log.Authority) error {
-	if st, err := n.restatus(); err != nil {
-		return err
-	} else if st != nil {
-		switch {
-		case st.Alarm != "":
-			return fmt.Errorf("the log is under an alarm: %s", st.Alarm)
-		case st.SchemaAlarm != "":
-			return fmt.Errorf("the log is under an alarm: %s", st.SchemaAlarm)
+	var st *ipc.Status
+	if d := daemonOf(n); d != nil {
+		var err error
+		if st, err = d.restatus(); err != nil {
+			return err
 		}
+	}
+	return unsettledWith(st, auth)
+}
+
+// unsettledWith is [unsettled] by juistd's status st, nil where none runs.
+func unsettledWith(st *ipc.Status, auth *log.Authority) error {
+	switch {
+	case st == nil:
+	case st.Alarm != "":
+		return fmt.Errorf("the log is under an alarm: %s", st.Alarm)
+	case st.SchemaAlarm != "":
+		return fmt.Errorf("the log is under an alarm: %s", st.SchemaAlarm)
 	}
 	switch {
 	case auth.Disabled() != nil:
@@ -563,15 +562,21 @@ func (a *app) networkLog() (*log.Authority, error) {
 	if err := a.requireOperator(); err != nil {
 		return nil, err
 	}
-	auth, err := n.log()
-	if err == nil && a.sudoUser() == "" {
-		state := auth.State()
-		a.home.fileAdminKeys(state.Network(), func(id types.Identity) bool {
-			_, ok := state.Admin(id)
-			return ok
-		})
+	return n.log()
+}
+
+// fileAdminKeys files each unfiled key here that auth's network names under
+// that network. Reading the log files nothing: a command that signs, or names
+// keys as "juist admins" lists them, calls it.
+func (a *app) fileAdminKeys(auth *log.Authority) {
+	if auth == nil || a.sudoUser() != "" {
+		return
 	}
-	return auth, err
+	state := auth.State()
+	a.home.fileAdminKeys(state.Network(), func(id types.Identity) bool {
+		_, ok := state.Admin(id)
+		return ok
+	})
 }
 
 // optionalLog is networkLog where a machine with no network is a normal
@@ -599,7 +604,7 @@ func (a *app) selfID() (types.Identity, bool, error) {
 	if err != nil {
 		return types.Identity{}, false, err
 	}
-	if st := n.status(); st != nil {
+	if st := liveStatus(n); st != nil {
 		return st.Self, true, nil
 	}
 	k, err := a.home.optionalNodeKeys()
@@ -609,44 +614,6 @@ func (a *app) selfID() (types.Identity, bool, error) {
 	return k.Identity.Public(), true, nil
 }
 
-// resolveDevice finds a member by name, identity key, the start of one, or
-// an overlay address.
-func resolveDevice(state *log.State, arg string) (types.NodeRecord, error) {
-	nodes := state.Nodes()
-	var matches []types.NodeRecord
-	addr, addrErr := netip.ParseAddr(arg)
-	for _, n := range nodes {
-		switch {
-		case strings.EqualFold(n.Name, arg),
-			n.Identity.String() == arg,
-			len(arg) >= 8 && strings.HasPrefix(n.Identity.String(), arg),
-			len(arg) >= 8 && strings.HasPrefix(n.Identity.String(), "nid:"+arg),
-			addrErr == nil && (state.Addr6(n.Identity) == addr || slices.Contains(n.V4Addrs(), addr)):
-			matches = append(matches, n)
-		}
-	}
-	switch len(matches) {
-	case 1:
-		return matches[0], nil
-	case 0:
-		return types.NodeRecord{}, fmt.Errorf("no device %q in %q\nhint: juist devices", arg, state.Network())
-	default:
-		names := make([]string, len(matches))
-		for i, m := range matches {
-			names[i] = displayMember(m) + " " + m.Identity.ShortString()
-		}
-		return types.NodeRecord{}, fmt.Errorf("%q matches %d devices (%s); use a key",
-			arg, len(matches), strings.Join(names, ", "))
-	}
-}
-
-func displayMember(n types.NodeRecord) string {
-	if n.Name != "" {
-		return n.Name
-	}
-	return n.Identity.ShortString()
-}
-
 // sealer returns the epoch sealer, drawing a fresh group secret per epoch. The
 // secret is not kept: every member recovers it from its own wrap.
 func sealer() log.Sealer {
@@ -654,128 +621,4 @@ func sealer() log.Sealer {
 		_, rec, err := secrets.NewEpoch(epoch, members)
 		return rec, err
 	}
-}
-
-// nextV4 returns the lowest overlay IPv4 address in the network's range that
-// is not [givenOut]: handing on one a removed device still believes it holds
-// would have members route one device's traffic to another. history includes
-// the records off the chain, whose admissions may yet be reissued.
-func nextV4(state *log.State, history []types.AUM) (netip.Addr, error) {
-	taken := map[netip.Addr]bool{}
-	for v4 := range givenOut(state, history) {
-		taken[v4] = true
-	}
-	v4, err := firstFreeV4(state.V4Range(), taken)
-	if err != nil && len(state.Nodes()) < types.MaxNodes {
-		// Full by history rather than by members: every address has been
-		// given out once. A range of its own is 1022 addresses for good.
-		return netip.Addr{}, fmt.Errorf("%w: every address in it went to a device once, and none is "+
-			"handed out twice\nhint: juist network renumber PREFIX, into a larger range", err)
-	}
-	return v4, err
-}
-
-// firstFreeV4 skips r's first and last address, which some systems treat as
-// the network and broadcast address.
-func firstFreeV4(r netip.Prefix, taken map[netip.Addr]bool) (netip.Addr, error) {
-	last := netipx.PrefixLastIP(r)
-	for a := r.Addr().Next(); a.Less(last); a = a.Next() {
-		if !taken[a] {
-			return a, nil
-		}
-	}
-	return netip.Addr{}, fmt.Errorf("IPv4 range %v full", r)
-}
-
-// uniqueName returns name, or name with a number appended if a member already
-// uses it: devices are removed and addressed by name, so two alike are a trap.
-//
-// Names are compared as resolveDevice compares them, folded, so that no two
-// members are told apart only by what "juist remove" ignores.
-func uniqueName(state *log.State, name string) string {
-	used := map[string]bool{}
-	for _, n := range state.Nodes() {
-		used[foldName(n.Name)] = true
-	}
-	if !used[foldName(name)] {
-		return name
-	}
-	for i := 2; ; i++ {
-		suffix := fmt.Sprintf("-%d", i)
-		base := name
-		for len(base)+len(suffix) > types.MaxNameLen {
-			_, size := utf8.DecodeLastRuneInString(base)
-			base = base[:len(base)-size]
-		}
-		candidate := strings.TrimRight(base, " \t") + suffix
-		if types.ValidateName(candidate) == nil && !used[foldName(candidate)] {
-			return candidate
-		}
-	}
-}
-
-// fileSafe turns a member name into something usable in a file name.
-func fileSafe(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	if b.Len() == 0 {
-		return "device"
-	}
-	return b.String()
-}
-
-// foldName is how names are compared: the log's rule for holders, and the
-// CLI's for every other name.
-func foldName(s string) string { return types.FoldName(s) }
-
-// checkName holds a name a person gives — a device's, an admin key's, the
-// network's — to one spelling: ASCII letters and digits, and ".", "_" and "-"
-// after the first. The log accepts more, but names are what "juist remove"
-// takes and what reaches everyone's terminal and command line, so a name
-// that looks like another, or that a shell would read as code, is refused
-// where it is first given.
-func checkName(what, name string) error {
-	if err := types.ValidateName(name); err != nil {
-		return fmt.Errorf("%s: %w", what, err)
-	}
-	for i, r := range name {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
-			i > 0 && strings.ContainsRune("._-", r)) {
-			return fmt.Errorf("%s %q: letters, digits, then also . _ -", what, name)
-		}
-	}
-	return nil
-}
-
-// memberName makes a name a joining device proposed into one checkName
-// accepts: the device chose it, and the admin's log is where it ends up.
-func memberName(proposed string) string {
-	var b strings.Builder
-	dash := false
-	for _, r := range proposed {
-		ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_'
-		switch {
-		case ok:
-			b.WriteRune(r)
-			dash = false
-		case b.Len() > 0 && !dash:
-			b.WriteByte('-')
-			dash = true
-		}
-	}
-	name := strings.TrimLeft(strings.TrimRight(b.String(), "-"), "._-")
-	if len(name) > types.MaxNameLen {
-		name = strings.TrimRight(name[:types.MaxNameLen], "._-")
-	}
-	if name == "" || checkName("name", name) != nil {
-		return "device"
-	}
-	return name
 }

@@ -59,9 +59,7 @@ const (
 	// CmdInform hands the daemon log records to apply and gossip.
 	CmdInform Command = 2
 
-	// CmdBootstrap asks for what a device joining through this one should
-	// start from: member announcements and freshness leases.
-	CmdBootstrap Command = 3
+	// 3 was bootstrap, retired; it is never reused.
 
 	// CmdLog asks for the active chain, anchor first.
 	CmdLog Command = 4
@@ -153,62 +151,19 @@ const (
 )
 
 func (c Command) String() string {
-	switch c {
-	case cmdInvalid:
+	if c == cmdInvalid {
 		return "no command"
-	case CmdStatus:
-		return "status"
-	case CmdInform:
-		return "inform"
-	case CmdBootstrap:
-		return "bootstrap"
-	case CmdLog:
-		return "log"
-	case CmdSelf:
-		return "self"
-	case CmdCreate:
-		return "create"
-	case CmdJoin:
-		return "join"
-	case CmdRotate:
-		return "rotate"
-	case CmdUnstage:
-		return "unstage"
-	case CmdSetOperator:
-		return "set-operator"
-	case CmdInvite:
-		return "invite"
-	case CmdInviteReply:
-		return "invite-reply"
-	case CmdReset:
-		return "reset"
-	case CmdWaiting:
-		return "waiting"
-	case CmdExit:
-		return "exit"
-	case CmdSubnet:
-		return "subnet"
-	case CmdNames:
-		return "names"
-	case CmdPublish:
-		return "publish"
-	case CmdPublished:
-		return "published"
-	case CmdServing:
-		return "serving"
-	case CmdShare:
-		return "share"
-	case CmdUnshare:
-		return "unshare"
-	case CmdStatusPage:
-		return "status page"
-	case CmdPing:
-		return "ping"
-	case CmdSettings:
-		return "settings"
-	default:
-		return fmt.Sprintf("command?<%d>", uint8(c))
 	}
+	if s, ok := requestShapes[c]; ok {
+		return s.name
+	}
+	return fmt.Sprintf("command?<%d>", uint8(c))
+}
+
+// Known reports whether c is a command this build defines.
+func (c Command) Known() bool {
+	_, ok := requestShapes[c]
+	return ok
 }
 
 // A Request is one IPC call.
@@ -242,9 +197,7 @@ type Request struct {
 	// well: what a caller needs to redo fork choice itself.
 	Orphans bool `cbor:"10,keyasint,omitempty"`
 
-	// Probe is accepted from older clients and ignored: the tunnels are
-	// checked in the background, and a status carries the last result.
-	Probe bool `cbor:"11,keyasint,omitempty"`
+	// 11 was Probe, retired; it is never reused.
 
 	// Force lets [CmdReset] reset a device the log still lists.
 	Force bool `cbor:"12,keyasint,omitempty"`
@@ -556,12 +509,12 @@ type InviteReply struct {
 // nothing else is meaningful. A response carrying Event is not the last: the
 // call is still running.
 type Response struct {
-	Err       string     `cbor:"1,keyasint,omitempty"`
-	Status    *Status    `cbor:"2,keyasint,omitempty"`
-	Bootstrap *Bootstrap `cbor:"3,keyasint,omitempty"`
-	Records   [][]byte   `cbor:"4,keyasint,omitempty"`
-	Self      *Self      `cbor:"5,keyasint,omitempty"`
-	Event     *Event     `cbor:"6,keyasint,omitempty"`
+	Err    string  `cbor:"1,keyasint,omitempty"`
+	Status *Status `cbor:"2,keyasint,omitempty"`
+	// 3 was Bootstrap, retired; it is never reused.
+	Records [][]byte `cbor:"4,keyasint,omitempty"`
+	Self    *Self    `cbor:"5,keyasint,omitempty"`
+	Event   *Event   `cbor:"6,keyasint,omitempty"`
 
 	// Orphans are encoded records off the active chain, for [Request.Orphans].
 	Orphans [][]byte `cbor:"7,keyasint,omitempty"`
@@ -606,11 +559,11 @@ type Ping struct {
 // the record itself.
 func RotationProof(aum *types.AUM) []byte {
 	h := aum.SigHash()
-	return append([]byte("juist rotation proof v1\x00"), h[:]...)
+	return append([]byte(types.LabelRotationProof+"\x00"), h[:]...)
 }
 
-// Bootstrap is the answer to [CmdBootstrap]. Everything in it is signed by its
-// author, so handing it to a new member extends no trust.
+// Bootstrap is what a device joining through this one starts from. Everything
+// in it is signed by its author, so handing it to a new member extends no trust.
 type Bootstrap struct {
 	// Endpoints are encoded member announcements, this node's own first.
 	Endpoints [][]byte `cbor:"1,keyasint,omitempty"`
@@ -683,7 +636,6 @@ const (
 	fOffer
 	fReply
 	fOrphans
-	fProbe
 	fForce
 	fWaiting
 	fExit
@@ -707,7 +659,7 @@ func (r *Request) present() reqField {
 		{len(r.Records) > 0, fRecords}, {r.Invite != "", fInvite}, {r.Name != "", fName},
 		{r.SetOperator || r.OperatorUID != 0, fSetOperator}, {r.Identity, fIdentity},
 		{r.Offer != nil, fOffer}, {r.Reply != nil, fReply}, {r.Orphans, fOrphans},
-		{r.Probe, fProbe}, {r.Force, fForce}, {len(r.Waiting) > 0, fWaiting},
+		{r.Force, fForce}, {len(r.Waiting) > 0, fWaiting},
 		{!r.ExitNode.IsZero() || r.ExitOff || r.Serve != nil || r.ExitIsolate, fExit},
 		{r.ServeSubnets != nil || r.AcceptSubnets != nil, fSubnet},
 		{r.AcceptNames != nil, fNames},
@@ -724,22 +676,23 @@ func (r *Request) present() reqField {
 	return f
 }
 
-// A requestShape is what a command's request may carry, and how it is refused.
+// A requestShape is a command's name, what its request may carry, and how it
+// is refused.
 type requestShape struct {
+	name  string
 	takes reqField
 	check func(*Request) bool // what the command needs, nil for nothing
 	shape string              // the refusal's text, empty for the generic one
 }
 
 var requestShapes = map[Command]requestShape{
-	CmdStatus:    {takes: fProbe},
-	CmdBootstrap: {},
-	CmdLog:       {takes: fOrphans},
-	CmdSelf:      {},
-	CmdUnstage:   {},
-	CmdRotate:    {takes: fIdentity},
-	CmdReset:     {takes: fForce},
-	CmdExit: {takes: fExit, shape: "an exit request sets an exit node, isolated or not, off, or serving, and one of them",
+	CmdStatus:  {name: "status"},
+	CmdLog:     {name: "log", takes: fOrphans},
+	CmdSelf:    {name: "self"},
+	CmdUnstage: {name: "unstage"},
+	CmdRotate:  {name: "rotate", takes: fIdentity},
+	CmdReset:   {name: "reset", takes: fForce},
+	CmdExit: {name: "exit", takes: fExit, shape: "an exit request sets an exit node, isolated or not, off, or serving, and one of them",
 		check: func(r *Request) bool {
 			n := 0
 			for _, set := range []bool{!r.ExitNode.IsZero(), r.ExitOff, r.Serve != nil} {
@@ -749,11 +702,11 @@ var requestShapes = map[Command]requestShape{
 			}
 			return n == 1 && (!r.ExitIsolate || !r.ExitNode.IsZero())
 		}},
-	CmdSubnet: {takes: fSubnet, shape: "a subnet request sets serving or accepting, and one of them",
+	CmdSubnet: {name: "subnet", takes: fSubnet, shape: "a subnet request sets serving or accepting, and one of them",
 		check: func(r *Request) bool { return (r.ServeSubnets != nil) != (r.AcceptSubnets != nil) }},
-	CmdNames: {takes: fNames, shape: "a names request sets accepting, and nothing else",
+	CmdNames: {name: "names", takes: fNames, shape: "a names request sets accepting, and nothing else",
 		check: func(r *Request) bool { return r.AcceptNames != nil }},
-	CmdPublish: {takes: fPublish, shape: fmt.Sprintf("a publish request sets serving, or adds or takes away where to "+
+	CmdPublish: {name: "publish", takes: fPublish, shape: fmt.Sprintf("a publish request sets serving, or adds or takes away where to "+
 		"for at most %d names, not both", MaxServeTo),
 		check: func(r *Request) bool {
 			switch {
@@ -782,44 +735,44 @@ var requestShapes = map[Command]requestShape{
 			}
 			return true
 		}},
-	CmdPublished: {takes: fListening, shape: "a published request carries the ingress's ports and nothing else",
+	CmdPublished: {name: "published", takes: fListening, shape: "a published request carries the ingress's ports and nothing else",
 		check: func(r *Request) bool { return validPorts(r.Listening) && validPorts(r.Unbound) }},
-	CmdUnshare: {takes: fShare, shape: "an unshare request names a share by its path, or nothing",
+	CmdUnshare: {name: "unshare", takes: fShare, shape: "an unshare request names a share by its path, or nothing",
 		check: func(r *Request) bool {
 			return r.Share == nil || r.Share.To == "" && r.Share.Until == 0 && r.Share.What == "" &&
 				len(r.Share.Path) <= maxSharePath
 		}},
-	CmdStatusPage: {},
-	CmdPing: {takes: fPing, shape: "a ping request names a member and nothing else",
+	CmdStatusPage: {name: "status page"},
+	CmdPing: {name: "ping", takes: fPing, shape: "a ping request names a member and nothing else",
 		check: func(r *Request) bool { return !r.Ping.IsZero() }},
-	CmdSettings: {takes: fSettings, shape: "a settings request sets HTTPS alone, a proxy, a relay's name or DNS, and nothing else",
+	CmdSettings: {name: "settings", takes: fSettings, shape: "a settings request sets HTTPS alone, a proxy, a relay's name or DNS, and nothing else",
 		check: func(r *Request) bool {
 			return (r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil || r.DNS != nil) &&
 				(r.Proxy == nil || ValidProxy(*r.Proxy) == nil) &&
 				(r.RelayName == nil || *r.RelayName == "" || types.ValidateHostName(*r.RelayName) == nil)
 		}},
-	CmdShare: {takes: fShare, shape: "a share request carries where to, on loopback, and an end, and nothing else",
+	CmdShare: {name: "share", takes: fShare, shape: "a share request carries where to, on loopback, and an end, and nothing else",
 		check: func(r *Request) bool { return r.Share != nil && r.Share.Valid() }},
-	CmdServing: {takes: fAccount | fListening, shape: "a serving request carries the terminator's account and where it listens, and nothing else",
+	CmdServing: {name: "serving", takes: fAccount | fListening, shape: "a serving request carries the terminator's account and where it listens, and nothing else",
 		check: func(r *Request) bool {
 			return (r.Account == nil || r.Account.Valid()) && validAddrPorts(r.Listening) && validAddrPorts(r.Unbound) &&
 				validNoCerts(r.NoCert)
 		}},
-	CmdWaiting: {takes: fWaiting, shape: fmt.Sprintf("a waiting request carries at most %d changes and nothing else", MaxWaiting),
+	CmdWaiting: {name: "waiting", takes: fWaiting, shape: fmt.Sprintf("a waiting request carries at most %d changes and nothing else", MaxWaiting),
 		check: func(r *Request) bool { return len(r.Waiting) <= MaxWaiting }},
-	CmdInform: {takes: fRecords, shape: "an inform request carries records and nothing else",
+	CmdInform: {name: "inform", takes: fRecords, shape: "an inform request carries records and nothing else",
 		check: func(r *Request) bool { return len(r.Records) > 0 }},
-	CmdCreate: {takes: fRecords | fSetOperator, shape: "a create request carries one genesis record",
+	CmdCreate: {name: "create", takes: fRecords | fSetOperator, shape: "a create request carries one genesis record",
 		check: func(r *Request) bool { return len(r.Records) == 1 }},
-	CmdJoin: {takes: fInvite | fName | fSetOperator, shape: "a join request carries an invite",
+	CmdJoin: {name: "join", takes: fInvite | fName | fSetOperator, shape: "a join request carries an invite",
 		check: func(r *Request) bool { return r.Invite != "" && len(r.Invite) <= maxInvite }},
-	CmdSetOperator: {takes: fSetOperator, shape: "a set-operator request carries an operator and nothing else",
+	CmdSetOperator: {name: "set-operator", takes: fSetOperator, shape: "a set-operator request carries an operator and nothing else",
 		check: func(r *Request) bool { return r.SetOperator }},
-	CmdInvite: {takes: fOffer, shape: "an invite request carries how the invite is offered and nothing else",
+	CmdInvite: {name: "invite", takes: fOffer, shape: "an invite request carries how the invite is offered and nothing else",
 		check: func(r *Request) bool {
 			return r.Offer != nil && r.Offer.Expires != 0 && r.Offer.Expires <= maxInviteExpiry
 		}},
-	CmdInviteReply: {takes: fReply, shape: "an invite reply carries the reply and nothing else",
+	CmdInviteReply: {name: "invite-reply", takes: fReply, shape: "an invite reply carries the reply and nothing else",
 		check: func(r *Request) bool { return r.Reply != nil }},
 }
 
@@ -913,31 +866,10 @@ func encode(v any, limit int) ([]byte, error) {
 	return b, nil
 }
 
-func decode[T any](dec cbor.DecMode, b []byte, limit int) (T, error) {
-	var zero, v T
-	if len(b) == 0 {
-		return zero, errors.New("ipc: empty IPC message")
-	}
-	if len(b) > limit {
-		return zero, fmt.Errorf("ipc: IPC message is %d bytes, over the %d limit", len(b), limit)
-	}
-	if err := dec.Unmarshal(b, &v); err != nil {
-		return zero, fmt.Errorf("ipc: decoding an IPC message: %w", err)
-	}
-	re, err := encMode.Marshal(v)
-	if err != nil {
-		return zero, fmt.Errorf("ipc: re-encoding an IPC message: %w", err)
-	}
-	if !bytes.Equal(re, b) {
-		return zero, errors.New("ipc: non-canonical IPC message")
-	}
-	return v, nil
-}
-
 // DecodeRequest decodes and shape-checks an IPC request. Exported for the
 // fuzz target.
 func DecodeRequest(b []byte) (Request, error) {
-	r, err := decode[Request](requestDec, b, MaxRequest)
+	r, err := types.DecodeCanonical[Request](requestDec, b, MaxRequest)
 	if err != nil {
 		return Request{}, err
 	}
@@ -949,7 +881,7 @@ func DecodeRequest(b []byte) (Request, error) {
 
 // DecodeResponse decodes an IPC reply.
 func DecodeResponse(b []byte) (Response, error) {
-	return decode[Response](responseDec, b, MaxResponse)
+	return types.DecodeCanonical[Response](responseDec, b, MaxResponse)
 }
 
 // makePrintable makes every string v points to, however deeply nested, safe

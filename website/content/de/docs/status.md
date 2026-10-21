@@ -5,15 +5,11 @@ description: Nachsehen, ob ein Gerät verbunden ist, was zu tun ist, welche Ger�
 lead: Vier Befehle zeigen dir, wie es um dein Netz steht. juist status zeigt dieses Gerät, juist health alles, worum du dich kümmern solltest, juist devices listet alle Geräte auf, und juist log zeigt jede Änderung und wer sie bestätigt hat.
 ---
 
-Dein Netz besteht aus Geräten, die zusammengehören, und jedes davon ist ein
-**Mitglied**. Jedes Mitglied hat eine eigene Kopie des Logs, also der
-signierten Liste aller Änderungen (siehe
-[So funktioniert juist]({{< relref "docs/how-it-works" >}})). Die Befehle auf
-dieser Seite lesen dieses Log und fragen den Daemon `juistd`, das Programm,
-das die Tunnel aufrecht hält, nach dem aktuellen Stand.
-
-Scheint etwas nicht zu stimmen, fang mit `juist health` an. Der Befehl nennt
-jedes Problem und gibt in einer Zeile `hint:` den Befehl aus, der es behebt.
+Diese Befehle fragen den Daemon `juistd`, wie es steht, und lesen die Kopie
+des [Mitgliederlogs]({{< relref "docs/how-it-works" >}}#the-membership-log)
+auf dem Gerät. Scheint etwas nicht zu stimmen, fang mit `juist health` an.
+Der Befehl nennt jedes Problem und gibt bei den meisten in einer Zeile
+`hint:` den Befehl aus, der es behebt.
 
 ## Ein Gerät prüfen
 
@@ -33,7 +29,7 @@ home · connected
   Names         laptop.home.juist
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
-  Schema        18
+  Schema        20
   Updated       just now
 ```
 
@@ -56,12 +52,18 @@ In der ersten Zeile steht einer dieser Zustände:
 | Zustand | Bedeutung |
 |---|---|
 | `connected` | alles funktioniert |
+| `no network` | dieses Gerät ist noch in keinem Netz; `juist health` sagt, wie du einem beitrittst oder eines gründest |
+| `not connected` | juistd hält das Netz, hat aber keine Tunnel aufgebaut, oder das Netz läuft auf diesem Host schon; `juist health` sagt, warum |
 | `waiting for peers` | es gibt andere Geräte, aber noch keines hat sich gemeldet |
 | `no tunnel up` | andere Geräte sind bekannt, aber durch keinen Tunnel zu ihnen fließt Verkehr |
 | `limited` | der Stand dieses Geräts ist womöglich veraltet, deshalb hält es nur Tunnel zu Vouchern (siehe `Freshness` unten) |
 | `disabled` | das Netz wurde mit einem Break-glass-Geheimnis beendet; mit `juist reset` beginnst du von vorn |
 | `removed` | dieses Gerät gehört nicht mehr zum Netz |
-| `juistd not running` | der Daemon läuft nicht, starte ihn (siehe [Fehlersuche]({{< relref "docs/troubleshooting" >}})) |
+| `refused` | die anderen Geräte weisen dieses ab; vermutlich wurde es entfernt |
+| `behind` | dieses Gerät war so lange weg, dass die anderen den Teil des Logs, den es braucht, nicht mehr aufbewahren; tritt mit einem neuen Einladungslink wieder bei ([Fehlersuche]({{< relref "docs/troubleshooting" >}}#warning-this-devices-log-is-older-than-what-the-networks-devices-keep)) |
+| `disconnected` | das Log hat sich gespalten oder ist zurückgesprungen, und alle Tunnel bleiben unten, bis ein Admin das auflöst ([Fehlersuche]({{< relref "docs/troubleshooting" >}}#warning-log-rollback-alarm-the-chain-went-back-from-epoch-4-to-3-)) |
+| `joining a network` | dieses Gerät tritt gerade einem Netz bei |
+| `not running` | der Daemon läuft nicht, etwa `juist0 · not running`, oder `juistd not running`, wo kein juist-Paket installiert ist; `juist health` sagt, wie du ihn startest (siehe [Fehlersuche]({{< relref "docs/troubleshooting" >}}#not-running)) |
 
 ## Was die Zeilen bedeuten
 
@@ -80,22 +82,23 @@ In der ersten Zeile steht einer dieser Zustände:
   aktuellen Stand des Netzes kennt, und wie lange diese Bestätigung gilt. Ein
   Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich
   ausstellt. Nach 48 Stunden ohne Bestätigung steht dort
-  `expired; vouchers only`. Einen Tag vorher warnt `juist health`. Ist kein
+  `expired; vouchers only`, oder `expired (1 of 2 vouchers); vouchers only`,
+  wo mehrere verlangt sind. Einen Tag vorher warnt `juist health`. Ist kein
   Gerät Voucher, steht dort `unchecked: no voucher`, und dürfen mindestens
   zwei Geräte Verkehr weiterleiten, schlägt `juist health` sie als Voucher vor.
   Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
 - `Published`: die veröffentlichten Namen, die dieses Gerät bedient, oder
   warum es sie nicht bedient. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}).
-- `Ingress`: auf einer Ingress, ob sie läuft, welche Namen sie bedient,
-  welche Ports sie per TCP weiterreicht und welche Ports ein anderes Programm
+- `Ingress`: auf einem Ingress, ob er läuft, welche Namen er bedient,
+  welche Ports er per TCP weiterreicht und welche Ports ein anderes Programm
   belegt.
 - `Sharing`: wie viele Freigaben dieses Gerät hat (`juist share` listet sie
   auf), oder warum niemand sie erreicht.
 - `Ports`: die Ports, auf denen juistd lauscht. `udp/41643` ist der für die Tunnel.
 - `Schema`: die Version des Formats, in dem das Log des Netzes steht. Kennt
   diese Version von juist eine neuere, folgt sie gelb in Klammern, etwa
-  `18 (19)`; auf einem Gerät mit Admin-Schlüssel sagt `juist health` dann,
-  wie du es anhebst (siehe [Admins]({{< relref "docs/admins" >}})).
+  `19 (20)`; auf einem Gerät mit Admin-Schlüssel sagt `juist health` dann,
+  wie du es anhebst (siehe [juist aktualisieren]({{< relref "docs/updating" >}})).
 - `Updated`: wann juistd zuletzt einen neuen Stand des Netzes übernommen hat.
 
 Zeilen wie `Subnets`, `Published` oder `Renumbering` erscheinen nur, wenn
@@ -135,10 +138,10 @@ Namen aus.
 ```console
 $ juist devices
 NAME                  IPV4         REACHED  SCHEMA  ROLES
-laptop (this device)  198.18.36.1  -        18      -
-nas                   198.18.36.2  direct   18      voucher, names, publishes
-vps                   198.18.36.3  direct   18      voucher, relay
-phone                 198.18.36.4  relayed  18      -
+laptop (this device)  198.18.36.1  -        20      -
+nas                   198.18.36.2  direct   20      voucher, names, publishes
+vps                   198.18.36.3  direct   20      voucher, relay
+phone                 198.18.36.4  relayed  20      -
 ```
 
 `ROLES` zeigt für jedes Gerät:
@@ -206,9 +209,9 @@ $ juist log
 4 changes
 ```
 
-Jeder Eintrag ist eine Änderung, darunter stehen die Admins, die sie mit
-ihrem Schlüssel bestätigt haben. Ein Admin ist eine Person, deren Schlüssel
-Änderungen bestätigen darf (siehe [Admins]({{< relref "docs/admins" >}})).
+Jeder Eintrag ist eine Änderung, darunter stehen die
+[Admins]({{< relref "docs/admins" >}}), die sie mit ihrem Schlüssel bestätigt
+haben.
 
 `juist log show` zeigt, was eine einzelne Änderung bewirkt hat und welche
 Schlüssel sie signiert haben. Du gibst sie mit ihrer Nummer an, mit -N vom
@@ -233,8 +236,10 @@ enthält das Log nicht, denn keine Änderung trägt ein signiertes Datum.
 journalctl -u juistd
 ```
 
-Hier steht, was juistd selbst meldet. Ein zweites Netz auf demselben Gerät
-hat einen eigenen Daemon, `juistd@juist1`, mit eigenem Log.
+Hier steht, was juistd selbst meldet; unter FreeBSD steht es in
+`/var/log/juistd.log`. Ein zweites Netz auf demselben Gerät hat einen eigenen
+Daemon, `juistd@juist1`, mit eigenem Log, unter FreeBSD
+`/var/log/juistd.juist1.log`.
 
 ## Hinweise
 

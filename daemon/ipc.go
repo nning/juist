@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/ipc"
 
 	"golang.org/x/sys/unix"
@@ -116,8 +117,10 @@ type ipcServer struct {
 
 	operators, readers, ingress *pool
 
+	// ctx ends at close, and with it every call under way.
+	ctx       context.Context
+	cancel    context.CancelFunc
 	closeOnce sync.Once
-	closed    chan struct{}
 	waits     waitSet
 }
 
@@ -155,13 +158,15 @@ func newIPCServer(path string, h handler, tierOf func(caller) tier, logf func(st
 		ln.Close()
 		return nil, fmt.Errorf("daemon: setting the mode of %s: %w", path, err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &ipcServer{
 		h:         h,
 		tierOf:    tierOf,
 		ln:        ln,
 		path:      path,
 		logf:      logf,
-		closed:    make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
 		operators: newPool(maxIPCClients, maxOperatorsPerUser),
 		readers:   newPool(maxReaderClients, maxClientsPerUser),
 		ingress:   newPool(maxIngressClients, maxIngressPerUser),
@@ -170,11 +175,13 @@ func newIPCServer(path string, h handler, tierOf func(caller) tier, logf func(st
 
 // newPipeServer answers calls from this process alone, through [ipcServer.pipe].
 func newPipeServer(h handler, tierOf func(caller) tier, logf func(string, ...any)) *ipcServer {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &ipcServer{
 		h:         h,
 		tierOf:    tierOf,
 		logf:      logf,
-		closed:    make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
 		operators: newPool(maxPipeClients, maxPipeClients),
 		readers:   newPool(0, 0),
 		ingress:   newPool(0, 0),
@@ -185,14 +192,8 @@ func newPipeServer(h handler, tierOf func(caller) tier, logf func(string, ...any
 // anyone who can write there can replace the socket and impersonate the
 // daemon to the CLI.
 func refuseSharedWritable(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("daemon: inspecting %s: %w", path, err)
-	}
-	if perm := info.Mode().Perm(); perm&0o022 != 0 {
-		return fmt.Errorf(
-			"daemon: %s is mode %o, writable by group or other; anyone who can write there can "+
-				"replace the control socket. Run: chmod 755 %s", path, perm, path)
+	if err := atomicfile.RefuseSharedWritable(path, "replace the control socket", "755"); err != nil {
+		return fmt.Errorf("daemon: %w", err)
 	}
 	return refuseForeignOwner(path)
 }
@@ -228,14 +229,12 @@ func (s *ipcServer) serve() {
 	for {
 		c, err := s.ln.Accept()
 		if err != nil {
-			select {
-			case <-s.closed:
+			if s.ctx.Err() != nil {
 				return
-			default:
 			}
 			s.logf("daemon: ipc accept: %v", err)
 			select {
-			case <-s.closed:
+			case <-s.ctx.Done():
 				return
 			case <-time.After(50 * time.Millisecond):
 			}
@@ -290,7 +289,7 @@ func (s *ipcServer) pipe() (net.Conn, error) {
 func (s *ipcServer) close() {
 	s.closeOnce.Do(func() {
 		s.waits.stop()
-		close(s.closed)
+		s.cancel()
 		if s.ln != nil {
 			s.ln.Close()
 			_ = removeIfExists(s.path)
@@ -329,15 +328,8 @@ func (s *ipcServer) handle(c net.Conn, who caller, t tier) error {
 
 	// The call ends when the caller hangs up, which for a long one is the
 	// only sign it stopped waiting: it sends nothing after its request.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	go func() {
-		select {
-		case <-s.closed:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
 	_ = c.SetDeadline(time.Time{})
 	replies := make(chan ipc.Request)
 	go func() {

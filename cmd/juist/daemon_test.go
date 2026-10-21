@@ -19,7 +19,10 @@ import (
 func TestTheDaemonHoldsTheDeviceAndThePersonHoldsTheKeys(t *testing.T) {
 	t.Parallel()
 	laptop := newDaemonDevice(t, nil)
-	mustContain(t, laptop.mustRun("status"), "no network", "juist join CODE")
+	if out := laptop.mustRun("status"); !strings.Contains(out, "no network") || strings.Contains(out, "juist join CODE") {
+		t.Errorf("status of a device in no network:\n%s", out)
+	}
+	mustContain(t, laptop.mustRun("health"), "hint: juist join CODE, or juist create")
 
 	mustContain(t, laptop.mustRun("create", "home", "--device", "laptop"),
 		`created network "home"`, "laptop", "198.18.4.1")

@@ -7,10 +7,10 @@ lead: Without an access policy, every device may open any connection to every ot
 
 ## How rules work
 
-The access policy is a set of rules held in the network's log, the signed
-list of every change ([How juist works]({{< relref "docs/how-it-works" >}})).
-An admin, a person whose key approves changes, sets it, and from then on
-every device enforces it.
+The access policy is a set of rules in the network's
+[membership log]({{< relref "docs/how-it-works" >}}#the-membership-log). An
+admin sets it, like any other change, and from then on every device enforces
+it.
 
 Each rule passes connections. This one:
 

@@ -100,6 +100,13 @@ func (d *plumbedTUN) Close() error {
 	return err
 }
 
+// What the manager finds a plumbed router can by type assertions, held at
+// compile time.
+var _ interface {
+	exitRouter
+	hostRouter
+} = (*plumbedRouter)(nil)
+
 // A plumbedRouter has the helper give the device the node's addresses and its
 // peers' routes. The host's one table holds them: instances are kept apart
 // by their prefixes, as the IPv4 yield of [InstanceHoldings] keeps them.

@@ -64,10 +64,10 @@ func TestAHostWithoutResolvedAsksJuistdAlone(t *testing.T) {
 		t.Errorf("the status says %+v", n)
 	}
 	hostOwn := []netip.AddrPort{netip.MustParseAddrPort("10.0.2.3:53")}
-	if got := served.upstream(nameQuery(t, "mx.example.net.")); !slices.Equal(got, hostOwn) {
+	if got := upsOf(t, served.upstream, nameQuery(t, "mx.example.net.")); !slices.Equal(got, hostOwn) {
 		t.Errorf("asks %v upstream, want the host's own %v", got, hostOwn)
 	}
-	if got := f.d.uplinkFor(nameQuery(t, "mx.example.net.")); !slices.Equal(got, hostOwn) {
+	if got := upsOf(t, f.d.uplinkFor, nameQuery(t, "mx.example.net.")); !slices.Equal(got, hostOwn) {
 		t.Errorf("asks %v for members, want the host's own %v", got, hostOwn)
 	}
 
@@ -142,7 +142,7 @@ EOF
 	if n := f.d.Status().Names; n == nil || !n.Resolved {
 		t.Errorf("the status says %+v", n)
 	}
-	if got := served.upstream(nameQuery(t, "mx.example.net.")); !slices.Equal(got, []netip.AddrPort{netip.MustParseAddrPort("10.0.2.3:53")}) {
+	if got := upsOf(t, served.upstream, nameQuery(t, "mx.example.net.")); !slices.Equal(got, []netip.AddrPort{netip.MustParseAddrPort("10.0.2.3:53")}) {
 		t.Errorf("asks %v upstream, want vtnet0's alone", got)
 	}
 }
@@ -171,10 +171,10 @@ func TestJuistdAsksNotTailscaledWhichAsksJuistd(t *testing.T) {
 	want := []netip.AddrPort{netip.MustParseAddrPort("10.11.1.1:53")}
 	asks := func(when string) {
 		t.Helper()
-		if got := served.upstream(nameQuery(t, "mx.example.net.")); !slices.Equal(got, want) {
+		if got := upsOf(t, served.upstream, nameQuery(t, "mx.example.net.")); !slices.Equal(got, want) {
 			t.Errorf("%s, asks %v upstream, want %v", when, got, want)
 		}
-		if got := f.d.uplinkFor(nameQuery(t, "mx.example.net.")); !slices.Equal(got, want) {
+		if got := upsOf(t, f.d.uplinkFor, nameQuery(t, "mx.example.net.")); !slices.Equal(got, want) {
 			t.Errorf("%s, asks %v for members, want %v", when, got, want)
 		}
 	}
@@ -182,9 +182,9 @@ func TestJuistdAsksNotTailscaledWhichAsksJuistd(t *testing.T) {
 
 	os.Remove(tailscaleds)
 	os.Symlink(own, tailscaleds)
-	f.d.soleMu.Lock()
-	f.d.soleReadAt = time.Time{}
-	f.d.soleMu.Unlock()
+	f.d.sole.mu.Lock()
+	f.d.sole.readAt = time.Time{}
+	f.d.sole.mu.Unlock()
 	asks("tailscaled's own linked to juistd's")
 }
 
@@ -224,7 +224,7 @@ func TestDNSOffLeavesTheHostsDNSAlone(t *testing.T) {
 		t.Fatal("DNS on, the host's DNS was not routed")
 	}
 
-	f.d.SetDNSOff(true)
+	f.d.changePrefs(func(p *Prefs) { p.DNSOff = true })
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestDNSOffLeavesTheHostsDNSAlone(t *testing.T) {
 		t.Errorf("DNS off, the exit node says %+v", ex)
 	}
 
-	f.d.SetDNSOff(false)
+	f.d.changePrefs(func(p *Prefs) { p.DNSOff = false })
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}

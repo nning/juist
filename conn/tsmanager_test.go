@@ -12,6 +12,7 @@ import (
 
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
+	"tailscale.com/util/clientmetric"
 )
 
 // node is a test node: its keys, its overlay addresses, and its live manager.
@@ -215,14 +216,19 @@ func TestARestartedPeerIsReachedAtOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Time for the path warm-up, so a handshake is not dropped for want of
-	// one and what is left is the sessions.
-	time.Sleep(time.Second)
+	// Until each side's warm-up proves a path, what a sends b is dropped,
+	// and b's handshake response with no path: what is left is the sessions.
+	ma, mb := a.mgr.(*tsManager), b.mgr.(*tsManager)
+	waitUntil(t, unprovenWait, "paths proven both ways", func() bool {
+		return !ma.isUnproven(b.nodeKey.Public()) && !mb.isUnproven(a.nodeKey.Public())
+	})
 	// Below WireGuard's 5 s RekeyTimeout, which a handshake merely
 	// scheduled on the stale session waits out.
 	start := time.Now()
-	if _, ok := pingUntil(t, a, b.pingAddr(), 2*time.Second); !ok {
-		t.Fatal("a could not reach b after b restarted")
+	for _, ok := ping(t, a, b.pingAddr(), 500*time.Millisecond); !ok; _, ok = ping(t, a, b.pingAddr(), 500*time.Millisecond) {
+		if time.Since(start) > 2*time.Second {
+			t.Fatal("a could not reach b after b restarted")
+		}
 	}
 	t.Logf("reached the restarted peer after %v", time.Since(start))
 }
@@ -372,4 +378,68 @@ func TestProbeProvesTheTunnel(t *testing.T) {
 	if probe() {
 		t.Fatal("a closed peer answered the probe")
 	}
+}
+
+// A quiet probe is answered by the peer's NAT traversal alone, and starts no
+// heartbeat on either end: no ping follows it every 3 s, and nothing goes
+// through WireGuard. A peer that is gone leaves it unanswered. Not parallel:
+// it counts every ping the process receives, and warms no path, whose pings
+// start a heartbeat.
+func TestAQuietProbeStartsNoHeartbeat(t *testing.T) {
+	warm := warmSchedule
+	warmSchedule = nil
+	t.Cleanup(func() { warmSchedule = warm })
+	a := startNode(t, 1, "198.18.0.1/32", "fd7a:115c:a1e0::1/128", nil)
+	b := startNode(t, 2, "198.18.0.2/32", "fd7a:115c:a1e0::2/128", nil)
+	if err := a.mgr.SetPeers([]Peer{b.peer()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.mgr.SetPeers([]Peer{a.peer()}); err != nil {
+		t.Fatal(err)
+	}
+	quietly := a.mgr.(interface {
+		ProbeQuietly(netip.Addr, time.Duration, func(bool))
+	})
+	probe := func() bool {
+		res := make(chan bool, 1)
+		quietly.ProbeQuietly(b.pingAddr(), 2*time.Second, func(ok bool) { res <- ok })
+		return <-res
+	}
+	answered := false
+	for deadline := time.Now().Add(15 * time.Second); !answered && time.Now().Before(deadline); {
+		answered = probe()
+	}
+	if !answered {
+		t.Fatal("the quiet probe was never answered")
+	}
+	time.Sleep(time.Second)
+	before := pingsReceived(t)
+	time.Sleep(10 * time.Second)
+	if n := pingsReceived(t) - before; n > 0 {
+		t.Fatalf("%d pings in the 10 s after a quiet probe: a heartbeat", n)
+	}
+	for _, n := range []*node{a, b} {
+		for _, tun := range n.mgr.Tunnels() {
+			if !tun.LastHandshake.IsZero() {
+				t.Fatalf("a quiet probe left a handshake at %v", tun.LastHandshake)
+			}
+		}
+	}
+
+	b.mgr.Close()
+	if probe() {
+		t.Fatal("a closed peer answered the quiet probe")
+	}
+}
+
+// pingsReceived is how many disco pings magicsock received in the process.
+func pingsReceived(t *testing.T) int64 {
+	t.Helper()
+	for _, m := range clientmetric.Metrics() {
+		if m.Name() == "magicsock_disco_recv_ping" {
+			return m.Value()
+		}
+	}
+	t.Fatal("magicsock counts no pings received")
+	return 0
 }

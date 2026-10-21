@@ -3,11 +3,13 @@
 package conn
 
 import (
+	"fmt"
 	"net/netip"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/google/nftables"
@@ -399,6 +401,36 @@ func TestAnUnmarkedExitRuleIsFound(t *testing.T) {
 	other.Table = exitTable(2)
 	if !unmarkedExitRule(unmarked, want) || unmarkedExitRule(want, want) || unmarkedExitRule(other, want) {
 		t.Error("the unmarked exit rule is not told apart")
+	}
+}
+
+// A kernel without IPv6 policy routing takes no IPv6 egress rule, the guard
+// keeping IPv6 in, and has none to delete; one without IPv4's cannot keep
+// egress in, so adding there fails.
+func TestEgressRulesWithoutPolicyRouting(t *testing.T) {
+	v4, v6 := netlink.FAMILY_V4, netlink.FAMILY_V6
+	wrapped := func(e syscall.Errno) error { return fmt.Errorf("adding a rule: %w", e) }
+	for _, tc := range []struct {
+		add  bool
+		fam  int
+		err  error
+		done bool
+	}{
+		{true, v4, nil, true},
+		{true, v4, wrapped(syscall.EEXIST), true},
+		{true, v6, wrapped(syscall.EAFNOSUPPORT), true},
+		{true, v4, wrapped(syscall.EAFNOSUPPORT), false},
+		{true, v6, wrapped(syscall.ENOENT), false},
+		{true, v4, wrapped(syscall.EPERM), false},
+		{false, v4, wrapped(syscall.ENOENT), true},
+		{false, v4, wrapped(syscall.EAFNOSUPPORT), true},
+		{false, v6, wrapped(syscall.EAFNOSUPPORT), true},
+		{false, v6, wrapped(syscall.EEXIST), false},
+		{false, v4, wrapped(syscall.EPERM), false},
+	} {
+		if got := ruleDone(tc.add, tc.fam, tc.err); got != tc.done {
+			t.Errorf("add %v, family %d, %v: done %v, want %v", tc.add, tc.fam, tc.err, got, tc.done)
+		}
 	}
 }
 

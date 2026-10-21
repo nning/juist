@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -745,5 +746,63 @@ func TestANodeThatDoesNotSeekAsksTheDHTNothing(t *testing.T) {
 		if puts == 0 {
 			t.Errorf("%s: published nothing", c.name)
 		}
+	}
+}
+
+// A node that does not take part sends the DHT nothing, not even a
+// bootstrap, and asks Ask alone; taking part again, it bootstraps and
+// publishes.
+func TestANodeThatDoesNotJoinSendsTheDHTNothing(t *testing.T) {
+	sw := newSwarm(t, 3)
+	kr := testKeyring(t, 4)
+	peer := newMember(t, sw, kr, 2, nil)
+	priv, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ann := peer.ann
+	ann.Identity = priv.Public()
+	if err := ann.Sign(priv); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var joins atomic.Bool
+	var asked atomic.Int32
+	n, err := New(Options{
+		Self:       priv.Public(),
+		Keyring:    kr,
+		Announce:   func() (gossip.Endpoint, bool) { return ann, true },
+		Wanted:     func() []types.Identity { return []types.Identity{peer.id} },
+		OnPeer:     func(gossip.Endpoint) {},
+		Ask:        func(context.Context, types.Identity) bool { asked.Add(1); return false },
+		Joins:      joins.Load,
+		Bootstrap:  sw.addrs,
+		Conn:       conn,
+		NoSecurity: true,
+		Clock:      func() time.Time { return time.Unix(1_700_000_000, 0) },
+		Logf:       t.Logf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { n.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	before := len(sw.seen())
+	n.Round(ctx)
+	if got := len(sw.seen()) - before; got != 0 {
+		t.Fatalf("a node that does not take part sent the DHT %d queries", got)
+	}
+	if asked.Load() != 1 {
+		t.Fatalf("Ask was asked %d times, want 1", asked.Load())
+	}
+	joins.Store(true)
+	n.Round(ctx)
+	if _, err := peer.node.Lookup(ctx, ann.Identity); err != nil {
+		t.Fatalf("taking part, the node published nothing: %v", err)
 	}
 }

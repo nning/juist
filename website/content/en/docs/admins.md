@@ -68,8 +68,8 @@ or stolen key then affects only one network, and no two networks' logs share
 a key.
 
 - A key from `juist admins new` is filed under the first network whose log
-  names it. `juist admins new alice --network home` names the network right
-  away.
+  names it, once `juist admins` lists it or it signs a change there.
+  `juist admins new alice --network home` names the network right away.
 - To govern a new network with a key you already have, say so:
   `juist create lab --admin-key alice@home`.
 - `juist admins` lists the keys on this machine and the networks each one
@@ -173,9 +173,12 @@ It shows what the change does, asks for confirmation, signs the file in
 place, and applies the change once it has enough votes. `juist apply` does
 the same.
 
-On a machine in no network, an admin can approve the admission of a device,
-but nothing that may change who approves or vouches: a removal, a role, an
-admin key, or the quorum. Only the log shows who such a change affects.
+On a machine in no network, an admin can approve the admission of a device
+that is not a voucher, and changes such as new tunnel keys, a new group
+secret, names or the policy. Nothing that may change who approves or vouches
+can be approved there, such as a removal, a role, a voucher's admission, a
+new identity key, an admin key or the quorum. Only the log shows who such a
+change affects.
 
 ## Notes
 
@@ -202,16 +205,11 @@ admin key, or the quorum. Only the log shows who such a change affects.
 - The [access policy]({{< relref "docs/access" >}}) is changed the same way.
   `juist approve policy.rec` shows the change as a diff against the current
   policy.
-- When an update of juist adds to the network's log, the `Schema` line of
-  `juist status` shows the network's schema and, in parentheses, this
-  version's, as in `18 (19)`. On your device, `juist health` then hints
-  `once every device runs this version: juist log upgrade`. `juist devices`
-  shows which schema each device's juist implements. Once every device runs
-  the new version, run `juist log upgrade`. From the upgrade on, devices on
-  older versions apply no changes until they are updated: `juist health` on
-  every other device names them, and `juist status` on them says so. Where
-  one has no tunnel to a device, `juist devices` there shows it as
-  `outdated`.
+- A new release of juist can bring a new schema, the format of the log's
+  changes. Once every device runs the release, an admin moves the network to
+  it with `juist log upgrade`; until then, `juist health` on an admin's device
+  reminds you. [Updating juist]({{< relref "docs/updating" >}}) explains the
+  steps.
 - juist reads networks whose log is at schema 18 or later, where every
   change is signed quantum-safe
   ([Security]({{< relref "docs/security" >}}#quantum-safe)). A network

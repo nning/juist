@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+
+	"github.com/nning/juist/internal/malformed"
 )
 
 // A Kind identifies what an [AUM] does. Numbers are permanent: never
@@ -669,7 +671,7 @@ func (a *AUM) ValidateUnsigned() error {
 				len(a.Grant.Routes), MaxRoutesPerNode)
 		}
 		for i, pfx := range a.Grant.Routes {
-			if i > 0 && comparePrefix(a.Grant.Routes[i-1], pfx) >= 0 {
+			if i > 0 && ComparePrefix(a.Grant.Routes[i-1], pfx) >= 0 {
 				return fmt.Errorf("route grant routes are not sorted and unique at %v", pfx)
 			}
 		}
@@ -816,7 +818,7 @@ func (a *AUM) Encode() ([]byte, error) { return encode(a) }
 // Hash returns the record's identity in the chain. The record must be valid —
 // out of [DecodeAUM] or past [AUM.StaticValidate]; hashing an invalid one
 // panics rather than returning a hash nothing should act on.
-func (a *AUM) Hash() Hash { return hashLabeled(labelAUM, mustEncode(a)) }
+func (a *AUM) Hash() Hash { return hashLabeled(LabelAUM, mustEncode(a)) }
 
 // SigHash returns the digest signatures are computed over: the record without
 // its signatures, so what is signed does not depend on the signatures already
@@ -825,7 +827,7 @@ func (a *AUM) Hash() Hash { return hashLabeled(labelAUM, mustEncode(a)) }
 func (a *AUM) SigHash() Hash {
 	unsigned := *a
 	unsigned.Signatures = nil
-	return hashLabeled(labelAUMSig, mustEncode(&unsigned))
+	return hashLabeled(LabelAUMSig, mustEncode(&unsigned))
 }
 
 // Sign appends a signature by priv, by ML-DSA, sorted. Signing twice with one
@@ -873,15 +875,15 @@ func (a *AUM) Signature(id Identity) (*Signature, bool) {
 }
 
 // VerifySignature reports whether the record carries a valid signature by
-// id, against the key the record names for id or else key. Whether id may sign
-// it is the log's to say.
+// id, against key or, where that is nil, the key the record names for id.
+// Whether id may sign it is the log's to say.
 func (a *AUM) VerifySignature(id Identity, key *SigningKey) bool {
 	s, ok := a.Signature(id)
 	if !ok {
 		return false
 	}
-	if k := a.NamedSigningKey(id); k != nil {
-		key = k
+	if key == nil {
+		key = a.NamedSigningKey(id)
 	}
 	return key != nil && key.Verify(a.SigHash().bytes(), s.PQ)
 }
@@ -1002,8 +1004,9 @@ func (a *AUM) Clone() *AUM {
 // DecodeAUM decodes and validates a record, rejecting anything that is not the
 // canonical encoding of a structurally valid one — which is what lets
 // [AUM.Hash] be the identity of the bytes it arrived as.
-func DecodeAUM(b []byte) (AUM, error) {
-	a, err := decodeCanonical[AUM](b)
+func DecodeAUM(b []byte) (_ AUM, err error) {
+	defer malformed.Recover(&err)
+	a, err := DecodeCanonical[AUM](decMode, b, MaxRecordSize)
 	if err != nil {
 		return AUM{}, err
 	}
@@ -1016,8 +1019,9 @@ func DecodeAUM(b []byte) (AUM, error) {
 // DecodeUnsignedAUM is [DecodeAUM] for a record part-way through its signing
 // ceremony. Nothing that acts on a record should use it: an unsigned record is
 // a proposal, not an authorization, and trust/log rejects one either way.
-func DecodeUnsignedAUM(b []byte) (AUM, error) {
-	a, err := decodeCanonical[AUM](b)
+func DecodeUnsignedAUM(b []byte) (_ AUM, err error) {
+	defer malformed.Recover(&err)
+	a, err := DecodeCanonical[AUM](decMode, b, MaxRecordSize)
 	if err != nil {
 		return AUM{}, err
 	}

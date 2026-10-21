@@ -119,10 +119,11 @@ func (a *app) warnFirewalled(st *ipc.Status, ports ...uint16) {
 // warnServedFirewalled warns, as warnFirewalled, of the ports the names
 // published on this device are served on.
 func (a *app) warnServedFirewalled() {
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return
 	}
+	st := d.st
 	auth, err := a.networkLog()
 	if err != nil {
 		return

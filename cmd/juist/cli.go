@@ -140,9 +140,9 @@ func newApp(in io.Reader, out, errOut io.Writer) *app {
 		system: os.ReadFile, getenv: os.Getenv,
 		helpers: &rendezvous.Helpers{STUN: rendezvous.DefaultSTUN}, spawn: spawnBackground}
 	a.interactive = isTerminal(in)
-	a.color = isTerminal(out) && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
-	a.width = termWidth(out)
-	a.terminal = isTerminal(out) && os.Getenv("TERM") != "dumb"
+	a.color = isTerminal(out) && a.getenv("NO_COLOR") == "" && a.getenv("TERM") != "dumb"
+	a.width = termWidth(out, a.getenv)
+	a.terminal = isTerminal(out) && a.getenv("TERM") != "dumb"
 	return a
 }
 
@@ -165,7 +165,7 @@ func isTerminal(v any) bool {
 
 // termWidth is the width of the terminal v is, else $COLUMNS (which watch
 // sets for the pipe it reads), else 0.
-func termWidth(v any) int {
+func termWidth(v any, getenv func(string) string) int {
 	f, ok := v.(*os.File)
 	if !ok {
 		return 0
@@ -173,7 +173,7 @@ func termWidth(v any) int {
 	if ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ); err == nil && ws.Col > 0 {
 		return int(ws.Col)
 	}
-	if n, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && n > 0 {
+	if n, err := strconv.Atoi(getenv("COLUMNS")); err == nil && n > 0 {
 		return n
 	}
 	return 0

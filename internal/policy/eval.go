@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"cmp"
 	"net/netip"
 	"slices"
 
@@ -296,12 +295,7 @@ func merge(a, b Access) Access {
 		a.Routes = slices.Clone(a.Routes)
 		a.Routes[i].Ports = normalize(append(slices.Clone(a.Routes[i].Ports), r.Ports...))
 	}
-	slices.SortFunc(a.Routes, func(x, y Route) int {
-		if c := x.Prefix.Addr().Compare(y.Prefix.Addr()); c != 0 {
-			return c
-		}
-		return cmp.Compare(x.Prefix.Bits(), y.Prefix.Bits())
-	})
+	slices.SortFunc(a.Routes, func(x, y Route) int { return types.ComparePrefix(x.Prefix, y.Prefix) })
 	return a
 }
 

@@ -14,9 +14,7 @@ import (
 // NetworkChanged tells the data plane that the host's networks changed, so
 // that it finds its paths again at once, where its monitor would not notice.
 func (d *Daemon) NetworkChanged() {
-	if n, ok := d.manager.(interface{ NetworkChanged() }); ok {
-		n.NetworkChanged()
-	}
+	d.manager.NetworkChanged()
 }
 
 // pingWait bounds a ping: the engine may never answer.

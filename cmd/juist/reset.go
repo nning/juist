@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/internal/statedir"
 
 	"github.com/nning/juist/internal/instance"
@@ -69,7 +70,7 @@ the default; the others keep their keys.`}
 	if err := a.proceed(*yes, q); err != nil {
 		return err
 	}
-	ds := n.status()
+	ds := liveStatus(n)
 	// Whatever juistd says: a name cleared while relay.sh found no root
 	// leaves the grant.
 	named := inst == 0 && (ds != nil && ds.HTTPS != nil && ds.HTTPS.Name != "" || a.relayGranted())
@@ -117,7 +118,7 @@ func resetLocalHome(h *home) error {
 			}
 		}
 	}
-	return keys.SyncDir(h.path)
+	return atomicfile.SyncDir(h.path)
 }
 
 func removeIfPresent(path string) error {

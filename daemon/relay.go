@@ -3,8 +3,11 @@ package daemon
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"net"
+	"net/netip"
 	"slices"
 	"syscall"
+	"time"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
@@ -14,22 +17,52 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// labelRelayRegion separates the relay-region derivation from every other
-// digest this project takes, so no hash can be reinterpreted as another kind.
-const labelRelayRegion = "juist/relay-region/v1"
-
 // relayRegion is a relay's region, 1..65535 as the data plane keeps it in 16
 // bits. It is derived from the network and the member so that it moves with
 // nobody: an index over the relay-capable set would renumber as the set
 // changes, and announcements name regions. Collisions are handled in relaySet.
 func relayRegion(network types.Hash, id types.Identity) int {
 	h := sha256.New()
-	h.Write([]byte(labelRelayRegion))
+	h.Write([]byte(types.LabelRelayRegion))
 	h.Write([]byte{0})
 	h.Write(network[:])
 	h.Write(id[:])
 	sum := h.Sum(nil)
 	return 1 + int(binary.BigEndian.Uint32(sum[:4])%uint32(conn.MaxRegionID))
+}
+
+// relayState is this device's own relay, under the daemon's mu.
+type relayState struct {
+	// server runs while the log grants this device the role; members is
+	// the WireGuard key set it admits, refreshed by every reconcile so that
+	// a DERP connection never has to reach the authority, and hosts the
+	// identity set that may wait at it for an invite's guest. region is
+	// whether it holds its region.
+	server  *relay.Server
+	members map[types.WGKey]bool
+	hosts   map[types.Identity]bool
+	region  bool
+
+	// https443 is its sockets on 443, by address, httpsErr why some could
+	// not be bound, and httpsHanded that the ingress takes 443 instead.
+	https443     map[netip.Addr]net.Listener
+	httpsErr     string
+	httpsHanded  bool
+	handOff      net.Listener // the hand-off socket, served by handOffFor
+	handOffFor   *relay.Server
+	handOffTaken bool // the ingress has been told of it since
+
+	// noCert is why it has no certificate for its name, hasCert that it
+	// has had one, and certDue when to order one again, certGap after the
+	// last.
+	noCert  string
+	hasCert bool
+	certGap time.Duration
+	certDue time.Time
+
+	// unreachedSince is when the tunnel checks first found it reached by
+	// nobody, while a live peer reaches no relay.
+	unreachedSince time.Time
 }
 
 // relaySet renders the relays this node should use: members the log grants
@@ -119,16 +152,14 @@ func (d *Daemon) syncRelay(state *log.State) {
 	} else {
 		want = false
 	}
-	select {
-	case <-d.closed:
+	if d.ctx.Err() != nil {
 		// Shutting down. Starting one here would outlive the Close that has
 		// already run over it.
 		want = false
-	default:
 	}
 
 	d.mu.Lock()
-	running := d.relay
+	running := d.ownRelay.server
 	d.mu.Unlock()
 
 	switch {
@@ -153,14 +184,14 @@ func (d *Daemon) syncRelay(state *log.State) {
 			return
 		}
 		d.mu.Lock()
-		if !d.session.holds(cert) {
-			// A rotation came between: the next reconcile starts it on
-			// the certificate for the new keys.
+		// A rotation came between, and the next reconcile starts it on the
+		// certificate for the new keys; or a Close, whose closeRelay has run.
+		if !d.session.holds(cert) || d.ctx.Err() != nil {
 			d.mu.Unlock()
 			srv.Close()
 			return
 		}
-		d.relay = srv
+		d.ownRelay.server = srv
 		d.announced = nil // the announcement now has a relay to name
 		d.mu.Unlock()
 		d.logf("daemon: relaying for members on TCP port %d (STUN on UDP %d)",
@@ -168,7 +199,7 @@ func (d *Daemon) syncRelay(state *log.State) {
 		d.syncHTTPS(state, srv)
 	case !want && running != nil:
 		d.mu.Lock()
-		d.relay = nil
+		d.ownRelay.server = nil
 		d.announced = nil
 		d.mu.Unlock()
 		d.closeHTTPS()
@@ -186,8 +217,8 @@ func (d *Daemon) syncRelay(state *log.State) {
 // admits, for the paths where membership cannot be read at all.
 func (d *Daemon) stopRelaying() {
 	d.mu.Lock()
-	d.relayMembers = map[types.WGKey]bool{}
-	d.relayHosts = map[types.Identity]bool{}
+	d.ownRelay.members = map[types.WGKey]bool{}
+	d.ownRelay.hosts = map[types.Identity]bool{}
 	d.mu.Unlock()
 	d.syncRelay(nil)
 }
@@ -199,7 +230,7 @@ func (d *Daemon) stopRelaying() {
 func (d *Daemon) admitToRelay(wg [32]byte) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.relayMembers[types.WGKey(wg)]
+	return d.ownRelay.members[types.WGKey(wg)]
 }
 
 // admitHostToRelay reports whether an identity may wait at this device's
@@ -207,13 +238,13 @@ func (d *Daemon) admitToRelay(wg [32]byte) bool {
 func (d *Daemon) admitHostToRelay(id [32]byte) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.relayHosts[types.Identity(id)]
+	return d.ownRelay.hosts[types.Identity(id)]
 }
 
 // relayInfo is what this node announces about its own relay, or nil.
 func (d *Daemon) relayInfo() *gossip.RelayInfo {
 	d.mu.Lock()
-	srv := d.relay
+	srv := d.ownRelay.server
 	d.mu.Unlock()
 	if srv == nil {
 		return nil
@@ -236,8 +267,8 @@ func (d *Daemon) relayInfo() *gossip.RelayInfo {
 // closeRelay stops this device's relay, for shutdown.
 func (d *Daemon) closeRelay() {
 	d.mu.Lock()
-	srv := d.relay
-	d.relay = nil
+	srv := d.ownRelay.server
+	d.ownRelay.server = nil
 	d.mu.Unlock()
 	if srv != nil {
 		srv.Close()

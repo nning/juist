@@ -248,3 +248,46 @@ func TestLabels(t *testing.T) {
 		}
 	}
 }
+
+// TestAnUnreadableQueryIsAServerFailure: an answer by the header alone keeps
+// the query's id, opcode and recursion bit and says it failed.
+func TestAnUnreadableQueryIsAServerFailure(t *testing.T) {
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 0x1234, RecursionDesired: true})
+	query, err := b.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p dnsmessage.Parser
+	h, err := p.Start(serverFailure(query))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.ID != 0x1234 || !h.Response || !h.RecursionDesired || h.RCode != dnsmessage.RCodeServerFailure {
+		t.Fatalf("answered %+v", h)
+	}
+	if serverFailure(query[:11]) != nil {
+		t.Fatal("a query shorter than a header was answered")
+	}
+}
+
+// A question's name is lowered as DNS compares names, A to Z alone, its
+// other bytes kept, as resolved has them.
+func TestAQuestionKeepsItsBytes(t *testing.T) {
+	for in, want := range map[string]string{"\xc3\x89.Corp.": "\xc3\x89.corp", "\xff.Corp.": "\xff.corp"} {
+		if got, _, _, ok := QuestionOf(query(t, in, dnsmessage.TypeA)); !ok || got != want {
+			t.Errorf("%q is %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A name is the zone's only as DNS compares names, A to Z alone folded: a
+// Kelvin sign is no k.
+func TestAZoneFoldsASCIIAlone(t *testing.T) {
+	z := &Zone{Domain: "work.juist"}
+	if msg := z.Answer(query(t, "x.WORK.juist.", dnsmessage.TypeA)); msg == nil {
+		t.Error("x.WORK.juist is not answered")
+	}
+	if msg := z.Answer(query(t, "x.worK.juist.", dnsmessage.TypeA)); msg != nil {
+		t.Errorf("x.worK.juist is answered: %v", parse(t, msg))
+	}
+}

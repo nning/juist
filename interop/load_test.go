@@ -72,7 +72,7 @@ juist publish add lx docs 443`)
 	}
 	fb.run(t, `set -e
 juist ingress serve
-daemon -f /tmp/probe answer 127.0.0.1:5399 127.0.0.1
+daemon -f -o /tmp/answer.log /tmp/probe answer 127.0.0.1:5399 127.0.0.1
 env PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 daemon -f -o /tmp/pebble.log /tmp/pebble -config /tmp/pebble.json -dnsserver 127.0.0.1:5399
 for a in `+strings.Join(sources, " ")+`; do ifconfig lo0 inet $a/32 alias; done`)
 	lx.run(t, `set -e

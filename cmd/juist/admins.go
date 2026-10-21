@@ -71,6 +71,7 @@ func (a *app) listAdmins(governs map[types.Identity][]string) error {
 	if err != nil {
 		return err
 	}
+	a.fileAdminKeys(auth)
 	if auth == nil {
 		if len(local) == 0 {
 			return errors.New("no network and no admin key here\nhint: juist admins new NAME")
@@ -124,7 +125,8 @@ func adminsNew(a *app, args []string) error {
 	s := spec{name: "juist admins new", args: "NAME", min: 1, max: 1, anyNetwork: true, about: `
 Create an admin key on this machine and print the command that adds it.
 --network names the network it is for; without, the first network whose
-log names it here files it under that network.`}
+log names it here files it, once "juist admins" or a change signed with it
+reads that log.`}
 	fs := newFlags(s.name)
 	on := fs.String("on", "", "`MACHINE` the key is kept on (default: this device's name, or the hostname)")
 	pos, err := a.parse(s, fs, args)
@@ -259,6 +261,7 @@ is a change like any other, which each key signs for itself.`}
 	if err != nil {
 		return err
 	}
+	a.fileAdminKeys(auth)
 	files, err := a.adminKeyFiles()
 	if err != nil {
 		return err

@@ -1317,6 +1317,47 @@ func TestRotateIdentityRequiresNewKeySignature(t *testing.T) {
 	}
 }
 
+// TestARotationOntoAnAdminCastsNoVote: a member's rotation onto an admin's
+// identity, naming a key of the member's own and that admin's signature
+// forged with it, is refused when its signatures are checked, not only when
+// it is applied, and casts no vote for the CLI either.
+func TestARotationOntoAnAdminCastsNoVote(t *testing.T) {
+	h := newHarness(t, 1, 1)
+	n := h.addNode("alpha")
+	forger, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatalf("generating identity: %v", err)
+	}
+	aum, err := h.auth.Builder().RotateIdentity(n.Identity, forger.Public(), forger.SigningKey(), h.sealer())
+	if err != nil {
+		t.Fatalf("RotateIdentity: %v", err)
+	}
+	admin := h.admins[0].Public()
+	aum.NewIdentity = &admin
+	if err := h.sign(&aum, h.nodeIDs[n.Identity]); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	if err := h.sign(&aum, forger); err != nil {
+		t.Fatalf("signing: %v", err)
+	}
+	for i := range aum.Signatures {
+		if aum.Signatures[i].KeyID == forger.Public() {
+			aum.Signatures[i].KeyID = admin
+		}
+	}
+	slices.SortFunc(aum.Signatures, func(x, y types.Signature) int { return x.KeyID.Compare(y.KeyID) })
+
+	st := h.auth.State()
+	if sst := st.SignatureStatus(&aum); sst.Votes > 0 || sst.Authorized() {
+		t.Fatalf("the forged signature cast %d votes", sst.Votes)
+	}
+	if aum.VerifySignature(admin, st.SigningKey(admin)) {
+		t.Fatal("the forged signature verifies as the admin's")
+	}
+	mustBreak(t, "a rotation onto an admin, checked", RuleUnauthorized, verifyAgainst(&aum, st))
+	h.mustReject("a rotation onto an admin with its signature forged", RuleUnauthorized, aum)
+}
+
 // --- break-glass -----------------------------------------------------------
 
 func TestDisablementCommitments(t *testing.T) {

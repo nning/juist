@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+
+	"github.com/nning/juist/internal/malformed"
 )
 
 var signature = []byte("\r\n\r\n\x00\r\nQUIT\n")
@@ -60,6 +62,7 @@ func LocalUDP(src netip.AddrPort, done bool) []byte {
 // ReadLocalUDP reads datagram b as a [LocalUDP] header, and reports the
 // client it names and whether it is done.
 func ReadLocalUDP(b []byte) (src netip.AddrPort, done, ok bool) {
+	defer malformed.RecoverOK(&ok)
 	if len(b) < 16 || !bytes.Equal(b[:12], signature) || b[12] != 0x20 {
 		return netip.AddrPort{}, false, false
 	}
@@ -87,7 +90,8 @@ func IsHeader(b []byte) bool { return bytes.HasPrefix(b, signature) }
 
 // ReadUDP reads datagram b as a v2 header for UDP alone, and reports the
 // client it names.
-func ReadUDP(b []byte) (netip.AddrPort, error) {
+func ReadUDP(b []byte) (_ netip.AddrPort, err error) {
+	defer malformed.Recover(&err)
 	src, ok, err := read(bufio.NewReaderSize(bytes.NewReader(b), 16+maxLength), 0x2)
 	switch {
 	case err != nil:
@@ -106,6 +110,7 @@ func ReadUDP(b []byte) (netip.AddrPort, error) {
 func Read(r *bufio.Reader) (src netip.AddrPort, ok bool, err error) { return read(r, 0x1) }
 
 func read(r *bufio.Reader, transport byte) (src netip.AddrPort, ok bool, err error) {
+	defer malformed.Recover(&err)
 	head, err := r.Peek(16)
 	if err != nil || !bytes.Equal(head[:12], signature) {
 		if errors.Is(err, io.EOF) || errors.Is(err, bufio.ErrBufferFull) || err == nil {

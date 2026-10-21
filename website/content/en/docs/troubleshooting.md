@@ -13,7 +13,7 @@ Run this on the device that has the problem:
 juist health
 ```
 
-Warnings start with `warning:`, and each one is followed by a `hint:` line
+Warnings start with `warning:`, and most are followed by a `hint:` line
 with the command to run. Plain lines name the devices this one does not
 reach. Where nothing is wrong, it says `nothing needs attention`.
 `juist status` shows the network's state and details. Any local user may run
@@ -26,21 +26,39 @@ For more detail, read the daemon's own log:
 journalctl -u juistd
 ```
 
-A second network on the same device has its own daemon and log:
-`journalctl -u juistd@juist1`.
+On FreeBSD it is `/var/log/juistd.log`. A second network on the same device
+has its own daemon and log: `journalctl -u juistd@juist1`, on FreeBSD
+`/var/log/juistd.juist1.log`.
+
+## By symptom
+
+| What does not work | Where to look |
+|---|---|
+| `juist status` says `not running` | [below](#not-running) |
+| a command says `operator only`, or needs sudo every time | [below](#read-only-to-manage-this-device-) |
+| another device does not answer a ping | `juist health`, then [no answer](#no-answer-from-nas-offline-or-udp41643-blocked) or [no tunnel traffic](#no-tunnel-traffic-from-nas) below |
+| ping works, but ssh or another service hangs | the [access policy]({{< relref "docs/access" >}}#why-a-connection-does-not-get-through), or the other device's firewall |
+| `nas.home.juist` does not resolve | [Names]({{< relref "docs/names" >}}#troubleshooting) |
+| no internet while an exit node is in use | [below](#exit-node--vps-internet-refused-) |
+| a new device cannot join | [Inviting devices]({{< relref "docs/invites" >}}#troubleshooting) |
+| a change does not take effect | it may wait for other admins' votes: [Several admins]({{< relref "docs/admins" >}}#when-a-change-needs-another-admin) |
+| a published name does not open | [Publishing services]({{< relref "docs/publishing" >}}#troubleshooting) |
+| the Android app shows an error | [Android]({{< relref "docs/android" >}}#troubleshooting) |
 
 ## Common problems
 
-### `juistd not running`
+### `not running`
 
-The daemon, the program that keeps the tunnels up, is not running. Start it:
+`juist status` says `juist0 · not running`, `juistd not running` (on FreeBSD
+before juistd is enabled) or `home · juistd not running`:
+the daemon, the program that keeps the tunnels up, is not running. Start it:
 
 ```sh
 sudo systemctl enable --now juistd
 ```
 
 For a second network on the device, the daemon is `juistd@juist1`. On
-FreeBSD, run `service juistd start`. See [Install]({{< relref "docs/install" >}}).
+FreeBSD, run `sysrc juistd_enable=YES && service juistd start` as root. See [Install]({{< relref "docs/install" >}}).
 
 ### `read-only; to manage this device …`
 
@@ -187,8 +205,9 @@ knows no device that joined after the upgrade, it shows `no answer`.
 
 The network was upgraded, and nas still runs a version of juist from before
 the upgrade. nas stays reachable, but it applies no change to the network
-until you update juist on it, a removal included. `juist status` on nas
-says the same.
+until you update juist on it, a removal included. On nas, `juist status`
+warns that no changes apply until juist is updated. See
+[Updating juist]({{< relref "docs/updating" >}}).
 
 ### `warning: this change builds on juistd's view of the log, …`
 
@@ -204,10 +223,10 @@ device, go ahead, and redo what it undoes.
 nas was offline for more changes than this device keeps keys for. nas can
 catch up from a device that still has those keys, usually one that was
 offline for as long. Otherwise, join it to the network again with a new
-invite. Only a device that runs is said to have fallen behind: of one that is
-offline, this device may hold only an announcement from before it joined.
+invite. The warning names only devices that are running; one that is
+offline shows up as offline instead.
 
-### `alarm: log: rollback alarm: the chain went back from epoch 4 to 3, …`
+### `warning: log: rollback alarm: the chain went back from epoch 4 to 3, …`
 
 Two admins changed the network at the same time, and the changes this device
 applied first lost to the others. Taking the winning changes would move the

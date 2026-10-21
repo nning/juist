@@ -22,16 +22,11 @@ func localDNSTable(family nftables.TableFamily) *nftables.Table {
 // of to's addresses to its port, which a resolv.conf cannot name; none
 // removes the table.
 func RedirectLocalDNS(to []netip.AddrPort) error {
-	c, err := nftables.New()
+	c, err := replacingTables(localDNSTable)
 	if err != nil {
-		return fmt.Errorf("conn: nftables: %w", err)
+		return err
 	}
 	defer c.CloseLasting()
-	for _, fam := range families {
-		t := localDNSTable(fam)
-		c.AddTable(t) // so that the delete below cannot fail for a missing table
-		c.DelTable(t)
-	}
 	if len(to) > 0 {
 		accept := nftables.ChainPolicyAccept
 		for _, fam := range families {

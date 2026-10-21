@@ -17,8 +17,10 @@ import (
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/trust/secrets"
+	"github.com/nning/juist/types"
 )
 
 // A Store puts and gets one opaque value at an address derived from a seed,
@@ -110,7 +112,7 @@ func resolveAll(hostPorts []string) ([]anacrolix.Addr, error) {
 // finds it.
 func RendezvousKey(seed [32]byte) [32]byte {
 	m := hmac.New(sha256.New, seed[:])
-	m.Write([]byte("juist relay rendezvous v1"))
+	m.Write([]byte(types.LabelRelayRendezvous))
 	return [32]byte(m.Sum(nil))
 }
 
@@ -120,7 +122,8 @@ func SealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint) ([]byte
 }
 
 // OpenAnnouncement opens and verifies an announcement published under epoch.
-func OpenAnnouncement(kr *keyring.Keyring, epoch uint64, blob []byte) (gossip.Endpoint, error) {
+func OpenAnnouncement(kr *keyring.Keyring, epoch uint64, blob []byte) (_ gossip.Endpoint, err error) {
+	defer malformed.Recover(&err)
 	return openAnnouncement(kr, epoch, blob)
 }
 

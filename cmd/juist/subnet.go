@@ -48,14 +48,15 @@ func subnetList(a *app, args []string) error {
 
 // listSubnets is "juist subnet" for one network.
 func (a *app) listSubnets() error {
-	if _, err := a.daemonStatus(); err != nil {
+	d, err := a.daemon()
+	if err != nil {
 		return err
 	}
 	// A reader's status says not who routes what.
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	st, err := a.restatus()
+	st, err := d.restatus()
 	if err != nil {
 		return err
 	}
@@ -116,25 +117,22 @@ func subnetServe(a *app, args []string) error {
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return err
 	}
+	st := d.st
 	if !servesHere {
 		return errors.New("a subnet router runs on Linux and FreeBSD alone")
 	}
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	n, err := a.openNode()
-	if err != nil {
-		return err
-	}
 	sub := cmp.Or(st.Subnets, &ipc.Subnets{})
 	dev := instance.Name(st.Instance)
 	if *stop {
 		if sub.Consent {
-			if _, err := n.exit(ipc.Request{Command: ipc.CmdSubnet, ServeSubnets: new(bool)}); err != nil {
+			if _, err := d.request(ipc.Request{Command: ipc.CmdSubnet, ServeSubnets: new(bool)}); err != nil {
 				return err
 			}
 			a.ok("stopped routing")
@@ -157,7 +155,7 @@ func subnetServe(a *app, args []string) error {
 		}
 	}
 	on := true
-	after, err := n.exit(ipc.Request{Command: ipc.CmdSubnet, ServeSubnets: &on})
+	after, err := d.request(ipc.Request{Command: ipc.CmdSubnet, ServeSubnets: &on})
 	if err != nil {
 		return err
 	}
@@ -251,10 +249,11 @@ func setAccepting(a *app, args []string, on bool, s spec) error {
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return err
 	}
+	st := d.st
 	word := map[bool]string{true: "subnets on", false: "subnets off"}[on]
 	if off := st.Subnets != nil && st.Subnets.Off; off != on {
 		a.ok("unchanged: %s", word)
@@ -263,11 +262,7 @@ func setAccepting(a *app, args []string, on bool, s spec) error {
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	n, err := a.openNode()
-	if err != nil {
-		return err
-	}
-	if _, err := n.exit(ipc.Request{Command: ipc.CmdSubnet, AcceptSubnets: &on}); err != nil {
+	if _, err := d.request(ipc.Request{Command: ipc.CmdSubnet, AcceptSubnets: &on}); err != nil {
 		return err
 	}
 	a.ok("%s", word)

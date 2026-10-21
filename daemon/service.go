@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/internal/statedir"
 
 	"github.com/nning/juist/ipc"
@@ -51,11 +52,19 @@ type Service struct {
 	lock    *os.File
 	ipc     *ipcServer
 
+	// runs are the goroutines Start began, which Close waits for after
+	// cancelling stop, before it takes mu.
+	runs      waitSet
+	closeOnce sync.Once
+	// moved is every mesh's [Options.Moved], which the watcher follows.
+	moved chan struct{}
+
 	// mu guards everything below. It is never held across network I/O — a
 	// join marks busy and runs unlocked — but it is held while the mesh
 	// stops and starts, which can take a moment and makes status wait.
 	mu       sync.Mutex
 	ctx      context.Context
+	stop     context.CancelFunc
 	keys     *keys.Node
 	store    *store.Dir
 	auth     *log.Authority // the log while no mesh owns it; nil if none
@@ -74,8 +83,9 @@ type Service struct {
 	// last failure to read the host, logged once.
 	hostConflict *hostConflictError
 	hostErr      string
-	clearChecks  int  // checks in a row that found the conflict gone
-	meshStarted  bool // a mesh ran in this process: the host is known
+	clearChecks  int        // checks in a row that found the conflict gone
+	meshStarted  bool       // a mesh ran in this process: the host is known
+	exitUnkept   ExitChoice // the rotated choice last not kept, logged once
 
 	// session is what a restarted mesh announces again, for as long as the
 	// device's keys are sessionKeys: new keys take a new one, since a
@@ -99,26 +109,9 @@ type Service struct {
 	ingressAsked atomic.Int64
 	ingressSaid  atomic.Pointer[ipc.IngressReport]
 
-	// exit and serve are the owner's choice of exit node and the operator's
-	// word on serving as one, as kept in Home.
-	exit  ExitChoice
-	serve bool
-	// serveSubnets and subnetsOff are the operator's and the owner's word
-	// on subnet routes, as the state directory keeps them.
-	serveSubnets, subnetsOff bool
-	// acceptNames is the owner's word on the network's public names, and
-	// servePublished the operator's on serving what is published here.
-	acceptNames, servePublished bool
-	dnsOff                      bool // the owner's word that juistd leaves the host's DNS alone
-	// serveTo is, by label, where the names whose TLS juist ends go, and
-	// serveMembers the labels whose service is for members alone.
-	serveTo      map[string]string
-	serveMembers map[string]bool
-
-	// httpsOnly, proxy and relayName are the device's settings of 443, as
-	// kept in Home.
-	httpsOnly        bool
-	proxy, relayName string
+	// prefs are the device's settings, as kept in Home but for a service
+	// member's ServeTo.
+	prefs Prefs
 }
 
 // ServiceOptions configures a [Service].
@@ -161,17 +154,22 @@ type ServiceOptions struct {
 	Logf func(format string, args ...any)
 }
 
-// rotationCheckInterval is how often the service looks for a key rotation
-// the log has adopted, however it arrived, so it can restart the mesh on the
-// new keys.
-const rotationCheckInterval = 5 * time.Second
+// The service looks for a key rotation or a move the log has adopted,
+// however it arrived, every watchEvery, which the mesh's own calls on a
+// change make a backstop, and every watchRetryEvery while the mesh failed to
+// start or an instance below on the host may come to hold what this one
+// claims.
+const (
+	watchEvery      = time.Minute
+	watchRetryEvery = 5 * time.Second
+)
 
 // NewService opens a state directory: it takes the directory's lock, loads
 // this device's keys or creates them, opens the log if there is one, and
 // listens on the control socket. Call [Service.Start].
 func NewService(opts ServiceOptions) (*Service, error) {
 	s := &Service{opts: opts, logf: opts.Logf, selfUID: uint32(os.Getuid()),
-		ingressUID: lookupUID(IngressUser), serveUID: lookupUID(ServeUser)}
+		ingressUID: lookupUID(IngressUser), serveUID: lookupUID(ServeUser), moved: make(chan struct{}, 1)}
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
 	}
@@ -210,7 +208,7 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	ok := false
 	defer func() {
 		if !ok {
-			lock.Close()
+			statedir.Unlock(lock)
 		}
 	}()
 
@@ -238,25 +236,9 @@ func NewService(opts ServiceOptions) (*Service, error) {
 		}
 	}
 	s.operator.Store(loadOperator(filepath.Join(home, statedir.OperatorFile), s.logf))
-	if s.exit, err = LoadExitChoice(filepath.Join(home, statedir.ExitFile)); err != nil {
-		s.logf("daemon: %v; internet traffic is refused until an exit node is chosen again", err)
-		// Isolated too: the choice kept may have been.
-		s.exit = ExitChoice{Chosen: true, Unreadable: true, Isolate: true}
-	}
-	_, err = os.Stat(filepath.Join(home, statedir.ServeFile))
-	s.serve = err == nil
-	_, err = os.Stat(filepath.Join(home, statedir.SubnetServeFile))
-	s.serveSubnets = err == nil
-	_, err = os.Stat(filepath.Join(home, statedir.SubnetsFile))
-	s.subnetsOff = err == nil
-	_, err = os.Stat(filepath.Join(home, statedir.NamesFile))
-	s.acceptNames = err == nil
-	_, err = os.Stat(filepath.Join(home, statedir.DNSOffFile))
-	s.dnsOff = err == nil
-	s.servePublished, s.serveTo, s.serveMembers = loadServeTo(home, s.logf)
-	s.httpsOnly, s.proxy, s.relayName = loadSettings(home, s.logf)
+	s.prefs = LoadPrefs(home, s.logf)
 	if s.opts.ServeTo != nil {
-		s.servePublished, s.serveTo, s.serveMembers = true, maps.Clone(s.opts.ServeTo), maps.Clone(s.opts.ServeMembers)
+		s.prefs.ServePublished, s.prefs.ServeTo, s.prefs.ServeMembers = true, maps.Clone(s.opts.ServeTo), maps.Clone(s.opts.ServeMembers)
 	}
 	s.clearEgressUnlessChosen()
 	s.holdExitLocked()
@@ -349,22 +331,40 @@ func loadOperator(path string, logf func(string, ...any)) uint32 {
 }
 
 // Start runs the mesh if this device is in a network, and starts answering on
-// the control socket. It returns at once; ctx ends everything. A mesh that
-// cannot start is no reason to stop: the service keeps answering, reports why
-// in [Status.StartError], and retries, as it does when the same failure comes
-// later — a daemon that exited instead would restart in a loop under systemd
-// and never be there to say what is wrong.
+// the control socket. It returns at once; ctx ends everything. Once Close has
+// begun it refuses. A mesh that cannot start is no reason to stop: the
+// service keeps answering, reports why in [Status.StartError], and retries,
+// as it does when the same failure comes later — a daemon that exited
+// instead would restart in a loop under systemd and never be there to say
+// what is wrong.
 func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("daemon: the service is closed")
+	}
 	s.ctx = ctx
+	// The mesh ends with ctx or Close's stopping it; the rest with stop.
+	ctx, s.stop = context.WithCancel(ctx)
 	_ = s.startMeshLocked() // logged, reported and retried
 	s.mu.Unlock()
-	go s.ipc.serve()
-	go s.watch(ctx)
+	s.goTracked(s.ipc.serve)
+	s.goTracked(func() { s.watch(ctx) })
 	if s.opts.Join != "" {
-		go s.joinAtStart(ctx)
+		s.goTracked(func() { s.joinAtStart(ctx) })
 	}
 	return nil
+}
+
+// goTracked runs f on a goroutine Close waits for, unless Close has begun.
+func (s *Service) goTracked(f func()) {
+	if !s.runs.track() {
+		return
+	}
+	go func() {
+		defer s.runs.done()
+		f()
+	}()
 }
 
 // joinAtStart joins by [ServiceOptions.Join] where this node is in no
@@ -411,19 +411,28 @@ func (s *Service) joinAtStart(ctx context.Context) {
 	}
 }
 
-// Close stops the control socket, then the mesh, then releases the lock.
+// Close stops the control socket and what Start began, then the mesh, then
+// releases the lock. A second Close waits for the first.
 func (s *Service) Close() {
-	s.ipc.close()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-	s.closed = true
-	s.stopMeshLocked()
-	// Stopped for good, the host routes by itself again.
-	s.clearEgress()
-	s.lock.Close()
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		stop := s.stop
+		s.mu.Unlock()
+		if stop != nil {
+			stop()
+		}
+		s.ipc.close()
+		// Outside mu, which they take.
+		s.runs.stop()
+		s.runs.wait()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.stopMeshLocked()
+		// Stopped for good, the host routes by itself again.
+		s.clearEgress()
+		statedir.Unlock(s.lock)
+	})
 }
 
 // clearEgress ends what a stopped mesh left refusing, on a device of its own:
@@ -432,40 +441,42 @@ func (s *Service) clearEgress() {
 	if s.opts.Mesh.TunName == "" {
 		return
 	}
-	err := conn.ClearEgress(s.opts.Mesh.Instance)
-	if p := s.opts.Mesh.Plumber; p != nil {
-		err = conn.ClearEgressBy(p, s.opts.Mesh.TunName)
-	}
-	if err != nil {
+	if err := s.hostControl().ClearEgress(); err != nil {
 		s.logf("daemon: %v", err)
 	}
 }
 
+// hostControl is how this service's device's egress is held while no mesh
+// runs.
+func (s *Service) hostControl() conn.HostControl {
+	return conn.HostControl{Instance: s.opts.Mesh.Instance, Plumber: s.opts.Mesh.Plumber, Dev: s.opts.Mesh.TunName}
+}
+
 func (s *Service) clearEgressUnlessChosen() {
-	if !s.exit.Refuses() {
+	if !s.prefs.Exit.Refuses() {
 		s.clearEgress()
 	}
 }
 
 // exitWithoutMeshLocked is what becomes of exit nodes while no mesh runs.
 func (s *Service) exitWithoutMeshLocked(state *log.State, notMember bool) *ipc.Exit {
-	if !s.exit.Refuses() && !s.serve {
+	if !s.prefs.Exit.Refuses() && !s.prefs.ServeExit {
 		return nil
 	}
 	why := "the tunnels are not up"
 	if notMember {
 		why = "this device is no member of the network"
 	}
-	e := &ipc.Exit{Consent: s.serve}
-	if s.serve {
+	e := &ipc.Exit{Consent: s.prefs.ServeExit}
+	if s.prefs.ServeExit {
 		e.NotServing = why
 	}
-	if s.exit.Refuses() {
-		e.Node, e.Refused = s.exit.Node, why
-		if s.exit.Unreadable {
+	if s.prefs.Exit.Refuses() {
+		e.Node, e.Refused = s.prefs.Exit.Node, why
+		if s.prefs.Exit.Unreadable {
 			e.Refused = errUnreadableChoice
 		}
-		if n, ok := state.Node(s.exit.Node); ok {
+		if n, ok := state.Node(s.prefs.Exit.Node); ok {
 			e.Name = n.Name
 		}
 	}
@@ -476,36 +487,35 @@ func (s *Service) exitWithoutMeshLocked(state *log.State, notMember bool) *ipc.E
 // route it, so that none leaves directly meanwhile; a mesh's router takes the
 // refusal over.
 func (s *Service) holdExitLocked() {
-	if s.opts.Mesh.TunName == "" || s.mesh != nil || !s.exit.Refuses() {
+	if s.opts.Mesh.TunName == "" || s.mesh != nil || !s.prefs.Exit.Refuses() {
 		return
 	}
-	err := conn.RefuseEgress(s.opts.Mesh.Instance, s.exit.Isolate)
-	if p := s.opts.Mesh.Plumber; p != nil {
-		err = conn.RefuseEgressBy(p, s.opts.Mesh.TunName, s.exit.Isolate)
-	}
-	if err != nil {
+	if err := s.hostControl().RefuseEgress(s.prefs.Exit.Isolate); err != nil {
 		s.logf("daemon: %v", err)
 	}
 }
 
 // followExit keeps the choice the mesh followed to the chosen node's rotated
-// identity: the mesh's as it is now, which a later rotation or the owner's
-// own choice may have overtaken since.
-func (s *Service) followExit(_, to types.Identity) {
+// identity. The mesh's choice is set with the service's under mu, so where
+// the two differ the mesh followed a rotation.
+func (s *Service) followExit() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.mesh == nil || !s.exit.Refuses() || s.exit.Unreadable {
+	if s.mesh == nil || !s.prefs.Exit.Refuses() || s.prefs.Exit.Unreadable {
 		return
 	}
 	c := s.mesh.exitChoiceNow()
-	if c.Node != to || c == s.exit {
+	if c == s.prefs.Exit {
 		return
 	}
 	if err := SaveExitChoice(filepath.Join(s.opts.Home, statedir.ExitFile), c); err != nil {
-		s.logf("daemon: keeping the exit node's new identity: %v", err)
+		if c != s.exitUnkept {
+			s.exitUnkept = c
+			s.logf("daemon: keeping the exit node's new identity: %v", err)
+		}
 		return
 	}
-	s.exit = c
+	s.prefs.Exit, s.exitUnkept = c, ExitChoice{}
 }
 
 // setSubnet records the operator's word on routing this device's subnets, or
@@ -523,13 +533,12 @@ func (s *Service) setSubnet(req *ipc.Request) error {
 		return err
 	}
 	if req.ServeSubnets != nil {
-		s.serveSubnets = *on
+		s.prefs.ServeSubnets = *on
 	} else {
-		s.subnetsOff = *on
+		s.prefs.SubnetsOff = *on
 	}
 	if s.mesh != nil {
-		s.mesh.SetSubnetConsent(s.serveSubnets)
-		s.mesh.SetSubnetsOff(s.subnetsOff)
+		s.mesh.SetPrefs(s.prefs)
 		_ = s.mesh.Reconcile() // so that the status answered says what came of it
 	}
 	return nil
@@ -542,7 +551,7 @@ func (s *Service) setSubnet(req *ipc.Request) error {
 func (s *Service) setPublish(req *ipc.Request) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	on, to, members := s.servePublished, maps.Clone(s.serveTo), maps.Clone(s.serveMembers)
+	on, to, members := s.prefs.ServePublished, maps.Clone(s.prefs.ServeTo), maps.Clone(s.prefs.ServeMembers)
 	if req.ServePublished != nil {
 		on = *req.ServePublished
 	}
@@ -591,9 +600,9 @@ func (s *Service) setPublish(req *ipc.Request) error {
 		}
 		to, members = nil, nil
 	}
-	s.servePublished, s.serveTo, s.serveMembers = on, to, members
+	s.prefs.ServePublished, s.prefs.ServeTo, s.prefs.ServeMembers = on, to, members
 	if s.mesh != nil {
-		s.mesh.SetPublishConsent(on, to, members)
+		s.mesh.SetPrefs(s.prefs)
 		_ = s.mesh.Reconcile() // so that the status answered says what came of it
 	}
 	return nil
@@ -659,9 +668,9 @@ func (s *Service) setNames(on bool) error {
 	if err := setFlagFile(s.opts.Home, statedir.NamesFile, on); err != nil {
 		return err
 	}
-	s.acceptNames = on
+	s.prefs.AcceptNames = on
 	if s.mesh != nil {
-		s.mesh.SetAcceptNames(on)
+		s.mesh.SetPrefs(s.prefs)
 		_ = s.mesh.Reconcile() // so that the status answered says what came of it
 	}
 	return nil
@@ -679,7 +688,7 @@ func setFlagFile(home, name string, on bool) error {
 		return err
 	}
 	// So that a power cut does not bring the word back.
-	return keys.SyncDir(home)
+	return atomicfile.SyncDir(home)
 }
 
 // setExit records the owner's choice of exit node, or the operator's word on
@@ -698,14 +707,14 @@ func (s *Service) setExit(req *ipc.Request) error {
 			err = nil
 		} else if err == nil {
 			// So that a power cut does not bring the consent back.
-			err = keys.SyncDir(home)
+			err = atomicfile.SyncDir(home)
 		}
 		if err != nil {
 			return err
 		}
-		s.serve = *req.Serve
+		s.prefs.ServeExit = *req.Serve
 		if s.mesh != nil {
-			s.mesh.SetServeConsent(s.serve)
+			s.mesh.SetPrefs(s.prefs)
 			_ = s.mesh.Reconcile() // so that the status answered says what came of it
 		}
 		return nil
@@ -719,9 +728,9 @@ func (s *Service) setExit(req *ipc.Request) error {
 	if err := SaveExitChoice(filepath.Join(home, statedir.ExitFile), c); err != nil {
 		return err
 	}
-	s.exit = c
+	s.prefs.Exit, s.exitUnkept = c, ExitChoice{}
 	if s.mesh != nil {
-		s.mesh.SetExitChoice(s.exit)
+		s.mesh.SetExitChoice(s.prefs.Exit)
 		_ = s.mesh.Reconcile()
 	}
 	s.clearEgressUnlessChosen()
@@ -741,24 +750,46 @@ func (s *Service) Mesh() *Daemon {
 }
 
 func (s *Service) watch(ctx context.Context) {
-	t := time.NewTicker(rotationCheckInterval)
+	paced := s.opts.Mesh.Pace.Changed()
+	t := time.NewTimer(s.watchWait())
 	defer t.Stop()
-	var looked time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.moved:
+			s.followMesh()
+			continue
+		case <-paced:
 		case <-t.C:
-			if time.Since(looked) < s.opts.Mesh.Pace.every(0, savingWatchEvery) {
-				continue
-			}
-			looked = time.Now()
-			s.adoptRotation()
-			s.followAddrs()
+			s.followMesh()
 			s.checkHost()
 			s.retryMesh()
 		}
+		// The change taken before the wait, so that none comes between.
+		paced = s.opts.Mesh.Pace.Changed()
+		t.Reset(s.watchWait())
 	}
+}
+
+// followMesh has the mesh follow what the log moved: this device's keys and
+// addresses, and the exit node chosen.
+func (s *Service) followMesh() {
+	s.adoptRotation()
+	s.followAddrs()
+	s.followExit()
+}
+
+// watchWait is how long the service waits before it looks again.
+func (s *Service) watchWait() time.Duration {
+	s.mu.Lock()
+	failed := s.mesh == nil && s.auth != nil && s.meshErr != nil && !errors.Is(s.meshErr, ErrNotMember)
+	lower := s.mesh != nil && s.opts.Mesh.Instance > 0 && s.opts.Mesh.HostHoldings != nil
+	s.mu.Unlock()
+	if failed || lower {
+		return watchRetryEvery
+	}
+	return s.opts.Mesh.Pace.every(watchEvery, savingWatchEvery)
 }
 
 // startMeshLocked starts the mesh over the log the service holds. A log that
@@ -769,76 +800,18 @@ func (s *Service) startMeshLocked() error {
 		return nil
 	}
 	o := s.opts.Mesh
-	// A lower instance on the host holding what this network claims routes
-	// it into its own network: this one runs without IPv4 then, and does not
-	// run at all where that instance is in this very network.
-	prev := s.hostConflict
-	s.hostConflict = nil
 	if state := s.auth.State(); state.IsMember(s.keys.Identity.Public()) {
-		c, err := s.hostConflictLocked(state)
-		if err != nil {
-			// Unreadable is no verdict: keep what was last found, if anything.
-			s.logHostOnce(err)
-			c = prev
-		} else {
-			s.hostErr = ""
-		}
-		// A lower instance that restarts holds nothing for a moment; the
-		// conflict ends once it has been seen gone a few times over.
-		if c == nil && prev != nil {
-			if s.clearChecks++; s.clearChecks < conflictClearChecks {
-				c = prev
-			}
-		}
-		if c != prev {
-			s.clearChecks = 0
-		}
-		switch {
-		case c != nil && (prev == nil || prev.Error() != c.Error()) && c.SameNetwork:
-			s.logf("daemon: not starting the mesh: %v", c)
-		case c != nil && (prev == nil || prev.Error() != c.Error()):
-			s.logf("daemon: running without IPv4: %v", c)
-		case c == nil && prev != nil:
-			s.logf("daemon: IPv4 back: no instance below this one holds what %q claims", state.Network())
-		}
-		s.hostConflict = c
+		c := s.followHostConflictLocked(state)
 		if c != nil && c.SameNetwork {
 			s.meshErr = c
 			return c
 		}
 		o.NoV4 = c != nil
+	} else {
+		s.hostConflict = nil
 	}
-	o.Authority, o.Storage = s.auth, s.store
-	o.Identity, o.Recipient, o.WireGuard = s.keys.Identity, s.keys.Recipient, s.keys.WireGuardPrivate()
-	if s.session == nil || s.sessionID != s.keys.Identity.Public() || s.sessionKeys != s.keys.Public {
-		sess, err := NewStoredSession(s.opts.Home, s.keys.Identity.Public(), s.keys.Public)
-		if err != nil {
-			return err
-		}
-		if s.session != nil && s.sessionID == s.keys.Identity.Public() {
-			sess.follow(s.session)
-		}
-		s.session, s.sessionID, s.sessionKeys = sess, s.keys.Identity.Public(), s.keys.Public
-	}
-	o.Session = s.session
-	o.EndpointCachePath = statedir.EndpointCachePath(s.opts.Home)
-	o.LeasePath = statedir.LeasePath(s.opts.Home)
-	o.WaitingPath = statedir.WaitingPath(s.opts.Home)
-	o.OnAddrsMoved, o.OnKeysNamed = s.followAddrs, s.adoptRotation
-	o.Exit, o.ServeExit, o.OnExitMoved = s.exit, s.serve, s.followExit
-	o.ServeSubnets, o.SubnetsOff = s.serveSubnets, s.subnetsOff
-	o.AcceptNames, o.ServePublished, o.ServeTo, o.ServeMembers = s.acceptNames, s.servePublished, s.serveTo, s.serveMembers
-	o.DNSOff = s.dnsOff
-	o.HTTPSOnly, o.Proxy, o.RelayName = s.httpsOnly, s.proxy, s.relayName
-	o.RelayCertsPath = filepath.Join(s.opts.Home, statedir.RelayCertsDir)
-	if !s.opts.InProcess {
-		o.HandOffSocket = HandOffSocket(cmp.Or(s.opts.Socket, ipc.SocketPath(s.opts.Home)))
-	}
-	o.IngressUID = s.ingressUID
-	o.KeyringPath = statedir.KeyringPath(s.opts.Home)
-	o.PairsPath = statedir.PairsPath(s.opts.Home)
-	if o.Logf == nil {
-		o.Logf = s.logf
+	if err := s.meshOptionsLocked(&o); err != nil {
+		return err
 	}
 	d, err := New(o)
 	if errors.Is(err, ErrNotMember) {
@@ -868,6 +841,76 @@ func (s *Service) startMeshLocked() error {
 	// The mesh owns the authority from here; the service asks it.
 	s.mesh, s.meshStop, s.meshDone, s.auth = d, cancel, done, nil
 	s.meshStarted = true
+	return nil
+}
+
+// followHostConflictLocked reads anew what a lower instance on the host holds
+// of what state claims, logs a change, and keeps it as s.hostConflict: such an
+// instance routes it into its own network, so this one runs without IPv4,
+// and not at all where that instance is in this very network.
+func (s *Service) followHostConflictLocked(state *log.State) *hostConflictError {
+	prev := s.hostConflict
+	c, err := s.hostConflictLocked(state)
+	if err != nil {
+		// Unreadable is no verdict: keep what was last found, if anything.
+		s.logHostOnce(err)
+		c = prev
+	} else {
+		s.hostErr = ""
+	}
+	// A lower instance that restarts holds nothing for a moment; the
+	// conflict ends once it has been seen gone a few times over.
+	if c == nil && prev != nil {
+		if s.clearChecks++; s.clearChecks < conflictClearChecks {
+			c = prev
+		}
+	}
+	if c != prev {
+		s.clearChecks = 0
+	}
+	switch {
+	case c != nil && (prev == nil || prev.Error() != c.Error()) && c.SameNetwork:
+		s.logf("daemon: not starting the mesh: %v", c)
+	case c != nil && (prev == nil || prev.Error() != c.Error()):
+		s.logf("daemon: running without IPv4: %v", c)
+	case c == nil && prev != nil:
+		s.logf("daemon: IPv4 back: no instance below this one holds what %q claims", state.Network())
+	}
+	s.hostConflict = c
+	return c
+}
+
+// meshOptionsLocked fills in o what the mesh takes from the service: its
+// log, keys, session, files and the device's settings.
+func (s *Service) meshOptionsLocked(o *Options) error {
+	o.Authority, o.Storage = s.auth, s.store
+	o.Identity, o.Recipient, o.WireGuard = s.keys.Identity, s.keys.Recipient, s.keys.WireGuardPrivate()
+	if s.session == nil || s.sessionID != s.keys.Identity.Public() || s.sessionKeys != s.keys.Public {
+		sess, err := NewStoredSession(s.opts.Home, s.keys.Identity.Public(), s.keys.Public)
+		if err != nil {
+			return err
+		}
+		if s.session != nil && s.sessionID == s.keys.Identity.Public() {
+			sess.follow(s.session)
+		}
+		s.session, s.sessionID, s.sessionKeys = sess, s.keys.Identity.Public(), s.keys.Public
+	}
+	o.Session = s.session
+	o.EndpointCachePath = statedir.EndpointCachePath(s.opts.Home)
+	o.LeasePath = statedir.LeasePath(s.opts.Home)
+	o.WaitingPath = statedir.WaitingPath(s.opts.Home)
+	o.Moved = s.moved
+	o.Prefs = s.prefs
+	o.RelayCertsPath = filepath.Join(s.opts.Home, statedir.RelayCertsDir)
+	if !s.opts.InProcess {
+		o.HandOffSocket = HandOffSocket(cmp.Or(s.opts.Socket, ipc.SocketPath(s.opts.Home)))
+	}
+	o.IngressUID = s.ingressUID
+	o.KeyringPath = statedir.KeyringPath(s.opts.Home)
+	o.PairsPath = statedir.PairsPath(s.opts.Home)
+	if o.Logf == nil {
+		o.Logf = s.logf
+	}
 	return nil
 }
 
@@ -970,9 +1013,7 @@ func (s *Service) adoptRotation() {
 	}
 	if promoted == nil {
 		if s.mesh != nil && !s.mesh.keysNamedElsewhere(state) {
-			// A reconcile that read the keys before the last rotation
-			// may have said they changed: the next is said again.
-			s.mesh.keysSaid.Store(false)
+			s.mesh.sayKeysAgain()
 		}
 		return
 	}
@@ -1002,9 +1043,7 @@ func (s *Service) followAddrs() {
 		return
 	}
 	if !s.mesh.addrsMoved() {
-		// A reconcile that read the addresses before the last move may
-		// have said they moved: the next move is said again.
-		s.mesh.movedSaid.Store(false)
+		s.mesh.sayMovesAgain()
 		return
 	}
 	err := s.mesh.followAddrs()
@@ -1072,13 +1111,13 @@ func (s *Service) Status() ipc.Status {
 			st.Disabled = d.At.String()
 		}
 		st.Exit = s.exitWithoutMeshLocked(state, st.NotMember)
-		if s.serveSubnets || s.subnetsOff {
-			st.Subnets = &ipc.Subnets{Consent: s.serveSubnets, Off: s.subnetsOff}
-			if s.serveSubnets {
+		if s.prefs.ServeSubnets || s.prefs.SubnetsOff {
+			st.Subnets = &ipc.Subnets{Consent: s.prefs.ServeSubnets, Off: s.prefs.SubnetsOff}
+			if s.prefs.ServeSubnets {
 				st.Subnets.NotServing = "the tunnels are not up"
 			}
 		}
-		if s.servePublished {
+		if s.prefs.ServePublished {
 			st.Publish = &ipc.Publish{Consent: true, NotServing: "the tunnels are not up"}
 		}
 	}
@@ -1114,7 +1153,7 @@ func (s *Service) Status() ipc.Status {
 		st.Shares = s.mesh.sharesStatus(state, s.mesh.freshness(now).Fresh(now.Unix()), now)
 		st.Terminator = s.mesh.terminatorStatus()
 	}
-	if len(s.serveTo) > 0 && st.InNetwork {
+	if len(s.prefs.ServeTo) > 0 && st.InNetwork {
 		p := ipc.Publish{NotServing: "the tunnels are not up"}
 		switch {
 		case st.Publish != nil:
@@ -1122,8 +1161,8 @@ func (s *Service) Status() ipc.Status {
 		case s.mesh != nil:
 			p.NotServing = nothingPublished
 		}
-		for _, label := range slices.Sorted(maps.Keys(s.serveTo)) {
-			p.To = append(p.To, ipc.ServeTo{Label: label, To: s.serveTo[label], Members: s.serveMembers[label]})
+		for _, label := range slices.Sorted(maps.Keys(s.prefs.ServeTo)) {
+			p.To = append(p.To, ipc.ServeTo{Label: label, To: s.prefs.ServeTo[label], Members: s.prefs.ServeMembers[label]})
 		}
 		st.Publish = &p
 	}
@@ -1132,8 +1171,8 @@ func (s *Service) Status() ipc.Status {
 	}
 	st.Joining = s.busy
 	st.Rendezvous = s.helpers()
-	if st.HTTPS == nil && (s.httpsOnly || s.relayName != "") {
-		st.HTTPS = &ipc.HTTPS{Only: s.httpsOnly, Proxy: ipc.RedactProxy(s.proxy), Name: s.relayName}
+	if st.HTTPS == nil && (s.prefs.HTTPSOnly || s.prefs.RelayName != "") {
+		st.HTTPS = &ipc.HTTPS{Only: s.prefs.HTTPSOnly, Proxy: ipc.RedactProxy(s.prefs.Proxy), Name: s.prefs.RelayName}
 	}
 	if op := s.operator.Load(); op != 0 {
 		st.Operator = userName(op)
@@ -1145,7 +1184,7 @@ func (s *Service) Status() ipc.Status {
 // DHT and STUN switches the mesh obeys cover invites too.
 func (s *Service) helpers() *rendezvous.Helpers {
 	o := s.opts.Mesh
-	if o.DisableDHT || len(o.STUN) == 0 || s.httpsOnly {
+	if o.DisableDHT || len(o.STUN) == 0 || s.prefs.HTTPSOnly {
 		return nil
 	}
 	return &rendezvous.Helpers{STUN: o.STUN, Bootstrap: o.DHTBootstrap}
@@ -1192,9 +1231,7 @@ func (s *Service) reset(force bool) error {
 	s.stopMeshLocked()
 	s.auth, s.meshErr, s.hostConflict = nil, nil, nil
 	// The choice and the consent were this network's, and go with it.
-	s.exit, s.serve = ExitChoice{}, false
-	s.serveSubnets, s.subnetsOff, s.acceptNames, s.servePublished, s.serveTo, s.serveMembers = false, false, false, false, nil, nil
-	s.httpsOnly, s.proxy, s.relayName = false, "", ""
+	s.prefs, s.exitUnkept = Prefs{}, ExitChoice{}
 	s.clearEgress()
 
 	entries, err := os.ReadDir(home)
@@ -1211,7 +1248,7 @@ func (s *Service) reset(force bool) error {
 			return fmt.Errorf("daemon: resetting %s: %w", home, err)
 		}
 	}
-	if err := keys.SyncDir(home); err != nil {
+	if err := atomicfile.SyncDir(home); err != nil {
 		return err
 	}
 	s.operator.Store(0)
@@ -1445,7 +1482,7 @@ func (s *Service) join(ctx context.Context, req *ipc.Request, events func(*ipc.E
 		name = k.Name
 	}
 	s.mu.Lock()
-	httpsOnly, proxy, meet := s.httpsOnly, proxyRoute(s.proxy, envProxyFunc()), s.helpers().Meeter(s.logf)
+	httpsOnly, proxy, meet := s.prefs.HTTPSOnly, proxyRoute(s.prefs.Proxy, envProxyFunc()), s.helpers().Meeter(s.logf)
 	s.mu.Unlock()
 	res, err := guest.Join(ctx, guest.Options{
 		HTTPSOnly:     httpsOnly,

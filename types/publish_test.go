@@ -98,14 +98,12 @@ func TestTheIngressHoldsThePublicPorts(t *testing.T) {
 
 	ingress = keyed(ingress)
 	tcp := keyed(&NodeRecord{Identity: id(2), Published: []PublishedName{{Label: "alt", Port: 8443, Public: 8443}}})
-	ix := NewMemberIndex(Hash{}, 2)
-	ix.SetDomain("pub.example.org")
+	ix := NewMemberIndex(NetworkSpace{Domain: "pub.example.org"}, 2)
 	ix.Add(ingress)
 	if err := ix.Check(tcp); err == nil || !strings.Contains(err.Error(), "port 8443") {
 		t.Errorf("a public port an ingress's own name goes to: %v", err)
 	}
-	ix = NewMemberIndex(Hash{}, 2)
-	ix.SetDomain("pub.example.org")
+	ix = NewMemberIndex(NetworkSpace{Domain: "pub.example.org"}, 2)
 	ix.Add(tcp)
 	if err := ix.Check(ingress); err == nil || !strings.Contains(err.Error(), "port 8443") {
 		t.Errorf("an ingress whose name goes to a public port: %v", err)

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -89,22 +90,13 @@ func RefuseSharedWritable(path string) error {
 }
 
 func refuseWritableDir(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("inspecting %s: %w", path, err)
-	}
-	if perm := info.Mode().Perm(); perm&0o022 != 0 {
-		return fmt.Errorf(
-			"%s is mode %o, writable by group or other; anyone who can write there can replace "+
-				"this keystore's signing keys. Run: chmod 700 %s", path, perm, path)
-	}
-	return nil
+	return atomicfile.RefuseSharedWritable(path, "replace this keystore's signing keys", "700")
 }
 
 // WriteSecret writes key material with owner-only permissions, refusing to
 // overwrite: silently replacing a key is how a network loses an admin. The
-// write is crash-atomic — temporary file, fsync, rename — so an interruption
-// cannot leave a truncated key file at the real name. The refusal is an
+// write is crash-atomic, so an interruption cannot leave a truncated key file
+// at the real name. The refusal is an
 // explicit existence check before the rename; this is the operator's own 0700
 // directory, so the gap is not an attacker's to race.
 func WriteSecret(path string, lines []string) error {
@@ -122,48 +114,10 @@ func WriteSecret(path string, lines []string) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".tmp-key-*")
-	if err != nil {
-		return fmt.Errorf("creating a temporary key file in %s: %w", dir, err)
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		tmp.Close()
-		os.Remove(tmpName)
-	}()
-	if err := tmp.Chmod(FileMode); err != nil {
-		return fmt.Errorf("setting mode on %s: %w", tmpName, err)
-	}
-	if _, err := tmp.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
-		return fmt.Errorf("writing %s: %w", tmpName, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("syncing %s: %w", tmpName, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("renaming %s to %s: %w", tmpName, path, err)
-	}
-	// The name is only durable once the directory entry is: a log that
-	// survives a power cut while the key file it names does not is a member
-	// that can never open its own epoch wrap again.
-	return SyncDir(dir)
-}
-
-// SyncDir makes renames and creations in a directory durable. Without it the
-// file contents survive a power loss but the name pointing at them may not.
-func SyncDir(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("opening %s to sync: %w", dir, err)
-	}
-	defer f.Close()
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("syncing %s: %w", dir, err)
-	}
-	return nil
+	// Synced with its directory: a log that survives a power cut while the
+	// key file it names does not is a member that can never open its own
+	// epoch wrap again.
+	return atomicfile.Write(path, []byte(strings.Join(lines, "\n")+"\n"), FileMode)
 }
 
 // ReadTagged reads a key file and returns each tag's base64 fields, decoded. A
@@ -356,7 +310,7 @@ func MaybePromote(home string, lookup func(types.Identity) (types.NodeRecord, bo
 		if err := os.Rename(path, filepath.Join(home, NodeKeysFile)); err != nil {
 			return nil, fmt.Errorf("promoting %s: %w", path, err)
 		}
-		return staged, SyncDir(home)
+		return staged, atomicfile.SyncDir(home)
 	}
 	return nil, nil
 }
@@ -390,7 +344,7 @@ func Abandon(home string) error {
 	if err := pruneAbandoned(home); err != nil {
 		return err
 	}
-	return SyncDir(home)
+	return atomicfile.SyncDir(home)
 }
 
 func pruneAbandoned(home string) error {

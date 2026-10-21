@@ -94,9 +94,13 @@ func pair(t *testing.T, group secrets.Secret, epochs ...uint64) (leader, followe
 	return a, b
 }
 
-// exchange runs one log sync's worth of messages, the leader first.
+// exchange runs one log sync's worth of messages, whichever of the two
+// leads now first.
 func exchange(t *testing.T, l, f *member) {
 	t.Helper()
+	if Leads(f.side.WG, l.side.WG) {
+		l, f = f, l
+	}
 	if _, err := l.store.Advance(l.env(f)); err != nil {
 		t.Fatal(err)
 	}
@@ -301,28 +305,36 @@ func TestAReplayedMessageMovesNothingBack(t *testing.T) {
 // WireGuard key, or a peer's store given up, takes both back to the group
 // key.
 func TestAPairKeyFollowsItsBinding(t *testing.T) {
-	group, _ := secrets.NewSecret()
-	l, f := pair(t, group, 1)
-	exchange(t, l, f)
-	if _, s := f.key(l); s != StagePair {
-		t.Fatal("no pair key")
-	}
-	f.side.WG[0] ^= 1
-	if _, s := l.key(f); s != StageGroup {
-		t.Errorf("after the peer's key rotated, the leader uses the %v", s)
-	}
-	if _, s := f.key(l); s != StageGroup {
-		t.Errorf("after its own key rotated, the follower uses the %v", s)
-	}
-	exchange(t, l, f)
-	kl, sl := l.key(f)
-	if kf, _ := f.key(l); sl != StagePair || kl != kf {
-		t.Fatal("no new pair key after the rotation")
-	}
-	f.store = NewStore()
-	f.store.AddSeed(1, group.PSKSeed(1))
-	if _, s := l.key(f); s != StageGroup {
-		t.Errorf("after the peer's store was given up, the leader uses the %v", s)
+	for _, swap := range []bool{false, true} {
+		t.Run(map[bool]string{false: "keeping who leads", true: "changing who leads"}[swap], func(t *testing.T) {
+			group, _ := secrets.NewSecret()
+			l, f := pair(t, group, 1)
+			exchange(t, l, f)
+			if _, s := f.key(l); s != StagePair {
+				t.Fatal("no pair key")
+			}
+			// The follower's key rotates to one that sorts after the
+			// leader's, or before it.
+			for rand.Read(f.side.WG[:]); Leads(f.side.WG, l.side.WG) != swap; {
+				rand.Read(f.side.WG[:])
+			}
+			if _, s := l.key(f); s != StageGroup {
+				t.Errorf("after the peer's key rotated, l uses the %v", s)
+			}
+			if _, s := f.key(l); s != StageGroup {
+				t.Errorf("after its own key rotated, f uses the %v", s)
+			}
+			exchange(t, l, f)
+			kl, sl := l.key(f)
+			if kf, _ := f.key(l); sl != StagePair || kl != kf {
+				t.Fatal("no new pair key after the rotation")
+			}
+			f.store = NewStore()
+			f.store.AddSeed(1, group.PSKSeed(1))
+			if _, s := l.key(f); s != StageGroup {
+				t.Errorf("after the peer's store was given up, l uses the %v", s)
+			}
+		})
 	}
 }
 
@@ -457,12 +469,18 @@ func TestGenerationsArePaced(t *testing.T) {
 	if f.store.Due(envAt(f, l)) {
 		t.Error("an offer put off is due within the pace")
 	}
+	if until, ok := f.store.PutOffUntil(); !ok || !until.After(at) || until.After(at.Add(Pace)) {
+		t.Errorf("an offer put off at %v may be answered from %v, %v", at, until, ok)
+	}
 	at = at.Add(Pace)
 	if !f.store.Due(envAt(f, l)) {
 		t.Error("an offer put off is not due after the pace: nothing has the follower reach the leader for it")
 	}
 	if f.store.Due(envAt(f, l)) {
 		t.Error("an offer put off is due twice")
+	}
+	if _, ok := f.store.PutOffUntil(); ok {
+		t.Error("an offer answered is still put off")
 	}
 	if changed, _ := f.store.Take(envAt(f, l), &offer2); !changed {
 		t.Error("a follower answered no generation after the pace")

@@ -16,6 +16,7 @@ import (
 	"github.com/nning/juist/ipc"
 
 	"github.com/nning/juist/internal/host"
+	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
@@ -117,7 +118,7 @@ than one admin must approve, the invite waits for them.`}
 	defer cancel()
 
 	var serveErr error
-	if a.node.status() != nil {
+	if d := daemonOf(a.node); d != nil {
 		if !o.yes && !a.interactive {
 			return errors.New("comparing the device's words needs a terminal; pass --yes to skip")
 		}
@@ -125,7 +126,7 @@ than one admin must approve, the invite waits for them.`}
 		// the guest's place: the words the guest shows are what say it did
 		// not.
 		adm.compare = !o.yes
-		serveErr = a.inviteThroughDaemon(ctx, auth, adm, o)
+		serveErr = a.inviteThroughDaemon(ctx, d, auth, adm, o)
 	} else {
 		serveErr = a.inviteHere(ctx, auth, adm, o)
 	}
@@ -156,13 +157,14 @@ func (a *app) inviteHere(ctx context.Context, auth *log.Authority, adm *admitter
 // inviteThroughDaemon has juistd offer the invite: the listener, the LAN
 // answers and the public DHT run there, apart from the admin keys, and the
 // daemon asks this process to decide and sign each admission.
-func (a *app) inviteThroughDaemon(ctx context.Context, auth *log.Authority, adm *admitter, o inviteOptions) error {
+func (a *app) inviteThroughDaemon(ctx context.Context, d *daemonNode, auth *log.Authority, adm *admitter,
+	o inviteOptions) error {
 	// Whole seconds, rounded up: an invite shorter than one still gets one.
 	expires := uint32((o.expires + time.Second - 1) / time.Second)
 	req := ipc.Request{Command: ipc.CmdInvite, Offer: &ipc.InviteOffer{
 		Port: uint16(o.port), LAN: o.lan, DHT: o.dht, Expires: expires}}
 	conv := &daemonInvite{a: a, auth: auth, adm: adm, o: o}
-	err := a.node.converse(ctx, req, conv.handle)
+	err := d.converse(ctx, req, conv.handle)
 	// The admission ends with the conversation's context; nothing of it is
 	// left running, or asking, once the invite has ended.
 	conv.admitting.Wait()
@@ -554,24 +556,50 @@ func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll
 	if err != nil || applied {
 		return err
 	}
-	// Renewed with the votes its copies gathered, which would lapse with them.
-	renew := func() {
-		if changes, err := a.waitingChanges(auth); err == nil {
+	// The votes its copies gathered lapse with them: each is folded in as it
+	// arrives, and handed on at once, not at the next renewal. The copies are
+	// opened only when the daemon holds others than at the last look.
+	var held []types.Hash
+	renew := func(due bool) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		grew := false
+		d := daemonOf(a.node)
+		if d == nil {
+			return false
+		}
+		raw, err := d.waiting(nil)
+		var now []types.Hash
+		for _, b := range raw {
+			now = append(now, waiting.Hash(b))
+		}
+		slices.SortFunc(now, types.Hash.Compare)
+		if err == nil && (due || !slices.Equal(now, held)) {
+			held = now
+			changes, _ := a.openWaiting(auth, raw)
 			for _, w := range changes {
 				if w.aum.SigHash() == c.aum.SigHash() {
-					c.aum.Signatures = mergeSignatures(auth.State(), &c.aum, w.aum.Signatures)
+					merged := mergeSignatures(auth.State(), &c.aum, w.aum.Signatures)
+					grew = len(merged) > len(c.aum.Signatures)
+					c.aum.Signatures = merged
 				}
 			}
 		}
+		// An invite ended meanwhile admits no one, nor hands its admission on.
+		if !due && !grew || ctx.Err() != nil {
+			return false
+		}
 		if auth.State().SignatureStatus(&c.aum).Authorized() {
-			if err := a.applyRecords([]types.AUM{c.aum}, false); err != nil {
+			if err := a.applyRecords([]types.AUM{c.aum}); err != nil {
 				a.warn("%v", err)
 			}
-			return
+			return true
 		}
 		if _, _, err := a.carry(auth, &c.aum, holdFor(), types.Identity{}); err != nil {
 			a.warn("%v", err)
 		}
+		return true
 	}
 	err = a.awaitAdmission(ctx, wait, req.Identity, auth.State().SignatureStatus(&c.aum), renew)
 	// Approved after the invite, the record would admit a device that never
@@ -586,9 +614,10 @@ func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll
 }
 
 // awaitAdmission waits for other admins to approve an admission, however it
-// reaches this device's log, telling the guest as it goes.
+// reaches this device's log, telling the guest as it goes. renew, given
+// whether a renewal is due, reports whether it renewed.
 func (a *app) awaitAdmission(ctx context.Context, wait func(votes, quorum uint32) error, id types.Identity,
-	st log.SignatureStatus, renew func()) error {
+	st log.SignatureStatus, renew func(due bool) bool) error {
 	if err := wait(st.Votes, st.Quorum); err != nil {
 		return err
 	}
@@ -603,9 +632,9 @@ func (a *app) awaitAdmission(ctx context.Context, wait func(votes, quorum uint32
 			return errors.New("invite ended before the other admins approved")
 		case <-poll.C:
 		}
-		if time.Since(renewed) > a.admissionHold/2 {
-			renew()
-			renewed = time.Now()
+		// A copy's hold runs from before the work of renewing it.
+		if now := time.Now(); renew(now.Sub(renewed) > a.admissionHold/2) {
+			renewed = now
 		}
 		// The head is cheap to ask for; the log is re-read only when it moved.
 		head, err := a.node.head()

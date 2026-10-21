@@ -1,5 +1,5 @@
 # The website: Hugo, pinned in go.mod as a tool, with the repository's toolchain.
-export GOTOOLCHAIN ?= go1.27.2
+export GOTOOLCHAIN ?= go1.27.3
 HUGO = go tool hugo
 OUT ?= ../build/site
 

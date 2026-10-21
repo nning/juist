@@ -36,6 +36,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -60,6 +61,8 @@ class JuistVpnService : VpnService() {
     private var notifier: Job? = null
     private var multicastHolder: Job? = null
     private var paceReceiver: BroadcastReceiver? = null
+    private var pacer: Job? = null
+    private val metered = MutableStateFlow(false)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -131,12 +134,15 @@ class JuistVpnService : VpnService() {
         notifier = null
         paceReceiver?.let { unregisterReceiver(it) }
         paceReceiver = null
+        pacer?.cancel()
+        pacer = null
         multicastHolder?.cancel()
         multicastHolder = null
         networkCallback?.let { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(it) }
         networkCallback = null
         networkThread?.quitSafely()
         networkThread = null
+        metered.value = false
         core = null
         c.close()
         multicast?.let { lock ->
@@ -158,17 +164,19 @@ class JuistVpnService : VpnService() {
         }
     }
 
-    /** Tells the core to save battery while the screen is off, the phone dozes or battery saver is on. */
+    /**
+     * Tells the core to save battery while the screen is off, the phone dozes
+     * or battery saver is on, and on a metered network while the app is not in
+     * front.
+     */
     private fun followPace(c: Core) {
-        val power = getSystemService(PowerManager::class.java)
-        fun read() {
-            if (core !== c) return
-            val p = Pace(power.isInteractive, power.isDeviceIdleMode, power.isPowerSaveMode)
-            c.setSaving(p.saving)
-            Juist.paced(p)
-        }
+        val pm = getSystemService(PowerManager::class.java)
+        fun read() = Pace(pm.isInteractive, pm.isDeviceIdleMode, pm.isPowerSaveMode)
+        val power = MutableStateFlow(read())
         val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) = read()
+            override fun onReceive(context: Context, intent: Intent) {
+                power.value = read()
+            }
         }
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -178,7 +186,16 @@ class JuistVpnService : VpnService() {
         }
         ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         paceReceiver = receiver
-        read()
+        pacer = scope.launch {
+            combine(power, metered, Juist.shown) { p, m, shown -> p.copy(metered = m, inFront = shown) }
+                .distinctUntilChanged()
+                .collect { p ->
+                    if (core === c) {
+                        c.setSaving(p.saving)
+                        Juist.paced(p)
+                    }
+                }
+        }
     }
 
     /**
@@ -191,6 +208,7 @@ class JuistVpnService : VpnService() {
         val follower = UnderlayFollower(
             use = { setUnderlyingNetworks(it?.let { n -> arrayOf(n) }) },
             changed = { core?.networkChanged(it) },
+            metered = { metered.value = it },
         )
         getSystemService(ConnectivityManager::class.java)
             .registerBestMatchingNetworkCallback(underlayRequest(), follower, Handler(thread.looper))
@@ -287,12 +305,14 @@ internal fun underlayRequest(): NetworkRequest = NetworkRequest.Builder()
 
 /**
  * Hands the network [underlayRequest] matches to use, null where there is
- * none, and its interface's name to changed, "" for none. A network lost
- * after another replaced it changes nothing.
+ * none, its interface's name to changed, "" for none, and whether it is
+ * metered to metered. A network lost after another replaced it changes
+ * nothing.
  */
 internal class UnderlayFollower(
     private val use: (Network?) -> Unit,
     private val changed: (String) -> Unit,
+    private val metered: (Boolean) -> Unit = {},
 ) : ConnectivityManager.NetworkCallback() {
     private var current: Network? = null
 
@@ -301,7 +321,11 @@ internal class UnderlayFollower(
         use(network)
     }
 
-    // Android calls it after every onAvailable.
+    // Android calls both after every onAvailable.
+    override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+        if (network == current) metered(isMetered(capabilities))
+    }
+
     override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
         if (network == current) changed(properties.interfaceName.orEmpty())
     }
@@ -311,8 +335,14 @@ internal class UnderlayFollower(
         current = null
         use(null)
         changed("")
+        metered(false)
     }
 }
+
+/** Whether traffic on a network with capabilities costs, as mobile data does. */
+internal fun isMetered(capabilities: NetworkCapabilities) =
+    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) &&
+        !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED)
 
 /** What the notification says of view: the network, and its state. */
 internal data class NotificationLines(val title: String, val text: String) {

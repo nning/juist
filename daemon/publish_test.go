@@ -84,7 +84,7 @@ func TestAnIngressReachesWhatIsServedAlone(t *testing.T) {
 		t.Errorf("not agreed, the status says %+v", st)
 	}
 
-	f.d.SetPublishConsent(true, nil, nil)
+	f.d.changePrefs(func(p *Prefs) { p.ServePublished, p.ServeTo, p.ServeMembers = true, nil, nil })
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestThePublishWordIsKept(t *testing.T) {
 	}
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
-	if f.s.servePublished {
+	if f.s.prefs.ServePublished {
 		t.Error("the service holds on to the word after a reset")
 	}
 }
@@ -151,7 +151,7 @@ func TestTheIngressAsksWhatIsPublishedAlone(t *testing.T) {
 	if resp := ask(ingress, ipc.CmdPublished); resp.Err != "" || resp.Published == nil {
 		t.Errorf("the ingress asked what is published: %+v", resp)
 	}
-	for _, cmd := range []ipc.Command{ipc.CmdStatus, ipc.CmdLog, ipc.CmdSelf, ipc.CmdBootstrap} {
+	for _, cmd := range []ipc.Command{ipc.CmdStatus, ipc.CmdLog, ipc.CmdSelf} {
 		if resp := ask(ingress, cmd); resp.Err == "" {
 			t.Errorf("the ingress's %v call got %+v", cmd, resp)
 		}
@@ -338,8 +338,8 @@ func TestWhereToServeIsKept(t *testing.T) {
 	kept("")
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
-	if f.s.servePublished || f.s.serveTo != nil {
-		t.Errorf("kept %v %v", f.s.servePublished, f.s.serveTo)
+	if f.s.prefs.ServePublished || f.s.prefs.ServeTo != nil {
+		t.Errorf("kept %v %v", f.s.prefs.ServePublished, f.s.prefs.ServeTo)
 	}
 }
 
@@ -353,7 +353,7 @@ func TestWhereToServeMovesOutOfTheWord(t *testing.T) {
 	if consent, to, _ := loadServeTo(home, t.Logf); !consent || to["immich"] != "127.0.0.1:2283" {
 		t.Fatalf("read %v %v", consent, to)
 	}
-	s := &Service{opts: ServiceOptions{Home: home}, servePublished: true, serveTo: map[string]string{"immich": "127.0.0.1:2283"}}
+	s := &Service{opts: ServiceOptions{Home: home}, prefs: Prefs{ServePublished: true, ServeTo: map[string]string{"immich": "127.0.0.1:2283"}}}
 	if err := s.setPublish(&ipc.Request{Unserve: []string{"immich"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -830,7 +830,7 @@ func TestTheMarkOfAServiceForMembersIsKept(t *testing.T) {
 	if err := s.setPublish(&ipc.Request{Unserve: []string{"photos"}}); err != nil {
 		t.Fatal(err)
 	}
-	if s.serveMembers["photos"] {
+	if s.prefs.ServeMembers["photos"] {
 		t.Error("the mark outlived its label")
 	}
 }
@@ -848,8 +848,8 @@ func TestAServiceMembersMarkIsItsCommandLines(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.serveMembers["photos"] != marked["photos"] {
-			t.Errorf("given %v, marked %v", marked, s.serveMembers)
+		if s.prefs.ServeMembers["photos"] != marked["photos"] {
+			t.Errorf("given %v, marked %v", marked, s.prefs.ServeMembers)
 		}
 		s.Close()
 	}

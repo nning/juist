@@ -19,6 +19,7 @@ import (
 
 	"github.com/nning/juist/internal/nettest"
 	"github.com/nning/juist/internal/proxyproto"
+	"github.com/nning/juist/internal/published"
 	"github.com/nning/juist/ipc"
 )
 
@@ -65,7 +66,7 @@ func (l *proxiedListener) Accept() (net.Conn, error) {
 		l.b.from = append(l.b.from, src)
 		l.b.mu.Unlock()
 	}
-	return bufferedConn{Conn: c, r: r}, nil
+	return published.BufferedConn{Conn: c, R: r}, nil
 }
 
 func (b *httpBackend) told() []netip.AddrPort {
@@ -306,7 +307,7 @@ func TestAHeaderAtOnceNamesTheClient(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		to := addrPortUDP(s.conn.LocalAddr())
+		to := published.AddrPort(s.conn.LocalAddr())
 		pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: ingress.AsSlice()})
 		if err != nil {
 			t.Fatal(err)
@@ -314,7 +315,7 @@ func TestAHeaderAtOnceNamesTheClient(t *testing.T) {
 		if _, err := pc.WriteToUDP(proxyproto.HeaderUDP(client, to), net.UDPAddrFromAddrPort(to)); err != nil {
 			t.Fatal(err)
 		}
-		flow := addrPortUDP(pc.LocalAddr())
+		flow := published.AddrPort(pc.LocalAddr())
 		var got netip.AddrPort
 		var named bool
 		for deadline := time.Now().Add(time.Second); !named && time.Now().Before(deadline); time.Sleep(time.Millisecond) {

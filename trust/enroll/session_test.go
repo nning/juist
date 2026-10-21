@@ -700,3 +700,12 @@ func TestTheWordsCoverTheSigningKey(t *testing.T) {
 		t.Fatal("the words are the same with another signing key")
 	}
 }
+
+// Accept is [Invite.AcceptHello] with the hello read from rw.
+func (inv *Invite) Accept(rw io.ReadWriter) (*Channel, error) {
+	hello, err := ReadHello(rw)
+	if err != nil {
+		return nil, err
+	}
+	return inv.AcceptHello(hello, rw)
+}

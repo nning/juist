@@ -86,9 +86,13 @@ func Start(home string, p Platform) (*Core, error) {
 	if running != nil {
 		return nil, errors.New("mobile: a core runs already; close it first")
 	}
-	keys.SealWith(sealer{p})
-	protectBy(p)
-	netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) { return interfaces(p) })
+	hookTo(p)
+	ok := false
+	defer func() {
+		if !ok {
+			hookTo(nil)
+		}
+	}()
 	logf := func(format string, args ...any) { p.Log(fmt.Sprintf(format, args...)) }
 	c := &Core{pace: daemon.NewPace()}
 	plumber := conn.NewVPNPlumber(vpn{p}, c.networkPrefixes)
@@ -106,7 +110,7 @@ func Start(home string, p Platform) (*Core, error) {
 			DisableRelay: true,
 			STUN:         rendezvous.DefaultSTUN,
 			ServeDNS:     func([]netip.Addr, func(netip.Addr) bool) (io.Closer, error) { return nil, errNoNames },
-			ServeNames: func(netip.AddrPort, func([]byte) []byte, func([]byte) []netip.AddrPort) (io.Closer, error) {
+			ServeNames: func(netip.AddrPort, func([]byte) []byte, func([]byte) ([]netip.AddrPort, error)) (io.Closer, error) {
 				return nil, errNoNames
 			},
 			// The core's own sockets leave past the tunnel, protected, as
@@ -115,6 +119,7 @@ func Start(home string, p Platform) (*Core, error) {
 			// Before the VPN routes the overlay, a dial would leave by the LAN.
 			GossipDial: conn.VPNDial(plumber),
 			Pace:       c.pace,
+			Rests:      true,
 			Logf:       logf,
 		},
 	})
@@ -137,8 +142,23 @@ func Start(home string, p Platform) (*Core, error) {
 		s.Close()
 		return nil, err
 	}
-	running = c
+	running, ok = c, true
 	return c, nil
+}
+
+// errNoCore is what the process-wide hooks answer while no core runs.
+var errNoCore = errors.New("mobile: no core runs")
+
+// hookTo has the process-wide hooks call p, or fail where p is nil, so that
+// none calls a closed platform and no key is written unsealed. Under
+// platformMu.
+func hookTo(p Platform) {
+	if p == nil {
+		p = noPlatform{}
+	}
+	keys.SealWith(sealer{p})
+	protectBy(p)
+	netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) { return interfaces(p) })
 }
 
 // follow keeps the network's prefixes st names, for the VPN's routes.
@@ -169,6 +189,7 @@ func (c *Core) Close() {
 	platformMu.Lock()
 	if running == c {
 		running = nil
+		hookTo(nil)
 	}
 	platformMu.Unlock()
 }

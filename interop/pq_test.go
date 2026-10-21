@@ -104,6 +104,14 @@ func previousRelease(t *testing.T, fb, lx *vm) {
 	} else if len(lost) > 0 {
 		t.Logf("lost alone across the bump at %s, as the lab's network does: %s", bump, strings.Join(lost, ", "))
 	}
+	// Raised to this build's schema, past which the previous release stops.
+	lx.run(t, env+"juist log upgrade --yes")
+	fb.eventually(t, "holding the upgrade", 2*time.Minute, env+"juist log upgrade --yes", has("unchanged"))
+	lx.eventually(t, "reaching fb past the upgrade", time.Minute, "ping -c1 -W2 "+fb4, ok)
+	fb.eventually(t, "reaching lx past the upgrade", time.Minute, "ping -c1 -t2 "+lx4, ok)
+	if out := fb.run(t, "juist health"); strings.Contains(out, "schema") {
+		t.Fatalf("past the upgrade, juist health names a schema:\n%s", out)
+	}
 	for _, v := range []*vm{fb, lx} {
 		v.run(t, env+"juist reset --force --yes")
 		v.eventually(t, "in no network", 2*time.Minute, "juist status", has("no network"))

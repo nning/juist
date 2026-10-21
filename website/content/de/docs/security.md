@@ -24,7 +24,8 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
   das Log hält fest, wer welche Änderung signiert hat.
 - Dem Anfang des Netzes. Jedes Gerät prüft jede Änderung im
   [Mitgliederlog]({{< relref "docs/how-it-works" >}}#the-membership-log)
-  zurück bis zur allerersten, die beim Anlegen des Netzes entstanden ist.
+  zurück bis zur allerersten, die beim Anlegen des Netzes entstanden ist,
+  oder bis zu einem Checkpoint, den die Admins signiert haben.
 - Jedem Mitglied, so weit die [Zugriffsregeln]({{< relref "docs/access" >}})
   es hereinlassen. Ohne Zugriffsregeln erreicht ein aufgenommenes Gerät durch
   den Tunnel jeden Port jedes anderen Mitglieds. Mit ihnen weist jedes Gerät
@@ -155,9 +156,9 @@ ließe sich dann entschlüsseln. juist schützt vor beidem:
   Gegenseite es anbietet, wie aktuelle Browser es tun.
 
 Jeder Tunnel zwischen Geräten mit der aktuellen Version ist quantensicher.
-Ein Gerät mit einer älteren Version bekommt nichts von deinem Verkehr, und
-`juist health` und `juist devices` zeigen es als veraltet, bis es
-aktualisiert ist.
+Ein Gerät mit einer älteren Version bekommt nichts von deinem Verkehr, bis es
+aktualisiert ist: `juist health` warnt, dass es ein älteres juist hat, und
+`juist devices` zeigt es als `outdated`.
 
 Die Grenze: Wer ein Gerät stiehlt und später einen Quantencomputer hat, liest,
 was dieses Gerät lesen konnte, auch heute mitgeschnittenen Verkehr seiner

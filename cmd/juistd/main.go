@@ -30,6 +30,8 @@ import (
 
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+	// Roots where the host has no CA bundle: without them relays on 443 fail unsaid.
+	_ "golang.org/x/crypto/x509roots/fallback"
 
 	"github.com/nning/juist/cmd/internal/defaults"
 	"github.com/nning/juist/daemon"

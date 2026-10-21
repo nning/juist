@@ -288,7 +288,7 @@ alone means absence).
 
 The state every genesis and checkpoint states carries a `Schema` version, and
 `KindSchemaUpgrade` raises it under the usual quorum. A build implements
-`types.CurrentSchema` (19) and reads from `types.MinSchema` (18) up; raising
+`types.CurrentSchema` (20) and reads from `types.MinSchema` (18) up; raising
 `MinSchema` drops the rules below it, so a network below has to move up with an
 older build first. Version numbers are unrelated to release names.
 
@@ -321,7 +321,7 @@ so a field a schema adds to the wire goes only to a peer whose announced schema
 reads it. Every member announces the newest schema its build implements, and
 `juist devices` shows a live member announcing an older one.
 
-Open, for M27: nothing says before an upgrade which members it would strand,
+Open, for M28: nothing says before an upgrade which members it would strand,
 or stops an admin authoring one too early.
 
 ## The freeze: what the fan-out measurement decided
@@ -519,8 +519,9 @@ subtract in `conn.Internet`, and subnet routes carry no default route.
   a failure replays.
 - Fuzz targets `FuzzDecodeAUM` (injectivity), `FuzzValidateAUM`,
   `FuzzChainValidate` (signs what it mutates; a rejected record changes nothing
-  and the epoch never regresses). `make fuzz` is the smoke run, `make
-  fuzz-long` the gate; neither runs on CI
+  and no state it trusts falls below the epoch floor), `FuzzAdmissibleAlike`
+  (a member set is admitted by records exactly where a whole state is).
+  `make fuzz` is the smoke run, `make fuzz-long` the gate; neither runs on CI
   ([06-verification.md](06-verification.md) §2).
 - `TestTCBDependencies` keeps the audit scope to the standard library plus two
   small modules, and the clock and filesystem out of the packages that decide

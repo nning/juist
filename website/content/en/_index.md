@@ -49,7 +49,7 @@ nas joined
 
 ## Features {#features}
 
-For networks of 25 to 100 devices with a few admins.
+Made for networks of up to about 100 devices with a few admins. A network holds at most 512 devices.
 
 {{< features >}}
 

@@ -280,3 +280,37 @@ func TestAMemberRelayIsAskedBeforeTheDHT(t *testing.T) {
 		t.Error("an answer no newer than the one held counts as found")
 	}
 }
+
+// A device that rests takes part in the public DHT only once checked and
+// while no member that does not rest answers it.
+func TestARestingDeviceJoinsTheDHTAloneOnly(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	resting, awake := f.nw.devices[1], f.nw.devices[2]
+	e := f.learn(t, resting, 4001)
+	e.Rests, e.Seq = true, e.Seq+1
+	if err := e.SignPQ(resting.identity); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Learn(e); err != nil {
+		t.Fatal(err)
+	}
+	f.learn(t, awake, 4002)
+	if f.d.joinsDHT() {
+		t.Error("joined before the first check")
+	}
+	r, a := resting.record.Identity, awake.record.Identity
+	for _, c := range []struct {
+		name string
+		live map[types.Identity]bool
+		want bool
+	}{
+		{"reaching none", map[types.Identity]bool{r: false, a: false}, true},
+		{"reaching one that rests", map[types.Identity]bool{r: true, a: false}, true},
+		{"reaching one awake", map[types.Identity]bool{r: false, a: true}, false},
+	} {
+		f.d.reachable.Store(&c.live)
+		if got := f.d.joinsDHT(); got != c.want {
+			t.Errorf("%s: joins %v, want %v", c.name, got, c.want)
+		}
+	}
+}

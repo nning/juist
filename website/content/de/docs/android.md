@@ -113,8 +113,8 @@ joining_words: Die vier Wörter, die der Admin vergleicht
 {{< /screens >}}
 
 {{< step on="dem Gerät eines Admins" >}}
-Starte eine Einladung in einem Terminal mit mindestens 59 Spalten, damit es
-den QR-Code anzeigen kann:
+Starte eine Einladung in einem Terminal mit etwa 60 Spalten oder mehr, damit
+es den QR-Code anzeigen kann:
 
 ```sh
 juist invite
@@ -196,7 +196,7 @@ dann, wenn die Firewall des Geräts Pings verwirft.
 erreicht das Gerät unter denselben Adressen, etwa ein SSH-Client unter
 `198.18.36.2`.
 
-## Über eine Exit-Node
+## Über einen Exit-Node
 
 Hat das Netz [Exit-Nodes]({{< relref "docs/exit-nodes" >}}), listet der
 Statusbildschirm sie unter **Internet**, neben **Direkt**. Wählst du eine, laufen
@@ -223,18 +223,41 @@ hin.
 
 ## Akku
 
-Solange der Bildschirm aus ist, das Telefon ruht oder der Energiesparmodus
-an ist, schont juist den Akku. Es prüft Mitglieder alle 5 Minuten statt alle
-30 Sekunden, gleicht das Netz alle 30 Minuten statt alle 2 ab und pingt
-ruhende Mitglieder nicht mehr, um ihre Wege warm zu halten. Es hört dann
-auch nicht mehr auf das Multicast-DNS des WLANs, das das Telefon für jedes
-solche Paket im Netz wecken würde. Änderungen kommen weiter sofort an, und
-Verkehr durch den Tunnel läuft im gewohnten Takt. Ist der Bildschirm an und
-der Energiesparmodus ebenfalls, sagt der Statusbildschirm es.
+juist schont den Akku, solange der Bildschirm aus ist, das Telefon ruht oder
+der Energiesparmodus an ist. In einem getakteten Netz, etwa über mobile Daten
+oder einen Hotspot, tut es das auch, sobald die App nicht im Vordergrund ist.
+Dann
 
-Ohne Relay kann es bis zu diesen 5 Minuten dauern, bis ein Mitglied ein
-Telefon hinter NAT mit ausgeschaltetem Bildschirm erreicht. Mit einem Relay
-erreicht es das Telefon sofort über das Relay.
+- prüft es die anderen Mitglieder alle 5 Minuten statt alle 30 Sekunden,
+  meist mit einem einzelnen Ping, der sonst nichts weckt;
+- gleicht es das Log des Netzes alle 30 Minuten statt alle 2 ab;
+- pingt es ruhende Mitglieder nicht mehr eigens, um den Weg zu ihnen offen
+  zu halten;
+- hört es nicht mehr auf das Multicast-DNS des WLANs und kündigt sich dort
+  nicht mehr an, denn jedes solche Paket würde das Telefon wecken.
+
+Änderungen am Netz kommen weiter sofort an, und der Verkehr durch den Tunnel
+wird nicht langsamer. Ist bei eingeschaltetem Bildschirm der
+Energiesparmodus an, sagt der Statusbildschirm das.
+
+Im öffentlichen DHT sucht das Telefon nur dann nach Mitgliedern, wenn es
+außer anderen Telefonen kein Gerät erreicht. Jedes andere Mitglied, das es
+erreicht, findet die übrigen dort und gibt sie weiter.
+
+Was das Telefon von anderen Geräten erfährt, gibt es nicht weiter; das
+erledigen die anderen untereinander. Eigene Neuigkeiten erzählt es zwei
+anderen Geräten, die sie weitergeben. Sobald das Netz auf dem Schema der App
+steht, tauscht ein Abgleich nur noch aus, was der anderen Seite fehlt, statt
+jedes Mal die Angaben aller Geräte.
+
+Sobald das Netz auf dem Schema der App steht
+([juist aktualisieren]({{< relref "docs/updating" >}})), lassen auch die
+anderen Geräte das Telefon schlafen. Sie überlassen den Abgleich des Logs
+dem Telefon und sehen alle 30 Minuten nach ihm. Wo kein Relay das Telefon
+erreicht, schicken sie ihm jede Minute einen einzelnen Ping, damit der Weg zu
+ihm offen bleibt. Ein Mitglied erreicht ein Telefon mit ausgeschaltetem
+Bildschirm trotzdem sofort: über ein Relay, wenn es eines gibt, sonst über
+den Weg, den diese Pings offen halten.
 
 ## Wenn das Telefon entfernt wird
 

@@ -88,7 +88,7 @@ func (s *State) SignatureStatus(a *types.AUM) SignatureStatus {
 }
 
 // signatureStatus evaluates a record's signatures, by ML-DSA, against the key
-// the record names for the signer or else keyOf does.
+// keyOf names for the signer or, where it names none, the record does.
 func signatureStatus(a *types.AUM, admins map[types.Identity]types.AdminKey, quorum uint32,
 	selfSigners []types.Identity, keyOf func(types.Identity) *types.SigningKey) SignatureStatus {
 	st := SignatureStatus{Quorum: quorum, SelfSigners: selfSigners}
@@ -247,9 +247,11 @@ func verifyEntry(a *types.AUM, sig *types.Signature, sigHash types.Hash,
 	if sig.PQ == nil {
 		return false
 	}
-	key := a.NamedSigningKey(sig.KeyID)
+	// A record names a key only for an identity the state has none for: one
+	// it named for an admin would cast that admin's vote.
+	key := keyOf(sig.KeyID)
 	if key == nil {
-		key = keyOf(sig.KeyID)
+		key = a.NamedSigningKey(sig.KeyID)
 	}
 	return key != nil && key.Verify(sigHash[:], sig.PQ)
 }

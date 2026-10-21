@@ -51,7 +51,7 @@ Zeile mit `juist join` für den Link. Eine Kamera liest aus dem QR-Code nur den
 Link, ohne den Befehl. Der Code fürs LAN steht ganz unten, damit er auch in
 einem Fenster sichtbar bleibt, das niedriger ist als der QR-Code. Geht die
 Ausgabe nicht in ein Terminal oder ist das Fenster zu schmal, fehlt der
-QR-Code. Im zweiten Fall sagt juist das:
+QR-Code. Im zweiten Fall sagt juist das, etwa so:
 `no qr code: the terminal is narrower than 59 columns`.
 
 Ein Telefon tritt bei, indem die [Android-App]({{< relref "docs/android" >}})
@@ -120,17 +120,17 @@ Eine Einladung kann dem neuen Gerät gleich beim Beitritt eine Rolle geben:
 |---|---|
 | `--relay` | ein Relay, das Verkehr für Geräte weiterleitet, die sich nicht direkt erreichen ([Relays]({{< relref "docs/relays" >}})) |
 | `--voucher` | ein Voucher, der stündlich bestätigt, dass der Stand des Netzes aktuell ist ([Frische]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)) |
-| `--ingress` | eine Ingress, die Verbindungen aus dem Internet für veröffentlichte Namen annimmt ([Dienste veröffentlichen]({{< relref "docs/publishing" >}})) |
+| `--ingress` | ein Ingress, der Verbindungen aus dem Internet für veröffentlichte Namen annimmt ([Dienste veröffentlichen]({{< relref "docs/publishing" >}})) |
 | `--service NAME` | ein Service-Mitglied, das `NAME` unter der Domain des Netzes veröffentlicht und selbst keine Verbindungen zu anderen Geräten öffnen kann ([Dienste veröffentlichen]({{< relref "docs/publishing" >}}#keeping-the-server-away-from-your-network)) |
 
-So lädst du einen VPS ein, der die Ingress des Netzes werden soll:
+So lädst du einen VPS als Ingress des Netzes ein:
 
 ```console
 $ juist invite vps --ingress
 invite to "home" as ingress, expires in 1h; on the new device:
 ```
 
-Eine Ingress kann kein Voucher sein, `--ingress` und `--voucher` schließen
+Ein Ingress kann kein Voucher sein, `--ingress` und `--voucher` schließen
 sich also aus. Ein Service-Mitglied hat keine weitere Rolle, `--service` lässt
 sich daher mit keiner der anderen Optionen kombinieren. Andere Rollen wie
 `exit` vergibst du nach dem Beitritt mit `juist grant`.

@@ -5,14 +5,11 @@ description: See whether a device is connected, what needs attention, which devi
 lead: Four commands tell you how things stand. juist status shows this device, juist health says what needs attention, juist devices lists every device, and juist log shows every change and who approved it.
 ---
 
-Your network is a group of devices that belong together, and each of them is
-a **member**. Every member keeps its own copy of the network's log, the signed
-list of every change (see [How juist works]({{< relref "docs/how-it-works" >}})).
-The commands on this page read that log, and ask the daemon `juistd`, the
-program that keeps the tunnels up, about the current state.
-
-Whenever something seems wrong, start with `juist health`. It names each problem
-and prints a `hint:` line with the command that fixes it.
+These commands ask the daemon `juistd` how things stand, and read the
+device's copy of the
+[membership log]({{< relref "docs/how-it-works" >}}#the-membership-log).
+Whenever something seems wrong, start with `juist health`. It names each
+problem, and for most it prints a `hint:` line with the command that fixes it.
 
 ## Checking a device
 
@@ -32,7 +29,7 @@ home · connected
   Names         laptop.home.juist
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
-  Schema        18
+  Schema        20
   Updated       just now
 ```
 
@@ -54,12 +51,18 @@ The state on the first line is one of these:
 | State | Meaning |
 |---|---|
 | `connected` | everything works |
+| `no network` | this device is in no network yet; `juist health` says how to join or create one |
+| `not connected` | juistd holds the network but has no tunnels up, or the network runs on this host already; `juist health` says why |
 | `waiting for peers` | there are other devices, but none of them has been heard from yet |
 | `no tunnel up` | other devices are known, but no tunnel to them carries traffic |
 | `limited` | this device's view may be out of date, so it keeps tunnels only to vouchers (see `Freshness` below) |
 | `disabled` | the network was ended with a break-glass secret; start over with `juist reset` |
 | `removed` | this device is no longer in the network |
-| `juistd not running` | the daemon is not running; start it (see [Troubleshooting]({{< relref "docs/troubleshooting" >}})) |
+| `refused` | the other devices refuse this one; most likely it was removed |
+| `behind` | this device was away so long that the others no longer keep the part of the log it needs; join again with a new invite link ([Troubleshooting]({{< relref "docs/troubleshooting" >}}#warning-this-devices-log-is-older-than-what-the-networks-devices-keep)) |
+| `disconnected` | the log has split or gone back, and every tunnel stays down until an admin resolves it ([Troubleshooting]({{< relref "docs/troubleshooting" >}}#warning-log-rollback-alarm-the-chain-went-back-from-epoch-4-to-3-)) |
+| `joining a network` | this device is joining a network |
+| `not running` | the daemon is not running, as in `juist0 · not running`, or `juistd not running` where no juist package is installed; `juist health` says how to start it (see [Troubleshooting]({{< relref "docs/troubleshooting" >}}#not-running)) |
 
 ## What each line means
 
@@ -76,8 +79,10 @@ The state on the first line is one of these:
 - `Freshness`: when a voucher last confirmed that this device's view of the
   network is current, and how long that confirmation stays valid. A voucher
   is a device the network trusts to confirm this every hour. After 48 hours
-  without a confirmation, the line reads `expired; vouchers only`. A warning
-  appears in `juist health` a day before that. If no device vouches, the line
+  without a confirmation, the line reads `expired; vouchers only`, or
+  `expired (1 of 2 vouchers); vouchers only` where several are required. A
+  warning appears in `juist health` a day before that. If no device vouches,
+  the line
   reads `unchecked: no voucher`, and if at least two devices may relay,
   `juist health` suggests making them vouchers. See
   [Removing a device]({{< relref "docs/remove" >}}).
@@ -90,8 +95,8 @@ The state on the first line is one of these:
 - `Ports`: the ports juistd listens on. `udp/41643` is the one for the tunnels.
 - `Schema`: the version of the record format the network's log is at. Where
   this version of juist implements a newer one, it follows in yellow, as in
-  `18 (19)`; on a device with an admin key, `juist health` then says how to
-  upgrade (see [Admins]({{< relref "docs/admins" >}})).
+  `19 (20)`; on a device with an admin key, `juist health` then says how to
+  upgrade (see [Updating juist]({{< relref "docs/updating" >}})).
 - `Updated`: when juistd last applied the network's state.
 
 Lines such as `Subnets`, `Published` or `Renumbering` appear only while those
@@ -130,10 +135,10 @@ its name.
 ```console
 $ juist devices
 NAME                  IPV4         REACHED  SCHEMA  ROLES
-laptop (this device)  198.18.36.1  -        18      -
-nas                   198.18.36.2  direct   18      voucher, names, publishes
-vps                   198.18.36.3  direct   18      voucher, relay
-phone                 198.18.36.4  relayed  18      -
+laptop (this device)  198.18.36.1  -        20      -
+nas                   198.18.36.2  direct   20      voucher, names, publishes
+vps                   198.18.36.3  direct   20      voucher, relay
+phone                 198.18.36.4  relayed  20      -
 ```
 
 `ROLES` lists, for each device:
@@ -201,9 +206,8 @@ $ juist log
 4 changes
 ```
 
-Each entry is one change, followed by the admins whose keys approved it. An
-admin is a person whose key may approve changes (see
-[Admins]({{< relref "docs/admins" >}})).
+Each entry is one change, followed by the
+[admins]({{< relref "docs/admins" >}}) whose keys approved it.
 
 `juist log show` shows what a single change did and which keys signed it.
 Give the change by its number, by -N counting back from the last (`-1` is the
@@ -228,8 +232,9 @@ log again.
 journalctl -u juistd
 ```
 
-This shows what juistd itself reports. A second network on the same device has
-its own daemon, `juistd@juist1`, with its own log.
+This shows what juistd itself reports; on FreeBSD it is `/var/log/juistd.log`.
+A second network on the same device has its own daemon, `juistd@juist1`, with
+its own log, on FreeBSD `/var/log/juistd.juist1.log`.
 
 ## Notes
 

@@ -147,10 +147,11 @@ func publishesPort(a *app, args []string) bool {
 // zero for until Ctrl-C, or in the background; saying says what is shared
 // where.
 func (a *app) shareLocal(req ipc.ShareRequest, dur time.Duration, background bool, saying func(name string) string) error {
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return err
 	}
+	st := d.st
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
@@ -163,10 +164,6 @@ func (a *app) shareLocal(req ipc.ShareRequest, dur time.Duration, background boo
 	if background && a.ready == nil {
 		return a.shareInBackground(st)
 	}
-	n, err := a.openNode()
-	if err != nil {
-		return err
-	}
 	var until time.Time
 	if dur > 0 {
 		until = time.Now().Add(dur)
@@ -176,13 +173,13 @@ func (a *app) shareLocal(req ipc.ShareRequest, dur time.Duration, background boo
 	said := false
 	var lost time.Time
 	for {
-		err = n.converse(a.ctx, ipc.Request{Command: ipc.CmdShare, Share: &req},
+		err = d.converse(a.ctx, ipc.Request{Command: ipc.CmdShare, Share: &req},
 			func(_ context.Context, e *ipc.Event, _ func(ipc.Request) error) error {
 				if e.Kind != ipc.EventSharing {
 					return nil
 				}
 				// Started by the package's script, as root, only where it runs not.
-				if now, _ := n.restatus(); terminatorDown(now) {
+				if now, _ := d.restatus(); terminatorDown(now) {
 					if err := a.startTerminator(""); err != nil {
 						return err
 					}
@@ -247,22 +244,19 @@ func juistdRefused(err error) bool {
 }
 
 // shares is this device's shares, in the order they started.
-func (a *app) shares() (node, []ipc.Share, error) {
-	if _, err := a.daemonStatus(); err != nil {
+func (a *app) shares() (*daemonNode, []ipc.Share, error) {
+	d, err := a.daemon()
+	if err != nil {
 		return nil, nil, err
 	}
 	if err := a.requireOperator(); err != nil {
 		return nil, nil, err
 	}
-	n, err := a.openNode()
+	st, err := d.restatus()
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := n.restatus()
-	if err != nil {
-		return nil, nil, err
-	}
-	return n, st.Shares, nil
+	return d, st.Shares, nil
 }
 
 // listShares is "juist share": what this device shares, where and until when.
@@ -300,7 +294,7 @@ func (a *app) listShares() error {
 // stopShare ends the share arg names, as juist share lists it, whichever
 // command holds it; the only one where arg is empty.
 func (a *app) stopShare(arg string) error {
-	n, shs, err := a.shares()
+	d, shs, err := a.shares()
 	if err != nil {
 		return err
 	}
@@ -321,7 +315,7 @@ func (a *app) stopShare(arg string) error {
 		return fmt.Errorf("%s is not shared\nhint: juist share lists what is", arg)
 	}
 	for _, sh := range stop {
-		_, err := ipc.Call(n.socket(), ipc.Request{Command: ipc.CmdUnshare, Share: &ipc.ShareRequest{Path: sh.Path}})
+		err := d.unshare(sh.Path)
 		switch {
 		case err != nil && err.Error() == errNotSharing:
 			a.ok("unchanged: not sharing %s", sharedWhat(sh))

@@ -48,11 +48,14 @@ counts only when enough admins have signed it.
 
 `juist log` lists the changes and who approved each one.
 
-Every 256 changes, juist records a **checkpoint** after the admin's change:
-the whole state as one change, which each device checks against its own copy.
-Once every device has it, the devices drop what lies before the checkpoint
-before it, so the log stays short. Where the quorum is more than one vote,
-the checkpoint waits for the other admins' votes like any change.
+So that the log does not grow forever, juist adds a **checkpoint**: when an
+admin's change makes 256 changes since the last checkpoint (fewer if they are
+large), the same command records one right after it. A checkpoint records
+the whole state of the network as one change, and each device checks it
+against its own copy. Once every device has a new checkpoint, all of them
+drop the part of the log that lies before the checkpoint preceding it. Where
+the quorum is more than one vote, the checkpoint waits for the other admins'
+votes like any change.
 
 ## Admins and the quorum {#admins}
 
@@ -214,3 +217,4 @@ vouchers vouch again`.
 | freshness | Whether enough vouchers have confirmed a device's view in the last 48 hours |
 | voucher | A device that confirms every hour that the network's state is current |
 | relay | A member that passes traffic between members that cannot reach each other |
+| schema | The numbered format of the log's changes; see [Updating juist]({{< relref "docs/updating" >}}) |

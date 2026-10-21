@@ -667,30 +667,19 @@ func TestAChangePastTheIntervalIsFollowedByACheckpoint(t *testing.T) {
 	}
 }
 
-type statusNode struct {
-	*localNode
-	st *ipc.Status
-}
-
-func (n statusNode) restatus() (*ipc.Status, error) { return n.st, nil }
-
 // No checkpoint is drafted of a log juistd holds under an alarm: devices
 // would compact to it, past what the alarm is about.
 func TestNoCheckpointOfALogUnderAnAlarm(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
 	c.mustRun("create", "home")
-	h, err := openHome(c.home)
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth := openLog(t, c)
 	for _, st := range []*ipc.Status{{Derived: ipc.Derived{Alarm: "log: fork alarm"}}, {SchemaAlarm: "too new"}} {
-		if unsettled(statusNode{&localNode{h: h}, st}, auth) == nil {
+		if unsettledWith(st, auth) == nil {
 			t.Fatalf("a checkpoint of a log under %+v", st)
 		}
 	}
-	if err := unsettled(statusNode{&localNode{h: h}, &ipc.Status{}}, auth); err != nil {
+	if err := unsettledWith(&ipc.Status{}, auth); err != nil {
 		t.Fatalf("a settled log: %v", err)
 	}
 }

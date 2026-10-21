@@ -7,17 +7,17 @@ import (
 )
 
 // While saving battery, the tunnels are checked every savingReachEvery, an
-// answer from a peer a relay can wake stands for savingProbeStands, the log
-// is synced with a random member every savingSyncEvery, and it is reconciled,
-// and the service looks for what moved, without a change every
-// savingReconcileEvery and savingWatchEvery. Pushes, new announcements and
-// the data plane's traffic keep their pace.
+// answer stands for savingProbeStands, the log is synced with a random member
+// every savingSyncEvery, and it is reconciled, and the service looks for what
+// moved, with neither an event nor a deadline every savingReconcileEvery and
+// savingWatchEvery. Pushes, new announcements, deadlines and the data
+// plane's traffic keep their pace.
 const (
 	savingReachEvery     = 5 * time.Minute
 	savingProbeStands    = 30 * time.Minute
 	savingSyncEvery      = 30 * time.Minute
-	savingReconcileEvery = 2 * time.Minute
-	savingWatchEvery     = time.Minute
+	savingReconcileEvery = 10 * time.Minute
+	savingWatchEvery     = 10 * time.Minute
 )
 
 // A Pace says whether the mesh saves the device's battery, as a phone's does
@@ -67,14 +67,18 @@ func (p *Pace) every(normal, saving time.Duration) time.Duration {
 type savingPace struct{ reach, sync, reconcile time.Duration }
 
 // due reports whether a tick of what last ran at last runs: always at the
-// normal pace, and once saving long after it.
+// normal pace, and once saving long after it. Pacing measures real time, as
+// the timers it runs by do; d.now is the clock times in the log are read by.
 func (d *Daemon) due(last time.Time, saving time.Duration) bool {
 	return time.Since(last) >= d.pace.every(0, saving)
 }
 
-// followPace tells the data plane whether to save battery.
+// followPace tells the data plane whether to save battery, and has LAN
+// discovery, quiet while saving, announce this device once it no longer is.
 func (d *Daemon) followPace() {
-	if s, ok := d.manager.(interface{ SetSaving(bool) }); ok {
-		s.SetSaving(d.pace.Saving())
+	saving := d.pace.Saving()
+	d.manager.SetSaving(saving)
+	if !saving && d.beacon != nil {
+		d.beacon.Wake()
 	}
 }

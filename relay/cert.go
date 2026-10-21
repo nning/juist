@@ -16,6 +16,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/nning/juist/internal/malformed"
 )
 
 // selfSigned is the relay's TLS identity: a certificate no authority signed,
@@ -72,7 +74,8 @@ func (c *Certificate) Encode(owner [32]byte) ([]byte, error) {
 
 // DecodeCertificate reads what [Certificate.Encode] wrote, and fails for any
 // owner but the one it was bound to, or a certificate that has expired.
-func DecodeCertificate(b []byte, owner [32]byte, now time.Time) (*Certificate, error) {
+func DecodeCertificate(b []byte, owner [32]byte, now time.Time) (_ *Certificate, err error) {
+	defer malformed.Recover(&err)
 	certBlock, rest := pem.Decode(b)
 	keyBlock, _ := pem.Decode(rest)
 	if certBlock == nil || certBlock.Type != pemCert || keyBlock == nil || keyBlock.Type != pemKey {
@@ -162,10 +165,4 @@ func hostNameFor(priv *ecdsa.PrivateKey) string {
 	sum := sha256.Sum256(pub)
 	label := strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:10]))
 	return label + ".relay.juist.invalid"
-}
-
-// CertPin returns the value a DERP map's CertName field takes to pin a
-// certificate by hash.
-func CertPin(sum [32]byte) string {
-	return fmt.Sprintf("sha256-raw:%x", sum)
 }

@@ -2,7 +2,6 @@ package gossip
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/nning/juist/internal/addrkey"
 	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/types"
 )
 
@@ -201,6 +201,11 @@ type Endpoint struct {
 	// Schema is the newest schema the node's build implements.
 	Schema types.SchemaVersion `cbor:"17,keyasint,omitempty"`
 
+	// Rests says the node saves battery, as a phone does: its peers check
+	// it quietly and leave log sync to it. Announced from
+	// [types.SchemaRests] on.
+	Rests bool `cbor:"19,keyasint,omitempty"`
+
 	// MLDSA is the author's ML-DSA signature over what Sig covers. An
 	// announcement without one, as discovery carries it, is a hint
 	// ([Cache.Add]). CBOR key 18 held a signing key claimed at schema 17.
@@ -226,7 +231,16 @@ func (e *Endpoint) SameAs(o *Endpoint) bool {
 		e.GossipPort == o.GossipPort && e.HomeRelay == o.HomeRelay && sameRelay(e.Relay, o.Relay) && e.Exit == o.Exit &&
 		e.Subnets == o.Subnets && e.DNS == o.DNS && e.NoV4 == o.NoV4 && e.Published == o.Published &&
 		(e.Share == nil) == (o.Share == nil) && (e.Share == nil || *e.Share == *o.Share) &&
-		bytes.Equal(e.Sealed, o.Sealed) && e.Epoch == o.Epoch && e.PairStore == o.PairStore && e.Schema == o.Schema
+		bytes.Equal(e.Sealed, o.Sealed) && e.Epoch == o.Epoch && e.PairStore == o.PairStore && e.Schema == o.Schema &&
+		e.Rests == o.Rests
+}
+
+// SameAsBut reports whether two announcements say the same but where their
+// node is reached: its addresses, open or sealed.
+func (e *Endpoint) SameAsBut(o *Endpoint) bool {
+	a, b := *e, *o
+	a.Addrs, a.Sealed, b.Addrs, b.Sealed = nil, nil, nil, nil
+	return a.SameAs(&b)
 }
 
 // PQ reports whether the node's handshakes mix in a preshared key.
@@ -250,96 +264,29 @@ func sameRelay(a, b *RelayInfo) bool {
 		a.Name == b.Name
 }
 
-// labelEndpoint is the domain-separation label for an endpoint record's
-// signature. It is distinct from every label in types, so a signature over an
-// announcement can never be replayed as a signature over a log record.
-const labelEndpoint = "juist/endpoint/v1"
-
-// signingBytes returns what an endpoint record's signature covers: a labelled
-// digest of the record with the signature field cleared.
-func (e *Endpoint) signingBytes() ([]byte, error) {
-	unsigned := *e
-	unsigned.Sig, unsigned.MLDSA = types.Sig{}, nil
-	body, err := encode(&unsigned)
-	if err != nil {
-		return nil, err
-	}
-	h := sha256.New()
-	h.Write([]byte(labelEndpoint))
-	h.Write([]byte{0})
-	h.Write(body)
-	return h.Sum(nil), nil
+func (e *Endpoint) author() types.Identity { return e.Identity }
+func (e *Endpoint) label() string          { return types.LabelEndpoint }
+func (e *Endpoint) describe() string       { return "endpoint record for " + e.Identity.ShortString() }
+func (e *Endpoint) unsigned() any {
+	u := *e
+	u.Sig, u.MLDSA = types.Sig{}, nil
+	return &u
 }
+func (e *Endpoint) sigs() (*types.Sig, **types.PQSig) { return &e.Sig, &e.MLDSA }
 
-// Sign fills in the record's signature. The identity must be the one the
-// record names, which is checked rather than assumed: every recipient silently
-// drops a record signed by the wrong key.
-func (e *Endpoint) Sign(priv types.PrivateIdentity) error {
-	if priv.Public() != e.Identity {
-		return fmt.Errorf("gossip: endpoint record names %v but would be signed by %v",
-			e.Identity.ShortString(), priv.Public().ShortString())
-	}
-	if err := e.StaticValidate(); err != nil {
-		return err
-	}
-	msg, err := e.signingBytes()
-	if err != nil {
-		return err
-	}
-	sig, err := priv.Sign(msg)
-	if err != nil {
-		return fmt.Errorf("gossip: signing endpoint record: %w", err)
-	}
-	e.Sig, e.MLDSA = sig, nil
-	return nil
-}
+// Sign fills in the record's signature, by the key the record names.
+func (e *Endpoint) Sign(priv types.PrivateIdentity) error { return sign(e, priv) }
 
 // SignPQ is [Endpoint.Sign], adding the ML-DSA signature members require.
-func (e *Endpoint) SignPQ(priv types.PrivateIdentity) error {
-	if err := e.Sign(priv); err != nil {
-		return err
-	}
-	msg, err := e.signingBytes()
-	if err != nil {
-		return err
-	}
-	pq, err := priv.SignPQ(msg)
-	if err != nil {
-		return fmt.Errorf("gossip: signing endpoint record: %w", err)
-	}
-	e.MLDSA = &pq
-	return nil
-}
+func (e *Endpoint) SignPQ(priv types.PrivateIdentity) error { return signPQ(e, priv) }
 
 // Verify checks the record's shape and its Ed25519 signature, which makes it
 // a hint; [Endpoint.VerifyPQ] makes it more.
-func (e *Endpoint) Verify() error {
-	if err := e.StaticValidate(); err != nil {
-		return err
-	}
-	msg, err := e.signingBytes()
-	if err != nil {
-		return err
-	}
-	if !e.Identity.Verify(msg, e.Sig) {
-		return fmt.Errorf("gossip: endpoint record for %v is not signed by that key",
-			e.Identity.ShortString())
-	}
-	return nil
-}
+func (e *Endpoint) Verify() error { return verify(e) }
 
 // VerifyPQ checks the record's ML-DSA signature against key, the signing
 // key the log names for its author.
-func (e *Endpoint) VerifyPQ(key *types.SigningKey) error {
-	msg, err := e.signingBytes()
-	if err != nil {
-		return err
-	}
-	if key == nil || !key.Verify(msg, e.MLDSA) {
-		return fmt.Errorf("gossip: endpoint record for %v carries no valid ML-DSA signature", e.Identity.ShortString())
-	}
-	return nil
-}
+func (e *Endpoint) VerifyPQ(key *types.SigningKey) error { return verifyPQ(e, key) }
 
 // Hint is the record without what a discovery item cannot carry: its ML-DSA
 // signature. Its Ed25519 signature still verifies.
@@ -533,8 +480,9 @@ func EncodeCachedEndpoints(eps []Endpoint, keys []AddrKey) ([]byte, error) {
 // DecodeCachedEndpoints decodes a persisted announcement set. It does not
 // verify them: the caller drops the ones that do not, since a file this node
 // wrote is no more trusted than a frame a peer sent.
-func DecodeCachedEndpoints(b []byte, out *[]Endpoint, keys *[]AddrKey) error {
-	held, err := decodeCanonical[cachedEndpoints](b)
+func DecodeCachedEndpoints(b []byte, out *[]Endpoint, keys *[]AddrKey) (err error) {
+	defer malformed.Recover(&err)
+	held, err := types.DecodeCanonical[cachedEndpoints](decMode, b, MaxFrameSize)
 	if err != nil {
 		return err
 	}
@@ -550,8 +498,9 @@ func DecodeCachedEndpoints(b []byte, out *[]Endpoint, keys *[]AddrKey) error {
 }
 
 // DecodeEndpoint decodes and verifies one endpoint record.
-func DecodeEndpoint(b []byte) (Endpoint, error) {
-	e, err := decodeCanonical[Endpoint](b)
+func DecodeEndpoint(b []byte) (_ Endpoint, err error) {
+	defer malformed.Recover(&err)
+	e, err := types.DecodeCanonical[Endpoint](decMode, b, MaxFrameSize)
 	if err != nil {
 		return Endpoint{}, err
 	}

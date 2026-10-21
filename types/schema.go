@@ -16,7 +16,7 @@ import "fmt"
 type SchemaVersion uint16
 
 // CurrentSchema is the schema this build implements.
-const CurrentSchema SchemaVersion = 19
+const CurrentSchema SchemaVersion = 21
 
 // SchemaSignedRotation is the first schema in which an identity rotation
 // names the new signing key in what its signers sign ([AUM.NewSigning]); below
@@ -27,6 +27,15 @@ const SchemaSignedRotation SchemaVersion = 19
 // siblings by [AUM.SigHash], not by which copy a node holds, and counts a key
 // as a branch's signer only where the record needed its signature.
 const SchemaContentForkChoice SchemaVersion = 19
+
+// SchemaRests is the first schema in which an announcement may say its device
+// rests, as a phone does, which earlier builds' strict decoders refuse.
+const SchemaRests SchemaVersion = 20
+
+// SchemaSeen is the first schema in which a gossip hello says what its
+// sender holds of each node rather than carrying it, which earlier builds'
+// strict decoders refuse.
+const SchemaSeen SchemaVersion = 21
 
 // MinSchema is the lowest schema this build reads, where every record is
 // signed by ML-DSA alone. Networks below it moved up with M17's build; the

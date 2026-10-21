@@ -113,7 +113,7 @@ func (b *Builder) SetNodeRoutes(id types.Identity, roles []types.Role, routes []
 	grant := &types.RouteGrant{Roles: slices.Clone(roles), Routes: slices.Clone(routes)}
 	slices.Sort(grant.Roles)
 	grant.Roles = slices.Compact(grant.Roles)
-	slices.SortFunc(grant.Routes, comparePrefixes)
+	slices.SortFunc(grant.Routes, types.ComparePrefix)
 	grant.Routes = slices.Compact(grant.Routes)
 	return b.finish(types.AUM{Kind: types.KindSetNodeRoutes, Subject: &id, Grant: grant})
 }
@@ -323,13 +323,6 @@ func (b *Builder) finish(aum types.AUM) (types.AUM, error) {
 		return types.AUM{}, err
 	}
 	return aum, nil
-}
-
-func comparePrefixes(a, b netip.Prefix) int {
-	if c := a.Addr().Compare(b.Addr()); c != 0 {
-		return c
-	}
-	return a.Bits() - b.Bits()
 }
 
 // Dry reports whether a record would apply to the builder's state, and returns

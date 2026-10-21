@@ -13,6 +13,9 @@ import (
 	"slices"
 
 	"filippo.io/edwards25519"
+
+	"github.com/nning/juist/internal/malformed"
+	"github.com/nning/juist/types"
 )
 
 // SPAKE2 (RFC 9382) over edwards25519 with SHA-256, HKDF and HMAC: the
@@ -46,7 +49,7 @@ var errBadElement = errors.New("enroll: the peer's key exchange message is not a
 // it with negligible probability. RFC 9382 has the party abort, which, left
 // at that, would let a guest test code after code for nothing: a host that
 // aborts on the right guess and answers every wrong one is an oracle. The
-// host therefore counts it as the invite's one guess ([Invite.Accept]).
+// host therefore counts it as the invite's one guess ([Invite.AcceptHello]).
 var errPasswordElement = errors.New("enroll: the peer's element was built from the password")
 
 // A spake is one party's half of a SPAKE2 run. Single use: x must never be
@@ -154,7 +157,7 @@ func mac(key, msg []byte) []byte {
 // RFC warns about is negligible.
 func passwordScalar(password []byte) (*edwards25519.Scalar, error) {
 	h := sha512.New()
-	h.Write([]byte("juist enroll spake2 w v1\x00"))
+	h.Write([]byte(types.LabelEnrollSPAKE2W + "\x00"))
 	h.Write(password)
 	return edwards25519.NewScalar().SetUniformBytes(h.Sum(nil))
 }
@@ -170,7 +173,8 @@ func scalarBigEndian(s *edwards25519.Scalar) []byte {
 // decodeElement accepts only the canonical encoding of a point of large
 // order. edwards25519 accepts non-canonical encodings, and two encodings of
 // one element would give one run two transcripts.
-func decodeElement(b []byte) (*edwards25519.Point, error) {
+func decodeElement(b []byte) (_ *edwards25519.Point, err error) {
+	defer malformed.Recover(&err)
 	if len(b) != elementLen {
 		return nil, errBadElement
 	}

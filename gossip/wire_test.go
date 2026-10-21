@@ -475,3 +475,50 @@ func TestAShareIsAnnounced(t *testing.T) {
 		}
 	}
 }
+
+// A newer announcement is told apart by what it changed: where its node is
+// reached alone, or more.
+func TestTheCacheSaysWhatAnAnnouncementChanged(t *testing.T) {
+	c := NewCache()
+	e, priv := testEndpoint(t)
+	if got := c.Added(e); got != Changed {
+		t.Fatalf("a first announcement is %v", got)
+	}
+	next := func(change func(*Endpoint)) Endpoint {
+		t.Helper()
+		n := *e.Clone()
+		n.Seq++
+		change(&n)
+		if err := n.Sign(priv); err != nil {
+			t.Fatal(err)
+		}
+		e = n
+		return n
+	}
+	if got := c.Added(next(func(n *Endpoint) {
+		n.Addrs = []netip.AddrPort{netip.MustParseAddrPort("198.51.100.9:41641")}
+	})); got != AddrsAlone {
+		t.Errorf("a new address alone is %v", got)
+	}
+	if got := c.Added(next(func(*Endpoint) {})); got != Unchanged {
+		t.Errorf("a renewal is %v", got)
+	}
+	if got := c.Added(next(func(n *Endpoint) { n.Disco = DiscoKey{9} })); got != Changed {
+		t.Errorf("a new disco key is %v", got)
+	}
+	if got := c.Added(next(func(n *Endpoint) {
+		n.Addrs = []netip.AddrPort{netip.MustParseAddrPort("198.51.100.10:41641")}
+		n.HomeRelay = 3
+	})); got != Changed {
+		t.Errorf("a new address and home relay are %v", got)
+	}
+	next(func(n *Endpoint) {
+		n.Relay = &RelayInfo{Port: 3340, Cert: make([]byte, RelayCertSize), HostName: "relay.example"}
+	})
+	c.Added(e)
+	if got := c.Added(next(func(n *Endpoint) {
+		n.Addrs = []netip.AddrPort{netip.MustParseAddrPort("198.51.100.11:41641")}
+	})); got != Changed {
+		t.Errorf("a relay moving, where its clients home, is %v", got)
+	}
+}

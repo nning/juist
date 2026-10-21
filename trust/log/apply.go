@@ -166,7 +166,7 @@ func (next *State) addNode(a *types.AUM, mode applyMode) error {
 	if len(next.nodes) >= types.MaxNodes {
 		return fmt.Errorf("log: the member set is at the %d-node limit", types.MaxNodes)
 	}
-	if err := next.checkNodeAdmissible(n, types.Identity{}); err != nil {
+	if err := next.checkNodeAdmissible(n); err != nil {
 		return err
 	}
 	if err := next.checkNodeSigning(n); err != nil {
@@ -198,7 +198,7 @@ func (next *State) setNodeRoutes(a *types.AUM, _ applyMode) error {
 	// The grant's routes were checked for form at decode; the overlap rules
 	// need the network's own prefix and the other members' routes, which
 	// only state knows.
-	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+	if err := next.checkNodeAdmissible(updated); err != nil {
 		return err
 	}
 	next.nodes[*a.Subject] = updated
@@ -216,7 +216,7 @@ func (next *State) setNodeNames(a *types.AUM, _ applyMode) error {
 	updated := cur.Clone()
 	updated.Names = slices.Clone(a.Names.Names)
 	// Held by no other member, which only state knows.
-	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+	if err := next.checkNodeAdmissible(updated); err != nil {
 		return err
 	}
 	next.nodes[*a.Subject] = updated
@@ -227,8 +227,9 @@ func (next *State) setDomain(a *types.AUM, _ applyMode) error {
 	if *a.Domain == next.domain {
 		return inEffect(fmt.Errorf("log: the network's domain is %q already", next.domain))
 	}
-	ix := types.NewMemberIndex(next.genesisHash, len(next.nodes))
-	ix.SetDomain(*a.Domain)
+	space := next.space()
+	space.Domain = *a.Domain
+	ix := types.NewMemberIndex(space, len(next.nodes))
 	for _, n := range next.Nodes() {
 		if len(n.Published) > 0 && *a.Domain == "" {
 			return fmt.Errorf("log: %v publishes names; withdraw them before the domain", n.Identity.ShortString())
@@ -271,7 +272,7 @@ func (next *State) setPublished(a *types.AUM, _ applyMode) error {
 	}
 	updated := cur.Clone()
 	updated.Published = slices.Clone(a.Publish.Names)
-	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+	if err := next.checkNodeAdmissible(updated); err != nil {
 		return err
 	}
 	next.nodes[*a.Subject] = updated
@@ -287,7 +288,7 @@ func (next *State) rotateNodeKey(a *types.AUM, _ applyMode) error {
 	updated.WireGuard = a.Keys.WireGuard
 	updated.X25519 = a.Keys.X25519
 	updated.MLKEM = a.Keys.MLKEM
-	if err := next.checkNodeAdmissible(updated, *a.Subject); err != nil {
+	if err := next.checkNodeAdmissible(updated); err != nil {
 		return err
 	}
 	next.nodes[*a.Subject] = updated
@@ -310,7 +311,7 @@ func (next *State) rotateIdentity(a *types.AUM, _ applyMode) error {
 	updated.Identity = *a.NewIdentity
 	updated.Signing = new(*a.NewSigning)
 	delete(next.nodes, *a.Subject)
-	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+	if err := next.checkNodeAdmissible(updated); err != nil {
 		return err
 	}
 	if err := next.checkNodeSigning(updated); err != nil {
@@ -509,7 +510,7 @@ func (next *State) renameNode(a *types.AUM, _ applyMode) error {
 	updated := cur.Clone()
 	updated.Name = name
 	// The share label follows the name.
-	if err := next.checkNodeAdmissible(updated, types.Identity{}); err != nil {
+	if err := next.checkNodeAdmissible(updated); err != nil {
 		return err
 	}
 	next.nodes[*a.Subject] = updated
@@ -569,7 +570,7 @@ func (next *State) renumberNetwork(a *types.AUM, mode applyMode) error {
 			}
 		}
 	}
-	slices.SortFunc(retiring, comparePrefixes)
+	slices.SortFunc(retiring, types.ComparePrefix)
 	prefix := *r.Prefix
 	next.v4Prefix = &prefix
 	next.v4Retiring = nil
@@ -706,34 +707,24 @@ func (s *State) v4Holder(addr netip.Addr) bool {
 	return false
 }
 
-// checkNodeAdmissible checks a node record against the rest of the member set:
-// route legality, and the collisions [types.MemberIndex] rejects. excluding
-// names a member to ignore, for a record that replaces a membership rather
-// than adding one.
-func (s *State) checkNodeAdmissible(n *types.NodeRecord, excluding types.Identity) error {
-	if err := n.ValidateInNetwork(s.ULA(), s.V4Ranges()); err != nil {
-		return fmt.Errorf("log: %w", err)
-	}
-	if err := n.ValidateNameBytes(); err != nil {
-		return fmt.Errorf("log: %w", err)
-	}
-	if len(n.Published) > 0 && s.domain == "" {
-		return errors.New("log: the network has no domain to publish names under")
-	}
-	if err := n.ValidatePublishing(); err != nil {
-		return fmt.Errorf("log: %w", err)
-	}
-	others := types.NewMemberIndex(s.genesisHash, len(s.nodes))
-	others.SetDomain(s.domain)
+// checkNodeAdmissible checks n, a member's record as a record leaves it,
+// against the network and every other member ([types.NodeRecord.ValidateIn]).
+func (s *State) checkNodeAdmissible(n *types.NodeRecord) error {
+	others := types.NewMemberIndex(s.space(), len(s.nodes))
 	for _, other := range s.nodes {
-		if other.Identity != excluding && other.Identity != n.Identity {
+		if other.Identity != n.Identity {
 			others.Add(other)
 		}
 	}
-	if err := others.Check(n); err != nil {
+	if err := n.ValidateIn(others); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
 	return nil
+}
+
+// space returns the network a member is admitted to.
+func (s *State) space() types.NetworkSpace {
+	return types.NetworkSpace{Genesis: s.genesisHash, Domain: s.domain, V4Prefix: s.v4Prefix, V4Retiring: s.v4Retiring}
 }
 
 // applyGenesis builds the initial state from a genesis record.

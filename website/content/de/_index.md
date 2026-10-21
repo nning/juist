@@ -50,7 +50,7 @@ nas joined
 
 ## Funktionen {#features}
 
-Für Netze mit 25 bis 100 Geräten und wenigen Admins.
+Gedacht für Netze mit bis zu etwa 100 Geräten und wenigen Admins. Ein Netz fasst höchstens 512 Geräte.
 
 {{< features >}}
 
@@ -58,8 +58,8 @@ Für Netze mit 25 bis 100 Geräten und wenigen Admins.
 
 Dienste auf deinen Mitgliedern, etwa auf dem NAS zu Hause, kannst du unter
 einem Namen im Internet erreichbar machen. Ein Gerät mit öffentlicher Adresse,
-die Ingress, liest den Namen, den der Client anfragt, und reicht die
-Verbindung durch den Tunnel weiter. TLS endet erst beim Mitglied, die Ingress
+der Ingress, liest den Namen, den der Client anfragt, und reicht die
+Verbindung durch den Tunnel weiter. TLS endet erst beim Mitglied, der Ingress
 bekommt den Inhalt also nie zu sehen.
 
 {{< flow publish >}}

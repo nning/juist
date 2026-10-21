@@ -47,7 +47,7 @@ next beside it, with a juistd of its own.`}
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	op, err := defaultOperator(operator, n.status())
+	op, err := defaultOperator(operator, liveStatus(n))
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ func (a *app) reportJoined(state *log.State, id types.Identity) {
 	a.ok("joined %q as %s", state.Network(), displayMember(self))
 	a.field("Addresses", "%s", addrList(state, self.Identity))
 	a.field("Devices", "%d", len(state.Nodes()))
-	if st := a.node.status(); st != nil {
+	if st := liveStatus(a.node); st != nil {
 		if st.Operator != "" {
 			a.field("Operator", "%s", st.Operator)
 		}
@@ -115,14 +115,16 @@ func (a *app) reportJoined(state *log.State, id types.Identity) {
 // packaged service for its state directory, juistd on any other. juistd does
 // not run next to admin keys, so a device kept in a keystore holding some has
 // no command to give.
-func (a *app) startHint() {
+func (a *app) startHint() { a.hint("%s", a.startHow()) }
+
+// startHow is what [app.startHint] says.
+func (a *app) startHow() string {
 	keys, _ := a.home.adminKeys()
 	switch {
 	case a.home.path == systemHome:
-		a.hint("%s", enableCmd())
+		return enableCmd()
 	case len(keys) > 0:
-		a.hint("no juistd runs for a keystore (%s); install the juist package", a.home.path)
-	default:
-		a.hint("juistd --home %s", a.home.path)
+		return fmt.Sprintf("no juistd runs for a keystore (%s); install the juist package", a.home.path)
 	}
+	return "juistd --home " + a.home.path
 }

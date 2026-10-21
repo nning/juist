@@ -246,8 +246,13 @@ func TestFramesAtTheirCapsFit(t *testing.T) {
 		hello.Keys = append(hello.Keys, k)
 	}
 
+	for i := range MaxEndpointsPerFrame + MaxLeasesPerFrame {
+		hello.Seen = append(hello.Seen, Seen{ID: types.Identity{byte(i), byte(i >> 8)}, Seq: 1 << 62, Key: 1 << 62, Lease: 1 << 62})
+	}
+
+	// At SchemaSeen the address keys travel in the records frame.
 	records := frame{Kind: kindRecords, Network: types.Hash{1}, Epoch: 1 << 62, Head: types.Hash{1},
-		Anchor: types.Hash{1}, Self: &ep, Endpoints: eps, Pair: pair}
+		Anchor: types.Hash{1}, Self: &ep, Endpoints: eps, Pair: pair, Keys: hello.Keys}
 	for range MaxLeasesPerFrame {
 		records.Leases = append(records.Leases, lb)
 	}

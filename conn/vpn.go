@@ -15,6 +15,7 @@ import (
 	"tailscale.com/wgengine/router"
 
 	"github.com/nning/juist/internal/plumber"
+	"github.com/nning/juist/types"
 )
 
 // A VPN brings the device up as Android's VpnService does: its addresses,
@@ -276,6 +277,10 @@ func (d *vpnTUN) Close() error {
 	return err
 }
 
+// What the manager finds a VPN's router can by a type assertion, held at
+// compile time.
+var _ exitRouter = (*vpnRouter)(nil)
+
 // A vpnRouter establishes the device again whenever what it routes changes:
 // the device's addresses, the overlay's routes, the internet while an exit
 // node is chosen, and the host's DNS.
@@ -373,11 +378,6 @@ func (r *vpnRouter) Close() error { return nil }
 
 func sortedPrefixes(ps []netip.Prefix) []netip.Prefix {
 	out := slices.Clone(ps)
-	slices.SortFunc(out, func(a, b netip.Prefix) int {
-		if c := a.Addr().Compare(b.Addr()); c != 0 {
-			return c
-		}
-		return a.Bits() - b.Bits()
-	})
+	slices.SortFunc(out, types.ComparePrefix)
 	return slices.Compact(out)
 }

@@ -18,7 +18,7 @@ import (
 //
 //   - no panic, which from a gossiped record would be a denial of service;
 //   - a rejected record changes nothing;
-//   - the epoch never goes backwards;
+//   - the epoch never goes backwards but under a rollback alarm;
 //   - reopening the store reproduces whatever state is reached.
 func FuzzChainValidate(f *testing.F) {
 	fx := theFuzzNetwork(f)
@@ -36,7 +36,7 @@ func FuzzChainValidate(f *testing.F) {
 		storage, auth := fx.open(t)
 		fx.sign(auth, &aum)
 		headBefore := auth.Head()
-		epochBefore := auth.State().Epoch()
+		floorBefore := checkEpochHeld(t, auth, storage, 0)
 		stateBefore := auth.State().Snapshot().Encode()
 
 		informErr := auth.Inform(aum)
@@ -48,9 +48,7 @@ func FuzzChainValidate(f *testing.F) {
 				t.Fatal("a rejected record changed the state")
 			}
 		}
-		if auth.State().Epoch() < epochBefore {
-			t.Fatalf("epoch went backwards: %d then %d", epochBefore, auth.State().Epoch())
-		}
+		checkEpochHeld(t, auth, storage, floorBefore)
 		reopened, err := Open(storage)
 		if err != nil {
 			t.Fatalf("store no longer opens after Inform (err was %v): %v", informErr, err)

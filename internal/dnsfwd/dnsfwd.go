@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/time/rate"
+	"github.com/nning/juist/internal/admit"
 )
 
 // Limits on what one forwarder takes on, and each source of it, so that a
@@ -34,6 +34,7 @@ const (
 	tcpIdle           = 10 * time.Second
 	maxTCPConns       = 64
 	perSourceConns    = 4
+	maxSources        = 4096
 	maxMessage        = 65535
 	headerLen         = 12
 )
@@ -60,8 +61,9 @@ type Options struct {
 	Upstream func() []netip.AddrPort
 
 	// UpstreamFor, where set, is the resolvers asked for query instead, nil
-	// for Upstream's; empty, it is asked of none.
-	UpstreamFor func(query []byte) []netip.AddrPort
+	// for Upstream's; empty, it is asked of none. An error answers SERVFAIL,
+	// a [Refusal] its RCode.
+	UpstreamFor func(query []byte) ([]netip.AddrPort, error)
 
 	// Answer, where set, answers a query itself, nil passing it upstream.
 	Answer func(query []byte) []byte
@@ -88,10 +90,9 @@ type Forwarder struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu      sync.Mutex
-	limits  map[netip.Addr]*rate.Limiter
-	busy    map[netip.Addr]int // queries in flight per source
-	open    map[netip.Addr]int // TCP connections per source
+	limits  *admit.Rates[netip.Addr]
+	busy    *admit.Set[netip.Addr] // queries in flight per source
+	open    *admit.Set[netip.Addr] // TCP connections per source
 	workers sync.WaitGroup
 }
 
@@ -104,7 +105,12 @@ func Start(opts Options) (*Forwarder, error) {
 		opts.Logf = func(string, ...any) {}
 	}
 	f := &Forwarder{opts: opts, inFlight: make(chan struct{}, maxInFlight), conns: make(chan struct{}, maxTCPConns),
-		limits: map[netip.Addr]*rate.Limiter{}, busy: map[netip.Addr]int{}, open: map[netip.Addr]int{}}
+		limits: admit.NewRates[netip.Addr](perSourceQPS, perSourceMax, maxSources)}
+	perQueries, perConns := perSourceInFlight, perSourceConns
+	if opts.Local {
+		perQueries, perConns = maxInFlight, maxInFlight
+	}
+	f.busy, f.open = admit.New[netip.Addr](admit.Limits{PerSource: perQueries}), admit.New[netip.Addr](admit.Limits{PerSource: perConns})
 	f.ctx, f.cancel = context.WithCancel(context.Background())
 	lc := net.ListenConfig{Control: control(opts.Device)}
 	for _, a := range opts.Addrs {
@@ -171,43 +177,7 @@ func (f *Forwarder) admit(src netip.Addr) bool {
 	if f.opts.Allowed != nil && !f.opts.Allowed(src) {
 		return false
 	}
-	if f.opts.Local {
-		return true
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	l := f.limits[src]
-	if l == nil {
-		if len(f.limits) > 4096 {
-			clear(f.limits)
-		}
-		l = rate.NewLimiter(perSourceQPS, perSourceMax)
-		f.limits[src] = l
-	}
-	return l.Allow()
-}
-
-// hold takes one of src's count slots in m, of at most max, reporting
-// whether there was one; release gives it back.
-func (f *Forwarder) hold(m map[netip.Addr]int, src netip.Addr, max int) bool {
-	if f.opts.Local {
-		max = maxInFlight
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if m[src] >= max {
-		return false
-	}
-	m[src]++
-	return true
-}
-
-func (f *Forwarder) release(m map[netip.Addr]int, src netip.Addr) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if m[src]--; m[src] <= 0 {
-		delete(m, src)
-	}
+	return f.opts.Local || f.limits.Allow(src)
 }
 
 // isQuery reports whether msg is a DNS query worth asking about: a standard
@@ -236,20 +206,21 @@ func (f *Forwarder) serveUDP(c *net.UDPConn) {
 			c.WriteToUDPAddrPort(resp, src)
 			continue
 		}
-		if !f.hold(f.busy, from, perSourceInFlight) {
+		slot, ok := f.busy.Admit(from, nil)
+		if !ok {
 			continue
 		}
 		select {
 		case f.inFlight <- struct{}{}:
 		default:
-			f.release(f.busy, from)
+			slot.Release()
 			continue // too much under way: the member asks again
 		}
 		q := bytes.Clone(buf[:n])
 		f.workers.Add(1)
 		go func() {
 			defer f.workers.Done()
-			defer f.release(f.busy, from)
+			defer slot.Release()
 			defer func() { <-f.inFlight }()
 			if resp, err := f.ask("udp", q); err == nil {
 				c.WriteToUDPAddrPort(resp, src)
@@ -270,21 +241,26 @@ func (f *Forwarder) serveTCP(ln net.Listener) {
 		}
 		src, _ := netip.ParseAddrPort(c.RemoteAddr().String())
 		from := src.Addr().Unmap()
-		if (f.opts.Allowed != nil && !f.opts.Allowed(from)) || !f.hold(f.open, from, perSourceConns) {
+		if f.opts.Allowed != nil && !f.opts.Allowed(from) {
+			c.Close()
+			continue
+		}
+		slot, ok := f.open.Admit(from, nil)
+		if !ok {
 			c.Close()
 			continue
 		}
 		select {
 		case f.conns <- struct{}{}:
 		default:
-			f.release(f.open, from)
+			slot.Release()
 			c.Close()
 			continue
 		}
 		f.workers.Add(1)
 		go func() {
 			defer f.workers.Done()
-			defer f.release(f.open, from)
+			defer slot.Release()
 			defer func() { <-f.conns }()
 			defer c.Close()
 			f.serveConn(c, src.Addr())
@@ -341,7 +317,14 @@ func (f *Forwarder) ask(network string, q []byte) ([]byte, error) {
 	var failed []byte
 	var ups []netip.AddrPort
 	if f.opts.UpstreamFor != nil {
-		ups = f.opts.UpstreamFor(q)
+		var err error
+		if ups, err = f.opts.UpstreamFor(q); err != nil {
+			rcode := uint8(rcodeServFail)
+			if r := (*Refusal)(nil); errors.As(err, &r) {
+				rcode = r.RCode
+			}
+			return failure(q, rcode), nil
+		}
 	}
 	if ups == nil {
 		ups = f.opts.Upstream()
@@ -363,6 +346,42 @@ func (f *Forwarder) ask(network string, q []byte) ([]byte, error) {
 		return failed, nil
 	}
 	return nil, last
+}
+
+// RCodes a refused query is answered; a [Refusal] names one.
+const (
+	RCodeFormErr  = 1
+	rcodeServFail = 2
+	RCodeNXDomain = 3
+	RCodeRefused  = 5
+)
+
+// A Refusal answers a query RCode, asking no one.
+type Refusal struct {
+	RCode uint8
+	Err   error
+}
+
+func (r *Refusal) Error() string { return r.Err.Error() }
+func (r *Refusal) Unwrap() error { return r.Err }
+
+// failure is a response to q with rcode, and q's question.
+func failure(q []byte, rcode uint8) []byte {
+	end := headerLen
+	if binary.BigEndian.Uint16(q[4:]) == 1 {
+		if off := skipName(q, headerLen); off >= 0 && off+4 <= len(q) {
+			end = off + 4
+		}
+	}
+	resp := make([]byte, end)
+	copy(resp, q[:4])
+	resp[2] = 0x80 | q[2]&0x79  // QR; opcode and RD as asked
+	resp[3] = 0x80 | rcode&0x0f // RA
+	if end > headerLen {
+		resp[5] = 1
+		copy(resp[headerLen:], q[headerLen:end])
+	}
+	return resp
 }
 
 // capTTL lowers every TTL in msg above max to max, in place, but an OPT

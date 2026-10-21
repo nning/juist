@@ -47,6 +47,10 @@ If the removed device is reachable when the removal takes effect, it is told:
 ```console {device="phone"}
 $ juist status
 home · removed
+
+hint: 1 warning: juist health
+$ juist health
+warning: this device was removed from the network
 hint: rejoin with a new invite, or start over: juist reset
 ```
 

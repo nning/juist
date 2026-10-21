@@ -2,8 +2,8 @@
 
 Each milestone has a **security exit criterion**: it is not done until the
 criterion passes, and the criteria are cumulative, since CI keeps enforcing
-every earlier one. A done milestone's criteria, by number, and the tests that
-check them are in [12-validating.md](12-validating.md). *(demo-able)* marks
+every earlier one; the tests that check what done milestones claim are in
+[12-validating.md](12-validating.md), by what they check. *(demo-able)* marks
 a milestone that closes a loop an outsider can be shown end to end. A done
 milestone says what it delivered, what validated it and what of it still
 binds; its plan and reviews are in git's history.
@@ -93,7 +93,7 @@ command about one network takes it first, and listings show every network.
 Renumbering a network or a member keeps every pair reachable through a
 transition. The rules a later change must keep are in
 [13-multi-network-notes.md](13-multi-network-notes.md); instances share the
-`juist` user until M23.
+`juist` user until M24.
 
 ## M5a — An admin key per network
 
@@ -116,7 +116,8 @@ what waits for a vote, and `juist approve` asks about each one, shown from the
 local log; the vote that completes the quorum applies it. A daemon holds at
 most 64 changes and 32 MiB, 16 and 8 MiB per signing key, each for seven days
 at most. An admission's copies wait five minutes at a time, renewed by the
-running invite, and are never carried from a file. What a compromised admin
+running invite, which hands on each vote as it arrives, and are never carried
+from a file. What a compromised admin
 device or key gains is weakness 10 in [02-threat-model.md](02-threat-model.md).
 
 ## M5c — Moving one device without a transition
@@ -214,7 +215,9 @@ juistd writes, and nftables take the host's queries on 53 to 41647; on
 FreeBSD resolvconf names it exclusively, on 53, which the helper binds. A
 resolv.conf tailscaled wrote stays its own, since tailscaled asks juistd back
 (`07-embedding-notes.md`). Debian's dhclient writes the host's own beside
-juistd's, by the package's enter hook. Open: other DHCP clients follow the
+juistd's, by the package's enter hook, and programs AppArmor confines read
+juistd's through the package's snippet in `abstractions/nameservice.d`, which
+postinst has AppArmor reload once. Open: other DHCP clients follow the
 link and write juistd's file, which the host then asks instead of juistd
 until juistd writes it again, within five minutes. Open: what juistd forwards
 without an exit node goes in plain DNS where resolved is configured for DNS
@@ -316,8 +319,8 @@ internet, and is yet to across the VPN turned off and on and the phone
 changing networks.
 
 An Android app that joins a network as a member from anywhere, reaches the
-others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M25 covers the app's key
-custody and its in-process API; the full app is M28, after v1.
+others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M26 covers the app's key
+custody and its in-process API; the full app is M29, after v1.
 
 - **Joining.** The invite's link scanned as a QR code, which `juist invite`
   renders in the terminal beside the link; or the code typed or pasted, its
@@ -375,7 +378,7 @@ router, exit and holdings are left out there by build tag.
 - **Lifecycle.** A foreground service keeps the mesh up in Doze, and a
   multicast lock lets mDNS find members on the Wi-Fi.
 
-The app looks finished from M10 on, not from M28: Kotlin and Compose, with a
+The app looks finished from M10 on, not from M29: Kotlin and Compose, with a
 theme of its own (colour, type, shape, spacing and motion as tokens), light
 and dark, and every state `ipc.Status` can report designed rather than left
 to an error. A screenshot test renders every screen in both themes, at 200 %
@@ -520,7 +523,7 @@ ingress where it is one; every member falls back to a named relay on 443 by
 itself. The relays stand in for the DHT, a company's proxy is taken (`juist
 set --proxy`), and links name relays by name. The rules are in
 [10-connectivity-notes.md](10-connectivity-notes.md), "HTTPS alone, and relays
-on 443". The Android app has no switch for it yet (M28).
+on 443". The Android app has no switch for it yet (M29).
 
 It does not hide juist from a censor that probes servers or fingerprints
 ClientHellos. Not done, each wanting more of the pinned Tailscale than it
@@ -652,7 +655,7 @@ member is heard past the newest; a device further behind than its peers keep
 is invited again by a link naming its admin
 ([08-trust-layer-notes.md](08-trust-layer-notes.md), "The two ratchets"). The
 CLI's pin survives compaction where a quorum of its keys signed the
-checkpoint the log starts from. Open for M24: a record released below a
+checkpoint the log starts from. Open for M25: a record released below a
 compaction is refused where devices compacted and taken where they did not,
 with no alarm (weakness 14 in [02-threat-model.md](02-threat-model.md)).
 
@@ -707,26 +710,11 @@ What still binds:
   stays serial says why: a latency bounded, a window counted, every socket
   read. The long sleeps left are windows in which something must not
   happen, and stay. `cmd/juist` and `daemon` spend their time verifying
-  ML-DSA signatures again on every resolve. Open: three tests fail their
-  timing under load or now and then, `conn`'s `TestARestartedPeerIsReachedAtOnce` (2 s to
-  reach a restarted peer) and `cmd/juist`'s
-  `TestAnAdmissionGathersVotesWhileItsInviteRuns` (an approval that does not
-  retry while the invite renews the copy it saw), and one about one run in a
-  hundred, `daemon`'s `TestARestartedShareLeavesAnothers` (its own share
-  must start before the restarted one comes back). In the lab,
+  ML-DSA signatures again on every resolve. In the lab,
   `access policy`'s hello for the name for members ended in a TLS internal
   error for two minutes in one run of four since the lab was split, its
   certificate not issued; the part now logs the terminator's journal and
   Pebble's where it fails, which is what the next one has to answer.
-
-- **Exit criteria:** (1) `build/ci`'s log gives each step's time; (2) a
-  failure planted in each stage still fails the closing run, and a failing
-  privileged test ends the run, the lab with it, within the minutes the
-  privileged stage takes; (3) nothing in a run is built, converted or
-  fetched twice; (4) the closing run passes in at most half of the 45
-  minutes recorded for it on the four-core host, and
-  [12-validating.md](12-validating.md)'s table of gates carries the new
-  times.
 
 ## M21 — Battery life on Android
 
@@ -734,62 +722,142 @@ A day with the app connected, the phone in neither battery nor data saver,
 put juist at 65 % of the phone's battery use by the afternoon (2026-10-12):
 too much to leave it on, which is what a VPN is for. The core runs on a
 phone at a laptop's pace, and some of what it does costs more there. Before
-the names on Android (M22), which are of little use on an app that cannot
-stay on, and before the audit, so that M25 covers what changes.
+the names on Android (M23), which are of little use on an app that cannot
+stay on, and before the audit, so that M26 covers what changes.
 
-**Under way.** Measured idle in the emulator, without a relay ([12-validating.md](12-validating.md),
-"An idle phone"): about 29,500 packets an hour, from magicsock's 3 s
-heartbeat on both ends of every tunnel, restarted for 45 s by each 30 s
-probe; the engine asking STUN again every few seconds, failing to reach a
-STUN server it took for its home; and the notification posted every 30 s.
-What follows from it is done:
+**Done** on 2026-10-21, reviewed (M21 reviews 1 to 3, the second in
+thirteen rounds, each round's fixes attacked again), validated by a real
+phone's day before and after ([12-validating.md](12-validating.md), "A real
+phone's day"): juist at 5 % of the battery in Android's own list against 32 %
+the day before and 65 % before M21, 21 mAh an hour against 54, its radio
+active 3 minutes an hour against 30, its own log sync through the tunnel
+about 1 MB an hour each way against 5 to 20; by `make android-idle` beside
+ten members; and by `make ci-vm` at 8799d87. Core 10 987 lines, audit scope
+33 598, measured after it (2026-10-21).
 
-- A node without a member relay is homeless, and asks STUN every 25 s only
-  while its tunnels carry traffic and it does not save battery, on every
-  platform.
+Measured idle in the emulator, without a relay, before it: about 29,500
+packets an hour, from magicsock's 3 s heartbeat on both ends of every
+tunnel, restarted for 45 s by each 30 s probe; the engine asking STUN again
+every few seconds, failing to reach a STUN server it took for its home; and
+the notification posted every 30 s. What follows from it:
+
+- A node that asks STUN servers and reaches no member relay is homeless,
+  rather than homed at a STUN server it would try every few seconds, and
+  asks STUN every 25 s only while its tunnels carry traffic and it does not
+  save battery, on every platform; one whose relays went unreached asks
+  again from 25 s to 10 minutes apart, saving or not, and homes at the
+  first it reaches. The STUN servers share one region of the relay map, so
+  that netcheck, which measures the three nearest regions, measures the
+  relays beside them.
 - The phone saves battery while its screen is off, it dozes or battery
-  saver is on (`daemon.Pace`): tunnels are checked every 5 minutes, an
-  answer from a peer a relay can wake stands for 30, the log is synced every
-  30 and reconciled without a change every 2, and magicsock's heartbeat is
-  off (silent disco), a path trusted while the peer's traffic arrives on it.
-  The multicast lock is held only while not saving or while joining, and the
+  saver is on, and on a metered network while the app is not in front
+  (`daemon.Pace`): tunnels are checked every 5 minutes, the log is synced
+  every 30, and magicsock's heartbeat is off (silent disco), a path trusted
+  while the peer's traffic arrives on it. The multicast lock is held, and
+  LAN discovery announces, only while not saving or while joining, and the
   status poll, the notification included, pauses with the screen off. The
   status screen says when battery saver keeps it saving.
+- **Peers let the phone rest,** from schema 20, whose announcements may say
+  a device rests, as the phone's do. A peer that rests, or any while this
+  device saves, is checked quietly: probed once in 30 minutes, its answer
+  standing between, and where no relay could wake it pinged meanwhile by a
+  disco ping sent with silent disco on, which starts no heartbeat on either
+  end, every minute: more often would keep going a heartbeat the last
+  packet started. A ping unanswered, a key changed since the answer, or a
+  new announcement has it probed, and a handshake under the key since
+  renews the answer, so that a pair costs one probe. The periodic sync
+  leaves a member that rests to sync by itself, but for one every 30
+  minutes where all do. A new address, where nothing else in the
+  announcement changed and it is no relay's, is pushed to those that do not
+  rest: one that rests learns it at its next sync, within 30 minutes, and
+  from disco over its relay meanwhile; without a relay a direct path to it
+  waits that long. A device that saves, homed at a relay, pushes a new
+  address of its own at the next reconcile or when saving ends.
+- **Log sync on a phone:** a real phone's day (2026-10-20) put juist at
+  512 mAh of 2 385, 496 of them the radio, held up for 4 h 42 min by
+  110 MB each way of juist's own log sync through the tunnel: every session
+  carried every member's announcement and address key both ways, about
+  70 KB a hello at 11 members, and every member pushed each change it heard
+  on to eight others, the phone among them, which pushed it on in turn. A
+  device that rests now passes on nothing it hears while a member awake
+  does, and pushes its own news to two members awake; a member passes on
+  others' announcements, address keys, waiting changes and leases to the
+  members awake alone, and records and its own news to every member that
+  rests besides `PushFanout` awake, so a phone hears others' news from its
+  author, or at its own sync. From schema 21 a hello says what its sender
+  holds of each node, its announcement's and address key's numbers and its
+  newest lease, and the records frame answering it carries what the peer
+  lacks, address keys among them. In the emulator beside ten members, one
+  restarting every 3 minutes, the phone's traffic with the members fell
+  from 30.5 MB an hour to 1.4, and its datagrams and segments from 53 000
+  an hour to 8 400
+  ([12-validating.md](12-validating.md), "An idle phone").
+- **The DHT on a phone:** a device that rests takes part in the public DHT
+  only once checked and while no member that does not rest answers it, and
+  a member leaves its lookups to no peer that rests; relays are asked as
+  before. A member answering it that runs without the DHT (`--no-dht`)
+  stands in all the same, which no announcement says.
+- **Events instead of polls:** the mesh reconciles at the next deadline it
+  knows (a membership's expiry, a renumbering's, the view going stale, a
+  lease to renew, a share's end, an exchange of pair keys put off, the
+  routing of the host's DNS to renew) and otherwise every 2 minutes, 10
+  while saving; the service looks for moved keys and addresses every
+  minute, 10 while saving, which the mesh's calls on a change make a
+  backstop, and every 5 s only while the mesh failed to start or a lower
+  instance may conflict. systemd-resolved's restarts are watched over D-Bus
+  (`NameOwnerChanged`), its routing renewed hourly then rather than every 5
+  minutes, and the host's routing is read again when an interface changes.
+  Laptops gain all of it.
+- `make android-idle` measures an idle phone in the emulator beside ten
+  members, one restarting every 3 minutes, with and without a relay, and
+  fails past a budget: 15 065 datagrams an hour without a relay and 8 408
+  with one ([12-validating.md](12-validating.md), "An idle phone").
 
-Open, in this order:
+Not taken up, from the review: a relay reached by TCP alone, its STUN port
+blocked, is never measured while a public STUN server answers (netcheck
+measures by HTTPS only where no UDP probe is answered), so it is no node's
+home; and with no STUN server asked (`--no-stun`), a dead relay is dialled,
+and measured, again every few seconds. Both are as before M21; `juist
+health` could say the first, and M22 weighs measuring such a relay by HTTPS.
 
-1. **Measure on a real phone,** a day's bug report read with Battery
-   Historian, with a relay as well as without: whether radio or CPU
-   dominates now, and the budget the emulator test below holds.
-2. **The DHT on a phone.** Off where relays or members stand in, as on
-   HTTPS alone.
-3. **Peers that let the phone rest.** A member's probe or sync still restarts
-   its own heartbeat towards the phone, which then answers every 3 s for
-   45 s. Saying in the announcement that a device saves battery would let
-   peers probe and sync it at its pace, at a schema bump, as the
-   announcements' decoders are strict.
-4. **Events instead of polls.** The watch loop, the reconcile and the host's
-   DNS routing each become a timer on the next known deadline (a
-   membership's expiry, a renumbering's) or a signal (a log change, netmon,
-   resolved's `PropertiesChanged`), keeping a slow backstop: a missed event
-   fails silently. Laptops gain it too.
-5. **Mobile data,** with the screen on, saves nothing yet.
+## M22 — Every member through one relay on 443
 
-- **Exit criteria:** (1) the measurement of step 1, before and after, is in
-  [12-validating.md](12-validating.md); (2) an idle phone in the emulator
-  stays within the budget step 1 sets, and a test fails when a change takes
-  it past; (3) a phone with the screen off still reaches and is reached by
-  a member within the stretched interval, and a phone woken by a packet
-  answers it; (4) the app is released.
+A device on a network that passes TCP to 443 alone reaches the relays named
+on 443 and no other, and a member is sent to at the relay it is homed at, so
+in a hotel's network a member homed at an unnamed relay is out of the
+device's reach, with `--https-only` or without it, unless every relay is
+named by hand. Both ends meet at the device's own relay instead: it sends
+every peer whose home it cannot reach there, and members keep a connection
+to it, so that one relay named on 443, the ingress's by itself, is enough.
+Relays forwarding for one another is the alternative should that fall short.
+Before the audit, so that M26 covers it, and not started before M21 is
+validated and the refactoring
+([temp/20261019-refactoring.md](temp/20261019-refactoring.md)) is done. The
+rules, the open decisions and what changes in the threat model are in
+[16-one-relay-on-443.md](16-one-relay-on-443.md).
 
-## M22 — Names on Android
+- **Exit criteria:** (1) in the netns lab, a device whose network passes TCP
+  to 443 alone, homed at the one named relay, reaches a member homed at an
+  unnamed relay and is reached by it, with `--https-only` and without, and
+  the member reaching it no longer once it stops keeping the connection;
+  (2) after three minutes without traffic, the device still reaches the
+  member first; (3) a member that learns the device's new home from the
+  relays alone, with no tunnel to it, reaches it; (4) a member that rests
+  keeps no connection, and is reached once it syncs; (5) an ingress's relay
+  is named `relay.<domain>` without `--relay-name`, and the device of (1)
+  needs no setting of 443 to reach every member; (6) `juist health` names a
+  peer the device's relay says is not there; (7)
+  [02-threat-model.md](02-threat-model.md) says what changes, and `make
+  ci-vm` passes with the lab.
+
+## M23 — Names on Android
 
 The Android app resolves none of the network's names. With a DNS server set,
 `VpnService` sends every lookup of the phone to it, so the core sets one only
 for an exit node, which then answers them all (`mobile.errNoNames`). A name
 for members alone (M16) is out of the phone's reach, and a published name
-resolves to the ingress, not the tunnel. Taken from the full app (M28), and
-before the audit, so that M25 covers a resolver that sees every lookup the
+resolves to the ingress, not the tunnel. Taken from the full app (M29), and
+before the audit, so that M26 covers a resolver that sees every lookup the
 phone makes.
 
 - **Lead options:**
@@ -812,6 +880,13 @@ phone makes.
     own DNS back.
   - **Status.** The app says, name by name as `juist status` does, where a
     name for members cannot be reached and why.
+  - **Carried from M21: the members' pings after news.** What is left of
+    an idle phone's traffic beside ten members comes in a burst a few
+    seconds after each member's restart, mostly disco pings from the other
+    members to the phone, a radio wake each time: find which check or push
+    starts them, and spare a phone that rests those that wake it for
+    nothing. The day that closed M21 ran on Wi-Fi; a day on mobile data
+    shows what a radio wake costs there.
 
 - **Open decisions:**
   - **Private DNS.** Which of Android's modes send lookups past the VPN's
@@ -834,10 +909,10 @@ phone makes.
   name cannot be reached where Private DNS passes the resolver by; (6) the
   app is released.
 
-## M23 — Boundaries on a host
+## M24 — Boundaries on a host
 
 What one network's daemon, the LAN and a local user can reach on a host
-running juist, closed before the audit, so that M25 covers it.
+running juist, closed before the audit, so that M26 covers it.
 
 - **A user per juistd instance,** so that one network's compromised daemon
   on a host no longer holds the others' device keys (residual weakness 9 in
@@ -862,10 +937,10 @@ running juist, closed before the audit, so that M25 covers it.
   (5) residual weaknesses 8 and 9 leave the threat model or say what
   remains of them.
 
-## M24 — The internal security review
+## M25 — The internal security review
 
 The review [15-security-review.md](15-security-review.md) plans, over the
-audit scope as M17 to M23 leave it, so that the auditor's hours go to what a
+audit scope as M17 to M24 leave it, so that the auditor's hours go to what a
 reader cannot find. It starts from the fuzzing:
 
 - **Fuzzing.** `waiting.Decode`, `types.DecodeLease`, the helper's protocol
@@ -901,26 +976,26 @@ reader cannot find. It starts from the fuzzing:
   and medium finding fixed with a test that fails without the fix, or
   accepted as a numbered residual weakness.
 
-## M25 — External audit → v1
+## M26 — External audit → v1
 
 External security audit of the audit scope, in the tiers of
-[06-verification.md](06-verification.md) §5, after M24's internal review:
+[06-verification.md](06-verification.md) §5, after M25's internal review:
 the trust layer and enrollment at its core,
-plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22 and M23 add to it — route consumption and its forwarding helper, the
+plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22, M23 and M24 add to it — route consumption and its forwarding helper, the
 override record and the resolver, the published names, those for members alone, and the ingress, its QUIC Initial parser included, the
 disable record, the preshared-key exchange, the ML-DSA cut-over and
-enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, a user per instance and FreeBSD's pf — fix findings, mature fuzz corpus (consider
+enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, the meeting at a relay on 443, a user per instance and FreeBSD's pf — fix findings, mature fuzz corpus (consider
 OSS-Fuzz), implementation-vs-threat-model review, documentation of the
 residual-weakness acceptances for operators, which the handbook's
 trade-offs carry ([14-website.md](14-website.md)).
 
 v1 is Linux and FreeBSD with M14's ACLs, and M10's minimal Android app;
-packaging and the full app follow in M27 and M28.
+packaging and the full app follow in M28 and M29.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) the acceptances documented for operators; v1.0 tag.
 
-## M26 — Multicast *(post-v1)*
+## M27 — Multicast *(post-v1)*
 
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LAN games.
 The overlay counts as one link for them. Multicast routing, streaming and
@@ -985,7 +1060,7 @@ of an overlay address to its member that the source check rests on.
   listener joined on the default interface receives a routed group's packets
   from a member.
 
-## M27 — Packaging *(post-v1)*
+## M28 — Packaging *(post-v1)*
 
 Distro repositories (apt, dnf, pkg) and a port in FreeBSD's ports tree, which
 fetches a release, for the packages every release already carries, and the readiness check that keeps an admin from stranding members
@@ -994,21 +1069,21 @@ on an upgrade.
 - **Exit criterion:** Linux/FreeBSD interop matrix green in CI via qemu;
   release artifacts reproducible byte-for-byte from two independent builders.
 
-## M28 — The full Android app *(post-v1)*
+## M29 — The full Android app *(post-v1)*
 
 The full Android app, on M10's: M6b's subnet routes through `VpnService`
-routes and M13's HTTPS alone, released as M27 releases the rest.
+routes and M13's HTTPS alone, released as M28 releases the rest.
 
 - **Exit criterion:** 3-platform interop matrix green in CI, Android by an
   emulator smoke test; the app's release artifact reproducible byte-for-byte
   from two independent builders.
 
-## M29 — A store, and a messenger on it *(post-v1)*
+## M30 — A store, and a messenger on it *(post-v1)*
 
 Members leave each other data while the other is offline, with no server: a
 key-value store replicated among the members' own devices, and a messenger on
 it with groups, pictures and files, `juistmsg` on Linux and FreeBSD and a chat
-in the app. It needs M10's app, not M28's. A device takes part if its owner
+in the app. It needs M10's app, not M29's. A device takes part if its owner
 turns it on; nothing about it is the quorum's.
 
 Not a DHT: every member holds the whole member list, so where a namespace
@@ -1109,9 +1184,9 @@ in the DHT, at every change of reach.
 
 Not scheduled. Done (M9): a quiet tunnel to a peer a relay can wake is
 probed every 5 minutes rather than every 30 s, and mDNS slows from 2 s to a
-minute while nothing changes; validated by unit tests alone. Events instead
-of polls and a keepalive that lets magicsock rest are M21's. Open, in this
-order:
+minute while nothing changes; validated by unit tests alone. M21 reconciles
+at deadlines rather than every 15 s and has a quiet ping, which starts no
+heartbeat, check a phone and a peer while saving. Open, in this order:
 
 1. **Measure.** Datagrams per minute on the underlay (magicsock's port, 5353,
    the relay's) and wakeups (`powertop`) of an idle laptop with three peers,
@@ -1120,9 +1195,9 @@ order:
 2. **On battery.** Read the power source (Linux
    `/sys/class/power_supply/*/online` of a `Mains` supply, FreeBSD
    `hw.acpi.acline`) and, on battery, stop relaying though granted, and
-   stretch the quiet probe and the sync interval. A relay that goes away moves
-   its peers' home region, so the switch wants hysteresis, and the status
-   says when it happened.
+   save as a phone does (`daemon.Pace`), its peers' tunnels checked
+   quietly. A relay that goes away moves its peers' home region, so the
+   switch wants hysteresis, and the status says when it happened.
 
 ## Deferred (post-v1, schema must not preclude)
 
@@ -1201,7 +1276,7 @@ gateway is for keeping the servers out of the clients' log.
 
 ## Later — Networks of phones alone
 
-Not scheduled; after M28, whose names it uses. A network whose every member is
+Not scheduled; after M29, whose names it uses. A network whose every member is
 an Android phone, created, invited to, governed and kept fresh from the app,
 whose members reach each other without a VPS: a family's phones, and a
 peer-to-peer chat between them. A relay member stays the answer that always
@@ -1219,7 +1294,7 @@ only way to need none.
    IPv6, and each carrier's NAT mapping and filtering. Step 4 is judged by that
    table, so it is taken first.
 2. **Governing from the app.** Genesis on the phone, its admin key sealed by
-   Keystore as `node.keys` is (M10), which M25's audit did not cover for
+   Keystore as `node.keys` is (M10), which M26's audit did not cover for
    admin keys, so it wants a review of its own. The app invites (the QR code
    on its screen, the code on the Wi-Fi, a link through the DHT's
    rendezvous), shows the words, votes, approves carried changes (M5b),
@@ -1281,7 +1356,7 @@ only way to need none.
    from another member through `VpnService`, tested. Without an access policy
    (M14) every member reaches every port a phone's apps open.
 
-The chat is M29's, whose store holds a message for a phone that is off on
+The chat is M30's, whose store holds a message for a phone that is off on
 the members that are on.
 
 - **Exit criteria:** (1) in `make interop`, three emulators and no other

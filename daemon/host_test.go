@@ -27,7 +27,7 @@ func TestHostClaims(t *testing.T) {
 	legacy := newNetwork(t, 2)
 	auth, _ := legacy.authorityFor(t)
 	v4, ula := hostClaims(auth.State(), 0)
-	slices.SortFunc(v4, comparePrefixes)
+	slices.SortFunc(v4, types.ComparePrefix)
 	if want := []netip.Prefix{p("198.18.0.1/32"), p("198.18.0.2/32")}; !slices.Equal(v4, want) {
 		t.Errorf("a network without a prefix of its own claims %v, want %v", v4, want)
 	}
@@ -57,7 +57,7 @@ func TestHostClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	v4, _ = hostClaims(auth.State(), 999)
-	slices.SortFunc(v4, comparePrefixes)
+	slices.SortFunc(v4, types.ComparePrefix)
 	if want := []netip.Prefix{p("10.7.0.0/24"), p("198.18.0.0/24")}; !slices.Equal(v4, want) {
 		t.Errorf("moving, the network claims %v, want %v", v4, want)
 	}
@@ -65,8 +65,6 @@ func TestHostClaims(t *testing.T) {
 		t.Errorf("past the deadline the network claims %v, want its new prefix alone", v4)
 	}
 }
-
-func comparePrefixes(a, b netip.Prefix) int { return a.Addr().Compare(b.Addr()) }
 
 // Only a lower instance's holdings conflict: this one's table is consulted
 // first, so a higher instance's routes are the ones that never win. The same

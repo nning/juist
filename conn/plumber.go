@@ -42,6 +42,32 @@ func preferredSrc4(addrs []netip.Prefix) netip.Addr {
 	return netip.Addr{}
 }
 
+// HostControl is what juistd does to the host's egress while no mesh runs:
+// refusing it, where an exit node is chosen, and clearing that. By Plumber
+// where it plumbs Dev, as on FreeBSD; by the kernel's routing and nftables
+// on Linux; nothing elsewhere.
+type HostControl struct {
+	Instance int
+	Plumber  Plumber
+	Dev      string
+}
+
+// RefuseEgress refuses egress as [RefuseEgress] or [RefuseEgressBy] do.
+func (h HostControl) RefuseEgress(isolate bool) error {
+	if h.Plumber != nil {
+		return RefuseEgressBy(h.Plumber, h.Dev, isolate)
+	}
+	return RefuseEgress(h.Instance, isolate)
+}
+
+// ClearEgress clears what RefuseEgress refused.
+func (h HostControl) ClearEgress() error {
+	if h.Plumber != nil {
+		return ClearEgressBy(h.Plumber, h.Dev)
+	}
+	return ClearEgress(h.Instance)
+}
+
 // RefuseEgressBy and ClearEgressBy are [RefuseEgress] and [ClearEgress] where
 // p plumbs dev, as on FreeBSD: refused, nothing but local space leaves the
 // host, and juistd's own traffic, and answers but with isolate, until a

@@ -6,13 +6,14 @@ import (
 	"net"
 	"net/netip"
 	"sync"
-	"time"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"golang.org/x/time/rate"
 	"tailscale.com/net/stun"
 	"tailscale.com/types/logger"
+
+	"github.com/nning/juist/internal/admit"
 )
 
 // stunResponder answers STUN binding requests, so a member learns its own
@@ -34,10 +35,10 @@ type stunResponder struct {
 	// flood does not spend the others' answers.
 	answers *rate.Limiter
 
-	mu        sync.Mutex // guards closed, perSource and pruned
-	closed    bool
-	perSource map[netip.Prefix]*rate.Limiter
-	pruned    time.Time
+	perSource *admit.Rates[netip.Prefix]
+
+	mu     sync.Mutex // guards closed
+	closed bool
 }
 
 const (
@@ -47,8 +48,9 @@ const (
 	stunBurst            = 400
 
 	// stunPerSource is one host's sustained answer rate, its burst twice
-	// that, and stunSources the hosts tracked; past them the rate in all
-	// alone applies, which a flood from spoofed sources still spends.
+	// that, and stunSources the hosts tracked; past them the host seen
+	// longest ago starts over, and the rate in all still bounds a flood from
+	// spoofed sources.
 	stunPerSource = 20
 	stunSources   = 4096
 )
@@ -59,7 +61,7 @@ const (
 // out rather than failing the relay.
 func listenSTUN(port uint16, logf logger.Logf) (*stunResponder, error) {
 	s := &stunResponder{logf: logf, answers: rate.NewLimiter(stunAnswersPerSecond, stunBurst),
-		perSource: map[netip.Prefix]*rate.Limiter{}}
+		perSource: newSTUNRates()}
 	v4, err := listenSTUNFamily("udp4", port, logf)
 	if err != nil {
 		return nil, err
@@ -241,28 +243,9 @@ func (s *stunResponder) serve(sock *stunSocket) {
 // allow reports whether a request from a is answered, by the rates from its
 // host, an IPv6 address's /64, and in all.
 func (s *stunResponder) allow(a netip.Addr) bool {
-	bits := 64
-	if a.Is4() {
-		bits = 32
-	}
-	host, _ := a.Prefix(bits)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	l := s.perSource[host]
-	if l == nil {
-		if len(s.perSource) >= stunSources && time.Since(s.pruned) >= time.Second {
-			s.pruned = time.Now()
-			for h, l := range s.perSource {
-				if l.Tokens() >= 2*stunPerSource {
-					delete(s.perSource, h)
-				}
-			}
-		}
-		if len(s.perSource) >= stunSources {
-			return s.answers.Allow()
-		}
-		l = rate.NewLimiter(stunPerSource, 2*stunPerSource)
-		s.perSource[host] = l
-	}
-	return l.Allow() && s.answers.Allow()
+	return s.perSource.Allow(admit.Host(a)) && s.answers.Allow()
+}
+
+func newSTUNRates() *admit.Rates[netip.Prefix] {
+	return admit.NewRates[netip.Prefix](stunPerSource, 2*stunPerSource, stunSources)
 }

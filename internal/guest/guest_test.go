@@ -115,7 +115,11 @@ func TestASecondSaltIsRefused(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		ch, err := inv.Accept(c)
+		hello, err := enroll.ReadHello(c)
+		if err != nil {
+			return
+		}
+		ch, err := inv.AcceptHello(hello, c)
 		if err != nil {
 			return
 		}

@@ -142,11 +142,17 @@ below the epoch floor is held under a rollback alarm. Implemented in `trust/log`
   `MaxHashesPerFrame` the ones nothing hangs from first, and from such a cut-short
   list a peer is taken to hold the ancestors of what it lists. Each side answers from the *peer's* anchor, so
   sync converges whatever the log's size and across compaction
-  ([09-mesh-layer-notes.md](09-mesh-layer-notes.md)).
+  ([09-mesh-layer-notes.md](09-mesh-layer-notes.md)). From schema 21 a hello
+  says what its sender holds of each node's announcement, address key and
+  lease, and the answer carries what is newer.
 - **Transports:** records are self-certifying, so they may arrive over any
   transport: log sync through the tunnel, an enrollment, a catch-up.
-- **Schedule:** a new change is pushed to all reachable members at once;
-  anti-entropy with a random member every 2 min; full sync on daemon start.
+- **Schedule:** a change to the log is pushed at once to `PushFanout`
+  members that do not rest and to every one that does, by its author and by
+  each member that hears it; another's announcement, address key or lease is
+  passed on to those that do not rest alone; a device that rests passes on
+  nothing and pushes its own news to two; anti-entropy with a random member
+  every 2 min; full sync on daemon start.
 - **Compaction:** juistd moves its anchor to the checkpoint before the newest once
   every live member has been heard past the newest, or one has compacted that far,
   and keeps the chain from its previous anchor for those behind
@@ -246,7 +252,7 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
 - **State integrity:** log + epoch floor persisted with fsync before any action
   depends on them; state file corruption ⇒ refuse to start, never silently
   re-genesis.
-- **Parser hygiene:** every externally supplied input has a fuzz target; M24 adds
+- **Parser hygiene:** every externally supplied input has a fuzz target; M25 adds
   those still missing ([06-verification.md](06-verification.md) §2).
 
 ## Data plane details

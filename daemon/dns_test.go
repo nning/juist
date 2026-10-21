@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/netip"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/internal/resolved"
@@ -188,7 +190,7 @@ func TestAnExitNodeAnswersItsMembersDNS(t *testing.T) {
 	if _, s := f.mgr.exitState(); s.DNS != DefaultDNSPort {
 		t.Errorf("the data plane redirects DNS to port %d", s.DNS)
 	}
-	f.d.SetServeConsent(false)
+	f.d.changePrefs(func(p *Prefs) { p.ServeExit = false })
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -455,5 +457,79 @@ func TestAVPNsDNSIsThroughWithoutAResolvConf(t *testing.T) {
 		through(string, []netip.AddrPort) (bool, string)
 	}).through(filepath.Join(t.TempDir(), "absent"), at); !ok {
 		t.Errorf("not through: %s", why)
+	}
+}
+
+// watchedHostDNS is a fakeHostDNS whose resolver restarts on restart, and
+// which is watched once watching, taken for a restart on subscribing as
+// resolved's watcher does.
+type watchedHostDNS struct {
+	fakeHostDNS
+	restart  chan struct{}
+	watching bool
+}
+
+func (h *watchedHostDNS) watch(ctx context.Context, watching func(bool), restarted func()) {
+	if !h.watching {
+		return
+	}
+	watching(true)
+	defer watching(false)
+	restarted()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-h.restart:
+			restarted()
+		}
+	}
+}
+
+func (h *watchedHostDNS) routes() int {
+	_, calls := h.now()
+	return strings.Count(strings.Join(calls, " "), "route")
+}
+
+// A resolver that starts again is given the routing again at once, which it
+// has forgotten; while its restarts are watched, the routing is renewed past
+// dnsRenewalWatched alone, and every dnsRenewal where they are not.
+func TestARestartedResolverIsRoutedAgain(t *testing.T) {
+	for _, watching := range []bool{true, false} {
+		t0 := time.Now()
+		c := &clock{now: t0}
+		host := &watchedHostDNS{restart: make(chan struct{}), watching: watching}
+		f := exitFixture(t, 1, -1, func(o *Options) { o.HostDNS = host; o.Clock = c.get })
+		exit := f.nw.devices[1]
+		f.learnExitDNS(t, exit, 7001, true, DefaultDNSPort)
+		f.d.SetExitChoice(ExitChoice{Chosen: true, Node: exit.record.Identity})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			f.d.Run(ctx)
+		}()
+		first := 1
+		if watching {
+			first = 2 // and again on subscribing
+		}
+		waitFor(t, 5*time.Second, "the host's DNS routed", func() bool { return host.routes() >= first })
+		waitFor(t, 5*time.Second, "the watch", func() bool { return f.d.dns.watched.Load() == watching })
+		routed := host.routes()
+		c.set(t0.Add(2 * dnsRenewal))
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		renewed := host.routes() > routed
+		if renewed == watching {
+			t.Fatalf("watching %v, the routing renewed %v after %v", watching, renewed, 2*dnsRenewal)
+		}
+		if watching {
+			host.restart <- struct{}{}
+			waitFor(t, 5*time.Second, "the host's DNS routed again after its resolver restarted",
+				func() bool { return host.routes() > routed })
+		}
+		cancel()
+		<-done
 	}
 }

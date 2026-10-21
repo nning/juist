@@ -59,9 +59,15 @@ func unitOf(n int) string {
 
 // startCmd, enableCmd, disableCmd and logCmd are what starts instance n,
 // enables the default's, disables n and shows n's log, as hints give them.
-// The base system has no sudo: they say "as root".
-func startCmd(n int) string { return "service " + strings.Join(rcArgs(n, "start"), " ") + ", as root" }
-func enableCmd() string     { return "sysrc juistd_enable=YES, then service juistd start, as root" }
+// The base system has no sudo: they say "as root". The default's start
+// enables it too, since rc refuses to start it while juistd_enable is NO.
+func startCmd(n int) string {
+	if n == 0 {
+		return enableCmd()
+	}
+	return "service " + strings.Join(rcArgs(n, "start"), " ") + ", as root"
+}
+func enableCmd() string { return "sysrc juistd_enable=YES, then service juistd start, as root" }
 
 func disableCmd(n int) string {
 	if n == 0 {

@@ -41,11 +41,14 @@ against the keystore's own pin (`networks/`: the head it last verified, that
 head's `SigHash`, and the admins and threshold that governed it), signs against
 that, and hands back only signed records. It signs nothing the daemon built
 without rebuilding it: a rotation record must be the one the CLI's own log
-produces for the staged keys. A later log must hold the pinned head or a copy
-of it; failing that, either this side's own fork choice over the chain and the
-daemon's orphans rejects the head, or a checkpoint a quorum of the pinned admins
-signed, descending from the head, stands in for it once compacted away. A
-truncated log passes neither.
+produces for the staged keys, and come with proof by the device's current
+identity key, since which device it is is the daemon's word too. A later log
+must hold the pinned head or a copy of it; failing that, either this side's
+own fork choice over the chain and the daemon's orphans rejects the head, or a
+checkpoint a quorum of the pinned admins signed, descending from the head,
+stands in for it once compacted away. A truncated log passes neither. A daemon
+that turns up holding another network is refused until the person deletes the
+pin naming the old one.
 
 **The inviting half runs in the daemon too.** `juist invite` asks juistd to
 offer the invite (`CmdInvite`, `internal/host`): listener, LAN answers, DHT and

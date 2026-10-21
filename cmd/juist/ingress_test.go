@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nning/juist/ipc"
 )
@@ -57,6 +58,51 @@ func TestIngressServe(t *testing.T) {
 // end its TLS and send it on to HOST:PORT, and adds to what was said before;
 // the terminator starts by the package's script and stops with serving,
 // which keeps where names go, or with the last of them.
+// The CAA record a terminator's account brings while publish add waits for
+// it is printed by that one run.
+func TestPublishAddWaitsForTheCAARecord(t *testing.T) {
+	t.Parallel()
+	h := newHost(t)
+	h.mustRun("create", "home", "--device", "laptop")
+	h.layout.serveScript = filepath.Join(t.TempDir(), "serve.sh")
+	if err := os.WriteFile(h.layout.serveScript, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.mustRun("network", "domain", "pub.example.org")
+	h.layout.caaWait = 10 * time.Second
+	sent := make(chan error, 1)
+	go func() {
+		// Once juistd serves the name, as the terminator would once the CA answers.
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			resp, err := ipc.Call(h.layout.socket(0), ipc.Request{Command: ipc.CmdStatus})
+			if err == nil && resp.Status.Publish != nil && len(resp.Status.Publish.Serving) > 0 {
+				break
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+		_, err := ipc.Call(h.layout.socket(0), ipc.Request{Command: ipc.CmdServing,
+			Account: &ipc.ACMEAccount{URI: "https://ca.example/acct/7", Issuers: []string{"ca.example"}}})
+		sent <- err
+	}()
+	out := h.mustRun("publish", "add", "immich", "127.0.0.1:2283")
+	if err := <-sent; err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, out, `immich.pub.example.org. CAA 0 issue "ca.example; accounturi=https://ca.example/acct/7"`)
+}
+
+// A CAA record juistd sends empty is passed over.
+func TestAnEmptyCAARecordIsPassedOver(t *testing.T) {
+	t.Parallel()
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	a.host = &hostLayout{}
+	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true, Derived: ipc.Derived{
+		Publish: &ipc.Publish{CAA: []string{"", `x.example. CAA 0 issue "ca.example"`}}}}}
+	a.showCAA("x.example")
+	mustContain(t, out.String(), `x.example. CAA 0 issue "ca.example"`)
+}
+
 func TestPublishAddEndsTLS(t *testing.T) {
 	t.Parallel()
 	h := newHost(t)

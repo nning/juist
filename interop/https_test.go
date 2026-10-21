@@ -54,6 +54,7 @@ func httpsAlone(t *testing.T, fb, lx *vm, work, fb4, lx4 string) {
 			t.Logf("lx:\n%s", out)
 			out, _ = fb.try("juist devices; grep -E 'home is now|report:|discovered' /var/log/juistd.log | tail -40; "+
 				"juist status; juist health; tail -40 /var/log/juistd.log; tail -20 /tmp/pebble.log; "+
+				"tail -5 /tmp/answer.log; sockstat -l | grep -F :5399; "+
 				"tail -30 /var/log/juist-ingress.log; ls -la /var/run/juist; sockstat -u | grep juist; id juist-ingress",
 				time.Minute)
 			t.Logf("fb:\n%s", out)
@@ -70,7 +71,7 @@ sysctl -qw net.ipv4.ip_forward=0
 juist set --relay-name ""
 rm -f /etc/systemd/system/juistd.service.d/pebble.conf; systemctl daemon-reload; systemctl restart juistd`, 3*time.Minute)
 		fb.try(`juist set --relay-name ""; sysrc -q -x juistd_env juistd_args; service juistd restart
-pkill -f '[p]robe answer'; daemon -f /tmp/probe answer 127.0.0.1:5399 127.0.0.1`, 3*time.Minute)
+pkill -f '[p]robe answer'; daemon -f -o /tmp/answer.log /tmp/probe answer 127.0.0.1:5399 127.0.0.1`, 3*time.Minute)
 		// The subtests after this one start from a tunnel up again.
 		lx.try("for i in $(seq 60); do ping -c1 -W2 "+fb4+" >/dev/null && break; sleep 3; done", 4*time.Minute)
 	})
@@ -79,7 +80,7 @@ pkill -f '[p]robe answer'; daemon -f /tmp/probe answer 127.0.0.1:5399 127.0.0.1`
 	// Both log verbosely, so that a failure shows where each is homed and
 	// which relays its measurements reach.
 	fb.run(t, `pkill -f '[p]robe answer'
-daemon -f /tmp/probe answer 127.0.0.1:5399 127.0.0.1 `+relayLX+`=`+lx.lanAddr+`
+daemon -f -o /tmp/answer.log /tmp/probe answer 127.0.0.1:5399 127.0.0.1 `+relayLX+`=`+lx.lanAddr+`
 sysrc -q juistd_env=SSL_CERT_FILE=/tmp/ca.pem juistd_args="--verbose --acme https://`+fb.lanAddr+`:14000/dir"
 service juistd restart >/dev/null`)
 	lx.run(t, `set -e

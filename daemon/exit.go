@@ -78,24 +78,6 @@ func SaveExitChoice(path string, c ExitChoice) error {
 	return statedir.WriteFilePrivate(path, []byte(c.Node.String()+"\n"))
 }
 
-// SetExitChoice makes c the exit node this device uses, from the next
-// reconcile on.
-func (d *Daemon) SetExitChoice(c ExitChoice) {
-	d.mu.Lock()
-	d.exitChoice = c
-	d.mu.Unlock()
-	d.MarkDirty()
-}
-
-// SetServeConsent records whether this device's operator agrees to serve as
-// an exit node where the log grants it the role.
-func (d *Daemon) SetServeConsent(on bool) {
-	d.mu.Lock()
-	d.serveConsent = on
-	d.mu.Unlock()
-	d.MarkDirty()
-}
-
 // An exitPlan is what one reconcile decides about exit nodes.
 type exitPlan struct {
 	egress  conn.Egress
@@ -300,7 +282,7 @@ func (d *Daemon) applyExit(p exitPlan) {
 	p.status.Serving = len(p.serve.Routes) > 0
 	p.subnets.Serving = p.serve.Subnets
 	if !p.isolate {
-		p.status.AnswersThrough = d.manager.AnswersThrough()
+		p.status.AnswersThrough = d.answersThrough()
 	}
 	port := d.serveDNS(p.status.Serving, p.dnsServe, p.dnsOverlay)
 	if port != 0 && p.serve.DNS != 0 {
@@ -407,6 +389,19 @@ func (d *Daemon) walkSuccessor(id types.Identity) (types.Identity, bool) {
 	return id, moved
 }
 
+// answersThrough says why answers to connections that came in by another
+// device would go through the exit node, as [conn.Manager.AnswersThrough].
+func (d *Daemon) answersThrough() string { return d.manager.AnswersThrough() }
+
+// SetExitChoice makes c the exit node this device uses, from the next
+// reconcile on.
+func (d *Daemon) SetExitChoice(c ExitChoice) {
+	d.mu.Lock()
+	d.exitChoice = c
+	d.mu.Unlock()
+	d.MarkDirty()
+}
+
 // followExit makes the node from's identity rotated to the choice, where from
 // is still chosen, and has it kept.
 func (d *Daemon) followExit(from, to types.Identity) {
@@ -416,8 +411,16 @@ func (d *Daemon) followExit(from, to types.Identity) {
 		d.exitChoice.Node = to
 	}
 	d.mu.Unlock()
-	if still && d.onExitMoved != nil {
-		go d.onExitMoved(from, to)
+	if still {
+		d.sayMoved()
+	}
+}
+
+// sayMoved tells [Options.Moved] the mesh has something to follow.
+func (d *Daemon) sayMoved() {
+	select {
+	case d.moved <- struct{}{}:
+	default:
 	}
 }
 

@@ -22,4 +22,4 @@ publish:
       de: Bekommt die entschlüsselte Verbindung.
   legend:
     en: "The ingress sees the name, the client's address, sizes and timing, not the content."
-    de: "Die Ingress sieht den Namen, die Adresse des Clients, Datenmengen und Zeitpunkte, aber nicht den Inhalt."
+    de: "Der Ingress sieht den Namen, die Adresse des Clients, Datenmengen und Zeitpunkte, aber nicht den Inhalt."

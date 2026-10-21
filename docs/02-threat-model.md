@@ -19,7 +19,7 @@
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
 | Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; once the network has an access policy (M14), only members it passes use one, enforced at the exit node or router |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
-| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M27, after v1.0); update transparency (roadmap item, not v1) |
+| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M28, after v1.0); update transparency (roadmap item, not v1) |
 
 ## Out of scope / consciously accepted
 
@@ -158,7 +158,7 @@ them by number.
    member's overlay address by a device that is no juist device. Tailscale drops
    only the second. What this costs: a container or VM on a bridge of the host no
    longer reaches the host's own overlay address, and a LAN host no longer reaches
-   a subnet router's. **FreeBSD is still open** (M23): it takes an address by any
+   a subnet router's. **FreeBSD is still open** (M24): it takes an address by any
    interface too, and pf, which juist runs only to serve or use an exit node, is
    where the same two rules belong. There a service bound only to an overlay
    address stays LAN-reachable, and an overlay source is no evidence that a packet
@@ -182,7 +182,7 @@ them by number.
    is the device keys. Bounded by: a device is still removed from each network
    by that network's quorum. A user per instance, which would close it, needs
    the packaging and each instance's view of the one below reworked, and is
-   left for the boundaries on a host, before the audit (M23).
+   left for the boundaries on a host, before the audit (M24).
 10. **Admin devices see what waits for the admins (M5b).** A change waiting
    for votes is sealed to the admin keys, but the juistd of every admin device
    that carries it sees its outside: which admin key handed it on, when it
@@ -212,8 +212,8 @@ them by number.
    enforces what it receives: a member that ignores its own policy reaches
    nothing the receiver does not pass, and a member that ignores the
    receiving side lets in what it chooses, its own risk. Past the target
-   scale, address keys beyond a hello's 2 MiB travel in their owners' own
-   hellos alone.
+   scale, address keys beyond a frame's 2 MiB travel from their owners
+   alone.
 12. **A tunnel is post-quantum against outsiders at once, against members
    once its pair has a key (M15).** A pair's first preshared key comes from
    the group secret, so a member holding that epoch's secret, one removed
@@ -253,7 +253,8 @@ them by number.
    that member under a restricted access policy. A hint naming another
    disco key has its member probed at once, two probes missed in a row
    finding it down; it changes the disco key of no tunnel that answers,
-   nor an announcement's relay, epoch or pair store, adds no
+   nor an announcement's relay, epoch or pair store, makes no member
+   rest and be checked quietly, adds no
    relay, relay name, route or consent, and a disco key it shares with an
    announcement leaves the hint's member out, not the announcement's. A
    device known by a hint alone exchanges no pair key, its preshared key is
@@ -285,6 +286,28 @@ them by number.
    good, each refusing the other's records. No record is ever accepted on
    that word.
 
+15. **Strangers can still crowd a member out of a relay (audit 2026-10-19).**
+   A relay holds the connections nothing admitted yet by site (an IPv4 /24,
+   an IPv6 /48), group (an IPv4 address, an IPv6 /56) and host, and a
+   newcomer past a bound closes the oldest of the largest. Who churns
+   connections faster than a member's TLS and DERP handshake completes still
+   pushes the member out where it shares the member's group, holds about
+   256/m groups of the member's site while the member's group holds m, or
+   holds as many sites as the 1024 in all (for IPv6 one /38). Behind NAT64
+   every IPv4 client is one host. A rendezvous stream whose peer is never
+   heard at the address it first heard follows the first other source after
+   three quiet keepalives, a stranger's on the path among them.
+
+16. **Strangers can delay a member's log sync that waits on a round trip
+   (refactoring 2026-10-19).** A node holds eight connections that have
+   said nothing yet, past which it closes the oldest of the host holding
+   the most in the group (an IPv6 /56) and site (an IPv4 /24, an IPv6 /48)
+   holding the most; who opens about eight a round trip from seven sites,
+   from fewer against several silent members of one site (a household, a
+   CGNAT pool), or from the member's own host, still closes a member's
+   before it authenticates where that takes a round trip, as a catch-up
+   does. A member whose hello comes at once is rarely held up.
+
 ## Security design rules derived from the above
 
 - No component outside the member set is ever trusted for *integrity* of membership —
@@ -292,6 +315,10 @@ them by number.
 - Every message that changes state is signed and chained; every message that carries
   state advertises the log head.
 - Freshness is enforced by the *acceptor* (fail closed), never assumed from the sender.
+- juistd forwards a name only where the host's systemd-resolved would send it, else
+  refuses it, and refuses one resolved would ask over DNS over TLS only where the
+  plaintext would cross the device's own local network (its resolver, no exit node
+  in use), not for members, whose queries leave at the exit node's site.
 - Prefer attributable signatures (audit trail) over threshold/aggregated ones.
 - The data plane never depends on the group secret alone: WireGuard's handshake
   holds without it, and a pair key replaces it as the preshared key; discovery

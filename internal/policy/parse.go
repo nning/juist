@@ -150,9 +150,9 @@ func lex(src string) ([]token, error) {
 	return append(toks, token{tEOF, "", line}), nil
 }
 
-// TestLines are the lines src's tests start on, in order; nil where src does
+// CaseLines are the lines src's tests start on, in order; nil where src does
 // not read.
-func TestLines(src string) []int {
+func CaseLines(src string) []int {
 	toks, err := lex(src)
 	if err != nil {
 		return nil
@@ -647,12 +647,7 @@ func sortRefs(r *types.PolicyRefs, at token) error {
 	if len(r.Names) > 0 && (r.Any || len(r.Nodes)+len(r.Tables)+len(r.Prefixes) > 0 || r.Internet) {
 		return &Error{Line: at.line, Msg: "a rule to names names nothing else"}
 	}
-	slices.SortFunc(r.Prefixes, func(a, b netip.Prefix) int {
-		if c := a.Addr().Compare(b.Addr()); c != 0 {
-			return c
-		}
-		return a.Bits() - b.Bits()
-	})
+	slices.SortFunc(r.Prefixes, types.ComparePrefix)
 	for i := 1; i < len(r.Prefixes); i++ {
 		if r.Prefixes[i] == r.Prefixes[i-1] {
 			return &Error{Line: at.line, Msg: fmt.Sprintf("%s named twice", r.Prefixes[i])}

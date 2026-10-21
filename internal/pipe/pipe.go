@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"net"
-	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -157,100 +156,4 @@ func (c active) Write(p []byte) (int, error) {
 		c.moved.Store(true)
 	}
 	return n, err
-}
-
-// Sources bounds the connections from one source at once: Max from an IPv4
-// address or an IPv6 /64, as one host holds, and Max*sitePerHost from an
-// IPv4 /24 or an IPv6 /48, as one site's hosts hold together.
-type Sources struct {
-	Max int
-
-	mu sync.Mutex
-	n  map[netip.Prefix]int
-}
-
-// Take counts a connection from a, and reports whether a's are within the
-// bound; Done gives back one taken.
-func (s *Sources) Take(a netip.Addr) bool {
-	host, site := sourceOf(a)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.n == nil {
-		s.n = map[netip.Prefix]int{}
-	}
-	if s.n[host] >= s.Max || s.n[site] >= s.Max*sitePerHost {
-		return false
-	}
-	s.n[host]++
-	s.n[site]++
-	return true
-}
-
-// Done gives back a connection Take counted.
-func (s *Sources) Done(a netip.Addr) {
-	host, site := sourceOf(a)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, p := range []netip.Prefix{host, site} {
-		if s.n[p]--; s.n[p] <= 0 {
-			delete(s.n, p)
-		}
-	}
-}
-
-// sitePerHost is how many hosts' bounds one site's together are.
-const sitePerHost = 4
-
-// sourceOf is a's host and site; the two differ in length, so share a map.
-func sourceOf(a netip.Addr) (host, site netip.Prefix) {
-	a = a.Unmap()
-	if a.Is4() {
-		host = netip.PrefixFrom(a, 32)
-		site, _ = a.Prefix(24)
-		return host, site
-	}
-	host, _ = a.Prefix(64)
-	site, _ = a.Prefix(48)
-	return host, site
-}
-
-// Named are the connections open for each name, to close those for a name
-// no longer served.
-type Named struct {
-	mu    sync.Mutex
-	conns map[any]named
-}
-
-type named struct {
-	name  string
-	close func()
-}
-
-// Add keeps c under name until Remove; close ends it.
-func (n *Named) Add(c any, name string, close func()) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.conns == nil {
-		n.conns = map[any]named{}
-	}
-	n.conns[c] = named{name, close}
-}
-
-// Remove forgets c.
-func (n *Named) Remove(c any) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	delete(n.conns, c)
-}
-
-// CloseUnless ends every connection whose name served does not hold.
-func (n *Named) CloseUnless(served func(name string) bool) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	for c, e := range n.conns {
-		if !served(e.name) {
-			e.close()
-			delete(n.conns, c)
-		}
-	}
 }

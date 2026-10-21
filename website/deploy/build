@@ -4,7 +4,7 @@
 # juist-build; REPO names another repository to build from than nning/juist.
 set -eu
 name=$1
-export GOTOOLCHAIN=go1.27.2
+export GOTOOLCHAIN=go1.27.3
 # /tmp may be a small tmpfs; compiling Hugo needs more.
 export GOTMPDIR="$HOME/.cache/go-tmp"
 dir="$HOME/site/$name"

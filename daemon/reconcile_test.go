@@ -953,36 +953,44 @@ func TestRestartRecoversPastEpochs(t *testing.T) {
 // epidemic propagation depends on relaying, so a revocation arriving mid-round
 // would otherwise converge at the two-minute backstop.
 func TestADisplacedPushIsDeferredNotDropped(t *testing.T) {
-	f := newReconcileFixture(t, 2)
-	ctx := t.Context()
+	// A push to every member deferred reaches every member; one to those
+	// awake alone, those alone.
+	for _, full := range []bool{true, false} {
+		f := newReconcileFixture(t, 2)
+		ctx := t.Context()
 
-	// Drain the signal the fixture's own construction may have left.
-	select {
-	case <-f.d.dirty:
-	default:
-	}
+		// Drain the signal the fixture's own construction may have left.
+		select {
+		case <-f.d.dirty:
+		default:
+		}
+		f.d.pushRests.Store(false)
 
-	release := make(chan struct{})
-	running := make(chan struct{})
-	f.d.inBackground(ctx, func(context.Context) {
-		close(running)
-		<-release
-	})
-	<-running
+		release := make(chan struct{})
+		running := make(chan struct{})
+		f.d.inBackground(ctx, func(context.Context) {
+			close(running)
+			<-release
+		}, false)
+		<-running
 
-	// A second round, asked for while the first is in flight.
-	f.d.inBackground(ctx, func(context.Context) { t.Error("two rounds ran at once") })
-	select {
-	case <-f.d.dirty:
-		t.Fatal("the displaced round was signalled before the first one finished")
-	default:
-	}
+		// A second round, asked for while the first is in flight.
+		f.d.inBackground(ctx, func(context.Context) { t.Error("two rounds ran at once") }, full)
+		select {
+		case <-f.d.dirty:
+			t.Fatal("the displaced round was signalled before the first one finished")
+		default:
+		}
 
-	close(release)
-	select {
-	case <-f.d.dirty:
-	case <-time.After(2 * time.Second):
-		t.Fatal("a push displaced by a running round was dropped; nothing will relay it")
+		close(release)
+		select {
+		case <-f.d.dirty:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a push displaced by a running round was dropped; nothing will relay it")
+		}
+		if got := f.d.pushRests.Load(); got != full {
+			t.Errorf("a displaced push to every member %v reaches members that rest %v", full, got)
+		}
 	}
 }
 
@@ -1363,11 +1371,11 @@ func TestANewerHintsDiscoKeyIsInstalledWhileItsMemberIsNotReached(t *testing.T) 
 	f.mgr.mu.Lock()
 	f.mgr.answers = nil
 	f.mgr.mu.Unlock()
-	for len(f.d.dirty) > 0 {
-		<-f.d.dirty
+	for len(f.d.soon) > 0 {
+		<-f.d.soon
 	}
 	f.d.refreshReach(t.Context())
-	if len(f.d.dirty) == 0 {
+	if len(f.d.soon) == 0 {
 		t.Fatal("a member found down with a newer hint's disco key held asks for no reconcile")
 	}
 	if err := f.d.Reconcile(); err != nil {

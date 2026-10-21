@@ -400,8 +400,8 @@ func TestTheRendezvousBoundsClientsByNetwork(t *testing.T) {
 	for i := range maxRendezvousSources + 10 {
 		h.allowSource(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}), now.Add(time.Duration(i)))
 	}
-	if len(h.sources) > maxRendezvousSources {
-		t.Errorf("%d clients held", len(h.sources))
+	if h.sources.Len() > maxRendezvousSources {
+		t.Errorf("%d clients held", h.sources.Len())
 	}
 	if !h.allowSource(netip.MustParseAddr("192.0.2.200"), now) {
 		t.Error("a new client found no room")

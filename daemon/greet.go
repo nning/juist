@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"net/netip"
 	"time"
 
@@ -59,15 +58,7 @@ func (d *Daemon) greetAt(id types.Identity, at netip.AddrPort) {
 		defer d.waits.done()
 		// Closing the daemon ends a session under way rather than waiting it
 		// out: Close, and a reset holding the service, wait for this.
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() {
-			select {
-			case <-d.closed:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
+		ctx := d.ctx
 		var waited time.Duration
 		for _, after := range d.greetAfter {
 			select {

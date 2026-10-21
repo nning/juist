@@ -18,6 +18,16 @@ type sealer struct{ p Platform }
 func (s sealer) Seal(plain []byte) ([]byte, error)  { return s.p.Seal(plain) }
 func (s sealer) Open(sealed []byte) ([]byte, error) { return s.p.Open(sealed) }
 
+// noPlatform is the platform while no core runs: it refuses everything.
+type noPlatform struct{}
+
+func (noPlatform) Protect(int32) bool              { return false }
+func (noPlatform) Establish(string) (int32, error) { return -1, errNoCore }
+func (noPlatform) Interfaces() (string, error)     { return "", errNoCore }
+func (noPlatform) Seal([]byte) ([]byte, error)     { return nil, errNoCore }
+func (noPlatform) Open([]byte) ([]byte, error)     { return nil, errNoCore }
+func (noPlatform) Log(string)                      {}
+
 // establish is what [Platform.Establish] brings the interface up with: its
 // addresses and the routes into it, as prefixes, the DNS servers that take
 // all of the phone's lookups, where any, and its MTU.

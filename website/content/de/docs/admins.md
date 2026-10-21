@@ -72,8 +72,9 @@ ist nur ein Netz betroffen, und zwei Netze teilen sich nie einen
 Schlüssel.
 
 - Ein Schlüssel aus `juist admins new` wird unter dem ersten Netz abgelegt,
-  in dessen Log er auftaucht. Mit `juist admins new alice --network home`
-  legst du das Netz gleich fest.
+  in dessen Log er auftaucht, sobald `juist admins` ihn auflistet oder er
+  dort eine Änderung unterschreibt. Mit `juist admins new alice --network
+  home` legst du das Netz gleich fest.
 - Soll ein neues Netz mit einem Schlüssel verwaltet werden, den du schon
   hast, gibst du ihn an: `juist create lab --admin-key alice@home`.
 - `juist admins` listet die Schlüssel auf diesem Rechner auf und zu jedem die
@@ -181,10 +182,12 @@ Ort und Stelle und wendet die Änderung an, sobald sie genug Stimmen hat.
 `juist apply` macht dasselbe.
 
 Auf einem Rechner, der zu keinem Netz gehört, kann ein Admin die Aufnahme
-eines Geräts bestätigen. Änderungen, die beeinflussen können, wer bestätigt
-oder wer Voucher ist, kann er dort aber nicht bestätigen: kein Entfernen,
-keine Rolle, keinen Admin-Schlüssel und kein Quorum. Wen eine solche Änderung
-betrifft, zeigt nur das Log.
+eines Geräts bestätigen, das kein Voucher wird, und Änderungen wie neue
+Tunnelschlüssel, ein neues Gruppengeheimnis, Namen oder die Zugriffsregeln.
+Nichts, was beeinflussen kann, wer bestätigt oder wer Voucher ist, lässt
+sich dort bestätigen, etwa ein Entfernen, eine Rolle, die Aufnahme eines
+Vouchers, ein neuer Identitätsschlüssel, ein Admin-Schlüssel oder das
+Quorum. Wen eine solche Änderung betrifft, zeigt nur das Log.
 
 ## Hinweise
 
@@ -213,16 +216,11 @@ betrifft, zeigt nur das Log.
 - [Zugriffsregeln]({{< relref "docs/access" >}}) änderst du genauso.
   `juist approve policy.rec` zeigt die Änderung als Diff gegen die geltenden
   Regeln.
-- Fügt ein Update von juist dem Log des Netzes etwas hinzu, zeigt die Zeile
-  `Schema` von `juist status` das Schema des Netzes und in Klammern das
-  dieser Version, etwa `18 (19)`. Auf deinem Gerät rät `juist health` dann
-  `once every device runs this version: juist log upgrade`. `juist devices`
-  zeigt, welches Schema das juist jedes Geräts kennt. Sobald alle Geräte die
-  neue Version haben, führe `juist log upgrade` aus. Geräte mit älteren
-  Versionen übernehmen ab dem Upgrade keine Änderungen, bis sie aktualisiert
-  sind: `juist health` nennt sie auf allen anderen Geräten, und
-  `juist status` meldet es auf ihnen selbst. Hat eines keinen Tunnel zu
-  einem Gerät, zeigt `juist devices` es dort als `outdated`.
+- Eine neue Version von juist kann ein neues Schema mitbringen, also ein
+  neues Format für die Änderungen im Log. Sobald jedes Gerät die Version hat,
+  hebt ein Admin das Netz mit `juist log upgrade` darauf an. Bis dahin
+  erinnert `juist health` auf dem Gerät eines Admins daran. Die Schritte
+  stehen unter [juist aktualisieren]({{< relref "docs/updating" >}}).
 - juist liest Netze, deren Log auf Schema 18 oder später steht, in denen
   jede Änderung quantensicher signiert ist
   ([Sicherheit]({{< relref "docs/security" >}}#quantensicher)). Ein Netz,

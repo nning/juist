@@ -3,6 +3,7 @@ package statuspage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -300,5 +301,46 @@ func TestThePageSaysHTTPSAlone(t *testing.T) {
 	p.Status.HTTPS.Relays = nil
 	if body := serve(t, p, ipc.ShowNone, member, "/").Body.String(); !strings.Contains(body, "no relay on 443/tcp") {
 		t.Errorf("the page does not say no relay is on 443:\n%s", body)
+	}
+}
+
+// The page says the network's schema as juist status does, and the one this
+// juist runs where the network is behind it.
+func TestThePageSaysTheSchema(t *testing.T) {
+	p := sample()
+	body := serve(t, p, ipc.ShowServices, member, "/").Body.String()
+	if want := fmt.Sprintf("<dt>Schema</dt><dd>%d</dd>", types.CurrentSchema); !strings.Contains(body, want) {
+		t.Errorf("a member is not shown the schema, %s:\n%s", want, body)
+	}
+	if strings.Contains(serve(t, p, ipc.ShowServices, public, "/").Body.String(), "Schema") {
+		t.Error("the public seeing services is shown the schema")
+	}
+	p.Status.Schema = types.CurrentSchema - 1
+	body = serve(t, p, ipc.ShowServices, member, "/").Body.String()
+	if want := fmt.Sprintf(`<dt>Schema</dt><dd class="relay">%d (%d)</dd>`, types.CurrentSchema-1,
+		types.CurrentSchema); !strings.Contains(body, want) {
+		t.Errorf("a network behind this juist's schema is not marked, %s:\n%s", want, body)
+	}
+}
+
+// Each device's schema shows as juist devices shows it: marked where older
+// than this juist's, - where unannounced, and left out where none is.
+func TestThePageSaysEachDevicesSchema(t *testing.T) {
+	p := sample()
+	if body := serve(t, p, ipc.ShowServices, member, "/").Body.String(); strings.Contains(body, "<th>Schema</th>") {
+		t.Errorf("a schema column with no schema announced:\n%s", body)
+	}
+	p.Status.Devices[0].Build, p.Status.Devices[1].Build = types.CurrentSchema, types.CurrentSchema-1
+	body := serve(t, p, ipc.ShowServices, member, "/").Body.String()
+	for _, want := range []string{"<th>Schema</th>",
+		fmt.Sprintf(`<td class="dim schema">%d</td>`, types.CurrentSchema),
+		fmt.Sprintf(`<td class="dim schema relay">%d</td>`, types.CurrentSchema-1),
+		`<td class="dim schema">-</td>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the devices lack %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(serve(t, p, ipc.ShowServices, public, "/").Body.String(), "<th>Schema</th>") {
+		t.Error("the public seeing services is shown the devices' schemas")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -600,76 +601,37 @@ func (l *netnsLab) cleanup() {
 	}
 }
 
-// encodePeers renders nodes as the peer records the receiving helper rebuilds:
+// encodePeers renders nodes as the peer set the receiving helper rebuilds:
 // what the reconciler would hand [Manager.SetPeers], plus the underlay
-// endpoint gossip would have carried.
-func encodePeers(peers []*netnsNode) string {
-	out := make([]string, 0, len(peers))
-	for _, p := range peers {
-		out = append(out, strings.Join([]string{
-			strconv.FormatUint(p.id, 10),
-			p.nodeKey.Public().String(),
-			rawHex(p.discoPub),
-			joinPrefixes(p.addrs),
-			netip.AddrPortFrom(p.underlay, uint16(p.listenPort())).String(),
-			joinPrefixes(p.carries),
-			joinPrefixes(p.subnets),
-		}, "|"))
+// endpoint gossip would have carried. JSON holds no space or line break.
+func encodePeers(nodes []*netnsNode) string {
+	peers := make([]Peer, 0, len(nodes))
+	for _, p := range nodes {
+		peers = append(peers, Peer{
+			ID:        p.id,
+			NodeKey:   p.nodeKey.Public(),
+			DiscoKey:  DiscoPublicFromRaw32(p.discoPub),
+			Addrs:     p.addrs,
+			Routes:    p.carries,
+			Subnets:   p.subnets,
+			Endpoints: []netip.AddrPort{netip.AddrPortFrom(p.underlay, uint16(p.listenPort()))},
+		})
 	}
-	return strings.Join(out, ";")
+	b, err := json.Marshal(peers)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
-// decodePeers is encodePeers' inverse, run in the helper.
+// decodePeers is encodePeers' inverse, run in the helper; "" is no peers.
 func decodePeers(s string) ([]Peer, error) {
 	if s == "" {
 		return nil, nil
 	}
 	var peers []Peer
-	for _, rec := range strings.Split(s, ";") {
-		f := strings.Split(rec, "|")
-		if len(f) != 7 {
-			return nil, fmt.Errorf("peer record %q has %d fields, want 7", rec, len(f))
-		}
-		id, err := strconv.ParseUint(f[0], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("peer ID %q: %w", f[0], err)
-		}
-		var nodePub key.NodePublic
-		if err := nodePub.UnmarshalText([]byte(f[1])); err != nil {
-			return nil, fmt.Errorf("peer node key: %w", err)
-		}
-		discoPub, err := unrawHex(f[2])
-		if err != nil {
-			return nil, fmt.Errorf("peer disco key: %w", err)
-		}
-		addrs, err := splitPrefixes(f[3])
-		if err != nil {
-			return nil, err
-		}
-		ep, err := netip.ParseAddrPort(f[4])
-		if err != nil {
-			return nil, fmt.Errorf("peer endpoint %q: %w", f[4], err)
-		}
-		var routes, subnets []netip.Prefix
-		if f[5] != "" {
-			if routes, err = splitPrefixes(f[5]); err != nil {
-				return nil, err
-			}
-		}
-		if f[6] != "" {
-			if subnets, err = splitPrefixes(f[6]); err != nil {
-				return nil, err
-			}
-		}
-		peers = append(peers, Peer{
-			ID:        id,
-			NodeKey:   nodePub,
-			DiscoKey:  DiscoPublicFromRaw32(discoPub),
-			Addrs:     addrs,
-			Routes:    routes,
-			Subnets:   subnets,
-			Endpoints: []netip.AddrPort{ep},
-		})
+	if err := json.Unmarshal([]byte(s), &peers); err != nil {
+		return nil, fmt.Errorf("peer set: %w", err)
 	}
 	return peers, nil
 }
@@ -716,8 +678,11 @@ type egressTap struct {
 	stop chan struct{}
 	done chan struct{}
 
-	mu   sync.Mutex
-	dsts map[netip.Addr]int
+	port string
+
+	mu    sync.Mutex
+	dsts  map[netip.Addr]int
+	first map[netip.Addr]string // the first frame to each destination, described
 }
 
 // tapEgress starts capturing on a node's bridge port. The port lives in the
@@ -729,16 +694,9 @@ func (l *netnsLab) tapEgress(n *netnsNode) *egressTap {
 	if err != nil {
 		t.Fatalf("looking up bridge port %s: %v", n.port, err)
 	}
-	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, int(htons(unix.ETH_P_ALL)))
+	fd, err := openPortCapture(iface.Index)
 	if err != nil {
-		t.Fatalf("opening a packet socket: %v", err)
-	}
-	if err := unix.Bind(fd, &unix.SockaddrLinklayer{
-		Protocol: htons(unix.ETH_P_ALL),
-		Ifindex:  iface.Index,
-	}); err != nil {
-		unix.Close(fd)
-		t.Fatalf("binding the packet socket to %s: %v", n.port, err)
+		t.Fatalf("capturing on bridge port %s: %v", n.port, err)
 	}
 	// A receive timeout, so the reader notices the stop signal without needing
 	// a packet to arrive first.
@@ -748,7 +706,8 @@ func (l *netnsLab) tapEgress(n *netnsNode) *egressTap {
 		t.Fatalf("setting the capture timeout: %v", err)
 	}
 
-	tap := &egressTap{t: t, stop: make(chan struct{}), done: make(chan struct{}), dsts: map[netip.Addr]int{}}
+	tap := &egressTap{t: t, stop: make(chan struct{}), done: make(chan struct{}), port: n.port,
+		dsts: map[netip.Addr]int{}, first: map[netip.Addr]string{}}
 	go func() {
 		defer close(tap.done)
 		defer unix.Close(fd)
@@ -759,14 +718,16 @@ func (l *netnsLab) tapEgress(n *netnsNode) *egressTap {
 				return
 			default:
 			}
-			nb, _, err := unix.Recvfrom(fd, buf, 0)
+			nb, from, err := unix.Recvfrom(fd, buf, 0)
 			if err != nil {
 				continue // the read timeout, or a signal
 			}
 			if dsts := frameDsts(buf[:nb]); len(dsts) > 0 {
 				tap.mu.Lock()
 				for _, dst := range dsts {
-					tap.dsts[dst]++
+					if tap.dsts[dst]++; tap.dsts[dst] == 1 {
+						tap.first[dst] = frameSummary(buf[:nb], from, iface.Index)
+					}
 				}
 				tap.mu.Unlock()
 			}
@@ -788,6 +749,7 @@ func (tp *egressTap) strangers() []netip.Addr {
 			continue
 		}
 		out = append(out, dst)
+		tp.t.Logf("tap on %s: %d frames to %v, the first %s", tp.port, tp.dsts[dst], dst, tp.first[dst])
 	}
 	return out
 }
@@ -838,6 +800,64 @@ func frameDsts(f []byte) []netip.Addr {
 		return []netip.Addr{netip.AddrFrom4([4]byte(f[38:42]))}
 	}
 	return nil
+}
+
+// openPortCapture opens a packet socket capturing every frame on one interface
+// and on no other.
+func openPortCapture(ifindex int) (int, error) {
+	// Protocol 0 until bound: a socket opened with ETH_P_ALL captures every
+	// interface's frames until bind, and keeps them queued after it.
+	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return -1, fmt.Errorf("opening a packet socket: %w", err)
+	}
+	if err := unix.Bind(fd, &unix.SockaddrLinklayer{Protocol: htons(unix.ETH_P_ALL), Ifindex: ifindex}); err != nil {
+		unix.Close(fd)
+		return -1, fmt.Errorf("binding a packet socket: %w", err)
+	}
+	return fd, nil
+}
+
+// frameSummary describes a captured frame for a failure message: protocol,
+// endpoints, ports, and the interface and direction it was captured on.
+func frameSummary(f []byte, from unix.Sockaddr, port int) string {
+	where := "on an unknown interface"
+	if ll, ok := from.(*unix.SockaddrLinklayer); ok {
+		dir := "from the node"
+		if ll.Pkttype == unix.PACKET_OUTGOING {
+			dir = "to the node"
+		}
+		where = dir
+		if ll.Ifindex != port {
+			where = fmt.Sprintf("%s, on ifindex %d, not the port's %d", dir, ll.Ifindex, port)
+		}
+	}
+	if len(f) < 14 {
+		return fmt.Sprintf("a %d-byte runt %s", len(f), where)
+	}
+	ports := func(proto byte, l4 []byte) string {
+		switch {
+		case (proto == 6 || proto == 17) && len(l4) >= 4:
+			return fmt.Sprintf("%d > %d", binary.BigEndian.Uint16(l4), binary.BigEndian.Uint16(l4[2:]))
+		case (proto == 1 || proto == 58) && len(l4) >= 1:
+			return fmt.Sprintf("type %d", l4[0])
+		}
+		return ""
+	}
+	switch et := binary.BigEndian.Uint16(f[12:14]); {
+	case et == 0x0800 && len(f) >= 34:
+		l4 := f[min(14+int(f[14]&0x0f)*4, len(f)):]
+		return fmt.Sprintf("ipv4 proto %d %v > %v %s, %s", f[23],
+			netip.AddrFrom4([4]byte(f[26:30])), netip.AddrFrom4([4]byte(f[30:34])), ports(f[23], l4), where)
+	case et == 0x86dd && len(f) >= 54:
+		return fmt.Sprintf("ipv6 next header %d %v > %v %s, %s", f[20],
+			netip.AddrFrom16([16]byte(f[22:38])), netip.AddrFrom16([16]byte(f[38:54])), ports(f[20], f[54:]), where)
+	case et == 0x0806 && len(f) >= 42:
+		return fmt.Sprintf("arp op %d for %v from %v, %s", binary.BigEndian.Uint16(f[20:22]),
+			netip.AddrFrom4([4]byte(f[38:42])), netip.AddrFrom4([4]byte(f[28:32])), where)
+	default:
+		return fmt.Sprintf("ethertype %#04x, %s", et, where)
+	}
 }
 
 // htons puts a 16-bit value in network byte order, which is what AF_PACKET's

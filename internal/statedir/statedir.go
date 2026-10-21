@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/nning/juist/gossip"
-	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/types"
 )
 
@@ -113,41 +113,8 @@ const PairsFile = "pairs.secret"
 // LeasePath returns where a home directory keeps its leases.
 func LeasePath(home string) string { return filepath.Join(home, LeaseFile) }
 
-// WriteFilePrivate writes owner-only, through a temporary file so a crash
-// cannot leave a half-written file under the name a later run will read. The
-// temporary name is fresh and created exclusively, so nothing planted in the
-// directory — a symlink under a predictable name — is written through.
-func WriteFilePrivate(path string, b []byte) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp) // a no-op once renamed
-	if err := f.Chmod(0o600); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	// Synced before the rename, so the name never points at bytes the
-	// filesystem has not committed, and the directory after it, so the name
-	// survives a power cut too.
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("renaming %s: %w", tmp, err)
-	}
-	return keys.SyncDir(dir)
-}
+// WriteFilePrivate replaces path whole, owner-only, by [atomicfile.Write].
+func WriteFilePrivate(path string, b []byte) error { return atomicfile.Write(path, b, 0o600) }
 
 // EncodeLeaseFile and DecodeLeaseFile are the lease file's format.
 func EncodeLeaseFile(raw [][]byte) ([]byte, error) { return cbor.Marshal(raw) }
@@ -229,6 +196,13 @@ func OpenLock(path string) (*os.File, error) {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
 	return f, nil
+}
+
+// Unlock drops f's lock and closes f. Closing alone leaves the lock held
+// while a child forked meanwhile has not yet exec'd, as it shares the file.
+func Unlock(f *os.File) {
+	_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+	f.Close()
 }
 
 // ErrHomeInUse is [ShareHome]'s answer while a juistd runs from the directory.

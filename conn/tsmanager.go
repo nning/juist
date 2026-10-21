@@ -1,45 +1,34 @@
 package conn
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"math"
 	"net/netip"
 	"net/url"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
-	"go4.org/netipx"
 	"tailscale.com/health"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/net/dns"
 	"tailscale.com/net/netmon"
-	"tailscale.com/net/tsaddr"
 	"tailscale.com/net/tstun"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tailcfg/nodecap"
-	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/preftype"
-	"tailscale.com/types/views"
 	"tailscale.com/util/eventbus"
 	"tailscale.com/util/usermetric"
-	"tailscale.com/version"
 	"tailscale.com/wgengine"
-	"tailscale.com/wgengine/filter"
-	"tailscale.com/wgengine/filter/filtertype"
 	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/router"
 	"tailscale.com/wgengine/wgcfg"
 
 	"github.com/nning/juist/internal/instance"
+	"github.com/nning/juist/types"
 )
 
 // Options configures a Tailscale-backed [Manager].
@@ -97,6 +86,11 @@ type Options struct {
 	// OnHostRoutesChange is called, possibly from another goroutine, when
 	// what [Manager.HostRoutes] says may have changed.
 	OnHostRoutesChange func()
+
+	// OnInterfacesChange is called, possibly from another goroutine, when
+	// the host's interfaces or their addresses change, on a device of its
+	// own.
+	OnInterfacesChange func()
 
 	// HTTPSOnly sends nothing but TLS to 443/tcp of relays' names: no UDP
 	// and no peer relay, and STUN is ignored. Every packet then goes through
@@ -158,7 +152,7 @@ type tsManager struct {
 	// Guarded by apply.
 	exits exitRouter
 	// hostRouter is the OS router's reading of the host's own routes.
-	hostRouter interface{ hostRoutes() []netip.Prefix }
+	hostRouter hostRouter
 	// inGuard keeps the overlay's addresses to the tunnel where the OS
 	// router can.
 	inGuard overlayGuard
@@ -177,16 +171,31 @@ type tsManager struct {
 	// hold in the map last installed.
 	stun        []string
 	stunRegions atomic.Pointer[map[tailcfg.DERPRegionID]bool]
-	// homeless is whether the map last installed holds STUN servers alone,
-	// and tun the wrapper whose idleness paces STUN then.
-	homeless atomic.Bool
-	tun      *tstun.Wrapper
-	// saving is [tsManager.SetSaving]'s.
-	saving atomic.Bool
+	// homeless is whether the engine is told it has no home: the map last
+	// installed holds STUN servers alone (stunOnly), or the last report
+	// measured no member relay (relayMissing); homeMu orders the telling.
+	// tun is the wrapper whose idleness paces STUN then.
+	homeless, stunOnly, relayMissing atomic.Bool
+	relayLost                        atomic.Int64  // relayMissing set anew, which starts the retries over
+	homed                            chan struct{} // the engine was told it has a home again
+	homeMu                           sync.Mutex
+	tun                              *tstun.Wrapper
+	// saving is [tsManager.SetSaving]'s; silentMu orders it with a quiet
+	// probe's silent disco.
+	saving   atomic.Bool
+	silentMu sync.Mutex
 
 	// relays is the relay set last installed, kept so an unchanged one does
-	// not restart the latency probes. Guarded by apply.
+	// not restart the latency probes, and dm the map installed. Guarded by
+	// apply.
 	relays []Relay
+	dm     *tailcfg.DERPMap
+	// stunDrop is whether a dropSTUNConn is due, stunDropped when the last
+	// ran, in Unix nanoseconds, and unreadLine says once that magicsock's
+	// line naming a new connection no longer reads as conn expects.
+	stunDrop    atomic.Bool
+	stunDropped atomic.Int64
+	unreadLine  sync.Once
 
 	// httpsOnly and proxy are [Options.HTTPSOnly] and [Options.Proxy], and
 	// named the names of the relays installed, those dropped since kept.
@@ -224,67 +233,6 @@ type tsManager struct {
 	// evicting is the peer peerConfig disowns while it is taken out of the
 	// device, the engine's only way to drop a peer's sessions. Set under apply.
 	evicting atomic.Pointer[key.NodePublic]
-}
-
-// peerState is one immutable peer-set snapshot.
-type peerState struct {
-	peers   map[key.NodePublic]Peer             // keyed by WireGuard public key
-	byIP    map[netip.Addr]key.NodePublic       // overlay address -> owner
-	nodes   map[key.NodePublic]tailcfg.NodeView // prebuilt views for peerForIP
-	allowed map[key.NodePublic][]netip.Prefix   // each peer's addresses and routes
-	routes  []routeEntry                        // every peer's routes, by first address
-}
-
-// A selfLookup is this node's addresses and view, as one.
-type selfLookup struct {
-	addrs []netip.Prefix
-	node  tailcfg.NodeView
-}
-
-// A routeEntry is one peer's route as a range of addresses.
-type routeEntry struct {
-	r  netipx.IPRange
-	nk key.NodePublic
-}
-
-// byRoute finds the peer whose routes hold ip. Routes do not overlap, so the
-// one starting at or below ip is the only candidate.
-func (st *peerState) byRoute(ip netip.Addr) (key.NodePublic, netip.Prefix, bool) {
-	i, _ := slices.BinarySearchFunc(st.routes, ip, func(e routeEntry, ip netip.Addr) int {
-		return e.r.From().Compare(ip)
-	})
-	switch {
-	case i < len(st.routes) && st.routes[i].r.From() == ip:
-	case i > 0:
-		i--
-	default:
-		return key.NodePublic{}, netip.Prefix{}, false
-	}
-	if e := st.routes[i]; e.r.Contains(ip) {
-		p, _ := e.r.Prefix()
-		return e.nk, p, true
-	}
-	return key.NodePublic{}, netip.Prefix{}, false
-}
-
-// overlayGuard is an OS router that drops what reaches the overlay's
-// addresses by another device than the tunnel.
-type overlayGuard interface {
-	guardOverlay(own, peers []netip.Addr) error
-}
-
-// exitRouter is what an OS router does for egress and serving beside
-// [router.Router].
-type exitRouter interface {
-	setEgress(e Egress, t tunnelled) error
-	setServe(s Serve) error
-	// lans is the networks the host is on but through this node's device,
-	// and its own addresses in them.
-	lans() ([]netip.Prefix, []netip.Addr)
-	// answersThrough is why answers to what comes in by another device
-	// would go into the tunnel though not isolated, "" where they leave by
-	// it.
-	answersThrough() string
 }
 
 var _ Manager = (*tsManager)(nil)
@@ -331,6 +279,13 @@ func New(opts Options) (_ Manager, err error) {
 	m.skip = opts.TunName
 	m.publicSeen = map[netip.Addr]time.Time{}
 	m.local.Store(&Networks{Prefixes: hostNetworks(m.skip)})
+	if len(m.stun) > 0 {
+		m.homed = make(chan struct{}, 1)
+	}
+	if len(m.stun) > 0 {
+		logf = m.watchEngine(logf)
+		m.logf = logf
+	}
 
 	// Shared with the OS router on the real-device path. Marked as in a map
 	// poll for good: magicsock keeps the first home relay it picks unless it
@@ -359,71 +314,10 @@ func New(opts Options) (_ Manager, err error) {
 		},
 	}
 
-	// newOSRouter wants the device and the engine wants the router, fixing the
-	// order: netmon, TUN, router, engine. The MTU must be DefaultTUNMTU() —
-	// 1280, the IPv6 minimum; lower and the kernel drops IPv6 silently.
 	if opts.Tun == nil && opts.TunName != "" {
-		mon, err := netmon.New(bus, logf)
-		if err != nil {
-			return nil, fmt.Errorf("conn: starting the network monitor: %w", err)
+		if err := m.openDevice(opts, &cfg, &undo, logf); err != nil {
+			return nil, err
 		}
-		// The engine never closes a monitor it was handed.
-		undo.push(func() { mon.Close() })
-		var dev tun.Device
-		var osRtr router.Router
-		if vp, ok := opts.Plumber.(*vpnPlumber); ok {
-			dev, osRtr = newVPNPlumbed(vp, opts.TunName, int(tstun.DefaultTUNMTU()), logf)
-			undo.push(func() { dev.Close() })
-		} else if opts.Plumber != nil {
-			if dev, osRtr, err = newPlumbed(opts.Plumber, opts.TunName, opts.Instance, int(tstun.DefaultTUNMTU()), logf); err != nil {
-				return nil, fmt.Errorf("conn: creating TUN device %q: %w", opts.TunName, err)
-			}
-			undo.push(func() { dev.Close() })
-		} else {
-			if dev, err = tun.CreateTUN(opts.TunName, int(tstun.DefaultTUNMTU())); err != nil {
-				// Lists what creation needs; does not claim to be the cause,
-				// since a name already in use comes back as EBUSY.
-				return nil, fmt.Errorf("conn: creating TUN device %q: %w (needs %s, and the name must be free)",
-					opts.TunName, err, tunNeeds)
-			}
-			undo.push(func() { dev.Close() })
-			if osRtr, err = newOSRouter(logf, dev, mon, healthTracker, bus, opts.Instance); err != nil {
-				return nil, fmt.Errorf("conn: creating the OS router: %w", err)
-			}
-		}
-		// The engine's own cleanup closes the device, and neither closes the
-		// router on failure; the router may already hold the policy rules its
-		// Up installed.
-		undo.pop()
-		undo.push(func() { closeUnstartedRouter(osRtr) })
-		// One monitor for both, rather than letting the engine start a second.
-		cfg.Tun = dev
-		cfg.Router = osRtr
-		m.osRouter = osRtr
-		if version.IsMobile() {
-			// What the engine hands Android's VPN.
-			m.osRouter = router.ConsolidatingRoutes(m.logf, osRtr)
-		}
-		m.exits, _ = osRtr.(exitRouter)
-		m.hostRouter, _ = osRtr.(interface{ hostRoutes() []netip.Prefix })
-		m.inGuard, _ = osRtr.(overlayGuard)
-		if w, ok := osRtr.(interface{ watchHostRoutes(func()) }); ok && opts.OnHostRoutesChange != nil {
-			w.watchHostRoutes(opts.OnHostRoutesChange)
-		}
-		m.tunName = opts.TunName
-		cfg.NetMon = mon
-		m.netMon = mon
-		// What an exit node serves leaves out the networks it is on, which
-		// change under it.
-		ec := bus.Client("juist-serve")
-		eventbus.SubscribeFunc(ec, func(d netmon.ChangeDelta) {
-			// Not on the bus's goroutine: Close holds apply while it closes
-			// the bus, which waits for this callback.
-			if d.InterfaceIPsChanged {
-				go m.refilter()
-				go m.followNetworks()
-			}
-		})
 	}
 
 	eng, err := wgengine.NewUserspaceEngine(logf, cfg)
@@ -502,22 +396,6 @@ func New(opts Options) (_ Manager, err error) {
 	return m, nil
 }
 
-// selfNode renders s exactly like a peer, minus endpoints: nothing discovers
-// us through our own node view. Only TCP 443 also keeps the engine from using
-// peer relays, which speak UDP.
-func (m *tsManager) selfNode(s Self) tailcfg.NodeView {
-	self := peerNode(Peer{
-		ID:       s.ID,
-		NodeKey:  s.NodeKey.Public(),
-		DiscoKey: s.DiscoKey.Public(),
-		Addrs:    s.Addrs,
-	}).AsStruct()
-	if m.httpsOnly {
-		self.CapMap = tailcfg.NodeCapMap{nodecap.OnlyTCP443: nil}
-	}
-	return self.View()
-}
-
 // checkOptions refuses options New cannot start from.
 func checkOptions(opts *Options) error {
 	for _, s := range opts.STUN {
@@ -539,31 +417,6 @@ func checkOptions(opts *Options) error {
 	return nil
 }
 
-// checkSelf refuses a Self the data plane cannot run as.
-func checkSelf(s Self) error {
-	if s.NodeKey.IsZero() {
-		return errors.New("conn: Self.NodeKey is required")
-	}
-	// A zero disco key makes magicsock generate an ephemeral one that no peer
-	// can match against the log, failing every exchange with no symptom but
-	// pings that get no pong.
-	if s.DiscoKey.IsZero() {
-		return errors.New("conn: Self.DiscoKey is required")
-	}
-	if err := checkNodeID(s.ID); err != nil {
-		return fmt.Errorf("conn: Self.ID: %w", err)
-	}
-	if len(s.Addrs) == 0 {
-		return errors.New("conn: Self.Addrs must not be empty")
-	}
-	for _, pfx := range s.Addrs {
-		if err := checkHostPrefix(pfx); err != nil {
-			return fmt.Errorf("conn: Self address: %w", err)
-		}
-	}
-	return nil
-}
-
 // cleanups is a stack of releases, run last first.
 type cleanups []func()
 
@@ -576,551 +429,6 @@ func (c cleanups) run() {
 	for i := len(c) - 1; i >= 0; i-- {
 		c[i]()
 	}
-}
-
-// peerConfig answers the data plane's live per-peer config lookup.
-func (m *tsManager) peerConfig(nk key.NodePublic) (wgcfg.PeerConfig, bool) {
-	if e := m.evicting.Load(); e != nil && *e == nk {
-		return wgcfg.PeerConfig{}, false
-	}
-	st := m.state.Load()
-	a, ok := st.allowed[nk]
-	return wgcfg.PeerConfig{AllowedIPs: a, PresharedKey: st.peers[nk].PSK}, ok
-}
-
-// peerByIP routes every outbound packet to a peer, so it stays lock-free:
-// one atomic load and one map read.
-func (m *tsManager) peerByIP(ip netip.Addr) (key.NodePublic, bool) {
-	st := m.state.Load()
-	if nk, ok := st.byIP[ip]; ok {
-		return nk, true
-	}
-	nk, _, ok := st.byRoute(ip)
-	return nk, ok
-}
-
-// sendTo is the peer what is sent to ip goes to: none while it is unproven.
-func (m *tsManager) sendTo(ip netip.Addr) (key.NodePublic, bool) {
-	nk, ok := m.peerByIP(ip)
-	if ok && m.isUnproven(nk) {
-		return key.NodePublic{}, false
-	}
-	return nk, ok
-}
-
-// unprovenWait bounds how long a peer waits for a path to be proven: past
-// the last of [warmSchedule]'s pings, whose delays follow one another.
-var unprovenWait = func() time.Duration {
-	d := 500 * time.Millisecond
-	for _, w := range warmSchedule {
-		d += w
-	}
-	return d
-}()
-
-// heldUnproven reports whether what is sent to p waits for disco to prove a
-// path: where it has an address to try and no relay to fall back on.
-func heldUnproven(p Peer, haveRelays bool) bool {
-	return (p.HomeRelay == 0 || !haveRelays) && len(p.Endpoints) > 0
-}
-
-func (m *tsManager) isUnproven(nk key.NodePublic) bool {
-	until, ok := m.unproven.Load(nk)
-	if !ok {
-		return false
-	}
-	if time.Now().Before(until.(time.Time)) {
-		return true
-	}
-	m.unproven.CompareAndDelete(nk, until)
-	return false
-}
-
-func (m *tsManager) peerForIP(ip netip.Addr) (wgengine.PeerForIP, bool) {
-	self := m.selfOnPath.Load()
-	for _, p := range self.addrs {
-		if p.Addr() == ip {
-			return wgengine.PeerForIP{Node: self.node, IsSelf: true, Route: p}, true
-		}
-	}
-	st := m.state.Load()
-	if nk, ok := st.byIP[ip]; ok {
-		return wgengine.PeerForIP{Node: st.nodes[nk], Route: netip.PrefixFrom(ip, ip.BitLen())}, true
-	}
-	if nk, r, ok := st.byRoute(ip); ok {
-		return wgengine.PeerForIP{Node: st.nodes[nk], Route: r}, true
-	}
-	return wgengine.PeerForIP{}, false
-}
-
-func (m *tsManager) SetPeers(peers []Peer) error {
-	// Copies are validated and stored, so the caller's slices can neither
-	// bypass the validation later nor race the lock-free lookups.
-	peers = clonePeers(peers)
-	// Before touching any state, so a rejected peer set leaves the data plane
-	// as it was.
-	if err := validatePeers(m.self, peers); err != nil {
-		return err
-	}
-	next, nodeList := newPeerState(m.self.NodeKey.Public(), peers)
-
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	if m.closed {
-		return errors.New("conn: manager is closed")
-	}
-
-	prev := m.state.Load().peers
-	resets := peerDelta(prev, next.peers)
-	fresh := newPaths(prev, next.peers)
-	m.noteKeying(prev, next.peers)
-	m.unproven.Range(func(k, _ any) bool {
-		if _, ok := next.peers[k.(key.NodePublic)]; !ok {
-			m.unproven.Delete(k)
-		}
-		return true
-	})
-	for _, nk := range fresh {
-		if heldUnproven(next.peers[nk], len(m.relays) > 0) {
-			m.unproven.Store(nk, time.Now().Add(unprovenWait))
-		}
-	}
-
-	// Order matters: the snapshot is swapped in before the data plane is
-	// told to resync, so a removed peer's lookup already fails by the time
-	// wireguard-go asks. A newly confined peer is confined first, and one
-	// newly keyed passes nothing until no session without its key is left.
-	m.confiner.set(m.keptConfined(peers), m.self.Addrs)
-	m.state.Store(next)
-
-	// Session keys are discarded outright rather than left to expire, for a
-	// removed peer and for one whose disco key changed — that means it
-	// restarted, so its old sessions are dead. Both are re-created lazily.
-	for _, nk := range resets {
-		m.evicting.Store(&nk)
-		m.eng.SyncDevicePeer(nk)
-	}
-	m.evicting.Store(nil)
-	// Every kept peer, not just changed ones: wireguard-go's lazy peer
-	// creation reads the config lookup unordered against this call, so a
-	// concurrently created peer can hold the previous snapshot's AllowedIPs.
-	for nk := range next.peers {
-		m.eng.SyncDevicePeer(nk)
-	}
-	m.magic.SetNetworkMap(m.selfNV, nodeList)
-	// Warm regardless of the reconfig result: the next SetPeers diffs against
-	// the snapshot already stored above, so a peer skipped here would never be
-	// warmed at all.
-	err := m.reconfig()
-	// Best effort: the peers are installed, and the SetEgress each reconcile
-	// follows with tries again and reports.
-	if t := m.tunnelledBy(next.peers); m.exits != nil && m.egress != EgressDirect && !t.equal(m.tunnelled) {
-		if gerr := m.exits.setEgress(m.egress, t); gerr != nil {
-			m.logf("conn: guarding what the peers carry: %v", gerr)
-		} else {
-			m.tunnelled = t
-		}
-	}
-	m.warmPaths(fresh)
-	return err
-}
-
-func (m *tsManager) SetSelf(s Self) error {
-	s.Addrs = slices.Clone(s.Addrs)
-	if err := checkSelf(s); err != nil {
-		return err
-	}
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	switch {
-	case m.closed:
-		return errors.New("conn: manager is closed")
-	case s.ID != m.self.ID || !s.DiscoKey.Equal(m.self.DiscoKey):
-		return errors.New("conn: SetSelf changes only the node key and the addresses")
-	}
-	peers := slices.Collect(maps.Values(m.state.Load().peers))
-	if err := validatePeers(s, peers); err != nil {
-		return err
-	}
-	if err := m.guardAhead(m.self.Addrs, s.Addrs); err != nil {
-		return err
-	}
-	// The new addresses are ours before the router puts them on the device,
-	// so the filter and the confiner never drop what arrives for them.
-	m.self = s
-	m.selfNV = m.selfNode(s)
-	m.selfOnPath.Store(&selfLookup{addrs: s.Addrs, node: m.selfNV})
-	m.eng.SetSelfNode(m.selfNV)
-	_, nodeList := newPeerState(s.NodeKey.Public(), peers)
-	m.confiner.set(m.keptConfined(peers), s.Addrs)
-	m.magic.SetNetworkMap(m.selfNV, nodeList)
-	return m.reconfig()
-}
-
-// keyingSettle is how long after a peer is given a preshared key its reset
-// is repeated: past any lookup the engine made with the key it had.
-const keyingSettle = 2 * time.Second
-
-// noteKeying records the peers next gives a key prev gave none, forgets
-// those gone or keyless again, and has their resets repeated. The caller
-// holds m.apply.
-func (m *tsManager) noteKeying(prev, next map[key.NodePublic]Peer) {
-	for nk := range m.keying {
-		if p, ok := next[nk]; !ok || p.PSK == [32]byte{} {
-			delete(m.keying, nk)
-		}
-	}
-	added := false
-	for nk, p := range next {
-		if old, ok := prev[nk]; ok && keyed(old, p) {
-			if m.keying == nil {
-				m.keying = map[key.NodePublic]time.Time{}
-			}
-			m.keying[nk], added = time.Now(), true
-			m.logf("conn: %v newly given a preshared key: nothing passes until it is reset again", nk.ShortString())
-		}
-	}
-	if added {
-		time.AfterFunc(keyingSettle, m.settleKeying)
-	}
-}
-
-// settleKeying resets again each peer keyed keyingSettle ago, so no session
-// made without its key outlives the first, and gives it its access.
-func (m *tsManager) settleKeying() {
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	if m.closed {
-		return
-	}
-	for nk, since := range m.keying {
-		if time.Since(since) < keyingSettle {
-			continue
-		}
-		m.evicting.Store(&nk)
-		m.eng.SyncDevicePeer(nk)
-		m.evicting.Store(nil)
-		m.eng.SyncDevicePeer(nk)
-		delete(m.keying, nk)
-		m.logf("conn: %v keyed: reset again", nk.ShortString())
-	}
-	m.confiner.set(m.keptConfined(slices.Collect(maps.Values(m.state.Load().peers))), m.self.Addrs)
-}
-
-// keptConfined is peers with each one newly keyed passing nothing, for as
-// long as a session without its key may still carry traffic. The caller
-// holds m.apply.
-func (m *tsManager) keptConfined(peers []Peer) []Peer {
-	var out []Peer
-	for i, p := range peers {
-		if _, ok := m.keying[p.NodeKey]; ok {
-			if out == nil {
-				out = slices.Clone(peers)
-			}
-			out[i].Access = &Access{Nothing: true}
-		}
-	}
-	if out == nil {
-		return peers
-	}
-	return out
-}
-
-// clonePeers copies peers and the slices they hold.
-func clonePeers(peers []Peer) []Peer {
-	out := slices.Clone(peers)
-	for i := range out {
-		out[i].Addrs = slices.Clone(out[i].Addrs)
-		out[i].Routes = slices.Clone(out[i].Routes)
-		out[i].Subnets = slices.Clone(out[i].Subnets)
-		out[i].Endpoints = slices.Clone(out[i].Endpoints)
-		out[i].Access = out[i].Access.Clone()
-	}
-	return out
-}
-
-// validatePeers reports whether peers is a set the data plane can hold
-// beside self. The log is supposed to make every refusal impossible, so one
-// means a bug upstream. An entry carrying self's node key must agree with
-// self, and is otherwise ignored.
-func validatePeers(self Self, peers []Peer) error {
-	selfKey, selfDisco := self.NodeKey.Public(), self.DiscoKey.Public()
-	seen := make(map[key.NodePublic]bool, len(peers))
-	byID := make(map[uint64]key.NodePublic, len(peers))
-	byDisco := make(map[key.DiscoPublic]key.NodePublic, len(peers))
-	byIP := make(map[netip.Addr]key.NodePublic, len(peers))
-	for _, p := range peers {
-		if p.NodeKey.IsZero() {
-			return errors.New("conn: peer has zero node key")
-		}
-		if p.NodeKey == selfKey {
-			// A matching self entry is expected; a disagreeing one means the
-			// log and the data plane hold different ideas of who we are.
-			if p.ID != self.ID || p.DiscoKey != selfDisco || !samePrefixSet(p.Addrs, self.Addrs) {
-				return fmt.Errorf("conn: peer entry %v carries our node key but diverges from Self (ID %d, disco %v, addrs %v; Self has ID %d, disco %v, addrs %v)",
-					p.NodeKey.ShortString(), p.ID, p.DiscoKey.ShortString(), p.Addrs,
-					self.ID, selfDisco.ShortString(), self.Addrs)
-			}
-			continue
-		}
-		if err := checkNodeID(p.ID); err != nil {
-			return fmt.Errorf("conn: peer %v: %w", p.NodeKey.ShortString(), err)
-		}
-		if p.ID == self.ID {
-			return fmt.Errorf("conn: peer %v shares our node ID %d", p.NodeKey.ShortString(), p.ID)
-		}
-		// magicsock keys its peer state by node ID, so a shared ID would make
-		// one peer silently clobber the other.
-		if other, dup := byID[p.ID]; dup {
-			return fmt.Errorf("conn: peers %v and %v share ID %d",
-				other.ShortString(), p.NodeKey.ShortString(), p.ID)
-		}
-		if seen[p.NodeKey] {
-			return fmt.Errorf("conn: peer %v appears twice", p.NodeKey.ShortString())
-		}
-		if p.DiscoKey.IsZero() {
-			return fmt.Errorf("conn: peer %v has no disco key", p.NodeKey.ShortString())
-		}
-		// Disco keys must be distinct: the NAT-traversal layer keys path state
-		// by them, and this is the one field a peer chooses, so without the
-		// check a member could copy another's and cut its connectivity.
-		if other, dup := byDisco[p.DiscoKey]; dup {
-			return fmt.Errorf("conn: peers %v and %v announce the same disco key %v",
-				other.ShortString(), p.NodeKey.ShortString(), p.DiscoKey.ShortString())
-		}
-		if p.DiscoKey == selfDisco {
-			return fmt.Errorf("conn: peer %v announces this node's own disco key",
-				p.NodeKey.ShortString())
-		}
-		if len(p.Addrs) == 0 {
-			return fmt.Errorf("conn: peer %v has no overlay address", p.NodeKey.ShortString())
-		}
-		for _, pfx := range p.Addrs {
-			if err := checkHostPrefix(pfx); err != nil {
-				return fmt.Errorf("conn: peer %v address: %w", p.NodeKey.ShortString(), err)
-			}
-			if owner, taken := byIP[pfx.Addr()]; taken {
-				return fmt.Errorf("conn: address %v claimed by both %v and %v",
-					pfx.Addr(), owner.ShortString(), p.NodeKey.ShortString())
-			}
-			if tsaddr.PrefixesContainsIP(self.Addrs, pfx.Addr()) {
-				return fmt.Errorf("conn: peer %v claims our own address %v",
-					p.NodeKey.ShortString(), pfx.Addr())
-			}
-			byIP[pfx.Addr()] = p.NodeKey
-		}
-		seen[p.NodeKey] = true
-		byID[p.ID] = p.NodeKey
-		byDisco[p.DiscoKey] = p.NodeKey
-	}
-	return validateRoutes(self, peers)
-}
-
-// validateRoutes holds routes to their contract: canonical prefixes outside
-// every address of this node's and its peers', and no two overlapping, so
-// that every address a route holds has one peer.
-func validateRoutes(self Self, peers []Peer) error {
-	var addrs, routes netipx.IPSetBuilder
-	for _, p := range self.Addrs {
-		addrs.AddPrefix(p)
-	}
-	for _, p := range peers {
-		for _, a := range p.Addrs {
-			addrs.AddPrefix(a)
-		}
-	}
-	held, err := addrs.IPSet()
-	if err != nil {
-		return fmt.Errorf("conn: %w", err)
-	}
-	for _, p := range peers {
-		for _, r := range p.carried() {
-			switch {
-			case !r.IsValid() || r.Masked() != r || r.Addr().Is4In6() || r.Addr().Zone() != "":
-				return fmt.Errorf("conn: peer %v route %v is not a canonical prefix", p.NodeKey.ShortString(), r)
-			case held.OverlapsPrefix(r):
-				return fmt.Errorf("conn: peer %v route %v holds an overlay address", p.NodeKey.ShortString(), r)
-			}
-			carried, err := routes.IPSet()
-			if err != nil {
-				return fmt.Errorf("conn: %w", err)
-			}
-			if carried.OverlapsPrefix(r) {
-				return fmt.Errorf("conn: route %v is carried twice", r)
-			}
-			routes.AddPrefix(r)
-		}
-	}
-	return nil
-}
-
-// newPeerState indexes a validated peer set, leaving out the entry for
-// selfKey.
-func newPeerState(selfKey key.NodePublic, peers []Peer) (*peerState, []tailcfg.NodeView) {
-	st := &peerState{
-		peers:   make(map[key.NodePublic]Peer, len(peers)),
-		byIP:    make(map[netip.Addr]key.NodePublic, len(peers)),
-		nodes:   make(map[key.NodePublic]tailcfg.NodeView, len(peers)),
-		allowed: make(map[key.NodePublic][]netip.Prefix, len(peers)),
-	}
-	nodes := make([]tailcfg.NodeView, 0, len(peers))
-	for _, p := range peers {
-		if p.NodeKey == selfKey {
-			continue
-		}
-		nv := peerNode(p)
-		st.peers[p.NodeKey] = p
-		st.nodes[p.NodeKey] = nv
-		st.allowed[p.NodeKey] = slices.Concat(p.Addrs, p.carried())
-		for _, pfx := range p.Addrs {
-			st.byIP[pfx.Addr()] = p.NodeKey
-		}
-		for _, r := range p.carried() {
-			st.routes = append(st.routes, routeEntry{r: netipx.RangeOfPrefix(r), nk: p.NodeKey})
-		}
-		nodes = append(nodes, nv)
-	}
-	slices.SortFunc(st.routes, func(x, y routeEntry) int { return x.r.From().Compare(y.r.From()) })
-	return st, nodes
-}
-
-// warmPaths starts NAT-traversal discovery towards new peers before anything
-// sends to them: without it the first handshake has no path, is dropped, and
-// WireGuard's five-second retry dominates in both directions. Probes repeat on
-// [warmSchedule], since a disco ping to a peer not yet told about us is
-// discarded. Failures are ignored. The caller must hold m.apply, which is what
-// makes the WaitGroup handshake with Close safe.
-func (m *tsManager) warmPaths(fresh []key.NodePublic) {
-	if len(fresh) == 0 || m.closed {
-		return
-	}
-	m.warm.Add(1)
-	go func() {
-		defer m.warm.Done()
-		for i, delay := range warmSchedule {
-			if i > 0 {
-				select {
-				case <-m.done:
-					return
-				case <-time.After(delay):
-				}
-			}
-			// Re-read the snapshot each round: a peer removed in the
-			// meantime is gone from it, and must not be probed.
-			st := m.state.Load()
-			for _, nk := range fresh {
-				nv, ok := st.nodes[nk]
-				if !ok {
-					continue
-				}
-				m.magic.Ping(nv, new(ipnstate.PingResult), 0, func(r *ipnstate.PingResult) {
-					if r.Err == "" {
-						m.unproven.Delete(nk)
-					}
-				})
-			}
-		}
-	}()
-}
-
-// warmSchedule is when warm-up probes are sent, measured from the reconcile
-// that introduced the peer. Over within a few seconds: past that WireGuard's
-// own retry has taken over.
-var warmSchedule = []time.Duration{0, 250 * time.Millisecond, 1 * time.Second, 3 * time.Second}
-
-// newPaths reports the peers that need a path established: those that were not
-// in the set before, and those whose disco key changed, which means the peer
-// restarted and whatever path was known to it is stale.
-func newPaths(prev, next map[key.NodePublic]Peer) (fresh []key.NodePublic) {
-	for nk, cur := range next {
-		if old, had := prev[nk]; !had || old.DiscoKey != cur.DiscoKey {
-			fresh = append(fresh, nk)
-		}
-	}
-	return fresh
-}
-
-// peerDelta reports which device peers must be reset, discarding session keys:
-// those that left the set, those whose disco key rotated, since that means
-// a restart and waiting out the rekey timers would blackhole traffic, and
-// those newly given a preshared key, whose session mixes in none.
-func peerDelta(prev, next map[key.NodePublic]Peer) (resets []key.NodePublic) {
-	for nk, old := range prev {
-		if cur, still := next[nk]; !still || cur.DiscoKey != old.DiscoKey || keyed(old, cur) {
-			resets = append(resets, nk)
-		}
-	}
-	return resets
-}
-
-// keyed reports whether a peer that had no preshared key is given one: its
-// session carries none, so it goes, and what the peer may open widens only
-// once it has.
-func keyed(old, cur Peer) bool { return old.PSK == [32]byte{} && cur.PSK != [32]byte{} }
-
-// samePrefixSet reports whether a and b hold the same prefixes, ignoring
-// order.
-func samePrefixSet(a, b []netip.Prefix) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	as, bs := slices.Clone(a), slices.Clone(b)
-	slices.SortFunc(as, comparePrefix)
-	slices.SortFunc(bs, comparePrefix)
-	return slices.Equal(as, bs)
-}
-
-// checkHostPrefix enforces the contract shared by [Self.Addrs] and
-// [Peer.Addrs]: a single host address in canonical form. Addrs become
-// AllowedIPs, which also authorize the source addresses a peer may originate,
-// so a wider prefix lets it impersonate other members. A v4-mapped v6 prefix
-// is refused because it aliases the plain v4 address while comparing unequal
-// to it, slipping past the duplicate checks while matching no packet.
-func checkHostPrefix(pfx netip.Prefix) error {
-	if !pfx.IsSingleIP() {
-		return fmt.Errorf("%v is not a single-IP prefix", pfx)
-	}
-	if pfx.Addr().Is4In6() {
-		return fmt.Errorf("%v is a v4-mapped v6 prefix; use the plain v4 form", pfx)
-	}
-	return nil
-}
-
-// checkNodeID reports whether id is usable as a tailcfg.NodeID, which is a
-// signed 64-bit value that magicsock requires to be non-zero.
-func checkNodeID(id uint64) error {
-	if id == 0 {
-		return errors.New("ID must be non-zero")
-	}
-	if id > math.MaxInt64 {
-		return fmt.Errorf("ID %d overflows tailcfg.NodeID", id)
-	}
-	return nil
-}
-
-// maxTunNameLen is IFNAMSIZ-1, the longest name Linux and the BSDs accept.
-const maxTunNameLen = 15
-
-// checkTunName rejects device names the OS would mishandle, which TUNSETIFF
-// reports as a bare EINVAL. '%' matters most: the kernel treats it as a
-// template, so "juist%d" creates a device the caller never named.
-func checkTunName(name string) error {
-	if name == "" {
-		return errors.New("must not be empty")
-	}
-	if len(name) > maxTunNameLen {
-		return fmt.Errorf("%q is %d bytes; the OS accepts at most %d", name, len(name), maxTunNameLen)
-	}
-	if name == "." || name == ".." {
-		return fmt.Errorf("%q is not a usable interface name", name)
-	}
-	if strings.ContainsAny(name, "%") {
-		return fmt.Errorf("%q contains %%, which the kernel expands to a different name", name)
-	}
-	if strings.ContainsAny(name, "/: \t\n") {
-		return fmt.Errorf("%q contains a character an interface name may not hold", name)
-	}
-	return nil
 }
 
 // reconfig applies this node's own WireGuard config and the packet filter;
@@ -1214,388 +522,8 @@ func (m *tsManager) peerRoutes() []netip.Prefix {
 		routes = append(routes, p.Addrs...)
 		routes = append(routes, p.Subnets...)
 	}
-	slices.SortFunc(routes, comparePrefix)
+	slices.SortFunc(routes, types.ComparePrefix)
 	return routes
-}
-
-// comparePrefix orders prefixes by address, then bits.
-func comparePrefix(x, y netip.Prefix) int {
-	if c := x.Addr().Compare(y.Addr()); c != 0 {
-		return c
-	}
-	return x.Bits() - y.Bits()
-}
-
-// filter builds the packet policy: any member may send anything to any other
-// member. It is installed explicitly, because a nil filter drops every inbound
-// packet, and built from Match values directly rather than through
-// tailcfg.FilterRule's parser, which only adds failure modes.
-func (m *tsManager) filter() (*filter.Filter, error) {
-	st := m.state.Load()
-	srcs := make([]netip.Prefix, 0, len(st.peers))
-	for _, p := range st.peers {
-		srcs = append(srcs, p.Addrs...)
-	}
-
-	serves := m.serve.Routes
-	if len(serves) > 0 {
-		var nets []netip.Prefix
-		var hosts []netip.Addr
-		if m.exits != nil {
-			nets, hosts = m.exits.lans()
-		} else {
-			nets, hosts = attached(m.tunName)
-		}
-		serves = served(serves, nets, hosts)
-	}
-	// A subnet router's networks are the very ones it serves.
-	serves = append(serves, m.serve.Subnets...)
-	var localNets netipx.IPSetBuilder
-	dsts := make([]filtertype.NetPortRange, 0, len(m.self.Addrs)+len(serves))
-	// What this node serves its peers is theirs to send to, as its own
-	// addresses are; nothing else outside them is.
-	for _, pfx := range slices.Concat(m.self.Addrs, serves) {
-		localNets.AddPrefix(pfx)
-		dsts = append(dsts, filtertype.NetPortRange{Net: pfx, Ports: filtertype.AllPorts})
-	}
-	ls, err := localNets.IPSet()
-	if err != nil {
-		return nil, fmt.Errorf("building local net set: %w", err)
-	}
-	if len(srcs) == 0 {
-		return filter.NewAllowNone(m.logf, ls), nil
-	}
-	matches := []filter.Match{{
-		IPProto: allIPProtos,
-		Srcs:    srcs,
-		Dsts:    dsts,
-	}}
-	// Sharing state with the previous filter carries the flow-tracking cache
-	// across rebuilds, so a membership change does not send every established
-	// UDP flow back through the slow path. Nil on the first build.
-	return filter.New(matches, nil, ls, ls, m.eng.GetFilter(), m.logf), nil
-}
-
-// refilter builds the packet filter again, where this node serves as an exit
-// node.
-func (m *tsManager) refilter() {
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	if m.closed || !m.serve.serving() {
-		return
-	}
-	filt, err := m.filter()
-	if err != nil {
-		m.logf("conn: building filter: %v", err)
-		return
-	}
-	m.eng.SetFilter(filt)
-}
-
-// allIPProtos enumerates every IP protocol number, the only way to say "any
-// protocol": Match.IPProto is a membership test with no wildcard.
-var allIPProtos = func() views.Slice[ipproto.Proto] {
-	p := make([]ipproto.Proto, 256)
-	for i := range p {
-		p[i] = ipproto.Proto(i)
-	}
-	return views.SliceOf(p)
-}()
-
-// AnswersThrough is why answers to what comes in by another device would go
-// through the exit node though not isolated, "" where they leave the way
-// they came, or where there is no device.
-func (m *tsManager) AnswersThrough() string {
-	if m.exits == nil {
-		return ""
-	}
-	return m.exits.answersThrough()
-}
-
-// tunnelledBy is what peers carry, answers as asked.
-func (m *tsManager) tunnelledBy(peers map[key.NodePublic]Peer) tunnelled {
-	t := tunnelledBy(peers)
-	t.answers = m.isolate
-	return t
-}
-
-// errNoExits is egress or serving asked of a node that routes nothing itself.
-var errNoExits = errors.New("conn: exit nodes need a device of this node's own, on Linux")
-
-func (m *tsManager) SetEgress(e Egress, isolate bool) error {
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	m.isolate = isolate
-	switch {
-	case m.closed:
-		return errors.New("conn: manager is closed")
-	case e == EgressDirect && m.egress == EgressDirect:
-		return nil
-	case m.exits == nil && e != EgressDirect:
-		return errNoExits
-	}
-	// Given again, the router installs it again: a route someone flushed is
-	// not announced, and every reconcile gives the egress.
-	if m.exits != nil {
-		t := m.tunnelledBy(m.state.Load().peers)
-		if err := m.exits.setEgress(e, t); err != nil {
-			return err
-		}
-		m.tunnelled = t
-	}
-	m.egress = e
-	return nil
-}
-
-func (m *tsManager) SetServe(s Serve) error {
-	s = Serve{Routes: slices.Clone(s.Routes), Subnets: slices.Clone(s.Subnets), Sources: slices.Clone(s.Sources), DNS: s.DNS}
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	switch {
-	case m.closed:
-		return errors.New("conn: manager is closed")
-	case slices.Equal(s.Routes, m.serve.Routes) && slices.Equal(s.Subnets, m.serve.Subnets) &&
-		slices.Equal(s.Sources, m.serve.Sources) && s.DNS == m.serve.DNS:
-		// Given again, the router installs it again, as it does egress; where
-		// it no longer may, nothing is served.
-		if s.serving() && m.exits != nil {
-			if err := m.exits.setServe(s); err != nil {
-				m.serve = Serve{}
-				return errors.Join(err, m.reconfig())
-			}
-		}
-		return nil
-	case m.exits == nil && s.serving():
-		return errNoExits
-	}
-	for _, r := range slices.Concat(s.Routes, s.Subnets) {
-		if tsaddr.PrefixesContainsIP(m.self.Addrs, r.Addr()) || !r.IsValid() || r.Masked() != r {
-			return fmt.Errorf("conn: route %v to serve is not a prefix outside this node", r)
-		}
-	}
-	// Masquerading before the filter lets anything through, and taking it
-	// away after, so that nothing leaves with an overlay source.
-	if s.serving() && m.exits != nil {
-		if err := m.exits.setServe(s); err != nil {
-			return err
-		}
-	}
-	m.serve = s
-	err := m.reconfig()
-	if !s.serving() && m.exits != nil {
-		err = errors.Join(err, m.exits.setServe(s))
-	}
-	return err
-}
-
-// SetRelays installs the relay set. It is separate from SetPeers because the
-// two change for different reasons: a relay set moves when a role is granted
-// or a relay restarts, and installing it re-runs the data plane's latency
-// probes, which an unchanged set must not.
-func (m *tsManager) SetRelays(relays []Relay) error {
-	if err := validateRelays(relays); err != nil {
-		return err
-	}
-	relays = slices.Clone(relays)
-	for i := range relays {
-		relays[i].Addrs = slices.Clone(relays[i].Addrs)
-	}
-	slices.SortFunc(relays, func(a, b Relay) int { return a.Region - b.Region })
-
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	if m.closed {
-		return errors.New("conn: manager is closed")
-	}
-	if sameRelays(m.relays, relays) {
-		return nil
-	}
-	m.relays = relays
-	// Names dropped are kept, up to a bound: a dial begun under the old
-	// map still asks the proxy hook, which must not send it direct.
-	named := slices.Clone(*m.named.Load())
-	for _, r := range relays {
-		if r.Name != "" && !slices.Contains(named, r.Name) {
-			named = append(named, r.Name)
-		}
-	}
-	if len(named) > maxProxiedNames {
-		named = named[len(named)-maxProxiedNames:]
-	}
-	m.named.Store(&named)
-	m.installDERPMap(relays)
-	if len(relays) == 0 {
-		// Nothing will report a home region again, and a stale one would be
-		// announced to peers as a path that no longer exists.
-		if m.homeRelay.Swap(0) != 0 {
-			m.notifyChange()
-		}
-	}
-	return nil
-}
-
-func (m *tsManager) HomeRelay() int { return int(m.homeRelay.Load()) }
-
-// SetSaving stops, or resumes, magicsock pinging every peer it sent to in
-// the last 45 s every 3 s: while saving battery a path is trusted while the
-// peer's traffic arrives on it, and probed when sending finds it stale.
-func (m *tsManager) SetSaving(saving bool) {
-	m.saving.Store(saving)
-	m.magic.SetSilentDisco(saving)
-}
-
-func (m *tsManager) ReachesRelay(region int) bool {
-	if region == 0 {
-		return false
-	}
-	if region == m.HomeRelay() {
-		return true
-	}
-	if m.magic == nil {
-		return false
-	}
-	r := m.magic.GetLastNetcheckReport(context.Background())
-	if r == nil {
-		return false
-	}
-	_, ok := r.RegionLatency[tailcfg.DERPRegionID(region)]
-	return ok
-}
-
-// publicHeld is how long a public address of this host's counts after it
-// was last reported.
-const publicHeld = 30 * time.Minute
-
-// followNetworks installs the relays again where this host's networks moved,
-// which order their addresses.
-func (m *tsManager) followNetworks() {
-	m.apply.Lock()
-	defer m.apply.Unlock()
-	local := Networks{Prefixes: hostNetworks(m.skip)}
-	now := time.Now()
-	m.epsMu.Lock()
-	for _, ap := range m.localEps {
-		if !isPrivateAddr(ap.Addr()) {
-			m.publicSeen[ap.Addr()] = now
-		}
-	}
-	// Held a while past the last report of them: netcheck reports a
-	// public address only some rounds, and an order that came and went
-	// with it would drop the home relay's connection each time. A server
-	// may report any address; it moves only where a relay's own come first.
-	for a, seen := range m.publicSeen {
-		if now.Sub(seen) > publicHeld {
-			delete(m.publicSeen, a)
-			continue
-		}
-		local.Public = append(local.Public, a)
-	}
-	m.epsMu.Unlock()
-	slices.SortFunc(local.Public, netip.Addr.Compare)
-	if local.equal(*m.local.Load()) {
-		return
-	}
-	m.local.Store(&local)
-	if !m.closed && len(m.relays) > 0 {
-		m.installDERPMap(m.relays)
-	}
-}
-
-// installDERPMap renders the relays and the STUN servers as one map. The STUN
-// regions are recorded first, so a report naming one is never mistaken for a
-// relay to be reached through.
-func (m *tsManager) installDERPMap(relays []Relay) {
-	dm, stunRegions := derpMap(relays, m.stun, m.httpsOnly, *m.local.Load())
-	m.stunRegions.Store(&stunRegions)
-	// With no relay to home at, the engine takes the nearest STUN server
-	// for its home and, failing to connect to it, asks every STUN server
-	// again every few seconds, idle or not.
-	homeless := dm != nil && len(dm.Regions) == len(stunRegions)
-	if m.homeless.Swap(homeless) != homeless {
-		m.magic.SetHomeless(homeless)
-	}
-	m.magic.SetDERPMap(dm)
-}
-
-// stunEvery is how often a homeless node asks STUN while its tunnels carry
-// traffic, as the engine does for a node with a home.
-const stunEvery = 25 * time.Second
-
-// stunWhileHomeless asks STUN every [stunEvery] while homeless, active and
-// not saving battery, which the engine stops doing for a homeless node: an
-// idle one asks again once traffic resumes or the network changes. A peer's
-// probes keep it active.
-func (m *tsManager) stunWhileHomeless() {
-	defer m.warm.Done()
-	t := time.NewTicker(stunEvery)
-	defer t.Stop()
-	for {
-		select {
-		case <-m.done:
-			return
-		case <-t.C:
-			if m.homeless.Load() && !m.saving.Load() && m.tun.IdleDuration() < 45*time.Second {
-				m.magic.ReSTUN("juist-homeless")
-			}
-		}
-	}
-}
-
-func (m *tsManager) LocalEndpoints() []netip.AddrPort {
-	m.epsMu.Lock()
-	defer m.epsMu.Unlock()
-	return slices.Clone(m.localEps)
-}
-
-// onStatus records the endpoint set the data plane believes this node is
-// reachable at. Without a relay it is empty: magicsock reports no endpoints of
-// its own with neither a STUN result nor a DERP map, which is why the
-// announcement is built from an interface scan as well and these are added to
-// it rather than substituted for it.
-func (m *tsManager) onStatus(st *wgengine.Status, err error) {
-	if err != nil || st == nil {
-		return
-	}
-	eps := make([]netip.AddrPort, 0, len(st.LocalAddrs))
-	for _, e := range st.LocalAddrs {
-		ap := e.Addr
-		if !ap.IsValid() || ap.Port() == 0 {
-			continue
-		}
-		eps = append(eps, netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()))
-	}
-	slices.SortFunc(eps, func(a, b netip.AddrPort) int {
-		if c := a.Addr().Compare(b.Addr()); c != 0 {
-			return c
-		}
-		return int(a.Port()) - int(b.Port())
-	})
-	eps = slices.Compact(eps)
-
-	m.epsMu.Lock()
-	changed := !slices.Equal(m.localEps, eps)
-	m.localEps = eps
-	m.epsMu.Unlock()
-	if changed {
-		m.notifyChange()
-		// The public addresses among them say which relays share a site.
-		go m.followNetworks()
-	}
-}
-
-// onNetInfo records the relay region the data plane chose for itself.
-func (m *tsManager) onNetInfo(ni *tailcfg.NetInfo) {
-	if ni == nil {
-		return
-	}
-	home := ni.PreferredDERP
-	if (*m.stunRegions.Load())[home] {
-		// Nearest, but nothing to be reached through.
-		home = 0
-	}
-	if m.homeRelay.Swap(int64(home)) != int64(home) {
-		m.notifyChange()
-	}
 }
 
 // notifyChange tells the caller that something in this node's announcement
@@ -1678,6 +606,35 @@ func (m *tsManager) Probe(ip netip.Addr, timeout time.Duration, cb func(bool)) {
 	})
 }
 
+// ProbeQuietly is [tsManager.Probe] by a disco ping alone, sent with silent
+// disco on: magicsock starts its heartbeat towards a peer, pinging it every
+// 3 s until 45 s after the last packet, on whatever it sends it but a disco
+// ping sent so, and its pong starts none on the far end. It does count as
+// such a last packet: one sooner than 45 s after another keeps a heartbeat
+// already going. Silent disco is the whole conn's: another peer's heartbeat
+// that ticks in that instant stops until its next packet.
+func (m *tsManager) ProbeQuietly(ip netip.Addr, timeout time.Duration, cb func(bool)) {
+	if m.isClosed() {
+		cb(false)
+		return
+	}
+	var once sync.Once
+	answer := func(ok bool) { once.Do(func() { cb(ok) }) }
+	t := time.AfterFunc(timeout, func() { answer(false) })
+	m.silentMu.Lock()
+	defer m.silentMu.Unlock()
+	// Engine.Ping reaches magicsock, which decides on the heartbeat, before
+	// it returns.
+	if !m.saving.Load() {
+		m.magic.SetSilentDisco(true)
+		defer m.magic.SetSilentDisco(false)
+	}
+	m.eng.Ping(ip, tailcfg.PingDisco, 0, func(r *ipnstate.PingResult) {
+		t.Stop()
+		answer(r.Err == "")
+	})
+}
+
 func (m *tsManager) isClosed() bool {
 	m.apply.Lock()
 	defer m.apply.Unlock()
@@ -1713,22 +670,4 @@ func (m *tsManager) HostRoutes() []netip.Prefix {
 	}
 	nets, _ := attached(m.tunName)
 	return nets
-}
-
-// carried is everything outside the overlay p carries for this node.
-func (p Peer) carried() []netip.Prefix { return slices.Concat(p.Routes, p.Subnets) }
-
-func peerNode(p Peer) tailcfg.NodeView {
-	return (&tailcfg.Node{
-		ID:         tailcfg.NodeID(p.ID),
-		StableID:   tailcfg.StableNodeID(fmt.Sprintf("n%d", p.ID)),
-		Name:       fmt.Sprintf("n%d", p.ID),
-		Key:        p.NodeKey,
-		DiscoKey:   p.DiscoKey,
-		Addresses:  p.Addrs,
-		AllowedIPs: slices.Concat(p.Addrs, p.carried()),
-		Endpoints:  p.Endpoints,
-		HomeDERP:   tailcfg.DERPRegionID(p.HomeRelay),
-		Cap:        tailcfg.CurrentCapabilityVersion,
-	}).View()
 }

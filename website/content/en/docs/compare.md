@@ -31,8 +31,9 @@ Four things set juist apart from every other mesh here:
   configuration, or are not available at all.
 - **Quantum-safe throughout.** Every tunnel mixes in a key a quantum
   computer cannot recover, and every change to the network is signed with
-  ML-DSA. None of the others signs its members that way, and of the others
-  only NetBird offers post-quantum tunnels, as an experimental option.
+  ML-DSA. None of the others signs its members that way. Of the other meshes,
+  only NetBird offers post-quantum tunnels, as an experimental option; plain
+  WireGuard gets them from a preshared key you set by hand.
 
 ## At a glance {#overview}
 
@@ -42,9 +43,9 @@ EasyTier stands in for the shared-secret meshes.
 
 ## Tailscale {#tailscale}
 
-[Tailscale](https://tailscale.com/blog/how-tailscale-works) is the most
-polished mesh VPN, with clients for Linux, Windows, macOS, iOS and Android,
-sign-in through an identity provider, and
+[Tailscale](https://tailscale.com/blog/how-tailscale-works) has clients for
+Linux, Windows, macOS, iOS and Android, sign-in through an identity provider,
+and
 [access rules](https://tailscale.com/kb/1018/acls). juist builds in parts of
 its client, see [Architecture]({{< relref "docs/architecture" >}}#tailscale).
 

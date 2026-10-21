@@ -148,15 +148,51 @@ func startWith(t *testing.T, to string, proxy bool, logf func(string, ...any),
 	return startOpts(t, to, proxy, func(o *Options) { o.Logf, o.Listen, o.GetCertificate = logf, listen, get })
 }
 
+// freePort is a port of 127.0.0.1 free for TCP and UDP alike: one free for
+// TCP may be held for UDP by another process, which then takes QUIC's
+// packets while the terminator has no socket.
+func freePort(t *testing.T) int {
+	t.Helper()
+	for range 100 {
+		probe, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pc, err := net.ListenPacket("udp", probe.Addr().String())
+		probe.Close()
+		if err == nil {
+			pc.Close()
+			return probe.Addr().(*net.TCPAddr).Port
+		}
+	}
+	t.Fatal("no port of 127.0.0.1 free for TCP and UDP")
+	return 0
+}
+
+// A port the tests serve on is free for QUIC too, where UDP sockets hold
+// some of the ports TCP has free.
+func TestFreePortIsFreeForUDP(t *testing.T) {
+	for range 1000 {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pc.Close()
+	}
+	for range 200 {
+		port := freePort(t)
+		pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+		if err != nil {
+			t.Fatalf("port %d: %v", port, err)
+		}
+		pc.Close()
+	}
+}
+
 // startOpts is startWith with the options mutate makes.
 func startOpts(t *testing.T, to string, proxy bool, mutate func(*Options)) (*source, string) {
 	t.Helper()
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := uint16(probe.Addr().(*net.TCPAddr).Port)
-	probe.Close()
+	port := uint16(freePort(t))
 	src := &source{asked: make(chan struct{}), p: &ipc.Published{
 		Names: []ipc.PublishedTarget{{Name: "immich.pub.example.org", Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
 			Port: port, Proxy: proxy, To: to}},
@@ -695,12 +731,7 @@ func TestTheStatusPageKnowsAMemberByItsAddress(t *testing.T) {
 		}
 		l.Close()
 	}
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := uint16(probe.Addr().(*net.TCPAddr).Port)
-	probe.Close()
+	port := uint16(freePort(t))
 	src := &source{asked: make(chan struct{}), p: &ipc.Published{
 		Names: []ipc.PublishedTarget{{Name: "status.pub.example.org", Addrs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
 			Port: port, Proxy: true, To: ipc.StatusPageTo(ipc.ShowNone)}},

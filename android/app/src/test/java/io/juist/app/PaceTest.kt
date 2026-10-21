@@ -16,6 +16,15 @@ class PaceTest {
         assertEquals(true, Pace(powerSave = true).saving)
     }
 
+    /** Mobile data costs radio time as well as money: only the app in front keeps the pace. */
+    @Test
+    fun savesOnAMeteredNetworkWhileTheAppIsNotInFront() {
+        assertEquals(true, Pace(metered = true).saving)
+        assertEquals(false, Pace(metered = true, inFront = true).saving)
+        assertEquals(false, Pace(inFront = false).saving)
+        assertEquals(true, Pace(interactive = false, metered = true, inFront = true).saving)
+    }
+
     /** Every multicast packet on the Wi-Fi wakes a phone holding the lock. */
     @Test
     fun theMulticastLockIsHeldWhileNotSavingOrJoining() {

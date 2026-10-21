@@ -107,6 +107,7 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | back an admin key up in a password manager | `juist admins export alice@home \| pass insert -m juist/alice` | [keys](https://docs.juist.nning.io/en/docs/keys/) |
 | end the network for good, with a break-glass secret | `juist network disable` | [changes](https://docs.juist.nning.io/en/docs/network-changes/) |
 | leave the network, as on a fresh install | `juist reset` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
+| move the network to a new release's schema, once every device runs it | `juist log upgrade` | [updating](https://docs.juist.nning.io/en/docs/updating/) |
 
 Any local user may run `juist status` and `juist health`; everything else is
 for root and the device's operator. Commands never ask which network or device
@@ -253,8 +254,8 @@ Still open before v1, as [05-roadmap.md](docs/05-roadmap.md) plans it:
 
 ## Development
 
-Go 1.27; `make` fetches and uses go1.27.2, so that a commit builds to the
-same bytes anywhere, and lists the targets.
+Go 1.21 or newer; `make` has it fetch and use go1.27.3, so that a commit
+builds to the same bytes anywhere, and lists the targets.
 
 ```sh
 make check                      # what CI gates on: lint, tidy, race tests, TCB and audit budgets

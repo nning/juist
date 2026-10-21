@@ -159,6 +159,18 @@ type Manager interface {
 	// goroutine.
 	Probe(ip netip.Addr, timeout time.Duration, cb func(answered bool))
 
+	// ProbeQuietly is Probe by a ping that starts no heartbeat, for a peer
+	// that rests or while this node saves battery.
+	ProbeQuietly(ip netip.Addr, timeout time.Duration, cb func(answered bool))
+
+	// SetSaving has the data plane save battery, measuring and keeping its
+	// paths less often.
+	SetSaving(saving bool)
+
+	// NetworkChanged tells the data plane that the host's networks changed,
+	// where its monitor would not notice, so that it finds its paths again.
+	NetworkChanged()
+
 	// Close shuts the manager down and releases the data plane. It is
 	// idempotent.
 	Close() error

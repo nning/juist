@@ -55,14 +55,15 @@ func exitList(a *app, args []string) error {
 
 // listExitNodes is "juist exit" for one network.
 func (a *app) listExitNodes() error {
-	if _, err := a.daemonStatus(); err != nil {
+	d, err := a.daemon()
+	if err != nil {
 		return err
 	}
 	// A reader's status names no devices, which would read as none.
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	st, err := a.restatus()
+	st, err := d.restatus()
 	if err != nil {
 		return err
 	}
@@ -164,32 +165,6 @@ func exitReach(st *ipc.Status, id types.Identity) string {
 	return ""
 }
 
-// daemonStatus is the status of the network's juistd, which exit nodes need.
-func (a *app) daemonStatus() (*ipc.Status, error) {
-	n, err := a.openNode()
-	if err != nil {
-		return nil, err
-	}
-	st := n.status()
-	switch {
-	case st == nil:
-		return nil, errors.New("juistd not running\nhint: " + startCmd(0))
-	case !st.InNetwork:
-		return nil, errNoNetwork
-	}
-	return st, nil
-}
-
-// restatus asks the network's juistd for its status again, as it answers
-// this user now.
-func (a *app) restatus() (*ipc.Status, error) {
-	n, err := a.openNode()
-	if err != nil {
-		return nil, err
-	}
-	return n.restatus()
-}
-
 func exitUse(a *app, args []string) error {
 	s := spec{name: "juist exit use", args: "DEVICE", min: 1, max: 1, about: exitUseAbout}
 	fs := newFlags(s.name)
@@ -199,9 +174,11 @@ func exitUse(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	if st, err := a.daemonStatus(); err != nil {
+	d, err := a.daemon()
+	if err != nil {
 		return err
-	} else if other, serves := a.otherEgress(st.Instance, true); serves {
+	}
+	if other, serves := a.otherEgress(d.st.Instance, true); serves {
 		return fmt.Errorf("%s serves as an exit node, and a host routes the internet through one network\n"+
 			"hint: juist exit serve --stop %s", other.label(), other.word())
 	} else if other != nil {
@@ -212,7 +189,7 @@ func exitUse(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := a.restatus()
+	st, err := d.restatus()
 	if err != nil {
 		return err
 	}
@@ -250,11 +227,7 @@ func exitUse(a *app, args []string) error {
 		return fmt.Errorf("this ssh session, %s, would end: %s\n"+
 			"hint: ssh to this device in the network%s, and run it there; or --force", client, why, overlayAddr(st))
 	}
-	n, err := a.openNode()
-	if err != nil {
-		return err
-	}
-	after, err := n.exit(ipc.Request{Command: ipc.CmdExit, ExitNode: target.Identity, ExitIsolate: *isolate})
+	after, err := d.request(ipc.Request{Command: ipc.CmdExit, ExitNode: target.Identity, ExitIsolate: *isolate})
 	if err != nil {
 		return err
 	}
@@ -285,34 +258,36 @@ func exitUse(a *app, args []string) error {
 	if ex.Serving {
 		a.warn("this device stops serving as an exit node")
 	}
-	a.warnDNS(after.Exit, dnsOverlay(after, append(slices.Clone(state.V4Ranges()), state.ULA())))
-	a.warnStrictRP(after.Exit)
+	a.emit(a.dnsNotes(after.Exit, dnsOverlay(after, append(slices.Clone(state.V4Ranges()), state.ULA()))))
+	a.emit(a.strictRPNotes(after.Exit))
 	return nil
 }
 
-// warnStrictRP says where strict reverse-path filtering drops what the exit
+// strictRPNotes say where strict reverse-path filtering drops what the exit
 // node answers: it arrives on a device the route back to it does not use.
-func (a *app) warnStrictRP(ex *ipc.Exit) {
+func (a *app) strictRPNotes(ex *ipc.Exit) []line {
 	var names []string
 	if ifs, err := net.Interfaces(); err == nil {
 		for _, ifc := range ifs {
 			names = append(names, ifc.Name)
 		}
 	}
+	var out []line
 	if ex != nil && ex.StrictRP6 {
-		a.warn("firewalld's strict IPv6 reverse-path filter drops the exit node's IPv6 answers")
-		a.hint("IPv6_rpfilter=loose in /etc/firewalld/firewalld.conf, then sudo systemctl reload firewalld")
+		out = append(out, line{kind: lineWarn, text: "firewalld's strict IPv6 reverse-path filter drops the exit node's IPv6 answers"},
+			line{kind: lineHint, text: "IPv6_rpfilter=loose in /etc/firewalld/firewalld.conf, then sudo systemctl reload firewalld"})
 	}
 	strict := strictRP(a.system, names)
 	if len(strict) == 0 {
-		return
+		return out
 	}
-	a.warn("strict reverse-path filtering on %s drops the exit node's answers", strings.Join(strict, ", "))
 	set := []string{"net.ipv4.conf.all.rp_filter=2"}
 	for _, n := range strict {
 		set = append(set, "net.ipv4.conf."+n+".rp_filter=2")
 	}
-	a.hint("sudo sysctl -w %s", strings.Join(set, " "))
+	return append(out,
+		line{kind: lineWarn, text: fmt.Sprintf("strict reverse-path filtering on %s drops the exit node's answers", strings.Join(strict, ", "))},
+		line{kind: lineHint, text: "sudo sysctl -w " + strings.Join(set, " ")})
 }
 
 // strictRP is those of ifaces whose reverse-path filter is strict: the higher
@@ -339,23 +314,24 @@ func strictRP(read func(string) ([]byte, error), ifaces []string) []string {
 	return out
 }
 
-// warnDNS says where the host's DNS leaves outside the tunnel, overlay aside,
+// dnsNotes say where the host's DNS leaves outside the tunnel, overlay aside,
 // and why, where the exit node in use, ex, does not take it.
-func (a *app) warnDNS(ex *ipc.Exit, overlay []netip.Prefix) {
+func (a *app) dnsNotes(ex *ipc.Exit, overlay []netip.Prefix) []line {
 	if ex != nil && ex.DNS {
-		return
+		return nil
 	}
 	out := dnsOutside(a.system, overlay)
 	switch {
 	case len(out) == 0:
+		return nil
 	case ex != nil && ex.DNSNot != "":
-		a.warn("DNS goes to %s, outside the tunnel: %s", joinAddrs(out), ex.DNSNot)
+		lines := []line{{kind: lineWarn, text: fmt.Sprintf("DNS goes to %s, outside the tunnel: %s", joinAddrs(out), ex.DNSNot)}}
 		if h := dnsHint(ex.DNSNot); h != "" {
-			a.hint("%s", h)
+			lines = append(lines, line{kind: lineHint, text: h})
 		}
-	default:
-		a.warn("DNS goes to %s, outside the tunnel", joinAddrs(out))
+		return lines
 	}
+	return []line{{kind: lineWarn, text: fmt.Sprintf("DNS goes to %s, outside the tunnel", joinAddrs(out))}}
 }
 
 // dnsHint is what lets the host's DNS through juistd where why stops it, ""
@@ -426,10 +402,11 @@ Send this device's internet traffic directly again.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return err
 	}
+	st := d.st
 	if !exitChosen(st.Exit) {
 		a.ok("unchanged: internet direct")
 		return nil
@@ -437,11 +414,7 @@ Send this device's internet traffic directly again.`}
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	n, err := a.openNode()
-	if err != nil {
-		return err
-	}
-	if _, err := n.exit(ipc.Request{Command: ipc.CmdExit, ExitOff: true}); err != nil {
+	if _, err := d.request(ipc.Request{Command: ipc.CmdExit, ExitOff: true}); err != nil {
 		return err
 	}
 	a.ok("internet direct")
@@ -455,25 +428,22 @@ func exitServe(a *app, args []string) error {
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return err
 	}
+	st := d.st
 	if !servesHere {
 		return errors.New("an exit node runs on Linux and FreeBSD alone")
 	}
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	n, err := a.openNode()
-	if err != nil {
-		return err
-	}
 	ex := cmp.Or(st.Exit, &ipc.Exit{})
 	dev := instance.Name(st.Instance)
 	if *stop {
 		if ex.Consent {
-			if _, err := n.exit(ipc.Request{Command: ipc.CmdExit, Serve: new(bool)}); err != nil {
+			if _, err := d.request(ipc.Request{Command: ipc.CmdExit, Serve: new(bool)}); err != nil {
 				return err
 			}
 			a.ok("stopped serving")
@@ -499,7 +469,7 @@ func exitServe(a *app, args []string) error {
 		}
 	}
 	on := true
-	after, err := n.exit(ipc.Request{Command: ipc.CmdExit, Serve: &on})
+	after, err := d.request(ipc.Request{Command: ipc.CmdExit, Serve: &on})
 	if err != nil {
 		return err
 	}

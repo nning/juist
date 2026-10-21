@@ -538,12 +538,7 @@ type source struct {
 }
 
 func sourceOf(a net.Addr) source {
-	addr := admit.Source(a)
-	if addr.Is6() {
-		p, _ := addr.Prefix(64)
-		addr = p.Addr()
-	}
-	return source{addr: addr}
+	return source{addr: admit.Host(admit.Source(a)).Addr()}
 }
 
 func (s source) String() string {

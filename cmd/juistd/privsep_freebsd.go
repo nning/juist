@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
-	"os/signal"
 	"os/user"
 	"slices"
 	"strings"
@@ -65,55 +63,30 @@ func runSplit(args []string) error {
 	if err != nil {
 		return err
 	}
-	// What root was started holding stays with root.
-	for fd := 3; fd < 1024; fd++ {
-		syscall.CloseOnExec(fd)
-	}
-	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	// Orphaned, the daemon could no longer route: it stops when the
+	// lifeline closes, and the next helper destroys what is left. A
+	// parent-death signal would not do: FreeBSD drops it at the daemon's
+	// exec, which follows a change of user.
+	// A hangup ends the daemon as a stop does.
+	ch, err := startChild(args, cred, unix.SOCK_STREAM, []string{plumber.EnvFD + "=3", plumber.EnvLifeline + "=4",
+		"HOME=" + u.HomeDir, "USER=" + u.Username, "LOGNAME=" + u.Username}, os.Stdout, os.Stderr, "the daemon as "+runAs,
+		func(s os.Signal) os.Signal {
+			if s == syscall.SIGHUP {
+				return syscall.SIGTERM
+			}
+			return s
+		})
 	if err != nil {
 		return err
 	}
-	helperEnd, daemonEnd := os.NewFile(uintptr(fds[0]), "helper"), os.NewFile(uintptr(fds[1]), "daemon")
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	// Orphaned, the daemon could no longer route: it stops when this end
-	// closes, and the next helper destroys what is left. A parent-death
-	// signal would not do: FreeBSD drops it at the daemon's exec, which
-	// follows a change of user.
-	lifeline, held, err := os.Pipe()
-	if err != nil {
-		return err
-	}
-	defer held.Close()
-	cmd := exec.Command(self, args...)
-	// Pipes, not root's terminal, which the daemon could read or type into,
-	// and a session of its own, which the terminal is none of.
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, struct{ io.Writer }{os.Stdout}, struct{ io.Writer }{os.Stderr}
-	cmd.ExtraFiles = []*os.File{daemonEnd, lifeline}
-	cmd.Env = append(daemonEnv(os.Environ()), plumber.EnvFD+"=3", plumber.EnvLifeline+"=4",
-		"HOME="+u.HomeDir, "USER="+u.Username, "LOGNAME="+u.Username)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred, Setsid: true}
-	sigs := make(chan os.Signal, 4)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sigs)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting the daemon as %s: %w", runAs, err)
-	}
-	daemonEnd.Close()
-	lifeline.Close()
-	c, err := net.FileConn(helperEnd)
-	helperEnd.Close()
-	if err != nil {
-		cmd.Process.Kill()
-		return err
-	}
+	defer ch.held.Close()
+	defer ch.unwatch()
+	cmd, c, held := ch.cmd, ch.conn, ch.held
 	served := make(chan error, 1)
 	var destroy func()
 	go func() {
 		var err error
-		destroy, err = plumber.Serve(c.(*net.UnixConn), plumber.FreeBSD{}, int(cred.Uid), func(format string, a ...any) {
+		destroy, err = plumber.Serve(c, plumber.FreeBSD{}, int(cred.Uid), func(format string, a ...any) {
 			fmt.Fprintf(os.Stderr, "juistd: "+format+"\n", a...)
 		})
 		served <- err
@@ -126,19 +99,9 @@ func runSplit(args []string) error {
 	}()
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
-	go func() {
-		for s := range sigs {
-			// A hangup ends the daemon as a stop does; one that does not
-			// stop in time is killed, lest the helper wait for ever.
-			if s == syscall.SIGHUP {
-				s = syscall.SIGTERM
-			}
-			cmd.Process.Signal(s)
-			time.AfterFunc(stopWait, func() { cmd.Process.Kill() })
-		}
-	}()
 	select {
 	case err = <-exited:
+		err = stoppedAsAsked(err, ch.stopping.Load())
 		// The daemon's end closed with it, and the helper destroys what it
 		// made as it reads that.
 		select {
@@ -151,7 +114,7 @@ func runSplit(args []string) error {
 	case serr := <-served:
 		if serr == nil {
 			// The daemon hung up, on its way out.
-			err = <-exited
+			err = stoppedAsAsked(<-exited, ch.stopping.Load())
 			break
 		}
 		// The helper stopped serving: the daemon, which could no longer
@@ -161,8 +124,7 @@ func runSplit(args []string) error {
 		// would otherwise wait for an answer to the end of their deadline.
 		c.Close()
 		held.Close()
-		cmd.Process.Signal(syscall.SIGTERM)
-		time.AfterFunc(stopWait, func() { cmd.Process.Kill() })
+		ch.stop(syscall.SIGTERM)
 		err = <-exited
 		if err == nil {
 			err = errors.New("the helper stopped serving the daemon")

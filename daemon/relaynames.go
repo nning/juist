@@ -15,8 +15,15 @@ import (
 // is taken as a relay's once the server at it says it is that relay.
 type relayNameProofs struct {
 	mu     sync.Mutex
-	by     map[string]*nameProof
+	by     map[nameClaim]*nameProof
+	newAt  map[types.Identity]time.Time // when each relay last got a name asked about
 	wanted chan struct{}
+}
+
+// nameClaim is a name as one relay claims it.
+type nameClaim struct {
+	name string
+	by   types.Identity
 }
 
 type nameProof struct {
@@ -27,14 +34,20 @@ type nameProof struct {
 	gap      time.Duration
 }
 
-// Bounds on asking relays' names whose they are.
+// Bounds on asking relays' names whose they are. A relay's names past its
+// own bound, or anyone's past the bound in all, push out the one longest
+// unclaimed, so a relay cycling names spends its own slots alone; one past
+// its own bound is taken once every nameProofNewEvery, so the names it has
+// every member ask stay few.
 const (
-	maxNameProofs   = 64
-	nameProofHeld   = 6 * time.Hour
-	nameProofFirst  = time.Minute
-	nameProofMost   = time.Hour
-	nameProofForget = 24 * time.Hour
-	nameProofWait   = 15 * time.Second
+	maxNameProofs     = 64
+	maxNamesPerRelay  = 4
+	nameProofNewEvery = 10 * time.Minute
+	nameProofHeld     = 6 * time.Hour
+	nameProofFirst    = time.Minute
+	nameProofMost     = time.Hour
+	nameProofForget   = 24 * time.Hour
+	nameProofWait     = 15 * time.Second
 )
 
 // relayNameProven reports whether the server at name said it is id's relay,
@@ -47,17 +60,25 @@ func (d *Daemon) relayNameProven(name string, id types.Identity) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.by == nil {
-		p.by = map[string]*nameProof{}
+		p.by, p.newAt = map[nameClaim]*nameProof{}, map[types.Identity]time.Time{}
 	}
-	e := p.by[name]
+	now := d.now()
+	k := nameClaim{name, id}
+	e := p.by[k]
 	if e == nil {
+		if p.claimsBy(id) >= maxNamesPerRelay {
+			if now.Sub(p.newAt[id]) < nameProofNewEvery {
+				return false
+			}
+			p.forgetLongestUnclaimed(func(c nameClaim) bool { return c.by == id })
+		}
 		if len(p.by) >= maxNameProofs {
-			return false
+			p.forgetLongestUnclaimed(func(nameClaim) bool { return true })
 		}
 		e = &nameProof{}
-		p.by[name] = e
+		p.by[k], p.newAt[id] = e, now
 	}
-	e.asked = d.now()
+	e.asked = now
 	if !e.answered {
 		select {
 		case p.wanted <- struct{}{}:
@@ -69,6 +90,31 @@ func (d *Daemon) relayNameProven(name string, id types.Identity) bool {
 	return e.answered && e.is == id
 }
 
+// claimsBy counts the names id claims, with p.mu held.
+func (p *relayNameProofs) claimsBy(id types.Identity) int {
+	n := 0
+	for c := range p.by {
+		if c.by == id {
+			n++
+		}
+	}
+	return n
+}
+
+// forgetLongestUnclaimed forgets the claim of those which was last claimed
+// longest ago, with p.mu held.
+func (p *relayNameProofs) forgetLongestUnclaimed(of func(nameClaim) bool) {
+	var oldest *nameClaim
+	for c, e := range p.by {
+		if of(c) && (oldest == nil || e.asked.Before(p.by[*oldest].asked)) {
+			oldest = &c
+		}
+	}
+	if oldest != nil {
+		delete(p.by, *oldest)
+	}
+}
+
 // proveRelayNames asks the relays' names whose they are, as they are
 // claimed and again now and then, and reconciles where an answer changed.
 func (d *Daemon) proveRelayNames(ctx context.Context) {
@@ -77,8 +123,6 @@ func (d *Daemon) proveRelayNames(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-d.closed:
 			return
 		case <-tick.C:
 		case <-d.nameProofs.wanted:
@@ -95,26 +139,31 @@ func (d *Daemon) proveDue(ctx context.Context) bool {
 	now := d.now()
 	p := &d.nameProofs
 	p.mu.Lock()
-	var due []string
-	for name, e := range p.by {
+	var due []nameClaim
+	for c, e := range p.by {
 		switch {
 		case now.Sub(e.asked) > nameProofForget:
-			delete(p.by, name)
+			delete(p.by, c)
 		case !now.Before(e.due):
-			due = append(due, name)
+			due = append(due, c)
+		}
+	}
+	for id, at := range p.newAt {
+		if now.Sub(at) > nameProofNewEvery && p.claimsBy(id) == 0 {
+			delete(p.newAt, id)
 		}
 	}
 	p.mu.Unlock()
 	changed := false
-	for _, name := range due {
+	for _, c := range due {
 		actx, cancel := context.WithTimeout(ctx, nameProofWait)
-		is, err := d.askWhoami(actx, name)
+		is, err := d.askWhoami(actx, c.name)
 		cancel()
 		if ctx.Err() != nil {
 			return changed
 		}
 		p.mu.Lock()
-		e := p.by[name]
+		e := p.by[c]
 		if e == nil {
 			p.mu.Unlock()
 			continue

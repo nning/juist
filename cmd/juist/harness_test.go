@@ -402,7 +402,14 @@ func startService(t *testing.T, home, sock string,
 		Home:   home,
 		Socket: sock,
 		Mesh: daemon.Options{
-			Connect:          func(conn.Options) (conn.Manager, error) { return mgr, nil },
+			Connect: func(o conn.Options) (conn.Manager, error) {
+				if pm, ok := mgr.(*peersManager); ok {
+					pm.mu.Lock()
+					pm.hostChanged = o.OnHostRoutesChange
+					pm.mu.Unlock()
+				}
+				return mgr, nil
+			},
 			DisableDiscovery: true,
 			DisableDHT:       true,
 			Logf:             func(string, ...any) {},
@@ -472,6 +479,14 @@ func (stubManager) Probe(_ netip.Addr, _ time.Duration, cb func(bool)) {
 	cb(false)
 }
 
+func (m stubManager) ProbeQuietly(addr netip.Addr, timeout time.Duration, cb func(bool)) {
+	m.Probe(addr, timeout, cb)
+}
+
+func (stubManager) SetSaving(bool) {}
+
+func (stubManager) NetworkChanged() {}
+
 func (stubManager) Close() error { return nil }
 
 // daemonDevice is a device as the packaged service runs it: juistd owns the
@@ -492,8 +507,35 @@ type peersManager struct {
 	peers   []conn.Peer
 	egress  conn.Egress
 	serve   conn.Serve
-	// host is what the host reaches outside juist.
-	host []netip.Prefix
+	// host is what the host reaches outside juist, which setHost changes
+	// and says so, as a router watching the host's routes does.
+	host        []netip.Prefix
+	hostChanged func()
+	// answers has an installed peer answer probes, as a reachable one does.
+	answers bool
+}
+
+func (m *peersManager) Probe(addr netip.Addr, _ time.Duration, cb func(bool)) {
+	m.mu.Lock()
+	ok := m.answers && slices.ContainsFunc(m.peers, func(p conn.Peer) bool {
+		return slices.ContainsFunc(p.Addrs, func(a netip.Prefix) bool { return a.Addr() == addr })
+	})
+	m.mu.Unlock()
+	cb(ok)
+}
+
+func (m *peersManager) ProbeQuietly(addr netip.Addr, timeout time.Duration, cb func(bool)) {
+	m.Probe(addr, timeout, cb)
+}
+
+func (m *peersManager) setHost(host []netip.Prefix) {
+	m.mu.Lock()
+	m.host = host
+	changed := m.hostChanged
+	m.mu.Unlock()
+	if changed != nil {
+		changed()
+	}
 }
 
 func (m *peersManager) HostRoutes() []netip.Prefix {

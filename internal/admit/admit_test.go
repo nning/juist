@@ -1,11 +1,14 @@
 package admit
 
 import (
+	"maps"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"slices"
 	"sync"
 	"testing"
+	"time"
 )
 
 var (
@@ -190,5 +193,180 @@ func TestARefusalEvictsNobody(t *testing.T) {
 	}
 	if evicted != 1 {
 		t.Fatalf("%d entries evicted", evicted)
+	}
+}
+
+func TestHostGroupAndSite(t *testing.T) {
+	for _, tc := range []struct{ addr, host, group, site string }{
+		{"192.0.2.7", "192.0.2.7/32", "192.0.2.7/32", "192.0.2.0/24"},
+		{"::ffff:192.0.2.7", "192.0.2.7/32", "192.0.2.7/32", "192.0.2.0/24"},
+		{"2001:db8:1:2ff:a::1", "2001:db8:1:2ff::/64", "2001:db8:1:200::/56", "2001:db8:1::/48"},
+		{"fe80::1%eth0", "fe80::/64", "fe80::/56", "fe80::/48"},
+	} {
+		a := netip.MustParseAddr(tc.addr)
+		if got := []string{Host(a).String(), Group(a).String(), Site(a).String()}; !slices.Equal(got, []string{tc.host, tc.group, tc.site}) {
+			t.Errorf("%s: host, group, site %v", tc.addr, got)
+		}
+	}
+	if p := Host(netip.Addr{}); p.IsValid() {
+		t.Errorf("the zero address is host %v", p)
+	}
+}
+
+// Past the total, EvictLargest takes the oldest of the source holding the
+// most within the group holding the most, ties going to the oldest, so a
+// lone older entry outlasts a flood.
+func TestEvictLargestOverall(t *testing.T) {
+	group := func(a netip.Addr) []netip.Addr { return []netip.Addr{netip.AddrFrom4([4]byte{a.As4()[0]})} }
+	s := NewNested(Limits{PerSource: 3, OnSource: EvictOldest, Total: 6, OnTotal: EvictLargest}, group)
+	lone, f1, f2, other := netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("20.0.0.1"), netip.MustParseAddr("20.0.0.2"), netip.MustParseAddr("30.0.0.1")
+	var evicted []int
+	admitted(t, s, lone, 1, &evicted, 0)
+	admitted(t, s, other, 2, &evicted, 10)
+	admitted(t, s, f1, 2, &evicted, 20)
+	admitted(t, s, f2, 1, &evicted, 30)
+	// Group 20 holds three, f1 the most of it.
+	admitted(t, s, f2, 1, &evicted, 31)
+	// Group 20 holds three again, now f2 the most of it.
+	admitted(t, s, other, 1, &evicted, 12)
+	// Group 30 holds three.
+	admitted(t, s, f1, 1, &evicted, 22)
+	if want := []int{20, 30, 10}; !slices.Equal(evicted, want) {
+		t.Fatalf("evicted %v, want %v", evicted, want)
+	}
+	if s.Count(lone) != 1 || s.Len() != 6 {
+		t.Fatalf("count %d, len %d", s.Count(lone), s.Len())
+	}
+
+	tied := New[netip.Addr](Limits{Total: 2, OnTotal: EvictLargest})
+	evicted = nil
+	admitted(t, tied, srcA, 1, &evicted, 0)
+	admitted(t, tied, srcB, 1, &evicted, 1)
+	admitted(t, tied, lone, 1, &evicted, 2)
+	if want := []int{0}; !slices.Equal(evicted, want) {
+		t.Fatalf("a tie evicted %v, want the oldest", evicted)
+	}
+}
+
+// After any admissions, evictions and releases every level's counts agree,
+// each knows how many of its children hold each count, and no bound is
+// passed.
+func TestTheIndexesAgree(t *testing.T) {
+	within := func(a netip.Addr) []netip.Addr {
+		b := a.As4()
+		return []netip.Addr{netip.AddrFrom4([4]byte{b[0]}), netip.AddrFrom4([4]byte{b[0], b[1]})}
+	}
+	s := NewNested(Limits{PerSource: 3, OnSource: EvictOldest, Total: 12, OnTotal: EvictLargest,
+		Within: []Bound{{Max: 7, On: EvictLargest}, {Max: 5, On: EvictOldest}}}, within)
+	r := rand.New(rand.NewPCG(1, 2))
+	var held []*Ticket[netip.Addr]
+	for step := range 20000 {
+		if r.IntN(3) > 0 || len(held) == 0 {
+			a := netip.AddrFrom4([4]byte{byte(r.IntN(3)), byte(r.IntN(3)), byte(r.IntN(3))})
+			tk, ok := s.Admit(a, func() {})
+			if !ok {
+				t.Fatalf("step %d: refused under evicting bounds", step)
+			}
+			held = append(held, tk)
+		} else {
+			i := r.IntN(len(held))
+			held[i].Release()
+			held[i].Release()
+			held = slices.Delete(held, i, i+1)
+		}
+		var check func(n *node[netip.Addr], level int)
+		check = func(n *node[netip.Addr], level int) {
+			bound := []int{12, 7, 5, 3}[level]
+			if n.held > bound || level > 0 && n.held == 0 {
+				t.Fatalf("step %d: level %d holds %d", step, level, n.held)
+			}
+			sum, most, sizes := 0, 0, map[int]int{}
+			for k, c := range n.children {
+				if c.key != k {
+					t.Fatalf("step %d: a child is filed under another key", step)
+				}
+				sum += c.held
+				most = max(most, c.held)
+				sizes[c.held]++
+				check(c, level+1)
+			}
+			if level < 3 && (sum != n.held || most != n.most || !maps.Equal(sizes, n.sizes)) {
+				t.Fatalf("step %d: level %d holds %d, its children %d; most %d, counted %d", step, level, n.held, sum, most, n.most)
+			}
+			if level == 3 && s.leaves[n.key] != n {
+				t.Fatalf("step %d: a source is not filed as one", step)
+			}
+		}
+		check(s.root, 0)
+	}
+}
+
+// One host's connections are bounded, and one site's, its hosts together.
+func TestHostsAndSites(t *testing.T) {
+	s := HostsAndSites(2)
+	var given *Ticket[netip.Prefix]
+	for _, tc := range []struct {
+		addr string
+		ok   bool
+	}{
+		{"2001:db8:1:1::1", true}, {"2001:db8:1:1::2", true}, {"2001:db8:1:1::3", false},
+		{"2001:db8:1:2::1", true}, {"2001:db8:1:3::1", true}, {"2001:db8:1:4::1", true},
+		{"2001:db8:1:5::1", true}, {"2001:db8:1:6::1", true}, {"2001:db8:1:6::2", true},
+		{"2001:db8:1:7::1", false}, {"2001:db8:2::1", true},
+		{"192.0.2.1", true}, {"192.0.2.1", true}, {"192.0.2.1", false},
+		{"192.0.2.2", true}, {"192.0.2.2", true}, {"192.0.2.3", true}, {"192.0.2.3", true},
+		{"192.0.2.4", true}, {"192.0.2.4", true}, {"192.0.2.5", false}, {"198.51.100.1", true},
+	} {
+		tk, got := s.Admit(Host(netip.MustParseAddr(tc.addr)), nil)
+		if got != tc.ok {
+			t.Errorf("a connection from %s taken %v, want %v", tc.addr, got, tc.ok)
+		}
+		if tc.addr == "192.0.2.4" {
+			given = tk
+		}
+	}
+	given.Release()
+	if _, ok := s.Admit(Host(netip.MustParseAddr("192.0.2.5")), nil); !ok {
+		t.Error("a site's connection given back is not taken again")
+	}
+}
+
+// Releasing an entry costs the same however many the set holds, as a closed
+// connection does at an ingress holding many.
+func TestReleaseDoesNotGrowWithTheSet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("timing")
+	}
+	type held struct {
+		s       *Set[netip.Prefix]
+		tickets []*Ticket[netip.Prefix]
+		srcs    []netip.Prefix
+	}
+	fill := func(n int) *held {
+		h := &held{s: HostsAndSites(n), tickets: make([]*Ticket[netip.Prefix], n), srcs: make([]netip.Prefix, n)}
+		for i := range n {
+			h.srcs[i] = Host(netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}))
+			h.tickets[i], _ = h.s.Admit(h.srcs[i], nil)
+		}
+		return h
+	}
+	// Windows of tens of milliseconds, interleaved, so that a time slice
+	// lost to another process does not decide.
+	churn := func(h *held) time.Duration {
+		start := time.Now()
+		for i := range 10000 {
+			j := i * 7919 % len(h.tickets)
+			h.tickets[j].Release()
+			h.tickets[j], _ = h.s.Admit(h.srcs[j], nil)
+		}
+		return time.Since(start)
+	}
+	s, l := fill(1<<10), fill(1<<17)
+	small, large := time.Duration(1<<62), time.Duration(1<<62)
+	for range 5 {
+		small, large = min(small, churn(s)), min(large, churn(l))
+	}
+	if large > 10*small {
+		t.Errorf("releasing and admitting again took %v holding %d, %v holding %d", large, 1<<17, small, 1<<10)
 	}
 }

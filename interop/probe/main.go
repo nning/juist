@@ -26,6 +26,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -36,6 +37,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -277,6 +279,28 @@ func pqget(addr, name, ca, path string) error {
 	return nil
 }
 
+// listenBoth listens on addr over UDP and TCP, waiting up to 10s for a
+// process told to stop to free it.
+func listenBoth(addr string) (net.PacketConn, net.Listener, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		pc, err := net.ListenPacket("udp", addr)
+		if err == nil {
+			ln, lerr := net.Listen("tcp", addr)
+			if lerr == nil {
+				return pc, ln, nil
+			}
+			pc.Close()
+			err = lerr
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) || time.Now().After(deadline) {
+			return nil, nil, err
+		}
+		fmt.Fprintf(os.Stderr, "probe: %v, trying again\n", err)
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func answerAll(addr, ip string, names []string) error {
 	a, err := netip.ParseAddr(ip)
 	if ip != "-" && (err != nil || !a.Is4()) {
@@ -316,7 +340,7 @@ func answerAll(addr, ip string, names []string) error {
 		out, _ := b.Finish()
 		return out
 	}
-	pc, err := net.ListenPacket("udp", addr)
+	pc, ln, err := listenBoth(addr)
 	if err != nil {
 		return err
 	}
@@ -332,10 +356,6 @@ func answerAll(addr, ip string, names []string) error {
 			}
 		}
 	}()
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
 	for {
 		c, err := ln.Accept()
 		if err != nil {

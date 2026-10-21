@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nning/juist/gossip"
@@ -23,33 +24,46 @@ type pskGiven struct {
 	stage pairkey.Stage
 }
 
-// loadPairs reads the preshared keys kept, or starts a store of its own,
-// which every peer reads as this node having given up the keys it held.
-func (d *Daemon) loadPairs() *pairkey.Store {
-	s, err := d.readPairsFile()
+// A pairStore is the preshared keys this node holds with its peers, the
+// file they are kept in, where path is not empty, and what was last kept
+// there; mu is innermost.
+type pairStore struct {
+	*pairkey.Store
+	path string
+	mu   sync.Mutex
+	kept []byte
+}
+
+// loadPairStore reads the preshared keys kept at path, or starts a store of
+// its own, which every peer reads as this node having given up the keys it
+// held.
+func loadPairStore(path string, logf func(string, ...any)) *pairStore {
+	p := &pairStore{path: path}
+	s, err := p.readFile()
 	if err != nil {
-		d.logf("daemon: reading the preshared keys kept, starting over: %v", err)
+		logf("daemon: reading the preshared keys kept, starting over: %v", err)
 	}
 	if s == nil {
 		s = pairkey.NewStore()
 	}
-	d.pairsKept, _ = s.Encode()
-	return s
+	p.Store = s
+	p.kept, _ = s.Encode()
+	return p
 }
 
-// readPairsFile is the store the pairs file holds, nil where there is none.
-func (d *Daemon) readPairsFile() (*pairkey.Store, error) {
-	if d.pairsPath == "" {
+// readFile is the store the file holds, nil where there is none.
+func (p *pairStore) readFile() (*pairkey.Store, error) {
+	if p.path == "" {
 		return nil, nil
 	}
-	b, err := os.ReadFile(d.pairsPath)
+	b, err := os.ReadFile(p.path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	text, err := keys.OpenText(d.pairsPath, string(b))
+	text, err := keys.OpenText(p.path, string(b))
 	if err != nil {
 		return nil, err
 	}
@@ -65,41 +79,46 @@ func (d *Daemon) readPairsFile() (*pairkey.Store, error) {
 	return nil, errors.New("no store in the file")
 }
 
-// changePairs runs change on the pair store and, where it changed anything,
-// keeps the store before anything else reads it: a change that cannot be
-// kept is undone, so no peer is told of a key this device would not hold
-// after a restart. It reports whether a change was kept.
-func (d *Daemon) changePairs(change func(*pairkey.Store) bool) bool {
-	d.pairsMu.Lock()
-	defer d.pairsMu.Unlock()
-	if !change(d.pairs) {
+// change runs fn on the store and, where it changed anything, keeps the
+// store before anything else reads it: a change that cannot be kept is
+// undone, so no peer is told of a key this device would not hold after a
+// restart. It reports whether a change was kept.
+func (p *pairStore) change(fn func(*pairkey.Store) bool, logf func(string, ...any)) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !fn(p.Store) {
 		return false
 	}
-	b, err := d.pairs.Encode()
-	if err == nil && d.pairsPath != "" {
+	b, err := p.Encode()
+	if err == nil && p.path != "" {
 		var text string
 		text, err = keys.SealText("# juist preshared keys this device holds with its peers; as secret as node.keys\n" +
 			base64.StdEncoding.EncodeToString(b) + "\n")
 		if err == nil {
-			err = statedir.WriteFilePrivate(d.pairsPath, []byte(text))
+			err = statedir.WriteFilePrivate(p.path, []byte(text))
 		}
 	}
 	if err != nil {
-		d.logf("daemon: keeping the preshared keys, so the change is undone: %v", err)
-		if rerr := d.pairs.Restore(d.pairsKept); rerr != nil {
-			d.logf("daemon: undoing a change to the preshared keys: %v", rerr)
+		logf("daemon: keeping the preshared keys, so the change is undone: %v", err)
+		if rerr := p.Restore(p.kept); rerr != nil {
+			logf("daemon: undoing a change to the preshared keys: %v", rerr)
 		}
 		return false
 	}
-	d.pairsKept = b
+	p.kept = b
 	return true
+}
+
+// changePairs is [pairStore.change] on this node's store.
+func (d *Daemon) changePairs(change func(*pairkey.Store) bool) bool {
+	return d.pairs.change(change, d.logf)
 }
 
 // readPairs runs read on the pair store, as kept.
 func (d *Daemon) readPairs(read func(*pairkey.Store)) {
-	d.pairsMu.Lock()
-	defer d.pairsMu.Unlock()
-	read(d.pairs)
+	d.pairs.mu.Lock()
+	defer d.pairs.mu.Unlock()
+	read(d.pairs.Store)
 }
 
 // keepSeeds adds the seeds of the epochs held to the pair store, so a peer
@@ -212,8 +231,7 @@ func (d *Daemon) onPair(m *pairkey.Msg) {
 		}
 		return changed
 	}) {
-		d.wantPair(m.From)
-		d.MarkDirty()
+		d.pushPair(m.From)
 	}
 }
 
@@ -231,8 +249,7 @@ func (d *Daemon) advancePair(env *pairkey.Env, who string) {
 	due := false
 	d.readPairs(func(s *pairkey.Store) { due = s.Due(env) })
 	if changed || due {
-		d.wantPair(env.Peer.ID)
-		d.MarkDirty()
+		d.pushPair(env.Peer.ID)
 	}
 }
 
@@ -330,6 +347,13 @@ func (d *Daemon) wantPair(id types.Identity) {
 		d.pairWanted = map[types.Identity]bool{}
 	}
 	d.pairWanted[id] = true
+}
+
+// pushPair has the next push reach id with this node's message in their
+// exchange, beside the members awake: no other that rests.
+func (d *Daemon) pushPair(id types.Identity) {
+	d.wantPair(id)
+	d.announceSoon()
 }
 
 // takePairWanted returns the peers exchanges wait on, and forgets them.

@@ -15,7 +15,6 @@ import (
 func FuzzDecodeIPCRequest(f *testing.F) {
 	for _, seed := range []Request{
 		{Command: CmdStatus},
-		{Command: CmdBootstrap},
 		{Command: CmdJoin, Invite: "7-acme-adviser-aimless", Name: "phone"},
 		{Command: CmdSetOperator, SetOperator: true, OperatorUID: 1000},
 		{Command: CmdRotate, Identity: true},
@@ -80,7 +79,7 @@ func FuzzDecodeIPCResponse(f *testing.F) {
 	for _, seed := range []Response{
 		{Err: "no"},
 		{Status: &Status{Derived: Derived{Epoch: 3, Members: 2, NetworkName: "n"}}},
-		{Bootstrap: &Bootstrap{Endpoints: [][]byte{{1}}, Leases: [][]byte{{2}}}},
+		{Records: [][]byte{{1}}, Orphans: [][]byte{{2}}},
 	} {
 		if b, err := encode(&seed, MaxRequest); err == nil {
 			f.Add(b)

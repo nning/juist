@@ -6,6 +6,8 @@
 package addrkey
 
 import (
+	"bytes"
+	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/hkdf"
 	"crypto/hmac"
@@ -19,6 +21,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/types"
 )
 
@@ -44,7 +47,7 @@ func Derive(secret []byte, network types.Hash, epoch uint64, peers []types.Ident
 		h.Write(p[:])
 	}
 	var info []byte
-	info = append(info, "juist/addr-key/v1\x00"...)
+	info = append(info, types.LabelAddrKey+"\x00"...)
 	info = binary.BigEndian.AppendUint64(info, epoch)
 	info = h.Sum(info)
 	b, err := hkdf.Key(sha256.New, secret, network[:], string(info), 32)
@@ -56,7 +59,7 @@ func Derive(secret []byte, network types.Hash, epoch uint64, peers []types.Ident
 
 // ID names k.
 func (k Key) ID() ID {
-	h := sha256.Sum256(append([]byte("juist/addr-key-id/v1\x00"), k[:]...))
+	h := sha256.Sum256(append([]byte(types.LabelAddrKeyID+"\x00"), k[:]...))
 	return ID(binary.BigEndian.Uint64(h[:8]))
 }
 
@@ -79,7 +82,7 @@ func Pair(scalar []byte, self types.Identity, peer types.Identity, public types.
 	if hi.Compare(lo) < 0 {
 		lo, hi = hi, lo
 	}
-	info := append(append([]byte("juist/pair-key/v1\x00"), lo[:]...), hi[:]...)
+	info := append(append([]byte(types.LabelPairKey+"\x00"), lo[:]...), hi[:]...)
 	b, err := hkdf.Key(sha256.New, shared, network[:], string(info), 32)
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("addrkey: deriving: %w", err)
@@ -90,7 +93,7 @@ func Pair(scalar []byte, self types.Identity, peer types.Identity, public types.
 // WithPSK is pair with the pair's preshared key psk mixed in, for a pair
 // that has one of its own.
 func WithPSK(pair, psk [32]byte) [32]byte {
-	b, err := hkdf.Key(sha256.New, append(pair[:], psk[:]...), nil, "juist/pair-key-psk/v1", 32)
+	b, err := hkdf.Key(sha256.New, append(pair[:], psk[:]...), nil, types.LabelPairKeyPSK, 32)
 	if err != nil {
 		panic(fmt.Sprintf("addrkey: deriving: %v", err))
 	}
@@ -101,26 +104,50 @@ func WithPSK(pair, psk [32]byte) [32]byte {
 // owner and the key's ID, which names one key: a wrap is the same for the
 // same key and pair, and never the same nonce for another.
 func Wrap(pair [32]byte, owner types.Identity, k Key) []byte {
-	a, _ := chacha20poly1305.NewX(pair[:])
 	nonce, ad := wrapNonce(owner, k.ID())
-	return a.Seal(nil, nonce, k[:], ad)
+	return newAEAD(pair).Seal(nil, nonce, k[:], ad)
 }
 
 // Unwrap opens a wrap of owner's key id, reporting false where it is not
 // sealed under pair.
 func Unwrap(pair [32]byte, owner types.Identity, id ID, wrap []byte) (Key, bool) {
-	a, _ := chacha20poly1305.NewX(pair[:])
 	nonce, ad := wrapNonce(owner, id)
-	b, err := a.Open(nil, nonce, wrap, ad)
+	b, err := newAEAD(pair).Open(nil, nonce, wrap, ad)
 	if err != nil || len(b) != len(Key{}) || Key(b).ID() != id {
 		return Key{}, false
 	}
 	return Key(b), true
 }
 
+func newAEAD(key [32]byte) cipher.AEAD {
+	a, err := chacha20poly1305.NewX(key[:])
+	if err != nil {
+		panic(fmt.Sprintf("addrkey: a 32-byte key refused: %v", err))
+	}
+	return a
+}
+
+// The project's strict codec: an address set has one encoding.
+var (
+	addrsEnc = func() cbor.EncMode {
+		m, err := cbor.CTAP2EncOptions().EncMode()
+		if err != nil {
+			panic(err)
+		}
+		return m
+	}()
+	addrsDec = func() cbor.DecMode {
+		m, err := types.StrictDecOptions(4, 16, 16).DecMode()
+		if err != nil {
+			panic(err)
+		}
+		return m
+	}()
+)
+
 func wrapNonce(owner types.Identity, id ID) (nonce, ad []byte) {
 	ad = binary.BigEndian.AppendUint64(append([]byte(nil), owner[:]...), uint64(id))
-	h := sha256.Sum256(append([]byte("juist/addr-wrap/v1\x00"), ad...))
+	h := sha256.Sum256(append([]byte(types.LabelAddrWrap+"\x00"), ad...))
 	return h[:chacha20poly1305.NonceSizeX], ad
 }
 
@@ -128,20 +155,17 @@ func wrapNonce(owner types.Identity, id ID) (nonce, ad []byte) {
 // subkey of k and the addresses, so the same addresses seal alike and a renewed
 // announcement reads as nothing new.
 func Seal(k Key, addrs []netip.AddrPort) ([]byte, error) {
-	body, err := cbor.Marshal(addrs)
+	body, err := addrsEnc.Marshal(addrs)
 	if err != nil {
 		return nil, fmt.Errorf("addrkey: encoding: %w", err)
 	}
-	a, _ := chacha20poly1305.NewX(k[:])
-	nk, err := hkdf.Key(sha256.New, k[:], nil, "juist/addr-nonce/v1", 32)
+	nk, err := hkdf.Key(sha256.New, k[:], nil, types.LabelAddrNonce, 32)
 	if err != nil {
 		return nil, fmt.Errorf("addrkey: deriving: %w", err)
 	}
 	mac := hmac.New(sha256.New, nk)
 	mac.Write(body)
-	out := binary.BigEndian.AppendUint64(nil, uint64(k.ID()))
-	out = append(out, mac.Sum(nil)[:aead.NonceLen]...)
-	return a.Seal(out, out[aead.EpochLen:], body, out[:aead.EpochLen]), nil
+	return aead.SealNonce(k, uint64(k.ID()), [aead.NonceLen]byte(mac.Sum(nil)), body), nil
 }
 
 // SealedID is the ID of the key sealed was sealed under.
@@ -151,7 +175,8 @@ func SealedID(sealed []byte) (ID, error) {
 }
 
 // Open opens what [Seal] sealed under k.
-func Open(k Key, sealed []byte) ([]netip.AddrPort, error) {
+func Open(k Key, sealed []byte) (_ []netip.AddrPort, err error) {
+	defer malformed.Recover(&err)
 	if id, err := SealedID(sealed); err != nil || id != k.ID() {
 		return nil, errors.New("addrkey: sealed under another key")
 	}
@@ -160,9 +185,11 @@ func Open(k Key, sealed []byte) ([]netip.AddrPort, error) {
 		return nil, err
 	}
 	var addrs []netip.AddrPort
-	dec, _ := cbor.DecOptions{MaxArrayElements: 16}.DecMode()
-	if err := dec.Unmarshal(body, &addrs); err != nil {
+	if err := addrsDec.Unmarshal(body, &addrs); err != nil {
 		return nil, fmt.Errorf("addrkey: decoding: %w", err)
+	}
+	if re, err := addrsEnc.Marshal(addrs); err != nil || !bytes.Equal(re, body) {
+		return nil, types.ErrNonCanonical
 	}
 	return addrs, nil
 }

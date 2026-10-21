@@ -44,8 +44,8 @@ On arm64, use `juist-freebsd14-aarch64.pkg`. On Linux the package starts the
 daemon itself; on FreeBSD you start it once, as shown above.
 {{< /step >}}
 
-Installing a newer release later replaces the old one. The device keeps its
-state.
+Installing a newer release later replaces the old one, and the device keeps
+its state; [Updating juist]({{< relref "docs/updating" >}}) has the details.
 
 ## Verifying a download
 
@@ -65,8 +65,9 @@ for each file you downloaded.
 
 ## Building from source
 
-Building needs Go 1.27. `make` then downloads go1.27.2 and builds with it, so
-that a given commit produces the same bytes on any machine.
+Building needs Go 1.21 or newer and `make`. `make` has Go download go1.27.3
+and builds with it, so that a given commit produces the same bytes on any
+machine.
 
 ```sh
 git clone https://github.com/nning/juist
@@ -123,7 +124,6 @@ To check that the daemon is running:
 ```console {device="nas"}
 $ juist status
 nas · no network
-hint: juist join CODE, or juist create
 ```
 
 Next, [create your first network]({{< relref "docs/first-network" >}}).
@@ -156,7 +156,8 @@ a relay on port 443, and the changes made by `juist exit serve`.
   `juist: kept /var/lib/juist, which still holds this device's keys and log`.
 - `/var/lib/juist-serve` stays as well (on FreeBSD, `/var/db/juist-serve`). It
   holds the TLS terminator's ACME account, which the CAA records of your
-  published names may refer to. The removal says so:
+  published names may refer to. `sudo apt purge juist` on Debian and Ubuntu,
+  and `sudo dnf remove juist` on Fedora, say so:
   `juist: kept /var/lib/juist-serve, the terminator's ACME account, which CAA records may name`.
 - On FreeBSD, the removal prints a single line starting with `juist: kept`
   that lists everything that stays.
@@ -169,6 +170,9 @@ a relay on port 443, and the changes made by `juist exit serve`.
   `make install knows apt (Debian, Ubuntu), dnf (Fedora) and pkg (FreeBSD); use make deb, rpm or pkg-freebsd`:
   this system uses none of these package managers. Build the package for one
   of the supported systems and install it there.
-- `juist status` says `juistd not running`: start it with
-  `sudo systemctl enable --now juistd`, or on FreeBSD with `service juistd start`.
-- On Linux, `journalctl -u juistd` shows the daemon's log.
+- `juist status` says `juist0 · not running`, or on FreeBSD before juistd is
+  enabled `juistd not running`: start the daemon with
+  `sudo systemctl enable --now juistd`, or on FreeBSD, as root, with
+  `sysrc juistd_enable=YES && service juistd start`.
+- On Linux, `journalctl -u juistd` shows the daemon's log; on FreeBSD it is
+  `/var/log/juistd.log`.

@@ -45,14 +45,15 @@ func namesList(a *app, args []string) error {
 
 // listNames is "juist names" for one network.
 func (a *app) listNames() error {
-	if _, err := a.daemonStatus(); err != nil {
+	d, err := a.daemon()
+	if err != nil {
 		return err
 	}
 	// A reader's status says not which device a name points at.
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	st, err := a.restatus()
+	st, err := d.restatus()
 	if err != nil {
 		return err
 	}
@@ -152,21 +153,18 @@ func setAcceptNames(a *app, args []string, on bool, s spec) error {
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
-	st, err := a.daemonStatus()
+	d, err := a.daemon()
 	if err != nil {
 		return err
 	}
+	st := d.st
 	word := map[bool]string{true: "public names on", false: "public names off"}[on]
 	// Sent either way: a status without a running mesh does not say.
 	unchanged := st.Names != nil && st.Names.Accepted == on
 	if err := a.requireOperator(); err != nil {
 		return err
 	}
-	n, err := a.openNode()
-	if err != nil {
-		return err
-	}
-	st, err = n.exit(ipc.Request{Command: ipc.CmdNames, AcceptNames: &on})
+	st, err = d.request(ipc.Request{Command: ipc.CmdNames, AcceptNames: &on})
 	if err != nil {
 		return err
 	}
@@ -261,7 +259,7 @@ func (a *app) acceptsNames() bool {
 	if err != nil {
 		return false
 	}
-	st := n.status()
+	st := liveStatus(n)
 	return st != nil && st.Names != nil && st.Names.Accepted
 }
 

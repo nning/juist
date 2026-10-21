@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -146,14 +147,13 @@ func TestServiceStatus(t *testing.T) {
 }
 
 // A status never waits for a probe: it carries what the background check
-// last found, and a Probe from an older client changes nothing. Nothing but a
-// status may carry Probe.
+// last found.
 func TestServiceStatusCarriesTheLastCheck(t *testing.T) {
 	f := newServiceFixture(t, true)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		start := time.Now()
-		resp, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdStatus, Probe: true})
+		resp, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdStatus})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -167,9 +167,6 @@ func TestServiceStatusCarriesTheLastCheck(t *testing.T) {
 			t.Fatal("no background check reached the status")
 		}
 		time.Sleep(50 * time.Millisecond)
-	}
-	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdLog, Probe: true}); err == nil {
-		t.Fatal("a log request carrying Probe was served")
 	}
 }
 
@@ -241,7 +238,7 @@ func TestSocketIsOpenAndCallsAreChecked(t *testing.T) {
 	if resp := ask(stranger, ipc.Request{Command: ipc.CmdStatus}); resp.Status == nil || resp.Status.CanOperate {
 		t.Fatalf("a stranger's status call: %+v", resp)
 	}
-	for _, cmd := range []ipc.Command{ipc.CmdLog, ipc.CmdSelf, ipc.CmdBootstrap, ipc.CmdRotate, ipc.CmdUnstage, ipc.CmdInform, ipc.CmdCreate, ipc.CmdJoin,
+	for _, cmd := range []ipc.Command{ipc.CmdLog, ipc.CmdSelf, ipc.CmdRotate, ipc.CmdUnstage, ipc.CmdInform, ipc.CmdCreate, ipc.CmdJoin,
 		ipc.CmdReset} {
 		if resp := ask(stranger, ipc.Request{Command: cmd}); resp.Err != ipc.ErrNotOperator {
 			t.Errorf("a stranger's %v call got %+v", cmd, resp)
@@ -307,6 +304,24 @@ func TestASecondServiceOnTheSameHomeIsRefused(t *testing.T) {
 	s2, err := NewService(ServiceOptions{Home: f.home})
 	if err != nil {
 		t.Fatalf("a successor could not take a released home: %v", err)
+	}
+	s2.Close()
+}
+
+// A closed service lets go of its home at once, though a child forked
+// meanwhile still has the lock file open.
+func TestAClosedServiceReleasesItsHomePastAForkedChild(t *testing.T) {
+	f := newServiceFixture(t, true)
+	child := exec.Command("sleep", "30")
+	child.ExtraFiles = []*os.File{f.s.lock}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	f.s.Close()
+	s2, err := NewService(ServiceOptions{Home: f.home})
+	if err != nil {
+		t.Fatalf("a successor could not take the released home: %v", err)
 	}
 	s2.Close()
 }
@@ -586,6 +601,94 @@ func TestHangingUpEndsAJoin(t *testing.T) {
 	}
 }
 
+// TestCloseEndsAJoinAtStart: a join the service started itself ends before
+// Close returns, so it cannot write the state directory once the lock is
+// released.
+func TestCloseEndsAJoinAtStart(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() { // a host that accepts and says nothing
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+	nw := newNetwork(t, 2)
+	home := socketDir(t)
+	writeDevice(t, home, nw.devices[0])
+	s, err := NewService(ServiceOptions{
+		Home: home,
+		Join: "juist:AAAAAAAAAAAAAAAAAAAAAA@" + ln.Addr().String(),
+		Mesh: Options{DisableDiscovery: true, DisableDHT: true},
+		Logf: safeLogf(t, ""),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !s.Status().Joining {
+		if time.Now().After(deadline) {
+			s.Close()
+			t.Fatal("the join at start never began")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.Close()
+	if s.Status().Joining {
+		t.Fatal("the join at start outlived Close")
+	}
+}
+
+// TestAStartDuringCloseIsRefused: a Start that comes while Close waits for a
+// call under way starts nothing Close would then wait for in vain.
+func TestAStartDuringCloseIsRefused(t *testing.T) {
+	nw := newNetwork(t, 2)
+	home := socketDir(t)
+	writeDevice(t, home, nw.devices[0])
+	s, err := NewService(ServiceOptions{Home: home, Logf: safeLogf(t, "")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	silent, err := s.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closed)
+	}()
+	for {
+		s.mu.Lock()
+		c := s.closed
+		s.mu.Unlock()
+		if c {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.Start(ctx); err == nil {
+		t.Error("a closing service started")
+	}
+	silent.Close()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close never returned after a Start during it")
+	}
+}
+
 // TestAnAbandonedRotationApprovedAnywayIsAdopted: the record carries this
 // device's signature, so an admin can still approve it; the keys it names
 // were archived, not deleted, and the device switches to them.
@@ -642,7 +745,7 @@ func TestAbandoningTwiceKeepsBothKeySets(t *testing.T) {
 	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdInform, Records: [][]byte{body}}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, 3*rotationCheckInterval, "the first abandoned keys to be adopted", func() bool {
+	waitFor(t, 3*watchRetryEvery, "the first abandoned keys to be adopted", func() bool {
 		m := f.s.Mesh()
 		if m == nil {
 			return false
@@ -689,7 +792,7 @@ func TestAnIdentityRotationApprovedWhileDownIsAdopted(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := startService(t, f.nw, f.home)
-	waitFor(t, 3*rotationCheckInterval, "the mesh to start on the approved identity", func() bool {
+	waitFor(t, 3*watchRetryEvery, "the mesh to start on the approved identity", func() bool {
 		return g.s.Mesh() != nil
 	})
 }
@@ -1034,7 +1137,7 @@ func TestAMovedDeviceMovesOntoItsNewAddressAtOnce(t *testing.T) {
 	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdInform, Records: [][]byte{body}}); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(rotationCheckInterval / 2)
+	deadline := time.Now().Add(watchRetryEvery / 2)
 	for {
 		if m := f.s.Mesh(); m == before && !m.addrsMoved() &&
 			slices.Contains(m.heldAddrs(), netip.MustParsePrefix("198.18.0.99/32")) {

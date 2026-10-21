@@ -8,14 +8,13 @@ lead: An exit node is a device in your network that carries the other devices' i
 ## How it works
 
 Normally a device goes online from wherever it is. With an exit node, it first
-sends its internet traffic through the tunnel to another member, a device that
-belongs to your network ([How juist works]({{< relref "docs/how-it-works" >}})).
-That member sends it on. Websites then see the exit node's address, and the
+sends its internet traffic through the tunnel to another member of your
+network, which sends it on. Websites then see the exit node's address, and the
 café's network sees only encrypted traffic.
 
-A device becomes an exit node in two steps. First an admin, a person whose key
-approves changes to the network, gives it the role `exit`. A role is a
-permission the network records for one device. Then the device's
+A device becomes an exit node in two steps. First an
+[admin]({{< relref "docs/how-it-works" >}}#admins) gives it the
+[role]({{< relref "docs/how-it-works" >}}#roles) `exit`. Then the device's
 [operator]({{< relref "docs/operator" >}}), the local user who manages it
 without sudo, agrees by running `juist exit serve` on it.
 

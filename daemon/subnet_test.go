@@ -270,7 +270,7 @@ func TestTheSubnetWordsAreKept(t *testing.T) {
 	}
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
-	if f.s.serveSubnets || f.s.subnetsOff {
+	if f.s.prefs.ServeSubnets || f.s.prefs.SubnetsOff {
 		t.Error("the service holds on to the words after a reset")
 	}
 }

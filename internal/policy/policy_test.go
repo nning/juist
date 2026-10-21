@@ -532,9 +532,9 @@ func TestWarningsOfCarriersAndRepeats(t *testing.T) {
 	}
 }
 
-func TestTestLines(t *testing.T) {
+func TestCaseLines(t *testing.T) {
 	src := "table <a> { b,\n test }\ntest pass from b to c\npass from b to c\n\ntest block from c to b\n"
-	if got := TestLines(src); !slices.Equal(got, []int{3, 6}) {
+	if got := CaseLines(src); !slices.Equal(got, []int{3, 6}) {
 		t.Errorf("tests start on %v, want 3 and 6", got)
 	}
 }

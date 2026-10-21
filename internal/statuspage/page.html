@@ -22,6 +22,8 @@ td .sub { display: block; font: 400 12.5px var(--mono); color: var(--muted); fon
 td.state { width: 1%; white-space: nowrap; }
 td.dim, td.hash { font: 400 13px var(--mono); color: var(--muted); }
 td.hash, td.idx { white-space: nowrap; }
+td.schema { width: 1%; white-space: nowrap; }
+td.dim.relay { color: var(--relay); }
 td.idx { width: 1%; font: 400 13px var(--mono); color: var(--muted); }
 .alarms { list-style: none; margin: 16px 0 0; padding: 0; }
 .alarms li { margin: 10px 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--alarm); color: var(--text); font-size: 15.5px; }
@@ -64,13 +66,13 @@ footer p { margin: 0 0 6px; }
 {{if .ShowNetwork}}
 <h2>Devices<small>{{len .Devices}}</small></h2>
 <table>
-<thead><tr><th>Name</th><th>Reach</th><th class="wide">Last heard</th></tr></thead>
+<thead><tr><th>Name</th><th>Reach</th>{{if .ShowSchemas}}<th>Schema</th>{{end}}<th class="wide">Last heard</th></tr></thead>
 <tbody>
-{{range .Devices}}<tr><td class="name">{{.Name}}<span class="sub">{{.Addrs}}{{if .Roles}} · {{.Roles}}{{end}}</span></td><td class="state"><span class="pill {{.Class}}">{{.Reach}}</span>{{if .Heard}}<span class="sub narrow">{{.Heard}}</span>{{end}}</td><td class="dim wide">{{.Heard}}</td></tr>
+{{range .Devices}}<tr><td class="name">{{.Name}}<span class="sub">{{.Addrs}}{{if .Roles}} · {{.Roles}}{{end}}</span></td><td class="state"><span class="pill {{.Class}}">{{.Reach}}</span>{{if .Heard}}<span class="sub narrow">{{.Heard}}</span>{{end}}</td>{{if $.ShowSchemas}}<td class="dim schema{{with .SchemaClass}} {{.}}{{end}}">{{.Schema}}</td>{{end}}<td class="dim wide">{{.Heard}}</td></tr>
 {{end}}</tbody>
 </table>
 <h2>Network</h2>
-<dl class="facts">{{range .Facts}}<dt>{{.Label}}</dt><dd>{{.Text}}</dd>{{end}}</dl>
+<dl class="facts">{{range .Facts}}<dt>{{.Label}}</dt><dd{{with .Class}} class="{{.}}"{{end}}>{{.Text}}</dd>{{end}}</dl>
 {{end}}
 {{if .ShowChanges}}
 <h2>Changes<small>{{if gt .Total (len .Changes)}}newest {{len .Changes}} of {{.Total}}{{else}}{{.Total}}{{end}}</small></h2>

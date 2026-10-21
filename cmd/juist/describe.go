@@ -22,368 +22,459 @@ import (
 // takes nothing from the file's name or its comments, which whoever handed
 // the file over chose.
 func effect(aum *types.AUM, state *log.State, now int64) []string {
-	member := func(id types.Identity) string {
-		if state != nil {
-			if n, ok := state.Node(id); ok {
-				return fmt.Sprintf("%s (%v)", displayMember(n), id.ShortString())
-			}
-		}
-		return id.ShortString()
+	d := &describer{state: state, now: now}
+	if say, ok := effects[aum.Kind]; ok {
+		say(d, aum, state)
+	} else {
+		d.add("a %s record", aum.Kind)
 	}
-	var out []string
-	add := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
-	switch aum.Kind {
-	case types.KindGenesis, types.KindCheckpoint:
-		st := aum.State
-		if aum.Kind == types.KindGenesis {
-			add("creates the network %q", st.Network)
+	return d.out
+}
+
+// A describer gathers the lines effect says.
+type describer struct {
+	state *log.State
+	now   int64
+	out   []string
+}
+
+func (d *describer) add(format string, args ...any) {
+	d.out = append(d.out, fmt.Sprintf(format, args...))
+}
+
+// member names a member as the state knows it.
+func (d *describer) member(id types.Identity) string {
+	if d.state != nil {
+		if n, ok := d.state.Node(id); ok {
+			return fmt.Sprintf("%s (%v)", displayMember(n), id.ShortString())
+		}
+	}
+	return id.ShortString()
+}
+
+// effects says each kind of record; TestEveryKindIsDescribed holds every kind
+// to one.
+var effects = map[types.Kind]func(d *describer, aum *types.AUM, state *log.State){
+	types.KindGenesis:           effectSnapshot,
+	types.KindCheckpoint:        effectSnapshot,
+	types.KindAddNode:           effectAddNode,
+	types.KindRemoveNode:        effectRemoveNode,
+	types.KindSetNodeRoutes:     effectSetNodeRoutes,
+	types.KindRotateNodeKey:     effectRotateNodeKey,
+	types.KindRotateIdentity:    effectRotateIdentity,
+	types.KindAddAdminKey:       effectAddAdminKey,
+	types.KindSetHolder:         effectSetHolder,
+	types.KindRemoveAdminKey:    effectRemoveAdminKey,
+	types.KindSetAdminRecipient: effectSetAdminRecipient,
+	types.KindSetQuorum:         effectSetQuorum,
+	types.KindEpochBump:         effectEpochBump,
+	types.KindSchemaUpgrade:     effectSchemaUpgrade,
+	types.KindSetVouchers:       effectSetVouchers,
+	types.KindRenumberNetwork:   effectRenumberNetwork,
+	types.KindRenumberNode:      effectRenumberNode,
+	types.KindRetireAddresses:   effectRetireAddresses,
+	types.KindSetNodeNames:      effectSetNodeNames,
+	types.KindSetDomain:         effectSetDomain,
+	types.KindSetPublished:      effectSetPublished,
+	types.KindRenameNetwork:     effectRenameNetwork,
+	types.KindSetPolicy:         effectSetPolicy,
+	types.KindRenameNode:        effectRenameNode,
+	types.KindDisable:           effectDisable,
+}
+
+func effectSnapshot(d *describer, aum *types.AUM, state *log.State) {
+	st := aum.State
+	if aum.Kind == types.KindGenesis {
+		d.add("creates the network %q", st.Network)
+	} else {
+		d.add("checkpoints %q", st.Network)
+	}
+	d.add("a change needs %s", count(st.Quorum, "vote"))
+	if st.Vouchers > 1 {
+		d.add("%d vouchers must confirm a device's view", st.Vouchers)
+	}
+	for _, p := range adminPeople(st.Admins) {
+		ids := make([]string, len(p.keys))
+		for i, k := range p.keys {
+			ids[i] = k.Public.ShortString()
+			if on := keyMachine(k); on != "" {
+				ids[i] += " on " + on
+			}
+		}
+		signs := "its key"
+		if len(p.keys) > 1 {
+			signs = fmt.Sprintf("%d of its %d keys (%s)", p.keys[0].NeededKeys(), len(p.keys), strings.Join(ids, ", "))
 		} else {
-			add("checkpoints %q", st.Network)
+			signs += " " + ids[0]
 		}
-		add("a change needs %s", count(st.Quorum, "vote"))
-		if st.Vouchers > 1 {
-			add("%d vouchers must confirm a device's view", st.Vouchers)
+		d.add("admin %s: %s, cast with %s", p.name, count(p.keys[0].Votes, "vote"), signs)
+	}
+	for _, n := range st.Nodes {
+		d.add("device %s (%v)%s", displayMember(n), n.Identity.ShortString(), rolesSuffix(n.Roles))
+	}
+	if st.Policy != nil {
+		d.add("an access policy of %s", count(len(st.Policy.Rules), "rule"))
+	}
+}
+
+func effectAddNode(d *describer, aum *types.AUM, state *log.State) {
+	n := aum.Node
+	d.add("admits the device %q (%v)", n.Name, n.Identity.ShortString())
+	d.add("with the keys %s", keysDigest(types.NodeKeys{WireGuard: n.WireGuard, X25519: n.X25519, MLKEM: n.MLKEM}))
+	if n.V4 != nil {
+		d.add("at %v", *n.V4)
+	}
+	d.add("with %s", rolesPhrase(n.Roles))
+	if len(n.Routes) > 0 {
+		d.add("routing %v", n.Routes)
+	}
+	for _, name := range n.Names {
+		d.add("pointing %s at it", name)
+	}
+	domain := "DOMAIN"
+	if state != nil {
+		domain = cmp.Or(state.Domain(), domain)
+	}
+	for _, p := range n.Published {
+		d.add("%s", publishedLine("publishing", p, domain, "it"))
+	}
+}
+
+func effectRemoveNode(d *describer, aum *types.AUM, state *log.State) {
+	roles := ""
+	if state != nil {
+		if n, ok := state.Node(*aum.Subject); ok {
+			roles = rolesSuffix(n.Roles)
 		}
-		for _, p := range adminPeople(st.Admins) {
-			ids := make([]string, len(p.keys))
-			for i, k := range p.keys {
-				ids[i] = k.Public.ShortString()
-				if on := keyMachine(k); on != "" {
-					ids[i] += " on " + on
-				}
+	}
+	d.add("removes the device %s%s", d.member(*aum.Subject), roles)
+}
+
+func effectSetNodeRoutes(d *describer, aum *types.AUM, state *log.State) {
+	var cur *types.NodeRecord
+	if state != nil {
+		if n, ok := state.Node(*aum.Subject); ok {
+			cur = &n
+		}
+	}
+	// Said as what changes, where the log says what it has cur.
+	if cur == nil {
+		d.add("gives %s %s", d.member(*aum.Subject), rolesPhrase(aum.Grant.Roles))
+	} else {
+		var added, taken []types.Role
+		for _, r := range aum.Grant.Roles {
+			if !slices.Contains(cur.Roles, r) {
+				added = append(added, r)
 			}
-			signs := "its key"
-			if len(p.keys) > 1 {
-				signs = fmt.Sprintf("%d of its %d keys (%s)", p.keys[0].NeededKeys(), len(p.keys), strings.Join(ids, ", "))
-			} else {
-				signs += " " + ids[0]
+		}
+		for _, r := range cur.Roles {
+			if !slices.Contains(aum.Grant.Roles, r) {
+				taken = append(taken, r)
 			}
-			add("admin %s: %s, cast with %s", p.name, count(p.keys[0].Votes, "vote"), signs)
 		}
-		for _, n := range st.Nodes {
-			add("device %s (%v)%s", displayMember(n), n.Identity.ShortString(), rolesSuffix(n.Roles))
+		if len(added) > 0 {
+			d.add("gives %s the %s %s", d.member(*aum.Subject), plural(len(added), "role"), describeRoles(added))
 		}
-		if st.Policy != nil {
-			add("an access policy of %s", count(len(st.Policy.Rules), "rule"))
+		if len(taken) > 0 {
+			d.add("takes the %s %s from %s", plural(len(taken), "role"), describeRoles(taken), d.member(*aum.Subject))
 		}
-	case types.KindAddNode:
-		n := aum.Node
-		add("admits the device %q (%v)", n.Name, n.Identity.ShortString())
-		add("with the keys %s", keysDigest(types.NodeKeys{WireGuard: n.WireGuard, X25519: n.X25519, MLKEM: n.MLKEM}))
-		if n.V4 != nil {
-			add("at %v", *n.V4)
+		if len(added)+len(taken) == 0 && slices.Equal(cur.Routes, aum.Grant.Routes) {
+			d.add("leaves %s as it is, with %s", d.member(*aum.Subject), rolesPhrase(cur.Roles))
 		}
-		add("with %s", rolesPhrase(n.Roles))
-		if len(n.Routes) > 0 {
-			add("routing %v", n.Routes)
+	}
+	// Routes are shown whenever they change, taking them away too.
+	switch {
+	case cur != nil && !slices.Equal(cur.Routes, aum.Grant.Routes):
+		d.add("changes the routes it carries from %s to %s", describeRoutes(cur.Routes),
+			describeRoutes(aum.Grant.Routes))
+	case cur == nil && len(aum.Grant.Routes) > 0:
+		d.add("routing %v", aum.Grant.Routes)
+	}
+}
+
+func effectRotateNodeKey(d *describer, aum *types.AUM, state *log.State) {
+	d.add("replaces the keys of %s with %s", d.member(*aum.Subject), keysDigest(*aum.Keys))
+}
+
+func effectRotateIdentity(d *describer, aum *types.AUM, state *log.State) {
+	d.add("replaces the identity key of %s with %v", d.member(*aum.Subject), aum.NewIdentity.ShortString())
+	if state != nil {
+		if n, ok := state.Node(*aum.Subject); ok {
+			d.add("which takes over %s", rolesPhrase(n.Roles))
 		}
-		for _, name := range n.Names {
-			add("pointing %s at it", name)
+	}
+}
+
+func effectAddAdminKey(d *describer, aum *types.AUM, state *log.State) {
+	k := aum.Admin
+	if k.Holder == "" {
+		d.add("gives the admin key %s (%v) %s", orDash(k.Name), k.Public.ShortString(), count(k.Votes, "vote"))
+	} else {
+		key := k.Public.ShortString()
+		if on := keyMachine(*k); on != "" {
+			key += " on " + on
 		}
-		domain := "DOMAIN"
+		d.add("gives %s the admin key %s, casting %s", k.Holder, key, count(k.Votes, "vote"))
 		if state != nil {
-			domain = cmp.Or(state.Domain(), domain)
-		}
-		for _, p := range n.Published {
-			add("%s", publishedLine("publishing", p, domain, "it"))
-		}
-	case types.KindRemoveNode:
-		roles := ""
-		if state != nil {
-			if n, ok := state.Node(*aum.Subject); ok {
-				roles = rolesSuffix(n.Roles)
+			if n := len(holderKeys(state, k.Holder)); n > 0 {
+				d.add("besides %s's %s; one vote between them", k.Holder, count(n, "key"))
 			}
 		}
-		add("removes the device %s%s", member(*aum.Subject), roles)
-	case types.KindSetNodeRoutes:
-		var now *types.NodeRecord
-		if state != nil {
-			if n, ok := state.Node(*aum.Subject); ok {
-				now = &n
+	}
+	if state != nil {
+		after := append(state.Admins(), *k)
+		d.add("(quorum %d of %d; %d after)", state.Quorum(), state.TotalVotes(), types.AchievableVotes(after))
+	}
+}
+
+func effectSetHolder(d *describer, aum *types.AUM, state *log.State) {
+	h := aum.Holder
+	d.add("counts %s's %s only when %d of their keys sign", h.Name, count(h.Votes, "vote"), h.Needed)
+	if state != nil {
+		if keys := holderKeys(state, h.Name); len(keys) > 0 {
+			d.add("(holds %s, needs %d now)", count(len(keys), "key"), keys[0].NeededKeys())
+		}
+	}
+}
+
+func effectRemoveAdminKey(d *describer, aum *types.AUM, state *log.State) {
+	name := aum.Subject.ShortString()
+	if state != nil {
+		if k, ok := state.Admin(*aum.Subject); ok {
+			on := ""
+			if m := keyMachine(k); m != "" {
+				on = " on " + m
+			}
+			name = fmt.Sprintf("%s (%s's, %s)", k.Public.ShortString()+on, orDash(keyPerson(k)), count(k.Votes, "vote"))
+		}
+	}
+	d.add("takes the vote away from the admin key %s", name)
+}
+
+func effectSetAdminRecipient(d *describer, aum *types.AUM, state *log.State) {
+	name := "the admin key " + aum.Subject.ShortString()
+	if state != nil {
+		if k, ok := state.Admin(*aum.Subject); ok {
+			name = orDash(keyPerson(k)) + "'s admin key " + aum.Subject.ShortString()
+			if m := keyMachine(k); m != "" {
+				name += " on " + m
 			}
 		}
-		// Said as what changes, where the log says what it has now.
-		if now == nil {
-			add("gives %s %s", member(*aum.Subject), rolesPhrase(aum.Grant.Roles))
-		} else {
-			var added, taken []types.Role
-			for _, r := range aum.Grant.Roles {
-				if !slices.Contains(now.Roles, r) {
-					added = append(added, r)
-				}
-			}
-			for _, r := range now.Roles {
-				if !slices.Contains(aum.Grant.Roles, r) {
-					taken = append(taken, r)
-				}
-			}
-			if len(added) > 0 {
-				add("gives %s the %s %s", member(*aum.Subject), plural(len(added), "role"), describeRoles(added))
-			}
-			if len(taken) > 0 {
-				add("takes the %s %s from %s", plural(len(taken), "role"), describeRoles(taken), member(*aum.Subject))
-			}
-			if len(added)+len(taken) == 0 && slices.Equal(now.Routes, aum.Grant.Routes) {
-				add("leaves %s as it is, with %s", member(*aum.Subject), rolesPhrase(now.Roles))
-			}
+	}
+	d.add("gives %s the encryption key %s", name, recipientDigest(*aum.Recipient))
+}
+
+func effectSetQuorum(d *describer, aum *types.AUM, state *log.State) {
+	if state != nil {
+		d.add("changes the quorum from %d to %d, of %d", state.Quorum(), *aum.Quorum, state.TotalVotes())
+	} else {
+		d.add("sets the quorum to %d", *aum.Quorum)
+	}
+}
+
+func effectEpochBump(d *describer, aum *types.AUM, state *log.State) {
+	d.add("rotates the network's group secret")
+}
+
+func effectSchemaUpgrade(d *describer, aum *types.AUM, state *log.State) {
+	d.add("moves the network to record schema %d; devices on older builds stop there", *aum.Schema)
+}
+
+func effectSetVouchers(d *describer, aum *types.AUM, state *log.State) {
+	if state != nil {
+		d.add("requires %d vouchers, not %d", *aum.Vouchers, max(state.Vouchers(), 1))
+	} else {
+		d.add("requires %d vouchers", *aum.Vouchers)
+	}
+}
+
+func effectRenumberNetwork(d *describer, aum *types.AUM, state *log.State) {
+	r := aum.Renumber
+	if state != nil {
+		d.add("moves every device from %v to %v", state.V4Range(), *r.Prefix)
+	} else {
+		d.add("moves every device to %v", *r.Prefix)
+	}
+	for _, e := range r.Addrs {
+		d.add("%s to %v", d.member(e.Identity), e.V4)
+	}
+	d.add("old addresses until %s", deadline(r.Until))
+	if past := deadlineNote(r.Until, d.now); past != "" {
+		d.add("%s", past)
+	}
+}
+
+func effectRenumberNode(d *describer, aum *types.AUM, state *log.State) {
+	r := aum.Renumber
+	var old *netip.Addr
+	known := false
+	if state != nil {
+		if n, ok := state.Node(*aum.Subject); ok {
+			old, known = n.V4, true
 		}
-		// Routes are shown whenever they change, taking them away too.
-		switch {
-		case now != nil && !slices.Equal(now.Routes, aum.Grant.Routes):
-			add("changes the routes it carries from %s to %s", describeRoutes(now.Routes),
-				describeRoutes(aum.Grant.Routes))
-		case now == nil && len(aum.Grant.Routes) > 0:
-			add("routing %v", aum.Grant.Routes)
+	}
+	atOnce := r.Until == types.RetireAtOnce && (old != nil || !known)
+	if atOnce {
+		d.add("moves %s to %v at once", d.member(*aum.Subject), *r.V4)
+	} else {
+		d.add("moves %s to %v", d.member(*aum.Subject), *r.V4)
+	}
+	switch {
+	case atOnce && old != nil:
+		d.add("retires %v now: devices not told yet reach the device over IPv6 only", *old)
+	case atOnce:
+		d.add("retires its old address now")
+	case r.Until == types.RetireAtOnce:
+	case old != nil:
+		d.add("%v until %s", *old, deadline(r.Until))
+		if past := deadlineNote(r.Until, d.now); past != "" {
+			d.add("%s", past)
 		}
-	case types.KindRotateNodeKey:
-		add("replaces the keys of %s with %s", member(*aum.Subject), keysDigest(*aum.Keys))
-	case types.KindRotateIdentity:
-		add("replaces the identity key of %s with %v", member(*aum.Subject), aum.NewIdentity.ShortString())
-		if state != nil {
-			if n, ok := state.Node(*aum.Subject); ok {
-				add("which takes over %s", rolesPhrase(n.Roles))
-			}
+	}
+}
+
+func effectRetireAddresses(d *describer, aum *types.AUM, state *log.State) {
+	d.add("retires old addresses before their deadlines")
+}
+
+func effectSetNodeNames(d *describer, aum *types.AUM, state *log.State) {
+	var had []string
+	if state != nil {
+		if n, ok := state.Node(*aum.Subject); ok {
+			had = n.Names
 		}
-	case types.KindAddAdminKey:
-		k := aum.Admin
-		if k.Holder == "" {
-			add("gives the admin key %s (%v) %s", orDash(k.Name), k.Public.ShortString(), count(k.Votes, "vote"))
-		} else {
-			key := k.Public.ShortString()
-			if on := keyMachine(*k); on != "" {
-				key += " on " + on
-			}
-			add("gives %s the admin key %s, casting %s", k.Holder, key, count(k.Votes, "vote"))
-			if state != nil {
-				if n := len(holderKeys(state, k.Holder)); n > 0 {
-					add("besides %s's %s; one vote between them", k.Holder, count(n, "key"))
-				}
-			}
+	}
+	// What each member that accepts names then resolves, which is what
+	// an approver has to weigh: a public name sent into the network.
+	for _, n := range aum.Names.Names {
+		if !slices.Contains(had, n) {
+			d.add("points %s at %s", n, d.member(*aum.Subject))
 		}
-		if state != nil {
-			after := append(state.Admins(), *k)
-			add("(quorum %d of %d; %d after)", state.Quorum(), state.TotalVotes(), types.AchievableVotes(after))
+	}
+	for _, n := range had {
+		if !slices.Contains(aum.Names.Names, n) {
+			d.add("no longer points %s at %s", n, d.member(*aum.Subject))
 		}
-	case types.KindSetHolder:
-		h := aum.Holder
-		add("counts %s's %s only when %d of their keys sign", h.Name, count(h.Votes, "vote"), h.Needed)
-		if state != nil {
-			if keys := holderKeys(state, h.Name); len(keys) > 0 {
-				add("(holds %s, needs %d now)", count(len(keys), "key"), keys[0].NeededKeys())
-			}
-		}
-	case types.KindRemoveAdminKey:
-		name := aum.Subject.ShortString()
-		if state != nil {
-			if k, ok := state.Admin(*aum.Subject); ok {
-				on := ""
-				if m := keyMachine(k); m != "" {
-					on = " on " + m
-				}
-				name = fmt.Sprintf("%s (%s's, %s)", k.Public.ShortString()+on, orDash(keyPerson(k)), count(k.Votes, "vote"))
-			}
-		}
-		add("takes the vote away from the admin key %s", name)
-	case types.KindSetAdminRecipient:
-		name := "the admin key " + aum.Subject.ShortString()
-		if state != nil {
-			if k, ok := state.Admin(*aum.Subject); ok {
-				name = orDash(keyPerson(k)) + "'s admin key " + aum.Subject.ShortString()
-				if m := keyMachine(k); m != "" {
-					name += " on " + m
-				}
-			}
-		}
-		add("gives %s the encryption key %s", name, recipientDigest(*aum.Recipient))
-	case types.KindSetQuorum:
-		if state != nil {
-			add("changes the quorum from %d to %d, of %d", state.Quorum(), *aum.Quorum, state.TotalVotes())
-		} else {
-			add("sets the quorum to %d", *aum.Quorum)
-		}
-	case types.KindEpochBump:
-		add("rotates the network's group secret")
-	case types.KindSchemaUpgrade:
-		add("moves the network to record schema %d; devices on older builds stop there", *aum.Schema)
-	case types.KindSetVouchers:
-		if state != nil {
-			add("requires %d vouchers, not %d", *aum.Vouchers, max(state.Vouchers(), 1))
-		} else {
-			add("requires %d vouchers", *aum.Vouchers)
-		}
-	case types.KindRenumberNetwork:
-		r := aum.Renumber
-		if state != nil {
-			add("moves every device from %v to %v", state.V4Range(), *r.Prefix)
-		} else {
-			add("moves every device to %v", *r.Prefix)
-		}
-		for _, e := range r.Addrs {
-			add("%s to %v", member(e.Identity), e.V4)
-		}
-		add("old addresses until %s", deadline(r.Until))
-		if past := deadlineNote(r.Until, now); past != "" {
-			add("%s", past)
-		}
-	case types.KindRenumberNode:
-		r := aum.Renumber
-		var old *netip.Addr
-		known := false
-		if state != nil {
-			if n, ok := state.Node(*aum.Subject); ok {
-				old, known = n.V4, true
+	}
+	if len(d.out) == 0 {
+		d.add("leaves %s's names as they are", d.member(*aum.Subject))
+	}
+}
+
+func effectSetDomain(d *describer, aum *types.AUM, state *log.State) {
+	was := ""
+	if state != nil {
+		was = state.Domain()
+	}
+	switch dom := *aum.Domain; {
+	case dom == "" && was != "":
+		d.add("withdraws the public domain %s", was)
+	case dom == "":
+		d.add("withdraws the public domain")
+	case was != "":
+		d.add("moves the public domain from %s to %s, and every published name with it", was, dom)
+		d.add(domainResolution, dom, dom)
+		for _, n := range state.Nodes() {
+			if slices.ContainsFunc(n.Published, func(p types.PublishedName) bool { return p.Label == "" }) {
+				d.add("publishes the domain %s itself on %s", dom, displayMember(n))
 			}
 		}
-		atOnce := r.Until == types.RetireAtOnce && (old != nil || !known)
-		if atOnce {
-			add("moves %s to %v at once", member(*aum.Subject), *r.V4)
-		} else {
-			add("moves %s to %v", member(*aum.Subject), *r.V4)
-		}
-		switch {
-		case atOnce && old != nil:
-			add("retires %v now: devices not told yet reach the device over IPv6 only", *old)
-		case atOnce:
-			add("retires its old address now")
-		case r.Until == types.RetireAtOnce:
-		case old != nil:
-			add("%v until %s", *old, deadline(r.Until))
-			if past := deadlineNote(r.Until, now); past != "" {
-				add("%s", past)
-			}
-		}
-	case types.KindRetireAddresses:
-		add("retires old addresses before their deadlines")
-	case types.KindSetNodeNames:
-		var had []string
-		if state != nil {
-			if n, ok := state.Node(*aum.Subject); ok {
-				had = n.Names
-			}
-		}
-		// What each member that accepts names then resolves, which is what
-		// an approver has to weigh: a public name sent into the network.
-		for _, n := range aum.Names.Names {
-			if !slices.Contains(had, n) {
-				add("points %s at %s", n, member(*aum.Subject))
-			}
-		}
-		for _, n := range had {
-			if !slices.Contains(aum.Names.Names, n) {
-				add("no longer points %s at %s", n, member(*aum.Subject))
-			}
-		}
-		if len(out) == 0 {
-			add("leaves %s's names as they are", member(*aum.Subject))
-		}
-	case types.KindSetDomain:
-		was := ""
-		if state != nil {
-			was = state.Domain()
-		}
-		switch d := *aum.Domain; {
-		case d == "" && was != "":
-			add("withdraws the public domain %s", was)
-		case d == "":
-			add("withdraws the public domain")
-		case was != "":
-			add("moves the public domain from %s to %s, and every published name with it", was, d)
-			add(domainResolution, d, d)
-			for _, n := range state.Nodes() {
-				if slices.ContainsFunc(n.Published, func(p types.PublishedName) bool { return p.Label == "" }) {
-					add("publishes the domain %s itself on %s", d, displayMember(n))
-				}
-			}
-		default:
-			add("sets the public domain to %s", d)
-			add(domainResolution, d, d)
-		}
-	case types.KindSetPublished:
-		var had []types.PublishedName
-		domain := "DOMAIN"
-		if state != nil {
-			if n, ok := state.Node(*aum.Subject); ok {
-				had = n.Published
-			}
-			domain = cmp.Or(state.Domain(), domain)
-		}
-		// What the internet then reaches, which is what an approver weighs.
-		for _, p := range aum.Publish.Names {
-			if !slices.Contains(had, p) {
-				add("%s", publishedLine("publishes", p, domain, member(*aum.Subject)))
-				if state != nil && p.Public == 0 && namedByRules(state.Policy(), p.Label) {
-					add("so the access policy's rules to %s open port %d of %s to their sources",
-						publishedPhrase(p, domain), p.Port, member(*aum.Subject))
-				}
-			}
-			if i := slices.IndexFunc(had, func(q types.PublishedName) bool { return q.Label == p.Label }); i >= 0 &&
-				had[i].Members && !p.Members {
-				add("makes %s public, for the internet: it was for members alone", publishedPhrase(p, domain))
-			}
-		}
-		for _, p := range had {
-			if !slices.ContainsFunc(aum.Publish.Names, func(q types.PublishedName) bool { return q.Label == p.Label }) {
-				add("no longer publishes %s", publishedPhrase(p, domain))
-			}
-		}
-		if len(out) == 0 {
-			add("leaves what %s publishes as it is", member(*aum.Subject))
-		}
-	case types.KindRenameNetwork:
-		if state != nil {
-			add("renames the network %q to %q", state.Network(), *aum.Network)
-		} else {
-			add("renames the network to %q", *aum.Network)
-		}
-	case types.KindSetPolicy:
-		out = append(out, policyEffect(aum.Policy, state, now)...)
-	case types.KindRenameNode:
-		add("renames %s to %q", member(*aum.Subject), *aum.NodeName)
-		if state == nil {
-			break
-		}
-		n, ok := state.Node(*aum.Subject)
-		if !ok {
-			break
-		}
-		// What others then reach it by, which is what an approver weighs.
-		if network := names.Label(state.Network()); network != "" {
-			zone := network + "." + types.NamesTLD
-			was, is := names.Label(n.Name), names.Label(*aum.NodeName)
-			// A label two members held, which resolved to neither, goes to the other.
-			var other string
-			for _, o := range state.Nodes() {
-				if o.Identity != n.Identity && was != "" && names.Label(o.Name) == was {
-					other = member(o.Identity)
-				}
-			}
-			switch {
-			case was == is:
-			case other != "" && is != "":
-				add("%s.%s resolves to it, and %s.%s to %s", is, zone, was, zone, other)
-			case other != "":
-				add("%s.%s resolves to %s", was, zone, other)
-			case was != "" && is != "":
-				add("%s.%s resolves to it, and %s.%s no longer does", is, zone, was, zone)
-			case was != "":
-				add("%s.%s no longer resolves, and no name under %s does", was, zone, zone)
-			case is != "":
-				add("%s.%s resolves to it", is, zone)
-			}
-		}
-		renamed := n.Clone()
-		renamed.Name = *aum.NodeName
-		was, _ := n.ShareLabel()
-		is, _ := renamed.ShareLabel()
-		if n.HasRole(types.RolePublish) && state.Domain() != "" && was != is {
-			add("shares under %s, not %s", nameUnder(is, state.Domain()), nameUnder(was, state.Domain()))
-		}
-	case types.KindDisable:
-		add("ends the network for good with a break-glass secret: every device stops")
 	default:
-		add("a %s record", aum.Kind)
+		d.add("sets the public domain to %s", dom)
+		d.add(domainResolution, dom, dom)
 	}
-	return out
+}
+
+func effectSetPublished(d *describer, aum *types.AUM, state *log.State) {
+	var had []types.PublishedName
+	domain := "DOMAIN"
+	if state != nil {
+		if n, ok := state.Node(*aum.Subject); ok {
+			had = n.Published
+		}
+		domain = cmp.Or(state.Domain(), domain)
+	}
+	// What the internet then reaches, which is what an approver weighs.
+	for _, p := range aum.Publish.Names {
+		if !slices.Contains(had, p) {
+			d.add("%s", publishedLine("publishes", p, domain, d.member(*aum.Subject)))
+			if state != nil && p.Public == 0 && namedByRules(state.Policy(), p.Label) {
+				d.add("so the access policy's rules to %s open port %d of %s to their sources",
+					publishedPhrase(p, domain), p.Port, d.member(*aum.Subject))
+			}
+		}
+		if i := slices.IndexFunc(had, func(q types.PublishedName) bool { return q.Label == p.Label }); i >= 0 &&
+			had[i].Members && !p.Members {
+			d.add("makes %s public, for the internet: it was for members alone", publishedPhrase(p, domain))
+		}
+	}
+	for _, p := range had {
+		if !slices.ContainsFunc(aum.Publish.Names, func(q types.PublishedName) bool { return q.Label == p.Label }) {
+			d.add("no longer publishes %s", publishedPhrase(p, domain))
+		}
+	}
+	if len(d.out) == 0 {
+		d.add("leaves what %s publishes as it is", d.member(*aum.Subject))
+	}
+}
+
+func effectRenameNetwork(d *describer, aum *types.AUM, state *log.State) {
+	if state != nil {
+		d.add("renames the network %q to %q", state.Network(), *aum.Network)
+	} else {
+		d.add("renames the network to %q", *aum.Network)
+	}
+}
+
+func effectSetPolicy(d *describer, aum *types.AUM, state *log.State) {
+	d.out = append(d.out, policyEffect(aum.Policy, state, d.now)...)
+}
+
+func effectRenameNode(d *describer, aum *types.AUM, state *log.State) {
+	d.add("renames %s to %q", d.member(*aum.Subject), *aum.NodeName)
+	if state == nil {
+		return
+	}
+	n, ok := state.Node(*aum.Subject)
+	if !ok {
+		return
+	}
+	// What others then reach it by, which is what an approver weighs.
+	if network := names.Label(state.Network()); network != "" {
+		zone := network + "." + types.NamesTLD
+		was, is := names.Label(n.Name), names.Label(*aum.NodeName)
+		// A label two members held, which resolved to neither, goes to the other.
+		var other string
+		for _, o := range state.Nodes() {
+			if o.Identity != n.Identity && was != "" && names.Label(o.Name) == was {
+				other = d.member(o.Identity)
+			}
+		}
+		switch {
+		case was == is:
+		case other != "" && is != "":
+			d.add("%s.%s resolves to it, and %s.%s to %s", is, zone, was, zone, other)
+		case other != "":
+			d.add("%s.%s resolves to %s", was, zone, other)
+		case was != "" && is != "":
+			d.add("%s.%s resolves to it, and %s.%s no longer does", is, zone, was, zone)
+		case was != "":
+			d.add("%s.%s no longer resolves, and no name under %s does", was, zone, zone)
+		case is != "":
+			d.add("%s.%s resolves to it", is, zone)
+		}
+	}
+	renamed := n.Clone()
+	renamed.Name = *aum.NodeName
+	was, _ := n.ShareLabel()
+	is, _ := renamed.ShareLabel()
+	if n.HasRole(types.RolePublish) && state.Domain() != "" && was != is {
+		d.add("shares under %s, not %s", nameUnder(is, state.Domain()), nameUnder(was, state.Domain()))
+	}
+}
+
+func effectDisable(d *describer, aum *types.AUM, state *log.State) {
+	d.add("ends the network for good with a break-glass secret: every device stops")
 }
 
 // deadlineNote warns of a renumbering whose deadline has passed, or is near.

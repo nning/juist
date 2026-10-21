@@ -100,6 +100,8 @@ func TestACompromisedJuistdPutsNoControlCharacterOrRootCommandOnTheTerminal(t *t
 		st.Device = "juist0" + hidden
 		st.SyncFailing = []string{"vps" + hidden + injected}
 		st.DataPlaneError = "refused" + injected
+		st.DNSRoutingUnread = "unread" + injected
+		st.DNSRefused, st.DNSRefusedAt = "refused"+injected, time.Now().Unix()
 		st.Relaying = true
 		st.HTTPS = &ipc.HTTPS{Name: "relay.example.org" + hidden, ListenError: "permission denied" + hidden + injected}
 		st.Terminator = &ipc.Terminator{Running: true,

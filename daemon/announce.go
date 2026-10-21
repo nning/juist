@@ -63,6 +63,7 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 		Epoch:      epoch,
 		PairStore:  store,
 		Schema:     types.CurrentSchema,
+		Rests:      d.rests && d.status.Schema >= types.SchemaRests,
 	}
 	switch {
 	case d.sealing != nil && d.sealing.withheld:
@@ -223,13 +224,39 @@ func mergeEndpoints(scanned, learned []netip.AddrPort) []netip.AddrPort {
 
 // onConnectivityChange is called by the data plane when the relay region it
 // chose, or the set of addresses it believes it is reachable at, has moved.
-// Both are in this node's announcement, so it is rebuilt and pushed.
+// Both are in this node's announcement, so it is rebuilt and pushed: to the
+// members awake where only a non-relay's addresses moved, as peers push it
+// on, and to all otherwise.
 func (d *Daemon) onConnectivityChange() {
+	// Run starts by announcing what is then, and nothing was announced
+	// before.
+	if !d.wired.Load() {
+		return
+	}
+	home := d.manager.HomeRelay()
 	d.mu.Lock()
 	d.announced = nil
+	homeSame := d.signed != nil && int(d.signed.HomeRelay) == home
+	homeKept := home != 0 && homeSame
+	addrsAlone := homeSame && d.ownRelay.server == nil
 	d.mu.Unlock()
 	if d.beacon != nil {
 		d.beacon.Wake()
 	}
-	d.MarkDirty()
+	// Saving, a new address with the home kept waits for the next reconcile
+	// to push it, or the end of saving: peers reach this device through its
+	// relay, and disco tells them the address there, which a NAT renumbers
+	// for an idle phone often.
+	if homeKept && d.pace.Saving() {
+		d.addrsWaiting.Store(true)
+		// Saving may have ended since: then nothing else pushes it soon.
+		if d.pace.Saving() || !d.addrsWaiting.Swap(false) {
+			return
+		}
+	}
+	if !addrsAlone {
+		d.MarkDirty()
+		return
+	}
+	d.announceSoon()
 }

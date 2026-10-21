@@ -81,3 +81,36 @@ func TestAChangeWakesTheBeacon(t *testing.T) {
 	})
 	woken("connectivity changed", f.d.onConnectivityChange)
 }
+
+// While saving, LAN discovery sends nothing unasked; back from saving, it
+// announces this device at once.
+func TestSavingQuietsTheBeacon(t *testing.T) {
+	// Not parallel: it counts datagrams in a window, which contention stretches.
+	const interval = 20 * time.Millisecond
+	sock := &sendCounter{closed: make(chan struct{})}
+	pace := NewPace()
+	f := newReconcileFixtureWith(t, 2, func(o *Options) {
+		o.DisableDiscovery = false
+		o.Discovery = &mdns.Options{Conn: sock, Interval: interval}
+		o.Pace = pace
+	})
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	go f.d.beacon.Run(t.Context())
+	pace.SetSaving(true)
+	f.d.followPace()
+	time.Sleep(5 * interval)
+	before := sock.count()
+	f.d.beacon.Wake()
+	time.Sleep(20 * interval)
+	if n := sock.count() - before; n > 0 {
+		t.Fatalf("saving, LAN discovery sent %d datagrams in %v", n, 20*interval)
+	}
+	pace.SetSaving(false)
+	f.d.followPace()
+	time.Sleep(10 * interval)
+	if n := sock.count() - before; n < 3 {
+		t.Fatalf("%d datagrams in %v back from saving, want the first interval's pace", n, 10*interval)
+	}
+}

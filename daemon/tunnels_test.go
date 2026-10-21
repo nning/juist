@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/pairkey"
 	"github.com/nning/juist/ipc"
 
 	"github.com/nning/juist/conn"
@@ -228,9 +229,9 @@ func TestProbesBackOffAPeerThatNeverAnswers(t *testing.T) {
 	f.mgr.answers = map[netip.Addr]bool{silent: true}
 	f.mgr.mu.Unlock()
 	f.d.refreshReach(t.Context()) // the 13th: skipped, still backing off
-	f.d.probeMu.Lock()
-	f.d.probeMisses = nil // as after an answer on a probed check
-	f.d.probeMu.Unlock()
+	f.d.probes.mu.Lock()
+	f.d.probes.misses = nil // as after an answer on a probed check
+	f.d.probes.mu.Unlock()
 	before := probes()
 	// Cancelled, so the sync due to a peer back up does not dial it.
 	ctx, cancel := context.WithCancel(t.Context())
@@ -668,7 +669,7 @@ func TestAPeerGoneFromThisRelayIsOffline(t *testing.T) {
 		t.Fatalf("a peer gone from this relay reads as seeking %v, absent %v", st.Seeking, st.Absent)
 	}
 	f.d.mu.Lock()
-	f.d.ownRegion, f.d.down = false, nil
+	f.d.ownRelay.region, f.d.down = false, nil
 	f.d.mu.Unlock()
 	f.d.refreshReach(t.Context())
 	c.set(t0.Add(2 * firstLookupGap))
@@ -985,6 +986,7 @@ func TestARestartedMembersHintMovesItsDiscoKeyWithinSeconds(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Each check asks for the next: the hint, then the first probe missed.
+	f.d.pushRests.Store(false)
 	asked := 0
 	on := func(i int, k gossip.DiscoKey) bool { return f.installed(t, i).DiscoKey == conn.DiscoPublicFromRaw32(k) }
 	for range 2 {
@@ -1007,6 +1009,9 @@ func TestARestartedMembersHintMovesItsDiscoKeyWithinSeconds(t *testing.T) {
 	}
 	if asked != 2 {
 		t.Fatalf("%d of the 2 checks were asked for", asked)
+	}
+	if f.d.pushRests.Load() {
+		t.Error("a restarted member found down is pushed to every member that rests")
 	}
 }
 
@@ -1049,5 +1054,38 @@ func TestARelayedPeerNamesItsHomeRelay(t *testing.T) {
 	f.d.refreshReach(t.Context())
 	if r := f.d.Status().Reach; len(r) != 1 || !r[0].Direct || r[0].Relay != "" {
 		t.Fatalf("direct: reach %+v, want no relay named", r)
+	}
+}
+
+// classifyReach changes nothing it is given: a peer back up is synced with
+// again, one down for the first time is seeking, one live and keyless past
+// outdatedAfter is outdated, and what the last check left is read alone.
+func TestClassifyReachSaysWhatChecksShow(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	back, fresh, keyless := types.Identity{1}, types.Identity{2}, types.Identity{3}
+	checks := []tunnelCheck{
+		{namedPeer: namedPeer{name: "back", id: back, stage: pairkey.StageGroup}, reach: ipc.PeerReach{Live: true}},
+		{namedPeer: namedPeer{name: "fresh", id: fresh, stage: pairkey.StageGroup}},
+		{namedPeer: namedPeer{name: "keyless", id: keyless, stage: pairkey.StageNone}, reach: ipc.PeerReach{Live: true}},
+	}
+	past := reachPast{
+		down:   map[types.Identity]*downPeer{back: {since: now.Add(-time.Hour)}},
+		behind: map[types.Identity]time.Time{keyless: now.Add(-outdatedAfter)},
+	}
+	v := classifyReach(checks, reachFacts{now: now}, past)
+	if !slices.Equal(v.resync, []types.Identity{back}) {
+		t.Errorf("resync %v, want the peer back up", v.resync)
+	}
+	if !slices.Equal(v.down, []string{"fresh"}) || !slices.Equal(v.seeking, []string{"fresh"}) || !v.reach[1].Seeking {
+		t.Errorf("down %v, seeking %v", v.down, v.seeking)
+	}
+	if p := v.past.down[fresh]; p == nil || !p.since.Equal(now) || len(v.past.down) != 1 {
+		t.Errorf("down peers left %v", v.past.down)
+	}
+	if !slices.Equal(v.outdated, []string{"keyless"}) || !v.reach[2].Outdated || v.live != 2 {
+		t.Errorf("outdated %v, live %d", v.outdated, v.live)
+	}
+	if _, ok := past.down[back]; !ok || len(past.down) != 1 {
+		t.Error("classifyReach changed what the last check left")
 	}
 }

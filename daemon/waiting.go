@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -57,10 +58,10 @@ func (w *waitingAdapter) Held(peer types.Identity) []types.Hash {
 	if err != nil || !d.adminDevice(state, d.self) || !d.adminDevice(state, peer) {
 		return nil
 	}
-	d.waitMu.Lock()
-	defer d.waitMu.Unlock()
-	out := make([]types.Hash, 0, len(d.waiting))
-	for h := range d.waiting {
+	d.changes.mu.Lock()
+	defer d.changes.mu.Unlock()
+	out := make([]types.Hash, 0, len(d.changes.held))
+	for h := range d.changes.held {
 		out = append(out, h)
 	}
 	slices.SortFunc(out, types.Hash.Compare)
@@ -75,10 +76,10 @@ func (w *waitingAdapter) For(id types.Identity, held []types.Hash) [][]byte {
 		return nil
 	}
 	now := d.now()
-	d.waitMu.Lock()
-	defer d.waitMu.Unlock()
+	d.changes.mu.Lock()
+	defer d.changes.mu.Unlock()
 	var out [][]byte
-	for h, hc := range d.waiting {
+	for h, hc := range d.changes.held {
 		if slices.Contains(held, h) || hc.c.IsAbout(id) || hc.c.Expires <= now.Unix() {
 			continue
 		}
@@ -93,10 +94,10 @@ func (w *waitingAdapter) For(id types.Identity, held []types.Hash) [][]byte {
 func (w *waitingAdapter) Handed(id types.Identity, changes [][]byte) {
 	d := w.daemon()
 	now := d.now()
-	d.waitMu.Lock()
-	defer d.waitMu.Unlock()
+	d.changes.mu.Lock()
+	defer d.changes.mu.Unlock()
 	for _, raw := range changes {
-		if hc, ok := d.waiting[waiting.Hash(raw)]; ok {
+		if hc, ok := d.changes.held[waiting.Hash(raw)]; ok {
 			hc.handed[id] = now
 		}
 	}
@@ -138,11 +139,11 @@ func (d *Daemon) offerWaiting(changes [][]byte, local bool) (int, error) {
 	added, refused := 0, error(nil)
 	defer func() {
 		if added > 0 {
-			d.saveWaiting()
+			d.changes.save(d.logf)
 		}
 	}()
-	d.waitMu.Lock()
-	defer d.waitMu.Unlock()
+	d.changes.mu.Lock()
+	defer d.changes.mu.Unlock()
 	for _, raw := range changes {
 		c, err := waiting.Decode(raw)
 		if err == nil {
@@ -184,15 +185,15 @@ func fits(c *waiting.Change, state *log.State, now time.Time) error {
 }
 
 // holdLocked adds a change, replacing an older copy by the same signer, within
-// the bounds. The caller holds waitMu.
+// the bounds. The caller holds changes.mu.
 func (d *Daemon) holdLocked(c *waiting.Change, raw []byte) error {
 	h := waiting.Hash(raw)
-	if _, ok := d.waiting[h]; ok {
+	if _, ok := d.changes.held[h]; ok {
 		return errHeld
 	}
 	var replaces []types.Hash
 	total, signer, signed := len(raw), len(raw), 1
-	for held, hc := range d.waiting {
+	for held, hc := range d.changes.held {
 		if hc.c.ID == c.ID && hc.c.Signer == c.Signer {
 			// The later copy wins, and of two alike the lower hash, so that
 			// every device settles on the same one.
@@ -209,7 +210,7 @@ func (d *Daemon) holdLocked(c *waiting.Change, raw []byte) error {
 		}
 	}
 	switch {
-	case len(d.waiting)-len(replaces) >= maxWaiting:
+	case len(d.changes.held)-len(replaces) >= maxWaiting:
 		return fmt.Errorf("%d changes wait here already", maxWaiting)
 	case total > maxWaitingBytes:
 		return errors.New("the changes waiting here fill their room")
@@ -217,26 +218,26 @@ func (d *Daemon) holdLocked(c *waiting.Change, raw []byte) error {
 		return fmt.Errorf("the changes %v handed on fill its room", c.Signer.ShortString())
 	}
 	for _, held := range replaces {
-		delete(d.waiting, held)
+		delete(d.changes.held, held)
 	}
-	d.waiting[h] = heldChange{c: c, raw: raw, handed: map[types.Identity]time.Time{}}
+	d.changes.held[h] = heldChange{c: c, raw: raw, handed: map[types.Identity]time.Time{}}
 	return nil
 }
 
 // pruneWaiting drops the changes that no longer fit the log.
 func (d *Daemon) pruneWaiting(state *log.State) {
 	now := d.now()
-	d.waitMu.Lock()
+	d.changes.mu.Lock()
 	dropped := false
-	for h, hc := range d.waiting {
+	for h, hc := range d.changes.held {
 		if fits(hc.c, state, now) != nil {
-			delete(d.waiting, h)
+			delete(d.changes.held, h)
 			dropped = true
 		}
 	}
-	d.waitMu.Unlock()
+	d.changes.mu.Unlock()
 	if dropped {
-		d.saveWaiting()
+		d.changes.save(d.logf)
 	}
 }
 
@@ -245,10 +246,10 @@ func (d *Daemon) Waiting() [][]byte {
 	if state, err := d.TrustedState(); err == nil {
 		d.pruneWaiting(state)
 	}
-	d.waitMu.Lock()
-	defer d.waitMu.Unlock()
-	out := make([][]byte, 0, len(d.waiting))
-	for _, hc := range d.waiting {
+	d.changes.mu.Lock()
+	defer d.changes.mu.Unlock()
+	out := make([][]byte, 0, len(d.changes.held))
+	for _, hc := range d.changes.held {
 		out = append(out, hc.raw)
 	}
 	slices.SortFunc(out, func(a, b []byte) int { return waiting.Hash(a).Compare(waiting.Hash(b)) })
@@ -256,10 +257,10 @@ func (d *Daemon) Waiting() [][]byte {
 }
 
 func (d *Daemon) loadWaiting() {
-	if d.waitingPath == "" {
+	if d.changes.path == "" {
 		return
 	}
-	b, err := os.ReadFile(d.waitingPath)
+	b, err := os.ReadFile(d.changes.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	}
@@ -268,13 +269,13 @@ func (d *Daemon) loadWaiting() {
 		err = waitingFileMode.Unmarshal(b, &raw)
 	}
 	if err != nil {
-		d.logf("daemon: %s was ignored: %v", d.waitingPath, err)
+		d.logf("daemon: %s was ignored: %v", d.changes.path, err)
 		return
 	}
 	// Checked again as they are taken: the file grants nothing.
 	if state, err := d.TrustedState(); err == nil {
-		d.waitMu.Lock()
-		defer d.waitMu.Unlock()
+		d.changes.mu.Lock()
+		defer d.changes.mu.Unlock()
 		for _, r := range raw {
 			if c, err := waiting.Decode(r); err == nil && fits(c, state, d.now()) == nil {
 				_ = d.holdLocked(c, r)
@@ -283,28 +284,44 @@ func (d *Daemon) loadWaiting() {
 	}
 }
 
-// saveWaiting writes the held changes out, outside waitMu: the file may be
-// tens of megabytes.
-func (d *Daemon) saveWaiting() {
-	if d.waitingPath == "" {
+// A waitStore is the changes waiting for votes held, by the hash of their
+// encoding, and the file they are kept in, where path is not empty.
+// saveMu → mu.
+type waitStore struct {
+	path   string
+	saveMu sync.Mutex // serializes writing the file
+	mu     sync.Mutex
+	held   map[types.Hash]heldChange
+}
+
+func (s *waitStore) len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.held)
+}
+
+// save writes the held changes out, outside mu: the file may be tens of
+// megabytes.
+func (s *waitStore) save(logf func(string, ...any)) {
+	if s.path == "" {
 		return
 	}
 	// Serialized, and the snapshot taken inside, so a writer holding an older
 	// set cannot rename over a newer one.
-	d.waitSaveMu.Lock()
-	defer d.waitSaveMu.Unlock()
-	d.waitMu.Lock()
-	raw := make([][]byte, 0, len(d.waiting))
-	for _, hc := range d.waiting {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	raw := make([][]byte, 0, len(s.held))
+	for _, hc := range s.held {
 		raw = append(raw, hc.raw)
 	}
-	d.waitMu.Unlock()
+	s.mu.Unlock()
 	b, err := cbor.Marshal(raw)
 	if err == nil {
-		err = statedir.WriteFilePrivate(d.waitingPath, b)
+		err = statedir.WriteFilePrivate(s.path, b)
 	}
 	if err != nil {
-		d.logf("daemon: writing %s: %v", d.waitingPath, err)
+		logf("daemon: writing %s: %v", s.path, err)
 	}
 }
 

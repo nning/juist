@@ -53,7 +53,7 @@ stattdessen neu. `juist rotate identity` ändert die IPv6-Adresse des Geräts
 und beendet damit alle Verbindungen über die alte. Dafür muss das Netz auf
 Schema 19 stehen: Darunter bricht er mit
 `juist: the network predates rotating an identity key` ab, bis ein Admin
-`juist log upgrade` ausführt.
+`juist log upgrade` ausführt ([juist aktualisieren]({{< relref "docs/updating" >}})).
 
 ## Ein Gerät von vorn beginnen lassen
 

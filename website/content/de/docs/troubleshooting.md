@@ -13,9 +13,9 @@ Führe auf dem Gerät, das das Problem hat, Folgendes aus:
 juist health
 ```
 
-Warnungen beginnen mit `warning:`, und auf jede folgt eine Zeile `hint:` mit
-dem Befehl, der weiterhilft. Schlichte Zeilen nennen die Geräte, die dieses
-nicht erreicht. Ist nichts zu tun, steht dort `nothing needs attention`.
+Warnungen beginnen mit `warning:`, und auf die meisten folgt eine Zeile
+`hint:` mit dem Befehl, der weiterhilft. Schlichte Zeilen nennen die Geräte,
+die dieses nicht erreicht. Ist nichts zu tun, steht dort `nothing needs attention`.
 `juist status` zeigt den Zustand des Netzes und die Einzelheiten. Jeder lokale
 Benutzer darf beide ausführen. Was die einzelnen Zeilen bedeuten, steht unter
 [Status und Geräte]({{< relref "docs/status" >}}).
@@ -26,22 +26,40 @@ Weitere Einzelheiten stehen im Log des Daemons:
 journalctl -u juistd
 ```
 
-Ein zweites Netz auf demselben Gerät hat einen eigenen Daemon mit eigenem
-Log: `journalctl -u juistd@juist1`.
+Unter FreeBSD ist es `/var/log/juistd.log`. Ein zweites Netz auf demselben
+Gerät hat einen eigenen Daemon mit eigenem Log: `journalctl -u juistd@juist1`,
+unter FreeBSD `/var/log/juistd.juist1.log`.
+
+## Nach Symptom
+
+| Was nicht geht | Wo du nachsiehst |
+|---|---|
+| `juist status` meldet `not running` | [unten](#not-running) |
+| ein Befehl meldet `operator only` oder braucht jedes Mal sudo | [unten](#read-only-to-manage-this-device-) |
+| ein anderes Gerät antwortet nicht auf Ping | `juist health`, dann [no answer](#no-answer-from-nas-offline-or-udp41643-blocked) oder [no tunnel traffic](#no-tunnel-traffic-from-nas) unten |
+| Ping geht, aber ssh oder ein anderer Dienst hängt | die [Zugriffsregeln]({{< relref "docs/access" >}}#warum-eine-verbindung-nicht-durchkommt) oder die Firewall des anderen Geräts |
+| `nas.home.juist` wird nicht aufgelöst | [Namen]({{< relref "docs/names" >}}#fehlersuche) |
+| kein Internet, solange ein Exit-Node genutzt wird | [unten](#exit-node--vps-internet-refused-) |
+| ein neues Gerät kann nicht beitreten | [Geräte einladen]({{< relref "docs/invites" >}}#fehlersuche) |
+| eine Änderung wird nicht wirksam | sie wartet vielleicht auf Stimmen anderer Admins: [Mehrere Admins]({{< relref "docs/admins" >}}#wenn-eine-änderung-einen-weiteren-admin-braucht) |
+| ein veröffentlichter Name öffnet sich nicht | [Dienste veröffentlichen]({{< relref "docs/publishing" >}}#fehlersuche) |
+| die Android-App zeigt einen Fehler | [Android]({{< relref "docs/android" >}}#fehlersuche) |
 
 ## Häufige Probleme
 
-### `juistd not running`
+### `not running`
 
-Der Daemon, also das Programm, das die Tunnel aufrecht hält, läuft nicht.
-Starte ihn:
+`juist status` meldet `juist0 · not running`, `juistd not running` (unter
+FreeBSD, solange juistd nicht aktiviert ist) oder `home · juistd not running`: Der Daemon, also das Programm, das die Tunnel
+aufrecht hält, läuft nicht. Starte ihn:
 
 ```sh
 sudo systemctl enable --now juistd
 ```
 
 Für ein zweites Netz auf dem Gerät heißt der Daemon `juistd@juist1`. Unter
-FreeBSD startest du ihn mit `service juistd start`. Siehe
+FreeBSD startest du ihn als root mit
+`sysrc juistd_enable=YES && service juistd start`. Siehe
 [Installation]({{< relref "docs/install" >}}).
 
 ### `read-only; to manage this device …`
@@ -195,8 +213,9 @@ Version kein Gerät kennt, das nach dem Upgrade beigetreten ist, zeigt es
 
 Das Netz wurde aktualisiert, und auf nas läuft noch eine Version von juist
 von vor dem Upgrade. nas bleibt erreichbar, übernimmt aber keine Änderung am
-Netz, bis du juist auf nas aktualisierst, auch kein Entfernen.
-`juist status` auf nas meldet dasselbe.
+Netz, bis du juist auf nas aktualisierst, auch kein Entfernen. Auf nas warnt
+`juist status`, dass bis zur Aktualisierung keine Änderungen übernommen
+werden. Siehe [juist aktualisieren]({{< relref "docs/updating" >}}).
 
 ### `warning: this change builds on juistd's view of the log, …`
 
@@ -213,11 +232,10 @@ gestohlenen Gerät, führe sie aus und wiederhole, was sie rückgängig macht.
 nas war für mehr Änderungen offline, als dieses Gerät Schlüssel aufbewahrt.
 nas kann den Stand von einem Gerät nachholen, das diese Schlüssel noch hat,
 meist von einem, das ebenso lange offline war. Sonst nimm nas mit einer neuen
-Einladung wieder ins Netz auf. Das wird nur über ein Gerät gesagt, das läuft:
-Von einem, das offline ist, hat dieses Gerät womöglich nur eine Ankündigung
-von vor seinem eigenen Beitritt.
+Einladung wieder ins Netz auf. Die Warnung nennt nur Geräte, die laufen. Ein
+Gerät, das offline ist, erscheint stattdessen als offline.
 
-### `alarm: log: rollback alarm: the chain went back from epoch 4 to 3, …`
+### `warning: log: rollback alarm: the chain went back from epoch 4 to 3, …`
 
 Zwei Admins haben das Netz gleichzeitig geändert, und die Änderungen, die
 dieses Gerät zuerst übernommen hat, sind den anderen unterlegen. Die

@@ -155,12 +155,13 @@ func TestTermWidthUnderWatch(t *testing.T) {
 	}
 	defer r.Close()
 	defer w.Close()
-	t.Setenv("COLUMNS", "40")
-	if got := termWidth(w); got != 40 {
+	columns := "40"
+	getenv := func(k string) string { return map[string]string{"COLUMNS": columns}[k] }
+	if got := termWidth(w, getenv); got != 40 {
 		t.Errorf("termWidth of a pipe with COLUMNS=40 = %d, want 40", got)
 	}
-	t.Setenv("COLUMNS", "")
-	if got := termWidth(w); got != 0 {
+	columns = ""
+	if got := termWidth(w, getenv); got != 0 {
 		t.Errorf("termWidth of a pipe without COLUMNS = %d, want 0", got)
 	}
 }

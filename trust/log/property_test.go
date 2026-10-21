@@ -69,9 +69,9 @@ func TestGeneratorIsReproducible(t *testing.T) {
 }
 
 // TestIncrementalDeliveryNeverRegresses models gossip: records arrive one at a
-// time in arbitrary order. The epoch must never go backwards, a rejected
-// record must leave nothing behind, and the store must reopen to what it
-// serves.
+// time in arbitrary order. The epoch must never go backwards but under a
+// rollback alarm, a rejected record must leave nothing behind, and the store
+// must reopen to what it serves.
 func TestIncrementalDeliveryNeverRegresses(t *testing.T) {
 	t.Parallel()
 	for seed := uint64(1); seed <= 16; seed++ {
@@ -91,10 +91,10 @@ func TestIncrementalDeliveryNeverRegresses(t *testing.T) {
 			// Keep re-offering deferred records, which is what an
 			// anti-entropy round does when it learns a parent it was missing.
 			deferred := order
+			var floor uint64
 			for round := 0; len(deferred) > 0 && round < 40; round++ {
 				var stillDeferred []types.AUM
 				for _, rec := range deferred {
-					epochBefore := auth.State().Epoch()
 					headBefore := auth.Head()
 					snapBefore := auth.State().Snapshot().Encode()
 					err := auth.Inform(rec)
@@ -105,9 +105,7 @@ func TestIncrementalDeliveryNeverRegresses(t *testing.T) {
 						}
 						stillDeferred = append(stillDeferred, rec)
 					}
-					if auth.State().Epoch() < epochBefore {
-						t.Fatalf("epoch went backwards: %d then %d", epochBefore, auth.State().Epoch())
-					}
+					floor = checkEpochHeld(t, auth, storage, floor)
 					reopened, err := Open(storage)
 					if err != nil {
 						t.Fatalf("store stopped opening: %v", err)
@@ -123,6 +121,25 @@ func TestIncrementalDeliveryNeverRegresses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// checkEpochHeld checks what the epoch floor promises: it never goes down,
+// and a chain that resolves below it, as where a sibling at a lower epoch
+// wins fork choice, is held under an alarm, so the device acts on no epoch
+// below one it adopted. It returns the floor.
+func checkEpochHeld(t *testing.T, auth *Authority, st Storage, before uint64) uint64 {
+	t.Helper()
+	floor, err := st.EpochFloor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if floor < before {
+		t.Fatalf("the epoch floor went down: %d then %d", before, floor)
+	}
+	if trusted, err := auth.TrustedState(); err == nil && trusted.Epoch() < floor {
+		t.Fatalf("the chain went back from epoch %d to %d, and is trusted", floor, trusted.Epoch())
+	}
+	return floor
 }
 
 // generator builds random but valid record sets, including forks, by keeping

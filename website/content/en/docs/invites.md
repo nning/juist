@@ -47,7 +47,7 @@ In a terminal, `juist invite` also draws the link as a QR code, above the
 itself, without the command. The LAN code is printed last, so that it stays
 visible even in a window shorter than the QR code. There is no QR code when
 the output is not a terminal, or when the window is too narrow for it, in
-which case juist says so:
+which case juist says so, for example
 `no qr code: the terminal is narrower than 59 columns`.
 
 A phone joins by scanning the QR code with the

@@ -8,7 +8,6 @@ package terminator
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -18,7 +17,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,8 +29,10 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 
+	"github.com/nning/juist/internal/lograte"
 	"github.com/nning/juist/internal/pipe"
 	"github.com/nning/juist/internal/proxyproto"
+	"github.com/nning/juist/internal/published"
 	"github.com/nning/juist/internal/statuspage"
 	"github.com/nning/juist/ipc"
 )
@@ -42,10 +42,9 @@ const (
 	DefaultPoll     = 5 * time.Second
 	DefaultMaxConns = 8192
 
-	helloTimeout  = 10 * time.Second
-	dialTimeout   = 5 * time.Second
-	idleTimeout   = 5 * time.Minute
-	missesAllowed = 1
+	helloTimeout = 10 * time.Second
+	dialTimeout  = 5 * time.Second
+	idleTimeout  = 5 * time.Minute
 )
 
 // Options configures a terminator.
@@ -98,11 +97,11 @@ type terminator struct {
 	tls   *tls.Config
 
 	account atomic.Pointer[ipc.ACMEAccount]
-	named   pipe.Named
-	passed  pipe.Named // by passKey
-	// byPeer are the connections by memberKey, which end once a name is for
-	// members alone their peer is not.
-	byPeer  pipe.Named
+	named   published.Named[nameKey]
+	passed  published.Named[passKey]
+	// byPeer are the connections by who opened them for which name, which end
+	// once a name is for members alone their peer is not.
+	byPeer  published.Named[memberKey]
 	pages   *statuspage.Server
 	quic    *quicServer
 	quicTLS *tls.Config
@@ -177,7 +176,7 @@ func Serve(ctx context.Context, o Options) error {
 		// never the PROXY header's.
 		var peer netip.Addr
 		if h.Conn != nil {
-			peer = addrPort(h.Conn.RemoteAddr()).Addr().Unmap()
+			peer = published.AddrPort(h.Conn.RemoteAddr()).Addr().Unmap()
 		}
 		if forMembers, ok := t.admits(h.ServerName, peer); forMembers && !ok {
 			if !slices.Contains(t.now.Load().ingresses, peer) || !slices.Equal(h.SupportedProtos, []string{acme.ALPNProto}) {
@@ -195,7 +194,7 @@ func Serve(ctx context.Context, o Options) error {
 		}
 		return plain, nil
 	}}
-	t.quic = newQUICServer(t, getCert)
+	t.quic = newQUICServer(t)
 	t.quicTLS = t.quic.tlsConfig(getCert)
 	t.poll(ctx)
 	t.mu.Lock()
@@ -213,42 +212,25 @@ func Serve(ctx context.Context, o Options) error {
 }
 
 // poll asks what to serve every Poll and listens where it says, until ctx
-// ends or juistd says it is idle; once asks go unanswered it serves nothing. Where what it listens on
-// changed, it asks again at once, so that juistd knows.
+// ends or juistd says it is idle; once asks go unanswered it serves nothing.
+// Where what it listens on changed, it asks again at once, so that juistd
+// knows.
 func (t *terminator) poll(ctx context.Context) {
-	misses := 0
-	tick := time.NewTicker(t.o.Poll)
-	defer tick.Stop()
-	var told *ipc.TerminatorReport
-	for {
-		r := t.report()
-		actx, cancel := context.WithTimeout(ctx, t.o.Poll)
-		p, err := t.o.Serving(actx, r)
-		cancel()
-		switch {
-		case err == nil && p.Idle && len(p.Names) == 0:
-			return
-		case err == nil:
-			misses = 0
-			told = r
-			t.set(ctx, p)
-			if again := t.report(); !slices.Equal(again.Listening, told.Listening) || !slices.Equal(again.Unbound, told.Unbound) {
-				continue
-			}
-		case ctx.Err() != nil:
-			return
-		default:
-			if misses++; misses == missesAllowed+1 {
-				t.o.Logf("terminator: juistd does not answer (%v); serving nothing until it does", err)
-				t.set(ctx, &ipc.Published{})
-			}
+	var r *ipc.TerminatorReport
+	published.Poll(ctx, t.o.Poll, func(actx context.Context) (*ipc.Published, error) {
+		r = t.report()
+		return t.o.Serving(actx, r)
+	}, func(p *ipc.Published) (again, stop bool) {
+		if p.Idle && len(p.Names) == 0 {
+			return false, true
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-	}
+		t.set(ctx, p)
+		now := t.report()
+		return !slices.Equal(now.Listening, r.Listening) || !slices.Equal(now.Unbound, r.Unbound), false
+	}, func(err error) {
+		t.o.Logf("terminator: juistd does not answer (%v); serving nothing until it does", err)
+		t.set(ctx, &ipc.Published{})
+	}, nil)
 }
 
 // report is what the terminator tells juistd: its account, where it
@@ -327,20 +309,14 @@ func (t *terminator) set(ctx context.Context, p *ipc.Published) {
 	t.now.Store(w)
 	// A connection piped as it is ends once its name goes elsewhere, or is
 	// proxied by path.
-	t.named.CloseUnless(func(key string) bool {
-		name, to, piped := strings.Cut(key, " ")
-		n, ok := t.lookup(name)
-		return ok && (!piped || n.To == to && len(n.Paths) == 0)
+	t.named.CloseUnless(func(k nameKey) bool {
+		n, ok := t.lookup(k.name)
+		return ok && (!k.piped || n.To == k.to && len(n.Paths) == 0)
 	})
-	t.passed.CloseUnless(func(key string) bool {
-		_, ok := t.passing(key)
-		return ok
-	})
-	t.byPeer.CloseUnless(func(key string) bool {
-		name, peer, _ := strings.Cut(key, " ")
-		from, forMembers := w.members[name]
-		a, err := netip.ParseAddr(peer)
-		return !forMembers || err == nil && from[a]
+	t.passed.CloseUnless(t.passing)
+	t.byPeer.CloseUnless(func(k memberKey) bool {
+		from, forMembers := w.members[k.name]
+		return !forMembers || from[k.peer]
 	})
 	t.quic.set(quic, t.quicTLS)
 	t.mu.Lock()
@@ -412,8 +388,7 @@ const certLogEvery = time.Minute
 // for each, and keeps it for the report until one is found: what the CA
 // refused is the operator's to know, and a scanner's names are none.
 func (t *terminator) logged(get func(*tls.ClientHelloInfo) (*tls.Certificate, error)) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	var mu sync.Mutex
-	said := map[string]time.Time{}
+	said := lograte.ByKey[string]{Interval: certLogEvery, Max: 4096}
 	return func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		c, err := get(h)
 		name := strings.TrimSuffix(strings.ToLower(h.ServerName), ".")
@@ -429,12 +404,9 @@ func (t *terminator) logged(get func(*tls.ClientHelloInfo) (*tls.Certificate, er
 		}
 		t.mu.Unlock()
 		if err != nil {
-			mu.Lock()
-			if time.Since(said[name]) >= certLogEvery {
-				said[name] = time.Now()
+			if _, _, ok := said.Allow(name, time.Now()); ok {
 				t.o.Logf("terminator: no certificate for %s: %v", h.ServerName, err)
 			}
-			mu.Unlock()
 		}
 		return c, err
 	}
@@ -473,9 +445,21 @@ func (t *terminator) admits(name string, peer netip.Addr) (forMembers, ok bool) 
 	return forMembers, !forMembers || from[peer.Unmap()]
 }
 
-// memberKey is a connection to a name for members alone, from peer.
-func memberKey(name string, peer netip.Addr) string {
-	return canonicalName(name) + " " + peer.Unmap().String()
+// A memberKey is a connection to a name, from peer.
+type memberKey struct {
+	name string
+	peer netip.Addr
+}
+
+func memberKeyOf(name string, peer netip.Addr) memberKey {
+	return memberKey{canonicalName(name), peer.Unmap()}
+}
+
+// A nameKey is a connection served by name, piped to a service where it is
+// passed on whole.
+type nameKey struct {
+	name, to string
+	piped    bool
 }
 
 // errForMembers refuses a name for members alone to whoever it is not for.
@@ -512,19 +496,20 @@ func (t *terminator) accept(ctx context.Context, ap netip.AddrPort, ln net.Liste
 	}
 }
 
-// passKey names the connections passed for n: its port, name and where it
-// goes, so that any of them changing closes them.
-func passKey(n ipc.PublishedTarget) string {
-	return strconv.Itoa(int(n.Port)) + " " + n.Name + " " + n.To
+// A passKey names the connections passed for a name: its port, name and
+// where it goes, so that any of them changing closes them.
+type passKey struct {
+	port     uint16
+	name, to string
 }
 
-// passing is the name published by TCP whose connections key names, while
-// it is served as it was.
-func (t *terminator) passing(key string) (ipc.PublishedTarget, bool) {
-	p, _, _ := strings.Cut(key, " ")
-	port, _ := strconv.ParseUint(p, 10, 16)
-	n, ok := t.now.Load().tcp[uint16(port)]
-	return n, ok && passKey(n) == key
+func passKeyOf(n ipc.PublishedTarget) passKey { return passKey{n.Port, n.Name, n.To} }
+
+// passing reports whether the name published by TCP whose connections k
+// names is served as it was.
+func (t *terminator) passing(k passKey) bool {
+	n, ok := t.now.Load().tcp[k.port]
+	return ok && passKeyOf(n) == k
 }
 
 // pass sends what c carries for n, a name published by TCP, to its local
@@ -534,7 +519,7 @@ func (t *terminator) passing(key string) (ipc.PublishedTarget, bool) {
 // alone, so that a service that speaks first is not kept waiting.
 func (t *terminator) pass(ctx context.Context, c net.Conn, n ipc.PublishedTarget) {
 	defer c.Close()
-	client := addrPort(c.RemoteAddr())
+	client := published.AddrPort(c.RemoteAddr())
 	if n.Proxy && slices.Contains(t.now.Load().ingresses, client.Addr().Unmap()) {
 		_ = c.SetDeadline(time.Now().Add(helloTimeout))
 		r := bufio.NewReader(c)
@@ -546,7 +531,7 @@ func (t *terminator) pass(ctx context.Context, c net.Conn, n ipc.PublishedTarget
 			client = src
 		}
 		_ = c.SetDeadline(time.Time{})
-		c = bufferedConn{Conn: c, r: r}
+		c = published.BufferedConn{Conn: c, R: r}
 	}
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	backend, err := t.o.Dial(dctx, "tcp", n.To)
@@ -556,14 +541,14 @@ func (t *terminator) pass(ctx context.Context, c net.Conn, n ipc.PublishedTarget
 	}
 	defer backend.Close()
 	if n.Proxy {
-		if _, err := backend.Write(proxyproto.Header(client, addrPort(c.LocalAddr()))); err != nil {
+		if _, err := backend.Write(proxyproto.Header(client, published.AddrPort(c.LocalAddr()))); err != nil {
 			return
 		}
 	}
-	key := passKey(n)
+	key := passKeyOf(n)
 	t.passed.Add(c, key, func() { c.Close(); backend.Close() })
 	defer t.passed.Remove(c)
-	if _, ok := t.passing(key); !ok {
+	if !t.passing(key) {
 		return // no longer served
 	}
 	pipe.Join(ctx, c, backend, idleTimeout)
@@ -577,7 +562,7 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(helloTimeout))
 	r := bufio.NewReader(c)
-	client := addrPort(c.RemoteAddr())
+	client := published.AddrPort(c.RemoteAddr())
 	if slices.Contains(t.now.Load().ingresses, client.Addr().Unmap()) {
 		src, ok, err := proxyproto.Read(r)
 		if err != nil {
@@ -587,8 +572,8 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 			client = src
 		}
 	}
-	peer := addrPort(c.RemoteAddr()).Addr().Unmap()
-	tc := tls.Server(bufferedConn{Conn: c, r: r}, t.tls)
+	peer := published.AddrPort(c.RemoteAddr()).Addr().Unmap()
+	tc := tls.Server(published.BufferedConn{Conn: c, R: r}, t.tls)
 	if err := tc.HandshakeContext(ctx); err != nil {
 		return
 	}
@@ -602,7 +587,7 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 	}
 	// Every connection, so that a name made for members alone ends those
 	// of whoever it is not for, though opened while it was public.
-	t.byPeer.Add(c, memberKey(n.Name, peer), func() { c.Close() })
+	t.byPeer.Add(c, memberKeyOf(n.Name, peer), func() { c.Close() })
 	defer t.byPeer.Remove(c)
 	if _, ok := t.admits(n.Name, peer); !ok {
 		return
@@ -613,7 +598,7 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 			return
 		}
 		_ = c.SetDeadline(time.Time{})
-		t.named.Add(c, n.Name, func() { c.Close() })
+		t.named.Add(c, nameKey{name: n.Name}, func() { c.Close() })
 		defer t.named.Remove(c)
 		if _, ok := t.lookup(n.Name); !ok {
 			return // no longer served
@@ -622,7 +607,7 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 		if page {
 			timeout, headerBytes = pageTimeout, pageHeaderBytes
 		}
-		px := t.proxiesFor(client, addrPort(c.LocalAddr()))
+		px := t.proxiesFor(client, published.AddrPort(c.LocalAddr()))
 		defer px.close()
 		var h http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			now, ok := t.lookup(n.Name)
@@ -654,11 +639,11 @@ func (t *terminator) serve(ctx context.Context, c net.Conn) {
 	defer backend.Close()
 	_ = c.SetDeadline(time.Time{})
 	if n.Proxy {
-		if _, err := backend.Write(proxyproto.Header(client, addrPort(c.LocalAddr()))); err != nil {
+		if _, err := backend.Write(proxyproto.Header(client, published.AddrPort(c.LocalAddr()))); err != nil {
 			return
 		}
 	}
-	t.named.Add(c, n.Name+" "+n.To, func() { c.Close(); backend.Close() })
+	t.named.Add(c, nameKey{n.Name, n.To, true}, func() { c.Close(); backend.Close() })
 	defer t.named.Remove(c)
 	if now, ok := t.lookup(n.Name); !ok || now.To != n.To || len(now.Paths) > 0 {
 		return // no longer served so
@@ -683,25 +668,16 @@ func (t *terminator) redirect(ap netip.AddrPort, ln net.Listener) {
 // toHTTPS redirects a request for a name served here to https, on the port
 // it is served on; it reads nothing else.
 func (t *terminator) toHTTPS(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	n, ok := t.lookup(host)
+	n, ok := t.lookup(published.Host(r))
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
+	host := n.Name
 	if n.Port != 443 {
 		host = net.JoinHostPort(n.Name, strconv.Itoa(int(n.Port)))
-	} else {
-		host = n.Name
 	}
-	// From the path alone: an opaque target such as "http:@evil.com" would
-	// otherwise name another host.
-	to := url.URL{Scheme: "https", Host: host, Path: cmp.Or(r.URL.Path, "/"), RawPath: r.URL.RawPath,
-		RawQuery: r.URL.RawQuery}
-	http.Redirect(w, r, to.String(), http.StatusPermanentRedirect)
+	published.RedirectHTTPS(w, r, host)
 }
 
 // proxiesFor is a client connection's proxies, made as its requests need them.
@@ -846,28 +822,3 @@ func (l *oneConn) Close() error {
 }
 
 func (l *oneConn) Addr() net.Addr { return l.c.LocalAddr() }
-
-// bufferedConn reads through r, which may hold what a PROXY header was
-// peeked from.
-type bufferedConn struct {
-	net.Conn
-	r *bufio.Reader
-}
-
-func (c bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
-
-// CloseWrite passes the end of one way on, where c can.
-func (c bufferedConn) CloseWrite() error {
-	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
-		return cw.CloseWrite()
-	}
-	return c.Conn.Close()
-}
-
-func addrPort(a net.Addr) netip.AddrPort {
-	if t, ok := a.(*net.TCPAddr); ok {
-		ap := t.AddrPort()
-		return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
-	}
-	return netip.AddrPortFrom(netip.IPv6Unspecified(), 0)
-}

@@ -26,8 +26,21 @@ polkit_pkla() {
 	rm -f "$pkla"
 }
 
+# Profiles read the nameservice abstraction's snippets only as they load, so
+# AppArmor reloads once for each new snippet. The marker is root's, as below.
+apparmor_nameservice() {
+	snippet=/etc/apparmor.d/abstractions/nameservice.d/juist
+	loaded=/var/lib/juist.apparmor
+	[ -d /sys/kernel/security/apparmor ] && [ -f "$snippet" ] && [ -d /run/systemd/system ] || return 0
+	sum=$(cksum <"$snippet")
+	[ "$(cat "$loaded" 2>/dev/null)" != "$sum" ] || return 0
+	systemctl reload apparmor.service >/dev/null 2>&1 || return 0
+	echo "$sum" >"$loaded"
+}
+
 polkit_pkla
 if [ "$1" = configure ]; then
+	apparmor_nameservice
 	if command -v systemd-sysusers >/dev/null 2>&1; then
 		systemd-sysusers /usr/lib/sysusers.d/juist.conf
 	else

@@ -43,9 +43,14 @@ func joinDaemon(t *testing.T, host, guest *daemonDevice, name string, args ...st
 // eventually runs check until it holds, or fails the test after a while.
 func eventually(t *testing.T, what string, check func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(20 * time.Second); !check(); {
+	eventuallyWithin(t, 20*time.Second, what, check)
+}
+
+func eventuallyWithin(t *testing.T, d time.Duration, what string, check func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(d); !check(); {
 		if time.Now().After(deadline) {
-			t.Fatalf("%s: not within 20s", what)
+			t.Fatalf("%s: not within %v", what, d)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -305,29 +310,28 @@ func TestAnAdmissionGathersVotesWhileItsInviteRuns(t *testing.T) {
 	t.Parallel()
 	dir := workDir(t)
 	alice, bob, carol := threeAdmins(t)
-	alice.admissionHold = 6 * time.Second
+	// Long enough for a vote to reach alice under load before its copy lapses.
+	alice.admissionHold = 30 * time.Second
 	inv := alice.start("invite", "--no-lan", "--port", "0", "--yes")
 	link := inv.waitFor(t, linkRE)[1]
 	guest := newDaemonDevice(t, nil)
 	joined := guest.start("join", link, "--name", "phone")
 	eventually(t, "the admission waits on bob's device", func() bool { return len(heldCopies(t, bob)) == 1 })
 	out, err := bob.answer("y", "approve")
+	approved := time.Now()
 	if err != nil {
 		t.Fatalf("bob approves: %v\n%s", err, out)
 	}
 	mustContain(t, out, "needs 1 more vote")
-	// Past bob's own copy's wait: what reaches carol is alice's, renewed
-	// with bob's vote.
-	bobs := func() bool {
-		for _, c := range heldCopies(t, carol) {
-			if c.Signer != c.Proposer {
-				return true
-			}
+	// Past bob's own copy's wait, which no copy he held outlasts by more
+	// than a hold: what carol approves is alice's, renewed with bob's vote.
+	time.Sleep(time.Until(approved.Add(alice.admissionHold + time.Second)))
+	for _, c := range heldCopies(t, carol) {
+		if c.Signer != c.Proposer {
+			t.Fatalf("bob's copy outlived its wait: issued %d, expires %d, now %d", c.Issued, c.Expires,
+				time.Now().Unix())
 		}
-		return false
 	}
-	eventually(t, "bob's copy reaches carol", bobs)
-	eventually(t, "bob's copy lapses on carol's device", func() bool { return !bobs() })
 	// Alice's copy renewed with bob's vote may reach carol a round later.
 	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(time.Second) {
 		out, err = carol.answer("y", "approve")
@@ -358,12 +362,112 @@ func TestAnAdmissionGathersVotesWhileItsInviteRuns(t *testing.T) {
 	}
 	inv.cancel()
 	_, _ = inv.wait(t)
-	eventually(t, "the copies of the ended invite's admission lapse", func() bool {
+	eventuallyWithin(t, alice.admissionHold+20*time.Second, "the copies of the ended invite's admission lapse", func() bool {
 		return len(heldCopies(t, bob)) == 0 && len(heldCopies(t, carol)) == 0
 	})
 	bob.mustRun("approve", "--yes", record+".kept")
 	if n := len(heldCopies(t, bob)); n != 0 {
 		t.Fatalf("approving an ended invite's admission from its file handed on %d copies", n)
+	}
+}
+
+// A vote reaching the inviting device is handed on with its admission at
+// once, not at the next renewal, by when the copy carrying it may have lapsed.
+func TestAVoteReachingTheInviteIsHandedOnAtOnce(t *testing.T) {
+	t.Parallel()
+	alice, bob, carol := threeAdmins(t)
+	alice.admissionHold = 2 * time.Minute
+	inv := alice.start("invite", "--no-lan", "--port", "0", "--yes")
+	link := inv.waitFor(t, linkRE)[1]
+	guest := newDaemonDevice(t, nil)
+	joined := guest.start("join", link, "--name", "phone")
+	alices := func() *waiting.Change {
+		for _, c := range heldCopies(t, carol) {
+			if c.Signer == c.Proposer {
+				return c
+			}
+		}
+		return nil
+	}
+	eventually(t, "the admission waits on bob's and carol's devices", func() bool {
+		return len(heldCopies(t, bob)) == 1 && alices() != nil
+	})
+	first := alices().Issued
+	out, err := bob.answer("y", "approve")
+	if err != nil {
+		t.Fatalf("bob approves: %v\n%s", err, out)
+	}
+	mustContain(t, out, "needs 1 more vote")
+	eventually(t, "alice's copy with bob's vote reaches carol", func() bool {
+		c := alices()
+		return c != nil && c.Issued > first
+	})
+	if out, err = carol.answer("y", "approve"); err != nil {
+		t.Fatalf("carol approves: %v\n%s", err, out)
+	}
+	mustContain(t, out, "applied")
+	if out, err := joined.wait(t); err != nil {
+		t.Fatalf("join: %v\n%s", err, out)
+	}
+	if out, err := inv.wait(t); err != nil {
+		t.Fatalf("invite: %v\n%s", err, out)
+	}
+}
+
+// renewalReader answers once the copies of an admission held when its admin
+// was asked have lapsed and a renewed one has reached their device.
+type renewalReader struct {
+	t     *testing.T
+	d     *daemonDevice
+	asked bool
+	reply *strings.Reader
+}
+
+func (r *renewalReader) Read(p []byte) (int, error) {
+	if !r.asked {
+		r.asked = true
+		shown := time.Now().Unix()
+		for _, c := range heldCopies(r.t, r.d) {
+			shown = max(shown, c.Expires)
+		}
+		eventually(r.t, "the shown copy lapses and a renewed one arrives", func() bool {
+			copies := heldCopies(r.t, r.d)
+			return time.Now().Unix() > shown && len(copies) == 1 && copies[0].Expires > shown
+		})
+	}
+	return r.reply.Read(p)
+}
+
+// An admission approved after the copy its admin was shown lapsed, while a
+// renewed copy waits, is approved, with as long to go as the renewed copy.
+func TestAnAdmissionRenewedWhileAskedIsApproved(t *testing.T) {
+	t.Parallel()
+	alice, bob := twoAdmins(t)
+	alice.admissionHold = 6 * time.Second
+	inv := alice.start("invite", "--no-lan", "--port", "0", "--yes")
+	link := inv.waitFor(t, linkRE)[1]
+	guest := newDaemonDevice(t, nil)
+	joined := guest.start("join", link, "--name", "phone")
+	// Between one copy's lapse and the next's arrival, nothing waits to be
+	// asked about.
+	eventually(t, "bob is asked about the admission", func() bool {
+		var out syncBuffer
+		a := bob.cli.app(&out, "y\n")
+		a.in = &renewalReader{t: t, d: bob, reply: strings.NewReader("y\n")}
+		err := a.main([]string{"--home", bob.home, "--socket", bob.sock, "approve"})
+		if strings.Contains(out.String(), "no change waits for your vote") {
+			return false
+		}
+		if err != nil || !strings.Contains(out.String(), "applied") {
+			t.Fatalf("approve after a renewal: %v\n%s", err, out.String())
+		}
+		return true
+	})
+	if out, err := joined.wait(t); err != nil {
+		t.Fatalf("join: %v\n%s", err, out)
+	}
+	if out, err := inv.wait(t); err != nil {
+		t.Fatalf("invite: %v\n%s", err, out)
 	}
 }
 

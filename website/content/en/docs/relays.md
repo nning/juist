@@ -42,8 +42,7 @@ sudo firewall-cmd --permanent --add-service=juist --add-service=juist-relay && s
 {{< /step >}}
 
 {{< step on="an admin's device" >}}
-Give the VPS the role `relay`. A role is a permission the network records for
-one device.
+Give the VPS the [role]({{< relref "docs/how-it-works" >}}#roles) `relay`:
 
 ```sh
 juist grant vps relay
@@ -85,13 +84,14 @@ says:
 
 - Every device learns the name from the relay's announcement.
 - Listening on port 443 needs a privilege that juistd otherwise lacks and that
-  only root can grant. `sudo juist set` grants it `CAP_NET_BIND_SERVICE` for
+  only root can give. `sudo juist set` gives it `CAP_NET_BIND_SERVICE` for
   this purpose only, through a systemd drop-in, and
   `sudo juist set --relay-name ""` takes it away together with the name.
-- On FreeBSD, juistd's helper binds 443 only while root's grant is in place and
-  no other program listens on 443. If pf runs, it must let the traffic in.
-- If the grant outlives the name, `juist health` warns, and `juist reset` takes
-  it away.
+- On FreeBSD, juistd's helper binds 443 only while root's permission is in
+  place and no other program listens on 443. If pf runs, it must let the
+  traffic in.
+- If the name is gone but the privilege remains, `juist health` warns, and
+  `juist reset` takes the privilege away.
 - Members use the name only once the server at that name confirms it is this
   relay. A name that points elsewhere is not used.
 - If the relay is also the network's

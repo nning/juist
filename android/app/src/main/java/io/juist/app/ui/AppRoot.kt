@@ -247,7 +247,7 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                     }
                 },
                 onVpnSettings = { runCatching { context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) } },
-                saving = pace.saving,
+                saving = pace.powerSave,
             )
             is Route.MemberOf -> {
                 val view = Juist.last

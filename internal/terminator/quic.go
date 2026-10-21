@@ -20,6 +20,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 
 	"github.com/nning/juist/internal/proxyproto"
+	"github.com/nning/juist/internal/published"
 	"github.com/nning/juist/ipc"
 )
 
@@ -84,7 +85,7 @@ func (l provingListener) Accept(ctx context.Context) (*quic.Conn, error) {
 	if err != nil {
 		return c, err
 	}
-	remote := addrPortUDP(c.RemoteAddr())
+	remote := published.AddrPort(c.RemoteAddr())
 	client, named := l.s.pc.client(remote)
 	if !named || !containsAddr(l.s.pc.ingresses(), remote.Addr()) {
 		return c, nil
@@ -104,7 +105,7 @@ func (l provingListener) Accept(ctx context.Context) (*quic.Conn, error) {
 	return c, nil
 }
 
-func newQUICServer(t *terminator, getCert func(*tls.ClientHelloInfo) (*tls.Certificate, error)) *quicServer {
+func newQUICServer(t *terminator) *quicServer {
 	// quic-go would say a small socket buffer on the standard logger, in
 	// words of its own; the handbook says it instead.
 	_ = os.Setenv("QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING", "true")
@@ -124,15 +125,15 @@ func (q *quicServer) opened(ctx context.Context, c *quic.Conn) context.Context {
 		_ = c.CloseWithError(0, "")
 		return ctx
 	}
-	peer := addrPortUDP(c.RemoteAddr()).Addr()
-	q.t.byPeer.Add(c, memberKey(n.Name, peer), func() { _ = c.CloseWithError(0, "") })
+	peer := published.AddrPort(c.RemoteAddr()).Addr()
+	q.t.byPeer.Add(c, memberKeyOf(n.Name, peer), func() { _ = c.CloseWithError(0, "") })
 	context.AfterFunc(c.Context(), func() { q.t.byPeer.Remove(c) })
 	if _, ok := q.t.admits(n.Name, peer); !ok {
 		_ = c.CloseWithError(0, "")
 		return ctx
 	}
-	px := q.t.proxiesFor(q.clientOf(addrPortUDP(c.RemoteAddr())), addrPortUDP(c.LocalAddr()))
-	q.t.named.Add(c, n.Name, func() { _ = c.CloseWithError(0, "") })
+	px := q.t.proxiesFor(q.clientOf(published.AddrPort(c.RemoteAddr())), published.AddrPort(c.LocalAddr()))
+	q.t.named.Add(c, nameKey{name: n.Name}, func() { _ = c.CloseWithError(0, "") })
 	context.AfterFunc(c.Context(), func() {
 		q.t.named.Remove(c)
 		px.close()
@@ -154,7 +155,7 @@ func (q *quicServer) tlsConfig(getCert func(*tls.ClientHelloInfo) (*tls.Certific
 			}
 			var peer netip.Addr
 			if h.Conn != nil {
-				peer = addrPortUDP(h.Conn.RemoteAddr()).Addr()
+				peer = published.AddrPort(h.Conn.RemoteAddr()).Addr()
 			}
 			if _, ok := q.t.admits(h.ServerName, peer); !ok {
 				return nil, errForMembers
@@ -341,7 +342,7 @@ func (c *clientsConn) read(tr *quic.Transport) {
 }
 
 func (c *clientsConn) take(d []byte, from net.Addr) {
-	remote := addrPortUDP(from)
+	remote := published.AddrPort(from)
 	if !proxyproto.IsHeader(d) || !containsAddr(c.ingresses(), remote.Addr()) {
 		return // a member's header names no one
 	}
@@ -395,20 +396,4 @@ func containsAddr(as []netip.Addr, a netip.Addr) bool {
 		}
 	}
 	return false
-}
-
-func addrPortUDP(a net.Addr) netip.AddrPort {
-	if u, ok := a.(*net.UDPAddr); ok {
-		ap := u.AddrPort()
-		return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
-	}
-	return addrPortOf(a.String())
-}
-
-func addrPortOf(s string) netip.AddrPort {
-	ap, err := netip.ParseAddrPort(s)
-	if err != nil {
-		return netip.AddrPortFrom(netip.IPv6Unspecified(), 0)
-	}
-	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
 }

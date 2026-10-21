@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/discovery/dht"
@@ -123,7 +125,7 @@ func TestTheRelayTakes443UnlessTheIngressDoes(t *testing.T) {
 		t.Fatalf("as the ingress, the status says %+v", h)
 	}
 	f.d.mu.Lock()
-	held, socket := len(f.d.https443), f.d.handOffPath
+	held, socket := len(f.d.ownRelay.https443), f.d.handOffPath
 	f.d.mu.Unlock()
 	if held != 0 {
 		t.Errorf("the relay holds %d sockets on 443 beside the ingress", held)
@@ -138,13 +140,13 @@ func TestTheRelayTakes443UnlessTheIngressDoes(t *testing.T) {
 	}
 	// Not before the relay takes the ingress's connections there.
 	f.d.mu.Lock()
-	f.d.httpsHanded = false
+	f.d.ownRelay.httpsHanded = false
 	f.d.mu.Unlock()
 	if p := f.d.Published(); len(p.Relays) != 0 {
 		t.Errorf("handed on before the relay takes the ingress's connections: %+v", p.Relays)
 	}
 	f.d.mu.Lock()
-	f.d.httpsHanded = true
+	f.d.ownRelay.httpsHanded = true
 	f.d.mu.Unlock()
 
 	f.nw.setRoles(t, f, f.self.record.Identity)
@@ -303,7 +305,7 @@ func TestHTTPSAloneAnnouncesNoAddressAndUsesTheRelays(t *testing.T) {
 		o.DisableDiscovery, o.DisableDHT = false, false
 		o.HostDNS = noHostDNS{}
 		o.ServeDNS = func([]netip.Addr, func(netip.Addr) bool) (io.Closer, error) { return io.NopCloser(nil), nil }
-		o.ServeNames = func(netip.AddrPort, func([]byte) []byte, func([]byte) []netip.AddrPort) (io.Closer, error) {
+		o.ServeNames = func(netip.AddrPort, func([]byte) []byte, func([]byte) ([]netip.AddrPort, error)) (io.Closer, error) {
 			return io.NopCloser(nil), nil
 		}
 	})
@@ -370,7 +372,7 @@ func TestSettingsOf443AreKeptAndShown(t *testing.T) {
 		t.Fatalf("after a restart, the status says %+v", h)
 	}
 	g.s.mu.Lock()
-	kept := g.s.proxy
+	kept := g.s.prefs.Proxy
 	g.s.mu.Unlock()
 	if kept != proxy {
 		t.Errorf("the proxy kept is %q", kept)
@@ -468,6 +470,26 @@ func TestARelayOrdersItsCertificateSparingly(t *testing.T) {
 	f.d.namedCertificate(posing)
 	if ca.count() != 3 {
 		t.Error("a handshake posing as a challenge ordered")
+	}
+}
+
+// An order of the relay's certificate cannot be cancelled and may outlive
+// Close; once closed, it writes nothing into the state directory.
+func TestAnOrderOutlivingCloseWritesNoCertificate(t *testing.T) {
+	path := t.TempDir()
+	f := newReconcileFixtureOn(t, newNetwork(t, 2), func(o *Options) {
+		o.RelayName, o.ACMEDirectory, o.RelayCertsPath = testRelayName, "http://127.0.0.1:1/directory", path
+	})
+	m, ok := f.d.relayCerts.(*autocert.Manager)
+	if !ok {
+		t.Fatalf("the relay's certificates come from %T", f.d.relayCerts)
+	}
+	f.d.Close()
+	if err := m.Cache.Put(t.Context(), testRelayName, []byte("late")); err == nil {
+		t.Error("a certificate was kept after Close")
+	}
+	if _, err := os.Stat(filepath.Join(path, testRelayName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the state directory was written after Close: %v", err)
 	}
 }
 
@@ -654,6 +676,45 @@ func TestARelaysNameIsTakenOnceItsServerSaysWhoseItIs(t *testing.T) {
 		if r.Name != "" && r.CertHash[0] != 1 {
 			t.Errorf("an invite waits at %s by the relay %d", r.Name, r.CertHash[0])
 		}
+	}
+}
+
+// TestOneRelayCyclingNamesLeavesAnothersProvable: a relay-capable member
+// that announces a new name at every reconcile spends its own slots alone and
+// has few of them asked about, and another relay's new name is still asked
+// and taken; a name of its own past its slots is taken after a while.
+func TestOneRelayCyclingNamesLeavesAnothersProvable(t *testing.T) {
+	f, _ := namedRelayFixture(t)
+	cycler, honest := f.nw.devices[1].record.Identity, f.nw.devices[2].record.Identity
+	var asked atomic.Int32
+	f.d.askWhoami = func(_ context.Context, name string) ([32]byte, error) {
+		asked.Add(1)
+		if name == "honest.example.org" {
+			return honest, nil
+		}
+		return cycler, nil
+	}
+	at := time.Now()
+	f.d.clock = func() time.Time { at = at.Add(time.Second); return at }
+	for i := range 2 * maxNameProofs {
+		f.d.relayNameProven(fmt.Sprintf("n%d.example.org", i), cycler)
+		f.d.proveDue(t.Context())
+	}
+	if n := asked.Load(); n > maxNamesPerRelay {
+		t.Errorf("%d of a cycling relay's names asked about, want at most %d", n, maxNamesPerRelay)
+	}
+	if f.d.relayNameProven("honest.example.org", honest) {
+		t.Fatal("a name was taken before its server was asked")
+	}
+	f.d.proveDue(t.Context())
+	if !f.d.relayNameProven("honest.example.org", honest) {
+		t.Fatal("a relay cycling names kept another's new name from being proven")
+	}
+	at = at.Add(nameProofNewEvery)
+	f.d.relayNameProven("later.example.org", cycler)
+	f.d.proveDue(t.Context())
+	if !f.d.relayNameProven("later.example.org", cycler) {
+		t.Error("a relay's new name past its slots was not taken after a while")
 	}
 }
 

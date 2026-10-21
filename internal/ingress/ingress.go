@@ -7,7 +7,6 @@ package ingress
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -17,9 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,8 +25,10 @@ import (
 
 	"golang.org/x/net/netutil"
 
+	"github.com/nning/juist/internal/admit"
 	"github.com/nning/juist/internal/pipe"
 	"github.com/nning/juist/internal/proxyproto"
+	"github.com/nning/juist/internal/published"
 	"github.com/nning/juist/ipc"
 )
 
@@ -50,10 +49,6 @@ const (
 	// answerTimeout bounds the wait for a client's answer to its target's
 	// first flight: long enough to pick a client certificate or type a PIN.
 	answerTimeout = time.Minute
-
-	// missesAllowed is how many asks in a row may go unanswered before the
-	// ingress publishes nothing.
-	missesAllowed = 1
 )
 
 // Options configures an ingress.
@@ -97,9 +92,9 @@ type ingress struct {
 	relays  atomic.Pointer[map[string]bool]                // in table, served by TLS alone
 	members atomic.Pointer[map[string]ipc.PublishedTarget] // not in table: for members alone
 	conns   chan struct{}
-	sources pipe.Sources
-	named   pipe.Named
-	passed  pipe.Named // by tcpKey
+	sources *admit.Set[netip.Prefix]
+	named   published.Named[spliceKey]
+	passed  published.Named[passKey]
 
 	mu        sync.Mutex
 	listeners map[uint16]net.Listener
@@ -161,7 +156,7 @@ func Serve(ctx context.Context, tlsLn, httpLn net.Listener, o Options) error {
 	if o.Listen == nil {
 		o.Listen = func(port uint16) (net.Listener, error) { return net.Listen("tcp", fmt.Sprintf(":%d", port)) }
 	}
-	in := &ingress{o: o, conns: make(chan struct{}, o.MaxConns), sources: pipe.Sources{Max: o.MaxPerSource},
+	in := &ingress{o: o, conns: make(chan struct{}, o.MaxConns), sources: admit.HostsAndSites(o.MaxPerSource),
 		listeners: map[uint16]net.Listener{}, failed: map[uint16]bool{}}
 	in.table.Store(&map[string]ipc.PublishedTarget{})
 	in.members.Store(&map[string]ipc.PublishedTarget{})
@@ -178,7 +173,7 @@ func Serve(ctx context.Context, tlsLn, httpLn net.Listener, o Options) error {
 		srv := &http.Server{Handler: http.HandlerFunc(in.redirect), ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: o.httpIdle,
 			ErrorLog: log.New(io.Discard, "", 0)}
-		ln := perSource{Listener: httpLn, sources: &pipe.Sources{Max: o.MaxPerSource}}
+		ln := perSource{Listener: httpLn, sources: admit.HostsAndSites(o.MaxPerSource)}
 		wg.Go(func() { _ = srv.Serve(netutil.LimitListener(ln, o.MaxConns)) })
 		context.AfterFunc(ctx, func() { srv.Close() })
 	}
@@ -197,41 +192,21 @@ func Serve(ctx context.Context, tlsLn, httpLn net.Listener, o Options) error {
 // unanswered: a juistd that stops answering takes the names down with it,
 // and the connections for them.
 func (in *ingress) poll(ctx context.Context) {
-	misses := 0
-	t := time.NewTicker(in.o.Poll)
-	defer t.Stop()
-	for {
+	var r *ipc.IngressReport
+	published.Poll(ctx, in.o.Poll, func(actx context.Context) (*ipc.Published, error) {
 		in.listenQUIC(ctx)
-		r := in.report()
-		actx, cancel := context.WithTimeout(ctx, in.o.Poll)
-		p, err := in.o.Published(actx, r)
-		cancel()
-		switch {
-		case err == nil:
-			if misses > missesAllowed {
-				in.o.Logf("ingress: juistd answers again")
-			}
-			misses = 0
-			in.serve(ctx, p)
-			// What it listens on changed: juistd hears of it at once.
-			if again := in.report(); !slices.Equal(again.Listening, r.Listening) || !slices.Equal(again.Unbound, r.Unbound) ||
-				again.NoQUIC != r.NoQUIC {
-				continue
-			}
-		case ctx.Err() != nil:
-			return
-		default:
-			if misses++; misses == missesAllowed+1 {
-				in.o.Logf("ingress: juistd does not answer (%v); serving nothing until it does", err)
-				in.serve(ctx, in.held())
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
+		r = in.report()
+		return in.o.Published(actx, r)
+	}, func(p *ipc.Published) (again, stop bool) {
+		in.serve(ctx, p)
+		// What it listens on changed: juistd hears of it at once.
+		now := in.report()
+		return !slices.Equal(now.Listening, r.Listening) || !slices.Equal(now.Unbound, r.Unbound) ||
+			now.NoQUIC != r.NoQUIC, false
+	}, func(err error) {
+		in.o.Logf("ingress: juistd does not answer (%v); serving nothing until it does", err)
+		in.serve(ctx, in.held())
+	}, func() { in.o.Logf("ingress: juistd answers again") })
 }
 
 // serve takes p as what is served, closing what no longer is.
@@ -269,9 +244,9 @@ func (in *ingress) serve(ctx context.Context, p *ipc.Published) {
 			return ok
 		})
 	}
-	in.passed.CloseUnless(func(key string) bool {
-		t, ok := tcp[portOfKey(key)]
-		return ok && tcpKey(t) == key
+	in.passed.CloseUnless(func(k passKey) bool {
+		t, ok := tcp[k.port]
+		return ok && passKeyOf(t) == k
 	})
 	in.listen(ctx, tcp)
 }
@@ -365,16 +340,21 @@ func (in *ingress) listenQUIC(ctx context.Context) {
 	context.AfterFunc(ctx, func() { pc.Close() })
 }
 
-// tcpKey names the connections passed for t: its port, its name and
-// whether it is served, so that any of them changing closes them.
-func tcpKey(t ipc.PublishedTarget) string {
-	return strconv.Itoa(int(t.Public)) + " " + t.Name + " " + strconv.FormatBool(len(t.Addrs) > 0)
+// A passKey names the connections passed for a target: its port, its name
+// and whether it is served, so that any of them changing closes them.
+type passKey struct {
+	port   uint16
+	name   string
+	served bool
 }
 
-func portOfKey(key string) uint16 {
-	p, _, _ := strings.Cut(key, " ")
-	n, _ := strconv.ParseUint(p, 10, 16)
-	return uint16(n)
+func passKeyOf(t ipc.PublishedTarget) passKey { return passKey{t.Public, t.Name, len(t.Addrs) > 0} }
+
+// A spliceKey names a connection spliced by name, or for the CA's
+// validation of a name alone.
+type spliceKey struct {
+	name       string
+	validation bool
 }
 
 // lookup is where name goes, if it is served.
@@ -383,21 +363,16 @@ func (in *ingress) lookup(name string) (ipc.PublishedTarget, bool) {
 	return t, ok
 }
 
-// validationKey is how a connection passed for the CA's validation alone is
-// named, apart from those passed by name.
-const validationKey = "acme "
-
 // stillPassed reports whether a connection keyed so may go on: one passed
 // by name while the name is served so, one for the CA's validation while
 // the name is served at all.
-func (in *ingress) stillPassed(key string) bool {
-	if name, ok := strings.CutPrefix(key, validationKey); ok {
-		_, served := in.lookup(name)
-		_, members := in.lookupMembers(name)
+func (in *ingress) stillPassed(k spliceKey) bool {
+	_, served := in.lookup(k.name)
+	if k.validation {
+		_, members := in.lookupMembers(k.name)
 		return served || members
 	}
-	_, ok := in.lookup(key)
-	return ok
+	return served
 }
 
 // acmeALPN is the protocol the CA asks for to validate a name by
@@ -447,7 +422,7 @@ func (in *ingress) acceptEach(ctx context.Context, ln net.Listener, what, port s
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		client := addrPort(c.RemoteAddr())
+		client := published.AddrPort(c.RemoteAddr())
 		select {
 		case in.conns <- struct{}{}:
 		default:
@@ -455,8 +430,8 @@ func (in *ingress) acceptEach(ctx context.Context, ln net.Listener, what, port s
 			in.o.Access("access: %s %v%s refused: too many connections", what, client, port)
 			continue
 		}
-		src := client.Addr()
-		if !in.sources.Take(src) {
+		slot, ok := in.sources.Admit(admit.Host(client.Addr()), nil)
+		if !ok {
 			<-in.conns
 			c.Close()
 			in.o.Access("access: %s %v%s refused: too many connections from it", what, client, port)
@@ -464,7 +439,7 @@ func (in *ingress) acceptEach(ctx context.Context, ln net.Listener, what, port s
 		}
 		go func() {
 			defer func() { <-in.conns }()
-			defer in.sources.Done(src)
+			defer slot.Release()
 			serve(ctx, c)
 		}()
 	}
@@ -476,7 +451,7 @@ func (in *ingress) acceptEach(ctx context.Context, ln net.Listener, what, port s
 // first.
 func (in *ingress) pass(ctx context.Context, port uint16, c net.Conn) {
 	defer c.Close()
-	start, client := time.Now(), addrPort(c.RemoteAddr())
+	start, client := time.Now(), published.AddrPort(c.RemoteAddr())
 	var name, outcome string
 	var up, down atomic.Int64
 	defer func() {
@@ -498,16 +473,16 @@ func (in *ingress) pass(ctx context.Context, port uint16, c net.Conn) {
 	}
 	defer target.Close()
 	if t.Proxy {
-		if _, err := target.Write(proxyproto.Header(client, addrPort(c.LocalAddr()))); err != nil {
+		if _, err := target.Write(proxyproto.Header(client, published.AddrPort(c.LocalAddr()))); err != nil {
 			outcome = "target unreachable"
 			return
 		}
 	}
 	outcome = "spliced"
-	key := tcpKey(t)
+	key := passKeyOf(t)
 	in.passed.Add(c, key, func() { c.Close(); target.Close() })
 	defer in.passed.Remove(c)
-	if now, ok := (*in.tcp.Load())[port]; !ok || tcpKey(now) != key {
+	if now, ok := (*in.tcp.Load())[port]; !ok || passKeyOf(now) != key {
 		return // withdrawn meanwhile
 	}
 	pipe.Join(ctx, watched{c, func(n int) { up.Add(int64(n)) }}, watched{target, func(n int) { down.Add(int64(n)) }}, in.o.idle)
@@ -518,7 +493,7 @@ func (in *ingress) pass(ctx context.Context, port uint16, c net.Conn) {
 // long as the name is served.
 func (in *ingress) splice(ctx context.Context, c net.Conn) {
 	defer c.Close()
-	start, client := time.Now(), addrPort(c.RemoteAddr())
+	start, client := time.Now(), published.AddrPort(c.RemoteAddr())
 	var name, outcome string
 	var up, down atomic.Int64
 	defer func() {
@@ -532,7 +507,7 @@ func (in *ingress) splice(ctx context.Context, c net.Conn) {
 		return
 	}
 	t, ok := in.lookup(name)
-	key := t.Name
+	key := spliceKey{name: t.Name}
 	if !ok {
 		mt, members := in.lookupMembers(name)
 		switch {
@@ -545,7 +520,7 @@ func (in *ingress) splice(ctx context.Context, c net.Conn) {
 			outcome = "members only"
 			return
 		}
-		t, ok, key = mt, true, validationKey+mt.Name
+		t, ok, key = mt, true, spliceKey{mt.Name, true}
 	}
 	target, err := in.dial(ctx, t)
 	if err != nil {
@@ -555,7 +530,7 @@ func (in *ingress) splice(ctx context.Context, c net.Conn) {
 	defer target.Close()
 	_ = c.SetDeadline(time.Time{})
 	if t.Proxy {
-		hello = append(proxyproto.Header(addrPort(c.RemoteAddr()), addrPort(c.LocalAddr())), hello...)
+		hello = append(proxyproto.Header(published.AddrPort(c.RemoteAddr()), published.AddrPort(c.LocalAddr())), hello...)
 	}
 	outcome = "spliced"
 	if _, err := target.Write(hello); err != nil {
@@ -645,10 +620,7 @@ func (in *ingress) dial(ctx context.Context, t ipc.PublishedTarget) (net.Conn, e
 // redirect sends a client asking for a served name over HTTP to https; it
 // reads nothing else.
 func (in *ingress) redirect(w http.ResponseWriter, r *http.Request) {
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
+	host := published.Host(r)
 	if _, ok := in.lookupPublished(host); !ok {
 		in.o.Access("access: http %s %q %s %q %d %q", r.RemoteAddr, host, r.Method, r.URL.RequestURI(),
 			http.StatusNotFound, r.UserAgent())
@@ -657,18 +629,14 @@ func (in *ingress) redirect(w http.ResponseWriter, r *http.Request) {
 	}
 	in.o.Access("access: http %s %q %s %q %d %q", r.RemoteAddr, host, r.Method, r.URL.RequestURI(),
 		http.StatusPermanentRedirect, r.UserAgent())
-	// From the path alone: an opaque target such as "http:@evil.com" would
-	// otherwise name another host.
-	to := url.URL{Scheme: "https", Host: strings.ToLower(host), Path: cmp.Or(r.URL.Path, "/"),
-		RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
-	http.Redirect(w, r, to.String(), http.StatusPermanentRedirect)
+	published.RedirectHTTPS(w, r, strings.ToLower(host))
 }
 
 // perSource is a listener taking no more connections from one source at once
 // than sources bounds.
 type perSource struct {
 	net.Listener
-	sources *pipe.Sources
+	sources *admit.Set[netip.Prefix]
 }
 
 func (l perSource) Accept() (net.Conn, error) {
@@ -677,12 +645,12 @@ func (l perSource) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		src := addrPort(c.RemoteAddr()).Addr()
-		if !l.sources.Take(src) {
+		slot, ok := l.sources.Admit(admit.Host(published.AddrPort(c.RemoteAddr()).Addr()), nil)
+		if !ok {
 			c.Close()
 			continue
 		}
-		return &givenBack{Conn: c, done: sync.OnceFunc(func() { l.sources.Done(src) })}, nil
+		return &givenBack{Conn: c, done: slot.Release}, nil
 	}
 }
 
@@ -727,11 +695,3 @@ type readOnlyConn struct {
 
 func (c readOnlyConn) Read(p []byte) (int, error)  { return c.r.Read(p) }
 func (c readOnlyConn) Write(p []byte) (int, error) { return 0, io.ErrClosedPipe }
-
-func addrPort(a net.Addr) netip.AddrPort {
-	if t, ok := a.(*net.TCPAddr); ok {
-		ap := t.AddrPort()
-		return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
-	}
-	return netip.AddrPortFrom(netip.IPv6Unspecified(), 0)
-}

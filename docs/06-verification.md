@@ -15,11 +15,13 @@ the runs.
   its record from live keys rather than replaying a checked-in vector, so a schema
   change cannot leave a frozen vector testing nothing. A whole state arriving at
   once — a genesis naming founders, a checkpoint adopted as an anchor — is covered
-  as its own path, since it is admitted on a quorum's word.
+  as its own path, since it is admitted on a quorum's word, under the rule a
+  record is admitted by: `FuzzAdmissibleAlike` holds the two to one verdict on
+  any member set.
 - Property tests (`trust/log/property_test.go`) over generated valid record sets
   delivered in different orders and increments ⇒ all validators converge to an
-  identical state or an identical alarm, the epoch never regresses, and a refused
-  record changes nothing. Each case is a numbered seed of our own generator, not
+  identical state or an identical alarm, no trusted state falls below the epoch
+  floor, and a refused record changes nothing. Each case is a numbered seed of our own generator, not
   `pgregory.net/rapid`: a failure is replayed by running the subtest it names.
 - Determinism: several topological orders of one record set produce byte-identical
   state (fork choice is deterministic).
@@ -47,7 +49,7 @@ Targets, added the milestone their input surface appears:
 | Access policy text (`internal/policy` `FuzzParse`) | policy files | M14 |
 | Pair-key messages and store (`FuzzTake`, `FuzzDecodeStore`) | signed messages; the pairs file | M15 |
 
-Open (M24): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`), the
+Open (M25): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`), the
 root helper's protocol and the resolver's input.
 
 The gate is 72 clean CPU-hours per input surface before a milestone closes, run
@@ -55,7 +57,7 @@ by hand with `make fuzz-long` or `make fuzz-one` per target (`make fuzz-matrix`
 lists them; 6 h on 4 workers a run), against a corpus kept outside the repository.
 It does not run on CI: hours per input surface is far more hosted-runner time than
 the project wants to spend. So far it is recorded for `FuzzPayloads` alone (M11b,
-[12-validating.md](12-validating.md)); M24 runs it over every target. `make fuzz`
+[12-validating.md](12-validating.md)); M25 runs it over every target. `make fuzz`
 smoke-runs every target for 30 s each. OSS-Fuzz, once the project qualifies,
 would move the long runs onto someone else's hardware.
 
@@ -112,13 +114,13 @@ convergence when an `exit` role is withdrawn across a mesh; chaos on gossip path
   is the RPM on Fedora; interop could assert it from `/proc`.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
   VPS relay member + one Android phone on LTE; full lifecycle including emergency
-  revocation from a phone (from M28).
+  revocation from a phone (from M29).
 
 ## 5. Cryptographic review gates
 
-- Internal review of the audit scope before the external audit (M24,
+- Internal review of the audit scope before the external audit (M25,
   [15-security-review.md](15-security-review.md)).
-- External audit at M25 of the audit scope: what [`audit-scope`](../audit-scope)
+- External audit at M26 of the audit scope: what [`audit-scope`](../audit-scope)
   places `core` or `in`, the code that decides who may do what, holds or derives a
   key, parses input from outside the membership, or runs as root. Every package
   is placed there, `out` ones with their reason, and `make tcb` fails on one

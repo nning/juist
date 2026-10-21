@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -392,5 +393,58 @@ func TestAGuestIsToldItJoinedOnlyWithinTheBound(t *testing.T) {
 	}
 	if joined > maxSessionsPerHost {
 		t.Fatalf("%d guests were told they joined, over the %d bound", joined, maxSessionsPerHost)
+	}
+}
+
+// TestGuestsAreBoundedByTheirGroup: guests from many addresses of one IPv6
+// /56 are held to the bound on one source, which one /64 would otherwise
+// escape by its addresses alone.
+func TestGuestsAreBoundedByTheirGroup(t *testing.T) {
+	for _, tc := range []struct{ name, format string }{
+		{"one /64", "[2001:db8:1:200::%x]:1"},
+		{"one /56", "[2001:db8:1:2%02x::1]:1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newForwarder(func([32]byte) bool { return true }, [32]byte{}, t.Logf)
+			id := [16]byte{0x56}
+			f.ids[id] = &waitingInvite{owner: [32]byte{1}, idle: time.Now()}
+			held, release := make(chan struct{}), make(chan struct{})
+			guestAdmitted = func() {
+				held <- struct{}{}
+				<-release
+			}
+			t.Cleanup(func() { guestAdmitted = func() {} })
+			var wg sync.WaitGroup
+			defer wg.Wait()
+			defer func() {
+				f.mu.Lock()
+				delete(f.ids, id)
+				f.cond.Broadcast()
+				f.mu.Unlock()
+				close(release)
+			}()
+			admitted := 0
+			for i := range maxGuestsPerSource + 1 {
+				r := httptest.NewRequest(http.MethodGet, forward.GuestPath+hex.EncodeToString(id[:]), nil)
+				r.RemoteAddr = fmt.Sprintf(tc.format, i+1)
+				refused := make(chan int, 1)
+				wg.Go(func() {
+					w := httptest.NewRecorder()
+					f.serveGuest(w, r)
+					refused <- w.Code
+				})
+				select {
+				case <-held:
+					admitted++
+				case code := <-refused:
+					if code != http.StatusServiceUnavailable {
+						t.Fatalf("guest %d answered %d", i, code)
+					}
+				}
+			}
+			if admitted != maxGuestsPerSource {
+				t.Fatalf("%d guests from %s were admitted to wait, want %d", admitted, tc.name, maxGuestsPerSource)
+			}
+		})
 	}
 }

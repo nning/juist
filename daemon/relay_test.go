@@ -2,9 +2,13 @@ package daemon
 
 import (
 	"bytes"
+	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +31,35 @@ func (nw *network) setRoles(t *testing.T, f *reconcileFixture, id types.Identity
 	}
 	if err := f.d.Inform([]types.AUM{rec}); err != nil {
 		t.Fatalf("applying the grant: %v", err)
+	}
+}
+
+// A relay whose start a Close overtakes does not outlive the Close.
+func TestARelayStartedAcrossCloseIsClosed(t *testing.T) {
+	held, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	nw := newNetwork(t, 2)
+	var d atomic.Pointer[Daemon]
+	f := newReconcileFixtureOn(t, nw, func(o *Options) {
+		o.RelayPort, o.PortFallback = uint16(held.Addr().(*net.TCPAddr).Port), true
+		// The port taken is said between the relay's start and its keeping.
+		o.Logf = func(format string, args ...any) {
+			if strings.Contains(fmt.Sprintf(format, args...), "relay port") {
+				d.Load().Close()
+			}
+		}
+	})
+	d.Store(f.d)
+	nw.setRoles(t, f, f.self.record.Identity, types.RoleRelayCapable)
+	f.d.mu.Lock()
+	srv := f.d.ownRelay.server
+	f.d.mu.Unlock()
+	if srv != nil {
+		srv.Close()
+		t.Fatal("the relay outlived Close")
 	}
 }
 

@@ -38,6 +38,7 @@ import (
 	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/trust/secrets"
 )
@@ -108,6 +109,11 @@ type Options struct {
 	// query is answered by every member, so asking unconditionally makes LAN
 	// traffic quadratic in the member count.
 	NeedsPeers func() bool
+
+	// Quiet, where set and true, has the beacon send nothing unasked, as
+	// while the device saves battery; it still answers what it reads.
+	// [Beacon.Wake] it when that ends.
+	Quiet func() bool
 
 	// Interval is the first gap between unsolicited announcements and
 	// queries. Zero uses [DefaultInterval].
@@ -371,6 +377,10 @@ func (b *Beacon) Run(ctx context.Context) {
 			gap = b.interval
 		} else {
 			gap = min(2*gap, slowest*b.interval)
+		}
+		if b.opts.Quiet != nil && b.opts.Quiet() {
+			t.Reset(gap)
+			continue
 		}
 		// Both, each time. A node announces under its newest name only, so
 		// a member an epoch behind never hears it, while a query names every
@@ -678,7 +688,8 @@ func sealPayload(s secrets.Secret, epoch uint64, body []byte) ([]byte, error) {
 	return aead.SealPadded(s.DiscoveryKey(epoch), epoch, body, size)
 }
 
-func openPayload(s secrets.Secret, epoch uint64, sealed []byte) ([]byte, error) {
+func openPayload(s secrets.Secret, epoch uint64, sealed []byte) (_ []byte, err error) {
+	defer malformed.Recover(&err)
 	// The epoch is chosen by the name the announcement arrived under, and it
 	// is also the blob's additional data, so a blob relabelled to a different
 	// epoch fails to authenticate rather than being opened with the wrong key.

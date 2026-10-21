@@ -166,7 +166,8 @@ func TestDisableEndsTheNetwork(t *testing.T) {
 		t.Fatalf("disable: %v\n%s", err, out)
 	}
 	mustContain(t, out, `end "home" for good?`, `disabled "home"`)
-	mustContain(t, laptop.mustRun("status"), "disabled", "ended with a break-glass secret", "juist reset")
+	mustContain(t, laptop.mustRun("status"), "disabled", "hint: 1 warning: juist health")
+	mustContain(t, laptop.mustRun("health"), "ended with a break-glass secret", "juist reset")
 	if _, err := laptop.run("network", "rename", "work"); err == nil || !strings.Contains(err.Error(), "is disabled") {
 		t.Fatalf("a change to a disabled network: %v", err)
 	}

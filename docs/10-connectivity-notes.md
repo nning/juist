@@ -62,7 +62,9 @@ and also the periodic STUN that keeps the public address current.
 ## Relay regions are derived, not assigned
 
 A peer announces the relay region it can be reached through, and member
-relays are not meshed, so a packet sent to any other region reaches nothing.
+relays are not meshed, so a packet sent to any other region reaches nothing
+(M22 plans to meet at one relay on 443:
+[16-one-relay-on-443.md](16-one-relay-on-443.md)).
 Every member must compute the same number for the same relay without agreeing
 on anything. An index over the relay-capable set would renumber whenever the
 set changes; the number is a hash of the network and the relay's identity

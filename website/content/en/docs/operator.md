@@ -61,7 +61,7 @@ It prints `operator cleared`.
 - In a terminal, a command that needs the operator asks
   `not the operator; run sudo juist set --operator=alice? [Y/n]` and, if you
   agree, runs it.
-- A few commands change the host itself and still ask for sudo once:
+- On Linux, a few commands change the host itself and still ask for sudo once:
   `juist exit serve`, `juist subnet serve`, and creating or joining a
   [second network]({{< relref "docs/networks" >}}) on the same device.
 - On a device in several networks, name the network:

@@ -9,6 +9,7 @@ import (
 	"net"
 
 	"github.com/nning/juist/internal/aead"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -127,11 +128,12 @@ func (m *catchUpMsg) validate() error {
 }
 
 // decodeCatchUp decodes and shape-checks a catch-up message's body.
-func decodeCatchUp(b []byte) (catchUpMsg, error) {
+func decodeCatchUp(b []byte) (_ catchUpMsg, err error) {
+	defer malformed.Recover(&err)
 	if len(b) > maxCatchUpMsg {
 		return catchUpMsg{}, fmt.Errorf("gossip: catch-up message is %d bytes, over the %d limit", len(b), maxCatchUpMsg)
 	}
-	m, err := decodeCanonical[catchUpMsg](b)
+	m, err := types.DecodeCanonical[catchUpMsg](decMode, b, MaxFrameSize)
 	if err != nil {
 		return catchUpMsg{}, err
 	}
@@ -140,14 +142,6 @@ func decodeCatchUp(b []byte) (catchUpMsg, error) {
 	}
 	return m, nil
 }
-
-// Domain-separation labels for what the steps sign, distinct from each other
-// and from every other label an identity key signs under.
-const (
-	labelCatchUpProof   = "juist/catch-up-proof/v1"
-	labelCatchUpGrant   = "juist/catch-up-grant/v1"
-	labelCatchUpRefusal = "juist/catch-up-refusal/v1"
-)
 
 // catchUpSigned is what a step's signature covers: the network, so a device in
 // two networks cannot have one carried to the other, the responder's nonce, so
@@ -166,15 +160,15 @@ func catchUpSigned(label string, network types.Hash, nonce []byte, initiator typ
 }
 
 func catchUpProofBytes(network types.Hash, nonce []byte, id types.Identity) []byte {
-	return catchUpSigned(labelCatchUpProof, network, nonce, id)
+	return catchUpSigned(types.LabelCatchUpProof, network, nonce, id)
 }
 
 func catchUpGrantBytes(network types.Hash, nonce []byte, initiator types.Identity, sealed []byte) []byte {
-	return catchUpSigned(labelCatchUpGrant, network, nonce, initiator, sealed)
+	return catchUpSigned(types.LabelCatchUpGrant, network, nonce, initiator, sealed)
 }
 
 func catchUpRefusalBytes(network types.Hash, nonce []byte, initiator types.Identity, epoch uint64) []byte {
-	return catchUpSigned(labelCatchUpRefusal, network, nonce, initiator, binary.BigEndian.AppendUint64(nil, epoch))
+	return catchUpSigned(types.LabelCatchUpRefusal, network, nonce, initiator, binary.BigEndian.AppendUint64(nil, epoch))
 }
 
 // isCatchUp reports whether a blob read off the stream opens a catch-up

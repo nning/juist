@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
@@ -137,7 +138,7 @@ either, and set it once it reads and passes its tests.`}
 		if !a.interactive {
 			return err
 		}
-		fmt.Fprintf(a.errOut, "juist: %v\n", err)
+		a.fail(err)
 		if again, err := a.confirm("edit again?"); err != nil || !again {
 			a.ok("unchanged: access policy")
 			return errSilent
@@ -320,7 +321,7 @@ juist policy prints it; no log is read. -w rewrites the files instead, and
 			return err
 		}
 		if err != nil {
-			fmt.Fprintf(a.errOut, "juist: %v\n", err)
+			a.fail(err)
 			failed = true
 			continue
 		}
@@ -407,7 +408,7 @@ func (a *app) readPolicy(state *log.State, src, name string) (*types.Policy, err
 		a.warn("%s", w)
 	}
 	failed := n.Failures(names)
-	lines := policy.TestLines(src)
+	lines := policy.CaseLines(src)
 	for _, f := range failed {
 		at := name
 		if f.Test < len(lines) {
@@ -511,21 +512,5 @@ func writeFileKeepingMode(path string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".juist-policy-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return atomicfile.Write(path, b, info.Mode().Perm())
 }

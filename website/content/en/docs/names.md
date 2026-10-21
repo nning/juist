@@ -19,14 +19,8 @@ tunnel, not over the internet. The name stays the same, so the server's
 certificate still matches. The rest of the internet still gets the public
 record.
 
-Both work on Linux and FreeBSD. Where systemd-resolved runs, it sends these
-names to juistd. Elsewhere juistd answers the device's DNS
-itself while it runs: the network's names, and every other name from the
-resolvers the device had before. On Linux the package's service points
-`/etc/resolv.conf` at a file juistd writes, and back when juistd stops; on
-FreeBSD juistd gives its resolver to resolvconf. A `/etc/resolv.conf` that
-Tailscale wrote stays Tailscale's, and the network's names are not resolved
-on that device.
+Both work on Linux and FreeBSD, and juist sets up the device's DNS for them
+by itself. [How the device resolves names](#resolver) explains how.
 
 ## Reaching a device by name
 
@@ -102,12 +96,38 @@ set --dns` turns it on again. Neither needs a restart.
 
 ## Notes
 
-- A public name has at least two labels, such as `example.org`, and is not under `.juist`.
+- A public name has at least two labels, such as `example.org`, and is not under `.juist`, `.local`, `.localhost`, `.arpa`, `.invalid` or `.onion`.
 - Each public name points at one device. A device can have up to 32.
 - A public name is resolved publicly again while its device cannot be reached, or while this device's view of the network is out of date. The connection then goes to the public address, as it would without juist.
 - A device whose name is not a valid DNS label has no name under `.juist`.
 - Under an [access policy]({{< relref "docs/access" >}}), a device has names only for the members it keeps a tunnel with. The public names of the other members resolve publicly on that device.
 - In `juist devices`, a device that public names point at shows `names` under `ROLES`. `juist names` lists the names.
+
+## How the device resolves names {#resolver}
+
+- Where systemd-resolved runs, it sends the queries for the network's names
+  to juistd.
+  A name juistd passes on, for this device or as an exit node for members,
+  goes where systemd-resolved would send it, and juistd refuses what
+  systemd-resolved would not send to a DNS server, such as `.local` names
+  or those in `/etc/hosts`. For this device, it refuses a name
+  systemd-resolved would ask over DNS over TLS, which would otherwise cross
+  the local network in plain text; as an exit node, it asks such a name for
+  members, whose queries leave at the exit node's site. For members, it
+  refuses a name only Tailscale's resolver would answer, which is every name
+  where Tailscale takes all of them (`~.`). `juist health` says so. While
+  juistd cannot read where a name goes, or systemd-resolved, which
+  `/etc/resolv.conf` names alone, is not running, juistd refuses the name
+  rather than ask anywhere else.
+- On Linux without systemd-resolved, juistd answers all of the device's DNS
+  while it runs: the network's names itself, every other name through the
+  resolvers the device used before. The package's service points
+  `/etc/resolv.conf` at a file juistd writes, and back when juistd stops. On
+  Debian and Ubuntu, the package also lets programs that AppArmor confines
+  read that file.
+- On FreeBSD, juistd hands its resolver to resolvconf.
+- If Tailscale wrote `/etc/resolv.conf`, juist leaves it alone, and the
+  network's names do not resolve on that device.
 
 ## Troubleshooting
 
@@ -129,6 +149,10 @@ says why:
 | `warning: home.juist not resolved here: tailscaled writes /etc/resolv.conf` | Tailscale answers this device's DNS; `sudo tailscale set --accept-dns=false` and `sudo systemctl restart juistd` hand it to juistd, without the tailnet's names |
 | `warning: home.juist not resolved here: /etc/resolv.conf is no longer juistd's` | another program, such as a DHCP client, wrote `/etc/resolv.conf`; `sudo systemctl restart juistd` hands it back |
 | `warning: home.juist not resolved here: /etc/resolv.conf asks …, not juistd` | on FreeBSD, resolvconf leaves alone a `resolv.conf` it did not write |
+| `warning: names juistd forwards are refused: the host asks tailscaled alone, whose answers members cannot reach` | an exit node refuses members the names the host sends to Tailscale alone; `sudo tailscale set --accept-dns=false` on it leaves the tailnet's names to its other resolvers |
+| `warning: names juistd forwards are refused: systemd-resolved asks over DNS over TLS, which juistd does not speak` | juistd refuses this device names systemd-resolved would ask over TLS rather than send them in plain text; `juist exit use DEVICE` sends them through the tunnel |
+| `warning: names juistd forwards are refused: systemd-resolved knows no DNS server` | systemd-resolved has no server to ask; `resolvectl status` shows the servers it knows |
+| `warning: names the host's DNS routing sends elsewhere are refused, as it cannot be read: …` | juistd cannot ask systemd-resolved where a name goes, and refuses such names until it can; `systemctl status systemd-resolved` shows how it is |
 
 Where systemd-resolved refused juistd, `juist health` adds:
 

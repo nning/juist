@@ -37,7 +37,7 @@ func (d *Daemon) adoptKeys(k *keys.Node) error {
 	// certificate for the new keys.
 	d.session.rebind(d.self, k.Public)
 	d.mu.Lock()
-	relaying := d.relay != nil
+	relaying := d.ownRelay.server != nil
 	d.mu.Unlock()
 	if relaying {
 		return errRelaying
@@ -103,13 +103,13 @@ func (d *Daemon) followAddrs() error {
 	if err := d.changeSelf(self); err != nil {
 		return err
 	}
-	d.dnsMu.Lock()
-	if d.names != nil && !slices.ContainsFunc(addrs, func(p netip.Prefix) bool { return p.Addr() == d.namesAt.Addr() }) {
+	d.dns.mu.Lock()
+	if d.dns.names != nil && !slices.ContainsFunc(addrs, func(p netip.Prefix) bool { return p.Addr() == d.dns.namesAt.Addr() }) {
 		// Started again at an address held, by the next reconcile.
-		d.names.Close()
-		d.names = nil
+		d.dns.names.Close()
+		d.dns.names = nil
 	}
-	d.dnsMu.Unlock()
+	d.dns.mu.Unlock()
 	d.setStatus(func(s *ipc.Status) { s.Addrs = addrs })
 	d.followed()
 	return nil

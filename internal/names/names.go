@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"golang.org/x/net/dns/dnsmessage"
+
+	"github.com/nning/juist/internal/malformed"
 )
 
 // TTL is every answer's, in seconds: short, so that a name withdrawn or a
@@ -57,7 +59,8 @@ func Label(name string) string {
 // goes on upstream: a name outside the zone and every override, a type of
 // an override's other than its addresses and their hints, and an override
 // whose target is not up, which then resolves as without it.
-func (z *Zone) Answer(query []byte) []byte {
+func (z *Zone) Answer(query []byte) (answer []byte) {
+	defer malformed.RecoverWith(&answer, func() []byte { return serverFailure(query) })
 	var p dnsmessage.Parser
 	h, err := p.Start(query)
 	if err != nil || h.Response {
@@ -67,7 +70,7 @@ func (z *Zone) Answer(query []byte) []byte {
 	if err != nil {
 		return nil
 	}
-	name := strings.ToLower(strings.TrimSuffix(q.Name.String(), "."))
+	name := asciiLower(strings.TrimSuffix(q.Name.String(), "."))
 	own := z.Domain != "" && (name == z.Domain || strings.HasSuffix(name, "."+z.Domain))
 	_, more := p.Question()
 	edns, ok := false, more == dnsmessage.ErrSectionDone
@@ -183,6 +186,20 @@ func refuse(h dnsmessage.Header, q dnsmessage.Question, rcode dnsmessage.RCode) 
 	return msg
 }
 
+// serverFailure answers query by its header alone, where it could not be
+// read past that: refused here rather than asked of the resolver upstream,
+// which might be told a name of the zone's.
+func serverFailure(query []byte) []byte {
+	if len(query) < 12 {
+		return nil
+	}
+	b := make([]byte, 12)
+	copy(b, query[:2])
+	b[2] = 0x80 | query[2]&0x79 // a response, the query's opcode and RD
+	b[3] = byte(dnsmessage.RCodeServerFailure)
+	return b
+}
+
 // hasOPT reports whether the rest of the query p parses carries an EDNS OPT
 // record, and whether it parses.
 func hasOPT(p *dnsmessage.Parser) (edns, ok bool) {
@@ -203,16 +220,35 @@ func hasOPT(p *dnsmessage.Parser) (edns, ok bool) {
 
 // Question is the name query asks for, lowercase without a final dot, and
 // whether it asks for one.
-func Question(query []byte) (string, bool) {
+func Question(query []byte) (name string, ok bool) {
+	defer malformed.RecoverOK(&ok)
+	name, _, _, ok = QuestionOf(query)
+	return name, ok
+}
+
+// QuestionOf is [Question] and the type and class asked for.
+func QuestionOf(query []byte) (_ string, qtype, qclass uint16, ok bool) {
+	defer malformed.RecoverOK(&ok)
 	var p dnsmessage.Parser
 	if _, err := p.Start(query); err != nil {
-		return "", false
+		return "", 0, 0, false
 	}
 	q, err := p.Question()
 	if err != nil {
-		return "", false
+		return "", 0, 0, false
 	}
-	return strings.ToLower(strings.TrimSuffix(q.Name.String(), ".")), true
+	return asciiLower(strings.TrimSuffix(q.Name.String(), ".")), uint16(q.Type), uint16(q.Class), true
+}
+
+// asciiLower is s with A to Z lowered alone, as DNS compares names.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for k, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[k] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // Overridden reports whether query asks for a name z overrides, or one below

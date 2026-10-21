@@ -87,6 +87,14 @@ func isJuistRulePref(pref uint32, inst int) bool {
 	return false
 }
 
+// What the manager finds a Linux router can by type assertions, held at
+// compile time.
+var _ interface {
+	exitRouter
+	overlayGuard
+	hostRouter
+} = (*linuxRouter)(nil)
+
 // linuxRouter programs juist's addresses, routes and policy rules. Of the
 // router config it serves only LocalAddrs and Routes; its netfilter state is
 // tables of its own.

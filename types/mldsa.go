@@ -23,11 +23,6 @@ type SigningKey [SigningKeySize]byte
 // A PQSig is an ML-DSA-44 signature.
 type PQSig [PQSigSize]byte
 
-const (
-	labelSigningSeed = "juist/mldsa44-seed/v1"
-	labelEndorsement = "juist/signing-key/v1"
-)
-
 // IsZero reports whether k is the zero value.
 func (k *SigningKey) IsZero() bool { return *k == SigningKey{} }
 
@@ -70,7 +65,7 @@ func (s *PQSig) UnmarshalBinary(b []byte) error {
 // signingKeyFromSeed derives an identity's ML-DSA key from its Ed25519 seed,
 // so that whatever holds the one holds the other.
 func signingKeyFromSeed(seed []byte) (*mldsa.PrivateKey, error) {
-	s, err := hkdf.Key(sha256.New, seed, nil, labelSigningSeed, mldsa.PrivateKeySize)
+	s, err := hkdf.Key(sha256.New, seed, nil, LabelSigningSeed, mldsa.PrivateKeySize)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +119,7 @@ func (i Identity) VerifyEndorsement(key *SigningKey, sig Sig) bool {
 }
 
 func endorsement(id Identity, key *SigningKey) Hash {
-	return hashLabeled(labelEndorsement, id[:], key[:])
+	return hashLabeled(LabelEndorsement, id[:], key[:])
 }
 
 // SignBoth signs msg by Ed25519 and by ML-DSA.

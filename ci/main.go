@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -31,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nning/juist/internal/testvm"
 	"golang.org/x/sys/unix"
 )
 
@@ -743,45 +743,13 @@ func boot(ctx context.Context, cache string, sz size, say func(string, ...any)) 
 func fetchChecked(ctx context.Context, path string, say func(string, ...any)) error {
 	if _, err := os.Stat(path); err != nil {
 		say("fetching %s", imageURL)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := (&http.Client{Timeout: time.Hour}).Do(req)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("%s: %s", imageURL, resp.Status)
-		}
-		f, err := os.Create(path + ".part")
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(f, resp.Body); err != nil {
-			f.Close()
-			return err
-		}
-		if err := f.Close(); err != nil {
-			return err
-		}
-		if err := os.Rename(path+".part", path); err != nil {
+		if err := testvm.Fetch(ctx, imageURL, path); err != nil {
 			return err
 		}
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return err
-	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != imageSum {
+	if err := testvm.Check(path, sha256.New, imageSum); err != nil {
 		os.Remove(path)
-		return fmt.Errorf("%s: sum %s, want %s", path, got, imageSum)
+		return err
 	}
 	return nil
 }
@@ -789,23 +757,14 @@ func fetchChecked(ctx context.Context, path string, say func(string, ...any)) er
 // seedServer serves cloud-init's NoCloud seed on the host's loopback, which
 // qemu's user network reaches as 10.0.2.2: the user ci, with pubkey and sudo.
 func seedServer(pubkey string) (string, func(), error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", nil, err
-	}
 	userData := "#cloud-config\nhostname: juist-ci\nssh_pwauth: false\nusers:\n  - name: ci\n" +
 		"    sudo: ALL=(ALL) NOPASSWD:ALL\n    shell: /bin/bash\n    ssh_authorized_keys:\n      - " +
 		strings.TrimSpace(pubkey) + "\n"
-	mux := http.NewServeMux()
-	mux.HandleFunc("/meta-data", func(w http.ResponseWriter, _ *http.Request) {
-		io.WriteString(w, "instance-id: juist-ci\nlocal-hostname: juist-ci\n")
-	})
-	mux.HandleFunc("/user-data", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, userData) })
-	mux.HandleFunc("/vendor-data", func(http.ResponseWriter, *http.Request) {})
-	srv := &http.Server{Handler: mux}
-	go srv.Serve(l)
-	port := l.Addr().(*net.TCPAddr).Port
-	return fmt.Sprintf("http://10.0.2.2:%d/", port), func() { srv.Close() }, nil
+	port, stop, err := testvm.ServeSeed("juist-ci", userData)
+	if err != nil {
+		return "", nil, err
+	}
+	return fmt.Sprintf("http://10.0.2.2:%d/", port), stop, nil
 }
 
 // start boots qemu on disk, sized sz, with KVM where /dev/kvm opens.

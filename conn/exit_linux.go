@@ -8,13 +8,8 @@ import (
 	"net/netip"
 	"os"
 	"slices"
-	"strconv"
-	"strings"
 	"syscall"
 
-	"github.com/google/nftables"
-	"github.com/google/nftables/expr"
-	"github.com/safchain/ethtool"
 	"github.com/tailscale/netlink"
 	"github.com/tailscale/netlink/nl"
 	"go4.org/netipx"
@@ -83,7 +78,7 @@ func dropUnmarkedExitRules(fam, inst int) error {
 		}
 		del := *netlink.NewRule()
 		del.Family, del.Priority, del.Table = fam, want.Priority, want.Table
-		if err := netlink.RuleDel(&del); err != nil && !errors.Is(err, syscall.ENOENT) {
+		if err := netlink.RuleDel(&del); !ruleDone(false, fam, err) {
 			return fmt.Errorf("deleting an unmarked exit rule: %w", err)
 		}
 	}
@@ -307,36 +302,54 @@ func (r *linuxRouter) delExitRoute(rt exitRoute) error {
 // guard alone keeps IPv6 in, refusing what it would route outside.
 func (r *linuxRouter) addExitRulesLocked() error {
 	var errs []error
-	uid := os.Getuid()
 	for _, fam := range r.ruleFamilies() {
-		// Root's traffic is the host's; only a juistd of its own user can be
-		// told apart from what the exit node is for.
-		if uid != 0 {
-			if err := uidRule(unix.RTM_NEWRULE, fam, juistRulePrefBase+exitRuleOwn+r.inst, uint32(uid)); err != nil &&
-				!errors.Is(err, syscall.EEXIST) {
-				errs = append(errs, fmt.Errorf("adding the rule for juistd's own traffic: %w", err))
-			}
-		}
-		errs = append(errs, dropUnmarkedExitRules(fam, r.inst))
-		errs = append(errs, setAnswerRule(fam, r.inst, !r.tunnelled.answers))
-		ru := exitRule(fam, r.inst)
-		if err := netlink.RuleAdd(&ru); err != nil && !errors.Is(err, syscall.EEXIST) {
-			errs = append(errs, fmt.Errorf("adding %v: %w", ru, err))
-		}
+		errs = append(errs, addExitRules(fam, r.inst, !r.tunnelled.answers))
 	}
 	return errors.Join(errs...)
+}
+
+// addExitRules adds instance inst's egress rules in fam, its answer rule
+// where answers and not otherwise.
+func addExitRules(fam, inst int, answers bool) error {
+	var errs []error
+	// Root's traffic is the host's; only a juistd of its own user can be
+	// told apart from what the exit node is for.
+	if uid := os.Getuid(); uid != 0 {
+		if err := uidRule(unix.RTM_NEWRULE, fam, juistRulePrefBase+exitRuleOwn+inst, uint32(uid)); !ruleDone(true, fam, err) {
+			errs = append(errs, fmt.Errorf("adding the rule for juistd's own traffic: %w", err))
+		}
+	}
+	errs = append(errs, dropUnmarkedExitRules(fam, inst), setAnswerRule(fam, inst, answers))
+	ru := exitRule(fam, inst)
+	if err := netlink.RuleAdd(&ru); !ruleDone(true, fam, err) {
+		errs = append(errs, fmt.Errorf("adding %v: %w", ru, err))
+	}
+	return errors.Join(errs...)
+}
+
+// ruleDone reports whether adding a rule in fam, or else deleting it, that
+// returned err leaves nothing to do. A kernel without IPv6 policy routing
+// takes no IPv6 rule, which the guard covers; without IPv4's, adding fails.
+func ruleDone(add bool, fam int, err error) bool {
+	switch {
+	case err == nil:
+		return true
+	case add:
+		return errors.Is(err, syscall.EEXIST) || fam == netlink.FAMILY_V6 && errors.Is(err, syscall.EAFNOSUPPORT)
+	}
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.EAFNOSUPPORT)
 }
 
 // setAnswerRule adds instance inst's answer rule in fam, or deletes it.
 func setAnswerRule(fam, inst int, on bool) error {
 	ru := answerRule(fam, inst)
 	if on {
-		if err := netlink.RuleAdd(&ru); err != nil && !errors.Is(err, syscall.EEXIST) {
+		if err := netlink.RuleAdd(&ru); !ruleDone(true, fam, err) {
 			return fmt.Errorf("adding %v: %w", ru, err)
 		}
 		return nil
 	}
-	if err := netlink.RuleDel(&ru); err != nil && !errors.Is(err, syscall.ENOENT) && !errors.Is(err, syscall.EAFNOSUPPORT) {
+	if err := netlink.RuleDel(&ru); !ruleDone(false, fam, err) {
 		return fmt.Errorf("deleting %v: %w", ru, err)
 	}
 	return nil
@@ -344,19 +357,33 @@ func setAnswerRule(fam, inst int, on bool) error {
 
 func (r *linuxRouter) delExitRulesLocked() error {
 	var errs []error
-	uid := os.Getuid()
 	for _, fam := range r.ruleFamilies() {
-		if uid != 0 {
-			if err := uidRule(unix.RTM_DELRULE, fam, juistRulePrefBase+exitRuleOwn+r.inst, uint32(uid)); err != nil &&
-				!errors.Is(err, syscall.ENOENT) {
-				errs = append(errs, fmt.Errorf("deleting the rule for juistd's own traffic: %w", err))
-			}
+		errs = append(errs, delExitRules(fam, r.inst))
+	}
+	return errors.Join(errs...)
+}
+
+// delExitRules deletes instance inst's egress rules in fam, with those of
+// M6a's first layouts: the exit rule without its mark, and the host rule
+// before it, which let the host's routes win.
+func delExitRules(fam, inst int) error {
+	var errs []error
+	if uid := os.Getuid(); uid != 0 {
+		if err := uidRule(unix.RTM_DELRULE, fam, juistRulePrefBase+exitRuleOwn+inst, uint32(uid)); !ruleDone(false, fam, err) {
+			errs = append(errs, fmt.Errorf("deleting the rule for juistd's own traffic: %w", err))
 		}
-		ru := exitRule(fam, r.inst)
-		if err := netlink.RuleDel(&ru); err != nil && !errors.Is(err, syscall.ENOENT) {
+	}
+	ru := exitRule(fam, inst)
+	unmarked := *netlink.NewRule()
+	unmarked.Family, unmarked.Priority, unmarked.Table = fam, ru.Priority, ru.Table
+	legacy := *netlink.NewRule()
+	legacy.Family, legacy.Priority = fam, juistRulePrefBase+90+inst
+	legacy.Table, legacy.SuppressPrefixlen = unix.RT_TABLE_MAIN, 0
+	answers := answerRule(fam, inst)
+	for _, ru := range []*netlink.Rule{&ru, &unmarked, &legacy, &answers} {
+		if err := netlink.RuleDel(ru); !ruleDone(false, fam, err) {
 			errs = append(errs, fmt.Errorf("deleting %v: %w", ru, err))
 		}
-		errs = append(errs, setAnswerRule(fam, r.inst, false))
 	}
 	return errors.Join(errs...)
 }
@@ -484,482 +511,6 @@ func uidRule(op uint16, family, pref int, uid uint32) error {
 	return err
 }
 
-// natTable is instance inst's nftables table for serving as an exit node,
-// and guardTable its table keeping a client's traffic in the tunnel, in each
-// family.
-func natTable(family nftables.TableFamily, inst int) *nftables.Table {
-	return &nftables.Table{Family: family, Name: "juist" + strconv.Itoa(inst)}
-}
-
-func guardTable(family nftables.TableFamily, inst int) *nftables.Table {
-	return &nftables.Table{Family: family, Name: "juist" + strconv.Itoa(inst) + "guard"}
-}
-
-var families = []nftables.TableFamily{nftables.TableFamilyIPv4, nftables.TableFamilyIPv6}
-
-// setGuard, on, drops what would leave outside the tunnel dev: every packet
-// sent or forwarded out of another device, but for bypass-marked ones
-// (magicsock's and tailscaled's), juistd's own by uid, DHCP, and those to
-// what no exit node carries. Routing sends nothing there; the guard holds
-// where routing does not, as for a socket bound to a device, or routes
-// someone deleted. What goes into dev for the internet it rejects in a family
-// through does not carry, and with refuse in both; through's subnets pass.
-// dev may be "" where there is no tunnel; off removes the guard.
-// Tables are replaced whole, in one transaction.
-func setGuard(inst int, on bool, dev string, through tunnelled, refuse bool, uid uint32) error {
-	c, err := nftables.New()
-	if err != nil {
-		return fmt.Errorf("conn: nftables: %w", err)
-	}
-	defer c.CloseLasting()
-	for _, fam := range families {
-		t := guardTable(fam, inst)
-		c.AddTable(t) // so that the delete below cannot fail for a missing table
-		c.DelTable(t)
-	}
-	if on {
-		for _, fam := range families {
-			t := c.AddTable(guardTable(fam, inst))
-			if !through.answers {
-				// Marked where a connection comes in, before routing, and
-				// on its answers, forwarded ones there and the host's own
-				// in a route chain, which routes them again.
-				accept := nftables.ChainPolicyAccept
-				pre := c.AddChain(&nftables.Chain{Table: t, Name: "answers-in", Type: nftables.ChainTypeFilter,
-					Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityMangle, Policy: &accept})
-				c.AddRule(&nftables.Rule{Table: t, Chain: pre, Exprs: markIncoming(dev)})
-				c.AddRule(&nftables.Rule{Table: t, Chain: pre, Exprs: clearAnswerMark()})
-				c.AddRule(&nftables.Rule{Table: t, Chain: pre, Exprs: markAnswer()})
-				out := c.AddChain(&nftables.Chain{Table: t, Name: "answers-out", Type: nftables.ChainTypeRoute,
-					Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityMangle, Policy: &accept})
-				c.AddRule(&nftables.Rule{Table: t, Chain: out, Exprs: markAnswer()})
-			}
-			for _, hook := range []*nftables.ChainHook{nftables.ChainHookOutput, nftables.ChainHookForward} {
-				accept := nftables.ChainPolicyAccept
-				ch := c.AddChain(&nftables.Chain{Table: t, Name: map[bool]string{true: "output", false: "forward"}[hook == nftables.ChainHookOutput],
-					Type: nftables.ChainTypeFilter, Hooknum: hook, Priority: nftables.ChainPriorityFilter, Policy: &accept})
-				for _, rule := range guardRules(fam, hook == nftables.ChainHookOutput, dev, through, refuse, uid) {
-					c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: rule})
-				}
-			}
-		}
-	}
-	if err := c.Flush(); err != nil {
-		return fmt.Errorf("conn: guarding the tunnel: %w", err)
-	}
-	return nil
-}
-
-// guardRules are one guard chain's rules, in order, the last dropping.
-func guardRules(fam nftables.TableFamily, output bool, dev string, through tunnelled, refuse bool, uid uint32) [][]expr.Any {
-	refuse = refuse || !through.carries(fam)
-	accept := &expr.Verdict{Kind: expr.VerdictAccept}
-	otherFam := func(p netip.Prefix) bool { return p.Addr().Is4() != (fam == nftables.TableFamilyIPv4) }
-	allowed := slices.DeleteFunc(offTunnel(), otherFam)
-	oif := func(d string) []expr.Any {
-		return []expr.Any{&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ifname(d)}}
-	}
-	var rules [][]expr.Any
-	if dev != "" && refuse {
-		for _, p := range slices.Concat(allowed, slices.DeleteFunc(slices.Clone(through.subnets), otherFam)) {
-			rules = append(rules, slices.Concat(oif(dev), addrIn(p, false), []expr.Any{accept}))
-		}
-		rules = append(rules, append(oif(dev), &expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: 0}))
-	} else if dev != "" {
-		rules = append(rules, append(oif(dev), accept))
-	}
-	if !through.answers {
-		rules = append(rules, append(isAnswer(), accept))
-	}
-	rules = append(rules, append(oif("lo"), accept))
-	rules = append(rules, [][]expr.Any{
-		{&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
-			&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(tsconst.LinuxFwmarkMaskNum), Xor: u32(0)},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: u32(tsconst.LinuxBypassMarkNum)}, accept},
-	}...)
-	if output && uid != 0 {
-		rules = append(rules, []expr.Any{&expr.Meta{Key: expr.MetaKeySKUID, Register: 1},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: u32(uid)}, accept})
-	}
-	// The host's own DHCP, to a server that may be off the link and in
-	// public space, from the client's port, which only root may bind; and
-	// its neighbour discovery, which answers from global addresses too, and
-	// never leaves the link (hop limit 255). Neither is forwarded.
-	if output {
-		rules = append(rules, dhcpRule(fam, accept))
-		if fam == nftables.TableFamilyIPv6 {
-			rules = append(rules, []expr.Any{&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
-				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_ICMPV6}},
-				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1},
-				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{255}},
-				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
-				&expr.Range{Op: expr.CmpOpEq, Register: 1, FromData: []byte{133}, ToData: []byte{137}}, accept})
-		}
-	}
-	for _, p := range allowed {
-		rules = append(rules, append(addrIn(p, false), accept))
-	}
-	return append(rules, []expr.Any{&expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop}})
-}
-
-// markIncoming marks a connection coming in by another device, from its
-// first packet or, for one older than the guard, its next: "ct direction
-// original ct mark & answerMark == 0 iifname != { juist*, dev, lo } fib
-// daddr . iif type local meta mark set meta mark | answerMark fib saddr .
-// mark . iif oif != 0 ct mark set ct mark | answerMark". It must be sent to
-// an address of that device, and the host's routes, as answers take them,
-// must lead back by it: what a LAN sends to the overlay's addresses, or what
-// comes in by a device whose routes are not the host's, as another VPN's, is
-// no connection to answer that way.
-func markIncoming(dev string) []expr.Any {
-	e := []expr.Any{
-		&expr.Ct{Register: 1, Key: expr.CtKeyDIRECTION},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0}}, // IP_CT_DIR_ORIGINAL
-		&expr.Ct{Register: 1, Key: expr.CtKeyMARK},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(answerMark), Xor: u32(0)},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: u32(0)},
-		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte("juist")}, // a prefix: every instance's
-		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: ifname("lo")},
-	}
-	if dev != "" {
-		e = append(e, &expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
-			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: ifname(dev)})
-	}
-	return append(e,
-		&expr.Fib{Register: 1, FlagDADDR: true, FlagIIF: true, ResultADDRTYPE: true},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: u32(unix.RTN_LOCAL)},
-		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(^uint32(answerMark)), Xor: u32(answerMark)},
-		&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1},
-		&expr.Fib{Register: 1, FlagSADDR: true, FlagMARK: true, FlagIIF: true, ResultOIF: true},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: u32(0)},
-		&expr.Ct{Register: 1, Key: expr.CtKeyMARK},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(^uint32(answerMark)), Xor: u32(answerMark)},
-		&expr.Ct{Register: 1, Key: expr.CtKeyMARK, SourceRegister: true},
-	)
-}
-
-// clearAnswerMark takes the mark [markIncoming] looked the way back up with
-// off the packet that came in: "ct direction original meta mark set meta
-// mark & ~answerMark".
-func clearAnswerMark() []expr.Any {
-	return []expr.Any{
-		&expr.Ct{Register: 1, Key: expr.CtKeyDIRECTION},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0}},
-		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(^uint32(answerMark)), Xor: u32(0)},
-		&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1},
-	}
-}
-
-// isAnswer is "ct direction reply ct mark & answerMark != 0".
-func isAnswer() []expr.Any {
-	return []expr.Any{
-		&expr.Ct{Register: 1, Key: expr.CtKeyDIRECTION},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}}, // IP_CT_DIR_REPLY
-		&expr.Ct{Register: 1, Key: expr.CtKeyMARK},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(answerMark), Xor: u32(0)},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: u32(0)},
-	}
-}
-
-// markAnswer is [isAnswer] "meta mark set meta mark | answerMark".
-func markAnswer() []expr.Any {
-	return append(isAnswer(),
-		&expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(^uint32(answerMark)), Xor: u32(answerMark)},
-		&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1})
-}
-
-// dhcpRule is "udp sport client dport server", of DHCP in fam.
-func dhcpRule(fam nftables.TableFamily, verdict expr.Any) []expr.Any {
-	client, server := uint16(68), uint16(67)
-	if fam == nftables.TableFamilyIPv6 {
-		client, server = 546, 547
-	}
-	return []expr.Any{&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_UDP}},
-		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 4},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1,
-			Data: []byte{byte(client >> 8), byte(client), byte(server >> 8), byte(server)}}, verdict}
-}
-
-// ifname is dev as an interface name compares in nftables.
-func ifname(dev string) []byte { return []byte(dev + "\x00") }
-
-func u32(v uint32) []byte {
-	b := make([]byte, 4)
-	nl.NativeEndian().PutUint32(b, v)
-	return b
-}
-
-// addrIn is "saddr in p", or "daddr in p" where dst.
-func addrIn(p netip.Prefix, src bool) []expr.Any {
-	field := addrField(p.Addr().Is6(), src)
-	return []expr.Any{
-		field,
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: field.Len, Mask: netipx.PrefixIPNet(p).Mask, Xor: make([]byte, field.Len)},
-		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: p.Masked().Addr().AsSlice()},
-	}
-}
-
-// addrField loads a packet's source address, or its destination, into
-// register 1.
-func addrField(v6, src bool) *expr.Payload {
-	off, n := uint32(16), uint32(4)
-	if v6 {
-		off, n = 24, 16
-	}
-	if src {
-		off -= n
-	}
-	return &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: off, Len: n}
-}
-
-func (r *linuxRouter) setServe(s Serve) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed && s.serving() {
-		return errors.New("conn: router is closed")
-	}
-	return r.setServeLocked(s)
-}
-
-// setServeLocked serves s from a table of this instance's own, which it
-// replaces whole; with no routes it removes the table. It masquerades what
-// peers send from s.Sources out of any device but this node's, and drops
-// what arrives from elsewhere with an overlay source, or comes new into the
-// overlay from a public one: forwarding is on for the whole host, and neither
-// is a peer's.
-func (r *linuxRouter) setServeLocked(s Serve) error {
-	if !s.serving() {
-		// Before anything below can fail.
-		r.restoreUplink()
-	}
-	if s.serving() {
-		// Any other instance's egress, higher ones' too: its table would take
-		// what this one's peers send out. Refused, nothing is served.
-		refuse := forwardingOff(os.ReadFile, slices.Concat(s.Routes, s.Subnets))
-		if refuse == nil {
-			if other, err := r.otherEgressLocked(false); err != nil {
-				refuse = err
-			} else if other >= 0 {
-				refuse = ErrEgressTaken
-			}
-		}
-		if refuse != nil {
-			return errors.Join(refuse, r.setServeLocked(Serve{}))
-		}
-	}
-	c, err := nftables.New()
-	if err != nil {
-		return fmt.Errorf("conn: nftables: %w", err)
-	}
-	defer c.CloseLasting()
-	for _, fam := range families {
-		t := natTable(fam, r.inst)
-		c.AddTable(t) // so that the delete below cannot fail for a missing table
-		c.DelTable(t)
-	}
-	if s.serving() {
-		dev := ifname(r.link.Attrs().Name)
-		for _, fam := range families {
-			t := c.AddTable(natTable(fam, r.inst))
-			accept := nftables.ChainPolicyAccept
-			nat := c.AddChain(&nftables.Chain{Table: t, Name: "postrouting", Type: nftables.ChainTypeNAT,
-				Hooknum: nftables.ChainHookPostrouting, Priority: nftables.ChainPriorityNATSource, Policy: &accept})
-			fwd := c.AddChain(&nftables.Chain{Table: t, Name: "forward", Type: nftables.ChainTypeFilter,
-				Hooknum: nftables.ChainHookForward, Priority: nftables.ChainPriorityFilter, Policy: &accept})
-			for _, rule := range serveRules(fam, dev, s.Sources) {
-				c.AddRule(&nftables.Rule{Table: t, Chain: fwd, Exprs: rule})
-			}
-			for _, src := range s.Sources {
-				if src.Addr().Is4() == (fam == nftables.TableFamilyIPv4) {
-					c.AddRule(&nftables.Rule{Table: t, Chain: nat, Exprs: masquerade(src, dev)})
-				}
-			}
-			if s.DNS == 0 {
-				continue
-			}
-			dnat := c.AddChain(&nftables.Chain{Table: t, Name: "prerouting", Type: nftables.ChainTypeNAT,
-				Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityNATDest, Policy: &accept})
-			for a := range r.addrs {
-				if a.Addr().Is4() != (fam == nftables.TableFamilyIPv4) {
-					continue
-				}
-				for _, proto := range []byte{unix.IPPROTO_UDP, unix.IPPROTO_TCP} {
-					c.AddRule(&nftables.Rule{Table: t, Chain: dnat, Exprs: dnsRedirect(dev, a.Addr(), proto, s.DNS)})
-				}
-			}
-		}
-	}
-	if err := c.Flush(); err != nil {
-		return fmt.Errorf("conn: setting up masquerade: %w", err)
-	}
-	r.serving = s.serving()
-	if r.serving {
-		r.forwardUDPInBatches()
-	}
-	return nil
-}
-
-// The features UDP GRO forwarding is: the uplink's to set, and the
-// device's without which it gains nothing.
-const (
-	rxUDPGROForwarding = "rx-udp-gro-forwarding"
-	rxGROList          = "rx-gro-list"
-	txUDPSegmentation  = "tx-udp-segmentation"
-)
-
-// nicFeatures reads and changes a device's offload features, as ethtool -k
-// and -K do.
-type nicFeatures interface {
-	Features(dev string) (map[string]bool, error)
-	Change(dev string, features map[string]bool) error
-	Close()
-}
-
-var openNICFeatures = func() (nicFeatures, error) { return ethtool.NewEthtool() }
-
-// forwardUDPInBatches has the uplink coalesce the UDP it forwards into the
-// device, as tailscaled advises a node that serves: without it every datagram
-// passes alone. What it changes is kept, for restoreUplink. The caller holds
-// r.mu.
-func (r *linuxRouter) forwardUDPInBatches() {
-	if r.mon != nil {
-		r.forwardUDPInBatchesOn(r.mon.InterfaceState().DefaultRouteInterface)
-	}
-}
-
-// forwardUDPInBatchesOn is forwardUDPInBatches with up the uplink.
-func (r *linuxRouter) forwardUDPInBatchesOn(up string) {
-	if up == "" || up == r.groFor {
-		return
-	}
-	r.restoreUplink()
-	r.groFor = up
-	e, err := openNICFeatures()
-	if err != nil {
-		r.logf("UDP GRO forwarding on %s: %v", up, err)
-		return
-	}
-	defer e.Close()
-	dev, err := e.Features(r.link.Attrs().Name)
-	if err != nil || !dev[txUDPSegmentation] {
-		return
-	}
-	had, err := e.Features(up)
-	if _, ok := had[rxUDPGROForwarding]; err != nil || !ok || had[rxUDPGROForwarding] && !had[rxGROList] {
-		return
-	}
-	if err := e.Change(up, map[string]bool{rxUDPGROForwarding: true, rxGROList: false}); err != nil {
-		r.logf("UDP GRO forwarding on %s: %v; UDP passes through more slowly", up, err)
-		return
-	}
-	r.groWas = map[string]bool{rxUDPGROForwarding: had[rxUDPGROForwarding], rxGROList: had[rxGROList]}
-	r.logf("set UDP GRO forwarding on %s while serving", up)
-}
-
-// restoreUplink gives the uplink back the features forwardUDPInBatches
-// changed. The caller holds r.mu.
-func (r *linuxRouter) restoreUplink() {
-	up, was := r.groFor, r.groWas
-	r.groFor, r.groWas = "", nil
-	if was == nil {
-		return
-	}
-	e, err := openNICFeatures()
-	if err == nil {
-		defer e.Close()
-		err = e.Change(up, was)
-	}
-	if err != nil {
-		r.logf("restoring %s's UDP GRO forwarding: %v", up, err)
-		return
-	}
-	r.logf("gave %s its UDP GRO forwarding back", up)
-}
-
-// serveRules are the serving table's forward chain: "iifname != juist*
-// saddr in sources drop", then for what goes out of dev from elsewhere, new,
-// "saddr in local space accept" and "drop". Every juist device of the host
-// is let through the first, since networks on one host may share overlay
-// space.
-func serveRules(fam nftables.TableFamily, dev []byte, sources []netip.Prefix) [][]expr.Any {
-	family := []byte(strings.TrimRight(strings.TrimSuffix(string(dev), "\x00"), "0123456789"))
-	notFromDev := []expr.Any{&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: dev}}
-	notFromJuist := []expr.Any{&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: family}}
-	intoDevNew := slices.Concat(notFromDev, []expr.Any{
-		&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: dev},
-		&expr.Ct{Key: expr.CtKeySTATE, Register: 1},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: u32(expr.CtStateBitNEW), Xor: u32(0)},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: u32(0)},
-	})
-	drop := &expr.Verdict{Kind: expr.VerdictDrop}
-	var rules [][]expr.Any
-	for _, src := range sources {
-		if src.Addr().Is4() == (fam == nftables.TableFamilyIPv4) {
-			rules = append(rules, slices.Concat(notFromJuist, addrIn(src, true), []expr.Any{drop}))
-		}
-	}
-	for _, p := range localSpace {
-		if p.Addr().Is4() == (fam == nftables.TableFamilyIPv4) {
-			rules = append(rules, slices.Concat(intoDevNew, addrIn(p, true), []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}))
-		}
-	}
-	return append(rules, slices.Concat(intoDevNew, []expr.Any{drop}))
-}
-
-// forwardingOff checks the host forwards every family routes hold, reading
-// sysctls through read.
-func forwardingOff(read func(string) ([]byte, error), routes []netip.Prefix) error {
-	for _, fam := range []struct {
-		v6   bool
-		path string
-	}{{false, "/proc/sys/net/ipv4/conf/all/forwarding"}, {true, "/proc/sys/net/ipv6/conf/all/forwarding"}} {
-		if !slices.ContainsFunc(routes, func(p netip.Prefix) bool { return p.Addr().Is6() == fam.v6 }) {
-			continue
-		}
-		b, err := read(fam.path)
-		if fam.v6 && errors.Is(err, os.ErrNotExist) {
-			continue // no IPv6 here; peers' IPv6 is dropped, as it would be refused
-		}
-		if err != nil || strings.TrimSpace(string(b)) != "1" {
-			return ErrForwardingOff
-		}
-	}
-	return nil
-}
-
-// dnsRedirect is "iifname dev daddr addr l4proto proto th dport 53 redirect
-// to :port": peers' DNS to this node's address, and to no other server.
-func dnsRedirect(dev []byte, addr netip.Addr, proto byte, port uint16) []expr.Any {
-	return slices.Concat(
-		[]expr.Any{&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: dev}},
-		addrIn(netip.PrefixFrom(addr, addr.BitLen()), false),
-		[]expr.Any{
-			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{proto}},
-			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0, 53}},
-			&expr.Immediate{Register: 1, Data: []byte{byte(port >> 8), byte(port)}},
-			&expr.Redir{RegisterProtoMin: 1},
-		})
-}
-
-// masquerade is "saddr src oifname != dev masquerade".
-func masquerade(src netip.Prefix, dev []byte) []expr.Any {
-	return slices.Concat(addrIn(src, true), []expr.Any{
-		&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: dev},
-		&expr.Masq{},
-	})
-}
-
 // RefuseEgress refuses instance inst's internet traffic where it has no
 // router, as while its juistd runs no mesh: the refusing routes, the rules
 // and the guard, which need no device of the instance's. A router of the
@@ -991,20 +542,7 @@ func RefuseEgress(inst int, isolate bool) error {
 				errs = append(errs, fmt.Errorf("adding exit route %v: %w", rt.dst, err))
 			}
 		}
-		if uid != 0 {
-			if err := uidRule(unix.RTM_NEWRULE, fam, juistRulePrefBase+exitRuleOwn+inst, uint32(uid)); err != nil &&
-				!errors.Is(err, syscall.EEXIST) {
-				errs = append(errs, err)
-			}
-		}
-		errs = append(errs, dropUnmarkedExitRules(fam, inst))
-		if err := setAnswerRule(fam, inst, !isolate); err != nil && !(v6 && errors.Is(err, syscall.EAFNOSUPPORT)) {
-			errs = append(errs, err)
-		}
-		ru := exitRule(fam, inst)
-		if err := netlink.RuleAdd(&ru); err != nil && !errors.Is(err, syscall.EEXIST) && !(v6 && errors.Is(err, syscall.EAFNOSUPPORT)) {
-			errs = append(errs, fmt.Errorf("adding %v: %w", ru, err))
-		}
+		errs = append(errs, addExitRules(fam, inst, !isolate))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("conn: refusing egress: %w", err)
@@ -1017,29 +555,8 @@ func RefuseEgress(inst int, isolate bool) error {
 // than leaving directly while juistd restarts, or after it failed.
 func ClearEgress(inst int) error {
 	var errs []error
-	uid := os.Getuid()
 	for _, fam := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
-		if uid != 0 {
-			if err := uidRule(unix.RTM_DELRULE, fam, juistRulePrefBase+exitRuleOwn+inst, uint32(uid)); err != nil &&
-				!errors.Is(err, syscall.ENOENT) && !errors.Is(err, syscall.EAFNOSUPPORT) {
-				errs = append(errs, err)
-			}
-		}
-		ru := exitRule(fam, inst)
-		// And those of M6a's first layouts: the exit rule without its mark,
-		// and the host rule before it, which let the host's routes win.
-		unmarked := *netlink.NewRule()
-		unmarked.Family, unmarked.Priority, unmarked.Table = fam, ru.Priority, ru.Table
-		legacy := *netlink.NewRule()
-		legacy.Family, legacy.Priority = fam, juistRulePrefBase+90+inst
-		legacy.Table, legacy.SuppressPrefixlen = unix.RT_TABLE_MAIN, 0
-		answers := answerRule(fam, inst)
-		for _, ru := range []*netlink.Rule{&ru, &unmarked, &legacy, &answers} {
-			if err := netlink.RuleDel(ru); err != nil && !errors.Is(err, syscall.ENOENT) &&
-				!errors.Is(err, syscall.EAFNOSUPPORT) {
-				errs = append(errs, err)
-			}
-		}
+		errs = append(errs, delExitRules(fam, inst))
 		routes, err := netlink.RouteListFiltered(fam, &netlink.Route{Table: exitTable(inst)}, netlink.RT_FILTER_TABLE)
 		if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
 			errs = append(errs, err)
@@ -1064,12 +581,4 @@ func ClearEgress(inst int) error {
 		return fmt.Errorf("conn: clearing egress: %w", err)
 	}
 	return nil
-}
-
-// carries reports whether an exit node's routes carry fam.
-func (t tunnelled) carries(fam nftables.TableFamily) bool {
-	if fam == nftables.TableFamilyIPv6 {
-		return t.v6
-	}
-	return t.v4
 }

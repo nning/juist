@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -36,12 +37,12 @@ type fakeNames struct {
 	mu       sync.Mutex
 	at       netip.AddrPort
 	answer   func([]byte) []byte
-	upstream func([]byte) []netip.AddrPort
+	upstream func([]byte) ([]netip.AddrPort, error)
 	closed   bool
 	err      error
 }
 
-func (f *fakeNames) start(at netip.AddrPort, answer func([]byte) []byte, upstream func([]byte) []netip.AddrPort) (io.Closer, error) {
+func (f *fakeNames) start(at netip.AddrPort, answer func([]byte) []byte, upstream func([]byte) ([]netip.AddrPort, error)) (io.Closer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -58,11 +59,26 @@ func (f *fakeNames) Close() error {
 	return nil
 }
 
+// upsOf is who upstream asks q of, failing the test where it refuses q.
+func upsOf(t *testing.T, upstream func([]byte) ([]netip.AddrPort, error), q []byte) []netip.AddrPort {
+	t.Helper()
+	ups, err := upstream(q)
+	if err != nil {
+		t.Errorf("refused: %v", err)
+	}
+	return ups
+}
+
 func nameQuery(t *testing.T, name string) []byte {
 	t.Helper()
-	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 1})
+	return typedQuery(t, name, dnsmessage.TypeAAAA)
+}
+
+func typedQuery(t *testing.T, name string, qtype dnsmessage.Type) []byte {
+	t.Helper()
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 1, RecursionDesired: true})
 	b.StartQuestions()
-	b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET})
+	b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name), Type: qtype, Class: dnsmessage.ClassINET})
 	q, err := b.Finish()
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +116,7 @@ func TestTheHostResolvesTheNetworksNames(t *testing.T) {
 	if n := f.d.Status().Names; n == nil || !reflect.DeepEqual(*n, ipc.Names{Domain: "m2-testnet.juist", Resolved: true}) {
 		t.Errorf("the status says %+v", n)
 	}
-	if got := served.upstream(nameQuery(t, "mx.example.net.")); !slices.Equal(got, []netip.AddrPort{netip.MustParseAddrPort("10.0.2.3:53")}) {
+	if got := upsOf(t, served.upstream, nameQuery(t, "mx.example.net.")); !slices.Equal(got, []netip.AddrPort{netip.MustParseAddrPort("10.0.2.3:53")}) {
 		t.Errorf("asks %v upstream, want the host's own resolver alone", got)
 	}
 	resp := served.answer(nameQuery(t, "n1.m2-testnet.juist."))
@@ -126,7 +142,7 @@ func TestTheHostResolvesTheNetworksNames(t *testing.T) {
 	}
 	exitDNS := []netip.AddrPort{netip.AddrPortFrom(*exit.record.V4, DefaultDNSPort),
 		netip.AddrPortFrom(f.auth.State().Addr6(exit.record.Identity), DefaultDNSPort)}
-	if up := served.upstream(nameQuery(t, "mx.example.net.")); len(up) != 2 || !slices.Contains(up, exitDNS[0]) || !slices.Contains(up, exitDNS[1]) {
+	if up := upsOf(t, served.upstream, nameQuery(t, "mx.example.net.")); len(up) != 2 || !slices.Contains(up, exitDNS[0]) || !slices.Contains(up, exitDNS[1]) {
 		t.Errorf("with an exit node, asks %v upstream, want %v", up, exitDNS)
 	}
 
@@ -153,7 +169,7 @@ func TestNamesThatWillNotStartLeaveTheExitNode(t *testing.T) {
 	host.mu.Lock()
 	r := host.routing
 	host.mu.Unlock()
-	if !r.Everything || len(r.Domains) != 0 || slices.Contains(r.Servers, f.d.namesAt) {
+	if !r.Everything || len(r.Domains) != 0 || slices.Contains(r.Servers, f.d.dns.namesAt) {
 		t.Errorf("routed %+v", r)
 	}
 	if n := f.d.Status().Names; n == nil || n.Resolved || n.Cannot || n.Not != "address in use" {
@@ -261,7 +277,7 @@ func TestAPublicNameNeedsTheOwnersWord(t *testing.T) {
 		t.Fatalf("not agreed, the status says %+v", n)
 	}
 
-	f.d.SetAcceptNames(true)
+	f.d.changePrefs(func(p *Prefs) { p.AcceptNames = true })
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +371,7 @@ func TestTheNamesWordIsKept(t *testing.T) {
 		t.Errorf("the word is not kept: %v", err)
 	}
 	f.s.mu.Lock()
-	accepted := f.s.acceptNames
+	accepted := f.s.prefs.AcceptNames
 	f.s.mu.Unlock()
 	if !accepted {
 		t.Error("the service does not hold the word")
@@ -374,7 +390,7 @@ func TestTheNamesWordIsKept(t *testing.T) {
 	}
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
-	if f.s.acceptNames {
+	if f.s.prefs.AcceptNames {
 		t.Error("the service holds on to the word after a reset")
 	}
 	if _, err := os.Stat(filepath.Join(f.home, statedir.NamesFile)); !os.IsNotExist(err) {
@@ -398,13 +414,17 @@ func TestAnExitNodeHandsNoOverrideOn(t *testing.T) {
 		"mx.example.net.": {up}, "MX.Example.net.": {up}, "a.mx.example.net.": {up},
 		"example.net.": host, "www.example.net.": host, "n1.m2-testnet.juist.": host,
 	} {
-		if got := f.d.membersUpstreamFor(nameQuery(t, name)); !slices.Equal(got, want) || (want != nil) != (got != nil) {
+		if got := upsOf(t, f.d.membersUpstreamFor, nameQuery(t, name)); !slices.Equal(got, want) || (want != nil) != (got != nil) {
 			t.Errorf("%s is asked of %v, want %v", name, got, want)
 		}
 	}
 	os.Remove(uplink)
-	if got := f.d.membersUpstreamFor(nameQuery(t, "mx.example.net.")); got == nil || len(got) != 0 {
+	if got := upsOf(t, f.d.membersUpstreamFor, nameQuery(t, "mx.example.net.")); got == nil || len(got) != 0 {
 		t.Errorf("without the host's resolvers, an overridden name is asked of %v, want none", got)
+	}
+	os.WriteFile(uplink, []byte("nameserver 100.100.100.100\n"), 0o644)
+	if ups, err := f.d.membersUpstreamFor(nameQuery(t, "mx.example.net.")); err == nil {
+		t.Errorf("the host's resolvers tailscaled's alone, a member's overridden name is asked of %v", ups)
 	}
 }
 
@@ -446,7 +466,7 @@ func TestAnExitNodeWithoutNamesAsksTheHostsResolvers(t *testing.T) {
 			if z := f.d.zone.Load(); z == nil || !z.Overridden(nameQuery(t, "mx.example.net.")) {
 				t.Fatal("the zone overrides no mx.example.net")
 			}
-			if got := f.d.membersUpstreamFor(nameQuery(t, "mx.example.net.")); !slices.Equal(got, want) {
+			if got := upsOf(t, f.d.membersUpstreamFor, nameQuery(t, "mx.example.net.")); !slices.Equal(got, want) {
 				t.Errorf("an overridden name is asked of %v, want the host's %v", got, want)
 			}
 		})
@@ -456,7 +476,7 @@ func TestAnExitNodeWithoutNamesAsksTheHostsResolvers(t *testing.T) {
 // An exit node asks nothing of tailscaled for a member, whose answer would
 // come from the host's tailnet, out of the member's reach: where tailscaled
 // wrote resolv.conf, the resolvers it replaced are asked; where resolved
-// routes the tailnet's domain to tailscaled, its other links are.
+// routes the tailnet's domain to tailscaled, its names are refused.
 func TestAnExitNodeAsksNothingOfTailscaled(t *testing.T) {
 	ap := netip.MustParseAddrPort
 	q := nameQuery(t, "devvm.example-tail.ts.net.")
@@ -467,70 +487,635 @@ func TestAnExitNodeAsksNothingOfTailscaled(t *testing.T) {
 	PreTailscaleResolvConf = pre
 	t.Cleanup(func() { PreTailscaleResolvConf = was })
 	hostResolvConf(t, "nameserver 100.100.100.100\nnameserver fd7a:115c:a1e0::53\nsearch example-tail.ts.net\n")
-	f := exitFixtureWith(t, func(*network) {}, func(o *Options) { o.HostDNS = &fakeHostDNS{err: resolved.ErrNotRunning} })
+	host := &readHostDNS{plainHostDNS: plainHostDNS{fakeHostDNS{err: resolved.ErrNotRunning}}, routingSource: routingSource{err: resolved.ErrNotRunning}}
+	f := exitFixtureWith(t, func(*network) {}, func(o *Options) { o.HostDNS = host })
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := f.d.membersUpstreamFor(q), []netip.AddrPort{ap("185.12.64.1:53"), ap("185.12.64.2:53")}; !slices.Equal(got, want) {
+	if got, want := upsOf(t, f.d.membersUpstreamFor, q), []netip.AddrPort{ap("185.12.64.1:53"), ap("185.12.64.2:53")}; !slices.Equal(got, want) {
 		t.Errorf("without resolved, a member's tailnet name is asked of %v, want %v", got, want)
 	}
 
 	hostResolvConf(t, "nameserver 127.0.0.53\n")
-	f.d.hostRouting.Store(&resolved.Routing{Scopes: []resolved.Scope{
+	host.set(resolved.Routing{Scopes: []resolved.Scope{
 		{Ifindex: 2, Servers: []netip.AddrPort{ap("10.0.2.3:53")}, DefaultRoute: true},
 		{Ifindex: 7, Servers: []netip.AddrPort{ap("100.100.100.100:53")}, Domains: []string{"example-tail.ts.net"}, DefaultRoute: true},
-	}})
-	if got, want := f.d.membersUpstreamFor(q), []netip.AddrPort{ap("10.0.2.3:53")}; !slices.Equal(got, want) {
-		t.Errorf("through resolved, a member's tailnet name is asked of %v, want %v", got, want)
+	}}, nil)
+	if ups, err := f.d.membersUpstreamFor(q); err == nil {
+		t.Errorf("through resolved, a member's tailnet name is asked of %v", ups)
 	}
 }
 
-// routingHostDNS routes domains and has its routing read, failing with err.
-type routingHostDNS struct {
-	domainsHostDNS
-	r   resolved.Routing
-	err error
+// A routingSource is a host resolver's routing, read as set, and where gate
+// is set, once it is closed.
+type routingSource struct {
+	rmu   sync.Mutex
+	r     resolved.Routing
+	err   error
+	reads int
+	gate  chan struct{}
 }
 
-func (h *routingHostDNS) routing() (resolved.Routing, error) { return h.r, h.err }
+func (h *routingSource) routing() (resolved.Routing, error) {
+	h.rmu.Lock()
+	h.reads++
+	gate := h.gate
+	h.rmu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	h.rmu.Lock()
+	defer h.rmu.Unlock()
+	return h.r, h.err
+}
 
-// What juistd's resolver does not answer, without an exit node, it asks the
-// resolvers resolved would, by the host's routing: a public name's own link
-// where one claims it, as a VPN's; and the host's resolvers in turn where
-// the routing cannot be read.
-func TestWhatIsNotAnsweredGoesWhereTheHostRoutesIt(t *testing.T) {
+func (h *routingSource) set(r resolved.Routing, err error) {
+	h.rmu.Lock()
+	defer h.rmu.Unlock()
+	h.r, h.err = r, err
+}
+
+func (h *routingSource) fail(err error) {
+	h.rmu.Lock()
+	defer h.rmu.Unlock()
+	h.err = err
+}
+
+func (h *routingSource) readCount() int {
+	h.rmu.Lock()
+	defer h.rmu.Unlock()
+	return h.reads
+}
+
+// readHostDNS has its routing read, but routes no domains.
+type readHostDNS struct {
+	plainHostDNS
+	routingSource
+}
+
+// plainHostDNS keeps fakeHostDNS's routing field from hiding routingSource's.
+type plainHostDNS struct{ fakeHostDNS }
+
+// routingHostDNS routes domains and has its routing read.
+type routingHostDNS struct {
+	domainsHostDNS
+	routingSource
+}
+
+// routingFixture is an exit node whose host's resolv.conf names resolved's
+// stub alone, whose resolved routes lab.example to a link, and whose clock
+// moves as advance says.
+func routingFixture(t *testing.T, mutate func(*Options)) (*reconcileFixture, *routingHostDNS, *fakeNames, func(time.Duration)) {
+	t.Helper()
+	ap := netip.MustParseAddrPort
 	uplink := filepath.Join(t.TempDir(), "resolv.conf")
 	os.WriteFile(uplink, []byte("nameserver 10.0.2.3\n"), 0o644)
 	was := UplinkResolvConf
 	UplinkResolvConf = uplink
 	t.Cleanup(func() { UplinkResolvConf = was })
-	ap := netip.MustParseAddrPort
-	host := &routingHostDNS{r: resolved.Routing{Scopes: []resolved.Scope{
+	hostResolvConf(t, "nameserver 127.0.0.53\n")
+	hosts := filepath.Join(t.TempDir(), "hosts")
+	os.WriteFile(hosts, []byte("127.0.0.1 localhost\n10.0.2.50 printer.lab.example\n"), 0o644)
+	wasHosts := EtcHosts
+	EtcHosts = hosts
+	t.Cleanup(func() { EtcHosts = wasHosts })
+	host := &routingHostDNS{routingSource: routingSource{r: resolved.Routing{Scopes: []resolved.Scope{
 		{Ifindex: 2, Servers: []netip.AddrPort{ap("10.0.2.3:53")}, DefaultRoute: true},
-		{Ifindex: 5, Servers: []netip.AddrPort{ap("10.99.2.2:53")}, Domains: []string{"example.net"}},
-	}}}
+		{Ifindex: 5, Servers: []netip.AddrPort{ap("10.99.2.2:53")}, Domains: []string{"lab.example"}},
+	}}}}
 	served := &fakeNames{}
-	f := exitFixtureWith(t, func(nw *network) { nw.devices[1].record.Names = []string{"mx.example.net"} },
-		func(o *Options) { o.HostDNS, o.ServeNames, o.AcceptNames = host, served.start, true })
+	f := exitFixtureWith(t, func(nw *network) { nw.devices[1].record.Names = []string{"mx.example.net"} }, func(o *Options) {
+		o.HostDNS, o.ServeNames, o.AcceptNames = host, served.start, true
+		if mutate != nil {
+			mutate(o)
+		}
+	})
+	now := time.Now()
+	var mu sync.Mutex
+	f.d.clock = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
+	if served.upstream == nil {
+		t.Fatal("juistd's resolver did not start")
+	}
+	advance := func(by time.Duration) { mu.Lock(); defer mu.Unlock(); now = now.Add(by) }
+	return f, host, served, advance
+}
+
+// What juistd's resolver does not answer, without an exit node, it asks the
+// resolvers resolved would, by the host's routing: a public name's own link
+// where one claims it, as a VPN's; and the host's resolvers in turn where
+// resolved is not running.
+func TestWhatIsNotAnsweredGoesWhereTheHostRoutesIt(t *testing.T) {
+	ap := netip.MustParseAddrPort
+	f, host, served, _ := routingFixture(t, nil)
+	host.set(resolved.Routing{Scopes: []resolved.Scope{
+		{Ifindex: 2, Servers: []netip.AddrPort{ap("10.0.2.3:53")}, DefaultRoute: true},
+		{Ifindex: 5, Servers: []netip.AddrPort{ap("10.99.2.2:53")}, Domains: []string{"example.net"}},
+	}}, nil)
 	for name, want := range map[string]netip.AddrPort{"mx.example.net.": ap("10.99.2.2:53"), "example.org.": ap("10.0.2.3:53")} {
-		if got := served.upstream(nameQuery(t, name)); !slices.Equal(got, []netip.AddrPort{want}) {
+		if got := upsOf(t, served.upstream, nameQuery(t, name)); !slices.Equal(got, []netip.AddrPort{want}) {
 			t.Errorf("%s is asked of %v, want %v", name, got, want)
 		}
 	}
-	if got := f.d.membersUpstreamFor(nameQuery(t, "mx.example.net.")); !slices.Equal(got, []netip.AddrPort{ap("10.99.2.2:53")}) {
+	if got := upsOf(t, f.d.membersUpstreamFor, nameQuery(t, "mx.example.net.")); !slices.Equal(got, []netip.AddrPort{ap("10.99.2.2:53")}) {
 		t.Errorf("a member's mx.example.net is asked of %v", got)
 	}
+}
 
-	host.err = errors.New("no bus")
-	f.d.dnsMu.Lock()
-	f.d.hostRoutingAt = time.Time{}
-	f.d.readHostRoutingLocked()
-	f.d.dnsMu.Unlock()
-	if got := served.upstream(nameQuery(t, "mx.example.net.")); !slices.Equal(got, []netip.AddrPort{ap("10.0.2.3:53")}) {
-		t.Errorf("the routing unread, mx.example.net is asked of %v", got)
+// A domain the host routes to a link from now on is asked of that link by
+// the next query a second later, by juistd's resolver and for members
+// alike, though resolved signals no such change.
+func TestADomainMovedIsAskedOfItsNewLinkAtOnce(t *testing.T) {
+	ap := netip.MustParseAddrPort
+	f, host, served, advance := routingFixture(t, nil)
+	q := nameQuery(t, "other.pub.example.org.")
+	if got := upsOf(t, served.upstream, q); !slices.Equal(got, []netip.AddrPort{ap("10.0.2.3:53")}) {
+		t.Fatalf("before example.org is routed, it is asked of %v", got)
+	}
+	host.set(resolved.Routing{Scopes: []resolved.Scope{
+		{Ifindex: 2, Servers: []netip.AddrPort{ap("10.0.2.3:53")}, DefaultRoute: true},
+		{Ifindex: 5, Servers: []netip.AddrPort{ap("10.99.2.2:53")}, Domains: []string{"lab.example", "example.org"}},
+	}}, nil)
+	advance(time.Second)
+	if got := upsOf(t, served.upstream, q); !slices.Equal(got, []netip.AddrPort{ap("10.99.2.2:53")}) {
+		t.Errorf("by juistd's resolver, example.org is asked of %v once the host routes it to a link", got)
+	}
+	if got := upsOf(t, f.d.membersUpstreamFor, q); !slices.Equal(got, []netip.AddrPort{ap("10.99.2.2:53")}) {
+		t.Errorf("for a member, example.org is asked of %v once the host routes it to a link", got)
+	}
+}
+
+// Where the host's routing cannot be read, a name it routes is refused,
+// SERVFAIL: never asked of the link the last read routed it to, nor of the
+// host's resolvers, for juistd's resolver and members alike. The failure is
+// logged once and juist health says it until a read succeeds.
+func TestAnUnreadRoutingRefusesTheName(t *testing.T) {
+	var logs struct {
+		sync.Mutex
+		lines []string
+	}
+	logf := safeLogf(t, "")
+	f, host, served, advance := routingFixture(t, func(o *Options) {
+		o.Logf = func(format string, args ...any) {
+			logs.Lock()
+			logs.lines = append(logs.lines, fmt.Sprintf(format, args...))
+			logs.Unlock()
+			logf(format, args...)
+		}
+	})
+	q := nameQuery(t, "a.lab.example.")
+	upsOf(t, served.upstream, q)
+	host.fail(errors.New("dbus: call timed out"))
+	for range 2 {
+		advance(hostRoutingFresh)
+		if ups, err := served.upstream(q); err == nil {
+			t.Errorf("the routing unread, juistd's resolver asks %v", ups)
+		}
+		if ups, err := f.d.membersUpstreamFor(q); err == nil {
+			t.Errorf("the routing unread, a member's name is asked of %v", ups)
+		}
+	}
+	if why := f.d.Status().DNSRoutingUnread; why != "dbus: call timed out" {
+		t.Errorf("the status says %q", why)
+	}
+	logs.Lock()
+	refusals := 0
+	for _, l := range logs.lines {
+		if strings.Contains(l, "cannot be read") {
+			refusals++
+		}
+	}
+	logs.Unlock()
+	if refusals != 1 {
+		t.Errorf("the failure was logged %d times", refusals)
+	}
+
+	at, err := defaultNamesServer("", nil)(netip.MustParseAddrPort("127.0.0.1:0"), func([]byte) []byte { return nil }, f.d.namesUpstreamFor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer at.Close()
+	c, err := net.Dial("udp", netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), at.(*dnsfwd.Forwarder).Port()).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(2 * time.Second))
+	c.Write(q)
+	buf := make([]byte, 512)
+	n, err := c.Read(buf)
+	var p dnsmessage.Parser
+	if h, perr := p.Start(buf[:n]); err != nil || perr != nil || h.RCode != dnsmessage.RCodeServerFailure {
+		t.Errorf("juistd's resolver answers %x, %v", buf[:n], err)
+	}
+
+	host.fail(nil)
+	advance(hostRoutingFresh)
+	upsOf(t, served.upstream, q)
+	if why := f.d.Status().DNSRoutingUnread; why != "" {
+		t.Errorf("read again, the status says %q", why)
+	}
+
+	host.fail(resolved.ErrNotRunning)
+	advance(hostRoutingFresh)
+	if ups, err := served.upstream(q); err == nil {
+		t.Errorf("resolved's stub alone in resolv.conf, not running, juistd's resolver asks %v", ups)
+	}
+	if ups, err := f.d.membersUpstreamFor(q); err == nil {
+		t.Errorf("resolved's stub alone in resolv.conf, not running, a member's name is asked of %v", ups)
+	}
+	if why := f.d.Status().DNSRoutingUnread; why != "" {
+		t.Errorf("resolved not running, the status says %q", why)
+	}
+	own := hostResolvConf(t, "nameserver 127.0.0.53\nnameserver 10.0.2.9\n")[1:]
+	if got := upsOf(t, served.upstream, q); !slices.Equal(got, own) {
+		t.Errorf("resolved not running, juistd's resolver asks a.lab.example of %v, want resolv.conf's %v", got, own)
+	}
+	own = hostResolvConf(t, "nameserver 10.0.2.9\n")
+	if got := upsOf(t, f.d.membersUpstreamFor, q); !slices.Equal(got, own) {
+		t.Errorf("resolved not running, a member's a.lab.example is asked of %v, want resolv.conf's %v", got, own)
+	}
+}
+
+// An exit node asks a member's name of no resolver where the host routes
+// it to tailscaled alone, whose answer the member cannot reach, nor of the
+// default route, which would put a tailnet's name to the public, nor where
+// a tailnet takes every name ("~."), which resolved sends to it; juist
+// health says so, and the log once.
+func TestAnExitNodeRefusesANameOnlyTailscaledAnswers(t *testing.T) {
+	ap := netip.MustParseAddrPort
+	var logs struct {
+		sync.Mutex
+		lines []string
+	}
+	logf := safeLogf(t, "")
+	f, host, _, advance := routingFixture(t, func(o *Options) {
+		o.Logf = func(format string, args ...any) {
+			logs.Lock()
+			logs.lines = append(logs.lines, fmt.Sprintf(format, args...))
+			logs.Unlock()
+			logf(format, args...)
+		}
+	})
+	host.set(resolved.Routing{Scopes: []resolved.Scope{
+		{Ifindex: 2, Servers: []netip.AddrPort{ap("9.9.9.9:53")}, DefaultRoute: true},
+		{Ifindex: 7, Servers: []netip.AddrPort{ap("100.100.100.100:53")}, Domains: []string{"corp.example"}},
+	}}, nil)
+	advance(hostRoutingFresh)
+	if got := upsOf(t, f.d.membersUpstreamFor, nameQuery(t, "example.org.")); !slices.Equal(got, []netip.AddrPort{ap("9.9.9.9:53")}) {
+		t.Errorf("example.org is asked of %v", got)
+	}
+	if f.d.Status().DNSRefused != "" {
+		t.Error("nothing refused, the status says a refusal")
+	}
+	for range 2 {
+		if ups, err := f.d.membersUpstreamFor(nameQuery(t, "secret.corp.example.")); err == nil {
+			t.Errorf("a name the host routes to tailscaled alone is asked of %v", ups)
+		}
+	}
+	if st := f.d.Status(); st.DNSRefused != errTailnetOnly.Error() || st.DNSRefusedAt == 0 {
+		t.Errorf("the status says %q at %d", st.DNSRefused, st.DNSRefusedAt)
+	}
+	host.set(resolved.Routing{Scopes: []resolved.Scope{
+		{Ifindex: 2, Servers: []netip.AddrPort{ap("9.9.9.9:53")}, DefaultRoute: true},
+		{Ifindex: 7, Servers: []netip.AddrPort{ap("100.100.100.100:53")}, Domains: []string{"", "corp.example"}, DefaultRoute: true},
+	}}, nil)
+	advance(hostRoutingFresh)
+	if ups, err := f.d.membersUpstreamFor(nameQuery(t, "example.org.")); err == nil {
+		t.Errorf("tailscaled taking every name, example.org is asked of %v", ups)
+	}
+	logs.Lock()
+	defer logs.Unlock()
+	n := 0
+	for _, l := range logs.lines {
+		if strings.Contains(l, "tailscaled alone") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("three refusals logged %d times", n)
+	}
+}
+
+// Where resolved runs, a member's name goes where it routes it, whatever
+// resolv.conf names besides its stub: never a link's resolver it did not
+// route the name to, nor a public one that would answer what resolved
+// refused.
+func TestAMembersNameGoesWhereResolvedRoutesIt(t *testing.T) {
+	ap := netip.MustParseAddrPort
+	f, _, served, _ := routingFixture(t, nil)
+	q := nameQuery(t, "a.lab.example.")
+	for _, conf := range []string{"nameserver 10.0.2.3\nnameserver 10.99.2.2\n", "nameserver 127.0.0.53\nnameserver 1.1.1.1\n"} {
+		hostResolvConf(t, conf)
+		for name, upstream := range map[string]func([]byte) ([]netip.AddrPort, error){
+			"juistd's resolver": served.upstream, "a member": f.d.membersUpstreamFor} {
+			if got := upsOf(t, upstream, q); !slices.Equal(got, []netip.AddrPort{ap("10.99.2.2:53")}) {
+				t.Errorf("resolv.conf %q, %s asks a.lab.example of %v", conf, name, got)
+			}
+		}
+	}
+}
+
+// What resolved asks no DNS server of is refused as resolved answers it:
+// what it never resolves NXDOMAIN, what it answers itself, from the hosts
+// file too, or asks mDNS or LLMNR of REFUSED, as what its stub refuses;
+// what it asks over TLS juistd's resolver refuses SERVFAIL, which juist
+// health says, as the host's query would leave in plain text by its local
+// network, but a member's, which leaves at this site, is asked.
+func TestWhatResolvedAsksNoServerOfIsRefused(t *testing.T) {
+	ap := netip.MustParseAddrPort
+	f, host, served, advance := routingFixture(t, nil)
+	own, _ := os.Hostname()
+	for name, rcode := range map[string]uint8{"x.invalid.": dnsfwd.RCodeNXDomain, "printer.local.": dnsfwd.RCodeRefused,
+		"localhost.": dnsfwd.RCodeRefused, "nas.": dnsfwd.RCodeRefused, own + ".": dnsfwd.RCodeRefused,
+		"printer.lab.example.": dnsfwd.RCodeRefused, "50.2.0.10.in-addr.arpa.": dnsfwd.RCodeRefused} {
+		for who, upstream := range map[string]func([]byte) ([]netip.AddrPort, error){
+			"juistd's resolver": served.upstream, "a member": f.d.membersUpstreamFor} {
+			var r *dnsfwd.Refusal
+			if ups, err := upstream(typedQuery(t, name, dnsmessage.TypeTXT)); !errors.As(err, &r) || r.RCode != rcode {
+				t.Errorf("%s: %s TXT is asked of %v, %v; want RCODE %d", who, name, ups, err, rcode)
+			}
+			if ups, err := upstream(nameQuery(t, name)); !errors.As(err, &r) || r.RCode != rcode {
+				t.Errorf("%s: %s is asked of %v, %v; want RCODE %d", who, name, ups, err, rcode)
+			}
+		}
+	}
+	raw := func(edit func([]byte) []byte) []byte { return edit(slices.Clone(nameQuery(t, "example.org."))) }
+	for what, q := range map[string][]byte{
+		"no recursion desired": raw(func(q []byte) []byte { q[2] &^= 0x01; return q }),
+		"two questions":        raw(func(q []byte) []byte { q[5] = 2; return append(q, q[12:]...) }),
+		"a zone transfer":      raw(func(q []byte) []byte { q[len(q)-3] = 252; return q }),
+		"class CH":             raw(func(q []byte) []byte { q[len(q)-1] = 3; return q }),
+	} {
+		var r *dnsfwd.Refusal
+		if ups, err := f.d.membersUpstreamFor(q); !errors.As(err, &r) || r.RCode != dnsfwd.RCodeRefused {
+			t.Errorf("%s: asked of %v, %v", what, ups, err)
+		}
+	}
+	host.set(resolved.Routing{Scopes: []resolved.Scope{{Ifindex: 2, Domains: []string{"lan"}}}}, nil)
+	advance(hostRoutingFresh)
+	if ups, err := f.d.membersUpstreamFor(nameQuery(t, "example.org.")); err == nil {
+		t.Errorf("resolved knowing no server, example.org is asked of %v", ups)
+	}
+	if why := f.d.Status().DNSRefused; why != resolved.ErrNoServers.Error() {
+		t.Errorf("resolved knowing no server, the status says %q", why)
+	}
+	host.set(resolved.Routing{Scopes: []resolved.Scope{
+		{Ifindex: 2, Servers: []netip.AddrPort{ap("10.0.2.3:53")}, DefaultRoute: true, OverTLS: true},
+	}}, nil)
+	advance(hostRoutingFresh)
+	if got := upsOf(t, f.d.membersUpstreamFor, nameQuery(t, "example.org.")); !slices.Equal(got, []netip.AddrPort{ap("10.0.2.3:53")}) {
+		t.Errorf("over TLS, a member's example.org, which leaves at this site, is asked of %v", got)
+	}
+	if why := f.d.Status().DNSRefused; why == resolved.ErrOverTLS.Error() {
+		t.Errorf("for a member, the status says %q", why)
+	}
+	var r *dnsfwd.Refusal
+	if ups, err := served.upstream(nameQuery(t, "example.org.")); err == nil || errors.As(err, &r) {
+		t.Errorf("over TLS, juistd's resolver asks example.org of %v, %v", ups, err)
+	}
+	if why := f.d.Status().DNSRefused; why != resolved.ErrOverTLS.Error() {
+		t.Errorf("the status says %q", why)
+	}
+}
+
+// A failure that persists is logged once hostRoutingLogEvery has passed
+// since the last, though one before it ended within that time.
+func TestAPersistingFailureIsLogged(t *testing.T) {
+	var logs struct {
+		sync.Mutex
+		lines []string
+	}
+	logf := safeLogf(t, "")
+	_, host, served, advance := routingFixture(t, func(o *Options) {
+		o.Logf = func(format string, args ...any) {
+			logs.Lock()
+			logs.lines = append(logs.lines, fmt.Sprintf(format, args...))
+			logs.Unlock()
+			logf(format, args...)
+		}
+	})
+	q := nameQuery(t, "a.lab.example.")
+	step := func(err error, by time.Duration) {
+		host.fail(err)
+		advance(by)
+		served.upstream(q)
+	}
+	failing := errors.New("dbus: call timed out")
+	step(failing, hostRoutingFresh)
+	step(nil, hostRoutingFresh)
+	step(failing, hostRoutingFresh)
+	step(failing, hostRoutingLogEvery)
+	logs.Lock()
+	defer logs.Unlock()
+	n := 0
+	for _, l := range logs.lines {
+		if strings.Contains(l, "cannot be read") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("a failure persisting past a minute logged %d times, want 2: %q", n, logs.lines)
+	}
+}
+
+// Where resolved is not running and resolv.conf is a link to one of its own
+// that is gone, a member's name is refused, not asked of the resolvers
+// tailscaled replaced.
+func TestADanglingStubLinkRefusesTheName(t *testing.T) {
+	pre := filepath.Join(t.TempDir(), "resolv.pre-tailscale-backup.conf")
+	os.WriteFile(pre, []byte("nameserver 185.12.64.1\n"), 0o644)
+	was := PreTailscaleResolvConf
+	PreTailscaleResolvConf = pre
+	t.Cleanup(func() { PreTailscaleResolvConf = was })
+	f, host, _, advance := routingFixture(t, nil)
+	link := filepath.Join(t.TempDir(), "resolv.conf")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "run/systemd/resolve/stub-resolv.conf"), link); err != nil {
+		t.Fatal(err)
+	}
+	wasConf := dnsfwd.ResolvConf
+	dnsfwd.ResolvConf = link
+	t.Cleanup(func() { dnsfwd.ResolvConf = wasConf })
+	host.fail(resolved.ErrNotRunning)
+	advance(hostRoutingFresh)
+	if ups, err := f.d.membersUpstreamFor(nameQuery(t, "example.org.")); err == nil {
+		t.Errorf("a dangling stub link, example.org is asked of %v", ups)
+	}
+}
+
+// A failure to read the host's routing is said no longer once a reconcile
+// finds it read again, though no query came, or nothing forwarding by it.
+func TestAReconcileEndsAFailureToRead(t *testing.T) {
+	f, host, served, advance := routingFixture(t, nil)
+	host.fail(errors.New("dbus: call timed out"))
+	advance(hostRoutingFresh)
+	served.upstream(nameQuery(t, "a.lab.example."))
+	if f.d.Status().DNSRoutingUnread == "" {
+		t.Fatal("the failure is not said")
+	}
+	host.fail(nil)
+	advance(hostRoutingFresh)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 5*time.Second, "the failure to be said no longer", func() bool { return f.d.Status().DNSRoutingUnread == "" })
+
+	host.fail(errors.New("dbus: call timed out"))
+	advance(hostRoutingFresh)
+	served.upstream(nameQuery(t, "a.lab.example."))
+	if f.d.Status().DNSRoutingUnread == "" {
+		t.Fatal("the failure is not said again")
+	}
+	f.d.changePrefs(func(p *Prefs) { p.DNSOff = true })
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if why := f.d.Status().DNSRoutingUnread; why != "" {
+		t.Errorf("with DNS off, the status says %q", why)
+	}
+}
+
+// Closing DNS begins no read of the host's routing, which nothing would
+// wait for, though a failure was said.
+func TestClosingDNSReadsNoRouting(t *testing.T) {
+	f, host, served, advance := routingFixture(t, nil)
+	host.fail(errors.New("dbus: call timed out"))
+	advance(hostRoutingFresh)
+	served.upstream(nameQuery(t, "a.lab.example."))
+	advance(hostRoutingFresh)
+	before := host.readCount()
+	f.d.closeDNS()
+	time.Sleep(100 * time.Millisecond)
+	if n := host.readCount() - before; n != 0 {
+		t.Errorf("closing DNS read the routing %d times", n)
+	}
+	if why := f.d.Status().DNSRoutingUnread; why != "" {
+		t.Errorf("closed, the status says %q", why)
+	}
+}
+
+// Reads that fail and succeed in turn log the failure once a minute at most.
+func TestAFlappingReadIsLoggedRarely(t *testing.T) {
+	var logs struct {
+		sync.Mutex
+		lines []string
+	}
+	logf := safeLogf(t, "")
+	_, host, served, advance := routingFixture(t, func(o *Options) {
+		o.Logf = func(format string, args ...any) {
+			logs.Lock()
+			logs.lines = append(logs.lines, fmt.Sprintf(format, args...))
+			logs.Unlock()
+			logf(format, args...)
+		}
+	})
+	q := nameQuery(t, "a.lab.example.")
+	for i := range 10 {
+		if i%2 == 0 {
+			host.fail(errors.New("dbus: call timed out"))
+		} else {
+			host.fail(nil)
+		}
+		advance(hostRoutingFresh)
+		served.upstream(q)
+	}
+	logs.Lock()
+	defer logs.Unlock()
+	n := 0
+	for _, l := range logs.lines {
+		if strings.Contains(l, "DNS routing") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("five failures in ten seconds logged %d lines, want 2: %q", n, logs.lines)
+	}
+}
+
+// Queries at once share one read of the host's routing, and a read is not
+// begun again within hostRoutingFresh of the last.
+func TestQueriesShareOneRead(t *testing.T) {
+	ap := netip.MustParseAddrPort
+	f, host, served, advance := routingFixture(t, nil)
+	advance(hostRoutingFresh)
+	before := host.readCount()
+	gate := make(chan struct{})
+	host.rmu.Lock()
+	host.gate = gate
+	host.rmu.Unlock()
+	q := nameQuery(t, "a.lab.example.")
+	var wg sync.WaitGroup
+	got := make([][]netip.AddrPort, 8)
+	for i := range got {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if i%2 == 0 {
+				got[i], _ = served.upstream(q)
+			} else {
+				got[i], _ = f.d.membersUpstreamFor(q)
+			}
+		}()
+	}
+	for host.readCount() == before {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+	for i, ups := range got {
+		if !slices.Equal(ups, []netip.AddrPort{ap("10.99.2.2:53")}) {
+			t.Errorf("query %d is asked of %v", i, ups)
+		}
+	}
+	if n := host.readCount() - before; n != 1 {
+		t.Errorf("%d queries at once read the routing %d times", len(got), n)
+	}
+	advance(hostRoutingFresh - time.Millisecond)
+	upsOf(t, served.upstream, q)
+	if n := host.readCount() - before; n != 1 {
+		t.Errorf("within hostRoutingFresh, the routing was read %d times", n)
+	}
+	advance(time.Millisecond)
+	upsOf(t, served.upstream, q)
+	if n := host.readCount() - before; n != 2 {
+		t.Errorf("after hostRoutingFresh, the routing was read %d times", n)
+	}
+}
+
+// A read of the host's routing that hangs refuses the query after
+// hostRoutingWait, and holds no later one longer.
+func TestAHangingReadRefusesTheName(t *testing.T) {
+	_, host, served, advance := routingFixture(t, nil)
+	advance(hostRoutingFresh)
+	gate := make(chan struct{})
+	host.rmu.Lock()
+	host.gate = gate
+	host.rmu.Unlock()
+	t.Cleanup(func() { close(gate) })
+	q := nameQuery(t, "a.lab.example.")
+	type result struct {
+		ups []netip.AddrPort
+		err error
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		ups, err := served.upstream(q)
+		done <- result{ups, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err == nil {
+			t.Errorf("the read hanging, a.lab.example is asked of %v", r.ups)
+		}
+		if took := time.Since(start); took < hostRoutingWait-100*time.Millisecond {
+			t.Errorf("refused after %v, before hostRoutingWait", took)
+		}
+	case <-time.After(hostRoutingWait + 2*time.Second):
+		t.Fatal("the query waits on a hanging read")
 	}
 }
 
@@ -636,7 +1221,7 @@ func TestTheNamesServerPassesOnShortTTLs(t *testing.T) {
 	}()
 	up := netip.MustParseAddrPort(pc.LocalAddr().String())
 	s, err := defaultNamesServer("", nil)(netip.MustParseAddrPort("127.0.0.1:0"),
-		func([]byte) []byte { return nil }, func([]byte) []netip.AddrPort { return []netip.AddrPort{up} })
+		func([]byte) []byte { return nil }, func([]byte) ([]netip.AddrPort, error) { return []netip.AddrPort{up}, nil })
 	if err != nil {
 		t.Fatal(err)
 	}

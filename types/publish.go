@@ -14,14 +14,14 @@ const MaxPublishedPerNode = 16
 // ingresses: LABEL.DOMAIN, or DOMAIN itself for the empty label, reached on
 // Port of the member, with the client's address in a PROXY protocol v2
 // header where Proxy is set. Where Public is set, every ingress passes TCP
-// on that port to it, from [SchemaTCP] on; otherwise TLS on 443, by name.
+// on that port to it; otherwise TLS on 443, by name.
 type PublishedName struct {
 	Label  string `cbor:"1,keyasint"`
 	Port   uint16 `cbor:"2,keyasint"`
 	Proxy  bool   `cbor:"3,keyasint,omitempty"`
 	Public uint16 `cbor:"4,keyasint,omitempty"`
-	// Members keeps the name from the internet, from [SchemaMembers] on:
-	// the members the access policy names it for reach it alone.
+	// Members keeps the name from the internet: the members the access
+	// policy names it for reach it alone.
 	Members bool `cbor:"5,keyasint,omitempty"`
 }
 

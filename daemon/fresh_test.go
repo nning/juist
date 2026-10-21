@@ -264,7 +264,7 @@ func TestAdminDeviceVouchesForItself(t *testing.T) {
 		t.Fatal(err)
 	}
 	var names types.Hash
-	for _, b := range f.d.encodedLeases() {
+	for _, b := range f.d.leases.encoded() {
 		l, err := types.DecodeLease(b)
 		if err != nil {
 			t.Fatal(err)
@@ -362,7 +362,7 @@ func TestAnAdminDeviceStoppedAtASchemaUpgradeStopsVouching(t *testing.T) {
 		t.Fatal("no schema alarm")
 	}
 	f.reconcileAt(t, f.start.Add(DefaultFreshnessTTL+time.Hour))
-	for _, b := range f.d.encodedLeases() {
+	for _, b := range f.d.leases.encoded() {
 		if l, _ := types.DecodeLease(b); l.Signer == f.nw.devices[0].record.Identity {
 			t.Fatalf("the admin device still vouches, %v after the upgrade stopped it",
 				time.Unix(int64(l.Issued), 0).Sub(f.start))
@@ -382,17 +382,16 @@ func TestConcurrentOffersKeepTheNewerLease(t *testing.T) {
 	f.clock.Set(f.start.Add(time.Minute))
 	want := uint64(f.start.Add(10 * time.Second).Unix())
 	for range 2000 {
-		f.d.leaseMu.Lock()
-		f.d.leases = map[types.Identity]types.Lease{}
-		f.d.leaseMu.Unlock()
+		f.d.leases.mu.Lock()
+		f.d.leases.held = map[types.Identity]types.Lease{}
+		f.d.leases.mu.Unlock()
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); f.d.offerLeases([][]byte{newer}) }()
 		go func() { defer wg.Done(); f.d.offerLeases([][]byte{older}) }()
 		wg.Wait()
-		f.d.leaseMu.Lock()
-		got := f.d.leases[f.nw.devices[1].record.Identity].Issued
-		f.d.leaseMu.Unlock()
+		held, _ := f.d.leases.get(f.nw.devices[1].record.Identity)
+		got := held.Issued
 		if got != want {
 			t.Fatalf("the older lease replaced the newer one")
 		}
@@ -408,9 +407,7 @@ func TestANewHeadInTheSameSecondIsVouchedFor(t *testing.T) {
 	if err := f.d.Inform([]types.AUM{removal}); err != nil {
 		t.Fatal(err)
 	}
-	f.d.leaseMu.Lock()
-	l := f.d.leases[f.nw.devices[0].record.Identity]
-	f.d.leaseMu.Unlock()
+	l, _ := f.d.leases.get(f.nw.devices[0].record.Identity)
 	if l.Head != f.auth.Head() {
 		t.Fatal("the admin device's lease still names the head before the removal")
 	}
@@ -428,5 +425,41 @@ func TestALeaseDecodedAgainIsTheOneHeld(t *testing.T) {
 	b.MLDSA[0] = 3
 	if sameLease(&a, &b) {
 		t.Fatal("leases with different ML-DSA signatures read as one")
+	}
+}
+
+// A new lease is pushed on to the members awake alone: one that rests takes
+// leases at its own sync, as they count for DefaultFreshnessTTL.
+func TestANewLeaseIsPushedToTheAwakeAlone(t *testing.T) {
+	f := newFreshFixture(t, "")
+	select {
+	case <-f.d.dirty:
+	default:
+	}
+	f.d.pushRests.Store(false)
+	f.d.offerLeases([][]byte{f.leaseFrom(t, 1, f.auth.Head(), f.start)})
+	if len(f.d.dirty) == 0 {
+		t.Fatal("a new lease was not pushed on")
+	}
+	if f.d.pushRests.Load() {
+		t.Error("a new lease was pushed to the members that rest")
+	}
+}
+
+// A device that rests and vouches pushes its own lease, as its own news.
+func TestARestingVoucherPushesItsOwnLease(t *testing.T) {
+	f := newFreshFixture(t, "", 0)
+	f.d.rests = true
+	f.reconcileAt(t, f.start)
+	select {
+	case <-f.d.dirty:
+	default:
+	}
+	f.reconcileAt(t, f.start.Add(DefaultLeaseInterval))
+	if got := f.d.Status().FreshSince; got != f.start.Add(DefaultLeaseInterval).Unix() {
+		t.Fatal("no lease renewed")
+	}
+	if len(f.d.dirty) == 0 {
+		t.Error("its own lease was not pushed")
 	}
 }

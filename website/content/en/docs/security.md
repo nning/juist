@@ -23,7 +23,8 @@ The full analysis, with every remaining weakness, is in the
   records who signed each change.
 - The start of the network. Every device checks each change in the
   [membership log]({{< relref "docs/how-it-works" >}}#the-membership-log) all
-  the way back to the first one, made when the network was created.
+  the way back to the first one, made when the network was created, or to a
+  checkpoint the admins signed.
 - Every member, as far as the [access policy]({{< relref "docs/access" >}})
   lets it in. Without a policy, an admitted device reaches every port of every
   other member through the tunnel. With one, each device refuses whatever no
@@ -142,8 +143,9 @@ juist protects against both:
   it, as current browsers do.
 
 Every tunnel between devices on the current version is quantum-safe. A device
-on an older version gets none of your traffic, and `juist health` and
-`juist devices` show it as outdated until it is updated.
+on an older version gets none of your traffic until it is updated:
+`juist health` warns that it runs an older juist, and `juist devices` shows
+it as `outdated`.
 
 The limit: whoever steals a device and later has a quantum computer reads what
 that device could read, its own tunnels' traffic recorded today included. Remove

@@ -25,6 +25,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/types"
 )
 
@@ -171,19 +172,6 @@ func (inv *Invite) Open() bool { return !inv.closed }
 // CodeOpen reports whether the typed code still works.
 func (inv *Invite) CodeOpen() bool { return !inv.closed && !inv.codeVoid }
 
-// Accept runs the host's half of the handshake over one connection. The
-// invite is spent once a guest proves it knows the code, and void once one
-// proves it does not ([ErrWrongCode]). Any other failure leaves it as it was:
-// a session that ends before the guest's confirmation gave its peer nothing
-// to test a guess against.
-func (inv *Invite) Accept(rw io.ReadWriter) (*Channel, error) {
-	hello, err := ReadHello(rw)
-	if err != nil {
-		return nil, err
-	}
-	return inv.AcceptHello(hello, rw)
-}
-
 // A Hello is a guest's first message, read before its session is let near
 // the invite: reading it concurrently, with a short deadline, is what keeps a
 // connection that says nothing from holding the one session at a time.
@@ -204,7 +192,11 @@ func ReadHello(r io.Reader) (*Hello, error) {
 // Code reports whether the guest is using the typed code rather than the link.
 func (h *Hello) Code() bool { return h.frame.Mode == modeCode }
 
-// AcceptHello is [Invite.Accept] for a guest whose hello has been read.
+// AcceptHello runs the host's half of the handshake over one connection,
+// whose hello h was read from it. The invite is spent once a guest proves it
+// knows the code, and void once one proves it does not ([ErrWrongCode]). Any
+// other failure leaves it as it was: a session that ends before the guest's
+// confirmation gave its peer nothing to test a guess against.
 func (inv *Invite) AcceptHello(h *Hello, rw io.ReadWriter) (*Channel, error) {
 	hello := h.frame
 	if inv.closed {
@@ -427,8 +419,9 @@ func readHandshake(r io.Reader) (hsFrame, error) {
 	return decodeHandshake(b)
 }
 
-func decodeHandshake(b []byte) (hsFrame, error) {
-	f, err := decodeCanonical[hsFrame](b)
+func decodeHandshake(b []byte) (_ hsFrame, err error) {
+	defer malformed.Recover(&err)
+	f, err := types.DecodeCanonical[hsFrame](decMode, b, maxHandshakeFrame)
 	if err != nil {
 		return hsFrame{}, err
 	}
@@ -463,7 +456,7 @@ type Channel struct {
 
 func newChannel(rw io.ReadWriter, keys spakeKeys, guest bool) (*Channel, error) {
 	c := &Channel{rw: rw, guest: guest, ke: keys.ke, transcript: keys.transcript}
-	if err := c.rekey(keys.ke, nil, "juist enroll v1 "); err != nil {
+	if err := c.rekey(keys.ke, nil, types.LabelEnrollV1); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -549,10 +542,10 @@ func (c *Channel) agreed(ss, ek, ct []byte) error {
 		th.Write(part)
 	}
 	transcript := th.Sum(nil)
-	if err := c.rekey(append(slices.Clone(c.ke), ss...), transcript, "juist enroll v3 "); err != nil {
+	if err := c.rekey(append(slices.Clone(c.ke), ss...), transcript, types.LabelEnrollV3); err != nil {
 		return err
 	}
-	c.binding = sha256.Sum256(append([]byte("juist enroll binding v3\x00"), transcript...))
+	c.binding = sha256.Sum256(append([]byte(types.LabelEnrollBinding+"\x00"), transcript...))
 	c.ke, c.transcript = nil, nil
 	return nil
 }
@@ -665,20 +658,3 @@ var decMode = func() cbor.DecMode {
 	}
 	return m
 }()
-
-// decodeCanonical decodes b and rejects it unless re-encoding reproduces it,
-// the rule every parser in this project follows.
-func decodeCanonical[T any](b []byte) (T, error) {
-	var zero, v T
-	if err := decMode.Unmarshal(b, &v); err != nil {
-		return zero, fmt.Errorf("enroll: decoding: %w", err)
-	}
-	re, err := encMode.Marshal(v)
-	if err != nil {
-		return zero, fmt.Errorf("enroll: re-encoding: %w", err)
-	}
-	if !bytes.Equal(re, b) {
-		return zero, errors.New("enroll: non-canonical encoding")
-	}
-	return v, nil
-}

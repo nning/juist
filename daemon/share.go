@@ -215,17 +215,15 @@ func (d *Daemon) sharing(id types.Identity, now time.Time) bool {
 
 // renewShare has this device's announcement go out where its shares' end
 // moved since last, which it updates.
-func (d *Daemon) renewShare(last *int64) bool {
+func (d *Daemon) renewShare(last *int64) {
 	var until int64
 	if sh := d.shareAnnounced(d.now()); sh != nil {
 		until = sh.Until
 	}
-	if until == *last {
-		return false
+	if until != *last {
+		*last = until
+		d.MarkDirty()
 	}
-	*last = until
-	d.MarkDirty()
-	return true
 }
 
 // shareServed is shs, this device's shares, as its terminator ends TLS for
@@ -309,7 +307,7 @@ func (s *Service) unshare(req *ipc.ShareRequest) error {
 func (s *Service) share(ctx context.Context, req *ipc.ShareRequest, events func(*ipc.Event) error) error {
 	var end time.Time
 	if req.Until != 0 {
-		if end = time.Unix(req.Until, 0); !end.After(time.Now()) {
+		if end = time.Unix(req.Until, 0); !end.After(s.now()) {
 			return errors.New("the share ends before it starts")
 		}
 	}
@@ -331,7 +329,7 @@ func (s *Service) share(ctx context.Context, req *ipc.ShareRequest, events func(
 	defer check.Stop()
 	var ended <-chan time.Time
 	if !end.IsZero() {
-		t := time.NewTimer(time.Until(end))
+		t := time.NewTimer(end.Sub(s.now()))
 		defer t.Stop()
 		ended = t.C
 	}

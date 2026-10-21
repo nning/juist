@@ -265,6 +265,9 @@ func (a *app) dispatch(args []string) error {
 	if name == "__manpage" {
 		return a.manpage(a.out)
 	}
+	if name == "__commands" {
+		return a.commandsPage(a.out)
+	}
 	if name == "__instance" {
 		return a.runCommand(&command{name: name, run: cmdInstance}, g, rest)
 	}

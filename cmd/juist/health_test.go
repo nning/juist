@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestStatusPointsAtHealth(t *testing.T) {
 		TunnelsDown: []string{"phone"}}}
 	var status, health syncBuffer
 	a := newApp(strings.NewReader(""), &status, &status)
-	a.printStatus(st)
+	a.printStatusIn(st, "", false)
 	a.healthHint(st, "", false)
 	got := status.String()
 	mustContain(t, got, "home · ", "hint: 2 warnings: juist health\n")
@@ -32,6 +33,75 @@ func TestStatusPointsAtHealth(t *testing.T) {
 		"warning: no tunnel traffic from phone")
 	if strings.Contains(health.String(), "This device") {
 		t.Errorf("health repeats the status:\n%s", health.String())
+	}
+}
+
+// Names refused while the host's DNS routing cannot be read are juist
+// health's to say, and juist status counts them alone.
+func TestHealthSaysTheDNSRoutingIsUnread(t *testing.T) {
+	t.Parallel()
+	st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home"}, DNSRoutingUnread: "dbus: call timed out"}
+	var status, health syncBuffer
+	a := newApp(strings.NewReader(""), &status, &status)
+	a.printStatusIn(st, "", false)
+	a.healthHint(st, "", false)
+	mustContain(t, status.String(), "hint: 1 warning: juist health\n")
+	if strings.Contains(status.String(), "dbus") {
+		t.Errorf("status says what juist health does:\n%s", status.String())
+	}
+	a = newApp(strings.NewReader(""), &health, &health)
+	a.health(st, "", false)
+	mustContain(t, health.String(),
+		"warning: names the host's DNS routing sends elsewhere are refused, as it cannot be read: dbus: call timed out\n")
+}
+
+// Names refused by how the host routes them are juist health's to say while
+// they are recent, and juist status counts them.
+func TestHealthSaysRecentRefusals(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	for _, tc := range []struct {
+		ago  time.Duration
+		want bool
+	}{{time.Minute, true}, {time.Hour, false}} {
+		var out syncBuffer
+		a := c.app(&out, "")
+		st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home"},
+			DNSRefused: "the host asks tailscaled alone, whose answers members cannot reach", DNSRefusedAt: a.now().Add(-tc.ago).Unix()}
+		n, _ := a.healthWarnings(st, "", false)
+		a.health(st, "", false)
+		said := strings.Contains(out.String(),
+			"warning: names juistd forwards are refused: the host asks tailscaled alone, whose answers members cannot reach\n")
+		if said != tc.want || (n == 1) != tc.want {
+			t.Errorf("refused %v ago: %d warnings counted:\n%s", tc.ago, n, out.String())
+		}
+		if hinted := strings.Contains(out.String(), "hint: sudo tailscale set --accept-dns=false"); hinted != tc.want && runtime.GOOS != "freebsd" {
+			t.Errorf("refused %v ago, hinted %v:\n%s", tc.ago, hinted, out.String())
+		}
+	}
+}
+
+// The warnings juist status counts are the ones juist health prints, alarms
+// aside.
+func TestStatusCountsTheWarningsHealthPrints(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.system = map[string]string{"/etc/resolv.conf": "nameserver 192.168.1.1\n"}
+	for _, st := range []*ipc.Status{
+		{InNetwork: true, Derived: ipc.Derived{NetworkName: "home"}},
+		{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Alarm: "log: fork alarm"},
+			Tunnels: ipc.Tunnels{TunnelsChecked: true, SyncFailing: []string{"vps"}, TunnelsDown: []string{"phone"}}},
+		{InNetwork: true, CanOperate: true, Derived: ipc.Derived{NetworkName: "home", Schema: types.CurrentSchema,
+			Exit: &ipc.Exit{Node: types.Identity{2}, Name: "vps", DNSNot: "DNS is off on this device"}}},
+	} {
+		var out syncBuffer
+		a := c.app(&out, "")
+		a.color = true
+		n, _ := a.healthWarnings(st, "", false)
+		a.health(st, "", false)
+		if printed := strings.Count(out.String(), a.paint("33", "warning:")); printed != n || n == 0 && st.Alarm != "" {
+			t.Errorf("%+v: counted %d warnings, health printed %d:\n%s", st, n, printed, out.String())
+		}
 	}
 }
 

@@ -81,6 +81,15 @@ type Status struct {
 	// Device is the TUN device, empty for none.
 	Device string `cbor:"60,keyasint,omitempty"`
 
+	// DNSRoutingUnread is why the host's DNS routing cannot be read, while
+	// the names it routes are refused; "" where it can.
+	DNSRoutingUnread string `cbor:"81,keyasint,omitempty"`
+
+	// DNSRefused is why names juistd forwards by the host's routing were
+	// refused last, at DNSRefusedAt, in Unix seconds.
+	DNSRefused   string `cbor:"82,keyasint,omitempty"`
+	DNSRefusedAt int64  `cbor:"83,keyasint,omitempty"`
+
 	// V4Claims is the IPv4 the network claims on a host: its prefix and the
 	// ranges it is moving away from, or where it has no prefix of its own,
 	// its members' addresses. The host's other instances yield to it, and a
@@ -386,6 +395,7 @@ func (s *Status) ForReader() Status {
 		EpochError: s.EpochError, SchemaAlarm: s.SchemaAlarm,
 		ListenPort: s.ListenPort, GossipPort: s.GossipPort,
 		Instance: s.Instance, HostConflict: s.HostConflict, Device: s.Device, V4Claims: coarseClaims(s.V4Claims),
+		DNSRoutingUnread: s.DNSRoutingUnread, DNSRefused: s.DNSRefused, DNSRefusedAt: s.DNSRefusedAt,
 	}
 }
 

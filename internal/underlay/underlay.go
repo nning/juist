@@ -7,45 +7,72 @@ import (
 	"net/netip"
 	"strings"
 
+	"go4.org/netipx"
 	"tailscale.com/net/netmon"
 )
 
 // Scan returns the addresses of every up, non-loopback interface: in addrs
 // those a device elsewhere might reach this host at, in internal those it
 // cannot, which callers use to tell an interface address from a reflexive one.
-// The interfaces are netmon's, which an Android app lists itself.
 func Scan() (addrs, internal []netip.Addr) {
-	ifaces, err := netmon.GetInterfaceList()
-	if err != nil {
-		return nil, nil
-	}
-	for _, ifi := range ifaces {
-		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		ifAddrs, err := ifi.Addrs()
-		if err != nil {
-			continue
-		}
-		hidden := InternalInterface(ifi.Name)
-		for _, a := range ifAddrs {
-			pfx, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ip, ok := netip.AddrFromSlice(pfx.IP)
-			if !ok {
-				continue
-			}
-			ip = ip.Unmap()
-			if hidden || tailscaleV6.Contains(ip) {
-				internal = append(internal, ip)
+	for _, ifc := range Interfaces(Filter{Up: true, NoLoopback: true}) {
+		hidden := InternalInterface(ifc.Name)
+		for _, p := range ifc.Prefixes {
+			if hidden || tailscaleV6.Contains(p.Addr()) {
+				internal = append(internal, p.Addr())
 			} else {
-				addrs = append(addrs, ip)
+				addrs = append(addrs, p.Addr())
 			}
 		}
 	}
 	return addrs, internal
+}
+
+// Filter says which interfaces [Interfaces] lists: Up those up alone,
+// NoLoopback none that is loopback, and never the one named Skip.
+type Filter struct {
+	Up, NoLoopback bool
+	Skip           string
+}
+
+// Interface is one of the host's interfaces and its addresses, each with its
+// network's length.
+type Interface struct {
+	Name     string
+	Prefixes []netip.Prefix
+}
+
+// Interfaces lists the host's interfaces f lets through, or none where they
+// cannot be read. They are netmon's: net.Interfaces is denied to an Android
+// app, which registers its own lister there.
+func Interfaces(f Filter) []Interface {
+	ifaces, err := netmon.GetInterfaceList()
+	if err != nil {
+		return nil
+	}
+	var out []Interface
+	for _, ifi := range ifaces {
+		if ifi.Interface == nil || ifi.Name == f.Skip ||
+			f.Up && ifi.Flags&net.FlagUp == 0 || f.NoLoopback && ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifi.Addrs()
+		if err != nil {
+			continue
+		}
+		ifc := Interface{Name: ifi.Name}
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if p, ok := netipx.FromStdIPNet(ipn); ok && p.IsValid() {
+				ifc.Prefixes = append(ifc.Prefixes, p)
+			}
+		}
+		out = append(out, ifc)
+	}
+	return out
 }
 
 // tailscaleV6 is Tailscale's overlay, named here for hosts whose Tailscale

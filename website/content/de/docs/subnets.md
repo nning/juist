@@ -7,17 +7,16 @@ lead: Ein Subnet-Router ist ein Mitglied, das Verkehr aus dem Netz in sein LAN w
 
 ## So funktioniert es
 
-Dein NAS zu Hause ist ein Mitglied, also ein Gerät, das zu deinem Netz gehört
-([So funktioniert juist]({{< relref "docs/how-it-works" >}})). Der Drucker
-daneben ist keines, denn auf ihm läuft kein juist. Mit einem Subnet-Router sind
-solche Geräte trotzdem für andere Mitglieder erreichbar: Das NAS nimmt den
-Verkehr für sie aus dem Tunnel und leitet ihn in sein LAN weiter, in diesem
-Beispiel `192.168.1.0/24`. Einen solchen Adressbereich nennt man Subnetz.
+Dein NAS zu Hause ist ein Mitglied deines Netzes. Der Drucker daneben ist
+keines, denn auf ihm läuft kein juist. Mit einem Subnet-Router erreichen die
+anderen Mitglieder den Drucker trotzdem: Das NAS nimmt ihren Verkehr aus dem
+Tunnel und leitet ihn in sein LAN weiter, in diesem Beispiel
+`192.168.1.0/24`. Einen solchen Adressbereich nennt man Subnetz.
 
-Ein Gerät wird in zwei Schritten zum Subnet-Router. Zuerst weist ein Admin,
-also eine Person, deren Schlüssel Änderungen am Netz bestätigt, dem Gerät das
-Subnetz zu. Dann stimmt der [Operator]({{< relref "docs/operator" >}}) des Geräts zu, also
-der lokale Benutzer, der es ohne sudo verwaltet, indem er dort
+Ein Gerät wird in zwei Schritten zum Subnet-Router. Zuerst weist ein
+[Admin]({{< relref "docs/how-it-works" >}}#admins) dem Gerät das Subnetz zu.
+Dann stimmt der [Operator]({{< relref "docs/operator" >}}) des Geräts zu,
+also der lokale Benutzer, der es ohne sudo verwaltet, indem er dort
 `juist subnet serve` ausführt.
 
 Für die Geräte im LAN kommen die Verbindungen vom NAS. Sie brauchen also

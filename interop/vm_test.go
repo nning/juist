@@ -7,13 +7,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/sha512"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +21,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/nning/juist/internal/testvm"
 )
 
 // An image is a VM's base disk, pinned by its sum, and what is installed on
@@ -196,18 +195,18 @@ func provisioned(cache string, img image, pub string, logf func(string, ...any))
 	src := filepath.Join(cache, name)
 	if checked(disk) == nil {
 		if base, err := backing(disk); err == nil {
-			if base == src && sumOf(src, img.hash, img.sum) == nil || base != src && checked(base) == nil {
+			if base == src && testvm.Check(src, img.hash, img.sum) == nil || base != src && checked(base) == nil {
 				return disk, nil
 			}
 		}
 	}
 	if _, err := os.Stat(src); err != nil {
 		logf("fetching %s", img.url)
-		if err := fetch(img.url, src); err != nil {
+		if err := testvm.Fetch(context.Background(), img.url, src); err != nil {
 			return "", err
 		}
 	}
-	if err := sumOf(src, img.hash, img.sum); err != nil {
+	if err := testvm.Check(src, img.hash, img.sum); err != nil {
 		os.Remove(src)
 		return "", err
 	}
@@ -321,7 +320,7 @@ func backing(path string) (string, error) {
 
 // keep moves path.part to path, with the sum checked beside it.
 func keep(path string) error {
-	s, err := fileSum(path+".part", sha256.New)
+	s, err := testvm.Sum(path+".part", sha256.New)
 	if err != nil {
 		return err
 	}
@@ -337,54 +336,7 @@ func checked(path string) error {
 	if err != nil {
 		return err
 	}
-	return sumOf(path, sha256.New, strings.TrimSpace(string(want)))
-}
-
-func sumOf(path string, h func() hash.Hash, want string) error {
-	got, err := fileSum(path, h)
-	if err != nil {
-		return err
-	}
-	if got != want {
-		return fmt.Errorf("%s: sum %s, want %s", path, got, want)
-	}
-	return nil
-}
-
-func fileSum(path string, h func() hash.Hash) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	s := h()
-	if _, err := io.Copy(s, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(s.Sum(nil)), nil
-}
-
-func fetch(url, to string) error {
-	resp, err := (&http.Client{Timeout: time.Hour}).Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: %s", url, resp.Status)
-	}
-	f, err := os.Create(to + ".part")
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(to+".part", to)
+	return testvm.Check(path, sha256.New, strings.TrimSpace(string(want)))
 }
 
 func sh(t *testing.T, name string, args ...string) string {
@@ -681,20 +633,7 @@ const seedUserData = "#cloud-config\nhostname: %s\ndisable_root: false\nssh_pwau
 
 // serveSeed serves the seed of a VM named hostname whose root pubkey lets in.
 func serveSeed(hostname, pubkey string) (int, func(), error) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, nil, err
-	}
-	userData := fmt.Sprintf(seedUserData, hostname, strings.TrimSpace(pubkey))
-	mux := http.NewServeMux()
-	mux.HandleFunc("/meta-data", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "instance-id: %s\nlocal-hostname: %s\n", hostname, hostname)
-	})
-	mux.HandleFunc("/user-data", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, userData) })
-	mux.HandleFunc("/vendor-data", func(w http.ResponseWriter, r *http.Request) {})
-	srv := &http.Server{Handler: mux}
-	go srv.Serve(l)
-	return l.Addr().(*net.TCPAddr).Port, func() { srv.Close() }, nil
+	return testvm.ServeSeed(hostname, fmt.Sprintf(seedUserData, hostname, strings.TrimSpace(pubkey)))
 }
 
 // The run's waits of seconds, by test.

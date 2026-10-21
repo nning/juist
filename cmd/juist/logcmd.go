@@ -136,7 +136,7 @@ group secret. With FILEs, say what each change needs and whether it applies.`}
 	a.field("Quorum", "%d of %s", state.Quorum(), count(state.TotalVotes(), "vote"))
 	a.field("Schema", "%v", state.Schema())
 	a.field("Devices", "%d", len(state.Nodes()))
-	if st := a.node.status(); st != nil {
+	if st := liveStatus(a.node); st != nil {
 		// The daemon holds this device's keys and has already tried.
 		if st.EpochError != "" {
 			a.warn("cannot open the group secret: %s", st.EpochError)
@@ -223,27 +223,27 @@ one's schema.`}
 
 // upgradeNote says the network's schema is below this build's, where a key
 // in this keystore is one of its admins'.
-func (a *app) upgradeNote(several bool) {
+func (a *app) upgradeNote(several bool) []line {
 	auth, err := a.networkLog()
 	if err != nil {
-		return
+		return nil
 	}
 	state := auth.State()
 	if state.Schema() >= types.CurrentSchema {
-		return
+		return nil
 	}
 	files, err := a.home.adminKeyFiles()
 	if err != nil || !slices.ContainsFunc(files, func(k adminKeyFile) bool {
 		_, admin := state.Admin(k.priv.Public())
 		return admin
 	}) {
-		return
+		return nil
 	}
 	cmd := "juist log upgrade"
 	if several {
 		cmd += " " + a.network
 	}
-	a.hint("once every device runs this version: %s", cmd)
+	return []line{{kind: lineHint, text: "once every device runs this version: " + cmd}}
 }
 
 func logCheckpoint(a *app, args []string) error {

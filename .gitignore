@@ -8,3 +8,4 @@
 /website/public/
 /website/.hugo_build.lock
 core
+!core/

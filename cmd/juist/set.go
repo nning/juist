@@ -74,7 +74,8 @@ through an exit node.`}
 	if err != nil {
 		return err
 	}
-	if n.status() == nil {
+	d := daemonOf(n)
+	if d == nil {
 		return errNoDaemon
 	}
 	if op.set {
@@ -82,7 +83,7 @@ through an exit node.`}
 		if err != nil {
 			return err
 		}
-		if err := n.setOperator(choice); err != nil {
+		if err := d.setOperator(choice); err != nil {
 			return err
 		}
 		if choice.uid == 0 {
@@ -98,7 +99,7 @@ through an exit node.`}
 		return err
 	}
 	naming := req.RelayName != nil && *req.RelayName != "" && a.host.relayScript != ""
-	if naming && n.status().Instance != 0 {
+	if naming && d.st.Instance != 0 {
 		return errors.New("a relay on 443 serves the default network's instance alone, for now")
 	}
 	if naming {
@@ -108,11 +109,11 @@ through an exit node.`}
 			return err
 		}
 		// The script restarts juistd where it grants it 443.
-		if _, err := a.statusAgain(n, 15*time.Second); err != nil {
+		if _, err := a.statusAgain(d, 15*time.Second); err != nil {
 			return err
 		}
 	}
-	st, err := n.exit(req)
+	st, err := d.request(req)
 	if err != nil {
 		return err
 	}
@@ -120,7 +121,7 @@ through an exit node.`}
 		if err := a.packageScript(a.host.relayScript, "off", "giving the relay's 443 back"); err != nil {
 			return err
 		}
-		if st, err = a.statusAgain(n, 15*time.Second); err != nil {
+		if st, err = a.statusAgain(d, 15*time.Second); err != nil {
 			return err
 		}
 	}
@@ -130,10 +131,10 @@ through an exit node.`}
 
 // statusAgain is juistd's status once it answers again and has looked at
 // its network, within wait.
-func (a *app) statusAgain(n node, wait time.Duration) (*ipc.Status, error) {
+func (a *app) statusAgain(d *daemonNode, wait time.Duration) (*ipc.Status, error) {
 	until := time.Now().Add(wait)
 	for {
-		st, err := n.restatus()
+		st, err := d.restatus()
 		if err == nil && (!st.InNetwork || st.LastReconcile > 0 || st.StartError != "") || time.Now().After(until) {
 			return st, err
 		}
@@ -277,7 +278,8 @@ func (a *app) requireOperator() error {
 	if err != nil {
 		return err
 	}
-	if st := n.status(); st == nil || st.CanOperate {
+	d := daemonOf(n)
+	if d == nil || d.st.CanOperate {
 		return nil
 	}
 	me := currentUser()
@@ -296,12 +298,12 @@ func (a *app) requireOperator() error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(a.ctx, "sudo", self, "--socket", n.socket(), "set", "--operator="+me)
+	cmd := exec.CommandContext(a.ctx, "sudo", self, "--socket", d.sock, "set", "--operator="+me)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, a.out, a.errOut
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("sudo juist set: %w", err)
 	}
-	st, err := n.restatus()
+	st, err := d.restatus()
 	if err != nil {
 		return err
 	}

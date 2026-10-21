@@ -1,16 +1,13 @@
 package gossip
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 
 	"github.com/fxamacker/cbor/v2"
 
-	"github.com/nning/juist/internal/aead"
-	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/internal/pairkey"
-	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
 
@@ -142,6 +139,21 @@ type frame struct {
 	// the receiver, signed. Sent only to a peer whose announcement says it
 	// sets preshared keys.
 	Pair *pairkey.Msg `cbor:"13,keyasint,omitempty"`
+
+	// Seen is, in a hello from [types.SchemaSeen] on, what the sender holds
+	// of each node in place of its announcements, address keys and leases,
+	// which the records frame answering it carries where newer.
+	Seen []Seen `cbor:"14,keyasint,omitempty"`
+}
+
+// A Seen is what a hello's sender holds of one node: the sequence numbers of
+// its announcement and address key and when its newest lease was issued,
+// zero for none.
+type Seen struct {
+	ID    types.Identity `cbor:"1,keyasint"`
+	Seq   uint64         `cbor:"2,keyasint,omitempty"`
+	Key   uint64         `cbor:"3,keyasint,omitempty"`
+	Lease uint64         `cbor:"4,keyasint,omitempty"`
 }
 
 // A waitingPayload is what [frame.Waiting] carries once opened. Changes enter
@@ -179,8 +191,12 @@ func (f *frame) validate() error {
 	if f.Kind == kindHello && (len(f.Records) > 0 || len(f.Leases) > 0) {
 		return errors.New("gossip: a hello frame must not carry records or leases")
 	}
-	if f.Kind != kindHello && len(f.Keys) > 0 {
-		return errors.New("gossip: address keys travel in a hello alone")
+	if len(f.Seen) > MaxEndpointsPerFrame+MaxLeasesPerFrame {
+		return fmt.Errorf("gossip: frame says what it holds of %d nodes, over the %d limit",
+			len(f.Seen), MaxEndpointsPerFrame+MaxLeasesPerFrame)
+	}
+	if f.Kind != kindHello && len(f.Seen) > 0 {
+		return errors.New("gossip: what a node holds travels in a hello alone")
 	}
 	if len(f.Leases) > MaxLeasesPerFrame {
 		return fmt.Errorf("gossip: frame carries %d leases, over the %d limit", len(f.Leases), MaxLeasesPerFrame)
@@ -237,31 +253,6 @@ func encode(v any) ([]byte, error) {
 	return b, nil
 }
 
-// decodeCanonical decodes b and rejects it unless b is exactly what encoding
-// the result produces. It carries real weight for endpoint records, whose
-// signature covers their encoding: without it a peer could re-spell a record
-// and the signature would still verify over different bytes.
-func decodeCanonical[T any](b []byte) (T, error) {
-	var zero, v T
-	if len(b) == 0 {
-		return zero, errors.New("gossip: empty input")
-	}
-	if len(b) > MaxFrameSize {
-		return zero, fmt.Errorf("gossip: input is %d bytes, over the %d limit", len(b), MaxFrameSize)
-	}
-	if err := decMode.Unmarshal(b, &v); err != nil {
-		return zero, fmt.Errorf("gossip: decoding: %w", err)
-	}
-	re, err := encMode.Marshal(v)
-	if err != nil {
-		return zero, fmt.Errorf("gossip: re-encoding to check canonicality: %w", err)
-	}
-	if !bytes.Equal(re, b) {
-		return zero, errors.New("gossip: non-canonical encoding")
-	}
-	return v, nil
-}
-
 // errNewerFrame is a frame naming a field this build does not know: its
 // sender runs a newer one.
 var errNewerFrame = errors.New("gossip: the peer runs a newer juist")
@@ -269,8 +260,9 @@ var errNewerFrame = errors.New("gossip: the peer runs a newer juist")
 // decodeFrame decodes and shape-checks a frame's plaintext. It does not
 // verify anything the frame carries: records go through types.DecodeAUM and
 // announcements through their own signature check, both at the point of use.
-func decodeFrame(b []byte) (frame, error) {
-	f, err := decodeCanonical[frame](b)
+func decodeFrame(b []byte) (_ frame, err error) {
+	defer malformed.Recover(&err)
+	f, err := types.DecodeCanonical[frame](decMode, b, MaxFrameSize)
 	if errors.As(err, new(*cbor.UnknownFieldError)) {
 		return frame{}, fmt.Errorf("%w: %w", errNewerFrame, err)
 	}
@@ -281,49 +273,4 @@ func decodeFrame(b []byte) (frame, error) {
 		return frame{}, err
 	}
 	return f, nil
-}
-
-// --- sealing ---------------------------------------------------------------
-
-// Frames are sealed with internal/aead under the epoch's gossip key. See that
-// package for the layout and for what the sealing does and does not buy.
-const (
-	sealOverhead  = aead.Overhead
-	maxSealedSize = MaxFrameSize + sealOverhead
-)
-
-// seal encrypts a frame under an epoch's group secret.
-func seal(s secrets.Secret, epoch uint64, plaintext []byte) ([]byte, error) {
-	if len(plaintext) > MaxFrameSize {
-		return nil, fmt.Errorf("gossip: frame is %d bytes, over the %d limit", len(plaintext), MaxFrameSize)
-	}
-	key := s.GossipKey(epoch)
-	return aead.Seal(key, epoch, plaintext)
-}
-
-// errUnknownEpoch reports a frame sealed under an epoch this node cannot open:
-// an ordinary condition, and a peer far behind looks the same as a non-member.
-var errUnknownEpoch = errors.New("gossip: frame is sealed under an epoch this node does not hold")
-
-// open decrypts a sealed frame with whichever epoch key it names, returning
-// that epoch so a reply can be sealed under the same one.
-func open(kr *keyring.Keyring, blob []byte) (epoch uint64, plaintext []byte, err error) {
-	if len(blob) > maxSealedSize {
-		return 0, nil, fmt.Errorf("gossip: sealed frame is %d bytes, over the %d limit",
-			len(blob), maxSealedSize)
-	}
-	epoch, err = aead.Epoch(blob)
-	if err != nil {
-		return 0, nil, fmt.Errorf("gossip: %w", err)
-	}
-	s, ok := kr.Secret(epoch)
-	if !ok {
-		return epoch, nil, fmt.Errorf("%w: epoch %d", errUnknownEpoch, epoch)
-	}
-	key := s.GossipKey(epoch)
-	pt, err := aead.Open(key, blob)
-	if err != nil {
-		return epoch, nil, fmt.Errorf("gossip: frame sealed under epoch %d: %w", epoch, err)
-	}
-	return epoch, pt, nil
 }

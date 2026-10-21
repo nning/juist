@@ -59,7 +59,7 @@ type forwarder struct {
 	mu      sync.Mutex
 	cond    *sync.Cond
 	ids     map[[16]byte]*waitingInvite
-	waiting *admit.Set[netip.Addr] // guests
+	waiting *admit.Set[netip.Prefix] // guests, by group
 
 	// active are the connections of invites being forwarded, by the member
 	// that waited for them: a relay shutting down ends them all, and a
@@ -94,7 +94,7 @@ type hostConn struct {
 func newForwarder(isMember func([32]byte) bool, certHash [32]byte, logf func(string, ...any)) *forwarder {
 	f := &forwarder{admit: isMember, certHash: certHash, logf: logf,
 		ids: map[[16]byte]*waitingInvite{}, active: map[net.Conn][32]byte{}, starting: map[[32]byte]int{},
-		waiting: admit.New[netip.Addr](admit.Limits{PerSource: maxGuestsPerSource, Total: maxGuestsWaiting})}
+		waiting: admit.New[netip.Prefix](admit.Limits{PerSource: maxGuestsPerSource, Total: maxGuestsWaiting})}
 	f.cond = sync.NewCond(&f.mu)
 	return f
 }
@@ -180,6 +180,7 @@ func (f *forwarder) serveHost(w http.ResponseWriter, r *http.Request) {
 		c.Close()
 		return
 	}
+	admittedOn(c)
 	// A waiting connection says nothing; one that ends, or speaks out of
 	// turn, is no longer waiting.
 	go func() {
@@ -313,14 +314,21 @@ func (f *forwarder) serveGuest(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if r.ContentLength != 0 || len(r.TransferEncoding) > 0 {
+		// Read to its end after the answer, with no deadline: it stays in
+		// the relay's bounds, where a guest admitted to wait does not.
+		w.Header().Set("Connection", "close")
+		http.Error(w, "an invite forward carries no body", http.StatusBadRequest)
+		return
+	}
 	f.mu.Lock()
 	f.sweep()
 	inv, known := f.ids[id]
-	var waiting *admit.Ticket[netip.Addr]
+	var waiting *admit.Ticket[netip.Prefix]
 	admitted := false
 	var owner [32]byte
 	if known && f.sessionsOf(inv.owner) < maxSessionsPerHost {
-		waiting, admitted = f.waiting.Admit(admit.ParseSource(r.RemoteAddr), nil)
+		waiting, admitted = f.waiting.Admit(admit.Group(admit.ParseSource(r.RemoteAddr)), nil)
 	}
 	if admitted {
 		owner = inv.owner
@@ -335,6 +343,13 @@ func (f *forwarder) serveGuest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many guests wait here", http.StatusServiceUnavailable)
 		return
 	}
+	// Bounded by waiting from here, and so out of the relay's own bounds,
+	// which a flood would otherwise close it by; any answer but the
+	// upgrade ends the connection, or it would be held unbounded.
+	if c, ok := r.Context().Value(connContextKey{}).(net.Conn); ok {
+		admittedOn(c)
+	}
+	w.Header().Set("Connection", "close")
 	defer waiting.Release()
 	started := false
 	defer func() {

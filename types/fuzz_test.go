@@ -46,7 +46,7 @@ func FuzzDecodeAUM(f *testing.F) {
 func FuzzValidateAUM(f *testing.F) {
 	seedCorpus(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
-		a, err := decodeCanonical[AUM](data)
+		a, err := DecodeCanonical[AUM](decMode, data, MaxRecordSize)
 		if err != nil {
 			return
 		}

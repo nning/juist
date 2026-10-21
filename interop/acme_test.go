@@ -97,7 +97,7 @@ func tlsAtTheTarget(t *testing.T, fb, lx *vm, work, pebble string) {
 			}
 			out, _ := lx.try("systemctl status juist-serve --no-pager; journalctl -u juist-serve --no-pager | tail -30", time.Minute)
 			t.Logf("lx's terminator:\n%s", out)
-			out, _ = fb.try("tail -30 /tmp/pebble.log; tail -20 /var/log/juist-ingress.log; tail -20 /var/log/juist-serve.log", time.Minute)
+			out, _ = fb.try("tail -30 /tmp/pebble.log; tail -5 /tmp/answer.log; tail -20 /var/log/juist-ingress.log; tail -20 /var/log/juist-serve.log", time.Minute)
 			t.Logf("fb's pebble and ingress:\n%s", out)
 			hold(t, fb, lx)
 		}
@@ -122,7 +122,7 @@ juist subnet remove fb `+fbSide.subnet+`
 juist grant fb ingress
 juist ingress serve
 juist publish add lx web 443
-daemon -f /tmp/probe answer 127.0.0.1:5399 127.0.0.1  # not 5353, which mDNS holds
+daemon -f -o /tmp/answer.log /tmp/probe answer 127.0.0.1:5399 127.0.0.1  # not 5353, which mDNS holds
 env PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 daemon -f -o /tmp/pebble.log /tmp/pebble -config /tmp/pebble.json -dnsserver 127.0.0.1:5399`)
 
 	// lx's terminator takes its certificates from Pebble, whose own it trusts

@@ -147,3 +147,34 @@ func TestASealsNonceIsNoMACUnderItsKey(t *testing.T) {
 		t.Fatalf("open: %v, %v", got, err)
 	}
 }
+
+// An address set with a second encoding opens to nothing.
+func TestANonCanonicalAddressSetIsRefused(t *testing.T) {
+	k := Key{7}
+	canon, err := cbor.Marshal([]netip.AddrPort{netip.MustParseAddrPort("[2001:db8::5]:41641")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		what string
+		body []byte
+	}{
+		{"a one-byte array length", append([]byte{0x98, 0x01}, canon[1:]...)},
+		{"a one-byte address length", append([]byte{0x81, 0x58, canon[1] & 0x1f}, canon[2:]...)},
+	} {
+		sealed, err := aead.Seal(k, uint64(k.ID()), c.body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Open(k, sealed); err == nil {
+			t.Errorf("%s opens to %v", c.what, got)
+		}
+	}
+	sealed, err := aead.Seal(k, uint64(k.ID()), canon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(k, sealed); err != nil {
+		t.Fatalf("the canonical encoding: %v", err)
+	}
+}

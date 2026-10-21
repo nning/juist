@@ -19,14 +19,13 @@ import (
 // session, as a rewritten TCP segment could, but not admit anyone. A stream
 // carries only link sessions, and a bad link confirmation voids nothing.
 //
-// A stream follows its peer to wherever the last packet of the session came
-// from, as WireGuard follows a roaming peer. Each side takes the first path
-// it hears on, and the two need not pick the same pair of addresses — one may
-// hear the other's LAN address first, the other its public one — so a stream
-// bound to its first address could drop everything the peer sends. Following
-// costs nothing an address check would have bought: the session id is known
-// only to holders of the link and to whoever is on the path, and the latter
-// could as well rewrite a TCP connection.
+// A stream takes the session's packets from any address, since the two sides
+// need not pick the same pair of addresses: one may hear the other's LAN
+// address first, the other its public one. It sends where it last heard its
+// peer, and follows another address only once that one has been quiet for
+// [followAfter], as when a NAT moved the peer's mapping: the session id is in
+// the clear, and whoever reads it on the path must not point the stream at
+// another host while the peer is still heard.
 const (
 	pktPunch byte = 1 // also the keepalive
 	pktData  byte = 2
@@ -40,10 +39,14 @@ const (
 	retransmitIn = 400 * time.Millisecond
 	maxRTO       = 8 * time.Second
 	tick         = 100 * time.Millisecond
-	keepaliveIn  = 10 * time.Second
+	keepaliveIn  = 2 * time.Second
 	peerSilence  = 90 * time.Second
 	maxBuffered  = 8 << 20
 )
+
+// followAfter is how long the peer's address must be quiet before the
+// stream sends where the session goes on instead: two keepalives lost.
+var followAfter = 3 * keepaliveIn
 
 var errClosed = errors.New("rendezvous: the stream is closed")
 
@@ -73,7 +76,7 @@ type stream struct {
 	id uint32
 
 	mu      sync.Mutex
-	peer    *net.UDPAddr // where the session was last heard from
+	peer    *net.UDPAddr // where the stream sends
 	cond    *sync.Cond
 	next    uint32   // sequence number the next segment gets
 	acked   uint32   // every segment below this is acknowledged
@@ -89,7 +92,8 @@ type stream struct {
 	err     error
 	closing bool // a Close is waiting for the last acknowledgements
 	closed  bool
-	heard   time.Time
+	heard   time.Time // when peer was last heard from
+	pinged  time.Time // when a keepalive was last sent
 
 	readDeadline, writeDeadline time.Time
 	done                        chan struct{}
@@ -127,10 +131,15 @@ func (s *stream) readLoop() {
 			continue
 		}
 		s.mu.Lock()
-		// Followed only to where a punch could go: a stranger holding the
-		// session id cannot point the stream at loopback or a group.
-		if (!ua.IP.Equal(s.peer.IP) || ua.Port != s.peer.Port) && punchable(ua.AddrPort()) {
-			s.peer = ua
+		switch {
+		case ua.IP.Equal(s.peer.IP) && ua.Port == s.peer.Port:
+			s.heard = time.Now()
+		case time.Since(s.heard) > followAfter && punchable(ua.AddrPort()):
+			// Where the session goes on once the peer's address went quiet,
+			// as when a NAT moved its mapping. The session id is in the
+			// clear, so a peer still heard is never left for another source.
+			s.peer, s.heard = ua, time.Now()
+			s.rto, s.last = 0, time.Time{} // what the old address lost goes again at once
 		}
 		s.handle(kind, seq, payload)
 		s.mu.Unlock()
@@ -139,7 +148,6 @@ func (s *stream) readLoop() {
 
 // handle takes one packet of the session, with s.mu held.
 func (s *stream) handle(kind byte, seq uint32, payload []byte) {
-	s.heard = time.Now()
 	switch kind {
 	case pktData:
 		s.receive(seq, payload)
@@ -249,9 +257,11 @@ func (s *stream) timerLoop() {
 				// stream at, it would otherwise be sent every tick for as
 				// long as the session lasts.
 				s.rto = min(2*max(s.rto, retransmitIn), maxRTO)
-			case now.Sub(s.last) > keepaliveIn:
+			case now.Sub(s.last) > keepaliveIn && now.Sub(s.pinged) > keepaliveIn:
+				// Its own time, not last's: a keepalive standing in for the
+				// resend would put that off for as long as the rto exceeds it.
 				s.send(pktPunch, 0, nil)
-				s.last = now
+				s.pinged = now
 			}
 			// Wakes waiters so they notice deadlines, which a condition
 			// variable cannot time out on by itself.

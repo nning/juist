@@ -10,13 +10,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowNetwork
+import org.robolectric.shadows.ShadowNetworkCapabilities
 
 @RunWith(RobolectricTestRunner::class)
 class UnderlayTest {
     private val used = mutableListOf<Network?>()
     private val changed = mutableListOf<String>()
-    private val follower = UnderlayFollower(use = { used += it }, changed = { changed += it })
+    private val metered = mutableListOf<Boolean>()
+    private val follower = UnderlayFollower(use = { used += it }, changed = { changed += it }, metered = { metered += it })
+
+    private fun capabilities(vararg c: Int) = ShadowNetworkCapabilities.newInstance().apply {
+        c.forEach { shadowOf(this).addCapability(it) }
+    }
 
     private fun link(name: String) = LinkProperties().apply { interfaceName = name }
 
@@ -49,5 +56,19 @@ class UnderlayTest {
         follower.onLost(wifi)
         assertEquals(listOf(wifi, null), used)
         assertEquals(listOf("wlan0", ""), changed)
+    }
+
+    @Test
+    fun saysWhetherTheNetworkInUseIsMetered() {
+        val wifi = ShadowNetwork.newInstance(100)
+        val cell = ShadowNetwork.newInstance(101)
+        follower.onAvailable(wifi)
+        follower.onCapabilitiesChanged(wifi, capabilities(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+        follower.onAvailable(cell)
+        follower.onCapabilitiesChanged(wifi, capabilities(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+        follower.onCapabilitiesChanged(cell, capabilities())
+        follower.onCapabilitiesChanged(cell, capabilities(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED))
+        follower.onLost(cell)
+        assertEquals(listOf(false, true, false, false), metered)
     }
 }

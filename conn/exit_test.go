@@ -385,6 +385,8 @@ type fixedRoutes []netip.Prefix
 
 func (f fixedRoutes) hostRoutes() []netip.Prefix { return f }
 
+func (fixedRoutes) watchHostRoutes(func()) {}
+
 // The manager says what its OS router reads of the host's routes, rather
 // than the attached networks alone.
 func TestTheManagerAsksItsRouterForTheHostsRoutes(t *testing.T) {

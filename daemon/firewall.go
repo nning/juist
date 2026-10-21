@@ -1,7 +1,5 @@
 package daemon
 
-import "context"
-
 // recheckFirewall asks the host firewall again, apart from the tunnel check
 // and without its probes, where a warning of it is up. One question runs at a
 // time.
@@ -16,16 +14,7 @@ func (d *Daemon) recheckFirewall() {
 	d.mu.Unlock()
 	go func() {
 		defer d.waits.done()
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() {
-			select {
-			case <-d.closed:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-		blocked, _ := d.firewalled(ctx, d.tunName, d.gossipPort)
+		blocked, _ := d.firewalled(d.ctx, d.tunName, d.gossipPort)
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		d.askingFirewall = false

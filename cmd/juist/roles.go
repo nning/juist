@@ -258,12 +258,7 @@ func (a *app) changeSubnet(state *log.State, target types.NodeRecord, subnets []
 
 func sortedPrefixes(ps []netip.Prefix) []netip.Prefix {
 	out := slices.Clone(ps)
-	slices.SortFunc(out, func(x, y netip.Prefix) int {
-		if c := x.Addr().Compare(y.Addr()); c != 0 {
-			return c
-		}
-		return x.Bits() - y.Bits()
-	})
+	slices.SortFunc(out, types.ComparePrefix)
 	return out
 }
 

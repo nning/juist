@@ -77,7 +77,9 @@ func TestNetnsExitNode(t *testing.T) {
 	for _, half := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
 		lab.runIn(client, "route", "add", half, "via", lab.gateway().String(), "dev", client.veth)
 	}
-	if err := client.ping(internet); err != nil {
+	// The routes may be the change that shows netmon the overlay's addresses,
+	// whose own messages it ignores: magicsock rebinds, and loses a second.
+	if err := client.pingUntil(internet, 10*time.Second); err != nil {
 		t.Errorf("with a hostile LAN's routes, the internet through the exit node: %v", err)
 	}
 	// Nor does a socket bound to the link.

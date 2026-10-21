@@ -599,14 +599,6 @@ func TestTheIngressLogsEachConnection(t *testing.T) {
 	l.find(t, `access: http 127.0.0.1:`, `"immich.pub.example.org" GET "/robots.txt?x=1" 308 "GPTBot/1.2 \"x\""`)
 }
 
-// An IPv4 client on a dual-stack listener is logged as IPv4.
-func TestAClientIsLoggedAsIPv4(t *testing.T) {
-	a := &net.TCPAddr{IP: net.ParseIP("::ffff:203.0.113.7"), Port: 51000}
-	if got := addrPort(a).String(); got != "203.0.113.7:51000" {
-		t.Errorf("logged as %s", got)
-	}
-}
-
 // A relay's name is handed on by TLS as a published name is, its client named
 // in a PROXY header, and is no name to redirect plain HTTP for.
 func TestTheIngressHandsARelaysNameOn(t *testing.T) {

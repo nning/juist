@@ -25,6 +25,7 @@ import (
 
 	"github.com/nning/juist/internal/pqtls"
 	"github.com/nning/juist/internal/underlay"
+	"github.com/nning/juist/types"
 )
 
 const (
@@ -33,7 +34,7 @@ const (
 	Upgrade   = "juist-invite-v1"
 
 	// Label starts what a registering host signs.
-	Label = "juist relay forward v1\x00"
+	Label = types.LabelRelayForward + "\x00"
 
 	// Waiting tells a host it is registered and waits for a guest; Joined
 	// tells both sides the other is on the line. To the host it is followed

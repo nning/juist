@@ -22,6 +22,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/dht/v2/krpc"
@@ -29,6 +30,7 @@ import (
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/aead"
 	"github.com/nning/juist/internal/keyring"
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -104,6 +106,11 @@ type Options struct {
 	// members this round; nil is always. It still publishes.
 	Seeks func() bool
 
+	// Joins, where set, reports whether this node takes part in the DHT
+	// this round, publishing and looking; nil is always. Ask is asked
+	// either way, and a node that never takes part never bootstraps.
+	Joins func() bool
+
 	// Bootstrap overrides the public DHT routers a fresh node starts from.
 	// Tests pass a private swarm's addresses.
 	Bootstrap []string
@@ -147,6 +154,7 @@ type Node struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	kick      chan struct{}
+	joined    atomic.Bool // in the last round
 
 	// published is what was last put, under which epoch and when; a round
 	// brought forward does not put the same announcement again.
@@ -208,11 +216,6 @@ func (n *Node) Run(ctx context.Context) {
 		}
 	}()
 
-	if n.store != nil {
-		if _, err := n.store.srv.Bootstrap(); err != nil {
-			n.opts.Logf("dht: bootstrap: %v", err)
-		}
-	}
 	t := time.NewTicker(n.interval)
 	defer t.Stop()
 	early := false
@@ -256,8 +259,14 @@ func (n *Node) Round(ctx context.Context) { n.round(ctx, false) }
 // puts this node's announcement only if it says something new. A round on
 // the interval always puts, so the item stays alive and freshly signed.
 func (n *Node) round(ctx context.Context, early bool) {
-	if err := n.publish(ctx, early); err != nil {
-		n.opts.Logf("dht: publishing this node's announcement: %v", err)
+	joins := n.opts.Joins == nil || n.opts.Joins()
+	if n.joined.Swap(joins) != joins && joins {
+		n.bootstrap()
+	}
+	if joins {
+		if err := n.publish(ctx, early); err != nil {
+			n.opts.Logf("dht: publishing this node's announcement: %v", err)
+		}
 	}
 	wanted := n.opts.Wanted()
 	if len(wanted) == 0 {
@@ -271,7 +280,7 @@ func (n *Node) round(ctx context.Context, early bool) {
 	if len(wanted) > MaxLookupsPerRound {
 		wanted = wanted[:MaxLookupsPerRound]
 	}
-	seeks := n.opts.Seeks == nil || n.opts.Seeks()
+	seeks := joins && (n.opts.Seeks == nil || n.opts.Seeks())
 	for _, id := range wanted {
 		if ctx.Err() != nil {
 			return
@@ -285,6 +294,17 @@ func (n *Node) round(ctx context.Context, early bool) {
 			continue
 		}
 		n.opts.OnPeer(e)
+	}
+}
+
+// bootstrap joins the public DHT, as this node takes part after a round it
+// did not: the routing table of one that stayed away is stale.
+func (n *Node) bootstrap() {
+	if n.store == nil {
+		return
+	}
+	if _, err := n.store.srv.Bootstrap(); err != nil {
+		n.opts.Logf("dht: bootstrap: %v", err)
 	}
 }
 
@@ -402,7 +422,8 @@ func sealAnnouncement(s secrets.Secret, epoch uint64, e gossip.Endpoint) ([]byte
 }
 
 // openAnnouncement opens and verifies an announcement published under epoch.
-func openAnnouncement(kr *keyring.Keyring, epoch uint64, blob []byte) (gossip.Endpoint, error) {
+func openAnnouncement(kr *keyring.Keyring, epoch uint64, blob []byte) (_ gossip.Endpoint, err error) {
+	defer malformed.Recover(&err)
 	s, ok := kr.Secret(epoch)
 	if !ok {
 		return gossip.Endpoint{}, fmt.Errorf("dht: no secret for epoch %d", epoch)

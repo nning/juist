@@ -198,7 +198,24 @@ func (d *Daemon) seeksInDHT() bool {
 		return true
 	}
 	for id, live := range *r {
-		if live && id.Compare(d.self) < 0 {
+		if live && id.Compare(d.self) < 0 && !d.peerRests(id) {
+			return false
+		}
+	}
+	return true
+}
+
+// joinsDHT reports whether a device that rests takes part in the public DHT:
+// not before its first check, nor while a member that does not rest answers
+// it, which publishes and looks there itself and hands on by gossip what
+// this device announces and finds.
+func (d *Daemon) joinsDHT() bool {
+	r := d.reachable.Load()
+	if r == nil {
+		return false
+	}
+	for id, live := range *r {
+		if live && !d.peerRests(id) {
 			return false
 		}
 	}

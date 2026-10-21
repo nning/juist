@@ -71,19 +71,6 @@ func ParseHash(s string) (Hash, error) {
 	return h, err
 }
 
-// Domain-separation labels, so no digest can be reinterpreted as one of a
-// different kind. A change in what is hashed under a label is a new label,
-// never a redefinition.
-const (
-	labelAUM         = "juist/aum/v1"
-	labelAUMSig      = "juist/aum-sig/v1"
-	labelAddr6       = "juist/addr6/v1"
-	labelULA         = "juist/ula/v1"
-	labelDisablement = "juist/disablement/v1"
-	labelEpochCommit = "juist/epoch-commit/v1"
-	labelLease       = "juist/lease/v1"
-)
-
 // errNULInLabel guards the invariant hashLabeled relies on.
 var errNULInLabel = errors.New("types: domain-separation label contains NUL")
 

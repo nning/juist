@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -93,6 +94,85 @@ func dropTo(name string) error {
 	return nil
 }
 
+// A child is this program run again as another user beside a parent that
+// stays root: the two hold a socket between them, and the child a lifeline
+// that ends with the parent.
+type child struct {
+	cmd      *exec.Cmd
+	conn     *net.UnixConn
+	held     *os.File // the parent's end of the lifeline
+	stopping atomic.Bool
+	// unwatch stops passing this process's stops on.
+	unwatch func()
+}
+
+// startChild runs args as cred, what root holds kept from it, with a socket
+// of sockType to this process on its descriptor 3, the lifeline on 4, env
+// added to [daemonEnv]'s and its output on out and errOut; what names the
+// child in an error. Each signal that stops this process, from before the
+// child starts, is passed on to it as as maps it. The caller closes c.held
+// and calls c.unwatch once done with the child.
+func startChild(args []string, cred *syscall.Credential, sockType int, env []string, out, errOut io.Writer,
+	what string, as func(os.Signal) os.Signal) (*child, error) {
+	// What root was started holding stays with root.
+	for fd := 3; fd < 1024; fd++ {
+		syscall.CloseOnExec(fd)
+	}
+	fds, err := socketpair(sockType)
+	if err != nil {
+		return nil, err
+	}
+	parentEnd, childEnd := os.NewFile(uintptr(fds[0]), "parent"), os.NewFile(uintptr(fds[1]), "child")
+	defer childEnd.Close()
+	defer parentEnd.Close()
+	// Orphaned, the child would hold on to what it was given for the next.
+	lifeline, held, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	defer lifeline.Close()
+	self, err := os.Executable()
+	if err != nil {
+		held.Close()
+		return nil, err
+	}
+	cmd := exec.Command(self, args...)
+	// Pipes, not root's terminal, which the child could read or type into,
+	// and a session of its own, which the terminal is none of.
+	cmd.Stdout, cmd.Stderr = struct{ io.Writer }{out}, struct{ io.Writer }{errOut}
+	cmd.ExtraFiles = []*os.File{childEnd, lifeline}
+	cmd.Env = append(daemonEnv(os.Environ()), env...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred, Setsid: true}
+	sigs := make(chan os.Signal, 4)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	if err := cmd.Start(); err != nil {
+		signal.Stop(sigs)
+		held.Close()
+		return nil, fmt.Errorf("starting %s: %w", what, err)
+	}
+	conn, err := net.FileConn(parentEnd)
+	if err != nil {
+		signal.Stop(sigs)
+		cmd.Process.Kill()
+		held.Close()
+		return nil, err
+	}
+	c := &child{cmd: cmd, conn: conn.(*net.UnixConn), held: held, unwatch: func() { signal.Stop(sigs) }}
+	go func() {
+		for s := range sigs {
+			c.stop(as(s))
+		}
+	}()
+	return c, nil
+}
+
+// stop passes s on to the child, and kills it past [stopWait].
+func (c *child) stop(s os.Signal) {
+	c.stopping.Store(true)
+	c.cmd.Process.Signal(s)
+	time.AfterFunc(stopWait, func() { c.cmd.Process.Kill() })
+}
+
 // runBinder, started as root, runs args again as the helper user name, and
 // stays root to listen for it by bind, which refuses what it may not.
 func runBinder(ctx context.Context, args []string, name string, bind func(context.Context, string) (*os.File, error),
@@ -101,55 +181,35 @@ func runBinder(ctx context.Context, args []string, name string, bind func(contex
 	if err != nil {
 		return err
 	}
-	// What root was started holding stays with root.
-	for fd := 3; fd < 1024; fd++ {
-		syscall.CloseOnExec(fd)
-	}
 	// One message to each request and each answer.
-	fds, err := socketpair(unix.SOCK_SEQPACKET)
+	c, err := startChild(args, cred, unix.SOCK_SEQPACKET, []string{envBinder + "=3", envBinderLifeline + "=4"},
+		errOut, errOut, "the helper as "+name, func(os.Signal) os.Signal { return syscall.SIGTERM })
 	if err != nil {
 		return err
 	}
-	parentEnd, childEnd := os.NewFile(uintptr(fds[0]), "binder"), os.NewFile(uintptr(fds[1]), "helper")
-	// Orphaned, the helper would keep its listeners from the next.
-	lifeline, held, err := os.Pipe()
-	if err != nil {
+	defer c.held.Close()
+	defer c.unwatch()
+	defer c.conn.Close()
+	go serveBinds(ctx, c.conn, bind)
+	context.AfterFunc(ctx, func() {
+		c.stopping.Store(true)
+		c.cmd.Process.Signal(syscall.SIGTERM)
+	})
+	return stoppedAsAsked(c.cmd.Wait(), c.stopping.Load())
+}
+
+// stoppedAsAsked is err, a child's exit, but nil where the child died of a
+// stop it was asked to make: one that came before its handler did.
+func stoppedAsAsked(err error, asked bool) error {
+	var exit *exec.ExitError
+	if !asked || !errors.As(err, &exit) {
 		return err
 	}
-	defer held.Close()
-	self, err := os.Executable()
-	if err != nil {
-		return err
+	if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() &&
+		(ws.Signal() == syscall.SIGTERM || ws.Signal() == syscall.SIGINT) {
+		return nil
 	}
-	cmd := exec.Command(self, args...)
-	cmd.Stdout, cmd.Stderr = struct{ io.Writer }{errOut}, struct{ io.Writer }{errOut}
-	cmd.ExtraFiles = []*os.File{childEnd, lifeline}
-	cmd.Env = append(daemonEnv(os.Environ()), envBinder+"=3", envBinderLifeline+"=4")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred, Setsid: true}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting the helper as %s: %w", name, err)
-	}
-	childEnd.Close()
-	lifeline.Close()
-	c, err := net.FileConn(parentEnd)
-	parentEnd.Close()
-	if err != nil {
-		cmd.Process.Kill()
-		return err
-	}
-	defer c.Close()
-	go serveBinds(ctx, c.(*net.UnixConn), bind)
-	sigs := make(chan os.Signal, 4)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(sigs)
-	go func() {
-		for range sigs {
-			cmd.Process.Signal(syscall.SIGTERM)
-			time.AfterFunc(stopWait, func() { cmd.Process.Kill() })
-		}
-	}()
-	context.AfterFunc(ctx, func() { cmd.Process.Signal(syscall.SIGTERM) })
-	return cmd.Wait()
+	return err
 }
 
 // stopWait is how long a process told to stop has before it is killed.
@@ -355,13 +415,13 @@ func (b *binder) bound(addr string) (*os.File, error) {
 	if _, err := b.c.Write([]byte(addr)); err != nil {
 		return nil, err
 	}
-	buf, oob := make([]byte, maxBindMessage), make([]byte, unix.CmsgSpace(4))
+	buf, oob := make([]byte, maxBindMessage), make([]byte, unix.CmsgSpace(8*4)) // room for extras, to be closed
 	for {
-		n, oobn, _, _, err := b.c.ReadMsgUnix(buf, oob)
+		n, oobn, flags, _, err := b.c.ReadMsgUnix(buf, oob)
 		if err != nil {
 			return nil, err
 		}
-		f := receivedFile(oob[:oobn], addr)
+		f := receivedFile(oob[:oobn], flags, addr)
 		code, rest, _ := strings.Cut(string(buf[:n]), " ")
 		answered, msg, _ := strings.Cut(rest, " ")
 		if answered != addr {
@@ -387,17 +447,14 @@ func (b *binder) bound(addr string) (*os.File, error) {
 	}
 }
 
-// receivedFile is the descriptor oob carries, nil for none.
-func receivedFile(oob []byte, name string) *os.File {
-	msgs, err := unix.ParseSocketControlMessage(oob)
-	if err != nil || len(msgs) != 1 {
+// receivedFile is the descriptor oob carries, nil for none; see
+// [plumber.ReceivedFD].
+func receivedFile(oob []byte, flags int, name string) *os.File {
+	fd, err := plumber.ReceivedFD(oob, flags)
+	if err != nil {
 		return nil
 	}
-	fds, err := unix.ParseUnixRights(&msgs[0])
-	if err != nil || len(fds) != 1 {
-		return nil
-	}
-	return os.NewFile(uintptr(fds[0]), name)
+	return os.NewFile(uintptr(fd), name)
 }
 
 // inheritedFD is the descriptor env names, -1 for none.

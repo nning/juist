@@ -1,10 +1,15 @@
 package conn
 
 import (
+	"net"
 	"net/netip"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
+
+	"tailscale.com/net/netmon"
 )
 
 func testRelay() Relay {
@@ -287,13 +292,13 @@ func TestSTUNServersNeverBecomeRelays(t *testing.T) {
 	if dm.Regions[MaxRegionID].Nodes[0].STUNOnly {
 		t.Fatal("a STUN server took a member relay's region")
 	}
-	if len(stunRegions) != 2 {
-		t.Fatalf("STUN regions %v", stunRegions)
+	if len(stunRegions) != 1 {
+		t.Fatalf("STUN regions %v, want one for both servers", stunRegions)
 	}
 	for id := range stunRegions {
 		reg := dm.Regions[id]
-		if len(reg.Nodes) != 1 || !reg.Nodes[0].STUNOnly || reg.Nodes[0].DERPPort != 0 {
-			t.Errorf("region %d is not a STUN-only node: %+v", id, reg.Nodes)
+		if len(reg.Nodes) != 2 || !reg.Nodes[0].STUNOnly || !reg.Nodes[1].STUNOnly || reg.Nodes[0].DERPPort != 0 {
+			t.Errorf("region %d is not the STUN-only nodes: %+v", id, reg.Nodes)
 		}
 		if dm.HomeParams.RegionScore[id] < 1000 {
 			t.Errorf("region %d could win the home relay on latency", id)
@@ -333,5 +338,52 @@ func TestARelayNameIsAPublicName(t *testing.T) {
 		if validRelayName(name) {
 			t.Errorf("%s taken", name)
 		}
+	}
+}
+
+// TestHostScannersReadTheAppsInterfaces: on Android only the app's own
+// interface lister works, so the relay order and an exit node's networks must
+// come from netmon's. Run apart, as the lister is the process's.
+func TestHostScannersReadTheAppsInterfaces(t *testing.T) {
+	if os.Getenv("JUIST_TEST_APP_INTERFACES") == "" {
+		cmd := exec.Command(os.Args[0], "-test.run", "^TestHostScannersReadTheAppsInterfaces$", "-test.count", "1")
+		cmd.Env = append(os.Environ(), "JUIST_TEST_APP_INTERFACES=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return
+	}
+	ifc := func(name string, flags net.Flags, addrs ...string) netmon.Interface {
+		var as []net.Addr
+		for _, a := range addrs {
+			p := netip.MustParsePrefix(a)
+			as = append(as, &net.IPNet{IP: p.Addr().AsSlice(), Mask: net.CIDRMask(p.Bits(), p.Addr().BitLen())})
+		}
+		return netmon.Interface{Interface: &net.Interface{Index: 9000, Name: name, Flags: flags}, AltAddrs: as}
+	}
+	up := net.FlagUp | net.FlagRunning
+	netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) {
+		return []netmon.Interface{
+			ifc("phonelo", up|net.FlagLoopback, "127.0.0.1/8"),
+			ifc("phonewlan", up, "192.168.77.23/24"),
+			ifc("phonedown", 0, "10.77.0.5/16"),
+			ifc("juist77", up, "100.77.0.1/32", "fd77::1/64"),
+		}, nil
+	})
+	pfx := func(ss ...string) (out []netip.Prefix) {
+		for _, s := range ss {
+			out = append(out, netip.MustParsePrefix(s))
+		}
+		return out
+	}
+	if got, want := hostNetworks("juist77"), pfx("127.0.0.1/8", "192.168.77.23/24"); !slices.Equal(got, want) {
+		t.Errorf("hostNetworks = %v, want %v", got, want)
+	}
+	nets, hosts := attached("juist77")
+	if want := pfx("192.168.77.0/24", "10.77.0.0/16"); !slices.Equal(nets, want) {
+		t.Errorf("attached's networks = %v, want %v", nets, want)
+	}
+	if want := []netip.Addr{netip.MustParseAddr("192.168.77.23"), netip.MustParseAddr("10.77.0.5")}; !slices.Equal(hosts, want) {
+		t.Errorf("attached's hosts = %v, want %v", hosts, want)
 	}
 }

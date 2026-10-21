@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/admit"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
@@ -691,6 +693,140 @@ func TestNotePeerRefusesFormerMembers(t *testing.T) {
 	}
 }
 
+// TestSilentConnectionsOfOneHostShareItsBudget: connections from many
+// addresses of one IPv6 /64 off the overlay, as a listener on the underlay
+// takes them, are held to the budget of one source, the oldest closed past
+// it; overlay addresses in one /64, each a member's own, keep one each.
+func TestSilentConnectionsOfOneHostShareItsBudget(t *testing.T) {
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := netip.MustParsePrefix("fd00:1:2::/48")
+	a := newTestNodeTimeout(t, types.Hash{1}, 1, s, 2*time.Second, func(o *Options) { o.Overlay = overlay })
+	for _, tc := range []struct {
+		name, format string
+		closed       int
+	}{
+		{"one /64 off the overlay", "2001:db8:1:2::%x", 2},
+		{"one /64 of the overlay", "fd00:1:2:3::%x", 0},
+	} {
+		var conns []net.Conn
+		var tickets []*admit.Ticket[netip.Prefix]
+		for i := range maxUnauthPerSource + 2 {
+			c, peer := net.Pipe()
+			t.Cleanup(func() { c.Close(); peer.Close() })
+			from := &net.TCPAddr{IP: net.ParseIP(fmt.Sprintf(tc.format, i+1)), Port: 1}
+			conns = append(conns, remoteConn{c, from})
+			tickets = append(tickets, a.node.admitSilent(conns[i]))
+		}
+		for i, c := range conns {
+			closed := c.SetDeadline(time.Time{}) != nil
+			if want := i < tc.closed; closed != want {
+				t.Errorf("%s: silent connection %d closed %v, want %v", tc.name, i, closed, want)
+			}
+		}
+		for _, tk := range tickets {
+			tk.Release()
+		}
+	}
+}
+
+// TestAFloodOfSilentConnectionsClosesItsOwn: a member's connection still
+// silent, as one whose hello waits on a round trip, outlasts floods past the
+// total from one /56 and from three hosts of three sites.
+func TestAFloodOfSilentConnectionsClosesItsOwn(t *testing.T) {
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestNodeTimeout(t, types.Hash{1}, 1, s, 2*time.Second)
+	pipe := func(ip string) net.Conn {
+		c, peer := net.Pipe()
+		t.Cleanup(func() { c.Close(); peer.Close() })
+		return remoteConn{c, &net.TCPAddr{IP: net.ParseIP(ip), Port: 1}}
+	}
+	for name, flood := range map[string]func(i int) string{
+		"one /56":     func(i int) string { return fmt.Sprintf("2001:db8:1:2%02x::%x", i/3, i%3+1) },
+		"three sites": func(i int) string { return []string{"192.0.2.1", "203.0.113.1", "2001:db8:5::1"}[i%3] },
+	} {
+		member := pipe("198.51.100.7")
+		tickets := []*admit.Ticket[netip.Prefix]{a.node.admitSilent(member)}
+		for i := range 4 * maxUnauth {
+			tickets = append(tickets, a.node.admitSilent(pipe(flood(i))))
+		}
+		if member.SetDeadline(time.Time{}) != nil {
+			t.Errorf("%s: the member's silent connection was closed", name)
+		}
+		for _, tk := range tickets {
+			tk.Release()
+		}
+	}
+}
+
+// TestSilentConnectionsFromOneGroupLeaveAMemberASlot: silent connections
+// spread over the /64s of one /56 hold at most half the inbound slots, the
+// oldest giving way, so a member still gets a session.
+func TestSilentConnectionsFromOneGroupLeaveAMemberASlot(t *testing.T) {
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spoofed atomic.Int32
+	spoofed.Store(2 * maxInboundSessions)
+	a := newTestNodeTimeout(t, types.Hash{1}, 1, s, time.Minute, func(o *Options) {
+		o.Listener = spoofingListener{o.Listener, &spoofed}
+	})
+	addr := loopbackFor(a.real).String()
+	for range spoofed.Load() {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatalf("dialing: %v", err)
+		}
+		t.Cleanup(func() { c.Close() })
+	}
+	// Before the hello timeout could be what frees the slots.
+	for deadline := time.Now().Add(helloTimeout / 2); spoofed.Load() > 0 || len(a.node.slots) > maxUnauth; {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d left to accept, %d slots held by silent connections", spoofed.Load(), len(a.node.slots))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	b := newTestNode(t, types.Hash{1}, 1, s)
+	t.Cleanup(func() { b.node.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := b.node.SyncWith(ctx, a.real, a.id); err != nil {
+		t.Fatalf("a member was refused while one /56 held silent connections: %v", err)
+	}
+}
+
+// spoofingListener gives the next n connections it accepts addresses of one
+// IPv6 /56, three to each /64.
+type spoofingListener struct {
+	net.Listener
+	n *atomic.Int32
+}
+
+func (l spoofingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	if i := l.n.Add(-1); i >= 0 {
+		return remoteConn{c, &net.TCPAddr{IP: net.ParseIP(fmt.Sprintf("2001:db8:1:2%02x::%x", i/3, i%3+1)), Port: 1}}, nil
+	}
+	return c, nil
+}
+
+// remoteConn is a net.Conn from remote.
+type remoteConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c remoteConn) RemoteAddr() net.Addr { return c.remote }
+
 // TestSilentConnectionsCannotHoldEveryInboundSlot: a peer that opens
 // connections and says nothing must not be able to shut inbound sync down for
 // the mesh. The budget is per source address and covers only connections that
@@ -727,12 +863,16 @@ func TestSilentConnectionsCannotHoldEveryInboundSlot(t *testing.T) {
 	// taken and is refused, which is the retry path, not the one under test.
 	silent, peak := 0, 0
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
-		silent = a.node.silent.Count(netip.MustParseAddr("127.0.0.1"))
+		silent = a.node.silent.Count(admit.Host(netip.MustParseAddr("127.0.0.1")))
 		peak = max(peak, silent)
 		if peak >= maxUnauthPerSource && silent <= maxUnauthPerSource && len(a.node.slots) <= silent {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if peak < maxUnauthPerSource {
+		t.Fatalf("one address was counted holding %d unauthenticated connections at most, "+
+			"so the cap was never reached", peak)
 	}
 	if silent > maxUnauthPerSource {
 		t.Fatalf("one address holds %d unauthenticated connections, over the %d cap",
@@ -850,4 +990,49 @@ func TestPushToHandsOverRecordsNotApplied(t *testing.T) {
 	if err := a.node.PushTo(t.Context(), types.Identity{7}, [][]byte{raw}); err == nil {
 		t.Fatal("a push to a member with no announcement succeeded")
 	}
+}
+
+// A session that brings announcements and no records says so through
+// OnAnnounced, whatever in them is new.
+func TestAnnouncementsAloneAreAnnouncedNotRecords(t *testing.T) {
+	s, err := secrets.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records, announced atomic.Int32
+	a := newTestNode(t, types.Hash{1}, 1, s)
+	b := newTestNodeTimeout(t, types.Hash{1}, 1, s, 2*time.Second, func(o *Options) {
+		o.OnRecords = func() { records.Add(1) }
+		o.OnAnnounced = func() { announced.Add(1) }
+	})
+	x, xpriv := testEndpoint(t)
+	relay := func(change func(*Endpoint)) {
+		t.Helper()
+		change(&x)
+		x.Seq++
+		if err := x.Sign(xpriv); err != nil {
+			t.Fatal(err)
+		}
+		if a.cache.Added(x) == Unchanged {
+			t.Fatal("not cached")
+		}
+		if err := a.node.SyncWith(t.Context(), b.addr(), types.Identity{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settled := func(r, n int32) {
+		t.Helper()
+		// The responder takes what it heard after it answered.
+		for deadline := time.Now().Add(5 * time.Second); records.Load() != r || announced.Load() != n; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("OnRecords %d and OnAnnounced %d times, want %d and %d", records.Load(), announced.Load(), r, n)
+			}
+		}
+	}
+	relay(func(*Endpoint) {})
+	settled(0, 1)
+	relay(func(e *Endpoint) { e.Addrs = []netip.AddrPort{netip.MustParseAddrPort("198.51.100.9:41641")} })
+	settled(0, 2)
+	relay(func(e *Endpoint) { e.Disco = DiscoKey{4} })
+	settled(0, 3)
 }

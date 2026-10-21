@@ -44,7 +44,7 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 		CmdPublish:   {ServePublished: &on},
 		CmdPublished: {},
 		CmdServing:   {},
-		CmdStatus:    {}, CmdBootstrap: {}, CmdLog: {}, CmdSelf: {}, CmdUnstage: {}, CmdRotate: {}, CmdReset: {},
+		CmdStatus:    {}, CmdLog: {}, CmdSelf: {}, CmdUnstage: {}, CmdRotate: {}, CmdReset: {},
 		CmdWaiting:     {},
 		CmdExit:        {ExitOff: true},
 		CmdInform:      {Records: [][]byte{{1}}},
@@ -53,10 +53,10 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 		CmdSetOperator: {SetOperator: true},
 		CmdInvite:      {Offer: &InviteOffer{Expires: 60}},
 		CmdInviteReply: {Reply: &InviteReply{Refused: "no"}},
-		cmdInvalid:     {}, Command(16): {}, Command(200): {},
+		cmdInvalid:     {}, Command(3): {}, Command(16): {}, Command(200): {},
 	}
 	accepts := map[Command][]string{
-		CmdStatus: {"Probe"}, CmdLog: {"Orphans"}, CmdRotate: {"Identity"}, CmdReset: {"Force"},
+		CmdLog: {"Orphans"}, CmdRotate: {"Identity"}, CmdReset: {"Force"},
 		CmdInform: {"Records"}, CmdCreate: {"SetOperator"}, CmdJoin: {"Invite", "Name", "SetOperator"},
 		CmdSetOperator: {"SetOperator", "OperatorUID"}, CmdInvite: {"Offer"}, CmdInviteReply: {"Reply"},
 		CmdWaiting: {"Waiting"}, CmdExit: {"ExitOff"}, CmdNames: {"AcceptNames"}, CmdPublish: {"ServePublished"},
@@ -71,7 +71,6 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 		"Offer":          func(r *Request) { r.Offer = &InviteOffer{Expires: 60} },
 		"Reply":          func(r *Request) { r.Reply = &InviteReply{Refused: "no"} },
 		"Orphans":        func(r *Request) { r.Orphans = true },
-		"Probe":          func(r *Request) { r.Probe = true },
 		"Force":          func(r *Request) { r.Force = true },
 		"Waiting":        func(r *Request) { r.Waiting = append(r.Waiting, []byte{3}) },
 		"ExitOff":        func(r *Request) { r.ExitOff = true },
@@ -81,7 +80,7 @@ func TestEachCommandTakesItsOwnFields(t *testing.T) {
 	}
 	for cmd, req := range base {
 		req.Command = cmd
-		valid := cmd >= CmdStatus && cmd <= CmdExit || cmd == CmdNames || cmd == CmdPublish || cmd == CmdPublished || cmd == CmdServing
+		valid := cmd >= CmdStatus && cmd <= CmdExit && cmd != 3 || cmd == CmdNames || cmd == CmdPublish || cmd == CmdPublished || cmd == CmdServing
 		if err := req.validate(); (err == nil) != valid {
 			t.Errorf("%v alone: %v", cmd, err)
 		}

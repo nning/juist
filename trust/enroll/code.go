@@ -132,7 +132,7 @@ func (c Code) password() []byte {
 // sees the guest's nonce: one try at 32 bits on either screen, not a search.
 func Fingerprint(salt Salt, nonce Nonce, req *JoinRequest) string {
 	h := sha256.New()
-	h.Write([]byte("juist device words v3\x00"))
+	h.Write([]byte(types.LabelDeviceWords + "\x00"))
 	h.Write(salt[:])
 	h.Write(nonce[:])
 	h.Write(req.Identity[:])
@@ -241,7 +241,7 @@ func (l Link) WithRelays(relays []netip.AddrPort, named []string) Link {
 // the guest asks for. It is derived from the secret one way, so the relay,
 // which sees it, learns nothing it could use against the handshake.
 func (l Link) ForwardID() [16]byte {
-	k, err := hkdf.Key(sha256.New, l.secret[:], nil, "juist invite forward v1", 16)
+	k, err := hkdf.Key(sha256.New, l.secret[:], nil, types.LabelInviteForward, 16)
 	if err != nil {
 		panic(err) // a 16-byte SHA-256 HKDF output cannot fail
 	}
@@ -264,7 +264,7 @@ const fingerprintLen = 16
 // SigningFingerprint names a signing key in a link: long enough that no
 // other key is found to match it, short enough to copy.
 func SigningFingerprint(k *types.SigningKey) [fingerprintLen]byte {
-	sum := sha256.Sum256(append([]byte("juist link signing key v1\x00"), k[:]...))
+	sum := sha256.Sum256(append([]byte(types.LabelLinkSigningKey+"\x00"), k[:]...))
 	return [fingerprintLen]byte(sum[:fingerprintLen])
 }
 
@@ -380,7 +380,7 @@ func ParseLink(s string) (Link, error) {
 // and none of them is the password.
 func (l Link) RendezvousKeys() (host, guest, seal [32]byte) {
 	derive := func(label string) (out [32]byte) {
-		k, err := hkdf.Key(sha256.New, l.secret[:], nil, "juist invite rendezvous v1 "+label, 32)
+		k, err := hkdf.Key(sha256.New, l.secret[:], nil, types.LabelInviteRendezvous+label, 32)
 		if err != nil {
 			panic(err) // a 32-byte SHA-256 HKDF output cannot fail
 		}

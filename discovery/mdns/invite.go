@@ -15,6 +15,8 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/netmon"
+
+	"github.com/nning/juist/internal/malformed"
 )
 
 // Invites are found on the LAN by their nameplate, the number a typed code
@@ -289,6 +291,7 @@ func collectHosts(m map[string][]netip.AddrPort) []InviteHost {
 }
 
 func parseInviteAnswer(raw []byte, name dnsmessage.Name) (id string, port uint16, ok bool) {
+	defer malformed.RecoverOK(&ok)
 	var p dnsmessage.Parser
 	if h, err := p.Start(raw); err != nil || !h.Response {
 		return "", 0, false

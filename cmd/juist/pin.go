@@ -15,31 +15,16 @@ import (
 	"github.com/fxamacker/cbor/v2"
 
 	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
-// The keystore's own anchor on each network it has seen through a daemon.
-//
-// The daemon is the less trusted side of the socket, and without an anchor
-// of its own the CLI could only check that the log a daemon hands it is
-// consistent in itself. A compromised juistd could then answer with a
-// counterfeit: a checkpoint signed by keys of its own that claims the real
-// network's genesis hash, or a network of its own altogether. The admin
-// would approve against it, and a device invited from it would be anchored
-// in it for good.
-//
-// So the keystore remembers, per network, the head it last verified, and per
-// daemon socket which network it held. A later log must contain that head or
-// a copy of it, its content under other signatures — or, if the head lost
-// fork choice since, as it does to a concurrent
-// removal, the daemon must hand over the branch it lost on, and this side's
-// own fork choice over the chain and that branch must pick the same winner.
-// A daemon that truncated the log to an older head fails that: the later
-// history it left out would win. A daemon that turns up holding another
-// network is refused until the person says so, by deleting the file that
-// names the old one.
+// pinsDir holds the keystore's own anchor, per network the head it last
+// verified and per daemon socket the network it held, which a later log from
+// the less trusted daemon must continue; docs/11-enrollment-and-freshness-notes.md
+// says how.
 const pinsDir = "networks"
 
 // A pin is what the keystore last verified of one network.
@@ -165,10 +150,10 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 	if err := h.pinsReady(); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(h.pinPath(genesis), b); err != nil {
+	if err := statedir.WriteFilePrivate(h.pinPath(genesis), b); err != nil {
 		return err
 	}
-	return writeFileAtomic(dpath, []byte(fmt.Sprintf("%x\n", genesis[:])))
+	return statedir.WriteFilePrivate(dpath, []byte(fmt.Sprintf("%x\n", genesis[:])))
 }
 
 // standsIn reports whether cp, the checkpoint juistd's log starts from, stands
@@ -323,22 +308,16 @@ func (h *home) expectNetwork(sock string, genesis types.Hash) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(h.pinPath(genesis), b); err != nil {
+	if err := statedir.WriteFilePrivate(h.pinPath(genesis), b); err != nil {
 		return err
 	}
-	return writeFileAtomic(h.daemonPinPath(sock), []byte(fmt.Sprintf("%x\n", genesis[:])))
+	return statedir.WriteFilePrivate(h.daemonPinPath(sock), []byte(fmt.Sprintf("%x\n", genesis[:])))
 }
 
 // expectAdmitted is [home.expectNetwork] for a join by a link that names its
-// admin: the log the daemon at sock hands back is held to the network, and
-// to a head on it, that the admin signed this device's admission into.
-// Otherwise the first log would be trusted on sight, and a juistd
-// compromised before it could have the keystore anchor a network of its own,
-// in which its admins' signatures would then admit whoever it liked.
-//
-// A pin this keystore already holds for the network stays: it was verified
-// here, and may be later than the admission. held fetches the daemon's
-// records, among which the admitted head's content is looked up.
+// admin: the first log the daemon at sock hands back is held to the network
+// and head the admin signed this device's admission into, not trusted on
+// sight. A pin already held stays; held fetches the daemon's records.
 func (h *home) expectAdmitted(sock string, link enroll.Link, a *enroll.Admission, self types.Identity,
 	held func() ([]types.AUM, error)) error {
 	// The admission is of this device: an older one of another device by the
@@ -365,11 +344,11 @@ func (h *home) expectAdmitted(sock string, link enroll.Link, a *enroll.Admission
 		if err != nil {
 			return err
 		}
-		if err := writeFileAtomic(h.pinPath(a.Network), b); err != nil {
+		if err := statedir.WriteFilePrivate(h.pinPath(a.Network), b); err != nil {
 			return err
 		}
 	}
-	return writeFileAtomic(h.daemonPinPath(sock), []byte(fmt.Sprintf("%x\n", a.Network[:])))
+	return statedir.WriteFilePrivate(h.daemonPinPath(sock), []byte(fmt.Sprintf("%x\n", a.Network[:])))
 }
 
 // lostForkChoice reports whether head is on a branch that fork choice, run
@@ -435,30 +414,6 @@ func parentsFirst(chain, records []types.AUM) []types.AUM {
 		}
 	}
 	return out
-}
-
-// writeFileAtomic writes a small file owner-only through a fresh temporary
-// file and a rename.
-func writeFileAtomic(path string, b []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(b)
-	if err == nil {
-		err = f.Sync()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return err
-	}
-	if err := os.Rename(f.Name(), path); err != nil {
-		return errors.Join(err, os.Remove(f.Name()))
-	}
-	return keys.SyncDir(filepath.Dir(path))
 }
 
 func short(s string) string {

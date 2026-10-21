@@ -3,6 +3,8 @@ package types
 import (
 	"errors"
 	"fmt"
+
+	"github.com/nning/juist/internal/malformed"
 )
 
 // A Lease is an admin device's signed statement that, at Issued, its log's
@@ -39,7 +41,7 @@ const MaxLeaseSize = 4096
 func (l *Lease) sigHash() Hash {
 	unsigned := *l
 	unsigned.Sig, unsigned.MLDSA = Sig{}, nil
-	return hashLabeled(labelLease, mustEncode(&unsigned))
+	return hashLabeled(LabelLease, mustEncode(&unsigned))
 }
 
 // Sign signs the lease with the signer's identity key, by Ed25519 and
@@ -82,11 +84,12 @@ func (l *Lease) Verify() error {
 func (l *Lease) Encode() ([]byte, error) { return encode(l) }
 
 // DecodeLease decodes a lease and checks its shape and signature.
-func DecodeLease(b []byte) (Lease, error) {
+func DecodeLease(b []byte) (_ Lease, err error) {
+	defer malformed.Recover(&err)
 	if len(b) > MaxLeaseSize {
 		return Lease{}, fmt.Errorf("types: a lease is %d bytes, over the %d limit", len(b), MaxLeaseSize)
 	}
-	l, err := decodeCanonical[Lease](b)
+	l, err := DecodeCanonical[Lease](decMode, b, MaxRecordSize)
 	if err != nil {
 		return Lease{}, err
 	}

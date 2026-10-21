@@ -171,14 +171,15 @@ unterscheidet sich in drei Punkten:
 Jede Änderung, etwa „nas aufnehmen“, ist ein Eintrag. Er enthält den Hash
 des vorigen Eintrags und gilt erst, wenn genug Admins ihn mit ihren
 [ML-DSA-44](https://doi.org/10.6028/NIST.FIPS.204)-Schlüsseln signiert
-haben, die auch ein Quantencomputer nicht fälschen kann. Jedes Gerät geht
-das Log vom ersten Eintrag des Netzes an durch und prüft jede Signatur
-selbst.
+haben, die auch ein Quantencomputer nicht fälschen kann. Jedes Gerät prüft
+jede Signatur selbst, vom ersten Eintrag des Netzes an oder ab einem
+Checkpoint, den ein Quorum von Admins signiert hat.
 
 Entstehen Änderungen gleichzeitig auf verschiedenen Geräten, bringt jedes
 Gerät sie auf dieselbe Weise in eine Reihenfolge. Widersprechen sich zwei
-Änderungen, löst juist das nie stillschweigend auf, mit einer Ausnahme: Das
-Entfernen hat Vorrang. Gibt es einen echten Fork, also zwei Verläufe, die sich
+Änderungen, löst juist das nie stillschweigend auf, mit einer Ausnahme: Eine
+Änderung, die Befugnisse entzieht, etwa das Entfernen eines Geräts, hat
+Vorrang. Gibt es einen echten Fork, also zwei Verläufe, die sich
 nicht einig sind, wer Mitglied ist, schlägt juist Alarm, und ein Admin muss
 ihn auflösen.
 

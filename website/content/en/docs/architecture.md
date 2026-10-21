@@ -156,12 +156,14 @@ three ways:
 Each change, such as "admit nas", is a record. It contains the hash of the
 record before it, and it counts only once enough admins have signed it with
 their [ML-DSA-44](https://doi.org/10.6028/NIST.FIPS.204) keys, which a
-quantum computer cannot forge either. Every device replays the log from the
-network's first record and checks each signature itself.
+quantum computer cannot forge either. Every device checks each signature
+itself, from the network's first record or from a checkpoint that a quorum
+of admins signed.
 
 Changes made at the same time on different devices are put into one order,
 and every device works out the same order. Changes that contradict each other
-are never resolved silently, with one exception: a removal wins. A real fork,
+are never resolved silently, with one exception: a change that takes
+authority away, such as a removal, wins. A real fork,
 where two histories disagree about who is a member, raises an alarm that an
 admin has to resolve.
 

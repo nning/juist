@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/admit"
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/secrets"
@@ -592,7 +593,7 @@ func TestAnUnprovedAskHoldsOnlyASilentSlot(t *testing.T) {
 		c, _ := rawAsk(t, p.peer)
 		held = append(held, c)
 	}
-	silent := p.peer.node.silent.Count(netip.MustParseAddr("127.0.0.1"))
+	silent := p.peer.node.silent.Count(admit.Host(netip.MustParseAddr("127.0.0.1")))
 	if silent > maxUnauthPerSource {
 		t.Fatalf("%d unproved asks hold silent slots, over the %d cap", silent, maxUnauthPerSource)
 	}

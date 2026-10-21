@@ -19,7 +19,7 @@ if [ "$1" = remove ] || [ "$1" = purge ]; then
 	rm -f /var/lib/polkit-1/localauthority/10-vendor.d/60-juist.pkla
 fi
 if [ "$1" = purge ]; then
-	rm -f /var/lib/juist.removed
+	rm -f /var/lib/juist.removed /var/lib/juist.apparmor
 fi
 if [ "$1" = purge ] && [ -d /var/lib/juist-serve ]; then
 	echo "juist: kept /var/lib/juist-serve, the terminator's ACME account, which CAA records may name" >&2

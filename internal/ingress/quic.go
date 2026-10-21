@@ -15,6 +15,8 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/nning/juist/internal/admit"
+	"github.com/nning/juist/internal/lograte"
 	"github.com/nning/juist/internal/proxyproto"
 	"github.com/nning/juist/internal/quicinitial"
 	"github.com/nning/juist/ipc"
@@ -74,9 +76,9 @@ type flow struct {
 	names     []string // the first the flow's
 	t         ipc.PublishedTarget
 	target    net.Conn
-	header    []byte // a PROXY v2 header naming the client, sent until the client is proven
-	live      int    // the connections the target has not said ended
-	slotted   bool   // holding a slot of the bounds TCP shares
+	header    []byte                      // a PROXY v2 header naming the client, sent until the client is proven
+	live      int                         // the connections the target has not said ended
+	slot      *admit.Ticket[netip.Prefix] // a slot of the bounds TCP shares, once held
 	closed    bool
 
 	unproven   *list.Element // among the unproven flows, in unprovenIn; under quicFlows.mu
@@ -109,17 +111,17 @@ type quicFlows struct {
 	waiting   *list.List           // unproven flows of *flow without a target, the oldest first
 	unproven  *list.List           // and with one
 	bySource  map[netip.Prefix]int // unproven flows by host
-	perSource map[netip.Prefix]*rate.Limiter
+	perSource *admit.Rates[netip.Prefix]
 	inAll     *rate.Limiter
-	saidAt    time.Time
-	unsaid    int // lines of unproven flows not logged since saidAt
+	said      lograte.Every // lines of unproven flows
 }
 
 // serveQUIC passes what pc takes until it is closed.
 func (in *ingress) serveQUIC(ctx context.Context, pc *net.UDPConn) {
 	q := &quicFlows{in: in, pc: pc, flows: map[netip.AddrPort]*flow{}, waiting: list.New(), unproven: list.New(),
-		bySource: map[netip.Prefix]int{}, perSource: map[netip.Prefix]*rate.Limiter{},
-		inAll: rate.NewLimiter(newInAll, 2*newInAll)}
+		bySource:  map[netip.Prefix]int{},
+		perSource: admit.NewRates[netip.Prefix](newPerSource, 2*newPerSource, 4*in.o.maxUnproven),
+		inAll:     rate.NewLimiter(newInAll, 2*newInAll), said: lograte.Every{Interval: time.Second}}
 	in.quic.Store(q)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -240,7 +242,7 @@ func (q *quicFlows) fresh(d []byte, client netip.AddrPort) ([]quicinitial.Packet
 // in all the oldest unproven flow gives way, one still without a target
 // first.
 func (q *quicFlows) start(ctx context.Context, d []byte, from, client netip.AddrPort, packets []quicinitial.Packet) {
-	host := hostOf(client.Addr())
+	host := admit.Host(client.Addr())
 	var oldest *flow
 	q.mu.Lock()
 	if q.bySource[host] >= maxUnprovenPerSource {
@@ -275,44 +277,24 @@ func (q *quicFlows) start(ctx context.Context, d []byte, from, client netip.Addr
 	q.wait(ctx, f, d, packets)
 }
 
-// hostOf is the prefix of a host: an IPv4 address, or an IPv6 /64.
-func hostOf(a netip.Addr) netip.Prefix {
-	bits := 64
-	if a.Is4() {
-		bits = 32
-	}
-	host, _ := a.Prefix(bits)
-	return host
-}
-
 // allowLocked reports whether a flow may start from a now, by the rates
 // from one host and in all. q.mu is held.
 func (q *quicFlows) allowLocked(a netip.Addr) bool {
-	host := hostOf(a)
-	l := q.perSource[host]
-	if l == nil {
-		if len(q.perSource) >= 4*q.in.o.maxUnproven {
-			return q.inAll.Allow() // past the bound, the rate in all alone
-		}
-		l = rate.NewLimiter(newPerSource, 2*newPerSource)
-		q.perSource[host] = l
-	}
-	return l.Allow() && q.inAll.Allow()
+	return q.perSource.Allow(admit.Host(a)) && q.inAll.Allow()
 }
 
 // sayLocked logs a line of a flow whose client is unproven, one a second at
 // most, saying how many went unsaid: a spoofed address may start any number.
 // q.mu is held.
 func (q *quicFlows) sayLocked(line string) {
-	if time.Since(q.saidAt) < time.Second {
-		q.unsaid++
+	left, _, ok := q.said.Allow(time.Now())
+	if !ok {
 		return
 	}
-	if q.unsaid > 0 {
-		line += fmt.Sprintf(", and %d more unsaid", q.unsaid)
+	if left > 0 {
+		line += fmt.Sprintf(", and %d more unsaid", left)
 	}
 	q.in.o.Access("%s", line)
-	q.saidAt, q.unsaid = time.Now(), 0
 }
 
 // say logs a line as sayLocked does.
@@ -428,7 +410,8 @@ func (q *quicFlows) prove(f *flow) {
 		q.close(f)
 		return
 	}
-	if !q.in.sources.Take(f.client.Addr()) {
+	slot, ok := q.in.sources.Admit(admit.Host(f.client.Addr()), nil)
+	if !ok {
 		<-q.in.conns
 		f.setOutcome("refused: too many connections from it")
 		q.close(f)
@@ -438,10 +421,10 @@ func (q *quicFlows) prove(f *flow) {
 	if f.closed {
 		f.mu.Unlock()
 		<-q.in.conns
-		q.in.sources.Done(f.client.Addr())
+		slot.Release()
 		return
 	}
-	f.slotted = true
+	f.slot = slot
 	f.mu.Unlock()
 }
 
@@ -454,7 +437,7 @@ func (q *quicFlows) doneUnproven(f *flow) {
 	}
 	f.unprovenIn.Remove(f.unproven)
 	f.unproven, f.unprovenIn = nil, nil
-	host := hostOf(f.client.Addr())
+	host := admit.Host(f.client.Addr())
 	if q.bySource[host]--; q.bySource[host] <= 0 {
 		delete(q.bySource, host)
 	}
@@ -630,7 +613,7 @@ func (q *quicFlows) close(f *flow) {
 		return
 	}
 	f.closed = true
-	target, slotted := f.target, f.slotted
+	target, slot := f.target, f.slot
 	name := ""
 	if len(f.names) > 0 {
 		name = f.names[0]
@@ -657,9 +640,9 @@ func (q *quicFlows) close(f *flow) {
 	if target != nil {
 		target.Close()
 	}
-	if slotted {
+	if slot != nil {
 		<-q.in.conns
-		q.in.sources.Done(f.client.Addr())
+		slot.Release()
 	}
 	if line != "" {
 		q.in.o.Access("%s", line)
@@ -697,13 +680,7 @@ func (q *quicFlows) janitor(stop chan struct{}) {
 			}
 			return now.Sub(time.Unix(0, f.last.Load())) > q.in.o.flowIdle
 		})
-		q.mu.Lock()
-		for host, l := range q.perSource {
-			if l.Tokens() >= 2*newPerSource {
-				delete(q.perSource, host)
-			}
-		}
-		q.mu.Unlock()
+		q.perSource.Prune()
 	}
 }
 

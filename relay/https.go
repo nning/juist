@@ -14,12 +14,12 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/acme"
 	"golang.org/x/time/rate"
 
+	"github.com/nning/juist/internal/admit"
 	"github.com/nning/juist/internal/pqtls"
 	"github.com/nning/juist/internal/proxyproto"
 )
@@ -64,7 +64,7 @@ func IsChallenge(h *tls.ClientHelloInfo) bool {
 // name, until the relay closes or ln does. The relay owns ln from here.
 func (s *Server) ServeHTTPS(ln net.Listener) {
 	go func() {
-		err := s.http.ServeTLS(ln, "", "")
+		err := s.http.ServeTLS(s.capped(ln), "", "")
 		select {
 		case <-s.closed:
 		default:
@@ -223,53 +223,22 @@ type rendezvousHandler struct {
 	logf         func(string, ...any)
 	total, older *rate.Limiter
 
-	mu      sync.Mutex
-	sources map[netip.Addr]*sourceLimit
-}
-
-type sourceLimit struct {
-	*rate.Limiter
-	seen time.Time
+	sources *admit.Rates[netip.Addr]
 }
 
 func newRendezvousHandler(r Rendezvous, logf func(string, ...any)) *rendezvousHandler {
 	return &rendezvousHandler{r: r, logf: logf, total: rate.NewLimiter(rendezvousTotal, rendezvousTotalBurst),
-		older: rate.NewLimiter(rendezvousOlder, rendezvousOlderBurst), sources: map[netip.Addr]*sourceLimit{}}
+		older:   rate.NewLimiter(rendezvousOlder, rendezvousOlderBurst),
+		sources: admit.NewRates[netip.Addr](rendezvousPerSource, rendezvousSourceBurst, maxRendezvousSources)}
 }
 
 // sourceOf is whose budget a request from a takes: an IPv6 client's whole
 // /56, as one holds that many addresses.
-func sourceOf(a netip.Addr) netip.Addr {
-	if a.Is6() && !a.Is4In6() {
-		p, _ := a.Prefix(56)
-		return p.Addr()
-	}
-	return a.Unmap()
-}
+func sourceOf(a netip.Addr) netip.Addr { return admit.Group(a).Addr() }
 
-// allowSource takes one request's worth from the client's budget, making
-// room for a client not seen yet by forgetting the one seen longest ago.
+// allowSource takes one request's worth from the client's budget.
 func (h *rendezvousHandler) allowSource(from netip.Addr, now time.Time) bool {
-	from = sourceOf(from)
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	l := h.sources[from]
-	if l == nil {
-		if len(h.sources) >= maxRendezvousSources {
-			var oldest netip.Addr
-			var at time.Time
-			for a, s := range h.sources {
-				if !oldest.IsValid() || s.seen.Before(at) {
-					oldest, at = a, s.seen
-				}
-			}
-			delete(h.sources, oldest)
-		}
-		l = &sourceLimit{Limiter: rate.NewLimiter(rendezvousPerSource, rendezvousSourceBurst)}
-		h.sources[from] = l
-	}
-	l.seen = now
-	return l.AllowN(now, 1)
+	return h.sources.AllowAt(sourceOf(from), now)
 }
 
 func (h *rendezvousHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

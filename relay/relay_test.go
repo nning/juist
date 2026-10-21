@@ -17,6 +17,7 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/util/eventbus"
 
+	"github.com/nning/juist/conn"
 	"github.com/nning/juist/internal/nettest"
 )
 
@@ -51,7 +52,7 @@ func region(s *Server) *tailcfg.DERPRegion {
 			Name:     "juist1a",
 			RegionID: 1,
 			HostName: s.HostName(),
-			CertName: CertPin(s.CertHash()),
+			CertName: conn.CertPin(s.CertHash()),
 			IPv4:     ap.Addr().String(),
 			IPv6:     "none",
 			DERPPort: int(s.Port()),
@@ -251,7 +252,7 @@ func TestWrongCertPinIsRefused(t *testing.T) {
 	reg := region(s)
 	var wrong [32]byte
 	wrong[0] = 1
-	reg.Nodes[0].CertName = CertPin(wrong)
+	reg.Nodes[0].CertName = conn.CertPin(wrong)
 	c := derphttp.NewRegionClient(member, t.Logf, mon, func() *tailcfg.DERPRegion { return reg })
 	defer c.Close()
 
@@ -487,4 +488,14 @@ func TestSTUNFloodFromOneHostStarvesNoOther(t *testing.T) {
 		return
 	}
 	t.Fatal("the other host went unanswered during the flood")
+}
+
+// localAddrs reports where the relay's own listener is bound.
+func (s *Server) localAddrs() []netip.AddrPort {
+	ta, ok := s.ln.Addr().(*net.TCPAddr)
+	if !ok {
+		return nil
+	}
+	ap := ta.AddrPort()
+	return []netip.AddrPort{netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
 }

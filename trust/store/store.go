@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -302,8 +303,8 @@ func (d *Dir) finishBatch() error {
 	return d.clearBatch()
 }
 
-// tempPrefix is what Add stages under, tmpPrefix what writeFileSync replaces
-// through. Both are tolerated by loadIndex and swept by [Dir.Add].
+// tempPrefix is what Add stages under, tmpPrefix what older builds replaced
+// files through. Both are tolerated by loadIndex and swept by [Dir.Add].
 const (
 	tempPrefix = ".incoming-"
 	tmpPrefix  = ".tmp-"
@@ -539,24 +540,17 @@ func refuseLink(path string) error {
 }
 
 // checkNotSharedWritable refuses a store directory that group or other can
-// write to. The log is not secret, but anyone who can write here can lower the
-// anchor or the epoch floor. An inherited directory is refused rather than
-// silently tightened.
+// write to: the log is not secret, but such a writer can lower the anchor or
+// the epoch floor.
 func checkNotSharedWritable(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("store: inspecting %s: %w", path, err)
-	}
-	if perm := info.Mode().Perm(); perm&0o022 != 0 {
-		return fmt.Errorf(
-			"store: %s is mode %o, writable by group or other; anyone who can write there can "+
-				"roll this node's log back. Run: chmod 700 %s", path, perm, path)
+	if err := atomicfile.RefuseSharedWritable(path, "roll this node's log back", "700"); err != nil {
+		return fmt.Errorf("store: %w", err)
 	}
 	return nil
 }
 
 // writeSync writes a file and fsyncs its contents, without the intermediate
-// rename [writeFileSync] does. Add stages record bodies with it, so a crash
+// rename [atomicfile.Write] does. Add stages record bodies with it, so a crash
 // leaves debris under the one prefix Add's cleanup knows; Add's own rename is
 // what publishes the record.
 //
@@ -587,47 +581,16 @@ func writeSync(name string, body []byte) error {
 	return nil
 }
 
-// writeFileSync writes a file and fsyncs it, replacing any existing content
-// atomically via a temporary file in the same directory.
 func writeFileSync(name string, body []byte) error {
-	dir := filepath.Dir(name)
-	tmp, err := os.CreateTemp(dir, tmpPrefix+"*")
-	if err != nil {
-		return fmt.Errorf("store: creating a temporary file in %s: %w", dir, err)
+	if err := atomicfile.Write(name, body, fileMode); err != nil {
+		return fmt.Errorf("store: %w", err)
 	}
-	tmpName := tmp.Name()
-	defer func() {
-		tmp.Close()
-		os.Remove(tmpName)
-	}()
-	if err := tmp.Chmod(fileMode); err != nil {
-		return fmt.Errorf("store: setting mode on %s: %w", tmpName, err)
-	}
-	if _, err := tmp.Write(body); err != nil {
-		return fmt.Errorf("store: writing %s: %w", tmpName, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fmt.Errorf("store: syncing %s: %w", tmpName, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("store: closing %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, name); err != nil {
-		return fmt.Errorf("store: renaming %s to %s: %w", tmpName, name, err)
-	}
-	return fsyncDir(dir)
+	return nil
 }
 
-// fsyncDir makes a rename durable. Without it the file contents survive a
-// power loss but the name pointing at them may not.
 func fsyncDir(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("store: opening %s to sync: %w", dir, err)
-	}
-	defer f.Close()
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("store: syncing %s: %w", dir, err)
+	if err := atomicfile.SyncDir(dir); err != nil {
+		return fmt.Errorf("store: %w", err)
 	}
 	return nil
 }

@@ -103,9 +103,7 @@ func TestASubnetFromAddToRemove(t *testing.T) {
 	})
 
 	// Part of it on this host's own LAN stays there.
-	laptop.mgr.mu.Lock()
-	laptop.mgr.host = prefixes("192.168.50.128/25")
-	laptop.mgr.mu.Unlock()
+	laptop.mgr.setHost(prefixes("192.168.50.128/25"))
 	eventually(t, "laptop leaves its own LAN to it", func() bool {
 		return slices.Equal(laptop.mgr.onlyPeerSubnets(t), prefixes("192.168.50.0/25"))
 	})
@@ -200,26 +198,26 @@ func TestTheStatusSaysWhereDNSGoes(t *testing.T) {
 	c.system = map[string]string{"/etc/resolv.conf": "nameserver 192.168.1.1\n"}
 	out = &syncBuffer{}
 	a = c.app(out, "")
-	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNSNot: "systemd-resolved refused juistd"}, nil)
+	a.emit(a.dnsNotes(&ipc.Exit{Node: id, Name: "vps", DNSNot: "systemd-resolved refused juistd"}, nil))
 	mustContain(t, out.String(), "warning: DNS goes to 192.168.1.1, outside the tunnel: systemd-resolved refused juistd",
 		"hint: the package's polkit rule allows juistd that")
 	out = &syncBuffer{}
 	a = c.app(out, "")
-	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNSNot: "systemd-resolved refused juistd: polkit is not installed"}, nil)
+	a.emit(a.dnsNotes(&ipc.Exit{Node: id, Name: "vps", DNSNot: "systemd-resolved refused juistd: polkit is not installed"}, nil))
 	mustContain(t, out.String(), "hint: "+asRoot("apt install polkitd")+", or "+asRoot("dnf install polkit"))
 	out = &syncBuffer{}
 	a = c.app(out, "")
-	a.warnDNS(&ipc.Exit{Node: id, Name: "vps",
-		DNSNot: "/etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub"}, nil)
+	a.emit(a.dnsNotes(&ipc.Exit{Node: id, Name: "vps",
+		DNSNot: "/etc/resolv.conf lists every link's servers, systemd-resolved's uplink mode, not its stub"}, nil))
 	mustContain(t, out.String(), "hint: "+asRoot("ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"))
 	out = &syncBuffer{}
 	a = c.app(out, "")
-	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNSNot: "DNS is off on this device"}, nil)
+	a.emit(a.dnsNotes(&ipc.Exit{Node: id, Name: "vps", DNSNot: "DNS is off on this device"}, nil))
 	mustContain(t, out.String(), "warning: DNS goes to 192.168.1.1, outside the tunnel: DNS is off on this device",
 		"hint: juist set --dns takes it again")
 	out = &syncBuffer{}
 	a = c.app(out, "")
-	a.warnDNS(&ipc.Exit{Node: id, Name: "vps", DNS: true}, nil)
+	a.emit(a.dnsNotes(&ipc.Exit{Node: id, Name: "vps", DNS: true}, nil))
 	if out.String() != "" {
 		t.Errorf("DNS through vps, still warned:\n%s", out.String())
 	}

@@ -47,6 +47,13 @@ revocation needs to cross the mesh.
   exchange stateless. Past `MaxHashesPerFrame` the list is cut short with the
   records nothing hangs from first, and only from a cut-short list does the
   receiver take the sender to hold the ancestors of what it lists.
+- **Announcements, address keys and leases travel by what is newer.** Below
+  schema 21 a hello carries every one the sender holds, about 6 KB a member
+  signed by ML-DSA; from it a hello says, per node, the sequence numbers of
+  its announcement and address key and when its newest lease was issued,
+  and the records frame answering it carries what is newer, or everything
+  to a hello that says nothing. A peer that claims more than it holds only
+  goes without.
 - **Each side answers from the peer's anchor,** its genesis or the checkpoint
   it compacted to, not from its own. A record below the receiver's anchor is
   one its log refuses, and `Inform` is atomic, so one refused record would
@@ -108,7 +115,9 @@ other order. The rules it keeps:
   that stops before its removal: the stale view it already holds.
 - A refusal counts only signed by a member the initiator's log lists and past
   the initiator's epoch. Status reads a counted one as the device's removal.
-- An ask stays on the budget for silent connections until it is granted.
+- An ask stays on the budget for silent connections until it is granted, so
+  silent newcomers from seven sites, fewer against several silent members of
+  its site, or from its own host, may close it (02-threat-model.md, residual weakness 16).
 - A node that applies several epochs at once backfills the ones it skipped, so
   its keyring holds the newest four.
 

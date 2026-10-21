@@ -54,12 +54,15 @@ haben.
 `juist log` listet die Änderungen auf und zeigt zu jeder, wer sie bestätigt
 hat.
 
-Alle 256 Änderungen hält juist nach der Änderung eines Admins einen
-**Checkpoint** fest. Das ist der ganze Stand als eine einzige Änderung, die
-jedes Gerät mit seiner eigenen Kopie abgleicht. Sobald alle Geräte ihn
-haben, verwerfen sie, was vor dem Checkpoint davor liegt, und das Log bleibt
-kurz. Braucht das Quorum mehr als eine Stimme, wartet der Checkpoint wie jede
-Änderung auf die Stimmen der anderen Admins.
+Damit das Log nicht endlos wächst, fügt juist **Checkpoints** hinzu: Bringt
+die Änderung eines Admins das Log auf 256 Änderungen seit dem letzten
+Checkpoint (weniger, wenn sie groß sind), hält derselbe Befehl gleich danach
+einen fest. Ein Checkpoint hält den ganzen Stand des Netzes als eine einzige
+Änderung fest, und jedes Gerät gleicht ihn mit seiner eigenen Kopie ab.
+Sobald alle Geräte einen neuen Checkpoint haben, verwerfen
+sie den Teil des Logs, der vor dem Checkpoint davor liegt. Braucht das
+Quorum mehr als eine Stimme, wartet der Checkpoint wie jede Änderung auf die
+Stimmen der anderen Admins.
 
 ## Admins und das Quorum {#admins}
 
@@ -231,3 +234,4 @@ voucher`. Einen Tag vorher warnt `juist health`: `freshness ends in 20h unless
 | Frische | Ob genug Voucher den Stand eines Geräts in den letzten 48 Stunden bestätigt haben |
 | Voucher | Ein Gerät, das stündlich bestätigt, dass der Stand des Netzes aktuell ist |
 | Relay | Ein Mitglied, das Verkehr zwischen Mitgliedern weiterleitet, die sich nicht direkt erreichen |
+| Schema | Das nummerierte Format der Änderungen im Log, siehe [juist aktualisieren]({{< relref "docs/updating" >}}) |

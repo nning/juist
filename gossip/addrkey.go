@@ -1,7 +1,6 @@
 package gossip
 
 import (
-	"crypto/sha256"
 	"fmt"
 
 	"github.com/nning/juist/internal/addrkey"
@@ -25,83 +24,28 @@ type AddrKey struct {
 	Sig   types.Sig    `cbor:"23,keyasint"`
 }
 
-const labelAddrKey = "juist/addr-key/v1"
-
-func (k *AddrKey) signingBytes() ([]byte, error) {
-	unsigned := *k
-	unsigned.Sig, unsigned.MLDSA = types.Sig{}, nil
-	body, err := encode(&unsigned)
-	if err != nil {
-		return nil, err
-	}
-	h := sha256.New()
-	h.Write([]byte(labelAddrKey))
-	h.Write([]byte{0})
-	h.Write(body)
-	return h.Sum(nil), nil
+func (k *AddrKey) author() types.Identity { return k.Owner }
+func (k *AddrKey) label() string          { return types.LabelAddrKey }
+func (k *AddrKey) describe() string       { return "address key of " + k.Owner.ShortString() }
+func (k *AddrKey) unsigned() any {
+	u := *k
+	u.Sig, u.MLDSA = types.Sig{}, nil
+	return &u
 }
+func (k *AddrKey) sigs() (*types.Sig, **types.PQSig) { return &k.Sig, &k.MLDSA }
 
 // Sign fills in the signature, by the owner's identity key.
-func (k *AddrKey) Sign(priv types.PrivateIdentity) error {
-	if priv.Public() != k.Owner {
-		return fmt.Errorf("gossip: address key of %v would be signed by %v", k.Owner.ShortString(), priv.Public().ShortString())
-	}
-	if err := k.StaticValidate(); err != nil {
-		return err
-	}
-	msg, err := k.signingBytes()
-	if err != nil {
-		return err
-	}
-	k.MLDSA = nil
-	k.Sig, err = priv.Sign(msg)
-	return err
-}
+func (k *AddrKey) Sign(priv types.PrivateIdentity) error { return sign(k, priv) }
 
 // SignPQ is [AddrKey.Sign], adding the ML-DSA signature members require.
-func (k *AddrKey) SignPQ(priv types.PrivateIdentity) error {
-	if err := k.Sign(priv); err != nil {
-		return err
-	}
-	msg, err := k.signingBytes()
-	if err != nil {
-		return err
-	}
-	pq, err := priv.SignPQ(msg)
-	if err != nil {
-		return err
-	}
-	k.MLDSA = &pq
-	return nil
-}
+func (k *AddrKey) SignPQ(priv types.PrivateIdentity) error { return signPQ(k, priv) }
 
 // VerifyPQ checks the record's ML-DSA signature against key, the signing
 // key the log names for its owner.
-func (k *AddrKey) VerifyPQ(key *types.SigningKey) error {
-	msg, err := k.signingBytes()
-	if err != nil {
-		return err
-	}
-	if key == nil || !key.Verify(msg, k.MLDSA) {
-		return fmt.Errorf("gossip: address key of %v carries no valid ML-DSA signature", k.Owner.ShortString())
-	}
-	return nil
-}
+func (k *AddrKey) VerifyPQ(key *types.SigningKey) error { return verifyPQ(k, key) }
 
 // Verify checks the record's shape and its signature.
-func (k *AddrKey) Verify() error {
-	if err := k.StaticValidate(); err != nil {
-		return err
-	}
-	msg, err := k.signingBytes()
-	if err != nil {
-		return err
-	}
-	if !k.Owner.Verify(msg, k.Sig) {
-		return fmt.Errorf("gossip: address key of %v is not signed by it", k.Owner.ShortString())
-	}
-	return nil
-}
+func (k *AddrKey) Verify() error { return verify(k) }
 
 // StaticValidate checks the record's shape.
 func (k *AddrKey) StaticValidate() error {

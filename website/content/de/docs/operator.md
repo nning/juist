@@ -63,10 +63,10 @@ Die Ausgabe lautet `operator cleared`.
 - Ein Befehl, der den Operator braucht, fragt im Terminal
   `not the operator; run sudo juist set --operator=alice? [Y/n]` und führt
   den angezeigten Befehl aus, wenn du zustimmst.
-- Einige Befehle verändern den Rechner selbst und fragen deshalb weiterhin
-  einmal nach sudo: `juist exit serve`, `juist subnet serve` und das Anlegen oder
-  Beitreten eines [zweiten Netzes]({{< relref "docs/networks" >}}) auf
-  demselben Gerät.
+- Unter Linux fragen einige Befehle, die den Rechner selbst verändern,
+  weiterhin einmal nach sudo: `juist exit serve`, `juist subnet serve` und
+  das Anlegen oder Beitreten eines
+  [zweiten Netzes]({{< relref "docs/networks" >}}) auf demselben Gerät.
 - Ist ein Gerät in mehreren Netzen, gibst du das Netz an:
   `sudo juist set work --operator=$USER`.
 - `juist reset` löscht den Operator zusammen mit dem Netz.

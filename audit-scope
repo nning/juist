@@ -14,6 +14,7 @@ core trust/store
 
 in gossip
 in internal/aead
+in internal/atomicfile
 in internal/addrkey
 in internal/dnsfwd
 in internal/ingress
@@ -23,12 +24,13 @@ in internal/names
 in internal/pairkey
 in internal/plumber
 in internal/policy
+in internal/published
 in internal/pqtls
 in internal/quicinitial
 in internal/statuspage
 in internal/waiting
 in mobile
-in cmd/juist changes.go describe.go pin.go rotate.go waiting.go
+in cmd/juist addresses.go changes.go describe.go naming.go pin.go rotate.go waiting.go
 in cmd/juistd helpers_unix.go privsep_freebsd.go
 in conn confine.go
 in daemon addrkeys.go compact.go control.go ipc.go pairkeys.go peercred.go peercred_bsd.go peercred_linux.go peercred_other.go policy.go reconcile.go
@@ -36,10 +38,13 @@ in ipc ipc.go status.go
 in relay admit.go cert.go https.go
 
 out ci                               the CI harness, not shipped
+out ci/idle                          a measurement of the Android app, not shipped
 out cmd/internal/defaults            packaging defaults
 out discovery/dht                    an untrusted transport; what it carries internal/aead seals
 out discovery/mdns                   an untrusted transport; what it carries internal/aead seals
 out internal/admit                   bounds connections before they speak: availability alone
+out internal/lograte                 bounds how often a log line is said: availability alone
+out internal/malformed               turns a decoder's panic into an error: availability alone
 out internal/changelog               says the log's changes for juist log
 out internal/cliflag                 parses the CLI's own arguments
 out internal/firewalld               asks firewalld to open juist's ports
@@ -55,6 +60,7 @@ out internal/rendezvous              an untrusted meeting point; the link's secr
 out internal/resolved                tells systemd-resolved where to ask
 out internal/statedir                the state directory's layout
 out internal/terminator              TLS by crypto/tls behind the ingress; holds no member's key
+out internal/testvm                  the CI harness and the test lab, not shipped
 out internal/underlay                picks the addresses a device announces
 out internal/webstyle                the served pages' look
 out interop                          the test lab

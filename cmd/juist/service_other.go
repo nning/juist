@@ -59,7 +59,14 @@ func unitOf(n int) string {
 
 // startCmd, enableCmd, disableCmd and logCmd are what starts instance n,
 // enables the default's, disables n and shows n's log, as hints give them.
-func startCmd(n int) string   { return "sudo systemctl start " + unitOf(n) }
+// The default's start enables it too: unlike another instance's, it may be
+// down for not being enabled.
+func startCmd(n int) string {
+	if n == 0 {
+		return enableCmd()
+	}
+	return "sudo systemctl start " + unitOf(n)
+}
 func enableCmd() string       { return "sudo systemctl enable --now juistd" }
 func disableCmd(n int) string { return "sudo systemctl disable --now " + unitOf(n) }
 func logCmd(n int) string     { return "journalctl -u " + unitOf(n) }

@@ -292,6 +292,11 @@ type fakeManager struct {
 	// saving is what SetSaving was last told.
 	saving bool
 
+	// quietly are the quiet probes sent, answered as probes are but where
+	// quietLost drops them.
+	quietly   []netip.Addr
+	quietLost map[netip.Addr]bool
+
 	// hold, when set, keeps every probe's answer back until it is closed.
 	hold chan struct{}
 
@@ -454,11 +459,27 @@ func (m *fakeManager) Probe(ip netip.Addr, _ time.Duration, cb func(bool)) {
 	}()
 }
 
+func (m *fakeManager) ProbeQuietly(ip netip.Addr, _ time.Duration, cb func(bool)) {
+	m.mu.Lock()
+	ok := m.answers[ip] && !m.quietLost[ip]
+	m.quietly = append(m.quietly, ip)
+	m.mu.Unlock()
+	go cb(ok)
+}
+
+func (m *fakeManager) quietProbes() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.quietly)
+}
+
 func (m *fakeManager) SetSaving(saving bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.saving = saving
 }
+
+func (m *fakeManager) NetworkChanged() {}
 
 func (m *fakeManager) isSaving() bool {
 	m.mu.Lock()
@@ -499,4 +520,18 @@ func (m *fakeManager) has(nodeKey [32]byte) bool {
 		}
 	}
 	return false
+}
+
+// changePrefs makes the daemon's settings what f makes of them, but for the
+// exit node chosen.
+func (d *Daemon) changePrefs(f func(*Prefs)) {
+	d.mu.Lock()
+	p := Prefs{ServeExit: d.serveConsent, ServeSubnets: d.subnetConsent, SubnetsOff: d.subnetsOff, AcceptNames: d.acceptNames}
+	d.mu.Unlock()
+	p.DNSOff = d.dnsOff.Load()
+	d.pub.mu.Lock()
+	p.ServePublished, p.ServeTo, p.ServeMembers = d.pub.consent, d.pub.to, d.pub.members
+	d.pub.mu.Unlock()
+	f(&p)
+	d.SetPrefs(p)
 }

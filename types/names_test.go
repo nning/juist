@@ -47,7 +47,7 @@ func TestNameSets(t *testing.T) {
 	if err := validateNames(many); err == nil {
 		t.Error("names over the limit taken")
 	}
-	ix := NewMemberIndex(Hash{1}, 2)
+	ix := NewMemberIndex(NetworkSpace{Genesis: Hash{1}}, 2)
 	ix.Add(&NodeRecord{Identity: Identity{1}, WireGuard: WGKey{1}, X25519: X25519Key{1}, MLKEM: MLKEMKey{1}, Names: []string{"mx.org"}})
 	other := &NodeRecord{Identity: Identity{2}, WireGuard: WGKey{2}, X25519: X25519Key{2}, MLKEM: MLKEMKey{2}, Names: []string{"mx.org"}}
 	if err := ix.Check(other); err == nil || !strings.Contains(err.Error(), "mx.org") {

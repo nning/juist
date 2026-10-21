@@ -355,7 +355,7 @@ stdin, or with --secrets from FILE.`}
 	if auth.Disabled() != nil {
 		return fmt.Errorf("%q is disabled already", state.Network())
 	}
-	if a.node.status() == nil {
+	if liveStatus(a.node) == nil {
 		return errors.New("no juistd here hands the record to the network\nhint: run it on a device of the network")
 	}
 	secrets, err := a.breakGlassFrom(*from, state)
@@ -374,7 +374,7 @@ stdin, or with --secrets from FILE.`}
 	if err != nil {
 		return err
 	}
-	if err := a.applyRecords([]types.AUM{aum}, false); err != nil {
+	if err := a.applyRecords([]types.AUM{aum}); err != nil {
 		return err
 	}
 	a.ok("disabled %q; every device stops as the record reaches it", state.Network())

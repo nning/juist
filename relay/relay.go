@@ -26,6 +26,8 @@ import (
 	"tailscale.com/types/key"
 	"tailscale.com/types/logger"
 
+	"github.com/nning/juist/internal/admit"
+	"github.com/nning/juist/internal/lograte"
 	"github.com/nning/juist/relay/forward"
 )
 
@@ -108,13 +110,32 @@ type Server struct {
 	// already holds and not merely the right to open another.
 	mu      sync.Mutex
 	clients map[*client]struct{}
+
+	pending  *admit.Set[netip.Prefix] // connections held that nothing admitted yet
+	sessions *admit.Set[key.NodePublic]
+	refused  lograte.Every
+	evicted  lograte.Every
 }
 
 // client is one live DERP connection and the key it was admitted under.
 type client struct {
 	nodeKey key.NodePublic
 	conn    net.Conn
+	session *admit.Ticket[key.NodePublic]
 }
+
+// Bounds on the connections a relay holds before a DERP session, or the
+// forwarder, admitted them, across its listeners, as [newPendingSet] keeps
+// them. What is admitted is bounded instead by its key's, and the
+// forwarder's.
+var (
+	maxPending        = 1024
+	maxPendingPerSite = 256
+)
+
+// maxSessionsPerKey bounds the sessions under one node key; a new one closes
+// the oldest. A member keeps one, and a second while it reconnects.
+const maxSessionsPerKey = 4
 
 // New starts a relay. The caller owns it until [Server.Close].
 func New(opts Options) (*Server, error) {
@@ -152,12 +173,17 @@ func New(opts Options) (*Server, error) {
 	}
 
 	s := &Server{
+		refused: lograte.Every{Interval: time.Minute},
+		evicted: lograte.Every{Interval: time.Minute},
 		logf:    logf,
 		ln:      ln,
 		cert:    cert,
 		admit:   opts.Admit,
 		closed:  make(chan struct{}),
 		clients: map[*client]struct{}{},
+		pending: newPendingSet(maxPendingPerSite, maxPending),
+		sessions: admit.New[key.NodePublic](admit.Limits{PerSource: maxSessionsPerKey,
+			OnSource: admit.EvictOldest}),
 	}
 
 	if !opts.DisableSTUN {
@@ -202,9 +228,14 @@ func New(opts Options) (*Server, error) {
 		mux.Handle(WhoamiPath, whoami(opts.Name, opts.Identity))
 	}
 	s.tls = tlsConfig(cert, opts.Name, opts.NamedCertificate)
+	// HTTP/1.1 alone: DERP and the forwarder take connections over, and a
+	// stream of HTTP/2 escapes the bounds a connection is held to.
+	http1 := new(http.Protocols)
+	http1.SetHTTP1(true)
 	s.http = &http.Server{
 		Handler:   mux,
 		TLSConfig: s.tls,
+		Protocols: http1,
 		// The connection a request arrived on, so that a client admitted on
 		// it can be dropped later. Nothing else can reach it: a DERP session
 		// hijacks the connection and the server stops tracking it.
@@ -220,7 +251,7 @@ func New(opts Options) (*Server, error) {
 	}
 
 	go func() {
-		err := s.http.ServeTLS(ln, "", "")
+		err := s.http.ServeTLS(s.capped(ln), "", "")
 		select {
 		case <-s.closed:
 		default:
@@ -228,6 +259,84 @@ func New(opts Options) (*Server, error) {
 		}
 	}()
 	return s, nil
+}
+
+// capped is ln holding no more connections than s's bounds, counted with
+// those of s's other listeners; past them an older one is closed.
+func (s *Server) capped(ln net.Listener) net.Listener { return cappedListener{ln, s} }
+
+type cappedListener struct {
+	net.Listener
+	s *Server
+}
+
+func (l cappedListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return l.s.hold(c), nil
+}
+
+// hold counts c against s's bounds, closing an older connection where they
+// are full.
+func (s *Server) hold(c net.Conn) net.Conn {
+	// release exists before the set holds hc: another listener's newcomer
+	// may evict it before admit returns.
+	var mu sync.Mutex
+	var entry *admit.Ticket[netip.Prefix]
+	hc := &heldConn{Conn: c, release: sync.OnceFunc(func() {
+		mu.Lock()
+		e := entry
+		mu.Unlock()
+		e.Release()
+	})}
+	src := admit.Source(c.RemoteAddr())
+	e, _ := s.pending.Admit(admit.Host(src), func() {
+		noteEvery(&s.refused, s.logf, func() string {
+			return fmt.Sprintf("relay: closing older connections not admitted, past %d from one site or %d in all; "+
+				"the last from %v", maxPendingPerSite, maxPending, src)
+		})
+		go hc.Close()
+	})
+	mu.Lock()
+	entry = e
+	mu.Unlock()
+	return hc
+}
+
+// heldConn gives its slot back once it is admitted or closed, which every
+// path that takes it over does.
+type heldConn struct {
+	net.Conn
+	release func()
+}
+
+func (c *heldConn) Close() error {
+	c.release()
+	return c.Conn.Close()
+}
+
+// NetConn is the connection under c, as derpserver looks for its TCP one.
+func (c *heldConn) NetConn() net.Conn { return c.Conn }
+
+// admittedOn gives back the slot of the connection under c, a TLS
+// connection a listener of s's took, once what admitted it bounds it.
+func admittedOn(c net.Conn) {
+	if tc, ok := c.(*tls.Conn); ok {
+		c = tc.NetConn()
+	}
+	if hc, ok := c.(*heldConn); ok {
+		hc.release()
+	}
+}
+
+// noteEvery logs line where e lets it through, saying how many times it
+// stands for.
+func noteEvery(e *lograte.Every, logf logger.Logf, line func() string) {
+	if left, _, ok := e.Allow(time.Now()); ok {
+		logf("%s (%d times since)", line(), left+1)
+	}
 }
 
 // rawNodeKey is a client's WireGuard public key in the form the membership log
@@ -256,7 +365,9 @@ func (s *Server) track(h http.Handler) http.Handler {
 		defer func() {
 			s.mu.Lock()
 			delete(s.clients, rec)
+			session := rec.session
 			s.mu.Unlock()
+			session.Release()
 		}()
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), clientContextKey{}, rec)))
 	})
@@ -407,21 +518,18 @@ func (s *Server) admitRequest(ctx context.Context, nodeKey key.NodePublic) bool 
 			nodeKey.ShortString())
 		return false
 	}
-	c.nodeKey = nodeKey
+	session, _ := s.sessions.Admit(nodeKey, func() {
+		noteEvery(&s.evicted, s.logf, func() string {
+			return fmt.Sprintf("relay: closing %v's oldest session, past %d under one key",
+				nodeKey.ShortString(), maxSessionsPerKey)
+		})
+		// As upstream closes a peer: a TLS close may wait on a write.
+		go c.conn.Close()
+	})
 	s.mu.Lock()
+	c.nodeKey, c.session = nodeKey, session
 	s.clients[c] = struct{}{}
 	s.mu.Unlock()
+	admittedOn(c.conn)
 	return true
-}
-
-// localAddrs reports where the relay's own listener is bound. A member
-// advertises the addresses of its endpoint announcement instead, so this
-// exists for the tests, which bind loopback.
-func (s *Server) localAddrs() []netip.AddrPort {
-	ta, ok := s.ln.Addr().(*net.TCPAddr)
-	if !ok {
-		return nil
-	}
-	ap := ta.AddrPort()
-	return []netip.AddrPort{netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
 }

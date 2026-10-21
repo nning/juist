@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -155,7 +156,7 @@ type view struct {
 	Changes  []ipc.Change
 	Total    int
 
-	ShowNetwork, ShowChanges bool
+	ShowNetwork, ShowChanges, ShowSchemas bool
 }
 
 type service struct {
@@ -165,10 +166,11 @@ type service struct {
 
 type device struct {
 	Name, Addrs, Roles, Reach, Class, Heard string
+	Schema, SchemaClass                     string
 	Self                                    bool
 }
 
-type fact struct{ Label, Text string }
+type fact struct{ Label, Text, Class string }
 
 // publicWords say what the public sees, for members.
 var publicWords = map[ipc.Visibility]string{
@@ -213,6 +215,7 @@ func build(p *ipc.StatusPage, err error, name string, public ipc.Visibility, mem
 		return v
 	}
 	v.Devices = devices(st, now)
+	v.ShowSchemas = slices.ContainsFunc(st.Devices, func(d ipc.Device) bool { return d.Build != 0 })
 	v.Alarms = alarms(st)
 	v.Facts = facts(st, p, now)
 	if v.ShowChanges {
@@ -286,6 +289,14 @@ func devices(st *ipc.Status, now time.Time) []device {
 			dev.Reach, dev.Class = "sought", "sought"
 		default:
 			dev.Reach, dev.Class = "down", "alarm"
+		}
+		switch {
+		case d.Build == 0:
+			dev.Schema = "-"
+		case d.Build < types.CurrentSchema:
+			dev.Schema, dev.SchemaClass = strconv.Itoa(int(d.Build)), "relay"
+		default:
+			dev.Schema = strconv.Itoa(int(d.Build))
 		}
 		if r.Heard > 0 {
 			dev.Heard = "heard " + ago(now.Sub(time.Unix(r.Heard, 0)))
@@ -487,7 +498,15 @@ func facts(st *ipc.Status, p *ipc.StatusPage, now time.Time) []fact {
 	if len(head) > 12 {
 		head = head[:12]
 	}
-	add("Log", "%s, schema %d, head %s", plural(p.Total, "change"), st.Schema, head)
+	if st.Schema != 0 {
+		add("Schema", "%d", st.Schema)
+		if st.Schema < types.CurrentSchema {
+			// As juist status: this juist could raise the network to its own.
+			out[len(out)-1].Text += fmt.Sprintf(" (%d)", types.CurrentSchema)
+			out[len(out)-1].Class = "relay"
+		}
+	}
+	add("Log", "%s, head %s", plural(p.Total, "change"), head)
 	return out
 }
 

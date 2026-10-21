@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -228,7 +229,7 @@ func TestAnExitNodeServesWhenGrantedAndAgreed(t *testing.T) {
 	if _, s := f.mgr.exitState(); len(s.Routes) > 0 {
 		t.Fatal("an exit node serves without its operator's word")
 	}
-	f.d.SetServeConsent(true)
+	f.d.changePrefs(func(p *Prefs) { p.ServeExit = true })
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
@@ -367,10 +368,8 @@ func TestAnExitNodeNeedsASystemUser(t *testing.T) {
 // A chosen exit node that rotates its identity stays the choice, and the new
 // identity is kept.
 func TestTheChoiceFollowsARotatedExitNode(t *testing.T) {
-	moved := make(chan [2]types.Identity, 1)
-	f := exitFixture(t, 1, -1, func(o *Options) {
-		o.OnExitMoved = func(from, to types.Identity) { moved <- [2]types.Identity{from, to} }
-	})
+	moved := make(chan struct{}, 1)
+	f := exitFixture(t, 1, -1, func(o *Options) { o.Moved = moved })
 	exit := f.nw.devices[1]
 	f.d.SetExitChoice(ExitChoice{Chosen: true, Node: exit.record.Identity})
 	fresh, err := types.GenerateIdentity()
@@ -402,11 +401,11 @@ func TestTheChoiceFollowsARotatedExitNode(t *testing.T) {
 		t.Errorf("egress %v, want the tunnel", e)
 	}
 	select {
-	case m := <-moved:
-		if m != [2]types.Identity{exit.record.Identity, fresh.Public()} {
-			t.Errorf("told of a move %v", m)
+	case <-moved:
+		if c := f.d.exitChoiceNow(); c.Node != fresh.Public() {
+			t.Errorf("told of a move to %v", c.Node)
 		}
-	case <-time.After(5 * time.Second):
+	default:
 		t.Error("the service was not told to keep the new identity")
 	}
 }
@@ -475,19 +474,77 @@ func TestAnEgressThatFailsIsNotCalledRefused(t *testing.T) {
 }
 
 // The service keeps the choice the mesh holds after a rotation, and not a
-// rotation's step the mesh has gone past.
+// rotation's step the mesh has gone past, once the mesh says it moved.
 func TestTheServiceKeepsTheMeshsFollowedChoice(t *testing.T) {
 	nw := newNetwork(t, 3)
 	f := serviceWithChoice(t, nw, nw.devices[0], nw.devices[1].record.Identity.String()+"\n")
 	a, b, c := nw.devices[1].record.Identity, nw.devices[2].record.Identity, newDevice(t, "c", netip.Addr{}).record.Identity
-	f.s.Mesh().SetExitChoice(ExitChoice{Chosen: true, Node: c})
-	f.s.followExit(a, b)
-	if got, _ := LoadExitChoice(filepath.Join(f.home, statedir.ExitFile)); got.Node != a {
-		t.Errorf("a step the mesh went past was kept: %v", got.Node)
+	f.s.Mesh().followExit(a, b)
+	f.s.Mesh().followExit(b, c)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, _ := LoadExitChoice(filepath.Join(f.home, statedir.ExitFile))
+		if got.Node == c {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("kept %v, want the mesh's %v", got.Node, c)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	f.s.followExit(b, c)
-	if got, _ := LoadExitChoice(filepath.Join(f.home, statedir.ExitFile)); got.Node != c {
-		t.Errorf("kept %v, want the mesh's %v", got.Node, c)
+}
+
+// A rotated choice that cannot be kept is said once, not at every look, and
+// again once another is not kept, the same as before too once one was kept.
+func TestAnUnkeptExitChoiceIsSaidOnce(t *testing.T) {
+	f := exitFixture(t, 1, -1, nil)
+	a, b := f.nw.devices[1].record.Identity, f.nw.devices[2].record.Identity
+	home := filepath.Join(t.TempDir(), "gone")
+	var said atomic.Int32
+	s := &Service{opts: ServiceOptions{Home: home}, mesh: f.d,
+		logf: func(string, ...any) { said.Add(1) }, prefs: Prefs{Exit: ExitChoice{Chosen: true, Node: a}}}
+	f.d.SetExitChoice(ExitChoice{Chosen: true, Node: a})
+	look := func(times int, want int32, kept types.Identity) {
+		t.Helper()
+		for range times {
+			s.followExit()
+		}
+		if n := said.Load(); n != want {
+			t.Errorf("said %d times, want %d", n, want)
+		}
+		if s.prefs.Exit.Node != kept {
+			t.Errorf("keeps %v, want %v", s.prefs.Exit.Node, kept)
+		}
+	}
+	f.d.followExit(a, b)
+	look(3, 1, a)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	look(1, 1, b)
+	if err := os.RemoveAll(home); err != nil {
+		t.Fatal(err)
+	}
+	// The owner chose a again, and it rotated to b once more.
+	s.prefs.Exit = ExitChoice{Chosen: true, Node: a}
+	f.d.SetExitChoice(s.prefs.Exit)
+	f.d.followExit(a, b)
+	look(2, 2, a)
+	c := newDevice(t, "c", netip.Addr{}).record.Identity
+	f.d.followExit(b, c)
+	look(2, 3, a)
+}
+
+// Another setting handed on keeps the rotation of the chosen exit node the
+// mesh followed, which the service may not have kept yet.
+func TestSettingsKeepAFollowedExitChoice(t *testing.T) {
+	f := exitFixture(t, 1, -1, nil)
+	a, b := f.nw.devices[1].record.Identity, f.nw.devices[2].record.Identity
+	f.d.SetExitChoice(ExitChoice{Chosen: true, Node: a})
+	f.d.followExit(a, b)
+	f.d.SetPrefs(Prefs{Exit: ExitChoice{Chosen: true, Node: a}, AcceptNames: true})
+	if got := f.d.exitChoiceNow().Node; got != b {
+		t.Fatalf("uses %v, want the followed %v", got, b)
 	}
 }
 
@@ -565,7 +622,7 @@ func TestAResetForgetsTheExitChoice(t *testing.T) {
 		t.Fatal("a choice that could not be kept was taken")
 	}
 	f.s.mu.Lock()
-	held := f.s.exit
+	held := f.s.prefs.Exit
 	f.s.mu.Unlock()
 	if held != (ExitChoice{}) {
 		t.Fatalf("a choice not kept is held: %+v", held)
@@ -591,8 +648,8 @@ func TestAResetForgetsTheExitChoice(t *testing.T) {
 	}
 	f.s.mu.Lock()
 	defer f.s.mu.Unlock()
-	if f.s.exit != (ExitChoice{}) || f.s.serve {
-		t.Errorf("the service holds on to %+v, serving %v", f.s.exit, f.s.serve)
+	if f.s.prefs.Exit != (ExitChoice{}) || f.s.prefs.ServeExit {
+		t.Errorf("the service holds on to %+v, serving %v", f.s.prefs.Exit, f.s.prefs.ServeExit)
 	}
 }
 

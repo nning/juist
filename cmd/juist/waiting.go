@@ -49,7 +49,8 @@ type waitingChange struct {
 func (a *app) carry(auth *log.Authority, aum *types.AUM, ttl time.Duration, proposer types.Identity) (bool, []string,
 	error) {
 	state := auth.State()
-	if a.node == nil || a.node.status() == nil {
+	d := daemonOf(a.node)
+	if d == nil {
 		return false, nil, nil
 	}
 	files, err := a.adminKeyFiles()
@@ -64,7 +65,7 @@ func (a *app) carry(auth *log.Authority, aum *types.AUM, ttl time.Duration, prop
 		return false, nil, nil
 	}
 	signer := files[i].priv
-	held, err := a.node.waiting(nil)
+	held, err := d.waiting(nil)
 	if err != nil {
 		return false, nil, fmt.Errorf("handing the change on: %w", err)
 	}
@@ -89,7 +90,7 @@ func (a *app) carry(auth *log.Authority, aum *types.AUM, ttl time.Duration, prop
 	if err != nil {
 		return false, nil, err
 	}
-	if _, err := a.node.waiting([][]byte{b}); err != nil {
+	if _, err := d.waiting([][]byte{b}); err != nil {
 		return false, nil, fmt.Errorf("handing the change on: %w", err)
 	}
 	return true, unreadable(state, aum, c), nil
@@ -121,15 +122,21 @@ func unreadable(state *log.State, aum *types.AUM, c *waiting.Change) []string {
 // is dropped unseen.
 func (a *app) waitingChanges(auth *log.Authority) ([]waitingChange, error) {
 	n, err := a.openNode()
-	if err != nil || n.status() == nil {
+	d := daemonOf(n)
+	if err != nil || d == nil {
 		return nil, err
 	}
+	raw, err := d.waiting(nil)
+	if err != nil {
+		return nil, err
+	}
+	return a.openWaiting(auth, raw)
+}
+
+// openWaiting is [app.waitingChanges] of the copies raw.
+func (a *app) openWaiting(auth *log.Authority, raw [][]byte) ([]waitingChange, error) {
 	files, err := a.adminKeyFiles()
 	if err != nil || len(files) == 0 {
-		return nil, err
-	}
-	raw, err := n.waiting(nil)
-	if err != nil {
 		return nil, err
 	}
 	state := auth.State()
@@ -212,20 +219,20 @@ func (a *app) summary(auth *log.Authority, w *waitingChange) string {
 	return fmt.Sprintf("%s, proposed by %s", what, a.adminName(auth, w.proposer))
 }
 
-// waitingNote says in a status which changes wait for this keystore's vote.
+// waitingNote says which changes wait for this keystore's vote, and how many.
 // It says nothing where it cannot tell.
-func (a *app) waitingNote() int {
+func (a *app) waitingNote() ([]line, int) {
 	auth, err := a.networkLog()
 	if err != nil {
-		return 0
+		return nil, 0
 	}
 	changes, err := a.waitingChanges(auth)
 	if err != nil {
-		return 0
+		return nil, 0
 	}
 	mine, err := a.forMyVote(auth, changes)
 	if err != nil || len(mine) == 0 {
-		return 0
+		return nil, 0
 	}
 	var what []string
 	for i := range mine {
@@ -235,9 +242,8 @@ func (a *app) waitingNote() int {
 	if len(mine) > 1 {
 		verb = "wait"
 	}
-	a.printf("%s %s for your vote: %s\n", count(len(mine), "change"), verb, strings.Join(what, "; "))
-	a.hint("juist approve")
-	return len(mine)
+	return []line{{text: fmt.Sprintf("%s %s for your vote: %s", count(len(mine), "change"), verb, strings.Join(what, "; "))},
+		{kind: lineHint, text: "juist approve"}}, len(mine)
 }
 
 // approveWaiting asks about each change waiting for this keystore's vote,
@@ -248,6 +254,7 @@ func (a *app) approveWaiting() error {
 	if err != nil {
 		return err
 	}
+	a.fileAdminKeys(auth)
 	changes, err := a.waitingChanges(auth)
 	if err != nil {
 		return err
@@ -279,6 +286,21 @@ func (a *app) approveWaiting() error {
 	return nil
 }
 
+// renewed brings w up to the copies held now: one renewed while its admin was
+// asked, as an invite renews its admission, waits longer than when shown.
+func (a *app) renewed(auth *log.Authority, w *waitingChange) {
+	changes, err := a.waitingChanges(auth)
+	if err != nil {
+		return
+	}
+	for _, n := range changes {
+		if n.aum.SigHash() == w.aum.SigHash() {
+			w.expires = max(w.expires, n.expires)
+			w.aum.Signatures = mergeSignatures(auth.State(), &w.aum, n.aum.Signatures)
+		}
+	}
+}
+
 func (a *app) approveOne(auth *log.Authority, w *waitingChange) error {
 	a.printf("%s, proposed by %s:\n", describeKind(w.aum.Kind), a.adminName(auth, w.proposer))
 	for _, line := range effect(&w.aum, auth.State(), a.now().Unix()) {
@@ -305,6 +327,7 @@ func (a *app) approveOne(auth *log.Authority, w *waitingChange) error {
 		a.printf("  not approved\n")
 		return nil
 	}
+	a.renewed(auth, w)
 	if a.now().Unix() >= w.expires {
 		a.printf("  expired while you were asked; not approved\n")
 		return nil
@@ -318,7 +341,7 @@ func (a *app) approveOne(auth *log.Authority, w *waitingChange) error {
 	}
 	st := auth.State().SignatureStatus(&w.aum)
 	if st.Authorized() {
-		if err := a.applyRecords([]types.AUM{w.aum}, false); err != nil {
+		if err := a.applyRecords([]types.AUM{w.aum}); err != nil {
 			return err
 		}
 		a.ok("applied")

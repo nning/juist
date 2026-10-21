@@ -265,3 +265,12 @@ func TestRebindTakesAnAddressOnceItCan(t *testing.T) {
 		a.Close()
 	}
 }
+
+// newMultiListener accepts from lns once started.
+func newMultiListener(lns []net.Listener) *multiListener {
+	m := &multiListener{conns: make(chan net.Conn), errs: make(chan error, len(lns)), closed: make(chan struct{})}
+	for _, ln := range lns {
+		m.lns = append(m.lns, &slot{ln: ln})
+	}
+	return m
+}

@@ -42,16 +42,11 @@ func (r *linuxRouter) guardOverlay(own, peers []netip.Addr) error {
 // setInGuard installs instance inst's [inTable] for dev, or removes it where
 // own and peers are both empty, in one transaction.
 func setInGuard(inst int, dev string, own, peers []netip.Addr) error {
-	c, err := nftables.New()
+	c, err := replacingTables(func(fam nftables.TableFamily) *nftables.Table { return inTable(fam, inst) })
 	if err != nil {
-		return fmt.Errorf("conn: nftables: %w", err)
+		return err
 	}
 	defer c.CloseLasting()
-	for _, fam := range families {
-		t := inTable(fam, inst)
-		c.AddTable(t) // so that the delete below cannot fail for a missing table
-		c.DelTable(t)
-	}
 	for _, fam := range families {
 		key, ownFam, srcFam := nftables.TypeIPAddr, ofFamily(own, fam), ofFamily(peers, fam)
 		if fam == nftables.TableFamilyIPv6 {

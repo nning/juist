@@ -9,17 +9,16 @@ lead: Ein Exit-Node ist ein Gerät in deinem Netz, über das die anderen ins Int
 
 Normalerweise geht ein Gerät dort ins Internet, wo es sich gerade befindet.
 Mit einem Exit-Node schickt es seinen Internetverkehr zuerst durch den Tunnel
-zu einem anderen Mitglied, also zu einem anderen Gerät in deinem Netz
-([So funktioniert juist]({{< relref "docs/how-it-works" >}})). Dieses
-Mitglied leitet den Verkehr weiter. Webseiten sehen dann die Adresse des
-Exit-Nodes, und das WLAN des Cafés sieht nur verschlüsselten Verkehr.
+zu einem anderen Mitglied deines Netzes, und das leitet ihn weiter. Webseiten
+sehen dann die Adresse des Exit-Nodes, und das WLAN des Cafés sieht nur
+verschlüsselten Verkehr.
 
-Ein Gerät wird in zwei Schritten zum Exit-Node. Zuerst gibt ein Admin, also
-eine Person, deren Schlüssel Änderungen am Netz bestätigt, dem Gerät die
-Rolle `exit`. Eine Rolle ist eine Berechtigung, die das Netz für ein Gerät
-festhält. Dann stimmt der [Operator]({{< relref "docs/operator" >}}) des
-Geräts zu, also der lokale Benutzer, der es ohne sudo verwaltet, indem er
-dort `juist exit serve` ausführt.
+Ein Gerät wird in zwei Schritten zum Exit-Node. Zuerst gibt ein
+[Admin]({{< relref "docs/how-it-works" >}}#admins) dem Gerät die
+[Rolle]({{< relref "docs/how-it-works" >}}#roles) `exit`. Dann stimmt der
+[Operator]({{< relref "docs/operator" >}}) des Geräts zu, also der lokale
+Benutzer, der es ohne sudo verwaltet, indem er dort `juist exit serve`
+ausführt.
 
 Ob ein Gerät einen Exit-Node nutzt, entscheidet es selbst. Solange du auf
 einem Gerät nicht `juist exit use` ausführst, ändert sich dort nichts.

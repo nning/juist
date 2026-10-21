@@ -60,7 +60,7 @@ func (a *app) listDevices(long, v6, all bool) error {
 	// Where no daemon runs there is nothing to say about tunnels.
 	var st *ipc.Status
 	if n, err := a.openNode(); err == nil {
-		if st = n.status(); st != nil && !st.InNetwork {
+		if st = liveStatus(n); st != nil && !st.InNetwork {
 			st = nil
 		}
 	}

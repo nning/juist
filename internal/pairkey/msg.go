@@ -50,8 +50,6 @@ type Msg struct {
 const MaxMsgSize = 2*types.IdentitySize + 2*types.WGKeySize + 5*9 + mlkem.CiphertextSize768 + checkSize + types.SigSize +
 	types.PQSigSize + 40
 
-const labelMsg = "juist/pair-msg/v1"
-
 var encMode = func() cbor.EncMode {
 	m, err := cbor.CTAP2EncOptions().EncMode()
 	if err != nil {
@@ -68,7 +66,7 @@ func (m *Msg) signingBytes(network types.Hash) ([]byte, error) {
 		return nil, fmt.Errorf("pairkey: encoding: %w", err)
 	}
 	h := sha256.New()
-	h.Write([]byte(labelMsg))
+	h.Write([]byte(types.LabelPairMsg))
 	h.Write([]byte{0})
 	h.Write(network[:])
 	h.Write(body)

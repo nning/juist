@@ -43,8 +43,7 @@ sudo firewall-cmd --permanent --add-service=juist --add-service=juist-relay && s
 {{< /step >}}
 
 {{< step on="dem Gerät eines Admins" >}}
-Gib dem VPS die Rolle `relay`. Eine Rolle ist eine Berechtigung, die das Netz
-für ein Gerät festhält.
+Gib dem VPS die [Rolle]({{< relref "docs/how-it-works" >}}#roles) `relay`:
 
 ```sh
 juist grant vps relay
@@ -94,13 +93,13 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
 - Unter FreeBSD belegt der Helfer von juistd Port 443 nur, solange root es
   erlaubt und kein anderes Programm auf 443 lauscht. Läuft pf, muss es den
   Verkehr durchlassen.
-- Überdauert das Recht den Namen, warnt `juist health`, und `juist reset`
-  nimmt es zurück.
+- Ist der Name weg, das Recht aber noch da, warnt `juist health`, und
+  `juist reset` nimmt das Recht zurück.
 - Die Mitglieder nutzen den Namen erst, wenn der Server unter diesem Namen
   bestätigt, dass er dieses Relay ist. Ein Name, der woandershin führt, wird
   nicht genutzt.
-- Ist das Relay zugleich die [Ingress]({{< relref "docs/publishing" >}})
-  des Netzes, die 443 schon belegt, reicht die Ingress die Verbindungen für
+- Ist das Relay zugleich der [Ingress]({{< relref "docs/publishing" >}})
+  des Netzes, der 443 schon belegt, reicht der Ingress die Verbindungen für
   den Namen an das Relay weiter.
 - Ein CAA-Eintrag für den Namen muss Let's Encrypt zulassen.
 - Auf einem Gerät in mehreren Netzen bedient nur der juistd des ersten Netzes
@@ -115,7 +114,7 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
 | 443/tcp | das Relay unter seinem öffentlichen Namen | auf einem Relay mit Namen; `juist set --relay-name` öffnet ihn |
 | 41642/tcp | eine Einladung per Code im LAN annehmen | auf dem einladenden Gerät, solange `juist invite` läuft |
 | 443/tcp, 443/udp, 80/tcp | die Namen, die Geräte veröffentlichen, per TLS und QUIC | auf einem Gerät mit der Rolle `ingress`; `juist ingress serve` öffnet sie |
-| die Ports, auf denen Namen per TCP veröffentlicht sind | diese Namen | auf jeder Ingress; sie öffnet und schließt sie, wenn Namen hinzukommen oder wegfallen |
+| die Ports, auf denen Namen per TCP veröffentlicht sind | diese Namen | auf jedem Ingress; er öffnet und schließt sie, wenn Namen hinzukommen oder wegfallen |
 
 Hinter NAT musst du nichts öffnen. Auch eine Einladung per Link braucht
 keinen offenen Port: Erreicht das neue Gerät das einladende nicht direkt,

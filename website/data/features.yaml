@@ -31,20 +31,20 @@
 - doc: docs/names
   en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
   de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}
-  note: {en: "Only on Linux with systemd-resolved.", de: "Nur unter Linux mit systemd-resolved."}
+  note: {en: "On Linux and FreeBSD, not in the Android app.", de: "Unter Linux und FreeBSD, nicht in der Android-App."}
 - doc: docs/publishing
   en: {title: Publishing services, text: "A member's service, reachable from the internet by name through an ingress."}
-  de: {title: Dienste veröffentlichen, text: "Dienste auf Mitgliedern, über eine Ingress unter einem Namen aus dem Internet erreichbar."}
+  de: {title: Dienste veröffentlichen, text: "Dienste auf Mitgliedern, über einen Ingress unter einem Namen aus dem Internet erreichbar."}
 - doc: docs/publishing
   en: {title: HTTP/3, text: "Published names over QUIC through the ingress, for browsers that discover it themselves or learn of it from DNS."}
-  de: {title: HTTP/3, text: "Veröffentlichte Namen über QUIC durch die Ingress, für Browser, die es selbst entdecken oder per DNS davon erfahren."}
+  de: {title: HTTP/3, text: "Veröffentlichte Namen über QUIC durch den Ingress, für Browser, die es selbst entdecken oder per DNS davon erfahren."}
 - doc: docs/publishing
   en: {title: Members-only names, text: "A published name with a certificate from the CA that the internet cannot reach. Only the members the access policy allows can open it."}
   de: {title: Namen nur für Mitglieder, text: "Ein veröffentlichter Name mit einem Zertifikat der CA, den das Internet nicht erreicht. Öffnen können ihn nur die Mitglieder, denen die Zugriffsregeln es erlauben."}
-  note: {en: "Reached from Linux with systemd-resolved.", de: "Erreichbar von Linux mit systemd-resolved."}
+  note: {en: "Reached from Linux and FreeBSD, not from the Android app.", de: "Erreichbar von Linux und FreeBSD, nicht aus der Android-App."}
 - doc: docs/publishing
   en: {title: TCP services, text: "A game server or any other TCP service on its own port on every ingress, passed on without being read."}
-  de: {title: TCP-Dienste, text: "Ein Spieleserver oder jeder andere TCP-Dienst auf einem eigenen Port jeder Ingress, weitergereicht, ohne mitzulesen."}
+  de: {title: TCP-Dienste, text: "Ein Spieleserver oder jeder andere TCP-Dienst auf einem eigenen Port jedes Ingress, weitergereicht, ohne mitzulesen."}
 - doc: docs/publishing
   en: {title: Sharing, text: "A file, a directory or a web server, on the internet right away under the device's own name. A directory downloads as a ZIP."}
   de: {title: Teilen, text: "Eine Datei, ein Verzeichnis oder einen Webserver sofort im Internet teilen, unter dem eigenen Namen des Geräts. Ein Verzeichnis lädt sich auch als ZIP."}

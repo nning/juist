@@ -168,8 +168,8 @@ groups:
         marks: yyyyynpnypn
         notes:
           juist:
-            en: On Linux with systemd-resolved.
-            de: Unter Linux mit systemd-resolved.
+            en: On Linux and FreeBSD, not in the Android app.
+            de: Unter Linux und FreeBSD, nicht in der Android-App.
           nebula:
             en: Each device's resolver must be pointed at a lighthouse by hand.
             de: Der Resolver jedes Geräts muss von Hand auf einen Lighthouse zeigen.
@@ -181,8 +181,8 @@ groups:
         marks: ynyynnnnnnn
         notes:
           juist:
-            en: On Linux with systemd-resolved.
-            de: Unter Linux mit systemd-resolved.
+            en: On Linux and FreeBSD, not in the Android app.
+            de: Unter Linux und FreeBSD, nicht in der Android-App.
       - en: Services published to the internet
         de: Dienste im Internet veröffentlichen
         marks: ypnynnnnnnn

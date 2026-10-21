@@ -61,12 +61,14 @@ juist network renumber work 10.7.0.0/24
 
 Ist das Gerät nur in einem Netz, kannst du den Namen weglassen.
 
-Dasselbe erreichst du bei jedem Befehl mit `--network NAME` oder mit der
+Dasselbe erreichst du bei jedem Befehl mit `--network NAME`, und bei allen
+außer `juist create`, `juist join` und `juist admins new` auch mit der
 Umgebungsvariable `$JUIST_NETWORK`.
 
-Die Übersichten `status`, `devices`, `network` und `admins` zeigen alle
-Netze, wenn du keines angibst. Alle anderen Befehle fragen nicht nach,
-welches Netz du meinst, sondern brechen ab und zählen die Netze auf:
+Befehle, die etwas auflisten, zeigen alle Netze, wenn du keines angibst:
+`status`, `health`, `devices`, `network`, `admins`, `names`, `exit`,
+`subnet` und `publish`. Alle anderen Befehle fragen nicht nach, welches Netz
+du meinst, sondern brechen ab und zählen die Netze auf:
 
 ```console
 $ juist invite
@@ -118,7 +120,7 @@ juist reset work --force
 Damit verlässt das Gerät `work`, und der zugehörige juistd wird entfernt.
 `home` bleibt mit seinen Schlüsseln unverändert. `--force` ist nötig,
 solange `work` das Gerät noch als Mitglied führt. Entferne das Gerät nach
-Möglichkeit vorher aus `work` ([Schlüssel]({{< relref "docs/keys" >}})).
+Möglichkeit vorher aus `work` ([Geräte entfernen]({{< relref "docs/remove" >}})).
 
 ## Hinweise
 

@@ -34,6 +34,8 @@ func (d *Daemon) Reconcile() error {
 	// order to their state reads, leaving pre-removal state in the data plane.
 	d.reconcileMu.Lock()
 	defer d.reconcileMu.Unlock()
+	// One that ends early keeps no deadline, which may be the one just past.
+	d.reconcileDue.Store(nil)
 
 	// A State is immutable once handed out, so the lock covers only the call
 	// that produces it: held across SetPeers, every gossip session would wait
@@ -67,9 +69,9 @@ func (d *Daemon) Reconcile() error {
 	d.pruneWaiting(state)
 	d.compactWhenSettled(state)
 	d.setSigning(state)
-	if d.onAddrsMoved != nil && state.IsMember(d.self) &&
+	if d.moved != nil && state.IsMember(d.self) &&
 		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.heldAddrs()) && d.movedSaid.CompareAndSwap(false, true) {
-		go d.onAddrsMoved()
+		d.sayMoved()
 	}
 
 	s := d.snapshotOf(state)
@@ -191,6 +193,7 @@ func (d *Daemon) Reconcile() error {
 		Publish:       d.publishNow(),
 		HTTPS:         d.httpsNow(relays),
 	})
+	d.noteDue(s, fresh, held)
 	return nil
 }
 
@@ -239,6 +242,10 @@ func (d *Daemon) keysNamedElsewhere(state *log.State) bool {
 	return ok && self.WireGuard != d.own.Load().wg
 }
 
+// sayKeysAgain has the next keys the log names said again, as a reconcile
+// that read them before the last rotation may have said they changed.
+func (d *Daemon) sayKeysAgain() { d.keysSaid.Store(false) }
+
 // keysAreStale reports a rotation applied while this daemon runs, which leaves
 // the log naming keys the process does not hold. Peers move to them at once, so
 // everything fails from here and looks like a network problem unless something
@@ -247,11 +254,11 @@ func (d *Daemon) keysAreStale(state *log.State) bool {
 	if !d.keysNamedElsewhere(state) {
 		return false
 	}
-	if d.onKeysNamed == nil {
+	if d.moved == nil {
 		d.logOnce("daemon: the log names different keys for this device than this daemon holds; " +
 			"restart juistd to pick up the promoted key file")
 	} else if d.keysSaid.CompareAndSwap(false, true) {
-		go d.onKeysNamed()
+		d.sayMoved()
 	}
 	return true
 }
@@ -362,7 +369,7 @@ func (d *Daemon) installRelays(s snapshot, held map[types.Identity]gossip.Endpoi
 		}
 	}
 	d.mu.Lock()
-	d.relayMembers, d.relayHosts = relayMembers, relayHosts
+	d.ownRelay.members, d.ownRelay.hosts = relayMembers, relayHosts
 	d.mu.Unlock()
 	d.syncRelay(s.state)
 
@@ -387,7 +394,7 @@ func (d *Daemon) installRelays(s snapshot, held map[types.Identity]gossip.Endpoi
 		})
 	}
 	d.mu.Lock()
-	d.ownRegion = ownRegion
+	d.ownRelay.region = ownRegion
 	d.mu.Unlock()
 	if err := d.manager.SetRelays(relays); err != nil {
 		err = fmt.Errorf("daemon: installing %d relays: %w", len(relays), err)
@@ -483,7 +490,8 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			out.ingresses[p.NodeKey] = true
 		}
 		out.peers = append(out.peers, p)
-		out.named = append(out.named, namedPeer{name: n.Name, id: n.Identity, wg: n.WireGuard, peer: p, stage: stage})
+		out.named = append(out.named, namedPeer{name: n.Name, id: n.Identity, wg: n.WireGuard, peer: p, stage: stage,
+			rests: ep.Rests && !ep.HintAlone()})
 	}
 	return out
 }
@@ -519,7 +527,7 @@ func (d *Daemon) teardown(v ipc.Derived, why string) error {
 	d.setInstalled(nil)
 	d.mu.Lock()
 	d.status.Tunnels = ipc.Tunnels{}
-	d.relayUnreachedSince = time.Time{}
+	d.ownRelay.unreachedSince = time.Time{}
 	d.reachGen++
 	d.mu.Unlock()
 	err := d.manager.SetPeers(nil)
@@ -675,7 +683,7 @@ func homeRelay(ep gossip.Endpoint, relays []conn.Relay) int {
 func (d *Daemon) isRelaying() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.relay != nil
+	return d.ownRelay.server != nil
 }
 
 // pruneEndpoints drops the cached announcements of former members and keeps

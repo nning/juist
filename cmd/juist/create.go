@@ -149,6 +149,21 @@ loses the network.`}
 	return p, nil
 }
 
+// fileHostAdminKeys files the keys here that a network on this host names.
+func (a *app) fileHostAdminKeys() {
+	if !a.hostScope() {
+		return
+	}
+	for _, i := range a.networkInstances() {
+		if i.st == nil {
+			continue
+		}
+		restore := a.within(i.name())
+		a.fileAdminKeys(a.readableLog())
+		restore()
+	}
+}
+
 // checkInit checks everything decidable from the arguments.
 func (a *app) checkInit(p *initPlan) error {
 	if p.quorum == 0 || p.quorum > types.MaxVotes {
@@ -166,6 +181,8 @@ func (a *app) checkInit(p *initPlan) error {
 	// A key made for this network before it, with "juist admins new
 	// --network", is the one it was made for.
 	p.keyName = cmp.Or(p.adminKey, adminKeyName(p.adminName, p.network))
+	// A key another network names is taken only by the name it is filed under.
+	a.fileHostAdminKeys()
 	var err error
 	if p.key, p.keyFound, err = a.home.adminKey(p.keyName); err != nil {
 		return err
@@ -241,7 +258,7 @@ func (a *app) initNode(p *initPlan) (node, operatorChoice, error) {
 	if err != nil {
 		return nil, operatorChoice{}, err
 	}
-	if n.status() != nil && p.noDevice {
+	if liveStatus(n) != nil && p.noDevice {
 		return nil, operatorChoice{}, errors.New("--no-device: juistd runs here")
 	}
 	if err := a.requireOperator(); err != nil {
@@ -252,7 +269,7 @@ func (a *app) initNode(p *initPlan) (node, operatorChoice, error) {
 	} else if !errors.Is(err, errNoNetwork) {
 		return nil, operatorChoice{}, err
 	}
-	op, err := defaultOperator(p.operator, n.status())
+	op, err := defaultOperator(p.operator, liveStatus(n))
 	if err != nil {
 		return nil, operatorChoice{}, err
 	}
@@ -413,13 +430,13 @@ func (a *app) reportCreated(secret *types.DisablementSecret, shown *bool) error 
 		a.field("Break-glass", "%s", backupLine(breakGlassLine, secret[:]))
 		*shown = true
 	}
-	if st := a.node.status(); st != nil && st.Operator != "" {
+	if st := liveStatus(a.node); st != nil && st.Operator != "" {
 		a.field("Operator", "%s", st.Operator)
 	}
 	a.startWarning()
 	a.warnHostOverlap()
 	// --no-device leaves the log in the keystore, and no device to start.
-	if a.node.status() == nil && state.IsMember(id) {
+	if liveStatus(a.node) == nil && state.IsMember(id) {
 		a.startHint()
 	}
 	if secret != nil {

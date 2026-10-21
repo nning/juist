@@ -9,11 +9,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
-	"github.com/nning/juist/trust/enroll"
-	"github.com/nning/juist/types"
 )
 
 // mayOperate reports whether who may do more than read the status. A caller
@@ -41,15 +39,44 @@ func (s *Service) isServe(who caller) bool {
 	return who.known && s.serveUID != 0 && who.uid == s.serveUID
 }
 
-// tierOf is what who may do on the socket.
-func (s *Service) tierOf(who caller) tier {
-	switch {
-	case s.mayOperate(who):
-		return tierOperator
-	case s.isIngress(who), s.isServe(who):
-		return tierIngress
+// A role is what a caller is to this device; a command's entry in
+// [commands] names the roles it answers.
+type role uint8
+
+const (
+	roleReader   role = 1 << iota // any other local user
+	roleIngress                   // the ingress
+	roleServe                     // the terminator
+	roleOperator                  // root, juistd's own user and the operator
+)
+
+// rolesOf is every role who holds: the operator's alone where it holds it.
+func (s *Service) rolesOf(who caller) role {
+	if s.mayOperate(who) {
+		return roleOperator
 	}
-	return tierReader
+	var r role
+	if s.isIngress(who) {
+		r |= roleIngress
+	}
+	if s.isServe(who) {
+		r |= roleServe
+	}
+	if r == 0 {
+		r = roleReader
+	}
+	return r
+}
+
+// tierOf is what who may do on the socket, which decides the pool it waits in.
+func (s *Service) tierOf(who caller) tier {
+	switch r := s.rolesOf(who); {
+	case r == roleOperator:
+		return tierOperator
+	case r == roleReader:
+		return tierReader
+	}
+	return tierIngress
 }
 
 // IngressUser and ServeUser are the users an ingress and a terminator run
@@ -77,148 +104,199 @@ func (s *Service) mayAppoint(who caller) bool {
 	return !who.known || who.uid == 0 || who.uid == s.selfUID
 }
 
+// A call is one request and who made it, as a command's run takes it.
+type call struct {
+	ctx     context.Context
+	req     *ipc.Request
+	who     caller
+	events  func(*ipc.Event) error
+	replies <-chan ipc.Request
+}
+
+// A command is who may ask for it, and what answers it: a response, or an
+// error, or neither for the operator's status, the shared default answer.
+type command struct {
+	who role
+	run func(s *Service, c *call) (*ipc.Response, error)
+}
+
+// commands answers every command [ipc.Command.Known] names; a test holds the
+// two to each other.
+var commands = map[ipc.Command]command{
+	ipc.CmdStatus:      {roleOperator | roleReader, (*Service).callStatus},
+	ipc.CmdPublished:   {roleOperator | roleIngress, (*Service).callPublished},
+	ipc.CmdServing:     {roleOperator | roleServe, (*Service).callServing},
+	ipc.CmdStatusPage:  {roleOperator | roleServe, (*Service).callStatusPage},
+	ipc.CmdSetOperator: {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.appoint(c.req) }},
+	ipc.CmdSelf:        {roleOperator, (*Service).callSelf},
+	ipc.CmdLog:         {roleOperator, (*Service).callLog},
+	ipc.CmdInform:      {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.inform(c.req.Records) }},
+	ipc.CmdCreate:      {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.create(c.req) }},
+	ipc.CmdJoin:        {roleOperator, (*Service).callJoin},
+	ipc.CmdInvite: {roleOperator, func(s *Service, c *call) (*ipc.Response, error) {
+		return nil, s.invite(c.ctx, c.req.Offer, c.events, c.replies)
+	}},
+	ipc.CmdShare: {roleOperator, func(s *Service, c *call) (*ipc.Response, error) {
+		return nil, s.share(c.ctx, c.req.Share, c.events)
+	}},
+	ipc.CmdUnshare: {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.unshare(c.req.Share) }},
+	ipc.CmdInviteReply: {roleOperator, func(*Service, *call) (*ipc.Response, error) {
+		return nil, errors.New("an invite reply is sent inside the invite it answers")
+	}},
+	ipc.CmdRotate:   {roleOperator, (*Service).callRotate},
+	ipc.CmdUnstage:  {roleOperator, func(s *Service, _ *call) (*ipc.Response, error) { return nil, s.unstage() }},
+	ipc.CmdReset:    {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.reset(c.req.Force) }},
+	ipc.CmdSubnet:   {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.setSubnet(c.req) }},
+	ipc.CmdNames:    {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.setNames(*c.req.AcceptNames) }},
+	ipc.CmdSettings: {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.setSettings(c.req) }},
+	ipc.CmdPublish:  {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.setPublish(c.req) }},
+	ipc.CmdExit:     {roleOperator, func(s *Service, c *call) (*ipc.Response, error) { return nil, s.setExit(c.req) }},
+	ipc.CmdPing:     {roleOperator, (*Service).callPing},
+	ipc.CmdWaiting:  {roleOperator, (*Service).callWaiting},
+}
+
 func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, events func(*ipc.Event) error,
 	replies <-chan ipc.Request) ipc.Response {
-	operates := s.mayOperate(who)
-	switch {
-	case req.Command == ipc.CmdPublished && (operates || s.isIngress(who)):
-		if s.isIngress(who) {
-			s.ingressAsked.Store(s.now().Unix())
-			r := ipc.IngressReportOf(*req)
-			s.ingressSaid.Store(&r)
-			if m := s.Mesh(); m != nil {
-				m.NoteIngressListening(r.Listening)
-			}
-		}
-		if m := s.Mesh(); m != nil {
-			p := m.Published()
-			if s.isIngress(who) && len(p.Relays) > 0 {
-				m.ingressTookRelay()
-			}
-			return ipc.Response{Published: p}
-		}
-		return ipc.Response{Published: &ipc.Published{}}
-	case req.Command == ipc.CmdServing && (operates || s.isServe(who)):
-		if m := s.Mesh(); m != nil {
-			return ipc.Response{Serving: m.serving(&ipc.TerminatorReport{Account: req.Account,
-				Listening: req.Listening, Unbound: req.Unbound, NoCert: req.NoCert, Stopping: req.Stopping}, s.isServe(who))}
-		}
-		return ipc.Response{Serving: &ipc.Published{}}
-	case req.Command == ipc.CmdStatusPage && (operates || s.isServe(who)):
-		p, err := s.StatusPage()
-		if err != nil {
-			return ipc.Response{Err: err.Error()}
-		}
-		return ipc.Response{StatusPage: p}
-	case s.isIngress(who) && !operates:
+	cmd, ok := commands[req.Command]
+	if !ok {
+		return ipc.Response{Err: fmt.Sprintf("unhandled %v", req.Command)}
+	}
+	// The one permission check every command passes.
+	switch roles := s.rolesOf(who); {
+	case roles&cmd.who != 0:
+	case roles&roleIngress != 0:
 		return ipc.Response{Err: "the ingress may ask what is published, and nothing else"}
-	case s.isServe(who) && !operates:
+	case roles&roleServe != 0:
 		return ipc.Response{Err: "the terminator may ask what this device serves and its status page, and nothing else"}
-	}
-	if req.Command == ipc.CmdStatus {
-		st := s.Status()
-		st.CanOperate = s.mayOperate(who)
-		if !st.CanOperate {
-			st = st.ForReader()
-		}
-		return ipc.Response{Status: &st}
-	}
-	if !s.mayOperate(who) {
+	default:
 		return ipc.Response{Err: ipc.ErrNotOperator}
 	}
 	if req.SetOperator && !s.mayAppoint(who) {
 		return ipc.Response{Err: "only root may choose this device's operator"}
 	}
-	var err error
-	switch req.Command {
-	case ipc.CmdSetOperator:
-		err = s.appoint(req)
-	case ipc.CmdSelf:
-		s.mu.Lock()
-		self := &ipc.Self{Identity: s.keys.Identity.Public(), Keys: s.keys.Public, Name: s.keys.Name,
-			Signing: new(s.keys.Identity.SigningKey())}
-		s.mu.Unlock()
-		return ipc.Response{Self: self}
-	case ipc.CmdLog:
-		var records, orphans [][]byte
-		if records, err = s.chain(); err == nil && req.Orphans {
-			orphans, err = s.orphans(records, maxOrphans)
-		}
-		if err == nil {
-			return ipc.Response{Records: records, Orphans: orphans}
-		}
-	case ipc.CmdBootstrap:
-		if m := s.Mesh(); m != nil {
-			return ipc.Response{Bootstrap: m.bootstrapHints()}
-		}
-		return ipc.Response{Bootstrap: &ipc.Bootstrap{}}
-	case ipc.CmdInform:
-		err = s.inform(req.Records)
-	case ipc.CmdCreate:
-		err = s.create(req)
-	case ipc.CmdJoin:
-		var adm *enroll.Admission
-		if adm, err = s.join(ctx, req, events); err == nil {
-			st := s.Status()
-			st.CanOperate = true
-			return ipc.Response{Status: &st, Admission: adm}
-		}
-	case ipc.CmdInvite:
-		err = s.invite(ctx, req.Offer, events, replies)
-	case ipc.CmdShare:
-		err = s.share(ctx, req.Share, events)
-	case ipc.CmdUnshare:
-		err = s.unshare(req.Share)
-	case ipc.CmdInviteReply:
-		err = errors.New("an invite reply is sent inside the invite it answers")
-	case ipc.CmdRotate:
-		var rec []byte
-		var proof *types.Sig
-		if rec, proof, err = s.rotate(req.Identity); err == nil {
-			return ipc.Response{Records: [][]byte{rec}, Proof: proof}
-		}
-	case ipc.CmdUnstage:
-		err = s.unstage()
-	case ipc.CmdReset:
-		err = s.reset(req.Force)
-	case ipc.CmdSubnet:
-		err = s.setSubnet(req)
-	case ipc.CmdNames:
-		err = s.setNames(*req.AcceptNames)
-	case ipc.CmdSettings:
-		err = s.setSettings(req)
-	case ipc.CmdPublish:
-		err = s.setPublish(req)
-	case ipc.CmdExit:
-		err = s.setExit(req)
-	case ipc.CmdPing:
-		m := s.Mesh()
-		if m == nil {
-			err = errNoNetwork
-			break
-		}
-		var p *ipc.Ping
-		if p, err = m.Ping(ctx, req.Ping); err == nil {
-			return ipc.Response{Ping: p}
-		}
-	case ipc.CmdWaiting:
-		m := s.Mesh()
-		if m == nil {
-			err = errNoNetwork
-			break
-		}
-		if err = m.OfferWaiting(req.Waiting); err == nil {
-			return ipc.Response{Waiting: m.Waiting()}
-		}
-	default:
-		err = fmt.Errorf("unhandled %v", req.Command)
-	}
-	if err != nil {
+	resp, err := cmd.run(s, &call{ctx: ctx, req: req, who: who, events: events, replies: replies})
+	switch {
+	case err != nil:
 		return ipc.Response{Err: err.Error()}
+	case resp != nil:
+		return *resp
 	}
 	st := s.Status()
 	st.CanOperate = true
 	return ipc.Response{Status: &st}
+}
+
+func (s *Service) callStatus(c *call) (*ipc.Response, error) {
+	st := s.Status()
+	st.CanOperate = s.mayOperate(c.who)
+	if !st.CanOperate {
+		st = st.ForReader()
+	} else if m := s.Mesh(); m != nil && st.Exit != nil && !st.Exit.Isolated {
+		// Read now, outside the service's lock, as no event says it
+		// changed: juist exit use asks it before ending an ssh session.
+		ex := *st.Exit
+		ex.AnswersThrough = m.answersThrough()
+		st.Exit = &ex
+	}
+	return &ipc.Response{Status: &st}, nil
+}
+
+func (s *Service) callPublished(c *call) (*ipc.Response, error) {
+	ingress := s.isIngress(c.who)
+	if ingress {
+		s.ingressAsked.Store(s.now().Unix())
+		r := ipc.IngressReportOf(*c.req)
+		s.ingressSaid.Store(&r)
+		if m := s.Mesh(); m != nil {
+			m.NoteIngressListening(r.Listening)
+		}
+	}
+	if m := s.Mesh(); m != nil {
+		p := m.Published()
+		if ingress && len(p.Relays) > 0 {
+			m.ingressTookRelay()
+		}
+		return &ipc.Response{Published: p}, nil
+	}
+	return &ipc.Response{Published: &ipc.Published{}}, nil
+}
+
+func (s *Service) callServing(c *call) (*ipc.Response, error) {
+	if m := s.Mesh(); m != nil {
+		req := c.req
+		return &ipc.Response{Serving: m.serving(&ipc.TerminatorReport{Account: req.Account,
+			Listening: req.Listening, Unbound: req.Unbound, NoCert: req.NoCert, Stopping: req.Stopping}, s.isServe(c.who))}, nil
+	}
+	return &ipc.Response{Serving: &ipc.Published{}}, nil
+}
+
+func (s *Service) callStatusPage(*call) (*ipc.Response, error) {
+	p, err := s.StatusPage()
+	if err != nil {
+		return nil, err
+	}
+	return &ipc.Response{StatusPage: p}, nil
+}
+
+func (s *Service) callSelf(*call) (*ipc.Response, error) {
+	s.mu.Lock()
+	self := &ipc.Self{Identity: s.keys.Identity.Public(), Keys: s.keys.Public, Name: s.keys.Name,
+		Signing: new(s.keys.Identity.SigningKey())}
+	s.mu.Unlock()
+	return &ipc.Response{Self: self}, nil
+}
+
+func (s *Service) callLog(c *call) (*ipc.Response, error) {
+	records, err := s.chain()
+	var orphans [][]byte
+	if err == nil && c.req.Orphans {
+		orphans, err = s.orphans(records, maxOrphans)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ipc.Response{Records: records, Orphans: orphans}, nil
+}
+
+func (s *Service) callJoin(c *call) (*ipc.Response, error) {
+	adm, err := s.join(c.ctx, c.req, c.events)
+	if err != nil {
+		return nil, err
+	}
+	st := s.Status()
+	st.CanOperate = true
+	return &ipc.Response{Status: &st, Admission: adm}, nil
+}
+
+func (s *Service) callRotate(c *call) (*ipc.Response, error) {
+	rec, proof, err := s.rotate(c.req.Identity)
+	if err != nil {
+		return nil, err
+	}
+	return &ipc.Response{Records: [][]byte{rec}, Proof: proof}, nil
+}
+
+func (s *Service) callPing(c *call) (*ipc.Response, error) {
+	m := s.Mesh()
+	if m == nil {
+		return nil, errNoNetwork
+	}
+	p, err := m.Ping(c.ctx, c.req.Ping)
+	if err != nil {
+		return nil, err
+	}
+	return &ipc.Response{Ping: p}, nil
+}
+
+func (s *Service) callWaiting(c *call) (*ipc.Response, error) {
+	m := s.Mesh()
+	if m == nil {
+		return nil, errNoNetwork
+	}
+	if err := m.OfferWaiting(c.req.Waiting); err != nil {
+		return nil, err
+	}
+	return &ipc.Response{Waiting: m.Waiting()}, nil
 }
 
 func (s *Service) appoint(req *ipc.Request) error {
@@ -257,7 +335,7 @@ func (s *Service) setOperatorLocked(uid uint32) error {
 			return err
 		}
 		s.operator.Store(0)
-		return keys.SyncDir(s.opts.Home)
+		return atomicfile.SyncDir(s.opts.Home)
 	}
 	if err := statedir.WriteFilePrivate(path, []byte(strconv.FormatUint(uint64(uid), 10)+"\n")); err != nil {
 		return err

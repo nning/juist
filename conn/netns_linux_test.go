@@ -4,13 +4,16 @@ package conn
 
 import (
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"tailscale.com/types/key"
 )
 
@@ -289,5 +292,58 @@ func TestNetnsFrameDsts(t *testing.T) {
 				t.Errorf("%s: address %d is %v, want %s", tc.name, i, got[i], w)
 			}
 		}
+	}
+}
+
+// TestNetnsPortCaptureSeesOnlyItsPort: the egress tap's socket holds no frame
+// from another interface. One opened with ETH_P_ALL and bound after queued the
+// host's own traffic, which a tap then reported as the client's leak.
+func TestNetnsPortCaptureSeesOnlyItsPort(t *testing.T) {
+	t.Parallel()
+	lab := newNetnsLab(t)
+	quiet, err := net.InterfaceByName(lab.bridge)
+	if err != nil {
+		t.Fatalf("looking up the bridge: %v", err)
+	}
+	// Loopback traffic, as much as two senders make, for a capture to catch.
+	stop := make(chan struct{})
+	var senders sync.WaitGroup
+	defer func() { close(stop); senders.Wait() }()
+	for range 2 {
+		c, err := net.Dial("udp", "127.0.0.1:9")
+		if err != nil {
+			t.Fatalf("dialling loopback: %v", err)
+		}
+		senders.Add(1)
+		go func() {
+			defer senders.Done()
+			defer c.Close()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_, _ = c.Write([]byte("x")) // refused every other time, which is traffic as well
+			}
+		}()
+	}
+	buf := make([]byte, 2048)
+	for round := range 500 {
+		fd, err := openPortCapture(quiet.Index)
+		if err != nil {
+			t.Fatalf("capturing on %s: %v", lab.bridge, err)
+		}
+		for {
+			nb, from, err := unix.Recvfrom(fd, buf, unix.MSG_DONTWAIT)
+			if err != nil {
+				break
+			}
+			if ll, ok := from.(*unix.SockaddrLinklayer); !ok || ll.Ifindex != quiet.Index {
+				unix.Close(fd)
+				t.Fatalf("round %d: a capture on %s holds %s", round, lab.bridge, frameSummary(buf[:nb], from, quiet.Index))
+			}
+		}
+		unix.Close(fd)
 	}
 }

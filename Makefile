@@ -15,7 +15,7 @@ MAKE_DRY     = $(strip $(foreach f,n t q,$(findstring $(f),$(MAKE_LETTERS))))
 
 # One toolchain for every target, so a commit builds to the same bytes anywhere
 # and local runs match CI's GO_VERSION.
-export GOTOOLCHAIN ?= go1.27.2
+export GOTOOLCHAIN ?= go1.27.3
 
 # Static binaries that need no C toolchain; only the race detector wants cgo.
 export CGO_ENABLED ?= 0
@@ -23,11 +23,8 @@ export CGO_ENABLED ?= 0
 # How every shipped binary is built; `make repro` checks it is reproducible.
 GOBUILD = CGO_ENABLED=0 $(GO) build $(GOFLAGS) -trimpath
 
-# Tool versions are pinned so local runs and CI agree, and so a compromised or
-# simply changed upstream cannot silently alter what our gates check. Bump
-# these deliberately; staticcheck's are in tools/go.mod.
-GOVULNCHECK_VERSION ?= v1.7.0
-ACTIONLINT_VERSION  ?= v1.7.7
+# The linters' versions are pinned in tools/go.mod, so that local runs and CI
+# agree and a changed upstream cannot silently alter what the gates check.
 
 # Source directories resolved through the module rather than by walking the
 # tree, so unrelated checkouts (agent worktrees under .claude/, vendored
@@ -41,7 +38,7 @@ GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 BUILDDIR ?= build
 CMDS     ?= juist juistd
 
-# Platforms v1 commits to (docs/05-roadmap.md M25). Building for each catches
+# Platforms v1 commits to (docs/05-roadmap.md M26). Building for each catches
 # build-tag rot in the embedded Tailscale stack.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
 # Platforms kept compiling though nothing ships for them: macOS, deferred past v1.
@@ -105,6 +102,11 @@ build: ## Build the binaries into build/
 # The man pages are made by the commands themselves, from their own help, so
 # they say what the commands say: juist(1) and juistd(8).
 MANDIR ?= $(BUILDDIR)/man
+
+.PHONY: commands-page
+commands-page: ## Write the handbook's command reference again, from juist's own help
+	@for lang in en de; do f=website/content/$$lang/docs/commands.md; \
+		{ sed '/^## /,$$d' $$f; $(GO) run $(GOFLAGS) ./cmd/juist __commands; } > $$f.new && mv $$f.new $$f; done
 
 .PHONY: man
 man: ## Build the man pages, juist(1) and juistd(8), into build/man
@@ -412,6 +414,15 @@ android-check: android-core ## Test the Android app: unit and screenshot tests, 
 android-screenshots: android-core ## Record the Android app's screenshots anew, into android/app/screenshots and website/video/phone
 	$(GRADLE) recordRoborazziDebug
 
+# `make android-idle` boots the AVD juist where no device is attached, and
+# runs each scenario for IDLE_MINUTES (35) with the screen off beside ten
+# members, one restarting every 3 minutes: about 50 minutes a scenario,
+# logged to build/idle.
+.PHONY: android-idle
+android-idle: android-core ## Measure the Android app idling in the emulator; fail past its budget (needs the AVD juist)
+	$(GRADLE) assembleDebug
+	$(GO) run ./ci/idle $(if $(IDLE_MINUTES),-minutes $(IDLE_MINUTES)) $(if $(IDLE),-scenarios "$(IDLE)")
+
 ## --- packaging -----------------------------------------------------------
 
 # `make rpm` builds an installable package from binaries this Makefile
@@ -531,12 +542,14 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	done; \
 	install -D -m 0644 packaging/ufw/juist $$root/etc/ufw/applications.d/juist; \
 	install -D -m 0644 packaging/dhclient/juist $$root/etc/dhcp/dhclient-enter-hooks.d/juist; \
+	install -D -m 0644 packaging/apparmor/juist $$root/etc/apparmor.d/abstractions/nameservice.d/juist; \
 	install -D -m 0644 packaging/completions/juist.bash $$root/usr/share/bash-completion/completions/juist; \
 	install -D -m 0644 packaging/completions/_juist $$root/usr/share/zsh/vendor-completions/_juist; \
 	install -D -m 0644 packaging/completions/juist.fish $$root/usr/share/fish/vendor_completions.d/juist.fish; \
 	install -d -m 0755 $$root/DEBIAN; \
 	install -m 0755 packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm $$root/DEBIAN/; \
-	printf '%s\n' /etc/ufw/applications.d/juist /etc/dhcp/dhclient-enter-hooks.d/juist > $$root/DEBIAN/conffiles; \
+	printf '%s\n' /etc/ufw/applications.d/juist /etc/dhcp/dhclient-enter-hooks.d/juist \
+		/etc/apparmor.d/abstractions/nameservice.d/juist > $$root/DEBIAN/conffiles; \
 	install -m 0644 packaging/deb/triggers $$root/DEBIAN/; \
 	size=$$(du -sk --exclude=DEBIAN $$root | cut -f1); \
 	sed -e 's|@VERSION@|$(DEB_VERSION)|' -e 's|@ARCH@|$(DEB_ARCH)|' -e "s|@SIZE@|$$size|" \
@@ -682,11 +695,13 @@ staticcheck: ## Run staticcheck
 
 .PHONY: govulncheck
 govulncheck: ## Check dependencies against the Go vulnerability database
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	$(GO) build -C tools -o $(abspath $(BUILDDIR))/govulncheck golang.org/x/vuln/cmd/govulncheck
+	$(BUILDDIR)/govulncheck ./...
 
 .PHONY: actionlint
 actionlint: ## Lint the GitHub Actions workflows
-	$(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+	$(GO) build -C tools -o $(abspath $(BUILDDIR))/actionlint github.com/rhysd/actionlint/cmd/actionlint
+	$(BUILDDIR)/actionlint
 
 .PHONY: lint
 lint: fmt-check vet staticcheck actionlint ## Run all static analysis
@@ -723,7 +738,7 @@ CHECK_STEPS = fmt-check vet staticcheck actionlint tidy-check build-test test-ra
 # not run, from the tree this run hashed, which no other run shares.
 CHECK_AS_IS = $(if $(MAKEOVERRIDES)$(filter-out file,$(foreach v,$(CHECK_VARS),$(origin $(v))))$(strip \
 	$(foreach f,i e,$(findstring $(f),$(MAKE_LETTERS))))$(MAKE_DRY),,yes)
-CHECK_VARS  = CHECK_STEPS TEST_FLAGS GO GOFLAGS GOTOOLCHAIN CGO_ENABLED ACTIONLINT_VERSION CMDS TCB_BUDGET
+CHECK_VARS  = CHECK_STEPS TEST_FLAGS GO GOFLAGS GOTOOLCHAIN CGO_ENABLED CMDS TCB_BUDGET
 CHECK_TREE := $(BUILDDIR)/check.tree.$(shell echo $$PPID)
 
 .PHONY: check

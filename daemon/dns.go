@@ -3,6 +3,8 @@ package daemon
 import (
 	"bytes"
 	"cmp"
+	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nning/juist/conn"
@@ -30,9 +34,53 @@ const (
 	dnsAskedPort   = 53
 )
 
-// dnsRenewal is how often a host's DNS routing is given again, which a
-// restarted resolved forgets.
-const dnsRenewal = 5 * time.Minute
+// The host's DNS routing is given again every dnsRenewal, which a restarted
+// resolved forgets, and every dnsRenewalWatched where resolved's restarts
+// are watched.
+const (
+	dnsRenewal        = 5 * time.Minute
+	dnsRenewalWatched = time.Hour
+)
+
+// A watchedDNS calls restarted each time the host's resolver starts again,
+// and watching with whether it watches, until ctx ends.
+type watchedDNS interface {
+	watch(ctx context.Context, watching func(bool), restarted func())
+}
+
+func (resolvedDNS) watch(ctx context.Context, watching func(bool), restarted func()) {
+	resolved.WatchRestarts(ctx, watching, restarted)
+}
+
+// watchHostDNS has the host's DNS routed again each time its resolver starts
+// again, where it can be watched.
+func (d *Daemon) watchHostDNS(ctx context.Context) {
+	w, ok := d.hostDNS.(watchedDNS)
+	if !ok || !d.waits.track() {
+		return
+	}
+	go func() {
+		defer d.waits.done()
+		w.watch(ctx, d.dns.watched.Store, func() {
+			d.dns.mu.Lock()
+			d.dns.routedAt = time.Time{}
+			d.dns.mu.Unlock()
+			d.reconcileSoon()
+		})
+	}()
+}
+
+// interfacesChanged reconciles soon, as a link coming or going, as a VPN's,
+// may change where the host's DNS goes.
+func (d *Daemon) interfacesChanged() { d.reconcileSoon() }
+
+// dnsRenewalNow is how long the routing given stands.
+func (d *Daemon) dnsRenewalNow() time.Duration {
+	if d.dns.watched.Load() {
+		return dnsRenewalWatched
+	}
+	return dnsRenewal
+}
 
 // A DNSRouting is what the host's DNS asks by this node's device: Servers,
 // for Domains, with Search tried for single names too, and for every name
@@ -56,6 +104,31 @@ const dnsOffWhy = "DNS is off on this device"
 
 // errNoDomains is a host resolver that routes no domains, only every name.
 var errNoDomains = errors.New("this host's resolver routes no domains")
+
+// dnsState is the DNS this device answers members as an exit node, and the
+// host's: routing is what the host was last told, and names answers it from
+// the zone. mu is held across the host's resolver and the servers' Close.
+type dnsState struct {
+	mu       sync.Mutex
+	server   io.Closer
+	addrs    []netip.Addr
+	overlay  []netip.Prefix
+	routing  DNSRouting       // what the host was last told
+	exit     []netip.AddrPort // the exit node's resolvers it is meant to ask
+	routedAt time.Time
+	why      string // why the routing last failed, "" where it did not
+	closed   bool
+	watched  atomic.Bool // the resolver's restarts are watched
+
+	names         io.Closer
+	namesAt       netip.AddrPort // where names answers, while it does
+	namesFailedAt time.Time
+	namesWhy      string // why names did not start
+	namesStatus   *ipc.Names
+	overrides     []heldOverride // the network's public names, answered or not
+	namesAccepted bool
+	namesUntil    int64 // until when overrides are answered, the view's freshness
+}
 
 // A HostDNS routes the host's DNS through this node's device as a routing
 // says, or gives it back.
@@ -101,14 +174,57 @@ func (r resolvedDNS) Route(rt DNSRouting) error {
 // routesDomains says resolved routes domains to a link, as juist's names need.
 func (resolvedDNS) routesDomains() bool { return true }
 
+// routingWithin bounds a read of resolved's routing, connecting included.
+const routingWithin = 5 * time.Second
+
 // routing is how resolved routes names to every link but this one.
 func (r resolvedDNS) routing() (resolved.Routing, error) {
-	i, c, err := r.link()
+	ifc, err := net.InterfaceByName(r.dev)
+	if err != nil {
+		return resolved.Routing{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), routingWithin)
+	defer cancel()
+	c, err := resolved.DialContext(ctx)
 	if err != nil {
 		return resolved.Routing{}, err
 	}
 	defer c.Close()
-	return c.Routing(i)
+	links := func() []int {
+		var out []int
+		if ifcs, err := net.Interfaces(); err == nil {
+			for _, i := range ifcs {
+				out = append(out, i.Index)
+			}
+		}
+		return out
+	}
+	rt, err := c.Routing(ifc.Index, links)
+	for k, sc := range rt.Scopes {
+		rt.Scopes[k].Subnets = linkSubnets(sc.Ifindex)
+	}
+	return rt, err
+}
+
+// linkSubnets are the addresses of the link at ifindex, with their prefixes.
+func linkSubnets(ifindex int) []netip.Prefix {
+	if ifindex == 0 {
+		return nil
+	}
+	ifc, err := net.InterfaceByIndex(ifindex)
+	if err != nil {
+		return nil
+	}
+	addrs, _ := ifc.Addrs()
+	var out []netip.Prefix
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			ip, _ := netip.AddrFromSlice(n.IP)
+			ones, _ := n.Mask.Size()
+			out = append(out, netip.PrefixFrom(ip.Unmap(), ones))
+		}
+	}
+	return out
 }
 
 func (r resolvedDNS) Revert() error {
@@ -174,9 +290,9 @@ func (d *Daemon) defaultDNSServer(dev string) DNSServer {
 // resolvers resolved would ask where this device's zone overrides its name
 // and the host's resolver asks juist's, and [Daemon.uplinkFor] otherwise,
 // which know no override.
-func (d *Daemon) membersUpstreamFor(q []byte) []netip.AddrPort {
+func (d *Daemon) membersUpstreamFor(q []byte) ([]netip.AddrPort, error) {
 	if z := d.zone.Load(); z != nil && d.namesRouted.Load() && z.Overridden(q) {
-		return d.hostUpstreamFor(q)
+		return d.hostUpstreamFor(q, true)
 	}
 	return d.uplinkFor(q)
 }
@@ -189,36 +305,62 @@ var tailscaledResolvers = []netip.Addr{netip.MustParseAddr("100.100.100.100"), n
 // before writing its own.
 var PreTailscaleResolvConf = "/etc/resolv.pre-tailscale-backup.conf"
 
+// resolvedStubs are where systemd-resolved's stub answers.
+var resolvedStubs = []netip.Addr{netip.MustParseAddr("127.0.0.53"), netip.MustParseAddr("127.0.0.54")}
+
+// errStubDown refuses a name the host would ask resolved's stub of, which
+// does not run.
+var errStubDown = errors.New("resolv.conf names systemd-resolved alone, which is not running")
+
+// errTailnetOnly refuses a member's name the host routes to tailscaled alone.
+var errTailnetOnly = errors.New("the host asks tailscaled alone, whose answers members cannot reach")
+
+// stubAlone reports whether ups are resolved's stub alone.
+func stubAlone(ups []netip.AddrPort) bool {
+	return len(ups) > 0 && !slices.ContainsFunc(ups, func(a netip.AddrPort) bool { return !slices.Contains(resolvedStubs, a.Addr()) })
+}
+
+func withoutStub(ups []netip.AddrPort) []netip.AddrPort {
+	return slices.DeleteFunc(slices.Clone(ups), func(a netip.AddrPort) bool { return slices.Contains(resolvedStubs, a.Addr()) })
+}
+
+// stubLinked reports whether resolv.conf is a link to one of resolved's,
+// which a dangling one is too.
+func stubLinked() bool {
+	to, err := os.Readlink(dnsfwd.ResolvConf)
+	return err == nil && strings.Contains(to, "systemd/resolve/")
+}
+
 // uplinkFor is who a member's query q is asked of where no override is
-// answered: those the host asks, by resolved's routing where resolv.conf
-// names its stub alone, its own where it asks juistd alone, but never
-// tailscaled's resolvers; nil, the forwarder's own, where they are all there
-// is.
-func (d *Daemon) uplinkFor(q []byte) []netip.AddrPort {
+// answered: those resolved would ask, where it runs, but never tailscaled's
+// resolvers; its own where the host asks juistd alone; else those
+// resolv.conf names, or tailscaled's predecessor's; nil, the forwarder's
+// own, where they are all there is. An error refuses q.
+func (d *Daemon) uplinkFor(q []byte) ([]netip.AddrPort, error) {
 	if s, ok := d.hostDNS.(soleResolver); ok {
 		// Never resolv.conf, which names juistd's own resolver.
-		return d.soleUpstream(s)
+		return d.soleUpstream(s), nil
 	}
+	r, err := d.hostRoutingNow()
 	ups := dnsfwd.HostResolvers()
-	stubOnly := len(ups) > 0 && !slices.ContainsFunc(ups, func(a netip.AddrPort) bool { return !a.Addr().IsLoopback() })
-	if r := d.hostRouting.Load(); r != nil && stubOnly {
-		if name, ok := names.Question(q); ok {
-			ups = withoutTailscaled(r.Servers(name))
-			if len(ups) == 0 {
-				for _, s := range r.Scopes {
-					if s.DefaultRoute {
-						ups = append(ups, withoutTailscaled(s.Servers)...)
-					}
-				}
-			}
+	switch {
+	case errors.Is(err, resolved.ErrNotRunning):
+		if stubAlone(ups) || len(ups) == 0 && stubLinked() {
+			return nil, errStubDown
 		}
-	} else if ups = withoutTailscaled(ups); len(ups) == 0 {
+		ups = withoutStub(ups)
+	case err != nil:
+		return nil, err
+	case r != nil:
+		return d.routed(r, q, true)
+	}
+	if ups = withoutTailscaled(ups); len(ups) == 0 {
 		ups = withoutTailscaled(dnsfwd.ResolversIn(PreTailscaleResolvConf))
 	}
 	if len(ups) == 0 {
-		return nil
+		return nil, nil
 	}
-	return ups
+	return ups, nil
 }
 
 func withoutTailscaled(ups []netip.AddrPort) []netip.AddrPort {
@@ -227,68 +369,366 @@ func withoutTailscaled(ups []netip.AddrPort) []netip.AddrPort {
 
 // namesUpstreamFor is who juistd's resolver asks q of, what it does not
 // answer itself: the exit node in use, else the host's resolvers.
-func (d *Daemon) namesUpstreamFor(q []byte) []netip.AddrPort {
+func (d *Daemon) namesUpstreamFor(q []byte) ([]netip.AddrPort, error) {
 	if up := d.namesExit.Load(); up != nil && len(*up) > 0 {
-		return *up
+		return *up, nil
 	}
-	return d.hostUpstreamFor(q)
+	return d.hostUpstreamFor(q, false)
 }
 
 // hostUpstreamFor is the host's resolvers resolved asks q's name of, but on
-// juist's device, never none-nil; the host's resolvers in turn where its
-// routing could not be read, or where the host asks juistd alone.
-func (d *Daemon) hostUpstreamFor(q []byte) []netip.AddrPort {
+// juist's device; where resolved is not running, those resolv.conf names
+// but its stub; the host's resolvers in turn where the host asks juistd
+// alone or has no routing to read. For members, never tailscaled's. An
+// error refuses q.
+func (d *Daemon) hostUpstreamFor(q []byte, members bool) ([]netip.AddrPort, error) {
 	if s, ok := d.hostDNS.(soleResolver); ok {
-		return append([]netip.AddrPort{}, d.soleUpstream(s)...)
+		return append([]netip.AddrPort{}, d.soleUpstream(s)...), nil
 	}
-	if r := d.hostRouting.Load(); r != nil {
-		if name, ok := names.Question(q); ok {
-			return r.Servers(name)
+	r, err := d.hostRoutingNow()
+	var ups []netip.AddrPort
+	switch {
+	case errors.Is(err, resolved.ErrNotRunning):
+		if ups = withoutStub(dnsfwd.HostResolvers()); len(ups) == 0 {
+			return nil, errStubDown
 		}
+	case err != nil:
+		return nil, err
+	case r != nil:
+		return d.routed(r, q, members)
+	default:
+		ups = append([]netip.AddrPort{}, uplinkResolvers()...)
 	}
-	return append([]netip.AddrPort{}, uplinkResolvers()...)
+	if members {
+		theirs := withoutTailscaled(ups)
+		if len(theirs) == 0 && len(ups) > 0 {
+			d.forwardRefused(errTailnetOnly)
+			return nil, errTailnetOnly
+		}
+		ups = theirs
+	}
+	return ups, nil
 }
 
-// hostRoutingEvery is how often the host's routing is read again, which a
-// link coming or going, as a VPN's, changes.
-const hostRoutingEvery = 30 * time.Second
+// routed is who resolved asks q of by r, refusing as resolved's stub would
+// answer it what the stub refuses, what resolved answers itself or asks no
+// DNS server of; and for the host, what it asks over TLS, which would leave
+// in plain text by the local network; for members, whose queries leave at
+// this site, never tailscaled's resolvers, and q refused where they are all
+// there is.
+func (d *Daemon) routed(r *resolved.Routing, q []byte, members bool) ([]netip.AddrPort, error) {
+	name, qtype, qclass, ok := names.QuestionOf(q)
+	if !ok {
+		return nil, &dnsfwd.Refusal{RCode: dnsfwd.RCodeFormErr, Err: errors.New("no question")}
+	}
+	if stubRefuses(q, qtype, qclass) || ownHostname(name) || inEtcHosts(name) {
+		return nil, &dnsfwd.Refusal{RCode: dnsfwd.RCodeRefused, Err: resolved.ErrNotUnicast}
+	}
+	ups, overTLS, err := r.Route(name, qtype)
+	switch {
+	case errors.Is(err, resolved.ErrNeverResolved):
+		return nil, &dnsfwd.Refusal{RCode: dnsfwd.RCodeNXDomain, Err: err}
+	case errors.Is(err, resolved.ErrOwn):
+		return nil, err
+	case errors.Is(err, resolved.ErrNoServers):
+		d.forwardRefused(err)
+		return nil, &dnsfwd.Refusal{RCode: dnsfwd.RCodeRefused, Err: err}
+	case err != nil:
+		return nil, &dnsfwd.Refusal{RCode: dnsfwd.RCodeRefused, Err: err}
+	case overTLS && !members:
+		d.forwardRefused(resolved.ErrOverTLS)
+		return nil, resolved.ErrOverTLS
+	}
+	if members {
+		if ups = withoutTailscaled(ups); len(ups) == 0 {
+			d.forwardRefused(errTailnetOnly)
+			return nil, errTailnetOnly
+		}
+	}
+	return ups, nil
+}
 
-// readHostRoutingLocked reads the host resolver's routing, where it has one
-// to read and has not been read for hostRoutingEvery; failing, it is
-// forgotten.
-func (d *Daemon) readHostRoutingLocked() {
-	rr, ok := d.hostDNS.(interface {
-		routing() (resolved.Routing, error)
-	})
-	if !ok || !d.hostRoutingAt.IsZero() && d.now().Sub(d.hostRoutingAt) < hostRoutingEvery {
-		return
+// stubRefuses reports whether resolved's stub refuses q, of type qtype and
+// class qclass: more than one question, no recursion desired, a zone
+// transfer, a type obsolete or no question's, or a class but IN and ANY.
+func stubRefuses(q []byte, qtype, qclass uint16) bool {
+	return binary.BigEndian.Uint16(q[4:]) != 1 || q[2]&0x01 == 0 || slices.Contains(stubRefusedTypes, qtype) ||
+		qclass != 1 && qclass != 255
+}
+
+// stubRefusedTypes are zone transfers, obsolete types and those no question
+// asks for, as resolved's stub has them.
+var stubRefusedTypes = []uint16{0, 3, 4, 7, 8, 9, 10, 11, 14, 30, 38, 41, 46, 249, 250, 251, 252, 253, 254}
+
+// ownHostname reports whether name is the host's own, which resolved
+// answers itself.
+func ownHostname(name string) bool {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return false
 	}
-	d.hostRoutingAt = d.now()
+	h = strings.ToLower(strings.TrimSuffix(h, "."))
+	short, _, _ := strings.Cut(h, ".")
+	return name == h || name == short
+}
+
+// forwardRefused has juist health say err refused a name the host routes,
+// and logs it at most every hostRoutingLogEvery.
+func (d *Daemon) forwardRefused(err error) {
+	now, why := d.now(), err.Error()
+	d.hostRouting.mu.Lock()
+	at, logged := d.hostRouting.refusedLogged[why]
+	log := !logged || now.Sub(at) >= hostRoutingLogEvery
+	if log {
+		if d.hostRouting.refusedLogged == nil {
+			d.hostRouting.refusedLogged = map[string]time.Time{}
+		}
+		d.hostRouting.refusedLogged[why] = now
+	}
+	if now.Unix() != d.hostRouting.refusedAt || why != d.hostRouting.refusedWhy {
+		d.hostRouting.refusedAt, d.hostRouting.refusedWhy = now.Unix(), why
+		d.setStatus(func(s *ipc.Status) { s.DNSRefused, s.DNSRefusedAt = why, now.Unix() })
+	}
+	d.hostRouting.mu.Unlock()
+	if log {
+		d.logf("daemon: refusing names the host routes: %s", why)
+	}
+}
+
+// A query goes by a read of the host's DNS routing begun at most
+// hostRoutingFresh before it, as resolved signals no change to a link's
+// domains, and waits at most hostRoutingWait for one.
+const (
+	hostRoutingFresh = time.Second
+	hostRoutingWait  = 3 * time.Second
+)
+
+// errHostRoutingSlow is a read of the host's DNS routing that outlasted
+// hostRoutingWait.
+var errHostRoutingSlow = fmt.Errorf("no answer within %v", hostRoutingWait)
+
+// A routingReader reads how the host's resolver routes names to every link
+// but juist's.
+type routingReader interface {
+	routing() (resolved.Routing, error)
+}
+
+// A domainRouter says whether the host's resolver routes domains to a link,
+// as juist's names need.
+type domainRouter interface{ routesDomains() bool }
+
+// A throughReporter reports whether the host's programs ask the servers
+// routed, and why not, as [Daemon.throughStub].
+type throughReporter interface {
+	through(path string, servers []netip.AddrPort) (bool, string)
+}
+
+// A namesPorter names the port juistd's resolver must answer the host on, in
+// place of [NamesPort].
+type namesPorter interface{ namesPort() uint16 }
+
+// What each host resolver can, held at compile time: the daemon finds each
+// capability by a type assertion, which a renamed method would fail silently.
+var (
+	_ watchedDNS      = resolvedDNS{}
+	_ routingReader   = resolvedDNS{}
+	_ domainRouter    = resolvedDNS{}
+	_ throughReporter = plumbedDNS{}
+	_ soleResolver    = fileDNS{}
+	_ domainRouter    = fileDNS{}
+	_ throughReporter = fileDNS{}
+	_ soleResolver    = resolvconfDNS{}
+	_ domainRouter    = resolvconfDNS{}
+	_ namesPorter     = resolvconfDNS{}
+	_ throughReporter = resolvconfDNS{}
+)
+
+// A capability lost to a renamed method fails to build here, not silently.
+var (
+	_ watchedDNS      = resolvedDNS{}
+	_ routingReader   = resolvedDNS{}
+	_ domainRouter    = resolvedDNS{}
+	_ domainRouter    = fileDNS{}
+	_ domainRouter    = resolvconfDNS{}
+	_ soleResolver    = fileDNS{}
+	_ soleResolver    = resolvconfDNS{}
+	_ throughReporter = plumbedDNS{}
+	_ throughReporter = vpnDNS{}
+	_ throughReporter = fileDNS{}
+	_ throughReporter = resolvconfDNS{}
+	_ namesPorter     = resolvconfDNS{}
+)
+
+// hostRoutingState is what the host's DNS routing was last read as, and the
+// refusals logged by it. Its lock is never held across D-Bus.
+type hostRoutingState struct {
+	mu       sync.Mutex
+	read     *routingRead // the last read, done or under way
+	why      string       // why the last read failed, "" where it did not
+	logged   bool         // whether this run of failures was logged
+	loggedAt time.Time
+
+	refusedLogged map[string]time.Time // when each reason a name was refused was logged
+	refusedAt     int64                // the second refusedWhy was last said in
+	refusedWhy    string
+}
+
+// A routingRead is one read of the host's DNS routing, begun at at; r and
+// err are set once done is closed.
+type routingRead struct {
+	at   time.Time
+	done chan struct{}
+	r    *resolved.Routing
+	err  error
+}
+
+func (rd *routingRead) finished() bool {
+	select {
+	case <-rd.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// hostRoutingNow is the host's DNS routing, read anew unless a read begun
+// within hostRoutingFresh is done or under way, which callers share; nil
+// where there is none to read, and [resolved.ErrNotRunning] where resolved
+// is not running. Another error is a read that failed or outlasted
+// hostRoutingWait, never an older routing.
+func (d *Daemon) hostRoutingNow() (*resolved.Routing, error) {
+	rr, ok := d.hostDNS.(routingReader)
+	if !ok {
+		return nil, nil
+	}
+	asked := d.now()
+	fresh := func(rd *routingRead) bool { return asked.Sub(rd.at) < hostRoutingFresh }
+	wait := time.NewTimer(hostRoutingWait)
+	defer wait.Stop()
+	for {
+		d.hostRouting.mu.Lock()
+		rd := d.hostRouting.read
+		if rd == nil || rd.finished() && !fresh(rd) {
+			rd = d.readHostRoutingLocked(rr)
+		}
+		d.hostRouting.mu.Unlock()
+		select {
+		case <-rd.done:
+			// One under way since before asked is no answer to it.
+			if fresh(rd) {
+				return rd.r, rd.err
+			}
+			continue
+		case <-wait.C:
+		}
+		d.hostRouting.mu.Lock()
+		if rd.finished() && fresh(rd) {
+			d.hostRouting.mu.Unlock()
+			return rd.r, rd.err
+		}
+		log := func() {}
+		if !rd.finished() {
+			log = d.hostRoutingReadLocked(errHostRoutingSlow)
+		}
+		d.hostRouting.mu.Unlock()
+		log()
+		return nil, errHostRoutingSlow
+	}
+}
+
+// readHostRoutingLocked begins a read of the host's DNS routing. The caller
+// holds hostRouting.mu.
+func (d *Daemon) readHostRoutingLocked(rr routingReader) *routingRead {
+	rd := &routingRead{at: d.now(), done: make(chan struct{})}
+	d.hostRouting.read = rd
+	go d.readHostRouting(rr, rd)
+	return rd
+}
+
+// readHostRouting reads the host's DNS routing into rd.
+func (d *Daemon) readHostRouting(rr routingReader, rd *routingRead) {
 	r, err := rr.routing()
-	if err != nil {
+	rd.err = err
+	switch {
+	case errors.Is(err, resolved.ErrNotRunning):
 		d.logOnce("daemon: reading the host's DNS routing: " + err.Error())
-		d.hostRouting.Store(nil)
-		return
+		err = nil
+	case err == nil:
+		rd.r = &r
 	}
-	d.hostRouting.Store(&r)
+	d.hostRouting.mu.Lock()
+	defer d.hostRouting.mu.Unlock()
+	// Logged before the waiters go on, so a query refused has its cause said.
+	d.hostRoutingReadLocked(err)()
+	close(rd.done)
+}
+
+// hostRoutingLogEvery is how often a failure to read the host's DNS
+// routing is logged at most, as reads may fail and succeed in turn.
+const hostRoutingLogEvery = time.Minute
+
+// hostRoutingReadLocked records whether the host's DNS routing could be
+// read, err nil where it could, for the status, and is what to log: a
+// failure not yet logged, at most every hostRoutingLogEvery, and the end of
+// a run logged. The caller holds hostRouting.mu.
+func (d *Daemon) hostRoutingReadLocked(err error) (log func()) {
+	why := ""
+	if err != nil {
+		why = err.Error()
+	}
+	was := d.hostRouting.why
+	d.hostRouting.why = why
+	if why != was {
+		d.setStatus(func(s *ipc.Status) { s.DNSRoutingUnread = why })
+	}
+	switch {
+	case why != "" && !d.hostRouting.logged:
+		now := d.now()
+		if d.hostRouting.loggedAt.IsZero() || now.Sub(d.hostRouting.loggedAt) >= hostRoutingLogEvery {
+			d.hostRouting.logged, d.hostRouting.loggedAt = true, now
+			return func() { d.logf("daemon: refusing names the host routes, as its DNS routing cannot be read: %s", why) }
+		}
+	case why == "" && d.hostRouting.logged:
+		d.hostRouting.logged = false
+		return func() { d.logf("daemon: the host's DNS routing is read again") }
+	}
+	return func() {}
+}
+
+// hostRoutingReconciled has a failure to read the host's DNS routing said
+// no longer once nothing forwards by it, and read again where something
+// does, as reads are otherwise a query's, but never once DNS is closed. The
+// caller holds dns.mu.
+func (d *Daemon) hostRoutingReconciled(forwards bool) {
+	rr, ok := d.hostDNS.(routingReader)
+	d.hostRouting.mu.Lock()
+	defer d.hostRouting.mu.Unlock()
+	switch {
+	case d.hostRouting.why == "":
+	case !ok || !forwards || d.dns.closed:
+		d.hostRouting.why, d.hostRouting.logged = "", false
+		d.setStatus(func(s *ipc.Status) { s.DNSRoutingUnread = "" })
+	case d.hostRouting.read == nil || d.hostRouting.read.finished() && d.now().Sub(d.hostRouting.read.at) >= hostRoutingFresh:
+		d.readHostRoutingLocked(rr)
+	}
 }
 
 // serveDNS answers members' DNS on addrs, from overlay, while on, and stops
 // otherwise; it reports the port it answers on, zero for none.
 func (d *Daemon) serveDNS(on bool, addrs []netip.Addr, overlay []netip.Prefix) uint16 {
-	d.dnsMu.Lock()
-	defer d.dnsMu.Unlock()
+	d.dns.mu.Lock()
+	defer d.dns.mu.Unlock()
 	return d.serveDNSLocked(on, addrs, overlay)
 }
 
 func (d *Daemon) serveDNSLocked(on bool, addrs []netip.Addr, overlay []netip.Prefix) uint16 {
-	on = on && !d.dnsClosed
-	if on && d.dnsServer != nil && slices.Equal(addrs, d.dnsAddrs) && slices.Equal(overlay, d.dnsOverlay) {
+	on = on && !d.dns.closed
+	if on && d.dns.server != nil && slices.Equal(addrs, d.dns.addrs) && slices.Equal(overlay, d.dns.overlay) {
 		return DefaultDNSPort
 	}
-	if d.dnsServer != nil {
-		d.dnsServer.Close()
-		d.dnsServer, d.dnsAddrs, d.dnsOverlay = nil, nil, nil
+	if d.dns.server != nil {
+		d.dns.server.Close()
+		d.dns.server, d.dns.addrs, d.dns.overlay = nil, nil, nil
 	}
 	if !on || d.startDNS == nil || len(addrs) == 0 {
 		return 0
@@ -302,7 +742,7 @@ func (d *Daemon) serveDNSLocked(on bool, addrs []netip.Addr, overlay []netip.Pre
 		d.logOnce("daemon: answering members' DNS: " + err.Error())
 		return 0
 	}
-	d.dnsServer, d.dnsAddrs, d.dnsOverlay = s, slices.Clone(addrs), overlay
+	d.dns.server, d.dns.addrs, d.dns.overlay = s, slices.Clone(addrs), overlay
 	return DefaultDNSPort
 }
 
@@ -310,13 +750,34 @@ func (d *Daemon) serveDNSLocked(on bool, addrs []netip.Addr, overlay []netip.Pre
 // tried again, which each reconcile would otherwise do.
 const dnsRetry = 30 * time.Second
 
+// dnsDue is when the routing of the host's DNS is next given again, renewed
+// or retried, or juist's resolver started again after it failed; zero for
+// none.
+func (d *Daemon) dnsDue() time.Time {
+	d.dns.mu.Lock()
+	defer d.dns.mu.Unlock()
+	var next soonest
+	if !d.dns.namesFailedAt.IsZero() {
+		next.add(d.dns.namesFailedAt.Add(dnsRetry))
+	}
+	_, keeps := d.hostDNS.(vpnDNS)
+	switch {
+	case d.dns.closed || d.hostDNS == nil || d.dns.routing.empty():
+	case d.dns.why != "":
+		next.add(d.dns.routedAt.Add(dnsRetry))
+	case !keeps:
+		next.add(d.dns.routedAt.Add(d.dnsRenewalNow()))
+	}
+	return next.at
+}
+
 // routeDNS routes the host's DNS to servers, or gives it back where there are
 // none; keep keeps what is routed, renewing it. It reports whether DNS goes
 // through the tunnel, and why not, where it was meant to.
 func (d *Daemon) routeDNS(servers []netip.AddrPort, keep bool) (bool, string) {
-	d.dnsMu.Lock()
-	defer d.dnsMu.Unlock()
-	if d.dnsClosed {
+	d.dns.mu.Lock()
+	defer d.dns.mu.Unlock()
+	if d.dns.closed {
 		return false, ""
 	}
 	return d.routeDNSLocked(servers, keep)
@@ -324,62 +785,60 @@ func (d *Daemon) routeDNS(servers []netip.AddrPort, keep bool) (bool, string) {
 
 func (d *Daemon) routeDNSLocked(exit []netip.AddrPort, keep bool) (bool, string) {
 	if keep {
-		exit = d.dnsExit
+		exit = d.dns.exit
 	}
-	d.dnsExit = slices.Clone(exit)
+	d.dns.exit = slices.Clone(exit)
 	up := slices.Clone(exit)
 	d.namesExit.Store(&up)
+	defer func() { d.hostRoutingReconciled(d.dns.names != nil && len(d.dns.exit) == 0 || d.dns.server != nil) }()
 	want := d.wantRoutingLocked(exit)
-	if d.names != nil && len(exit) == 0 || d.dnsServer != nil {
-		d.readHostRoutingLocked()
-	}
-	d.namesStatus = nil
+	d.dns.namesStatus = nil
 	d.namesRouted.Store(false)
 	if want.empty() {
-		if !d.dnsRouting.empty() && d.hostDNS != nil {
+		if !d.dns.routing.empty() && d.hostDNS != nil {
 			if err := d.hostDNS.Revert(); err != nil {
 				d.logOnce("daemon: giving the host's DNS back: " + err.Error())
 			}
 		}
-		d.dnsRouting, d.dnsWhy = DNSRouting{}, ""
+		d.dns.routing, d.dns.why = DNSRouting{}, ""
 		off := d.dnsOff.Load()
-		if off && d.names != nil {
-			d.names.Close()
-			d.names = nil
+		if off && d.dns.names != nil {
+			d.dns.names.Close()
+			d.dns.names = nil
 		}
-		d.namesStatus = d.namesNotLocked()
+		d.dns.namesStatus = d.namesNotLocked()
 		if off && len(exit) > 0 {
 			return false, dnsOffWhy
 		}
 		return false, ""
 	}
 	if d.hostDNS == nil {
-		d.namesStatus = d.namesNotLocked()
+		d.dns.namesStatus = d.namesNotLocked()
 		return false, "juistd runs without a device of its own"
 	}
-	same := want.equal(d.dnsRouting)
+	same := want.equal(d.dns.routing)
 	switch {
-	case same && d.dnsWhy == "" && d.now().Sub(d.dnsRoutedAt) < dnsRenewal:
+	case same && d.dns.why == "" && d.now().Sub(d.dns.routedAt) < d.dnsRenewalNow():
 		return d.routedLocked(exit)
-	case same && d.dnsWhy != "" && d.now().Sub(d.dnsRoutedAt) < dnsRetry:
+	case same && d.dns.why != "" && d.now().Sub(d.dns.routedAt) < dnsRetry:
 		return d.routedLocked(exit)
 	}
 	// Taken for routed even where it failed half-way, so that going off
 	// gives the link back whatever of it resolved took.
-	d.dnsRouting, d.dnsRoutedAt, d.dnsWhy = want, d.now(), ""
+	d.dns.routing, d.dns.routedAt, d.dns.why = want, d.now(), ""
 	if err := d.hostDNS.Route(want); err != nil {
 		d.logOnce("daemon: routing the host's DNS: " + err.Error())
 		switch {
 		case errors.Is(err, resolved.ErrNotRunning) && tailscaledWrote(cmp.Or(d.resolvConf, "/etc/resolv.conf")):
-			d.dnsWhy = "tailscaled writes " + cmp.Or(d.resolvConf, "/etc/resolv.conf")
+			d.dns.why = "tailscaled writes " + cmp.Or(d.resolvConf, "/etc/resolv.conf")
 		case errors.Is(err, resolved.ErrNotRunning):
-			d.dnsWhy = "systemd-resolved does not run on this host"
+			d.dns.why = "systemd-resolved does not run on this host"
 		case errors.Is(err, resolved.ErrNoPolkit):
-			d.dnsWhy = "systemd-resolved refused juistd: polkit is not installed"
+			d.dns.why = "systemd-resolved refused juistd: polkit is not installed"
 		case errors.Is(err, resolved.ErrNotAuthorized):
-			d.dnsWhy = "systemd-resolved refused juistd"
+			d.dns.why = "systemd-resolved refused juistd"
 		default:
-			d.dnsWhy = err.Error()
+			d.dns.why = err.Error()
 		}
 	}
 	return d.routedLocked(exit)
@@ -388,22 +847,22 @@ func (d *Daemon) routeDNSLocked(exit []netip.AddrPort, keep bool) (bool, string)
 // routedLocked is what the routing last given makes of the exit node's DNS,
 // as [Daemon.routeDNS] reports it, and of the network's names.
 func (d *Daemon) routedLocked(exit []netip.AddrPort) (bool, string) {
-	named := d.names != nil && d.dnsRouting.Servers[0] == d.namesAt
-	d.namesRouted.Store(named && d.dnsWhy == "")
+	named := d.dns.names != nil && d.dns.routing.Servers[0] == d.dns.namesAt
+	d.namesRouted.Store(named && d.dns.why == "")
 	if !named {
-		d.namesStatus = d.namesNotLocked()
+		d.dns.namesStatus = d.namesNotLocked()
 	}
-	if d.dnsWhy != "" {
+	if d.dns.why != "" {
 		if named {
 			z := d.zone.Load()
-			d.namesStatus = &ipc.Names{Domain: z.Domain, Public: z.Public, Not: d.dnsWhy}
+			d.dns.namesStatus = &ipc.Names{Domain: z.Domain, Public: z.Public, Not: d.dns.why}
 		}
-		return false, d.dnsWhy
+		return false, d.dns.why
 	}
 	through, why := d.throughStub()
 	if named {
 		z := d.zone.Load()
-		d.namesStatus = &ipc.Names{Domain: z.Domain, Public: z.Public, Resolved: through, Not: why}
+		d.dns.namesStatus = &ipc.Names{Domain: z.Domain, Public: z.Public, Resolved: through, Not: why}
 	}
 	if len(exit) == 0 {
 		return false, ""
@@ -416,7 +875,7 @@ func (d *Daemon) routedLocked(exit []netip.AddrPort) (bool, string) {
 func (d *Daemon) namesNotLocked() *ipc.Names {
 	z := d.zone.Load()
 	switch {
-	case d.dnsClosed || z == nil || z == noZone:
+	case d.dns.closed || z == nil || z == noZone:
 		return nil
 	case z.Domain == "" && z.Public == "":
 		return &ipc.Names{Not: "the network's name is no DNS label", Cannot: true}
@@ -427,7 +886,7 @@ func (d *Daemon) namesNotLocked() *ipc.Names {
 	case !routesDomains(d.hostDNS):
 		return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: errNoDomains.Error(), Cannot: true}
 	}
-	return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: cmp.Or(d.namesWhy, "juistd does not answer them")}
+	return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: cmp.Or(d.dns.namesWhy, "juistd does not answer them")}
 }
 
 // setZone has the host resolve what p plans of the network's names.
@@ -435,23 +894,23 @@ func (d *Daemon) setZone(p exitPlan) {
 	if p.zone == nil {
 		return
 	}
-	d.dnsMu.Lock()
-	defer d.dnsMu.Unlock()
+	d.dns.mu.Lock()
+	defer d.dns.mu.Unlock()
 	d.zone.Store(p.zone)
-	d.overrides, d.namesUntil, d.namesAccepted = p.overrides, p.namesUntil, p.accepted
+	d.dns.overrides, d.dns.namesUntil, d.dns.namesAccepted = p.overrides, p.namesUntil, p.accepted
 }
 
 // namesNow is what the last reconcile made of the network's names, with
 // whether each public name is answered as of now.
 func (d *Daemon) namesNow() *ipc.Names {
-	d.dnsMu.Lock()
-	defer d.dnsMu.Unlock()
-	if d.namesStatus == nil {
+	d.dns.mu.Lock()
+	defer d.dns.mu.Unlock()
+	if d.dns.namesStatus == nil {
 		return nil
 	}
-	n := *d.namesStatus
-	n.Accepted = d.namesAccepted
-	for _, h := range d.overrides {
+	n := *d.dns.namesStatus
+	n.Accepted = d.dns.namesAccepted
+	for _, h := range d.dns.overrides {
 		if h.members {
 			n.ForMembers = append(n.ForMembers, h.name)
 		}
@@ -460,31 +919,15 @@ func (d *Daemon) namesNow() *ipc.Names {
 		}
 		o := ipc.NameOverride{Name: h.name, Device: h.device}
 		if n.Accepted {
-			o.Not = d.overrideNot(h, d.namesUntil)
+			o.Not = d.overrideNot(h, d.dns.namesUntil)
 		}
 		n.Overrides = append(n.Overrides, o)
 	}
 	return &n
 }
 
-// SetDNSOff records whether this device's owner had juistd leave the host's
-// DNS alone: the network's names and an exit node's DNS alike.
-func (d *Daemon) SetDNSOff(off bool) {
-	d.dnsOff.Store(off)
-	d.MarkDirty()
-}
-
-// SetAcceptNames records whether this device's owner agreed that it
-// resolves the public names the network points at members to them.
-func (d *Daemon) SetAcceptNames(on bool) {
-	d.mu.Lock()
-	d.acceptNames = on
-	d.mu.Unlock()
-	d.MarkDirty()
-}
-
 func routesDomains(h HostDNS) bool {
-	rd, ok := h.(interface{ routesDomains() bool })
+	rd, ok := h.(domainRouter)
 	return ok && rd.routesDomains()
 }
 
@@ -492,13 +935,13 @@ func routesDomains(h HostDNS) bool {
 // resolvers or none: juist's resolver for the names it answers, and for
 // every name with an exit node; else the exit node's resolvers, or none.
 func (d *Daemon) wantRoutingLocked(exit []netip.AddrPort) DNSRouting {
-	if d.dnsClosed || d.dnsOff.Load() {
+	if d.dns.closed || d.dnsOff.Load() {
 		return DNSRouting{}
 	}
 	z := d.zone.Load()
 	if domains := routedDomains(z); len(domains) > 0 && d.namesServingLocked() {
 		_, sole := d.hostDNS.(soleResolver)
-		r := DNSRouting{Servers: []netip.AddrPort{d.namesAt}, Domains: domains, Everything: len(exit) > 0 || sole}
+		r := DNSRouting{Servers: []netip.AddrPort{d.dns.namesAt}, Domains: domains, Everything: len(exit) > 0 || sole}
 		if z.Domain != "" {
 			r.Search = []string{z.Domain}
 		}
@@ -513,13 +956,13 @@ func (d *Daemon) wantRoutingLocked(exit []netip.AddrPort) DNSRouting {
 // namesServingLocked has juist's resolver answer the host, where the host's
 // resolver routes domains to it, and reports whether it does.
 func (d *Daemon) namesServingLocked() bool {
-	if d.names != nil {
+	if d.dns.names != nil {
 		return true
 	}
-	if !routesDomains(d.hostDNS) || d.startNames == nil || d.dnsClosed {
+	if !routesDomains(d.hostDNS) || d.startNames == nil || d.dns.closed {
 		return false
 	}
-	if !d.namesFailedAt.IsZero() && d.now().Sub(d.namesFailedAt) < dnsRetry {
+	if !d.dns.namesFailedAt.IsZero() && d.now().Sub(d.dns.namesFailedAt) < dnsRetry {
 		return false
 	}
 	answer := func(q []byte) []byte {
@@ -534,11 +977,11 @@ func (d *Daemon) namesServingLocked() bool {
 		s, err = d.startNames(at, answer, d.namesUpstreamFor)
 	}
 	if err != nil {
-		d.namesFailedAt, d.namesWhy = d.now(), err.Error()
+		d.dns.namesFailedAt, d.dns.namesWhy = d.now(), err.Error()
 		d.logOnce("daemon: answering the host's names: " + err.Error())
 		return false
 	}
-	d.names, d.namesAt, d.namesFailedAt, d.namesWhy = s, at, time.Time{}, ""
+	d.dns.names, d.dns.namesAt, d.dns.namesFailedAt, d.dns.namesWhy = s, at, time.Time{}, ""
 	d.soleAnswersAt(at.Addr())
 	return true
 }
@@ -548,10 +991,8 @@ func (d *Daemon) namesServingLocked() bool {
 // they ask the servers routed.
 func (d *Daemon) throughStub() (bool, string) {
 	path := cmp.Or(d.resolvConf, "/etc/resolv.conf")
-	if t, ok := d.hostDNS.(interface {
-		through(string, []netip.AddrPort) (bool, string)
-	}); ok {
-		return t.through(path, d.dnsRouting.Servers)
+	if t, ok := d.hostDNS.(throughReporter); ok {
+		return t.through(path, d.dns.routing.Servers)
 	}
 	servers, why := nameservers(path)
 	if why != "" {
@@ -594,14 +1035,14 @@ func nameservers(path string) ([]string, string) {
 // closeDNS stops answering members' DNS and gives the host's back, for good:
 // a reconcile racing Close starts neither again.
 func (d *Daemon) closeDNS() {
-	d.dnsMu.Lock()
-	defer d.dnsMu.Unlock()
-	d.dnsClosed = true
+	d.dns.mu.Lock()
+	defer d.dns.mu.Unlock()
+	d.dns.closed = true
 	d.serveDNSLocked(false, nil, nil)
 	d.routeDNSLocked(nil, false)
-	if d.names != nil {
-		d.names.Close()
-		d.names = nil
+	if d.dns.names != nil {
+		d.dns.names.Close()
+		d.dns.names = nil
 		d.namesRouted.Store(false)
 	}
 }

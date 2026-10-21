@@ -45,6 +45,7 @@ taken back.`}
 	} else if r.auth, err = a.optionalLog(); err != nil {
 		return err
 	}
+	a.fileAdminKeys(r.auth)
 	r.haveNetwork = r.auth != nil
 	// Whatever is fully approved when a later file fails is applied all the
 	// same, rather than left signed and waiting.
@@ -88,7 +89,7 @@ func (r *approval) flush() error {
 	if len(r.batch) == 0 {
 		return nil
 	}
-	if err := a.applyRecords(r.batch, false); err != nil {
+	if err := a.applyRecords(r.batch); err != nil {
 		return err
 	}
 	var err error
@@ -190,7 +191,7 @@ func (r *approval) check(path string, aum *types.AUM) (done bool, err error) {
 	a.ok("%s: in the log already", path)
 	// Handed on all the same: it is a no-op, and what has this device adopt
 	// a rotation of its own keys at once.
-	return true, a.applyRecords([]types.AUM{*aum}, false)
+	return true, a.applyRecords([]types.AUM{*aum})
 }
 
 // sign asks, then signs aum with every admin key here that has a part in it
@@ -330,7 +331,7 @@ func (a *app) createFromGenesis(records []types.AUM) error {
 	if err != nil {
 		return err
 	}
-	op, err := defaultOperator(optionalString{}, n.status())
+	op, err := defaultOperator(optionalString{}, liveStatus(n))
 	if err != nil {
 		return err
 	}

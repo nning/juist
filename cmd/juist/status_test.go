@@ -12,11 +12,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
 )
 
 func noPaint(_, s string) string { return s }
+
+// statusOf renders s as of now on a host of one instance.
+func statusOf(s *ipc.Status, now time.Time, paint func(code, s string) string) statusView {
+	return statusOfOn(s, now, paint, instance.Name, false)
+}
 
 // A name the terminator has no certificate for is warned of, with why, while
 // it runs.
@@ -88,7 +94,7 @@ func TestStatusNotesComeFromTheReport(t *testing.T) {
 	}
 
 	v = statusOf(&ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", NotMember: true}}, now, noPaint)
-	if len(v.notes) != 0 || v.head[0].text != "home · removed" {
+	if len(v.head) != 1 || v.head[0].text != "home · removed" || len(v.notes) != 2 || v.notes[0].kind != lineWarn {
 		t.Errorf("a removed device's status: %+v", v)
 	}
 }
@@ -142,7 +148,44 @@ func TestStatusWithoutADaemon(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
 	c.mustRun("create", "home", "--device", "laptop")
-	mustContain(t, c.mustRun("status"), "juistd not running", "laptop", "198.18.4.1")
+	out := c.mustRun("status")
+	mustContain(t, out, "juistd not running", "laptop", "198.18.4.1", "hint: 1 warning: juist health\n")
+	if strings.Contains(out, "no juistd runs") {
+		t.Errorf("status says how to start juistd:\n%s", out)
+	}
+	mustContain(t, c.mustRun("health"), "warning: juistd not running\nhint: no juistd runs")
+}
+
+// juist status names a state that needs attention, and juist health says
+// what it is and what to do.
+func TestStatusNamesTheStateAndHealthSaysWhy(t *testing.T) {
+	t.Parallel()
+	home := ipc.Derived{NetworkName: "home", Schema: types.CurrentSchema}
+	for _, tc := range []struct {
+		st          *ipc.Status
+		state, says string
+	}{
+		{&ipc.Status{CanOperate: true, Derived: ipc.Derived{SelfName: "nas"}}, "nas · no network", "juist join CODE"},
+		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: ipc.Derived{NetworkName: "home", Disabled: "x", Schema: types.CurrentSchema}},
+			"home · disabled", "ended with a break-glass secret"},
+		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: home, HostConflict: &ipc.HostConflict{SameNetwork: true, Instance: 1}},
+			"home · not connected", "runs on this host already"},
+		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: home, StartError: "operation not permitted"},
+			"home · not connected", "tunnels not up, retrying: operation not permitted"},
+		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: ipc.Derived{NetworkName: "home", NotMember: true}},
+			"home · removed", "rejoin with a new invite"},
+	} {
+		var status, health syncBuffer
+		a := newApp(strings.NewReader(""), &status, &status)
+		a.printStatusIn(tc.st, "", false)
+		mustContain(t, status.String(), tc.state)
+		if strings.Contains(status.String(), "warning:") || strings.Contains(status.String(), "hint:") {
+			t.Errorf("status of %s says more than the state:\n%s", tc.state, status.String())
+		}
+		a = newApp(strings.NewReader(""), &health, &health)
+		a.health(tc.st, "", false)
+		mustContain(t, health.String(), tc.says, "hint: ")
+	}
 }
 
 func TestStatusShowsFreshness(t *testing.T) {
@@ -569,7 +612,7 @@ func TestStatusFitsANarrowTerminal(t *testing.T) {
 	var out syncBuffer
 	a := newApp(strings.NewReader(""), &out, &out)
 	a.width = 60
-	a.printStatus(st)
+	a.printStatusIn(st, "", false)
 	got := out.String()
 	for _, l := range strings.Split(got, "\n") {
 		if len(l) > a.width {
@@ -849,8 +892,8 @@ func TestStatusCountsTheDevicesWithoutATunnel(t *testing.T) {
 
 // printStatusAndHealth prints what juist status and juist health print for s.
 func printStatusAndHealth(a *app, s *ipc.Status) {
-	a.printStatus(s)
-	a.healthNotes(s, "")
+	a.printStatusIn(s, "", false)
+	a.emit(a.healthNotes(s, ""))
 }
 
 // juist status -v names the relay of each relayed device under Relays, and
@@ -877,7 +920,7 @@ func TestStatusVerboseNamesEachDevicesRelay(t *testing.T) {
 	}
 	var plain syncBuffer
 	b := newApp(strings.NewReader(""), &plain, &plain)
-	b.printStatus(st)
+	b.printStatusIn(st, "", false)
 	if strings.Contains(plain.String(), "phone") {
 		t.Errorf("plain status lists relayed devices:\n%s", plain.String())
 	}

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/nning/juist/types"
 )
@@ -183,6 +184,20 @@ func (s *Store) Due(env *Env) bool {
 	defer s.mu.Unlock()
 	p := s.pairs[env.Peer.WG]
 	return p != nil && p.boundTo(env) && p.due(env.Now)
+}
+
+// PutOffUntil is when the soonest offer a follower put off within [Pace]
+// may be answered, where one waits.
+func (s *Store) PutOffUntil() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var at time.Time
+	for _, p := range s.pairs {
+		if p.putOff && (at.IsZero() || p.paced.Add(Pace).Before(at)) {
+			at = p.paced.Add(Pace)
+		}
+	}
+	return at, !at.IsZero()
 }
 
 // Describe says where the exchange with env's peer stands, naming no key.

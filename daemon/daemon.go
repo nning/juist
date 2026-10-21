@@ -13,7 +13,6 @@ import (
 	"crypto/ecdh"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"math/rand/v2"
 	"net"
@@ -39,9 +38,6 @@ import (
 	"github.com/nning/juist/internal/keyring"
 	"github.com/nning/juist/internal/names"
 	"github.com/nning/juist/internal/netstack"
-	"github.com/nning/juist/internal/pairkey"
-	"github.com/nning/juist/internal/resolved"
-	"github.com/nning/juist/relay"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
@@ -61,9 +57,10 @@ const (
 	// member. It is the backstop; a change reaches reachable members by push.
 	DefaultSyncInterval = 2 * time.Minute
 
-	// DefaultReconcileInterval re-derives the peer set for what changes
-	// without an event, such as a membership expiring.
-	DefaultReconcileInterval = 15 * time.Second
+	// DefaultReconcileInterval re-derives the peer set where neither an
+	// event nor a deadline the log names, such as a membership expiring,
+	// has in the meantime: a backstop for what changes unannounced.
+	DefaultReconcileInterval = 2 * time.Minute
 
 	// DefaultReachDelay leaves paths time to come up before the first check,
 	// which would otherwise report every peer as not answering.
@@ -151,20 +148,10 @@ type Options struct {
 	// it the role: the operator's veto over their own machine's bandwidth.
 	DisableRelay bool
 
-	// HTTPSOnly sends nothing but TLS to 443/tcp of the relays' public
-	// names, and DNS for them: no LAN discovery, DHT, STUN or other UDP, so
-	// every tunnel goes through a relay, and members are looked for at the
-	// relays. It needs TunName or Netstack, since log sync runs in the
-	// tunnel. Proxy is the HTTP proxy it goes through, "" for HTTPS_PROXY's.
-	HTTPSOnly bool
-	Proxy     string
-
-	// RelayName is the public DNS name this device's relay serves on
-	// 443/tcp too, where the log makes it a relay, under a certificate from
-	// the CA at ACMEDirectory, none where empty, kept in RelayCertsPath, in
-	// memory where empty. ListenHTTPS binds 443 at an address, which needs
+	// ACMEDirectory is the CA the relay's name, [Prefs.RelayName], has its
+	// certificate from, kept in RelayCertsPath, in memory where empty.
+	// ListenHTTPS binds 443 at an address, which needs
 	// CAP_NET_BIND_SERVICE or root; nil binds it directly.
-	RelayName      string
 	ACMEDirectory  string
 	RelayCertsPath string
 	ListenHTTPS    func(netip.Addr) (net.Listener, error)
@@ -233,45 +220,15 @@ type Options struct {
 	// kept across a restart. Empty keeps them in memory only.
 	WaitingPath string
 
-	// OnAddrsMoved is called, on a goroutine of its own, when the log gives
-	// this device other overlay addresses than the data plane holds, and
-	// OnKeysNamed when it names other keys than the mesh runs on; each once,
-	// until the mesh follows.
-	OnAddrsMoved, OnKeysNamed func()
+	// Moved is sent to, without waiting, when the log gives this device other
+	// overlay addresses than the data plane holds or names other keys than
+	// the mesh runs on, each once until the mesh follows, and when the
+	// chosen exit node rotated its identity. Give it a buffer.
+	Moved chan<- struct{}
 
-	// Exit is the exit node this device's owner chose, and ServeExit whether
-	// its operator agreed to serve as one; [Daemon.SetExitChoice] and
-	// [Daemon.SetServeConsent] change them.
-	Exit      ExitChoice
-	ServeExit bool
-
-	// ServeSubnets says the operator agreed to route the subnets the log
-	// grants this device, and SubnetsOff that its owner routes none of its
-	// peers'; [Daemon.SetSubnetConsent] and [Daemon.SetSubnetsOff] change
-	// them.
-	ServeSubnets bool
-	SubnetsOff   bool
-
-	// ServePublished says the operator agreed to serve the names the log
-	// publishes on this device, and ServeTo where those go, by label, whose
-	// TLS juist ends; [Daemon.SetPublishConsent] changes them.
-	ServePublished bool
-	ServeTo        map[string]string
-	// ServeMembers are the labels of ServeTo whose service is for members
-	// alone.
-	ServeMembers map[string]bool
-
-	// AcceptNames says the owner agreed that this device resolves the
-	// public names the network points at members to them;
-	// [Daemon.SetAcceptNames] changes it.
-	AcceptNames bool
-	// DNSOff has juistd leave the host's DNS alone; [Daemon.SetDNSOff]
-	// changes it.
-	DNSOff bool
-
-	// OnExitMoved is called, on a goroutine of its own, where the exit node
-	// chosen rotated its identity from one to another.
-	OnExitMoved func(from, to types.Identity)
+	// Prefs are the device's settings; [Daemon.SetPrefs] and
+	// [Daemon.SetExitChoice] change them.
+	Prefs
 
 	// EgressUser says why juistd's user may use no exit node, "" where it
 	// may; nil asks the host, once, of the user juistd runs as.
@@ -316,13 +273,20 @@ type Options struct {
 	// device. Zero uses [DefaultLeaseInterval].
 	LeaseInterval time.Duration
 
-	// SyncInterval and ReconcileInterval override the defaults above.
+	// SyncInterval and ReconcileInterval override the defaults above; a
+	// reconcile waits a second at least.
 	SyncInterval      time.Duration
 	ReconcileInterval time.Duration
 
 	// Pace, where set, slows the mesh while it saves battery; it outlives a
 	// restart of the mesh.
 	Pace *Pace
+
+	// Rests says this device saves battery whenever it can, as a phone does:
+	// its announcement says so, where the network's schema has the field,
+	// and it joins the public DHT only while no member that does not rest
+	// answers it.
+	Rests bool
 
 	// ReachDelay is how long after start the tunnels are first checked. Zero
 	// uses [DefaultReachDelay].
@@ -343,18 +307,23 @@ type Options struct {
 //
 // Each field sits under the lock that guards it; those above the first lock
 // are set by [New] and not changed after. Locks are taken in this order, and
-// none is held across a call into the data plane but dnsMu, across the
-// host's resolver (D-Bus) and the DNS server's Close, which gossip never
-// waits on:
+// none is held across a call into the data plane but reconcileMu, selfMu and
+// dns.mu, the last also across the host's resolver (D-Bus) and the DNS
+// server's Close, which gossip never waits on and which waits for its
+// queries, so a query takes no lock held across D-Bus:
 //
+//	Service.mu → selfMu → reconcileMu,  selfMu → dns.mu,  selfMu → mu
 //	Service.mu → reconcileMu → authMu,  Service.mu → mu → waits' own
-//	Service.mu → waitMu,  reconcileMu → mu,  reconcileMu → waitSaveMu → waitMu
-//	reconcileMu → dnsMu → mu
-//	probeMu → mu,  leaseSaveMu → leaseMu,  keyringSaveMu → the keyring's own
+//	Service.mu → changes.mu,  reconcileMu → mu,  reconcileMu → changes.saveMu → changes.mu
+//	reconcileMu → dns.mu → mu,  dns.mu → sole.mu,  reconcileMu → pub.mu → mu
+//	dns.mu → hostRouting.mu → mu
+//	probes.mu → mu,  leases.saveMu → leases.mu,  keyringSaveMu → the keyring's own
 //	a relay server's lock → mu: its admission callbacks take mu, so mu is
 //	never held across a call into the relay
 //
-// authMu, mu, leaseMu and waitMu are never held together, and the function
+// pairs.mu and sole.mu are innermost: nothing is taken under them.
+//
+// authMu, mu, leases.mu and changes.mu are never held together, and the function
 // passed to setStatus runs under mu, so it must take no lock of the daemon's.
 type Daemon struct {
 	self     types.Identity
@@ -375,27 +344,24 @@ type Daemon struct {
 
 	// httpsOnly, proxy, relayName and the rest are [Options.HTTPSOnly] and
 	// its neighbours; relayCerts is nil without a relay name.
-	httpsOnly    bool
-	proxy        string
-	envProxy     func(*url.URL) (*url.URL, error)
-	relayName    string
-	relayCerts   certSource
-	listenHTTPS  func(netip.Addr) (net.Listener, error)
-	handOffPath  string
-	ingressUID   uint32
-	rvKeys       rendezvousKeys
-	nameProofs   relayNameProofs
-	whoamiHTTP   *http.Client
-	askWhoami    func(context.Context, string) ([32]byte, error)
-	noV4         atomic.Bool
-	cachePath    string
-	leasePath    string
-	waitingPath  string
-	onAddrsMoved func()
-	movedSaid    atomic.Bool // onAddrsMoved was called since the last move
-	onKeysNamed  func()
-	keysSaid     atomic.Bool // onKeysNamed was called since the last rotation
-	keyringPath  string
+	httpsOnly   bool
+	proxy       string
+	envProxy    func(*url.URL) (*url.URL, error)
+	relayName   string
+	relayCerts  certSource
+	listenHTTPS func(netip.Addr) (net.Listener, error)
+	handOffPath string
+	ingressUID  uint32
+	rvKeys      rendezvousKeys
+	nameProofs  relayNameProofs
+	whoamiHTTP  *http.Client
+	askWhoami   func(context.Context, string) ([32]byte, error)
+	noV4        atomic.Bool
+	cachePath   string
+	moved       chan<- struct{}
+	movedSaid   atomic.Bool // a move was said since the mesh last followed one
+	keysSaid    atomic.Bool // a rotation was said since the mesh last followed one
+	keyringPath string
 	// terminatorWanted is [Options.TerminatorWanted], ingressPorts
 	// [Options.IngressPorts].
 	terminatorWanted, ingressPorts string
@@ -416,13 +382,9 @@ type Daemon struct {
 	connSelf conn.Self
 	held     atomic.Pointer[[]netip.Prefix]
 
-	// pairs are the preshared keys this node holds with its peers, under
-	// pairsMu, pairsPath where they are kept and pairsKept what was last
-	// kept there; psks what each installed peer was last given, under mu.
-	pairs      *pairkey.Store
-	pairsPath  string
-	pairsMu    sync.Mutex
-	pairsKept  []byte
+	// pairs are the preshared keys this node holds with its peers; psks
+	// what each installed peer was last given, under mu.
+	pairs      *pairStore
 	psks       map[types.Identity]pskGiven
 	pairWanted map[types.Identity]bool // peers an exchange waits on, under mu
 
@@ -437,6 +399,13 @@ type Daemon struct {
 
 	pace           *Pace
 	saving         savingPace
+	rests          bool
+	reconcileDue   atomic.Pointer[time.Time] // see [Daemon.noteDue]
+	reconcileArmed atomic.Pointer[time.Time] // when the loop's timer fires
+	restingSynced  time.Time                 // see [Daemon.syncOne]; guarded by mu
+	addrsWaiting   atomic.Bool               // see [Daemon.onConnectivityChange]
+	pushRests      atomic.Bool               // the next push reaches members that rest too
+	wired          atomic.Bool               // New is done, which the data plane's callbacks may precede
 	syncEvery      time.Duration
 	reachEvery     time.Duration
 	reachDelay     time.Duration
@@ -449,18 +418,22 @@ type Daemon struct {
 	clock          func() time.Time
 	logf           func(string, ...any)
 
-	// dirty coalesces "something changed, reconcile and push", and recheck
-	// "check the tunnels soon". Buffered to one: a second signal arriving
-	// before the loop wakes is the same work.
+	// dirty coalesces "something changed, reconcile and push", soon
+	// "reconcile", and recheck "check the tunnels soon". Buffered to one: a
+	// second signal arriving before the loop wakes is the same work.
 	dirty   chan struct{}
+	soon    chan struct{}
+	rearm   chan struct{} // a deadline sooner than the loop's timer
 	recheck chan struct{}
 
 	// syncing holds a token while an anti-entropy round runs, so rounds do not
 	// overlap; pushDeferred, under mu, records one asked for meanwhile.
 	syncing chan struct{}
 
+	// ctx ends at Close; Run's ends with it too.
+	ctx       context.Context
+	cancel    context.CancelFunc
 	closeOnce sync.Once
-	closed    chan struct{}
 	waits     waitSet
 
 	// reconcileMu serializes whole reconciles — state read through SetPeers —
@@ -474,26 +447,14 @@ type Daemon struct {
 	storage    log.Storage
 	compacting compaction
 
-	// probeMu serializes tunnel checks, so asking twice does not probe twice.
-	probeMu     sync.Mutex
-	probeMisses map[types.Identity]int // checks in a row each peer missed
-	unanswered  map[types.Identity]int // probes in a row a peer left unanswered
-	answered    map[types.Identity]probeAnswer
+	probes probeState
 
-	// leaseMu guards leases, the newest lease held per signer, and
-	// leaseSaveMu serializes writing them out.
-	leaseSaveMu sync.Mutex
-	leaseMu     sync.Mutex
-	leases      map[types.Identity]types.Lease
+	leases leaseStore
 
 	// keyringSaveMu serializes writing the keyring out.
 	keyringSaveMu sync.Mutex
 
-	// waitMu guards waiting, the changes waiting for votes held, by the hash
-	// of their encoding, and waitSaveMu serializes writing them out.
-	waitSaveMu sync.Mutex
-	waitMu     sync.Mutex
-	waiting    map[types.Hash]heldChange
+	changes waitStore
 
 	mu sync.Mutex
 
@@ -544,12 +505,12 @@ type Daemon struct {
 	// [Daemon.logOnce].
 	logged       map[string]bool
 	pushDeferred bool
+	deferredFull bool // a deferred round would have reached members that rest
 
 	// exitChoice and serveConsent are the owner's and the operator's word on
 	// exit nodes, servingExit whether this device serves as one now, and
 	// exitStatus what the last reconcile made of them.
-	exitChoice  ExitChoice
-	onExitMoved func(from, to types.Identity)
+	exitChoice ExitChoice
 	// successorMiss is the identity and head a rotation was last looked
 	// for in vain.
 	successorMiss struct {
@@ -580,45 +541,21 @@ type Daemon struct {
 	// IPv4: only where the log routes through it.
 	announcedNoV4 bool
 
-	// dnsMu guards the DNS this device answers members as an exit node, and
-	// the host's: dnsRouting is what the host was last told, and names
-	// answers it from zone.
-	dnsMu       sync.Mutex
-	hostDNS     HostDNS
-	startDNS    DNSServer
-	dnsServer   io.Closer
-	dnsAddrs    []netip.Addr
-	dnsOverlay  []netip.Prefix
-	dnsRouting  DNSRouting       // what the host was last told
-	dnsExit     []netip.AddrPort // the exit node's resolvers it is meant to ask
-	dnsRoutedAt time.Time
-	dnsWhy      string // why the routing last failed, "" where it did not
-	dnsClosed   bool
+	hostDNS    HostDNS
+	startDNS   DNSServer
+	resolvConf string
+	dns        dnsState
 
-	startNames    NamesServer
-	names         io.Closer
-	namesAt       netip.AddrPort // where names answers, while it does
-	namesFixed    netip.AddrPort // [Options.NamesAddr]
-	namesFailedAt time.Time
-	namesWhy      string // why names did not start
-	namesStatus   *ipc.Names
-	overrides     []heldOverride // the network's public names, answered or not
-	namesAccepted bool
-	namesUntil    int64 // until when overrides are answered, the view's freshness
-	reachable     atomic.Pointer[map[types.Identity]bool]
-	zone          atomic.Pointer[names.Zone]
-	namesExit     atomic.Pointer[[]netip.AddrPort] // the exit node's resolvers, which names asks
-	namesRouted   atomic.Bool                      // whether the host's resolver asks names
+	startNames  NamesServer
+	namesFixed  netip.AddrPort // [Options.NamesAddr]
+	reachable   atomic.Pointer[map[types.Identity]bool]
+	zone        atomic.Pointer[names.Zone]
+	namesExit   atomic.Pointer[[]netip.AddrPort] // the exit node's resolvers, which names asks
+	namesRouted atomic.Bool                      // whether the host's resolver asks names
 
 	dnsOff      atomic.Bool // [Options.DNSOff]
-	soleMu      sync.Mutex
-	soleReadAt  time.Time
-	soleServers []netip.AddrPort // the host's own, where it asks juistd alone
-	soleOwn     netip.Addr       // where juistd's resolver answers
-
-	hostRouting   atomic.Pointer[resolved.Routing] // how the host routes names but to juist's device
-	hostRoutingAt time.Time
-	resolvConf    string
+	sole        soleState
+	hostRouting hostRoutingState
 
 	announced   *gossip.Endpoint // nil when it is to be rebuilt
 	signed      *gossip.Endpoint // the last one signed, which announced renews
@@ -632,34 +569,10 @@ type Daemon struct {
 	cachedKeys      []gossip.AddrKey
 	cachedAt        time.Time
 
-	// relay is this device's own relay while the log grants it the role, and
-	// relayMembers is the WireGuard key set it admits, refreshed by every
-	// reconcile so that a DERP connection never has to reach the authority.
-	// relayHosts is the identity set that may wait at it for an invite's
-	// guest, and ownRegion whether it holds its region.
-	relay        *relay.Server
-	relayMembers map[types.WGKey]bool
-	relayHosts   map[types.Identity]bool
-
-	// namedRelays are the relays installed that serve a name on 443;
-	// https443 the relay's own sockets on 443, by address, httpsErr why
-	// some could not be bound, and httpsHanded that the ingress takes 443
-	// instead. relayNoCert is why the relay has no certificate for its
-	// name, relayHasCert that it has had one, and relayCertDue when to order
-	// one again, relayCertGap after the last.
-	namedRelays  []conn.Relay
-	relays       []conn.Relay // every relay installed, asked for announcements before the DHT
-	https443     map[netip.Addr]net.Listener
-	httpsErr     string
-	httpsHanded  bool
-	handOff      net.Listener // the hand-off socket, served by handOffFor
-	handOffFor   *relay.Server
-	handOffTaken bool // the ingress has been told of it since
-	relayNoCert  string
-	relayHasCert bool
-	relayCertGap time.Duration
-	relayCertDue time.Time
-	ownRegion    bool
+	// namedRelays are the relays installed that serve a name on 443.
+	namedRelays []conn.Relay
+	relays      []conn.Relay // every relay installed, asked for announcements before the DHT
+	ownRelay    relayState
 
 	// addrs caches the last interface scan; see [Daemon.underlayEndpoints].
 	addrs      []netip.AddrPort
@@ -672,10 +585,6 @@ type Daemon struct {
 	// reachGen counts teardowns, so a tunnel check that began before one
 	// does not publish what it found.
 	reachGen uint64
-
-	// relayUnreachedSince is when the tunnel checks first found this
-	// device's relay reached by nobody, while a live peer reaches no relay.
-	relayUnreachedSince time.Time
 
 	// askingFirewall is set while [Daemon.recheckFirewall] waits for an
 	// answer.
@@ -711,65 +620,65 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	d := &Daemon{
-		authority:        opts.Authority,
-		storage:          opts.Storage,
-		identity:         opts.Identity,
-		self:             self,
-		ula:              state.ULA(),
-		endpoints:        gossip.NewCache(),
-		keyring:          keyring.New(),
-		pace:             opts.Pace,
-		saving:           savingPace{reach: savingReachEvery, sync: savingSyncEvery, reconcile: savingReconcileEvery},
-		syncEvery:        cmp.Or(opts.SyncInterval, DefaultSyncInterval),
-		reachEvery:       reachEvery,
-		greetAfter:       defaultGreetAfter,
-		reachDelay:       cmp.Or(opts.ReachDelay, DefaultReachDelay),
-		pathSettle:       pathSettle,
-		firewalled:       firewalld.Blocks,
-		reconcileEvery:   cmp.Or(opts.ReconcileInterval, DefaultReconcileInterval),
-		clock:            opts.Clock,
-		logf:             opts.Logf,
-		dirty:            make(chan struct{}, 1),
-		recheck:          make(chan struct{}, 1),
-		syncing:          make(chan struct{}, 1),
-		closed:           make(chan struct{}),
-		peerIDs:          map[types.WGKey]uint64{},
-		everMember:       map[types.Identity]bool{},
-		peerBeacons:      map[types.Identity]peerBeacon{},
-		cachePath:        opts.EndpointCachePath,
-		relayPort:        opts.RelayPort,
-		portFallback:     opts.PortFallback,
-		noRelay:          opts.DisableRelay,
-		httpsOnly:        opts.HTTPSOnly,
-		proxy:            opts.Proxy,
-		envProxy:         envProxyFunc(),
-		relayName:        opts.RelayName,
-		listenHTTPS:      opts.ListenHTTPS,
-		handOffPath:      opts.HandOffSocket,
-		ingressUID:       opts.IngressUID,
-		https443:         map[netip.Addr]net.Listener{},
-		relayMembers:     map[types.WGKey]bool{},
-		relayHosts:       map[types.Identity]bool{},
-		leases:           map[types.Identity]types.Lease{},
-		leasePath:        opts.LeasePath,
-		waitingPath:      opts.WaitingPath,
-		onAddrsMoved:     opts.OnAddrsMoved,
-		onKeysNamed:      opts.OnKeysNamed,
+		authority:      opts.Authority,
+		storage:        opts.Storage,
+		identity:       opts.Identity,
+		self:           self,
+		ula:            state.ULA(),
+		endpoints:      gossip.NewCache(),
+		keyring:        keyring.New(),
+		pace:           opts.Pace,
+		rests:          opts.Rests,
+		saving:         savingPace{reach: savingReachEvery, sync: savingSyncEvery, reconcile: savingReconcileEvery},
+		syncEvery:      cmp.Or(opts.SyncInterval, DefaultSyncInterval),
+		reachEvery:     reachEvery,
+		greetAfter:     defaultGreetAfter,
+		reachDelay:     cmp.Or(opts.ReachDelay, DefaultReachDelay),
+		pathSettle:     pathSettle,
+		firewalled:     firewalld.Blocks,
+		reconcileEvery: cmp.Or(opts.ReconcileInterval, DefaultReconcileInterval),
+		clock:          opts.Clock,
+		logf:           opts.Logf,
+		dirty:          make(chan struct{}, 1),
+		soon:           make(chan struct{}, 1),
+		rearm:          make(chan struct{}, 1),
+		recheck:        make(chan struct{}, 1),
+		syncing:        make(chan struct{}, 1),
+		peerIDs:        map[types.WGKey]uint64{},
+		everMember:     map[types.Identity]bool{},
+		peerBeacons:    map[types.Identity]peerBeacon{},
+		cachePath:      opts.EndpointCachePath,
+		relayPort:      opts.RelayPort,
+		portFallback:   opts.PortFallback,
+		noRelay:        opts.DisableRelay,
+		httpsOnly:      opts.HTTPSOnly,
+		proxy:          opts.Proxy,
+		envProxy:       envProxyFunc(),
+		relayName:      opts.RelayName,
+		listenHTTPS:    opts.ListenHTTPS,
+		handOffPath:    opts.HandOffSocket,
+		ingressUID:     opts.IngressUID,
+		ownRelay: relayState{
+			https443: map[netip.Addr]net.Listener{},
+			members:  map[types.WGKey]bool{},
+			hosts:    map[types.Identity]bool{},
+		},
+		leases:           newLeaseStore(opts.LeasePath),
+		moved:            opts.Moved,
 		exitChoice:       opts.Exit,
 		serveConsent:     opts.ServeExit,
 		subnetConsent:    opts.ServeSubnets,
 		subnetsOff:       opts.SubnetsOff,
 		acceptNames:      opts.AcceptNames,
-		onExitMoved:      opts.OnExitMoved,
 		userEgress:       egressUserOf(opts.EgressUser),
-		waiting:          map[types.Hash]heldChange{},
+		changes:          waitStore{path: opts.WaitingPath, held: map[types.Hash]heldChange{}},
 		keyringPath:      opts.KeyringPath,
-		pairsPath:        opts.PairsPath,
 		terminatorWanted: opts.TerminatorWanted,
 		ingressPorts:     opts.IngressPorts,
 		ttl:              cmp.Or(opts.FreshnessTTL, DefaultFreshnessTTL),
 		leaseEvery:       cmp.Or(opts.LeaseInterval, DefaultLeaseInterval),
 	}
+	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.noV4.Store(opts.NoV4)
 	d.endpoints.SetClock(d.now)
 	d.pub.consent, d.pub.to, d.pub.members = opts.ServePublished, maps.Clone(opts.ServeTo), maps.Clone(opts.ServeMembers)
@@ -785,7 +694,7 @@ func New(opts Options) (*Daemon, error) {
 	selfAddrs := d.overlayAddrs(state, self, now)
 	d.v4 = state.V4RangesAt(now)
 	d.kept = d.loadKeyring()
-	d.pairs = d.loadPairs()
+	d.pairs = loadPairStore(opts.PairsPath, d.logf)
 	if d.logf == nil {
 		d.logf = func(string, ...any) {}
 	}
@@ -816,7 +725,7 @@ func New(opts Options) (*Daemon, error) {
 		return nil, errors.New("daemon: HTTPS alone needs a device or the netstack, since log sync runs in the tunnel")
 	}
 	if opts.RelayName != "" {
-		if d.relayCerts, err = newRelayCertificates(opts.RelayName, opts.ACMEDirectory, opts.RelayCertsPath); err != nil {
+		if d.relayCerts, err = newRelayCertificates(opts.RelayName, opts.ACMEDirectory, opts.RelayCertsPath, &d.waits); err != nil {
 			return nil, fmt.Errorf("daemon: the relay's certificates: %w", err)
 		}
 	}
@@ -846,6 +755,7 @@ func New(opts Options) (*Daemon, error) {
 		// node's announcement, and both are learned asynchronously once
 		// there is a relay to learn them from.
 		OnConnectivityChange: d.onConnectivityChange,
+		OnInterfacesChange:   d.interfacesChanged,
 		// A subnet a route of the host's now holds is given back at once.
 		OnHostRoutesChange: d.MarkDirty,
 	}
@@ -910,10 +820,13 @@ func New(opts Options) (*Daemon, error) {
 		Dial:         d.gossipDial(opts.GossipDial),
 		OverlayAddrs: d.overlayGossipAddrs,
 		OverlayOnly:  d.overlayOnly,
+		Overlay:      d.ula,
 		OnOwn:        d.ownEchoed,
-		OnRecords:    d.MarkDirty,
-		Leases:       d.encodedLeases,
+		OnRecords:    d.relayRecords,
+		OnAnnounced:  d.relayAnnounced,
+		Leases:       d.leases.encoded,
 		OnLeases:     d.offerLeases,
+		SeenAlone:    d.seenAlone,
 		OnHave:       d.onHave,
 		Waiting:      (*waitingAdapter)(d),
 		Pair:         d.pairMsg,
@@ -934,6 +847,7 @@ func New(opts Options) (*Daemon, error) {
 		mopts.Announce = d.announcement
 		mopts.OnPeer = d.onDiscovered
 		mopts.NeedsPeers = d.needsPeers
+		mopts.Quiet = d.pace.Saving
 		mopts.Logf = d.logf
 		// Discovery is an underlay function, so it must not use the overlay
 		// device this daemon just created.
@@ -959,19 +873,23 @@ func New(opts Options) (*Daemon, error) {
 			o.Items = &relayItems{d: d, hc: d.httpsClient()}
 		} else {
 			o.Ask, o.Seeks = d.askRelays, d.seeksInDHT
+			if opts.Rests {
+				o.Joins = d.joinsDHT
+			}
 		}
 		if d.dht, err = dht.New(o); err != nil {
 			return nil, err
 		}
 	}
 	undo.done()
+	d.wired.Store(true)
 
 	// Before the loop starts, so the first reconcile already has somewhere to
 	// reach the peers this device knew about when it stopped, and knows how
 	// fresh its state was. The keys first, so nothing is held unchecked.
 	d.setSigning(state)
 	d.loadEndpointCache(d.cachePath)
-	d.loadLeases()
+	d.leases.load(d.logf)
 	d.loadWaiting()
 
 	d.setStatus(func(s *ipc.Status) {
@@ -1058,6 +976,7 @@ func (d *Daemon) listenGossip(opts Options, overlay []netip.Prefix) (net.Listene
 func (d *Daemon) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer context.AfterFunc(d.ctx, cancel)()
 
 	if !d.waits.track() {
 		return nil // closed before it ever ran
@@ -1106,38 +1025,68 @@ func (d *Daemon) Run(ctx context.Context) error {
 	syncTick := time.NewTicker(d.syncEvery)
 	defer syncTick.Stop()
 	d.checkInBackground(ctx)
-	reconcileTick := time.NewTicker(d.reconcileEvery)
-	defer reconcileTick.Stop()
+	d.watchHostDNS(ctx)
+	var paced <-chan struct{}
+	reconcileAt := time.NewTimer(time.Hour)
+	defer reconcileAt.Stop()
+	rearm := func() {
+		// The change taken before the wait, so that none comes between.
+		paced = d.pace.Changed()
+		wait := d.reconcileWait()
+		armed := d.now().Add(wait)
+		d.reconcileArmed.Store(&armed)
+		reconcileAt.Reset(wait)
+	}
+	rearm()
 
-	// While saving, ticks come at the normal pace and those due sooner than
-	// the saving one are skipped.
-	reconciled, synced := time.Now(), time.Now()
+	// While saving, sync ticks come at the normal pace and those due sooner
+	// than the saving one are skipped.
+	synced := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
+			if d.ctx.Err() != nil {
+				return nil
+			}
 			return ctx.Err()
-		case <-d.closed:
-			return nil
 		case <-d.dirty:
 			if err := d.Reconcile(); err != nil {
 				d.logf("daemon: reconcile: %v", err)
 			}
-			reconciled = time.Now()
-			d.inBackground(ctx, d.pushAll)
-		case <-reconcileTick.C:
-			if !d.due(reconciled, d.saving.reconcile) {
-				continue
+			rearm()
+			// Whichever push, it carries an address that waited.
+			d.addrsWaiting.Store(false)
+			if d.pushRests.Swap(false) {
+				d.inBackground(ctx, d.pushAll, true)
+			} else {
+				d.inBackground(ctx, d.pushAwake, false)
 			}
+		case <-paced:
+			if !d.pace.Saving() && d.addrsWaiting.Swap(false) {
+				d.announceSoon()
+			}
+			rearm()
+		case <-d.rearm:
+			rearm()
+		case <-d.soon:
 			if err := d.Reconcile(); err != nil {
 				d.logf("daemon: reconcile: %v", err)
 			}
-			reconciled = time.Now()
+			rearm()
+		case <-reconcileAt.C:
+			if err := d.Reconcile(); err != nil {
+				d.logf("daemon: reconcile: %v", err)
+			}
+			rearm()
+			if d.addrsWaiting.Swap(false) {
+				d.inBackground(ctx, d.pushAwake, false)
+			}
 		case <-syncTick.C:
 			if !d.due(synced, d.saving.sync) {
 				continue
 			}
 			synced = time.Now()
-			d.inBackground(ctx, d.syncOne)
+			d.inBackground(ctx, d.syncOne, true)
 		}
 	}
 }
@@ -1147,12 +1096,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 // member, and the loop must stay free to service d.dirty. A round asked for
 // while one runs is deferred, not dropped — dropping it would break the
 // epidemic relay a revocation depends on.
-func (d *Daemon) inBackground(ctx context.Context, round func(context.Context)) {
+// A deferred round reaches members that rest where any round deferred
+// would have: full says this one would.
+func (d *Daemon) inBackground(ctx context.Context, round func(context.Context), full bool) {
 	select {
 	case d.syncing <- struct{}{}:
 	default:
 		d.mu.Lock()
 		d.pushDeferred = true
+		d.deferredFull = d.deferredFull || full
 		d.mu.Unlock()
 		return
 	}
@@ -1165,26 +1117,83 @@ func (d *Daemon) inBackground(ctx context.Context, round func(context.Context)) 
 		defer func() {
 			<-d.syncing
 			d.mu.Lock()
-			deferred := d.pushDeferred
-			d.pushDeferred = false
+			deferred, full := d.pushDeferred, d.deferredFull
+			d.pushDeferred, d.deferredFull = false, false
 			d.mu.Unlock()
-			if deferred {
-				// Terminates: the round it triggers raises no signal of its
-				// own unless something was genuinely new.
+			// Terminates: the round it triggers raises no signal of its
+			// own unless something was genuinely new.
+			switch {
+			case deferred && full:
 				d.MarkDirty()
+			case deferred:
+				d.announceSoon()
 			}
 		}()
 		round(ctx)
 	}()
 }
 
+// reconcileSoon asks the loop to reconcile, pushing nothing. It never
+// blocks.
+func (d *Daemon) reconcileSoon() {
+	select {
+	case d.soon <- struct{}{}:
+	default:
+	}
+}
+
 // MarkDirty asks the loop to reconcile and push. It never blocks, so it is
 // safe from a gossip session or an IPC handler.
 func (d *Daemon) MarkDirty() {
+	d.pushRests.Store(true)
+	d.announceSoon()
+}
+
+// announceSoon is [Daemon.MarkDirty] for this device's announcement alone,
+// pushed to the members that do not rest: one that rests learns it at its
+// next sync, and from disco on the way meanwhile.
+func (d *Daemon) announceSoon() {
 	select {
 	case d.dirty <- struct{}{}:
 	default:
 	}
+}
+
+// seenAlone reports whether the network is at the schema whose hellos say
+// what they hold.
+func (d *Daemon) seenAlone() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.status.Schema >= types.SchemaSeen
+}
+
+// relayRecords passes on log records a session brought, to every member:
+// a node that rests leaves that to those awake, and reconciles alone.
+func (d *Daemon) relayRecords() {
+	if d.leavesRelaying() {
+		// Records may change its own announcement: its epoch, its pairs'.
+		d.announceSoon()
+		return
+	}
+	d.MarkDirty()
+}
+
+// relayAnnounced is [Daemon.relayRecords] for another's announcement, an
+// address key or a waiting change, passed on to the members awake: one
+// that rests has an announcement's news from its author, or at its next
+// sync.
+func (d *Daemon) relayAnnounced() {
+	if d.leavesRelaying() {
+		d.reconcileSoon()
+		return
+	}
+	d.announceSoon()
+}
+
+// leavesRelaying reports whether this node rests and a member awake relays
+// in its stead.
+func (d *Daemon) leavesRelaying() bool {
+	return d.rests && slices.ContainsFunc(d.memberList(), func(id types.Identity) bool { return !d.peerRests(id) })
 }
 
 // Inform applies records an admin quorum authorized and pushes them out, so a
@@ -1212,35 +1221,95 @@ func (d *Daemon) Inform(records []types.AUM) error {
 // reaches everyone in O(log n) rounds rather than costing O(n²) sessions.
 const PushFanout = 8
 
+// boolOrder sorts false before true.
+func boolOrder(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// restingPushFanout is how many members awake a node that rests pushes to:
+// they push it on, and each session wakes the phone.
+const restingPushFanout = 2
+
 // pushAll runs one anti-entropy round with up to [PushFanout] members. It
 // terminates because OnRecords fires only when something was actually new.
-func (d *Daemon) pushAll(ctx context.Context) {
+func (d *Daemon) pushAll(ctx context.Context) { d.push(ctx, false) }
+
+// push is [Daemon.pushAll], to the members that do not rest alone where
+// awake says so, and to those an exchange of preshared keys waits on.
+func (d *Daemon) push(ctx context.Context, awake bool) {
 	wanted := d.takePairWanted()
-	peers := d.memberList()
-	if len(peers) == 0 {
-		return
+	var up, resting []types.Identity
+	for _, id := range d.memberList() {
+		if d.peerRests(id) && !wanted[id] {
+			resting = append(resting, id)
+		} else {
+			up = append(up, id)
+		}
 	}
-	if len(peers) > PushFanout {
+	fanout := PushFanout
+	if d.rests {
+		fanout = restingPushFanout
+	}
+	if len(up) > fanout {
 		// Shuffle rather than take a prefix: a fixed slice would leave the
 		// rest reachable only through whoever happened to be in it.
-		rand.Shuffle(len(peers), func(i, j int) { peers[i], peers[j] = peers[j], peers[i] })
+		rand.Shuffle(len(up), func(i, j int) { up[i], up[j] = up[j], up[i] })
+		slices.SortStableFunc(up, func(a, b types.Identity) int {
+			return boolOrder(d.gossip.Failing(a)) - boolOrder(d.gossip.Failing(b))
+		})
 		// An exchange of preshared keys waits on its peer alone.
-		first := slices.DeleteFunc(slices.Clone(peers), func(id types.Identity) bool { return !wanted[id] })
-		peers = append(first, slices.DeleteFunc(peers, func(id types.Identity) bool { return wanted[id] })...)
-		peers = peers[:PushFanout]
+		first := slices.DeleteFunc(slices.Clone(up), func(id types.Identity) bool { return !wanted[id] })
+		up = append(first, slices.DeleteFunc(up, func(id types.Identity) bool { return wanted[id] })...)
+		up = up[:max(fanout, len(first))]
+	}
+	peers := up
+	if !awake {
+		// Members that rest relay nothing, so each hears from the author.
+		peers = append(peers, resting...)
+	}
+	if len(peers) == 0 {
+		return
 	}
 	d.gossip.Sync(ctx, peers)
 }
 
+// pushAwake is [Daemon.pushAll] to the members that do not rest.
+func (d *Daemon) pushAwake(ctx context.Context) { d.push(ctx, true) }
+
 // syncOne is the periodic backstop: anti-entropy with one member chosen at
 // random, which is what makes convergence robust to a push that was dropped.
+// A member that rests is left to sync by itself, at its own pace, but where
+// all do, one is synced with every [savingSyncEvery].
 func (d *Daemon) syncOne(ctx context.Context) {
-	peers := d.memberList()
+	all := d.memberList()
+	peers := slices.DeleteFunc(slices.Clone(all), d.peerRests)
+	if len(peers) == 0 {
+		// Saving, the loop paces the tick already.
+		d.mu.Lock()
+		due := d.pace.Saving() || d.now().Sub(d.restingSynced) >= savingSyncEvery
+		if due {
+			d.restingSynced = d.now()
+		}
+		d.mu.Unlock()
+		if !due {
+			return
+		}
+		peers = all
+	}
 	if len(peers) == 0 {
 		return
 	}
 	pick := peers[rand.IntN(len(peers))]
 	d.gossip.Sync(ctx, []types.Identity{pick})
+}
+
+// peerRests reports whether id's announcement, not a hint, says it rests.
+func (d *Daemon) peerRests(id types.Identity) bool {
+	e, ok := d.endpoints.Get(id)
+	return ok && !e.HintAlone() && e.Rests
 }
 
 // memberList returns the members to gossip with: everyone the log carries
@@ -1289,14 +1358,12 @@ func (d *Daemon) discovered(e gossip.Endpoint, where string) {
 	if e.Identity == d.self {
 		return
 	}
-	if !d.endpoints.Add(e) {
-		return
-	}
-	if !d.actionableSubject(e.Identity) {
+	change := d.endpoints.Added(e)
+	if change == gossip.Unchanged || !d.actionableSubject(e.Identity) {
 		return
 	}
 	d.logf("daemon: discovered %v %s at %v", e.Identity.ShortString(), where, d.underlay(e))
-	d.MarkDirty()
+	d.relayAnnounced()
 }
 
 // overlayGossipAddrs is where a member can be reached for anti-entropy once
@@ -1332,15 +1399,17 @@ func (d *Daemon) checkInBackground(ctx context.Context) {
 		wait := time.NewTimer(d.reachDelay)
 		var last time.Time
 		defer wait.Stop()
+		// Each change taken before the pace is read, so that none comes
+		// between.
+		paced := d.pace.Changed()
 		d.followPace()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-d.closed:
-				return
 			case <-wait.C:
-			case <-d.pace.Changed():
+			case <-paced:
+				paced = d.pace.Changed()
 				d.followPace()
 				if d.pace.Saving() {
 					// The next check comes at the saving pace.
@@ -1354,8 +1423,6 @@ func (d *Daemon) checkInBackground(ctx context.Context) {
 					select {
 					case <-ctx.Done():
 						return
-					case <-d.closed:
-						return
 					case <-time.After(gap):
 					}
 				}
@@ -1365,8 +1432,6 @@ func (d *Daemon) checkInBackground(ctx context.Context) {
 				if gap := recheckGap - time.Since(last); gap > 0 {
 					select {
 					case <-ctx.Done():
-						return
-					case <-d.closed:
 						return
 					case <-time.After(gap):
 					}
@@ -1389,6 +1454,10 @@ func (d *Daemon) addrsMoved() bool {
 	}
 	return !slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.heldAddrs())
 }
+
+// sayMovesAgain has the next move the log makes said again, as one a
+// reconcile said from before the last may have been.
+func (d *Daemon) sayMovesAgain() { d.movedSaid.Store(false) }
 
 // heldAddrs is the overlay addresses the data plane holds.
 func (d *Daemon) heldAddrs() []netip.Prefix {
@@ -1450,10 +1519,8 @@ func (d *Daemon) needsPeers() bool {
 
 // Status returns a snapshot of what the daemon knows about itself.
 func (d *Daemon) Status() ipc.Status {
-	d.waitMu.Lock()
-	held := len(d.waiting)
-	d.waitMu.Unlock()
-	names := d.namesNow() // before d.mu, which dnsMu is taken before
+	held := d.changes.len()
+	names := d.namesNow() // before d.mu, which dns.mu is taken before
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s := d.status
@@ -1540,8 +1607,8 @@ func (d *Daemon) Learn(e gossip.Endpoint) error {
 		// in must not shadow it.
 		return nil
 	}
-	if d.endpoints.Add(e) {
-		d.MarkDirty()
+	if d.endpoints.Added(e) != gossip.Unchanged {
+		d.relayAnnounced()
 	}
 	return nil
 }
@@ -1554,7 +1621,7 @@ func (d *Daemon) Close() error {
 	var err error
 	d.closeOnce.Do(func() {
 		d.waits.stop()
-		close(d.closed)
+		d.cancel()
 		if d.dht != nil {
 			d.dht.Close()
 		}

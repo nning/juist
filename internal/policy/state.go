@@ -80,7 +80,7 @@ func Detached() (Resolver, Namer) {
 		if id, err := types.ParseIdentity(name); err == nil {
 			return id, nil
 		}
-		id := types.Identity(sha256.Sum256([]byte("juist/policy-detached/v1\x00" + name)))
+		id := types.Identity(sha256.Sum256([]byte(types.LabelPolicyDetached + "\x00" + name)))
 		names[id] = name
 		return id, nil
 	}

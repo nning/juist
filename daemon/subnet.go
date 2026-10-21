@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"cmp"
 	"net/netip"
 	"slices"
 	"strings"
@@ -13,24 +12,6 @@ import (
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
 )
-
-// SetSubnetConsent records whether this device's operator agrees to route
-// the subnets the log grants it for the network's members.
-func (d *Daemon) SetSubnetConsent(on bool) {
-	d.mu.Lock()
-	d.subnetConsent = on
-	d.mu.Unlock()
-	d.MarkDirty()
-}
-
-// SetSubnetsOff records whether this device's owner turned off routing its
-// peers' subnets into the tunnel.
-func (d *Daemon) SetSubnetsOff(off bool) {
-	d.mu.Lock()
-	d.subnetsOff = off
-	d.mu.Unlock()
-	d.MarkDirty()
-}
 
 // A subnetPlan is what one reconcile decides about subnet routes: what this
 // device routes for its peers, and the peers' prefixes it sends into the
@@ -142,7 +123,7 @@ func (d *Daemon) planSubnets(s snapshot, fresh bool, held map[types.Identity]gos
 		}
 	}
 	slices.SortFunc(p.status.Routes, func(x, y ipc.SubnetRoute) int {
-		return cmp.Or(x.Prefix.Addr().Compare(y.Prefix.Addr()), x.Prefix.Bits()-y.Prefix.Bits())
+		return types.ComparePrefix(x.Prefix, y.Prefix)
 	})
 	return p
 }

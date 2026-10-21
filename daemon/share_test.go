@@ -370,15 +370,20 @@ func TestAShareIsRenewedAsItsEndMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	var last int64
-	if !f.d.renewShare(&last) {
+	renewed := func() bool {
+		before := last
+		f.d.renewShare(&last)
+		return last != before
+	}
+	if !renewed() {
 		t.Fatal("a new share is not announced")
 	}
 	c.set(c.get().Add(time.Minute))
-	if f.d.renewShare(&last) {
+	if renewed() {
 		t.Error("a share renewed with its end where it was")
 	}
 	c.set(c.get().Add(shareLease / 2))
-	if !f.d.renewShare(&last) {
+	if !renewed() {
 		t.Error("a share whose end moved is not renewed")
 	}
 }
@@ -572,10 +577,13 @@ func TestARestartedShareLeavesAnothers(t *testing.T) {
 		done <- err
 	}()
 	<-named
+	// Taken under the lock: the restarted share's check, which reads the
+	// mesh through it, could otherwise take up its share first.
 	f.s.mu.Lock()
 	f.s.restartMeshLocked(nil, "a test")
+	_, _, err := f.s.mesh.StartShare(&ipc.ShareRequest{To: "127.0.0.1:9000"}, time.Time{})
 	f.s.mu.Unlock()
-	if _, _, err := f.s.Mesh().StartShare(&ipc.ShareRequest{To: "127.0.0.1:9000"}, time.Time{}); err != nil {
+	if err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -651,9 +659,11 @@ func TestJuistdSaysWhenTheTerminatorIsNeeded(t *testing.T) {
 	needed(true)
 	f.d.EndShare(sh)
 	needed(false)
-	f.d.SetPublishConsent(true, map[string]string{"immich": "127.0.0.1:2283"}, nil)
+	f.d.changePrefs(func(p *Prefs) {
+		p.ServePublished, p.ServeTo, p.ServeMembers = true, map[string]string{"immich": "127.0.0.1:2283"}, nil
+	})
 	needed(true)
-	f.d.SetPublishConsent(true, nil, nil)
+	f.d.changePrefs(func(p *Prefs) { p.ServePublished, p.ServeTo, p.ServeMembers = true, nil, nil })
 	needed(false)
 	if _, _, err := f.d.StartShare(&ipc.ShareRequest{To: "127.0.0.1:8000"}, time.Time{}); err != nil {
 		t.Fatal(err)
@@ -688,5 +698,17 @@ func TestTheStatusSaysWhereTheTerminatorListens(t *testing.T) {
 	}
 	if st := f.d.terminatorStatus(); st != nil {
 		t.Errorf("once the terminator said it stops, the status says %+v", st)
+	}
+}
+
+// A share's end is read by the device's clock, as everything it announces
+// is: one past by that clock ends before it starts, however far ahead the
+// wall clock puts it.
+func TestAShareEndIsReadByTheDevicesClock(t *testing.T) {
+	ahead := time.Now().Add(2 * time.Hour)
+	s := &Service{opts: ServiceOptions{Mesh: Options{Clock: func() time.Time { return ahead }}}}
+	err := s.share(t.Context(), &ipc.ShareRequest{To: "127.0.0.1:8000", Until: time.Now().Add(time.Hour).Unix()}, nil)
+	if err == nil || err.Error() != "the share ends before it starts" {
+		t.Fatalf("a share ending an hour before the device's now: %v", err)
 	}
 }

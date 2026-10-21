@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -305,7 +306,11 @@ func TestANewInstanceTakesAFreeNumber(t *testing.T) {
 		t.Fatalf("init beside an enabled instance that is down: %v", err)
 	}
 	out := h.mustRun("status")
-	mustContain(t, out, "juist4 · not running", startCmd(4), "home · ", "work · ")
+	mustContain(t, out, "juist4 · not running", "hint: 1 warning: juist health juist4", "home · ", "work · ")
+	if strings.Contains(out, startCmd(4)) {
+		t.Errorf("status says how to start an instance:\n%s", out)
+	}
+	mustContain(t, h.mustRun("health"), "juist4\nwarning: juistd not running\nhint: "+startCmd(4))
 	mustContain(t, h.mustRun("devices"), "juist4 · not running", "home · juist0", "work · juist2")
 	if _, err := h.run("remove", "phone"); err == nil || !strings.Contains(err.Error(), "juist4 (not running)") {
 		t.Fatalf("a command with an instance down: %v", err)
@@ -331,10 +336,11 @@ func TestAHostConflictReads(t *testing.T) {
 	st.HostConflict.SameNetwork = true
 	st.StartError = "network runs here already"
 	v = statusOfOn(st, testNow(), noPaint, instance.Name, false)
-	head := render(v.head)
-	mustContain(t, head, "not connected", "runs on this host already, as juist0", "juist reset juist1 --force")
-	if strings.Contains(head, "CAP_NET_ADMIN") {
-		t.Errorf("a same-network refusal reads as a missing capability:\n%s", head)
+	mustContain(t, render(v.head), "not connected")
+	notes = render(v.notes)
+	mustContain(t, notes, "runs on this host already, as juist0", "juist reset juist1 --force")
+	if strings.Contains(notes, "CAP_NET_ADMIN") {
+		t.Errorf("a same-network refusal reads as a missing capability:\n%s", notes)
 	}
 }
 
@@ -528,12 +534,110 @@ func TestAnArgumentNamingANetworkIsTheNetwork(t *testing.T) {
 func TestARemovedInstanceSaysHowToStartOver(t *testing.T) {
 	t.Parallel()
 	st := &ipc.Status{InNetwork: true, Instance: 1, Derived: ipc.Derived{NetworkName: "core", NotMember: true}}
-	mustContain(t, render(statusOf(st, testNow(), noPaint).head), "core · removed", "juist reset juist1")
+	v := statusOf(st, testNow(), noPaint)
+	mustContain(t, render(v.head), "core · removed")
+	mustContain(t, render(v.notes), "juist reset juist1")
 	st.Instance = 0
-	if head := render(statusOf(st, testNow(), noPaint).head); strings.Contains(head, "juist0") ||
-		!strings.Contains(head, "juist reset") {
-		t.Fatalf("the default instance's hint: %s", head)
+	if notes := render(statusOf(st, testNow(), noPaint).notes); strings.Contains(notes, "juist0") ||
+		!strings.Contains(notes, "juist reset") {
+		t.Fatalf("the default instance's hint: %s", notes)
 	}
 	// Beside another network, a bare reset would not know which.
-	mustContain(t, render(statusOfOn(st, testNow(), noPaint, instance.Name, true).head), "juist reset juist0")
+	mustContain(t, render(statusOfOn(st, testNow(), noPaint, instance.Name, true).notes), "juist reset juist0")
+}
+
+// The juist health that juist status points at for a juistd that does not run
+// says so, as the one warning counted, on a host in one network and in two.
+func TestStatusPointsAtAHealthThatSaysJuistdIsDown(t *testing.T) {
+	t.Parallel()
+	follow := func(h *testHost, inst int) {
+		t.Helper()
+		status := h.mustRun("status")
+		i := strings.Index(status, "hint: 1 warning: juist ")
+		if i < 0 {
+			t.Fatalf("status points nowhere:\n%s", status)
+		}
+		cmd := strings.Fields(strings.SplitN(status[i+len("hint: 1 warning: juist "):], "\n", 2)[0])
+		out, err := h.run(cmd...)
+		if err != nil || strings.Count(out, "warning:") != 1 ||
+			!strings.Contains(out, "warning: juistd not running\nhint: "+startCmd(inst)) {
+			t.Errorf("juist %s, as status says:\n%s%v", strings.Join(cmd, " "), out, err)
+		}
+	}
+	one := newHost(t)
+	one.mustRun("create", "home")
+	one.stops[0]()
+	follow(one, 0)
+
+	two := newHost(t)
+	two.mustRun("create", "home")
+	two.mustRun("create", "work")
+	two.stops[1]()
+	follow(two, 1)
+
+	// Named, it is the same state, not an error.
+	for h, inst := range map[*testHost]string{one: "juist0", two: "juist1"} {
+		out, err := h.run("status", inst)
+		if err != nil || !strings.Contains(out, inst+" · not running") || !strings.Contains(out, "hint: 1 warning: juist health") {
+			t.Errorf("juist status %s:\n%s%v", inst, out, err)
+		}
+	}
+}
+
+// The default instance's juistd is started enabled, as it may be down for
+// not being enabled, which a start alone would leave so.
+func TestTheDefaultInstanceIsStartedEnabled(t *testing.T) {
+	t.Parallel()
+	if startCmd(0) != enableCmd() || startCmd(1) == enableCmd() {
+		t.Errorf("start hints: %q, %q", startCmd(0), startCmd(1))
+	}
+}
+
+// A command turned to another network is turned back to what it was about,
+// not to nothing.
+func TestWithinRestoresWhatTheCommandWasAbout(t *testing.T) {
+	t.Parallel()
+	a := newApp(strings.NewReader(""), &syncBuffer{}, &syncBuffer{})
+	n, inst := &daemonNode{sock: "/nonexistent"}, &hostInstance{n: 1}
+	a.network, a.node, a.instance, a.listing = "home", n, inst, "home"
+	restore := a.within("work")
+	if a.network != "work" || a.node != nil || a.instance != nil {
+		t.Fatalf("within work: network %q, node %v, instance %v", a.network, a.node, a.instance)
+	}
+	a.listing = "work"
+	restore()
+	if a.network != "home" || a.node != node(n) || a.instance != inst || a.listing != "home" {
+		t.Fatalf("restored: network %q, node %v, instance %v, listing %q", a.network, a.node, a.instance, a.listing)
+	}
+}
+
+// An instance made or removed is in the next read of the host's instances
+// within the same invocation, not the list read before.
+func TestAnInstanceMadeOrRemovedIsSeenByTheNextStep(t *testing.T) {
+	t.Parallel()
+	h := newHost(t)
+	a := h.cli.app(&syncBuffer{}, "")
+	var err error
+	if a.home, err = openHome(h.cli.home); err != nil {
+		t.Fatal(err)
+	}
+	has := func(n int) bool {
+		return slices.ContainsFunc(a.hostInstances(), func(i hostInstance) bool { return i.n == n })
+	}
+	if !has(0) || has(1) {
+		t.Fatalf("before: %v", a.hostInstances())
+	}
+	n, err := a.makeInstance(operatorChoice{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has(n) {
+		t.Fatalf("made %s, not seen: %v", instance.Name(n), a.hostInstances())
+	}
+	if err := a.removeInstance(n); err != nil {
+		t.Fatal(err)
+	}
+	if has(n) {
+		t.Fatalf("removed %s, still seen: %v", instance.Name(n), a.hostInstances())
+	}
 }

@@ -109,8 +109,8 @@ joining_words: The four words, for the admin to compare
 {{< /screens >}}
 
 {{< step on="an admin's device" >}}
-Start an invite in a terminal at least 59 columns wide, so that it can show
-the QR code:
+Start an invite in a terminal about 60 columns wide or wider, so that it can
+show the QR code:
 
 ```sh
 juist invite
@@ -214,18 +214,37 @@ VPN app turns juist off, and the app tells you so.
 
 ## Battery
 
-While the screen is off, the phone dozes or battery saver is on, juist
-saves battery. It checks members every 5 minutes instead of every 30
-seconds, syncs the network every 30 minutes instead of every 2, and stops
-pinging idle members to keep their paths warm. It also stops listening for
-members on the Wi-Fi's multicast DNS, which would wake the phone for every
-such packet on the network. Changes still arrive at once, and traffic
-through the tunnel goes at its usual pace. With the screen on and battery
-saver on, the status screen says so.
+juist saves battery while the screen is off, the phone dozes or battery
+saver is on. On a metered network, such as mobile data or a hotspot, it
+also saves battery whenever the app is not in front. It then:
 
-Without a relay, a member may take up to those 5 minutes to reach a phone
-behind NAT whose screen is off. With a relay, it is reached through the
-relay at once.
+- checks the other members every 5 minutes instead of every 30 seconds,
+  mostly with a single ping that wakes nothing else;
+- syncs the network's log every 30 minutes instead of every 2;
+- no longer pings idle members just to keep the paths to them open;
+- stops listening and announcing itself on the Wi-Fi's multicast DNS, which
+  would wake the phone for every such packet.
+
+Changes to the network still arrive at once, and traffic through the tunnel
+is not slowed down. If battery saver is on while the screen is on, the
+status screen says so.
+
+The phone searches the public DHT for members only while it reaches no
+device other than phones. Any other member it reaches finds the others there
+and passes them on.
+
+The phone passes on nothing it hears from other devices; they do that among
+themselves. News of its own it tells two other devices, which pass it on.
+Once the network runs the app's schema, a sync exchanges only what the other
+side lacks, rather than every device's details each time.
+
+Once the network runs the app's schema
+([Updating juist]({{< relref "docs/updating" >}})), the other devices let
+the phone sleep too. They leave the log sync to the phone and check on it
+every 30 minutes. Where no relay can reach the phone, they send it a single
+ping every minute to keep the way to it open. A member still reaches a phone
+whose screen is off at once: through a relay if there is one, otherwise
+along the path those pings keep open.
 
 ## When the phone is removed
 

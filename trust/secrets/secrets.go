@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/types"
 )
 
@@ -150,8 +151,8 @@ func recipientKey(x types.X25519Key, m types.MLKEMKey) (hpke.PublicKey, error) {
 // reused across epochs. Binding to the network too would be circular for the
 // genesis record; the signatures over the record supply that.
 func sealInfo(epoch uint64, recipient types.Identity) []byte {
-	info := make([]byte, 0, len(labelSealInfo)+1+8+types.IdentitySize)
-	info = append(info, labelSealInfo...)
+	info := make([]byte, 0, len(types.LabelEpochSeal)+1+8+types.IdentitySize)
+	info = append(info, types.LabelEpochSeal...)
 	info = append(info, 0)
 	info = binary.BigEndian.AppendUint64(info, epoch)
 	info = append(info, recipient[:]...)
@@ -258,8 +259,8 @@ const CatchUpKeySize = 32
 // catchUpInfo binds a catch-up grant to one network, one recipient and the
 // nonce of one session, so it can be neither replayed nor re-addressed.
 func catchUpInfo(network types.Hash, recipient types.Identity, nonce []byte) []byte {
-	info := make([]byte, 0, len(labelCatchUp)+1+len(network)+types.IdentitySize+len(nonce))
-	info = append(info, labelCatchUp...)
+	info := make([]byte, 0, len(types.LabelCatchUp)+1+len(network)+types.IdentitySize+len(nonce))
+	info = append(info, types.LabelCatchUp...)
 	info = append(info, 0)
 	info = append(info, network[:]...)
 	info = append(info, recipient[:]...)
@@ -285,6 +286,7 @@ func SealCatchUp(network types.Hash, n *types.NodeRecord, nonce []byte) (key [Ca
 
 // OpenCatchUp recovers the session key a peer sealed to this node.
 func OpenCatchUp(network types.Hash, self types.Identity, priv *PrivateKeys, nonce, sealed []byte) (key [CatchUpKeySize]byte, err error) {
+	defer malformed.Recover(&err)
 	hpkePriv, err := hpke.NewHybridPrivateKey(priv.mlkem, priv.x25519)
 	if err != nil {
 		return key, fmt.Errorf("secrets: assembling recipient key: %w", err)
@@ -306,11 +308,11 @@ func AdminRecipient(seed []byte) (*PrivateKeys, error) {
 	if len(seed) != 32 {
 		return nil, fmt.Errorf("secrets: an admin key seed is %d bytes, want 32", len(seed))
 	}
-	x, err := hkdf.Key(sha256.New, seed, nil, labelAdminX25519, 32)
+	x, err := hkdf.Key(sha256.New, seed, nil, types.LabelAdminX25519, 32)
 	if err != nil {
 		return nil, err
 	}
-	m, err := hkdf.Key(sha256.New, seed, nil, labelAdminMLKEM, mlkem.SeedSize)
+	m, err := hkdf.Key(sha256.New, seed, nil, types.LabelAdminMLKEM, mlkem.SeedSize)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +332,7 @@ const SealedKeySize = types.SealedSecretSize
 const KeySize = 32
 
 func keyInfo(context []byte, reader types.Identity) []byte {
-	info := append([]byte(labelWaitingKey), 0)
+	info := append([]byte(types.LabelWaitingKey), 0)
 	info = append(info, context...)
 	return append(info, reader[:]...)
 }
@@ -369,7 +371,7 @@ func OpenKey(context []byte, reader types.Identity, priv *PrivateKeys, sealed []
 }
 
 func peerInfo(network types.Hash, recipient types.Identity) []byte {
-	info := append([]byte(labelPeer), 0)
+	info := append([]byte(types.LabelPeerSeal), 0)
 	info = append(info, network[:]...)
 	return append(info, recipient[:]...)
 }
@@ -385,7 +387,8 @@ func SealToPeer(network types.Hash, n *types.NodeRecord, plaintext []byte) ([]by
 }
 
 // OpenFromPeer opens what [SealToPeer] sealed to this device, self.
-func OpenFromPeer(network types.Hash, self types.Identity, priv *PrivateKeys, sealed []byte) ([]byte, error) {
+func OpenFromPeer(network types.Hash, self types.Identity, priv *PrivateKeys, sealed []byte) (_ []byte, err error) {
+	defer malformed.Recover(&err)
 	hpkePriv, err := hpke.NewHybridPrivateKey(priv.mlkem, priv.x25519)
 	if err != nil {
 		return nil, fmt.Errorf("secrets: assembling recipient key: %w", err)
@@ -396,23 +399,6 @@ func OpenFromPeer(network types.Hash, self types.Identity, priv *PrivateKeys, se
 	}
 	return pt, nil
 }
-
-// Domain-separation labels. Every derived value is bound to one of these, so
-// the discovery AEAD key and a topic ID can never come out equal, and neither
-// can ever equal the secret itself.
-const (
-	labelSealInfo     = "juist/epoch-seal/v1"
-	labelCatchUp      = "juist/catch-up/v1"
-	labelTopic        = "juist/dht-topic/v1"
-	labelDiscoveryKey = "juist/discovery-aead/v1"
-	labelMDNS         = "juist/mdns-beacon/v1"
-	labelGossipKey    = "juist/gossip-aead/v1"
-	labelAdminX25519  = "juist/admin-recipient-x25519/v1"
-	labelAdminMLKEM   = "juist/admin-recipient-mlkem/v1"
-	labelWaitingKey   = "juist/waiting-key/v1"
-	labelPeer         = "juist/peer-seal/v1"
-	labelPSK          = "juist/wg-psk/v1"
-)
 
 // derive expands the secret into keying material for one labelled use:
 // HKDF-SHA256 with the epoch as salt and label plus context as info. Mixing
@@ -455,7 +441,7 @@ func (s Secret) TopicSeed(epoch, window uint64, subject types.Identity) [32]byte
 	ctx := binary.BigEndian.AppendUint64(nil, window)
 	ctx = append(ctx, subject[:]...)
 	var out [32]byte
-	copy(out[:], s.derive(labelTopic, epoch, ctx, len(out)))
+	copy(out[:], s.derive(types.LabelDHTTopic, epoch, ctx, len(out)))
 	return out
 }
 
@@ -463,7 +449,7 @@ func (s Secret) TopicSeed(epoch, window uint64, subject types.Identity) [32]byte
 // a DHT storage node sees opaque bytes at an opaque key.
 func (s Secret) DiscoveryKey(epoch uint64) [32]byte {
 	var out [32]byte
-	copy(out[:], s.derive(labelDiscoveryKey, epoch, nil, len(out)))
+	copy(out[:], s.derive(types.LabelDiscoveryKey, epoch, nil, len(out)))
 	return out
 }
 
@@ -471,7 +457,7 @@ func (s Secret) DiscoveryKey(epoch uint64) [32]byte {
 // service name would tell every coffee-shop LAN that this network exists and
 // who is on it.
 func (s Secret) MDNSName(epoch uint64) []byte {
-	return s.derive(labelMDNS, epoch, nil, TopicIDSize)
+	return s.derive(types.LabelMDNS, epoch, nil, TopicIDSize)
 }
 
 // PSKSeed returns what an epoch's WireGuard preshared keys are derived from:
@@ -479,7 +465,7 @@ func (s Secret) MDNSName(epoch uint64) []byte {
 // discovery, so as to reach a peer still behind.
 func (s Secret) PSKSeed(epoch uint64) [32]byte {
 	var out [32]byte
-	copy(out[:], s.derive(labelPSK, epoch, nil, len(out)))
+	copy(out[:], s.derive(types.LabelPSK, epoch, nil, len(out)))
 	return out
 }
 
@@ -489,6 +475,6 @@ func (s Secret) PSKSeed(epoch uint64) [32]byte {
 // every record inside a frame carries its own signatures.
 func (s Secret) GossipKey(epoch uint64) [32]byte {
 	var out [32]byte
-	copy(out[:], s.derive(labelGossipKey, epoch, nil, len(out)))
+	copy(out[:], s.derive(types.LabelGossipKey, epoch, nil, len(out)))
 	return out
 }

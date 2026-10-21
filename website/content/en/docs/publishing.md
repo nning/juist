@@ -31,6 +31,18 @@ The ingress does not decrypt TLS, so it never sees the content. TLS ends on
 the NAS, which passes the decrypted connection on to the service. One ingress
 serves every name in the network.
 
+Every way of publishing needs the domain and the ingress, which the first
+three steps below set up once. Then, depending on what you want to publish:
+
+| To publish | See |
+|---|---|
+| a web service on a member, under a name of its own | [Setting it up](#setting-it-up), step 4 |
+| a server you do not trust with access to your network | [Keeping the server away from your network](#keeping-the-server-away-from-your-network) |
+| a name that only members can open | [Members-only names](#names-for-members-alone) |
+| a game server or another service that does not speak TLS | [Game servers and other TCP services](#a-game-server-or-another-tcp-service) |
+| a file, a directory or a local web server, right away | [Quick sharing](#quick-sharing) |
+| an overview of the network's devices | [Status page](#status-page) |
+
 ## Setting it up
 
 {{< step on="an admin's device" >}}
@@ -130,8 +142,17 @@ The same setup as a single Compose file, with a web service to try it on, for
 Docker and Podman: [examples/service-member](https://github.com/nning/juist/tree/main/examples/service-member) in the
 repository.
 
-Outside Docker, `juistd --serve immich=127.0.0.1:2283` runs it as any user.
-`--serve @=web:80` serves the domain itself.
+Outside Docker, a service member is juistd run as any user. It needs no root
+and makes no device of its own:
+
+```sh
+juistd --home ~/immich-juist --serve immich=127.0.0.1:2283 --join 'juist:…'
+```
+
+`--home` is where it keeps its keys and the log; it joins with the link the
+first time and ignores it once in the network. What it prints is its log, so
+run it under your service manager, a systemd user unit for instance, which
+keeps it running and its log. `--serve @=web:80` serves the domain itself.
 {{< /step >}}
 
 The service member ends TLS itself, with a certificate from Let's Encrypt, and
@@ -200,9 +221,10 @@ name.
 
 If you add `--members` here too, the service itself is marked as members-only:
 juist never sends the name to it while the log lists the name as public.
-`juist status` warns about that, and `juist publish` shows the service with
-`(members)`. Later commands keep the mark until `--members=false`. A service
-member marks its services the same way with `juistd --serve NAME=ADDR --members`.
+`juist health` warns about that, as `juist publish add` does, and
+`juist publish` shows the service with `(members)`. Later commands keep the
+mark until `--members=false`. A service member marks its services the same
+way with `juistd --serve NAME=ADDR --members`.
 {{< /step >}}
 
 Without an [access policy]({{< relref "docs/access" >}}), every member can open
@@ -225,7 +247,7 @@ does not open the name.
 - The name needs a service of its own. juist does not serve a members-only name
   if another name or a share on the same device reaches the same service with
   its bytes passed through unchanged, because a client of the other name could
-  ask the service for the members-only name in its Host header. `juist status`
+  ask the service for the members-only name in its Host header. `juist health`
   reports this. Names whose HTTP juist proxies (`--http3`) are held to their
   own Host and do not count. Let the service listen only on 127.0.0.1, and do
   not forward another device's names to it.
@@ -344,13 +366,16 @@ juist publish status-page status --public all   # anyone sees all of it
 
 Members see all of it:
 
-- every device with its addresses and roles;
+- every device with its addresses and roles, and the newest schema its juist
+  implements, marked where older than the serving device's;
 - how the serving device reaches each one (direct, through a relay, sought,
   absent, or outdated where it runs an older juist), and when it last heard
   from it;
 - the published names and shares, whether each is up, and `members only` on
   those for members alone;
 - what needs attention;
+- the network's schema, and the one this juist runs where that is newer, as
+  `juist status` shows them;
 - the log's newest changes.
 
 Everyone else sees what `--public` allows, and never a members-only name:
@@ -427,8 +452,9 @@ shows is then that of a device the others accept no connections from.
 
 ## Limits
 
-- An ingress passes up to 16384 connections at a time, 256 from one address
-  and 1024 from one /24 or /48. A device where juist ends TLS accepts 8192.
+- An ingress passes up to 16384 connections at a time, 256 from one IPv4
+  address or IPv6 /64, and 1024 from one IPv4 /24 or IPv6 /48. A device
+  where juist ends TLS accepts 8192.
   `--max-conns N`, and for the ingress `--max-per-source N`, change these
   limits: on Linux in a drop-in for `juist-ingress` or `juist-serve`, on
   FreeBSD in `juist_ingress_args` or `juist_serve_args`.
@@ -494,8 +520,12 @@ resolve the network's names.
 Members that resolve a name on 443 to its device connect to it directly. A CAA
 record closes this gap. It is a DNS record that says who may issue
 certificates for a name, here bound to the target's ACME account.
-`juist publish add NAME HOST:PORT` prints it; for a service member, the
-terminator's log shows it.
+`juist publish add NAME HOST:PORT` prints it. To see it again, run
+`juist publish serve` on the device as its operator: it prints the CAA records
+of the names it ends TLS for, the account in each. The terminator's log has
+them too: `journalctl -u juist-serve`, on FreeBSD `/var/log/juist-serve.log`,
+and for a service member what it prints, `docker logs immich-juist` in
+Docker.
 {{< /note >}}
 
 ## Troubleshooting
@@ -514,9 +544,9 @@ terminator's log shows it.
 | `the terminator does not say it listens on …` | it did not start in time; `journalctl -u juist-serve` shows why |
 | `juist health`: `warning: another program holds port 80 on …` | members opening `http://NAME` reach that program instead of a redirect to https. Make it listen only on the addresses it serves, and open the name with `https://` until then |
 | `juist health`: `warning: no certificate for NAME: …` | the CA issued none, for the reason given. Most often it cannot reach NAME, whose public DNS must point at a running ingress. Until then, clients' TLS fails |
-| `juist status`: `warning: not serving NAME, which is for members alone: OTHER reaches its service as it is, …` | OTHER goes to the same service by TCP, or without being proxied, so its clients could ask the service for NAME. Give NAME a service of its own |
-| `juist status`: `warning: not serving NAME, its service meant for members alone: the log has the name public` | to publish it for members, an admin runs `juist publish add DEVICE NAME --members`; to make it public, run `juist publish add NAME HOST:PORT --members=false` on the device |
-| `juist status`: `warning: NAME, for members alone, is not reached from here, …` | this device resolves the network's names through public DNS, so NAME leads to the ingress, which refuses it. The rest of `juist health` says why |
+| `juist health`: `warning: not serving NAME, which is for members alone: OTHER reaches its service as it is, …` | OTHER goes to the same service by TCP, or without being proxied, so its clients could ask the service for NAME. Give NAME a service of its own |
+| `juist health`: `warning: not serving NAME, its service meant for members alone: the log has the name public` | to publish it for members, an admin runs `juist publish add DEVICE NAME --members`; to make it public, run `juist publish add NAME HOST:PORT --members=false` on the device |
+| `juist health`: `warning: NAME, for members alone, is not reached from here, …` | this device resolves the network's names through public DNS, so NAME leads to the ingress, which refuses it. The rest of `juist health` says why |
 | `another program holds port 443 on …, where juist would end TLS` | stop that program, or publish on another port |
 | on vps, `juist status`: `Ingress` says `…; another program holds port 443/udp` | another program, often a web server's own HTTP/3, holds 443/udp on the ingress. Browsers stay on TCP until it lets go; then the ingress takes the port |
 | `access: quic … refused: another name's flow from its address` | a client connected from one UDP socket to names on two devices, and the ingress passes that socket on to only one of them. Browsers use a separate socket for each |

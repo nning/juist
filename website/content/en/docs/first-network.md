@@ -104,12 +104,12 @@ home · connected
   Names         laptop.home.juist
   Freshness     unchecked: no voucher
   Ports         udp/41643
-  Schema        18
+  Schema        20
   Updated       just now
 $ juist devices
 NAME                  IPV4         REACHED  SCHEMA  ROLES
-laptop (this device)  198.18.36.1  -        18      -
-nas                   198.18.36.2  direct   18      -
+laptop (this device)  198.18.36.1  -        20      -
+nas                   198.18.36.2  direct   20      -
 $ ping 198.18.36.2
 ```
 
@@ -154,7 +154,7 @@ public address, such as a VPS, needs port 41643/udp open.
 | What you see | What to do |
 |---|---|
 | `juist: run as alice, without sudo: the admin key belongs in your keystore` | Run `juist create` without sudo. |
-| `juistd not running` in `juist status` | `sudo systemctl enable --now juistd` |
+| `juist0 · not running` in `juist status` | `sudo systemctl enable --now juistd` |
 | `read-only; to manage this device …` | `sudo juist set --operator=$USER`, once |
 | `warning: code voided: wrong guess from …` | Join with the link, which still works. If that was not your device, someone else knows the invite. |
 | `juist: words not confirmed; nothing signed` | If the words differed, the device asking is not the one you invited. Start a new invite. |

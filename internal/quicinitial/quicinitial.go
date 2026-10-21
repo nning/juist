@@ -14,6 +14,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/nning/juist/internal/malformed"
 )
 
 // The versions read.
@@ -130,7 +132,8 @@ func SourceIDs(b []byte) [][]byte {
 // have, or of another connection, which a client does not coalesce (RFC
 // 9000, 12.2). It fails where the first is no Initial or any does not
 // decrypt.
-func Parse(b []byte) ([]Packet, error) {
+func Parse(b []byte) (_ []Packet, err error) {
+	defer malformed.Recover(&err)
 	if !IsInitial(b) {
 		return nil, errNotInitial
 	}

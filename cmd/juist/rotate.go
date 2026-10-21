@@ -127,20 +127,10 @@ func rotateKeys(a *app, identity bool) error {
 	return err
 }
 
-// checkRotation holds a rotation record the daemon built to what this
-// device's own verified log builds for the keys it names, before any admin
-// key here signs it. The daemon is the less trusted side of the socket: one
-// that answered a rotation with an admission or a quorum change would have
-// the admin sign that instead, and an attacker who owns juistd would own the
-// network rather than one member. Only the new keys and the sealed epoch are
-// taken from the daemon's record; the log checks the epoch's wraps cover the
-// members exactly, and the new identity's signature its signing key.
-//
-// Which device this is, is the daemon's word too, so the record must come
-// with proof by that device's current identity key: without it, a daemon
-// could rotate any member's slot to a key of its own. The device's own
-// signatures on the record must be there and valid, so that what the admins
-// sign can apply.
+// checkRotation holds the less trusted daemon's rotation record, before any
+// admin key here signs it, to what this device's verified log builds from its
+// new keys and sealed epoch alone, signed by the device and proven by its
+// current identity key; docs/11-enrollment-and-freshness-notes.md says why.
 func checkRotation(auth *log.Authority, self types.Identity, identity bool, aum *types.AUM, proof types.Sig) error {
 	refuse := errors.New("juistd answered with a record that is not this rotation; not signed. " +
 		"If this recurs, juistd here may be compromised")

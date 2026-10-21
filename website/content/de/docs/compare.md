@@ -32,9 +32,10 @@ Vier Dinge hat von den Meshes hier nur juist:
   der Konfiguration jedes Geräts eingetragen, oder es gibt sie nicht.
 - **Durchgehend quantensicher.** Jeder Tunnel mischt einen Schlüssel ein,
   den ein Quantencomputer nicht herausfinden kann, und jede Änderung am Netz
-  ist mit ML-DSA signiert. Keines der anderen signiert seine Mitglieder so,
-  und von den anderen bietet nur NetBird quantensichere Tunnel an, als
-  experimentelle Option.
+  ist mit ML-DSA signiert. Keines der anderen signiert seine Mitglieder so.
+  Von den anderen Meshes bietet nur NetBird quantensichere Tunnel an, als
+  experimentelle Option; reines WireGuard bekommt sie durch einen Preshared
+  Key, den du von Hand setzt.
 
 ## Auf einen Blick {#overview}
 
@@ -44,9 +45,9 @@ EasyTier steht für die Meshes mit gemeinsamem Geheimnis.
 
 ## Tailscale {#tailscale}
 
-[Tailscale](https://tailscale.com/blog/how-tailscale-works) ist das
-ausgereifteste Mesh-VPN. Es hat Clients für Linux, Windows, macOS, iOS und
-Android, Anmeldung über einen Identitätsanbieter und
+[Tailscale](https://tailscale.com/blog/how-tailscale-works) hat Clients für
+Linux, Windows, macOS, iOS und Android, Anmeldung über einen
+Identitätsanbieter und
 [Zugriffsregeln](https://tailscale.com/kb/1018/acls). juist enthält Teile
 dieses Clients, siehe [Architektur]({{< relref "docs/architecture" >}}#tailscale).
 

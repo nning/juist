@@ -1,6 +1,7 @@
 package types
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -93,7 +94,7 @@ var forbiddenRoutes = []netip.Prefix{
 // genesis hash rather than a slice of it, keeping the address space and the
 // chain's hashes independent derivations.
 func ULA(genesis Hash) netip.Prefix {
-	h := hashLabeled(labelULA, genesis[:])
+	h := hashLabeled(LabelULA, genesis[:])
 	var b [16]byte
 	b[0] = 0xfd
 	copy(b[1:6], h[:5])
@@ -108,7 +109,7 @@ func ULA(genesis Hash) netip.Prefix {
 // safe by the log's collision check. The genesis hash is mixed in so one key
 // in two networks gets two unrelated addresses.
 func Addr6(genesis Hash, id Identity) netip.Addr {
-	h := hashLabeled(labelAddr6, genesis[:], id[:])
+	h := hashLabeled(LabelAddr6, genesis[:], id[:])
 	prefix := ULA(genesis).Addr().As16()
 	var b [16]byte
 	copy(b[:6], prefix[:6])
@@ -221,18 +222,8 @@ var overlaySpaces = []netip.Prefix{CGNAT, OverlayV4, netip.MustParsePrefix("fd7a
 
 var uniqueLocal = netip.MustParsePrefix("fc00::/7")
 
-// comparePrefix orders prefixes deterministically: by address family, then
-// address, then prefix length. Route sets are sorted by it so that one set has
-// one encoding.
-func comparePrefix(a, b netip.Prefix) int {
-	if c := a.Addr().Compare(b.Addr()); c != 0 {
-		return c
-	}
-	switch {
-	case a.Bits() < b.Bits():
-		return -1
-	case a.Bits() > b.Bits():
-		return 1
-	}
-	return 0
+// ComparePrefix orders prefixes by address, then length: the order every
+// prefix set in a record is sorted in, so that one set has one encoding.
+func ComparePrefix(a, b netip.Prefix) int {
+	return cmp.Or(a.Addr().Compare(b.Addr()), a.Bits()-b.Bits())
 }

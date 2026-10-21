@@ -322,6 +322,131 @@ func TestStreamFollowsItsPeer(t *testing.T) {
 	}
 }
 
+// dataTo reports whether pc receives a data packet of session id within d.
+func dataTo(pc net.PacketConn, id uint32, d time.Duration) bool {
+	buf := make([]byte, 2048)
+	_ = pc.SetReadDeadline(time.Now().Add(d))
+	for {
+		n, _, err := pc.ReadFrom(buf)
+		if err != nil {
+			return false
+		}
+		if kind, got, _, _, ok := parsePacket(buf[:n]); ok && got == id && kind == pktData {
+			return true
+		}
+	}
+}
+
+// TestAStrangerCannotPointTheStreamElsewhere: the session id travels in the
+// clear, and a punch carrying it from another address leaves a stream whose
+// peer is heard where it was.
+func TestAStrangerCannotPointTheStreamElsewhere(t *testing.T) {
+	a, b := streamPair(t, 0, 0)
+	stranger, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stranger.Close()
+	if _, err := b.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := a.Read(make([]byte, 16)); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = stranger.WriteTo(packet(pktPunch, 42, 0, nil), a.pc.LocalAddr())
+	time.Sleep(50 * time.Millisecond)
+	if _, err := a.Write([]byte("for b alone")); err != nil {
+		t.Fatal(err)
+	}
+	if dataTo(stranger, 42, time.Second) {
+		t.Fatal("a stranger's punch pointed the stream at the stranger")
+	}
+	_ = b.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 16)
+	if n, err := b.Read(buf); err != nil || string(buf[:n]) != "for b alone" {
+		t.Fatalf("b read %q, %v", buf[:n], err)
+	}
+}
+
+// TestStreamFollowsAPeerThatMoved: once the peer's address is quiet, the
+// session going on from another address is followed, as when a NAT moves the
+// peer's mapping.
+func TestStreamFollowsAPeerThatMoved(t *testing.T) {
+	old := followAfter
+	followAfter = 300 * time.Millisecond
+	defer func() { followAfter = old }()
+	pa, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	was, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer was.Close()
+	moved, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer moved.Close()
+	a := newStream(pa, was.LocalAddr().(*net.UDPAddr).AddrPort(), 7)
+	defer a.Close()
+	_, _ = moved.WriteTo(packet(pktPunch, 7, 0, nil), pa.LocalAddr())
+	time.Sleep(50 * time.Millisecond)
+	if _, err := a.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if dataTo(moved, 7, 200*time.Millisecond) {
+		t.Fatal("the stream left its peer while its address was still in time")
+	}
+	time.Sleep(followAfter)
+	_, _ = moved.WriteTo(packet(pktPunch, 7, 0, nil), pa.LocalAddr())
+	if !dataTo(moved, 7, time.Second) {
+		t.Fatal("the stream did not follow its peer, at once, once the old address went quiet")
+	}
+	_, _ = moved.WriteTo(packet(pktAck, 7, 1, nil), pa.LocalAddr())
+}
+
+// TestAStreamResendsPastAnOutage: a window unacknowledged for longer than
+// the keepalive interval is still sent again, though the keepalives go on
+// both ways and the peer is heard throughout.
+func TestAStreamResendsPastAnOutage(t *testing.T) {
+	pa, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pb.Close()
+	a := newStream(pa, pb.LocalAddr().(*net.UDPAddr).AddrPort(), 5)
+	defer a.Close()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(500 * time.Millisecond):
+				_, _ = pb.WriteTo(packet(pktPunch, 5, 1, nil), pa.LocalAddr())
+			}
+		}
+	}()
+	if _, err := a.Write([]byte("lost")); err != nil {
+		t.Fatal(err)
+	}
+	outage := time.Now().Add(4 * time.Second)
+	for time.Now().Before(outage) {
+		dataTo(pb, 5, time.Until(outage))
+	}
+	if !dataTo(pb, 5, maxRTO+2*time.Second) {
+		t.Fatal("a window unacknowledged past an outage was not sent again")
+	}
+}
+
 // TestAnEnrollmentRunsOverTheMeeting is the point of the package: the
 // invite's key exchange, over a punched path instead of TCP.
 func TestAnEnrollmentRunsOverTheMeeting(t *testing.T) {
@@ -345,7 +470,12 @@ func TestAnEnrollmentRunsOverTheMeeting(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		ch, err := inv.Accept(c)
+		hello, err := enroll.ReadHello(c)
+		if err != nil {
+			hostErr <- err
+			return
+		}
+		ch, err := inv.AcceptHello(hello, c)
 		if err != nil {
 			hostErr <- err
 			return

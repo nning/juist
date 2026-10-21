@@ -169,16 +169,6 @@ func startIngress(t *testing.T, port, target int) {
 	t.Cleanup(func() { cancel(); <-done })
 }
 
-func freePort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
-}
-
 type certAuthority struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey

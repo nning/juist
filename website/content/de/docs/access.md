@@ -7,10 +7,10 @@ lead: Ohne Zugriffsregeln darf jedes Gerät zu jedem anderen jede Verbindung auf
 
 ## Wie Regeln wirken
 
-Die Zugriffsregeln stehen im Log des Netzes, der signierten Liste aller
-Änderungen ([So funktioniert juist]({{< relref "docs/how-it-works" >}})).
-Ein Admin, also eine Person, deren Schlüssel Änderungen bestätigt, legt sie
-fest, und von da an setzt jedes Gerät sie durch.
+Die Zugriffsregeln stehen im
+[Mitgliederlog]({{< relref "docs/how-it-works" >}}#the-membership-log) des
+Netzes. Ein Admin legt sie fest wie jede andere Änderung, und von da an setzt
+jedes Gerät sie durch.
 
 Jede Regel lässt Verbindungen durch. Diese hier:
 
@@ -157,7 +157,7 @@ dafür nicht.
   durchlassen. Darf ein Gerät einen Exit-Node nutzen, darf es auch dessen DNS
   nutzen. Ein Subnet-Router hält es mit seinem Subnetz genauso.
 - Ein [Service-Mitglied]({{< relref "docs/publishing" >}}) öffnet nichts,
-  egal was die Zugriffsregeln sagen. Eine Ingress erreicht, was auf einem
+  egal was die Zugriffsregeln sagen. Ein Ingress erreicht, was auf einem
   Gerät veröffentlicht ist, ebenfalls unabhängig von den Regeln.
 - Zwei Geräte, die keine Regel in irgendeiner Richtung verbindet, sind keine
   Peers: Sie haben keinen Tunnel zueinander, und keines erfährt, wo das
@@ -234,7 +234,7 @@ Sonst könnte jeder, der ins Repository pushen darf, das Netz ändern.
 - `juist policy check` und `set` warnen vor allem, was so nicht funktionieren
   kann oder etwas ungenutzt lässt: ein Exit-Node ohne die Exit-Rolle, ein
   Präfix, das kein Subnet-Router routet, die Adresse eines Geräts statt
-  seines Namens, ein Service-Mitglied oder eine Ingress als Quelle, ein
+  seines Namens, ein Service-Mitglied oder ein Ingress als Quelle, ein
   Gerät, das in keiner Regel vorkommt, ein Exit-Node oder Subnet-Router, den
   keine Regel nutzt, und eine Tabelle oder ein Dienst, den keine Regel nutzt.
 - `juist policy set -` liest die Zugriffsregeln von der Standardeingabe.

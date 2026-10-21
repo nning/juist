@@ -46,8 +46,9 @@ Paket den Daemon von selbst, unter FreeBSD startest du ihn einmal wie oben
 gezeigt.
 {{< /step >}}
 
-Installierst du später ein neueres Release, ersetzt es das alte. Der Zustand
-des Geräts bleibt dabei erhalten.
+Installierst du später ein neueres Release, ersetzt es das alte, und der
+Zustand des Geräts bleibt erhalten. Einzelheiten stehen unter
+[juist aktualisieren]({{< relref "docs/updating" >}}).
 
 ## Den Download prüfen
 
@@ -68,8 +69,9 @@ jede heruntergeladene Datei.
 
 ## Aus dem Quellcode bauen
 
-Zum Bauen brauchst du Go 1.27. `make` lädt dann selbst go1.27.2 herunter und
-baut damit, sodass ein Commit auf jedem Rechner exakt dieselben Bytes ergibt.
+Zum Bauen brauchst du Go 1.21 oder neuer und `make`. `make` lässt Go selbst
+go1.27.3 herunterladen und baut damit, sodass ein Commit auf jedem Rechner
+exakt dieselben Bytes ergibt.
 
 ```sh
 git clone https://github.com/nning/juist
@@ -104,7 +106,7 @@ Prozessorarchitektur, mit `armhf` und `i386` funktioniert es genauso.
   `juist`, und hat nur `CAP_NET_ADMIN`, auf einem
   [Relay auf Port 443]({{< relref "docs/relays" >}}) zusätzlich
   `CAP_NET_BIND_SERVICE`.
-- Unter Linux zwei weitere Dienste. `juist-ingress` betreibt eine Ingress und
+- Unter Linux zwei weitere Dienste. `juist-ingress` betreibt einen Ingress und
   wird von `juist ingress serve` gestartet. `juist-serve` ist juists eigener
   TLS-Terminator; systemd startet ihn ohne sudo, sobald `juist publish` oder
   `juist share` ihn braucht
@@ -130,7 +132,6 @@ Ob der Daemon läuft, siehst du so:
 ```console {device="nas"}
 $ juist status
 nas · no network
-hint: juist join CODE, or juist create
 ```
 
 Weiter geht es mit dem [ersten Netz]({{< relref "docs/first-network" >}}).
@@ -152,7 +153,7 @@ pkg delete juist           # FreeBSD, als root
 
 Dabei wird juistd für jedes Netz auf dem Gerät beendet, und alles, was juist
 auf dem Rechner eingerichtet hat, wird rückgängig gemacht. Unter Linux sind das die
-Firewall-Regel für `juist0`, eine Ingress, ein Relay auf Port 443 und die
+Firewall-Regel für `juist0`, ein Ingress, ein Relay auf Port 443 und die
 Änderungen von `juist exit serve`.
 
 ## Was nach dem Deinstallieren bleibt
@@ -164,7 +165,9 @@ Firewall-Regel für `juist0`, eine Ingress, ein Relay auf Port 443 und die
   `juist: kept /var/lib/juist, which still holds this device's keys and log`.
 - Auch `/var/lib/juist-serve` bleibt (unter FreeBSD `/var/db/juist-serve`).
   Darin liegt das ACME-Konto des TLS-Terminators, auf das die CAA-Einträge
-  deiner veröffentlichten Namen verweisen können. Das Entfernen meldet das:
+  deiner veröffentlichten Namen verweisen können. `sudo apt purge juist`
+  unter Debian und Ubuntu und `sudo dnf remove juist` unter Fedora melden
+  das:
   `juist: kept /var/lib/juist-serve, the terminator's ACME account, which CAA records may name`.
 - Unter FreeBSD gibt das Entfernen eine einzige Zeile aus, die mit
   `juist: kept` beginnt und alles aufzählt, was bleibt.
@@ -177,6 +180,9 @@ Firewall-Regel für `juist0`, eine Ingress, ein Relay auf Port 443 und die
   `make install knows apt (Debian, Ubuntu), dnf (Fedora) and pkg (FreeBSD); use make deb, rpm or pkg-freebsd`:
   Dieses System nutzt keinen der drei Paketmanager. Bau das Paket für eines
   der unterstützten Systeme und installiere es dort.
-- `juist status` meldet `juistd not running`: Starte ihn mit
-  `sudo systemctl enable --now juistd`, unter FreeBSD mit `service juistd start`.
-- Unter Linux zeigt `journalctl -u juistd` das Log des Daemons.
+- `juist status` meldet `juist0 · not running`, unter FreeBSD vor dem
+  Aktivieren `juistd not running`: Starte den Daemon mit
+  `sudo systemctl enable --now juistd`, unter FreeBSD als root mit
+  `sysrc juistd_enable=YES && service juistd start`.
+- Unter Linux zeigt `journalctl -u juistd` das Log des Daemons; unter FreeBSD
+  steht es in `/var/log/juistd.log`.

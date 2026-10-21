@@ -3,7 +3,7 @@
 package conn
 
 import (
-	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/netip"
@@ -280,7 +280,7 @@ func lanAddr(pfx netip.Prefix, host int) netip.Addr {
 	return netip.AddrFrom4(octets)
 }
 
-// lab_exec_ns runs a command inside a namespace by name, for the router
+// execNS runs a command inside a namespace by name, for the router
 // namespaces the lab owns but does not model as nodes.
 func (l *netnsLab) execNS(ns string, argv ...string) *exec.Cmd {
 	return exec.Command(l.ip, append([]string{"netns", "exec", ns}, argv...)...)
@@ -333,7 +333,7 @@ func joinAddrPorts(aps []netip.AddrPort) string {
 }
 
 // relaySpec is how the lab tells a node where the relay is: what conn.Relay
-// needs, in one line.
+// needs, as JSON in one line.
 type relaySpec struct {
 	region   int
 	hostName string
@@ -343,37 +343,20 @@ type relaySpec struct {
 }
 
 func (r relaySpec) encode() string {
-	return strings.Join([]string{
-		strconv.Itoa(r.region), r.hostName, r.addr.String(),
-		strconv.Itoa(int(r.stunPort)), hex.EncodeToString(r.cert[:]),
-	}, "|")
+	b, err := json.Marshal(Relay{Region: r.region, HostName: r.hostName, Addrs: []netip.AddrPort{r.addr},
+		STUNPort: r.stunPort, CertHash: r.cert})
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
 func decodeRelaySpec(s string) (Relay, error) {
-	f := strings.Split(s, "|")
-	if len(f) != 5 {
-		return Relay{}, fmt.Errorf("relay spec %q has %d fields, want 5", s, len(f))
+	var r Relay
+	if err := json.Unmarshal([]byte(s), &r); err != nil {
+		return Relay{}, fmt.Errorf("relay spec: %w", err)
 	}
-	region, err := strconv.Atoi(f[0])
-	if err != nil {
-		return Relay{}, fmt.Errorf("relay region %q: %w", f[0], err)
-	}
-	addr, err := netip.ParseAddrPort(f[2])
-	if err != nil {
-		return Relay{}, fmt.Errorf("relay address %q: %w", f[2], err)
-	}
-	stun, err := strconv.ParseUint(f[3], 10, 16)
-	if err != nil {
-		return Relay{}, fmt.Errorf("relay STUN port %q: %w", f[3], err)
-	}
-	cert, err := unrawHex(f[4])
-	if err != nil {
-		return Relay{}, fmt.Errorf("relay certificate hash: %w", err)
-	}
-	return Relay{
-		Region: region, HostName: f[1], Addrs: []netip.AddrPort{addr},
-		STUNPort: uint16(stun), CertHash: cert,
-	}, nil
+	return r, nil
 }
 
 func testBinary(t *testing.T) string {
@@ -751,7 +734,7 @@ func TestNATRelaySpecRoundTrips(t *testing.T) {
 	if err := validateRelays([]Relay{got}); err != nil {
 		t.Errorf("the lab builds a relay the data plane refuses: %v", err)
 	}
-	if _, err := decodeRelaySpec("1|host|10.0.0.1:1"); err == nil {
+	if _, err := decodeRelaySpec(want.encode()[:20]); err == nil {
 		t.Error("a truncated spec decoded")
 	}
 }

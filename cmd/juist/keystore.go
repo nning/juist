@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/nning/juist/internal/atomicfile"
 	"github.com/nning/juist/internal/statedir"
 
 	"github.com/nning/juist/internal/keys"
@@ -446,31 +447,15 @@ func readRecordFile(path string) (types.AUM, error) {
 	return types.AUM{}, fmt.Errorf("%s: no %s line", path, recordTag)
 }
 
-// writeRecordFile replaces a record file with the record as it is now,
-// through a fresh temporary file and a rename: a record file often sits in a
-// directory others can write to, and writing in place would follow a symlink
-// planted under its name.
+// writeRecordFile replaces a record file with the record as it is now, by
+// [atomicfile.Write]: a record file often sits in a directory others can write
+// to, and writing in place would follow a symlink planted under its name.
 func writeRecordFile(path string, a *types.AUM) error {
 	text, err := encodeRecord(a)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("writing %s: %w", path, err)
-	}
-	defer os.Remove(f.Name()) // a no-op once renamed
-	err = f.Chmod(0o644)
-	if err == nil {
-		_, err = f.WriteString(text)
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), path)
-	}
-	if err != nil {
+	if err := atomicfile.Write(path, []byte(text), 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil

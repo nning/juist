@@ -19,7 +19,7 @@ var errNoStatusPage = errors.New("this device serves no status page")
 func (s *Service) servesStatusPage() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.servePublished && slices.ContainsFunc(slices.Collect(maps.Values(s.serveTo)), func(to string) bool {
+	return s.prefs.ServePublished && slices.ContainsFunc(slices.Collect(maps.Values(s.prefs.ServeTo)), func(to string) bool {
 		_, ok := ipc.StatusPageOf(to)
 		return ok
 	})

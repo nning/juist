@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -339,5 +341,126 @@ func TestTheTerminatorHearsItsParentGo(t *testing.T) {
 	case <-gone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the parent's going went unheard")
+	}
+}
+
+// An answer from the binder carrying other than one descriptor whole, in one
+// message, is no listener and leaves none of what arrived open.
+func TestABindersExtraDescriptorsAreClosed(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	dup := func() int {
+		fd, err := unix.Dup(int(r.Fd()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fd
+	}
+	sp, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(sp[0])
+	defer unix.Close(sp[1])
+	// sent is what a read with room for room bytes of control messages
+	// takes of oob sent, and its flags.
+	sent := func(oob []byte, room int) ([]byte, int) {
+		if err := unix.Sendmsg(sp[0], []byte{0}, oob, nil, 0); err != nil {
+			t.Fatal(err)
+		}
+		got := make([]byte, room)
+		_, oobn, flags, _, err := unix.Recvmsg(sp[1], make([]byte, 1), got, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got[:oobn], flags
+	}
+	carried := func(oob []byte) []int {
+		var fds []int
+		for len(oob) >= unix.CmsgLen(0) {
+			hdr, data, rest, err := unix.ParseOneSocketControlMessage(oob)
+			if err != nil {
+				break
+			}
+			got, _ := unix.ParseUnixRights(&unix.SocketControlMessage{Header: hdr, Data: data})
+			fds, oob = append(fds, got...), rest
+		}
+		return fds
+	}
+	one, flags := sent(unix.UnixRights(dup()), unix.CmsgSpace(4*4))
+	if f := receivedFile(one, flags, "one"); f == nil {
+		t.Fatal("one descriptor was not taken")
+	} else {
+		f.Close()
+	}
+	unreadable := make([]byte, unix.CmsgSpace(0))
+	(*unix.Cmsghdr)(unsafe.Pointer(&unreadable[0])).SetLen(1 << 20)
+	twoInOne, twoFlags := sent(unix.UnixRights(dup(), dup()), unix.CmsgSpace(4*4))
+	truncated, truncFlags := sent(unix.UnixRights(dup(), dup()), unix.CmsgLen(4))
+	if truncFlags&unix.MSG_CTRUNC == 0 {
+		t.Fatal("a read with room for one descriptor of two was not truncated")
+	}
+	// Linux keeps the descriptors that fit, FreeBSD none of them.
+	truncKept := len(carried(truncated))
+	if truncKept > 1 {
+		t.Fatalf("a read with room for one descriptor carried %d", truncKept)
+	}
+	for _, tc := range []struct {
+		name  string
+		oob   []byte
+		flags int
+		want  int
+	}{
+		{"two in one message", twoInOne, twoFlags, 2},
+		{"one in each of two", slices.Concat(unix.UnixRights(dup()), unix.UnixRights(dup())), 0, 2},
+		{"one before an unreadable message", slices.Concat(unix.UnixRights(dup()), unreadable), 0, 1},
+		{"one of two, truncated", truncated, truncFlags, truncKept},
+	} {
+		fds := carried(tc.oob)
+		if len(fds) != tc.want {
+			t.Fatalf("%s: %d descriptors carried, want %d", tc.name, len(fds), tc.want)
+		}
+		if f := receivedFile(tc.oob, tc.flags, tc.name); f != nil {
+			f.Close()
+			t.Errorf("%s: taken as a listener", tc.name)
+		}
+		for _, fd := range fds {
+			if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); !errors.Is(err, unix.EBADF) {
+				unix.Close(fd)
+				t.Errorf("%s: descriptor %d left open", tc.name, fd)
+			}
+		}
+	}
+}
+
+// A child that dies of the stop it was asked to make stopped as asked; one
+// that exits failing, is killed, or was not asked did not.
+func TestAStopAskedForIsNoFailure(t *testing.T) {
+	exited := func(sig syscall.Signal, script string) error {
+		cmd := exec.Command("sh", "-c", script)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if sig != 0 {
+			cmd.Process.Signal(sig)
+		}
+		return cmd.Wait()
+	}
+	term, kill, failed := exited(syscall.SIGTERM, "exec sleep 60"), exited(syscall.SIGKILL, "exec sleep 60"), exited(0, "exit 1")
+	if err := stoppedAsAsked(term, true); err != nil {
+		t.Errorf("stopped by the stop asked for: %v", err)
+	}
+	for _, c := range []struct {
+		name  string
+		err   error
+		asked bool
+	}{{"stopped unasked", term, false}, {"killed", kill, true}, {"failing", failed, true}} {
+		if stoppedAsAsked(c.err, c.asked) == nil {
+			t.Errorf("%s (%v), taken as stopped", c.name, c.err)
+		}
 	}
 }

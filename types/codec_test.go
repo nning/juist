@@ -316,7 +316,7 @@ func TestHashLabelsAreDistinct(t *testing.T) {
 	// the domain-separation labels are what prevent.
 	unsigned := a
 	unsigned.Signatures = nil
-	if a.SigHash() == hashLabeled(labelAUM, mustEncode(&unsigned)) {
+	if a.SigHash() == hashLabeled(LabelAUM, mustEncode(&unsigned)) {
 		t.Fatal("signing hash equals the unlabelled record hash of the unsigned record")
 	}
 }

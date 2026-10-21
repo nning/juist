@@ -124,14 +124,15 @@ func (d *Daemon) settles() time.Duration {
 // signedAt reads an announcement's sequence number as the signer's clock.
 func signedAt(e gossip.Endpoint) time.Time { return time.Unix(int64(min(e.Seq, 1<<62)), 0) }
 
-// A namedPeer is an installed peer under its member name, and what its
-// handshakes mix in.
+// A namedPeer is an installed peer under its member name, what its
+// handshakes mix in, and whether its announcement says it rests.
 type namedPeer struct {
 	name  string
 	id    types.Identity
 	wg    types.WGKey
 	peer  conn.Peer
 	stage pairkey.Stage
+	rests bool
 }
 
 // setInstalled records the peer set about to be installed. Set before
@@ -162,13 +163,35 @@ func (d *Daemon) Tunnels(wait time.Duration) (live int, down []string) {
 type probeAnswer struct {
 	at     time.Time // wall clock, so that a suspend ages it
 	direct bool
+	psk    [32]byte  // installed then: a quiet ping proves no other
+	pinged time.Time // when it was last pinged quietly since
 }
+
+// quietPingGap is the least time between two quiet pings of a peer, or one
+// and its probe: longer than the 45 s magicsock keeps the heartbeat a packet
+// started going after the last, which a ping sooner would keep going.
+const quietPingGap = 50 * time.Second
 
 // standsAt reports whether a needs no new probe at at, standing for as long
 // as stands.
 func (a probeAnswer) standsAt(at time.Time, stands time.Duration) bool {
-	age := at.Sub(a.at)
-	return age >= 0 && age < stands
+	return within(a.at, at, stands)
+}
+
+// within reports whether at lies in the span from since, a clock set back
+// leaving it out.
+func within(since, at time.Time, span time.Duration) bool {
+	age := at.Sub(since)
+	return age >= 0 && age < span
+}
+
+// probeState is what one tunnel check leaves the next; mu serializes the
+// checks, so asking twice does not probe twice.
+type probeState struct {
+	mu         sync.Mutex
+	misses     map[types.Identity]int // checks in a row each peer missed
+	unanswered map[types.Identity]int // probes in a row a peer left unanswered
+	answered   map[types.Identity]probeAnswer
 }
 
 // A tunnelCheck is one installed peer and what checking it found.
@@ -179,15 +202,19 @@ type tunnelCheck struct {
 
 // checkTunnels checks every installed peer's tunnel. Each is probed, fresh
 // handshake or not, unless both ends have a relay, this device reaches the
-// peer's, and it answered within [quietProbeEvery], or [savingProbeStands]
-// while saving battery: its last answer then stands. A relay not reached
-// wakes nothing, and only a probe finds a peer homed there down, to be
-// looked up for its next home. The path is read after the
-// probes, since magicsock names a direct path only for a few seconds after its
-// last pong, and a quiet tunnel would otherwise read as relayed.
+// peer's, and it answered within [quietProbeEvery]: its last answer then
+// stands. A relay not reached wakes nothing, and only a probe finds a peer
+// homed there down, to be looked up for its next home.
+//
+// A peer that rests, or any while this device saves battery, is checked
+// quietly: an answer stands for [savingProbeStands], and where no relay could
+// wake the peer a quiet ping, which starts no heartbeat, holds the way open
+// meanwhile, [quietPingGap] apart; one unanswered is followed by a probe. The path is read after
+// the probes, since magicsock names a direct path only for a few seconds
+// after its last pong, and a quiet tunnel would otherwise read as relayed.
 func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
-	d.probeMu.Lock()
-	defer d.probeMu.Unlock()
+	d.probes.mu.Lock()
+	defer d.probes.mu.Unlock()
 	d.mu.Lock()
 	peers := d.installed
 	now := d.probeNow
@@ -195,13 +222,22 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 	d.mu.Unlock()
 	at := d.now().Round(0)
 	homed := d.manager.HomeRelay() != 0
-	stands := d.pace.every(quietProbeEvery, savingProbeStands)
+	saving := d.pace.Saving()
 
 	out := make([]tunnelCheck, len(peers))
 	probed, answered, kept := make([]bool, len(peers)), make([]bool, len(peers)), make([]bool, len(peers))
+	pinged, pingAnswered := make([]bool, len(peers)), make([]bool, len(peers))
 	doubted := make([]bool, len(peers))
 	answers := make(map[types.Identity]probeAnswer, len(peers))
 	var wg sync.WaitGroup
+	probe := func(i int) {
+		probed[i] = true
+		wg.Add(1)
+		d.manager.Probe(peers[i].peer.Addrs[0].Addr(), wait, func(ok bool) {
+			defer wg.Done()
+			out[i].reach.Live, answered[i] = ok, ok
+		})
+	}
 	for i, p := range peers {
 		out[i] = tunnelCheck{namedPeer: p, reach: ipc.PeerReach{Identity: p.id}}
 		if len(p.peer.Addrs) == 0 {
@@ -209,67 +245,55 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		}
 		// Neither an answer standing nor a backoff spares it a probe.
 		doubted[i] = d.doubted(p)
-		if a, ok := d.answered[p.id]; ok && homed && d.manager.ReachesRelay(p.peer.HomeRelay) && !now[p.id] && !doubted[i] && a.standsAt(at, stands) {
-			out[i].reach.Live, out[i].reach.Direct, kept[i] = true, a.direct, true
-			answers[p.id] = a
-			continue
+		quiet := saving || p.rests
+		stands := quietProbeEvery
+		if quiet {
+			stands = savingProbeStands
+		}
+		wakes := homed && d.manager.ReachesRelay(p.peer.HomeRelay)
+		// An answer proves the key it was given under alone.
+		if a, ok := d.probes.answered[p.id]; ok && !now[p.id] && !doubted[i] && a.psk == p.peer.PSK && a.standsAt(at, stands) {
+			switch {
+			case wakes, quiet && (within(a.at, at, quietPingGap) || within(a.pinged, at, quietPingGap)):
+				out[i].reach.Live, out[i].reach.Direct, kept[i] = true, a.direct, true
+				answers[p.id] = a
+				continue
+			case quiet:
+				pinged[i] = true
+				a.pinged = at
+				answers[p.id] = a
+				wg.Add(1)
+				d.manager.ProbeQuietly(p.peer.Addrs[0].Addr(), wait, func(ok bool) {
+					defer wg.Done()
+					pingAnswered[i] = ok
+				})
+				continue
+			}
 		}
 		// A peer that has not answered for a while is probed in only every
 		// few checks: every device probing every one gone for good costs
 		// traffic through the relays and battery on laptops, for nothing.
 		// One with a new announcement is probed at once.
-		if n := d.probeMisses[p.id]; !now[p.id] && !doubted[i] && n >= probeMissesBeforeBackoff && n%probeBackoff != 0 {
+		if n := d.probes.misses[p.id]; !now[p.id] && !doubted[i] && n >= probeMissesBeforeBackoff && n%probeBackoff != 0 {
 			continue
 		}
-		probed[i] = true
-		wg.Add(1)
-		d.manager.Probe(p.peer.Addrs[0].Addr(), wait, func(ok bool) {
-			defer wg.Done()
-			out[i].reach.Live, answered[i] = ok, ok
-		})
+		probe(i)
+	}
+	wg.Wait()
+	// A quiet ping is lost as one packet is: only a probe finds its peer down.
+	for i := range peers {
+		switch {
+		case pinged[i] && pingAnswered[i]:
+			out[i].reach.Live, out[i].reach.Direct, kept[i] = true, answers[peers[i].id].direct, true
+		case pinged[i]:
+			delete(answers, peers[i].id)
+			probe(i)
+		}
 	}
 	wg.Wait()
 	tunnels := d.manager.Tunnels()
-	settle := false
-	for i := range out {
-		t := tunnels[out[i].peer.ID]
-		// A handshake stands in for a probe not sent, and for one lost on
-		// the way: a probe is one packet. Two unanswered in a row outweigh
-		// all but a handshake just now, since a peer that restarted leaves
-		// the last one looking fresh for minutes.
-		fresh := tunnelFresh
-		if probed[i] && d.unanswered[out[i].id] > 0 {
-			fresh = reachEvery
-			if doubted[i] {
-				fresh = 0
-			}
-		}
-		if hs := t.LastHandshake; !hs.IsZero() && time.Since(hs) < fresh {
-			out[i].reach.Live = true
-		}
-		out[i].reach.Direct = out[i].reach.Direct || out[i].reach.Live && t.Direct.IsValid()
-		settle = settle || !kept[i] && out[i].reach.Live && !out[i].reach.Direct
-	}
-	misses := make(map[types.Identity]int, len(out))
-	for _, c := range out {
-		if !c.reach.Live {
-			misses[c.id] = d.probeMisses[c.id] + 1
-		}
-	}
-	d.probeMisses = misses // a peer that answers, or is gone, starts over
-	unanswered := make(map[types.Identity]int, len(out))
-	for i, c := range out {
-		switch {
-		case probed[i] && !answered[i]:
-			unanswered[c.id] = d.unanswered[c.id] + 1
-			if doubted[i] && unanswered[c.id] == 1 {
-				d.checkSoon() // the second miss decides
-			}
-		case !probed[i] && d.unanswered[c.id] > 0:
-			unanswered[c.id] = d.unanswered[c.id]
-		}
-	}
-	d.unanswered = unanswered
+	settle := d.liveByHandshake(out, tunnels, probed, doubted, kept)
+	d.countMisses(out, probed, answered, doubted)
 	if settle && d.pathSettle > 0 {
 		// A probe's answer can arrive through the relay before the pong
 		// that confirms the direct path does.
@@ -281,18 +305,84 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 			}
 		}
 	}
-	for i, c := range out {
-		if answered[i] {
-			answers[c.id] = probeAnswer{at: at, direct: c.reach.Direct}
-		}
-	}
-	d.answered = answers
+	keepAnswers(answers, out, tunnels, answered, at)
+	d.probes.answered = answers
 	handshakes := make(map[uint64]time.Time, len(tunnels))
 	for id, t := range tunnels {
 		handshakes[id] = t.LastHandshake
 	}
 	d.probePairs(out, probed, handshakes)
 	return out
+}
+
+// liveByHandshake takes a fresh handshake for a live tunnel and reads each
+// live one's path, and reports whether one answered through a relay where a
+// direct path may yet be confirmed.
+func (d *Daemon) liveByHandshake(out []tunnelCheck, tunnels map[uint64]conn.Tunnel, probed, doubted, kept []bool) (settle bool) {
+	for i := range out {
+		t := tunnels[out[i].peer.ID]
+		// A handshake stands in for a probe not sent, and for one lost on
+		// the way: a probe is one packet. Two unanswered in a row outweigh
+		// all but a handshake just now, since a peer that restarted leaves
+		// the last one looking fresh for minutes.
+		fresh := tunnelFresh
+		if probed[i] && d.probes.unanswered[out[i].id] > 0 {
+			fresh = reachEvery
+			if doubted[i] {
+				fresh = 0
+			}
+		}
+		if hs := t.LastHandshake; !hs.IsZero() && time.Since(hs) < fresh {
+			out[i].reach.Live = true
+		}
+		out[i].reach.Direct = out[i].reach.Direct || out[i].reach.Live && t.Direct.IsValid()
+		settle = settle || !kept[i] && out[i].reach.Live && !out[i].reach.Direct
+	}
+	return settle
+}
+
+// countMisses counts the checks each peer has been down for, and the probes
+// in a row it left unanswered. Called with d.probes.mu held.
+func (d *Daemon) countMisses(out []tunnelCheck, probed, answered, doubted []bool) {
+	misses := make(map[types.Identity]int, len(out))
+	for _, c := range out {
+		if !c.reach.Live {
+			misses[c.id] = d.probes.misses[c.id] + 1
+		}
+	}
+	d.probes.misses = misses // a peer that answers, or is gone, starts over
+	unanswered := make(map[types.Identity]int, len(out))
+	for i, c := range out {
+		switch {
+		case probed[i] && !answered[i]:
+			unanswered[c.id] = d.probes.unanswered[c.id] + 1
+			if doubted[i] && unanswered[c.id] == 1 {
+				d.checkSoon() // the second miss decides
+			}
+		case !probed[i] && d.probes.unanswered[c.id] > 0:
+			unanswered[c.id] = d.probes.unanswered[c.id]
+		}
+	}
+	d.probes.unanswered = unanswered
+}
+
+// keepAnswers records in answers each answer this check had at at, and each
+// handshake since one under the same key.
+func keepAnswers(answers map[types.Identity]probeAnswer, out []tunnelCheck, tunnels map[uint64]conn.Tunnel,
+	answered []bool, at time.Time) {
+	for i, c := range out {
+		a, held := answers[c.id]
+		switch hs := tunnels[c.peer.ID].LastHandshake; {
+		case answered[i]:
+			answers[c.id] = probeAnswer{at: at, direct: c.reach.Direct, psk: c.peer.PSK}
+		case held && a.psk == c.peer.PSK && hs.After(a.at) && !hs.After(at):
+			// A handshake under the key since, as the peer's own probe
+			// brings, answers for both ends: one burst of heartbeat a
+			// pair rather than one each.
+			a.at = hs
+			answers[c.id] = a
+		}
+	}
 }
 
 // refreshReach checks the tunnels and keeps the result for status requests
@@ -302,21 +392,19 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	gen := d.reachGen
 	d.mu.Unlock()
 	checks := d.checkTunnels(probeWait)
-	reach := make([]ipc.PeerReach, len(checks))
 	now := d.now()
-	var live int
-	var down, seeking, absent, syncFailing, syncNewer, syncBroken, outdated, olderBuild []string
-	var resync []types.Identity
-	lookup := false
+	var syncFailing, syncNewer, syncBroken []string
 	failed := make(map[types.Identity]gossip.Failure, len(checks))
 	for _, c := range checks {
 		failed[c.id] = d.gossip.Failed(c.id)
 	}
 	held := make(map[types.Identity]gossip.Endpoint, len(checks))
 	announced := make(map[types.Identity]types.SchemaVersion, len(checks))
+	renews := make(map[types.Identity]bool, len(checks))
 	for _, c := range checks {
 		if !c.reach.Live {
 			held[c.id], _ = d.endpoints.Get(c.id)
+			renews[c.id] = d.endpoints.Renews(c.id)
 		} else if ep, ok := d.endpoints.Get(c.id); ok && !ep.HintAlone() {
 			announced[c.id] = ep.Schema
 		}
@@ -327,8 +415,8 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	// under its own lock.
 	d.mu.Lock()
 	region := uint16(relayRegion(d.status.Network, d.self))
-	srv := d.relay
-	if !d.ownRegion {
+	srv := d.ownRelay.server
+	if !d.ownRelay.region {
 		srv = nil
 	}
 	d.mu.Unlock()
@@ -359,110 +447,33 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		d.mu.Unlock()
 		return
 	}
-	downs := make(map[types.Identity]*downPeer, len(checks))
 	reachable := make(map[types.Identity]bool, len(checks))
 	for _, c := range checks {
 		reachable[c.id] = c.reach.Live
 	}
 	d.reachable.Store(&reachable)
-	behind, older := map[types.Identity]time.Time{}, map[types.Identity]time.Time{}
-	for i, c := range checks {
-		reach[i] = c.reach
-		if c.reach.Live {
-			live++
-			if !c.reach.Direct {
-				reach[i].Relay = relays[c.peer.HomeRelay]
-			}
-			// Back up, or up with a sync that failed: sync now, so the log
-			// and the announcements catch up, and so that a failure the
-			// status reports is one through the tunnel as it is.
-			if _, was := d.down[c.id]; was || failed[c.id] != 0 && now.Sub(d.syncRetried[c.id]) >= syncRetryGap {
-				resync = append(resync, c.id)
-			}
-			// Its tunnel carries juist's own traffic alone. Only a sync that
-			// works shows it is not catching up.
-			if c.stage == pairkey.StageNone {
-				since, was := d.behind[c.id]
-				if !was {
-					since = now
-				}
-				behind[c.id] = since
-				if now.Sub(since) >= outdatedAfter && failed[c.id] == 0 {
-					reach[i].Outdated = true
-					outdated = append(outdated, c.name)
-				}
-			}
-			// It reaches this device, and applies no change past what its
-			// build implements.
-			if build, ok := announced[c.id]; ok && !reach[i].Outdated && build < d.status.Schema {
-				since, was := d.olderBuild[c.id]
-				if !was {
-					since = now
-				}
-				older[c.id] = since
-				if now.Sub(since) >= outdatedAfter && failed[c.id] == 0 {
-					reach[i].OlderBuild = true
-					olderBuild = append(olderBuild, c.name)
-				}
-			}
-			continue
-		}
-		down = append(down, c.name)
-		p := d.down[c.id]
-		if p == nil {
-			p = &downPeer{since: now, lookupPlan: lookupPlan{lookAt: now}}
-		}
-		downs[c.id] = p
-		lookup = lookup || !now.Before(p.lookAt)
-		ep := held[c.id]
-		reach[i].Since, reach[i].Heard = p.since.Unix(), signedAt(ep).Unix()
-		// A device never seen renewing may be on a build that does not: the
-		// window says nothing about it.
-		window := settle
-		if !d.endpoints.Renews(c.id) {
-			window = 0
-		}
-		switch p.state(now, signedAt(ep), window, gone[c.id]) {
-		case stateSeeking:
-			reach[i].Seeking = true
-			seeking = append(seeking, c.name)
-		case stateAbsent:
-			reach[i].Absent = true
-			absent = append(absent, c.name)
-		case stateBlocked:
-			// Running a build from before the network's upgrade, which knows
-			// no member that joined after it. Given longer than a live peer:
-			// its announcement from after the upgrade comes by the DHT.
-			if c.stage == pairkey.StageNone || !ep.HintAlone() && ep.Schema < d.status.Schema {
-				since, was := d.behind[c.id]
-				if !was {
-					since = now
-				}
-				behind[c.id] = since
-				if now.Sub(since) >= max(outdatedAfter, settle) {
-					reach[i].Outdated = true
-					outdated = append(outdated, c.name)
-				}
-			}
-		}
-	}
-	d.down = downs
-	d.behind, d.olderBuild = behind, older
+	v := classifyReach(checks, reachFacts{
+		now: now, schema: d.status.Schema, settle: settle, relays: relays,
+		failed: failed, held: held, announced: announced, renews: renews, gone: gone,
+	}, reachPast{down: d.down, behind: d.behind, olderBuild: d.olderBuild, syncRetried: d.syncRetried})
+	d.down, d.behind, d.olderBuild = v.past.down, v.past.behind, v.past.olderBuild
 	if d.syncRetried == nil {
 		d.syncRetried = map[types.Identity]time.Time{}
 	}
-	for _, id := range resync {
+	for _, id := range v.resync {
 		d.syncRetried[id] = now
 	}
+	reach, resync := v.reach, v.resync
 	d.mu.Unlock()
-	// A peer found down is installed on the disco key a newer hint names.
+	// A peer found down is installed on the disco key a newer hint names,
+	// which every member hears of from the hint itself.
 	for _, c := range checks {
 		if k, ok := d.endpoints.HintDisco(c.id); ok && !c.reach.Live && c.peer.DiscoKey != conn.DiscoPublicFromRaw32(k) {
-			d.MarkDirty()
+			d.reconcileSoon()
 			break
 		}
 	}
-	if lookup && d.dht != nil {
+	if v.lookup && d.dht != nil {
 		d.dht.Kick()
 	}
 	if len(resync) > 0 {
@@ -489,34 +500,154 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 			firewalled, firewallUnsure = d.tunName, unsure
 		}
 	}
-	slices.Sort(down)
-	slices.Sort(seeking)
-	slices.Sort(absent)
 	slices.Sort(syncFailing)
 	slices.Sort(syncNewer)
 	slices.Sort(syncBroken)
-	slices.Sort(outdated)
-	slices.Sort(olderBuild)
 	home := relays[d.manager.HomeRelay()]
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.reachGen == gen {
 		switch {
 		case srv == nil || relayedFor > 0 || !stranded:
-			d.relayUnreachedSince = time.Time{}
-		case d.relayUnreachedSince.IsZero():
-			d.relayUnreachedSince = now
+			d.ownRelay.unreachedSince = time.Time{}
+		case d.ownRelay.unreachedSince.IsZero():
+			d.ownRelay.unreachedSince = now
 		}
-		unreached := !d.relayUnreachedSince.IsZero() && now.Sub(d.relayUnreachedSince) >= relayUnreachedAfter
+		unreached := !d.ownRelay.unreachedSince.IsZero() && now.Sub(d.ownRelay.unreachedSince) >= relayUnreachedAfter
 		d.status.Tunnels = ipc.Tunnels{
-			TunnelsChecked: true, TunnelsLive: live, TunnelsDown: down,
+			TunnelsChecked: true, TunnelsLive: v.live, TunnelsDown: v.down,
 			Reach: reach, ReachChecked: now.Unix(), HomeRelay: home,
-			Seeking: seeking, Absent: absent, SyncFailing: syncFailing, SyncNewer: syncNewer,
-			SyncBroken: syncBroken, Outdated: outdated, OlderBuild: olderBuild,
+			Seeking: v.seeking, Absent: v.absent, SyncFailing: syncFailing, SyncNewer: syncNewer,
+			SyncBroken: syncBroken, Outdated: v.outdated, OlderBuild: v.olderBuild,
 			Firewalled: firewalled, FirewallUnsure: firewallUnsure,
 			RelayedFor: relayedFor, RelayUnreached: unreached, RelayPort: relayPort,
 		}
 	}
+}
+
+// reachPast is what one tunnel check leaves the next.
+type reachPast struct {
+	down               map[types.Identity]*downPeer
+	behind, olderBuild map[types.Identity]time.Time
+	syncRetried        map[types.Identity]time.Time // read alone
+}
+
+// reachFacts are what refreshReach gathers for classifyReach.
+type reachFacts struct {
+	now       time.Time
+	schema    types.SchemaVersion
+	settle    time.Duration
+	relays    map[int]string
+	failed    map[types.Identity]gossip.Failure
+	held      map[types.Identity]gossip.Endpoint // the down's announcements
+	announced map[types.Identity]types.SchemaVersion
+	renews    map[types.Identity]bool
+	gone      map[types.Identity]bool
+}
+
+// A reachVerdict is what classifyReach makes of a tunnel check.
+type reachVerdict struct {
+	reach                                       []ipc.PeerReach
+	live                                        int
+	down, seeking, absent, outdated, olderBuild []string
+	resync                                      []types.Identity
+	lookup                                      bool
+	past                                        reachPast
+}
+
+// classifyReach says what checks show of each peer, given f and what the
+// last check left: whether it is down and why, behind or on an older build,
+// and whom to sync with again. It changes nothing; refreshReach applies it
+// under d.mu.
+func classifyReach(checks []tunnelCheck, f reachFacts, past reachPast) reachVerdict {
+	v := reachVerdict{reach: make([]ipc.PeerReach, len(checks)), past: reachPast{
+		down:   make(map[types.Identity]*downPeer, len(checks)),
+		behind: map[types.Identity]time.Time{}, olderBuild: map[types.Identity]time.Time{},
+	}}
+	for i, c := range checks {
+		v.reach[i] = c.reach
+		if c.reach.Live {
+			v.live++
+			if !c.reach.Direct {
+				v.reach[i].Relay = f.relays[c.peer.HomeRelay]
+			}
+			// Back up, or up with a sync that failed: sync now, so the log
+			// and the announcements catch up, and so that a failure the
+			// status reports is one through the tunnel as it is.
+			if _, was := past.down[c.id]; was || f.failed[c.id] != 0 && f.now.Sub(past.syncRetried[c.id]) >= syncRetryGap {
+				v.resync = append(v.resync, c.id)
+			}
+			// Its tunnel carries juist's own traffic alone. Only a sync that
+			// works shows it is not catching up.
+			if c.stage == pairkey.StageNone {
+				since, was := past.behind[c.id]
+				if !was {
+					since = f.now
+				}
+				v.past.behind[c.id] = since
+				if f.now.Sub(since) >= outdatedAfter && f.failed[c.id] == 0 {
+					v.reach[i].Outdated = true
+					v.outdated = append(v.outdated, c.name)
+				}
+			}
+			// It reaches this device, and applies no change past what its
+			// build implements.
+			if build, ok := f.announced[c.id]; ok && !v.reach[i].Outdated && build < f.schema {
+				since, was := past.olderBuild[c.id]
+				if !was {
+					since = f.now
+				}
+				v.past.olderBuild[c.id] = since
+				if f.now.Sub(since) >= outdatedAfter && f.failed[c.id] == 0 {
+					v.reach[i].OlderBuild = true
+					v.olderBuild = append(v.olderBuild, c.name)
+				}
+			}
+			continue
+		}
+		v.down = append(v.down, c.name)
+		p := past.down[c.id]
+		if p == nil {
+			p = &downPeer{since: f.now, lookupPlan: lookupPlan{lookAt: f.now}}
+		}
+		v.past.down[c.id] = p
+		v.lookup = v.lookup || !f.now.Before(p.lookAt)
+		ep := f.held[c.id]
+		v.reach[i].Since, v.reach[i].Heard = p.since.Unix(), signedAt(ep).Unix()
+		// A device never seen renewing may be on a build that does not: the
+		// window says nothing about it.
+		window := f.settle
+		if !f.renews[c.id] {
+			window = 0
+		}
+		switch p.state(f.now, signedAt(ep), window, f.gone[c.id]) {
+		case stateSeeking:
+			v.reach[i].Seeking = true
+			v.seeking = append(v.seeking, c.name)
+		case stateAbsent:
+			v.reach[i].Absent = true
+			v.absent = append(v.absent, c.name)
+		case stateBlocked:
+			// Running a build from before the network's upgrade, which knows
+			// no member that joined after it. Given longer than a live peer:
+			// its announcement from after the upgrade comes by the DHT.
+			if c.stage == pairkey.StageNone || !ep.HintAlone() && ep.Schema < f.schema {
+				since, was := past.behind[c.id]
+				if !was {
+					since = f.now
+				}
+				v.past.behind[c.id] = since
+				if f.now.Sub(since) >= max(outdatedAfter, f.settle) {
+					v.reach[i].Outdated = true
+					v.outdated = append(v.outdated, c.name)
+				}
+			}
+		}
+	}
+	for _, names := range [][]string{v.down, v.seeking, v.absent, v.outdated, v.olderBuild} {
+		slices.Sort(names)
+	}
+	return v
 }
 
 // What a failing log sync through a live tunnel is put down to.

@@ -1,18 +1,10 @@
 package daemon
 
 import (
-	"cmp"
-	"errors"
-	"io/fs"
-	"os"
-	"slices"
 	"time"
-
-	"github.com/nning/juist/internal/statedir"
 
 	"github.com/nning/juist/ipc"
 
-	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -38,6 +30,16 @@ const (
 // so the cheap tests come first: only the newest lease per signer in a frame
 // is looked at, and the one already held is not checked again.
 func (d *Daemon) offerLeases(raw [][]byte) {
+	if d.takeLeases(raw) {
+		// A device that rests takes leases at its own sync: they count for
+		// DefaultFreshnessTTL.
+		d.relayAnnounced()
+	}
+}
+
+// takeLeases is [Daemon.offerLeases] but for what is pushed, reporting
+// whether a lease held changed.
+func (d *Daemon) takeLeases(raw [][]byte) bool {
 	now := d.now().Unix()
 	newest := map[types.Identity]types.Lease{}
 	for _, b := range raw {
@@ -51,9 +53,7 @@ func (d *Daemon) offerLeases(raw [][]byte) {
 	}
 	changed := false
 	for _, l := range newest {
-		d.leaseMu.Lock()
-		held, ok := d.leases[l.Signer]
-		d.leaseMu.Unlock()
+		held, ok := d.leases.get(l.Signer)
 		if ok && sameLease(&held, &l) {
 			continue
 		}
@@ -66,44 +66,14 @@ func (d *Daemon) offerLeases(raw [][]byte) {
 		if err != nil || shadowed {
 			continue
 		}
-		d.leaseMu.Lock()
-		// Another session may have stored a newer one since held was read.
-		if cur, ok := d.leases[l.Signer]; !ok || cur == held || cur.Issued < l.Issued {
-			d.leases[l.Signer] = l
+		if d.leases.replace(l, held) {
 			changed = true
 		}
-		d.leaseMu.Unlock()
 	}
 	if changed {
-		d.saveLeases()
-		d.MarkDirty()
+		d.leases.save(d.logf)
 	}
-}
-
-// encodedLeases returns the held leases for a peer, newest first.
-func (d *Daemon) encodedLeases() [][]byte {
-	held := d.heldLeases()
-	slices.SortFunc(held, func(a, b types.Lease) int { return cmp.Compare(b.Issued, a.Issued) })
-	out := make([][]byte, 0, len(held))
-	for i := range held {
-		if b, err := held[i].Encode(); err == nil {
-			out = append(out, b)
-		}
-		if len(out) == gossip.MaxLeasesPerFrame {
-			break
-		}
-	}
-	return out
-}
-
-func (d *Daemon) heldLeases() []types.Lease {
-	d.leaseMu.Lock()
-	defer d.leaseMu.Unlock()
-	out := make([]types.Lease, 0, len(d.leases))
-	for _, l := range d.leases {
-		out = append(out, l)
-	}
-	return out
+	return changed
 }
 
 // maybeIssueLease vouches for this node's state if it is an admin device and
@@ -120,12 +90,8 @@ func (d *Daemon) maybeIssueLease(state *log.State, now time.Time) {
 	schema := d.authority.SchemaAlarm()
 	d.authMu.Unlock()
 	if schema != nil {
-		d.leaseMu.Lock()
-		_, held := d.leases[d.self]
-		delete(d.leases, d.self)
-		d.leaseMu.Unlock()
-		if held {
-			d.saveLeases()
+		if d.leases.drop(d.self) {
+			d.leases.save(d.logf)
 		}
 		return
 	}
@@ -138,9 +104,7 @@ func (d *Daemon) maybeIssueLease(state *log.State, now time.Time) {
 	if !signer {
 		return
 	}
-	d.leaseMu.Lock()
-	last, held := d.leases[d.self]
-	d.leaseMu.Unlock()
+	last, held := d.leases.get(d.self)
 	issued := time.Unix(int64(last.Issued), 0)
 	if held && last.Head == state.Head() && !issued.After(now) && now.Sub(issued) < d.leaseEvery {
 		return
@@ -162,7 +126,9 @@ func (d *Daemon) maybeIssueLease(state *log.State, now time.Time) {
 		d.logf("daemon: encoding a freshness lease: %v", err)
 		return
 	}
-	d.offerLeases([][]byte{b})
+	if d.takeLeases([][]byte{b}) {
+		d.announceSoon()
+	}
 }
 
 // pruneLeases drops held leases that vouch for nothing now: a signer that
@@ -170,7 +136,7 @@ func (d *Daemon) maybeIssueLease(state *log.State, now time.Time) {
 // which would count once the clock caught up, but so will its signer's next
 // lease. Under an alarm nothing is pruned, since nothing checks.
 func (d *Daemon) pruneLeases(now time.Time) {
-	held := d.heldLeases()
+	held := d.leases.all()
 	var drop []types.Lease
 	d.authMu.Lock()
 	if d.authority.Alarm() == nil {
@@ -184,74 +150,18 @@ func (d *Daemon) pruneLeases(now time.Time) {
 	if len(drop) == 0 {
 		return
 	}
-	d.leaseMu.Lock()
-	for _, l := range drop {
-		// Only the lease that was checked: a session may have stored its
-		// signer's next one since.
-		if d.leases[l.Signer] == l {
-			delete(d.leases, l.Signer)
-		}
-	}
-	d.leaseMu.Unlock()
-	d.saveLeases()
+	// Only the leases that were checked: a session may have stored a
+	// signer's next one since.
+	d.leases.dropEach(drop)
+	d.leases.save(d.logf)
 }
 
 // freshness is what the held leases say about this node's state now.
 func (d *Daemon) freshness(now time.Time) log.Freshness {
-	held := d.heldLeases()
+	held := d.leases.all()
 	d.authMu.Lock()
 	defer d.authMu.Unlock()
 	return d.authority.Freshness(held, now.Unix(), int64(d.ttl/time.Second))
-}
-
-func (d *Daemon) loadLeases() {
-	if d.leasePath == "" {
-		return
-	}
-	b, err := os.ReadFile(d.leasePath)
-	if errors.Is(err, fs.ErrNotExist) {
-		return
-	}
-	if err != nil {
-		d.logf("daemon: reading %s: %v", d.leasePath, err)
-		return
-	}
-	raw, err := statedir.DecodeLeaseFile(b)
-	if err != nil {
-		// A hint that does not decode costs freshness until the next lease
-		// arrives, which is the fail-closed direction.
-		d.logf("daemon: %s did not decode and was ignored: %v", d.leasePath, err)
-		return
-	}
-	d.leaseMu.Lock()
-	defer d.leaseMu.Unlock()
-	for _, r := range raw {
-		l, err := types.DecodeLease(r)
-		if err != nil {
-			continue
-		}
-		if held, ok := d.leases[l.Signer]; !ok || held.Issued < l.Issued {
-			d.leases[l.Signer] = l
-		}
-	}
-}
-
-func (d *Daemon) saveLeases() {
-	if d.leasePath == "" {
-		return
-	}
-	// Serialized, and the snapshot taken inside, so a writer holding an older
-	// set cannot rename over a newer one.
-	d.leaseSaveMu.Lock()
-	defer d.leaseSaveMu.Unlock()
-	b, err := statedir.EncodeLeaseFile(d.encodedLeases())
-	if err != nil {
-		d.logf("daemon: encoding leases: %v", err)
-		return
-	}
-	if err := statedir.WriteFilePrivate(d.leasePath, b); err != nil {
-		d.logf("daemon: writing %s: %v", d.leasePath, err)
-	}
 }
 
 // bootstrapHints is what a new member is handed at enrollment: every
@@ -274,7 +184,7 @@ func (d *Daemon) bootstrapHints() *ipc.Bootstrap {
 			break
 		}
 	}
-	return &ipc.Bootstrap{Endpoints: eps, Leases: d.encodedLeases()}
+	return &ipc.Bootstrap{Endpoints: eps, Leases: d.leases.encoded()}
 }
 
 // sameLease reports whether a and b are one lease, signatures and all.

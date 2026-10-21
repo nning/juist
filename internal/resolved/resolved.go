@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -52,9 +53,28 @@ type Client struct {
 func Dial() (*Client, error) {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
-		return nil, err
+		return nil, noBus(err)
 	}
 	return Open(conn)
+}
+
+// DialContext is [Dial] whose connection, its handshake included, ends with
+// ctx: for a client used within it alone.
+func DialContext(ctx context.Context) (*Client, error) {
+	conn, err := dbus.ConnectSystemBus(dbus.WithContext(ctx))
+	if err != nil {
+		return nil, noBus(err)
+	}
+	return Open(conn)
+}
+
+// noBus is err, but [ErrNotRunning] where there is no system bus to connect
+// to, as in a container, which no resolved can be on.
+func noBus(err error) error {
+	if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+		return fmt.Errorf("%w: %w", ErrNotRunning, err)
+	}
+	return err
 }
 
 // Open is [Dial] over conn, which the client closes. resolved's bus name is

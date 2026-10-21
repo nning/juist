@@ -19,15 +19,9 @@ haben, führt `mail.example.org` dann durch den Tunnel zum NAS statt über das
 Internet. Weil der Name derselbe bleibt, passt auch das Zertifikat des
 Servers weiterhin. Für den Rest des Internets ändert sich nichts.
 
-Beides funktioniert unter Linux und FreeBSD. Wo systemd-resolved läuft,
-schickt es diese Namen an juistd. Anderswo beantwortet
-juistd das DNS des Geräts selbst, solange es läuft: die Namen des Netzes,
-und jeden anderen Namen über die Resolver, die das Gerät vorher hatte. Unter
-Linux lässt der Dienst des Pakets `/etc/resolv.conf` auf eine Datei zeigen,
-die juistd schreibt, und stellt sie zurück, wenn juistd endet; unter FreeBSD
-gibt juistd seinen Resolver an resolvconf. Eine `/etc/resolv.conf`, die
-Tailscale geschrieben hat, bleibt die von Tailscale, und die Namen des Netzes
-werden auf diesem Gerät nicht aufgelöst.
+Beides funktioniert unter Linux und FreeBSD, und juist richtet das DNS des
+Geräts dafür selbst ein. Wie, steht unter
+[So löst das Gerät Namen auf](#resolver).
 
 ## Ein Gerät über seinen Namen erreichen
 
@@ -106,12 +100,38 @@ Neustart.
 
 ## Hinweise
 
-- Ein öffentlicher Name hat mindestens zwei Labels, etwa `example.org`, und liegt nicht unter `.juist`.
+- Ein öffentlicher Name hat mindestens zwei Labels, etwa `example.org`, und liegt nicht unter `.juist`, `.local`, `.localhost`, `.arpa`, `.invalid` oder `.onion`.
 - Jeder öffentliche Name verweist auf genau ein Gerät. Ein Gerät kann bis zu 32 solcher Namen haben.
 - Ist das Gerät eines öffentlichen Namens nicht erreichbar oder ist der Stand dieses Geräts veraltet, wird der Name wieder öffentlich aufgelöst. Die Verbindung geht dann an die öffentliche Adresse, wie ohne juist.
 - Ein Gerät, dessen Name kein gültiges DNS-Label ist, bekommt keinen Namen unter `.juist`.
 - Unter [Zugriffsregeln]({{< relref "docs/access" >}}) kennt ein Gerät nur die Namen der Mitglieder, zu denen es einen Tunnel hat. Die öffentlichen Namen der anderen löst es öffentlich auf.
 - In `juist devices` zeigt ein Gerät, auf das öffentliche Namen verweisen, `names` in der Spalte `ROLES`. `juist names` listet die Namen auf.
+
+## So löst das Gerät Namen auf {#resolver}
+
+- Wo systemd-resolved läuft, schickt es die Anfragen nach den Namen des
+  Netzes an juistd.
+  Einen Namen, den juistd weitergibt, für dieses Gerät oder als Exit-Node für
+  Mitglieder, fragt es dort an, wohin systemd-resolved ihn schicken würde,
+  und weist ab, was systemd-resolved keinem DNS-Server schicken würde, etwa
+  Namen unter `.local` oder aus `/etc/hosts`. Für dieses Gerät weist es einen
+  Namen ab, den systemd-resolved über DNS over TLS fragen würde, der sonst
+  unverschlüsselt durchs lokale Netz ginge; als Exit-Node fragt es einen
+  solchen Namen für Mitglieder an, deren Anfragen am Ort des Exit-Nodes
+  hinausgehen. Für Mitglieder weist es einen Namen ab, den nur der Resolver
+  von Tailscale beantworten würde, also jeden Namen, wo Tailscale alle nimmt
+  (`~.`). `juist health` sagt das. Solange juistd nicht lesen kann, wohin
+  ein Name geht, oder systemd-resolved, das `/etc/resolv.conf` allein nennt,
+  nicht läuft, weist juistd den Namen ab, statt woanders zu fragen.
+- Unter Linux ohne systemd-resolved beantwortet juistd das gesamte DNS des
+  Geräts, solange es läuft: die Namen des Netzes selbst, alle anderen über
+  die Resolver, die das Gerät vorher benutzt hat. Der Dienst des Pakets lässt
+  `/etc/resolv.conf` auf eine Datei zeigen, die juistd schreibt, und stellt
+  sie zurück, wenn juistd endet. Unter Debian und Ubuntu erlaubt das Paket
+  außerdem Programmen, die AppArmor einschränkt, diese Datei zu lesen.
+- Unter FreeBSD übergibt juistd seinen Resolver an resolvconf.
+- Hat Tailscale `/etc/resolv.conf` geschrieben, lässt juist sie in Ruhe, und
+  die Namen des Netzes werden auf diesem Gerät nicht aufgelöst.
 
 ## Fehlersuche
 
@@ -133,6 +153,10 @@ aufgelöst oder ist ein öffentlicher Name aus, sagt
 | `warning: home.juist not resolved here: tailscaled writes /etc/resolv.conf` | Tailscale beantwortet das DNS dieses Geräts; `sudo tailscale set --accept-dns=false` und `sudo systemctl restart juistd` übergeben es juistd, ohne die Namen des Tailnets |
 | `warning: home.juist not resolved here: /etc/resolv.conf is no longer juistd's` | ein anderes Programm, etwa ein DHCP-Client, hat `/etc/resolv.conf` geschrieben; `sudo systemctl restart juistd` übergibt sie wieder |
 | `warning: home.juist not resolved here: /etc/resolv.conf asks …, not juistd` | unter FreeBSD lässt resolvconf eine `resolv.conf` in Ruhe, die es nicht selbst geschrieben hat |
+| `warning: names juistd forwards are refused: the host asks tailscaled alone, whose answers members cannot reach` | ein Exit-Node weist Mitgliedern die Namen ab, die der Host allein an Tailscale schickt; `sudo tailscale set --accept-dns=false` auf ihm überlässt die Namen des Tailnets seinen anderen Resolvern |
+| `warning: names juistd forwards are refused: systemd-resolved asks over DNS over TLS, which juistd does not speak` | juistd weist diesem Gerät Namen ab, die systemd-resolved über TLS fragen würde, statt sie unverschlüsselt zu schicken; `juist exit use DEVICE` schickt sie durch den Tunnel |
+| `warning: names juistd forwards are refused: systemd-resolved knows no DNS server` | systemd-resolved hat keinen Server zu fragen; `resolvectl status` zeigt die Server, die es kennt |
+| `warning: names the host's DNS routing sends elsewhere are refused, as it cannot be read: …` | juistd kann systemd-resolved nicht fragen, wohin ein Name geht, und weist solche Namen ab, bis es das kann; `systemctl status systemd-resolved` zeigt, wie es steht |
 
 Hat systemd-resolved juistd abgewiesen, ergänzt `juist health`:
 

@@ -3,7 +3,7 @@
 - group: basics
   items: [docs/how-it-works, docs/install, docs/first-network, docs/invites, docs/android]
 - group: everyday
-  items: [docs/status, docs/operator, docs/names, docs/remove]
+  items: [docs/status, docs/operator, docs/names, docs/remove, docs/updating]
 - group: admins
   items: [docs/admins, docs/networks, docs/network-changes, docs/access, docs/keys]
 - group: routing
@@ -11,4 +11,4 @@
 - group: design
   items: [docs/architecture, docs/compare, docs/security]
 - group: help
-  items: [docs/troubleshooting]
+  items: [docs/troubleshooting, docs/commands]

@@ -110,8 +110,12 @@ object Juist {
     private val publishing = Any()
     private var joinJob: Job? = null
 
-    /** Whether a screen is showing, which makes the status poll fast. */
-    @Volatile var visible = false
+    private val _visible = MutableStateFlow(false)
+    /** Whether a screen is showing, which makes the status poll fast and keeps the pace on a metered network. */
+    val shown: StateFlow<Boolean> = _visible.asStateFlow()
+    var visible: Boolean
+        get() = _visible.value
+        set(v) { _visible.value = v }
 
     private val _pace = MutableStateFlow(Pace())
     /** The phone's pace as [JuistVpnService] last read it; the screen off pauses the status poll. */

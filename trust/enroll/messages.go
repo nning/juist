@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nning/juist/internal/malformed"
 	"github.com/nning/juist/types"
 )
 
@@ -118,7 +119,7 @@ type Nonce [16]byte
 
 // CommitNonce is what a join request carries for n.
 func CommitNonce(n Nonce) [32]byte {
-	return sha256.Sum256(append([]byte("juist words commit v1\x00"), n[:]...))
+	return sha256.Sum256(append([]byte(types.LabelWordsCommit+"\x00"), n[:]...))
 }
 
 // A JoinRequest is what a guest asks to be admitted as.
@@ -216,7 +217,7 @@ func (a *Admission) Verify(fingerprint [fingerprintLen]byte, key *types.SigningK
 }
 
 func (a *Admission) message() []byte {
-	b := append([]byte("juist enroll admission v2\x00"), a.Admin[:]...)
+	b := append([]byte(types.LabelEnrollAdmission+"\x00"), a.Admin[:]...)
 	b = append(b, a.Network[:]...)
 	b = append(b, a.Head[:]...)
 	b = append(b, a.Guest[:]...)
@@ -303,8 +304,9 @@ func (m *Message) validate() error {
 
 // DecodeMessage decodes and shape-checks one message. Exported for the fuzz
 // target.
-func DecodeMessage(b []byte) (Message, error) {
-	m, err := decodeCanonical[Message](b)
+func DecodeMessage(b []byte) (_ Message, err error) {
+	defer malformed.Recover(&err)
+	m, err := types.DecodeCanonical[Message](decMode, b, maxChannelFrame)
 	if err != nil {
 		return Message{}, err
 	}
@@ -337,7 +339,7 @@ func (r *JoinRequest) Verify(c *Channel) error {
 }
 
 func proofMessage(binding [32]byte) []byte {
-	sum := sha256.Sum256(append([]byte("juist enroll proof v1\x00"), binding[:]...))
+	sum := sha256.Sum256(append([]byte(types.LabelEnrollProof+"\x00"), binding[:]...))
 	return sum[:]
 }
 

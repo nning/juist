@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nning/juist/internal/dnsfwd"
@@ -23,6 +24,15 @@ type soleResolver interface {
 	// hostResolv is the host's own resolvers and search domains, juistd's
 	// aside.
 	hostResolv() resolvConf
+}
+
+// soleState is the host's own resolvers, read at readAt, where it asks
+// juistd's resolver alone, and where that answers.
+type soleState struct {
+	mu      sync.Mutex
+	readAt  time.Time
+	servers []netip.AddrPort
+	own     netip.Addr
 }
 
 // resolvConf is what a resolv.conf says.
@@ -169,9 +179,8 @@ type resolvconfDNS struct{ plumbedDNS }
 
 func (resolvconfDNS) routesDomains() bool { return true }
 
-// on53 says juistd's resolver must answer on 53, which resolvconf names
-// alone.
-func (resolvconfDNS) on53() bool { return true }
+// namesPort is 53, the only port resolvconf names.
+func (resolvconfDNS) namesPort() uint16 { return 53 }
 
 func (r resolvconfDNS) Route(rt DNSRouting) error {
 	rt.Search = searchWith(rt.Search, r.hostResolv().search)
@@ -229,33 +238,37 @@ func asksOnly(path string, servers []netip.AddrPort, whom string) (bool, string)
 	return true, ""
 }
 
+// soleReadEvery is how often the host's own resolvers are read again where
+// it asks juistd alone.
+const soleReadEvery = 30 * time.Second
+
 // soleUpstream is the host's own resolvers, which juistd's resolver asks
-// where the host asks it alone; read again after hostRoutingEvery. Never
+// where the host asks it alone; read again after soleReadEvery. Never
 // tailscaled's, which take juistd's for theirs once tailscaled has
 // resolv.conf back, nor juistd's own; the last found where none is left.
 func (d *Daemon) soleUpstream(s soleResolver) []netip.AddrPort {
-	d.soleMu.Lock()
-	defer d.soleMu.Unlock()
-	if d.soleReadAt.IsZero() || d.now().Sub(d.soleReadAt) >= hostRoutingEvery || d.now().Before(d.soleReadAt) {
-		d.soleReadAt = d.now()
+	d.sole.mu.Lock()
+	defer d.sole.mu.Unlock()
+	if d.sole.readAt.IsZero() || d.now().Sub(d.sole.readAt) >= soleReadEvery || d.now().Before(d.sole.readAt) {
+		d.sole.readAt = d.now()
 		ups := withoutTailscaled(s.hostResolv().servers)
 		if len(ups) == 0 {
 			ups = withoutTailscaled(dnsfwd.ResolversIn(PreTailscaleResolvConf))
 		}
-		ups = slices.DeleteFunc(ups, func(a netip.AddrPort) bool { return a.Addr() == d.soleOwn })
+		ups = slices.DeleteFunc(ups, func(a netip.AddrPort) bool { return a.Addr() == d.sole.own })
 		if len(ups) > 0 {
-			d.soleServers = ups
+			d.sole.servers = ups
 		}
 	}
-	return slices.Clone(d.soleServers)
+	return slices.Clone(d.sole.servers)
 }
 
 // soleAnswersAt has soleUpstream leave out at, where juistd's resolver
 // answers.
 func (d *Daemon) soleAnswersAt(at netip.Addr) {
-	d.soleMu.Lock()
-	defer d.soleMu.Unlock()
-	if d.soleOwn != at {
-		d.soleOwn, d.soleReadAt = at, time.Time{}
+	d.sole.mu.Lock()
+	defer d.sole.mu.Unlock()
+	if d.sole.own != at {
+		d.sole.own, d.sole.readAt = at, time.Time{}
 	}
 }

@@ -251,7 +251,7 @@ func TestOnlyAWholeCheckIsStamped(t *testing.T) {
 		return strings.Contains(string(out), "yes")
 	}
 	for _, k := range []string{"MAKEFLAGS", "CHECK_STEPS", "TEST_FLAGS", "GO", "GOFLAGS", "GOTOOLCHAIN", "CGO_ENABLED",
-		"ACTIONLINT_VERSION", "CMDS", "TCB_BUDGET"} {
+		"CMDS", "TCB_BUDGET"} {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
 	}

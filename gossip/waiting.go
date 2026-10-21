@@ -66,7 +66,7 @@ func (n *Node) openWaiting(network types.Hash, sealed []byte) waitingPayload {
 		n.logf("gossip: waiting changes not sealed to this device: %v", err)
 		return waitingPayload{}
 	}
-	p, err := decodeCanonical[waitingPayload](b)
+	p, err := types.DecodeCanonical[waitingPayload](decMode, b, MaxFrameSize)
 	if err != nil || len(p.Held) > MaxWaitingPerFrame || len(p.Changes) > MaxWaitingPerFrame {
 		n.logf("gossip: dropping malformed waiting changes")
 		return waitingPayload{}

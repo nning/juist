@@ -10,8 +10,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"tailscale.com/net/netmon"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/internal/keys"
@@ -103,6 +106,51 @@ func TestACoreKeepsItsKeysSealedAcrossRestarts(t *testing.T) {
 	}
 	if err := c.Join("7-nonsense", "phone", nil); err == nil {
 		t.Error("joined by a code of words no code holds")
+	}
+}
+
+// closingPlatform counts the calls on it once closed.
+type closingPlatform struct {
+	*fakePlatform
+	closed atomic.Bool
+	late   atomic.Int32
+}
+
+func (p *closingPlatform) called() {
+	if p.closed.Load() {
+		p.late.Add(1)
+	}
+}
+
+func (p *closingPlatform) Protect(fd int32) bool { p.called(); return p.fakePlatform.Protect(fd) }
+func (p *closingPlatform) Interfaces() (string, error) {
+	p.called()
+	return p.fakePlatform.Interfaces()
+}
+func (p *closingPlatform) Seal(b []byte) ([]byte, error) { p.called(); return p.fakePlatform.Seal(b) }
+func (p *closingPlatform) Open(b []byte) ([]byte, error) { p.called(); return p.fakePlatform.Open(b) }
+
+// No process-wide hook calls a closed core's platform, and no key is written
+// unsealed once it is closed.
+func TestAClosedCoreLeavesNoHookOnItsPlatform(t *testing.T) {
+	t.Cleanup(func() {
+		keys.SealWith(nil)
+		netmon.RegisterInterfaceGetter(nil)
+	})
+	p := &closingPlatform{fakePlatform: &fakePlatform{t: t}}
+	c, err := Start(filepath.Join(t.TempDir(), "juist"), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	p.closed.Store(true)
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := keys.WriteSecret(path, []string{"key material"}); err == nil {
+		t.Error("a key was written with no core to seal it")
+	}
+	_, _ = netmon.GetInterfaceList()
+	if n := p.late.Load(); n > 0 {
+		t.Errorf("the closed platform was called %d times", n)
 	}
 }
 

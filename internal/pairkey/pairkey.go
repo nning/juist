@@ -63,7 +63,7 @@ func Group(seed [32]byte, epoch uint64, a, b types.WGKey) Key {
 	if string(hi[:]) < string(lo[:]) {
 		lo, hi = hi, lo
 	}
-	info := append([]byte("juist/wg-psk-group/v1\x00"), lo[:]...)
+	info := append([]byte(types.LabelPSKGroup+"\x00"), lo[:]...)
 	info = append(info, hi[:]...)
 	return Key(expand(seed[:], binary.BigEndian.AppendUint64(nil, epoch), info))
 }
@@ -94,7 +94,7 @@ func derive(network types.Hash, leader, follower types.WGKey, gen, epoch uint64,
 	transcript := sha256.New()
 	transcript.Write(ctL)
 	transcript.Write(ctF)
-	info := append([]byte("juist/wg-psk-pair/v1\x00"), network[:]...)
+	info := append([]byte(types.LabelPSKPair+"\x00"), network[:]...)
 	info = append(info, leader[:]...)
 	info = append(info, follower[:]...)
 	info = binary.BigEndian.AppendUint64(info, gen)
@@ -110,7 +110,7 @@ const checkSize = 16
 // a key the other has not shown it derived alike.
 func check(k Key, role string) []byte {
 	m := hmac.New(sha256.New, k[:])
-	m.Write([]byte("juist/wg-psk-check/v1\x00" + role))
+	m.Write([]byte(types.LabelPSKCheck + "\x00" + role))
 	return m.Sum(nil)[:checkSize]
 }
 

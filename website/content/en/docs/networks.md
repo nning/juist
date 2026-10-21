@@ -58,11 +58,13 @@ juist network renumber work 10.7.0.0/24
 
 If the device is in only one network, you can leave the name out.
 
-`--network NAME` does the same for any command, as does the environment
-variable `$JUIST_NETWORK`.
+`--network NAME` does the same for any command. So does the environment
+variable `$JUIST_NETWORK`, except for `juist create`, `juist join` and
+`juist admins new`.
 
-The listings `status`, `devices`, `network` and `admins` show all networks
-when you don't name one. Any other command does not ask which network you
+Commands that list things show every network when you don't name one:
+`status`, `health`, `devices`, `network`, `admins`, `names`, `exit`,
+`subnet` and `publish`. Any other command does not ask which network you
 mean; it stops and lists them:
 
 ```console
@@ -110,7 +112,7 @@ juist reset work --force
 
 This leaves `work` and removes its juistd. `home` stays as it is, with its
 keys. `--force` is needed while `work` still lists this device. Where you can,
-remove the device from `work` first ([Keys]({{< relref "docs/keys" >}})).
+remove the device from `work` first ([Removing a device]({{< relref "docs/remove" >}})).
 
 ## Notes
 

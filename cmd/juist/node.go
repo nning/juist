@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -69,32 +70,6 @@ type node interface {
 	// standing is what a reset would forget; reset forgets it.
 	standing(force bool) (resetStanding, error)
 	reset(force bool) error
-
-	// hints returns what a device joining through this one should start from.
-	hints() (endpoints, leases [][]byte)
-
-	// status is the daemon's report, or nil where no daemon runs; restatus
-	// asks for it again.
-	status() *ipc.Status
-	restatus() (*ipc.Status, error)
-
-	// socket is the daemon's control socket, or "" where none runs.
-	socket() string
-
-	// setOperator appoints the daemon's operator.
-	setOperator(op operatorChoice) error
-
-	// converse runs a conversation with the daemon, such as an invite.
-	converse(ctx context.Context, req ipc.Request, handle eventHandler) error
-
-	// waiting hands the daemon changes waiting for votes, and returns every
-	// one it holds; errNoDaemon where none runs.
-	waiting(hand [][]byte) ([][]byte, error)
-
-	// exit sends the daemon a choice of exit node, or its operator's word on
-	// serving as one, and returns its status after; errNoDaemon where none
-	// runs.
-	exit(req ipc.Request) (*ipc.Status, error)
 }
 
 // An eventHandler answers a daemon's events in a conversation; an error hangs up.
@@ -120,6 +95,8 @@ type operatorChoice struct {
 
 // --- a running daemon ----------------------------------------------------
 
+// A daemonNode is a running juistd. What a daemon alone does is its own
+// methods, reached through [daemonOf] or [app.daemon].
 type daemonNode struct {
 	sock string
 	st   *ipc.Status
@@ -143,11 +120,50 @@ func (n *daemonNode) call(req ipc.Request) (ipc.Response, error) {
 	return resp, err
 }
 
-func (n *daemonNode) status() *ipc.Status { return n.st }
-func (n *daemonNode) socket() string      { return n.sock }
+// daemonOf is n's juistd, or nil where n is a state directory, nil, or an
+// instance's juistd that did not answer.
+func daemonOf(n node) *daemonNode {
+	if d, ok := n.(*daemonNode); ok && d.st != nil {
+		return d
+	}
+	return nil
+}
 
+// liveStatus is the status n's juistd last sent, or nil where [daemonOf] is.
+func liveStatus(n node) *ipc.Status {
+	if d := daemonOf(n); d != nil {
+		return d.st
+	}
+	return nil
+}
+
+// daemon is the juistd of the network the command is about; an error where
+// none runs or it holds no network.
+func (a *app) daemon() (*daemonNode, error) {
+	n, err := a.openNode()
+	if err != nil {
+		return nil, err
+	}
+	d := daemonOf(n)
+	switch {
+	case d == nil && a.instance != nil:
+		return nil, errors.New("juistd not running\nhint: " + startCmd(a.instance.n))
+	case d == nil:
+		return nil, errors.New("juistd not running\nhint: " + a.startHow())
+	case !d.st.InNetwork:
+		return nil, errNoNetwork
+	}
+	return d, nil
+}
+
+// restatus asks for the daemon's status again, as it answers this user now.
 func (n *daemonNode) restatus() (*ipc.Status, error) {
-	resp, err := n.call(ipc.Request{Command: ipc.CmdStatus})
+	return n.request(ipc.Request{Command: ipc.CmdStatus})
+}
+
+// request sends req, and returns the daemon's status after.
+func (n *daemonNode) request(req ipc.Request) (*ipc.Status, error) {
+	resp, err := n.call(req)
 	if err != nil {
 		return nil, err
 	}
@@ -189,8 +205,12 @@ func (n *daemonNode) records() ([]types.AUM, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]types.AUM, 0, len(resp.Records))
-	for _, b := range resp.Records {
+	return decodeRecords(resp.Records)
+}
+
+func decodeRecords(bodies [][]byte) ([]types.AUM, error) {
+	out := make([]types.AUM, 0, len(bodies))
+	for _, b := range bodies {
 		aum, err := types.DecodeAUM(b)
 		if err != nil {
 			return nil, fmt.Errorf("juistd sent an undecodable record: %w", err)
@@ -270,15 +290,7 @@ func (n *daemonNode) logRecords(chain bool) ([]types.AUM, error) {
 	if chain {
 		bodies = append(slices.Clip(resp.Records), bodies...)
 	}
-	out := make([]types.AUM, 0, len(bodies))
-	for _, b := range bodies {
-		aum, err := types.DecodeAUM(b)
-		if err != nil {
-			return nil, fmt.Errorf("juistd sent an invalid record: %w", err)
-		}
-		out = append(out, aum)
-	}
-	return out, nil
+	return decodeRecords(bodies)
 }
 
 func (n *daemonNode) apply(records []types.AUM) error {
@@ -297,6 +309,8 @@ func (n *daemonNode) apply(records []types.AUM) error {
 	return nil
 }
 
+// waiting hands the daemon changes waiting for votes, and returns every one
+// it holds.
 func (n *daemonNode) waiting(hand [][]byte) ([][]byte, error) {
 	resp, err := n.call(ipc.Request{Command: ipc.CmdWaiting, Waiting: hand})
 	if err != nil {
@@ -305,16 +319,25 @@ func (n *daemonNode) waiting(hand [][]byte) ([][]byte, error) {
 	return resp.Waiting, nil
 }
 
-func (n *daemonNode) exit(req ipc.Request) (*ipc.Status, error) {
-	resp, err := n.call(req)
+// published is what the daemon tells its ingress.
+func (n *daemonNode) published() (*ipc.Published, error) {
+	resp, err := n.call(ipc.Request{Command: ipc.CmdPublished})
 	if err != nil {
 		return nil, err
 	}
-	if resp.Status == nil {
-		return nil, errNoStatus
-	}
-	n.st = resp.Status
-	return n.st, nil
+	return cmp.Or(resp.Published, &ipc.Published{}), nil
+}
+
+// serving is what the daemon tells its terminator, nil where it says nothing.
+func (n *daemonNode) serving() (*ipc.Published, error) {
+	resp, err := n.call(ipc.Request{Command: ipc.CmdServing})
+	return resp.Serving, err
+}
+
+// unshare ends the share of path, whichever call holds it.
+func (n *daemonNode) unshare(path string) error {
+	_, err := n.call(ipc.Request{Command: ipc.CmdUnshare, Share: &ipc.ShareRequest{Path: path}})
+	return err
 }
 
 func (n *daemonNode) self() (*ipc.Self, error) {
@@ -418,22 +441,16 @@ func (n *daemonNode) reset(force bool) error {
 	return nil
 }
 
+// setOperator appoints the daemon's operator.
 func (n *daemonNode) setOperator(op operatorChoice) error {
 	_, err := n.call(ipc.Request{Command: ipc.CmdSetOperator, SetOperator: true, OperatorUID: op.uid})
 	return err
 }
 
+// converse runs a conversation with the daemon, such as an invite.
 func (n *daemonNode) converse(ctx context.Context, req ipc.Request, handle eventHandler) error {
 	_, err := ipc.Converse(ctx, n.sock, req, handle)
 	return notOperator(err)
-}
-
-func (n *daemonNode) hints() (endpoints, leases [][]byte) {
-	resp, err := n.call(ipc.Request{Command: ipc.CmdBootstrap})
-	if err != nil || resp.Bootstrap == nil {
-		return nil, nil
-	}
-	return resp.Bootstrap.Endpoints, resp.Bootstrap.Leases
 }
 
 // notOperator is err, or where it is the daemon's refusal of a user who may
@@ -464,15 +481,7 @@ type localNode struct {
 	lock *os.File
 }
 
-func (n *localNode) status() *ipc.Status              { return nil }
-func (n *localNode) restatus() (*ipc.Status, error)   { return nil, nil }
-func (n *localNode) socket() string                   { return "" }
-func (n *localNode) forget()                          {}
-func (n *localNode) setOperator(operatorChoice) error { return errNoDaemon }
-
-func (n *localNode) converse(context.Context, ipc.Request, eventHandler) error { return errNoDaemon }
-func (n *localNode) waiting([][]byte) ([][]byte, error)                        { return nil, errNoDaemon }
-func (n *localNode) exit(ipc.Request) (*ipc.Status, error)                     { return nil, errNoDaemon }
+func (n *localNode) forget() {}
 
 var errNoDaemon = errors.New("juistd not running")
 
@@ -681,8 +690,6 @@ func (n *localNode) unstage() error {
 	return keys.Abandon(n.h.path)
 }
 
-func (n *localNode) hints() (endpoints, leases [][]byte) { return nil, nil }
-
 func (n *localNode) standing(force bool) (resetStanding, error) {
 	k, err := n.h.optionalNodeKeys()
 	if err != nil && !force {
@@ -753,7 +760,8 @@ func (a *app) openNode() (node, error) {
 		return nil, fmt.Errorf("juistd not running at %s", a.socket)
 	}
 	if a.network != "" {
-		return a.hostNode()
+		n, _, err := a.hostNode()
+		return n, err
 	}
 	if ok, err := try(ipc.SocketPath(a.home.path)); ok || err != nil {
 		return a.node, err
@@ -777,7 +785,7 @@ func (a *app) openNode() (node, error) {
 		}
 		return a.localNode()
 	}
-	if n, err := a.hostNode(); n != nil || err != nil {
+	if n, found, err := a.hostNode(); found || err != nil {
 		return n, err
 	}
 	if a.serviceInstalled() {

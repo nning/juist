@@ -182,8 +182,8 @@ enrollment protocol and is left open.
   was named when the key was filed; nothing renames it afterwards.
 - A key named without `@` is either from before keys were filed per network,
   and keeps its name, or carries `juist-unfiled-v1`, and the first log naming
-  it files it. A key
-  without the mark is never filed.
+  it files it when `juist admins` lists it, it signs, or `juist create` runs
+  beside that network; reading the log alone never writes the keystore. A key without the mark is never filed.
 - Without a log, keys filed under different networks never sign one record
   together.
 
@@ -205,7 +205,7 @@ device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
   [02-threat-model.md](02-threat-model.md). Closing it needs a user per
   instance. Then an instance's home cannot sit in the default's 0700 one,
   each needs a runtime directory of its own, and the instance above has to be
-  allowed to read the exact claims of the one below. That is M23's.
+  allowed to read the exact claims of the one below. That is M24's.
 - **Other networks' addresses in path discovery.** magicsock learns this
   host's addresses from every interface but Tailscale's own, and sends them to
   peers in the call-me-maybe it relays. A network's members may therefore be

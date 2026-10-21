@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -340,6 +341,59 @@ func TestAnAnswerOfItsOwnReachesNoResolver(t *testing.T) {
 	}
 	if resp, err := askUDP(t, at, query(0x1000)); err != nil || !answers(resp, query(0x1000)) || up.asked.Load() != 1 {
 		t.Errorf("the rest was not forwarded: %x, %v", resp, err)
+	}
+}
+
+// A query UpstreamFor refuses is answered SERVFAIL, over UDP and TCP, and
+// asked of no resolver, not even Upstream's.
+func TestARefusedQueryIsAnsweredServerFailure(t *testing.T) {
+	up := startUpstream(t, false)
+	refuse := func([]byte) ([]netip.AddrPort, error) { return nil, errors.New("no routing") }
+	at := startForwarderWith(t, up, func(o *Options) { o.UpstreamFor = refuse })
+	q := query(0x5150)
+	q[2] = 0x01 // RD
+	check := func(over string, resp []byte, err error) {
+		t.Helper()
+		var p dnsmessage.Parser
+		h, perr := p.Start(resp)
+		if err != nil || perr != nil {
+			t.Fatalf("over %s: %x, %v, %v", over, resp, err, perr)
+		}
+		qs, _ := p.AllQuestions()
+		if h.ID != 0x5150 || !h.Response || h.RCode != dnsmessage.RCodeServerFailure || !h.RecursionDesired ||
+			len(qs) != 1 || qs[0].Name.String() != "example.com." {
+			t.Errorf("over %s: %+v, %v", over, h, qs)
+		}
+	}
+	resp, err := askUDP(t, at, q)
+	check("UDP", resp, err)
+	c, err := net.Dial("tcp", at.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(time.Second))
+	c.Write(tcpMessage(q))
+	resp, err = readTCPMessage(bufio.NewReader(c))
+	check("TCP", resp, err)
+	if n := up.asked.Load(); n != 0 {
+		t.Errorf("the resolver was asked %d times", n)
+	}
+}
+
+// A query UpstreamFor refuses with a Refusal is answered its RCode.
+func TestARefusalIsAnsweredItsRCode(t *testing.T) {
+	up := startUpstream(t, false)
+	refuse := func([]byte) ([]netip.AddrPort, error) {
+		return nil, fmt.Errorf("x: %w", &Refusal{RCode: RCodeNXDomain, Err: errors.New("never")})
+	}
+	at := startForwarderWith(t, up, func(o *Options) { o.UpstreamFor = refuse })
+	resp, err := askUDP(t, at, query(0x5151))
+	if err != nil || !answers(resp, query(0x5151)) || resp[3]&0x0f != RCodeNXDomain {
+		t.Errorf("%x, %v", resp, err)
+	}
+	if n := up.asked.Load(); n != 0 {
+		t.Errorf("the resolver was asked %d times", n)
 	}
 }
 

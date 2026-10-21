@@ -229,3 +229,19 @@ func TestUpstreamNoPortMapperOrCaptivePortalIsLinked(t *testing.T) {
 		}
 	}
 }
+
+// The engine's lines conn reads still read so, and SetHomeless(false) still
+// starts its endpoint update beside ReSTUN's queue, which the netcheck after
+// a return home makes up for: an upgrade that changes either fails here.
+func TestUpstreamLinesAndTheHomelessUpdate(t *testing.T) {
+	for _, c := range []struct{ rel, want string }{
+		{"wgengine/magicsock/derp.go", `"` + homeDERPChanging + ` `},
+		{"wgengine/magicsock/derp.go", `c.logf("` + addingDERPConn + `", regionID, why)`},
+		{"wgengine/magicsock/derp.go", `func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, `},
+		{"wgengine/magicsock/magicsock.go", `go c.updateEndpoints("set-homeless-disabled")`},
+	} {
+		if !strings.Contains(upstreamSource(t, c.rel), c.want) {
+			t.Errorf("%s no longer holds %s", c.rel, c.want)
+		}
+	}
+}

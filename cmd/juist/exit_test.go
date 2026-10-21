@@ -21,6 +21,9 @@ import (
 func homeAndVPS(t *testing.T) (laptop, vps *daemonDevice) {
 	t.Helper()
 	laptop = newDaemonDevice(t, nil)
+	laptop.mgr.mu.Lock()
+	laptop.mgr.answers = true
+	laptop.mgr.mu.Unlock()
 	laptop.mustRun("create", "home", "--device", "laptop")
 	vps = newDaemonDevice(t, nil)
 	inv := laptop.start("invite", "--no-lan", "--port", "0", "--yes")
@@ -136,6 +139,10 @@ func TestAnExitNodeFromGrantToOff(t *testing.T) {
 	eventually(t, "laptop hears vps serves", func() bool {
 		ex := statusOfDaemon(t, laptop).Exit
 		return ex != nil && slices.Contains(ex.Offering, n.Identity)
+	})
+	// The list says how the last tunnel check found vps, however soon it ran.
+	eventually(t, "laptop checks its tunnel to vps", func() bool {
+		return slices.ContainsFunc(statusOfDaemon(t, laptop).Reach, func(r ipc.PeerReach) bool { return r.Identity == n.Identity })
 	})
 	if out := laptop.mustRun("exit"); !regexp.MustCompile(`(?m)^vps +\S+ +serving$`).MatchString(out) {
 		t.Fatalf("the list:\n%s", out)
@@ -497,7 +504,7 @@ func TestFirewalldStrictReversePath(t *testing.T) {
 	for _, strict := range []bool{false, true} {
 		out := &syncBuffer{}
 		a := c.app(out, "")
-		a.warnStrictRP(&ipc.Exit{Name: "vps", StrictRP6: strict})
+		a.emit(a.strictRPNotes(&ipc.Exit{Name: "vps", StrictRP6: strict}))
 		if got := strings.Contains(out.String(), "firewalld's strict IPv6 reverse-path filter"); got != strict {
 			t.Errorf("strict %v, warned:\n%s", strict, out.String())
 		}

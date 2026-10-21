@@ -1,6 +1,7 @@
 package gossip
 
 import (
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -134,13 +135,13 @@ func (c *Cache) tooFarAheadLocked(e *Endpoint) bool {
 
 // asHint is the hint e as read: where to dial its author, without what only
 // its author may say, its consent to serve as an exit, route subnets, answer
-// DNS, serve published names or share, its relay, its overlay IPv4 and its
-// preshared key's epoch and store.
+// DNS, serve published names or share, its relay, its overlay IPv4, its
+// preshared key's epoch and store, and that it rests.
 func asHint(e Endpoint) Endpoint {
 	h := *e.Clone()
 	h.MLDSA = nil
 	h.Exit, h.Subnets, h.DNS, h.Published, h.Share = false, false, 0, false, nil
-	h.Relay, h.NoV4, h.Epoch, h.PairStore = nil, false, 0, 0
+	h.Relay, h.NoV4, h.Epoch, h.PairStore, h.Rests = nil, false, 0, 0, false
 	h.hint = true
 	return h
 }
@@ -178,34 +179,58 @@ func (c *Cache) IsHint(id types.Identity) bool {
 // where it says; everything else comes from the announcement alone. One not
 // shown signed by ML-DSA, as before the keys are given, is refused where it
 // numbers itself past [maxHintAhead].
-func (c *Cache) Add(e Endpoint) bool {
+func (c *Cache) Add(e Endpoint) bool { return c.Added(e) != Unchanged }
+
+// A Change is what an announcement added to a [Cache] changed.
+type Change int
+
+const (
+	Unchanged  Change = iota
+	AddrsAlone        // where its node is reached, and nothing else
+	Changed
+)
+
+func (c Change) String() string {
+	switch c {
+	case Unchanged:
+		return "unchanged"
+	case AddrsAlone:
+		return "addresses alone"
+	case Changed:
+		return "changed"
+	}
+	return fmt.Sprintf("Change(%d)", int(c))
+}
+
+// Added is [Cache.Add], saying what changed.
+func (c *Cache) Added(e Endpoint) Change {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.former[e.Identity] {
-		return false
+		return Unchanged
 	}
 	if full, held := c.by[e.Identity]; held && e.Seq <= full.Seq {
 		// A replay, or older: refused before its signature costs anything.
-		return false
+		return Unchanged
 	}
 	before, _ := c.getLocked(e.Identity)
 	beforeDisco, _ := c.hintDiscoLocked(e.Identity)
 	hint := c.hintLocked(&e)
 	if (hint || c.signing == nil) && c.tooFarAheadLocked(&e) {
-		return false
+		return Unchanged
 	}
 	if hint {
 		h := e.Hint()
 		if cur, held := c.hints[e.Identity]; held && h.Seq <= cur.Seq {
-			return false
+			return Unchanged
 		} else if !held && !c.roomLocked(c.hints, e.Identity) {
-			return false
+			return Unchanged
 		}
 		c.hints[e.Identity] = h
 	} else {
 		cur, held := c.by[e.Identity]
 		if !held && !c.roomLocked(c.by, e.Identity) {
-			return false
+			return Unchanged
 		}
 		c.by[e.Identity] = *e.Clone()
 		if h, held := c.hints[e.Identity]; held && h.Seq <= e.Seq {
@@ -217,7 +242,15 @@ func (c *Cache) Add(e Endpoint) bool {
 	}
 	after, _ := c.getLocked(e.Identity)
 	afterDisco, _ := c.hintDiscoLocked(e.Identity)
-	return !before.SameAs(&after) || afterDisco != beforeDisco
+	switch {
+	case before.SameAs(&after) && afterDisco == beforeDisco:
+		return Unchanged
+	// A relay's addresses are where its clients home, more than a move.
+	case !hint && afterDisco == beforeDisco && !before.Identity.IsZero() && !before.HintAlone() &&
+		after.Relay == nil && before.SameAsBut(&after):
+		return AddrsAlone
+	}
+	return Changed
 }
 
 // roomLocked reports whether m has room for id: below the bound, or full

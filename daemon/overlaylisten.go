@@ -84,15 +84,6 @@ type slot struct {
 	gone bool         // rebind dropped it, under the multiListener's mu
 }
 
-// newMultiListener accepts from lns once started.
-func newMultiListener(lns []net.Listener) *multiListener {
-	m := &multiListener{conns: make(chan net.Conn), errs: make(chan error, len(lns)), closed: make(chan struct{})}
-	for _, ln := range lns {
-		m.lns = append(m.lns, &slot{ln: ln})
-	}
-	return m
-}
-
 func (m *multiListener) start() {
 	for _, s := range m.lns {
 		go m.accept(s)

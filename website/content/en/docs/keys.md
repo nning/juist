@@ -48,7 +48,7 @@ that runs a relay restarts its tunnels instead. `juist rotate identity`
 changes the device's IPv6 address, which ends any connections that used the
 old one. It needs the network at schema 19: below it, it stops with
 `juist: the network predates rotating an identity key` until an admin runs
-`juist log upgrade`.
+`juist log upgrade` ([Updating juist]({{< relref "docs/updating" >}})).
 
 ## Starting a device over
 

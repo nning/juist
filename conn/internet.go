@@ -1,14 +1,15 @@
 package conn
 
 import (
-	"cmp"
 	"errors"
-	"net"
 	"net/netip"
 	"slices"
 
 	"go4.org/netipx"
 	"tailscale.com/types/key"
+
+	"github.com/nning/juist/internal/underlay"
+	"github.com/nning/juist/types"
 )
 
 // specialV4 and specialV6 are the ranges an exit node carries for nobody:
@@ -32,28 +33,11 @@ var localSpace = slices.Concat(specialV4, specialV6, prefixes("fc00::/7", "fe80:
 // are on, and the host's own addresses in them. Single addresses are no
 // network.
 func attached(skip string) (nets []netip.Prefix, hosts []netip.Addr) {
-	ifs, err := net.Interfaces()
-	if err != nil {
-		return nil, nil
-	}
-	for _, ifc := range ifs {
-		if ifc.Name == skip || ifc.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := ifc.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			ipn, ok := a.(*net.IPNet)
-			if !ok {
-				continue
+	for _, ifc := range underlay.Interfaces(underlay.Filter{NoLoopback: true, Skip: skip}) {
+		for _, p := range ifc.Prefixes {
+			if !p.IsSingleIP() {
+				nets, hosts = append(nets, p.Masked()), append(hosts, p.Addr())
 			}
-			p, ok := netipx.FromStdIPNet(ipn)
-			if !ok || p.IsSingleIP() {
-				continue
-			}
-			nets, hosts = append(nets, p.Masked()), append(hosts, p.Addr())
 		}
 	}
 	return nets, hosts
@@ -166,7 +150,7 @@ func tunnelledBy(peers map[key.NodePublic]Peer) tunnelled {
 		}
 		t.subnets = append(t.subnets, p.Subnets...)
 	}
-	slices.SortFunc(t.subnets, func(x, y netip.Prefix) int { return cmp.Or(x.Addr().Compare(y.Addr()), x.Bits()-y.Bits()) })
+	slices.SortFunc(t.subnets, types.ComparePrefix)
 	return t
 }
 
