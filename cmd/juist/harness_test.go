@@ -466,6 +466,10 @@ func (stubManager) HomeRelay() int { return 0 }
 
 func (stubManager) ReachesRelay(int) bool { return false }
 
+func (stubManager) Walled() bool { return false }
+
+func (stubManager) NotAtHome() map[uint64]time.Time { return nil }
+
 func (stubManager) LocalEndpoints() []netip.AddrPort { return nil }
 
 func (stubManager) LocalPort() uint16 { return 41641 }

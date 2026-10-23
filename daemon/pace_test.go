@@ -774,6 +774,23 @@ func TestWhileSavingANewAddressWaitsForTheNextSync(t *testing.T) {
 	}) {
 		t.Error("saving, a new home was not pushed")
 	}
+	if _, ok := f.d.announcement(); !ok {
+		t.Fatal("no announcement")
+	}
+	// Members awake keep the home of a walled device open, which disco
+	// cannot tell; one that rests keeps none, and is not woken for it.
+	f.d.pushRests.Store(false)
+	if !pushed(func() {
+		f.mgr.mu.Lock()
+		f.mgr.walled = true
+		f.mgr.mu.Unlock()
+		f.d.onConnectivityChange()
+	}) {
+		t.Error("saving, walls coming were not pushed")
+	}
+	if f.d.pushRests.Load() {
+		t.Error("walls coming were pushed to the members that rest")
+	}
 	pace.SetSaving(false)
 	if !pushed(newAddr) {
 		t.Error("not saving, a new address was not pushed")

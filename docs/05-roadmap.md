@@ -832,23 +832,27 @@ to it, so that one relay named on 443, the ingress's by itself, is enough.
 Relays forwarding for one another is the alternative should that fall short.
 Before the audit, so that M26 covers it, and not started before M21 is
 validated and the refactoring
-([temp/20261019-refactoring.md](temp/20261019-refactoring.md)) is done. The
-rules, the open decisions and what changes in the threat model are in
-[16-one-relay-on-443.md](16-one-relay-on-443.md).
+([temp/20261019-refactoring.md](temp/20261019-refactoring.md)) is done.
 
-- **Exit criteria:** (1) in the netns lab, a device whose network passes TCP
-  to 443 alone, homed at the one named relay, reaches a member homed at an
-  unnamed relay and is reached by it, with `--https-only` and without, and
-  the member reaching it no longer once it stops keeping the connection;
-  (2) after three minutes without traffic, the device still reaches the
-  member first; (3) a member that learns the device's new home from the
-  relays alone, with no tunnel to it, reaches it; (4) a member that rests
-  keeps no connection, and is reached once it syncs; (5) an ingress's relay
-  is named `relay.<domain>` without `--relay-name`, and the device of (1)
-  needs no setting of 443 to reach every member; (6) `juist health` names a
-  peer the device's relay says is not there; (7)
-  [02-threat-model.md](02-threat-model.md) says what changes, and `make
-  ci-vm` passes with the lab.
+**Done** on 2026-10-23, reviewed (M22 reviews 1 to 3, the third's fixes
+attacked again in three rounds), validated in the netns lab by hotel, a
+device whose network passes TCP to 443 alone, beside lx homed at a relay
+without a name (`interop/onerelay_test.go`): hotel reaches lx and is reached
+through fb's relay, the ingress's, serving `relay.<domain>` with no name
+set, with `--https-only` and without, and again after three minutes without
+traffic; with lx stopped, hotel reaches it no longer and `juist health`
+names it as not at fb's relay; and lx, started after hotel moved, reaches it
+by what the relays hold alone. A member that rests keeps no connection and
+is reached once it sends (`conn`: `TestWalledNodesMeetAtAHome`, `daemon`:
+`TestAPeerWalledIsKeptAtItsHome`), and
+[02-threat-model.md](02-threat-model.md), weaknesses 5 and 15, says what
+changes. `make ci-vm` passed at M22, and in the nine lab runs since
+M22 hotel met lx without `--https-only` within 21 s to 2m31s, mostly
+under 40 s; `make android-idle` stays within its budgets
+([12-validating.md](12-validating.md), "An idle phone beside ten members").
+Core 10 987 lines, audit scope 34 049, measured after it (2026-10-23). The
+rules, and what M22 leaves open, are in
+[16-one-relay-on-443.md](16-one-relay-on-443.md).
 
 ## M23 — Names on Android
 
@@ -1169,6 +1173,80 @@ code.
   nothing written after; (4) in `make interop`, an emulator and `juistmsg`
   exchange messages and a file both ways; (5) a member writing past its
   quota is cut at a holder, and the others' writes still land.
+
+## M31 — OpenBSD *(post-v1)*
+
+juistd on OpenBSD as M7 has it on FreeBSD: a root helper, the daemon as
+`juist`, DNS, exit nodes and subnet routers, an rc.d script and a package.
+
+Today `GOOS=openbsd` compiles for amd64 and arm64, though `make cross` does
+not build it, and every platform file takes its fallback: no helper, so a
+device means root throughout; no peer credentials, so the IPC socket's mode
+alone; no host DNS; no serving. The pinned Tailscale's own router
+(`osrouter/router_openbsd.go`, ifconfig and route) would set addresses and
+routes, an exit node's default route included; juist's helper replaces it,
+as on FreeBSD.
+
+The plan, in order:
+
+1. **Build.** `openbsd/amd64` and `openbsd/arm64` join `CROSS_PLATFORMS`, so
+   that nothing breaks unseen meanwhile.
+2. **Helper and privileges.** `internal/plumber` gains an OpenBSD host beside
+   FreeBSD's: the helper opens `/dev/tunN`, sets addresses and routes with
+   ifconfig and route, each route naming its source address, and hands the
+   descriptor to the daemon running as `juist`. Code where the two agree is
+   shared, what differs is build-tagged. pledge(2) and unveil(2) narrow the
+   helper and the daemon to what each uses.
+3. **Peer credentials.** `daemon/peercred` reads `SO_PEERCRED`
+   (`struct sockpeercred`), so the IPC socket checks its callers as on Linux
+   and FreeBSD.
+4. **DNS.** resolvd(8) takes the helper's proposal of juistd's resolver per
+   device (`route nameserver <dev> <addr>`, withdrawn by the same without an
+   address). Unlike `resolvconf -x` it keeps the other servers behind, and
+   takes no search domains. While unwind(8) runs, resolvd comments
+   proposals out; `juist health` then warns unless `unwind.conf` forces
+   juist's names to `autoconf`.
+5. **Exit nodes and subnet routers.** Forwarding through
+   `net.inet.ip.forwarding` and `net.inet6.ip6.forwarding`, held and restored
+   as on FreeBSD; the NAT, forwarding filter and egress guard in pf anchors of
+   juist's. OpenBSD's pf has `anchor` alone, no `nat-anchor` or `rdr-anchor`,
+   and writes NAT as `match out … nat-to`, so the rules are OpenBSD's own and
+   only the anchors' life cycle is FreeBSD's.
+6. **Service and package.** An rc.d script (`rc.subr`, `rcctl`), the
+   commands in `cmd/juist` that start and enable instances beside systemd's
+   and FreeBSD's, manual pages and `--help` naming rc.d, and `make
+   pkg-openbsd` by `pkg_create`, reproducible as `make repro-freebsd` checks.
+7. **Tests and lab.** `make test-openbsd` runs every test on an OpenBSD VM in
+   qemu as root, as `make test-freebsd` does; `make interop` gains it beside
+   Debian and FreeBSD.
+
+Constraints:
+
+- **DNS through an exit node** must not fall back to the LAN's servers that
+  resolvd keeps behind juistd's: the egress guard blocks DNS to anyone but
+  juistd while names go through the exit node.
+- **Network changes** are noticed by Tailscale's 10 s poll on OpenBSD
+  (`net/netmon/netmon_polling.go`), not by events as devd(8) gives them on
+  FreeBSD: roaming is slower until a routing-socket monitor is added there.
+
+Open decisions:
+
+- **juistd's own traffic beside an exit node:** off the tunnel by pf's `user`
+  match, as on FreeBSD, or by an rtable of its own, as Tailscale's router
+  does. pf is the lead, being one mechanism for both.
+- **Signing the package:** `pkg_add` checks signify(1) signatures against the
+  keys in `/etc/signify`, so either a key of juist's that the user installs
+  once, or unsigned packages until a port in the ports tree, as M28 plans for
+  FreeBSD.
+- **Which releases:** the current one alone, or both that OpenBSD supports.
+
+- **Exit criteria:** (1) `make test-openbsd` passes; (2) in `make interop`,
+  OpenBSD, Debian and FreeBSD each use the others as exit node, subnet router
+  and DNS; (3) on OpenBSD the helper alone runs as root, and a caller of
+  another user is refused at the IPC socket; (4) with an exit node and
+  juistd's resolver stopped, no DNS query leaves the host outside the tunnel;
+  (5) the package installs and removes cleanly, and builds to the same bytes
+  on two builders.
 
 ## Later — The whole network's reach
 

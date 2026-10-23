@@ -280,6 +280,9 @@ type fakeManager struct {
 	home    int
 	reached map[int]bool // relay regions a measurement reached, the home aside
 	eps     []netip.AddrPort
+	walled  bool
+	notAt   map[uint64]time.Time // as NotAtHome reports
+	onProbe func()               // run as each probe is sent, without mu
 
 	tunnels map[uint64]conn.Tunnel
 	answers map[netip.Addr]bool // whether a probe to the address is answered
@@ -415,6 +418,18 @@ func (m *fakeManager) ReachesRelay(region int) bool {
 	return region != 0 && (region == m.home || m.reached[region])
 }
 
+func (m *fakeManager) Walled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.walled
+}
+
+func (m *fakeManager) NotAtHome() map[uint64]time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.notAt)
+}
+
 func (m *fakeManager) LocalEndpoints() []netip.AddrPort {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -449,8 +464,11 @@ func (m *fakeManager) Probe(ip netip.Addr, _ time.Duration, cb func(bool)) {
 			}
 		}
 	}
-	hold := m.hold
+	hold, onProbe := m.hold, m.onProbe
 	m.mu.Unlock()
+	if onProbe != nil {
+		onProbe()
+	}
 	go func() {
 		if hold != nil {
 			<-hold

@@ -254,6 +254,7 @@ sleep 2`)
 			t.Errorf("the proxy was asked %q", l)
 		}
 	}
+	oneRelayOn443(t, fb, lx, hotel, fb4, lx4)
 	fb.run(t, "juist remove hotel --yes && juist remove office --yes")
 }
 

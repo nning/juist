@@ -15,6 +15,15 @@ name on port 443. Every device learns that name, and a device that cannot
 reach the relay's usual port switches to the name by itself. Nothing needs to
 be set up on the device for this.
 
+One relay on 443 is enough. A device that reaches only some relays sends
+everything through its own one, and the other devices keep a connection to
+that relay while it is there, so it reaches devices that use a relay without
+a name too. Phones that save battery keep no such connection: the device
+reaches them once they next send something, as they do when they sync. If
+the network has an [ingress]({{< relref "docs/publishing" >}}) that is also
+a relay, its relay serves `relay.` plus the network's domain on 443 by
+itself.
+
 A network that inspects traffic, and blocks or reports anything that is not
 HTTPS, needs more. With `juist set --https-only`, a device sends only TLS to
 the relays' names on port 443, plus DNS queries for those names. It sends no
@@ -24,8 +33,8 @@ the public DHT nor STUN servers. Every packet then goes through a relay.
 ## Setting it up
 
 {{< step on="the relay" >}}
-Give a relay a public name on port 443, as described in
-[Relays]({{< relref "docs/relays" >}}):
+Unless the ingress's relay serves one already, give a relay a public name on
+port 443, as described in [Relays]({{< relref "docs/relays" >}}):
 
 ```sh
 sudo juist set --relay-name relay.example.org
@@ -106,6 +115,8 @@ password.
 | `juist health`: `warning: no relay on 443/tcp` | the same |
 | `juist health`: `no answer from …: offline, or at no relay on 443` | the device is offline, or cannot reach any relay that has a name |
 | `juist health`: `no tunnel traffic from … through the relays on 443` | check the relays' names in DNS, and that port 443 reaches them |
+| `juist health`: `warning: … not at the relay on …, the one this device reaches it at` | the device runs, but keeps no connection there: it saves battery and is reached once it sends, or it runs an older juist |
+| `juist health`: `no answer from …: not at the relay on …` | the device is offline, or keeps no connection there; once it is known to be offline, the line goes |
 
 If joining says `the invite link names no relay on 443`, you need a new invite
 link, made after a relay serves a name on 443.

@@ -68,11 +68,15 @@ type fakeDNSServer struct {
 	mu     sync.Mutex
 	addrs  []netip.Addr
 	closed bool
+	err    error // what starting returns, as a port another holds
 }
 
 func (s *fakeDNSServer) start(addrs []netip.Addr, allowed func(netip.Addr) bool) (io.Closer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
 	s.addrs, s.closed = slices.Clone(addrs), false
 	if allowed(netip.MustParseAddr("8.8.8.8")) {
 		panic("the resolver would answer the internet")
@@ -202,6 +206,38 @@ func TestAnExitNodeAnswersItsMembersDNS(t *testing.T) {
 	}
 }
 
+// An exit node whose forwarder failed to start tries again at a reconcile
+// dnsRetry on, not only at the next one due otherwise, and says why it
+// answers no member's DNS until it does.
+func TestAnExitNodesForwarderIsStartedAgain(t *testing.T) {
+	server := &fakeDNSServer{err: errors.New("listen udp 198.18.0.1:41646: bind: address already in use")}
+	f := exitFixture(t, 0, -1, func(o *Options) { o.ServeExit, o.ServeDNS = true, server.start })
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.d.Status().Exit; st == nil || !st.Serving || !strings.Contains(st.DNSUnserved, "address already in use") {
+		t.Fatalf("the status says %+v, want the forwarder's failure", st)
+	}
+	if a, _ := f.d.Announcement(); a.DNS != 0 {
+		t.Errorf("answering none, it announces port %d", a.DNS)
+	}
+	if due := f.d.reconcileDue.Load(); due == nil || due.IsZero() || due.After(time.Now().Add(dnsRetry+time.Second)) {
+		t.Errorf("the next reconcile is due at %v, want within %v", due, dnsRetry)
+	}
+	server.mu.Lock()
+	server.err = nil
+	server.mu.Unlock()
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.d.Status().Exit; st == nil || st.DNSUnserved != "" {
+		t.Errorf("started, the status says %+v", st)
+	}
+	if a, _ := f.d.Announcement(); a.DNS != dnsAskedPort {
+		t.Errorf("started, it announces port %d", a.DNS)
+	}
+}
+
 // routedFixture is a daemon routing the host's DNS through exit node 1.
 func routedFixture(t *testing.T, host *fakeHostDNS, mutate func(*Options)) *reconcileFixture {
 	t.Helper()
@@ -318,7 +354,7 @@ func TestAClosedDaemonLeavesDNSAlone(t *testing.T) {
 	host := &fakeHostDNS{}
 	f := exitFixture(t, 0, -1, func(o *Options) { o.HostDNS, o.ServeDNS = host, server.start })
 	f.d.closeDNS()
-	if port := f.d.serveDNS(true, []netip.Addr{netip.MustParseAddr("198.18.0.1")}, nil); port != 0 {
+	if port, _ := f.d.serveDNS(true, []netip.Addr{netip.MustParseAddr("198.18.0.1")}, nil); port != 0 {
 		t.Error("a closed daemon answers DNS again")
 	}
 	if through, _ := f.d.routeDNS([]netip.AddrPort{netip.MustParseAddrPort("198.18.0.2:41646")}, false); through {

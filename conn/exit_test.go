@@ -186,7 +186,7 @@ func TestByRouteAtTheEdges(t *testing.T) {
 	st, _ := newPeerState(key.NodePublic{}, []Peer{
 		{NodeKey: k1, Routes: []netip.Prefix{netip.MustParsePrefix("8.0.0.0/8"), netip.MustParsePrefix("2000::/3")}},
 		{NodeKey: k2, Routes: []netip.Prefix{netip.MustParsePrefix("9.0.0.0/8")}},
-	})
+	}, sameHome)
 	for _, tc := range []struct {
 		ip   string
 		want key.NodePublic

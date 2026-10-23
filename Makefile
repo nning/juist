@@ -416,7 +416,8 @@ android-screenshots: android-core ## Record the Android app's screenshots anew, 
 
 # `make android-idle` boots the AVD juist where no device is attached, and
 # runs each scenario for IDLE_MINUTES (35) with the screen off beside ten
-# members, one restarting every 3 minutes: about 50 minutes a scenario,
+# members, one restarting every 3 minutes: about 50 minutes a scenario, up to
+# 5 more without a relay, where a member pings the phone until its next check,
 # logged to build/idle.
 .PHONY: android-idle
 android-idle: android-core ## Measure the Android app idling in the emulator; fail past its budget (needs the AVD juist)

@@ -63,9 +63,9 @@ const stunRegionScore = 1e6
 // derpMap renders relays and STUN servers as the map the data plane consumes,
 // and returns the regions the STUN servers took. Nothing at all returns nil,
 // which is how the engine is told there are no relays. httpsOnly keeps the
-// relays' names on 443 alone, and no STUN server; local orders each relay's
-// addresses.
-func derpMap(relays []Relay, stun []string, httpsOnly bool, local Networks) (*tailcfg.DERPMap, map[tailcfg.DERPRegionID]bool) {
+// relays' names on 443 alone, and no STUN server; nameFirst puts a relay's
+// name in DNS before its addresses; local orders each relay's addresses.
+func derpMap(relays []Relay, stun []string, httpsOnly, nameFirst bool, local Networks) (*tailcfg.DERPMap, map[tailcfg.DERPRegionID]bool) {
 	stunRegions := map[tailcfg.DERPRegionID]bool{}
 	if httpsOnly {
 		relays = slices.DeleteFunc(slices.Clone(relays), func(r Relay) bool { return r.Name == "" })
@@ -98,8 +98,12 @@ func derpMap(relays []Relay, stun []string, httpsOnly bool, local Networks) (*ta
 		if !httpsOnly {
 			reg.Nodes = pinnedNodes(r, ordered, 0)
 		}
-		if r.Name != "" {
-			reg.Nodes = append(reg.Nodes, namedNodes(r, public)...)
+		if named := namedNodes(r, public); r.Name != "" && nameFirst && !httpsOnly {
+			// The relay's own port stays among the first three nodes, which
+			// netcheck sends STUN to.
+			reg.Nodes = slices.Concat(named[:1], reg.Nodes, named[1:])
+		} else if r.Name != "" {
+			reg.Nodes = append(reg.Nodes, named...)
 		}
 		dm.Regions[id] = reg
 	}

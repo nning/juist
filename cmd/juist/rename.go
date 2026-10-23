@@ -57,7 +57,7 @@ name follow the name; keys, addresses, roles and public names stay.`}
 				return fmt.Errorf("%s points %s at itself already, the name it would share under\nhint: juist names remove %s %s",
 					displayMember(target), shared, displayMember(target), shared)
 			}
-			if err := labelFree(state, l, target.Identity); err != nil {
+			if err := labelFree(state, l, target.Identity, a.now().Unix()); err != nil {
 				return err
 			}
 		}

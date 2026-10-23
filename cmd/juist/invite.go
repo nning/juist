@@ -105,7 +105,7 @@ than one admin must approve, the invite waits for them.`}
 		if o.service, err = parseLabel(o.service, auth.State().Domain()); err != nil {
 			return err
 		}
-		if err := labelFree(auth.State(), o.service, types.Identity{}); err != nil {
+		if err := labelFree(auth.State(), o.service, types.Identity{}, a.now().Unix()); err != nil {
 			return err
 		}
 	}

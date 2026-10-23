@@ -77,9 +77,17 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 			return err
 		}
 	}
+	before := auth.State()
 	applied, err := a.submitRoutes(auth, target, sortRoles(next), target.SubnetRoutes(), *yes)
-	if err != nil || !applied {
+	if err != nil {
 		return err
+	}
+	if grant {
+		// Applied, or waiting for other admins to approve.
+		a.warnRelayNameTaken(before, target, roles)
+	}
+	if !applied {
+		return nil
 	}
 	name := displayMember(target)
 	vouches, relays := roles[types.RoleAdmin], roles[types.RoleRelayCapable]
@@ -381,4 +389,19 @@ func parseRole(s string) (types.Role, error) {
 	}
 	return "", fmt.Errorf("%q is not a role%s; the roles are %s and %s", s, didYouMean(strings.ToLower(s), names...),
 		strings.Join(names[:len(names)-1], ", "), names[len(names)-1])
+}
+
+// warnRelayNameTaken warns where roles make target the first ingress that
+// relays, whose relay takes relay.DOMAIN, while another holds that name.
+func (a *app) warnRelayNameTaken(state *log.State, target types.NodeRecord, roles map[types.Role]bool) {
+	if state.Domain() == "" || !roles[types.RoleIngress] || !roles[types.RoleRelayCapable] {
+		return
+	}
+	if _, ok := ingressRelay(state, a.now().Unix()); ok {
+		return
+	}
+	if err := labelClaimed(state, "relay", target.Identity); err != nil {
+		first, _, _ := strings.Cut(err.Error(), "\n")
+		a.warn("%s, which %s's relay takes unless juist set --relay-name names another", first, displayMember(target))
+	}
 }

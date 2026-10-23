@@ -284,7 +284,8 @@ func (d *Daemon) applyExit(p exitPlan) {
 	if !p.isolate {
 		p.status.AnswersThrough = d.answersThrough()
 	}
-	port := d.serveDNS(p.status.Serving, p.dnsServe, p.dnsOverlay)
+	port, why := d.serveDNS(p.status.Serving, p.dnsServe, p.dnsOverlay)
+	p.status.DNSUnserved = why
 	if port != 0 && p.serve.DNS != 0 {
 		// Asked on 53, which the data plane sends to the forwarder.
 		port = dnsAskedPort

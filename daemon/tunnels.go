@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"sync"
@@ -391,6 +392,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	d.mu.Lock()
 	gen := d.reachGen
 	d.mu.Unlock()
+	start := d.now()
 	checks := d.checkTunnels(probeWait)
 	now := d.now()
 	var syncFailing, syncNewer, syncBroken []string
@@ -411,6 +413,17 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	}
 	settle := d.settles()
 	relays := d.relayOwners()
+	notAt := d.manager.NotAtHome()
+	// A walled device sends to a peer homed where it does not reach at its
+	// own home.
+	via := map[int]int{}
+	if d.manager.Walled() {
+		for _, c := range checks {
+			if r := c.peer.HomeRelay; r != 0 && !d.manager.ReachesRelay(r) {
+				via[r] = d.manager.HomeRelay()
+			}
+		}
+	}
 	// Asked before d.mu is taken: the relay asks the daemon who may use it
 	// under its own lock.
 	d.mu.Lock()
@@ -453,7 +466,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	}
 	d.reachable.Store(&reachable)
 	v := classifyReach(checks, reachFacts{
-		now: now, schema: d.status.Schema, settle: settle, relays: relays,
+		now: now, schema: d.status.Schema, settle: settle, relays: relays, via: via,
 		failed: failed, held: held, announced: announced, renews: renews, gone: gone,
 	}, reachPast{down: d.down, behind: d.behind, olderBuild: d.olderBuild, syncRetried: d.syncRetried})
 	d.down, d.behind, d.olderBuild = v.past.down, v.past.behind, v.past.olderBuild
@@ -464,7 +477,15 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		d.syncRetried[id] = now
 	}
 	reach, resync := v.reach, v.resync
+	// What the check's own probes brought counts for a peer it found down.
+	var notAtRelay []string
+	for _, c := range checks {
+		if p, at := v.past.down[c.id], notAt[c.peer.ID]; p != nil && (!at.Before(p.since) || !at.Before(start)) {
+			notAtRelay = append(notAtRelay, c.name)
+		}
+	}
 	d.mu.Unlock()
+	slices.Sort(notAtRelay)
 	// A peer found down is installed on the disco key a newer hint names,
 	// which every member hears of from the hint itself.
 	for _, c := range checks {
@@ -517,7 +538,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		d.status.Tunnels = ipc.Tunnels{
 			TunnelsChecked: true, TunnelsLive: v.live, TunnelsDown: v.down,
 			Reach: reach, ReachChecked: now.Unix(), HomeRelay: home,
-			Seeking: v.seeking, Absent: v.absent, SyncFailing: syncFailing, SyncNewer: syncNewer,
+			Seeking: v.seeking, Absent: v.absent, NotAtRelay: notAtRelay, SyncFailing: syncFailing, SyncNewer: syncNewer,
 			SyncBroken: syncBroken, Outdated: v.outdated, OlderBuild: v.olderBuild,
 			Firewalled: firewalled, FirewallUnsure: firewallUnsure,
 			RelayedFor: relayedFor, RelayUnreached: unreached, RelayPort: relayPort,
@@ -538,6 +559,7 @@ type reachFacts struct {
 	schema    types.SchemaVersion
 	settle    time.Duration
 	relays    map[int]string
+	via       map[int]int // the region sent to for a peer's home, where not that
 	failed    map[types.Identity]gossip.Failure
 	held      map[types.Identity]gossip.Endpoint // the down's announcements
 	announced map[types.Identity]types.SchemaVersion
@@ -569,7 +591,7 @@ func classifyReach(checks []tunnelCheck, f reachFacts, past reachPast) reachVerd
 		if c.reach.Live {
 			v.live++
 			if !c.reach.Direct {
-				v.reach[i].Relay = f.relays[c.peer.HomeRelay]
+				v.reach[i].Relay = f.relays[cmp.Or(f.via[c.peer.HomeRelay], c.peer.HomeRelay)]
 			}
 			// Back up, or up with a sync that failed: sync now, so the log
 			// and the announcements catch up, and so that a failure the

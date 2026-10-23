@@ -151,3 +151,56 @@ func TestDevicesShowEachBuild(t *testing.T) {
 		t.Errorf("a column of schemas none said:\n%s", none.String())
 	}
 }
+
+// A member this device's relay says is not there is said so in one line: a
+// warning where it runs, as it keeps no connection there, an answer's reason
+// where it may be offline, and nothing where it is.
+func TestHealthNamesAMemberNotAtTheRelay(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name            string
+		seeking, absent []string
+		want, not       string
+		warnings        int
+	}{
+		{"runs", nil, nil, "warning: phone not at the relay on edge01, the one this device reaches it at\n",
+			"though it announces itself", 1},
+		{"may be offline", []string{"phone"}, nil,
+			"no answer from phone: not at the relay on edge01, the one this device reaches it at\n", "udp/", 0},
+		{"offline", nil, []string{"phone"}, "", "not at the relay", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 2, Relays: 2,
+				RelayCapable: 2}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, TunnelsDown: []string{"phone"},
+				Seeking: c.seeking, Absent: c.absent, NotAtRelay: []string{"phone"}, HomeRelay: "edge01"}}
+			var health syncBuffer
+			a := newApp(strings.NewReader(""), &health, &health)
+			a.health(st, "", false)
+			if !strings.Contains(health.String(), c.want) || strings.Contains(health.String(), c.not) {
+				t.Errorf("juist health says:\n%s\nwant %q, not %q", health.String(), c.want, c.not)
+			}
+			if n, _ := a.healthWarnings(st, "", false); n != c.warnings {
+				t.Errorf("%d warnings, want %d", n, c.warnings)
+			}
+		})
+	}
+}
+
+// An exit node whose forwarder does not answer says why in juist health, and
+// counts it in juist status, which says it serves.
+func TestHealthSaysAnExitNodeAnswersNoDNS(t *testing.T) {
+	t.Parallel()
+	st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1,
+		Exit: &ipc.Exit{Consent: true, Serving: true, DNSUnserved: "dnsfwd: listen udp 198.18.0.1:41646: bind: address already in use"}}}
+	var status, health syncBuffer
+	a := newApp(strings.NewReader(""), &status, &status)
+	a.printStatusIn(st, "", false)
+	a.healthHint(st, "", false)
+	mustContain(t, status.String(), "this device serves\n", "hint: 1 warning: juist health\n")
+	if strings.Contains(status.String(), "address already in use") {
+		t.Errorf("status says what juist health does:\n%s", status.String())
+	}
+	a = newApp(strings.NewReader(""), &health, &health)
+	a.health(st, "", false)
+	mustContain(t, health.String(), "warning: members' DNS is not answered here: dnsfwd: listen udp 198.18.0.1:41646: bind: address already in use\n")
+}

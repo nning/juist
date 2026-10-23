@@ -251,14 +251,18 @@ func (d *Daemon) askRelays(ctx context.Context, id types.Identity) bool {
 }
 
 // askable are the relays worth asking: not this device's own, the home
-// relay's first, a few.
+// relay's first, then those named on 443, where a walled device leaves its
+// announcement, and those alone where this device is walled; a few.
 func (d *Daemon) askable() []conn.Relay {
-	home := d.manager.HomeRelay()
+	home, walled := d.manager.HomeRelay(), d.manager.Walled()
 	d.mu.Lock()
 	own := relayRegion(d.status.Network, d.self)
-	relays := slices.DeleteFunc(slices.Clone(d.relays), func(r conn.Relay) bool { return r.Region == own })
+	relays := slices.DeleteFunc(slices.Clone(d.relays), func(r conn.Relay) bool {
+		return r.Region == own || walled && r.Name == "" && r.Region != home
+	})
 	d.mu.Unlock()
-	slices.SortStableFunc(relays, func(a, b conn.Relay) int { return cmp.Compare(boolInt(a.Region != home), boolInt(b.Region != home)) })
+	rank := func(r conn.Relay) int { return 2*boolInt(r.Region != home) + boolInt(r.Name == "") }
+	slices.SortStableFunc(relays, func(a, b conn.Relay) int { return cmp.Compare(rank(a), rank(b)) })
 	return relays[:min(len(relays), maxRendezvousRelays)]
 }
 

@@ -32,7 +32,7 @@ every push:
 | a milestone, or the review round closing it, is done; before a release | `make ci-vm`, recorded under "The last privileged run" | 18 min |
 | where a milestone's criteria ask for it | `make test-freebsd`, `make repro-freebsd`, `make test-acme`, `make fuzz-long`, the hand tests on Fedora | — |
 | a change to `mobile` or `android/` | `make android-check`, with a JDK and the Android SDK; the app by hand in an emulator or on a phone | 3 min |
-| a change to what a phone, or a peer of one, sends while idle: the pace, the checks, sync, the DHT | `make android-idle`, with the AVD `juist`, recorded under "The last privileged run" | 90 min |
+| a change to what a phone, or a peer of one, sends while idle: the pace, the checks, sync, the DHT | `make android-idle`, with the AVD `juist`, recorded under "The last privileged run" | 100 min |
 | a change to the website's CSS, scripts or layouts | `make -C website check test-browser`, with Chrome | 1 min |
 | documentation alone | nothing; the commit carries `[skip ci]` | — |
 
@@ -310,7 +310,7 @@ interop`).
 | a withdrawn or stale grant ends routing, on both sides | `daemon`: `TestARouterRoutesWhatItIsGranted`, `TestASubnetIsLeftOutWhereItMustBe/stale`; `cmd/juist`: `TestASubnetFromAddToRemove` | no |
 | the operator's and the owner's word are kept and forgotten with the network | `daemon`: `TestTheSubnetWordsAreKept`; `ipc`: `TestASubnetRequestSetsOneThing` | no |
 | no subnet takes another overlay, a VPN's or the host's own routes, nor what a network pushed | `trust/log`: `TestRejectsOverlayOverlappingRoutes`; `conn`: `TestTheHostsOwnRoutes`; `daemon`: `TestARouterWithoutIPv4RoutesNoIPv4`, `TestAPeerWithoutIPv4IsSentNoIPv4`, `TestOnlyARoutedDeviceSaysItHasNoIPv4`; `cmd/juist`: `TestForwardingStaysWhileEitherServes` | no |
-| a member's DNS is answered through its exit node, and not outside the tunnel; no one else is answered | `conn`: `TestNetnsExitNodeAnswersDNS`; `internal/dnsfwd`: `TestAQueryIsForwarded`, `TestOnlyMembersQueriesAreForwarded`, `TestAMemberIsAnsweredAtItsRate`, `TestTheHostsResolvers`; `daemon`: `TestAnExitNodeAnswersItsMembersDNS` | for the first |
+| a member's DNS is answered through its exit node, and not outside the tunnel; no one else is answered; a forwarder that failed to start is started again 30 s on, and `juist health` says why until it is | `conn`: `TestNetnsExitNodeAnswersDNS`; `internal/dnsfwd`: `TestAQueryIsForwarded`, `TestOnlyMembersQueriesAreForwarded`, `TestAMemberIsAnsweredAtItsRate`, `TestTheHostsResolvers`; `daemon`: `TestAnExitNodeAnswersItsMembersDNS`, `TestAnExitNodesForwarderIsStartedAgain`; `cmd/juist`: `TestHealthSaysAnExitNodeAnswersNoDNS` | for the first |
 | resolved is pointed at the exit node while one is chosen, refused too, and given back when off | `daemon`: `TestTheHostsDNSGoesThroughTheExitNode`; `internal/resolved`: `TestRouteAndRevert`, `TestADialledClientRoutes`; `packaging`: `TestThePolkitRuleAllowsJuistsDNSAlone` | no |
 | without resolved, or refused by it, nothing is configured and the reason is said | `daemon`: `TestDNSOutsideTheTunnelIsSaid`, `TestDNSAroundResolvedIsSaid`, `TestAFailedDNSRoutingWaits`; `internal/resolved`: `TestWhatResolvedCannotDoIsSaid`; `cmd/juist`: `TestDNSOutsideTheTunnel`, `TestTheStatusSaysWhereDNSGoes` | no |
 | DNS follows the choice whatever the network does, and a stopped daemon leaves it alone | `daemon`: `TestDNSFollowsTheChoiceWhateverTheNetwork`, `TestAClosedDaemonLeavesDNSAlone`; `internal/dnsfwd`: `TestAFailingResolverIsPassedOver`, `TestASourceHoldsFewConnections` | no |
@@ -496,12 +496,20 @@ The latest `make ci-vm` that closed a milestone, and the latest run of each
 gate it does not cover. Replace an entry when its gate runs again, so it is
 clear how old the evidence is.
 
-- **`make ci-vm`, 2026-10-21, refactoring of 2026-10-19 review 2**, run as
-  M21, packages 4 to 11 and Go 1.27.3: every stage passed in 26m51s, the
-  privileged tests in 4m45s, `test-race` in 11m33s, and the lab's two pairs in
-  16m14s. `make check` here passed at the same tree. The last run closing a
-  milestone, M20's, at 708c455, passed in 16m46s, and a failure planted in
-  each stage ended the run in it (roadmap, M20).
+- **`make ci-vm`, 2026-10-23, M22 done**, run as M22: every stage
+  passed in 28m24s, the privileged tests in 2m48s, `test-race` in 9m17s, and
+  the lab's two pairs in 26m35s, the hotel meeting a member at an unnamed
+  relay without `--https-only` after 25 s; in the nine runs since M22 it
+  took 21 s to 2m31s, mostly under 40 s, each step's order now logged, and
+  how lx sees hotel. The run before at the same commit failed `test-race` in
+  `TestANodeThatDoesNotJoinSendsTheDHTNothing`, a lookup not finding what
+  the node had just put, which 90 runs under load here did not show again.
+  One lab run, at M22, an exit node refused its client's DNS on 53 for
+  two minutes in the upgraded pair, its cause not known; a forwarder that
+  fails to start is now started again 30 s on and said by `juist health`,
+  and the dump of a Linux node carries its nftables rules for DNS and
+  juistd's sockets. The run closing M20, at 708c455, passed in 16m46s, and a
+  failure planted in each stage ended the run in it (roadmap, M20).
 - **`make test-freebsd`, 2026-10-21, after M21**: all 54
   packages passed, the command reference's test skipping there as Linux's
   help. `make cross` passed in the run above; `make android-check` last
@@ -535,18 +543,26 @@ clear how old the evidence is.
 - **The app by hand, 2026-10-05**, in an Android 16 emulator: the VPN turned
   off and on three times within seconds ends on, log sync leaves from the
   overlay address, and the kept epoch secrets are sealed.
-- **An idle phone beside ten members, 2026-10-20, M21**, `make
-  android-idle` at ea4d7cc (M21 review 3), one member restarting every 3
-  minutes: without a relay 15 065 datagrams and segments an hour, 4.9 MB
-  with the members' data planes; with `a` relaying 8 408, 1.4 MB, and 0.9
-  MB through the relay; the phone answered a member's ping in 2 and 6 ms.
-  The same lab at M21, before the change, sent 53 000 an hour with a
-  relay and 30.5 MB with the members, over the 12 minutes before the
-  emulator's Wi-Fi dropped. What is left comes in a burst after each
-  restart, mostly the other members' disco pings (roadmap, M21, open). The
-  budgets in `ci/idle`, 20 000 and 11 000, hold these. Beside two members,
-  as the lab ran before: 29 500 an hour without a relay before M21, at
-  M20, and 934 without and 1 887 with one at 1fa7ddb.
+- **An idle phone beside ten members, 2026-10-23, M22 review 3**, `make
+  android-idle`, one member restarting every 3 minutes. With `a` relaying:
+  9 017 datagrams and segments an hour at M22, 11 542 and 11 155 at
+  M22, and 9 819 and 11 568 at origin/main's M22, without M22, the
+  phone answering a member's ping in 6 to 23 ms; M21's 8 408 at ea4d7cc was
+  one run, and the budget of 11 000 drawn from it failed main as often as
+  M22, so it is 15 000 now, the headroom of the budget without a relay. The
+  spread is in the burst after each restart, mostly the other members'
+  disco pings (roadmap, M23, carried from M21), 300 to 1 000 a burst.
+  Without a relay 14 224 and 15 303 an hour at M22 and M22, the
+  first ping answered in 4 and 1 ms. There the phone announces no address
+  the members reach, and they reach it only on the path its last check
+  left, which magicsock forgets after 45 s: the one ping at the end was
+  answered or not as the phone's check every 5 minutes fell, unanswered at
+  M22 and at M22, answered at ea4d7cc, so the member now pings
+  until the phone's next check, 5 and a half minutes at most. The same lab
+  at M21, before M21, sent 53 000 an hour with a relay and 30.5 MB with
+  the members, over the 12 minutes before the emulator's Wi-Fi dropped.
+  Beside two members, as the lab ran before: 29 500 an hour without a relay
+  before M21, at M20, and 934 without and 1 887 with one at 1fa7ddb.
 - **A real phone's day at schema 21, 2026-10-21, M21 done**, the same
   Pixel 8 Pro with the app at M21, the network of 11 upgraded to schema
   21, from 11:32 to 16:03, nearly all of it on Wi-Fi (182 KB over LTE),

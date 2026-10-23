@@ -466,7 +466,7 @@ Read a line "juist admins export" printed from stdin, and keep the key it holds 
 
 ### `juist set [NETWORK]`
 
-Change this device's settings. \-\-operator names the local user who may manage it without sudo, as root; \-\-operator="" clears it. \-\-https-only sends nothing but TLS to relays on 443, through \-\-proxy where given; \-\-relay-name serves this device's relay on 443 under a public name. \-\-dns=false leaves this host's DNS alone: no network names, and no DNS through an exit node.
+Change this device's settings. \-\-operator names the local user who may manage it without sudo, as root; \-\-operator="" clears it. \-\-https-only sends nothing but TLS to relays on 443, through \-\-proxy where given; \-\-relay-name serves this device's relay on 443 under a public name, relay.DOMAIN on the network's ingress where not given. \-\-dns=false leaves this host's DNS alone: no network names, and no DNS through an exit node.
 
 - `-D, --dns`: take this host's DNS for the network's names and the exit node; =false leaves it alone (default true)
 - `-O, --https-only`: reach relays by TLS on 443 alone; =false undoes it

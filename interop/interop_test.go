@@ -629,7 +629,8 @@ echo "== $a"; pfctl -a $a -s nat; pfctl -a $a -s rules; done; pfctl -s info | he
 sysctl net.inet.ip.forwarding; cat /etc/resolv.conf; tail -30 /var/log/juistd.log`
 	}
 	return `juist status; juist health; ip rule; ip route show table all | grep -v -e '^local' -e '^broadcast' -e '^multicast' | head -40
-sysctl net.ipv4.ip_forward; iptables-save | head -60; resolvectl status juist0; journalctl -u juistd -n 30 --no-pager`
+sysctl net.ipv4.ip_forward; iptables-save | head -60; resolvectl status juist0; journalctl -u juistd -n 30 --no-pager
+nft list ruleset | grep -A12 -E '^table .* juist' | grep -E '^table|chain|dport 53|redirect' | head -30; ss -lnup | grep -E 'juistd|:53 '`
 }
 
 // hold keeps the VMs up after a failure while JUIST_INTEROP_HOLD names a

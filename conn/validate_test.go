@@ -389,7 +389,7 @@ func TestNewPeerStateIndexesACopy(t *testing.T) {
 		{ID: 1, NodeKey: selfKey.Public(), Addrs: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")}},
 		{ID: 2, NodeKey: k1, DiscoKey: key.NewDisco().Public(), Addrs: addrs},
 	}
-	st, nodes := newPeerState(selfKey.Public(), clonePeers(peers))
+	st, nodes := newPeerState(selfKey.Public(), clonePeers(peers), sameHome)
 	addrs[0] = netip.MustParsePrefix("198.18.0.9/32")
 	if len(st.peers) != 1 || len(nodes) != 1 || st.nodes[k1].Key() != k1 {
 		t.Fatalf("state holds %d peers and %d views, want only the other peer", len(st.peers), len(nodes))

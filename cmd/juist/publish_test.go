@@ -236,6 +236,59 @@ func TestATakenLabelIsSaidAtOnce(t *testing.T) {
 	}
 }
 
+// relay.DOMAIN is the name of the relay of an ingress that relays, and no
+// name to publish while there is one.
+func TestTheIngressRelaysNameIsNotPublished(t *testing.T) {
+	t.Parallel()
+	admin := newCLI(t)
+	admin.mustRun("create", "home", "--device", "laptop")
+	enrollDevice(t, admin, "nas")
+	enrollDevice(t, admin, "vps")
+	admin.mustRun("network", "domain", "pub.example.org")
+	admin.mustRun("grant", "vps", "ingress")
+	admin.mustRun("publish", "add", "nas", "relay")
+	admin.mustRun("publish", "remove", "nas", "relay")
+	admin.mustRun("grant", "vps", "relay")
+	if _, err := admin.run("publish", "add", "nas", "relay"); err == nil ||
+		!strings.Contains(err.Error(), "relay.pub.example.org is the name of vps's relay") {
+		t.Errorf("publishing the ingress's relay's name: %v", err)
+	}
+}
+
+// Granting the roles that make the first ingress that relays warns where
+// relay.DOMAIN, which its relay takes, is published already.
+func TestAnIngressRelayTakingAPublishedNameIsWarned(t *testing.T) {
+	t.Parallel()
+	admin := newCLI(t)
+	admin.mustRun("create", "home", "--device", "laptop")
+	enrollDevice(t, admin, "nas")
+	enrollDevice(t, admin, "vps")
+	admin.mustRun("network", "domain", "pub.example.org")
+	admin.mustRun("publish", "add", "nas", "relay")
+	if out := admin.mustRun("grant", "vps", "ingress"); strings.Contains(out, "warning:") {
+		t.Errorf("an ingress that does not relay warned: %s", out)
+	}
+	mustContain(t, admin.mustRun("grant", "vps", "relay"),
+		"warning: relay.pub.example.org is published on nas already, which vps's relay takes unless juist set --relay-name names another")
+}
+
+// A grant that waits for another admin's vote warns as one applied does.
+func TestAnIngressRelayGrantWaitingIsWarned(t *testing.T) {
+	t.Parallel()
+	alice := newCLI(t)
+	alice.mustRun("create", "home", "--device", "laptop", "--admin-name", "alice")
+	enrollDevice(t, alice, "nas")
+	enrollDevice(t, alice, "vps")
+	alice.mustRun("network", "domain", "pub.example.org")
+	alice.mustRun("publish", "add", "nas", "relay")
+	alice.mustRun("grant", "vps", "ingress")
+	_, bob := adminKeyOf(t, "bob")
+	alice.mustRun("admins", "add", "bob", bob)
+	alice.mustRun("admins", "quorum", "2", "--yes")
+	mustContain(t, alice.mustRun("grant", "vps", "relay"), "needs 1 more vote",
+		"warning: relay.pub.example.org is published on nas already")
+}
+
 // The domain itself is published spelled out, by one device, which the
 // approval says; its own address records are hinted at, and it is removed
 // as any name is.

@@ -120,6 +120,11 @@ type dnsState struct {
 	closed   bool
 	watched  atomic.Bool // the resolver's restarts are watched
 
+	// serveFailedAt is when answering members' DNS last failed to start,
+	// and serveWhy why; zero and "" while it answers or is not asked to.
+	serveFailedAt time.Time
+	serveWhy      string
+
 	names         io.Closer
 	namesAt       netip.AddrPort // where names answers, while it does
 	namesFailedAt time.Time
@@ -714,11 +719,12 @@ func (d *Daemon) hostRoutingReconciled(forwards bool) {
 }
 
 // serveDNS answers members' DNS on addrs, from overlay, while on, and stops
-// otherwise; it reports the port it answers on, zero for none.
-func (d *Daemon) serveDNS(on bool, addrs []netip.Addr, overlay []netip.Prefix) uint16 {
+// otherwise; it reports the port it answers on, zero for none, and why it
+// answers none where it was to.
+func (d *Daemon) serveDNS(on bool, addrs []netip.Addr, overlay []netip.Prefix) (uint16, string) {
 	d.dns.mu.Lock()
 	defer d.dns.mu.Unlock()
-	return d.serveDNSLocked(on, addrs, overlay)
+	return d.serveDNSLocked(on, addrs, overlay), d.dns.serveWhy
 }
 
 func (d *Daemon) serveDNSLocked(on bool, addrs []netip.Addr, overlay []netip.Prefix) uint16 {
@@ -731,6 +737,7 @@ func (d *Daemon) serveDNSLocked(on bool, addrs []netip.Addr, overlay []netip.Pre
 		d.dns.server, d.dns.addrs, d.dns.overlay = nil, nil, nil
 	}
 	if !on || d.startDNS == nil || len(addrs) == 0 {
+		d.dns.serveFailedAt, d.dns.serveWhy = time.Time{}, ""
 		return 0
 	}
 	overlay = slices.Clone(overlay)
@@ -739,10 +746,13 @@ func (d *Daemon) serveDNSLocked(on bool, addrs []netip.Addr, overlay []netip.Pre
 	}
 	s, err := d.startDNS(addrs, allowed)
 	if err != nil {
+		// Tried again at a reconcile dnsRetry on, not the next one by chance.
+		d.dns.serveFailedAt, d.dns.serveWhy = d.now(), err.Error()
 		d.logOnce("daemon: answering members' DNS: " + err.Error())
 		return 0
 	}
 	d.dns.server, d.dns.addrs, d.dns.overlay = s, slices.Clone(addrs), overlay
+	d.dns.serveFailedAt, d.dns.serveWhy = time.Time{}, ""
 	return DefaultDNSPort
 }
 
@@ -759,6 +769,9 @@ func (d *Daemon) dnsDue() time.Time {
 	var next soonest
 	if !d.dns.namesFailedAt.IsZero() {
 		next.add(d.dns.namesFailedAt.Add(dnsRetry))
+	}
+	if !d.dns.serveFailedAt.IsZero() {
+		next.add(d.dns.serveFailedAt.Add(dnsRetry))
 	}
 	_, keeps := d.hostDNS.(vpnDNS)
 	switch {

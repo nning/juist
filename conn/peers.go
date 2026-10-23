@@ -69,7 +69,7 @@ func (m *tsManager) selfNode(s Self) tailcfg.NodeView {
 		NodeKey:  s.NodeKey.Public(),
 		DiscoKey: s.DiscoKey.Public(),
 		Addrs:    s.Addrs,
-	}).AsStruct()
+	}, 0).AsStruct()
 	if m.httpsOnly {
 		self.CapMap = tailcfg.NodeCapMap{nodecap.OnlyTCP443: nil}
 	}
@@ -185,13 +185,13 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	if err := validatePeers(m.self, peers); err != nil {
 		return err
 	}
-	next, nodeList := newPeerState(m.self.NodeKey.Public(), peers)
 
 	m.apply.Lock()
 	defer m.apply.Unlock()
 	if m.closed {
 		return errors.New("conn: manager is closed")
 	}
+	next, nodeList := newPeerState(m.self.NodeKey.Public(), peers, m.sendHome)
 
 	prev := m.state.Load().peers
 	resets := peerDelta(prev, next.peers)
@@ -245,6 +245,9 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 		}
 	}
 	m.warmPaths(fresh)
+	if walledMoved(prev, next.peers) {
+		m.meetSoon()
+	}
 	return err
 }
 
@@ -274,7 +277,7 @@ func (m *tsManager) SetSelf(s Self) error {
 	m.selfNV = m.selfNode(s)
 	m.selfOnPath.Store(&selfLookup{addrs: s.Addrs, node: m.selfNV})
 	m.eng.SetSelfNode(m.selfNV)
-	_, nodeList := newPeerState(s.NodeKey.Public(), peers)
+	_, nodeList := newPeerState(s.NodeKey.Public(), peers, m.sendHome)
 	m.confiner.set(m.keptConfined(peers), s.Addrs)
 	m.magic.SetNetworkMap(m.selfNV, nodeList)
 	return m.reconfig()
@@ -428,8 +431,8 @@ func validateRoutes(self Self, peers []Peer) error {
 }
 
 // newPeerState indexes a validated peer set, leaving out the entry for
-// selfKey.
-func newPeerState(selfKey key.NodePublic, peers []Peer) (*peerState, []tailcfg.NodeView) {
+// selfKey; sendHome maps a peer's home to the region sent to.
+func newPeerState(selfKey key.NodePublic, peers []Peer, sendHome func(int) int) (*peerState, []tailcfg.NodeView) {
 	st := &peerState{
 		peers:   make(map[key.NodePublic]Peer, len(peers)),
 		byIP:    make(map[netip.Addr]key.NodePublic, len(peers)),
@@ -441,7 +444,7 @@ func newPeerState(selfKey key.NodePublic, peers []Peer) (*peerState, []tailcfg.N
 		if p.NodeKey == selfKey {
 			continue
 		}
-		nv := peerNode(p)
+		nv := peerNode(p, sendHome(p.HomeRelay))
 		st.peers[p.NodeKey] = p
 		st.nodes[p.NodeKey] = nv
 		st.allowed[p.NodeKey] = slices.Concat(p.Addrs, p.carried())
@@ -497,10 +500,27 @@ func checkNodeID(id uint64) error {
 	return nil
 }
 
+// walledMoved reports whether a peer became walled or stopped being so, or
+// a walled one moved home, from prev to next: what the meeting loop is
+// kicked for, not every reconcile, as each kick pings every walled peer.
+func walledMoved(prev, next map[key.NodePublic]Peer) bool {
+	homes := func(peers map[key.NodePublic]Peer) map[key.NodePublic]int {
+		out := map[key.NodePublic]int{}
+		for nk, p := range peers {
+			if p.Walled {
+				out[nk] = p.HomeRelay
+			}
+		}
+		return out
+	}
+	return !maps.Equal(homes(prev), homes(next))
+}
+
 // carried is everything outside the overlay p carries for this node.
 func (p Peer) carried() []netip.Prefix { return slices.Concat(p.Routes, p.Subnets) }
 
-func peerNode(p Peer) tailcfg.NodeView {
+// peerNode is p as the data plane takes it, sent to at home.
+func peerNode(p Peer, home int) tailcfg.NodeView {
 	return (&tailcfg.Node{
 		ID:         tailcfg.NodeID(p.ID),
 		StableID:   tailcfg.StableNodeID(fmt.Sprintf("n%d", p.ID)),
@@ -510,7 +530,7 @@ func peerNode(p Peer) tailcfg.NodeView {
 		Addresses:  p.Addrs,
 		AllowedIPs: slices.Concat(p.Addrs, p.carried()),
 		Endpoints:  p.Endpoints,
-		HomeDERP:   tailcfg.DERPRegionID(p.HomeRelay),
+		HomeDERP:   tailcfg.DERPRegionID(home),
 		Cap:        tailcfg.CurrentCapabilityVersion,
 	}).View()
 }

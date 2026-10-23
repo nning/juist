@@ -73,6 +73,9 @@ func (d *Daemon) Reconcile() error {
 		!slices.Equal(d.overlayAddrs(state, d.self, d.now().Unix()), d.heldAddrs()) && d.movedSaid.CompareAndSwap(false, true) {
 		d.sayMoved()
 	}
+	if d.moved != nil && d.relayNameMoved(state) && d.relayNameSaid.CompareAndSwap(false, true) {
+		d.sayMoved()
+	}
 
 	s := d.snapshotOf(state)
 	// This device itself may be the one that is out, in which case the whole
@@ -472,6 +475,7 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			Addrs:     d.overlayAddrs(s.state, n.Identity, s.now),
 			Endpoints: d.underlay(ep),
 			HomeRelay: homeRelay(ep, relays),
+			Walled:    walled(ep) && !d.rests,
 			Access:    ap.access(n, ep),
 		}
 		psk, stage := d.psk(s.state, n, ep)
@@ -677,6 +681,26 @@ func homeRelay(ep gossip.Endpoint, relays []conn.Relay) int {
 		return 0
 	}
 	return int(ep.HomeRelay)
+}
+
+// relayNameMoved reports whether the name the ingress role gives this
+// device's relay under state is not the one it was given when it started:
+// the service tells, and keeps a name set instead.
+func (d *Daemon) relayNameMoved(state *log.State) bool {
+	if d.relayName != "" && d.relayNameByRole == "" {
+		return false
+	}
+	name, id := IngressRelayName(state, d.now().Unix())
+	if id != d.self {
+		name = ""
+	}
+	return name != d.relayNameByRole
+}
+
+// walled reports whether ep says its node reaches named relays alone: a home
+// and no address, open or sealed. A node on HTTPS alone says so too.
+func walled(ep gossip.Endpoint) bool {
+	return ep.HomeRelay != 0 && len(ep.Addrs) == 0 && len(ep.Sealed) == 0
 }
 
 // isRelaying reports whether this device is currently serving a relay.

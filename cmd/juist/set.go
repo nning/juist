@@ -21,7 +21,8 @@ func cmdSet(a *app, args []string) error {
 Change this device's settings. --operator names the local user who may
 manage it without sudo, as root; --operator="" clears it. --https-only
 sends nothing but TLS to relays on 443, through --proxy where given;
---relay-name serves this device's relay on 443 under a public name.
+--relay-name serves this device's relay on 443 under a public name,
+relay.DOMAIN on the network's ingress where not given.
 --dns=false leaves this host's DNS alone: no network names, and no DNS
 through an exit node.`}
 	fs := newFlags(s.name)
@@ -164,9 +165,12 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 		}
 	}
 	if req.RelayName != nil {
-		if *req.RelayName == "" {
+		switch {
+		case *req.RelayName == "" && h.Name != "":
+			a.ok("relay name %s, the ingress's", h.Name)
+		case *req.RelayName == "":
 			a.ok("relay name cleared")
-		} else {
+		default:
 			a.ok("relay name %s", *req.RelayName)
 		}
 	}

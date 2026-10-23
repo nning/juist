@@ -58,7 +58,14 @@ type Peer struct {
 	// or zero for none. It is the peer's own choice — a packet sent to any
 	// other region is dropped, since member relays are not meshed — so it
 	// travels in the peer's announcement rather than being decided here.
+	// Where this node is walled and does not reach it, what goes to the peer
+	// goes to this node's own home instead.
 	HomeRelay int
+
+	// Walled says the peer reaches named relays alone, as [Manager.Walled]
+	// says of this node: unless saving battery, this node keeps its
+	// connection to the peer's home open, where the peer sends to it.
+	Walled bool
 
 	// Access is what the peer may open on this node and this node on it;
 	// nil leaves it to the filter, which takes anything from a member.
@@ -129,6 +136,16 @@ type Manager interface {
 	// ReachesRelay reports whether region is this node's home relay, or one
 	// its last measurement of the relays reached.
 	ReachesRelay(region int) bool
+
+	// Walled reports whether this node reaches member relays by TCP alone,
+	// and not all of them, as on a network passing 443 alone: peers homed
+	// where it does not reach are sent to at its own home, so it must
+	// announce that, by announcing no address.
+	Walled() bool
+
+	// NotAtHome reports the peers this node's home relay said were not
+	// connected to it when sent to, by [Peer.ID], with when it last said so.
+	NotAtHome() map[uint64]time.Time
 
 	// LocalEndpoints reports the underlay addresses the NAT-traversal layer
 	// believes this node can be reached at, including reflexive ones learned

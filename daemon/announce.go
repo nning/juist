@@ -29,8 +29,10 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 	// for it.
 	scanned, internal := d.underlayEndpoints()
 	addrs := mergeEndpoints(gossip.SortAddrs(scanned), d.reachableLearned(d.manager.LocalEndpoints(), internal))
-	if d.httpsOnly {
-		// Nothing reaches it but through a relay, which needs no address.
+	walls := d.httpsOnly || d.manager.Walled()
+	if walls {
+		// Nothing reaches it but through a relay, which needs no address;
+		// and none says to peers that it is walled.
 		addrs = nil
 	}
 	relayInfo := d.relayInfo()
@@ -47,6 +49,7 @@ func (d *Daemon) announce(renew time.Duration) (gossip.Endpoint, bool) {
 		// — staying discoverable is how the resolving records arrive.
 		return gossip.Endpoint{}, false
 	}
+	d.announcedWalls = walls
 	e := gossip.Endpoint{
 		Identity:   d.self,
 		Disco:      d.discoPublic,
@@ -225,19 +228,23 @@ func mergeEndpoints(scanned, learned []netip.AddrPort) []netip.AddrPort {
 // onConnectivityChange is called by the data plane when the relay region it
 // chose, or the set of addresses it believes it is reachable at, has moved.
 // Both are in this node's announcement, so it is rebuilt and pushed: to the
-// members awake where only a non-relay's addresses moved, as peers push it
-// on, and to all otherwise.
+// members awake where only a non-relay's addresses or walls moved, as peers
+// push it on, and to all otherwise.
 func (d *Daemon) onConnectivityChange() {
 	// Run starts by announcing what is then, and nothing was announced
 	// before.
 	if !d.wired.Load() {
 		return
 	}
-	home := d.manager.HomeRelay()
+	home, walls := d.manager.HomeRelay(), d.httpsOnly || d.manager.Walled()
 	d.mu.Lock()
 	d.announced = nil
 	homeSame := d.signed != nil && int(d.signed.HomeRelay) == home
-	homeKept := home != 0 && homeSame
+	// Walls coming or going are no address a peer learns by disco: members
+	// awake keep this device's home open for it, or stop, at once; one that
+	// rests keeps none either way.
+	wallsMoved := d.announcedWalls != walls
+	homeKept := home != 0 && homeSame && !wallsMoved
 	addrsAlone := homeSame && d.ownRelay.server == nil
 	d.mu.Unlock()
 	if d.beacon != nil {

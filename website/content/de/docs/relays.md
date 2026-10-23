@@ -100,7 +100,13 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
   nicht genutzt.
 - Ist das Relay zugleich der [Ingress]({{< relref "docs/publishing" >}})
   des Netzes, der 443 schon belegt, reicht der Ingress die Verbindungen für
-  den Namen an das Relay weiter.
+  den Namen an das Relay weiter. Ohne `--relay-name` bedient sein Relay
+  `relay.` plus die Domain des Netzes, die der Wildcard-Eintrag der Domain
+  schon auf den Ingress zeigen lässt. Solange ein Ingress Relay ist, lässt
+  sich `relay` nicht veröffentlichen. Sind mehrere Ingresse Relays,
+  übernimmt einer von ihnen den Namen, wie `juist status` dort sagt; gib den
+  anderen eigene Namen, und zeigt der Wildcard-Eintrag auf alle, lass
+  `relay.` plus die Domain nur auf diesen einen zeigen.
 - Ein CAA-Eintrag für den Namen muss Let's Encrypt zulassen.
 - Auf einem Gerät in mehreren Netzen bedient nur der juistd des ersten Netzes
   einen Namen auf 443.

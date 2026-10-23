@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"math"
 	"net"
 	"net/netip"
@@ -671,7 +672,7 @@ func TestAnUnchangedAnnouncementIsNotPutAgainSoon(t *testing.T) {
 	// The node has no DHT server: getting past the check would panic.
 	reset(epoch, time.Now().Add(-3*time.Minute))
 	ann.Seq = 9 // renewed, nothing changed
-	if err := n.publish(t.Context(), true); err != nil {
+	if err := n.publish(t.Context(), true, n.items); err != nil {
 		t.Fatalf("an unchanged announcement, renewed: %v", err)
 	}
 	for _, tc := range []struct {
@@ -694,7 +695,7 @@ func TestAnUnchangedAnnouncementIsNotPutAgainSoon(t *testing.T) {
 					t.Errorf("%s was not put", tc.name)
 				}
 			}()
-			_ = n.publish(t.Context(), tc.early)
+			_ = n.publish(t.Context(), tc.early, n.items)
 		}()
 	}
 }
@@ -804,5 +805,105 @@ func TestANodeThatDoesNotJoinSendsTheDHTNothing(t *testing.T) {
 	n.Round(ctx)
 	if _, err := peer.node.Lookup(ctx, ann.Identity); err != nil {
 		t.Fatalf("taking part, the node published nothing: %v", err)
+	}
+}
+
+// mapItems holds items in memory, as relays on 443 would.
+type mapItems struct {
+	mu    sync.Mutex
+	items map[[32]byte][]byte
+}
+
+func (m *mapItems) Put(_ context.Context, seed [32]byte, value []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.items == nil {
+		m.items = map[[32]byte][]byte{}
+	}
+	m.items[seed] = value
+	return nil
+}
+
+func (m *mapItems) Get(_ context.Context, seed [32]byte) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if v, ok := m.items[seed]; ok {
+		return v, nil
+	}
+	return nil, errors.New("not here")
+}
+
+func (m *mapItems) Close() error { return nil }
+
+func (m *mapItems) len() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.items)
+}
+
+// A round while walled puts and looks at the relays beside the DHT, and
+// one after it at the DHT again, though the announcement did not change.
+func TestAWalledRoundUsesTheRelaysBeside(t *testing.T) {
+	sw := newSwarm(t, 3)
+	kr := testKeyring(t, 4)
+	a := newMember(t, sw, kr, 1, nil)
+	b := newMember(t, sw, kr, 2, func() []types.Identity { return []types.Identity{a.id} })
+	var walled atomic.Bool
+	walled.Store(true)
+	beside := &mapItems{}
+	for _, m := range []*member{a, b} {
+		m.node.opts.Beside, m.node.opts.Walled = beside, walled.Load
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a.node.Round(ctx)
+	if beside.len() != 1 {
+		t.Fatalf("a walled round put %d items beside the DHT, want its announcement", beside.len())
+	}
+	if _, err := b.node.Lookup(ctx, a.id); err == nil {
+		t.Fatal("a walled round put the announcement in the DHT")
+	}
+	b.node.Round(ctx)
+	b.mu.Lock()
+	_, found := b.found[a.id]
+	b.mu.Unlock()
+	if !found {
+		t.Fatal("a walled round did not look beside the DHT")
+	}
+	walled.Store(false)
+	a.node.round(ctx, true)
+	if _, err := b.node.Lookup(ctx, a.id); err != nil {
+		t.Fatalf("back from behind walls, the announcement is not in the DHT: %v", err)
+	}
+}
+
+// A walled node that rests, while a member awake answers it, puts and looks
+// beside the DHT no more than in it; one left to seek by others looks there
+// no more than in the DHT either.
+func TestAWalledRoundKeepsJoinsAndSeeks(t *testing.T) {
+	sw := newSwarm(t, 3)
+	kr := testKeyring(t, 4)
+	a := newMember(t, sw, kr, 1, nil)
+	b := newMember(t, sw, kr, 2, func() []types.Identity { return []types.Identity{a.id} })
+	beside := &mapItems{}
+	for _, m := range []*member{a, b} {
+		m.node.opts.Beside, m.node.opts.Walled = beside, func() bool { return true }
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a.node.opts.Joins = func() bool { return false }
+	a.node.Round(ctx)
+	if beside.len() != 0 {
+		t.Fatalf("a walled round of a node left out put %d items beside the DHT", beside.len())
+	}
+	a.node.opts.Joins = nil
+	a.node.Round(ctx)
+	b.node.opts.Seeks = func() bool { return false }
+	b.node.Round(ctx)
+	b.mu.Lock()
+	_, found := b.found[a.id]
+	b.mu.Unlock()
+	if found {
+		t.Error("a walled round of a node left to others to seek looked beside the DHT")
 	}
 }

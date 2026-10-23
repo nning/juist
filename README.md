@@ -95,7 +95,7 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | reach a device by name | `ssh laptop.home.juist`, or `ssh laptop` | [names](https://docs.juist.nning.io/en/docs/names/) |
 | leave this device's DNS alone, names and exit node alike | `sudo juist set --dns=false` | [names](https://docs.juist.nning.io/en/docs/names/) |
 | let a device with a public address relay for the others | `juist grant vps relay` | [relays](https://docs.juist.nning.io/en/docs/relays/) |
-| reach the network from a hotel or office that only lets HTTPS out | `sudo juist set --relay-name relay.example.org` on a relay, `sudo juist set --https-only` here | [HTTPS only](https://docs.juist.nning.io/en/docs/https-only/) |
+| reach the network from a hotel or office that only lets HTTPS out | one relay on 443: the ingress's serves `relay.DOMAIN` by itself, another `sudo juist set --relay-name relay.example.org`; `sudo juist set --https-only` here where traffic is inspected | [HTTPS only](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |
 | let every device reach the LAN behind one | `juist subnet add nas 192.168.1.0/24`, then `juist subnet serve` on it | [subnets](https://docs.juist.nning.io/en/docs/subnets/) |
 | say which device may open what on which, and use which exit node or subnet | `juist policy edit`, or `juist policy set policy.conf` | [access policy](https://docs.juist.nning.io/en/docs/access/) |

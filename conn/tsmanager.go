@@ -233,6 +233,10 @@ type tsManager struct {
 	// evicting is the peer peerConfig disowns while it is taken out of the
 	// device, the engine's only way to drop a peer's sessions. Set under apply.
 	evicting atomic.Pointer[key.NodePublic]
+
+	// walled is [Manager.Walled], walls what makes it so.
+	walled atomic.Bool
+	walls  walls
 }
 
 var _ Manager = (*tsManager)(nil)
@@ -282,10 +286,9 @@ func New(opts Options) (_ Manager, err error) {
 	if len(m.stun) > 0 {
 		m.homed = make(chan struct{}, 1)
 	}
-	if len(m.stun) > 0 {
-		logf = m.watchEngine(logf)
-		m.logf = logf
-	}
+	m.walls.kick = make(chan struct{}, 1)
+	logf = m.watchEngine(logf)
+	m.logf = logf
 
 	// Shared with the OS router on the real-device path. Marked as in a map
 	// poll for good: magicsock keeps the first home relay it picks unless it
@@ -386,6 +389,7 @@ func New(opts Options) (_ Manager, err error) {
 	if err != nil {
 		return nil, err
 	}
+	go m.meetLoop()
 
 	// The wrapper blocks every read until Start is called, and everything it
 	// depends on — lookups, filter, initial config — is installed above.

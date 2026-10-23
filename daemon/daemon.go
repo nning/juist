@@ -148,6 +148,10 @@ type Options struct {
 	// it the role: the operator's veto over their own machine's bandwidth.
 	DisableRelay bool
 
+	// RelayNameByRole is the part of [Prefs.RelayName] the ingress role
+	// gave, "" where it is set or the role gives none.
+	RelayNameByRole string
+
 	// ACMEDirectory is the CA the relay's name, [Prefs.RelayName], has its
 	// certificate from, kept in RelayCertsPath, in memory where empty.
 	// ListenHTTPS binds 443 at an address, which needs
@@ -360,11 +364,19 @@ type Daemon struct {
 	cachePath   string
 	moved       chan<- struct{}
 	movedSaid   atomic.Bool // a move was said since the mesh last followed one
-	keysSaid    atomic.Bool // a rotation was said since the mesh last followed one
-	keyringPath string
+	// relayNameSaid is whether the relay's name was said to have moved.
+	relayNameSaid atomic.Bool
+	// announcedWalls is whether the last announcement said this device is
+	// walled, by announcing no address. Guarded by mu.
+	announcedWalls bool
+	keysSaid       atomic.Bool // a rotation was said since the mesh last followed one
+	keyringPath    string
 	// terminatorWanted is [Options.TerminatorWanted], ingressPorts
 	// [Options.IngressPorts].
 	terminatorWanted, ingressPorts string
+
+	// relayNameByRole is [Options.RelayNameByRole].
+	relayNameByRole string
 
 	session      *Session
 	discoPrivate [32]byte
@@ -724,6 +736,7 @@ func New(opts Options) (*Daemon, error) {
 	if opts.HTTPSOnly && opts.TunName == "" && !opts.Netstack {
 		return nil, errors.New("daemon: HTTPS alone needs a device or the netstack, since log sync runs in the tunnel")
 	}
+	d.relayNameByRole = opts.RelayNameByRole
 	if opts.RelayName != "" {
 		if d.relayCerts, err = newRelayCertificates(opts.RelayName, opts.ACMEDirectory, opts.RelayCertsPath, &d.waits); err != nil {
 			return nil, fmt.Errorf("daemon: the relay's certificates: %w", err)
@@ -876,6 +889,8 @@ func New(opts Options) (*Daemon, error) {
 			if opts.Rests {
 				o.Joins = d.joinsDHT
 			}
+			// So they stand in while the network passes 443 alone.
+			o.Beside, o.Walled = &relayItems{d: d, hc: d.httpsClient()}, d.manager.Walled
 		}
 		if d.dht, err = dht.New(o); err != nil {
 			return nil, err

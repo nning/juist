@@ -290,6 +290,10 @@ type Tunnels struct {
 	// announcement: most likely offline.
 	Absent []string `cbor:"51,keyasint,omitempty"`
 
+	// NotAtRelay names those counted in TunnelsDown that this device's home
+	// relay, HomeRelay's, said were not connected to it when sent to there.
+	NotAtRelay []string `cbor:"84,keyasint,omitempty"`
+
 	// SyncFailing names the members whose tunnel is live but whose last log
 	// sync connected to none of their addresses; SyncNewer those whose
 	// frames this build cannot read, as they run a newer one; SyncBroken
@@ -384,7 +388,7 @@ func (s *Status) ForReader() Status {
 		Tunnels: Tunnels{
 			TunnelsChecked: s.TunnelsChecked, TunnelsLive: s.TunnelsLive, TunnelsDown: s.TunnelsDown,
 			Reach: s.Reach, ReachChecked: s.ReachChecked, HomeRelay: s.HomeRelay,
-			Seeking: s.Seeking, Absent: s.Absent, SyncFailing: s.SyncFailing, SyncNewer: s.SyncNewer,
+			Seeking: s.Seeking, Absent: s.Absent, NotAtRelay: s.NotAtRelay, SyncFailing: s.SyncFailing, SyncNewer: s.SyncNewer,
 			SyncBroken: s.SyncBroken, Outdated: s.Outdated, OlderBuild: s.OlderBuild, Firewalled: s.Firewalled,
 			FirewallUnsure: s.FirewallUnsure, RelayedFor: s.RelayedFor, RelayUnreached: s.RelayUnreached,
 			RelayPort: s.RelayPort,
@@ -520,6 +524,9 @@ type Exit struct {
 	// would though not chosen, "" where they leave the way they came.
 	Isolated       bool   `cbor:"14,keyasint,omitempty"`
 	AnswersThrough string `cbor:"15,keyasint,omitempty"`
+
+	// DNSUnserved says why this device, serving, answers no member's DNS.
+	DNSUnserved string `cbor:"16,keyasint,omitempty"`
 }
 
 // Names is how the host resolves the network's names: under Domain, as

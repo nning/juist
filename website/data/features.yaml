@@ -55,8 +55,8 @@
   en: {title: Relays, text: "Where NAT prevents a direct connection, traffic goes through a member with a public address."}
   de: {title: Relays, text: "Wo das NAT keine direkte Verbindung zulässt, läuft der Verkehr über ein Mitglied mit öffentlicher Adresse."}
 - doc: docs/https-only
-  en: {title: HTTPS only, text: "From a network that lets only HTTPS out, through relays on port 443 under public names, and through a company's proxy."}
-  de: {title: Nur HTTPS, text: "Aus einem Netz, das nur HTTPS hinauslässt, über Relays auf Port 443 unter öffentlichen Namen und über den Proxy einer Firma."}
+  en: {title: HTTPS only, text: "From a network that lets only HTTPS out, to every member through one relay on port 443, the ingress's by itself, and through a company's proxy."}
+  de: {title: Nur HTTPS, text: "Aus einem Netz, das nur HTTPS hinauslässt, zu jedem Mitglied über ein Relay auf Port 443, das des Ingress von selbst, und über den Proxy einer Firma."}
 - doc: docs/network-changes
   en: {title: Renaming and renumbering, text: "Give the network or a device a new name, or the devices new IPv4 addresses, without setting anything up again."}
   de: {title: Umbenennen und umnummerieren, text: "Das Netz oder ein Gerät bekommt einen neuen Namen, die Geräte neue IPv4-Adressen, ohne dass etwas neu eingerichtet wird."}

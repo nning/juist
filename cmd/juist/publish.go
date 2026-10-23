@@ -222,7 +222,7 @@ the access policy names it for them.`}
 	if err := membersAllowed(state, p); err != nil {
 		return err
 	}
-	next, err := publishedWith(state, target, p)
+	next, err := publishedWith(state, target, p, a.now().Unix())
 	if err != nil {
 		return err
 	}
@@ -338,7 +338,7 @@ func (a *app) publishHere(pos []string, proxy bool, members *bool, tcp *tcpFlag)
 	if err := membersAllowed(state, p); err != nil {
 		return err
 	}
-	next, err := publishedWith(state, self, p)
+	next, err := publishedWith(state, self, p, a.now().Unix())
 	if err != nil {
 		return err
 	}
@@ -620,8 +620,8 @@ func publishableLabel(state *log.State, arg string) (string, error) {
 
 // publishedWith is what target publishes once it publishes p too, in
 // place of a name of p's label; p must be published on no other device.
-func publishedWith(state *log.State, target types.NodeRecord, p types.PublishedName) ([]types.PublishedName, error) {
-	if err := labelFree(state, p.Label, target.Identity); err != nil {
+func publishedWith(state *log.State, target types.NodeRecord, p types.PublishedName, now int64) ([]types.PublishedName, error) {
+	if err := labelFree(state, p.Label, target.Identity, now); err != nil {
 		return nil, err
 	}
 	next := slices.DeleteFunc(slices.Clone(target.Published), func(q types.PublishedName) bool { return q.Label == p.Label })
@@ -634,9 +634,30 @@ func publishedWith(state *log.State, target types.NodeRecord, p types.PublishedN
 }
 
 // labelFree says why label is no name to publish under the domain on a
-// device other than except: another publishes it, holds it as its own name,
-// or a name under it points at a member.
-func labelFree(state *log.State, label string, except types.Identity) error {
+// device other than except at unix time now: another publishes it, holds it
+// as its own name, or a name under it points at a member.
+func labelFree(state *log.State, label string, except types.Identity, now int64) error {
+	name := nameUnder(label, state.Domain())
+	if relay, ok := ingressRelay(state, now); label == "relay" && ok {
+		return fmt.Errorf("%s is the name of %s's relay", name, displayMember(relay))
+	}
+	return labelClaimed(state, label, except)
+}
+
+// ingressRelay is an ingress that relays and has not expired at unix time
+// now, whose relay takes relay.DOMAIN unless named otherwise, as
+// daemon.IngressRelayName says.
+func ingressRelay(state *log.State, now int64) (types.NodeRecord, bool) {
+	for _, n := range state.Nodes() {
+		if n.HasRole(types.RoleIngress) && n.HasRole(types.RoleRelayCapable) && !n.Expired(now) {
+			return n, true
+		}
+	}
+	return types.NodeRecord{}, false
+}
+
+// labelClaimed is [labelFree] but for the ingress's relay.
+func labelClaimed(state *log.State, label string, except types.Identity) error {
 	name := nameUnder(label, state.Domain())
 	for _, n := range state.Nodes() {
 		if n.Identity == except {

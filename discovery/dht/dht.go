@@ -122,6 +122,12 @@ type Options struct {
 	// which is then not joined at all.
 	Items Items
 
+	// Beside, where set, holds them instead in each round Walled reports
+	// true for, as for a device whose network passes TCP to 443 alone;
+	// Joins and Seeks hold there as in the DHT.
+	Beside Items
+	Walled func() bool
+
 	// NoSecurity disables the DHT's node-ID-from-IP rule, which a swarm on
 	// loopback cannot satisfy. Tests only.
 	NoSecurity bool
@@ -156,12 +162,13 @@ type Node struct {
 	kick      chan struct{}
 	joined    atomic.Bool // in the last round
 
-	// published is what was last put, under which epoch and when; a round
-	// brought forward does not put the same announcement again.
+	// published is what was last put, under which epoch, when and where; a
+	// round brought forward does not put the same announcement again.
 	publishMu      sync.Mutex
 	published      *gossip.Endpoint
 	publishedEpoch uint64
 	publishedWhen  time.Time
+	publishedAt    Items
 }
 
 // New starts a DHT node. Bootstrapping happens in the background: a network
@@ -259,12 +266,17 @@ func (n *Node) Round(ctx context.Context) { n.round(ctx, false) }
 // puts this node's announcement only if it says something new. A round on
 // the interval always puts, so the item stays alive and freshly signed.
 func (n *Node) round(ctx context.Context, early bool) {
+	items := n.items
 	joins := n.opts.Joins == nil || n.opts.Joins()
-	if n.joined.Swap(joins) != joins && joins {
+	if n.opts.Beside != nil && n.opts.Walled != nil && n.opts.Walled() {
+		// The routing table of a node walled off is stale once it is not.
+		items = n.opts.Beside
+		n.joined.Store(false)
+	} else if n.joined.Swap(joins) != joins && joins {
 		n.bootstrap()
 	}
 	if joins {
-		if err := n.publish(ctx, early); err != nil {
+		if err := n.publish(ctx, early, items); err != nil {
 			n.opts.Logf("dht: publishing this node's announcement: %v", err)
 		}
 	}
@@ -288,7 +300,7 @@ func (n *Node) round(ctx context.Context, early bool) {
 		if n.opts.Ask != nil && n.opts.Ask(ctx, id) || !seeks {
 			continue
 		}
-		e, err := n.Lookup(ctx, id)
+		e, err := n.lookup(ctx, id, items)
 		if err != nil {
 			n.opts.Logf("dht: looking up %v: %v", id.ShortString(), err)
 			continue
@@ -321,9 +333,9 @@ func (n *Node) window() uint64 {
 // the newest epoch it holds. It publishes under one epoch and looks under
 // every one, so that a member and a peer an epoch apart still meet: whichever
 // of them is behind is the one that finds the other.
-func (n *Node) Publish(ctx context.Context) error { return n.publish(ctx, false) }
+func (n *Node) Publish(ctx context.Context) error { return n.publish(ctx, false, n.items) }
 
-func (n *Node) publish(ctx context.Context, early bool) error {
+func (n *Node) publish(ctx context.Context, early bool, items Items) error {
 	e, ok := n.opts.Announce()
 	if !ok {
 		return nil
@@ -334,7 +346,7 @@ func (n *Node) publish(ctx context.Context, early bool) error {
 	}
 	n.publishMu.Lock()
 	same := early && n.published != nil && n.published.SameAs(&e) && epoch == n.publishedEpoch &&
-		time.Since(n.publishedWhen) < n.interval
+		time.Since(n.publishedWhen) < n.interval && n.publishedAt == items
 	n.publishMu.Unlock()
 	if same {
 		return nil
@@ -343,11 +355,11 @@ func (n *Node) publish(ctx context.Context, early bool) error {
 	if err != nil {
 		return err
 	}
-	if err := n.items.Put(ctx, secret.TopicSeed(epoch, n.window(), n.opts.Self), value); err != nil {
+	if err := items.Put(ctx, secret.TopicSeed(epoch, n.window(), n.opts.Self), value); err != nil {
 		return fmt.Errorf("dht: putting this node's announcement: %w", err)
 	}
 	n.publishMu.Lock()
-	n.published, n.publishedEpoch, n.publishedWhen = e.Clone(), epoch, time.Now()
+	n.published, n.publishedEpoch, n.publishedWhen, n.publishedAt = e.Clone(), epoch, time.Now(), items
 	n.publishMu.Unlock()
 	return nil
 }
@@ -357,6 +369,10 @@ func (n *Node) publish(ctx context.Context, early bool) error {
 // publisher republishes on its own interval, so for a few minutes after a
 // rollover the item that exists is the old one.
 func (n *Node) Lookup(ctx context.Context, id types.Identity) (gossip.Endpoint, error) {
+	return n.lookup(ctx, id, n.items)
+}
+
+func (n *Node) lookup(ctx context.Context, id types.Identity, items Items) (gossip.Endpoint, error) {
 	cur := n.window()
 	var lastErr error
 	// Newest epoch first: the common case is that both sides are current, and
@@ -369,12 +385,12 @@ func (n *Node) Lookup(ctx context.Context, id types.Identity) (gossip.Endpoint, 
 			continue
 		}
 		windows := []uint64{cur, cur - 1}
-		if n.store == nil {
+		if n.store == nil || items != n.items {
 			// A relay answers for a member under each window around its own.
 			windows = windows[:1]
 		}
 		for _, w := range windows {
-			raw, err := n.items.Get(ctx, secret.TopicSeed(epoch, w, id))
+			raw, err := items.Get(ctx, secret.TopicSeed(epoch, w, id))
 			if err != nil {
 				lastErr = err
 				continue
@@ -453,6 +469,9 @@ func (n *Node) Close() error {
 	n.closeOnce.Do(func() {
 		close(n.closed)
 		n.items.Close()
+		if n.opts.Beside != nil {
+			n.opts.Beside.Close()
+		}
 	})
 	return nil
 }

@@ -26,7 +26,7 @@ func namedRelay() Relay {
 // netcheck sends STUN to: resolved in DNS first, then at the relay's public
 // addresses, which needs none.
 func TestANamedRelayComesAfterItsPublicAddresses(t *testing.T) {
-	dm, _ := derpMap([]Relay{namedRelay()}, nil, false, Networks{})
+	dm, _ := derpMap([]Relay{namedRelay()}, nil, false, false, Networks{})
 	nodes := dm.Regions[7].Nodes
 	type want struct{ host, v4, v6 string }
 	pinned, named := "abcdefgh.relay.juist.invalid", "relay.example.org"
@@ -61,7 +61,7 @@ func TestANamedRelayComesAfterItsPublicAddresses(t *testing.T) {
 func TestOnlyTCP443KeepsTheNamesAlone(t *testing.T) {
 	plain := testRelay()
 	plain.Region = 8
-	dm, stunRegions := derpMap([]Relay{namedRelay(), plain}, []string{"stun.example:3478"}, true, Networks{})
+	dm, stunRegions := derpMap([]Relay{namedRelay(), plain}, []string{"stun.example:3478"}, true, false, Networks{})
 	if len(dm.Regions) != 1 || len(stunRegions) != 0 {
 		t.Fatalf("regions %v, STUN regions %v; want the named relay's alone", dm.RegionIDs(), stunRegions)
 	}
@@ -77,7 +77,7 @@ func TestOnlyTCP443KeepsTheNamesAlone(t *testing.T) {
 			t.Errorf("node %+v, want the name on 443 alone", n)
 		}
 	}
-	if dm, _ := derpMap([]Relay{plain}, []string{"stun.example:3478"}, true, Networks{}); dm != nil {
+	if dm, _ := derpMap([]Relay{plain}, []string{"stun.example:3478"}, true, false, Networks{}); dm != nil {
 		t.Errorf("a map without a named relay: %v", dm.RegionIDs())
 	}
 }

@@ -7,8 +7,25 @@ import (
 	"time"
 
 	"github.com/nning/juist/relay"
+	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
+
+// IngressRelayName is the name the relay of the network's ingress takes on
+// 443 where none is set, relay.DOMAIN, and that ingress: of those that relay
+// too and have not expired at unix time now, the one of the lowest identity.
+// "" where there is none.
+func IngressRelayName(state *log.State, now int64) (string, types.Identity) {
+	if state.Domain() == "" {
+		return "", types.Identity{}
+	}
+	for _, n := range state.NodesWithRole(types.RoleIngress) {
+		if n.HasRole(types.RoleRelayCapable) && !n.Expired(now) {
+			return "relay." + state.Domain(), n.Identity
+		}
+	}
+	return "", types.Identity{}
+}
 
 // A relay's public name is its member's word, and whoever holds a
 // certificate for the name serves it: another member could claim it. A name

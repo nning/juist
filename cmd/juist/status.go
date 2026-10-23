@@ -467,6 +467,9 @@ func (r *statusRender) exit() {
 		r.field("Exit node", "%s", name)
 	case ex.Serving:
 		r.field("Exit node", "this device serves")
+		if ex.DNSUnserved != "" {
+			r.note(lineWarn, "members' DNS is not answered here: "+ex.DNSUnserved)
+		}
 	case ex.Consent:
 		r.field("Exit node", "%s", paint("33", "this device does not serve: "+ex.NotServing))
 	}
@@ -777,15 +780,28 @@ func syncNotes(n *notes, s *ipc.Status) {
 	}
 }
 
-// reachNotes are who answers on no path, and who fell behind.
+// reachNotes are who answers on no path, and who fell behind. A peer the
+// relay says is not there is said so in its one line: a warning where it
+// runs, as it then keeps no connection there, and nothing where it is
+// offline.
 func reachNotes(n *notes, s *ipc.Status) {
 	httpsOnly := s.HTTPS != nil && s.HTTPS.Only
-	if len(s.Seeking) > 0 && httpsOnly {
-		n.note(lineInfo, "no answer from %s: offline, or at no relay on 443", strings.Join(s.Seeking, ", "))
-	} else if len(s.Seeking) > 0 {
-		n.note(lineInfo, "no answer from %s: offline, or udp/%d blocked", strings.Join(s.Seeking, ", "), s.ListenPort)
+	notAt := func(name string) bool { return slices.Contains(s.NotAtRelay, name) }
+	seeking := slices.DeleteFunc(slices.Clone(s.Seeking), notAt)
+	gone := slices.DeleteFunc(slices.Clone(s.Seeking), func(name string) bool { return !notAt(name) })
+	down := slices.DeleteFunc(s.Blocked(), notAt)
+	away := slices.DeleteFunc(s.Blocked(), func(name string) bool { return !notAt(name) })
+	itThem := func(names []string) string { return map[bool]string{true: "it", false: "them"}[len(names) == 1] }
+	if len(seeking) > 0 && httpsOnly {
+		n.note(lineInfo, "no answer from %s: offline, or at no relay on 443", strings.Join(seeking, ", "))
+	} else if len(seeking) > 0 {
+		n.note(lineInfo, "no answer from %s: offline, or udp/%d blocked", strings.Join(seeking, ", "), s.ListenPort)
 	}
-	if down := s.Blocked(); len(down) > 0 && httpsOnly {
+	if len(gone) > 0 {
+		n.note(lineInfo, "no answer from %s: not at the relay on %s, the one this device reaches %s at",
+			strings.Join(gone, ", "), s.HomeRelay, itThem(gone))
+	}
+	if len(down) > 0 && httpsOnly {
 		n.note(lineWarn, "no tunnel traffic from %s through the relays on 443", strings.Join(down, ", "))
 	} else if len(down) > 0 && s.Relays > 0 {
 		n.note(lineWarn, "no tunnel traffic from %s, though it announces itself", strings.Join(down, ", "))
@@ -794,6 +810,10 @@ func reachNotes(n *notes, s *ipc.Status) {
 			strings.Join(down, ", "), s.ListenPort)
 		n.note(lineHint, "on a device with a public address: %s", openPorts("juist", s.ListenPort, serviceDataPort,
 			"udp"))
+	}
+	if len(away) > 0 {
+		n.note(lineWarn, "%s not at the relay on %s, the one this device reaches %s at", strings.Join(away, ", "),
+			s.HomeRelay, itThem(away))
 	}
 	if s.Conflicted > 0 {
 		n.note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))

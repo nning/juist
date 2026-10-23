@@ -109,6 +109,9 @@ type Service struct {
 	ingressAsked atomic.Int64
 	ingressSaid  atomic.Pointer[ipc.IngressReport]
 
+	// relayNamed is the name the ingress role gave the running mesh's relay.
+	relayNamed string
+
 	// prefs are the device's settings, as kept in Home but for a service
 	// member's ServeTo.
 	prefs Prefs
@@ -773,11 +776,42 @@ func (s *Service) watch(ctx context.Context) {
 }
 
 // followMesh has the mesh follow what the log moved: this device's keys and
-// addresses, and the exit node chosen.
+// addresses, the exit node chosen, and its relay's name.
 func (s *Service) followMesh() {
 	s.adoptRotation()
 	s.followAddrs()
 	s.followExit()
+	s.followRelayName()
+}
+
+// relayNameLocked is the name this device's relay takes on 443 under state,
+// and the part of it the ingress role gave, not the setting.
+func (s *Service) relayNameLocked(state *log.State) (name, byRole string) {
+	if s.prefs.RelayName != "" {
+		return s.prefs.RelayName, ""
+	}
+	if name, id := IngressRelayName(state, s.now().Unix()); id == s.keys.Identity.Public() {
+		return name, name
+	}
+	return "", ""
+}
+
+// followRelayName restarts the mesh where the name the ingress role gives
+// this device's relay moved.
+func (s *Service) followRelayName() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mesh == nil {
+		return
+	}
+	state, err := s.mesh.TrustedState()
+	if err != nil {
+		return
+	}
+	if _, byRole := s.relayNameLocked(state); byRole != s.relayNamed {
+		s.logf("daemon: the ingress role names this device's relay %q; restarting", byRole)
+		s.restartMeshLocked(nil, "the relay's new name")
+	}
 }
 
 // watchWait is how long the service waits before it looks again.
@@ -901,6 +935,8 @@ func (s *Service) meshOptionsLocked(o *Options) error {
 	o.WaitingPath = statedir.WaitingPath(s.opts.Home)
 	o.Moved = s.moved
 	o.Prefs = s.prefs
+	o.RelayName, s.relayNamed = s.relayNameLocked(s.auth.State())
+	o.RelayNameByRole = s.relayNamed
 	o.RelayCertsPath = filepath.Join(s.opts.Home, statedir.RelayCertsDir)
 	if !s.opts.InProcess {
 		o.HandOffSocket = HandOffSocket(cmp.Or(s.opts.Socket, ipc.SocketPath(s.opts.Home)))

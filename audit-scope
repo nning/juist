@@ -32,7 +32,7 @@ in internal/waiting
 in mobile
 in cmd/juist addresses.go changes.go describe.go naming.go pin.go rotate.go waiting.go
 in cmd/juistd helpers_unix.go privsep_freebsd.go
-in conn confine.go
+in conn confine.go walls.go
 in daemon addrkeys.go compact.go control.go ipc.go pairkeys.go peercred.go peercred_bsd.go peercred_linux.go peercred_other.go policy.go reconcile.go
 in ipc ipc.go status.go
 in relay admit.go cert.go https.go

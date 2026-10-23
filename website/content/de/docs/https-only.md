@@ -16,6 +16,15 @@ Der Weg hinaus ist ein [Relay]({{< relref "docs/relays" >}}), das einen
 ein Gerät, das den üblichen Port des Relays nicht erreicht, weicht von selbst
 auf den Namen aus. Dafür musst du auf dem Gerät nichts einrichten.
 
+Ein Relay auf 443 genügt. Ein Gerät, das nur einige Relays erreicht, schickt
+alles über sein eigenes, und die anderen Geräte halten eine Verbindung zu
+diesem Relay, solange es dort ist. So erreicht es auch Geräte, die ein Relay
+ohne Namen nutzen. Handys, die Akku sparen, halten keine solche Verbindung:
+Das Gerät erreicht sie, sobald sie wieder etwas senden, wie beim Abgleich
+des Logs. Hat das Netz einen [Ingress]({{< relref "docs/publishing" >}}), der
+auch Relay ist, bedient dessen Relay von selbst `relay.` plus die Domain des
+Netzes auf 443.
+
 Ein Netz, das den Verkehr genauer prüft und alles blockiert oder meldet, was
 kein HTTPS ist, verlangt mehr. Mit `juist set --https-only` schickt ein Gerät
 nur noch TLS an die Namen der Relays auf Port 443, dazu DNS-Anfragen nach
@@ -26,7 +35,8 @@ Jedes Paket läuft dann über ein Relay.
 ## Einrichten
 
 {{< step on="dem Relay" >}}
-Gib einem Relay einen öffentlichen Namen auf Port 443, wie unter
+Sofern das Relay des Ingress nicht schon einen bedient, gib einem Relay einen
+öffentlichen Namen auf Port 443, wie unter
 [Relays]({{< relref "docs/relays" >}}) beschrieben:
 
 ```sh
@@ -111,6 +121,8 @@ Passwort.
 | `juist health`: `warning: no relay on 443/tcp` | dasselbe |
 | `juist health`: `no answer from …: offline, or at no relay on 443` | das Gerät ist offline oder erreicht kein Relay mit Namen |
 | `juist health`: `no tunnel traffic from … through the relays on 443` | prüfe die Namen der Relays im DNS, und ob Port 443 sie erreicht |
+| `juist health`: `warning: … not at the relay on …, the one this device reaches it at` | das Gerät läuft, hält dort aber keine Verbindung: es spart Akku und wird erreicht, sobald es sendet, oder es läuft mit einem älteren juist |
+| `juist health`: `no answer from …: not at the relay on …` | das Gerät ist offline oder hält dort keine Verbindung; sobald feststeht, dass es offline ist, verschwindet die Zeile |
 
 Meldet der Beitritt `the invite link names no relay on 443`, brauchst du einen
 neuen Einladungslink, erstellt, nachdem ein Relay einen Namen auf 443 bedient.

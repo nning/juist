@@ -239,6 +239,13 @@ func TestUpstreamLinesAndTheHomelessUpdate(t *testing.T) {
 		{"wgengine/magicsock/derp.go", `c.logf("` + addingDERPConn + `", regionID, why)`},
 		{"wgengine/magicsock/derp.go", `func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, `},
 		{"wgengine/magicsock/magicsock.go", `go c.updateEndpoints("set-homeless-disabled")`},
+		{"wgengine/magicsock/derp.go", `c.logf("` + derpNotHere + `",` + "\n\t\t\t\t\tregionID, key.NodePublic(m.Peer).ShortString())"},
+		{"wgengine/magicsock/derp.go", `func (c *Conn) runDerpReader(ctx context.Context, regionID tailcfg.DERPRegionID, `},
+		{"net/netcheck/netcheck.go", `c.logf("[v1] report: %v"`},
+		{"wgengine/magicsock/magicsock.go", `Logf:                logger.WithPrefix(c.logf, "netcheck: "),`},
+		// What meetEvery keeps a connection to a walled peer's home under.
+		{"wgengine/magicsock/derp.go", "derpInactiveCleanupTime = 60 * time.Second"},
+		{"wgengine/magicsock/derp.go", "derpCleanStaleInterval = 15 * time.Second"},
 	} {
 		if !strings.Contains(upstreamSource(t, c.rel), c.want) {
 			t.Errorf("%s no longer holds %s", c.rel, c.want)

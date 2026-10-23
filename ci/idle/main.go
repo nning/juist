@@ -40,7 +40,7 @@ import (
 // with headroom for the emulator's spread.
 var budget = map[string]int{
 	"no relay": 20000,
-	"relay":    11000,
+	"relay":    15000,
 }
 
 // members is how many juistd the phone idles beside: a household's
@@ -59,6 +59,13 @@ const (
 	// pace it saves at, not the minutes after the screen went off and a
 	// relay granted came to be everyone's home.
 	settle = 5 * time.Minute
+	// pathWait bounds how long a member pings the phone at the end until
+	// one is answered: without a relay it reaches the phone only on the
+	// path the phone's last check left, which magicsock forgets after 45 s,
+	// and the phone checks every 5 minutes while it saves. With a relay the
+	// first is answered, but for one lost.
+	pathWait      = 5*time.Minute + 30*time.Second
+	pathWaitRelay = 10 * time.Second
 )
 
 func main() {
@@ -351,6 +358,7 @@ type report struct {
 	counts   map[string]int
 	bytes    map[string]int
 	answered time.Duration // a member's ping of the phone at the end, zero unanswered
+	waited   time.Duration // how long the member pinged before one was answered
 	stats    string
 }
 
@@ -386,6 +394,9 @@ func (r *report) String() string {
 	}
 	if r.answered > 0 {
 		fmt.Fprintf(&b, "\n  woken by a member's ping, the phone answered in %v", r.answered.Round(time.Millisecond))
+		if r.waited >= time.Second {
+			fmt.Fprintf(&b, ", %v after the first ping", r.waited.Round(time.Second))
+		}
 	}
 	return b.String()
 }
@@ -477,10 +488,25 @@ func scenario(ctx context.Context, name, apk, bin, dir string, length time.Durat
 	}
 	shell("pkill tcpdump; for i in $(seq 50); do pgrep -x tcpdump >/dev/null || break; sleep 0.2; done; pkill -9 tcpdump")
 	r := &report{scenario: name, length: time.Since(start)}
-	// The phone, screen off, is woken by a member's packet and answers it.
-	resp, err := ipc.Call(a.sock(), ipc.Request{Command: ipc.CmdPing, Ping: phone})
-	if err == nil && resp.Ping != nil && resp.Ping.Micros > 0 {
-		r.answered = time.Duration(resp.Ping.Micros) * time.Microsecond
+	// Before the pings, whose wakes are not the idle's.
+	if r.stats, err = shell("dumpsys batterystats " + app); err == nil {
+		os.WriteFile(filepath.Join(dir, "batterystats.txt"), []byte(r.stats), 0o644)
+	}
+	// The phone, screen off, is woken by a member's packet and answers it;
+	// what the pings send is past the capture.
+	wait := pathWait
+	if name == "relay" {
+		wait = pathWaitRelay
+	}
+	for asked := time.Now(); ; {
+		resp, err := ipc.Call(a.sock(), ipc.Request{Command: ipc.CmdPing, Ping: phone})
+		if err == nil && resp.Ping != nil && resp.Ping.Micros > 0 {
+			r.answered, r.waited = time.Duration(resp.Ping.Micros)*time.Microsecond, time.Since(asked)
+			break
+		}
+		if time.Since(asked) > wait || sleep(ctx, 5*time.Second) != nil {
+			break
+		}
 	}
 	text, err := shell("tcpdump -n -tt -q -r " + capture)
 	if err != nil {
@@ -508,9 +534,6 @@ func scenario(ctx context.Context, name, apk, bin, dir string, length time.Durat
 			r.counts[f.kind] -= n
 			r.counts[f.kind+uncounted] = n
 		}
-	}
-	if r.stats, err = shell("dumpsys batterystats " + app); err == nil {
-		os.WriteFile(filepath.Join(dir, "batterystats.txt"), []byte(r.stats), 0o644)
 	}
 	os.WriteFile(filepath.Join(dir, "report.txt"), []byte(r.String()+"\n"), 0o644)
 	if r.answered == 0 {

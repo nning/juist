@@ -60,6 +60,7 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 			m.notifyChange()
 		}
 	}
+	m.rerouteLocked()
 	return nil
 }
 
@@ -73,6 +74,7 @@ func (m *tsManager) SetSaving(saving bool) {
 	defer m.silentMu.Unlock()
 	m.saving.Store(saving)
 	m.magic.SetSilentDisco(saving)
+	m.meetSoon()
 }
 
 func (m *tsManager) ReachesRelay(region int) bool {
@@ -81,6 +83,9 @@ func (m *tsManager) ReachesRelay(region int) bool {
 	}
 	if region == m.HomeRelay() {
 		return true
+	}
+	if out := m.walls.out.Load(); out != nil && (*out)[region] {
+		return false
 	}
 	if m.magic == nil {
 		return false
@@ -135,7 +140,8 @@ func (m *tsManager) followNetworks() {
 // watchEngine drops what magicsock says at each netcheck of a homeless node:
 // that its home moves to the nearest STUN server, which it then does not
 // take. It has a connection magicsock opens to a STUN server's region
-// dropped, at most once per [stunDropEvery].
+// dropped, at most once per [stunDropEvery], notes a peer the home relay
+// says is not there, and has each report looked at for walls.
 func (m *tsManager) watchEngine(logf logger.Logf) logger.Logf {
 	return func(format string, args ...any) {
 		if format == addingDERPConn {
@@ -147,6 +153,16 @@ func (m *tsManager) watchEngine(logf logger.Logf) logger.Logf {
 				m.unreadLine.Do(func() { logf("conn: magicsock's new relay connections are no longer read: %q %T", format, args) })
 			} else if (*m.stunRegions.Load())[r] && !m.stunDrop.Swap(true) {
 				go m.dropSTUNConnSoon()
+			}
+		}
+		if format == netcheckReport {
+			m.rerouteAfterReport()
+		}
+		if format == derpNotHere && len(args) == 2 {
+			r, rok := args[0].(tailcfg.DERPRegionID)
+			short, sok := args[1].(string)
+			if rok && sok {
+				m.noteNotHere(r, short)
 			}
 		}
 		if m.homeless.Load() && strings.HasPrefix(format, homeDERPChanging) {
@@ -207,7 +223,7 @@ func (m *tsManager) dropSTUNConn() {
 // regions are recorded first, so a report naming one is never mistaken for a
 // relay to be reached through.
 func (m *tsManager) installDERPMap(relays []Relay) {
-	dm, stunRegions := derpMap(relays, m.stun, m.httpsOnly, *m.local.Load())
+	dm, stunRegions := derpMap(relays, m.stun, m.httpsOnly, m.walls.nameFirst, *m.local.Load())
 	m.dm = dm
 	m.stunRegions.Store(&stunRegions)
 	m.stunOnly.Store(dm != nil && len(dm.Regions) == len(stunRegions))
@@ -384,5 +400,7 @@ func (m *tsManager) onNetInfo(ni *tailcfg.NetInfo) {
 	}
 	if m.homeRelay.Swap(int64(home)) != int64(home) {
 		m.notifyChange()
+		m.meetSoon()
 	}
+	m.reroute()
 }

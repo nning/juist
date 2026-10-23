@@ -129,6 +129,7 @@ entscheidest du selbst: mit `juist exit off`.
 | auf vps, `juist status`: `this device does not serve: IP forwarding is off on this host` | Führe `juist exit serve` noch einmal aus, es richtet das mit sudo ein. |
 | `juist health`: `warning: DNS goes to …, outside the tunnel: systemd-resolved refused juistd` | Installiere juist als Paket, dessen polkit-Regel juistd das erlaubt, und installiere polkit. |
 | `juist health`: `warning: strict reverse-path filtering on … drops the exit node's answers` | Führe die Zeile `sudo sysctl -w …` aus dem Hinweis aus. |
+| auf vps, `juist health`: `warning: members' DNS is not answered here: …` | Sieh dir den Grund an, etwa ein anderes Programm auf Port 41646; juistd versucht es alle 30 Sekunden erneut. |
 
 Hinter `internet refused:` nennt der Status den Grund, etwa
 `it cannot be reached`, `its operator has not agreed to serve` oder

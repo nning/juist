@@ -116,7 +116,13 @@ them by number.
    another relay's name: members ask the server at the name whose it is. A
    device on HTTPS alone asks the relays for the announcements it lacks, so
    they learn which members it looks for, and it puts every packet through
-   them.
+   them. A walled device, one that reaches some relays by TCP alone (M22),
+   does so without `--https-only` too, and meets every member at its own
+   home: that one relay sees the timing and volume of all its pairs and can
+   stop all of them, where they were spread over the peers' homes, and as
+   every member keeps a connection to it while the device is walled, it sees
+   which members run then. A relay is given no right over another, and sees
+   node keys and WireGuard ciphertext alone, as before.
 6. **Enrollment bottoms out at admin-device security.** One-guess PAKE invites and
    full-entropy QR tokens shrink but cannot eliminate the window in which a mis-issued
    invite or a compromised admin device admits an attacker.
@@ -296,7 +302,9 @@ them by number.
    holds as many sites as the 1024 in all (for IPv6 one /38). Behind NAT64
    every IPv4 client is one host. A rendezvous stream whose peer is never
    heard at the address it first heard follows the first other source after
-   three quiet keepalives, a stranger's on the path among them.
+   three quiet keepalives, a stranger's on the path among them. A walled
+   device's every pair runs through its home, so a member crowded out there
+   is cut off from it, though it reaches the member's own home.
 
 16. **Strangers can delay a member's log sync that waits on a round trip
    (refactoring 2026-10-19).** A node holds eight connections that have

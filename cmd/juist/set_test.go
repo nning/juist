@@ -32,6 +32,13 @@ func TestSetSaysWhatItSetOf443(t *testing.T) {
 	if strings.Contains(vps.mustRun("status"), "relay.example.org") {
 		t.Error("the status names a relay name cleared")
 	}
+	// The ingress's relay is named under the domain where no name is set.
+	laptop.mustRun("network", "domain", "pub.example.org")
+	laptop.mustRun("grant", "vps", "ingress")
+	eventually(t, "the status names the ingress's relay on 443", func() bool {
+		return strings.Contains(vps.mustRun("status"), "relay.pub.example.org, ")
+	})
+	mustContain(t, vps.mustRun("set", "--relay-name", ""), "relay name relay.pub.example.org, the ingress's")
 	mustContain(t, laptop.mustRun("set", "--proxy", "http://user:secret@proxy.example:3128"),
 		"proxy http://user:xxxxx@proxy.example:3128", "hint: the proxy is used with --https-only alone")
 	if out, err := laptop.run("set", "--proxy", "socks5://proxy.example:1080"); err == nil {

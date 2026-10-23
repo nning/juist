@@ -96,7 +96,13 @@ says:
   relay. A name that points elsewhere is not used.
 - If the relay is also the network's
   [ingress]({{< relref "docs/publishing" >}}), which already holds 443, the
-  ingress passes the name's connections on to the relay.
+  ingress passes the name's connections on to the relay. Without
+  `--relay-name`, its relay serves `relay.` plus the network's domain, which
+  the domain's wildcard record points at the ingress already. While an
+  ingress relays, `relay` is no name to publish. Where several ingresses
+  relay, one of them takes the name, as `juist status` on it says; give the
+  others names of their own, and where the wildcard points at all of them,
+  point `relay.` plus the domain at that one alone.
 - A CAA record for the name must allow Let's Encrypt.
 - On a device in several networks, only the default network's juistd serves a
   name on 443.
