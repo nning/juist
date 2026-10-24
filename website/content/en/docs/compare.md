@@ -198,8 +198,8 @@ belongs.
 ## Where juist is weaker {#weaker}
 
 - juist has not had a security audit.
-- It runs on Linux and FreeBSD, and on Android as a member without names,
-  roles or subnets that cannot be an exit node; there is nothing for
+- It runs on Linux and FreeBSD, and on Android as a member without public
+  names, roles or subnets that cannot be an exit node; there is nothing for
   Windows, macOS or iOS.
 - It knows devices, not users: its access rules name devices, and there is
   no sign-in through an identity provider.

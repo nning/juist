@@ -111,7 +111,11 @@ fun MemberScreen(
 
                 SectionTitle(stringResource(R.string.section_addresses))
                 Panel {
-                    if (member.v4.isNotEmpty()) CopyRow(stringResource(R.string.label_ipv4), member.v4, copied)
+                    if (member.dns.isNotEmpty()) CopyRow(stringResource(R.string.label_dns), member.dns, copied)
+                    if (member.v4.isNotEmpty()) {
+                        if (member.dns.isNotEmpty()) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        CopyRow(stringResource(R.string.label_ipv4), member.v4, copied)
+                    }
                     if (member.retiring.isNotEmpty()) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         CopyRow(stringResource(R.string.label_ipv4_retiring), member.retiring, copied)

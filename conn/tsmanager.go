@@ -100,6 +100,13 @@ type Options struct {
 	// Proxy, with HTTPSOnly, is the HTTP proxy a connection to a relay's
 	// name goes through, by CONNECT, or nil for none.
 	Proxy func(host string) (*url.URL, error)
+
+	// Local, where set, is a device whose other end is a stack in this
+	// process holding LocalAddrs: what this node's device sends to them is
+	// taken there before the engine and its filter, and what the stack sends
+	// is delivered to the device. Close closes it, as a New that fails does.
+	Local      tun.Device
+	LocalAddrs []netip.Addr
 }
 
 // tsManager implements [Manager] on top of Tailscale's wgengine and magicsock.
@@ -234,6 +241,9 @@ type tsManager struct {
 	// device, the engine's only way to drop a peer's sessions. Set under apply.
 	evicting atomic.Pointer[key.NodePublic]
 
+	// stack is [Options.Local].
+	stack tun.Device
+
 	// walled is [Manager.Walled], walls what makes it so.
 	walled atomic.Bool
 	walls  walls
@@ -244,6 +254,13 @@ var _ Manager = (*tsManager)(nil)
 // New starts a Tailscale-backed connectivity manager. No DERP map is
 // installed, so it is direct-only: no connection to any relay or STUN server.
 func New(opts Options) (_ Manager, err error) {
+	if opts.Local != nil {
+		defer func() {
+			if err != nil {
+				opts.Local.Close()
+			}
+		}()
+	}
 	if err := checkOptions(&opts); err != nil {
 		return nil, err
 	}
@@ -337,6 +354,10 @@ func New(opts Options) (_ Manager, err error) {
 	}
 	m.confiner = confine(tundev)
 	m.tun = tundev
+	if opts.Local != nil {
+		m.stack = opts.Local
+		takeLocal(tundev, opts.Local, slices.Clone(opts.LocalAddrs), &m.warm)
+	}
 	// magicsock treats ListenPort as a preference: a port it cannot bind
 	// silently becomes an OS-assigned one, and nothing downstream repairs
 	// that, since our endpoints come from an interface scan. Only the initial
@@ -656,6 +677,9 @@ func (m *tsManager) Close() error {
 	// Stop and drain the warm-up goroutines before the engine goes: they
 	// call into magicsock, which does not survive its engine.
 	close(m.done)
+	if m.stack != nil {
+		m.stack.Close()
+	}
 	m.warm.Wait()
 	m.eng.Close()
 	// The engine closes the router it was given but not the monitor, since it

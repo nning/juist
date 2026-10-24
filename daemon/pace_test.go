@@ -260,6 +260,42 @@ func TestAChangedKeyIsProbedNotPinged(t *testing.T) {
 	}
 }
 
+// A peer checked quietly whose new announcement moves its addresses alone is
+// not probed for it, which would start a heartbeat on both ends; one with a
+// new disco key, a restart, is.
+func TestAMoveAloneHasNoQuietPeerProbed(t *testing.T) {
+	f, c, _ := quietFixture(t, true, nil)
+	f.checkEvery(t, c, time.Minute, 1, true)
+	dev := f.nw.devices[1]
+	announce := func(port uint16, disco gossip.DiscoKey) {
+		t.Helper()
+		e := f.signedBy(t, dev, c.get())
+		e.Rests, e.Addrs = true, []netip.AddrPort{netip.AddrPortFrom(netip.MustParseAddr("198.51.100.9"), port)}
+		if !disco.IsZero() {
+			e.Disco = disco
+		}
+		if err := e.SignPQ(dev.identity); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Learn(e); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	announce(41641, gossip.DiscoKey{})
+	f.checkEvery(t, c, time.Minute, 1, true)
+	if probes := f.mgr.probes(); probes != 1 {
+		t.Fatalf("after its addresses moved, the peer had %d probes, want the first alone", probes)
+	}
+	announce(41642, gossip.DiscoKey{9})
+	f.checkEvery(t, c, time.Minute, 1, true)
+	if probes := f.mgr.probes(); probes != 2 {
+		t.Fatalf("after it restarted, the peer had %d probes, want 2", probes)
+	}
+}
+
 // The periodic sync leaves a member that rests to sync by itself, and picks
 // one that does not.
 func TestTheBackstopSyncLeavesARestingMemberAlone(t *testing.T) {

@@ -293,14 +293,8 @@ func TestCacheKeepsTheNewestAnnouncement(t *testing.T) {
 	if err := renewed.Sign(priv); err != nil {
 		t.Fatal(err)
 	}
-	if c.Renews(e.Identity) {
-		t.Error("a node is taken to renew before it has")
-	}
 	if c.Add(renewed) {
 		t.Error("an announcement renewing its signature only was reported as news")
-	}
-	if !c.Renews(e.Identity) {
-		t.Error("a node seen renewing is not taken to renew")
 	}
 	if got, _ := c.Get(e.Identity); got.Seq != renewed.Seq {
 		t.Error("the renewed announcement was not kept")

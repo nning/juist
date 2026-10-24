@@ -250,6 +250,11 @@ type Options struct {
 	ServeNames NamesServer
 	NamesAddr  netip.AddrPort
 	ListenDNS  func(netip.AddrPort) (net.PacketConn, net.Listener, error)
+	// Resolver, where set, has juistd's resolver answer the host at the
+	// network's [types.ResolverAddr] on 53, on a stack of its own that takes
+	// the device's packets to it before the engine, in place of ServeNames
+	// and NamesAddr.
+	Resolver *Resolver
 	// ResolvConf is what the host's programs read their resolvers from,
 	// /etc/resolv.conf where empty; it must name resolved's stub for
 	// resolved's routing to be theirs.
@@ -385,6 +390,7 @@ type Daemon struct {
 	overlayOnly  bool          // log sync through the tunnel alone
 	handedOn     types.Hash    // the disable record handOnDisable gave members
 	stack        *netstack.Net // the overlay's network stack, nil on a device
+	resolver     *netstack.Net // the stack juistd's resolver answers in, nil for none
 	tunName      string
 	gossipLn     net.Listener
 
@@ -563,6 +569,7 @@ type Daemon struct {
 	reachable   atomic.Pointer[map[types.Identity]bool]
 	zone        atomic.Pointer[names.Zone]
 	namesExit   atomic.Pointer[[]netip.AddrPort] // the exit node's resolvers, which names asks
+	exitRefused atomic.Bool                      // the exit node chosen is refused, its internet blocked
 	namesRouted atomic.Bool                      // whether the host's resolver asks names
 
 	dnsOff      atomic.Bool // [Options.DNSOff]
@@ -750,6 +757,9 @@ func New(opts Options) (*Daemon, error) {
 	if opts.Netstack {
 		connect = d.onNetstack(connect)
 	}
+	if opts.Resolver != nil {
+		connect = d.withResolver(connect)
+	}
 	connOpts := conn.Options{
 		Self: conn.Self{
 			ID:       d.peerID(wgPub),
@@ -812,6 +822,9 @@ func New(opts Options) (*Daemon, error) {
 	}
 	d.dnsOff.Store(opts.DNSOff)
 	d.startNames, d.namesFixed = opts.ServeNames, opts.NamesAddr
+	if opts.Resolver != nil {
+		d.startNames, d.namesFixed = d.resolverNames(opts.Resolver.Dial), netip.AddrPortFrom(types.ResolverAddr(d.ula), 53)
+	}
 	d.held.Store(&selfAddrs)
 	ln, err := d.listenGossip(opts, selfAddrs)
 	if err != nil {

@@ -34,3 +34,19 @@ func TestValidateV4Prefix(t *testing.T) {
 		}
 	}
 }
+
+// The resolver's address is the network's prefix and ::53, which a member's
+// derived address does not take.
+func TestTheResolverAddressIsTheNetworksAndNoMembers(t *testing.T) {
+	g := Hash{1, 2, 3}
+	ula := ULA(g)
+	a := ResolverAddr(ula)
+	if !ula.Contains(a) || a.As16()[15] != 0x53 || a.String() != ula.Addr().String()+"53" {
+		t.Errorf("the resolver is at %v in %v", a, ula)
+	}
+	for i := range 1000 {
+		if Addr6(g, Identity{byte(i), byte(i >> 8)}) == a {
+			t.Fatalf("identity %d takes the resolver's address", i)
+		}
+	}
+}

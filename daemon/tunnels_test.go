@@ -268,9 +268,10 @@ func (f *reconcileFixture) renewing(t *testing.T, dev *device, at time.Time) {
 	}
 }
 
-// A device never seen renewing its announcement may be on a build that does
-// not: gone quiet, it is not called offline for want of a renewal.
-func TestADeviceThatNeverRenewsIsNotCalledOffline(t *testing.T) {
+// A device quiet since before this one started, so never seen renewing, is
+// called offline once a renewal had time to come: every build it can run
+// renews.
+func TestADeviceQuietSinceBeforeAStartReadsAsOffline(t *testing.T) {
 	t0 := time.Unix(1_700_000_000, 0)
 	c := &clock{now: t0}
 	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
@@ -284,8 +285,8 @@ func TestADeviceThatNeverRenewsIsNotCalledOffline(t *testing.T) {
 	f.d.refreshReach(t.Context())
 	c.set(t0.Add(f.d.settles() + time.Hour))
 	f.d.refreshReach(t.Context())
-	if st := f.d.Status(); len(st.Absent) != 0 || !slices.Equal(st.Seeking, []string{peer.record.Name}) {
-		t.Fatalf("a device never seen renewing reads as absent %v, seeking %v", st.Absent, st.Seeking)
+	if st := f.d.Status(); !slices.Equal(st.Absent, []string{peer.record.Name}) || len(st.Seeking) != 0 {
+		t.Fatalf("a device quiet since before the start reads as absent %v, seeking %v", st.Absent, st.Seeking)
 	}
 }
 

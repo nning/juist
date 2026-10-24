@@ -12,7 +12,7 @@
 - doc: docs/android
   en: {title: Android, text: "A phone joins with the invite's QR code or code, reaches the members at their addresses, and shows how each one is reached."}
   de: {title: Android, text: "Ein Telefon tritt mit dem QR-Code oder dem Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie es jedes erreicht."}
-  note: {en: "On Android 12 or newer, as a member without names, roles or subnets.", de: "Unter Android 12 oder neuer, als Mitglied ohne Namen, Rollen und Subnetze."}
+  note: {en: "On Android 12 or newer, as a member without public names, roles or subnets.", de: "Unter Android 12 oder neuer, als Mitglied ohne öffentliche Namen, Rollen und Subnetze."}
 - doc: docs/admins
   en: {title: Admins and quorum, text: "Every change needs k of n admins. If it needs more approvals, it is passed on to the other admins' devices."}
   de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}
@@ -31,7 +31,7 @@
 - doc: docs/names
   en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
   de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}
-  note: {en: "On Linux and FreeBSD, not in the Android app.", de: "Unter Linux und FreeBSD, nicht in der Android-App."}
+  note: {en: "Public names on Linux and FreeBSD, not in the Android app.", de: "Öffentliche Namen unter Linux und FreeBSD, nicht in der Android-App."}
 - doc: docs/publishing
   en: {title: Publishing services, text: "A member's service, reachable from the internet by name through an ingress."}
   de: {title: Dienste veröffentlichen, text: "Dienste auf Mitgliedern, über einen Ingress unter einem Namen aus dem Internet erreichbar."}
@@ -41,7 +41,7 @@
 - doc: docs/publishing
   en: {title: Members-only names, text: "A published name with a certificate from the CA that the internet cannot reach. Only the members the access policy allows can open it."}
   de: {title: Namen nur für Mitglieder, text: "Ein veröffentlichter Name mit einem Zertifikat der CA, den das Internet nicht erreicht. Öffnen können ihn nur die Mitglieder, denen die Zugriffsregeln es erlauben."}
-  note: {en: "Reached from Linux and FreeBSD, not from the Android app.", de: "Erreichbar von Linux und FreeBSD, nicht aus der Android-App."}
+  note: {en: "Reached from Linux, FreeBSD and the Android app.", de: "Erreichbar von Linux, FreeBSD und der Android-App."}
 - doc: docs/publishing
   en: {title: TCP services, text: "A game server or any other TCP service on its own port on every ingress, passed on without being read."}
   de: {title: TCP-Dienste, text: "Ein Spieleserver oder jeder andere TCP-Dienst auf einem eigenen Port jedes Ingress, weitergereicht, ohne mitzulesen."}

@@ -268,12 +268,58 @@ func (r plumbedDNS) Route(rt DNSRouting) error {
 func (r plumbedDNS) Revert() error { return r.p.SetDNS(r.dev, nil, nil) }
 
 // VPNDNS is the host's DNS through a VPN device's own servers, as Android's
-// VpnService sets them, which every program's lookups then go to.
-func VPNDNS(p conn.Plumber, dev string) HostDNS { return vpnDNS{plumbedDNS{p: p, dev: dev}} }
+// VpnService sets them, which every program's lookups then go to: juistd's
+// resolver alone, which asks those of the network beneath the VPN, as
+// underlay says them, of what it does not answer. While Private DNS names a
+// host, the VPN takes no lookups, which would all fail.
+func VPNDNS(p conn.Plumber, dev string, underlay func() Underlay) HostDNS {
+	return vpnDNS{plumbedDNS: plumbedDNS{p: p, dev: dev}, underlay: underlay}
+}
 
-type vpnDNS struct{ plumbedDNS }
+// An Underlay is how the network beneath a VPN resolves: its resolvers,
+// whether they answer DNS over TLS, as Android's automatic Private DNS found,
+// and PrivateDNS the host Android's Private DNS sends every lookup to past
+// the VPN's servers, "" where none. Its search domains are not the VPN's,
+// which would keep a network's after the phone left it: a name without a dot
+// the network's domain lacks is asked as it is.
+type Underlay struct {
+	Servers    []netip.Addr
+	OverTLS    bool
+	PrivateDNS string
+}
+
+type vpnDNS struct {
+	plumbedDNS
+	underlay func() Underlay
+}
+
+func (vpnDNS) routesDomains() bool { return true }
+
+func (vpnDNS) namesPort() uint16 { return 53 }
+
+// hostResolv is the underlay's resolvers, by DNS over TLS first where they
+// answer it, and in plain text where that fails, as Android asks them.
+func (v vpnDNS) hostResolv() resolvConf {
+	u := v.underlay()
+	var c resolvConf
+	if u.OverTLS {
+		for _, a := range u.Servers {
+			c.servers = append(c.servers, netip.AddrPortFrom(a, dnsfwd.TLSPort))
+		}
+	}
+	for _, a := range u.Servers {
+		c.servers = append(c.servers, netip.AddrPortFrom(a, 53))
+	}
+	return c
+}
 
 func (vpnDNS) through(string, []netip.AddrPort) (bool, string) { return true, "" }
+
+func (v vpnDNS) bypassedBy() string { return v.underlay().PrivateDNS }
+
+// PrivateDNSNot is why a phone resolves none of the network's names while
+// Private DNS sends every lookup to host.
+func PrivateDNSNot(host string) string { return "Private DNS sends every lookup to " + host }
 
 // through reports whether the host's programs ask servers, whose resolver
 // resolvconf wrote.
@@ -372,10 +418,18 @@ func withoutTailscaled(ups []netip.AddrPort) []netip.AddrPort {
 	return slices.DeleteFunc(slices.Clone(ups), func(a netip.AddrPort) bool { return slices.Contains(tailscaledResolvers, a.Addr()) })
 }
 
+// errExitRefused fails a lookup the exit node chosen would answer while it
+// is refused, which would go unanswered.
+var errExitRefused = &dnsfwd.Refusal{RCode: dnsfwd.RCodeServFail, Err: errors.New("the exit node chosen is refused")}
+
 // namesUpstreamFor is who juistd's resolver asks q of, what it does not
-// answer itself: the exit node in use, else the host's resolvers.
+// answer itself: the exit node in use, none while it is refused, else the
+// host's resolvers.
 func (d *Daemon) namesUpstreamFor(q []byte) ([]netip.AddrPort, error) {
 	if up := d.namesExit.Load(); up != nil && len(*up) > 0 {
+		if d.exitRefused.Load() {
+			return nil, errExitRefused
+		}
 		return *up, nil
 	}
 	return d.hostUpstreamFor(q, false)
@@ -532,6 +586,19 @@ type throughReporter interface {
 // place of [NamesPort].
 type namesPorter interface{ namesPort() uint16 }
 
+// A bypassedResolver names the host every lookup goes to past whatever the
+// host's DNS is routed to, "" where none, as Android's Private DNS.
+type bypassedResolver interface{ bypassedBy() string }
+
+// dnsBypassedBy is the host every lookup goes to past the host's DNS
+// routing, "" where none.
+func (d *Daemon) dnsBypassedBy() string {
+	if b, ok := d.hostDNS.(bypassedResolver); ok {
+		return b.bypassedBy()
+	}
+	return ""
+}
+
 // What each host resolver can, held at compile time: the daemon finds each
 // capability by a type assertion, which a renamed method would fail silently.
 var (
@@ -550,18 +617,22 @@ var (
 
 // A capability lost to a renamed method fails to build here, not silently.
 var (
-	_ watchedDNS      = resolvedDNS{}
-	_ routingReader   = resolvedDNS{}
-	_ domainRouter    = resolvedDNS{}
-	_ domainRouter    = fileDNS{}
-	_ domainRouter    = resolvconfDNS{}
-	_ soleResolver    = fileDNS{}
-	_ soleResolver    = resolvconfDNS{}
-	_ throughReporter = plumbedDNS{}
-	_ throughReporter = vpnDNS{}
-	_ throughReporter = fileDNS{}
-	_ throughReporter = resolvconfDNS{}
-	_ namesPorter     = resolvconfDNS{}
+	_ watchedDNS       = resolvedDNS{}
+	_ routingReader    = resolvedDNS{}
+	_ domainRouter     = resolvedDNS{}
+	_ domainRouter     = fileDNS{}
+	_ domainRouter     = resolvconfDNS{}
+	_ soleResolver     = fileDNS{}
+	_ soleResolver     = resolvconfDNS{}
+	_ throughReporter  = plumbedDNS{}
+	_ throughReporter  = vpnDNS{}
+	_ bypassedResolver = vpnDNS{}
+	_ soleResolver     = vpnDNS{}
+	_ domainRouter     = vpnDNS{}
+	_ namesPorter      = vpnDNS{}
+	_ throughReporter  = fileDNS{}
+	_ throughReporter  = resolvconfDNS{}
+	_ namesPorter      = resolvconfDNS{}
 )
 
 // hostRoutingState is what the host's DNS routing was last read as, and the
@@ -820,8 +891,11 @@ func (d *Daemon) routeDNSLocked(exit []netip.AddrPort, keep bool) (bool, string)
 			d.dns.names = nil
 		}
 		d.dns.namesStatus = d.namesNotLocked()
-		if off && len(exit) > 0 {
+		switch by := d.dnsBypassedBy(); {
+		case off && len(exit) > 0:
 			return false, dnsOffWhy
+		case by != "" && len(exit) > 0:
+			return false, PrivateDNSNot(by)
 		}
 		return false, ""
 	}
@@ -894,6 +968,8 @@ func (d *Daemon) namesNotLocked() *ipc.Names {
 		return &ipc.Names{Not: "the network's name is no DNS label", Cannot: true}
 	case d.dnsOff.Load():
 		return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: dnsOffWhy, Cannot: true, Off: true}
+	case d.dnsBypassedBy() != "":
+		return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: PrivateDNSNot(d.dnsBypassedBy())}
 	case d.hostDNS == nil || d.startNames == nil:
 		return &ipc.Names{Domain: z.Domain, Public: z.Public, Not: "juistd runs without a device of its own", Cannot: true}
 	case !routesDomains(d.hostDNS):
@@ -948,7 +1024,7 @@ func routesDomains(h HostDNS) bool {
 // resolvers or none: juist's resolver for the names it answers, and for
 // every name with an exit node; else the exit node's resolvers, or none.
 func (d *Daemon) wantRoutingLocked(exit []netip.AddrPort) DNSRouting {
-	if d.dns.closed || d.dnsOff.Load() {
+	if d.dns.closed || d.dnsOff.Load() || d.dnsBypassedBy() != "" {
 		return DNSRouting{}
 	}
 	z := d.zone.Load()

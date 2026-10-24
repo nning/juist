@@ -206,6 +206,9 @@ fun alarmTitle(a: Alarm): String = when (a.kind) {
         pluralStringResource(R.plurals.alarm_silent_count, a.count, a.count)
     }
     "seeking" -> stringResource(R.string.alarm_seeking, names(a.names))
+    "privateDns" -> stringResource(R.string.alarm_private_dns, names(a.names))
+    "names" -> stringResource(R.string.alarm_names)
+    "forMembers" -> stringResource(R.string.alarm_for_members, names(a.names))
     else -> a.kind
 }
 
@@ -223,5 +226,7 @@ fun alarmHint(a: Alarm): Int? = when (a.kind) {
     "noRelay" -> R.string.alarm_no_relay_hint
     "freshnessEnding" -> R.string.alarm_freshness_ending_hint
     "unrevoked" -> R.string.alarm_unrevoked_hint
+    "privateDns" -> R.string.alarm_private_dns_hint
+    "forMembers" -> R.string.alarm_for_members_hint
     else -> null
 }

@@ -21,7 +21,10 @@ Servers weiterhin. Für den Rest des Internets ändert sich nichts.
 
 Beides funktioniert unter Linux und FreeBSD, und juist richtet das DNS des
 Geräts dafür selbst ein. Wie, steht unter
-[So löst das Gerät Namen auf](#resolver).
+[So löst das Gerät Namen auf](#resolver). Die
+[Android-App]({{< relref "docs/android" >}}#namen) löst die Namen der
+Mitglieder und die unter der Domain des Netzes veröffentlichten auf, keine
+öffentlichen Namen.
 
 ## Ein Gerät über seinen Namen erreichen
 
@@ -105,6 +108,7 @@ Neustart.
 - Ist das Gerät eines öffentlichen Namens nicht erreichbar oder ist der Stand dieses Geräts veraltet, wird der Name wieder öffentlich aufgelöst. Die Verbindung geht dann an die öffentliche Adresse, wie ohne juist.
 - Ein Gerät, dessen Name kein gültiges DNS-Label ist, bekommt keinen Namen unter `.juist`.
 - Unter [Zugriffsregeln]({{< relref "docs/access" >}}) kennt ein Gerät nur die Namen der Mitglieder, zu denen es einen Tunnel hat. Die öffentlichen Namen der anderen löst es öffentlich auf.
+- Wo juistd das ganze DNS eines Geräts beantwortet, unter Android, unter Linux ohne systemd-resolved und unter FreeBSD, beantwortet es auch die Reverse-Namen der Adressen des Netzes, die eines Geräts mit seinem Namen. Ein Programm, das nachschlägt, wer `198.18.36.2` ist, fragt also keinen Resolver außerhalb des Netzes.
 - In `juist devices` zeigt ein Gerät, auf das öffentliche Namen verweisen, `names` in der Spalte `ROLES`. `juist names` listet die Namen auf.
 
 ## So löst das Gerät Namen auf {#resolver}
@@ -130,6 +134,12 @@ Neustart.
   sie zurück, wenn juistd endet. Unter Debian und Ubuntu erlaubt das Paket
   außerdem Programmen, die AppArmor einschränkt, diese Datei zu lesen.
 - Unter FreeBSD übergibt juistd seinen Resolver an resolvconf.
+- Unter Android schickt das VPN der App jede Namensanfrage des Telefons an
+  juist, an eine Adresse des Netzes, die nur Pakete des Telefons erreichen.
+  Jeden anderen Namen fragt juist beim Netz an, in dem das Telefon ist, über
+  DNS über TLS, wo das Private DNS von Android auf Automatisch das täte. Ist
+  Privates DNS auf den Hostnamen eines Anbieters gestellt, schickt Android
+  jede Anfrage dorthin, und juist lässt das DNS des Telefons in Ruhe.
 - Hat Tailscale `/etc/resolv.conf` geschrieben, lässt juist sie in Ruhe, und
   die Namen des Netzes werden auf diesem Gerät nicht aufgelöst.
 

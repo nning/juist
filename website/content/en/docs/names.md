@@ -20,7 +20,9 @@ certificate still matches. The rest of the internet still gets the public
 record.
 
 Both work on Linux and FreeBSD, and juist sets up the device's DNS for them
-by itself. [How the device resolves names](#resolver) explains how.
+by itself. [How the device resolves names](#resolver) explains how. The
+[Android app]({{< relref "docs/android" >}}#names) resolves the members' names
+and those published under the network's domain, not public names.
 
 ## Reaching a device by name
 
@@ -101,6 +103,7 @@ set --dns` turns it on again. Neither needs a restart.
 - A public name is resolved publicly again while its device cannot be reached, or while this device's view of the network is out of date. The connection then goes to the public address, as it would without juist.
 - A device whose name is not a valid DNS label has no name under `.juist`.
 - Under an [access policy]({{< relref "docs/access" >}}), a device has names only for the members it keeps a tunnel with. The public names of the other members resolve publicly on that device.
+- Where juistd answers all of a device's DNS, on Android, on Linux without systemd-resolved and on FreeBSD, it answers the reverse names of the network's addresses too, a device's by its name, so that a program looking up who `198.18.36.2` is asks no resolver outside the network.
 - In `juist devices`, a device that public names point at shows `names` under `ROLES`. `juist names` lists the names.
 
 ## How the device resolves names {#resolver}
@@ -126,6 +129,12 @@ set --dns` turns it on again. Neither needs a restart.
   Debian and Ubuntu, the package also lets programs that AppArmor confines
   read that file.
 - On FreeBSD, juistd hands its resolver to resolvconf.
+- On Android, the app's VPN takes every lookup of the phone to juist, at an
+  address of the network's own that only the phone's packets reach. juist
+  asks the phone's network every other name, through DNS over TLS where
+  Android's Private DNS, set to automatic, would. With Private DNS set to a
+  provider's hostname, Android sends every lookup there, and juist leaves the
+  phone's DNS alone.
 - If Tailscale wrote `/etc/resolv.conf`, juist leaves it alone, and the
   network's names do not resolve on that device.
 

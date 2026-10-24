@@ -402,11 +402,9 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	}
 	held := make(map[types.Identity]gossip.Endpoint, len(checks))
 	announced := make(map[types.Identity]types.SchemaVersion, len(checks))
-	renews := make(map[types.Identity]bool, len(checks))
 	for _, c := range checks {
 		if !c.reach.Live {
 			held[c.id], _ = d.endpoints.Get(c.id)
-			renews[c.id] = d.endpoints.Renews(c.id)
 		} else if ep, ok := d.endpoints.Get(c.id); ok && !ep.HintAlone() {
 			announced[c.id] = ep.Schema
 		}
@@ -467,7 +465,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	d.reachable.Store(&reachable)
 	v := classifyReach(checks, reachFacts{
 		now: now, schema: d.status.Schema, settle: settle, relays: relays, via: via,
-		failed: failed, held: held, announced: announced, renews: renews, gone: gone,
+		failed: failed, held: held, announced: announced, gone: gone,
 	}, reachPast{down: d.down, behind: d.behind, olderBuild: d.olderBuild, syncRetried: d.syncRetried})
 	d.down, d.behind, d.olderBuild = v.past.down, v.past.behind, v.past.olderBuild
 	if d.syncRetried == nil {
@@ -563,7 +561,6 @@ type reachFacts struct {
 	failed    map[types.Identity]gossip.Failure
 	held      map[types.Identity]gossip.Endpoint // the down's announcements
 	announced map[types.Identity]types.SchemaVersion
-	renews    map[types.Identity]bool
 	gone      map[types.Identity]bool
 }
 
@@ -636,13 +633,7 @@ func classifyReach(checks []tunnelCheck, f reachFacts, past reachPast) reachVerd
 		v.lookup = v.lookup || !f.now.Before(p.lookAt)
 		ep := f.held[c.id]
 		v.reach[i].Since, v.reach[i].Heard = p.since.Unix(), signedAt(ep).Unix()
-		// A device never seen renewing may be on a build that does not: the
-		// window says nothing about it.
-		window := f.settle
-		if !f.renews[c.id] {
-			window = 0
-		}
-		switch p.state(f.now, signedAt(ep), window, f.gone[c.id]) {
+		switch p.state(f.now, signedAt(ep), f.settle, f.gone[c.id]) {
 		case stateSeeking:
 			v.reach[i].Seeking = true
 			v.seeking = append(v.seeking, c.name)
@@ -700,8 +691,11 @@ func syncVerdict(f gossip.Failure, tun bool) int {
 // noteNewAnnouncements compares the peers about to be installed with those
 // installed: one whose announcement says something new runs, and is probed
 // now rather than when its backoff allows, so its tunnel is known to be back
-// as soon as it is. One that only renewed its signature changes nothing here.
+// as soon as it is. One that only renewed its signature changes nothing here,
+// and one checked quietly and not down that only moved its addresses is left
+// to its next check: a probe would start a heartbeat on both ends.
 func (d *Daemon) noteNewAnnouncements(next []namedPeer) {
+	saving := d.pace.Saving()
 	d.mu.Lock()
 	changed := false
 	for _, n := range next {
@@ -709,8 +703,12 @@ func (d *Daemon) noteNewAnnouncements(next []namedPeer) {
 		if i >= 0 && samePeerPath(d.installed[i].peer, n.peer) {
 			continue
 		}
-		if p := d.down[n.id]; p != nil {
+		p := d.down[n.id]
+		if p != nil {
 			p.renewed = true
+		}
+		if i >= 0 && p == nil && (saving || n.rests) && movedAlone(d.installed[i].peer, n.peer) {
+			continue
 		}
 		if d.probeNow == nil {
 			d.probeNow = map[types.Identity]bool{}
@@ -758,6 +756,9 @@ func (d *Daemon) checkDoubted(peers []namedPeer) {
 func samePeerPath(a, b conn.Peer) bool {
 	return a.DiscoKey == b.DiscoKey && a.HomeRelay == b.HomeRelay && slices.Equal(a.Endpoints, b.Endpoints)
 }
+
+// movedAlone reports whether b differs from a in its addresses alone.
+func movedAlone(a, b conn.Peer) bool { return a.DiscoKey == b.DiscoKey && a.HomeRelay == b.HomeRelay }
 
 // checkSoon asks for a tunnel check ahead of the next one due.
 func (d *Daemon) checkSoon() {

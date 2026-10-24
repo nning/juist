@@ -321,7 +321,7 @@ so a field a schema adds to the wire goes only to a peer whose announced schema
 reads it. Every member announces the newest schema its build implements, and
 `juist devices` shows a live member announcing an older one.
 
-Open, for M28: nothing says before an upgrade which members it would strand,
+Open, for M31: nothing says before an upgrade which members it would strand,
 or stops an admin authoring one too early.
 
 ## The freeze: what the fan-out measurement decided

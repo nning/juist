@@ -378,17 +378,23 @@ func mintedCopies(t *testing.T, rec types.AUM, key types.PrivateIdentity, quorum
 // in, settles where every other node does.
 func TestCopiesAKeyMintsDoNotDecideForkChoice(t *testing.T) {
 	h := newHarness(t, 5, 2)
-	mallory := h.admins[4]
 	victim := h.addNode("victim")
 	var removal, kRemoval types.AUM
 	var copies []types.AUM
-	for {
+	// Each try another key mints, one signQuorum leaves out, whose removal
+	// sorts elsewhere: one key's alone may sort below nearly every removal
+	// of the victim.
+	for try := 0; ; try++ {
+		mallory := h.admins[int(h.quorum)+try%(len(h.admins)-int(h.quorum))]
 		b := h.auth.Builder()
 		var err error
 		if removal, err = b.RemoveNode(victim.Identity, h.sealer()); err != nil {
 			t.Fatal(err)
 		}
-		for _, k := range h.admins[:4] {
+		for _, k := range h.admins {
+			if k.Public() == mallory.Public() {
+				continue
+			}
 			if err := h.sign(&removal, k); err != nil {
 				t.Fatal(err)
 			}

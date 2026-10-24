@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/nning/juist/internal/guest"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/internal/rendezvous"
+	"github.com/nning/juist/internal/underlay"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/types"
@@ -60,9 +62,13 @@ type Core struct {
 	s      *daemon.Service
 	cancel context.CancelFunc
 	pace   *daemon.Pace
+	logf   func(format string, args ...any)
 	// cover is the network's prefixes, as the status last named them, which
 	// the VPN routes whole.
 	cover atomic.Pointer[[]netip.Prefix]
+	// underlay is how the network beneath the VPN resolves, as the app last
+	// said.
+	underlay atomic.Pointer[daemon.Underlay]
 
 	mu         sync.Mutex
 	cancelJoin context.CancelFunc
@@ -94,7 +100,7 @@ func Start(home string, p Platform) (*Core, error) {
 		}
 	}()
 	logf := func(format string, args ...any) { p.Log(fmt.Sprintf(format, args...)) }
-	c := &Core{pace: daemon.NewPace()}
+	c := &Core{pace: daemon.NewPace(), logf: logf}
 	plumber := conn.NewVPNPlumber(vpn{p}, c.networkPrefixes)
 	s, err := daemon.NewService(daemon.ServiceOptions{
 		Home:      home,
@@ -103,16 +109,14 @@ func Start(home string, p Platform) (*Core, error) {
 		Mesh: daemon.Options{
 			TunName:      tunName,
 			Plumber:      plumber,
-			HostDNS:      daemon.VPNDNS(plumber, tunName),
+			HostDNS:      daemon.VPNDNS(plumber, tunName, c.underlayNow),
 			ListenPort:   daemon.DefaultListenPort,
 			GossipPort:   daemon.DefaultGossipPort,
 			PortFallback: true,
 			DisableRelay: true,
 			STUN:         rendezvous.DefaultSTUN,
-			ServeDNS:     func([]netip.Addr, func(netip.Addr) bool) (io.Closer, error) { return nil, errNoNames },
-			ServeNames: func(netip.AddrPort, func([]byte) []byte, func([]byte) ([]netip.AddrPort, error)) (io.Closer, error) {
-				return nil, errNoNames
-			},
+			ServeDNS:     func([]netip.Addr, func(netip.Addr) bool) (io.Closer, error) { return nil, errNoMembersDNS },
+			Resolver:     &daemon.Resolver{Dial: resolverDial(conn.VPNDialer(plumber), c.networkPrefixes)},
 			// The core's own sockets leave past the tunnel, protected, as
 			// juistd's user's do on Linux, and the app opens none of its own.
 			EgressUser: func() string { return "" },
@@ -177,9 +181,28 @@ func (c *Core) networkPrefixes() []netip.Prefix {
 	return nil
 }
 
-// errNoNames: with a DNS server set, VpnService sends all of the phone's DNS
-// to it, so the network's names are not resolved here.
-var errNoNames = errors.New("an Android device resolves no names of the network")
+// errNoMembersDNS: a phone is no exit node.
+var errNoMembersDNS = errors.New("an Android device answers no member's DNS")
+
+func (c *Core) underlayNow() daemon.Underlay {
+	if u := c.underlay.Load(); u != nil {
+		return *u
+	}
+	return daemon.Underlay{}
+}
+
+// resolverDial reaches a resolver in the network's prefixes, an exit node's,
+// through the tunnel by overlay, and any other on the network beneath the
+// VPN, protected from the tunnel.
+func resolverDial(overlay func(context.Context, string, netip.AddrPort) (net.Conn, error),
+	cover func() []netip.Prefix) func(context.Context, string, netip.AddrPort) (net.Conn, error) {
+	return func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error) {
+		if slices.ContainsFunc(cover(), func(p netip.Prefix) bool { return p.Contains(to.Addr()) }) {
+			return overlay(ctx, network, to)
+		}
+		return underlay.Dialer(0).DialContext(ctx, network, to.String())
+	}
+}
 
 // Close stops the mesh and the daemon.
 func (c *Core) Close() {
@@ -203,7 +226,7 @@ func (c *Core) Status() (string, error) {
 		return "", err
 	}
 	c.follow(resp.Status)
-	b, err := json.Marshal(viewOf(resp.Status))
+	b, err := json.Marshal(viewOf(resp.Status, c.underlayNow().PrivateDNS))
 	return string(b), err
 }
 
@@ -289,10 +312,16 @@ func (c *Core) Forget() error {
 }
 
 // NetworkChanged tells the core that Android's default network changed, to
-// iface, its interface's name, or to none where it is empty; the core's
-// monitor only polls every few minutes there.
-func (c *Core) NetworkChanged(iface string) {
+// iface, its interface's name, or to none where it is empty, which resolves
+// as resolvers, a JSON [underlayDNS]; the core's monitor only polls every few
+// minutes there.
+func (c *Core) NetworkChanged(iface, resolvers string) {
 	defaultRouteVia(iface)
+	u, err := parseUnderlay(resolvers)
+	if err != nil {
+		c.logf("mobile: %v", err)
+	}
+	c.underlay.Store(&u)
 	if m := c.s.Mesh(); m != nil {
 		m.NetworkChanged()
 	}

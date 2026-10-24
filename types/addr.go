@@ -117,6 +117,16 @@ func Addr6(genesis Hash, id Identity) netip.Addr {
 	return netip.AddrFrom16(b)
 }
 
+// ResolverAddr is where a device that answers its own host's DNS in the
+// tunnel, as the Android app, takes its lookups: the network's [ULA] prefix
+// and ::53. No member's [Addr6] can take it but by finding an identity whose
+// 80 derived bits are those, about 2^80 keys.
+func ResolverAddr(ula netip.Prefix) netip.Addr {
+	b := ula.Masked().Addr().As16()
+	b[15] = 0x53
+	return netip.AddrFrom16(b)
+}
+
 // validateAddrForm rejects address encodings that are not the canonical form
 // for the address they denote: netip.Addr can carry a zone, and IPv4 in either
 // 4-byte or IPv4-mapped form, which would give one address two encodings.

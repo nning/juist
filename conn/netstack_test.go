@@ -89,3 +89,31 @@ func TestAServiceMemberAnswersAndOpensNothing(t *testing.T) {
 		t.Errorf("the service member reached the member: %q", got)
 	}
 }
+
+// What the device sends to a local address reaches the stack holding it,
+// before the engine, and its answer reaches the device; the stack is closed
+// with the manager.
+func TestALocalAddressIsAnsweredInTheProcess(t *testing.T) {
+	t.Parallel()
+	host, hostNet, err := netstack.New([]netip.Addr{netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("fd7a:115c:a1e0::1")}, 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := netip.MustParseAddr("fd7a:115c:a1e0::53")
+	local, localNet, err := netstack.New([]netip.Addr{resolver}, 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := startNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128", func(o *Options) {
+		o.Tun, o.RespondToPing, o.Local, o.LocalAddrs = host, false, local, []netip.Addr{resolver}
+	})
+	echoOn(t, localNet, netip.AddrPortFrom(resolver, 53))
+	got, err := askOn(hostNet, netip.AddrPortFrom(resolver, 53), 5*time.Second)
+	if want := "from [fd7a:115c:a1e0::1]:"; err != nil || len(got) < len(want) || got[:len(want)] != want {
+		t.Fatalf("the local address answered %q, %v", got, err)
+	}
+	n.mgr.Close()
+	if _, err := localNet.ListenTCPAddrPort(netip.AddrPortFrom(resolver, 54)); err == nil {
+		t.Error("the local stack runs on after the manager closed")
+	}
+}

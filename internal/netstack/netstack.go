@@ -258,3 +258,9 @@ func (n *Net) DialContextTCPAddrPort(ctx context.Context, ap netip.AddrPort) (*g
 	fa, proto := fullAddr(ap)
 	return gonet.DialContextTCP(ctx, n.d.stack, fa, proto)
 }
+
+// DialUDPAddrPort sends datagrams from the stack to ap.
+func (n *Net) DialUDPAddrPort(ap netip.AddrPort) (*gonet.UDPConn, error) {
+	fa, proto := fullAddr(ap)
+	return gonet.DialUDP(n.d.stack, nil, &fa, proto)
+}

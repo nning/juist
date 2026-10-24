@@ -252,7 +252,7 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
 - **State integrity:** log + epoch floor persisted with fsync before any action
   depends on them; state file corruption ⇒ refuse to start, never silently
   re-genesis.
-- **Parser hygiene:** every externally supplied input has a fuzz target; M25 adds
+- **Parser hygiene:** every externally supplied input has a fuzz target; M29 adds
   those still missing ([06-verification.md](06-verification.md) §2).
 
 ## Data plane details

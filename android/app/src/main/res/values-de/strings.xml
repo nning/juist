@@ -114,6 +114,7 @@
     <string name="members_none">Noch keine anderen Geräte</string>
     <string name="members_checked">Geprüft %1$s</string>
     <string name="label_name">Name</string>
+    <string name="label_dns">DNS-Name</string>
     <string name="label_ipv4">IPv4</string>
     <string name="label_ipv4_retiring">IPv4 (alt)</string>
     <string name="label_ipv6">IPv6</string>
@@ -220,6 +221,11 @@
         <item quantity="other">%d Geräte haben sich noch nicht gemeldet</item>
     </plurals>
     <string name="alarm_seeking">Keine Antwort von %1$s: offline oder blockiert</string>
+    <string name="alarm_private_dns">Privates DNS schickt jede Anfrage an %1$s, an juist vorbei: die Namen des Netzes werden nicht aufgelöst</string>
+    <string name="alarm_private_dns_hint">Stell Privates DNS in den Netzwerkeinstellungen des Telefons auf Automatisch oder Aus.</string>
+    <string name="alarm_names">Die Namen des Netzes werden nicht aufgelöst</string>
+    <string name="alarm_for_members">%1$s, nur für Mitglieder, ist von hier aus nicht erreichbar</string>
+    <string name="alarm_for_members_hint">Das Telefon löst den Namen öffentlich auf, solange die Namen des Netzes nicht aufgelöst werden.</string>
     <string name="list_and">%1$s und %2$s</string>
 
     <!-- Member -->

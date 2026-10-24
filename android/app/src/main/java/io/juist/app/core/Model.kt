@@ -15,6 +15,7 @@ data class NetworkView(
     val fresh: Freshness = Freshness(),
     val tunnels: Tunnels = Tunnels(),
     val exit: ExitView? = null,
+    val names: NamesView? = null,
     val alarms: List<Alarm> = emptyList(),
     val updated: Long = 0,
 ) {
@@ -55,6 +56,8 @@ data class Member(
     val relay: String = "",
     val heard: Long = 0,
     val since: Long = 0,
+    /** Its name under the network's domain, where it has one. */
+    val dns: String = "",
 )
 
 /** How the last check reached a member; mobile/view.go's reachOf says when each holds. */
@@ -104,6 +107,14 @@ data class ExitView(
 ) {
     val inUse get() = node.isNotEmpty()
 }
+
+/** What the phone resolves of the network's names: its domain, the phone's own names, and whether its lookups reach juist. */
+@Serializable
+data class NamesView(
+    val domain: String = "",
+    val own: List<String> = emptyList(),
+    val resolved: Boolean = false,
+)
 
 @Serializable
 data class Tunnels(val live: Int = 0, val total: Int = 0, val checked: Long = 0)

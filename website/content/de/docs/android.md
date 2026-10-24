@@ -1,8 +1,8 @@
 ---
 title: Android
 linkTitle: Android
-description: Die Android-App von juist installieren, mit einem Telefon per QR-Code oder Code einem Netz beitreten und auf dem Telefon sehen, wie jedes Gerät erreicht wird.
-lead: Mit der Android-App wird ein Telefon Mitglied eines Netzes. Es tritt per QR-Code oder Code der Einladung bei, erreicht die anderen Geräte unter ihren Adressen und zeigt, wie jedes davon erreicht wird.
+description: Die Android-App von juist installieren, mit einem Telefon per QR-Code oder Code einem Netz beitreten, die Geräte beim Namen erreichen und auf dem Telefon sehen, wie jedes erreicht wird.
+lead: Mit der Android-App wird ein Telefon Mitglied eines Netzes. Es tritt per QR-Code oder Code der Einladung bei, erreicht die anderen Geräte unter ihren Namen und Adressen und zeigt, wie jedes davon erreicht wird.
 ---
 
 ## Was die App kann
@@ -10,17 +10,19 @@ lead: Mit der Android-App wird ein Telefon Mitglied eines Netzes. Es tritt per Q
 Die App bringt juist auf ein Telefon mit Android 12 oder neuer. Das Telefon
 tritt einem Netz als **Mitglied** ohne Rollen bei, also als Gerät, das die
 anderen nur erreicht und von ihnen erreicht wird. Solange sein VPN an ist,
-erreicht jede App auf dem Telefon die anderen Geräte unter ihren Adressen im
-Netz.
+erreicht jede App auf dem Telefon die anderen Geräte unter ihren Namen, etwa
+`nas.home.juist`, und unter ihren Adressen im Netz.
 
-Durch das VPN läuft nur der Verkehr zu den Adressen des Netzes. Der übrige
-Verkehr des Telefons und sein DNS laufen wie bisher an juist vorbei.
+Durch das VPN laufen der Verkehr zu den Adressen des Netzes und das DNS des
+Telefons ([Namen](#namen)). Der übrige Verkehr des Telefons läuft wie bisher
+an juist vorbei.
 
 Was das Telefon nicht kann:
 
 - Es kann nur in einem Netz sein.
-- Es löst keine Namen auf: `nas.home.juist` funktioniert dort nicht, nimm die
-  Adresse des Geräts, etwa `198.18.36.2`.
+- Es kann [öffentliche Namen]({{< relref "docs/names" >}}) nicht einschalten.
+  Ein öffentlicher Name, den ein Admin auf ein Gerät zeigen lässt, löst dort
+  also öffentlich auf.
 - Es kann keinen [Subnet-Router]({{< relref "docs/subnets" >}}) nutzen und
   selbst keine [Exit-Node]({{< relref "docs/exit-nodes" >}}) sein, seinen
   Internetverkehr aber über eine schicken.
@@ -165,8 +167,8 @@ Rechner zeigen (siehe
 - Alles, worum du dich kümmern solltest, etwa ein Gerät, das nicht antwortet,
   oder **Kein Gerät darf weiterleiten**: Ein Telefon im Mobilfunk braucht oft
   ein [Relay]({{< relref "docs/relays" >}}), um die anderen zu erreichen.
-- Dieses Telefon: seinen Namen, seine IPv4- und IPv6-Adresse, die du zum
-  Kopieren antippst, und seine Frische, also wann ein Voucher zuletzt
+- Dieses Telefon: seinen Namen, seinen DNS-Namen, seine IPv4- und
+  IPv6-Adresse, die du zum Kopieren antippst, und seine Frische, also wann ein Voucher zuletzt
   bestätigt hat, dass es den aktuellen Stand des Netzes kennt.
 - Jedes andere Gerät, mit der Art, wie es erreicht wird.
 
@@ -187,21 +189,56 @@ hat das Netz gewechselt), **Offline**, **Noch nicht gemeldet**,
 **Noch nicht geprüft** oder **Veraltet** (darauf läuft ein älteres juist; bis
 es aktualisiert ist, kommt ein Ping durch, andere Apps nicht).
 
-Tippe auf ein Gerät, um seine Adressen, seine Rollen und seine letzte Meldung
-zu sehen. Bei einem Gerät, das über ein Relay erreicht wird, steht dort auch,
+Tippe auf ein Gerät, um seinen DNS-Namen, seine Adressen, seine Rollen und
+seine letzte Meldung zu sehen. Bei einem Gerät, das über ein Relay erreicht wird, steht dort auch,
 auf welchem Gerät dieses Relay läuft. **Ping** schickt ein Echo durch den
 Tunnel. juist auf dem Gerät beantwortet es selbst, also kommt die Antwort auch
 dann, wenn die Firewall des Geräts Pings verwirft.
 **Im Browser öffnen** öffnet `http://` an seiner Adresse. Jede andere App
-erreicht das Gerät unter denselben Adressen, etwa ein SSH-Client unter
-`198.18.36.2`.
+erreicht das Gerät unter demselben Namen und denselben Adressen, etwa ein
+SSH-Client unter `nas.home.juist`.
+
+## Namen
+
+{{< screens >}}
+status_private_dns: Was die App sagt, solange Privates DNS an juist vorbeigeht
+{{< /screens >}}
+
+Solange das VPN an ist, geht jede Namensanfrage des Telefons an juist, das in
+der App läuft. Es beantwortet die [Namen]({{< relref "docs/names" >}}) des
+Netzes selbst: jedes Gerät als `nas.home.juist` oder einfach `nas`, und die
+unter der Domain des Netzes [veröffentlichten]({{< relref "docs/publishing" >}})
+Namen, auch die nur für Mitglieder, die dann direkt durch den Tunnel zu ihrem
+Gerät führen. Es beantwortet auch, wer eine Adresse des Netzes ist: Eine App,
+die `198.18.36.2` nachschlägt, erfährt `nas.home.juist` und fragt niemanden
+außerhalb. Jeden anderen Namen fragt es beim Netz an, in dem das Telefon
+gerade ist, so wie das Telefon ohne juist, und über DNS über TLS, wo das
+Private DNS des Telefons auf Automatisch das auch tut.
+
+Der Statusbildschirm zeigt den eigenen Namen des Telefons unter **DNS-Name**,
+der Bildschirm jedes Geräts dessen Namen. Eine Anfrage, die juist nicht
+weitergeben kann, etwa ohne Netz oder über eine Exit-Node, die nicht nutzbar
+ist, scheitert sofort statt nach ein paar Sekunden. Schaltest du das VPN aus, hat das Telefon wieder sein eigenes DNS.
+
+Die Android-Einstellung **Privates DNS** entscheidet, ob Anfragen juist
+erreichen:
+
+| Privates DNS | Namen |
+|---|---|
+| Aus | werden aufgelöst |
+| Automatisch | werden aufgelöst |
+| Hostname des privaten DNS-Anbieters | werden nicht aufgelöst: Android schickt jede Anfrage an diesen Anbieter, an juist vorbei |
+
+Ist der Hostname eines Anbieters eingestellt, lässt juist das DNS des Telefons
+in Ruhe, und die App sagt, dass die Namen des Netzes nicht aufgelöst werden,
+und nennt jeden Namen nur für Mitglieder, der dann nicht erreichbar ist.
 
 ## Über einen Exit-Node
 
 Hat das Netz [Exit-Nodes]({{< relref "docs/exit-nodes" >}}), listet der
 Statusbildschirm sie unter **Internet**, neben **Direkt**. Wählst du eine, laufen
 das Internet und das DNS des Telefons über sie, wie `juist exit use` auf einem
-Rechner. Solange die gewählte Exit-Node nicht nutzbar ist, wird der
+Rechner. Die Namen des Netzes beantwortet juist weiter selbst. Solange die gewählte Exit-Node nicht nutzbar ist, wird der
 Internetverkehr des Telefons gesperrt statt an ihr vorbeigeschickt, und die App
 sagt, warum. Mit **Direkt** geht er wieder ohne juist hinaus.
 
@@ -295,4 +332,5 @@ App nur deinstalliert wurde, führt das Netz weiterhin als Mitglied.
 | **Eingeschränkt** | Das Telefon hat seit 48 Stunden nicht genug Voucher erreicht. Verbinde es mit einem Netz, in dem es sie erreichen kann. |
 | **Zu wenige Voucher haben bestätigt: eingeschränkt in … Stunden** | Bring vorher einen Voucher wieder online. |
 | **Abgewiesen** oder **Entfernt** | Das Telefon wurde entfernt. Vergiss das Netz und tritt mit einer neuen Einladung wieder bei. |
-| `nas.home.juist` löst nicht auf | Das Telefon löst keine Namen auf; nimm die Adresse, die der Bildschirm des Geräts zeigt. |
+| **Privates DNS schickt jede Anfrage an …** | Stell Privates DNS in den Netzwerkeinstellungen des Telefons auf Automatisch oder Aus. |
+| `nas.home.juist` löst nicht auf | Schalte das VPN ein. Sonst sagt der Statusbildschirm, warum. |

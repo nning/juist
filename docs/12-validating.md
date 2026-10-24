@@ -364,6 +364,7 @@ interop`).
 | a request to upgrade to h2c reaches no service; a service is one with its port written with a leading zero, its address mapped or ending in a dot | `internal/terminator`: `TestNoUpgradeToH2C`; `daemon`: `TestAServiceIsOneHoweverSpelledAndAShareSharesIt` | no |
 | a name passed by TCP shares its service though its target offers HTTP/3; a policy test of a name for members passes no ingress, service member or its own device, with a policy or without; a test names one name alone, a label; a name for members resolves for those it is for, never on its own device; the status names each one not reached, and a shared service's warning has its hint; the publish line marks a name for members; an approval says which rules a name it publishes opens | `cmd/juist`: `TestAServiceForMembersGoesToNoPublicName`, `TestStatusSaysHowNamesResolve`, `TestTheStatusWarnsOfANameSharingItsService`, `TestPublishANameForMembersAlone`, `TestAPolicyNamesANameForMembers`; `daemon`: `TestAServiceIsOneHoweverSpelledAndAShareSharesIt`, `TestANameForMembersResolvesForThoseItIsFor`; `internal/policy`: `TestANameForMembersPassesWhomTheDeviceTakes`; `types`: `TestAPolicyMeansWhatItSays` | no |
 | juistd holds a service meant for members alone from its name while the log has it public, a mark it keeps across restarts and later commands until `--members=false`, in a line an older version leaves out; a test to a name names no exit node | `daemon`: `TestAServiceForMembersIsWithheldFromAPublicName`, `TestTheMarkOfAServiceForMembersIsKept`; `cmd/juist`: `TestAServiceForMembersGoesToNoPublicName`; `types`: `TestAPolicyMeansWhatItSays` | no |
+| whatever a host's program sends juist's resolver is answered with a response to it or passed on, and an answer from upstream has every TTL capped but an additional OPT record's, never panicking | `internal/names`: `FuzzAnswer`; `internal/dnsfwd`: `FuzzForwarded` | no |
 | a service member marks its services for members alone by `--members`, as its command line says and not a file left from before; `juist publish` shows the mark; on an admin's device the mark changes nothing in the log by itself | `cmd/juistd`: `TestMembersMarksAServiceMembersServices`, `TestHelpListsEveryOptionWithItsDefault`; `daemon`: `TestAServiceMembersMarkIsItsCommandLines`; `cmd/juist`: `TestAServiceForMembersGoesToNoPublicName` | no |
 
 ### Publishing
@@ -473,10 +474,11 @@ interop`).
 | a node that reaches no member relay is homeless and asks STUN only while its tunnels carry traffic and it does not save battery, not every few seconds for a STUN server it took for its home; one that reaches a relay, by HTTPS alone too, or reaches it again, saving or not, homes there; a report that measured nothing changes no home | `conn`: `TestAnIdleNodeWithoutARelayStopsAskingSTUN`, `TestASavingNodeAsksNoSTUNThoughProbed`, `TestAHomeIsARelayReachedOrNone`, `TestAConnectionToTheSTUNRegionIsDropped`, `TestAHomelessNodeSaysNoHomeItDoesNotTake`, `TestARelayReachedByHTTPSAloneIsAHome`, `TestAReportMeasuringNothingKeepsTheHome`, `TestAHomeTakenOutOfOrderIsSetRight`, `TestASavingNodeHomesAgainWhenItsRelayReturns`, `TestARelayIsMeasuredBesideThreeSTUNServers` | no |
 | saving battery, the tunnels are checked at the saving pace, an answer a relay can wake stands longer, sync ticks due sooner are skipped and the data plane's heartbeat is off; back from saving, the tunnels are checked at once and the heartbeat resumes | `daemon`: `TestWhileSavingAnAnswerStandsLonger`, `TestSavingSlowsTheChecksAndBackFromItChecksAtOnce`, `TestSavingSkipsTicksDueSooner` | no |
 | the app saves battery while the screen is off, the phone dozes or battery saver is on, and on a metered network while it is not in front, and holds the multicast lock, and LAN discovery announces, only while not saving or while joining | `android/app`: `PaceTest`, `UnderlayTest`; `daemon`: `TestSavingQuietsTheBeacon`; `discovery/mdns`: `TestAQuietBeaconSendsNothing`; [Measure an idle phone](#measure-an-idle-phone) | no |
-| a peer that rests, or any while this device saves, is probed once in 30 minutes and pinged quietly in the checks between where no relay can wake it; a quiet ping starts no heartbeat, sends nothing through WireGuard, and one unanswered, or a key changed since the last answer, is followed by a probe | `daemon`: `TestARestingPeerIsCheckedQuietly`, `TestWhileSavingEveryPeerIsCheckedQuietly`, `TestAQuietPingUnansweredIsFollowedByAProbe`, `TestAChangedKeyIsProbedNotPinged`, `TestAChangedKeyIsProbedThoughARelayWakes`, `TestAHandshakeUnderTheKeyRenewsTheAnswer`, `TestAClockSetBackHasThePeerProbed`; `conn`: `TestAQuietProbeStartsNoHeartbeat` | no |
+| a peer that rests, or any while this device saves, is probed once in 30 minutes and pinged quietly in the checks between where no relay can wake it; a quiet ping starts no heartbeat, sends nothing through WireGuard, and one unanswered, or a key changed since the last answer, is followed by a probe, and a new announcement that moved the peer's addresses alone has it probed no sooner | `daemon`: `TestARestingPeerIsCheckedQuietly`, `TestWhileSavingEveryPeerIsCheckedQuietly`, `TestAQuietPingUnansweredIsFollowedByAProbe`, `TestAChangedKeyIsProbedNotPinged`, `TestAMoveAloneHasNoQuietPeerProbed`, `TestAChangedKeyIsProbedThoughARelayWakes`, `TestAHandshakeUnderTheKeyRenewsTheAnswer`, `TestAClockSetBackHasThePeerProbed`; `conn`: `TestAQuietProbeStartsNoHeartbeat` | no |
 | a device that rests says so in its announcement from schema 20 alone; the periodic sync leaves a member that rests alone, but for one every 30 minutes where all rest; a new address, nothing else in its announcement changed and no relay's, is pushed by the device and on by each member to the members awake alone, a deferred push as asked, and one saving and homed waits for the next reconcile or the end of saving; a device that rests joins the public DHT only once checked and while no member that does not rest answers it, and a node that does not take part sends the DHT nothing | `daemon`: `TestARestingDeviceSaysSoFromSchema20`, `TestTheBackstopSyncLeavesARestingMemberAlone`, `TestTheBackstopSyncReachesARestingMemberWhereAllRest`, `TestWhileSavingTheRestingSyncFollowsTheTick`, `TestAnAddressIsPushedToTheAwakeAlone`, `TestAMoveIsPushedAsPeersPushItOn`, `TestALearnedAnnouncementIsPushedOnToTheAwakeAlone`, `TestADisplacedPushIsDeferredNotDropped`, `gossip`: `TestAnnouncementsAloneAreAnnouncedNotRecords`, `TestTheCacheSaysWhatAnAnnouncementChanged`; `daemon`: `TestWhileSavingANewAddressWaitsForTheNextSync`, `TestAWaitingAddressIsPushedLater`, `TestARestingDeviceJoinsTheDHTAloneOnly`, `TestADeviceWhoseLowerLivePeerRestsSeeksItself`, `TestAHintAloneSaysNoMemberRests`, `TestANewerHintLeavesAMembersRestAlone`; `discovery/dht`: `TestANodeThatDoesNotJoinSendsTheDHTNothing` | no |
 | a device that rests passes on nothing it hears while a member awake does, and pushes its own news to two members awake; a push reaches `PushFanout` members awake and every member that rests, and others' announcements, address keys and leases go on to the members awake alone, a pair exchange to its peer and the members awake, and a member found down on a hint's key is reinstalled without a push; from schema 21 a hello says what its sender holds of each node and the records frame answering it carries what is newer, all of it to a hello that says nothing, within `MaxFrameSize` at every cap | `daemon`: `TestAPushReachesTheFanoutAwakeAndEveryMemberThatRests`, `TestADeviceThatRestsPushesToFewAwake`, `TestADeviceThatRestsRelaysNothing`, `TestANewLeaseIsPushedToTheAwakeAlone`, `TestHellosSayWhatTheyHoldFromSchema21`, `TestADeviceThatRestsPushesItselfAfterRecords`, `TestARestingVoucherPushesItsOwnLease`, `TestAPairExchangeWakesNoMemberThatRests`, `TestARestartedMembersHintMovesItsDiscoKeyWithinSeconds`; `gossip`: `TestASeenHelloCarriesWhatThePeerLacks`, `TestARecordsFrameCarriesWhatIsNewerThanSeen`, `TestSeenAndFullHellosMeet`, `TestKeysInARecordsFrameLeaveRoomForARecord`, `TestFramesAtTheirCapsFit` | no |
 | the mesh reconciles at the next deadline the log, the leases, the announcements and the host's DNS name, a membership's expiry among them, and otherwise every 2 minutes; a resolver that starts again is routed again at once, and the routing renewed hourly while watched; an offer of a pair key put off is due after the pace | `daemon`: `TestAMembershipIsReconciledAwayAtItsExpiry`, `TestTheNextReconcileIsDueAtTheSoonestDeadline`, `TestADevicePastItsExpiryWaitsForTheBackstop`, `TestASoonerDeadlineRearmsTheLoop`, `TestARestartedResolverIsRoutedAgain`; `internal/resolved`: `TestARestartedResolvedIsSeen`, with `dbus-daemon`; `internal/pairkey`: `TestGenerationsArePaced` | no |
+| every lookup of the phone goes to juistd's resolver at the network's prefix and ::53, routed into the tunnel and taken before the engine from the phone's own packets alone, where no member's derived address lies; it answers the network's names and the reverse names of its addresses, over UDP and TCP, and searches the network's domain alone, asks the network beneath the VPN the rest by the resolvers the app last reported, protected, over TLS first, sessions resumed, where automatic Private DNS found them answering it, and in plain text for 10 minutes after TLS failed, and through the tunnel the exit node in use; a lookup it can ask no one of, or one for a refused exit node, fails at once, and a listener failing for good is not spun on; an answer longer than a datagram the stack carries goes out truncated and whole over TCP, and one from upstream keeps its TTL but for a name the network may answer itself; while Private DNS names a host the VPN takes no lookup, and the app says why and names each name for members alone then out of reach | `daemon`: `TestAPhoneAsksJuistdsResolverAlone`, `TestAPhoneWithoutResolversFailsAtOnce`, `TestPrivateDNSLeavesThePhonesNamesUnresolved`, `TestAPhonesOtherLookupsGoToTheExitNode`, `TestAPhoneAsksOverTLSWhereAndroidWould`, `TestARefusedExitNodesLookupsFailAtOnce`, `TestAPhoneKeepsUpstreamTTLs`, `TestAPhoneGetsALongAnswerOverTCP`; `internal/names`: `TestReverseNamesOfTheNetworkAreAnswered`; `conn`: `TestALocalAddressIsAnsweredInTheProcess`, `TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS`, `TestAVPNDialLeavesByTheDeviceAlone`; `internal/dnsfwd`: `TestAQueryNoneCanBeAskedFailsAtOnce`, `TestAForwarderListensAndDialsAsItIsGiven`, `TestAResolverOn853IsAskedOverTLS`, `TestAFailingListenerIsNotSpunOn`, `TestCappedSaysWhichAnswersAreCapped`, `TestAnAnswerTooLongForUDPIsTruncated`; `types`: `TestTheResolverAddressIsTheNetworksAndNoMembers`; `mobile`: `TestTheViewSaysWhyNamesAreNotResolved`, `TestTheUnderlaysResolversAreReadAsTheAppSaysThem`, `TestTheVPNConfigIsWhatTheAppReads`; `android/app`: `UnderlayTest`, `VpnConfigTest`; [Check names on Android](#check-names-on-android) | no |
 | an idle phone in the emulator stays within its budget, with and without a relay, and answers a member's ping with its screen off | `make android-idle` | the emulator |
 
 ### CI
@@ -496,24 +498,22 @@ The latest `make ci-vm` that closed a milestone, and the latest run of each
 gate it does not cover. Replace an entry when its gate runs again, so it is
 clear how old the evidence is.
 
-- **`make ci-vm`, 2026-10-23, M22 done**, run as M22: every stage
-  passed in 28m24s, the privileged tests in 2m48s, `test-race` in 9m17s, and
-  the lab's two pairs in 26m35s, the hotel meeting a member at an unnamed
-  relay without `--https-only` after 25 s; in the nine runs since M22 it
-  took 21 s to 2m31s, mostly under 40 s, each step's order now logged, and
-  how lx sees hotel. The run before at the same commit failed `test-race` in
-  `TestANodeThatDoesNotJoinSendsTheDHTNothing`, a lookup not finding what
-  the node had just put, which 90 runs under load here did not show again.
-  One lab run, at M22, an exit node refused its client's DNS on 53 for
-  two minutes in the upgraded pair, its cause not known; a forwarder that
-  fails to start is now started again 30 s on and said by `juist health`,
-  and the dump of a Linux node carries its nftables rules for DNS and
-  juistd's sockets. The run closing M20, at 708c455, passed in 16m46s, and a
-  failure planted in each stage ended the run in it (roadmap, M20).
+- **`make ci-vm`, 2026-10-24, M23 done**, run as M23: every stage
+  passed in 29m11s, the privileged tests in 2m56s, `test-race` in 9m55s, and
+  the lab's two pairs in 26m26s, exit nodes and names among them; at M23,
+  M23 under way, in 31m54s. The run closing M22, at M22, passed in
+  28m24s, and in the nine lab runs before it the hotel met a member at an
+  unnamed relay without `--https-only` within 21 s to 2m31s, mostly under
+  40 s. A `make check` here before M23 failed in
+  `TestCopiesAKeyMintsDoNotDecideForkChoice`, which drew one key's removal
+  for the whole run and so looped past 15 minutes where it sorted low; it
+  draws the key anew each try since M23. The run closing M20, at
+  708c455, passed in 16m46s, and a failure planted in each stage ended the
+  run in it (roadmap, M20).
 - **`make test-freebsd`, 2026-10-21, after M21**: all 54
   packages passed, the command reference's test skipping there as Linux's
-  help. `make cross` passed in the run above; `make android-check` last
-  passed at M21.
+  help. `make cross` passed in the run above; `make android-check` passed at
+  the commit closing M23.
 - **`make repro-freebsd`, 2026-09-30, at M7 review 5**: the binaries for both
   systems and the package the same bytes from a Debian 12 container and a
   FreeBSD 14.5 VM.
@@ -540,29 +540,34 @@ clear how old the evidence is.
   443/udp is blocked, no SELinux denial. [Check the privilege
   footprint](#check-the-privilege-footprint) and [Check two networks on one
   host](#check-two-networks-on-one-host) have no recorded run.
+- **Names on Android by hand, 2026-10-24, M23 review 3**, at M23,
+  [Check names on Android](#check-names-on-android) in the Android 16
+  emulator: a member's name, its short name and a name for members alone
+  resolve to their overlay addresses and open through the tunnel; `ping`
+  names the member it reaches without a reverse lookup on `wlan0`; a name
+  without a dot the network's domain lacks is asked of the phone's network
+  as it is; other names resolve as without the VPN; without Wi-Fi a lookup
+  failed in 37 ms (2026-10-23). Off, automatic and a host name for Private
+  DNS each as the handbook says. With an exit node in docker-vm, no lookup
+  on `wlan0`, the names resolved and an HTTP request left by it; refused by
+  `juist exit serve --stop`, a lookup failed in 35 ms; its container
+  stopped, Android gave up after 1.7 s. The VPN off, the phone's own DNS.
+  Not tried by hand: DNS over TLS to the network's resolvers and TTLs, as
+  the emulator's resolver answers no TLS and every TTL as 30 s itself.
 - **The app by hand, 2026-10-05**, in an Android 16 emulator: the VPN turned
   off and on three times within seconds ends on, log sync leaves from the
   overlay address, and the kept epoch secrets are sealed.
-- **An idle phone beside ten members, 2026-10-23, M22 review 3**, `make
-  android-idle`, one member restarting every 3 minutes. With `a` relaying:
-  9 017 datagrams and segments an hour at M22, 11 542 and 11 155 at
-  M22, and 9 819 and 11 568 at origin/main's M22, without M22, the
-  phone answering a member's ping in 6 to 23 ms; M21's 8 408 at ea4d7cc was
-  one run, and the budget of 11 000 drawn from it failed main as often as
-  M22, so it is 15 000 now, the headroom of the budget without a relay. The
-  spread is in the burst after each restart, mostly the other members'
-  disco pings (roadmap, M23, carried from M21), 300 to 1 000 a burst.
-  Without a relay 14 224 and 15 303 an hour at M22 and M22, the
-  first ping answered in 4 and 1 ms. There the phone announces no address
-  the members reach, and they reach it only on the path its last check
-  left, which magicsock forgets after 45 s: the one ping at the end was
-  answered or not as the phone's check every 5 minutes fell, unanswered at
-  M22 and at M22, answered at ea4d7cc, so the member now pings
-  until the phone's next check, 5 and a half minutes at most. The same lab
-  at M21, before M21, sent 53 000 an hour with a relay and 30.5 MB with
-  the members, over the 12 minutes before the emulator's Wi-Fi dropped.
-  Beside two members, as the lab ran before: 29 500 an hour without a relay
-  before M21, at M20, and 934 without and 1 887 with one at 1fa7ddb.
+- **An idle phone beside ten members, 2026-10-24, M23 review 3**, `make
+  android-idle` at M23, one member restarting every 3 minutes. With `a`
+  relaying: 7 261 datagrams and segments an hour, the members' data planes
+  4 582, the phone answering a member's ping in 7 ms; 6 871 at M23, and
+  10 662 with the resolver in the app before a quiet peer that moved its
+  addresses alone was spared a probe, its data planes 7 493, a restart's 3
+  minutes carrying 500 to 850 where they now carry mostly 250 to 420. Without
+  a relay 13 584, and 14 664 at M23, the phone answering after 10 s. M22
+  review 3 measured 9 017 to 11 568 beside a relay and 14 224 and 15 303
+  without; M21's 8 408 at ea4d7cc was one run. The same lab at M21,
+  before M21, sent 53 000 an hour with a relay and 30.5 MB with the members.
 - **A real phone's day at schema 21, 2026-10-21, M21 done**, the same
   Pixel 8 Pro with the app at M21, the network of 11 upgraded to schema
   21, from 11:32 to 16:03, nearly all of it on Wi-Fi (182 KB over LTE),
@@ -848,6 +853,40 @@ shell dumpsys batterystats io.juist`: the app's share of the battery, its
 mobile radio and Wi-Fi time, wakeups and wake locks, and Settings' battery
 use for the app beside it.
 
+## Check names on Android
+
+In the AVD `juist`, beside juistds on this host as `make android-idle` runs
+them: `a` creating the network `names`, `juist network domain
+pub.example.org`, `juist grant a relay`; `c`, invited with `--service wiki`,
+as `juistd --serve wiki=127.0.0.1:PORT --members --join LINK`, and `juist
+publish add c wiki --members` on `a`; the phone joined by a link. Then from
+`adb shell`:
+
+```sh
+dumpsys connectivity | grep 'InterfaceName: tun'   # DnsAddresses: the network's prefix and ::53; Domains: names.juist
+ping -c1 a.names.juist; ping -c1 a           # a's overlay address, answered through the tunnel
+ping -c1 wiki.pub.example.org                # c's, once the phone has heard c serves it
+echo | nc -w 3 wiki.pub.example.org 443 && echo open
+ping -c1 example.org                         # as without the VPN
+tcpdump -i wlan0 -n port 53 &                # while pinging a.names.juist: no PTR of its address
+ping -c1 printerxyz                          # asked of the phone's network as it is
+svc wifi disable; ping -c1 example.org; svc wifi enable   # unknown host within a second
+settings put global private_dns_mode opportunistic        # names resolve
+settings put global private_dns_specifier dns.google
+settings put global private_dns_mode hostname             # no DnsAddresses on tun; the app warns
+```
+
+For an exit node, a juistd with a device of its own in a container of
+docker-vm (`--cap-add NET_ADMIN --device /dev/net/tun --sysctl
+net.ipv4.ip_forward=1 --sysctl net.ipv6.conf.all.forwarding=1`), joined,
+granted `exit` and `juist exit serve`, chosen in the app: the names still
+resolve, `tcpdump -i wlan0 port 53` on the phone sees nothing while other
+names resolve, and an HTTP request leaves by the exit node; after `juist
+exit serve --stop` there, the app says it is refused and other names fail
+at once. Stopping the VPN
+gives the phone its own DNS back: `example.org` resolves, `a.names.juist`
+does not.
+
 ## Reading a failure in the NAT matrix
 
 The matrix classifies each NAT before it tests anything — one socket, two
@@ -879,7 +918,7 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   `JUIST_PUBLIC_TESTS=1 go test -run PublicDHT -v ./internal/rendezvous`.
 - **Upgrades across more than one release.** `make interop` runs the previous
   release beside this build; nothing older. The readiness check that would
-  stop an admin stranding members is M28's
+  stop an admin stranding members is M31's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
 - **The freshness TTL on a real clock.** The tests move a fake one. On real
   devices, stopping every admin device for longer than the TTL is what shows the

@@ -115,6 +115,7 @@
     <string name="members_none">No other devices yet</string>
     <string name="members_checked">Checked %1$s</string>
     <string name="label_name">Name</string>
+    <string name="label_dns">DNS name</string>
     <string name="label_ipv4">IPv4</string>
     <string name="label_ipv4_retiring">IPv4 (old)</string>
     <string name="label_ipv6">IPv6</string>
@@ -221,6 +222,11 @@
         <item quantity="other">%d devices not heard from</item>
     </plurals>
     <string name="alarm_seeking">No answer from %1$s: offline or blocked</string>
+    <string name="alarm_private_dns">Private DNS sends every lookup to %1$s, past juist: the network’s names are not resolved</string>
+    <string name="alarm_private_dns_hint">Set Private DNS to automatic or off in the phone’s network settings.</string>
+    <string name="alarm_names">The network’s names are not resolved</string>
+    <string name="alarm_for_members">%1$s, for members alone, is not reached from here</string>
+    <string name="alarm_for_members_hint">The phone resolves it publicly while the network’s names are not resolved.</string>
     <string name="list_and">%1$s and %2$s</string>
 
     <!-- Member -->

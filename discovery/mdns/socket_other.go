@@ -6,5 +6,5 @@ import "syscall"
 
 // reuseAddr has no implementation here, so binding the mDNS port is exclusive
 // and will fail if another responder already holds it. Every platform v1
-// commits to (docs/05-roadmap.md M26) is a unix and uses the real one above.
+// commits to (docs/05-roadmap.md M30) is a unix and uses the real one above.
 func reuseAddr(_, _ string, _ syscall.RawConn) error { return nil }

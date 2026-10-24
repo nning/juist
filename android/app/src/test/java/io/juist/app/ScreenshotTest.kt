@@ -95,6 +95,8 @@ abstract class Screens(private val variant: String) {
 
     @Test fun forked() = shot("status_alarm") { StatusScreen(Connection.On(forkedView), none, none, {}, none, none) }
 
+    @Test fun privateDns() = shot("status_private_dns") { StatusScreen(Connection.On(privateDnsView), none, none, {}, none, none) }
+
     @Test fun removed() = shot("status_removed") { StatusScreen(Connection.On(removedView), none, none, {}, none, none) }
 
     @Test fun off() = shot("status_off") {

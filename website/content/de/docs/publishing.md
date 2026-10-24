@@ -257,11 +257,11 @@ zum Gerät oder zu `any` öffnet den Namen nicht.
   die er gedacht ist. Es erkennt sie an der Adresse im Netz, von der ihre
   Verbindung kommt. Vom Ingress nimmt es nur die Prüfung der CA an, ein
   übernommener Ingress kommt also nicht weiter.
-- Unter Linux und FreeBSD erreichen Mitglieder den Namen direkt an seinem
-  Gerät, wie jeden Namen auf 443. Geräte, die die Namen des Netzes über
+- Unter Linux, FreeBSD und Android erreichen Mitglieder den Namen direkt an
+  seinem Gerät, wie jeden Namen auf 443. Geräte, die die Namen des Netzes über
   öffentliches DNS auflösen, erreichen ihn gar nicht: solche, auf denen
   `juist health` sagt, dass die Namen nicht aufgelöst werden, und vor jedem
-  solchen Namen warnt, und die Android-App.
+  solchen Namen warnt, wie es auch die Android-App tut.
 - Der Name braucht einen eigenen Dienst. juist bedient einen Namen nur für
   Mitglieder nicht, wenn ein anderer Name oder eine Freigabe auf demselben
   Gerät denselben Dienst erreicht und juist deren Bytes unverändert
@@ -396,8 +396,9 @@ Mitglieder sehen alles:
 
 - jedes Gerät mit Adressen und Rollen, und dem neuesten Schema, das sein juist
   kennt, markiert, wo es älter ist als das des bereitstellenden Geräts;
-- wie das bereitstellende Gerät es erreicht (direkt, über ein Relay, gesucht,
-  abwesend oder veraltet, wenn darauf ein älteres juist läuft) und wann es
+- wie das bereitstellende Gerät es erreicht, in den Worten von
+  [`juist devices`]({{< relref "docs/status#die-geräte-auflisten" >}})
+  (`direct`, `relayed`, `no answer`, `offline` und so weiter), und wann es
   zuletzt von ihm gehört hat;
 - die veröffentlichten Namen und Freigaben, ob sie erreichbar sind, und
   `members only` an denen, die nur für Mitglieder sind;

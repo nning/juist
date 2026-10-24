@@ -240,10 +240,10 @@ does not open the name.
   for, recognized by the network address their connection comes from. From the
   ingress it accepts only the CA's check, so a compromised ingress gets no
   further.
-- On Linux and FreeBSD, members reach the name directly at its device, like
-  any name on 443. Devices that resolve the network's names through public
+- On Linux, FreeBSD and Android, members reach the name directly at its
+  device, like any name on 443. Devices that resolve the network's names through public
   DNS cannot reach it at all: those where `juist health` says the names are
-  not resolved, and warns about each such name, and the Android app.
+  not resolved, and warns about each such name, as the Android app does too.
 - The name needs a service of its own. juist does not serve a members-only name
   if another name or a share on the same device reaches the same service with
   its bytes passed through unchanged, because a client of the other name could
@@ -368,9 +368,10 @@ Members see all of it:
 
 - every device with its addresses and roles, and the newest schema its juist
   implements, marked where older than the serving device's;
-- how the serving device reaches each one (direct, through a relay, sought,
-  absent, or outdated where it runs an older juist), and when it last heard
-  from it;
+- how the serving device reaches each one, in the words of
+  [`juist devices`]({{< relref "docs/status#listing-the-devices" >}})
+  (`direct`, `relayed`, `no answer`, `offline` and so on), and when it last
+  heard from it;
 - the published names and shares, whether each is up, and `members only` on
   those for members alone;
 - what needs attention;

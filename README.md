@@ -148,8 +148,9 @@ alone.
 make android    # needs a JDK 21, the Android SDK and NDK; the APKs land in android/app/build/outputs/apk
 ```
 
-It sends its internet through an exit node where one is chosen; it resolves
-no names, uses no subnets, and takes no roles.
+It resolves the network's names, sends its internet through an exit node
+where one is chosen, turns no public names on, uses no subnets, and takes no
+roles.
 Building, signing and what the app shows: [Android](https://docs.juist.nning.io/en/docs/android/).
 
 ## Several networks and several admins

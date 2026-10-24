@@ -38,7 +38,6 @@ type Cache struct {
 	by     map[types.Identity]Endpoint
 	hints  map[types.Identity]Endpoint
 	keys   map[types.Identity]AddrKey // members' alone
-	renews map[types.Identity]bool
 	member map[types.Identity]bool
 	former map[types.Identity]bool
 
@@ -51,7 +50,7 @@ type Cache struct {
 // NewCache returns an empty cache.
 func NewCache() *Cache {
 	return &Cache{by: map[types.Identity]Endpoint{}, hints: map[types.Identity]Endpoint{},
-		keys: map[types.Identity]AddrKey{}, renews: map[types.Identity]bool{}, now: time.Now}
+		keys: map[types.Identity]AddrKey{}, now: time.Now}
 }
 
 // SetClock replaces time.Now, which bounds a hint's number.
@@ -59,14 +58,6 @@ func (c *Cache) SetClock(now func() time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.now = now
-}
-
-// Renews reports whether a node has been seen signing its announcement again
-// with nothing changed, as a build that renews does.
-func (c *Cache) Renews(id types.Identity) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.renews[id]
 }
 
 // SetMembership gives the cache the reconciler's view of the log: who is a
@@ -228,16 +219,12 @@ func (c *Cache) Added(e Endpoint) Change {
 		}
 		c.hints[e.Identity] = h
 	} else {
-		cur, held := c.by[e.Identity]
-		if !held && !c.roomLocked(c.by, e.Identity) {
+		if _, held := c.by[e.Identity]; !held && !c.roomLocked(c.by, e.Identity) {
 			return Unchanged
 		}
 		c.by[e.Identity] = *e.Clone()
 		if h, held := c.hints[e.Identity]; held && h.Seq <= e.Seq {
 			delete(c.hints, e.Identity)
-		}
-		if held && cur.SameAs(&e) {
-			c.renews[e.Identity] = true
 		}
 	}
 	after, _ := c.getLocked(e.Identity)

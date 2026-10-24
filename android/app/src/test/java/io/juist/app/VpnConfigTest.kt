@@ -13,18 +13,21 @@ class VpnConfigTest {
         val addrs = mutableListOf<String>()
         val routes = mutableListOf<String>()
         val dns = mutableListOf<String>()
+        val search = mutableListOf<String>()
         var mtuSet = 0
 
         override fun addAddress(address: InetAddress, prefixLength: Int) { addrs += "${address.hostAddress}/$prefixLength" }
         override fun addRoute(address: InetAddress, prefixLength: Int) { routes += "${address.hostAddress}/$prefixLength" }
         override fun addDnsServer(address: InetAddress) { dns += address.hostAddress!! }
+        override fun addSearchDomain(domain: String) { search += domain }
         override fun setMtu(mtu: Int) { mtuSet = mtu }
     }
 
     /**
      * mobile/testdata/establish.json, which the Go side's test holds the core
-     * to: through an exit node, its routes and DNS servers reach the builder,
-     * which a field the app no longer read would leave out unnoticed.
+     * to: its DNS server and search domains, and through an exit node its
+     * routes, reach the builder, which a field the app no longer read would
+     * leave out unnoticed.
      */
     @Test
     fun bringsTheVpnUpAsTheCoreSays() {
@@ -32,11 +35,12 @@ class VpnConfigTest {
         configureVpn(File("../../mobile/testdata/establish.json").readText(), r)
         assertEquals(listOf("100.64.0.7/32", "fd00:1:2:0:0:0:0:7/128"), r.addrs)
         assertEquals(listOf("100.64.0.0/10", "fd00:1:2:0:0:0:0:0/48", "0.0.0.0/1", "128.0.0.0/2", "2000:0:0:0:0:0:0:0/3"), r.routes)
-        assertEquals(listOf("100.64.0.1", "fd00:1:2:0:0:0:0:1"), r.dns)
+        assertEquals(listOf("fd00:1:2:0:0:0:0:53"), r.dns)
+        assertEquals(listOf("home.juist", "lan"), r.search)
         assertEquals(1280, r.mtuSet)
     }
 
-    /** Without an exit node, the core names no DNS server, and the phone keeps its own. */
+    /** Where the core names no DNS server, the phone keeps its own. */
     @Test
     fun setsNoDnsServerWithoutOne() {
         val r = Recorder()

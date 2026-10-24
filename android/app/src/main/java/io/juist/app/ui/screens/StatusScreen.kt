@@ -292,6 +292,10 @@ private fun NoteCard(severity: Severity, title: String, hint: String?, text: Str
 private fun ThisDevice(view: NetworkView, on: Boolean, copied: (String) -> Unit) {
     Panel {
         InfoRow(stringResource(R.string.label_name), view.self.name)
+        for (n in view.names?.own.orEmpty()) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            CopyRow(stringResource(R.string.label_dns), n, copied)
+        }
         if (view.self.v4.isNotEmpty()) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             CopyRow(stringResource(R.string.label_ipv4), view.self.v4, copied)

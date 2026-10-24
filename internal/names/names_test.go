@@ -291,3 +291,50 @@ func TestAZoneFoldsASCIIAlone(t *testing.T) {
 		t.Errorf("x.worK.juist is answered: %v", parse(t, msg))
 	}
 }
+
+// A reverse name of the network's own addresses is answered from the zone, a
+// member's by its name, any other there as none, so that no resolver outside
+// learns which of the network's addresses the host talks to; one outside
+// them goes upstream.
+func TestReverseNamesOfTheNetworkAreAnswered(t *testing.T) {
+	z := *zone
+	z.Reverse = []netip.Prefix{netip.MustParsePrefix("198.18.0.0/22"), netip.MustParsePrefix("fd12::/48")}
+	v6 := "2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.2.1.d.f.ip6.arpa."
+	for _, tc := range []struct {
+		name  string
+		typ   dnsmessage.Type
+		rcode dnsmessage.RCode
+		ptr   string
+	}{
+		{"2.0.18.198.in-addr.arpa.", dnsmessage.TypePTR, dnsmessage.RCodeSuccess, "mailer.home.juist."},
+		{"2.0.18.198.IN-ADDR.ARPA.", dnsmessage.TypePTR, dnsmessage.RCodeSuccess, "mailer.home.juist."},
+		{v6, dnsmessage.TypePTR, dnsmessage.RCodeSuccess, "mailer.home.juist."},
+		{"2.0.18.198.in-addr.arpa.", dnsmessage.TypeA, dnsmessage.RCodeSuccess, ""},
+		{"9.0.18.198.in-addr.arpa.", dnsmessage.TypePTR, dnsmessage.RCodeNameError, ""},
+		{"3.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.2.1.d.f.ip6.arpa.", dnsmessage.TypePTR, dnsmessage.RCodeSuccess, "zeus.home.juist."},
+	} {
+		msg := z.Answer(query(t, tc.name, tc.typ))
+		if msg == nil {
+			t.Errorf("%s %v: not answered", tc.name, tc.typ)
+			continue
+		}
+		var m dnsmessage.Message
+		if err := m.Unpack(msg); err != nil {
+			t.Fatal(err)
+		}
+		var ptr string
+		for _, r := range m.Answers {
+			if p, ok := r.Body.(*dnsmessage.PTRResource); ok {
+				ptr = p.PTR.String()
+			}
+		}
+		if m.RCode != tc.rcode || ptr != tc.ptr || !m.Authoritative {
+			t.Errorf("%s %v: %v %q, want %v %q", tc.name, tc.typ, m.RCode, ptr, tc.rcode, tc.ptr)
+		}
+	}
+	for _, name := range []string{"1.1.168.192.in-addr.arpa.", "18.198.in-addr.arpa.", "0.4.18.198.in-addr.arpa.", "x.0.18.198.in-addr.arpa."} {
+		if msg := z.Answer(query(t, name, dnsmessage.TypePTR)); msg != nil {
+			t.Errorf("%s answered, not passed on", name)
+		}
+	}
+}

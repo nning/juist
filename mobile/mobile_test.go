@@ -17,6 +17,7 @@ import (
 	"tailscale.com/net/netmon"
 
 	"github.com/nning/juist/conn"
+	"github.com/nning/juist/daemon"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
@@ -209,7 +210,7 @@ func identity(b byte) types.Identity {
 // directly, one through a relay, one being looked for, one not heard from.
 func sampleStatus() *ipc.Status {
 	self, a, b, c, d := identity(1), identity(2), identity(3), identity(4), identity(5)
-	return &ipc.Status{Self: self, InNetwork: true,
+	s := &ipc.Status{Self: self, InNetwork: true,
 		Addrs: []netip.Prefix{netip.MustParsePrefix("10.0.0.5/32"), netip.MustParsePrefix("fd00::5/128")},
 		Derived: ipc.Derived{NetworkName: "home", SelfName: "phone", Members: 5, Peers: 3, Unreachable: 1,
 			Silent: []string{"dora"}, LeaseSigners: 1, Vouchers: 1, Vouching: 1, FreshSince: 100, FreshUntil: 200,
@@ -224,28 +225,64 @@ func sampleStatus() *ipc.Status {
 			Reach: []ipc.PeerReach{{Identity: a, Live: true, Direct: true}, {Identity: b, Live: true, Relay: "anna"},
 				{Identity: c, Seeking: true, Since: 140}}},
 	}
+	s.Names = &ipc.Names{Domain: "home.juist", Resolved: true}
+	return s
+}
+
+// The view names the phone's own names, and says, as juist health does, why
+// the network's are not resolved, Private DNS by its host, and each name for
+// members alone out of reach then.
+func TestTheViewSaysWhyNamesAreNotResolved(t *testing.T) {
+	s := sampleStatus()
+	s.Names.Overrides = []ipc.NameOverride{{Name: "phone.example.org", Device: "phone"}, {Name: "www.example.org", Device: "anna"}}
+	v := viewOf(s, "dns.google")
+	if v.Names == nil || !v.Names.Resolved || !slices.Equal(v.Names.Own, []string{"phone.home.juist", "phone.example.org"}) {
+		t.Errorf("names %+v", v.Names)
+	}
+	kinds := func(v view) []string {
+		var out []string
+		for _, a := range v.Alarms {
+			if a.Kind == "privateDns" || a.Kind == "names" || a.Kind == "forMembers" {
+				out = append(out, a.Kind+":"+a.Severity+":"+strings.Join(a.Names, ",")+":"+a.Text)
+			}
+		}
+		return out
+	}
+	if got := kinds(v); len(got) != 0 {
+		t.Errorf("resolved, alarms %v", got)
+	}
+	s.Names = &ipc.Names{Domain: "home.juist", Not: daemon.PrivateDNSNot("dns.google"), ForMembers: []string{"wiki.example.org"}}
+	want := []string{"privateDns:warn:dns.google:", "forMembers:warn:wiki.example.org:"}
+	if got := kinds(viewOf(s, "dns.google")); !slices.Equal(got, want) {
+		t.Errorf("Private DNS: alarms %v, want %v", got, want)
+	}
+	s.Names.Not = "the VPN is not up"
+	want = []string{"names:warn::the VPN is not up", "forMembers:warn:wiki.example.org:"}
+	if got := kinds(viewOf(s, "")); !slices.Equal(got, want) {
+		t.Errorf("not resolved: alarms %v, want %v", got, want)
+	}
 }
 
 func TestTheViewOffersTheExitNodes(t *testing.T) {
 	s := sampleStatus()
-	if v := viewOf(s); v.Exit != nil {
+	if v := viewOf(s, ""); v.Exit != nil {
 		t.Errorf("an exit node offered where none is: %+v", v.Exit)
 	}
 	anna := s.Devices[2].Identity
 	s.Exit = &ipc.Exit{Offering: []types.Identity{anna}}
-	v := viewOf(s)
+	v := viewOf(s, "")
 	if v.Exit == nil || len(v.Exit.Offering) != 1 || v.Exit.Offering[0].Name != "anna" || v.Exit.Node != "" {
 		t.Fatalf("exit nodes on offer: %+v", v.Exit)
 	}
 	s.Exit = &ipc.Exit{Node: anna, Name: "anna", Refused: "the exit node does not answer"}
-	if v := viewOf(s); v.Exit == nil || v.Exit.Name != "anna" || v.Exit.Refused == "" {
+	if v := viewOf(s, ""); v.Exit == nil || v.Exit.Name != "anna" || v.Exit.Refused == "" {
 		t.Errorf("an exit node chosen and refused: %+v", v.Exit)
 	}
 }
 
 func TestTheViewJudgesAsJuistStatusDoes(t *testing.T) {
 	s := sampleStatus()
-	v := viewOf(s)
+	v := viewOf(s, "")
 	if v.State != "connected" || v.Self.Name != "phone" || v.Self.V4 != "10.0.0.5" || v.Self.V6 != "fd00::5" ||
 		v.Fresh.State != "fresh" {
 		t.Errorf("view: %+v", v)
@@ -269,19 +306,19 @@ func TestTheViewJudgesAsJuistStatusDoes(t *testing.T) {
 	}
 
 	s.Stale, s.Alarm = true, "two heads"
-	if v := viewOf(s); v.State != "disconnected" || v.Fresh.State != "stale" || v.Alarms[0].Kind != "fork" {
+	if v := viewOf(s, ""); v.State != "disconnected" || v.Fresh.State != "stale" || v.Alarms[0].Kind != "fork" {
 		t.Errorf("with a fork alarm: %+v", v)
 	}
 	s.Alarm = ""
-	if v := viewOf(s); v.State != "limited" {
+	if v := viewOf(s, ""); v.State != "limited" {
 		t.Errorf("stale: %s", v.State)
 	}
 	s.NotMember = true
-	if v := viewOf(s); v.State != "removed" {
+	if v := viewOf(s, ""); v.State != "removed" {
 		t.Errorf("removed: %s", v.State)
 	}
 	s.Disabled, s.StartError = "IY5WHNAM5UBB", "the mesh did not start"
-	if v := viewOf(s); v.State != "disabled" {
+	if v := viewOf(s, ""); v.State != "disabled" {
 		t.Errorf("disabled: %s", v.State)
 	}
 }
@@ -292,7 +329,7 @@ func TestTheViewNamesWhoNeedsAnUpdate(t *testing.T) {
 	s := sampleStatus()
 	s.Reach[0].Outdated = true
 	s.Outdated, s.SyncNewer, s.OlderBuild = []string{"anna"}, []string{"bert"}, []string{"carl"}
-	v := viewOf(s)
+	v := viewOf(s, "")
 	if v.Members[0].Name != "anna" || v.Members[0].Reach != "outdated" {
 		t.Errorf("members %+v", v.Members)
 	}
@@ -311,7 +348,7 @@ func TestTheViewNamesWhoNeedsAnUpdate(t *testing.T) {
 func TestTheViewIsWhatTheAppReads(t *testing.T) {
 	s := sampleStatus()
 	s.EpochError = "no wrap for this device"
-	got, err := json.MarshalIndent(viewOf(s), "", "  ")
+	got, err := json.MarshalIndent(viewOf(s, ""), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,10 +379,10 @@ func (p *recordingPlatform) Establish(config string) (int32, error) {
 	return -1, nil
 }
 
-// The app brings the VPN up with what Establish hands it, through an exit
-// node its routes and DNS too; android/app's unit tests read this file, so
-// that a field the app no longer finds, as the DNS servers, fails a test
-// rather than leaking lookups past the tunnel. JUIST_UPDATE_GOLDEN=1 writes
+// The app brings the VPN up with what Establish hands it, its DNS and search
+// domains, and through an exit node its routes too; android/app's unit tests
+// read this file, so that a field the app no longer finds, as the DNS
+// servers, fails a test rather than leaking lookups past the tunnel. JUIST_UPDATE_GOLDEN=1 writes
 // it anew.
 func TestTheVPNConfigIsWhatTheAppReads(t *testing.T) {
 	p := &recordingPlatform{fakePlatform: fakePlatform{t: t}}
@@ -353,8 +390,9 @@ func TestTheVPNConfigIsWhatTheAppReads(t *testing.T) {
 		Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.7/32"), netip.MustParsePrefix("fd00:1:2::7/128")},
 		Routes: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("fd00:1:2::/48"),
 			netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("128.0.0.0/2"), netip.MustParsePrefix("2000::/3")},
-		DNS: []netip.Addr{netip.MustParseAddr("100.64.0.1"), netip.MustParseAddr("fd00:1:2::1")},
-		MTU: 1280,
+		DNS:    []netip.Addr{netip.MustParseAddr("fd00:1:2::53")},
+		Search: []string{"home.juist", "lan"},
+		MTU:    1280,
 	})
 	if err == nil || len(p.established) != 1 {
 		t.Fatalf("established %q, %v", p.established, err)
@@ -379,9 +417,23 @@ func TestTheViewWarnsBeforeFreshnessEnds(t *testing.T) {
 	s := sampleStatus()
 	now := time.Now().Unix()
 	s.FreshSince, s.FreshUntil = now-30*3600, now+18*3600
-	v := viewOf(s)
+	v := viewOf(s, "")
 	i := slices.IndexFunc(v.Alarms, func(a alarm) bool { return a.Kind == "freshnessEnding" })
 	if i < 0 || v.Alarms[i].Count != 18 {
 		t.Fatalf("alarms %+v, want freshnessEnding in 18 hours", v.Alarms)
+	}
+}
+
+// The app's word on the network beneath the VPN reaches the daemon, its
+// link-local resolver with its zone; an address that does not parse is
+// left out and said.
+func TestTheUnderlaysResolversAreReadAsTheAppSaysThem(t *testing.T) {
+	u, err := parseUnderlay(`{"servers":["192.168.1.1","fe80:0:0:0:0:0:0:1%wlan0","nonsense"],"overTls":true,"privateDns":"dns.google"}`)
+	want := []netip.Addr{netip.MustParseAddr("192.168.1.1"), netip.MustParseAddr("fe80::1%wlan0")}
+	if err == nil || !slices.Equal(u.Servers, want) || !u.OverTLS || u.PrivateDNS != "dns.google" {
+		t.Errorf("%+v, %v", u, err)
+	}
+	if u, err := parseUnderlay(""); err != nil || len(u.Servers) != 0 {
+		t.Errorf("none: %+v, %v", u, err)
 	}
 }

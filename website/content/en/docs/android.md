@@ -1,8 +1,8 @@
 ---
 title: Android
 linkTitle: Android
-description: Install juist's Android app, join a network with a phone by its QR code or code, and see from the phone how each device is reached.
-lead: The Android app makes a phone a member of one network. It joins by the invite's QR code or code, reaches the other devices at their addresses, and shows how each of them is reached.
+description: Install juist's Android app, join a network with a phone by its QR code or code, reach the devices by name, and see from the phone how each one is reached.
+lead: The Android app makes a phone a member of one network. It joins by the invite's QR code or code, reaches the other devices by their names and addresses, and shows how each of them is reached.
 ---
 
 ## What the app does
@@ -10,16 +10,17 @@ lead: The Android app makes a phone a member of one network. It joins by the inv
 The app runs juist on a phone with Android 12 or newer. The phone joins one
 network as a **member** with no roles, as a device that only reaches the
 others and is reached by them. While its VPN is on, every app on the phone
-reaches the other devices at their addresses in the network.
+reaches the other devices by their names, such as `nas.home.juist`, and at
+their addresses in the network.
 
-The VPN carries only traffic to the network's addresses. The phone's other
-traffic and its DNS bypass juist, as before.
+The VPN carries the traffic to the network's addresses, and the phone's DNS
+([Names](#names)). The phone's other traffic bypasses juist, as before.
 
 What the phone cannot do:
 
 - It can be in only one network.
-- It resolves no names: `nas.home.juist` does not work there, so use the
-  device's address, such as `198.18.36.2`.
+- It cannot turn [public names]({{< relref "docs/names" >}}) on, so a public
+  name an admin points at a device resolves publicly there.
 - It cannot use a [subnet router]({{< relref "docs/subnets" >}}) or act as an
   [exit node]({{< relref "docs/exit-nodes" >}}), though it can send its
   internet traffic through one.
@@ -159,8 +160,8 @@ a computer (see
 - Whatever needs attention, such as a device that does not answer, or
   **No device may relay**: a phone on mobile data often needs a
   [relay]({{< relref "docs/relays" >}}) to reach the others.
-- This phone: its name, its IPv4 and IPv6 addresses (tap one to copy it), and
-  its freshness, that is, when a voucher last confirmed that its view of the
+- This phone: its name, its DNS name, its IPv4 and IPv6 addresses (tap one to
+  copy it), and its freshness, that is, when a voucher last confirmed that its view of the
   network is current.
 - Each other device, with how it is reached.
 
@@ -181,20 +182,56 @@ A device is reached **Direct**, **Through a relay**, or not at the moment:
 runs an older juist; until that is updated, a ping gets through, other apps
 do not).
 
-Tap a device to see its addresses, its roles and when it was last heard from.
+Tap a device to see its name in DNS, its addresses, its roles and when it was
+last heard from.
 For a device reached through a relay, it names the device whose relay
 carries the traffic.
 **Ping** sends an echo through the tunnel. juist on that device answers it
 itself, so the ping is answered even if the device's firewall drops pings.
 **Open in browser** opens `http://` at its address. Every other app reaches the device
-at the same addresses, such as an SSH client at `198.18.36.2`.
+by the same name and addresses, such as an SSH client at `nas.home.juist`.
+
+## Names
+
+{{< screens >}}
+status_private_dns: What the app says while Private DNS passes juist by
+{{< /screens >}}
+
+While the VPN is on, every lookup on the phone goes to juist, which runs in
+the app. It answers the network's [names]({{< relref "docs/names" >}})
+itself: each device as `nas.home.juist`, or just `nas`, and the names
+[published]({{< relref "docs/publishing" >}}) under the network's domain,
+those for members alone among them, which then lead straight to their
+device through the tunnel. It also answers who an address of the network
+is, so that an app looking up `198.18.36.2` learns `nas.home.juist` and
+asks no one outside. Every other name it asks of the network the
+phone is on, as the phone would without juist, and through DNS over TLS
+where the phone's Private DNS, set to automatic, does that too.
+
+The status screen shows the phone's own name under **DNS name**, and each
+device's screen its name. A lookup juist cannot pass on, as with no network
+or through an exit node that cannot be used, fails at once rather than
+after a few seconds. Turning the VPN off gives the
+phone its own DNS back.
+
+Android's **Private DNS** setting decides whether lookups reach juist:
+
+| Private DNS | Names |
+|---|---|
+| Off | resolved |
+| Automatic | resolved |
+| Private DNS provider hostname | not resolved: Android sends every lookup to that provider, past juist |
+
+With a provider's hostname set, juist leaves the phone's DNS alone, and the
+app says that the network's names are not resolved, and names each name for
+members alone that is then out of reach.
 
 ## Through an exit node
 
 Where the network has [exit nodes]({{< relref "docs/exit-nodes" >}}), the
 status screen lists them under **Internet**, beside **Direct**. Choose one,
 and the phone's internet and its DNS go through it, as `juist exit use`
-does on a computer. While the chosen exit node cannot be used, the phone's
+does on a computer. juist still answers the network's names itself. While the chosen exit node cannot be used, the phone's
 internet traffic is blocked rather than sent around it, and the app says why.
 Choose **Direct** to send it out without juist again.
 
@@ -280,4 +317,5 @@ uninstalled.
 | **Limited** | The phone has not reached enough vouchers for 48 hours. Connect it to a network where it can reach them. |
 | **Too few vouchers have vouched: limited in … hours** | Bring a voucher back online before then. |
 | **Refused** or **Removed** | The phone was removed. Forget the network and join again with a new invite. |
-| `nas.home.juist` does not resolve | The phone resolves no names; use the address the device's screen shows. |
+| **Private DNS sends every lookup to …** | Set Private DNS to automatic or off in the phone's network settings. |
+| `nas.home.juist` does not resolve | Turn the VPN on. Otherwise the status screen says why. |

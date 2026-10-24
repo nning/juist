@@ -28,17 +28,18 @@ type VPN interface {
 }
 
 // A VPNConfig is a device as [VPN.Establish] brings it up: DNS, where set,
-// takes all of the host's lookups.
+// takes all of the host's lookups, trying Search for a name without a dot.
 type VPNConfig struct {
 	Addrs  []netip.Prefix
 	Routes []netip.Prefix
 	DNS    []netip.Addr
+	Search []string
 	MTU    int
 }
 
 func (c VPNConfig) equal(o VPNConfig) bool {
 	return slices.Equal(c.Addrs, o.Addrs) && slices.Equal(c.Routes, o.Routes) && slices.Equal(c.DNS, o.DNS) &&
-		c.MTU == o.MTU
+		slices.Equal(c.Search, o.Search) && c.MTU == o.MTU
 }
 
 // errOnVPN refuses what a VPN app may not do to its host.
@@ -55,18 +56,29 @@ func NewVPNPlumber(v VPN, cover func() []netip.Prefix) Plumber {
 	return &vpnPlumber{v: v, cover: cover}
 }
 
-// VPNDial is a TCP dial into the overlay for p, a [NewVPNPlumber]'s: from
-// the device's own address of the far end's family, so that it leaves by the
-// device alone, and failing while no device is established.
+// VPNDial is a TCP dial into the overlay for p, a [NewVPNPlumber]'s, as
+// [VPNDialer]'s.
 func VPNDial(p Plumber) func(context.Context, netip.AddrPort) (net.Conn, error) {
+	dial := VPNDialer(p)
+	return func(ctx context.Context, to netip.AddrPort) (net.Conn, error) { return dial(ctx, "tcp", to) }
+}
+
+// VPNDialer dials into the overlay for p, a [NewVPNPlumber]'s, over network,
+// tcp or udp: from the device's own address of the far end's family, so that
+// it leaves by the device alone, and failing while no device is established.
+func VPNDialer(p Plumber) func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error) {
 	vp, _ := p.(*vpnPlumber)
-	return func(ctx context.Context, to netip.AddrPort) (net.Conn, error) {
+	return func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error) {
 		from, ok := vp.source(to.Addr())
 		if !ok {
 			return nil, errNoVPNDevice
 		}
-		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: from.AsSlice()}}
-		return d.DialContext(ctx, "tcp", to.String())
+		var local net.Addr = &net.TCPAddr{IP: from.AsSlice()}
+		if network == "udp" {
+			local = &net.UDPAddr{IP: from.AsSlice()}
+		}
+		d := net.Dialer{LocalAddr: local}
+		return d.DialContext(ctx, network, to.String())
 	}
 }
 
@@ -125,8 +137,9 @@ func (p *vpnPlumber) SetServe(_ string, s plumber.ServeSpec) error {
 // is set on it.
 func (p *vpnPlumber) SetEgress(string, plumber.EgressSpec) error { return nil }
 
-// SetDNS has the device take the host's lookups to servers, or none.
-func (p *vpnPlumber) SetDNS(_ string, servers []netip.Addr, _ []string) error {
+// SetDNS has the device take the host's lookups to servers, searching
+// search, or none.
+func (p *vpnPlumber) SetDNS(_ string, servers []netip.Addr, search []string) error {
 	r := p.router()
 	if r == nil {
 		if len(servers) > 0 {
@@ -134,7 +147,7 @@ func (p *vpnPlumber) SetDNS(_ string, servers []netip.Addr, _ []string) error {
 		}
 		return nil
 	}
-	return r.setDNS(servers)
+	return r.setDNS(servers, search)
 }
 
 func (p *vpnPlumber) Answers(string) (string, error) { return "", nil }
@@ -294,6 +307,7 @@ type vpnRouter struct {
 	addrs, overlay  []netip.Prefix // as the engine last set them
 	internet        bool           // routed into the tunnel, for an exit node
 	dns             []netip.Addr
+	search          []string
 	established     VPNConfig // as last established
 	everEstablished bool
 }
@@ -312,10 +326,13 @@ func (r *vpnRouter) Set(cfg *router.Config) error {
 	return r.establishLocked()
 }
 
-func (r *vpnRouter) setDNS(servers []netip.Addr) error {
+func (r *vpnRouter) setDNS(servers []netip.Addr, search []string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.dns = slices.Clone(servers)
+	r.dns, r.search = slices.Clone(servers), nil
+	if len(servers) > 0 {
+		r.search = slices.Clone(search)
+	}
 	return r.establishLocked()
 }
 
@@ -359,7 +376,14 @@ func (r *vpnRouter) establishLocked() error {
 	if r.internet {
 		routes = append(routes, Internet(true, true, append(slices.Clone(cover), r.overlay...))...)
 	}
-	c := VPNConfig{Addrs: r.addrs, Routes: sortedPrefixes(routes), DNS: r.dns, MTU: r.dev.mtu}
+	// The servers taking the host's lookups are in the tunnel, juistd's own
+	// resolver among them, which no member's route covers.
+	for _, a := range r.dns {
+		if !slices.ContainsFunc(routes, func(p netip.Prefix) bool { return p.Contains(a) }) {
+			routes = append(routes, netip.PrefixFrom(a, a.BitLen()))
+		}
+	}
+	c := VPNConfig{Addrs: r.addrs, Routes: sortedPrefixes(routes), DNS: r.dns, Search: r.search, MTU: r.dev.mtu}
 	if r.everEstablished && c.equal(r.established) {
 		return nil
 	}

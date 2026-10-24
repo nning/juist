@@ -167,9 +167,6 @@ groups:
         de: Namen für jedes Gerät
         marks: yyyyynpnypn
         notes:
-          juist:
-            en: On Linux and FreeBSD, not in the Android app.
-            de: Unter Linux und FreeBSD, nicht in der Android-App.
           nebula:
             en: Each device's resolver must be pointed at a lighthouse by hand.
             de: Der Resolver jedes Geräts muss von Hand auf einen Lighthouse zeigen.
@@ -231,8 +228,8 @@ groups:
         marks: pyyyyyypppy
         notes:
           juist:
-            en: Only Android, as a member without names, roles or subnets.
-            de: Nur Android, als Mitglied ohne Namen, Rollen und Subnetze.
+            en: Only Android, as a member without public names, roles or subnets.
+            de: Nur Android, als Mitglied ohne öffentliche Namen, Rollen und Subnetze.
           tinc:
             en: No Android or iOS.
             de: Kein Android und iOS.

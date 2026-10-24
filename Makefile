@@ -38,7 +38,7 @@ GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 BUILDDIR ?= build
 CMDS     ?= juist juistd
 
-# Platforms v1 commits to (docs/05-roadmap.md M26). Building for each catches
+# Platforms v1 commits to (docs/05-roadmap.md M30). Building for each catches
 # build-tag rot in the embedded Tailscale stack.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
 # Platforms kept compiling though nothing ships for them: macOS, deferred past v1.

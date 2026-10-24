@@ -159,6 +159,41 @@ func TestThePageMarksOutdatedDevices(t *testing.T) {
 	}
 }
 
+// A device's reach reads as `juist devices` says it.
+func TestTheReachReadsAsTheCLISaysIt(t *testing.T) {
+	nas := func(p *ipc.StatusPage) string {
+		for _, d := range devices(&p.Status, testNow) {
+			if d.Name == "nas" {
+				return d.Reach
+			}
+		}
+		return ""
+	}
+	for _, c := range []struct {
+		reach ipc.PeerReach
+		want  string
+	}{
+		{ipc.PeerReach{Live: true, Direct: true}, "direct"},
+		{ipc.PeerReach{Live: true}, "relayed"},
+		{ipc.PeerReach{Live: true, Outdated: true}, "outdated"},
+		{ipc.PeerReach{Absent: true}, "offline"},
+		{ipc.PeerReach{Seeking: true}, "no answer"},
+		{ipc.PeerReach{}, "no answer"},
+	} {
+		p := sample()
+		c.reach.Identity = p.Status.Reach[2].Identity
+		p.Status.Reach[2] = c.reach
+		if got := nas(p); got != c.want {
+			t.Errorf("%+v reads %q, not %q", c.reach, got, c.want)
+		}
+	}
+	p := sample()
+	p.Status.Reach = p.Status.Reach[:2]
+	if got := nas(p); got != "not connected" {
+		t.Errorf("a device without a tunnel reads %q", got)
+	}
+}
+
 // When a peer was last heard from shows once: in its column on a wide
 // screen, under the state on a narrow one. The copy under the state is a
 // td .sub, so the rule hiding it outside the narrow layout must be as

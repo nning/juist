@@ -484,7 +484,7 @@ func TestAHelpersDNSTakesPort53Alone(t *testing.T) {
 // to read, as on Android.
 func TestAVPNsDNSIsThroughWithoutAResolvConf(t *testing.T) {
 	p := &dnsPlumber{}
-	h := VPNDNS(p, "juist0")
+	h := VPNDNS(p, "juist0", func() Underlay { return Underlay{} })
 	at := []netip.AddrPort{netip.MustParseAddrPort("198.19.44.2:53")}
 	if err := h.Route(DNSRouting{Servers: at, Everything: true}); err != nil || len(p.set) != 1 {
 		t.Errorf("routing to the exit node: %v, %v", err, p.set)

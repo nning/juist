@@ -135,7 +135,8 @@ type heldOverride struct {
 // upstream.
 func (d *Daemon) namesZone(state *log.State, view policy.View, fresh log.Freshness, accepted bool, now int64,
 	serves func(types.Identity) bool) (*names.Zone, []heldOverride, int64) {
-	z := &names.Zone{Members: map[string][]netip.Addr{}, Overrides: map[string]names.Override{}, Public: state.Domain()}
+	z := &names.Zone{Members: map[string][]netip.Addr{}, Overrides: map[string]names.Override{}, Public: state.Domain(),
+		Reverse: append(slices.Clone(state.V4RangesAt(now)), state.ULA())}
 	if network := names.Label(state.Network()); network != "" {
 		z.Domain = network + "." + types.NamesTLD
 	}

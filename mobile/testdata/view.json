@@ -4,6 +4,7 @@
   "self": {
     "identity": "nid:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     "name": "phone",
+    "dns": "phone.home.juist",
     "v4": "10.0.0.5",
     "v6": "fd00::5",
     "reach": "self"
@@ -12,6 +13,7 @@
     {
       "identity": "nid:AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "name": "anna",
+      "dns": "anna.home.juist",
       "roles": [
         "admin"
       ],
@@ -20,18 +22,21 @@
     {
       "identity": "nid:AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "name": "bert",
+      "dns": "bert.home.juist",
       "reach": "relay",
       "relay": "anna"
     },
     {
       "identity": "nid:BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "name": "cleo",
+      "dns": "cleo.home.juist",
       "reach": "sought",
       "since": 140
     },
     {
       "identity": "nid:BQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
       "name": "dora",
+      "dns": "dora.home.juist",
       "reach": "silent"
     }
   ],
@@ -46,6 +51,13 @@
     "live": 2,
     "total": 3,
     "checked": 150
+  },
+  "names": {
+    "domain": "home.juist",
+    "own": [
+      "phone.home.juist"
+    ],
+    "resolved": true
   },
   "alarms": [
     {

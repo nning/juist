@@ -2,9 +2,17 @@ package dnsfwd
 
 import (
 	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"net/netip"
 	"os"
@@ -271,7 +279,8 @@ func TestAFailingResolverIsPassedOver(t *testing.T) {
 		}
 	}()
 	failing.addr = netip.MustParseAddrPort(pc.LocalAddr().String())
-	f := &Forwarder{opts: Options{Upstream: func() []netip.AddrPort { return []netip.AddrPort{failing.addr, good.addr} }}}
+	f := &Forwarder{opts: Options{Upstream: func() []netip.AddrPort { return []netip.AddrPort{failing.addr, good.addr} }},
+		ctx: context.Background()}
 	resp, err := f.ask("udp", query(9))
 	if err != nil || resp[3]&0x0f != 0 || good.asked.Load() != 1 {
 		t.Errorf("answered %x, %v, the good resolver asked %d times", resp, err, good.asked.Load())
@@ -461,5 +470,311 @@ func TestAnAnswerPassedOnIsCapped(t *testing.T) {
 	}
 	for n := range len(msg) {
 		capTTL(msg[:n], 30) // a cut message is left as it parses
+	}
+}
+
+// A query no resolver can be asked is answered SERVFAIL at once where
+// FailFast says so, and not at all otherwise.
+func TestAQueryNoneCanBeAskedFailsAtOnce(t *testing.T) {
+	up := startUpstream(t, false)
+	none := func() []netip.AddrPort { return nil }
+	refused := errors.New("network is unreachable")
+	for _, tc := range []struct {
+		name string
+		set  func(*Options)
+	}{
+		{"no resolver", func(o *Options) { o.Upstream = none }},
+		{"no route", func(o *Options) {
+			o.Dial = func(context.Context, string, netip.AddrPort) (net.Conn, error) { return nil, refused }
+		}},
+	} {
+		at := startForwarderWith(t, up, func(o *Options) { tc.set(o); o.FailFast = true })
+		start := time.Now()
+		resp, err := askUDP(t, at, query(0x5152))
+		if err != nil || !answers(resp, query(0x5152)) || resp[3]&0x0f != RCodeServFail || time.Since(start) > 500*time.Millisecond {
+			t.Errorf("%s: %x, %v after %v", tc.name, resp, err, time.Since(start))
+		}
+		at = startForwarderWith(t, up, tc.set)
+		if resp, err := askUDP(t, at, query(0x5153)); err == nil {
+			t.Errorf("%s, without FailFast: answered %x", tc.name, resp)
+		}
+	}
+	if n := up.asked.Load(); n != 0 {
+		t.Errorf("the resolver was asked %d times", n)
+	}
+}
+
+// datagrams is a PacketConn that is no *net.UDPConn, as a stack in the
+// process gives.
+type datagrams struct{ net.PacketConn }
+
+// The forwarder answers on what Listen gives, any PacketConn, and asks
+// upstream by Dial.
+func TestAForwarderListensAndDialsAsItIsGiven(t *testing.T) {
+	up := startUpstream(t, false)
+	var dialed atomic.Int32
+	at := startForwarderWith(t, up, func(o *Options) {
+		o.Listen = func(ap netip.AddrPort) (net.PacketConn, net.Listener, error) {
+			pc, err := net.ListenPacket("udp", ap.String())
+			if err != nil {
+				return nil, nil, err
+			}
+			ln, err := net.Listen("tcp", ap.String())
+			if err != nil {
+				pc.Close()
+				return nil, nil, err
+			}
+			return datagrams{pc}, ln, nil
+		}
+		o.Dial = func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error) {
+			dialed.Add(1)
+			var d net.Dialer
+			return d.DialContext(ctx, network, to.String())
+		}
+	})
+	resp, err := askUDP(t, at, query(0x5154))
+	if err != nil || !answers(resp, query(0x5154)) {
+		t.Fatalf("%x, %v", resp, err)
+	}
+	if dialed.Load() != 1 || up.asked.Load() != 1 {
+		t.Errorf("dialed %d times, the resolver asked %d", dialed.Load(), up.asked.Load())
+	}
+}
+
+// tlsUpstream answers queries by DNS over TLS on loopback with a certificate
+// of its own, counting them.
+func tlsUpstream(t *testing.T) (netip.AddrPort, *atomic.Int32) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1),
+		NotAfter: time.Now().Add(time.Hour)}, &x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var asked atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				q, err := readTCPMessage(bufio.NewReader(c))
+				if err != nil {
+					return
+				}
+				asked.Add(1)
+				q[2] |= 0x80
+				c.Write(tcpMessage(q))
+			}()
+		}
+	}()
+	return netip.MustParseAddrPort(ln.Addr().String()), &asked
+}
+
+// A resolver on 853 is asked by DNS over TLS, whatever its certificate, and
+// the next one in turn where it cannot be.
+func TestAResolverOn853IsAskedOverTLS(t *testing.T) {
+	plain := startUpstream(t, false)
+	overTLS, asked := tlsUpstream(t)
+	dot, dns := netip.MustParseAddrPort("127.0.0.1:853"), netip.MustParseAddrPort("127.0.0.1:53")
+	var dotAt atomic.Pointer[netip.AddrPort]
+	dotAt.Store(&overTLS)
+	at := startForwarderWith(t, plain, func(o *Options) {
+		o.Upstream = func() []netip.AddrPort { return []netip.AddrPort{dot, dns} }
+		o.Dial = func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error) {
+			if to == dot {
+				if network != "tcp" {
+					t.Errorf("DNS over TLS asked over %s", network)
+				}
+				to = *dotAt.Load()
+			} else {
+				to = plain.addr
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, to.String())
+		}
+	})
+	if resp, err := askUDP(t, at, query(0x5155)); err != nil || !answers(resp, query(0x5155)) || asked.Load() != 1 || plain.asked.Load() != 0 {
+		t.Errorf("over TLS: %x, %v; asked %d over TLS, %d in plain text", resp, err, asked.Load(), plain.asked.Load())
+	}
+	closed := netip.MustParseAddrPort("127.0.0.1:1")
+	dotAt.Store(&closed)
+	if resp, err := askUDP(t, at, query(0x5156)); err != nil || !answers(resp, query(0x5156)) || plain.asked.Load() != 1 {
+		t.Errorf("TLS refused: %x, %v; asked %d in plain text", resp, err, plain.asked.Load())
+	}
+	dotAt.Store(&overTLS)
+	if resp, err := askUDP(t, at, query(0x5157)); err != nil || !answers(resp, query(0x5157)) || asked.Load() != 1 || plain.asked.Load() != 2 {
+		t.Errorf("after TLS failed: %x, %v; asked %d over TLS, %d in plain text, want TLS left alone for a while",
+			resp, err, asked.Load(), plain.asked.Load())
+	}
+}
+
+// failingDatagrams fails every read without being closed, counting them, as
+// a stack in the process does once its device is gone.
+type failingDatagrams struct {
+	net.PacketConn
+	reads atomic.Int32
+}
+
+func (f *failingDatagrams) ReadFrom([]byte) (int, net.Addr, error) {
+	f.reads.Add(1)
+	return 0, nil, errors.New("endpoint is in invalid state")
+}
+
+// A listener that fails every read or accept is waited on between tries, not
+// spun on.
+func TestAFailingListenerIsNotSpunOn(t *testing.T) {
+	pc, ln := listenBoth(t)
+	failing := &failingDatagrams{PacketConn: pc}
+	ap := netip.MustParseAddrPort(pc.LocalAddr().String())
+	f, err := Start(Options{Addrs: []netip.Addr{ap.Addr()}, Port: ap.Port(),
+		Listen: func(netip.AddrPort) (net.PacketConn, net.Listener, error) { return failing, ln, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	f.Close()
+	if n := failing.reads.Load(); n > 20 {
+		t.Errorf("%d reads failed in 300 ms", n)
+	}
+}
+
+// Where Capped says which, MaxTTL caps the answers to those queries alone,
+// and every other passes on as upstream answered it.
+func TestCappedSaysWhichAnswersAreCapped(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, maxMessage)
+		for {
+			n, src, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			var p dnsmessage.Parser
+			h, err := p.Start(buf[:n])
+			if err != nil {
+				continue
+			}
+			q, err := p.Question()
+			if err != nil {
+				continue
+			}
+			b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true})
+			b.StartQuestions()
+			b.Question(q)
+			b.StartAnswers()
+			b.AResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 3600}, dnsmessage.AResource{A: [4]byte{192, 0, 2, 1}})
+			resp, _ := b.Finish()
+			pc.WriteTo(resp, src)
+		}
+	}()
+	up := &upstream{addr: netip.MustParseAddrPort(pc.LocalAddr().String())}
+	at := startForwarderWith(t, up, func(o *Options) {
+		o.MaxTTL = 30
+		o.Capped = func(q []byte) bool { return bytes.Contains(q, []byte("\x07example\x03org")) }
+	})
+	for name, want := range map[string]uint32{"www.example.org.": 30, "www.example.com.": 3600} {
+		b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 9})
+		b.StartQuestions()
+		b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET})
+		q, _ := b.Finish()
+		resp, err := askUDP(t, at, q)
+		var m dnsmessage.Message
+		if err != nil || m.Unpack(resp) != nil || len(m.Answers) != 1 || m.Answers[0].Header.TTL != want {
+			t.Errorf("%s: %+v, %v, want TTL %d", name, m.Answers, err, want)
+		}
+	}
+}
+
+// bigUpstream answers every query with 150 addresses, about 2.4 KB, over UDP
+// and TCP.
+func bigUpstream(t *testing.T) *upstream {
+	t.Helper()
+	pc, ln := listenBoth(t)
+	t.Cleanup(func() { pc.Close(); ln.Close() })
+	answer := func(q []byte) []byte {
+		var p dnsmessage.Parser
+		h, err := p.Start(q)
+		if err != nil {
+			return nil
+		}
+		qq, err := p.Question()
+		if err != nil {
+			return nil
+		}
+		b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, RecursionAvailable: true})
+		b.StartQuestions()
+		b.Question(qq)
+		b.StartAnswers()
+		for i := range 150 {
+			b.AResource(dnsmessage.ResourceHeader{Name: qq.Name, Class: dnsmessage.ClassINET, TTL: 60}, dnsmessage.AResource{A: [4]byte{192, 0, 2, byte(i)}})
+		}
+		resp, _ := b.Finish()
+		return resp
+	}
+	go func() {
+		buf := make([]byte, maxMessage)
+		for {
+			n, src, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			pc.WriteTo(answer(buf[:n]), src)
+		}
+	}()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				q, err := readTCPMessage(bufio.NewReader(c))
+				if err == nil {
+					c.Write(tcpMessage(answer(q)))
+				}
+			}()
+		}
+	}()
+	return &upstream{addr: netip.MustParseAddrPort(pc.LocalAddr().String())}
+}
+
+// An answer longer than MaxUDP is sent over UDP truncated, its question
+// alone with TC set, for the asker to ask again over TCP, which carries it
+// whole.
+func TestAnAnswerTooLongForUDPIsTruncated(t *testing.T) {
+	up := bigUpstream(t)
+	at := startForwarderWith(t, up, func(o *Options) { o.MaxUDP = 1232 })
+	resp, err := askUDP(t, at, query(0x5158))
+	var m dnsmessage.Message
+	if err != nil || len(resp) > 1232 || m.Unpack(resp) != nil || !m.Truncated || m.ID != 0x5158 ||
+		len(m.Questions) != 1 || len(m.Answers) != 0 {
+		t.Errorf("over UDP: %d bytes, %+v, %v", len(resp), m.Header, err)
+	}
+	c, err := net.Dial("tcp", at.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(time.Second))
+	c.Write(tcpMessage(query(0x5159)))
+	resp, err = readTCPMessage(bufio.NewReader(c))
+	if err != nil || m.Unpack(resp) != nil || m.Truncated || len(m.Answers) != 150 {
+		t.Errorf("over TCP: %d answers, %v", len(m.Answers), err)
 	}
 }

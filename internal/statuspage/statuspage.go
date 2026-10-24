@@ -274,7 +274,7 @@ func devices(st *ipc.Status, now time.Time) []device {
 		case !installed && slices.Contains(st.Silent, dev.Name):
 			dev.Reach, dev.Class = "not heard from", "absent"
 		case !installed:
-			dev.Reach, dev.Class = "no tunnel", "absent"
+			dev.Reach, dev.Class = "not connected", "absent"
 		case !st.TunnelsChecked:
 			dev.Reach, dev.Class = "not checked yet", "absent"
 		case r.Live && r.Outdated:
@@ -282,13 +282,13 @@ func devices(st *ipc.Status, now time.Time) []device {
 		case r.Live && r.Direct:
 			dev.Reach, dev.Class = "direct", "direct"
 		case r.Live:
-			dev.Reach, dev.Class = "relay", "relay"
+			dev.Reach, dev.Class = "relayed", "relay"
 		case r.Absent:
-			dev.Reach, dev.Class = "absent", "absent"
+			dev.Reach, dev.Class = "offline", "absent"
 		case r.Seeking:
-			dev.Reach, dev.Class = "sought", "sought"
+			dev.Reach, dev.Class = "no answer", "sought"
 		default:
-			dev.Reach, dev.Class = "down", "alarm"
+			dev.Reach, dev.Class = "no answer", "alarm"
 		}
 		switch {
 		case d.Build == 0:

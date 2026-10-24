@@ -12,9 +12,14 @@ import (
 )
 
 // NetworkChanged tells the data plane that the host's networks changed, so
-// that it finds its paths again at once, where its monitor would not notice.
+// that it finds its paths again at once, where its monitor would not notice,
+// and has the host's own resolvers read again.
 func (d *Daemon) NetworkChanged() {
 	d.manager.NetworkChanged()
+	d.sole.mu.Lock()
+	d.sole.readAt = time.Time{}
+	d.sole.mu.Unlock()
+	d.reconcileSoon()
 }
 
 // pingWait bounds a ping: the engine may never answer.

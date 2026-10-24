@@ -4,6 +4,7 @@ package names
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -25,13 +26,16 @@ const ednsSize = 1232
 // members, by name, each lowercase without a final dot. Up says whether an
 // override's target is answered for now; nil answers every one. Public is
 // the network's public domain, which comes here whole, its names but the
-// overrides going on upstream.
+// overrides going on upstream. Reverse are the network's own prefixes, whose
+// reverse names it answers, a member's address by its name and any other as
+// none, so that no resolver outside learns them.
 type Zone struct {
 	Domain    string
 	Members   map[string][]netip.Addr
 	Overrides map[string]Override
 	Up        func(target string) bool
 	Public    string
+	Reverse   []netip.Prefix
 }
 
 // An Override points a public name at Target, a member, by its addresses.
@@ -71,7 +75,8 @@ func (z *Zone) Answer(query []byte) (answer []byte) {
 		return nil
 	}
 	name := asciiLower(strings.TrimSuffix(q.Name.String(), "."))
-	own := z.Domain != "" && (name == z.Domain || strings.HasSuffix(name, "."+z.Domain))
+	rev, reverse := z.reverseOf(name)
+	own := reverse || z.Domain != "" && (name == z.Domain || strings.HasSuffix(name, "."+z.Domain))
 	_, more := p.Question()
 	edns, ok := false, more == dnsmessage.ErrSectionDone
 	if ok {
@@ -92,6 +97,9 @@ func (z *Zone) Answer(query []byte) (answer []byte) {
 			return refuse(h, q, rcode)
 		}
 		return nil
+	}
+	if reverse {
+		return z.replyReverse(h, q, edns, rev)
 	}
 	if own {
 		label := strings.TrimSuffix(strings.TrimSuffix(name, z.Domain), ".")
@@ -155,6 +163,84 @@ func (z *Zone) reply(h dnsmessage.Header, q dnsmessage.Question, edns, own bool,
 			return nil
 		}
 		if b.SOAResource(dnsmessage.ResourceHeader{Name: apex, Class: dnsmessage.ClassINET, TTL: TTL}, soa) != nil {
+			return nil
+		}
+	}
+	if edns {
+		var rh dnsmessage.ResourceHeader
+		if rh.SetEDNS0(ednsSize, dnsmessage.RCodeSuccess, false) != nil || b.StartAdditionals() != nil ||
+			b.OPTResource(rh, dnsmessage.OPTResource{}) != nil {
+			return nil
+		}
+	}
+	msg, err := b.Finish()
+	if err != nil {
+		return nil
+	}
+	return msg
+}
+
+// reverseOf is the address name is the reverse name of, where it is one of
+// the network's own.
+func (z *Zone) reverseOf(name string) (netip.Addr, bool) {
+	var a netip.Addr
+	if v4, ok := strings.CutSuffix(name, ".in-addr.arpa"); ok {
+		o := strings.Split(v4, ".")
+		if len(o) != 4 {
+			return a, false
+		}
+		var err error
+		if a, err = netip.ParseAddr(o[3] + "." + o[2] + "." + o[1] + "." + o[0]); err != nil {
+			return a, false
+		}
+	} else if v6, ok := strings.CutSuffix(name, ".ip6.arpa"); ok {
+		n := strings.Split(v6, ".")
+		if len(n) != 32 {
+			return a, false
+		}
+		var b [16]byte
+		for i, l := range n {
+			if len(l) != 1 || strings.IndexByte("0123456789abcdef", l[0]) < 0 {
+				return a, false
+			}
+			nibble := byte(strings.IndexByte("0123456789abcdef", l[0]))
+			b[15-i/2] |= nibble << (4 * (i % 2))
+		}
+		a = netip.AddrFrom16(b)
+	} else {
+		return a, false
+	}
+	for _, p := range z.Reverse {
+		if p.Contains(a) {
+			return a, true
+		}
+	}
+	return a, false
+}
+
+// replyReverse answers q, the reverse name of a, with the name of the member
+// holding a, empty for another type, and as none where no member holds it.
+func (z *Zone) replyReverse(h dnsmessage.Header, q dnsmessage.Question, edns bool, a netip.Addr) []byte {
+	var target string
+	for label, addrs := range z.Members {
+		if z.Domain != "" && slices.Contains(addrs, a) {
+			target = label + "." + z.Domain + "."
+		}
+	}
+	rcode := dnsmessage.RCodeSuccess
+	if target == "" {
+		rcode = dnsmessage.RCodeNameError
+	}
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, Authoritative: true,
+		RecursionDesired: h.RecursionDesired, RecursionAvailable: true, RCode: rcode})
+	b.EnableCompression()
+	if b.StartQuestions() != nil || b.Question(q) != nil || b.StartAnswers() != nil {
+		return nil
+	}
+	if target != "" && q.Type == dnsmessage.TypePTR {
+		n, err := dnsmessage.NewName(target)
+		if err != nil || b.PTRResource(dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: TTL},
+			dnsmessage.PTRResource{PTR: n}) != nil {
 			return nil
 		}
 	}

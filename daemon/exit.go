@@ -291,6 +291,7 @@ func (d *Daemon) applyExit(p exitPlan) {
 		port = dnsAskedPort
 	}
 	d.setZone(p)
+	d.exitRefused.Store(p.status.Refused != "")
 	through, why := d.routeDNS(p.dns, p.keepDNS)
 	p.status.DNS = through
 	if !through && !p.status.Node.IsZero() && p.status.DNSNot == "" {

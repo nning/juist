@@ -214,8 +214,16 @@ func TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS(t *testing.T) {
 		t.Error("the network is no longer routed")
 	}
 	dns := []netip.Addr{netip.MustParseAddr("10.0.0.1")}
-	if err := p.SetDNS("juist0", dns, nil); err != nil || !slices.Equal(last().DNS, dns) {
-		t.Errorf("DNS established: %v, %v", last().DNS, err)
+	search := []string{"home.juist", "lan"}
+	if err := p.SetDNS("juist0", dns, search); err != nil || !slices.Equal(last().DNS, dns) || !slices.Equal(last().Search, search) {
+		t.Errorf("DNS established: %v searching %v, %v", last().DNS, last().Search, err)
+	}
+	resolver := []netip.Addr{netip.MustParseAddr("fd00:9::53")}
+	if err := p.SetDNS("juist0", resolver, search); err != nil || !routes(last().Routes, "fd00:9::53") {
+		t.Errorf("the resolver at %v is not routed into the tunnel: %v, %v", resolver, last().Routes, err)
+	}
+	if err := p.SetDNS("juist0", nil, search); err != nil || len(last().DNS) != 0 || len(last().Search) != 0 {
+		t.Errorf("DNS given back: %v searching %v, %v", last().DNS, last().Search, err)
 	}
 	if err := exits.setEgress(EgressDirect, tunnelled{}); err != nil {
 		t.Fatal(err)
@@ -223,6 +231,7 @@ func TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS(t *testing.T) {
 	if routes(last().Routes, "8.8.8.8") {
 		t.Error("the internet is still routed into the tunnel with no exit node")
 	}
+	p.SetDNS("juist0", dns, nil)
 	n := v.established()
 	if err := p.SetDNS("juist0", dns, nil); err != nil || v.established() != n {
 		t.Errorf("the same DNS again established the device again: %v", err)
@@ -263,5 +272,13 @@ func TestAVPNDialLeavesByTheDeviceAlone(t *testing.T) {
 	defer c.Close()
 	if from := netip.MustParseAddrPort(c.LocalAddr().String()).Addr(); from != self[0].Addr() {
 		t.Errorf("the dial left from %v, want %v", from, self[0].Addr())
+	}
+	u, err := VPNDialer(p)(t.Context(), "udp", to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u.Close()
+	if from := netip.MustParseAddrPort(u.LocalAddr().String()).Addr(); from != self[0].Addr() {
+		t.Errorf("a datagram left from %v, want %v", from, self[0].Addr())
 	}
 }

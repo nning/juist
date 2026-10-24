@@ -42,13 +42,14 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 
 /**
  * Runs the core while the VPN is on: in the foreground, so that the mesh stays
  * up in Doze, at the pace the phone allows, and holding a multicast lock while
  * not saving battery, so that mDNS finds members on the Wi-Fi. Its device
- * carries the network's addresses, and the phone's internet and DNS only
- * while an exit node is used.
+ * carries the network's addresses and the phone's DNS, and the phone's
+ * internet only while an exit node is used.
  */
 class JuistVpnService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -207,7 +208,7 @@ class JuistVpnService : VpnService() {
         val thread = HandlerThread("juist-underlay").apply { start() }
         val follower = UnderlayFollower(
             use = { setUnderlyingNetworks(it?.let { n -> arrayOf(n) }) },
-            changed = { core?.networkChanged(it) },
+            changed = { iface, resolvers -> core?.networkChanged(iface, resolvers) },
             metered = { metered.value = it },
         )
         getSystemService(ConnectivityManager::class.java)
@@ -228,6 +229,7 @@ class JuistVpnService : VpnService() {
                 override fun addAddress(address: InetAddress, prefixLength: Int) { b.addAddress(address, prefixLength) }
                 override fun addRoute(address: InetAddress, prefixLength: Int) { b.addRoute(address, prefixLength) }
                 override fun addDnsServer(address: InetAddress) { b.addDnsServer(address) }
+                override fun addSearchDomain(domain: String) { b.addSearchDomain(domain) }
                 override fun setMtu(mtu: Int) { b.setMtu(mtu) }
             })
             val pfd = b.establish() ?: throw IllegalStateException(getString(R.string.vpn_not_established))
@@ -305,13 +307,13 @@ internal fun underlayRequest(): NetworkRequest = NetworkRequest.Builder()
 
 /**
  * Hands the network [underlayRequest] matches to use, null where there is
- * none, its interface's name to changed, "" for none, and whether it is
- * metered to metered. A network lost after another replaced it changes
- * nothing.
+ * none, its interface's name and how it resolves, an [UnderlayDns] as JSON,
+ * to changed, "" for none, and whether it is metered to metered. A network
+ * lost after another replaced it changes nothing.
  */
 internal class UnderlayFollower(
     private val use: (Network?) -> Unit,
-    private val changed: (String) -> Unit,
+    private val changed: (iface: String, resolvers: String) -> Unit,
     private val metered: (Boolean) -> Unit = {},
 ) : ConnectivityManager.NetworkCallback() {
     private var current: Network? = null
@@ -327,15 +329,38 @@ internal class UnderlayFollower(
     }
 
     override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
-        if (network == current) changed(properties.interfaceName.orEmpty())
+        if (network == current) changed(properties.interfaceName.orEmpty(), UnderlayDns.of(properties).json())
     }
 
     override fun onLost(network: Network) {
         if (network != current) return
         current = null
         use(null)
-        changed("")
+        changed("", "")
         metered(false)
+    }
+}
+
+/**
+ * How a network resolves, as the core reads it (mobile/platform.go's
+ * underlayDNS): its resolvers, whether automatic Private DNS found them
+ * answering DNS over TLS, and the host Private DNS sends every lookup to, set
+ * only in its strict mode.
+ */
+@Serializable
+internal data class UnderlayDns(
+    val servers: List<String> = emptyList(),
+    val overTls: Boolean = false,
+    val privateDns: String = "",
+) {
+    fun json(): String = coreJson.encodeToString(serializer(), this)
+
+    companion object {
+        fun of(p: LinkProperties) = UnderlayDns(
+            servers = p.dnsServers.mapNotNull { it.hostAddress },
+            overTls = p.isPrivateDnsActive && p.privateDnsServerName == null,
+            privateDns = p.privateDnsServerName.orEmpty(),
+        )
     }
 }
 

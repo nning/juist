@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -51,13 +52,30 @@ type Options struct {
 	Device string
 
 	// Listen, where set, binds each address in its place, as a helper
-	// binds a port the forwarder may not; Device does not apply to it.
+	// binds a port the forwarder may not, or a stack in this process holds
+	// it; Device does not apply to it. Its datagrams' addresses are
+	// [net.UDPAddr]s.
 	Listen func(netip.AddrPort) (net.PacketConn, net.Listener, error)
+
+	// Dial, where set, opens a connection to a resolver upstream in place of
+	// [net.Dialer], over network, udp or tcp.
+	Dial func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error)
+
+	// MaxUDP, where set, is the longest answer sent over UDP, as a stack that
+	// fragments nothing carries; a longer one is sent truncated, for the
+	// asker to ask again over TCP.
+	MaxUDP int
+
+	// FailFast answers SERVFAIL a query no resolver upstream answered, at
+	// once where none could be asked, rather than leaving the asker to time
+	// out.
+	FailFast bool
 
 	// Allowed says whether a source may ask: the network's overlay.
 	Allowed func(netip.Addr) bool
 
-	// Upstream is the resolvers asked, read from the host where nil.
+	// Upstream is the resolvers asked, read from the host where nil. One on
+	// [TLSPort] is asked by DNS over TLS.
 	Upstream func() []netip.AddrPort
 
 	// UpstreamFor, where set, is the resolvers asked for query instead, nil
@@ -69,8 +87,10 @@ type Options struct {
 	Answer func(query []byte) []byte
 
 	// MaxTTL, where set, caps the TTL of every record an answer from
-	// upstream carries, in seconds.
+	// upstream carries, in seconds; Capped, where set, the answers to the
+	// queries it reports alone.
 	MaxTTL uint32
+	Capped func(query []byte) bool
 
 	// Local has the host alone ask, its resolver as one source for all its
 	// programs: no source is held to the limits on one.
@@ -82,13 +102,19 @@ type Options struct {
 // A Forwarder answers until closed.
 type Forwarder struct {
 	opts     Options
-	udp      []*net.UDPConn
+	udp      []net.PacketConn
 	tcp      []net.Listener
 	inFlight chan struct{}
 	conns    chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// tlsConf resumes sessions with resolvers over TLS, and tlsFailed is
+	// when each last failed, which is then asked in plain text alone until
+	// tlsBackoff passed.
+	tlsConf   *tls.Config
+	tlsFailed sync.Map // netip.AddrPort → time.Time
 
 	limits  *admit.Rates[netip.Addr]
 	busy    *admit.Set[netip.Addr] // queries in flight per source
@@ -112,6 +138,8 @@ func Start(opts Options) (*Forwarder, error) {
 	}
 	f.busy, f.open = admit.New[netip.Addr](admit.Limits{PerSource: perQueries}), admit.New[netip.Addr](admit.Limits{PerSource: perConns})
 	f.ctx, f.cancel = context.WithCancel(context.Background())
+	f.tlsConf = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12,
+		ClientSessionCache: tls.NewLRUClientSessionCache(maxTLSSessions)}
 	lc := net.ListenConfig{Control: control(opts.Device)}
 	for _, a := range opts.Addrs {
 		ap := netip.AddrPortFrom(a, opts.Port)
@@ -121,14 +149,7 @@ func Start(opts Options) (*Forwarder, error) {
 				f.Close()
 				return nil, fmt.Errorf("dnsfwd: %w", err)
 			}
-			uc, ok := pc.(*net.UDPConn)
-			if !ok {
-				pc.Close()
-				ln.Close()
-				f.Close()
-				return nil, fmt.Errorf("dnsfwd: %v is no UDP socket", ap)
-			}
-			f.udp, f.tcp = append(f.udp, uc), append(f.tcp, ln)
+			f.udp, f.tcp = append(f.udp, pc), append(f.tcp, ln)
 			continue
 		}
 		pc, err := lc.ListenPacket(context.Background(), "udp", ap.String())
@@ -136,7 +157,7 @@ func Start(opts Options) (*Forwarder, error) {
 			f.Close()
 			return nil, fmt.Errorf("dnsfwd: %w", err)
 		}
-		f.udp = append(f.udp, pc.(*net.UDPConn))
+		f.udp = append(f.udp, pc)
 		ln, err := lc.Listen(context.Background(), "tcp", ap.String())
 		if err != nil {
 			f.Close()
@@ -171,6 +192,21 @@ func (f *Forwarder) Close() error {
 	return nil
 }
 
+// failedRetry is how long a listener that failed waits before it reads
+// again: one failing for good, as a stack's whose device is gone, would
+// otherwise spin.
+const failedRetry = 50 * time.Millisecond
+
+// pause waits failedRetry, and reports whether the forwarder still runs.
+func (f *Forwarder) pause() bool {
+	select {
+	case <-f.ctx.Done():
+		return false
+	case <-time.After(failedRetry):
+		return true
+	}
+}
+
 // admit reports whether src may ask now.
 func (f *Forwarder) admit(src netip.Addr) bool {
 	src = src.Unmap()
@@ -187,23 +223,28 @@ func isQuery(msg []byte) bool {
 	return len(msg) >= headerLen+5 && msg[2]&0xf8 == 0 && binary.BigEndian.Uint16(msg[4:6]) > 0
 }
 
-func (f *Forwarder) serveUDP(c *net.UDPConn) {
+func (f *Forwarder) serveUDP(c net.PacketConn) {
 	defer f.workers.Done()
 	buf := make([]byte, maxMessage)
 	for {
-		n, src, err := c.ReadFromUDPAddrPort(buf)
+		n, addr, err := c.ReadFrom(buf)
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, net.ErrClosed) || !f.pause() {
 				return
 			}
 			continue
 		}
+		ua, ok := addr.(*net.UDPAddr)
+		if !ok {
+			continue
+		}
+		src := ua.AddrPort()
 		from := src.Addr().Unmap()
 		if !isQuery(buf[:n]) || !f.admit(from) {
 			continue
 		}
 		if resp := f.answer(buf[:n]); resp != nil {
-			c.WriteToUDPAddrPort(resp, src)
+			c.WriteTo(f.fitUDP(resp), ua)
 			continue
 		}
 		slot, ok := f.busy.Admit(from, nil)
@@ -223,7 +264,7 @@ func (f *Forwarder) serveUDP(c *net.UDPConn) {
 			defer slot.Release()
 			defer func() { <-f.inFlight }()
 			if resp, err := f.ask("udp", q); err == nil {
-				c.WriteToUDPAddrPort(resp, src)
+				c.WriteTo(f.fitUDP(resp), ua)
 			}
 		}()
 	}
@@ -234,7 +275,7 @@ func (f *Forwarder) serveTCP(ln net.Listener) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, net.ErrClosed) || !f.pause() {
 				return
 			}
 			continue
@@ -306,20 +347,33 @@ func (f *Forwarder) Port() uint16 {
 	if len(f.udp) == 0 {
 		return 0
 	}
-	return uint16(f.udp[0].LocalAddr().(*net.UDPAddr).Port)
+	ua, _ := f.udp[0].LocalAddr().(*net.UDPAddr)
+	if ua == nil {
+		return 0
+	}
+	return uint16(ua.Port)
 }
 
 // ask puts q to the host's resolvers in turn, over network, and returns the
 // first answer that is not a failure of the resolver itself (SERVFAIL or
-// REFUSED), else the last answer or error.
+// REFUSED), else the last answer, or the last error, which FailFast answers
+// SERVFAIL.
 func (f *Forwarder) ask(network string, q []byte) ([]byte, error) {
+	resp, err := f.askUpstream(network, q)
+	if err != nil && f.opts.FailFast {
+		return failure(q, RCodeServFail), nil
+	}
+	return resp, err
+}
+
+func (f *Forwarder) askUpstream(network string, q []byte) ([]byte, error) {
 	var last error = errors.New("dnsfwd: no resolver on this host")
 	var failed []byte
 	var ups []netip.AddrPort
 	if f.opts.UpstreamFor != nil {
 		var err error
 		if ups, err = f.opts.UpstreamFor(q); err != nil {
-			rcode := uint8(rcodeServFail)
+			rcode := uint8(RCodeServFail)
 			if r := (*Refusal)(nil); errors.As(err, &r) {
 				rcode = r.RCode
 			}
@@ -330,28 +384,42 @@ func (f *Forwarder) ask(network string, q []byte) ([]byte, error) {
 		ups = f.opts.Upstream()
 	}
 	for _, up := range ups {
-		resp, err := exchange(network, up, q)
+		if up.Port() == TLSPort && f.tlsFailedLately(up) {
+			continue
+		}
+		resp, err := f.exchange(network, up, q)
+		if err != nil && up.Port() == TLSPort {
+			f.tlsFailed.Store(up, time.Now())
+		}
 		switch {
 		case err != nil:
 			last = err
 		case resp[3]&0x0f == 2 || resp[3]&0x0f == 5:
 			failed = resp
 		default:
-			capTTL(resp, f.opts.MaxTTL)
+			capTTL(resp, f.maxTTL(q))
 			return resp, nil
 		}
 	}
 	if failed != nil {
-		capTTL(failed, f.opts.MaxTTL)
+		capTTL(failed, f.maxTTL(q))
 		return failed, nil
 	}
 	return nil, last
 }
 
+// maxTTL is the cap on the TTLs of an answer to q, zero for none.
+func (f *Forwarder) maxTTL(q []byte) uint32 {
+	if f.opts.Capped != nil && !f.opts.Capped(q) {
+		return 0
+	}
+	return f.opts.MaxTTL
+}
+
 // RCodes a refused query is answered; a [Refusal] names one.
 const (
 	RCodeFormErr  = 1
-	rcodeServFail = 2
+	RCodeServFail = 2
 	RCodeNXDomain = 3
 	RCodeRefused  = 5
 )
@@ -364,6 +432,27 @@ type Refusal struct {
 
 func (r *Refusal) Error() string { return r.Err.Error() }
 func (r *Refusal) Unwrap() error { return r.Err }
+
+// fitUDP is resp, truncated to its question with TC set where it is longer
+// than MaxUDP.
+func (f *Forwarder) fitUDP(resp []byte) []byte {
+	if f.opts.MaxUDP == 0 || len(resp) <= f.opts.MaxUDP || len(resp) < headerLen {
+		return resp
+	}
+	end := headerLen
+	if binary.BigEndian.Uint16(resp[4:]) == 1 {
+		if off := skipName(resp, headerLen); off >= 0 && off+4 <= len(resp) {
+			end = off + 4
+		}
+	}
+	out := bytes.Clone(resp[:end])
+	out[2] |= 0x02 // TC
+	clear(out[4:headerLen])
+	if end > headerLen {
+		out[5] = 1
+	}
+	return out
+}
 
 // failure is a response to q with rcode, and q's question.
 func failure(q []byte, rcode uint8) []byte {
@@ -384,9 +473,9 @@ func failure(q []byte, rcode uint8) []byte {
 	return resp
 }
 
-// capTTL lowers every TTL in msg above max to max, in place, but an OPT
-// record's, whose TTL holds flags; zero caps none. It stops where msg does
-// not parse.
+// capTTL lowers every TTL in msg above max to max, in place, but an
+// additional OPT record's, whose TTL holds flags; zero caps none. It stops
+// where msg does not parse.
 func capTTL(msg []byte, max uint32) {
 	if max == 0 || len(msg) < headerLen {
 		return
@@ -398,12 +487,14 @@ func capTTL(msg []byte, max uint32) {
 		}
 		off += 4
 	}
-	records := int(binary.BigEndian.Uint16(msg[6:])) + int(binary.BigEndian.Uint16(msg[8:])) + int(binary.BigEndian.Uint16(msg[10:]))
-	for range records {
+	answers := int(binary.BigEndian.Uint16(msg[6:])) + int(binary.BigEndian.Uint16(msg[8:]))
+	records := answers + int(binary.BigEndian.Uint16(msg[10:]))
+	for i := range records {
 		if off = skipName(msg, off); off < 0 || off+10 > len(msg) {
 			return
 		}
-		if typ, ttl := binary.BigEndian.Uint16(msg[off:]), binary.BigEndian.Uint32(msg[off+4:]); typ != typeOPT && ttl > max {
+		opt := i >= answers && binary.BigEndian.Uint16(msg[off:]) == typeOPT
+		if ttl := binary.BigEndian.Uint32(msg[off+4:]); !opt && ttl > max {
 			binary.BigEndian.PutUint32(msg[off+4:], max)
 		}
 		off += 10 + int(binary.BigEndian.Uint16(msg[off+8:]))
@@ -429,13 +520,52 @@ func skipName(msg []byte, off int) int {
 	return -1
 }
 
-func exchange(network string, up netip.AddrPort, q []byte) ([]byte, error) {
-	c, err := net.DialTimeout(network, up.String(), queryTimeout)
+// TLSPort is where a resolver upstream answers DNS over TLS. It is asked
+// opportunistically, its certificate unchecked, as Android's automatic
+// Private DNS asks a network's resolver: encrypted against those who only
+// listen.
+const TLSPort = 853
+
+// tlsBackoff is how long a resolver whose TLS failed is asked in plain text
+// alone, and maxTLSSessions how many resolvers' sessions are kept to resume.
+const (
+	tlsBackoff     = 10 * time.Minute
+	maxTLSSessions = 8
+)
+
+// tlsFailedLately reports whether up's TLS failed within tlsBackoff.
+func (f *Forwarder) tlsFailedLately(up netip.AddrPort) bool {
+	at, ok := f.tlsFailed.Load(up)
+	return ok && time.Since(at.(time.Time)) < tlsBackoff
+}
+
+func (f *Forwarder) exchange(network string, up netip.AddrPort, q []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(f.ctx, queryTimeout)
+	defer cancel()
+	overTLS := up.Port() == TLSPort
+	if overTLS {
+		network = "tcp"
+	}
+	var c net.Conn
+	var err error
+	if f.opts.Dial != nil {
+		c, err = f.opts.Dial(ctx, network, up)
+	} else {
+		var d net.Dialer
+		c, err = d.DialContext(ctx, network, up.String())
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(queryTimeout))
+	if overTLS {
+		tc := tls.Client(c, f.tlsConf)
+		if err := tc.HandshakeContext(ctx); err != nil {
+			return nil, err
+		}
+		c = tc
+	}
 	if network == "tcp" {
 		if _, err := c.Write(tcpMessage(q)); err != nil {
 			return nil, err

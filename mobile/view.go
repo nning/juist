@@ -5,6 +5,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nning/juist/daemon"
+	juistnames "github.com/nning/juist/internal/names"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
 )
@@ -25,6 +27,7 @@ type view struct {
 	Fresh   freshness `json:"fresh"`
 	Tunnels tunnels   `json:"tunnels"`
 	Exit    *exit     `json:"exit,omitempty"`
+	Names   *names    `json:"names,omitempty"`
 	Alarms  []alarm   `json:"alarms,omitempty"`
 
 	// Updated is when the peer set was last derived, Unix seconds.
@@ -33,11 +36,13 @@ type view struct {
 
 // A member is a device of the network.
 type member struct {
-	Identity string   `json:"identity"`
-	Name     string   `json:"name"`
-	V4       string   `json:"v4,omitempty"`
-	V6       string   `json:"v6,omitempty"`
-	Roles    []string `json:"roles,omitempty"`
+	Identity string `json:"identity"`
+	Name     string `json:"name"`
+	// DNS is its name under the network's domain, where it has one.
+	DNS   string   `json:"dns,omitempty"`
+	V4    string   `json:"v4,omitempty"`
+	V6    string   `json:"v6,omitempty"`
+	Roles []string `json:"roles,omitempty"`
 	// Retiring is the IPv4 address a renumbering moved it from, until
 	// RetiringUntil.
 	Retiring      string `json:"retiring,omitempty"`
@@ -82,6 +87,15 @@ type exit struct {
 	Offering []member `json:"offering,omitempty"`
 }
 
+// names is what the phone resolves of the network's names: Domain the
+// network's, Own the phone's own names, and Resolved whether its lookups
+// reach juist's resolver, which the alarms say why not.
+type names struct {
+	Domain   string   `json:"domain,omitempty"`
+	Own      []string `json:"own,omitempty"`
+	Resolved bool     `json:"resolved,omitempty"`
+}
+
 // tunnels is the last check of the installed peers' tunnels, at Checked.
 type tunnels struct {
 	Live    int   `json:"live"`
@@ -100,8 +114,9 @@ type alarm struct {
 	Text     string   `json:"text,omitempty"`
 }
 
-// viewOf is s as the app shows it.
-func viewOf(s *ipc.Status) view {
+// viewOf is s as the app shows it, Private DNS sending every lookup to
+// privateDNS where set.
+func viewOf(s *ipc.Status, privateDNS string) view {
 	v := view{Network: s.NetworkName, Updated: s.LastReconcile,
 		Self: member{Identity: s.Self.String(), Name: cmp.Or(s.SelfName, s.Self.ShortString()), Reach: "self"}}
 	for _, p := range s.Addrs {
@@ -167,6 +182,9 @@ func viewOf(s *ipc.Status) view {
 		v.Members = append(v.Members, m)
 	}
 	slices.SortStableFunc(v.Members, func(a, b member) int { return cmp.Compare(a.Name, b.Name) })
+	if s.Names != nil && s.Names.Domain != "" {
+		dnsNames(&v, s.Names.Domain)
+	}
 
 	switch {
 	case s.LeaseSigners == 0:
@@ -181,8 +199,44 @@ func viewOf(s *ipc.Status) view {
 		v.Tunnels = tunnels{Live: s.TunnelsLive, Total: s.TunnelsLive + len(s.TunnelsDown), Checked: s.ReachChecked}
 	}
 	v.Exit = exitOf(s.Exit, v.Members)
-	v.Alarms = alarmsOf(s)
+	v.Names = namesOf(s.Names, v.Self)
+	v.Alarms = alarmsOf(s, privateDNS)
 	return v
+}
+
+// dnsNames gives each device its name under domain, as the zone does: none
+// to a label two devices' names share.
+func dnsNames(v *view, domain string) {
+	labels := map[string]int{}
+	all := []*member{&v.Self}
+	for i := range v.Members {
+		all = append(all, &v.Members[i])
+	}
+	for _, m := range all {
+		labels[juistnames.Label(m.Name)]++
+	}
+	for _, m := range all {
+		if l := juistnames.Label(m.Name); l != "" && labels[l] == 1 {
+			m.DNS = l + "." + domain
+		}
+	}
+}
+
+// namesOf is n as the app shows it, nil where there are none.
+func namesOf(n *ipc.Names, self member) *names {
+	if n == nil || n.Domain == "" && n.Public == "" {
+		return nil
+	}
+	out := &names{Domain: n.Domain, Resolved: n.Resolved}
+	if self.DNS != "" {
+		out.Own = append(out.Own, self.DNS)
+	}
+	for _, o := range n.Overrides {
+		if o.Device == self.Name && self.Name != "" {
+			out.Own = append(out.Own, o.Name)
+		}
+	}
+	return out
 }
 
 // exitOf is e as the app shows it, the exit nodes on offer by their members;
@@ -233,7 +287,7 @@ func reachOf(r ipc.PeerReach, installed, silent, checked bool) string {
 // alarmsOf are the notes of `juist status` that a phone can have, most
 // severe first; those about a host's firewall, ports, relay or terminator
 // cannot apply.
-func alarmsOf(s *ipc.Status) []alarm {
+func alarmsOf(s *ipc.Status, privateDNS string) []alarm {
 	var out []alarm
 	add := func(a alarm) { out = append(out, a) }
 	if s.Alarm != "" {
@@ -281,11 +335,34 @@ func alarmsOf(s *ipc.Status) []alarm {
 	for _, u := range s.Unrevoked {
 		add(alarm{Kind: "unrevoked", Severity: "warn", Text: u})
 	}
+	out = append(out, namesAlarms(s.Names, privateDNS)...)
 	if s.Unreachable > 0 && s.Peers > 0 {
 		add(alarm{Kind: "silent", Severity: "info", Names: s.Silent, Count: s.Unreachable})
 	}
 	if len(s.Seeking) > 0 {
 		add(alarm{Kind: "seeking", Severity: "info", Names: s.Seeking})
+	}
+	return out
+}
+
+// namesAlarms are what `juist health` says of the network's names that a
+// phone can have: why they are not resolved, Private DNS by the host it
+// sends every lookup to, and each name for members alone then out of reach.
+func namesAlarms(n *ipc.Names, privateDNS string) []alarm {
+	if n == nil || n.Resolved || n.Off {
+		return nil
+	}
+	var out []alarm
+	switch {
+	case privateDNS != "" && n.Not == daemon.PrivateDNSNot(privateDNS):
+		out = append(out, alarm{Kind: "privateDns", Severity: "warn", Names: []string{privateDNS}})
+	case n.Cannot:
+		out = append(out, alarm{Kind: "names", Severity: "info", Text: n.Not})
+	default:
+		out = append(out, alarm{Kind: "names", Severity: "warn", Text: n.Not})
+	}
+	if len(n.ForMembers) > 0 {
+		out = append(out, alarm{Kind: "forMembers", Severity: "warn", Names: slices.Clone(n.ForMembers)})
 	}
 	return out
 }

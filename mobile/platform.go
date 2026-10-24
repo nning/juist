@@ -6,11 +6,13 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strings"
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/net/netmon"
 
 	"github.com/nning/juist/conn"
+	"github.com/nning/juist/daemon"
 )
 
 type sealer struct{ p Platform }
@@ -30,18 +32,20 @@ func (noPlatform) Log(string)                      {}
 
 // establish is what [Platform.Establish] brings the interface up with: its
 // addresses and the routes into it, as prefixes, the DNS servers that take
-// all of the phone's lookups, where any, and its MTU.
+// all of the phone's lookups, where any, the search domains they try a name
+// without a dot under, and its MTU.
 type establish struct {
 	Addrs  []string `json:"addrs"`
 	Routes []string `json:"routes"`
 	DNS    []string `json:"dns,omitempty"`
+	Search []string `json:"search,omitempty"`
 	MTU    int      `json:"mtu"`
 }
 
 type vpn struct{ p Platform }
 
 func (v vpn) Establish(c conn.VPNConfig) (*os.File, error) {
-	e := establish{Addrs: prefixStrings(c.Addrs), Routes: prefixStrings(c.Routes), MTU: c.MTU}
+	e := establish{Addrs: prefixStrings(c.Addrs), Routes: prefixStrings(c.Routes), Search: c.Search, MTU: c.MTU}
 	for _, a := range c.DNS {
 		e.DNS = append(e.DNS, a.String())
 	}
@@ -120,4 +124,40 @@ func parseInterfaces(s string) ([]netmon.Interface, error) {
 		out = append(out, netmon.Interface{Interface: ifi, AltAddrs: addrs})
 	}
 	return out, nil
+}
+
+// underlayDNS is how the network beneath the VPN resolves, as
+// [Core.NetworkChanged] is told: its resolvers' addresses, a link-local one
+// with its zone, whether automatic Private DNS found them answering DNS over
+// TLS, and the host Private DNS sends every lookup to, where one is set.
+type underlayDNS struct {
+	Servers    []string `json:"servers,omitempty"`
+	OverTLS    bool     `json:"overTls,omitempty"`
+	PrivateDNS string   `json:"privateDns,omitempty"`
+}
+
+// parseUnderlay is s, an [underlayDNS], as the daemon takes it: none where s
+// is empty, and the addresses that parse where some do not.
+func parseUnderlay(s string) (daemon.Underlay, error) {
+	if s == "" {
+		return daemon.Underlay{}, nil
+	}
+	var in underlayDNS
+	if err := json.Unmarshal([]byte(s), &in); err != nil {
+		return daemon.Underlay{}, fmt.Errorf("the underlay's resolvers: %w", err)
+	}
+	u := daemon.Underlay{OverTLS: in.OverTLS, PrivateDNS: in.PrivateDNS}
+	var bad []string
+	for _, a := range in.Servers {
+		ip, err := netip.ParseAddr(a)
+		if err != nil {
+			bad = append(bad, a)
+			continue
+		}
+		u.Servers = append(u.Servers, ip.Unmap())
+	}
+	if len(bad) > 0 {
+		return u, fmt.Errorf("the underlay's resolvers: no addresses: %s", strings.Join(bad, ", "))
+	}
+	return u, nil
 }

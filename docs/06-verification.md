@@ -48,16 +48,17 @@ Targets, added the milestone their input surface appears:
 | PROXY v2 header, TCP and UDP (`FuzzRead`, `FuzzReadUDP`) | a terminator's input from the ingress, and back | M11b |
 | Access policy text (`internal/policy` `FuzzParse`) | policy files | M14 |
 | Pair-key messages and store (`FuzzTake`, `FuzzDecodeStore`) | signed messages; the pairs file | M15 |
+| A host's DNS queries and its resolvers' answers (`internal/names` `FuzzAnswer`, `internal/dnsfwd` `FuzzForwarded`) | every program on the host, the Android app's phone among them; the network's resolvers | M23 |
 
-Open (M25): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`), the
-root helper's protocol and the resolver's input.
+Open (M29): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`) and
+the root helper's protocol.
 
 The gate is 72 clean CPU-hours per input surface before a milestone closes, run
 by hand with `make fuzz-long` or `make fuzz-one` per target (`make fuzz-matrix`
 lists them; 6 h on 4 workers a run), against a corpus kept outside the repository.
 It does not run on CI: hours per input surface is far more hosted-runner time than
 the project wants to spend. So far it is recorded for `FuzzPayloads` alone (M11b,
-[12-validating.md](12-validating.md)); M25 runs it over every target. `make fuzz`
+[12-validating.md](12-validating.md)); M29 runs it over every target. `make fuzz`
 smoke-runs every target for 30 s each. OSS-Fuzz, once the project qualifies,
 would move the long runs onto someone else's hardware.
 
@@ -114,13 +115,13 @@ convergence when an `exit` role is withdrawn across a mesh; chaos on gossip path
   is the RPM on Fedora; interop could assert it from `/proc`.
 - Manual pre-release drill on real networks: two hard-NAT'd home connections + one
   VPS relay member + one Android phone on LTE; full lifecycle including emergency
-  revocation from a phone (from M29).
+  revocation from a phone (from M28).
 
 ## 5. Cryptographic review gates
 
-- Internal review of the audit scope before the external audit (M25,
+- Internal review of the audit scope before the external audit (M29,
   [15-security-review.md](15-security-review.md)).
-- External audit at M26 of the audit scope: what [`audit-scope`](../audit-scope)
+- External audit at M30 of the audit scope: what [`audit-scope`](../audit-scope)
   places `core` or `in`, the code that decides who may do what, holds or derives a
   key, parses input from outside the membership, or runs as root. Every package
   is placed there, `out` ones with their reason, and `make tcb` fails on one

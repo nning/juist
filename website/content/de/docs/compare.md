@@ -218,7 +218,7 @@ Server herum, der bestimmt, wer dazugehört.
 
 - Ein Sicherheitsaudit gab es für juist bisher nicht.
 - Es läuft unter Linux und FreeBSD, und unter Android als Mitglied ohne
-  Namen, Rollen und Subnetze, das kein Exit-Node sein kann. Für Windows,
+  öffentliche Namen, Rollen und Subnetze, das kein Exit-Node sein kann. Für Windows,
   macOS und iOS gibt es nichts.
 - Es kennt nur Geräte, keine Benutzer: Seine Zugriffsregeln nennen Geräte,
   und eine Anmeldung über einen Identitätsanbieter gibt es nicht.

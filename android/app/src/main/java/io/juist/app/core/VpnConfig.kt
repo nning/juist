@@ -8,6 +8,7 @@ internal interface VpnTarget {
     fun addAddress(address: InetAddress, prefixLength: Int)
     fun addRoute(address: InetAddress, prefixLength: Int)
     fun addDnsServer(address: InetAddress)
+    fun addSearchDomain(domain: String)
     fun setMtu(mtu: Int)
 }
 
@@ -17,13 +18,14 @@ internal data class EstablishConfig(
     val addrs: List<String>,
     val routes: List<String>,
     val dns: List<String> = emptyList(),
+    val search: List<String> = emptyList(),
     val mtu: Int,
 )
 
 /**
  * Brings t up as config, the core's, says: its addresses, its routes, and
- * its DNS servers, set only while an exit node is used, which then answers
- * all of the phone's lookups.
+ * its DNS servers, juist's resolver in the tunnel, which then answers all of
+ * the phone's lookups, with the domains a name without a dot is tried under.
  */
 internal fun configureVpn(config: String, t: VpnTarget) {
     val c = coreJson.decodeFromString(EstablishConfig.serializer(), config)
@@ -31,6 +33,7 @@ internal fun configureVpn(config: String, t: VpnTarget) {
     for (a in c.addrs) prefix(a).let { (addr, bits) -> t.addAddress(addr, bits) }
     for (r in c.routes) prefix(r).let { (addr, bits) -> t.addRoute(addr, bits) }
     for (d in c.dns) t.addDnsServer(InetAddress.getByName(d))
+    for (s in c.search) t.addSearchDomain(s)
 }
 
 private fun prefix(s: String): Pair<InetAddress, Int> {
