@@ -72,10 +72,27 @@ func multicastNodes(nodes ...*netnsNode) {
 	}
 }
 
+// pingGroupUntil pings ff02::1 on n's device until each of from answers.
+func (n *netnsNode) pingGroupUntil(from []netip.Addr, within time.Duration) error {
+	deadline := time.Now().Add(within)
+	for {
+		out, _ := n.lab.exec(n, "ping", "-6", "-n", "-c", "2", "-i", "0.5", "-W", "2", "-I", n.tun, "ff02::1").CombinedOutput()
+		missing := slices.DeleteFunc(slices.Clone(from), func(a netip.Addr) bool {
+			return strings.Contains(string(out), "from "+a.String()+"%") || strings.Contains(string(out), "from "+a.String()+":")
+		})
+		if len(missing) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s: no answer from %v: %s", n.name, missing, strings.TrimSpace(string(out)))
+		}
+	}
+}
+
 // A group datagram sent on one member's device reaches listeners joined on
 // the other members' devices, from the sender's overlay address, over IPv6
 // its link-local one, full-sized too; and an answer goes back unicast to it,
-// as SSDP's does.
+// as SSDP's does; a ping to ff02::1 is answered by every member.
 func TestNetnsAGroupDatagramReachesEveryMember(t *testing.T) {
 	t.Parallel()
 	lab := newNetnsLab(t)
@@ -100,6 +117,32 @@ func TestNetnsAGroupDatagramReachesEveryMember(t *testing.T) {
 		a.command("SEND 6 64", "OK")
 	}); err != nil {
 		t.Fatalf("the answer to a's link-local: %v", err)
+	}
+	if err := a.pingGroupUntil([]netip.Addr{linkLocal(b.addrs[1].Addr()), linkLocal(c.addrs[1].Addr())}, 30*time.Second); err != nil {
+		t.Fatalf("a ping to ff02::1: %v", err)
+	}
+}
+
+// Under an access that passes groups and pings both ways, a ping to ff02::1
+// is answered by every member, through a firewall that drops what
+// conntrack takes for invalid, as firewalld does.
+func TestNetnsAGroupPingIsAnsweredUnderAnAccess(t *testing.T) {
+	t.Parallel()
+	lab := newNetnsLab(t)
+	a, b, c := lab.addNode("a", 1), lab.addNode("b", 2), lab.addNode("c", 3)
+	multicastNodes(a, b, c)
+	a.start([]*netnsNode{b, c}, 0)
+	b.start([]*netnsNode{a, c}, 0)
+	c.start([]*netnsNode{a, b}, 0)
+	for _, n := range []*netnsNode{a, b, c} {
+		n.command("GROUPACCESS", "OK")
+	}
+	lab.must(lab.exec(a, "nft", "add table inet fw; add chain inet fw input { type filter hook input priority filter; }; add rule inet fw input ct state invalid drop"))
+	if err := a.pingUntil(b.addrs[1].Addr(), 60*time.Second); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	if err := a.pingGroupUntil([]netip.Addr{linkLocal(b.addrs[1].Addr()), linkLocal(c.addrs[1].Addr())}, 30*time.Second); err != nil {
+		t.Fatalf("a ping to ff02::1: %v", err)
 	}
 }
 

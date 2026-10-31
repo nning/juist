@@ -41,6 +41,17 @@ fingerprint is:
 also in `SHA256SUMS`
 ([Verifying a download]({{< relref "docs/install" >}}#verifying-a-download)).
 
+F-Droid, or another client for F-Droid repositories, installs the app from
+juist's repository and updates it with each release. Add the repository by
+this address, which carries the fingerprint of the key that signs its index:
+
+```text
+https://pkg.juist.nning.io/juist/android/repo?fingerprint=0AAB0ADFA407BE52D9FB3AF3C0426FF0CDF4CA67CEBBFD981EA29EF0BD373C30
+```
+
+It holds the release's APK, so an app installed either way updates from the
+other.
+
 To build the app yourself, see
 [android/README.md](https://github.com/nning/juist/blob/main/android/README.md).
 An app you built does not install over a release, or the other way round,

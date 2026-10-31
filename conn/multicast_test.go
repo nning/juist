@@ -25,6 +25,8 @@ var (
 
 func mdnsFrom(src netip.Addr) []byte { return udpPacket(netip.AddrPortFrom(src, 5353), mdnsGroup) }
 
+func udpFrom(at netip.AddrPort) groupSource { return groupSource{ipproto.UDP, at} }
+
 func TestAGroupDatagramUnwrapsAsSent(t *testing.T) {
 	inner := mdnsFrom(addrB)
 	inner[8] = 255 // mDNS's TTL, left as sent
@@ -366,15 +368,15 @@ func TestAnAnswerPassesForItsWindow(t *testing.T) {
 	c.ask(udpPacket(ap("100.64.0.1:5000"), ap("239.255.255.250:1900")), b)
 	c.ask(fragment4(addrA, netip.MustParseAddr("239.255.255.250"), 64), b)
 	c.ask(mdns6From(llA), b)
-	if !c.answers(addrB, ap("100.64.0.1:5000")) || !c.answers(llB, netip.AddrPortFrom(llA, 5353)) {
+	if !c.answers(addrB, udpFrom(ap("100.64.0.1:5000"))) || !c.answers(llB, udpFrom(netip.AddrPortFrom(llA, 5353))) {
 		t.Fatal("no answer passes")
 	}
-	if c.answers(addrB, ap("100.64.0.1:5001")) || c.answers(addrB, ap("100.64.0.2:5000")) ||
-		c.answers(addrC, ap("100.64.0.1:5000")) {
+	if c.answers(addrB, udpFrom(ap("100.64.0.1:5001"))) || c.answers(addrB, udpFrom(ap("100.64.0.2:5000"))) ||
+		c.answers(addrC, udpFrom(ap("100.64.0.1:5000"))) {
 		t.Error("an answer to another port or address, or from another peer, passes")
 	}
 	now = now.Add(answerWindow + time.Second)
-	if c.answers(addrB, ap("100.64.0.1:5000")) {
+	if c.answers(addrB, udpFrom(ap("100.64.0.1:5000"))) {
 		t.Error("an answer passes past its window")
 	}
 }
@@ -403,7 +405,7 @@ func TestAnAccessDecidesEachWayAlone(t *testing.T) {
 	if pol.wrap(pol.peers[0], udpPacket(ap("100.64.0.1:5000"), ap("239.255.255.250:1900"))) == nil {
 		t.Error("SSDP was not wrapped for a peer passed it")
 	}
-	if passesGroup(pol.sender(addrC).from, mdnsFrom(addrC)) {
+	if passesGroup(pol.sender(addrC).from, false, mdnsFrom(addrC)) {
 		t.Error("mDNS was taken from a peer passed SSDP alone")
 	}
 }
@@ -442,10 +444,10 @@ func TestOnePeersQuestionsCrowdOutNoOthers(t *testing.T) {
 		c.ask(udpPacket(netip.AddrPortFrom(addrB, uint16(i+1)), ap("239.255.255.250:1900")), x)
 	}
 	c.ask(udpPacket(ap("100.64.0.1:5000"), ap("239.255.255.250:1900")), y)
-	if !c.answers(addrC, ap("100.64.0.1:5000")) {
+	if !c.answers(addrC, udpFrom(ap("100.64.0.1:5000"))) {
 		t.Error("one peer's flood kept another's answer out")
 	}
-	if !c.answers(addrB, netip.AddrPortFrom(addrB, 5000)) || c.answers(addrB, netip.AddrPortFrom(addrB, 1)) {
+	if !c.answers(addrB, udpFrom(netip.AddrPortFrom(addrB, 5000))) || c.answers(addrB, udpFrom(netip.AddrPortFrom(addrB, 1))) {
 		t.Error("the flooding peer keeps other than its latest")
 	}
 }
@@ -457,7 +459,7 @@ func TestEveryPortPassesFragments(t *testing.T) {
 	for _, all := range [][]Ports{{{Proto: ipproto.UDP}}, {{}}} {
 		c.set([]Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(addrB, 32)}, Access: &Access{GroupsFrom: all}}},
 			[]netip.Prefix{netip.PrefixFrom(addrA, 32)})
-		if !passesGroup(c.policy.Load().sender(addrB).from, fragment4(addrB, netip.MustParseAddr("239.1.1.1"), 64)) {
+		if !passesGroup(c.policy.Load().sender(addrB).from, false, fragment4(addrB, netip.MustParseAddr("239.1.1.1"), 64)) {
 			t.Errorf("%v drops a later fragment", all)
 		}
 	}

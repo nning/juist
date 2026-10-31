@@ -42,6 +42,18 @@ SHA-256-Fingerabdruck ihres Zertifikats lautet:
 APK steht auch in `SHA256SUMS`
 ([Einen Download prüfen]({{< relref "docs/install" >}}#verifying-a-download)).
 
+F-Droid, oder ein anderer Client für F-Droid-Paketquellen, installiert die
+App aus der Paketquelle von juist und aktualisiert sie mit jedem Release.
+Trage die Paketquelle mit dieser Adresse ein, die den Fingerabdruck des
+Schlüssels enthält, der ihren Index signiert:
+
+```text
+https://pkg.juist.nning.io/juist/android/repo?fingerprint=0AAB0ADFA407BE52D9FB3AF3C0426FF0CDF4CA67CEBBFD981EA29EF0BD373C30
+```
+
+Sie enthält die APK des Releases, eine auf dem einen Weg installierte App
+aktualisiert sich also auch auf dem anderen.
+
 Wie du die App selbst baust, steht in
 [android/README.md](https://github.com/nning/juist/blob/main/android/README.md).
 Eine selbst gebaute App lässt sich nicht über ein Release installieren und

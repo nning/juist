@@ -358,6 +358,68 @@ func TestARunningDeviceBehindAFirewallReadsAsBlocked(t *testing.T) {
 	}
 }
 
+// A device that wakes for a moment while its tunnel is down, as a sleeping
+// Mac does for Power Nap, is blocked on the way only until the renewal that
+// would follow had time to come, and is looked up often enough meanwhile to
+// find one; with none, it reads as offline again.
+func TestADeviceWakingForAMomentReadsAsOfflineAgain(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	c := &clock{now: t0}
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
+	peer := f.nw.devices[1]
+	id := peer.record.Identity
+	if err := f.d.Learn(f.signedBy(t, peer, t0.Add(-3*time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	f.d.refreshReach(t.Context())
+	woke := t0.Add(2 * time.Hour)
+	c.set(woke)
+	f.d.refreshReach(t.Context())
+	f.d.mu.Lock()
+	f.d.down[id].lookEvery, f.d.down[id].lookAt = maxLookupGap, woke.Add(maxLookupGap)
+	f.d.mu.Unlock()
+	f.d.onFoundInDHT(f.signedBy(t, peer, woke))
+	f.d.refreshReach(t.Context())
+	if st := f.d.Status(); !slices.Equal(st.Blocked(), []string{peer.record.Name}) {
+		t.Fatalf("a device signing while down reads as blocked %v, absent %v", st.Blocked(), st.Absent)
+	}
+	c.set(woke.Add(seekLookupGap))
+	if !slices.Contains(f.d.wanted(), id) {
+		t.Errorf("not looked up %v after it signed, its lookups backed off to %v", seekLookupGap, maxLookupGap)
+	}
+	c.set(woke.Add(f.d.settles()))
+	f.d.refreshReach(t.Context())
+	if st := f.d.Status(); len(st.Blocked()) != 0 || !slices.Equal(st.Absent, []string{peer.record.Name}) {
+		t.Fatalf("quiet for %v after it signed: blocked %v, absent %v", f.d.settles(), st.Blocked(), st.Absent)
+	}
+}
+
+// A device that keeps signing while its tunnel is down stays blocked.
+func TestADeviceRenewingWhileDownStaysBlocked(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0)
+	c := &clock{now: t0}
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
+	peer := f.nw.devices[1]
+	if err := f.d.Learn(f.signedBy(t, peer, t0.Add(-3*time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	f.d.refreshReach(t.Context())
+	for at := 3 * time.Minute; at < 3*f.d.settles(); at += announceRenewal {
+		c.set(t0.Add(at))
+		f.d.onFoundInDHT(f.signedBy(t, peer, c.get()))
+		f.d.refreshReach(t.Context())
+		if st := f.d.Status(); !slices.Equal(st.Blocked(), []string{peer.record.Name}) {
+			t.Fatalf("renewing at %v: blocked %v, seeking %v, absent %v", at, st.Blocked(), st.Seeking, st.Absent)
+		}
+	}
+}
+
 // A device that runs while its tunnel is down and names no epoch has yet to
 // catch up, and knows no member that joined since: it is called outdated once
 // its newer announcement had the time to arrive, and only one that names an

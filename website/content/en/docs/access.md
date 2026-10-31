@@ -126,7 +126,8 @@ everything. Ping needs `proto icmp`, or a rule without a protocol.
 destinations, and nothing else. Its destinations are devices, tables or
 `any`. A `port` limits it to those UDP ports, as in
 `pass multicast from <family> to <family> port 5353`; it needs no `proto`,
-since only UDP crosses. With a `port`, a datagram too large for one packet
+since only UDP crosses; without a `port`, pings to IPv6 groups do too, as
+`ping ff02::1` sends them. With a `port`, a datagram too large for one packet
 does not pass. The rule also passes the answers a destination
 sends straight back to a group datagram, as SSDP sends them. Rules that
 pass multicast need the network's schema 22, which

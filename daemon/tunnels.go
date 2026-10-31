@@ -78,8 +78,8 @@ const (
 // A downPeer is an installed member the checks find down.
 type downPeer struct {
 	lookupPlan
-	since   time.Time // when a check first found it down
-	renewed bool      // an announcement saying something new arrived since
+	since time.Time // when a check first found it down
+	alive time.Time // the newest sign of it running since; zero for none
 }
 
 // A downState is what can be said about why a peer's tunnel is down.
@@ -97,20 +97,55 @@ const (
 	stateAbsent
 )
 
-// state says why a peer is down at now, given when its newest announcement
-// held was signed, how long a sign of life may take to arrive — zero where
-// none is to be expected — and whether its home relay, this device's, finds
-// it disconnected.
-func (p *downPeer) state(now, signed time.Time, settle time.Duration, relayGone bool) downState {
+// state says why a peer is down at now, given how long a sign of life may
+// take to arrive — zero where none is to be expected — and whether its home
+// relay, this device's, finds it disconnected. A sign of life blames the way
+// only until a renewal following it had time to arrive: a device that wakes
+// for moments, as a sleeping Mac does, is offline between them.
+func (p *downPeer) state(now time.Time, settle time.Duration, relayGone bool) downState {
 	switch {
-	case p.renewed || signed.After(p.since.Add(clockSkew)):
-		// Signed since, as the signer's clock has it: clockSkew ahead, a
-		// record signed just before the peer went quiet would pass.
+	case !p.alive.IsZero() && (settle == 0 || now.Before(p.alive.Add(settle))):
 		return stateBlocked
-	case relayGone && !now.Before(p.since.Add(firstLookupGap)), settle > 0 && !now.Before(p.since.Add(settle)):
+	case relayGone && !now.Before(p.since.Add(firstLookupGap)), settle > 0 && !now.Before(p.quietSince().Add(settle)):
 		return stateAbsent
 	}
 	return stateSeeking
+}
+
+// quietSince is when the peer was last known running: its newest sign of
+// life, or when it went down.
+func (p *downPeer) quietSince() time.Time {
+	if p.alive.After(p.since) {
+		return p.alive
+	}
+	return p.since
+}
+
+// signedSince returns p, or a copy, with signed taken as a sign of it running
+// where it was made since p went down, as the signer's clock has it:
+// clockSkew ahead, a record signed just before the peer went quiet would
+// pass.
+func (p *downPeer) signedSince(signed, now time.Time) *downPeer {
+	if !signed.After(p.since.Add(clockSkew)) || !signed.After(p.alive) {
+		return p
+	}
+	if signed.After(now) {
+		signed = now
+	}
+	q := *p
+	q.ranAt(signed, now)
+	return &q
+}
+
+// ranAt records a sign of p running at t, and brings its next lookup within
+// seekLookupGap, so the renewal a running peer follows it with is found
+// before the settle time is out.
+func (p *downPeer) ranAt(t, now time.Time) {
+	p.alive = t
+	p.lookEvery = min(p.lookEvery, seekLookupGap)
+	if next := now.Add(seekLookupGap); p.lookAt.After(next) {
+		p.lookAt = next
+	}
 }
 
 // settles is how long after a peer goes down a sign of it running has had
@@ -625,15 +660,16 @@ func classifyReach(checks []tunnelCheck, f reachFacts, past reachPast) reachVerd
 			continue
 		}
 		v.down = append(v.down, c.name)
+		ep := f.held[c.id]
 		p := past.down[c.id]
 		if p == nil {
 			p = &downPeer{since: f.now, lookupPlan: lookupPlan{lookAt: f.now}}
 		}
+		p = p.signedSince(signedAt(ep), f.now)
 		v.past.down[c.id] = p
 		v.lookup = v.lookup || !f.now.Before(p.lookAt)
-		ep := f.held[c.id]
 		v.reach[i].Since, v.reach[i].Heard = p.since.Unix(), signedAt(ep).Unix()
-		switch p.state(f.now, signedAt(ep), f.settle, f.gone[c.id]) {
+		switch p.state(f.now, f.settle, f.gone[c.id]) {
 		case stateSeeking:
 			v.reach[i].Seeking = true
 			v.seeking = append(v.seeking, c.name)
@@ -705,7 +741,8 @@ func (d *Daemon) noteNewAnnouncements(next []namedPeer) {
 		}
 		p := d.down[n.id]
 		if p != nil {
-			p.renewed = true
+			now := d.now()
+			p.ranAt(now, now)
 		}
 		if i >= 0 && p == nil && (saving || n.rests) && movedAlone(d.installed[i].peer, n.peer) {
 			continue

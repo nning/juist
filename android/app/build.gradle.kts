@@ -18,6 +18,9 @@ fun output(vararg args: String): String =
 val commitTime = output("git", "log", "-1", "--format=%ct").toLong()
 val versionLabel = output("sh", repo.file("packaging/version.sh").asFile.path, "android")
 
+// -Pjuist.dev builds the dev channel's app, which installs beside juist's own.
+val dev = providers.gradleProperty("juist.dev").isPresent
+
 android {
     namespace = "io.juist.app"
     compileSdk {
@@ -31,6 +34,8 @@ android {
         versionCode = ((commitTime - 1_767_225_600) / 60).toInt() // minutes since 2026
         versionName = versionLabel
         resourceConfigurations += listOf("en", "de")
+        if (dev) applicationIdSuffix = ".dev"
+        manifestPlaceholders["appLabel"] = if (dev) "juist dev" else "@string/app_name"
     }
 
     signingConfigs {

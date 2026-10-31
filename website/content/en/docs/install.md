@@ -1,7 +1,7 @@
 ---
 title: Install
 linkTitle: Install
-description: Install juist's released package on Debian, Ubuntu, Fedora or FreeBSD, check the download, or build the package from source.
+description: Install juist from its package repository or a release on Debian, Ubuntu, Fedora or FreeBSD, check the download, or build the package from source.
 lead: Install juist as a system package on every device that should be in a network. Each release comes with ready-made packages and a signed list of their checksums.
 ---
 
@@ -14,6 +14,73 @@ amd64 and arm64, except the RPM, which is only available for x86_64. A phone
 joins with the app instead; see [Android]({{< relref "docs/android" >}}).
 
 ## Installing the package
+
+juist's package repository installs juist, and the system's own updates then
+bring each new release. The repository has the release's packages for
+Debian, Ubuntu, Fedora and FreeBSD. To install a single file, take the
+release's package instead ([From a release](#from-a-release)).
+
+### From the package repository {#from-the-package-repository}
+
+{{< step on="a Debian or Ubuntu device" >}}
+Add the repository and its key, then install juist:
+
+```sh
+sudo install -d -m 755 /etc/apt/keyrings
+sudo curl -fsSL -o /etc/apt/keyrings/juist.gpg https://pkg.juist.nning.io/juist/key.gpg
+echo "deb [signed-by=/etc/apt/keyrings/juist.gpg] https://pkg.juist.nning.io/juist/deb/ ./" | sudo tee /etc/apt/sources.list.d/juist.list
+sudo apt update && sudo apt install juist
+```
+
+This is the same for amd64 and arm64.
+{{< /step >}}
+{{< step on="a Fedora device" >}}
+Add the repository, then install juist:
+
+```sh
+sudo tee /etc/yum.repos.d/juist.repo <<'EOF'
+[juist]
+name=juist
+baseurl=https://pkg.juist.nning.io/juist/rpm
+gpgcheck=0
+repo_gpgcheck=1
+gpgkey=https://pkg.juist.nning.io/juist/key.asc
+EOF
+sudo dnf install juist
+```
+
+The key signs the repository's index, which holds each package's checksum, so
+the RPM stays the release's file, unsigned itself.
+{{< /step >}}
+{{< step on="a FreeBSD 15 device" >}}
+As root, add the repository and its key, install juist, then start the
+daemon:
+
+```sh
+mkdir -p /usr/local/etc/pkg/repos /usr/local/etc/pkg/keys
+fetch -o /usr/local/etc/pkg/keys/juist.pub https://pkg.juist.nning.io/juist/freebsd.pub
+cat > /usr/local/etc/pkg/repos/juist.conf <<'EOF'
+juist: {
+  url: "https://pkg.juist.nning.io/juist/freebsd/${ABI}",
+  signature_type: "pubkey",
+  pubkey: "/usr/local/etc/pkg/keys/juist.pub"
+}
+EOF
+pkg install -r juist juist
+sysrc juistd_enable=YES && service juistd start
+```
+
+This is the same for amd64 and arm64; what juist does with pf is under
+[From a release](#from-a-release). `sha256 /usr/local/etc/pkg/keys/juist.pub`
+prints the key's checksum,
+`c649f2cd073f9e72825b0c1b8a2682f25c5c55405a178ea6d8a0f8b65ed89e3d`.
+{{< /step >}}
+
+dnf shows the key's fingerprint when it imports it, and
+`gpg --show-keys /etc/apt/keyrings/juist.gpg` shows it on Debian and Ubuntu:
+`1D57474BAAC54CEEAD9168110EBE32412D806005`.
+
+### From a release {#from-a-release}
 
 {{< step on="a Debian or Ubuntu device" >}}
 Download the package and install it:
@@ -52,6 +119,8 @@ any rule that passes `quick`; otherwise `juist health` warns.
 
 Installing a newer release later replaces the old one, and the device keeps
 its state; [Updating juist]({{< relref "docs/updating" >}}) has the details.
+A package from the repository and one from a release are the same, so either
+updates the other.
 
 ## Verifying a download
 

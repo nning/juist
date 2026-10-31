@@ -30,7 +30,20 @@ The [handbook](https://docs.juist.nning.io/en/docs/) explains every feature step
 
 ## Install
 
-On every device, the package of the [latest release](https://github.com/nning/juist/releases/latest):
+On Debian and Ubuntu, from juist's package repository, which then updates
+juist with the system:
+
+```sh
+sudo install -d -m 755 /etc/apt/keyrings
+sudo curl -fsSL -o /etc/apt/keyrings/juist.gpg https://pkg.juist.nning.io/juist/key.gpg
+echo "deb [signed-by=/etc/apt/keyrings/juist.gpg] https://pkg.juist.nning.io/juist/deb/ ./" | sudo tee /etc/apt/sources.list.d/juist.list
+sudo apt update && sudo apt install juist
+```
+
+Fedora takes it as a `.repo` file, FreeBSD as a pkg repository, and Android
+by F-Droid:
+[Install](https://docs.juist.nning.io/en/docs/install/#from-the-package-repository).
+Or, on every device, the package of the [latest release](https://github.com/nning/juist/releases/latest):
 
 ```sh
 # Debian, Ubuntu (juist_arm64.deb on arm64)

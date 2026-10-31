@@ -40,7 +40,8 @@ type Access struct {
 
 	// GroupsFrom are the UDP ports the peer may send this node group
 	// datagrams on, GroupsTo those this node may send it on; none where
-	// nil. Each passes the unicast answers to a group datagram too.
+	// nil. ICMPv6 in them passes echo requests to a group. Each passes the
+	// unicast answers to a group datagram too.
 	GroupsFrom, GroupsTo []Ports
 }
 
@@ -215,7 +216,7 @@ func (c *confiner) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 		if (p.IPProto == ipip || p.IPProto == ipv6Encap) && slices.Contains(pol.self, p.Dst.Addr()) {
 			return filter.Drop
 		}
-		if acc, ok := pol.peers[p.Src.Addr()]; ok && (acc.Nothing || !c.admits(pol, acc, p) && !(slices.Contains(pol.self, p.Dst.Addr()) && c.answer(acc.GroupsTo, p.IPProto, p.Src.Addr(), p.Dst))) ||
+		if acc, ok := pol.peers[p.Src.Addr()]; ok && (acc.Nothing || !c.admits(pol, acc, p) && !(slices.Contains(pol.self, p.Dst.Addr()) && c.answer(acc.GroupsTo, p, p.Src.Addr(), p.Dst))) ||
 			pol.none != nil && pol.none.Contains(p.Src.Addr()) {
 			return filter.Drop
 		}
@@ -231,11 +232,20 @@ func (c *confiner) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	return filter.Accept
 }
 
-// answer reports whether a UDP datagram of peer's to dst answers a group
-// datagram that left from dst lately, one peer was sent or sent; groups are
-// its access's, which pass none where empty.
-func (c *confiner) answer(groups []Ports, proto ipproto.Proto, peer netip.Addr, dst netip.AddrPort) bool {
-	return c.groups != nil && len(groups) > 0 && proto == ipproto.UDP && c.groups.answers(peer, dst)
+// answer reports whether p, a UDP datagram or an echo reply of peer's to
+// dst, answers a group datagram that left from dst lately, one peer was sent
+// or sent; groups are its access's, which pass none where empty.
+func (c *confiner) answer(groups []Ports, p *packet.Parsed, peer netip.Addr, dst netip.AddrPort) bool {
+	switch {
+	case c.groups == nil:
+		return false
+	case p.IPProto == ipproto.UDP:
+		return len(groups) > 0 && c.groups.answers(peer, groupSource{ipproto.UDP, dst})
+	case p.IPProto == ipproto.ICMPv6 && p.IsEchoResponse() && passes(groups, ipproto.ICMPv6, 0):
+		b := p.Payload()
+		return len(b) >= 2 && c.groups.answers(peer, groupSource{ipproto.ICMPv6, netip.AddrPortFrom(dst.Addr(), binary.BigEndian.Uint16(b))})
+	}
+	return false
 }
 
 // opens reports whether acc lets its peer open proto to dst, on this node or
@@ -296,7 +306,7 @@ func (c *confiner) admits(pol *confinePolicy, acc *Access, p *packet.Parsed) boo
 
 func (c *confiner) out(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if pol := c.policy.Load(); pol != nil {
-		if acc, ok := pol.peers[p.Dst.Addr()]; ok && (acc.Nothing || !c.sends(pol, acc, p) && !(slices.Contains(pol.self, p.Src.Addr()) && c.answer(acc.GroupsFrom, p.IPProto, p.Dst.Addr(), p.Dst))) ||
+		if acc, ok := pol.peers[p.Dst.Addr()]; ok && (acc.Nothing || !c.sends(pol, acc, p) && !(slices.Contains(pol.self, p.Src.Addr()) && c.answer(acc.GroupsFrom, p, p.Dst.Addr(), p.Dst))) ||
 			pol.none != nil && pol.none.Contains(p.Dst.Addr()) {
 			return filter.Drop
 		}

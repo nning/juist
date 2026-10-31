@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"golang.org/x/sys/unix"
 )
 
 // inTable is instance inst's table keeping the overlay's addresses to its
@@ -83,6 +84,9 @@ func setInGuard(inst int, dev string, own, peers []netip.Addr) error {
 		for _, rule := range inRules(fam, dev, dst, src) {
 			c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: rule})
 		}
+		if fam == nftables.TableFamilyIPv6 {
+			c.AddRule(&nftables.Rule{Table: t, Chain: ch, Exprs: untrackedEchoReplies(dev)})
+		}
 	}
 	if err := c.Flush(); err != nil {
 		return fmt.Errorf("conn: guarding the overlay's addresses: %w", err)
@@ -115,6 +119,24 @@ func inRules(fam nftables.TableFamily, dev string, own, overlay *nftables.Set) [
 				&expr.Lookup{SourceRegister: 1, SetName: s.set.Name, SetID: s.set.ID}}, drop))
 	}
 	return rules
+}
+
+// untrackedEchoReplies is "iifname dev icmpv6 type echo-reply ip6 daddr
+// fe80::/10 notrack": conntrack takes a member's answer to a ping to a group
+// for invalid, as no flow went to its address, and firewalld drops those.
+func untrackedEchoReplies(dev string) []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ifname(dev)},
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_ICMPV6}},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{129}},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 24, Len: 2},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 2, Mask: []byte{0xff, 0xc0}, Xor: []byte{0, 0}},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{0xfe, 0x80}},
+		&expr.Notrack{},
+	}
 }
 
 // ofFamily is the addresses of addrs in fam.

@@ -12,6 +12,9 @@ den anderen Mitgliedern, die auf ihrem `juist0` lauschen. juist überträgt UDP
 an Multicast-Gruppen, über IPv4 und IPv6. Das Datagramm kommt mit der Adresse
 des Absenders im Netz an, also geht eine Antwort direkt an ihn zurück.
 
+Auch Pings an IPv6-Gruppen überträgt es, sodass `ping -I juist0 ff02::1`
+die Mitglieder zeigt, die antworten, jedes mit seiner Link-local-Adresse.
+
 Multicast ist von Haus aus an. Jedes Mitglied kann dann auf den anderen
 Suchanfragen beantworten, wie ein Gerät in deinem LAN. Es kann einen Drucker
 oder einen Medienserver ankündigen, und die Antwort enthält seine Adresse im
@@ -24,6 +27,9 @@ juist überträgt nicht:
 - Broadcast, etwa an `255.255.255.255`.
 - IPv6-Gruppen außer denen mit Link-Scope (`ff02::`) und Site-Scope
   (`ff05::`).
+- ICMP an eine Gruppe außer einem IPv6-Ping, etwa Router Advertisements,
+  Neighbor Discovery oder MLD.
+- DHCPv6, damit kein Mitglied den anderen Adressen oder DNS-Server zuteilt.
 - Multicast unter [Zugriffsregeln]({{< relref "docs/access" >}}), außer eine
   Regel `pass multicast` lässt es durch.
 
@@ -40,8 +46,8 @@ pass multicast from <familie> to <familie>
 pass multicast from <spieler> to <spieler> port 4445
 ```
 
-Die zweite Regel lässt nur UDP-Port 4445 durch, die eigene Gruppe eines
-Spiels. Jede Regel lässt auch die Antworten durch, die ein Gerät direkt
+Die erste Regel, ohne Port, lässt auch Pings durch. Die zweite lässt nur
+UDP-Port 4445 durch, die eigene Gruppe eines Spiels. Jede Regel lässt auch die Antworten durch, die ein Gerät direkt
 zurückschickt. Solche Regeln brauchen Schema 22 des Netzes, siehe
 [Aktualisieren]({{< relref "docs/updating" >}}).
 

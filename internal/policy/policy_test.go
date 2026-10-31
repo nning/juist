@@ -639,8 +639,8 @@ func TestNamesAreReadAsTheyMayBe(t *testing.T) {
 }
 
 // A pass multicast rule lets its sources send group datagrams to its
-// destinations, by UDP port where it names any, and nothing else; it reads
-// back as written, and makes the two peers.
+// destinations, by UDP port where it names any, pings too where it names
+// none, and nothing else; it reads back as written, and makes the two peers.
 func TestAMulticastRulePassesGroupsAlone(t *testing.T) {
 	l := office()
 	src := "pass multicast from <staff> to { anna, nas } port { 1900, 5353 }\npass multicast from nas to ben\n" +
@@ -658,7 +658,7 @@ func TestAMulticastRulePassesGroupsAlone(t *testing.T) {
 	if got := ben.Out[l.ids["nas"]]; !reflect.DeepEqual(got.Multicast, ports) || len(got.Own) > 0 {
 		t.Errorf("ben may send nas %+v", got)
 	}
-	if got := ben.In[l.ids["nas"]].Multicast; !reflect.DeepEqual(got, []types.PortRange{{Proto: types.ProtoUDP}}) {
+	if got := ben.In[l.ids["nas"]].Multicast; !reflect.DeepEqual(got, []types.PortRange{{Proto: types.ProtoICMP}, {Proto: types.ProtoUDP}}) {
 		t.Errorf("ben takes %v from nas", got)
 	}
 	if got := nas.In[l.ids["ben"]].Multicast; !reflect.DeepEqual(got, ports) {

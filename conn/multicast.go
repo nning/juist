@@ -38,9 +38,9 @@ const (
 
 // A multicaster carries the group datagrams this node's device sends to
 // every member its access lets it, each wrapped and addressed to the member,
-// and delivers theirs. Only UDP to a multicast group passes, IPv6 only to a
-// group of link or site scope, with the sender's own overlay address as its
-// source, or over IPv6 its link-local address.
+// and delivers theirs. Only UDP to a multicast group passes, and over IPv6 an
+// echo request, IPv6 only to a group of link or site scope, with the sender's
+// own overlay address as its source, or over IPv6 its link-local address.
 type multicaster struct {
 	policy atomic.Pointer[groupPolicy]
 	sent   *rate.Limiter
@@ -49,7 +49,7 @@ type multicaster struct {
 	// lately, by the address of the peer that may answer them, which its
 	// unicast answers pass; at most maxAsked a peer.
 	askedMu sync.Mutex
-	asked   map[netip.Addr]map[netip.AddrPort]time.Time
+	asked   map[netip.Addr]map[groupSource]time.Time
 	now     func() time.Time
 	// sending holds what the host sent, for a goroutine of its own to wrap
 	// and inject: InjectOutbound blocks the hook, which runs on the
@@ -75,12 +75,25 @@ type groupPolicy struct {
 
 // A groupMember is a member's overlay addresses, its link-local address
 // where it holds one, and what it may still send. to and from are the UDP
-// ports a group datagram may go to it on and come from it on, any where nil.
+// ports a group datagram may go to it on and come from it on, any where nil;
+// echoTo and echoFrom pass echo requests.
 type groupMember struct {
-	v4, v6, ll netip.Addr
-	lim        *rate.Limiter
-	to, from   []Ports
+	v4, v6, ll       netip.Addr
+	lim              *rate.Limiter
+	to, from         []Ports
+	echoTo, echoFrom bool
 }
+
+// A groupSource is where a group datagram left from, which its answers go
+// to: a UDP port, or an echo request's identifier.
+type groupSource struct {
+	proto ipproto.Proto
+	at    netip.AddrPort
+}
+
+// dhcpv6Ports are DHCPv6's client and server ports, which no group
+// datagram goes to.
+var dhcpv6Ports = []uint16{546, 547}
 
 // answerWindow is how long a unicast answer to a group datagram passes
 // a restricted peer's access: SSDP's longest wait, and more.
@@ -135,9 +148,11 @@ func (c *multicaster) set(peers []Peer, self []netip.Prefix) {
 		acc := peer.Access
 		sends, takes := acc == nil, acc == nil
 		m := memberOf(peer.Addrs)
+		m.echoTo, m.echoFrom = acc == nil, acc == nil
 		if acc != nil && !acc.Nothing {
 			sends, takes = len(acc.GroupsTo) > 0, len(acc.GroupsFrom) > 0
 			m.to, m.from = anyPort(acc.GroupsTo), anyPort(acc.GroupsFrom)
+			m.echoTo, m.echoFrom = passes(acc.GroupsTo, ipproto.ICMPv6, 0), passes(acc.GroupsFrom, ipproto.ICMPv6, 0)
 		}
 		sends = sends && !peer.Rests
 		if !sends && !takes {
@@ -190,9 +205,13 @@ func anyPort(ports []Ports) []Ports {
 	return ports
 }
 
-// passes reports whether ports pass datagram, any where nil; one whose port
-// is not in it, as a later fragment, passes where nil alone.
-func passesGroup(ports []Ports, datagram []byte) bool {
+// passesGroup reports whether ports, any where nil, pass datagram, and echo
+// where it is an echo request; one whose port is not in ports, as a later
+// fragment, passes where nil alone.
+func passesGroup(ports []Ports, echo bool, datagram []byte) bool {
+	if groupEcho(datagram) {
+		return echo
+	}
 	if ports == nil {
 		return true
 	}
@@ -200,10 +219,16 @@ func passesGroup(ports []Ports, datagram []byte) bool {
 	return ok && passes(ports, ipproto.UDP, dst.Port())
 }
 
-// groupPorts is a group datagram's source and destination with their UDP
+// groupEcho reports whether a group datagram is an echo request.
+func groupEcho(b []byte) bool {
+	return len(b) >= 48 && b[0]>>4 == 6 && ipproto.Proto(b[6]) == ipproto.ICMPv6
+}
+
+// groupPorts is a UDP group datagram's source and destination with their
 // ports, false where it does not hold them, as a later fragment does not.
 func groupPorts(b []byte) (src, dst netip.AddrPort, ok bool) {
 	switch {
+	case groupEcho(b):
 	case len(b) >= 48 && b[0]>>4 == 6:
 		return netip.AddrPortFrom(netip.AddrFrom16([16]byte(b[8:24])), binary.BigEndian.Uint16(b[40:42])),
 			netip.AddrPortFrom(netip.AddrFrom16([16]byte(b[24:40])), binary.BigEndian.Uint16(b[42:44])), true
@@ -217,11 +242,15 @@ func groupPorts(b []byte) (src, dst netip.AddrPort, ok bool) {
 // ask records that peer may answer datagram for answerWindow, at its
 // addresses of the datagram's family.
 func (c *multicaster) ask(datagram []byte, peer *groupMember) {
-	src, _, ok := groupPorts(datagram)
-	if !ok {
+	var src groupSource
+	if groupEcho(datagram) {
+		src = groupSource{ipproto.ICMPv6, netip.AddrPortFrom(netip.AddrFrom16([16]byte(datagram[8:24])), binary.BigEndian.Uint16(datagram[44:46]))}
+	} else if at, _, ok := groupPorts(datagram); ok {
+		src = groupSource{ipproto.UDP, at}
+	} else {
 		return
 	}
-	if src.Addr().Is4() {
+	if src.at.Addr().Is4() {
 		c.record(peer.v4, src)
 		return
 	}
@@ -231,7 +260,7 @@ func (c *multicaster) ask(datagram []byte, peer *groupMember) {
 
 // record keeps src for peer, in place of what peer holds longest where it
 // holds maxAsked.
-func (c *multicaster) record(peer netip.Addr, src netip.AddrPort) {
+func (c *multicaster) record(peer netip.Addr, src groupSource) {
 	if !peer.IsValid() {
 		return
 	}
@@ -239,17 +268,17 @@ func (c *multicaster) record(peer netip.Addr, src netip.AddrPort) {
 	c.askedMu.Lock()
 	defer c.askedMu.Unlock()
 	if c.asked == nil {
-		c.asked = map[netip.Addr]map[netip.AddrPort]time.Time{}
+		c.asked = map[netip.Addr]map[groupSource]time.Time{}
 	}
 	held := c.asked[peer]
 	if held == nil {
-		held = map[netip.AddrPort]time.Time{}
+		held = map[groupSource]time.Time{}
 		c.asked[peer] = held
 	}
 	if _, ok := held[src]; !ok && len(held) >= maxAsked {
-		var oldest netip.AddrPort
+		var oldest groupSource
 		for k, at := range held {
-			if !oldest.IsValid() || at.Before(held[oldest]) {
+			if !oldest.at.IsValid() || at.Before(held[oldest]) {
 				oldest = k
 			}
 		}
@@ -260,7 +289,7 @@ func (c *multicaster) record(peer netip.Addr, src netip.AddrPort) {
 
 // answers reports whether peer may answer a group datagram that left from
 // src lately: one this node sent it, or it sent this node.
-func (c *multicaster) answers(peer netip.Addr, src netip.AddrPort) bool {
+func (c *multicaster) answers(peer netip.Addr, src groupSource) bool {
 	c.askedMu.Lock()
 	at, ok := c.asked[peer][src]
 	c.askedMu.Unlock()
@@ -298,7 +327,7 @@ func (m *groupMember) owns(src netip.Addr) bool {
 // wrap is datagram wrapped from this node to peer, nil where either lacks
 // an address of its family.
 func (p *groupPolicy) wrap(peer *groupMember, datagram []byte) []byte {
-	if !passesGroup(peer.to, datagram) {
+	if !passesGroup(peer.to, peer.echoTo, datagram) {
 		return nil
 	}
 	if datagram[0]>>4 == 4 {
@@ -351,7 +380,7 @@ func (c *multicaster) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 		} else {
 			inner, ok = unwrapGroup6(p.Buffer(), sender.v6, sender.ll, pol.self.v6)
 		}
-		if !ok || !passesGroup(sender.from, inner) || !sender.lim.Allow() {
+		if !ok || !passesGroup(sender.from, sender.echoFrom, inner) || !sender.lim.Allow() {
 			return filter.Drop
 		}
 		c.ask(inner, sender)
@@ -366,12 +395,17 @@ func (c *multicaster) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 
 // groupDatagram reports whether b is a whole IP packet carrying UDP to a
 // multicast group, without IPv4 options or IPv6 extension headers, over IPv4
-// a fragment of one too, over IPv6 to a group of link or site scope; and its
-// source.
+// a fragment of one too, over IPv6 to a group of link or site scope, or an
+// echo request to one; and its source. No other ICMPv6 passes: router
+// advertisements, neighbour discovery and MLD go to groups too; nor DHCPv6,
+// which could hand the members addresses and resolvers.
 func groupDatagram(b []byte) (netip.Addr, bool) {
 	if len(b) >= 40 && b[0]>>4 == 6 {
 		scope := b[25] & 0x0f
-		if int(binary.BigEndian.Uint16(b[4:6]))+40 != len(b) || ipproto.Proto(b[6]) != ipproto.UDP ||
+		next := ipproto.Proto(b[6])
+		echo := next == ipproto.ICMPv6 && len(b) >= 48 && b[40] == 128 && b[41] == 0
+		udp := next == ipproto.UDP && len(b) >= 48 && !slices.Contains(dhcpv6Ports, binary.BigEndian.Uint16(b[42:44]))
+		if int(binary.BigEndian.Uint16(b[4:6]))+40 != len(b) || !udp && !echo ||
 			b[24] != 0xff || scope != 2 && scope != 5 {
 			return netip.Addr{}, false
 		}

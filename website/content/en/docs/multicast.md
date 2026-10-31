@@ -12,6 +12,9 @@ other members that listen on their `juist0`. juist carries UDP to multicast
 groups, over IPv4 and IPv6. The datagram arrives with the sender's address
 in the network, so an answer goes straight back to it.
 
+It carries pings to IPv6 groups too, so that `ping -I juist0 ff02::1`
+shows the members that answer, each by its link-local address.
+
 Multicast is on by default. Every member can then answer discovery queries
 on the others, as a device on your LAN can. It can announce a printer or a
 media server, and the answer carries its address in the network.
@@ -23,6 +26,9 @@ juist does not carry:
 - broadcast, such as to `255.255.255.255`.
 - IPv6 groups other than those of link scope (`ff02::`) and site scope
   (`ff05::`).
+- ICMP to a group other than an IPv6 ping, such as router advertisements,
+  neighbour discovery or MLD.
+- DHCPv6, so that no member hands the others addresses or DNS servers.
 - multicast under an [access policy]({{< relref "docs/access" >}}), unless a
   `pass multicast` rule passes it.
 
@@ -39,7 +45,8 @@ pass multicast from <family> to <family>
 pass multicast from <gamers> to <gamers> port 4445
 ```
 
-The second rule passes only UDP port 4445, a game's own group. Each rule
+The first rule, without a port, passes pings too. The second passes only
+UDP port 4445, a game's own group. Each rule
 also passes the answers a device sends straight back. Such rules need the
 network's schema 22; see [Updating]({{< relref "docs/updating" >}}).
 

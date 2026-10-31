@@ -185,14 +185,15 @@ cut off. The rules:
   endpoint cache is rewritten for it hourly.
 - The status blames the way to a peer — a blocked UDP port, a missing relay —
   only where it has changed its announcement since it went down, or signed it
-  more than two minutes after, allowing for a clock ahead of this one's.
-  Without that it says the peer is offline once a renewal could have come (a
+  more than two minutes after, allowing for a clock ahead of this one's, and
+  only until a renewal following that sign could have come; meanwhile the
+  peer is looked up at least every 5 minutes. A device that wakes for moments
+  while asleep, as a Mac does for Power Nap, reads as offline between them.
+  Without a sign it says the peer is offline once a renewal could have come (a
   DHT interval, a lookup gap, the clock skew both ways; less with no DHT), and
   at once where this device's relay holds the peer's home region and finds it
-  disconnected; until then it says it does not know which. A device never seen
-  renewing may be on a build that does not, so the window alone never calls it
-  offline. A failed sync through a live tunnel is reported only once a retry
-  through it failed too.
+  disconnected; until then it says it does not know which. A failed sync
+  through a live tunnel is reported only once a retry through it failed too.
 
 **A relayed pair whose home relay moves.** The home region follows netcheck,
 and a peer reached only through a relay learns the new region from the

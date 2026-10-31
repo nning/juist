@@ -325,15 +325,17 @@ them by number.
    before it authenticates where that takes a round trip, as a catch-up
    does. A member whose hello comes at once is rarely held up.
 17. **Members are on one link for discovery (M25).** A member's UDP to a
-   multicast group, mDNS, SSDP and LLMNR among it, reaches every other
-   member's host, as a LAN neighbour's would:
+   multicast group, mDNS, SSDP and LLMNR among it, and its pings to an IPv6
+   group, reach every other member's host, as a LAN neighbour's would:
    it can answer for any name or service those protocols ask about, as a
    printer or a media server, and a host that trusts a discovered service
    trusts the member. Each datagram carries its sender's own address, so
    the answer names who gave it; nothing but the sender's own address
    passes, at most 100 datagrams a second from each. Under an access
    policy only what a `pass multicast` rule passes crosses, with the
-   unicast answers to it for ten seconds.
+   unicast answers to it for ten seconds. On Linux, echo replies to a
+   member's link-local address on its device go untracked, since conntrack
+   takes an answer to a group ping for invalid and firewalld drops those.
 
 ## Security design rules derived from the above
 

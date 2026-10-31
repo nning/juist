@@ -1,7 +1,7 @@
 ---
 title: Installation
 linkTitle: Installation
-description: Das fertige juist-Paket auf Debian, Ubuntu, Fedora oder FreeBSD installieren, den Download prüfen oder das Paket aus dem Quellcode bauen.
+description: juist aus der Paketquelle oder einem Release auf Debian, Ubuntu, Fedora oder FreeBSD installieren, den Download prüfen oder das Paket aus dem Quellcode bauen.
 lead: juist installierst du als Paket deines Systems, und zwar auf jedem Gerät, das in ein Netz soll. Jedes Release bringt fertige Pakete mit, dazu eine signierte Liste ihrer Prüfsummen.
 ---
 
@@ -15,6 +15,74 @@ Telefon tritt stattdessen mit der App bei, siehe
 [Android]({{< relref "docs/android" >}}).
 
 ## Das Paket installieren
+
+Die Paketquelle von juist installiert juist, und die Updates des Systems
+bringen danach jedes neue Release mit. Sie enthält die Pakete der Releases für
+Debian, Ubuntu, Fedora und FreeBSD. Um eine einzelne Datei zu installieren,
+nimmst du stattdessen das Paket des Releases
+([Aus einem Release](#from-a-release)).
+
+### Aus der Paketquelle {#from-the-package-repository}
+
+{{< step on="einem Gerät mit Debian oder Ubuntu" >}}
+Trage die Paketquelle und ihren Schlüssel ein und installiere dann juist:
+
+```sh
+sudo install -d -m 755 /etc/apt/keyrings
+sudo curl -fsSL -o /etc/apt/keyrings/juist.gpg https://pkg.juist.nning.io/juist/key.gpg
+echo "deb [signed-by=/etc/apt/keyrings/juist.gpg] https://pkg.juist.nning.io/juist/deb/ ./" | sudo tee /etc/apt/sources.list.d/juist.list
+sudo apt update && sudo apt install juist
+```
+
+Das gilt für amd64 und arm64 gleichermaßen.
+{{< /step >}}
+{{< step on="einem Gerät mit Fedora" >}}
+Trage die Paketquelle ein und installiere dann juist:
+
+```sh
+sudo tee /etc/yum.repos.d/juist.repo <<'EOF'
+[juist]
+name=juist
+baseurl=https://pkg.juist.nning.io/juist/rpm
+gpgcheck=0
+repo_gpgcheck=1
+gpgkey=https://pkg.juist.nning.io/juist/key.asc
+EOF
+sudo dnf install juist
+```
+
+Der Schlüssel signiert den Index der Paketquelle, der die Prüfsumme jedes
+Pakets enthält. So bleibt das RPM die Datei des Releases und selbst unsigniert.
+{{< /step >}}
+{{< step on="einem Gerät mit FreeBSD 15" >}}
+Trage als root die Paketquelle und ihren Schlüssel ein, installiere juist und
+starte dann den Daemon:
+
+```sh
+mkdir -p /usr/local/etc/pkg/repos /usr/local/etc/pkg/keys
+fetch -o /usr/local/etc/pkg/keys/juist.pub https://pkg.juist.nning.io/juist/freebsd.pub
+cat > /usr/local/etc/pkg/repos/juist.conf <<'EOF'
+juist: {
+  url: "https://pkg.juist.nning.io/juist/freebsd/${ABI}",
+  signature_type: "pubkey",
+  pubkey: "/usr/local/etc/pkg/keys/juist.pub"
+}
+EOF
+pkg install -r juist juist
+sysrc juistd_enable=YES && service juistd start
+```
+
+Das gilt für amd64 und arm64 gleichermaßen; was juist mit pf macht, steht
+unter [Aus einem Release](#from-a-release).
+`sha256 /usr/local/etc/pkg/keys/juist.pub` gibt die Prüfsumme des Schlüssels
+aus, `c649f2cd073f9e72825b0c1b8a2682f25c5c55405a178ea6d8a0f8b65ed89e3d`.
+{{< /step >}}
+
+dnf zeigt den Fingerabdruck des Schlüssels, wenn es ihn importiert, und unter
+Debian und Ubuntu zeigt ihn `gpg --show-keys /etc/apt/keyrings/juist.gpg`:
+`1D57474BAAC54CEEAD9168110EBE32412D806005`.
+
+### Aus einem Release {#from-a-release}
 
 {{< step on="einem Gerät mit Debian oder Ubuntu" >}}
 Lade das Paket herunter und installiere es:
@@ -55,6 +123,8 @@ jeder Regel, die mit `quick` durchlässt; sonst warnt `juist health`.
 Installierst du später ein neueres Release, ersetzt es das alte, und der
 Zustand des Geräts bleibt erhalten. Einzelheiten stehen unter
 [juist aktualisieren]({{< relref "docs/updating" >}}).
+Ein Paket aus der Paketquelle und eines aus einem Release sind dasselbe, jedes
+aktualisiert also das andere.
 
 ## Den Download prüfen {#verifying-a-download}
 

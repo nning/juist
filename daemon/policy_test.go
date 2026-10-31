@@ -453,7 +453,8 @@ func TestAddressesAreWithheldWithoutAKey(t *testing.T) {
 func udp(port uint16) conn.Ports { return conn.Ports{Proto: ipproto.UDP, First: port, Last: port} }
 
 // A pass multicast rule gives the data plane the group datagrams each way
-// it passes, by port, and makes the two peers.
+// it passes, by port, pings too where it names none, and makes the two
+// peers.
 func TestAMulticastRuleReachesTheDataPlane(t *testing.T) {
 	f := exitFixtureWith(t, func(*network) {}, nil)
 	f.learnOthers(t)
@@ -466,7 +467,7 @@ func TestAMulticastRuleReachesTheDataPlane(t *testing.T) {
 		t.Errorf("n1, which n0 may send SSDP to, has %+v", a)
 	}
 	if a := f.peerOf(t, n2).Access; a == nil || a.GroupsTo != nil ||
-		!slices.Equal(a.GroupsFrom, []conn.Ports{{Proto: ipproto.UDP}}) {
+		!slices.Equal(a.GroupsFrom, []conn.Ports{{Proto: ipproto.ICMPv4}, {Proto: ipproto.ICMPv6}, {Proto: ipproto.UDP}}) {
 		t.Errorf("n2, which may send n0 any group, has %+v", a)
 	}
 }

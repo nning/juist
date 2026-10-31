@@ -11,6 +11,13 @@ Das neue Paket installierst du genauso wie das erste
 ([Installieren]({{< relref "docs/install" >}})). Schlüssel, Netze und
 Einstellungen des Geräts bleiben erhalten.
 
+Aus der
+[Paketquelle]({{< relref "docs/install" >}}#from-the-package-repository)
+installiert, aktualisiert sich juist mit dem System: `sudo apt update && sudo
+apt upgrade` unter Debian und Ubuntu, `sudo dnf upgrade` unter Fedora und
+`pkg upgrade` als root unter FreeBSD, gefolgt von den Neustarts unten. Ein
+Paket aus einem Release installierst du erneut:
+
 {{< step on="einem Gerät mit Debian oder Ubuntu" >}}
 ```sh
 curl -LO https://github.com/nning/juist/releases/latest/download/juist_amd64.deb
@@ -37,8 +44,8 @@ alten Daemons weiter.
 Geräte mit unterschiedlichen Versionen arbeiten weiter zusammen, solange das
 Netz auf seinem Schema bleibt. Du kannst sie also eins nach dem anderen
 aktualisieren. Auf einem
-Telefon installierst du die neue APK über die alte
-([Android]({{< relref "docs/android" >}}#die-app-installieren)).
+Telefon installierst du die neue APK über die alte, oder F-Droid aktualisiert
+sie ([Android]({{< relref "docs/android" >}}#die-app-installieren)).
 
 ## Das Schema
 

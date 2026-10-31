@@ -4,9 +4,11 @@ Builds a website instance whenever `website/`, `design/` or
 `android/app/screenshots/` changes on `main` and serves it on a port of
 `127.0.0.1`. `/etc/juist-site/NAME` configures the instance NAME: `ADDR` to
 listen on, `FLAGS` for the server (`-noindex` for a preview), and `REPO`, a
-repository to build from other than the public one. Needs the user
-`juist-build`, as `packaging/follow-main/setup` sets it up, whose
-credentials also read a private `REPO`. As root, from this directory:
+repository to build from other than the public one. Runs as the system user
+`juist-build`, which `packaging/follow-main/setup` makes, or
+`useradd --system --user-group --home-dir /var/lib/juist-build --create-home juist-build`;
+a private `REPO` needs its read-only deploy key. As root, from this
+directory:
 
 ```sh
 install -d -m 755 /usr/local/lib/juist-site /var/lib/juist-site /etc/juist-site

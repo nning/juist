@@ -11,6 +11,13 @@ Install the new package the same way as the first one
 ([Install]({{< relref "docs/install" >}})). The device keeps its keys, its
 networks and its settings.
 
+Installed from the
+[package repository]({{< relref "docs/install" >}}#from-the-package-repository),
+juist updates with the system: `sudo apt update && sudo apt upgrade` on Debian
+and Ubuntu, `sudo dnf upgrade` on Fedora, and `pkg upgrade` as root on
+FreeBSD, followed by the restarts below. A package from a release is
+installed again:
+
 {{< step on="a Debian or Ubuntu device" >}}
 ```sh
 curl -LO https://github.com/nning/juist/releases/latest/download/juist_amd64.deb
@@ -36,7 +43,7 @@ keep running.
 
 Devices on different releases keep working together while the network stays
 on its schema, so you can update them one at a time. On a phone, install the
-new APK over the old one
+new APK over the old one, or let F-Droid update it
 ([Android]({{< relref "docs/android" >}}#installing-the-app)).
 
 ## The schema

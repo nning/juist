@@ -98,7 +98,7 @@ func (d *Daemon) wanted() []types.Identity {
 		// Until a sign of life could have come, the lookups that would find
 		// it stay close together.
 		most := maxLookupGap
-		if p := d.down[w.id]; p != nil && now.Before(p.since.Add(settle)) {
+		if p := d.down[w.id]; p != nil && now.Before(p.quietSince().Add(settle)) {
 			most = seekLookupGap
 		}
 		w.p.reschedule(now, most)

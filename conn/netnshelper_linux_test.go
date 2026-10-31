@@ -315,6 +315,18 @@ func TestHelperNetnsNode(t *testing.T) {
 			say("OK")
 			continue
 		}
+		if cmd == "GROUPACCESS" {
+			// As a policy passing everything and multicast both ways leaves it.
+			groups := []Ports{{Proto: ipproto.ICMPv4}, {Proto: ipproto.ICMPv6}, {Proto: ipproto.UDP}}
+			for i := range peers {
+				peers[i].Access = &Access{Open: []Ports{{}}, Sends: []Ports{{}}, GroupsFrom: groups, GroupsTo: groups}
+			}
+			if err := mgr.SetPeers(peers); err != nil {
+				t.Fatalf("SetPeers: %v", err)
+			}
+			say("OK")
+			continue
+		}
 		if port, ok := strings.CutPrefix(cmd, "ACCESS "); ok {
 			for i := range peers {
 				p := uint16(mustAtoi(t, port))

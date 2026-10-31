@@ -61,7 +61,7 @@ type Access struct {
 	// them, sorted.
 	Names []string
 	// Multicast is the UDP ports it may send group datagrams to the other
-	// on.
+	// on, and ICMP where it may ping it by a group.
 	Multicast []types.PortRange
 }
 
@@ -240,7 +240,7 @@ func (n *Network) compile() *compiled {
 		}
 		switch {
 		case r.Multicast && len(r.Ports) == 0:
-			cr.ports = []types.PortRange{{Proto: types.ProtoUDP}}
+			cr.ports = []types.PortRange{{Proto: types.ProtoUDP}, {Proto: types.ProtoICMP}}
 		case len(r.Ports)+len(r.Services) == 0:
 			cr.ports = Everything
 		}

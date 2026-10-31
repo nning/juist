@@ -67,6 +67,7 @@ out interop                          the test lab
 out interop/probe                    the test lab
 out packaging                        build tooling
 out packaging/freebsd/mkpkg          build tooling
+out packaging/freebsd/mkrepo         build tooling
 out packaging/image/mkimage          build tooling
 out packaging/licenses               build tooling
 out private/publish                  publishing tooling

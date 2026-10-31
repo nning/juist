@@ -101,8 +101,9 @@ func TestLookupsKeepTheirSchedule(t *testing.T) {
 }
 
 // Why a peer is down: blocked on the way where it has signed or changed its
-// announcement since, offline where no sign of that came in time, or when its
-// home relay here finds it gone; undecided until then.
+// announcement since, until a renewal following that had time to come;
+// offline where no sign of that came in time, or when its home relay here
+// finds it gone; undecided until then.
 func TestWhyAPeerIsDown(t *testing.T) {
 	t0 := time.Unix(1_700_000_000, 0)
 	at := func(d time.Duration) time.Time { return t0.Add(d) }
@@ -117,13 +118,15 @@ func TestWhyAPeerIsDown(t *testing.T) {
 	}{
 		{"just down", downPeer{since: t0}, at(time.Second), at(-time.Minute), false, stateSeeking},
 		{"signed since", downPeer{since: t0}, at(4 * time.Minute), at(3 * time.Minute), false, stateBlocked},
+		{"signed since, quiet after", downPeer{since: t0}, at(3*time.Minute + settle), at(3 * time.Minute), false, stateAbsent},
 		{"signed just before, by a clock ahead", downPeer{since: t0}, at(settle), at(90 * time.Second), false, stateAbsent},
-		{"said something new", downPeer{since: t0, renewed: true}, at(time.Second), at(-time.Hour), false, stateBlocked},
+		{"said something new", downPeer{since: t0, alive: at(time.Second)}, at(time.Second), at(-time.Hour), false, stateBlocked},
+		{"said something new, quiet after", downPeer{since: t0, alive: at(time.Hour)}, at(time.Hour + settle), at(-time.Hour), false, stateAbsent},
 		{"quiet past the window", downPeer{since: t0}, at(settle), at(-time.Minute), false, stateAbsent},
 		{"its relay here finds it gone", downPeer{since: t0}, at(firstLookupGap), at(-time.Minute), true, stateAbsent},
 		{"its relay here, a moment on", downPeer{since: t0}, at(time.Second), at(-time.Minute), true, stateSeeking},
 	} {
-		if got := tc.p.state(tc.now, tc.signed, settle, tc.gone); got != tc.want {
+		if got := tc.p.signedSince(tc.signed, tc.now).state(tc.now, settle, tc.gone); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}
