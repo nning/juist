@@ -25,6 +25,8 @@ type fakeHost struct {
 	// multipath routing does; routes are those held then.
 	onePath bool
 	routes  map[netip.Prefix]int
+	// held are the host's addresses and gateways.
+	held []netip.Addr
 }
 
 func (h *fakeHost) record(format string, a ...any) {
@@ -111,7 +113,14 @@ func (h *fakeHost) ListenHTTPS(a netip.Addr) (*os.File, error) {
 }
 
 func (h *fakeHost) Free(string) bool { return true }
-func (h *fakeHost) Answers() string  { return "the host's rules" }
+
+func (h *fakeHost) HostAddrs() []netip.Addr { return h.held }
+
+func (h *fakeHost) SetGuard(dev string, g GuardSpec) error {
+	h.record("guard %s %v %v", dev, g.Own, g.Overlay)
+	return nil
+}
+func (h *fakeHost) Answers() string { return "the host's rules" }
 
 func (h *fakeHost) SetDNS(dev string, servers []netip.Addr, search []string) error {
 	if len(search) > 0 {
@@ -169,7 +178,7 @@ func pair(t *testing.T, h Host) (*Client, chan error) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		destroy, err := Serve(fc.(*net.UnixConn), h, 870, t.Logf)
+		destroy, err := Serve(fc.(*net.UnixConn), h, 870, "juist0", t.Logf)
 		destroy()
 		done <- err
 	}()
@@ -276,9 +285,9 @@ func TestTheHelperTouchesNothingElse(t *testing.T) {
 		want string
 	}{
 		{"another device", func() error { _, err := c.OpenTUN("em0", 1280); return err }, "no device of juist's"},
-		{"a tiny MTU", func() error { _, err := c.OpenTUN("juist1", 576); return err }, "MTU"},
-		{"a device not opened", func() error { return c.SetAddrs("juist2", prefixes("10.0.0.1/32")) }, "not opened here"},
-		{"its destruction", func() error { return c.Destroy("juist2") }, "not opened here"},
+		{"a tiny MTU", func() error { _, err := c.OpenTUN("juist0", 576); return err }, "MTU"},
+		{"a device not opened", func() error { return c.SetAddrs("juist0", prefixes("10.0.0.1/32")) }, "not opened here"},
+		{"its destruction", func() error { return c.Destroy("juist0") }, "not opened here"},
 	} {
 		if err := tc.err(); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
@@ -429,6 +438,89 @@ func TestServingTakesTheDevicesAddressesAlone(t *testing.T) {
 	}
 }
 
+// What a guard writes into pf's rules is addresses in the overlay's space
+// alone: a LAN host's would keep it from the LAN.
+func TestAGuardTakesTheOverlaysAddressesAlone(t *testing.T) {
+	h := &fakeHost{}
+	c, _ := pair(t, h)
+	f, err := c.OpenTUN("juist0", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := c.SetAddrs("juist0", prefixes("198.19.44.1/32", "fd12::1/128")); err != nil {
+		t.Fatal(err)
+	}
+	a := netip.MustParseAddr
+	for _, tc := range []struct {
+		g    GuardSpec
+		want string
+	}{
+		{GuardSpec{Own: []netip.Addr{a("203.0.113.9")}}, "outside any network's space"},
+		{GuardSpec{Overlay: []netip.Addr{a("192.0.2.7")}}, "outside any network's space"},
+		{GuardSpec{Overlay: []netip.Addr{a("fd12::2%x\npass in quick all")}}, "outside any network's space"},
+	} {
+		if err := c.SetGuard("juist0", tc.g); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("guarding %v: %v, want %q", tc.g, err, tc.want)
+		}
+	}
+	if err := c.SetGuard("juist0", GuardSpec{Own: []netip.Addr{a("198.19.44.1"), a("fd12::1")},
+		Overlay: []netip.Addr{a("198.19.44.2"), a("fd12::2")}}); err != nil {
+		t.Errorf("guarding its own and its peers': %v", err)
+	}
+	if got := h.took(); !slices.Contains(got, "guard juist0 [198.19.44.1 fd12::1] [198.19.44.2 fd12::2]") {
+		t.Errorf("the host saw %q", got)
+	}
+}
+
+// No route into the device takes the host's own address or a gateway of its
+// routes, so not its LAN whole; a part of a wider network it is on, which a
+// subnet may be, it does take.
+func TestTheHelperRoutesNothingOverTheHostsOwnLAN(t *testing.T) {
+	h := &fakeHost{held: []netip.Addr{netip.MustParseAddr("10.20.0.7"), netip.MustParseAddr("10.20.0.1"),
+		netip.MustParseAddr("fe80::1%em0")}}
+	c, _ := pair(t, h)
+	f, err := c.OpenTUN("juist0", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	for _, p := range []string{"10.20.0.0/24", "10.20.0.1/32", "10.0.0.0/8", "10.20.0.7/32"} {
+		err := c.SetRoutes("juist0", prefixes(p), netip.Addr{})
+		if err == nil || !strings.Contains(err.Error(), "over the host's own LAN") {
+			t.Errorf("a route to %s: %v", p, err)
+		}
+	}
+	if err := c.SetRoutes("juist0", prefixes("10.20.0.128/25", "10.30.0.0/16"), netip.Addr{}); err != nil {
+		t.Errorf("a subnet beside the host's: %v", err)
+	}
+	if got := h.took(); slices.ContainsFunc(got, func(s string) bool {
+		return strings.Contains(s, "route+ juist0 10.20.0.0/24") || strings.Contains(s, "route+ juist0 10.0.0.0/8")
+	}) {
+		t.Errorf("the host saw %q", got)
+	}
+}
+
+// A helper plumbs its own daemon's device alone: another network's daemon,
+// taken over, lifts no refusal of this one's while it is stopped, nor sets
+// its DNS or opens its device.
+func TestTheHelperPlumbsItsDaemonsDeviceAlone(t *testing.T) {
+	h := &fakeHost{}
+	c, _ := pair(t, h)
+	for what, err := range map[string]error{
+		"lifting a refusal": c.SetEgress("juist1", EgressSpec{Mode: EgressDirect}),
+		"giving DNS back":   c.SetDNS("juist1", nil, nil),
+		"opening":           func() error { _, err := c.OpenTUN("juist1", 1280); return err }(),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "no device of this juistd's") {
+			t.Errorf("%s on another's device: %v", what, err)
+		}
+	}
+	if got := h.took(); len(got) != 0 {
+		t.Errorf("the host saw %q", got)
+	}
+}
+
 // The daemon asks whether answers leave the way they came, before any device.
 func TestTheHelperSaysWhereAnswersGo(t *testing.T) {
 	c, _ := pair(t, &fakeHost{})
@@ -445,14 +537,14 @@ func TestTheHelperSaysWhereAnswersGo(t *testing.T) {
 func TestTheHelperKeepsToTheNetworksSpace(t *testing.T) {
 	h := &fakeHost{}
 	c, _ := pair(t, h)
-	if err := c.SetDNS("juist1", []netip.Addr{netip.MustParseAddr("198.19.44.1")}, nil); err == nil {
+	if err := c.SetDNS("juist0", []netip.Addr{netip.MustParseAddr("198.19.44.1")}, nil); err == nil {
 		t.Error("DNS set for a device not opened")
 	}
-	if err := c.SetDNS("juist1", nil, nil); err != nil {
+	if err := c.SetDNS("juist0", nil, nil); err != nil {
 		t.Errorf("DNS given back without a device: %v", err)
 	}
 	e := EgressSpec{Mode: EgressRefused, Capture: prefixes("8.0.0.0/7")}
-	if err := c.SetEgress("juist1", e); err == nil {
+	if err := c.SetEgress("juist0", e); err == nil {
 		t.Error("captured into a device not opened")
 	}
 	f, err := c.OpenTUN("juist0", 1280)

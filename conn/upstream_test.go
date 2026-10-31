@@ -246,6 +246,16 @@ func TestUpstreamLinesAndTheHomelessUpdate(t *testing.T) {
 		// What meetEvery keeps a connection to a walled peer's home under.
 		{"wgengine/magicsock/derp.go", "derpInactiveCleanupTime = 60 * time.Second"},
 		{"wgengine/magicsock/derp.go", "derpCleanStaleInterval = 15 * time.Second"},
+		// What it keeps it by: a relay answers no packet for no client but disco.
+		{"derp/derpserver/derpserver.go", "if disco.LooksLikeDiscoWrapper(contents) != true {\n\t\treturn\n\t}"},
+		// What a relay reached by ICMP alone is read from, and what holds
+		// netcheck at another.
+		{"net/netcheck/netcheck.go", `c.logf("[v1] ICMP latency of %v (%d): %v", reg.RegionCode, reg.RegionID, d)`},
+		{"net/netcheck/netcheck.go", `c.logf("[v1] netcheck: measuring HTTPS latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)`},
+		{"net/netcheck/netcheck.go", "if haveLatencySample || recentActivity {\n\t\t\tr.PreferredDERP = c.ForcePreferredDERP"},
+		{"tailcfg/derpmap.go", "\tRegionID DERPRegionID\n"},
+		// What TestWalledNodesMeetAtAHome counts a walled peer's pings by.
+		{"wgengine/magicsock/magicsock.go", `c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x padding=%v"`},
 	} {
 		if !strings.Contains(upstreamSource(t, c.rel), c.want) {
 			t.Errorf("%s no longer holds %s", c.rel, c.want)

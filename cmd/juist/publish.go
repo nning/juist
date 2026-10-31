@@ -30,12 +30,13 @@ func publishFamily() family {
 			{name: "remove", aliases: []string{"rm"}, run: publishRemove, forms: [][2]string{{"remove [DEVICE] NAME", "stop publishing NAME"}}},
 			{name: "serve", run: publishServe, forms: [][2]string{{"serve [--stop]", "serve what is published on this\ndevice to the ingresses"}}},
 		}, footer: `A name is one label under the network's domain (juist network domain), or
-the domain itself, spelled out, whose DNS points at the ingresses (juist
-grant DEVICE ingress). The ingresses read the name a client asks for and
-pass the connection to the device, where juist ends TLS (juist publish add
-NAME HOST:PORT) or the service does; a name published by TCP (--tcp) has a
-port of its own on every ingress instead. juist publish PORT publishes this
-host's PORT under the device's own name at once, as the publish role lets it.`}
+the domain itself, spelled out. Its DNS points at the ingresses (juist grant
+DEVICE ingress). An ingress reads the name a client asks for and passes the
+connection to the device. There, juist ends TLS (juist publish add NAME
+HOST:PORT), or the service does. A name published by TCP (--tcp) gets its
+own port on every ingress instead. juist publish PORT publishes this host's
+PORT under the device's own name at once, if the device has the publish
+role.`}
 }
 
 func cmdPublish(a *app, args []string) error {
@@ -131,14 +132,14 @@ func (a *app) listPublished() error {
 
 func publishAdd(a *app, args []string) error {
 	s := spec{name: "juist publish add", args: "NAME HOST:PORT | DEVICE NAME [PORT]", min: 2, max: 3, about: `
-Publish NAME.DOMAIN, or DOMAIN itself. Given HOST:PORT, such as
-127.0.0.1:2283, it is published on this device, where juist ends TLS with a
-certificate of its own and sends the connection on to HOST:PORT. Given
-DEVICE, on DEVICE's PORT, 443 unless given, where the service ends TLS once
-DEVICE's operator agrees. With --tcp, every ingress passes TCP on a port of
-its own to the device instead, for a service that speaks no TLS. With
---members, the internet does not reach it: members do, at the device, as
-the access policy names it for them.`}
+Publish NAME.DOMAIN, or DOMAIN itself. With HOST:PORT, such as
+127.0.0.1:2283, the name is published on this device: juist ends TLS with
+its own certificate and sends the connection on to HOST:PORT. With DEVICE,
+the name goes to DEVICE's PORT (default 443), where the service ends TLS,
+once DEVICE's operator agrees. With --tcp, every ingress passes TCP to the
+device on a separate port, for a service without TLS. With --members, the
+internet cannot reach the name; members reach it at the device, as the
+access policy allows.`}
 	fs := newFlags(s.name)
 	proxy := fs.Bool("proxy", false, "send the client's address in a PROXY protocol v2 header")
 	http2 := fs.Bool("http2", false, "offer clients HTTP/2; the service at HOST:PORT takes it without TLS (h2c)")
@@ -417,9 +418,9 @@ func (a *app) publishHere(pos []string, proxy bool, members *bool, tcp *tcpFlag)
 func publishStatusPage(a *app, args []string) error {
 	s := spec{name: "juist publish status-page", args: "NAME", min: 1, max: 1, about: `
 Serve the network's status page as NAME.DOMAIN on this device, where juist
-ends TLS: its devices, how this device reaches them, the published names
-and the log's changes. Members see all of it; --public says what anyone
-else sees: none, services, network (all but the changes) or all.`}
+ends TLS. It shows the devices, how this device reaches them, the published
+names and the log's changes. Members see all of it. --public sets what
+others see: none, services, network (all but the changes) or all.`}
 	fs := newFlags(s.name)
 	public := fs.String("public", ipc.ShowServices.String(), "`WHAT` non-members see: none, services, network or all")
 	pos, err := a.parse(s, fs, args)
@@ -712,8 +713,8 @@ func (a *app) servePublishedNext(target types.NodeRecord) error {
 
 func publishRemove(a *app, args []string) error {
 	s := spec{name: "juist publish remove", args: "[DEVICE] NAME", min: 1, max: 2, about: `
-Stop publishing NAME on DEVICE, this device unless given. On this device,
-juist also stops ending TLS for NAME.`}
+Stop publishing NAME on DEVICE (default: this device). On this device, juist
+also stops ending TLS for NAME.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -789,8 +790,6 @@ juist also stops ending TLS for NAME.`}
 // nothing on.
 const notPublishedHere = "the network publishes nothing on this device"
 
-// publishSummary is the status line of what this device serves of what is
-// published on it; paint colours what it does not.
 // sharedWarning says why a name for members alone, "NAME with OTHER", is
 // not served.
 func sharedWarning(shared string) string {
@@ -807,7 +806,10 @@ func withheldWarning(name string) string {
 	return fmt.Sprintf("not serving %s, its service meant for members alone: the log has the name public", name)
 }
 
-func publishSummary(pub *ipc.Publish, paint func(code, s string) string) string {
+// publishSummary is the status line of what this device serves of
+// published, the names the log publishes on it; paint colours what it does
+// not.
+func publishSummary(pub *ipc.Publish, published []string, paint func(code, s string) string) string {
 	switch {
 	case pub == nil:
 		return ""
@@ -819,10 +821,42 @@ func publishSummary(pub *ipc.Publish, paint func(code, s string) string) string 
 			", but ends TLS for none: the terminator does not run (juist publish serve)")
 	case len(pub.Serving) > 0:
 		return "this device serves " + strings.Join(pub.Serving, ", ")
-	case !pub.Consent && pub.NotServing == "":
-		return paint("33", "not served here: not agreed to on this device (juist publish serve)")
+	case pub.NotServing == notPublishedHere && pub.Consent:
+		return "none (ready to serve)"
+	case pub.NotServing == notPublishedHere:
+		return "none"
+	case len(published) > 0:
+		return paint("33", strings.Join(published, ", ")+" (not served)")
 	}
-	return paint("33", "not served here: "+pub.NotServing)
+	return paint("33", "not served")
+}
+
+// selfPublished are the names the log publishes on this device, as s lists
+// its devices.
+func selfPublished(s *ipc.Status) []string {
+	i := slices.IndexFunc(s.Devices, func(d ipc.Device) bool { return d.Identity == s.Self })
+	if i < 0 {
+		return nil
+	}
+	return s.Devices[i].Published
+}
+
+// publishNotes say, for juist health, why published, the names the log
+// publishes on this device, named self, are not served, and what serves them.
+func publishNotes(pub *ipc.Publish, published []string, self string) []line {
+	what := cmp.Or(strings.Join(published, ", "), "what is published on this device")
+	switch {
+	case pub == nil || len(pub.Serving) > 0:
+		return nil
+	case pub.NotServing == notPublishedHere && pub.Consent:
+		return []line{{kind: lineHint, text: "an admin publishes a name on this device: juist publish add " + self + " NAME"}}
+	case pub.NotServing == notPublishedHere:
+		return nil
+	case !pub.Consent && pub.NotServing == "":
+		return []line{{kind: lineWarn, text: "not serving " + what + ": not agreed to on this device"},
+			{kind: lineHint, text: "juist publish serve"}}
+	}
+	return []line{{kind: lineWarn, text: "not serving " + what + ": " + pub.NotServing}}
 }
 
 // parseLabel reads arg as a name to publish under domain: one label, or one

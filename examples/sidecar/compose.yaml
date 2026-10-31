@@ -1,0 +1,41 @@
+# An app that reaches the juist network as a device of its own, through a
+# juist container sharing its network namespace. See README.md.
+name: juist-sidecar
+
+services:
+  # Holds the namespace, so that juist and the app keep it across their
+  # restarts. Recreating it cuts both off until they are restarted too.
+  netns:
+    image: registry.k8s.io/pause:3.10
+    restart: unless-stopped
+
+  # juistd as a device: juist0 in the namespace, with the device's own
+  # addresses, and what the access policy grants it.
+  juist:
+    image: ${JUIST_IMAGE:?set JUIST_IMAGE in .env}
+    network_mode: service:netns
+    # Docker gives a capability to root alone.
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun]
+    environment:
+      JUIST_JOIN: ${JUIST_JOIN:-} # joined by once started, ignored once in the network
+    volumes:
+      - type: volume
+        source: juist # its keys and log
+        target: /var/lib/juist
+        volume:
+          nocopy: true # root's, not the image's user's, which juistd would refuse
+    restart: unless-stopped
+
+  # The app: what it opens to a member's address goes through juist0.
+  app:
+    image: docker.io/library/busybox:latest
+    command: [sleep, infinity]
+    network_mode: service:netns
+    depends_on: [juist]
+    restart: unless-stopped
+
+volumes:
+  juist: {}

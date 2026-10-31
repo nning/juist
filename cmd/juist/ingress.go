@@ -27,10 +27,10 @@ func ingressFamily() family {
 		subs: []subcommand{
 			{name: "list", aliases: []string{"ls"}, run: ingressList, forms: [][2]string{{"", "what this ingress serves"}}},
 			{name: "serve", run: ingressServe, forms: [][2]string{{"serve [--stop]", "serve as the network's ingress, on 443\nand 80, and the ports names are published\non by TCP"}}},
-		}, footer: `An ingress is a device with a public address the network granted the role
-(juist grant DEVICE ingress). It reads the name a client asks for, or takes
-the port a name is published on by TCP, and passes the connection to the
-device, through the tunnel, ending no TLS.`}
+		}, footer: `An ingress is a device with a public address and the ingress role (juist
+grant DEVICE ingress). It reads the name a client asks for, or the port a
+name is published on by TCP, and passes the connection through the tunnel to
+the device. It ends no TLS.`}
 }
 
 func cmdIngress(a *app, args []string) error { return ingressFamily().run(a, args) }

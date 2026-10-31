@@ -7,19 +7,15 @@ lead: Mit einer Einladung tritt genau ein neues Gerät dem Netz bei. Du startest
 
 ## So funktioniert eine Einladung
 
-Eine **Einladung** ist ein kurzlebiges Geheimnis, mit dem ein neues Gerät dem
-Netz beitritt. `juist invite` gibt sie in zwei Formen aus, als Code und als
-Link, und wartet dann. Auf dem neuen Gerät rufst du `sudo juist join` mit
-einem der beiden auf.
+Eine **Einladung** ist ein kurzlebiges Geheimnis, mit dem ein neues Gerät
+beitritt. `juist invite` gibt sie als Code und als Link aus und wartet. Auf
+dem neuen Gerät rufst du `sudo juist join` mit einem der beiden auf.
 
-Einladen kann nur das Gerät eines Admins, denn die Aufnahme eines Geräts ist
-eine Änderung am Netz, die ein Admin signieren muss. Ein **Admin** ist ein
-Mensch, der mit seinem Schlüssel Änderungen signiert, siehe
-[So funktioniert juist]({{< relref "docs/how-it-works" >}}).
-
-Bevor irgendetwas signiert wird, zeigen beide Geräte vier Wörter, die du
-vergleichst. Daran erkennst du, dass das Gerät, das beitreten will, wirklich
-das eingeladene ist.
+Einladen kann nur das Gerät eines
+[Admins]({{< relref "docs/how-it-works" >}}#admins), denn die Aufnahme ist
+eine signierte Änderung. Bevor etwas signiert wird, zeigen beide Geräte vier
+Wörter zum Vergleichen. Sie belegen, dass das Gerät, das beitreten will, das
+eingeladene ist.
 
 ## Code oder Link
 
@@ -29,37 +25,29 @@ das eingeladene ist.
 | Funktioniert | nur im selben LAN | überall |
 | Nach einem Fehlversuch | ist der Code ungültig | bleibt alles gültig |
 
-Der **Code** besteht aus einer Zahl und drei Wörtern und ist kurz genug, um
-ihn vorzulesen oder abzutippen. Die Zahl unterscheidet Einladungen
-voneinander und ist nicht geheim, die drei Wörter schon. Das neue Gerät sucht
-das einladende Gerät, indem es im LAN nachfragt, und verbindet sich dann mit
-ihm auf TCP-Port 41642. Kann eine Firewall auf dem einladenden Gerät diesen
-Port blockieren, gibt `juist invite` den Befehl aus, der ihn öffnet, etwa
+Der **Code** besteht aus einer Zahl und drei Wörtern und lässt sich
+vorlesen. Die Zahl unterscheidet Einladungen, die drei Wörter sind das
+Geheimnis. Das neue Gerät sucht das einladende im LAN und verbindet sich mit
+ihm auf TCP-Port 41642. Kann eine Firewall diesen Port blockieren, gibt
+`juist invite` den Befehl aus, der ihn öffnet, etwa
 `hint: the firewall may block the device: sudo ufw allow 41642/tcp`.
 
 Mit dem Code gibt es genau einen Versuch. Nach einem Fehlversuch meldet das
-einladende Gerät `warning: code voided: wrong guess from …` und lehnt danach
-auch den richtigen Code ab. Der Link funktioniert aber weiterhin.
+einladende Gerät `warning: code voided: wrong guess from …` und lehnt auch
+den richtigen Code ab. Der Link funktioniert weiter.
 
 Der **Link** enthält ein 128-Bit-Geheimnis, die Adressen des einladenden
-Geräts und den Schlüssel des einladenden Admins, der das neue Gerät an dessen
-Signatur bindet. Kopiere ihn vollständig samt Anführungszeichen, denn er
-enthält Zeichen, die eine Shell sonst verändern würde.
+Geräts und den Schlüssel des einladenden Admins. Kopiere ihn vollständig
+samt Anführungszeichen, damit die Shell ihn nicht verändert.
 
-Im Terminal zeichnet `juist invite` den Link zusätzlich als QR-Code, über der
-Zeile mit `juist join` für den Link. Eine Kamera liest aus dem QR-Code nur den
-Link, ohne den Befehl. Der Code fürs LAN steht ganz unten, damit er auch in
-einem Fenster sichtbar bleibt, das niedriger ist als der QR-Code. Geht die
-Ausgabe nicht in ein Terminal oder ist das Fenster zu schmal, fehlt der
-QR-Code. Im zweiten Fall sagt juist das, etwa so:
-`no qr code: the terminal is narrower than 59 columns`.
-
-Ein Telefon tritt bei, indem die [Android-App]({{< relref "docs/android" >}})
-den QR-Code scannt oder du den Code in sie eintippst.
+Im Terminal zeigt `juist invite` den Link auch als QR-Code. Ein Telefon tritt
+bei, indem die [Android-App]({{< relref "docs/android" >}}) ihn scannt oder
+du den Code eintippst. Ist das Fenster zu schmal für den QR-Code, sagt juist
+das.
 
 Code und Link verfallen, sobald ein Gerät beigetreten ist oder die Einladung
-abläuft. Eine Einladung gilt eine Stunde, es sei denn, du gibst `--expires`
-an, etwa `--expires 2h`. Höchstens sind `7d` möglich.
+abläuft. Eine Einladung gilt eine Stunde; `--expires 2h` ändert das, bis
+`7d`.
 
 ## Ein Gerät einladen
 
@@ -98,30 +86,29 @@ nas joined
 
 ## Die vier Wörter
 
-Die Wörter umfassen die Identität des neuen Geräts und alle seine Schlüssel.
-Hat sich ein anderes Gerät dazwischengeschaltet, weichen die Wörter ab.
-Jede Seite legt ihren Teil der Wörter fest, bevor sie den Teil der anderen
-kennt. Ein Gerät dazwischen kann deshalb nicht nach passenden Wörtern suchen.
+Die Wörter umfassen die Identität des neuen Geräts und alle seine
+Schlüssel. Hat sich ein anderes Gerät dazwischengeschaltet, weichen sie ab.
+Ein Gerät dazwischen kann nicht nach passenden Wörtern suchen, weil jede
+Seite ihren Teil festlegt, bevor sie den der anderen kennt.
 
-Weichen die Wörter voneinander ab, antworte mit `n`. Die Einladung signiert
-dann nichts: `juist: words not confirmed; nothing signed`. Starte eine neue
-Einladung und finde heraus, welches Gerät beitreten wollte.
+Weichen die Wörter ab, antworte mit `n`. Die Einladung signiert nichts:
+`juist: words not confirmed; nothing signed`. Starte eine neue Einladung und
+finde heraus, welches Gerät beitreten wollte.
 
-`juist invite --yes` nimmt das Gerät auf, ohne zu vergleichen. Damit entfällt
-diese Prüfung. Nutze die Option also nur, wo du ohnehin nicht vergleichen
-könntest, etwa in einem Skript.
+`juist invite --yes` überspringt den Vergleich. Nutze es nur, wo du ohnehin
+nicht vergleichen kannst, etwa in einem Skript.
 
 ## Mit einer Rolle einladen
 
-Mit einer **Rolle** übernimmt ein Gerät eine zusätzliche Aufgabe im Netz.
-Eine Einladung kann dem neuen Gerät gleich beim Beitritt eine Rolle geben:
+Eine Einladung kann dem neuen Gerät gleich beim Beitritt eine
+[Rolle]({{< relref "docs/how-it-works" >}}#roles) geben:
 
 | Option | Das neue Gerät wird |
 |---|---|
 | `--relay` | ein Relay, das Verkehr für Geräte weiterleitet, die sich nicht direkt erreichen ([Relays]({{< relref "docs/relays" >}})) |
 | `--voucher` | ein Voucher, der stündlich bestätigt, dass der Stand des Netzes aktuell ist ([Frische]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)) |
 | `--ingress` | ein Ingress, der Verbindungen aus dem Internet für veröffentlichte Namen annimmt ([Dienste veröffentlichen]({{< relref "docs/publishing" >}})) |
-| `--service NAME` | ein Service-Mitglied, das `NAME` unter der Domain des Netzes veröffentlicht und selbst keine Verbindungen zu anderen Geräten öffnen kann ([Dienste veröffentlichen]({{< relref "docs/publishing" >}}#keeping-the-server-away-from-your-network)) |
+| `--service NAME` | ein Service-Mitglied, das `NAME` veröffentlicht und keine Verbindungen zu anderen Geräten öffnen kann ([Service-Mitglieder]({{< relref "docs/service-member" >}})) |
 
 So lädst du einen VPS als Ingress des Netzes ein:
 
@@ -130,53 +117,44 @@ $ juist invite vps --ingress
 invite to "home" as ingress, expires in 1h; on the new device:
 ```
 
-Ein Ingress kann kein Voucher sein, `--ingress` und `--voucher` schließen
-sich also aus. Ein Service-Mitglied hat keine weitere Rolle, `--service` lässt
-sich daher mit keiner der anderen Optionen kombinieren. Andere Rollen wie
-`exit` vergibst du nach dem Beitritt mit `juist grant`.
+`--ingress` und `--voucher` schließen sich aus, und `--service` lässt sich
+mit keiner anderen Option kombinieren. Andere Rollen wie `exit` vergibst du
+nach dem Beitritt mit `juist grant`.
 
 ## Über NAT hinweg
 
 Der Link funktioniert auch, wenn beide Geräte an verschiedenen Orten hinter
 NAT stehen. Das neue Gerät probiert zuerst die Adressen aus dem Link. Kommt
-es darüber nicht durch, finden sich beide über den öffentlichen
-BitTorrent-DHT, und das neue Gerät meldet
-`no direct answer; meeting through the DHT (up to a minute)`. Den größten
-Teil dieser Minute braucht der Beitritt zum DHT.
+es nicht durch, finden sich beide über den öffentlichen BitTorrent-DHT, und
+das neue Gerät meldet
+`no direct answer; meeting through the DHT (up to a minute)`.
 
 Hat das Netz ein Relay und steht das einladende Gerät hinter NAT, wartet die
-Einladung zusätzlich beim Relay, und der Link enthält dessen Adresse.
-`juist invite` meldet dann
+Einladung auch beim Relay: `juist invite` meldet
 `meets through relay 203.0.113.7:41645 where this device is unreachable`. Das
-Geheimnis der Einladung bekommt das Relay nie zu sehen.
+Geheimnis der Einladung sieht das Relay nie.
 
 Scheitern kann das nur, wenn beide NATs symmetrisch sind, also für jedes Ziel
-einen neuen Port wählen. Dann hast du zwei Möglichkeiten:
+einen neuen Port wählen. Dann tritt über einen Internetanschluss bei, von dem
+aus das einladende Gerät erreichbar ist, oder richte zuerst ein
+[Relay]({{< relref "docs/relays" >}}) ein.
 
-- Du trittst über einen Internetanschluss bei, von dem aus das einladende
-  Gerät erreichbar ist.
-- Du richtest zuerst ein [Relay]({{< relref "docs/relays" >}}) ein und lädst
-  dann neu ein.
-
-## Hinweise
+## Gut zu wissen
 
 - Eine Einladung gilt für genau ein Gerät. Für das nächste rufst du
   `juist invite` erneut auf.
-- `--no-lan` gibt nur den Link aus, keinen Code. `--no-dht` hält die
-  Einladung aus dem öffentlichen DHT heraus. Mit `--port` wählst du einen
-  anderen TCP-Port als 41642.
-- `sudo juist join` macht den Benutzer, der sudo aufgerufen hat, zum
-  [Operator]({{< relref "docs/operator" >}}) des Geräts, also zu dem lokalen
-  Benutzer, der es ohne sudo verwaltet. Mit `--operator` bestimmst du einen
-  anderen. `--name` legt fest, unter welchem Namen das Gerät beitritt.
-- Braucht das Netz die Stimmen mehrerer Admins, wartet die Einladung auf die
-  übrigen, und das neue Gerät zeigt `waiting for approval (1 of 2 votes)`.
-  Diese Wartezeit zählt zur Laufzeit der Einladung.
-- Ist ein Gerät in mehreren Netzen, gibst du an, welches gemeint ist:
-  `juist invite work`.
-- Hat das Netz [Zugriffsregeln]({{< relref "docs/access" >}}), lassen sie
-  keinen Verkehr von oder zu dem neuen Gerät durch, bis eine Regel es nennt.
-  `juist invite` weist in einer `hint:`-Zeile darauf hin.
+- `--no-lan` gibt nur den Link aus. `--no-dht` hält die Einladung aus dem
+  öffentlichen DHT heraus. `--port` wählt einen anderen TCP-Port als 41642.
+- `sudo juist join` macht den sudo-Benutzer zum
+  [Operator]({{< relref "docs/operator" >}}) des Geräts. `--operator` nennt
+  einen anderen Benutzer, `--name` den Namen des Geräts.
+- Braucht eine Änderung die Stimmen mehrerer Admins, wartet die Einladung auf
+  die übrigen, und das neue Gerät zeigt `waiting for approval (1 of 2 votes)`.
+  Die Wartezeit zählt zur Laufzeit der Einladung.
+- Auf einem Gerät in mehreren Netzen nennst du das Netz: `juist invite work`.
+- Mit [Zugriffsregeln]({{< relref "docs/access" >}}) bekommt das neue Gerät
+  keinen Verkehr, bis eine Regel es nennt. `juist invite` sagt das in einer
+  `hint:`-Zeile.
 
 ## Fehlersuche
 

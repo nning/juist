@@ -57,6 +57,7 @@ install -D -m 0644 juist-ingress-ports.path %{buildroot}%{_unitdir}/juist-ingres
 install -D -m 0644 juist-ingress-ports.service %{buildroot}%{_unitdir}/juist-ingress-ports.service
 install -D -m 0644 %{SOURCE1} %{buildroot}%{_sysusersdir}/%{name}.conf
 install -D -m 0755 firewall.sh %{buildroot}%{_prefix}/lib/juist/firewall.sh
+install -D -m 0755 instances.sh %{buildroot}%{_prefix}/lib/juist/instances.sh
 install -D -m 0755 exit-node.sh %{buildroot}%{_prefix}/lib/juist/exit-node.sh
 install -D -m 0755 ingress.sh %{buildroot}%{_prefix}/lib/juist/ingress.sh
 install -D -m 0755 serve.sh %{buildroot}%{_prefix}/lib/juist/serve.sh
@@ -97,6 +98,12 @@ elif systemctl is-enabled --quiet juist-serve.service 2>/dev/null; then
 	# A terminator enabled before juist-serve.path came is started by it.
 	systemctl disable --quiet juist-serve.service >/dev/null 2>&1 || :
 	systemctl enable --now juist-serve.path >/dev/null 2>&1 || :
+fi
+# The other networks' instances move out of the default's home, each to a
+# user of its own, on the units the upgrade brought.
+if [ $1 -gt 1 ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || :
+	%{_prefix}/lib/juist/instances.sh move
 fi
 # An ingress enabled before juist-ingress-ports.path came has the firewall
 # follow its ports by it.
@@ -163,6 +170,7 @@ fi
 %{_sysusersdir}/%{name}.conf
 %dir %{_prefix}/lib/juist
 %{_prefix}/lib/juist/firewall.sh
+%{_prefix}/lib/juist/instances.sh
 %{_prefix}/lib/juist/exit-node.sh
 %{_prefix}/lib/juist/ingress.sh
 %{_prefix}/lib/juist/serve.sh

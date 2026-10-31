@@ -129,6 +129,7 @@ h1, h2, h3 { font-weight: 600; line-height: 1.2; letter-spacing: -0.015em; }
 .prose td:last-child { font: 400 13px var(--mono); color: var(--muted); }
 .features td:first-child { white-space: nowrap; }
 .features-run { font-size: 14px; color: var(--muted); }
+.features .uses { display: block; margin-top: 2px; font-size: 14px; }
 .home-body table { max-width: 58rem; }
 
 /* Code blocks */

@@ -39,8 +39,9 @@ func (FreeBSD) OpenTUN(name string, mtu int) (*os.File, func() error, error) {
 		lock.Close()
 		return nil, nil, fmt.Errorf("%s is another juistd's: %w", name, syscall.EBUSY)
 	}
-	// What a helper gone left served for the device, it serves no longer.
-	if err := unserve(name); err != nil {
+	// What a helper gone left served or guarded for the device, it does
+	// no longer.
+	if err := errors.Join(unserve(name), unguard(name)); err != nil {
 		lock.Close()
 		return nil, nil, err
 	}
@@ -53,7 +54,7 @@ func (FreeBSD) OpenTUN(name string, mtu int) (*os.File, func() error, error) {
 	// juistd restarts. The routes into the device go with it.
 	return f, func() error {
 		defer forgetCapture(name)
-		return errors.Join(unserve(name), destroy(), lock.Close())
+		return errors.Join(unserve(name), unguard(name), destroy(), lock.Close())
 	}, nil
 }
 
@@ -133,7 +134,7 @@ func openTUN(name string, mtu int) (*os.File, func() error, error) {
 		dev.Close()
 		return nil, nil, err
 	}
-	if err := run("/sbin/ifconfig", name, "up"); err != nil {
+	if err := run("/sbin/ifconfig", name, "group", DeviceGroup, "up"); err != nil {
 		f.Close()
 		dev.Close()
 		return nil, nil, err

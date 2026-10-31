@@ -198,6 +198,81 @@ func TestServingSetsTheHostUpAndBack(t *testing.T) {
 // Using an exit node routes the internet into the device behind a guard,
 // which outlasts the device where it refuses; going direct takes both away
 // and puts pf back as found.
+// A device's guard has pf run with its anchor, its device in juist's group,
+// and pf back as it was once it ends, by the device's end too.
+func TestAGuardSetsTheHostUpAndBack(t *testing.T) {
+	requireRoot(t)
+	info, _ := pfOutput("-s", "info")
+	pfWasOn := strings.Contains(info, "Status: Enabled")
+	h := FreeBSD{}
+	f, destroy, err := h.OpenTUN("juist6", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if out, _ := exec.Command("/sbin/ifconfig", "juist6").CombinedOutput(); !strings.Contains(string(out), "groups: tun "+DeviceGroup) {
+		t.Errorf("the device is in no group of juist's:\n%s", out)
+	}
+	g := GuardSpec{Own: []netip.Addr{netip.MustParseAddr("198.18.240.1")}, Overlay: []netip.Addr{netip.MustParseAddr("198.18.240.2")}}
+	if err := h.SetGuard("juist6", g); err != nil {
+		t.Fatal(err)
+	}
+	rules, _ := pfOutput("-a", "juist/juist6_in", "-s", "rules")
+	for _, want := range []string{"block drop in quick on ! juist6 from any to <juist_own>",
+		"block drop in quick on ! juist from <juist_overlay> to any", "pass in quick on lo0"} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("the anchor lacks %q:\n%s", want, rules)
+		}
+	}
+	if info, _ := pfOutput("-s", "info"); !strings.Contains(info, "Status: Enabled") {
+		t.Error("guarding, pf is off")
+	}
+	// The host reaches its own address by TCP, both ends of which come in
+	// by the loopback, as its resolver's fallback does.
+	if out, err := exec.Command("/sbin/ifconfig", "juist6", "inet", "198.18.240.1/32", "198.18.240.1", "alias").CombinedOutput(); err != nil {
+		t.Fatalf("an address: %v: %s", err, out)
+	}
+	ln, err := net.Listen("tcp", "198.18.240.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			c.Close()
+		}
+	}()
+	if c, err := net.DialTimeout("tcp", ln.Addr().String(), 5*time.Second); err != nil {
+		t.Errorf("guarded, the host does not reach its own address by TCP: %v", err)
+	} else {
+		c.Close()
+	}
+	if err := h.SetGuard("juist6", GuardSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	if rules, _ := pfOutput("-a", "juist/juist6_in", "-s", "rules"); strings.TrimSpace(rules) != "" {
+		t.Errorf("unguarded, the anchor holds:\n%s", rules)
+	}
+	info, _ = pfOutput("-s", "info")
+	if on := strings.Contains(info, "Status: Enabled"); on != pfWasOn {
+		t.Errorf("unguarded, pf is on: %v, was %v", on, pfWasOn)
+	}
+	if err := h.SetGuard("juist6", g); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := destroy(); err != nil {
+		t.Fatal(err)
+	}
+	if rules, _ := pfOutput("-a", "juist/juist6_in", "-s", "rules"); strings.TrimSpace(rules) != "" {
+		t.Errorf("destroyed, the anchor holds:\n%s", rules)
+	}
+	info, _ = pfOutput("-s", "info")
+	if on := strings.Contains(info, "Status: Enabled"); on != pfWasOn {
+		t.Errorf("destroyed, pf is on: %v, was %v", on, pfWasOn)
+	}
+}
+
 func TestEgressSetsTheHostUpAndBack(t *testing.T) {
 	requireRoot(t)
 	info, _ := pfOutput("-s", "info")
@@ -288,7 +363,7 @@ func TestPFIsKeptAndLeftBe(t *testing.T) {
 	if err := h.SetEgress("juist7", e, 870); err != nil {
 		t.Fatal(err)
 	}
-	if err := pfctl("", "-a", "juist/juist7_egress", "-F", "all"); err != nil {
+	if err := pfctl("", "-a", "juist/juist7_egress", "-F", "rules"); err != nil {
 		t.Fatal(err)
 	}
 	if err := pfctl("", "-d"); err != nil {

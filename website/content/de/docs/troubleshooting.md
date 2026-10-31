@@ -50,8 +50,7 @@ unter FreeBSD `/var/log/juistd.juist1.log`.
 ### `not running`
 
 `juist status` meldet `juist0 · not running`, `juistd not running` (unter
-FreeBSD, solange juistd nicht aktiviert ist) oder `home · juistd not running`: Der Daemon, also das Programm, das die Tunnel
-aufrecht hält, läuft nicht. Starte ihn:
+FreeBSD, solange juistd nicht aktiviert ist) oder `home · juistd not running`: Der Daemon läuft nicht. Starte ihn:
 
 ```sh
 sudo systemctl enable --now juistd
@@ -64,8 +63,8 @@ FreeBSD startest du ihn als root mit
 
 ### `read-only; to manage this device …`
 
-Du bist weder root noch der Operator des Geräts, also der lokale Benutzer,
-der es ohne sudo verwalten darf. Du siehst den Status, mehr nicht. Mach dich
+Du bist weder root noch der [Operator]({{< relref "docs/operator" >}}) des
+Geräts. Du siehst den Status, mehr nicht. Mach dich
 einmalig zum Operator:
 
 ```sh
@@ -85,8 +84,7 @@ es eine öffentliche Adresse, öffne dort 41643/udp. Siehe
 
 `nas` ist bekannt, aber von dort kommt kein Verkehr an. Entweder ist Port
 41643/udp gesperrt, oder beide Geräte stehen hinter NAT und es gibt kein
-Relay, also kein Mitglied, das Verkehr zwischen Geräten weiterleitet, die
-sich nicht direkt erreichen. Öffne 41643/udp auf einem Gerät mit öffentlicher
+[Relay]({{< relref "docs/relays" >}}). Öffne 41643/udp auf einem Gerät mit öffentlicher
 Adresse, wie der Hinweis vorschlägt:
 
 ```console
@@ -186,8 +184,9 @@ Auch `juist reset` entzieht es. Siehe [Relays]({{< relref "docs/relays" >}}).
 
 ### `Freshness  expired; vouchers only`
 
-48 Stunden lang waren zu wenige Voucher erreichbar. Ein Voucher ist ein
-Gerät, das stündlich bestätigt, dass der Stand des Netzes aktuell ist. Bis
+48 Stunden lang waren zu wenige
+[Voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
+erreichbar. Bis
 wieder genug bestätigen, hält dieses Gerät nur Tunnel zu Vouchern, und sein
 Zustand lautet `limited`. Bring einen Voucher wieder online. Damit es nicht
 wieder passiert, mach nur Geräte zu Vouchern, die ständig laufen, und nimm

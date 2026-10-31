@@ -108,6 +108,9 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	t.Run("disable", func(t *testing.T) {
 		disable(t, fb, lx, fb4, glass)
 	})
+	t.Run("a user per network", func(t *testing.T) {
+		instanceUsers(t, fb, lx)
+	})
 	t.Run("removal", func(t *testing.T) {
 		removal(t, fb, lx)
 	})
@@ -323,6 +326,15 @@ func tunnel(t *testing.T, fb, lx *vm, fb4, fb6, lx4, lx6 string) {
 	lx.eventually(t, "reaching fb over IPv6", time.Minute, "ping -c1 -W2 "+fb6, ok)
 	fb.eventually(t, "reaching lx over IPv4", time.Minute, "ping -c1 -t2 "+lx4, ok)
 	fb.eventually(t, "reaching lx over IPv6", time.Minute, "timeout 5 ping6 -c1 "+lx6, ok)
+	// The LAN reaches fb's overlay address no more, sent there by fb's LAN
+	// address rather than the tunnel: pf keeps it to fb's device (M24).
+	lx.run(t, "ip route add "+fb4+"/32 via "+fb.lanAddr+" table 77 && ip rule add to "+fb4+" lookup 77 pref 77")
+	defer lx.try("ip rule del pref 77; ip route flush table 77", time.Minute)
+	lx.run(t, "ping -c1 -W2 "+fb.lanAddr+" >/dev/null")
+	if out, err := lx.try("ping -c3 -W2 "+fb4, time.Minute); err == nil {
+		t.Errorf("lx reaches fb's overlay address by the LAN:\n%s", out)
+	}
+	fb.run(t, "pfctl -a juist/juist0_in -s rules | grep -q 'block drop in quick on ! juist0'")
 }
 
 // removal removes both packages, which leave no device, rule, forwarding or

@@ -97,6 +97,49 @@ func serveRules(dev string, s ServeSpec, uplinks []uplink) string {
 	return b.String()
 }
 
+// A GuardSpec is what keeps a device's overlay to its tunnel: Own its
+// addresses, which nothing reaches by another device, and Overlay its
+// peers', which come in by juist's devices alone.
+type GuardSpec struct {
+	Own     []netip.Addr `cbor:"1,keyasint,omitempty"`
+	Overlay []netip.Addr `cbor:"2,keyasint,omitempty"`
+}
+
+// guardRules is the pf anchor guarding dev as g asks, as Linux's in table
+// does: the loopback passes, as the host reaches its own addresses by it,
+// statelessly, as both ends of a connection come in by it.
+func guardRules(dev string, g GuardSpec) string {
+	addrs := func(as []netip.Addr) string {
+		out := make([]string, 0, len(as))
+		for _, a := range as {
+			out = append(out, a.String())
+		}
+		slices.Sort(out)
+		return strings.Join(slices.Compact(out), ", ")
+	}
+	src := slices.Concat(g.Own, g.Overlay)
+	var b strings.Builder
+	if len(g.Own) > 0 {
+		fmt.Fprintf(&b, "table <juist_own> const { %s }\n", addrs(g.Own))
+	}
+	if len(src) > 0 {
+		fmt.Fprintf(&b, "table <juist_overlay> const { %s }\n", addrs(src))
+	}
+	if len(g.Own) > 0 {
+		fmt.Fprintf(&b, "pass in quick on lo0 to <juist_own> no state\n")
+		fmt.Fprintf(&b, "block drop in quick on ! %s to <juist_own>\n", dev)
+	}
+	if len(src) > 0 {
+		fmt.Fprintf(&b, "pass in quick on lo0 from <juist_overlay> no state\n")
+		fmt.Fprintf(&b, "block drop in quick on ! %s from <juist_overlay>\n", DeviceGroup)
+	}
+	return b.String()
+}
+
+// DeviceGroup is the interface group juist's devices are in, every
+// instance's: networks on one host may share overlay space.
+const DeviceGroup = "juist"
+
 func prefixStrings(ps []netip.Prefix) []string {
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {

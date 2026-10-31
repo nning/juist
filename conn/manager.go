@@ -112,6 +112,11 @@ type Manager interface {
 	// the host's own firewall decides; "" where they leave the way they came.
 	AnswersThrough() string
 
+	// Unguarded says why the overlay's addresses are reachable by other
+	// devices than the tunnel, where the host would not keep them to it;
+	// "" where they are not, or the platform leaves that to its kernel.
+	Unguarded() string
+
 	// SetServe says what this node forwards for its peers out of the overlay,
 	// masquerading their sources, where the platform can.
 	SetServe(s Serve) error
@@ -142,6 +147,10 @@ type Manager interface {
 	// where it does not reach are sent to at its own home, so it must
 	// announce that, by announcing no address.
 	Walled() bool
+
+	// ReachesNoRelay reports whether the last report had no UDP answered and
+	// reached no relay, as where every relay's name on 443 is gone.
+	ReachesNoRelay() bool
 
 	// NotAtHome reports the peers this node's home relay said were not
 	// connected to it when sent to, by [Peer.ID], with when it last said so.

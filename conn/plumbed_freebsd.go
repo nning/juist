@@ -118,8 +118,9 @@ type plumbedRouter struct {
 	done chan struct{} // closes with the router, ending the watch of routes
 	once sync.Once
 
-	mu    sync.Mutex
-	addrs []netip.Prefix // the device's, as last set
+	mu        sync.Mutex
+	addrs     []netip.Prefix // the device's, as last set
+	unguarded string         // why the last guard failed, "" where it held
 }
 
 func (r *plumbedRouter) Up() error { return nil }
@@ -150,6 +151,37 @@ func (r *plumbedRouter) Set(cfg *router.Config) error {
 	r.addrs = slices.Clone(cfg.LocalAddrs)
 	r.mu.Unlock()
 	return errors.Join(errs...)
+}
+
+// What the manager finds a plumbed router can by type assertions, held at
+// compile time.
+var _ interface {
+	overlayGuard
+	unguardedRouter
+} = (*plumbedRouter)(nil)
+
+// guardOverlay has the helper keep the overlay to the device in pf. Where it
+// cannot, as where the host's own pf rules call no juist anchor, the device
+// runs, and unguarded says why: refusing would cost every member's tunnel.
+func (r *plumbedRouter) guardOverlay(own, peers []netip.Addr) error {
+	why := ""
+	if err := r.p.SetGuard(r.dev, plumber.GuardSpec{Own: own, Overlay: peers}); err != nil {
+		why = err.Error()
+	}
+	r.mu.Lock()
+	changed := why != r.unguarded
+	r.unguarded = why
+	r.mu.Unlock()
+	if changed && why != "" {
+		r.logf("the overlay's addresses are reachable by other devices: %s", why)
+	}
+	return nil
+}
+
+func (r *plumbedRouter) unguardedBy() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.unguarded
 }
 
 // setServe has the helper serve s through the device: its addresses the ones

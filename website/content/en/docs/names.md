@@ -7,22 +7,19 @@ lead: Every device in your network has a name, such as nas.home.juist, or just n
 
 ## How names work
 
-Each device in the network is a **member**, and each member has a name. juist
-turns that name into a DNS name: `DEVICE.NETWORK.juist`. In the network `home`,
-the device `nas` is `nas.home.juist`, and plain `nas` works too. You don't
-need to turn anything on for this.
+Every member has a DNS name: `DEVICE.NETWORK.juist`. In the network `home`,
+the device `nas` is `nas.home.juist`, and plain `nas` works too. Nothing needs
+turning on for this.
 
 You can also point a **public name** at a member. Say your NAS runs a mail
-server that the internet knows as `mail.example.org`. On devices that have
-turned public names on, `mail.example.org` then leads to the NAS through the
-tunnel, not over the internet. The name stays the same, so the server's
-certificate still matches. The rest of the internet still gets the public
-record.
+server known as `mail.example.org`. On devices that turned public names on,
+that name then leads to the NAS through the tunnel. The certificate still
+matches, and the rest of the internet still gets the public record.
 
-Both work on Linux and FreeBSD, and juist sets up the device's DNS for them
-by itself. [How the device resolves names](#resolver) explains how. The
-[Android app]({{< relref "docs/android" >}}#names) resolves the members' names
-and those published under the network's domain, not public names.
+Both work on Linux and FreeBSD, where juist sets up the device's DNS itself
+([how](#resolver)). The [Android app]({{< relref "docs/android" >}}#names)
+resolves the members' names and the names published under the network's
+domain, not public names.
 
 ## Reaching a device by name
 
@@ -42,9 +39,8 @@ Point the name at the device:
 juist names add nas mail.example.org
 ```
 
-It prints `nas: names mail.example.org`. This is a change to the network, so
-like any other change it needs the admins' approval
-([approving changes]({{< relref "docs/network-changes" >}})).
+It prints `nas: names mail.example.org`. Like any change, it needs the
+admins' approval ([approving changes]({{< relref "docs/network-changes" >}})).
 {{< /step >}}
 
 {{< step on="each device that should use it" >}}
@@ -57,32 +53,27 @@ juist names on
 It prints `public names on: mail.example.org at nas`.
 {{< /step >}}
 
-`juist names` lists the network's names, the public ones among them, and how
-this device resolves each one.
-`juist names off` makes this device resolve them publicly again, and
-`juist names remove nas mail.example.org` takes the name away from the device.
+`juist names` lists the network's names and how this device resolves each.
+`juist names off` makes this device resolve them publicly again.
+`juist names remove nas mail.example.org` takes the name from the device.
 
 ## Why each device opts in
 
-A public name in the network overrides what the internet says. The admins who
-approve such a change could point any public name at any member they choose.
-A connection that checks a certificate would then fail, since the member has
-no certificate for that name. But plain HTTP, mail without a verified
-certificate, and a lot of internal tooling would not notice.
+A public name in the network overrides what the internet says. The admins
+could point any public name at any member. A connection that checks the
+certificate would fail, but plain HTTP, mail without certificate checks and
+much internal tooling would not notice.
 
-So each device decides for itself. A device that has not run `juist names on`
-resolves every public name as it would without juist. Member names such as
-`nas.home.juist` override nothing outside the network, so they need no
-consent.
+So each device decides for itself. A device without `juist names on` resolves
+every public name as without juist. Member names such as `nas.home.juist`
+override nothing outside the network and need no consent.
 
-The exception is the network's own domain for
+The exception is the network's domain for
 [publishing]({{< relref "docs/publishing" >}}). Once the admins set it, every
-member resolves that domain through juistd, whether public names are on or
-not, and DNSSEC is off for it on members. A name published there on port 443
-leads straight to its device; every other name in the domain resolves as
-before. `juist network domain` warns about this, and admins see it when they
-approve the change. Only set it to a domain you control: juist cannot check that
-you do.
+member resolves that domain through juistd, with DNSSEC off for it. A name
+published there on port 443 leads straight to its device; other names in the
+domain resolve as before. Only set a domain you control: juist cannot check
+that you do.
 
 ## Leaving this device's DNS alone
 
@@ -90,62 +81,45 @@ you do.
 sudo juist set --dns=false
 ```
 
-It prints `dns off`. juistd then leaves this device's DNS as it found it: no
-names of the network, and no DNS through an exit node, which then goes to the
-device's own resolvers outside the tunnel. The `Names` line in `juist status`
-then ends in `(DNS off)`, and `juist health` says what that means. `sudo juist
-set --dns` turns it on again. Neither needs a restart.
+It prints `dns off`. juistd then leaves this device's DNS alone: no network
+names, and no DNS through an exit node. The `Names` line in `juist status`
+ends in `(DNS off)`. `sudo juist set --dns` turns it on again, without a
+restart.
 
-## Notes
+## Good to know
 
-- A public name has at least two labels, such as `example.org`, and is not under `.juist`, `.local`, `.localhost`, `.arpa`, `.invalid` or `.onion`.
+- A public name has at least two labels, such as `example.org`, and is not
+  under `.juist`, `.local`, `.localhost`, `.arpa`, `.invalid` or `.onion`.
 - Each public name points at one device. A device can have up to 32.
-- A public name is resolved publicly again while its device cannot be reached, or while this device's view of the network is out of date. The connection then goes to the public address, as it would without juist.
+- While its device cannot be reached, or this device's view is out of date, a
+  public name resolves publicly again.
 - A device whose name is not a valid DNS label has no name under `.juist`.
-- Under an [access policy]({{< relref "docs/access" >}}), a device has names only for the members it keeps a tunnel with. The public names of the other members resolve publicly on that device.
-- Where juistd answers all of a device's DNS, on Android, on Linux without systemd-resolved and on FreeBSD, it answers the reverse names of the network's addresses too, a device's by its name, so that a program looking up who `198.18.36.2` is asks no resolver outside the network.
-- In `juist devices`, a device that public names point at shows `names` under `ROLES`. `juist names` lists the names.
+- Under an [access policy]({{< relref "docs/access" >}}), a device has names
+  only for the members it keeps a tunnel with.
+- If juistd answers all of a device's DNS, it also answers reverse lookups of
+  the network's addresses.
 
 ## How the device resolves names {#resolver}
 
-- Where systemd-resolved runs, it sends the queries for the network's names
-  to juistd.
-  A name juistd passes on, for this device or as an exit node for members,
-  goes where systemd-resolved would send it, and juistd refuses what
-  systemd-resolved would not send to a DNS server, such as `.local` names
-  or those in `/etc/hosts`. For this device, it refuses a name
-  systemd-resolved would ask over DNS over TLS, which would otherwise cross
-  the local network in plain text; as an exit node, it asks such a name for
-  members, whose queries leave at the exit node's site. For members, it
-  refuses a name only Tailscale's resolver would answer, which is every name
-  where Tailscale takes all of them (`~.`). `juist health` says so. While
-  juistd cannot read where a name goes, or systemd-resolved, which
-  `/etc/resolv.conf` names alone, is not running, juistd refuses the name
-  rather than ask anywhere else.
+- With systemd-resolved, it sends queries for the network's names to juistd.
+  Names juistd passes on go where systemd-resolved would send them. juistd
+  refuses names systemd-resolved would ask over DNS over TLS, rather than send
+  them in plain text, and names only Tailscale's resolver would answer.
+  `juist health` says so.
 - On Linux without systemd-resolved, juistd answers all of the device's DNS
-  while it runs: the network's names itself, every other name through the
-  resolvers the device used before. The package's service points
-  `/etc/resolv.conf` at a file juistd writes, and back when juistd stops. On
-  Debian and Ubuntu, the package also lets programs that AppArmor confines
-  read that file.
+  while it runs, other names through the resolvers the device used before.
+  The package points `/etc/resolv.conf` at juistd's file, and back when juistd
+  stops.
 - On FreeBSD, juistd hands its resolver to resolvconf.
-- On Android, the app's VPN takes every lookup of the phone to juist, at an
-  address of the network's own that only the phone's packets reach. juist
-  asks the phone's network every other name, through DNS over TLS where
-  Android's Private DNS, set to automatic, would. With Private DNS set to a
-  provider's hostname, Android sends every lookup there, and juist leaves the
-  phone's DNS alone.
+- On Android, see [the app's names]({{< relref "docs/android" >}}#names).
 - If Tailscale wrote `/etc/resolv.conf`, juist leaves it alone, and the
   network's names do not resolve on that device.
 
 ## Troubleshooting
 
-The `Names` line in [`juist status`]({{< relref "docs/status" >}}) lists this
-device's own names, such as `nas.home.juist, mail.example.org`, and ends in
-`(DNS off)` where DNS is off. `juist names` lists every name of the network,
-its domains among them, and how this device resolves each. Where they are not
-resolved, or a public name is off, [`juist health`]({{< relref "docs/status" >}})
-says why:
+`juist names` lists every name of the network and how this device resolves
+each. If names are not resolved, or a public name is off,
+[`juist health`]({{< relref "docs/status" >}}) says why:
 
 | `juist health` says | Meaning |
 |---|---|
@@ -169,16 +143,16 @@ Where systemd-resolved refused juistd, `juist health` adds:
 hint: the package's polkit rule allows juistd that: /usr/share/polkit-1/rules.d/60-juist.rules
 ```
 
-Install juist from the package (see [Install]({{< relref "docs/install" >}})),
-which brings that rule. Where polkit is missing, as after `dpkg -i`, which
-skips the packages juist recommends, the hint installs it:
+Install juist from the package ([Install]({{< relref "docs/install" >}})),
+which brings that rule. If polkit is missing, as after `dpkg -i`, the hint
+installs it:
 
 ```console
 hint: sudo apt install polkitd, or sudo dnf install polkit
 ```
 
-juistd tries again within a minute, without a restart. In uplink mode,
-the hint gives the command that points `/etc/resolv.conf` at the stub:
+juistd tries again within a minute, without a restart. In uplink mode, the
+hint points `/etc/resolv.conf` at the stub:
 
 ```sh
 sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf

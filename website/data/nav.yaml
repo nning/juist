@@ -2,12 +2,15 @@
 # left out, and so is a group with none.
 - group: basics
   items: [docs/how-it-works, docs/install, docs/first-network, docs/invites, docs/android]
+- group: uses
+  items: [docs/use/own-services, docs/use/share, docs/use/homelab, docs/use/team-tools, docs/use/home-lan,
+          docs/use/public-wifi, docs/use/ssh, docs/use/locked-down-networks, docs/use/game-server, docs/use/container-app]
 - group: everyday
   items: [docs/status, docs/operator, docs/names, docs/remove, docs/updating]
 - group: admins
   items: [docs/admins, docs/networks, docs/network-changes, docs/access, docs/keys]
 - group: routing
-  items: [docs/exit-nodes, docs/subnets, docs/relays, docs/https-only, docs/publishing]
+  items: [docs/exit-nodes, docs/subnets, docs/relays, docs/https-only, docs/publishing, docs/service-member, docs/members-only, docs/tcp-services, docs/sharing]
 - group: design
   items: [docs/architecture, docs/compare, docs/security]
 - group: help

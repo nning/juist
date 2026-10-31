@@ -19,7 +19,7 @@ Kein Server in der Mitte
 : Um ein Gerät aufzunehmen oder zu entfernen, braucht es ein Quorum von Admins, jeder mit einem Schlüssel auf seinen eigenen Geräten. Die Schlüssel bleiben im Keystore, der Daemon bekommt sie nie.
 
 Fail-closed
-: Hat ein Netz Voucher und haben sich 48 Stunden lang zu wenige von ihnen für ein Gerät verbürgt, behält es nur noch Tunnel zu Vouchern. So hält es keine Verbindung zu einem Gerät, das längst entfernt wurde.
+: Hat ein Netz Voucher und haben sich 48 Stunden lang zu wenige für ein Gerät verbürgt, behält es nur Tunnel zu Vouchern. Ein entferntes Gerät bleibt so nicht verbunden.
 {{< /rules >}}
 
 ## Das erste Netz
@@ -124,10 +124,10 @@ Was du tun kannst
 
 {{< trade title="Ein Tunnel beginnt mit dem Schlüssel der Gruppe" knob="keine Einstellung" >}}
 Was passiert
-: Bis zwei Geräte einen eigenen Schlüssel haben, was einen Log-Abgleich nach dem Aufbau ihres Tunnels dauert, schützt ihren Verkehr ein Schlüssel, den jedes Mitglied ableiten könnte.
+: Zwei Geräte bekommen ihren eigenen Schlüssel einen Log-Abgleich nach dem Aufbau ihres Tunnels. Bis dahin schützt ihren Verkehr ein Schlüssel, den jedes Mitglied ableiten könnte.
 
 Warum juist das hinnimmt
-: Gegen alle außerhalb des Netzes ist er von Anfang an quantensicher; nur ein Mitglied, oder ein seither entferntes Gerät, mit einem Quantencomputer könnte diese ersten Sekunden lesen.
+: Gegen alle außerhalb des Netzes ist er von Anfang an quantensicher. Nur ein Mitglied oder ein seither entferntes Gerät mit einem Quantencomputer könnte diese ersten Sekunden lesen.
 
 Was du tun kannst
 : Nichts; es dauert bis zum nächsten Log-Abgleich der beiden.

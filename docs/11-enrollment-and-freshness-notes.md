@@ -123,14 +123,15 @@ offline.
 
 **Through a member's relay.** Without the DHT, and where both NATs defeat
 punching, the link reaches the host through a relay of the network's own. The
-inviting daemon keeps connections waiting at each other relay-capable member's
-relay, over TLS pinned to the certificate that member announces, registered
-under the link's forward id (HKDF of the secret, one way) and a signature by its
-identity key over the relay's certificate hash, the id and a relay nonce. The
-relay checks the signer is a live member. The link names the relays (`r=`);
-the guest asks one for the id and the relay joins the two connections, so it
-learns the id, the addresses and the traffic's size, and cannot answer for the
-host. It bounds what it holds (`relay/forward.go`). The host counts a forwarded
+inviting daemon keeps connections waiting at each relay-capable member's relay,
+its own last, over TLS pinned to the certificate that member announces,
+registered under the link's forward id (HKDF of the secret, one way) and a
+signature by its identity key over the relay's certificate hash, the id and a
+relay nonce. The relay checks the signer is a live member. The link names the
+relays (`r=`), the host's own too, which is all a guest on HTTPS alone reaches
+where no other relay serves a name; the guest asks one for the id and the
+relay joins the two connections, so it learns the id, the addresses and the
+traffic's size, and cannot answer for the host. It bounds what it holds (`relay/forward.go`). The host counts a forwarded
 guest by the address the relay reports, and takes no code hello through it.
 
 **Firewalls.** The packages install firewalld services and ufw profiles for

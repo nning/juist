@@ -16,13 +16,13 @@ import (
 func cmdApprove(a *app, args []string) error {
 	s := spec{name: "juist approve", args: "[FILE...]", max: -1, about: `
 Sign change files with this keystore's admin keys, in place, and apply each
-once fully approved. Without files, ask about each change waiting for your
-vote on this admin device. Alias: juist apply.
+once it has enough votes. Without files, ask about each change waiting for
+your vote on this admin device. Alias: juist apply.
 
-Each change's effect is shown from the record and the log, never from the
-file's name or comments. Changes to who may approve need the log here.
-Records that do not fit this device's log are refused: a signature cannot be
-taken back.`}
+The effect of each change is shown from the record and the log, never from
+the file's name or comments. Changes to who may approve need the log on this
+device. Records that do not fit this device's log are refused, because a
+signature cannot be taken back.`}
 	fs := newFlags(s.name)
 	r := &approval{a: a}
 	fs.BoolVar(&r.noApply, "no-apply", false, "sign only")

@@ -17,7 +17,7 @@ if [ "$1" = build ]; then
 		done
 	done
 	version=0.$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S)
-	sh packaging/freebsd/pkg.sh "$go" "$out/juist-$version.pkg" "$version" FreeBSD:14:amd64 "$out.bin" >/dev/null
+	sh packaging/freebsd/pkg.sh "$go" "$out/juist-$version.pkg" "$version" FreeBSD:15:amd64 "$out.bin" >/dev/null
 	exit 0
 fi
 go=$1

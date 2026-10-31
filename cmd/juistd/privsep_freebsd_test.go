@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -82,9 +83,9 @@ func start(t *testing.T, env ...string) *exec.Cmd {
 		}
 		t.Skip("needs root")
 	}
-	u, err := user.Lookup(runAs)
+	u, err := user.Lookup(defaultUser)
 	if err != nil {
-		t.Skipf("needs the %s user: %v", runAs, err)
+		t.Skipf("needs the %s user: %v", defaultUser, err)
 	}
 	home := t.TempDir()
 	uid, _ := strconv.Atoi(u.Uid)
@@ -95,7 +96,12 @@ func start(t *testing.T, env ...string) *exec.Cmd {
 	if err := os.Chown(home, uid, gid); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "--home", home, "--socket", filepath.Join(home, "d.sock"), "--tun", "",
+	// The garbling daemon opens juist5, which its helper plumbs alone.
+	tun := ""
+	if slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, garble+"=") }) {
+		tun = "juist5"
+	}
+	cmd := exec.Command(os.Args[0], "--home", home, "--socket", filepath.Join(home, "d.sock"), "--tun", tun,
 		"--no-dht", "--no-discovery", "--no-stun")
 	cmd.Env = append(append(os.Environ(), asMain+"=1"), env...)
 	if err := cmd.Start(); err != nil {
@@ -109,7 +115,7 @@ func start(t *testing.T, env ...string) *exec.Cmd {
 func started(t *testing.T, env ...string) (*exec.Cmd, int) {
 	t.Helper()
 	cmd := start(t, env...)
-	u, _ := user.Lookup(runAs)
+	u, _ := user.Lookup(defaultUser)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		out, _ := exec.Command("pgrep", "-P", strconv.Itoa(cmd.Process.Pid)).Output()

@@ -55,6 +55,18 @@ func TestHealthSaysTheDNSRoutingIsUnread(t *testing.T) {
 		"warning: names the host's DNS routing sends elsewhere are refused, as it cannot be read: dbus: call timed out\n")
 }
 
+// An overlay the host does not keep to the tunnel is juist health's to say.
+func TestHealthSaysTheOverlayIsUnguarded(t *testing.T) {
+	t.Parallel()
+	st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home"},
+		Tunnels: ipc.Tunnels{Unguarded: "pf's rules call no juist anchor first"}}
+	var health syncBuffer
+	a := newApp(strings.NewReader(""), &health, &health)
+	a.health(st, "", false)
+	mustContain(t, health.String(),
+		"warning: other devices than the tunnel reach this device's overlay addresses: pf's rules call no juist anchor first\n")
+}
+
 // Names refused by how the host routes them are juist health's to say while
 // they are recent, and juist status counts them.
 func TestHealthSaysRecentRefusals(t *testing.T) {

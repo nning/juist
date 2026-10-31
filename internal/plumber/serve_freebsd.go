@@ -85,7 +85,20 @@ func flushAnchor(name string) error {
 	if err := pfctl("", "-s", "info"); err != nil {
 		return nil // no pf, so no anchor
 	}
-	return pfctl("", "-a", "juist/"+name, "-F", "all")
+	anchor := "juist/" + name
+	errs := []error{pfctl("", "-a", anchor, "-F", "rules"), pfctl("", "-a", anchor, "-F", "nat")}
+	// -F all and -F Tables fail in an anchor on FreeBSD 15.1, so its tables go one by one.
+	tables, err := pfOutput("-a", anchor, "-s", "Tables")
+	if ee := (*exec.ExitError)(nil); errors.As(err, &ee) && bytes.Contains(ee.Stderr, []byte("Anchor does not exist")) {
+		err = nil
+	}
+	if err != nil {
+		errs = append(errs, fmt.Errorf("pfctl -a %s -s Tables: %w", anchor, err))
+	}
+	for _, t := range strings.Fields(tables) {
+		errs = append(errs, pfctl("", "-a", anchor, "-t", t, "-T", "kill"))
+	}
+	return errors.Join(errs...)
 }
 
 // uplinks are the host's devices but juist's and the loopback, with their

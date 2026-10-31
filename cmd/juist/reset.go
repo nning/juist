@@ -16,11 +16,11 @@ import (
 
 func cmdReset(a *app, args []string) error {
 	s := spec{name: "juist reset", about: `
-Forget the network and this device's keys, log, peers and operator for it,
-as on a fresh install. Admin keys are kept. A device the network still lists
-needs --force; remove it first where possible. On a device in several
-networks only the one named is forgotten, with its juistd unless that is
-the default; the others keep their keys.`}
+Forget the network on this device: its keys, log, peers and operator, as on
+a fresh install. Admin keys are kept. If the network still lists the device,
+this needs --force; remove the device first if you can. On a device in
+several networks, only the named one is forgotten, with its juistd unless
+that is the default. The others keep their keys.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	force := fs.Bool("force", false, "reset even if the network still lists this device")

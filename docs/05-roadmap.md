@@ -92,8 +92,8 @@ instance whose IPv4 a lower one holds runs without IPv4 and says so. A
 command about one network takes it first, and listings show every network.
 Renumbering a network or a member keeps every pair reachable through a
 transition. The rules a later change must keep are in
-[13-multi-network-notes.md](13-multi-network-notes.md); instances share the
-`juist` user until M24.
+[13-multi-network-notes.md](13-multi-network-notes.md); since M24 each
+instance runs as a user of its own.
 
 ## M5a — An admin key per network
 
@@ -319,7 +319,7 @@ internet, and is yet to across the VPN turned off and on and the phone
 changing networks.
 
 An Android app that joins a network as a member from anywhere, reaches the
-others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M30 covers the app's key
+others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M32 covers the app's key
 custody and its in-process API; the full app is M26.
 
 - **Joining.** The invite's link scanned as a QR code, which `juist invite`
@@ -655,7 +655,7 @@ member is heard past the newest; a device further behind than its peers keep
 is invited again by a link naming its admin
 ([08-trust-layer-notes.md](08-trust-layer-notes.md), "The two ratchets"). The
 CLI's pin survives compaction where a quorum of its keys signed the
-checkpoint the log starts from. Open for M29: a record released below a
+checkpoint the log starts from. Open for M31: a record released below a
 compaction is refused where devices compacted and taken where they did not,
 with no alarm (weakness 14 in [02-threat-model.md](02-threat-model.md)).
 
@@ -723,7 +723,7 @@ put juist at 65 % of the phone's battery use by the afternoon (2026-10-12):
 too much to leave it on, which is what a VPN is for. The core runs on a
 phone at a laptop's pace, and some of what it does costs more there. Before
 the names on Android (M23), which are of little use on an app that cannot
-stay on, and before the audit, so that M30 covers what changes.
+stay on, and before the audit, so that M32 covers what changes.
 
 **Done** on 2026-10-21, reviewed (M21 reviews 1 to 3, the second in
 thirteen rounds, each round's fixes attacked again), validated by a real
@@ -830,7 +830,7 @@ named by hand. Both ends meet at the device's own relay instead: it sends
 every peer whose home it cannot reach there, and members keep a connection
 to it, so that one relay named on 443, the ingress's by itself, is enough.
 Relays forwarding for one another is the alternative should that fall short.
-Before the audit, so that M30 covers it, and not started before M21 is
+Before the audit, so that M32 covers it, and not started before M21 is
 validated and the refactoring
 ([temp/20261019-refactoring.md](temp/20261019-refactoring.md)) is done.
 
@@ -861,7 +861,7 @@ The Android app resolved none of the network's names: with a DNS server set,
 for an exit node, which then answered them all. A name for members alone
 (M16) was out of the phone's reach, and a published name resolved to the
 ingress, not the tunnel. Taken from the full app (M26), and before the audit,
-so that M30 covers a resolver that sees every lookup the phone makes.
+so that M32 covers a resolver that sees every lookup the phone makes.
 
 **Done** on 2026-10-24, reviewed (M23 reviews 1 to 3, the third attacking
 the fixes of the first two again), validated in the Android 16 emulator by
@@ -943,22 +943,85 @@ addresses still go where resolved routes them.
 ## M24 — Boundaries on a host
 
 What one network's daemon, the LAN and a local user can reach on a host
-running juist, closed before the audit, so that M30 covers it.
+running juist, closed before the audit, so that M32 covers it.
 
-- **A user per juistd instance,** so that one network's compromised daemon
-  on a host no longer holds the others' device keys (residual weakness 9 in
-  [02-threat-model.md](02-threat-model.md)). An instance's home can then not
-  sit in the default's 0700 one, each needs a runtime directory of its own,
-  and the instance above has to be allowed to read the exact claims of the
-  one below ([13-multi-network-notes.md](13-multi-network-notes.md)).
-- **pf on FreeBSD** drops what reaches the overlay's addresses by another
-  interface, as Linux does (residual weakness 8).
-- **The FreeBSD helper's routes.** It refuses the host's links, loopback and
-  multicast, but not a route over the host's own LAN, which a subnet route
-  looks like; whether it checks the host's connected routes itself.
-- **The read tier.** `ForReader` passes members' identities in `Reach` and
-  their names in `Silent`, `TunnelsDown` and `PQ`, which the tier was
-  narrowed to keep from any local user.
+**Done** on 2026-10-31, reviewed (M24 reviews 1 and 2, the second
+attacking the first's fix and the boundary between instances again),
+validated by `make ci-vm` at M24, the lab on FreeBSD 15.1, in 36m8s:
+exit criterion (1) by the lab's `a user per network` on Debian and FreeBSD
+and its upgrade moving each instance's home; (2) by the lab's `tunnel`, lx
+reaching fb's overlay address by the LAN no more, and
+`TestAGuardSetsTheHostUpAndBack` on FreeBSD 15.1; (3) by
+`TestTheHelperRoutesNothingOverTheHostsOwnLAN`; (4) by
+`TestAReaderSeesNoMembersNames`; (5) by residual weaknesses 8 and 9 in
+[02-threat-model.md](02-threat-model.md), which say what remains; (6) to
+(10) as below. `make test-freebsd` passed all 54 packages on 15.1. Core
+10 997 lines, audit scope 35 151, measured after it (2026-10-31). What
+it built:
+
+- **A user per juistd instance**, so that one network's compromised daemon
+  on a host holds none of the others' device keys. Instance 0 stays the
+  `juist` user, in `/var/lib/juist` and `/run/juist`; instance N runs as
+  `juistN`, in `/var/lib/juistN` and `/run/juistN` (`/var/db/juistN`,
+  `/var/run/juistN` on FreeBSD). The packages make `juist1` to `juist9` as
+  they make `juist`, so `create` and `join` add no user. An upgrade moves an
+  instance's home out of the default's once, as root, giving on only what
+  was juist's and nothing that became a link or a file meanwhile. The
+  instance above reads the claims of the one below over its socket, as any
+  local user, coarsely. Polkit lets `juistN` point resolved at its own
+  device alone.
+- **pf on FreeBSD** keeps a device's overlay to its tunnel, as Linux's in
+  table does: an anchor of its own, `juist/juistN_in`, drops what comes for
+  the device's addresses by another device than it or the loopback, and
+  members' sources by a device in no juist group. pf runs for it where it
+  was off. Where the host's own rules call no juist anchor, the device runs
+  unguarded and `juist health` says why.
+- **The FreeBSD helper** plumbs its own daemon's device alone, and routes
+  nothing that holds the host's own address or a gateway of its routes, so
+  not the host's LAN whole. A part of a wider network the host is on stays
+  a subnet's to take, as the daemon takes one inside a DHCP netmask too
+  wide.
+- **The read tier** names no other member: a local user who may not operate
+  sees each by a pseudonym, `member 1` on, the same throughout one status,
+  and no member's identity.
+
+**Carried from M22**, what [16-one-relay-on-443.md](16-one-relay-on-443.md)
+left open, before the user per instance; done, with exit criteria (6) to
+(10) passed by `make ci-vm` at M24 and (6) by ten lab runs in a row
+before it ([12-validating.md](12-validating.md)); the invite from a relay
+on 443 by hand on Debian 13 VMs on laptop1 (`private/debian-vms.sh`, at
+M24): a guest whose network passes TCP to 443 and DNS alone, on
+`--https-only`, joined through the network's only relay, named on 443,
+reached it both ways, and its package was removed cleanly:
+
+- **The first meeting after a restart.** In two lab runs of nine, hotel
+  reached lx 1m48s and 2m31s after leaving `--https-only`, where the others
+  took 16 to 37 s. Caught in the fifteenth run of a loop: homed and not yet
+  walled, hotel announced its addresses, so lx stopped keeping fb's relay
+  open and heard the walls only at its next sync; a device homed without
+  UDP now says it is walled until a report decides, and members keep a
+  walled peer's home open 2 minutes past the last need, as a restarting
+  peer is homeless first. The rest, caught in held lab runs: a device
+  announced the home the engine picks by number where a report measured
+  no relay, which lx sent to in vain; a home is now announced once
+  measured, and a peer without one is sent to at its last for 2 minutes.
+- **Homes reached by TCP alone.** Where public STUN servers answer and no
+  relay's port does, netcheck measures no relay by HTTPS and the device is
+  homeless: after two such reports it asks without the STUN servers, until
+  its link changes.
+- **A home pinged alone.** A juistd with the right to ping takes a relay
+  that answered ICMP and not HTTPS for its home: such a relay counts as
+  unmeasured, and the device is held at the nearest relay HTTPS reached.
+- **The last name gone.** A device reaching no relay without UDP takes the
+  ingress at `relay.<domain>`, its role's name in the log, once the name's
+  server says it is the ingress: an announcement found unsigned names no
+  relay, and a name once proven stays so until its server says otherwise.
+- **Peers kept open for nothing.** A member keeps a connection at a walled
+  peer's home only where its own home has no name on 443, which a walled
+  peer reaches.
+- **A walled phone is pinged.** The connection is kept by a write to the
+  peer's home addressed to no client, which the relay drops, once per home,
+  rather than by a ping to each walled peer.
 
 - **Exit criteria:** (1) with two networks on a host, installed as the
   package installs them, one network's juistd cannot read the other's
@@ -966,14 +1029,20 @@ running juist, closed before the audit, so that M30 covers it.
   address is dropped; (3) the helper refuses a route over the host's own
   LAN; (4) the read tier passes a local user no member's identity or name;
   (5) residual weaknesses 8 and 9 leave the threat model or say what
-  remains of them.
+  remains of them; (6) in the lab, hotel meets lx without `--https-only`
+  within a minute in ten runs in a row; (7) hotel, its network passing a
+  STUN server's port too, is homed at fb's relay and reaches lx; (8) a
+  relay answering ICMP alone is never a home; (9) a walled device whose
+  relay names all moved finds the members again at `relay.<domain>`; (10)
+  a walled peer receives nothing from a member to keep the member's
+  connection, and none from one whose home has a name.
 
 ## M25 — Multicast
 
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LAN games.
 The overlay counts as one link for them. Multicast routing, streaming and
 broadcast are out of scope; broadcast has no address to go to while every
-overlay address is a host prefix. Before the audit, so that M30 covers the
+overlay address is a host prefix. Before the audit, so that M32 covers the
 unwrapping, which parses what members send.
 
 Today nothing crosses: the pinned filter drops every multicast destination
@@ -1007,19 +1076,73 @@ The plan, in order:
    measured.
 5. **avahi.** It skips point-to-point interfaces unless
    `allow-point-to-point=yes`, and a Linux TUN is one for good: the flag
-   cannot be cleared. `juist status` hints at the setting where avahi runs.
+   cannot be cleared. `juist health` warns of the setting where avahi runs,
+   as status gives no hints.
+
+Steps 1 to 3 are in `conn` (`multicast.go`), behind `Options.Multicast`,
+which juistd sets once M24 is done, so that v0.24.0 carries none of it:
+only IPv4 UDP to a group passes, the fragments of a datagram included, to
+and from members without an access, at most 100 datagrams a second in
+bursts of 200 from each sender, and a wrapped packet must be exactly what
+the sender's juistd makes: no options, unfragmented. Exit criterion (1)
+passed for IPv4 by `make ci-vm STAGES=vm`, `TestNetnsAGroupDatagram*`, at b7d2df5,
+which landed as M24 with `conn` unchanged.
+
+Without an access policy, group datagrams pass between all members, since
+every member already reaches every port and the app chose `juist0` by
+sending into it; routed groups (step 4) stay opt-in per host. Under a
+policy none pass but those a rule passes, pair by pair:
+
+    pass multicast from <family> to <family>
+    pass multicast from <gamers> to <gamers> port 4445
+
+1. **The keyword.** `multicast` follows `pass`, as pf's `in` and `out` do,
+   and is not a `proto`: a group is a kind of destination, not an IP
+   protocol. `port` needs no `proto` there, since only UDP passes; elsewhere
+   it still does. The rule is a field of `PolicyRule`, which older members'
+   strict decoder rejects, so it comes with a schema bump.
+2. **Who takes part.** A datagram from A goes to B, and B takes it, where a
+   rule passes A to B. conn's `Access` gains a field for it, and a peer with
+   it joins the multicaster as a peer without an access does today.
+3. **Replies.** The same rule passes unicast UDP from B to the port a group
+   datagram of A's left from, for a few seconds after it, as netfilter's
+   broadcast helper does: SSDP, WS-Discovery and mDNS's legacy and QU
+   queries are answered unicast, to a port no rule can name.
+4. **Unwrapping.** The receiver looks the outer source, which WireGuard has
+   authenticated, up among the senders it takes before it parses the inner
+   packet. Where it takes none, nothing is unwrapped.
 
 Open decisions:
 
 - **MTU.** A full-sized packet grows 20 bytes past the TUN MTU when wrapped.
-  Sending it anyway is the lead option, pending a test over direct paths and
-  relays.
-- **IPv6.** Link-scope groups are sent from `fe80::` sources, which fail the
-  source check and which `juist0` may not have. IPv4 comes first; IPv6 needs a
-  per-member link-local address derived from its identity.
-- **Default.** Multicast an app sends into `juist0` itself is forwarded by
-  default, since the app chose the interface and every member already
-  reaches every port; routed groups are opt-in.
+  Sending it anyway is the lead option: in the lab it crosses a direct path
+  and a relay, over an underlay of 1500; a narrower underlay is untested.
+- **IPv6.** Planned below; open is only whether Android's `VpnService`
+  takes a link-local address, to be measured.
+
+IPv6, in order, all of it with `Options.Multicast` alone and no schema
+change:
+
+1. **A link-local address per member.** `fe80::/64` with the low 64 bits of
+   the member's overlay IPv6 address, which follows from its identity, so
+   that a receiver checks a link-local source as it checks an overlay one.
+   conn derives it for this node and each peer and adds it to the addresses
+   it holds, so that AllowedIPs, the filter and the confiner treat it as the
+   member's own: SSDP and legacy mDNS answer a query unicast, to its source.
+   A link-local that two members, or a member and this node, would share is
+   neither's, since 64 bits can be ground.
+2. **The device holds it alone.** Linux gives a TUN a random link-local
+   (addrgenmode random, as for any device without a hardware address), and
+   FreeBSD one of its own (`auto_linklocal`); the router turns both off and
+   puts the derived one on `juist0`, so that the host sends from it.
+3. **Transport.** IPv6 in IPv6 (next header 41) between the overlay IPv6
+   addresses, which every member has, as its IPv4 address is optional; 40
+   bytes past the MTU where the IPv4 wrapping adds 20.
+4. **What passes.** UDP to a group of link or site scope (`ff02::/16`,
+   `ff05::/16`: mDNS `ff02::fb`, SSDP and WS-Discovery `ff02::c`, LLMNR
+   `ff02::1:3`), from the sender's link-local or overlay address, with UDP
+   the first next header: no fragments and no extension headers. MLD is
+   ICMPv6, so it stays behind as IGMP does.
 
 Not planned: a TAP mode. Carrying Ethernet would need a virtual switch and
 encapsulation, since wireguard-go carries only IP, and would lose the binding
@@ -1027,18 +1150,22 @@ of an overlay address to its member that the source check rests on.
 
 - **Exit criteria:** (1) in the netns matrix, an mDNS query sent on `juist0`
   reaches the other members' listeners with the sender's overlay address as
-  its source, directly and through a relay; (2) a wrapped packet whose inner
+  its source, over IPv6 its link-local, directly and through a relay, and an
+  SSDP answer goes back unicast; (2) a wrapped packet whose inner
   source is not the sending peer's address is dropped; (3) a member whose
   daemon is patched to ignore the limit is cut at the receiver; (4) no packet
   from another LAN host, and no IGMP or MLD, crosses the overlay; (5) a
   listener joined on the default interface receives a routed group's packets
-  from a member; (6) the unwrapping has a fuzz target.
+  from a member; (6) the unwrapping has a fuzz target; (7) under a policy,
+  a group datagram reaches only the members a `pass multicast` rule passes
+  it to, an SSDP answer to one goes back, and a wrapped packet from a
+  member no rule passes is dropped unparsed.
 
 ## M26 — The full Android app
 
 The full Android app, on M10's, once M10's exit criteria are met: M6b's
 subnet routes through `VpnService` routes and M13's HTTPS alone, released
-as the app is now. Before the audit, so that M30 covers the routes a phone
+as the app is now. Before the audit, so that M32 covers the routes a phone
 takes.
 
 A real phone's day on mobile data, where M21's and M23's ran on Wi-Fi,
@@ -1083,7 +1210,7 @@ A network whose every member is an Android phone, created, invited to,
 governed and kept fresh from the app, whose members reach each other without
 a VPS: a family's phones, and a peer-to-peer chat between them. A relay
 member stays the answer that always works; this plan makes it unnecessary
-where the networks the phones are on allow it. Before the audit, so that M30
+where the networks the phones are on allow it. Before the audit, so that M32
 covers admin keys on a phone. A phone as exit node is not planned.
 
 The case it has to serve: two phones, both behind NAT that punches nothing,
@@ -1132,8 +1259,11 @@ only way to need none.
       plane's map as a region with a home score below any member relay's, as
       the STUN-only regions do. Two devices meet only through a region both
       use, so whether and which is the network's choice, a quorum-signed
-      setting in the log (a schema bump) rather than a device's flag; the app
-      offers it at genesis, and Linux networks may choose it too. What its
+      setting in the log (a schema bump) rather than a device's flag. Its
+      default follows where the network is created: on at genesis in the app,
+      off at `juist create`, so a network of laptops and servers uses none
+      unless its admins choose one, and either can change it later. A laptop
+      in a network that has one uses it too, as phones' last way to it. What its
       operator sees is weakness 5 in [02-threat-model.md](02-threat-model.md).
       Open: which servers the default names. Tailscale's are run for its
       customers, used by Headscale by default and tolerated, not promised; a
@@ -1158,7 +1288,7 @@ only way to need none.
    from another member through `VpnService`, tested. Without an access policy
    (M14) every member reaches every port a phone's apps open.
 
-The chat is M32's, whose store holds a message for a phone that is off on
+The chat is M34's, whose store holds a message for a phone that is off on
 the members that are on.
 
 - **Exit criteria:** (1) in `make interop`, three emulators and no other
@@ -1175,11 +1305,91 @@ the members that are on.
   hand, a phone joins by code on the inviting phone's hotspot.
 
 
-## M29 — The internal security review
+## M29 — A desktop app on Linux
+
+An icon in the desktop's status bar, as Tailscale's on Linux (`tailscale
+systray`): the state at a glance, and what a laptop's user changes on the
+move without a terminal. Before the audit, so that M32 covers what it asks
+of the control socket.
+
+- **The icon** shows connected, an exit node in use, or a warning of `juist
+  health`, and its tooltip the status's first lines.
+- **The menu:** the device's name and addresses (copied by a click), the
+  members and whether each is reached, the exit node chosen from those
+  granted or none, and a notification for a new warning or an alarm. With several networks (M5), one submenu each.
+- **Built on** the control socket as `juist` uses it, nothing of its own in
+  juistd: the operator gets the menu whole; any other user what the read
+  tier passes (M24), the state without members, and no switches. It holds
+  no keys, and governing (invite, approve, remove) stays the command
+  line's.
+- **How:** StatusNotifierItem over D-Bus, which KDE, Xfce, Cinnamon and
+  sway's bars show, and GNOME only with the AppIndicator extension, which
+  `juist health` does not judge; the app says where no host is found.
+  `fyne.io/systray`, which Tailscale's pinned module uses
+  (`client/systray`), is the lead, so no cgo and no GTK. A binary of its
+  own, `juist-tray`, started by an XDG autostart entry the package installs,
+  so that a server's install can leave it out.
+- **Open decisions:** whether it is a package of its own; a window beyond
+  the menu (the status page, M9f, opens in the browser meanwhile); FreeBSD's
+  desktops, which take the same binary.
+
+- **Exit criteria:** (1) on a desktop session in the CI VM (sway, headless),
+  the item appears on D-Bus, its menu lists the granted exit nodes, choosing
+  one routes through it and the icon says so; (2) a user who is not the
+  operator gets the menu without the switches; (3) stopping juistd turns the
+  icon to off and starting it brings the state back, without restarting the
+  app; (4) by hand on GNOME with the extension and on KDE, Debian and Fedora,
+  the package installed and removed cleanly.
+
+## M30 — Formal models of what juist designed itself
+
+Machine-checked models of the protocols and rules juist composed from
+standard primitives, before the review and the audit: a flaw in a design is
+found before a reader judges its code, and the audit checks the models
+with it. The primitives and WireGuard are not modelled; the preshared key
+joins WireGuard's published models (Tamarin, CryptoVerif).
+
+- **Enrollment** (`trust/enroll`) in ProVerif: the code stays a weak secret
+  against offline guessing, and online costs the invite its one guess, a
+  password-built element included; the channel key stays secret while
+  SPAKE2 or ML-KEM-768 holds; guest and host agree on the transcript, and
+  the key admitted is the one the admin saw; no side's message reflects
+  back as the other's.
+- **The pair key** (`internal/pairkey`) in ProVerif or Tamarin: a third
+  member holding the group secret learns no pair's key; both ends agree on
+  key and epoch before either mixes it in; forward secrecy as a lemma that
+  fails, as weakness 12 says, and whether an ephemeral ML-KEM share makes
+  it hold.
+- **The log** (`trust/log`) in TLA+: honest validators converge on one
+  state or one alarm in any order of delivery, no trusted state falls below
+  the epoch floor, every membership change has its quorum, a removed key
+  undoes no revocation, compaction included, and a member cut off from a
+  removal refuses the removed one at the TTL under bounded clock skew. The
+  three fork-choice findings M31 lists are decided against it.
+- **Model and code:** traces the log's model generates are replayed against
+  `trust/log`'s validator; each protocol model names the labels and
+  transcript fields it stands for, and a test fails where the code's differ.
+- **Left out:** `aead` and `addrkey`, standard constructions M31 reads line
+  by line; the computational strength of the SPAKE2 and ML-KEM combiner,
+  which a symbolic model takes as given; code-level proof (Gobra).
+- **Open decisions:** ProVerif or Tamarin for the pair key; TLA+ checked by
+  TLC or Apalache, or Quint; whether the models run in `make ci-vm` or by
+  hand, as `make fuzz-long` does.
+
+- **Exit criteria:** (1) every model's lemmas proved, or a failed one fixed
+  in the code with a test that fails without the fix, or accepted as a
+  numbered residual weakness; (2) each model's attacker written beside it
+  against [02-threat-model.md](02-threat-model.md)'s adversaries; (3) the
+  log's traces replay against the validator without a divergence; (4) the
+  run, its tool versions and what did not run recorded in
+  [12-validating.md](12-validating.md).
+
+## M31 — The internal security review
 
 The review [15-security-review.md](15-security-review.md) plans, over the
-audit scope as M17 to M28 leave it, so that the auditor's hours go to what a
-reader cannot find. It starts from the fuzzing:
+audit scope as M17 to M30 leave it, so that M32's audit goes to what a
+reader cannot find, and M30's models beside the code they stand for. It
+starts from the fuzzing:
 
 - **Fuzzing.** `waiting.Decode`, `types.DecodeLease` and the helper's
   protocol have no target, and no `fuzz-long` run is recorded in
@@ -1214,26 +1424,29 @@ reader cannot find. It starts from the fuzzing:
   and medium finding fixed with a test that fails without the fix, or
   accepted as a numbered residual weakness.
 
-## M30 — External audit → v1
+## M32 — An audit by a second model → v1
 
-External security audit of the audit scope, in the tiers of
-[06-verification.md](06-verification.md) §5, after M29's internal review:
-the trust layer and enrollment at its core,
-plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22, M23, M24, M25, M26, M27 and M28 add to it — route consumption and its forwarding helper, the
+Security audit of the audit scope by a model other than the one juist is
+developed with, from the code and the threat model rather than M31's notes;
+no human audit is planned. In the tiers of
+[06-verification.md](06-verification.md) §5, after M31's internal review:
+the trust layer and enrollment at its core, M30's models with them,
+plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22, M23, M24, M25, M26, M27, M28 and M29 add to it — route consumption and its forwarding helper, the
 override record and the resolver, the published names, those for members alone, and the ingress, its QUIC Initial parser included, the
 disable record, the preshared-key exchange, the ML-DSA cut-over and
-enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, the meeting at a relay on 443, a user per instance and FreeBSD's pf, multicast's unwrapping, the phone's subnet routes, several networks in one app and admin keys on a phone — fix findings, mature fuzz corpus (consider
+enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, the meeting at a relay on 443, a user per instance and FreeBSD's pf, multicast's unwrapping, the phone's subnet routes, several networks in one app, admin keys on a phone and the desktop app's use of the control socket — fix findings, mature fuzz corpus (consider
 OSS-Fuzz), implementation-vs-threat-model review, documentation of the
 residual-weakness acceptances for operators, which the handbook's
-trade-offs carry ([14-website.md](14-website.md)).
+trade-offs carry ([14-website.md](14-website.md)). Open decision: which
+model.
 
-v1 is Linux and FreeBSD with M14's ACLs and M25's multicast, and the
-Android app as M26 to M28 leave it; packaging follows in M31.
+v1 is Linux and FreeBSD with M14's ACLs and M25's multicast, Linux's
+desktop app (M29), and the Android app as M26 to M28 leave it; packaging follows in M33.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) the acceptances documented for operators; v1.0 tag.
 
-## M31 — Packaging *(post-v1)*
+## M33 — Packaging *(post-v1)*
 
 Distro repositories (apt, dnf, pkg) and a port in FreeBSD's ports tree, which
 fetches a release, for the packages every release already carries, and the readiness check that keeps an admin from stranding members
@@ -1242,7 +1455,7 @@ on an upgrade.
 - **Exit criterion:** Linux/FreeBSD interop matrix green in CI via qemu;
   release artifacts reproducible byte-for-byte from two independent builders.
 
-## M32 — A store, and a messenger on it *(post-v1)*
+## M34 — A store, and a messenger on it *(post-v1)*
 
 Members leave each other data while the other is offline, with no server: a
 key-value store replicated among the members' own devices, and a messenger on
@@ -1334,7 +1547,7 @@ code.
   exchange messages and a file both ways; (5) a member writing past its
   quota is cut at a holder, and the others' writes still land.
 
-## M33 — OpenBSD *(post-v1)*
+## M35 — OpenBSD *(post-v1)*
 
 juistd on OpenBSD as M7 has it on FreeBSD: a root helper, the daemon as
 `juist`, DNS, exit nodes and subnet routers, an rc.d script and a package.
@@ -1396,7 +1609,7 @@ Open decisions:
   does. pf is the lead, being one mechanism for both.
 - **Signing the package:** `pkg_add` checks signify(1) signatures against the
   keys in `/etc/signify`, so either a key of juist's that the user installs
-  once, or unsigned packages until a port in the ports tree, as M31 plans for
+  once, or unsigned packages until a port in the ports tree, as M33 plans for
   FreeBSD.
 - **Which releases:** the current one alone, or both that OpenBSD supports.
 

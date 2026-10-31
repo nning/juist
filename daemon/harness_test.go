@@ -261,17 +261,18 @@ func safeLogf(t *testing.T, prefix string) func(string, ...any) {
 // reconciler decides rather than about packets moving. It records every peer
 // set it is given, which is the whole of the reconciler's output.
 type fakeManager struct {
-	mu       sync.Mutex
-	isolate  bool   // as SetEgress was last told
-	through  string // what AnswersThrough says
-	peers    []conn.Peer
-	self     []conn.Self // as SetSelf was told, in order
-	relays   []conn.Relay
-	relaySet int
-	sets     int
-	closed   bool
-	err      error // returned by SetPeers, to exercise the failure path
-	relayErr error // returned by SetRelays
+	mu        sync.Mutex
+	isolate   bool   // as SetEgress was last told
+	through   string // what AnswersThrough says
+	unguarded string // what Unguarded says
+	peers     []conn.Peer
+	self      []conn.Self // as SetSelf was told, in order
+	relays    []conn.Relay
+	relaySet  int
+	sets      int
+	closed    bool
+	err       error // returned by SetPeers, to exercise the failure path
+	relayErr  error // returned by SetRelays
 	// hostRoutes is what the host reaches outside juist.
 	hostRoutes []netip.Prefix
 	// egressErr is what SetEgress returns for each egress.
@@ -281,6 +282,7 @@ type fakeManager struct {
 	reached map[int]bool // relay regions a measurement reached, the home aside
 	eps     []netip.AddrPort
 	walled  bool
+	noRelay bool                 // as ReachesNoRelay reports
 	notAt   map[uint64]time.Time // as NotAtHome reports
 	onProbe func()               // run as each probe is sent, without mu
 
@@ -330,6 +332,12 @@ func (m *fakeManager) AnswersThrough() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.through
+}
+
+func (m *fakeManager) Unguarded() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unguarded
 }
 
 func (m *fakeManager) SetServe(s conn.Serve) error {
@@ -422,6 +430,12 @@ func (m *fakeManager) Walled() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.walled
+}
+
+func (m *fakeManager) ReachesNoRelay() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.noRelay
 }
 
 func (m *fakeManager) NotAtHome() map[uint64]time.Time {

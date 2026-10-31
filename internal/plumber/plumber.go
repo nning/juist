@@ -53,6 +53,7 @@ const (
 	opAnswers = "answers"
 	opListen  = "listen-https"
 	opDNS53   = "listen-dns"
+	opGuard   = "guard"
 )
 
 type request struct {
@@ -68,6 +69,7 @@ type request struct {
 	Listen netip.Addr     `cbor:"10,keyasint,omitempty"`
 	Search []string       `cbor:"11,keyasint,omitempty"`
 	Proto  string         `cbor:"12,keyasint,omitempty"`
+	Guard  *GuardSpec     `cbor:"13,keyasint,omitempty"`
 }
 
 type response struct {
@@ -137,6 +139,13 @@ func (c *Client) SetRoutes(dev string, routes []netip.Prefix, src4 netip.Addr) e
 // behind a pf anchor of juist's, or no longer where s serves nothing.
 func (c *Client) SetServe(dev string, s ServeSpec) error {
 	_, err := c.call(request{Op: opServe, Device: dev, Serve: &s})
+	return err
+}
+
+// SetGuard has the host keep dev's overlay to it as g asks, or no longer
+// where g holds no address.
+func (c *Client) SetGuard(dev string, g GuardSpec) error {
+	_, err := c.call(request{Op: opGuard, Device: dev, Guard: &g})
 	return err
 }
 
@@ -383,6 +392,13 @@ type Host interface {
 	// SetDNS makes servers the host's resolvers by dev, with search its
 	// search domains, or no longer.
 	SetDNS(dev string, servers []netip.Addr, search []string) error
+	// SetGuard keeps dev's overlay to it as g asks, or no longer where g
+	// holds no address; destroying the device ends it too.
+	SetGuard(dev string, g GuardSpec) error
+	// HostAddrs is the addresses of the host's devices but juist's and the
+	// loopback, and the gateways of its routes, which no route into a
+	// device may take.
+	HostAddrs() []netip.Addr
 	// Free reports whether no helper holds dev.
 	Free(dev string) bool
 	// Answers says why answers to what comes in by another device would not
@@ -418,8 +434,10 @@ func (d *device) destroyed(h Host, name string) error {
 // takes, and returns how to destroy every device it made. The caller
 // destroys them once the daemon is gone: destroying a device waits for its
 // descriptor to close. uid is the daemon's, as the caller started it: the
-// socket's own credentials are its creator's, the helper's.
-func Serve(c *net.UnixConn, h Host, uid int, logf func(string, ...any)) (destroy func(), err error) {
+// socket's own credentials are its creator's, the helper's. dev is the
+// daemon's device, the one it plumbs alone: another network's daemon has a
+// helper of its own; "" for none.
+func Serve(c *net.UnixConn, h Host, uid int, dev string, logf func(string, ...any)) (destroy func(), err error) {
 	devs := map[string]*device{}
 	destroy = func() {
 		for name, d := range devs {
@@ -429,10 +447,13 @@ func Serve(c *net.UnixConn, h Host, uid int, logf func(string, ...any)) (destroy
 			delete(devs, name)
 		}
 	}
-	return destroy, serve(c, h, devs, uid)
+	if dev != "" && !devicePattern.MatchString(dev) {
+		return destroy, fmt.Errorf("%q is no device of juist's", dev)
+	}
+	return destroy, serve(c, h, devs, uid, dev)
 }
 
-func serve(c *net.UnixConn, h Host, devs map[string]*device, uid int) error {
+func serve(c *net.UnixConn, h Host, devs map[string]*device, uid int, dev string) error {
 	for {
 		body, f, err := readFrame(c, false)
 		if errors.Is(err, io.EOF) {
@@ -452,7 +473,7 @@ func serve(c *net.UnixConn, h Host, devs map[string]*device, uid int) error {
 			// Read alone, of no device in particular.
 			resp.Answers = h.Answers()
 		} else if err == nil {
-			out, err = handle(devs, h, req, uid)
+			out, err = handle(devs, h, req, uid, dev)
 		}
 		if err != nil {
 			resp.Err = err.Error()
@@ -471,9 +492,12 @@ func serve(c *net.UnixConn, h Host, devs map[string]*device, uid int) error {
 	}
 }
 
-func handle(devs map[string]*device, h Host, req request, uid int) (*os.File, error) {
+func handle(devs map[string]*device, h Host, req request, uid int, dev string) (*os.File, error) {
 	if !devicePattern.MatchString(req.Device) {
 		return nil, fmt.Errorf("%q is no device of juist's", req.Device)
+	}
+	if req.Device != dev {
+		return nil, fmt.Errorf("%q is no device of this juistd's", req.Device)
 	}
 	d := devs[req.Device]
 	if req.Op == opEgress && req.Egress != nil {
@@ -570,6 +594,18 @@ func handle(devs map[string]*device, h Host, req request, uid int) (*os.File, er
 			return nil, fmt.Errorf("%v is no address for a relay", a)
 		}
 		return h.ListenHTTPS(a)
+	case opGuard:
+		if req.Guard == nil {
+			return nil, errors.New("nothing to guard")
+		}
+		// Written into pf's rules, the device's ahead of being set: in the
+		// overlay's space alone, lest the LAN's be kept from the LAN.
+		for _, a := range slices.Concat(req.Guard.Own, req.Guard.Overlay) {
+			if !a.IsValid() || a.Zone() != "" || !within(netip.PrefixFrom(a, a.BitLen()), overlaySpace) {
+				return nil, fmt.Errorf("an address %q outside any network's space", a)
+			}
+		}
+		return nil, h.SetGuard(req.Device, *req.Guard)
 	case opEgress:
 		if req.Egress == nil {
 			return nil, errors.New("no egress")
@@ -734,6 +770,7 @@ func setAddrs(h Host, dev string, d *device, want []netip.Prefix) error {
 func setRoutes(h Host, dev string, d *device, want []netip.Prefix, src4 netip.Addr) error {
 	var errs []error
 	wanted := map[netip.Prefix]netip.Addr{}
+	hosts := h.HostAddrs()
 	for _, p := range want {
 		switch {
 		case !p.IsValid():
@@ -746,6 +783,12 @@ func setRoutes(h Host, dev string, d *device, want []netip.Prefix, src4 netip.Ad
 		}
 		if slices.ContainsFunc(linkSpace, func(s netip.Prefix) bool { return s.Overlaps(p) }) {
 			errs = append(errs, fmt.Errorf("a route of the host's links, %v", p))
+			continue
+		}
+		// The host's LAN whole holds its address. A part of a wider network
+		// it is on may be a subnet's, as a DHCP netmask too wide makes it.
+		if slices.ContainsFunc(hosts, func(a netip.Addr) bool { return p.Contains(a.WithZone("")) }) {
+			errs = append(errs, fmt.Errorf("a route over the host's own LAN, %v", p))
 			continue
 		}
 		src := netip.Addr{}

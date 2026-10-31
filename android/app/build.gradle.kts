@@ -7,16 +7,16 @@ plugins {
     alias(libs.plugins.roborazzi)
 }
 
-// The commit, not the clock, numbers a build, so two builds of one commit match
-// and a later commit upgrades an earlier one.
-fun git(vararg args: String): String =
-    providers.exec { commandLine("git", *args) }.standardOutput.asText.get().trim()
-
-val commitTime = git("log", "-1", "--format=%ct").toLong()
-val commit = git("log", "-1", "--format=%h")
-
 // The repository's root, which holds the core's AAR and the design tokens.
 val repo: Directory = rootProject.layout.projectDirectory.dir("..")
+
+// The commit, not the clock, numbers a build, so two builds of one commit match
+// and a later commit upgrades an earlier one; its name is `juist version`'s.
+fun output(vararg args: String): String =
+    providers.exec { commandLine(*args) }.standardOutput.asText.get().trim()
+
+val commitTime = output("git", "log", "-1", "--format=%ct").toLong()
+val versionLabel = output("sh", repo.file("packaging/version.sh").asFile.path, "android")
 
 android {
     namespace = "io.juist.app"
@@ -29,7 +29,7 @@ android {
         minSdk = 31
         targetSdk = 36
         versionCode = ((commitTime - 1_767_225_600) / 60).toInt() // minutes since 2026
-        versionName = "0+$commit"
+        versionName = versionLabel
         resourceConfigurations += listOf("en", "de")
     }
 

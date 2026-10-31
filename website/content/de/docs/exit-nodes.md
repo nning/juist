@@ -16,8 +16,7 @@ verschlüsselten Verkehr.
 Ein Gerät wird in zwei Schritten zum Exit-Node. Zuerst gibt ein
 [Admin]({{< relref "docs/how-it-works" >}}#admins) dem Gerät die
 [Rolle]({{< relref "docs/how-it-works" >}}#roles) `exit`. Dann stimmt der
-[Operator]({{< relref "docs/operator" >}}) des Geräts zu, also der lokale
-Benutzer, der es ohne sudo verwaltet, indem er dort `juist exit serve`
+[Operator]({{< relref "docs/operator" >}}) des Geräts zu, indem er dort `juist exit serve`
 ausführt.
 
 Ob ein Gerät einen Exit-Node nutzt, entscheidet es selbst. Solange du auf
@@ -86,7 +85,10 @@ wenn der Stand des Netzes auf diesem Gerät veraltet ist. DNS-Anfragen gehen
 dann ins Leere statt ins LAN. Ob du wieder direkt ins Internet gehst,
 entscheidest du selbst: mit `juist exit off`.
 
-## Hinweise
+Wird juistd ordentlich beendet, hebt es die Blockade auf. Während eines
+Neustarts geht der Verkehr also kurz direkt ins Internet.
+
+## Gut zu wissen
 
 - `juist exit` listet die Exit-Nodes auf und zeigt, ob sie jeweils
   bereitstehen und welcher gerade genutzt wird.
@@ -105,19 +107,10 @@ entscheidest du selbst: mit `juist exit off`.
 - Hast du die Firewall des Exit-Nodes von Hand eingerichtet, muss sie UDP und
   TCP 41646 auf `juist0` durchlassen. Dort beantwortet der Exit-Node die
   DNS-Anfragen seiner Mitglieder ([Relays, Ports und Firewalls]({{< relref "docs/relays" >}})).
-- Läuft auf dem Exit-Node auch Tailscale, beantwortet er die DNS-Anfragen
-  seiner Mitglieder über die normalen DNS-Server des Rechners. Den Resolver
-  von Tailscale fragt er nie, denn der würde für Namen aus dem Tailnet
-  Adressen liefern, die die Mitglieder nicht erreichen.
+- Läuft auf dem Exit-Node auch Tailscale, beantwortet er das DNS seiner
+  Mitglieder über die normalen DNS-Server des Rechners, nie über den
+  Resolver von Tailscale.
 - Unter FreeBSD arbeiten Exit-Nodes mit pf, und DNS läuft über resolvconf.
-- Unter Linux schaltet ein Exit-Node oder Subnet-Router auf der
-  Netzwerkschnittstelle seiner Standardroute UDP-GRO-Forwarding ein, wie es
-  `ethtool -K eth0 rx-udp-gro-forwarding on rx-gro-list off` tut, damit er
-  UDP-Verkehr wie QUIC gebündelt weiterleitet. Beendet er den Dienst, stellt
-  er die vorherigen Einstellungen der Schnittstelle wieder her. Beides steht
-  im Log.
-- Wird juistd ordentlich beendet, hebt er die Blockade auf. Während eines
-  Neustarts des Dienstes geht der Verkehr also kurz direkt ins Internet.
 
 ## Fehlersuche
 

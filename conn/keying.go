@@ -56,7 +56,7 @@ func (m *tsManager) settleKeying() {
 		delete(m.keying, nk)
 		m.logf("conn: %v keyed: reset again", nk.ShortString())
 	}
-	m.confiner.set(m.keptConfined(slices.Collect(maps.Values(m.state.Load().peers))), m.self.Addrs)
+	m.setPolicy(m.keptConfined(slices.Collect(maps.Values(m.state.Load().peers))), m.self.Addrs)
 }
 
 // warmPaths starts NAT-traversal discovery towards new peers before anything

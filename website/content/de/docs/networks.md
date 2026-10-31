@@ -8,16 +8,15 @@ lead: Ein Gerät kann mehreren Netzen gleichzeitig angehören, etwa einem privat
 ## Ein juistd pro Netz
 
 Dein Laptop gehört vielleicht zu deinem privaten Netz und zum Netz deines
-Teams. Beide haben verschiedene Admins, verschiedene Geräte und verschiedene
-Regeln. juist hält sie auf dem Laptop getrennt, indem jedes Netz seinen
-eigenen juistd bekommt, den Daemon, der im Hintergrund die Tunnel aufrecht
-hält
-([So funktioniert juist]({{< relref "docs/how-it-works" >}})).
+Teams, mit verschiedenen Admins, Geräten und Regeln. juist hält sie getrennt,
+indem jedes Netz sein eigenes juistd bekommt.
 
-Das erste Netz läuft in `juistd.service`. Jedes weitere läuft daneben in
-einer nummerierten Instanz: `juistd@juist1`, `juistd@juist2` und so weiter.
-Jede Instanz hat ihr eigenes Netzwerkgerät (`juist0`, `juist1`, …), ihr
-eigenes Zustandsverzeichnis und ihre eigenen Ports.
+Das erste Netz läuft in `juistd.service`, jedes weitere in einer
+nummerierten Instanz: `juistd@juist1`, `juistd@juist2` und so weiter. Jede
+Instanz hat ihr eigenes Netzwerkgerät (`juist0`, `juist1`, …), ihr eigenes
+Zustandsverzeichnis und eigene Ports und läuft als eigener Benutzer (`juist`,
+`juist1`, …), damit das juistd eines Netzes die Schlüssel eines anderen nicht
+lesen kann.
 
 ## Einem zweiten Netz beitreten oder eines anlegen
 
@@ -103,13 +102,12 @@ von selbst wieder.
 
 ## Ein Admin-Schlüssel pro Netz
 
-Ein Admin-Schlüssel ist der Schlüssel, mit dem ein Admin Änderungen
-signiert. Jedes Netz bekommt einen eigenen, etwa `admins/alice@home.key` und
-`admins/alice@work.key`. Geht ein Schlüssel verloren oder wird er gestohlen,
-ist daher nur ein Netz betroffen. Soll ein neues Netz mit einem Schlüssel
-verwaltet werden, den du schon hast, gibst du ihn an:
-`juist create lab --admin-key alice@home`. Mehr dazu unter
-[Mehrere Admins]({{< relref "docs/admins" >}}).
+Jedes Netz bekommt einen eigenen Admin-Schlüssel, etwa
+`admins/alice@home.key` und `admins/alice@work.key`. Ein verlorener Schlüssel
+betrifft also nur ein Netz. Soll ein neues Netz mit einem vorhandenen
+Schlüssel verwaltet werden, nenn ihn:
+`juist create lab --admin-key alice@home`
+([Mehrere Admins]({{< relref "docs/admins" >}})).
 
 ## Ein Netz verlassen
 
@@ -122,30 +120,26 @@ Damit verlässt das Gerät `work`, und der zugehörige juistd wird entfernt.
 solange `work` das Gerät noch als Mitglied führt. Entferne das Gerät nach
 Möglichkeit vorher aus `work` ([Geräte entfernen]({{< relref "docs/remove" >}})).
 
-## Hinweise
+## Gut zu wissen
 
 - Auf einem Host laufen höchstens zehn juistd: `juistd.service` und
   `juistd@juist1` bis `juistd@juist9`.
-- Die Ports des n-ten juistd sind die des ersten plus 10·n, also 41653/udp
-  für `juistd@juist1` und für den Log-Abgleich TCP 41654 auf `juist1`. Die
-  Firewall-Profile, die die Pakete installieren, enthalten nur die Ports des
-  ersten Netzes. Die der anderen nennt `juist status`
+- Die Ports des n-ten juistd sind die des ersten plus 10·n: 41653/udp für
+  `juistd@juist1` und der Log-Abgleich auf TCP 41654 auf `juist1`. Die
+  Firewall-Profile der Pakete enthalten nur die Ports des ersten Netzes; die
+  anderen nennt `juist status`
   ([Relays, Ports und Firewalls]({{< relref "docs/relays" >}})).
-- Läuft der juistd des zweiten Netzes nicht, startest du ihn mit
+- Läuft das juistd des zweiten Netzes nicht, starte es mit
   `sudo systemctl enable --now juistd@juist1`. Sein Log zeigt
-  `journalctl -u juistd@juist1`.
-- Unter FreeBSD stehen die Instanzen der weiteren Netze in der
-  rc.conf-Variable `juistd_instances`, und `service juistd start juist1`
-  startet eine davon.
-- Ein Gerät kann demselben Netz nur einmal angehören. Weil eine Einladung
-  nicht verrät, für welches Netz sie gilt, wird ein zweiter Beitritt zum
-  selben Netz zunächst angenommen. Der neue juistd lehnt das Netz dann aber ab
-  und nennt die Aufnahme, die ein Admin wieder entfernen sollte.
-- Ein Gerät in mehreren Netzen leitet seinen Internetverkehr über
-  [einen Exit-Node]({{< relref "docs/exit-nodes" >}}) nur eines dieser Netze.
-- Alle juistd laufen unter demselben Benutzer `juist`. Wer einen davon
-  übernimmt, hat die Geräteschlüssel aller Netze auf dem Host.
-- Die Mitglieder eines Netzes können erfahren, welche Adressen dieser Host in
-  seinen anderen Netzen hat, und damit, welche Adressbereiche diese Netze
-  nutzen.
+  `journalctl -u juistd@juist1`. Unter FreeBSD nennt die rc.conf-Variable
+  `juistd_instances` die Instanzen, und `service juistd start juist1` startet
+  eine.
+- Ein Gerät kann einem Netz nur einmal angehören. Eine Einladung verrät
+  nicht, für welches Netz sie gilt, also wird ein zweiter Beitritt zum selben
+  Netz zunächst angenommen. Das neue juistd lehnt das Netz dann ab und nennt
+  die Aufnahme, die ein Admin entfernen sollte.
+- Ein Gerät in mehreren Netzen leitet seinen Internetverkehr über den
+  [Exit-Node]({{< relref "docs/exit-nodes" >}}) nur eines dieser Netze.
+- Die Mitglieder eines Netzes können die Adressen dieses Hosts in seinen
+  anderen Netzen erfahren und damit, welche Adressbereiche diese nutzen.
 

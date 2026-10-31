@@ -91,6 +91,13 @@ var allIPProtos = func() views.Slice[ipproto.Proto] {
 	return views.SliceOf(p)
 }()
 
+func (m *tsManager) Unguarded() string {
+	if g, ok := m.inGuard.(unguardedRouter); ok {
+		return g.unguardedBy()
+	}
+	return ""
+}
+
 // AnswersThrough is why answers to what comes in by another device would go
 // through the exit node though not isolated, "" where they leave the way
 // they came, or where there is no device.

@@ -19,7 +19,7 @@ Changes need your admins
 : Admitting or removing a device takes a quorum of admins, each with a key on their own devices. The keys stay in the keystore; the daemon never holds them.
 
 Fail-closed
-: Once a network has vouchers, a device that too few of them have vouched for in 48 hours keeps tunnels only to vouchers, so it cannot keep a removed device connected.
+: Once a network has vouchers, a device that too few of them vouched for in 48 hours keeps tunnels only to vouchers. It cannot keep a removed device connected.
 {{< /rules >}}
 
 ## Your first network
@@ -122,10 +122,10 @@ What you can do
 
 {{< trade title="A tunnel starts on the group's key" knob="no setting" >}}
 What happens
-: Until two devices have their own key, which takes one log sync after their tunnel comes up, their traffic is protected by a key any member could derive.
+: Two devices get their own key one log sync after their tunnel comes up. Until then, their traffic is protected by a key any member could derive.
 
 Why accepted
-: Against everyone outside the network it is quantum-safe from the start; only a member, or a device removed since, with a quantum computer could read those first seconds.
+: Against everyone outside the network it is quantum-safe from the start. Only a member, or a device removed since, with a quantum computer could read those first seconds.
 
 What you can do
 : Nothing; it lasts until the next log sync between the two.

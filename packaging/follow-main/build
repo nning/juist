@@ -15,7 +15,8 @@ repo=$(cat "$HOME/repo" 2>/dev/null || echo https://github.com/nning/juist.git)
 [ -d juist/.git ] || git clone -q --branch main "$repo" juist
 cd juist
 git remote set-url origin "$repo"
-git fetch -q origin main
+# The tags too, from which the package and juist version take the release.
+git fetch -q --tags --force origin main
 new=$(git rev-parse FETCH_HEAD)
 built=$(cat "$HOME/built" 2>/dev/null || true)
 [ "$new" != "$built" ] || exit 0

@@ -907,3 +907,33 @@ func TestAWalledRoundKeepsJoinsAndSeeks(t *testing.T) {
 		t.Error("a walled round of a node left to others to seek looked beside the DHT")
 	}
 }
+
+// An early round puts nothing it put already, unless Republish said where
+// it was held moved: then it puts the same announcement again.
+func TestARepublishPutsTheSameAnnouncementAgain(t *testing.T) {
+	sw := newSwarm(t, 3)
+	kr := testKeyring(t, 4)
+	a := newMember(t, sw, kr, 1, nil)
+	var walled atomic.Bool
+	walled.Store(true)
+	held := &mapItems{}
+	a.node.opts.Beside, a.node.opts.Walled = held, walled.Load
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	a.node.Round(ctx)
+	if held.len() != 1 {
+		t.Fatalf("the round put %d items, want its announcement", held.len())
+	}
+	held.mu.Lock()
+	held.items = nil // the relay holding it restarted
+	held.mu.Unlock()
+	a.node.round(ctx, true)
+	if held.len() != 0 {
+		t.Fatal("an early round put an announcement it had put already")
+	}
+	a.node.Republish()
+	a.node.round(ctx, true)
+	if held.len() != 1 {
+		t.Fatal("after Republish, an early round did not put the announcement again")
+	}
+}

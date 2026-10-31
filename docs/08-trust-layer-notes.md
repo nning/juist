@@ -290,7 +290,7 @@ The state every genesis and checkpoint states carries a `Schema` version, and
 `KindSchemaUpgrade` raises it under the usual quorum. A build implements
 `types.CurrentSchema` (20) and reads from `types.MinSchema` (18) up; raising
 `MinSchema` drops the rules below it, so a network below has to move up with an
-older build first. Version numbers are unrelated to release names.
+older build first. Schema numbers are unrelated to release versions.
 
 **A build too old for the network stops, and says so.** The chain resolves up
 to the upgrade record and no further; `Authority.SchemaAlarm` reports it and
@@ -321,7 +321,7 @@ so a field a schema adds to the wire goes only to a peer whose announced schema
 reads it. Every member announces the newest schema its build implements, and
 `juist devices` shows a live member announcing an older one.
 
-Open, for M31: nothing says before an upgrade which members it would strand,
+Open, for M33: nothing says before an upgrade which members it would strand,
 or stops an admin authoring one too early.
 
 ## The freeze: what the fan-out measurement decided

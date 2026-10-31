@@ -16,7 +16,7 @@ import (
 )
 
 func namesFamily() family {
-	return family{name: "juist names", intro: "Point public names at devices, which members then reach through the tunnel.",
+	return family{name: "juist names", intro: "Point public names at devices, so that members reach them through the tunnel.",
 		subs: []subcommand{
 			{name: "list", aliases: []string{"ls"}, run: namesList, forms: [][2]string{{"", "the network's names, public ones too, and how this device resolves each"}}},
 			{name: "add", run: namesAdd, forms: [][2]string{{"add DEVICE NAME...", "point NAME at DEVICE"}}},
@@ -24,10 +24,10 @@ func namesFamily() family {
 				forms: [][2]string{{"remove DEVICE NAME...", "take NAME from DEVICE"}}},
 			{name: "on", run: namesOn, forms: [][2]string{{"on", "resolve them to their devices on this device"}}},
 			{name: "off", run: namesOff, forms: [][2]string{{"off", "resolve them publicly again"}}},
-		}, footer: `Every device is DEVICE.NETWORK.juist to the others on Linux and FreeBSD.
-A public name, such as mail.example.org, resolves to its device on each
-device that turned names on, and publicly elsewhere and while its device is
-out of reach.`}
+		}, footer: `On Linux and FreeBSD, every device is DEVICE.NETWORK.juist to the others. A
+public name, such as mail.example.org, resolves to its device on each device
+that turned names on. Elsewhere, and while its device is out of reach, it
+resolves publicly.`}
 }
 
 func cmdNames(a *app, args []string) error { return namesFamily().run(a, args) }
@@ -109,7 +109,7 @@ func nameState(n *ipc.Names, o ipc.NameOverride, paint func(code, s string) stri
 func namesAdd(a *app, args []string) error {
 	return changeNames(a, args, true, spec{name: "juist names add", args: "DEVICE NAME...", min: 2, max: -1, about: `
 Point public names, such as mail.example.org, at a device. Each device that
-turned names on resolves them to it: juist names on.`})
+turned names on (juist names on) resolves them to it.`})
 }
 
 func namesRemove(a *app, args []string) error {
@@ -138,8 +138,8 @@ func changeNames(a *app, args []string, add bool, s spec) error {
 
 func namesOn(a *app, args []string) error {
 	return setAcceptNames(a, args, true, spec{name: "juist names on", about: `
-Resolve the public names the network points at devices to them, through the
-tunnel, on this device. juist names off undoes it.`})
+On this device, resolve the network's public names to their devices, through
+the tunnel. juist names off undoes it.`})
 }
 
 func namesOff(a *app, args []string) error {

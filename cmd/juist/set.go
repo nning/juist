@@ -18,13 +18,12 @@ import (
 
 func cmdSet(a *app, args []string) error {
 	s := spec{name: "juist set", about: `
-Change this device's settings. --operator names the local user who may
-manage it without sudo, as root; --operator="" clears it. --https-only
-sends nothing but TLS to relays on 443, through --proxy where given;
---relay-name serves this device's relay on 443 under a public name,
-relay.DOMAIN on the network's ingress where not given.
---dns=false leaves this host's DNS alone: no network names, and no DNS
-through an exit node.`}
+Change this device's settings. --operator sets the local user who may manage
+the device without sudo; run it as root. --operator="" clears it.
+--https-only sends only TLS to relays on 443, through --proxy if given.
+--relay-name serves this device's relay on 443 under a public name (default:
+relay.DOMAIN on the network's ingress). --dns=false leaves this host's DNS
+alone: no network names, and no DNS through an exit node.`}
 	fs := newFlags(s.name)
 	var op, proxy, relayName optionalString
 	fs.Var(&op, "operator", "local `USER` who manages this device")

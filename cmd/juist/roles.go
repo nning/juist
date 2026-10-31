@@ -17,18 +17,17 @@ const rolesAbout = `Roles:
 
   exit     carries other devices' internet traffic, once its operator
            agrees: juist exit serve
-  ingress  takes connections from the internet for the names devices
-           publish; on a device with a public address, and nothing else
-  service  a service member: juistd --serve beside a service, which every
-           device keeps from opening any connection to it
-  publish  shares under its own name at once, without a vote each time:
+  ingress  takes connections from the internet for published names; on a
+           device with a public address and no other role
+  service  a service member: juistd --serve next to a service; no device
+           may open a connection to it
+  publish  shares under its own name without a vote each time:
            juist share FILE, juist publish PORT
   relay    relays for devices that cannot reach each other; best on two or
            more devices with public addresses
-  voucher  vouches hourly that the network state is current, so cut-off
-           devices notice; where too few vouch for 48 hours, devices reach
-           only vouchers: give it to devices that are always on. Not an
-           admin key.`
+  voucher  confirms hourly that the network state is current. If too few
+           vouch for 48 hours, devices reach only vouchers, so give it to
+           devices that are always on. Not an admin key.`
 
 func cmdGrant(a *app, args []string) error {
 	s := spec{name: "juist grant", args: "DEVICE ROLE...", min: 2, max: -1, about: `
@@ -38,7 +37,8 @@ Give a device roles. ` + rolesAbout}
 
 func cmdRevoke(a *app, args []string) error {
 	s := spec{name: "juist revoke", args: "DEVICE ROLE...", min: 2, max: -1, about: `
-Take roles from a device. ` + rolesAbout}
+Take roles from a device: exit, ingress, service, publish, relay or voucher.
+juist grant --help says what each does.`}
 	return changeRoles(a, s, args, false)
 }
 

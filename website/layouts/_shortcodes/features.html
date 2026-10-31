@@ -5,7 +5,9 @@
 <tbody>
 {{- range hugo.Data.features }}{{ $t := index . $l }}{{ $id := anchorize .en.title }}
 <tr id="{{ $id }}"><td>{{ with and .doc (site.GetPage .doc) }}<a href="{{ .RelPermalink }}">{{ $t.title }}</a>{{ else }}{{ $t.title }}{{ end }}
-{{- with .note }}{{ $notes = $notes | append (index . $l) }}{{ strings.Repeat (len $notes) "*" }}{{ end }} <a class="anchor" href="#{{ $id }}" aria-label="{{ i18n "anchor" }}">#</a></td><td data-label="{{ i18n "featureWhat" }}">{{ $t.text }}</td></tr>
+{{- with .note }}{{ $notes = $notes | append (index . $l) }}{{ strings.Repeat (len $notes) "*" }}{{ end }} <a class="anchor" href="#{{ $id }}" aria-label="{{ i18n "anchor" }}">#</a></td><td data-label="{{ i18n "featureWhat" }}">{{ $t.text }}
+{{- $uses := slice }}{{ range .uses }}{{ with site.GetPage . }}{{ $uses = $uses | append . }}{{ end }}{{ end }}
+{{- with $uses }}<span class="uses">→ {{ range $i, $u := . }}{{ if $i }} · {{ end }}<a href="{{ $u.RelPermalink }}">{{ $u.LinkTitle }}</a>{{ end }}</span>{{ end }}</td></tr>
 {{- end }}
 </tbody></table>
 <p class="features-run">{{ i18n "featuresRun" }}{{ range $i, $n := $notes }} {{ strings.Repeat (add $i 1) "*" }}&#8239;{{ $n }}{{ end }}</p>

@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -246,7 +248,7 @@ func TestCollidingRelayRegionsKeepOneDeterministically(t *testing.T) {
 		{Identity: lo, Roles: []types.Role{types.RoleRelayCapable}},
 		{Identity: hi, Roles: []types.Role{types.RoleRelayCapable}},
 	}
-	got := f.d.relaySet(network, nodes, held)
+	got := f.d.relaySet(network, nodes, held, nameClaim{})
 	if len(got) != 1 {
 		t.Fatalf("two relays colliding on one region produced %d entries, want 1", len(got))
 	}
@@ -762,9 +764,9 @@ func TestTheRelayFloorIsReported(t *testing.T) {
 	}
 }
 
-// An invite waits at the relays of other members the log makes
-// relay-capable and whose announcement says where, with the certificate each
-// announced; not at a member's that only announces, nor at its own.
+// An invite waits at the relays of members the log makes relay-capable and
+// whose announcement says where, with the certificate each announced; not at
+// a member's that only announces.
 func TestAnInviteWaitsAtTheMembersRelays(t *testing.T) {
 	f := newReconcileFixture(t, 3)
 	relayDev, plain := f.nw.devices[1], f.nw.devices[2]
@@ -843,5 +845,84 @@ func TestAHintAloneAddsNoRelayAndTakesNoName(t *testing.T) {
 	invite := f.d.inviteRelays(f.auth.State())
 	if len(invite) != 1 || invite[0].Name != named.Name {
 		t.Fatalf("an invite would wait at %+v, want the member's relay under its name", invite)
+	}
+}
+
+// The ingress takes the name its role gives it where it announces none its
+// server proves, once the server at that name says it is the ingress; another
+// relay never takes it, and a proven name of its own comes first unless this
+// device reaches no relay, as once that name is gone.
+func TestTheIngressTakesItsRolesNameWhereItsOwnIsNotProven(t *testing.T) {
+	f := newReconcileFixture(t, 3)
+	network := types.Hash{1}
+	ingress, other := f.nw.devices[1].record.Identity, f.nw.devices[2].record.Identity
+	f.d.askWhoami = func(_ context.Context, name string) ([32]byte, error) {
+		switch name {
+		case "relay.pub.example.org", "own.example.org":
+			return ingress, nil
+		}
+		return [32]byte{}, errors.New("not served")
+	}
+	relayNamed := func(name string) *gossip.RelayInfo { r := testRelayInfo(); r.Name = name; return r }
+	nodes := []types.NodeRecord{
+		{Identity: ingress, Roles: []types.Role{types.RoleRelayCapable, types.RoleIngress}},
+		{Identity: other, Roles: []types.Role{types.RoleRelayCapable}},
+	}
+	names := func(held map[types.Identity]gossip.Endpoint) map[types.Identity]string {
+		claim := nameClaim{"relay.pub.example.org", ingress}
+		f.d.relaySet(network, nodes, held, claim)
+		f.d.proveDue(t.Context())
+		out := map[types.Identity]string{}
+		for _, r := range f.d.relaySet(network, nodes, held, claim) {
+			for id := range held {
+				if r.Region == relayRegion(network, id) {
+					out[id] = r.Name
+				}
+			}
+		}
+		return out
+	}
+	addr := []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41641")}
+	got := names(map[types.Identity]gossip.Endpoint{
+		ingress: {Identity: ingress, Addrs: addr, Relay: relayNamed("gone.example.org")},
+		other:   {Identity: other, Addrs: addr, Relay: relayNamed("")},
+	})
+	if got[ingress] != "relay.pub.example.org" || got[other] != "" {
+		t.Errorf("names %v; want the ingress at relay.pub.example.org, the other at none", got)
+	}
+	got = names(map[types.Identity]gossip.Endpoint{
+		ingress: {Identity: ingress, Addrs: addr, Relay: relayNamed("own.example.org")},
+	})
+	if got[ingress] != "own.example.org" {
+		t.Errorf("the ingress at %q, want its own proven name", got[ingress])
+	}
+	f.mgr.mu.Lock()
+	f.mgr.noRelay = true
+	f.mgr.mu.Unlock()
+	got = names(map[types.Identity]gossip.Endpoint{
+		ingress: {Identity: ingress, Addrs: addr, Relay: relayNamed("own.example.org")},
+	})
+	if got[ingress] != "relay.pub.example.org" {
+		t.Errorf("reaching no relay, the ingress at %q, want its role's name first", got[ingress])
+	}
+	// Reaching it there, it keeps that name while the ingress announces the
+	// one it was taken over, and leaves it once the ingress announces another.
+	f.mgr.mu.Lock()
+	f.mgr.noRelay = false
+	f.mgr.mu.Unlock()
+	got = names(map[types.Identity]gossip.Endpoint{
+		ingress: {Identity: ingress, Addrs: addr, Relay: relayNamed("own.example.org")},
+	})
+	if got[ingress] != "relay.pub.example.org" {
+		t.Errorf("reaching a relay again, the ingress at %q, want its role's name kept", got[ingress])
+	}
+	names(map[types.Identity]gossip.Endpoint{
+		ingress: {Identity: ingress, Addrs: addr, Relay: relayNamed("relay.pub.example.org")},
+	})
+	got = names(map[types.Identity]gossip.Endpoint{
+		ingress: {Identity: ingress, Addrs: addr, Relay: relayNamed("own.example.org")},
+	})
+	if got[ingress] != "own.example.org" {
+		t.Errorf("once it announced another name, the ingress at %q, want the name it announces", got[ingress])
 	}
 }

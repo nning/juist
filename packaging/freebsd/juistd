@@ -9,8 +9,9 @@
 # juistd_args (str):      more options for juistd, for each of them.
 #
 # juistd starts as root, keeps a helper as root that plumbs its devices, and
-# runs the daemon as the juist user. "service juistd start juist1" starts
-# one instance. "service juistd clear", with none running, removes what one
+# runs the daemon as the juist user, or another network's instance as its
+# own user, juist1 to juist9. "service juistd start juist1" starts one
+# instance. "service juistd clear", with none running, removes what one
 # that did not stop cleanly, or left refusing the internet, holds of the host.
 
 . /etc/rc.subr
@@ -34,8 +35,10 @@ case $inst in
 "")
 	pidfile=/var/run/juistd.pid
 	logfile=/var/log/juistd.log
+	user=juist
 	home=/var/db/juist
-	args="--home $home --socket /var/run/juist/juistd.sock --tun juist0"
+	rundir=/var/run/juist
+	args="--home $home --socket $rundir/juistd.sock --tun juist0"
 	;;
 juist[1-9])
 	name=juistd_$inst
@@ -43,8 +46,10 @@ juist[1-9])
 	juistd_enable=YES
 	pidfile=/var/run/juistd.$inst.pid
 	logfile=/var/log/juistd.$inst.log
-	home=/var/db/juist/$inst
-	args="--instance $inst --home $home --socket /var/run/juist/$inst.sock"
+	user=$inst
+	home=/var/db/$inst
+	rundir=/var/run/$inst
+	args="--instance $inst --home $home --socket $rundir/juistd.sock"
 	;;
 *)
 	echo "juistd: no instance $inst: juist1 to juist9" >&2
@@ -60,13 +65,33 @@ command_args="-f -r -H -P $pidfile -o $logfile $juistd_bin $args $juistd_args"
 
 juistd_precmd()
 {
-	install -d -o juist -g juist -m 0700 /var/db/juist
-	# An instance's home is in the juist user's directory, where that user
-	# could plant a link: it is made as that user, never followed as root.
-	if [ "$home" != /var/db/juist ]; then
-		su -m juist -c "mkdir -p -m 0700 $home" || return 1
+	if ! pw usershow "$user" >/dev/null 2>&1; then
+		echo "juistd: there is no $user user, which the package makes" >&2
+		return 1
 	fi
-	install -d -o juist -g juist -m 0755 /var/run/juist
+	# An instance kept its home in the juist user's directory before it had
+	# a user of its own: it moves once. That user could have planted links
+	# there: a symbolic one is neither moved nor followed as root, and a
+	# hard one to another's file, which FreeBSD lets anyone make, keeps its
+	# owner, as only what was juist's is given on, once juist is shut out.
+	old=/var/db/juist/$inst
+	if [ -n "$inst" ] && [ -d "$old" ] && [ ! -L "$old" ] && [ ! -e "$home" ] && [ ! -L "$home" ]; then
+		mv "$old" "$home" || return 1
+		if [ -L "$home" ] || [ ! -d "$home" ]; then
+			# Swapped by juist since it was looked at, for a link, or a
+			# hard link to another's file: where it is now, only root
+			# changes it, and root's chown and chmod would follow it.
+			rm -f "$home"
+		else
+			chown root:wheel "$home"
+			chmod 0700 "$home"
+			find "$home" -mindepth 1 -user juist -exec chown -h "$user:$user" {} +
+			chown "$user:$user" "$home"
+			echo "juistd: $inst's home is $home now"
+		fi
+	fi
+	install -d -o "$user" -g "$user" -m 0700 "$home"
+	install -d -o "$user" -g "$user" -m 0755 "$rundir"
 	kldload -n if_tuntap
 }
 
@@ -91,8 +116,13 @@ juistd_clear()
 			;;
 		esac
 	done
+	# -F all fails at an anchor's tables on FreeBSD 15.1; they go one by one.
 	for a in $(pfctl -a juist -s Anchors 2>/dev/null); do
-		pfctl -a "$a" -F all >/dev/null 2>&1
+		pfctl -a "$a" -F rules >/dev/null 2>&1
+		pfctl -a "$a" -F nat >/dev/null 2>&1
+		for t in $(pfctl -a "$a" -s Tables 2>/dev/null); do
+			pfctl -a "$a" -t "$t" -T kill >/dev/null 2>&1
+		done
 	done
 	state=/var/run/juistd.host
 	if [ -f $state ]; then

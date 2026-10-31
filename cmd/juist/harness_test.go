@@ -53,6 +53,9 @@ type cli struct {
 
 	// editor, where set, edits a file in place of the operator's editor.
 	editor func(path string) error
+
+	// genesisSchema, where set, is the schema a network it creates starts at.
+	genesisSchema types.SchemaVersion
 }
 
 // noHost is a host with no juistd, and none installed.
@@ -127,6 +130,7 @@ func (c *cli) app(out *syncBuffer, in string) *app {
 		a.admissionHold = c.admissionHold
 	}
 	a.editor = c.editor
+	a.genesisSchema = c.genesisSchema
 	if c.terminal {
 		a.terminal, a.color, a.width = true, true, 80
 	}
@@ -457,6 +461,7 @@ func (stubManager) SetSelf(conn.Self) error { return nil }
 func (stubManager) SetEgress(conn.Egress, bool) error { return nil }
 
 func (stubManager) AnswersThrough() string { return "" }
+func (stubManager) Unguarded() string      { return "" }
 
 func (stubManager) SetServe(conn.Serve) error { return nil }
 
@@ -467,6 +472,8 @@ func (stubManager) HomeRelay() int { return 0 }
 func (stubManager) ReachesRelay(int) bool { return false }
 
 func (stubManager) Walled() bool { return false }
+
+func (stubManager) ReachesNoRelay() bool { return false }
 
 func (stubManager) NotAtHome() map[uint64]time.Time { return nil }
 
@@ -547,6 +554,8 @@ func (m *peersManager) HostRoutes() []netip.Prefix {
 	defer m.mu.Unlock()
 	return slices.Clone(m.host)
 }
+
+func (m *peersManager) Unguarded() string { return "" }
 
 func (m *peersManager) AnswersThrough() string {
 	m.mu.Lock()

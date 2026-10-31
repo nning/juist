@@ -11,24 +11,21 @@ On hotel, company or school networks, often only TCP to port 443 gets out.
 WireGuard, path discovery and the relay's usual port 41645 are blocked.
 
 The way out is a [relay]({{< relref "docs/relays" >}}) that serves a public
-name on port 443. Every device learns that name, and a device that cannot
-reach the relay's usual port switches to the name by itself. Nothing needs to
-be set up on the device for this.
+name on port 443. Every device learns that name. A device that cannot reach
+the relay's usual port switches to the name by itself; nothing needs setting
+up on the device.
 
-One relay on 443 is enough. A device that reaches only some relays sends
-everything through its own one, and the other devices keep a connection to
-that relay while it is there, so it reaches devices that use a relay without
-a name too. Phones that save battery keep no such connection: the device
-reaches them once they next send something, as they do when they sync. If
-the network has an [ingress]({{< relref "docs/publishing" >}}) that is also
-a relay, its relay serves `relay.` plus the network's domain on 443 by
-itself.
+One relay on 443 is enough: devices that use other relays keep a connection
+to it, so it reaches them too. Phones that save battery keep none and are
+reached the next time they send. If the network's
+[ingress]({{< relref "docs/publishing" >}}) is also a relay, it serves
+`relay.DOMAIN` on 443 by itself.
 
-A network that inspects traffic, and blocks or reports anything that is not
-HTTPS, needs more. With `juist set --https-only`, a device sends only TLS to
-the relays' names on port 443, plus DNS queries for those names. It sends no
-WireGuard over UDP, does no path discovery and no LAN search, and uses neither
-the public DHT nor STUN servers. Every packet then goes through a relay.
+A network that inspects traffic and blocks or reports anything but HTTPS
+needs more. With `juist set --https-only`, a device sends only TLS to the
+relays' names on port 443, and DNS queries for those names. It sends no
+WireGuard over UDP, does no path discovery or LAN search, and uses neither the
+public DHT nor STUN servers. Every packet goes through a relay.
 
 ## Setting it up
 
@@ -56,10 +53,10 @@ through:
 ```
 {{< /step >}}
 
-To join a network from such a place, set this before `juist join`, and use the
-invite link, not the code. The link names the relays on 443, for example
-`r=relay.example.org`. A typed code is looked up on the LAN, which a device in
-HTTPS-only mode does not search.
+To join a network from such a place, set this before `juist join`, and use
+the invite link, not the code. The link names the relays on 443, for example
+`r=relay.example.org`; a code needs the LAN, which HTTPS-only mode does not
+search.
 
 ```sh
 sudo juist set --https-only
@@ -79,10 +76,9 @@ sudo juist set --https-only --proxy -
 ```
 
 juist then asks for the URL, such as
-`http://user:password@proxy.example.com:3128`, and does not show it as you
-type. On the command line, every user of the device could read the password.
-For a proxy without a password, `--proxy http://proxy.example.com:3128` is
-enough.
+`http://user:password@proxy.example.com:3128`, without showing it, so that
+other users of the device cannot read the password. For a proxy without a
+password, `--proxy http://proxy.example.com:3128` is enough.
 
 juist asks the proxy only for `CONNECT relay.example.org:443`, and the proxy
 resolves the name itself, so the device does not need DNS of its own. Without
@@ -90,7 +86,7 @@ resolves the name itself, so the device does not need DNS of its own. Without
 `--proxy ""` goes back to that. `juist status` shows the proxy without its
 password.
 
-## Notes
+## Good to know
 
 - Every packet goes through a relay, so the relay limits the speed. The
   tunnel's TCP connections then run inside TCP, which recovers slowly from

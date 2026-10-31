@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -31,7 +32,7 @@ func untar(t *testing.T, b []byte) (map[string][]byte, map[string]*tar.Header) {
 
 // The image is what docker load takes: a manifest naming the config and the
 // layer by their sums, the binaries in it to run with their licenses, its
-// home the user's; and built twice, the same bytes.
+// home the user's and juist's; and built twice, the same bytes.
 func TestTheImageLoads(t *testing.T) {
 	dir := t.TempDir()
 	for _, f := range []string{"juistd", "juist", "certs", "license", "third"} {
@@ -75,7 +76,7 @@ func TestTheImageLoads(t *testing.T) {
 		t.Errorf("the layer %v is not the config's %v", m.Layers, config.RootFS.DiffIDs)
 	}
 	if m.RepoTags[0] != "juist:1.0" || config.Architecture != "amd64" || config.Config.User != "65532:65532" ||
-		config.Config.Entrypoint[0] != "/usr/local/bin/juistd" {
+		config.Config.Entrypoint[0] != "/usr/local/bin/juistd" || !slices.Contains(config.Config.Env, "JUIST_HOME=/var/lib/juist") {
 		t.Errorf("the image is %+v, %+v", m, config)
 	}
 	inside, headers := untar(t, layer)

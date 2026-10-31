@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
+	"golang.org/x/net/ipv4"
 	"tailscale.com/net/stun"
 	"tailscale.com/types/ipproto"
 
@@ -107,6 +108,7 @@ func TestHelperNetnsNode(t *testing.T) {
 		Tun:        dev,
 		TunName:    tunName,
 		Instance:   inst,
+		Multicast:  os.Getenv(envMulticast) != "",
 		Debug:      os.Getenv(envDebug) != "",
 		// Engine logs go to stderr as they happen. The test framework's own
 		// log buffers until the test ends, which is far too late to explain a
@@ -209,6 +211,7 @@ func TestHelperNetnsNode(t *testing.T) {
 		say("%s", relayLine)
 	}
 	streams := map[string]*heldStream{}
+	var heard *groupListener
 	var psk [32]byte
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
@@ -243,6 +246,13 @@ func TestHelperNetnsNode(t *testing.T) {
 			}
 			if err := mgr.SetPeers(peers); err != nil {
 				t.Fatalf("SetPeers after HINT: %v", err)
+			}
+			say("OK")
+			continue
+		}
+		if size, ok := strings.CutPrefix(cmd, "SEND "); ok {
+			if err := sendGroup(os.Getenv(envTun), mustAtoi(t, size)); err != nil {
+				t.Fatalf("SEND: %v", err)
 			}
 			say("OK")
 			continue
@@ -359,6 +369,14 @@ func TestHelperNetnsNode(t *testing.T) {
 				t.Fatalf("SetPeers(none): %v", err)
 			}
 			say("OK")
+		case "JOIN":
+			if heard, err = joinGroup(os.Getenv(envTun)); err != nil {
+				t.Fatalf("JOIN: %v", err)
+			}
+			defer heard.close()
+			say("OK")
+		case "HEARD":
+			say("HEARD %s", heard.heard())
 		case "HOSTROUTES":
 			// How often the host's own routes were seen to change.
 			say("HOSTROUTES %d", hostRouteChanges.Load())
@@ -754,4 +772,78 @@ func (h *heldStream) stat() string {
 		why = strings.ReplaceAll(h.err.Error(), " ", "_")
 	}
 	return fmt.Sprintf("%d %d %s", h.echoed, gap.Milliseconds(), why)
+}
+
+// testGroup is where the lab's group datagrams go: mDNS's group, on a port
+// of its own.
+var testGroup = netip.MustParseAddrPort("224.0.0.251:45353")
+
+// A groupListener records the group datagrams a device delivers, each as
+// source/size.
+type groupListener struct {
+	c    *net.UDPConn
+	mu   sync.Mutex
+	seen []string
+}
+
+func joinGroup(dev string) (*groupListener, error) {
+	ifi, err := net.InterfaceByName(dev)
+	if err != nil {
+		return nil, err
+	}
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{Port: int(testGroup.Port())})
+	if err != nil {
+		return nil, err
+	}
+	if err := ipv4.NewPacketConn(c).JoinGroup(ifi, &net.UDPAddr{IP: testGroup.Addr().AsSlice()}); err != nil {
+		c.Close()
+		return nil, err
+	}
+	l := &groupListener{c: c}
+	go func() {
+		b := make([]byte, 1<<16)
+		for {
+			n, from, err := c.ReadFromUDPAddrPort(b)
+			if err != nil {
+				return
+			}
+			l.mu.Lock()
+			l.seen = append(l.seen, fmt.Sprintf("%v/%d", from.Addr().Unmap(), n))
+			l.mu.Unlock()
+		}
+	}()
+	return l, nil
+}
+
+func (l *groupListener) heard() string {
+	if l == nil {
+		return ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.seen, ",")
+}
+
+func (l *groupListener) close() { l.c.Close() }
+
+// sendGroup sends size bytes to testGroup on dev, as mDNS does: TTL 255.
+func sendGroup(dev string, size int) error {
+	ifi, err := net.InterfaceByName(dev)
+	if err != nil {
+		return err
+	}
+	c, err := net.ListenUDP("udp4", nil)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	p := ipv4.NewPacketConn(c)
+	if err := p.SetMulticastInterface(ifi); err != nil {
+		return err
+	}
+	if err := p.SetMulticastTTL(255); err != nil {
+		return err
+	}
+	_, err = c.WriteToUDPAddrPort(make([]byte, size), testGroup)
+	return err
 }

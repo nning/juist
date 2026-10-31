@@ -12,6 +12,7 @@
 //	probe hello ADDR:PORT SNI [CA]    as get, over TLS, asking for SNI, taking a certificate CA's file issued, or any
 //	probe h3get ADDR:PORT NAME CA     fetch https://NAME/ from ADDR:PORT over HTTP/3, and print the protocol and status
 //	probe answer ADDR IP [NAME=IP]    answer DNS on ADDR, over UDP and TCP, with IP for every name, "-" for none, but NAMEs
+//	probe stun ADDR                   answer STUN binding requests on ADDR with the address each came from
 //	probe pairs FILE                  print the newest generation of a pair key in use in juistd's pairs file
 //	probe pcap FILE                   print each TCP flow to 443 in a capture with its SNI, or empty, each DNS query, and any other packet
 //	probe proxy ADDR USER:PASS LOG NAME=IP...  serve HTTP CONNECT on ADDR to the NAMEs' port 443 alone, logging each request
@@ -43,6 +44,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/dns/dnsmessage"
+	"tailscale.com/net/stun"
 
 	"github.com/nning/juist/internal/proxyproto"
 )
@@ -60,7 +62,7 @@ func main() {
 		!(len(os.Args) > 5 && os.Args[1] == "proxy") && !(len(os.Args) == 6 && os.Args[1] == "pqget") {
 		fmt.Fprintln(os.Stderr, "usage: probe serve NAME [PORT] | proxied NAME PORT | web PORT | get ADDR:PORT [FROM] | hold ADDR:PORT FROM SECS | "+
 			"dns ADDR | resolve ADDR LOG | tls NAME PORT | hello ADDR:PORT SNI [CA] | h3get ADDR:PORT NAME CA | pqget ADDR:PORT NAME CA PATH | "+
-			"answer ADDR IP [NAME=IP...] | pairs FILE | pcap FILE")
+			"answer ADDR IP [NAME=IP...] | stun ADDR | pairs FILE | pcap FILE")
 		os.Exit(2)
 	}
 	var err error
@@ -89,6 +91,8 @@ func main() {
 		err = pqget(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
 	case "answer":
 		err = answerAll(os.Args[2], os.Args[3], os.Args[4:])
+	case "stun":
+		err = serveSTUN(os.Args[2])
 	case "pcap":
 		err = pcapFlows(os.Args[2])
 	case "pairs":
@@ -520,5 +524,25 @@ func resolve(addr, logPath string) error {
 		if msg, err := b.Finish(); err == nil {
 			c.WriteTo(msg, src)
 		}
+	}
+}
+
+// serveSTUN answers every STUN binding request on addr with its source.
+func serveSTUN(addr string) error {
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 1500)
+	for {
+		n, from, err := pc.ReadFrom(buf)
+		if err != nil {
+			return err
+		}
+		tx, err := stun.ParseBindingRequest(buf[:n])
+		if err != nil {
+			continue
+		}
+		pc.WriteTo(stun.Response(tx, from.(*net.UDPAddr).AddrPort()), from)
 	}
 }

@@ -1,14 +1,18 @@
-# The juist user, a system one below 1000 for juistd's daemon, and
-# juist-ingress and juist-serve for the ingress and the terminator; one that
-# exists is kept. 829 down is free in the ports tree's UIDs and GIDs.
+# The juist user, a system one below 1000 for juistd's daemon, juist1 to
+# juist9 for the other networks' instances, each its own so that one
+# network's daemon reads none of another's keys, and juist-ingress and
+# juist-serve for the ingress and the terminator; one that exists is kept.
+# 829 down is free in the ports tree's UIDs and GIDs.
 id=829
-for u in juist juist-ingress juist-serve; do
+for u in juist juist-ingress juist-serve juist1 juist2 juist3 juist4 juist5 juist6 juist7 juist8 juist9; do
 	while pw usershow -u $id >/dev/null 2>&1 || pw groupshow -g $id >/dev/null 2>&1; do
 		id=$((id - 1))
 	done
 	pw groupshow $u >/dev/null 2>&1 || pw groupadd $u -g $id
 	home=/nonexistent
-	[ $u = juist ] && home=/var/db/juist
+	case $u in
+	juist | juist[1-9]) home=/var/db/$u ;;
+	esac
 	[ $u = juist-serve ] && home=/var/db/juist-serve
 	pw usershow $u >/dev/null 2>&1 ||
 		pw useradd $u -u $id -g $u -d $home -s /usr/sbin/nologin -c "juist $u"

@@ -34,8 +34,8 @@ func networkFamily() family {
 		{name: "disable", run: networkDisable, forms: [][2]string{
 			{"disable [NETWORK]", "end the network for good with the\nbreak-glass secret: every device stops"},
 		}},
-	}, footer: `NETWORK names one of this device's networks, or its juistd (juist1); it may
-be left out where the device is in one. Old IPv4 addresses keep working
+	}, footer: `NETWORK names one of this device's networks, or its juistd (juist1). It can
+be left out if the device is in only one. Old IPv4 addresses keep working
 until the deadline. IPv6 addresses never move.`}
 }
 
@@ -148,9 +148,9 @@ Rename the network on every device. Nothing else changes.`}
 
 func networkDomain(a *app, args []string) error {
 	s := spec{name: "juist network domain", args: "DOMAIN|off", min: 1, max: 1, about: `
-Set the public domain devices publish names under, such as pub.example.org,
-whose DNS points *.DOMAIN at the ingresses; off withdraws it. Every member
-then resolves DOMAIN through juistd, with DNSSEC off for it.`}
+Set the public domain that names are published under, such as
+pub.example.org; its DNS points *.DOMAIN at the ingresses. off withdraws it.
+Every member then resolves DOMAIN through juistd, with DNSSEC off for it.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -224,16 +224,16 @@ func networkRenumber(a *app, args []string) error {
 Move IPv4 addresses.
 
   juist network renumber [NETWORK] PREFIX        every device into PREFIX,
-                                                 at its offset where free
+                                                 at the same offset if free
   juist network renumber [NETWORK] DEVICE ADDR   one device to ADDR; with
                                                  --finish, retiring its old
                                                  one now
   juist network renumber [NETWORK] --finish      retire the old addresses now
 
-Old addresses keep working until --for from now; make it long enough for
-every device to come online once. Retired ones are held, for no other
-device to take, until a plain --finish. Configuration outside juist that
-names old addresses is not moved.`}
+Old addresses keep working until --for from now; make that long enough for
+every device to come online once. Retired addresses stay reserved until a
+plain --finish, so that no other device takes them. Configuration outside
+juist that names old addresses is not changed.`}
 	fs := newFlags(s.name)
 	keep := longDuration(7 * 24 * time.Hour)
 	fs.Var(&keep, "for", "keep old addresses for `DURATION`, like 12h or 7d")

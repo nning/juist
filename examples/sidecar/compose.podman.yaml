@@ -1,0 +1,5 @@
+# Podman gives the image's own user the capability, so juistd need not run as
+# root. Used where .env sets COMPOSE_FILE=compose.yaml:compose.podman.yaml.
+services:
+  juist:
+    user: !reset null

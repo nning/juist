@@ -133,7 +133,7 @@ Einzelheiten stehen unter
 Hinter NAT musst du keine Firewall-Ports öffnen. Ein Gerät mit öffentlicher
 Adresse, etwa ein VPS, braucht den offenen Port 41643/udp.
 
-## Hinweise
+## Gut zu wissen
 
 - `juist create home` nennt das Netz `home`. Das Gerät bekommt den
   Rechnernamen, es sei denn, du gibst `--device` an.
@@ -148,13 +148,12 @@ Adresse, etwa ein VPS, braucht den offenen Port 41643/udp.
   von den Admin-Schlüsseln: Mit ihr beendest du das Netz, wenn nicht mehr
   genug Admin-Schlüssel übrig sind, um es zu ändern
   ([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
-- Das Netz hat noch keinen **Voucher**. Ein Voucher ist ein Gerät, das
-  stündlich bestätigt, dass der Stand des Netzes aktuell ist. Das begrenzt,
-  wie lange ein von den anderen abgeschnittenes Gerät noch mit einem
-  entfernten sprechen kann. Gib die
-  Rolle nur Geräten, die ständig laufen (`juist grant GERÄT voucher`);
-  `juist create --voucher` macht schon das erste Gerät dazu. Mehr dazu unter
-  [Frische]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
+- Das Netz hat noch keinen
+  [Voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers), also
+  begrenzt nichts, wie lange ein abgeschnittenes Gerät noch mit einem
+  entfernten sprechen kann. Gib die Rolle nur Geräten, die ständig laufen
+  (`juist grant GERÄT voucher`); `juist create --voucher` macht schon das
+  erste Gerät dazu.
 
 ## Fehlersuche
 

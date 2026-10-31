@@ -7,9 +7,14 @@ lead: Vier Befehle zeigen dir, wie es um dein Netz steht. juist status zeigt die
 
 Diese Befehle fragen den Daemon `juistd`, wie es steht, und lesen die Kopie
 des [Mitgliederlogs]({{< relref "docs/how-it-works" >}}#the-membership-log)
-auf dem Gerät. Scheint etwas nicht zu stimmen, fang mit `juist health` an.
-Der Befehl nennt jedes Problem und gibt bei den meisten in einer Zeile
-`hint:` den Befehl aus, der es behebt.
+auf dem Gerät. Scheint etwas nicht zu stimmen, fang mit `juist health` an. Der Befehl
+nennt jedes Problem, meist mit einer Zeile `hint:`, die es behebt.
+
+`juist status` und `juist health` darf jeder lokale Benutzer ausführen, alle
+anderen Befehle nur root und der [Operator]({{< relref "docs/operator" >}})
+des Geräts. Auf einem Gerät in [mehreren Netzen]({{< relref "docs/networks" >}})
+zeigen die Befehle jedes Netz nacheinander; `juist devices work` zeigt nur
+eines.
 
 ## Ein Gerät prüfen
 
@@ -68,25 +73,19 @@ In der ersten Zeile steht einer dieser Zustände:
 ## Was die Zeilen bedeuten
 
 - `This device`: Name und Adressen dieses Geräts im Netz, erst IPv4, dann IPv6.
-- `Devices`: wie viele andere Geräte es gibt und zu wie vielen davon bei der
+- `Devices`: wie viele andere Geräte es gibt und zu wie vielen bei der
   letzten Prüfung kein Tunnel Verkehr trug; `juist devices` sagt, warum.
-  juistd prüft alle 30 Sekunden. Haben beide Enden ein Relay, prüft es einen
-  ruhigen Tunnel nur alle 5 Minuten, damit das Funkmodul eines Laptops
-  schlafen kann.
-- `Relays`: wie viele Geräte Verkehr weiterleiten dürfen und welches davon dieses Gerät nutzt. Ein [Relay]({{< relref "docs/relays" >}}) leitet Verkehr zwischen zwei Geräten weiter, die sich nicht direkt erreichen.
+- `Relays`: wie viele Geräte [weiterleiten]({{< relref "docs/relays" >}})
+  dürfen und welches davon dieses Gerät nutzt.
 - `HTTPS`: auf einem Gerät, das nur HTTPS sendet, die Relays auf Port 443, über die es läuft, und sein Proxy. Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}).
 - `Relay name`: der öffentliche Name, den das Relay dieses Geräts auf Port 443 bedient. root und der Operator sehen außerdem, ob es ihn schon bedient.
 - `Exit node`: über welches Gerät der Internetverkehr dieses Geräts läuft, falls überhaupt. Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: die eigenen Namen dieses Geräts, etwa `laptop.home.juist`; `juist names` listet die des Netzes, und warum sie nicht aufgelöst werden, sagt `juist health`. Siehe [Namen]({{< relref "docs/names" >}}).
-- `Freshness`: wann ein Voucher zuletzt bestätigt hat, dass dieses Gerät den
-  aktuellen Stand des Netzes kennt, und wie lange diese Bestätigung gilt. Ein
-  Voucher ist ein Gerät, das diese Bestätigung im Auftrag des Netzes stündlich
-  ausstellt. Nach 48 Stunden ohne Bestätigung steht dort
-  `expired; vouchers only`, oder `expired (1 of 2 vouchers); vouchers only`,
-  wo mehrere verlangt sind. Einen Tag vorher warnt `juist health`. Ist kein
-  Gerät Voucher, steht dort `unchecked: no voucher`, und dürfen mindestens
-  zwei Geräte Verkehr weiterleiten, schlägt `juist health` sie als Voucher vor.
-  Siehe [Geräte entfernen]({{< relref "docs/remove" >}}).
+- `Freshness`: wann ein [Voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
+  den Stand dieses Geräts zuletzt bestätigt hat und wie lange das gilt. Nach
+  48 Stunden ohne Bestätigung steht dort `expired; vouchers only`, und
+  `juist health` warnt einen Tag vorher. Ohne Voucher steht dort
+  `unchecked: no voucher`.
 - `Published`: die veröffentlichten Namen, die dieses Gerät bedient, oder
   warum es sie nicht bedient. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}).
 - `Ingress`: auf einem Ingress, ob er läuft, welche Namen er bedient,
@@ -151,9 +150,6 @@ phone                 198.18.36.4  relayed  20      -
 - `names`, wenn öffentliche Namen auf das Gerät zeigen ([`juist names`]({{< relref "docs/names" >}}) listet sie auf);
 - `publishes`, wenn es Namen veröffentlicht ([`juist publish`]({{< relref "docs/publishing" >}}) listet sie auf);
 - `-`, wenn nichts davon zutrifft.
-
-In einem schmalen Terminal brechen die Rollen innerhalb ihrer Spalte um. In
-einem noch schmaleren, etwa auf dem Handy, belegt jedes Gerät mehrere Zeilen.
 
 `REACHED` gibt an, wie juistd das Gerät bei der letzten Prüfung erreicht hat:
 
@@ -240,16 +236,6 @@ Hier steht, was juistd selbst meldet; unter FreeBSD steht es in
 `/var/log/juistd.log`. Ein zweites Netz auf demselben Gerät hat einen eigenen
 Daemon, `juistd@juist1`, mit eigenem Log, unter FreeBSD
 `/var/log/juistd.juist1.log`.
-
-## Hinweise
-
-- Jeder lokale Benutzer darf `juist status` und `juist health` ausführen. Wer
-  weder root noch [Operator]({{< relref "docs/operator" >}}) des Geräts ist,
-  sieht in `juist health` einen Hinweis `read-only`.
-- `juist devices`, `juist log` und alle anderen Befehle sind root und dem Operator vorbehalten.
-- Ist ein Gerät in [mehreren Netzen]({{< relref "docs/networks" >}}), zeigen
-  `juist status`, `juist health` und `juist devices` alle Netze nacheinander.
-  `juist devices work` zeigt nur eines.
 
 ## Fehlersuche
 

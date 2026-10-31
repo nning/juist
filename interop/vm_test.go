@@ -36,8 +36,8 @@ type image struct {
 
 var (
 	freebsdImage = image{
-		url:  "https://download.freebsd.org/releases/CI-IMAGES/14.5-RELEASE/amd64/Latest/FreeBSD-14.5-RELEASE-amd64-BASIC-CI-ufs.raw.xz",
-		sum:  "d3797afea543f53faac72f0b35fdc5c00f7e898cc8058b828eca251885239917",
+		url:  "https://download.freebsd.org/releases/CI-IMAGES/15.1-RELEASE/amd64/Latest/FreeBSD-15.1-RELEASE-amd64-BASIC-CI-ufs.raw.xz",
+		sum:  "908e735f18ba192eaf48c2703b549225c9b96e74e3784bd9278c7120b4139962",
 		hash: sha256.New,
 		setup: `set -e
 cp /etc/resolv.conf /tmp/resolv.conf; [ -z "$DNS" ] || echo "nameserver $DNS" > /etc/resolv.conf

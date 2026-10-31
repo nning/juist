@@ -173,7 +173,9 @@ func TestPublishAddEndsTLS(t *testing.T) {
 	mustContain(t, h.mustRun("status"), "this device serves docs.pub.example.org, immich.pub.example.org")
 
 	mustContain(t, h.mustRun("publish", "serve", "--stop"), "stopped serving")
-	mustContain(t, h.mustRun("status"), "not agreed to on this device")
+	mustContain(t, h.mustRun("status"), "docs.pub.example.org, immich.pub.example.org (not served)")
+	mustContain(t, h.mustRun("health"), "warning: not serving docs.pub.example.org, immich.pub.example.org: not agreed to on this device",
+		"hint: juist publish serve")
 	mustContain(t, h.mustRun("publish", "serve"), "ending TLS for docs.pub.example.org to 127.0.0.1:8282",
 		"ending TLS for immich.pub.example.org to 127.0.0.1:2283", "immich.pub.example.org. CAA")
 	mustContain(t, h.mustRun("publish", "rm", "docs"), "laptop: publishes immich.pub.example.org:443",
@@ -235,7 +237,8 @@ func TestTheTerminatorStartsBeforeTheName(t *testing.T) {
 	mustContain(t, out, "docs.pub.example.org goes to 127.0.0.1:8181 once published on this device",
 		"hint: an admin publishes it: juist publish add vps docs")
 	mustContain(t, vps.mustRun("publish"), "docs.pub.example.org", "vps", "not published", "127.0.0.1:8181")
-	mustContain(t, vps.mustRun("status"), "not served here: the network publishes nothing on this device")
+	mustContain(t, vps.mustRun("status"), "none (ready to serve)")
+	mustContain(t, vps.mustRun("health"), "hint: an admin publishes a name on this device: juist publish add vps NAME")
 	laptop.mustRun("publish", "add", "vps", "docs")
 	eventually(t, "the status saying the terminator does not run", func() bool {
 		return strings.Contains(vps.mustRun("status"), "ends TLS for none: the terminator does not run")

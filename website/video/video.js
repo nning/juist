@@ -205,7 +205,7 @@ function caption(h, p, o) {
 async function load() {
   const cast = new Cast(await (await fetch("casts/demo.cast")).text());
   intro.build();
-  term.build(cast, ["laptop · Debian 12", "nas · FreeBSD 14"]);
+  term.build(cast, ["laptop · Debian 12", "nas · FreeBSD 15"]);
   $("#outro .mark").innerHTML = (await (await fetch("wordmark.svg")).text()).replace(/<!--.*?-->\s*/s, "");
   $("#outro .tag").textContent = "A mesh VPN with no coordination server";
   $("#outro .url").textContent = "github.com/nning/juist";

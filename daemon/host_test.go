@@ -453,12 +453,21 @@ func TestAnInstanceBesideAnEmptyHomeTakesIPv4(t *testing.T) {
 	}
 }
 
+func TestLowerSocketsBeside(t *testing.T) {
+	if got := lowerSocketBeside("/run/juist3/juistd.sock", 0); got != "/run/juist/juistd.sock" {
+		t.Errorf("the default's socket %q", got)
+	}
+	if got := lowerSocketBeside("/run/juist3/juistd.sock", 2); got != "/run/juist2/juistd.sock" {
+		t.Errorf("instance 2's socket %q", got)
+	}
+}
+
 func TestLowerHomesBeside(t *testing.T) {
 	if lowerHomesBeside("/var/lib/juist", 0) != nil || lowerHomesBeside("/tmp/dev", 2) != nil {
 		t.Fatal("homes derived outside the packaged layout")
 	}
-	f := lowerHomesBeside("/var/lib/juist/juist3/", 3)
-	if f(0) != "/var/lib/juist" || f(2) != "/var/lib/juist/juist2" {
+	f := lowerHomesBeside("/var/lib/juist3/", 3)
+	if f(0) != "/var/lib/juist" || f(2) != "/var/lib/juist2" {
 		t.Fatalf("lower homes %q, %q", f(0), f(2))
 	}
 }

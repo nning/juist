@@ -10,11 +10,11 @@ import (
 
 func cmdJoin(a *app, args []string) error {
 	s := spec{name: "juist join", args: "CODE", min: 1, max: 1, anyNetwork: true, about: `
-Join a network with the code or link "juist invite" printed, such as
+Join a network with the code or link that juist invite printed, such as
 42-drumbeat-tolerance-glucose. The device verifies the network's log itself.
-Under sudo on a device with no operator, the sudo user becomes its operator
-unless --operator names another. A device in a network already joins the
-next beside it, with a juistd of its own.`}
+Under sudo, on a device with no operator, the sudo user becomes its
+operator, unless --operator names another. If the device is already in a
+network, the new network gets its own juistd.`}
 	fs := newFlags(s.name)
 	name := fs.String("name", "", "`NAME` to join as (default: the hostname)")
 	var operator optionalString

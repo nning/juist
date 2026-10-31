@@ -46,10 +46,9 @@ WorkingDirectory=/var/lib/juist
 # The control socket lives apart from the state, so that reaching it is not
 # reading node.keys: any local user may connect and ask for status, and the
 # daemon decides everything else per call from the caller's kernel-reported
-# uid. 0755 so users can reach the socket; nothing else is kept there.
-# Preserved, because every instance's socket is in it: systemd would delete
-# the directory with whichever unit stopped first. juistd removes its own
-# socket when it stops.
+# uid. 0755 so users can reach the socket. Preserved across a restart: the
+# default's holds the resolv.conf the host points at and the ingress's
+# ports. juistd removes its own socket when it stops.
 RuntimeDirectory=juist
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes

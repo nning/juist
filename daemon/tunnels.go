@@ -538,7 +538,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 			Reach: reach, ReachChecked: now.Unix(), HomeRelay: home,
 			Seeking: v.seeking, Absent: v.absent, NotAtRelay: notAtRelay, SyncFailing: syncFailing, SyncNewer: syncNewer,
 			SyncBroken: syncBroken, Outdated: v.outdated, OlderBuild: v.olderBuild,
-			Firewalled: firewalled, FirewallUnsure: firewallUnsure,
+			Firewalled: firewalled, FirewallUnsure: firewallUnsure, Unguarded: d.manager.Unguarded(),
 			RelayedFor: relayedFor, RelayUnreached: unreached, RelayPort: relayPort,
 		}
 	}

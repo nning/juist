@@ -9,18 +9,15 @@ lead: Jedes Gerät hat eigene Schlüssel, und alle Geräte eines Netzes teilen e
 
 Jedes Gerät hat eigene Schlüssel. Seine WireGuard- und Sealing-Schlüssel
 schützen seine Tunnel und die Nachrichten, die an es versiegelt werden. Sein
-Identitätsschlüssel weist es im Mitgliederlog aus, der signierten Liste
-aller Änderungen, die jedes Gerät prüft
-([So funktioniert juist]({{< relref "docs/how-it-works" >}})).
+Identitätsschlüssel weist es im
+[Mitgliederlog]({{< relref "docs/how-it-works" >}}#the-membership-log) aus.
 
 Außerdem hat das Netz ein Gruppengeheimnis, das alle Mitglieder kennen und
-mit dem sie einander finden. Admin-Schlüssel sind noch einmal etwas anderes:
-Sie gehören Personen und dienen dazu, Änderungen zu bestätigen
-([Mehrere Admins]({{< relref "docs/admins" >}})).
+mit dem sie einander finden. Admin-Schlüssel gehören Personen und bestätigen
+Änderungen ([Mehrere Admins]({{< relref "docs/admins" >}})).
 
 Einen Schlüssel zu ersetzen heißt, ihn zu erneuern. Ein neuer Schlüssel ist
-eine Änderung am Log, die Admins bestätigen ihn also wie jede andere
-Änderung.
+eine Änderung am Log, also bestätigen die Admins ihn wie jede andere.
 
 ## Schlüssel erneuern
 
@@ -47,13 +44,15 @@ und die neuen Schlüssel bleiben vorgemerkt, bis das Log sie enthält. Mit
 Bestätigung wartet.
 
 Verbindungen laufen weiter, während das Gerät auf seine neuen Schlüssel
-wechselt: Der Tunnel zu jedem Gerät wartet kurz auf einen Handshake mit den
-neuen Schlüsseln. Ein Gerät, das ein Relay betreibt, startet seine Tunnel
-stattdessen neu. `juist rotate identity` ändert die IPv6-Adresse des Geräts
-und beendet damit alle Verbindungen über die alte. Dafür muss das Netz auf
-Schema 19 stehen: Darunter bricht er mit
+wechselt. Ein Gerät, das ein Relay betreibt, startet seine Tunnel stattdessen
+neu.
+
+`juist rotate identity` ändert die IPv6-Adresse des Geräts und beendet damit
+die Verbindungen über die alte. Dafür muss das Netz auf Schema 19 stehen;
+darunter bricht der Befehl mit
 `juist: the network predates rotating an identity key` ab, bis ein Admin
-`juist log upgrade` ausführt ([juist aktualisieren]({{< relref "docs/updating" >}})).
+`juist log upgrade` ausführt
+([juist aktualisieren]({{< relref "docs/updating" >}})).
 
 ## Ein Gerät von vorn beginnen lassen
 
@@ -89,10 +88,10 @@ Entferne das verlorene Gerät:
 juist remove phone
 ```
 
-Dabei wird auch das Gruppengeheimnis erneuert. Jedes Gerät baut seinen Tunnel
-zu phone ab, sobald es davon erfährt. Ein Gerät, das vom Rest abgeschnitten
-ist, tut das spätestens, wenn seine Frische abläuft, also nach 48 Stunden
-ohne Voucher.
+Dabei wird auch das Gruppengeheimnis erneuert. Jedes Gerät baut seinen
+Tunnel zu phone ab, sobald es davon erfährt; ein abgeschnittenes Gerät tut das
+binnen 48 Stunden, wenn das Netz
+[Voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers) hat.
 {{< /step >}}
 
 {{< step on="dem Gerät eines Admins" >}}
@@ -134,10 +133,10 @@ imported admin key "alice@home"
 it casts 1 vote in "home"
 ```
 
-Die Zeile läuft immer durch eine Pipe, nie über die Kommandozeile. Sie trägt
-eine Prüfsumme, deshalb wird eine abgeschnittene Zeile abgelehnt. Sie deckt
-auch den quantensicheren Signaturschlüssel ab, der sich aus ihr ableitet. Ein
-Import ersetzt nie einen vorhandenen Schlüssel. Wurde der Schlüssel seit der
+Die Zeile läuft immer durch eine Pipe, nie über die Kommandozeile. Ihre
+Prüfsumme lehnt eine abgeschnittene Zeile ab. Sie deckt auch den
+quantensicheren Signaturschlüssel ab, der sich aus ihr ableitet. Ein Import
+ersetzt nie einen vorhandenen Schlüssel. Wurde der Schlüssel seit der
 Sicherung aus dem Netz entfernt, warnt der Import mit
 `"home" gives it no vote`.
 
@@ -149,7 +148,7 @@ Die eigenen Schlüssel eines Geräts lassen sich nicht exportieren: Eine Kopie
 auf einem anderen Rechner wäre ein zweites Gerät unter dem Namen des ersten.
 Entferne ein verlorenes Gerät stattdessen und lade ein neues ein.
 
-## Hinweise
+## Gut zu wissen
 
 - Erneuern, Zurücksetzen und Entfernen dürfen nur root und der
   [Operator]({{< relref "docs/operator" >}}) des Geräts. Zum Bestätigen
@@ -159,15 +158,14 @@ Entferne ein verlorenes Gerät stattdessen und lade ein neues ein.
 - `juist log` zeigt jede Erneuerung und wer sie bestätigt hat.
 
 {{< note danger >}}
-Gehen so viele Admin-Schlüssel verloren, dass kein Quorum mehr zustande kommt,
-ist das endgültig. Bleiben weniger Admin-Schlüssel übrig, als eine Änderung
-braucht, lässt sich keine Änderung mehr signieren: Kein Gerät kann mehr
-hinzukommen oder entfernt werden. Das Break-glass-Geheimnis, das
-`juist create` anzeigt, gibt dem Netz keine neuen Admins, es beendet es
-endgültig ([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
-Vorbeugen kannst du so: Sichere jeden Admin-Schlüssel, setze mehr Admins ein,
-als das Quorum braucht, jeden mit eigenen Geräten, und halte bei
-`juist admins require` einen Schlüssel mehr bereit, als verlangt wird.
+Der Verlust eines Quorums von Admin-Schlüsseln ist endgültig. Bleiben
+weniger Admin-Schlüssel übrig, als eine Änderung braucht, kann nie wieder ein
+Gerät hinzukommen oder entfernt werden. Das Break-glass-Geheimnis, das
+`juist create` anzeigt, beendet das Netz nur
+([Das Netz beenden]({{< relref "docs/network-changes" >}}#das-netz-beenden)).
+Sichere jeden Admin-Schlüssel, setze mehr Admins ein, als das Quorum braucht,
+jeden mit eigenen Geräten, und halte bei `juist admins require` einen
+Schlüssel mehr bereit, als verlangt wird.
 {{< /note >}}
 
 Warum juist das in Kauf nimmt, steht unter

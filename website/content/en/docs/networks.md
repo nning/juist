@@ -7,16 +7,15 @@ lead: A device can be in more than one network at the same time, such as a home 
 
 ## One juistd per network
 
-Your laptop may belong to your home network and to your team's network. The
-two have different admins, different devices and different rules. juist keeps
-them apart on the laptop by giving each network its own juistd, the daemon
-that maintains the tunnels in the background
-([How juist works]({{< relref "docs/how-it-works" >}})).
+Your laptop may belong to your home network and to your team's network, with
+different admins, devices and rules. juist keeps them apart by giving each
+network its own juistd.
 
-The first network runs in `juistd.service`. Each additional network runs in a
-numbered instance alongside it: `juistd@juist1`, `juistd@juist2`, and so on.
-Each instance has its own network device (`juist0`, `juist1`, …), its own
-state directory and its own ports.
+The first network runs in `juistd.service`, each further one in a numbered
+instance: `juistd@juist1`, `juistd@juist2`, and so on. Each instance has its
+own network device (`juist0`, `juist1`, …), state directory and ports, and
+runs as its own user (`juist`, `juist1`, …), so that one network's juistd
+cannot read another's keys.
 
 ## Joining or creating a second network
 
@@ -98,11 +97,11 @@ comes back by itself.
 
 ## One admin key per network
 
-An admin key is the key an admin signs changes with. Each network gets its
-own, such as `admins/alice@home.key` and `admins/alice@work.key`, so a lost or
-stolen key affects only one network. To manage a new network with a key you
-already have, name it: `juist create lab --admin-key alice@home`. See
-[Several admins]({{< relref "docs/admins" >}}) for more.
+Each network gets its own admin key, such as `admins/alice@home.key` and
+`admins/alice@work.key`, so a lost key affects only one network. To manage a
+new network with a key you already have, name it:
+`juist create lab --admin-key alice@home`
+([Several admins]({{< relref "docs/admins" >}})).
 
 ## Leaving one network
 
@@ -114,28 +113,24 @@ This leaves `work` and removes its juistd. `home` stays as it is, with its
 keys. `--force` is needed while `work` still lists this device. Where you can,
 remove the device from `work` first ([Removing a device]({{< relref "docs/remove" >}})).
 
-## Notes
+## Good to know
 
 - One host runs at most ten juistds: `juistd.service` and `juistd@juist1` to
   `juistd@juist9`.
-- The ports of the n-th juistd are those of the first plus 10·n: 41653/udp
-  for `juistd@juist1`, and log sync on TCP 41654 on `juist1`. The firewall
-  profiles that the packages install cover only the first network's ports;
-  `juist status` shows the others
-  ([Relays, ports and firewalls]({{< relref "docs/relays" >}})).
+- The n-th juistd's ports are the first one's plus 10·n: 41653/udp for
+  `juistd@juist1`, and log sync on TCP 41654 on `juist1`. The packages'
+  firewall profiles cover only the first network's ports; `juist status` shows
+  the others ([Relays, ports and firewalls]({{< relref "docs/relays" >}})).
 - If the second network's juistd is not running, start it with
   `sudo systemctl enable --now juistd@juist1`. `journalctl -u juistd@juist1`
-  shows its log.
-- On FreeBSD, the instances for the other networks are listed in the rc.conf
-  variable `juistd_instances`, and `service juistd start juist1` starts one.
-- A device can be in a given network only once. Since an invite does not say
-  which network it is for, a second join to the same network is admitted at
-  first. The new juistd then refuses the network and says which admission an
-  admin should remove.
-- A device in several networks sends its internet traffic through
-  [an exit node]({{< relref "docs/exit-nodes" >}}) of only one of them.
-- Every juistd runs as the same user, `juist`. Whoever takes over one of them
-  has the device keys of every network on the host.
+  shows its log. On FreeBSD, the rc.conf variable `juistd_instances` lists the
+  instances, and `service juistd start juist1` starts one.
+- A device can be in a network only once. An invite does not say which
+  network it is for, so a second join to the same network is admitted first.
+  The new juistd then refuses the network and names the admission an admin
+  should remove.
+- A device in several networks sends its internet traffic through the
+  [exit node]({{< relref "docs/exit-nodes" >}}) of only one of them.
 - Members of one network may learn this host's addresses in its other
-  networks, and from them which address ranges those networks use.
+  networks, and so which address ranges those use.
 

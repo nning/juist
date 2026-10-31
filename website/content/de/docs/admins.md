@@ -7,28 +7,22 @@ lead: Ein Admin ist eine Person, deren Schlüssel Änderungen am Netz bestätigt
 
 ## Admins, Schlüssel und Quorum
 
-Jede Änderung am Netz ist ein Eintrag im Mitgliederlog, egal ob ein Gerät
-aufgenommen, entfernt oder mit einer Rolle versehen wird. Das Log ist die
-signierte Liste aller Änderungen, und jedes Gerät prüft sie selbst
-([So funktioniert juist]({{< relref "docs/how-it-works" >}})). Eine Änderung
+Jede Änderung am Netz, etwa die Aufnahme eines Geräts oder eine Rolle, ist
+ein Eintrag im
+[Mitgliederlog]({{< relref "docs/how-it-works" >}}#the-membership-log). Sie
 gilt, sobald genug Admins sie signiert haben.
 
-Ein **Admin** ist eine Person. Ein **Admin-Schlüssel** ist der Schlüssel, mit
-dem diese Person signiert. Er liegt als Datei wie `admins/alice@home.key` in
-ihrem Keystore `~/.config/juist`. Ein Admin hat auf jedem Gerät, von dem aus
-er Änderungen bestätigt, einen eigenen Schlüssel. Kopiere nie einen Schlüssel
-auf ein anderes Gerät, sondern leg dort einen neuen an.
+Ein **Admin** ist eine Person. Ein **Admin-Schlüssel** ist das, womit sie
+signiert. Er liegt als Datei wie `admins/alice@home.key` in ihrem Keystore
+`~/.config/juist`. Ein Admin hat auf jedem Gerät, von dem aus er bestätigt,
+einen eigenen Schlüssel. Kopiere nie einen Schlüssel auf ein anderes Gerät,
+sondern leg dort einen neuen an.
 
 Das **Quorum** ist die Zahl der Stimmen, die eine Änderung braucht. Jeder
-Admin-Schlüssel hat eine Stimme. Alle Schlüssel einer Person zählen aber
-zusammen nur einmal, egal mit welchem sie signiert. Angenommen, alice, bob und
-carol sind Admins mit je einer Stimme, und das Quorum ist 2. Dann reichen zwei
-beliebige von ihnen, um eine Änderung zu bestätigen. Einer darf also im
-Urlaub sein, und allein kann niemand etwas ändern.
-
-Ein Admin ist nicht dasselbe wie ein Voucher. Ein Voucher ist ein Gerät mit
-der Rolle `voucher`, das stündlich bestätigt, dass der Stand des Netzes
-aktuell ist. Einen Admin-Schlüssel hat ein Voucher nicht.
+Admin-Schlüssel hat eine Stimme, aber alle Schlüssel einer Person zählen
+zusammen nur einmal. Angenommen, alice, bob und carol haben je eine Stimme,
+und das Quorum ist 2. Dann reichen zwei beliebige, einer darf im Urlaub sein,
+und allein kann niemand etwas ändern.
 
 ## Von zwei Laptops aus bestätigen
 
@@ -181,51 +175,30 @@ Der Befehl zeigt, was die Änderung bewirkt, fragt nach, signiert die Datei an
 Ort und Stelle und wendet die Änderung an, sobald sie genug Stimmen hat.
 `juist apply` macht dasselbe.
 
-Auf einem Rechner, der zu keinem Netz gehört, kann ein Admin die Aufnahme
-eines Geräts bestätigen, das kein Voucher wird, und Änderungen wie neue
-Tunnelschlüssel, ein neues Gruppengeheimnis, Namen oder die Zugriffsregeln.
-Nichts, was beeinflussen kann, wer bestätigt oder wer Voucher ist, lässt
-sich dort bestätigen, etwa ein Entfernen, eine Rolle, die Aufnahme eines
-Vouchers, ein neuer Identitätsschlüssel, ein Admin-Schlüssel oder das
-Quorum. Wen eine solche Änderung betrifft, zeigt nur das Log.
+Auf einem Rechner in keinem Netz kann ein Admin nur Änderungen bestätigen,
+die nicht beeinflussen, wer bestätigt oder Voucher ist, etwa die Aufnahme
+eines Geräts, das kein Voucher wird, neue Tunnelschlüssel, Namen oder die
+Zugriffsregeln. Ein Entfernen, eine Rolle, ein Admin-Schlüssel oder das
+Quorum brauchen das Log, also bestätige sie auf einem Gerät im Netz.
 
-## Hinweise
+## Gut zu wissen
 
-- `juist admins` listet alle Admins mit ihren Stimmen und den Rechnern auf,
-  auf denen ihre Schlüssel liegen, dazu das Quorum und die Zahl der nötigen
-  Voucher.
+- `juist admins` listet alle Admins mit ihren Stimmen und den Rechnern ihrer
+  Schlüssel auf, dazu das Quorum und die Zahl der nötigen Voucher.
 - `juist admins add NAME KEY --votes N` gibt einem Schlüssel mehr als eine
-  Stimme. `juist create --admin-votes N` macht dasselbe für den Schlüssel, den
-  `juist create` anlegt.
-- `juist admins remove NAME|KEY` entzieht einem Schlüssel seine Stimme. Das
-  wird abgelehnt, wenn die übrigen Schlüssel das Quorum nicht mehr erreichen.
+  Stimme; `juist create --admin-votes N` tut das für den ersten Schlüssel.
+- `juist admins remove NAME|KEY` entzieht einem Schlüssel die Stimme. Das wird
+  abgelehnt, wenn die übrigen Schlüssel das Quorum nicht mehr erreichen.
 - `juist admins quorum` warnt, wenn jede Änderung alle Admins braucht, denn
-  dann sperrt schon der Verlust der Schlüssel eines einzigen Admins das Netz.
-  Setzt du in einem Netz ohne Voucher ein Quorum über 1, weist es darauf
-  hin, dass Änderungen, die auf Stimmen warten, über Voucher laufen.
-  `juist create --quorum` tut das ebenso.
+  dann sperrt der Verlust der Schlüssel eines Admins das Netz.
 - Admin-Schlüssel verlassen ihren Rechner nur als Sicherungszeile
-  ([Schlüssel]({{< relref "docs/keys" >}}#admin-schlüssel-sichern)). Der
-  Rechner, auf dem sie liegen, muss zu keinem Netz gehören: Mit
-  `juist create --no-device` legst du ein Netz von einem Rechner aus an, der
-  nur signiert.
-- Führe Admin-Befehle als du selbst aus, ohne sudo, denn die Schlüssel liegen
-  in deinem Keystore.
-- `juist log` zeigt jede Änderung und wer sie bestätigt hat, `juist log show 3`,
-  was Änderung 3 bewirkt hat.
+  ([Schlüssel]({{< relref "docs/keys" >}}#admin-schlüssel-sichern)). Dieser
+  Rechner muss zu keinem Netz gehören: `juist create --no-device` legt ein
+  Netz von einem Rechner aus an, der nur signiert.
+- Führe Admin-Befehle als du selbst aus, ohne sudo: Die Schlüssel liegen in
+  deinem Keystore.
 - [Zugriffsregeln]({{< relref "docs/access" >}}) änderst du genauso.
-  `juist approve policy.rec` zeigt die Änderung als Diff gegen die geltenden
-  Regeln.
-- Eine neue Version von juist kann ein neues Schema mitbringen, also ein
-  neues Format für die Änderungen im Log. Sobald jedes Gerät die Version hat,
-  hebt ein Admin das Netz mit `juist log upgrade` darauf an. Bis dahin
-  erinnert `juist health` auf dem Gerät eines Admins daran. Die Schritte
-  stehen unter [juist aktualisieren]({{< relref "docs/updating" >}}).
-- juist liest Netze, deren Log auf Schema 18 oder später steht, in denen
-  jede Änderung quantensicher signiert ist
-  ([Sicherheit]({{< relref "docs/security" >}}#quantensicher)). Ein Netz,
-  das mit einem älteren juist angelegt wurde, liest es nicht mehr: Seine
-  Admins legen es neu an, und seine Geräte treten dem neuen bei.
+  `juist approve policy.rec` zeigt die Änderung als Diff.
 
 {{< note danger >}}
 Gehen so viele Admin-Schlüssel verloren, dass keine Änderung mehr genug
@@ -242,7 +215,8 @@ braucht, jeden mit eigenen Geräten
 | Was du siehst | Was du tun kannst |
 |---|---|
 | `hint: for changes waiting for your vote to reach you: juist admins receive` | Führe einmal `juist admins receive` aus. |
-| `juist health`: `hint: once every device runs this version: juist log upgrade` | Aktualisiere juist auf allen Geräten, dann führe `juist log upgrade` aus. |
+| `juist health`: `hint: every device implements schema 21: juist log upgrade` | Führe `juist log upgrade` aus. |
+| `juist: not every device implements schema 21: phone (20)` | Aktualisiere juist auf den genannten Geräten, dann führe den Befehl erneut aus ([Aktualisieren]({{< relref "docs/updating" >}})). |
 | `juist: the network predates rotating an identity key` | Aktualisiere juist auf allen Geräten, dann führe `juist log upgrade` aus. |
 | `--admin "bob": a key with no signing key, from an older juist` | bob ruft `juist admins new bob` mit dieser Version noch einmal auf und schickt die neue Zeile. |
 | `juist: the key names no signing key, which the network needs; it is from an older juist` | bob ruft `juist admins new bob` mit dieser Version auf und schickt den Befehl, den es ausgibt, vollständig. |

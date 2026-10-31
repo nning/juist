@@ -8,8 +8,13 @@ lead: Four commands tell you how things stand. juist status shows this device, j
 These commands ask the daemon `juistd` how things stand, and read the
 device's copy of the
 [membership log]({{< relref "docs/how-it-works" >}}#the-membership-log).
-Whenever something seems wrong, start with `juist health`. It names each
-problem, and for most it prints a `hint:` line with the command that fixes it.
+If something seems wrong, start with `juist health`. It names each problem,
+mostly with a `hint:` line that fixes it.
+
+Any local user may run `juist status` and `juist health`. All other commands
+are for root and the device's [operator]({{< relref "docs/operator" >}}). On a
+device in [several networks]({{< relref "docs/networks" >}}), the commands
+show each network in turn; `juist devices work` shows just one.
 
 ## Checking a device
 
@@ -67,25 +72,18 @@ The state on the first line is one of these:
 ## What each line means
 
 - `This device`: its name and its addresses in the network, IPv4 first, then IPv6.
-- `Devices`: how many other devices there are, and how many of them had no
-  tunnel carrying traffic at the last check; `juist devices` says why.
-  juistd checks every 30 seconds. If both ends have a relay, it checks a quiet
-  tunnel only every 5 minutes, so that a laptop's radio can sleep.
-- `Relays`: how many devices may relay, and which one this device uses. A [relay]({{< relref "docs/relays" >}}) passes traffic between two devices that cannot reach each other directly.
+- `Devices`: how many other devices there are, and how many had no tunnel
+  carrying traffic at the last check; `juist devices` says why.
+- `Relays`: how many devices may [relay]({{< relref "docs/relays" >}}), and
+  which one this device uses.
 - `HTTPS`: on a device that sends only HTTPS, the relays on port 443 it uses, and its proxy. See [HTTPS only]({{< relref "docs/https-only" >}}).
 - `Relay name`: the public name this device's relay serves on port 443. Root and the operator also see whether it serves it yet.
 - `Exit node`: which device carries this device's internet traffic, if any. See [Exit nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: this device's own names, such as `laptop.home.juist`; `juist names` lists the network's, and `juist health` says why where they are not resolved. See [Names]({{< relref "docs/names" >}}).
-- `Freshness`: when a voucher last confirmed that this device's view of the
-  network is current, and how long that confirmation stays valid. A voucher
-  is a device the network trusts to confirm this every hour. After 48 hours
-  without a confirmation, the line reads `expired; vouchers only`, or
-  `expired (1 of 2 vouchers); vouchers only` where several are required. A
-  warning appears in `juist health` a day before that. If no device vouches,
-  the line
-  reads `unchecked: no voucher`, and if at least two devices may relay,
-  `juist health` suggests making them vouchers. See
-  [Removing a device]({{< relref "docs/remove" >}}).
+- `Freshness`: when a [voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
+  last confirmed this device's view, and how long that stays valid. After 48
+  hours without one, it reads `expired; vouchers only`, and `juist health`
+  warns a day before. Without vouchers, it reads `unchecked: no voucher`.
 - `Published`: the published names this device serves, or why it does not
   serve them. See [Publishing services]({{< relref "docs/publishing" >}}).
 - `Ingress`: on an ingress, whether it runs, the names it serves, the ports
@@ -148,9 +146,6 @@ phone                 198.18.36.4  relayed  20      -
 - `names` if public names point at it ([`juist names`]({{< relref "docs/names" >}}) lists them);
 - `publishes` if it publishes names ([`juist publish`]({{< relref "docs/publishing" >}}) lists them);
 - `-` if none of these apply.
-
-On a narrow terminal the roles wrap within their column. On an even narrower
-one, such as a phone's, each device takes up several lines.
 
 `REACHED` says how juistd reached the device at its last check:
 
@@ -235,17 +230,6 @@ journalctl -u juistd
 This shows what juistd itself reports; on FreeBSD it is `/var/log/juistd.log`.
 A second network on the same device has its own daemon, `juistd@juist1`, with
 its own log, on FreeBSD `/var/log/juistd.juist1.log`.
-
-## Notes
-
-- Any local user may run `juist status` and `juist health`. A user who is
-  neither root nor the device's [operator]({{< relref "docs/operator" >}})
-  sees a `read-only` hint in `juist health`.
-- `juist devices`, `juist log` and all other commands are only for root and
-  the operator.
-- On a device in [several networks]({{< relref "docs/networks" >}}),
-  `juist status`, `juist health` and `juist devices` show each network in turn.
-  `juist devices work` shows just one.
 
 ## Troubleshooting
 

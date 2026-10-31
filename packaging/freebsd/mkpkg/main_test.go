@@ -15,7 +15,7 @@ import (
 
 func build(t *testing.T, dir, out string) {
 	t.Helper()
-	if err := run("../manifest.json", "../scripts", "1.2", "FreeBSD:14:amd64", 1700000000, out, []string{
+	if err := run("../manifest.json", "../scripts", "1.2", "FreeBSD:15:amd64", 1700000000, out, []string{
 		"/usr/local/sbin/tool=" + filepath.Join(dir, "tool"),
 		"/usr/local/share/man/man8/tool.8.gz=" + filepath.Join(dir, "tool.8"),
 	}); err != nil {
@@ -77,7 +77,7 @@ func TestPackage(t *testing.T) {
 	if err := json.Unmarshal(contents["+MANIFEST"], &m); err != nil {
 		t.Fatal(err)
 	}
-	if m.Arch != "freebsd:14:x86:64" || m.Annotations["FreeBSD_version"] != "1400000" {
+	if m.Arch != "freebsd:15:x86:64" || m.Annotations["FreeBSD_version"] != "1500000" {
 		t.Errorf("arch %q, FreeBSD_version %q", m.Arch, m.Annotations["FreeBSD_version"])
 	}
 	for name, f := range m.Files {
@@ -109,7 +109,7 @@ func TestModesAndMistakes(t *testing.T) {
 	src := filepath.Join(dir, "juistd")
 	os.WriteFile(src, []byte("#!/bin/sh\n"), 0o644)
 	out := filepath.Join(dir, "p.pkg")
-	if err := run("../manifest.json", "../scripts", "1", "FreeBSD:14:amd64", 0, out,
+	if err := run("../manifest.json", "../scripts", "1", "FreeBSD:15:amd64", 0, out,
 		[]string{"/usr/local/etc/rc.d/juistd=" + src, "/usr/local/libexec/juist/serve.sh=" + src}); err != nil {
 		t.Fatal(err)
 	}
@@ -129,13 +129,13 @@ func TestModesAndMistakes(t *testing.T) {
 		{"/usr/local/bin/x=" + src, "/usr/local/bin/x=" + src},
 		{"/usr/local/bin/../x=" + src},
 	} {
-		if err := run("../manifest.json", "../scripts", "1", "FreeBSD:14:amd64", 0, out, specs); err == nil {
+		if err := run("../manifest.json", "../scripts", "1", "FreeBSD:15:amd64", 0, out, specs); err == nil {
 			t.Errorf("%q taken", specs)
 		}
 	}
 	scripts := t.TempDir()
 	os.WriteFile(filepath.Join(scripts, "pre-install~"), []byte("true\n"), 0o644)
-	if err := run("../manifest.json", scripts, "1", "FreeBSD:14:amd64", 0, out, []string{"/usr/local/bin/x=" + src}); err == nil {
+	if err := run("../manifest.json", scripts, "1", "FreeBSD:15:amd64", 0, out, []string{"/usr/local/bin/x=" + src}); err == nil {
 		t.Error("an editor's backup taken for a script")
 	}
 }

@@ -60,14 +60,25 @@ A fix for a finding comes with a regression test that fails against the code
 before the fix: revert the fix, watch the test fail, restore it. A test that
 exists for a scenario is not evidence that the scenario works.
 
+### Commit messages
+
+A commit message is a subject line of at most 72 characters, a blank line,
+and a body wrapped at 72 columns; the `Co-Authored-By:` trailer ends it. The
+subject names the change, prefixed as above (`M<N> done` for a milestone's,
+which `make publish` and `make previous` look for), with `[skip ci]` at its
+end where `12-validating.md` asks for it. The body says what changed and
+why, in paragraphs or a list, everything the subject leaves out. A change
+too small for a body still keeps its subject short. Commits from
+2026-10-12 to 2026-10-30 put all of it into one line: do not copy them.
+
 ## Publishing
 
 Work happens in `nning/juist-dev`; the public repository, which `public` in
-`private/publish/scrub.txt` names, gets one commit per done milestone. `make
-publish M=M<N>` builds it in `build/public` from the milestone's `M<N> done`
-commit, scrubbed as `scrub.txt` says, and stops on an address or domain the
-public tree has not shown; `PUSH=1` publishes it, only when the user says
-so. `private/` is never published. An own host, domain or address enters
+`private/publish/scrub.txt` names, gets one commit per done milestone and
+per fix release. `make publish M=M<N>` builds it in `build/public` from the
+milestone's `M<N> done` commit, scrubbed as `scrub.txt` says, and stops on an
+address or domain the public tree has not shown; `PUSH=1` publishes it, only
+when the user says so. `private/` is never published. An own host, domain or address enters
 `scrub.txt` in the commit that brings it.
 
 A release on the public repository is `make release` from the public tree,
@@ -75,6 +86,14 @@ uploaded whole from `build/release`, and not marked a pre-release, since the
 handbook's download links follow `releases/latest`. Its keys live in
 `~/.local/share/juist-signing` and never enter the repository or an agent's
 context: refer to the files, never print them.
+
+Until v1.0, milestone M<N> is release `v0.<N>.0`, and its fix release
+`make publish M=M<N>.<K>` is `v0.<N>.<K>`, from an `M<N>.<K> done` commit or
+`AT=` one on a branch off the milestone's; its fixes land on `main` too, or
+the next milestone's publish stops. `PUSH=1` tags the public commit and the
+private one with the version, and the GitHub release takes the tag, titled
+`juist 0.<N>.<K>`. Every package's version is `packaging/version.sh`'s, which
+follows the newest tag as Go's stamp in the binaries does.
 
 ## Gates
 

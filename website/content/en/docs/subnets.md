@@ -15,8 +15,7 @@ called a subnet.
 
 A device becomes a subnet router in two steps. First an
 [admin]({{< relref "docs/how-it-works" >}}#admins) assigns the subnet to the
-device. Then the device's [operator]({{< relref "docs/operator" >}}), the
-local user who manages it without sudo, agrees by running
+device. Then the device's [operator]({{< relref "docs/operator" >}}) agrees by running
 `juist subnet serve` on it.
 
 To the devices on the LAN, the connections come from the NAS, so they need no
@@ -65,7 +64,7 @@ When your laptop is at home on `192.168.1.0/24`, it talks to the printer
 directly, not through the NAS. `juist subnet` then says
 `this device reaches it by a route of its own`.
 
-## Notes
+## Good to know
 
 - `juist subnet` lists every subnet, its router, and its state on this device.
   `juist status` sums this up in the `Subnets` line.
@@ -102,7 +101,7 @@ On a device that cannot reach a subnet, `juist subnet` gives the reason after
 | `its router's operator has not agreed to route it` | run `juist subnet serve` on the router |
 | `subnets are off on this device` | run `juist subnet on` |
 | `the access policy passes none of it to this device` | add a rule for the subnet ([Access policy]({{< relref "docs/access" >}})) |
-| `this device's view of the network is stale` | bring a voucher back online, a device that confirms the network's state is current; see [Status]({{< relref "docs/status" >}}) |
+| `this device's view of the network is stale` | bring a [voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers) back online |
 
 On the router itself, `not routed: not agreed to on this device` means
 `juist subnet serve` has not run there yet. As long as no subnet has been

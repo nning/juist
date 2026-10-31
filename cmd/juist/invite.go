@@ -50,14 +50,14 @@ type inviteOptions struct {
 
 func cmdInvite(a *app, args []string) error {
 	s := spec{name: "juist invite", args: "[NAME]", max: 1, about: `
-Invite one device, then wait for it to join. Prints a code, for the same
-LAN, and a link, for anywhere; behind NAT, the two devices meet through the
-public BitTorrent DHT. Both end when a device joins or the invite expires;
-a wrong guess voids the code, and the link still works. A terminal shows
-the link as a QR code too.
+Invite one device and wait for it to join. Prints a code for the same LAN
+and a link for anywhere. Behind NAT, the two devices meet through the public
+BitTorrent DHT. Both end when a device joins or the invite expires. A wrong
+guess voids the code; the link still works. A terminal also shows the link
+as a QR code.
 
-NAME is the device's name in the network (default: its own). Where more
-than one admin must approve, the invite waits for them.`}
+NAME is the device's name in the network (default: its own). If more than
+one admin must approve, the invite waits for them.`}
 	fs := newFlags(s.name)
 	var o inviteOptions
 	fs.BoolVar(&o.relay, "relay", false, "make the device a relay")

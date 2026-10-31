@@ -19,11 +19,10 @@ einem LAN kollidiert, das du nutzt, oder mit
 [einem anderen Netz auf demselben Gerät]({{< relref "docs/networks" >}}).
 IPv6-Adressen ändern sich dabei nie.
 
-Beides sind Änderungen am Mitgliederlog, der signierten Liste aller
-Änderungen, die jedes Gerät prüft
-([So funktioniert juist]({{< relref "docs/how-it-works" >}})). Ein Admin
-nimmt sie vor, und alle Geräte ziehen nach. Braucht das Quorum mehr als einen
-Admin, wartet die Änderung auf die anderen
+Beides sind Änderungen am
+[Mitgliederlog]({{< relref "docs/how-it-works" >}}#the-membership-log): Ein
+Admin nimmt sie vor, und alle Geräte ziehen nach. Braucht das Quorum mehr als
+einen Admin, wartet die Änderung auf die anderen
 ([Mehrere Admins]({{< relref "docs/admins" >}})).
 
 ## Das Netz umbenennen
@@ -53,7 +52,7 @@ Das Gerät gibst du an wie bei `juist remove`: mit Namen, Adresse oder
 Schlüssel. Einen Namen, den schon ein anderes Gerät hat, lehnt juist ab,
 unabhängig von Groß- und Kleinschreibung.
 
-Ein Gerät, das [Dateien teilt]({{< relref "docs/publishing" >}}), teilt sie
+Ein Gerät, das [Dateien teilt]({{< relref "docs/sharing" >}}), teilt sie
 unter seinem neuen Namen, etwa `tablet.pub.example.org`. Bei einem solchen
 Gerät lehnt juist außerdem einen Namen ab, den ein anderes Gerät
 veröffentlicht, einen, den das Gerät selbst schon veröffentlicht oder auf
@@ -146,7 +145,7 @@ beitreten, das du mit `juist create` anlegst.
 Bewahre die Zeile getrennt von den Admin-Schlüsseln auf: Wer einen Tresor mit
 beidem erbeutet, kann das Netz verwalten und auch beenden.
 
-## Hinweise
+## Gut zu wissen
 
 - Alte IPv4-Adressen funktionieren in der Voreinstellung noch 7 Tage. Mit
   `--for 12h` oder `--for 14d` wählst du eine andere Frist. Sie sollte lang

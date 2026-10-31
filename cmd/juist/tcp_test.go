@@ -214,12 +214,12 @@ func TestTheNameJustPublishedIsWaitedFor(t *testing.T) {
 func TestASilentTerminatorPassesNone(t *testing.T) {
 	plain := func(_, s string) string { return s }
 	got := publishSummary(&ipc.Publish{Consent: true, Serving: []string{"mc.pub.example.org"}, TerminatorSilent: true,
-		Passing: []string{"mc.pub.example.org to 127.0.0.1:25565"}}, plain)
+		Passing: []string{"mc.pub.example.org to 127.0.0.1:25565"}}, nil, plain)
 	if !strings.Contains(got, "but passes none on: the terminator does not run") {
 		t.Errorf("passing alone: %q", got)
 	}
 	got = publishSummary(&ipc.Publish{Consent: true, Serving: []string{"a", "b"}, TerminatorSilent: true,
-		Ending: []string{"a to 127.0.0.1:1"}, Passing: []string{"b to 127.0.0.1:2"}}, plain)
+		Ending: []string{"a to 127.0.0.1:1"}, Passing: []string{"b to 127.0.0.1:2"}}, nil, plain)
 	if !strings.Contains(got, "but ends TLS for none") {
 		t.Errorf("ending TLS too: %q", got)
 	}

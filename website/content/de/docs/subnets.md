@@ -16,8 +16,7 @@ Tunnel und leitet ihn in sein LAN weiter, in diesem Beispiel
 Ein Gerät wird in zwei Schritten zum Subnet-Router. Zuerst weist ein
 [Admin]({{< relref "docs/how-it-works" >}}#admins) dem Gerät das Subnetz zu.
 Dann stimmt der [Operator]({{< relref "docs/operator" >}}) des Geräts zu,
-also der lokale Benutzer, der es ohne sudo verwaltet, indem er dort
-`juist subnet serve` ausführt.
+indem er dort `juist subnet serve` ausführt.
 
 Für die Geräte im LAN kommen die Verbindungen vom NAS. Sie brauchen also
 keine eigene Einrichtung.
@@ -65,7 +64,7 @@ diese. Ist dein Laptop zu Hause selbst im `192.168.1.0/24`, spricht
 er direkt mit dem Drucker und nicht über das NAS. `juist subnet` meldet dann
 `this device reaches it by a route of its own`.
 
-## Hinweise
+## Gut zu wissen
 
 - `juist subnet` listet alle Subnetze mit ihrem Router auf und zeigt ihren
   Zustand auf diesem Gerät. `juist status` fasst das in der Zeile `Subnets`
@@ -105,7 +104,7 @@ hinter `not in use:`:
 | `its router's operator has not agreed to route it` | Führe auf dem Router `juist subnet serve` aus. |
 | `subnets are off on this device` | Führe `juist subnet on` aus. |
 | `the access policy passes none of it to this device` | Ergänze eine Regel für das Subnetz ([Zugriffsregeln]({{< relref "docs/access" >}})). |
-| `this device's view of the network is stale` | Bring einen Voucher wieder online, also ein Gerät, das den aktuellen Stand des Netzes bestätigt. Siehe [Status]({{< relref "docs/status" >}}). |
+| `this device's view of the network is stale` | Bring einen [Voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers) wieder online. |
 
 Auf dem Router selbst bedeutet `not routed: not agreed to on this device`,
 dass dort `juist subnet serve` noch nicht ausgeführt wurde. Solange dem Gerät

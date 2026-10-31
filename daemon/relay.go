@@ -75,8 +75,17 @@ type relayState struct {
 // a home, and a member that relayed for others while being reachable through
 // no relay itself would be invisible to exactly the peers that cannot punch
 // to it.
+//
+// The ingress that relays takes the name its role gives it in the log where
+// it announces none proven, and first while this device reaches no relay
+// without UDP, as once the name it announced is gone, and after that until
+// it announces another: a name proven stays so until its server says
+// otherwise, and an announcement found unsigned, as at a relay's rendezvous,
+// names no relay. The name's server must say it is the member, as for any
+// name.
 func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
-	held map[types.Identity]gossip.Endpoint) []conn.Relay {
+	held map[types.Identity]gossip.Endpoint, ingress nameClaim) []conn.Relay {
+	blind := d.manager.ReachesNoRelay()
 
 	out := make([]conn.Relay, 0, 4)
 	taken := make(map[int]types.Identity, 4)
@@ -96,9 +105,23 @@ func (d *Daemon) relaySet(network types.Hash, nodes []types.NodeRecord,
 		if len(addrs) == 0 && ep.Relay.Name == "" {
 			continue
 		}
-		name := ep.Relay.Name
-		if name != "" && !d.relayNameProven(name, n.Identity) {
-			name = ""
+		candidates := []string{ep.Relay.Name}
+		if ingress.name != "" && ingress.by == n.Identity && ingress.name != ep.Relay.Name {
+			if was, over := d.nameProofs.passedOver(n.Identity); blind || over && was == ep.Relay.Name {
+				candidates = []string{ingress.name, ep.Relay.Name}
+			} else {
+				candidates = append(candidates, ingress.name)
+			}
+		}
+		name := ""
+		for _, c := range candidates {
+			if c != "" && d.relayNameProven(c, n.Identity) {
+				name = c
+				break
+			}
+		}
+		if ingress.by == n.Identity {
+			d.nameProofs.passOver(n.Identity, ep.Relay.Name, blind && name == ingress.name && name != ep.Relay.Name)
 		}
 		if name != "" && slices.Contains(names, name) {
 			// A name is one relay's: two would be two regions on one
@@ -276,25 +299,38 @@ func (d *Daemon) closeRelay() {
 }
 
 // inviteRelays are the member relays an invite from this device may wait at
-// for its guest: every other live member the log makes relay-capable whose
-// announcement says where its relay is.
+// for its guest: every live member the log makes relay-capable whose
+// announcement says where its relay is, this device last, whose own a guest
+// on HTTPS alone needs where no other relay serves a name.
 func (d *Daemon) inviteRelays(state *log.State) []forward.Relay {
 	now := d.now().Unix()
 	var relays []types.NodeRecord
+	var self *types.NodeRecord
 	held := map[types.Identity]gossip.Endpoint{}
 	claims := map[string]int{}
 	for _, n := range state.NodesWithRole(types.RoleRelayCapable) {
-		if n.Identity == d.self || n.Expired(now) {
+		if n.Expired(now) {
 			continue
 		}
 		ep, ok := d.endpoints.Get(n.Identity)
+		if n.Identity == d.self {
+			ep, ok = d.announcement()
+		}
 		if !ok || ep.Relay == nil || len(ep.Relay.Cert) != sha256.Size {
 			continue
 		}
-		relays, held[n.Identity] = append(relays, n), ep
+		if n.Identity == d.self {
+			self = &n
+		} else {
+			relays = append(relays, n)
+		}
+		held[n.Identity] = ep
 		if ep.Relay.Name != "" {
 			claims[ep.Relay.Name]++
 		}
+	}
+	if self != nil {
+		relays = append(relays, *self)
 	}
 	var out []forward.Relay
 	for _, n := range relays {

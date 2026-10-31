@@ -44,3 +44,24 @@ func TestAFirewallFixShowsOnTheNextStatus(t *testing.T) {
 	fw.Set(func(f *firewalldtest.Firewalld) { f.Zones["vpn0"] = "trusted" })
 	waitFor("the fix shows", func(st ipc.Status) bool { return st.Firewalled == "" }, reachEvery/10)
 }
+
+// Where the host would not keep the overlay's addresses to the tunnel, the
+// status says why, every local user's too.
+func TestAnUnguardedOverlayIsInTheStatus(t *testing.T) {
+	f := newServiceFixtureWith(t, nil)
+	f.mgr.mu.Lock()
+	f.mgr.unguarded = "pf's rules call no juist anchor first"
+	f.mgr.mu.Unlock()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		resp, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdStatus})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := resp.Status.ForReader(); st.Unguarded == "pf's rules call no juist anchor first" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the status says nothing of the guard: %q", resp.Status.Unguarded)
+		}
+	}
+}

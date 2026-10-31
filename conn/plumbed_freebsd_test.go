@@ -32,8 +32,9 @@ func requireRoot(t *testing.T) {
 	}
 }
 
-// helperPair is a client of a real helper, as juistd's split makes one.
-func helperPair(t *testing.T) *plumber.Client {
+// helperPair is a client of a real helper for dev, as juistd's split makes
+// one.
+func helperPair(t *testing.T, dev string) *plumber.Client {
 	t.Helper()
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
@@ -49,7 +50,7 @@ func helperPair(t *testing.T) *plumber.Client {
 	}
 	done := make(chan error, 1)
 	go func() {
-		destroy, err := plumber.Serve(fc.(*net.UnixConn), plumber.FreeBSD{}, os.Getuid(), t.Logf)
+		destroy, err := plumber.Serve(fc.(*net.UnixConn), plumber.FreeBSD{}, os.Getuid(), dev, t.Logf)
 		destroy()
 		done <- err
 	}()
@@ -67,7 +68,7 @@ func helperPair(t *testing.T) *plumber.Client {
 // descriptor, is another instance's holding, and goes with its routes.
 func TestAPlumbedDeviceCarriesTheOverlay(t *testing.T) {
 	requireRoot(t)
-	c := helperPair(t)
+	c := helperPair(t, "juist9")
 	dev, rtr, err := newPlumbed(c, "juist9", 9, 1280, t.Logf)
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +204,7 @@ func watchRoutes(t *testing.T, dst netip.Addr) func() []int {
 // comes back out of it.
 func TestAPlumbedDeviceTakesWhatTheNodeWrites(t *testing.T) {
 	requireRoot(t)
-	c := helperPair(t)
+	c := helperPair(t, "juist8")
 	dev, rtr, err := newPlumbed(c, "juist8", 8, 1280, t.Logf)
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +264,7 @@ func TestAPlumbedDeviceTakesWhatTheNodeWrites(t *testing.T) {
 // new one.
 func TestAPlumbedRouterKnowsTheHostsRoutes(t *testing.T) {
 	requireRoot(t)
-	c := helperPair(t)
+	c := helperPair(t, "juist8")
 	dev, rtr, err := newPlumbed(c, "juist8", 8, 1280, t.Logf)
 	if err != nil {
 		t.Fatal(err)

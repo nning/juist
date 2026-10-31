@@ -14,8 +14,9 @@ needs a registry:
 | | instance 0 | instance n |
 |---|---|---|
 | unit | `juistd.service` | `juistd@juistn.service` |
-| home | `/var/lib/juist` | `/var/lib/juist/juistn` |
-| socket | `/run/juist/juistd.sock` | `/run/juist/juistn.sock` |
+| user | `juist` | `juistn` |
+| home | `/var/lib/juist` | `/var/lib/juistn` |
+| socket | `/run/juist/juistd.sock` | `/run/juistn/juistd.sock` |
 | TUN device | `juist0` | `juistn` |
 | ports | 41643 udp, 41644 tcp, 41645 relay | the same plus 10·n |
 | routing table | 0x6a75 | 0x6a75 + n |
@@ -31,11 +32,11 @@ Ports are fixed per instance, not taken free at start, so a firewall can be
 told them before the instance runs and peers' endpoint caches stay right across
 restarts. Ports another program holds still give way to OS-chosen ones.
 
-`/run/juist` is preserved (`RuntimeDirectoryPreserve=yes` on both units):
-every instance's socket is in it, and systemd would otherwise delete the
-directory with whichever unit stopped first. The default instance's reset
-spares the other instances' homes inside its own. LAN discovery joins no
-instance's device.
+Each instance runs as a user of its own, which the packages make, so that
+one network's juistd reads none of another's keys; on FreeBSD the homes are
+in `/var/db` and the sockets in `/var/run`, named alike. An upgrade from a
+package that kept the instances' homes inside the default's moves each once
+(`packaging/instances.sh`). LAN discovery joins no instance's device.
 
 ## The lower instance wins, so the higher one yields
 
@@ -199,13 +200,6 @@ device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
 
 ## Still open
 
-- **A user per instance.** Every instance runs as `juist`, so one taken over
-  holds the device keys of every network on the host and can operate the
-  others over their sockets: residual weakness 9 in
-  [02-threat-model.md](02-threat-model.md). Closing it needs a user per
-  instance. Then an instance's home cannot sit in the default's 0700 one,
-  each needs a runtime directory of its own, and the instance above has to be
-  allowed to read the exact claims of the one below. That is M24's.
 - **Other networks' addresses in path discovery.** magicsock learns this
   host's addresses from every interface but Tailscale's own, and sends them to
   peers in the call-me-maybe it relays. A network's members may therefore be

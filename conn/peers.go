@@ -191,6 +191,7 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	if m.closed {
 		return errors.New("conn: manager is closed")
 	}
+	m.holdHomes(peers, time.Now())
 	next, nodeList := newPeerState(m.self.NodeKey.Public(), peers, m.sendHome)
 
 	prev := m.state.Load().peers
@@ -213,7 +214,7 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	// told to resync, so a removed peer's lookup already fails by the time
 	// wireguard-go asks. A newly confined peer is confined first, and one
 	// newly keyed passes nothing until no session without its key is left.
-	m.confiner.set(m.keptConfined(peers), m.self.Addrs)
+	m.setPolicy(m.keptConfined(peers), m.self.Addrs)
 	m.state.Store(next)
 
 	// Session keys are discarded outright rather than left to expire, for a
@@ -278,9 +279,16 @@ func (m *tsManager) SetSelf(s Self) error {
 	m.selfOnPath.Store(&selfLookup{addrs: s.Addrs, node: m.selfNV})
 	m.eng.SetSelfNode(m.selfNV)
 	_, nodeList := newPeerState(s.NodeKey.Public(), peers, m.sendHome)
-	m.confiner.set(m.keptConfined(peers), s.Addrs)
+	m.setPolicy(m.keptConfined(peers), s.Addrs)
 	m.magic.SetNetworkMap(m.selfNV, nodeList)
 	return m.reconfig()
+}
+
+// setPolicy tells the confiner and the multicaster who the peers are, and
+// this node's addresses.
+func (m *tsManager) setPolicy(peers []Peer, self []netip.Prefix) {
+	m.confiner.set(peers, self)
+	m.groups.set(peers, self)
 }
 
 // keptConfined is peers with each one newly keyed passing nothing, for as
@@ -533,4 +541,35 @@ func peerNode(p Peer, home int) tailcfg.NodeView {
 		HomeDERP:   tailcfg.DERPRegionID(home),
 		Cap:        tailcfg.CurrentCapabilityVersion,
 	}).View()
+}
+
+// homeHeld is how long a peer that says it has no home is still sent to at
+// the one it had: restarting, a device is homeless for a while before it
+// takes the same home again, and a peer installed with none is sent nothing
+// by relay, not even the answer to what it sends.
+const homeHeld = 2 * time.Minute
+
+// A heldHome is the home a peer last said it had, and when.
+type heldHome struct {
+	region int
+	at     time.Time
+}
+
+// holdHomes gives each of peers that says it has no home the home it had
+// within [homeHeld] before now, and notes the homes the others say. The
+// caller holds m.apply.
+func (m *tsManager) holdHomes(peers []Peer, now time.Time) {
+	held := make(map[key.NodePublic]heldHome, len(peers))
+	for i := range peers {
+		p := &peers[i]
+		if p.HomeRelay != 0 {
+			held[p.NodeKey] = heldHome{p.HomeRelay, now}
+			continue
+		}
+		if h, ok := m.homes[p.NodeKey]; ok && now.Sub(h.at) < homeHeld {
+			p.HomeRelay = h.region
+			held[p.NodeKey] = h
+		}
+	}
+	m.homes = held
 }

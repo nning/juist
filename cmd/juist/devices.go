@@ -15,11 +15,12 @@ import (
 
 func cmdDevices(a *app, args []string) error {
 	s := spec{name: "juist devices", about: `
-List the network's devices, how juistd last reached each (directly, through
-a relay, or not; outdated where one runs an older juist and is unreachable
-until updated), and the newest schema each one's juist implements, yellow
-where older than this one's. juistd checks every 30s. On a device in several
-networks, each network's, unless NETWORK names one.`}
+List the network's devices and how juistd last reached each: directly,
+through a relay, or not. outdated means the device runs an older juist and
+stays unreachable until updated. SCHEMA is the newest schema each device's
+juist implements, yellow if older than this one's. juistd checks every 30s.
+On a device in several networks, it lists each network unless NETWORK names
+one.`}
 	fs := newFlags(s.name)
 	long := fs.Bool("keys", false, "show identity keys")
 	v6 := fs.Bool("ipv6", false, "show IPv6 addresses")
@@ -99,6 +100,9 @@ func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Statu
 			if d.Build != 0 {
 				builds[d.Identity] = d.Build
 			}
+		}
+		for _, b := range st.Builds {
+			builds[b.Identity] = b.Schema
 		}
 	}
 	showBuilds := len(builds) > 0

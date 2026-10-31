@@ -2,110 +2,50 @@
 title: Android
 linkTitle: Android
 description: Die Android-App von juist installieren, mit einem Telefon per QR-Code oder Code einem Netz beitreten, die Geräte beim Namen erreichen und auf dem Telefon sehen, wie jedes erreicht wird.
-lead: Mit der Android-App wird ein Telefon Mitglied eines Netzes. Es tritt per QR-Code oder Code der Einladung bei, erreicht die anderen Geräte unter ihren Namen und Adressen und zeigt, wie jedes davon erreicht wird.
+lead: Mit der Android-App wird ein Telefon Mitglied eines Netzes. Es tritt per QR-Code oder Code der Einladung bei, erreicht die anderen Geräte unter Namen und Adresse und zeigt, wie jedes erreicht wird.
 ---
 
 ## Was die App kann
 
 Die App bringt juist auf ein Telefon mit Android 12 oder neuer. Das Telefon
-tritt einem Netz als **Mitglied** ohne Rollen bei, also als Gerät, das die
-anderen nur erreicht und von ihnen erreicht wird. Solange sein VPN an ist,
-erreicht jede App auf dem Telefon die anderen Geräte unter ihren Namen, etwa
-`nas.home.juist`, und unter ihren Adressen im Netz.
+tritt einem Netz als Mitglied ohne Rollen bei. Solange sein VPN an ist,
+erreicht jede App auf dem Telefon die anderen Geräte unter ihrem Namen, etwa
+`nas.home.juist`, und unter ihrer Adresse. Das VPN trägt nur den Verkehr ins
+Netz und das DNS des Telefons ([Namen](#names)); aller übrige Verkehr geht an
+juist vorbei.
 
-Durch das VPN laufen der Verkehr zu den Adressen des Netzes und das DNS des
-Telefons ([Namen](#namen)). Der übrige Verkehr des Telefons läuft wie bisher
-an juist vorbei.
+Das Telefon kann nicht:
 
-Was das Telefon nicht kann:
-
-- Es kann nur in einem Netz sein.
-- Es kann [öffentliche Namen]({{< relref "docs/names" >}}) nicht einschalten.
-  Ein öffentlicher Name, den ein Admin auf ein Gerät zeigen lässt, löst dort
-  also öffentlich auf.
-- Es kann keinen [Subnet-Router]({{< relref "docs/subnets" >}}) nutzen und
-  selbst keine [Exit-Node]({{< relref "docs/exit-nodes" >}}) sein, seinen
-  Internetverkehr aber über eine schicken.
-- Es kann keine Geräte einladen, keinen Admin-Schlüssel halten und keinen
-  Verkehr für andere weiterleiten. Einladungen kommen von einem Admin, der
-  `juist invite` auf einem Rechner aufruft.
+- in mehr als einem Netz sein;
+- [öffentliche Namen]({{< relref "docs/names" >}}) einschalten, sie lösen
+  sich dort also öffentlich auf;
+- einen [Subnet-Router]({{< relref "docs/subnets" >}}) nutzen oder
+  [Exit-Node]({{< relref "docs/exit-nodes" >}}) sein, wohl aber einen nutzen;
+- Geräte einladen, einen Admin-Schlüssel halten oder weiterleiten.
+  Einladungen kommen vom Rechner eines Admins.
 
 ## Die App installieren
 
 Jedes [Release](https://github.com/nning/juist/releases/latest) enthält die
-App als `juist-android-arm64.apk`. Lade sie auf dem Telefon herunter und
-öffne sie. Android fragt dann, ob der Browser Apps installieren darf. Für den
-Emulator nimmst du `juist-android-x86_64.apk`.
+App als `juist-android-arm64.apk`, für den Emulator
+`juist-android-x86_64.apk`. Lade sie auf dem Telefon herunter und öffne sie;
+Android fragt, ob der Browser Apps installieren darf.
 
-Die App ist mit dem Release-Schlüssel von juist signiert. Sein Zertifikat hat
-den SHA-256-Fingerabdruck
+Die App ist mit dem Release-Schlüssel von juist signiert. Der
+SHA-256-Fingerabdruck ihres Zertifikats lautet:
 
 ```text
 51:5C:14:80:41:8A:98:4A:8B:1A:E3:69:51:7A:2C:9F:7F:48:A2:19:41:0C:AE:E6:6F:B5:82:EF:EC:AB:E5:21
 ```
 
-`apksigner verify --print-certs juist-android-arm64.apk` zeigt ihn an. Die APK
-steht außerdem in `SHA256SUMS`, du kannst sie also prüfen, wie unter
-[Den Download prüfen]({{< relref "docs/install" >}}#den-download-prüfen)
-beschrieben.
+`apksigner verify --print-certs juist-android-arm64.apk` zeigt ihn an. Die
+APK steht auch in `SHA256SUMS`
+([Einen Download prüfen]({{< relref "docs/install" >}}#verifying-a-download)).
 
-## Aus dem Quellcode bauen
-
-Du kannst die App auch selbst bauen, auf einem Rechner mit JDK 21, dem
-Android-SDK mit Plattform 37.2 und dem NDK 29. Setz `ANDROID_HOME` auf das
-SDK und `ANDROID_NDK_HOME` auf das NDK, falls es nicht im SDK liegt.
-
-{{< step on="deinem Rechner" >}}
-Bau die App im Quellcode:
-
-```sh
-make android
-```
-
-Das baut den Kern und die App nach `android/app/build/outputs/apk`, mit je
-einem Release- und einem Debug-Build pro Prozessorarchitektur. Ein Telefon
-braucht den Build für `arm64-v8a`, der Emulator den für `x86_64`.
-{{< /step >}}
-{{< step on="deinem Rechner" >}}
-Installier sie auf einem Telefon, das per USB angeschlossen ist und
-USB-Debugging an hat:
-
-```sh
-adb install android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
-```
-
-Oder kopier die Datei aufs Telefon und öffne sie dort. Android fragt dann, ob
-die App, mit der du sie öffnest, Apps installieren darf.
-{{< /step >}}
-
-Android installiert nur signierte Apps. Den Release-Build signierst du mit
-deinem eigenen Schlüssel, den du einmal mit `keytool` aus dem JDK anlegst und
-in `~/.gradle/gradle.properties` einträgst:
-
-```sh
-keytool -genkeypair -keystore ~/juist-app.jks -alias juist -keyalg RSA -keysize 4096 -validity 10000
-```
-
-```text
-juist.signing.store=/home/du/juist-app.jks
-juist.signing.storePassword=…
-juist.signing.keyAlias=juist
-juist.signing.keyPassword=…
-```
-
-Statt der beiden Passwörter kannst du `juist.signing.passwordFile=` auf eine
-Datei mit dem Passwort setzen. Das geht bei einem PKCS12-Keystore, der nur ein
-Passwort hat und den `keytool` standardmäßig anlegt.
-
-Ohne diese Einträge bleibt der Release-Build unsigniert. Installier dann den
-Debug-Build, `apk/debug/app-arm64-v8a-debug.apk`. Er ist eine eigene App,
-`io.juist.debug`, und lässt sich neben einem Release-Build installieren.
-
-Android installiert ein Update nur dann über die App, wenn derselbe Schlüssel
-beide signiert hat. Ein Release lässt sich also nicht über eine selbst gebaute
-App installieren und umgekehrt. Bleib bei einer der beiden: Deinstallierst du die App, um eine
-mit einem anderen Schlüssel zu installieren, sind die Schlüssel des Telefons
-weg, und es muss als neues Gerät wieder beitreten.
+Wie du die App selbst baust, steht in
+[android/README.md](https://github.com/nning/juist/blob/main/android/README.md).
+Eine selbst gebaute App lässt sich nicht über ein Release installieren und
+umgekehrt, weil ein anderer Schlüssel sie signiert.
 
 ## Einem Netz beitreten
 
@@ -115,8 +55,8 @@ joining_words: Die vier Wörter, die der Admin vergleicht
 {{< /screens >}}
 
 {{< step on="dem Gerät eines Admins" >}}
-Starte eine Einladung in einem Terminal mit etwa 60 Spalten oder mehr, damit
-es den QR-Code anzeigen kann:
+Starte eine Einladung in einem Terminal mit mindestens 60 Spalten, damit es
+den QR-Code zeigt:
 
 ```sh
 juist invite
@@ -124,213 +64,161 @@ juist invite
 {{< /step >}}
 {{< step on="dem Telefon" >}}
 Öffne juist, tippe auf **QR-Code scannen** und richte die Kamera auf den
-QR-Code. Android fragt einmal, ob juist die Kamera nutzen darf.
+QR-Code.
 
 Oder tippe auf **Code eintippen** und gib den Code ein, etwa
-`42-drumbeat-tolerance-glucose`. Die App ergänzt jedes Wort beim Tippen. Ein
-Code funktioniert nur, wenn das Telefon im selben LAN ist wie das einladende
-Gerät, denn die App sucht dieses Gerät, indem sie im LAN nachfragt, wie
-`juist join` auch. Bist du woanders, scanne den QR-Code oder füge den Link in
+`42-drumbeat-tolerance-glucose`. Ein Code funktioniert nur im selben LAN wie
+das einladende Gerät. Anderswo scannst du den QR-Code oder fügst den Link in
 dasselbe Feld ein.
 {{< /step >}}
 {{< step on="dem Telefon" >}}
-Prüfe den Namen, den das Telefon im Netz haben wird. Die App schlägt einen
-vor, der auf dem Namen des Telefons beruht, etwa `pixel-8`. Tippe auf
-**Beitreten** und erlaube das VPN, wenn Android fragt.
-
-Das Telefon zeigt dann vier Wörter in großer Schrift.
+Prüf den Namen des Telefons im Netz, etwa `pixel-8`. Tippe auf
+**Beitreten** und erlaube das VPN, wenn Android fragt. Das Telefon zeigt dann
+vier Wörter.
 {{< /step >}}
 {{< step on="dem Gerät eines Admins" >}}
-Vergleiche sie mit den Wörtern, die die Einladung zeigt, und antworte mit
-`y`, wenn sie übereinstimmen. Weichen sie ab, antworte mit `n` und brich auf
-dem Telefon ab.
+Vergleiche sie mit den Wörtern, die die Einladung zeigt. Stimmen sie,
+antworte mit `y`. Sonst antworte mit `n` und brich auf dem Telefon ab.
 {{< /step >}}
 
 Braucht das Netz die Stimmen mehrerer Admins, zeigt das Telefon
-`Warte auf Zustimmung: 1 von 2 Stimmen`, bis die übrigen zugestimmt haben.
-Danach zeigt es seinen Status. [Geräte einladen]({{< relref "docs/invites" >}})
-erklärt Code, Link und Wörter.
+`Waiting for approval: 1 of 2 votes`, bis die anderen bestätigt haben.
+[Geräte einladen]({{< relref "docs/invites" >}}) erklärt Code, Link und
+Wörter.
 
 ## Der Statusbildschirm
 
 {{< screens >}}
-status: Das Netz, dieses Telefon und alles, worum du dich kümmern solltest
+status: Das Netz, dieses Telefon und was Aufmerksamkeit braucht
 member: Ein Gerät, mit einem Ping durch den Tunnel
 {{< /screens >}}
 
-Die App zeigt, was `juist status`, `juist health` und `juist devices` auf einem
-Rechner zeigen (siehe
-[Status und Geräte]({{< relref "docs/status" >}})):
-
-- Den Namen des Netzes und seinen Zustand, etwa **Verbunden**. Jeden
-  anderen Zustand erklärt eine Zeile darunter.
-- Alles, worum du dich kümmern solltest, etwa ein Gerät, das nicht antwortet,
-  oder **Kein Gerät darf weiterleiten**: Ein Telefon im Mobilfunk braucht oft
-  ein [Relay]({{< relref "docs/relays" >}}), um die anderen zu erreichen.
-- Dieses Telefon: seinen Namen, seinen DNS-Namen, seine IPv4- und
-  IPv6-Adresse, die du zum Kopieren antippst, und seine Frische, also wann ein Voucher zuletzt
-  bestätigt hat, dass es den aktuellen Stand des Netzes kennt.
-- Jedes andere Gerät, mit der Art, wie es erreicht wird.
+Die App zeigt, was `juist status`, `juist health` und `juist devices` auf
+einem Rechner zeigen ([Status und Geräte]({{< relref "docs/status" >}})):
+den Zustand des Netzes, was Aufmerksamkeit braucht, Namen, Adressen und
+Frische dieses Telefons und wie jedes andere Gerät erreicht wird. Tippe auf
+eine Adresse, um sie zu kopieren.
 
 | Zustand | Bedeutung |
 |---|---|
 | Verbunden | das Telefon erreicht die Geräte des Netzes |
-| Wartet auf Geräte | es gibt andere Geräte, aber noch keines hat sich gemeldet |
+| Wartet auf Geräte | noch kein anderes Gerät hat sich gemeldet |
 | Kein Tunnel steht | die Geräte sind bekannt, aber zu keinem fließt Verkehr |
-| Eingeschränkt | kein Voucher hat in letzter Zeit bestätigt, dass der Stand des Telefons aktuell ist, also erreicht es nur Voucher |
+| Eingeschränkt | kein Voucher hat den Stand des Telefons zuletzt bestätigt, also erreicht es nur Voucher |
 | Entfernt | das Telefon gehört nicht mehr zum Netz |
 | Abgewiesen | die Geräte des Netzes weisen das Telefon ab, wahrscheinlich wurde es entfernt |
 | Getrennt | die Geschichte des Netzes hat sich gespalten, und alle Tunnel sind unterbrochen, bis ein Admin das klärt |
 | Aus | das VPN ist aus |
 
-Ein Gerät wird **Direkt** erreicht, **Über ein Relay** oder gerade nicht:
-**Keine Antwort**, **Wird gesucht** (es wurde vielleicht neu gestartet oder
-hat das Netz gewechselt), **Offline**, **Noch nicht gemeldet**,
-**Noch nicht geprüft** oder **Veraltet** (darauf läuft ein älteres juist; bis
-es aktualisiert ist, kommt ein Ping durch, andere Apps nicht).
+Ein Gerät wird **Direkt** oder **Über ein Relay** erreicht, oder gerade
+nicht: **Keine Antwort**, **Wird gesucht**, **Offline**,
+**Noch nicht gemeldet**, **Noch nicht geprüft** oder **Veraltet** (es läuft
+ein älteres juist, und bis zum Update kommen nur Pings durch).
 
-Tippe auf ein Gerät, um seinen DNS-Namen, seine Adressen, seine Rollen und
-seine letzte Meldung zu sehen. Bei einem Gerät, das über ein Relay erreicht wird, steht dort auch,
-auf welchem Gerät dieses Relay läuft. **Ping** schickt ein Echo durch den
-Tunnel. juist auf dem Gerät beantwortet es selbst, also kommt die Antwort auch
-dann, wenn die Firewall des Geräts Pings verwirft.
-**Im Browser öffnen** öffnet `http://` an seiner Adresse. Jede andere App
-erreicht das Gerät unter demselben Namen und denselben Adressen, etwa ein
-SSH-Client unter `nas.home.juist`.
+Tippe auf ein Gerät, um Namen, Adressen, Rollen und den letzten Kontakt zu
+sehen. **Ping** schickt ein Echo durch den Tunnel, das juist auf dem Gerät
+beantwortet, auch wenn dessen Firewall Pings verwirft. **Im Browser öffnen**
+öffnet `http://` mit seiner Adresse.
 
-## Namen
+## Namen {#names}
 
 {{< screens >}}
-status_private_dns: Was die App sagt, solange Privates DNS an juist vorbeigeht
+status_private_dns: Was die App sagt, während Privates DNS an juist vorbeigeht
 {{< /screens >}}
 
-Solange das VPN an ist, geht jede Namensanfrage des Telefons an juist, das in
-der App läuft. Es beantwortet die [Namen]({{< relref "docs/names" >}}) des
-Netzes selbst: jedes Gerät als `nas.home.juist` oder einfach `nas`, und die
-unter der Domain des Netzes [veröffentlichten]({{< relref "docs/publishing" >}})
-Namen, auch die nur für Mitglieder, die dann direkt durch den Tunnel zu ihrem
-Gerät führen. Es beantwortet auch, wer eine Adresse des Netzes ist: Eine App,
-die `198.18.36.2` nachschlägt, erfährt `nas.home.juist` und fragt niemanden
-außerhalb. Jeden anderen Namen fragt es beim Netz an, in dem das Telefon
-gerade ist, so wie das Telefon ohne juist, und über DNS über TLS, wo das
-Private DNS des Telefons auf Automatisch das auch tut.
+Solange das VPN an ist, geht jede Namensabfrage auf dem Telefon an juist in
+der App. Es beantwortet die [Namen]({{< relref "docs/names" >}}) des Netzes,
+etwa `nas.home.juist` oder nur `nas`, und die unter der Domain des Netzes
+[veröffentlichten]({{< relref "docs/publishing" >}}) Namen, die dann direkt
+zu ihrem Gerät führen. Auch Rückwärtsabfragen der Adressen des Netzes
+beantwortet es. Alle anderen Namen gehen wie ohne juist an das Netz, in dem
+das Telefon ist, über DNS over TLS, wenn Privates DNS auf automatisch steht
+und es nutzen würde. Schaltest du das VPN aus, bekommt das Telefon sein
+eigenes DNS zurück.
 
-Der Statusbildschirm zeigt den eigenen Namen des Telefons unter **DNS-Name**,
-der Bildschirm jedes Geräts dessen Namen. Eine Anfrage, die juist nicht
-weitergeben kann, etwa ohne Netz oder über eine Exit-Node, die nicht nutzbar
-ist, scheitert sofort statt nach ein paar Sekunden. Schaltest du das VPN aus, hat das Telefon wieder sein eigenes DNS.
+Ob Abfragen juist erreichen, entscheidet die Android-Einstellung
+**Privates DNS**:
 
-Die Android-Einstellung **Privates DNS** entscheidet, ob Anfragen juist
-erreichen:
-
-| Privates DNS | Namen |
+| Privates DNS | Namen des Netzes |
 |---|---|
 | Aus | werden aufgelöst |
 | Automatisch | werden aufgelöst |
-| Hostname des privaten DNS-Anbieters | werden nicht aufgelöst: Android schickt jede Anfrage an diesen Anbieter, an juist vorbei |
+| Hostname des privaten DNS-Anbieters | werden nicht aufgelöst: Android schickt jede Abfrage an diesen Anbieter |
 
-Ist der Hostname eines Anbieters eingestellt, lässt juist das DNS des Telefons
-in Ruhe, und die App sagt, dass die Namen des Netzes nicht aufgelöst werden,
-und nennt jeden Namen nur für Mitglieder, der dann nicht erreichbar ist.
+Ist ein Anbieter eingetragen, sagt die App, dass die Namen des Netzes nicht
+aufgelöst werden, und nennt jeden
+[Namen nur für Mitglieder]({{< relref "docs/members-only" >}}), der dann
+unerreichbar ist.
 
 ## Über einen Exit-Node
 
 Hat das Netz [Exit-Nodes]({{< relref "docs/exit-nodes" >}}), listet der
-Statusbildschirm sie unter **Internet**, neben **Direkt**. Wählst du eine, laufen
-das Internet und das DNS des Telefons über sie, wie `juist exit use` auf einem
-Rechner. Die Namen des Netzes beantwortet juist weiter selbst. Solange die gewählte Exit-Node nicht nutzbar ist, wird der
-Internetverkehr des Telefons gesperrt statt an ihr vorbeigeschickt, und die App
-sagt, warum. Mit **Direkt** geht er wieder ohne juist hinaus.
+Statusbildschirm sie unter **Internet** auf, neben **Direkt**. Wählst du
+einen, laufen Internetverkehr und DNS des Telefons über ihn. Die Namen des
+Netzes beantwortet weiter juist. Solange der Exit-Node nicht nutzbar ist,
+wird der Internetverkehr gesperrt, nicht direkt geschickt, und die App sagt
+warum. Mit **Direkt** geht es wieder ohne ihn.
 
-Stoppt juist, schickt Android den Verkehr des Telefons direkt hinaus. Soll er
-stattdessen gesperrt werden, schalte für juist **Durchgehend aktives VPN** und
-**Verbindungen ohne VPN blockieren** in den VPN-Einstellungen von Android ein.
-Die App verlinkt diese Einstellungen.
+Stoppt juist, schickt Android den Verkehr direkt. Soll er stattdessen
+gesperrt werden, schalte für juist **Durchgehend aktives VPN** und
+**Verbindungen ohne VPN blockieren** in den VPN-Einstellungen von Android
+ein. Die App verlinkt dorthin.
 
 ## Das VPN aus- und einschalten
 
 Der Schalter neben dem Zustand schaltet das VPN aus und ein. Solange es an
 ist, zeigt eine Benachrichtigung den Zustand, mit der Aktion **Ausschalten**.
-
-War das VPN an, schaltet juist es nach einem Neustart des Telefons oder einem
-Update der App wieder ein. Auch die Android-Einstellung **Durchgehend aktives
-VPN** in den VPN-Einstellungen funktioniert mit juist. Android betreibt immer
-nur ein VPN: Eine andere VPN-App schaltet juist aus, und die App weist darauf
-hin.
+War das VPN an, schaltet juist es nach einem Neustart oder Update wieder ein.
+Android betreibt immer nur ein VPN: Eine andere VPN-App schaltet juist ab, und
+die App sagt das.
 
 ## Akku
 
-juist schont den Akku, solange der Bildschirm aus ist, das Telefon ruht oder
-der Energiesparmodus an ist. In einem getakteten Netz, etwa über mobile Daten
-oder einen Hotspot, tut es das auch, sobald die App nicht im Vordergrund ist.
-Dann
+juist spart Akku, solange der Bildschirm aus ist, das Telefon ruht oder der
+Energiesparmodus an ist, und im Mobilnetz oder an einem Hotspot, solange die
+App nicht im Vordergrund ist. Es prüft dann die anderen Geräte und gleicht
+das Log seltener ab und lauscht nicht mehr auf das Multicast-DNS des WLANs.
+Änderungen am Netz kommen trotzdem sofort an, und der Verkehr durch den
+Tunnel wird nicht langsamer.
 
-- prüft es die anderen Mitglieder alle 5 Minuten statt alle 30 Sekunden,
-  meist mit einem einzelnen Ping, der sonst nichts weckt;
-- gleicht es das Log des Netzes alle 30 Minuten statt alle 2 ab;
-- pingt es ruhende Mitglieder nicht mehr eigens, um den Weg zu ihnen offen
-  zu halten;
-- hört es nicht mehr auf das Multicast-DNS des WLANs und kündigt sich dort
-  nicht mehr an, denn jedes solche Paket würde das Telefon wecken.
-
-Änderungen am Netz kommen weiter sofort an, und der Verkehr durch den Tunnel
-wird nicht langsamer. Ist bei eingeschaltetem Bildschirm der
-Energiesparmodus an, sagt der Statusbildschirm das.
-
-Im öffentlichen DHT sucht das Telefon nur dann nach Mitgliedern, wenn es
-außer anderen Telefonen kein Gerät erreicht. Jedes andere Mitglied, das es
-erreicht, findet die übrigen dort und gibt sie weiter.
-
-Was das Telefon von anderen Geräten erfährt, gibt es nicht weiter; das
-erledigen die anderen untereinander. Eigene Neuigkeiten erzählt es zwei
-anderen Geräten, die sie weitergeben. Sobald das Netz auf dem Schema der App
-steht, tauscht ein Abgleich nur noch aus, was der anderen Seite fehlt, statt
-jedes Mal die Angaben aller Geräte.
-
-Sobald das Netz auf dem Schema der App steht
+Läuft das Netz mit dem Schema der App
 ([juist aktualisieren]({{< relref "docs/updating" >}})), lassen auch die
-anderen Geräte das Telefon schlafen. Sie überlassen den Abgleich des Logs
-dem Telefon und sehen alle 30 Minuten nach ihm. Wo kein Relay das Telefon
-erreicht, schicken sie ihm jede Minute einen einzelnen Ping, damit der Weg zu
-ihm offen bleibt. Ein Mitglied erreicht ein Telefon mit ausgeschaltetem
-Bildschirm trotzdem sofort: über ein Relay, wenn es eines gibt, sonst über
-den Weg, den diese Pings offen halten.
+anderen Geräte das Telefon schlafen: Sie prüfen es seltener und überlassen
+ihm den Log-Abgleich. Ein Mitglied erreicht ein schlafendes Telefon trotzdem
+sofort.
 
 ## Wenn das Telefon entfernt wird
 
-Ein Admin entfernt das Telefon wie jedes andere Gerät, mit
-`juist remove pixel-8` ([Geräte entfernen]({{< relref "docs/remove" >}})).
-Die App zeigt dann **Entfernt**. Tippe auf **Netz vergessen**, um mit neuen
-Schlüsseln neu anzufangen, und tritt dann mit einer neuen Einladung wieder
-bei.
+Ein Admin entfernt das Telefon wie jedes Gerät: `juist remove pixel-8`
+([Ein Gerät entfernen]({{< relref "docs/remove" >}})). Die App zeigt dann
+**Entfernt**. Tippe auf **Netz vergessen**, um mit neuen Schlüsseln neu
+anzufangen, und tritt mit einer neuen Einladung wieder bei.
 
 Willst du juist auf dem Telefon nicht mehr nutzen, lass es zuerst von einem
-Admin entfernen und deinstalliere dann die App. Ein Telefon, auf dem die
-App nur deinstalliert wurde, führt das Netz weiterhin als Mitglied.
+Admin entfernen und deinstalliere dann die App. Ein nur deinstalliertes
+Telefon führt das Netz weiter.
 
-## Datenschutz und Sicherheit
+## Privatsphäre und Sicherheit
 
-- Die Schlüssel des Telefons sind mit einem AES-256-Schlüssel versiegelt, den
-  der Android-Keystore hält, im Sicherheitschip des Telefons, falls es einen
-  hat. Dieser Schlüssel verlässt den Keystore nie, eine Kopie der Dateien der
-  App lässt sich also auf keinem anderen Telefon öffnen.
+- Die Schlüssel des Telefons sind mit einem AES-256-Schlüssel im Android
+  Keystore versiegelt, im Sicherheitschip des Telefons, wenn es einen hat.
+  Eine Kopie der App-Dateien lässt sich auf keinem anderen Telefon öffnen.
 - Nichts von juist landet in einem Backup oder auf einem neuen Telefon. Ein
   neues Telefon tritt mit einer eigenen Einladung bei.
-- Die Kamera wird nur auf dem Scan-Bildschirm benutzt, um den QR-Code zu
-  lesen, und nichts, was sie sieht, wird gespeichert oder verschickt.
-- **Über juist** im Menü zeigt die Version der App und die Lizenzen der
-  enthaltenen Komponenten. **Protokoll kopieren** kopiert das Protokoll der App, das
-  sie nur im Speicher hält. Es nennt die Geräte und Adressen deines Netzes;
-  gib es nur jemandem, dem du vertraust und der dir helfen soll.
+- Die Kamera liest nur den QR-Code. Nichts, was sie sieht, wird gespeichert
+  oder verschickt.
+- **Über juist** im Menü zeigt Version und Lizenzen. **Protokoll kopieren**
+  kopiert das Log der App, das nur im Speicher liegt. Es nennt deine Geräte
+  und Adressen; gib es nur jemandem, dem du vertraust.
 
 ## Fehlersuche
 
-| Was du siehst | Was du tun kannst |
+| Du siehst | Was zu tun ist |
 |---|---|
-| **Nicht beigetreten** | Die Einladung ist vielleicht abgelaufen oder schon benutzt, oder das einladende Gerät ist nicht erreichbar. Starte eine neue Einladung. Ein Code funktioniert nur im selben LAN; scanne stattdessen den QR-Code. |
-| **Kein Gerät darf weiterleiten** | Ein Admin vergibt `relay` an ein Gerät mit öffentlicher Adresse ([Relays]({{< relref "docs/relays" >}})). |
-| **Eingeschränkt** | Das Telefon hat seit 48 Stunden nicht genug Voucher erreicht. Verbinde es mit einem Netz, in dem es sie erreichen kann. |
+| **Nicht beigetreten** | Die Einladung ist abgelaufen, verbraucht, oder das einladende Gerät ist nicht erreichbar. Starte eine neue Einladung. Ein Code funktioniert nur im selben LAN; scanne stattdessen den QR-Code. |
+| **Kein Gerät darf weiterleiten** | Ein Telefon im Mobilnetz braucht oft ein Relay. Ein Admin gibt einem Gerät mit öffentlicher Adresse die Rolle `relay` ([Relays]({{< relref "docs/relays" >}})). |
+| **Eingeschränkt** | Das Telefon hat 48 Stunden lang zu wenige Voucher erreicht. Verbinde es mit einem Netz, in dem es sie erreicht. |
 | **Zu wenige Voucher haben bestätigt: eingeschränkt in … Stunden** | Bring vorher einen Voucher wieder online. |
 | **Abgewiesen** oder **Entfernt** | Das Telefon wurde entfernt. Vergiss das Netz und tritt mit einer neuen Einladung wieder bei. |
-| **Privates DNS schickt jede Anfrage an …** | Stell Privates DNS in den Netzwerkeinstellungen des Telefons auf Automatisch oder Aus. |
-| `nas.home.juist` löst nicht auf | Schalte das VPN ein. Sonst sagt der Statusbildschirm, warum. |
+| **Privates DNS schickt jede Anfrage an …** | Stell Privates DNS in den Netzwerkeinstellungen des Telefons auf automatisch oder aus. |
+| `nas.home.juist` wird nicht aufgelöst | Schalte das VPN ein. Sonst sagt der Statusbildschirm, warum. |

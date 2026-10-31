@@ -44,11 +44,12 @@ func httpsAlone(t *testing.T, fb, lx *vm, work, fb4, lx4 string) {
 			for _, w := range []walled{hotel, office} {
 				out, _ := lx.try(w.juist("status")+"; tail -60 "+w.home+"/juistd.log; grep -E "+
 					"'preshared key with|newly given a preshared key|keyed:|log sync|gossip' "+w.home+"/juistd.log | tail -60; "+
-					w.juist("devices")+"; grep -E 'discovered|dht:|home is now|^lab:' "+w.home+"/juistd.log | tail -60",
+					w.juist("devices")+"; grep -E 'discovered|dht:|home is now|^lab:|conn: |report: ' "+w.home+"/juistd.log | tail -80",
 					time.Minute)
 				t.Logf("%s:\n%s", w.name, out)
 			}
-			out, _ := lx.try("juist devices; journalctl -u juistd --no-pager | grep -E 'home is now|report:|discovered' | tail -40; "+
+			out, _ := lx.try("juist devices; journalctl -u juistd --no-pager | "+
+				"grep -E 'home is now|report:|discovered|conn: |adding connection to derp|keeping a connection' | tail -60; "+
 				"juist status; juist health; iptables -L -v -n | head -40; /tmp/probe pcap /tmp/hotel.pcap | sort | uniq -c | head -40; "+
 				"cat /tmp/proxy.log | sort | uniq -c; journalctl -u juistd -n 40 --no-pager", 2*time.Minute)
 			t.Logf("lx:\n%s", out)
@@ -244,13 +245,14 @@ sleep 2`)
 		t.Errorf("nDPI found no TLS in hotel's capture:\n%s", ndpi)
 	}
 	// (5): office reached nothing but the proxy, and asked it for the
-	// relays' names on 443 alone.
+	// relays' names on 443 alone, the ingress's by its role among them,
+	// which a device reaching no relay tries first (M24).
 	if other := lx.run(t, "tcpdump -nr /tmp/office.pcap 'ip and not (dst host 10.89.0.1 and tcp dst port 3128)' "+
 		"2>/dev/null"); strings.TrimSpace(other) != "" {
 		t.Errorf("office sent besides the proxy:\n%s", other)
 	}
 	for _, l := range strings.Split(strings.TrimSpace(lx.run(t, "sort -u /tmp/proxy.log")), "\n") {
-		if l != "CONNECT "+relayFB+":443" && l != "CONNECT "+relayLX+":443" {
+		if l != "CONNECT "+relayFB+":443" && l != "CONNECT "+relayLX+":443" && l != "CONNECT "+relayIngress+":443" {
 			t.Errorf("the proxy was asked %q", l)
 		}
 	}

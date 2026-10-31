@@ -1,8 +1,10 @@
 # The features table on the home page. A row whose handbook page exists links to it;
-# its anchor is the English title, and a note marks a feature that does not run everywhere.
+# its anchor is the English title, a note marks a feature that does not run everywhere,
+# and uses names the use-case pages it serves.
 - doc: docs/how-it-works
   en: {title: Mesh and NAT traversal, text: "WireGuard tunnels between every pair of devices, direct where NAT allows."}
   de: {title: Mesh und NAT-Traversal, text: "WireGuard-Tunnel zwischen allen Geräten, direkt, wo das NAT es zulässt."}
+  uses: [docs/use/ssh]
 - doc: docs/security
   en: {title: Quantum-safe, text: "Every handshake mixes in a key a quantum computer cannot recover, each pair of devices has its own, and every change is signed with ML-DSA."}
   de: {title: Quantensicher, text: "Jeder Handshake mischt einen Schlüssel ein, den ein Quantencomputer nicht herausfinden kann, jedes Gerätepaar hat seinen eigenen, und jede Änderung ist mit ML-DSA signiert."}
@@ -13,50 +15,66 @@
   en: {title: Android, text: "A phone joins with the invite's QR code or code, reaches the members at their addresses, and shows how each one is reached."}
   de: {title: Android, text: "Ein Telefon tritt mit dem QR-Code oder dem Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie es jedes erreicht."}
   note: {en: "On Android 12 or newer, as a member without public names, roles or subnets.", de: "Unter Android 12 oder neuer, als Mitglied ohne öffentliche Namen, Rollen und Subnetze."}
+- doc: docs/install
+  en: {title: Containers, text: "An app in a container is a device of its own, through a juist container sharing its network namespace."}
+  de: {title: Container, text: "Eine App im Container ist ein eigenes Gerät, über einen juist-Container, der sich ihren Netz-Namespace teilt."}
+  uses: [docs/use/container-app]
+  note: {en: "On Linux, with Docker or Podman; the network's names do not resolve in the container.", de: "Unter Linux, mit Docker oder Podman; die Namen des Netzes werden im Container nicht aufgelöst."}
 - doc: docs/admins
   en: {title: Admins and quorum, text: "Every change needs k of n admins. If it needs more approvals, it is passed on to the other admins' devices."}
   de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}
 - doc: docs/access
   en: {title: Access policy, text: "Which device may open what on which other device, and which exit node or subnet it may use. Everything else is refused."}
   de: {title: Zugriffsregeln, text: "Welches Gerät was auf welchem öffnen und welchen Exit-Node oder welches Subnetz es nutzen darf. Alles andere wird abgewiesen."}
+  uses: [docs/use/own-services, docs/use/team-tools, docs/use/ssh]
 - doc: docs/networks
   en: {title: Several networks, text: "One device in several networks, each with its own admin key."}
   de: {title: Mehrere Netze, text: "Ein Gerät in mehreren Netzen, jedes mit eigenem Admin-Schlüssel."}
 - doc: docs/exit-nodes
   en: {title: Exit nodes, text: "A device's internet traffic and DNS, sent through another member."}
   de: {title: Exit-Nodes, text: "Internetverkehr und DNS eines Geräts über ein anderes Mitglied."}
+  uses: [docs/use/public-wifi]
 - doc: docs/subnets
   en: {title: Subnet routers, text: "The LAN behind one member, reachable from the others."}
   de: {title: Subnet-Router, text: "Das LAN hinter einem Mitglied, erreichbar für die anderen."}
+  uses: [docs/use/home-lan]
 - doc: docs/names
   en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
   de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}
+  uses: [docs/use/own-services]
   note: {en: "Public names on Linux and FreeBSD, not in the Android app.", de: "Öffentliche Namen unter Linux und FreeBSD, nicht in der Android-App."}
 - doc: docs/publishing
   en: {title: Publishing services, text: "A member's service, reachable from the internet by name through an ingress."}
   de: {title: Dienste veröffentlichen, text: "Dienste auf Mitgliedern, über einen Ingress unter einem Namen aus dem Internet erreichbar."}
+  uses: [docs/use/homelab]
 - doc: docs/publishing
   en: {title: HTTP/3, text: "Published names over QUIC through the ingress, for browsers that discover it themselves or learn of it from DNS."}
   de: {title: HTTP/3, text: "Veröffentlichte Namen über QUIC durch den Ingress, für Browser, die es selbst entdecken oder per DNS davon erfahren."}
-- doc: docs/publishing
+  uses: [docs/use/homelab]
+- doc: docs/members-only
   en: {title: Members-only names, text: "A published name with a certificate from the CA that the internet cannot reach. Only the members the access policy allows can open it."}
   de: {title: Namen nur für Mitglieder, text: "Ein veröffentlichter Name mit einem Zertifikat der CA, den das Internet nicht erreicht. Öffnen können ihn nur die Mitglieder, denen die Zugriffsregeln es erlauben."}
+  uses: [docs/use/team-tools]
   note: {en: "Reached from Linux, FreeBSD and the Android app.", de: "Erreichbar von Linux, FreeBSD und der Android-App."}
-- doc: docs/publishing
+- doc: docs/tcp-services
   en: {title: TCP services, text: "A game server or any other TCP service on its own port on every ingress, passed on without being read."}
   de: {title: TCP-Dienste, text: "Ein Spieleserver oder jeder andere TCP-Dienst auf einem eigenen Port jedes Ingress, weitergereicht, ohne mitzulesen."}
-- doc: docs/publishing
+  uses: [docs/use/game-server]
+- doc: docs/sharing
   en: {title: Sharing, text: "A file, a directory or a web server, on the internet right away under the device's own name. A directory downloads as a ZIP."}
   de: {title: Teilen, text: "Eine Datei, ein Verzeichnis oder einen Webserver sofort im Internet teilen, unter dem eigenen Namen des Geräts. Ein Verzeichnis lädt sich auch als ZIP."}
+  uses: [docs/use/share]
 - doc: docs/publishing
   en: {title: Status page, text: "Devices, how they are reached, published names and the log's changes on one page for members, and as much of it for everyone else as you choose."}
   de: {title: Statusseite, text: "Geräte, ihre Erreichbarkeit, veröffentlichte Namen und die Änderungen im Log auf einer Seite, für Mitglieder, und so viel davon für alle anderen, wie du willst."}
 - doc: docs/relays
   en: {title: Relays, text: "Where NAT prevents a direct connection, traffic goes through a member with a public address."}
   de: {title: Relays, text: "Wo das NAT keine direkte Verbindung zulässt, läuft der Verkehr über ein Mitglied mit öffentlicher Adresse."}
+  uses: [docs/use/locked-down-networks]
 - doc: docs/https-only
   en: {title: HTTPS only, text: "From a network that lets only HTTPS out, to every member through one relay on port 443, the ingress's by itself, and through a company's proxy."}
   de: {title: Nur HTTPS, text: "Aus einem Netz, das nur HTTPS hinauslässt, zu jedem Mitglied über ein Relay auf Port 443, das des Ingress von selbst, und über den Proxy einer Firma."}
+  uses: [docs/use/locked-down-networks]
 - doc: docs/network-changes
   en: {title: Renaming and renumbering, text: "Give the network or a device a new name, or the devices new IPv4 addresses, without setting anything up again."}
   de: {title: Umbenennen und umnummerieren, text: "Das Netz oder ein Gerät bekommt einen neuen Namen, die Geräte neue IPv4-Adressen, ohne dass etwas neu eingerichtet wird."}

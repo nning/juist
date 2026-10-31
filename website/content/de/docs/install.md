@@ -8,7 +8,7 @@ lead: juist installierst du als Paket deines Systems, und zwar auf jedem Gerät,
 ## Unterstützte Systeme
 
 juist läuft unter Linux und FreeBSD. Für Debian und Ubuntu gibt es ein
-`.deb`, für Fedora ein RPM und für FreeBSD ein pkg-Paket. Jedes
+`.deb`, für Fedora ein RPM und für FreeBSD 15 ein pkg-Paket. Jedes
 [Release](https://github.com/nning/juist/releases/latest) enthält die Pakete
 für amd64 und arm64, das RPM allerdings nur für x86_64. Ein
 Telefon tritt stattdessen mit der App bei, siehe
@@ -33,24 +33,30 @@ Installiere das Paket:
 sudo dnf install https://github.com/nning/juist/releases/latest/download/juist.x86_64.rpm
 ```
 {{< /step >}}
-{{< step on="einem Gerät mit FreeBSD 14" >}}
+{{< step on="einem Gerät mit FreeBSD 15" >}}
 Installiere das Paket als root mit pkg und starte dann den Daemon:
 
 ```sh
-pkg add https://github.com/nning/juist/releases/latest/download/juist-freebsd14-amd64.pkg
+pkg add https://github.com/nning/juist/releases/latest/download/juist-freebsd15-amd64.pkg
 sysrc juistd_enable=YES && service juistd start
 ```
 
-Auf arm64 nimmst du `juist-freebsd14-aarch64.pkg`. Unter Linux startet das
+Auf arm64 nimmst du `juist-freebsd15-aarch64.pkg`. Unter Linux startet das
 Paket den Daemon von selbst, unter FreeBSD startest du ihn einmal wie oben
 gezeigt.
+
+Unter FreeBSD lässt juistd pf mit eigenen Regeln laufen, die die Adressen des
+Geräts im Netz dem Tunnel vorbehalten: Das LAN erreicht sie nicht. Lädt der
+Host eigene pf-Regeln, muss `/etc/pf.conf` die Anker von juist aufrufen,
+`nat-anchor "juist/*"`, `rdr-anchor "juist/*"` und `anchor "juist/*"`, vor
+jeder Regel, die mit `quick` durchlässt; sonst warnt `juist health`.
 {{< /step >}}
 
 Installierst du später ein neueres Release, ersetzt es das alte, und der
 Zustand des Geräts bleibt erhalten. Einzelheiten stehen unter
 [juist aktualisieren]({{< relref "docs/updating" >}}).
 
-## Den Download prüfen
+## Den Download prüfen {#verifying-a-download}
 
 Jedes Release führt die SHA-256-Summen seiner Dateien in `SHA256SUMS`,
 signiert mit dem Schlüssel in
@@ -97,32 +103,108 @@ Die Pakete landen in `build/deb`, `build/rpm/RPMS` und `build/freebsd`.
 `make deb DEB_ARCH=arm64` baut das `.deb` für eine andere
 Prozessorarchitektur, mit `armhf` und `i386` funktioniert es genauso.
 
+## Im Container
+
+Eine App im Container kann ein eigenes Gerät sein, mit eigenen Adressen und
+einem eigenen Platz in den [Zugriffsregeln]({{< relref "docs/access" >}}):
+juistd läuft in einem zweiten Container, der sich den Netz-Namespace mit der
+App teilt, und legt dort `juist0` an. Was die App zur Adresse eines Mitglieds
+öffnet, geht durch den Tunnel. Das Image baust du mit `make image` im
+Quellbaum und lädst es mit `docker load`.
+
+{{< step on="dem Gerät eines Admins" >}}
+```sh
+juist invite app
+```
+{{< /step >}}
+
+{{< step on="dem Container-Host" >}}
+In einer `compose.yaml` hält ein eigener Dienst, `netns`, den Namespace,
+damit juist und die App ihn behalten, wenn einer von beiden neu startet;
+`JUIST_JOIN` nimmt den Einladungslink:
+
+```yaml
+services:
+  netns:
+    image: registry.k8s.io/pause:3.10
+    restart: unless-stopped
+  juist:
+    image: juist:VERSION
+    network_mode: service:netns
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    devices: [/dev/net/tun]
+    environment:
+      JUIST_JOIN: "juist:…"
+    volumes:
+      - type: volume
+        source: juist
+        target: /var/lib/juist
+        volume:
+          nocopy: true
+    restart: unless-stopped
+  app:
+    image: …   # die App
+    network_mode: service:netns
+    depends_on: [juist]
+    restart: unless-stopped
+volumes:
+  juist: {}
+```
+
+```sh
+docker compose up -d
+```
+
+Wie der Beitritt lief, zeigt `docker compose logs juist`, die Adressen des
+Geräts `docker compose exec juist juist status`. Nach dem Beitritt ist der
+Link verbraucht und `JUIST_JOIN` wird ignoriert.
+{{< /step >}}
+
+- juistd braucht `CAP_NET_ADMIN` und `/dev/net/tun`, kein `privileged`.
+  Docker gibt eine Capability nur root, also läuft juistd dort als root, ohne
+  jede andere Capability, auf einem Volume, das root gehört: `nocopy`
+  verhindert, dass es dem Benutzer des Images gehört. Podman gibt sie dem
+  Benutzer des Images; dort kommt die `compose.podman.yaml` des Beispiels
+  dazu.
+- Die Namen des Netzes werden in den Containern nicht aufgelöst, da dort kein
+  systemd-resolved läuft, und `juist health` sagt das. Nimm die Adressen, die
+  `juist devices` auflistet, oder trag Namen mit `extra_hosts` an `netns`
+  in die `/etc/hosts` des Namespace ein, mit der IPv6-Adresse, die beim
+  Umnummerieren gleich bleibt.
+- Startet `netns` neu, startet `docker compose restart netns` juist und die
+  App mit ihm neu; sonst bleiben sie in seinem alten Namespace.
+- Statt `netns` kann ein Tailscale-Container im Userspace-Modus den
+  Namespace halten, mit `network_mode: service:tailscale`; die beiden kommen
+  sich nicht in die Quere.
+
+Dasselbe mit Kommentaren, einer `.env` und Podmans Ergänzung:
+[examples/sidecar](https://github.com/nning/juist/tree/main/examples/sidecar)
+im Repository.
+
 ## Was das Paket installiert
 
 - Den Befehl `juist` und den Daemon `juistd`. Was welches Programm tut, steht
   unter [So funktioniert juist]({{< relref "docs/how-it-works" >}}).
 - Unter Linux den Dienst `juistd`. Er startet sofort und wartet, bis du ein
-  Netz anlegst oder einem beitrittst. Er läuft unter einem eigenen Benutzer,
-  `juist`, und hat nur `CAP_NET_ADMIN`, auf einem
-  [Relay auf Port 443]({{< relref "docs/relays" >}}) zusätzlich
-  `CAP_NET_BIND_SERVICE`.
-- Unter Linux zwei weitere Dienste. `juist-ingress` betreibt einen Ingress und
-  wird von `juist ingress serve` gestartet. `juist-serve` ist juists eigener
-  TLS-Terminator; systemd startet ihn ohne sudo, sobald `juist publish` oder
-  `juist share` ihn braucht
-  ([Dienste veröffentlichen]({{< relref "docs/publishing" >}})).
+  Netz anlegst oder einem beitrittst. Er läuft als Benutzer `juist`, nur mit
+  `CAP_NET_ADMIN`, auf einem [Relay auf Port 443]({{< relref "docs/relays" >}})
+  zusätzlich mit `CAP_NET_BIND_SERVICE`. Weitere Netze laufen als die
+  Benutzer `juist1` bis `juist9`, die das Paket ebenfalls anlegt.
+- Unter Linux zwei weitere Dienste: `juist-ingress` für einen
+  [Ingress]({{< relref "docs/publishing" >}}), gestartet von
+  `juist ingress serve`, und `juist-serve`, den TLS-Terminator von juist, den
+  systemd startet, wenn `juist publish` oder `juist share` ihn braucht.
 - Firewall-Profile für ufw und firewalld: `juist`, `juist-relay`,
   `juist-relay-443`, `juist-invite` und `juist-ingress`. Läuft ufw oder
-  firewalld, lässt das Paket außerdem den Verkehr auf dem Netzwerkgerät
-  `juist0` durch. Das Netz braucht ihn, um sein Log abzugleichen, und
-  veröffentlichte Dienste, um erreichbar zu sein. Das geschieht nur bei der
-  ersten Installation, damit ein Upgrade deine Firewall-Einstellungen nicht
-  anrührt.
+  firewalld, lässt das Paket außerdem Verkehr auf `juist0` durch, den der
+  Log-Abgleich und veröffentlichte Dienste brauchen. Das geschieht nur bei der
+  ersten Installation, ein Upgrade lässt deine Firewall in Ruhe.
 - Eine polkit-Regel, die juistd erlaubt, das DNS des Netzes über
-  systemd-resolved einzurichten. Die Regel braucht polkit, das das Paket
-  empfiehlt; Minimalinstallationen wie Fedora Cloud haben es sonst nicht.
-  polkit vor 0.106, etwa unter Ubuntu 22.04, liest keine Regeln: Dort legt
-  das .deb dieselbe Erlaubnis in
+  systemd-resolved einzurichten. Sie braucht polkit, das das Paket empfiehlt;
+  Minimalinstallationen wie Fedora Cloud haben es nicht. Unter Ubuntu 22.04,
+  dessen polkit keine Regeln liest, legt das .deb dieselbe Erlaubnis in
   `/var/lib/polkit-1/localauthority/10-vendor.d/60-juist.pkla` ab.
 - Shell-Vervollständigung für bash, zsh und fish sowie die Man-Pages
   `juist(1)` und `juistd(8)`.
@@ -159,9 +241,10 @@ Firewall-Regel für `juist0`, ein Ingress, ein Relay auf Port 443 und die
 ## Was nach dem Deinstallieren bleibt
 
 - Unter Linux bleiben die Schlüssel und das Log des Geräts in
-  `/var/lib/juist`, ebenso die Systembenutzer `juist`, `juist-ingress` und
-  `juist-serve`. Auf Debian und Ubuntu löscht `sudo apt purge juist` das
-  Verzeichnis `/var/lib/juist` nur, wenn es leer ist. Andernfalls meldet es:
+  `/var/lib/juist`, die eines weiteren Netzes in `/var/lib/juist1` usw.,
+  ebenso die Systembenutzer `juist`, `juist1` bis `juist9`, `juist-ingress`
+  und `juist-serve`. Auf Debian und Ubuntu löscht `sudo apt purge juist` jedes
+  dieser Verzeichnisse nur, wenn es leer ist. Andernfalls meldet es:
   `juist: kept /var/lib/juist, which still holds this device's keys and log`.
 - Auch `/var/lib/juist-serve` bleibt (unter FreeBSD `/var/db/juist-serve`).
   Darin liegt das ACME-Konto des TLS-Terminators, auf das die CAA-Einträge

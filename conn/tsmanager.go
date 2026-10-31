@@ -107,6 +107,10 @@ type Options struct {
 	// is delivered to the device. Close closes it, as a New that fails does.
 	Local      tun.Device
 	LocalAddrs []netip.Addr
+
+	// Multicast carries the IPv4 UDP this node's device sends to a multicast
+	// group to every member without an [Access], and delivers theirs.
+	Multicast bool
 }
 
 // tsManager implements [Manager] on top of Tailscale's wgengine and magicsock.
@@ -171,13 +175,21 @@ type tsManager struct {
 	serve     Serve
 	tunName   string
 
-	// confiner keeps restricted peers to their access.
+	// confiner keeps restricted peers to their access, and groups carries
+	// multicast, nil without [Options.Multicast].
 	confiner *confiner
+	groups   *multicaster
 
 	// stun are the public STUN servers, and stunRegions the regions they
 	// hold in the map last installed.
 	stun        []string
 	stunRegions atomic.Pointer[map[tailcfg.DERPRegionID]bool]
+	// relayRegions are the member relays' regions in that map.
+	relayRegions atomic.Pointer[map[tailcfg.DERPRegionID]bool]
+	// pinged are the relays netcheck reached by ICMP alone.
+	pinged pinged
+	// homes are the homes peers last said they had. Guarded by apply.
+	homes map[key.NodePublic]heldHome
 	// homeless is whether the engine is told it has no home: the map last
 	// installed holds STUN servers alone (stunOnly), or the last report
 	// measured no member relay (relayMissing); homeMu orders the telling.
@@ -296,6 +308,7 @@ func New(opts Options) (_ Manager, err error) {
 	}
 	m.state.Store(&peerState{})
 	m.stunRegions.Store(&map[tailcfg.DERPRegionID]bool{})
+	m.relayRegions.Store(&map[tailcfg.DERPRegionID]bool{})
 	m.named.Store(&[]string{})
 	m.skip = opts.TunName
 	m.publicSeen = map[netip.Addr]time.Time{}
@@ -304,6 +317,7 @@ func New(opts Options) (_ Manager, err error) {
 		m.homed = make(chan struct{}, 1)
 	}
 	m.walls.kick = make(chan struct{}, 1)
+	m.walls.keepKey = key.NewNode().Public()
 	logf = m.watchEngine(logf)
 	m.logf = logf
 
@@ -353,6 +367,10 @@ func New(opts Options) (_ Manager, err error) {
 		return nil, errors.New("conn: engine did not surface its magicsock conn or TUN wrapper")
 	}
 	m.confiner = confine(tundev)
+	if opts.Multicast {
+		m.groups = relayGroups(tundev, m.done, &m.warm)
+		undo.push(func() { close(m.done) })
+	}
 	m.tun = tundev
 	if opts.Local != nil {
 		m.stack = opts.Local

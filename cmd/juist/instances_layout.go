@@ -17,8 +17,8 @@ import (
 // A hostLayout is where the packaged services keep their sockets and state
 // and how an instance is started and stopped; tests move all of it.
 type hostLayout struct {
-	runDir   string   // sockets: juistd.sock, and juistN.sock for the others
-	stateDir string   // the default's home, holding the others' as juistN
+	runDir   string   // the default's socket, juistd.sock; instance N's is in juistN beside it
+	stateDir string   // the default's home; instance N's is juistN beside it
 	wantsDir string   // an enabled instance has its unit linked here
 	unitDirs []string // where instanceUnit may be installed
 	systemd  string   // exists while systemd runs the host; "" for always
@@ -90,14 +90,14 @@ func (l *hostLayout) socket(n int) string {
 	if n == 0 {
 		return filepath.Join(l.runDir, filepath.Base(ipc.SystemSocket))
 	}
-	return filepath.Join(l.runDir, instance.Name(n)+".sock")
+	return filepath.Join(filepath.Dir(l.runDir), instance.Name(n), filepath.Base(ipc.SystemSocket))
 }
 
 func (l *hostLayout) home(n int) string {
 	if n == 0 {
 		return l.stateDir
 	}
-	return filepath.Join(l.stateDir, instance.Name(n))
+	return filepath.Join(filepath.Dir(l.stateDir), instance.Name(n))
 }
 
 // homeOf is the instance whose home path is.

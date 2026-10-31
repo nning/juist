@@ -25,17 +25,32 @@ docs.juist.nning.io.
   trade-offs. *Documentation* is the handbook, a page per task in the order of
   `data/nav.yaml`; its sidebar lists only pages that exist.
 - **Handbook pages** follow one shape: what it is, how to (steps, each on a
-  named device), good to know, if something goes wrong.
+  named device), good to know, if something goes wrong. "Good to know" sits
+  in the section it belongs to, not in a catch-all "Notes". A page serves
+  one task; one that grows a second task splits.
+- **Use cases** (`content/*/docs/use/`) start from a goal and compose the
+  features it takes: what you get, what you need, steps, what to watch out
+  for, where to read on. They link to the handbook pages rather than repeat
+  them, and a features row names the use cases it serves (`uses:`).
 - **Trade-offs** take each residual weakness from
   [02-threat-model.md](02-threat-model.md) as what happens, why it is accepted
-  and what moves it; this is M30's documentation of the acceptances.
+  and what moves it; this is M32's documentation of the acceptances.
 - **Writing.** Every command, flag, default and output line is checked
   against the README, the commands' help or the code, and left out if it
-  cannot be. Each juist term is explained where a page first uses it. Short
-  sentences in the second person ("du" in German), no slogans, metaphors or
-  em dashes; commands and output stay English on German pages. German pages
-  say what the English ones say in idiomatic German, not sentence by
-  sentence in English word order.
+  cannot be. Short sentences in the second person ("du" in German), no
+  slogans, metaphors or em dashes; commands and output stay English on
+  German pages. German pages say what the English ones say in idiomatic
+  German, not sentence by sentence in English word order.
+- **Plain sentences.** One statement per sentence, subject before verb,
+  rarely past 20 words. "If", not "where", for a condition; no "of its own",
+  "beside" or "as X does" where a plain word says it; no clause tucked
+  inside another.
+- **Only what a reader acts on.** A page says what a user needs to do a task
+  or to understand a failure. How juist does it inside (log formats, timers,
+  kernel tuning, protocol steps) goes to Architecture or Security, or out.
+- **Each term once.** A juist term (operator, voucher, quorum, ingress, …)
+  is explained in How juist works and linked where another page first uses
+  it, not explained again.
 - **The current state only.** Pages say what juist does today; no
   milestones, plans, or work in progress, and nothing promised for a later
   version. The one exception is the comparison matrix's "planned" mark.
@@ -88,7 +103,7 @@ The website and the app take their look from one place, `design/`:
 ## Still to come
 
 - **Every trade-off.** The home page carries five; the rest of
-  [02-threat-model.md](02-threat-model.md)'s list, for M30.
+  [02-threat-model.md](02-threat-model.md)'s list, for M32.
 - **A command reference** generated as `juist __manpage` is.
 - **Search and staleness.** Pagefind; a check that every page exists in both
   languages and that a translation is not older than its source.

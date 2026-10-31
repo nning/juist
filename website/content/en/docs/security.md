@@ -92,8 +92,7 @@ drops its tunnel to the device as soon as it learns of the removal. See
 The limit: a member that is cut off from the rest learns of the removal late,
 and until then keeps its tunnel to the removed device. Freshness limits that
 to 48 hours: a member that no voucher has vouched for in 48 hours keeps
-tunnels only to vouchers. A **voucher** is a device that confirms every hour
-that the network's state is current. With `juist admins vouchers M`, that
+tunnels only to vouchers. With `juist admins vouchers M`, that
 limit holds even if M − 1 vouchers lie. See
 [freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
 
@@ -110,11 +109,10 @@ why it is accepted, and what you can change. In short:
   Give it more admins than the quorum needs.
 - A network where every device sits behind symmetric NAT needs a relay member.
 - The public DHT and STUN servers see the addresses of the devices that use
-  them. A device looks up another in the DHT when it has lost track of it
-  and none of the network's relays knows where it is, so the DHT sees that
-  the two addresses belong to one network, though not to which, nor whose
-  they are. Of the devices that reach one another, only one asks. With a
-  relay of your own, juistd can run without them.
+  them. If a device has lost track of another and no relay knows where it is,
+  it looks it up in the DHT. The DHT then sees that two addresses belong to
+  one network, but not to which, nor whose they are. With a relay of your
+  own, juistd can run without them.
 
 ## Quantum-safe
 
@@ -129,11 +127,11 @@ juist protects against both:
   change to the members.
 - Group secrets are sealed with X25519 combined with ML-KEM-768.
 - Every change to the network, and every message devices sign for one
-  another, is signed with ML-DSA-44, and a signature with Ed25519 alone is
-  refused. Only copies of a device's announcement found in the DHT, at a
-  relay or on the LAN are taken on Ed25519 alone, and they say no more than
-  where to reach the device. Each device's and admin key's ML-DSA key derives from the key it
-  already has, so its backup covers it.
+  another, is signed with ML-DSA-44; Ed25519 alone is refused. The only
+  exception are copies of a device's announcement from the DHT, a relay or
+  the LAN, which say no more than where to reach the device.
+- Each device's and admin's ML-DSA key derives from the key it already has,
+  so its backup covers it.
 - Joining agrees a key with ML-KEM-768 after the code or link is checked, so
   someone who records a join and later has a quantum computer learns
   nothing from it.
@@ -159,7 +157,7 @@ What stays classical: a relay proves itself with a classical certificate,
 since it is trusted only to pass traffic, and a proxy that ends TLS without
 ML-KEM cannot carry a device that reaches only HTTPS.
 
-## Notes
+## Good to know
 
 - On Linux, juist drops traffic that reaches a device's juist addresses
   without coming through the tunnel, and traffic that claims to come from a

@@ -66,9 +66,9 @@ it, by default a qemu VM whose ssh is forwarded to port 2222, which needs
 neither root nor KVM here:
 
 ```sh
-curl -LO https://download.freebsd.org/releases/CI-IMAGES/14.5-RELEASE/amd64/Latest/FreeBSD-14.5-RELEASE-amd64-BASIC-CI-ufs.raw.xz
-xz -d FreeBSD-14.5-RELEASE-amd64-BASIC-CI-ufs.raw.xz
-qemu-img convert -O qcow2 FreeBSD-14.5-RELEASE-amd64-BASIC-CI-ufs.raw fb.qcow2
+curl -LO https://download.freebsd.org/releases/CI-IMAGES/15.1-RELEASE/amd64/Latest/FreeBSD-15.1-RELEASE-amd64-BASIC-CI-ufs.raw.xz
+xz -d FreeBSD-15.1-RELEASE-amd64-BASIC-CI-ufs.raw.xz
+qemu-img convert -O qcow2 FreeBSD-15.1-RELEASE-amd64-BASIC-CI-ufs.raw fb.qcow2
 qemu-system-x86_64 -machine q35 -accel tcg,thread=multi -smp 2 -m 2048 \
   -drive file=fb.qcow2,if=virtio -nographic \
   -netdev user,id=n0,hostfwd=tcp:127.0.0.1:2222-:22 -device virtio-net-pci,netdev=n0
@@ -79,13 +79,14 @@ plumbing skip there by name; a test that needs `go` or more than one loopback
 address skips too.
 
 **`make interop` is where Linux and FreeBSD meet** (`interop/`): two pairs of
-a Debian 12 (lx) and a FreeBSD 14.5 (fb) VM in qemu, each pair's LAN a pair of
+a Debian 12 (lx) and a FreeBSD 15.1 (fb) VM in qemu, each pair's LAN a pair of
 UDP sockets on the host's loopback, each VM with its package installed. One
 pair, `TestLinuxAndFreeBSD`, joins one network of this build, which crosses
 three epoch bumps and then carries every part its rows below name; the other,
 `TestLinuxAndFreeBSDUpgraded`, starts on the previous release, the last done
-milestone's packages that `make previous` builds once per commit into
-`INTEROP_CACHE` in an environment that holds none of this make's variables,
+milestone's packages that `make previous` builds once per commit and
+FreeBSD release into `INTEROP_CACHE`, in an environment that holds none of
+this make's variables but `FREEBSD_ABI`,
 upgrades the two beside each other, pings across the epoch bumps, and serves
 as exit node, subnet router and ingress and resolves names, resolved there
 and gone. Both remove their packages, leaving no
@@ -228,6 +229,8 @@ interop`).
 | instances keep their tables and rules apart | `conn`: `TestInstancesKeepTheirRulesApart`, `TestNetnsInstancesLeaveEachOtherAlone` | for the second |
 | an overlapping instance yields IPv4, the same network twice does not start | `daemon`: `TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt`, `TestAnInstanceRefusesANetworkTheHostRunsAlready`, `TestTheLowerInstanceKeepsItsAddresses` | no |
 | the CLI finds, makes and removes instances | `cmd/juist`: `TestASecondNetworkRunsBesideTheFirst`, `TestJoiningASecondNetwork` | no |
+| each network's juistd runs as a user of its own, reading none of another's keys; an upgrade moves an instance's home out of the default's once, giving on only what was juist's, nothing that became a link or a file meanwhile; a purge removes an empty home alone | `make interop`: `TestLinuxAndFreeBSD/a_user_per_network`, `TestLinuxAndFreeBSDUpgraded`; `packaging`: `TestInstancesMoveOutOfTheDefaultsHome`, `TestARunningInstanceMovesOverTheHomeItsStopMade`, `TestAHomeSwappedForALinkIsGivenNothing`, `TestAPurgeKeepsAnInstancesHomeThatHoldsKeys`, `TestAnInstanceHomeMovesOnceAndFollowsNoLink`; `cmd/juistd`: `TestTheDaemonRunsAsItsInstancesUser` | qemu, and FreeBSD for the last but one |
+| a local user who may not operate is shown no other member's name or identity, each by a pseudonym the same throughout one status | `ipc`: `TestAReaderSeesNoMembersNames`, `TestEveryStatusFieldIsClassifiedForReaders`; `cmd/juist`: `TestStatusVerboseNamesEachDevicesRelay` | no |
 | a renumbering keeps every pair reachable, the offline one included | `conn`: `TestNetnsRenumberingKeepsEveryPairReachable`; `trust/log`: `TestRejectsCollidingV4Address` | for the first |
 | a descriptor juistd is sent by its binder or plumber is taken only alone, in one whole message; every other that arrives is closed, before an unreadable message or in a truncated read too | `cmd/juistd`: `TestABindersExtraDescriptorsAreClosed` | no |
 
@@ -324,12 +327,13 @@ interop`).
 
 | Claim | Where it is checked | Privileged |
 |---|---|---|
-| on FreeBSD the daemon runs as juist, and a helper as root plumbs juist's own devices alone, one helper each, addresses of one host and no default route, and neither outlives the other | `internal/plumber`: `TestTheHelperPlumbsWhatItIsAsked`, `TestTheHelperTouchesNothingElse`, `TestAnAddressIsOneHost`, `TestALargeRouteSetGoesWhole`, `TestALateAnswerIsNoOtherCallsAnswer`, `TestADeviceIsOneHelpers`, `TestManyRoutesGoInFast`; `cmd/juistd`: `TestRootSplitsOffTheDaemon`, `TestADaemonStoppedAtOnceStopsCleanly`, `TestTheDaemonGoesWithItsHelper`, `TestAHelperThatStopsServingStopsTheDaemon`, `TestRootNeedsAHome`, `TestRootGetsHelp`, `TestTheDaemonGetsNoneOfRootsEnvironment`, `TestAJuistUserOfRootsIsRefused` | FreeBSD, for the last ten |
+| on FreeBSD the daemon runs as juist or its instance's user, and a helper as root plumbs its daemon's own device alone, one helper each, addresses of one host, no default route and nothing holding the host's own address or a gateway of its routes, and neither outlives the other | `internal/plumber`: `TestTheHelperPlumbsWhatItIsAsked`, `TestTheHelperTouchesNothingElse`, `TestTheHelperPlumbsItsDaemonsDeviceAlone`, `TestTheHelperRoutesNothingOverTheHostsOwnLAN`; `cmd/juistd`: `TestTheHelperPlumbsTheDaemonsDeviceAlone`; `TestAnAddressIsOneHost`, `TestALargeRouteSetGoesWhole`, `TestALateAnswerIsNoOtherCallsAnswer`, `TestADeviceIsOneHelpers`, `TestManyRoutesGoInFast`; `cmd/juistd`: `TestRootSplitsOffTheDaemon`, `TestADaemonStoppedAtOnceStopsCleanly`, `TestTheDaemonGoesWithItsHelper`, `TestAHelperThatStopsServingStopsTheDaemon`, `TestRootNeedsAHome`, `TestRootGetsHelp`, `TestTheDaemonGetsNoneOfRootsEnvironment`, `TestAJuistUserOfRootsIsRefused` | FreeBSD, for the last ten |
 | a device the helper made carries the overlay both ways, from the renumbered source, is another instance's holding, and goes with its routes; the host's own routes are read and heard | `conn`: `TestAPlumbedDeviceCarriesTheOverlay`, `TestAPlumbedDeviceTakesWhatTheNodeWrites`, `TestAPlumbedRouterKnowsTheHostsRoutes`, `TestTheManagerAsksItsRouterForTheHostsRoutes` | FreeBSD, but for the last |
 | rc.d runs, reports and stops an instance with juistd_args, and the CLI starts, stops and reads instances through rc.conf | `packaging`: `TestTheRCScriptRunsAnInstance`; `cmd/juist`: `TestStoppingAnInstanceDisablesIt`, `TestAnInstanceIsEnabledByRCConf` | FreeBSD, for the first |
 | every test passes on FreeBSD, the CLI's hints in rc.d's words | `make test-freebsd` | FreeBSD |
 | a FreeBSD exit node or router masquerades the overlay, takes overlay sources and its forwarder by the tunnel alone, and puts forwarding and pf back as it found them | `internal/plumber`: `TestServingRules`, `TestServingSetsTheHostUpAndBack` | FreeBSD, for the last |
 | using an exit node on FreeBSD routes the internet into the device behind a guard by juistd's own uid, refusing outlasts the device, and going direct puts all back; the host's DNS goes by resolvconf, on 53 alone | `internal/plumber`: `TestEgressRules`, `TestEgressIsTheDaemonsUser`, `TestEgressSetsTheHostUpAndBack`, `TestDNSGoesByResolvconf`; `daemon`: `TestAHelpersDNSTakesPort53Alone` | FreeBSD, for the last three |
+| pf keeps a device's overlay to it, as Linux's in table does: nothing reaches its addresses by another device but the loopback, by TCP too, and no member's source comes in by a device that is no juist one; the LAN reaches a device's overlay address no more; where the host's rules call no juist anchor the status and `juist health` say why | `internal/plumber`: `TestGuardRules`, `TestAGuardTakesTheOverlaysAddressesAlone`, `TestAGuardSetsTheHostUpAndBack`; `daemon`: `TestAnUnguardedOverlayIsInTheStatus`; `cmd/juist`: `TestHealthSaysTheOverlayIsUnguarded`; `make interop`: `TestLinuxAndFreeBSD/tunnel` | FreeBSD, for the third, and qemu |
 | pf rules hold none of the daemon's text, what someone takes of juist's pf is put back, the host's own ruleset must call the anchors first and is left be | `internal/plumber`: `TestServingTakesTheDevicesAddressesAlone`, `TestTheHostsRulesCallTheAnchorsFirst`, `TestPFIsKeptAndLeftBe` | FreeBSD, for the last |
 | the FreeBSD package is the same bytes from each build, its manifests first, every file's sum and mode as pkg checks them | `packaging/freebsd/mkpkg`: `TestPackage` | no |
 | answers to connections that came in by another device leave by it, past the guard, unless isolated; FreeBSD's helper says where the host's own pf rules decide instead | `conn`: `TestTheGuardPassesAnswersButIsolated`; `internal/plumber`: `TestAnswersLeaveTheWayTheyCame`, `TestTheHelperSaysWhereAnswersGo`; `daemon`: `TestAnIsolatedChoiceSendsAnswersThrough`, `TestTheExitChoiceIsKept`; `ipc`: `TestAnExitRequestSetsOneThing`; `make interop` | qemu, for the last |
@@ -340,7 +344,7 @@ interop`).
 | resolved's list of every link's servers as resolv.conf is named as the reason DNS goes around the exit node, with the stub as the hint | `daemon`: `TestResolvedsUplinkModeIsSaid`; `cmd/juist`: `TestTheStatusSaysWhereDNSGoes` | no |
 | two builders on two systems make the same binaries for Linux and FreeBSD, and the same package | `make repro-freebsd` | a FreeBSD host |
 | the helper takes no address or source outside a network's space, captures nothing the host keeps to its links, deletes a route by its gateway, keeps what to put back where that fails, leaves a pf rc.conf starts on, and adds answer rules beside no ruleset of the host's | `internal/plumber`: `TestTheHelperKeepsToTheNetworksSpace`, `TestARouteDeletedLeavesTheHosts`, `TestAPfTheHostStartsIsLeftOn`, `TestPFIsKeptAndLeftBe`; `conn`: `TestARedirectsRouteIsNotTheHosts` | FreeBSD, but for the first |
-| an instance's home is made as the juist user, never followed as root; clear waits for a supervised juistd | `packaging`: `TestAnInstanceHomeFollowsNoLink`, `TestClearWaitsForASupervisedJuistd` | FreeBSD |
+| an instance's home moves out of the juist user's once, never following a link as root nor giving on a hard link's file; clear waits for a supervised juistd | `packaging`: `TestAnInstanceHomeMovesOnceAndFollowsNoLink`, `TestClearWaitsForASupervisedJuistd` | FreeBSD |
 | the FreeBSD package's modes go by where a file goes, and a file twice or a stray script is refused | `packaging/freebsd/mkpkg`: `TestModesAndMistakes` | no |
 
 ### Names
@@ -498,6 +502,16 @@ The latest `make ci-vm` that closed a milestone, and the latest run of each
 gate it does not cover. Replace an entry when its gate runs again, so it is
 clear how old the evidence is.
 
+- **`make ci-vm`, 2026-10-31, M24 done**, at M24: every stage passed
+  in 36m8s, the privileged tests in 2m53s, `test-race` in 10m4s, and the
+  lab, on FreeBSD 15.1, in 33m4s, a user per network and the LAN kept from
+  fb's overlay address among it. A run at M24 hung in `HTTPS alone`
+  while another worktree's lab shared the host's cores, fb's juistd no
+  longer answering; the lab alone passed at 6bc0a2d, as at M24 and in
+  the run above. The parts carried from M22 passed at M24, in 32m27s,
+  after ten lab runs in a row at M24 where hotel met lx within 25 to
+  37 s. `make test-freebsd` passed all 54 packages on the 15.1 VM at
+  M24.
 - **`make ci-vm`, 2026-10-24, M23 done**, run as M23: every stage
   passed in 29m11s, the privileged tests in 2m56s, `test-race` in 9m55s, and
   the lab's two pairs in 26m26s, exit nodes and names among them; at M23,
@@ -510,13 +524,15 @@ clear how old the evidence is.
   draws the key anew each try since M23. The run closing M20, at
   708c455, passed in 16m46s, and a failure planted in each stage ended the
   run in it (roadmap, M20).
-- **`make test-freebsd`, 2026-10-21, after M21**: all 54
-  packages passed, the command reference's test skipping there as Linux's
-  help. `make cross` passed in the run above; `make android-check` passed at
-  the commit closing M23.
-- **`make repro-freebsd`, 2026-09-30, at M7 review 5**: the binaries for both
-  systems and the package the same bytes from a Debian 12 container and a
-  FreeBSD 14.5 VM.
+- **FreeBSD 15.1, 2026-10-30, at the commit making it the target**:
+  `make test-freebsd` passed all 54 packages on a 15.1 VM, after it had shown
+  `pfctl -F all` failing in an anchor; `make repro-freebsd` made the same
+  binaries and package from a Debian 12 container and the 15.1 VM; `make
+  interop` passed `TestLinuxAndFreeBSD` whole, with the guard passing the
+  loopback without state (M24), and `TestLinuxAndFreeBSDUpgraded` on its own, its
+  first run having lost the FreeBSD VM's ssh under load. `make check` and
+  `make cross` passed. `make android-check`
+  passed at the commit closing M23.
 - **`make test-acme`, 2026-10-02, at M9 review 1**: passed, the CAA record's
   account among it.
 - **`make fuzz-long`**: no run over every target is recorded. `FuzzPayloads`
@@ -629,12 +645,14 @@ invite from:
 ```sh
 juist create lab --yes                # asks for sudo once; says juist1
 juist status                        # both, headed juist0 and juist1
-systemctl status juistd@juist1      # running, as the juist user
+systemctl status juistd@juist1      # running, as the juist1 user
+sudo ls /var/lib/juist1             # its keys, juist1's alone, 0700
+sudo -u juist cat /var/lib/juist1/node.keys   # permission denied
 ip -br addr show juist1             # the second network's addresses
 ip rule | grep -E '^51[0-9][0-9]'   # 5110 … 5170 and 5111 … 5171
 ip route show table 27254           # juist1's routes, and nothing else's
 sudo systemctl restart juistd       # juist1's routes and rules stay put
-juist reset lab --force            # juist1 goes, with its home
+juist reset lab --force            # juist1 goes, with its home; the user stays
 ```
 
 For the conflict, found the second network with `--ipv4` set to the first
@@ -776,6 +794,7 @@ ps -axo user,pid,ppid,command | grep juistd   # daemon(8), juistd as root, juist
 ifconfig juist0                               # once in a network: mtu 1280, the overlay addresses
 juist create lab --device fb1                 # on one; juist invite, and juist join on the other
 ping -c3 OTHER-V4; ping6 -c3 OTHER-V6         # through the tunnel, "direct" in juist status
+pfctl -a juist/juist0_in -s rules             # the guard: the overlay kept to juist0
 netstat -rn | grep juist0                     # the other's addresses, and nothing else
 service juistd stop; ifconfig juist0          # does not exist: the helper destroyed it
 ```
@@ -813,8 +832,9 @@ pkg delete juist               # every juistd stops; no juist0, pf and forwardin
 cat /etc/resolv.conf; ls /var/run/juist*   # the host's resolvers; nothing of juist's
 ```
 
-The removal says what it keeps: the juist user, `/var/db/juist` with the
-device's keys, the logs, and `juistd_` settings in `rc.conf`.
+The removal says what it keeps: the users juist and juist1 to juist9,
+`/var/db/juist` with the device's keys, another network's `/var/db/juistN`,
+the logs, and `juistd_` settings in `rc.conf`.
 
 `kill -9` of the root juistd stops the daemon, which reads its helper's end
 of a pipe close, and daemon(8) starts both again, the new helper destroying
@@ -918,7 +938,7 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   `JUIST_PUBLIC_TESTS=1 go test -run PublicDHT -v ./internal/rendezvous`.
 - **Upgrades across more than one release.** `make interop` runs the previous
   release beside this build; nothing older. The readiness check that would
-  stop an admin stranding members is M31's
+  stop an admin stranding members is M33's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
 - **The freshness TTL on a real clock.** The tests move a fake one. On real
   devices, stopping every admin device for longer than the TTL is what shows the

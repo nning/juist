@@ -9,15 +9,14 @@ lead: Each device has its own keys, and all devices in a network share one secre
 
 Each device has its own keys. Its WireGuard and sealing keys protect its
 tunnels and the messages sealed to it. Its identity key identifies it in the
-membership log, the signed list of every change that every device checks
-([How juist works]({{< relref "docs/how-it-works" >}})).
+[membership log]({{< relref "docs/how-it-works" >}}#the-membership-log).
 
 The network also has a group secret, which all members share and use to find
-each other. Admin keys are something else again: they belong to people and
-approve changes ([Several admins]({{< relref "docs/admins" >}})).
+each other. Admin keys belong to people and approve changes
+([Several admins]({{< relref "docs/admins" >}})).
 
 Replacing keys is called rotating them. A new key is a change to the log, so
-the admins approve it like any other change.
+the admins approve it like any other.
 
 ## Rotating keys
 
@@ -42,13 +41,14 @@ If the change needs another admin, it waits for their approval, and the new
 keys stay staged until the log contains them. `juist rotate abandon` drops a
 rotation that is still waiting for approval.
 
-Connections keep running while the device switches to its new keys: the
-tunnel to each peer waits briefly for a handshake with the new keys. A device
-that runs a relay restarts its tunnels instead. `juist rotate identity`
-changes the device's IPv6 address, which ends any connections that used the
-old one. It needs the network at schema 19: below it, it stops with
-`juist: the network predates rotating an identity key` until an admin runs
-`juist log upgrade` ([Updating juist]({{< relref "docs/updating" >}})).
+Connections keep running while the device switches to its new keys. A
+device that runs a relay restarts its tunnels instead.
+
+`juist rotate identity` changes the device's IPv6 address, which ends the
+connections that used the old one. It needs the network at schema 19; below
+it, it stops with `juist: the network predates rotating an identity key`
+until an admin runs `juist log upgrade`
+([Updating juist]({{< relref "docs/updating" >}})).
 
 ## Starting a device over
 
@@ -84,9 +84,9 @@ Remove the lost device:
 juist remove phone
 ```
 
-This also rotates the group secret. Every device drops its tunnel to phone as
-soon as it hears of the removal. A device that is cut off from the rest drops
-it when its freshness expires at the latest, after 48 hours without a voucher.
+This also rotates the group secret. Every device drops its tunnel to phone
+once it hears of the removal; a cut-off device does so within 48 hours if the
+network has [vouchers]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
 {{< /step >}}
 
 {{< step on="an admin's device" >}}
@@ -125,11 +125,11 @@ imported admin key "alice@home"
 it casts 1 vote in "home"
 ```
 
-The line always goes through a pipe, never onto the command line. It carries
-a checksum, so a truncated line is refused. It covers the key's quantum-safe
-signing key too, which derives from it. An import never replaces an
-existing key. If the key has been removed from the network since the backup,
-the import warns `"home" gives it no vote`.
+The line always goes through a pipe, never onto the command line. Its
+checksum refuses a truncated line. It also covers the key's quantum-safe
+signing key, which derives from it. An import never replaces an existing key.
+If the key was removed from the network since the backup, the import warns
+`"home" gives it no vote`.
 
 Keep the break-glass line that `juist create` showed the same way, but
 separately from the admin keys
@@ -139,7 +139,7 @@ A device's own keys cannot be exported: a copy on another machine would be a
 second device under the first one's name. Instead, remove a lost device and
 invite a new one.
 
-## Notes
+## Good to know
 
 - Only root and the device's [operator]({{< relref "docs/operator" >}}) can
   rotate, reset and remove. Approving takes an admin key.
@@ -149,13 +149,12 @@ invite a new one.
 
 {{< note danger >}}
 Losing a quorum of admin keys is final. With fewer admin keys left than a
-change needs, no change can ever be signed again: no device can be added or
-removed. The break-glass secret that `juist create` shows does not give the
-network new admins; it ends the network for good
+change needs, no device can ever be added or removed again. The break-glass
+secret that `juist create` shows only ends the network
 ([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
-To guard against this, back up every admin key, have more admins than the
-quorum needs, each on their own devices, and with `juist admins require`,
-hold one key more than it requires.
+Back up every admin key, have more admins than the quorum needs, each on
+their own devices, and with `juist admins require`, hold one key more than
+it requires.
 {{< /note >}}
 
 Why juist accepts this is explained under

@@ -1,7 +1,8 @@
 # juist.rules for polkit before 0.106, which reads no rules: the same actions,
-# on any device, which resolved before systemd 256 names none of anyway.
+# for the same users, on any device, which resolved before systemd 256 names
+# none of anyway.
 [juistd routes systemd-resolved's DNS]
-Identity=unix-user:juist
+Identity=unix-user:juist;unix-user:juist1;unix-user:juist2;unix-user:juist3;unix-user:juist4;unix-user:juist5;unix-user:juist6;unix-user:juist7;unix-user:juist8;unix-user:juist9
 Action=org.freedesktop.resolve1.set-dns-servers;org.freedesktop.resolve1.set-domains;org.freedesktop.resolve1.set-default-route;org.freedesktop.resolve1.set-dnssec-negative-trust-anchors;org.freedesktop.resolve1.revert
 ResultAny=yes
 ResultInactive=yes

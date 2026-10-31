@@ -212,19 +212,30 @@ func (s *Service) hostConflictLocked(state *log.State) (*hostConflictError, erro
 }
 
 // lowerHomesBeside is where the instances below one whose home is home keep
-// theirs, in the packaged layout: the default's is the parent, holding the
-// others' as juistn. It is nil where home is not laid out so.
+// theirs, in the packaged layout: beside it, the default's as juist and the
+// others' as juistn. It is nil where home is not laid out so. Each runs as a
+// user of its own, whose home another cannot read: such a check finds no
+// network there, and the one below is waited for only once it answers.
 func lowerHomesBeside(home string, self int) func(n int) string {
 	if self == 0 || filepath.Base(filepath.Clean(home)) != instance.Name(self) {
 		return nil
 	}
 	parent := filepath.Dir(filepath.Clean(home))
-	return func(n int) string {
-		if n == 0 {
-			return parent
-		}
-		return filepath.Join(parent, instance.Name(n))
+	return func(n int) string { return filepath.Join(parent, besideName(n)) }
+}
+
+// lowerSocketBeside is instance n's socket beside sock in the packaged layout.
+func lowerSocketBeside(sock string, n int) string {
+	return filepath.Join(filepath.Dir(filepath.Dir(sock)), besideName(n), filepath.Base(ipc.SystemSocket))
+}
+
+// besideName is instance n's directory in the packaged layout: juist for
+// the default, juistn for the others.
+func besideName(n int) string {
+	if n == 0 {
+		return filepath.Base(filepath.Dir(ipc.SystemSocket))
 	}
+	return instance.Name(n)
 }
 
 func fileExists(path string) bool {
@@ -232,16 +243,12 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// lowerStatusBeside asks the instances beside a socket in the packaged
-// layout, where instance n's is juistn.sock and the default's juistd.sock.
+// lowerStatusBeside asks the instances below one whose socket is sock, in
+// the packaged layout, where each one's is juistd.sock in a directory of its
+// own beside the others': juist for the default, juistn for the rest.
 func lowerStatusBeside(sock string) func(ctx context.Context, n int) (*ipc.Status, error) {
-	dir := filepath.Dir(sock)
 	return func(ctx context.Context, n int) (*ipc.Status, error) {
-		name := instance.Name(n) + ".sock"
-		if n == 0 {
-			name = filepath.Base(ipc.SystemSocket)
-		}
-		resp, err := ipc.Stream(ctx, filepath.Join(dir, name), ipc.Request{Command: ipc.CmdStatus}, nil)
+		resp, err := ipc.Stream(ctx, lowerSocketBeside(sock, n), ipc.Request{Command: ipc.CmdStatus}, nil)
 		if err != nil {
 			return nil, err
 		}

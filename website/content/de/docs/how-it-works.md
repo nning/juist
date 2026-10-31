@@ -54,15 +54,11 @@ haben.
 `juist log` listet die Änderungen auf und zeigt zu jeder, wer sie bestätigt
 hat.
 
-Damit das Log nicht endlos wächst, fügt juist **Checkpoints** hinzu: Bringt
-die Änderung eines Admins das Log auf 256 Änderungen seit dem letzten
-Checkpoint (weniger, wenn sie groß sind), hält derselbe Befehl gleich danach
-einen fest. Ein Checkpoint hält den ganzen Stand des Netzes als eine einzige
-Änderung fest, und jedes Gerät gleicht ihn mit seiner eigenen Kopie ab.
-Sobald alle Geräte einen neuen Checkpoint haben, verwerfen
-sie den Teil des Logs, der vor dem Checkpoint davor liegt. Braucht das
-Quorum mehr als eine Stimme, wartet der Checkpoint wie jede Änderung auf die
-Stimmen der anderen Admins.
+Damit das Log nicht endlos wächst, hält juist etwa alle 256 Änderungen einen
+**Checkpoint** fest: den ganzen Stand des Netzes als eine Änderung. Jedes
+Gerät gleicht ihn mit seiner eigenen Kopie ab, und ältere Teile des Logs
+fallen weg, sobald alle Geräte ihn haben. Wie jede Änderung braucht ein
+Checkpoint das Quorum.
 
 ## Admins und das Quorum {#admins}
 
@@ -71,18 +67,16 @@ aufnehmen und entfernen, Rollen vergeben oder das Netz umbenennen. Wer
 `juist create` aufruft, wird der erste Admin.
 
 Änderungen signiert ein Admin mit seinem Admin-Schlüssel. Die Schlüssel
-liegen im Keystore des Admins, also in `~/.config/juist` in seinem
-Home-Verzeichnis, und zwar auf jedem Rechner, von dem aus er Änderungen
-bestätigt. juistd bekommt sie nie zu sehen. Ein Schlüssel verlässt den
-Rechner, auf dem er erzeugt wurde, nur als Sicherungszeile. Wer zwei Laptops
-hat, hat also auf jedem einen eigenen.
+liegen im **Keystore** des Admins, `~/.config/juist` in seinem
+Home-Verzeichnis, auf jedem Rechner, von dem aus er bestätigt. juistd bekommt
+sie nie. Ein Schlüssel verlässt seinen Rechner nur als Sicherungszeile. Wer
+zwei Laptops hat, hat also auf jedem einen eigenen.
 
 Das **Quorum** legt fest, wie viele Admin-Stimmen eine Änderung braucht.
-Voreingestellt ist 1, ein Admin kann also allein entscheiden. Nach
-`juist admins quorum 2` braucht jede Änderung zwei Stimmen, zum Beispiel von
-zwei Personen. Fehlen einer Änderung noch Stimmen, wartet sie, bis andere
-Admins sie mit `juist approve` bestätigen. Mehr dazu unter
-[Admins]({{< relref "docs/admins" >}}).
+Voreingestellt ist 1. Nach `juist admins quorum 2` braucht jede Änderung zwei
+Stimmen, zum Beispiel von zwei Personen. Fehlen noch Stimmen, wartet die
+Änderung, bis andere Admins sie mit `juist approve` bestätigen. Mehr dazu
+unter [Admins]({{< relref "docs/admins" >}}).
 
 ## Rollen {#roles}
 
@@ -96,24 +90,22 @@ einer **Rolle** übernimmt ein Gerät eine zusätzliche Aufgabe. Ein Admin vergi
 | `voucher` | Bestätigt jede Stunde, dass der Stand des Netzes aktuell ist. So merken abgeschnittene Geräte, dass ihnen etwas fehlt. Siehe [Frische](#freshness-and-vouchers) weiter unten. |
 | `relay` | Leitet Verkehr zwischen Geräten weiter, die sich nicht direkt erreichen. Siehe [Relays]({{< relref "docs/relays" >}}). |
 | `exit` | Leitet den Internetverkehr anderer Geräte weiter, sobald sein Operator zugestimmt hat. Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}). |
-| `ingress` | Nimmt Verbindungen aus dem Internet für die Namen an, die Geräte veröffentlichen. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
-| `service` | Ein Service-Mitglied, also ein eigener juistd neben einem veröffentlichten Dienst. Kein Gerät nimmt eine Verbindung an, die es aufbaut. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
-| `publish` | Darf sofort unter dem eigenen Namen des Geräts teilen, ohne jedes Mal einen Admin zu fragen: `juist share`, `juist publish PORT`. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
+| `ingress` | Nimmt Verbindungen aus dem Internet für veröffentlichte Namen an. Siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}). |
+| `service` | Ein Service-Mitglied: ein eigenes juistd neben einem veröffentlichten Dienst. Kein Gerät nimmt eine Verbindung an, die es öffnet. Siehe [Service-Mitglieder]({{< relref "docs/service-member" >}}). |
+| `publish` | Teilt unter dem eigenen Namen des Geräts, ohne jedes Mal einen Admin zu fragen. Siehe [Teilen]({{< relref "docs/sharing" >}}). |
 
 Eine Rolle legt fest, welches Gerät als Exit-Node oder Relay dienen darf.
-Gibt es Zugriffsregeln, legen sie fest, welche Geräte es nutzen dürfen.
+Zugriffsregeln, falls es sie gibt, legen fest, welche Geräte es nutzen dürfen.
 
-Admin ist keine Rolle eines Geräts. Ein Admin ist ein Mensch mit Schlüsseln,
-ein Voucher dagegen ein Gerät ohne Admin-Schlüssel.
+Admin ist keine Rolle eines Geräts: Ein Admin ist ein Mensch mit Schlüsseln.
+Ein Voucher ist ein Gerät und hat keinen Admin-Schlüssel.
 
-Ein Gerät kann außerdem das LAN hinter sich für die anderen Mitglieder
-erreichbar machen. Das legst du mit `juist subnet add` fest, nicht über eine
-Rolle. Mehr dazu unter [Subnet-Router]({{< relref "docs/subnets" >}}).
+Das LAN hinter einem Gerät machst du mit `juist subnet add` erreichbar, nicht
+über eine Rolle. Mehr dazu unter [Subnet-Router]({{< relref "docs/subnets" >}}).
 
 ## Wie Geräte einander finden {#discovery}
 
-Bevor sich zwei Geräte verbinden können, muss jedes wissen, wo das andere
-ist. Einen Server, den sie fragen könnten, gibt es nicht. Deshalb sucht juist
+Einen Server, der weiß, wo ein Gerät ist, gibt es nicht. Deshalb sucht juist
 an drei Stellen:
 
 - im LAN, wo sich die Geräte gegenseitig bemerkbar machen,
@@ -123,40 +115,33 @@ an drei Stellen:
   einem großen öffentlichen Verzeichnis im Internet, falls ein Gerät ein
   Mitglied aus den Augen verloren hat.
 
-Was die Geräte im DHT ablegen, ist verschlüsselt, und jeder Eintrag ist
-gleich groß. Der DHT sieht nur Adressen, nie
-Inhalte. Nichts, was er liefert, kann ändern, wer zum Netz gehört.
+Was die Geräte im DHT ablegen, ist verschlüsselt und gleich groß. Der DHT
+sieht nur Adressen, nie Inhalte, und nichts, was er liefert, kann ändern, wer
+zum Netz gehört.
 
 ## Wie Geräte sich verbinden {#connections}
 
-Der Verkehr zwischen zwei Mitgliedern läuft durch einen WireGuard-Tunnel.
-WireGuard ist das VPN-Protokoll, das ihn auf dem ganzen Weg von einem Gerät
-zum anderen verschlüsselt.
+Der Verkehr zwischen zwei Mitgliedern läuft durch einen WireGuard-Tunnel,
+Ende zu Ende verschlüsselt. juist kommt durch NAT hindurch, sodass sich die
+beiden Geräte direkt verbinden. Seine öffentliche Adresse erfragt juistd bei
+öffentlichen STUN-Servern.
 
-Die meisten Geräte stehen hinter einem Router mit NAT, der Verbindungen von
-außen abblockt. juist kommt durch dieses NAT hindurch, sodass sich die beiden
-Geräte direkt verbinden. Dazu muss juistd seine eigene öffentliche Adresse
-kennen und fragt sie in der Voreinstellung bei öffentlichen STUN-Servern ab.
+Erreichen sich zwei Geräte nicht direkt, geht ihr Verkehr über ein Mitglied
+mit der Rolle `relay`, nie über Fremde. Das Relay sieht nur verschlüsselten
+WireGuard-Verkehr.
 
-Erreichen sich zwei Geräte nicht direkt, nehmen sie den Umweg über ein
-Mitglied mit der Rolle `relay`, nie über Fremde. Das Relay sieht nur
-verschlüsselten WireGuard-Verkehr.
-
-Hinter NAT musst du keine Firewall-Ports öffnen. Bei einem Gerät mit
-öffentlicher Adresse muss 41643/udp offen sein. Die übrigen Ports stehen unter
-[Relays]({{< relref "docs/relays" >}}).
-
-Wie die Tunnel aufgebaut sind und was juist dafür von WireGuard und Tailscale
-übernimmt, erklärt die Seite [Architektur]({{< relref "docs/architecture" >}}).
+Hinter NAT öffnest du keine Firewall-Ports. Ein Gerät mit öffentlicher
+Adresse braucht 41643/udp offen. Die übrigen Ports stehen unter
+[Relays]({{< relref "docs/relays" >}}), wie die Tunnel aufgebaut sind, unter
+[Architektur]({{< relref "docs/architecture" >}}).
 
 ## Adressen im Netz {#addresses}
 
 Jedes Mitglied hat zwei Adressen im Netz. `juist devices` zeigt sie an.
 
-- Eine IPv4-Adresse, etwa `198.18.36.2`. `juist create` wählt dafür einen
-  zufälligen Block aus `198.18.0.0/15`, etwa `198.18.36.0/22`. Das erste Gerät
-  bekommt die erste Adresse darin, jedes weitere die nächste freie. Admins
-  können diese Adressen mit `juist network renumber` verschieben.
+- Eine IPv4-Adresse, etwa `198.18.36.2`, aus einem zufälligen Block in
+  `198.18.0.0/15`, den `juist create` wählt. Jedes neue Gerät bekommt die
+  nächste freie. Admins können sie mit `juist network renumber` verschieben.
 - Eine IPv6-Adresse wie `fd84:7a1f:97ee:21a8:2ab0:e8e:caa0:b306`, die sich
   aus dem Identitätsschlüssel des Geräts ergibt. Beim Umnummerieren bleibt sie
   gleich. Ändern kann sie nur `juist rotate identity`.
@@ -178,33 +163,31 @@ denen es einen Tunnel hat. Admins können auch öffentliche Namen wie
 
 ## Frische und Voucher {#freshness-and-vouchers}
 
-Entfernt ein Admin ein Gerät, baut jedes Mitglied seinen Tunnel zu diesem
-Gerät ab, sobald es davon erfährt. Ein Mitglied, das vom Rest des Netzes
-abgeschnitten ist, erfährt davon aber womöglich nichts und spricht weiter mit
-dem entfernten Gerät.
+Entfernt ein Admin ein Gerät, baut jedes Mitglied seinen Tunnel dorthin ab,
+sobald es davon erfährt. Ein vom Rest abgeschnittenes Mitglied erfährt davon
+womöglich nichts und spricht weiter mit dem entfernten Gerät.
 
-Dagegen hilft die **Frische**. Jeder Voucher signiert stündlich eine kurze
-Bestätigung, wie das Netz gerade aussieht. Ein Mitglied, das eine solche
-Bestätigung aus den letzten 48 Stunden hat, ist frisch. Hat es keine, ist es
-abgelaufen: Dann behält es nur noch Tunnel zu Vouchern, bis es wieder von
-einem hört. Ein entferntes Gerät bleibt so höchstens 48 Stunden verbunden.
+Das begrenzt die **Frische**. Jeder **Voucher** signiert stündlich eine
+Bestätigung des aktuellen Stands. Ein Mitglied mit einer solchen Bestätigung
+aus den letzten 48 Stunden ist frisch. Ohne sie ist es abgelaufen und behält
+nur Tunnel zu Vouchern, bis es wieder von einem hört. Ein entferntes Gerät
+bleibt so höchstens 48 Stunden verbunden.
 
-Das hat vier Folgen:
+Daraus folgt:
 
-- Ein neues Netz hat keinen Voucher und prüft die Frische deshalb gar nicht.
-  Dass ein Gerät entfernt wurde, erfährt trotzdem jedes Gerät, sobald es
-  Kontakt zu einem hat, das davon weiß. Nur ist nicht begrenzt, wie lange das
-  bei einem abgeschnittenen Gerät dauert. `juist create --voucher` macht schon das
-  erste Gerät zum Voucher.
+- Ein neues Netz hat keinen Voucher und prüft keine Frische. Ein Entfernen
+  erreicht trotzdem jedes Gerät, sobald es mit einem spricht, das davon weiß,
+  nur ohne Zeitgrenze. `juist create --voucher` macht das erste Gerät zum
+  Voucher.
 - Mach nur Geräte zu Vouchern, die ständig laufen, etwa einen VPS oder einen
   Heimserver. Sind 48 Stunden lang zu wenige Voucher online, haben alle
   anderen Mitglieder nur noch Tunnel zu Vouchern. Ein Netz aus Laptops und
   Telefonen, die oft aus sind, fährt ohne Voucher besser.
-- Bei nur einem Voucher musst du darauf vertrauen, dass er ehrlich ist. Nach `juist admins vouchers 2` braucht ein
-  Mitglied Bestätigungen von zwei Vouchern, um frisch zu sein. Ein einzelner
-  Voucher, der lügt, reicht dann nicht mehr. Halte einen in Reserve: zwei von
-  drei Vouchern auf Hosts, die unabhängig voneinander ausfallen, nicht zwei
-  Maschinen beim selben Anbieter.
+- Bei nur einem Voucher vertraust du darauf, dass er ehrlich ist. Nach
+  `juist admins vouchers 2` braucht ein Mitglied Bestätigungen von zwei
+  Vouchern, ein einzelner lügender Voucher reicht dann nicht. Halte einen in
+  Reserve: zwei von drei Vouchern auf Hosts, die unabhängig voneinander
+  ausfallen, nicht zwei Maschinen beim selben Anbieter.
 - Ein Relay kann ein Gerät von den anderen abschneiden. Reicht ein einziger
   Voucher, mach kein Relay zum Voucher, sonst könnte diese eine Maschine ein
   Gerät abschneiden und zugleich frisch halten.
@@ -230,6 +213,9 @@ voucher`. Einen Tag vorher warnt `juist health`: `freshness ends in 20h unless
 | Keystore | `~/.config/juist`, wo deine Admin-Schlüssel liegen |
 | Quorum | Wie viele Admin-Stimmen eine Änderung braucht |
 | Rolle | Eine zusätzliche Aufgabe für ein Gerät: Voucher, Relay, Exit, Ingress, Service oder Publish |
+| Exit-Node | Ein Mitglied, das den Internetverkehr anderer Geräte weiterleitet, siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}) |
+| Ingress | Ein Mitglied mit öffentlicher Adresse, das Verbindungen aus dem Internet an veröffentlichte Namen weiterleitet, siehe [Dienste veröffentlichen]({{< relref "docs/publishing" >}}) |
+| Service-Mitglied | Ein eigenes juistd neben einem veröffentlichten Dienst, von dem kein Gerät Verbindungen annimmt, siehe [Service-Mitglieder]({{< relref "docs/service-member" >}}) |
 | Einladung | Ein Code oder Link, mit dem ein neues Gerät beitritt |
 | Frische | Ob genug Voucher den Stand eines Geräts in den letzten 48 Stunden bestätigt haben |
 | Voucher | Ein Gerät, das stündlich bestätigt, dass der Stand des Netzes aktuell ist |

@@ -38,7 +38,7 @@ GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 BUILDDIR ?= build
 CMDS     ?= juist juistd
 
-# Platforms v1 commits to (docs/05-roadmap.md M30). Building for each catches
+# Platforms v1 commits to (docs/05-roadmap.md M32). Building for each catches
 # build-tag rot in the embedded Tailscale stack.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
 # Platforms kept compiling though nothing ships for them: macOS, deferred past v1.
@@ -224,11 +224,11 @@ INTEROP_FLAGS ?=
 INTEROP_CHROME ?= $(firstword $(shell command -v chromium chromium-browser google-chrome chrome 2>/dev/null))
 
 # The last done milestone, which the lab upgrades Debian and FreeBSD from:
-# the previous release. Its packages are built once per commit and
-# toolchain, into PREVTOP, as its own Makefile builds them in an environment
-# that holds none of this make's variables.
+# the previous release. Its packages are built once per commit, toolchain
+# and FreeBSD release, into PREVTOP, as its own Makefile builds them in an
+# environment that holds none of this make's variables but FREEBSD_ABI.
 PREVIOUS ?= $(shell git rev-list -1 -E --grep='^M[0-9]+:? done' HEAD 2>/dev/null)
-PREVTOP  ?= $(INTEROP_CACHE)/previous/$(shell git rev-parse --short=12 $(PREVIOUS) 2>/dev/null)-$(GOTOOLCHAIN)
+PREVTOP  ?= $(INTEROP_CACHE)/previous/$(shell git rev-parse --short=12 $(PREVIOUS) 2>/dev/null)-$(GOTOOLCHAIN)-freebsd$(word 2,$(subst :, ,$(FREEBSD_ABI)))
 
 .PHONY: previous
 previous: ## Build the last done milestone's .deb and FreeBSD package, which make interop upgrades from
@@ -240,8 +240,8 @@ previous: ## Build the last done milestone's .deb and FreeBSD package, which mak
 	commit=$$(git rev-parse --short $(PREVIOUS)); \
 	stamp=$$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S $(PREVIOUS)); \
 	clean="env -i PATH=$$PATH HOME=$$HOME TMPDIR=$${TMPDIR:-/tmp} GOTOOLCHAIN=$(GOTOOLCHAIN) CGO_ENABLED=$(CGO_ENABLED)"; \
-	$$clean $(MAKE) -C $$tmp/src deb DEBTOP=$$tmp/deb BUILDDIR=$$tmp/build RPM_DIRTY= RPM_COMMIT=$$commit RPM_STAMP=$$stamp; \
-	$$clean $(MAKE) -C $$tmp/src pkg-freebsd BUILDDIR=$$tmp/build RPM_DIRTY= RPM_COMMIT=$$commit RPM_STAMP=$$stamp; \
+	$$clean $(MAKE) -C $$tmp/src deb DEBTOP=$$tmp/deb BUILDDIR=$$tmp/build VERSION_DIRTY= RPM_DIRTY= RPM_COMMIT=$$commit RPM_STAMP=$$stamp; \
+	$$clean $(MAKE) -C $$tmp/src pkg-freebsd FREEBSD_ABI=$(FREEBSD_ABI) BUILDDIR=$$tmp/build VERSION_DIRTY= RPM_DIRTY= RPM_COMMIT=$$commit RPM_STAMP=$$stamp; \
 	rm -rf $$tmp/src; touch $$tmp/built; mv -T $$tmp $(PREVTOP) 2>/dev/null || test -f $(PREVTOP)/built
 
 # What the lab installs; make ci-vm builds it while the VM tests.
@@ -428,24 +428,21 @@ android-idle: android-core ## Measure the Android app idling in the emulator; fa
 
 # `make rpm` builds an installable package from binaries this Makefile
 # compiles, rather than from source inside the build root, so it needs no Go
-# toolchain and no network there. Version 0 is deliberate — the project has cut
-# no release — and the release field carries the commit's UTC time and hash.
-# The time is what sorts: a hash alone does not, so two builds on one day would
-# otherwise upgrade or not by chance.
+# toolchain and no network there. Every package's version is version.sh's,
+# which follows the release tag vX.Y.Z as `juist version` does; a build between
+# releases carries the commit's UTC time, which is what sorts it.
 RPMBUILD    ?= rpmbuild
 RPM_NAME    ?= juist
 RPMTOP      ?= $(abspath $(BUILDDIR)/rpm)
-RPM_VERSION ?= 0
-RPM_COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # A tree with changes, untracked files included, carries the build's time too,
 # so two builds of one commit's changes still sort, one after the other.
 # Expanded once, so the name of the package and its metadata agree.
-ifeq ($(origin RPM_DIRTY),undefined)
-RPM_DIRTY := $(shell [ -n "$$(git status --porcelain 2>/dev/null)" ] && echo .dirty$$(date -u +%Y%m%d%H%M%S))
+ifeq ($(origin VERSION_DIRTY),undefined)
+VERSION_DIRTY := $(shell [ -n "$$(git status --porcelain 2>/dev/null)" ] && date -u +%Y%m%d%H%M%S)
 endif
-RPM_STAMP   ?= $(shell TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S 2>/dev/null || \
-                 date -u +%Y%m%d%H%M%S)
-RPM_RELEASE ?= 0.$(RPM_STAMP)git$(RPM_COMMIT)$(RPM_DIRTY)
+version      = $(shell sh packaging/version.sh $(1) $(VERSION_DIRTY))
+RPM_VERSION ?= $(call version,rpm-version)
+RPM_RELEASE ?= $(call version,rpm-release)
 
 # juist's own; THIRD_PARTY_LICENSES holds those of what it links.
 RPM_LICENSE ?= BSD-3-Clause
@@ -468,7 +465,7 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	$(BUILDDIR)/juistd __manpage > $$stage/juistd.8; \
 	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service packaging/systemd/juist-ingress.service \
 		packaging/systemd/juist-ingress-ports.path packaging/systemd/juist-ingress-ports.service \
-		packaging/systemd/juist-serve.service packaging/systemd/juist-serve.path README.md LICENSE THIRD_PARTY_LICENSES packaging/firewall.sh packaging/exit-node.sh \
+		packaging/systemd/juist-serve.service packaging/systemd/juist-serve.path README.md LICENSE THIRD_PARTY_LICENSES packaging/firewall.sh packaging/instances.sh packaging/exit-node.sh \
 		packaging/ingress.sh packaging/serve.sh packaging/relay.sh packaging/resolv.sh packaging/polkit/juist.rules \
 		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml packaging/firewalld/juist-relay-443.xml \
 		packaging/firewalld/juist-ingress.xml \
@@ -487,12 +484,12 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 
 # `make deb` is the same package for Debian and Ubuntu, assembled with
 # dpkg-deb from binaries this Makefile compiles, so it needs neither debhelper
-# nor root: --root-owner-group records root ownership without fakeroot. The
-# version sorts between test builds the way RPM_RELEASE does. DEB_ARCH picks
-# the target and GOARCH follows it, so `make deb DEB_ARCH=arm64` cross-builds.
+# nor root: --root-owner-group records root ownership without fakeroot.
+# DEB_ARCH picks the target and GOARCH follows it, so `make deb DEB_ARCH=arm64`
+# cross-builds.
 DEBTOP      ?= $(abspath $(BUILDDIR)/deb)
 DEB_ARCH    ?= $(shell dpkg --print-architecture 2>/dev/null || $(GO) env GOARCH)
-DEB_VERSION ?= $(RPM_VERSION)~$(RPM_STAMP)git$(RPM_COMMIT)$(subst .dirty,+dirty,$(RPM_DIRTY))
+DEB_VERSION ?= $(call version,deb)
 DEB_GOARCH   = $(or $(DEB_GOARCH_$(DEB_ARCH)),$(error DEB_ARCH=$(DEB_ARCH) is not a target this Makefile knows))
 DEB_GOARCH_amd64 = amd64
 DEB_GOARCH_arm64 = arm64
@@ -531,6 +528,7 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	done; \
 	gzip -9n $$root/usr/share/man/man1/juist.1 $$root/usr/share/man/man8/juistd.8; \
 	install -D -m 0755 packaging/firewall.sh $$root/usr/lib/juist/firewall.sh; \
+	install -D -m 0755 packaging/instances.sh $$root/usr/lib/juist/instances.sh; \
 	install -D -m 0755 packaging/exit-node.sh $$root/usr/lib/juist/exit-node.sh; \
 	install -D -m 0755 packaging/ingress.sh $$root/usr/lib/juist/ingress.sh; \
 	install -D -m 0755 packaging/serve.sh $$root/usr/lib/juist/serve.sh; \
@@ -576,6 +574,9 @@ release: ## Build a signed release into build/release: packages under stable nam
 	@test -f $(RELEASE_KEY) || { echo "release: no signing key at $(RELEASE_KEY)"; exit 1; }
 	@test "$(words $(RELEASE_RPM))" = 1 || { \
 		echo "release: want one RPM in $(RPMTOP)/RPMS/x86_64, found $(words $(RELEASE_RPM)); make rpm on Fedora, or RELEASE_RPM=FILE"; exit 1; }
+	@test "$(RPM_RELEASE)" = 1 || { echo "release: HEAD is no release tag vX.Y.Z, or the tree has changes"; exit 1; }
+	@case "$(notdir $(RELEASE_RPM))" in juist-$(RPM_VERSION)-1.*) ;; *) \
+		echo "release: $(notdir $(RELEASE_RPM)) is no $(RPM_VERSION)-1; build it in a clone with the tag, not an archive"; exit 1;; esac
 	@test -x "$(APKSIGNER)" || { echo "release: apksigner not found under ANDROID_HOME; or APKSIGNER=PATH"; exit 1; }
 	@set -e; for abi in arm64-v8a x86_64; do \
 		apk=$(RELEASE_APKS)/app-$$abi-release.apk; \
@@ -590,8 +591,8 @@ release: ## Build a signed release into build/release: packages under stable nam
 		cp $(DEBTOP)/juist_*_$$a.deb $(RELEASE_DIR)/juist_$$a.deb; \
 	done; \
 	for a in amd64 aarch64; do \
-		$(MAKE) --no-print-directory pkg-freebsd FREEBSD_ABI=FreeBSD:14:$$a >/dev/null; \
-		cp $(BUILDDIR)/freebsd/juist-*.pkg $(RELEASE_DIR)/juist-freebsd14-$$a.pkg; \
+		$(MAKE) --no-print-directory pkg-freebsd FREEBSD_ABI=FreeBSD:15:$$a >/dev/null; \
+		cp $(BUILDDIR)/freebsd/juist-*.pkg $(RELEASE_DIR)/juist-freebsd15-$$a.pkg; \
 	done; \
 	cp $(RELEASE_RPM) $(RELEASE_DIR)/juist.x86_64.rpm; \
 	cp $(RELEASE_APKS)/app-arm64-v8a-release.apk $(RELEASE_DIR)/juist-android-arm64.apk; \
@@ -610,8 +611,8 @@ release-verify: ## Check build/release against SHA256SUMS and SHA256SUMS against
 # `make pkg-freebsd` is the FreeBSD package, written by packaging/freebsd/mkpkg
 # rather than pkg-create(8), so that any system builds it, to the same bytes
 # from one commit. FREEBSD_ABI picks the release and machine it installs on.
-FREEBSD_ABI     ?= FreeBSD:14:amd64
-FREEBSD_VERSION ?= $(RPM_VERSION).$(RPM_STAMP)$(subst .dirty,.,$(RPM_DIRTY))
+FREEBSD_ABI     ?= FreeBSD:15:amd64
+FREEBSD_VERSION ?= $(call version,freebsd)
 
 .PHONY: pkg-freebsd
 pkg-freebsd: ## Build the FreeBSD package into build/freebsd
@@ -622,7 +623,8 @@ pkg-freebsd: ## Build the FreeBSD package into build/freebsd
 # `make image` is the service member's container image, written by
 # packaging/image/mkimage as docker save would, for docker or podman load:
 # juistd and juist for IMAGE_ARCH and this host's CA certificates.
-IMAGE_ARCH  ?= amd64
+IMAGE_ARCH    ?= amd64
+IMAGE_VERSION ?= $(call version,image)
 # The host's CA bundle: Debian's, Fedora's, or FreeBSD's.
 IMAGE_CERTS ?= $(firstword $(wildcard /etc/ssl/certs/ca-certificates.crt \
 	/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/cert.pem))
@@ -633,11 +635,11 @@ image: ## Build the service member's container image into build/image
 	@bin=$(call bindir,linux,$(IMAGE_ARCH)); for c in juist juistd; do \
 		GOOS=linux GOARCH=$(IMAGE_ARCH) $(GOBUILD) -o $$bin/$$c ./cmd/$$c || exit 1; \
 	done
-	@bin=$(call bindir,linux,$(IMAGE_ARCH)); $(GO) run ./packaging/image/mkimage -o $(BUILDDIR)/image/juist-$(FREEBSD_VERSION)-$(IMAGE_ARCH).tar \
-		-tag juist:$(FREEBSD_VERSION) -arch $(IMAGE_ARCH) -mtime $$(git log -1 --format=%ct) -certs $(IMAGE_CERTS) \
+	@bin=$(call bindir,linux,$(IMAGE_ARCH)); $(GO) run ./packaging/image/mkimage -o $(BUILDDIR)/image/juist-$(IMAGE_VERSION)-$(IMAGE_ARCH).tar \
+		-tag juist:$(IMAGE_VERSION) -arch $(IMAGE_ARCH) -mtime $$(git log -1 --format=%ct) -certs $(IMAGE_CERTS) \
 		-license LICENSE -third-party THIRD_PARTY_LICENSES \
 		-juistd $$bin/juistd -juist $$bin/juist
-	@echo $(BUILDDIR)/image/juist-$(FREEBSD_VERSION)-$(IMAGE_ARCH).tar
+	@echo $(BUILDDIR)/image/juist-$(IMAGE_VERSION)-$(IMAGE_ARCH).tar
 
 # `make install` builds the package this system's package manager takes and
 # installs it: the .deb with apt, the RPM with dnf, FreeBSD's with pkg, with

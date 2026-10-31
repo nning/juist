@@ -7,13 +7,10 @@ lead: juist remove takes a device out of the network, such as a phone you lost. 
 
 ## How removal works
 
-Removing a device is a change to the network's log, the signed list of who
-belongs (see [How juist works]({{< relref "docs/how-it-works" >}})). Like any
-change, it needs the approval of your admins, the people whose keys approve
-changes.
-
-Once the removal is in the log, every device that receives it drops the
-removed device's tunnel. The network also gets a new group secret, a key all
+Removing a device is a change to the
+[membership log]({{< relref "docs/how-it-works" >}}#the-membership-log) and
+needs your admins' approval. Every device that receives it drops the removed
+device's tunnel. The network also gets a new group secret, the key all
 members share, so the removed device can no longer find the others.
 
 ## Removing a device
@@ -57,26 +54,16 @@ hint: rejoin with a new invite, or start over: juist reset
 To use it again, [invite]({{< relref "docs/invites" >}}) it again, or run
 `juist reset`, which leaves it in no network, as after a fresh install.
 
-A device that was offline at that moment is not told. It may report itself connected,
-although no member accepts it any more, or say
+A device that was offline then is not told. It may report itself connected,
+although no member accepts it, or say
 `the network's devices refuse this one: most likely it was removed`.
 
 ## Why removal is not instant
 
-There is no server that tells all devices at the same time. Devices pass changes on to
-each other, so a device that is offline, or cut off from the others, hears of
-the removal only when it is back in touch. Until then, it could keep a tunnel
-to the removed device.
-
-Freshness puts a limit on that. A **voucher** is a device that confirms every
-hour that the network's state is current. A new network has none, so there is
-no limit until you make a device a voucher. If no voucher has confirmed a
-device's view for 48 hours, it keeps tunnels only to vouchers, so it can no
-longer stay connected to a removed device. Its `juist status` then shows the state `limited` and
-`Freshness  expired; vouchers only`.
-
-This holds only while the vouchers are not cut off together with the device:
-a voucher keeps every device it still reaches current.
+Devices pass changes on to each other. A device that is offline or cut off
+hears of the removal only when it is back in touch, and until then could keep
+a tunnel to the removed device. [Freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
+limits that to 48 hours, but only once the network has a voucher:
 
 {{< step on="an admin's device" >}}
 Make an always-on device, such as a VPS, a voucher:
@@ -85,30 +72,29 @@ Make an always-on device, such as a VPS, a voucher:
 juist grant vps voucher
 ```
 
-The role does not give the device an admin key. The device can confirm the
-network's state, but not change anything.
+The role gives the device no admin key. It confirms the network's state but
+cannot change anything.
 {{< /step >}}
 
-By default, one voucher is enough. A voucher that lies could then keep the
-devices it reaches on an old view. To guard against that, require several:
+One lying voucher could keep the devices it reaches on an old view. To guard
+against that, require two:
 
 ```sh
 juist admins vouchers 2
 ```
 
-Now a device trusts its view only when two vouchers have confirmed it within
-48 hours. One dishonest voucher is then not enough, but two vouchers must be
-online, so give the role to a third device as a spare. `juist grant` and
-`juist admins vouchers` warn if there is no spare, and if only one voucher is
-needed and a voucher also relays.
+Two vouchers must then be online, so give the role to a third device as a
+spare. `juist grant` and `juist admins vouchers` warn if there is no spare.
 
-## Notes
+## Good to know
 
-- `juist remove` refuses to remove one of the vouchers that `juist admins vouchers` requires, and says how to lower the number first.
-- Removing the last voucher warns that freshness then goes unchecked.
-- If the removed device held an admin key, as a lost laptop might, take that key's vote away too: `juist admins remove`. See [Admins]({{< relref "docs/admins" >}}).
-- Running `juist remove` on the device itself warns that the device leaves the network for good.
-- `juist reset` on a device the network still lists needs `--force`. Remove it first where you can.
+- `juist remove` refuses to remove a voucher that `juist admins vouchers`
+  requires, and says how to lower the number first. Removing the last voucher
+  warns that freshness then goes unchecked.
+- If the removed device held an admin key, as a lost laptop might, take that
+  key's vote away too: `juist admins remove` ([Admins]({{< relref "docs/admins" >}})).
+- `juist reset` on a device the network still lists needs `--force`. Remove
+  it first if you can.
 
 ## Troubleshooting
 

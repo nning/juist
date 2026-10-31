@@ -51,7 +51,7 @@ has its own daemon and log: `journalctl -u juistd@juist1`, on FreeBSD
 
 `juist status` says `juist0 · not running`, `juistd not running` (on FreeBSD
 before juistd is enabled) or `home · juistd not running`:
-the daemon, the program that keeps the tunnels up, is not running. Start it:
+the daemon is not running. Start it:
 
 ```sh
 sudo systemctl enable --now juistd
@@ -62,8 +62,9 @@ FreeBSD, run `sysrc juistd_enable=YES && service juistd start` as root. See [Ins
 
 ### `read-only; to manage this device …`
 
-You are neither root nor the device's operator, the local user who may manage
-it without sudo. You can see the status, but nothing more. To make yourself
+You are neither root nor the device's
+[operator]({{< relref "docs/operator" >}}). You can see the status, but
+nothing more. To make yourself
 the operator, run this once:
 
 ```sh
@@ -82,8 +83,8 @@ has a public address, open 41643/udp there. See
 ### `no tunnel traffic from nas`
 
 `nas` is known, but no traffic arrives from it. Either port 41643/udp is
-blocked, or both devices are behind NAT and there is no relay. A relay is a
-member that passes traffic between devices that cannot reach each other. Open
+blocked, or both devices are behind NAT and there is no
+[relay]({{< relref "docs/relays" >}}). Open
 41643/udp on a device with a public address, as the hint says:
 
 ```console
@@ -179,8 +180,8 @@ sudo /usr/lib/juist/relay.sh off
 
 ### `Freshness  expired; vouchers only`
 
-Too few vouchers have been reachable for 48 hours. A voucher is a device that
-confirms every hour that the network's state is current. Until enough of them
+Too few [vouchers]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
+have been reachable for 48 hours. Until enough of them
 vouch again, this device keeps tunnels only to vouchers, and its state reads
 `limited`. Bring a voucher back online. To prevent this, choose only devices
 that are always on as vouchers, and have one more than you need. See

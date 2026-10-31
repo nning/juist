@@ -15,8 +15,7 @@ café's network sees only encrypted traffic.
 A device becomes an exit node in two steps. First an
 [admin]({{< relref "docs/how-it-works" >}}#admins) gives it the
 [role]({{< relref "docs/how-it-works" >}}#roles) `exit`. Then the device's
-[operator]({{< relref "docs/operator" >}}), the local user who manages it
-without sudo, agrees by running `juist exit serve` on it.
+[operator]({{< relref "docs/operator" >}}) agrees by running `juist exit serve` on it.
 
 Each device decides for itself whether to use an exit node. Nothing changes on
 a device until you run `juist exit use` on it.
@@ -80,7 +79,10 @@ serving or has lost its role, or when this device's view of the network is
 stale. DNS lookups then go nowhere rather than to the LAN. Going direct is
 your decision: run `juist exit off`.
 
-## Notes
+When juistd stops cleanly, it lifts the block, so traffic goes direct for a
+moment while the service restarts.
+
+## Good to know
 
 - `juist exit` lists the exit nodes, whether each is serving, and which one is
   in use.
@@ -98,17 +100,9 @@ your decision: run `juist exit off`.
 - If you configured the exit node's firewall by hand, it must allow UDP and TCP
   41646 on `juist0`, where the exit node answers its members' DNS queries
   ([Relays, ports and firewalls]({{< relref "docs/relays" >}})).
-- If the exit node also runs Tailscale, it answers its members' DNS queries
-  through the host's regular DNS servers. It never asks Tailscale's resolver,
-  which would answer tailnet names with addresses the members cannot reach.
+- If the exit node also runs Tailscale, it answers its members' DNS through
+  the host's regular DNS servers, never through Tailscale's resolver.
 - On FreeBSD, exit nodes work with pf, and DNS goes through resolvconf.
-- On Linux, an exit node or subnet router turns on UDP GRO forwarding on the
-  network interface of its default route, the same as `ethtool -K eth0
-  rx-udp-gro-forwarding on rx-gro-list off`, so that it forwards UDP traffic
-  such as QUIC in batches. When it stops serving, it restores the interface's
-  previous settings. Both changes are logged.
-- When juistd stops cleanly, it lifts the block, so while the service restarts,
-  traffic goes direct for a moment.
 
 ## Troubleshooting
 

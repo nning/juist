@@ -44,8 +44,10 @@ if [ "$1" = configure ]; then
 	if command -v systemd-sysusers >/dev/null 2>&1; then
 		systemd-sysusers /usr/lib/sysusers.d/juist.conf
 	else
-		getent passwd juist >/dev/null ||
-			adduser --system --group --home /var/lib/juist --no-create-home juist
+		for u in juist juist1 juist2 juist3 juist4 juist5 juist6 juist7 juist8 juist9; do
+			getent passwd $u >/dev/null ||
+				adduser --system --group --home /var/lib/$u --no-create-home $u
+		done
 		getent passwd juist-ingress >/dev/null ||
 			adduser --system --group --home /nonexistent --no-create-home juist-ingress
 		getent passwd juist-serve >/dev/null ||
@@ -87,6 +89,9 @@ if [ "$1" = configure ]; then
 			if systemctl is-enabled --quiet juist-ingress.service 2>/dev/null; then
 				systemctl enable --now juist-ingress-ports.path || true
 			fi
+			# The other networks' instances move out of the default's
+			# home, each to a user of its own.
+			/usr/lib/juist/instances.sh move
 			# ufw holds a profile's ports as they were when allowed.
 			if command -v ufw >/dev/null 2>&1; then
 				ufw app update juist-ingress >/dev/null 2>&1 || true

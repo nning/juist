@@ -19,14 +19,11 @@ import (
 	"github.com/nning/juist/internal/plumber"
 )
 
-// runAs is the user the daemon runs as when juistd is started as root.
-const runAs = "juist"
-
 // permHint is what gives a device's creation the right it lacked.
 const permHint = `creating %q needs root: start juistd as root, which runs the daemon as juist, the packaged service, or --tun ""`
 
 // split, started as root, keeps this process as the helper that plumbs the
-// daemon's devices and runs the daemon as [runAs], until it exits; it
+// daemon's devices and runs the daemon as [runAs] says, until it exits; it
 // reports the daemon's exit code, and whether it split. Root always splits:
 // a helper's descriptor in its environment is no helper's.
 func split(args []string) (int, bool) {
@@ -54,10 +51,11 @@ func runSplit(args []string) error {
 		return errors.New("started as root, juistd needs --home, a directory the juist user owns\n" +
 			"hint: service juistd start, which gives it")
 	}
-	u, err := user.Lookup(runAs)
+	as := runAs(args)
+	u, err := user.Lookup(as)
 	if err != nil {
 		return fmt.Errorf("started as root, juistd runs as the %s user, and there is none\n"+
-			"hint: pw useradd %s -u 829 -d /var/db/juist -s /usr/sbin/nologin, a system user", runAs, runAs)
+			"hint: pw useradd %s -d /var/db/%s -s /usr/sbin/nologin, a system user, as the package makes it", as, as, as)
 	}
 	cred, err := credential(u)
 	if err != nil {
@@ -69,7 +67,7 @@ func runSplit(args []string) error {
 	// exec, which follows a change of user.
 	// A hangup ends the daemon as a stop does.
 	ch, err := startChild(args, cred, unix.SOCK_STREAM, []string{plumber.EnvFD + "=3", plumber.EnvLifeline + "=4",
-		"HOME=" + u.HomeDir, "USER=" + u.Username, "LOGNAME=" + u.Username}, os.Stdout, os.Stderr, "the daemon as "+runAs,
+		"HOME=" + u.HomeDir, "USER=" + u.Username, "LOGNAME=" + u.Username}, os.Stdout, os.Stderr, "the daemon as "+as,
 		func(s os.Signal) os.Signal {
 			if s == syscall.SIGHUP {
 				return syscall.SIGTERM
@@ -86,7 +84,7 @@ func runSplit(args []string) error {
 	var destroy func()
 	go func() {
 		var err error
-		destroy, err = plumber.Serve(c, plumber.FreeBSD{}, int(cred.Uid), func(format string, a ...any) {
+		destroy, err = plumber.Serve(c, plumber.FreeBSD{}, int(cred.Uid), deviceOf(args), func(format string, a ...any) {
 			fmt.Fprintf(os.Stderr, "juistd: "+format+"\n", a...)
 		})
 		served <- err

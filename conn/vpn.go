@@ -125,6 +125,9 @@ func (p *vpnPlumber) SetAddrs(string, []netip.Prefix) error { return nil }
 
 func (p *vpnPlumber) SetRoutes(string, []netip.Prefix, netip.Addr) error { return nil }
 
+// SetGuard does nothing: a VPN service's device is the app's alone.
+func (p *vpnPlumber) SetGuard(string, plumber.GuardSpec) error { return nil }
+
 func (p *vpnPlumber) SetServe(_ string, s plumber.ServeSpec) error {
 	if len(s.Sources) > 0 || s.DNSPort != 0 {
 		return errOnVPN

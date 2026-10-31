@@ -2,6 +2,17 @@
 # install time; nothing removes it again, because a UID may own files this
 # package never installed.
 u juist - "juist mesh VPN" /var/lib/juist -
+# The other networks' juistd instances, each its own user so that one
+# network's daemon reads none of another's keys.
+u juist1 - "juist mesh VPN, instance 1" /var/lib/juist1 -
+u juist2 - "juist mesh VPN, instance 2" /var/lib/juist2 -
+u juist3 - "juist mesh VPN, instance 3" /var/lib/juist3 -
+u juist4 - "juist mesh VPN, instance 4" /var/lib/juist4 -
+u juist5 - "juist mesh VPN, instance 5" /var/lib/juist5 -
+u juist6 - "juist mesh VPN, instance 6" /var/lib/juist6 -
+u juist7 - "juist mesh VPN, instance 7" /var/lib/juist7 -
+u juist8 - "juist mesh VPN, instance 8" /var/lib/juist8 -
+u juist9 - "juist mesh VPN, instance 9" /var/lib/juist9 -
 # The network's ingress, where this device is one: it holds no key and
 # reaches juistd's socket alone.
 u juist-ingress - "juist ingress" - -

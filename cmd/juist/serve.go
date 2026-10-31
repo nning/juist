@@ -14,10 +14,10 @@ import (
 
 func publishServe(a *app, args []string) error {
 	s := spec{name: "juist publish serve", about: `
-Serve the names the network publishes on this device: the ingresses then
-pass connections for them to this device's ports, where the service ends
-TLS, or juist where told to (juist publish add NAME HOST:PORT). --stop undoes
-it, and keeps where names go.`}
+Serve the names the network publishes on this device. The ingresses then
+pass their connections to this device's ports. The service ends TLS there,
+or juist does if told to by juist publish add NAME HOST:PORT. --stop undoes
+it and keeps where the names go.`}
 	fs := newFlags(s.name)
 	stop := fs.Bool("stop", false, "stop serving")
 	if _, err := a.parse(s, fs, args); err != nil {

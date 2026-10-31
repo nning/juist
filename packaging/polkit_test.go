@@ -41,8 +41,13 @@ console.log(JSON.stringify(out));
 	}
 	checks := []check{
 		{"juist", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist0"}, "yes"},
-		{"juist", "org.freedesktop.resolve1.set-domains", map[string]string{"interface": "juist3"}, "yes"},
-		{"juist", "org.freedesktop.resolve1.revert", map[string]string{"interface": "juist9"}, "yes"},
+		{"juist3", "org.freedesktop.resolve1.set-domains", map[string]string{"interface": "juist3"}, "yes"},
+		{"juist9", "org.freedesktop.resolve1.revert", map[string]string{"interface": "juist9"}, "yes"},
+		{"juist", "org.freedesktop.resolve1.set-domains", map[string]string{"interface": "juist3"}, "not handled"},
+		{"juist3", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist0"}, "not handled"},
+		{"juist3", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist4"}, "not handled"},
+		{"juist0", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist0"}, "not handled"},
+		{"juist10", "org.freedesktop.resolve1.set-dns-servers", map[string]string{"interface": "juist1"}, "not handled"},
 		{"juist", "org.freedesktop.resolve1.set-default-route", map[string]string{}, "yes"}, // before systemd 256
 		{"juist", "org.freedesktop.resolve1.set-dnssec-negative-trust-anchors", map[string]string{"interface": "juist0"}, "yes"},
 		{"juist", "org.freedesktop.resolve1.set-dnssec-negative-trust-anchors", map[string]string{"interface": "eth0"}, "not handled"},
@@ -94,7 +99,7 @@ func TestThePklaAllowsWhatTheRuleDoes(t *testing.T) {
 	if len(want) != 5 || !slices.Equal(got, want) {
 		t.Errorf("the .pkla allows %v, the rule %v", got, want)
 	}
-	if !strings.Contains(string(pkla), "\nIdentity=unix-user:juist\n") ||
+	if !strings.Contains(string(pkla), "\nIdentity=unix-user:juist;unix-user:juist1;") ||
 		!strings.Contains(string(pkla), "\nResultAny=yes\n") {
 		t.Errorf("the .pkla is not juistd's, or not for a service:\n%s", pkla)
 	}
@@ -136,7 +141,7 @@ func TestThePklaIsForAnOldPolkitAlone(t *testing.T) {
 		if got := err == nil; got != c.want {
 			t.Errorf("%q, postinst %v: .pkla there %v, want %v", c.dpkg, c.args, got, c.want)
 		}
-		if err == nil && !strings.Contains(string(b), "Identity=unix-user:juist") {
+		if err == nil && !strings.Contains(string(b), "Identity=unix-user:juist;") {
 			t.Errorf("the .pkla installed reads:\n%s", b)
 		}
 	}

@@ -24,7 +24,7 @@ version) [ -n "$FAKE_VCS" ] && echo "	build	vcs=git" ;;
 esac
 `
 
-// pkgBuild runs pkg.sh for FreeBSD:14:amd64 as if on goos/goarch, and says
+// pkgBuild runs pkg.sh for FreeBSD:15:amd64 as if on goos/goarch, and says
 // what it asked of go.
 func pkgBuild(t *testing.T, goos, goarch string, env ...string) (log, builddir string) {
 	t.Helper()
@@ -36,7 +36,7 @@ func pkgBuild(t *testing.T, goos, goarch string, env ...string) (log, builddir s
 	builddir = filepath.Join(dir, "build")
 	logFile := filepath.Join(dir, "log")
 	cmd := exec.Command("sh", "packaging/freebsd/pkg.sh", goBin, filepath.Join(builddir, "freebsd", "juist.pkg"),
-		"1.0", "FreeBSD:14:amd64", builddir)
+		"1.0", "FreeBSD:15:amd64", builddir)
 	cmd.Dir = ".."
 	cmd.Env = append(append(os.Environ(), "FAKE_LOG="+logFile, "FAKE_GOOS="+goos, "FAKE_GOARCH="+goarch), env...)
 	if out, err := cmd.CombinedOutput(); err != nil {

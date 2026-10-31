@@ -196,6 +196,7 @@ code directly, so they fail on the upgrade itself rather than in the field.
 | derphttp dials a node's `DERPPort` at its host name in DNS where an address is empty, verifies a node without `CertName` by WebPKI, and asks `feature.HookProxyFromEnvironment` for each dial; no port mapper or captive-portal probe is linked | relays on 443, the proxy | `TestUpstreamANamedNodeIsDialledByNameThroughTheProxy`, `TestUpstreamNoPortMapperOrCaptivePortalIsLinked`, `TestMembersRelayThroughThePublicName` |
 | A preshared key reaches a peer created on first contact through the config lookup and an active one in place through `SyncDevicePeer`, which keeps its session; a peer holding another completes no handshake | `conn.Peer.PSK` and the resets of a peer newly keyed | `TestHandshakesCarryThePresharedKey`, `TestAKeyWhereThereWasNoneEndsTheSession`, `TestAPeerCreatedWithTheKeyItHadPassesNothing` |
 | The wrapper hands each packet the device sends to `PreFilterPacketOutboundToWireGuardNetstackIntercept` before the engine's own hook and the filter, a hook nothing but Tailscale's netstack sets, and `InjectInboundCopy` writes to the device past the inbound filter | `conn.Options.Local`, the phone's resolver | `TestALocalAddressIsAnsweredInTheProcess` |
+| The wrapper hands each packet the device sends to `PreFilterPacketOutboundToWireGuardEngineIntercept` ahead of the filter, which drops every multicast destination, and each from a peer to `PreFilterPacketInboundFromWireGuard` ahead of it; `InjectOutbound` skips the outbound filter, and wireguard-go picks the peer by the outer destination | `conn.Options.Multicast` | `TestAGroupDatagramReachesEveryMember`, `TestTheMulticasterCallsTheEnginesHooks` |
 | The device, MTU and engine wiring behave as the requirements above say | the real-device path | `make test-os-plumbing` (root; `make ci-vm` runs it) |
 
 ## Answers leave the way they came (Linux)
@@ -293,11 +294,11 @@ instead:
   rc.conf does not start pf. Answers to what comes in keep leaving the way
   it came only with that ruleset of juist's: pf decides by the last rule
   that matches, so a pass of juist's would override a host's `block in all`
-  before the anchor, and `match` takes no `reply-to` in 14.5; beside the
+  before the anchor, and `match` takes no `reply-to` (15.1); beside the
   host's own rules theirs decide, and the status says so.
-- **Routes to one prefix do not stand side by side** on 14.5, even with
-  `net.route.multipath=1`, whatever their gateways: juist deletes a route
-  by its gateway all the same, so as never to take another's.
+- **Routes to one prefix stand side by side** on 15.1, as
+  `net.route.multipath=1`, its default, allows: juist deletes a route by its
+  gateway, so as never to take another's.
 - **IPv6 on the device** takes the address as `inet6 A prefixlen 128`;
   Tailscale's `/48` workaround for FreeBSD bug 218508 concerns the
   point-to-point form, which juist does not use.

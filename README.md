@@ -40,8 +40,8 @@ sudo apt install ./juist_amd64.deb
 # Fedora (x86_64)
 sudo dnf install https://github.com/nning/juist/releases/latest/download/juist.x86_64.rpm
 
-# FreeBSD 14, as root (juist-freebsd14-aarch64.pkg on arm64)
-pkg add https://github.com/nning/juist/releases/latest/download/juist-freebsd14-amd64.pkg
+# FreeBSD 15, as root (juist-freebsd15-aarch64.pkg on arm64)
+pkg add https://github.com/nning/juist/releases/latest/download/juist-freebsd15-amd64.pkg
 sysrc juistd_enable=YES && service juistd start
 ```
 
@@ -53,6 +53,9 @@ Or build the package from the source and install it: `make install`, or
 and `juistd`, the daemon, with shell completion and man pages. Checking a
 download, and building for another machine:
 [Install](https://docs.juist.nning.io/en/docs/install/).
+
+An app in a container becomes a device of its own through a juist container
+sharing its network namespace: [examples/sidecar](examples/sidecar).
 
 ## Your first network
 
@@ -251,7 +254,7 @@ What works:
 Still open before v1, as [05-roadmap.md](docs/05-roadmap.md) plans it:
 
 - the Android app, which joins and reaches the network but is not finished
-- the external security audit
+- a security audit by a second model; a human audit is not planned
 
 ## Development
 

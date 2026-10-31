@@ -924,4 +924,15 @@ func TestStatusVerboseNamesEachDevicesRelay(t *testing.T) {
 	if strings.Contains(plain.String(), "phone") {
 		t.Errorf("plain status lists relayed devices:\n%s", plain.String())
 	}
+	// A reader is shown no member's name nor identity, these lines included.
+	read := st.ForReader()
+	var reader syncBuffer
+	c := newApp(strings.NewReader(""), &reader, &reader)
+	c.now = testNow
+	c.printStatusIn(&read, "", true)
+	mustContain(t, reader.String(), "  Relays        1 available, via member 1\n                a device via a relay\n"+
+		"                a device via member 1\n")
+	if strings.Contains(reader.String(), "nid:") || strings.Contains(reader.String(), "phone") {
+		t.Errorf("a reader's status names a member:\n%s", reader.String())
+	}
 }

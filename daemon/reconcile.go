@@ -167,22 +167,25 @@ func (d *Daemon) Reconcile() error {
 	if refused {
 		d.logOnce("daemon: members refuse this device a catch-up and none answers it; it was most likely removed")
 	}
-	devices := peerDevices(ipc.DevicesOf(state, s.now), d.self, s.view)
+	all := ipc.DevicesOf(state, s.now)
+	builds := make([]ipc.Build, 0, len(all))
+	for _, dev := range all {
+		if b := d.buildOf(dev.Identity); b != 0 {
+			builds = append(builds, ipc.Build{Identity: dev.Identity, Schema: b})
+		}
+	}
+	devices := peerDevices(all, d.self, s.view)
 	for i := range devices {
 		id := devices[i].Identity
 		devices[i].Serving = len(devices[i].Published) > 0 && d.servesPublished(id)
-		if id == d.self {
-			devices[i].Build = types.CurrentSchema
-		} else if e, ok := d.endpoints.Get(id); ok && !e.HintAlone() {
-			devices[i].Build = e.Schema
-		}
+		devices[i].Build = d.buildOf(id)
 	}
 	d.setDerived(ipc.Derived{
 		NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(), Schema: state.Schema(),
 		Members: len(s.members), Expired: s.expired,
 		Peers: len(b.peers), Unreachable: len(b.silent), Silent: b.silent,
 		Unrevoked: unrevoked, Lost: lost,
-		Devices: devices, Unmoved: unmoved,
+		Devices: devices, Builds: builds, Unmoved: unmoved,
 		Refused: refused, Overtaken: d.overtaken(), SelfName: d.selfName(state),
 		LeaseSigners: fresh.Signers, FreshSince: fresh.Since, FreshUntil: fresh.Until,
 		Vouchers: fresh.Needed, Vouching: fresh.Vouching, Stale: !fresh.Fresh(s.now),
@@ -386,7 +389,9 @@ func (d *Daemon) installRelays(s snapshot, held map[types.Identity]gossip.Endpoi
 		relayHeld[d.self] = mine
 	}
 	network := s.state.GenesisHash()
-	relays := d.relaySet(network, s.members, relayHeld)
+	var ingress nameClaim
+	ingress.name, ingress.by = IngressRelayName(s.state, d.now().Unix())
+	relays := d.relaySet(network, s.members, relayHeld, ingress)
 	// Where two relays derive one region the lower identity keeps it, and a
 	// peer homed there is homed at the other.
 	ownRegion := false
@@ -406,8 +411,13 @@ func (d *Daemon) installRelays(s snapshot, held map[types.Identity]gossip.Endpoi
 	}
 	named := slices.DeleteFunc(slices.Clone(relays), func(r conn.Relay) bool { return r.Name == "" })
 	d.mu.Lock()
+	moved := !slices.EqualFunc(d.namedRelays, named, func(a, b conn.Relay) bool { return a.Name == b.Name })
 	d.namedRelays, d.relays = named, relays
 	d.mu.Unlock()
+	if moved && d.dht != nil && (d.httpsOnly || d.manager.Walled()) {
+		// What the names held is no longer where it is looked for.
+		d.dht.Republish()
+	}
 	return relays, nil
 }
 
@@ -708,6 +718,18 @@ func (d *Daemon) isRelaying() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.ownRelay.server != nil
+}
+
+// buildOf is the newest schema id's juist implements, as its announcement
+// says; zero where none does.
+func (d *Daemon) buildOf(id types.Identity) types.SchemaVersion {
+	if id == d.self {
+		return types.CurrentSchema
+	}
+	if e, ok := d.endpoints.Get(id); ok && !e.HintAlone() {
+		return e.Schema
+	}
+	return 0
 }
 
 // pruneEndpoints drops the cached announcements of former members and keeps

@@ -128,7 +128,7 @@ first. [Inviting devices]({{< relref "docs/invites" >}}) has the details.
 Behind NAT, you do not need to open anything in a firewall. A device with a
 public address, such as a VPS, needs port 41643/udp open.
 
-## Notes
+## Good to know
 
 - `juist create home` names the network `home`. The device is named after its
   host unless you pass `--device`.
@@ -142,12 +142,11 @@ public address, such as a VPS, needs port 41643/udp open.
   a password manager or on paper, apart from the admin keys. With it, you can
   end the network if too few admin keys are left to change it
   ([Ending the network]({{< relref "docs/network-changes" >}}#ending-the-network)).
-- The network has no **voucher** yet. A voucher is a device that confirms
-  every hour that the network's state is current. This limits how long a
-  device that is cut off from the others can keep talking to one you removed. Give the role only to devices that are
-  always on (`juist grant DEVICE voucher`); `juist create --voucher` makes the
-  first device one. See
-  [freshness]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
+- The network has no [voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
+  yet, so nothing limits how long a cut-off device can keep talking to a
+  removed one. Give the role only to always-on devices
+  (`juist grant DEVICE voucher`); `juist create --voucher` makes the first
+  device one.
 
 ## Troubleshooting
 

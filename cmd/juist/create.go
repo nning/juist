@@ -101,17 +101,18 @@ func cmdCreate(a *app, args []string) error {
 
 func (a *app) parseInit(args []string) (initPlan, error) {
 	s := spec{name: "juist create", args: "[NETWORK]", max: 1, anyNetwork: true, about: `
-Create a network with this device as its first member. --voucher makes it
-vouch for the network's state too; where it is then off for 48 hours, every
-other device reaches only vouchers, so use it on a device that is always on.
-NETWORK defaults to two random words. A device in a network already runs
-the new one beside it, with a juistd of its own.
+Create a network with this device as its first member. NETWORK defaults to
+two random words. If the device is already in a network, the new network
+gets its own juistd.
+
+--voucher makes this device a voucher too. If it is then off for 48 hours,
+the other devices reach only vouchers, so use it on a device that is always
+on.
 
 The admin keys (this keystore's and --admin) and --quorum decide who may
-change the network; changing them later takes a quorum as well. This
-keystore's is a new one, unless --admin-key shares one with its other
-networks. Recovery without the admin keys is not implemented: losing them
-loses the network.`}
+change the network. Changing them later takes a quorum too. This keystore's
+admin key is new, unless --admin-key reuses one from another network. Losing
+the admin keys loses the network: there is no recovery.`}
 	var p initPlan
 	fs := newFlags(s.name)
 	fs.StringVar(&p.device, "device", "", "this device's `NAME` (default: the hostname)")
@@ -321,6 +322,9 @@ func (a *app) foundNetwork(n node, op operatorChoice, p *initPlan) (err error) {
 		return err
 	}
 	genesis.State.V4Prefix = p.v4
+	if a.genesisSchema != 0 {
+		genesis.State.Schema = a.genesisSchema
+	}
 	if err := genesis.Sign(localAdmin); err != nil {
 		return err
 	}

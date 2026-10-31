@@ -25,9 +25,9 @@ import (
 
 func cmdStatus(a *app, args []string) error {
 	s := spec{name: "juist status", about: `
-Show this device's network and how many devices it reaches; every network,
-where it is in several. Any local user may run it. juist health says what
-needs attention, juist devices lists the devices.`}
+Show this device's network and how many devices it reaches, for every
+network if the device is in several. Any local user may run it. juist health
+says what needs attention; juist devices lists the devices.`}
 	fs := newFlags(s.name)
 	devices := fs.Bool("devices", false, "list the devices too, as juist devices does")
 	verbose := fs.Bool("verbose", false, "name the relay that carries the traffic to each relayed device")
@@ -104,7 +104,7 @@ func (a *app) adminNotes(st *ipc.Status, several bool) (notes []line, votes int)
 		notes, votes = a.waitingNote()
 	}
 	if st.InNetwork && !st.NotMember && st.SchemaAlarm == "" && st.Schema < types.CurrentSchema {
-		notes = append(notes, a.upgradeNote(several)...)
+		notes = append(notes, a.upgradeNote(st, several)...)
 	}
 	return notes, votes
 }
@@ -165,7 +165,12 @@ func withRelayed(head []line, s *ipc.Status) []line {
 			continue
 		}
 		via := cmp.Or(r.Relay, "a relay")
-		relayed = append(relayed, line{kind: lineField, text: cmp.Or(names[r.Identity], r.Identity.ShortString()) + " via " + via})
+		who := cmp.Or(names[r.Identity], r.Identity.ShortString())
+		if r.Identity == (types.Identity{}) {
+			// A reader's status, which names no member.
+			who = "a device"
+		}
+		relayed = append(relayed, line{kind: lineField, text: who + " via " + via})
 	}
 	slices.SortFunc(relayed, func(x, y line) int { return cmp.Compare(x.text, y.text) })
 	at := slices.IndexFunc(head, func(l line) bool { return l.kind == lineField && l.label == "Relays" })
@@ -481,9 +486,11 @@ func (r *statusRender) served() {
 	if t := subnetSummary(s.Subnets, paint); t != "" {
 		r.field("Subnets", "%s", t)
 	}
-	if t := publishSummary(s.Publish, paint); t != "" {
+	published := selfPublished(s)
+	if t := publishSummary(s.Publish, published, paint); t != "" {
 		r.field("Published", "%s", t)
 	}
+	r.v.notes = append(r.v.notes, publishNotes(s.Publish, published, cmp.Or(s.SelfName, s.Self.ShortString()))...)
 	if s.Publish != nil {
 		for _, sh := range s.Publish.Shared {
 			r.note(lineWarn, sharedWarning(sh))
@@ -709,6 +716,9 @@ func deviceNotes(n *notes, s *ipc.Status, several bool) {
 			n.note(lineHint, "sudo firewall-cmd --permanent --zone=trusted --change-interface=%s && sudo firewall-cmd --reload",
 				s.Firewalled)
 		}
+	}
+	if s.Unguarded != "" {
+		n.note(lineWarn, "other devices than the tunnel reach this device's overlay addresses: %s", s.Unguarded)
 	}
 	if s.DataPlaneError != "" {
 		n.note(lineWarn, "data plane refused the device set: %s", s.DataPlaneError)

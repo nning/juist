@@ -32,6 +32,7 @@ import (
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/relay"
+	"github.com/nning/juist/relay/forward"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
@@ -673,7 +674,7 @@ func TestARelaysNameIsTakenOnceItsServerSaysWhoseItIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, r := range f.d.inviteRelays(state) {
-		if r.Name != "" && r.CertHash[0] != 1 {
+		if r.Name == "one.example.org" && r.CertHash[0] != 1 {
 			t.Errorf("an invite waits at %s by the relay %d", r.Name, r.CertHash[0])
 		}
 	}
@@ -740,6 +741,7 @@ func TestTheRelayOrdersOnceTheIngressHandsItsNameOn(t *testing.T) {
 
 // A name one relay alone claims goes into an invite unasked, as the host may
 // reach no name, but into the data plane once its server says whose it is.
+// The invite waits at this device's own relay after it.
 func TestAnInviteNamesARelayItCouldNotAsk(t *testing.T) {
 	f, _ := namedRelayFixture(t)
 	one := f.nw.devices[1]
@@ -756,7 +758,8 @@ func TestAnInviteNamesARelayItCouldNotAsk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relays := f.d.inviteRelays(state); len(relays) != 1 || relays[0].Name != "solo.example.org" {
+	if relays := f.d.inviteRelays(state); len(relays) != 2 || relays[0].Name != "solo.example.org" ||
+		relays[1].Name != testRelayName {
 		t.Errorf("the invite waits at %+v", relays)
 	}
 	f.d.mu.Lock()
@@ -765,5 +768,67 @@ func TestAnInviteNamesARelayItCouldNotAsk(t *testing.T) {
 		if r.Name == "solo.example.org" {
 			t.Error("the data plane takes a name its server did not answer for")
 		}
+	}
+}
+
+// An invite from the network's only relay on 443 waits at that relay, its
+// own, under its name: a guest on HTTPS alone reaches nothing else.
+func TestAnInviteWaitsAtItsOwnRelayUnderItsName(t *testing.T) {
+	f, _ := namedRelayFixture(t)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := f.d.TrustedState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine, ok := f.d.Announcement()
+	if !ok || mine.Relay == nil {
+		t.Fatal("the device announces no relay")
+	}
+	relays := f.d.inviteRelays(state)
+	if len(relays) != 1 || relays[0].Name != testRelayName || relays[0].CertHash != [32]byte(mine.Relay.Cert) ||
+		len(relays[0].Addrs) == 0 {
+		t.Fatalf("the invite waits at %+v, want this device's relay under %s", relays, testRelayName)
+	}
+
+	// The relay takes this device's wait and joins a guest to it.
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	var id [16]byte
+	id[0] = 7
+	sign := func(msg []byte) ([]byte, error) {
+		sig, err := f.self.identity.Sign(msg)
+		return sig[:], err
+	}
+	waited := make(chan net.Conn, 1)
+	go func() {
+		c, _, err := forward.Wait(ctx, relays[0], id, f.self.identity.Public(), sign)
+		if err != nil {
+			t.Errorf("waiting at its own relay: %v", err)
+		}
+		waited <- c
+	}()
+	var guest net.Conn
+	for guest == nil && ctx.Err() == nil {
+		if guest, err = forward.Dial(ctx, relays[0].Addrs[0], id); err != nil {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if guest == nil {
+		t.Fatalf("no guest joined at the device's own relay: %v", err)
+	}
+	defer guest.Close()
+	host := <-waited
+	if host == nil {
+		t.FailNow()
+	}
+	defer host.Close()
+	if _, err := guest.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(host, buf); err != nil || string(buf) != "hello" {
+		t.Fatalf("the host read %q, %v", buf, err)
 	}
 }

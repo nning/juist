@@ -108,15 +108,13 @@ these in braces. A destination is any of those, or:
   device or table;
 - an address or prefix behind a subnet router, such as `192.168.1.0/24` or
   `192.168.1.20`;
-- `name photos`, a [members-only name]({{< relref "docs/publishing" >}}#names-for-members-alone),
-  given by its label under the network's domain, or `name @` for the domain
-  itself. The rule lets its sources open port 443, over TCP and UDP, on the
-  device that publishes the name and terminates its TLS, and only for that
-  name. A members-only name needs such a rule: a rule to its device, or to
-  `any`, opens the port but not the name. A rule with a `name` has no other
-  destination and no port. A rule naming a public name published by TLS opens that name's port on its device
-  to the sources in the same way. If another device publishes the name
-  later, the rule opens that device instead.
+- `name photos`, a published name, given by its label under the network's
+  domain, or `name @` for the domain itself. The rule opens port 443, TCP and
+  UDP, on the device that publishes the name, and only for that name. A
+  rule with `name` has no other destination and no port.
+  [Members-only names]({{< relref "docs/members-only" >}}) need such a rule:
+  a rule to their device, or to `any`, opens the port but not the name. If
+  another device publishes the name later, the rule follows it.
 
 `proto` takes `tcp`, `udp`, `icmp` or a list in braces. `port` takes a
 port, a range such as `8000:8080`, or a list. A rule can have several
@@ -124,11 +122,11 @@ port, a range such as `8000:8080`, or a list. A rule can have several
 everything. Ping needs `proto icmp`, or a rule without a protocol.
 
 A test starts with `test pass` or `test block`. It checks a connection from
-one device to a single destination: one device, `internet via` one exit
-node, one address, or one name, given without a port. With a protocol and a
-port, the test checks exactly that connection. With only a protocol, it
-checks any port of that protocol, and with neither, whether anything passes
-at all. In a rule, by contrast, `proto tcp` passes every TCP port.
+one device to one destination: a device, `internet via` one exit node, an
+address, or a name without a port. With a protocol and a port, it checks
+exactly that connection; with only a protocol, any port of it; with neither,
+whether anything passes at all. In a rule, by contrast, `proto tcp` passes
+every TCP port.
 
 A device whose name is a keyword, such as `test`, goes in double quotes:
 `"test"`. A rule continues onto the next line inside braces, or after a
@@ -149,7 +147,7 @@ in their own block. It does not need a network.
 - An exit node forwards for a device only what the policy passes. A device
   the policy lets use an exit node may also use its DNS. A subnet router
   does the same for its subnet.
-- A [service member]({{< relref "docs/publishing" >}}) opens nothing,
+- A [service member]({{< relref "docs/service-member" >}}) opens nothing,
   whatever the policy says. An ingress reaches what is published on a
   device, regardless of the policy.
 - Two devices that no rule connects, in either direction, are not peers:
@@ -212,7 +210,7 @@ The file can live in a repository and be changed by merge request:
 Never give a CI job an admin key that reaches the quorum on its own, or
 anyone who can push to the repository could change the network.
 
-## Notes
+## Good to know
 
 - `juist policy set` refuses an empty file; to withdraw the policy, use
   `juist policy off`. `pass from any to any` lets every device open anything

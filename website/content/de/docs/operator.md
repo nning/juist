@@ -14,17 +14,16 @@ Auf jedem Gerät erledigt der Daemon `juistd` die Arbeit, und der Befehl
 |---|---|
 | root | alles, auch den Operator festlegen |
 | der Operator | alles andere, etwa Geräte auflisten, einladen, Änderungen bestätigen oder einen Exit-Node nutzen |
-| jeder andere lokale Benutzer | nur `juist status` und `juist health` |
+| jeder andere lokale Benutzer | nur `juist status` und `juist health`, die andere Geräte als `member 1`, `member 2` usw. zeigen |
 
 Der **Operator** ist der lokale Benutzer, der für dieses Gerät festgelegt
 ist, meist du, also die Person, die das Gerät benutzt. Gibt es einen
 Operator, musst du nicht mehr vor jeden Befehl `sudo` schreiben.
 
-Für Änderungen am Netz selbst, etwa um ein Gerät aufzunehmen oder zu
-entfernen, braucht es außerdem einen Admin-Schlüssel. Ein Admin ist eine
-Person, deren Schlüssel Änderungen bestätigt. Admin-Schlüssel liegen in deinem
-eigenen Keystore `~/.config/juist`. Deshalb führst du diese Befehle als du
-selbst aus, nicht mit sudo (siehe [Admins]({{< relref "docs/admins" >}})).
+Änderungen am Netz, etwa die Aufnahme eines Geräts, brauchen außerdem einen
+[Admin-Schlüssel]({{< relref "docs/admins" >}}). Er liegt in deinem eigenen
+Keystore `~/.config/juist`, also führst du diese Befehle als du selbst aus,
+nicht mit sudo.
 
 ## Den Operator festlegen
 
@@ -54,7 +53,7 @@ sudo juist set --operator=""
 
 Die Ausgabe lautet `operator cleared`.
 
-## Hinweise
+## Gut zu wissen
 
 - Jedes Gerät hat pro Netz genau einen Operator. Nur root kann ihn mit
   `juist set --operator` festlegen. Die übrigen Einstellungen von

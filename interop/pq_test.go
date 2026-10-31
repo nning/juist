@@ -73,6 +73,11 @@ func previousRelease(t *testing.T, fb, lx *vm) {
 	}
 	lx.run(t, env+"juist admins add fb "+key[1])
 	fb.eventually(t, "holding its admin key's addition", 2*time.Minute, env+"juist admins", has("fb"))
+	// Another network on each, whose instance the upgrade gives a user of
+	// its own (M24).
+	for _, v := range []*vm{fb, lx} {
+		secondOnPrevious(t, v)
+	}
 	lx.run(t, "systemctl stop juistd")
 	// The data plane between the two on their LAN from here, for a failure.
 	fb.run(t, "daemon -f sh -c 'exec tcpdump -n -tt -l -c 400 -i vtnet1 udp port 41643 > /tmp/pq.udp 2>/dev/null'")
@@ -80,6 +85,7 @@ func previousRelease(t *testing.T, fb, lx *vm) {
 		"and host 10.77.0.1 > /tmp/pq.udp 2>/dev/null' >/dev/null 2>&1 < /dev/null")
 	fb.run(t, "pkg add -f /tmp/juist.pkg >/dev/null && service juistd restart >/dev/null")
 	fb.eventually(t, "juistd answers, upgraded", 2*time.Minute, "juist status", ok)
+	secondMoved(t, fb)
 	lx.run(t, "systemctl start juistd")
 	lx.eventually(t, "reaching fb, upgraded, from the previous release", 3*time.Minute, "ping -c1 -W2 "+fb4, ok)
 	fb.eventually(t, "reaching lx on the previous release, upgraded", time.Minute, "ping -c1 -t2 "+lx4, ok)
@@ -89,6 +95,7 @@ func previousRelease(t *testing.T, fb, lx *vm) {
 
 	lx.run(t, "dpkg -i /tmp/juist.deb >/dev/null && systemctl is-active juistd >/dev/null")
 	lx.eventually(t, "juistd answers, upgraded", 2*time.Minute, "juist status", ok)
+	secondMoved(t, lx)
 	lx.eventually(t, "the tunnel on a pair key", 3*time.Minute, pairsCmd, newer(0))
 	lx.eventually(t, "reaching fb on a pair key", time.Minute, "ping -c1 -W2 "+fb4, ok)
 	fb.eventually(t, "reaching lx on a pair key", time.Minute, "ping -c1 -t2 "+lx4, ok)
@@ -105,7 +112,8 @@ func previousRelease(t *testing.T, fb, lx *vm) {
 		t.Logf("lost alone across the bump at %s, as the lab's network does: %s", bump, strings.Join(lost, ", "))
 	}
 	// Raised to this build's schema, past which the previous release stops.
-	lx.run(t, env+"juist log upgrade --yes")
+	lx.eventually(t, "raising the schema once fb's juistd says it implements it", 2*time.Minute,
+		env+"juist log upgrade --yes", ok)
 	fb.eventually(t, "holding the upgrade", 2*time.Minute, env+"juist log upgrade --yes", has("unchanged"))
 	lx.eventually(t, "reaching fb past the upgrade", time.Minute, "ping -c1 -W2 "+fb4, ok)
 	fb.eventually(t, "reaching lx past the upgrade", time.Minute, "ping -c1 -t2 "+lx4, ok)

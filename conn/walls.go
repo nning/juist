@@ -3,7 +3,6 @@ package conn
 import (
 	"context"
 	"maps"
-	"net/netip"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -14,7 +13,7 @@ import (
 	"tailscale.com/types/key"
 )
 
-// meetEvery is how often a walled peer is pinged at its home: magicsock
+// meetEvery is how often a member writes to a walled peer's home: magicsock
 // closes a connection to a region other than its home once nothing was
 // written on it for 60 s, checking every 15 s.
 const meetEvery = 45 * time.Second
@@ -49,20 +48,45 @@ type walls struct {
 	// Guarded by apply.
 	nameFirst bool
 	blind     int
-	counted   *netcheck.Report
+	// namedFirst is how many reports were counted since names came first,
+	// each taken with them first. Guarded by apply.
+	namedFirst int
+	counted    *netcheck.Report
 	// asked is the report counted when another was last asked for, once
 	// each, as none comes while the link is down; waited the one the wait
 	// before asking began at. Guarded by apply.
 	asked, waited *netcheck.Report
+	// stunAside is whether the map leaves the STUN servers out, as where
+	// they answered and no relay did; unanswered is how many reports in a
+	// row, up to stunCounted, did so; asideAgain when they may be left out
+	// again after HTTPS reached no relay either, asideGap the wait after
+	// the next such. Guarded by apply, stunAside written under it.
+	stunAside   atomic.Bool
+	unanswered  int
+	stunCounted *netcheck.Report
+	asideAgain  time.Time
+	asideGap    time.Duration
+	emptyAside  int // reports in a row that measured nothing, without them
+
+	noRelay atomic.Bool // blind is above 0, for readers without apply
 
 	kick chan struct{} // the meeting loop is to look again
 	due  atomic.Bool   // a look after a report is due
+	// met is when each home a connection is kept at was last needed, kept
+	// the homes last kept. Guarded by apply.
+	met  map[int]time.Time
+	kept []int
+	// keepKey is what the writes keeping a connection at a walled peer's
+	// home are addressed to: no client holds it, so the relay drops them.
+	keepKey key.NodePublic
 
 	goneMu sync.Mutex
 	gone   map[key.NodePublic]time.Time
 }
 
 func (m *tsManager) Walled() bool { return m.walled.Load() }
+
+func (m *tsManager) ReachesNoRelay() bool { return m.walls.noRelay.Load() }
 
 func (m *tsManager) NotAtHome() map[uint64]time.Time {
 	m.walls.goneMu.Lock()
@@ -105,9 +129,9 @@ func (m *tsManager) noteNotHere(region tailcfg.DERPRegionID, short string) {
 // unreachedIn says which of relays a node homed at home does not reach, as
 // r measured them, nil where it is not walled; ok is false where r says
 // nothing either way, as one that measured nothing. Without UDP, netcheck
-// pings a relay too, which says nothing of its TCP port: a report that has
-// ICMP counts a relay reached by its name on 443 alone.
-func unreachedIn(relays []Relay, home int, r *netcheck.Report, httpsOnly bool) (unreached map[int]bool, ok bool) {
+// pings a relay too, which says nothing of TCP: a relay in pinged, reached
+// by ICMP alone, is not reached.
+func unreachedIn(relays []Relay, home int, r *netcheck.Report, httpsOnly bool, pinged map[int]bool) (unreached map[int]bool, ok bool) {
 	if home == 0 || len(relays) == 0 {
 		return nil, true
 	}
@@ -119,7 +143,7 @@ func unreachedIn(relays []Relay, home int, r *netcheck.Report, httpsOnly bool) (
 	}
 	for _, rel := range relays {
 		_, measured := r.RegionLatency[tailcfg.DERPRegionID(rel.Region)]
-		if rel.Region != home && (!measured || r.ICMPv4 && rel.Name == "") {
+		if rel.Region != home && (!measured || pinged[rel.Region]) {
 			if unreached == nil {
 				unreached = map[int]bool{}
 			}
@@ -130,16 +154,14 @@ func unreachedIn(relays []Relay, home int, r *netcheck.Report, httpsOnly bool) (
 }
 
 // blindAfter is how many reports in a row, r last, had no UDP and reached
-// no relay, before was. ICMP measures a region's first node, so with names
-// first, only a named relay, whose first node is its name with no STUN
-// port, counts as reached by HTTPS.
-func blindAfter(r *netcheck.Report, relays []Relay, nameFirst bool, before int) int {
+// no relay but by ICMP alone, those in pinged, before was.
+func blindAfter(r *netcheck.Report, relays []Relay, pinged map[int]bool, before int) int {
 	if r == nil || r.UDP || !slices.ContainsFunc(relays, func(rel Relay) bool { return rel.Name != "" }) {
 		return 0
 	}
 	for _, rel := range relays {
 		_, ok := r.RegionLatency[tailcfg.DERPRegionID(rel.Region)]
-		if ok && (!r.ICMPv4 || nameFirst && rel.Name != "") {
+		if ok && !pinged[rel.Region] {
 			return 0
 		}
 	}
@@ -149,8 +171,8 @@ func blindAfter(r *netcheck.Report, relays []Relay, nameFirst bool, before int) 
 // missedAfter counts, per relay, the reports in a row that left it out of
 // reach of a node homed at home, r last, before was; a report that says
 // nothing either way leaves them.
-func missedAfter(r *netcheck.Report, relays []Relay, home int, httpsOnly bool, before map[int]int) (after map[int]int, decisive bool) {
-	u, ok := unreachedIn(relays, home, r, httpsOnly)
+func missedAfter(r *netcheck.Report, relays []Relay, home int, httpsOnly bool, pinged map[int]bool, before map[int]int) (after map[int]int, decisive bool) {
+	u, ok := unreachedIn(relays, home, r, httpsOnly, pinged)
 	if !ok {
 		return before, false
 	}
@@ -176,18 +198,21 @@ func missesToWall(rel Relay, httpsOnly bool) int {
 // follow takes report r, once, into what makes this node walled, and
 // reports whether it was new. The home a report leads to comes after it, so
 // the report is counted for what it missed again once there is one.
-func (w *walls) follow(r *netcheck.Report, relays []Relay, home int, httpsOnly bool) bool {
+func (w *walls) follow(r *netcheck.Report, relays []Relay, home int, httpsOnly bool, pinged map[int]bool) bool {
 	switch {
 	case r != w.counted:
 		w.counted = r
-		w.blind = blindAfter(r, relays, w.nameFirst, w.blind)
+		w.blind = blindAfter(r, relays, pinged, w.blind)
+		if w.nameFirst {
+			w.namedFirst++
+		}
 	case home != 0 && !w.homed:
 		w.asked = nil
 	default:
 		return false
 	}
 	w.homed = home != 0
-	w.missed, w.decisive = missedAfter(r, relays, home, httpsOnly, w.missed)
+	w.missed, w.decisive = missedAfter(r, relays, home, httpsOnly, pinged, w.missed)
 	return true
 }
 
@@ -237,6 +262,19 @@ func (w *walls) undecided(relays []Relay, home int, httpsOnly bool) bool {
 	if w.blind == 1 && !w.nameFirst && !httpsOnly {
 		return true
 	}
+	return w.missing(relays, home, httpsOnly)
+}
+
+// saysWalled reports whether a node homed at home says it is walled after
+// report r: a relay is out of reach, or r had no UDP and one more report has
+// to decide whether one is.
+func (w *walls) saysWalled(r *netcheck.Report, unreached map[int]bool, relays []Relay, home int, httpsOnly bool) bool {
+	return len(unreached) > 0 || r != nil && !r.UDP && w.missing(relays, home, httpsOnly)
+}
+
+// missing reports whether a relay, homed at home, was missed by fewer
+// reports in a row than make it out of reach.
+func (w *walls) missing(relays []Relay, home int, httpsOnly bool) bool {
 	if home == 0 || !w.decisive {
 		return false
 	}
@@ -250,17 +288,125 @@ func (w *walls) undecided(relays []Relay, home int, httpsOnly bool) bool {
 // report r, was before: two reports in a row without UDP that reached no
 // relay may have spent their time on the relays' own ports, which a network
 // passing 443 alone drops, before netcheck ends them; one alone may be the
-// first after a link change. A report with UDP puts the ports first again.
-func nameFirstAfter(r *netcheck.Report, httpsOnly bool, blind int, was bool) bool {
+// first after a link change. A report that measured one of relays by UDP puts
+// the ports first again; UDP a STUN server alone answered says nothing of
+// them, as in a report taken before the STUN servers were left out.
+func nameFirstAfter(r *netcheck.Report, relays []Relay, httpsOnly bool, blind int, was bool) bool {
 	switch {
 	case httpsOnly || r == nil:
 		return was
-	case r.UDP:
+	case r.UDP && measuresRelay(r, relays, nil):
 		return false
+	case r.UDP:
+		return was
 	case blind >= 2:
 		return true
 	}
 	return was
+}
+
+// unansweredAfter is how many reports in a row, r last, had UDP answered and
+// measured no relay, before was: netcheck measures by HTTPS only where no UDP
+// is answered, so STUN servers answering alone leave every relay unmeasured.
+func unansweredAfter(r *netcheck.Report, relays []Relay, before int) int {
+	if r == nil || len(r.RegionLatency) == 0 || len(relays) == 0 {
+		return before
+	}
+	if !r.UDP || measuresRelay(r, relays, nil) {
+		return 0
+	}
+	return before + 1
+}
+
+// measuresRelay reports whether r measured any of relays, but by ICMP alone,
+// those in pinged.
+func measuresRelay(r *netcheck.Report, relays []Relay, pinged map[int]bool) bool {
+	return r != nil && slices.ContainsFunc(relays, func(rel Relay) bool {
+		_, ok := r.RegionLatency[tailcfg.DERPRegionID(rel.Region)]
+		return ok && !pinged[rel.Region]
+	})
+}
+
+// reachesNoneAside reports whether r, taken without the STUN servers,
+// reached no relay with every way tried: with the relays' names on 443
+// first, where there are any, which come first only after two such reports;
+// namesTried is whether r was taken so.
+func reachesNoneAside(r *netcheck.Report, relays []Relay, pinged map[int]bool, namesTried bool) bool {
+	if r == nil || r.UDP || measuresRelay(r, relays, pinged) {
+		return false
+	}
+	return namesTried || !slices.ContainsFunc(relays, func(rel Relay) bool { return rel.Name != "" })
+}
+
+// followSTUN leaves the STUN servers out of the map after two reports in a
+// row that only they answered, so that netcheck measures the relays by
+// HTTPS, until the link changes; where HTTPS reaches none either, as with
+// the relays gone, they come back, to be left out again no sooner than
+// [relayRetryFirst] later, doubling up to [relayRetryMost].
+func (m *tsManager) followSTUN() {
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	if m.closed || len(m.stun) == 0 || m.httpsOnly {
+		return
+	}
+	r := m.magic.GetLastNetcheckReport(context.Background())
+	if r == m.walls.stunCounted || r == nil {
+		return
+	}
+	m.walls.stunCounted = r
+	if m.walls.stunAside.Load() {
+		pinged := m.pinged.lastAlone()
+		if r.UDP || measuresRelay(r, m.relays, pinged) {
+			m.walls.emptyAside = 0
+		} else if m.walls.emptyAside++; m.walls.emptyAside >= 2 {
+			// Without the STUN servers no report names one for the nearest
+			// region, which is what makes a node whose relays went homeless;
+			// two in a row, as one alone may follow a link change.
+			if !m.relayMissing.Swap(true) {
+				m.relayLost.Add(1)
+			}
+			m.followHome()
+		}
+		switch {
+		case r.UDP && measuresRelay(r, m.relays, nil):
+			// A relay's own port answered: they were not measured for
+			// another reason, as while they started, and the STUN servers
+			// are what tell this node its public address.
+			m.walls.stunAside.Store(false)
+			m.walls.unanswered, m.walls.asideAgain, m.walls.asideGap = 0, time.Time{}, 0
+			m.logf("conn: a relay answered UDP; the STUN servers are asked again")
+			m.installDERPMapAsking(m.relays, false)
+		case measuresRelay(r, m.relays, pinged):
+			m.walls.asideGap = 0
+		case reachesNoneAside(r, m.relays, pinged, m.walls.nameFirst && m.walls.namedFirst > 0):
+			m.walls.asideGap = min(max(2*m.walls.asideGap, relayRetryFirst), relayRetryMost)
+			m.walls.asideAgain = time.Now().Add(m.walls.asideGap)
+			m.walls.stunAside.Store(false)
+			m.walls.unanswered = 0
+			if !m.relayMissing.Swap(true) {
+				m.relayLost.Add(1)
+			}
+			m.logf("conn: no relay reached without the STUN servers either; they are asked again")
+			// At the next report: one asked now would cost a homeless
+			// node, as with every relay down, another round.
+			m.installDERPMapAsking(m.relays, false)
+		}
+		return
+	}
+	m.walls.unanswered = unansweredAfter(r, m.relays, m.walls.unanswered)
+	if m.walls.unanswered < 2 || time.Now().Before(m.walls.asideAgain) {
+		return
+	}
+	m.walls.stunAside.Store(true)
+	m.walls.emptyAside = 0
+	m.logf("conn: STUN servers answered and no relay did; the relays are measured without them until the link changes")
+	// Their own ports went unanswered, so their names on 443 come first at
+	// once rather than after two reports reaching none.
+	if !m.walls.nameFirst && slices.ContainsFunc(m.relays, func(rel Relay) bool { return rel.Name != "" }) {
+		m.walls.nameFirst, m.walls.namedFirst = true, 0
+		m.logf("conn: relays' names on 443 first: true")
+	}
+	m.installDERPMap(m.relays)
 }
 
 // sendHome is the region what goes to a peer homed at region is sent to.
@@ -282,9 +428,10 @@ func (m *tsManager) rerouteLocked() {
 	}
 	home := m.HomeRelay()
 	r := m.magic.GetLastNetcheckReport(context.Background())
-	if m.walls.follow(r, m.relays, home, m.httpsOnly) {
-		if first := nameFirstAfter(r, m.httpsOnly, m.walls.blind, m.walls.nameFirst); first != m.walls.nameFirst {
-			m.walls.nameFirst = first
+	if m.walls.follow(r, m.relays, home, m.httpsOnly, m.pinged.lastAlone()) {
+		m.walls.noRelay.Store(m.walls.blind > 0)
+		if first := nameFirstAfter(r, m.relays, m.httpsOnly, m.walls.blind, m.walls.nameFirst); first != m.walls.nameFirst {
+			m.walls.nameFirst, m.walls.namedFirst = first, 0
 			m.logf("conn: relays' names on 443 first: %v", first)
 			m.installDERPMap(m.relays)
 		}
@@ -293,22 +440,29 @@ func (m *tsManager) rerouteLocked() {
 		}
 	}
 	unreached := m.walls.unreachedAt(m.relays, home, m.httpsOnly)
-	if maps.Equal(unreached, m.walls.unreached) && (len(unreached) == 0 || home == m.walls.home) {
-		return
-	}
-	m.walls.unreached, m.walls.home = unreached, home
-	m.walls.out.Store(&unreached)
-	// Walled off from fewer relays, it may be to keep a connection to one.
-	m.meetSoon()
-	st := m.state.Load()
-	next, nodes := newPeerState(m.self.NodeKey.Public(), slices.Collect(maps.Values(st.peers)), m.sendHome)
-	m.state.Store(next)
-	m.magic.SetNetworkMap(m.selfNV, nodes)
-	walled := len(unreached) > 0
-	if m.walled.Swap(walled) != walled {
-		if walled {
+	// Homed without UDP, it says it is walled while a report still has to
+	// decide: said otherwise, members stop keeping its home open, and hear
+	// the walls that follow only at their next sync.
+	walled := m.walls.saysWalled(r, unreached, m.relays, home, m.httpsOnly)
+	if !maps.Equal(unreached, m.walls.unreached) || len(unreached) > 0 && home != m.walls.home {
+		m.walls.unreached, m.walls.home = unreached, home
+		m.walls.out.Store(&unreached)
+		// Walled off from fewer relays, it may be to keep a connection to one.
+		m.meetSoon()
+		st := m.state.Load()
+		next, nodes := newPeerState(m.self.NodeKey.Public(), slices.Collect(maps.Values(st.peers)), m.sendHome)
+		m.state.Store(next)
+		m.magic.SetNetworkMap(m.selfNV, nodes)
+		if len(unreached) > 0 {
 			m.logf("conn: walled: relays %v are out of reach, their peers are sent to at %d", slices.Sorted(maps.Keys(unreached)), home)
-		} else {
+		}
+	}
+	if m.walled.Swap(walled) != walled {
+		switch {
+		case len(unreached) > 0: // said above, as they moved
+		case walled:
+			m.logf("conn: walled until a report decides it, homed at %d without UDP", home)
+		default:
 			m.logf("conn: no longer walled")
 		}
 		m.notifyChange()
@@ -355,9 +509,9 @@ func (m *tsManager) meetLoop() {
 	}
 }
 
-// meet pings each walled peer at its home, unless that is this node's own
-// or out of its reach, asks for a report where one is undecided and timed
-// says the wait for it is over, and says when to do so again, or 0.
+// meet keeps a connection at each walled peer's home, asks for a report
+// where one is undecided and timed says the wait for it is over, and says
+// when to do so again, or 0.
 func (m *tsManager) meet(timed bool) time.Duration {
 	m.apply.Lock()
 	if m.closed {
@@ -372,26 +526,30 @@ func (m *tsManager) meet(timed bool) time.Duration {
 	} else {
 		wait = m.walls.waitFor(m.relays, home, m.httpsOnly)
 	}
-	var at []netip.Addr
-	for _, p := range m.state.Load().peers {
-		if !p.Walled || p.HomeRelay == 0 || len(p.Addrs) == 0 {
-			continue
+	var at []int
+	if !m.saving.Load() {
+		reaches := func(region int) bool {
+			return m.sendHome(region) == region && m.dm != nil && m.dm.Regions[tailcfg.DERPRegionID(region)] != nil
 		}
-		if p.HomeRelay != home && m.sendHome(p.HomeRelay) == p.HomeRelay && m.dm != nil &&
-			m.dm.Regions[tailcfg.DERPRegionID(p.HomeRelay)] != nil {
-			at = append(at, p.Addrs[0].Addr())
-		}
+		at = meetingHomes(slices.Collect(maps.Values(m.state.Load().peers)), m.relays, home, reaches)
+		at = m.walls.lingering(at, time.Now(), func(region int) bool { return region != home && reaches(region) })
+	} else {
+		m.walls.met = nil
+	}
+	if !slices.Equal(at, m.walls.kept) {
+		m.walls.kept = at
+		m.logf("conn: keeping relays %v open for walled peers", at)
 	}
 	m.apply.Unlock()
 	if ask {
 		m.magic.ReSTUN("walls")
 	}
-	if !m.saving.Load() {
-		for _, ip := range at {
-			m.ProbeQuietly(ip, meetEvery/3, func(bool) {})
+	for _, region := range at {
+		// One byte, not disco: the relay answers a disco packet for no
+		// client, and passes nothing to the walled peer either way.
+		if _, err := m.magic.SendDERPPacketTo(m.walls.keepKey, tailcfg.DERPRegionID(region), []byte{0}); err != nil {
+			m.logf("conn: keeping a connection at relay %d: %v", region, err)
 		}
-	} else {
-		at = nil
 	}
 	switch {
 	case wait:
@@ -400,6 +558,50 @@ func (m *tsManager) meet(timed bool) time.Duration {
 		return meetEvery
 	}
 	return 0
+}
+
+// meetLinger is how long a connection is kept at a walled peer's home after
+// it was last needed: a walled device that restarts announces itself
+// homeless, then not walled, before it is walled at the same home again.
+const meetLinger = 2 * time.Minute
+
+// lingering is homes, noted as needed at now, and the homes needed within
+// [meetLinger] before that still reached. The caller holds m.apply.
+func (w *walls) lingering(homes []int, now time.Time, reaches func(int) bool) []int {
+	if w.met == nil {
+		w.met = map[int]time.Time{}
+	}
+	for _, h := range homes {
+		w.met[h] = now
+	}
+	out := slices.Clone(homes)
+	for h, at := range w.met {
+		switch {
+		case now.Sub(at) >= meetLinger || !reaches(h):
+			delete(w.met, h)
+		case !slices.Contains(out, h):
+			out = append(out, h)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// meetingHomes are the homes of walled peers a node homed at home keeps a
+// connection at, each once: none where its own home has a name on 443, which
+// a walled peer reaches, and none that is its home or out of its reach.
+func meetingHomes(peers []Peer, relays []Relay, home int, reaches func(region int) bool) []int {
+	if home != 0 && slices.ContainsFunc(relays, func(r Relay) bool { return r.Region == home && r.Name != "" }) {
+		return nil
+	}
+	var out []int
+	for _, p := range peers {
+		if p.Walled && p.HomeRelay != 0 && p.HomeRelay != home && !slices.Contains(out, p.HomeRelay) && reaches(p.HomeRelay) {
+			out = append(out, p.HomeRelay)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // netcheckReport is the line netcheck ends each report with, before
@@ -415,6 +617,15 @@ func (m *tsManager) rerouteAfterReport() {
 	}
 	time.AfterFunc(time.Second, func() {
 		m.walls.due.Store(false)
+		m.holdHome()
+		// After reroute, which counts the report for the names first.
 		m.reroute()
+		m.followSTUN()
+		if m.walls.stunAside.Load() {
+			// The engine passes on no report whose home is the one it
+			// fell back to while homeless, as the first to reach a relay
+			// without the STUN servers often is.
+			m.followReport()
+		}
 	})
 }

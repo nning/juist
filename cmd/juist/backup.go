@@ -105,10 +105,12 @@ func (a *app) readSecretLine(prompt string) (string, error) {
 
 func adminsExport(a *app, args []string) error {
 	s := spec{name: "juist admins export", args: "NAME", min: 1, max: 1, anyNetwork: true, about: `
-Print the admin key NAME, as "juist admins" lists it under KEY HERE, as one
-line on stdout, to keep in a password manager:
+Print the admin key NAME (as juist admins lists it under KEY HERE) as one
+line on stdout, for a password manager:
+
   juist admins export alice@home | bx create --name "juist alice" --password-stdin
-"juist admins import" reads it back.`}
+
+juist admins import reads it back.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -127,9 +129,9 @@ line on stdout, to keep in a password manager:
 
 func adminsImport(a *app, args []string) error {
 	s := spec{name: "juist admins import", args: "NAME", min: 1, max: 1, anyNetwork: true, about: `
-Read a line "juist admins export" printed from stdin, and keep the key it
-holds here as NAME, such as alice@home. A key of that name is never
-replaced. Says whether the network still gives the key a vote.`}
+Read a line printed by juist admins export from stdin and keep its key here
+as NAME, such as alice@home. An existing key of that name is never replaced.
+Says whether the network still gives the key a vote.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -337,10 +339,10 @@ func (a *app) breakGlassFrom(from string, state *log.State) ([][]byte, error) {
 
 func networkDisable(a *app, args []string) error {
 	s := spec{name: "juist network disable", about: `
-End the network for good: reveal its break-glass secret, the line juist
-create showed, in a record that stops every device it reaches. Nothing
+End the network for good. This reveals its break-glass secret, the line
+juist create showed, in a record that stops every device it reaches. Nothing
 undoes it; each device starts over with juist reset. The line is read from
-stdin, or with --secrets from FILE.`}
+stdin, or from FILE with --secrets.`}
 	fs := newFlags(s.name)
 	from := fs.String("secrets", "", "`FILE` holding the break-glass secret, - for stdin (default: an older network's file in the keystore, else stdin)")
 	yes := fs.Bool("yes", false, "do not ask")

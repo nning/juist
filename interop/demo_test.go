@@ -27,7 +27,7 @@ func TestDemo(t *testing.T) {
 	}
 	nas, laptop := labPair(t, "nas", "laptop")
 
-	r := newRecorder(80, 26, "laptop · Debian 12", "nas · FreeBSD 14")
+	r := newRecorder(80, 26, "laptop · Debian 12", "nas · FreeBSD 15")
 	left, right := r.panes[0], r.panes[1]
 	time.Sleep(time.Second)
 	r.run(t, laptop, left, "juist create home", nil)

@@ -7,17 +7,15 @@ lead: Können sich zwei Geräte nicht direkt erreichen, leitet ein Mitglied dein
 
 ## Was ein Relay tut
 
-Die meisten Geräte stehen hinter einem Router mit NAT. Sie teilen sich eine
-öffentliche Adresse und sind von außen nicht erreichbar. Meist bekommt juist
-trotzdem einen direkten Tunnel hin. Das scheitert nur, wenn beide Geräte
-hinter symmetrischem NAT stehen, einer strengeren Variante, die manche Router
-verwenden. Dann brauchen die beiden ein Relay.
+Meist bekommt juist einen direkten Tunnel durch NAT hin. Das scheitert nur,
+wenn beide Geräte hinter symmetrischem NAT stehen, einer strengen Variante,
+die für jedes Ziel einen neuen Port wählt. Dann brauchen die beiden ein
+Relay.
 
-Ein Relay ist ein Mitglied deines Netzes mit öffentlicher Adresse, etwa ein
-VPS, das Verkehr zwischen Geräten weiterleitet, die sich nicht direkt
-erreichen ([So funktioniert juist]({{< relref "docs/how-it-works" >}})).
-Fremde leiten deinen Verkehr nie weiter. Nur Mitglieder können das Relay
-nutzen, und es sieht nur verschlüsselten WireGuard-Verkehr.
+Ein Relay ist ein Mitglied mit öffentlicher Adresse, etwa ein VPS, das
+Verkehr zwischen Geräten weiterleitet, die sich nicht direkt erreichen. Fremde
+leiten deinen Verkehr nie weiter. Nur Mitglieder können das Relay nutzen, und
+es sieht nur verschlüsselten WireGuard-Verkehr.
 
 Ein Relay hilft auch bei Einladungen. Rufst du `juist invite` auf einem
 Laptop hinter NAT auf, wartet die Einladung zusätzlich beim Relay, und der
@@ -86,27 +84,24 @@ es durch, und Let's Encrypt stellt ein Zertifikat für den Namen aus.
 {{< /step >}}
 
 - Jedes Gerät erfährt den Namen aus der Ankündigung des Relays.
-- Um Port 443 zu belegen, braucht juistd ein Recht, das es sonst nicht hat und
-  das nur root vergeben kann. `sudo juist set` gibt ihm
-  `CAP_NET_BIND_SERVICE` nur für diesen Zweck, per systemd-Drop-in, und
-  `sudo juist set --relay-name ""` nimmt es zusammen mit dem Namen zurück.
+- Port 443 braucht ein Recht, das nur root vergeben kann. `sudo juist set`
+  gibt juistd `CAP_NET_BIND_SERVICE` nur dafür, per systemd-Drop-in.
+  `sudo juist set --relay-name ""` nimmt es mit dem Namen zurück.
 - Unter FreeBSD belegt der Helfer von juistd Port 443 nur, solange root es
   erlaubt und kein anderes Programm auf 443 lauscht. Läuft pf, muss es den
   Verkehr durchlassen.
 - Ist der Name weg, das Recht aber noch da, warnt `juist health`, und
   `juist reset` nimmt das Recht zurück.
-- Die Mitglieder nutzen den Namen erst, wenn der Server unter diesem Namen
-  bestätigt, dass er dieses Relay ist. Ein Name, der woandershin führt, wird
-  nicht genutzt.
+- Die Mitglieder nutzen den Namen erst, wenn der Server dort belegt, dass er
+  dieses Relay ist.
 - Ist das Relay zugleich der [Ingress]({{< relref "docs/publishing" >}})
-  des Netzes, der 443 schon belegt, reicht der Ingress die Verbindungen für
-  den Namen an das Relay weiter. Ohne `--relay-name` bedient sein Relay
-  `relay.` plus die Domain des Netzes, die der Wildcard-Eintrag der Domain
-  schon auf den Ingress zeigen lässt. Solange ein Ingress Relay ist, lässt
-  sich `relay` nicht veröffentlichen. Sind mehrere Ingresse Relays,
-  übernimmt einer von ihnen den Namen, wie `juist status` dort sagt; gib den
-  anderen eigene Namen, und zeigt der Wildcard-Eintrag auf alle, lass
-  `relay.` plus die Domain nur auf diesen einen zeigen.
+  des Netzes, belegt der Ingress 443 und reicht die Verbindungen für den
+  Namen an das Relay weiter. Ohne `--relay-name` bedient es `relay.DOMAIN`,
+  auf das der Wildcard-Eintrag der Domain schon zeigt. `relay` lässt sich
+  dann nicht veröffentlichen.
+- Sind mehrere Ingresse Relays, übernimmt einer `relay.DOMAIN`, wie
+  `juist status` dort sagt. Gib den anderen eigene Namen und lass
+  `relay.DOMAIN` nur auf diesen einen zeigen.
 - Ein CAA-Eintrag für den Namen muss Let's Encrypt zulassen.
 - Auf einem Gerät in mehreren Netzen bedient nur der juistd des ersten Netzes
   einen Namen auf 443.
@@ -138,15 +133,12 @@ Die Pakete bringen Profile für ufw und firewalld mit, die `juist`,
 Ports des ersten Netzes. Die Ports der anderen Netze nennt `juist status`.
 
 Der Log-Abgleich läuft im Tunnel, über TCP 41644 auf `juist0` (41654 auf
-`juist1` und so weiter). Über ihn geben Geräte Änderungen am Mitgliederlog
-weiter, also an der signierten Liste, wer zum Netz gehört. Was dort ankommt, hat
-WireGuard und juists eigenen Filter schon passiert, und wo ufw oder firewalld
-läuft, lassen die Pakete es durch. Eine von Hand eingerichtete Firewall muss
-es ebenfalls durchlassen. Sonst behält das Gerät zwar seine Tunnel, verpasst
-aber Änderungen am Netz, auch das Entfernen von Geräten. `juist health`
-weist darauf hin. Ein [Exit-Node]({{< relref "docs/exit-nodes" >}})
-beantwortet dort außerdem die DNS-Anfragen seiner Mitglieder, auf UDP und TCP
-41646. Auch das muss eine solche Firewall durchlassen.
+`juist1` und so weiter). Läuft ufw oder firewalld, lassen die Pakete ihn
+durch. Eine von Hand eingerichtete Firewall muss ihn ebenfalls durchlassen.
+Sonst behält das Gerät seine Tunnel, verpasst aber Änderungen am Netz, auch
+das Entfernen von Geräten, und `juist health` meldet das. Ein
+[Exit-Node]({{< relref "docs/exit-nodes" >}}) beantwortet dort außerdem DNS,
+auf UDP und TCP 41646.
 
 {{< note >}}
 Beim Upgrade von einem Build, dessen Profil `juist` noch alle Ports öffnete:

@@ -18,7 +18,7 @@ import (
 )
 
 func policyFamily() family {
-	return family{name: "juist policy", intro: `Say which device may open what on which. Without a policy every device
+	return family{name: "juist policy", intro: `Set which device may open what on which other. Without a policy, every device
 may open anything on every other.`,
 		subs: []subcommand{
 			{name: "show", run: policyShow, forms: [][2]string{{"", "the network's policy"}}},
@@ -27,9 +27,10 @@ may open anything on every other.`,
 			{name: "diff", run: policyDiff, forms: [][2]string{{"diff FILE", "how FILE differs from the policy"}}},
 			{name: "check", run: policyCheck, forms: [][2]string{{"check FILE", "read FILE against the network, run its tests"}}},
 			{name: "test", run: policyTest, forms: [][2]string{{"test from DEVICE to DEST ...", "whether the policy passes it, and by which rule"}}},
-			{name: "fmt", run: policyFmt, forms: [][2]string{{"fmt [FILE...]", "print FILE in the policy's own form"}}},
+			{name: "fmt", run: policyFmt, forms: [][2]string{{"fmt [FILE...]", "print FILE in canonical form"}}},
 			{name: "off", run: policyOff, forms: [][2]string{{"off", "withdraw it"}}},
-		}, footer: `A policy passes what devices may open, in pf's words; the rest is refused:
+		}, footer: `A policy lists what devices may open, in pf's syntax; everything else is
+refused:
 
   table <staff> { laptop, phone }
   pass from <staff> to nas proto tcp port 445
@@ -65,9 +66,9 @@ func policyShow(a *app, args []string) error {
 
 func policySet(a *app, args []string) error {
 	s := spec{name: "juist policy set", args: "FILE", min: 1, max: 1, about: `
-Make FILE the network's access policy, once it reads against the network
-and passes its tests; - reads standard input. It goes to the other admins
-as other changes do where it needs their votes.`}
+Make FILE the network's access policy, once it parses against the network
+and passes its tests. - reads standard input. If the change needs other
+admins' votes, it goes to them like any change.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	pos, err := a.parse(s, fs, args)
@@ -91,8 +92,8 @@ as other changes do where it needs their votes.`}
 
 func policyEdit(a *app, args []string) error {
 	s := spec{name: "juist policy edit", about: `
-Change the network's access policy in $VISUAL or $EDITOR, vi without
-either, and set it once it reads and passes its tests.`}
+Edit the network's access policy in $VISUAL or $EDITOR (default vi). It is
+set once it parses and passes its tests.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	if _, err := a.parse(s, fs, args); err != nil {
@@ -148,8 +149,8 @@ either, and set it once it reads and passes its tests.`}
 
 func policyOff(a *app, args []string) error {
 	s := spec{name: "juist policy off", about: `
-Withdraw the network's access policy: every device may then open anything
-on every other, as before it had one.`}
+Withdraw the network's access policy. Every device may then open anything on
+every other again.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	if _, err := a.parse(s, fs, args); err != nil {
@@ -177,9 +178,9 @@ on every other, as before it had one.`}
 
 func policyDiff(a *app, args []string) error {
 	s := spec{name: "juist policy diff", args: "FILE", min: 1, max: 1, about: `
-Show how FILE differs from the network's access policy, both in the
-policy's own form: - before a line only the policy has, + before one only
-FILE has. Exits 1 where they differ.`}
+Show how FILE differs from the network's access policy, both in canonical
+form: - marks a line only the policy has, + a line only FILE has. Exits 1 if
+they differ.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -214,8 +215,8 @@ FILE has. Exits 1 where they differ.`}
 
 func policyCheck(a *app, args []string) error {
 	s := spec{name: "juist policy check", args: "FILE", min: 1, max: 1, about: `
-Read FILE against the network, as juist policy set would, and run its
-tests, setting nothing.`}
+Parse FILE against the network, as juist policy set would, and run its
+tests. Sets nothing.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -242,10 +243,10 @@ tests, setting nothing.`}
 
 func policyTest(a *app, args []string) error {
 	s := spec{name: "juist policy test", args: "from DEVICE to DEST [proto P [port N]]", min: 4, max: -1, about: `
-Say whether the network's access policy lets DEVICE open DEST, a device,
-internet via DEVICE, an address or name NAME, a published name, and which
-rule passes it; exits 1 where none does. It takes what a test line in a
-policy takes.`}
+Say whether the network's access policy lets DEVICE open DEST, and which
+rule allows it. DEST is a device, internet via DEVICE, an address, name
+NAME, or a published name, as in a test line of a policy. Exits 1 if no rule
+allows it.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -289,9 +290,9 @@ policy takes.`}
 
 func policyFmt(a *app, args []string) error {
 	s := spec{name: "juist policy fmt", args: "[FILE...]", max: -1, anyNetwork: true, about: `
-Print each FILE, standard input without one, in the policy's own form, as
-juist policy prints it; no log is read. -w rewrites the files instead, and
--l lists those not in that form, failing if there are any.`}
+Print each FILE (default: standard input) in canonical form, as juist policy
+prints the policy. Reads no log. -w rewrites the files instead; -l lists the
+files not in canonical form and fails if there are any.`}
 	fs := newFlags(s.name)
 	write := fs.Bool("write", false, "rewrite FILE in place")
 	list := fs.Bool("list", false, "list files not in the policy's own form")

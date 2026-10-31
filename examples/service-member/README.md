@@ -9,7 +9,7 @@ way out, publishes no port, and with Docker 29's isolated gateway mode cannot
 reach the host. The service member, `juistd --serve whoami=whoami:80`, ends
 TLS for `whoami.DOMAIN` with a certificate from Let's Encrypt; every member
 keeps it from opening a connection to them. See
-[Publishing services](../../website/content/en/docs/publishing.md) for the design.
+[Service members](../../website/content/en/docs/service-member.md) for the design.
 
 It needs a network with a domain (`juist network domain DOMAIN`) and an
 ingress whose address `*.DOMAIN` points at.

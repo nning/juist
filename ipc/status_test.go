@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"net/netip"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nning/juist/types"
 )
 
 // fullStatus sets every field of a status, each to a value derived from its
@@ -66,23 +69,29 @@ func TestAFullStatusDecodes(t *testing.T) {
 
 // statusGolden is a full status as the CLI reads it. Adding a field changes it;
 // nothing else may.
-const statusGolden = "b8520158200100000000000000000000000000000000000000000000000000000000000000028141ff0358" +
-	"200300000000000000000000000000000000000000000000000000000000000000046273340558200500000000000000" +
-	"00000000000000000000000000000000000000000000000006060707080809090a637331300b637331310c0c0d0d0e0e" +
-	"0f0f10f511f5121213637331391463733230151516f5171718186373323418191819181a181a181b181b181cf5181df5" +
-	"181ef5181f637333311820f51821637333331822a0182318231824182418258163733337182681637333381827f51828" +
-	"182818298163733431182a81a10158200000000000000000000000000000000000000000000000000000000000000000" +
-	"182b182b182c63733434182d81a101582000000000000000000000000000000000000000000000000000000000000000" +
-	"00182e8163733436182ff5183081637334381831816373343918328163733530183381637335311834f5183563733533" +
-	"1836f5183718371838f518391839183a183a183ba301000441ff0541ff183c63733630183d8141ff183e183e183fa101" +
-	"582000000000000000000000000000000000000000000000000000000000000000001840a01841a01842a01843a01845" +
-	"a0184618461847637337311848a0184981a10260184b8163733735184c8163733736184d8163733737184e8163733738" +
-	"184f81637337391850f51851637338311852637338321853185318548163733834"
+const statusGolden = "b8540158200100000000000000000000000000000000000000000000000000000000000000028141ff03582003000000" +
+	"000000000000000000000000000000000000000000000000000000000462733405582005000000000000000000000000" +
+	"0000000000000000000000000000000000000006060707080809090a637331300b637331310c0c0d0d0e0e0f0f10f511" +
+	"f5121213637331391463733230151516f5171718186373323418191819181a181a181b181b181cf5181df5181ef5181f" +
+	"637333311820f51821637333331822a0182318231824182418258163733337182681637333381827f518281828182981" +
+	"63733431182a81a10158200000000000000000000000000000000000000000000000000000000000000000182b182b18" +
+	"2c63733434182d81a10158200000000000000000000000000000000000000000000000000000000000000000182e8163" +
+	"733436182ff5183081637334381831816373343918328163733530183381637335311834f51835637335331836f51837" +
+	"18371838f518391839183a183a183ba301000441ff0541ff183c63733630183d8141ff183e183e183fa1015820000000" +
+	"00000000000000000000000000000000000000000000000000000000001840a01841a01842a01843a01845a018461846" +
+	"1847637337311848a0184981a10260184b8163733735184c8163733736184d8163733737184e8163733738184f816373" +
+	"37391850f51851637338311852637338321853185318548163733834185563733835185681a201582000000000000000" +
+	"000000000000000000000000000000000000000000000000000200"
 
 // operatorOnly are the status fields a caller who may not operate is not
 // shown. Every other field must be copied by [Status.ForReader].
-var operatorOnly = map[string]bool{"Devices": true, "Unmoved": true, "Waiting": true, "Publish": true, "Ingress": true,
+var operatorOnly = map[string]bool{"Devices": true, "Builds": true, "Unmoved": true, "Waiting": true, "Publish": true, "Ingress": true,
 	"Shares": true, "Terminator": true}
+
+// byPseudonym are the fields a reader is shown with other members renamed.
+var byPseudonym = map[string]bool{"Silent": true, "Unrevoked": true, "Lost": true, "NoKey": true, "TunnelsDown": true,
+	"Reach": true, "HomeRelay": true, "Seeking": true, "Absent": true, "NotAtRelay": true, "SyncFailing": true,
+	"SyncNewer": true, "SyncBroken": true, "Outdated": true, "OlderBuild": true}
 
 // A field added to Status is shown to every local user or kept from them by
 // decision, not by default.
@@ -98,6 +107,11 @@ func TestEveryStatusFieldIsClassifiedForReaders(t *testing.T) {
 		switch {
 		case operatorOnly[sf.Name] && !shown.IsZero():
 			t.Errorf("%s is operator-only, and ForReader shows it", sf.Name)
+		case byPseudonym[sf.Name]:
+			if s, ok := shown.Interface().(string); ok && strings.HasPrefix(s, "s") ||
+				shown.Kind() == reflect.Slice && shown.Index(0).Kind() == reflect.String && strings.HasPrefix(shown.Index(0).String(), "s") {
+				t.Errorf("%s is shown to a reader as it is", sf.Name)
+			}
 		case !operatorOnly[sf.Name] && !reflect.DeepEqual(shown.Interface(), fv.FieldByIndex(sf.Index).Interface()):
 			t.Errorf("%s is neither copied by ForReader nor listed in operatorOnly", sf.Name)
 		}
@@ -127,6 +141,42 @@ func TestAReaderSeesNoPublicNames(t *testing.T) {
 	}
 	if len(st.Names.Overrides) != 1 {
 		t.Fatal("the operator's status lost its public names")
+	}
+}
+
+// A reader is shown no other member's name or identity: each name is a
+// pseudonym, the same wherever it recurs in one status, and this device's
+// own name stays.
+func TestAReaderSeesNoMembersNames(t *testing.T) {
+	phone, laptop := types.Identity{0xa1}, types.Identity{0xb2}
+	st := Status{Self: types.Identity{0xc3}, Derived: Derived{SelfName: "lx",
+		Silent: []string{"phone"}, Unrevoked: []string{"remove-node of phone"}, Lost: []string{"the admission of laptop"},
+		NoKey: []string{"laptop"}, Exit: &Exit{Node: laptop, Name: "laptop"}},
+		Tunnels: Tunnels{TunnelsDown: []string{"phone", "laptop"}, Seeking: []string{"phone"}, Absent: []string{"laptop"},
+			NotAtRelay: []string{"phone"}, SyncFailing: []string{"laptop"}, SyncNewer: []string{"phone"},
+			SyncBroken: []string{"laptop"}, Outdated: []string{"phone"}, OlderBuild: []string{"laptop"},
+			Reach: []PeerReach{{Identity: phone, Relay: "laptop"}, {Identity: laptop, Relay: "lx"}}, HomeRelay: "laptop"}}
+	read := st.ForReader()
+	b, err := encode(&read, MaxResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range [][]byte{[]byte("phone"), []byte("laptop"), phone[:], laptop[:]} {
+		if bytes.Contains(b, secret) {
+			t.Errorf("a reader is shown %q", secret)
+		}
+	}
+	if read.SelfName != "lx" || read.Reach[1].Relay != "lx" || read.Self != st.Self {
+		t.Errorf("a reader is not shown this device as itself: %q, %q", read.SelfName, read.Reach[1].Relay)
+	}
+	if p := read.TunnelsDown[0]; p == "" || read.Seeking[0] != p || read.NotAtRelay[0] != p || read.Silent[0] != p {
+		t.Errorf("phone's pseudonym differs between lists: %v %v %v %v", read.TunnelsDown, read.Seeking, read.NotAtRelay, read.Silent)
+	}
+	if p := read.TunnelsDown[1]; p == read.TunnelsDown[0] || read.HomeRelay != p || read.Exit.Name != p || read.Reach[0].Relay != p {
+		t.Errorf("laptop's pseudonym differs between fields: %v %q %q %q", read.TunnelsDown, read.HomeRelay, read.Exit.Name, read.Reach[0].Relay)
+	}
+	if st.TunnelsDown[0] != "phone" || st.Reach[0].Identity != phone || st.Exit.Name != "laptop" {
+		t.Error("the operator's status lost its names")
 	}
 }
 

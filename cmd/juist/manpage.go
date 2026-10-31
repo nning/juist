@@ -93,8 +93,8 @@ any other command stops and names the networks. No command asks which.`)
 	m.section("FILES")
 	for _, f := range [][2]string{
 		{"~/.config/juist", "The keystore: admins/ holds admin keys, NAME@NETWORK.key for one network's, networks/ what the keystore last verified of each network, founded-NETWORK each network founded from it."},
-		{systemHome, "The packaged juistd's state: the device's keys and the network's log. " + systemHome + "/juistN for the others."},
-		{ipc.SystemSocket, "The packaged juistd's control socket; " + filepath.Dir(ipc.SystemSocket) + "/juistN.sock for the others."},
+		{systemHome, "The packaged juistd's state: the device's keys and the network's log; " + systemHome + "N for the others, each its own user's."},
+		{ipc.SystemSocket, "The packaged juistd's control socket; " + filepath.Dir(ipc.SystemSocket) + "N/juistd.sock for the others."},
 	} {
 		m.option(f[0], f[1])
 	}

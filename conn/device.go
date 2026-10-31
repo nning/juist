@@ -95,6 +95,11 @@ type overlayGuard interface {
 	guardOverlay(own, peers []netip.Addr) error
 }
 
+// unguardedRouter is an overlay guard that may run unguarded, and says why.
+type unguardedRouter interface {
+	unguardedBy() string
+}
+
 // A hostRouter is an OS router that reads the host's own routes, and says
 // when they change.
 type hostRouter interface {

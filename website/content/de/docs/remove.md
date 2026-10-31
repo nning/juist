@@ -7,16 +7,12 @@ lead: juist remove nimmt ein Gerät aus dem Netz, etwa ein verlorenes Handy. Jed
 
 ## Wie das Entfernen funktioniert
 
-Ein Gerät zu entfernen ist eine Änderung am Log des Netzes, also an der
-signierten Liste, wer dazugehört (siehe
-[So funktioniert juist]({{< relref "docs/how-it-works" >}})). Wie jede
-Änderung müssen deine Admins sie bestätigen, also die Personen, deren
-Schlüssel Änderungen bestätigen.
-
-Sobald die Entfernung im Log steht, baut jedes Gerät, das davon erfährt,
+Ein Gerät zu entfernen ist eine Änderung am
+[Mitgliederlog]({{< relref "docs/how-it-works" >}}#the-membership-log) und
+braucht die Bestätigung deiner Admins. Jedes Gerät, das davon erfährt, baut
 seinen Tunnel zum entfernten Gerät ab. Außerdem bekommt das Netz ein neues
-Gruppengeheimnis, also einen neuen Schlüssel, den alle Mitglieder teilen.
-Dadurch findet das entfernte Gerät die anderen nicht mehr.
+Gruppengeheimnis, den Schlüssel, den alle Mitglieder teilen. Dadurch findet
+das entfernte Gerät die anderen nicht mehr.
 
 ## Ein Gerät entfernen
 
@@ -68,24 +64,11 @@ oder meldet `the network's devices refuse this one: most likely it was removed`.
 
 ## Warum das Entfernen nicht sofort wirkt
 
-Es gibt keinen Server, der allen Geräten gleichzeitig Bescheid gibt. Die
-Geräte geben Änderungen untereinander weiter. Ein Gerät, das offline oder von
-den anderen abgeschnitten ist, erfährt von der Entfernung also erst, wenn es
-wieder Kontakt hat. Bis dahin könnte es noch einen Tunnel zum entfernten
-Gerät halten.
-
-Die Frische setzt dem eine Grenze. Ein **Voucher** ist ein Gerät, das
-stündlich bestätigt, dass der Stand des Netzes aktuell ist. Ein neues Netz
-hat keinen, die Grenze gilt also erst, wenn du einen ernennst. Hat ein Gerät
-48 Stunden lang keine Bestätigung von einem Voucher bekommen, hält es nur noch
-Tunnel zu Vouchern.
-So kann es keine Verbindung zu einem entfernten Gerät aufrechterhalten. Sein
-`juist status` zeigt dann den Zustand `limited` und
-`Freshness  expired; vouchers only`.
-
-Das funktioniert nur, solange die Voucher nicht zusammen mit dem Gerät
-abgeschnitten sind. Ein Voucher hält jedes Gerät auf dem aktuellen Stand, das
-er noch erreicht.
+Die Geräte geben Änderungen untereinander weiter. Ein Gerät, das offline
+oder abgeschnitten ist, erfährt vom Entfernen erst, wenn es wieder Kontakt
+hat, und könnte bis dahin einen Tunnel zum entfernten Gerät halten. Die
+[Frische]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers) begrenzt
+das auf 48 Stunden, aber erst, wenn das Netz einen Voucher hat:
 
 {{< step on="dem Gerät eines Admins" >}}
 Mach ein Gerät, das ständig läuft, etwa einen VPS, zum Voucher:
@@ -94,32 +77,32 @@ Mach ein Gerät, das ständig läuft, etwa einen VPS, zum Voucher:
 juist grant vps voucher
 ```
 
-Mit der Rolle bekommt das Gerät keinen Admin-Schlüssel. Es bestätigt nur den
-Stand des Netzes und kann nichts ändern.
+Mit der Rolle bekommt das Gerät keinen Admin-Schlüssel. Es bestätigt den
+Stand des Netzes, kann aber nichts ändern.
 {{< /step >}}
 
-In der Voreinstellung reicht ein Voucher. Ein Voucher, der lügt, könnte die
-Geräte, die er erreicht, dann auf einem alten Stand halten. Dagegen hilft es,
-mehrere Voucher zu verlangen:
+Ein lügender Voucher könnte die Geräte, die er erreicht, auf einem alten
+Stand halten. Dagegen hilft es, zwei zu verlangen:
 
 ```sh
 juist admins vouchers 2
 ```
 
-Jetzt hält ein Gerät seinen Stand nur dann für aktuell, wenn zwei Voucher ihn
-innerhalb von 48 Stunden bestätigt haben. Ein einzelner unehrlicher Voucher
-reicht dann nicht mehr, dafür müssen aber zwei Voucher online sein. Gib die
-Rolle deshalb einem dritten Gerät als Reserve. `juist grant` und
-`juist admins vouchers` warnen, wenn es keine Reserve gibt, und wenn nur ein
-Voucher verlangt wird und ein Voucher zugleich Relay ist.
+Dann müssen zwei Voucher online sein, also gib die Rolle einem dritten Gerät
+als Reserve. `juist grant` und `juist admins vouchers` warnen, wenn es keine
+Reserve gibt.
 
-## Hinweise
+## Gut zu wissen
 
-- `juist remove` weigert sich, einen der Voucher zu entfernen, die `juist admins vouchers` verlangt, und erklärt, wie du die Zahl vorher senkst.
-- Wer den letzten Voucher entfernt, bekommt eine Warnung, dass die Frische dann nicht mehr geprüft wird.
-- Lag auf dem entfernten Gerät ein Admin-Schlüssel, etwa auf einem verlorenen Laptop, entzieh diesem Schlüssel auch seine Stimme: `juist admins remove`. Siehe [Admins]({{< relref "docs/admins" >}}).
-- Rufst du `juist remove` auf dem Gerät selbst auf, warnt es, dass das Gerät das Netz endgültig verlässt.
-- `juist reset` braucht `--force`, solange das Netz das Gerät noch als Mitglied führt. Entferne es nach Möglichkeit vorher.
+- `juist remove` weigert sich, einen Voucher zu entfernen, den
+  `juist admins vouchers` verlangt, und sagt, wie du die Zahl vorher senkst.
+  Wer den letzten Voucher entfernt, wird gewarnt, dass die Frische dann nicht
+  mehr geprüft wird.
+- Lag auf dem entfernten Gerät ein Admin-Schlüssel, etwa auf einem verlorenen
+  Laptop, entzieh diesem Schlüssel auch die Stimme: `juist admins remove`
+  ([Admins]({{< relref "docs/admins" >}})).
+- `juist reset` braucht `--force`, solange das Netz das Gerät noch führt.
+  Entferne es vorher, wenn du kannst.
 
 ## Fehlersuche
 

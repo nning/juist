@@ -131,6 +131,12 @@ func (m *tsManager) followNetworks() {
 	if local.equal(*m.local.Load()) {
 		return
 	}
+	if !slices.Equal(local.Prefixes, m.local.Load().Prefixes) {
+		m.walls.unanswered, m.walls.asideAgain, m.walls.asideGap = 0, time.Time{}, 0
+		if m.walls.stunAside.Swap(false) {
+			m.logf("conn: the link changed; the STUN servers are asked again")
+		}
+	}
 	m.local.Store(&local)
 	if !m.closed && len(m.relays) > 0 {
 		m.installDERPMap(m.relays)
@@ -154,6 +160,9 @@ func (m *tsManager) watchEngine(logf logger.Logf) logger.Logf {
 			} else if (*m.stunRegions.Load())[r] && !m.stunDrop.Swap(true) {
 				go m.dropSTUNConnSoon()
 			}
+		}
+		if format == icmpLatencyLine || format == httpsFailedLine || format == netcheckReport {
+			m.pinged.read(format, args)
 		}
 		if format == netcheckReport {
 			m.rerouteAfterReport()
@@ -222,20 +231,46 @@ func (m *tsManager) dropSTUNConn() {
 // installDERPMap renders the relays and the STUN servers as one map. The STUN
 // regions are recorded first, so a report naming one is never mistaken for a
 // relay to be reached through.
-func (m *tsManager) installDERPMap(relays []Relay) {
-	dm, stunRegions := derpMap(relays, m.stun, m.httpsOnly, m.walls.nameFirst, *m.local.Load())
+func (m *tsManager) installDERPMap(relays []Relay) { m.installDERPMapAsking(relays, true) }
+
+// installDERPMapAsking is installDERPMap; ask is whether a report is asked
+// for at once, as the engine does for a new map.
+func (m *tsManager) installDERPMapAsking(relays []Relay, ask bool) {
+	stun := m.stun
+	if m.walls.stunAside.Load() {
+		stun = nil
+	}
+	dm, stunRegions := derpMap(relays, stun, m.httpsOnly, m.walls.nameFirst, *m.local.Load())
 	m.dm = dm
 	m.stunRegions.Store(&stunRegions)
+	relayRegions := map[tailcfg.DERPRegionID]bool{}
+	if dm != nil {
+		for id := range dm.Regions {
+			if !stunRegions[id] {
+				relayRegions[id] = true
+			}
+		}
+	}
+	m.relayRegions.Store(&relayRegions)
 	m.stunOnly.Store(dm != nil && len(dm.Regions) == len(stunRegions))
 	// Homeless before the map, so that it homes nowhere; homed after it, so
 	// that the netcheck leaving homelessness starts measures the map.
 	if m.stunOnly.Load() || m.relayMissing.Load() {
 		m.followHome()
-		m.magic.SetDERPMap(dm)
+		m.setDERPMap(dm, ask)
 		return
 	}
-	m.magic.SetDERPMap(dm)
+	m.setDERPMap(dm, ask)
 	m.followHome()
+}
+
+// setDERPMap installs dm in the engine, asking for a report at once where ask.
+func (m *tsManager) setDERPMap(dm *tailcfg.DERPMap, ask bool) {
+	if ask {
+		m.magic.SetDERPMap(dm)
+	} else {
+		m.magic.SetDERPMapWithoutReSTUN(dm)
+	}
 }
 
 // followReport takes the last netcheck's choice of the nearest region: a
@@ -247,7 +282,10 @@ func (m *tsManager) followReport() {
 	if r == nil || len(r.RegionLatency) == 0 {
 		return
 	}
-	missing := (*m.stunRegions.Load())[r.PreferredDERP]
+	none := m.holdHome()
+	// A relay's region, not the STUN servers': a report taken before they
+	// were left out names theirs, which the map no longer holds.
+	missing := !(*m.relayRegions.Load())[r.PreferredDERP] || none
 	if !m.relayMissing.Swap(missing) && missing {
 		m.relayLost.Add(1)
 	}
@@ -384,17 +422,42 @@ func (m *tsManager) onStatus(st *wgengine.Status, err error) {
 	}
 }
 
+// measuredOrHeld reports whether home is the one already announced or one
+// the last report measured: a report that measured no relay leaves the
+// engine to pick one by its number.
+func (m *tsManager) measuredOrHeld(home int) bool {
+	return measuredOrHeld(home, int(m.homeRelay.Load()), m.magic.GetLastNetcheckReport(context.Background()))
+}
+
+func measuredOrHeld(home, held int, r *netcheck.Report) bool {
+	if home == held {
+		return true
+	}
+	if r == nil {
+		return false
+	}
+	_, ok := r.RegionLatency[tailcfg.DERPRegionID(home)]
+	return ok
+}
+
 // onNetInfo records the relay region the data plane chose for itself.
 func (m *tsManager) onNetInfo(ni *tailcfg.NetInfo) {
 	if ni == nil {
 		return
 	}
 	stunRegions := *m.stunRegions.Load()
-	if len(stunRegions) > 0 {
+	if len(stunRegions) > 0 || m.walls.stunAside.Load() {
 		m.followReport()
 	}
 	home := ni.PreferredDERP
-	if stunRegions[home] || m.homeless.Load() {
+	if !m.measuredOrHeld(int(home)) || m.pinged.lastAlone()[int(home)] {
+		// The engine's pick where it measured none but by ICMP, which peers
+		// would send to in vain. The report that measures it names the
+		// same home, which the engine passes on only where told to.
+		home = 0
+		m.magic.ResetNetInfoLast()
+	}
+	if !(*m.relayRegions.Load())[home] || m.homeless.Load() {
 		// Nearest, but nothing to be reached through; or left.
 		home = 0
 	}

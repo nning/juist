@@ -7,14 +7,12 @@ lead: When two devices cannot reach each other directly, a member of your own ne
 
 ## What a relay does
 
-Most devices sit behind a router that does NAT: they share one public address
-and cannot be reached from outside. juist usually gets a direct tunnel through
-anyway. It fails only where both devices sit behind symmetric NAT, a stricter
-kind that some routers use. Then the two need a relay.
+juist usually gets a direct tunnel through NAT. It fails only if both devices
+sit behind symmetric NAT, a strict kind that picks a new port for every
+destination. Then the two need a relay.
 
-A relay is a member of your network with a public address, such as a VPS, that
-passes traffic between devices that cannot reach each other
-([How juist works]({{< relref "docs/how-it-works" >}})). No third party ever
+A relay is a member with a public address, such as a VPS, that passes
+traffic between devices that cannot reach each other. No third party ever
 relays your traffic. Only members can use the relay, and it sees only
 encrypted WireGuard traffic.
 
@@ -83,26 +81,23 @@ says:
 {{< /step >}}
 
 - Every device learns the name from the relay's announcement.
-- Listening on port 443 needs a privilege that juistd otherwise lacks and that
-  only root can give. `sudo juist set` gives it `CAP_NET_BIND_SERVICE` for
-  this purpose only, through a systemd drop-in, and
-  `sudo juist set --relay-name ""` takes it away together with the name.
+- Port 443 needs a privilege only root can give. `sudo juist set` gives
+  juistd `CAP_NET_BIND_SERVICE` for this alone, through a systemd drop-in.
+  `sudo juist set --relay-name ""` takes it away with the name.
 - On FreeBSD, juistd's helper binds 443 only while root's permission is in
   place and no other program listens on 443. If pf runs, it must let the
   traffic in.
 - If the name is gone but the privilege remains, `juist health` warns, and
   `juist reset` takes the privilege away.
-- Members use the name only once the server at that name confirms it is this
-  relay. A name that points elsewhere is not used.
+- Members use the name only once the server there proves it is this relay.
 - If the relay is also the network's
-  [ingress]({{< relref "docs/publishing" >}}), which already holds 443, the
-  ingress passes the name's connections on to the relay. Without
-  `--relay-name`, its relay serves `relay.` plus the network's domain, which
-  the domain's wildcard record points at the ingress already. While an
-  ingress relays, `relay` is no name to publish. Where several ingresses
-  relay, one of them takes the name, as `juist status` on it says; give the
-  others names of their own, and where the wildcard points at all of them,
-  point `relay.` plus the domain at that one alone.
+  [ingress]({{< relref "docs/publishing" >}}), the ingress holds 443 and
+  passes the name's connections to the relay. Without `--relay-name`, it
+  serves `relay.DOMAIN`, which the domain's wildcard record already points at
+  the ingress. `relay` is then no name to publish.
+- If several ingresses relay, one of them takes `relay.DOMAIN`, as
+  `juist status` there says. Give the others their own names, and point
+  `relay.DOMAIN` at that one alone.
 - A CAA record for the name must allow Let's Encrypt.
 - On a device in several networks, only the default network's juistd serves a
   name on 443.
@@ -132,15 +127,12 @@ The packages install ufw and firewalld profiles named `juist`, `juist-relay`,
 `juist-relay-443`, `juist-invite` and `juist-ingress`. The profiles cover the
 first network's ports; `juist status` gives the port numbers for the others.
 
-Log sync runs inside the tunnel, on TCP 41644 on `juist0` (41654 on `juist1`,
-and so on). It is how devices pass on changes to the membership log, the
-signed record of who belongs to the network. Traffic there has already passed
-WireGuard and juist's own filter, and the packages let it in where ufw or
-firewalld runs. A firewall you configured by hand must let it in too.
-Otherwise the device keeps its tunnels but misses changes to the network,
-including removals; `juist health` reports this. An
-[exit node]({{< relref "docs/exit-nodes" >}}) also answers its members' DNS
-queries there, on UDP and TCP 41646, which such a firewall must let in as well.
+Log sync runs inside the tunnel, on TCP 41644 on `juist0` (41654 on
+`juist1`, and so on). The packages let it in if ufw or firewalld runs. A
+firewall you configured by hand must let it in too. Otherwise the device
+keeps its tunnels but misses changes to the network, removals included, and
+`juist health` reports this. An [exit node]({{< relref "docs/exit-nodes" >}})
+also answers DNS there, on UDP and TCP 41646.
 
 {{< note >}}
 Upgrading from a build whose `juist` profile opened every port: ufw keeps the
@@ -150,10 +142,9 @@ to 41643/udp right away. In both cases, a relay needs `juist-relay` added.
 
 ## Running without public helpers
 
-By default, juistd asks public STUN servers (Google, Cloudflare) for its own
-public address. It also uses the public BitTorrent DHT, a shared directory on
-the internet, to find members it has lost track of. Both see addresses, never
-contents.
+By default, juistd asks public STUN servers (Google, Cloudflare) for its
+public address, and uses the public BitTorrent DHT to find members it lost
+track of. Both see addresses, never contents.
 
 Once you have a relay of your own, the network can run without either. On
 every device, run:

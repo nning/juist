@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -116,7 +117,7 @@ func TestAWalledNodeSendsToItsOwnHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitUntil(t, 45*time.Second, "a walled node homed at the relay it reaches", func() bool {
-		return a.mgr.HomeRelay() == 8 && a.mgr.Walled()
+		return a.mgr.HomeRelay() == 8 && walledOff(a)
 	})
 	if got := homeOf(a, p); got != 8 {
 		t.Errorf("a peer homed at the relay out of reach is sent to at %d, want this node's home", got)
@@ -135,6 +136,13 @@ func TestAWalledNodeSendsToItsOwnHome(t *testing.T) {
 	waitUntil(t, meetEvery/2, "the walls gone once every relay is reached", func() bool {
 		return !a.mgr.Walled() && homeOf(a, p) == 9
 	})
+}
+
+// walledOff reports whether n found a relay out of reach, as Walled alone
+// does not: it says so too while a report has yet to decide.
+func walledOff(n *node) bool {
+	out := n.mgr.(*tsManager).walls.out.Load()
+	return out != nil && len(*out) > 0
 }
 
 // meetAlwaysDERP marks the run of TestWalledNodesMeetAtAHome in a process
@@ -170,7 +178,16 @@ func TestWalledNodesMeetAtAHome(t *testing.T) {
 	}()
 	r8, r9 := startRelay(t, 0), startRelay(t, 0)
 	at8, at9 := netip.AddrPortFrom(hostAddr(t), r8.Port()), netip.AddrPortFrom(hostAddr(t), r9.Port())
-	a := newNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
+	var pinged atomic.Int64
+	a := startNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128", func(o *Options) {
+		logf := o.Logf
+		o.Logf = func(format string, args ...any) {
+			if strings.Contains(format, "got ping") {
+				pinged.Add(1)
+			}
+			logf(format, args...)
+		}
+	})
 	keeps := newNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	rests := newNode(t, 3, "100.64.0.3/32", "fd7a:115c:a1e0::3/128")
 	if err := a.mgr.SetRelays([]Relay{relayAt(r8, 8, at8), relayAt(r9, 9, deadTCP(t))}); err != nil {
@@ -184,7 +201,7 @@ func TestWalledNodesMeetAtAHome(t *testing.T) {
 		}
 	}
 	waitUntil(t, 45*time.Second, "homes at 8 for the walled node and 9 for the members", func() bool {
-		return a.mgr.HomeRelay() == 8 && a.mgr.Walled() &&
+		return a.mgr.HomeRelay() == 8 && walledOff(a) &&
 			keeps.mgr.HomeRelay() == 9 && !keeps.mgr.Walled() && rests.mgr.HomeRelay() == 9 && !rests.mgr.Walled()
 	})
 	bare := func(n *node, home int, walled bool) Peer {
@@ -206,12 +223,18 @@ func TestWalledNodesMeetAtAHome(t *testing.T) {
 		return r8.Connected(wgKey(keeps)) && r8.Connected(wgKey(rests))
 	})
 	// Past the 60 s after the last write magicsock closes an idle
-	// connection at, checking every 15 s.
-	time.Sleep(90 * time.Second)
+	// connection at, checking every 15 s; counting pings once those the
+	// first contact left have come.
+	time.Sleep(20 * time.Second)
+	pinged.Store(0)
+	time.Sleep(70 * time.Second)
 	idle := time.Now()
 	if !r8.Connected(wgKey(keeps)) || r8.Connected(wgKey(rests)) {
 		t.Fatalf("connected to the walled node's home: keeping %v, saving %v; want the keeping member alone",
 			r8.Connected(wgKey(keeps)), r8.Connected(wgKey(rests)))
+	}
+	if n := pinged.Load(); n > 0 {
+		t.Errorf("the walled node was pinged %d times while a member kept its connection", n)
 	}
 	if _, ok := pingUntil(t, a, keeps.pingAddr(), 20*time.Second); !ok {
 		t.Fatal("the walled node did not reach the member keeping its connection first")
@@ -260,8 +283,8 @@ func TestNotAtHomeReadsTheRelaysLine(t *testing.T) {
 }
 
 // A report without UDP measures the relays by HTTPS, and by ICMP too where
-// it may ping, which says nothing of a relay's own port: then a relay counts
-// reached by its name on 443 alone.
+// it may ping, which says nothing of TCP: a relay reached by ICMP alone is
+// not reached, one HTTPS reached is, by its name or its own port.
 func TestARelayPingedIsNotReachedByItsPort(t *testing.T) {
 	named := func(region int) Relay { r := namedRelay(); r.Region = region; return r }
 	plain := testRelay()
@@ -269,24 +292,26 @@ func TestARelayPingedIsNotReachedByItsPort(t *testing.T) {
 	relays := []Relay{named(8), plain, named(10)}
 	ms := map[tailcfg.DERPRegionID]time.Duration{8: time.Millisecond, 9: time.Millisecond, 10: time.Millisecond}
 	for _, c := range []struct {
-		name string
-		r    *netcheck.Report
-		want []int
-		ok   bool
+		name   string
+		r      *netcheck.Report
+		pinged map[int]bool
+		want   []int
+		ok     bool
 	}{
-		{"UDP", &netcheck.Report{UDP: true, RegionLatency: ms}, nil, true},
-		{"HTTPS reaching all", &netcheck.Report{RegionLatency: ms}, nil, true},
-		{"HTTPS reaching the home", &netcheck.Report{RegionLatency: map[tailcfg.DERPRegionID]time.Duration{8: 1}}, []int{9, 10}, true},
-		{"ICMP", &netcheck.Report{ICMPv4: true, RegionLatency: ms}, []int{9}, true},
-		{"nothing measured", &netcheck.Report{}, nil, false},
+		{"UDP", &netcheck.Report{UDP: true, RegionLatency: ms}, nil, nil, true},
+		{"HTTPS reaching all", &netcheck.Report{RegionLatency: ms}, nil, nil, true},
+		{"HTTPS reaching the home", &netcheck.Report{RegionLatency: map[tailcfg.DERPRegionID]time.Duration{8: 1}}, nil, []int{9, 10}, true},
+		{"ICMP alone", &netcheck.Report{ICMPv4: true, RegionLatency: ms}, map[int]bool{9: true}, []int{9}, true},
+		{"ICMP and HTTPS", &netcheck.Report{ICMPv4: true, RegionLatency: ms}, nil, nil, true},
+		{"nothing measured", &netcheck.Report{}, nil, nil, false},
 	} {
-		got, ok := unreachedIn(relays, 8, c.r, false)
+		got, ok := unreachedIn(relays, 8, c.r, false, c.pinged)
 		if ok != c.ok || !slices.Equal(slices.Sorted(maps.Keys(got)), c.want) {
 			t.Errorf("%s: unreached %v, %v; want %v, %v", c.name, got, ok, c.want, c.ok)
 		}
 	}
 	if got, _ := unreachedIn(relays, 8, &netcheck.Report{UDP: true, RegionLatency: map[tailcfg.DERPRegionID]time.Duration{8: 1}},
-		true); len(got) != 2 {
+		true, nil); len(got) != 2 {
 		t.Errorf("HTTPS alone with UDP in the report: unreached %v", got)
 	}
 }
@@ -319,8 +344,8 @@ func TestNamesComeFirstWhereNoRelayWasReached(t *testing.T) {
 	udp := &netcheck.Report{UDP: true, RegionLatency: reached.RegionLatency}
 	blind := 0
 	step := func(r *netcheck.Report, was bool) bool {
-		blind = blindAfter(r, relays, was, blind)
-		return nameFirstAfter(r, false, blind, was)
+		blind = blindAfter(r, relays, nil, blind)
+		return nameFirstAfter(r, relays, false, blind, was)
 	}
 	if step(none, false) {
 		t.Error("one report reaching nothing put names first")
@@ -331,21 +356,25 @@ func TestNamesComeFirstWhereNoRelayWasReached(t *testing.T) {
 	if !step(reached, true) || blind != 0 {
 		t.Errorf("a relay reached by name put the ports first, or left %d blind", blind)
 	}
+	stunAlone := &netcheck.Report{UDP: true, RegionLatency: map[tailcfg.DERPRegionID]time.Duration{100: time.Millisecond}}
+	if !nameFirstAfter(stunAlone, relays, false, 0, true) {
+		t.Error("UDP a STUN server alone answered put the ports first")
+	}
 	if step(udp, true) {
 		t.Error("UDP back kept names first")
 	}
-	if nameFirstAfter(none, true, 5, false) {
+	if nameFirstAfter(none, relays, true, 5, false) {
 		t.Error("names first on HTTPS alone, whose map holds names alone")
 	}
-	if blindAfter(none, []Relay{testRelay()}, false, 3) != 0 {
+	if blindAfter(none, []Relay{testRelay()}, nil, 3) != 0 {
 		t.Error("counted blind without a name to put first")
 	}
 	pinged := &netcheck.Report{ICMPv4: true, RegionLatency: reached.RegionLatency}
-	if blindAfter(pinged, relays, false, 1) != 2 {
-		t.Error("a relay pinged, its port first, counted as reached by HTTPS")
+	if blindAfter(pinged, relays, map[int]bool{7: true}, 1) != 2 {
+		t.Error("a relay reached by ICMP alone counted as reached by HTTPS")
 	}
-	if blindAfter(pinged, relays, true, 1) != 0 {
-		t.Error("a named relay measured, its name first and unpinged, did not count as reached")
+	if blindAfter(pinged, relays, nil, 1) != 0 {
+		t.Error("a relay HTTPS reached beside ICMP did not count as reached")
 	}
 }
 
@@ -367,8 +396,8 @@ func TestWallsNeedTwoReportsInARow(t *testing.T) {
 	}
 	var w walls
 	look := func(r *netcheck.Report) map[int]bool {
-		w.follow(r, relays, 7, false)
-		w.follow(r, relays, 7, false)
+		w.follow(r, relays, 7, false, nil)
+		w.follow(r, relays, 7, false, nil)
 		return w.unreachedAt(relays, 7, false)
 	}
 	if u := look(lat(7)); u != nil || !w.undecided(relays, 7, false) {
@@ -404,15 +433,15 @@ func TestWallsNeedTwoReportsInARow(t *testing.T) {
 	}
 	var homeless walls
 	report := lat(7)
-	homeless.follow(report, relays, 0, false)
-	if !homeless.follow(report, relays, 7, false) || homeless.follow(report, relays, 7, false) {
+	homeless.follow(report, relays, 0, false, nil)
+	if !homeless.follow(report, relays, 7, false, nil) || homeless.follow(report, relays, 7, false, nil) {
 		t.Error("the report a home came after is not counted again, once, with it")
 	}
 	if !homeless.undecided(relays, 7, false) || homeless.blind != 0 {
 		t.Errorf("the report before the home asks no other, or counted blind %d", homeless.blind)
 	}
 	var https walls
-	https.follow(lat(7), relays, 7, true)
+	https.follow(lat(7), relays, 7, true, nil)
 	if u := https.unreachedAt(relays, 7, true); !u[9] || !u[10] {
 		t.Errorf("on HTTPS alone, relays without a name, not in the map, are reached: %v", u)
 	}
@@ -459,7 +488,7 @@ func TestAReportIsAskedForOncePerReport(t *testing.T) {
 	relays := []Relay{namedRelay(), plain}
 	r := &netcheck.Report{RegionLatency: map[tailcfg.DERPRegionID]time.Duration{7: time.Millisecond}}
 	var w walls
-	w.follow(r, relays, 7, false)
+	w.follow(r, relays, 7, false, nil)
 	if w.askFor(relays, 7, false) {
 		t.Error("asked for another report before waiting after this one")
 	}
@@ -470,19 +499,110 @@ func TestAReportIsAskedForOncePerReport(t *testing.T) {
 		t.Error("asked again with no report since, as while the link is down")
 	}
 	next := &netcheck.Report{RegionLatency: r.RegionLatency}
-	w.follow(next, relays, 7, false)
+	w.follow(next, relays, 7, false, nil)
 	if w.askFor(relays, 7, false) {
 		t.Error("asked again once the second miss decided it")
 	}
 	var homeless walls
 	blind := &netcheck.Report{}
-	homeless.follow(blind, relays, 0, false)
+	homeless.follow(blind, relays, 0, false, nil)
 	if !homeless.waitFor(relays, 0, false) || !homeless.askFor(relays, 0, false) {
 		t.Fatal("a report reaching no relay asks for no other")
 	}
-	homeless.follow(r, relays, 0, false)
-	homeless.follow(r, relays, 7, false)
+	homeless.follow(r, relays, 0, false, nil)
+	homeless.follow(r, relays, 7, false, nil)
 	if !homeless.waitFor(relays, 7, false) || !homeless.askFor(relays, 7, false) {
 		t.Error("the report a home came after, missing relay 9, asks for no other")
+	}
+}
+
+// A member keeps a connection at each walled peer's home once, and none
+// where its own home has a name on 443 or the peer's is its own or out of
+// its reach.
+func TestMeetingHomes(t *testing.T) {
+	relays := []Relay{{Region: 1}, {Region: 2}, {Region: 3, Name: "relay.example.org"}, {Region: 4}}
+	peers := []Peer{
+		{ID: 1, HomeRelay: 2, Walled: true},
+		{ID: 2, HomeRelay: 2, Walled: true},
+		{ID: 3, HomeRelay: 4, Walled: true},
+		{ID: 4, HomeRelay: 1, Walled: true},
+		{ID: 5, HomeRelay: 3},
+		{ID: 6, Walled: true},
+	}
+	all := func(int) bool { return true }
+	if got := meetingHomes(peers, relays, 1, all); !slices.Equal(got, []int{2, 4}) {
+		t.Errorf("homed at 1: %v, want [2 4]", got)
+	}
+	if got := meetingHomes(peers, relays, 1, func(r int) bool { return r != 4 }); !slices.Equal(got, []int{2}) {
+		t.Errorf("4 out of reach: %v, want [2]", got)
+	}
+	if got := meetingHomes(peers, relays, 3, all); got != nil {
+		t.Errorf("homed at a named relay: %v, want none", got)
+	}
+	if got := meetingHomes(peers, relays, 0, all); !slices.Equal(got, []int{1, 2, 4}) {
+		t.Errorf("homeless: %v, want [1 2 4]", got)
+	}
+}
+
+// Homed without UDP, a node says it is walled while one report missed a
+// relay and the next has to decide: said otherwise, members stop keeping
+// its home open. With UDP, or once every relay is reached, it does not.
+func TestANodeSaysItIsWalledWhileAReportHasToDecide(t *testing.T) {
+	relays := []Relay{{Region: 7}, {Region: 8}}
+	home7 := &netcheck.Report{RegionLatency: map[tailcfg.DERPRegionID]time.Duration{7: time.Millisecond}}
+	var w walls
+	w.follow(home7, relays, 7, false, nil)
+	if w.unreachedAt(relays, 7, false) != nil || !w.saysWalled(home7, nil, relays, 7, false) {
+		t.Error("one report missing a relay: not said walled, or out of reach at once")
+	}
+	udp := &netcheck.Report{UDP: true, RegionLatency: home7.RegionLatency}
+	if w.saysWalled(udp, nil, relays, 7, false) {
+		t.Error("said walled with UDP")
+	}
+	both := &netcheck.Report{RegionLatency: map[tailcfg.DERPRegionID]time.Duration{7: time.Millisecond, 8: time.Millisecond}}
+	w.follow(both, relays, 7, false, nil)
+	if w.saysWalled(both, w.unreachedAt(relays, 7, false), relays, 7, false) {
+		t.Error("said walled with every relay reached")
+	}
+}
+
+// A home a connection was kept at stays kept for meetLinger after it was last
+// needed, as while a walled device restarts and says first it is homeless,
+// then not walled; one out of reach, or past that, is dropped.
+func TestAHomeIsKeptAWhileAfterItWasNeeded(t *testing.T) {
+	var w walls
+	t0 := time.Unix(1_700_000_000, 0)
+	all := func(int) bool { return true }
+	if got := w.lingering([]int{8}, t0, all); !slices.Equal(got, []int{8}) {
+		t.Fatalf("needed: %v, want [8]", got)
+	}
+	if got := w.lingering(nil, t0.Add(meetLinger-time.Second), all); !slices.Equal(got, []int{8}) {
+		t.Errorf("within the while: %v, want [8] kept", got)
+	}
+	if got := w.lingering(nil, t0.Add(meetLinger-time.Second), func(r int) bool { return r != 8 }); got != nil {
+		t.Errorf("out of reach: %v, want none", got)
+	}
+	w.lingering([]int{9}, t0, all)
+	if got := w.lingering(nil, t0.Add(meetLinger), all); got != nil {
+		t.Errorf("past the while: %v, want none", got)
+	}
+}
+
+// A peer that says it has no home is sent to at the one it had, for homeHeld,
+// as while it restarts; past that, or for one that never said one, not.
+func TestAPeerWithoutAHomeKeepsTheOneItHadAWhile(t *testing.T) {
+	m := &tsManager{}
+	a, b := key.NewNode().Public(), key.NewNode().Public()
+	t0 := time.Unix(1_700_000_000, 0)
+	m.holdHomes([]Peer{{NodeKey: a, HomeRelay: 8}, {NodeKey: b}}, t0)
+	peers := []Peer{{NodeKey: a}, {NodeKey: b}}
+	m.holdHomes(peers, t0.Add(homeHeld-time.Second))
+	if peers[0].HomeRelay != 8 || peers[1].HomeRelay != 0 {
+		t.Errorf("homes %d and %d, want 8 held and none", peers[0].HomeRelay, peers[1].HomeRelay)
+	}
+	peers = []Peer{{NodeKey: a}}
+	m.holdHomes(peers, t0.Add(homeHeld))
+	if peers[0].HomeRelay != 0 {
+		t.Errorf("home %d past homeHeld, want none", peers[0].HomeRelay)
 	}
 }

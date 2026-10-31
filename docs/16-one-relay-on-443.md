@@ -44,9 +44,28 @@ proxy.
   without UDP measures every relay by HTTPS, so one it did not measure is
   out of its reach, and one miss may be a far relay past netcheck's time. A
   relay measured, or UDP answered, ends it at once; a report that measured
-  nothing changes nothing, and a relay without a name pinged by ICMP
+  nothing changes nothing, and a relay that answered ICMP and not HTTPS
   counts as unmeasured. Where one report left this open, the device asks for another
   10 s later (`conn/walls.go`).
+- **STUN servers answering alone are left out.** netcheck measures by
+  HTTPS only where no UDP is answered, so where public STUN servers answer
+  and no relay's port does, it measures no relay and the device is
+  homeless. After two such reports in a row the map leaves the STUN servers
+  out, so that the relays are measured by HTTPS, their names on 443 first,
+  until the device's link changes; the relays' own STUN ports still tell it its public address
+  where they answer. The device stays homeless until a relay is measured,
+  and goes homeless after two reports without them that measured nothing,
+  as no STUN server is there to be taken for the nearest region; where
+  HTTPS reaches none either, with the relays' names first where there are
+  any, as with the relays down, it goes homeless at once and the STUN
+  servers come back, to be left out again no sooner than 25 s later,
+  doubling up to 10 minutes.
+- **A relay pinged alone is no home.** A juistd with the right to ping has
+  netcheck ping the relays beside HTTPS where UDP is blocked; which relays
+  answered ICMP and not HTTPS is read from netcheck's lines, and where
+  netcheck chose one for the home, the device is held at the nearest relay
+  HTTPS reached, or none, until a report pings none alone
+  (`conn/pinged.go`).
 - **A device without UDP tries names first.** Where two reports in a row
   without UDP reached no relay, relays' names on 443 come before their own
   ports in the map, which a network passing 443 alone drops at a cost of
@@ -59,21 +78,49 @@ proxy.
   magicsock takes (`HomeDERP`); magicsock drops a packet to a region its map
   lacks before it tries the route a peer last came by, so this cannot be left
   to it. A peer homed where it reaches is sent to there, as before.
+- **A home is announced once measured.** Where a report measured no relay,
+  the engine picks a home by its number, which a device announced, and its
+  peers sent to it there in vain, as after its restart; a home is announced
+  where the last report measured it, or it is the one announced already.
+  A peer that says it has no home is sent to at the one it had, for 2
+  minutes, as one that restarts is homeless before it takes it again.
+- **It says so while undecided too.** A device homed without UDP, whose
+  last report missed a relay that one more report has to decide on, says it
+  is walled meanwhile: said otherwise, members stop keeping its home open
+  and hear the walls that follow only at their next sync, two minutes on.
 - **It says so by announcing no address,** open or sealed: a home and no
   address is what peers read as walled, which a device on `--https-only`
   announces already. No field is added, so no schema is raised. Walls
   coming or going are pushed to the members awake alone, at once while
   saving too.
-- **Members stay where a walled device is.** A member sends a quiet disco
-  ping to each walled peer at its home every 45 s, below magicsock's 60 s
-  idle limit checked every 15 s, unless that home is its own or out of its
-  reach, and again at once only where a walled peer or its home moved. A
+- **Members stay where a walled device is.** A member writes a byte to
+  each walled peer's home every 45 s, below magicsock's 60 s idle limit
+  checked every 15 s, addressed to a key no client holds, which the relay
+  drops: the walled peer receives nothing, and one write serves every
+  walled peer homed there. It does not where that home is its own or out
+  of its reach, or where its own home has a name on 443, which a walled
+  device reaches and sends to itself; and again at once only where a
+  walled peer or its home moved. It keeps the connection 2 minutes past the
+  last write a walled peer needed: one that restarts says first that it is
+  homeless, then not walled, before it is walled at the same home again. A
   member that rests, or saves battery, keeps none: the walled device
   reaches it once it sends, as when it syncs.
 - **The announcement reaches them without UDP.** A walled device without
   `--https-only` leaves its announcement at the relays on 443, and looks
   there, in each DHT round it is walled, as far as it would take part in
-  the DHT; the public DHT is joined again once it is not.
+  the DHT; the public DHT is joined again once it is not. Where the names
+  on 443 it holds move, it leaves its announcement there again at once,
+  changed or not: a relay that took a new name, or restarted, holds none.
+- **The ingress is found by its role's name.** An announcement found
+  without a signature, as at a relay's rendezvous, names no relay, so a
+  device whose every relay name moved learns no new one there. The ingress
+  that relays is therefore taken at `relay.<domain>`, the name its role
+  gives it in the log, where it announces none proven, and first while the
+  device reaches no relay without UDP, and after that until the ingress
+  announces another name, as a name once proven stays so until its server
+  says otherwise; its server must say it is that member, as for
+  any name (`daemon/relay.go`). A device that reaches no relay at all learns
+  a name the ingress moved to only once it reaches a member again.
 - **The ingress's relay is named by itself.** On the ingress that relays,
   the one of the lowest identity where several do, the relay takes
   `relay.<domain>` unless `--relay-name` says another name, and the service
@@ -86,34 +133,6 @@ proxy.
   `juist health` names the peers down since then, or since the check that
   found them down began: a warning for one that runs, the reason of no
   answer for one that may be offline, nothing for one known to be.
-
-## Still open
-
-- **Homes reached by TCP alone.** netcheck measures by HTTPS only where no
-  UDP probe is answered, so on a network that passes a public STUN server
-  but no relay's port, no relay is measured and the device is homeless.
-  Measuring the relays by HTTPS where their STUN goes unanswered is not part
-  of M22.
-- **The first meeting after a restart.** A walled device is walled within
-  20 s of its juistd starting and leaves its announcement at its relay at
-  once, which pushes it on; yet in two lab runs of nine, hotel reached lx
-  only after 1m48s and 2m31s, where the others took 21 to 37 s. The lab now
-  logs how lx sees hotel and when fb heard of it, which is what the next
-  such run has to answer.
-- **A home pinged alone.** A juistd running as root pings relays by ICMP
-  where UDP is blocked, and netcheck may take the nearest relay it pinged,
-  without a name and out of its reach by TCP, for its home, as before M22;
-  the packages run juistd without the right to ping.
-- **The last name gone.** A walled device whose relays on 443 all lose
-  their names, or move, learns nothing new: it reaches no member to hear
-  of the names that replace them.
-- **Peers kept open for nothing.** A peer on `--https-only` that reaches
-  every relay, or one whose addresses are withheld from this device, reads
-  as walled too, and costs each member a connection and a ping every 45 s.
-- **A walled phone is pinged.** The keepalive is a ping to the walled device
-  itself, so a phone walled in a hotel's Wi-Fi answers every member every
-  45 s, which M21's budgets do not cover; a write that reaches the relay
-  alone would spare it, and magicsock exports none.
 
 ## The alternative: relays that forward
 
@@ -134,4 +153,4 @@ not the lead.
 ## The threat model
 
 What changes is in [02-threat-model.md](02-threat-model.md), weaknesses 5
-and 15. The change is audit scope (M30).
+and 15. The change is audit scope (M32).

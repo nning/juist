@@ -1,7 +1,7 @@
 // Command mkpkg writes a FreeBSD package, as pkg-create(8) would, from files
 // already built, so that any system builds it, and to the same bytes.
 //
-//	mkpkg -manifest M -scripts DIR -version V -abi FreeBSD:14:amd64 -mtime T -o OUT DEST=SRC...
+//	mkpkg -manifest M -scripts DIR -version V -abi FreeBSD:15:amd64 -mtime T -o OUT DEST=SRC...
 //
 // A DEST ending in .gz whose SRC does not is compressed on the way.
 package main
@@ -51,7 +51,7 @@ func main() {
 	manifest := flag.String("manifest", "", "the package's metadata, JSON")
 	scripts := flag.String("scripts", "", "a directory of scripts named as pkg runs them")
 	version := flag.String("version", "", "the package's version")
-	abi := flag.String("abi", "", "the ABI it installs on, as FreeBSD:14:amd64")
+	abi := flag.String("abi", "", "the ABI it installs on, as FreeBSD:15:amd64")
 	mtime := flag.Int64("mtime", 0, "every file's time, in seconds since the epoch")
 	out := flag.String("o", "", "the package to write")
 	flag.Parse()

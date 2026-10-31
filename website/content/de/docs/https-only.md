@@ -12,25 +12,22 @@ Port 443 hinaus. WireGuard, die Pfadsuche und der übliche Port 41645 des
 Relays sind gesperrt.
 
 Der Weg hinaus ist ein [Relay]({{< relref "docs/relays" >}}), das einen
-öffentlichen Namen auf Port 443 bedient. Jedes Gerät erfährt diesen Namen, und
-ein Gerät, das den üblichen Port des Relays nicht erreicht, weicht von selbst
-auf den Namen aus. Dafür musst du auf dem Gerät nichts einrichten.
+öffentlichen Namen auf Port 443 bedient. Jedes Gerät erfährt diesen Namen.
+Erreicht ein Gerät den üblichen Port des Relays nicht, weicht es von selbst
+auf den Namen aus; auf dem Gerät musst du nichts einrichten.
 
-Ein Relay auf 443 genügt. Ein Gerät, das nur einige Relays erreicht, schickt
-alles über sein eigenes, und die anderen Geräte halten eine Verbindung zu
-diesem Relay, solange es dort ist. So erreicht es auch Geräte, die ein Relay
-ohne Namen nutzen. Handys, die Akku sparen, halten keine solche Verbindung:
-Das Gerät erreicht sie, sobald sie wieder etwas senden, wie beim Abgleich
-des Logs. Hat das Netz einen [Ingress]({{< relref "docs/publishing" >}}), der
-auch Relay ist, bedient dessen Relay von selbst `relay.` plus die Domain des
-Netzes auf 443.
+Ein Relay auf 443 genügt: Geräte, die andere Relays nutzen, halten eine
+Verbindung zu ihm, also erreicht es auch sie. Handys, die Akku sparen, halten
+keine und werden erreicht, sobald sie wieder senden. Ist der
+[Ingress]({{< relref "docs/publishing" >}}) des Netzes auch Relay, bedient er
+`relay.DOMAIN` auf 443 von selbst.
 
-Ein Netz, das den Verkehr genauer prüft und alles blockiert oder meldet, was
-kein HTTPS ist, verlangt mehr. Mit `juist set --https-only` schickt ein Gerät
-nur noch TLS an die Namen der Relays auf Port 443, dazu DNS-Anfragen nach
-diesen Namen. Es schickt kein WireGuard über UDP, sucht keine Pfade,
-durchsucht nicht das LAN und nutzt weder die öffentliche DHT noch STUN-Server.
-Jedes Paket läuft dann über ein Relay.
+Ein Netz, das den Verkehr prüft und alles blockiert oder meldet, was kein
+HTTPS ist, verlangt mehr. Mit `juist set --https-only` schickt ein Gerät nur
+noch TLS an die Namen der Relays auf Port 443, dazu DNS-Anfragen nach diesen
+Namen. Es schickt kein WireGuard über UDP, sucht keine Pfade und nicht im LAN
+und nutzt weder den öffentlichen DHT noch STUN-Server. Jedes Paket läuft über
+ein Relay.
 
 ## Einrichten
 
@@ -59,10 +56,10 @@ der Verkehr läuft:
 ```
 {{< /step >}}
 
-Um von dort aus einem Netz beizutreten, setze die Option vor `juist join` und
-nimm den Einladungslink, nicht den Code. Der Link nennt die Relays auf 443,
-etwa `r=relay.example.org`. Ein eingetippter Code wird im LAN gesucht, und das
-durchsucht ein Gerät im Nur-HTTPS-Modus nicht.
+Um von dort aus einem Netz beizutreten, setze die Option vor `juist join`
+und nimm den Einladungslink, nicht den Code. Der Link nennt die Relays auf
+443, etwa `r=relay.example.org`; ein Code braucht das LAN, das der
+Nur-HTTPS-Modus nicht durchsucht.
 
 ```sh
 sudo juist set --https-only
@@ -93,7 +90,7 @@ löst den Namen selbst auf. Das Gerät braucht dann also kein eigenes DNS. Ohne
 `--proxy ""` kehrt dazu zurück. `juist status` zeigt den Proxy ohne sein
 Passwort.
 
-## Hinweise
+## Gut zu wissen
 
 - Jedes Paket läuft über ein Relay, das damit die Geschwindigkeit begrenzt.
   Die TCP-Verbindungen des Tunnels laufen dann in TCP, das sich von

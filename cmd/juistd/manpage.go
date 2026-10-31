@@ -75,8 +75,8 @@ they are. Where two networks claim one IPv4 address, the lower instance's
 routes win, and the higher runs without IPv4 until one of them renumbers.`)
 	line(".SH FILES")
 	for _, f := range [][2]string{
-		{defaults.SystemHome, "The packaged juistd's state: node.keys, the log, the peer cache and leases. " + defaults.SystemHome + "/juistN for an instance."},
-		{ipc.SystemSocket, "The control socket; " + filepath.Dir(ipc.SystemSocket) + "/juistN.sock for an instance."},
+		{defaults.SystemHome, "The packaged juistd's state: node.keys, the log, the peer cache and leases; " + defaults.SystemHome + "N for an instance, which runs as the user juistN."},
+		{ipc.SystemSocket, "The control socket; " + filepath.Dir(ipc.SystemSocket) + "N/juistd.sock for an instance."},
 		serviceFiles,
 	} {
 		tagged(f[0], f[1])

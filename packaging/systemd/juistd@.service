@@ -3,8 +3,10 @@
 # device already in a network creates one, and "juist reset" of that network
 # removes it. The instance number chooses its TUN device (%i), its ports (the
 # defaults plus ten times the number), its routing table and its policy
-# rules, so that no instance takes what another routes by. It starts after
-# the default, which it yields IPv4 to where their networks overlap.
+# rules, so that no instance takes what another routes by. It runs as the
+# user %i, which the package makes, so that one network's juistd reads none
+# of another's keys. It starts after the default, which it yields IPv4 to
+# where their networks overlap.
 #
 # The rest is juistd.service's, line for line:
 #
@@ -15,7 +17,7 @@
 # networking; it still holds no admin keys and cannot change who is a member
 # (docs/02-threat-model.md, docs/04-architecture.md key custody).
 #
-# State lives in /var/lib/juist/%i, the control socket is /run/juist/%i.sock.
+# State lives in /var/lib/%i, the control socket is /run/%i/juistd.sock.
 
 
 [Unit]
@@ -30,26 +32,25 @@ Type=simple
 # what juistd writes, as root, and back; an instance's leaves it be.
 ExecStartPre=-+/usr/lib/juist/resolv.sh start %i
 ExecStopPost=-+/usr/lib/juist/resolv.sh stop %i
-ExecStart=/usr/local/bin/juistd --instance %i --home /var/lib/juist/%i --socket /run/juist/%i.sock
+ExecStart=/usr/local/bin/juistd --instance %i --home /var/lib/%i --socket /run/%i/juistd.sock
 Restart=on-failure
 RestartSec=2
 
-# Dedicated user; /var/lib/juist/%i is created and chowned by systemd.
-User=juist
-Group=juist
-StateDirectory=juist/%i
+# Dedicated user; /var/lib/%i is created and chowned by systemd.
+User=%i
+Group=%i
+StateDirectory=%i
 # 0700, not systemd's 0755 default: this holds node.keys. juist only refuses a
 # group/other-writable state dir, so 0755 would pass while world-readable.
 StateDirectoryMode=0700
-WorkingDirectory=/var/lib/juist/%i
+WorkingDirectory=/var/lib/%i
 # The control socket lives apart from the state, so that reaching it is not
 # reading node.keys: any local user may connect and ask for status, and the
 # daemon decides everything else per call from the caller's kernel-reported
-# uid. 0755 so users can reach the socket; nothing else is kept there.
-# Preserved, because every instance's socket is in it: systemd would delete
-# the directory with whichever unit stopped first. juistd removes its own
-# socket when it stops.
-RuntimeDirectory=juist
+# uid. 0755 so users can reach the socket. Preserved across a restart: the
+# default's holds the resolv.conf the host points at and the ingress's
+# ports. juistd removes its own socket when it stops.
+RuntimeDirectory=%i
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 # Every file the daemon writes is private; the socket is chmodded explicitly.

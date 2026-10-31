@@ -11,8 +11,8 @@ import (
 
 func cmdRename(a *app, args []string) error {
 	s := spec{name: "juist rename", args: "DEVICE NAME", min: 2, max: 2, about: `
-Rename a device: by name, address, or key. DEVICE.NETWORK.juist and its share
-name follow the name; keys, addresses, roles and public names stay.`}
+Rename a device, by name, address or key. DEVICE.NETWORK.juist and its share
+name change with it. Keys, addresses, roles and public names stay.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err

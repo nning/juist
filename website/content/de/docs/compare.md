@@ -217,9 +217,9 @@ Server herum, der bestimmt, wer dazugehört.
 ## Wo juist schwächer ist {#weaker}
 
 - Ein Sicherheitsaudit gab es für juist bisher nicht.
-- Es läuft unter Linux und FreeBSD, und unter Android als Mitglied ohne
-  öffentliche Namen, Rollen und Subnetze, das kein Exit-Node sein kann. Für Windows,
-  macOS und iOS gibt es nichts.
+- Es läuft unter Linux und FreeBSD. Unter Android ist ein Telefon ein
+  Mitglied ohne Rollen, öffentliche Namen oder Subnetze. Für Windows, macOS
+  und iOS gibt es nichts.
 - Es kennt nur Geräte, keine Benutzer: Seine Zugriffsregeln nennen Geräte,
   und eine Anmeldung über einen Identitätsanbieter gibt es nicht.
 - Ein entferntes Gerät ist draußen, sobald die anderen Geräte davon erfahren.

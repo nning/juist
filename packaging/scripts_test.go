@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -33,8 +35,8 @@ func newSandbox(t *testing.T) *sandbox {
 	// the sandbox's enabled file lists. A firewall tool left unstubbed is
 	// the host's: firewalld's has polkit ask whoever is logged in for a
 	// password.
-	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "exit-node.sh", "ingress.sh", "serve.sh",
-		"relay.sh", "install", "firewall-cmd", "ufw"} {
+	for _, name := range []string{"systemctl", "systemd-sysusers", "firewall.sh", "instances.sh", "exit-node.sh", "ingress.sh",
+		"serve.sh", "relay.sh", "install", "firewall-cmd", "ufw"} {
 		body := "#!/bin/sh\necho \"" + name + " $*\" >> " + filepath.Join(root, "calls") + "\n"
 		switch name {
 		case "install":
@@ -65,6 +67,7 @@ func (sb *sandbox) run(script string, args ...string) {
 	}
 	s := strings.NewReplacer(
 		"/usr/lib/juist/firewall.sh", filepath.Join(sb.root, "bin", "firewall.sh"),
+		"/usr/lib/juist/instances.sh", filepath.Join(sb.root, "bin", "instances.sh"),
 		"/usr/lib/juist/exit-node.sh", filepath.Join(sb.root, "bin", "exit-node.sh"),
 		"/usr/lib/juist/ingress.sh", filepath.Join(sb.root, "bin", "ingress.sh"),
 		"/usr/lib/juist/serve.sh", filepath.Join(sb.root, "bin", "serve.sh"),
@@ -104,6 +107,9 @@ func TestAnUpgradeIgnoresWhatTheDaemonPlants(t *testing.T) {
 	calls := sb.calls()
 	if strings.Contains(calls, "firewall.sh allow") || strings.Contains(calls, "systemctl enable") {
 		t.Fatalf("an upgrade acted as a fresh install:\n%s", calls)
+	}
+	if !strings.Contains(calls, "instances.sh move") {
+		t.Error("an upgrade did not move the instances' homes out of the default's")
 	}
 	if !strings.Contains(calls, "try-restart juistd.service juistd@*.service") {
 		t.Fatalf("an upgrade did not restart the daemon and its instances:\n%s", calls)
@@ -157,6 +163,84 @@ func TestAReinstallIsAFreshInstall(t *testing.T) {
 	sb.run("postrm", "purge")
 	if entries, _ := filepath.Glob(filepath.Join(sb.root, "var/lib/*")); len(entries) != 0 {
 		t.Fatalf("a purge left %v", entries)
+	}
+}
+
+// linuxPackagesOnly skips a test of what only the Linux packages ship, as
+// instances.sh, which takes GNU coreutils.
+func linuxPackagesOnly(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("instances.sh is the Linux packages'")
+	}
+}
+
+// What the juist user swaps its instance's home for between the check and
+// the move, a link to another's file, is moved, and then neither followed
+// nor given on, but removed: root's chmod and chown follow a link.
+func TestAHomeSwappedForALinkIsGivenNothing(t *testing.T) {
+	linuxPackagesOnly(t)
+	sb := newSandbox(t)
+	state := filepath.Join(sb.root, "state")
+	old := filepath.Join(state, "juist/juist6")
+	if err := os.MkdirAll(old, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(sb.root, "sudoers")
+	if err := os.WriteFile(victim, nil, 0o440); err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(sb.root, "calls")
+	for name, body := range map[string]string{
+		"chown": "echo \"chown $*\" >> " + calls + "\n",
+		// The stop is the window: the juist user swaps the home meanwhile.
+		"systemctl": "echo \"systemctl $*\" >> " + calls + "\n" +
+			"case $1 in is-active) [ \"$3\" = juistd@juist6.service ];; stop) rm -rf " + old + "; ln -s " + victim + " " + old + ";; esac\n",
+	} {
+		if err := os.WriteFile(filepath.Join(sb.root, "bin", name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := os.ReadFile("instances.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(sb.root, "instances.sh")
+	if err := os.WriteFile(script, []byte(strings.ReplaceAll(string(b), "/run/systemd/system", filepath.Join(sb.root, "run/systemd/system"))), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", script, "move")
+	cmd.Env = []string{"PATH=" + filepath.Join(sb.root, "bin") + ":/usr/bin:/bin", "JUIST_STATE=" + state}
+	out, _ := cmd.CombinedOutput()
+	log := string(out) + sb.calls()
+	if fi, err := os.Stat(victim); err != nil || fi.Mode().Perm() != 0o440 {
+		t.Errorf("the link's target was changed: %v %v\n%s", fi.Mode(), err, log)
+	}
+	if strings.Contains(log, "chown juist6") || strings.Contains(log, "chown root") {
+		t.Errorf("the link was given on:\n%s", log)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "juist6")); !os.IsNotExist(err) {
+		t.Errorf("the link stays as instance 6's home: %v", err)
+	}
+}
+
+// A purge removes another network's home as the default's: only if empty.
+func TestAPurgeKeepsAnInstancesHomeThatHoldsKeys(t *testing.T) {
+	sb := newSandbox(t)
+	for _, d := range []string{"var/lib/juist1", "var/lib/juist2"} {
+		if err := os.MkdirAll(filepath.Join(sb.root, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sb.root, "var/lib/juist2/node.keys"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sb.run("postrm", "purge")
+	if _, err := os.Stat(filepath.Join(sb.root, "var/lib/juist1")); err == nil {
+		t.Error("a purge left juist1's empty home")
+	}
+	if _, err := os.Stat(filepath.Join(sb.root, "var/lib/juist2/node.keys")); err != nil {
+		t.Errorf("a purge took juist2's keys: %v", err)
 	}
 }
 
@@ -219,10 +303,13 @@ func TestTheInstanceUnitIsTheDefaultOne(t *testing.T) {
 		"Description=juist node", "Description=juist node %i",
 		"After=network-online.target", "After=network-online.target juistd.service",
 		"ExecStart=/usr/local/bin/juistd --home /var/lib/juist --socket /run/juist/juistd.sock --tun juist0",
-		"ExecStart=/usr/local/bin/juistd --instance %i --home /var/lib/juist/%i --socket /run/juist/%i.sock",
-		"/var/lib/juist is created", "/var/lib/juist/%i is created",
-		"StateDirectory=juist", "StateDirectory=juist/%i",
-		"WorkingDirectory=/var/lib/juist", "WorkingDirectory=/var/lib/juist/%i",
+		"ExecStart=/usr/local/bin/juistd --instance %i --home /var/lib/%i --socket /run/%i/juistd.sock",
+		"/var/lib/juist is created", "/var/lib/%i is created",
+		"StateDirectory=juist", "StateDirectory=%i",
+		"WorkingDirectory=/var/lib/juist", "WorkingDirectory=/var/lib/%i",
+		"User=juist", "User=%i",
+		"Group=juist", "Group=%i",
+		"RuntimeDirectory=juist", "RuntimeDirectory=%i",
 	)
 	if len(def) != len(inst) {
 		t.Fatalf("juistd.service has %d lines after [Unit], juistd@.service %d", len(def), len(inst))
@@ -236,13 +323,8 @@ func TestTheInstanceUnitIsTheDefaultOne(t *testing.T) {
 			t.Errorf("juistd@.service line %d is %q, want %q", i+1, inst[i], want)
 		}
 	}
-	for _, line := range inst {
-		if strings.HasPrefix(line, "RuntimeDirectory=") && line != "RuntimeDirectory=juist" {
-			t.Errorf("%s: every instance's socket is in /run/juist", line)
-		}
-	}
 	if !slices.Contains(def, "RuntimeDirectoryPreserve=yes") {
-		t.Error("/run/juist is not preserved: the first unit to stop would delete every instance's socket")
+		t.Error("/run/juist is not preserved: a restart would drop the resolv.conf the host points at")
 	}
 }
 
@@ -289,5 +371,110 @@ func TestFirewallScriptTakesADevice(t *testing.T) {
 	}
 	if calls, err := run("open"); err == nil {
 		t.Fatalf("an unknown action succeeded:\n%s", calls)
+	}
+}
+
+// instances.sh move takes each instance's home out of the default's, to one
+// of its own, given to its own user; it leaves one that is a link, and one
+// whose new home exists already.
+func TestInstancesMoveOutOfTheDefaultsHome(t *testing.T) {
+	linuxPackagesOnly(t)
+	sb := newSandbox(t)
+	state := filepath.Join(sb.root, "state")
+	for _, d := range []string{"juist/juist2", "juist/juist4", "juist4", "elsewhere"} {
+		if err := os.MkdirAll(filepath.Join(state, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"juist/juist2/node.keys", "juist4/node.keys"} {
+		if err := os.WriteFile(filepath.Join(state, f), []byte("keys"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(state, "elsewhere"), filepath.Join(state, "juist/juist3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sb.root, "bin", "chown"),
+		[]byte("#!/bin/sh\necho \"chown $*\" >> "+filepath.Join(sb.root, "calls")+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "instances.sh", "move")
+	cmd.Env = []string{"PATH=" + filepath.Join(sb.root, "bin") + ":/usr/bin:/bin", "JUIST_STATE=" + state,
+		"JUIST_USER=" + me.Username}
+	out, err := cmd.CombinedOutput()
+	calls := string(out) + sb.calls()
+	if err != nil {
+		t.Fatalf("move: %v\n%s", err, calls)
+	}
+	if b, err := os.ReadFile(filepath.Join(state, "juist2/node.keys")); err != nil || string(b) != "keys" {
+		t.Errorf("instance 2's keys did not move: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(state, "juist/juist2")); !os.IsNotExist(err) {
+		t.Errorf("instance 2's old home is still there: %v", err)
+	}
+	// Shut out of it first, then given what was the default's user's alone:
+	// a hard link that user planted to another's file keeps its owner.
+	home := filepath.Join(state, "juist2")
+	if !strings.Contains(calls, "chown root:root "+home+"\nchown -h juist2:juist2 "+home+"/node.keys\nchown juist2:juist2 "+home+"\n") {
+		t.Errorf("instance 2's home was not given to juist2:\n%s", calls)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "juist3")); !os.IsNotExist(err) || strings.Contains(calls, "juist3") {
+		t.Errorf("a link was moved, or acted on:\n%s", calls)
+	}
+	if _, err := os.Stat(filepath.Join(state, "juist/juist4")); err != nil || !strings.Contains(calls, "both exist") {
+		t.Errorf("instance 4's old home was not left beside its new one (%v):\n%s", err, calls)
+	}
+}
+
+// A running instance's stop already runs the new unit's ExecStopPost, for
+// which systemd makes its new, empty StateDirectory: the home replaces that,
+// rather than moving into it.
+func TestARunningInstanceMovesOverTheHomeItsStopMade(t *testing.T) {
+	linuxPackagesOnly(t)
+	sb := newSandbox(t)
+	state := filepath.Join(sb.root, "state")
+	if err := os.MkdirAll(filepath.Join(state, "juist/juist5"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "juist/juist5/node.keys"), []byte("keys"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(sb.root, "calls")
+	for name, body := range map[string]string{
+		"chown": "echo \"chown $*\" >> " + calls + "\n",
+		"systemctl": "echo \"systemctl $*\" >> " + calls + "\n" +
+			"case $1 in is-active) [ \"$3\" = juistd@juist5.service ];; stop) mkdir -p " + filepath.Join(state, "juist5") + ";; esac\n",
+	} {
+		if err := os.WriteFile(filepath.Join(sb.root, "bin", name), []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := os.ReadFile("instances.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(sb.root, "instances.sh")
+	if err := os.WriteFile(script, []byte(strings.ReplaceAll(string(b), "/run/systemd/system", filepath.Join(sb.root, "run/systemd/system"))), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", script, "move")
+	cmd.Env = []string{"PATH=" + filepath.Join(sb.root, "bin") + ":/usr/bin:/bin", "JUIST_STATE=" + state}
+	out, err := cmd.CombinedOutput()
+	log := string(out) + sb.calls()
+	if err != nil {
+		t.Fatalf("move: %v\n%s", err, log)
+	}
+	if b, err := os.ReadFile(filepath.Join(state, "juist5/node.keys")); err != nil || string(b) != "keys" {
+		t.Errorf("instance 5's keys are not in its home: %v\n%s", err, log)
+	}
+	if _, err := os.Stat(filepath.Join(state, "juist/juist5")); !os.IsNotExist(err) {
+		t.Errorf("instance 5's old home is still there: %v", err)
+	}
+	if !strings.Contains(log, "systemctl stop juistd@juist5.service\n") || !strings.Contains(log, "systemctl start juistd@juist5.service\n") {
+		t.Errorf("instance 5 was not stopped and started again:\n%s", log)
 	}
 }

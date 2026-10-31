@@ -118,8 +118,10 @@ func TestPublishServe(t *testing.T) {
 	laptop.mustRun("network", "domain", "pub.example.org")
 	mustContain(t, laptop.mustRun("publish", "add", "vps", "immich"), "hint: on vps, juist publish serve")
 	eventually(t, "the vps learns what it publishes", func() bool {
-		return strings.Contains(vps.mustRun("status"), "not served here: not agreed to on this device")
+		return strings.Contains(vps.mustRun("status"), "immich.pub.example.org (not served)")
 	})
+	mustContain(t, vps.mustRun("health"), "warning: not serving immich.pub.example.org: not agreed to on this device",
+		"hint: juist publish serve")
 	mustContain(t, vps.mustRun("publish", "serve"), "serving immich.pub.example.org")
 	mustContain(t, vps.mustRun("status"), "this device serves immich.pub.example.org")
 	eventually(t, "the laptop hears the vps serves", func() bool {

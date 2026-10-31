@@ -34,7 +34,33 @@ type relayNameProofs struct {
 	mu     sync.Mutex
 	by     map[nameClaim]*nameProof
 	newAt  map[types.Identity]time.Time // when each relay last got a name asked about
+	over   map[types.Identity]string    // the ingress's announced name its role's name was taken over
 	wanted chan struct{}
+}
+
+// passOver notes whether the ingress id is taken by its role's name over
+// announced, the name it announces; done is false where it is not.
+func (p *relayNameProofs) passOver(id types.Identity, announced string, done bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case done:
+		if p.over == nil {
+			p.over = map[types.Identity]string{}
+		}
+		p.over[id] = announced
+	case p.over[id] != announced:
+		delete(p.over, id)
+	}
+}
+
+// passedOver is the announced name the ingress id was last taken over by its
+// role's name, held until it announces another; ok is false for none.
+func (p *relayNameProofs) passedOver(id types.Identity) (announced string, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	announced, ok = p.over[id]
+	return announced, ok
 }
 
 // nameClaim is a name as one relay claims it.

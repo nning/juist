@@ -4,9 +4,9 @@ import "github.com/nning/juist/ipc"
 
 func cmdHealth(a *app, args []string) error {
 	s := spec{name: "juist health", about: `
-Say what needs attention on this device, each with a hint to fix it, and
-which devices it does not reach; every network, where it is in several.
-juist status shows how things stand.`}
+Say what needs attention on this device, each with a hint, and which devices
+it does not reach, for every network if the device is in several. juist
+status shows the state.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}

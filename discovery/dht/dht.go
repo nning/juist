@@ -258,6 +258,15 @@ func (n *Node) Kick() {
 	}
 }
 
+// Republish runs a round soon that puts this node's announcement whether or
+// not it changed, as where the relays on 443 holding it did.
+func (n *Node) Republish() {
+	n.publishMu.Lock()
+	n.published = nil
+	n.publishMu.Unlock()
+	n.Kick()
+}
+
 // Round is one publish-and-look cycle, exported so a test can drive it without
 // waiting out an interval.
 func (n *Node) Round(ctx context.Context) { n.round(ctx, false) }

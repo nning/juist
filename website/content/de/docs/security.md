@@ -101,8 +101,7 @@ Mehr dazu unter [Ein Gerät entfernen]({{< relref "docs/remove" >}}).
 Die Grenze: Ein Mitglied, das vom Rest abgeschnitten ist, erfährt erst spät
 davon und behält bis dahin seinen Tunnel zum entfernten Gerät. Die Frische
 begrenzt das auf 48 Stunden. Hat sich so lange kein Voucher für ein Mitglied
-verbürgt, behält es nur noch Tunnel zu Vouchern. Ein **Voucher** ist ein
-Gerät, das stündlich bestätigt, dass der Stand des Netzes aktuell ist. Mit
+verbürgt, behält es nur noch Tunnel zu Vouchern. Mit
 `juist admins vouchers M` hält diese Grenze auch dann, wenn M − 1 Voucher
 lügen. Mehr dazu unter
 [Frische]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers).
@@ -122,11 +121,10 @@ kann, warum juist das hinnimmt und was du dagegen tun kannst. Kurz gefasst:
 - Stehen alle Geräte eines Netzes hinter symmetrischem NAT, braucht es ein
   Mitglied als Relay.
 - Der öffentliche DHT und die STUN-Server sehen die Adressen der Geräte, die
-  sie nutzen. Ein Gerät sucht ein anderes im DHT, wenn es dessen Spur
-  verloren hat und keines der Relays des Netzes weiß, wo es ist. Dann sieht
-  der DHT, dass beide Adressen zu einem Netz gehören, aber nicht zu welchem
-  und nicht, wem sie gehören. Von den Geräten, die einander erreichen, fragt
-  nur eines. Mit einem eigenen Relay kommt juistd ohne sie aus.
+  sie nutzen. Hat ein Gerät die Spur eines anderen verloren und weiß kein
+  Relay, wo es ist, sucht es im DHT. Der DHT sieht dann, dass zwei Adressen zu
+  einem Netz gehören, aber nicht zu welchem und nicht, wem sie gehören. Mit
+  einem eigenen Relay kommt juistd ohne sie aus.
 
 ## Quantensicher
 
@@ -140,13 +138,13 @@ ließe sich dann entschlüsseln. juist schützt vor beidem:
   haben: Jedes kapselt ein Geheimnis an den ML-KEM-768-Schlüssel des anderen.
   Dieser Schlüssel erneuert sich mit jeder Änderung der Mitglieder.
 - Gruppengeheimnisse sind mit X25519 und ML-KEM-768 zusammen versiegelt.
-- Jede Änderung am Netz und jede Nachricht, die Geräte füreinander signieren,
-  ist mit ML-DSA-44 signiert, und eine Signatur allein mit Ed25519 wird
-  abgewiesen. Nur Kopien der Ankündigung eines Geräts aus dem DHT, von einem
-  Relay oder aus dem LAN werden mit Ed25519 allein angenommen, und sie sagen
-  nicht mehr, als wo das Gerät zu erreichen ist. Der ML-DSA-Schlüssel jedes Geräts und jedes Admin-Schlüssels
-  leitet sich aus dem Schlüssel ab, den es schon hat, also deckt dessen
-  Backup ihn mit ab.
+- Jede Änderung am Netz und jede Nachricht, die Geräte füreinander
+  signieren, ist mit ML-DSA-44 signiert; Ed25519 allein wird abgewiesen. Die
+  einzige Ausnahme sind Kopien der Ankündigung eines Geräts aus dem DHT, von
+  einem Relay oder aus dem LAN, die nicht mehr sagen als, wo das Gerät zu
+  erreichen ist.
+- Der ML-DSA-Schlüssel jedes Geräts und jedes Admins leitet sich aus dem
+  Schlüssel ab, den es schon hat, also deckt dessen Backup ihn mit ab.
 - Der Beitritt vereinbart nach der Prüfung von Code oder Link einen Schlüssel
   mit ML-KEM-768. Wer einen Beitritt mitschneidet und später einen
   Quantencomputer hat, erfährt daraus nichts.
@@ -174,7 +172,7 @@ aus, da ihm nur das Weiterreichen von Verkehr anvertraut ist, und ein Proxy,
 der TLS ohne ML-KEM beendet, kann ein Gerät, das nur HTTPS erreicht, nicht
 tragen.
 
-## Hinweise
+## Gut zu wissen
 
 - Unter Linux verwirft juist Verkehr, der die juist-Adressen eines Geräts
   nicht durch den Tunnel erreicht, und Verkehr, der vorgibt, von einem

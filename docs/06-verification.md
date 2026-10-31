@@ -49,8 +49,9 @@ Targets, added the milestone their input surface appears:
 | Access policy text (`internal/policy` `FuzzParse`) | policy files | M14 |
 | Pair-key messages and store (`FuzzTake`, `FuzzDecodeStore`) | signed messages; the pairs file | M15 |
 | A host's DNS queries and its resolvers' answers (`internal/names` `FuzzAnswer`, `internal/dnsfwd` `FuzzForwarded`) | every program on the host, the Android app's phone among them; the network's resolvers | M23 |
+| Multicast from members (`conn` `FuzzUnwrapGroup`) | members' wrapped group datagrams | M25 |
 
-Open (M29): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`) and
+Open (M31): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`) and
 the root helper's protocol.
 
 The gate is 72 clean CPU-hours per input surface before a milestone closes, run
@@ -58,7 +59,7 @@ by hand with `make fuzz-long` or `make fuzz-one` per target (`make fuzz-matrix`
 lists them; 6 h on 4 workers a run), against a corpus kept outside the repository.
 It does not run on CI: hours per input surface is far more hosted-runner time than
 the project wants to spend. So far it is recorded for `FuzzPayloads` alone (M11b,
-[12-validating.md](12-validating.md)); M29 runs it over every target. `make fuzz`
+[12-validating.md](12-validating.md)); M31 runs it over every target. `make fuzz`
 smoke-runs every target for 30 s each. OSS-Fuzz, once the project qualifies,
 would move the long runs onto someone else's hardware.
 
@@ -119,9 +120,10 @@ convergence when an `exit` role is withdrawn across a mesh; chaos on gossip path
 
 ## 5. Cryptographic review gates
 
-- Internal review of the audit scope before the external audit (M29,
+- Internal review of the audit scope before the audit (M31,
   [15-security-review.md](15-security-review.md)).
-- External audit at M30 of the audit scope: what [`audit-scope`](../audit-scope)
+- Audit at M32 of the audit scope, by a model other than the one juist is
+  developed with: what [`audit-scope`](../audit-scope)
   places `core` or `in`, the code that decides who may do what, holds or derives a
   key, parses input from outside the membership, or runs as root. Every package
   is placed there, `out` ones with their reason, and `make tcb` fails on one
@@ -135,9 +137,9 @@ convergence when an `exit` role is withdrawn across a mesh; chaos on gossip path
     stay where they are put), not line by line.
 - After v1, each milestone that grows the audit scope gets an audit of what it
   added, scoped by the sizes its "Done" line records.
-- A short machine-checkable model (Tamarin/ProVerif, or TLA+ for the
-  epoch/freshness state machine) is a stretch goal — valuable for the freshness and
-  fork-choice rules, which are where novel logic lives.
+- Machine-checked models (M30) of what juist designed itself: enrollment
+  and the pair key in ProVerif or Tamarin, the log's fork choice, epochs
+  and freshness in TLA+; M32's audit checks them with the code.
 
 ## 6. Continuous regression metrics
 

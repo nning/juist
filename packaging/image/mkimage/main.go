@@ -6,7 +6,8 @@
 //		-license F -third-party F
 //
 // The image holds juistd and juist, their licenses, the CA certificates and a
-// user of their own, and runs juistd as that user with its home in a volume.
+// user of their own, and runs juistd as that user with its home in a volume,
+// where juist finds it.
 package main
 
 import (
@@ -115,7 +116,7 @@ func run(out, tag, arch string, mtime int64, juistd, juist, certs, license, thir
 		Architecture: arch, OS: "linux", Created: t.Format(time.RFC3339),
 		Config: containerConfig{
 			User:       fmt.Sprintf("%d:%d", uid, uid),
-			Env:        []string{"PATH=/usr/local/bin", "HOME=" + home},
+			Env:        []string{"PATH=/usr/local/bin", "HOME=" + home, "JUIST_HOME=" + home},
 			Entrypoint: []string{"/usr/local/bin/juistd", "--home", home},
 			WorkingDir: home,
 			Volumes:    map[string]struct{}{home: {}},

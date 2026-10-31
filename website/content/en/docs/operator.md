@@ -14,16 +14,15 @@ sends it requests. The daemon decides who may ask for what:
 |---|---|
 | root | everything, including choosing the operator |
 | the operator | everything else: list devices, invite, approve, use an exit node, and so on |
-| any other local user | only `juist status` and `juist health` |
+| any other local user | only `juist status` and `juist health`, which show other devices as `member 1`, `member 2` and so on |
 
 The **operator** is the local user chosen for this device, usually you, the
 person who uses it. Once there is an operator, you no longer type `sudo`
 before each command.
 
-Changes to the network itself, such as admitting or removing a device, also
-need an admin key. An admin is a person whose key approves changes. Admin keys
-live in your own keystore, `~/.config/juist`, so you run those commands as
-yourself, not with sudo (see [Admins]({{< relref "docs/admins" >}})).
+Changes to the network, such as admitting a device, also need an
+[admin key]({{< relref "docs/admins" >}}). It lives in your own keystore,
+`~/.config/juist`, so you run those commands as yourself, not with sudo.
 
 ## Setting the operator
 
@@ -53,7 +52,7 @@ sudo juist set --operator=""
 
 It prints `operator cleared`.
 
-## Notes
+## Good to know
 
 - Each device has one operator per network. Only root can choose it with
   `juist set --operator`. The operator may change the other `juist set`

@@ -19,7 +19,7 @@
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
 | Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; once the network has an access policy (M14), only members it passes use one, enforced at the exit node or router |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
-| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M31, after v1.0); update transparency (roadmap item, not v1) |
+| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M33, after v1.0); update transparency (roadmap item, not v1) |
 
 ## Out of scope / consciously accepted
 
@@ -120,8 +120,8 @@ them by number.
    does so without `--https-only` too, and meets every member at its own
    home: that one relay sees the timing and volume of all its pairs and can
    stop all of them, where they were spread over the peers' homes, and as
-   every member keeps a connection to it while the device is walled, it sees
-   which members run then. A relay is given no right over another, and sees
+   every member homed at a relay without a name keeps a connection to it
+   while the device is walled, it sees which of those run then. A relay is given no right over another, and sees
    node keys and WireGuard ciphertext alone, as before.
 6. **Enrollment bottoms out at admin-device security.** One-guess PAKE invites and
    full-entropy QR tokens shrink but cannot eliminate the window in which a mis-issued
@@ -156,19 +156,20 @@ them by number.
    send nothing outside the tunnel, not even answers, chooses the exit node
    with `--isolate`.
 8. **A real device puts the overlay addresses on the host, where the LAN could
-   reach them.** Linux's weak host model makes an address on `juist0` reachable
-   through *any* interface, and both default-deny gates sit downstream of WireGuard
-   decryption. On Linux juistd therefore drops, in an nftables table of its own
-   (`juistNin`, prerouting at raw priority), what comes for this node's overlay
-   addresses by another device than its tunnel or loopback, and what comes from a
-   member's overlay address by a device that is no juist device. Tailscale drops
-   only the second. What this costs: a container or VM on a bridge of the host no
-   longer reaches the host's own overlay address, and a LAN host no longer reaches
-   a subnet router's. **FreeBSD is still open** (M24): it takes an address by any
-   interface too, and pf, which juist runs only to serve or use an exit node, is
-   where the same two rules belong. There a service bound only to an overlay
-   address stays LAN-reachable, and an overlay source is no evidence that a packet
-   came through the tunnel. The package's installer, not the
+   reach them.** Linux and FreeBSD deliver to an address on `juist0` by *any*
+   interface (the weak host model), and both default-deny gates sit downstream
+   of WireGuard decryption. juistd therefore drops what comes for this node's
+   overlay addresses by another device than its tunnel or loopback, and what
+   comes from a member's overlay address by a device that is no juist device:
+   on Linux in an nftables table of its own (`juistNin`, prerouting at raw
+   priority), on FreeBSD in a pf anchor of its own (`juist/juistN_in`), pf run
+   for it where it was off (M24). Tailscale drops only the second. What this
+   costs: a container or VM on a bridge of the host no longer reaches the
+   host's own overlay address, and a LAN host no longer reaches a subnet
+   router's. What remains: on FreeBSD, where the host loads pf rules of its
+   own that do not call juist's anchors first, the guard cannot load; the
+   device runs without it, as refusing would cost every member's tunnel, and
+   `juist health` says so. The package's installer, not the
    daemon, does touch the host firewall once, in the other direction: where
    firewalld or ufw runs it lets everything in on `juist0`, as Tailscale's own
    rules do for `tailscale0`, because a host firewall that drops the overlay
@@ -177,18 +178,26 @@ them by number.
    tunnel**; with one, what it passes; the host firewall still guards every
    other interface, and
    `/usr/lib/juist/firewall.sh revoke` takes the rule back.
-9. **A host's networks trust one another's juistd (M5).** A host in several
-   networks runs one juistd per network, all as the `juist` user. An attacker
-   who takes over one of them, through a parser bug a member of that network
-   reaches, can read the other instances' device keys and operate them over
-   their sockets. That makes the attacker this device in every network the
-   host is in. It gains no admin key and no vote in any of them. Each
-   instance already holds `CAP_NET_ADMIN` and could redirect the host's
-   traffic anyway, so the step from one network to all of them on that host
-   is the device keys. Bounded by: a device is still removed from each network
-   by that network's quorum. A user per instance, which would close it, needs
-   the packaging and each instance's view of the one below reworked, and is
-   left for the boundaries on a host, before the audit (M24).
+9. **A host's networks share the host (M5, M24).** A host in several networks
+   runs one juistd per network, each as a user of its own (`juist`, then
+   `juist1` to `juist9`), in a home only that user reads. An attacker who
+   takes over one of them, through a parser bug a member of that network
+   reaches, reads no other instance's device keys and may only read the
+   others' status, as any local user may: no member's name or identity.
+   What remains is what the network capability gives every instance: it can
+   route what the host sends to another network's overlay addresses into its
+   own device, as overlay space may overlap, and read what the host sends
+   there; not what members send each other, and no key. On FreeBSD the
+   daemon has no such capability, but its helper routes into its device
+   what the daemon asks, the host's own address and gateways excepted, so the
+   same holds. Bounded by: the attacker is still this device in its own
+   network alone, which that network's quorum removes it from. Once, on the
+   upgrade to M24, root moves each instance's home out of the default's, a
+   directory the `juist` user held, and gives on only what was that user's;
+   a taken-over default daemon holding a directory of it open could still
+   swap a name for a hard link to another's file while that runs, on
+   FreeBSD, where any user may make one (Linux's `fs.protected_hardlinks`
+   forbids it).
 10. **Admin devices see what waits for the admins (M5b).** A change waiting
    for votes is sealed to the admin keys, but the juistd of every admin device
    that carries it sees its outside: which admin key handed it on, when it

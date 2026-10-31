@@ -145,7 +145,7 @@ type Derived struct {
 
 	// Silent names the members counted in Unreachable, by their names in
 	// the log, so a person is told which devices are not heard from, not
-	// only how many. Status is anyone's to read, and the log is not.
+	// only how many; a reader, by pseudonym.
 	Silent []string `cbor:"37,keyasint,omitempty"`
 
 	// Unrevoked names the revocations that lost fork choice to a concurrent
@@ -159,6 +159,10 @@ type Derived struct {
 	// Devices are the members as the log lists them, for a caller who may
 	// read the status but not the log.
 	Devices []Device `cbor:"45,keyasint,omitempty"`
+
+	// Builds are what every member's announcement says of its juist, those
+	// the access policy keeps from Devices included.
+	Builds []Build `cbor:"86,keyasint,omitempty"`
 
 	// Refused is set when a member's log refused this device a catch-up and
 	// no member it tried has answered since: most likely it was removed.
@@ -322,6 +326,10 @@ type Tunnels struct {
 	Firewalled     string `cbor:"53,keyasint,omitempty"`
 	FirewallUnsure bool   `cbor:"54,keyasint,omitempty"`
 
+	// Unguarded says why the overlay's addresses are reachable by other
+	// devices than the tunnel, where the host would not keep them to it.
+	Unguarded string `cbor:"85,keyasint,omitempty"`
+
 	// RelayedFor is how many members this device's relay was found to
 	// serve: connected to it, or announcing it as their home. RelayUnreached
 	// says it has served none for minutes while a live peer is homed at no
@@ -370,27 +378,30 @@ func (s *Status) VouchAgain() string {
 }
 
 // ForReader is the status as a caller who may not operate sees it. It is an
-// allow-list: a field not copied here reaches operators only.
+// allow-list: a field not copied here reaches operators only. Other members
+// appear by pseudonym, and their identities not at all.
 func (s *Status) ForReader() Status {
+	p := pseudonyms{s.SelfName: s.SelfName}
 	return Status{
 		Self: s.Self, Addrs: s.Addrs, Network: s.Network,
 		Derived: Derived{
 			NetworkName: s.NetworkName, Head: s.Head, Epoch: s.Epoch, Schema: s.Schema,
 			Members: s.Members, Peers: s.Peers, Unreachable: s.Unreachable, Expired: s.Expired,
-			Silent: s.Silent, Unrevoked: s.Unrevoked, Lost: s.Lost, Refused: s.Refused, Overtaken: s.Overtaken, SelfName: s.SelfName,
+			Silent: p.all(s.Silent), Unrevoked: changes(s.Unrevoked), Lost: changes(s.Lost), Refused: s.Refused, Overtaken: s.Overtaken, SelfName: s.SelfName,
 			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
-			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, NoKey: s.NoKey,
-			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(),
+			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, NoKey: p.all(s.NoKey),
+			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(p),
 			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(), HTTPS: s.HTTPS.forReader(),
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
 		},
 		Tunnels: Tunnels{
-			TunnelsChecked: s.TunnelsChecked, TunnelsLive: s.TunnelsLive, TunnelsDown: s.TunnelsDown,
-			Reach: s.Reach, ReachChecked: s.ReachChecked, HomeRelay: s.HomeRelay,
-			Seeking: s.Seeking, Absent: s.Absent, NotAtRelay: s.NotAtRelay, SyncFailing: s.SyncFailing, SyncNewer: s.SyncNewer,
-			SyncBroken: s.SyncBroken, Outdated: s.Outdated, OlderBuild: s.OlderBuild, Firewalled: s.Firewalled,
-			FirewallUnsure: s.FirewallUnsure, RelayedFor: s.RelayedFor, RelayUnreached: s.RelayUnreached,
+			TunnelsChecked: s.TunnelsChecked, TunnelsLive: s.TunnelsLive, TunnelsDown: p.all(s.TunnelsDown),
+			Reach: p.reach(s.Reach), ReachChecked: s.ReachChecked, HomeRelay: p.of(s.HomeRelay),
+			Seeking: p.all(s.Seeking), Absent: p.all(s.Absent), NotAtRelay: p.all(s.NotAtRelay),
+			SyncFailing: p.all(s.SyncFailing), SyncNewer: p.all(s.SyncNewer),
+			SyncBroken: p.all(s.SyncBroken), Outdated: p.all(s.Outdated), OlderBuild: p.all(s.OlderBuild), Firewalled: s.Firewalled,
+			FirewallUnsure: s.FirewallUnsure, Unguarded: s.Unguarded, RelayedFor: s.RelayedFor, RelayUnreached: s.RelayUnreached,
 			RelayPort: s.RelayPort,
 		},
 		SyncInTunnel: s.SyncInTunnel, Rendezvous: s.Rendezvous,
@@ -401,6 +412,56 @@ func (s *Status) ForReader() Status {
 		Instance: s.Instance, HostConflict: s.HostConflict, Device: s.Device, V4Claims: coarseClaims(s.V4Claims),
 		DNSRoutingUnread: s.DNSRoutingUnread, DNSRefused: s.DNSRefused, DNSRefusedAt: s.DNSRefusedAt,
 	}
+}
+
+// pseudonyms name other members for a reader: "member 1" on, in the order
+// met, the same throughout one status and in no other.
+type pseudonyms map[string]string
+
+func (p pseudonyms) of(name string) string {
+	if name == "" {
+		return ""
+	}
+	if q, ok := p[name]; ok {
+		return q
+	}
+	q := "member " + strconv.Itoa(len(p))
+	p[name] = q
+	return q
+}
+
+func (p pseudonyms) all(names []string) []string {
+	if names == nil {
+		return nil
+	}
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = p.of(n)
+	}
+	return out
+}
+
+func (p pseudonyms) reach(rs []PeerReach) []PeerReach {
+	if rs == nil {
+		return nil
+	}
+	out := slices.Clone(rs)
+	for i := range out {
+		out[i].Identity, out[i].Relay = types.Identity{}, p.of(out[i].Relay)
+	}
+	return out
+}
+
+// changes is "a change" for each of names, which name members.
+func changes(names []string) []string {
+	if names == nil {
+		return nil
+	}
+	out := make([]string, len(names))
+	for i := range out {
+		out[i] = "a change"
+	}
+	return out
 }
 
 // coarseClaims is claims with each single address widened to the /22 it is
@@ -480,6 +541,12 @@ type Device struct {
 	// Build is the newest schema the member's juist implements, as its
 	// announcement says; zero where none says. [DevicesOf] leaves it unset.
 	Build types.SchemaVersion `cbor:"13,keyasint,omitempty"`
+}
+
+// A Build is the newest schema a member's juist implements.
+type Build struct {
+	Identity types.Identity      `cbor:"1,keyasint"`
+	Schema   types.SchemaVersion `cbor:"2,keyasint"`
 }
 
 // Exit is a device's use of exit nodes, and its serving as one.
@@ -692,13 +759,14 @@ func (s *Subnets) forReader() *Subnets {
 	return &r
 }
 
-// forReader is e without the other exit nodes, which only an operator lists.
-func (e *Exit) forReader() *Exit {
+// forReader is e without the other exit nodes, which only an operator lists,
+// and the one in use by pseudonym.
+func (e *Exit) forReader(p pseudonyms) *Exit {
 	if e == nil {
 		return nil
 	}
 	r := *e
-	r.Offering = nil
+	r.Offering, r.Node, r.Name = nil, types.Identity{}, p.of(e.Name)
 	return &r
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/nning/juist/internal/cliflag"
 	"github.com/nning/juist/internal/rendezvous"
 	"github.com/nning/juist/trust/log"
+	"github.com/nning/juist/types"
 )
 
 // errSilent reports a failure whose message has already been printed, so the
@@ -109,6 +110,10 @@ type app struct {
 	// drawV4 picks a new network's IPv4 prefix among those taken leaves;
 	// tests make it deterministic.
 	drawV4 func(taken func(netip.Prefix) bool) (netip.Prefix, error)
+
+	// genesisSchema, where set, is the schema a new network starts at in
+	// place of this build's; tests set an older one.
+	genesisSchema types.SchemaVersion
 
 	// admissionHold is how long a copy of an admission waits on the admin
 	// devices before its invite renews it; tests shorten it.
@@ -370,6 +375,7 @@ var shorts = map[string]byte{
 	"verbose":     'v',
 	"voucher":     'V',
 	"votes":       'v',
+	"when-ready":  'w',
 	"write":       'w',
 	"yes":         'y',
 }

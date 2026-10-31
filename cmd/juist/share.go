@@ -30,10 +30,10 @@ const maxShare = 7 * 24 * time.Hour
 
 func cmdShare(a *app, args []string) error {
 	s := spec{name: "juist share", args: "[FILE|DIR] | --stop [FILE|DIR|PORT|URL]", max: 1, about: `
-Share FILE or DIR read-only from the internet, under this device's own name
-and a random path, until Ctrl-C or --for; with --background, until juist
-share --stop. A directory is listed, and downloads whole as a ZIP. Without
-FILE or DIR, it lists this device's shares, juist publish PORT's too. The
+Share FILE or DIR read-only on the internet, under this device's own name
+and a random path, until Ctrl-C or --for. With --background, until juist
+share --stop. A directory is listed and downloads as a ZIP. Without FILE or
+DIR, list this device's shares, including those of juist publish PORT. The
 device needs the publish role.`}
 	fs := newFlags(s.name)
 	var dur longDuration
@@ -87,8 +87,8 @@ device needs the publish role.`}
 func publishPort(a *app, args []string) error {
 	s := spec{name: "juist publish", args: "PORT", min: 1, max: 1, about: `
 Publish the HTTP server on this host's PORT under this device's own name,
-until Ctrl-C or for --for; with --background, until juist share --stop or
---for. The device needs the publish role.`}
+until Ctrl-C or --for. With --background, until juist share --stop or --for.
+The device needs the publish role.`}
 	fs := newFlags(s.name)
 	var dur longDuration
 	fs.Var(&dur, "for", "publish for `DURATION`, like 2h or 7d")

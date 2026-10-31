@@ -110,17 +110,14 @@ mehrere davon in geschweiften Klammern. Ein Ziel ist eines davon oder:
   ein bestimmtes Gerät oder eine Tabelle;
 - eine Adresse oder ein Präfix hinter einem Subnet-Router, etwa
   `192.168.1.0/24` oder `192.168.1.20`;
-- `name photos`, ein [Name nur für Mitglieder]({{< relref "docs/publishing" >}}#names-for-members-alone),
-  angegeben über sein Label unter der Domain des Netzes, oder `name @` für
-  die Domain selbst. Die Regel erlaubt ihren Quellen, Port 443 per TCP und
-  UDP auf dem Gerät zu öffnen, das den Namen veröffentlicht und sein TLS
-  beendet, und zwar nur für diesen Namen. Ein Name nur für Mitglieder
-  braucht eine solche Regel: Eine Regel zu seinem Gerät oder zu `any` öffnet
-  den Port, aber nicht den Namen. Eine Regel mit `name` hat kein
-  weiteres Ziel und keinen Port. Nennt eine Regel einen öffentlichen, per
-  TLS veröffentlichten Namen, öffnet sie den Quellen ebenso den Port dieses
-  Namens auf seinem Gerät. Veröffentlicht später ein anderes Gerät den Namen,
-  öffnet die Regel stattdessen dieses.
+- `name photos`, ein veröffentlichter Name, angegeben über sein Label unter
+  der Domain des Netzes, oder `name @` für die Domain selbst. Die Regel öffnet
+  Port 443, TCP und UDP, auf dem Gerät, das den Namen veröffentlicht, und nur
+  für diesen Namen. Eine Regel mit `name` hat kein weiteres Ziel und keinen
+  Port. [Namen nur für Mitglieder]({{< relref "docs/members-only" >}})
+  brauchen eine solche Regel: Eine Regel zu ihrem Gerät oder zu `any` öffnet
+  den Port, aber nicht den Namen. Veröffentlicht später ein anderes Gerät den
+  Namen, folgt die Regel ihm.
 
 `proto` nimmt `tcp`, `udp`, `icmp` oder eine Liste in Klammern, `port` einen
 Port, einen Bereich wie `8000:8080` oder eine Liste. Eine Regel kann mehrere
@@ -129,11 +126,11 @@ lässt alles durch. Für Ping braucht es `proto icmp` oder eine Regel ohne
 Protokoll.
 
 Ein Test beginnt mit `test pass` oder `test block`. Er prüft eine Verbindung
-von einem Gerät zu genau einem Ziel: einem Gerät, `internet via` einem
-Exit-Node, einer Adresse oder einem Namen, den er ohne Port nennt. Mit
-Protokoll und Port prüft der Test genau diese Verbindung. Nennt er nur ein
-Protokoll, prüft er einen beliebigen Port davon, nennt er keins von beiden,
-ob überhaupt etwas durchgeht. `proto tcp` in einer Regel dagegen lässt jeden TCP-Port durch.
+von einem Gerät zu einem Ziel: einem Gerät, `internet via` einem Exit-Node,
+einer Adresse oder einem Namen ohne Port. Mit Protokoll und Port prüft er
+genau diese Verbindung, nur mit Protokoll einen beliebigen Port davon, ohne
+beides, ob überhaupt etwas durchgeht. `proto tcp` in einer Regel lässt
+dagegen jeden TCP-Port durch.
 
 Ein Gerätename, der ein Schlüsselwort der Sprache ist, etwa `test`, steht in
 doppelten Anführungszeichen: `"test"`. Innerhalb geschweifter Klammern und,
@@ -156,7 +153,7 @@ dafür nicht.
 - Ein Exit-Node leitet für ein Gerät nur weiter, was die Zugriffsregeln
   durchlassen. Darf ein Gerät einen Exit-Node nutzen, darf es auch dessen DNS
   nutzen. Ein Subnet-Router hält es mit seinem Subnetz genauso.
-- Ein [Service-Mitglied]({{< relref "docs/publishing" >}}) öffnet nichts,
+- Ein [Service-Mitglied]({{< relref "docs/service-member" >}}) öffnet nichts,
   egal was die Zugriffsregeln sagen. Ein Ingress erreicht, was auf einem
   Gerät veröffentlicht ist, ebenfalls unabhängig von den Regeln.
 - Zwei Geräte, die keine Regel in irgendeiner Richtung verbindet, sind keine
@@ -223,7 +220,7 @@ werden:
 Gib keinem CI-Job einen Admin-Schlüssel, der allein das Quorum erreicht.
 Sonst könnte jeder, der ins Repository pushen darf, das Netz ändern.
 
-## Hinweise
+## Gut zu wissen
 
 - `juist policy set` weist eine leere Datei ab; zurücknehmen kannst du die
   Zugriffsregeln mit `juist policy off`. Mit `pass from any to any` darf jedes

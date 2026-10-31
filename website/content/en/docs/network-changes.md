@@ -18,10 +18,10 @@ one. You need it when the network's range clashes with a LAN you use, or with
 [another network on the same device]({{< relref "docs/networks" >}}). IPv6
 addresses never change.
 
-Both are changes to the membership log, the signed list of every change that
-every device checks ([How juist works]({{< relref "docs/how-it-works" >}})).
-An admin makes them, and every device follows. If the quorum needs more than
-one admin, the change waits for the others
+Both are changes to the
+[membership log]({{< relref "docs/how-it-works" >}}#the-membership-log): an
+admin makes them, and every device follows. If the quorum needs more than one
+admin, the change waits for the others
 ([Several admins]({{< relref "docs/admins" >}})).
 
 ## Renaming the network
@@ -50,11 +50,10 @@ You specify the device as for `juist remove`: by name, address or key. juist
 refuses a name that another device already has, regardless of upper or lower
 case.
 
-A device that [shares files]({{< relref "docs/publishing" >}}) shares them
-under its new name, such as `tablet.pub.example.org`. For such a device, juist
-also refuses a name that another device publishes, a name the device itself
-already publishes or points at itself, and a name that is not a valid DNS
-label. A running `juist share` prints its new link.
+A device that [shares files]({{< relref "docs/sharing" >}}) shares them
+under its new name, such as `tablet.pub.example.org`. For such a device,
+juist also refuses a name that another device publishes or that is not a
+valid DNS label. A running `juist share` prints its new link.
 
 ## Moving every device's address
 
@@ -142,7 +141,7 @@ it, and its `juist status` then says `disabled`. To carry on, run
 Store the line separately from the admin keys: whoever gets a vault holding
 both can both govern the network and end it.
 
-## Notes
+## Good to know
 
 - Old IPv4 addresses keep working for 7 days by default. `--for 12h` or
   `--for 14d` sets a different period. Make it long enough for every device to

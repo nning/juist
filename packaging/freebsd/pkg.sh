@@ -1,6 +1,6 @@
 #!/bin/sh
 # pkg.sh GO OUT VERSION ABI BUILDDIR: build the FreeBSD package OUT for ABI,
-# as FreeBSD:14:amd64, from this tree, on any system and to the same bytes.
+# as FreeBSD:15:amd64, from this tree, on any system and to the same bytes.
 # The binaries are built in BUILDDIR where they run here, as "make build"
 # leaves them, and in BUILDDIR/freebsd-GOARCH elsewhere; go relinks neither
 # while it is up to date.

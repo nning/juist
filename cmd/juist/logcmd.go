@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/nning/juist/internal/changelog"
 	"github.com/nning/juist/internal/keys"
+	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
@@ -15,7 +17,7 @@ import (
 
 func logFamily() family {
 	return family{name: "juist log", intro: `Inspect the membership log: the signed, hash-chained record of every change,
-held and verified by each device.`, subs: []subcommand{
+which each device holds and verifies.`, subs: []subcommand{
 		{name: "show", run: logShow, forms: [][2]string{{"", "list the changes"},
 			{"show N|HASH", "what one change did, and who signed it; -1 is the last"}}},
 		{name: "verify", run: logVerify, forms: [][2]string{{"verify [FILE]", "re-verify the log, or check a change file"}}},
@@ -113,7 +115,7 @@ func findChange(entries []changelog.Entry, arg string) (int, error) {
 
 func logVerify(a *app, args []string) error {
 	s := spec{name: "juist log verify", args: "[FILE...]", max: -1, about: `
-Re-verify the stored log from its start, and that this device can open the
+Verify the stored log from its start, and that this device can open the
 group secret. With FILEs, say what each change needs and whether it applies.`}
 	files, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
@@ -191,45 +193,111 @@ group secret. With FILEs, say what each change needs and whether it applies.`}
 
 func logUpgrade(a *app, args []string) error {
 	s := spec{name: "juist log upgrade", about: `
-Raise the network to this build's record schema. Devices on older builds stop
-at the upgrade until updated: update them first; juist devices shows each
-one's schema.`}
+Raise the network to this build's record schema once every device's juist
+implements it, as juist devices shows. --force raises it anyway, and devices
+on older builds stop until updated. --when-ready, for a timer, raises it
+without asking once they do, and else does nothing.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
+	force := fs.Bool("force", false, "raise it although devices lag")
+	whenReady := fs.Bool("when-ready", false, "raise it without asking once every device is ready")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
+	}
+	if *force && *whenReady {
+		return fmt.Errorf("--force and --when-ready exclude each other\n%s", s.usage(fs))
 	}
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
 	}
-	cur := auth.State().Schema()
+	state := auth.State()
+	cur := state.Schema()
 	if cur >= types.CurrentSchema {
-		a.ok("unchanged: at %v", cur)
+		if !*whenReady {
+			a.ok("unchanged: at %v", cur)
+		}
 		return nil
 	}
 	to := types.CurrentSchema
-	a.warn("raising %v to %v; devices on older builds stop until updated", cur, to)
-	if err := a.proceed(*yes, "continue?"); err != nil {
-		return err
+	if !*force {
+		n, err := a.openNode()
+		if err != nil {
+			return err
+		}
+		st := liveStatus(n)
+		if st == nil || !st.InNetwork || st.NotMember {
+			return fmt.Errorf("no juistd of this network here says which schema each device implements\n" +
+				"hint: run it on a member, or raise it anyway: juist log upgrade --force")
+		}
+		if lag := unready(state, st, to); len(lag) > 0 {
+			if *whenReady {
+				return nil
+			}
+			return fmt.Errorf("not every device implements %v: %s\n"+
+				"hint: update them, or raise it anyway: juist log upgrade --force", to, strings.Join(lag, ", "))
+		}
 	}
 	aum, err := auth.Builder().SchemaUpgrade(to)
 	if err != nil {
 		return err
 	}
+	if *whenReady {
+		if _, err := a.signLocally(&aum, auth); err != nil {
+			return err
+		}
+		if len(aum.Signatures) > 0 && !state.SignatureStatus(&aum).Authorized() {
+			return fmt.Errorf("raising %v to %v needs other admins' votes\nhint: juist log upgrade", cur, to)
+		}
+	} else {
+		if *force {
+			a.warn("raising %v to %v; devices on older builds stop until updated", cur, to)
+		} else {
+			a.warn("raising %v to %v, which cannot be undone", cur, to)
+		}
+		if err := a.proceed(*yes, "continue?"); err != nil {
+			return err
+		}
+	}
 	_, err = a.submit(auth, &change{aum: aum, file: "schema-upgrade.rec", done: fmt.Sprintf("upgraded to %v", to)})
 	return err
 }
 
-// upgradeNote says the network's schema is below this build's, where a key
-// in this keystore is one of its admins'.
-func (a *app) upgradeNote(several bool) []line {
+// unready names the members whose juist st does not know to implement to,
+// expired ones included, as "nas (20)", or "phone (-)" where no announcement
+// says.
+func unready(state *log.State, st *ipc.Status, to types.SchemaVersion) []string {
+	builds := map[types.Identity]types.SchemaVersion{}
+	for _, d := range st.Devices {
+		builds[d.Identity] = d.Build
+	}
+	for _, b := range st.Builds {
+		builds[b.Identity] = b.Schema
+	}
+	var lag []string
+	for _, d := range byAddress(ipc.DevicesOf(state, 0)) {
+		b := builds[d.Identity]
+		if b >= to {
+			continue
+		}
+		said := "-"
+		if b != 0 {
+			said = strconv.Itoa(int(b))
+		}
+		lag = append(lag, fmt.Sprintf("%s (%s)", cmp.Or(d.Name, d.Identity.ShortString()), said))
+	}
+	return lag
+}
+
+// upgradeNote says that every device implements this build's schema, which
+// is above the network's, where a key in this keystore is one of its admins'.
+func (a *app) upgradeNote(st *ipc.Status, several bool) []line {
 	auth, err := a.networkLog()
 	if err != nil {
 		return nil
 	}
 	state := auth.State()
-	if state.Schema() >= types.CurrentSchema {
+	if state.Schema() >= types.CurrentSchema || len(unready(state, st, types.CurrentSchema)) > 0 {
 		return nil
 	}
 	files, err := a.home.adminKeyFiles()
@@ -243,13 +311,13 @@ func (a *app) upgradeNote(several bool) []line {
 	if several {
 		cmd += " " + a.network
 	}
-	return []line{{kind: lineHint, text: "once every device runs this version: " + cmd}}
+	return []line{{kind: lineHint, text: fmt.Sprintf("every device implements %v: %s", types.CurrentSchema, cmd)}}
 }
 
 func logCheckpoint(a *app, args []string) error {
 	s := spec{name: "juist log checkpoint", about: `
-Record the whole current state as one change, which every device checks
-against its own history. juist records one by itself every 256 changes.`}
+Record the whole current state as one change. Every device checks it against
+its own history. juist records one by itself every 256 changes.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}

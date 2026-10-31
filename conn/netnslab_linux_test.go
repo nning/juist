@@ -86,6 +86,8 @@ const (
 	dnsPort     = 41646
 	// envDNSListen is where the DNS helper answers.
 	envDNSListen = "JUIST_NETNS_DNS_LISTEN"
+	// envMulticast carries group datagrams, as [Options.Multicast].
+	envMulticast = "JUIST_NETNS_MULTICAST"
 
 	// protoPrefix marks the helper's protocol lines, so they are separable
 	// from the test framework's own output on the same stream.

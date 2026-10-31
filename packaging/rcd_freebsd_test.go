@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +14,31 @@ import (
 
 	"github.com/nning/juist/internal/plumber"
 )
+
+// instanceUser has the user an instance runs as, as the package makes it,
+// for the test where it is missing.
+func instanceUser(t *testing.T, name string) {
+	t.Helper()
+	if exec.Command("pw", "usershow", name).Run() == nil {
+		return
+	}
+	if out, err := exec.Command("pw", "useradd", name, "-d", "/var/db/"+name, "-s", "/usr/sbin/nologin").CombinedOutput(); err != nil {
+		t.Fatalf("pw useradd %s: %v\n%s", name, err, out)
+	}
+	t.Cleanup(func() { exec.Command("pw", "userdel", name).Run() })
+}
+
+// lookupIDs is name's uid and gid.
+func lookupIDs(t *testing.T, name string) (int, int) {
+	t.Helper()
+	u, err := user.Lookup(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	return uid, gid
+}
 
 func requireRoot(t *testing.T) {
 	t.Helper()
@@ -28,11 +54,12 @@ func requireRoot(t *testing.T) {
 // juistd_args gives, under daemon(8), and reports and stops it.
 func TestTheRCScriptRunsAnInstance(t *testing.T) {
 	requireRoot(t)
-	home := "/var/db/juist/juist9"
+	home := "/var/db/juist9"
 	if _, err := os.Stat(home); err == nil {
 		t.Skipf("%s is in use", home)
 	}
-	t.Cleanup(func() { os.Remove(home); os.Remove("/var/log/juistd.juist9.log") })
+	instanceUser(t, "juist9")
+	t.Cleanup(func() { os.Remove(home); os.Remove("/var/run/juist9"); os.Remove("/var/log/juistd.juist9.log") })
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args")
 	fake := filepath.Join(dir, "juistd")
@@ -55,7 +82,7 @@ func TestTheRCScriptRunsAnInstance(t *testing.T) {
 			break
 		}
 	}
-	want := "--instance juist9 --home /var/db/juist/juist9 --socket /var/run/juist/juist9.sock --verbose -f 72h"
+	want := "--instance juist9 --home /var/db/juist9 --socket /var/run/juist9/juistd.sock --verbose -f 72h"
 	if got := strings.TrimSpace(string(args)); got != want {
 		t.Errorf("juistd got %q, want %q", got, want)
 	}
@@ -116,7 +143,7 @@ func pfctl(args ...string) string {
 // host, a refusing guard among it, and puts forwarding and pf back as found.
 func TestTheRCScriptClearsWhatAJuistdLeft(t *testing.T) {
 	requireRoot(t)
-	if exec.Command("pgrep", "-q", "-x", "juistd").Run() == nil {
+	if exec.Command("pgrep", "-q", "-x", "juistd").Run() == nil || exec.Command("pgrep", "-q", "-F", "/var/run/juistd.pid").Run() == nil {
 		t.Skip("a juistd runs")
 	}
 	if _, err := os.Stat("/var/run/juistd.host"); err == nil {
@@ -158,39 +185,92 @@ func TestTheRCScriptClearsWhatAJuistdLeft(t *testing.T) {
 	}
 }
 
-// An instance's home, in the juist user's directory, is not followed as root
-// where that user made it a link: root's files stay root's.
-func TestAnInstanceHomeFollowsNoLink(t *testing.T) {
+// An instance's home moves out of the juist user's directory, where it was
+// kept before the instance had a user of its own, to one its user owns; a
+// link the juist user made there is neither moved nor followed as root.
+func TestAnInstanceHomeMovesOnceAndFollowsNoLink(t *testing.T) {
 	requireRoot(t)
-	home := "/var/db/juist/juist7"
-	if _, err := os.Lstat(home); err == nil {
-		t.Skipf("%s is in use", home)
+	for _, n := range []string{"juist6", "juist7"} {
+		for _, p := range []string{"/var/db/juist/" + n, "/var/db/" + n} {
+			if _, err := os.Lstat(p); err == nil {
+				t.Skipf("%s is in use", p)
+			}
+		}
+		instanceUser(t, n)
+		t.Cleanup(func() {
+			os.RemoveAll("/var/db/" + n)
+			os.Remove("/var/db/juist/" + n)
+			os.Remove("/var/run/" + n)
+			os.Remove("/var/log/juistd." + n + ".log")
+		})
+	}
+	if err := os.MkdirAll("/var/db/juist/juist6", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("/var/db/juist/juist6/node.keys", []byte("keys"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The juist user's, as the home was; and a hard link it planted there to
+	// root's file, as FreeBSD lets any user make, which keeps its owner.
+	juistUID, juistGID := lookupIDs(t, "juist")
+	for _, p := range []string{"/var/db/juist/juist6", "/var/db/juist/juist6/node.keys"} {
+		if err := os.Chown(p, juistUID, juistGID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rootsFile, err := os.CreateTemp("/var/db", "juist-test-roots")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootsFile.Close()
+	t.Cleanup(func() { os.Remove(rootsFile.Name()) })
+	if err := os.Link(rootsFile.Name(), "/var/db/juist/juist6/planted"); err != nil {
+		t.Fatal(err)
 	}
 	victim := t.TempDir()
 	if err := os.Chmod(victim, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(victim, home); err != nil {
+	if err := os.Symlink(victim, "/var/db/juist/juist7"); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Remove(home); os.Remove("/var/log/juistd.juist7.log") })
 	fake := filepath.Join(t.TempDir(), "juistd")
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	rc := func(verb string) {
-		cmd := exec.Command("/bin/sh", "freebsd/juistd", verb, "juist7")
+	rc := func(verb, n string) {
+		cmd := exec.Command("/bin/sh", "freebsd/juistd", verb, n)
 		cmd.Env = append(os.Environ(), "juistd_bin="+fake)
 		cmd.CombinedOutput()
 	}
-	rc("onestart")
-	rc("onestop")
+	for _, n := range []string{"juist6", "juist7"} {
+		rc("onestart", n)
+		rc("onestop", n)
+	}
+	if b, err := os.ReadFile("/var/db/juist6/node.keys"); err != nil || string(b) != "keys" {
+		t.Errorf("juist6's keys did not move: %v", err)
+	}
 	var st syscall.Stat_t
+	if err := syscall.Stat("/var/db/juist6/node.keys", &st); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := exec.Command("id", "-u", "juist6").Output(); strconv.Itoa(int(st.Uid)) != strings.TrimSpace(string(u)) {
+		t.Errorf("juist6's keys are uid %d's, not juist6's", st.Uid)
+	}
+	if err := syscall.Stat(rootsFile.Name(), &st); err != nil || st.Uid != 0 {
+		t.Errorf("root's file, linked into the home, became uid %d's: %v", st.Uid, err)
+	}
+	if _, err := os.Lstat("/var/db/juist/juist7"); err != nil {
+		t.Errorf("the link was moved: %v", err)
+	}
 	if err := syscall.Stat(victim, &st); err != nil {
 		t.Fatal(err)
 	}
 	if st.Uid != 0 || st.Mode&0o777 == 0o700 {
 		t.Errorf("the link's target became uid %d, mode %o", st.Uid, st.Mode&0o777)
+	}
+	if fi, err := os.Lstat("/var/db/juist7"); err != nil || !fi.IsDir() {
+		t.Errorf("juist7 has no home of its own: %v", err)
 	}
 }
 
