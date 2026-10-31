@@ -637,3 +637,57 @@ func TestNamesAreReadAsTheyMayBe(t *testing.T) {
 		t.Errorf("warnings %q", w)
 	}
 }
+
+// A pass multicast rule lets its sources send group datagrams to its
+// destinations, by UDP port where it names any, and nothing else; it reads
+// back as written, and makes the two peers.
+func TestAMulticastRulePassesGroupsAlone(t *testing.T) {
+	l := office()
+	src := "pass multicast from <staff> to { anna, nas } port { 1900, 5353 }\npass multicast from nas to ben\n" +
+		"\ntable <staff> { anna, ben }\n"
+	n := l.network(t, src)
+	want := "table <staff> { anna, ben }\n\npass multicast from <staff> to { anna, nas } port { 1900, 5353 }\npass multicast from nas to ben\n"
+	if got := Format(n.Policy, l.name); got != want {
+		t.Fatalf("formatted:\n%s\nwant:\n%s", got, want)
+	}
+	if err := n.Policy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	ben, nas := n.View(l.ids["ben"]), n.View(l.ids["nas"])
+	ports := []types.PortRange{{Proto: types.ProtoUDP, First: 1900, Last: 1900}, {Proto: types.ProtoUDP, First: 5353, Last: 5353}}
+	if got := ben.Out[l.ids["nas"]]; !reflect.DeepEqual(got.Multicast, ports) || len(got.Own) > 0 {
+		t.Errorf("ben may send nas %+v", got)
+	}
+	if got := ben.In[l.ids["nas"]].Multicast; !reflect.DeepEqual(got, []types.PortRange{{Proto: types.ProtoUDP}}) {
+		t.Errorf("ben takes %v from nas", got)
+	}
+	if got := nas.In[l.ids["ben"]].Multicast; !reflect.DeepEqual(got, ports) {
+		t.Errorf("nas takes %v from ben", got)
+	}
+	if !ben.Peers[l.ids["nas"]] || ben.Control[l.ids["nas"]] {
+		t.Error("ben does not peer nas")
+	}
+	if ok, _ := n.Explain(types.PolicyTest{From: l.ids["ben"], To: types.PolicyRefs{Nodes: []types.Identity{l.ids["nas"]}}}); ok {
+		t.Error("a multicast rule passes a connection")
+	}
+	for _, c := range []struct{ src, want string }{
+		{"pass multicast from ben to nas proto udp port 1900\n", "multicast is UDP alone: port needs no proto"},
+		{"pass multicast from ben to nas service web\nservice web = proto tcp port 80\n", "port needs no service"},
+		{"pass multicast from ben to internet\n", "multicast goes to devices alone"},
+		{"pass multicast from ben to 192.168.10.0/24\n", "multicast goes to devices alone"},
+		{"pass multicast from ben to nas port 0\n", "ports run 1 to 65535"},
+	} {
+		if _, err := Parse(c.src, l.resolve); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q: %v, want %q", c.src, err, c.want)
+		}
+	}
+	bad := &types.Policy{Rules: []types.PolicyRule{{Multicast: true, From: types.PolicyRefs{Any: true}, To: types.PolicyRefs{Any: true},
+		Ports: []types.PortRange{{Proto: types.ProtoTCP, First: 80, Last: 80}}}}}
+	if err := bad.Validate(); err == nil {
+		t.Error("a multicast rule on TCP is valid")
+	}
+	bad.Rules[0].Ports = []types.PortRange{{Proto: types.ProtoUDP}}
+	if err := bad.Validate(); err == nil {
+		t.Error("a multicast rule on port 0, which reads back as no rule, is valid")
+	}
+}

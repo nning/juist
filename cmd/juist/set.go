@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,8 @@ the device without sudo; run it as root. --operator="" clears it.
 --https-only sends only TLS to relays on 443, through --proxy if given.
 --relay-name serves this device's relay on 443 under a public name (default:
 relay.DOMAIN on the network's ingress). --dns=false leaves this host's DNS
-alone: no network names, and no DNS through an exit node.`}
+alone: no network names, and no DNS through an exit node. --multicast=false
+carries no discovery multicast; --groups routes IPv4 groups into the network.`}
 	fs := newFlags(s.name)
 	var op, proxy, relayName optionalString
 	fs.Var(&op, "operator", "local `USER` who manages this device")
@@ -31,11 +33,14 @@ alone: no network names, and no DNS through an exit node.`}
 	fs.Var(&proxy, "proxy", "HTTP proxy `URL` to reach them by, - to read it from stdin; \"\" for HTTPS_PROXY")
 	fs.Var(&relayName, "relay-name", "public `NAME` of this device's relay on 443")
 	dns := fs.Bool("dns", true, "take this host's DNS for the network's names and the exit node; =false leaves it alone")
+	multicast := fs.Bool("multicast", true, "carry discovery multicast, as mDNS and SSDP, to the members; =false carries none")
+	var groups optionalString
+	fs.Var(&groups, "groups", "IPv4 `GROUPS`, comma-separated, routed into the network; \"\" for none")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
-	setHTTPS, setDNS := cliflag.IsSet(fs, "https-only"), cliflag.IsSet(fs, "dns")
-	if !op.set && !setHTTPS && !proxy.set && !relayName.set && !setDNS {
+	setHTTPS, setDNS, setMulticast := cliflag.IsSet(fs, "https-only"), cliflag.IsSet(fs, "dns"), cliflag.IsSet(fs, "multicast")
+	if !op.set && !setHTTPS && !proxy.set && !relayName.set && !setDNS && !setMulticast && !groups.set {
 		a.help(s, fs, a.errOut)
 		return errSilent
 	}
@@ -45,6 +50,16 @@ alone: no network names, and no DNS through an exit node.`}
 	}
 	if setDNS {
 		req.DNS = dns
+	}
+	if setMulticast {
+		req.Multicast = multicast
+	}
+	if groups.set {
+		list, err := parseGroups(groups.value)
+		if err != nil {
+			return fmt.Errorf("--groups: %w", err)
+		}
+		req.Groups = &list
 	}
 	if proxy.set && proxy.value == "-" {
 		// Off the command line, which every user may read, and sudo logs.
@@ -92,7 +107,7 @@ alone: no network names, and no DNS through an exit node.`}
 			a.ok("operator %s", op.value)
 		}
 	}
-	if req.HTTPSOnly == nil && req.Proxy == nil && req.RelayName == nil && req.DNS == nil {
+	if !req.Settings() {
 		return nil
 	}
 	if err := a.requireOperator(); err != nil {
@@ -176,8 +191,20 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 	if req.DNS != nil {
 		a.ok("%s", map[bool]string{true: "dns on", false: "dns off"}[*req.DNS])
 	}
+	if req.Multicast != nil {
+		a.ok("%s", map[bool]string{true: "multicast on", false: "multicast off"}[*req.Multicast])
+	}
+	if req.Groups != nil {
+		if len(*req.Groups) == 0 {
+			a.ok("groups cleared")
+		} else {
+			a.ok("groups %s", strings.Join(*req.Groups, ", "))
+		}
+	}
 	switch {
 	case !st.InNetwork:
+	case req.Groups != nil && len(*req.Groups) > 0 && st.Multicast != nil && st.Multicast.Off:
+		a.hint("multicast is off, so no group is routed: juist set --multicast")
 	case h.Only && len(h.Relays) == 0:
 		a.warn("no relay on 443/tcp")
 		a.hint("a relay's operator names it there: juist set --relay-name NAME")
@@ -192,6 +219,28 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 	} else if h.NotAnnounced != "" {
 		a.warn("members are not told of %s: %s", *req.RelayName, h.NotAnnounced)
 	}
+}
+
+// parseGroups reads a comma-separated list of IPv4 multicast groups, none
+// for "".
+func parseGroups(list string) ([]string, error) {
+	out := []string{}
+	for _, f := range strings.Split(list, ",") {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		g, err := ipc.ParseGroup(f)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(out, g.String()) {
+			out = append(out, g.String())
+		}
+	}
+	if len(out) > ipc.MaxGroups {
+		return nil, fmt.Errorf("more than %d groups", ipc.MaxGroups)
+	}
+	return out, nil
 }
 
 // optionalString is a string flag that knows whether it was given, so that

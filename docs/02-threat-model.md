@@ -324,6 +324,16 @@ them by number.
    CGNAT pool), or from the member's own host, still closes a member's
    before it authenticates where that takes a round trip, as a catch-up
    does. A member whose hello comes at once is rarely held up.
+17. **Members are on one link for discovery (M25).** A member's UDP to a
+   multicast group, mDNS, SSDP and LLMNR among it, reaches every other
+   member's host, as a LAN neighbour's would:
+   it can answer for any name or service those protocols ask about, as a
+   printer or a media server, and a host that trusts a discovered service
+   trusts the member. Each datagram carries its sender's own address, so
+   the answer names who gave it; nothing but the sender's own address
+   passes, at most 100 datagrams a second from each. Under an access
+   policy only what a `pass multicast` rule passes crosses, with the
+   unicast answers to it for ten seconds.
 
 ## Security design rules derived from the above
 

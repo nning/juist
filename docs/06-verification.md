@@ -49,7 +49,7 @@ Targets, added the milestone their input surface appears:
 | Access policy text (`internal/policy` `FuzzParse`) | policy files | M14 |
 | Pair-key messages and store (`FuzzTake`, `FuzzDecodeStore`) | signed messages; the pairs file | M15 |
 | A host's DNS queries and its resolvers' answers (`internal/names` `FuzzAnswer`, `internal/dnsfwd` `FuzzForwarded`) | every program on the host, the Android app's phone among them; the network's resolvers | M23 |
-| Multicast from members (`conn` `FuzzUnwrapGroup`) | members' wrapped group datagrams | M25 |
+| Multicast from members (`conn` `FuzzUnwrapGroup`, `FuzzUnwrapGroup6`) | members' wrapped group datagrams | M25 |
 
 Open (M31): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`) and
 the root helper's protocol.

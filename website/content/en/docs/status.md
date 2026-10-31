@@ -32,6 +32,7 @@ home · connected
   Devices       3 others
   Relays        1 available, via vps
   Names         laptop.home.juist
+  Multicast     on
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
   Schema        20
@@ -80,6 +81,7 @@ The state on the first line is one of these:
 - `Relay name`: the public name this device's relay serves on port 443. Root and the operator also see whether it serves it yet.
 - `Exit node`: which device carries this device's internet traffic, if any. See [Exit nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: this device's own names, such as `laptop.home.juist`; `juist names` lists the network's, and `juist health` says why where they are not resolved. See [Names]({{< relref "docs/names" >}}).
+- `Multicast`: whether this device carries multicast to the members, and the groups it routes into the network. See [Multicast]({{< relref "docs/multicast" >}}).
 - `Freshness`: when a [voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
   last confirmed this device's view, and how long that stays valid. After 48
   hours without one, it reads `expired; vouchers only`, and `juist health`

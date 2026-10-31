@@ -121,6 +121,17 @@ port, a range such as `8000:8080`, or a list. A rule can have several
 `proto` clauses. A rule without `proto`, `port` or `service` passes
 everything. Ping needs `proto icmp`, or a rule without a protocol.
 
+`pass multicast from SOURCE to DESTINATION` passes
+[multicast]({{< relref "docs/multicast" >}}) from the sources to the
+destinations, and nothing else. Its destinations are devices, tables or
+`any`. A `port` limits it to those UDP ports, as in
+`pass multicast from <family> to <family> port 5353`; it needs no `proto`,
+since only UDP crosses. With a `port`, a datagram too large for one packet
+does not pass. The rule also passes the answers a destination
+sends straight back to a group datagram, as SSDP sends them. Rules that
+pass multicast need the network's schema 22, which
+[juist log upgrade]({{< relref "docs/updating" >}}) raises.
+
 A test starts with `test pass` or `test block`. It checks a connection from
 one device to one destination: a device, `internet via` one exit node, an
 address, or a name without a port. With a protocol and a port, it checks

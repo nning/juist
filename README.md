@@ -97,6 +97,7 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | remove a device, on every device at once | `juist remove phone` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
 | reach a device by name | `ssh laptop.home.juist`, or `ssh laptop` | [names](https://docs.juist.nning.io/en/docs/names/) |
 | leave this device's DNS alone, names and exit node alike | `sudo juist set --dns=false` | [names](https://docs.juist.nning.io/en/docs/names/) |
+| route a group, as SSDP's, into the network for programs on the default interface; or carry no multicast | `sudo juist set --groups 239.255.255.250`, `sudo juist set --multicast=false` | [multicast](https://docs.juist.nning.io/en/docs/multicast/) |
 | let a device with a public address relay for the others | `juist grant vps relay` | [relays](https://docs.juist.nning.io/en/docs/relays/) |
 | reach the network from a hotel or office that only lets HTTPS out | one relay on 443: the ingress's serves `relay.DOMAIN` by itself, another `sudo juist set --relay-name relay.example.org`; `sudo juist set --https-only` here where traffic is inspected | [HTTPS only](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |

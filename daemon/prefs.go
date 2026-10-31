@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"maps"
+	"net/netip"
 	"os"
 	"path/filepath"
 
@@ -47,6 +48,12 @@ type Prefs struct {
 	HTTPSOnly bool
 	Proxy     string
 	RelayName string
+
+	// MulticastOff has the device carry no multicast, and Groups are the
+	// IPv4 groups routed into it, as [conn.Options.Groups]. A running Daemon
+	// does not take them either.
+	MulticastOff bool
+	Groups       []netip.Addr
 }
 
 // LoadPrefs reads the settings kept in home, each in a file of its own,
@@ -70,6 +77,8 @@ func LoadPrefs(home string, logf func(string, ...any)) Prefs {
 	p.DNSOff = has(statedir.DNSOffFile)
 	p.ServePublished, p.ServeTo, p.ServeMembers = loadServeTo(home, logf)
 	p.HTTPSOnly, p.Proxy, p.RelayName = loadSettings(home, logf)
+	p.MulticastOff = has(statedir.MulticastOffFile)
+	p.Groups = loadGroups(home, logf)
 	return p
 }
 

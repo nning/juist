@@ -32,7 +32,7 @@ const (
 // and the node keys, for a reset of a home no daemon runs from.
 var StateFiles = []string{EndpointCacheFile, KeyringFile, PairsFile, LeaseFile, RelayCertFile, OperatorFile, WaitingFile, ExitFile, ServeFile,
 	SubnetsFile, SubnetServeFile, NamesFile, DNSOffFile, PublishServeFile, PublishToFile, HTTPSOnlyFile, ProxyFile, RelayNameFile,
-	RelayCertsDir}
+	RelayCertsDir, MulticastOffFile, GroupsFile}
 
 // ExitFile holds the exit node this device's owner chose, or "off"; without
 // it none was chosen. ServeFile, where it exists, is the operator's word that
@@ -69,6 +69,12 @@ const (
 	ProxyFile     = "proxy"
 	RelayNameFile = "relay-name"
 	RelayCertsDir = "relay-certs"
+
+	// MulticastOffFile, where it exists, is the owner's word that this
+	// device carries no multicast; GroupsFile holds the groups routed into
+	// its device, one a line.
+	MulticastOffFile = "multicast-off"
+	GroupsFile       = "multicast-groups"
 )
 
 // WaitingFile holds the changes waiting for votes a node holds, sealed to

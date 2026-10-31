@@ -70,7 +70,7 @@ FUZZLONGWORKERS ?= 4
 
 # The trusted computing base's core is held to a budget; audit-scope places
 # every package in or out of the audit (docs/06-verification.md §5, §6).
-TCB_BUDGET ?= 11000
+TCB_BUDGET ?= 11050
 
 .DEFAULT_GOAL := help
 

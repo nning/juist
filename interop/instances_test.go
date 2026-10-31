@@ -46,18 +46,19 @@ func instanceUsers(t *testing.T, fb, lx *vm) {
 }
 
 // secondOnPrevious makes a second network on v on the previous release, whose
-// instance keeps its home in the default's.
+// instance keeps its home in the default's before M24 and in its own from
+// M24 on.
 func secondOnPrevious(t *testing.T, v *vm) {
 	const env = "HOME=/tmp/second "
 	v.run(t, "mkdir -p /tmp/second")
 	t.Cleanup(func() { v.try(env+"juist reset second --force --yes", 2*time.Minute) })
 	v.run(t, env+"juist create second --device "+v.name+"2")
 	v.eventually(t, "running a second network, on the previous release", 2*time.Minute, "juist status", has("second"))
-	home := "/var/lib/juist/juist1"
+	dir := "/var/lib/"
 	if v.freebsd {
-		home = "/var/db/juist/juist1"
+		dir = "/var/db/"
 	}
-	v.run(t, "[ -f "+home+"/node.keys ]")
+	v.run(t, "[ -f "+dir+"juist/juist1/node.keys ] || [ -f "+dir+"juist1/node.keys ]")
 }
 
 // secondMoved is M24's upgrade of an instance: its home moved out of the

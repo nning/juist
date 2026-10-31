@@ -455,6 +455,20 @@ interop`).
 | a restricted router's other sources reach this node alone, and its ICMP errors are about what this node sent and addressed to it; a device that cannot make its address key withholds its addresses; juist policy test says which rule passes a connection, and a failing test which rule passes it; names are said by their line; warnings name devices in no rule, exit nodes and routers no rule uses, and a device's address for its name; remove says what the policy loses; devices --all lists every device | `conn`: `TestARoutersOtherSourcesReachThisNodeAlone`; `daemon`: `TestAddressesAreWithheldWithoutAKey`; `internal/policy`: `TestParseSaysWhatIsWrong`, `TestALineGoesOnAfterABackslash`, `TestTestsAreChecked`, `TestWarningsOfWhatIsUnused`, `TestDiff`; `cmd/juist`: `TestAPolicyIsAsked`, `TestRemovingADeviceSaysWhatThePolicyLoses`, `TestADeviceListsItsPeersAlone`, `TestAnInviteUnderAPolicySaysSo` | no |
 | tests are checked against the whole policy's view, at its limits in a moment; a failing test is said by its line; the invite's hint follows an admission alone; arguments of juist policy test that are no word go in quotes, and a character the text cannot hold is named whole; a relay or voucher alone is no device in no rule, and a warning is said once; the first policy is asked about, and approving without the log hints where names show | `internal/policy`: `TestTestsAreCheckedQuickly`, `TestTestLines`, `TestWords`, `TestADeviceNamedLikeAKeyword`, `TestWarningsOfCarriersAndRepeats`, `TestParseSaysWhatIsWrong`; `cmd/juist`: `TestABadPolicyIsRefused`, `TestTheFirstPolicyIsAskedAbout`, `TestAPolicyWaitsForVotes` | no |
 
+### Multicast
+
+| Claim | Where it is checked | Privileged |
+|---|---|---|
+| a group datagram sent on a member's device reaches the others' listeners from its overlay address, over IPv6 its link-local, full-sized too, directly and through a relay alone, and an answer goes back unicast to the link-local | `conn`: `TestNetnsAGroupDatagramReachesEveryMember`, `TestNetnsAGroupDatagramCrossesARelay`, `TestAGroupDatagramReachesEveryMember`, `TestAGroupDatagram6ReachesEveryMemberAndIsAnswered` | netns |
+| a wrapped packet is delivered only as juistd makes it, from a member without an access, its inner source the member's own, UDP to a group, IPv6 of link or site scope, without options or extension headers | `conn`: `TestOnlyAMembersOwnGroupDatagramUnwraps`, `TestOnlyAMembersOwnGroupDatagram6Unwraps`, `TestARestrictedPeerTakesNoPartInGroups`, `FuzzUnwrapGroup`, `FuzzUnwrapGroup6` | no |
+| a sender past the limit is cut at the receiver | `conn`: `TestAReceiverHoldsASenderToItsOwnAndToTheLimit` | no |
+| only this node's own group datagrams leave, no LAN host's, IGMP or MLD | `conn`: `TestOnlyThisNodesOwnGroupDatagramsAreSent`, `TestOnlyThisNodesOwnGroupDatagram6sAreSent`, `TestAGroupDatagramReachesEveryMember` | no |
+| a member's link-local is the overlay address's low half, neither's where two would share it, derived again with this node's addresses, kept out of the guard, routes and serving | `conn`: `TestALinkLocalIsTheOverlayAddresssLowHalf`, `TestALinkLocalTwoWouldShareIsNeithers`, `TestSetSelfDerivesThePeersLinkLocalsAgain`, `TestAPeerRegainingItsLinkLocalIsReachedAtIt`, `TestTheGuardTakesNoLinkLocal`, `TestAPlumbedRouterKeepsLinkLocalsToTheDevice`; `internal/plumber`: `TestALinkLocalAddressIsTheDevicesOwn`, `TestALinkLocalAddressGivenIsTheDevicesOnly` | FreeBSD root, in part |
+| a routed group reaches a listener on the default interface from a member's overlay address | `conn`: `TestNetnsARoutedGroupReachesTheDefaultInterface` | netns |
+| `juist set --multicast` and `--groups` are kept, refused whole where they cannot be set, said by the status, and taken by the mesh; a groups file is bounded | `daemon`: `TestMulticastSettingsAreKeptAndTaken`, `TestARefusedSettingSetsNothing`, `TestASettingNotWrittenUndoesTheOthers`, `TestASettingTheMeshDoesNotTakeRestartsNothing`, `TestGroupsKeptWithoutADeviceBlockNothing`, `TestAGroupsFileIsBounded`; `cmd/juist`: `TestStatusSaysMulticast`, `TestGroupsAreIPv4MulticastAlone` | no |
+| health warns where avahi runs and leaves the device out | `cmd/juist`: `TestHealthWarnsOfAvahiLeavingTheDeviceOut` | no |
+| under a policy, a group datagram goes only where a `pass multicast` rule passes it, by port, each way alone, its unicast answer for ten seconds, nothing from a member no rule passes; the rule reads back, needs schema 22, and reaches the data plane | `conn`: `TestAccessPassesGroupsAndTheirAnswersAlone`, `TestAnAccessDecidesEachWayAlone`, `TestAnAnswerPassesForItsWindow`, `TestAnAnswerLeavesAFlowItsReplies`, `TestOnePeersQuestionsCrowdOutNoOthers`, `TestEveryPortPassesFragments`, `TestAnAnswerIsThisNodesAlone`, `TestARestingPeerIsSentNoGroups`, `TestNothingWrappedForThisNodeReachesTheHost`; `cmd/juist`: `TestAMulticastPolicyAsksForTheUpgrade`; `internal/policy`: `TestAMulticastRulePassesGroupsAlone`; `trust/log`: `TestAMulticastPolicyNeedsSchema22`; `daemon`: `TestAMulticastRuleReachesTheDataPlane` | no |
+
 ### Android and battery
 
 | Claim | Where it is checked | Privileged |
@@ -502,6 +516,15 @@ The latest `make ci-vm` that closed a milestone, and the latest run of each
 gate it does not cover. Replace an entry when its gate runs again, so it is
 clear how old the evidence is.
 
+- **`make ci-vm`, 2026-10-31, M25 done**, at M25: every stage passed
+  in 36m41s, the privileged tests in 2m53s, `test-race` in 10m29s, and the
+  lab in 29m48s, the multicast netns tests and the upgrade from M24, at
+  schema 21, to this build with multicast on among it. The run before, at
+  M25, failed in that upgrade, which looked for a second network's home
+  where releases before M24 keep it; M25 takes either. At b168780, M25
+  review 5, the lab's `access_policy` failed once, east reaching no relay
+  as it started, and passed whole on the same commit run again. `make
+  test-freebsd` did not run on M25: the 15.1 VM here was gone.
 - **`make ci-vm`, 2026-10-31, M24 done**, at M24: every stage passed
   in 36m8s, the privileged tests in 2m53s, `test-race` in 10m4s, and the
   lab, on FreeBSD 15.1, in 33m4s, a user per network and the LAN kept from
@@ -512,18 +535,6 @@ clear how old the evidence is.
   after ten lab runs in a row at M24 where hotel met lx within 25 to
   37 s. `make test-freebsd` passed all 54 packages on the 15.1 VM at
   M24.
-- **`make ci-vm`, 2026-10-24, M23 done**, run as M23: every stage
-  passed in 29m11s, the privileged tests in 2m56s, `test-race` in 9m55s, and
-  the lab's two pairs in 26m26s, exit nodes and names among them; at M23,
-  M23 under way, in 31m54s. The run closing M22, at M22, passed in
-  28m24s, and in the nine lab runs before it the hotel met a member at an
-  unnamed relay without `--https-only` within 21 s to 2m31s, mostly under
-  40 s. A `make check` here before M23 failed in
-  `TestCopiesAKeyMintsDoNotDecideForkChoice`, which drew one key's removal
-  for the whole run and so looped past 15 minutes where it sorted low; it
-  draws the key anew each try since M23. The run closing M20, at
-  708c455, passed in 16m46s, and a failure planted in each stage ended the
-  run in it (roadmap, M20).
 - **FreeBSD 15.1, 2026-10-30, at the commit making it the target**:
   `make test-freebsd` passed all 54 packages on a 15.1 VM, after it had shown
   `pfctl -F all` failing in an anchor; `make repro-freebsd` made the same

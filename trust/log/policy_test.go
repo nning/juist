@@ -128,3 +128,18 @@ func TestAnEmptyPolicyWithdrawsIt(t *testing.T) {
 		t.Fatalf("with its one member removed, the policy is %+v, want one passing nothing", p)
 	}
 }
+
+// A policy passing multicast needs schema 22, which older builds' strict
+// decoders stop at; the upgrade to it is what allows it.
+func TestAMulticastPolicyNeedsSchema22(t *testing.T) {
+	h := newHarnessWith(t, 1, 1, func(s *types.Snapshot) { s.Schema = 21 })
+	nas := h.addNode("nas")
+	policy := &types.Policy{Rules: []types.PolicyRule{{Multicast: true,
+		From: types.PolicyRefs{Any: true}, To: types.PolicyRefs{Nodes: []types.Identity{nas.Identity}}}}}
+	h.mustReject("a multicast policy at schema 21", RuleState, h.signed(types.AUM{Kind: types.KindSetPolicy, Policy: policy}))
+	h.apply(h.auth.Builder().SchemaUpgrade(22))
+	h.apply(h.auth.Builder().SetPolicy(policy))
+	if !h.auth.State().Policy().PassesMulticast() {
+		t.Fatal("the state holds no multicast rule")
+	}
+}

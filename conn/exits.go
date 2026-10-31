@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"go4.org/netipx"
+	"tailscale.com/net/packet"
 	"tailscale.com/net/tsaddr"
 	"tailscale.com/types/ipproto"
 	"tailscale.com/types/key"
@@ -62,7 +63,21 @@ func (m *tsManager) filter() (*filter.Filter, error) {
 	// Sharing state with the previous filter carries the flow-tracking cache
 	// across rebuilds, so a membership change does not send every established
 	// UDP flow back through the slow path. Nil on the first build.
-	return filter.New(matches, nil, ls, ls, m.eng.GetFilter(), m.logf), nil
+	f := filter.New(matches, nil, ls, ls, m.eng.GetFilter(), m.logf)
+	// The filter drops link-local unicast but to the link-local addresses
+	// members hold, as [Options.Multicast] gives them.
+	var held []netip.Addr
+	for _, pfx := range slices.Concat(m.self.Addrs, srcs) {
+		if pfx.Addr().IsLinkLocalUnicast() {
+			held = append(held, pfx.Addr())
+		}
+	}
+	if len(held) > 0 {
+		f.LinkLocalAllowHooks = []filter.PacketMatch{func(p packet.Parsed) (bool, string) {
+			return slices.Contains(held, p.Dst.Addr()), "a member's link-local"
+		}}
+	}
+	return f, nil
 }
 
 // refilter builds the packet filter again, where this node serves as an exit

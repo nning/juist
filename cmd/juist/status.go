@@ -514,6 +514,16 @@ func (r *statusRender) served() {
 		}
 		r.v.notes = append(r.v.notes, namesNotes(s.Names)...)
 	}
+	if m := s.Multicast; m != nil {
+		switch {
+		case m.Off:
+			r.field("Multicast", "off")
+		case len(m.Groups) > 0:
+			r.field("Multicast", "on, routed: %s", strings.Join(m.Groups, ", "))
+		default:
+			r.field("Multicast", "on")
+		}
+	}
 }
 
 func (r *statusRender) renumbering() {

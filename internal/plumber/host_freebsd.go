@@ -164,15 +164,72 @@ func (FreeBSD) AddAddr(dev string, p netip.Prefix) error {
 		// A point-to-point address to itself, as Tailscale sets it.
 		return run("/sbin/ifconfig", dev, "inet", a+"/32", a, "alias")
 	}
+	if p.Addr().IsLinkLocalUnicast() {
+		return onlyLinkLocal(dev, p.Addr())
+	}
 	return run("/sbin/ifconfig", dev, "inet6", a, "prefixlen", strconv.Itoa(p.Bits()), "alias")
 }
 
 func (FreeBSD) DelAddr(dev string, p netip.Prefix) error {
-	fam := "inet"
+	fam, a := "inet", p.Addr().String()
 	if p.Addr().Is6() {
 		fam = "inet6"
 	}
-	return run("/sbin/ifconfig", dev, fam, p.Addr().String(), "-alias")
+	if p.Addr().IsLinkLocalUnicast() {
+		// Gone already where another took its place.
+		if !holds(dev, p.Addr()) {
+			return nil
+		}
+		a += "%" + dev
+	}
+	return run("/sbin/ifconfig", dev, fam, a, "-alias")
+}
+
+// holds reports whether dev holds a.
+func holds(dev string, a netip.Addr) bool {
+	ifc, err := net.InterfaceByName(dev)
+	if err != nil {
+		return false
+	}
+	addrs, _ := ifc.Addrs()
+	for _, ad := range addrs {
+		if ipn, ok := ad.(*net.IPNet); ok {
+			if b, ok := netip.AddrFromSlice(ipn.IP); ok && b.Unmap() == a {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// onlyLinkLocal has dev hold ll as its one link-local address, on-link for
+// the members' others: the kernel gives it one of its own otherwise, which
+// the host would send from. Without DAD, which a tunnel has no use for and
+// which leaves the address unusable until done.
+func onlyLinkLocal(dev string, ll netip.Addr) error {
+	if err := run("/sbin/ifconfig", dev, "inet6", "-auto_linklocal", "no_dad"); err != nil {
+		return err
+	}
+	ifc, err := net.InterfaceByName(dev)
+	if err != nil {
+		return err
+	}
+	addrs, err := ifc.Addrs()
+	if err != nil {
+		return err
+	}
+	for _, ad := range addrs {
+		ipn, ok := ad.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if a, ok := netip.AddrFromSlice(ipn.IP); ok && a.IsLinkLocalUnicast() && a != ll {
+			if err := run("/sbin/ifconfig", dev, "inet6", a.String()+"%"+dev, "-alias"); err != nil {
+				return err
+			}
+		}
+	}
+	return run("/sbin/ifconfig", dev, "inet6", ll.String()+"%"+dev, "prefixlen", "64", "alias")
 }
 
 // AddRoute routes p into dev by a message to the routing socket, which a

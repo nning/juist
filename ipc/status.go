@@ -251,6 +251,10 @@ type Derived struct {
 	// HTTPS is this device's use of 443/tcp; nil where none.
 	HTTPS *HTTPS `cbor:"72,keyasint,omitempty"`
 
+	// Multicast is whether the device carries multicast, nil where it has
+	// no device of its own to.
+	Multicast *Multicast `cbor:"87,keyasint,omitempty"`
+
 	// NotMember is set when this device is no longer in the member set. The
 	// daemon has torn its own data plane down.
 	NotMember bool `cbor:"16,keyasint,omitempty"`
@@ -393,6 +397,7 @@ func (s *Status) ForReader() Status {
 			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, NoKey: p.all(s.NoKey),
 			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(p),
 			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(), HTTPS: s.HTTPS.forReader(),
+			Multicast:      s.Multicast,
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
 		},
 		Tunnels: Tunnels{
@@ -809,3 +814,10 @@ const ErrNothingStaged = "no rotation of this device's keys is waiting"
 // ErrStillMember is the text of [CmdReset]'s refusal for a device the log
 // still lists, which the CLI recognizes.
 const ErrStillMember = "this device is still a member of its network"
+
+// Multicast is a device's carrying of multicast: off by its owner's word, or
+// on, with the IPv4 groups routed into the device.
+type Multicast struct {
+	Off    bool     `cbor:"1,keyasint,omitempty"`
+	Groups []string `cbor:"2,keyasint,omitempty"`
+}

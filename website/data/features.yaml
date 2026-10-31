@@ -38,6 +38,10 @@
   en: {title: Subnet routers, text: "The LAN behind one member, reachable from the others."}
   de: {title: Subnet-Router, text: "Das LAN hinter einem Mitglied, erreichbar für die anderen."}
   uses: [docs/use/home-lan]
+- doc: docs/multicast
+  en: {title: Multicast, text: "Printers, media servers and LAN games find the members by mDNS, SSDP or their own groups, as on one LAN."}
+  de: {title: Multicast, text: "Drucker, Medienserver und LAN-Spiele finden die Mitglieder per mDNS, SSDP oder eigenen Gruppen, wie in einem LAN."}
+  note: {en: "On Linux and FreeBSD, not in the Android app; groups routed into the network on Linux.", de: "Unter Linux und FreeBSD, nicht in der Android-App; Gruppen ins Netz leiten nur unter Linux."}
 - doc: docs/names
   en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
   de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}

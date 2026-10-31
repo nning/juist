@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/tailscale/netlink"
+	"github.com/tailscale/netlink/nl"
 	"github.com/tailscale/wireguard-go/tun"
 	"go4.org/netipx"
 	"golang.org/x/sys/unix"
@@ -136,6 +137,9 @@ type linuxRouter struct {
 	// inOwn and inPeers are what the in table guards, where inInstalled.
 	inOwn, inPeers []netip.Addr
 	inInstalled    bool
+	// ownLinkLocal says the kernel was told to give the device no
+	// link-local address of its own.
+	ownLinkLocal bool
 }
 
 func newOSRouter(logf logger.Logf, dev tun.Device, mon *netmon.Monitor, _ *health.Tracker, bus *eventbus.Bus,
@@ -209,6 +213,34 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 	}
 	r.routes = reconcile(r.routes, usable(cfg.Routes, v6, true), r.addRoute, r.delRoute, &errs)
 	r.addrs = reconcile(r.addrs, addrs, r.addAddr, r.delAddr, &errs)
+	if slices.ContainsFunc(addrs, func(p netip.Prefix) bool { return p.Addr().IsLinkLocalUnicast() }) {
+		errs = append(errs, r.onlyLinkLocalLocked())
+	}
+	return errors.Join(errs...)
+}
+
+// onlyLinkLocalLocked leaves the device the link-local address it was given
+// alone: the kernel gives a device without a hardware address a random one,
+// which the host would send from as well.
+func (r *linuxRouter) onlyLinkLocalLocked() error {
+	var errs []error
+	if !r.ownLinkLocal {
+		if err := addrGenModeNone(r.link); err != nil {
+			errs = append(errs, fmt.Errorf("leaving %s no link-local address of its own: %w", r.link.Attrs().Name, err))
+		} else {
+			r.ownLinkLocal = true
+		}
+	}
+	have, err := netlink.AddrList(r.link, netlink.FAMILY_V6)
+	if err != nil {
+		return errors.Join(append(errs, fmt.Errorf("listing %s's addresses: %w", r.link.Attrs().Name, err))...)
+	}
+	for _, a := range have {
+		p, ok := netipx.FromStdIPNet(a.IPNet)
+		if ok && p.Addr().IsLinkLocalUnicast() && !r.addrs[p] {
+			errs = append(errs, r.delAddr(p))
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -397,4 +429,18 @@ func (r *linuxRouter) onRuleDeleted(pref uint32) {
 			}
 		}
 	})
+}
+
+// addrGenModeNone has the kernel generate no IPv6 address for link, as ip
+// link set addrgenmode none does; by netlink, since juistd writes no sysctls.
+func addrGenModeNone(link netlink.Link) error {
+	req := nl.NewNetlinkRequest(unix.RTM_SETLINK, unix.NLM_F_ACK)
+	msg := nl.NewIfInfomsg(unix.AF_UNSPEC)
+	msg.Index = int32(link.Attrs().Index)
+	req.AddData(msg)
+	spec := nl.NewRtAttr(unix.IFLA_AF_SPEC, nil)
+	spec.AddRtAttr(unix.AF_INET6, nil).AddRtAttr(unix.IFLA_INET6_ADDR_GEN_MODE, []byte{1}) // IN6_ADDR_GEN_MODE_NONE
+	req.AddData(spec)
+	_, err := req.Execute(unix.NETLINK_ROUTE, 0)
+	return err
 }

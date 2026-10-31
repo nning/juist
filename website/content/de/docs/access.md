@@ -125,6 +125,17 @@ Port, einen Bereich wie `8000:8080` oder eine Liste. Eine Regel kann mehrere
 lässt alles durch. Für Ping braucht es `proto icmp` oder eine Regel ohne
 Protokoll.
 
+`pass multicast from QUELLE to ZIEL` lässt
+[Multicast]({{< relref "docs/multicast" >}}) von den Quellen zu den Zielen
+durch, und sonst nichts. Ziele sind Geräte, Tabellen oder `any`. Ein `port`
+beschränkt die Regel auf diese UDP-Ports, etwa
+`pass multicast from <familie> to <familie> port 5353`. Sie braucht kein
+`proto`, denn nur UDP geht hinüber. Mit `port` geht ein Datagramm, das nicht
+in ein Paket passt, nicht durch. Die Regel lässt auch die Antworten durch,
+die ein Ziel direkt auf ein Gruppen-Datagramm zurückschickt, wie SSDP es tut.
+Regeln mit Multicast brauchen Schema 22 des Netzes, das
+[juist log upgrade]({{< relref "docs/updating" >}}) anhebt.
+
 Ein Test beginnt mit `test pass` oder `test block`. Er prüft eine Verbindung
 von einem Gerät zu einem Ziel: einem Gerät, `internet via` einem Exit-Node,
 einer Adresse oder einem Namen ohne Port. Mit Protokoll und Port prüft er

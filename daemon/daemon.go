@@ -772,6 +772,7 @@ func New(opts Options) (*Daemon, error) {
 		Instance:  opts.Instance,
 		STUN:      opts.STUN,
 		HTTPSOnly: opts.HTTPSOnly,
+		Multicast: carriesMulticast(opts),
 		Proxy:     d.proxyFor,
 		Logf:      d.logf,
 		// The home relay and the reflexive addresses both belong in this
@@ -781,6 +782,9 @@ func New(opts Options) (*Daemon, error) {
 		OnInterfacesChange:   d.interfacesChanged,
 		// A subnet a route of the host's now holds is given back at once.
 		OnHostRoutesChange: d.MarkDirty,
+	}
+	if connOpts.Multicast && routesGroups(opts) {
+		connOpts.Groups = opts.Groups
 	}
 	mgr, err := onPortOrAny(d, opts.ListenPort, conn.ErrPortTaken, "UDP", func(port uint16) (conn.Manager, error) {
 		o := connOpts

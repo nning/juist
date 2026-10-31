@@ -60,3 +60,38 @@ func TestAPlumbedRouterAddsAddressesBeforeRoutes(t *testing.T) {
 		}
 	}
 }
+
+// specPlumber records the routes and serve spec it is given.
+type specPlumber struct {
+	orderPlumber
+	routes []netip.Prefix
+	serve  plumber.ServeSpec
+}
+
+func (p *specPlumber) SetRoutes(_ string, r []netip.Prefix, _ netip.Addr) error {
+	p.routes = r
+	return nil
+}
+func (p *specPlumber) SetServe(_ string, s plumber.ServeSpec) error { p.serve = s; return nil }
+
+// A link-local address goes on the device alone: no route names one, and
+// serving, whose addresses the helper takes from the overlay alone, is told
+// of none.
+func TestAPlumbedRouterKeepsLinkLocalsToTheDevice(t *testing.T) {
+	p := &specPlumber{}
+	r := &plumbedRouter{p: p, dev: "juist0", done: make(chan struct{})}
+	self := withLinkLocal([]netip.Prefix{netip.MustParsePrefix("100.64.0.1/32"), netip.MustParsePrefix("fd7a:115c:a1e0::1/128")})
+	peer := withLinkLocal([]netip.Prefix{netip.MustParsePrefix("100.64.0.2/32"), netip.MustParsePrefix("fd7a:115c:a1e0::2/128")})
+	if err := r.Set(&router.Config{LocalAddrs: self, Routes: peer}); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(p.routes, func(q netip.Prefix) bool { return q.Addr().IsLinkLocalUnicast() }) {
+		t.Errorf("routes %v name a link-local address", p.routes)
+	}
+	if err := r.setServe(Serve{Sources: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/24")}, Routes: Internet(true, true, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.serve.Addrs) == 0 || slices.ContainsFunc(p.serve.Addrs, netip.Addr.IsLinkLocalUnicast) {
+		t.Errorf("serving is told of %v", p.serve.Addrs)
+	}
+}

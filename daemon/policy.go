@@ -70,7 +70,8 @@ func (ap *accessPlan) access(n *types.NodeRecord, ep gossip.Endpoint) *conn.Acce
 		return nil
 	}
 	in, out := ap.view.In[n.Identity], ap.view.Out[n.Identity]
-	a := &conn.Access{Open: append(ports(in.Own), own...), Sends: append(ports(out.Own), theirs...)}
+	a := &conn.Access{Open: append(ports(in.Own), own...), Sends: append(ports(out.Own), theirs...),
+		GroupsFrom: ports(in.Multicast), GroupsTo: ports(out.Multicast)}
 	if len(in.Exit) > 0 && ap.internet != nil {
 		for _, p := range ap.internet {
 			a.Through = append(a.Through, conn.Through{Prefix: p, Ports: ports(in.Exit)})

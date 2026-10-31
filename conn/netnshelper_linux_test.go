@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"tailscale.com/net/stun"
 	"tailscale.com/types/ipproto"
 
@@ -109,6 +111,7 @@ func TestHelperNetnsNode(t *testing.T) {
 		TunName:    tunName,
 		Instance:   inst,
 		Multicast:  os.Getenv(envMulticast) != "",
+		Groups:     groupsOf(t, os.Getenv(envGroups)),
 		Debug:      os.Getenv(envDebug) != "",
 		// Engine logs go to stderr as they happen. The test framework's own
 		// log buffers until the test ends, which is far too late to explain a
@@ -211,7 +214,8 @@ func TestHelperNetnsNode(t *testing.T) {
 		say("%s", relayLine)
 	}
 	streams := map[string]*heldStream{}
-	var heard *groupListener
+	groups := &groupLab{tun: os.Getenv(envTun)}
+	defer groups.close()
 	var psk [32]byte
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
@@ -250,9 +254,16 @@ func TestHelperNetnsNode(t *testing.T) {
 			say("OK")
 			continue
 		}
-		if size, ok := strings.CutPrefix(cmd, "SEND "); ok {
-			if err := sendGroup(os.Getenv(envTun), mustAtoi(t, size)); err != nil {
-				t.Fatalf("SEND: %v", err)
+		if rest, ok := strings.CutPrefix(cmd, "SEND "); ok {
+			if err := groups.send(strings.Fields(rest)); err != nil {
+				t.Fatalf("SEND %s: %v", rest, err)
+			}
+			say("OK")
+			continue
+		}
+		if rest, ok := strings.CutPrefix(cmd, "JOIN "); ok {
+			if err := groups.join(strings.Fields(rest)); err != nil {
+				t.Fatalf("JOIN %s: %v", rest, err)
 			}
 			say("OK")
 			continue
@@ -369,14 +380,10 @@ func TestHelperNetnsNode(t *testing.T) {
 				t.Fatalf("SetPeers(none): %v", err)
 			}
 			say("OK")
-		case "JOIN":
-			if heard, err = joinGroup(os.Getenv(envTun)); err != nil {
-				t.Fatalf("JOIN: %v", err)
-			}
-			defer heard.close()
-			say("OK")
 		case "HEARD":
-			say("HEARD %s", heard.heard())
+			say("HEARD %s", groups.heard.list())
+		case "ANSWERS":
+			say("ANSWERS %s", groups.answers.list())
 		case "HOSTROUTES":
 			// How often the host's own routes were seen to change.
 			say("HOSTROUTES %d", hostRouteChanges.Load())
@@ -774,32 +781,75 @@ func (h *heldStream) stat() string {
 	return fmt.Sprintf("%d %d %s", h.echoed, gap.Milliseconds(), why)
 }
 
-// testGroup is where the lab's group datagrams go: mDNS's group, on a port
-// of its own.
-var testGroup = netip.MustParseAddrPort("224.0.0.251:45353")
+// testGroup and testGroup6 are where the lab's group datagrams go: mDNS's
+// groups, on a port of their own.
+var (
+	testGroup  = netip.MustParseAddrPort("224.0.0.251:45353")
+	testGroup6 = netip.MustParseAddrPort("[ff02::fb]:45353")
+)
 
-// A groupListener records the group datagrams a device delivers, each as
+// A groupLab sends group datagrams and listens for them, each heard as
 // source/size.
-type groupListener struct {
-	c    *net.UDPConn
-	mu   sync.Mutex
-	seen []string
+type groupLab struct {
+	tun            string
+	heard, answers seen
+	senders        map[string]*net.UDPConn
+	listeners      []*net.UDPConn
 }
 
-func joinGroup(dev string) (*groupListener, error) {
+type seen struct {
+	mu    sync.Mutex
+	items []string
+}
+
+func (s *seen) add(from netip.AddrPort, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items = append(s.items, fmt.Sprintf("%v/%d", from.Addr().Unmap().WithZone(""), n))
+}
+
+func (s *seen) list() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.items, ",")
+}
+
+// join listens for the group of family 4 or 6, joined on the device or dev,
+// and with "answer" answers each datagram unicast.
+func (g *groupLab) join(args []string) error {
+	if len(args) < 1 {
+		return errors.New("JOIN 4|6 [DEV] [answer]")
+	}
+	group, network := testGroup, "udp4"
+	if args[0] == "6" {
+		group, network = testGroup6, "udp6"
+	}
+	dev, answer := g.tun, false
+	for _, a := range args[1:] {
+		if a == "answer" {
+			answer = true
+		} else {
+			dev = a
+		}
+	}
 	ifi, err := net.InterfaceByName(dev)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	c, err := net.ListenUDP("udp4", &net.UDPAddr{Port: int(testGroup.Port())})
+	c, err := net.ListenUDP(network, &net.UDPAddr{Port: int(group.Port())})
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := ipv4.NewPacketConn(c).JoinGroup(ifi, &net.UDPAddr{IP: testGroup.Addr().AsSlice()}); err != nil {
+	if group.Addr().Is4() {
+		err = ipv4.NewPacketConn(c).JoinGroup(ifi, &net.UDPAddr{IP: group.Addr().AsSlice()})
+	} else {
+		err = ipv6.NewPacketConn(c).JoinGroup(ifi, &net.UDPAddr{IP: group.Addr().AsSlice()})
+	}
+	if err != nil {
 		c.Close()
-		return nil, err
+		return err
 	}
-	l := &groupListener{c: c}
+	g.listeners = append(g.listeners, c)
 	go func() {
 		b := make([]byte, 1<<16)
 		for {
@@ -807,43 +857,93 @@ func joinGroup(dev string) (*groupListener, error) {
 			if err != nil {
 				return
 			}
-			l.mu.Lock()
-			l.seen = append(l.seen, fmt.Sprintf("%v/%d", from.Addr().Unmap(), n))
-			l.mu.Unlock()
+			g.heard.add(from, n)
+			if answer {
+				c.WriteToUDPAddrPort([]byte("answer"), from)
+			}
 		}
 	}()
-	return l, nil
+	return nil
 }
 
-func (l *groupListener) heard() string {
-	if l == nil {
-		return ""
+// send sends size bytes to the group of family 4 or 6, on the device, or
+// with "routed" where the host's routes say, as mDNS does: hop limit 255.
+// Answers to it are kept.
+func (g *groupLab) send(args []string) error {
+	if len(args) < 2 {
+		return errors.New("SEND 4|6 SIZE [routed]")
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return strings.Join(l.seen, ",")
-}
-
-func (l *groupListener) close() { l.c.Close() }
-
-// sendGroup sends size bytes to testGroup on dev, as mDNS does: TTL 255.
-func sendGroup(dev string, size int) error {
-	ifi, err := net.InterfaceByName(dev)
+	size, err := strconv.Atoi(args[1])
 	if err != nil {
 		return err
 	}
-	c, err := net.ListenUDP("udp4", nil)
-	if err != nil {
-		return err
+	routed := len(args) > 2 && args[2] == "routed"
+	group, network := testGroup, "udp4"
+	if args[0] == "6" {
+		group, network = testGroup6, "udp6"
 	}
-	defer c.Close()
-	p := ipv4.NewPacketConn(c)
-	if err := p.SetMulticastInterface(ifi); err != nil {
-		return err
+	key := args[0] + strconv.FormatBool(routed)
+	if g.senders == nil {
+		g.senders = map[string]*net.UDPConn{}
 	}
-	if err := p.SetMulticastTTL(255); err != nil {
-		return err
+	c := g.senders[key]
+	if c == nil {
+		if c, err = net.ListenUDP(network, nil); err != nil {
+			return err
+		}
+		g.senders[key] = c
+		go func() {
+			b := make([]byte, 1<<16)
+			for {
+				n, from, err := c.ReadFromUDPAddrPort(b)
+				if err != nil {
+					return
+				}
+				g.answers.add(from, n)
+			}
+		}()
+		ifi, err := net.InterfaceByName(g.tun)
+		if err != nil {
+			return err
+		}
+		if group.Addr().Is4() {
+			p := ipv4.NewPacketConn(c)
+			if !routed {
+				err = p.SetMulticastInterface(ifi)
+			}
+			err = errors.Join(err, p.SetMulticastTTL(255))
+		} else {
+			p := ipv6.NewPacketConn(c)
+			if !routed {
+				err = p.SetMulticastInterface(ifi)
+			}
+			err = errors.Join(err, p.SetMulticastHopLimit(255))
+		}
+		if err != nil {
+			return err
+		}
 	}
-	_, err = c.WriteToUDPAddrPort(make([]byte, size), testGroup)
+	_, err = c.WriteToUDPAddrPort(make([]byte, size), group)
 	return err
+}
+
+func (g *groupLab) close() {
+	for _, c := range g.listeners {
+		c.Close()
+	}
+	for _, c := range g.senders {
+		c.Close()
+	}
+}
+
+func groupsOf(t *testing.T, list string) []netip.Addr {
+	var out []netip.Addr
+	for _, g := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' }) {
+		a, err := netip.ParseAddr(g)
+		if err != nil {
+			t.Fatalf("groups: %v", err)
+		}
+		out = append(out, a)
+	}
+	return out
 }

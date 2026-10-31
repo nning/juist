@@ -258,6 +258,9 @@ func (next *State) setPolicy(a *types.AUM, _ applyMode) error {
 	if err := a.Policy.ValidateMembers(next.Nodes()); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
+	if a.Policy.PassesMulticast() && next.schema < types.SchemaMulticast {
+		return fmt.Errorf("log: a policy passing multicast needs %v; the network is at %v", types.SchemaMulticast, next.schema)
+	}
 	next.policy = a.Policy.Clone()
 	return nil
 }

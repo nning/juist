@@ -60,6 +60,9 @@ type Access struct {
 	// Names are the labels of the names it may open there, as TLS asks for
 	// them, sorted.
 	Names []string
+	// Multicast is the UDP ports it may send group datagrams to the other
+	// on.
+	Multicast []types.PortRange
 }
 
 // A Route is ports on a prefix behind a subnet router.
@@ -70,7 +73,7 @@ type Route struct {
 
 // Empty reports whether a grants nothing.
 func (a Access) Empty() bool {
-	return len(a.Own) == 0 && len(a.Exit) == 0 && len(a.Routes) == 0 && len(a.Names) == 0
+	return len(a.Own) == 0 && len(a.Exit) == 0 && len(a.Routes) == 0 && len(a.Names) == 0 && len(a.Multicast) == 0
 }
 
 // Everything is the port set that is every protocol and port.
@@ -171,6 +174,8 @@ type compiledRule struct {
 	prefixes []netip.Prefix
 	ports    []types.PortRange
 	names    []string
+	// multicast passes group datagrams on ports and nothing else.
+	multicast bool
 }
 
 func (n *Network) compile() *compiled {
@@ -224,6 +229,8 @@ func (n *Network) compile() *compiled {
 			prefixes: r.To.Prefixes,
 			ports:    slices.Clone(r.Ports),
 			names:    r.To.Names,
+
+			multicast: r.Multicast,
 		}
 		if len(r.To.ViaNodes)+len(r.To.ViaTables) > 0 {
 			cr.via = expand(false, r.To.ViaNodes, r.To.ViaTables)
@@ -231,7 +238,10 @@ func (n *Network) compile() *compiled {
 		for _, s := range r.Services {
 			cr.ports = append(cr.ports, services[s]...)
 		}
-		if len(r.Ports)+len(r.Services) == 0 {
+		switch {
+		case r.Multicast && len(r.Ports) == 0:
+			cr.ports = []types.PortRange{{Proto: types.ProtoUDP}}
+		case len(r.Ports)+len(r.Services) == 0:
 			cr.ports = Everything
 		}
 		cr.ports = normalize(cr.ports)
@@ -243,6 +253,12 @@ func (n *Network) compile() *compiled {
 // grant is what r lets its sources open on m.
 func (r *compiledRule) grant(m Member) Access {
 	var a Access
+	if r.multicast {
+		if r.to[m.ID] {
+			a.Multicast = r.ports
+		}
+		return a
+	}
 	if r.to[m.ID] {
 		a.Own = r.ports
 	}
@@ -285,6 +301,7 @@ func merge(a, b Access) Access {
 		a.Names = slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(a.Names), b.Names...))))
 	}
 	a.Own = normalize(append(slices.Clone(a.Own), b.Own...))
+	a.Multicast = normalize(append(slices.Clone(a.Multicast), b.Multicast...))
 	a.Exit = normalize(append(slices.Clone(a.Exit), b.Exit...))
 	for _, r := range b.Routes {
 		i := slices.IndexFunc(a.Routes, func(x Route) bool { return x.Prefix == r.Prefix })

@@ -57,6 +57,8 @@ type PolicyRule struct {
 	To       PolicyRefs  `cbor:"2,keyasint"`
 	Ports    []PortRange `cbor:"3,keyasint,omitempty"`
 	Services []string    `cbor:"4,keyasint,omitempty"`
+	// Multicast passes group datagrams alone, by UDP Ports; [SchemaMulticast].
+	Multicast bool `cbor:"5,keyasint,omitempty"`
 }
 
 // PolicyRefs name members: every one, by identity, or by table. As a
@@ -202,6 +204,10 @@ func (r *PolicyRule) validate(tables map[string][]string, services map[string]bo
 	if len(r.To.Names) > 0 && (len(r.Ports) > 0 || len(r.Services) > 0) {
 		return errors.New("a name is opened on its own port: a rule to names names no port")
 	}
+	if r.Multicast && (r.To.Internet || len(r.To.Prefixes)+len(r.To.Names)+len(r.Services) > 0 ||
+		slices.ContainsFunc(r.Ports, func(p PortRange) bool { return p.Proto != ProtoUDP || p.First == 0 })) {
+		return errors.New("multicast goes to members alone, by UDP port")
+	}
 	if len(r.Ports) > MaxPolicyPorts {
 		return fmt.Errorf("%d ports, over the %d limit", len(r.Ports), MaxPolicyPorts)
 	}
@@ -283,6 +289,11 @@ func (p *Policy) Empty() bool {
 // Empty reports whether r names nothing.
 func (r *PolicyRefs) Empty() bool {
 	return !r.Any && len(r.Nodes) == 0 && len(r.Tables) == 0 && !r.Internet && len(r.Prefixes) == 0 && len(r.Names) == 0
+}
+
+// PassesMulticast reports whether a rule of p passes multicast.
+func (p *Policy) PassesMulticast() bool {
+	return slices.ContainsFunc(p.Rules, func(r PolicyRule) bool { return r.Multicast })
 }
 
 // NamesNames reports whether a rule or a test of p names a published name.

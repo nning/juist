@@ -10,7 +10,7 @@
 - group: admins
   items: [docs/admins, docs/networks, docs/network-changes, docs/access, docs/keys]
 - group: routing
-  items: [docs/exit-nodes, docs/subnets, docs/relays, docs/https-only, docs/publishing, docs/service-member, docs/members-only, docs/tcp-services, docs/sharing]
+  items: [docs/exit-nodes, docs/subnets, docs/multicast, docs/relays, docs/https-only, docs/publishing, docs/service-member, docs/members-only, docs/tcp-services, docs/sharing]
 - group: design
   items: [docs/architecture, docs/compare, docs/security]
 - group: help

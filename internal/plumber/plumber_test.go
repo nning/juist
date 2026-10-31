@@ -355,6 +355,32 @@ func TestAnAddressIsOneHost(t *testing.T) {
 	}
 }
 
+// A link-local address is taken where it is a member's own: fe80::/64 and
+// the low half of one of the device's overlay IPv6 addresses.
+func TestALinkLocalAddressIsTheDevicesOwn(t *testing.T) {
+	h := &fakeHost{}
+	c, _ := pair(t, h)
+	f, err := c.OpenTUN("juist0", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := c.SetAddrs("juist0", prefixes("fd90::1:2:3:4/128", "fe80::1:2:3:4/128")); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"fe80::9/128", "fe80:1::1:2:3:4/128", "fe80::1:2:3:4/64", "fe81::1:2:3:4/128"} {
+		err := c.SetAddrs("juist0", prefixes("fd90::1:2:3:4/128", bad))
+		if err == nil || !strings.Contains(err.Error(), "outside any network's space") && !strings.Contains(err.Error(), "more than one host") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	if got := h.took(); !slices.Contains(got, "addr+ juist0 fe80::1:2:3:4/128") || slices.ContainsFunc(got, func(c string) bool {
+		return strings.HasPrefix(c, "addr+") && strings.Contains(c, "fe8") && !strings.HasSuffix(c, "fe80::1:2:3:4/128")
+	}) {
+		t.Errorf("the host saw %q", got)
+	}
+}
+
 // slowHost takes longer than a call may over every route.
 type slowHost struct{ fakeHost }
 

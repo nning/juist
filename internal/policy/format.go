@@ -37,7 +37,13 @@ func Format(p *types.Policy, name Namer) string {
 	lines = nil
 	for _, r := range p.Rules {
 		line := "pass from " + f.list(f.refs(r.From)) + " to " + f.list(f.refs(r.To))
-		if len(r.Ports) > 0 {
+		switch {
+		case r.Multicast:
+			line = "pass multicast" + strings.TrimPrefix(line, "pass")
+			if len(r.Ports) > 0 {
+				line += " port " + list(portList(r.Ports))
+			}
+		case len(r.Ports) > 0:
 			line += " " + protoPorts(r.Ports)
 		}
 		if len(r.Services) > 0 {
@@ -187,6 +193,19 @@ func prefix(p netip.Prefix) string {
 
 // protoPorts is one "proto … [port …]" clause per set of ports the protocols
 // share, ICMP's first.
+// portList is ports as a port clause lists them.
+func portList(ports []types.PortRange) []string {
+	var out []string
+	for _, p := range ports {
+		s := strconv.Itoa(int(p.First))
+		if p.Last != p.First {
+			s += ":" + strconv.Itoa(int(p.Last))
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 func protoPorts(ports []types.PortRange) string {
 	type clause struct {
 		protos []string

@@ -1,6 +1,11 @@
 package main
 
-import "github.com/nning/juist/ipc"
+import (
+	"slices"
+	"strings"
+
+	"github.com/nning/juist/ipc"
+)
 
 func cmdHealth(a *app, args []string) error {
 	s := spec{name: "juist health", about: `
@@ -83,6 +88,9 @@ func (a *app) healthNotes(s *ipc.Status, inst string) []line {
 		notes = append(notes, a.dnsNotes(ex, dnsOverlay(s, nil))...)
 		notes = append(notes, a.strictRPNotes(ex)...)
 	}
+	if m := s.Multicast; m != nil && !m.Off && s.Device != "" {
+		notes = append(notes, avahiNotes(a.system, s.Device)...)
+	}
 	if !s.CanOperate {
 		network := ""
 		if inst != "" {
@@ -128,4 +136,64 @@ func (a *app) printHostHealth(insts []hostInstance) {
 			a.ok("nothing needs attention")
 		}
 	}
+}
+
+// avahi's configuration and pid file, on Linux and FreeBSD.
+var avahiFiles = [][2]string{
+	{"/etc/avahi/avahi-daemon.conf", "/run/avahi-daemon/pid"},
+	{"/usr/local/etc/avahi/avahi-daemon.conf", "/var/run/avahi-daemon/pid"},
+}
+
+// avahiNotes warn where avahi runs and leaves dev out, as it does a
+// point-to-point device unless told otherwise.
+func avahiNotes(read func(string) ([]byte, error), dev string) []line {
+	for _, f := range avahiFiles {
+		if _, err := read(f[1]); err != nil {
+			continue
+		}
+		conf, _ := read(f[0])
+		server := iniSection(string(conf), "server")
+		list := func(key string) []string {
+			var out []string
+			for _, v := range strings.Split(server[key], ",") {
+				if v = strings.TrimSpace(v); v != "" {
+					out = append(out, v)
+				}
+			}
+			return out
+		}
+		allow, deny := list("allow-interfaces"), list("deny-interfaces")
+		switch {
+		case slices.Contains(deny, dev) || len(allow) > 0 && !slices.Contains(allow, dev):
+			return []line{{kind: lineWarn, text: "avahi leaves " + dev + " out: its allow-interfaces or deny-interfaces say so"},
+				{kind: lineHint, text: "name " + dev + " in allow-interfaces in " + f[0] + ", then restart avahi-daemon"}}
+		case !avahiYes(server["allow-point-to-point"]):
+			return []line{{kind: lineWarn, text: "avahi leaves " + dev + " out, a point-to-point device: members are not found by mDNS"},
+				{kind: lineHint, text: "set allow-point-to-point=yes under [server] in " + f[0] + ", then restart avahi-daemon"}}
+		}
+		return nil
+	}
+	return nil
+}
+
+// avahiYes reads a boolean as avahi does: by its first letter.
+func avahiYes(v string) bool { return v != "" && strings.ContainsRune("yYtT1", rune(v[0])) }
+
+// iniSection is the keys of an INI file's section, as avahi reads them.
+func iniSection(text, section string) map[string]string {
+	out := map[string]string{}
+	in := false
+	for _, l := range strings.Split(text, "\n") {
+		l = strings.TrimSpace(l)
+		switch {
+		case l == "" || l[0] == '#' || l[0] == ';':
+		case l[0] == '[':
+			in = strings.TrimSpace(strings.Trim(l, "[]")) == section
+		case in:
+			if k, v, ok := strings.Cut(l, "="); ok {
+				out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			}
+		}
+	}
+	return out
 }

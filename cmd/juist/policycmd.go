@@ -389,6 +389,9 @@ func parsePolicy(state *log.State, src, name string) (*types.Policy, error) {
 	if err != nil {
 		return nil, lineError(name, err)
 	}
+	if err := multicastSchema(p, state.Schema()); err != nil {
+		return nil, err
+	}
 	if p.Empty() {
 		return nil, fmt.Errorf("%s holds no policy\nhint: juist policy off withdraws it", name)
 	}
@@ -421,6 +424,15 @@ func (a *app) readPolicy(state *log.State, src, name string) (*types.Policy, err
 		return nil, fmt.Errorf("%s fails %s", name, count(len(failed), "test"))
 	}
 	return p, nil
+}
+
+// multicastSchema refuses a policy passing multicast where the network's
+// schema predates it, saying how to raise it.
+func multicastSchema(p *types.Policy, at types.SchemaVersion) error {
+	if p.PassesMulticast() && at < types.SchemaMulticast {
+		return needsUpgrade("pass multicast")
+	}
+	return nil
 }
 
 func needsPolicySchema(state *log.State) error {

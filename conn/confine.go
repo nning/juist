@@ -37,6 +37,11 @@ type Access struct {
 
 	// Nothing passes nothing either way, replies and errors included.
 	Nothing bool
+
+	// GroupsFrom are the UDP ports the peer may send this node group
+	// datagrams on, GroupsTo those this node may send it on; none where
+	// nil. Each passes the unicast answers to a group datagram too.
+	GroupsFrom, GroupsTo []Ports
 }
 
 // Ports are a protocol, zero for every one, and its ports First to Last,
@@ -57,7 +62,8 @@ func (a *Access) Clone() *Access {
 	if a == nil {
 		return nil
 	}
-	out := &Access{Open: slices.Clone(a.Open), Through: slices.Clone(a.Through), Sends: slices.Clone(a.Sends), Nothing: a.Nothing}
+	out := &Access{Open: slices.Clone(a.Open), Through: slices.Clone(a.Through), Sends: slices.Clone(a.Sends), Nothing: a.Nothing,
+		GroupsFrom: slices.Clone(a.GroupsFrom), GroupsTo: slices.Clone(a.GroupsTo)}
 	for i := range out.Through {
 		out.Through[i].Ports = slices.Clone(out.Through[i].Ports)
 	}
@@ -105,6 +111,10 @@ type confiner struct {
 
 	// The engine's own hooks, run after these.
 	nextIn, nextOut tstun.FilterFunc
+
+	// groups knows the group datagrams sent and delivered, which a
+	// restricted peer's answers follow; nil without multicast.
+	groups *multicaster
 }
 
 // A flowSet is the flows to one peer address. A packet of a flow takes its
@@ -200,7 +210,12 @@ func (c *confiner) set(peers []Peer, self []netip.Prefix) {
 
 func (c *confiner) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if pol := c.policy.Load(); pol != nil {
-		if acc, ok := pol.peers[p.Src.Addr()]; ok && (acc.Nothing || !c.admits(pol, acc, p)) ||
+		// What is wrapped for this node is the multicaster's, which takes it
+		// ahead of this where it runs; the host's own tunnels never see it.
+		if (p.IPProto == ipip || p.IPProto == ipv6Encap) && slices.Contains(pol.self, p.Dst.Addr()) {
+			return filter.Drop
+		}
+		if acc, ok := pol.peers[p.Src.Addr()]; ok && (acc.Nothing || !c.admits(pol, acc, p) && !(slices.Contains(pol.self, p.Dst.Addr()) && c.answer(acc.GroupsTo, p.IPProto, p.Src.Addr(), p.Dst))) ||
 			pol.none != nil && pol.none.Contains(p.Src.Addr()) {
 			return filter.Drop
 		}
@@ -214,6 +229,13 @@ func (c *confiner) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 		return c.nextIn(p, w)
 	}
 	return filter.Accept
+}
+
+// answer reports whether a UDP datagram of peer's to dst answers a group
+// datagram that left from dst lately, one peer was sent or sent; groups are
+// its access's, which pass none where empty.
+func (c *confiner) answer(groups []Ports, proto ipproto.Proto, peer netip.Addr, dst netip.AddrPort) bool {
+	return c.groups != nil && len(groups) > 0 && proto == ipproto.UDP && c.groups.answers(peer, dst)
 }
 
 // opens reports whether acc lets its peer open proto to dst, on this node or
@@ -274,7 +296,7 @@ func (c *confiner) admits(pol *confinePolicy, acc *Access, p *packet.Parsed) boo
 
 func (c *confiner) out(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if pol := c.policy.Load(); pol != nil {
-		if acc, ok := pol.peers[p.Dst.Addr()]; ok && (acc.Nothing || !c.sends(pol, acc, p)) ||
+		if acc, ok := pol.peers[p.Dst.Addr()]; ok && (acc.Nothing || !c.sends(pol, acc, p) && !(slices.Contains(pol.self, p.Src.Addr()) && c.answer(acc.GroupsFrom, p.IPProto, p.Dst.Addr(), p.Dst))) ||
 			pol.none != nil && pol.none.Contains(p.Dst.Addr()) {
 			return filter.Drop
 		}

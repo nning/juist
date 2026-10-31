@@ -141,9 +141,11 @@ func (r *plumbedRouter) Set(cfg *router.Config) error {
 	if slices.ContainsFunc(cfg.LocalAddrs, func(p netip.Prefix) bool { return !slices.Contains(held, p) }) {
 		errs = append(errs, r.p.SetAddrs(r.dev, both))
 	}
-	// A route to an address of the device's own is the device's already.
+	// A route to an address of the device's own is the device's already,
+	// and a member's link-local address on-link by the device's own.
 	routes := slices.DeleteFunc(slices.Clone(cfg.Routes), func(p netip.Prefix) bool {
-		return slices.ContainsFunc(cfg.LocalAddrs, func(a netip.Prefix) bool { return a.Addr() == p.Addr() && p.IsSingleIP() })
+		return p.Addr().IsLinkLocalUnicast() ||
+			slices.ContainsFunc(cfg.LocalAddrs, func(a netip.Prefix) bool { return a.Addr() == p.Addr() && p.IsSingleIP() })
 	})
 	errs = append(errs, r.p.SetRoutes(r.dev, routes, preferredSrc4(cfg.LocalAddrs)))
 	errs = append(errs, r.p.SetAddrs(r.dev, cfg.LocalAddrs))
@@ -193,7 +195,9 @@ func (r *plumbedRouter) setServe(s Serve) error {
 	r.mu.Lock()
 	var addrs []netip.Addr
 	for _, a := range r.addrs {
-		addrs = append(addrs, a.Addr())
+		if !a.Addr().IsLinkLocalUnicast() {
+			addrs = append(addrs, a.Addr())
+		}
 	}
 	r.mu.Unlock()
 	return r.p.SetServe(r.dev, plumber.ServeSpec{Sources: s.Sources, Addrs: addrs, DNSPort: s.DNS, Local: offTunnel()})

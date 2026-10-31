@@ -3,6 +3,7 @@ package conn
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -108,9 +109,16 @@ type Options struct {
 	Local      tun.Device
 	LocalAddrs []netip.Addr
 
-	// Multicast carries the IPv4 UDP this node's device sends to a multicast
-	// group to every member without an [Access], and delivers theirs.
+	// Multicast carries the UDP this node's device sends to a multicast
+	// group to every member without an [Access], and delivers theirs. Each
+	// member then holds a link-local address of its overlay IPv6 one's, the
+	// only one on this node's device.
 	Multicast bool
+
+	// Groups are IPv4 multicast groups routed into the device and joined on
+	// it, with Multicast, so that an app sending and listening on the host's
+	// default interface reaches the members instead of the LAN. Linux alone.
+	Groups []netip.Addr
 }
 
 // tsManager implements [Manager] on top of Tailscale's wgengine and magicsock.
@@ -179,6 +187,9 @@ type tsManager struct {
 	// multicast, nil without [Options.Multicast].
 	confiner *confiner
 	groups   *multicaster
+	// routed are [Options.Groups], and joined holds them on the device.
+	routed []netip.Prefix
+	joined io.Closer
 
 	// stun are the public STUN servers, and stunRegions the regions they
 	// hold in the map last installed.
@@ -283,6 +294,12 @@ func New(opts Options) (_ Manager, err error) {
 	// The caller keeps ownership of its slice; the addresses are read
 	// lock-free on packet paths, so they must not be mutable from outside.
 	opts.Self.Addrs = slices.Clone(opts.Self.Addrs)
+	if opts.Multicast {
+		opts.Self.Addrs = withLinkLocal(opts.Self.Addrs)
+	}
+	if err := checkGroups(opts); err != nil {
+		return nil, err
+	}
 
 	// What a failed New must release, in reverse order.
 	var undo cleanups
@@ -369,7 +386,11 @@ func New(opts Options) (_ Manager, err error) {
 	m.confiner = confine(tundev)
 	if opts.Multicast {
 		m.groups = relayGroups(tundev, m.done, &m.warm)
+		m.confiner.groups = m.groups
 		undo.push(func() { close(m.done) })
+		for _, g := range opts.Groups {
+			m.routed = append(m.routed, netip.PrefixFrom(g, 32))
+		}
 	}
 	m.tun = tundev
 	if opts.Local != nil {
@@ -427,6 +448,12 @@ func New(opts Options) (_ Manager, err error) {
 	m.apply.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	if len(m.routed) > 0 {
+		if m.joined, err = joinGroups(opts.TunName, opts.Groups); err != nil {
+			return nil, fmt.Errorf("conn: joining the groups routed into %s: %w", opts.TunName, err)
+		}
+		undo.push(func() { m.joined.Close() })
 	}
 	go m.meetLoop()
 
@@ -493,7 +520,7 @@ func (m *tsManager) reconfig() error {
 	// ProtectKernelTunables depends on this daemon writing no sysctls.
 	rt := &router.Config{
 		LocalAddrs:    m.self.Addrs,
-		Routes:        m.peerRoutes(),
+		Routes:        slices.Concat(m.peerRoutes(), m.routed),
 		NetfilterMode: preftype.NetfilterOff,
 	}
 	err = m.eng.Reconfig(wg, rt, &dns.Config{})
@@ -549,7 +576,11 @@ func (m *tsManager) guardAhead(prev, next []netip.Prefix) error {
 func hostAddrs(ps []netip.Prefix) []netip.Addr {
 	addrs := make([]netip.Addr, 0, len(ps))
 	for _, p := range ps {
-		addrs = append(addrs, p.Addr())
+		// A link-local address is the device's alone by its scope, and the
+		// LAN's own may be one like it.
+		if !p.Addr().IsLinkLocalUnicast() {
+			addrs = append(addrs, p.Addr())
+		}
 	}
 	return addrs
 }
@@ -697,6 +728,9 @@ func (m *tsManager) Close() error {
 	close(m.done)
 	if m.stack != nil {
 		m.stack.Close()
+	}
+	if m.joined != nil {
+		m.joined.Close()
 	}
 	m.warm.Wait()
 	m.eng.Close()

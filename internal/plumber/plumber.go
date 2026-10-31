@@ -753,7 +753,7 @@ func setAddrs(h Host, dev string, d *device, want []netip.Prefix) error {
 			errs = append(errs, fmt.Errorf("an address of more than one host, %v", p))
 			continue
 		}
-		if !within(p, overlaySpace) {
+		if !within(p, overlaySpace) && !linkLocalOf(p, want) {
 			// One of the internet's, or the LAN's, would be the host's own.
 			errs = append(errs, fmt.Errorf("an address outside any network's space, %v", p))
 			continue
@@ -765,6 +765,23 @@ func setAddrs(h Host, dev string, d *device, want []netip.Prefix) error {
 		d.addrs = append(d.addrs, p)
 	}
 	return errors.Join(errs...)
+}
+
+// linkLocalOf reports whether p is the link-local address a member holds
+// beside one of its overlay IPv6 addresses among want: fe80::/64 and that
+// address's low 64 bits.
+func linkLocalOf(p netip.Prefix, want []netip.Prefix) bool {
+	if !p.Addr().Is6() || !p.IsSingleIP() || p.Addr().Zone() != "" {
+		return false
+	}
+	ll := p.Addr().As16()
+	if ll[0] != 0xfe || ll[1] != 0x80 || [6]byte(ll[2:8]) != [6]byte{} {
+		return false
+	}
+	return slices.ContainsFunc(want, func(q netip.Prefix) bool {
+		a := q.Addr().As16()
+		return q.Addr().Is6() && q.IsSingleIP() && within(q, overlaySpace) && [8]byte(a[8:]) == [8]byte(ll[8:])
+	})
 }
 
 func setRoutes(h Host, dev string, d *device, want []netip.Prefix, src4 netip.Addr) error {

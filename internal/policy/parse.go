@@ -174,7 +174,7 @@ func CaseLines(src string) []int {
 }
 
 // keywords may not stand for a device unquoted.
-var keywords = []string{"any", "block", "from", "icmp", "internet", "name", "pass", "port", "proto",
+var keywords = []string{"any", "block", "from", "icmp", "internet", "multicast", "name", "pass", "port", "proto",
 	"service", "table", "tcp", "test", "to", "udp", "via"}
 
 type parser struct {
@@ -350,6 +350,7 @@ func (p *parser) service() (types.PolicyService, error) {
 func (p *parser) rule() (types.PolicyRule, error) {
 	var r types.PolicyRule
 	at := p.peek()
+	r.Multicast = p.keyword("multicast")
 	if err := p.expect("from"); err != nil {
 		return r, err
 	}
@@ -361,6 +362,9 @@ func (p *parser) rule() (types.PolicyRule, error) {
 	}
 	if err := p.list(func() error { return p.ref(&r.To, true) }); err != nil {
 		return r, err
+	}
+	if r.Multicast {
+		return r, p.multicastRule(&r, at)
 	}
 	ports, err := p.protoPorts(false)
 	if err != nil {
@@ -388,6 +392,39 @@ func (p *parser) rule() (types.PolicyRule, error) {
 		return r, err
 	}
 	return r, sortRefs(&r.To, at)
+}
+
+// multicastRule reads the rest of a pass multicast rule: its ports, UDP
+// alone, which need no proto.
+func (p *parser) multicastRule(r *types.PolicyRule, at token) error {
+	if t := p.peek(); t.kind == tWord && (t.text == "proto" || t.text == "service") {
+		return p.errorf(t, "multicast is UDP alone: port needs no %s", t.text)
+	}
+	if r.To.Internet || len(r.To.Prefixes) > 0 || len(r.To.Names) > 0 {
+		return p.errorf(at, "multicast goes to devices alone")
+	}
+	if p.keyword("port") {
+		err := p.list(func() error {
+			t := p.next()
+			rg, err := parsePortRange(t.text)
+			switch {
+			case errors.Is(err, errPortRange):
+				return p.errorf(t, "%s: ports run 1 to 65535", t)
+			case err != nil || t.kind != tWord:
+				return p.errorf(t, "%s where a port or a range like 8000:8080 belongs", t)
+			}
+			r.Ports = append(r.Ports, types.PortRange{Proto: types.ProtoUDP, First: rg[0], Last: rg[1]})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		r.Ports = normalize(r.Ports)
+	}
+	if err := sortRefs(&r.From, at); err != nil {
+		return err
+	}
+	return sortRefs(&r.To, at)
 }
 
 func (p *parser) test() (types.PolicyTest, error) {

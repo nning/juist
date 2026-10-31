@@ -128,6 +128,53 @@ func TestARouteDeletedLeavesTheHosts(t *testing.T) {
 	}
 }
 
+// A link-local address given is the device's only one: the one the kernel
+// gives it goes, and gives it no other later.
+func TestALinkLocalAddressGivenIsTheDevicesOnly(t *testing.T) {
+	requireRoot(t)
+	h := FreeBSD{}
+	f, destroy, err := h.OpenTUN("juist7", 1280)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destroy()
+	defer f.Close()
+	ula, ll := netip.MustParsePrefix("fd90::1:2:3:4/128"), netip.MustParsePrefix("fe80::1:2:3:4/128")
+	for _, p := range []netip.Prefix{ula, ll} {
+		if err := h.AddAddr("juist7", p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linkLocals := func() []string {
+		ifc, err := net.InterfaceByName("juist7")
+		if err != nil {
+			t.Fatal(err)
+		}
+		addrs, _ := ifc.Addrs()
+		var out []string
+		for _, ad := range addrs {
+			if ipn, ok := ad.(*net.IPNet); ok && ipn.IP.IsLinkLocalUnicast() {
+				out = append(out, ipn.String())
+			}
+		}
+		return out
+	}
+	if got := linkLocals(); len(got) != 1 || got[0] != "fe80::1:2:3:4/64" {
+		t.Errorf("the device holds the link-locals %q", got)
+	}
+	exec.Command("/sbin/ifconfig", "juist7", "down").Run()
+	exec.Command("/sbin/ifconfig", "juist7", "up").Run()
+	if got := linkLocals(); len(got) != 1 {
+		t.Errorf("up again, the device holds the link-locals %q", got)
+	}
+	if err := h.DelAddr("juist7", ll); err != nil {
+		t.Fatal(err)
+	}
+	if got := linkLocals(); len(got) != 0 {
+		t.Errorf("deleted, the device holds the link-locals %q", got)
+	}
+}
+
 // Serving loads pf with juist's anchor, forwards, and puts pf and
 // forwarding back as it found them once it stops, or the device goes.
 func TestServingSetsTheHostUpAndBack(t *testing.T) {

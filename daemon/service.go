@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1209,6 +1210,14 @@ func (s *Service) Status() ipc.Status {
 	st.Rendezvous = s.helpers()
 	if st.HTTPS == nil && (s.prefs.HTTPSOnly || s.prefs.RelayName != "") {
 		st.HTTPS = &ipc.HTTPS{Only: s.prefs.HTTPSOnly, Proxy: ipc.RedactProxy(s.prefs.Proxy), Name: s.prefs.RelayName}
+	}
+	if o := s.opts.Mesh; o.TunName != "" && !o.Netstack && runtime.GOOS != "android" {
+		st.Multicast = &ipc.Multicast{Off: s.prefs.MulticastOff}
+		for _, g := range s.prefs.Groups {
+			if routesGroups(o) {
+				st.Multicast.Groups = append(st.Multicast.Groups, g.String())
+			}
+		}
 	}
 	if op := s.operator.Load(); op != 0 {
 		st.Operator = userName(op)

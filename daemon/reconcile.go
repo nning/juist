@@ -486,6 +486,7 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			Endpoints: d.underlay(ep),
 			HomeRelay: homeRelay(ep, relays),
 			Walled:    walled(ep) && !d.rests,
+			Rests:     ep.Rests && !ep.HintAlone(),
 			Access:    ap.access(n, ep),
 		}
 		psk, stage := d.psk(s.state, n, ep)

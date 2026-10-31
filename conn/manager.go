@@ -67,6 +67,10 @@ type Peer struct {
 	// connection to the peer's home open, where the peer sends to it.
 	Walled bool
 
+	// Rests says the peer rests, as a phone saving battery does: it is
+	// sent no group datagram, which would wake it.
+	Rests bool
+
 	// Access is what the peer may open on this node and this node on it;
 	// nil leaves it to the filter, which takes anything from a member.
 	Access *Access

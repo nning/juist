@@ -145,8 +145,8 @@ const (
 	CmdPing Command = 24
 
 	// CmdSettings changes this device's settings: [Request.HTTPSOnly],
-	// [Request.Proxy], [Request.RelayName] and [Request.DNS], whichever it
-	// carries.
+	// [Request.Proxy], [Request.RelayName], [Request.DNS], [Request.Multicast]
+	// and [Request.Groups], whichever it carries.
 	CmdSettings Command = 25
 )
 
@@ -259,6 +259,44 @@ type Request struct {
 	// DNS, which a [CmdSettings] sets too, is whether juistd takes the
 	// host's DNS: for the network's names, and through an exit node.
 	DNS *bool `cbor:"35,keyasint,omitempty"`
+	// Multicast and Groups, which a [CmdSettings] sets too, are whether the
+	// device carries multicast, and the IPv4 groups routed into it, none
+	// where empty.
+	Multicast *bool     `cbor:"36,keyasint,omitempty"`
+	Groups    *[]string `cbor:"37,keyasint,omitempty"`
+}
+
+// MaxGroups bounds the groups routed into a device.
+const MaxGroups = 16
+
+// ParseGroup reads an IPv4 multicast group, the only kind routed into a
+// device.
+func ParseGroup(s string) (netip.Addr, error) {
+	g, err := netip.ParseAddr(s)
+	if err != nil || !g.Is4() || !g.IsMulticast() {
+		return netip.Addr{}, fmt.Errorf("%q is no IPv4 multicast group", s)
+	}
+	return g, nil
+}
+
+func validGroups(gs *[]string) bool {
+	if gs == nil {
+		return true
+	}
+	if len(*gs) > MaxGroups {
+		return false
+	}
+	for _, g := range *gs {
+		if _, err := ParseGroup(g); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// Settings reports whether r sets any of the device's settings.
+func (r *Request) Settings() bool {
+	return r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil || r.DNS != nil || r.Multicast != nil || r.Groups != nil
 }
 
 // maxTerminatorAddrs caps the addresses a terminator reports, each way.
@@ -646,7 +684,7 @@ const (
 	fShare
 	fPing
 	fListening // Listening and Unbound
-	fSettings  // HTTPSOnly, Proxy, RelayName and DNS
+	fSettings  // HTTPSOnly, Proxy, RelayName, DNS, Multicast and Groups
 )
 
 // present lists the optional fields r sets.
@@ -667,7 +705,7 @@ func (r *Request) present() reqField {
 		{r.Account != nil || len(r.NoCert) > 0 || r.Stopping, fAccount},
 		{len(r.Listening) > 0 || len(r.Unbound) > 0, fListening},
 		{r.Share != nil, fShare}, {!r.Ping.IsZero(), fPing},
-		{r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil || r.DNS != nil, fSettings},
+		{r.Settings(), fSettings},
 	} {
 		if p.set {
 			f |= p.f
@@ -745,9 +783,9 @@ var requestShapes = map[Command]requestShape{
 	CmdStatusPage: {name: "status page"},
 	CmdPing: {name: "ping", takes: fPing, shape: "a ping request names a member and nothing else",
 		check: func(r *Request) bool { return !r.Ping.IsZero() }},
-	CmdSettings: {name: "settings", takes: fSettings, shape: "a settings request sets HTTPS alone, a proxy, a relay's name or DNS, and nothing else",
+	CmdSettings: {name: "settings", takes: fSettings, shape: "a settings request sets HTTPS alone, a proxy, a relay's name, DNS or multicast, and nothing else",
 		check: func(r *Request) bool {
-			return (r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil || r.DNS != nil) &&
+			return r.Settings() && validGroups(r.Groups) &&
 				(r.Proxy == nil || ValidProxy(*r.Proxy) == nil) &&
 				(r.RelayName == nil || *r.RelayName == "" || types.ValidateHostName(*r.RelayName) == nil)
 		}},

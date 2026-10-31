@@ -16,7 +16,7 @@ import "fmt"
 type SchemaVersion uint16
 
 // CurrentSchema is the schema this build implements.
-const CurrentSchema SchemaVersion = 21
+const CurrentSchema SchemaVersion = 22
 
 // SchemaSignedRotation is the first schema in which an identity rotation
 // names the new signing key in what its signers sign ([AUM.NewSigning]); below
@@ -36,6 +36,9 @@ const SchemaRests SchemaVersion = 20
 // sender holds of each node rather than carrying it, which earlier builds'
 // strict decoders refuse.
 const SchemaSeen SchemaVersion = 21
+
+// SchemaMulticast is the first schema with [PolicyRule.Multicast].
+const SchemaMulticast SchemaVersion = 22
 
 // MinSchema is the lowest schema this build reads, where every record is
 // signed by ML-DSA alone. Networks below it moved up with M17's build; the

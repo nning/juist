@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"net/netip"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,6 +45,10 @@ func TestOnlyAMembersOwnGroupDatagramUnwraps(t *testing.T) {
 	binary.BigEndian.PutUint16(fragmented[6:8], 0x2000)
 	optioned := wrapGroup(addrB, addrA, mdnsFrom(addrB))
 	optioned[0] = 4<<4 | 6
+	innerOptions := mdnsFrom(addrB)
+	innerOptions = slices.Concat(innerOptions[:20], []byte{1, 1, 1, 0}, innerOptions[20:])
+	innerOptions[0] = 4<<4 | 6
+	binary.BigEndian.PutUint16(innerOptions[2:4], uint16(len(innerOptions)))
 	for name, b := range map[string][]byte{
 		"another member's source":  wrapGroup(addrB, addrA, mdnsFrom(addrC)),
 		"a LAN source":             wrapGroup(addrB, addrA, mdnsFrom(netip.MustParseAddr("192.168.1.20"))),
@@ -55,6 +60,7 @@ func TestOnlyAMembersOwnGroupDatagramUnwraps(t *testing.T) {
 		"from another node":        wrapGroup(addrC, addrA, mdnsFrom(addrB)),
 		"fragmented":               fragmented,
 		"with options":             optioned,
+		"with options inside":      wrapGroup(addrB, addrA, innerOptions),
 		"cut short":                wrapGroup(addrB, addrA, mdnsFrom(addrB))[:30],
 		"longer than its datagram": append(wrapGroup(addrB, addrA, mdnsFrom(addrB)), 0),
 	} {
@@ -286,5 +292,217 @@ func TestARestrictedPeerTakesNoPartInGroups(t *testing.T) {
 	}
 	if n := atA[0].Load(); n != 0 {
 		t.Errorf("%d of the restricted peer's group datagrams were delivered", n)
+	}
+}
+
+// Under an access, a group datagram goes to a peer whose access passes its
+// port alone, and is taken from one whose access passes it; the peer's
+// unicast answer to it passes for answerWindow, other unicast not, and a
+// wrapped packet from a peer passed no group is dropped.
+func TestAccessPassesGroupsAndTheirAnswersAlone(t *testing.T) {
+	a, aTUN := groupNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
+	b, bTUN := groupNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
+	c, cTUN := groupNode(t, 3, "100.64.0.3/32", "fd7a:115c:a1e0::3/128")
+	ssdp := []Ports{{Proto: ipproto.UDP, First: 1900, Last: 1900}}
+	restricted := func(n *node, acc Access) Peer { p := n.peer(); p.Access = &acc; return p }
+	for _, set := range []struct {
+		n     *node
+		peers []Peer
+	}{
+		{a, []Peer{restricted(b, Access{GroupsTo: ssdp}), restricted(c, Access{Sends: []Ports{{}}, Open: []Ports{{}}})}},
+		// b holds a to nothing, as a patched daemon would: a decides alone.
+		{b, []Peer{a.peer()}},
+		{c, []Peer{restricted(a, Access{GroupsFrom: []Ports{{}}, Open: []Ports{{}}, Sends: []Ports{{}}})}},
+	} {
+		if err := set.n.mgr.SetPeers(set.peers); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	ssdpGroup := ap("239.255.255.250:1900")
+	toPort := func(port uint16) func(*packet.Parsed) bool {
+		return func(p *packet.Parsed) bool { return p.IPProto == ipproto.UDP && p.Dst.Port() == port }
+	}
+	atA := counting(aTUN, stop, toPort(5000), toPort(6000), toPort(7000), groupFrom(addrC), toPort(5353))
+	atB := counting(bTUN, stop, toPort(1900), toPort(5353))
+	atC := counting(cTUN, stop, groupFrom(addrA), toPort(7000))
+	// The tunnel to c is up once its unicast arrives.
+	sendUntil(t, cTUN, udpPacket(ap("100.64.0.3:7000"), ap("100.64.0.1:7000")), atA[2])
+	sendUntil(t, aTUN, udpPacket(ap("100.64.0.1:5000"), ssdpGroup), atB[0])
+	for range 5 {
+		aTUN.out <- mdnsFrom(addrA)
+	}
+	sendUntil(t, bTUN, udpPacket(ap("100.64.0.2:1900"), ap("100.64.0.1:5000")), atA[0])
+	for range 5 {
+		bTUN.out <- udpPacket(ap("100.64.0.2:1900"), ap("100.64.0.1:6000"))
+		bTUN.out <- udpPacket(ap("100.64.0.2:1900"), ap("100.64.0.1:5353"))
+		cTUN.out <- wrapGroup(addrC, addrA, mdnsFrom(addrC))
+	}
+	time.Sleep(time.Second)
+	if n := atC[0].Load(); n != 0 {
+		t.Errorf("c, which no access passes a group to, got %d", n)
+	}
+	if n := atB[1].Load(); n != 0 {
+		t.Errorf("b got %d mDNS datagrams, which its access does not pass", n)
+	}
+	if n := atA[1].Load(); n != 0 {
+		t.Errorf("%d of b's datagrams to a port no group datagram left from were delivered", n)
+	}
+	if n := atA[3].Load(); n != 0 {
+		t.Errorf("%d group datagrams of c, which no access passes, were delivered", n)
+	}
+	if n := atA[4].Load(); n != 0 {
+		t.Errorf("%d of b's datagrams to the port of a group datagram b was not sent were delivered", n)
+	}
+}
+
+// An answer passes for answerWindow after its question, from the peer
+// asked alone, and no longer.
+func TestAnAnswerPassesForItsWindow(t *testing.T) {
+	now := time.Unix(1000, 0)
+	c := &multicaster{now: func() time.Time { return now }}
+	b := &groupMember{v4: addrB, v6: v6B, ll: llB}
+	c.ask(udpPacket(ap("100.64.0.1:5000"), ap("239.255.255.250:1900")), b)
+	c.ask(fragment4(addrA, netip.MustParseAddr("239.255.255.250"), 64), b)
+	c.ask(mdns6From(llA), b)
+	if !c.answers(addrB, ap("100.64.0.1:5000")) || !c.answers(llB, netip.AddrPortFrom(llA, 5353)) {
+		t.Fatal("no answer passes")
+	}
+	if c.answers(addrB, ap("100.64.0.1:5001")) || c.answers(addrB, ap("100.64.0.2:5000")) ||
+		c.answers(addrC, ap("100.64.0.1:5000")) {
+		t.Error("an answer to another port or address, or from another peer, passes")
+	}
+	now = now.Add(answerWindow + time.Second)
+	if c.answers(addrB, ap("100.64.0.1:5000")) {
+		t.Error("an answer passes past its window")
+	}
+}
+
+// An access decides each way alone: a peer this node may send to is no
+// sender for that, one it takes from no target, and a port the access does
+// not pass is not sent.
+func TestAnAccessDecidesEachWayAlone(t *testing.T) {
+	c := &multicaster{}
+	ssdp := []Ports{{Proto: ipproto.UDP, First: 1900, Last: 1900}}
+	peer := func(a netip.Addr, acc *Access) Peer {
+		return Peer{Addrs: []netip.Prefix{netip.PrefixFrom(a, 32)}, Access: acc}
+	}
+	c.set([]Peer{peer(addrB, &Access{GroupsTo: ssdp}), peer(addrC, &Access{GroupsFrom: ssdp}),
+		peer(netip.MustParseAddr("100.64.0.4"), &Access{Open: []Ports{{}}})}, []netip.Prefix{netip.PrefixFrom(addrA, 32)})
+	pol := c.policy.Load()
+	if len(pol.peers) != 1 || pol.peers[0].v4 != addrB {
+		t.Errorf("sent to %+v, want b alone", pol.peers)
+	}
+	if pol.sender(addrB) != nil || pol.sender(addrC) == nil || pol.sender(netip.MustParseAddr("100.64.0.4")) != nil {
+		t.Error("taken from others than c")
+	}
+	if pol.wrap(pol.peers[0], mdnsFrom(addrA)) != nil {
+		t.Error("mDNS was wrapped for a peer passed SSDP alone")
+	}
+	if pol.wrap(pol.peers[0], udpPacket(ap("100.64.0.1:5000"), ap("239.255.255.250:1900"))) == nil {
+		t.Error("SSDP was not wrapped for a peer passed it")
+	}
+	if passesGroup(pol.sender(addrC).from, mdnsFrom(addrC)) {
+		t.Error("mDNS was taken from a peer passed SSDP alone")
+	}
+}
+
+// A flow the access passes keeps its replies where its first datagram goes
+// to a port a group datagram came from too.
+func TestAnAnswerLeavesAFlowItsReplies(t *testing.T) {
+	a, aTUN := groupNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
+	b, bTUN := groupNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
+	mdnsPort := []Ports{{Proto: ipproto.UDP, First: 5353, Last: 5353}}
+	pa, pb := b.peer(), a.peer()
+	pa.Access = &Access{Sends: mdnsPort, GroupsFrom: []Ports{{Proto: ipproto.UDP}}}
+	pb.Access = &Access{Open: mdnsPort, GroupsTo: []Ports{{Proto: ipproto.UDP}}}
+	if err := a.mgr.SetPeers([]Peer{pa}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.mgr.SetPeers([]Peer{pb}); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	toPort := func(port uint16) func(*packet.Parsed) bool {
+		return func(p *packet.Parsed) bool { return p.IPProto == ipproto.UDP && p.Dst.Port() == port }
+	}
+	atA, atB := counting(aTUN, stop, groupFrom(addrB), toPort(40001)), counting(bTUN, stop, toPort(5353))
+	sendUntil(t, bTUN, mdnsFrom(addrB), atA[0])
+	sendUntil(t, aTUN, udpPacket(ap("100.64.0.1:40001"), ap("100.64.0.2:5353")), atB[0])
+	sendUntil(t, bTUN, udpPacket(ap("100.64.0.2:5353"), ap("100.64.0.1:40001")), atA[1])
+}
+
+// A peer's sources fill its own share of what answers are kept for alone.
+func TestOnePeersQuestionsCrowdOutNoOthers(t *testing.T) {
+	c := &multicaster{}
+	x, y := &groupMember{v4: addrB}, &groupMember{v4: addrC}
+	for i := range 5000 {
+		c.ask(udpPacket(netip.AddrPortFrom(addrB, uint16(i+1)), ap("239.255.255.250:1900")), x)
+	}
+	c.ask(udpPacket(ap("100.64.0.1:5000"), ap("239.255.255.250:1900")), y)
+	if !c.answers(addrC, ap("100.64.0.1:5000")) {
+		t.Error("one peer's flood kept another's answer out")
+	}
+	if !c.answers(addrB, netip.AddrPortFrom(addrB, 5000)) || c.answers(addrB, netip.AddrPortFrom(addrB, 1)) {
+		t.Error("the flooding peer keeps other than its latest")
+	}
+}
+
+// A port set passing every UDP port passes a later fragment, which holds
+// no port.
+func TestEveryPortPassesFragments(t *testing.T) {
+	c := &multicaster{}
+	for _, all := range [][]Ports{{{Proto: ipproto.UDP}}, {{}}} {
+		c.set([]Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(addrB, 32)}, Access: &Access{GroupsFrom: all}}},
+			[]netip.Prefix{netip.PrefixFrom(addrA, 32)})
+		if !passesGroup(c.policy.Load().sender(addrB).from, fragment4(addrB, netip.MustParseAddr("239.1.1.1"), 64)) {
+			t.Errorf("%v drops a later fragment", all)
+		}
+	}
+}
+
+// An answer passes to this node's own address alone, and from it alone.
+func TestAnAnswerIsThisNodesAlone(t *testing.T) {
+	g := &multicaster{}
+	g.ask(udpPacket(ap("100.64.0.2:5353"), ap("224.0.0.251:5353")), &groupMember{v4: addrB})
+	c := &confiner{groups: g}
+	all := []Ports{{Proto: ipproto.UDP}}
+	c.set([]Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(addrB, 32)}, Access: &Access{GroupsFrom: all, GroupsTo: all}}},
+		[]netip.Prefix{netip.PrefixFrom(addrA, 32)})
+	if got := c.out(parsed(udpPacket(ap("100.64.0.1:40000"), ap("100.64.0.2:5353"))), nil); got != filter.Accept {
+		t.Errorf("this node's answer: %v", got)
+	}
+	if got := c.out(parsed(udpPacket(ap("192.168.1.9:40000"), ap("100.64.0.2:5353"))), nil); got == filter.Accept {
+		t.Error("a forwarded host's datagram passed as an answer")
+	}
+	if got := c.in(parsed(udpPacket(ap("100.64.0.2:40000"), ap("100.64.0.2:5353"))), nil); got == filter.Accept {
+		t.Error("the peer's datagram to its own address passed as an answer")
+	}
+}
+
+// A resting peer, as a phone saving battery, is sent no group datagram.
+func TestARestingPeerIsSentNoGroups(t *testing.T) {
+	c := &multicaster{}
+	c.set([]Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(addrB, 32)}, Rests: true}, {Addrs: []netip.Prefix{netip.PrefixFrom(addrC, 32)}}},
+		[]netip.Prefix{netip.PrefixFrom(addrA, 32)})
+	if pol := c.policy.Load(); len(pol.peers) != 1 || pol.peers[0].v4 != addrC {
+		t.Errorf("sent to %+v, want c alone", pol.peers)
+	}
+}
+
+// What is wrapped for this node never reaches the host where no multicaster
+// takes it, as with multicast off; what is wrapped for what it routes does.
+func TestNothingWrappedForThisNodeReachesTheHost(t *testing.T) {
+	c := &confiner{}
+	c.set(nil, []netip.Prefix{netip.PrefixFrom(addrA, 32), netip.PrefixFrom(v6A, 128)})
+	for _, b := range [][]byte{wrapGroup(addrB, addrA, mdnsFrom(addrB)), wrapGroup6(v6B, v6A, mdns6From(llB))} {
+		if got := c.in(parsed(b), nil); got != filter.Drop {
+			t.Errorf("%v: %v", parsed(b), got)
+		}
+	}
+	if got := c.in(parsed(wrapGroup(addrB, netip.MustParseAddr("192.168.1.9"), mdnsFrom(addrB))), nil); got != filter.Accept {
+		t.Errorf("a packet wrapped for a routed host: %v", got)
 	}
 }

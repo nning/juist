@@ -1039,110 +1039,85 @@ reached it both ways, and its package was removed cleanly:
 
 ## M25 — Multicast
 
-Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LAN games.
-The overlay counts as one link for them. Multicast routing, streaming and
-broadcast are out of scope; broadcast has no address to go to while every
-overlay address is a host prefix. Before the audit, so that M32 covers the
-unwrapping, which parses what members send.
+Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LLMNR,
+LAN games. The overlay counts as one link for them. Multicast routing,
+streaming and broadcast are out of scope; broadcast has no address to go to
+while every overlay address is a host prefix. Before the audit, so that M32
+covers the unwrapping, which parses what members send.
 
-Today nothing crosses: the pinned filter drops every multicast destination
-before juist's rules, silently on the way out, and wireguard-go picks a peer
-by destination address alone.
+**Done** on 2026-10-31, reviewed (M25 reviews 1 to 5, the second and the
+fourth attacking the fixes and the policy rule again, the fifth over the
+whole milestone), validated by `make ci-vm` at M25, in 36m41s: exit
+criteria (1) and (5) by the netns lab's `TestNetnsAGroupDatagram*` and
+`TestNetnsARoutedGroupReachesTheDefaultInterface`; (2), (3) and (4) by
+conn's tests through real tunnels; (6) by `FuzzUnwrapGroup` and
+`FuzzUnwrapGroup6`; (7) by `TestAccessPassesGroupsAndTheirAnswersAlone`
+and the policy's, log's and daemon's own; the lab's FreeBSD 15.1 and its
+upgrade from M24 to schema 22 with multicast on; the app built at the
+commit closing it is a pre-release on juist-dev. Core 11 014 lines, its
+budget raised to 11 050 for the rule's field, check and schema, audit scope
+35 738, measured after it (2026-10-31). What it built:
 
-The plan, in order:
+- **Capture** (`conn/multicast.go`): UDP to a multicast group that the host
+  sends into the device from this node's own address, IPv6 only to groups
+  of link or site scope, without IPv4 options or IPv6 extension headers, is
+  taken ahead of the filter (`PreFilterPacketOutboundToWireGuardEngineIntercept`,
+  chained in front of the engine's), and IGMP and MLD stay behind. This node
+  holds itself to 100 datagrams a second in bursts of 200.
+- **Transport:** a copy to each member without an access but one that
+  rests, as the Android app does, which a copy would wake; IPv4 in IPv4
+  between overlay IPv4 addresses, IPv6 in IPv6 between overlay IPv6
+  addresses, as a member's IPv4 address is optional, injected by a goroutine
+  of its own, since `InjectOutbound` from the hook blocks the goroutine that
+  drains it. Every member gets a copy; membership tracking waits until that
+  proves too much. A full-sized datagram goes 20 or 40 bytes past the MTU,
+  which crosses a direct path and a relay in the lab, over an underlay of
+  1500; a narrower one is untested.
+- **Delivery:** a wrapped packet must be exactly what juistd makes, from a
+  member without an access to this node's own address; the inner source
+  the sender's overlay address, or over IPv6 its link-local one; at most
+  100 a second in bursts of 200 from each sender; then `InjectInboundCopy`.
+  The TTL is left as sent. A packet wrapped for this node never reaches
+  the host, multicast on or off, so that a host's own IP-in-IP tunnels do
+  not unwrap a member's.
+- **A link-local address per member:** `fe80::/64` and the low 64 bits of
+  its overlay IPv6 address, which follows from its identity. conn adds it
+  to each member's addresses, so that AllowedIPs, the filter (by a
+  `LinkLocalAllowHooks` hook), the confiner and the source check treat it as
+  the member's own, and unicast answers (SSDP, legacy mDNS) come back. One
+  two peers would share is neither's, one a peer shares with this node the
+  peer's no longer. The device holds it alone: Linux's router sets
+  addrgenmode none by netlink and deletes the kernel's, FreeBSD's helper
+  sets `-auto_linklocal no_dad` and takes no link-local but one derived from
+  an overlay address it is given. The overlay's guard and serving leave
+  link-locals out.
+- **Routed groups** (`juist set --groups`, IPv4, Linux): routed into the
+  device in juist's table and joined on it, so that an app on the default
+  interface sends to the members and receives theirs; the group leaves the
+  LAN on that host. IPv6 groups are not routed: the kernel's local table
+  sends `ff00::/8` by every device before juist's rules.
+- **Under an access policy** none passes but what a rule passes, pair by
+  pair: `pass multicast from <family> to <family> [port N]`. The keyword
+  follows `pass`, as pf's `in` and `out` do, and is no `proto`: a group is a
+  kind of destination; `port` needs no `proto`, since UDP alone crosses.
+  `PolicyRule.Multicast` is a field older members' strict decoder refuses,
+  so it needs schema 22 (`types.SchemaMulticast`), which the log enforces.
+  The rule gives `conn.Access` its `GroupsTo` and `GroupsFrom` ports; the
+  two members peer. The same rule passes unicast UDP to the port a group
+  datagram left from, for ten seconds after it, both ways through the
+  confiner, as netfilter's broadcast helper does: SSDP, WS-Discovery and
+  mDNS's legacy and QU queries are answered so. The receiver looks the
+  authenticated outer source up among the senders it takes before it
+  parses anything.
+- **juistd** carries multicast by default on a device of its own,
+  `juist set --multicast=false` turns it off, both settings restart the
+  mesh; `juist status` says `Multicast on`, `off` or the routed groups, and
+  `juist health` warns where avahi runs and leaves the device out
+  (`allow-point-to-point`, `allow-interfaces`, `deny-interfaces`). The
+  Android app carries none, nor a service member on its network stack.
 
-1. **Capture.** A multicast packet the host sends into `juist0`, IGMP and MLD
-   excepted, is taken ahead of the filter, copied per peer, and the original
-   dropped. The hook is `PreFilterPacketOutboundToWireGuardEngineIntercept`,
-   which the engine already holds (`handleLocalPackets`), so juist chains in
-   front of it, with a guard in
-   [07-embedding-notes.md](07-embedding-notes.md#upgrading-the-pinned-tailscale).
-2. **Transport.** Each copy goes IP-in-IP (protocol 4 or 41) from this
-   device's overlay IPv4 address to the peer's, through `InjectOutbound`, so
-   the outer address picks the peer and relays need nothing new. Every peer
-   gets a copy: the receiving kernel drops groups nobody joined, and
-   discovery traffic is small. Membership tracking waits until that proves
-   too much.
-3. **Delivery.** `PreFilterPacketInboundFromWireGuard`, also held by the
-   engine, unwraps. The inner source must be the sending peer's own overlay
-   address, as `AllowedIPs` requires of unicast, and the destination a
-   multicast group in scope; the packet then enters through
-   `InjectInboundCopy`. The receiver enforces a per-sender rate limit, since
-   a sender's own limit binds only an honest one. The TTL is left as sent.
-4. **Default-interface apps.** An app that joins and sends on the default
-   route's interface never meets `juist0`. For groups an operator names,
-   juistd routes the group into `juist0`, which takes the group off the LAN
-   for that host. Whether common apps follow such a route is to be
-   measured.
-5. **avahi.** It skips point-to-point interfaces unless
-   `allow-point-to-point=yes`, and a Linux TUN is one for good: the flag
-   cannot be cleared. `juist health` warns of the setting where avahi runs,
-   as status gives no hints.
-
-Steps 1 to 3 are in `conn` (`multicast.go`), behind `Options.Multicast`,
-which juistd sets once M24 is done, so that v0.24.0 carries none of it:
-only IPv4 UDP to a group passes, the fragments of a datagram included, to
-and from members without an access, at most 100 datagrams a second in
-bursts of 200 from each sender, and a wrapped packet must be exactly what
-the sender's juistd makes: no options, unfragmented. Exit criterion (1)
-passed for IPv4 by `make ci-vm STAGES=vm`, `TestNetnsAGroupDatagram*`, at b7d2df5,
-which landed as M24 with `conn` unchanged.
-
-Without an access policy, group datagrams pass between all members, since
-every member already reaches every port and the app chose `juist0` by
-sending into it; routed groups (step 4) stay opt-in per host. Under a
-policy none pass but those a rule passes, pair by pair:
-
-    pass multicast from <family> to <family>
-    pass multicast from <gamers> to <gamers> port 4445
-
-1. **The keyword.** `multicast` follows `pass`, as pf's `in` and `out` do,
-   and is not a `proto`: a group is a kind of destination, not an IP
-   protocol. `port` needs no `proto` there, since only UDP passes; elsewhere
-   it still does. The rule is a field of `PolicyRule`, which older members'
-   strict decoder rejects, so it comes with a schema bump.
-2. **Who takes part.** A datagram from A goes to B, and B takes it, where a
-   rule passes A to B. conn's `Access` gains a field for it, and a peer with
-   it joins the multicaster as a peer without an access does today.
-3. **Replies.** The same rule passes unicast UDP from B to the port a group
-   datagram of A's left from, for a few seconds after it, as netfilter's
-   broadcast helper does: SSDP, WS-Discovery and mDNS's legacy and QU
-   queries are answered unicast, to a port no rule can name.
-4. **Unwrapping.** The receiver looks the outer source, which WireGuard has
-   authenticated, up among the senders it takes before it parses the inner
-   packet. Where it takes none, nothing is unwrapped.
-
-Open decisions:
-
-- **MTU.** A full-sized packet grows 20 bytes past the TUN MTU when wrapped.
-  Sending it anyway is the lead option: in the lab it crosses a direct path
-  and a relay, over an underlay of 1500; a narrower underlay is untested.
-- **IPv6.** Planned below; open is only whether Android's `VpnService`
-  takes a link-local address, to be measured.
-
-IPv6, in order, all of it with `Options.Multicast` alone and no schema
-change:
-
-1. **A link-local address per member.** `fe80::/64` with the low 64 bits of
-   the member's overlay IPv6 address, which follows from its identity, so
-   that a receiver checks a link-local source as it checks an overlay one.
-   conn derives it for this node and each peer and adds it to the addresses
-   it holds, so that AllowedIPs, the filter and the confiner treat it as the
-   member's own: SSDP and legacy mDNS answer a query unicast, to its source.
-   A link-local that two members, or a member and this node, would share is
-   neither's, since 64 bits can be ground.
-2. **The device holds it alone.** Linux gives a TUN a random link-local
-   (addrgenmode random, as for any device without a hardware address), and
-   FreeBSD one of its own (`auto_linklocal`); the router turns both off and
-   puts the derived one on `juist0`, so that the host sends from it.
-3. **Transport.** IPv6 in IPv6 (next header 41) between the overlay IPv6
-   addresses, which every member has, as its IPv4 address is optional; 40
-   bytes past the MTU where the IPv4 wrapping adds 20.
-4. **What passes.** UDP to a group of link or site scope (`ff02::/16`,
-   `ff05::/16`: mDNS `ff02::fb`, SSDP and WS-Discovery `ff02::c`, LLMNR
-   `ff02::1:3`), from the sender's link-local or overlay address, with UDP
-   the first next header: no fragments and no extension headers. MLD is
-   ICMPv6, so it stays behind as IGMP does.
+What a member gains is in [02-threat-model.md](02-threat-model.md),
+residual weakness 17.
 
 Not planned: a TAP mode. Carrying Ethernet would need a virtual switch and
 encapsulation, since wireguard-go carries only IP, and would lose the binding

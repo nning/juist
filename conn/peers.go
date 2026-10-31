@@ -180,16 +180,19 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 	// Copies are validated and stored, so the caller's slices can neither
 	// bypass the validation later nor race the lock-free lookups.
 	peers = clonePeers(peers)
-	// Before touching any state, so a rejected peer set leaves the data plane
-	// as it was.
-	if err := validatePeers(m.self, peers); err != nil {
-		return err
-	}
 
 	m.apply.Lock()
 	defer m.apply.Unlock()
 	if m.closed {
 		return errors.New("conn: manager is closed")
+	}
+	if m.groups != nil {
+		peers = withLinkLocals(m.self.NodeKey.Public(), m.self.Addrs, peers)
+	}
+	// Before touching any state, so a rejected peer set leaves the data plane
+	// as it was.
+	if err := validatePeers(m.self, peers); err != nil {
+		return err
 	}
 	m.holdHomes(peers, time.Now())
 	next, nodeList := newPeerState(m.self.NodeKey.Public(), peers, m.sendHome)
@@ -254,6 +257,9 @@ func (m *tsManager) SetPeers(peers []Peer) error {
 
 func (m *tsManager) SetSelf(s Self) error {
 	s.Addrs = slices.Clone(s.Addrs)
+	if m.groups != nil {
+		s.Addrs = withLinkLocal(s.Addrs)
+	}
 	if err := checkSelf(s); err != nil {
 		return err
 	}
@@ -266,6 +272,10 @@ func (m *tsManager) SetSelf(s Self) error {
 		return errors.New("conn: SetSelf changes only the node key and the addresses")
 	}
 	peers := slices.Collect(maps.Values(m.state.Load().peers))
+	if m.groups != nil {
+		// Derived again: a peer's may be the new one of this node's.
+		peers = withLinkLocals(s.NodeKey.Public(), s.Addrs, withoutLinkLocals(peers))
+	}
 	if err := validatePeers(s, peers); err != nil {
 		return err
 	}
@@ -278,8 +288,15 @@ func (m *tsManager) SetSelf(s Self) error {
 	m.selfNV = m.selfNode(s)
 	m.selfOnPath.Store(&selfLookup{addrs: s.Addrs, node: m.selfNV})
 	m.eng.SetSelfNode(m.selfNV)
-	_, nodeList := newPeerState(s.NodeKey.Public(), peers, m.sendHome)
+	next, nodeList := newPeerState(s.NodeKey.Public(), peers, m.sendHome)
 	m.setPolicy(m.keptConfined(peers), s.Addrs)
+	if m.groups != nil {
+		// A peer's link-local may come or go: its AllowedIPs with it.
+		m.state.Store(next)
+		for nk := range next.peers {
+			m.eng.SyncDevicePeer(nk)
+		}
+	}
 	m.magic.SetNetworkMap(m.selfNV, nodeList)
 	return m.reconfig()
 }
