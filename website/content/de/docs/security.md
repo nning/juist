@@ -5,6 +5,9 @@ description: Wem juist vertraut und wem nicht, wo die Schlüssel liegen und welc
 lead: Was juist schützt, worauf es sich verlässt und wo seine Grenzen liegen, verständlich auch ohne Sicherheitswissen. Ein Sicherheitsaudit gab es für juist bisher nicht.
 ---
 
+Wie agentisch geschriebener Code geprüft wird und was diese Prüfungen belegen:
+[Qualitätssicherung]({{< relref "docs/quality-assurance" >}}).
+
 ## Wer entscheidet
 
 Bei juist entscheidet kein Server in der Mitte, wer zum Netz gehört. Das tun

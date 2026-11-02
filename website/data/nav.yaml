@@ -12,6 +12,6 @@
 - group: routing
   items: [docs/exit-nodes, docs/subnets, docs/multicast, docs/relays, docs/https-only, docs/publishing, docs/service-member, docs/members-only, docs/tcp-services, docs/sharing]
 - group: design
-  items: [docs/architecture, docs/compare, docs/security]
+  items: [docs/architecture, docs/compare, docs/security, docs/quality-assurance]
 - group: help
   items: [docs/troubleshooting, docs/commands]

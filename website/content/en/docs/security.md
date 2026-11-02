@@ -5,6 +5,9 @@ description: What juist trusts and what it does not, where the keys live, and wh
 lead: What juist protects, what it relies on, and where its limits are, for readers who are not security experts. juist has not had a security audit.
 ---
 
+How agent-written code is checked, and what those checks establish:
+[Quality assurance]({{< relref "docs/quality-assurance" >}}).
+
 ## Who decides
 
 juist has no server in the middle that decides who belongs to the network.

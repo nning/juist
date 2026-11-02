@@ -1,7 +1,9 @@
 # juist
 
 > [!WARNING]
-> **Developed with Opus 5.5, no human (security) audit yet!**
+> **Developed with AI agents (Opus 5.5); no human security audit yet.**
+> [Quality assurance and security](https://docs.juist.nning.io/en/docs/quality-assurance/)
+> explains the checks, the evidence and their limits.
 
 A peer-to-peer mesh VPN with **no coordination server at all**, neither a
 vendor's nor your own. WireGuard carries the traffic. Who belongs to the
