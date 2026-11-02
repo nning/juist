@@ -4,7 +4,7 @@
   <div class="in">
     <h1>{{ .Params.headline }}</h1>
     <p class="lead">{{ .Params.lead }}</p>
-    {{ with site.GetPage "docs/install" }}<a class="install" href="{{ .RelPermalink }}">{{ i18n "packages" }} →</a>{{ end }}
+    {{ with site.GetPage "docs/install" }}<a class="install" href="{{ .RelPermalink }}">{{ i18n "install" }} →</a>{{ end }}
     <div class="links">{{ range .Params.links }}{{ if .page }}{{ with site.GetPage .page }}<a href="{{ .RelPermalink }}">{{ .LinkTitle }} →</a>{{ end }}{{ else }}<a href="#{{ .anchor }}">{{ .label }}</a>{{ end }}{{ end }}</div>
   </div>
 </section>
