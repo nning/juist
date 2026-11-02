@@ -22,7 +22,9 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
+	"golang.org/x/sys/unix"
 	"tailscale.com/net/stun"
+	"tailscale.com/tsconst"
 	"tailscale.com/types/ipproto"
 
 	"github.com/nning/juist/internal/dnsfwd"
@@ -112,6 +114,7 @@ func TestHelperNetnsNode(t *testing.T) {
 		Instance:   inst,
 		Multicast:  os.Getenv(envMulticast) != "",
 		Groups:     groupsOf(t, os.Getenv(envGroups)),
+		GroupsAuto: os.Getenv(envMulticast) != "" && os.Getenv(envGroups) == "",
 		Debug:      os.Getenv(envDebug) != "",
 		// Engine logs go to stderr as they happen. The test framework's own
 		// log buffers until the test ends, which is far too late to explain a
@@ -835,6 +838,22 @@ func (g *groupLab) join(args []string) error {
 	group, network := testGroup, "udp4"
 	if args[0] == "6" {
 		group, network = testGroup6, "udp6"
+	} else if args[0] == "ssdp" {
+		group = netip.MustParseAddrPort("239.255.255.250:1900")
+	} else if args[0] == "minecraft" {
+		group = netip.MustParseAddrPort("224.0.2.60:4445")
+	} else if strings.HasPrefix(args[0], "broadcast") {
+		group = netip.MustParseAddrPort("255.255.255.255:45353")
+		if args[0] == "broadcast-directed" {
+			group = netip.MustParseAddrPort("10.77.0.255:45353")
+		}
+		if port, ok := strings.CutPrefix(args[0], "broadcast:"); ok {
+			n, err := strconv.ParseUint(port, 10, 16)
+			if err != nil {
+				return err
+			}
+			group = netip.AddrPortFrom(group.Addr(), uint16(n))
+		}
 	}
 	dev, answer := g.tun, false
 	for _, a := range args[1:] {
@@ -852,7 +871,19 @@ func (g *groupLab) join(args []string) error {
 	if err != nil {
 		return err
 	}
-	if group.Addr().Is4() {
+	if args[0] == "minecraft" {
+		rc, e := c.SyscallConn()
+		if e == nil {
+			e = rc.Control(func(fd uintptr) { err = unix.SetsockoptInt(int(fd), unix.IPPROTO_IP, unix.IP_MULTICAST_ALL, 0) })
+		}
+		if err = errors.Join(err, e); err != nil {
+			c.Close()
+			return err
+		}
+	}
+	if !group.Addr().IsMulticast() {
+		// Broadcast needs no group membership.
+	} else if group.Addr().Is4() {
 		err = ipv4.NewPacketConn(c).JoinGroup(ifi, &net.UDPAddr{IP: group.Addr().AsSlice()})
 	} else {
 		err = ipv6.NewPacketConn(c).JoinGroup(ifi, &net.UDPAddr{IP: group.Addr().AsSlice()})
@@ -889,18 +920,41 @@ func (g *groupLab) send(args []string) error {
 	if err != nil {
 		return err
 	}
-	routed := len(args) > 2 && args[2] == "routed"
+	routed := len(args) > 2 && (args[2] == "routed" || args[2] == "underlay")
 	group, network := testGroup, "udp4"
 	if args[0] == "6" {
 		group, network = testGroup6, "udp6"
+	} else if args[0] == "ssdp" {
+		group = netip.MustParseAddrPort("239.255.255.250:1900")
+	} else if args[0] == "minecraft" {
+		group = netip.MustParseAddrPort("224.0.2.60:4445")
+	} else if strings.HasPrefix(args[0], "broadcast") {
+		group = netip.MustParseAddrPort("255.255.255.255:45353")
+		if args[0] == "broadcast-directed" {
+			group = netip.MustParseAddrPort("10.77.0.255:45353")
+		}
+		if port, ok := strings.CutPrefix(args[0], "broadcast:"); ok {
+			n, err := strconv.ParseUint(port, 10, 16)
+			if err != nil {
+				return err
+			}
+			group = netip.AddrPortFrom(group.Addr(), uint16(n))
+		}
 	}
-	key := args[0] + strconv.FormatBool(routed)
+	var sourcePort uint64
+	if len(args) > 3 {
+		sourcePort, err = strconv.ParseUint(args[3], 10, 16)
+		if err != nil {
+			return err
+		}
+	}
+	key := args[0] + strconv.FormatBool(routed) + ":" + strconv.FormatUint(sourcePort, 10)
 	if g.senders == nil {
 		g.senders = map[string]*net.UDPConn{}
 	}
 	c := g.senders[key]
 	if c == nil {
-		if c, err = net.ListenUDP(network, nil); err != nil {
+		if c, err = net.ListenUDP(network, &net.UDPAddr{Port: int(sourcePort)}); err != nil {
 			return err
 		}
 		g.senders[key] = c
@@ -923,7 +977,11 @@ func (g *groupLab) send(args []string) error {
 			if !routed {
 				err = p.SetMulticastInterface(ifi)
 			}
-			err = errors.Join(err, p.SetMulticastTTL(255))
+			ttl := 255
+			if args[0] == "minecraft" {
+				ttl = 1
+			}
+			err = errors.Join(err, p.SetMulticastTTL(ttl))
 		} else {
 			p := ipv6.NewPacketConn(c)
 			if !routed {
@@ -935,7 +993,27 @@ func (g *groupLab) send(args []string) error {
 			return err
 		}
 	}
-	_, err = c.WriteToUDPAddrPort(make([]byte, size), group)
+
+	mark := 0
+	if len(args) > 2 && args[2] == "underlay" {
+		mark = tsconst.LinuxBypassMarkNum
+	}
+	rc, err := c.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var setErr error
+	if err = rc.Control(func(fd uintptr) { setErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, mark) }); err != nil {
+		return err
+	}
+	if setErr != nil {
+		return setErr
+	}
+	payload := make([]byte, size)
+	if args[0] == "minecraft" {
+		copy(payload, "[MOTD]juist test[/MOTD][AD]45111[/AD]")
+	}
+	_, err = c.WriteToUDPAddrPort(payload, group)
 	return err
 }
 
@@ -949,6 +1027,9 @@ func (g *groupLab) close() {
 }
 
 func groupsOf(t *testing.T, list string) []netip.Addr {
+	if list == "none" {
+		return nil
+	}
 	var out []netip.Addr
 	for _, g := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' }) {
 		a, err := netip.ParseAddr(g)

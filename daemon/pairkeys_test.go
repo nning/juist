@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/netip"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/fxamacker/cbor/v2"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/gossip"
@@ -589,6 +592,107 @@ func TestAHintAlonePicksNoPresharedKey(t *testing.T) {
 		env, ok := f.d.pairEnvOf(f.auth.State(), &n)
 		if !ok || env.PeerStore != e.PairStore || env.Epoch != e.Epoch {
 			t.Fatalf("a hint naming epoch %d, store %d is paired as %+v", forged.epoch, forged.store, env)
+		}
+	}
+}
+
+func TestAnUnconfirmedPairSurvivesBothRestarts(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		t.Run(fmt.Sprintf("full-announcement=%v", full), func(t *testing.T) { unconfirmedPairRestart(t, full) })
+	}
+}
+
+func unconfirmedPairRestart(t *testing.T, full bool) {
+	m := &mesh{t: t, nw: newNetwork(t, 2), hub: &lanHub{}, mutate: inTunnel}
+	kept := []*persisted{keep(t, m.nw), keep(t, m.nw)}
+	clock := &passing{}
+	for i := range 2 {
+		self, peer := m.nw.devices[i], m.nw.devices[1-i]
+		p := &pairkey.Pair{Self: self.record.WireGuard, Peer: peer.record.WireGuard, PeerStore: uint64(2 - i), Cur: pairkey.Gen{N: 1, Epoch: 1, Key: pairkey.Key{1}}}
+		next := &pairkey.Gen{N: 2, Epoch: 1, Key: pairkey.Key{2}}
+		if pairkey.Leads(p.Self, p.Peer) {
+			p.Next = next
+			p.Last = 2
+		} else {
+			p.Offered = next
+		}
+		raw, err := cbor.Marshal(map[int]any{1: uint64(i + 1), 2: []*pairkey.Pair{p}, 4: uint64(2)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(kept[i].home, "pairs.secret"), []byte(base64.StdEncoding.EncodeToString(raw)+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 2 {
+		m.nodes = append(m.nodes, m.startKept(t, i, m.nw.devices[i], kept[i], clock))
+	}
+	if full {
+		for i, n := range m.nodes {
+			var ep gossip.Endpoint
+			// One made before the group secret is recovered names no epoch.
+			waitFor(t, 10*time.Second, "an announcement with its epoch", func() bool {
+				var ok bool
+				ep, ok = n.d.Announcement()
+				return ok && ep.PQ()
+			})
+			if err := m.nodes[1-i].d.Learn(ep); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	m.waitForPairs(t, time.Minute, "an unconfirmed pair to recover after both restarted", m.paired)
+	if !pingUntil(m.nodes[0], m.nodes[1].overlayV4(), 10*time.Second) {
+		t.Fatal("no tunnel after recovery")
+	}
+	m.waitForPairs(t, 30*time.Second, "the recovered pair to finish the commit", func() bool {
+		for i, n := range m.nodes {
+			var gen uint64
+			n.d.readPairs(func(s *pairkey.Store) { gen = s.Generations()[m.nodes[1-i].dev.record.WireGuard] })
+			if gen < 2 {
+				return false
+			}
+		}
+		return m.paired()
+	})
+}
+
+func TestADeadTunnelRetriesItsUnconfirmedPair(t *testing.T) {
+	nw := newNetwork(t, 2)
+	if !pairkey.Leads(nw.devices[0].record.WireGuard, nw.devices[1].record.WireGuard) {
+		nw.devices[0], nw.devices[1] = nw.devices[1], nw.devices[0]
+	}
+	f := newReconcileFixtureOn(t, nw, nil)
+	peer := nw.devices[1]
+	ep := f.learn(t, peer, 7001)
+	p := &pairkey.Pair{
+		Self: f.self.record.WireGuard, Peer: peer.record.WireGuard, PeerStore: ep.PairStore,
+		Cur:  pairkey.Gen{N: 1, Epoch: 1, Key: pairkey.Key{1}},
+		Next: &pairkey.Gen{N: 2, Epoch: 1, Key: pairkey.Key{2}}, Last: 2,
+	}
+	raw, err := cbor.Marshal(map[int]any{1: uint64(2), 2: []*pairkey.Pair{p}, 4: uint64(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.pairs.Restore(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	installed := f.installed(t, 1)
+	f.mgr.tunnels = map[uint64]conn.Tunnel{installed.ID: {LastHandshake: time.Now().Add(-time.Minute)}}
+	for attempt := range 2 {
+		live, _ := f.d.Tunnels(time.Millisecond)
+		if live != 1-attempt {
+			t.Fatalf("check %d: %d live tunnels", attempt+1, live)
+		}
+		if err := f.d.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		want := [32]byte{byte(2 - attempt)}
+		if got := f.installed(t, 1).PSK; got != want {
+			t.Fatalf("check %d: key %x, want %x", attempt+1, got[:4], want[:4])
 		}
 	}
 }

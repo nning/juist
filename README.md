@@ -40,8 +40,10 @@ which then updates juist with the system (on FreeBSD, as root, with
 curl -fsSL https://pkg.juist.nning.io/install.sh | sh
 ```
 
-Android takes it by F-Droid, and each step by hand is in
+Each step by hand is in
 [Install](https://docs.juist.nning.io/en/docs/install/#from-the-package-repository).
+On Android, F-Droid installs the app from juist's repository
+([Android](https://docs.juist.nning.io/en/docs/android/#with-f-droid)).
 Or, on every device, the package of the [latest release](https://github.com/nning/juist/releases/latest):
 
 ```sh
@@ -109,7 +111,9 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | remove a device, on every device at once | `juist remove phone` | [remove](https://docs.juist.nning.io/en/docs/remove/) |
 | reach a device by name | `ssh laptop.home.juist`, or `ssh laptop` | [names](https://docs.juist.nning.io/en/docs/names/) |
 | leave this device's DNS alone, names and exit node alike | `sudo juist set --dns=false` | [names](https://docs.juist.nning.io/en/docs/names/) |
-| route a group, as SSDP's, into the network for programs on the default interface; or carry no multicast | `sudo juist set --groups 239.255.255.250`, `sudo juist set --multicast=false` | [multicast](https://docs.juist.nning.io/en/docs/multicast/) |
+| limit automatic group copying to SSDP; or carry no multicast or UDP broadcast | `sudo juist set --groups 239.255.255.250`, `sudo juist set --multicast=false` | [multicast](https://docs.juist.nning.io/en/docs/multicast/) |
+| find Minecraft Java LAN worlds on the LAN and across the network | automatic on Linux where policy permits; `sudo juist set --groups auto` restores the default | [Minecraft](https://docs.juist.nning.io/en/docs/multicast/#minecraft-java-edition) |
+| carry UDP broadcasts, including NetBIOS, on Linux with no port configuration | on without a policy; with one, only where `pass multicast` permits; `--multicast=false` disables it | [discovery](https://docs.juist.nning.io/en/docs/multicast/) |
 | let a device with a public address relay for the others | `juist grant vps relay` | [relays](https://docs.juist.nning.io/en/docs/relays/) |
 | reach the network from a hotel or office that only lets HTTPS out | one relay on 443: the ingress's serves `relay.DOMAIN` by itself, another `sudo juist set --relay-name relay.example.org`; `sudo juist set --https-only` here where traffic is inspected | [HTTPS only](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |
@@ -167,6 +171,8 @@ make android    # needs a JDK 21, the Android SDK and NDK; the APKs land in andr
 It resolves the network's names, sends its internet through an exit node
 where one is chosen, turns no public names on, uses no subnets, and takes no
 roles.
+Release and development updates share the app's identity and signing key,
+so switching repositories keeps the phone's keys and network.
 Building, signing and what the app shows: [Android](https://docs.juist.nning.io/en/docs/android/).
 
 ## Several networks and several admins

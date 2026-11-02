@@ -13,6 +13,7 @@ core trust/secrets
 core trust/store
 
 in gossip
+in discovery/mdns bypass_linux.go
 in internal/aead
 in internal/atomicfile
 in internal/addrkey
@@ -32,7 +33,7 @@ in internal/waiting
 in mobile
 in cmd/juist addresses.go changes.go describe.go naming.go pin.go rotate.go waiting.go
 in cmd/juistd helpers_unix.go privsep_freebsd.go
-in conn confine.go local.go multicast.go walls.go
+in conn confine.go local.go multicast.go group_delivery.go discovery_linux.go walls.go
 in daemon addrkeys.go compact.go control.go ipc.go pairkeys.go peercred.go peercred_bsd.go peercred_linux.go peercred_other.go policy.go reconcile.go
 in ipc ipc.go status.go
 in relay admit.go cert.go https.go
@@ -41,7 +42,6 @@ out ci                               the CI harness, not shipped
 out ci/idle                          a measurement of the Android app, not shipped
 out cmd/internal/defaults            packaging defaults
 out discovery/dht                    an untrusted transport; what it carries internal/aead seals
-out discovery/mdns                   an untrusted transport; what it carries internal/aead seals
 out internal/admit                   bounds connections before they speak: availability alone
 out internal/lograte                 bounds how often a log line is said: availability alone
 out internal/malformed               turns a decoder's panic into an error: availability alone
@@ -70,5 +70,6 @@ out packaging/freebsd/mkpkg          build tooling
 out packaging/freebsd/mkrepo         build tooling
 out packaging/image/mkimage          build tooling
 out packaging/licenses               build tooling
+out private/pkg                      package repository tooling
 out private/publish                  publishing tooling
 out relay/forward                    carries enrollment between host and guest, sealed by the link's secret

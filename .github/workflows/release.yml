@@ -1,0 +1,95 @@
+name: Release
+
+# A tag vX.Y.Z in nning/juist: its packages, built here and unsigned, with
+# GitHub's provenance, in a draft release, which make release-ci checks,
+# signs and publishes.
+on:
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+
+permissions:
+  contents: read
+
+env:
+  # The Makefile's GOTOOLCHAIN; the two move together.
+  GO_VERSION: '1.27.3'
+
+jobs:
+  packages:
+    if: github.repository == 'nning/juist'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: fedora:44
+    steps:
+      - run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros dpkg git make tar gzip findutils
+      - uses: actions/checkout@v7
+        with:
+          # version.sh takes the version from the tag.
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: make rpm
+      - run: rpm -K build/rpm/RPMS/x86_64/juist-*.rpm
+      - run: make release-files
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: build/release/
+          if-no-files-found: error
+
+  android:
+    if: github.repository == 'nning/juist'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platforms;android-37.2 build-tools;36.0.0 build-tools;37.0.0 ndk;29.0.14206865
+      # No signing key here: the release build comes out unsigned.
+      - run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865" make android
+      - run: |
+          mkdir -p dist
+          for abi in arm64-v8a x86_64; do
+            cp "android/app/build/outputs/apk/release/app-$abi-release-unsigned.apk" "dist/juist-android-${abi%-v8a}-unsigned.apk"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: dist/
+          if-no-files-found: error
+
+  draft:
+    needs: [packages, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+      - run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft \
+            --title "juist ${GITHUB_REF_NAME#v}" --notes "Unsigned until make release-ci publishes it." dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}

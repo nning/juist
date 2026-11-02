@@ -343,11 +343,7 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 	}
 	keepAnswers(answers, out, tunnels, answered, at)
 	d.probes.answered = answers
-	handshakes := make(map[uint64]time.Time, len(tunnels))
-	for id, t := range tunnels {
-		handshakes[id] = t.LastHandshake
-	}
-	d.probePairs(out, probed, handshakes)
+	d.probePairs(out, probed)
 	return out
 }
 

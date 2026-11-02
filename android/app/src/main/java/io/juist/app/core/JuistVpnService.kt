@@ -231,6 +231,7 @@ class JuistVpnService : VpnService() {
                 override fun addDnsServer(address: InetAddress) { b.addDnsServer(address) }
                 override fun addSearchDomain(domain: String) { b.addSearchDomain(domain) }
                 override fun setMtu(mtu: Int) { b.setMtu(mtu) }
+                override fun setMetered(metered: Boolean) { b.setMetered(metered) }
             })
             val pfd = b.establish() ?: throw IllegalStateException(getString(R.string.vpn_not_established))
             return pfd.detachFd()

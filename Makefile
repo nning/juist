@@ -379,6 +379,18 @@ fuzz-matrix: ## Emit the fuzz targets as a JSON matrix (one object per target)
 	done; \
 	printf ']\n'
 
+.PHONY: repro-packages
+repro-packages: ## Fail unless HEAD builds to the same .deb, FreeBSD package and, with rpmbuild, RPM twice
+	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	git clone -q . "$$tmp/a"; git clone -q . "$$tmp/elsewhere/b"; \
+	targets="deb pkg-freebsd"; ! command -v $(RPMBUILD) >/dev/null 2>&1 || targets="$$targets rpm"; \
+	$(MAKE) -s -C "$$tmp/a" $$targets >/dev/null; \
+	GOCACHE="$$tmp/cache" $(MAKE) -s -C "$$tmp/elsewhere/b" $$targets >/dev/null; \
+	for f in $$(cd "$$tmp/a/build" && find deb freebsd rpm/RPMS -name '*.deb' -o -name '*.pkg' -o -name '*.rpm' 2>/dev/null); do \
+		cmp -s "$$tmp/a/build/$$f" "$$tmp/elsewhere/b/build/$$f" || { echo "repro-packages: two builds of $$f differ"; exit 1; }; \
+		echo "==> $${f##*/} reproducible"; \
+	done
+
 .PHONY: tcb
 tcb: ## Report the core's and the audit scope's sizes; fail past the core's budget or on an unplaced package
 	@sh ci/tcb.sh "$(GO)" audit-scope $(TCB_BUDGET)
@@ -475,6 +487,7 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 		-C $(RPMTOP)/stage $(RPM_NAME)-$(RPM_VERSION)
 	@cp packaging/rpm/juist.sysusers $(RPMTOP)/SOURCES/
 	@cp packaging/rpm/juist.spec $(RPMTOP)/SPECS/
+	SOURCE_DATE_EPOCH=$$(git log -1 --format=%ct 2>/dev/null || date +%s) \
 	$(RPMBUILD) --define "_topdir $(RPMTOP)" \
 		--define "ver $(RPM_VERSION)" \
 		--define "rel $(RPM_RELEASE)" \
@@ -553,7 +566,9 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	size=$$(du -sk --exclude=DEBIAN $$root | cut -f1); \
 	sed -e 's|@VERSION@|$(DEB_VERSION)|' -e 's|@ARCH@|$(DEB_ARCH)|' -e "s|@SIZE@|$$size|" \
 		packaging/deb/control.in > $$root/DEBIAN/control; \
-	dpkg-deb --root-owner-group -Zxz --build $$root $(DEBTOP)/juist_$(DEB_VERSION)_$(DEB_ARCH).deb >/dev/null
+	t=$$(git log -1 --format=%ct 2>/dev/null || date +%s); \
+	find $$root -exec touch -h -d @$$t {} +; \
+	SOURCE_DATE_EPOCH=$$t dpkg-deb --root-owner-group -Zxz --build $$root $(DEBTOP)/juist_$(DEB_VERSION)_$(DEB_ARCH).deb >/dev/null
 	@find $(DEBTOP) -maxdepth 1 -name '*.deb'
 
 # `make release` writes a release into build/release under stable names, so
@@ -569,22 +584,13 @@ APKSIGNER     ?= $(lastword $(sort $(wildcard $(ANDROID_HOME)/build-tools/*/apks
 # An APK signed by another key than this certificate's, a test key say, is no release.
 ANDROID_CERT  := $(shell cat packaging/android-release.sha256)
 
-.PHONY: release
-release: ## Build a signed release into build/release: packages under stable names, SHA256SUMS and its signature
-	@test -f $(RELEASE_KEY) || { echo "release: no signing key at $(RELEASE_KEY)"; exit 1; }
-	@test "$(words $(RELEASE_RPM))" = 1 || { \
-		echo "release: want one RPM in $(RPMTOP)/RPMS/x86_64, found $(words $(RELEASE_RPM)); make rpm on Fedora, or RELEASE_RPM=FILE"; exit 1; }
+.PHONY: release-files
+release-files: ## Build the release's packages under stable names into build/release, unsigned: the debs, FreeBSD's and, with RELEASE_RPM, the RPM
 	@test "$(RPM_RELEASE)" = 1 || { echo "release: HEAD is no release tag vX.Y.Z, or the tree has changes"; exit 1; }
-	@case "$(notdir $(RELEASE_RPM))" in juist-$(RPM_VERSION)-1.*) ;; *) \
+	@test -z "$(RELEASE_RPM)" || test "$(words $(RELEASE_RPM))" = 1 || { \
+		echo "release: want one RPM in $(RPMTOP)/RPMS/x86_64, found $(words $(RELEASE_RPM)); or RELEASE_RPM=FILE"; exit 1; }
+	@case "$(notdir $(RELEASE_RPM))" in ""|juist-$(RPM_VERSION)-1.*) ;; *) \
 		echo "release: $(notdir $(RELEASE_RPM)) is no $(RPM_VERSION)-1; build it in a clone with the tag, not an archive"; exit 1;; esac
-	@test -x "$(APKSIGNER)" || { echo "release: apksigner not found under ANDROID_HOME; or APKSIGNER=PATH"; exit 1; }
-	@set -e; for abi in arm64-v8a x86_64; do \
-		apk=$(RELEASE_APKS)/app-$$abi-release.apk; \
-		test -f $$apk || { echo "release: $$apk missing; make android"; exit 1; }; \
-		certs=$$($(APKSIGNER) verify --print-certs $$apk) || { echo "release: apksigner cannot verify $$apk"; exit 1; }; \
-		echo "$$certs" | grep -q "SHA-256 digest: $(ANDROID_CERT)$$" || { \
-			echo "release: $$apk is not signed by the release key (packaging/android-release.sha256)"; exit 1; }; \
-	done
 	@rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
 	@set -e; for a in amd64 arm64; do \
 		$(MAKE) --no-print-directory deb DEB_ARCH=$$a >/dev/null; \
@@ -594,12 +600,78 @@ release: ## Build a signed release into build/release: packages under stable nam
 		$(MAKE) --no-print-directory pkg-freebsd FREEBSD_ABI=FreeBSD:15:$$a >/dev/null; \
 		cp $(BUILDDIR)/freebsd/juist-*.pkg $(RELEASE_DIR)/juist-freebsd15-$$a.pkg; \
 	done; \
-	cp $(RELEASE_RPM) $(RELEASE_DIR)/juist.x86_64.rpm; \
-	cp $(RELEASE_APKS)/app-arm64-v8a-release.apk $(RELEASE_DIR)/juist-android-arm64.apk; \
-	cp $(RELEASE_APKS)/app-x86_64-release.apk $(RELEASE_DIR)/juist-android-x86_64.apk; \
+	[ -z "$(RELEASE_RPM)" ] || cp $(RELEASE_RPM) $(RELEASE_DIR)/juist.x86_64.rpm
+
+.PHONY: release
+release: ## Build a signed release into build/release: packages under stable names, SHA256SUMS and its signature
+	@test -f $(RELEASE_KEY) || { echo "release: no signing key at $(RELEASE_KEY)"; exit 1; }
+	@test -n "$(RELEASE_RPM)" || { echo "release: no RPM in $(RPMTOP)/RPMS/x86_64; make rpm on Fedora, or RELEASE_RPM=FILE"; exit 1; }
+	@test -x "$(APKSIGNER)" || { echo "release: apksigner not found under ANDROID_HOME; or APKSIGNER=PATH"; exit 1; }
+	@set -e; for abi in arm64-v8a x86_64; do \
+		apk=$(RELEASE_APKS)/app-$$abi-release.apk; \
+		test -f $$apk || { echo "release: $$apk missing; make android"; exit 1; }; \
+		certs=$$($(APKSIGNER) verify --print-certs $$apk) || { echo "release: apksigner cannot verify $$apk"; exit 1; }; \
+		echo "$$certs" | grep -q "SHA-256 digest: $(ANDROID_CERT)$$" || { \
+			echo "release: $$apk is not signed by the release key (packaging/android-release.sha256)"; exit 1; }; \
+	done
+	@$(MAKE) --no-print-directory release-files
+	@cp $(RELEASE_APKS)/app-arm64-v8a-release.apk $(RELEASE_DIR)/juist-android-arm64.apk
+	@cp $(RELEASE_APKS)/app-x86_64-release.apk $(RELEASE_DIR)/juist-android-x86_64.apk
+	@$(MAKE) --no-print-directory release-sign
+
+.PHONY: release-sign
+release-sign:
 	cd $(RELEASE_DIR) && sha256sum -- * > SHA256SUMS
 	ssh-keygen -Y sign -q -f $(RELEASE_KEY) -n juist-release $(RELEASE_DIR)/SHA256SUMS
 	@$(MAKE) --no-print-directory release-verify
+
+# make release-ci takes the release that .github/workflows/release.yml drafts
+# from the tag; the release key's store, alias and password file are Gradle's.
+RELEASE_REPO  ?= nning/juist
+RELEASE_CI    ?= $(BUILDDIR)/release-ci
+GRADLE_PROPS  ?= $(HOME)/.gradle/gradle.properties
+SIGNING_STORE ?= $(shell sed -n 's/^juist.signing.store=//p' $(GRADLE_PROPS) 2>/dev/null)
+SIGNING_ALIAS ?= $(shell sed -n 's/^juist.signing.keyAlias=//p' $(GRADLE_PROPS) 2>/dev/null)
+SIGNING_PASS  ?= $(shell sed -n 's/^juist.signing.passwordFile=//p' $(GRADLE_PROPS) 2>/dev/null)
+ZIPALIGN      ?= $(lastword $(sort $(wildcard $(ANDROID_HOME)/build-tools/*/zipalign)))
+
+.PHONY: release-ci
+release-ci: ## Publish the release CI drafted for this tag: its packages checked against a build here and its APKs signed (NOTES=FILE)
+	@test "$(RPM_RELEASE)" = 1 || { echo "release-ci: HEAD is no release tag vX.Y.Z, or the tree has changes"; exit 1; }
+	@test -f "$(NOTES)" || { echo "release-ci: NOTES=FILE names the release notes"; exit 1; }
+	@test -f $(RELEASE_KEY) || { echo "release-ci: no signing key at $(RELEASE_KEY)"; exit 1; }
+	@test -x "$(APKSIGNER)" -a -x "$(ZIPALIGN)" || { echo "release-ci: apksigner or zipalign not found under ANDROID_HOME"; exit 1; }
+	@test -f "$(SIGNING_STORE)" -a -n "$(SIGNING_ALIAS)" -a -f "$(SIGNING_PASS)" || { \
+		echo "release-ci: juist.signing.store, keyAlias and passwordFile in $(GRADLE_PROPS) name the release key"; exit 1; }
+	@set -e; tag=v$(RPM_VERSION); ci=$(RELEASE_CI); \
+	rm -rf $$ci && mkdir -p $$ci; \
+	gh release download $$tag -R $(RELEASE_REPO) -D $$ci; \
+	for f in $$ci/*; do \
+		gh attestation verify $$f -R $(RELEASE_REPO) >/dev/null || { echo "release-ci: $${f##*/} has no provenance from $(RELEASE_REPO)"; exit 1; }; \
+	done; \
+	$(MAKE) --no-print-directory release-files RELEASE_RPM= >/dev/null; \
+	for f in juist_amd64.deb juist_arm64.deb juist-freebsd15-amd64.pkg juist-freebsd15-aarch64.pkg; do \
+		cmp -s $$ci/$$f $(RELEASE_DIR)/$$f || { echo "release-ci: CI's $$f differs from the one built here"; exit 1; }; \
+	done; \
+	if command -v $(RPMBUILD) >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory rpm >/dev/null; \
+		cmp -s $$ci/juist.x86_64.rpm $(RPMTOP)/RPMS/x86_64/juist-$(RPM_VERSION)-1.*.rpm || { echo "release-ci: CI's RPM differs from the one built here"; exit 1; }; \
+	fi; \
+	cp $$ci/juist.x86_64.rpm $(RELEASE_DIR)/; \
+	for abi in arm64 x86_64; do \
+		$(ZIPALIGN) -P 16 -f 4 $$ci/juist-android-$$abi-unsigned.apk $$ci/aligned.apk; \
+		$(APKSIGNER) sign --ks $(SIGNING_STORE) --ks-key-alias $(SIGNING_ALIAS) --ks-pass file:$(SIGNING_PASS) \
+			--out $(RELEASE_DIR)/juist-android-$$abi.apk $$ci/aligned.apk; \
+		rm -f $$ci/aligned.apk $(RELEASE_DIR)/juist-android-$$abi.apk.idsig; \
+		$(APKSIGNER) verify --print-certs $(RELEASE_DIR)/juist-android-$$abi.apk | grep -q "SHA-256 digest: $(ANDROID_CERT)$$" || { \
+			echo "release-ci: juist-android-$$abi.apk is not signed by the release key"; exit 1; }; \
+	done
+	@$(MAKE) --no-print-directory release-sign
+	@set -e; tag=v$(RPM_VERSION); \
+	gh release upload $$tag -R $(RELEASE_REPO) --clobber $(RELEASE_DIR)/juist-android-*.apk $(RELEASE_DIR)/SHA256SUMS $(RELEASE_DIR)/SHA256SUMS.sig; \
+	for abi in arm64 x86_64; do gh release delete-asset $$tag juist-android-$$abi-unsigned.apk -R $(RELEASE_REPO) -y; done; \
+	gh release edit $$tag -R $(RELEASE_REPO) --draft=false --latest --notes-file $(NOTES); \
+	echo "release-ci: published $$tag"
 
 .PHONY: release-verify
 release-verify: ## Check build/release against SHA256SUMS and SHA256SUMS against its signature

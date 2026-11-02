@@ -14,7 +14,7 @@
 - doc: docs/android
   en: {title: Android, text: "A phone joins with the invite's QR code or code, reaches the members at their addresses, and shows how each one is reached."}
   de: {title: Android, text: "Ein Telefon tritt mit dem QR-Code oder dem Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie es jedes erreicht."}
-  note: {en: "On Android 12 or newer, as a member without public names, roles or subnets.", de: "Unter Android 12 oder neuer, als Mitglied ohne öffentliche Namen, Rollen und Subnetze."}
+  note: {en: "On Android 12 or newer, as a member without public names, roles or subnets. F-Droid installs and updates it.", de: "Unter Android 12 oder neuer, als Mitglied ohne öffentliche Namen, Rollen und Subnetze. F-Droid installiert und aktualisiert sie."}
 - doc: docs/install
   en: {title: Containers, text: "An app in a container is a device of its own, through a juist container sharing its network namespace."}
   de: {title: Container, text: "Eine App im Container ist ein eigenes Gerät, über einen juist-Container, der sich ihren Netz-Namespace teilt."}
@@ -41,7 +41,11 @@
 - doc: docs/multicast
   en: {title: Multicast, text: "Printers, media servers and LAN games find the members by mDNS, SSDP or their own groups, as on one LAN."}
   de: {title: Multicast, text: "Drucker, Medienserver und LAN-Spiele finden die Mitglieder per mDNS, SSDP oder eigenen Gruppen, wie in einem LAN."}
-  note: {en: "On Linux and FreeBSD, not in the Android app; groups routed into the network on Linux.", de: "Unter Linux und FreeBSD, nicht in der Android-App; Gruppen ins Netz leiten nur unter Linux."}
+  note: {en: "On Linux and FreeBSD, not in the Android app; IPv4 groups copied automatically on Linux, including Minecraft Java. On without a policy; with one, only where pass multicast permits. --multicast=false disables both.", de: "Unter Linux und FreeBSD, nicht in der Android-App; IPv4-Gruppen unter Linux automatisch kopiert, auch Minecraft Java. Ohne Policy an, mit Policy nur durch pass multicast; --multicast=false schaltet beides ab."}
+- doc: docs/multicast
+  en: {title: UDP broadcast, text: "Local IPv4 UDP broadcasts, including NetBIOS, reach the members too, while the originals stay on the LAN; no port configuration."}
+  de: {title: UDP-Broadcast, text: "Eigene IPv4-UDP-Broadcasts einschließlich NetBIOS erreichen auch die Mitglieder, während die Originale im LAN bleiben; ohne Portkonfiguration."}
+  note: {en: "Automatic on Linux without a policy; with one, only where pass multicast permits. No DHCP or fragmented broadcasts.", de: "Unter Linux ohne Policy automatisch; mit Policy nur durch pass multicast. Kein DHCP oder fragmentierter Broadcast."}
 - doc: docs/names
   en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
   de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}

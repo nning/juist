@@ -70,9 +70,8 @@ const (
 	RelayNameFile = "relay-name"
 	RelayCertsDir = "relay-certs"
 
-	// MulticastOffFile, where it exists, is the owner's word that this
-	// device carries no multicast; GroupsFile holds the groups routed into
-	// its device, one a line.
+	// MulticastOffFile disables multicast; GroupsFile holds one group per
+	// line or "none" to disable copies. An absent GroupsFile means automatic.
 	MulticastOffFile = "multicast-off"
 	GroupsFile       = "multicast-groups"
 )

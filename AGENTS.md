@@ -94,9 +94,13 @@ address or domain the public tree has not shown; `PUSH=1` publishes it, only
 when the user says so. `private/` is never published. An own host, domain or address enters
 `scrub.txt` in the commit that brings it.
 
-A release on the public repository is `make release` from the public tree,
-uploaded whole from `build/release`, and not marked a pre-release, since the
-handbook's download links follow `releases/latest`. Its keys live in
+A release on the public repository starts with the tag `PUSH=1` pushes:
+the workflow `release.yml` builds its packages and the app, unsigned, into a
+draft release. `make release-public V=0.<N>.<K> NOTES=FILE`, outside working
+hours, checks the packages against its own build, signs the app and
+`SHA256SUMS`, and publishes the release, not as a pre-release, since the
+handbook's download links follow `releases/latest`. `make release` builds and
+signs one here instead, where CI cannot. Its keys live in
 `~/.local/share/juist-signing` and never enter the repository or an agent's
 context: refer to the files, never print them.
 
@@ -115,7 +119,8 @@ every v1 target platform; run it whenever a build-tagged file changes, which
 `make check` does not compile for other platforms. CI is `make ci-vm`: the
 privileged tests and `make check` in a KVM VM it sets up itself, the lab
 beside it, then the cross builds, about 18 minutes, logged to `build/ci`; the
-first failure ends it. GitHub's workflows run by hand alone. Run it whole, in
+first failure ends it. GitHub's workflows run on each push to the public
+repository and by hand alone here. Run it whole, in
 the background, when a milestone or the review round closing it is done, and
 record it in `12-validating.md`; `make ci-vm FAST=1` takes `make check` from
 the stamp the last pass left, for the rounds before. A change to what `make

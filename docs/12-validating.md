@@ -35,6 +35,8 @@ every push:
 | a change to what a phone, or a peer of one, sends while idle: the pace, the checks, sync, the DHT | `make android-idle`, with the AVD `juist`, recorded under "The last privileged run" | 100 min |
 | a change to the website's CSS, scripts or layouts | `make -C website check test-browser`, with Chrome | 1 min |
 | documentation alone | nothing; the commit carries `[skip ci]` | — |
+| a push or pull request to the public repository | `ci.yml` on GitHub: `make check`'s steps, the privileged tests, the cross builds and `make repro-packages` | — |
+| a release tag on the public repository | `release.yml` on GitHub drafts the release; `make release-public` checks it against a build here | — |
 
 The times are KVM's on a four-core host with nothing else running. `make
 ci` runs what `make ci-vm` runs but the lab, on this machine, the privileged
@@ -62,8 +64,9 @@ until the package brings it.
 
 **`make test-freebsd` builds every package's tests for FreeBSD** and runs them
 over ssh as root on a FreeBSD host, which needs no Go. `FREEBSD_SSH` reaches
-it, by default a qemu VM whose ssh is forwarded to port 2222, which needs
-neither root nor KVM here:
+it; install the juist package and Git on that host before the run. The
+package supplies the juist user the rc.d tests exercise. By default ssh is
+forwarded to port 2222 on a qemu VM, which needs neither root nor KVM here:
 
 ```sh
 curl -LO https://download.freebsd.org/releases/CI-IMAGES/15.1-RELEASE/amd64/Latest/FreeBSD-15.1-RELEASE-amd64-BASIC-CI-ufs.raw.xz
@@ -143,7 +146,9 @@ hash of its own. An interrupt, or a signal to make, fails the run; the lab
 goes with the runner however it ends, and a VM kept with `-keep` stays. The closing run takes no stamp: it runs
 `make check` in the VM, `repro` building once from an empty build cache as
 ever; it takes the lab's disks, which their sums check, and the previous
-release's packages, which its commit and the toolchain key, from their caches. GitHub's workflows run by hand alone.
+release's packages, which its commit and the toolchain key, from their caches. GitHub's workflows run
+on each push and pull request to the public repository, and by hand alone in
+this one.
 
 **`make repro-freebsd` builds HEAD on two builders**, this machine and the
 FreeBSD host `FREEBSD_SSH` reaches: juist and juistd for Linux and FreeBSD,
@@ -465,9 +470,13 @@ interop`).
 | a sender past the limit is cut at the receiver | `conn`: `TestAReceiverHoldsASenderToItsOwnAndToTheLimit` | no |
 | only this node's own group datagrams leave, no LAN host's, IGMP or MLD | `conn`: `TestOnlyThisNodesOwnGroupDatagramsAreSent`, `TestOnlyThisNodesOwnGroupDatagram6sAreSent`, `TestAGroupDatagramReachesEveryMember` | no |
 | a member's link-local is the overlay address's low half, neither's where two would share it, derived again with this node's addresses, kept out of the guard, routes and serving | `conn`: `TestALinkLocalIsTheOverlayAddresssLowHalf`, `TestALinkLocalTwoWouldShareIsNeithers`, `TestSetSelfDerivesThePeersLinkLocalsAgain`, `TestAPeerRegainingItsLinkLocalIsReachedAtIt`, `TestTheGuardTakesNoLinkLocal`, `TestAPlumbedRouterKeepsLinkLocalsToTheDevice`; `internal/plumber`: `TestALinkLocalAddressIsTheDevicesOwn`, `TestALinkLocalAddressGivenIsTheDevicesOnly` | FreeBSD root, in part |
-| a routed group reaches a listener on the default interface from a member's overlay address | `conn`: `TestNetnsARoutedGroupReachesTheDefaultInterface` | netns |
-| `juist set --multicast` and `--groups` are kept, refused whole where they cannot be set, said by the status, and taken by the mesh; a groups file is bounded | `daemon`: `TestMulticastSettingsAreKeptAndTaken`, `TestARefusedSettingSetsNothing`, `TestASettingNotWrittenUndoesTheOthers`, `TestASettingTheMeshDoesNotTakeRestartsNothing`, `TestGroupsKeptWithoutADeviceBlockNothing`, `TestAGroupsFileIsBounded`; `cmd/juist`: `TestStatusSaysMulticast`, `TestGroupsAreIPv4MulticastAlone` | no |
+| automatic or explicitly selected IPv4 groups and UDP broadcasts reach a listener on the default interface from the member's overlay address while the original stays on the LAN; full-sized too, with unicast answers, Minecraft's group at TTL 1 and SSDP without a group list, the original's mark preserved, no oversized copies, removed peers stopping copying and restored ones starting it again, no rules left after stop | `conn`: `TestNetnsDiscoveryKeepsTheLAN`, `TestNetnsBroadcastCopiesOrdinaryUDPPorts`, `TestNetnsACopiedGroupReachesTheDefaultInterface` | netns |
+| broadcasts unwrap only from the authenticated member, never DHCP, fragments, a subnet broadcast or unicast; UDP ports 137 and 138 use the ordinary broadcast path with unchanged payload; the group access and answer window apply | `conn`: `TestBroadcastUnwrapsOnlyFromItsMember`, `TestBroadcastCarriesOrdinaryUDPPorts`, `TestBroadcastFollowsTheGroupAccess`, `TestRefusedBroadcastNeverReachesTheEngine`, `TestAccessPassesGroupsAndTheirAnswersAlone` | no |
+| policy changes switch kernel discovery copies off and on without changing routes, a local multicast-off setting overrides permission; disabled group copying leaves native tunnel multicast working; bypass-marked UDP, including juist's own mDNS beacons, stays on the underlay | `conn`: `TestNetnsDiscoveryFollowsMulticastAccess`, `TestNetnsAutomaticGroupsCanBeDisabled`, `TestNetnsUnderlayGroupsAreNotCopied`; `discovery/mdns`: `TestTheBeaconSocketStaysOnTheUnderlay` | netns; CAP_NET_ADMIN or CAP_NET_RAW for the beacon |
+| automatic or explicitly selected groups also reach strict multicast sockets by a local unicast copy only where ordinary UDP access permits it; source, payload and TTL stay as sent | `conn`: `TestALocalGroupCopyNeedsUnicastAccess`, `TestNetnsDiscoveryKeepsTheLAN`; `TestNetnsMinecraftJava` uses an external JDK to read the LAN announcement and connect by TCP to its sender | netns; JDK for the last |
+| `juist set --multicast` and `--groups` are kept, refused whole where they cannot be set, said by the status, and taken by the mesh; automatic copying is the default, explicit lists and disabling persist, and a groups file is bounded | `daemon`: `TestMulticastSettingsAreKeptAndTaken`, `TestARefusedSettingSetsNothing`, `TestASettingNotWrittenUndoesTheOthers`, `TestASettingTheMeshDoesNotTakeRestartsNothing`, `TestGroupsKeptWithoutADeviceBlockNothing`, `TestAGroupsFileIsBounded`, `TestAutomaticGroupsAreTheDefaultAndCanBeDisabled`, `TestMulticastDefaultsFollowThePolicyAndLocalOffWins`; `cmd/juist`: `TestStatusSaysMulticast`, `TestSetGroupsSelectsAutomaticExplicitAndOff`, `TestGroupsAreIPv4MulticastAlone` | no |
 | health warns where avahi runs and leaves the device out | `cmd/juist`: `TestHealthWarnsOfAvahiLeavingTheDeviceOut` | no |
+| queued group datagrams stop when their policy snapshot changes, including between recipients; datagrams with no permitted recipient spend no sending quota | `conn`: `TestQueuedGroupsUseNoRevokedPolicy`, `TestDeniedGroupsSpendNoSendingBudget` | no |
 | under a policy, a group datagram goes only where a `pass multicast` rule passes it, by port, each way alone, its unicast answer for ten seconds, nothing from a member no rule passes; the rule reads back, needs schema 22, and reaches the data plane | `conn`: `TestAccessPassesGroupsAndTheirAnswersAlone`, `TestAnAccessDecidesEachWayAlone`, `TestAnAnswerPassesForItsWindow`, `TestAnAnswerLeavesAFlowItsReplies`, `TestOnePeersQuestionsCrowdOutNoOthers`, `TestEveryPortPassesFragments`, `TestAnAnswerIsThisNodesAlone`, `TestARestingPeerIsSentNoGroups`, `TestNothingWrappedForThisNodeReachesTheHost`; `cmd/juist`: `TestAMulticastPolicyAsksForTheUpgrade`; `internal/policy`: `TestAMulticastRulePassesGroupsAlone`; `trust/log`: `TestAMulticastPolicyNeedsSchema22`; `daemon`: `TestAMulticastRuleReachesTheDataPlane` | no |
 
 ### Android and battery
@@ -485,7 +494,7 @@ interop`).
 | the core follows the phone's network outside its own VPN, which Android reports as the app's default once up, and a network lost after another replaced it changes nothing | `android/app`: `UnderlayTest`; the app by hand in an emulator | no |
 | the core's dials into the overlay leave by the VPN device, from its own address, and fail before it is established rather than leave by the LAN | `conn`: `TestAVPNDialLeavesByTheDeviceAlone` | no |
 | the epoch secrets kept beside the node's keys are sealed as they are | `daemon`: `TestKeptSecretsAreSealedAsTheNodesKeys` | no |
-| the app brings the VPN up as the core says: its addresses, routes and, through an exit node, DNS servers, from the file the Go side's test writes | `mobile`: `TestTheVPNConfigIsWhatTheAppReads`; `android/app`: `VpnConfigTest` | no |
+| the app brings the VPN up as the core says: its addresses, routes and, through an exit node, DNS servers, from the file the Go side's test writes; the VPN is as metered as the network beneath it, so that no app's work waiting for an unmetered network is held back | `mobile`: `TestTheVPNConfigIsWhatTheAppReads`; `android/app`: `VpnConfigTest`; [The last privileged run](#the-last-privileged-run), "A metered VPN" | no |
 | the app's connection follows the core: starting, on, off, failed, off when another VPN took over and not wanted again; its last view outlives the process; a join ends as the core says; an exit node chosen reaches the core; a reboot or update turns on what was on, with consent | `android/app`: `JuistTest` | no |
 | an invite link opened from elsewhere asks to join and joins nothing untapped, changes nothing in a network, and no other link is taken; every screen survives a recreated activity; the exit nodes are chosen by a tap, not while off, and one chosen and no longer offered stays listed and refused | `android/app`: `AppRootTest`, `ExitSectionTest` | no |
 | every screen in both themes, both languages and at 200 % | `make android-check`: the Roborazzi tests against `android/app/screenshots` | no |
@@ -517,6 +526,80 @@ The latest `make ci-vm` that closed a milestone, and the latest run of each
 gate it does not cover. Replace an entry when its gate runs again, so it is
 clear how old the evidence is.
 
+- **Pair-key recovery (M25 review 9), 2026-11-01, at 66409ed**:
+  `make ci-vm STAGES=check,lab` passed in 35m5s
+  (`20261101-190014-66409ed59c3f`), the lab's normal and upgrade runs
+  in 33m53s, `access_policy` after the HTTPS relay scenario included.
+  It is not a closing run: the vm and build stages did not run. A first
+  run at c9940fa failed `make test-race` in the new
+  `TestAnUnconfirmedPairSurvivesBothRestarts`, which took an announcement
+  made before the group secret was recovered; the test now waits for one
+  with its epoch and passed 12 of 12 under `-race`. Both fixes' regressions
+  fail with their fix reverted.
+  An uncommitted lab probe that restarts both daemons and joins two new
+  nodes eight times in a row, which reproduced the failure within a few
+  rounds before the fix, passed all eight on 66409ed's packages, the
+  slowest join reaching Linux after 42.6 s.
+- **Multicast/broadcast review, 2026-11-01, working-tree snapshots**:
+  the Linux privileged gate passed in 3m54s in
+  `20261101-083539-M25.3-dirty`. `make check` and `make cross` passed;
+  all `conn` tests passed as root on FreeBSD 15.1 with OS plumbing required.
+  The final host check also passed after rebasing onto M25.3. An earlier
+  merged run failed `TestAShareInTheBackground` with an unavailable daemon;
+  ten isolated reruns and the unchanged full rerun passed.
+  Its lab failure, east not reaching Linux after the HTTPS relay
+  scenario, was a pair key left unrecovered after both daemons restarted;
+  review 9 above fixes it, and its lab passed. These are uncommitted trees based on M25.3, not runs of the final commit.
+  The data-plane manifest digest is
+  `d444b1b4ed3dde95dd2212211c0cd08c460f1793ff5d2d0d838dac9c9353294e`;
+  all 225 listed sources match the lab tree. Logs and the manifest are
+  retained under `build/ci/discovery-review-20261101/`.
+  Both regressions fail with the previous behavior: queued packets survive
+  a policy replacement, and denied group traffic exhausts permitted traffic's
+  sending quota. A full closing CI run and a Minecraft client were not run.
+- **Android update identity, 2026-11-01**, on a working tree based on
+  M25.3: `make android android-check` passed, including 135 app tests,
+  screenshots and lint; `make check` and the website check passed too.
+  The release-signed x86_64 APK updated the published
+  0.25.2 APK in a read-only Android 16 emulator without uninstalling it;
+  its app UID and a file in private app storage survived. The arm64 APK
+  has application ID `io.juist` and the pinned release certificate.
+  This checks update identity and data retention, not a joined phone's
+  network connection. The dev-builder regression fails with the previous
+  watcher/importer and passes with the separate app build. A different
+  signing certificate is refused before import. Logs are retained in
+  `build/ci/android-channel-20261101/`. No Linux/FreeBSD plumbing or package
+  lab was run for this Android build and F-Droid change.
+- **Broadcast UDP ports, 2026-11-01, working-tree snapshots**: the Linux
+  privileged gate passed in 2m17s in `20261101-065000-M25.3-dirty`.
+  `make ci-vm STAGES=lab` passed in 32m1s, `interop-run` in 28m54s,
+  including the M25 upgrade. Its snapshot is
+  `20261101-065458-M25.3-dirty`. These are uncommitted trees based
+  on M25.3, not runs of the final commit. Their data-plane sources match
+  this change; the SHA-256 manifest digest is `9ed4e23b9979c0cdec3fd468a39de666b7082af4bac2c14f49a16fbbee610989`.
+  Logs and the manifest are retained under `build/ci/netbios-20261101/`.
+  `make check`, `make cross` and the website check passed. The ordinary UDP
+  broadcast tests cover source and destination ports 137 and 138, unchanged
+  payloads, delivery through the tunnel with physical ingress blocked, and
+  preservation of the LAN original. Both the unit regression and the
+  kernel regression fail with the old port exclusions. All `conn` tests
+  also passed as root on FreeBSD 15.1 with OS plumbing required.
+  A NetBIOS application and a full closing CI run were not run.
+- **Latest full FreeBSD suite, 2026-11-01**: `make test-freebsd` passed all
+  56 packages as root on FreeBSD 15.1 on the discovery validation tree
+  subsequently landed as M25.3, before the broadcast port exclusions were
+  removed. Git and the juist package were installed. The two TCB-script
+  and two license-rendering checks skipped without Go; their build-host
+  runs passed. The package was removed cleanly, its binaries and rc.d
+  script gone; the juist users and `/var/db/juist` remain intentionally.
+- **Latest Java discovery probe, 2026-11-01**: `TestNetnsMinecraftJava`
+  passed as root with OpenJDK 21.0.12.1 on review commit 3b0d21c, before
+  its validation-documentation amendment. Its data-plane sources match
+  the manifest in the review entry above. The Java socket read the
+  announcement without a group list and connected to the sender's overlay
+  address by TCP. Logs are retained under
+  `build/ci/discovery-review-20261101/`. Ordinary gates skip this optional
+  JDK probe. A Minecraft game client was not run.
 - **`make ci-vm`, 2026-10-31, M25 done**, at M25: every stage passed
   in 36m41s, the privileged tests in 2m53s, `test-race` in 10m29s, and the
   lab in 29m48s, the multicast netns tests and the upgrade from M24, at
@@ -582,6 +665,12 @@ clear how old the evidence is.
   stopped, Android gave up after 1.7 s. The VPN off, the phone's own DNS.
   Not tried by hand: DNS over TLS to the network's resolvers and TTLs, as
   the emulator's resolver answers no TLS and every TTL as 30 s itself.
+- **A metered VPN, 2026-11-01**, in an Android 13 emulator with Google
+  APIs: with the VPN up, 26 jobs of Google's apps waited for an unmetered
+  network beside unmetered Wi-Fi, none with it off; with
+  `setMetered(false)` none waited, the VPN carried `NOT_METERED`, and it
+  was metered while the Wi-Fi was. FCM's connection to port 5228 came
+  back within 5 s of its process being killed, in forced Doze too.
 - **The app by hand, 2026-10-05**, in an Android 16 emulator: the VPN turned
   off and on three times within seconds ends on, log sync leaves from the
   overlay address, and the kept epoch secrets are sealed.
@@ -929,7 +1018,7 @@ NAT-traversal chatter: `sent ping … (10.77.0.22:41641)` with no matching
 `got ping` on the other side means the punch packets are being dropped, and
 `learned no address on the lab's LAN` means STUN never answered, so there was
 nothing to punch to. `make ci-vm` keeps the whole log in `build/ci`; from
-GitHub's workflow, run by hand, it is the `OS plumbing (privileged)` job's,
+GitHub's workflow it is the `OS plumbing (privileged)` job's,
 more readable with the job prefix stripped:
 
 ```sh

@@ -7,6 +7,12 @@
 %global __brp_strip %{nil}
 %global __brp_strip_static_archive %{nil}
 %global __brp_strip_comment_note %{nil}
+# Reproducible: times from the commit (SOURCE_DATE_EPOCH, which make rpm
+# sets), and no build host.
+%global source_date_epoch_from_changelog 0
+%global use_source_date_epoch_as_buildtime 1
+%global clamp_mtime_to_source_date_epoch 1
+%global _buildhost juist
 
 %{!?ver: %global ver 0}
 %{!?rel: %global rel 1}

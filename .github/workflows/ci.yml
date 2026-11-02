@@ -1,7 +1,11 @@
 name: CI
 
-# By hand alone: CI is make ci-vm, on a machine of our own.
+# In nning/juist on every push to main and pull request; elsewhere by hand
+# alone, since there CI is make ci-vm, on a machine of our own.
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 # Nothing here needs write access to the repository.
@@ -14,6 +18,7 @@ env:
 
 jobs:
   test:
+    if: github.repository == 'nning/juist' || github.event_name == 'workflow_dispatch'
     name: test (race + coverage)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -32,6 +37,7 @@ jobs:
           JUIST_REQUIRE_HOST_NET: '1'
 
   os-plumbing:
+    if: github.repository == 'nning/juist' || github.event_name == 'workflow_dispatch'
     name: OS plumbing (privileged)
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -57,6 +63,7 @@ jobs:
       - run: sudo -E env "PATH=$PATH" "HOME=$HOME" make test-os-plumbing
 
   lint:
+    if: github.repository == 'nning/juist' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -71,6 +78,7 @@ jobs:
       - run: make actionlint
 
   tidy:
+    if: github.repository == 'nning/juist' || github.event_name == 'workflow_dispatch'
     name: go.mod tidy
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -83,6 +91,7 @@ jobs:
       - run: make tidy-check
 
   cross:
+    if: github.repository == 'nning/juist' || github.event_name == 'workflow_dispatch'
     name: cross-compile
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -98,6 +107,7 @@ jobs:
       - run: make repro
 
   vuln:
+    if: github.repository == 'nning/juist' || github.event_name == 'workflow_dispatch'
     name: govulncheck
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -110,6 +120,7 @@ jobs:
       - run: make govulncheck
 
   tcb:
+    if: github.repository == 'nning/juist' || github.event_name == 'workflow_dispatch'
     name: TCB size
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -124,6 +135,7 @@ jobs:
       - run: make tcb
 
   packages:
+    if: github.repository == 'nning/juist' || github.event_name == 'workflow_dispatch'
     name: packages (deb, rpm and FreeBSD)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -131,16 +143,19 @@ jobs:
     # the deb is built here too, since dpkg-deb comes along. Building both is
     # what catches a spec or a Makefile target that no longer matches the
     # files it packages.
-    container: fedora:42
+    container: fedora:44
     steps:
-      - run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros dpkg git make tar gzip
+      - run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros dpkg git make tar gzip findutils
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      # Each built twice, in two places, and compared.
+      - run: make repro-packages
       - run: make rpm deb pkg-freebsd
+      - run: rpm -K build/rpm/RPMS/*/juist-*.rpm
       - run: rpm -qlp build/rpm/RPMS/*/juist-*.rpm
       - run: dpkg-deb -c build/deb/juist_*.deb
       - run: tar -tvzf build/freebsd/juist-*.pkg

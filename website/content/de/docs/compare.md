@@ -115,7 +115,7 @@ ZeroTier, die die kommerzielle Nutzung einschränkt. ZeroTier One, der
 quelloffene Client, ist nicht quantensicher; ZeroTier Quantum, eine eigene
 kommerzielle Plattform von 2026, verspricht es zu sein.
 
-ZeroTier passt, wenn du ein Layer-2-Netz brauchst, etwa für Broadcasts oder
+ZeroTier passt, wenn du ein Layer-2-Netz brauchst, etwa
 für andere Protokolle als IP.
 
 ## Nebula {#nebula}

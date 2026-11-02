@@ -11,6 +11,7 @@ import (
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/ipc"
+	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
@@ -193,4 +194,22 @@ func (d *Daemon) closeToIngresses() {
 // peerDevices is devs as this device lists them.
 func peerDevices(devs []ipc.Device, self types.Identity, view policy.View) []ipc.Device {
 	return slices.DeleteFunc(devs, func(d ipc.Device) bool { return !view.Lists(self, d.Identity) })
+}
+
+func multicastPermitted(state *log.State, self types.Identity, now int64) bool {
+	if state == nil {
+		return true
+	}
+	view := policy.NetworkOf(state, now).View(self)
+	if !view.Restricted {
+		return true
+	}
+	for _, grants := range []map[types.Identity]policy.Access{view.In, view.Out} {
+		for _, a := range grants {
+			if len(a.Multicast) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }

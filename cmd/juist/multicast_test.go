@@ -1,18 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/nning/juist/daemon"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
 )
 
 // The status says whether the device carries multicast and which groups it
-// routes, and nothing where it has no device to.
+// copies, and nothing where it has no device to.
 func TestStatusSaysMulticast(t *testing.T) {
 	t.Parallel()
 	st := &ipc.Status{InNetwork: true, Device: "juist0", Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1}}
@@ -21,8 +25,9 @@ func TestStatusSaysMulticast(t *testing.T) {
 		want string
 	}{
 		{&ipc.Multicast{}, "on"},
+		{&ipc.Multicast{Auto: true}, "on, copied: auto"},
 		{&ipc.Multicast{Off: true, Groups: []string{"224.0.0.251"}}, "off"},
-		{&ipc.Multicast{Groups: []string{"224.0.0.251", "239.255.255.250"}}, "on, routed: 224.0.0.251, 239.255.255.250"},
+		{&ipc.Multicast{Groups: []string{"224.0.0.251", "239.255.255.250"}}, "on, copied: 224.0.0.251, 239.255.255.250"},
 	} {
 		st.Multicast = c.m
 		head := statusOf(st, testNow(), noPaint).head
@@ -109,5 +114,34 @@ func TestAMulticastPolicyAsksForTheUpgrade(t *testing.T) {
 	}
 	if err := multicastSchema(&types.Policy{Rules: []types.PolicyRule{{From: types.PolicyRefs{Any: true}, To: types.PolicyRefs{Any: true}}}}, 21); err != nil {
 		t.Errorf("a policy without multicast at schema 21: %v", err)
+	}
+}
+
+func TestSetGroupsSelectsAutomaticExplicitAndOff(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("group copying is Linux only")
+	}
+	c := newCLI(t)
+	sock := filepath.Join(shortTempDir(t), "juistd.sock")
+	startService(t, t.TempDir(), sock, nil, nil, func(o *daemon.ServiceOptions) { o.Mesh.TunName = "juist0" })
+	for _, tc := range []struct{ arg, want string }{
+		{"239.255.255.250", "groups 239.255.255.250"}, {"", "groups off"}, {"auto", "groups auto"},
+	} {
+		out, err := c.run("--socket", sock, "set", "--groups", tc.arg)
+		if err != nil {
+			t.Fatalf("%q: %v: %s", tc.arg, err, out)
+		}
+		mustContain(t, out, tc.want)
+	}
+}
+
+func TestGroupSettingsHintIncludesPolicyPermission(t *testing.T) {
+	var out, stderr bytes.Buffer
+	a := &app{out: &out, errOut: &stderr}
+	groups := []string{"auto"}
+	a.saySettings(&ipc.Request{Groups: &groups}, &ipc.Status{InNetwork: true, Multicast: &ipc.Multicast{Off: true}})
+	if got := stderr.String(); !strings.Contains(got, "enabled locally and permitted by the access policy") || strings.Contains(got, "juist set --multicast") {
+		t.Fatalf("misleading discovery hint: %s", got)
 	}
 }

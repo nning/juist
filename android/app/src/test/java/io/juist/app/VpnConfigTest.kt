@@ -15,12 +15,14 @@ class VpnConfigTest {
         val dns = mutableListOf<String>()
         val search = mutableListOf<String>()
         var mtuSet = 0
+        var metered: Boolean? = null
 
         override fun addAddress(address: InetAddress, prefixLength: Int) { addrs += "${address.hostAddress}/$prefixLength" }
         override fun addRoute(address: InetAddress, prefixLength: Int) { routes += "${address.hostAddress}/$prefixLength" }
         override fun addDnsServer(address: InetAddress) { dns += address.hostAddress!! }
         override fun addSearchDomain(domain: String) { search += domain }
         override fun setMtu(mtu: Int) { mtuSet = mtu }
+        override fun setMetered(metered: Boolean) { this.metered = metered }
     }
 
     /**
@@ -38,6 +40,17 @@ class VpnConfigTest {
         assertEquals(listOf("fd00:1:2:0:0:0:0:53"), r.dns)
         assertEquals(listOf("home.juist", "lan"), r.search)
         assertEquals(1280, r.mtuSet)
+    }
+
+    /**
+     * Android counts a VPN as metered unless told otherwise, and then holds
+     * back every app's work that waits for an unmetered network, Wi-Fi or not.
+     */
+    @Test
+    fun isNoMoreMeteredThanTheNetworkBeneath() {
+        val r = Recorder()
+        configureVpn(File("../../mobile/testdata/establish.json").readText(), r)
+        assertEquals(false, r.metered)
     }
 
     /** Where the core names no DNS server, the phone keeps its own. */

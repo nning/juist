@@ -26,10 +26,39 @@ Das Telefon kann nicht:
 
 ## Die App installieren
 
-Jedes [Release](https://github.com/nning/juist/releases/latest) enthält die
-App als `juist-android-arm64.apk`, für den Emulator
-`juist-android-x86_64.apk`. Lade sie auf dem Telefon herunter und öffne sie;
-Android fragt, ob der Browser Apps installieren darf.
+Installiere die App mit F-Droid, das dann jedes neue Release bringt, oder
+lade sie einmal von GitHub herunter.
+
+### Mit F-Droid
+
+1. Installiere [F-Droid](https://f-droid.org) auf dem Telefon, falls es dort
+   noch fehlt. Ein anderer Client für F-Droid-Paketquellen, etwa Droid-ify,
+   geht auch.
+2. Tippe auf dem Telefon auf
+   [Paketquelle von juist zu F-Droid hinzufügen](fdroidrepos://pkg.juist.nning.io/juist/android/repo?fingerprint=0AAB0ADFA407BE52D9FB3AF3C0426FF0CDF4CA67CEBBFD981EA29EF0BD373C30)
+   und bestätige in F-Droid. Oder kopiere diese Adresse, öffne in F-Droid
+   **Paketquellen**, tippe auf **+** und füge sie ein:
+
+   ```text
+   https://pkg.juist.nning.io/juist/android/repo?fingerprint=0AAB0ADFA407BE52D9FB3AF3C0426FF0CDF4CA67CEBBFD981EA29EF0BD373C30
+   ```
+
+3. Suche in F-Droid nach **juist** und installiere es. Android fragt, ob
+   F-Droid Apps installieren darf.
+
+F-Droid aktualisiert die App mit jedem Release. Am Fingerabdruck in der
+Adresse prüft es, dass die Paketquelle die von juist ist.
+
+### Von GitHub
+
+Lade auf dem Telefon `juist-android-arm64.apk` aus dem
+[neuesten Release](https://github.com/nning/juist/releases/latest) herunter
+und öffne sie. Android fragt, ob der Browser Apps installieren darf. Zum
+Aktualisieren installierst du die APK des nächsten Releases darüber, oder du
+fügst die F-Droid-Paketquelle hinzu, die auch eine so installierte App
+aktualisiert.
+
+### Die App prüfen
 
 Die App ist mit dem Release-Schlüssel von juist signiert. Der
 SHA-256-Fingerabdruck ihres Zertifikats lautet:
@@ -42,22 +71,9 @@ SHA-256-Fingerabdruck ihres Zertifikats lautet:
 APK steht auch in `SHA256SUMS`
 ([Einen Download prüfen]({{< relref "docs/install" >}}#verifying-a-download)).
 
-F-Droid, oder ein anderer Client für F-Droid-Paketquellen, installiert die
-App aus der Paketquelle von juist und aktualisiert sie mit jedem Release.
-Trage die Paketquelle mit dieser Adresse ein, die den Fingerabdruck des
-Schlüssels enthält, der ihren Index signiert:
-
-```text
-https://pkg.juist.nning.io/juist/android/repo?fingerprint=0AAB0ADFA407BE52D9FB3AF3C0426FF0CDF4CA67CEBBFD981EA29EF0BD373C30
-```
-
-Sie enthält die APK des Releases, eine auf dem einen Weg installierte App
-aktualisiert sich also auch auf dem anderen.
-
-Wie du die App selbst baust, steht in
-[android/README.md](https://github.com/nning/juist/blob/main/android/README.md).
-Eine selbst gebaute App lässt sich nicht über ein Release installieren und
-umgekehrt, weil ein anderer Schlüssel sie signiert.
+Eine [selbst gebaute](https://github.com/nning/juist/blob/main/android/README.md)
+App ist mit einem anderen Schlüssel signiert. Sie lässt sich deshalb nicht
+über ein Release installieren und umgekehrt.
 
 ## Einem Netz beitreten
 

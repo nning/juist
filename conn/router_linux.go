@@ -139,7 +139,13 @@ type linuxRouter struct {
 	inInstalled    bool
 	// ownLinkLocal says the kernel was told to give the device no
 	// link-local address of its own.
-	ownLinkLocal bool
+	ownLinkLocal    bool
+	discoveryOn     bool
+	discoveryAuto   bool
+	discoveryGroups []netip.Addr
+	discoveryRoute  discoveryRoute
+	discoveryVia    netip.Addr
+	discoverySet    bool
 }
 
 func newOSRouter(logf logger.Logf, dev tun.Device, mon *netmon.Monitor, _ *health.Tracker, bus *eventbus.Bus,
@@ -212,6 +218,7 @@ func (r *linuxRouter) Set(cfg *router.Config) error {
 		}
 	}
 	r.routes = reconcile(r.routes, usable(cfg.Routes, v6, true), r.addRoute, r.delRoute, &errs)
+	errs = append(errs, r.copyDiscoveryLocked())
 	r.addrs = reconcile(r.addrs, addrs, r.addAddr, r.delAddr, &errs)
 	if slices.ContainsFunc(addrs, func(p netip.Prefix) bool { return p.Addr().IsLinkLocalUnicast() }) {
 		errs = append(errs, r.onlyLinkLocalLocked())
@@ -261,6 +268,7 @@ func (r *linuxRouter) Close() error {
 	if r.inInstalled {
 		errs = append(errs, setInGuard(r.inst, r.link.Attrs().Name, nil, nil))
 	}
+	errs = append(errs, setDiscovery(r.inst, r.link.Attrs().Index, r.link.Attrs().Name, discoveryRoute{}, nil, false))
 	r.routes = reconcile(r.routes, nil, r.addRoute, r.delRoute, &errs)
 	errs = append(errs, r.delRulesLocked())
 	r.mu.Unlock()

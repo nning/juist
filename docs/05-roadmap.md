@@ -1136,6 +1136,42 @@ of an overlay address to its member that the source check rests on.
   it to, an SSDP answer to one goes back, and a wrapped packet from a
   member no rule passes is dropped unparsed.
 
+## Discovery copying after M25
+
+Linux copies the host's own IPv4 UDP multicast and broadcasts into the
+network alongside the LAN. The copy carries the sender's overlay address;
+the original and its mark stay on the LAN. Limited and subnet broadcasts
+are supported; subnet broadcasts arrive as limited broadcast. Only local,
+unfragmented UDP without IP options, fitting 1280 bytes, is copied. DHCP
+broadcasts are excluded; NetBIOS uses the ordinary UDP broadcast path,
+without protocol-specific address or name handling. IPv6 still needs
+native device support.
+
+Without a policy, copying and multicast are enabled by default. Under a
+policy they are off until a matching `pass multicast` rule permits them,
+by peer, direction and port. Kernel copying needs an IPv4 peer with outgoing
+UDP multicast access and follows policy changes even when routes stay the
+same. `juist set --multicast=false` overrides every policy permission.
+
+IPv4 groups are copied automatically. `--groups` restricts them to a list;
+`--groups ""` disables group copies while leaving broadcast alone;
+`--groups auto` restores the default. Explicit groups are also joined on
+the device. A local unicast copy reaches Java sockets joined only on the
+LAN, retaining the sender and requiring ordinary UDP permission too.
+Bypass-marked sockets, including juist's own mDNS beacons, stay on the
+underlay. Copying stops when the last eligible IPv4 peer goes away. Queued datagrams
+expire with their policy snapshot; only traffic with an eligible recipient
+spends the sending quota.
+
+Core 11 014 lines, budget 11 050; audit scope 36 069, measured on
+2026-11-01. `make check`, `make cross`, the website check, the Linux
+privileged gate, the FreeBSD connection tests and the real Java discovery
+probe passed. The Linux/FreeBSD lab passed at 66409ed (M25 review 9),
+which recovers a pair key left unconfirmed when both ends restart.
+[12-validating.md](12-validating.md#the-last-privileged-run)
+identifies the tested snapshots and results. Residual weakness 18 in
+[02-threat-model.md](02-threat-model.md) covers host-wide discovery exposure.
+
 ## M26 — The full Android app
 
 The full Android app, on M10's, once M10's exit criteria are met: M6b's
@@ -1409,7 +1445,7 @@ the trust layer and enrollment at its core, M30's models with them,
 plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22, M23, M24, M25, M26, M27, M28 and M29 add to it — route consumption and its forwarding helper, the
 override record and the resolver, the published names, those for members alone, and the ingress, its QUIC Initial parser included, the
 disable record, the preshared-key exchange, the ML-DSA cut-over and
-enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, the meeting at a relay on 443, a user per instance and FreeBSD's pf, multicast's unwrapping, the phone's subnet routes, several networks in one app, admin keys on a phone and the desktop app's use of the control socket — fix findings, mature fuzz corpus (consider
+enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, the meeting at a relay on 443, a user per instance and FreeBSD's pf, discovery's unwrapping and local delivery, the phone's subnet routes, several networks in one app, admin keys on a phone and the desktop app's use of the control socket — fix findings, mature fuzz corpus (consider
 OSS-Fuzz), implementation-vs-threat-model review, documentation of the
 residual-weakness acceptances for operators, which the handbook's
 trade-offs carry ([14-website.md](14-website.md)). Open decision: which

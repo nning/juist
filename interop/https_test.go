@@ -73,8 +73,16 @@ juist set --relay-name ""
 rm -f /etc/systemd/system/juistd.service.d/pebble.conf; systemctl daemon-reload; systemctl restart juistd`, 3*time.Minute)
 		fb.try(`juist set --relay-name ""; sysrc -q -x juistd_env juistd_args; service juistd restart
 pkill -f '[p]robe answer'; daemon -f -o /tmp/answer.log /tmp/probe answer 127.0.0.1:5399 127.0.0.1`, 3*time.Minute)
-		// The subtests after this one start from a tunnel up again.
-		lx.try("for i in $(seq 60); do ping -c1 -W2 "+fb4+" >/dev/null && break; sleep 3; done", 4*time.Minute)
+		defer func() {
+			if t.Failed() {
+				for _, v := range []*vm{fb, lx} {
+					out, _ := v.try(diagnose(v)+"; juist log | tail -20", 2*time.Minute)
+					t.Logf("%s after HTTPS cleanup:\n%s", v.name, out)
+				}
+			}
+		}()
+		lx.eventually(t, "reaching fb after HTTPS cleanup", 4*time.Minute,
+			"ping -c1 -W2 "+fb4, func(string) bool { return true })
 	})
 
 	// Pebble finds lx's relay by its name; the rest of its names are fb's.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -109,16 +110,15 @@ type Options struct {
 	Local      tun.Device
 	LocalAddrs []netip.Addr
 
-	// Multicast carries the UDP this node's device sends to a multicast
-	// group to every member without an [Access], and delivers theirs. Each
-	// member then holds a link-local address of its overlay IPv6 one's, the
-	// only one on this node's device.
+	// Multicast carries discovery multicast and IPv4 UDP broadcast between members.
 	Multicast bool
 
-	// Groups are IPv4 multicast groups routed into the device and joined on
-	// it, with Multicast, so that an app sending and listening on the host's
-	// default interface reaches the members instead of the LAN. Linux alone.
+	// Groups are IPv4 multicast groups copied into the device on Linux,
+	// while the originals still reach the LAN. They need Multicast.
 	Groups []netip.Addr
+	// GroupsAuto copies every locally sent IPv4 UDP multicast group on Linux.
+	// It needs Multicast and an empty Groups list.
+	GroupsAuto bool
 }
 
 // tsManager implements [Manager] on top of Tailscale's wgengine and magicsock.
@@ -187,9 +187,7 @@ type tsManager struct {
 	// multicast, nil without [Options.Multicast].
 	confiner *confiner
 	groups   *multicaster
-	// routed are [Options.Groups], and joined holds them on the device.
-	routed []netip.Prefix
-	joined io.Closer
+	joined   io.Closer
 
 	// stun are the public STUN servers, and stunRegions the regions they
 	// hold in the map last installed.
@@ -386,11 +384,10 @@ func New(opts Options) (_ Manager, err error) {
 	m.confiner = confine(tundev)
 	if opts.Multicast {
 		m.groups = relayGroups(tundev, m.done, &m.warm)
+		m.groups.localGroups = slices.Clone(opts.Groups)
+		m.groups.autoGroups = opts.GroupsAuto
 		m.confiner.groups = m.groups
 		undo.push(func() { close(m.done) })
-		for _, g := range opts.Groups {
-			m.routed = append(m.routed, netip.PrefixFrom(g, 32))
-		}
 	}
 	m.tun = tundev
 	if opts.Local != nil {
@@ -449,9 +446,9 @@ func New(opts Options) (_ Manager, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(m.routed) > 0 {
+	if len(opts.Groups) > 0 {
 		if m.joined, err = joinGroups(opts.TunName, opts.Groups); err != nil {
-			return nil, fmt.Errorf("conn: joining the groups routed into %s: %w", opts.TunName, err)
+			return nil, fmt.Errorf("conn: joining the groups copied into %s: %w", opts.TunName, err)
 		}
 		undo.push(func() { m.joined.Close() })
 	}
@@ -520,7 +517,7 @@ func (m *tsManager) reconfig() error {
 	// ProtectKernelTunables depends on this daemon writing no sysctls.
 	rt := &router.Config{
 		LocalAddrs:    m.self.Addrs,
-		Routes:        slices.Concat(m.peerRoutes(), m.routed),
+		Routes:        m.peerRoutes(),
 		NetfilterMode: preftype.NetfilterOff,
 	}
 	err = m.eng.Reconfig(wg, rt, &dns.Config{})
@@ -537,6 +534,11 @@ func (m *tsManager) reconfig() error {
 		}
 	}
 	m.routerStale = false
+	if r, ok := m.osRouter.(interface{ discoveryPeers([]Peer) error }); ok {
+		if err := r.discoveryPeers(slices.Collect(maps.Values(m.state.Load().peers))); err != nil {
+			return err
+		}
+	}
 	if m.inGuard != nil {
 		return m.inGuard.guardOverlay(hostAddrs(m.self.Addrs), m.peerAddrs())
 	}

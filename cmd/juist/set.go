@@ -25,7 +25,11 @@ the device without sudo; run it as root. --operator="" clears it.
 --relay-name serves this device's relay on 443 under a public name (default:
 relay.DOMAIN on the network's ingress). --dns=false leaves this host's DNS
 alone: no network names, and no DNS through an exit node. --multicast=false
-carries no discovery multicast; --groups routes IPv4 groups into the network.`}
+carries no multicast or UDP broadcast, even if policy allows it. Without a
+policy discovery is on by default; under a policy a pass multicast rule
+enables it. On Linux IPv4 groups are copied automatically; --groups limits
+or disables those copies. UDP broadcast includes NetBIOS; DHCP is excluded.
+Local UDP copies of those groups need ordinary unicast access to the port.`}
 	fs := newFlags(s.name)
 	var op, proxy, relayName optionalString
 	fs.Var(&op, "operator", "local `USER` who manages this device")
@@ -33,9 +37,9 @@ carries no discovery multicast; --groups routes IPv4 groups into the network.`}
 	fs.Var(&proxy, "proxy", "HTTP proxy `URL` to reach them by, - to read it from stdin; \"\" for HTTPS_PROXY")
 	fs.Var(&relayName, "relay-name", "public `NAME` of this device's relay on 443")
 	dns := fs.Bool("dns", true, "take this host's DNS for the network's names and the exit node; =false leaves it alone")
-	multicast := fs.Bool("multicast", true, "carry discovery multicast, as mDNS and SSDP, to the members; =false carries none")
-	var groups optionalString
-	fs.Var(&groups, "groups", "IPv4 `GROUPS`, comma-separated, routed into the network; \"\" for none")
+	multicast := fs.Bool("multicast", true, "carry discovery where policy permits it; =false carries no multicast or broadcast")
+	groups := optionalString{value: "auto"}
+	fs.Var(&groups, "groups", "IPv4 `GROUPS`: auto, a comma-separated list, or \"\" for none")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
@@ -196,7 +200,7 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 	}
 	if req.Groups != nil {
 		if len(*req.Groups) == 0 {
-			a.ok("groups cleared")
+			a.ok("groups off")
 		} else {
 			a.ok("groups %s", strings.Join(*req.Groups, ", "))
 		}
@@ -204,7 +208,7 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 	switch {
 	case !st.InNetwork:
 	case req.Groups != nil && len(*req.Groups) > 0 && st.Multicast != nil && st.Multicast.Off:
-		a.hint("multicast is off, so no group is routed: juist set --multicast")
+		a.hint("copying needs multicast enabled locally and permitted by the access policy")
 	case h.Only && len(h.Relays) == 0:
 		a.warn("no relay on 443/tcp")
 		a.hint("a relay's operator names it there: juist set --relay-name NAME")
@@ -221,9 +225,11 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 	}
 }
 
-// parseGroups reads a comma-separated list of IPv4 multicast groups, none
-// for "".
+// parseGroups accepts auto, a list of IPv4 multicast groups, or "" for none.
 func parseGroups(list string) ([]string, error) {
+	if strings.TrimSpace(list) == "auto" {
+		return []string{"auto"}, nil
+	}
 	out := []string{}
 	for _, f := range strings.Split(list, ",") {
 		if f = strings.TrimSpace(f); f == "" {

@@ -10,6 +10,7 @@ internal interface VpnTarget {
     fun addDnsServer(address: InetAddress)
     fun addSearchDomain(domain: String)
     fun setMtu(mtu: Int)
+    fun setMetered(metered: Boolean)
 }
 
 /** What the core hands `Platform.establish`: mobile/testdata/establish.json is one. */
@@ -26,9 +27,12 @@ internal data class EstablishConfig(
  * Brings t up as config, the core's, says: its addresses, its routes, and
  * its DNS servers, juist's resolver in the tunnel, which then answers all of
  * the phone's lookups, with the domains a name without a dot is tried under.
+ * It is as metered as the network beneath it: a VPN Android counts as metered
+ * holds back every app's work that waits for an unmetered network.
  */
 internal fun configureVpn(config: String, t: VpnTarget) {
     val c = coreJson.decodeFromString(EstablishConfig.serializer(), config)
+    t.setMetered(false)
     t.setMtu(c.mtu)
     for (a in c.addrs) prefix(a).let { (addr, bits) -> t.addAddress(addr, bits) }
     for (r in c.routes) prefix(r).let { (addr, bits) -> t.addRoute(addr, bits) }

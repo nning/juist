@@ -302,6 +302,12 @@ func TestARestrictedPeerTakesNoPartInGroups(t *testing.T) {
 // unicast answer to it passes for answerWindow, other unicast not, and a
 // wrapped packet from a peer passed no group is dropped.
 func TestAccessPassesGroupsAndTheirAnswersAlone(t *testing.T) {
+	for _, dst := range []string{"239.255.255.250:1900", "255.255.255.255:1900"} {
+		t.Run(dst, func(t *testing.T) { testGroupAccess(t, ap(dst)) })
+	}
+}
+
+func testGroupAccess(t *testing.T, ssdpGroup netip.AddrPort) {
 	a, aTUN := groupNode(t, 1, "100.64.0.1/32", "fd7a:115c:a1e0::1/128")
 	b, bTUN := groupNode(t, 2, "100.64.0.2/32", "fd7a:115c:a1e0::2/128")
 	c, cTUN := groupNode(t, 3, "100.64.0.3/32", "fd7a:115c:a1e0::3/128")
@@ -322,7 +328,6 @@ func TestAccessPassesGroupsAndTheirAnswersAlone(t *testing.T) {
 	}
 	stop := make(chan struct{})
 	defer close(stop)
-	ssdpGroup := ap("239.255.255.250:1900")
 	toPort := func(port uint16) func(*packet.Parsed) bool {
 		return func(p *packet.Parsed) bool { return p.IPProto == ipproto.UDP && p.Dst.Port() == port }
 	}
@@ -506,5 +511,48 @@ func TestNothingWrappedForThisNodeReachesTheHost(t *testing.T) {
 	}
 	if got := c.in(parsed(wrapGroup(addrB, netip.MustParseAddr("192.168.1.9"), mdnsFrom(addrB))), nil); got != filter.Accept {
 		t.Errorf("a packet wrapped for a routed host: %v", got)
+	}
+}
+
+func TestQueuedGroupsUseNoRevokedPolicy(t *testing.T) {
+	for _, when := range []string{"queued", "partly sent"} {
+		t.Run(when, func(t *testing.T) {
+			c := &multicaster{}
+			self := []netip.Prefix{netip.PrefixFrom(addrA, 32)}
+			peers := []Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(addrB, 32)}}, {Addrs: []netip.Prefix{netip.PrefixFrom(addrC, 32)}}}
+			c.set(peers, self)
+			s := groupSend{datagram: mdnsFrom(addrA), pol: c.policy.Load()}
+			revoke := func() {
+				for i := range peers {
+					peers[i].Access = &Access{Open: []Ports{{Proto: ipproto.TCP, First: 22, Last: 22}}}
+				}
+				c.set(peers, self)
+			}
+			want := 0
+			if when == "queued" {
+				revoke()
+			} else {
+				want = 1
+			}
+			sent := 0
+			c.send(s, func([]byte) error { sent++; revoke(); return nil })
+			if sent != want {
+				t.Fatalf("sent %d queued packets after revocation; want %d", sent, want)
+			}
+		})
+	}
+}
+
+func TestDeniedGroupsSpendNoSendingBudget(t *testing.T) {
+	c := &multicaster{sending: make(chan groupSend, 2), sent: rate.NewLimiter(0, 1)}
+	c.set([]Peer{{Addrs: []netip.Prefix{netip.PrefixFrom(addrB, 32)}, Access: &Access{GroupsTo: []Ports{{Proto: ipproto.UDP, First: 4445, Last: 4445}}}}}, []netip.Prefix{netip.PrefixFrom(addrA, 32)})
+	c.out(parsed(mdnsFrom(addrA)), nil)
+	if len(c.sending) != 0 {
+		t.Error("queued a packet no peer may receive")
+		<-c.sending
+	}
+	c.out(parsed(udpPacket(ap("100.64.0.1:5000"), ap("224.0.2.60:4445"))), nil)
+	if len(c.sending) != 1 {
+		t.Fatal("denied traffic exhausted the permitted group's budget")
 	}
 }

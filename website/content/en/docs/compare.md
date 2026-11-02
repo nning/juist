@@ -105,7 +105,7 @@ available, but under ZeroTier's own licence, which restricts commercial use.
 ZeroTier One, the open source client, is not post-quantum; ZeroTier Quantum,
 a separate commercial platform launched in 2026, promises to be.
 
-Choose ZeroTier if you need a layer 2 network, such as for broadcast or
+Choose ZeroTier if you need a layer 2 network, such as for
 protocols other than IP.
 
 ## Nebula {#nebula}

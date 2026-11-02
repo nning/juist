@@ -1212,9 +1212,9 @@ func (s *Service) Status() ipc.Status {
 		st.HTTPS = &ipc.HTTPS{Only: s.prefs.HTTPSOnly, Proxy: ipc.RedactProxy(s.prefs.Proxy), Name: s.prefs.RelayName}
 	}
 	if o := s.opts.Mesh; o.TunName != "" && !o.Netstack && runtime.GOOS != "android" {
-		st.Multicast = &ipc.Multicast{Off: s.prefs.MulticastOff}
+		st.Multicast = &ipc.Multicast{Off: s.prefs.MulticastOff || !multicastPermitted(state, st.Self, s.now().Unix()), Auto: copiesGroups(o) && s.prefs.automaticGroups()}
 		for _, g := range s.prefs.Groups {
-			if routesGroups(o) {
+			if copiesGroups(o) {
 				st.Multicast.Groups = append(st.Multicast.Groups, g.String())
 			}
 		}

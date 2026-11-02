@@ -38,12 +38,14 @@ const (
 
 // A multicaster carries the group datagrams this node's device sends to
 // every member its access lets it, each wrapped and addressed to the member,
-// and delivers theirs. Only UDP to a multicast group passes, and over IPv6 an
+// and delivers theirs. Only UDP discovery datagrams pass, and over IPv6 an
 // echo request, IPv6 only to a group of link or site scope, with the sender's
 // own overlay address as its source, or over IPv6 its link-local address.
 type multicaster struct {
-	policy atomic.Pointer[groupPolicy]
-	sent   *rate.Limiter
+	policy      atomic.Pointer[groupPolicy]
+	localGroups []netip.Addr
+	autoGroups  bool
+	sent        *rate.Limiter
 
 	// asked are the sources of the group datagrams sent and delivered
 	// lately, by the address of the peer that may answer them, which its
@@ -81,6 +83,7 @@ type groupMember struct {
 	v4, v6, ll       netip.Addr
 	lim              *rate.Limiter
 	to, from         []Ports
+	open             []Ports
 	echoTo, echoFrom bool
 }
 
@@ -94,6 +97,8 @@ type groupSource struct {
 // dhcpv6Ports are DHCPv6's client and server ports, which no group
 // datagram goes to.
 var dhcpv6Ports = []uint16{546, 547}
+
+var broadcastBlockedPorts = []uint16{67, 68}
 
 // answerWindow is how long a unicast answer to a group datagram passes
 // a restricted peer's access: SSDP's longest wait, and more.
@@ -122,18 +127,25 @@ func relayGroups(w *tstun.Wrapper, done <-chan struct{}, running *sync.WaitGroup
 		for {
 			select {
 			case s := <-c.sending:
-				for _, peer := range s.pol.peers {
-					if b := s.pol.wrap(peer, s.datagram); b != nil {
-						c.ask(s.datagram, peer)
-						w.InjectOutbound(b)
-					}
-				}
+				c.send(s, w.InjectOutbound)
 			case <-done:
 				return
 			}
 		}
 	}()
 	return c
+}
+
+func (c *multicaster) send(s groupSend, inject func([]byte) error) {
+	for _, peer := range s.pol.peers {
+		if c.policy.Load() != s.pol {
+			return
+		}
+		if b := s.pol.wrap(peer, s.datagram); b != nil {
+			c.ask(s.datagram, peer)
+			inject(b)
+		}
+	}
 }
 
 // set replaces who takes part: the peers without an [Access], and this
@@ -149,6 +161,11 @@ func (c *multicaster) set(peers []Peer, self []netip.Prefix) {
 		sends, takes := acc == nil, acc == nil
 		m := memberOf(peer.Addrs)
 		m.echoTo, m.echoFrom = acc == nil, acc == nil
+		if acc == nil {
+			m.open = []Ports{{}}
+		} else {
+			m.open = acc.Open
+		}
 		if acc != nil && !acc.Nothing {
 			sends, takes = len(acc.GroupsTo) > 0, len(acc.GroupsFrom) > 0
 			m.to, m.from = anyPort(acc.GroupsTo), anyPort(acc.GroupsFrom)
@@ -327,19 +344,23 @@ func (m *groupMember) owns(src netip.Addr) bool {
 // wrap is datagram wrapped from this node to peer, nil where either lacks
 // an address of its family.
 func (p *groupPolicy) wrap(peer *groupMember, datagram []byte) []byte {
-	if !passesGroup(peer.to, peer.echoTo, datagram) {
+	if !p.canSend(peer, datagram) {
 		return nil
 	}
 	if datagram[0]>>4 == 4 {
-		if !p.self.v4.IsValid() || !peer.v4.IsValid() {
-			return nil
-		}
 		return wrapGroup(p.self.v4, peer.v4, datagram)
 	}
-	if !p.self.v6.IsValid() || !peer.v6.IsValid() {
-		return nil
-	}
 	return wrapGroup6(p.self.v6, peer.v6, datagram)
+}
+
+func (p *groupPolicy) canSend(peer *groupMember, datagram []byte) bool {
+	if !passesGroup(peer.to, peer.echoTo, datagram) {
+		return false
+	}
+	if datagram[0]>>4 == 4 {
+		return p.self.v4.IsValid() && peer.v4.IsValid()
+	}
+	return p.self.v6.IsValid() && peer.v6.IsValid()
 }
 
 // out takes a group datagram the host sends, ahead of the filter, which
@@ -348,12 +369,15 @@ func (p *groupPolicy) wrap(peer *groupMember, datagram []byte) []byte {
 func (c *multicaster) out(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	if src, ok := groupDatagram(p.Buffer()); ok {
 		pol := c.policy.Load()
-		if pol != nil && pol.self.owns(src) && len(pol.peers) > 0 && c.sent.Allow() {
+		if pol != nil && pol.self.owns(src) && slices.ContainsFunc(pol.peers, func(peer *groupMember) bool { return pol.canSend(peer, p.Buffer()) }) && c.sent.Allow() {
 			select {
 			case c.sending <- groupSend{datagram: append([]byte(nil), p.Buffer()...), pol: pol}:
 			default:
 			}
 		}
+		return filter.DropSilently
+	}
+	if p.Dst.Addr() == netip.MustParseAddr("255.255.255.255") {
 		return filter.DropSilently
 	}
 	if c.nextOut != nil {
@@ -385,6 +409,9 @@ func (c *multicaster) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 		}
 		c.ask(inner, sender)
 		w.InjectInboundCopy(inner)
+		if local := c.localGroup(inner, pol, sender); local != nil {
+			w.InjectInboundCopy(local)
+		}
 		return filter.DropSilently
 	}
 	if c.nextIn != nil {
@@ -393,12 +420,8 @@ func (c *multicaster) in(p *packet.Parsed, w *tstun.Wrapper) filter.Response {
 	return filter.Accept
 }
 
-// groupDatagram reports whether b is a whole IP packet carrying UDP to a
-// multicast group, without IPv4 options or IPv6 extension headers, over IPv4
-// a fragment of one too, over IPv6 to a group of link or site scope, or an
-// echo request to one; and its source. No other ICMPv6 passes: router
-// advertisements, neighbour discovery and MLD go to groups too; nor DHCPv6,
-// which could hand the members addresses and resolvers.
+// groupDatagram accepts UDP multicast, unfragmented UDP broadcast or an IPv6 group ping.
+// Options, extension headers, DHCPv6 and IPv6 groups beyond link or site scope stay out.
 func groupDatagram(b []byte) (netip.Addr, bool) {
 	if len(b) >= 40 && b[0]>>4 == 6 {
 		scope := b[25] & 0x0f
@@ -418,8 +441,14 @@ func groupDatagram(b []byte) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	dst := netip.AddrFrom4([4]byte(b[16:20]))
-	if !dst.IsMulticast() || ipproto.Proto(b[9]) != ipproto.UDP {
+	if ipproto.Proto(b[9]) != ipproto.UDP {
 		return netip.Addr{}, false
+	}
+	if !dst.IsMulticast() {
+		if dst != netip.MustParseAddr("255.255.255.255") || len(b) < 28 || binary.BigEndian.Uint16(b[6:8])&0x3fff != 0 ||
+			slices.Contains(broadcastBlockedPorts, binary.BigEndian.Uint16(b[20:22])) || slices.Contains(broadcastBlockedPorts, binary.BigEndian.Uint16(b[22:24])) {
+			return netip.Addr{}, false
+		}
 	}
 	return netip.AddrFrom4([4]byte(b[12:16])), true
 }
@@ -557,13 +586,16 @@ func headerChecksum(h []byte) uint16 {
 	return ^uint16(sum)
 }
 
-// checkGroups refuses [Options.Groups] the node cannot route.
+// checkGroups refuses group copying the node cannot support.
 func checkGroups(opts Options) error {
-	if len(opts.Groups) == 0 {
+	if opts.GroupsAuto && len(opts.Groups) > 0 {
+		return errors.New("conn: automatic groups and a group list are mutually exclusive")
+	}
+	if len(opts.Groups) == 0 && !opts.GroupsAuto {
 		return nil
 	}
 	if !opts.Multicast || opts.TunName == "" || opts.Tun != nil || opts.Plumber != nil || runtime.GOOS != "linux" {
-		return errors.New("conn: groups are routed into a device of Linux's own, with multicast")
+		return errors.New("conn: groups are copied into a device of Linux's own, with multicast")
 	}
 	for _, g := range opts.Groups {
 		if !g.Is4() || !g.IsMulticast() {

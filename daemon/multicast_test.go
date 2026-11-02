@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nning/juist/conn"
+	"github.com/nning/juist/internal/policy"
 	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
 )
@@ -59,13 +60,15 @@ func TestMulticastSettingsAreKeptAndTaken(t *testing.T) {
 	var seen connectsSeen
 	f := newServiceFixtureWith(t, func(o *Options) { o.TunName = "vpn0"; seen.wrap(o) })
 	mdns := netip.MustParseAddr("224.0.0.251")
-	seen.last(t, "carrying multicast", func(o conn.Options) bool { return o.Multicast && len(o.Groups) == 0 })
+	seen.last(t, "carrying multicast", func(o conn.Options) bool {
+		return o.Multicast && len(o.Groups) == 0 && o.GroupsAuto == (runtime.GOOS == "linux")
+	})
 
 	groups, off := []string{"224.0.0.251", "239.255.255.250"}, false
 	resp, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdSettings, Groups: &groups})
 	if runtime.GOOS != "linux" {
 		if err == nil {
-			t.Fatal("groups were routed on " + runtime.GOOS)
+			t.Fatal("groups were copied on " + runtime.GOOS)
 		}
 		return
 	}
@@ -90,7 +93,7 @@ func TestMulticastSettingsAreKeptAndTaken(t *testing.T) {
 			t.Errorf("%s was not kept: %v", name, err)
 		}
 	}
-	for _, bad := range [][]string{{"10.0.0.1"}, {"ff02::fb"}, {"nonsense"}} {
+	for _, bad := range [][]string{{"10.0.0.1"}, {"ff02::fb"}, {"nonsense"}, {"auto", "224.0.2.60"}} {
 		if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdSettings, Groups: &bad}); err == nil {
 			t.Errorf("groups %v were taken", bad)
 		}
@@ -108,10 +111,21 @@ func TestMulticastSettingsAreKeptAndTaken(t *testing.T) {
 	if _, err := ipc.Call(g.sock, ipc.Request{Command: ipc.CmdSettings, Multicast: &on, Groups: &none}); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{statedir.MulticastOffFile, statedir.GroupsFile} {
-		if _, err := os.Stat(filepath.Join(f.home, name)); !os.IsNotExist(err) {
-			t.Errorf("%s stayed: %v", name, err)
-		}
+	if _, err := os.Stat(filepath.Join(f.home, statedir.MulticastOffFile)); !os.IsNotExist(err) {
+		t.Errorf("multicast off stayed: %v", err)
+	}
+	if p := LoadPrefs(f.home, t.Logf); !p.GroupsOff || p.automaticGroups() {
+		t.Fatalf("empty groups were not kept: %+v", p)
+	}
+	automatic := []string{"auto"}
+	if resp, err = ipc.Call(g.sock, ipc.Request{Command: ipc.CmdSettings, Groups: &automatic}); err != nil {
+		t.Fatal(err)
+	}
+	if m := resp.Status.Multicast; m == nil || !m.Auto || len(m.Groups) != 0 {
+		t.Fatalf("automatic status: %+v", m)
+	}
+	if p := LoadPrefs(f.home, t.Logf); !p.automaticGroups() {
+		t.Fatalf("automatic groups were not kept: %+v", p)
 	}
 
 	h := newServiceFixture(t, true)
@@ -149,7 +163,7 @@ func TestAGroupsFileIsBounded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, statedir.GroupsFile), []byte(strings.Join(lines, "\n")+"\nnonsense\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := loadGroups(home, t.Logf)
+	got, _ := loadGroups(home, t.Logf)
 	if len(got) != ipc.MaxGroups || len(slices.Compact(slices.SortedFunc(slices.Values(got), netip.Addr.Compare))) != len(got) {
 		t.Errorf("read %v", got)
 	}
@@ -171,8 +185,8 @@ func TestGroupsKeptWithoutADeviceBlockNothing(t *testing.T) {
 			t.Errorf("%+v: %v", req, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(f.home, statedir.GroupsFile)); !os.IsNotExist(err) {
-		t.Errorf("the groups stayed: %v", err)
+	if p := LoadPrefs(f.home, t.Logf); !p.GroupsOff || len(p.Groups) > 0 {
+		t.Errorf("groups not disabled: %+v", p)
 	}
 }
 
@@ -210,4 +224,91 @@ func TestASettingTheMeshDoesNotTakeRestartsNothing(t *testing.T) {
 	if n := len(seen.opts) - before; n != 0 {
 		t.Errorf("the mesh started %d times again", n)
 	}
+}
+
+func TestAutomaticGroupsAreTheDefaultAndCanBeDisabled(t *testing.T) {
+	home := t.TempDir()
+	if p := LoadPrefs(home, t.Logf); !p.automaticGroups() {
+		t.Fatal("new devices need a group list")
+	}
+	for _, tc := range []struct {
+		text string
+		auto bool
+		off  bool
+	}{
+		{"none\n", false, true}, {"auto\n", true, false}, {"224.0.2.60\n", false, false}, {"", false, true}, {"bad\n", false, true},
+	} {
+		if err := os.WriteFile(filepath.Join(home, statedir.GroupsFile), []byte(tc.text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		p := LoadPrefs(home, t.Logf)
+		if p.automaticGroups() != tc.auto || p.GroupsOff != tc.off {
+			t.Errorf("%q: %+v", tc.text, p)
+		}
+	}
+	if err := os.Remove(filepath.Join(home, statedir.GroupsFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(home, statedir.GroupsFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if p := LoadPrefs(home, t.Logf); p.automaticGroups() {
+		t.Fatal("an unreadable groups file enabled automatic copies")
+	}
+}
+
+func TestMulticastDefaultsFollowThePolicyAndLocalOffWins(t *testing.T) {
+	f := newServiceFixtureWith(t, func(o *Options) { o.TunName = "vpn0" })
+	check := func(off bool) {
+		t.Helper()
+		if m := f.s.Status().Multicast; m == nil || m.Off != off {
+			t.Fatalf("multicast=%+v, want off=%v", m, off)
+		}
+	}
+	auth, _ := f.nw.authorityFor(t)
+	set := func(src string) {
+		t.Helper()
+		p, err := policy.Parse(src, policy.Members(auth.State()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec, err := auth.Builder().SetPolicy(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rec.Sign(f.nw.admin); err != nil {
+			t.Fatal(err)
+		}
+		if err := auth.Inform(rec); err != nil {
+			t.Fatal(err)
+		}
+		body, err := rec.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdInform, Records: [][]byte{body}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(false)
+	set("pass from n0 to n1 proto tcp port 22\n")
+	check(true)
+	set("pass multicast from n0 to n1 port 4445\n")
+	check(false)
+	set("pass multicast from n1 to n0 port 4445\n")
+	check(false)
+	off := false
+	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdSettings, Multicast: &off}); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	set("pass multicast from n0 to n1\n")
+	check(true)
+	on := true
+	if _, err := ipc.Call(f.sock, ipc.Request{Command: ipc.CmdSettings, Multicast: &on}); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	set("pass from n0 to n1\n")
+	check(true)
 }

@@ -15,7 +15,10 @@ in the network, so an answer goes straight back to it.
 It carries pings to IPv6 groups too, so that `ping -I juist0 ff02::1`
 shows the members that answer, each by its link-local address.
 
-Multicast is on by default. Every member can then answer discovery queries
+Without an access policy, multicast and discovery copying are on by default.
+With a policy they are off until a matching `pass multicast` rule permits
+them, by device, direction and port. `sudo juist set --multicast=false`
+disables both even if policy permits them. Every permitted member can answer discovery queries
 on the others, as a device on your LAN can. It can announce a printer or a
 media server, and the answer carries its address in the network.
 
@@ -23,7 +26,7 @@ juist does not carry:
 
 - multicast from other devices on your LAN. Only what a member sends itself
   crosses.
-- broadcast, such as to `255.255.255.255`.
+- DHCP broadcasts (UDP source or destination ports 67 and 68), or fragmented broadcasts.
 - IPv6 groups other than those of link scope (`ff02::`) and site scope
   (`ff05::`).
 - ICMP to a group other than an IPv6 ping, such as router advertisements,
@@ -52,34 +55,85 @@ network's schema 22; see [Updating]({{< relref "docs/updating" >}}).
 
 ## Programs that use the default interface
 
-Many programs listen and send on every interface, `juist0` among them. Some
-use only the host's default interface, usually the LAN's. For those, route
-their group into the network.
-
-{{< step on="laptop" >}}
-Route SSDP's group into the network:
-
-```sh
-sudo juist set --groups 239.255.255.250
-```
-
-It prints `groups 239.255.255.250`, and `juist status` shows:
+On Linux, juist automatically copies this host's IPv4 UDP multicast into
+the network alongside the LAN. Programs that use only the default interface,
+such as Minecraft Java, need no group configuration. `juist status` shows:
 
 ```console
-  Multicast     on, routed: 239.255.255.250
+  Multicast     on, copied: auto
 ```
-{{< /step >}}
 
-{{< step on="nas" as="the other members" >}}
-Do the same on every member that runs such a program, so that it receives
-the group on its default interface too.
-{{< /step >}}
+Copying follows those permissions on every participating Linux member. Existing
+explicit group lists remain in force. To restore the automatic default:
 
-A routed group goes to the members and no longer to the LAN, from this
-device. Several groups are separated by commas. `sudo juist set --groups ""`
-routes none again. You can route only IPv4 groups, and only on Linux.
-Changing the groups restarts the device's tunnels, which takes a few
-seconds.
+```sh
+sudo juist set --groups auto
+```
+
+To copy only selected groups, give a comma-separated list, for example
+`sudo juist set --groups 239.255.255.250` for SSDP. `sudo juist set --groups ""`
+stops copying groups and prints `groups off`; broadcast remains on.
+
+The original still goes to the LAN. Copying works only for IPv4 on Linux,
+for unfragmented UDP packets up to 1280 bytes including the IP header
+(1252 bytes of payload). Changing the groups restarts the device's tunnels,
+which takes a few seconds. IPv6 programs must send and listen on `juist0`.
+
+### Minecraft Java Edition
+
+No group configuration is needed on Linux with the automatic default.
+Under a policy, the discovery and game permissions below are still required.
+
+Java Edition announces an open LAN world on UDP port 4445. The copy carries
+the host's address in juist, so the client connects through juist; players
+on the original LAN still receive the announcement too. Under an access
+policy, allow multicast port 4445 and the game's TCP port separately. The
+TCP port is the one chosen when opening the world to LAN.
+
+Java's multicast socket joins only the default interface's group. With
+automatic copying or a matching explicit group list, juist also delivers a
+local unicast UDP copy with the sender's address preserved. Under an access policy, this copy additionally
+needs ordinary UDP access to port 4445. For example, with TCP port 25565
+chosen in the LAN dialog:
+
+```text
+pass multicast from <gamers> to <gamers> port 4445
+pass from <gamers> to <gamers> proto udp port 4445
+pass from <gamers> to <gamers> proto tcp port 25565
+```
+
+The original multicast still reaches listeners on `juist0`; an application
+that accepts both deliveries can see two copies. The packet's payload and
+source are unchanged. A socket bound to a LAN interface, LAN address or group address may still
+need explicit support for `juist0`.
+
+## What other members learn
+
+Automatic copying includes discovery from every program on this host,
+not only games you deliberately use through juist. It can reveal device
+names, service identifiers and other information normally sent on the LAN.
+Without a policy every member can receive it. Use an access policy to limit
+who receives it, or `sudo juist set --multicast=false` to turn it off here.
+
+## UDP broadcast
+
+On Linux, juist automatically copies this host's IPv4 UDP broadcasts into
+its network, with multicast on. It copies both `255.255.255.255` and subnet
+broadcasts; the latter arrive as `255.255.255.255`. The originals still go
+to the LAN. There is no list of ports to configure. The packet must fit
+1280 bytes including the IP header and must not be fragmented. DHCP
+broadcasts are excluded. NetBIOS on UDP ports 137 and 138 follows this same
+broadcast path, without protocol-specific address or name handling.
+
+Broadcast uses the same `pass multicast` rules and rate limit as multicast.
+An answer is permitted for ten seconds on the source UDP port. A program
+bound to its LAN address or LAN interface alone may not receive packets
+arriving on `juist0`. Addresses written inside a discovery message are
+not translated.
+
+Automatic copying works only on Linux. On FreeBSD, multicast programs
+must send and listen on `juist0` themselves. The Android app carries
+neither multicast nor broadcast.
 
 ## Avahi
 
@@ -112,8 +166,8 @@ sudo systemctl restart avahi-daemon
 sudo juist set --multicast=false
 ```
 
-It prints `multicast off`, and `juist status` shows `Multicast off`.
-`sudo juist set --multicast` turns it on again. Both restart the device's
+This turns off multicast and broadcast even where policy permits them. It prints `multicast off`, and `juist status` shows `Multicast off`.
+`sudo juist set --multicast` allows discovery again where policy permits it. Both restart the device's
 tunnels, which takes a few seconds.
 
 The Android app carries no multicast.
@@ -121,7 +175,7 @@ The Android app carries no multicast.
 ## If something goes wrong
 
 - **A program finds no member.** Run `juist health` and look for the avahi
-  warning. Check that the program listens on `juist0`, or route its group as
-  above.
+  warning. On Linux, check that `juist status` says `copied: auto` or lists
+  the program's group. Elsewhere the program must listen on `juist0`.
 - **`juist status` shows no `Multicast` line.** The device has no `juist0`,
   as a [service member]({{< relref "docs/service-member" >}}) does not.

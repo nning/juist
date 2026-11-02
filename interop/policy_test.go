@@ -17,6 +17,10 @@ func accessPolicy(t *testing.T, fb, lx *vm, lx4 string) {
 	west := walled{name: "west", ns: "west", dev: "we", net: "10.87.0", home: "/tmp/west", sock: "/tmp/west/juistd.sock"}
 	t.Cleanup(func() {
 		if t.Failed() {
+			for _, v := range []*vm{fb, lx} {
+				out, _ := v.try(diagnose(v)+"; juist log | tail -20", 2*time.Minute)
+				t.Logf("%s before policy cleanup:\n%s", v.name, out)
+			}
 			for _, w := range []walled{east, west} {
 				out, _ := lx.try(w.juist("status")+"; "+w.juist("devices")+"; tail -40 "+w.home+"/juistd.log", time.Minute)
 				t.Logf("%s:\n%s", w.name, out)

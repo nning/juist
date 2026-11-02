@@ -816,8 +816,9 @@ const ErrNothingStaged = "no rotation of this device's keys is waiting"
 const ErrStillMember = "this device is still a member of its network"
 
 // Multicast is a device's carrying of multicast: off by its owner's word, or
-// on, with the IPv4 groups routed into the device.
+// on, with the IPv4 groups copied into the device.
 type Multicast struct {
 	Off    bool     `cbor:"1,keyasint,omitempty"`
 	Groups []string `cbor:"2,keyasint,omitempty"`
+	Auto   bool     `cbor:"3,keyasint,omitempty"`
 }

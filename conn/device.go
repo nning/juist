@@ -58,6 +58,11 @@ func (m *tsManager) openDevice(opts Options, cfg *wgengine.Config, undo *cleanup
 	// One monitor for both, rather than letting the engine start a second.
 	cfg.Tun = dev
 	cfg.Router = osRtr
+	if r, ok := osRtr.(interface {
+		copyDiscovery(bool, []netip.Addr, bool)
+	}); ok {
+		r.copyDiscovery(opts.Multicast, opts.Groups, opts.GroupsAuto)
+	}
 	m.osRouter = osRtr
 	if version.IsMobile() {
 		// What the engine hands Android's VPN.

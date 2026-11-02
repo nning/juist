@@ -45,6 +45,11 @@ Without these settings the release build stays unsigned. Install the debug
 build instead, `apk/debug/app-arm64-v8a-debug.apk`. It is a separate app,
 `io.juist.debug`, and installs next to a release build.
 
+The stable and development channels use the same release application ID,
+`io.juist`, and signing key. The repository selects the channel; a development
+update keeps the installed app's keys and network. A release can replace it
+once its version code is newer. `-Pjuist.dev` no longer creates another app.
+
 Android installs an update only if the same key signed both, so a release
 does not install over an app you built yourself, or the other way round.
 Uninstalling the app to switch deletes the phone's keys, and the phone has to

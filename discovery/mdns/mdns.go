@@ -218,6 +218,9 @@ func listenMulticast(group netip.AddrPort, skipIface string) (PacketConn, error)
 		if err := reuseAddr(network, address, c); err != nil {
 			return err
 		}
+		if err := markUnderlay(c); err != nil {
+			return err
+		}
 		return underlay.Control(network, address, c)
 	}}
 	pc, err := lc.ListenPacket(context.Background(), "udp4",

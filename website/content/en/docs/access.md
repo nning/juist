@@ -122,14 +122,16 @@ port, a range such as `8000:8080`, or a list. A rule can have several
 everything. Ping needs `proto icmp`, or a rule without a protocol.
 
 `pass multicast from SOURCE to DESTINATION` passes
-[multicast]({{< relref "docs/multicast" >}}) from the sources to the
+[multicast and UDP broadcast]({{< relref "docs/multicast" >}}) from the sources to the
 destinations, and nothing else. Its destinations are devices, tables or
 `any`. A `port` limits it to those UDP ports, as in
 `pass multicast from <family> to <family> port 5353`; it needs no `proto`,
 since only UDP crosses; without a `port`, pings to IPv6 groups do too, as
 `ping ff02::1` sends them. With a `port`, a datagram too large for one packet
 does not pass. The rule also passes the answers a destination
-sends straight back to a group datagram, as SSDP sends them. Rules that
+sends straight back to a group datagram, as SSDP sends them. The local
+unicast copy for automatically copied or selected IPv4 groups needs ordinary UDP access to its
+port as well. Rules that
 pass multicast need the network's schema 22, which
 [juist log upgrade]({{< relref "docs/updating" >}}) raises.
 

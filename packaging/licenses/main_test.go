@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
 )
 
 func TestThirdPartyLicensesAreCurrent(t *testing.T) {
+	requireGo(t)
 	want, err := render()
 	if err != nil {
 		t.Fatal(err)
@@ -24,6 +26,7 @@ func TestThirdPartyLicensesAreCurrent(t *testing.T) {
 
 // The fonts juist embeds come under the OFL, which has to travel with them.
 func TestEmbeddedFontsCarryTheirLicense(t *testing.T) {
+	requireGo(t)
 	b, err := render()
 	if err != nil {
 		t.Fatal(err)
@@ -44,5 +47,12 @@ func TestPlatformsAreTheMakefiles(t *testing.T) {
 	}
 	if got, want := strings.Join(platforms, " "), string(m[1]); got != want {
 		t.Fatalf("platforms %q, Makefile's CROSS_PLATFORMS %q", got, want)
+	}
+}
+
+func requireGo(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("needs go to enumerate module licenses")
 	}
 }

@@ -88,7 +88,7 @@ const (
 	envDNSListen = "JUIST_NETNS_DNS_LISTEN"
 	// envMulticast carries group datagrams, as [Options.Multicast].
 	envMulticast = "JUIST_NETNS_MULTICAST"
-	// envGroups are the groups routed into the device, as [Options.Groups].
+	// envGroups are the groups copied into the device, as [Options.Groups].
 	envGroups = "JUIST_NETNS_GROUPS"
 
 	// protoPrefix marks the helper's protocol lines, so they are separable

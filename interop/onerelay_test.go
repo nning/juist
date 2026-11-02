@@ -124,7 +124,8 @@ iptables -I HOTEL 1 -d 10.88.0.1 -p udp --dport 3478 -j ACCEPT`)
 		`/usr/bin/juistd --home `+hotel.home+` --socket `+hotel.sock+` --stun 10.88.0.1:3478 --verbose >>`+hotel.home+`/juistd.log 2>&1 < /dev/null`))
 	lx.eventually(t, "hotel's juistd answering", time.Minute, hotel.juist("status"), has("connected"))
 	lx.eventually(t, "hotel reaching lx beside a STUN server answering", 3*time.Minute, hotel.in("ping -c1 -W2 "+lx4), ok)
-	mustHave(t, lx.run(t, `grep -q 'STUN servers answered and no relay did' `+hotel.home+`/juistd.log && echo aside`), "aside")
+	lx.eventually(t, "hotel setting STUN aside after the UDP probes", time.Minute,
+		hotel.in(`grep -q 'STUN servers answered and no relay did' `+hotel.home+`/juistd.log && echo aside`), has("aside"))
 
 	// Every name hotel, on HTTPS alone again, holds on 443 moves: lx's
 	// relay takes a name and gives it up again, fb's takes relayFB, hotel

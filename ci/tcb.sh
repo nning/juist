@@ -24,7 +24,8 @@ done
 for p in $(sort -u "$tmp/placed" | comm -23 "$tmp/pkgs" -); do
 	echo "tcb: $p is placed nowhere; add it to $scope as in or out"; fail=1
 done
-for p in $(sort -u "$tmp/placed" | comm -13 "$tmp/pkgs" -); do
+# private/ is never published, so the public tree has none of it.
+for p in $(sort -u "$tmp/placed" | comm -13 "$tmp/pkgs" - | grep -v '^private/'); do
 	echo "tcb: $p in $scope is no package of the module"; fail=1
 done
 

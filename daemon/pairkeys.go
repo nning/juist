@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/nning/juist/gossip"
 	"github.com/nning/juist/internal/keys"
@@ -301,16 +300,25 @@ func (d *Daemon) notePSK(n *types.NodeRecord, k pairkey.Key, stage pairkey.Stage
 	}
 }
 
-// probePairs has each exchange this node leads, whose commit the follower
-// has not yet confirmed, try the key before it where a check just found the
-// peer down and its session gone: the follower is on one of the two.
-func (d *Daemon) probePairs(checks []tunnelCheck, probed []bool, handshakes map[uint64]time.Time) {
+// probePairs retries held keys when a probed tunnel is down.
+func (d *Daemon) probePairs(checks []tunnelCheck, probed []bool) {
+	d.authMu.Lock()
+	state, err := d.authority.TrustedState()
+	d.authMu.Unlock()
+	if err != nil {
+		return
+	}
 	changed := false
 	for i, c := range checks {
-		if !probed[i] || c.reach.Live || d.now().Sub(handshakes[c.peer.ID]) < tunnelFresh {
+		if !probed[i] || c.reach.Live {
 			continue
 		}
-		env, ok := d.pairEnvFor(c.id)
+		n, ok := state.Node(c.id)
+		if !ok || n.Expired(d.now().Unix()) {
+			continue
+		}
+		// Hints can recover held keys; a full announcement needs the tunnel.
+		env, ok := d.pairEnvOf(state, &n)
 		if !ok {
 			continue
 		}

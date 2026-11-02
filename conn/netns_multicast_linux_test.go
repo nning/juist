@@ -106,7 +106,7 @@ func TestNetnsAGroupDatagramReachesEveryMember(t *testing.T) {
 	b.command("JOIN 6 answer", "OK")
 	c.command("JOIN 6", "OK")
 	both := []*netnsNode{b, c}
-	if err := sendGroupUntil(a, both, a.addrs[0].Addr(), labSend{"4", []int{64, fullGroupDatagram}, false}, 60*time.Second); err != nil {
+	if err := sendGroupUntil(a, both, a.addrs[0].Addr(), labSend{"4", []int{64, 65, fullGroupDatagram}, false}, 60*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	llA := linkLocal(a.addrs[1].Addr())
@@ -168,7 +168,7 @@ func TestNetnsAGroupDatagramCrossesARelay(t *testing.T) {
 	}
 	b.command("JOIN 4", "OK")
 	b.command("JOIN 6", "OK")
-	if err := sendGroupUntil(a, []*netnsNode{b}, a.addrs[0].Addr(), labSend{"4", []int{64, fullGroupDatagram}, false}, 60*time.Second); err != nil {
+	if err := sendGroupUntil(a, []*netnsNode{b}, a.addrs[0].Addr(), labSend{"4", []int{64, 65, fullGroupDatagram}, false}, 60*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	if err := sendGroupUntil(a, []*netnsNode{b}, linkLocal(a.addrs[1].Addr()), labSend{"6", []int{64, fullGroupDatagram6}, false}, 60*time.Second); err != nil {
@@ -176,11 +176,9 @@ func TestNetnsAGroupDatagramCrossesARelay(t *testing.T) {
 	}
 }
 
-// An app that sends a routed group by the host's routes, and one listening
-// for it on the host's default interface, reach each other through the
-// network, not the LAN: the datagram comes from the sender's overlay
-// address.
-func TestNetnsARoutedGroupReachesTheDefaultInterface(t *testing.T) {
+// A copied group reaches a listener joined on the default interface.
+
+func TestNetnsACopiedGroupReachesTheDefaultInterface(t *testing.T) {
 	t.Parallel()
 	lab := newNetnsLab(t)
 	a, b := lab.addNode("a", 1), lab.addNode("b", 2)
@@ -193,5 +191,191 @@ func TestNetnsARoutedGroupReachesTheDefaultInterface(t *testing.T) {
 	b.command("JOIN 4 "+b.veth, "OK")
 	if err := sendGroupUntil(a, []*netnsNode{b}, a.addrs[0].Addr(), labSend{"4", []int{64}, true}, 60*time.Second); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNetnsDiscoveryKeepsTheLAN(t *testing.T) {
+	for _, family := range []string{"4", "4-list", "minecraft", "ssdp", "broadcast", "broadcast-directed"} {
+		t.Run(family, func(t *testing.T) {
+			lab := newNetnsLab(t)
+			a, b, c := lab.addNode("a", 1), lab.addNode("b", 2), lab.addNode("c", 3)
+			multicastNodes(a, b)
+			group, port := testGroup.Addr().String(), "45353"
+			if family == "minecraft" {
+				group, port = "224.0.2.60", "4445"
+			}
+			if family == "ssdp" {
+				group, port = "239.255.255.250", "1900"
+			}
+			if family == "4-list" {
+				for _, n := range []*netnsNode{a, b} {
+					n.env = append(n.env, envGroups+"="+group)
+				}
+			}
+			a.start([]*netnsNode{b}, 0)
+			b.start([]*netnsNode{a}, 0)
+			c.start(nil, 0)
+			b.command("JOIN "+family+" "+b.veth+" answer", "OK")
+			c.command("JOIN "+family+" "+c.veth, "OK")
+			lab.must(lab.exec(a, "nft", "add table ip marks; add chain ip marks before { type filter hook output priority 9; }; add chain ip marks after { type filter hook output priority 11; }; add rule ip marks before oifname \""+a.veth+"\" udp dport "+port+" meta mark set 0x1234; add rule ip marks after oifname \""+a.veth+"\" udp dport "+port+" meta mark != 0x1234 drop"))
+			lab.must(lab.exec(b, "nft", "add table ip lan; add chain ip lan pre { type filter hook prerouting priority -300; }; add rule ip lan pre iifname \""+b.veth+"\" udp dport "+port+" drop"))
+			if err := a.pingUntil(b.addrs[0].Addr(), 60*time.Second); err != nil {
+				t.Fatal(err)
+			}
+			if err := sendGroupUntil(a, []*netnsNode{b}, a.addrs[0].Addr(), labSend{family, []int{64, 65, fullGroupDatagram}, true}, 15*time.Second); err != nil {
+				for _, n := range []*netnsNode{a, b} {
+					out, _ := lab.exec(n, "sh", "-c", "nft list ruleset; ip route show table all; ip route get "+b.addrs[0].Addr().String()+" oif "+a.tun).CombinedOutput()
+					t.Logf("%s rules: %s", n.name, out)
+				}
+				t.Fatal(err)
+			}
+			if err := sendGroupUntil(a, []*netnsNode{c}, a.underlay, labSend{family, []int{64, 65, fullGroupDatagram, 1300}, true}, 10*time.Second); err != nil {
+				t.Fatalf("LAN original: %v", err)
+			}
+			if err := heardUntil([]*netnsNode{a}, "ANSWERS", b.addrs[0].Addr(), []int{len("answer")}, 10*time.Second, func() { a.command("SEND "+family+" 64 routed", "OK") }); err != nil {
+				t.Fatalf("unicast answer: %v", err)
+			}
+			if heard := b.command("HEARD", "HEARD"); strings.Contains(heard, "/1300") {
+				t.Fatalf("oversized discovery crossed: %s", heard)
+			}
+			a.setPeers("none")
+			out, err := lab.exec(a, "nft", "list tables").CombinedOutput()
+			if err != nil || strings.Contains(string(out), "discovery") {
+				t.Fatalf("discovery without peers: %s (%v)", out, err)
+			}
+			a.setPeers("all")
+			if err := sendGroupUntil(a, []*netnsNode{b}, a.addrs[0].Addr(), labSend{family, []int{80}, true}, 15*time.Second); err != nil {
+				t.Fatalf("restored peer: %v", err)
+			}
+			a.stop()
+			out, err = lab.exec(a, "nft", "list tables").CombinedOutput()
+			if err != nil || strings.Contains(string(out), "discovery") {
+				t.Fatalf("discovery rules left after stop: %s (%v)", out, err)
+			}
+		})
+	}
+}
+
+func TestNetnsAutomaticGroupsCanBeDisabled(t *testing.T) {
+	lab := newNetnsLab(t)
+	a, b := lab.addNode("a", 1), lab.addNode("b", 2)
+	multicastNodes(a, b)
+	a.env = append(a.env, envGroups+"=none")
+	a.start([]*netnsNode{b}, 0)
+	b.start([]*netnsNode{a}, 0)
+	b.command("JOIN minecraft "+b.veth, "OK")
+	lab.must(lab.exec(b, "nft", "add table ip lan; add chain ip lan pre { type filter hook prerouting priority -300; }; add rule ip lan pre iifname "+b.veth+" udp dport 4445 drop"))
+	if err := a.pingUntil(b.addrs[0].Addr(), 60*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		a.command("SEND minecraft 64 routed", "OK")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if heard := b.command("HEARD", "HEARD"); strings.Contains(heard, "/64") {
+		t.Fatalf("disabled copies crossed: %s", heard)
+	}
+	if err := sendGroupUntil(a, []*netnsNode{b}, a.addrs[0].Addr(), labSend{"minecraft", []int{80}, false}, 15*time.Second); err != nil {
+		t.Fatalf("native multicast was disabled too: %v", err)
+	}
+}
+
+func TestNetnsUnderlayGroupsAreNotCopied(t *testing.T) {
+	lab := newNetnsLab(t)
+	a, b := lab.addNode("a", 1), lab.addNode("b", 2)
+	multicastNodes(a, b)
+	a.start([]*netnsNode{b}, 0)
+	b.start([]*netnsNode{a}, 0)
+	b.command("JOIN minecraft "+b.veth, "OK")
+	lab.must(lab.exec(b, "nft", "add table ip lan; add chain ip lan pre { type filter hook prerouting priority -300; }; add rule ip lan pre iifname "+b.veth+" udp dport 4445 drop"))
+	if err := a.pingUntil(b.addrs[0].Addr(), 60*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		a.command("SEND minecraft 64 underlay", "OK")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if heard := b.command("HEARD", "HEARD"); strings.Contains(heard, "/64") {
+		t.Fatalf("underlay packet copied: %s", heard)
+	}
+	if err := sendGroupUntil(a, []*netnsNode{b}, a.addrs[0].Addr(), labSend{"minecraft", []int{80}, true}, 15*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNetnsDiscoveryFollowsMulticastAccess(t *testing.T) {
+	for _, off := range []bool{false, true} {
+		t.Run(strconv.FormatBool(off), func(t *testing.T) {
+			lab := newNetnsLab(t)
+			a, b := lab.addNode("a", 1), lab.addNode("b", 2)
+			if off {
+				multicastNodes(b)
+			} else {
+				multicastNodes(a, b)
+			}
+			a.start([]*netnsNode{b}, 0)
+			b.start([]*netnsNode{a}, 0)
+			b.command("JOIN minecraft "+b.veth, "OK")
+			b.command("JOIN broadcast", "OK")
+			lab.must(lab.exec(b, "nft", "add table ip lan; add chain ip lan pre { type filter hook prerouting priority -300; }; add rule ip lan pre iifname "+b.veth+" udp dport { 4445, 45353 } drop"))
+			if err := a.pingUntil(b.addrs[0].Addr(), 60*time.Second); err != nil {
+				t.Fatal(err)
+			}
+			table := func(want bool) {
+				t.Helper()
+				out, err := lab.exec(a, "nft", "list table ip juist0discovery").CombinedOutput()
+				if (err == nil) != want {
+					t.Fatalf("copy table present=%v, want %v: %s", err == nil, want, out)
+				}
+			}
+			a.command("ACCESS 22", "OK")
+			table(false)
+			a.command("GROUPACCESS", "OK")
+			b.command("GROUPACCESS", "OK")
+			table(!off)
+			for _, family := range []string{"minecraft", "broadcast"} {
+				if off {
+					a.command("SEND "+family+" 64 routed", "OK")
+				} else if err := sendGroupUntil(a, []*netnsNode{b}, a.addrs[0].Addr(), labSend{family, []int{64}, true}, 15*time.Second); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if off {
+				time.Sleep(500 * time.Millisecond)
+				if heard := b.command("HEARD", "HEARD"); strings.Contains(heard, "/64") {
+					t.Fatalf("policy overrode multicast off: %s", heard)
+				}
+			}
+			a.command("ACCESS 22", "OK")
+			table(false)
+		})
+	}
+}
+
+func TestNetnsBroadcastCopiesOrdinaryUDPPorts(t *testing.T) {
+	for _, port := range []uint16{137, 138} {
+		t.Run(strconv.Itoa(int(port)), func(t *testing.T) {
+			lab := newNetnsLab(t)
+			a, b, c := lab.addNode("a", 1), lab.addNode("b", 2), lab.addNode("c", 3)
+			multicastNodes(a, b)
+			a.start([]*netnsNode{b}, 0)
+			b.start([]*netnsNode{a}, 0)
+			c.start(nil, 0)
+			family := "broadcast:" + strconv.Itoa(int(port))
+			b.command("JOIN "+family+" "+b.veth, "OK")
+			c.command("JOIN "+family+" "+c.veth, "OK")
+			lab.must(lab.exec(b, "nft", "add table ip lan; add chain ip lan pre { type filter hook prerouting priority -300; }; add rule ip lan pre iifname "+b.veth+" udp dport "+strconv.Itoa(int(port))+" drop"))
+			if err := a.pingUntil(b.addrs[0].Addr(), 60*time.Second); err != nil {
+				t.Fatal(err)
+			}
+			send := func() { a.command("SEND "+family+" 64 routed "+strconv.Itoa(int(port)), "OK") }
+			if err := heardUntil([]*netnsNode{b}, "HEARD", a.addrs[0].Addr(), []int{64}, 15*time.Second, send); err != nil {
+				rules, _ := lab.exec(a, "nft", "list table ip juist0discovery").CombinedOutput()
+				t.Fatalf("overlay: %v; sender rules: %s", err, rules)
+			}
+			if err := heardUntil([]*netnsNode{c}, "HEARD", netip.MustParseAddr("10.77.0.1"), []int{64}, 15*time.Second, send); err != nil {
+				t.Fatalf("LAN: %v", err)
+			}
+		})
 	}
 }

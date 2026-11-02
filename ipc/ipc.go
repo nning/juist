@@ -259,18 +259,16 @@ type Request struct {
 	// DNS, which a [CmdSettings] sets too, is whether juistd takes the
 	// host's DNS: for the network's names, and through an exit node.
 	DNS *bool `cbor:"35,keyasint,omitempty"`
-	// Multicast and Groups, which a [CmdSettings] sets too, are whether the
-	// device carries multicast, and the IPv4 groups routed into it, none
-	// where empty.
+	// Multicast controls discovery; Groups is ["auto"], an IPv4 group list,
+	// or empty to disable copies.
 	Multicast *bool     `cbor:"36,keyasint,omitempty"`
 	Groups    *[]string `cbor:"37,keyasint,omitempty"`
 }
 
-// MaxGroups bounds the groups routed into a device.
+// MaxGroups bounds an explicit group list.
 const MaxGroups = 16
 
-// ParseGroup reads an IPv4 multicast group, the only kind routed into a
-// device.
+// ParseGroup reads an IPv4 multicast group.
 func ParseGroup(s string) (netip.Addr, error) {
 	g, err := netip.ParseAddr(s)
 	if err != nil || !g.Is4() || !g.IsMulticast() {
@@ -280,6 +278,9 @@ func ParseGroup(s string) (netip.Addr, error) {
 }
 
 func validGroups(gs *[]string) bool {
+	if gs != nil && len(*gs) == 1 && (*gs)[0] == "auto" {
+		return true
+	}
 	if gs == nil {
 		return true
 	}

@@ -783,8 +783,9 @@ func New(opts Options) (*Daemon, error) {
 		// A subnet a route of the host's now holds is given back at once.
 		OnHostRoutesChange: d.MarkDirty,
 	}
-	if connOpts.Multicast && routesGroups(opts) {
+	if connOpts.Multicast && copiesGroups(opts) {
 		connOpts.Groups = opts.Groups
+		connOpts.GroupsAuto = opts.Prefs.automaticGroups()
 	}
 	mgr, err := onPortOrAny(d, opts.ListenPort, conn.ErrPortTaken, "UDP", func(port uint16) (conn.Manager, error) {
 		o := connOpts

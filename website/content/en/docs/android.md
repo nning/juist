@@ -25,10 +25,38 @@ The phone cannot:
 
 ## Installing the app
 
-Every [release](https://github.com/nning/juist/releases/latest) has the app
-as `juist-android-arm64.apk`, and `juist-android-x86_64.apk` for the
-emulator. Download it on the phone and open it; Android asks you to allow the
-browser to install apps.
+Install the app with F-Droid, which then brings every new release, or
+download it once from GitHub.
+
+### With F-Droid
+
+1. Install [F-Droid](https://f-droid.org) on the phone, if it is not there
+   yet. Another client for F-Droid repositories, such as Droid-ify, works
+   too.
+2. On the phone, tap
+   [Add juist's repository to F-Droid](fdroidrepos://pkg.juist.nning.io/juist/android/repo?fingerprint=0AAB0ADFA407BE52D9FB3AF3C0426FF0CDF4CA67CEBBFD981EA29EF0BD373C30)
+   and confirm in F-Droid. Or copy this address, open **Repositories** in
+   F-Droid, tap **+** and paste it:
+
+   ```text
+   https://pkg.juist.nning.io/juist/android/repo?fingerprint=0AAB0ADFA407BE52D9FB3AF3C0426FF0CDF4CA67CEBBFD981EA29EF0BD373C30
+   ```
+
+3. Search F-Droid for **juist** and install it. Android asks you to allow
+   F-Droid to install apps.
+
+F-Droid updates the app with every release. The fingerprint in the address
+lets it check that the repository is juist's.
+
+### From GitHub
+
+Download `juist-android-arm64.apk` from the
+[latest release](https://github.com/nning/juist/releases/latest) on the
+phone and open it. Android asks you to allow the browser to install apps.
+To update, install the next release's APK over it, or add the F-Droid
+repository, which updates an app installed this way too.
+
+### Checking the app
 
 The app is signed with juist's release key. Its certificate's SHA-256
 fingerprint is:
@@ -41,21 +69,9 @@ fingerprint is:
 also in `SHA256SUMS`
 ([Verifying a download]({{< relref "docs/install" >}}#verifying-a-download)).
 
-F-Droid, or another client for F-Droid repositories, installs the app from
-juist's repository and updates it with each release. Add the repository by
-this address, which carries the fingerprint of the key that signs its index:
-
-```text
-https://pkg.juist.nning.io/juist/android/repo?fingerprint=0AAB0ADFA407BE52D9FB3AF3C0426FF0CDF4CA67CEBBFD981EA29EF0BD373C30
-```
-
-It holds the release's APK, so an app installed either way updates from the
-other.
-
-To build the app yourself, see
-[android/README.md](https://github.com/nning/juist/blob/main/android/README.md).
-An app you built does not install over a release, or the other way round,
-because a different key signs it.
+An app you [built yourself](https://github.com/nning/juist/blob/main/android/README.md)
+is signed by another key, so it does not install over a release, or the
+other way round.
 
 ## Joining a network
 

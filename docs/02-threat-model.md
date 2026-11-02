@@ -325,7 +325,7 @@ them by number.
    before it authenticates where that takes a round trip, as a catch-up
    does. A member whose hello comes at once is rarely held up.
 17. **Members are on one link for discovery (M25).** A member's UDP to a
-   multicast group, mDNS, SSDP and LLMNR among it, and its pings to an IPv6
+   multicast group, mDNS, SSDP and LLMNR among it, its IPv4 UDP broadcasts, and its pings to an IPv6
    group, reach every other member's host, as a LAN neighbour's would:
    it can answer for any name or service those protocols ask about, as a
    printer or a media server, and a host that trusts a discovered service
@@ -336,6 +336,29 @@ them by number.
    unicast answers to it for ten seconds. On Linux, echo replies to a
    member's link-local address on its device go untracked, since conntrack
    takes an answer to a group ping for invalid and firewalld drops those.
+   Where multicast is enabled, Linux copies this host's UDP broadcasts and
+   automatically copied or selected IPv4 groups from
+   local output into the tunnel, rewriting only the marked copy's source
+   to its overlay address; the original stays on the LAN. Copies fit 1280
+   bytes and are unfragmented. Subnet broadcasts arrive as limited broadcast;
+   DHCP broadcasts never cross. NetBIOS uses the ordinary broadcast path.
+   Forwarded LAN traffic is not copied, and addresses inside a discovery message are not translated.
+   Bypass-marked sockets, including juist's own mDNS beacons, stay on the underlay.
+   Automatic or explicitly selected IPv4 groups get a local unicast copy too, for sockets such as
+   Java's which joined only the LAN. This needs the sender's ordinary
+   unicast permission on that UDP port as well; the source is unchanged,
+   native multicast delivery remains, and fragments get no such copy.
+
+18. **Host-wide discovery leaves the LAN.** With copying enabled, discovery
+   broadcasts and automatically copied IPv4 groups from every program on a
+   Linux host reach permitted members, even if the user never selected that
+   program. They may disclose device names, service identifiers and other
+   details programs intended for their local LAN. Without a policy this is
+   enabled by default for the network; a policy defaults to no discovery
+   and enables it only where `pass multicast` permits it. The local
+   `--multicast=false` switch disables it even where policy permits it.
+   Group lists and packet/rate bounds do not make permitted discovery
+   messages private from the members that receive them.
 
 ## Security design rules derived from the above
 

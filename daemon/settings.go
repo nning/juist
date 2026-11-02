@@ -69,7 +69,11 @@ func (s *Service) setSettings(req *ipc.Request) error {
 	}
 	if req.Groups != nil {
 		next.Groups = nil
+		next.GroupsOff = len(*req.Groups) == 0
 		for _, g := range *req.Groups {
+			if g == "auto" && len(*req.Groups) == 1 {
+				break
+			}
 			a, err := ipc.ParseGroup(g)
 			if err != nil {
 				return err
@@ -83,14 +87,14 @@ func (s *Service) setSettings(req *ipc.Request) error {
 	if next.HTTPSOnly && !s.prefs.HTTPSOnly && o.TunName == "" && !o.Netstack {
 		return errors.New(`HTTPS alone runs log sync in the tunnel, and juistd runs with --tun ""`)
 	}
-	// Turning multicast off and routing no groups take no device, so that
+	// Turning multicast off and copying no groups take no device, so that
 	// what one left kept elsewhere can be undone.
-	if (req.Multicast != nil && *req.Multicast || req.Groups != nil && len(next.Groups) > 0) &&
+	if (req.Multicast != nil && *req.Multicast || req.Groups != nil && (len(next.Groups) > 0 || next.automaticGroups())) &&
 		(o.TunName == "" || o.Netstack || runtime.GOOS == "android") {
 		return errors.New("multicast takes a device of juistd's own")
 	}
-	if req.Groups != nil && len(next.Groups) > 0 && !routesGroups(o) {
-		return errors.New("groups are routed into the device on Linux alone")
+	if req.Groups != nil && (len(next.Groups) > 0 || next.automaticGroups()) && !copiesGroups(o) {
+		return errors.New("groups are copied into the device on Linux alone")
 	}
 	if err := writeSettings(s.opts.Home, req, next, s.prefs); err != nil {
 		return err
@@ -118,6 +122,12 @@ func (s *Service) setSettings(req *ipc.Request) error {
 // fails, those written are put back as prev had them.
 func writeSettings(home string, req *ipc.Request, next, prev Prefs) error {
 	groups := func(p Prefs) string {
+		if p.automaticGroups() {
+			return ""
+		}
+		if len(p.Groups) == 0 {
+			return "none"
+		}
 		var lines []string
 		for _, g := range p.Groups {
 			lines = append(lines, g.String())
@@ -163,23 +173,26 @@ func writeSettings(home string, req *ipc.Request, next, prev Prefs) error {
 }
 
 // carried is what of p's multicast the mesh takes: whether it carries
-// multicast, and the groups it routes, in order.
+// multicast, and the groups it copies, in order.
 func (s *Service) carried(p Prefs) string {
 	o := s.opts.Mesh
 	o.Prefs = p
 	if !carriesMulticast(o) {
 		return "off"
 	}
-	if !routesGroups(o) {
+	if !copiesGroups(o) {
 		return "on"
+	}
+	if p.automaticGroups() {
+		return "on auto"
 	}
 	gs := slices.SortedFunc(slices.Values(p.Groups), netip.Addr.Compare)
 	return fmt.Sprint("on ", gs)
 }
 
-// routesGroups reports whether a device of opts's routes groups into it:
+// copiesGroups reports whether a device of opts's copies groups into it:
 // one of Linux's own.
-func routesGroups(o Options) bool {
+func copiesGroups(o Options) bool {
 	return o.TunName != "" && !o.Netstack && o.Plumber == nil && runtime.GOOS == "linux"
 }
 
@@ -191,15 +204,21 @@ func setTextFile(home, name, v string) error {
 	return statedir.WriteFilePrivate(filepath.Join(home, name), []byte(v+"\n"))
 }
 
-// loadGroups reads the groups routed into the device from home, leaving
-// out a line that is no IPv4 multicast group.
-func loadGroups(home string, logf func(string, ...any)) []netip.Addr {
+// loadGroups returns the explicit groups and whether automatic copying is off.
+func loadGroups(home string, logf func(string, ...any)) ([]netip.Addr, bool) {
 	b, err := os.ReadFile(filepath.Join(home, statedir.GroupsFile))
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			logf("daemon: reading %s: %v", statedir.GroupsFile, err)
 		}
-		return nil
+		return nil, !errors.Is(err, os.ErrNotExist)
+	}
+	text := strings.TrimSpace(string(b))
+	if text == "auto" {
+		return nil, false
+	}
+	if text == "" || text == "none" {
+		return nil, true
 	}
 	var out []netip.Addr
 	for _, line := range strings.Fields(string(b)) {
@@ -217,7 +236,7 @@ func loadGroups(home string, logf func(string, ...any)) []netip.Addr {
 		}
 		out = append(out, g)
 	}
-	return out
+	return out, len(out) == 0
 }
 
 // carriesMulticast reports whether a device of opts's carries multicast: one

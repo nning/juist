@@ -518,8 +518,10 @@ func (r *statusRender) served() {
 		switch {
 		case m.Off:
 			r.field("Multicast", "off")
+		case m.Auto:
+			r.field("Multicast", "on, copied: auto")
 		case len(m.Groups) > 0:
-			r.field("Multicast", "on, routed: %s", strings.Join(m.Groups, ", "))
+			r.field("Multicast", "on, copied: %s", strings.Join(m.Groups, ", "))
 		default:
 			r.field("Multicast", "on")
 		}

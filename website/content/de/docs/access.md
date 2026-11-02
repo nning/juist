@@ -126,14 +126,16 @@ lässt alles durch. Für Ping braucht es `proto icmp` oder eine Regel ohne
 Protokoll.
 
 `pass multicast from QUELLE to ZIEL` lässt
-[Multicast]({{< relref "docs/multicast" >}}) von den Quellen zu den Zielen
+[Multicast und UDP-Broadcast]({{< relref "docs/multicast" >}}) von den Quellen zu den Zielen
 durch, und sonst nichts. Ziele sind Geräte, Tabellen oder `any`. Ein `port`
 beschränkt die Regel auf diese UDP-Ports, etwa
 `pass multicast from <familie> to <familie> port 5353`. Sie braucht kein
 `proto`, denn nur UDP geht hinüber; ohne `port` auch Pings an IPv6-Gruppen,
 wie `ping ff02::1` sie sendet. Mit `port` geht ein Datagramm, das nicht
 in ein Paket passt, nicht durch. Die Regel lässt auch die Antworten durch,
-die ein Ziel direkt auf ein Gruppen-Datagramm zurückschickt, wie SSDP es tut.
+die ein Ziel direkt auf ein Gruppen-Datagramm zurückschickt, wie SSDP es tut. Die lokale
+Unicast-Kopie automatisch kopierter oder ausgewählter IPv4-Gruppen braucht zusätzlich gewöhnlichen
+UDP-Zugriff auf ihren Port.
 Regeln mit Multicast brauchen Schema 22 des Netzes, das
 [juist log upgrade]({{< relref "docs/updating" >}}) anhebt.
 
