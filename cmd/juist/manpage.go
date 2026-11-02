@@ -107,6 +107,8 @@ sudo juist join 'juist:…'    # on that device
 juist status                 # this device's networks, and what needs attention
 juist remove phone           # out of the network, on every device
 juist grant vps relay        # a device with a public address relays for others`)
+	m.section("TRADEMARKS")
+	m.text(`"WireGuard" and the "WireGuard" logo are registered trademarks of Jason A. Donenfeld.`)
 	m.section("SEE ALSO")
 	m.line(`.BR juistd (8)`)
 	m.line(`.PP`)

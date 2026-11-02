@@ -49,6 +49,19 @@ milestones, plans or work in progress, except the comparison matrix's
 "planned" mark. Grep `website/` for the command or
 term to find each page, and run `make -C website check`.
 
+"WireGuard" is Jason A. Donenfeld's registered trademark
+([policy](https://www.wireguard.com/trademark-policy/)): name it only to say
+what juist uses, with both capitals, never in a name of juist's own (product,
+package, command, feature), never its logo, and never as a claim of
+compatibility, endorsement or affiliation. Its notice stays in the README,
+the website's footer and both man pages. "Tailscale" is Tailscale Inc.'s
+registered trademark, and its BSD license forbids the name in promoting
+what derives from its code: name it only where the text is about Tailscale
+itself (what juist takes from it, the comparison, running beside it), never
+to describe or advertise juist ("Tailscale-like"), never its logo; its
+notice stays in the README and the footer.
+`TestTrademarksAreNamedAsTheirOwnersAsk` checks both marks.
+
 ## Landing changes
 
 Work lands directly on `main`, without pull requests. Fetch and rebase onto

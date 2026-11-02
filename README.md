@@ -3,10 +3,10 @@
 > [!WARNING]
 > **Developed with Opus 5.5, no human (security) audit yet!**
 
-A peer-to-peer mesh VPN in the spirit of Tailscale, with **no coordination
-server at all**, neither a vendor's nor your own. WireGuard carries the traffic.
-Who belongs to the network is a log signed by your admins, and every device
-checks that log for itself.
+A peer-to-peer mesh VPN with **no coordination server at all**, neither a
+vendor's nor your own. WireGuard carries the traffic. Who belongs to the
+network is a log signed by your admins, and every device checks that log
+for itself.
 
 - **Nothing to run or trust in the middle.** Devices find each other on the
   LAN, through each other, or through the public BitTorrent DHT. They punch
@@ -311,3 +311,9 @@ included. What carries its own license keeps it: the IBM Plex fonts (SIL
 OFL), the outline of Juist (ODbL) and the code adapted from wireguard-go
 (MIT). The packages carry the licenses of what juist links, in
 [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES); `make licenses` writes it anew.
+
+"WireGuard" and the "WireGuard" logo are registered trademarks of Jason A.
+Donenfeld. "Tailscale" is a registered trademark of Tailscale Inc. juist is
+neither affiliated with nor endorsed by the
+[WireGuard](https://www.wireguard.com/) project or
+[Tailscale](https://tailscale.com/) Inc.

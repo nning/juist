@@ -226,6 +226,9 @@ func TestTheManPageListsEveryOption(t *testing.T) {
 	if !strings.HasPrefix(page, ".TH JUISTD 8") || !strings.Contains(page, ".BR juist (1)") {
 		t.Fatalf("not a juistd(8):\n%s", page)
 	}
+	if !strings.Contains(page, "registered trademarks of Jason A. Donenfeld") {
+		t.Error("the page names WireGuard without its trademark notice")
+	}
 	for _, o := range optionOrder {
 		if want := `\-\-` + strings.ReplaceAll(o.long, "-", `\-`); !strings.Contains(page, want) {
 			t.Errorf("the page lacks --%s", o.long)

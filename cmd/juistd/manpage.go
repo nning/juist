@@ -81,6 +81,8 @@ routes win, and the higher runs without IPv4 until one of them renumbers.`)
 	} {
 		tagged(f[0], f[1])
 	}
+	line(".SH TRADEMARKS")
+	text(`"WireGuard" and the "WireGuard" logo are registered trademarks of Jason A. Donenfeld.`)
 	line(".SH SEE ALSO")
 	line(".BR juist (1)")
 	_, err := io.WriteString(w, b.String())

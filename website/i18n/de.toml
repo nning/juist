@@ -19,6 +19,8 @@ featuresRun = "Alle Funktionen laufen unter Linux und FreeBSD, die App unter And
 anchor = "Link hierher"
 osm = "Umriss von Juist © OpenStreetMap-Mitwirkende, ODbL"
 fonts = "IBM Plex, SIL OFL"
+wireguard = "„<a href=\"https://www.wireguard.com/\">WireGuard</a>“ und das „WireGuard“-Logo sind eingetragene Marken von Jason A. Donenfeld"
+tailscale = "„<a href=\"https://tailscale.com/\">Tailscale</a>“ ist eine eingetragene Marke der Tailscale Inc."
 docs = "Dokumentation"
 basics = "Grundlagen"
 uses = "Anwendungsfälle"
