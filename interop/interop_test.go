@@ -493,11 +493,11 @@ func serve(t *testing.T, admin, server, client *vm, s, back side, addr4, addr6 s
 	client.eventually(t, "resolving as before", time.Minute, dns, func(out string) bool { return !through(out) })
 }
 
-// names has lx, whose resolved routes domains, resolve fb by its name, and a
-// public name the network points at fb to fb, once agreed and while fb is
-// reachable, without asking the public resolver for it; fb, whose resolvconf
-// asks juistd alone, resolves lx by its name. The public resolver is lx's
-// target, for lab.example.
+// names has lx, whose resolved routes domains, resolve fb by its name, fb's
+// addresses by that name, and a public name the network points at fb to fb,
+// once agreed and while fb is reachable, without asking the public resolver
+// for it; fb, whose resolvconf asks juistd alone, resolves lx by its name.
+// The public resolver is lx's target, for lab.example.
 func names(t *testing.T, fb, lx *vm, fb4, fb6, lx6 string) {
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -516,6 +516,9 @@ resolvectl dns vt0 10.99.2.2; resolvectl domain vt0 '~lab.example'`)
 		return strings.Contains(out, fb4) && strings.Contains(out, fb6)
 	})
 	lx.eventually(t, "resolving fb by its name alone", time.Minute, "getent hosts fb", has(fb6))
+	for _, a := range []string{fb4, fb6} {
+		lx.eventually(t, "naming fb by "+a, time.Minute, "getent hosts "+a, has("fb.interop.juist"))
+	}
 	mustHave(t, lx.run(t, "juist status"), "Names", "interop.juist")
 	fb.eventually(t, "resolving lx by its name", 2*time.Minute, "getent hosts lx.interop.juist", has(lx6))
 	fb.eventually(t, "resolving lx by its name alone", time.Minute, "getent hosts lx", has(lx6))

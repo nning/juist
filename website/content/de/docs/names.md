@@ -30,7 +30,10 @@ ssh nas.home.juist
 ssh nas
 ```
 
-Beide Befehle führen zum NAS, und zwar zu seinen Adressen im Netz.
+Beide Befehle führen zum NAS, und zwar zu seinen Adressen im Netz. Umgekehrt
+ergibt `host 198.18.36.2` den Namen `nas.home.juist`. Eine Adresse im Netz,
+die keinem Mitglied gehört, hat keinen Namen, und kein Resolver außerhalb des
+Geräts wird nach ihr gefragt.
 
 ## Einen öffentlichen Namen auf ein Gerät verweisen lassen
 
@@ -110,7 +113,7 @@ schaltet es wieder ein, ohne Neustart.
 ## So löst das Gerät Namen auf {#resolver}
 
 - Mit systemd-resolved schickt dieses die Anfragen nach den Namen des Netzes
-  an juistd. Namen, die juistd weitergibt, gehen dorthin, wohin
+  und nach den Rückwärtsnamen seiner Adressen an juistd. Namen, die juistd weitergibt, gehen dorthin, wohin
   systemd-resolved sie schicken würde. juistd weist Namen ab, die
   systemd-resolved über DNS over TLS fragen würde, statt sie unverschlüsselt
   zu schicken, und Namen, die nur der Resolver von Tailscale beantworten

@@ -87,9 +87,10 @@ func typedQuery(t *testing.T, name string, qtype dnsmessage.Type) []byte {
 }
 
 // Where the host routes domains, juist's resolver answers it the network's
-// names: the host routes the network's domain and searches it, and every
-// name besides while an exit node is used, which the resolver then asks;
-// else the host's own resolvers, not the stub. Closed, it all goes back.
+// names: the host routes the network's domain and searches it, and the
+// reverse zones of its prefixes, and every name besides while an exit node
+// is used, which the resolver then asks; else the host's own resolvers, not
+// the stub. Closed, it all goes back.
 func TestTheHostResolvesTheNetworksNames(t *testing.T) {
 	uplink := filepath.Join(t.TempDir(), "resolv.conf")
 	os.WriteFile(uplink, []byte("nameserver 127.0.0.53\nnameserver 10.0.2.3\n"), 0o644)
@@ -105,8 +106,13 @@ func TestTheHostResolvesTheNetworksNames(t *testing.T) {
 	r := host.routing
 	host.mu.Unlock()
 	at := netip.AddrPortFrom(f.auth.State().Addr6(f.self.record.Identity), NamesPort)
-	want := DNSRouting{Servers: []netip.AddrPort{at}, Domains: []string{"m2-testnet.juist"},
-		Search: []string{"m2-testnet.juist"}}
+	ula := names.ReverseZones(f.auth.State().ULA())
+	if len(ula) != 1 {
+		t.Fatalf("the ULA's reverse zones are %v", ula)
+	}
+	want := DNSRouting{Servers: []netip.AddrPort{at},
+		Domains: []string{"m2-testnet.juist", "18.198.in-addr.arpa", "19.198.in-addr.arpa", ula[0]},
+		Search:  []string{"m2-testnet.juist"}}
 	if !r.equal(want) {
 		t.Fatalf("routed %+v, want %+v", r, want)
 	}
@@ -126,6 +132,15 @@ func TestTheHostResolvesTheNetworksNames(t *testing.T) {
 	}
 	if got := netip.AddrFrom16(m.Answers[0].Body.(*dnsmessage.AAAAResource).AAAA); got != f.auth.State().Addr6(f.nw.devices[1].record.Identity) {
 		t.Errorf("n1 is %v", got)
+	}
+	for _, a := range []netip.Addr{*f.nw.devices[1].record.V4, f.auth.State().Addr6(f.nw.devices[1].record.Identity)} {
+		var m dnsmessage.Message
+		if err := m.Unpack(served.answer(typedQuery(t, reverseName(a)+".", dnsmessage.TypePTR))); err != nil || len(m.Answers) != 1 {
+			t.Fatalf("%v's reverse name is answered %+v, %v", a, m, err)
+		}
+		if got := m.Answers[0].Body.(*dnsmessage.PTRResource).PTR.String(); got != "n1.m2-testnet.juist." {
+			t.Errorf("%v is %s", a, got)
+		}
 	}
 
 	exit := f.nw.devices[1]
@@ -281,7 +296,7 @@ func TestAPublicNameNeedsTheOwnersWord(t *testing.T) {
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	if r := routedNow(host); !slices.Equal(r.Domains, []string{"m2-testnet.juist", "mx.example.net"}) || r.Everything {
+	if r := routedNow(host); !slices.Equal(r.Domains[:2], []string{"m2-testnet.juist", "mx.example.net"}) || r.Everything {
 		t.Errorf("agreed, the host routes %+v", r)
 	}
 	if a := answeredA(t, served, "mx.example.net."); a != nil {

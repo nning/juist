@@ -28,7 +28,10 @@ ssh nas.home.juist
 ssh nas
 ```
 
-Both lead to the NAS, at its addresses in the network.
+Both lead to the NAS, at its addresses in the network. The other way round,
+`host 198.18.36.2` gives `nas.home.juist`. An address in the network that no
+member holds has no name, and no resolver outside the device is asked about
+it.
 
 ## Pointing a public name at a device
 
@@ -101,7 +104,8 @@ restart.
 
 ## How the device resolves names {#resolver}
 
-- With systemd-resolved, it sends queries for the network's names to juistd.
+- With systemd-resolved, it sends queries for the network's names, and for
+  the reverse names of its addresses, to juistd.
   Names juistd passes on go where systemd-resolved would send them. juistd
   refuses names systemd-resolved would ask over DNS over TLS, rather than send
   them in plain text, and names only Tailscale's resolver would answer.

@@ -10,7 +10,9 @@ lead: Install juist as a system package on every device that should be in a netw
 juist runs on Linux and FreeBSD. It comes as a `.deb` for Debian and Ubuntu,
 an RPM for Fedora, and a pkg package for FreeBSD 15. Every
 [release](https://github.com/nning/juist/releases/latest) has packages for
-amd64 and arm64, except the RPM, which is only available for x86_64. A phone
+amd64 and arm64, except the RPM, which is only available for x86_64. On
+another Linux with systemd, Arch or Gentoo say, `make install` installs it
+from the source ([Building from source](#building-from-source)). A phone
 joins with the app instead; see [Android]({{< relref "docs/android" >}}).
 
 ## Installing the package
@@ -155,7 +157,7 @@ The first command prints `Good "juist-release" signature for juist with ED25519 
 SHA256:a2nq8txrPWVfLfF4XGzyKrFo4t71aXkcDOGZNQJABLM`, the second prints `OK`
 for each file you downloaded.
 
-## Building from source
+## Building from source {#building-from-source}
 
 Building needs Go 1.21 or newer and `make`. `make` has Go download go1.27.3
 and builds with it, so that a given commit produces the same bytes on any
@@ -170,6 +172,13 @@ make install      # gmake install, as root, on FreeBSD
 `make install` builds the package for the system it runs on (the `.deb` on
 Debian and Ubuntu, the RPM on Fedora, the pkg package on FreeBSD) and installs
 it. Run it again later to install a new build over the old one.
+
+Where there is neither apt, dnf nor pkg, on another Linux with systemd,
+`make install` installs the RPM's files to the same places itself, creates
+the `juist` user and starts `juistd`. It does not install over a juist from
+a package. `make uninstall` removes them again, and without the source tree
+`sudo /usr/lib/juist/manual-install.sh uninstall`; the users and
+`/var/lib/juist`, which holds the device's keys, stay.
 
 To install juist on a machine that should not build it, build only the package
 and copy it over:

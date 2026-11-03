@@ -248,7 +248,8 @@ func uplinkResolvers() []netip.AddrPort {
 }
 
 // routedDomains are the domains z has a word on, its own first, then the
-// network's public domain, each once.
+// network's public domain, each once, and with a domain of its own the
+// reverse zones of the network's prefixes, which no resolver outside learns.
 func routedDomains(z *names.Zone) []string {
 	if z == nil {
 		return nil
@@ -268,7 +269,13 @@ func routedDomains(z *names.Zone) []string {
 		others = append(others, n)
 	}
 	slices.Sort(others)
-	return append(out, others...)
+	out = append(out, others...)
+	if z.Domain != "" {
+		for _, p := range z.Reverse {
+			out = append(out, names.ReverseZones(p)...)
+		}
+	}
+	return out
 }
 
 // reachedDirectly reports whether members reach p at its member, on the port

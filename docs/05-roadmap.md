@@ -927,8 +927,7 @@ measured after it (2026-10-24). What it built:
 Not taken up: DNS over TLS to the network's resolvers and their TTLs were not
 tried by hand, as the emulator's resolver answers no TLS and every TTL as
 30 s itself, and a real phone's day on mobile data waits for the full app
-(M26). On a host with systemd-resolved, the reverse names of the network's
-addresses still go where resolved routes them.
+(M26).
 
 - **Exit criteria:** (1) in the emulator, with no exit node, the app
   resolves a member's name and a name for members alone to its overlay

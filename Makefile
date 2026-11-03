@@ -571,6 +571,47 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	SOURCE_DATE_EPOCH=$$t dpkg-deb --root-owner-group -Zxz --build $$root $(DEBTOP)/juist_$(DEB_VERSION)_$(DEB_ARCH).deb >/dev/null
 	@find $(DEBTOP) -maxdepth 1 -name '*.deb'
 
+# `make stage-systemd` lays out the RPM's files, the docs and manual-install.sh
+# under build/systemd/root, which make install installs where no package
+# manager serves.
+SYSTEMDTOP ?= $(abspath $(BUILDDIR)/systemd)
+
+.PHONY: stage-systemd
+stage-systemd: ## Lay out juist's files for a systemd host without apt, dnf or pkg in build/systemd/root
+	@rm -rf $(SYSTEMDTOP)
+	@set -e; root=$(SYSTEMDTOP)/root; \
+	for c in $(CMDS); do \
+		echo "==> $$c"; \
+		$(GOBUILD) -o $(BUILDDIR)/$$c ./cmd/$$c; \
+		install -D -m 0755 $(BUILDDIR)/$$c $$root/usr/bin/$$c; \
+	done; \
+	for u in juistd.service juistd@.service juist-ingress.service juist-serve.service; do \
+		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/system/$$u; \
+		sed -i 's|^ExecStart=/usr/local/bin/juistd |ExecStart=/usr/bin/juistd |' $$root/usr/lib/systemd/system/$$u; \
+		grep -q '^ExecStart=/usr/bin/juistd ' $$root/usr/lib/systemd/system/$$u; \
+	done; \
+	for u in juist-serve.path juist-ingress-ports.path juist-ingress-ports.service; do \
+		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/system/$$u; \
+	done; \
+	install -D -m 0644 packaging/rpm/juist.sysusers $$root/usr/lib/sysusers.d/juist.conf; \
+	install -D -m 0644 README.md $$root/usr/share/doc/juist/README.md; \
+	install -D -m 0644 LICENSE $$root/usr/share/doc/juist/copyright; \
+	install -D -m 0644 THIRD_PARTY_LICENSES $$root/usr/share/doc/juist/THIRD_PARTY_LICENSES; \
+	install -d -m 0755 $$root/usr/share/man/man1 $$root/usr/share/man/man8; \
+	$(BUILDDIR)/juist __manpage > $$root/usr/share/man/man1/juist.1; \
+	$(BUILDDIR)/juistd __manpage > $$root/usr/share/man/man8/juistd.8; \
+	gzip -9n $$root/usr/share/man/man1/juist.1 $$root/usr/share/man/man8/juistd.8; \
+	for s in firewall instances exit-node ingress serve relay resolv manual-install; do \
+		install -D -m 0755 packaging/$$s.sh $$root/usr/lib/juist/$$s.sh; \
+	done; \
+	install -D -m 0644 packaging/polkit/juist.rules $$root/usr/share/polkit-1/rules.d/60-juist.rules; \
+	for f in juist juist-relay juist-relay-443 juist-invite juist-ingress; do \
+		install -D -m 0644 packaging/firewalld/$$f.xml $$root/usr/lib/firewalld/services/$$f.xml; \
+	done; \
+	install -D -m 0644 packaging/completions/juist.bash $$root/usr/share/bash-completion/completions/juist; \
+	install -D -m 0644 packaging/completions/_juist $$root/usr/share/zsh/site-functions/_juist; \
+	install -D -m 0644 packaging/completions/juist.fish $$root/usr/share/fish/vendor_completions.d/juist.fish
+
 # `make release` writes a release into build/release under stable names, so
 # that releases/latest/download/NAME is always the newest, with SHA256SUMS
 # signed by RELEASE_KEY as packaging/release-signers names. It builds the .debs
@@ -719,7 +760,7 @@ image: ## Build the service member's container image into build/image
 SUDO ?= sudo
 
 .PHONY: install
-install: ## Build this system's package (.deb, RPM or FreeBSD's) and install it with sudo
+install: ## Build this system's package (.deb, RPM or FreeBSD's) and install it with sudo; elsewhere on systemd, its files
 	@set -e; \
 	sudo=$(SUDO); [ "$$(id -u)" -eq 0 ] && sudo=; \
 	if command -v apt >/dev/null 2>&1; then \
@@ -738,10 +779,19 @@ install: ## Build this system's package (.deb, RPM or FreeBSD's) and install it 
 		pkg=$$(find $(BUILDDIR)/freebsd -name '*.pkg'); \
 		echo "==> installing $$pkg"; \
 		$$sudo pkg add "$$pkg"; \
+	elif [ -d /run/systemd/system ]; then \
+		$(MAKE) --no-print-directory stage-systemd; \
+		echo "==> installing $(SYSTEMDTOP)/root"; \
+		$$sudo sh packaging/manual-install.sh install $(SYSTEMDTOP)/root; \
 	else \
-		echo "make install knows apt (Debian, Ubuntu), dnf (Fedora) and pkg (FreeBSD); use make deb, rpm or pkg-freebsd"; \
+		echo "make install knows apt (Debian, Ubuntu), dnf (Fedora), pkg (FreeBSD) and systemd; use make deb, rpm or pkg-freebsd"; \
 		exit 1; \
 	fi
+
+.PHONY: uninstall
+uninstall: ## Remove what make install installed where no package manager serves
+	@sudo=$(SUDO); [ "$$(id -u)" -eq 0 ] && sudo=; \
+	$$sudo sh /usr/lib/juist/manual-install.sh uninstall
 
 ## --- lint ----------------------------------------------------------------
 

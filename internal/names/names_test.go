@@ -3,6 +3,7 @@ package names
 import (
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 
 	"golang.org/x/net/dns/dnsmessage"
@@ -336,5 +337,60 @@ func TestReverseNamesOfTheNetworkAreAnswered(t *testing.T) {
 		if msg := z.Answer(query(t, name, dnsmessage.TypePTR)); msg != nil {
 			t.Errorf("%s answered, not passed on", name)
 		}
+	}
+}
+
+// The reverse zones of a prefix hold its addresses and no other's, so that a
+// resolver routing them to juistd sends it none but the network's.
+func TestReverseZonesHoldThePrefixAlone(t *testing.T) {
+	for _, tc := range []struct {
+		prefix string
+		want   []string
+	}{
+		{"10.40.0.0/16", []string{"40.10.in-addr.arpa"}},
+		{"10.40.11.0/24", []string{"11.40.10.in-addr.arpa"}},
+		{"198.18.0.0/22", []string{"0.18.198.in-addr.arpa", "1.18.198.in-addr.arpa", "2.18.198.in-addr.arpa", "3.18.198.in-addr.arpa"}},
+		{"10.41.12.13/15", []string{"40.10.in-addr.arpa", "41.10.in-addr.arpa"}},
+		{"fdab:cdef:abcd::/48", []string{"d.c.b.a.f.e.d.c.b.a.d.f.ip6.arpa"}},
+		{"fd12::/46", []string{"0.0.0.0.0.0.0.0.2.1.d.f.ip6.arpa", "1.0.0.0.0.0.0.0.2.1.d.f.ip6.arpa", "2.0.0.0.0.0.0.0.2.1.d.f.ip6.arpa", "3.0.0.0.0.0.0.0.2.1.d.f.ip6.arpa"}},
+		{"100.64.0.0/10", []string{"100.in-addr.arpa"}},
+		{"10.40.0.0/19", []string{"40.10.in-addr.arpa"}},
+		{"10.0.0.0/8", []string{"10.in-addr.arpa"}},
+		{"10.0.0.0/7", nil},
+		{"fd00::/8", nil},
+		{"", nil},
+	} {
+		var p netip.Prefix
+		if tc.prefix != "" {
+			p = netip.MustParsePrefix(tc.prefix)
+		}
+		if got := ReverseZones(p); !slices.Equal(got, tc.want) {
+			t.Errorf("%q: %v, want %v", tc.prefix, got, tc.want)
+		}
+	}
+
+	// Each zone's lowest and highest address are the prefix's.
+	for _, s := range []string{"10.32.0.0/12", "198.18.0.0/22", "fdab:cdef:abcd::/48", "fd12::/46"} {
+		p := netip.MustParsePrefix(s)
+		z := Zone{Reverse: []netip.Prefix{p}}
+		zones := ReverseZones(p)
+		if want := 1 << ((p.Bits()+7)/8*8 - p.Bits()); p.Addr().Is4() && len(zones) != want {
+			t.Errorf("%s: %d zones, want %d", s, len(zones), want)
+		}
+		labels, lo, hi := 4, "0.", "255."
+		if p.Addr().Is6() {
+			labels, lo, hi = 32, "0.", "f."
+		}
+		for _, zn := range zones {
+			n := labels - (strings.Count(zn, ".") - 1)
+			for _, pad := range []string{strings.Repeat(lo, n), strings.Repeat(hi, n)} {
+				if _, ok := z.reverseOf(pad + zn); !ok {
+					t.Errorf("%s: %s holds %s, outside it", s, zn, pad+zn)
+				}
+			}
+		}
+	}
+	if z := ReverseZones(netip.MustParsePrefix("10.16.0.0/12")); len(z) != 16 || z[0] != "16.10.in-addr.arpa" || z[15] != "31.10.in-addr.arpa" {
+		t.Errorf("10.16.0.0/12: %v", z)
 	}
 }

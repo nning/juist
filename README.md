@@ -63,9 +63,10 @@ The Android app is `juist-android-arm64.apk` there. `SHA256SUMS` is signed
 with the key in [packaging/release-signers](packaging/release-signers).
 
 Or build the package from the source and install it: `make install`, or
-`gmake install` as root on FreeBSD. The package brings `juist`, the command,
-and `juistd`, the daemon, with shell completion and man pages. Checking a
-download, and building for another machine:
+`gmake install` as root on FreeBSD; on another Linux with systemd it installs
+the package's files itself, and `make uninstall` removes them. The package
+brings `juist`, the command, and `juistd`, the daemon, with shell completion
+and man pages. Checking a download, and building for another machine:
 [Install](https://docs.juist.nning.io/en/docs/install/).
 
 An app in a container becomes a device of its own through a juist container

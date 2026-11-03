@@ -65,6 +65,13 @@ var (
 // it, man pages without their compression.
 func debFiles(t *testing.T) map[string]bool {
 	t.Helper()
+	return recipeFiles(t, "deb")
+}
+
+// recipeFiles is what the Makefile's target installs under $$root, man pages
+// without their compression.
+func recipeFiles(t *testing.T, target string) map[string]bool {
+	t.Helper()
 	b, err := os.ReadFile("../Makefile")
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +81,9 @@ func debFiles(t *testing.T) map[string]bool {
 	if cmds == nil {
 		t.Fatal("the Makefile sets no CMDS")
 	}
-	_, recipe, ok := strings.Cut(mk, "\ndeb: ")
+	_, recipe, ok := strings.Cut(mk, "\n"+target+": ")
 	if !ok {
-		t.Fatal("the Makefile has no deb target")
+		t.Fatalf("the Makefile has no %s target", target)
 	}
 	recipe, _, _ = strings.Cut(recipe, "\n\n")
 	files := map[string]bool{}

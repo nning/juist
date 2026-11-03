@@ -3,6 +3,7 @@
 package names
 
 import (
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -354,4 +355,55 @@ func (z *Zone) Overridden(query []byte) bool {
 		}
 		name = name[i+1:]
 	}
+}
+
+// maxReverseZones bounds a prefix's zones: resolved takes 256 domains of a
+// link in older versions, and refuses them all past that.
+const maxReverseZones = 16
+
+// ReverseZones are the reverse zones that hold p's addresses, and no other
+// where [maxReverseZones] do, else the one zone that holds p; none for an
+// invalid p or one shorter than /8 or /16.
+func ReverseZones(p netip.Prefix) []string {
+	if !p.IsValid() {
+		return nil
+	}
+	p = p.Masked()
+	unit, suffix, shortest := 8, "in-addr.arpa", 8
+	if p.Addr().Is6() {
+		unit, suffix, shortest = 4, "ip6.arpa", 16
+	}
+	if p.Bits() < shortest {
+		return nil
+	}
+	n := (p.Bits() + unit - 1) / unit // labels of each zone
+	if 1<<(n*unit-p.Bits()) > maxReverseZones {
+		n = p.Bits() / unit
+	}
+	units := make([]int, 0, 32)
+	for _, b := range p.Addr().AsSlice() {
+		if unit == 8 {
+			units = append(units, int(b))
+		} else {
+			units = append(units, int(b>>4), int(b&0x0f))
+		}
+	}
+	units = units[:n]
+	var out []string
+	for i := range 1 << max(n*unit-p.Bits(), 0) {
+		var b strings.Builder
+		for k := n - 1; k >= 0; k-- {
+			u := units[k]
+			if k == n-1 {
+				u |= i
+			}
+			if unit == 8 {
+				fmt.Fprintf(&b, "%d.", u)
+			} else {
+				fmt.Fprintf(&b, "%x.", u)
+			}
+		}
+		out = append(out, b.String()+suffix)
+	}
+	return out
 }
