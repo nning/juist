@@ -20,6 +20,9 @@ type HTTPS struct {
 	// holds, which with Only are the only ones it reaches.
 	Relays []string `cbor:"3,keyasint,omitempty"`
 
+	// Owners are the members whose relays those are, by name.
+	Owners []string `cbor:"9,keyasint,omitempty"`
+
 	// Name is the public name this device's relay serves on 443, as set.
 	// NotAnnounced says why members are not told of it, "" where they are;
 	// Listening where 443 is taken, as ADDR:443, or "the ingress" where the
@@ -40,7 +43,7 @@ func (h *HTTPS) forReader() *HTTPS {
 	if h == nil {
 		return nil
 	}
-	return &HTTPS{Only: h.Only, Relays: h.Relays, Name: h.Name}
+	return &HTTPS{Only: h.Only, Relays: h.Relays, Owners: h.Owners, Name: h.Name}
 }
 
 // ValidProxy checks a proxy's URL as a setting takes it: "", or http or

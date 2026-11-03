@@ -40,3 +40,22 @@ func TestTheMeshRunsOnTheKeptSettingsOf443(t *testing.T) {
 			m.httpsOnly, m.proxy, m.relayName, proxy, name)
 	}
 }
+
+// Outside a network, the status names the proxy HTTPS_PROXY gives as the
+// mesh would, where none is set.
+func TestTheStatusNamesTheEnvironmentsProxyBeforeAJoin(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://user:secret@proxy.example:3128")
+	home := socketDir(t)
+	if err := os.WriteFile(filepath.Join(home, statedir.HTTPSOnlyFile), []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewService(ServiceOptions{Home: home, Socket: filepath.Join(socketDir(t), "s")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	h := s.Status().HTTPS
+	if h == nil || !h.Only || h.Proxy != "http://user:xxxxx@proxy.example:3128" {
+		t.Errorf("the status says %+v, want HTTPS alone through the environment's proxy, its password redacted", h)
+	}
+}

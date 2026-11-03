@@ -486,6 +486,7 @@ type Daemon struct {
 	// installed is the peer set last installed in the data plane, by name,
 	// and lastPeers that set as installed, routes and access included.
 	installed     []namedPeer
+	installedAt   map[types.Identity]time.Time // when each installed peer first was
 	lastPeers     []conn.Peer
 	lastIngresses map[key.NodePublic]bool
 

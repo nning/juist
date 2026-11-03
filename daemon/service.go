@@ -1209,7 +1209,10 @@ func (s *Service) Status() ipc.Status {
 	st.Joining = s.busy
 	st.Rendezvous = s.helpers()
 	if st.HTTPS == nil && (s.prefs.HTTPSOnly || s.prefs.RelayName != "") {
-		st.HTTPS = &ipc.HTTPS{Only: s.prefs.HTTPSOnly, Proxy: ipc.RedactProxy(s.prefs.Proxy), Name: s.prefs.RelayName}
+		st.HTTPS = &ipc.HTTPS{Only: s.prefs.HTTPSOnly, Name: s.prefs.RelayName}
+		if s.prefs.HTTPSOnly {
+			st.HTTPS.Proxy = shownProxy(s.prefs.Proxy, envProxyFunc())
+		}
 	}
 	if o := s.opts.Mesh; o.TunName != "" && !o.Netstack && runtime.GOOS != "android" {
 		st.Multicast = &ipc.Multicast{Off: s.prefs.MulticastOff || !multicastPermitted(state, st.Self, s.now().Unix()), Auto: copiesGroups(o) && s.prefs.automaticGroups()}

@@ -314,8 +314,11 @@ func (r *statusRender) connected() bool {
 		r.v.head = append(r.v.head, line{text: paint("1", name) + " · no network"})
 		if h := s.HTTPS; h != nil && h.Only {
 			r.field("HTTPS", "only%s", proxied(h))
+			// A code needs the LAN search HTTPS alone does without.
+			r.note(lineHint, "juist join LINK, or juist create")
+		} else {
+			r.note(lineHint, "juist join CODE, or juist create")
 		}
-		r.note(lineHint, "juist join CODE, or juist create")
 		return false
 	}
 	if s.Disabled != "" {
@@ -814,6 +817,17 @@ func reachNotes(n *notes, s *ipc.Status) {
 	down := slices.DeleteFunc(s.Blocked(), notAt)
 	away := slices.DeleteFunc(s.Blocked(), func(name string) bool { return !notAt(name) })
 	itThem := func(names []string) string { return map[bool]string{true: "it", false: "them"}[len(names) == 1] }
+	var owners []string
+	if httpsOnly {
+		// A relay this device reaches runs in its owner's juistd: offline
+		// it is not, and its own relay is one it is at.
+		owners = slices.DeleteFunc(slices.Clone(seeking), func(name string) bool { return !slices.Contains(s.HTTPS.Owners, name) })
+		seeking = slices.DeleteFunc(seeking, func(name string) bool { return slices.Contains(owners, name) })
+	}
+	if len(owners) > 0 {
+		n.note(lineInfo, "no answer yet from %s through %s on 443", strings.Join(owners, ", "),
+			map[bool]string{true: "its own relay", false: "their own relays"}[len(owners) == 1])
+	}
 	if len(seeking) > 0 && httpsOnly {
 		n.note(lineInfo, "no answer from %s: offline, or at no relay on 443", strings.Join(seeking, ", "))
 	} else if len(seeking) > 0 {

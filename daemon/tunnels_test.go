@@ -202,11 +202,13 @@ func (f *reconcileFixture) installed(t *testing.T, i int) conn.Peer {
 // every peer gone for good would cost relay traffic and battery for nothing.
 // One that answers again starts over.
 func TestProbesBackOffAPeerThatNeverAnswers(t *testing.T) {
-	f := newReconcileFixture(t, 2)
+	c := &clock{now: time.Unix(1_700_000_000, 0)}
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
 	f.learn(t, f.nw.devices[1], 4001)
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
+	c.set(c.get().Add(newPeerProbing))
 	silent := f.installed(t, 1).Addrs[0].Addr()
 	probes := func() int {
 		f.mgr.mu.Lock()
@@ -539,6 +541,7 @@ func TestANewAnnouncementIsProbedAtOnce(t *testing.T) {
 	if err := f.d.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
+	c.set(c.get().Add(newPeerProbing))
 	for range 5 {
 		f.d.refreshReach(t.Context())
 	}
@@ -571,6 +574,40 @@ func TestANewAnnouncementIsProbedAtOnce(t *testing.T) {
 	}
 	if st := f.d.Status(); len(st.Seeking)+len(st.Absent) != 0 {
 		t.Errorf("a peer that said something new reads as seeking %v, absent %v", st.Seeking, st.Absent)
+	}
+}
+
+// A peer just installed, as after this device joins, is probed in every
+// check past the backoff, and backed off from once it is no longer new.
+func TestANewPeerIsProbedPastTheBackoff(t *testing.T) {
+	c := &clock{now: time.Unix(1_700_000_000, 0)}
+	f := newReconcileFixtureWith(t, 2, func(o *Options) { o.Clock = c.get })
+	f.learn(t, f.nw.devices[1], 4001)
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	addr := f.installed(t, 1).Addrs[0].Addr()
+	probes := func() int {
+		f.mgr.mu.Lock()
+		defer f.mgr.mu.Unlock()
+		return len(slices.DeleteFunc(slices.Clone(f.mgr.probed), func(a netip.Addr) bool { return a != addr }))
+	}
+	const checks = probeMissesBeforeBackoff + 3
+	for range checks {
+		c.set(c.get().Add(reachEvery))
+		f.d.refreshReach(t.Context())
+	}
+	if n := probes(); n != checks {
+		t.Errorf("a peer just installed was probed in %d of %d checks", n, checks)
+	}
+	c.set(c.get().Add(newPeerProbing))
+	before := probes()
+	for range 3 {
+		c.set(c.get().Add(reachEvery))
+		f.d.refreshReach(t.Context())
+	}
+	if probes() != before {
+		t.Error("a peer installed long ago was probed past the backoff")
 	}
 }
 

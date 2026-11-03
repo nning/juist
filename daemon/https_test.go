@@ -678,6 +678,9 @@ func TestARelaysNameIsTakenOnceItsServerSaysWhoseItIs(t *testing.T) {
 			t.Errorf("an invite waits at %s by the relay %d", r.Name, r.CertHash[0])
 		}
 	}
+	if h := f.d.Status().HTTPS; h == nil || !slices.Contains(h.Owners, one.record.Name) || slices.Contains(h.Owners, two.record.Name) {
+		t.Errorf("the status names %v as the relays' owners, want %s and not %s", h, one.record.Name, two.record.Name)
+	}
 }
 
 // TestOneRelayCyclingNamesLeavesAnothersProvable: a relay-capable member

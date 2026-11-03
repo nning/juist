@@ -166,6 +166,7 @@ func TestStatusNamesTheStateAndHealthSaysWhy(t *testing.T) {
 		state, says string
 	}{
 		{&ipc.Status{CanOperate: true, Derived: ipc.Derived{SelfName: "nas"}}, "nas · no network", "juist join CODE"},
+		{&ipc.Status{CanOperate: true, Derived: ipc.Derived{SelfName: "nas", HTTPS: &ipc.HTTPS{Only: true}}}, "nas · no network", "juist join LINK"},
 		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: ipc.Derived{NetworkName: "home", Disabled: "x", Schema: types.CurrentSchema}},
 			"home · disabled", "ended with a break-glass secret"},
 		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: home, HostConflict: &ipc.HostConflict{SameNetwork: true, Instance: 1}},
@@ -824,6 +825,16 @@ func TestStatusSaysHTTPSAloneAndTheRelaysName(t *testing.T) {
 	printStatusAndHealth(a, st)
 	mustContain(t, out.String(), "HTTPS         only, by relay.example.org through http://u:xxxxx@proxy:3128\n",
 		"no answer from nas: offline, or at no relay on 443")
+
+	// One whose relay this device is at is no offline one.
+	out = syncBuffer{}
+	st.HTTPS.Owners = []string{"nas"}
+	printStatusAndHealth(a, st)
+	mustContain(t, out.String(), "no answer yet from nas through its own relay on 443")
+	if strings.Contains(out.String(), "offline") {
+		t.Errorf("the relay's own device is called offline:\n%s", out.String())
+	}
+	st.HTTPS.Owners = nil
 	if strings.Contains(out.String(), "udp/") {
 		t.Errorf("a device on HTTPS alone is told of UDP:\n%s", out.String())
 	}

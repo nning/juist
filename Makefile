@@ -563,7 +563,7 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	printf '%s\n' /etc/ufw/applications.d/juist /etc/dhcp/dhclient-enter-hooks.d/juist \
 		/etc/apparmor.d/abstractions/nameservice.d/juist > $$root/DEBIAN/conffiles; \
 	install -m 0644 packaging/deb/triggers $$root/DEBIAN/; \
-	size=$$(du -sk --exclude=DEBIAN $$root | cut -f1); \
+	size=$$(sh packaging/deb/installed-size $$root); \
 	sed -e 's|@VERSION@|$(DEB_VERSION)|' -e 's|@ARCH@|$(DEB_ARCH)|' -e "s|@SIZE@|$$size|" \
 		packaging/deb/control.in > $$root/DEBIAN/control; \
 	t=$$(git log -1 --format=%ct 2>/dev/null || date +%s); \

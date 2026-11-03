@@ -30,6 +30,11 @@ const (
 	probeBackoff             = 10
 )
 
+// newPeerProbing is how long a peer just installed, as after this device
+// joins, is probed in every check, past the backoff: neither end has met the
+// other's tunnel yet, and a backoff would leave it down for minutes.
+const newPeerProbing = 10 * time.Minute
+
 // pathSettle is how long a check waits for a direct path to be confirmed
 // where a probe was answered without one.
 const pathSettle = time.Second
@@ -175,9 +180,19 @@ type namedPeer struct {
 // SetPeers, a failed install leaves probes aimed at peers that may lack an
 // entry, which they then report as down.
 func (d *Daemon) setInstalled(peers []namedPeer) {
+	now := d.now()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.installed = peers
+	at := make(map[types.Identity]time.Time, len(peers))
+	for _, p := range peers {
+		if t, ok := d.installedAt[p.id]; ok {
+			at[p.id] = t
+		} else {
+			at[p.id] = now
+		}
+	}
+	d.installedAt = at
 }
 
 // Tunnels reports how many installed peers' tunnels are live and names the
@@ -253,6 +268,7 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 	defer d.probes.mu.Unlock()
 	d.mu.Lock()
 	peers := d.installed
+	installedAt := d.installedAt
 	now := d.probeNow
 	d.probeNow = nil
 	d.mu.Unlock()
@@ -310,7 +326,8 @@ func (d *Daemon) checkTunnels(wait time.Duration) []tunnelCheck {
 		// few checks: every device probing every one gone for good costs
 		// traffic through the relays and battery on laptops, for nothing.
 		// One with a new announcement is probed at once.
-		if n := d.probes.misses[p.id]; !now[p.id] && !doubted[i] && n >= probeMissesBeforeBackoff && n%probeBackoff != 0 {
+		if n := d.probes.misses[p.id]; !now[p.id] && !doubted[i] && !within(installedAt[p.id], at, newPeerProbing) &&
+			n >= probeMissesBeforeBackoff && n%probeBackoff != 0 {
 			continue
 		}
 		probe(i)

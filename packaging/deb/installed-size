@@ -1,0 +1,7 @@
+#!/bin/sh
+# installed-size ROOT prints the KiB of ROOT outside DEBIAN as dpkg-gencontrol
+# counts them: each file's size rounded up, 1 for any other entry. It reads no
+# blocks, which differ between file systems.
+set -e
+find "$1" -path "$1/DEBIAN" -prune -o ! -path "$1" \( -type f -printf '%s\n' -o -printf 'entry\n' \) |
+	awk '$1 == "entry" { n++; next } { n += int(($1 + 1023) / 1024) } END { print n + 0 }'

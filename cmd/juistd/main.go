@@ -541,7 +541,11 @@ func report(out, errOut io.Writer, st ipc.Status, tun string) {
 	}
 	if !st.InNetwork {
 		fmt.Fprintf(out, "juistd: %s (%v) in no network\n", st.SelfName, st.Self.ShortString())
-		hint("juist create, or juist join CODE")
+		if st.HTTPS != nil && st.HTTPS.Only {
+			hint("juist create, or juist join LINK")
+		} else {
+			hint("juist create, or juist join CODE")
+		}
 		return
 	}
 	fmt.Fprintf(out, "juistd: network %q (%v)\n", st.NetworkName, st.Network)

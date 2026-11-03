@@ -110,6 +110,7 @@ password.
 | `juist status`: `HTTPS  only, and no relay on 443` | give a relay a public name: run `sudo juist set --relay-name NAME` on it |
 | `juist health`: `warning: no relay on 443/tcp` | the same |
 | `juist health`: `no answer from …: offline, or at no relay on 443` | the device is offline, or cannot reach any relay that has a name |
+| `juist health`: `no answer yet from … through its own relay on 443` | the device runs, since its relay is the one this device uses, but the tunnel to it is not up yet; shortly after a join this goes by itself within minutes |
 | `juist health`: `no tunnel traffic from … through the relays on 443` | check the relays' names in DNS, and that port 443 reaches them |
 | `juist health`: `warning: … not at the relay on …, the one this device reaches it at` | the device runs, but keeps no connection there: it saves battery and is reached once it sends, or it runs an older juist |
 | `juist health`: `no answer from …: not at the relay on …` | the device is offline, or keeps no connection there; once it is known to be offline, the line goes |

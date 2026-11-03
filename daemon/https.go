@@ -647,18 +647,20 @@ func (d *Daemon) httpsNow(relays []conn.Relay) *ipc.HTTPS {
 	}
 	h := &ipc.HTTPS{Only: d.httpsOnly, Name: d.relayName}
 	if d.httpsOnly {
-		if d.proxy != "" {
-			h.Proxy = ipc.RedactProxy(d.proxy)
-		} else if u, err := d.envProxy(&url.URL{Scheme: "https", Host: "relay.invalid"}); err == nil && u != nil {
-			h.Proxy = ipc.RedactProxy(u.String())
-		}
+		h.Proxy = shownProxy(d.proxy, d.envProxy)
 	}
+	owners := d.relayOwners()
 	for _, r := range relays {
-		if r.Name != "" {
-			h.Relays = append(h.Relays, r.Name)
+		if r.Name == "" {
+			continue
+		}
+		h.Relays = append(h.Relays, r.Name)
+		if o := owners[r.Region]; o != "" && !slices.Contains(h.Owners, o) {
+			h.Owners = append(h.Owners, o)
 		}
 	}
 	slices.Sort(h.Relays)
+	slices.Sort(h.Owners)
 	if d.relayName == "" {
 		return h
 	}
@@ -683,6 +685,18 @@ func (d *Daemon) httpsNow(relays []conn.Relay) *ipc.HTTPS {
 		h.NoCert = "not yet ordered"
 	}
 	return h
+}
+
+// shownProxy is the proxy a status names, without its password: the one
+// set, or else HTTPS_PROXY's.
+func shownProxy(set string, env func(*url.URL) (*url.URL, error)) string {
+	if set != "" {
+		return ipc.RedactProxy(set)
+	}
+	if u, err := env(&url.URL{Scheme: "https", Host: "relay.invalid"}); err == nil && u != nil {
+		return ipc.RedactProxy(u.String())
+	}
+	return ""
 }
 
 // envProxyFunc reads HTTPS_PROXY and NO_PROXY once.

@@ -168,7 +168,8 @@ cut off. The rules:
   interval always puts it, freshly signed; a changed one brings a round
   forward at once.
 - A new announcement for an installed peer is probed at once, past the probe
-  backoff, and a tunnel back up is synced at once.
+  backoff, and a tunnel back up is synced at once. A peer installed within the
+  last 10 minutes, as every one after a join, is probed in every check.
 - A peer that answered is probed again only after 5 minutes where both ends
   have a home relay and this device reaches the peer's, its answer standing
   meanwhile: a probe keeps magicsock pinging the peer every 3 s for 45 s, so
