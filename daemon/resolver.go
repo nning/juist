@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/internal/dnsfwd"
@@ -19,6 +20,9 @@ import (
 // asks: Dial opens a connection to one over network, udp or tcp.
 type Resolver struct {
 	Dial func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error)
+	// Observe, where set, hears of each lookup asked upstream, as
+	// [dnsfwd.Options.Observe].
+	Observe func(query []byte, rcode int, err error, took time.Duration)
 }
 
 // withResolver has connect build the data plane with a stack of its own at
@@ -48,7 +52,7 @@ const resolverMaxUDP = netstackMTU - 40 - 8
 // resolverNames answers the host in the resolver's stack, which the host's
 // own packets alone reach, asking upstream by dial, and failing at once what
 // it cannot ask.
-func (d *Daemon) resolverNames(dial func(context.Context, string, netip.AddrPort) (net.Conn, error)) NamesServer {
+func (d *Daemon) resolverNames(r Resolver) NamesServer {
 	return func(addr netip.AddrPort, answer func([]byte) []byte, upstream func([]byte) ([]netip.AddrPort, error)) (io.Closer, error) {
 		stack := d.resolver
 		if stack == nil {
@@ -68,8 +72,8 @@ func (d *Daemon) resolverNames(dial func(context.Context, string, netip.AddrPort
 		}
 		none := func() []netip.AddrPort { return nil }
 		return dnsfwd.Start(dnsfwd.Options{Addrs: []netip.Addr{addr.Addr()}, Port: addr.Port(), Listen: listen,
-			Local: true, Answer: answer, Upstream: none, UpstreamFor: upstream, Dial: dial, FailFast: true,
-			MaxTTL: names.TTL, Capped: d.namesCapped, MaxUDP: resolverMaxUDP})
+			Local: true, Answer: answer, Upstream: none, UpstreamFor: upstream, Dial: r.Dial, FailFast: true,
+			MaxTTL: names.TTL, Capped: d.namesCapped, MaxUDP: resolverMaxUDP, Observe: r.Observe})
 	}
 }
 

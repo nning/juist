@@ -49,13 +49,14 @@ import io.juist.app.BuildConfig
 import io.juist.app.R
 import io.juist.app.core.Connection
 import io.juist.app.core.CoreOff
-import io.juist.app.core.Diagnostics
+import io.juist.app.core.Report
 import io.juist.app.core.JoinState
 import io.juist.app.core.Juist
 import io.juist.app.core.lastView
 import io.juist.app.ui.screens.AboutScreen
 import io.juist.app.ui.screens.CodeScreen
 import io.juist.app.ui.screens.ConfirmScreen
+import io.juist.app.ui.screens.DetailsScreen
 import io.juist.app.ui.screens.JoiningScreen
 import io.juist.app.ui.screens.LicensesScreen
 import io.juist.app.ui.screens.MemberScreen
@@ -80,10 +81,11 @@ sealed interface Route {
     data class MemberOf(val identity: String) : Route
     data object About : Route
     data object Licenses : Route
+    data object Details : Route
 
     val depth get() = when (this) {
         Welcome, Status -> 0
-        Scan, Code, About, is MemberOf -> 1
+        Scan, Code, About, Details, is MemberOf -> 1
         is Confirm, Licenses -> 2
         Joining -> 3
     }
@@ -99,7 +101,7 @@ internal fun decode(s: String): Route = when {
     s.startsWith("confirm:") -> Route.Confirm(s.removePrefix("confirm:"))
     s.startsWith("opened:") -> Route.Confirm(s.removePrefix("opened:"), fromElsewhere = true)
     s.startsWith("member:") -> Route.MemberOf(s.removePrefix("member:"))
-    else -> listOf(Route.Welcome, Route.Scan, Route.Code, Route.Joining, Route.Status, Route.About, Route.Licenses)
+    else -> listOf(Route.Welcome, Route.Scan, Route.Code, Route.Joining, Route.Status, Route.About, Route.Licenses, Route.Details)
         .firstOrNull { it.toString() == s } ?: Route.Welcome
 }
 
@@ -234,6 +236,7 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                 onDisconnect = { Juist.disconnect(context) },
                 onMember = { push(Route.MemberOf(it.identity)) },
                 onAbout = { push(Route.About) },
+                onDetails = { push(Route.Details) },
                 // A device in no network has nothing to keep a VPN on for.
                 onForget = {
                     scope.launch {
@@ -281,9 +284,31 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                 version = BuildConfig.VERSION_NAME,
                 onHandbook = { open(context, handbook) },
                 onLicenses = { push(Route.Licenses) },
-                onCopyLog = { copyPrivately(context, Diagnostics.text()) },
+                onCopyLog = { copyPrivately(context, Report.text(context, BuildConfig.VERSION_NAME)) },
                 onBack = ::pop,
             )
+            Route.Details -> {
+                val view = Juist.last
+                if (view == null) {
+                    LaunchedEffect(Unit) { pop() }
+                } else {
+                    val on = connection is Connection.On
+                    val changes by produceState<List<io.juist.app.core.Change>?>(null, on) {
+                        value = if (on) Juist.changes().getOrNull() else null
+                    }
+                    val diagnosis by produceState(Juist.diagnosis(), connection) { value = Juist.diagnosis() }
+                    DetailsScreen(
+                        view = view,
+                        on = on,
+                        changes = changes,
+                        diagnosis = diagnosis,
+                        onNames = { v -> scope.launch { Juist.setNames(v).onFailure { toast(context, errorText(context, it)) } } },
+                        onHttpsOnly = { v -> scope.launch { Juist.setHttpsOnly(v).onFailure { toast(context, errorText(context, it)) } } },
+                        onCopyReport = { copyPrivately(context, Report.text(context, BuildConfig.VERSION_NAME)) },
+                        onBack = ::pop,
+                    )
+                }
+            }
             Route.Licenses -> {
                 val text by produceState("") {
                     value = withContext(Dispatchers.IO) {

@@ -353,6 +353,8 @@ internal data class UnderlayDns(
     val servers: List<String> = emptyList(),
     val overTls: Boolean = false,
     val privateDns: String = "",
+    /** The network's routes, which no subnet route takes into the tunnel. */
+    val routes: List<String> = emptyList(),
 ) {
     fun json(): String = coreJson.encodeToString(serializer(), this)
 
@@ -361,6 +363,7 @@ internal data class UnderlayDns(
             servers = p.dnsServers.mapNotNull { it.hostAddress },
             overTls = p.isPrivateDnsActive && p.privateDnsServerName == null,
             privateDns = p.privateDnsServerName.orEmpty(),
+            routes = p.routes.filter { !it.isDefaultRoute }.map { it.destination.toString() },
         )
     }
 }

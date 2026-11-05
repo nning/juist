@@ -10,7 +10,8 @@ lead: The Android app makes a phone a member of one network. It joins by the inv
 The app runs juist on a phone with Android 12 or newer. The phone joins one
 network as a member without roles. While its VPN is on, every app on the
 phone reaches the other devices by name, such as `nas.home.juist`, and by
-address. The VPN carries only the traffic to the network and the phone's DNS
+address, and the LANs behind its [subnet routers](#subnets). The VPN carries
+only the traffic to the network, to those subnets and the phone's DNS
 ([Names](#names)); all other traffic bypasses juist.
 
 The phone cannot:
@@ -18,8 +19,8 @@ The phone cannot:
 - be in more than one network;
 - turn [public names]({{< relref "docs/names" >}}) on, so they resolve
   publicly there;
-- use a [subnet router]({{< relref "docs/subnets" >}}) or be an
-  [exit node]({{< relref "docs/exit-nodes" >}}), though it can use one;
+- route a subnet or be an [exit node]({{< relref "docs/exit-nodes" >}}),
+  though it can use both;
 - invite devices, hold an admin key, or relay. Invites come from an admin's
   computer.
 
@@ -138,10 +139,53 @@ A device is reached **Direct** or **Through a relay**, or not at the moment:
 **Not checked yet**, or **Outdated** (it runs an older juist, and only pings
 get through until it is updated).
 
-Tap a device to see its name, addresses, roles and when it was last heard
-from. **Ping** sends an echo through the tunnel, which juist on that device
-answers even if its firewall drops pings. **Open in browser** opens `http://`
-at its address.
+Tap a device to see its name, addresses, roles, its juist's schema and when
+it was last heard from. **Ping** sends an echo through the tunnel, which juist
+on that device answers even if its firewall drops pings. **Open in browser**
+opens `http://` at its address.
+
+{{< screens >}}
+member_services: A device's services: published names, a TCP port and a subnet
+{{< /screens >}}
+
+Under **Services**, the device's screen lists what the network publishes on
+it ([Publishing services]({{< relref "docs/publishing" >}})): a name opens in
+the browser, a TCP port and a subnet copy when tapped. Names for members alone
+say so.
+
+## Details
+
+{{< screens >}}
+details: The phone's settings, the network's schema, relays and subnets, and the log's latest changes
+{{< /screens >}}
+
+**Details**, under the devices or in the menu, shows what `juist status`
+and the [status page]({{< relref "docs/publishing" >}}#status-page) show beyond the
+state: the network's schema next to the app's, the log's head, when the
+phone last brought its view of the network up to date, the relays and the one
+the phone goes through, the network's names, its subnets, and the log's latest
+changes, as `juist log` lists them.
+
+It also holds the phone's two settings:
+
+- **Network names**: every lookup goes to juist, which answers the network's
+  names. Off, the phone keeps its own DNS and resolves none of them, as
+  `juist set --dns=false` does on a computer.
+- **HTTPS only**: the phone reaches relays by HTTPS on port 443 alone, as
+  `juist set --https-only` does ([Networks that only allow
+  HTTPS]({{< relref "docs/https-only" >}})).
+
+Under **Diagnosis**, the app counts how often it set up the VPN and how its
+lookups went: how many failed or were slow, and which. **Copy log** adds how
+Android sees the phone's networks.
+
+## Subnets {#subnets}
+
+When the network grants a member a [subnet]({{< relref "docs/subnets" >}}),
+such as the LAN at home, the phone reaches it through that member while the
+VPN is on. A subnet the phone's own network already covers, such as that LAN
+while the phone is on its Wi-Fi, stays outside the tunnel, and **Details**
+says so. Moving to mobile data takes it into the tunnel again.
 
 ## Names
 
@@ -185,7 +229,9 @@ Android's VPN settings. The app links to them.
 
 ## Turning the VPN off and on
 
-The switch next to the state turns the VPN off and on. While it is on, a
+The switch next to the state turns the VPN off and on, as does juist's tile
+in Android's Quick Settings: add it by editing the tiles, and press it long to
+open the app. While it is on, a
 notification shows the state, with a **Turn off** action. If the VPN was on,
 juist turns it on again after a restart or an update. Android runs one VPN at
 a time: another VPN app turns juist off, and the app says so.
@@ -224,7 +270,8 @@ uninstalled.
 - The camera is used only to read the QR code. Nothing it sees is stored or
   sent.
 - **About**, in the menu, shows the version and licenses. **Copy log** copies
-  the app's log, which lives in memory only. It names your devices and
+  the app's log, which lives in memory only, with how Android sees the
+  phone's networks and the lookups that failed. It names your devices and
   addresses, so share it only with someone you trust.
 
 ## Troubleshooting

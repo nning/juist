@@ -51,3 +51,20 @@ func TestTheTerminatorIsToldTheStatusPage(t *testing.T) {
 		t.Errorf("a reader got %+v", resp)
 	}
 }
+
+// The log's changes are listed without a status page served, as the app
+// lists them, newest first and at most as many as asked.
+func TestTheLogsChangesAreListedWithoutAStatusPage(t *testing.T) {
+	nw := newNetwork(t, 2)
+	f := serviceWithChoice(t, nw, nw.devices[0], "")
+	var got []ipc.Change
+	var total int
+	waitFor(t, 10*time.Second, "the log's changes", func() bool {
+		var err error
+		got, total, err = f.s.Changes(1)
+		return err == nil && total > 0
+	})
+	if len(got) != 1 || got[0].Index != total-1 || got[0].What == "" {
+		t.Errorf("changes %+v of %d", got, total)
+	}
+}

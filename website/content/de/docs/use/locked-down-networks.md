@@ -75,8 +75,8 @@ Tunnel wieder direkt laufen.
 - **juist bleibt erkennbar** für einen Zensor, der Server abfragt oder
   TLS-Fingerabdrücke vergleicht.
 - **Ein CAA-Eintrag für den Namen des Relays** muss Let's Encrypt zulassen.
-- **Die Android-App** hat keine Einstellung für den Nur-HTTPS-Modus, wechselt
-  aber von selbst zum Namen eines Relays auf 443, wo UDP und der Port des
+- **Die Android-App** schaltet den Nur-HTTPS-Modus unter **Details** ein und
+  wechselt von selbst zum Namen eines Relays auf 443, wo UDP und der Port des
   Relays gesperrt sind.
 
 ## Weiterlesen

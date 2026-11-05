@@ -22,6 +22,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.builtins.ListSerializer
 
 /** Whether the core runs, and what it last said. */
 sealed interface Connection {
@@ -79,6 +80,12 @@ internal interface CoreCalls {
     fun useExit(identity: String)
     fun exitOff()
     fun forget()
+    /** A JSON [Diagnosis]. */
+    fun diagnose(): String
+    /** The log's newest changes, JSON [Change]s. */
+    fun changes(): String
+    fun setNames(on: Boolean)
+    fun setHttpsOnly(on: Boolean)
 }
 
 /** The Go core's calls. */
@@ -91,6 +98,10 @@ internal class GoCore(private val c: Core) : CoreCalls {
     override fun useExit(identity: String) = c.useExit(identity)
     override fun exitOff() = c.exitOff()
     override fun forget() = c.forget()
+    override fun diagnose(): String = c.diagnose()
+    override fun changes(): String = c.changes()
+    override fun setNames(on: Boolean) = c.setNames(on)
+    override fun setHttpsOnly(on: Boolean) = c.setHTTPSOnly(on)
 }
 
 /** The process's one core, which [JuistVpnService] runs and the screens watch. */
@@ -292,6 +303,27 @@ object Juist {
         val c = core ?: return@withContext Result.failure(CoreOff())
         runCatching { if (identity == null) c.exitOff() else c.useExit(identity) }.also { refresh() }
     }
+
+    /** Has the phone's lookups go to juist, for the network's names, or leaves its DNS alone. */
+    suspend fun setNames(on: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        val c = core ?: return@withContext Result.failure(CoreOff())
+        runCatching { c.setNames(on) }.also { refresh() }
+    }
+
+    /** Has the phone reach relays by TLS on 443 alone, or by every way. */
+    suspend fun setHttpsOnly(on: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+        val c = core ?: return@withContext Result.failure(CoreOff())
+        runCatching { c.setHttpsOnly(on) }.also { refresh() }
+    }
+
+    /** The log's newest changes, newest first. */
+    suspend fun changes(): Result<List<Change>> = withContext(Dispatchers.IO) {
+        val c = core ?: return@withContext Result.failure(CoreOff())
+        runCatching { coreJson.decodeFromString(ListSerializer(Change.serializer()), c.changes()) }
+    }
+
+    /** What the core says of how the phone's traffic fares, null while it is off. */
+    fun diagnosis(): Diagnosis? = core?.let { c -> runCatching { coreJson.decodeFromString(Diagnosis.serializer(), c.diagnose()) }.getOrNull() }
 
     /** Forgets a network that removed this device, so it can join again. */
     suspend fun forget(): Result<Unit> = withContext(Dispatchers.IO) {

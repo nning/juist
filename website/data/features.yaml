@@ -1,6 +1,6 @@
 # The features table on the home page. A row whose handbook page exists links to it;
-# its anchor is the English title, a note marks a feature that does not run everywhere,
-# and uses names the use-case pages it serves.
+# its anchor is the English title, only names the one platform a feature is limited to,
+# and uses names the use-case pages it serves. Further limits belong on the handbook page.
 - doc: docs/how-it-works
   en: {title: Mesh and NAT traversal, text: "WireGuard tunnels between every pair of devices, direct where NAT allows."}
   de: {title: Mesh und NAT-Traversal, text: "WireGuard-Tunnel zwischen allen Geräten, direkt, wo das NAT es zulässt."}
@@ -12,14 +12,13 @@
   en: {title: Invites, text: "A code for the LAN or a link for anywhere. Both devices show four words to compare."}
   de: {title: Einladungen, text: "Ein Code fürs LAN oder ein Link für überall. Beide Geräte zeigen vier Wörter, die du vergleichst."}
 - doc: docs/android
-  en: {title: Android, text: "A phone joins with the invite's QR code or code, reaches the members at their addresses, and shows how each one is reached."}
-  de: {title: Android, text: "Ein Telefon tritt mit dem QR-Code oder dem Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie es jedes erreicht."}
-  note: {en: "On Android 12 or newer, as a member without public names, roles or subnets. F-Droid installs and updates it.", de: "Unter Android 12 oder neuer, als Mitglied ohne öffentliche Namen, Rollen und Subnetze. F-Droid installiert und aktualisiert sie."}
+  en: {title: Android, text: "A phone with Android 12 or newer joins with the invite's QR code or code, reaches the members at their addresses, and shows how each one is reached."}
+  de: {title: Android, text: "Ein Telefon mit Android 12 oder neuer tritt mit dem QR-Code oder dem Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie es jedes erreicht."}
 - doc: docs/install
   en: {title: Containers, text: "An app in a container is a device of its own, through a juist container sharing its network namespace."}
   de: {title: Container, text: "Eine App im Container ist ein eigenes Gerät, über einen juist-Container, der sich ihren Netz-Namespace teilt."}
   uses: [docs/use/container-app]
-  note: {en: "On Linux, with Docker or Podman; the network's names do not resolve in the container.", de: "Unter Linux, mit Docker oder Podman; die Namen des Netzes werden im Container nicht aufgelöst."}
+  only: Linux
 - doc: docs/admins
   en: {title: Admins and quorum, text: "Every change needs k of n admins. If it needs more approvals, it is passed on to the other admins' devices."}
   de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}
@@ -41,16 +40,14 @@
 - doc: docs/multicast
   en: {title: Multicast, text: "Printers, media servers and LAN games find the members by mDNS, SSDP or their own groups, as on one LAN."}
   de: {title: Multicast, text: "Drucker, Medienserver und LAN-Spiele finden die Mitglieder per mDNS, SSDP oder eigenen Gruppen, wie in einem LAN."}
-  note: {en: "On Linux and FreeBSD, not in the Android app; IPv4 groups copied automatically on Linux, including Minecraft Java. On without a policy; with one, only where pass multicast permits. --multicast=false disables both.", de: "Unter Linux und FreeBSD, nicht in der Android-App; IPv4-Gruppen unter Linux automatisch kopiert, auch Minecraft Java. Ohne Policy an, mit Policy nur durch pass multicast; --multicast=false schaltet beides ab."}
 - doc: docs/multicast
   en: {title: UDP broadcast, text: "Local IPv4 UDP broadcasts, including NetBIOS, reach the members too, while the originals stay on the LAN; no port configuration."}
   de: {title: UDP-Broadcast, text: "Eigene IPv4-UDP-Broadcasts einschließlich NetBIOS erreichen auch die Mitglieder, während die Originale im LAN bleiben; ohne Portkonfiguration."}
-  note: {en: "Automatic on Linux without a policy; with one, only where pass multicast permits. No DHCP or fragmented broadcasts.", de: "Unter Linux ohne Policy automatisch; mit Policy nur durch pass multicast. Kein DHCP oder fragmentierter Broadcast."}
+  only: Linux
 - doc: docs/names
   en: {title: Names, text: "Every member as DEVICE.NETWORK.juist, and public names pointed at members."}
   de: {title: Namen, text: "Jedes Mitglied unter GERÄT.NETZ.juist, dazu öffentliche Namen, die auf Mitglieder verweisen."}
   uses: [docs/use/own-services]
-  note: {en: "Public names on Linux and FreeBSD, not in the Android app.", de: "Öffentliche Namen unter Linux und FreeBSD, nicht in der Android-App."}
 - doc: docs/publishing
   en: {title: Publishing services, text: "A member's service, reachable from the internet by name through an ingress."}
   de: {title: Dienste veröffentlichen, text: "Dienste auf Mitgliedern, über einen Ingress unter einem Namen aus dem Internet erreichbar."}
@@ -63,7 +60,6 @@
   en: {title: Members-only names, text: "A published name with a certificate from the CA that the internet cannot reach. Only the members the access policy allows can open it."}
   de: {title: Namen nur für Mitglieder, text: "Ein veröffentlichter Name mit einem Zertifikat der CA, den das Internet nicht erreicht. Öffnen können ihn nur die Mitglieder, denen die Zugriffsregeln es erlauben."}
   uses: [docs/use/team-tools]
-  note: {en: "Reached from Linux, FreeBSD and the Android app.", de: "Erreichbar von Linux, FreeBSD und der Android-App."}
 - doc: docs/tcp-services
   en: {title: TCP services, text: "A game server or any other TCP service on its own port on every ingress, passed on without being read."}
   de: {title: TCP-Dienste, text: "Ein Spieleserver oder jeder andere TCP-Dienst auf einem eigenen Port jedes Ingress, weitergereicht, ohne mitzulesen."}

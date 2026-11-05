@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/netmon"
 
 	"github.com/nning/juist/conn"
@@ -214,10 +216,14 @@ func sampleStatus() *ipc.Status {
 		Addrs: []netip.Prefix{netip.MustParsePrefix("10.0.0.5/32"), netip.MustParsePrefix("fd00::5/128")},
 		Derived: ipc.Derived{NetworkName: "home", SelfName: "phone", Members: 5, Peers: 3, Unreachable: 1,
 			Silent: []string{"dora"}, LeaseSigners: 1, Vouchers: 1, Vouching: 1, FreshSince: 100, FreshUntil: 200,
-			RelayCapable: 1,
+			RelayCapable: 1, Schema: 22, Epoch: 3, Builds: []ipc.Build{{Identity: a, Schema: 22}},
+			Subnets: &ipc.Subnets{Routes: []ipc.SubnetRoute{{Prefix: netip.MustParsePrefix("192.168.7.0/24"), Router: a,
+				Name: "anna", InUse: true}}},
 			Devices: []ipc.Device{
 				{Identity: self, Name: "phone", V4: "10.0.0.5"},
-				{Identity: c, Name: "cleo"}, {Identity: a, Name: "anna", Roles: []types.Role{"admin"}},
+				{Identity: c, Name: "cleo"}, {Identity: a, Name: "anna", Roles: []types.Role{"admin"},
+					Published: []string{"wiki.example.org", "game.example.org:25565"}, Members: []string{"wiki.example.org"},
+					Names: []string{"anna.example.org"}, Subnets: []netip.Prefix{netip.MustParsePrefix("192.168.7.0/24")}},
 				{Identity: b, Name: "bert"}, {Identity: d, Name: "dora"},
 			}},
 		Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 2, TunnelsDown: []string{"cleo"}, ReachChecked: 150,
@@ -435,5 +441,107 @@ func TestTheUnderlaysResolversAreReadAsTheAppSaysThem(t *testing.T) {
 	}
 	if u, err := parseUnderlay(""); err != nil || len(u.Servers) != 0 {
 		t.Errorf("none: %+v, %v", u, err)
+	}
+}
+
+// The view lists what each member publishes, routes and runs, and says the
+// phone's settings and what juist status says beyond the state.
+func TestTheViewSaysWhatMembersOfferAndTheDetails(t *testing.T) {
+	s := sampleStatus()
+	s.HTTPS = &ipc.HTTPS{Only: true, Relays: []string{"relay.example.org"}}
+	v := viewOf(s, "")
+	i := slices.IndexFunc(v.Members, func(m member) bool { return m.Name == "anna" })
+	anna := v.Members[i]
+	if !slices.Equal(anna.Published, []string{"wiki.example.org", "game.example.org:25565"}) ||
+		!slices.Equal(anna.MembersOnly, []string{"wiki.example.org"}) || !slices.Equal(anna.Subnets, []string{"192.168.7.0/24"}) ||
+		anna.Build != 22 {
+		t.Errorf("anna: %+v", anna)
+	}
+	if !v.Settings.Names || !v.Settings.HTTPSOnly {
+		t.Errorf("settings %+v", v.Settings)
+	}
+	d := v.Details
+	if d.Schema != 22 || d.AppSchema != int(types.CurrentSchema) || d.Relays != 1 ||
+		!slices.Equal(d.HTTPSRelays, []string{"relay.example.org"}) || len(d.Subnets) != 1 || !d.Subnets[0].InUse || d.Subnets[0].Router != "anna" {
+		t.Errorf("details %+v", d)
+	}
+	s.Names.Off = true
+	if viewOf(s, "").Settings.Names {
+		t.Error("names said on while the phone's DNS is left alone")
+	}
+}
+
+// The network beneath's routes are taken but for its default routes and what
+// does not parse.
+func TestTheUnderlaysRoutesLeaveOutItsDefaults(t *testing.T) {
+	got := underlayRoutes(`{"routes":["192.168.1.0/24","0.0.0.0/0","::/0","fd12::/64","nonsense","10.1.2.3/8"]}`)
+	want := []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24"), netip.MustParsePrefix("fd12::/64"), netip.MustParsePrefix("10.0.0.0/8")}
+	if !slices.Equal(got, want) {
+		t.Errorf("routes %v, want %v", got, want)
+	}
+}
+
+// A device established before the network's prefixes were known, as during a
+// join, is established again once they are, and not for the same prefixes.
+func TestTheCoreRoutesTheNetworksPrefixesOnceKnown(t *testing.T) {
+	changed := 0
+	c := &Core{logf: t.Logf, coverChanged: func() error { changed++; return nil }}
+	c.follow(&ipc.Status{})
+	st := sampleStatus()
+	c.follow(st)
+	c.follow(st)
+	if changed != 1 {
+		t.Errorf("the VPN routed a new cover %d times, want once", changed)
+	}
+}
+
+// Failed and slow lookups are counted and kept, with their names, and a
+// lookup answered at once is only counted.
+func TestTheResolversLookupsAreDiagnosed(t *testing.T) {
+	var logged []string
+	s := newDNSStats(func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) })
+	q := func(name string) []byte {
+		b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 1, RecursionDesired: true})
+		b.StartQuestions()
+		b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name + "."), Type: dnsmessage.TypeAAAA, Class: dnsmessage.ClassINET})
+		m, _ := b.Finish()
+		return m
+	}
+	s.observe(q("example.org"), 0, nil, 20*time.Millisecond)
+	s.observe(q("mtalk.google.com"), -1, errors.New("i/o timeout"), 3*time.Second)
+	s.observe(q("android.googleapis.com"), 2, nil, 40*time.Millisecond)
+	s.observe(q("slow.example.org"), 0, nil, 1500*time.Millisecond)
+	d := s.snapshot()
+	if d.Queries != 4 || d.Failed != 2 || d.Slow != 1 || d.MaxMillis != 3000 || len(d.Recent) != 3 {
+		t.Fatalf("%+v", d)
+	}
+	if r := d.Recent[0]; r.Name != "mtalk.google.com" || r.Type != "AAAA" || r.Why != "i/o timeout" {
+		t.Errorf("first failure kept as %+v", r)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "mtalk.google.com") {
+		t.Errorf("logged %q, want the first failure alone", logged)
+	}
+}
+
+// Slow lookups crowd out no failure: a report keeps the latest of each.
+func TestSlowLookupsKeepTheFailures(t *testing.T) {
+	s := newDNSStats(func(string, ...any) {})
+	q := func(name string) []byte {
+		b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 1})
+		b.StartQuestions()
+		b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name + "."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET})
+		m, _ := b.Finish()
+		return m
+	}
+	s.observe(q("mtalk.google.com"), 2, nil, 30*time.Millisecond)
+	for i := range recentLookups + 3 {
+		s.observe(q(fmt.Sprintf("slow%d.example.org", i)), 0, nil, 1100*time.Millisecond)
+	}
+	d := s.snapshot()
+	if len(d.Recent) != recentLookups+1 || d.Recent[0].Name != "mtalk.google.com" || d.Recent[0].Why != "SERVFAIL" {
+		t.Errorf("kept %d lookups, the first %+v", len(d.Recent), d.Recent[0])
+	}
+	if last := d.Recent[len(d.Recent)-1]; last.Name != fmt.Sprintf("slow%d.example.org", recentLookups+2) {
+		t.Errorf("the newest slow lookup kept is %s", last.Name)
 	}
 }

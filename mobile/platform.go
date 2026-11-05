@@ -134,6 +134,27 @@ type underlayDNS struct {
 	Servers    []string `json:"servers,omitempty"`
 	OverTLS    bool     `json:"overTls,omitempty"`
 	PrivateDNS string   `json:"privateDns,omitempty"`
+	// Routes are the network's routes, which no subnet route takes into the
+	// tunnel.
+	Routes []string `json:"routes,omitempty"`
+}
+
+// underlayRoutes is what s, an [underlayDNS], routes but by default routes,
+// leaving out what does not parse.
+func underlayRoutes(s string) []netip.Prefix {
+	var in underlayDNS
+	if s == "" || json.Unmarshal([]byte(s), &in) != nil {
+		return nil
+	}
+	var out []netip.Prefix
+	for _, r := range in.Routes {
+		p, err := netip.ParsePrefix(r)
+		if err != nil || p.Bits() == 0 {
+			continue
+		}
+		out = append(out, p.Masked())
+	}
+	return out
 }
 
 // parseUnderlay is s, an [underlayDNS], as the daemon takes it: none where s

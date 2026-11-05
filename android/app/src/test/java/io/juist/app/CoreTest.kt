@@ -28,6 +28,14 @@ class CoreTest {
         assertEquals(FreshState.Fresh, v.fresh.state)
         assertEquals(listOf("epoch", "silent", "seeking"), v.alarms.map { it.kind })
         assertEquals(Severity.Warn, v.alarms[0].severity)
+        val anna = v.members.first { it.name == "anna" }
+        assertEquals(listOf("wiki.example.org", "game.example.org:25565"), anna.published)
+        assertEquals(listOf("wiki.example.org"), anna.membersOnly)
+        assertEquals(listOf("192.168.7.0/24"), anna.subnets)
+        assertEquals(22, anna.build)
+        assertEquals(true, v.settings.names)
+        assertEquals(22, v.details.schema)
+        assertEquals("anna", v.details.subnets.single().router)
     }
 
     @Test

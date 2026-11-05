@@ -99,7 +99,9 @@ the workflow `release.yml` builds its packages and the app, unsigned, into a
 draft release. `make release-public V=0.<N>.<K> NOTES=FILE`, outside working
 hours, checks the packages against its own build, signs the app and
 `SHA256SUMS`, and publishes the release, not as a pre-release, since the
-handbook's download links follow `releases/latest`. `make release` builds and
+handbook's download links follow `releases/latest`. Every version `PUSH=1`
+tags gets its release the same evening, a fix release too; its notes cover
+every tag since the last release. `make release` builds and
 signs one here instead, where CI cannot. Its keys live in
 `~/.local/share/juist-signing` and never enter the repository or an agent's
 context: refer to the files, never print them.
@@ -110,7 +112,11 @@ Until v1.0, milestone M<N> is release `v0.<N>.0`, and its fix release
 the next milestone's publish stops. `PUSH=1` tags the public commit and the
 private one with the version, and the GitHub release takes the tag, titled
 `juist 0.<N>.<K>`. Every package's version is `packaging/version.sh`'s, which
-follows the newest tag as Go's stamp in the binaries does.
+follows the highest tag behind the commit as Go's stamp in the binaries does.
+Once `M<N> done` is tagged, the next commit on `main` gets the annotated tag
+`v0.<N+1>.0-dev`, pushed with it, so that dev builds say `0.<N+1>.0-dev.…`
+rather than a patch of the last release; it is never published, and never
+on a release's own commit, whose version it would take.
 
 ## Gates
 

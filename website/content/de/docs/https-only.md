@@ -106,9 +106,10 @@ Passwort.
   abtastet oder TLS am Fingerabdruck erkennt. Wer den Namen des Relays
   abfragt, findet ein Relay, und der TLS-Handshake ist der eines Go-Programms,
   nicht eines Browsers.
-- Die Android-App hat keine Einstellung für den Nur-HTTPS-Modus. Sie weicht
-  aber von selbst auf den Namen eines Relays auf 443 aus, wo UDP und der Port
-  des Relays gesperrt sind.
+- Die Android-App schaltet den Nur-HTTPS-Modus unter **Details**, **Nur
+  HTTPS** ein, ohne Proxy. Ohne ihn weicht sie trotzdem von selbst auf den
+  Namen eines Relays auf 443 aus, wo UDP und der Port des Relays gesperrt
+  sind.
 
 ## Fehlersuche
 

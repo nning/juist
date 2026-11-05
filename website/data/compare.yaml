@@ -149,8 +149,8 @@ groups:
         marks: yyyyypppnyp
         notes:
           juist:
-            en: Not on Android.
-            de: Nicht unter Android.
+            en: Android can use one but cannot be one.
+            de: Android kann einen nutzen, aber selbst keiner sein.
           zerotier:
             en: Forwarding and NAT by hand on the router.
             de: Weiterleitung und NAT von Hand auf dem Router.
@@ -228,8 +228,8 @@ groups:
         marks: pyyyyyypppy
         notes:
           juist:
-            en: Only Android, as a member without public names, roles or subnets.
-            de: Nur Android, als Mitglied ohne öffentliche Namen, Rollen und Subnetze.
+            en: Only Android, as a member without public names or roles.
+            de: Nur Android, als Mitglied ohne öffentliche Namen und Rollen.
           tinc:
             en: No Android or iOS.
             de: Kein Android und iOS.

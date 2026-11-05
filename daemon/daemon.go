@@ -829,7 +829,7 @@ func New(opts Options) (*Daemon, error) {
 	d.dnsOff.Store(opts.DNSOff)
 	d.startNames, d.namesFixed = opts.ServeNames, opts.NamesAddr
 	if opts.Resolver != nil {
-		d.startNames, d.namesFixed = d.resolverNames(opts.Resolver.Dial), netip.AddrPortFrom(types.ResolverAddr(d.ula), 53)
+		d.startNames, d.namesFixed = d.resolverNames(*opts.Resolver), netip.AddrPortFrom(types.ResolverAddr(d.ula), 53)
 	}
 	d.held.Store(&selfAddrs)
 	ln, err := d.listenGossip(opts, selfAddrs)

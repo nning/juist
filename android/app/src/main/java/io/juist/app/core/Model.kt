@@ -18,6 +18,8 @@ data class NetworkView(
     val names: NamesView? = null,
     val alarms: List<Alarm> = emptyList(),
     val updated: Long = 0,
+    val settings: PhoneSettings = PhoneSettings(),
+    val details: Details = Details(),
 ) {
     val inNetwork get() = state != State.None && state != State.Joining && state != State.Unknown
 }
@@ -58,7 +60,63 @@ data class Member(
     val since: Long = 0,
     /** Its name under the network's domain, where it has one. */
     val dns: String = "",
+    /** The names published on it, NAME:PORT for one passed by TCP; [membersOnly] those for members alone. */
+    val published: List<String> = emptyList(),
+    val membersOnly: List<String> = emptyList(),
+    /** The public names pointed at it, and the subnets it routes. */
+    val names: List<String> = emptyList(),
+    val subnets: List<String> = emptyList(),
+    /** The newest schema its juist implements, 0 where it says none. */
+    val build: Int = 0,
 )
+
+/** The phone's own settings: whether its lookups go to juist, and whether it reaches relays by HTTPS alone. */
+@Serializable
+data class PhoneSettings(val names: Boolean = true, val httpsOnly: Boolean = false)
+
+/** What `juist status` says beyond the state. */
+@Serializable
+data class Details(
+    val schema: Int = 0,
+    val appSchema: Int = 0,
+    val epoch: Long = 0,
+    val head: String = "",
+    val relays: Int = 0,
+    val installed: Int = 0,
+    val home: String = "",
+    val httpsRelays: List<String> = emptyList(),
+    val subnets: List<SubnetRoute> = emptyList(),
+)
+
+/** A subnet the network routes through [router], in use on this phone or not, and why. */
+@Serializable
+data class SubnetRoute(val prefix: String, val router: String = "", val inUse: Boolean = false, val why: String = "")
+
+/** One of the log's changes, as `juist log` lists it. */
+@Serializable
+data class Change(val index: Int, val what: String, val signers: List<String> = emptyList())
+
+/** What the core says of how the phone's traffic fares (mobile/diagnose.go). */
+@Serializable
+data class Diagnosis(
+    val established: Int = 0,
+    val lastEstablished: Long = 0,
+    val saving: Boolean = false,
+    val dns: DnsDiagnosis = DnsDiagnosis(),
+)
+
+@Serializable
+data class DnsDiagnosis(
+    val queries: Int = 0,
+    val failed: Int = 0,
+    val slow: Int = 0,
+    val maxMillis: Long = 0,
+    val recent: List<Lookup> = emptyList(),
+)
+
+/** A lookup that failed, [why], or was slow. */
+@Serializable
+data class Lookup(val at: Long, val name: String, val type: String, val why: String = "", val millis: Long = 0)
 
 /** How the last check reached a member; mobile/view.go's reachOf says when each holds. */
 @Serializable

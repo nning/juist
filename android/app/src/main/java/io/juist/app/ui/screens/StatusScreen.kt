@@ -100,6 +100,7 @@ fun StatusScreen(
     onMember: (Member) -> Unit,
     onAbout: () -> Unit,
     onForget: () -> Unit,
+    onDetails: () -> Unit = {},
     onStartOver: () -> Unit = {},
     onExit: (String?) -> Unit = {},
     onVpnSettings: () -> Unit = {},
@@ -125,6 +126,7 @@ fun StatusScreen(
                 actions = {
                     IconButton({ menu = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
                     DropdownMenu(menu, { menu = false }) {
+                        DropdownMenuItem({ Text(stringResource(R.string.details_title)) }, { menu = false; onDetails() })
                         DropdownMenuItem({ Text(stringResource(R.string.about_title)) }, { menu = false; onAbout() })
                     }
                 },
@@ -148,6 +150,9 @@ fun StatusScreen(
                     ThisDevice(view, on, copied)
                     view.exit?.let { ExitSection(it, on, onExit, onVpnSettings) }
                     Members(view, on, onMember)
+                    TextButton(onDetails, Modifier.padding(horizontal = Space.s, vertical = Space.s)) {
+                        Text(stringResource(R.string.action_details))
+                    }
                 }
             }
         }

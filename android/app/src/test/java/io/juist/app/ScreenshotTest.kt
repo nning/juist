@@ -14,6 +14,7 @@ import io.juist.app.ui.LocalNow
 import io.juist.app.ui.screens.AboutScreen
 import io.juist.app.ui.screens.CodeScreen
 import io.juist.app.ui.screens.ConfirmScreen
+import io.juist.app.ui.screens.DetailsScreen
 import io.juist.app.ui.screens.JoiningScreen
 import io.juist.app.ui.screens.MemberScreen
 import io.juist.app.ui.screens.PingResult
@@ -130,6 +131,15 @@ abstract class Screens(private val variant: String) {
             pings = listOf(PingResult(23.4), PingResult(null, "no answer within 5s"), PingResult(31.0)),
             pinging = false, onPing = none, onOpen = {}, onBack = none,
         )
+    }
+
+    @Test fun memberWithServices() = shot("member_services") {
+        MemberScreen(servicesMember, on = true, pings = emptyList(), pinging = false, onPing = none, onOpen = {}, onBack = none)
+    }
+
+    @Test fun details() = shot("details") {
+        DetailsScreen(detailsView, on = true, changes = sampleChanges, diagnosis = sampleDiagnosis, onNames = {},
+            onHttpsOnly = {}, onCopyReport = none, onBack = none)
     }
 
     @Test fun about() = shot("about") { AboutScreen("0+8f4f2b0", none, none, none, none) }

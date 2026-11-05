@@ -10,17 +10,18 @@ lead: Mit der Android-App wird ein Telefon Mitglied eines Netzes. Es tritt per Q
 Die App bringt juist auf ein Telefon mit Android 12 oder neuer. Das Telefon
 tritt einem Netz als Mitglied ohne Rollen bei. Solange sein VPN an ist,
 erreicht jede App auf dem Telefon die anderen Geräte unter ihrem Namen, etwa
-`nas.home.juist`, und unter ihrer Adresse. Das VPN trägt nur den Verkehr ins
-Netz und das DNS des Telefons ([Namen](#names)); aller übrige Verkehr geht an
-juist vorbei.
+`nas.home.juist`, und unter ihrer Adresse, dazu die LANs hinter ihren
+[Subnet-Routern](#subnets). Das VPN trägt nur den Verkehr ins Netz, in diese
+Subnetze und das DNS des Telefons ([Namen](#names)); aller übrige Verkehr
+geht an juist vorbei.
 
 Das Telefon kann nicht:
 
 - in mehr als einem Netz sein;
 - [öffentliche Namen]({{< relref "docs/names" >}}) einschalten, sie lösen
   sich dort also öffentlich auf;
-- einen [Subnet-Router]({{< relref "docs/subnets" >}}) nutzen oder
-  [Exit-Node]({{< relref "docs/exit-nodes" >}}) sein, wohl aber einen nutzen;
+- ein Subnetz routen oder [Exit-Node]({{< relref "docs/exit-nodes" >}}) sein,
+  wohl aber beides nutzen;
 - Geräte einladen, einen Admin-Schlüssel halten oder weiterleiten.
   Einladungen kommen vom Rechner eines Admins.
 
@@ -143,10 +144,54 @@ nicht: **Keine Antwort**, **Wird gesucht**, **Offline**,
 **Noch nicht gemeldet**, **Noch nicht geprüft** oder **Veraltet** (es läuft
 ein älteres juist, und bis zum Update kommen nur Pings durch).
 
-Tippe auf ein Gerät, um Namen, Adressen, Rollen und den letzten Kontakt zu
-sehen. **Ping** schickt ein Echo durch den Tunnel, das juist auf dem Gerät
-beantwortet, auch wenn dessen Firewall Pings verwirft. **Im Browser öffnen**
-öffnet `http://` mit seiner Adresse.
+Tippe auf ein Gerät, um Namen, Adressen, Rollen, das Schema seines juist und
+den letzten Kontakt zu sehen. **Ping** schickt ein Echo durch den Tunnel, das
+juist auf dem Gerät beantwortet, auch wenn dessen Firewall Pings verwirft.
+**Im Browser öffnen** öffnet `http://` mit seiner Adresse.
+
+{{< screens >}}
+member_services: Die Dienste eines Geräts: veröffentlichte Namen, ein TCP-Port und ein Subnetz
+{{< /screens >}}
+
+Unter **Dienste** listet der Bildschirm eines Geräts, was das Netz auf ihm
+veröffentlicht ([Dienste veröffentlichen]({{< relref "docs/publishing" >}})):
+Ein Name öffnet sich im Browser, ein TCP-Port und ein Subnetz werden beim
+Antippen kopiert. Namen nur für Mitglieder sagen das.
+
+## Details
+
+{{< screens >}}
+details: Die Einstellungen des Telefons, Schema, Relays und Subnetze des Netzes und die letzten Änderungen im Log
+{{< /screens >}}
+
+**Details**, unter den Geräten oder im Menü, zeigt, was `juist status` und die
+[Statusseite]({{< relref "docs/publishing" >}}#status-page) über den Zustand hinaus
+zeigen: das Schema des Netzes neben dem der App, den Kopf des Logs, wann das
+Telefon seine Sicht auf das Netz zuletzt aktualisiert hat, die Relays und das,
+über das das Telefon läuft, die Namen des Netzes, seine Subnetze und die
+letzten Änderungen im Log, wie `juist log` sie listet.
+
+Dort liegen auch die zwei Einstellungen des Telefons:
+
+- **Namen im Netz**: Jede Abfrage geht an juist, das die Namen des Netzes
+  beantwortet. Aus, behält das Telefon sein eigenes DNS und löst keinen davon
+  auf, wie `juist set --dns=false` auf einem Rechner.
+- **Nur HTTPS**: Das Telefon erreicht Relays nur über HTTPS auf Port 443, wie
+  mit `juist set --https-only` ([Netze, die nur HTTPS
+  durchlassen]({{< relref "docs/https-only" >}})).
+
+Unter **Diagnose** zählt die App, wie oft sie das VPN eingerichtet hat und wie
+ihre Abfragen liefen: wie viele fehlschlugen oder langsam waren, und welche.
+**Protokoll kopieren** fügt hinzu, wie Android die Netze des Telefons sieht.
+
+## Subnetze {#subnets}
+
+Gibt das Netz einem Mitglied ein [Subnetz]({{< relref "docs/subnets" >}}),
+etwa das LAN zu Hause, erreicht das Telefon es über dieses Mitglied, solange
+das VPN an ist. Ein Subnetz, das das eigene Netz des Telefons schon abdeckt,
+etwa dieses LAN, während das Telefon in seinem WLAN ist, bleibt außerhalb des
+Tunnels, und **Details** sagt das. Im Mobilnetz geht es wieder durch den
+Tunnel.
 
 ## Namen {#names}
 
@@ -194,7 +239,9 @@ ein. Die App verlinkt dorthin.
 
 ## Das VPN aus- und einschalten
 
-Der Schalter neben dem Zustand schaltet das VPN aus und ein. Solange es an
+Der Schalter neben dem Zustand schaltet das VPN aus und ein, ebenso die
+Kachel von juist in den Schnelleinstellungen von Android: Füge sie beim
+Bearbeiten der Kacheln hinzu; lang gedrückt öffnet sie die App. Solange es an
 ist, zeigt eine Benachrichtigung den Zustand, mit der Aktion **Ausschalten**.
 War das VPN an, schaltet juist es nach einem Neustart oder Update wieder ein.
 Android betreibt immer nur ein VPN: Eine andere VPN-App schaltet juist ab, und
@@ -236,8 +283,9 @@ Telefon führt das Netz weiter.
 - Die Kamera liest nur den QR-Code. Nichts, was sie sieht, wird gespeichert
   oder verschickt.
 - **Über juist** im Menü zeigt Version und Lizenzen. **Protokoll kopieren**
-  kopiert das Log der App, das nur im Speicher liegt. Es nennt deine Geräte
-  und Adressen; gib es nur jemandem, dem du vertraust.
+  kopiert das Log der App, das nur im Speicher liegt, mit dem, wie Android die
+  Netze des Telefons sieht, und den fehlgeschlagenen Abfragen. Es nennt deine
+  Geräte und Adressen; gib es nur jemandem, dem du vertraust.
 
 ## Fehlersuche
 

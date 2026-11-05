@@ -267,4 +267,61 @@
         <item quantity="one">%d Tag</item>
         <item quantity="other">%d Tage</item>
     </plurals>
+
+    <!-- Details -->
+    <string name="details_title">Details</string>
+    <string name="action_details">Details</string>
+    <string name="section_settings">Dieses Telefon</string>
+    <string name="setting_names">Namen im Netz</string>
+    <string name="setting_names_about">Jede Abfrage geht an juist, das die Namen des Netzes beantwortet. Aus, behält das Telefon sein eigenes DNS.</string>
+    <string name="setting_https_only">Nur HTTPS</string>
+    <string name="setting_https_only_about">Relays nur über HTTPS auf Port 443 erreichen, für Netze, die nichts anderes durchlassen.</string>
+    <string name="section_network">Netz</string>
+    <string name="label_schema">Schema</string>
+    <string name="schema_value">%1$d, diese App %2$d</string>
+    <string name="label_log">Log</string>
+    <string name="log_value">%1$s, Epoche %2$d</string>
+    <string name="label_updated">Aktualisiert</string>
+    <string name="label_relays">Relays</string>
+    <plurals name="relays_available">
+        <item quantity="one">%d verfügbar</item>
+        <item quantity="other">%d verfügbar</item>
+    </plurals>
+    <string name="relays_home">über %1$s</string>
+    <string name="relays_https">auf 443: %1$s</string>
+    <string name="relays_https_none">keines auf 443</string>
+    <string name="label_names">Namen</string>
+    <string name="names_resolved">%1$s, aufgelöst</string>
+    <string name="names_not_resolved">%1$s, nicht aufgelöst</string>
+    <string name="names_off">%1$s, auf diesem Telefon aus</string>
+    <string name="section_subnets">Subnetze</string>
+    <string name="subnet_via">%1$s über %2$s</string>
+    <string name="subnet_in_use">In Gebrauch</string>
+    <string name="subnet_not_in_use">Nicht in Gebrauch</string>
+    <string name="section_changes">Letzte Änderungen</string>
+    <string name="section_diagnosis">Diagnose</string>
+    <string name="label_vpn_established">VPN eingerichtet</string>
+    <plurals name="vpn_established">
+        <item quantity="one">einmal</item>
+        <item quantity="other">%d-mal</item>
+    </plurals>
+    <string name="label_lookups">Abfragen</string>
+    <string name="lookups_value">%1$d gestellt, %2$d fehlgeschlagen, %3$d langsam</string>
+    <string name="lookup_ms">%1$d ms</string>
+    <string name="lookup_slow">langsam</string>
+    <string name="diagnosis_about">Das Log enthält zusätzlich, wie Android die Netze des Telefons sieht. Es nennt deine Geräte und ihre Adressen. Teile es nur mit jemandem, dem du vertraust.</string>
+
+    <!-- Services -->
+    <string name="section_services">Dienste</string>
+    <string name="label_published">Veröffentlicht</string>
+    <string name="label_published_members">Veröffentlicht, nur für Mitglieder</string>
+    <string name="label_tcp">TCP-Port</string>
+    <string name="label_tcp_members">TCP-Port, nur für Mitglieder</string>
+    <string name="label_public_name">Öffentlicher Name</string>
+    <string name="label_subnet">Subnetz</string>
+    <string name="label_build">juist</string>
+    <string name="build_value">Schema %1$d</string>
+
+    <!-- Tile -->
+    <string name="tile_label">juist</string>
 </resources>

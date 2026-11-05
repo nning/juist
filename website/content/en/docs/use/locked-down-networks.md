@@ -74,8 +74,9 @@ direct again.
 - **It does not hide juist** from a censor that probes servers or
   fingerprints TLS.
 - **A CAA record for the relay's name** must allow Let's Encrypt.
-- **The Android app** has no setting for HTTPS-only mode, but switches to a
-  relay's name on 443 by itself where UDP and the relay's port are blocked.
+- **The Android app** turns HTTPS-only mode on under **Details**, and
+  switches to a relay's name on 443 by itself where UDP and the relay's port
+  are blocked.
 
 ## Read more
 

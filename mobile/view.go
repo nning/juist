@@ -32,6 +32,42 @@ type view struct {
 
 	// Updated is when the peer set was last derived, Unix seconds.
 	Updated int64 `json:"updated,omitempty"`
+
+	Settings settings `json:"settings"`
+	Details  details  `json:"details"`
+}
+
+// settings are the phone's own: Names whether its lookups go to juist's
+// resolver, HTTPSOnly whether it reaches relays by TLS on 443 alone.
+type settings struct {
+	Names     bool `json:"names"`
+	HTTPSOnly bool `json:"httpsOnly,omitempty"`
+}
+
+// details are what `juist status` says beyond the state: the network's
+// schema and this build's, the log's head, the relays, the subnets.
+type details struct {
+	Schema    int    `json:"schema,omitempty"`
+	AppSchema int    `json:"appSchema"`
+	Epoch     uint64 `json:"epoch,omitempty"`
+	Head      string `json:"head,omitempty"`
+	// Relays is how many members may relay, Installed how many this phone
+	// holds, Home the one it is homed at; HTTPSRelays those on 443 it
+	// reaches while on HTTPS alone.
+	Relays      int           `json:"relays,omitempty"`
+	Installed   int           `json:"installed,omitempty"`
+	Home        string        `json:"home,omitempty"`
+	HTTPSRelays []string      `json:"httpsRelays,omitempty"`
+	Subnets     []subnetRoute `json:"subnets,omitempty"`
+}
+
+// A subnetRoute is a subnet the network routes through Router, in use or
+// not and why.
+type subnetRoute struct {
+	Prefix string `json:"prefix"`
+	Router string `json:"router,omitempty"`
+	InUse  bool   `json:"inUse,omitempty"`
+	Why    string `json:"why,omitempty"`
 }
 
 // A member is a device of the network.
@@ -58,6 +94,16 @@ type member struct {
 	// tunnel was first found down, Unix seconds.
 	Heard int64 `json:"heard,omitempty"`
 	Since int64 `json:"since,omitempty"`
+
+	// Published are the names published on it, NAME:PORT for one passed by
+	// TCP, MembersOnly those of them for members alone, Names the public
+	// names pointed at it, Subnets the prefixes it routes, and Build the
+	// newest schema its juist implements.
+	Published   []string `json:"published,omitempty"`
+	MembersOnly []string `json:"membersOnly,omitempty"`
+	Names       []string `json:"names,omitempty"`
+	Subnets     []string `json:"subnets,omitempty"`
+	Build       int      `json:"build,omitempty"`
 }
 
 // freshness is whether admin devices vouch for this device's view: State is
@@ -118,7 +164,9 @@ type alarm struct {
 // privateDNS where set.
 func viewOf(s *ipc.Status, privateDNS string) view {
 	v := view{Network: s.NetworkName, Updated: s.LastReconcile,
-		Self: member{Identity: s.Self.String(), Name: cmp.Or(s.SelfName, s.Self.ShortString()), Reach: "self"}}
+		Self:     member{Identity: s.Self.String(), Name: cmp.Or(s.SelfName, s.Self.ShortString()), Reach: "self"},
+		Settings: settings{Names: s.Names == nil || !s.Names.Off, HTTPSOnly: s.HTTPS != nil && s.HTTPS.Only},
+		Details:  details{AppSchema: int(types.CurrentSchema)}}
 	for _, p := range s.Addrs {
 		if p.Addr().Is4() {
 			v.Self.V4 = cmp.Or(v.Self.V4, p.Addr().String())
@@ -160,9 +208,17 @@ func viewOf(s *ipc.Status, privateDNS string) view {
 	for _, r := range s.Reach {
 		reach[r.Identity] = r
 	}
+	builds := make(map[types.Identity]types.SchemaVersion, len(s.Builds))
+	for _, b := range s.Builds {
+		builds[b.Identity] = b.Schema
+	}
 	for _, d := range s.Devices {
 		m := member{Identity: d.Identity.String(), Name: d.Name, V4: d.V4, V6: d.V6,
-			Retiring: d.Retiring, RetiringUntil: d.RetiringUntil}
+			Retiring: d.Retiring, RetiringUntil: d.RetiringUntil, Published: d.Published, MembersOnly: d.Members,
+			Names: d.Names, Build: int(cmp.Or(d.Build, builds[d.Identity]))}
+		for _, p := range d.Subnets {
+			m.Subnets = append(m.Subnets, p.String())
+		}
 		for _, r := range d.Roles {
 			m.Roles = append(m.Roles, string(r))
 		}
@@ -201,7 +257,26 @@ func viewOf(s *ipc.Status, privateDNS string) view {
 	v.Exit = exitOf(s.Exit, v.Members)
 	v.Names = namesOf(s.Names, v.Self)
 	v.Alarms = alarmsOf(s, privateDNS)
+	v.Details = detailsOf(s)
 	return v
+}
+
+// detailsOf is what s says beyond the state.
+func detailsOf(s *ipc.Status) details {
+	d := details{Schema: int(s.Schema), AppSchema: int(types.CurrentSchema), Epoch: s.Epoch,
+		Relays: s.RelayCapable, Installed: s.Relays, Home: s.HomeRelay}
+	if s.Head != (types.Hash{}) {
+		d.Head = s.Head.String()[:12]
+	}
+	if s.HTTPS != nil && s.HTTPS.Only {
+		d.HTTPSRelays = s.HTTPS.Relays
+	}
+	if s.Subnets != nil {
+		for _, r := range s.Subnets.Routes {
+			d.Subnets = append(d.Subnets, subnetRoute{Prefix: r.Prefix.String(), Router: r.Name, InUse: r.InUse, Why: r.Why})
+		}
+	}
+	return d
 }
 
 // dnsNames gives each device its name under domain, as the zone does: none

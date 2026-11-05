@@ -311,15 +311,16 @@ the addresses it serves on to https, and the page sends HSTS.
 
 ## M10 — Android, minimal
 
-**Under way:** the app and its core are built, and by hand in an emulator it
-joins by link, shows the network and pings a member; the exit criteria are
-not met yet (below). Joining from another network and using an exit node,
-added on 2026-10-04, are built; on a phone a Linux exit node carried its
-internet, and is yet to across the VPN turned off and on and the phone
-changing networks.
+**Done** on 2026-11-02, validated by `make check`, `make android-check`, the
+automatic freshness tests, and by hand on an Android phone: QR and code joins,
+ping and HTTP directly and through a relay; link joins over LTE through the
+DHT and a member relay, including a NAT that changes ports by destination;
+and an exit node carrying IPv4, IPv6 and DNS, failing closed when stopped or
+withdrawn, and returning to direct traffic after `off`. Core 11 014 lines,
+audit scope 36 069, measured after it with `make tcb`.
 
 An Android app that joins a network as a member from anywhere, reaches the
-others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M32 covers the app's key
+others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M33 covers the app's key
 custody and its in-process API; the full app is M26.
 
 - **Joining.** The invite's link scanned as a QR code, which `juist invite`
@@ -430,24 +431,27 @@ Decided:
   the phone's shell through the VPN, log sync both ways, and the phone
   removed, which it showed 3 s after `juist remove`; the DHT's rendezvous
   found a host behind another NAT, which the two NATs' one router, without
-  hairpinning, kept from answering. Not yet: (1) in `make
-  interop`, which runs no emulator, and a code, which needs the LAN the
-  emulator's NAT is not; (2) past the freshness TTL; (3) to (5).
+  hairpinning, kept from answering. On an Android phone, QR and code joins,
+  ping and HTTP directly and through a relay, LTE joins through the DHT and a
+  member relay behind NATs including one that changes ports by destination,
+  and exit-node IPv4, IPv6 and DNS, fail-closed behavior, and return to direct
+  traffic after `off` were also checked by hand. Freshness expiry is covered
+  automatically by `trust/log.TestFreshnessEndsExactlyAtTheTTL`,
+  `daemon.TestPartitionedVictimRefusesARevokedPeerAtTheTTL` and
+  `daemon.TestStartupGate`.
 
-- **Exit criteria:** (1) in `make interop`, an Android emulator joins the
-  network by the invite's QR code and by its typed code, pings a member and
-  fetches a page from it over HTTP, directly and through a relay; (2) removed,
-  it loses its tunnels as fast as a Linux member does, and past the freshness
-  TTL keeps tunnels only to admin devices; (3) by hand, a phone on LTE joins
-  by link a network whose members are all behind NAT, through the DHT and,
-  with the invite's DHT off (`--no-dht`), through a member's relay, and
-  reaches a member behind NAT; (4) in `make interop`, the emulator behind a
-  NAT that picks a new port per destination joins by link through a
-  member's relay; (5) in `make interop`, the emulator through a Linux exit
-  node: its internet, IPv4 and IPv6, and its DNS leave by the exit node, and
-  none of the core's own sockets; with the exit node stopped or its role
-  withdrawn nothing leaves directly; after `off` everything goes direct
-  again; and by hand, a phone on LTE through an exit node.
+- **Exit criteria:** (1) an Android device joins by QR code and typed code,
+  pings a member and fetches a page over HTTP, directly and through a relay;
+  (2) when removed, it loses its tunnels as fast as a Linux member does, and
+  past the freshness TTL keeps tunnels only to admin devices; (3) a phone on
+  LTE joins by link a network whose members are behind NAT, through the DHT
+  and, with the invite's DHT off (`--no-dht`), through a member's relay, and
+  reaches a member behind NAT; (4) the phone behind a NAT that picks a new
+  port per destination joins by link through a member's relay; (5) through a
+  Linux exit node, the phone's internet, IPv4, IPv6 and DNS leave by the exit
+  node, none of the core's own sockets do, and with the exit node stopped or
+  its role withdrawn nothing leaves directly; after `off` everything goes
+  direct again.
 
 ## M11 — More than HTTPS through the ingress
 
@@ -523,7 +527,7 @@ ingress where it is one; every member falls back to a named relay on 443 by
 itself. The relays stand in for the DHT, a company's proxy is taken (`juist
 set --proxy`), and links name relays by name. The rules are in
 [10-connectivity-notes.md](10-connectivity-notes.md), "HTTPS alone, and relays
-on 443". The Android app has no switch for it yet (M26).
+on 443". The Android app has its switch from M26 on.
 
 It does not hide juist from a censor that probes servers or fingerprints
 ClientHellos. Not done, each wanting more of the pinned Tailscale than it
@@ -655,7 +659,7 @@ member is heard past the newest; a device further behind than its peers keep
 is invited again by a link naming its admin
 ([08-trust-layer-notes.md](08-trust-layer-notes.md), "The two ratchets"). The
 CLI's pin survives compaction where a quorum of its keys signed the
-checkpoint the log starts from. Open for M31: a record released below a
+checkpoint the log starts from. Open for M32: a record released below a
 compaction is refused where devices compacted and taken where they did not,
 with no alarm (weakness 14 in [02-threat-model.md](02-threat-model.md)).
 
@@ -723,7 +727,7 @@ put juist at 65 % of the phone's battery use by the afternoon (2026-10-12):
 too much to leave it on, which is what a VPN is for. The core runs on a
 phone at a laptop's pace, and some of what it does costs more there. Before
 the names on Android (M23), which are of little use on an app that cannot
-stay on, and before the audit, so that M32 covers what changes.
+stay on, and before the audit, so that M33 covers what changes.
 
 **Done** on 2026-10-21, reviewed (M21 reviews 1 to 3, the second in
 thirteen rounds, each round's fixes attacked again), validated by a real
@@ -830,7 +834,7 @@ named by hand. Both ends meet at the device's own relay instead: it sends
 every peer whose home it cannot reach there, and members keep a connection
 to it, so that one relay named on 443, the ingress's by itself, is enough.
 Relays forwarding for one another is the alternative should that fall short.
-Before the audit, so that M32 covers it, and not started before M21 is
+Before the audit, so that M33 covers it, and not started before M21 is
 validated and the refactoring
 ([temp/20261019-refactoring.md](temp/20261019-refactoring.md)) is done.
 
@@ -861,7 +865,7 @@ The Android app resolved none of the network's names: with a DNS server set,
 for an exit node, which then answered them all. A name for members alone
 (M16) was out of the phone's reach, and a published name resolved to the
 ingress, not the tunnel. Taken from the full app (M26), and before the audit,
-so that M32 covers a resolver that sees every lookup the phone makes.
+so that M33 covers a resolver that sees every lookup the phone makes.
 
 **Done** on 2026-10-24, reviewed (M23 reviews 1 to 3, the third attacking
 the fixes of the first two again), validated in the Android 16 emulator by
@@ -926,8 +930,8 @@ measured after it (2026-10-24). What it built:
 
 Not taken up: DNS over TLS to the network's resolvers and their TTLs were not
 tried by hand, as the emulator's resolver answers no TLS and every TTL as
-30 s itself, and a real phone's day on mobile data waits for the full app
-(M26).
+30 s itself; a real phone's day on mobile data was taken in M26
+(2026-11-03).
 
 - **Exit criteria:** (1) in the emulator, with no exit node, the app
   resolves a member's name and a name for members alone to its overlay
@@ -942,7 +946,7 @@ tried by hand, as the emulator's resolver answers no TLS and every TTL as
 ## M24 — Boundaries on a host
 
 What one network's daemon, the LAN and a local user can reach on a host
-running juist, closed before the audit, so that M32 covers it.
+running juist, closed before the audit, so that M33 covers it.
 
 **Done** on 2026-10-31, reviewed (M24 reviews 1 and 2, the second
 attacking the first's fix and the boundary between instances again),
@@ -1041,7 +1045,7 @@ reached it both ways, and its package was removed cleanly:
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LLMNR,
 LAN games. The overlay counts as one link for them. Multicast routing,
 streaming and broadcast are out of scope; broadcast has no address to go to
-while every overlay address is a host prefix. Before the audit, so that M32
+while every overlay address is a host prefix. Before the audit, so that M33
 covers the unwrapping, which parses what members send.
 
 **Done** on 2026-10-31, reviewed (M25 reviews 1 to 5, the second and the
@@ -1173,17 +1177,47 @@ identifies the tested snapshots and results. Residual weakness 18 in
 
 ## M26 — The full Android app
 
+**Done** on 2026-11-05: subnet routes through `VpnService` routes, less
+those the network beneath the VPN reaches itself; the HTTPS-alone switch;
+the Quick Settings tile; a member's services; the details screen with the
+names switch; and the diagnosis copied with the log. Reviewed once
+(2026-11-02, no finding that asked for a fix), validated by `make ci-vm`
+at M26 ([12-validating.md](12-validating.md), "The last privileged
+run"), the exit criterion by its lab's interop run and `make
+android-smoke`, which joins the app in the emulator, resolves and pings a
+member and is pinged by it. Subnets, the tile, the names switch and the
+details checked by hand in an Android 13 emulator with Google APIs, HTTPS
+alone on a phone against a relay on 443, and a phone's day on LTE
+(2026-11-03) put juist at 16 % in Android's list, against 5 % on Wi-Fi at
+M21. Family Link, and what the relay's keepalive costs on mobile data,
+moved to M29. Core 11 014 lines, audit scope 36 432, measured after it
+(2026-11-05).
+
 The full Android app, on M10's, once M10's exit criteria are met: M6b's
 subnet routes through `VpnService` routes and M13's HTTPS alone, released
-as the app is now. Before the audit, so that M32 covers the routes a phone
+as the app is now. Before the audit, so that M33 covers the routes a phone
 takes.
 
 A real phone's day on mobile data, where M21's and M23's ran on Wi-Fi,
 shows what a radio wake costs there, before it is released.
 
-- **Exit criterion:** 3-platform interop matrix green in CI, Android by an
-  emulator smoke test; the app's release artifact reproducible byte-for-byte
-  from two independent builders.
+- **A Quick Settings tile** turns the VPN on and off as the app's switch
+  does, and shows its state; a long press opens the app. Where Android has
+  not yet granted the VPN, the tile opens the app to ask.
+- **A member's services.** Its screen lists what the network publishes on
+  it: names under the network's domain (M9), members-only among them (M16),
+  and TCP ports through the ingress (M11a), each opened in the browser or
+  copied. The in-process API gains them where `ipc.Status` lacks them.
+- **Details.** The status screen gains what `juist status` and the status
+  page (M9f) show where it applies to a phone: the network's schema and the
+  app's, the log's head and when the phone last updated its view; the
+  log's newest changes, as `juist log` lists them; relays (how many, which
+  one this phone is homed at); the vouchers behind freshness; names and
+  their DNS state; and each member's juist version beside its reach. Not
+  what the phone cannot have (ports, serving, roles' settings, multicast).
+
+- **Exit criteria:** 3-platform interop matrix green in CI, Android by an
+  emulator smoke test.
 
 ## M27 — Several networks in the app
 
@@ -1220,7 +1254,7 @@ A network whose every member is an Android phone, created, invited to,
 governed and kept fresh from the app, whose members reach each other without
 a VPS: a family's phones, and a peer-to-peer chat between them. A relay
 member stays the answer that always works; this plan makes it unnecessary
-where the networks the phones are on allow it. Before the audit, so that M32
+where the networks the phones are on allow it. Before the audit, so that M33
 covers admin keys on a phone. A phone as exit node is not planned.
 
 The case it has to serve: two phones, both behind NAT that punches nothing,
@@ -1234,15 +1268,23 @@ only way to need none.
    IPv6, and each carrier's NAT mapping and filtering. Step 4 is judged by that
    table, so it is taken first.
 2. **Governing from the app.** Genesis on the phone, its admin key sealed by
-   Keystore as `node.keys` is (M10). The app invites (the QR code
-   on its screen, the code on the Wi-Fi, a link through the DHT's
-   rendezvous), shows the words, votes, approves carried changes (M5b),
-   removes a device and grants roles. Genesis asks for a second admin phone
-   or M12's backup, since a lost phone holding the only admin key ends every
-   further change.
-3. **Freshness.** A phone may hold the `voucher` role and vouches while its
-   service runs. As long as one voucher phone is on and reaches the others,
-   no member falls back to vouchers only.
+   Keystore as `node.keys` is (M10), under a key that requires the user's
+   authentication: every change using it — genesis, invite, approve, remove,
+   grant or revoke a role — asks for the phone's biometric first, the device
+   credential as the fallback, and none signs while the phone is locked. The
+   app invites (the QR code on its screen, the code on the Wi-Fi, a link
+   through the DHT's rendezvous), shows the words, votes, approves carried
+   changes (M5b), removes a device and grants roles. Exporting the admin key,
+   as M12's line or as the app's password-encrypted file to a cloud folder the
+   user picks, asks for that authentication too. Genesis asks for a second
+   admin phone or such a backup, since a lost phone holding the only admin key
+   ends every further change.
+3. **Freshness.** A network of phones alone takes no voucher: phones rest, so
+   a voucher there would check nothing at M = 1 and cost availability, and
+   freshness stays unchecked (`juist status` says so), removals still
+   spreading by gossip, the epoch bump and the rotated group secret. In a
+   mixed network a phone may hold the `voucher` role and vouch while its
+   service runs.
 4. **Reach without a VPS**, cheapest first:
    1. **IPv6.** Carriers give phones global addresses, so between two of
       them only stateful filters stand, which a simultaneous open may pass;
@@ -1298,7 +1340,7 @@ only way to need none.
    from another member through `VpnService`, tested. Without an access policy
    (M14) every member reaches every port a phone's apps open.
 
-The chat is M34's, whose store holds a message for a phone that is off on
+The chat is M35's, whose store holds a message for a phone that is off on
 the members that are on.
 
 - **Exit criteria:** (1) in `make interop`, three emulators and no other
@@ -1315,11 +1357,62 @@ the members that are on.
   hand, a phone joins by code on the inviting phone's hotspot.
 
 
-## M29 — A desktop app on Linux
+## M29 — Family Link, and a phone on mobile data
+
+What the app does on two phones as they are used, beside M26's features:
+one Google's Family Link supervises, and one on mobile data all day.
+
+- **Family Link.** On a phone Google's Family Link supervises, what a
+  parent sends while juist runs does not arrive (more screen time, playing
+  a sound to find it), without an exit node too; it comes as a push
+  through Google's FCM, whose connection to `mtalk.google.com:5228` leaves
+  beside the VPN without an exit node, while its lookup goes through
+  juist's resolver. The first
+  fix (M25.3, the VPN no more metered than the network beneath it, since
+  Android held back Google's jobs for an unmetered network) is in 0.25.6
+  and the dev builds from 2026-11-01. With a dev build of 2026-11-04 a
+  sound arrived on the supervised phone, juist and its names on, shortly
+  after the VPN came on; the rest of step 1 is not tried. Each step is
+  judged by the one before it:
+  1. **Confirm** on the supervised phone with an app at or after M25.3:
+     a sound sent and more screen time granted arrive within a minute,
+     on Wi-Fi and mobile data, the screen on and off.
+  2. **If not, look at FCM** with the VPN on and off (`adb shell dumpsys
+     activity service com.google.android.gms/.gcm.GcmService`): whether
+     the connection stands, how often it reconnects, and whether a new
+     device from `establish()` drops it; with Private DNS off, automatic
+     and named; and against another VPN that routes only its own
+     prefixes (Tailscale), which would point at Android rather than juist.
+  3. **Suspects then:** the resolver every lookup goes to since M23,
+     failing or slow for `mtalk.google.com`; an IPv6 address on the VPN
+     where the network beneath has none, so that AAAA answers are tried
+     first; Family Link's lock at a time limit or bedtime, reported to stop
+     VPNs that then stay off, where the service has to come back as after a
+     reboot.
+- **The relay's keepalive.** A phone's day on LTE (2026-11-03) put juist
+  at 16 % in Android's list, against 5 % on Wi-Fi at M21. Its floor is the
+  relay's keepalive: the pinned derpserver sends every client one every 60
+  to 65 s, a resting phone too, which on LTE wakes the radio about 60 times
+  an hour whatever the phone's pace. Sparing a resting phone it is safe
+  only where the carrier's NAT keeps an idle connection open longer than
+  the phone's own traffic leaves it idle; else the relay no longer reaches
+  the phone.
+
+- **Exit criteria:** (1) on a phone Family Link supervises, with juist on,
+  directly and through an exit node, on Wi-Fi and mobile data, the screen
+  on and off after the phone slept, a sound and more screen time a parent
+  sends arrive within a minute, as with juist off; after Family Link locks
+  and unlocks the phone, juist is on again; (2) how long the carrier of the
+  phone's day keeps an idle connection is measured, and from it decided
+  whether a relay spares a resting phone its keepalive; where it does, a
+  phone's day on LTE puts juist below 16 % and a member reaches the
+  resting phone within a minute.
+
+## M30 — A desktop app on Linux
 
 An icon in the desktop's status bar, as Tailscale's on Linux (`tailscale
 systray`): the state at a glance, and what a laptop's user changes on the
-move without a terminal. Before the audit, so that M32 covers what it asks
+move without a terminal. Before the audit, so that M33 covers what it asks
 of the control socket.
 
 - **The icon** shows connected, an exit node in use, or a warning of `juist
@@ -1351,7 +1444,7 @@ of the control socket.
   app; (4) by hand on GNOME with the extension and on KDE, Debian and Fedora,
   the package installed and removed cleanly.
 
-## M30 — Formal models of what juist designed itself
+## M31 — Formal models of what juist designed itself
 
 Machine-checked models of the protocols and rules juist composed from
 standard primitives, before the review and the audit: a flaw in a design is
@@ -1375,11 +1468,11 @@ joins WireGuard's published models (Tamarin, CryptoVerif).
   the epoch floor, every membership change has its quorum, a removed key
   undoes no revocation, compaction included, and a member cut off from a
   removal refuses the removed one at the TTL under bounded clock skew. The
-  three fork-choice findings M31 lists are decided against it.
+  three fork-choice findings M32 lists are decided against it.
 - **Model and code:** traces the log's model generates are replayed against
   `trust/log`'s validator; each protocol model names the labels and
   transcript fields it stands for, and a test fails where the code's differ.
-- **Left out:** `aead` and `addrkey`, standard constructions M31 reads line
+- **Left out:** `aead` and `addrkey`, standard constructions M32 reads line
   by line; the computational strength of the SPAKE2 and ML-KEM combiner,
   which a symbolic model takes as given; code-level proof (Gobra).
 - **Open decisions:** ProVerif or Tamarin for the pair key; TLA+ checked by
@@ -1394,11 +1487,11 @@ joins WireGuard's published models (Tamarin, CryptoVerif).
   run, its tool versions and what did not run recorded in
   [12-validating.md](12-validating.md).
 
-## M31 — The internal security review
+## M32 — The internal security review
 
 The review [15-security-review.md](15-security-review.md) plans, over the
-audit scope as M17 to M30 leave it, so that M32's audit goes to what a
-reader cannot find, and M30's models beside the code they stand for. It
+audit scope as M17 to M31 leave it, so that M33's audit goes to what a
+reader cannot find, and M31's models beside the code they stand for. It
 starts from the fuzzing:
 
 - **Fuzzing.** `waiting.Decode`, `types.DecodeLease` and the helper's
@@ -1434,14 +1527,14 @@ starts from the fuzzing:
   and medium finding fixed with a test that fails without the fix, or
   accepted as a numbered residual weakness.
 
-## M32 — An audit by a second model → v1
+## M33 — An audit by a second model → v1
 
 Security audit of the audit scope by a model other than the one juist is
-developed with, from the code and the threat model rather than M31's notes;
+developed with, from the code and the threat model rather than M32's notes;
 no human audit is planned. In the tiers of
-[06-verification.md](06-verification.md) §5, after M31's internal review:
-the trust layer and enrollment at its core, M30's models with them,
-plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22, M23, M24, M25, M26, M27, M28 and M29 add to it — route consumption and its forwarding helper, the
+[06-verification.md](06-verification.md) §5, after M32's internal review:
+the trust layer and enrollment at its core, M31's models with them,
+plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22, M23, M24, M25, M26, M27, M28, M29 and M30 add to it — route consumption and its forwarding helper, the
 override record and the resolver, the published names, those for members alone, and the ingress, its QUIC Initial parser included, the
 disable record, the preshared-key exchange, the ML-DSA cut-over and
 enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, the meeting at a relay on 443, a user per instance and FreeBSD's pf, discovery's unwrapping and local delivery, the phone's subnet routes, several networks in one app, admin keys on a phone and the desktop app's use of the control socket — fix findings, mature fuzz corpus (consider
@@ -1451,21 +1544,59 @@ trade-offs carry ([14-website.md](14-website.md)). Open decision: which
 model.
 
 v1 is Linux and FreeBSD with M14's ACLs and M25's multicast, Linux's
-desktop app (M29), and the Android app as M26 to M28 leave it; packaging follows in M33.
+desktop app (M30), and the Android app as M26 to M29 leave it; packaging follows in M34.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) the acceptances documented for operators; v1.0 tag.
 
-## M33 — Packaging *(post-v1)*
+## M34 — Packaging *(post-v1)*
 
 Distro repositories (apt, dnf, pkg) and a port in FreeBSD's ports tree, which
 fetches a release, for the packages every release already carries, and the readiness check that keeps an admin from stranding members
-on an upgrade.
+on an upgrade. The app's APK becomes reproducible here too, which gomobile's
+cgo build with the NDK, Gradle and R8 make harder than the Go binaries; until
+then its signature alone vouches for it.
+
+Arch Linux, Gentoo and Nix join the distributions the package repository
+serves, each in its own form and built by the same builder as the deb, the
+rpm and FreeBSD's pkg, in a stable and a dev channel:
+
+- **Arch Linux:** a pacman repository, `arch/$arch` beside `deb/` and `rpm/`:
+  a `PKGBUILD` that packages the release's binaries with the deb's units,
+  `sysusers.d` and scripts, `makepkg` in an `archlinux:base-devel` container,
+  `repo-add` for the database, packages and database signed with the
+  repository's key (`SigLevel = Required`). An AUR `PKGBUILD` that builds
+  from the release's sources may follow; it is maintained in the AUR, not
+  here.
+- **Gentoo:** an ebuild repository (overlay) in git, added with
+  `eselect repository`, its commits signed and verified by Portage
+  (`sync-git-verify-commit-signature`). `net-vpn/juist-bin` installs the
+  release's binaries, its `Manifest` holding their checksums, and the users
+  come from `acct-user`/`acct-group` ebuilds, one per user the packages make.
+  A source ebuild needs the Go modules as a tarball of its own and is left
+  out unless asked for.
+- **Nix:** a flake in the repository, `buildGoModule` with a pinned
+  `vendorHash`, for `nix run` and `nix profile install`, and a NixOS module,
+  `services.juist`, that makes the users, the units, their capabilities and
+  the firewall's openings, as the packages do elsewhere. A binary cache is
+  optional: Go builds quickly from source. nixpkgs itself is a later
+  question, its review being outside this project.
+- **What each needs:** `install.sh` learns pacman and, where it can, Portage;
+  the handbook's install and updating pages, English and German, and
+  `features.yaml` name each; `make check` builds each package's files as it
+  builds the deb's.
+- **Open decisions:** OpenRC, which much of Gentoo runs: an init script of
+  juist's own, or the ebuild depending on systemd at first; whether the
+  NixOS module covers instances 1 to 9 and the ingress or the default
+  instance alone at first.
 
 - **Exit criterion:** Linux/FreeBSD interop matrix green in CI via qemu;
-  release artifacts reproducible byte-for-byte from two independent builders.
+  release artifacts, the app's APK among them, reproducible byte-for-byte
+  from two independent builders; on Arch, on Gentoo with systemd and on
+  NixOS, juist installs from the repository, joins a network, upgrades from
+  the previous release in place and removes cleanly, saying what it leaves.
 
-## M34 — A store, and a messenger on it *(post-v1)*
+## M35 — A store, and a messenger on it *(post-v1)*
 
 Members leave each other data while the other is offline, with no server: a
 key-value store replicated among the members' own devices, and a messenger on
@@ -1557,7 +1688,7 @@ code.
   exchange messages and a file both ways; (5) a member writing past its
   quota is cut at a holder, and the others' writes still land.
 
-## M35 — OpenBSD *(post-v1)*
+## M36 — OpenBSD *(post-v1)*
 
 juistd on OpenBSD as M7 has it on FreeBSD: a root helper, the daemon as
 `juist`, DNS, exit nodes and subnet routers, an rc.d script and a package.
@@ -1619,7 +1750,7 @@ Open decisions:
   does. pf is the lead, being one mechanism for both.
 - **Signing the package:** `pkg_add` checks signify(1) signatures against the
   keys in `/etc/signify`, so either a key of juist's that the user installs
-  once, or unsigned packages until a port in the ports tree, as M33 plans for
+  once, or unsigned packages until a port in the ports tree, as M34 plans for
   FreeBSD.
 - **Which releases:** the current one alone, or both that OpenBSD supports.
 

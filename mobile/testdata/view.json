@@ -17,7 +17,21 @@
       "roles": [
         "admin"
       ],
-      "reach": "direct"
+      "reach": "direct",
+      "published": [
+        "wiki.example.org",
+        "game.example.org:25565"
+      ],
+      "membersOnly": [
+        "wiki.example.org"
+      ],
+      "names": [
+        "anna.example.org"
+      ],
+      "subnets": [
+        "192.168.7.0/24"
+      ],
+      "build": 22
     },
     {
       "identity": "nid:AwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -80,5 +94,21 @@
         "cleo"
       ]
     }
-  ]
+  ],
+  "settings": {
+    "names": true
+  },
+  "details": {
+    "schema": 22,
+    "appSchema": 22,
+    "epoch": 3,
+    "relays": 1,
+    "subnets": [
+      {
+        "prefix": "192.168.7.0/24",
+        "router": "anna",
+        "inUse": true
+      }
+    ]
+  }
 }

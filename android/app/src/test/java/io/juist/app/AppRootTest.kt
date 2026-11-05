@@ -75,6 +75,10 @@ class AppRootTest {
             override fun useExit(identity: String) {}
             override fun exitOff() {}
             override fun forget() {}
+            override fun diagnose() = "{}"
+            override fun changes() = "[]"
+            override fun setNames(on: Boolean) {}
+            override fun setHttpsOnly(on: Boolean) {}
         })
         Juist.refresh()
         show(mutableStateOf(link))

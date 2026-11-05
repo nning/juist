@@ -1,6 +1,7 @@
 package io.juist.app.ui.screens
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -33,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -40,6 +42,7 @@ import io.juist.app.R
 import io.juist.app.core.Member
 import io.juist.app.core.Reach
 import io.juist.app.ui.ago
+import io.juist.app.ui.components.Address
 import io.juist.app.ui.components.BackBar
 import io.juist.app.ui.components.CopyRow
 import io.juist.app.ui.components.InfoRow
@@ -132,6 +135,37 @@ fun MemberScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         InfoRow(stringResource(R.string.label_down_since), ago(member.since, alone = true))
                     }
+                    if (member.build > 0) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        InfoRow(stringResource(R.string.label_build), stringResource(R.string.build_value, member.build))
+                    }
+                }
+
+                if (member.published.isNotEmpty() || member.names.isNotEmpty() || member.subnets.isNotEmpty()) {
+                    SectionTitle(stringResource(R.string.section_services))
+                    Panel {
+                        var first = true
+                        fun divider() = if (first) { first = false; false } else true
+                        for (p in member.published) {
+                            if (divider()) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            val forMembers = p in member.membersOnly
+                            if (':' in p) {
+                                CopyRow(stringResource(if (forMembers) R.string.label_tcp_members else R.string.label_tcp), p, copied)
+                            } else {
+                                OpenRow(stringResource(if (forMembers) R.string.label_published_members else R.string.label_published), p) {
+                                    onOpen("https://$p/")
+                                }
+                            }
+                        }
+                        for (n in member.names) {
+                            if (divider()) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            OpenRow(stringResource(R.string.label_public_name), n) { onOpen("https://$n/") }
+                        }
+                        for (n in member.subnets) {
+                            if (divider()) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            CopyRow(stringResource(R.string.label_subnet), n, copied)
+                        }
+                    }
                 }
 
                 SectionTitle(stringResource(R.string.section_reach))
@@ -179,6 +213,24 @@ fun MemberScreen(
                 Spacer(Modifier.height(Space.l))
             }
         }
+    }
+}
+
+/** A name that opens in the browser when tapped. */
+@Composable
+private fun OpenRow(label: String, value: String, onOpen: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button, onClick = onOpen)
+            .padding(horizontal = Space.l, vertical = Space.m),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Address(value)
+        }
+        Icon(painterResource(R.drawable.ic_open), null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

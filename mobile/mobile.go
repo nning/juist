@@ -69,6 +69,10 @@ type Core struct {
 	// underlay is how the network beneath the VPN resolves, as the app last
 	// said.
 	underlay atomic.Pointer[daemon.Underlay]
+	// coverChanged has the VPN route a changed cover.
+	coverChanged func() error
+	plumber      conn.Plumber
+	dns          *dnsStats
 
 	mu         sync.Mutex
 	cancelJoin context.CancelFunc
@@ -100,8 +104,10 @@ func Start(home string, p Platform) (*Core, error) {
 		}
 	}()
 	logf := func(format string, args ...any) { p.Log(fmt.Sprintf(format, args...)) }
-	c := &Core{pace: daemon.NewPace(), logf: logf}
+	c := &Core{pace: daemon.NewPace(), logf: logf, dns: newDNSStats(logf)}
 	plumber := conn.NewVPNPlumber(vpn{p}, c.networkPrefixes)
+	c.plumber = plumber
+	c.coverChanged = func() error { return conn.VPNCoverChanged(plumber) }
 	s, err := daemon.NewService(daemon.ServiceOptions{
 		Home:      home,
 		InProcess: true,
@@ -116,7 +122,8 @@ func Start(home string, p Platform) (*Core, error) {
 			DisableRelay: true,
 			STUN:         rendezvous.DefaultSTUN,
 			ServeDNS:     func([]netip.Addr, func(netip.Addr) bool) (io.Closer, error) { return nil, errNoMembersDNS },
-			Resolver:     &daemon.Resolver{Dial: resolverDial(conn.VPNDialer(plumber), c.networkPrefixes)},
+			Resolver: &daemon.Resolver{Dial: resolverDial(conn.VPNDialer(plumber), c.networkPrefixes),
+				Observe: c.dns.observe},
 			// The core's own sockets leave past the tunnel, protected, as
 			// juistd's user's do on Linux, and the app opens none of its own.
 			EgressUser: func() string { return "" },
@@ -131,8 +138,9 @@ func Start(home string, p Platform) (*Core, error) {
 		return nil, err
 	}
 	c.s = s
-	// A phone routes no member's subnets, which could cover the LAN it is on.
-	accept := false
+	// Earlier apps turned subnets off for good; the LAN the phone is on is
+	// kept out of them by the network beneath's routes instead.
+	accept := true
 	if _, err := ipc.CallVia(s.Pipe, ipc.Request{Command: ipc.CmdSubnet, AcceptSubnets: &accept}); err != nil {
 		s.Close()
 		return nil, err
@@ -165,13 +173,19 @@ func hookTo(p Platform) {
 	netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) { return interfaces(p) })
 }
 
-// follow keeps the network's prefixes st names, for the VPN's routes.
+// follow keeps the network's prefixes st names, for the VPN's routes, and
+// has a device established before they changed route them.
 func (c *Core) follow(st *ipc.Status) {
 	var ps []netip.Prefix
 	if st.InNetwork && !st.NotMember {
 		ps = append(slices.Clone(st.V4Claims), types.ULA(st.Network))
 	}
-	c.cover.Store(&ps)
+	old := c.cover.Swap(&ps)
+	if old != nil && !slices.Equal(*old, ps) && c.coverChanged != nil {
+		if err := c.coverChanged(); err != nil {
+			c.logf("mobile: routing the network's prefixes: %v", err)
+		}
+	}
 }
 
 func (c *Core) networkPrefixes() []netip.Prefix {
@@ -322,9 +336,48 @@ func (c *Core) NetworkChanged(iface, resolvers string) {
 		c.logf("mobile: %v", err)
 	}
 	c.underlay.Store(&u)
+	conn.SetVPNHostRoutes(c.plumber, underlayRoutes(resolvers))
 	if m := c.s.Mesh(); m != nil {
 		m.NetworkChanged()
 	}
+}
+
+// SetNames has the phone's lookups go to juist's resolver, which answers the
+// network's names, or leaves the phone's DNS alone, as `juist set --dns`.
+func (c *Core) SetNames(on bool) error {
+	_, err := c.call(ipc.Request{Command: ipc.CmdSettings, DNS: &on})
+	return err
+}
+
+// SetHTTPSOnly has the phone reach relays by TLS on 443 alone, as `juist set
+// --https-only`, which restarts the mesh.
+func (c *Core) SetHTTPSOnly(on bool) error {
+	_, err := c.call(ipc.Request{Command: ipc.CmdSettings, HTTPSOnly: &on})
+	return err
+}
+
+// maxChanges is how many of the log's changes Changes lists.
+const maxChanges = 20
+
+// A change is one of the log's, as `juist log` lists it.
+type change struct {
+	Index   int      `json:"index"`
+	What    string   `json:"what"`
+	Signers []string `json:"signers,omitempty"`
+}
+
+// Changes lists the log's newest changes, newest first, as JSON changes.
+func (c *Core) Changes() (string, error) {
+	changes, _, err := c.s.Changes(maxChanges)
+	if err != nil {
+		return "", err
+	}
+	out := []change{}
+	for _, ch := range changes {
+		out = append(out, change{Index: ch.Index, What: ch.What, Signers: ch.Signers})
+	}
+	b, err := json.Marshal(out)
+	return string(b), err
 }
 
 // SetSaving slows the mesh down to save battery, as while the screen is off,

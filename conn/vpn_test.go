@@ -282,3 +282,46 @@ func TestAVPNDialLeavesByTheDeviceAlone(t *testing.T) {
 		t.Errorf("a datagram left from %v, want %v", from, self[0].Addr())
 	}
 }
+
+// A device established before the network's prefixes were known, as during a
+// join, routes them whole once they are, and only then.
+func TestAVPNIsEstablishedAgainOnceTheNetworksPrefixesAreKnown(t *testing.T) {
+	v := &fakeVPN{t: t}
+	var network []netip.Prefix
+	p := NewVPNPlumber(v, func() []netip.Prefix { return network })
+	dev, rtr := newVPNPlumbed(p.(*vpnPlumber), "juist0", 1280, t.Logf)
+	defer dev.Close()
+	self := []netip.Prefix{netip.MustParsePrefix("10.0.0.2/32")}
+	if err := rtr.Set(&router.Config{LocalAddrs: self, Routes: []netip.Prefix{netip.MustParsePrefix("10.0.0.3/32")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := VPNCoverChanged(p); err != nil || v.established() != 1 {
+		t.Fatalf("an unchanged cover established the device again: %d times, %v", v.established(), err)
+	}
+	network = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/22")}
+	if err := VPNCoverChanged(p); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := VPNEstablished(p); v.established() != 2 || n != 2 {
+		t.Fatalf("established %d times, counted %d, want 2", v.established(), n)
+	}
+	if got := v.given[1].Routes; !slices.Contains(got, network[0]) || slices.Contains(got, netip.MustParsePrefix("10.0.0.3/32")) {
+		t.Errorf("routes once the network is known: %v", got)
+	}
+}
+
+// What the network beneath the VPN routes is the host's routes, and a change
+// to them is heard.
+func TestAVPNTakesTheNetworkBeneathsRoutesAsTheHosts(t *testing.T) {
+	p := NewVPNPlumber(&fakeVPN{t: t}, nil)
+	dev, rtr := newVPNPlumbed(p.(*vpnPlumber), "juist0", 1280, t.Logf)
+	defer dev.Close()
+	heard := 0
+	rtr.(hostRouter).watchHostRoutes(func() { heard++ })
+	lan := []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24")}
+	SetVPNHostRoutes(p, lan)
+	SetVPNHostRoutes(p, lan)
+	if got := rtr.(hostRouter).hostRoutes(); !slices.Equal(got, lan) || heard != 1 {
+		t.Errorf("host routes %v, heard %d times, want %v once", got, heard, lan)
+	}
+}

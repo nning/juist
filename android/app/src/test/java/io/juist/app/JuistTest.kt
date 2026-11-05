@@ -44,6 +44,11 @@ private class FakeCore : CoreCalls {
     override fun useExit(identity: String) { exit = identity }
     override fun exitOff() { exit = null }
     override fun forget() {}
+    var names: Boolean? = null
+    override fun diagnose() = """{"established":2,"dns":{"queries":3,"failed":1}}"""
+    override fun changes() = """[{"index":4,"what":"admit phone"}]"""
+    override fun setNames(on: Boolean) { names = on }
+    override fun setHttpsOnly(on: Boolean) {}
 }
 
 @RunWith(RobolectricTestRunner::class)
@@ -165,6 +170,19 @@ class JuistTest {
         assertNull(core.exit)
         Juist.disconnect(app)
         assertTrue(Juist.useExit("node-a").isFailure)
+    }
+
+    /** The names setting reaches the core, the log's changes and the diagnosis come from it, and none while it is off. */
+    @Test
+    fun settingsChangesAndTheDiagnosisGoThroughTheCore() = runBlocking {
+        Juist.attached(core)
+        assertTrue(Juist.setNames(false).isSuccess)
+        assertEquals(false, core.names)
+        assertEquals("admit phone", Juist.changes().getOrThrow().single().what)
+        assertEquals(1, Juist.diagnosis()?.dns?.failed)
+        Juist.disconnect(app)
+        assertTrue(Juist.setNames(true).isFailure)
+        assertNull(Juist.diagnosis())
     }
 
     /** After a reboot or an update, the VPN is on again where it was wanted. */

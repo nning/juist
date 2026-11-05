@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
@@ -90,6 +91,61 @@ type vpnPlumber struct {
 
 	mu  sync.Mutex
 	rtr *vpnRouter // the router of the device the last mesh made, nil before
+
+	// host is what the network beneath the VPN routes but by its default
+	// routes, and hostChanged hears of each change.
+	host        []netip.Prefix
+	hostChanged func()
+
+	established     int
+	lastEstablished time.Time
+}
+
+// VPNCoverChanged establishes p's device again where the network's prefixes
+// its cover names are no longer those it was established with, as after a
+// join, before which the cover named none. p is a [NewVPNPlumber]'s.
+func VPNCoverChanged(p Plumber) error {
+	vp, ok := p.(*vpnPlumber)
+	if !ok {
+		return nil
+	}
+	r := vp.router()
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.establishLocked()
+}
+
+// SetVPNHostRoutes has p take routes as what the network beneath the VPN
+// reaches but by its default routes, which no subnet route then takes into
+// the tunnel. p is a [NewVPNPlumber]'s.
+func SetVPNHostRoutes(p Plumber, routes []netip.Prefix) {
+	vp, ok := p.(*vpnPlumber)
+	if !ok {
+		return
+	}
+	routes = sortedPrefixes(routes)
+	vp.mu.Lock()
+	same := slices.Equal(vp.host, routes)
+	vp.host = routes
+	changed := vp.hostChanged
+	vp.mu.Unlock()
+	if !same && changed != nil {
+		changed()
+	}
+}
+
+// VPNEstablished is how often p established a device, and when last.
+func VPNEstablished(p Plumber) (int, time.Time) {
+	vp, ok := p.(*vpnPlumber)
+	if !ok {
+		return 0, time.Time{}
+	}
+	vp.mu.Lock()
+	defer vp.mu.Unlock()
+	return vp.established, vp.lastEstablished
 }
 
 func (p *vpnPlumber) router() *vpnRouter {
@@ -167,7 +223,7 @@ func (p *vpnPlumber) Destroy(string) error {
 func newVPNPlumbed(p *vpnPlumber, name string, mtu int, logf logger.Logf) (tun.Device, router.Router) {
 	d := &vpnTUN{name: name, mtu: mtu, events: make(chan tun.Event, 1), swapped: make(chan struct{})}
 	d.events <- tun.EventUp
-	r := &vpnRouter{v: p.v, cover: p.cover, dev: d, logf: logger.WithPrefix(logf, "router: ")}
+	r := &vpnRouter{v: p.v, p: p, cover: p.cover, dev: d, logf: logger.WithPrefix(logf, "router: ")}
 	p.mu.Lock()
 	p.rtr = r
 	p.mu.Unlock()
@@ -295,13 +351,17 @@ func (d *vpnTUN) Close() error {
 
 // What the manager finds a VPN's router can by a type assertion, held at
 // compile time.
-var _ exitRouter = (*vpnRouter)(nil)
+var (
+	_ exitRouter = (*vpnRouter)(nil)
+	_ hostRouter = (*vpnRouter)(nil)
+)
 
 // A vpnRouter establishes the device again whenever what it routes changes:
 // the device's addresses, the overlay's routes, the internet while an exit
 // node is chosen, and the host's DNS.
 type vpnRouter struct {
 	v     VPN
+	p     *vpnPlumber
 	cover func() []netip.Prefix
 	dev   *vpnTUN
 	logf  logger.Logf
@@ -359,6 +419,18 @@ func (r *vpnRouter) setServe(s Serve) error {
 
 func (r *vpnRouter) lans() ([]netip.Prefix, []netip.Addr) { return nil, nil }
 
+func (r *vpnRouter) hostRoutes() []netip.Prefix {
+	r.p.mu.Lock()
+	defer r.p.mu.Unlock()
+	return slices.Clone(r.p.host)
+}
+
+func (r *vpnRouter) watchHostRoutes(changed func()) {
+	r.p.mu.Lock()
+	defer r.p.mu.Unlock()
+	r.p.hostChanged = changed
+}
+
 func (r *vpnRouter) answersThrough() string { return "" }
 
 // establishLocked establishes the device again where its config changed.
@@ -398,6 +470,11 @@ func (r *vpnRouter) establishLocked() error {
 		return err
 	}
 	r.established, r.everEstablished = c, true
+	r.p.mu.Lock()
+	r.p.established++
+	r.p.lastEstablished = time.Now()
+	r.p.mu.Unlock()
+	r.logf("established: %d routes, DNS %v", len(c.Routes), c.DNS)
 	return nil
 }
 

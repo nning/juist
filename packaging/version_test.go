@@ -10,8 +10,8 @@ import (
 
 // version.sh gives each package format the version Go stamps into the
 // binaries: the tag on its commit, a pre-release of the next patch after it,
-// 0 before any tag, marked where the tree has changes; and every format sorts
-// them in the order they were built.
+// of the version itself after a -dev tag, 0 before any tag, marked where the
+// tree has changes; and every format sorts them in the order they were built.
 func TestVersionScriptFollowsGosStamp(t *testing.T) {
 	gobin, err := exec.LookPath("go")
 	if err != nil {
@@ -98,12 +98,33 @@ func TestVersionScriptFollowsGosStamp(t *testing.T) {
 	git("tag", "v0.22.1")
 	check("a patch release", want{"v0.22.1", "0.22.1", "1", "0.22.1", "0.22.1,1"})
 
+	// main heads for the next milestone, whose fix releases are on a branch.
+	date = "2026-10-26T08:00:00Z"
+	git("commit", "-q", "--allow-empty", "-m", "third")
+	git("tag", "v0.23.0-dev")
+	check("a -dev tag", want{"v0.23.0-dev", "0.23.0", "0.20261026080000git" + s(),
+		"0.23.0~20261026080000git" + s(), "0.23.0.pre20261026080000,1"})
+	date = "2026-10-27T08:00:00Z"
+	git("commit", "-q", "--allow-empty", "-m", "fourth")
+	afterDev := want{"v0.23.0-dev.0.20261027080000-" + h(), "0.23.0", "0.20261027080000git" + s(),
+		"0.23.0~20261027080000git" + s(), "0.23.0.pre20261027080000,1"}
+	check("after a -dev tag", afterDev)
+	git("checkout", "-q", "-b", "fixes", "v0.22.1")
+	git("commit", "-q", "--allow-empty", "-m", "fix")
+	git("tag", "v0.22.2")
+	git("checkout", "-q", "-")
+	check("beside a later fix release", afterDev)
+	date = "2026-10-28T08:00:00Z"
+	git("commit", "-q", "--allow-empty", "-m", "fifth")
+	git("tag", "v0.23.0")
+	check("the milestone's release", want{"v0.23.0", "0.23.0", "1", "0.23.0", "0.23.0,1"})
+
 	write("changed", "")
-	if got, want := stamped(), "v0.22.1+dirty"; got != want {
+	if got, want := stamped(), "v0.23.0+dirty"; got != want {
 		t.Errorf("with changes: go stamps %s, want %s", got, want)
 	}
-	for format, want := range map[string]string{"go": "v0.22.1+dirty", "android": "0.22.1+dirty", "rpm-release": "1.dirty20261025090000",
-		"deb": "0.22.1+dirty20261025090000", "freebsd": "0.22.1.20261025090000,1", "image": "0.22.1.20261025090000"} {
+	for format, want := range map[string]string{"go": "v0.23.0+dirty", "android": "0.23.0+dirty", "rpm-release": "1.dirty20261025090000",
+		"deb": "0.23.0+dirty20261025090000", "freebsd": "0.23.0.20261025090000,1", "image": "0.23.0.20261025090000"} {
 		if got := version(format, "20261025090000"); got != want {
 			t.Errorf("with changes: version.sh %s gives %s, want %s", format, got, want)
 		}

@@ -38,7 +38,7 @@ GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 BUILDDIR ?= build
 CMDS     ?= juist juistd
 
-# Platforms v1 commits to (docs/05-roadmap.md M32). Building for each catches
+# Platforms v1 commits to (docs/05-roadmap.md M33). Building for each catches
 # build-tag rot in the embedded Tailscale stack.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
 # Platforms kept compiling though nothing ships for them: macOS, deferred past v1.
@@ -431,6 +431,13 @@ android-screenshots: android-core ## Record the Android app's screenshots anew, 
 # members, one restarting every 3 minutes: about 50 minutes a scenario, up to
 # 5 more without a relay, where a member pings the phone until its next check,
 # logged to build/idle.
+# `make android-smoke` is Android's part of the interop matrix, in the AVD
+# juist where no device is attached.
+.PHONY: android-smoke
+android-smoke: android-core ## Join the Android app in the emulator and check its paths (needs the AVD juist)
+	$(GRADLE) assembleDebug
+	$(GO) run ./ci/idle -scenarios smoke
+
 .PHONY: android-idle
 android-idle: android-core ## Measure the Android app idling in the emulator; fail past its budget (needs the AVD juist)
 	$(GRADLE) assembleDebug

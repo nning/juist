@@ -162,16 +162,17 @@ in Docker from the rest of the network
 The app, for Android 12 or newer, joins one network as a member by scanning
 the QR code `juist invite` shows in a terminal, or by the code typed in on the
 same LAN. While its VPN is on, every app on the phone reaches the other
-devices at their addresses; the phone's other traffic and its DNS are left
-alone.
+devices at their addresses and the subnets members route; the phone's other
+traffic is left alone.
 
 ```sh
 make android    # needs a JDK 21, the Android SDK and NDK; the APKs land in android/app/build/outputs/apk
 ```
 
 It resolves the network's names, sends its internet through an exit node
-where one is chosen, turns no public names on, uses no subnets, and takes no
-roles.
+where one is chosen, reaches relays by HTTPS alone where asked, turns no
+public names on, and takes no roles. A Quick Settings tile turns it on and
+off, and its details show what `juist status` and `juist log` would.
 Release and development updates share the app's identity and signing key,
 so switching repositories keeps the phone's keys and network.
 Building, signing and what the app shows: [Android](https://docs.juist.nning.io/en/docs/android/).

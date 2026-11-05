@@ -1,6 +1,12 @@
 package io.juist.app
 
 import io.juist.app.core.Alarm
+import io.juist.app.core.Change
+import io.juist.app.core.Details
+import io.juist.app.core.Diagnosis
+import io.juist.app.core.DnsDiagnosis
+import io.juist.app.core.Lookup
+import io.juist.app.core.SubnetRoute
 import io.juist.app.core.ExitView
 import io.juist.app.core.FreshState
 import io.juist.app.core.Freshness
@@ -75,3 +81,39 @@ val privateDnsView = sampleView.copy(
 )
 
 val removedView = NetworkView(state = State.Removed, network = "home", self = sampleView.self)
+
+/** nas, publishing a wiki for members alone and a game server, and routing the home LAN. */
+val servicesMember = sampleView.members[1].copy(
+    published = listOf("wiki.example.org", "photos.example.org", "game.example.org:25565"),
+    membersOnly = listOf("wiki.example.org"),
+    subnets = listOf("192.168.178.0/24"),
+    build = 22,
+)
+
+/** What juist status says beyond the state, with a subnet in use and one the LAN covers. */
+val detailsView = sampleView.copy(
+    details = Details(
+        schema = 22, appSchema = 22, epoch = 7, head = "3O72DZHV3GMB", relays = 1, installed = 1, home = "vps",
+        subnets = listOf(
+            SubnetRoute("192.168.178.0/24", "nas", inUse = true),
+            SubnetRoute("10.20.0.0/16", "vps", why = "this device reaches it by a route of its own"),
+        ),
+    ),
+)
+
+val sampleChanges = listOf(
+    Change(41, "device admission: pixel-8", listOf("laptop")),
+    Change(40, "subnet grant: 192.168.178.0/24 to nas", listOf("laptop")),
+    Change(39, "role grant: relay-capable to vps", listOf("laptop")),
+)
+
+val sampleDiagnosis = Diagnosis(
+    established = 3, lastEstablished = NOW - 3600,
+    dns = DnsDiagnosis(
+        queries = 1532, failed = 2, slow = 1, maxMillis = 3000,
+        recent = listOf(
+            Lookup(NOW - 1800, "mtalk.google.com", "AAAA", "i/o timeout", 3000),
+            Lookup(NOW - 600, "example.org", "A", "", 1240),
+        ),
+    ),
+)

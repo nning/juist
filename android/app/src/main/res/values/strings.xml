@@ -268,4 +268,61 @@
         <item quantity="one">%d day</item>
         <item quantity="other">%d days</item>
     </plurals>
+
+    <!-- Details -->
+    <string name="details_title">Details</string>
+    <string name="action_details">Details</string>
+    <string name="section_settings">This phone</string>
+    <string name="setting_names">Network names</string>
+    <string name="setting_names_about">Every lookup goes to juist, which answers the network\'s names. Off, the phone keeps its own DNS.</string>
+    <string name="setting_https_only">HTTPS only</string>
+    <string name="setting_https_only_about">Reach relays by HTTPS on port 443 alone, for networks that let nothing else through.</string>
+    <string name="section_network">Network</string>
+    <string name="label_schema">Schema</string>
+    <string name="schema_value">%1$d, this app %2$d</string>
+    <string name="label_log">Log</string>
+    <string name="log_value">%1$s, epoch %2$d</string>
+    <string name="label_updated">Updated</string>
+    <string name="label_relays">Relays</string>
+    <plurals name="relays_available">
+        <item quantity="one">%d available</item>
+        <item quantity="other">%d available</item>
+    </plurals>
+    <string name="relays_home">via %1$s</string>
+    <string name="relays_https">on 443: %1$s</string>
+    <string name="relays_https_none">none on 443</string>
+    <string name="label_names">Names</string>
+    <string name="names_resolved">%1$s, resolved</string>
+    <string name="names_not_resolved">%1$s, not resolved</string>
+    <string name="names_off">%1$s, off on this phone</string>
+    <string name="section_subnets">Subnets</string>
+    <string name="subnet_via">%1$s via %2$s</string>
+    <string name="subnet_in_use">In use</string>
+    <string name="subnet_not_in_use">Not in use</string>
+    <string name="section_changes">Latest changes</string>
+    <string name="section_diagnosis">Diagnosis</string>
+    <string name="label_vpn_established">VPN set up</string>
+    <plurals name="vpn_established">
+        <item quantity="one">once</item>
+        <item quantity="other">%d times</item>
+    </plurals>
+    <string name="label_lookups">Lookups</string>
+    <string name="lookups_value">%1$d asked, %2$d failed, %3$d slow</string>
+    <string name="lookup_ms">%1$d ms</string>
+    <string name="lookup_slow">slow</string>
+    <string name="diagnosis_about">The log adds how Android sees the phone\'s networks. It names your devices and their addresses. Share it only with someone you trust.</string>
+
+    <!-- Services -->
+    <string name="section_services">Services</string>
+    <string name="label_published">Published</string>
+    <string name="label_published_members">Published, members only</string>
+    <string name="label_tcp">TCP port</string>
+    <string name="label_tcp_members">TCP port, members only</string>
+    <string name="label_public_name">Public name</string>
+    <string name="label_subnet">Subnet</string>
+    <string name="label_build">juist</string>
+    <string name="build_value">schema %1$d</string>
+
+    <!-- Tile -->
+    <string name="tile_label">juist</string>
 </resources>

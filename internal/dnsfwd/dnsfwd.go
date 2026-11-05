@@ -92,6 +92,10 @@ type Options struct {
 	MaxTTL uint32
 	Capped func(query []byte) bool
 
+	// Observe, where set, hears of each query asked upstream: the answer's
+	// RCode, -1 where none came, why not, and how long it took.
+	Observe func(query []byte, rcode int, err error, took time.Duration)
+
 	// Local has the host alone ask, its resolver as one source for all its
 	// programs: no source is held to the limits on one.
 	Local bool
@@ -359,7 +363,15 @@ func (f *Forwarder) Port() uint16 {
 // REFUSED), else the last answer, or the last error, which FailFast answers
 // SERVFAIL.
 func (f *Forwarder) ask(network string, q []byte) ([]byte, error) {
+	start := time.Now()
 	resp, err := f.askUpstream(network, q)
+	if f.opts.Observe != nil {
+		rcode := -1
+		if err == nil && len(resp) >= 4 {
+			rcode = int(resp[3] & 0x0f)
+		}
+		f.opts.Observe(q, rcode, err, time.Since(start))
+	}
 	if err != nil && f.opts.FailFast {
 		return failure(q, RCodeServFail), nil
 	}

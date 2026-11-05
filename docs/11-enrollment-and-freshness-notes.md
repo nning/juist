@@ -226,6 +226,9 @@ group secret. Where vouchers are used:
 
 - they are hosts that are always on and fail apart: two of three at M = 2, not
   two machines in one cloud account;
+- a network of phones alone takes none: they rest, so a voucher there would
+  check nothing at M = 1 and cost availability, and freshness stays unchecked
+  ([05-roadmap.md](05-roadmap.md), M28);
 - a relay is not the one voucher at M = 1, since it can withhold the removal
   and vouch for the old head alone;
 - `juist create --voucher`, `juist grant` and `juist admins vouchers` warn of

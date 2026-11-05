@@ -100,8 +100,9 @@ password.
 - HTTPS-only mode does not hide juist from a censor that probes servers or
   fingerprints TLS. Probing the relay's name reveals a relay, and the TLS
   handshake is that of a Go program, not a browser.
-- The Android app has no setting for HTTPS-only mode. It does switch to a
-  relay's name on 443 by itself where UDP and the relay's port are blocked.
+- The Android app turns HTTPS-only mode on under **Details**, **HTTPS only**,
+  without a proxy. Without it, it still switches to a relay's name on 443 by
+  itself where UDP and the relay's port are blocked.
 
 ## Troubleshooting
 

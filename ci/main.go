@@ -53,7 +53,7 @@ sudo usermod -aG kvm ci
 const (
 	stageVM    = "vm"    // what only the VM shows: the host-network probes and the privileged tests
 	stageCheck = "check" // make check's steps
-	stageLab   = "lab"   // make interop
+	stageLab   = "lab"   // make interop, and make android-smoke where this host can
 	stageBuild = "build" // the cross builds, govulncheck and the packages
 )
 
@@ -151,9 +151,11 @@ type runner struct {
 	logDir  string
 	name    string // the run's log's, without .log
 	out     io.Writer
-	checkVM bool  // make check runs in the VM, not taken from the stamp
-	vmCPUs  []int // the host's CPUs the VM runs on beside the lab, none for any
-	labCPUs []int // and the lab
+	checkVM bool // make check runs in the VM, not taken from the stamp
+	// noAndroid is why the lab ran no Android smoke test, "" where it did.
+	noAndroid string
+	vmCPUs    []int // the host's CPUs the VM runs on beside the lab, none for any
+	labCPUs   []int // and the lab
 
 	mu    sync.Mutex
 	times []string
@@ -253,8 +255,11 @@ func (r *runner) what() string {
 	if len(r.o.targets) > 0 {
 		return "make " + strings.Join(r.o.targets, " ")
 	}
-	if slices.Equal(r.o.stages, stageOrder) && r.checkVM {
+	if slices.Equal(r.o.stages, stageOrder) && r.checkVM && r.noAndroid == "" {
 		return "every stage"
+	}
+	if slices.Equal(r.o.stages, stageOrder) && r.checkVM {
+		return "every stage but the Android smoke test, " + r.noAndroid + " (not a closing run)"
 	}
 	s := "stages " + strings.Join(r.o.stages, " ")
 	if slices.Contains(r.o.stages, stageCheck) && !r.checkVM {
@@ -328,6 +333,13 @@ func (r *runner) run(parent context.Context) error {
 				labErr = r.timed("lab: make interop-run", func() error {
 					return r.local(ctx, "interop-run", "lab", "INTEROP_FLAGS=-failfast")
 				})
+			}
+			if labErr == nil {
+				if r.noAndroid = androidMissing(); r.noAndroid != "" {
+					r.say("lab: no Android smoke test: %s", r.noAndroid)
+				} else {
+					labErr = r.timed("lab: make android-smoke", func() error { return r.local(ctx, "android-smoke", "android") })
+				}
 			}
 			// The lab's CPUs then take the builds that need no Fedora.
 			for _, t := range r.hereAfterLab() {
@@ -986,6 +998,27 @@ func pipe(src, dst *exec.Cmd) error {
 }
 
 func qemuImg() string { return envOr("QEMU_IMG", "qemu-img") }
+
+// androidMissing is why make android-smoke cannot run here: no Android SDK
+// with an emulator, or no AVD juist; "" where it can.
+func androidMissing() string {
+	sdk := os.Getenv("ANDROID_HOME")
+	if sdk == "" {
+		return "ANDROID_HOME is not set"
+	}
+	if _, err := os.Stat(filepath.Join(sdk, "emulator", "emulator")); err != nil {
+		return "no emulator in " + sdk
+	}
+	avd := os.Getenv("ANDROID_AVD_HOME")
+	if avd == "" {
+		home, _ := os.UserHomeDir()
+		avd = filepath.Join(home, ".android", "avd")
+	}
+	if _, err := os.Stat(filepath.Join(avd, "juist.ini")); err != nil {
+		return "no AVD juist in " + avd
+	}
+	return ""
+}
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {

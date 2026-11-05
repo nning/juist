@@ -778,3 +778,35 @@ func TestAnAnswerTooLongForUDPIsTruncated(t *testing.T) {
 		t.Errorf("over TCP: %d answers, %v", len(m.Answers), err)
 	}
 }
+
+// Observe hears of each query asked upstream: what came back, or why nothing.
+func TestEachQueryAskedUpstreamIsObserved(t *testing.T) {
+	up := startUpstream(t, false)
+	type seen struct {
+		rcode int
+		err   error
+	}
+	got := make(chan seen, 4)
+	observe := func(o *Options) {
+		o.Observe = func(_ []byte, rcode int, err error, _ time.Duration) { got <- seen{rcode, err} }
+	}
+	at := startForwarderWith(t, up, observe)
+	if _, err := askUDP(t, at, query(1)); err != nil {
+		t.Fatal(err)
+	}
+	if s := <-got; s.rcode != 0 || s.err != nil {
+		t.Errorf("an answer observed as %+v", s)
+	}
+	refused := errors.New("network is unreachable")
+	at = startForwarderWith(t, up, func(o *Options) {
+		observe(o)
+		o.FailFast = true
+		o.Dial = func(context.Context, string, netip.AddrPort) (net.Conn, error) { return nil, refused }
+	})
+	if _, err := askUDP(t, at, query(2)); err != nil {
+		t.Fatal(err)
+	}
+	if s := <-got; s.rcode != -1 || !errors.Is(s.err, refused) {
+		t.Errorf("a query no resolver answered observed as %+v", s)
+	}
+}

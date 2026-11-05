@@ -85,16 +85,18 @@ func TestStagesArePickedInTheirOrder(t *testing.T) {
 // the VM.
 func TestOnlyAWholeRunCloses(t *testing.T) {
 	for _, c := range []struct {
-		o       options
-		checkVM bool
-		closing bool
+		o         options
+		checkVM   bool
+		noAndroid string
+		closing   bool
 	}{
-		{options{stages: stageOrder}, true, true},
-		{options{stages: stageOrder, fast: true}, false, false},
-		{options{stages: stageOrder[1:]}, true, false},
-		{options{stages: stageOrder, targets: []string{"ci"}}, true, false},
+		{options{stages: stageOrder}, true, "", true},
+		{options{stages: stageOrder}, true, "ANDROID_HOME is not set", false},
+		{options{stages: stageOrder, fast: true}, false, "", false},
+		{options{stages: stageOrder[1:]}, true, "", false},
+		{options{stages: stageOrder, targets: []string{"ci"}}, true, "", false},
 	} {
-		r := &runner{o: c.o, checkVM: c.checkVM}
+		r := &runner{o: c.o, checkVM: c.checkVM, noAndroid: c.noAndroid}
 		if got := r.what() == "every stage"; got != c.closing {
 			t.Errorf("%+v, make check in the VM %v: %q", c.o, c.checkVM, r.what())
 		}

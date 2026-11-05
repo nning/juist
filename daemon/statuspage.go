@@ -35,19 +35,33 @@ func (s *Service) StatusPage() (*ipc.StatusPage, error) {
 	if m == nil {
 		return p, nil
 	}
-	chain, err := m.Chain()
-	if err != nil {
+	var err error
+	p.Members, p.Shares, _ = m.pageMembers()
+	if p.Changes, p.Total, err = s.Changes(ipc.MaxPageChanges); err != nil {
 		return nil, err
 	}
-	var admins []types.AdminKey
-	p.Members, p.Shares, admins = m.pageMembers()
-	entries := changelog.Of(chain, admins)
-	p.Total = len(entries)
-	for i := len(entries) - 1; i >= 0 && len(p.Changes) < ipc.MaxPageChanges; i-- {
-		e := entries[i]
-		p.Changes = append(p.Changes, ipc.Change{Index: i, What: e.What, Signers: e.Signers, Hash: e.Hash})
-	}
 	return p, nil
+}
+
+// Changes are the log's newest changes, at most max, newest first, as juist
+// log lists them, and how many it holds; none while no mesh runs.
+func (s *Service) Changes(max int) ([]ipc.Change, int, error) {
+	m := s.Mesh()
+	if m == nil {
+		return nil, 0, nil
+	}
+	chain, err := m.Chain()
+	if err != nil {
+		return nil, 0, err
+	}
+	_, _, admins := m.pageMembers()
+	entries := changelog.Of(chain, admins)
+	var out []ipc.Change
+	for i := len(entries) - 1; i >= 0 && len(out) < max; i-- {
+		e := entries[i]
+		out = append(out, ipc.Change{Index: i, What: e.What, Signers: e.Signers, Hash: e.Hash})
+	}
+	return out, len(entries), nil
 }
 
 // pageMembers is, for a status page, the overlay addresses of every member

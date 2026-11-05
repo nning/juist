@@ -77,7 +77,7 @@ func main() {
 	apk := flag.String("apk", "android/app/build/outputs/apk/debug/app-x86_64-debug.apk", "the debug APK")
 	bin := flag.String("bin", "build/idle/bin", "where juist and juistd are built")
 	minutes := flag.Int("minutes", 35, "how long to capture, at least the longest saving interval")
-	scenarios := flag.String("scenarios", "no relay,relay", "the scenarios to run, comma-separated")
+	scenarios := flag.String("scenarios", "no relay,relay", "the scenarios to run, comma-separated; smoke checks the paths alone")
 	keep := flag.Bool("keep", false, "leave the emulator running")
 	flag.IntVar(&members, "members", members, "how many members beside the phone")
 	flag.DurationVar(&churn, "churn", churn, "how often a member restarts while the phone idles, zero never")
@@ -95,7 +95,7 @@ func run(ctx context.Context, apk, bin string, length time.Duration, scenarios [
 		return err
 	}
 	for _, s := range scenarios {
-		if _, ok := budget[s]; !ok {
+		if _, ok := budget[s]; !ok && s != smokeScenario {
 			return fmt.Errorf("no scenario %q", s)
 		}
 	}
@@ -109,6 +109,13 @@ func run(ctx context.Context, apk, bin string, length time.Duration, scenarios [
 	defer stop()
 	var failed []string
 	for _, s := range scenarios {
+		if s == smokeScenario {
+			if err := smoke(apk, bin, filepath.Join(out, s)); err != nil {
+				return fmt.Errorf("%s: %w", s, err)
+			}
+			fmt.Println("idle: smoke: the phone joined, resolved, reached and was reached")
+			continue
+		}
 		r, err := scenario(ctx, s, apk, bin, filepath.Join(out, strings.ReplaceAll(s, " ", "-")), length)
 		if err != nil {
 			return fmt.Errorf("%s: %w", s, err)
@@ -121,7 +128,9 @@ func run(ctx context.Context, apk, bin string, length time.Duration, scenarios [
 	if len(failed) > 0 {
 		return errors.New(strings.Join(failed, "; "))
 	}
-	fmt.Println("idle: within budget")
+	if slices.ContainsFunc(scenarios, func(s string) bool { return s != smokeScenario }) {
+		fmt.Println("idle: within budget")
+	}
 	return nil
 }
 
@@ -540,6 +549,88 @@ func scenario(ctx context.Context, name, apk, bin, dir string, length time.Durat
 		return r, errors.New("the phone, screen off, did not answer a member's ping")
 	}
 	return r, nil
+}
+
+// smokeScenario joins the phone and checks the paths through the tunnel,
+// measuring nothing: Android's part of the interop matrix.
+const smokeScenario = "smoke"
+
+// smoke joins the phone beside two members by a link, and checks that it
+// resolves a member's name, reaches it by ping, and is reached by its ping.
+func smoke(apk, bin, dir string) (err error) {
+	os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	var ms []*member
+	defer func() {
+		for _, m := range ms {
+			m.stop()
+		}
+	}()
+	for i, name := range []string{"a", "b"} {
+		m, err := startMember(bin, dir, name, 41843+10*i)
+		if err != nil {
+			return err
+		}
+		ms = append(ms, m)
+	}
+	a, b := ms[0], ms[1]
+	if err := a.juist(bin, "create", "smoke", "--device", "a"); err != nil {
+		return err
+	}
+	if err := invite(bin, a, "b", func(link string) error { return b.juist(bin, "join", link, "--name", "b") }); err != nil {
+		return err
+	}
+	if err := a.juist(bin, "grant", "a", "relay"); err != nil {
+		return err
+	}
+	if _, err := adb("root"); err != nil {
+		return err
+	}
+	waitFor(time.Minute, "adb as root", func() bool { _, err := shell("true"); return err == nil })
+	shell("input keyevent 224; wm dismiss-keyguard")
+	adb("uninstall", app)
+	if _, err := adb("install", "-r", "-g", apk); err != nil {
+		return err
+	}
+	defer shell("am force-stop " + app + "; rm -f /sdcard/ui.xml")
+	if _, err := shell("appops set " + app + " ACTIVATE_VPN allow"); err != nil {
+		return err
+	}
+	if err := invite(bin, a, "phone", joinPhone); err != nil {
+		return err
+	}
+	phone, err := waitLive(a, b, "phone")
+	if err != nil {
+		return err
+	}
+	st, err := a.status()
+	if err != nil {
+		return err
+	}
+	var v4 string
+	for _, d := range st.Devices {
+		if d.Name == "a" {
+			v4 = d.V4
+		}
+	}
+	if v4 == "" || st.Names == nil || st.Names.Domain == "" {
+		return fmt.Errorf("a has no address or the network no domain: %q, %+v", v4, st.Names)
+	}
+	for _, to := range []string{v4, "a." + st.Names.Domain} {
+		var out string
+		if err := waitFor(time.Minute, "the phone's ping of "+to, func() bool {
+			out, err = shell("ping -c1 -W5 " + to)
+			return err == nil && strings.Contains(out, " 0% packet loss")
+		}); err != nil {
+			return fmt.Errorf("%w: %s", err, out)
+		}
+	}
+	return waitFor(time.Minute, "a's ping of the phone", func() bool {
+		resp, err := ipc.Call(a.sock(), ipc.Request{Command: ipc.CmdPing, Ping: phone})
+		return err == nil && resp.Ping != nil && resp.Ping.Micros > 0
+	})
 }
 
 // idleFor waits out length, restarting one of ms but the first two, which
