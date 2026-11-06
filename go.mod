@@ -5,8 +5,8 @@ go 1.27.3
 require (
 	filippo.io/edwards25519 v1.2.0
 	github.com/anacrolix/dht/v2 v2.24.0
-	github.com/anacrolix/log v0.17.0
-	github.com/anacrolix/torrent v1.48.1-0.20230103142631-c20f73d53e9f
+	github.com/anacrolix/log v0.17.1-0.20251118025802-918f1157b7bb
+	github.com/anacrolix/torrent v1.61.1-0.20260911233437-76452a2c8a2f
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/nftables v0.3.0
@@ -30,14 +30,14 @@ require (
 require (
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
-	github.com/anacrolix/chansync v0.3.0 // indirect
-	github.com/anacrolix/generics v0.0.0-20230816105729-c755655aee45 // indirect
+	github.com/anacrolix/chansync v0.8.0 // indirect
+	github.com/anacrolix/generics v0.2.0 // indirect
 	github.com/anacrolix/missinggo v1.3.0 // indirect
 	github.com/anacrolix/missinggo/perf v1.0.0 // indirect
-	github.com/anacrolix/missinggo/v2 v2.7.1 // indirect
+	github.com/anacrolix/missinggo/v2 v2.11.0 // indirect
 	github.com/anacrolix/multiless v0.4.0 // indirect
-	github.com/anacrolix/stm v0.4.1-0.20221221005312-96d17df0e496 // indirect
-	github.com/anacrolix/sync v0.5.0 // indirect
+	github.com/anacrolix/stm v0.5.0 // indirect
+	github.com/anacrolix/sync v0.5.5-0.20251119100342-d78dd1f686f1 // indirect
 	github.com/axiomhq/hyperloglog v0.2.6 // indirect
 	github.com/benbjohnson/immutable v0.4.3 // indirect
 	github.com/bradfitz/iter v0.0.0-20191230175014-e8f45d346db8 // indirect
@@ -57,10 +57,16 @@ require (
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect
 	github.com/kamstrup/intmap v0.5.2 // indirect
+	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/mdlayher/socket v0.7.0 // indirect
+	github.com/minio/sha256-simd v1.0.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
+	github.com/mr-tron/base58 v1.2.0 // indirect
+	github.com/multiformats/go-multihash v0.2.3 // indirect
+	github.com/multiformats/go-varint v0.0.6 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417 // indirect
+	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -72,6 +78,7 @@ require (
 	golang.org/x/tools v0.50.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect
+	lukechampine.com/blake3 v1.1.6 // indirect
 )
 
 tool (
