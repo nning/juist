@@ -41,6 +41,8 @@ func TestTheServerServesFilesAlone(t *testing.T) {
 		{"GET", "/de/nichts", 404, "weg", ""},
 		{"GET", "/../etc/passwd", 404, "gone", ""},
 		{"POST", "/", 405, "", ""},
+		{"GET", "/install", 302, "", installScript},
+		{"HEAD", "/install/", 302, "", installScript},
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))

@@ -27,19 +27,19 @@ release's package instead ([From a release](#from-a-release)).
 On Debian, Ubuntu and Fedora:
 
 ```sh
-curl -fsSL https://pkg.juist.nning.io/install.sh | sh
+curl -fsSL https://juist.nning.io/install | sh
 ```
 
 On FreeBSD 15, as root:
 
 ```sh
-fetch -o - https://pkg.juist.nning.io/install.sh | sh
+fetch -o - https://juist.nning.io/install | sh
 ```
 
 The script adds the repository and its key to apt, dnf or pkg, installs
 juist, and on FreeBSD starts the daemon; where it is not root, it takes sudo.
-To read it first, download it and run `sh install.sh`. By hand, the steps
-are these:
+To read it first, download it to `install.sh` and run `sh install.sh`. By
+hand, the steps are these:
 
 {{< step on="a Debian or Ubuntu device" >}}
 Add the repository and its key, then install juist:

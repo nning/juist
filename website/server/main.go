@@ -27,6 +27,10 @@ import (
 // script or style.
 const csp = "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
+// installScript is where /install sends curl and fetch: the script of the
+// latest release.
+const installScript = "https://pkg.juist.nning.io/install.sh"
+
 // defaultIdle is how long a quiet keep-alive connection stays open. Each one
 // holds one of the ingress's slots, which a crowd of visitors would exhaust.
 const defaultIdle = 10 * time.Second
@@ -64,8 +68,8 @@ func newServer(site fs.FS, addr string, idle time.Duration, noindex bool, logTo 
 
 // handler serves site's files, text in the smallest coding the client takes,
 // Brotli, zstd or gzip. A
-// directory is served as its index.html, and a name that is no file gets a
-// 404 page.
+// directory is served as its index.html, /install redirects to the install
+// script, and a name that is no file gets a 404 page.
 func handler(site fs.FS) http.Handler {
 	files := http.FileServerFS(site)
 	enc := &encodedCache{site: site}
@@ -85,6 +89,10 @@ func handler(site fs.FS) http.Handler {
 		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		if name == "" {
 			name = "."
+		}
+		if name == "install" {
+			http.Redirect(w, r, installScript, http.StatusFound)
+			return
 		}
 		st, err := fs.Stat(site, name)
 		if err == nil && st.IsDir() {

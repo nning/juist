@@ -37,7 +37,7 @@ which then updates juist with the system (on FreeBSD, as root, with
 `fetch -o -` for `curl -fsSL`):
 
 ```sh
-curl -fsSL https://pkg.juist.nning.io/install.sh | sh
+curl -fsSL https://juist.nning.io/install | sh
 ```
 
 Each step by hand is in

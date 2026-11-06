@@ -2,7 +2,7 @@
 # Installs juist from its package repository: adds the repository and its key
 # to apt (Debian, Ubuntu), dnf (Fedora) or pkg (FreeBSD), installs juist, and
 # on FreeBSD starts it. As root, or with sudo or doas at hand:
-#   curl -fsSL https://pkg.juist.nning.io/install.sh | sh
+#   curl -fsSL https://juist.nning.io/install | sh
 # JUIST_REPO names another repository than juist's.
 set -eu
 repo=${JUIST_REPO:-https://pkg.juist.nning.io/juist}

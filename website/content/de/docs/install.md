@@ -29,19 +29,19 @@ nimmst du stattdessen das Paket des Releases
 Unter Debian, Ubuntu und Fedora:
 
 ```sh
-curl -fsSL https://pkg.juist.nning.io/install.sh | sh
+curl -fsSL https://juist.nning.io/install | sh
 ```
 
 Unter FreeBSD 15, als root:
 
 ```sh
-fetch -o - https://pkg.juist.nning.io/install.sh | sh
+fetch -o - https://juist.nning.io/install | sh
 ```
 
 Das Skript trägt die Paketquelle und ihren Schlüssel bei apt, dnf oder pkg
 ein, installiert juist und startet unter FreeBSD den Daemon; wo es nicht root
-ist, nimmt es sudo. Um es vorher zu lesen, lade es herunter und starte es mit
-`sh install.sh`. Von Hand sind es diese Schritte:
+ist, nimmt es sudo. Um es vorher zu lesen, lade es als `install.sh` herunter
+und starte es mit `sh install.sh`. Von Hand sind es diese Schritte:
 
 {{< step on="einem Gerät mit Debian oder Ubuntu" >}}
 Trage die Paketquelle und ihren Schlüssel ein und installiere dann juist:
