@@ -3,13 +3,11 @@ package conn
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"net/netip"
 	"os"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/types/logger"
@@ -46,27 +44,16 @@ func (c VPNConfig) equal(o VPNConfig) bool {
 // errOnVPN refuses what a VPN app may not do to its host.
 var errOnVPN = errors.New("conn: a VPN device serves nothing")
 
-// NewVPNPlumber is the [Plumber] for v. It serves nothing, and sends the
-// host's traffic outside the overlay into the tunnel only where an exit node
-// is chosen, with the host's DNS then. Where cover names the network's
-// prefixes, they are routed whole, rather than one route per member:
-// establishing again replaces the device, and with it every connection
-// through it, as Android does, so it is kept to changes of the device's own
-// addresses and of the exit node's use.
-func NewVPNPlumber(v VPN, cover func() []netip.Prefix) Plumber {
-	return &vpnPlumber{v: v, cover: cover}
-}
-
-// VPNDial is a TCP dial into the overlay for p, a [NewVPNPlumber]'s, as
+// VPNDial is a TCP dial into the overlay for p, a [VPNHub.Plumber]'s, as
 // [VPNDialer]'s.
 func VPNDial(p Plumber) func(context.Context, netip.AddrPort) (net.Conn, error) {
 	dial := VPNDialer(p)
 	return func(ctx context.Context, to netip.AddrPort) (net.Conn, error) { return dial(ctx, "tcp", to) }
 }
 
-// VPNDialer dials into the overlay for p, a [NewVPNPlumber]'s, over network,
-// tcp or udp: from the device's own address of the far end's family, so that
-// it leaves by the device alone, and failing while no device is established.
+// VPNDialer dials into the overlay for p, a [VPNHub.Plumber]'s, over network,
+// tcp or udp: from the network's own address of the far end's family, so
+// that it leaves by the device alone, and failing while no device carries it.
 func VPNDialer(p Plumber) func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error) {
 	vp, _ := p.(*vpnPlumber)
 	return func(ctx context.Context, network string, to netip.AddrPort) (net.Conn, error) {
@@ -85,31 +72,22 @@ func VPNDialer(p Plumber) func(ctx context.Context, network string, to netip.Add
 
 var errNoVPNDevice = errors.New("conn: no VPN device is established to dial through")
 
+// A vpnPlumber is one network's on a hub, in its slot.
 type vpnPlumber struct {
-	v     VPN
+	hub   *VPNHub
+	slot  int
 	cover func() []netip.Prefix
-
-	mu  sync.Mutex
-	rtr *vpnRouter // the router of the device the last mesh made, nil before
-
-	// host is what the network beneath the VPN routes but by its default
-	// routes, and hostChanged hears of each change.
-	host        []netip.Prefix
-	hostChanged func()
-
-	established     int
-	lastEstablished time.Time
 }
 
 // VPNCoverChanged establishes p's device again where the network's prefixes
 // its cover names are no longer those it was established with, as after a
-// join, before which the cover named none. p is a [NewVPNPlumber]'s.
+// join, before which the cover named none. p is a [VPNHub.Plumber]'s.
 func VPNCoverChanged(p Plumber) error {
 	vp, ok := p.(*vpnPlumber)
 	if !ok {
 		return nil
 	}
-	r := vp.router()
+	r := vp.hub.router(vp.slot)
 	if r == nil {
 		return nil
 	}
@@ -118,59 +96,10 @@ func VPNCoverChanged(p Plumber) error {
 	return r.establishLocked()
 }
 
-// SetVPNHostRoutes has p take routes as what the network beneath the VPN
-// reaches but by its default routes, which no subnet route then takes into
-// the tunnel. p is a [NewVPNPlumber]'s.
-func SetVPNHostRoutes(p Plumber, routes []netip.Prefix) {
-	vp, ok := p.(*vpnPlumber)
-	if !ok {
-		return
-	}
-	routes = sortedPrefixes(routes)
-	vp.mu.Lock()
-	same := slices.Equal(vp.host, routes)
-	vp.host = routes
-	changed := vp.hostChanged
-	vp.mu.Unlock()
-	if !same && changed != nil {
-		changed()
-	}
-}
-
-// VPNEstablished is how often p established a device, and when last.
-func VPNEstablished(p Plumber) (int, time.Time) {
-	vp, ok := p.(*vpnPlumber)
-	if !ok {
-		return 0, time.Time{}
-	}
-	vp.mu.Lock()
-	defer vp.mu.Unlock()
-	return vp.established, vp.lastEstablished
-}
-
-func (p *vpnPlumber) router() *vpnRouter {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.rtr
-}
-
-// source is the device's address of to's family, as last established.
+// source is the network's own address of to's family, where the device
+// last established carries it.
 func (p *vpnPlumber) source(to netip.Addr) (netip.Addr, bool) {
-	r := p.router()
-	if r == nil {
-		return netip.Addr{}, false
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.everEstablished {
-		return netip.Addr{}, false
-	}
-	for _, a := range r.established.Addrs {
-		if a.Addr().Is4() == to.Unmap().Is4() {
-			return a.Addr(), true
-		}
-	}
-	return netip.Addr{}, false
+	return p.hub.source(p.slot, to.Unmap().Is4())
 }
 
 func (p *vpnPlumber) OpenTUN(string, int) (*os.File, error) {
@@ -199,7 +128,7 @@ func (p *vpnPlumber) SetEgress(string, plumber.EgressSpec) error { return nil }
 // SetDNS has the device take the host's lookups to servers, searching
 // search, or none.
 func (p *vpnPlumber) SetDNS(_ string, servers []netip.Addr, search []string) error {
-	r := p.router()
+	r := p.hub.router(p.slot)
 	if r == nil {
 		if len(servers) > 0 {
 			return errors.New("conn: no VPN device is up to take the host's DNS")
@@ -211,142 +140,83 @@ func (p *vpnPlumber) SetDNS(_ string, servers []netip.Addr, search []string) err
 
 func (p *vpnPlumber) Answers(string) (string, error) { return "", nil }
 
-func (p *vpnPlumber) Destroy(string) error {
-	if r := p.router(); r != nil {
-		return r.dev.Close()
-	}
-	return nil
-}
+func (p *vpnPlumber) Destroy(string) error { return nil }
 
-// newVPNPlumbed is the device p establishes, without a descriptor until its
-// router is first given addresses, and that router.
+// newVPNPlumbed is the device of p's network on its hub and its router,
+// which establish the hub's device once given addresses.
 func newVPNPlumbed(p *vpnPlumber, name string, mtu int, logf logger.Logf) (tun.Device, router.Router) {
-	d := &vpnTUN{name: name, mtu: mtu, events: make(chan tun.Event, 1), swapped: make(chan struct{})}
+	d := &vpnTUN{name: name, mtu: mtu, hub: p.hub, slot: p.slot, events: make(chan tun.Event, 1),
+		in: make(chan *[]byte, vpnQueue), done: make(chan struct{})}
 	d.events <- tun.EventUp
-	r := &vpnRouter{v: p.v, p: p, cover: p.cover, dev: d, logf: logger.WithPrefix(logf, "router: ")}
-	p.mu.Lock()
-	p.rtr = r
-	p.mu.Unlock()
+	r := &vpnRouter{p: p, cover: p.cover, mtu: mtu, logf: logger.WithPrefix(logf, "router: ")}
+	p.hub.attach(p.slot, d, r)
 	return d, r
 }
 
-// A vpnTUN is the device on whichever descriptor was established last. Read
-// waits for the first, and moves to each new one.
+// vpnQueue is how many packets wait for a network's engine before more are
+// dropped, as a full NIC queue drops them.
+const vpnQueue = 256
+
+// A vpnTUN is one network's device on a hub: it reads what the hub sends its
+// way, and writes through the hub.
 type vpnTUN struct {
 	name   string
 	mtu    int
+	hub    *VPNHub
+	slot   int
 	events chan tun.Event
-
-	mu      sync.Mutex
-	f       *os.File
-	swapped chan struct{} // closed and replaced whenever f changes
-	closed  bool
-	once    sync.Once
+	in     chan *[]byte
+	done   chan struct{}
+	once   sync.Once
 }
 
-// swap makes f the device's descriptor and closes the one it replaces, which
-// ends a Read waiting on it.
-func (d *vpnTUN) swap(f *os.File) error {
-	d.mu.Lock()
-	if d.closed {
-		d.mu.Unlock()
-		f.Close()
-		return os.ErrClosed
-	}
-	old := d.f
-	d.f = f
-	close(d.swapped)
-	d.swapped = make(chan struct{})
-	d.mu.Unlock()
-	if old != nil {
-		old.Close()
-	}
-	return nil
-}
-
-// current is the descriptor, waiting for the first.
-func (d *vpnTUN) current() (*os.File, error) {
-	for {
-		d.mu.Lock()
-		f, closed, swapped := d.f, d.closed, d.swapped
-		d.mu.Unlock()
-		if closed {
-			return nil, os.ErrClosed
-		}
-		if f != nil {
-			return f, nil
-		}
-		<-swapped
-	}
-}
-
-func (d *vpnTUN) File() *os.File {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.f
-}
-
+func (d *vpnTUN) File() *os.File           { return d.hub.file() }
 func (d *vpnTUN) MTU() (int, error)        { return d.mtu, nil }
 func (d *vpnTUN) Name() (string, error)    { return d.name, nil }
 func (d *vpnTUN) Events() <-chan tun.Event { return d.events }
 func (d *vpnTUN) BatchSize() int           { return 1 }
 
+// deliver queues b, from the packet pool, for the engine, dropping it where
+// the queue is full or the device closed.
+func (d *vpnTUN) deliver(b *[]byte) {
+	select {
+	case <-d.done:
+		putPacket(b)
+		return
+	default:
+	}
+	select {
+	case d.in <- b:
+	default:
+		putPacket(b)
+	}
+}
+
 func (d *vpnTUN) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
-	for {
-		f, err := d.current()
-		if err != nil {
-			return 0, err
-		}
-		n, err := f.Read(slab[tun.ReadPacketSpacing : len(slab)-tun.ReadPacketSpacing])
-		if err != nil {
-			if d.File() != f {
-				continue // established again
-			}
-			return 0, err
-		}
-		if n == 0 {
-			continue
-		}
+	select {
+	case b := <-d.in:
+		n := copy(slab[tun.ReadPacketSpacing:len(slab)-tun.ReadPacketSpacing], *b)
+		putPacket(b)
 		packets[0] = tun.ReadPacket{Offset: tun.ReadPacketSpacing, Size: n}
 		return 1, nil
+	case <-d.done:
+		return 0, os.ErrClosed
 	}
 }
 
-// Write drops what comes before the first descriptor, as a device that is
-// down would.
-func (d *vpnTUN) Write(bufs [][]byte, offset int) (int, error) {
-	f := d.File()
-	if f == nil {
-		return len(bufs), nil
-	}
-	for i, buf := range bufs {
-		if len(buf) <= offset {
-			return i, io.ErrShortBuffer
-		}
-		if _, err := f.Write(buf[offset:]); err != nil {
-			if d.File() != f {
-				return len(bufs), nil // established again; these are lost as on any change
-			}
-			return i, err
-		}
-	}
-	return len(bufs), nil
-}
+// Write drops what comes before the hub's first descriptor, as a device
+// that is down would.
+func (d *vpnTUN) Write(bufs [][]byte, offset int) (int, error) { return d.hub.write(d, bufs, offset) }
 
+// Close detaches the device from the hub, whose own device stays up for
+// the other networks and for this one's next mesh.
 func (d *vpnTUN) Close() error {
-	var err error
 	d.once.Do(func() {
-		d.mu.Lock()
-		f := d.f
-		d.f, d.closed = nil, true
-		close(d.swapped)
-		d.mu.Unlock()
+		close(d.done)
 		close(d.events)
-		if f != nil {
-			err = f.Close()
-		}
+		d.hub.detach(d)
 	})
-	return err
+	return nil
 }
 
 // What the manager finds a VPN's router can by a type assertion, held at
@@ -356,23 +226,21 @@ var (
 	_ hostRouter = (*vpnRouter)(nil)
 )
 
-// A vpnRouter establishes the device again whenever what it routes changes:
-// the device's addresses, the overlay's routes, the internet while an exit
-// node is chosen, and the host's DNS.
+// A vpnRouter has the hub establish its device again whenever what its
+// network routes changes: the network's addresses, the overlay's routes, the
+// internet while an exit node is chosen, and the host's DNS.
 type vpnRouter struct {
-	v     VPN
 	p     *vpnPlumber
 	cover func() []netip.Prefix
-	dev   *vpnTUN
+	mtu   int
 	logf  logger.Logf
 
-	mu              sync.Mutex
-	addrs, overlay  []netip.Prefix // as the engine last set them
-	internet        bool           // routed into the tunnel, for an exit node
-	dns             []netip.Addr
-	search          []string
-	established     VPNConfig // as last established
-	everEstablished bool
+	mu             sync.Mutex
+	own            []netip.Addr   // the addresses as the engine last gave them, in its order
+	addrs, overlay []netip.Prefix // as the engine last set them
+	internet       bool           // routed into the tunnel, for an exit node
+	dns            []netip.Addr
+	search         []string
 }
 
 func (r *vpnRouter) Up() error { return nil }
@@ -385,6 +253,10 @@ func (r *vpnRouter) Set(cfg *router.Config) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.own = r.own[:0]
+	for _, a := range cfg.LocalAddrs {
+		r.own = append(r.own, a.Addr().Unmap())
+	}
 	r.addrs, r.overlay = sortedPrefixes(cfg.LocalAddrs), slices.Clone(cfg.Routes)
 	return r.establishLocked()
 }
@@ -419,21 +291,14 @@ func (r *vpnRouter) setServe(s Serve) error {
 
 func (r *vpnRouter) lans() ([]netip.Prefix, []netip.Addr) { return nil, nil }
 
-func (r *vpnRouter) hostRoutes() []netip.Prefix {
-	r.p.mu.Lock()
-	defer r.p.mu.Unlock()
-	return slices.Clone(r.p.host)
-}
+func (r *vpnRouter) hostRoutes() []netip.Prefix { return r.p.hub.hostRoutes() }
 
-func (r *vpnRouter) watchHostRoutes(changed func()) {
-	r.p.mu.Lock()
-	defer r.p.mu.Unlock()
-	r.p.hostChanged = changed
-}
+func (r *vpnRouter) watchHostRoutes(changed func()) { r.p.hub.watchHostRoutes(r.p.slot, changed) }
 
 func (r *vpnRouter) answersThrough() string { return "" }
 
-// establishLocked establishes the device again where its config changed.
+// establishLocked hands the hub what the network routes, which establishes
+// its device again where that changed it.
 func (r *vpnRouter) establishLocked() error {
 	if len(r.addrs) == 0 {
 		return nil
@@ -448,34 +313,15 @@ func (r *vpnRouter) establishLocked() error {
 		return p.IsSingleIP() && slices.ContainsFunc(r.addrs, func(a netip.Prefix) bool { return a.Addr() == p.Addr() }) ||
 			slices.ContainsFunc(cover, func(c netip.Prefix) bool { return c.Bits() <= p.Bits() && c.Contains(p.Addr()) })
 	}), cover...)
-	if r.internet {
-		routes = append(routes, Internet(true, true, append(slices.Clone(cover), r.overlay...))...)
+	c, err := r.p.hub.set(r.p.slot, r, &vpnPart{
+		addrs: r.addrs, own: slices.Clone(r.own), routes: sortedPrefixes(routes),
+		overlay: append(slices.Clone(cover), r.overlay...), internet: r.internet,
+		dns: r.dns, search: r.search, mtu: r.mtu,
+	})
+	if c != nil {
+		r.logf("established: %d routes, DNS %v", len(c.Routes), c.DNS)
 	}
-	// The servers taking the host's lookups are in the tunnel, juistd's own
-	// resolver among them, which no member's route covers.
-	for _, a := range r.dns {
-		if !slices.ContainsFunc(routes, func(p netip.Prefix) bool { return p.Contains(a) }) {
-			routes = append(routes, netip.PrefixFrom(a, a.BitLen()))
-		}
-	}
-	c := VPNConfig{Addrs: r.addrs, Routes: sortedPrefixes(routes), DNS: r.dns, Search: r.search, MTU: r.dev.mtu}
-	if r.everEstablished && c.equal(r.established) {
-		return nil
-	}
-	f, err := r.v.Establish(c)
-	if err != nil {
-		return err
-	}
-	if err := r.dev.swap(f); err != nil {
-		return err
-	}
-	r.established, r.everEstablished = c, true
-	r.p.mu.Lock()
-	r.p.established++
-	r.p.lastEstablished = time.Now()
-	r.p.mu.Unlock()
-	r.logf("established: %d routes, DNS %v", len(c.Routes), c.DNS)
-	return nil
+	return err
 }
 
 func (r *vpnRouter) Close() error { return nil }

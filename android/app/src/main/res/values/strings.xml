@@ -104,7 +104,7 @@
     <string name="action_forget">Forget network</string>
     <string name="action_start_over">Start over</string>
     <string name="start_over_title">Start over?</string>
-    <string name="start_over_body">Deletes this phone’s keys and what it knows of the network. Joining again takes a new invite, and an admin should remove this phone.</string>
+    <string name="start_over_body">Deletes this phone’s keys and what it knows of its networks. Joining again takes a new invite, and an admin should remove this phone.</string>
     <string name="action_more">More</string>
 
     <string name="section_this_device">This phone</string>
@@ -325,4 +325,17 @@
 
     <!-- Tile -->
     <string name="tile_label">juist</string>
+    <!-- Several networks -->
+    <string name="section_networks">Networks</string>
+    <string name="action_join_another">Join another network</string>
+    <string name="another_title">Join another network</string>
+    <string name="another_body">This phone stays in the networks it is in, and joins one more beside them.</string>
+    <string name="networks_most">This phone is in %1$d networks, the most it joins.</string>
+    <string name="action_leave">Leave network</string>
+    <string name="leave_title">Leave %1$s?</string>
+    <string name="leave_body">Deletes this phone’s keys for the network and ends its tunnels there; the other networks stay as they are. The network lists this phone until an admin removes it.</string>
+    <string name="action_leave_confirm">Leave</string>
+    <string name="alarm_no_v4">No IPv4: %1$s holds this network’s addresses</string>
+    <string name="alarm_no_v4_hint">IPv6 carries this network meanwhile. Renumbering one of the two networks ends it.</string>
+    <string name="another_network">another network</string>
 </resources>

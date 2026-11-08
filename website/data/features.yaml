@@ -29,6 +29,7 @@
 - doc: docs/networks
   en: {title: Several networks, text: "One device in several networks, each with its own admin key."}
   de: {title: Mehrere Netze, text: "Ein Gerät in mehreren Netzen, jedes mit eigenem Admin-Schlüssel."}
+  note: {en: "One juistd each on Linux and FreeBSD, up to ten; in the Android app up to four, behind its one VPN.", de: "Unter Linux und FreeBSD je ein juistd, bis zu zehn; in der Android-App bis zu vier, hinter ihrem einen VPN."}
 - doc: docs/exit-nodes
   en: {title: Exit nodes, text: "A device's internet traffic and DNS, sent through another member."}
   de: {title: Exit-Nodes, text: "Internetverkehr und DNS eines Geräts über ein anderes Mitglied."}

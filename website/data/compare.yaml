@@ -195,8 +195,8 @@ groups:
         marks: ynnnyyyyyyy
         notes:
           juist:
-            en: Only one on Android.
-            de: Unter Android nur eines.
+            en: Up to four on Android.
+            de: Unter Android bis zu vier.
           zerotier:
             en: On phones, one at a time.
             de: Auf Handys nur eines zugleich.

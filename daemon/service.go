@@ -59,6 +59,8 @@ type Service struct {
 	closeOnce sync.Once
 	// moved is every mesh's [Options.Moved], which the watcher follows.
 	moved chan struct{}
+	// answering is the running mesh, for [Service.AnswerNames] without mu.
+	answering atomic.Pointer[Daemon]
 
 	// mu guards everything below. It is never held across network I/O — a
 	// join marks busy and runs unlocked — but it is held while the mesh
@@ -78,6 +80,11 @@ type Service struct {
 	// meshErr is why the mesh last failed to start over a log that lists
 	// this device; the watcher retries.
 	meshErr error
+
+	// meshGen counts the meshes started, so that a stopped one's lost data
+	// plane restarts nothing; lostAt is when a loss last restarted one.
+	meshGen uint64
+	lostAt  time.Time
 
 	// hostConflict is what a lower instance on the host held of this
 	// network's claims when the mesh last started, or nil; hostErr is the
@@ -150,7 +157,8 @@ type ServiceOptions struct {
 	ServeMembers map[string]bool
 
 	// Join, where set, is an invite this node joins by once started, unless
-	// it is in a network; Say receives how that goes.
+	// it is in a network; Say receives how that goes, and a data plane
+	// started anew after it failed.
 	Join string
 	Say  func(format string, args ...any)
 
@@ -746,6 +754,15 @@ func (s *Service) setExit(req *ipc.Request) error {
 // [ipc.Dialer] for [ServiceOptions.InProcess].
 func (s *Service) Pipe() (net.Conn, error) { return s.ipc.pipe() }
 
+// AnswerNames is the running mesh's [Daemon.AnswerNames], nil without one;
+// it takes no lock, so that a lookup never waits for the service.
+func (s *Service) AnswerNames(query []byte) []byte {
+	if d := s.answering.Load(); d != nil {
+		return d.AnswerNames(query)
+	}
+	return nil
+}
+
 // Mesh returns the running mesh, or nil.
 func (s *Service) Mesh() *Daemon {
 	s.mu.Lock()
@@ -821,7 +838,14 @@ func (s *Service) watchWait() time.Duration {
 	failed := s.mesh == nil && s.auth != nil && s.meshErr != nil && !errors.Is(s.meshErr, ErrNotMember)
 	lower := s.mesh != nil && s.opts.Mesh.Instance > 0 && s.opts.Mesh.HostHoldings != nil
 	s.mu.Unlock()
-	if failed || lower {
+	switch {
+	case failed:
+		return watchRetryEvery
+	case lower && s.opts.Mesh.Rests:
+		// A phone rechecks its other networks at its pace, which a screen
+		// turned on speeds up at once.
+		return s.opts.Mesh.Pace.every(watchRetryEvery, savingWatchEvery)
+	case lower:
 		return watchRetryEvery
 	}
 	return s.opts.Mesh.Pace.every(watchEvery, savingWatchEvery)
@@ -848,6 +872,9 @@ func (s *Service) startMeshLocked() error {
 	if err := s.meshOptionsLocked(&o); err != nil {
 		return err
 	}
+	s.meshGen++
+	gen := s.meshGen
+	o.OnLost = func(err error) { s.meshLost(gen, err) }
 	d, err := New(o)
 	if errors.Is(err, ErrNotMember) {
 		if s.meshErr == nil || !errors.Is(s.meshErr, ErrNotMember) {
@@ -875,6 +902,7 @@ func (s *Service) startMeshLocked() error {
 	}()
 	// The mesh owns the authority from here; the service asks it.
 	s.mesh, s.meshStop, s.meshDone, s.auth = d, cancel, done, nil
+	s.answering.Store(d)
 	s.meshStarted = true
 	return nil
 }
@@ -955,6 +983,7 @@ func (s *Service) stopMeshLocked() {
 	if s.mesh == nil {
 		return
 	}
+	s.answering.Store(nil)
 	s.meshStop()
 	s.mesh.Close()
 	<-s.meshDone
@@ -1090,6 +1119,31 @@ func (s *Service) followAddrs() {
 	}
 	s.logf("daemon: moving onto the log's overlay addresses: %v; restarting on them", err)
 	s.restartMeshLocked(nil, "an address change")
+}
+
+// lostPause is the least time between two restarts for a lost data plane,
+// which a device failing again at once would otherwise repeat in a loop.
+const lostPause = 10 * time.Second
+
+// meshLost starts the mesh anew when the data plane of mesh gen ended by
+// itself, which leaves it refusing every peer set.
+func (s *Service) meshLost(gen uint64, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.mesh == nil || gen != s.meshGen {
+		return
+	}
+	if wait := time.Until(s.lostAt.Add(lostPause)); wait > 0 {
+		time.AfterFunc(wait, func() { s.meshLost(gen, err) })
+		return
+	}
+	s.lostAt = time.Now()
+	if s.opts.Say != nil {
+		s.opts.Say("%v; starting it anew", err)
+	} else {
+		s.logf("daemon: %v; starting it anew", err)
+	}
+	s.restartMeshLocked(nil, "losing the data plane")
 }
 
 // restartMeshLocked stops the mesh, runs change, and starts it again over the

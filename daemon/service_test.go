@@ -1273,3 +1273,37 @@ func TestTheDisableRecordComesFirstOffTheChain(t *testing.T) {
 		t.Fatalf("the first record off the chain is not the disable record: %v", err)
 	}
 }
+
+// A data plane that closed itself is started anew, at most once a
+// lostPause; the loss of one already replaced restarts nothing.
+func TestServiceRestartsALostDataPlane(t *testing.T) {
+	var mu sync.Mutex
+	var lost []func(error)
+	started := func() int { mu.Lock(); defer mu.Unlock(); return len(lost) }
+	onLost := func(i int) func(error) { mu.Lock(); defer mu.Unlock(); return lost[i] }
+	f := newServiceFixtureWith(t, func(o *Options) {
+		o.Connect = func(co conn.Options) (conn.Manager, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			lost = append(lost, co.OnLost)
+			return &fakeManager{}, nil
+		}
+	})
+	waitFor(t, 5*time.Second, "the mesh to start", func() bool { return started() == 1 })
+	if onLost(0) == nil {
+		t.Fatal("the data plane was started with no OnLost")
+	}
+	first := f.s.Mesh()
+	onLost(0)(errors.New("conn: the data plane closed itself: its device closed"))
+	waitFor(t, 5*time.Second, "the mesh to start anew", func() bool { return started() == 2 })
+	if f.s.Mesh() == first {
+		t.Error("the lost mesh is still the running one")
+	}
+
+	onLost(0)(errors.New("again"))
+	onLost(1)(errors.New("at once"))
+	time.Sleep(200 * time.Millisecond)
+	if n := started(); n != 2 {
+		t.Errorf("%d meshes started, want 2: a stale loss or one within lostPause restarted", n)
+	}
+}

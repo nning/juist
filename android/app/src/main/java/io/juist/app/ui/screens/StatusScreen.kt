@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -62,6 +63,9 @@ import io.juist.app.R
 import io.juist.app.core.Alarm
 import io.juist.app.core.Connection
 import io.juist.app.core.lastView
+import io.juist.app.core.networks
+import io.juist.app.core.view
+import io.juist.app.core.worstState
 import io.juist.app.core.Member
 import io.juist.app.core.NetworkView
 import io.juist.app.core.OffReason
@@ -105,28 +109,51 @@ fun StatusScreen(
     onExit: (String?) -> Unit = {},
     onVpnSettings: () -> Unit = {},
     saving: Boolean = false,
+    slot: Int? = null,
+    onJoinAnother: (() -> Unit)? = null,
+    onLeave: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
 ) {
-    val view = connection.lastView
+    val view = if (slot != null) connection.view(slot) else connection.lastView
     val on = connection is Connection.On
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val copiedText = stringResource(R.string.copied)
     val copied: (String) -> Unit = { scope.launch { snackbar.showSnackbar(copiedText.format(it)) } }
     var menu by remember { mutableStateOf(false) }
+    var leaving by remember { mutableStateOf(false) }
+    val name = view?.network?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.app_name)
+    if (leaving && onLeave != null) {
+        AlertDialog(
+            onDismissRequest = { leaving = false },
+            title = { Text(stringResource(R.string.leave_title, name)) },
+            text = { Text(stringResource(R.string.leave_body)) },
+            confirmButton = {
+                TextButton({ leaving = false; onLeave() }) { Text(stringResource(R.string.action_leave_confirm)) }
+            },
+            dismissButton = { TextButton({ leaving = false }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        view?.network?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.app_name),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+                title = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    if (onBack != null) {
+                        IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) }
+                    }
                 },
                 actions = {
                     IconButton({ menu = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
                     DropdownMenu(menu, { menu = false }) {
                         DropdownMenuItem({ Text(stringResource(R.string.details_title)) }, { menu = false; onDetails() })
+                        if (onJoinAnother != null) {
+                            DropdownMenuItem({ Text(stringResource(R.string.action_join_another)) }, { menu = false; onJoinAnother() })
+                        }
+                        if (onLeave != null && view?.inNetwork == true && view.state.ended != true) {
+                            DropdownMenuItem({ Text(stringResource(R.string.action_leave)) }, { menu = false; leaving = true })
+                        }
                         DropdownMenuItem({ Text(stringResource(R.string.about_title)) }, { menu = false; onAbout() })
                     }
                 },
@@ -159,14 +186,19 @@ fun StatusScreen(
     }
 }
 
+/**
+ * The VPN's switch and how view's network fares, or with overall how the
+ * network faring worst does, for the list of networks.
+ */
 @Composable
-private fun Hero(
+internal fun Hero(
     connection: Connection,
     view: NetworkView?,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
     onStartOver: () -> Unit,
+    overall: Boolean = false,
 ) {
     var confirm by remember { mutableStateOf(false) }
     if (confirm) {
@@ -182,20 +214,22 @@ private fun Hero(
     }
     val on = connection is Connection.On
     val starting = connection is Connection.Starting
-    val state = (connection as? Connection.On)?.view?.state
+    val state = (connection as? Connection.On)?.let { (if (overall) it.worstState else view?.state) ?: it.view.state }
     val title: String
     val body: String?
     val color: Color
     when (connection) {
         is Connection.On -> {
-            title = stringResource(stateLabel(connection.view.state))
-            val about = stateExplanation(connection.view.state)?.let { stringResource(it) }
-            body = if (connection.view.state == State.Unstarted && connection.view.detail.isNotEmpty()) {
-                listOfNotNull(about, connection.view.detail).joinToString("\n")
+            val s = state ?: State.Unknown
+            title = stringResource(stateLabel(s))
+            val about = if (overall) null else stateExplanation(s)?.let { stringResource(it) }
+            val detail = view?.detail.orEmpty()
+            body = if (!overall && s == State.Unstarted && detail.isNotEmpty()) {
+                listOfNotNull(about, detail).joinToString("\n")
             } else {
                 about
             }
-            color = stateColor(connection.view.state)
+            color = stateColor(s)
         }
         is Connection.Starting -> {
             title = stringResource(R.string.state_starting)
@@ -237,7 +271,7 @@ private fun Hero(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (on && state?.ended == true) {
+        if (!overall && on && state?.ended == true) {
             Button(onForget, Modifier.fillMaxWidth().padding(start = Space.l, end = Space.l, bottom = Space.l)) {
                 Text(stringResource(R.string.action_forget))
             }
@@ -247,7 +281,7 @@ private fun Hero(
                 Text(stringResource(R.string.action_start_over))
             }
         }
-        if (connection is Connection.Off && view?.inNetwork == true) {
+        if (connection is Connection.Off && (if (overall) connection.networks.isNotEmpty() else view?.inNetwork == true)) {
             Button(onConnect, Modifier.fillMaxWidth().padding(start = Space.l, end = Space.l, bottom = Space.l)) {
                 Icon(painterResource(R.drawable.ic_power), null, Modifier.size(18.dp))
                 Spacer(Modifier.width(Space.s))
@@ -258,11 +292,11 @@ private fun Hero(
 }
 
 @Composable
-private fun AlarmCard(a: Alarm) =
+internal fun AlarmCard(a: Alarm) =
     NoteCard(a.severity, alarmTitle(a), alarmHint(a)?.let { stringResource(it) }, a.text)
 
 @Composable
-private fun NoteCard(severity: Severity, title: String, hint: String?, text: String = "") {
+internal fun NoteCard(severity: Severity, title: String, hint: String?, text: String = "") {
     val (container, content) = when (severity) {
         Severity.Alarm -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
         Severity.Warn -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer

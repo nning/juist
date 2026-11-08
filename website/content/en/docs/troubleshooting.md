@@ -247,6 +247,14 @@ cannot replace the device's log. If the join says the chain does not continue
 this log, nothing it missed moved the group secret, so it cannot tell the
 invite's log is newer: run `juist reset`, then join.
 
+### `juistd: conn: the data plane closed itself: …; starting it anew`
+
+A line in juistd's log: the tunnel device under juistd failed, most often
+after the host stalled, for instance when its memory ran out. juistd starts
+the tunnel anew by itself, at most once every 10 seconds; until then
+`juist health` may warn `data plane refused the device set`. Should the
+line come again and again, find what stalls the host.
+
 ### `removed`
 
 This device is no longer in the network. To use it again, join with a new

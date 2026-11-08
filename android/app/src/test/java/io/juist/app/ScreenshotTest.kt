@@ -17,6 +17,7 @@ import io.juist.app.ui.screens.ConfirmScreen
 import io.juist.app.ui.screens.DetailsScreen
 import io.juist.app.ui.screens.JoiningScreen
 import io.juist.app.ui.screens.MemberScreen
+import io.juist.app.ui.screens.NetworksScreen
 import io.juist.app.ui.screens.PingResult
 import io.juist.app.ui.screens.ScanScreen
 import io.juist.app.ui.screens.StatusScreen
@@ -52,6 +53,12 @@ abstract class Screens(private val variant: String) {
     private val none = {}
 
     @Test fun welcome() = shot("welcome") { WelcomeScreen(none, none, none) }
+
+    @Test fun joinAnother() = shot("welcome_another") { WelcomeScreen(none, none, none, onBack = none) }
+
+    @Test fun networks() = shot("networks") {
+        NetworksScreen(Connection.On(listOf(sampleView, officeView)), none, none, {}, none, none)
+    }
 
     @Test fun scanAsksForTheCamera() = shot("scan") {
         ScanScreen(granted = false, denied = false, onAllow = none, onInvite = {}, onCode = none, onBack = none) { _, _ -> }

@@ -209,6 +209,7 @@ fun alarmTitle(a: Alarm): String = when (a.kind) {
     "privateDns" -> stringResource(R.string.alarm_private_dns, names(a.names))
     "names" -> stringResource(R.string.alarm_names)
     "forMembers" -> stringResource(R.string.alarm_for_members, names(a.names))
+    "noV4" -> stringResource(R.string.alarm_no_v4, names(a.names).ifEmpty { stringResource(R.string.another_network) })
     else -> a.kind
 }
 
@@ -228,5 +229,6 @@ fun alarmHint(a: Alarm): Int? = when (a.kind) {
     "unrevoked" -> R.string.alarm_unrevoked_hint
     "privateDns" -> R.string.alarm_private_dns_hint
     "forMembers" -> R.string.alarm_for_members_hint
+    "noV4" -> R.string.alarm_no_v4_hint
     else -> null
 }

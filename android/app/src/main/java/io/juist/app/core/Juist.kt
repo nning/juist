@@ -24,17 +24,28 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.builtins.ListSerializer
 
-/** Whether the core runs, and what it last said. */
+/** Whether the core runs, and what it last said of each network, by slot. */
 sealed interface Connection {
     /** The VPN is off; [last] is what the core said before it stopped, if it ever ran. */
-    data class Off(val last: NetworkView?, val reason: OffReason = OffReason.None) : Connection
+    data class Off(val last: List<NetworkView>, val reason: OffReason = OffReason.None) : Connection {
+        constructor(last: NetworkView?, reason: OffReason = OffReason.None) : this(listOfNotNull(last), reason)
+    }
 
-    data class Starting(val last: NetworkView?) : Connection
+    data class Starting(val last: List<NetworkView>) : Connection {
+        constructor(last: NetworkView?) : this(listOfNotNull(last))
+    }
 
-    data class On(val view: NetworkView) : Connection
+    data class On(val views: List<NetworkView>) : Connection {
+        constructor(view: NetworkView) : this(listOf(view))
+
+        /** The network the phone is in, where it is in one alone, or the first. */
+        val view: NetworkView get() = views.firstOrNull { it.inNetwork } ?: views.first()
+    }
 
     /** The core did not start; [message] is its own reason, in English. */
-    data class Failed(val message: String, val last: NetworkView?) : Connection
+    data class Failed(val message: String, val last: List<NetworkView>) : Connection {
+        constructor(message: String, last: NetworkView?) : this(message, listOfNotNull(last))
+    }
 }
 
 enum class OffReason { None, Revoked }
@@ -46,7 +57,8 @@ sealed interface JoinState {
     data class Running(val step: JoinStep, val relayed: Boolean = false, val words: List<String> = emptyList(),
         val votes: Int = 0, val quorum: Int = 0) : JoinState
 
-    data object Joined : JoinState
+    /** Joined, in the core's [slot]. */
+    data class Joined(val slot: Int = 0) : JoinState
 
     /**
      * The join failed, by a code where [byCode], which only finds its host on
@@ -60,48 +72,68 @@ enum class JoinStep { Starting, Looking, Meeting, Connected, Compare, Waiting }
 /** A call into the core while none runs. */
 class CoreOff : IllegalStateException("juist is off")
 
-/** What the core last said, whether it runs or not. */
-val Connection.lastView: NetworkView?
+/** What the core last said of every network, whether it runs or not. */
+val Connection.views: List<NetworkView>
     get() = when (this) {
-        is Connection.On -> view
+        is Connection.On -> views
         is Connection.Off -> last
         is Connection.Starting -> last
         is Connection.Failed -> last
     }
 
+/** The networks the phone is in, by slot. */
+val Connection.networks: List<NetworkView> get() = views.filter { it.inNetwork }
+
+/** What the core last said of the network in slot. */
+fun Connection.view(slot: Int): NetworkView? = views.firstOrNull { it.slot == slot }
+
+/** What the core last said of the phone's network where it is in one alone, or of its first. */
+val Connection.lastView: NetworkView?
+    get() = networks.firstOrNull() ?: views.firstOrNull()
+
+/** The state of the network that fares worst, as `juist status` orders them. */
+val Connection.worstState: State?
+    get() = networks.minByOrNull { it.state.ordinal }?.state
+
+/** How many networks a phone is in at most, mobile.MaxNetworks. */
+const val MAX_NETWORKS = 4
+
 /** What [Juist] asks of a running core: the Go core's, or a test's. */
 internal interface CoreCalls {
+    /** Every network's view, a JSON list. */
     fun status(): String
-    /** Joins by invite as name, telling progress each event (internal/guest.EventKind). */
-    fun join(invite: String, name: String, progress: (kind: Int, text: String, votes: Int, quorum: Int) -> Unit)
+    /** Joins by invite as name, telling progress each event (internal/guest.EventKind); the slot joined. */
+    fun join(invite: String, name: String, progress: (kind: Int, text: String, votes: Int, quorum: Int) -> Unit): Int
     fun cancelJoin()
     /** One echo's round trip, in microseconds. */
-    fun ping(identity: String): Long
-    fun useExit(identity: String)
-    fun exitOff()
-    fun forget()
+    fun ping(slot: Int, identity: String): Long
+    fun useExit(slot: Int, identity: String)
+    fun exitOff(slot: Int)
+    fun forget(slot: Int)
+    fun leave(slot: Int)
     /** A JSON [Diagnosis]. */
     fun diagnose(): String
     /** The log's newest changes, JSON [Change]s. */
-    fun changes(): String
-    fun setNames(on: Boolean)
-    fun setHttpsOnly(on: Boolean)
+    fun changes(slot: Int): String
+    fun setNames(slot: Int, on: Boolean)
+    fun setHttpsOnly(slot: Int, on: Boolean)
 }
 
 /** The Go core's calls. */
 internal class GoCore(private val c: Core) : CoreCalls {
     override fun status(): String = c.status()
-    override fun join(invite: String, name: String, progress: (Int, String, Int, Int) -> Unit) =
+    override fun join(invite: String, name: String, progress: (Int, String, Int, Int) -> Unit): Int =
         c.join(invite, name, JoinListener { kind, text, votes, quorum -> progress(kind, text, votes, quorum) })
     override fun cancelJoin() = c.cancelJoin()
-    override fun ping(identity: String): Long = c.ping(identity)
-    override fun useExit(identity: String) = c.useExit(identity)
-    override fun exitOff() = c.exitOff()
-    override fun forget() = c.forget()
+    override fun ping(slot: Int, identity: String): Long = c.ping(slot, identity)
+    override fun useExit(slot: Int, identity: String) = c.useExit(slot, identity)
+    override fun exitOff(slot: Int) = c.exitOff(slot)
+    override fun forget(slot: Int) = c.forget(slot)
+    override fun leave(slot: Int) = c.leave(slot)
     override fun diagnose(): String = c.diagnose()
-    override fun changes(): String = c.changes()
-    override fun setNames(on: Boolean) = c.setNames(on)
-    override fun setHttpsOnly(on: Boolean) = c.setHTTPSOnly(on)
+    override fun changes(slot: Int): String = c.changes(slot)
+    override fun setNames(slot: Int, on: Boolean) = c.setNames(slot, on)
+    override fun setHttpsOnly(slot: Int, on: Boolean) = c.setHTTPSOnly(slot, on)
 }
 
 /** The process's one core, which [JuistVpnService] runs and the screens watch. */
@@ -109,7 +141,7 @@ object Juist {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var cacheFile: File
 
-    private val _connection = MutableStateFlow<Connection>(Connection.Off(null))
+    private val _connection = MutableStateFlow<Connection>(Connection.Off(emptyList()))
     val connection: StateFlow<Connection> = _connection.asStateFlow()
 
     private val _join = MutableStateFlow<JoinState>(JoinState.Idle)
@@ -138,14 +170,18 @@ object Juist {
 
     fun init(context: Context) {
         cacheFile = File(context.noBackupFilesDir, "last-status.json")
-        val last = runCatching { parseView(cacheFile.readText()) }.getOrNull()
+        val last = runCatching { parseViews(cacheFile.readText()) }.getOrDefault(emptyList())
         _connection.value = Connection.Off(last)
     }
 
-    /** The state directory, kept from backups and transfers. */
+    /** The state directory of the phone's first network, kept from backups and transfers; the others' are beside it. */
     fun home(context: Context) = File(context.noBackupFilesDir, "juist")
 
-    val last: NetworkView? get() = _connection.value.lastView
+    /** Every network's state directory, as mobile.Core.homeOf names them. */
+    private fun homes(context: Context) = listOf(home(context)) + (1 until MAX_NETWORKS).map { File(context.noBackupFilesDir, "juist$it") }
+
+    /** What the core last said of every network. */
+    val last: List<NetworkView> get() = _connection.value.views
 
     /** Whether Android must first ask the user to let juist set up a VPN. */
     fun consentIntent(context: Context): Intent? = VpnService.prepare(context)
@@ -216,19 +252,24 @@ object Juist {
     /** Asks the core for its status now; it blocks. */
     fun refresh() {
         val c = core ?: return
-        val view = runCatching { parseView(c.status()) }.getOrNull() ?: return
+        val views = runCatching { parseViews(c.status()) }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return
         synchronized(publishing) {
             if (core !== c) return
-            val was = (_connection.value as? Connection.On)?.view
-            _connection.value = Connection.On(view)
+            val was = (_connection.value as? Connection.On)?.views
+            _connection.value = Connection.On(views)
             // Kept for when the VPN is off, which needs the members, not how they were reached.
-            if (view.inNetwork && (was == null || was.members.map { it.name } != view.members.map { it.name } || was.self != view.self)) {
-                runCatching { cacheFile.writeText(coreJson.encodeToString(NetworkView.serializer(), view)) }
-            } else if (!view.inNetwork) {
+            val kept = views.filter { it.inNetwork }
+            if (kept.isEmpty()) {
                 cacheFile.delete()
+            } else if (was == null || cached(was) != cached(kept)) {
+                runCatching { cacheFile.writeText(coreJson.encodeToString(ListSerializer(NetworkView.serializer()), kept)) }
             }
         }
     }
+
+    /** What of views the cache holds, so that it is written when that changes alone. */
+    private fun cached(views: List<NetworkView>) =
+        views.filter { it.inNetwork }.map { Triple(it.slot, it.self, it.members.map { m -> m.name } + it.network) }
 
     private suspend fun runningCore(): CoreCalls? =
         core ?: withTimeoutOrNull(20_000) {
@@ -260,7 +301,7 @@ object Juist {
             // Cancelled by the person, whose screen has moved on.
             if (!isActive) return@launch
             _join.value = result.fold(
-                onSuccess = { JoinState.Joined },
+                onSuccess = { JoinState.Joined(it) },
                 // Stopped from elsewhere, as by the notification's action.
                 onFailure = { JoinState.Failed(if (core !== c) null else it.message.orEmpty(), byCode = !InviteCode.isLink(invite)) },
             )
@@ -280,55 +321,61 @@ object Juist {
         if (_join.value !is JoinState.Running) _join.value = JoinState.Idle
     }
 
-    /** One echo to the member, its round trip in milliseconds. */
-    suspend fun ping(identity: String): Result<Double> = withContext(Dispatchers.IO) {
+    /** One echo to the member of slot's network, its round trip in milliseconds. */
+    suspend fun ping(slot: Int, identity: String): Result<Double> = withContext(Dispatchers.IO) {
         val c = core ?: return@withContext Result.failure(CoreOff())
-        runCatching { c.ping(identity) / 1000.0 }
+        runCatching { c.ping(slot, identity) / 1000.0 }
     }
 
     /**
-     * Deletes the state directory, keys and all, where the core cannot start
-     * over it any more, as when Keystore lost the key that seals them. The
-     * network still lists this device until an admin removes it.
+     * Deletes every network's state directory, keys and all, where the core
+     * cannot start over them any more, as when Keystore lost the key that
+     * seals them. The networks still list this device until an admin removes it.
      */
     fun startOver(context: Context) {
         disconnect(context)
-        home(context).deleteRecursively()
+        homes(context).forEach { it.deleteRecursively() }
         cacheFile.delete()
-        _connection.value = Connection.Off(null)
+        _connection.value = Connection.Off(emptyList())
     }
 
-    /** Sends the phone's internet through the exit node with identity, or directly where it is null. */
-    suspend fun useExit(identity: String?): Result<Unit> = withContext(Dispatchers.IO) {
+    /** Sends the phone's internet through the exit node with identity in slot's network, or directly where it is null. */
+    suspend fun useExit(slot: Int, identity: String?): Result<Unit> = withContext(Dispatchers.IO) {
         val c = core ?: return@withContext Result.failure(CoreOff())
-        runCatching { if (identity == null) c.exitOff() else c.useExit(identity) }.also { refresh() }
+        runCatching { if (identity == null) c.exitOff(slot) else c.useExit(slot, identity) }.also { refresh() }
     }
 
-    /** Has the phone's lookups go to juist, for the network's names, or leaves its DNS alone. */
-    suspend fun setNames(on: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+    /** Has the phone's lookups take slot's network's names, or leaves them out. */
+    suspend fun setNames(slot: Int, on: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
         val c = core ?: return@withContext Result.failure(CoreOff())
-        runCatching { c.setNames(on) }.also { refresh() }
+        runCatching { c.setNames(slot, on) }.also { refresh() }
     }
 
-    /** Has the phone reach relays by TLS on 443 alone, or by every way. */
-    suspend fun setHttpsOnly(on: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+    /** Has slot's network reach its relays by TLS on 443 alone, or by every way. */
+    suspend fun setHttpsOnly(slot: Int, on: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
         val c = core ?: return@withContext Result.failure(CoreOff())
-        runCatching { c.setHttpsOnly(on) }.also { refresh() }
+        runCatching { c.setHttpsOnly(slot, on) }.also { refresh() }
     }
 
-    /** The log's newest changes, newest first. */
-    suspend fun changes(): Result<List<Change>> = withContext(Dispatchers.IO) {
+    /** The newest changes of slot's log, newest first. */
+    suspend fun changes(slot: Int): Result<List<Change>> = withContext(Dispatchers.IO) {
         val c = core ?: return@withContext Result.failure(CoreOff())
-        runCatching { coreJson.decodeFromString(ListSerializer(Change.serializer()), c.changes()) }
+        runCatching { coreJson.decodeFromString(ListSerializer(Change.serializer()), c.changes(slot)) }
     }
 
     /** What the core says of how the phone's traffic fares, null while it is off. */
     fun diagnosis(): Diagnosis? = core?.let { c -> runCatching { coreJson.decodeFromString(Diagnosis.serializer(), c.diagnose()) }.getOrNull() }
 
-    /** Forgets a network that removed this device, so it can join again. */
-    suspend fun forget(): Result<Unit> = withContext(Dispatchers.IO) {
+    /** Forgets slot's network, one that removed this device, so it can join again. */
+    suspend fun forget(slot: Int): Result<Unit> = withContext(Dispatchers.IO) {
         val c = core ?: return@withContext Result.failure(CoreOff())
-        runCatching { c.forget() }.also { refresh() }
+        runCatching { c.forget(slot) }.also { refresh() }
+    }
+
+    /** Leaves slot's network, which lists this phone until an admin removes it; the others stay as they are. */
+    suspend fun leave(slot: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        val c = core ?: return@withContext Result.failure(CoreOff())
+        runCatching { c.leave(slot) }.also { refresh() }
     }
 }
 

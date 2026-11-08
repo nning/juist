@@ -116,7 +116,8 @@ remove the device from `work` first ([Removing a device]({{< relref "docs/remove
 ## Good to know
 
 - One host runs at most ten juistds: `juistd.service` and `juistd@juist1` to
-  `juistd@juist9`.
+  `juistd@juist9`. A phone joins up to four networks, all in the app
+  ([Android]({{< relref "docs/android" >}}#several-networks)).
 - The n-th juistd's ports are the first one's plus 10·n: 41653/udp for
   `juistd@juist1`, and log sync on TCP 41654 on `juist1`. The packages'
   firewall profiles cover only the first network's ports; `juist status` shows

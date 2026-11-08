@@ -1,14 +1,15 @@
 ---
 title: Android
 linkTitle: Android
-description: Install juist's Android app, join a network with a phone by its QR code or code, reach the devices by name, and see from the phone how each one is reached.
-lead: The Android app makes a phone a member of one network. It joins by the invite's QR code or code, reaches the other devices by name and address, and shows how each is reached.
+description: Install juist's Android app, join networks with a phone by their QR code or code, reach the devices by name, and see from the phone how each one is reached.
+lead: The Android app makes a phone a member of up to four networks. It joins by the invite's QR code or code, reaches the other devices by name and address, and shows how each is reached.
 ---
 
 ## What the app does
 
-The app runs juist on a phone with Android 12 or newer. The phone joins one
-network as a member without roles. While its VPN is on, every app on the
+The app runs juist on a phone with Android 12 or newer. The phone joins a
+network as a member without roles, and up to four
+([Several networks](#several-networks)). While its VPN is on, every app on the
 phone reaches the other devices by name, such as `nas.home.juist`, and by
 address, and the LANs behind its [subnet routers](#subnets). The VPN carries
 only the traffic to the network, to those subnets and the phone's DNS
@@ -16,7 +17,7 @@ only the traffic to the network, to those subnets and the phone's DNS
 
 The phone cannot:
 
-- be in more than one network;
+- be in more than four networks;
 - turn [public names]({{< relref "docs/names" >}}) on, so they resolve
   publicly there;
 - route a subnet or be an [exit node]({{< relref "docs/exit-nodes" >}}),
@@ -110,6 +111,38 @@ If the network needs more than one admin's vote, the phone shows
 `Waiting for approval: 1 of 2 votes` until the others approve.
 [Inviting devices]({{< relref "docs/invites" >}}) explains the code, the link
 and the words.
+
+## Several networks {#several-networks}
+
+{{< screens >}}
+networks: The networks a phone is in, each as it fares
+welcome_another: Joining another network
+{{< /screens >}}
+
+To join another network, tap **Join another network** in the menu, or open
+another invite link, and join as for the first. The app then opens at the
+list of the phone's networks; tap one for its status. In each network, the
+phone is a member of its own, with its own keys, name and addresses, and the
+one switch turns the VPN on and off for all of them.
+
+- The phone resolves every network's names and searches their domains, so
+  `nas` finds `nas.home.juist` or `nas.work.juist`.
+- One network's [exit node](#through-an-exit-node) carries the internet at a
+  time: choosing one in another network lets the first go. While it is used,
+  the phone asks its network's resolver, so with **Network names** off there,
+  no network's names resolve.
+- Where two networks' IPv4 ranges overlap, one of them runs over IPv6 alone
+  and says so until one is renumbered
+  ([Overlapping address ranges]({{< relref "docs/networks" >}}#overlapping-address-ranges)).
+  A join keeps IPv4 with the networks the phone is in.
+- A member of one network does not reach another network through the phone.
+- An alarm in one network leaves the others' tunnels up.
+- **Leave network**, in a network's menu, deletes the phone's keys for it and
+  ends its tunnels there; the other networks stay as they are. The network
+  lists the phone until an admin removes it.
+- An invite does not say which network it is for. Joining a network the
+  phone is in already is undone, and the app names the admission an admin
+  should remove.
 
 ## The status screen
 

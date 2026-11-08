@@ -123,7 +123,8 @@ Möglichkeit vorher aus `work` ([Geräte entfernen]({{< relref "docs/remove" >}}
 ## Gut zu wissen
 
 - Auf einem Host laufen höchstens zehn juistd: `juistd.service` und
-  `juistd@juist1` bis `juistd@juist9`.
+  `juistd@juist1` bis `juistd@juist9`. Ein Telefon tritt bis zu vier Netzen
+  bei, alle in der App ([Android]({{< relref "docs/android" >}}#several-networks)).
 - Die Ports des n-ten juistd sind die des ersten plus 10·n: 41653/udp für
   `juistd@juist1` und der Log-Abgleich auf TCP 41654 auf `juist1`. Die
   Firewall-Profile der Pakete enthalten nur die Ports des ersten Netzes; die

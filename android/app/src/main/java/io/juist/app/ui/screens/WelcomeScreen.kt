@@ -8,12 +8,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -37,26 +41,36 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 
-/** Where a device in no network starts: an invite scanned or typed. */
+/**
+ * Where a device in no network starts: an invite scanned or typed. With
+ * onBack, a phone in a network already joins another here.
+ */
 @Composable
-fun WelcomeScreen(onScan: () -> Unit, onCode: () -> Unit, onAbout: () -> Unit) {
+fun WelcomeScreen(onScan: () -> Unit, onCode: () -> Unit, onAbout: () -> Unit, onBack: (() -> Unit)? = null) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Readable(Modifier.safeDrawingPadding()) {
             Column(
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = Space.xl),
             ) {
-                Spacer(Modifier.height(Space.xxxl))
-                Wordmark(height = 44.dp)
-                Spacer(Modifier.height(Space.xxl))
+                if (onBack != null) {
+                    IconButton(onBack, Modifier.padding(top = Space.s).offset(x = -Space.m)) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+                    }
+                    Spacer(Modifier.height(Space.l))
+                } else {
+                    Spacer(Modifier.height(Space.xxxl))
+                    Wordmark(height = 44.dp)
+                    Spacer(Modifier.height(Space.xxl))
+                }
                 Text(
-                    stringResource(R.string.welcome_title),
+                    stringResource(if (onBack != null) R.string.another_title else R.string.welcome_title),
                     Modifier.semantics { heading() },
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Spacer(Modifier.height(Space.m))
                 Text(
-                    stringResource(R.string.welcome_body),
+                    stringResource(if (onBack != null) R.string.another_body else R.string.welcome_body),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

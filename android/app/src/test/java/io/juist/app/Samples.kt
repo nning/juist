@@ -117,3 +117,12 @@ val sampleDiagnosis = Diagnosis(
         ),
     ),
 )
+
+/** A second network the phone is in, in slot 1, waiting for its other devices. */
+val officeView = NetworkView(
+    slot = 1,
+    state = State.Waiting,
+    network = "office",
+    self = Member(identity = "nid:CAAA", name = "pixel-8", v4 = "198.18.140.9", v6 = "fd7e:21c0:9a4:3b1f:6e82:d5a0:c47b:1e93", reach = Reach.Self),
+    members = listOf(Member("nid:CQAA", "build", "198.18.140.1", reach = Reach.Sought)),
+)

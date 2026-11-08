@@ -159,7 +159,7 @@ in Docker from the rest of the network
 
 ## Android
 
-The app, for Android 12 or newer, joins one network as a member by scanning
+The app, for Android 12 or newer, joins up to four networks as a member by scanning
 the QR code `juist invite` shows in a terminal, or by the code typed in on the
 same LAN. While its VPN is on, every app on the phone reaches the other
 devices at their addresses and the subnets members route; the phone's other
@@ -169,7 +169,7 @@ traffic is left alone.
 make android    # needs a JDK 21, the Android SDK and NDK; the APKs land in android/app/build/outputs/apk
 ```
 
-It resolves the network's names, sends its internet through an exit node
+It resolves the networks' names, sends its internet through an exit node
 where one is chosen, reaches relays by HTTPS alone where asked, turns no
 public names on, and takes no roles. A Quick Settings tile turns it on and
 off, and its details show what `juist status` and `juist log` would.

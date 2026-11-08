@@ -1221,6 +1221,28 @@ shows what a radio wake costs there, before it is released.
 
 ## M27 — Several networks in the app
 
+**Done** on 2026-11-06: up to four networks in the app, each in a slot of
+its own in one core behind `conn.VPNHub`, which routes them together on one
+device, hands each packet to the network its destination is in and the
+internet to the exit node's, translates what Android sent from another
+network's address, and lets nothing reach a network's addresses from
+another network or from where another's routes lead; one resolver answers
+every network's names; the M5 rules hold by slot; the app lists the
+networks, joins another and leaves one. Decided: one Keystore key seals
+every slot's keys, at most four networks, a network's alarm stays its own
+([13-multi-network-notes.md](13-multi-network-notes.md#on-a-phone-slots-behind-one-vpn)).
+Reviewed in three rounds (2026-11-05), each fix with a test that fails
+without it; validated by `make ci-vm` at M26.1
+([12-validating.md](12-validating.md), "The last privileged run"), exit
+criteria (1), (3) and (4) by its `make android-smoke`, which joins the
+emulator to two networks, reaches a member of each directly and one through
+the other's relay alone, resolves both networks' names and leaves the
+second while the first's tunnel stays up; (2) by the hub's tests, a
+network's engine writing to the other's addresses or from them. An M26 app
+in a network, updated in place to this one keeps the
+network, its keys and addresses. Core 11 014 lines, audit scope 36 859,
+measured after it (2026-11-06).
+
 The app is a member of one network. On Linux each network is an instance of
 its own (M5); a phone has one VPN at a time, and an app's `VpnService` one
 interface, which `establish()` replaces.
@@ -1237,10 +1259,6 @@ interface, which `establish()` replaces.
   ([13-multi-network-notes.md](13-multi-network-notes.md)).
 - **The app** lists the networks, joins and leaves one, and says for each
   what the status says now.
-
-- **Open decisions:** whether each network's keys are sealed apart; how
-  many networks a phone may join; what a network's alarm does to the
-  others'.
 
 - **Exit criteria:** (1) in `make interop`, the emulator joins two
   networks and reaches a member of each, directly and through a relay; (2)

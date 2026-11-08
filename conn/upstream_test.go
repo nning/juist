@@ -254,6 +254,10 @@ func TestUpstreamLinesAndTheHomelessUpdate(t *testing.T) {
 		{"net/netcheck/netcheck.go", `c.logf("[v1] netcheck: measuring HTTPS latency of %v (%d): %v", reg.RegionCode, reg.RegionID, err)`},
 		{"net/netcheck/netcheck.go", "if haveLatencySample || recentActivity {\n\t\t\tr.PreferredDERP = c.ForcePreferredDERP"},
 		{"tailcfg/derpmap.go", "\tRegionID DERPRegionID\n"},
+		// What watchLost waits for and reads the reason of.
+		{"wgengine/wglog/wglog.go", `const prefix = "` + wgErrorPrefix + `"`},
+		{"wgengine/wglog/wglog.go", "Errorf:   logger.WithPrefix(wrapper, prefix),"},
+		{"wgengine/userspace.go", "if !closing {\n\t\t\t\te.logf(\"Closing the engine because the WireGuard device has been closed...\")\n\t\t\t\te.Close()"},
 		// What TestWalledNodesMeetAtAHome counts a walled peer's pings by.
 		{"wgengine/magicsock/magicsock.go", `c.dlogf("[v1] magicsock: disco: %v<-%v (%v, %v)  got ping tx=%x padding=%v"`},
 	} {

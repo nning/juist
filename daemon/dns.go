@@ -1056,7 +1056,12 @@ func (d *Daemon) namesServingLocked() bool {
 	}
 	answer := func(q []byte) []byte {
 		if z := d.zone.Load(); z != nil {
-			return z.Answer(q)
+			if a := z.Answer(q); a != nil {
+				return a
+			}
+		}
+		if d.otherNames != nil {
+			return d.otherNames(q)
 		}
 		return nil
 	}

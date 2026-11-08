@@ -258,6 +258,14 @@ Kette dieses Log nicht fortsetzt, hat nichts von dem Verpassten das
 Gruppengeheimnis gewechselt, und das Gerät kann nicht erkennen, dass das Log
 der Einladung neuer ist: Führe `juist reset` aus und tritt dann bei.
 
+### `juistd: conn: the data plane closed itself: …; starting it anew`
+
+Eine Zeile in juistds Log: Das Tunnelgerät unter juistd ist ausgefallen,
+meist nachdem der Rechner hing, etwa weil der Speicher voll war. juistd
+startet den Tunnel von selbst neu, höchstens alle 10 Sekunden; bis dahin
+warnt `juist health` womöglich `data plane refused the device set`. Kommt
+die Zeile immer wieder, finde heraus, was den Rechner hängen lässt.
+
 ### `removed`
 
 Dieses Gerät gehört nicht mehr zum Netz. Willst du es weiter nutzen, tritt

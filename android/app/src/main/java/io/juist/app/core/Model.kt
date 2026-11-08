@@ -1,12 +1,15 @@
 package io.juist.app.core
 
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /** The core's status as the app shows it: mobile/view.go's view, field for field. */
 @Serializable
 data class NetworkView(
+    /** The network's slot in the core, 0 for the phone's first. */
+    val slot: Int = 0,
     val state: State = State.Unknown,
     val network: String = "",
     val detail: String = "",
@@ -200,3 +203,11 @@ val coreJson = Json {
 }
 
 fun parseView(json: String): NetworkView = coreJson.decodeFromString(NetworkView.serializer(), json)
+
+/** Every network's view, by slot, as the core lists them; one view alone, as earlier apps kept it, is slot 0's. */
+fun parseViews(json: String): List<NetworkView> =
+    if (json.trimStart().startsWith("[")) {
+        coreJson.decodeFromString(ListSerializer(NetworkView.serializer()), json).sortedBy { it.slot }
+    } else {
+        listOf(parseView(json).copy(slot = 0))
+    }

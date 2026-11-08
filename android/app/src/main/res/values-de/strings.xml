@@ -103,7 +103,7 @@
     <string name="action_forget">Netz vergessen</string>
     <string name="action_start_over">Neu beginnen</string>
     <string name="start_over_title">Neu beginnen?</string>
-    <string name="start_over_body">Löscht die Schlüssel des Telefons und alles, was es über das Netz weiß. Zum erneuten Beitritt brauchst du eine neue Einladung, und ein Admin sollte dieses Telefon entfernen.</string>
+    <string name="start_over_body">Löscht die Schlüssel des Telefons und alles, was es über seine Netze weiß. Zum erneuten Beitritt brauchst du eine neue Einladung, und ein Admin sollte dieses Telefon entfernen.</string>
     <string name="action_more">Mehr</string>
 
     <string name="section_this_device">Dieses Telefon</string>
@@ -324,4 +324,17 @@
 
     <!-- Tile -->
     <string name="tile_label">juist</string>
+    <!-- Mehrere Netze -->
+    <string name="section_networks">Netze</string>
+    <string name="action_join_another">Weiterem Netz beitreten</string>
+    <string name="another_title">Einem weiteren Netz beitreten</string>
+    <string name="another_body">Dieses Telefon bleibt in seinen Netzen und tritt daneben einem weiteren bei.</string>
+    <string name="networks_most">Dieses Telefon ist in %1$d Netzen, mehr nimmt es nicht auf.</string>
+    <string name="action_leave">Netz verlassen</string>
+    <string name="leave_title">%1$s verlassen?</string>
+    <string name="leave_body">Löscht die Schlüssel dieses Telefons für das Netz und beendet seine Tunnel dorthin; die anderen Netze bleiben, wie sie sind. Das Netz führt das Telefon weiter, bis ein Admin es entfernt.</string>
+    <string name="action_leave_confirm">Verlassen</string>
+    <string name="alarm_no_v4">Kein IPv4: %1$s belegt die Adressen dieses Netzes</string>
+    <string name="alarm_no_v4_hint">Bis dahin trägt IPv6 dieses Netz. Eines der beiden Netze neu zu nummerieren beendet es.</string>
+    <string name="another_network">ein anderes Netz</string>
 </resources>

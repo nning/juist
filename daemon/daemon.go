@@ -169,6 +169,9 @@ type Options struct {
 	// Connect builds the data plane. Nil uses [conn.New].
 	Connect func(conn.Options) (conn.Manager, error)
 
+	// OnLost is the data plane's [conn.Options.OnLost].
+	OnLost func(error)
+
 	// GossipDial opens outbound log sync sessions. Nil dials TCP; tests
 	// replace it to cut a device off as a dropped tunnel would.
 	GossipDial func(ctx context.Context, addr netip.AddrPort) (net.Conn, error)
@@ -566,7 +569,8 @@ type Daemon struct {
 	dns        dnsState
 
 	startNames  NamesServer
-	namesFixed  netip.AddrPort // [Options.NamesAddr]
+	namesFixed  netip.AddrPort      // [Options.NamesAddr]
+	otherNames  func([]byte) []byte // [Resolver.Others]
 	reachable   atomic.Pointer[map[types.Identity]bool]
 	zone        atomic.Pointer[names.Zone]
 	namesExit   atomic.Pointer[[]netip.AddrPort] // the exit node's resolvers, which names asks
@@ -783,6 +787,7 @@ func New(opts Options) (*Daemon, error) {
 		OnInterfacesChange:   d.interfacesChanged,
 		// A subnet a route of the host's now holds is given back at once.
 		OnHostRoutesChange: d.MarkDirty,
+		OnLost:             opts.OnLost,
 	}
 	if connOpts.Multicast && copiesGroups(opts) {
 		connOpts.Groups = opts.Groups
@@ -830,6 +835,7 @@ func New(opts Options) (*Daemon, error) {
 	d.startNames, d.namesFixed = opts.ServeNames, opts.NamesAddr
 	if opts.Resolver != nil {
 		d.startNames, d.namesFixed = d.resolverNames(*opts.Resolver), netip.AddrPortFrom(types.ResolverAddr(d.ula), 53)
+		d.otherNames = opts.Resolver.Others
 	}
 	d.held.Store(&selfAddrs)
 	ln, err := d.listenGossip(opts, selfAddrs)

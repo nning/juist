@@ -58,17 +58,27 @@ func rev(b []byte) []byte {
 	return out
 }
 
+// statusOf is slot 0's view.
 func statusOf(t *testing.T, c *Core) view {
+	t.Helper()
+	vs := statusesOf(t, c)
+	if len(vs) == 0 || vs[0].Slot != 0 {
+		t.Fatalf("no view of slot 0: %+v", vs)
+	}
+	return vs[0].view
+}
+
+func statusesOf(t *testing.T, c *Core) []slotView {
 	t.Helper()
 	s, err := c.Status()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var v view
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
+	var vs []slotView
+	if err := json.Unmarshal([]byte(s), &vs); err != nil {
 		t.Fatal(err)
 	}
-	return v
+	return vs
 }
 
 func TestACoreKeepsItsKeysSealedAcrossRestarts(t *testing.T) {
@@ -104,10 +114,13 @@ func TestACoreKeepsItsKeysSealedAcrossRestarts(t *testing.T) {
 	if again := statusOf(t, c); again.Self.Identity != v.Self.Identity || p.opened == 0 {
 		t.Errorf("restarted as %s, opened %d times; was %s", again.Self.Identity, p.opened, v.Self.Identity)
 	}
-	if _, err := c.Ping(v.Self.Identity); err == nil {
+	if _, err := c.Ping(0, v.Self.Identity); err == nil {
 		t.Error("pinged outside any network")
 	}
-	if err := c.Join("7-nonsense", "phone", nil); err == nil {
+	if _, err := c.Ping(1, v.Self.Identity); err == nil {
+		t.Error("pinged through a slot no network is in")
+	}
+	if _, err := c.Join("7-nonsense", "phone", nil); err == nil {
 		t.Error("joined by a code of words no code holds")
 	}
 }
@@ -485,13 +498,22 @@ func TestTheUnderlaysRoutesLeaveOutItsDefaults(t *testing.T) {
 // join, is established again once they are, and not for the same prefixes.
 func TestTheCoreRoutesTheNetworksPrefixesOnceKnown(t *testing.T) {
 	changed := 0
-	c := &Core{logf: t.Logf, coverChanged: func() error { changed++; return nil }}
-	c.follow(&ipc.Status{})
+	n := &network{c: &Core{logf: t.Logf}, coverChanged: func() error { changed++; return nil }}
+	n.follow(&ipc.Status{})
 	st := sampleStatus()
-	c.follow(st)
-	c.follow(st)
+	st.V4Claims = []netip.Prefix{netip.MustParsePrefix("198.18.4.0/22")}
+	n.follow(st)
+	n.follow(st)
 	if changed != 1 {
 		t.Errorf("the VPN routed a new cover %d times, want once", changed)
+	}
+	if got := n.networkPrefixes(); !slices.Contains(got, st.V4Claims[0]) {
+		t.Errorf("cover %v, want the network's IPv4 %v", got, st.V4Claims)
+	}
+	st.HostConflict = &ipc.HostConflict{Instance: 0}
+	n.follow(st)
+	if got := n.networkPrefixes(); slices.ContainsFunc(got, func(p netip.Prefix) bool { return p.Addr().Is4() }) || changed != 2 {
+		t.Errorf("cover %v while a lower network holds the IPv4, want IPv6 alone", got)
 	}
 }
 

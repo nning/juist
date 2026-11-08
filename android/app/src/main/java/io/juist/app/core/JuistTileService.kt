@@ -59,13 +59,13 @@ class JuistTileService : TileService() {
     private fun show(c: Connection) {
         val tile = qsTile ?: return
         tile.state = when {
-            c.lastView?.inNetwork != true -> Tile.STATE_UNAVAILABLE
+            c.networks.isEmpty() -> Tile.STATE_UNAVAILABLE
             c is Connection.On || c is Connection.Starting -> Tile.STATE_ACTIVE
             else -> Tile.STATE_INACTIVE
         }
-        tile.label = c.lastView?.network?.takeIf { it.isNotEmpty() } ?: getString(R.string.app_name)
+        tile.label = networkNames(c.views).ifEmpty { getString(R.string.app_name) }
         tile.subtitle = when (c) {
-            is Connection.On -> getString(stateLabel(c.view.state))
+            is Connection.On -> getString(stateLabel(c.worstState ?: c.view.state))
             is Connection.Starting -> getString(R.string.state_starting)
             is Connection.Failed -> getString(R.string.state_failed)
             is Connection.Off -> getString(R.string.state_vpn_off)
@@ -82,6 +82,6 @@ internal enum class TileAction { TurnOn, TurnOff, OpenApp }
  */
 internal fun tileAction(c: Connection, needsConsent: Boolean): TileAction = when {
     c is Connection.On || c is Connection.Starting -> TileAction.TurnOff
-    c.lastView?.inNetwork != true || needsConsent -> TileAction.OpenApp
+    c.networks.isEmpty() || needsConsent -> TileAction.OpenApp
     else -> TileAction.TurnOn
 }

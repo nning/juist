@@ -4,13 +4,17 @@
 package mobile
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +25,7 @@ import (
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/daemon"
 	"github.com/nning/juist/internal/guest"
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/internal/rendezvous"
 	"github.com/nning/juist/internal/underlay"
@@ -56,26 +61,46 @@ type JoinListener interface {
 // tunName is cosmetic: Android names the device itself.
 const tunName = "juist0"
 
-// A Core is the running daemon. Its methods are safe from any thread, and
-// block; call them off the main thread.
+// MaxNetworks is how many networks a phone is a member of at most: each
+// keeps tunnels, relays and announcements of its own, which a phone pays
+// for in battery.
+const MaxNetworks = 4
+
+// A Core is the running daemon: a service per network, in a slot of its
+// own, all behind one VPN. Its methods are safe from any thread, and block;
+// call them off the main thread.
 type Core struct {
-	s      *daemon.Service
-	cancel context.CancelFunc
-	pace   *daemon.Pace
-	logf   func(format string, args ...any)
-	// cover is the network's prefixes, as the status last named them, which
-	// the VPN routes whole.
-	cover atomic.Pointer[[]netip.Prefix]
+	home string // slot 0's state directory; slot n's is beside it
+	hub  *conn.VPNHub
+	pace *daemon.Pace
+	logf func(format string, args ...any)
 	// underlay is how the network beneath the VPN resolves, as the app last
 	// said.
 	underlay atomic.Pointer[daemon.Underlay]
-	// coverChanged has the VPN route a changed cover.
-	coverChanged func() error
-	plumber      conn.Plumber
-	dns          *dnsStats
+	dns      *dnsStats
+
+	// exitMu has one exit node chosen at a time.
+	exitMu sync.Mutex
 
 	mu         sync.Mutex
+	nets       map[int]*network
+	failed     map[int]string // slots whose service did not start, and why
 	cancelJoin context.CancelFunc
+	joinSlot   int
+}
+
+// A network is one slot's service.
+type network struct {
+	c       *Core
+	slot    int
+	s       *daemon.Service
+	cancel  context.CancelFunc
+	plumber conn.Plumber
+	// cover is the network's prefixes, as the status last named them, which
+	// the VPN routes whole.
+	cover atomic.Pointer[[]netip.Prefix]
+	// coverChanged has the VPN route a changed cover.
+	coverChanged func() error
 }
 
 // platformMu guards running, the one core whose platform the process-wide
@@ -85,8 +110,12 @@ var (
 	running    *Core
 )
 
+// errNoNetwork answers for a slot no network is in.
+var errNoNetwork = errors.New("mobile: no network in that slot")
+
 // Start opens the state directory home, creating this device's keys sealed
-// by p where it has none, and runs the mesh where it is in a network.
+// by p where it has none, and runs the mesh of each network the phone is in:
+// slot 0's in home, the others' beside it.
 func Start(home string, p Platform) (*Core, error) {
 	if p == nil {
 		return nil, errors.New("mobile: no platform")
@@ -104,40 +133,110 @@ func Start(home string, p Platform) (*Core, error) {
 		}
 	}()
 	logf := func(format string, args ...any) { p.Log(fmt.Sprintf(format, args...)) }
-	c := &Core{pace: daemon.NewPace(), logf: logf, dns: newDNSStats(logf)}
-	plumber := conn.NewVPNPlumber(vpn{p}, c.networkPrefixes)
-	c.plumber = plumber
-	c.coverChanged = func() error { return conn.VPNCoverChanged(plumber) }
-	s, err := daemon.NewService(daemon.ServiceOptions{
-		Home:      home,
+	c := &Core{home: filepath.Clean(home), pace: daemon.NewPace(), logf: logf, dns: newDNSStats(logf),
+		nets: map[int]*network{}, failed: map[int]string{}, joinSlot: -1}
+	c.hub = conn.NewVPNHub(vpn{p}, logf)
+	if _, err := c.startNetwork(0); err != nil {
+		c.hub.Close()
+		return nil, err
+	}
+	for slot := 1; slot < MaxNetworks; slot++ {
+		home := c.homeOf(slot)
+		switch {
+		case holdsNetwork(home):
+			if _, err := c.startNetwork(slot); err != nil {
+				c.logf("mobile: network %d: %v", slot, err)
+				c.mu.Lock()
+				c.failed[slot] = err.Error()
+				c.mu.Unlock()
+			}
+		case fileExists(home):
+			// What a join the app did not live to finish left.
+			removeHome(home)
+		}
+	}
+	running, ok = c, true
+	return c, nil
+}
+
+// homeOf is slot's state directory: home for 0, juistn beside it for n, as
+// instances' are on Linux.
+func (c *Core) homeOf(slot int) string {
+	if slot == 0 {
+		return c.home
+	}
+	return filepath.Join(filepath.Dir(c.home), instance.Name(slot))
+}
+
+// holdsNetwork reports whether home holds a network's log.
+func holdsNetwork(home string) bool { return fileExists(filepath.Join(home, keys.LogDir, "anchor")) }
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// removeHome deletes a slot's state directory, keys and all, where it is
+// one: a juist home always holds its node keys.
+func removeHome(home string) error {
+	if !fileExists(filepath.Join(home, keys.NodeKeysFile)) {
+		if entries, err := os.ReadDir(home); err != nil || len(entries) > 0 {
+			return fmt.Errorf("mobile: %s is no juist home, so it is kept", home)
+		}
+	}
+	return os.RemoveAll(home)
+}
+
+// startNetwork runs slot's service, in a network or not yet.
+func (c *Core) startNetwork(slot int) (*network, error) {
+	n := &network{c: c, slot: slot}
+	n.plumber = c.hub.Plumber(slot, n.networkPrefixes)
+	n.coverChanged = func() error { return conn.VPNCoverChanged(n.plumber) }
+	logf := c.logf
+	if slot > 0 {
+		prefix := instance.Name(slot) + ": "
+		logf = func(format string, args ...any) { c.logf(prefix+format, args...) }
+	}
+	opts := daemon.ServiceOptions{
+		Home:      c.homeOf(slot),
 		InProcess: true,
 		Logf:      logf,
 		Mesh: daemon.Options{
 			TunName:      tunName,
-			Plumber:      plumber,
-			HostDNS:      daemon.VPNDNS(plumber, tunName, c.underlayNow),
-			ListenPort:   daemon.DefaultListenPort,
-			GossipPort:   daemon.DefaultGossipPort,
+			Plumber:      n.plumber,
+			HostDNS:      daemon.VPNDNS(n.plumber, tunName, c.underlayNow),
+			ListenPort:   instance.Port(daemon.DefaultListenPort, slot),
+			GossipPort:   instance.Port(daemon.DefaultGossipPort, slot),
 			PortFallback: true,
 			DisableRelay: true,
 			STUN:         rendezvous.DefaultSTUN,
 			ServeDNS:     func([]netip.Addr, func(netip.Addr) bool) (io.Closer, error) { return nil, errNoMembersDNS },
-			Resolver: &daemon.Resolver{Dial: resolverDial(conn.VPNDialer(plumber), c.networkPrefixes),
-				Observe: c.dns.observe},
+			Resolver: &daemon.Resolver{Dial: resolverDial(conn.VPNDialer(n.plumber), n.networkPrefixes),
+				Observe: c.dns.observe, Others: n.otherNames},
 			// The core's own sockets leave past the tunnel, protected, as
 			// juistd's user's do on Linux, and the app opens none of its own.
 			EgressUser: func() string { return "" },
 			// Before the VPN routes the overlay, a dial would leave by the LAN.
-			GossipDial: conn.VPNDial(plumber),
+			GossipDial: conn.VPNDial(n.plumber),
 			Pace:       c.pace,
 			Rests:      true,
 			Logf:       logf,
+			// A higher slot yields IPv4 to a lower one, as a higher instance
+			// does on Linux; the kernel shows a VPN app nothing of either.
+			Instance:     slot,
+			HostHoldings: func(int, string) ([]conn.Holding, error) { return nil, nil },
+			LowerStatus:  c.lowerStatus,
+			LowerHome:    c.homeOf,
 		},
-	})
+	}
+	if meshForTests != nil {
+		meshForTests(slot, &opts.Mesh)
+	}
+	s, err := daemon.NewService(opts)
 	if err != nil {
 		return nil, err
 	}
-	c.s = s
+	n.s = s
 	// Earlier apps turned subnets off for good; the LAN the phone is on is
 	// kept out of them by the network beneath's routes instead.
 	accept := true
@@ -146,16 +245,51 @@ func Start(home string, p Platform) (*Core, error) {
 		return nil, err
 	}
 	st := s.Status()
-	c.follow(&st)
+	n.follow(&st)
 	ctx, cancel := context.WithCancel(context.Background())
-	c.cancel = cancel
+	n.cancel = cancel
 	if err := s.Start(ctx); err != nil {
 		cancel()
 		s.Close()
 		return nil, err
 	}
-	running, ok = c, true
-	return c, nil
+	c.mu.Lock()
+	c.nets[slot] = n
+	delete(c.failed, slot)
+	c.mu.Unlock()
+	return n, nil
+}
+
+// meshForTests, where set, changes what a slot's mesh runs with: a test's
+// host has no device carrying the overlay's addresses.
+var meshForTests func(slot int, o *daemon.Options)
+
+// lowerStatus is slot's status, for a higher slot's check of what it holds.
+func (c *Core) lowerStatus(_ context.Context, slot int) (*ipc.Status, error) {
+	n := c.network(slot)
+	if n == nil {
+		return nil, errNoNetwork
+	}
+	st := n.s.Status()
+	return &st, nil
+}
+
+func (c *Core) network(slot int) *network {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.nets[slot]
+}
+
+// networks are the running networks, by slot.
+func (c *Core) networks() []*network {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]*network, 0, len(c.nets))
+	for _, n := range c.nets {
+		out = append(out, n)
+	}
+	slices.SortFunc(out, func(a, b *network) int { return a.slot - b.slot })
+	return out
 }
 
 // errNoCore is what the process-wide hooks answer while no core runs.
@@ -174,23 +308,41 @@ func hookTo(p Platform) {
 }
 
 // follow keeps the network's prefixes st names, for the VPN's routes, and
-// has a device established before they changed route them.
-func (c *Core) follow(st *ipc.Status) {
+// has a device established before they changed route them. A network that
+// yields IPv4 to a lower slot routes its IPv6 alone.
+func (n *network) follow(st *ipc.Status) {
 	var ps []netip.Prefix
 	if st.InNetwork && !st.NotMember {
-		ps = append(slices.Clone(st.V4Claims), types.ULA(st.Network))
+		if st.HostConflict == nil {
+			ps = slices.Clone(st.V4Claims)
+		}
+		ps = append(ps, types.ULA(st.Network))
 	}
-	old := c.cover.Swap(&ps)
-	if old != nil && !slices.Equal(*old, ps) && c.coverChanged != nil {
-		if err := c.coverChanged(); err != nil {
-			c.logf("mobile: routing the network's prefixes: %v", err)
+	old := n.cover.Swap(&ps)
+	if old != nil && !slices.Equal(*old, ps) && n.coverChanged != nil {
+		if err := n.coverChanged(); err != nil {
+			n.c.logf("mobile: routing the network's prefixes: %v", err)
 		}
 	}
 }
 
-func (c *Core) networkPrefixes() []netip.Prefix {
-	if ps := c.cover.Load(); ps != nil {
+func (n *network) networkPrefixes() []netip.Prefix {
+	if ps := n.cover.Load(); ps != nil {
 		return *ps
+	}
+	return nil
+}
+
+// otherNames answers q from the other networks' names, so that the one
+// resolver the phone asks answers every network's.
+func (n *network) otherNames(q []byte) []byte {
+	for _, o := range n.c.networks() {
+		if o == n {
+			continue
+		}
+		if a := o.s.AnswerNames(q); a != nil {
+			return a
+		}
 	}
 	return nil
 }
@@ -218,11 +370,14 @@ func resolverDial(overlay func(context.Context, string, netip.AddrPort) (net.Con
 	}
 }
 
-// Close stops the mesh and the daemon.
+// Close stops every network's mesh and daemon, and takes the VPN down.
 func (c *Core) Close() {
 	c.CancelJoin()
-	c.cancel()
-	c.s.Close()
+	nets := c.networks()
+	for i := len(nets) - 1; i >= 0; i-- {
+		nets[i].close()
+	}
+	c.hub.Close()
 	platformMu.Lock()
 	if running == c {
 		running = nil
@@ -231,47 +386,195 @@ func (c *Core) Close() {
 	platformMu.Unlock()
 }
 
-func (c *Core) call(req ipc.Request) (ipc.Response, error) { return ipc.CallVia(c.s.Pipe, req) }
+func (n *network) close() {
+	n.cancel()
+	n.s.Close()
+}
 
-// Status is the daemon's status as the app shows it, a JSON [view].
-func (c *Core) Status() (string, error) {
-	resp, err := c.call(ipc.Request{Command: ipc.CmdStatus})
-	if err != nil {
-		return "", err
+// on is slot's network, or errNoNetwork.
+func (c *Core) on(slot int32) (*network, error) {
+	if n := c.network(int(slot)); n != nil {
+		return n, nil
 	}
-	c.follow(resp.Status)
-	b, err := json.Marshal(viewOf(resp.Status, c.underlayNow().PrivateDNS))
+	return nil, errNoNetwork
+}
+
+func (n *network) call(req ipc.Request) (ipc.Response, error) { return ipc.CallVia(n.s.Pipe, req) }
+
+// A slotView is one network's view, by its slot.
+type slotView struct {
+	Slot int `json:"slot"`
+	view
+}
+
+// Status is every network's status as the app shows it, by slot, a JSON
+// list of [view]s each with its slot: slot 0's always, in a network or not.
+func (c *Core) Status() (string, error) {
+	nets := c.networks()
+	sts := make(map[int]*ipc.Status, len(nets))
+	out := []slotView{}
+	for _, n := range nets {
+		resp, err := n.call(ipc.Request{Command: ipc.CmdStatus})
+		if err != nil {
+			if n.slot == 0 {
+				return "", err
+			}
+			out = append(out, slotView{Slot: n.slot, view: view{State: "unstarted", Detail: err.Error()}})
+			continue
+		}
+		n.follow(resp.Status)
+		sts[n.slot] = resp.Status
+		out = append(out, slotView{Slot: n.slot, view: viewOf(resp.Status, c.underlayNow().PrivateDNS)})
+	}
+	for i := range out {
+		if st := sts[out[i].Slot]; st != nil && st.HostConflict != nil && !st.HostConflict.SameNetwork {
+			var names []string
+			if o := sts[st.HostConflict.Instance]; o != nil && o.NetworkName != "" {
+				names = []string{o.NetworkName}
+			}
+			out[i].Alarms = append(out[i].Alarms, alarm{Kind: "noV4", Severity: "warn", Names: names})
+		}
+	}
+	c.mu.Lock()
+	for slot, why := range c.failed {
+		out = append(out, slotView{Slot: slot, view: view{State: "unstarted", Detail: why}})
+	}
+	c.mu.Unlock()
+	slices.SortFunc(out, func(a, b slotView) int { return a.Slot - b.Slot })
+	b, err := json.Marshal(out)
 	return string(b), err
 }
 
-// Join redeems invite, a code or a link, asking for the member name name,
-// and returns once this device is a member or the join failed. CancelJoin
-// ends it.
-func (c *Core) Join(invite, name string, l JoinListener) error {
+// Join redeems invite, a code or a link, asking for the member name name, in
+// the lowest slot no network is in, and returns that slot once this device
+// is a member there or the join failed. CancelJoin ends it.
+func (c *Core) Join(invite, name string, l JoinListener) (int32, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c.mu.Lock()
 	if c.cancelJoin != nil {
 		c.mu.Unlock()
-		return errors.New("a join is under way")
+		return -1, errors.New("a join is under way")
 	}
 	c.cancelJoin = cancel
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
-		c.cancelJoin = nil
+		c.cancelJoin, c.joinSlot = nil, -1
 		c.mu.Unlock()
 	}()
-	_, err := ipc.StreamVia(ctx, c.s.Pipe, ipc.Request{Command: ipc.CmdJoin, Invite: invite, Name: name},
+	n, made, err := c.freeSlot()
+	if err != nil {
+		return -1, err
+	}
+	c.mu.Lock()
+	c.joinSlot = n.slot
+	c.mu.Unlock()
+	_, err = ipc.StreamVia(ctx, n.s.Pipe, ipc.Request{Command: ipc.CmdJoin, Invite: invite, Name: name},
 		func(e *ipc.Event) {
 			if l != nil {
 				l.Progress(int32(e.Kind), e.Text, int32(e.Votes), int32(e.Quorum))
 			}
 		})
 	if ctx.Err() != nil {
-		return context.Canceled
+		err = context.Canceled
 	}
-	return err
+	if err == nil {
+		err = c.joinedTwice(n)
+	}
+	if err != nil && made {
+		c.drop(n)
+	}
+	if err != nil {
+		return -1, err
+	}
+	return int32(n.slot), nil
+}
+
+// joinedTwice undoes a join into a network another slot is in already,
+// which would have the lower of the two stop the other, and says which
+// admission an admin should remove.
+func (c *Core) joinedTwice(n *network) error {
+	st := n.s.Status()
+	for _, o := range c.networks() {
+		if o == n {
+			continue
+		}
+		if ost := o.s.Status(); ost.InNetwork && ost.Network == st.Network {
+			if _, err := n.call(ipc.Request{Command: ipc.CmdReset, Force: true}); err != nil {
+				return err
+			}
+			if n.slot == 0 {
+				c.hub.Remove(0)
+			}
+			return fmt.Errorf("this phone is in %s already; an admin should remove its second admission, %s",
+				cmp.Or(ost.NetworkName, "that network"), cmp.Or(st.SelfName, st.Self.ShortString()))
+		}
+	}
+	return nil
+}
+
+// freeSlot is the slot a join takes, made where it runs no service yet, and
+// whether it was: the lowest above every slot in a network, so that a new
+// network takes IPv4 from none the phone is in, else the lowest free one.
+func (c *Core) freeSlot() (*network, bool, error) {
+	running := map[int]*network{}
+	top := -1
+	for _, n := range c.networks() {
+		running[n.slot] = n
+		if n.s.Status().InNetwork {
+			top = n.slot
+		}
+	}
+	c.mu.Lock()
+	failed := maps.Clone(c.failed)
+	c.mu.Unlock()
+	for _, slot := range joinOrder(top) {
+		if failed[slot] != "" {
+			continue
+		}
+		if n := running[slot]; n != nil {
+			if !n.s.Status().InNetwork {
+				return n, false, nil
+			}
+			continue
+		}
+		if fileExists(c.homeOf(slot)) {
+			if err := removeHome(c.homeOf(slot)); err != nil {
+				return nil, false, err
+			}
+		}
+		n, err := c.startNetwork(slot)
+		return n, err == nil, err
+	}
+	return nil, false, fmt.Errorf("this phone is in %d networks, the most it joins", MaxNetworks)
+}
+
+// joinOrder is the order a join tries the slots in: those above top, then
+// those below it.
+func joinOrder(top int) []int {
+	var out []int
+	for slot := top + 1; slot < MaxNetworks; slot++ {
+		out = append(out, slot)
+	}
+	for slot := 0; slot < top; slot++ {
+		out = append(out, slot)
+	}
+	return out
+}
+
+// drop stops a slot's service but slot 0's, deletes its state and takes its
+// routes off the VPN.
+func (c *Core) drop(n *network) error {
+	if n.slot == 0 {
+		return nil
+	}
+	c.mu.Lock()
+	delete(c.nets, n.slot)
+	c.mu.Unlock()
+	n.close()
+	c.hub.Remove(n.slot)
+	return removeHome(c.homeOf(n.slot))
 }
 
 // CancelJoin ends a join under way, if any.
@@ -284,14 +587,19 @@ func (c *Core) CancelJoin() {
 	}
 }
 
-// Ping sends one TSMP ping through the tunnel to the member whose identity is
-// given as in a [view], and returns the round trip in microseconds.
-func (c *Core) Ping(identity string) (int64, error) {
+// Ping sends one TSMP ping through slot's tunnel to the member whose
+// identity is given as in a [view], and returns the round trip in
+// microseconds.
+func (c *Core) Ping(slot int32, identity string) (int64, error) {
+	n, err := c.on(slot)
+	if err != nil {
+		return 0, err
+	}
 	id, err := types.ParseIdentity(identity)
 	if err != nil {
 		return 0, err
 	}
-	resp, err := c.call(ipc.Request{Command: ipc.CmdPing, Ping: id})
+	resp, err := n.call(ipc.Request{Command: ipc.CmdPing, Ping: id})
 	if err != nil {
 		return 0, err
 	}
@@ -301,28 +609,127 @@ func (c *Core) Ping(identity string) (int64, error) {
 	return resp.Ping.Micros, nil
 }
 
-// UseExit sends the phone's internet through the exit node whose identity is
-// given as in a [view], kept across restarts as `juist exit use` keeps it.
-func (c *Core) UseExit(identity string) error {
+// UseExit sends the phone's internet through the exit node of slot's
+// network whose identity is given as in a [view], kept across restarts as
+// `juist exit use` keeps it; another network's exit node is let go then,
+// since the internet goes to one at a time.
+func (c *Core) UseExit(slot int32, identity string) error {
+	n, err := c.on(slot)
+	if err != nil {
+		return err
+	}
 	id, err := types.ParseIdentity(identity)
 	if err != nil {
 		return err
 	}
-	_, err = c.call(ipc.Request{Command: ipc.CmdExit, ExitNode: id})
-	return err
+	var others []exitChooser
+	for _, o := range c.networks() {
+		if o != n {
+			others = append(others, o)
+		}
+	}
+	return c.chooseExit(n, id, others)
 }
 
 // ExitOff sends the phone's internet directly again.
-func (c *Core) ExitOff() error {
-	_, err := c.call(ipc.Request{Command: ipc.CmdExit, ExitOff: true})
+func (c *Core) ExitOff(slot int32) error {
+	n, err := c.on(slot)
+	if err != nil {
+		return err
+	}
+	c.exitMu.Lock()
+	defer c.exitMu.Unlock()
+	return n.exitOff()
+}
+
+// An exitChooser is a network as the phone chooses its exit node.
+type exitChooser interface {
+	exitNode() (types.Identity, bool)
+	useExit(types.Identity) error
+	exitOff() error
+}
+
+// chooseExit has target's exit node id carry the internet, chosen before
+// the others' are let go, so that it never leaves beside the tunnel
+// meanwhile; where one of theirs cannot be, target's choice goes back to
+// what it was, since the lower of two would keep carrying it.
+func (c *Core) chooseExit(target exitChooser, id types.Identity, others []exitChooser) error {
+	c.exitMu.Lock()
+	defer c.exitMu.Unlock()
+	was, had := target.exitNode()
+	if err := target.useExit(id); err != nil {
+		return err
+	}
+	for _, o := range others {
+		if _, ok := o.exitNode(); !ok {
+			continue
+		}
+		if err := o.exitOff(); err != nil {
+			undo := target.exitOff
+			if had {
+				undo = func() error { return target.useExit(was) }
+			}
+			return errors.Join(err, undo())
+		}
+	}
+	return nil
+}
+
+func (n *network) exitNode() (types.Identity, bool) {
+	st := n.s.Status()
+	if st.Exit == nil || st.Exit.Node.IsZero() {
+		return types.Identity{}, false
+	}
+	return st.Exit.Node, true
+}
+
+func (n *network) useExit(id types.Identity) error {
+	_, err := n.call(ipc.Request{Command: ipc.CmdExit, ExitNode: id})
 	return err
 }
 
-// Forget returns a device the network removed, or one in a disabled network,
-// to a fresh install, with new keys, so it can join again.
-func (c *Core) Forget() error {
-	_, err := c.call(ipc.Request{Command: ipc.CmdReset})
+func (n *network) exitOff() error {
+	_, err := n.call(ipc.Request{Command: ipc.CmdExit, ExitOff: true})
 	return err
+}
+
+// Forget returns slot's device, one the network removed or one in a
+// disabled network, to a fresh install, with new keys, so it can join
+// again; a slot but the first is let go with it.
+func (c *Core) Forget(slot int32) error { return c.leave(slot, false) }
+
+// Leave is Forget for a device the network still lists, which it goes on
+// listing until an admin removes it.
+func (c *Core) Leave(slot int32) error { return c.leave(slot, true) }
+
+func (c *Core) leave(slot int32, force bool) error {
+	if slot > 0 {
+		c.mu.Lock()
+		failed := c.failed[int(slot)] != ""
+		delete(c.failed, int(slot))
+		c.mu.Unlock()
+		if failed {
+			return removeHome(c.homeOf(int(slot)))
+		}
+	}
+	n, err := c.on(slot)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	joining := c.joinSlot == n.slot
+	c.mu.Unlock()
+	if joining {
+		return errors.New("this network is being joined; cancel the join")
+	}
+	if _, err := n.call(ipc.Request{Command: ipc.CmdReset, Force: force}); err != nil {
+		return err
+	}
+	if n.slot == 0 {
+		c.hub.Remove(0)
+		return nil
+	}
+	return c.drop(n)
 }
 
 // NetworkChanged tells the core that Android's default network changed, to
@@ -336,23 +743,33 @@ func (c *Core) NetworkChanged(iface, resolvers string) {
 		c.logf("mobile: %v", err)
 	}
 	c.underlay.Store(&u)
-	conn.SetVPNHostRoutes(c.plumber, underlayRoutes(resolvers))
-	if m := c.s.Mesh(); m != nil {
-		m.NetworkChanged()
+	c.hub.SetHostRoutes(underlayRoutes(resolvers))
+	for _, n := range c.networks() {
+		if m := n.s.Mesh(); m != nil {
+			m.NetworkChanged()
+		}
 	}
 }
 
-// SetNames has the phone's lookups go to juist's resolver, which answers the
-// network's names, or leaves the phone's DNS alone, as `juist set --dns`.
-func (c *Core) SetNames(on bool) error {
-	_, err := c.call(ipc.Request{Command: ipc.CmdSettings, DNS: &on})
+// SetNames has the phone's lookups go to juist's resolver, which answers
+// slot's network's names, or leaves them out, as `juist set --dns`.
+func (c *Core) SetNames(slot int32, on bool) error {
+	n, err := c.on(slot)
+	if err != nil {
+		return err
+	}
+	_, err = n.call(ipc.Request{Command: ipc.CmdSettings, DNS: &on})
 	return err
 }
 
-// SetHTTPSOnly has the phone reach relays by TLS on 443 alone, as `juist set
-// --https-only`, which restarts the mesh.
-func (c *Core) SetHTTPSOnly(on bool) error {
-	_, err := c.call(ipc.Request{Command: ipc.CmdSettings, HTTPSOnly: &on})
+// SetHTTPSOnly has slot's network reach its relays by TLS on 443 alone, as
+// `juist set --https-only`, which restarts its mesh.
+func (c *Core) SetHTTPSOnly(slot int32, on bool) error {
+	n, err := c.on(slot)
+	if err != nil {
+		return err
+	}
+	_, err = n.call(ipc.Request{Command: ipc.CmdSettings, HTTPSOnly: &on})
 	return err
 }
 
@@ -366,9 +783,14 @@ type change struct {
 	Signers []string `json:"signers,omitempty"`
 }
 
-// Changes lists the log's newest changes, newest first, as JSON changes.
-func (c *Core) Changes() (string, error) {
-	changes, _, err := c.s.Changes(maxChanges)
+// Changes lists the newest changes of slot's log, newest first, as JSON
+// changes.
+func (c *Core) Changes(slot int32) (string, error) {
+	n, err := c.on(slot)
+	if err != nil {
+		return "", err
+	}
+	changes, _, err := n.s.Changes(maxChanges)
 	if err != nil {
 		return "", err
 	}

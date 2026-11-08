@@ -109,7 +109,9 @@ context: refer to the files, never print them.
 Until v1.0, milestone M<N> is release `v0.<N>.0`, and its fix release
 `make publish M=M<N>.<K>` is `v0.<N>.<K>`, from an `M<N>.<K> done` commit or
 `AT=` one on a branch off the milestone's; its fixes land on `main` too, or
-the next milestone's publish stops. `PUSH=1` tags the public commit and the
+the next milestone's publish stops. Once pushed, that commit is merged into
+`main`, where `git merge-tree` must show it changes no file, so that every
+release tag stays behind `main`. `PUSH=1` tags the public commit and the
 private one with the version, and the GitHub release takes the tag, titled
 `juist 0.<N>.<K>`. Every package's version is `packaging/version.sh`'s, which
 follows the highest tag behind the commit as Go's stamp in the binaries does.

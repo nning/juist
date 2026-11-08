@@ -238,6 +238,13 @@ func viewOf(s *ipc.Status, privateDNS string) view {
 		v.Members = append(v.Members, m)
 	}
 	slices.SortStableFunc(v.Members, func(a, b member) int { return cmp.Compare(a.Name, b.Name) })
+	if s.HostConflict != nil {
+		// Running without IPv4, the phone reaches no member's.
+		v.Self.V4, v.Self.Retiring = "", ""
+		for i := range v.Members {
+			v.Members[i].V4, v.Members[i].Retiring = "", ""
+		}
+	}
 	if s.Names != nil && s.Names.Domain != "" {
 		dnsNames(&v, s.Names.Domain)
 	}

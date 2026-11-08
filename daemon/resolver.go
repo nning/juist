@@ -23,6 +23,22 @@ type Resolver struct {
 	// Observe, where set, hears of each lookup asked upstream, as
 	// [dnsfwd.Options.Observe].
 	Observe func(query []byte, rcode int, err error, took time.Duration)
+	// Others, where set, answers what this network's names do not, as the
+	// other networks' [Daemon.AnswerNames] on the same host; nil goes on
+	// upstream.
+	Others func(query []byte) []byte
+}
+
+// AnswerNames is the answer to query from this network's names, nil where
+// they do not answer it or do not take the host's lookups.
+func (d *Daemon) AnswerNames(query []byte) []byte {
+	if !d.namesRouted.Load() {
+		return nil
+	}
+	if z := d.zone.Load(); z != nil {
+		return z.Answer(query)
+	}
+	return nil
 }
 
 // withResolver has connect build the data plane with a stack of its own at

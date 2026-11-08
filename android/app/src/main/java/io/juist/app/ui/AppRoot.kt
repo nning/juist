@@ -52,7 +52,10 @@ import io.juist.app.core.CoreOff
 import io.juist.app.core.Report
 import io.juist.app.core.JoinState
 import io.juist.app.core.Juist
-import io.juist.app.core.lastView
+import io.juist.app.core.MAX_NETWORKS
+import io.juist.app.core.NetworkView
+import io.juist.app.core.networks
+import io.juist.app.core.view
 import io.juist.app.ui.screens.AboutScreen
 import io.juist.app.ui.screens.CodeScreen
 import io.juist.app.ui.screens.ConfirmScreen
@@ -60,6 +63,7 @@ import io.juist.app.ui.screens.DetailsScreen
 import io.juist.app.ui.screens.JoiningScreen
 import io.juist.app.ui.screens.LicensesScreen
 import io.juist.app.ui.screens.MemberScreen
+import io.juist.app.ui.screens.NetworksScreen
 import io.juist.app.ui.screens.PingResult
 import io.juist.app.ui.screens.ScanRoute
 import io.juist.app.ui.screens.StatusScreen
@@ -73,36 +77,59 @@ import kotlinx.coroutines.withContext
 /** Where the app is: a stack of screens, kept across a recreated activity. */
 sealed interface Route {
     data object Welcome : Route
+    /** The welcome of a phone in a network already, which joins another. */
+    data object Another : Route
+    data object Networks : Route
     data object Scan : Route
     data object Code : Route
     data class Confirm(val invite: String, val fromElsewhere: Boolean = false) : Route
     data object Joining : Route
-    data object Status : Route
-    data class MemberOf(val identity: String) : Route
+    data class Status(val slot: Int = 0) : Route
+    data class MemberOf(val identity: String, val slot: Int = 0) : Route
     data object About : Route
     data object Licenses : Route
-    data object Details : Route
+    data class Details(val slot: Int = 0) : Route
 
     val depth get() = when (this) {
-        Welcome, Status -> 0
-        Scan, Code, About, Details, is MemberOf -> 1
-        is Confirm, Licenses -> 2
-        Joining -> 3
+        Welcome, Networks -> 0
+        is Status, Another -> 1
+        Scan, Code, About, is Details, is MemberOf -> 2
+        is Confirm, Licenses -> 3
+        Joining -> 4
     }
 }
 
 internal fun encode(r: Route): String = when (r) {
     is Route.Confirm -> (if (r.fromElsewhere) "opened:" else "confirm:") + r.invite
-    is Route.MemberOf -> "member:" + r.identity
+    is Route.MemberOf -> "member:${r.slot}:" + r.identity
+    is Route.Status -> "status:${r.slot}"
+    is Route.Details -> "details:${r.slot}"
     else -> r.toString()
+}
+
+/** The slot a saved route names before its colon, and the rest; slot 0 where it names none, as earlier apps saved it. */
+private fun slotted(s: String): Pair<Int, String> {
+    val n = s.substringBefore(':', "")
+    return n.toIntOrNull()?.let { it to s.substringAfter(':') } ?: (0 to s)
 }
 
 internal fun decode(s: String): Route = when {
     s.startsWith("confirm:") -> Route.Confirm(s.removePrefix("confirm:"))
     s.startsWith("opened:") -> Route.Confirm(s.removePrefix("opened:"), fromElsewhere = true)
-    s.startsWith("member:") -> Route.MemberOf(s.removePrefix("member:"))
-    else -> listOf(Route.Welcome, Route.Scan, Route.Code, Route.Joining, Route.Status, Route.About, Route.Licenses, Route.Details)
+    s.startsWith("member:") -> slotted(s.removePrefix("member:")).let { (slot, id) -> Route.MemberOf(id, slot) }
+    s.startsWith("status:") -> Route.Status(s.removePrefix("status:").toIntOrNull() ?: 0)
+    s.startsWith("details:") -> Route.Details(s.removePrefix("details:").toIntOrNull() ?: 0)
+    s == "Status" -> Route.Status(0)
+    s == "Details" -> Route.Details(0)
+    else -> listOf(Route.Welcome, Route.Another, Route.Networks, Route.Scan, Route.Code, Route.Joining, Route.About, Route.Licenses)
         .firstOrNull { it.toString() == s } ?: Route.Welcome
+}
+
+/** The screen a phone in networks starts at: the welcome in none, the network's status in one, the list in more. */
+internal fun homeOf(networks: List<NetworkView>): Route = when (networks.size) {
+    0 -> Route.Welcome
+    1 -> Route.Status(networks[0].slot)
+    else -> Route.Networks
 }
 
 private val stackSaver = listSaver<List<Route>, String>({ it.map(::encode) }, { it.map(::decode) })
@@ -113,17 +140,23 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
     val connection by Juist.connection.collectAsStateWithLifecycle()
     val join by Juist.join.collectAsStateWithLifecycle()
     val pace by Juist.pace.collectAsStateWithLifecycle()
-    val inNetwork = connection.lastView?.inNetwork == true
-    val home = if (inNetwork) Route.Status else Route.Welcome
+    val networks = connection.networks
+    val inNetwork = networks.isNotEmpty()
+    val home = homeOf(networks)
     var stack by rememberSaveable(stateSaver = stackSaver) { mutableStateOf(listOf(home)) }
     fun push(r: Route) { stack = stack + r }
     fun pop() { if (stack.size > 1) stack = stack.dropLast(1) }
+    // Where a join starts: the welcome, or for another network the networks and the welcome beside them.
+    val joinBase = if (inNetwork) listOf(home, Route.Another) else listOf(Route.Welcome)
+    val canJoinAnother = inNetwork && networks.size < MAX_NETWORKS
+    val most = stringResource(R.string.networks_most, MAX_NETWORKS)
 
-    // The network decides where home is: joined, removed and forgotten move it.
-    LaunchedEffect(inNetwork, join) {
+    // The networks decide where home is: joined, removed, left and forgotten move it.
+    LaunchedEffect(home, join) {
         when {
             join is JoinState.Joined -> {
-                stack = listOf(Route.Status)
+                val slot = (join as JoinState.Joined).slot
+                stack = if (home == Route.Networks) listOf(Route.Networks, Route.Status(slot)) else listOf(home)
                 Juist.clearJoin()
             }
             join is JoinState.Running -> {}
@@ -136,7 +169,14 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
     LaunchedEffect(opened.value, inNetwork) {
         val link = opened.value ?: return@LaunchedEffect
         opened.value = null
-        if (!inNetwork && join !is JoinState.Running) stack = listOf(Route.Welcome, Route.Confirm(link, fromElsewhere = true))
+        if (join is JoinState.Running) return@LaunchedEffect
+        if (!inNetwork) {
+            stack = listOf(Route.Welcome, Route.Confirm(link, fromElsewhere = true))
+        } else if (canJoinAnother) {
+            stack = listOf(home, Route.Another, Route.Confirm(link, fromElsewhere = true))
+        } else {
+            toast(context, most)
+        }
     }
     BackHandler(stack.size > 1) {
         if (stack.last() == Route.Joining) Juist.cancelJoin()
@@ -198,6 +238,18 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
     ) { route -> saved.SaveableStateProvider(encode(route)) {
         when (route) {
             Route.Welcome -> WelcomeScreen(onScan = { push(Route.Scan) }, onCode = { push(Route.Code) }, onAbout = { push(Route.About) })
+            Route.Another -> WelcomeScreen(onScan = { push(Route.Scan) }, onCode = { push(Route.Code) }, onAbout = { push(Route.About) },
+                onBack = ::pop)
+            Route.Networks -> NetworksScreen(
+                connection = connection,
+                onConnect = { withVpn { Juist.connect(context) } },
+                onDisconnect = { Juist.disconnect(context) },
+                onNetwork = { push(Route.Status(it)) },
+                onJoinAnother = { push(Route.Another) },
+                onAbout = { push(Route.About) },
+                onStartOver = { Juist.startOver(context) },
+                saving = pace.powerSave,
+            )
             Route.Scan -> ScanRoute(
                 onInvite = { stack = stack.dropLast(1) + Route.Confirm(it) },
                 onCode = { stack = stack.dropLast(1) + Route.Code },
@@ -227,33 +279,48 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                 },
                 onScan = {
                     Juist.clearJoin()
-                    stack = listOf(Route.Welcome, Route.Scan)
+                    stack = joinBase + Route.Scan
                 },
             )
-            Route.Status -> StatusScreen(
-                connection = connection,
-                onConnect = { withVpn { Juist.connect(context) } },
-                onDisconnect = { Juist.disconnect(context) },
-                onMember = { push(Route.MemberOf(it.identity)) },
-                onAbout = { push(Route.About) },
-                onDetails = { push(Route.Details) },
-                // A device in no network has nothing to keep a VPN on for.
-                onForget = {
-                    scope.launch {
-                        Juist.forget().fold({ Juist.disconnect(context) }, { toast(context, errorText(context, it)) })
-                    }
-                },
-                onStartOver = { Juist.startOver(context) },
-                onExit = { id ->
-                    scope.launch {
-                        Juist.useExit(id).onFailure { toast(context, errorText(context, it)) }
-                    }
-                },
-                onVpnSettings = { runCatching { context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) } },
-                saving = pace.powerSave,
-            )
+            is Route.Status -> {
+                val slot = route.slot
+                // A network left or forgotten beside others leaves its screen.
+                if (stack.size > 1 && connection.view(slot)?.inNetwork != true) LaunchedEffect(Unit) { pop() }
+                StatusScreen(
+                    connection = connection,
+                    onConnect = { withVpn { Juist.connect(context) } },
+                    onDisconnect = { Juist.disconnect(context) },
+                    onMember = { push(Route.MemberOf(it.identity, slot)) },
+                    onAbout = { push(Route.About) },
+                    onDetails = { push(Route.Details(slot)) },
+                    // A device in no network has nothing to keep a VPN on for.
+                    onForget = {
+                        scope.launch {
+                            Juist.forget(slot).fold({ if (Juist.connection.value.networks.isEmpty()) Juist.disconnect(context) },
+                                { toast(context, errorText(context, it)) })
+                        }
+                    },
+                    onStartOver = { Juist.startOver(context) },
+                    onExit = { id ->
+                        scope.launch {
+                            Juist.useExit(slot, id).onFailure { toast(context, errorText(context, it)) }
+                        }
+                    },
+                    onVpnSettings = { runCatching { context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) } },
+                    saving = pace.powerSave,
+                    slot = slot,
+                    onJoinAnother = if (canJoinAnother) ({ push(Route.Another) }) else null,
+                    onLeave = {
+                        scope.launch {
+                            Juist.leave(slot).fold({ if (Juist.connection.value.networks.isEmpty()) Juist.disconnect(context) },
+                                { toast(context, errorText(context, it)) })
+                        }
+                    },
+                    onBack = if (stack.size > 1) ::pop else null,
+                )
+            }
             is Route.MemberOf -> {
-                val view = Juist.last
+                val view = connection.view(route.slot)
                 val member = (if (view?.self?.identity == route.identity) view.self else null)
                     ?: view?.members?.firstOrNull { it.identity == route.identity }
                 if (member == null) {
@@ -267,7 +334,7 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                         onPing = {
                             pinging += member.identity
                             scope.launch {
-                                val r = Juist.ping(member.identity).fold(
+                                val r = Juist.ping(route.slot, member.identity).fold(
                                     { PingResult(it) },
                                     { PingResult(null, errorText(context, it)) },
                                 )
@@ -287,14 +354,15 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                 onCopyLog = { copyPrivately(context, Report.text(context, BuildConfig.VERSION_NAME)) },
                 onBack = ::pop,
             )
-            Route.Details -> {
-                val view = Juist.last
+            is Route.Details -> {
+                val slot = route.slot
+                val view = connection.view(slot)
                 if (view == null) {
                     LaunchedEffect(Unit) { pop() }
                 } else {
                     val on = connection is Connection.On
-                    val changes by produceState<List<io.juist.app.core.Change>?>(null, on) {
-                        value = if (on) Juist.changes().getOrNull() else null
+                    val changes by produceState<List<io.juist.app.core.Change>?>(null, on, slot) {
+                        value = if (on) Juist.changes(slot).getOrNull() else null
                     }
                     val diagnosis by produceState(Juist.diagnosis(), connection) { value = Juist.diagnosis() }
                     DetailsScreen(
@@ -302,8 +370,8 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                         on = on,
                         changes = changes,
                         diagnosis = diagnosis,
-                        onNames = { v -> scope.launch { Juist.setNames(v).onFailure { toast(context, errorText(context, it)) } } },
-                        onHttpsOnly = { v -> scope.launch { Juist.setHttpsOnly(v).onFailure { toast(context, errorText(context, it)) } } },
+                        onNames = { v -> scope.launch { Juist.setNames(slot, v).onFailure { toast(context, errorText(context, it)) } } },
+                        onHttpsOnly = { v -> scope.launch { Juist.setHttpsOnly(slot, v).onFailure { toast(context, errorText(context, it)) } } },
                         onCopyReport = { copyPrivately(context, Report.text(context, BuildConfig.VERSION_NAME)) },
                         onBack = ::pop,
                     )

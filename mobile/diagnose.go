@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
-
-	"github.com/nning/juist/conn"
 )
 
 // slowLookup is how long a lookup may take before it counts as slow.
@@ -140,7 +138,7 @@ type diagnosis struct {
 // JSON diagnosis: how often the VPN was established, whether the core saves
 // battery, and how the resolver's lookups went.
 func (c *Core) Diagnose() string {
-	n, last := conn.VPNEstablished(c.plumber)
+	n, last := c.hub.Established()
 	d := diagnosis{Established: n, Saving: c.pace.Saving(), DNS: c.dns.snapshot()}
 	if !last.IsZero() {
 		d.LastEstablished = last.Unix()

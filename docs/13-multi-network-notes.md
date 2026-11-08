@@ -198,6 +198,59 @@ every instance and revokes every device's firewall rule, and leaves their
 homes, which hold keys, as it leaves the default's. `firewall.sh` takes the
 device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
 
+## On a phone: slots behind one VPN
+
+A phone has one VPN, and a `VpnService` one device, so the app runs every
+network's service in one process (`mobile`), each in a numbered slot that
+plays an instance's part:
+
+- **Slot 0** is the app's state directory as it always was, so that a phone
+  joined before keeps its network as it is. Slot n's is `juistn` beside it;
+  its ports are slot 0's plus 10·n, as an instance's. A join takes the
+  lowest free slot above every slot in a network, and the lowest free one
+  only where none is left above, so that a new network takes IPv4 from none
+  the phone is in; one into a network a slot is in already is reset at once.
+  A slot left is deleted, but slot 0, which is reset. A slot's directory without a network, as a join the app did not
+  live to finish leaves, is deleted at the next start, and only where it
+  holds node keys.
+- **At most four networks** (`mobile.MaxNetworks`): each keeps tunnels,
+  relays and announcements of its own, which the phone pays for in battery.
+- **One Keystore key** seals every slot's keys. Each slot's keys are files
+  of their own, but another key would keep nothing apart that the app's own
+  user does not already hold.
+- **A network's alarm stays its own.** Its mesh stops or limits itself as
+  on Linux; the other networks' tunnels, routes and names stay up.
+
+`conn.VPNHub` is the one device. It establishes the union of what the slots
+route, and establishes it again only when that union changes, since Android
+replaces every connection through the device each time; a mesh restarting
+keeps its slot's routes for ten seconds, so that a restart establishes the
+device once at most. A packet from the phone goes to the lowest slot whose
+routes hold its destination, the internet to the slot whose exit node is in
+use, and the rest nowhere. Android picks one source address for the whole
+device, so a packet sent from another slot's address leaves from its own,
+and the answer is translated back by the flow it belongs to. A slot writes
+to the phone only to its own addresses and to multicast groups, and from
+nowhere another slot's routes lead, which its exit node or a subnet router
+could claim: no slot reaches another's address on the phone, nor has the
+phone answer into another network, and Android forwards nothing between
+them. A translation goes with its slot's addresses.
+
+The M5 rules hold by slot: a slot asks the slots below it what their
+networks claim, in-process, and runs without IPv4 where one holds it, or
+does not start in a network a lower slot is in. The phone rechecks at its
+pace, every five seconds with the screen on, every ten minutes saving.
+
+- **Names.** The phone asks one resolver, the exit node's slot's where one
+  is in use, and else the lowest slot's with names on. It answers every
+  slot's names with names on, from their zones in-process, and searches
+  their domains, the rest upstream as its own slot does: by the exit node
+  where one is in use, so that no lookup leaves beside it. With that slot's
+  names off, the exit node's resolvers take every lookup, and no slot's
+  names resolve.
+- **Exit nodes.** The internet goes to one slot's exit node at a time:
+  choosing one lets another slot's go, once the new one is chosen.
+
 ## Still open
 
 - **Other networks' addresses in path discovery.** magicsock learns this
@@ -213,7 +266,9 @@ device: `allow juist3`, `revoke juist3`, or `revoke` alone for all ten.
 ## Verification
 
 Unprivileged: `internal/instance` (names, ports), `conn`
-(`TestInstancesKeepTheirRulesApart`, `TestInstanceHoldingsUnprivileged`),
+(`TestInstancesKeepTheirRulesApart`, `TestInstanceHoldingsUnprivileged`,
+the hub's `TestAHub…`), `mobile/networks_test.go` (two networks in one core
+behind one device, one yielding IPv4, one left),
 `daemon/host_test.go` (claims, the conflict rule, an instance that runs
 without IPv4 and takes it back, one that refuses its own network twice, a
 default that never yields), `cmd/juist/instances_test.go` (a host in-process

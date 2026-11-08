@@ -3,6 +3,7 @@ package conn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -174,6 +175,10 @@ func (m *tsManager) watchEngine(logf logger.Logf) logger.Logf {
 				m.noteNotHere(r, short)
 			}
 		}
+		if rest, ok := strings.CutPrefix(format, wgErrorPrefix); ok && !strings.HasPrefix(rest, "[v2] ") {
+			s := fmt.Sprintf(rest, args...)
+			m.wgError.Store(&s)
+		}
 		if m.homeless.Load() && strings.HasPrefix(format, homeDERPChanging) {
 			return
 		}
@@ -187,6 +192,7 @@ func (m *tsManager) watchEngine(logf logger.Logf) logger.Logf {
 const (
 	homeDERPChanging = "magicsock: home DERP changing"
 	addingDERPConn   = "magicsock: adding connection to derp-%v for %v"
+	wgErrorPrefix    = "wg: "
 )
 
 // stunDropEvery bounds how often dropSTUNConn installs the map twice, as a

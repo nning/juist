@@ -233,7 +233,9 @@ func (m *member) env() []string {
 	return append(os.Environ(), "JUIST_HOME="+m.home+"-keys", "JUIST_SOCKET="+m.sock())
 }
 
-func startMember(bin, dir, name string, port int) (*member, error) {
+// startMember starts a member's juistd, with env added to its environment;
+// port 0 has it take every port the OS chooses.
+func startMember(bin, dir, name string, port int, env ...string) (*member, error) {
 	m := &member{name: name, home: filepath.Join(dir, name), port: port}
 	os.RemoveAll(m.home)
 	os.RemoveAll(m.home + "-keys")
@@ -250,9 +252,13 @@ func startMember(bin, dir, name string, port int) (*member, error) {
 	if err != nil {
 		return nil, err
 	}
-	m.cmd = exec.Command(filepath.Join(bin, "juistd"), "--home", m.home, "--verbose",
-		"--port", strconv.Itoa(port), "--gossip-port", strconv.Itoa(port+1), "--relay-port", strconv.Itoa(port+2),
-		"--serve", "web="+web.Addr().String())
+	ports := []string{"--port", strconv.Itoa(port), "--gossip-port", strconv.Itoa(port + 1), "--relay-port", strconv.Itoa(port + 2)}
+	if port == 0 {
+		ports = []string{"--port", "0", "--gossip-port", "0", "--relay-port", "0"}
+	}
+	m.cmd = exec.Command(filepath.Join(bin, "juistd"), append(append([]string{"--home", m.home, "--verbose"}, ports...),
+		"--serve", "web="+web.Addr().String())...)
+	m.cmd.Env = append(os.Environ(), env...)
 	m.cmd.Stdout, m.cmd.Stderr = log, log
 	if err := m.cmd.Start(); err != nil {
 		return nil, err
@@ -277,8 +283,9 @@ func (m *member) restart(bin string) error {
 	if err != nil {
 		return err
 	}
-	args := m.cmd.Args
+	args, env := m.cmd.Args, m.cmd.Env
 	m.cmd = exec.Command(filepath.Join(bin, "juistd"), args[1:]...)
+	m.cmd.Env = env
 	m.cmd.Stdout, m.cmd.Stderr = log, log
 	if err := m.cmd.Start(); err != nil {
 		return err
@@ -568,6 +575,18 @@ func smoke(apk, bin, dir string) (err error) {
 			m.stop()
 		}
 	}()
+	// What the phone showed and logged when it failed, for the next question.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if ui, uerr := shell("uiautomator dump /sdcard/ui.xml >/dev/null && cat /sdcard/ui.xml"); uerr == nil {
+			os.WriteFile(filepath.Join(dir, "ui.xml"), []byte(ui), 0o644)
+		}
+		if logs, lerr := adb("logcat", "-d", "-t", "3000"); lerr == nil {
+			os.WriteFile(filepath.Join(dir, "logcat.txt"), []byte(logs), 0o644)
+		}
+	}()
 	for i, name := range []string{"a", "b"} {
 		m, err := startMember(bin, dir, name, 41843+10*i)
 		if err != nil {
@@ -618,19 +637,169 @@ func smoke(apk, bin, dir string) (err error) {
 	if v4 == "" || st.Names == nil || st.Names.Domain == "" {
 		return fmt.Errorf("a has no address or the network no domain: %q, %+v", v4, st.Names)
 	}
-	for _, to := range []string{v4, "a." + st.Names.Domain} {
+	if err := phonePings(v4, "a."+st.Names.Domain); err != nil {
+		return err
+	}
+	if err := pingsPhone(a, phone); err != nil {
+		return err
+	}
+	return secondNetwork(bin, dir, &ms, a, phone, v4, st.Names.Domain)
+}
+
+// phonePings waits for the phone's ping of each of to to be answered.
+func phonePings(to ...string) error {
+	for _, t := range to {
 		var out string
-		if err := waitFor(time.Minute, "the phone's ping of "+to, func() bool {
-			out, err = shell("ping -c1 -W5 " + to)
+		var err error
+		if werr := waitFor(time.Minute, "the phone's ping of "+t, func() bool {
+			out, err = shell("ping -c1 -W5 " + t)
 			return err == nil && strings.Contains(out, " 0% packet loss")
-		}); err != nil {
-			return fmt.Errorf("%w: %s", err, out)
+		}); werr != nil {
+			return fmt.Errorf("%w: %s", werr, out)
 		}
 	}
-	return waitFor(time.Minute, "a's ping of the phone", func() bool {
-		resp, err := ipc.Call(a.sock(), ipc.Request{Command: ipc.CmdPing, Ping: phone})
+	return nil
+}
+
+// pingsPhone waits for m's ping of the phone, by its identity, to be
+// answered.
+func pingsPhone(m *member, phone types.Identity) error {
+	return waitFor(time.Minute, m.name+"'s ping of the phone", func() bool {
+		resp, err := ipc.Call(m.sock(), ipc.Request{Command: ipc.CmdPing, Ping: phone})
 		return err == nil && resp.Ping != nil && resp.Ping.Micros > 0
 	})
+}
+
+// secondNetwork joins the phone, in the first network beside a, to a
+// second one of two members, c relaying and d reached through its relay
+// alone; checks that the phone reaches both networks' members by address
+// and name; and leaves the second network in the app, the first's tunnel
+// to a up throughout.
+func secondNetwork(bin, dir string, ms *[]*member, a *member, phone types.Identity, aV4, domain string) error {
+	for _, name := range []string{"c", "d"} {
+		port, env := 41863, []string(nil)
+		if name == "d" {
+			// Relay-only by the knob, which leaves a fixed port unbound,
+			// so that juistd takes it for one another program holds.
+			port, env = 0, []string{"TS_DEBUG_ALWAYS_USE_DERP=true"}
+		}
+		m, err := startMember(bin, dir, name, port, env...)
+		if err != nil {
+			return err
+		}
+		*ms = append(*ms, m)
+	}
+	c, d := (*ms)[2], (*ms)[3]
+	if err := c.juist(bin, "create", "smoke2", "--device", "c"); err != nil {
+		return err
+	}
+	// Granted first, so that d learns of the relay by joining: without it, d
+	// reaches no one to learn of it from.
+	if err := c.juist(bin, "grant", "c", "relay"); err != nil {
+		return err
+	}
+	if err := invite(bin, c, "d", func(link string) error { return d.juist(bin, "join", link, "--name", "d") }); err != nil {
+		return err
+	}
+	if err := invite(bin, c, "phone", joinPhone); err != nil {
+		return err
+	}
+	second, err := waitLive(c, d, "phone")
+	if err != nil {
+		return err
+	}
+	if err := waitFor(3*time.Minute, "d's tunnel to the phone through c's relay", func() bool {
+		st, err := d.status()
+		return err == nil && slices.ContainsFunc(st.Reach, func(r ipc.PeerReach) bool {
+			return r.Identity == second && r.Live && !r.Direct && r.Relay != ""
+		})
+	}); err != nil {
+		return err
+	}
+	st, err := d.status()
+	if err != nil {
+		return err
+	}
+	if st.Names == nil || st.Names.Domain == "" || st.Names.Domain == domain {
+		return fmt.Errorf("the second network has no domain of its own: %+v", st.Names)
+	}
+	var dV4 string
+	for _, dev := range st.Devices {
+		if dev.Name == "d" {
+			dV4 = dev.V4
+		}
+	}
+	if dV4 == "" {
+		return fmt.Errorf("d has no IPv4 address: %+v", st.Devices)
+	}
+	if err := phonePings(aV4, "a."+domain, "c."+st.Names.Domain, dV4, "d."+st.Names.Domain); err != nil {
+		return err
+	}
+	if err := pingsPhone(d, second); err != nil {
+		return err
+	}
+
+	// Leaving the second network keeps the first's tunnel to a: it stays
+	// live while the app leaves, but for a sample or two lost, and both
+	// ways answer after.
+	stop := make(chan struct{})
+	down := make(chan string, 1)
+	go func() {
+		missed := 0
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Second):
+			}
+			st, err := a.status()
+			if err != nil || slices.ContainsFunc(st.Reach, func(r ipc.PeerReach) bool { return r.Identity == phone && r.Live }) {
+				missed = 0
+				continue
+			}
+			if missed++; missed == 3 {
+				select {
+				case down <- "a's tunnel to the phone went down while it left the second network":
+				default:
+				}
+			}
+		}
+	}()
+	err = leaveInApp("smoke2")
+	if err == nil {
+		err = waitFor(time.Minute, "the second network's names gone from the phone", func() bool {
+			_, err := shell("ping -c1 -W2 c." + st.Names.Domain)
+			return err != nil
+		})
+	}
+	if err == nil {
+		err = phonePings(aV4, "a."+domain)
+	}
+	if err == nil {
+		err = pingsPhone(a, phone)
+	}
+	close(stop)
+	if err != nil {
+		return err
+	}
+	select {
+	case why := <-down:
+		return errors.New(why)
+	default:
+	}
+	return nil
+}
+
+// leaveInApp leaves the network named network from its screen in the app.
+func leaveInApp(network string) error {
+	for _, step := range []struct{ attr, value string }{
+		{"text", network}, {"content-desc", "More"}, {"text", "Leave network"}, {"text", "Leave"},
+	} {
+		if err := tapBy(step.attr, step.value, time.Minute, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // idleFor waits out length, restarting one of ms but the first two, which
@@ -658,8 +827,11 @@ func joinPhone(link string) error {
 }
 
 // boundsOf finds the bounds of the first view whose text is text in dump.
-func boundsOf(dump, text string) (x, y int, ok bool) {
-	re := regexp.MustCompile(`text="` + regexp.QuoteMeta(text) + `"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"`)
+func boundsOf(dump, text string) (x, y int, ok bool) { return boundsBy(dump, "text", text) }
+
+// boundsBy finds the bounds of the first view whose attr is value in dump.
+func boundsBy(dump, attr, value string) (x, y int, ok bool) {
+	re := regexp.MustCompile(` ` + attr + `="` + regexp.QuoteMeta(value) + `"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"`)
 	m := re.FindStringSubmatch(dump)
 	if m == nil {
 		return 0, 0, false
@@ -672,9 +844,14 @@ func boundsOf(dump, text string) (x, y int, ok bool) {
 // "Wait" to a dialog saying an app is not responding, as the emulator's
 // System UI is under load, and calling again while none shows.
 func tap(text string, limit time.Duration, again func()) error {
+	return tapBy("text", text, limit, again)
+}
+
+// tapBy is tap for the first view whose attr is value.
+func tapBy(attr, value string, limit time.Duration, again func()) error {
 	var x, y int
 	tries := 0
-	if err := waitFor(limit, "a view saying "+text, func() bool {
+	if err := waitFor(limit, "a view whose "+attr+" is "+value, func() bool {
 		dump, err := shell("uiautomator dump /sdcard/ui.xml >/dev/null && cat /sdcard/ui.xml")
 		if err != nil {
 			return false
@@ -684,7 +861,7 @@ func tap(text string, limit time.Duration, again func()) error {
 			return false
 		}
 		var ok bool
-		if x, y, ok = boundsOf(dump, text); ok {
+		if x, y, ok = boundsBy(dump, attr, value); ok {
 			return true
 		}
 		if tries++; tries%5 == 0 && again != nil {

@@ -52,6 +52,11 @@ func (v *fakeVPN) established() int {
 	return len(v.far)
 }
 
+// newVPNPlumber is the plumber of the one network on a hub of its own.
+func newVPNPlumber(v VPN, cover func() []netip.Prefix) Plumber {
+	return NewVPNHub(v, func(string, ...any) {}).Plumber(0, cover)
+}
+
 func readPacket(t *testing.T, d tun.Device) chan []byte {
 	t.Helper()
 	got := make(chan []byte, 4)
@@ -74,7 +79,7 @@ func readPacket(t *testing.T, d tun.Device) chan []byte {
 
 func TestAVPNDeviceMovesToEachEstablishedDescriptor(t *testing.T) {
 	v := &fakeVPN{t: t}
-	dev, rtr := newVPNPlumbed(NewVPNPlumber(v, nil).(*vpnPlumber), "juist0", 1280, t.Logf)
+	dev, rtr := newVPNPlumbed(newVPNPlumber(v, nil).(*vpnPlumber), "juist0", 1280, t.Logf)
 	got := readPacket(t, dev)
 	recv := func(what string) []byte {
 		t.Helper()
@@ -143,7 +148,7 @@ func TestAVPNDeviceMovesToEachEstablishedDescriptor(t *testing.T) {
 }
 
 func TestAVPNPlumberServesNothing(t *testing.T) {
-	p := NewVPNPlumber(&fakeVPN{t: t}, nil)
+	p := newVPNPlumber(&fakeVPN{t: t}, nil)
 	if err := p.SetEgress("juist0", plumber.EgressSpec{Mode: plumber.EgressDirect}); err != nil {
 		t.Errorf("leaving the host's traffic as it is: %v", err)
 	}
@@ -161,7 +166,7 @@ func TestAVPNPlumberServesNothing(t *testing.T) {
 func TestAVPNRoutesTheNetworkWholeAndIsNotEstablishedAgainForAMember(t *testing.T) {
 	v := &fakeVPN{t: t}
 	network := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/22"), netip.MustParsePrefix("fd00:1:2::/48")}
-	dev, rtr := newVPNPlumbed(NewVPNPlumber(v, func() []netip.Prefix { return network }).(*vpnPlumber), "juist0", 1280, t.Logf)
+	dev, rtr := newVPNPlumbed(newVPNPlumber(v, func() []netip.Prefix { return network }).(*vpnPlumber), "juist0", 1280, t.Logf)
 	defer dev.Close()
 	self := []netip.Prefix{netip.MustParsePrefix("10.0.0.2/32"), netip.MustParsePrefix("fd00:1:2::2/128")}
 	peers := []netip.Prefix{netip.MustParsePrefix("10.0.0.3/32"), netip.MustParsePrefix("fd00:1:2::3/128"),
@@ -188,7 +193,7 @@ func routes(rs []netip.Prefix, a string) bool {
 func TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS(t *testing.T) {
 	v := &fakeVPN{t: t}
 	network := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/22"), netip.MustParsePrefix("fd00:1:2::/48")}
-	p := NewVPNPlumber(v, func() []netip.Prefix { return network }).(*vpnPlumber)
+	p := newVPNPlumber(v, func() []netip.Prefix { return network }).(*vpnPlumber)
 	dev, rtr := newVPNPlumbed(p, "juist0", 1280, t.Logf)
 	defer dev.Close()
 	self := []netip.Prefix{netip.MustParsePrefix("10.0.0.2/32"), netip.MustParsePrefix("fd00:1:2::2/128")}
@@ -250,7 +255,7 @@ func TestAVPNDialLeavesByTheDeviceAlone(t *testing.T) {
 	}
 	defer ln.Close()
 	to := netip.MustParseAddrPort(ln.Addr().String())
-	p := NewVPNPlumber(&fakeVPN{t: t}, nil)
+	p := newVPNPlumber(&fakeVPN{t: t}, nil)
 	dial := VPNDial(p)
 	if c, err := dial(t.Context(), to); err == nil {
 		c.Close()
@@ -288,7 +293,7 @@ func TestAVPNDialLeavesByTheDeviceAlone(t *testing.T) {
 func TestAVPNIsEstablishedAgainOnceTheNetworksPrefixesAreKnown(t *testing.T) {
 	v := &fakeVPN{t: t}
 	var network []netip.Prefix
-	p := NewVPNPlumber(v, func() []netip.Prefix { return network })
+	p := newVPNPlumber(v, func() []netip.Prefix { return network })
 	dev, rtr := newVPNPlumbed(p.(*vpnPlumber), "juist0", 1280, t.Logf)
 	defer dev.Close()
 	self := []netip.Prefix{netip.MustParsePrefix("10.0.0.2/32")}
@@ -302,7 +307,7 @@ func TestAVPNIsEstablishedAgainOnceTheNetworksPrefixesAreKnown(t *testing.T) {
 	if err := VPNCoverChanged(p); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := VPNEstablished(p); v.established() != 2 || n != 2 {
+	if n, _ := p.(*vpnPlumber).hub.Established(); v.established() != 2 || n != 2 {
 		t.Fatalf("established %d times, counted %d, want 2", v.established(), n)
 	}
 	if got := v.given[1].Routes; !slices.Contains(got, network[0]) || slices.Contains(got, netip.MustParsePrefix("10.0.0.3/32")) {
@@ -313,14 +318,14 @@ func TestAVPNIsEstablishedAgainOnceTheNetworksPrefixesAreKnown(t *testing.T) {
 // What the network beneath the VPN routes is the host's routes, and a change
 // to them is heard.
 func TestAVPNTakesTheNetworkBeneathsRoutesAsTheHosts(t *testing.T) {
-	p := NewVPNPlumber(&fakeVPN{t: t}, nil)
+	p := newVPNPlumber(&fakeVPN{t: t}, nil)
 	dev, rtr := newVPNPlumbed(p.(*vpnPlumber), "juist0", 1280, t.Logf)
 	defer dev.Close()
 	heard := 0
 	rtr.(hostRouter).watchHostRoutes(func() { heard++ })
 	lan := []netip.Prefix{netip.MustParsePrefix("192.168.1.0/24")}
-	SetVPNHostRoutes(p, lan)
-	SetVPNHostRoutes(p, lan)
+	p.(*vpnPlumber).hub.SetHostRoutes(lan)
+	p.(*vpnPlumber).hub.SetHostRoutes(lan)
 	if got := rtr.(hostRouter).hostRoutes(); !slices.Equal(got, lan) || heard != 1 {
 		t.Errorf("host routes %v, heard %d times, want %v once", got, heard, lan)
 	}

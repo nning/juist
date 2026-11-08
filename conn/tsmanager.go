@@ -63,7 +63,7 @@ type Options struct {
 	TunName string
 
 	// Plumber, where set, creates the device TunName names and routes it,
-	// for a node that may not itself, as on FreeBSD; one from [NewVPNPlumber]
+	// for a node that may not itself, as on FreeBSD; one from [VPNHub.Plumber]
 	// establishes it as Android's VpnService does.
 	Plumber Plumber
 
@@ -93,6 +93,11 @@ type Options struct {
 	// the host's interfaces or their addresses change, on a device of its
 	// own.
 	OnInterfacesChange func()
+
+	// OnLost is called once, from another goroutine, when the data plane
+	// ends without Close, as when its device fails: the manager is of no
+	// further use, and the caller closes it and starts another.
+	OnLost func(error)
 
 	// HTTPSOnly sends nothing but TLS to 443/tcp of relays' names: no UDP
 	// and no peer relay, and STUN is ignored. Every packet then goes through
@@ -148,6 +153,10 @@ type tsManager struct {
 	// not tear the engine down under a SetPeers in flight.
 	apply  sync.Mutex
 	closed bool // guarded by apply: Close has run, the engine is gone
+
+	// wgError is the last error WireGuard logged, which says why the
+	// engine closed itself.
+	wgError atomic.Pointer[string]
 
 	// unproven are peers installed with no relay to fall back on, each until
 	// when nothing is sent to it before disco proves a path: a first
@@ -460,7 +469,30 @@ func New(opts Options) (_ Manager, err error) {
 	if opts.Debug {
 		m.magic.SetDebugLoggingEnabled(true)
 	}
+	if opts.OnLost != nil {
+		// Past every failure above, whose cleanup closes the engine too.
+		go m.watchLost(opts.OnLost)
+	}
 	return m, nil
+}
+
+// watchLost calls onLost if the engine closes without Close, as it does
+// when WireGuard's device fails, leaving the router closed and every
+// later reconfiguration refused.
+func (m *tsManager) watchLost(onLost func(error)) {
+	select {
+	case <-m.done:
+		return
+	case <-m.eng.Done():
+	}
+	if m.isClosed() {
+		return
+	}
+	why := "its device closed"
+	if s := m.wgError.Load(); s != nil {
+		why = *s
+	}
+	onLost(fmt.Errorf("conn: the data plane closed itself: %s", why))
 }
 
 // checkOptions refuses options New cannot start from.

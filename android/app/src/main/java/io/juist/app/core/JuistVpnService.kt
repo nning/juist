@@ -91,7 +91,7 @@ class JuistVpnService : VpnService() {
             followNetworks()
             Juist.attached(GoCore(c))
             notifier = scope.launch {
-                Juist.connection.mapNotNull { (it as? Connection.On)?.view }
+                Juist.connection.mapNotNull { (it as? Connection.On)?.views }
                     .map { NotificationLines.of(this@JuistVpnService, it) }
                     .distinctUntilChanged()
                     .collect { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(it)) }
@@ -222,7 +222,7 @@ class JuistVpnService : VpnService() {
 
         override fun establish(config: String): Int {
             val b = Builder()
-                .setSession(Juist.last?.network?.takeIf { it.isNotEmpty() } ?: getString(R.string.app_name))
+                .setSession(networkNames(Juist.last).ifEmpty { getString(R.string.app_name) })
                 .setConfigureIntent(openApp())
             // No allowBypass: no app leaves the tunnel by binding to the network beside it.
             configureVpn(config, object : VpnTarget {
@@ -373,13 +373,18 @@ internal fun isMetered(capabilities: NetworkCapabilities) =
     !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) &&
         !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_TEMPORARILY_NOT_METERED)
 
-/** What the notification says of view: the network, and its state. */
+/** The names of the networks in views the phone is in, as one line. */
+internal fun networkNames(views: List<NetworkView>): String =
+    views.filter { it.inNetwork }.map { it.network }.filter { it.isNotEmpty() }.joinToString(", ")
+
+/** What the notification says of views: the networks, and how the one faring worst fares. */
 internal data class NotificationLines(val title: String, val text: String) {
     companion object {
-        fun of(context: Context, view: NetworkView?): NotificationLines {
-            val title = view?.network?.takeIf { it.isNotEmpty() } ?: context.getString(R.string.app_name)
-            if (view == null) return NotificationLines(title, context.getString(R.string.state_starting))
-            return NotificationLines(title, context.getString(stateLabel(view.state)))
+        fun of(context: Context, views: List<NetworkView>?): NotificationLines {
+            val title = networkNames(views.orEmpty()).ifEmpty { context.getString(R.string.app_name) }
+            if (views.isNullOrEmpty()) return NotificationLines(title, context.getString(R.string.state_starting))
+            val state = Connection.On(views).let { it.worstState ?: it.view.state }
+            return NotificationLines(title, context.getString(stateLabel(state)))
         }
     }
 }

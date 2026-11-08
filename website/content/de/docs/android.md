@@ -1,14 +1,15 @@
 ---
 title: Android
 linkTitle: Android
-description: Die Android-App von juist installieren, mit einem Telefon per QR-Code oder Code einem Netz beitreten, die Geräte beim Namen erreichen und auf dem Telefon sehen, wie jedes erreicht wird.
-lead: Mit der Android-App wird ein Telefon Mitglied eines Netzes. Es tritt per QR-Code oder Code der Einladung bei, erreicht die anderen Geräte unter Namen und Adresse und zeigt, wie jedes erreicht wird.
+description: Die Android-App von juist installieren, mit einem Telefon per QR-Code oder Code Netzen beitreten, die Geräte beim Namen erreichen und auf dem Telefon sehen, wie jedes erreicht wird.
+lead: Mit der Android-App wird ein Telefon Mitglied von bis zu vier Netzen. Es tritt per QR-Code oder Code der Einladung bei, erreicht die anderen Geräte unter Namen und Adresse und zeigt, wie jedes erreicht wird.
 ---
 
 ## Was die App kann
 
 Die App bringt juist auf ein Telefon mit Android 12 oder neuer. Das Telefon
-tritt einem Netz als Mitglied ohne Rollen bei. Solange sein VPN an ist,
+tritt einem Netz als Mitglied ohne Rollen bei, und bis zu vier
+([Mehrere Netze](#several-networks)). Solange sein VPN an ist,
 erreicht jede App auf dem Telefon die anderen Geräte unter ihrem Namen, etwa
 `nas.home.juist`, und unter ihrer Adresse, dazu die LANs hinter ihren
 [Subnet-Routern](#subnets). Das VPN trägt nur den Verkehr ins Netz, in diese
@@ -17,7 +18,7 @@ geht an juist vorbei.
 
 Das Telefon kann nicht:
 
-- in mehr als einem Netz sein;
+- in mehr als vier Netzen sein;
 - [öffentliche Namen]({{< relref "docs/names" >}}) einschalten, sie lösen
   sich dort also öffentlich auf;
 - ein Subnetz routen oder [Exit-Node]({{< relref "docs/exit-nodes" >}}) sein,
@@ -114,6 +115,39 @@ Braucht das Netz die Stimmen mehrerer Admins, zeigt das Telefon
 `Waiting for approval: 1 of 2 votes`, bis die anderen bestätigt haben.
 [Geräte einladen]({{< relref "docs/invites" >}}) erklärt Code, Link und
 Wörter.
+
+## Mehrere Netze {#several-networks}
+
+{{< screens >}}
+networks: Die Netze eines Telefons, jedes, wie es ihm geht
+welcome_another: Einem weiteren Netz beitreten
+{{< /screens >}}
+
+Um einem weiteren Netz beizutreten, tippe im Menü auf **Weiterem Netz
+beitreten** oder öffne einen weiteren Einladungslink und tritt bei wie beim
+ersten. Die App öffnet dann mit der Liste der Netze des Telefons; tippe auf
+eines für seinen Status. In jedem Netz ist das Telefon ein eigenes Mitglied,
+mit eigenen Schlüsseln, eigenem Namen und eigenen Adressen, und der eine
+Schalter schaltet das VPN für alle ein und aus.
+
+- Das Telefon löst die Namen aller Netze auf und sucht in ihren Domains,
+  `nas` findet also `nas.home.juist` oder `nas.work.juist`.
+- Das Internet trägt jeweils der [Exit-Node](#über-einen-exit-node) eines
+  Netzes: Wählst du einen in einem anderen Netz, gibt das erste seinen ab.
+  Solange er genutzt wird, fragt das Telefon den Resolver seines Netzes; ist
+  dort **Netznamen** aus, löst sich kein Name eines Netzes auf.
+- Überschneiden sich die IPv4-Bereiche zweier Netze, läuft eines davon nur
+  über IPv6 und sagt das, bis eines neu nummeriert ist
+  ([Überlappende Adressbereiche]({{< relref "docs/networks" >}}#überlappende-adressbereiche)).
+  Ein Beitritt lässt IPv4 bei den Netzen, in denen das Telefon schon ist.
+- Ein Mitglied des einen Netzes erreicht über das Telefon kein anderes Netz.
+- Ein Alarm in einem Netz lässt die Tunnel der anderen stehen.
+- **Netz verlassen** im Menü eines Netzes löscht die Schlüssel des Telefons
+  dafür und beendet seine Tunnel dorthin; die anderen Netze bleiben, wie sie
+  sind. Das Netz führt das Telefon weiter, bis ein Admin es entfernt.
+- Eine Einladung verrät nicht, für welches Netz sie ist. Ein Beitritt in ein
+  Netz, in dem das Telefon schon ist, wird zurückgenommen, und die App nennt
+  die Aufnahme, die ein Admin entfernen sollte.
 
 ## Der Statusbildschirm
 
