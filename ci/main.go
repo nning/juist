@@ -255,11 +255,15 @@ func (r *runner) what() string {
 	if len(r.o.targets) > 0 {
 		return "make " + strings.Join(r.o.targets, " ")
 	}
-	if slices.Equal(r.o.stages, stageOrder) && r.checkVM && r.noAndroid == "" {
+	noAndroid := r.noAndroid
+	if r.o.lab == "vm" {
+		noAndroid = "the lab in the VM runs none"
+	}
+	if slices.Equal(r.o.stages, stageOrder) && r.checkVM && noAndroid == "" {
 		return "every stage"
 	}
 	if slices.Equal(r.o.stages, stageOrder) && r.checkVM {
-		return "every stage but the Android smoke test, " + r.noAndroid + " (not a closing run)"
+		return "every stage but the Android smoke test, " + noAndroid + " (not a closing run)"
 	}
 	s := "stages " + strings.Join(r.o.stages, " ")
 	if slices.Contains(r.o.stages, stageCheck) && !r.checkVM {

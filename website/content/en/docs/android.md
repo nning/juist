@@ -263,8 +263,8 @@ Android's VPN settings. The app links to them.
 ## Turning the VPN off and on
 
 The switch next to the state turns the VPN off and on, as does juist's tile
-in Android's Quick Settings: add it by editing the tiles, and press it long to
-open the app. While it is on, a
+in Android's Quick Settings: add it by editing the tiles, and press it long, or
+in no network at all, to open the app. While it is on, a
 notification shows the state, with a **Turn off** action. If the VPN was on,
 juist turns it on again after a restart or an update. Android runs one VPN at
 a time: another VPN app turns juist off, and the app says so.

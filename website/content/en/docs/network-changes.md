@@ -152,6 +152,9 @@ both can both govern the network and end it.
   drops the earlier old address immediately, and juist warns about this.
 - Retired addresses stay reserved, so that no other device gets them, until
   you run `juist network renumber --finish` without further arguments.
+- Under `Renumbering`, `juist status` names the devices `not told yet` of a
+  move. It names only devices the access policy lets this one reach, as no
+  other can tell it.
 - The new range must have room for every device. juist warns when it
   overlaps a LAN of this host, or another network the device is in.
 - Configuration outside juist that names old addresses is not moved: update

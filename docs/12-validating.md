@@ -132,7 +132,8 @@ beside the lab and 8 where it nests it, one pair at a time. One run at a time ho
 lab's in files beside it, and ends with every step's time. `STAGES=vm,lab`
 runs those alone, `FROM=lab` those from one on, `LAB=vm` nests the lab in the
 VM, `CI_MAKE` makes targets in the VM alone, and `go run ./ci -keep` leaves the
-VM up to look into. A run of fewer stages says it is not a closing run.
+VM up to look into. A run of fewer stages, or with `LAB=vm`, which runs no
+Android smoke test, says it is not a closing run.
 
 `make check` stamps `build/check.stamp` with the hash of the tree it passed on,
 where the tree did not change meanwhile. `make ci-vm FAST=1` takes `make check`

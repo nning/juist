@@ -129,6 +129,21 @@ func TestStatusWireFormatIsUnchanged(t *testing.T) {
 	}
 }
 
+// A reader learns whose the relays on 443 are by pseudonym alone, the one
+// Seeking gives the same member.
+func TestAReaderIsNotToldWhoseTheRelaysAre(t *testing.T) {
+	st := Status{Derived: Derived{SelfName: "phone", HTTPS: &HTTPS{Only: true,
+		Relays: []string{"relay.example.org"}, Owners: []string{"nas"}}},
+		Tunnels: Tunnels{Seeking: []string{"laptop", "nas"}}}
+	got := st.ForReader()
+	if got.HTTPS == nil || len(got.HTTPS.Owners) != 1 {
+		t.Fatalf("a reader's HTTPS is %+v", got.HTTPS)
+	}
+	if o := got.HTTPS.Owners[0]; o == "nas" || o != got.Seeking[1] {
+		t.Errorf("a reader sees the relay's owner as %q, seeking %v", o, got.Seeking)
+	}
+}
+
 // A reader sees how names resolve, the public domain included, not which
 // devices public names point at, as it sees no device list.
 func TestAReaderSeesNoPublicNames(t *testing.T) {

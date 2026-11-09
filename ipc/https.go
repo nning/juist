@@ -39,11 +39,11 @@ type HTTPS struct {
 // HandedOn is what [HTTPS.Listening] says where the ingress takes 443.
 const HandedOn = "the ingress"
 
-func (h *HTTPS) forReader() *HTTPS {
+func (h *HTTPS) forReader(p pseudonyms) *HTTPS {
 	if h == nil {
 		return nil
 	}
-	return &HTTPS{Only: h.Only, Relays: h.Relays, Owners: h.Owners, Name: h.Name}
+	return &HTTPS{Only: h.Only, Relays: h.Relays, Owners: p.all(h.Owners), Name: h.Name}
 }
 
 // ValidProxy checks a proxy's URL as a setting takes it: "", or http or

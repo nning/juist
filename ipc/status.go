@@ -172,8 +172,8 @@ type Derived struct {
 	// checkpoint past all its log holds: it is invited again.
 	Overtaken bool `cbor:"80,keyasint,omitempty"`
 
-	// Unmoved names the other members not yet seen holding the newest
-	// renumbering, while an old address is still recorded.
+	// Unmoved names the other members log sync reaches not yet seen holding
+	// the newest renumbering, while an old address is still recorded.
 	Unmoved []string `cbor:"49,keyasint,omitempty"`
 
 	// Exit is what this device does with exit nodes.
@@ -396,7 +396,7 @@ func (s *Status) ForReader() Status {
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
 			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, NoKey: p.all(s.NoKey),
 			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(p),
-			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(), HTTPS: s.HTTPS.forReader(),
+			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(), HTTPS: s.HTTPS.forReader(p),
 			Multicast:      s.Multicast,
 			DataPlaneError: s.DataPlaneError, LastReconcile: s.LastReconcile,
 		},

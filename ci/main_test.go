@@ -95,6 +95,7 @@ func TestOnlyAWholeRunCloses(t *testing.T) {
 		{options{stages: stageOrder, fast: true}, false, "", false},
 		{options{stages: stageOrder[1:]}, true, "", false},
 		{options{stages: stageOrder, targets: []string{"ci"}}, true, "", false},
+		{options{stages: stageOrder, lab: "vm"}, true, "", false},
 	} {
 		r := &runner{o: c.o, checkVM: c.checkVM, noAndroid: c.noAndroid}
 		if got := r.what() == "every stage"; got != c.closing {

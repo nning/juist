@@ -158,6 +158,9 @@ beidem erbeutet, kann das Netz verwalten und auch beenden.
 - Stillgelegte Adressen bleiben reserviert, damit kein anderes Gerät sie
   bekommt, bis du `juist network renumber --finish` ohne weitere Argumente
   aufrufst.
+- Unter `Renumbering` nennt `juist status` die Geräte, die vom Umzug noch
+  nichts wissen (`not told yet`). Es nennt nur Geräte, die dieses Gerät laut
+  Access-Policy erreichen darf, denn nur sie können es ihm sagen.
 - Der neue Bereich muss Platz für alle Geräte bieten. juist warnt, wenn er
   sich mit einem LAN dieses Hosts überschneidet oder mit einem anderen Netz,
   dem das Gerät angehört.

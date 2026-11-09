@@ -1180,8 +1180,10 @@ identifies the tested snapshots and results. Residual weakness 18 in
 **Done** on 2026-11-05: subnet routes through `VpnService` routes, less
 those the network beneath the VPN reaches itself; the HTTPS-alone switch;
 the Quick Settings tile; a member's services; the details screen with the
-names switch; and the diagnosis copied with the log. Reviewed once
-(2026-11-02, no finding that asked for a fix), validated by `make ci-vm`
+names switch; and the diagnosis copied with the log. Reviewed on
+2026-11-02 (no finding that asked for a fix) and in M26 reviews 1 and 2
+(2026-11-06: five lenses, 13 findings confirmed, one medium; the second,
+on the first's fixes, found two gaps in their tests), validated by `make ci-vm`
 at M26 ([12-validating.md](12-validating.md), "The last privileged
 run"), the exit criterion by its lab's interop run and `make
 android-smoke`, which joins the app in the emulator, resolves and pings a
@@ -1192,6 +1194,14 @@ alone on a phone against a relay on 443, and a phone's day on LTE
 M21. Family Link, and what the relay's keepalive costs on mobile data,
 moved to M29. Core 11 014 lines, audit scope 36 432, measured after it
 (2026-11-05).
+
+Open from M26 review 1, all minor: the app's alarms on HTTPS alone lack
+the CLI's "no relay on 443" and its wording for a relay's own device; a
+subnet's reason in Details is the daemon's English; an interrupted first
+`make install` leaves files neither it nor `make uninstall` takes, and on
+a host with AppArmor it installs no nameservice snippet; `make
+android-smoke`'s "is pinged" is a TSMP ping, answered before the phone's
+filter, and no phone meets a FreeBSD member.
 
 The full Android app, on M10's, once M10's exit criteria are met: M6b's
 subnet routes through `VpnService` routes and M13's HTTPS alone, released

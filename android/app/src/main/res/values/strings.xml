@@ -310,7 +310,7 @@
     <string name="lookups_value">%1$d asked, %2$d failed, %3$d slow</string>
     <string name="lookup_ms">%1$d ms</string>
     <string name="lookup_slow">slow</string>
-    <string name="diagnosis_about">The log adds how Android sees the phone\'s networks. It names your devices and their addresses. Share it only with someone you trust.</string>
+    <string name="diagnosis_about">The copied log adds how Android sees the phone\'s networks. It names your devices and their addresses. Share it only with someone you trust.</string>
 
     <!-- Services -->
     <string name="section_services">Services</string>

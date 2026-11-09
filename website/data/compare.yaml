@@ -103,6 +103,13 @@ groups:
           shared-secret:
             en: Over WebSocket with TLS, to a node listening on port 443.
             de: Über WebSocket mit TLS, zu einem Knoten auf Port 443.
+      - en: Multicast and broadcast between devices (mDNS, SSDP, LAN games)
+        de: Multicast und Broadcast zwischen den Geräten (mDNS, SSDP, LAN-Spiele)
+        marks: ynnnnynynyn
+        notes:
+          juist:
+            en: Not in the Android app.
+            de: Nicht in der Android-App.
       - en: Ethernet (layer 2) between devices
         de: Ethernet (Layer 2) zwischen den Geräten
         marks: nnnnnynynnn
@@ -124,7 +131,7 @@ groups:
     rows:
       - en: Exit nodes
         de: Exit-Nodes
-        marks: yyyyyppppyp
+        marks: yyyyypppyyp
         notes:
           juist:
             en: Android can use one but cannot be one.
@@ -139,8 +146,8 @@ groups:
             en: Routes by hand on every device.
             de: Routen von Hand auf jedem Gerät.
           rayfish:
-            en: IPv6 only.
-            de: Nur IPv6.
+            en: On Linux and macOS; FreeBSD can offer one but not use it.
+            de: Unter Linux und macOS; FreeBSD kann eine anbieten, aber nicht nutzen.
           wireguard:
             en: By hand on every device.
             de: Von Hand auf jedem Gerät.

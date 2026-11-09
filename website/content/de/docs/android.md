@@ -275,7 +275,7 @@ ein. Die App verlinkt dorthin.
 
 Der Schalter neben dem Zustand schaltet das VPN aus und ein, ebenso die
 Kachel von juist in den Schnelleinstellungen von Android: Füge sie beim
-Bearbeiten der Kacheln hinzu; lang gedrückt öffnet sie die App. Solange es an
+Bearbeiten der Kacheln hinzu; lang gedrückt, oder ohne Netz, öffnet sie die App. Solange es an
 ist, zeigt eine Benachrichtigung den Zustand, mit der Aktion **Ausschalten**.
 War das VPN an, schaltet juist es nach einem Neustart oder Update wieder ein.
 Android betreibt immer nur ein VPN: Eine andere VPN-App schaltet juist ab, und

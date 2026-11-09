@@ -249,7 +249,7 @@ Server herum, der bestimmt, wer dazugehört.
   [Clients](https://docs.netmaker.io/docs/client-installation)
 - [Tinc](https://www.tinc-vpn.org/)
 - [rayfish](https://github.com/rayfish/rayfish) und sein
-  [Sicherheitsmodell](https://github.com/rayfish/rayfish/blob/main/SECURITY.md),
+  [Sicherheitsmodell](https://github.com/rayfish/rayfish/blob/master/SECURITY.md),
   [Protokoll von nostr-vpn](https://github.com/mmalmi/nostr-vpn/blob/main/docs/protocol.md),
   [Tunnet](https://github.com/tunnetio/Tunnet)
 - [Headscale und OIDC](https://headscale.net/stable/ref/oidc/),
@@ -291,6 +291,17 @@ Server herum, der bestimmt, wer dazugehört.
   [Relays bei iroh](https://docs.iroh.computer/configuring-networks),
   [Nebula und Layer 2](https://github.com/slackhq/nebula/issues/1452),
   [EasyTier und Layer 2](https://github.com/EasyTier/EasyTier/issues/184)
+- Multicast und Broadcast:
+  [Paketfilter von Tailscale](https://github.com/tailscale/tailscale/blob/v1.104.0/wgengine/filter/filter.go#L703)
+  und [Feature-Request für mDNS](https://github.com/tailscale/tailscale/issues/1013),
+  [Antwort von Headscale](https://github.com/juanfont/headscale/issues/1796),
+  [Feature-Request bei NetBird](https://github.com/netbirdio/netbird/discussions/7825),
+  [Protokoll von ZeroTier](https://docs.zerotier.com/protocol/),
+  [Feature-Request bei Nebula](https://github.com/slackhq/nebula/issues/1455),
+  [Modi von Tinc](https://github.com/gsliepen/tinc/blob/1.1/doc/tinc.conf.5.in),
+  [Weiterleitung bei rayfish](https://github.com/rayfish/rayfish/blob/157c03350b294e3e4cb35b901d73a6ba96ad5d8d/src/forward.rs#L665-L669),
+  [Weiterleitung bei EasyTier](https://github.com/EasyTier/EasyTier/blob/v2.6.4/easytier/src/peers/peer_manager.rs#L1550-L1570),
+  [Cryptokey-Routing von WireGuard](https://www.wireguard.com/#cryptokey-routing)
 
 Die Recherche hinter dieser Seite umfasst rund 25 Projekte und steht im
 Repository (auf Englisch):

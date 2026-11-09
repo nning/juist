@@ -309,7 +309,7 @@
     <string name="lookups_value">%1$d gestellt, %2$d fehlgeschlagen, %3$d langsam</string>
     <string name="lookup_ms">%1$d ms</string>
     <string name="lookup_slow">langsam</string>
-    <string name="diagnosis_about">Das Log enthält zusätzlich, wie Android die Netze des Telefons sieht. Es nennt deine Geräte und ihre Adressen. Teile es nur mit jemandem, dem du vertraust.</string>
+    <string name="diagnosis_about">Das kopierte Protokoll enthält zusätzlich, wie Android die Netze des Telefons sieht. Es nennt deine Geräte und ihre Adressen. Teile es nur mit jemandem, dem du vertraust.</string>
 
     <!-- Services -->
     <string name="section_services">Dienste</string>

@@ -228,7 +228,7 @@ belongs.
   [its clients](https://docs.netmaker.io/docs/client-installation)
 - [Tinc](https://www.tinc-vpn.org/)
 - [rayfish](https://github.com/rayfish/rayfish) and its
-  [security model](https://github.com/rayfish/rayfish/blob/main/SECURITY.md),
+  [security model](https://github.com/rayfish/rayfish/blob/master/SECURITY.md),
   [nostr-vpn's protocol](https://github.com/mmalmi/nostr-vpn/blob/main/docs/protocol.md),
   [Tunnet](https://github.com/tunnetio/Tunnet)
 - [Headscale and OIDC](https://headscale.net/stable/ref/oidc/),
@@ -270,6 +270,17 @@ belongs.
   [iroh's relays](https://docs.iroh.computer/configuring-networks),
   [Nebula on layer 2](https://github.com/slackhq/nebula/issues/1452),
   [EasyTier on layer 2](https://github.com/EasyTier/EasyTier/issues/184)
+- Multicast and broadcast:
+  [Tailscale's packet filter](https://github.com/tailscale/tailscale/blob/v1.104.0/wgengine/filter/filter.go#L703)
+  and [its request for mDNS](https://github.com/tailscale/tailscale/issues/1013),
+  [Headscale's answer](https://github.com/juanfont/headscale/issues/1796),
+  [NetBird's request](https://github.com/netbirdio/netbird/discussions/7825),
+  [ZeroTier's protocol](https://docs.zerotier.com/protocol/),
+  [Nebula's request](https://github.com/slackhq/nebula/issues/1455),
+  [Tinc's modes](https://github.com/gsliepen/tinc/blob/1.1/doc/tinc.conf.5.in),
+  [rayfish's forwarding](https://github.com/rayfish/rayfish/blob/157c03350b294e3e4cb35b901d73a6ba96ad5d8d/src/forward.rs#L665-L669),
+  [EasyTier's forwarding](https://github.com/EasyTier/EasyTier/blob/v2.6.4/easytier/src/peers/peer_manager.rs#L1550-L1570),
+  [WireGuard's cryptokey routing](https://www.wireguard.com/#cryptokey-routing)
 
 The survey behind this page, with about 25 projects, is in the repository:
 [control-plane options](https://github.com/nning/juist/blob/main/docs/03-control-plane-options.md)

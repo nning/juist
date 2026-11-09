@@ -87,6 +87,28 @@ type resetStanding struct {
 
 var errNoNetwork = errors.New("not in a network\nhint: juist join CODE, or juist create")
 
+// noNetwork is errNoNetwork, its hint naming a link where a code cannot work.
+func noNetwork(httpsOnly bool) error {
+	if httpsOnly {
+		return noNetworkByLink{}
+	}
+	return errNoNetwork
+}
+
+type noNetworkByLink struct{}
+
+func (noNetworkByLink) Error() string {
+	return "not in a network\nhint: juist join LINK, or juist create"
+}
+func (noNetworkByLink) Is(target error) bool { return target == errNoNetwork }
+
+func httpsOnly(st *ipc.Status) bool { return st.HTTPS != nil && st.HTTPS.Only }
+
+func (n *localNode) noNetwork() error {
+	_, err := os.Stat(n.h.join(statedir.HTTPSOnlyFile))
+	return noNetwork(err == nil)
+}
+
 // An operatorChoice is who should operate the daemon after a create or join.
 type operatorChoice struct {
 	set bool
@@ -151,7 +173,7 @@ func (a *app) daemon() (*daemonNode, error) {
 	case d == nil:
 		return nil, errors.New("juistd not running\nhint: " + a.startHow())
 	case !d.st.InNetwork:
-		return nil, errNoNetwork
+		return nil, noNetwork(httpsOnly(d.st))
 	}
 	return d, nil
 }
@@ -199,7 +221,7 @@ func (n *daemonNode) chain() ([]types.AUM, error) {
 
 func (n *daemonNode) records() ([]types.AUM, error) {
 	if !n.st.InNetwork {
-		return nil, errNoNetwork
+		return nil, noNetwork(httpsOnly(n.st))
 	}
 	resp, err := n.call(ipc.Request{Command: ipc.CmdLog})
 	if err != nil {
@@ -503,7 +525,7 @@ func (n *localNode) log() (*log.Authority, error) {
 			return nil, fmt.Errorf("no network in %s, but in %s\nhint: move its contents up one level",
 				n.h.join(logDir), n.h.join(logDir, keys.LogDir))
 		}
-		return nil, errNoNetwork
+		return nil, n.noNetwork()
 	}
 	return auth, nil
 }
@@ -514,7 +536,7 @@ func (n *localNode) chain() ([]types.AUM, error) {
 		return nil, err
 	}
 	if !have {
-		return nil, errNoNetwork
+		return nil, n.noNetwork()
 	}
 	hashes, err := auth.Chain()
 	if err != nil {

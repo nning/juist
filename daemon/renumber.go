@@ -21,9 +21,10 @@ type renumbering struct {
 }
 
 // followRenumbering returns the names of the live members other than this one
-// not yet seen holding the newest renumbering, while any member's old address
-// is still recorded: working until its deadline, or held after it, when a
-// member not told yet reaches the moved one over IPv6 alone.
+// that log sync reaches, the only ones it can hear from, not yet seen holding
+// the newest renumbering, while any member's old address is still recorded:
+// working until its deadline, or held after it, when a member not told yet
+// reaches the moved one over IPv6 alone.
 func (d *Daemon) followRenumbering(state *log.State, live map[types.Identity]bool) []string {
 	_, moving := state.V4Retiring()
 	for _, n := range state.Nodes() {
@@ -55,7 +56,8 @@ func (d *Daemon) followRenumbering(state *log.State, live map[types.Identity]boo
 	defer d.mu.Unlock()
 	var out []string
 	for _, n := range state.Nodes() {
-		if n.Identity != d.self && live[n.Identity] && !d.moving.seen[n.Identity] {
+		if n.Identity != d.self && live[n.Identity] && (d.gossipTo == nil || d.gossipTo(n.Identity)) &&
+			!d.moving.seen[n.Identity] {
 			out = append(out, cmp.Or(n.Name, n.Identity.ShortString()))
 		}
 	}

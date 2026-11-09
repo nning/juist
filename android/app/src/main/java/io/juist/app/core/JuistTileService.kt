@@ -58,20 +58,22 @@ class JuistTileService : TileService() {
 
     private fun show(c: Connection) {
         val tile = qsTile ?: return
-        tile.state = when {
-            c.networks.isEmpty() -> Tile.STATE_UNAVAILABLE
-            c is Connection.On || c is Connection.Starting -> Tile.STATE_ACTIVE
-            else -> Tile.STATE_INACTIVE
-        }
+        tile.state = tileState(c)
         tile.label = networkNames(c.views).ifEmpty { getString(R.string.app_name) }
-        tile.subtitle = when (c) {
-            is Connection.On -> getString(stateLabel(c.worstState ?: c.view.state))
-            is Connection.Starting -> getString(R.string.state_starting)
-            is Connection.Failed -> getString(R.string.state_failed)
-            is Connection.Off -> getString(R.string.state_vpn_off)
-        }
+        tile.subtitle = getString(tileSubtitle(c))
         tile.updateTile()
     }
+}
+
+/** The tile's state; never unavailable, as Android delivers no tap to that. */
+internal fun tileState(c: Connection): Int =
+    if (c is Connection.On || c is Connection.Starting) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+
+internal fun tileSubtitle(c: Connection): Int = when (c) {
+    is Connection.On -> stateLabel(c.worstState ?: c.view.state)
+    is Connection.Starting -> R.string.state_starting
+    is Connection.Failed -> R.string.state_failed
+    is Connection.Off -> if (c.networks.isEmpty()) R.string.state_none else R.string.state_vpn_off
 }
 
 internal enum class TileAction { TurnOn, TurnOff, OpenApp }

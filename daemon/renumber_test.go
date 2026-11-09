@@ -155,3 +155,32 @@ func TestARenumberedDeviceMovesAtTheDeadline(t *testing.T) {
 		t.Error("the deadline passed and the mesh keeps the old address")
 	}
 }
+
+// A member the policy keeps apart from this device is never heard by its log
+// sync, so the status does not name it as not told.
+func TestTheStatusLeavesOutMembersThePolicyKeepsApart(t *testing.T) {
+	c := &clock{now: time.Unix(1_700_000_000, 0)}
+	nw := newNetworkMutated(t, 4, func(nw *network) {
+		nw.devices[3].record.Roles = []types.Role{types.RoleRelayCapable}
+	})
+	f := newReconcileFixtureOn(t, nw, func(o *Options) { o.Clock = c.get })
+	peer, apart, relay := nw.devices[1], nw.devices[2], nw.devices[3]
+	f.learn(t, peer, 4002)
+	f.learn(t, apart, 4003)
+	f.learn(t, relay, 4004)
+	nw.setPolicy(t, f, "pass from n0 to n1\n")
+	rec, err := f.auth.Builder().RenumberNode(peer.record.Identity, netip.MustParseAddr("198.18.0.9"),
+		uint64(c.get().Add(time.Hour).Unix()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Sign(nw.admin); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.Inform([]types.AUM{rec}); err != nil {
+		t.Fatalf("informing the daemon: %v", err)
+	}
+	if want := []string{peer.record.Name, relay.record.Name}; !slices.Equal(f.d.Status().Unmoved, want) {
+		t.Errorf("the status names %v as not told, want %v", f.d.Status().Unmoved, want)
+	}
+}

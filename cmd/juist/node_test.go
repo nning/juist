@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/statedir"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
 )
@@ -100,6 +103,45 @@ func TestTheCallsOfIngressTerminatorAndShareSayHowToOperate(t *testing.T) {
 		a.node = &daemonNode{sock: sock, st: st}
 		if err := call(a); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: got %v, want the hint %q", name, err, want)
+		}
+	}
+}
+
+// A device on HTTPS alone in no network is asked for a link, which it can
+// use, by every command that needs a network, not for a code.
+func TestNoNetworkAsksHTTPSAloneForALink(t *testing.T) {
+	t.Parallel()
+	h, err := openHome(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpsAlone := &ipc.Status{CanOperate: true, Derived: ipc.Derived{HTTPS: &ipc.HTTPS{Only: true}}}
+	for _, c := range []struct {
+		what  string
+		err   func() error
+		wants string
+	}{
+		{"a daemon", func() error { _, err := (&daemonNode{st: &ipc.Status{}}).records(); return err }, "juist join CODE"},
+		{"a daemon on HTTPS alone", func() error { _, err := (&daemonNode{st: httpsAlone}).records(); return err }, "juist join LINK"},
+		{"a command for juistd on HTTPS alone", func() error {
+			a := newCLI(t).app(&syncBuffer{}, "")
+			a.node = &daemonNode{sock: "/nonexistent", st: httpsAlone}
+			_, err := a.daemon()
+			return err
+		}, "juist join LINK"},
+		{"a home", func() error { _, err := (&localNode{h: h}).chain(); return err }, "juist join CODE"},
+		{"a home on HTTPS alone", func() error {
+			if err := os.WriteFile(h.join(statedir.HTTPSOnlyFile), []byte("\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := (&localNode{h: h}).chain()
+			return err
+		}, "juist join LINK"},
+		{"a home's log on HTTPS alone", func() error { _, err := (&localNode{h: h}).log(); return err }, "juist join LINK"},
+	} {
+		err := c.err()
+		if !errors.Is(err, errNoNetwork) || !strings.Contains(fmt.Sprint(err), c.wants) {
+			t.Errorf("%s in no network says %v, want %q", c.what, err, c.wants)
 		}
 	}
 }
