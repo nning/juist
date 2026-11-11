@@ -43,6 +43,7 @@ func systemLayout() *hostLayout {
 		terminatorWait: 15 * time.Second,
 		dockerNets:     dockerNets,
 		firewalled:     firewalld.Blocks,
+		udpBlocked:     firewalldBlocksUDP,
 	}
 }
 

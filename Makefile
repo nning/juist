@@ -70,7 +70,7 @@ FUZZLONGWORKERS ?= 4
 
 # The trusted computing base's core is held to a budget; audit-scope places
 # every package in or out of the audit (docs/06-verification.md §5, §6).
-TCB_BUDGET ?= 11050
+TCB_BUDGET ?= 8100
 
 .DEFAULT_GOAL := help
 
@@ -484,7 +484,8 @@ rpm: ## Build an installable RPM into build/rpm/RPMS (needs rpmbuild)
 	$(BUILDDIR)/juistd __manpage > $$stage/juistd.8; \
 	cp packaging/systemd/juistd.service packaging/systemd/juistd@.service packaging/systemd/juist-ingress.service \
 		packaging/systemd/juist-ingress-ports.path packaging/systemd/juist-ingress-ports.service \
-		packaging/systemd/juist-serve.service packaging/systemd/juist-serve.path README.md LICENSE THIRD_PARTY_LICENSES packaging/firewall.sh packaging/instances.sh packaging/exit-node.sh \
+		packaging/systemd/juist-serve.service packaging/systemd/juist-serve.path \
+		packaging/systemd/juist-upgrade@.service packaging/systemd/juist-upgrade@.timer README.md LICENSE THIRD_PARTY_LICENSES packaging/firewall.sh packaging/instances.sh packaging/exit-node.sh \
 		packaging/ingress.sh packaging/serve.sh packaging/relay.sh packaging/resolv.sh packaging/polkit/juist.rules \
 		packaging/firewalld/juist.xml packaging/firewalld/juist-relay.xml packaging/firewalld/juist-relay-443.xml \
 		packaging/firewalld/juist-ingress.xml \
@@ -535,6 +536,9 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	for u in juist-serve.path juist-ingress-ports.path juist-ingress-ports.service; do \
 		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/system/$$u; \
 	done; \
+	for u in juist-upgrade@.service juist-upgrade@.timer; do \
+		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/user/$$u; \
+	done; \
 	install -D -m 0644 packaging/rpm/juist.sysusers $$root/usr/lib/sysusers.d/juist.conf; \
 	install -D -m 0644 README.md $$root/usr/share/doc/juist/README.md; \
 	install -D -m 0644 LICENSE $$root/usr/share/doc/juist/copyright; \
@@ -554,6 +558,7 @@ deb: ## Build an installable .deb for Debian and Ubuntu into build/deb (needs dp
 	install -D -m 0755 packaging/serve.sh $$root/usr/lib/juist/serve.sh; \
 	install -D -m 0755 packaging/relay.sh $$root/usr/lib/juist/relay.sh; \
 	install -D -m 0755 packaging/resolv.sh $$root/usr/lib/juist/resolv.sh; \
+	install -D -m 0755 packaging/sysext.sh $$root/usr/lib/juist/sysext.sh; \
 	install -D -m 0644 packaging/polkit/juist.rules $$root/usr/share/polkit-1/rules.d/60-juist.rules; \
 	install -D -m 0644 packaging/polkit/juist.pkla $$root/usr/lib/juist/juist.pkla; \
 	for f in juist juist-relay juist-relay-443 juist-invite juist-ingress; do \
@@ -599,6 +604,9 @@ stage-systemd: ## Lay out juist's files for a systemd host without apt, dnf or p
 	done; \
 	for u in juist-serve.path juist-ingress-ports.path juist-ingress-ports.service; do \
 		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/system/$$u; \
+	done; \
+	for u in juist-upgrade@.service juist-upgrade@.timer; do \
+		install -D -m 0644 packaging/systemd/$$u $$root/usr/lib/systemd/user/$$u; \
 	done; \
 	install -D -m 0644 packaging/rpm/juist.sysusers $$root/usr/lib/sysusers.d/juist.conf; \
 	install -D -m 0644 README.md $$root/usr/share/doc/juist/README.md; \

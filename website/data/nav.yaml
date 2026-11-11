@@ -4,7 +4,7 @@
   items: [docs/how-it-works, docs/install, docs/first-network, docs/invites, docs/android]
 - group: uses
   items: [docs/use/own-services, docs/use/share, docs/use/homelab, docs/use/team-tools, docs/use/home-lan,
-          docs/use/public-wifi, docs/use/ssh, docs/use/locked-down-networks, docs/use/game-server, docs/use/container-app]
+          docs/use/phones, docs/use/public-wifi, docs/use/ssh, docs/use/locked-down-networks, docs/use/game-server, docs/use/container-app]
 - group: everyday
   items: [docs/status, docs/operator, docs/names, docs/remove, docs/updating]
 - group: admins

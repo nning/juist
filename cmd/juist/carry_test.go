@@ -108,7 +108,7 @@ func TestAChangeWaitsOnTheOtherAdminDevice(t *testing.T) {
 	if _, err := bob.run("approve"); err == nil || !strings.Contains(err.Error(), "needs an answer from a terminal") {
 		t.Fatalf("approve without a terminal: %v", err)
 	}
-	if _, err := bob.run("approve", "--yes"); err == nil || !strings.Contains(err.Error(), "--yes and --no-apply take files") {
+	if _, err := bob.run("approve", "--yes"); err == nil || !strings.Contains(err.Error(), "--yes needs FILE\nusage: juist approve") {
 		t.Fatalf("approve --yes: %v", err)
 	}
 	out, err := bob.answer("n", "approve")
@@ -508,7 +508,7 @@ func TestAChangeThatExpiresWhileAskedIsNotSigned(t *testing.T) {
 	a := bob.cli.app(&out, "y\n")
 	a.in = &clockReader{t: t, d: waiting.MaxLifetime + time.Hour, reply: strings.NewReader("y\n")}
 	err := a.main([]string{"--home", bob.home, "--socket", bob.sock, "approve"})
-	if err != nil || !strings.Contains(out.String(), "expired while you were asked; not approved") {
+	if err != nil || !strings.Contains(out.String(), "expired before you answered; not approved") {
 		t.Fatalf("approve past the expiry: %v\n%s", err, out.String())
 	}
 	if len(heldCopies(t, bob)) != 1 {

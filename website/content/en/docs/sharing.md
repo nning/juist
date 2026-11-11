@@ -24,6 +24,7 @@ juist publish 8000 --for 2h        # this device's web server on port 8000, for 
 juist share -b --for 7d ~/talk.pdf # in the background, for a week
 juist share                        # lists this device's shares, with their links
 juist share --stop ~/talk.pdf      # ends one, by its file, port or link
+juist publish --stop 8000          # ends the web server's, as juist share --stop 8000 does
 ```
 
 ## What others see
@@ -65,4 +66,4 @@ juist share --stop ~/talk.pdf      # ends one, by its file, port or link
 | `this device publishes a port already` | Another `juist publish PORT` runs, perhaps in the background. `juist share` lists it; `juist share --stop PORT` ends it. |
 | `this device holds 16 shares already` | `juist share` lists them. End one with `juist share --stop`. |
 | `warning: nothing answers on 127.0.0.1:8000 yet` | Start the web server that `juist publish 8000` points at. |
-| `juist status`: `Sharing` says `reached by nobody: the terminator does not run` | `juist share` starts it. `journalctl -u juist-serve` shows why it stopped. |
+| `juist status`: `Sharing` says `unreachable: the terminator does not run` | `juist share` starts it. `journalctl -u juist-serve` shows why it stopped. |

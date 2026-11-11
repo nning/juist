@@ -8,14 +8,12 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// Freshness leases bound how long a node acts on a view of the network that
-// may be missing a removal: a node fails closed unless the state's threshold
-// of distinct admin devices has each vouched for it within the TTL. See
+// Freshness: a node fails closed unless the state's threshold of distinct
+// admin devices has each vouched for it within the TTL. See
 // docs/11-enrollment-and-freshness-notes.md.
 
-// MaxLeaseSkew is how far in the future a lease may be dated and still count,
-// in seconds. Clocks disagree; a lease from far ahead would stretch a
-// partition past the TTL on one clock's word.
+// MaxLeaseSkew is how far ahead, in seconds, a lease may be dated and still
+// count; more would let one clock stretch a partition past the TTL.
 const MaxLeaseSkew = 5 * 60
 
 // LeaseSigners returns the members that may issue leases at now: the live
@@ -32,8 +30,7 @@ func (s *State) LeaseSigners(now int64) []types.NodeRecord {
 
 // CheckLease reports whether l vouches for this node's state at now: signed
 // by a live admin device of the trusted state, for this network, naming a
-// record on the active chain — so this node holds at least what the signer
-// held — and not dated beyond [MaxLeaseSkew] ahead.
+// record on the active chain, and not dated beyond [MaxLeaseSkew] ahead.
 func (a *Authority) CheckLease(l *types.Lease, now int64) error {
 	state, err := a.TrustedState()
 	if err != nil {
@@ -81,23 +78,18 @@ func (f Freshness) Enforced() bool { return f.Signers > 0 }
 func (f Freshness) Fresh(now int64) bool { return !f.Enforced() || now < f.Until }
 
 // Freshness evaluates leases against the current state at now with a TTL of
-// ttl seconds. Leases are re-checked every time, since a change to the state
-// can withdraw a signer, and a lease from a device that is no longer an admin
-// device vouches for nothing. Under an alarm nothing vouches.
+// ttl seconds. Leases are re-checked every call, since a state change can
+// withdraw a signer. Under an alarm nothing vouches.
 //
-// A node is fresh while the state's threshold of distinct admin devices have
-// each vouched within the TTL. A signer vouches for what it holds, and one
-// that lies — naming the anchor, which is on every chain — cannot be told
-// from one that is behind; the threshold is what makes one dishonest admin
-// device not enough.
+// A lying signer cannot be told from one that is behind; the threshold of
+// distinct admin devices is what makes one dishonest device not enough.
 func (a *Authority) Freshness(leases []types.Lease, now, ttl int64) Freshness {
 	state, err := a.TrustedState()
 	if err != nil {
 		return Freshness{Signers: 1}
 	}
-	// Enforcement counts every admin device, expired or not: a network whose
-	// admin devices have all expired has nobody left to vouch, which must
-	// read as stale rather than as a network that never asked.
+	// Count expired admin devices too: all expired must read as stale, not
+	// as unenforced.
 	f := Freshness{Signers: len(state.NodesWithRole(types.RoleAdmin)), Needed: int(state.Vouchers())}
 	newest := map[types.Identity]int64{}
 	for i := range leases {

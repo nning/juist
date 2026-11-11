@@ -9,10 +9,8 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// State is the authority state at one position in the chain: who the members
-// are, which keys may authorize changes, and which group-secret epoch is
-// current. State values are immutable — applying a record produces a new one —
-// so a caller holding a State keeps a stable view while the chain moves.
+// State is the authority state at one position in the chain. It is
+// immutable: applying a record produces a new one.
 type State struct {
 	head        types.Hash
 	genesisHash types.Hash
@@ -25,6 +23,7 @@ type State struct {
 	v4Prefix    *netip.Prefix
 	v4Retiring  *types.RetiringRanges
 	domain      string
+	publicDERP  types.PublicDERP
 	policy      *types.Policy // replaced, never mutated
 	disablement []types.Hash
 	admins      map[types.Identity]types.AdminKey
@@ -35,8 +34,8 @@ type State struct {
 // Head returns the hash of the last record applied.
 func (s *State) Head() types.Hash { return s.head }
 
-// GenesisHash returns the hash of the network's genesis record, which is the
-// network's permanent identifier.
+// GenesisHash returns the hash of the genesis record, the network's
+// permanent identifier.
 func (s *State) GenesisHash() types.Hash { return s.genesisHash }
 
 // Network returns the human-readable network name.
@@ -53,6 +52,9 @@ func (s *State) EpochCommit() types.Hash { return s.epochCommit }
 
 // Domain returns the network's public domain, or "" for none.
 func (s *State) Domain() string { return s.domain }
+
+// PublicDERP returns the network's public DERP servers.
+func (s *State) PublicDERP() types.PublicDERP { return s.publicDERP }
 
 // Policy returns the network's access policy, or nil for none.
 func (s *State) Policy() *types.Policy {
@@ -82,7 +84,7 @@ func (s *State) SigningKey(id types.Identity) *types.SigningKey {
 func (s *State) Vouchers() uint32 { return max(s.vouchers, 1) }
 
 // alreadyRevoked reports whether what a revocation withdraws is withdrawn in
-// s already, so that a copy of it that lost fork choice changes nothing.
+// s already.
 func (s *State) alreadyRevoked(a *types.AUM) bool {
 	switch a.Kind {
 	case types.KindRemoveNode:
@@ -110,11 +112,8 @@ func (s *State) alreadyRevoked(a *types.AUM) bool {
 }
 
 // Revokes reports whether a record applied to s withdraws authority, which
-// fork choice prefers over its siblings and never silently orphans:
-// "revoked wins". Removals always do, and so does withdrawing vouching
-// authority — taking a device's admin role away, or raising the vouching
-// threshold — which a concurrent change could otherwise orphan on its hash,
-// keeping a distrusted admin device vouching.
+// fork choice prefers over its siblings and never silently orphans. Removals
+// do, and so do dropping a device's admin role and raising a threshold.
 func (s *State) Revokes(a *types.AUM) bool {
 	if a.Kind.IsRevocation() {
 		return true
@@ -136,8 +135,7 @@ func (s *State) Revokes(a *types.AUM) bool {
 			}
 		}
 	case types.KindSetQuorum:
-		// A higher threshold takes from every coalition that met the old
-		// one, like the vouching threshold.
+		// A higher quorum takes from every coalition that met the old one.
 		return *a.Quorum > s.quorum
 	}
 	return false
@@ -151,8 +149,8 @@ func (s *State) TotalVotes() uint32 { return types.AchievableVotes(s.Admins()) }
 // ULA returns the network's overlay IPv6 prefix.
 func (s *State) ULA() netip.Prefix { return types.ULA(s.genesisHash) }
 
-// V4Prefix returns the network's own IPv4 prefix, if it has one: a network
-// founded before prefixes were drawn numbers from the schema's whole range.
+// V4Prefix returns the network's own IPv4 prefix; older networks have none
+// and use the schema's whole range.
 func (s *State) V4Prefix() (netip.Prefix, bool) {
 	if s.v4Prefix == nil {
 		return netip.Prefix{}, false
@@ -197,11 +195,9 @@ func (s *State) V4Retiring() (types.RetiringRanges, bool) {
 func (s *State) Addr6(id types.Identity) netip.Addr { return types.Addr6(s.genesisHash, id) }
 
 // Addrs returns a member's overlay addresses at unix time now as single-host
-// prefixes: the derived v6 address, the retiring v4 address while it is live,
-// and the explicit v4 address if it has one. Single-host is load-bearing —
-// these become AllowedIPs, which also authorize the source addresses a peer
-// may originate. The first of each family is the one to send from: a
-// retiring address is the one every member still accepts.
+// prefixes: v6, the retiring v4 while live, then the explicit v4. They must
+// stay single-host: they become AllowedIPs, which authorize source addresses.
+// The first of each family is the one to send from.
 func (s *State) Addrs(id types.Identity, now int64) []netip.Prefix {
 	n, ok := s.nodes[id]
 	if !ok {
@@ -281,8 +277,7 @@ func (s *State) ValidDisablement(secret []byte) bool {
 }
 
 // EpochRecord reconstructs the current epoch's distribution record, so a
-// member can recover the group secret from state alone — including state
-// bootstrapped from a checkpoint, where the original may be compacted away.
+// member can recover the group secret from state alone.
 func (s *State) EpochRecord() *types.EpochRecord {
 	rec := &types.EpochRecord{
 		Epoch:  s.epoch,
@@ -298,8 +293,7 @@ func (s *State) EpochRecord() *types.EpochRecord {
 	return rec
 }
 
-// Snapshot returns the state in its serializable form, which is what a
-// checkpoint record carries and what determinism is compared over.
+// Snapshot returns the state in the serializable form a checkpoint carries.
 func (s *State) Snapshot() *types.Snapshot {
 	gh := s.genesisHash
 	snap := &types.Snapshot{
@@ -315,6 +309,10 @@ func (s *State) Snapshot() *types.Snapshot {
 		Schema:      s.schema,
 		Vouchers:    s.vouchers,
 		Domain:      s.domain,
+	}
+	if s.publicDERP != (types.PublicDERP{}) {
+		p := s.publicDERP
+		snap.PublicDERP = &p
 	}
 	if s.v4Prefix != nil {
 		p := *s.v4Prefix
@@ -333,10 +331,7 @@ func stateFromSnapshot(snap *types.Snapshot, head types.Hash) (*State, error) {
 	if snap.GenesisHash == nil {
 		return nil, errors.New("log: snapshot has no genesis hash")
 	}
-	// A state at a schema this build does not implement cannot be interpreted
-	// at all: its records may carry kinds and fields this build has never
-	// heard of, so acting on the part it understands would be exactly the
-	// split view the closed record set exists to prevent.
+	// Nothing at an unimplemented schema can be interpreted.
 	if snap.Schema > types.CurrentSchema {
 		return nil, &SchemaTooNewError{Version: snap.Schema, Implemented: types.CurrentSchema, At: head}
 	}
@@ -365,6 +360,9 @@ func stateFromSnapshot(snap *types.Snapshot, head types.Hash) (*State, error) {
 	}
 	if snap.Policy != nil {
 		s.policy = snap.Policy.Clone()
+	}
+	if snap.PublicDERP != nil {
+		s.publicDERP = *snap.PublicDERP
 	}
 	for i := range snap.Admins {
 		s.admins[snap.Admins[i].Public] = *snap.Admins[i].Clone()

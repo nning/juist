@@ -232,7 +232,7 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 	var err error
 	var devices []types.PrivateIdentity
 
-	op := g.rng.IntN(23)
+	op := g.rng.IntN(24)
 	if len(members) == 0 && slices.Contains([]int{2, 3, 4, 5, 14, 18, 20, 21, 22}, op) {
 		return types.AUM{}, nil, false
 	}
@@ -348,6 +348,8 @@ func (g *generator) step(base *State) (types.AUM, *State, bool) {
 			{},
 		}
 		aum, err = b.SetPolicy(policies[g.rng.IntN(len(policies))])
+	case 23: // name Tailscale's public DERP servers, or none
+		aum, err = b.SetPublicDERP(types.PublicDERP{Tailscale: g.rng.IntN(2) == 0})
 	}
 	if err != nil || !g.sign(&aum, base, devices) {
 		return types.AUM{}, nil, false

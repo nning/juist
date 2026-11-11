@@ -60,7 +60,7 @@ einer frischen Installation.
 
 War das Gerät in diesem Moment offline, erfährt es nichts davon. Es zeigt
 sich womöglich weiter als verbunden, obwohl kein Mitglied es mehr annimmt,
-oder meldet `the network's devices refuse this one: most likely it was removed`.
+oder meldet `other devices refuse this one: it was likely removed`.
 
 ## Warum das Entfernen nicht sofort wirkt
 

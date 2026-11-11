@@ -2,8 +2,8 @@
 # its anchor is the English title, only names the one platform a feature is limited to,
 # and uses names the use-case pages it serves. Further limits belong on the handbook page.
 - doc: docs/how-it-works
-  en: {title: Mesh and NAT traversal, text: "WireGuard tunnels between every pair of devices, direct where NAT allows."}
-  de: {title: Mesh und NAT-Traversal, text: "WireGuard-Tunnel zwischen allen Geräten, direkt, wo das NAT es zulässt."}
+  en: {title: Mesh and NAT traversal, text: "WireGuard tunnels between every pair of devices, direct where NAT allows or the router maps a port by UPnP, NAT-PMP or PCP."}
+  de: {title: Mesh und NAT-Traversal, text: "WireGuard-Tunnel zwischen allen Geräten, direkt, wo das NAT es zulässt oder der Router per UPnP, NAT-PMP oder PCP einen Port weiterleitet."}
   uses: [docs/use/ssh]
 - doc: docs/security
   en: {title: Quantum-safe, text: "Every handshake mixes in a key a quantum computer cannot recover, each pair of devices has its own, and every change is signed with ML-DSA."}
@@ -12,13 +12,17 @@
   en: {title: Invites, text: "A code for the LAN or a link for anywhere. Both devices show four words to compare."}
   de: {title: Einladungen, text: "Ein Code fürs LAN oder ein Link für überall. Beide Geräte zeigen vier Wörter, die du vergleichst."}
 - doc: docs/android
-  en: {title: Android, text: "A phone with Android 12 or newer joins with the invite's QR code or code, reaches the members at their addresses, and shows how each one is reached."}
-  de: {title: Android, text: "Ein Telefon mit Android 12 oder neuer tritt mit dem QR-Code oder dem Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie es jedes erreicht."}
+  en: {title: Android, text: "A phone with Android 12 or newer joins with the invite's QR code or code, reaches the members at their addresses, and shows how each one is reached. It founds a network of its own too, and invites and removes devices behind its fingerprint."}
+  de: {title: Android, text: "Ein Telefon mit Android 12 oder neuer tritt mit dem QR-Code oder dem Code der Einladung bei, erreicht die Mitglieder unter ihren Adressen und zeigt, wie es jedes erreicht. Es gründet auch ein eigenes Netz und lädt Geräte ein oder entfernt sie, hinter seinem Fingerabdruck."}
+  uses: [docs/use/phones]
 - doc: docs/install
   en: {title: Containers, text: "An app in a container is a device of its own, through a juist container sharing its network namespace."}
   de: {title: Container, text: "Eine App im Container ist ein eigenes Gerät, über einen juist-Container, der sich ihren Netz-Namespace teilt."}
   uses: [docs/use/container-app]
   only: Linux
+- doc: docs/install
+  en: {title: Steam Deck, text: "SteamOS installs juist with the same one line, as a system extension its updates keep."}
+  de: {title: Steam Deck, text: "Unter SteamOS installiert dieselbe Zeile juist, als System-Erweiterung, die seine Updates behalten."}
 - doc: docs/admins
   en: {title: Admins and quorum, text: "Every change needs k of n admins. If it needs more approvals, it is passed on to the other admins' devices."}
   de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}
@@ -73,9 +77,9 @@
   en: {title: Status page, text: "Devices, how they are reached, published names and the log's changes on one page for members, and as much of it for everyone else as you choose."}
   de: {title: Statusseite, text: "Geräte, ihre Erreichbarkeit, veröffentlichte Namen und die Änderungen im Log auf einer Seite, für Mitglieder, und so viel davon für alle anderen, wie du willst."}
 - doc: docs/relays
-  en: {title: Relays, text: "Where NAT prevents a direct connection, traffic goes through a member with a public address."}
-  de: {title: Relays, text: "Wo das NAT keine direkte Verbindung zulässt, läuft der Verkehr über ein Mitglied mit öffentlicher Adresse."}
-  uses: [docs/use/locked-down-networks]
+  en: {title: Relays, text: "Where NAT prevents a direct connection, traffic goes through a member with a public address, or, where the network chooses, Tailscale's public DERP servers."}
+  de: {title: Relays, text: "Wo das NAT keine direkte Verbindung zulässt, läuft der Verkehr über ein Mitglied mit öffentlicher Adresse oder, wenn das Netz es wählt, über Tailscales öffentliche DERP-Server."}
+  uses: [docs/use/locked-down-networks, docs/use/phones]
 - doc: docs/https-only
   en: {title: HTTPS only, text: "From a network that lets only HTTPS out, to every member through one relay on port 443, the ingress's by itself, and through a company's proxy."}
   de: {title: Nur HTTPS, text: "Aus einem Netz, das nur HTTPS hinauslässt, zu jedem Mitglied über ein Relay auf Port 443, das des Ingress von selbst, und über den Proxy einer Firma."}
@@ -84,8 +88,8 @@
   en: {title: Renaming and renumbering, text: "Give the network or a device a new name, or the devices new IPv4 addresses, without setting anything up again."}
   de: {title: Umbenennen und umnummerieren, text: "Das Netz oder ein Gerät bekommt einen neuen Namen, die Geräte neue IPv4-Adressen, ohne dass etwas neu eingerichtet wird."}
 - doc: docs/keys
-  en: {title: Key backups, text: "An admin key as one line, for a password manager."}
-  de: {title: Schlüssel sichern, text: "Ein Admin-Schlüssel als eine Zeile, für den Passwortmanager."}
+  en: {title: Key backups, text: "An admin key as one line, for a password manager, or from the app as a file sealed by a password."}
+  de: {title: Schlüssel sichern, text: "Ein Admin-Schlüssel als eine Zeile, für den Passwortmanager, oder aus der App als Datei, mit einem Passwort versiegelt."}
 - doc: docs/network-changes
   en: {title: Break-glass, text: "A secret shown once at creation and kept offline ends the network for good, with no admin needed."}
   de: {title: Break-glass, text: "Ein Geheimnis, beim Anlegen einmal angezeigt und offline verwahrt, beendet das Netz endgültig, ganz ohne Admin."}

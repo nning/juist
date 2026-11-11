@@ -1262,6 +1262,7 @@ func (s *Service) Status() ipc.Status {
 	}
 	st.Joining = s.busy
 	st.Rendezvous = s.helpers()
+	st.PortMapOff = s.prefs.PortMapOff
 	if st.HTTPS == nil && (s.prefs.HTTPSOnly || s.prefs.RelayName != "") {
 		st.HTTPS = &ipc.HTTPS{Only: s.prefs.HTTPSOnly, Name: s.prefs.RelayName}
 		if s.prefs.HTTPSOnly {
@@ -1269,7 +1270,8 @@ func (s *Service) Status() ipc.Status {
 		}
 	}
 	if o := s.opts.Mesh; o.TunName != "" && !o.Netstack && runtime.GOOS != "android" {
-		st.Multicast = &ipc.Multicast{Off: s.prefs.MulticastOff || !multicastPermitted(state, st.Self, s.now().Unix()), Auto: copiesGroups(o) && s.prefs.automaticGroups()}
+		st.Multicast = &ipc.Multicast{Off: s.prefs.MulticastOff || !multicastPermitted(state, st.Self, s.now().Unix()), Auto: copiesGroups(o) && s.prefs.automaticGroups(),
+			GroupsOff: copiesGroups(o) && s.prefs.GroupsOff && len(s.prefs.Groups) == 0}
 		for _, g := range s.prefs.Groups {
 			if copiesGroups(o) {
 				st.Multicast.Groups = append(st.Multicast.Groups, g.String())

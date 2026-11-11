@@ -35,21 +35,18 @@ const (
 	recordsDir  = "records"
 	recordExt   = ".cbor"
 
-	// formatVersion is written at creation and checked at open. A future
-	// layout change bumps it, so an older binary refuses a newer store
-	// instead of misreading it.
+	// formatVersion is checked at open; a layout change bumps it, so an older
+	// binary refuses a newer store instead of misreading it.
 	formatVersion = "juist-log-v1"
 
-	// Owner-only: the log is not secret — every member has it — but the
-	// epoch floor and anchor are integrity-critical, and a world-writable
-	// state directory is how a local user rolls a daemon back.
+	// Owner-only: the log is not secret, but a local user who can write the
+	// anchor or epoch floor rolls the daemon back.
 	dirMode  fs.FileMode = 0o700
 	fileMode fs.FileMode = 0o600
 )
 
-// A Dir is a [log.Storage] backed by a directory. Record bodies are not
-// cached: the index holds hashes and parent links, and bodies are read and
-// re-verified on demand, so memory and disk cannot disagree.
+// A Dir is a [log.Storage] backed by a directory. Bodies are not cached but
+// re-read and re-verified on demand, so memory and disk cannot disagree.
 type Dir struct {
 	path    string
 	records string
@@ -64,12 +61,10 @@ type Dir struct {
 
 var _ log.Storage = (*Dir)(nil)
 
-// Open opens or creates a store at path. Every record file is read and
-// verified against its name, so opening is where corruption is caught.
-//
-// Neither the directory nor its records directory may be a symbolic link:
-// the CLI may open, as root, a store in a directory another user owns, and a
-// link planted there would have it write wherever the link points.
+// Open opens or creates a store at path, verifying every record against its
+// name. Neither path nor its records directory may be a symbolic link: root
+// may open a store in another user's directory, and a planted link would
+// redirect its writes.
 func Open(path string) (*Dir, error) {
 	if err := refuseLink(path); err != nil {
 		return nil, err
@@ -121,8 +116,7 @@ func (d *Dir) checkVersion() error {
 	b, err := os.ReadFile(name)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		// A directory with records but no version marker is not a store this
-		// code wrote; refusing beats guessing at its layout.
+		// Records without a version marker: not ours; refuse to guess.
 		entries, err := os.ReadDir(d.records)
 		if err != nil {
 			return fmt.Errorf("store: reading %s: %w", d.records, err)
@@ -149,15 +143,11 @@ func (d *Dir) loadIndex() error {
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), recordExt) {
-			// Leftovers from an interrupted write. Both prefixes are swept:
-			// a store written by an older build can hold either, and neither
-			// must keep this one from opening.
+			// Leftovers of an interrupted write, by this or an older build.
 			if strings.HasPrefix(e.Name(), tempPrefix) || strings.HasPrefix(e.Name(), tmpPrefix) {
-				// Skipped, not removed: opening is not exclusive, and
-				// deleting a file another process is between writeSync and
-				// Rename on fails its publish — which, Inform being atomic,
-				// costs it the whole batch. Skipping is enough to keep the
-				// store openable; sweeping belongs to the writer.
+				// Skipped, not removed: opening is not exclusive, and removing
+				// a file another process is about to rename fails its whole
+				// batch. The writer sweeps.
 				continue
 			}
 			return fmt.Errorf("store: %s contains an unexpected entry %q",
@@ -203,9 +193,8 @@ func (d *Dir) readRecord(h types.Hash) (types.AUM, error) {
 		return types.AUM{}, fmt.Errorf("store: %s does not hold a valid record: %w; it is damaged, "+
 			"or written before schema 18, which this juist reads no more", name, err)
 	}
-	// The file name is the claim; this is the check. Without it a single
-	// flipped bit — or an edit — would be indistinguishable from a record the
-	// network actually authorized.
+	// The file name is the claim; this is the check against flipped bits and
+	// edits.
 	if got := aum.Hash(); got != h {
 		return types.AUM{}, fmt.Errorf(
 			"store: %s holds a record that hashes to %v; the file is corrupt or was edited. "+
@@ -230,9 +219,7 @@ func (d *Dir) Children(h types.Hash) ([]types.Hash, error) {
 	return slices.Clone(d.children[h]), nil
 }
 
-// Prefixes naming a file that is not a record: an in-progress write.
-// rename publishes a staged record; a variable so a test can cut a batch
-// short as a crash would.
+// rename publishes a staged record; a variable so a test can simulate a crash.
 var rename = os.Rename
 
 const batchHeader = "juist-batch-v1"
@@ -310,18 +297,16 @@ const (
 	tmpPrefix  = ".tmp-"
 )
 
-// A staged record is one written under a temporary name and not yet renamed
-// into place.
+// staged is a record written under a temporary name, not yet published.
 type staged struct {
 	hash types.Hash
 	temp string
 }
 
-// Add writes records durably: every file is written and fsynced before any is
-// renamed into place, so a crash cannot leave a half-written record under a
-// name claiming to hash to it. The batch is journaled before the first
-// rename, and a batch cut short is finished at the next [Open]: part of one
-// can resolve on its own, below the floor the whole of it clears.
+// Add writes records durably: all are fsynced before any is renamed into
+// place, so no name points at a half-written record. The batch is journaled
+// before the first rename and finished at the next [Open] if cut short: part
+// of a batch can resolve below the floor the whole clears.
 func (d *Dir) Add(aums ...types.AUM) error {
 	var pending []staged
 	cleanup := func() {
@@ -361,18 +346,16 @@ func (d *Dir) Add(aums ...types.AUM) error {
 		cleanup()
 		return err
 	}
-	// From here a failure leaves the journal and the staged files, which the
-	// next Open publishes.
+	// A failure from here leaves the journal for the next Open to finish.
 	for _, s := range pending {
 		if err := d.publish(s.hash); err != nil {
 			return err
 		}
 	}
-	// Swept here rather than at open: this process is the writer, so a staged
-	// file it does not own is residue rather than a write in flight.
+	// Only the writer sweeps: to it, a staged file it does not own is residue.
 	d.sweepStaged(pending)
-	// The renames are only durable once the directory entry is, and the
-	// journal may go only once they are.
+	// The renames are durable only once the directory is synced; only then may
+	// the journal go.
 	if err := fsyncDir(d.records); err != nil {
 		return err
 	}
@@ -502,8 +485,7 @@ func (d *Dir) loadSchemaFloor() error {
 
 func (d *Dir) SchemaFloor() (types.SchemaVersion, error) { return d.schemaFloor, nil }
 
-// SetSchemaFloor raises the schema floor and fsyncs, for the same reason
-// [Dir.SetEpochFloor] does: a ratchet that does not survive a crash is not one.
+// SetSchemaFloor raises the schema floor and fsyncs, so it survives a crash.
 func (d *Dir) SetSchemaFloor(v types.SchemaVersion) error {
 	if v <= d.schemaFloor {
 		return nil
@@ -516,8 +498,7 @@ func (d *Dir) SetSchemaFloor(v types.SchemaVersion) error {
 	return nil
 }
 
-// SetEpochFloor raises the floor and fsyncs before returning. Its entire
-// purpose is to survive a crash, so an unsynced write would defeat it.
+// SetEpochFloor raises the epoch floor and fsyncs, so it survives a crash.
 func (d *Dir) SetEpochFloor(epoch uint64) error {
 	if epoch <= d.floor {
 		return nil
@@ -539,9 +520,8 @@ func refuseLink(path string) error {
 	return nil
 }
 
-// checkNotSharedWritable refuses a store directory that group or other can
-// write to: the log is not secret, but such a writer can lower the anchor or
-// the epoch floor.
+// checkNotSharedWritable refuses a directory group or other can write: such a
+// writer can lower the anchor or the epoch floor.
 func checkNotSharedWritable(path string) error {
 	if err := atomicfile.RefuseSharedWritable(path, "roll this node's log back", "700"); err != nil {
 		return fmt.Errorf("store: %w", err)
@@ -549,18 +529,12 @@ func checkNotSharedWritable(path string) error {
 	return nil
 }
 
-// writeSync writes a file and fsyncs its contents, without the intermediate
-// rename [atomicfile.Write] does. Add stages record bodies with it, so a crash
-// leaves debris under the one prefix Add's cleanup knows; Add's own rename is
-// what publishes the record.
-//
-// The name is predictable from the record, so whatever is already there —
-// debris of a crash, or a link someone who can write the directory planted —
-// is removed rather than opened, and the file is created exclusively: a link
-// planted in between fails the create instead of redirecting it.
+// writeSync writes and fsyncs a file without [atomicfile.Write]'s rename;
+// Add's rename publishes it. The name is predictable, so whatever is there is
+// removed, not opened, and the file is created exclusively: a link planted in
+// between fails the create instead of redirecting it.
 func writeSync(name string, body []byte) error {
-	// RemoveAll, so that a directory planted under the name does not block
-	// staging for good; it removes links rather than following them.
+	// RemoveAll clears a planted directory too, and does not follow links.
 	if err := os.RemoveAll(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("store: removing %s: %w", name, err)
 	}
@@ -595,9 +569,8 @@ func fsyncDir(dir string) error {
 	return nil
 }
 
-// sweepStaged removes staged files left by an interrupted write, skipping the
-// ones this call just published. Called only from [Dir.Add]: a second
-// concurrent writer is a configuration error the CLI refuses to become.
+// sweepStaged removes staged files except published. Only [Dir.Add] calls it;
+// a second concurrent writer is a configuration error the CLI refuses.
 func (d *Dir) sweepStaged(published []staged) {
 	entries, err := os.ReadDir(d.records)
 	if err != nil {

@@ -66,4 +66,7 @@ const (
 	LabelRelayRendezvous  = "juist relay rendezvous v1"
 	LabelRelayRegion      = "juist/relay-region/v1"
 	LabelPolicyDetached   = "juist/policy-detached/v1"
+
+	// An admin key kept as a line sealed by a password.
+	LabelSealedAdminKey = "juist/admin-key-sealed/v1"
 )

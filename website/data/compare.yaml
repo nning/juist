@@ -117,6 +117,9 @@ groups:
         de: Läuft ohne Server des Herstellers
         marks: ynyyynyyyyy
         notes:
+          juist:
+            en: A network the app creates uses Tailscale's public DERP servers until an admin turns them off.
+            de: Ein Netz, das die App anlegt, nutzt Tailscales öffentliche DERP-Server, bis ein Admin sie abschaltet.
           headscale:
             en: With a DERP relay of your own.
             de: Mit einem eigenen DERP-Relay.

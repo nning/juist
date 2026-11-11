@@ -16,9 +16,8 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// A Secret is what a guest knows about an invite: a typed [Code] or a
-// [Link]. Either runs the same key exchange; they differ in entropy and in
-// how the guest finds the host.
+// A Secret is what a guest knows of an invite: a typed [Code] or a [Link].
+// Both run the same exchange; they differ in entropy and in finding the host.
 type Secret interface {
 	mode() mode
 	password() []byte
@@ -52,9 +51,8 @@ type Code struct {
 	Words     [CodeWords]byte
 }
 
-// NetworkName draws a name for a network nobody named: two words of the PGP
-// word list, one of each half, such as "belfast-hazardous", which is easier
-// to say and to recall than a number and tells two networks apart.
+// NetworkName draws a name for an unnamed network: one word from each half of
+// the PGP word list, such as "belfast-hazardous".
 func NetworkName() (string, error) {
 	var b [2]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -116,20 +114,12 @@ func (c Code) password() []byte {
 	return append(b, c.Words[:]...)
 }
 
-// Fingerprint names a joining device in four words of the PGP word list, for
-// a person to compare between its screen and the inviting admin's. The device
-// that runs the invite runs the session too, and could put a device of its
-// own in the guest's place, or the guest's identity with keys of its own; the
-// words cover the identity and every key the request names, its signing key
-// too, so either shows as other words.
-//
-// Four words are 32 bits, enough only if nobody can search them, and the
-// device in the middle carries both the admin's salt and the guest's nonce.
-// So each is fixed before the other is known: the guest commits to its nonce
-// in the join request, before the admin draws the salt, and reveals it only
-// once it holds the salt. A device in the middle has to fix its own request's
-// nonce before it sees the admin's salt, and hand the guest a salt before it
-// sees the guest's nonce: one try at 32 bits on either screen, not a search.
+// Fingerprint names a joining device in four PGP words for a person to compare
+// on its screen and the admin's. They cover the identity and every key the
+// request names, so an inviting device substituting a device or keys shows
+// other words. 32 bits hold only if unsearchable: the guest commits to its
+// nonce before the admin draws the salt and reveals it after, so a device in
+// the middle gets one try per screen, not a search.
 func Fingerprint(salt Salt, nonce Nonce, req *JoinRequest) string {
 	h := sha256.New()
 	h.Write([]byte(types.LabelDeviceWords + "\x00"))
@@ -220,10 +210,9 @@ type Link struct {
 	Admin        *types.Identity
 	AdminSigning *[fingerprintLen]byte
 
-	// Relays are member relays the inviting host waits at for a guest that
-	// cannot reach it directly ([Link.ForwardID]). A relay passes bytes and
-	// learns nothing that would let it answer in the host's place. Named are
-	// relays by their public names, on 443.
+	// Relays are member relays the host waits at for a guest that cannot
+	// reach it ([Link.ForwardID]); they pass bytes and learn nothing to answer
+	// in the host's place. Named are relays by public name, on 443.
 	Relays []netip.AddrPort
 	Named  []string
 }
@@ -374,10 +363,9 @@ func ParseLink(s string) (Link, error) {
 	return l, nil
 }
 
-// RendezvousKeys derives what the two sides of a link need to meet through the
-// DHT when the link's addresses do not reach: where each publishes, and the key
-// that seals what they publish. Only a holder of the link can compute them,
-// and none of them is the password.
+// RendezvousKeys derives where each side publishes on the DHT, and the key
+// sealing it, for when the link's addresses do not reach. Only link holders
+// can compute them, and none is the password.
 func (l Link) RendezvousKeys() (host, guest, seal [32]byte) {
 	derive := func(label string) (out [32]byte) {
 		k, err := hkdf.Key(sha256.New, l.secret[:], nil, types.LabelInviteRendezvous+label, 32)

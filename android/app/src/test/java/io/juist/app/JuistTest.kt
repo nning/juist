@@ -5,6 +5,7 @@ import android.content.Intent
 import io.juist.app.core.Connection
 import io.juist.app.core.CoreCalls
 import io.juist.app.core.JoinState
+import io.juist.app.core.InviteState
 import io.juist.app.core.Juist
 import io.juist.app.core.JuistVpnService
 import io.juist.app.core.OffReason
@@ -56,7 +57,31 @@ private class FakeCore : CoreCalls {
     override fun diagnose() = """{"established":2,"dns":{"queries":3,"failed":1}}"""
     override fun changes(slot: Int) = """[{"index":4,"what":"admit phone"}]"""
     override fun setNames(slot: Int, on: Boolean) { names = on }
+    var publicNames: Boolean? = null
+    override fun setPublicNames(slot: Int, on: Boolean) { publicNames = on }
     override fun setHttpsOnly(slot: Int, on: Boolean) {}
+    override fun setPortMapping(slot: Int, on: Boolean) {}
+    override fun create(network: String, name: String, seed: ByteArray) = io.juist.app.core.Founded(0, "", "nid:abc")
+    var inviteEvents: io.juist.app.core.InviteEvents? = null
+    /** Each invite's end, in order; a cancel ends the newest unless holdCancelled. */
+    val inviteEnds = java.util.concurrent.CopyOnWriteArrayList<java.util.concurrent.CompletableFuture<Unit>>()
+    var holdCancelled = false
+    override fun invite(slot: Int, minutes: Int, admin: String, events: io.juist.app.core.InviteEvents) {
+        val end = java.util.concurrent.CompletableFuture<Unit>()
+        inviteEnds += end
+        inviteEvents = events
+        events.ready("650-ample-ribbon", "juist:link")
+        try {
+            end.get()
+        } catch (e: java.util.concurrent.ExecutionException) {
+            throw e.cause!!
+        }
+    }
+    override fun cancelInvite() { if (!holdCancelled) inviteEnds.lastOrNull()?.complete(Unit) }
+    override fun admit(seed: ByteArray) {}
+    override fun refuse() { inviteEnds.last().completeExceptionally(Exception("words not confirmed; nothing signed")) }
+    override fun remove(slot: Int, identity: String, seed: ByteArray, lastVoucher: Boolean) = true
+    override fun grant(slot: Int, identity: String, role: String, on: Boolean, seed: ByteArray, lastVoucher: Boolean) = true
 }
 
 /** Two networks as the core lists them, view.json's in slot 0 and an office in slot 2, and a slot in none. */
@@ -187,16 +212,19 @@ class JuistTest {
         assertTrue(Juist.useExit(2, "node-a").isFailure)
     }
 
-    /** The names setting reaches the core, the log's changes and the diagnosis come from it, and none while it is off. */
+    /** The names settings reach the core, the log's changes and the diagnosis come from it, and none while it is off. */
     @Test
     fun settingsChangesAndTheDiagnosisGoThroughTheCore() = runBlocking {
         Juist.attached(core)
         assertTrue(Juist.setNames(0, false).isSuccess)
         assertEquals(false, core.names)
+        assertTrue(Juist.setPublicNames(0, true).isSuccess)
+        assertEquals(true, core.publicNames)
         assertEquals("admit phone", Juist.changes(0).getOrThrow().single().what)
         assertEquals(1, Juist.diagnosis()?.dns?.failed)
         Juist.disconnect(app)
         assertTrue(Juist.setNames(0, true).isFailure)
+        assertTrue(Juist.setPublicNames(0, false).isFailure)
         assertNull(Juist.diagnosis())
     }
 
@@ -257,5 +285,49 @@ class JuistTest {
         ShadowVpnService.setPrepareResult(Intent("android.net.vpn.SETUP_VPN"))
         StartReceiver().onReceive(app, boot)
         assertNull(startedService())
+    }
+
+    /** Words refused end the invite as refused, not as admitting; cancelled, it is gone. */
+    @Test
+    fun anInviteSaysTheWordsWereRefused() {
+        Juist.attached(core)
+        assertTrue(Juist.invite(0, 1, "nid:admin"))
+        waitUntil { Juist.invite.value is InviteState.Offered }
+        assertFalse("a second invite started beside the first", Juist.invite(0, 1, "nid:admin"))
+        core.inviteEvents!!.compare("ample ribbon tundra velvet", "laptop")
+        assertEquals(InviteState.Comparing("ample ribbon tundra velvet", "laptop"), Juist.invite.value)
+        kotlinx.coroutines.runBlocking { Juist.answerInvite(null) }
+        waitUntil { Juist.invite.value is InviteState.Ended }
+        assertEquals(InviteState.Ended(null, refused = true), Juist.invite.value)
+
+        assertTrue(Juist.invite(1, 1, "nid:admin"))
+        waitUntil { Juist.invite.value is InviteState.Offered }
+        assertEquals(1, Juist.inviteSlot)
+        Juist.cancelInvite()
+        assertEquals(InviteState.Idle, Juist.invite.value)
+    }
+
+    /** An invite that ends after the next one started says nothing of the next. */
+    @Test
+    fun aLateInviteSaysNothingOfTheNext() {
+        Juist.attached(core)
+        core.holdCancelled = true
+        assertTrue(Juist.invite(0, 1, "nid:admin"))
+        waitUntil { Juist.invite.value is InviteState.Offered }
+        Juist.cancelInvite()
+        assertTrue(Juist.invite(1, 1, "nid:admin"))
+        waitUntil { core.inviteEnds.size == 2 && Juist.invite.value is InviteState.Offered }
+        core.inviteEnds[0].complete(Unit)
+        Thread.sleep(300)
+        assertEquals(InviteState.Offered("650-ample-ribbon", "juist:link"), Juist.invite.value)
+        core.inviteEnds[1].complete(Unit)
+    }
+
+    private fun waitUntil(ok: () -> Boolean) {
+        val end = System.currentTimeMillis() + 5_000
+        while (!ok()) {
+            check(System.currentTimeMillis() < end) { "timed out" }
+            Thread.sleep(10)
+        }
     }
 }

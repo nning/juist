@@ -89,7 +89,7 @@ nothing needs attention
 
 work
 warning: no IPv4 on this host: "home" (juist0) holds 198.18.36.2, which "work" claims too (198.18.36.0/22)
-hint: renumber one of the two networks: juist network renumber juist1 PREFIX, or the other
+hint: renumber either network: juist network renumber juist1 PREFIX
 ```
 
 Once one of them is [renumbered]({{< relref "docs/network-changes" >}}), IPv4

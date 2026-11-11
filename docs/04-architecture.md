@@ -75,7 +75,8 @@ of the audit, and the Audit column is its placement.
 | `internal/host` | The inviting half of an enrollment; asks the CLI for every signature | — | out (holds no key) |
 | `cmd/juist` | The CLI, commands in its table in `main.go`. Holds the admin keys and a per-network pin; signs only what it rebuilt from its own verified log | — | changes, pin, rotation, waiting |
 
-The core (`types`, `trust/`) is held to **11 k lines** by `make tcb`; the audit
+The core (`types`, `trust/`) is held to **8 100 lines of code** by `make tcb`,
+comments and blank lines not counted; the audit
 scope around it is measured ([06-verification.md](06-verification.md) §5).
 
 ## Log schema (extends TKA's AUM set)
@@ -252,8 +253,8 @@ are the same lesson: **the local API is the most-exploited surface.** Rules:
 - **State integrity:** log + epoch floor persisted with fsync before any action
   depends on them; state file corruption ⇒ refuse to start, never silently
   re-genesis.
-- **Parser hygiene:** every externally supplied input has a fuzz target; M32 adds
-  those still missing ([06-verification.md](06-verification.md) §2).
+- **Parser hygiene:** every externally supplied input has a fuzz target
+  ([06-verification.md](06-verification.md) §2).
 
 ## Data plane details
 

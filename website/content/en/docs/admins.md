@@ -203,11 +203,11 @@ needs, each with their own devices ([Keys]({{< relref "docs/keys" >}}#backing-up
 | You see | What to do |
 |---|---|
 | `hint: for changes waiting for your vote to reach you: juist admins receive` | run `juist admins receive` once |
-| `juist health`: `hint: every device implements schema 21: juist log upgrade` | run `juist log upgrade` |
-| `juist: not every device implements schema 21: phone (20)` | update juist on the devices it names, then run it again ([Updating]({{< relref "docs/updating" >}})) |
+| `juist health`: `hint: every device supports schema 21: juist log upgrade` | run `juist log upgrade` |
+| `juist: not every device supports schema 21: phone (20)` | update juist on the devices it names, then run it again ([Updating]({{< relref "docs/updating" >}})) |
 | `juist: the network predates rotating an identity key` | update juist on every device, then run `juist log upgrade` |
 | `--admin "bob": a key with no signing key, from an older juist` | bob runs `juist admins new bob` again with this version and sends the new line |
-| `juist: the key names no signing key, which the network needs; it is from an older juist` | bob runs `juist admins new bob` with this version and sends the command it prints, whole |
+| `juist: key has no signing key; it is from an older juist` | bob runs `juist admins new bob` with this version and sends the command it prints, whole |
 | `hint: bob cannot read it on an admin device yet; send them the file` | send bob the `.rec` file; he runs `juist approve FILE` |
 | `juist: no admin key of this network in …` | run the command where an admin's key is |
 | `juist: run as alice, without sudo: …` | run it again without sudo |

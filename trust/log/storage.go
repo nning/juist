@@ -12,12 +12,10 @@ import (
 // ErrNotFound is returned by [Storage.AUM] for a hash it does not hold.
 var ErrNotFound = errors.New("log: record not found")
 
-// Storage holds records and the two node-local ratchets — the anchor and the
-// epoch floor — that protect against being walked backwards. Records are
-// content-addressed: an implementation checks what it reads back hashes to the
-// name it was filed under, and reports corruption rather than repairing it.
-// The ratchets are node-local, so two nodes that have seen different histories
-// refuse different things, which a fork alarm surfaces.
+// Storage holds records and the node-local ratchets (anchor, epoch and schema
+// floor) that protect against being walked backwards. An implementation must
+// check that what it reads back hashes to its name, and report corruption
+// rather than repair it.
 type Storage interface {
 	// AUM returns the record with the given hash, or [ErrNotFound].
 	AUM(h types.Hash) (types.AUM, error)
@@ -27,42 +25,35 @@ type Storage interface {
 	Children(h types.Hash) ([]types.Hash, error)
 
 	// Add stores records durably. A failure may leave part of the batch
-	// stored, which callers re-resolve to find out, but a store that
-	// outlives a crash must hold all of a batch or none of it when next
-	// opened: part of one can resolve below the epoch floor the whole
-	// clears. Re-adding a record already held is not an error: the name is
-	// its content.
+	// stored, but after a crash a store must hold all of a batch or none:
+	// part of one can resolve below the epoch floor the whole clears.
+	// Re-adding a held record is not an error.
 	Add(aums ...types.AUM) error
 
-	// Delete removes records: by compaction, after the anchor has advanced
-	// past them, and copies of a record that earn no place.
+	// Delete removes records.
 	Delete(hashes ...types.Hash) error
 
-	// Hashes returns every stored record's hash. Compaction needs it to find
-	// records the anchor can no longer reach, and it is how "is this store
-	// empty" is answered.
+	// Hashes returns every stored record's hash.
 	Hashes() ([]types.Hash, error)
 
-	// Anchor returns the oldest record the active chain is computed from: the
-	// genesis record, or the newest checkpoint this node adopted. A chain that
-	// does not descend from it is not considered at all.
+	// Anchor returns the record the active chain is computed from: genesis,
+	// or the newest checkpoint adopted. Chains not descending from it are
+	// ignored.
 	Anchor() (types.Hash, bool, error)
 
-	// SetAnchor records a new anchor. Callers only ever move it forward,
-	// along the active chain, or onto the chain a rebase takes.
+	// SetAnchor records a new anchor. Callers only move it forward, along the
+	// active chain or onto the chain a rebase takes.
 	SetAnchor(h types.Hash) error
 
 	// EpochFloor returns the highest group-secret epoch this node has ever
 	// adopted. A chain resolving below it is a rollback attempt.
 	EpochFloor() (uint64, error)
 
-	// SetEpochFloor raises the floor. Implementations must persist it before
-	// returning, since its whole purpose is to survive a restart.
+	// SetEpochFloor raises the floor, persisted before returning.
 	SetEpochFloor(epoch uint64) error
 
 	// SchemaFloor returns the highest record schema this node has ever
-	// adopted. A chain resolving below it is a rollback of the schema, which
-	// is how a fork that never took the upgrade would otherwise be adopted.
+	// adopted. A chain resolving below it is a schema rollback.
 	SchemaFloor() (types.SchemaVersion, error)
 
 	// SetSchemaFloor raises the schema floor, persisted before returning.
@@ -111,8 +102,7 @@ func (m *MemStorage) Children(h types.Hash) ([]types.Hash, error) {
 }
 
 func (m *MemStorage) Add(aums ...types.AUM) error {
-	// Validate the whole batch before mutating anything, so a rejected batch
-	// leaves the store as it was.
+	// Validate the whole batch first, so a rejected one changes nothing.
 	for i := range aums {
 		if err := aums[i].StaticValidate(); err != nil {
 			return fmt.Errorf("log: refusing to store an invalid record: %w", err)
@@ -218,8 +208,7 @@ func newOverlay(base reader, aums []types.AUM) (*overlay, error) {
 		if _, dup := o.added[h]; dup {
 			continue
 		}
-		// A record the store already holds is not new; leaving it out of the
-		// overlay keeps the child index from listing it twice.
+		// Already held: leave it out so the child index lists it once.
 		if _, err := base.AUM(h); err == nil {
 			continue
 		}
@@ -243,14 +232,11 @@ func newOverlay(base reader, aums []types.AUM) (*overlay, error) {
 }
 
 // earnsPlace reports whether a, hashing to h, earns a place beside others,
-// copies of it: it is one of the two lowest hashes, or carries a signature by
-// a key none of others carries, or is a checkpoint with fewer than
-// [maxCheckpointCopies] others. Copies of a record are thus bounded by its
-// signers, however many a key or a relay mints, while every node keeps the
-// lowest two it is shown, so their heads agree, and every key any copy brings.
+// copies of it: it is one of the two lowest hashes, carries a key none of
+// others carries, or is a checkpoint with fewer than [maxCheckpointCopies]
+// others. This bounds copies by signers while nodes keep the same lowest two.
 func earnsPlace(r reader, a *types.AUM, h types.Hash, others []types.Hash) (bool, error) {
-	// A peer may be anchored at any copy of a checkpoint, and refuses what a
-	// node that does not hold that copy sends it.
+	// A peer may be anchored at any copy of a checkpoint.
 	if a.Kind == types.KindCheckpoint && len(others)-count(others, h) < maxCheckpointCopies {
 		return true, nil
 	}
@@ -282,8 +268,8 @@ func earnsPlace(r reader, a *types.AUM, h types.Hash, others []types.Hash) (bool
 	return false, nil
 }
 
-// maxCheckpointCopies is as many copies of a checkpoint as a store keeps
-// whatever they carry.
+// maxCheckpointCopies is how many checkpoint copies a store keeps whatever
+// they carry.
 const maxCheckpointCopies = 8
 
 func count(hashes []types.Hash, h types.Hash) int {
@@ -355,8 +341,7 @@ func (o *overlay) Children(h types.Hash) ([]types.Hash, error) {
 		return nil, err
 	}
 	out := append(base, o.children[h]...)
-	// Deterministic order: fork choice must not depend on the order the store
-	// happens to return children in.
+	// Fork choice must not depend on store order.
 	slices.SortFunc(out, types.Hash.Compare)
 	return slices.Compact(out), nil
 }
@@ -369,8 +354,7 @@ func (o *overlay) Hashes() ([]types.Hash, error) {
 	return append(base, slices.Collect(maps.Keys(o.added))...), nil
 }
 
-// pending returns the records the overlay adds, so the caller can commit
-// exactly those once resolution has approved them.
+// pending returns the records the overlay adds.
 func (o *overlay) pending() []types.AUM {
 	hashes := slices.Collect(maps.Keys(o.added))
 	slices.SortFunc(hashes, types.Hash.Compare)

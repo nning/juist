@@ -18,8 +18,8 @@ matches, and the rest of the internet still gets the public record.
 
 Both work on Linux and FreeBSD, where juist sets up the device's DNS itself
 ([how](#resolver)). The [Android app]({{< relref "docs/android" >}}#names)
-resolves the members' names and the names published under the network's
-domain, not public names.
+resolves them too, public names once **Public names** is on in its
+**Details**.
 
 ## Reaching a device by name
 
@@ -53,10 +53,13 @@ Turn public names on for this device:
 juist names on
 ```
 
-It prints `public names on: mail.example.org at nas`.
+It prints `public names on: mail.example.org at nas`. On a phone, turn
+**Public names** on in the app's **Details**.
 {{< /step >}}
 
 `juist names` lists the network's names and how this device resolves each.
+The names [published]({{< relref "docs/publishing" >}}) under the network's
+domain take one row, `see juist publish`, as `juist publish` lists them.
 `juist names off` makes this device resolve them publicly again.
 `juist names remove nas mail.example.org` takes the name from the device.
 
@@ -86,8 +89,8 @@ sudo juist set --dns=false
 
 It prints `dns off`. juistd then leaves this device's DNS alone: no network
 names, and no DNS through an exit node. The `Names` line in `juist status`
-ends in `(DNS off)`. `sudo juist set --dns` turns it on again, without a
-restart.
+ends in `(DNS off)`, and every row in `juist names` says `juist DNS off`.
+`sudo juist set --dns` turns it on again, without a restart.
 
 ## Good to know
 
@@ -139,7 +142,7 @@ each. If names are not resolved, or a public name is off,
 | `warning: names juistd forwards are refused: the host asks tailscaled alone, whose answers members cannot reach` | an exit node refuses members the names the host sends to Tailscale alone; `sudo tailscale set --accept-dns=false` on it leaves the tailnet's names to its other resolvers |
 | `warning: names juistd forwards are refused: systemd-resolved asks over DNS over TLS, which juistd does not speak` | juistd refuses this device names systemd-resolved would ask over TLS rather than send them in plain text; `juist exit use DEVICE` sends them through the tunnel |
 | `warning: names juistd forwards are refused: systemd-resolved knows no DNS server` | systemd-resolved has no server to ask; `resolvectl status` shows the servers it knows |
-| `warning: names the host's DNS routing sends elsewhere are refused, as it cannot be read: …` | juistd cannot ask systemd-resolved where a name goes, and refuses such names until it can; `systemctl status systemd-resolved` shows how it is |
+| `warning: cannot read the host's DNS routing, so names routed elsewhere are refused: …` | juistd cannot ask systemd-resolved where a name goes, and refuses such names until it can; `systemctl status systemd-resolved` shows how it is |
 
 Where systemd-resolved refused juistd, `juist health` adds:
 

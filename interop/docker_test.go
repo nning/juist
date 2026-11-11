@@ -42,7 +42,7 @@ docker network connect svcnet svcm`)
 	invite(t, fb, lx, "docker exec svcm juist -s /var/lib/juist/daemon.sock join '%s' --name dweb")
 	fb.run(t, `set -e
 juist grant dweb service
-juist publish add dweb dweb 443`)
+juist publish dweb 443 --on dweb`)
 	fb.eventually(t, "fetching the container's name through itself", 4*time.Minute,
 		"/tmp/probe hello "+fb.lanAddr+":443 dweb.pub.example.org /tmp/root.pem", has("web-in-docker from "))
 

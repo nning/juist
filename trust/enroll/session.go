@@ -29,12 +29,9 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// ProtocolVersion is the enrollment protocol a hello speaks. It changes with
-// any message a peer of the other version could not decode, so the two
-// devices refuse at the hello, with a reason a person can act on, instead of
-// failing on a field one of them does not know. 2: a join request commits to
-// the nonce the words are made from. 3: the channel is rekeyed by ML-KEM-768
-// after SPAKE2, and a join request brings its ML-DSA key.
+// ProtocolVersion is the enrollment protocol a hello speaks. Bump it with any
+// message an older peer could not decode, so a mismatch is refused at the hello
+// with an actionable reason instead of failing on an unknown field.
 const ProtocolVersion = 3
 
 // Frame size limits. A handshake frame is a few dozen bytes; a channel frame
@@ -46,26 +43,23 @@ const (
 
 var (
 	// ErrWrongCode is the host's verdict on a guest that did not know the
-	// code. The invite is void from then on: that is what bounds an attacker
-	// to one guess.
+	// code. The code is void from then on, bounding an attacker to one guess.
 	ErrWrongCode = errors.New("enroll: someone tried this invite with the wrong code; the code is now void")
 
 	// ErrLinkSpent is the host's verdict on a guest that holds the link and
 	// answered with an element built from it, which spends the invite.
 	ErrLinkSpent = errors.New("enroll: a holder of the link spent the invite without joining")
 
-	// ErrWrongLink is the host's verdict on a guest whose link secret did
-	// not match. It voids nothing: at 128 bits an online guess is worth
-	// nothing, and voiding would let anyone who reaches the port end the
-	// invite with one connection.
+	// ErrWrongLink is the host's verdict on a guest whose link secret did not
+	// match. It voids nothing: a 128-bit guess is worthless, and voiding would
+	// let anyone reaching the port end the invite.
 	ErrWrongLink = errors.New("enroll: a guest's link did not match this invite")
 
-	// ErrInviteClosed is returned for a session against an invite that was
-	// used or voided.
+	// ErrInviteClosed: the invite was already used or voided.
 	ErrInviteClosed = errors.New("enroll: the invite has already been used or voided")
 
-	// ErrImpostor is the guest's verdict on a host that did not know the
-	// code: whoever answered is not the device that issued the invite.
+	// ErrImpostor is the guest's verdict on a host that did not know the code,
+	// so did not issue the invite.
 	ErrImpostor = errors.New("enroll: the device that answered does not know the invite code, " +
 		"so it is not the one that issued it")
 )
@@ -119,26 +113,23 @@ type RefusedError struct{ Reason Refusal }
 func (e *RefusedError) Error() string { return "enroll: " + e.Reason.String() }
 
 // An Invite is the host's half of an invite: a typed code and a link, either
-// of which admits one device. It is not safe for concurrent use, and must
-// not be: sessions are serial so that an invite can never be guessed at twice
-// at once.
+// admitting one device. Deliberately not safe for concurrent use: serial
+// sessions keep an invite from being guessed at twice at once.
 type Invite struct {
 	code Code
 	link Link
 
-	// closed is the invite spent: a device joined, or proved it knows it.
-	// codeVoid is the typed code alone voided by a wrong guess at it, or by
-	// too many guesses at its nameplate; the link, a secret of its own,
-	// still works.
+	// closed: a device joined or proved it knows the invite. codeVoid: the
+	// code alone is void (a wrong guess or too many nameplate misses); the
+	// link still works.
 	closed   bool
 	codeVoid bool
 	misses   int
 }
 
-// MaxNameplateMisses is how many hellos for another nameplate an invite
-// answers before it takes its code out of use. Asking costs a guesser
-// nothing, and 999 nameplates are few, so without a bound anyone could find
-// the right one and then spend the code's one guess.
+// MaxNameplateMisses is how many hellos for other nameplates void the code:
+// asking is free and 999 nameplates are few, so a guesser could find the
+// right one and then spend the code's one guess.
 const MaxNameplateMisses = 32
 
 // NewInvite draws an invite for a host listening at addrs.
@@ -192,11 +183,10 @@ func ReadHello(r io.Reader) (*Hello, error) {
 // Code reports whether the guest is using the typed code rather than the link.
 func (h *Hello) Code() bool { return h.frame.Mode == modeCode }
 
-// AcceptHello runs the host's half of the handshake over one connection,
-// whose hello h was read from it. The invite is spent once a guest proves it
-// knows the code, and void once one proves it does not ([ErrWrongCode]). Any
-// other failure leaves it as it was: a session that ends before the guest's
-// confirmation gave its peer nothing to test a guess against.
+// AcceptHello runs the host's half of the handshake on rw, which h was read
+// from. A guest proving it knows the secret spends the invite; one proving it
+// does not voids the code ([ErrWrongCode]). Other failures change nothing: a
+// session ending before the guest's confirmation tested no guess.
 func (inv *Invite) AcceptHello(h *Hello, rw io.ReadWriter) (*Channel, error) {
 	hello := h.frame
 	if inv.closed {
@@ -262,8 +252,7 @@ func (inv *Invite) AcceptHello(h *Hello, rw io.ReadWriter) (*Channel, error) {
 			refuse(rw, RefusedWrongLink)
 			return nil, ErrWrongLink
 		}
-		// The code's one guess is spent; the link is another secret, and a
-		// guess at the code says nothing about it.
+		// Only the code's guess is spent; the link is a separate secret.
 		inv.codeVoid = true
 		refuse(rw, RefusedWrongCode)
 		return nil, ErrWrongCode
@@ -331,8 +320,6 @@ func Join(rw io.ReadWriter, secret Secret) (*Channel, error) {
 func aadFor(m mode) []byte { return []byte{'j', 'u', 'i', 's', 't', ProtocolVersion, byte(m)} }
 
 func refuse(w io.Writer, r Refusal) { _ = writeHandshake(w, &hsFrame{Kind: hsRefuse, Refusal: r}) }
-
-// --- handshake frames ------------------------------------------------------
 
 type hsKind uint8
 
@@ -438,8 +425,6 @@ func writeHandshake(w io.Writer, f *hsFrame) error {
 	}
 	return writeFrame(w, b)
 }
-
-// --- the channel -----------------------------------------------------------
 
 // A Channel is the encrypted session a completed handshake yields: AES-256-GCM
 // in each direction, with counter nonces, so a frame cannot be replayed,
@@ -614,8 +599,6 @@ func counterNonce(n uint64) []byte {
 	binary.BigEndian.PutUint64(nonce[4:], n)
 	return nonce
 }
-
-// --- framing and encoding ----------------------------------------------------
 
 func readFrame(r io.Reader, limit int) ([]byte, error) {
 	var hdr [4]byte

@@ -77,7 +77,13 @@ type Core struct {
 	// underlay is how the network beneath the VPN resolves, as the app last
 	// said.
 	underlay atomic.Pointer[daemon.Underlay]
-	dns      *dnsStats
+	// cancelInvite ends the invite open, whose admission inviteAnswer
+	// answers.
+	cancelInvite context.CancelFunc
+	inviteAnswer chan []byte
+	// routes are the network beneath's own, as it last named them.
+	routes atomic.Pointer[[]netip.Prefix]
+	dns    *dnsStats
 
 	// exitMu has one exit node chosen at a time.
 	exitMu sync.Mutex
@@ -232,6 +238,7 @@ func (c *Core) startNetwork(slot int) (*network, error) {
 	if meshForTests != nil {
 		meshForTests(slot, &opts.Mesh)
 	}
+	opts.InviteAddrs = inviteAddrsForTests
 	s, err := daemon.NewService(opts)
 	if err != nil {
 		return nil, err
@@ -263,6 +270,10 @@ func (c *Core) startNetwork(slot int) (*network, error) {
 // meshForTests, where set, changes what a slot's mesh runs with: a test's
 // host has no device carrying the overlay's addresses.
 var meshForTests func(slot int, o *daemon.Options)
+
+// inviteAddrsForTests, where set, is where an invite is reached, as a phone
+// with no interface of a test's reaches none.
+var inviteAddrsForTests func(port uint16) []netip.AddrPort
 
 // lowerStatus is slot's status, for a higher slot's check of what it holds.
 func (c *Core) lowerStatus(_ context.Context, slot int) (*ipc.Status, error) {
@@ -304,8 +315,19 @@ func hookTo(p Platform) {
 	}
 	keys.SealWith(sealer{p})
 	protectBy(p)
-	netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) { return interfaces(p) })
+	hooked.Store(&p)
+	registerGetter()
 }
+
+// hooked is the platform the interface getter asks. netmon keeps its getter
+// in a plain variable that magicsock reads from goroutines a closed core may
+// leave behind, so it is set once, and the platform changes beneath it.
+var (
+	hooked         atomic.Pointer[Platform]
+	registerGetter = sync.OnceFunc(func() {
+		netmon.RegisterInterfaceGetter(func() ([]netmon.Interface, error) { return interfaces(*hooked.Load()) })
+	})
+)
 
 // follow keeps the network's prefixes st names, for the VPN's routes, and
 // has a device established before they changed route them. A network that
@@ -424,7 +446,13 @@ func (c *Core) Status() (string, error) {
 		}
 		n.follow(resp.Status)
 		sts[n.slot] = resp.Status
-		out = append(out, slotView{Slot: n.slot, view: viewOf(resp.Status, c.underlayNow().PrivateDNS)})
+		v := viewOf(resp.Status, c.underlayNow().PrivateDNS)
+		if m := n.s.Mesh(); m != nil {
+			if state, err := m.TrustedState(); err == nil {
+				v.Admins = adminsOf(state)
+			}
+		}
+		out = append(out, slotView{Slot: n.slot, view: v})
 	}
 	for i := range out {
 		if st := sts[out[i].Slot]; st != nil && st.HostConflict != nil && !st.HostConflict.SameNetwork {
@@ -737,13 +765,15 @@ func (c *Core) leave(slot int32, force bool) error {
 // as resolvers, a JSON [underlayDNS]; the core's monitor only polls every few
 // minutes there.
 func (c *Core) NetworkChanged(iface, resolvers string) {
-	defaultRouteVia(iface)
+	defaultRouteVia(iface, underlayGateway(resolvers))
 	u, err := parseUnderlay(resolvers)
 	if err != nil {
 		c.logf("mobile: %v", err)
 	}
 	c.underlay.Store(&u)
-	c.hub.SetHostRoutes(underlayRoutes(resolvers))
+	routes := underlayRoutes(resolvers)
+	c.routes.Store(&routes)
+	c.hub.SetHostRoutes(routes)
 	for _, n := range c.networks() {
 		if m := n.s.Mesh(); m != nil {
 			m.NetworkChanged()
@@ -759,6 +789,29 @@ func (c *Core) SetNames(slot int32, on bool) error {
 		return err
 	}
 	_, err = n.call(ipc.Request{Command: ipc.CmdSettings, DNS: &on})
+	return err
+}
+
+// SetPublicNames has the phone resolve the public names slot's network
+// points at members to them, through the tunnel, or publicly, as `juist
+// names on` and `off`.
+func (c *Core) SetPublicNames(slot int32, on bool) error {
+	n, err := c.on(slot)
+	if err != nil {
+		return err
+	}
+	_, err = n.call(ipc.Request{Command: ipc.CmdNames, AcceptNames: &on})
+	return err
+}
+
+// SetPortMapping has slot's network ask the router to open a port for the
+// phone by UPnP, NAT-PMP or PCP, or not, as `juist set --port-mapping`.
+func (c *Core) SetPortMapping(slot int32, on bool) error {
+	n, err := c.on(slot)
+	if err != nil {
+		return err
+	}
+	_, err = n.call(ipc.Request{Command: ipc.CmdSettings, PortMapping: &on})
 	return err
 }
 

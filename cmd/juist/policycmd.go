@@ -25,7 +25,7 @@ may open anything on every other.`,
 			{name: "edit", run: policyEdit, forms: [][2]string{{"edit", "change it in $EDITOR"}}},
 			{name: "set", run: policySet, forms: [][2]string{{"set FILE", "make FILE the policy, - for standard input"}}},
 			{name: "diff", run: policyDiff, forms: [][2]string{{"diff FILE", "how FILE differs from the policy"}}},
-			{name: "check", run: policyCheck, forms: [][2]string{{"check FILE", "read FILE against the network, run its tests"}}},
+			{name: "check", run: policyCheck, forms: [][2]string{{"check FILE", "check FILE against the network and run its tests"}}},
 			{name: "test", run: policyTest, forms: [][2]string{{"test from DEVICE to DEST ...", "whether the policy passes it, and by which rule"}}},
 			{name: "fmt", run: policyFmt, forms: [][2]string{{"fmt [FILE...]", "print FILE in canonical form"}}},
 			{name: "off", run: policyOff, forms: [][2]string{{"off", "withdraw it"}}},
@@ -66,9 +66,8 @@ func policyShow(a *app, args []string) error {
 
 func policySet(a *app, args []string) error {
 	s := spec{name: "juist policy set", args: "FILE", min: 1, max: 1, about: `
-Make FILE the network's access policy, once it parses against the network
-and passes its tests. - reads standard input. If the change needs other
-admins' votes, it goes to them like any change.`}
+Make FILE, - for standard input, the access policy, once it parses and
+passes its tests.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	pos, err := a.parse(s, fs, args)
@@ -92,8 +91,8 @@ admins' votes, it goes to them like any change.`}
 
 func policyEdit(a *app, args []string) error {
 	s := spec{name: "juist policy edit", about: `
-Edit the network's access policy in $VISUAL or $EDITOR (default vi). It is
-set once it parses and passes its tests.`}
+Edit the access policy in $VISUAL or $EDITOR (default vi). It is set once
+it parses and passes its tests.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	if _, err := a.parse(s, fs, args); err != nil {
@@ -149,8 +148,8 @@ set once it parses and passes its tests.`}
 
 func policyOff(a *app, args []string) error {
 	s := spec{name: "juist policy off", about: `
-Withdraw the network's access policy. Every device may then open anything on
-every other again.`}
+Withdraw the access policy: every device may then open anything on every
+other again.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	if _, err := a.parse(s, fs, args); err != nil {
@@ -164,7 +163,7 @@ every other again.`}
 		a.ok("unchanged: no access policy")
 		return nil
 	}
-	if err := a.proceed(*yes, "every device may then open anything on every other; withdraw the access policy?"); err != nil {
+	if err := a.proceed(*yes, "withdraw the access policy? every device may then open anything on every other"); err != nil {
 		return err
 	}
 	aum, err := auth.Builder().SetPolicy(&types.Policy{})
@@ -178,9 +177,9 @@ every other again.`}
 
 func policyDiff(a *app, args []string) error {
 	s := spec{name: "juist policy diff", args: "FILE", min: 1, max: 1, about: `
-Show how FILE differs from the network's access policy, both in canonical
-form: - marks a line only the policy has, + a line only FILE has. Exits 1 if
-they differ.`}
+Show how FILE differs from the access policy, both in canonical form: -
+marks a line only the policy has, + a line only FILE has. Exits 1 if they
+differ.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -243,10 +242,9 @@ tests. Sets nothing.`}
 
 func policyTest(a *app, args []string) error {
 	s := spec{name: "juist policy test", args: "from DEVICE to DEST [proto P [port N]]", min: 4, max: -1, about: `
-Say whether the network's access policy lets DEVICE open DEST, and which
-rule allows it. DEST is a device, internet via DEVICE, an address, name
-NAME, or a published name, as in a test line of a policy. Exits 1 if no rule
-allows it.`}
+Say whether the access policy lets DEVICE open DEST, and by which rule.
+DEST is a device, internet via DEVICE, an address, name NAME, or a published
+name. Exits 1 if no rule allows it.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -258,7 +256,11 @@ allows it.`}
 	state := auth.State()
 	p, err := policy.Parse("test pass "+policy.Words(pos), policy.Members(state))
 	if pe := (*policy.Error)(nil); errors.As(err, &pe) {
-		return errors.New(pe.Msg)
+		// A device or name not found is no bad syntax: its error has a hint.
+		if strings.Contains(pe.Msg, "\nhint:") {
+			return errors.New(pe.Msg)
+		}
+		return a.usageErr("%s", pe.Msg)
 	} else if err != nil {
 		return err
 	}
@@ -266,7 +268,7 @@ allows it.`}
 	n := policy.NetworkOf(state, a.now().Unix())
 	if len(t.To.Names) == 1 {
 		if _, _, ok := n.Publisher(t.To.Names[0]); !ok {
-			return fmt.Errorf("%s is published on no device by TLS", nameUnder(t.To.Names[0], state.Domain()))
+			return fmt.Errorf("no device publishes %s by TLS", nameUnder(t.To.Names[0], state.Domain()))
 		}
 	}
 	names := policy.Names(state)
@@ -291,20 +293,24 @@ allows it.`}
 func policyFmt(a *app, args []string) error {
 	s := spec{name: "juist policy fmt", args: "[FILE...]", max: -1, anyNetwork: true, about: `
 Print each FILE (default: standard input) in canonical form, as juist policy
-prints the policy. Reads no log. -w rewrites the files instead; -l lists the
-files not in canonical form and fails if there are any.`}
+prints the policy. -w rewrites the files instead; -l lists those not in
+canonical form, and fails if there are any.`}
 	fs := newFlags(s.name)
 	write := fs.Bool("write", false, "rewrite FILE in place")
-	list := fs.Bool("list", false, "list files not in the policy's own form")
+	list := fs.Bool("list", false, "list files not in canonical form")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
 	}
 	switch {
 	case *write && *list:
-		return fmt.Errorf("-w or -l, not both\n%s", s.usage(fs))
-	case len(pos) == 0 && (*write || *list), slices.Contains(pos, "-") && *write:
-		return fmt.Errorf("-w and -l take files\n%s", s.usage(fs))
+		return a.usageErr("--write cannot be used with --list")
+	case len(pos) == 0 && *write:
+		return a.usageErr("--write needs a FILE")
+	case slices.Contains(pos, "-") && *write:
+		return a.usageErr("--write cannot be used with -")
+	case len(pos) == 0 && *list:
+		return a.usageErr("--list needs a FILE")
 	case len(pos) == 0:
 		pos = []string{"-"}
 	}
@@ -358,7 +364,7 @@ func (a *app) readPolicyFile(path string) (src, name string, err error) {
 			return "", "", err
 		}
 		if len(b) > maxPolicyText {
-			return "", "", fmt.Errorf("standard input holds over %d bytes, more than any policy", maxPolicyText)
+			return "", "", fmt.Errorf("standard input is over %d bytes, too long for a policy", maxPolicyText)
 		}
 		return string(b), "<stdin>", nil
 	}
@@ -372,7 +378,7 @@ func (a *app) readPolicyFile(path string) (src, name string, err error) {
 		return "", "", err
 	}
 	if len(b) > maxPolicyText {
-		return "", "", fmt.Errorf("%s holds over %d bytes, more than any policy", path, maxPolicyText)
+		return "", "", fmt.Errorf("%s is over %d bytes, too long for a policy", path, maxPolicyText)
 	}
 	return string(b), path, nil
 }
@@ -393,7 +399,7 @@ func parsePolicy(state *log.State, src, name string) (*types.Policy, error) {
 		return nil, err
 	}
 	if p.Empty() {
-		return nil, fmt.Errorf("%s holds no policy\nhint: juist policy off withdraws it", name)
+		return nil, fmt.Errorf("%s holds no policy\nhint: to withdraw the policy: juist policy off", name)
 	}
 	return p, nil
 }
@@ -459,7 +465,7 @@ func (a *app) submitPolicy(auth *log.Authority, p *types.Policy, yes bool) error
 		a.warn("the access policy passes nothing")
 	}
 	if state.Policy() == nil {
-		if err := a.proceed(yes, "anything the policy does not pass is then refused; set it?"); err != nil {
+		if err := a.proceed(yes, "set the access policy? anything it does not pass is then refused"); err != nil {
 			return err
 		}
 	}
@@ -491,9 +497,9 @@ func policyLoss(p *types.Policy, id types.Identity) string {
 		lost = append(lost, count(n, "test"))
 	}
 	if len(lost) == 0 {
-		return "; the access policy names it no more"
+		return "; the access policy no longer names it"
 	}
-	return "; the access policy names it no more, and loses " + strings.Join(lost, " and ")
+	return "; the access policy loses " + strings.Join(lost, " and ")
 }
 
 // edit opens path in the operator's editor.

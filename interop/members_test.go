@@ -33,11 +33,11 @@ func membersAlone(t *testing.T, fb, lx *vm, work, lx4 string) {
 	// A service of its own: web's, which the internet reaches, would answer
 	// its clients for secret by Host.
 	lx.run(t, "setsid -f /tmp/probe serve lx-secret 8082 >/dev/null 2>&1 < /dev/null")
-	fb.run(t, "juist publish add lx secret --members")
-	if out, _ := lx.try("juist publish add secret 127.0.0.1:80", time.Minute); !has("its service as it is")(out) {
+	fb.run(t, "juist publish secret --members --on lx")
+	if out, _ := lx.try("juist publish secret 127.0.0.1:80", time.Minute); !has("give a name for members only its own service")(out) {
 		t.Errorf("sharing web's service, the name for members was not refused:\n%s", out)
 	}
-	lx.eventually(t, "ending TLS for the name for members", 3*time.Minute, "juist publish add secret 127.0.0.1:8082",
+	lx.eventually(t, "ending TLS for the name for members", 3*time.Minute, "juist publish secret 127.0.0.1:8082",
 		has("ending TLS for secret.pub.example.org to 127.0.0.1:8082"))
 	if out := fb.run(t, "juist publish"); !has("(members)")(out) {
 		t.Errorf("juist publish does not mark the name for members:\n%s", out)

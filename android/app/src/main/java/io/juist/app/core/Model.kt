@@ -23,6 +23,10 @@ data class NetworkView(
     val updated: Long = 0,
     val settings: PhoneSettings = PhoneSettings(),
     val details: Details = Details(),
+    /** The network's admin keys, by which the app tells the networks it holds a key of. */
+    val admins: List<String> = emptyList(),
+    /** How many changes wait for votes on this phone. */
+    val waiting: Int = 0,
 ) {
     val inNetwork get() = state != State.None && state != State.Joining && state != State.Unknown
 }
@@ -59,6 +63,8 @@ data class Member(
     val reach: Reach = Reach.Unknown,
     /** The member whose relay carries the traffic to it, where [reach] is [Reach.Relay]. */
     val relay: String = "",
+    /** Whether [relay] is one of Tailscale’s public DERP servers, no member’s. */
+    val relayPublic: Boolean = false,
     val heard: Long = 0,
     val since: Long = 0,
     /** Its name under the network's domain, where it has one. */
@@ -73,9 +79,32 @@ data class Member(
     val build: Int = 0,
 )
 
-/** The phone's own settings: whether its lookups go to juist, and whether it reaches relays by HTTPS alone. */
+/**
+ * The phone's own settings: whether its lookups go to juist, whether it resolves the public names the network
+ * points at members to them, whether it reaches relays by HTTPS alone, and whether it has the router open a port
+ * for it.
+ */
 @Serializable
-data class PhoneSettings(val names: Boolean = true, val httpsOnly: Boolean = false)
+data class PhoneSettings(
+    val names: Boolean = true,
+    val publicNames: Boolean = false,
+    val httpsOnly: Boolean = false,
+    val portMapping: Boolean = true,
+)
+
+/** What the data plane measured of the network beneath (ipc.Underlay). */
+@Serializable
+data class Underlay(
+    val udp: Boolean = false,
+    val ipv4: Boolean = false,
+    val ipv6: Boolean = false,
+    /** Whether the measurement told how IPv4's NAT maps; [portPerPeer] how it does. */
+    val mapping: Boolean = false,
+    val portPerPeer: Boolean = false,
+    /** The port mapping protocols the router answered, and the address a mapping holds there. */
+    val offered: List<String> = emptyList(),
+    val mapped: String = "",
+)
 
 /** What `juist status` says beyond the state. */
 @Serializable
@@ -88,6 +117,9 @@ data class Details(
     val installed: Int = 0,
     val home: String = "",
     val httpsRelays: List<String> = emptyList(),
+    /** Whether members meet through Tailscale's public DERP servers where no member relays. */
+    val publicDerp: Boolean = false,
+    val underlay: Underlay? = null,
     val subnets: List<SubnetRoute> = emptyList(),
 )
 
@@ -169,13 +201,21 @@ data class ExitView(
     val inUse get() = node.isNotEmpty()
 }
 
-/** What the phone resolves of the network's names: its domain, the phone's own names, and whether its lookups reach juist. */
+/**
+ * What the phone resolves of the network's names: its domain, the phone's own names, whether its lookups reach juist,
+ * and the public names pointed at other members.
+ */
 @Serializable
 data class NamesView(
     val domain: String = "",
     val own: List<String> = emptyList(),
     val resolved: Boolean = false,
+    val public: List<PublicName> = emptyList(),
 )
+
+/** A public name the network points at member, and why the phone resolves it publicly now, where it agreed. */
+@Serializable
+data class PublicName(val name: String = "", val member: String = "", val not: String = "")
 
 @Serializable
 data class Tunnels(val live: Int = 0, val total: Int = 0, val checked: Long = 0)
@@ -211,3 +251,24 @@ fun parseViews(json: String): List<NetworkView> =
     } else {
         listOf(parseView(json).copy(slot = 0))
     }
+
+/** An invite the phone offers. */
+sealed interface InviteState {
+    /** Whether it is open, and another may not start. */
+    val open: Boolean get() = this !is Idle && this !is Joined && this !is Ended
+
+    data object Idle : InviteState
+    data object Starting : InviteState
+    /** Open: the code for the same Wi-Fi, the link a QR code shows; noLan where the code is not announced on the Wi-Fi. */
+    data class Offered(val code: String, val link: String, val noLan: Boolean = false) : InviteState
+    /** A device asks to join as name: the person compares words with those it shows. */
+    data class Comparing(val words: String, val name: String) : InviteState
+    data class Admitting(val name: String) : InviteState
+    data class Joined(val name: String) : InviteState
+    /** Ended unjoined: why, null where it expired or was cancelled; refused where the words differed. */
+    data class Ended(val why: String?, val refused: Boolean = false) : InviteState
+}
+
+/** host.Joined and host.NoLAN, the invite's events of a device that joined and of a code not on the Wi-Fi. */
+internal const val HOST_JOINED = 3
+internal const val HOST_NO_LAN = 4

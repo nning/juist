@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/govern"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/enroll"
@@ -332,7 +333,9 @@ func TestAnInviteThroughTheDaemonAdmitsOneDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.node = &localNode{h: a.home}
-	d := &daemonInvite{a: a, auth: auth, adm: &admitter{a: a, key: key}, o: inviteOptions{expires: time.Minute}}
+	adm := &admitter{a: a, key: key}
+	d := &govern.Invite{Key: key.Public(), Signing: key.SigningKey(),
+		Announce: func(enroll.Code, enroll.Link, uint16) {}, Admit: adm.Admit, Event: a.reportHostEvent}
 	join := func() *ipc.Event {
 		g, err := keys.GenerateNode()
 		if err != nil {
@@ -346,24 +349,24 @@ func TestAnInviteThroughTheDaemonAdmitsOneDevice(t *testing.T) {
 	replies := 0
 	reply := func(ipc.Request) error { mu.Lock(); replies++; mu.Unlock(); return nil }
 	ctx := context.Background()
-	if err := d.handle(ctx, join(), reply); err == nil {
+	if err := d.Handle(ctx, join(), reply); err == nil {
 		t.Fatal("an admission before the invite was offered was answered")
 	}
 	inv, err := enroll.NewInvite([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41642")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.handle(ctx, &ipc.Event{Kind: ipc.EventInviteReady, Code: inv.Code().String(),
+	if err := d.Handle(ctx, &ipc.Event{Kind: ipc.EventInviteReady, Code: inv.Code().String(),
 		Link: inv.Link().String()}, reply); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.handle(ctx, join(), reply); err != nil {
+	if err := d.Handle(ctx, join(), reply); err != nil {
 		t.Fatalf("the invite's one admission: %v", err)
 	}
-	if err := d.handle(ctx, join(), reply); err == nil {
+	if err := d.Handle(ctx, join(), reply); err == nil {
 		t.Fatal("a second admission in one invite was answered")
 	}
-	d.admitting.Wait()
+	d.Wait()
 	if n := len(openLog(t, c).State().Nodes()); n != 2 || replies != 1 {
 		t.Fatalf("%d members and %d answers after one invite", n, replies)
 	}
@@ -390,22 +393,23 @@ func TestAnAdmissionHoldsTheGuestToItsSigningKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	adm := &admitter{a: a, key: key}
-	d := &daemonInvite{a: a, auth: auth, adm: adm, o: inviteOptions{expires: time.Minute}}
+	d := &govern.Invite{Key: key.Public(), Signing: key.SigningKey(),
+		Announce: func(enroll.Code, enroll.Link, uint16) {}, Admit: adm.Admit, Event: a.reportHostEvent}
 	inv, err := enroll.NewInvite([]netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:41642")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	reply := func(ipc.Request) error { return nil }
 	ctx := context.Background()
-	if err := d.handle(ctx, &ipc.Event{Kind: ipc.EventInviteReady, Code: inv.Code().String(),
+	if err := d.Handle(ctx, &ipc.Event{Kind: ipc.EventInviteReady, Code: inv.Code().String(),
 		Link: inv.Link().String()}, reply); err != nil {
 		t.Fatal(err)
 	}
 	unsigned := &enroll.JoinRequest{Name: "phone", Identity: g.Identity.Public(), Keys: g.Public}
-	if err := d.handle(ctx, &ipc.Event{Kind: ipc.EventInviteAdmit, Join: unsigned}, reply); err == nil {
+	if err := d.Handle(ctx, &ipc.Event{Kind: ipc.EventInviteAdmit, Join: unsigned}, reply); err == nil {
 		t.Fatal("a request without a signing key was taken up")
 	}
-	d.admitting.Wait()
+	d.Wait()
 
 	req := &enroll.JoinRequest{Name: "phone", Identity: g.Identity.Public(), Keys: g.Public,
 		Signing: g.Identity.SigningKey()}

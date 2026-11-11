@@ -46,6 +46,10 @@ Every device holds a copy of the log and checks every change itself. It
 trusts neither the device that sent the change nor the path it took. A change
 counts only when enough admins have signed it.
 
+Admitting a device records its public keys. A device builds a tunnel only
+with keys it found in its own checked copy of the log, so neither another
+member nor a relay can slip in a key of its own.
+
 `juist log` lists the changes and who approved each one.
 
 So that the log does not grow forever, juist records a **checkpoint** about
@@ -115,10 +119,19 @@ to end. juist punches through NAT so that the two devices connect directly.
 To learn its own public address, juistd asks public STUN servers.
 
 If two devices cannot reach each other directly, their traffic goes through a
-member with the `relay` role, never through a third party. The relay sees
-only encrypted WireGuard traffic.
+member with the `relay` role, or, where the network chose them and no member
+relays, through Tailscale's public DERP servers
+([Relays]({{< relref "docs/relays" >}}#public-derp)). Either sees only
+encrypted WireGuard traffic.
 
-Behind NAT, you open nothing in a firewall. A device with a public address
+Where the router offers UPnP, NAT-PMP or PCP, juistd has it open a port for
+the tunnels, so that the others reach this device directly even where both
+sides are behind NAT; `juist status` shows the port on its `Underlay` line,
+and `sudo juist set --port-mapping=false` asks the router for none.
+
+Behind NAT, you open nothing in the router. A firewall on the device itself
+has to let 41643/udp in where the router maps it; `juist health` says where
+firewalld does not. A device with a public address
 needs 41643/udp open. [Relays]({{< relref "docs/relays" >}}) lists the other
 ports, and [Architecture]({{< relref "docs/architecture" >}}) explains how
 the tunnels are built.

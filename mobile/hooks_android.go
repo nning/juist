@@ -23,6 +23,10 @@ func protectBy(p Platform) {
 	underlay.ProtectWith(func(fd uintptr) error { return protect(int(fd)) })
 }
 
-// defaultRouteVia records the interface Android routes the internet by,
-// which netmon cannot read from the kernel in an app.
-func defaultRouteVia(iface string) { netmon.UpdateLastKnownDefaultRouteInterface(iface) }
+// defaultRouteVia records the interface Android routes the internet by, and
+// its gateway, which the port mapper asks; netmon cannot read either from
+// the kernel in an app.
+func defaultRouteVia(iface, gateway string) {
+	netmon.UpdateLastKnownDefaultRouteInterface(iface)
+	netmon.UpdateLastKnownDefaultGateway(gateway)
+}

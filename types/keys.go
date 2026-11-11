@@ -21,15 +21,11 @@ const (
 	SeedSize      = ed25519.SeedSize
 	WGKeySize     = 32
 	X25519KeySize = 32
-	// MLKEMKeySize is the size of an ML-KEM-768 encapsulation key. Spelled
-	// out rather than taken from crypto/mlkem so this package does not
-	// depend on it: only trust/secrets performs ML-KEM operations.
+	// MLKEMKeySize is an ML-KEM-768 encapsulation key's size.
 	MLKEMKeySize = 1184
 )
 
-// Text prefixes. Identity, WireGuard and X25519 public keys are all 32 opaque
-// bytes, so their text forms are tagged: pasting one where another belongs is
-// caught at parse time rather than three records later.
+// Text forms are tagged so one key type pasted for another fails to parse.
 const (
 	identityPrefix = "nid:"
 	wgPrefix       = "wg:"
@@ -39,37 +35,32 @@ const (
 
 var b64 = base64.RawURLEncoding
 
-// An Identity is an Ed25519 public key. It names both member nodes and admin
-// signing keys and serves as its own key ID. A node's Identity is the one key
-// that never changes while it is a member — the others are rotatable
-// attributes — and its overlay v6 address derives from it.
+// An Identity is an Ed25519 public key naming a node or admin key, and its own
+// key ID. A node's Identity is fixed while it is a member.
 type Identity [IdentitySize]byte
 
 // A Sig is an Ed25519 signature.
 type Sig [SigSize]byte
 
-// A WGKey is a WireGuard static public key (Curve25519).
+// A WGKey is a WireGuard static public key.
 type WGKey [WGKeySize]byte
 
 // An X25519Key is the classical half of a node's HPKE recipient key.
 type X25519Key [X25519KeySize]byte
 
-// An MLKEMKey is an ML-KEM-768 encapsulation key: the post-quantum half of a
-// node's HPKE recipient key, and the key material reserved for the per-pair
-// WireGuard preshared-key hedge (docs/07-embedding-notes.md).
+// An MLKEMKey is an ML-KEM-768 encapsulation key, the post-quantum half of a
+// node's HPKE recipient key.
 type MLKEMKey [MLKEMKeySize]byte
 
-// A Signature is one attributable signature over an AUM. Attributable by
-// design: the log doubles as the audit trail that identifies a malicious
-// admin, which an aggregated or threshold signature would hide.
+// A Signature is one signature over an AUM, attributable to its signer so the
+// log identifies a malicious admin; no aggregate or threshold signatures.
 type Signature struct {
-	// KeyID is the identity that signed. Both node identity keys and admin
-	// keys sign records, so which of the two a KeyID must be is decided per
-	// record kind by trust/log.
+	// KeyID is the signer, node or admin key; which one a kind needs is
+	// trust/log's to decide.
 	KeyID Identity `cbor:"1,keyasint"`
 
-	// PQ is the ML-DSA signature. CBOR key 2 held the Ed25519 one before
-	// schema 18, and key 4 a rotated-to identity's signing key at schema 18.
+	// PQ is the ML-DSA signature. Keys 2 and 4 are retired (pre-schema-18
+	// Ed25519 signature, schema-18 signing key).
 	PQ *PQSig `cbor:"3,keyasint"`
 }
 
@@ -92,22 +83,17 @@ func (s *Signature) clone() *Signature {
 	return &out
 }
 
-// IsZero reports whether i is the zero value.
 func (i Identity) IsZero() bool { return i == Identity{} }
 
-// Verify reports whether sig is a valid signature by i over msg. crypto/ed25519
-// rejects non-canonical points and unreduced scalars, which is what makes the
-// log's verdict reproducible: a malleable encoding would let one node accept a
-// record another rejects.
+// Verify reports whether sig is i's signature over msg. crypto/ed25519 rejects
+// non-canonical encodings, so every node reaches the same verdict.
 func (i Identity) Verify(msg []byte, sig Sig) bool {
 	return ed25519.Verify(ed25519.PublicKey(i[:]), msg, sig[:])
 }
 
-// Validate reports whether i is usable as a signing key: not the zero value,
-// canonically encoded, on the curve, and — the reason this is more than a
-// length check — not of small order. A small-order key admits a signature
-// anyone can compute, turning its votes from "held by an admin" into "held by
-// anybody", which quorum cannot notice.
+// Validate reports whether i is a usable signing key: non-zero, a valid point,
+// and not of small order, for which anyone can forge signatures and quorum
+// would not notice.
 func (i Identity) Validate() error {
 	if i.IsZero() {
 		return errors.New("identity key is zero")
@@ -130,8 +116,7 @@ func (i Identity) ShortString() string {
 	return identityPrefix + s[:8] + "…"
 }
 
-// Compare orders identities bytewise. Records holding sets of identities are
-// sorted by it, which is what makes their encoding canonical.
+// Compare orders identities bytewise: the canonical order of identity sets.
 func (i Identity) Compare(other Identity) int { return bytes.Compare(i[:], other[:]) }
 
 func (i Identity) MarshalText() ([]byte, error)   { return []byte(i.String()), nil }
@@ -176,9 +161,6 @@ func (k *X25519Key) UnmarshalBinary(b []byte) error {
 	return unmarshalKeyBinary("X25519 key", b, k[:])
 }
 
-// IsZero reports whether k is the zero value. Unlike the 32-byte keys this is
-// a 1184-byte comparison, so callers on hot paths should avoid it; nothing in
-// the log is a hot path.
 func (k *MLKEMKey) IsZero() bool { return *k == MLKEMKey{} }
 
 func (k MLKEMKey) String() string                 { return mlkemPrefix + b64.EncodeToString(k[:]) }
@@ -204,15 +186,13 @@ func (s *Sig) UnmarshalBinary(b []byte) error {
 	return unmarshalKeyBinary("signature", b, s[:])
 }
 
-// A PrivateIdentity is the secret half of an [Identity]: a node's identity key
-// or an admin's signing key. Admin keys live in the operator's CLI keystore,
-// never in the daemon, so this is held only for a signing operation.
+// A PrivateIdentity is the secret half of an [Identity]. Admin keys never
+// reach the daemon; hold one only for a signing operation.
 type PrivateIdentity struct {
 	priv ed25519.PrivateKey
 	pq   *mldsa.PrivateKey // derived from priv's seed
 }
 
-// GenerateIdentity creates a new identity keypair from the system CSPRNG.
 func GenerateIdentity() (PrivateIdentity, error) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -221,8 +201,7 @@ func GenerateIdentity() (PrivateIdentity, error) {
 	return NewPrivateIdentity(priv.Seed())
 }
 
-// NewPrivateIdentity reconstructs an identity from its 32-byte seed, the form
-// [PrivateIdentity.Seed] persists.
+// NewPrivateIdentity reconstructs an identity from [PrivateIdentity.Seed].
 func NewPrivateIdentity(seed []byte) (PrivateIdentity, error) {
 	if len(seed) != SeedSize {
 		return PrivateIdentity{}, fmt.Errorf("types: identity seed is %d bytes, want %d", len(seed), SeedSize)
@@ -234,10 +213,8 @@ func NewPrivateIdentity(seed []byte) (PrivateIdentity, error) {
 	return PrivateIdentity{priv: ed25519.NewKeyFromSeed(seed), pq: pq}, nil
 }
 
-// IsZero reports whether p holds no key.
 func (p PrivateIdentity) IsZero() bool { return p.priv == nil }
 
-// Public returns the corresponding [Identity].
 func (p PrivateIdentity) Public() Identity {
 	var out Identity
 	if p.priv == nil {
@@ -247,8 +224,7 @@ func (p PrivateIdentity) Public() Identity {
 	return out
 }
 
-// Seed returns the 32-byte seed, the persistable form of the private key.
-// Callers must treat it as secret key material.
+// Seed returns the private key's persistable form, which is secret.
 func (p PrivateIdentity) Seed() []byte {
 	if p.priv == nil {
 		return nil
@@ -256,7 +232,6 @@ func (p PrivateIdentity) Seed() []byte {
 	return p.priv.Seed()
 }
 
-// Sign signs msg.
 func (p PrivateIdentity) Sign(msg []byte) (Sig, error) {
 	var out Sig
 	if p.priv == nil {
@@ -280,8 +255,7 @@ func cloneArray(b []byte) ([]byte, error) {
 	return out, nil
 }
 
-// unmarshalKeyText decodes prefix + unpadded base64url into dst, which must
-// already have the expected length.
+// unmarshalKeyText decodes prefix + unpadded base64url into exactly dst.
 func unmarshalKeyText(what, prefix string, text []byte, dst []byte) error {
 	s := string(text)
 	if prefix != "" {
@@ -294,9 +268,8 @@ func unmarshalKeyText(what, prefix string, text []byte, dst []byte) error {
 	if b64.DecodedLen(len(s)) != len(dst) {
 		return fmt.Errorf("types: %s is %d base64 characters, want %d", what, len(s), b64.EncodedLen(len(dst)))
 	}
-	// DecodedLen only bounds the length, so a decode error still has to be
-	// checked: it catches non-alphabet characters and non-zero trailing bits,
-	// both of which would otherwise give one key two text forms.
+	// The decode error also catches non-zero trailing bits, which would give
+	// one key two text forms.
 	n, err := b64.Decode(dst, []byte(s))
 	if err != nil {
 		return fmt.Errorf("types: decoding %s: %w", what, err)

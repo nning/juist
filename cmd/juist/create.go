@@ -2,10 +2,8 @@ package main
 
 import (
 	"cmp"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	mathrand "math/rand/v2"
 	"net"
 	"net/netip"
 	"os"
@@ -17,6 +15,7 @@ import (
 
 	"go4.org/netipx"
 
+	"github.com/nning/juist/internal/govern"
 	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/trust/log"
@@ -102,27 +101,24 @@ func cmdCreate(a *app, args []string) error {
 func (a *app) parseInit(args []string) (initPlan, error) {
 	s := spec{name: "juist create", args: "[NETWORK]", max: 1, anyNetwork: true, about: `
 Create a network with this device as its first member. NETWORK defaults to
-two random words. If the device is already in a network, the new network
-gets its own juistd.
+two random words. A device already in a network runs the new one in its own
+juistd.
 
---voucher makes this device a voucher too. If it is then off for 48 hours,
-the other devices reach only vouchers, so use it on a device that is always
-on.
+Use --voucher only on a device that is always on: if it is off for 48
+hours, the other devices reach only vouchers.
 
-The admin keys (this keystore's and --admin) and --quorum decide who may
-change the network. Changing them later takes a quorum too. This keystore's
-admin key is new, unless --admin-key reuses one from another network. Losing
-the admin keys loses the network: there is no recovery.`}
+Your admin key (new, or --admin-key), the --admin keys and --quorum decide
+who may change the network. Losing the admin keys loses the network.`}
 	var p initPlan
 	fs := newFlags(s.name)
-	fs.StringVar(&p.device, "device", "", "this device's `NAME` (default: the hostname)")
-	fs.BoolVar(&p.noDevice, "no-device", false, "do not make this device a member; for a signing-only machine")
+	fs.StringVar(&p.device, "device", "", "this device's `NAME` (default: hostname)")
+	fs.BoolVar(&p.noDevice, "no-device", false, "create without this device, for a signing-only machine")
 	fs.BoolVar(&p.relay, "relay", false, "make this device a relay")
 	fs.BoolVar(&p.voucher, "voucher", false, "make this device a voucher")
-	fs.StringVar(&p.adminName, "admin-name", "", "your `NAME` as admin (default: your user name, or --admin-key's)")
-	fs.StringVar(&p.adminKey, "admin-key", "", "govern it with the admin key `NAME` here too, as \"juist admins\" lists it")
+	fs.StringVar(&p.adminName, "admin-name", "", "your admin `NAME` (default: user name or --admin-key)")
+	fs.StringVar(&p.adminKey, "admin-key", "", "use the existing admin key `NAME` (see juist admins)")
 	fs.Var(&p.extraAdmins, "admin", "another admin, as `NAME=KEY[:VOTES]`; repeatable")
-	fs.UintVar(&p.adminVotes, "admin-votes", 1, "votes of the admin key created here")
+	fs.UintVar(&p.adminVotes, "admin-votes", 1, "votes of your admin key")
 	fs.UintVar(&p.quorum, "quorum", 1, "votes a change needs")
 	fs.StringVar(&p.ipv4, "ipv4", "", "IPv4 `PREFIX`, such as 10.111.0.0/24 (default: a free /22 in "+
 		types.OverlayV4.String()+")")
@@ -133,7 +129,11 @@ the admin keys loses the network: there is no recovery.`}
 		return p, err
 	}
 	if p.noDevice && (p.voucher || p.relay) {
-		return p, errors.New("--voucher and --relay are roles of this device, which --no-device leaves out")
+		role := "--voucher"
+		if !p.voucher {
+			role = "--relay"
+		}
+		return p, a.usageErr("%s cannot be used with --no-device", role)
 	}
 	if len(pos) == 1 {
 		p.network = pos[0]
@@ -168,16 +168,16 @@ func (a *app) fileHostAdminKeys() {
 // checkInit checks everything decidable from the arguments.
 func (a *app) checkInit(p *initPlan) error {
 	if p.quorum == 0 || p.quorum > types.MaxVotes {
-		return fmt.Errorf("--quorum must be between 1 and %d", types.MaxVotes)
+		return a.usageErr("--quorum must be from 1 to %d", types.MaxVotes)
 	}
 	if u := a.sudoUser(); u != "" {
 		return fmt.Errorf("run as %s, without sudo: the admin key belongs in your keystore", u)
 	}
 	if err := checkName("network name", p.network); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	if err := checkName("--admin-name", p.adminName); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	// A key made for this network before it, with "juist admins new
 	// --network", is the one it was made for.
@@ -188,20 +188,20 @@ func (a *app) checkInit(p *initPlan) error {
 	if p.key, p.keyFound, err = a.home.adminKey(p.keyName); err != nil {
 		return err
 	} else if !p.keyFound && p.adminKey != "" {
-		return fmt.Errorf("--admin-key: no admin key %q here\nhint: juist admins", p.adminKey)
+		return fmt.Errorf("no admin key %q here\nhint: juist admins", p.adminKey)
 	}
 	if p.device != "" {
 		if err := checkName("--device", p.device); err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 	}
 	if p.ipv4 != "" {
 		v4, err := netip.ParsePrefix(p.ipv4)
 		if err != nil {
-			return fmt.Errorf("--ipv4: bad prefix %q (want e.g. 10.111.0.0/24)", p.ipv4)
+			return a.usageErr("%q is not an IPv4 prefix", p.ipv4)
 		}
 		if err := types.ValidateV4Prefix(v4); err != nil {
-			return fmt.Errorf("--ipv4: %w", err)
+			return a.usageErr("%v", err)
 		}
 		if used := hostNetsOverlapping(v4); len(used) > 0 {
 			a.warn("%v overlaps %s here; traffic to both goes into the network", v4, strings.Join(used, ", "))
@@ -210,7 +210,7 @@ func (a *app) checkInit(p *initPlan) error {
 			}
 		}
 		if other := a.networkClaiming(v4); other != "" {
-			a.warn("%v overlaps %s, which this device is in; one of the two would run here without IPv4", v4, other)
+			a.warn("%v overlaps %s, which this device is in; one of them would run here without IPv4", v4, other)
 			if err := a.proceed(p.yes, "continue?"); err != nil {
 				return err
 			}
@@ -229,7 +229,7 @@ func (a *app) checkInit(p *initPlan) error {
 	for _, spec := range p.extraAdmins {
 		key, err := parseAdminSpec(spec)
 		if err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 		// Each key belongs to the person it is named for: two under one name
 		// are one admin's, on two devices, and cast one vote.
@@ -237,11 +237,11 @@ func (a *app) checkInit(p *initPlan) error {
 		p.admins = append(p.admins, key)
 	}
 	if err := types.ValidateAdmins(p.admins); err != nil {
-		return fmt.Errorf("%w; give one person's keys the same votes", err)
+		return a.usageErr("%v; give one person's keys the same votes", err)
 	}
 	total := types.AchievableVotes(p.admins)
 	if uint32(p.quorum) > total {
-		return fmt.Errorf("--quorum %d exceeds the %s the admins cast", p.quorum, count(total, "vote"))
+		return a.usageErr("--quorum %d is more than the admins have (%s)", p.quorum, count(total, "vote"))
 	}
 	if uint32(p.quorum) == total && total > 1 {
 		a.warn("every change needs every admin; losing one admin's keys locks the network")
@@ -278,7 +278,7 @@ func (a *app) initNode(p *initPlan) (node, operatorChoice, error) {
 	for _, name := range []string{foundedFile(p.network), breakGlassFile(p.network), genesisFileFor(p.network)} {
 		if _, err := os.Stat(a.home.join(name)); err == nil {
 			return nil, operatorChoice{}, fmt.Errorf("network %q already prepared here: %s\nhint: pick another "+
-				"name, or move the file away if that network never came to be", p.network, a.home.join(name))
+				"name, or move the file away if that network was never created", p.network, a.home.join(name))
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return nil, operatorChoice{}, err
 		}
@@ -385,7 +385,7 @@ func founderRecord(n node, p *initPlan) (types.NodeRecord, error) {
 		return types.NodeRecord{}, err
 	}
 	if self.Signing == nil {
-		return types.NodeRecord{}, errors.New("juistd runs an older juist than this command\nhint: restart it")
+		return types.NodeRecord{}, errors.New("juistd is older than juist\nhint: restart it")
 	}
 	v4, err := firstFreeV4(types.V4Range(p.v4), nil)
 	if err != nil {
@@ -449,27 +449,17 @@ func (a *app) reportCreated(secret *types.DisablementSecret, shown *bool) error 
 	return nil
 }
 
-// drawBreakGlass draws the network's one break-glass secret, which juist
-// create shows once and writes nowhere, and the genesis's commitment to it.
-func drawBreakGlass() (types.DisablementSecret, types.Hash, error) {
-	var s types.DisablementSecret
-	if _, err := rand.Read(s[:]); err != nil {
-		return s, types.Hash{}, fmt.Errorf("drawing the break-glass secret: %w", err)
-	}
-	return s, types.DisablementCommit(s[:]), nil
-}
-
 // breakGlassWarning says what the break-glass secret just shown is for.
 func (a *app) breakGlassWarning() {
 	a.warn("the break-glass secret is shown only now and kept nowhere: keep it safe, apart from the admin keys")
-	a.hint("with it, juist network disable ends the network once too few admin keys are left to change it")
+	a.hint("with it, juist network disable ends the network when too few admin keys are left")
 }
 
 // parseAdminSpec parses NAME=KEY[:VOTES].
 func parseAdminSpec(spec string) (types.AdminKey, error) {
 	name, rest, ok := strings.Cut(spec, "=")
 	if !ok {
-		return types.AdminKey{}, fmt.Errorf("--admin %q: expected NAME=KEY[:VOTES]", spec)
+		return types.AdminKey{}, fmt.Errorf("--admin %q is not NAME=KEY[:VOTES]", spec)
 	}
 	votes := uint64(1)
 	// The key's own text form contains a colon, so votes are split off the end.
@@ -484,11 +474,10 @@ func parseAdminSpec(spec string) (types.AdminKey, error) {
 		return types.AdminKey{}, fmt.Errorf("--admin %q: %w", name, err)
 	}
 	if signing == nil {
-		return types.AdminKey{}, fmt.Errorf("--admin %q: a key with no signing key, from an older juist\n"+
-			"hint: juist admins new prints it whole", name)
+		return types.AdminKey{}, fmt.Errorf("--admin %q: key is from an older juist, without a signing key; make a new one with juist admins new", name)
 	}
 	if votes == 0 || votes > types.MaxVotes {
-		return types.AdminKey{}, fmt.Errorf("--admin %q: votes must be between 1 and %d", name, types.MaxVotes)
+		return types.AdminKey{}, fmt.Errorf("--admin %q: votes must be from 1 to %d", name, types.MaxVotes)
 	}
 	if err := checkName("--admin", name); err != nil {
 		return types.AdminKey{}, err
@@ -502,43 +491,6 @@ func defaultAdminName() string {
 		return u.Username
 	}
 	return "admin"
-}
-
-// v4DrawBits is the length of the prefix a network founded without --ipv4
-// numbers from: 1022 addresses, one of 128 in [types.OverlayV4]. That is
-// about twice [types.MaxNodes] at once, and 1022 admissions over the network's
-// life, since no address is handed out twice; renumbering into a larger
-// range makes room. A network holding all of 198.18/15 would overlap every
-// other on a host that is in two.
-const v4DrawBits = 22
-
-// drawV4Prefix picks a random /22 in [types.OverlayV4] that taken leaves. The
-// first is never drawn: a network founded before prefixes were drawn numbers
-// from the start of the range, so a host in one of those and a new one would
-// otherwise hold the same addresses. One that has given out more than 1022
-// addresses reaches into the draw's range; a host in both then runs the
-// higher instance without IPv4 until one renumbers (daemon/host.go).
-func drawV4Prefix(taken func(netip.Prefix) bool) (netip.Prefix, error) {
-	candidates := v4DrawCandidates()
-	for _, i := range mathrand.Perm(len(candidates)) {
-		if !taken(candidates[i]) {
-			return candidates[i], nil
-		}
-	}
-	return netip.Prefix{}, fmt.Errorf("every /%d in %v overlaps a network on this host\n"+
-		"hint: choose the range with --ipv4", v4DrawBits, types.OverlayV4)
-}
-
-// v4DrawCandidates lists the prefixes [drawV4Prefix] draws from, in order:
-// every /22 in [types.OverlayV4] but the first.
-func v4DrawCandidates() []netip.Prefix {
-	var out []netip.Prefix
-	p := netip.PrefixFrom(types.OverlayV4.Addr(), v4DrawBits)
-	for types.OverlayV4.Contains(p.Addr()) {
-		out = append(out, p)
-		p = netip.PrefixFrom(netipx.PrefixLastIP(p).Next(), v4DrawBits)
-	}
-	return out[1:]
 }
 
 // hostNetsOverlapping names this device's interface networks that overlap p,
@@ -571,3 +523,9 @@ func hostNetsOverlapping(p netip.Prefix, own ...netip.Addr) []string {
 	}
 	return out
 }
+
+func drawBreakGlass() (types.DisablementSecret, types.Hash, error) { return govern.DrawBreakGlass() }
+
+func drawV4Prefix(taken func(netip.Prefix) bool) (netip.Prefix, error) { return govern.DrawV4(taken) }
+
+func v4DrawCandidates() []netip.Prefix { return govern.V4DrawCandidates() }

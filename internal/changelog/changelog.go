@@ -42,6 +42,7 @@ var kindNames = map[types.Kind]string{
 	types.KindRenameNode:        "renaming of a device",
 	types.KindDisable:           "end of the network",
 	types.KindSetPolicy:         "change of the access policy",
+	types.KindSetPublicDERP:     "change of the public DERP servers",
 }
 
 // An Entry is one change: what it did, who approved it, and its hash.

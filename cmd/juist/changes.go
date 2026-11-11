@@ -12,11 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nning/juist/internal/govern"
 	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/ipc"
-
 	"github.com/nning/juist/trust/log"
-	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
 
@@ -61,7 +60,7 @@ func (a *app) submit(auth *log.Authority, c *change) (applied bool, err error) {
 	// is signed by the device, and is what an admin approves.
 	if len(c.aum.Signatures) == 0 {
 		return false, errNotSubmitted{fmt.Errorf("no admin key of this network in %s\nhint: run it where "+
-			"an admin's key is", a.home.path)}
+			"an admin key is", a.home.path)}
 	}
 	st := auth.State().SignatureStatus(&c.aum)
 	if st.Authorized() {
@@ -118,7 +117,7 @@ func approvalsNeeded(st log.SignatureStatus, keys []types.AdminKey, aum *types.A
 		switch need := int(p.keys[0].NeededKeys()); {
 		case signed >= need:
 		case signed > 0:
-			from = append(from, fmt.Sprintf("%s more of %s's keys%s (%d of %d signed)", fmt.Sprint(need-signed),
+			from = append(from, fmt.Sprintf("%s of %s%s (%d of %d signed)", count(need-signed, "more key"),
 				p.name, where, signed, need))
 		default:
 			from = append(from, p.name+where)
@@ -188,7 +187,7 @@ func (a *app) writePending(name string, aum *types.AUM) (string, error) {
 // signature, which rotations need, is added where its keys are.
 func (a *app) signLocally(aum *types.AUM, auth *log.Authority) ([]types.Identity, error) {
 	if auth != nil && auth.Disabled() != nil {
-		return nil, fmt.Errorf("%q is disabled; nothing changes it any more", auth.State().Network())
+		return nil, fmt.Errorf("%q is disabled and cannot be changed", auth.State().Network())
 	}
 	a.fileAdminKeys(auth)
 	admins, err := a.signingKeys(aum, auth)
@@ -223,13 +222,13 @@ func (a *app) warnStaleRevocation(state *log.State, aum *types.AUM) {
 		return
 	}
 	if st.FreshSince > 0 {
-		a.warn("this change builds on juistd's view of the log, last vouched for %s, and undoes any later change "+
-			"it lacks", ago(a.now().Sub(time.Unix(st.FreshSince, 0))))
+		a.warn("this change builds on juistd's view of the log, last vouched for %s; it undoes any later change "+
+			"missing here", ago(a.now().Sub(time.Unix(st.FreshSince, 0))))
 	} else {
-		a.warn("this change builds on juistd's view of the log, which no admin device vouches for, " +
-			"and undoes any later change it lacks")
+		a.warn("this change builds on juistd's view of the log, which no admin device vouches for; " +
+			"it undoes any later change missing here")
 	}
-	a.hint("where it can wait, let this device catch up first")
+	a.hint("if it can wait, let this device catch up first")
 }
 
 // signingKeys are the admin keys here that may sign aum: the one --key
@@ -246,7 +245,7 @@ func (a *app) signingKeys(aum *types.AUM, auth *log.Authority) ([]types.PrivateI
 				return []types.PrivateIdentity{k.priv}, nil
 			}
 		}
-		return nil, fmt.Errorf("--key: no admin key %q here\nhint: juist admins", a.keyName)
+		return nil, fmt.Errorf("no admin key %q here\nhint: juist admins", a.keyName)
 	}
 	// Keys filed under one network are that network's; any other two may be
 	// two networks'.
@@ -258,7 +257,7 @@ func (a *app) signingKeys(aum *types.AUM, auth *log.Authority) ([]types.PrivateI
 			one = one && k.network() == files[0].network()
 		}
 		if !one {
-			return nil, fmt.Errorf("no log here to say which admin key is this network's: %s\n"+
+			return nil, fmt.Errorf("admin keys of several networks here, and no log to tell which: %s\n"+
 				"hint: juist approve --key NAME FILE", strings.Join(names, ", "))
 		}
 	}
@@ -342,7 +341,7 @@ func (a *app) checkApplicable(path string, auth *log.Authority, aum *types.AUM) 
 		}
 	}
 	if parent < 0 {
-		return fmt.Errorf("%s: another network's, or follows changes not received here yet\nhint: let this "+
+		return fmt.Errorf("%s: from another network, or follows changes not here yet\nhint: let this "+
 			"device catch up, or approve where the admin key is", path)
 	}
 	// Refused whatever it is. It forks the log where it was started, and a
@@ -350,7 +349,7 @@ func (a *app) checkApplicable(path string, auth *log.Authority, aum *types.AUM) 
 	// its own signers' keys included; anything else would win or lose on
 	// its hash. Started again, it is judged against the log as it is.
 	if parent < len(chain)-1 {
-		return fmt.Errorf("%s: outdated by a later change\nhint: whoever started it redoes it", path)
+		return fmt.Errorf("%s: outdated by a later change\nhint: whoever started it must start it again", path)
 	}
 	if _, err := auth.Builder().Check(aum); err != nil {
 		return fmt.Errorf("%s does not apply; not signed: %v", path, err)
@@ -427,7 +426,7 @@ func (a *app) applyRecords(records []types.AUM) error {
 	}
 	if auth, err := n.log(); err == nil && auth.Disabled() != nil &&
 		slices.ContainsFunc(records, func(r types.AUM) bool { return r.Kind != types.KindDisable }) {
-		return fmt.Errorf("%q is disabled; nothing changes it any more", auth.State().Network())
+		return fmt.Errorf("%q is disabled and cannot be changed", auth.State().Network())
 	}
 	// A rotation of this device's keys is adopted where the keys are; what
 	// the device calls itself before and after says whether it happened.
@@ -614,11 +613,4 @@ func (a *app) selfID() (types.Identity, bool, error) {
 	return k.Identity.Public(), true, nil
 }
 
-// sealer returns the epoch sealer, drawing a fresh group secret per epoch. The
-// secret is not kept: every member recovers it from its own wrap.
-func sealer() log.Sealer {
-	return func(epoch uint64, members []types.NodeRecord) (*types.EpochRecord, error) {
-		_, rec, err := secrets.NewEpoch(epoch, members)
-		return rec, err
-	}
-}
+func sealer() log.Sealer { return govern.Sealer() }

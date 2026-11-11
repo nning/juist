@@ -73,7 +73,7 @@ func TestBadArgumentsAreRefused(t *testing.T) {
 		usage bool
 	}{
 		{[]string{"--no-such"}, "unknown option --no-such", true},
-		{[]string{"-home", "/x"}, "as --home", true},
+		{[]string{"-home", "/x"}, "did you mean --home?", true},
 		{[]string{"start"}, `unexpected argument "start"`, true},
 		{[]string{"--port", "70000"}, "a port must be below 65536", false},
 		{[]string{"-f", "1h"}, "--freshness-ttl must be at least 2h", false},

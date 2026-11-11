@@ -31,8 +31,9 @@ home · connected
   This device   laptop  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0
   Devices       3 others
   Relays        1 available, via vps
+  Underlay      IPv4, IPv6
   Names         laptop.home.juist
-  Multicast     on, copied: auto
+  Multicast     on
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
   Schema        20
@@ -65,7 +66,7 @@ The state on the first line is one of these:
 | `disabled` | the network was ended with a break-glass secret; start over with `juist reset` |
 | `removed` | this device is no longer in the network |
 | `refused` | the other devices refuse this one; most likely it was removed |
-| `behind` | this device was away so long that the others no longer keep the part of the log it needs; join again with a new invite link ([Troubleshooting]({{< relref "docs/troubleshooting" >}}#warning-this-devices-log-is-older-than-what-the-networks-devices-keep)) |
+| `behind` | this device was away so long that the others no longer keep the part of the log it needs; join again with a new invite link ([Troubleshooting]({{< relref "docs/troubleshooting" >}}#warning-this-device-fell-too-far-behind-to-catch-up)) |
 | `disconnected` | the log has split or gone back, and every tunnel stays down until an admin resolves it ([Troubleshooting]({{< relref "docs/troubleshooting" >}}#warning-log-rollback-alarm-the-chain-went-back-from-epoch-4-to-3-)) |
 | `joining a network` | this device is joining a network |
 | `not running` | the daemon is not running, as in `juist0 · not running`, or `juistd not running` where no juist package is installed; `juist health` says how to start it (see [Troubleshooting]({{< relref "docs/troubleshooting" >}}#not-running)) |
@@ -76,12 +77,23 @@ The state on the first line is one of these:
 - `Devices`: how many other devices there are, and how many had no tunnel
   carrying traffic at the last check; `juist devices` says why.
 - `Relays`: how many devices may [relay]({{< relref "docs/relays" >}}), and
-  which one this device uses.
+  which one this device uses; `Tailscale's public DERP` where the network
+  chose those ([Relays]({{< relref "docs/relays" >}}#public-derp)).
+- `Underlay`: what juistd last measured of the network beneath: whether UDP
+  gets out over IPv4 and IPv6. Where the router offers UPnP, NAT-PMP or PCP,
+  it says so, and the public address of the port it opened for this device,
+  as in `UPnP maps 203.0.113.7:41643`; `port mapping off` after
+  `sudo juist set --port-mapping=false`, when the router is not asked.
 - `HTTPS`: on a device that sends only HTTPS, the relays on port 443 it uses, and its proxy. See [HTTPS only]({{< relref "docs/https-only" >}}).
 - `Relay name`: the public name this device's relay serves on port 443. Root and the operator also see whether it serves it yet.
 - `Exit node`: which device carries this device's internet traffic, if any. See [Exit nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: this device's own names, such as `laptop.home.juist`; `juist names` lists the network's, and `juist health` says why where they are not resolved. See [Names]({{< relref "docs/names" >}}).
-- `Multicast`: whether this device carries multicast and UDP broadcast to the members, and the groups it copies into the network. `copied: auto` is the Linux default: all local IPv4 UDP groups where discovery is permitted. With a policy, `off` remains until a matching `pass multicast` rule enables discovery; `--multicast=false` overrides that permission. See [Multicast]({{< relref "docs/multicast" >}}).
+- `Multicast`: whether this device carries multicast and UDP broadcast to
+  the members. `on` includes the Linux default of copying local IPv4 UDP
+  groups where discovery is permitted; an explicitly selected list appears
+  after `copying`, and `on (groups off)` after `--groups ""`. With a policy, `off` remains until a matching `pass
+  multicast` rule enables discovery; `--multicast=false` overrides that
+  permission. See [Multicast]({{< relref "docs/multicast" >}}).
 - `Freshness`: when a [voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
   last confirmed this device's view, and how long that stays valid. After 48
   hours without one, it reads `expired; vouchers only`, and `juist health`
@@ -111,6 +123,7 @@ features are in use.
 $ juist health
 warning: log sync to vps fails in the tunnel: tcp/41644 does not answer there
 hint: where it runs Linux: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
+
 no answer from phone: offline, or udp/41643 blocked
 ```
 
@@ -136,7 +149,7 @@ its name.
 $ juist devices
 NAME                  IPV4         REACHED  SCHEMA  ROLES
 laptop (this device)  198.18.36.1  -        20      -
-nas                   198.18.36.2  direct   20      voucher, names, publishes
+nas                   198.18.36.2  direct   20      voucher, names, publishes 3 names
 vps                   198.18.36.3  direct   20      voucher, relay
 phone                 198.18.36.4  relayed  20      -
 ```
@@ -146,7 +159,7 @@ phone                 198.18.36.4  relayed  20      -
 - the roles the network gives it, such as `voucher`, `relay` or `exit`;
 - its subnets;
 - `names` if public names point at it ([`juist names`]({{< relref "docs/names" >}}) lists them);
-- `publishes` if it publishes names ([`juist publish`]({{< relref "docs/publishing" >}}) lists them);
+- `publishes 3 names` with how many names it publishes ([`juist publish`]({{< relref "docs/publishing" >}}) lists them), apart from the role `publish`, which lets it [share]({{< relref "docs/sharing" >}}) under its own name;
 - `-` if none of these apply.
 
 `REACHED` says how juistd reached the device at its last check:
@@ -170,7 +183,7 @@ or has heard none, the column is left out.
 
 With an [access policy]({{< relref "docs/access" >}}), `juist devices`
 lists only this device and the members it has a tunnel with, and ends with
-`hint: 2 more devices the access policy keeps apart from this one: juist devices --all`.
+`hint: 2 more devices the access policy keeps apart: juist devices --all`.
 
 `juist devices -6` adds each device's IPv6 address. `juist devices --keys`
 adds its identity key, which [`juist remove`]({{< relref "docs/remove" >}})

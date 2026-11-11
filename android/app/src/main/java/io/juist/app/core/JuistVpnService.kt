@@ -29,6 +29,7 @@ import androidx.core.content.ContextCompat
 import io.juist.mobile.Core
 import io.juist.mobile.Mobile
 import io.juist.mobile.Platform
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
@@ -355,6 +356,8 @@ internal data class UnderlayDns(
     val privateDns: String = "",
     /** The network's routes, which no subnet route takes into the tunnel. */
     val routes: List<String> = emptyList(),
+    /** The IPv4 router its default route goes through, which the port mapper asks. */
+    val gateway: String = "",
 ) {
     fun json(): String = coreJson.encodeToString(serializer(), this)
 
@@ -364,6 +367,8 @@ internal data class UnderlayDns(
             overTls = p.isPrivateDnsActive && p.privateDnsServerName == null,
             privateDns = p.privateDnsServerName.orEmpty(),
             routes = p.routes.filter { !it.isDefaultRoute }.map { it.destination.toString() },
+            gateway = p.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }
+                ?.gateway?.hostAddress.orEmpty(),
         )
     }
 }

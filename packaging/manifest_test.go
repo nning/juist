@@ -19,6 +19,8 @@ var (
 		"/etc/dhcp/dhclient-enter-hooks.d/juist",
 		"/etc/apparmor.d/abstractions/nameservice.d/juist",
 		"/usr/lib/juist/juist.pkla",
+		// SteamOS takes the .deb's /usr as a system extension.
+		"/usr/lib/juist/sysext.sh",
 		// The RPM's %doc and %license.
 		"/usr/share/doc/juist/README.md",
 		"/usr/share/doc/juist/copyright",
@@ -131,6 +133,7 @@ func rpmFiles(t *testing.T) map[string]bool {
 		t.Fatal("the spec lists no files")
 	}
 	macros := strings.NewReplacer("%{_bindir}", "/usr/bin", "%{_unitdir}", "/usr/lib/systemd/system",
+		"%{_userunitdir}", "/usr/lib/systemd/user",
 		"%{_sysusersdir}", "/usr/lib/sysusers.d", "%{_datadir}", "/usr/share", "%{_mandir}", "/usr/share/man",
 		"%{_prefix}", "/usr", "%{name}", "juist")
 	files := map[string]bool{}

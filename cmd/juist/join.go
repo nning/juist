@@ -10,13 +10,12 @@ import (
 
 func cmdJoin(a *app, args []string) error {
 	s := spec{name: "juist join", args: "CODE", min: 1, max: 1, anyNetwork: true, about: `
-Join a network with the code or link that juist invite printed, such as
-42-drumbeat-tolerance-glucose. The device verifies the network's log itself.
-Under sudo, on a device with no operator, the sudo user becomes its
-operator, unless --operator names another. If the device is already in a
-network, the new network gets its own juistd.`}
+Join a network with the code or link juist invite printed, such as
+42-drumbeat-tolerance-glucose. Under sudo, on a device without an operator,
+the sudo user becomes its operator, unless --operator names another. A
+device already in a network runs the new one in its own juistd.`}
 	fs := newFlags(s.name)
-	name := fs.String("name", "", "`NAME` to join as (default: the hostname)")
+	name := fs.String("name", "", "`NAME` to join as (default: hostname)")
 	var operator optionalString
 	fs.Var(&operator, "operator", "local `USER` who manages this device without sudo")
 	pos, err := a.parse(s, fs, args)
@@ -25,13 +24,13 @@ network, the new network gets its own juistd.`}
 	}
 	if *name != "" {
 		if err := checkName("--name", *name); err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 	}
 	// Checked here, before anything reaches the network, so a typo costs
 	// nothing and is explained in terms of the code.
 	if _, err := guest.ParseInvite(pos[0]); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	// On a device already in a network, the new one gets a juistd of its own.
 	// $JUIST_NETWORK names a network the device is in, which an invite need

@@ -194,7 +194,7 @@ func TestRemovingAKeyNamesThePerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, strings.Join(effect(&aum, auth.State(), time.Now().Unix()), "\n"), "bob's", "on bobpc")
+	mustContain(t, strings.Join(effect(&aum, auth.State(), time.Now().Unix()), "\n"), "on bobpc (bob, 1 vote)")
 	mustContain(t, c.mustRun("admins", "remove", "bob"), "removed bob's key")
 }
 
@@ -231,11 +231,13 @@ func TestARenumberingApprovedLateSaysHowMuchIsLeft(t *testing.T) {
 		"BUT only 24h of that is left", "--for")
 }
 
-// An old address past its deadline still blocks until the renumbering is
-// finished, which the refusal says; finishing warns of nothing that stopped.
+// Below schema 25, an old address past its deadline still blocks until the
+// renumbering is finished, which the refusal says; finishing warns of nothing
+// that stopped.
 func TestAnOldAddressPastItsDeadline(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
+	c.genesisSchema = types.SchemaTakeRetired - 1
 	c.mustRun("create", "home", "--device", "laptop")
 	enrollDevice(t, c, "phone")
 	c.mustRun("network", "renumber", "phone", "198.18.4.9", "--for", "1s", "--yes")
@@ -331,7 +333,7 @@ func TestRenumberingAsksOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	mustContain(t, out, "was tablet's", "retire now")
+	mustContain(t, out, "198.18.4.3 was used by tablet", "retire now")
 	if n := strings.Count(out, "[y/N]"); n != 1 {
 		t.Errorf("asked %d times:\n%s", n, out)
 	}

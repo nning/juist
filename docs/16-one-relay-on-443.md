@@ -125,7 +125,7 @@ proxy.
   the one of the lowest identity where several do, the relay takes
   `relay.<domain>` unless `--relay-name` says another name, and the service
   restarts the mesh when that moves; an ingress whose membership expired
-  takes none. `juist publish add` refuses the label `relay` while such an
+  takes none. `juist publish` refuses the label `relay` while such an
   ingress exists, and `juist grant` warns where it makes the first while
   another holds the name.
 - **Health says who is not there.** Where the device's home answers that a

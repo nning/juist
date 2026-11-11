@@ -56,7 +56,7 @@ To use it again, [invite]({{< relref "docs/invites" >}}) it again, or run
 
 A device that was offline then is not told. It may report itself connected,
 although no member accepts it, or say
-`the network's devices refuse this one: most likely it was removed`.
+`other devices refuse this one: it was likely removed`.
 
 ## Why removal is not instant
 

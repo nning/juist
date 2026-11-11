@@ -10,23 +10,19 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// A Sealer produces the epoch record that distributes a fresh group secret. A
-// callback rather than a dependency, so this package does not link the HPKE and
-// ML-KEM code at all. members is the set as it will be after the record being
-// built, which is what the wrap set must match exactly.
+// A Sealer produces the epoch record that distributes a fresh group secret.
+// members is the set after the record being built; the wraps must match it
+// exactly.
 type Sealer func(epoch uint64, members []types.NodeRecord) (*types.EpochRecord, error)
 
-// A Builder assembles records against a state. Every method returns an
-// unsigned record that already satisfies the semantic rules, so a signing
-// ceremony spread across machines is not spent on a record that was never
-// going to apply. Authorization is decided by the signatures alone.
+// A Builder assembles unsigned records against a state that already satisfy
+// the semantic rules; authorization is left to the signatures.
 type Builder struct {
 	state *State
 }
 
-// Builder returns a builder against the current state, not the alarm-checked
-// one: assembling the record that resolves a fork is what an operator does
-// while an alarm is raised.
+// Builder returns a builder against the current state, even under an alarm,
+// since the record resolving a fork is built then.
 func (a *Authority) Builder() *Builder { return &Builder{state: a.state} }
 
 // NewBuilder returns a builder against an explicit state.
@@ -35,10 +31,8 @@ func NewBuilder(s *State) *Builder { return &Builder{state: s} }
 // State returns the state the builder works against.
 func (b *Builder) State() *State { return b.state }
 
-// Genesis builds a genesis record: the network-creating ceremony. Its
-// arguments are the whole of the initial policy, since none of it can be
-// changed by anything weaker than the quorum being established here. A genesis
-// nobody can authorize under its own policy is rejected rather than stored.
+// Genesis builds a genesis record from the whole initial policy. A genesis
+// nobody can authorize under its own policy is rejected.
 func Genesis(network string, quorum uint32, admins []types.AdminKey,
 	disablement []types.Hash, nodes []types.NodeRecord, sealer Sealer) (types.AUM, error) {
 
@@ -54,9 +48,7 @@ func Genesis(network string, quorum uint32, admins []types.AdminKey,
 	slices.SortFunc(snap.Admins, func(a, b types.AdminKey) int { return a.Public.Compare(b.Public) })
 	slices.SortFunc(snap.Nodes, func(a, b types.NodeRecord) int { return a.Identity.Compare(b.Identity) })
 
-	// Epoch 1 from the start, so wrap coverage holds from the first record and
-	// the epoch floor never treats zero as a special case. A genesis with no
-	// founding members still establishes an epoch, with no recipients.
+	// Epoch 1 even without members, so zero is never a special case.
 	epoch, err := sealer(1, snap.Nodes)
 	if err != nil {
 		return types.AUM{}, err
@@ -133,6 +125,11 @@ func (b *Builder) SetDomain(domain string) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindSetDomain, Domain: &domain})
 }
 
+// SetPublicDERP builds a record setting the network's public DERP servers.
+func (b *Builder) SetPublicDERP(p types.PublicDERP) (types.AUM, error) {
+	return b.finish(types.AUM{Kind: types.KindSetPublicDERP, PublicDERP: &p})
+}
+
 // SetPolicy builds a record replacing the network's access policy.
 func (b *Builder) SetPolicy(p *types.Policy) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindSetPolicy, Policy: p.Clone()})
@@ -160,10 +157,8 @@ func (b *Builder) RotateNodeKey(id types.Identity, keys types.NodeKeys, sealer S
 	members[i].WireGuard = keys.WireGuard
 	members[i].X25519 = keys.X25519
 	members[i].MLKEM = keys.MLKEM
-	// The rotated member's wrap must be sealed to its new encryption key, so
-	// the sealer sees the post-rotation set. Nothing in the log can prove that
-	// happened — a wrap is opaque to everyone but its recipient — so the
-	// member reports a wrap it cannot open, against the record's commitment.
+	// The wrap must be sealed to the new key. The log cannot prove that; the
+	// member reports a wrap it cannot open.
 	epoch, err := b.seal(sealer, members)
 	if err != nil {
 		return types.AUM{}, err
@@ -171,10 +166,9 @@ func (b *Builder) RotateNodeKey(id types.Identity, keys types.NodeKeys, sealer S
 	return b.finish(types.AUM{Kind: types.KindRotateNodeKey, Subject: &id, Keys: &keys, Epoch: epoch})
 }
 
-// RotateIdentity builds a record replacing a member's identity key with new,
-// whose signing key is signing, and with it the member's derived overlay
-// address. The record needs signatures by the old key and the new as well as
-// quorum.
+// RotateIdentity builds a record replacing a member's identity key, and with
+// it its overlay address, with new, whose signing key is signing. The record
+// needs signatures by the old key and the new as well as quorum.
 func (b *Builder) RotateIdentity(old, new types.Identity, signing types.SigningKey, sealer Sealer) (types.AUM, error) {
 	members := b.state.Nodes()
 	i := slices.IndexFunc(members, func(m types.NodeRecord) bool { return m.Identity == old })
@@ -245,10 +239,8 @@ func (b *Builder) EpochBump(sealer Sealer) (types.AUM, error) {
 	return b.finish(types.AUM{Kind: types.KindEpochBump, Epoch: epoch})
 }
 
-// SchemaUpgrade builds a record raising the network's record schema. It
-// refuses a version this build does not implement: authoring an upgrade the
-// authoring device could not then read would strand the network on a schema
-// nobody present can write records under.
+// SchemaUpgrade builds a record raising the network's record schema, up to
+// what this build implements, so the network is not stranded.
 func (b *Builder) SchemaUpgrade(v types.SchemaVersion) (types.AUM, error) {
 	if v <= b.state.schema {
 		return types.AUM{}, fmt.Errorf("log: the network is already at %v", b.state.schema)
@@ -311,8 +303,7 @@ func (b *Builder) seal(sealer Sealer, members []types.NodeRecord) (*types.EpochR
 }
 
 // finish sets the parent, then rejects the record if it would not apply. The
-// dry run uses a placeholder hash, since the real one is not known until the
-// signatures are in and nothing but genesis depends on its own hash.
+// dry run uses a placeholder hash; only genesis depends on its own.
 func (b *Builder) finish(aum types.AUM) (types.AUM, error) {
 	head := b.state.head
 	aum.Prev = &head
@@ -325,9 +316,8 @@ func (b *Builder) finish(aum types.AUM) (types.AUM, error) {
 	return aum, nil
 }
 
-// Dry reports whether a record would apply to the builder's state, and returns
-// the state it would produce, without changing anything. Authorization is
-// checked too, or the answer would change the moment it is offered for real.
+// Dry reports whether a record, authorization included, would apply to the
+// builder's state, and returns the state it would produce.
 func (b *Builder) Dry(aum *types.AUM) (*State, error) {
 	if err := verifyAgainst(aum, b.state); err != nil {
 		return nil, err
@@ -335,10 +325,8 @@ func (b *Builder) Dry(aum *types.AUM) (*State, error) {
 	return b.state.apply(aum, aum.Hash(), applyChain)
 }
 
-// Check is [Builder.Dry] for a record still collecting its votes: all but the
-// quorum is checked, so an admin is not asked to sign a record that could
-// never apply here — one built on another head, or a checkpoint that does not
-// state the chain's state.
+// Check is [Builder.Dry] for a record still collecting votes: everything but
+// the quorum and the self-signatures is checked.
 func (b *Builder) Check(aum *types.AUM) (*State, error) {
 	if err := verify(aum, b.state, true); err != nil {
 		return nil, err

@@ -35,7 +35,7 @@ func oneRelayOn443(t *testing.T, fb, lx *vm, hotel walled, fb4, lx4 string) {
 	lx.run(t, `setsid -f /tmp/probe answer 10.88.0.1:53 - `+names+` >/dev/null 2>&1 < /dev/null`)
 	lx.run(t, hotel.in(`setsid -f /tmp/probe answer 127.0.0.53:53 - `+names+` >/dev/null 2>&1 < /dev/null`))
 	fb.run(t, "juist grant fb relay")
-	mustHave(t, fb.run(t, `juist set --relay-name ""`), "relay name "+relayIngress+", the ingress's")
+	mustHave(t, fb.run(t, `juist set --relay-name ""`), "relay name "+relayIngress+" (from the ingress)")
 	fb.eventually(t, "serving its relay as the ingress's on 443", 4*time.Minute, "juist status",
 		has(relayIngress+", on 443 through the ingress"))
 	// hotel learns the new name through lx's relay, before that goes off
@@ -104,7 +104,7 @@ func oneRelayOn443(t *testing.T, fb, lx *vm, hotel walled, fb4, lx4 string) {
 	lx.run(t, "systemctl stop juistd")
 	lx.run(t, "! "+hotel.in("ping -c3 -W2 "+lx4))
 	lx.eventually(t, "hotel saying lx is not at fb's relay", 3*time.Minute, hotel.juist("health"),
-		has("no answer from lx: not at the relay on fb"))
+		has("no answer from lx: not at fb, the relay this device uses"))
 	lx.run(t, "pkill -f '[j]uistd --home "+hotel.home+"'; while pgrep -f '[j]uistd --home "+hotel.home+"' >/dev/null; do sleep 0.5; done")
 	lx.run(t, hotel.in(`setsid -f env SSL_CERT_FILE=/tmp/pebble-root.pem DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent `+
 		`/usr/bin/juistd --home `+hotel.home+` --socket `+hotel.sock+` --verbose >>`+hotel.home+`/juistd.log 2>&1 < /dev/null`))
@@ -142,7 +142,7 @@ iptables -I HOTEL 1 -d 10.88.0.1 -p udp --dport 3478 -j ACCEPT`)
 	mustHave(t, lx.run(t, `juist set --relay-name ""`), "relay name cleared")
 	lx.eventually(t, "hotel knowing lx's relay without a name", 4*time.Minute, hotel.juist("status"),
 		func(out string) bool { return !strings.Contains(out, relayLX) })
-	mustHave(t, fb.run(t, `juist set --relay-name ""`), "relay name "+relayIngress+", the ingress's")
+	mustHave(t, fb.run(t, `juist set --relay-name ""`), "relay name "+relayIngress+" (from the ingress)")
 	// Its certificate may be ordered anew, which takes the lab's CA minutes.
 	fb.eventually(t, "serving its relay as the ingress's on 443 again", 4*time.Minute, "juist status",
 		has(relayIngress+", on 443 through the ingress"))

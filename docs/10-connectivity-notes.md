@@ -51,7 +51,8 @@ netcheck.
 **Public STUN servers stand in where no member relays.** Without them two
 devices behind NAT with no relay-capable member learn no reflexive address and
 never meet. juistd asks public STUN servers (`--stun`, Google's and
-Cloudflare's by default, `--no-stun` for none). They enter the data plane's map
+Cloudflare's by default, `--no-stun` for none; Tailscale's DERP nodes, where
+a network names them, answer STUN regardless, as netcheck measures them so). They enter the data plane's map
 as STUN-only regions at the top of the region space, with a home score that
 keeps any member relay preferred. With no member relay a STUN server becomes
 the engine's home: the engine then retries a relay connection that fails

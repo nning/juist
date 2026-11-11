@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -9,9 +10,8 @@ import (
 
 func cmdHealth(a *app, args []string) error {
 	s := spec{name: "juist health", about: `
-Say what needs attention on this device, each with a hint, and which devices
-it does not reach, for every network if the device is in several. juist
-status shows the state.`}
+Say what needs attention on this device, and which devices it does not
+reach, for every network if the device is in several.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
@@ -62,8 +62,19 @@ func (a *app) namedDown() (hostInstance, bool) {
 // host in several, and reports whether it printed anything.
 func (a *app) health(s *ipc.Status, inst string, several bool) (said bool) {
 	notes, _ := a.healthLines(s, inst, several)
-	a.emit(notes)
+	a.emitIssues(notes)
 	return len(notes) > 0
+}
+
+// emitIssues is emit with a blank line between issues, on stderr, so that
+// stdout keeps a line per outcome.
+func (a *app) emitIssues(lines []line) {
+	for k, l := range lines {
+		if k > 0 && l.startsIssue() {
+			fmt.Fprintln(a.errOut)
+		}
+		a.emit(lines[k : k+1])
+	}
 }
 
 // healthLines is what [app.health] prints, and how many changes wait for
@@ -81,7 +92,7 @@ func (a *app) healthLines(s *ipc.Status, inst string, several bool) ([]line, int
 func (a *app) healthNotes(s *ipc.Status, inst string) []line {
 	notes := statusOfOn(s, a.now(), a.paint, a.instanceLabel, inst != "").notes
 	if s.Instance == 0 && (s.HTTPS == nil || s.HTTPS.Name == "") && a.relayGranted() {
-		notes = append(notes, line{kind: lineWarn, text: "juistd may bind any port below 1024, which no relay on 443 here needs"},
+		notes = append(notes, line{kind: lineWarn, text: "juistd may bind ports below 1024, but no relay here uses 443"},
 			line{kind: lineHint, text: asRoot(a.host.relayScript + " off")})
 	}
 	if ex := s.Exit; ex != nil && !ex.Node.IsZero() && ex.Refused == "" && ex.Failed == "" {
@@ -91,12 +102,30 @@ func (a *app) healthNotes(s *ipc.Status, inst string) []line {
 	if m := s.Multicast; m != nil && !m.Off && s.Device != "" {
 		notes = append(notes, avahiNotes(a.system, s.Device)...)
 	}
+	if u := s.Underlay; u != nil && u.Mapped != "" && s.ListenPort != 0 && a.host.udpBlocked != nil {
+		if zone, service, unsure := a.host.udpBlocked(a.ctx, s.ListenPort); unsure {
+			// A hint, not a warning: without the right to read the zone, the
+			// user could never clear it.
+			notes = append(notes, line{kind: lineHint, apart: true, text: fmt.Sprintf("firewalld may block udp/%d, which the router maps to this device: juist cannot read the ports of zone %s; to check: %s",
+				s.ListenPort, zone, asRoot("juist health"))})
+		} else if zone != "" {
+			open := fmt.Sprintf("--add-port=%d/udp", s.ListenPort)
+			if service {
+				open = "--add-service=juist"
+			}
+			notes = append(notes, line{kind: lineWarn, text: fmt.Sprintf("firewalld blocks udp/%d, which the router maps to this device", s.ListenPort)})
+			if pastableZone(zone) {
+				notes = append(notes, line{kind: lineHint,
+					text: "sudo firewall-cmd --permanent --zone=" + zone + " " + open + " && sudo firewall-cmd --reload"})
+			}
+		}
+	}
 	if !s.CanOperate {
 		network := ""
 		if inst != "" {
 			network = inst + " "
 		}
-		notes = append(notes, line{kind: lineHint,
+		notes = append(notes, line{kind: lineHint, apart: true,
 			text: "read-only; to manage this device: " + asRoot("juist set "+network+"--operator="+currentUser())})
 	}
 	return notes
@@ -165,10 +194,10 @@ func avahiNotes(read func(string) ([]byte, error), dev string) []line {
 		allow, deny := list("allow-interfaces"), list("deny-interfaces")
 		switch {
 		case slices.Contains(deny, dev) || len(allow) > 0 && !slices.Contains(allow, dev):
-			return []line{{kind: lineWarn, text: "avahi leaves " + dev + " out: its allow-interfaces or deny-interfaces say so"},
+			return []line{{kind: lineWarn, text: "avahi skips " + dev + ": allow-interfaces or deny-interfaces leave it out"},
 				{kind: lineHint, text: "name " + dev + " in allow-interfaces in " + f[0] + ", then restart avahi-daemon"}}
 		case !avahiYes(server["allow-point-to-point"]):
-			return []line{{kind: lineWarn, text: "avahi leaves " + dev + " out, a point-to-point device: members are not found by mDNS"},
+			return []line{{kind: lineWarn, text: "avahi skips " + dev + ", a point-to-point device, so mDNS finds no members"},
 				{kind: lineHint, text: "set allow-point-to-point=yes under [server] in " + f[0] + ", then restart avahi-daemon"}}
 		}
 		return nil

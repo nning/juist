@@ -35,7 +35,7 @@ created network "home"
   Break-glass   juist-break-glass-1.qL0x…dW8.u3Rk6g
   Operator      alice
 warning: the break-glass secret is shown only now and kept nowhere: keep it safe, apart from the admin keys
-hint: with it, juist network disable ends the network once too few admin keys are left to change it
+hint: with it, juist network disable ends the network when too few admin keys are left
 ```
 
 juist fragt einmal nach sudo, um dich zum **Operator** des Geräts zu machen.
@@ -163,7 +163,7 @@ Adresse, etwa ein VPS, braucht den offenen Port 41643/udp.
 | `juist0 · not running` in `juist status` | `sudo systemctl enable --now juistd` |
 | `read-only; to manage this device …` | einmal `sudo juist set --operator=$USER` |
 | `warning: code voided: wrong guess from …` | Tritt mit dem Link bei, der weiterhin gilt. Kam der Fehlversuch nicht von deinem Gerät, kennt jemand anderes die Einladung. |
-| `juist: words not confirmed; nothing signed` | Wichen die Wörter voneinander ab, ist das anfragende Gerät nicht das eingeladene. Starte eine neue Einladung. |
+| `juist: words not confirmed; not admitted` | Wichen die Wörter voneinander ab, ist das anfragende Gerät nicht das eingeladene. Starte eine neue Einladung. |
 | `no answer from a device` in `juist health` | Das Gerät ist offline, oder sein Port 41643/udp ist gesperrt. |
 | `no tunnel traffic from a device` | Öffne 41643/udp auf einem Gerät mit öffentlicher Adresse, oder gib einem Gerät die Rolle `relay`. |
 

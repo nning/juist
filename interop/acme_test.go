@@ -121,7 +121,7 @@ juist revoke fb exit voucher --yes
 juist subnet remove fb `+fbSide.subnet+`
 juist grant fb ingress
 juist ingress serve
-juist publish add lx web 443
+juist publish web 443 --on lx
 daemon -f -o /tmp/answer.log /tmp/probe answer 127.0.0.1:5399 127.0.0.1  # not 5353, which mDNS holds
 env PEBBLE_VA_NOSLEEP=1 PEBBLE_WFE_NONCEREJECT=0 daemon -f -o /tmp/pebble.log /tmp/pebble -config /tmp/pebble.json -dnsserver 127.0.0.1:5399`)
 
@@ -135,9 +135,9 @@ printf '%s\n' '[Service]' 'Environment=SSL_CERT_FILE=/etc/juist-test-ca.pem' 'Ex
 		fb.lanAddr+`:14000/dir' > /etc/systemd/system/juist-serve.service.d/pebble.conf
 systemctl daemon-reload
 setsid -f /tmp/probe serve lx-web >/dev/null 2>&1 < /dev/null`)
-	lx.eventually(t, "ending TLS for what fb published on it", 3*time.Minute, "juist publish add web 127.0.0.1:80",
+	lx.eventually(t, "ending TLS for what fb published on it", 3*time.Minute, "juist publish web 127.0.0.1:80",
 		has("ending TLS for web.pub.example.org to 127.0.0.1:80"))
-	lx.eventually(t, "printing the CAA record", time.Minute, "juist publish serve",
+	lx.eventually(t, "printing the CAA record", time.Minute, "juist publish web",
 		has(`web.pub.example.org. CAA 0 issue "pebble.letsencrypt.org; accounturi=https://`+fb.lanAddr+`:14000/`))
 	fb.eventually(t, "taking Pebble's root", time.Minute,
 		"fetch -q --ca-cert=/tmp/ca.pem -o /tmp/root.pem https://127.0.0.1:15000/roots/0 && grep -q CERTIFICATE /tmp/root.pem",
@@ -152,11 +152,11 @@ setsid -f /tmp/probe serve lx-web >/dev/null 2>&1 < /dev/null`)
 	fb.run(t, `set -e
 daemon -f /tmp/probe serve fb-web 8081
 sysrc juist_serve_env=SSL_CERT_FILE=/tmp/ca.pem juist_serve_args="--acme https://`+fb.lanAddr+`:14000/dir"
-juist publish add fb fbweb 8443`)
-	fb.eventually(t, "saying another program holds 8443", 3*time.Minute, "juist publish add fbweb 127.0.0.1:8081 2>&1; true",
+juist publish fbweb 8443 --on fb`)
+	fb.eventually(t, "saying another program holds 8443", 3*time.Minute, "juist publish fbweb 127.0.0.1:8081 2>&1; true",
 		has("another program holds port 8443"))
 	fb.run(t, "pkill -f '[p]robe tls fb-tls'")
-	fb.eventually(t, "ending TLS for its own name", 3*time.Minute, "juist publish add fbweb 127.0.0.1:8081",
+	fb.eventually(t, "ending TLS for its own name", 3*time.Minute, "juist publish fbweb 127.0.0.1:8081",
 		has("ending TLS for fbweb.pub.example.org to 127.0.0.1:8081"))
 	fb.eventually(t, "fetching its own name through itself", 3*time.Minute,
 		"/tmp/probe hello "+fb.lanAddr+":443 fbweb.pub.example.org /tmp/root.pem", has("fb-web from 127.0.0.1"))
@@ -193,7 +193,7 @@ func serviceMember(t *testing.T, fb, lx *vm) {
 	invite(t, fb, lx, "juist --socket /tmp/svc/juistd.sock join '%s' --name svc")
 	fb.run(t, `set -e
 juist grant svc service
-juist publish add svc svc 443`)
+juist publish svc 443 --on svc`)
 	fb.eventually(t, "fetching the service member's name through itself", 4*time.Minute,
 		"/tmp/probe hello "+fb.lanAddr+":443 svc.pub.example.org /tmp/root.pem", has("lx-web from 127.0.0.1"))
 	svc4 := strings.TrimSpace(fb.run(t, `juist devices | awk '$1 == "svc" {print $2}'`))

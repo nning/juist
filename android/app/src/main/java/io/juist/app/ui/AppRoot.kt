@@ -2,6 +2,7 @@ package io.juist.app.ui
 
 import android.Manifest
 import android.app.Activity
+import android.view.WindowManager
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
@@ -13,6 +14,7 @@ import android.os.PersistableBundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -38,6 +40,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
@@ -57,7 +60,16 @@ import io.juist.app.core.NetworkView
 import io.juist.app.core.networks
 import io.juist.app.core.view
 import io.juist.app.ui.screens.AboutScreen
+import io.juist.app.core.AdminSeeds
+import io.juist.app.core.AdminKeyLost
+import androidx.compose.runtime.DisposableEffect
+import io.juist.app.core.Founded
+import io.juist.app.core.InviteState
+import io.juist.app.ui.screens.AdminSection
+import io.juist.app.ui.screens.BackupScreen
 import io.juist.app.ui.screens.CodeScreen
+import io.juist.app.ui.screens.CreateScreen
+import io.juist.app.ui.screens.InviteScreen
 import io.juist.app.ui.screens.ConfirmScreen
 import io.juist.app.ui.screens.DetailsScreen
 import io.juist.app.ui.screens.JoiningScreen
@@ -89,12 +101,16 @@ sealed interface Route {
     data object About : Route
     data object Licenses : Route
     data class Details(val slot: Int = 0) : Route
+    data object Create : Route
+    /** The admin key's backup; fresh after the network was just founded, which shows its break-glass secret. */
+    data class Backup(val slot: Int = 0, val fresh: Boolean = false) : Route
+    data class Invite(val slot: Int = 0) : Route
 
     val depth get() = when (this) {
         Welcome, Networks -> 0
         is Status, Another -> 1
-        Scan, Code, About, is Details, is MemberOf -> 2
-        is Confirm, Licenses -> 3
+        Scan, Code, About, is Details, is MemberOf, Create, is Invite -> 2
+        is Confirm, Licenses, is Backup -> 3
         Joining -> 4
     }
 }
@@ -104,6 +120,9 @@ internal fun encode(r: Route): String = when (r) {
     is Route.MemberOf -> "member:${r.slot}:" + r.identity
     is Route.Status -> "status:${r.slot}"
     is Route.Details -> "details:${r.slot}"
+    // Fresh is the founding's one showing of the break-glass secret, which a restart does not repeat.
+    is Route.Backup -> "backup:${r.slot}" + if (r.fresh) ":fresh" else ""
+    is Route.Invite -> "invite:${r.slot}"
     else -> r.toString()
 }
 
@@ -119,9 +138,14 @@ internal fun decode(s: String): Route = when {
     s.startsWith("member:") -> slotted(s.removePrefix("member:")).let { (slot, id) -> Route.MemberOf(id, slot) }
     s.startsWith("status:") -> Route.Status(s.removePrefix("status:").toIntOrNull() ?: 0)
     s.startsWith("details:") -> Route.Details(s.removePrefix("details:").toIntOrNull() ?: 0)
+    s.startsWith("backup:") -> s.removePrefix("backup:").split(':').let {
+        Route.Backup(it[0].toIntOrNull() ?: 0, fresh = it.getOrNull(1) == "fresh")
+    }
+    s.startsWith("invite:") -> Route.Invite(s.removePrefix("invite:").toIntOrNull() ?: 0)
     s == "Status" -> Route.Status(0)
     s == "Details" -> Route.Details(0)
-    else -> listOf(Route.Welcome, Route.Another, Route.Networks, Route.Scan, Route.Code, Route.Joining, Route.About, Route.Licenses)
+    else -> listOf(Route.Welcome, Route.Another, Route.Networks, Route.Scan, Route.Code, Route.Joining, Route.About, Route.Licenses,
+        Route.Create)
         .firstOrNull { it.toString() == s } ?: Route.Welcome
 }
 
@@ -178,9 +202,31 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
             toast(context, most)
         }
     }
-    BackHandler(stack.size > 1) {
-        if (stack.last() == Route.Joining) Juist.cancelJoin()
-        pop()
+    // A network just founded shows its break-glass secret, and offers the
+    // admin key's backup, over every other screen until it is left: the
+    // secret lives in Juist alone, and no navigation passes it unseen.
+    val governing = remember { Governing(context) }
+    fun keyFailed(t: Throwable) = toast(context, governError(context, t))
+    val founded by Juist.founded.collectAsStateWithLifecycle()
+    fun leaveBackup(f: Founded) {
+        Juist.founded(null)
+        // A screen opened meanwhile, as by a link, stays; else the network founded shows.
+        if (stack.last() == Route.Create || stack.last() == Route.Welcome || stack.last() == Route.Another) {
+            stack = listOf(home.takeIf { it != Route.Welcome } ?: Route.Status(f.slot), Route.Status(f.slot)).distinct()
+        }
+    }
+    BackHandler(stack.size > 1 || founded != null) {
+        val f = founded
+        when {
+            f != null -> leaveBackup(f)
+            stack.last() == Route.Joining -> { Juist.cancelJoin(); pop() }
+            stack.last() is Route.Invite -> { Juist.cancelInvite(); pop() }
+            else -> pop()
+        }
+    }
+    // An invite whose screen the stack no longer holds, as after a link opened from elsewhere, ends.
+    LaunchedEffect(stack) {
+        if (stack.none { it is Route.Invite } && Juist.invite.value != InviteState.Idle) Juist.cancelInvite()
     }
 
     // A VPN needs the person's consent once, and the notification is asked for alongside.
@@ -223,11 +269,26 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
     }
     val scope = rememberCoroutineScope()
     val handbook = stringResource(R.string.handbook_url)
+    val res = LocalResources.current
+    val invite by Juist.invite.collectAsStateWithLifecycle()
+    var creating by remember { mutableStateOf(false) }
+    var governingBusy by remember { mutableStateOf(false) }
+    // The sealed line waits in Juist, which outlives a screen recreated while the picker is open.
+    val saveFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val line = Juist.pendingBackup
+        Juist.pendingBackup = null
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            checkNotNull(line)
+            checkNotNull(context.contentResolver.openOutputStream(uri)).use { it.write((line + "\n").toByteArray()) }
+        }.fold({ toast(context, res.getString(R.string.backup_saved)) },
+            { toast(context, res.getString(R.string.backup_not_saved)) })
+    }
     // Each screen in the stack keeps what was typed into it while another is on top.
     val saved = rememberSaveableStateHolder()
 
     CompositionLocalProvider(LocalNow provides now) { AnimatedContent(
-        targetState = stack.last(),
+        targetState = founded?.let { Route.Backup(it.slot, fresh = true) } ?: stack.last(),
         transitionSpec = {
             val forward = targetState.depth >= initialState.depth
             val dir = if (forward) 1 else -1
@@ -237,9 +298,101 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
         label = "route",
     ) { route -> saved.SaveableStateProvider(encode(route)) {
         when (route) {
-            Route.Welcome -> WelcomeScreen(onScan = { push(Route.Scan) }, onCode = { push(Route.Code) }, onAbout = { push(Route.About) })
+            Route.Welcome -> WelcomeScreen(onScan = { push(Route.Scan) }, onCode = { push(Route.Code) }, onAbout = { push(Route.About) },
+                onCreate = { push(Route.Create) })
             Route.Another -> WelcomeScreen(onScan = { push(Route.Scan) }, onCode = { push(Route.Code) }, onAbout = { push(Route.About) },
-                onBack = ::pop)
+                onBack = ::pop, onCreate = { push(Route.Create) })
+            Route.Create -> CreateScreen(
+                suggested = suggestedName(deviceName),
+                busy = creating,
+                onCreate = { network, name ->
+                    withVpn {
+                        creating = true
+                        scope.launch {
+                            val r = governing.create(network, name)
+                            creating = false
+                            r?.onFailure { toast(context, governError(context, it)) }
+                        }
+                    }
+                },
+                onBack = ::pop,
+            )
+            is Route.Backup -> {
+                val view = connection.view(route.slot)
+                val fresh = founded?.takeIf { route.fresh && it.slot == route.slot }
+                val held = if (fresh != null) fresh.admin.takeIf { governing.holds(it) } else governing.heldKey(view)
+                val breakGlass = fresh?.breakGlass
+                Secure()
+                BackupScreen(
+                    breakGlass = breakGlass,
+                    onCopyBreakGlass = { breakGlass?.let { copyPrivately(context, it) } },
+                    onCopyLine = {
+                        val pub = held ?: return@BackupScreen
+                        scope.launch {
+                            governing.withKey(pub, res.getString(R.string.auth_backup)) { seed ->
+                                runCatching { copyPrivately(context, AdminSeeds.line(seed)) }
+                            }?.fold({ toast(context, res.getString(R.string.backup_copied)) },
+                                { keyFailed(it) })
+                        }
+                    },
+                    onSaveFile = { password ->
+                        val pub = held ?: return@BackupScreen
+                        scope.launch {
+                            governing.withKey(pub, res.getString(R.string.auth_backup)) { seed ->
+                                // Argon2id takes a second and 64 MiB: off the main thread.
+                                withContext(Dispatchers.Default) { runCatching { AdminSeeds.sealed(seed, password) } }
+                            }?.fold({ line ->
+                                Juist.pendingBackup = line
+                                // Without a document picker on the phone, said rather than crashed.
+                                runCatching { saveFile.launch("juist-admin-${view?.network.orEmpty()}.txt") }.onFailure {
+                                    Juist.pendingBackup = null
+                                    toast(context, res.getString(R.string.backup_not_saved))
+                                }
+                            },
+                                { keyFailed(it) })
+                        }
+                    },
+                    onDone = {
+                        val f = founded
+                        if (route.fresh && f != null) leaveBackup(f) else pop()
+                    },
+                )
+            }
+            is Route.Invite -> {
+                val view = connection.view(route.slot)
+                val held = governing.heldKey(view)
+                // Started once per visit: a screen recreated on a joined or ended invite shows it, not a new one;
+                // another network's invite gives way.
+                LaunchedEffect(route.slot, held) {
+                    if (held == null) return@LaunchedEffect
+                    if (Juist.inviteSlot != route.slot) Juist.cancelInvite()
+                    if (Juist.invite.value == InviteState.Idle) Juist.invite(route.slot, INVITE_MINUTES, held)
+                }
+                Secure()
+                InviteScreen(
+                    state = (if (Juist.inviteSlot == route.slot) invite else InviteState.Starting).let {
+                        // On HTTPS alone the code is announced on no Wi-Fi.
+                        if (it is InviteState.Offered && view?.settings?.httpsOnly == true) it.copy(noLan = true) else it
+                    },
+                    onShare = { link ->
+                        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, link)
+                        runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                    },
+                    onSame = {
+                        val pub = held ?: return@InviteScreen
+                        scope.launch {
+                            val name = (invite as? InviteState.Comparing)?.name.orEmpty()
+                            governing.withKey(pub, res.getString(R.string.auth_admit, name)) { seed -> Juist.answerInvite(seed) }
+                                ?.onFailure { toast(context, governError(context, it)) }
+                        }
+                    },
+                    onDifferent = { scope.launch { Juist.answerInvite(null) } },
+                    onClose = {
+                        Juist.cancelInvite()
+                        pop()
+                    },
+                )
+            }
             Route.Networks -> NetworksScreen(
                 connection = connection,
                 onConnect = { withVpn { Juist.connect(context) } },
@@ -317,6 +470,8 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                         }
                     },
                     onBack = if (stack.size > 1) ::pop else null,
+                    onInvite = governing.heldKey(connection.view(slot))?.let { { push(Route.Invite(slot)) } },
+                    onBackup = governing.heldKey(connection.view(slot))?.let { { push(Route.Backup(slot)) } },
                 )
             }
             is Route.MemberOf -> {
@@ -344,6 +499,39 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                         },
                         onOpen = { open(context, it) },
                         onBack = ::pop,
+                        admin = governing.heldKey(view)?.let { pub ->
+                            // The only voucher: taking it leaves freshness unchecked, which the section asks first.
+                            val lastVoucher = "admin" in member.roles &&
+                                (listOfNotNull(view?.self) + view?.members.orEmpty()).count { "admin" in it.roles } == 1
+                            {
+                                AdminSection(
+                                    roles = member.roles.mapNotNull { logRoles[it] }.toSet(),
+                                    isSelf = member.identity == view?.self?.identity,
+                                    lastVoucher = lastVoucher,
+                                    enabled = connection is Connection.On && !governingBusy,
+                                    onRole = { role, grant ->
+                                        governingBusy = true
+                                        scope.launch {
+                                            governing.withKey(pub, res.getString(R.string.auth_change, member.name)) { seed ->
+                                                Juist.grant(route.slot, member.identity, role, grant, seed, lastVoucher)
+                                            }?.fold({ if (!it) toast(context, res.getString(R.string.change_waits)) },
+                                                { toast(context, governError(context, it)) })
+                                            governingBusy = false
+                                        }
+                                    },
+                                    onRemove = {
+                                        governingBusy = true
+                                        scope.launch {
+                                            governing.withKey(pub, res.getString(R.string.auth_remove, member.name)) { seed ->
+                                                Juist.remove(route.slot, member.identity, seed, lastVoucher)
+                                            }?.fold({ if (it) pop() else toast(context, res.getString(R.string.change_waits)) },
+                                                { toast(context, governError(context, it)) })
+                                            governingBusy = false
+                                        }
+                                    },
+                                )
+                            }
+                        },
                     )
                 }
             }
@@ -371,7 +559,9 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                         changes = changes,
                         diagnosis = diagnosis,
                         onNames = { v -> scope.launch { Juist.setNames(slot, v).onFailure { toast(context, errorText(context, it)) } } },
+                        onPublicNames = { v -> scope.launch { Juist.setPublicNames(slot, v).onFailure { toast(context, errorText(context, it)) } } },
                         onHttpsOnly = { v -> scope.launch { Juist.setHttpsOnly(slot, v).onFailure { toast(context, errorText(context, it)) } } },
+                        onPortMapping = { v -> scope.launch { Juist.setPortMapping(slot, v).onFailure { toast(context, errorText(context, it)) } } },
                         onCopyReport = { copyPrivately(context, Report.text(context, BuildConfig.VERSION_NAME)) },
                         onBack = ::pop,
                     )
@@ -402,14 +592,51 @@ private fun open(context: Context, url: String) {
 }
 
 /** Copies text kept from the clipboard's preview and history, as the log naming the network's devices. */
-private fun copyPrivately(context: Context, text: String) {
+internal fun copyPrivately(context: Context, text: String) {
     val clip = ClipData.newPlainText("juist", text)
     clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
     context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
 }
 
-private fun toast(context: Context, text: String) = Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+internal fun toast(context: Context, text: String) = Toast.makeText(context, text, Toast.LENGTH_LONG).show()
 
 /** What went wrong in a call into the core, in the app's words where they are its own. */
 fun errorText(context: Context, t: Throwable): String =
     if (t is CoreOff) context.getString(R.string.core_off) else t.message.orEmpty()
+
+/** What went wrong with an admin key, in the app's words where they are its own. */
+internal fun governError(context: Context, t: Throwable): String = when (t) {
+    is NoScreenLock -> context.getString(R.string.no_screen_lock)
+    is AdminKeyLost -> context.getString(R.string.admin_key_lost)
+    else -> errorText(context, t)
+}
+
+/**
+ * Keeps what the screen shows out of screenshots and the recent apps, while
+ * a secret shows: counted, since two secure screens overlap in a transition.
+ */
+@Composable
+internal fun Secure() {
+    val window = LocalActivity.current?.window ?: return
+    DisposableEffect(window) {
+        if (secureScreens.getOrDefault(window, 0) == 0) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        secureScreens[window] = secureScreens.getOrDefault(window, 0) + 1
+        onDispose {
+            val left = secureScreens.getOrDefault(window, 1) - 1
+            if (left == 0) {
+                secureScreens.remove(window)
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            } else {
+                secureScreens[window] = left
+            }
+        }
+    }
+}
+
+private val secureScreens = java.util.WeakHashMap<android.view.Window, Int>()
+
+/** How long an invite from the phone stays open, in minutes. */
+private const val INVITE_MINUTES = 15
+
+/** The app's names of the roles the log names. */
+private val logRoles = mapOf("admin" to "voucher", "relay-capable" to "relay", "exit" to "exit")

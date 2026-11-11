@@ -69,11 +69,12 @@ type app struct {
 	instances      *[]hostInstance
 	instance       *hostInstance
 	asRoot         func() bool
-	made           int    // an instance this invocation started, which a failure takes back
-	keyName        string // the one admin key to sign with, where one is named
-	spec           spec   // the command's, as parsed, for hints that name it
-	ownRecordsSaid bool   // see hintOwnRecords
-	applied        bool   // a change other than a checkpoint was applied; see checkpointIfDue
+	made           int           // an instance this invocation started, which a failure takes back
+	keyName        string        // the one admin key to sign with, where one is named
+	spec           spec          // the command's, as parsed, for hints that name it
+	flags          *flag.FlagSet // the command's options, for usageErr
+	ownRecordsSaid bool          // see hintOwnRecords
+	applied        bool          // a change other than a checkpoint was applied; see checkpointIfDue
 
 	// listing is the instance a listing of every network is at, and
 	// listingHeads says the listing heads each network itself.
@@ -92,11 +93,13 @@ type app struct {
 	// interactive is set when a person can answer a question on in, read
 	// through reader; reading is a read under way.
 	interactive bool
-	reader      *bufio.Reader
-	reading     chan readResult
-	color       bool
-	width       int  // the terminal's columns, 0 for no limit
-	terminal    bool // out is a terminal that can draw block characters
+	// tty opens the terminal, for a password where stdin is a file.
+	tty      func() (*os.File, error)
+	reader   *bufio.Reader
+	reading  chan readResult
+	color    bool
+	width    int  // the terminal's columns, 0 for no limit
+	terminal bool // out is a terminal that can draw block characters
 
 	// inviteAddrs lists where an invite's host can be reached, and findInvite
 	// asks the LAN who holds an invite, nil meaning mDNS; tests replace both.
@@ -143,7 +146,8 @@ func newApp(in io.Reader, out, errOut io.Writer) *app {
 	a := &app{ctx: context.Background(), in: in, out: out, errOut: errOut, inviteAddrs: hostAddrs, now: time.Now, drawV4: drawV4Prefix,
 		host: systemLayout(), asRoot: func() bool { return os.Geteuid() == 0 }, admissionHold: admissionHold,
 		system: os.ReadFile, getenv: os.Getenv,
-		helpers: &rendezvous.Helpers{STUN: rendezvous.DefaultSTUN}, spawn: spawnBackground}
+		helpers: &rendezvous.Helpers{STUN: rendezvous.DefaultSTUN}, spawn: spawnBackground,
+		tty: func() (*os.File, error) { return os.OpenFile("/dev/tty", os.O_RDWR, 0) }}
 	a.interactive = isTerminal(in)
 	a.color = isTerminal(out) && a.getenv("NO_COLOR") == "" && a.getenv("TERM") != "dumb"
 	a.width = termWidth(out, a.getenv)
@@ -331,55 +335,56 @@ func (s spec) synopsis() string {
 // --home and --socket, which every command takes. A switch that grants
 // authority takes a letter no one types by habit, such as -v for verbose.
 var shorts = map[string]byte{
-	"admin":       'a',
-	"admin-key":   'K',
-	"admin-name":  'u',
-	"admin-votes": 'v',
-	"all":         'a',
-	"background":  'b',
-	"device":      'n',
-	"devices":     'd',
-	"dns":         'D',
-	"expires":     'e',
-	"finish":      'f',
-	"for":         't',
-	"force":       'f',
-	"groups":      'G',
-	"ingress":     'i',
-	"ipv4":        '4',
-	"ipv6":        '6',
-	"isolate":     'i',
-	"key":         'k',
-	"keys":        'k',
-	"list":        'l',
-	"members":     'm',
-	"multicast":   'M',
-	"name":        'n',
-	"no-apply":    'n',
-	"no-device":   'N',
-	"no-dht":      'd',
-	"no-lan":      'l',
-	"on":          'o',
-	"operator":    'o',
-	"port":        'p',
-	"http2":       '2',
-	"http3":       '3',
-	"https-only":  'O',
-	"proxy":       'P',
-	"public":      'W',
-	"quorum":      'q',
-	"relay":       'r',
-	"relay-name":  'R',
-	"secrets":     'g',
-	"service":     'S',
-	"stop":        'S',
-	"tcp":         'T',
-	"verbose":     'v',
-	"voucher":     'V',
-	"votes":       'v',
-	"when-ready":  'w',
-	"write":       'w',
-	"yes":         'y',
+	"admin":        'a',
+	"admin-key":    'K',
+	"admin-name":   'u',
+	"admin-votes":  'v',
+	"all":          'a',
+	"background":   'b',
+	"device":       'n',
+	"devices":      'd',
+	"dns":          'D',
+	"expires":      'e',
+	"finish":       'f',
+	"for":          't',
+	"force":        'f',
+	"groups":       'G',
+	"ingress":      'i',
+	"ipv4":         '4',
+	"ipv6":         '6',
+	"isolate":      'i',
+	"key":          'k',
+	"keys":         'k',
+	"list":         'l',
+	"members":      'm',
+	"multicast":    'M',
+	"name":         'n',
+	"no-apply":     'n',
+	"no-device":    'N',
+	"no-dht":       'd',
+	"no-lan":       'l',
+	"on":           'o',
+	"operator":     'o',
+	"port":         'p',
+	"port-mapping": 'U',
+	"http2":        '2',
+	"http3":        '3',
+	"https-only":   'O',
+	"proxy":        'P',
+	"public":       'W',
+	"quorum":       'q',
+	"relay":        'r',
+	"relay-name":   'R',
+	"secrets":      'g',
+	"service":      'S',
+	"stop":         'S',
+	"tcp":          'T',
+	"verbose":      'v',
+	"voucher":      'V',
+	"votes":        'v',
+	"when-ready":   'w',
+	"write":        'w',
+	"yes":          'y',
 }
 
 // addShorts gives every long option of fs its one-letter spelling.
@@ -463,7 +468,7 @@ func (a *app) parse(s spec, fs *flag.FlagSet, args []string) ([]string, error) {
 	for i := range pos {
 		pos[i] = strings.TrimPrefix(pos[i], backwardsMark)
 	}
-	a.spec = s
+	a.spec, a.flags = s, fs
 	// A first argument that names one of the device's networks is that
 	// network, where what follows still makes the command. With one network
 	// it may be left out.
@@ -493,6 +498,12 @@ const backwardsMark = "\x00"
 func isBackwards(arg string) bool {
 	_, err := strconv.ParseUint(strings.TrimPrefix(arg, "-"), 10, 32)
 	return strings.HasPrefix(arg, "-") && err == nil
+}
+
+// usageErr is a bad argument or option value, as a Unix tool reports it:
+// what is wrong, then the command's usage line.
+func (a *app) usageErr(format string, args ...any) error {
+	return fmt.Errorf("%s\n%s", fmt.Sprintf(format, args...), a.spec.usage(a.flags))
 }
 
 // usage is the one-line synopsis errors end with; fs, if any, adds options.

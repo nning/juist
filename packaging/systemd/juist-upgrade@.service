@@ -1,0 +1,7 @@
+[Unit]
+Description=Raise juist network %i to this juist's schema once every device implements it
+Documentation=man:juist(1)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/juist log upgrade --when-ready %i

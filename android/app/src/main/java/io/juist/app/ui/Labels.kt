@@ -102,6 +102,7 @@ fun reachLabel(m: Member): String = when (m.reach) {
 /** What a member's reach means, for its own screen; null where its name says it all. */
 @Composable
 fun reachExplanation(m: Member): String? = when {
+    m.reach == Reach.Relay && m.relayPublic -> stringResource(R.string.reach_relay_about_public)
     m.reach == Reach.Relay && m.relay.isNotEmpty() -> stringResource(R.string.reach_relay_about_named, m.relay)
     else -> reachExplanationOf(m.reach)?.let { stringResource(it) }
 }
@@ -191,7 +192,7 @@ fun alarmTitle(a: Alarm): String = when (a.kind) {
     "refused" -> stringResource(R.string.alarm_refused)
     "epoch" -> stringResource(R.string.alarm_epoch)
     "dataPlane" -> stringResource(R.string.alarm_data_plane)
-    "noTraffic" -> stringResource(R.string.alarm_no_traffic, names(a.names))
+    "noTraffic", "noTrafficRelayed" -> stringResource(R.string.alarm_no_traffic, names(a.names))
     "newer" -> stringResource(R.string.alarm_newer, names(a.names))
     "outdated" -> stringResource(R.string.alarm_outdated, names(a.names))
     "older" -> stringResource(R.string.alarm_older, names(a.names))
@@ -205,7 +206,6 @@ fun alarmTitle(a: Alarm): String = when (a.kind) {
     } else {
         pluralStringResource(R.plurals.alarm_silent_count, a.count, a.count)
     }
-    "seeking" -> stringResource(R.string.alarm_seeking, names(a.names))
     "privateDns" -> stringResource(R.string.alarm_private_dns, names(a.names))
     "names" -> stringResource(R.string.alarm_names)
     "forMembers" -> stringResource(R.string.alarm_for_members, names(a.names))
@@ -221,6 +221,7 @@ fun alarmHint(a: Alarm): Int? = when (a.kind) {
     "staleKeys" -> R.string.alarm_stale_keys_hint
     "refused" -> R.string.alarm_refused_hint
     "noTraffic" -> R.string.alarm_no_traffic_hint
+    "noTrafficRelayed" -> R.string.alarm_no_traffic_relayed_hint
     "newer" -> R.string.alarm_newer_hint
     "outdated" -> R.string.alarm_outdated_hint
     "older" -> R.string.alarm_older_hint

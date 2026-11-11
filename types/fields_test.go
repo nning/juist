@@ -154,7 +154,7 @@ func TestCloneCopiesEveryField(t *testing.T) {
 // without devices, are the zero payloads with a meaning.
 func TestEveryPayloadIsValidated(t *testing.T) {
 	meaningful := map[string]bool{"Grant": true, "Names": true, "Domain": true, "Publish": true, "Policy": true,
-		"Signing": true}
+		"Signing": true, "PublicDERP": true}
 	checked := map[string]bool{}
 	for i, seed := range corpusSeeds(t) {
 		a, err := DecodeAUM(seed)

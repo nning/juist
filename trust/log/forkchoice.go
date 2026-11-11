@@ -85,18 +85,15 @@ func copyGroups(r reader, hashes []types.Hash) ([][]types.Hash, error) {
 	return out, nil
 }
 
-// pickPrimary applies fork choice to a set of valid siblings of parent: a
-// revocation beats anything else, otherwise the lower hash wins, from
-// [types.SchemaContentForkChoice] on the lower [types.AUM.SigHash]. Signature
-// weight is deliberately not part of the rule — every change already needs
-// quorum, so weight would only let one quorum outbid another by collecting
-// extras.
+// pickPrimary applies fork choice to valid siblings of parent, in order:
+//  1. a branch loses to a sibling whose branch removes an admin key that
+//     signed anything on it, so a removed key cannot undo its own removal;
+//  2. a revocation beats anything else;
+//  3. the lower hash wins, from [types.SchemaContentForkChoice] on the lower
+//     [types.AUM.SigHash].
 //
-// One rule comes first: a branch loses to a sibling whose branch removes an
-// admin key that signed anything on it. An admin key removed at some point
-// could otherwise sign a sibling rooted before its removal, win on the
-// revocation bias or a ground hash, and undo its own removal with everything
-// after it.
+// Signature weight is deliberately not a rule: it would let one quorum outbid
+// another by collecting extras.
 func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, error) {
 	// Walking each branch on a chain without forks makes resolution quadratic.
 	if len(candidates) == 1 {
@@ -113,7 +110,7 @@ func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, er
 		keys[i] = k
 		removes = removes || len(k.removed) > 0
 	}
-	// Signers take states to tell, and matter only where a branch removes a
+	// Signers need states to tell; only collect them if some branch removes a
 	// key.
 	if removes {
 		budget = maxOrphanRecords
@@ -166,12 +163,11 @@ type branchKeys struct {
 	signers, removed map[types.Identity]bool
 }
 
-// keysOfBranch collects branchKeys, the signers only withSigners, over every
-// stored record from root, whose parent is parent, on, within budget: the
-// chain ahead of a fork is at most as long as the chain. A record's signers
-// are the keys any copy of it carries; from [types.SchemaContentForkChoice] on
-// only those it needs ([neededSigners]), so a key that adds its signature to
-// a record others authorized does not make the record its own.
+// keysOfBranch collects branchKeys (signers only withSigners) over every
+// stored record from root on, within budget. A record's signers are the keys
+// any copy carries; from [types.SchemaContentForkChoice] on only those it
+// needs ([neededSigners]), so adding a signature to a record others
+// authorized does not make it the signer's.
 func keysOfBranch(r reader, root candidate, parent *State, withSigners bool, budget *int) (branchKeys, error) {
 	k := branchKeys{signers: map[types.Identity]bool{}, removed: map[types.Identity]bool{}}
 	needed := withSigners && byContent(parent)

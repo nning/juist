@@ -29,9 +29,8 @@ var (
 	spakeN = mustPoint("d3bfb518f44f3430f29d0c92af503865a1ed3281dc69b35dd868ba85f886c4ab")
 )
 
-// Party identities. Fixed role labels rather than empty strings: the RFC
-// allows empty identities only where they are implicit, and a label is what
-// stops one side's messages being reflected back at it as the other's.
+// Party identities: fixed role labels, not empty, so one side's messages
+// cannot be reflected back at it as the other's.
 var (
 	guestIdentity = []byte("juist enroll guest")
 	hostIdentity  = []byte("juist enroll host")
@@ -43,13 +42,10 @@ const elementLen = 32
 // errBadElement reports a peer's message that is not a usable group element.
 var errBadElement = errors.New("enroll: the peer's key exchange message is not a valid group element")
 
-// errPasswordElement reports a peer's element that makes K the identity. The
-// only way to send one is to build it from the password itself — w·M, with no
-// secret scalar — so it is a guess, and a right one; an honest peer produces
-// it with negligible probability. RFC 9382 has the party abort, which, left
-// at that, would let a guest test code after code for nothing: a host that
-// aborts on the right guess and answers every wrong one is an oracle. The
-// host therefore counts it as the invite's one guess ([Invite.AcceptHello]).
+// errPasswordElement reports a peer element that makes K the identity: only
+// w·M without a secret scalar does, so it is a right guess. RFC 9382 aborts,
+// but a host aborting on right guesses and answering wrong ones is an oracle,
+// so the host counts it as the invite's one guess ([Invite.AcceptHello]).
 var errPasswordElement = errors.New("enroll: the peer's element was built from the password")
 
 // A spake is one party's half of a SPAKE2 run. Single use: x must never be

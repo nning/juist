@@ -24,8 +24,8 @@ func (a *app) newInstance(in []hostInstance) (hostInstance, error) {
 	}
 	already := "this device is in " + strings.Join(labels, " and ")
 	if !a.host.canMakeInstances() {
-		return hostInstance{}, fmt.Errorf("%s, and another network needs %s, which "+
-			"the juist package installs\nhint: or leave %s first: juist reset %s --force", already, instanceNeed,
+		return hostInstance{}, fmt.Errorf("%s; another network needs %s from the juist package"+
+			"\nhint: or leave %s first: juist reset %s --force", already, instanceNeed,
 			labels[0], in[0].word())
 	}
 	if a.asRoot() {
@@ -34,7 +34,7 @@ func (a *app) newInstance(in []hostInstance) (hostInstance, error) {
 			return hostInstance{}, err
 		}
 		a.made = n
-		a.printf("%s\n", a.dim(fmt.Sprintf("%s; this network gets a juistd of its own, %s", already, instance.Name(n))))
+		a.printf("%s\n", a.dim(fmt.Sprintf("%s; this network gets its own juistd, %s", already, instance.Name(n))))
 		return a.instanceNumber(n)
 	}
 	if !a.interactive && !a.yes {
@@ -42,11 +42,11 @@ func (a *app) newInstance(in []hostInstance) (hostInstance, error) {
 		if a.purpose == forFounding {
 			hint = "add --yes, which runs sudo for it"
 		}
-		return hostInstance{}, fmt.Errorf("%s; another network beside it takes a juistd of its own, which "+
-			"takes sudo to start\nhint: %s", already, hint)
+		return hostInstance{}, fmt.Errorf("%s; another network needs its own juistd, started with sudo\nhint: %s",
+			already, hint)
 	}
 	if !a.yes {
-		ok, err := a.ask(a.ctx, question{text: already + "; start a juistd for this network beside it (sudo)?",
+		ok, err := a.ask(a.ctx, question{text: already + "; start another juistd for this network (sudo)?",
 			yes: true})
 		if err != nil {
 			return hostInstance{}, err
@@ -69,7 +69,7 @@ func (a *app) newInstance(in []hostInstance) (hostInstance, error) {
 	}
 	a.hostChanged()
 	a.made = n
-	a.printf("%s\n", a.dim(fmt.Sprintf("this network gets a juistd of its own, %s", instance.Name(n))))
+	a.printf("%s\n", a.dim(fmt.Sprintf("this network gets its own juistd, %s", instance.Name(n))))
 	return a.instanceNumber(n)
 }
 
@@ -82,7 +82,7 @@ func (a *app) sudo(args []string, out *strings.Builder) error {
 	}
 	if _, err := exec.LookPath("sudo"); err != nil {
 		// FreeBSD's base system has none.
-		return errors.New("this takes root, and there is no sudo here\nhint: run it as root")
+		return errors.New("needs root, and there is no sudo here\nhint: run it as root")
 	}
 	cmd := exec.CommandContext(a.ctx, "sudo", append([]string{self}, args...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, a.out, a.errOut
@@ -109,7 +109,7 @@ func (a *app) makeInstance(op operatorChoice) (int, error) {
 		}
 	}
 	if n == 0 {
-		return 0, fmt.Errorf("this host runs %d juistds already, the most it may: one per network", instance.Max+1)
+		return 0, fmt.Errorf("this host runs %d juistds already, the most allowed", instance.Max+1)
 	}
 	undo := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), instanceStartWait)
@@ -134,13 +134,13 @@ func (a *app) makeInstance(op operatorChoice) (int, error) {
 	// As the package does for juist0 at install: log sync runs in the
 	// tunnel, and a firewall that drops it there loses removals too.
 	if err := a.host.firewall(a.ctx, "allow", n); err != nil {
-		a.warn("letting %s through the firewall: %v", instance.Name(n), err)
+		a.warn("cannot open the firewall for %s: %v", instance.Name(n), err)
 	}
 	if op.set {
 		if _, err := ipc.Call(a.host.socket(n), ipc.Request{Command: ipc.CmdSetOperator, SetOperator: true,
 			OperatorUID: op.uid}); err != nil {
 			undo()
-			return 0, fmt.Errorf("appointing %s's operator: %w", instance.Name(n), err)
+			return 0, fmt.Errorf("setting the operator of %s: %w", instance.Name(n), err)
 		}
 	}
 	a.hostChanged()
@@ -168,7 +168,7 @@ func (a *app) removeInstance(n int) error {
 		return err
 	}
 	if err := a.host.firewall(a.ctx, "revoke", n); err != nil {
-		a.warn("revoking %s's firewall rule: %v", instance.Name(n), err)
+		a.warn("cannot remove the firewall rule for %s: %v", instance.Name(n), err)
 	}
 	home := a.host.home(n)
 	if err := os.RemoveAll(home); err != nil {

@@ -49,6 +49,10 @@ The full analysis, with every remaining weakness, is in the
 - The relay. A [relay]({{< relref "docs/relays" >}}) is one of your own
   members. Only members can use it, and it sees only encrypted WireGuard
   traffic.
+- Tailscale's public DERP servers, where the network chooses them, as one
+  the Android app creates does: they too see only encrypted WireGuard
+  traffic, but also every device's public address and which devices talk to
+  which, when and how much ([Relays]({{< relref "docs/relays" >}}#public-derp)).
 - The daemon, for signing. juistd never holds an admin key, so a compromised
   juistd cannot sign changes.
 

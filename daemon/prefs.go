@@ -54,6 +54,10 @@ type Prefs struct {
 	Groups       []netip.Addr
 	// GroupsOff disables automatic copies when Groups is empty.
 	GroupsOff bool
+
+	// PortMapOff asks the router for no port mapping. A running Daemon does
+	// not take it: the service starts a new one.
+	PortMapOff bool
 }
 
 // LoadPrefs reads the settings kept in home, each in a file of its own,
@@ -79,6 +83,7 @@ func LoadPrefs(home string, logf func(string, ...any)) Prefs {
 	p.HTTPSOnly, p.Proxy, p.RelayName = loadSettings(home, logf)
 	p.MulticastOff = has(statedir.MulticastOffFile)
 	p.Groups, p.GroupsOff = loadGroups(home, logf)
+	p.PortMapOff = has(statedir.PortMapOffFile)
 	return p
 }
 

@@ -64,7 +64,7 @@ Beherrscht die Version auf diesem Gerät ein neueres Schema als das Netz,
   Klammern das dieser Version, etwa `20 (21)`;
 - ergänzt `juist health` auf einem Gerät mit Admin-Schlüssel, sobald das
   juist jedes Geräts es beherrscht,
-  `hint: every device implements schema 21: juist log upgrade`.
+  `hint: every device supports schema 21: juist log upgrade`.
 
 ## Das Schema anheben
 
@@ -100,7 +100,7 @@ von ihm nichts gehört hat, ändert `juist log upgrade` nichts und nennt es:
 
 ```console
 $ juist log upgrade
-juist: not every device implements schema 21: phone (20)
+juist: not every device supports schema 21: phone (20)
 hint: update them, or raise it anyway: juist log upgrade --force
 ```
 
@@ -122,10 +122,22 @@ Geräte es wartet, sagt `juist log upgrade`.
 
 {{< step on="dem Gerät eines Admins" >}}
 Lass es regelmäßig laufen, als der Benutzer, in dessen Keystore der
-Admin-Schlüssel liegt, etwa täglich aus seiner crontab (`crontab -e`):
+Admin-Schlüssel liegt, auf einem Gerät, das meist an ist. Die Linux-Pakete
+bringen dafür einen Timer mit, der stündlich läuft; nenne das Netz, wie
+`juist status` es nennt:
+
+```console
+$ systemctl --user enable --now juist-upgrade@home.timer
+$ loginctl enable-linger      # wo niemand angemeldet bleibt
+```
+
+`journalctl --user -u juist-upgrade@home` zeigt, was er getan hat. Unter
+FreeBSD oder ohne die Pakete tut die crontab des Benutzers (`crontab -e`)
+dasselbe, mit dem Pfad, den `command -v juist` ausgibt, unter FreeBSD
+`/usr/local/bin/juist`:
 
 ```
-0 3 * * * juist log upgrade --when-ready
+0 * * * * /usr/local/bin/juist log upgrade --when-ready home
 ```
 
 Ist das Quorum größer als eins, reicht deine Stimme allein nicht:
@@ -140,7 +152,7 @@ Ein Gerät, dessen juist das neue Schema des Netzes nicht kennt, wendet keine
 Geräte warnen in `juist health` davor:
 
 ```console
-warning: nas runs an older juist, which applies no changes until updated
+warning: nas runs an older juist and applies no changes until updated
 ```
 
 Ein Gerät mit älterer Version kann auch ganz vom Verkehr abgeschnitten sein:

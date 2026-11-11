@@ -155,12 +155,17 @@ beidem erbeutet, kann das Netz verwalten und auch beenden.
 - Ein Gerät hat höchstens eine alte Adresse. Wird es vor Ablauf der Frist
   erneut verschoben, fällt die frühere alte Adresse sofort weg, und juist
   warnt davor.
-- Stillgelegte Adressen bleiben reserviert, damit kein anderes Gerät sie
-  bekommt, bis du `juist network renumber --finish` ohne weitere Argumente
-  aufrufst.
-- Unter `Renumbering` nennt `juist status` die Geräte, die vom Umzug noch
-  nichts wissen (`not told yet`). Es nennt nur Geräte, die dieses Gerät laut
-  Access-Policy erreichen darf, denn nur sie können es ihm sagen.
+- Ist eine alte Adresse stillgelegt, nach Ablauf der Frist oder mit
+  `--finish`, ist sie frei: Ein anderes Gerät kann sie bekommen, und ein
+  Subnetz kann den alten Bereich abdecken. Ein Subnetz über einen Teil davon
+  übernimmt den ganzen Bereich und jede alte Adresse darin. Geräte, die vom
+  Umzug noch nichts wissen, schicken ihren Verkehr weiter zum alten Inhaber,
+  der ihn lesen kann, und juist warnt davor: Verschiebe ein Gerät auf eine
+  alte Adresse erst, wenn `juist status` unter `not told yet` kein Gerät mehr
+  nennt. Dort stehen nur Geräte, die dieses laut Zugriffsregeln erreichen
+  darf, denn nur von ihnen erfährt es etwas. Solange `juist log upgrade` das Netz nicht auf das aktuelle
+  Record-Schema gehoben hat, bleiben stillgelegte Adressen reserviert, bis du
+  `juist network renumber --finish` ohne weitere Argumente aufrufst.
 - Der neue Bereich muss Platz für alle Geräte bieten. juist warnt, wenn er
   sich mit einem LAN dieses Hosts überschneidet oder mit einem anderen Netz,
   dem das Gerät angehört.
@@ -191,8 +196,8 @@ beidem erbeutet, kann das Netz verwalten und auch beenden.
 |---|---|
 | `juist health`: `no IPv4 on this host: …` | Zwei Netze auf diesem Gerät überschneiden sich. Nummeriere eines um, wie der Hinweis vorschlägt. |
 | `juist: 10.7.0.9 is taken by nas` | Wähl eine freie Adresse. |
-| `juist: 10.7.0.9 is outside the network's range …` | Wähl eine Adresse aus dem Bereich, den `juist network` anzeigt. |
+| `juist: 10.7.0.9 is outside the network (…)` | Wähl eine Adresse aus dem Bereich, den `juist network` anzeigt. |
 | `juist: another device is named "tablet" already` | Wähl einen anderen Namen, oder benenne zuerst das andere Gerät um. |
 | `juist: no line on stdin` | Leite die Break-glass-Zeile hinein, oder gib ihre Datei mit `--secrets FILE` an. |
-| `juist: no break-glass secret of "home" there` | Die Zeile gehört zu einem anderen Netz. |
-| `juist: "home" is disabled; nothing changes it any more` | Das Netz ist beendet: `juist reset`, dann `juist create`. |
+| `juist: no break-glass secret of "home" given` | Die Zeile gehört zu einem anderen Netz. |
+| `juist: "home" is disabled and cannot be changed` | Das Netz ist beendet: `juist reset`, dann `juist create`. |

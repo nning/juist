@@ -1,7 +1,7 @@
 ---
 title: Install
 linkTitle: Install
-description: Install juist from its package repository or a release on Debian, Ubuntu, Fedora or FreeBSD, check the download, or build the package from source.
+description: Install juist from its package repository or a release on Debian, Ubuntu, Fedora, FreeBSD or the Steam Deck, check the download, or build the package from source.
 lead: Install juist as a system package on every device that should be in a network. Each release comes with ready-made packages and a signed list of their checksums.
 ---
 
@@ -12,8 +12,10 @@ an RPM for Fedora, and a pkg package for FreeBSD 15. Every
 [release](https://github.com/nning/juist/releases/latest) has packages for
 amd64 and arm64, except the RPM, which is only available for x86_64. On
 another Linux with systemd, Arch or Gentoo say, `make install` installs it
-from the source ([Building from source](#building-from-source)). A phone
-joins with the app instead; see [Android]({{< relref "docs/android" >}}).
+from the source ([Building from source](#building-from-source)). On the
+Steam Deck, juist installs as a system extension of SteamOS
+([On the Steam Deck](#steam-deck)). A phone joins with the app instead; see
+[Android]({{< relref "docs/android" >}}).
 
 ## Installing the package
 
@@ -38,7 +40,8 @@ fetch -o - https://juist.nning.io/install | sh
 
 The script adds the repository and its key to apt, dnf or pkg, installs
 juist, and on FreeBSD starts the daemon; where it is not root, it takes sudo.
-To read it first, download it to `install.sh` and run `sh install.sh`. By
+On SteamOS, it installs juist as a system extension instead
+([On the Steam Deck](#steam-deck)). To read it first, download it to `install.sh` and run `sh install.sh`. By
 hand, the steps are these:
 
 {{< step on="a Debian or Ubuntu device" >}}
@@ -193,6 +196,36 @@ The packages end up in `build/deb`, `build/rpm/RPMS` and `build/freebsd`.
 `make deb DEB_ARCH=arm64` builds the `.deb` for another architecture; `armhf`
 and `i386` work the same way.
 
+## On the Steam Deck {#steam-deck}
+
+SteamOS keeps `/usr` read-only and replaces it with each of its updates, so
+juist comes to it as a system extension: the install script puts the
+`.deb`'s files into `/var/lib/extensions/juist.raw`, which systemd lays over
+`/usr` at every boot. juist, the device's keys and its networks stay across
+SteamOS updates.
+
+{{< step on="the Steam Deck, in desktop mode, in Konsole" >}}
+Give the user `deck` a password for sudo, unless it has one, then install
+juist:
+
+```sh
+passwd
+curl -fsSL https://juist.nning.io/install | sh
+```
+{{< /step >}}
+
+The script checks the repository's signed index and the package's
+checksum, and starts juistd. Run it again to install a newer release:
+SteamOS does not update juist itself. Next is the
+[first network]({{< relref "docs/first-network" >}}), as on any other
+Linux.
+
+- What juist changes in `/etc`, the firewall's trusted zone, an exit node's
+  forwarding and the avahi setting `juist health` may ask for, SteamOS keeps
+  across its updates by `/etc/atomic-update.conf.d/juist.conf`.
+- `sudo /usr/lib/juist/sysext.sh uninstall` removes juist again; what stays
+  is listed under [What stays after uninstalling](#what-stays-after-uninstalling).
+
 ## In a container
 
 An app in a container can be a device of its own, with its own addresses and
@@ -321,13 +354,14 @@ own device. Then remove the package:
 sudo apt remove juist      # Debian, Ubuntu
 sudo dnf remove juist      # Fedora
 pkg delete juist           # FreeBSD, as root
+sudo /usr/lib/juist/sysext.sh uninstall   # SteamOS
 ```
 
 This stops juistd for every network on the device and undoes what juist set
 up on the host. On Linux, that is the firewall rule for `juist0`, an ingress,
 a relay on port 443, and the changes made by `juist exit serve`.
 
-## What stays after uninstalling
+## What stays after uninstalling {#what-stays-after-uninstalling}
 
 - On Linux, the device's keys and log stay in `/var/lib/juist`, a further
   network's in `/var/lib/juist1` and so on, and the system users `juist`,

@@ -5,7 +5,7 @@
 # KEYWORD: shutdown
 #
 # juist_serve_enable (bool): YES ends TLS for the names published on this
-#                            device; juist publish add NAME HOST:PORT sets it.
+#                            device; juist publish NAME HOST:PORT sets it.
 # juist_serve_args (str):    more options, such as --acme URL.
 #
 # Started as root, the terminator runs as juist-serve beside a parent that

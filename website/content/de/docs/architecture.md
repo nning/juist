@@ -135,7 +135,9 @@ Version 1.104.0:
 - **DERP** leitet Verkehr weiter, wenn kein direkter Weg zustande kommt, siehe
   [DERP servers](https://tailscale.com/kb/1232/derp-servers). Bei Tailscale
   stehen DERP-Server allen Nutzern offen. Bei juist läuft DERP auf einem
-  Mitglied mit der Rolle `relay` und bedient nur Mitglieder aus dem Log.
+  Mitglied mit der Rolle `relay` und bedient nur Mitglieder aus dem Log; ein
+  Netz kann außerdem Tailscales öffentliche DERP-Server wählen, wo kein
+  Mitglied weiterleitet ([Relays]({{< relref "docs/relays" >}}#public-derp)).
 - **wgengine** verbindet WireGuard mit dem Betriebssystem, also mit
   Netzwerkgerät, Paketfilter, Routen und DNS.
 - **STUN** verrät einem Gerät seine öffentliche Adresse.
@@ -144,7 +146,8 @@ Den Teil, der mit einem Koordinationsserver spricht, lässt juist weg.
 Tailscales Client bekommt seine Peers und deren Schlüssel von diesem Server,
 juist übergibt demselben Code stattdessen Peers, die es aus dem Mitgliederlog
 erzeugt hat. Du brauchst kein Tailscale-Konto, und es geht kein Verkehr an
-Tailscale.
+Tailscale, außer das Netz wählt dessen öffentliche DERP-Server, wie eines,
+das die Android-App anlegt.
 
 Ein Fehler im übernommenen Verbindungscode kann Verbindungen stören oder
 Adressen preisgeben. Ein Gerät aufnehmen kann er nicht, denn darunter prüft

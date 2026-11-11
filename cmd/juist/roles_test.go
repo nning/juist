@@ -73,8 +73,8 @@ func TestARoleThatExcludesAnotherIsSaid(t *testing.T) {
 	enrollDevice(t, admin, "vps")
 	admin.mustRun("grant", "vps", "voucher")
 	for _, tc := range []struct{ role, want string }{
-		{"ingress", "vps holds the role voucher, which the role ingress excludes\nhint: juist revoke vps voucher"},
-		{"service", "vps holds the role voucher, which the role service excludes\nhint: juist revoke vps voucher"},
+		{"ingress", "vps cannot be voucher and ingress at once\nhint: juist revoke vps voucher"},
+		{"service", "vps cannot be voucher and service at once\nhint: juist revoke vps voucher"},
 	} {
 		if _, err := admin.run("grant", "vps", tc.role); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("grant %s: %v", tc.role, err)

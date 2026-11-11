@@ -2,7 +2,6 @@ package main
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -14,29 +13,34 @@ import (
 	"go4.org/netipx"
 
 	"github.com/nning/juist/internal/cliflag"
+	"github.com/nning/juist/internal/govern"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
 func networkFamily() family {
-	return family{name: "juist network", intro: "Show, rename and renumber the network, set its domain, or end it.", subs: []subcommand{
-		{name: "show", run: networkShow, forms: [][2]string{{"[NETWORK]", "name and address ranges; every\nnetwork's, without NETWORK"}}},
+	return family{name: "juist network", intro: "Show, rename and renumber the network, set its domain and public DERP servers, or end it.", subs: []subcommand{
+		{name: "show", run: networkShow, forms: [][2]string{{"[NETWORK]", "show name and address ranges,\nfor every network without NETWORK"}}},
 		{name: "rename", run: networkRename, forms: [][2]string{{"rename [NETWORK] NAME", "rename the network"}}},
 		{name: "domain", run: networkDomain, forms: [][2]string{
-			{"domain [NETWORK] DOMAIN", "the public domain names are\npublished under (juist publish)"},
-			{"domain [NETWORK] off", "withdraw it"},
+			{"domain [NETWORK] DOMAIN", "set the public domain for juist publish"},
+			{"domain [NETWORK] off", "remove it"},
+		}},
+		{name: "derp", run: networkDERP, forms: [][2]string{
+			{"derp [NETWORK] on", "use Tailscale's public DERP servers\nwhere no member relays"},
+			{"derp [NETWORK] off", "use none"},
 		}},
 		{name: "renumber", run: networkRenumber, forms: [][2]string{
 			{"renumber [NETWORK] PREFIX", "move every device into PREFIX,\nsuch as 10.7.0.0/22"},
-			{"renumber [NETWORK] DEVICE ADDR", "move one device to ADDR; with\n--finish, retiring its old one now"},
+			{"renumber [NETWORK] DEVICE ADDR", "move one device to ADDR"},
 			{"renumber [NETWORK] --finish", "retire the old addresses now"},
 		}},
 		{name: "disable", run: networkDisable, forms: [][2]string{
-			{"disable [NETWORK]", "end the network for good with the\nbreak-glass secret: every device stops"},
+			{"disable [NETWORK]", "end the network for good with the\nbreak-glass secret; every device stops"},
 		}},
-	}, footer: `NETWORK names one of this device's networks, or its juistd (juist1). It can
-be left out if the device is in only one. Old IPv4 addresses keep working
-until the deadline. IPv6 addresses never move.`}
+	}, footer: `NETWORK is a network of this device, or its juistd (juist1); it can be left
+out if there is only one. Old IPv4 addresses work until the deadline; IPv6
+addresses never move.`}
 }
 
 func cmdNetwork(a *app, args []string) error { return networkFamily().run(a, args) }
@@ -75,33 +79,38 @@ func (a *app) showNetwork() error {
 	if d := state.Domain(); d != "" {
 		a.field("Domain", "%s", d)
 	}
+	if state.PublicDERP().Tailscale {
+		a.field("Public DERP", "Tailscale")
+	}
+	// From schema 25 what is retired is free; before, it is held.
+	free := state.Schema() >= types.SchemaTakeRetired
 	var moving, heldNodes []types.NodeRecord
 	for _, n := range state.Nodes() {
 		switch {
 		case n.Retiring.Live(now):
 			moving = append(moving, n)
-		case n.Retiring != nil:
+		case n.Retiring != nil && !free:
 			heldNodes = append(heldNodes, n)
 		}
 	}
 	slices.SortFunc(heldNodes, func(x, y types.NodeRecord) int { return x.Retiring.Addr.Compare(y.Retiring.Addr) })
 	var held []string
 	r, retiring := state.V4Retiring()
-	if retiring && !r.Live(now) {
+	if retiring && !r.Live(now) && !free {
 		held = append(held, joinPrefixes(r.Prefixes)+" (the old range)")
 	}
 	for _, n := range heldNodes {
 		// What the old range holds needs no line of its own.
 		if !retiring || r.Live(now) || !slices.ContainsFunc(r.Prefixes, func(p netip.Prefix) bool { return p.Contains(n.Retiring.Addr) }) {
-			held = append(held, fmt.Sprintf("%v (%s's old address)", n.Retiring.Addr, displayMember(n)))
+			held = append(held, fmt.Sprintf("%v (old address of %s)", n.Retiring.Addr, displayMember(n)))
 		}
 	}
 	if len(held) > 0 {
 		a.field("Held", "%s", strings.Join(held, ", "))
 		if len(moving) > 0 {
-			a.hint("juist network renumber --finish frees them, and ends the moves below")
+			a.hint("to free them and end the moves below: juist network renumber --finish")
 		} else {
-			a.hint("juist network renumber --finish frees them")
+			a.hint("to free them: juist network renumber --finish")
 		}
 	}
 	if len(moving) == 0 {
@@ -126,7 +135,7 @@ Rename the network on every device. Nothing else changes.`}
 	}
 	name := pos[0]
 	if err := checkName("network name", name); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	auth, err := a.networkLog()
 	if err != nil {
@@ -148,9 +157,9 @@ Rename the network on every device. Nothing else changes.`}
 
 func networkDomain(a *app, args []string) error {
 	s := spec{name: "juist network domain", args: "DOMAIN|off", min: 1, max: 1, about: `
-Set the public domain that names are published under, such as
-pub.example.org; its DNS points *.DOMAIN at the ingresses. off withdraws it.
-Every member then resolves DOMAIN through juistd, with DNSSEC off for it.`}
+Set the public domain for published names, such as pub.example.org. Its
+DNS points *.DOMAIN at the ingresses. off removes it. Members resolve DOMAIN
+through juistd, without DNSSEC.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -158,7 +167,7 @@ Every member then resolves DOMAIN through juistd, with DNSSEC off for it.`}
 	domain := ""
 	if pos[0] != "off" {
 		if domain, err = parseHostName(pos[0]); err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 	}
 	auth, err := a.networkLog()
@@ -173,8 +182,8 @@ Every member then resolves DOMAIN through juistd, with DNSSEC off for it.`}
 	if domain == "" {
 		for _, n := range state.Nodes() {
 			if len(n.Published) > 0 {
-				return fmt.Errorf("%s publishes names under %s\nhint: juist publish remove %s %s", displayMember(n),
-					state.Domain(), displayMember(n), n.Published[0].Under(state.Domain()))
+				return fmt.Errorf("%s still publishes names under %s\nhint: juist publish --stop %s --on %s", displayMember(n),
+					state.Domain(), n.Published[0].Under(state.Domain()), displayMember(n))
 			}
 		}
 	}
@@ -183,13 +192,50 @@ Every member then resolves DOMAIN through juistd, with DNSSEC off for it.`}
 		return err
 	}
 	if domain != "" {
-		a.warn("every member then resolves %s through juistd, names on or not, with DNSSEC off for it", domain)
+		a.warn("every member resolves %s through juistd without DNSSEC, even with names off", domain)
 	}
 	done := "domain " + domain
 	if domain == "" {
 		done = "no domain"
 	}
 	_, err = a.submit(auth, &change{aum: aum, file: "domain.rec", done: done})
+	return err
+}
+
+func networkDERP(a *app, args []string) error {
+	s := spec{name: "juist network derp", args: "on|off", min: 1, max: 1, about: `
+Use Tailscale's public DERP servers where no member relays, or none. They
+see only encrypted traffic, but also the public address of every device and
+who talks to whom, when and how much. Member relays come first.`}
+	pos, err := a.parse(s, newFlags(s.name), args)
+	if err != nil {
+		return err
+	}
+	var want types.PublicDERP
+	switch pos[0] {
+	case "on":
+		want.Tailscale = true
+	case "off":
+	default:
+		return a.usageErr("%q is not on or off", pos[0])
+	}
+	auth, err := a.networkLog()
+	if err != nil {
+		return err
+	}
+	state := auth.State()
+	if state.PublicDERP() == want {
+		a.ok("unchanged: public DERP %s", pos[0])
+		return nil
+	}
+	if state.Schema() < types.SchemaPublicDERP {
+		return needsUpgrade("public DERP servers")
+	}
+	aum, err := auth.Builder().SetPublicDERP(want)
+	if err != nil {
+		return err
+	}
+	_, err = a.submit(auth, &change{aum: aum, file: "public-derp.rec", done: "public DERP " + pos[0]})
 	return err
 }
 
@@ -221,23 +267,14 @@ func (d *longDuration) Set(v string) error {
 
 func networkRenumber(a *app, args []string) error {
 	s := spec{name: "juist network renumber", args: "PREFIX | DEVICE ADDR | --finish", max: 2, about: `
-Move IPv4 addresses.
-
-  juist network renumber [NETWORK] PREFIX        every device into PREFIX,
-                                                 at the same offset if free
-  juist network renumber [NETWORK] DEVICE ADDR   one device to ADDR; with
-                                                 --finish, retiring its old
-                                                 one now
-  juist network renumber [NETWORK] --finish      retire the old addresses now
-
-Old addresses keep working until --for from now; make that long enough for
-every device to come online once. Retired addresses stay reserved until a
-plain --finish, so that no other device takes them. Configuration outside
-juist that names old addresses is not changed.`}
+Move every device into PREFIX, at the same offset where free, or one device
+to ADDR. Old addresses keep working for the time --for gives; make that long enough for
+every device to come online once. --finish alone retires them now.
+Configuration outside juist is not changed.`}
 	fs := newFlags(s.name)
 	keep := longDuration(7 * 24 * time.Hour)
 	fs.Var(&keep, "for", "keep old addresses for `DURATION`, like 12h or 7d")
-	finish := fs.Bool("finish", false, "retire old addresses now; with DEVICE ADDR, only that device's")
+	finish := fs.Bool("finish", false, "retire old addresses now; with DEVICE ADDR, only its old one")
 	yes := fs.Bool("yes", false, "do not ask")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
@@ -245,14 +282,13 @@ juist that names old addresses is not changed.`}
 	}
 	switch {
 	case *finish && cliflag.IsSet(fs, "for"):
-		return fmt.Errorf("--finish takes no --for: it retires the old address now\n%s", s.usage(fs))
+		return a.usageErr("--finish cannot be used with --for")
 	case *finish && len(pos) == 1:
-		return fmt.Errorf("--finish takes DEVICE ADDR, or nothing\n%s", s.usage(fs))
+		return a.usageErr("--finish takes DEVICE ADDR or no argument")
 	case !*finish && len(pos) == 0:
-		return fmt.Errorf("missing PREFIX, or DEVICE ADDR\n%s", s.usage(fs))
-	}
-	if keep <= 0 {
-		return errors.New("--for must be positive")
+		return a.usageErr("missing PREFIX or DEVICE ADDR")
+	case keep <= 0:
+		return a.usageErr("--for must be positive")
 	}
 	auth, err := a.networkLog()
 	if err != nil {
@@ -276,17 +312,17 @@ func (a *app) renumberNetwork(auth *log.Authority, arg string, until uint64, yes
 	state := auth.State()
 	prefix, err := netip.ParsePrefix(arg)
 	if err != nil {
-		return fmt.Errorf("bad prefix %q (want e.g. 10.7.0.0/22; one device: renumber DEVICE ADDR)", arg)
+		return a.usageErr("%q is not a prefix such as 10.7.0.0/22", arg)
 	}
 	if err := types.ValidateV4Prefix(prefix); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	if numberedFrom(state, prefix) {
 		a.ok("unchanged: numbered from %v", prefix)
 		return nil
 	}
 	if room := usableHosts(prefix); room < uint64(len(state.Nodes())) {
-		return fmt.Errorf("%v fits %s, the network has %d", prefix, count(room, "device"), len(state.Nodes()))
+		return fmt.Errorf("%v has room for %s, but the network has %d", prefix, count(room, "device"), len(state.Nodes()))
 	}
 	history, err := a.addressHistory()
 	if err != nil {
@@ -307,8 +343,7 @@ func (a *app) renumberNetwork(auth *log.Authority, arg string, until uint64, yes
 		a.warn("%v overlaps %s here; traffic to both goes into the network", prefix, strings.Join(used, ", "))
 	}
 	if other := a.networkClaiming(prefix); other != "" {
-		a.warn("%v overlaps %s, which this device is in; one of the two would run here without IPv4",
-			prefix, other)
+		a.warn("%v overlaps %s, also on this device; one of them would run here without IPv4", prefix, other)
 	}
 	to := make(map[types.Identity]netip.Addr, len(addrs))
 	for _, m := range addrs {
@@ -340,21 +375,21 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 	name := displayMember(target)
 	addr, err := netip.ParseAddr(arg)
 	if err != nil || !addr.Is4() {
-		return fmt.Errorf("bad IPv4 address %q", arg)
+		return a.usageErr("%q is not an IPv4 address", arg)
 	}
 	r := state.V4Range()
 	if !r.Contains(addr) {
-		return fmt.Errorf("%v is outside the network's range %v", addr, r)
+		return fmt.Errorf("%v is outside the network (%v)", addr, r)
 	}
 	if addr == r.Addr() || addr == netipx.PrefixLastIP(r) {
-		return fmt.Errorf("%v is the first or last address of %v", addr, r)
+		return fmt.Errorf("%v cannot be the first or last address of %v", addr, r)
 	}
 	if target.V4 != nil && *target.V4 == addr {
 		now := a.now().Unix()
 		if r := target.Retiring; r.Live(now) {
 			a.ok("unchanged: %s at %v; its old %v works until %s", name, addr, r.Addr, deadline(r.Until))
 			if until == types.RetireAtOnce {
-				a.hint("juist network renumber --finish retires every old address now")
+				a.hint("to retire every old address now: juist network renumber --finish")
 			}
 			return nil
 		}
@@ -364,8 +399,12 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 	for _, n := range state.Nodes() {
 		switch {
 		case n.Identity == target.Identity || !slices.Contains(n.V4Addrs(), addr):
-		case n.Retiring != nil && n.Retiring.Addr == addr && !n.Retiring.Live(a.now().Unix()):
-			return fmt.Errorf("%v is held as %s's old address\nhint: juist network renumber --finish frees it",
+		case n.Retiring != nil && n.Retiring.Addr == addr && n.Retiring.Live(a.now().Unix()):
+			return fmt.Errorf("%v is the old address of %s until %s\nhint: to free it now: juist network renumber --finish",
+				addr, displayMember(n), deadline(n.Retiring.Until))
+		case n.Retiring != nil && n.Retiring.Addr == addr && state.Schema() >= types.SchemaTakeRetired:
+		case n.Retiring != nil && n.Retiring.Addr == addr:
+			return fmt.Errorf("%v is held as the old address of %s\nhint: to free it: juist network renumber --finish",
 				addr, displayMember(n))
 		default:
 			return fmt.Errorf("%v is taken by %s", addr, displayMember(n))
@@ -375,15 +414,15 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 	if err != nil {
 		return err
 	}
-	if g, held := givenOut(state, history)[addr]; held && g.id != target.Identity {
-		a.warn("%v was %s's; devices not yet told still send its traffic there", addr,
-			cmp.Or(g.name, g.id.ShortString()))
+	if g, held := givenOut(state, history)[addr]; held && g.ID != target.Identity {
+		a.warn("%v was used by %s; devices not told yet still send its traffic there", addr,
+			cmp.Or(g.Name, g.ID.ShortString()))
 	}
 	a.warnTransitionEnds([]types.NodeRecord{target}, map[types.Identity]netip.Addr{target.Identity: addr})
 	atOnce := until == types.RetireAtOnce && target.V4 != nil
 	if atOnce {
-		a.warn("connections to %s's %v end; devices not told yet reach %s over IPv6 only until they are", name,
-			*target.V4, name)
+		a.warn("connections to %v (%s) end; devices not told yet reach %s over IPv6 only until they are",
+			*target.V4, name, name)
 	}
 	question := fmt.Sprintf("give %s %v?", name, addr)
 	switch {
@@ -414,6 +453,7 @@ func (a *app) renumberDevice(auth *log.Authority, dev, arg string, until uint64,
 func (a *app) retireAddresses(auth *log.Authority, yes bool) error {
 	state := auth.State()
 	now := a.now().Unix()
+	free := state.Schema() >= types.SchemaTakeRetired
 	nodes := slices.DeleteFunc(state.Nodes(), func(n types.NodeRecord) bool { return n.Retiring == nil })
 	slices.SortFunc(nodes, func(x, y types.NodeRecord) int { return x.Retiring.Addr.Compare(y.Retiring.Addr) })
 	// What still works is retired; what works no more, but is held, is freed.
@@ -422,15 +462,15 @@ func (a *app) retireAddresses(auth *log.Authority, yes bool) error {
 		item := "the old range " + joinPrefixes(r.Prefixes)
 		if r.Live(now) {
 			live = append(live, item)
-		} else {
+		} else if !free {
 			held = append(held, item)
 		}
 	}
 	for _, n := range nodes {
-		item := fmt.Sprintf("%s's %v", displayMember(n), n.Retiring.Addr)
+		item := fmt.Sprintf("%v (%s)", n.Retiring.Addr, displayMember(n))
 		if n.Retiring.Live(now) {
 			live = append(live, item)
-		} else {
+		} else if !free {
 			held = append(held, item)
 		}
 	}
@@ -477,7 +517,7 @@ func (a *app) warnTransitionEnds(moving []types.NodeRecord, to map[types.Identit
 	var cut []string
 	for _, n := range moving {
 		if n.Retiring.Live(now) && to[n.Identity] != n.Retiring.Addr {
-			cut = append(cut, fmt.Sprintf("%s's %v", displayMember(n), n.Retiring.Addr))
+			cut = append(cut, fmt.Sprintf("%v (%s)", n.Retiring.Addr, displayMember(n)))
 		}
 	}
 	if len(cut) > 0 {
@@ -492,42 +532,7 @@ func numberedFrom(state *log.State, p netip.Prefix) bool {
 		!slices.ContainsFunc(state.Nodes(), func(n types.NodeRecord) bool { return n.V4 != nil && !p.Contains(*n.V4) })
 }
 
-// A grant is who a record gave an IPv4 address to.
-type grant struct {
-	id   types.Identity
-	name string
-}
-
-// givenOut maps every IPv4 address a member holds, or any record in history
-// gave out, to whom it went last. A device removed a moment ago still
-// believes it holds its address, and so do members that have not heard of
-// the removal yet; the same goes for an address a renumbering retired.
-func givenOut(state *log.State, history []types.AUM) map[netip.Addr]grant {
-	out := map[netip.Addr]grant{}
-	mark := func(nodes []types.NodeRecord) {
-		for _, n := range nodes {
-			for _, v4 := range n.V4Addrs() {
-				out[v4] = grant{n.Identity, n.Name}
-			}
-		}
-	}
-	for i := range history {
-		switch h := &history[i]; {
-		case h.Node != nil:
-			mark([]types.NodeRecord{*h.Node})
-		case h.State != nil:
-			mark(h.State.Nodes)
-		case h.Renumber != nil && h.Subject != nil && h.Renumber.V4 != nil:
-			out[*h.Renumber.V4] = grant{id: *h.Subject}
-		case h.Renumber != nil:
-			for _, e := range h.Renumber.Addrs {
-				out[e.V4] = grant{id: e.Identity}
-			}
-		}
-	}
-	mark(state.Nodes())
-	return out
-}
+type grant = govern.Grant
 
 // renumbered gives every member an address in prefix: the one it holds,
 // where that is in prefix already; else the one at its place in the range it
@@ -549,11 +554,11 @@ func renumbered(state *log.State, prefix netip.Prefix, history []types.AUM) ([]t
 		if _, done := given[n.Identity]; done || !ok || !prefix.Contains(v4) || v4 == prefix.Addr() || v4 == last {
 			return
 		}
-		if g, taken := held[v4]; taken && g.id != n.Identity {
+		if g, taken := held[v4]; taken && g.ID != n.Identity {
 			return
 		}
 		given[n.Identity] = v4
-		held[v4] = grant{id: n.Identity}
+		held[v4] = grant{ID: n.Identity}
 	}
 	for _, n := range nodes {
 		if n.V4 != nil {
@@ -645,4 +650,8 @@ func (a *app) addressHistory() ([]types.AUM, error) {
 		return nil, err
 	}
 	return append(slices.Clone(history), orphans...), nil
+}
+
+func givenOut(state *log.State, history []types.AUM) map[netip.Addr]grant {
+	return govern.GivenOut(state, history)
 }

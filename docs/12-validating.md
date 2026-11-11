@@ -31,6 +31,7 @@ every push:
 | a review round, after `make check` passed on the tree | `make ci-vm FAST=1` | 15 min |
 | a milestone, or the review round closing it, is done; before a release | `make ci-vm`, recorded under "The last privileged run" | 18 min |
 | where a milestone's criteria ask for it | `make test-freebsd`, `make repro-freebsd`, `make test-acme`, `make fuzz-long`, the hand tests on Fedora | — |
+| a change to `packaging/sysext.sh` or the SteamOS path of `install.sh` | [Check a Steam Deck](#check-a-steam-deck) in a SteamOS VM, recorded under "The last privileged run" | 40 min |
 | a change to `mobile` or `android/` | `make android-check`, with a JDK and the Android SDK; `make android-smoke` with the AVD `juist`; the app by hand in an emulator or on a phone | 3 min, 3 min |
 | a change to what a phone, or a peer of one, sends while idle: the pace, the checks, sync, the DHT | `make android-idle`, with the AVD `juist`, recorded under "The last privileged run" | 100 min |
 | a change to the website's CSS, scripts or layouts | `make -C website check test-browser`, with Chrome | 1 min |
@@ -236,6 +237,7 @@ interop`).
 | an overlapping instance yields IPv4, the same network twice does not start | `daemon`: `TestAnInstanceRunsWithoutIPv4WhereALowerOneHoldsIt`, `TestAnInstanceRefusesANetworkTheHostRunsAlready`, `TestTheLowerInstanceKeepsItsAddresses` | no |
 | the CLI finds, makes and removes instances | `cmd/juist`: `TestASecondNetworkRunsBesideTheFirst`, `TestJoiningASecondNetwork` | no |
 | each network's juistd runs as a user of its own, reading none of another's keys; an upgrade moves an instance's home out of the default's once, giving on only what was juist's, nothing that became a link or a file meanwhile; a purge removes an empty home alone | `make interop`: `TestLinuxAndFreeBSD/a_user_per_network`, `TestLinuxAndFreeBSDUpgraded`; `packaging`: `TestInstancesMoveOutOfTheDefaultsHome`, `TestARunningInstanceMovesOverTheHomeItsStopMade`, `TestAHomeSwappedForALinkIsGivenNothing`, `TestAPurgeKeepsAnInstancesHomeThatHoldsKeys`, `TestAnInstanceHomeMovesOnceAndFollowsNoLink`; `cmd/juistd`: `TestTheDaemonRunsAsItsInstancesUser` | qemu, and FreeBSD for the last but one |
+| on SteamOS, the install script takes the newest `.deb` its repository's signed index names, and refuses one without `sysext.sh`; the package becomes a system extension whose units start at boot, which an upgrade replaces and a removal takes away, keeping the device's keys, and which survives a SteamOS update | `packaging`: `TestASysextInstallUpgradesAndRemovesCleanly`, `TestASysextInstallTakesAnUnpackedJuistAlone`, `TestASysextBootStartsWhatIsEnabled`; [Check a Steam Deck](#check-a-steam-deck) | a SteamOS VM |
 | a local user who may not operate is shown no other member's name or identity, each by a pseudonym the same throughout one status | `ipc`: `TestAReaderSeesNoMembersNames`, `TestEveryStatusFieldIsClassifiedForReaders`; `cmd/juist`: `TestStatusVerboseNamesEachDevicesRelay` | no |
 | a renumbering keeps every pair reachable, the offline one included | `conn`: `TestNetnsRenumberingKeepsEveryPairReachable`; `trust/log`: `TestRejectsCollidingV4Address` | for the first |
 | a descriptor juistd is sent by its binder or plumber is taken only alone, in one whole message; every other that arrives is closed, before an unreadable message or in a truncated read too | `cmd/juistd`: `TestABindersExtraDescriptorsAreClosed` | no |
@@ -301,6 +303,7 @@ interop`).
 | nothing is signed unasked | `cmd/juist`: `TestAChangeWaitsOnTheOtherAdminDevice`, `TestAChangeThatExpiresWhileAskedIsNotSigned` | no |
 | a change sealed to its admins opens for no other key | `internal/waiting`: `TestAChangeOpensForItsAdminsAlone`; `trust/secrets`: `TestSealKeyToOpensForItsReaderAlone`; `trust/log`: `TestSetAdminRecipient`, `TestAGenesisRecipientIsSignedForByItsKey` | no |
 | a device moved at once is reached at its new address only, and other transitions run on | `cmd/juist`: `TestAMoveAtOnceReachesEveryDevice`, `TestMovingADeviceAtOnce`, `TestAMoveAtOnceReadsAsOne`, `TestHeldAddressesRead`, `TestStatusNamesTheDevicesNotYetMoved`; `daemon`: `TestAMovedDeviceMovesOntoItsNewAddressAtOnce`; `trust/log`: `TestRenumberNodeAtOnce` | no |
+| from schema 25 a retired old address or range is free: a move takes another member's retiring address and a subnet route a retiring range, ending their retirement in the same record; the CLI refuses either before the deadline and warns after it, `juist network` holds nothing, and an approval says what is taken; below schema 25 both stay held until a plain --finish | `trust/log`: `TestAMoveTakesARetiringAddressFromSchema25`, `TestARouteTakesARetiringRangeFromSchema25`; `cmd/juist`: `TestAnOldAddressIsFreeAfterItsDeadline`, `TestASubnetTakesTheOldRange`, `TestTakingAnOldAddressReadsAsSuch`, `TestHeldAddressesRead`, `TestAnOldAddressPastItsDeadline` | no |
 
 ### Exit nodes, subnet routers and DNS
 
@@ -362,12 +365,12 @@ interop`).
 | `juist names add` and `remove` take a name in its one form, never two devices' or the network's own, `grant` and `revoke` name them for a name or a subnet, and an approver reads what a change points where | `cmd/juist`: `TestNamesAddAndRemove`, `TestNameStates`, `TestASubnetFromAddToRemove`, `TestANamesChangeSaysWhatItPoints` | no |
 | members' names are answered from the log with the zone's SOA, a name the network lacks does not exist, and overrides are answered by address alone, their hints empty | `internal/names`: `TestMembersAreAnswered`, `TestOverridesAreAnswered`, `TestTheZoneIsItsAuthority`, `TestTheZonesNamesGoNowhereElse`, `TestLabels`; `internal/dnsfwd`: `TestAnAnswerOfItsOwnReachesNoResolver`, `TestTheHostIsHeldToNoSourcesRate` | no |
 | resolved routes the network's domain, the reverse zones of its prefixes (at most 16 a prefix, else the one holding it), and every name with an exit node, to juistd's resolver on an address the device holds, bound to it and answering the host alone, which asks the exit node, else the resolvers resolved would but its own link's; the domains are kept from DNSSEC validation; it is given back on close, and the status says why names do not resolve | `daemon`: `TestTheHostResolvesTheNetworksNames`, `TestNamesThatWillNotStartLeaveTheExitNode`, `TestNamesNotResolvedAreSaid`, `TestTheNamesServerIsBoundToTheDevice`, `TestTheNamesAddressIsOneTheDeviceHolds`, `TestWhatIsNotAnsweredGoesWhereTheHostRoutesIt`; `internal/names`: `TestReverseZonesHoldThePrefixAlone`; `internal/resolved`: `TestConfigureDomains`, `TestRouting`; `packaging`: `TestThePolkitRuleAllowsJuistsDNSAlone`; `cmd/juist`: `TestStatusSaysHowNamesResolve` | no |
-| a public name is resolved to its member only where the owner agreed, never by an exit node for a member that did not, which an exit node whose host's resolver does not ask juist's, as without resolved, asks of its own resolvers, while the view is fresh and the member reachable, and publicly otherwise; the word is kept and forgotten with the network, and the status lists each name and why it resolves publicly | `internal/names`: `TestOverridesAreAnswered`, `TestEDNSIsAnsweredInKind`, `TestOverridden`; `daemon`: `TestAPublicNameNeedsTheOwnersWord`, `TestAnExitNodeHandsNoOverrideOn`, `TestAnExitNodeWithoutNamesAsksTheHostsResolvers`, `TestAStaleViewAnswersNoPublicName`, `TestNoMemberNoNames`, `TestTheNamesWordIsKept`; `ipc`: `TestANamesRequestSetsAcceptingAlone`, `TestAReaderSeesNoPublicNames`; `cmd/juist`: `TestAcceptNames`, `TestStatusListsPublicNames`; `ipc`: `TestEachCommandTakesItsOwnFields` | no |
+| a public name is resolved to its member only where the owner agreed, never by an exit node for a member that did not, which an exit node whose host's resolver does not ask juist's, as without resolved, asks of its own resolvers, while the view is fresh and the member reachable, and publicly otherwise; the word is kept and forgotten with the network, and the status lists each name and why it resolves publicly | `internal/names`: `TestOverridesAreAnswered`, `TestEDNSIsAnsweredInKind`, `TestOverridden`; `daemon`: `TestAPublicNameNeedsTheOwnersWord`, `TestAnExitNodeHandsNoOverrideOn`, `TestAnExitNodeWithoutNamesAsksTheHostsResolvers`, `TestAStaleViewAnswersNoPublicName`, `TestNoMemberNoNames`, `TestTheNamesWordIsKept`; `ipc`: `TestANamesRequestSetsAcceptingAlone`, `TestAReaderSeesNoPublicNames`; `cmd/juist`: `TestAcceptNames`, `TestStatusListsPublicNames`; `ipc`: `TestEachCommandTakesItsOwnFields`; on a phone, by the app's switch, kept across a restart, each name listed with its member and why: `mobile`: `TestThePublicNamesSwitchIsTheOwnersWord`, `TestTheViewSaysWhyNamesAreNotResolved`; `android/app`: `CoreTest`, `JuistTest` | no |
 | with resolved, members resolve by name and their addresses to their names, a public name resolves to its member through the tunnel without the public resolver being asked, a name beside it publicly, and publicly again while the member is down and once revoked | `make interop`: `TestLinuxAndFreeBSD/names` | qemu |
 | a name for members alone and a policy naming a name are on 443 by TLS alone; a rule to names names nothing else and no port, a test one name | `types`: `TestNamesForMembersAlone`, `TestAPolicyMeansWhatItSays`, `TestAPolicyNamingNamesNeedsItsSchema`; `trust/log`: `TestNamesForMembers` | no |
 | a rule to a name lets its sources open its device on its port and the name alone there, which the device learns by name; a rule to the device's port is none to a name for members; the text reads back, and says what is wrong | `internal/policy`: `TestARuleToANameLetsItsSourcesOpenIt`, `TestNamesAreReadAsTheyMayBe` | no |
 | the ingress passes a name for members to the CA's validation alone, says so, and answers port 80 for it as for no name; the device takes it from the members it is for and from the ingress the CA's validation alone, and ends the connection of a member it is no longer for | `internal/ingress`: `TestANameForMembersPassesTheCAAlone`; `internal/terminator`: `TestANameForMembersIsTheirsAlone` | no |
-| juistd tells the terminator and the ingress names for members apart, with the members each is for, as the policy says; `juist publish add --members` keeps the mark, and `juist policy test` takes a name | `daemon`: `TestANameForMembersGoesToTheTerminatorApart`, `TestAnIngressIsToldANameForMembersApart`; `cmd/juist`: `TestPublishANameForMembersAlone`, `TestAPolicyNamesANameForMembers` | no |
+| juistd tells the terminator and the ingress names for members apart, with the members each is for, as the policy says; `juist publish --members` keeps the mark, and `juist policy test` takes a name | `daemon`: `TestANameForMembersGoesToTheTerminatorApart`, `TestAnIngressIsToldANameForMembersApart`; `cmd/juist`: `TestPublishANameForMembersAlone`, `TestAPolicyNamesANameForMembers` | no |
 | between hosts: the internet and the ingress itself through the tunnel are refused, and none of their hellos has the name's certificate ordered; Pebble issues it through the ingress on the hello of a member it is for, which opens it by it; east, which a rule names it for, opens it, west, which may open any port of lx's, does not | `make interop`: `TestLinuxAndFreeBSD/members_alone`, `TestLinuxAndFreeBSD/access_policy` | qemu |
 | a name made for members alone ends the connections others opened while it was public, at the ingress and the device, over TCP and QUIC, and a member it is no longer for loses its QUIC connection; a request for another Host is misdirected; sessions resume; a name for members alone shares no service another name or a share passes on as it is, however its address is spelled; the device itself is none of its members | `internal/terminator`: `TestANameMadeForMembersEndsWhatOthersOpened`, `TestHTTP3ForMembersAlone`, `TestAMemberNoLongerForANameLosesItsQUIC`, `TestARequestForAnotherNameIsMisdirected`, `TestATLSSessionIsResumed`; `internal/ingress`: `TestANameMadeForMembersEndsItsConnections`; `daemon`: `TestANameForMembersSharesNoServicePassedOnAsItIs`, `TestAServiceIsOneHoweverSpelledAndAShareSharesIt`, `TestANameForMembersGoesToTheTerminatorApart` | no |
 | a hello refused a name for members, over TCP or QUIC, has no certificate ordered; the member's does | `internal/terminator`: `TestARefusedHelloOrdersNoCertificate` | no |
@@ -382,10 +385,11 @@ interop`).
 | Claim | Where it is checked | Privileged |
 |---|---|---|
 | a published name is one label on a port, sorted and once; an ingress is neither voucher nor exit; a state publishes only under a domain of its own | `types`: `TestPublishedNameSets`, `TestAnIngressIsNothingElse`, `TestPublishedNamesNeedTheirDomain`, `TestEveryPayloadIsValidated` | no |
+| a published name may be a name of its own, published as it is, never for members alone, from schema 23; it is one member's, no name another's override holds, and outside the domain, which cannot move over it; the ingress, the terminator and members' resolution take it whole, not behind --proxy; an approval says members resolve it | `types`: `TestANameOfItsOwn`, `TestANameOfItsOwnIsOneMembers`; `trust/log`: `TestANameOfItsOwnNeedsSchema23`; `daemon`: `TestANameOfItsOwnIsServedAsItIs`; `cmd/juist`: `TestPublishANameOfItsOwn` | no |
 | a quorum sets the domain and publishes names, which survive reopening and a checkpoint; a name before the domain, the domain withdrawn under names, a label another publishes and a name both published and pointed at a member are refused, the domain's move included | `trust/log`: `TestPublishedNamesNeedTheDomain`, `TestPublishedNamesAreOneMembers`, `TestTheIngressRole`, `TestApplyLeavesItsParentUnchanged`, `TestStateCarriesEveryField` | no |
-| `juist network domain` and `juist publish` set and list what is published, `juist grant` an ingress, and an approver reads what a change publishes | `cmd/juist`: `TestPublishAddAndRemove`, `TestGrantAnIngress`, `TestAPublishChangeSaysWhatItPublishes`, `TestEveryKindIsDescribed` | no |
+| `juist network domain` and `juist publish` set and list what is published, `juist grant` an ingress, and an approver reads what a change publishes | `cmd/juist`: `TestPublishAndStop`, `TestGrantAnIngress`, `TestAPublishChangeSaysWhatItPublishes`, `TestEveryKindIsDescribed` | no |
 | a member takes from an ingress TCP to its own addresses on the ports it publishes and serves and log sync's, and replies to what it opened, nothing else, whatever the flags, the protocol or the address it serves; the engine's own hooks still run | `conn`: `TestTheConfinerKeepsAnIngressToItsPorts`, `TestTheConfinerCallsTheEnginesHooks`, `TestAnIngressReachesItsPortsAlone` | no |
-| an ingress is confined, and reaches the published port only once the operator agreed and while the view is fresh; the word is kept and goes with the network, and the status says what is served or why not | `daemon`: `TestAnIngressReachesWhatIsServedAlone`, `TestThePublishWordIsKept`; `ipc`: `TestEachCommandTakesItsOwnFields`, `TestEveryStatusFieldIsClassifiedForReaders`; `cmd/juist`: `TestPublishServe` | no |
+| an ingress is confined, and reaches the published port only once the operator agreed and while the view is fresh; the word is kept and goes with the network, and the status says what is served or why not | `daemon`: `TestAnIngressReachesWhatIsServedAlone`, `TestThePublishWordIsKept`; `ipc`: `TestEachCommandTakesItsOwnFields`, `TestEveryStatusFieldIsClassifiedForReaders`; `cmd/juist`: `TestServingANamePublishedHere` | no |
 | the user juist-ingress may ask what is published and nothing else, from a pool of its own; an ingress is told every published name and where it goes, and nothing once it is no ingress or stale; it reads a reply of a newer juistd | `daemon`: `TestTheIngressAsksWhatIsPublishedAlone`, `TestReadersCannotCrowdOutTheIngress`, `TestAnIngressServesWhatIsPublishedWhileFresh`; `ipc`: `TestTheIngressReadsAReplyOfANewerJuistd`, `FuzzDecodePublished` | no |
 | an ingress passes a connection for a published name to its target untouched, its ClientHello first and a PROXY v2 header where asked, past an address that does not answer; a name not published reaches nothing; HTTP redirects a served name to https alone; a silent juistd takes the names down after two asks, and a client that says nothing is let go | `internal/ingress`: `TestTheIngressSplicesByServerName`, `TestTheIngressSaysWhoTheClientIs`, `TestTheIngressRedirectsToHTTPS`, `TestASilentJuistdPublishesNothing`, `TestAClientThatSaysNothingIsLetGo` | no |
 | the ingress logs each connection with its client, name, outcome, bytes each way and duration, and each request on port 80 with its path and User-Agent, quoted | `internal/ingress`: `TestTheIngressLogsEachConnection` | no |
@@ -393,9 +397,9 @@ interop`).
 | flows this node opened to confined peers are bounded per address and in all; one peer's churn evicts its own flows, never another's, and a peer no longer confined leaves none behind | `conn`: `TestOnePeersFlowsEvictNoOthers` | no |
 | between hosts, from the packages: an ingress serves a name a member publishes once the member's operator agrees, redirects HTTP to it, and reaches nothing else of that member's; a withdrawn name reaches nothing; the package's removal stops the ingress and leaves its user | `make interop`: `TestLinuxAndFreeBSD/ingress`, `TestLinuxAndFreeBSD/removal` | qemu |
 | TLS ends at the target for a name served alone, the plain connection reaching the local service; the CA's challenge goes no further; ALPN is offered for it alone; a PROXY header is believed from an ingress alone and passed on; what is served no longer is listened for no longer, and a port another program holds is said | `internal/terminator`: `TestTheTerminatorEndsTLSForWhatItServes`, `TestTheChallengeStopsHere`, `TestTheServiceLearnsTheClientFromAnIngress`, `TestTheTerminatorListensWhereItServes`; `internal/proxyproto`: `TestAHeaderReadsBack`, `TestABadHeaderIsRefused` | no |
-| the terminator is told what this device serves and where it goes, on its own addresses, nothing without the word or while stale; it may ask nothing else; where to is kept apart from the word, added to and taken from one name at a time; `juist publish add NAME HOST:PORT` starts it; members resolve a name published on 443 to a target that serves it | `daemon`: `TestATerminatorIsToldWhereNamesGo`, `TestWhereToServeIsKept`, `TestWhereToServeMovesOutOfTheWord`, `TestTheTerminatorAsksWhatItServesAlone`, `TestMembersReachAPublishedNameDirectly`; `ipc`: `TestAPublishRequestNamesWhereTo`; `cmd/juist`: `TestPublishAddEndsTLS`; `packaging`: `TestServeScriptStartsAndStops`, `TestARemovalStopsTheIngress` | no |
+| the terminator is told what this device serves and where it goes, on its own addresses, nothing without the word or while stale; it may ask nothing else; where to is kept apart from the word, added to and taken from one name at a time; `juist publish NAME HOST:PORT` starts it; members resolve a name published on 443 to a target that serves it | `daemon`: `TestATerminatorIsToldWhereNamesGo`, `TestWhereToServeIsKept`, `TestWhereToServeMovesOutOfTheWord`, `TestTheTerminatorAsksWhatItServesAlone`, `TestMembersReachAPublishedNameDirectly`; `ipc`: `TestAPublishRequestNamesWhereTo`; `cmd/juist`: `TestPublishingHereEndsTLS`; `packaging`: `TestServeScriptStartsAndStops`, `TestARemovalStopsTheIngress` | no |
 | with Pebble as the CA, the terminator takes a certificate by TLS-ALPN-01, answering the challenge itself, which a client trusting Pebble's root alone takes, and tells juistd the account and the CA's name for itself | `make test-acme`: `internal/terminator`: `TestACertificateFromPebble` | no |
-| the CAA record: the account key is autocert's own; a terminator's account reaches juistd only where it fits a record as it is; the status holds a record for each name whose TLS juist ends, and `juist publish add` and `serve` print them | `internal/terminator`: `TestTheAccountKeyIsAutocertsOwn`; `ipc`: `TestAServingRequestCarriesAnAccountThatFitsCAA`; `daemon`: `TestTheStatusHoldsTheCAARecords`; `cmd/juist`: `TestPublishAddEndsTLS` | no |
+| the CAA record: the account key is autocert's own; a terminator's account reaches juistd only where it fits a record as it is; the status holds a record for each name whose TLS juist ends, and `juist publish NAME` prints them | `internal/terminator`: `TestTheAccountKeyIsAutocertsOwn`; `ipc`: `TestAServingRequestCarriesAnAccountThatFitsCAA`; `daemon`: `TestTheStatusHoldsTheCAARecords`; `cmd/juist`: `TestPublishingHereEndsTLS` | no |
 | FreeBSD's helpers: the terminator's root parent listens where juistd says this device serves and nowhere else, and hands it the listener; a helper started as root drops to its user for good; the rc.d scripts run juistd as the helpers on the default socket and stop them; libexec's scripts are executable | `cmd/juistd`: `TestTheBinderListensWhereNamesAreServed`, `TestAHelperDropsRoot`; `packaging`: `TestTheHelpersRCScriptsRunThem`; `packaging/freebsd/mkpkg`: `TestModesAndMistakes` | root, the rc.d one FreeBSD |
 | `juist invite --service NAME` admits a service member publishing NAME, under the domain alone and with no other role, and the approval says what it publishes | `cmd/juist`: `TestInviteAServiceMember` | no |
 | the service member's image: what docker load takes, the same bytes twice, its binaries runnable and its home its user's | `packaging/image/mkimage`: `TestTheImageLoads` | no |
@@ -423,7 +427,7 @@ interop`).
 | a status page target says what the public sees and is no HOST:PORT; a member is known by its address alone; the terminator reads a newer juistd's page and its refusal | `ipc`: `TestAStatusPageTargetSaysWhatThePublicSees`, `TestAStatusPageKnowsItsMembers`, `TestTheTerminatorReadsAStatusPage`, `TestAPublishRequestNamesWhereTo` | no |
 | the terminator is told the status page only where its operator serves one, its members every member's addresses but an ingress's, its changes the log's newest; no reader is told | `daemon`: `TestTheTerminatorIsToldTheStatusPage`; `internal/changelog`: `TestEveryKindIsNamed` | no |
 | a member sees the whole page, the public what `--public` says, a page for members alone 404 with its assets; a forged PROXY header from an ingress is the public still; what it shows is escaped, juistd asked once a moment, and its silence said | `internal/statuspage`: `TestWhatAClientSees`, `TestThePageSaysWhoseViewItIs`, `TestThePageEscapesWhatItShows`, `TestThePageServesItsAssetsAndNothingElse`, `TestJuistdIsAskedOnceAMoment`; `internal/terminator`: `TestTheStatusPageKnowsAMemberByItsAddress` | no |
-| `juist publish status-page` publishes the page as a name whose TLS juist ends, says what the public sees, changes it, and takes it down | `cmd/juist`: `TestPublishTheStatusPage` | no |
+| `juist publish NAME status-page` publishes the page as a name whose TLS juist ends, says what the public sees, changes it, and takes it down | `cmd/juist`: `TestPublishTheStatusPage` | no |
 | plain HTTP to an address a name is served on is redirected to https, for names served there alone; port 80 held by another program is told juistd, warned of by `juist status` and the page; the FreeBSD binder listens on port 80 where a name is served; the page sends HSTS | `internal/terminator`: `TestPlainHTTPIsRedirected`; `cmd/juist`: `TestTheStatusWarnsOfPort80HeldByAnother`; `cmd/juistd`: `TestTheBinderListensWhereNamesAreServed`; `internal/statuspage`: `TestWhatAClientSees`, `TestThePageServesItsAssetsAndNothingElse` | no |
 | the log: an admission publishes under the domain alone, a published name fits DNS, a label is published once, and an ingress publishes nothing on 80 or 443 | `trust/log`: `TestAnAdmissionPublishesUnderTheDomainAlone`, `TestAPublishedNameFitsDNS`, `TestALabelIsPublishedOnce`, `TestAnIngressPublishesNothingOnItsOwnPorts` | no |
 | the helpers: a quiet client gives its slot back, a host holds a few connections, a withdrawn name or a stale view ends the connections for it, a juistd that hangs takes the names down within two polls, the redirect lets idle clients go, the ingress says juistd is gone, a failed listener is listened for again, a closed network stack ends its listeners and listens on its own addresses alone, and the ingress and the terminator each keep a slot | `internal/ingress`: `TestAQuietClientGivesItsSlotBack`, `TestAHostHoldsAFewConnections`, `TestAWithdrawnNameEndsItsConnections`, `TestAJuistdThatHangsPublishesNothing`, `TestTheRedirectLetsAnIdleClientGo`; `internal/terminator`: `TestANameNoLongerServedEndsItsConnections`, `TestAJuistdThatHangsEndsServing`, `TestAFailedListenerIsListenedAgain`; `internal/netstack`: `TestClosingTheDeviceEndsItsListeners`, `TestTheStackListensOnItsAddressesAlone`; `daemon`: `TestOneHelperCannotCrowdOutTheOther`, `TestAnIngressReachesWhatIsServedAlone`; `cmd/juistd`: `TestTheIngressSaysJuistdIsGone` | no |
@@ -431,19 +435,19 @@ interop`).
 | the daemon: a share's end ends that share alone, a restarted share leaves another's, a look at what is published changes nothing, an expired device's helpers are told nothing, and the status says where the terminator listens and where another program holds the port | `daemon`: `TestAShareEndsItselfAlone`, `TestARestartedShareLeavesAnothers`, `TestPublishedHasNoSideEffectsAndExpiryEndsServing`, `TestTheStatusSaysWhereTheTerminatorListens` | no |
 | the helpers: the binder answers each request alone, however many came before and however late, binds no address another program listens on, and its terminator hears it go; the terminator says where it listens; a connection idles only both ways at once | `cmd/juistd`: `TestTheBinderAnswersEachRequestAlone`, `TestTheTerminatorHearsItsParentGo`; `internal/terminator`: `TestTheTerminatorSaysWhereItListens`; `internal/pipe`: `TestJoinIdlesBothWaysAtOnce` | no |
 | the CLI: what the terminator says decides whether TLS ends where a name is published; a share keeps its terminator; a taken label is said before anything is asked | `cmd/juist`: `TestTheTerminatorsWordDecides`, `TestAShareKeepsItsTerminator`, `TestATakenLabelIsSaidAtOnce` | no |
-| a name behind `--proxy` is not resolved to its device; the domain itself is answered with its device's address through the reachability check; the status names the public domain; `juist network domain` warns that every member resolves it through juistd; `juistd --serve @=ADDR` serves the domain itself | `daemon`: `TestMembersReachAPublishedNameDirectly`, `TestTheDomainGoesToJuistdWhole`, `TestTheStatusNamesThePublicDomain`; `cmd/juist`: `TestTheNamesLineNamesTheNames`, `TestPublishAddAndRemove`; `ipc`: `TestAReaderSeesNoPublicNames`; `cmd/juistd`: `TestServeMakesAServiceMember` | no |
+| a name behind `--proxy` is not resolved to its device; the domain itself is answered with its device's address through the reachability check; the status names the public domain; `juist network domain` warns that every member resolves it through juistd; `juistd --serve @=ADDR` serves the domain itself | `daemon`: `TestMembersReachAPublishedNameDirectly`, `TestTheDomainGoesToJuistdWhole`, `TestTheStatusNamesThePublicDomain`; `cmd/juist`: `TestTheNamesLineNamesTheNames`, `TestPublishAndStop`; `ipc`: `TestAReaderSeesNoPublicNames`; `cmd/juistd`: `TestServeMakesAServiceMember` | no |
 | the CLI waits for a terminator it just started by what juistd says then, and a terminator that stops says so, so the status counts it down at once; the terminator orders no certificate for a name it no longer serves; the ingress lets go a client that does not answer its target's hello within a minute, bounds a site's connections and port 80's by source, and redirects by the path alone; a spliced connection whose source fails ends both ways, one that cannot write leaves the other way to finish, on FreeBSD too; the confiner takes echo replies and ICMP errors on what this node opened, and ends a TCP flow at an RST, or a minute after FINs both ways; the RPM owns `/usr/lib/juist`, and both packages recommend polkit; `juist grant` names the role that excludes the one granted | `cmd/juist`: `TestAStartedTerminatorIsWaitedFor`, `TestARoleThatExcludesAnotherIsSaid`, `TestGrantAnIngress`; `internal/terminator`: `TestANameNotServedIsNotOrdered`, `TestATerminatorSaysItStops`; `daemon`: `TestTheStatusSaysWhereTheTerminatorListens`; `internal/ingress`: `TestAClientThatStopsAfterItsHelloIsLetGo`, `TestTheRedirectNamesItsHostAndBoundsASource`; `internal/pipe`: `TestSourcesBoundHostsAndSites`, `TestAFailedWayEndsBoth`, `TestAWayThatCannotWriteLetsTheOtherFinish`; `conn`: `TestAConfinedPeerAnswersPingsAndErrors`, `TestAConfinedFlowEndsWithItsConnection`; `packaging`: `TestTheRPMOwnsItsDirectories`, `TestThePackagesRecommendPolkit` | no |
-| where firewalld keeps the port a device serves on from arriving on its juist device, `juist share`, `juist publish add` and `serve` say so, with the command that puts the device in the trusted zone, and say nothing where it lets the port in; an interface counts as blocked as log sync's check counts it | `cmd/juist`: `TestAFirewallKeepingOutWhatIsServedIsSaid`; `internal/firewalld`: `TestBlocksAsksFirewalldOnTheSystemBus`, `TestAZoneWhosePortsCannotBeAskedCountsAsFirewalled` | no |
+| where firewalld keeps the port a device serves on from arriving on its juist device, `juist share` and `juist publish NAME` say so, with the command that puts the device in the trusted zone, and say nothing where it lets the port in; an interface counts as blocked as log sync's check counts it | `cmd/juist`: `TestAFirewallKeepingOutWhatIsServedIsSaid`; `internal/firewalld`: `TestBlocksAsksFirewalldOnTheSystemBus`, `TestAZoneWhosePortsCannotBeAskedCountsAsFirewalled` | no |
 | a public TCP port is one name's, off 80, 443, juist's own ports and those an ingress's own names go to | `types`: `TestNamesPublishedByTCP`, `TestTheIngressHoldsThePublicPorts`; `trust/log`: `TestNamesPublishedByTCP` | no |
 | every ingress holds each public port, passes TCP at once, with a PROXY header where asked, within the bounds, and closes a port withdrawn | `internal/ingress`: `tcp_test.go`; `make interop`: `TestLinuxAndFreeBSD/TCP` | qemu, for the last |
 | the terminator passes a name by TCP on unread, from an ingress's header where asked | `internal/terminator`: `tcp_test.go` | no |
 | the firewall follows the public ports while the ingress runs, one run at a time, its own rules noted and others' left; it lets in those alone the ingress listens on, never one another program holds, and juistd's restart leaves them | `packaging`: `TestIngressScriptFollowsThePorts`, `TestIngressScriptRunsOneAtATime`; `daemon`: `TestTheIngressPortsFollowTheLog`, `TestTheFirewallLetsInWhatTheIngressHolds`; by hand on Fedora and Ubuntu | no |
-| `juist publish add … --tcp`, its approval, the status and the listings | `cmd/juist`: `tcp_test.go` | no |
+| `juist publish … --tcp`, its approval, the status and the listings | `cmd/juist`: `tcp_test.go` | no |
 | the Initial packets of versions 1 and 2 read by the keys their DCID gives, coalesced ones of one connection alone, the ClientHello reassembled out of order and over datagrams within its bounds, and the header IDs read without keys | `internal/quicinitial`: `quicinitial_test.go`, `FuzzParse`, `FuzzHello` | no |
 | the ingress passes QUIC by the name the Initials ask for and no datagram for another; keeps nothing of what does not parse; drops a client's PROXY header; passes three times what an unproven client sent until the terminator says, naming the client, it is proven; bounds unproven flows by host, the oldest giving way past the bound in all, one without a target first, ends them after twice the hello timeout and logs them once a second; carries connections from one socket to the same target, eight live at most and any number one after another, refuses one to another target and any past the rate of new flows; ends a flow once the terminator says its connections ended, a withdrawn name's and a quiet one's; takes 443/udp once free, telling juistd meanwhile | `internal/ingress`: `quic_test.go` | no |
 | the terminator ends QUIC for names offered HTTP/3 alone, proxies them as HTTP/1.1 or h2c over QUIC and TCP with `Alt-Svc`, tells an ingress, naming the client, that it completed its handshake and that its connection ended, believes a header from an ingress alone, counts QUIC against its bound, gives each client connection its own proxy, gone with it, the idle connections of others giving way past a service's bound, passes upgrades, takes headers of 64 KiB without a client's naming one, and ends a withdrawn name's QUIC | `internal/terminator`: `quic_test.go`, `proxy_test.go` | no |
 | a member lets an ingress send UDP to the ports of names offered HTTP/3 alone, and later fragments to itself; a reply from such a port opens nothing | `conn`: `TestTheConfinerKeepsAnIngressToItsPorts`, `TestFragmentsOfAConfinedPeersDatagramPass`, `TestAQUICReplyOpensNothing`; `daemon`: `TestAnIngressSendsQUICToNamesOfferedHTTP3Alone` | no |
-| `juist publish add … --http3`, the HTTPS record it prints, and the hint that a name with records of its own needs its own addresses; the ingress's status says 443/udp, or that another program holds it | `cmd/juist`: `TestPublishAddOffersHTTP3`, `TestPublishAddEndsTLS`, `TestTheIngressSummaryNamesItsPorts`; `daemon`: `TestTheStatusSaysTheIngressPorts` | no |
+| `juist publish … --http3`, the HTTPS record it prints, and the hint that a name with records of its own needs its own addresses; the ingress's status says 443/udp, or that another program holds it | `cmd/juist`: `TestPublishingOffersHTTP3`, `TestPublishingHereEndsTLS`, `TestTheIngressSummaryNamesItsPorts`; `daemon`: `TestTheStatusSaysTheIngressPorts` | no |
 | between hosts: Chrome fetches a name on lx over HTTP/3 through fb, and over HTTP/2 where 443/udp is not forwarded | `make interop`: `TestLinuxAndFreeBSD/HTTP/3` | qemu |
 
 ### The access policy
@@ -533,9 +537,27 @@ The latest `make ci-vm` that closed a milestone, and the latest run of each
 gate it does not cover. Replace an entry when its gate runs again, so it is
 clear how old the evidence is.
 
-- **`make ci-vm`, 2026-11-02, fix release 0.25.6**, at M25.6 (M25
-  review 9 with the trademark commits, no M26): every stage passed in
-  35m42s (`20261102-223919-M25.6`), the lab in 32m44s.
+- **Check a Steam Deck, 2026-11-08**, the commit of `sysext.sh`, in KVM
+  from Valve's recovery image 20260707.10 (SteamOS 3.8.14, systemd 257):
+  the stable repository's 0.26.2 was refused for want of `sysext.sh`, its
+  index's signature checked; the test repository's build installed, made
+  `juist0` and resolved its name through resolved, came back after a
+  reboot and an upgrade, and removed cleanly. Two such VMs on one LAN
+  joined by code and pinged each other by name, directly. On a full A/B
+  install, `steamos-update` to 20261023.100 (SteamOS 3.9.5, systemd 261)
+  kept the extension merged, juistd started at boot, its node ID, network
+  and addresses, the `juist` user and `juist0` in the trusted zone.
+- **`make ci-vm`, 2026-11-09, at M28** (M28's closing review rounds,
+  before M28 done): every stage passed, one after another rather than
+  beside each other, since homeserver had 13 GiB free: `vm,check` in
+  12m37s (`20261109-214600-M28`), the lab's normal and upgrade
+  runs in 28m54s (`20261109-215838-M28`), the builds in 4m16s
+  (`20261109-222732-M28`). `make android-smoke` ran apart, on
+  2026-11-10 at M28 (M28 and this record), once the AVD `juist`
+  was wiped of a screen lock nobody recorded: the phone joined, resolved,
+  reached and was reached. Earlier tries that day failed on a stream stalled 6.4 s after a
+  renumbering and on two timing tests under `-race` while the host's load
+  stood near 10; each passed on the next run with no change to its code.
 - **Pair-key recovery (M25 review 9), 2026-11-01, at 66409ed**:
   `make ci-vm STAGES=check,lab` passed in 35m5s
   (`20261101-190014-66409ed59c3f`), the lab's normal and upgrade runs
@@ -885,7 +907,7 @@ a LAN. From an admin device:
 juist network domain pub.example.org  # warning: every member then resolves pub.example.org through juistd …
 juist grant vps ingress               # hint: on vps, juist ingress serve
 juist grant laptop publish            # for juist share
-juist publish add nas immich          # on nas's port 443, once nas's operator agrees
+juist publish immich --on nas         # on nas's port 443, once nas's operator agrees
 ```
 
 On the ingress:
@@ -900,7 +922,7 @@ sudo ufw status                       # Debian and Ubuntu: juist-ingress allowed
 On the target, nas, as its operator, and then from outside the network:
 
 ```sh
-juist publish add immich 127.0.0.1:2283   # "ending TLS for immich.pub.example.org to 127.0.0.1:2283"
+juist publish immich 2283                 # "ending TLS for immich.pub.example.org to 127.0.0.1:2283"
 juist status                              # Published …; Names home.juist, pub.example.org
 curl -sI https://immich.pub.example.org   # the service, with a certificate from Let's Encrypt
 curl -sI http://immich.pub.example.org    # 308 to https
@@ -1005,6 +1027,34 @@ of a pipe close, and daemon(8) starts both again, the new helper destroying
 the device left behind; `kill -9` of the daemon has the helper destroy it at
 once, and daemon(8) likewise starts both again.
 
+## Check a Steam Deck
+
+In KVM, from Valve's recovery image
+(`steamdeck-images.steamos.cloud/recovery/steamdeck-repair-latest.img.bz2`),
+booted as the VM's NVMe. Its `deck` has no password and sshd is off: before
+the first boot, write into its var partition's `lib/overlays/etc/upper` an
+`sshd.service` link in `systemd/system/multi-user.target.wants` and a
+sudoers drop-in, and into its home partition `deck/.ssh/authorized_keys`
+(`debugfs -w` edits the ext4 partitions without root). A full install, for
+the update, is the recovery script `~/tools/repair_device.sh all` run from
+the image onto a second, empty NVMe, with `NOPROMPT=1`, stubs in
+`~/jupiter-bios` and `~/jupiter-controller-fw`, and `sanitize_all` taken
+out; the new disk boots slot B, whose var partition needs the same files,
+listed in an `/etc/atomic-update.conf.d` file so that the update keeps them.
+
+```sh
+curl -fsSL http://10.0.2.2:PORT/install.sh | JUIST_REPO=http://10.0.2.2:PORT/REPO sh
+systemd-sysext status; ls -l /var/lib/extensions   # juist on /usr; juist.raw, about 40 MB of /var's 230
+juist create lab; getent ahosts steamdeck.lab.juist   # juist0, the name through resolved
+sudo reboot                                        # juistd runs again, by juist-sysext.service
+sudo steamos-update && sudo reboot                 # the other slot: the same, and the same node ID
+sudo /usr/lib/juist/sysext.sh uninstall            # no juist.raw, no juist unit, no juist0
+```
+
+`REPO` is a flat apt repository the deb of the tree under test is in, its
+`Release` signed by a key of the test's, served from the host. The
+repository's own still lacks `sysext.sh` until the release that brings it.
+
 ## Measure an idle phone
 
 `make android-idle` measures the app in the Android emulator, the AVD
@@ -1070,6 +1120,23 @@ exit serve --stop` there, the app says it is refused and other names fail
 at once. Stopping the VPN
 gives the phone its own DNS back: `example.org` resolves, `a.names.juist`
 does not.
+
+## Reach an app on a phone
+
+M28's exit criterion (4). In a fresh AVD (`avdmanager create avd -k
+"system-images;android-36;default;x86_64" -d pixel_7`, no screen lock, since
+a locked user resolves no activity), beside a juistd `a` on this host that
+creates the network and relays, and a juistd with a device of its own in a
+container of docker-vm (`--cap-add NET_ADMIN --device /dev/net/tun`, joined
+by `juistd --join LINK`), the phone joined by a link. Then:
+
+```sh
+adb shell "su shell toybox nc -l -p 8080" &           # a listener as an ordinary uid
+echo hi | docker exec -i box nc -w 5 -N PHONE_V4 8080  # the phone prints hi
+echo hi | docker exec -i box nc -w 5 -N PHONE_V6 8081  # as above, on 8081
+```
+
+Passed on 2026-11-08 at M27.1, both addresses.
 
 ## Reading a failure in the NAT matrix
 

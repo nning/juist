@@ -12,29 +12,33 @@ Du brauchst eine Domain und einen Ingress, wie sie
 [Dienste veröffentlichen]({{< relref "docs/publishing" >}}#setting-it-up)
 einrichtet.
 
-{{< step on="dem Gerät eines Admins" >}}
-```sh
-juist publish add nas mc 25565 --tcp
+Auf dem NAS, als dessen [Operator]({{< relref "docs/operator" >}}):
+
+```sh {device="nas"}
+juist publish mc 25565 --tcp
 ```
 
-Das veröffentlicht Port 25565 von nas auf Port 25565 jedes Ingress, als
-`mc.example.org`, und gibt `nas: publishes mc.example.org:25565/tcp` aus.
-`--tcp=PORT` wählt einen anderen öffentlichen Port:
-`juist publish add nas ssh 22 --tcp=2222` gibt
+Das veröffentlicht den Minecraft-Server auf Port 25565 des NAS auf Port 25565
+jedes Ingress, als `mc.example.org`. Die Ausgabe lautet
+`nas: publishes mc.example.org:25565/tcp` und
+`passing mc.example.org to 127.0.0.1:25565`. `--tcp=PORT` wählt einen anderen
+öffentlichen Port: `juist publish ssh 22 --tcp=2222` veröffentlicht den
+SSH-Zugang des NAS als `ssh.example.org:2222/tcp`. Hat das NAS keinen
+Admin-Schlüssel, nennt der Befehl den Befehl für einen Admin, wie bei
+[jedem Namen]({{< relref "docs/publishing" >}}#who-publishes).
+
+Ein Dienst, der auf allen Adressen lauscht, auch auf den Overlay-Adressen,
+nimmt seine Verbindungen dort selbst an. Dann veröffentlicht ein Admin den
+Port des Geräts mit `--on`, und der Operator des NAS bedient ihn, so wie er
+ist:
+
+```sh
+juist publish mc 25565 --tcp --on nas   # auf dem Gerät eines Admins
+juist publish mc                        # auf nas
+```
+
+`juist publish ssh 22 --tcp=2222 --on nas` gibt
 `ssh.example.org:2222/tcp to 22` aus.
-{{< /step >}}
-
-{{< step on="nas" as="dem Ziel" >}}
-Lauscht der Dienst auf allen Adressen, stimmt sein Operator mit
-`juist publish serve` zu. Lauscht er nur auf Loopback, veröffentlichst du ihn
-auf dem Gerät:
-
-```sh
-juist publish add mc 127.0.0.1:25565 --tcp
-```
-
-Der Befehl gibt `passing mc.example.org to 127.0.0.1:25565` aus.
-{{< /step >}}
 
 Spieler verbinden sich mit `mc.example.org:25565`. Jeder Ingress lauscht auf
 dem Port, solange ein Name darauf veröffentlicht ist. Unter Linux öffnet der
@@ -72,5 +76,5 @@ sehen darf.
 
 | Du siehst | Was zu tun ist |
 |---|---|
-| `another program holds port 25565 on …, where juist would pass NAME by TCP` | Der Dienst lauscht auf allen Adressen, auch auf den Overlay-Adressen. Veröffentliche stattdessen seinen Port, wie der Hinweis sagt, und stimm mit `juist publish serve` zu. |
+| `another program holds port 25565 on …, needed for NAME` | Der Dienst lauscht auf allen Adressen, auch auf den Overlay-Adressen. Veröffentliche stattdessen den Port des Geräts, wie der Hinweis sagt, und bediene ihn mit `juist publish NAME` auf dem Gerät. |
 | auf vps, `juist status`: `Ingress` zeigt `…; another program holds port 22` | Ein Programm auf dem Ingress, oft sshd, belegt einen veröffentlichten Port. juist überlässt ihm den Port. Veröffentliche den Namen mit `--tcp=PORT` auf einem anderen Port. |

@@ -25,24 +25,18 @@ ihn beim Ausstellen des Zertifikats prüft.
 
 ## Einrichten
 
-{{< step on="dem Gerät eines Admins" >}}
-Veröffentliche den Namen nur für Mitglieder:
+{{< step on="tools" as="dem Ziel" >}}
+Veröffentliche das Wiki auf Port 3000 nur für Mitglieder:
 
 ```sh
-juist publish add tools wiki --members
+juist publish wiki 3000 --members
 ```
 
 Die Ausgabe lautet `tools: publishes wiki.example.org:443 (members)`.
-{{< /step >}}
-
-{{< step on="tools" as="dem Ziel" >}}
-Leg fest, wohin die entschlüsselten Verbindungen gehen, und markiere den
-Dienst als nur für Mitglieder, damit juist ihm nie einen öffentlichen Namen
-schickt:
-
-```sh
-juist publish add wiki 127.0.0.1:3000 --members
-```
+`--members` markiert auch den Dienst selbst als nur für Mitglieder, damit
+juist ihm nie einen öffentlichen Namen schickt. Hat tools keinen
+Admin-Schlüssel, nennt der Befehl, was ein Admin auf seinem eigenen Gerät
+ausführt: `juist publish wiki --members --on tools`.
 {{< /step >}}
 
 {{< step on="dem Gerät eines Admins" >}}

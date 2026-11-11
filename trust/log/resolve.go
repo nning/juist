@@ -18,9 +18,8 @@ type resolution struct {
 	// copies are the copies of the chain's records that have several.
 	copies []types.Hash
 
-	// listed is every member the chain named from the anchor on, with the
-	// signing key it last had: at most the anchor's members and one per
-	// record.
+	// listed is every member the chain named from the anchor on, with its
+	// last signing key.
 	listed map[types.Identity]types.SigningKey
 
 	// tooNew is set when the walk stopped at an authorized schema upgrade
@@ -31,10 +30,10 @@ type resolution struct {
 	disabled *DisabledError
 }
 
-// resolve computes the active chain and the branches off it. It is a pure
-// function of the records reachable from the anchor — no clock, no randomness,
-// no dependence on arrival or storage order — which is what makes two nodes
-// holding the same records reach the same state.
+// resolve computes the active chain and the branches off it. It must stay a
+// pure function of the records reachable from the anchor (no clock, no
+// randomness, no arrival or storage order), so nodes holding the same records
+// reach the same state.
 func resolve(st reader, anchor types.Hash) (*resolution, error) {
 	r := reader(hashOrdered{st})
 	anchorAUM, err := r.AUM(anchor)
@@ -62,8 +61,7 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 			anchor, anchorAUM.Kind)
 	}
 
-	// The anchor stands for its content: what hangs from any copy of it is on
-	// its chain.
+	// What hangs from any copy of the anchor is on its chain.
 	anchors, err := anchorCopies(r, anchor, &anchorAUM)
 	if err != nil {
 		return nil, err
@@ -85,8 +83,8 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 			res.listed[id] = *n.Signing
 		}
 	}
-	// A branch is recorded with the state it forks from; the state it is
-	// probed against is the chain's, which is not known until the walk below.
+	// Branches are probed against the chain's final state, known only after
+	// the walk.
 	type pendingOrphan struct {
 		root   candidate
 		branch *State
@@ -122,13 +120,9 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 		if err != nil {
 			var tooNew *SchemaTooNewError
 			if errors.As(err, &tooNew) {
-				// The chain ends here for this build. The record itself is
-				// authorized and reachable, so it is kept and relayed — a
-				// node that cannot apply a record must still not swallow the
-				// one that explains why. What follows it is not: this build
-				// does not know the rules those records are judged by, and
-				// storing unverified records would let any member fill a
-				// stopped node's disk.
+				// The chain ends here for this build. Keep and relay the
+				// authorized record that explains why, but not what follows:
+				// unverified records would let any member fill the disk.
 				for _, h := range primary.copies {
 					res.reachable[h] = true
 				}
@@ -154,8 +148,8 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 	}
 	res.state = state
 
-	// Branches are analyzed after the chain is known, because the question
-	// each one answers is "could this be reissued on the head that won".
+	// After the chain: each branch asks whether it can be reissued on the
+	// winning head.
 	budget := maxOrphanRecords
 	for _, po := range orphanRoots {
 		o := Orphan{Root: po.root.hash}
@@ -196,10 +190,8 @@ func followsDisable(r reader, a *types.AUM) bool {
 	return err == nil && parent.Kind == types.KindDisable
 }
 
-// placeDisables takes in the disable records the walk did not reach: hung
-// below the anchor, past a schema this build stopped at, or deeper on a branch
-// than the walk goes. Every state holds the commitments fixed at genesis, so
-// a record revealing one of the secrets ends the network wherever it hangs.
+// placeDisables takes in valid disable records the walk did not reach: one
+// revealing a genesis break-glass secret ends the network wherever it hangs.
 func placeDisables(r reader, res *resolution) error {
 	hashes, err := r.Hashes()
 	if err != nil {
@@ -229,8 +221,8 @@ func (res *resolution) noteDisabled(h types.Hash) {
 	}
 }
 
-// hashOrdered returns children in hash order, which pickPrimary's rule needs:
-// it is not transitive, so its result depends on the order it is given.
+// hashOrdered returns children in hash order, which pickPrimary needs: its
+// rule is not transitive, so the result depends on input order.
 type hashOrdered struct{ reader }
 
 func (o hashOrdered) Children(h types.Hash) ([]types.Hash, error) {
@@ -259,10 +251,10 @@ func (s *State) at(h types.Hash) *State {
 	return c
 }
 
-// childrenOf reads the records hanging from parents, copies of one record,
-// verifies each against state, which is the state after that record, and
-// returns them with their copies gathered, in the order fork choice reads
-// them. Disable records are noted, not returned.
+// childrenOf verifies the records hanging from parents (copies of one
+// record) against state, the state after it, and returns them with their
+// copies gathered, in fork-choice order. Disable records are noted, not
+// returned.
 func childrenOf(r reader, parents []types.Hash, state *State, res *resolution) ([]candidate, error) {
 	var children []types.Hash
 	for _, p := range parents {
@@ -281,9 +273,8 @@ func childrenOf(r reader, parents []types.Hash, state *State, res *resolution) (
 			return nil, fmt.Errorf("log: reading %v: %w", ch, err)
 		}
 		if err := verifyAgainst(&child, state.at(*child.Prev)); err != nil {
-			// Validity is a function of the parent state, which is a
-			// function of the parent hash, so a stored record's verdict
-			// never changes. One that fails now was never storable.
+			// Validity depends only on the parent hash, so a stored record
+			// that fails now was never storable.
 			return nil, fmt.Errorf("log: record %v (%v) is not authorized: %w",
 				ch, child.Kind, err)
 		}

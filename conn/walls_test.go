@@ -319,7 +319,7 @@ func TestARelayPingedIsNotReachedByItsPort(t *testing.T) {
 // With the name first, a relay's name in DNS comes before its addresses,
 // which stay among the first three nodes netcheck sends STUN to.
 func TestANameFirstComesBeforeTheRelaysPort(t *testing.T) {
-	dm, _ := derpMap([]Relay{namedRelay()}, nil, false, true, Networks{})
+	dm, _ := derpMap([]Relay{namedRelay()}, nil, false, true, Networks{}, false)
 	nodes := dm.Regions[7].Nodes
 	if len(nodes) != 6 || nodes[0].HostName != "relay.example.org" || nodes[0].IPv4 != "" || nodes[0].DERPPort != 443 {
 		t.Fatalf("nodes %+v, want the name in DNS first", nodes)
@@ -328,7 +328,7 @@ func TestANameFirstComesBeforeTheRelaysPort(t *testing.T) {
 		t.Errorf("the relay's own port is not second and third: %+v", nodes[1:3])
 	}
 	plain := testRelay()
-	if dm, _ := derpMap([]Relay{plain}, nil, false, true, Networks{}); dm.Regions[7].Nodes[0].DERPPort != 4443 {
+	if dm, _ := derpMap([]Relay{plain}, nil, false, true, Networks{}, false); dm.Regions[7].Nodes[0].DERPPort != 4443 {
 		t.Error("a relay without a name lost its port first")
 	}
 }

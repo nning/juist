@@ -22,7 +22,7 @@ systemctl enable --now juist-site-follow-main@docs.timer
 
 The first build compiles Hugo and takes a while; `journalctl -fu
 juist-site-follow-main@docs` shows it. Then publish it from that member:
-`juist publish add docs 127.0.0.1:8181 --http2`. The domain itself,
+`juist publish docs 127.0.0.1:8181 --http2`. The domain itself,
 published the same way, serves `/install`, which redirects to the install
 script. `journalctl -u juist-site@docs` shows a line for each request: host,
 path, status, bytes, referrer and User-Agent; the client's address is in the

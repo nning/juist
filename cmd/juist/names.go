@@ -16,18 +16,17 @@ import (
 )
 
 func namesFamily() family {
-	return family{name: "juist names", intro: "Point public names at devices, so that members reach them through the tunnel.",
+	return family{name: "juist names", intro: "Point public names at devices, for members to reach through the tunnel.",
 		subs: []subcommand{
-			{name: "list", aliases: []string{"ls"}, run: namesList, forms: [][2]string{{"", "the network's names, public ones too, and how this device resolves each"}}},
+			{name: "list", aliases: []string{"ls"}, run: namesList, forms: [][2]string{{"", "list the names and how this device resolves them"}}},
 			{name: "add", run: namesAdd, forms: [][2]string{{"add DEVICE NAME...", "point NAME at DEVICE"}}},
 			{name: "remove", aliases: []string{"rm"}, run: namesRemove,
 				forms: [][2]string{{"remove DEVICE NAME...", "take NAME from DEVICE"}}},
-			{name: "on", run: namesOn, forms: [][2]string{{"on", "resolve them to their devices on this device"}}},
+			{name: "on", run: namesOn, forms: [][2]string{{"on", "resolve public names to their devices here"}}},
 			{name: "off", run: namesOff, forms: [][2]string{{"off", "resolve them publicly again"}}},
 		}, footer: `On Linux and FreeBSD, every device is DEVICE.NETWORK.juist to the others. A
-public name, such as mail.example.org, resolves to its device on each device
-that turned names on. Elsewhere, and while its device is out of reach, it
-resolves publicly.`}
+public name such as mail.example.org resolves to its device where names are
+on, and publicly elsewhere or while its device is out of reach.`}
 }
 
 func cmdNames(a *app, args []string) error { return namesFamily().run(a, args) }
@@ -68,7 +67,7 @@ func (a *app) listNames() error {
 		fmt.Fprintf(tw, "*.%s\t%s\t%s\n", n.Domain, "every member", domainState(n, a.paint))
 	}
 	if n.Public != "" {
-		fmt.Fprintf(tw, "*.%s\t%s\t%s\n", n.Public, "what is published", domainState(n, a.paint))
+		fmt.Fprintf(tw, "*.%s\t%s\t%s\n", n.Public, "see juist publish", domainState(n, a.paint))
 	}
 	for _, o := range n.Overrides {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", o.Name, o.Device, nameState(n, o, a.paint))
@@ -88,7 +87,7 @@ func domainState(n *ipc.Names, paint func(code, s string) string) string {
 	case n.Resolved:
 		return paint("32", "resolved")
 	case n.Off:
-		return paint("2", "DNS off on this device")
+		return paint("2", "juist DNS off")
 	}
 	return paint("33", "not resolved here: "+n.Not)
 }
@@ -96,6 +95,8 @@ func domainState(n *ipc.Names, paint func(code, s string) string) string {
 // nameState is how this device resolves o, one of n's public names.
 func nameState(n *ipc.Names, o ipc.NameOverride, paint func(code, s string) string) string {
 	switch {
+	case n.Off:
+		return paint("2", "juist DNS off")
 	case !n.Accepted:
 		return "off on this device"
 	case !n.Resolved:
@@ -108,8 +109,8 @@ func nameState(n *ipc.Names, o ipc.NameOverride, paint func(code, s string) stri
 
 func namesAdd(a *app, args []string) error {
 	return changeNames(a, args, true, spec{name: "juist names add", args: "DEVICE NAME...", min: 2, max: -1, about: `
-Point public names, such as mail.example.org, at a device. Each device that
-turned names on (juist names on) resolves them to it.`})
+Point public names such as mail.example.org at a device. Devices with
+juist names on resolve them to it.`})
 }
 
 func namesRemove(a *app, args []string) error {
@@ -127,7 +128,7 @@ func changeNames(a *app, args []string, add bool, s spec) error {
 	for _, arg := range pos {
 		host, err := parseHostName(arg)
 		if err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 		if names, err = changeName(auth.State(), target, names, host, add); err != nil {
 			return err
@@ -138,8 +139,8 @@ func changeNames(a *app, args []string, add bool, s spec) error {
 
 func namesOn(a *app, args []string) error {
 	return setAcceptNames(a, args, true, spec{name: "juist names on", about: `
-On this device, resolve the network's public names to their devices, through
-the tunnel. juist names off undoes it.`})
+Resolve the network's public names to their devices, through the tunnel,
+on this device. juist names off undoes it.`})
 }
 
 func namesOff(a *app, args []string) error {
@@ -191,9 +192,9 @@ func parseHostName(arg string) (string, error) {
 	name, err := idna.Lookup.ToASCII(strings.TrimSuffix(strings.ToLower(arg), "."))
 	switch {
 	case err != nil || !strings.Contains(name, "."):
-		return "", fmt.Errorf("%q is no public name, such as mail.example.org", arg)
+		return "", fmt.Errorf("%q is not a name like mail.example.org", arg)
 	case strings.HasSuffix(name, "."+types.NamesTLD):
-		return "", fmt.Errorf("%s is the network's own; members are DEVICE.NETWORK.%s already", name, types.NamesTLD)
+		return "", fmt.Errorf("name cannot end in .%s: %s", types.NamesTLD, name)
 	}
 	if err := types.ValidateHostName(name); err != nil {
 		return "", err
@@ -207,7 +208,7 @@ func changeName(state *log.State, target types.NodeRecord, names []string, name 
 	dev := displayMember(target)
 	if !grant {
 		if !slices.Contains(names, name) {
-			return nil, fmt.Errorf("%s does not answer for %s\nhint: juist names", dev, name)
+			return nil, fmt.Errorf("%s does not point at %s\nhint: juist names lists the names", name, dev)
 		}
 		return slices.DeleteFunc(names, func(n string) bool { return n == name }), nil
 	}
@@ -221,7 +222,7 @@ func changeName(state *log.State, target types.NodeRecord, names []string, name 
 		return names, nil
 	}
 	if len(names) >= types.MaxNamesPerNode {
-		return nil, fmt.Errorf("%s answers for %d names, the most a device may", dev, types.MaxNamesPerNode)
+		return nil, fmt.Errorf("%s already has %d names, the maximum", dev, types.MaxNamesPerNode)
 	}
 	names = append(names, name)
 	slices.Sort(names)
@@ -247,7 +248,7 @@ func (a *app) submitNames(auth *log.Authority, target types.NodeRecord, next []s
 		return err
 	}
 	if len(next) > len(target.Names) && !a.acceptsNames() {
-		a.hint("juist names on, on each device that is to resolve it")
+		a.hint("on each device that should resolve it: juist names on")
 	}
 	return nil
 }
@@ -315,7 +316,7 @@ func namesNotes(n *ipc.Names) []line {
 	case n.Resolved:
 	case n.Off:
 		out = append(out, line{kind: lineInfo, text: "DNS is off on this device: the network's names are " +
-			"not resolved here, and no DNS goes through an exit node; juist set --dns takes it again"})
+			"not resolved, and no DNS goes through an exit node (juist set --dns turns it on)"})
 	case n.Cannot && n.Not == noDevice:
 		// The setup itself, as a service member's, not a state of DNS.
 	case n.Cannot:
@@ -329,7 +330,7 @@ func namesNotes(n *ipc.Names) []line {
 	if !n.Resolved {
 		for _, name := range n.ForMembers {
 			out = append(out, line{kind: lineWarn, text: fmt.Sprintf(
-				"%s, for members alone, is not reached from here, which resolves the network's names publicly", name)})
+				"%s is for members only and not reachable here: this device resolves the network's names publicly", name)})
 		}
 	}
 	switch {

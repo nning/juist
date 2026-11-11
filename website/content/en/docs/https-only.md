@@ -21,11 +21,18 @@ reached the next time they send. If the network's
 [ingress]({{< relref "docs/publishing" >}}) is also a relay, it serves
 `relay.DOMAIN` on 443 by itself.
 
+A network that has
+[Tailscale's public DERP servers]({{< relref "docs/relays" >}}#public-derp)
+on, as one the Android app creates, needs no relay of its own for this:
+Tailscale's servers serve on 443 too.
+
 A network that inspects traffic and blocks or reports anything but HTTPS
 needs more. With `juist set --https-only`, a device sends only TLS to the
 relays' names on port 443, and DNS queries for those names. It sends no
 WireGuard over UDP, does no path discovery or LAN search, and uses neither the
-public DHT nor STUN servers. Every packet goes through a relay.
+public DHT nor STUN servers. Every packet goes through a relay. Where the
+network has Tailscale's servers on, it sends TLS to their names too, so a
+network that inspects traffic sees those.
 
 ## Setting it up
 
@@ -108,13 +115,15 @@ password.
 
 | What you see | What to do |
 |---|---|
-| `juist status`: `HTTPS  only, and no relay on 443` | give a relay a public name: run `sudo juist set --relay-name NAME` on it |
+| `juist status`: `HTTPS  only, no relay on 443` | give a relay a public name: run `sudo juist set --relay-name NAME` on it |
 | `juist health`: `warning: no relay on 443/tcp` | the same |
+| `juist status`: `HTTPS  only, by Tailscale's public DERP` | nothing: the device reaches the others through Tailscale's servers on 443 |
 | `juist health`: `no answer from …: offline, or at no relay on 443` | the device is offline, or cannot reach any relay that has a name |
+| `juist health`: `no answer from …: offline, or not at Tailscale's DERP` | the device is offline, or its network blocks Tailscale's servers |
 | `juist health`: `no answer yet from … through its own relay on 443` | the device runs, since its relay is the one this device uses, but the tunnel to it is not up yet; shortly after a join this goes by itself within minutes |
 | `juist health`: `no tunnel traffic from … through the relays on 443` | check the relays' names in DNS, and that port 443 reaches them |
-| `juist health`: `warning: … not at the relay on …, the one this device reaches it at` | the device runs, but keeps no connection there: it saves battery and is reached once it sends, or it runs an older juist |
-| `juist health`: `no answer from …: not at the relay on …` | the device is offline, or keeps no connection there; once it is known to be offline, the line goes |
+| `juist health`: `warning: … not at …, the relay this device uses` | the device runs, but keeps no connection there: it saves battery and is reached once it sends, or it runs an older juist |
+| `juist health`: `no answer from …: not at …, the relay this device uses` | the device is offline, or keeps no connection there; once it is known to be offline, the line goes |
 
 If joining says `the invite link names no relay on 443`, you need a new invite
 link, made after a relay serves a name on 443.

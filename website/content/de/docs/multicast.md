@@ -62,7 +62,7 @@ nutzen, etwa Minecraft Java, brauchen keine Gruppenkonfiguration.
 `juist status` zeigt:
 
 ```console
-  Multicast     on, copied: auto
+  Multicast     on
 ```
 
 Das Kopieren folgt diesen Berechtigungen auf jedem beteiligten Linux-Mitglied.
@@ -149,7 +149,7 @@ ein Gerät wie `juist0` aus, solange seine Konfiguration es nicht erlaubt.
 `juist health` warnt davor:
 
 ```console
-warning: avahi leaves juist0 out, a point-to-point device: members are not found by mDNS
+warning: avahi skips juist0, a point-to-point device, so mDNS finds no members
 hint: set allow-point-to-point=yes under [server] in /etc/avahi/avahi-daemon.conf, then restart avahi-daemon
 ```
 
@@ -182,8 +182,9 @@ Die Android-App überträgt kein Multicast.
 ## Wenn etwas nicht klappt
 
 - **Ein Programm findet kein Mitglied.** Führe `juist health` aus und achte
-  auf die Warnung zu avahi. Prüfe unter Linux, ob `juist status`
-  `copied: auto` oder die Gruppe des Programms zeigt. Auf anderen Systemen
+  auf die Warnung zu avahi. Prüfe unter Linux, ob `juist status` `Multicast
+  on` zeigt; steht dort `on (groups off)`, stellt `sudo juist set
+  --groups auto` das automatische Kopieren wieder her. Auf anderen Systemen
   muss das Programm auf `juist0` lauschen.
 - **`juist status` zeigt keine Zeile `Multicast`.** Das Gerät hat kein
   `juist0`, wie ein [Service-Mitglied]({{< relref "docs/service-member" >}}).

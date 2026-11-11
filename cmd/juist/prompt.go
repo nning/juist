@@ -98,7 +98,7 @@ func (a *app) confirm(text string) (bool, error) { return a.confirmAs(question{t
 
 func (a *app) confirmAs(q question) (bool, error) {
 	if !a.interactive {
-		return false, errors.New("needs confirmation; pass --yes or run in a terminal")
+		return false, errors.New("needs confirmation: run in a terminal, or add --yes")
 	}
 	ok, err := a.ask(a.ctx, q)
 	if errors.Is(err, context.Canceled) {

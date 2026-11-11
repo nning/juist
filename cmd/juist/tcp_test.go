@@ -20,42 +20,61 @@ func TestPublishByTCP(t *testing.T) {
 	admin.mustRun("create", "home", "--device", "laptop")
 	enrollDevice(t, admin, "nas")
 	admin.mustRun("network", "domain", "pub.example.org")
-	mustContain(t, admin.mustRun("publish", "add", "nas", "mc", "25565", "--tcp"),
-		"nas: publishes mc.pub.example.org:25565/tcp", "hint: on nas, juist publish serve")
-	mustContain(t, admin.mustRun("publish", "add", "nas", "ssh", "22", "--tcp=2222", "--proxy"),
-		"mc.pub.example.org:25565/tcp, ssh.pub.example.org:2222/tcp to 22")
-	mustContain(t, admin.mustRun("publish", "add", "nas", "immich"), "immich.pub.example.org:443")
-	mustContain(t, admin.mustRun("publish"), "25565/tcp", "2222/tcp to 22 (proxy protocol)")
-	mustContain(t, admin.mustRun("publish", "add", "nas", "mc", "25565", "-T"), "nas: unchanged")
+	mustContain(t, admin.mustRun("publish", "mc", "25589", "--tcp=25565", "--on", "nas"),
+		"nas: publishes mc.pub.example.org:25565/tcp", "hint: on nas, juist publish mc")
+	mustContain(t, admin.mustRun("publish", "ssh", "22", "--tcp=2222", "--proxy", "--on", "nas"),
+		"mc.pub.example.org:25565/tcp to 25589, ssh.pub.example.org:2222/tcp to 22")
+	mustContain(t, admin.mustRun("publish", "immich", "--on", "nas"), "immich.pub.example.org:443")
+	listed := admin.mustRun("publish")
+	for _, want := range []struct {
+		name, port, to string
+	}{
+		{"  mc ", "25565/tcp", "nas:25589"},
+		{"  ssh ", "2222/tcp (proxy protocol)", "nas:22"},
+	} {
+		var line string
+		for _, candidate := range strings.Split(listed, "\n") {
+			if strings.HasPrefix(candidate, want.name) {
+				line = candidate
+				break
+			}
+		}
+		if !strings.Contains(line, want.port) || !strings.Contains(line, want.to) ||
+			strings.Contains(line, "to 25589") || strings.Contains(line, "to 22") {
+			t.Errorf("juist publish row for %s does not separate public port and target: %q\n%s",
+				want.name, line, listed)
+		}
+	}
+	mustContain(t, admin.mustRun("publish", "mc", "25589", "--tcp=25565", "--on", "nas"), "nas: unchanged")
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"nas", "mc2", "25566", "--tcp=25565"}, "mc.pub.example.org is published on port 25565 already"},
-		{[]string{"laptop", "game", "25565", "--tcp"}, "mc.pub.example.org is published on port 25565 already"},
-		{[]string{"nas", "web", "8443", "--tcp=443"}, "a name is not published by TCP on port 443"},
-		{[]string{"nas", "web", "8080", "--tcp=80"}, "port 80"},
-		{[]string{"nas", "x", "1", "--tcp=41643"}, "one of juist's own"},
-		{[]string{"nas", "web", "--tcp"}, "needs the device's port\nhint: juist publish add nas web PORT --tcp"},
-		{[]string{"nas", "mc", "25565"}, "mc.pub.example.org is published by TCP on port 25565\nhint: juist publish add nas mc.pub.example.org 25565 --tcp"},
-		{[]string{"nas", "ssh", "22", "--tcp", "2222"}, "hint: a public port goes with the option: --tcp=2222"},
-		{[]string{"nas", "x", "1", "--tcp=0"}, "want a port"},
-		{[]string{"nas", "x", "1", "--tcp=y"}, "want a port"},
-		{[]string{"x", "127.0.0.1:1", "--tcp", "--http2"}, "--http2 is for a name whose TLS juist ends"},
-		{[]string{"nas", "web", "22", "--tcp=2223"}, "both go to port 22"},
+		{[]string{"mc2", "25566", "--tcp=25565", "--on", "nas"}, "mc.pub.example.org is published on port 25565 already"},
+		{[]string{"game", "25565", "--tcp", "--on", "laptop"}, "mc.pub.example.org is published on port 25565 already"},
+		{[]string{"web", "8443", "--tcp=443", "--on", "nas"}, "cannot publish by TCP on port 443"},
+		{[]string{"web", "8080", "--tcp=80", "--on", "nas"}, "port 80"},
+		{[]string{"x", "1", "--tcp=41643", "--on", "nas"}, "one of juist's own"},
+		{[]string{"web", "--tcp", "--on", "nas"}, "--tcp with --on needs PORT\nusage: juist publish"},
+		{[]string{"mc", "25565", "--on", "nas"}, "mc.pub.example.org is published by TCP on port 25565\nhint: juist publish mc 25589 --tcp=25565 --on nas"},
+		{[]string{"ssh", "22", "--tcp", "2222", "--on", "nas"}, "unexpected argument \"2222\": the public port goes in --tcp=2222\nusage: juist publish"},
+		{[]string{"x", "1", "--tcp=0", "--on", "nas"}, "not a port"},
+		{[]string{"x", "1", "--tcp=y", "--on", "nas"}, "not a port"},
+		{[]string{"x", "127.0.0.1:1", "--tcp", "--http2"}, "--http2 cannot be used with --tcp"},
+		{[]string{"web", "22", "--tcp=2223", "--on", "nas"}, "both go to port 22"},
 	} {
-		if out, err := admin.run(append([]string{"publish", "add"}, tc.args...)...); err == nil ||
+		if out, err := admin.run(append([]string{"publish"}, tc.args...)...); err == nil ||
 			!strings.Contains(err.Error(), tc.want) {
-			t.Errorf("add %q: %v\n%s", tc.args, err, out)
+			t.Errorf("publish %q: %v\n%s", tc.args, err, out)
 		}
 	}
-	mustContain(t, admin.mustRun("publish", "rm", "nas", "mc"), "nas: publishes immich.pub.example.org:443, ssh.pub.example.org:2222/tcp to 22")
-	mustContain(t, admin.mustRun("publish", "add", "nas", "mc", "25565"), "mc.pub.example.org:25565,")
+	mustContain(t, admin.mustRun("publish", "--stop", "mc", "--on", "nas"), "nas: publishes immich.pub.example.org:443, ssh.pub.example.org:2222/tcp to 22")
+	mustContain(t, admin.mustRun("publish", "mc", "25565", "--on", "nas"), "mc.pub.example.org:25565,")
 
 	// An ingress holds every public port: none of its own names goes to one.
 	enrollDevice(t, admin, "vps")
 	admin.mustRun("grant", "vps", "ingress")
-	if out, err := admin.run("publish", "add", "vps", "web", "2222"); err == nil || !strings.Contains(err.Error(), "port 2222") {
+	if out, err := admin.run("publish", "web", "2222", "--on", "vps"); err == nil || !strings.Contains(err.Error(), "port 2222") {
 		t.Errorf("an ingress's name on a public port: %v\n%s", err, out)
 	}
 }
@@ -77,10 +96,10 @@ func TestATCPChangeSaysWhatItOpens(t *testing.T) {
 		"publishes ssh.pub.example.org by TCP on port 2222 of every ingress, to port 22 of laptop (", "), with PROXY protocol")
 }
 
-// juist publish add NAME HOST:PORT --tcp publishes NAME on this device by TCP,
+// juist publish NAME HOST:PORT --tcp publishes NAME on this device by TCP,
 // on the public port, which the device takes too, and has juist pass it on
 // to HOST:PORT as it is; it says so, and no CAA record.
-func TestPublishAddPassesTCP(t *testing.T) {
+func TestPublishingPassesTCP(t *testing.T) {
 	t.Parallel()
 	h := newHost(t)
 	h.mustRun("create", "home", "--device", "laptop")
@@ -89,30 +108,30 @@ func TestPublishAddPassesTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.mustRun("network", "domain", "pub.example.org")
-	out := h.mustRun("publish", "add", "mc", "127.0.0.1:25565", "--tcp")
+	out := h.mustRun("publish", "mc", "127.0.0.1:25565", "--tcp")
 	mustContain(t, out, "laptop: publishes mc.pub.example.org:25565/tcp", "serving mc.pub.example.org",
 		"passing mc.pub.example.org to 127.0.0.1:25565")
 	if strings.Contains(out, "ending TLS") || strings.Contains(out, "CAA") {
 		t.Errorf("TLS said for a name passed by TCP:\n%s", out)
 	}
-	mustContain(t, h.mustRun("publish", "add", "ssh", "127.0.0.1:22", "--tcp=2222"),
+	mustContain(t, h.mustRun("publish", "ssh", "127.0.0.1:22", "--tcp=2222"),
 		"ssh.pub.example.org:2222/tcp", "passing ssh.pub.example.org to 127.0.0.1:22")
-	if out := h.mustRun("publish", "add", "ssh", "127.0.0.1:2022", "--tcp=2222"); strings.Contains(out, "publishes") ||
+	if out := h.mustRun("publish", "ssh", "127.0.0.1:2022", "--tcp=2222"); strings.Contains(out, "publishes") ||
 		!strings.Contains(out, "passing ssh.pub.example.org to 127.0.0.1:2022") {
 		t.Errorf("a name passed elsewhere:\n%s", out)
 	}
-	if _, err := h.run("publish", "add", "mc", "127.0.0.1:25566"); err == nil ||
-		!strings.Contains(err.Error(), "is published by TCP on port 25565\nhint: juist publish add mc 127.0.0.1:25566 --tcp,") {
+	if _, err := h.run("publish", "mc", "127.0.0.1:25566"); err == nil ||
+		!strings.Contains(err.Error(), "is published by TCP on port 25565\nhint: juist publish mc 127.0.0.1:25566 --tcp, or juist publish --stop mc first") {
 		t.Errorf("a name by TCP turned to TLS: %v", err)
 	}
-	if _, err := h.run("publish", "add", "mc", "127.0.0.1:25565", "--tcp", "2222"); err == nil ||
-		!strings.Contains(err.Error(), "hint: a public port goes with the option: --tcp=2222") {
+	if _, err := h.run("publish", "mc", "127.0.0.1:25565", "--tcp", "2222"); err == nil ||
+		!strings.Contains(err.Error(), "the public port goes in --tcp=2222") {
 		t.Errorf("a public port apart from --tcp: %v", err)
 	}
-	mustContain(t, h.mustRun("publish", "serve"), "passing mc.pub.example.org to 127.0.0.1:25565",
+	mustContain(t, h.mustRun("publish", "mc"), "passing mc.pub.example.org to 127.0.0.1:25565",
 		"passing ssh.pub.example.org to 127.0.0.1:2022")
-	mustContain(t, h.mustRun("publish"), "mc.pub.example.org", "25565/tcp", "127.0.0.1:25565")
-	mustContain(t, h.mustRun("publish", "rm", "mc"), "mc.pub.example.org no longer goes to 127.0.0.1:25565")
+	mustContain(t, h.mustRun("publish"), "pub.example.org\n  mc ", "25565/tcp", "laptop:25565")
+	mustContain(t, h.mustRun("publish", "--stop", "mc"), "mc.pub.example.org no longer goes to 127.0.0.1:25565")
 }
 
 // An ingress lists the names it passes by TCP with their public port, and
@@ -128,7 +147,7 @@ func TestAnIngressListsWhatItPassesByTCP(t *testing.T) {
 	h.mustRun("revoke", "laptop", "voucher", "--yes")
 	h.mustRun("grant", "laptop", "ingress")
 	h.mustRun("network", "domain", "pub.example.org")
-	h.mustRun("publish", "add", "laptop", "mc", "2283", "--tcp=25565")
+	h.mustRun("publish", "mc", "2283", "--tcp=25565", "--on", "laptop")
 	eventually(t, "the ingress is told the name", func() bool {
 		return strings.Contains(h.mustRun("ingress"), "mc.pub.example.org")
 	})
@@ -170,27 +189,27 @@ func TestAnOperatorPassesWhatAnAdminPublishedByTCP(t *testing.T) {
 	}
 	vps.cli.host, vps.cli.root = &layout, true
 	laptop.mustRun("network", "domain", "pub.example.org")
-	laptop.mustRun("publish", "add", "vps", "pp", "2222", "--tcp", "--proxy")
+	laptop.mustRun("publish", "pp", "2222", "--tcp", "--proxy", "--on", "vps")
 	eventually(t, "the vps learns what it publishes", func() bool {
 		return strings.Contains(vps.mustRun("publish"), "2222/tcp")
 	})
-	out := vps.mustRun("publish", "add", "pp", "127.0.0.1:7002", "--tcp", "--proxy")
+	out := vps.mustRun("publish", "pp", "127.0.0.1:7002", "--tcp", "--proxy")
 	if strings.Contains(out, "hint: an admin publishes it") || strings.Contains(out, "publishes pp") {
 		t.Errorf("the ports published were changed:\n%s", out)
 	}
 	mustContain(t, out, "pp.pub.example.org")
-	if _, err := vps.run("publish", "add", "pp", "127.0.0.1:7002", "--tcp=2223", "--proxy"); err != nil {
+	if _, err := vps.run("publish", "pp", "127.0.0.1:7002", "--tcp=2223", "--proxy"); err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, vps.mustRun("publish", "add", "pp", "127.0.0.1:7002", "--tcp=2223", "--proxy"),
-		"hint: an admin publishes it: juist publish add vps pp.pub.example.org 2223 --tcp --proxy")
+	mustContain(t, vps.mustRun("publish", "pp", "127.0.0.1:7002", "--tcp=2223", "--proxy"),
+		"hint: an admin publishes it: juist publish pp 2223 --tcp --proxy --on vps")
 
 	// By TLS in the log, juist ends TLS for it until an admin says otherwise.
-	laptop.mustRun("publish", "add", "vps", "web")
-	eventually(t, "the vps learns web", func() bool { return strings.Contains(vps.mustRun("publish"), "web.pub.example.org") })
-	mustContain(t, vps.mustRun("publish", "add", "web", "127.0.0.1:8080", "--tcp"),
+	laptop.mustRun("publish", "web", "--on", "vps")
+	eventually(t, "the vps learns web", func() bool { return strings.Contains(vps.mustRun("publish"), "  web ") })
+	mustContain(t, vps.mustRun("publish", "web", "127.0.0.1:8080", "--tcp"),
 		"warning: until an admin publishes it by TCP, juist ends TLS for web.pub.example.org",
-		"hint: an admin publishes it: juist publish add vps web.pub.example.org 8080 --tcp")
+		"hint: an admin publishes it: juist publish web 8080 --tcp --on vps")
 }
 
 // The terminator is waited for where the name just published is served, by
@@ -209,18 +228,18 @@ func TestTheNameJustPublishedIsWaitedFor(t *testing.T) {
 	}
 }
 
-// A device passing names by TCP alone, whose terminator does not run, is
-// said to pass none on, not to end TLS for none.
-func TestASilentTerminatorPassesNone(t *testing.T) {
+// A device whose terminator does not run says so, whether it passes names
+// by TCP alone or ends TLS for some.
+func TestASilentTerminatorIsSaid(t *testing.T) {
 	plain := func(_, s string) string { return s }
 	got := publishSummary(&ipc.Publish{Consent: true, Serving: []string{"mc.pub.example.org"}, TerminatorSilent: true,
 		Passing: []string{"mc.pub.example.org to 127.0.0.1:25565"}}, nil, plain)
-	if !strings.Contains(got, "but passes none on: the terminator does not run") {
+	if want := "this device serves mc.pub.example.org, but the terminator does not run (juist publish mc.pub.example.org)"; got != want {
 		t.Errorf("passing alone: %q", got)
 	}
 	got = publishSummary(&ipc.Publish{Consent: true, Serving: []string{"a", "b"}, TerminatorSilent: true,
 		Ending: []string{"a to 127.0.0.1:1"}, Passing: []string{"b to 127.0.0.1:2"}}, nil, plain)
-	if !strings.Contains(got, "but ends TLS for none") {
+	if !strings.Contains(got, "but the terminator does not run") {
 		t.Errorf("ending TLS too: %q", got)
 	}
 }
@@ -231,10 +250,10 @@ func TestAPortTheTerminatorCannotHoldIsSaid(t *testing.T) {
 	st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2}}
 	st.Terminator = &ipc.Terminator{Running: true, Unbound: []string{"100.64.0.1:25565", "[fd00::1]:25565", "100.64.0.1:80"}}
 	notes := statusNotes(st, false)
-	want := line{kind: lineWarn, text: "another program holds port 25565 on 100.64.0.1, fd00::1, where juist would serve what is published here"}
+	want := line{kind: lineWarn, text: "another program holds port 25565 on 100.64.0.1, fd00::1, needed for what is published here"}
 	i := slices.Index(notes, want)
 	if i < 0 || !slices.ContainsFunc(notes[i:], func(l line) bool {
-		return l.kind == lineHint && strings.Contains(l.text, "publish its port: juist publish add DEVICE NAME PORT")
+		return l.kind == lineHint && strings.Contains(l.text, "publish its port: juist publish NAME PORT --on DEVICE")
 	}) {
 		t.Errorf("notes %v", notes)
 	}
@@ -255,24 +274,42 @@ func TestAServiceForMembersGoesToNoPublicName(t *testing.T) {
 	laptop.mustRun("network", "domain", "pub.example.org")
 	var wiki string
 	eventually(t, "the vps learns the domain", func() bool {
-		out, err := vps.run("publish", "add", "wiki", "127.0.0.1:2343", "--members")
+		out, err := vps.run("publish", "wiki", "127.0.0.1:2343", "--members")
 		wiki = out
 		return err == nil
 	})
-	mustContain(t, wiki, "wiki.pub.example.org goes to 127.0.0.1:2343 once published on this device for members alone")
-	laptop.mustRun("publish", "add", "vps", "photos")
-	eventually(t, "the vps learns photos", func() bool { return strings.Contains(vps.mustRun("publish"), "photos.pub.example.org") })
-	withheld := "warning: not serving photos.pub.example.org, its service meant for members alone: the log has the name public"
-	mustContain(t, vps.mustRun("publish", "add", "photos", "127.0.0.1:2342", "--members"), withheld,
-		"hint: an admin publishes it: juist publish add vps photos.pub.example.org --members")
+	mustContain(t, wiki, "wiki.pub.example.org goes to 127.0.0.1:2343 once published on this device for members only")
+	// Named alone, it is not published by this device's guess at how.
+	if _, err := vps.run("publish", "wiki"); err == nil ||
+		!strings.Contains(err.Error(), "wiki.pub.example.org goes to 127.0.0.1:2343 but is not published\n"+
+			"hint: an admin publishes it: juist publish wiki --members --on vps") {
+		t.Errorf("publish wiki: %v", err)
+	}
+	mustContain(t, vps.mustRun("health"), "warning: wiki.pub.example.org goes to 127.0.0.1:2343 but is not published",
+		"hint: an admin publishes it: juist publish wiki --members --on vps")
+	mustContain(t, vps.mustRun("publish"), "NAME             DEVICE  PORT  TO                        STATE\n"+
+		"pub.example.org\n"+
+		"  wiki           vps     -     127.0.0.1:2343 (members)  unpublished\n")
+	// One meant by TCP is not asked for as TLS on 443.
+	mustContain(t, vps.mustRun("publish", "mc", "127.0.0.1:25565", "--tcp", "--proxy"),
+		"hint: an admin publishes it: juist publish mc 25565 --tcp --proxy --on vps")
+	mustContain(t, vps.mustRun("health"), "hint: an admin publishes it: juist publish mc --on vps (add PORT and --tcp or --proxy if the service needs them)")
+	if _, err := vps.run("publish", "mc"); err == nil || !strings.Contains(err.Error(), "(add PORT and --tcp or --proxy if the service needs them)") {
+		t.Errorf("publish mc: %v", err)
+	}
+	laptop.mustRun("publish", "photos", "--on", "vps")
+	eventually(t, "the vps learns photos", func() bool { return strings.Contains(vps.mustRun("publish"), "  photos ") })
+	withheld := "warning: not serving photos.pub.example.org: its service is for members only, but the name is public"
+	mustContain(t, vps.mustRun("publish", "photos", "127.0.0.1:2342", "--members"), withheld,
+		"hint: an admin publishes it: juist publish photos --members --on vps")
 	mustContain(t, vps.mustRun("health"), withheld)
-	mustContain(t, vps.mustRun("publish", "add", "photos", "127.0.0.1:2342"), withheld)
-	if out := vps.mustRun("publish", "add", "photos", "127.0.0.1:2342", "--members=false"); strings.Contains(out, withheld) {
+	mustContain(t, vps.mustRun("publish", "photos", "127.0.0.1:2342"), withheld)
+	if out := vps.mustRun("publish", "photos", "127.0.0.1:2342", "--members=false"); strings.Contains(out, withheld) {
 		t.Errorf("--members=false still held it back:\n%s", out)
 	}
-	vps.mustRun("publish", "add", "photos", "127.0.0.1:2342", "--members")
+	vps.mustRun("publish", "photos", "127.0.0.1:2342", "--members")
 	mustContain(t, vps.mustRun("publish"), "127.0.0.1:2342 (members)")
-	laptop.mustRun("publish", "add", "vps", "photos", "--members")
+	laptop.mustRun("publish", "photos", "--members", "--on", "vps")
 	eventually(t, "the vps serves photos for members", func() bool { return !strings.Contains(vps.mustRun("status"), withheld) })
 
 	// On an admin's device, the mark changes nothing in the log by itself.
@@ -282,13 +319,13 @@ func TestAServiceForMembersGoesToNoPublicName(t *testing.T) {
 		t.Fatal(err)
 	}
 	laptop.cli.host, laptop.cli.root = &admin, true
-	laptop.mustRun("publish", "add", "blog", "127.0.0.1:9", "--members")
-	laptop.mustRun("publish", "add", "laptop", "blog", "--members=false")
-	mustContain(t, laptop.mustRun("publish", "add", "blog", "127.0.0.1:9"),
-		"warning: not serving blog.pub.example.org, its service meant for members alone: the log has the name public",
-		"hint: an admin publishes it: juist publish add laptop blog.pub.example.org --members")
+	laptop.mustRun("publish", "blog", "127.0.0.1:9", "--members")
+	laptop.mustRun("publish", "blog", "--members=false", "--on", "laptop")
+	mustContain(t, laptop.mustRun("publish", "blog", "127.0.0.1:9"),
+		"warning: not serving blog.pub.example.org: its service is for members only, but the name is public",
+		"hint: an admin publishes it: juist publish blog --members --on laptop")
 	for _, l := range strings.Split(laptop.mustRun("publish"), "\n") {
-		if strings.HasPrefix(l, "blog.") && (strings.Contains(l, "443 (members)") || !strings.Contains(l, "127.0.0.1:9 (members)")) {
+		if strings.HasPrefix(l, "  blog ") && (strings.Contains(l, "443 (members)") || !strings.Contains(l, "127.0.0.1:9 (members)")) {
 			t.Errorf("the device's mark changed the log, or went: %q", l)
 		}
 	}

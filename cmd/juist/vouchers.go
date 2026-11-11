@@ -36,9 +36,9 @@ func (a *app) warnVouchers(all []types.NodeRecord, needed int) {
 		}
 	}
 	if len(relays) > 0 {
-		a.warn("%s relays too: with 1 voucher needed, it alone can keep a device it cuts off fresh",
+		a.warn("%s relays too: with 1 voucher needed, it alone can cut a device off and keep it fresh",
 			strings.Join(relays, ", "))
-		a.hint("juist admins vouchers 2, with vouchers on hosts that fail apart")
+		a.hint("juist admins vouchers 2, with vouchers on independent hosts")
 	}
 }
 

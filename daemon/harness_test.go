@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -261,18 +262,19 @@ func safeLogf(t *testing.T, prefix string) func(string, ...any) {
 // reconciler decides rather than about packets moving. It records every peer
 // set it is given, which is the whole of the reconciler's output.
 type fakeManager struct {
-	mu        sync.Mutex
-	isolate   bool   // as SetEgress was last told
-	through   string // what AnswersThrough says
-	unguarded string // what Unguarded says
-	peers     []conn.Peer
-	self      []conn.Self // as SetSelf was told, in order
-	relays    []conn.Relay
-	relaySet  int
-	sets      int
-	closed    bool
-	err       error // returned by SetPeers, to exercise the failure path
-	relayErr  error // returned by SetRelays
+	publicDERP atomic.Bool
+	mu         sync.Mutex
+	isolate    bool   // as SetEgress was last told
+	through    string // what AnswersThrough says
+	unguarded  string // what Unguarded says
+	peers      []conn.Peer
+	self       []conn.Self // as SetSelf was told, in order
+	relays     []conn.Relay
+	relaySet   int
+	sets       int
+	closed     bool
+	err        error // returned by SetPeers, to exercise the failure path
+	relayErr   error // returned by SetRelays
 	// hostRoutes is what the host reaches outside juist.
 	hostRoutes []netip.Prefix
 	// egressErr is what SetEgress returns for each egress.
@@ -450,7 +452,13 @@ func (m *fakeManager) LocalEndpoints() []netip.AddrPort {
 	return append([]netip.AddrPort(nil), m.eps...)
 }
 
-func (m *fakeManager) LocalPort() uint16 { return 41641 }
+func (m *fakeManager) LocalPort() uint16       { return 41641 }
+func (m *fakeManager) Underlay() conn.Underlay { return conn.Underlay{} }
+
+func (m *fakeManager) SetPublicDERP(on bool) error {
+	m.publicDERP.Store(on)
+	return nil
+}
 
 func (m *fakeManager) Ping(netip.Addr, func(conn.PingResult)) {}
 

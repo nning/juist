@@ -23,14 +23,13 @@ import (
 )
 
 func ingressFamily() family {
-	return family{name: "juist ingress", intro: "Take connections from the internet for the names devices publish.",
+	return family{name: "juist ingress", intro: "Take connections from the internet for published names.",
 		subs: []subcommand{
 			{name: "list", aliases: []string{"ls"}, run: ingressList, forms: [][2]string{{"", "what this ingress serves"}}},
-			{name: "serve", run: ingressServe, forms: [][2]string{{"serve [--stop]", "serve as the network's ingress, on 443\nand 80, and the ports names are published\non by TCP"}}},
+			{name: "serve", run: ingressServe, forms: [][2]string{{"serve [--stop]", "serve as the network's ingress"}}},
 		}, footer: `An ingress is a device with a public address and the ingress role (juist
-grant DEVICE ingress). It reads the name a client asks for, or the port a
-name is published on by TCP, and passes the connection through the tunnel to
-the device. It ends no TLS.`}
+grant DEVICE ingress). It passes each connection, by name or TCP port,
+through the tunnel to the device that publishes it, without ending TLS.`}
 }
 
 func cmdIngress(a *app, args []string) error { return ingressFamily().run(a, args) }
@@ -49,7 +48,7 @@ func ingressList(a *app, args []string) error {
 		return err
 	}
 	if !isIngress(st) {
-		a.ok("this device is no ingress")
+		a.ok("this device is not an ingress")
 		a.hint("an admin grants it: juist grant %s ingress", cmp.Or(st.SelfName, st.Self.ShortString()))
 		return nil
 	}
@@ -60,7 +59,7 @@ func ingressList(a *app, args []string) error {
 	if len(p.Names) == 0 && len(p.TCP) == 0 {
 		a.ok("nothing to serve")
 		if st.Stale {
-			a.hint("this device's view of the network is stale, and a stale ingress serves nothing")
+			a.hint("this device's view of the network is stale; a stale ingress serves nothing")
 		}
 		return nil
 	}
@@ -81,16 +80,16 @@ func ingressList(a *app, args []string) error {
 		return err
 	}
 	if in := st.Ingress; in != nil && len(heldPorts(in)) > 0 {
-		a.warn("another program holds %s here, which the ingress cannot listen on", portsPhrase(heldPorts(in)))
+		a.warn("another program holds %s; the ingress cannot listen there", portsPhrase(heldPorts(in)))
 	}
 	return nil
 }
 
 func ingressServe(a *app, args []string) error {
 	s := spec{name: "juist ingress serve", about: `
-Serve as the network's ingress: the juist-ingress service, on 443, 443/udp
-for HTTP/3, 80 and the ports names are published on by TCP, let through
-firewalld or ufw where one runs. --stop undoes it.`}
+Serve as the network's ingress: run the juist-ingress service on 443,
+443/udp (HTTP/3), 80 and the published TCP ports, and open them in
+firewalld or ufw. --stop undoes it.`}
 	fs := newFlags(s.name)
 	stop := fs.Bool("stop", false, "stop serving")
 	if _, err := a.parse(s, fs, args); err != nil {
@@ -105,20 +104,20 @@ firewalld or ufw where one runs. --stop undoes it.`}
 		return err
 	}
 	if a.host.ingressScript == "" {
-		return errors.New("an ingress runs on Linux and FreeBSD alone")
+		return errors.New("an ingress runs only on Linux and FreeBSD")
 	}
 	if st.Instance != 0 {
-		return errors.New("an ingress serves the default network's instance alone, for now")
+		return errors.New("an ingress serves only the default instance, for now")
 	}
 	if *stop {
-		if err := a.packageScript(a.host.ingressScript, "off", "the ingress's service and firewall"); err != nil {
+		if err := a.packageScript(a.host.ingressScript, "off", "the ingress service and firewall"); err != nil {
 			return err
 		}
 		a.ok("stopped serving")
 		return nil
 	}
 	if !isIngress(st) {
-		return fmt.Errorf("this device is no ingress\nhint: an admin grants it: juist grant %s ingress",
+		return fmt.Errorf("this device is not an ingress\nhint: an admin grants it: juist grant %s ingress",
 			cmp.Or(st.SelfName, st.Self.ShortString()))
 	}
 	return a.serveIngress(st.Stale)
@@ -127,7 +126,7 @@ firewalld or ufw where one runs. --stop undoes it.`}
 // serveIngress has the package's script start the ingress, and waits for it
 // to answer; stale says this device's view is.
 func (a *app) serveIngress(stale bool) error {
-	if err := a.packageScript(a.host.ingressScript, "on", "the ingress's service and firewall"); err != nil {
+	if err := a.packageScript(a.host.ingressScript, "on", "the ingress service and firewall"); err != nil {
 		return err
 	}
 	if a.host.answers != nil {
@@ -160,7 +159,7 @@ func (a *app) sayServing(names int, tcp []uint16, stale bool) {
 		a.ok("serving %s on 443, 443/udp and 80", count(names, "name"))
 	}
 	if names == 0 && stale {
-		a.hint("this device's view of the network is stale, and a stale ingress serves nothing")
+		a.hint("this device's view of the network is stale; a stale ingress serves nothing")
 	}
 }
 
@@ -214,7 +213,7 @@ func endsTLS(ctx context.Context, addr string) error {
 	case len(b) == 0:
 		return errors.New("nothing answers there")
 	case b[0] != 0x15 && b[0] != 0x16: // an alert, or a handshake
-		return errors.New("a service there speaks no TLS; another program holds the port")
+		return errors.New("no TLS there: another program holds the port")
 	}
 	return nil
 }
@@ -237,7 +236,7 @@ func (a *app) serveIngressNext(target types.NodeRecord) error {
 		a.hint("on %s, juist ingress serve", displayMember(target))
 		return nil
 	case a.host.ingressScript == "":
-		a.warn("an ingress runs on Linux and FreeBSD alone")
+		a.warn("an ingress runs only on Linux and FreeBSD")
 		return nil
 	case !a.asRoot() && !a.interactive:
 		a.hint("juist ingress serve")
@@ -331,7 +330,7 @@ func hasSudo() bool {
 func (a *app) packageScript(script, action, needs string) error {
 	line := asRoot(script + " " + action)
 	if !fileExists(script) {
-		return fmt.Errorf("no %s here; %s is the host's to set up", script, needs)
+		return fmt.Errorf("%s is missing; set up %s by hand", script, needs)
 	}
 	var cmd *exec.Cmd
 	switch {

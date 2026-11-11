@@ -18,12 +18,12 @@ only the traffic to the network, to those subnets and the phone's DNS
 The phone cannot:
 
 - be in more than four networks;
-- turn [public names]({{< relref "docs/names" >}}) on, so they resolve
-  publicly there;
 - route a subnet or be an [exit node]({{< relref "docs/exit-nodes" >}}),
   though it can use both;
-- invite devices, hold an admin key, or relay. Invites come from an admin's
-  computer.
+- relay.
+
+It can found a network of its own and hold its admin key
+([Creating a network](#creating-a-network)).
 
 ## Installing the app
 
@@ -112,6 +112,53 @@ If the network needs more than one admin's vote, the phone shows
 [Inviting devices]({{< relref "docs/invites" >}}) explains the code, the link
 and the words.
 
+## Creating a network {#creating-a-network}
+
+{{< screens >}}
+create: A network's name and the phone's
+backup: The break-glass secret, shown once, and the admin key's backup
+invite: An invite's QR code and code
+invite_compare: The words a joining device shows, compared before it is admitted
+member_admin: A member's roles, and removing it
+{{< /screens >}}
+
+**Create a network**, under the welcome's buttons, founds a network with the
+phone as its first device, as `juist create` does on a computer. The phone
+holds its admin key, sealed in Android Keystore behind your fingerprint, face
+or screen lock: every change that uses it asks for one of those first, and
+none is made while the phone is locked. Without a screen lock, the app asks
+you to set one.
+
+Right after, the app shows the network's break-glass secret once: keep it
+somewhere safe, apart from the phone. With it, `juist network disable` ends
+the network for good once too few admin keys are left to change it
+([Admin keys]({{< relref "docs/keys" >}})). The same screen offers a backup of
+the admin key, which you may skip: a phone lost with the only admin key ends
+every further change, but every copy is one more place the key can be taken
+from. A copy goes into a password manager as the line `juist admins export`
+prints, or into a file sealed by a password of at least twelve characters,
+in a folder you choose. `juist admins import` reads either on a computer, and
+**Back up the admin key** in the status screen's menu does it again.
+
+A network of phones has no relay of its own, so its members meet through
+Tailscale's public DERP servers where they cannot reach each other directly
+([Relays]({{< relref "docs/relays" >}}#public-derp)); the app says so when
+it creates one. The app has no switch for them: `juist network derp off`
+turns them off on a computer that has joined the network and imported the
+admin key (`juist admins import`), as
+[A network of phones alone]({{< relref "docs/use/phones" >}}) walks through.
+Such a network has no voucher either, so its freshness stays unchecked: a
+removed phone learns of its removal as soon as it meets one that knows.
+
+**Invite a device**, under the devices, offers an invite: its QR code, which
+the other device scans, its code for the same Wi-Fi, and a link to share.
+When the device asks to join, both show four words; once they match, **Same
+words** and your fingerprint admit it. The device's screen lists its roles to
+the admin: **Relay**, **Voucher** and **Exit node** (a phone itself only
+**Voucher**), and **Remove from the network**. A change that needs other
+admins' votes is signed and waits for them, and the app says so. Taking
+the network's last voucher, which leaves freshness unchecked, asks first.
+
 ## Several networks {#several-networks}
 
 {{< screens >}}
@@ -138,8 +185,9 @@ one switch turns the VPN on and off for all of them.
 - A member of one network does not reach another network through the phone.
 - An alarm in one network leaves the others' tunnels up.
 - **Leave network**, in a network's menu, deletes the phone's keys for it and
-  ends its tunnels there; the other networks stay as they are. The network
-  lists the phone until an admin removes it.
+  ends its tunnels there; the other networks stay as they are, and so does
+  an admin key the phone holds. The network lists the phone until an admin
+  removes it.
 - An invite does not say which network it is for. Joining a network the
   phone is in already is undone, and the app names the admission an admin
   should remove.
@@ -196,17 +244,27 @@ details: The phone's settings, the network's schema, relays and subnets, and the
 and the [status page]({{< relref "docs/publishing" >}}#status-page) show beyond the
 state: the network's schema next to the app's, the log's head, when the
 phone last brought its view of the network up to date, the relays and the one
-the phone goes through, the network's names, its subnets, and the log's latest
+the phone goes through, what it measured of the network beneath (the
+`Underlay` line of `juist status`), the network's names, its subnets, and the log's latest
 changes, as `juist log` lists them.
 
-It also holds the phone's two settings:
+It also holds the phone's four settings:
 
 - **Network names**: every lookup goes to juist, which answers the network's
   names. Off, the phone keeps its own DNS and resolves none of them, as
   `juist set --dns=false` does on a computer.
+- **Public names**: the [public names]({{< relref "docs/names" >}}) the
+  network points at members, such as a server's website, lead to that
+  member through the tunnel, as `juist names on` does on a computer. Off,
+  the default, they resolve publicly. Below, **Public names** lists each
+  one with its member and whether the phone reaches it through the tunnel
+  or, and why, publicly.
 - **HTTPS only**: the phone reaches relays by HTTPS on port 443 alone, as
   `juist set --https-only` does ([Networks that only allow
   HTTPS]({{< relref "docs/https-only" >}})).
+- **Port mapping**: on a Wi-Fi whose router offers UPnP, NAT-PMP or PCP, the
+  phone has it open a port, so that members reach it directly; off, it asks
+  for none, as `juist set --port-mapping=false` does.
 
 Under **Diagnosis**, the app counts how often it set up the VPN and how its
 lookups went: how many failed or were slow, and which. **Copy log** adds how
@@ -230,7 +288,8 @@ While the VPN is on, every lookup on the phone goes to juist in the app. It
 answers the network's [names]({{< relref "docs/names" >}}), such as
 `nas.home.juist` or just `nas`, and the names
 [published]({{< relref "docs/publishing" >}}) under the network's domain,
-which then lead straight to their device. It also answers reverse lookups of
+which then lead straight to their device, and with **Public names** on
+in **Details** the public names pointed at members. It also answers reverse lookups of
 the network's addresses. All other names go to the phone's network as
 without juist, over DNS over TLS if Private DNS is automatic and the network
 supports it. Turning the VPN off gives the phone its own DNS back.
@@ -298,6 +357,13 @@ uninstalled.
 - The phone's keys are sealed by an AES-256 key in Android Keystore, inside
   the phone's security chip if it has one. A copy of the app's files cannot
   be opened on another phone.
+- An admin key is sealed by a second Keystore key, which opens only right
+  after you authenticated, for that one change, and never while the phone is
+  locked; the app wipes its copy after the change, and juist keeps none.
+  Removing the phone's screen lock makes Android destroy that Keystore key:
+  the admin keys it sealed are then lost, and only their backup brings them
+  back. A key copied as a line stays on the clipboard until something else
+  is copied.
 - Nothing of juist goes into a backup or onto a new phone. A new phone joins
   with its own invite.
 - The camera is used only to read the QR code. Nothing it sees is stored or

@@ -96,10 +96,9 @@ const (
 	MaxPolicyNameLen = 32
 )
 
-// Validate checks a policy's shape: names well-formed and defined once,
-// every name it uses defined, no table in itself, sets sorted, and each
-// rule and test meaningful. Whether its members exist, and so whether their
-// keys are valid, is [Policy.ValidateMembers]'s.
+// Validate checks a policy's shape: names defined once and before use, no
+// table in itself, sets sorted. It does not check members exist; that, and so
+// their keys, is [Policy.ValidateMembers]'s.
 func (p *Policy) Validate() error {
 	if len(p.Tables) > MaxPolicyNames || len(p.Services) > MaxPolicyNames {
 		return fmt.Errorf("a policy with %d tables and %d services, over the %d limit",
@@ -164,8 +163,7 @@ func (p *Policy) Validate() error {
 	return nil
 }
 
-// cyclic is a table that contains itself, or "": a depth-first walk that
-// visits each table once.
+// cyclic returns a table that contains itself, or "".
 func cyclic(tables map[string][]string) string {
 	const visiting, done = 1, 2
 	state := map[string]int{}

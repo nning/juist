@@ -46,7 +46,13 @@ import androidx.compose.ui.text.withStyle
  * onBack, a phone in a network already joins another here.
  */
 @Composable
-fun WelcomeScreen(onScan: () -> Unit, onCode: () -> Unit, onAbout: () -> Unit, onBack: (() -> Unit)? = null) {
+fun WelcomeScreen(
+    onScan: () -> Unit,
+    onCode: () -> Unit,
+    onAbout: () -> Unit,
+    onBack: (() -> Unit)? = null,
+    onCreate: (() -> Unit)? = null,
+) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Readable(Modifier.safeDrawingPadding()) {
             Column(
@@ -93,6 +99,11 @@ fun WelcomeScreen(onScan: () -> Unit, onCode: () -> Unit, onAbout: () -> Unit, o
                     Icon(painterResource(R.drawable.ic_keyboard), null, Modifier.size(20.dp))
                     Spacer(Modifier.size(Space.s))
                     Text(stringResource(R.string.action_enter_code))
+                }
+                if (onCreate != null) {
+                    TextButton(onCreate, Modifier.align(Alignment.CenterHorizontally)) {
+                        Text(stringResource(R.string.action_create_network))
+                    }
                 }
                 TextButton(onAbout, Modifier.align(Alignment.CenterHorizontally)) {
                     Text(stringResource(R.string.about_title))

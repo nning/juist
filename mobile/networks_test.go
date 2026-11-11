@@ -76,6 +76,12 @@ func create(t *testing.T, n *network, name string, v4 netip.Prefix) { createIn(t
 // hands it to each.
 func createIn(t *testing.T, name string, v4 netip.Prefix, ns ...*network) {
 	t.Helper()
+	createWith(t, name, v4, nil, ns...)
+}
+
+// createWith is createIn with others, devices of no core here, as members too.
+func createWith(t *testing.T, name string, v4 netip.Prefix, others []types.NodeRecord, ns ...*network) {
+	t.Helper()
 	admin, err := types.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +98,12 @@ func createIn(t *testing.T, name string, v4 netip.Prefix, ns ...*network) {
 		a := addr
 		recs = append(recs, types.NodeRecord{Identity: self.Identity, Name: fmt.Sprintf("phone%d", i), WireGuard: self.Keys.WireGuard,
 			X25519: self.Keys.X25519, MLKEM: self.Keys.MLKEM, Signing: self.Signing, V4: &a})
+	}
+	for _, o := range others {
+		addr = addr.Next()
+		a := addr
+		o.V4 = &a
+		recs = append(recs, o)
 	}
 	var disable [32]byte
 	sealer := func(epoch uint64, members []types.NodeRecord) (*types.EpochRecord, error) {
@@ -379,5 +391,83 @@ func TestAJoinLeavesTheNetworksThePhoneIsIn(t *testing.T) {
 	create(t, c.network(0), "last", netip.MustParsePrefix("198.18.40.0/22"))
 	if _, _, err := c.freeSlot(); err == nil {
 		t.Error("a fifth network found a slot")
+	}
+}
+
+// otherDevice is a member no core here runs, answering for names.
+func otherDevice(t *testing.T, name string, names ...string) types.NodeRecord {
+	t.Helper()
+	id, err := types.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, err := secrets.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, m, err := priv.Public()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg types.WGKey
+	wg[0] = 1
+	return types.NodeRecord{Identity: id.Public(), Name: name, WireGuard: wg, X25519: x, MLKEM: m,
+		Signing: new(id.SigningKey()), Names: names}
+}
+
+// The app's public-names switch is `juist names on` and `off` for its slot:
+// the view lists the names the network points at other members, says why
+// each resolves publicly once the phone agreed, and keeps the word across
+// a restart.
+func TestThePublicNamesSwitchIsTheOwnersWord(t *testing.T) {
+	t.Cleanup(func() { keys.SealWith(nil) })
+	gossipOnLoopback(t)
+	home := filepath.Join(t.TempDir(), "juist")
+	p := &vpnPlatform{fakePlatform: fakePlatform{t: t}}
+	defer p.close()
+	c, err := Start(home, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { c.Close() }()
+	createWith(t, "home", netip.MustParsePrefix("198.18.4.0/22"),
+		[]types.NodeRecord{otherDevice(t, "server", "rss.example.org")}, c.network(0))
+	public := func(c *Core) (bool, []publicName) {
+		vs := statusesOf(t, c)
+		if len(vs) != 1 || vs[0].Names == nil {
+			return false, nil
+		}
+		return vs[0].Settings.PublicNames, vs[0].Names.Public
+	}
+	waitFor(t, "the public name listed, not agreed", func() bool {
+		on, ps := public(c)
+		return !on && slices.Equal(ps, []publicName{{Name: "rss.example.org", Member: "server"}})
+	})
+
+	if err := c.SetPublicNames(0, true); err != nil {
+		t.Fatal(err)
+	}
+	unreached := []publicName{{Name: "rss.example.org", Member: "server", Not: "server is not reachable"}}
+	if on, ps := public(c); !on || !slices.Equal(ps, unreached) {
+		t.Errorf("agreed, the view says %v %+v", on, ps)
+	}
+
+	c.Close()
+	if c, err = Start(home, p); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the word kept across a restart", func() bool {
+		on, ps := public(c)
+		return on && slices.Equal(ps, unreached)
+	})
+
+	if err := c.SetPublicNames(0, false); err != nil {
+		t.Fatal(err)
+	}
+	if on, ps := public(c); on || !slices.Equal(ps, []publicName{{Name: "rss.example.org", Member: "server"}}) {
+		t.Errorf("taken back, the view says %v %+v", on, ps)
+	}
+	if err := c.SetPublicNames(1, true); err == nil {
+		t.Error("a slot without a network took the word")
 	}
 }

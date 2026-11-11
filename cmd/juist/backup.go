@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -13,57 +12,21 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/nning/juist/internal/backupline"
 	"github.com/nning/juist/internal/keys"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
-// Tags of the lines a secret of the keystore is exported as: what it holds,
-// and in which version of the line.
+// Tags of the lines a secret of the keystore is exported as.
 const (
-	adminKeyLine   = "juist-admin-key-1"
-	breakGlassLine = "juist-break-glass-1"
+	adminKeyLine   = backupline.AdminKey
+	breakGlassLine = backupline.BreakGlass
 )
 
-// backupLine is payload as one line: tag.payload.checksum, the checksum
-// covering the rest so that a line cut short fails to import.
-func backupLine(tag string, payload []byte) string {
-	body := tag + "." + b64.EncodeToString(payload)
-	return body + "." + lineChecksum(body)
-}
+func backupLine(tag string, payload []byte) string { return backupline.Line(tag, payload) }
 
-func lineChecksum(body string) string {
-	sum := sha256.Sum256([]byte(body))
-	return b64.EncodeToString(sum[:4])
-}
-
-// parseBackupLine returns the payload of a line backupLine wrote under tag.
-func parseBackupLine(line, tag string) ([]byte, error) {
-	line = strings.TrimSpace(line)
-	parts := strings.Split(line, ".")
-	if len(parts) != 3 || !strings.HasPrefix(parts[0], "juist-") {
-		return nil, errors.New("not a line juist exported")
-	}
-	if parts[0] != tag {
-		for _, l := range []struct{ tag, what, cmd string }{
-			{adminKeyLine, "an admin key", "juist admins import NAME"},
-			{breakGlassLine, "a break-glass secret", "juist network disable"},
-		} {
-			if parts[0] == l.tag {
-				return nil, fmt.Errorf("the line holds %s\nhint: %s", l.what, l.cmd)
-			}
-		}
-		return nil, fmt.Errorf("the line is %s, which this juist does not read", parts[0])
-	}
-	if lineChecksum(parts[0]+"."+parts[1]) != parts[2] {
-		return nil, errors.New("the line is damaged or cut short; paste it whole")
-	}
-	payload, err := b64.DecodeString(parts[1])
-	if err != nil {
-		return nil, errors.New("the line is damaged or cut short; paste it whole")
-	}
-	return payload, nil
-}
+func parseBackupLine(line, tag string) ([]byte, error) { return backupline.Parse(line, tag) }
 
 // readBackupLine reads an exported line from stdin, without echo on a
 // terminal: it is a secret.
@@ -96,7 +59,7 @@ func (a *app) readSecretLine(prompt string) (string, error) {
 	case err != nil && !errors.Is(err, io.EOF):
 		return "", err
 	case strings.TrimSpace(line) == "":
-		return "", errors.New("no line on stdin")
+		return "", errNoLine
 	}
 	return line, nil
 }
@@ -105,8 +68,8 @@ func (a *app) readSecretLine(prompt string) (string, error) {
 
 func adminsExport(a *app, args []string) error {
 	s := spec{name: "juist admins export", args: "NAME", min: 1, max: 1, anyNetwork: true, about: `
-Print the admin key NAME (as juist admins lists it under KEY HERE) as one
-line on stdout, for a password manager:
+Print the admin key NAME, as juist admins lists it under KEY HERE, as one
+line for a password manager. The line is the key: keep it secret.
 
   juist admins export alice@home | bx create --name "juist alice" --password-stdin
 
@@ -129,9 +92,10 @@ juist admins import reads it back.`}
 
 func adminsImport(a *app, args []string) error {
 	s := spec{name: "juist admins import", args: "NAME", min: 1, max: 1, anyNetwork: true, about: `
-Read a line printed by juist admins export from stdin and keep its key here
-as NAME, such as alice@home. An existing key of that name is never replaced.
-Says whether the network still gives the key a vote.`}
+Read a line juist admins export printed from stdin and keep its key here as
+NAME, such as alice@home. For a line the Android app sealed, the password is
+asked for at the terminal if stdin is a file, else read from the next line
+of stdin, or asked for if there is none. An existing key is never replaced.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
@@ -139,10 +103,10 @@ Says whether the network still gives the key a vote.`}
 	name := pos[0]
 	person, network, _ := strings.Cut(name, "@")
 	if err := checkKeyName(name); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	if err := checkName("NAME", person); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	if u := a.sudoUser(); u != "" {
 		return fmt.Errorf("run as %s, without sudo: the key belongs in your keystore", u)
@@ -152,22 +116,22 @@ Says whether the network still gives the key a vote.`}
 		return err
 	}
 	if slices.ContainsFunc(files, func(k adminKeyFile) bool { return k.name == name }) {
-		return fmt.Errorf("an admin key %q is here already; import under another NAME", name)
+		return fmt.Errorf("admin key %q is here already", name)
 	}
 	line, err := a.readBackupLine()
 	if err != nil {
 		return err
 	}
-	seed, err := parseBackupLine(line, adminKeyLine)
+	seed, err := a.adminSeed(line)
 	if err != nil {
 		return err
 	}
 	priv, err := types.NewPrivateIdentity(seed)
 	if err != nil {
-		return errors.New("the line is damaged or cut short; paste it whole")
+		return errors.New("the line is damaged or cut short")
 	}
 	if i := slices.IndexFunc(files, func(k adminKeyFile) bool { return k.priv.Public() == priv.Public() }); i >= 0 {
-		return fmt.Errorf("that key is here already, as %q", files[i].name)
+		return fmt.Errorf("the key is here already, as %q", files[i].name)
 	}
 	if network != "" && a.network == "" && a.namesNetwork(network) {
 		a.network = network
@@ -185,7 +149,7 @@ Says whether the network still gives the key a vote.`}
 		name = adminKeyName(person, state.Network())
 		network = state.Network()
 		if slices.ContainsFunc(files, func(k adminKeyFile) bool { return k.name == name }) {
-			return fmt.Errorf("an admin key %q is here already; import under another NAME", name)
+			return fmt.Errorf("admin key %q is here already", name)
 		}
 	}
 	if err := a.home.writeSecret(filepath.Join(adminsDir, name+".key"), adminKeyLines(priv, network == "")); err != nil {
@@ -196,7 +160,7 @@ Says whether the network still gives the key a vote.`}
 	case votes:
 		a.ok("it casts %s in %q", count(k.Votes, "vote"), state.Network())
 	case state != nil:
-		a.warn("%q gives it no vote: it was removed, or is another network's", state.Network())
+		a.warn("the key has no vote in %q: it was removed, or is from another network", state.Network())
 	}
 	return nil
 }
@@ -265,7 +229,7 @@ func readBreakGlass(path string) ([][]byte, error) {
 func splitSecrets(payload []byte) ([][]byte, error) {
 	n := len(payload) / types.DisablementSecretSize
 	if n == 0 || n > types.MaxDisablementValues || len(payload)%types.DisablementSecretSize != 0 {
-		return nil, errors.New("the line is damaged or cut short; paste it whole")
+		return nil, errors.New("the line is damaged or cut short")
 	}
 	out := make([][]byte, n)
 	for i := range out {
@@ -339,12 +303,11 @@ func (a *app) breakGlassFrom(from string, state *log.State) ([][]byte, error) {
 
 func networkDisable(a *app, args []string) error {
 	s := spec{name: "juist network disable", about: `
-End the network for good. This reveals its break-glass secret, the line
-juist create showed, in a record that stops every device it reaches. Nothing
-undoes it; each device starts over with juist reset. The line is read from
-stdin, or from FILE with --secrets.`}
+End the network for good: a record with its break-glass secret, the line
+juist create showed, stops every device it reaches. Nothing undoes it; each
+device starts over with juist reset.`}
 	fs := newFlags(s.name)
-	from := fs.String("secrets", "", "`FILE` holding the break-glass secret, - for stdin (default: an older network's file in the keystore, else stdin)")
+	from := fs.String("secrets", "", "`FILE` with the break-glass secret, - for stdin (default: the keystore's file, else stdin)")
 	yes := fs.Bool("yes", false, "do not ask")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
@@ -358,7 +321,7 @@ stdin, or from FILE with --secrets.`}
 		return fmt.Errorf("%q is disabled already", state.Network())
 	}
 	if liveStatus(a.node) == nil {
-		return errors.New("no juistd here hands the record to the network\nhint: run it on a device of the network")
+		return errors.New("no juistd here to hand the record on\nhint: run it on a device of the network")
 	}
 	secrets, err := a.breakGlassFrom(*from, state)
 	if err != nil {
@@ -366,7 +329,7 @@ stdin, or from FILE with --secrets.`}
 	}
 	i := slices.IndexFunc(secrets, state.ValidDisablement)
 	if i < 0 {
-		return fmt.Errorf("no break-glass secret of %q there", state.Network())
+		return fmt.Errorf("no break-glass secret of %q found", state.Network())
 	}
 	if err := a.proceedNow(*yes, fmt.Sprintf("end %q for good? every device stops, and nothing undoes it",
 		state.Network())); err != nil {
@@ -382,3 +345,51 @@ stdin, or from FILE with --secrets.`}
 	a.ok("disabled %q; every device stops as the record reaches it", state.Network())
 	return nil
 }
+
+// adminSeed is the key a line juist admins export or the app wrote holds,
+// asking for the password of one sealed by it.
+func (a *app) adminSeed(line string) ([]byte, error) {
+	if backupline.Tag(line) != backupline.SealedAdminKey {
+		return parseBackupLine(line, adminKeyLine)
+	}
+	password, err := a.readPassword()
+	if err != nil {
+		return nil, err
+	}
+	return backupline.Open(line, strings.TrimRight(password, "\r\n"))
+}
+
+// readPassword reads the password of a sealed line by what stdin is, not
+// by when the password comes: from a file, as `juist admins import NAME <
+// FILE` reads the app's, at the terminal; from a pipe, whose writer gives
+// both lines, next on it, and at the terminal where it ends without one;
+// at the terminal itself, there.
+func (a *app) readPassword() (string, error) {
+	f, ok := a.in.(*os.File)
+	if !ok || isTerminal(f) {
+		return a.readSecretLine("password: ")
+	}
+	tty, ttyErr := a.tty()
+	if ttyErr == nil {
+		defer tty.Close()
+	}
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		// Typed into the pipe's writer, as with `cat FILE - |`, it echoes:
+		// say where it is read, where a person may be there to see.
+		if ttyErr == nil {
+			fmt.Fprintln(a.errOut, "password: read from the next line of stdin")
+		}
+		password, err := a.readSecretLine("password: ")
+		if !errors.Is(err, errNoLine) {
+			return password, err
+		}
+	}
+	if ttyErr != nil {
+		return a.readSecretLine("password: ")
+	}
+	t := &app{ctx: a.ctx, in: tty, out: a.out, errOut: a.errOut}
+	return t.readSecretLine("password: ")
+}
+
+// errNoLine is readSecretLine's error where stdin holds no further line.
+var errNoLine = errors.New("no line on stdin")

@@ -28,12 +28,12 @@ func TestNamesAddAndRemove(t *testing.T) {
 		want string
 	}{
 		{[]string{"names", "add", "laptop", "mx.example.net"}, "hint: juist names remove phone mx.example.net"},
-		{[]string{"names", "add", "phone", "mailer.home.juist"}, "the network's own"},
+		{[]string{"names", "add", "phone", "mailer.home.juist"}, "name cannot end in .juist: mailer.home.juist"},
 		{[]string{"names", "add", "phone", "10.1.2.3"}, "as an address does"},
-		{[]string{"names", "add", "phone", "mail"}, `"mail" is no public name, such as mail.example.org`},
-		{[]string{"names", "remove", "laptop", "mx.example.net"}, "does not answer for mx.example.net"},
-		{[]string{"grant", "phone", "relay", "www.example.net"}, "hint: juist names add phone www.example.net"},
-		{[]string{"revoke", "phone", "mx.example.net"}, "hint: juist names remove phone mx.example.net"},
+		{[]string{"names", "add", "phone", "mail"}, `"mail" is not a name like mail.example.org` + "\nusage: juist names add"},
+		{[]string{"names", "remove", "laptop", "mx.example.net"}, "mx.example.net does not point at laptop"},
+		{[]string{"grant", "phone", "relay", "www.example.net"}, "www.example.net is a public name, not a role\nusage: juist grant"},
+		{[]string{"revoke", "phone", "mx.example.net"}, "mx.example.net is a public name, not a role\nusage: juist revoke"},
 	} {
 		if out, err := admin.run(tc.args...); err == nil || !strings.Contains(out+err.Error(), tc.want) {
 			t.Errorf("juist %q: %v\n%s", tc.args, err, out)
@@ -71,7 +71,7 @@ func TestStatusSaysHowNamesResolve(t *testing.T) {
 		{ipc.Names{Domain: "home.juist", Resolved: true}, []line{{kind: lineField, label: "Names", text: "laptop.home.juist"}}},
 		{ipc.Names{Domain: "home.juist", Not: "DNS is off on this device", Cannot: true, Off: true},
 			[]line{{kind: lineField, label: "Names", text: "laptop.home.juist (DNS off)"},
-				{kind: lineInfo, text: "DNS is off on this device: the network's names are not resolved here, and no DNS goes through an exit node; juist set --dns takes it again"}}},
+				{kind: lineInfo, text: "DNS is off on this device: the network's names are not resolved, and no DNS goes through an exit node (juist set --dns turns it on)"}}},
 		{ipc.Names{Domain: "home.juist", Not: "this host's resolver routes no domains", Cannot: true},
 			[]line{{kind: lineField, label: "Names", text: "laptop.home.juist"},
 				{kind: lineInfo, text: "home.juist not resolved here: this host's resolver routes no domains"}}},
@@ -91,8 +91,8 @@ func TestStatusSaysHowNamesResolve(t *testing.T) {
 				{kind: lineHint, text: "the package's juistd.service hands juistd /etc/resolv.conf, to answer this host's DNS itself"}}},
 		{ipc.Names{Domain: "home.juist", Not: "this host's resolver routes no domains", Cannot: true,
 			ForMembers: []string{"photos.pub.example.org", "wiki.pub.example.org"}},
-			[]line{{kind: lineWarn, text: "photos.pub.example.org, for members alone, is not reached from here, which resolves the network's names publicly"},
-				{kind: lineWarn, text: "wiki.pub.example.org, for members alone, is not reached from here, which resolves the network's names publicly"}}},
+			[]line{{kind: lineWarn, text: "photos.pub.example.org is for members only and not reachable here: this device resolves the network's names publicly"},
+				{kind: lineWarn, text: "wiki.pub.example.org is for members only and not reachable here: this device resolves the network's names publicly"}}},
 	} {
 		s := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 1, SelfName: "laptop", Names: &tc.names}}
 		v := statusOf(s, now, noPaint)
@@ -121,7 +121,7 @@ func TestAcceptNames(t *testing.T) {
 	laptop, vps := homeAndVPS(t)
 	mustContain(t, laptop.mustRun("names"), "*.home.juist", "every member", "hint: an admin points a public name at a device")
 	mustContain(t, laptop.mustRun("names", "add", "vps", "mx.example.net"), "vps: names mx.example.net",
-		"hint: juist names on, on each device that is to resolve it")
+		"hint: on each device that should resolve it: juist names on")
 	eventually(t, "health names the public name", func() bool {
 		return strings.Contains(laptop.mustRun("health"), "1 public name, off on this device")
 	})
@@ -192,11 +192,15 @@ func TestNameStates(t *testing.T) {
 	t.Parallel()
 	o := ipc.NameOverride{Name: "mx.example.net", Device: "mailer"}
 	down := ipc.NameOverride{Name: "mx.example.net", Device: "mailer", Not: "mailer is not reachable"}
+	if got := domainState(&ipc.Names{Off: true}, noPaint); got != "juist DNS off" {
+		t.Errorf("DNS off domain: %q", got)
+	}
 	for _, tc := range []struct {
 		n    ipc.Names
 		o    ipc.NameOverride
 		want string
 	}{
+		{ipc.Names{Off: true}, o, "juist DNS off"},
 		{ipc.Names{Resolved: true}, o, "off on this device"},
 		{ipc.Names{Accepted: true, Not: "this host's resolver routes no domains"}, o,
 			"not resolved here: this host's resolver routes no domains"},

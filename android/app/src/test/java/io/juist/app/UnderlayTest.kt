@@ -1,8 +1,10 @@
 package io.juist.app
 
+import android.net.IpPrefix
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.RouteInfo
 import java.net.Inet6Address
 import java.net.InetAddress
 import io.juist.app.core.UnderlayDns
@@ -82,6 +84,22 @@ class UnderlayTest {
         assertEquals("dns.google", u.privateDns)
         follower.onLost(wifi)
         assertEquals("", resolvers.last())
+    }
+
+    /** The port mapper hears the IPv4 router the default route goes through, not another. */
+    @Test
+    fun saysTheNetworksGateway() {
+        val wifi = ShadowNetwork.newInstance(100)
+        follower.onAvailable(wifi)
+        val route = RouteInfo::class.java.getConstructor(IpPrefix::class.java, InetAddress::class.java, String::class.java)
+        follower.onLinkPropertiesChanged(wifi, link("wlan0").apply {
+            addRoute(route.newInstance(IpPrefix(InetAddress.getByName("192.168.1.0"), 24), null, "wlan0"))
+            addRoute(route.newInstance(IpPrefix(InetAddress.getByName("::"), 0), InetAddress.getByName("fe80::1"), "wlan0"))
+            addRoute(route.newInstance(IpPrefix(InetAddress.getByName("0.0.0.0"), 0), InetAddress.getByName("192.168.1.1"), "wlan0"))
+        })
+        val u = coreJson.decodeFromString(UnderlayDns.serializer(), resolvers.single())
+        assertEquals("192.168.1.1", u.gateway)
+        assertEquals(listOf("192.168.1.0/24"), u.routes)
     }
 
     @Test

@@ -73,6 +73,38 @@ A fix for a finding comes with a regression test that fails against the code
 before the fix: revert the fix, watch the test fail, restore it. A test that
 exists for a scenario is not evidence that the scenario works.
 
+### Reviews
+
+No milestone is done without a review round. Reviewers did not write the
+code: fresh agents given the diff since the last `M<N> done`, the
+milestone's section of `05-roadmap.md` and `02-threat-model.md`, never the
+author's summary. A part that lands on its own is reviewed when it lands;
+the closing review covers the whole diff.
+`.claude/workflows/milestone-review.js` runs a round.
+
+- One reviewer per area and lens: correctness, security against the threat
+  model, failure and restart paths, platforms, CLI output and docs. What the
+  threat model names gets an adversarial reviewer, of another model where
+  one is available.
+- Severity: critical and high are a lost security property or wrong
+  behaviour in normal use, medium is wrong behaviour in a realistic edge
+  case. Wording, docs, output layout and a missing test are minor, however
+  they read.
+- A finding names input, state and wrong outcome, a failing test where it
+  can. Someone other than its finder confirms it before it is fixed.
+- Every confirmed finding is settled in the round's commit, fixed or
+  rejected with a reason in its body; none is carried to the roadmap or a
+  later round. A minor is fixed where that is cheap, else rejected.
+- A fix is the smallest that ends the wrong behaviour: a correction, a
+  revert of its cause, or the limit said where users read it. A fix that
+  would need new functionality is not made; the limit is said instead.
+- A round's fixes get a follow-up round: one fresh reviewer, the fixes'
+  diff alone, its minors settled without another round. Where a follow-up
+  finds something above minor in the previous follow-up's fix, that fix is
+  reverted and the limit said instead, which ends the rounds.
+- Rounds end when one confirms nothing above minor; the `M<N> done` commit
+  and the roadmap say how many there were.
+
 ### Commit messages
 
 A commit message is a subject line of at most 72 characters, a blank line,
@@ -135,7 +167,9 @@ the stamp the last pass left, for the rounds before. A change to what `make
 check` skips runs the stage that covers it: devices, routes, firewall or NAT
 `make ci-vm STAGES=vm`, packages, units or what passes between hosts `make
 ci-vm STAGES=lab`. Say its result, or that it did not run.
-`12-validating.md`, "When each gate runs", has the whole table. Claims about the
+A change to a message the lab expects (`grep -rn` its words in `interop/`)
+updates the lab in the same commit. `12-validating.md`, "When each gate
+runs", has the whole table. Claims about the
 embedded Tailscale stack are verified against the pinned module cache
 (`~/go/pkg/mod/tailscale.com@<version>`), not from memory.
 
@@ -170,14 +204,30 @@ what to add. New commands go through the command table and helpers in
 `cmd/juist` (`cli.go`, `changes.go`), and are tested through the in-process
 app with injected output, never `os.Stdout`.
 
+A command, subcommand or form that is replaced is gone: no alias, no
+message naming the old form, no hint for it, no test for it.
+
 ### Output
 
 juist speaks like a Unix tool, not a chat: one line per outcome, lowercase,
 no trailing period, no ✓. Warnings are `warning: …` and suggestions `hint: …`,
 both on stderr; errors are `juist: …` with at most one `hint:` line, or a
-`usage:` line for bad arguments. Say what happened, not what to do next unless
+`usage:` line for bad arguments: a wrong option, a missing or extra
+argument, or a value the command does not take (`a.usageErr`), as a Unix
+tool says it: what is wrong in a few words, then the usage, no hint. Say what happened, not what to do next unless
 it is needed to act; explanations belong in `--help` and `docs/`, and `--help`
 text stays a few lines.
+
+Messages are plain English, worded as a user would say them: the thing,
+then what is wrong with it, in the user's words. `name cannot be only
+digits`, `name cannot start with a digit`, `--members cannot be used with
+--tcp`, `"x" is not a port`. Not, in new or changed messages:
+
+- noun chains and possessives: `a new name's label`, `juist publish's own
+  words`;
+- literary or inverted turns: `is no more`, `not digits alone`, `where it
+  was meant so`, `the name X stops with Y` (say `to stop X: Y`);
+- the code's terms where the user's say it: label, target, form.
 
 `juist status` says the state, without errors, warnings or hints: what needs
 attention is a warning in `juist health`, and status only counts them and

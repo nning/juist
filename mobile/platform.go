@@ -137,6 +137,8 @@ type underlayDNS struct {
 	// Routes are the network's routes, which no subnet route takes into the
 	// tunnel.
 	Routes []string `json:"routes,omitempty"`
+	// Gateway is the IPv4 router the network's default route goes through.
+	Gateway string `json:"gateway,omitempty"`
 }
 
 // underlayRoutes is what s, an [underlayDNS], routes but by default routes,
@@ -181,4 +183,18 @@ func parseUnderlay(s string) (daemon.Underlay, error) {
 		return u, fmt.Errorf("the underlay's resolvers: no addresses: %s", strings.Join(bad, ", "))
 	}
 	return u, nil
+}
+
+// underlayGateway is the IPv4 router s, an [underlayDNS], names, "" for none
+// or one that does not parse.
+func underlayGateway(s string) string {
+	var in underlayDNS
+	if s == "" || json.Unmarshal([]byte(s), &in) != nil {
+		return ""
+	}
+	a, err := netip.ParseAddr(in.Gateway)
+	if err != nil || !a.Unmap().Is4() {
+		return ""
+	}
+	return a.Unmap().String()
 }

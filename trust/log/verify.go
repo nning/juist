@@ -8,9 +8,8 @@ import (
 	"github.com/nning/juist/types"
 )
 
-// SignatureStatus reports how far a record is from being authorized. It exists
-// for the signing ceremony: with admin keys deliberately held on separate
-// machines, whoever assembles a record needs to know what is still missing.
+// SignatureStatus reports how far a record is from being authorized, for the
+// signing ceremony.
 type SignatureStatus struct {
 	// Votes is the weight of the valid admin signatures present.
 	Votes uint32
@@ -24,8 +23,7 @@ type SignatureStatus struct {
 	Unsigned    []types.Identity
 
 	// Untrusted lists signatures by keys the network does not trust for this
-	// record. Any of them makes the record invalid outright, rather than
-	// merely unauthorized.
+	// record. Any of them makes the record invalid, not merely unauthorized.
 	Untrusted []types.Identity
 
 	// Invalid lists signers whose signature is present but does not verify.
@@ -39,12 +37,9 @@ func (s SignatureStatus) Authorized() bool {
 }
 
 // SelfSigners returns the non-admin keys a record must additionally be signed
-// by. A key rotation is signed by the node whose keys change, which is what
-// shows they came from the device. An identity rotation is signed by the new
-// key, proving some device holds it, and by the old one too: otherwise admins
-// alone could move a member's slot to a key of their choosing. An admin key
-// signs for its own encryption key, in a genesis as in
-// [types.KindSetAdminRecipient].
+// by: the node whose keys a rotation changes; for an identity rotation both
+// old and new key, so admins alone cannot move a member's slot; an admin key
+// for its own encryption key, in a genesis or [types.KindSetAdminRecipient].
 func SelfSigners(a *types.AUM) []types.Identity {
 	switch a.Kind {
 	case types.KindGenesis:
@@ -66,8 +61,7 @@ func SelfSigners(a *types.AUM) []types.Identity {
 	}
 }
 
-// SignAsDevice adds every signature of a device's that a record needs: those
-// of the keys held, old and new, that it names as its self-signers.
+// SignAsDevice signs a with every held key that [SelfSigners] names.
 func SignAsDevice(a *types.AUM, held ...types.PrivateIdentity) error {
 	for _, want := range SelfSigners(a) {
 		for _, k := range held {
@@ -100,20 +94,17 @@ func signatureStatus(a *types.AUM, admins map[types.Identity]types.AdminKey, quo
 		admin, isAdmin := admins[sig.KeyID]
 		isSelf := slices.Contains(selfSigners, sig.KeyID)
 		if !isAdmin && !isSelf {
-			// A signature from a key with no role invalidates the record
-			// rather than being ignored: otherwise anyone could mint a second
-			// valid encoding of it, with a different hash.
+			// Invalidate rather than ignore: otherwise anyone could mint a
+			// second valid encoding with a different hash.
 			st.Untrusted = append(st.Untrusted, sig.KeyID)
 			continue
 		}
-		// Trust first, verify second: an untrusted key ID is a map lookup,
-		// while a signature check is not, and a record may carry dozens.
+		// Trust before verify: a lookup is cheap, a signature check is not.
 		if !verifyEntry(a, sig, sigHash, keyOf) {
 			st.Invalid = append(st.Invalid, sig.KeyID)
 			continue
 		}
-		// A key can be both: an admin signing a rotation of its own device
-		// satisfies the self-signature requirement and casts its votes.
+		// A key can be both admin and self-signer.
 		if isAdmin {
 			voted[admin.Public] = true
 		}
@@ -137,9 +128,8 @@ func signatureStatus(a *types.AUM, admins map[types.Identity]types.AdminKey, quo
 	return st
 }
 
-// verifyAgainst checks that a record is authorized by the given authority
-// state and chains to it. Whether its substance is acceptable is
-// [State.apply]'s job.
+// verifyAgainst checks that a record chains to parent and is authorized by
+// it; its substance is [State.apply]'s job.
 func verifyAgainst(a *types.AUM, parent *State) error { return verify(a, parent, false) }
 
 // verify is [verifyAgainst], or with votesPending everything but the quorum
@@ -173,9 +163,7 @@ func verify(a *types.AUM, parent *State, votesPending bool) error {
 }
 
 // GenesisStatus reports how far a genesis record is from being authorized
-// under the policy it declares. A genesis is the one record whose progress
-// cannot be measured against a chain, so without this a tool cannot tell a
-// ceremony still collecting signatures from a broken record.
+// under the policy it declares.
 func GenesisStatus(a *types.AUM) (SignatureStatus, error) {
 	if a.Kind != types.KindGenesis {
 		return SignatureStatus{}, fmt.Errorf("log: %v is not a genesis record", a.Kind)
@@ -210,10 +198,8 @@ func genesisAdmins(a *types.AUM) map[types.Identity]types.AdminKey {
 }
 
 // verifySelfSigned checks a genesis, or a checkpoint adopted as a bootstrap
-// anchor, against the admin keys it declares. Self-referential by necessity:
-// such a record is only as trustworthy as the way it reached you, the one
-// place history is taken on the signers' word. A node that later holds a
-// checkpoint's ancestry compares it against what the chain produces.
+// anchor, against the admin keys it declares. Such a record is only as
+// trustworthy as the way it arrived.
 func verifySelfSigned(a *types.AUM, kind types.Kind) error {
 	if err := a.StaticValidate(); err != nil {
 		return reject(RuleMalformed, fmt.Errorf("log: %w", err))

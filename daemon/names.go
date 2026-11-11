@@ -15,6 +15,7 @@ import (
 	"github.com/nning/juist/internal/dnsfwd"
 	"github.com/nning/juist/internal/names"
 	"github.com/nning/juist/internal/policy"
+	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -156,7 +157,7 @@ func (d *Daemon) namesZone(state *log.State, view policy.View, fresh log.Freshne
 			// device is resolved as by the internet, which reaches nothing.
 			mine := !p.Members || n.Identity != d.self && (!view.Restricted ||
 				slices.Contains(view.Out[n.Identity].Names, p.Label))
-			if reachedDirectly(p) && state.Domain() != "" && serves(n.Identity) && mine {
+			if ipc.ReachedDirectly(p) && state.Domain() != "" && serves(n.Identity) && mine {
 				held = append(held, heldOverride{name: p.Under(state.Domain()), target: n.Identity, device: n.Name,
 					published: true, members: p.Members})
 			}
@@ -276,14 +277,4 @@ func routedDomains(z *names.Zone) []string {
 		}
 	}
 	return out
-}
-
-// reachedDirectly reports whether members reach p at its member, on the port
-// the internet reaches it on: by TLS on 443, or by TCP on its own port. A
-// service behind --proxy may want the ingress's header.
-func reachedDirectly(p types.PublishedName) bool {
-	if p.Public != 0 {
-		return p.Public == p.Port && !p.Proxy
-	}
-	return p.Port == 443 && !p.Proxy
 }

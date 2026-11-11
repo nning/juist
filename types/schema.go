@@ -2,25 +2,17 @@ package types
 
 import "fmt"
 
-// A SchemaVersion identifies the record schema a network's log is written
-// under. The schema is frozen at M3b in the sense that no field can be added
-// to a record without a version behind it; this is what that version is.
-//
-// It is a property of the *network*, carried in the state every genesis and
-// checkpoint states, and raised only by a quorum-signed
-// [KindSchemaUpgrade] record. A build that meets a version it does not
-// implement stops applying records and says so, rather than ignoring the
-// difference: a node acting on a subset of what its peers act on holds a
-// different view of who is a member, which is the split the log exists to
-// prevent.
+// A SchemaVersion is the record schema a network's log is written under; no
+// field is added without one. Raised only by [KindSchemaUpgrade]. A build
+// meeting one it does not implement stops applying records rather than act
+// on a subset of what its peers act on.
 type SchemaVersion uint16
 
 // CurrentSchema is the schema this build implements.
-const CurrentSchema SchemaVersion = 22
+const CurrentSchema SchemaVersion = 25
 
-// SchemaSignedRotation is the first schema in which an identity rotation
-// names the new signing key in what its signers sign ([AUM.NewSigning]); below
-// it, identities do not rotate.
+// SchemaSignedRotation is the first schema with identity rotation, its new
+// signing key signed over ([AUM.NewSigning]).
 const SchemaSignedRotation SchemaVersion = 19
 
 // SchemaContentForkChoice is the first schema in which fork choice orders
@@ -29,20 +21,30 @@ const SchemaSignedRotation SchemaVersion = 19
 const SchemaContentForkChoice SchemaVersion = 19
 
 // SchemaRests is the first schema in which an announcement may say its device
-// rests, as a phone does, which earlier builds' strict decoders refuse.
+// rests, which older strict decoders refuse.
 const SchemaRests SchemaVersion = 20
 
-// SchemaSeen is the first schema in which a gossip hello says what its
-// sender holds of each node rather than carrying it, which earlier builds'
-// strict decoders refuse.
+// SchemaSeen is the first schema in which a gossip hello says what its sender
+// holds of each node, which older strict decoders refuse.
 const SchemaSeen SchemaVersion = 21
 
 // SchemaMulticast is the first schema with [PolicyRule.Multicast].
 const SchemaMulticast SchemaVersion = 22
 
+// SchemaOwnNames is the first schema with names of their own ([OwnName]).
+const SchemaOwnNames SchemaVersion = 23
+
+// SchemaPublicDERP is the first schema with a public DERP setting
+// ([PublicDERP]).
+const SchemaPublicDERP SchemaVersion = 24
+
+// SchemaTakeRetired is the first schema in which a move or a subnet route
+// may take an address or range another member is retiring, which ends that
+// retirement.
+const SchemaTakeRetired SchemaVersion = 25
+
 // MinSchema is the lowest schema this build reads, where every record is
-// signed by ML-DSA alone. Networks below it moved up with M17's build; the
-// rules of schemas 0 to 17 are in git's history.
+// signed by ML-DSA alone.
 const MinSchema SchemaVersion = 18
 
 func (v SchemaVersion) String() string { return fmt.Sprintf("schema %d", uint16(v)) }

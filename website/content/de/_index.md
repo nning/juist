@@ -13,7 +13,7 @@ links:
 
 {{< rules >}}
 Kein Server in der Mitte
-: Geräte finden einander im LAN, über andere Mitglieder oder über den öffentlichen BitTorrent-DHT. Sie kommen durch NAT, und wo das nicht klappt, springt ein Relay ein, das auf einem deiner eigenen Geräte läuft.
+: Geräte finden einander im LAN, über andere Mitglieder oder über den öffentlichen BitTorrent-DHT. Sie kommen durch NAT, und wo das nicht klappt, springt ein Relay ein, das auf einem deiner eigenen Geräte läuft, oder, wenn das Netz es wählt, Tailscales öffentliche DERP-Server.
 
 Änderungen brauchen deine Admins
 : Um ein Gerät aufzunehmen oder zu entfernen, braucht es ein Quorum von Admins, jeder mit einem Schlüssel auf seinen eigenen Geräten. Die Schlüssel bleiben im Keystore, der Daemon bekommt sie nie.
@@ -111,13 +111,13 @@ Was du tun kannst
 
 {{< trade title="Öffentliche Helfer sehen Adressen" knob="--no-dht --no-stun" >}}
 Was passiert
-: Der öffentliche BitTorrent-DHT und die STUN-Server sehen die Adressen der Geräte, die sie nutzen.
+: Der öffentliche BitTorrent-DHT und die STUN-Server sehen die Adressen der Geräte, die sie nutzen, ebenso Tailscales DERP-Server, wenn das Netz sie wählt.
 
 Warum juist das hinnimmt
 : juist vertraut nichts, was sie liefern. Ein kompromittierter Helfer kann Verbindungen verzögern, aber nicht ändern, wer zum Netz gehört.
 
 Was du tun kannst
-: juistd ohne sie betreiben und den Geräten selbst Adressen mitgeben, unter denen sie sich erreichen.
+: juistd ohne sie betreiben, Tailscales DERP-Server mit `juist network derp off` abschalten und den Geräten selbst Adressen mitgeben, unter denen sie sich erreichen.
 {{< /trade >}}
 
 ### Kryptographie

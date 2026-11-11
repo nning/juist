@@ -6,4 +6,4 @@ package mobile
 // routes the core's own sockets and netmon reads the routes itself.
 func protectBy(Platform) {}
 
-func defaultRouteVia(string) {}
+func defaultRouteVia(string, string) {}

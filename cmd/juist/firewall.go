@@ -3,7 +3,9 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -69,6 +71,89 @@ func firewalldAdmitsInvite(c *firewalld.Client, port uint16) bool {
 	return err == nil && open
 }
 
+// firewalldZones is what firewalldUDP asks of firewalld.
+type firewalldZones interface {
+	Zone(iface string) (string, error)
+	Admits(zone string, port uint16, proto string) (bool, error)
+	HasService(zone, service string) (bool, error)
+}
+
+// firewalldBlocksUDP asks a running firewalld, as [firewalldUDP] does, about
+// UDP to port arriving on the default route's interface.
+func firewalldBlocksUDP(ctx context.Context, port uint16) (zone string, service, unsure bool) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	c, err := firewalld.Dial(ctx)
+	if err != nil {
+		return "", false, false
+	}
+	defer c.Close()
+	return firewalldUDP(c, uplink(os.ReadFile), port)
+}
+
+// firewalldUDP returns the zone that keeps UDP to port from arriving on
+// iface, "" where none is known to; whether its service "juist" is defined,
+// which the default port's hint then names; and unsure where the zone's
+// ports could not be read.
+func firewalldUDP(c firewalldZones, iface string, port uint16) (zone string, service, unsure bool) {
+	zone, err := c.Zone(iface)
+	if err != nil || zone == "" {
+		return "", false, false
+	}
+	open, err := c.Admits(zone, port, "udp")
+	if errors.Is(err, firewalld.ErrNotAuthorized) {
+		return zone, false, true
+	}
+	if err != nil || open {
+		return "", false, false
+	}
+	if port != serviceDataPort {
+		return zone, false, false
+	}
+	open, err = c.HasService(zone, "juist")
+	switch {
+	case err == nil && !open:
+		return zone, true, false
+	case err != nil && strings.Contains(err.Error(), "INVALID_SERVICE"):
+		return zone, false, false // undefined, so it lets nothing in
+	}
+	return "", false, false
+}
+
+// pastableZone reports whether zone is a firewalld zone name a shell reads
+// as one word: letters, digits, - and _, at most 17 of them.
+func pastableZone(zone string) bool {
+	if len(zone) == 0 || len(zone) > 17 || zone[0] == '-' {
+		return false
+	}
+	for _, c := range []byte(zone) {
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// uplink is the interface of the IPv4 default route with the lowest
+// metric, from /proc/net/route as read reads it; "" where none is known.
+func uplink(read func(string) ([]byte, error)) string {
+	b, err := read("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	best, metric := "", uint64(math.MaxUint64)
+	for line := range strings.Lines(string(b)) {
+		f := strings.Fields(line)
+		if len(f) < 8 || f[1] != "00000000" || f[7] != "00000000" {
+			continue
+		}
+		if m, err := strconv.ParseUint(f[6], 10, 32); err == nil && m < metric && pastableIfName(f[0]) {
+			best, metric = f[0], m
+		}
+	}
+	return best
+}
+
 // pastableIfName reports whether dev, as juistd names its device, is an
 // interface name Linux and FreeBSD both take and a shell reads as one word:
 // what the daemon reports goes into commands run as root.
@@ -109,9 +194,9 @@ func (a *app) warnFirewalled(st *ipc.Status, ports ...uint16) {
 	}
 	what := strings.Join(blocked, ", ")
 	if unsure {
-		a.warn("firewalld may block %s on %s: its zone is not trusted, and juist may not read its ports", what, dev)
+		a.warn("firewalld may block %s on %s: its zone is not trusted, and juist cannot read its ports", what, dev)
 	} else {
-		a.warn("firewalld blocks %s on %s, so the ingresses and members reach nothing served there", what, dev)
+		a.warn("firewalld blocks %s on %s: ingresses and members cannot reach it", what, dev)
 	}
 	a.hint("sudo firewall-cmd --permanent --zone=trusted --change-interface=%s && sudo firewall-cmd --reload", dev)
 }

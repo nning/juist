@@ -263,6 +263,9 @@ type Request struct {
 	// or empty to disable copies.
 	Multicast *bool     `cbor:"36,keyasint,omitempty"`
 	Groups    *[]string `cbor:"37,keyasint,omitempty"`
+	// PortMapping, which a [CmdSettings] sets too, is whether this device
+	// asks its router to map a port for it by UPnP, NAT-PMP or PCP.
+	PortMapping *bool `cbor:"38,keyasint,omitempty"`
 }
 
 // MaxGroups bounds an explicit group list.
@@ -297,7 +300,8 @@ func validGroups(gs *[]string) bool {
 
 // Settings reports whether r sets any of the device's settings.
 func (r *Request) Settings() bool {
-	return r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil || r.DNS != nil || r.Multicast != nil || r.Groups != nil
+	return r.HTTPSOnly != nil || r.Proxy != nil || r.RelayName != nil || r.DNS != nil || r.Multicast != nil || r.Groups != nil ||
+		r.PortMapping != nil
 }
 
 // maxTerminatorAddrs caps the addresses a terminator reports, each way.
@@ -458,15 +462,16 @@ type ServeTo struct {
 	Members bool `cbor:"3,keyasint,omitempty"`
 }
 
-// Valid reports whether s names one label and one HOST:PORT or status page.
+// Valid reports whether s names one label or name of its own, and one
+// HOST:PORT or status page.
 func (s ServeTo) Valid() bool {
 	if _, ok := StatusPageOf(s.To); ok {
-		return s.Label == "" || types.ValidateLabel(s.Label) == nil
+		return s.Label == "" || types.ValidatePublishedLabel(s.Label) == nil
 	}
 	addr, _ := HTTP2Of(s.To)
 	host, port, err := net.SplitHostPort(addr)
 	n, perr := strconv.ParseUint(port, 10, 16)
-	return (s.Label == "" || types.ValidateLabel(s.Label) == nil) && err == nil && perr == nil && n > 0 && host != "" &&
+	return (s.Label == "" || types.ValidatePublishedLabel(s.Label) == nil) && err == nil && perr == nil && n > 0 && host != "" &&
 		!strings.ContainsAny(addr, " \t\n")
 }
 
@@ -685,7 +690,7 @@ const (
 	fShare
 	fPing
 	fListening // Listening and Unbound
-	fSettings  // HTTPSOnly, Proxy, RelayName, DNS, Multicast and Groups
+	fSettings  // HTTPSOnly, Proxy, RelayName, DNS, Multicast, Groups and PortMapping
 )
 
 // present lists the optional fields r sets.
@@ -1101,6 +1106,12 @@ func StreamVia(ctx context.Context, dial Dialer, req Request, onEvent func(*Even
 func Converse(ctx context.Context, path string, req Request,
 	onEvent func(ctx context.Context, e *Event, reply func(Request) error) error) (Response, error) {
 	return converse(ctx, Socket(path), req, onEvent, 0)
+}
+
+// ConverseVia is [Converse] over dial.
+func ConverseVia(ctx context.Context, dial Dialer, req Request,
+	onEvent func(ctx context.Context, e *Event, reply func(Request) error) error) (Response, error) {
+	return converse(ctx, dial, req, onEvent, 0)
 }
 
 // converse runs a call, waiting at most idle between frames once the first

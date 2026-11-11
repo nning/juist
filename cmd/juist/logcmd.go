@@ -16,8 +16,8 @@ import (
 )
 
 func logFamily() family {
-	return family{name: "juist log", intro: `Inspect the membership log: the signed, hash-chained record of every change,
-which each device holds and verifies.`, subs: []subcommand{
+	return family{name: "juist log", intro: `Inspect the membership log: the signed chain of every change, which each
+device holds and verifies.`, subs: []subcommand{
 		{name: "show", run: logShow, forms: [][2]string{{"", "list the changes"},
 			{"show N|HASH", "what one change did, and who signed it; -1 is the last"}}},
 		{name: "verify", run: logVerify, forms: [][2]string{{"verify [FILE]", "re-verify the log, or check a change file"}}},
@@ -94,7 +94,7 @@ func findChange(entries []changelog.Entry, arg string) (int, error) {
 			i += len(entries)
 		}
 		if i < 0 || i >= len(entries) {
-			return 0, fmt.Errorf("no change %s: the log lists 0 to %d, or %d to -1", arg, len(entries)-1, -len(entries))
+			return 0, fmt.Errorf("no change %s: the log has 0 to %d, or %d to -1", arg, len(entries)-1, -len(entries))
 		}
 		return i, nil
 	}
@@ -102,7 +102,7 @@ func findChange(entries []changelog.Entry, arg string) (int, error) {
 	for i, e := range entries {
 		if arg != "" && strings.HasPrefix(e.Hash.String(), strings.ToUpper(arg)) {
 			if found >= 0 {
-				return 0, fmt.Errorf("%s starts the hash of more than one change: give more of it", arg)
+				return 0, fmt.Errorf("%s matches more than one change; give more of the hash", arg)
 			}
 			found = i
 		}
@@ -193,19 +193,19 @@ group secret. With FILEs, say what each change needs and whether it applies.`}
 
 func logUpgrade(a *app, args []string) error {
 	s := spec{name: "juist log upgrade", about: `
-Raise the network to this build's record schema once every device's juist
-implements it, as juist devices shows. --force raises it anyway, and devices
-on older builds stop until updated. --when-ready, for a timer, raises it
-without asking once they do, and else does nothing.`}
+Raise the network to this build's record schema once every device supports
+it (see juist devices). --force raises it anyway; devices on older builds stop
+until updated. --when-ready, for timers, raises it without asking once every
+device is ready, and does nothing before.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
-	force := fs.Bool("force", false, "raise it although devices lag")
-	whenReady := fs.Bool("when-ready", false, "raise it without asking once every device is ready")
+	force := fs.Bool("force", false, "raise it even if devices are not ready")
+	whenReady := fs.Bool("when-ready", false, "raise it without asking if every device is ready")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
 	if *force && *whenReady {
-		return fmt.Errorf("--force and --when-ready exclude each other\n%s", s.usage(fs))
+		return a.usageErr("--force cannot be used with --when-ready")
 	}
 	auth, err := a.networkLog()
 	if err != nil {
@@ -227,14 +227,14 @@ without asking once they do, and else does nothing.`}
 		}
 		st := liveStatus(n)
 		if st == nil || !st.InNetwork || st.NotMember {
-			return fmt.Errorf("no juistd of this network here says which schema each device implements\n" +
+			return fmt.Errorf("cannot tell which schema each device supports: no juistd of this network here\n" +
 				"hint: run it on a member, or raise it anyway: juist log upgrade --force")
 		}
 		if lag := unready(state, st, to); len(lag) > 0 {
 			if *whenReady {
 				return nil
 			}
-			return fmt.Errorf("not every device implements %v: %s\n"+
+			return fmt.Errorf("not every device supports %v: %s\n"+
 				"hint: update them, or raise it anyway: juist log upgrade --force", to, strings.Join(lag, ", "))
 		}
 	}
@@ -247,7 +247,7 @@ without asking once they do, and else does nothing.`}
 			return err
 		}
 		if len(aum.Signatures) > 0 && !state.SignatureStatus(&aum).Authorized() {
-			return fmt.Errorf("raising %v to %v needs other admins' votes\nhint: juist log upgrade", cur, to)
+			return fmt.Errorf("raising %v to %v needs votes of other admins\nhint: juist log upgrade", cur, to)
 		}
 	} else {
 		if *force {
@@ -311,7 +311,7 @@ func (a *app) upgradeNote(st *ipc.Status, several bool) []line {
 	if several {
 		cmd += " " + a.network
 	}
-	return []line{{kind: lineHint, text: fmt.Sprintf("every device implements %v: %s", types.CurrentSchema, cmd)}}
+	return []line{{kind: lineHint, apart: true, text: fmt.Sprintf("every device supports %v: %s", types.CurrentSchema, cmd)}}
 }
 
 func logCheckpoint(a *app, args []string) error {
@@ -339,7 +339,7 @@ its own history. juist records one by itself every 256 changes.`}
 func (a *app) reportLogHealth(auth *log.Authority) {
 	for _, o := range auth.Orphans() {
 		if len(o.Unrevoked) > 0 {
-			a.warn("%s lost to a concurrent change, not in effect; an admin redoes it",
+			a.warn("%s lost to a concurrent change, not in effect; an admin must redo it",
 				count(len(o.Unrevoked), "revocation"))
 		}
 		// A checkpoint has nothing to redo.

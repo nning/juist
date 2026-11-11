@@ -12,29 +12,31 @@ You need a domain and an ingress, as
 [Publishing services]({{< relref "docs/publishing" >}}#setting-it-up) sets them
 up.
 
-{{< step on="an admin's device" >}}
-```sh
-juist publish add nas mc 25565 --tcp
+On the NAS, as its [operator]({{< relref "docs/operator" >}}):
+
+```sh {device="nas"}
+juist publish mc 25565 --tcp
 ```
 
-This publishes port 25565 of nas on port 25565 of every ingress, as
-`mc.example.org`, and prints `nas: publishes mc.example.org:25565/tcp`.
-`--tcp=PORT` picks another public port:
-`juist publish add nas ssh 22 --tcp=2222` prints
+This publishes the Minecraft server on port 25565 of the NAS on port 25565 of
+every ingress, as `mc.example.org`. It prints
+`nas: publishes mc.example.org:25565/tcp` and
+`passing mc.example.org to 127.0.0.1:25565`. `--tcp=PORT` picks another
+public port: `juist publish ssh 22 --tcp=2222` publishes the NAS's SSH as
+`ssh.example.org:2222/tcp`. If the NAS holds no admin key, the command names
+the admin's command, as for [any name]({{< relref "docs/publishing" >}}#who-publishes).
+
+A service that listens on all addresses, the overlay addresses too, takes
+its connections there itself. An admin then publishes the device's port with
+`--on`, and the NAS's operator serves it as it is:
+
+```sh
+juist publish mc 25565 --tcp --on nas   # on an admin's device
+juist publish mc                        # on nas
+```
+
+`juist publish ssh 22 --tcp=2222 --on nas` prints
 `ssh.example.org:2222/tcp to 22`.
-{{< /step >}}
-
-{{< step on="nas" as="the target" >}}
-If the service listens on all addresses, its operator agrees with
-`juist publish serve`. If it listens only on loopback, publish it on the
-device:
-
-```sh
-juist publish add mc 127.0.0.1:25565 --tcp
-```
-
-It prints `passing mc.example.org to 127.0.0.1:25565`.
-{{< /step >}}
 
 Players connect to `mc.example.org:25565`. Every ingress listens on the port
 while a name is published on it. On Linux, the ingress opens the port in
@@ -68,5 +70,5 @@ what encrypts itself, as SSH does, or what anyone may see.
 
 | You see | What to do |
 |---|---|
-| `another program holds port 25565 on …, where juist would pass NAME by TCP` | The service listens on all addresses, including the overlay addresses. Publish its port instead, as the hint says, and agree with `juist publish serve`. |
+| `another program holds port 25565 on …, needed for NAME` | The service listens on all addresses, including the overlay addresses. Publish the device's port instead, as the hint says, and serve it with `juist publish NAME` on the device. |
 | on vps, `juist status`: `Ingress` says `…; another program holds port 22` | A program on the ingress, often sshd, holds a published port. juist leaves the port to it. Publish the name on another port with `--tcp=PORT`. |

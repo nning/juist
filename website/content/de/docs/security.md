@@ -52,6 +52,11 @@ Die vollständige Analyse mit allen verbleibenden Schwächen steht im
 - Dem Relay. Ein [Relay]({{< relref "docs/relays" >}}) ist eines deiner
   eigenen Mitglieder. Nur Mitglieder können es nutzen, und es sieht nur
   verschlüsselten WireGuard-Verkehr.
+- Tailscales öffentlichen DERP-Servern, wenn das Netz sie wählt, wie eines,
+  das die Android-App anlegt: Auch sie sehen nur verschlüsselten
+  WireGuard-Verkehr, aber dazu die öffentliche Adresse jedes Geräts und welche
+  Geräte wann wie viel miteinander austauschen
+  ([Relays]({{< relref "docs/relays" >}}#public-derp)).
 - Dem Daemon, wenn es ums Signieren geht. juistd bekommt nie einen
   Admin-Schlüssel. Auch ein kompromittierter juistd kann also keine Änderungen
   signieren.

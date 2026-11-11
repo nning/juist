@@ -41,7 +41,7 @@ func TestHelp(t *testing.T) {
 	// The help says what the README and the invite's own hint say.
 	mustContain(t, c.mustRun("help", "invite"), "voids the code; the link still works")
 	mustContain(t, c.mustRun("help", "publish"), "juist ends TLS")
-	mustContain(t, c.mustRun("help", "publish", "add"), "juist ends TLS with")
+	mustContain(t, c.mustRun("help", "publish"), "juist publish NAME [PORT] --on DEVICE")
 }
 
 // Options are --name or -n, and actions are commands: nothing else parses.
@@ -52,16 +52,16 @@ func TestOptionsHaveOneSpellingAndActionsAreCommands(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"-home", "/tmp/x", "status"}, "as --home"},
-		{[]string{"status", "-socket=/tmp/s"}, "as --socket"},
-		{[]string{"invite", "-expires", "2h"}, "as --expires"},
+		{[]string{"-home", "/tmp/x", "status"}, "did you mean --home?"},
+		{[]string{"status", "-socket=/tmp/s"}, "did you mean --socket?"},
+		{[]string{"invite", "-expires", "2h"}, "did you mean --expires?"},
 		{[]string{"invite", "--expire", "2h"}, "did you mean --expires?"},
-		{[]string{"remove", "--y", "x"}, "as -y"},
-		{[]string{"--version"}, "use: juist version"},
-		{[]string{"-init"}, "did you mean: juist create"},
-		{[]string{"-create"}, "did you mean: juist create"},
+		{[]string{"remove", "--y", "x"}, "did you mean -y?"},
+		{[]string{"--version"}, `did you mean "juist version"?`},
+		{[]string{"-init"}, `did you mean "juist create"?`},
+		{[]string{"-create"}, `did you mean "juist create"?`},
 		{[]string{"rotate", "--identity"}, "unknown option --identity"},
-		{[]string{"rotate", "sideways"}, "unknown rotation"},
+		{[]string{"rotate", "sideways"}, "unknown rotation \"sideways\"\nusage: juist rotate"},
 		{[]string{"grant", "--remove", "a", "relay"}, "unknown option --remove"},
 	} {
 		_, err := c.run(tc.args...)

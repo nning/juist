@@ -327,6 +327,15 @@ func measuresRelay(r *netcheck.Report, relays []Relay, pinged map[int]bool) bool
 	})
 }
 
+// measuresPublic reports whether r measured one of Tailscale's regions,
+// but by ICMP alone, those in pinged.
+func measuresPublic(r *netcheck.Report, pinged map[int]bool) bool {
+	return r != nil && slices.ContainsFunc(tailscaleRegions(), func(reg *tailcfg.DERPRegion) bool {
+		_, ok := r.RegionLatency[reg.RegionID]
+		return ok && !pinged[int(reg.RegionID)]
+	})
+}
+
 // reachesNoneAside reports whether r, taken without the STUN servers,
 // reached no relay with every way tried: with the relays' names on 443
 // first, where there are any, which come first only after two such reports;
@@ -356,7 +365,10 @@ func (m *tsManager) followSTUN() {
 	m.walls.stunCounted = r
 	if m.walls.stunAside.Load() {
 		pinged := m.pinged.lastAlone()
-		if r.UDP || measuresRelay(r, m.relays, pinged) {
+		// Tailscale's regions, where the network names them, are a home
+		// too: one measured leaves the node homed there, aside or not.
+		public := m.publicDERP.Load() && measuresPublic(r, pinged)
+		if r.UDP || public || measuresRelay(r, m.relays, pinged) {
 			m.walls.emptyAside = 0
 		} else if m.walls.emptyAside++; m.walls.emptyAside >= 2 {
 			// Without the STUN servers no report names one for the nearest
@@ -378,6 +390,17 @@ func (m *tsManager) followSTUN() {
 			m.installDERPMapAsking(m.relays, false)
 		case measuresRelay(r, m.relays, pinged):
 			m.walls.asideGap = 0
+		case public && !r.UDP:
+			// Homed at Tailscale's on 443, but nothing answers UDP without
+			// the STUN servers, which tell this node its public address:
+			// they come back on the same backoff, the home kept.
+			m.walls.asideGap = min(max(2*m.walls.asideGap, relayRetryFirst), relayRetryMost)
+			m.walls.asideAgain = time.Now().Add(m.walls.asideGap)
+			m.walls.stunAside.Store(false)
+			m.walls.unanswered = 0
+			m.logf("conn: Tailscale's DERP reached on 443 alone; the STUN servers are asked again")
+			m.installDERPMapAsking(m.relays, false)
+		case public:
 		case reachesNoneAside(r, m.relays, pinged, m.walls.nameFirst && m.walls.namedFirst > 0):
 			m.walls.asideGap = min(max(2*m.walls.asideGap, relayRetryFirst), relayRetryMost)
 			m.walls.asideAgain = time.Now().Add(m.walls.asideGap)

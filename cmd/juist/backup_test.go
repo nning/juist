@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nning/juist/internal/backupline"
 )
 
 var (
@@ -67,7 +70,7 @@ func TestCreateShowsTheBreakGlassSecretAndKeepsItNowhere(t *testing.T) {
 	out := c.mustRun("create", "home")
 	line := breakGlassOf(t, out)
 	mustContain(t, out, "Break-glass   "+line, "shown only now and kept nowhere",
-		"juist network disable ends the network once too few admin keys are left")
+		"juist network disable ends the network when too few admin keys are left")
 	payload, err := parseBackupLine(line, breakGlassLine)
 	if err != nil {
 		t.Fatal(err)
@@ -299,6 +302,223 @@ func TestAdminKeyExportAndImport(t *testing.T) {
 	mustContain(t, c.mustRun("admins", "quorum", "1", "--yes"), "quorum")
 }
 
+// A key the app sealed by a password is imported with that password, and
+// not with another.
+func TestAdminKeyImportSealedByAPassword(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home")
+	name := adminKeyHere(t, c)
+	seed, err := parseBackupLine(adminKeyLineRE.FindString(c.mustRun("admins", "export", name)), adminKeyLine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := backupline.Seal(seed, "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(c.home, adminsDir, name+".key")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.answer(sealed+"\nwrong horse battery", "admins", "import", name); !errors.Is(err, backupline.ErrPassword) {
+		t.Fatalf("another password: %v", err)
+	}
+	mustContain(t, must(c.answer(sealed+"\ncorrect horse battery", "admins", "import", name)), "imported admin key")
+	mustContain(t, c.mustRun("admins", "quorum", "1", "--yes"), "quorum")
+}
+
+// A sealed line read from a file, as the app saves it, has its password
+// asked at the terminal, not read from the file.
+func TestAdminKeyImportFromTheAppsFileAsksAtTheTerminal(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home")
+	name := adminKeyHere(t, c)
+	seed, err := parseBackupLine(adminKeyLineRE.FindString(c.mustRun("admins", "export", name)), adminKeyLine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := backupline.Seal(seed, "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(c.home, adminsDir, name+".key")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "juist-admin-home.txt")
+	if err := os.WriteFile(file, []byte(sealed+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	tty, typed, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer typed.Close()
+	if _, err := typed.WriteString("correct horse battery\n"); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	a := c.app(&out, "")
+	a.in = in
+	a.tty = func() (*os.File, error) { return tty, nil }
+	if err := a.main([]string{"--home", c.home, "admins", "import", name}); err != nil {
+		t.Fatalf("import from the app's file: %v\n%s", err, out.String())
+	}
+	mustContain(t, out.String(), "imported admin key")
+}
+
+// A password piped after the sealed line, as by a script started at a
+// terminal, is read from there, not asked at the terminal.
+func TestAdminKeyImportTakesAPasswordPipedAfterTheLine(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home")
+	name := adminKeyHere(t, c)
+	seed, err := parseBackupLine(adminKeyLineRE.FindString(c.mustRun("admins", "export", name)), adminKeyLine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := backupline.Seal(seed, "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(c.home, adminsDir, name+".key")); err != nil {
+		t.Fatal(err)
+	}
+	in, piped, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	if _, err := piped.WriteString(sealed + "\ncorrect horse battery\n"); err != nil {
+		t.Fatal(err)
+	}
+	piped.Close()
+	var out syncBuffer
+	a := c.app(&out, "")
+	a.in = in
+	// Asked at the terminal, a wrong one would be typed.
+	tty, typed, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer typed.Close()
+	if _, err := typed.WriteString("wrong horse battery\n"); err != nil {
+		t.Fatal(err)
+	}
+	a.tty = func() (*os.File, error) { return tty, nil }
+	if err := a.main([]string{"--home", c.home, "admins", "import", name}); err != nil {
+		t.Fatalf("a password piped after the line: %v\n%s", err, out.String())
+	}
+	mustContain(t, out.String(), "imported admin key")
+}
+
+// Without a terminal, as in a script, the password of a sealed line is read
+// from stdin, though it comes after the line was read.
+func TestAdminKeyImportWithoutATerminalReadsThePasswordFromStdin(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home")
+	name := adminKeyHere(t, c)
+	seed, err := parseBackupLine(adminKeyLineRE.FindString(c.mustRun("admins", "export", name)), adminKeyLine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := backupline.Seal(seed, "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(c.home, adminsDir, name+".key")); err != nil {
+		t.Fatal(err)
+	}
+	in, piped, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	if _, err := piped.WriteString(sealed + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = piped.WriteString("correct horse battery\n")
+		piped.Close()
+	}()
+	var out syncBuffer
+	a := c.app(&out, "")
+	a.in = in
+	a.tty = func() (*os.File, error) { return nil, errors.New("no terminal") }
+	if err := a.main([]string{"--home", c.home, "admins", "import", name}); err != nil {
+		t.Fatalf("a password on stdin without a terminal: %v\n%s", err, out.String())
+	}
+	mustContain(t, out.String(), "imported admin key")
+}
+
+// From a pipe, the password is read next on it however late it comes, a
+// terminal or not; and asked at the terminal where the pipe ends without.
+func TestAdminKeyImportFromAPipeReadsThePipe(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, piped, typed string
+	}{
+		{"later on the pipe", "correct horse battery\n", "wrong horse battery\n"},
+		{"none on the pipe", "", "correct horse battery\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cli := newCLI(t)
+			cli.mustRun("create", "home")
+			name := adminKeyHere(t, cli)
+			seed, err := parseBackupLine(adminKeyLineRE.FindString(cli.mustRun("admins", "export", name)), adminKeyLine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sealed, err := backupline.Seal(seed, "correct horse battery")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(cli.home, adminsDir, name+".key")); err != nil {
+				t.Fatal(err)
+			}
+			in, piped, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
+			if _, err := piped.WriteString(sealed + "\n"); err != nil {
+				t.Fatal(err)
+			}
+			go func() {
+				time.Sleep(300 * time.Millisecond)
+				_, _ = piped.WriteString(c.piped)
+				piped.Close()
+			}()
+			tty, typed, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer typed.Close()
+			if _, err := typed.WriteString(c.typed); err != nil {
+				t.Fatal(err)
+			}
+			var out syncBuffer
+			a := cli.app(&out, "")
+			a.in = in
+			a.tty = func() (*os.File, error) { return tty, nil }
+			if err := a.main([]string{"--home", cli.home, "admins", "import", name}); err != nil {
+				t.Fatalf("%v\n%s", err, out.String())
+			}
+			// A password typed into the pipe's writer echoes: it says
+			// where it is read.
+			mustContain(t, out.String(), "imported admin key", "password: read from the next line of stdin")
+		})
+	}
+}
+
 func TestImportSaysAKeyHasNoVote(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
@@ -306,7 +526,7 @@ func TestImportSaysAKeyHasNoVote(t *testing.T) {
 	other := newCLI(t)
 	other.mustRun("create", "work")
 	line := adminKeyLineRE.FindString(other.mustRun("admins", "export", adminKeyHere(t, other)))
-	mustContain(t, must(c.answer(line, "admins", "import", "work-key")), "imported admin key", `"home" gives it no vote`)
+	mustContain(t, must(c.answer(line, "admins", "import", "work-key")), "imported admin key", `the key has no vote in "home"`)
 }
 
 func TestImportRefusesTheOtherKindOfLine(t *testing.T) {

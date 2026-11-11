@@ -96,7 +96,7 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	t.Run("access policy", func(t *testing.T) {
 		accessPolicy(t, fb, lx, lx4)
 	})
-	fb.try("juist publish serve --stop; juist ingress serve --stop; pkill -f '[p]ebble'; pkill -f '[p]robe answer'; "+
+	fb.try("juist publish --stop; juist ingress serve --stop; pkill -f '[p]ebble'; pkill -f '[p]robe answer'; "+
 		"pkill -f '[p]robe serve fb-web'; sysrc -x juist_serve_env juist_serve_args", time.Minute)
 	t.Run("rename", func(t *testing.T) {
 		rename(t, fb, lx, fb4, fb6)
@@ -381,24 +381,24 @@ juist revoke lx exit --yes
 juist subnet remove lx `+lxSide.subnet+`
 juist network domain pub.example.org
 juist grant lx ingress
-juist publish add fb web 8443`)
+juist publish web 8443 --on fb`)
 	// Published on fb by its operator, the name is served at once.
 	lx.eventually(t, "learning it is the ingress", 3*time.Minute, "juist ingress serve", has("serving 1 name on 443, 443/udp and 80"))
 	lx.run(t, "systemctl is-active --quiet juist-ingress && getent passwd juist-ingress >/dev/null")
 	lx.eventually(t, "being confined by fb", 2*time.Minute, "! /tmp/probe get "+fb4+":80", ok)
 	// Without fb's word, lx is told no name.
-	fb.run(t, "juist publish serve --stop")
+	fb.run(t, "juist publish --stop")
 	lx.eventually(t, "being told no name", 2*time.Minute, "juist ingress serve", has("serving 0 names on 443, 443/udp and 80"))
 	lx.eventually(t, "taking the name no longer", time.Minute,
 		`[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: web.pub.example.org' http://127.0.0.1/)" = 404 ]`, ok)
 	lx.run(t, "! /tmp/probe hello 127.0.0.1:443 web.pub.example.org")
-	fb.run(t, "juist publish serve")
+	fb.run(t, "juist publish web")
 	lx.eventually(t, "reaching fb's published port through itself", 2*time.Minute,
 		"/tmp/probe hello 127.0.0.1:443 web.pub.example.org", has("fb-tls from"))
 	lx.run(t, "juist status | grep -q 'Ingress *serving web.pub.example.org on 443, 443/udp and 80'")
 	lx.run(t, "! /tmp/probe get "+fb4+":80")
 	lx.run(t, `[ "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: web.pub.example.org' http://127.0.0.1/)" = "308 https://web.pub.example.org/" ]`)
-	fb.run(t, "juist publish rm fb web")
+	fb.run(t, "juist publish --stop web --on fb")
 	lx.eventually(t, "the withdrawn name reaching nothing", 2*time.Minute,
 		"! /tmp/probe hello 127.0.0.1:443 web.pub.example.org", ok)
 	lx.run(t, "juist ingress serve --stop && ! systemctl is-active --quiet juist-ingress")

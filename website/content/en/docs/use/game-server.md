@@ -26,31 +26,22 @@ NAS, as long as the public port is the NAS's own and the name has no
 
 ## Setting it up
 
-{{< step on="an admin's device" >}}
-Publish port 25565 of nas on every ingress:
-
-```sh
-juist publish add nas mc 25565 --tcp
-```
-
-It prints `nas: publishes mc.example.org:25565/tcp`. `--tcp=PORT` picks a
-different public port.
-{{< /step >}}
-
 {{< step on="nas" as="the game server" >}}
-If the server listens on all addresses, agree to serve it:
+Publish the server's port on every ingress:
 
 ```sh
-juist publish serve
+juist publish mc 25565 --tcp
 ```
 
-If it listens only on loopback, juist passes the bytes on to it unchanged:
+It prints `nas: publishes mc.example.org:25565/tcp` and
+`passing mc.example.org to 127.0.0.1:25565`: juist passes the bytes on to the
+server unchanged. `--tcp=PORT` picks a different public port. Without an
+admin key on the NAS, the command names what an admin runs:
+`juist publish mc 25565 --tcp --on nas`.
 
-```sh
-juist publish add mc 127.0.0.1:25565 --tcp
-```
-
-It prints `passing mc.example.org to 127.0.0.1:25565`.
+If the server listens on all addresses, it takes the connections itself. An
+admin then publishes the NAS's port with `juist publish mc 25565 --tcp --on nas`,
+and you serve it here with `juist publish mc`.
 {{< /step >}}
 
 {{< step on="your DNS provider's website" >}}
@@ -77,7 +68,7 @@ _minecraft._tcp.mc.example.org. SRV 0 5 25565 mc.example.org.
   [access policy]({{< relref "docs/access" >}}) says otherwise, for example
   `pass from <friends> to nas proto tcp port 25565`.
 - **Client addresses.** The server sees connections from the ingress.
-  `--proxy` on `juist publish add` sends the client's address in a PROXY
+  `--proxy` on `juist publish` sends the client's address in a PROXY
   protocol v2 header, which Paper and Velocity accept when configured to and
   vanilla Minecraft does not.
 - Ports 80, 443 and juist's own, 41640 to 41739, cannot be published this way.

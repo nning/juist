@@ -52,7 +52,7 @@ func (a *app) showQR(text string) {
 		return
 	}
 	if w := 2 + len([]rune(lines[0])); a.width > 0 && w > a.width {
-		a.printf("%s\n\n", a.dim(fmt.Sprintf("no qr code: the terminal is narrower than %d columns", w)))
+		a.printf("%s\n\n", a.dim(fmt.Sprintf("no QR code: the terminal is narrower than %d columns", w)))
 		return
 	}
 	for i, l := range lines {

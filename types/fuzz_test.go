@@ -3,6 +3,7 @@ package types
 import (
 	"bytes"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -69,6 +70,79 @@ func FuzzValidateAUM(f *testing.F) {
 		}
 		_ = a.Clone()
 	})
+}
+
+// FuzzDecodeLease reads a lease as gossip hands one on: what decodes encodes
+// again to the same bytes and verifies, and no input panics. With resign the
+// input is signed again first: such a lease decodes exactly when it names a
+// network, a head and a time, and its ML-DSA signature verifies.
+func FuzzDecodeLease(f *testing.F) {
+	priv, err := GenerateIdentity()
+	if err != nil {
+		f.Fatal(err)
+	}
+	key := priv.SigningKey()
+	l := Lease{Network: Hash{1}, Head: Hash{2}, Issued: 1000}
+	if err := l.Sign(priv); err != nil {
+		f.Fatal(err)
+	}
+	ed := l
+	ed.MLDSA = nil
+	for _, s := range []Lease{l, ed} {
+		b, err := s.Encode()
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(b, false)
+		f.Add(b, true)
+	}
+	f.Add([]byte{}, false)
+	f.Add([]byte{0xa0}, true)
+	f.Fuzz(func(t *testing.T, data []byte, resign bool) {
+		if resign {
+			l, err := DecodeCanonical[Lease](decMode, data, MaxRecordSize)
+			if err != nil {
+				refusedCleanly(t, err)
+				return
+			}
+			if err := l.Sign(priv); err != nil {
+				t.Fatal(err)
+			}
+			if data, err = l.Encode(); err != nil {
+				t.Fatalf("a decoded lease failed to encode: %v", err)
+			}
+			_, err = DecodeLease(data)
+			if shaped := !l.Network.IsZero() && !l.Head.IsZero() && l.Issued != 0; (err == nil) != shaped {
+				t.Fatalf("a signed lease decodes as %v, though it names a network, a head and a time: %v", err, shaped)
+			}
+		}
+		l, err := DecodeLease(data)
+		if err != nil {
+			refusedCleanly(t, err)
+			return
+		}
+		re, err := l.Encode()
+		if err != nil {
+			t.Fatalf("a decoded lease failed to re-encode: %v", err)
+		}
+		if !bytes.Equal(re, data) {
+			t.Fatalf("re-encoding changed the bytes:\ninput: %x\nagain: %x", data, re)
+		}
+		if err := l.Verify(); err != nil {
+			t.Fatalf("a decoded lease does not verify: %v", err)
+		}
+		if err := l.VerifyPQ(&key); resign && err != nil {
+			t.Fatalf("a lease signed again does not verify by ML-DSA: %v", err)
+		}
+	})
+}
+
+// refusedCleanly fails on an error malformed.Recover made of a panic.
+func refusedCleanly(t *testing.T, err error) {
+	t.Helper()
+	if strings.Contains(err.Error(), "malformed input: ") {
+		t.Fatalf("a decoder panicked: %v", err)
+	}
 }
 
 func seedCorpus(f *testing.F) {
@@ -198,6 +272,7 @@ func corpusSeeds(t interface{ Fatalf(string, ...any) }) [][]byte {
 		{Kind: KindRenameNode, Prev: &parent, Subject: &id, NodeName: new("laptop")},
 		{Kind: KindDisable, Prev: &parent, Secret: &DisablementSecret{2}},
 		{Kind: KindSetPolicy, Prev: &parent, Policy: seedPolicy(id)},
+		{Kind: KindSetPublicDERP, Prev: &parent, PublicDERP: &PublicDERP{Tailscale: true}},
 	}
 	// An identity rotation signed by the identity rotated to.
 	rotated := AUM{Kind: KindRotateIdentity, Prev: &parent, Subject: &id, NewIdentity: &freshPub,

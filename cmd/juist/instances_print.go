@@ -105,8 +105,8 @@ func (a *app) warnHostOverlap() {
 			if o.n > a.instance.n {
 				yields, word = o.st.NetworkName, o.name()
 			}
-			a.warn("%q's IPv4 range overlaps %q's (%s) here; %q runs here without IPv4 until one of them "+
-				"renumbers", st.NetworkName, o.st.NetworkName, o.name(), yields)
+			a.warn("the IPv4 ranges of %q and %q (%s) overlap; %q runs here without IPv4 until one renumbers",
+				st.NetworkName, o.st.NetworkName, o.name(), yields)
 			a.hint("juist network renumber %s PREFIX", word)
 			return
 		}

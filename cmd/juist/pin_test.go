@@ -64,7 +64,7 @@ func TestTheKeystoreAnchorsWhatItVerified(t *testing.T) {
 
 	// Another network where the daemon held this one.
 	orecs, oauth := chainOf(t, other)
-	if err := keystore.checkPin(sock, oauth, orecs, noOrphans); err == nil || !strings.Contains(err.Error(), "now holds network") {
+	if err := keystore.checkPin(sock, oauth, orecs, noOrphans); err == nil || !strings.Contains(err.Error(), "holds network") {
 		t.Fatalf("a daemon that switched networks: %v", err)
 	}
 

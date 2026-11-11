@@ -45,15 +45,14 @@ func TestASubnetFromAddToRemove(t *testing.T) {
 		args []string
 		want []string
 	}{
-		{[]string{"subnet", "add", "vps", "192.168.50.1/24"}, []string{"192.168.50.1/24 has host bits set", "hint: 192.168.50.0/24"}},
-		{[]string{"subnet", "add", "vps", "0.0.0.0/0"}, []string{"0.0.0.0/0 is the internet", "hint: juist grant vps exit"}},
+		{[]string{"subnet", "add", "vps", "192.168.50.1/24"}, []string{"192.168.50.1/24 has host bits set; did you mean 192.168.50.0/24?\nusage: juist subnet add"}},
+		{[]string{"subnet", "add", "vps", "0.0.0.0/0"}, []string{"0.0.0.0/0 is the internet, not a subnet\nusage: juist subnet add"}},
 		{[]string{"subnet", "add", "vps", "198.18.4.0/24"}, []string{"overlaps the network's own addresses"}},
-		{[]string{"subnet", "add", "vps", "192.168/16"}, []string{`"192.168/16" is no prefix`}},
-		{[]string{"subnet", "add", "vps", "192.168.50.1"}, []string{`"192.168.50.1" is no prefix`}},
+		{[]string{"subnet", "add", "vps", "192.168/16"}, []string{"\"192.168/16\" is not a subnet\nusage: juist subnet add"}},
+		{[]string{"subnet", "add", "vps", "192.168.50.1"}, []string{`"192.168.50.1" is not a subnet`}},
 		{[]string{"subnet", "remove", "vps", "10.0.0.0/8"}, []string{"vps does not route 10.0.0.0/8", "hint: juist subnet"}},
-		{[]string{"grant", "vps", "192.168.50.0/24"}, []string{"192.168.50.0/24 is a subnet, not a role",
-			"hint: juist subnet add vps 192.168.50.0/24"}},
-		{[]string{"revoke", "vps", "relay", "192.168.50.0/24"}, []string{"hint: juist subnet remove vps 192.168.50.0/24"}},
+		{[]string{"grant", "vps", "192.168.50.0/24"}, []string{"192.168.50.0/24 is a subnet, not a role\nusage: juist grant"}},
+		{[]string{"revoke", "vps", "relay", "192.168.50.0/24"}, []string{"192.168.50.0/24 is a subnet, not a role\nusage: juist revoke"}},
 	} {
 		out, err := laptop.run(tc.args...)
 		if err == nil {
@@ -238,6 +237,6 @@ func TestRoutingADockerNetworkIsWarnedOf(t *testing.T) {
 	}
 	a.warnDocker([]netip.Prefix{netip.MustParsePrefix("192.168.77.0/24"), netip.MustParsePrefix("172.21.0.0/16")})
 	mustContain(t, out.String(),
-		"warning: docker shields its containers on br-494bc3342646 (172.21.0.0/16) from routed traffic",
+		"warning: docker drops routed traffic to its containers on br-494bc3342646 (172.21.0.0/16)",
 		"hint: docker lets it through on a network with gateway_mode_ipv4=nat-unprotected")
 }

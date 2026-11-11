@@ -74,22 +74,28 @@ func (p *pinged) lastAlone() map[int]bool {
 
 // homeToHold is the region netcheck is to be held at after report r, whose
 // regions alone were reached by ICMP alone: its own choice where HTTPS
-// reached that, else the nearest relay HTTPS reached, 0 for none; hold is
+// reached that, else the nearest relay HTTPS reached, its latency weighed
+// by the map's scores as netcheck weighs it, 0 for none; hold is
 // false where nothing was pinged alone, as with UDP, and netcheck chooses.
-func homeToHold(r *netcheck.Report, alone map[int]bool, stun map[tailcfg.DERPRegionID]bool) (region int, hold bool) {
+func homeToHold(r *netcheck.Report, alone map[int]bool, stun map[tailcfg.DERPRegionID]bool,
+	scores map[tailcfg.DERPRegionID]float64) (region int, hold bool) {
 	if r == nil || r.UDP || len(alone) == 0 {
 		return 0, false
 	}
 	if p := r.PreferredDERP; p != 0 && !alone[int(p)] && !stun[p] {
 		return int(p), true
 	}
-	best := tailcfg.DERPRegionID(0)
+	best, bestScaled := tailcfg.DERPRegionID(0), 0.0
 	for id, d := range r.RegionLatency {
 		if alone[int(id)] || stun[id] {
 			continue
 		}
-		if best == 0 || d < r.RegionLatency[best] || d == r.RegionLatency[best] && id < best {
-			best = id
+		scaled := float64(d)
+		if s, ok := scores[id]; ok && s > 0 {
+			scaled *= s
+		}
+		if best == 0 || scaled < bestScaled || scaled == bestScaled && id < best {
+			best, bestScaled = id, scaled
 		}
 	}
 	return int(best), true
@@ -101,7 +107,11 @@ func homeToHold(r *netcheck.Report, alone map[int]bool, stun map[tailcfg.DERPReg
 func (m *tsManager) holdHome() (none bool) {
 	r := m.magic.GetLastNetcheckReport(context.Background())
 	alone := m.pinged.lastAlone()
-	region, hold := homeToHold(r, alone, *m.stunRegions.Load())
+	var scores map[tailcfg.DERPRegionID]float64
+	if p := m.regionScores.Load(); p != nil {
+		scores = *p
+	}
+	region, hold := homeToHold(r, alone, *m.stunRegions.Load(), scores)
 	m.pinged.mu.Lock()
 	moved := region != m.pinged.held
 	m.pinged.held = region

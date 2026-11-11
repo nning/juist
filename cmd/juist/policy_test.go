@@ -94,7 +94,7 @@ func TestAPolicyWaitsForVotes(t *testing.T) {
 	mustContain(t, first.mustRun("policy", "set", "--yes", file), "needs 1 more vote", "juist approve policy.rec")
 	pending := filepath.Join(workDir(t), "policy.rec")
 	mustContain(t, second.mustRun("approve", "--yes", pending), "sets an access policy", "+ pass from nid:",
-		"hint: devices show by key here; juist log verify")
+		"hint: devices are shown by key here; for names: juist log verify")
 	mustContain(t, first.mustRun("log", "verify", pending), "+ pass from laptop to laptop")
 	mustContain(t, first.mustRun("apply", pending), "applied")
 	if got := first.mustRun("policy"); got != "pass from laptop to laptop\n" {
@@ -173,7 +173,7 @@ func TestADeviceListsItsPeersAlone(t *testing.T) {
 	mustContain(t, admin.mustRun("devices"), "phone")
 	admin.mustRun("policy", "set", "--yes", writePolicy(t, "p.conf", "pass from laptop to nas\n"))
 	out := admin.mustRun("devices")
-	mustContain(t, out, "laptop (this device)", "nas", "hint: 1 more device the access policy keeps apart from this one: juist devices --all")
+	mustContain(t, out, "laptop (this device)", "nas", "hint: 1 more device the access policy keeps apart: juist devices --all")
 	mustContain(t, admin.mustRun("devices", "--all"), "phone")
 	if strings.Contains(out, "phone") {
 		t.Errorf("a device the policy keeps apart is listed:\n%s", out)
@@ -191,8 +191,8 @@ func TestAnInviteUnderAPolicySaysSo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, out, "hint: the access policy passes phone nothing until it names it: juist policy edit")
-	if strings.Index(out, "admitted phone") > strings.Index(out, "hint: the access policy") {
+	mustContain(t, out, "hint: the policy passes no traffic for phone until it names it: juist policy edit")
+	if strings.Index(out, "admitted phone") > strings.Index(out, "hint: the policy passes") {
 		t.Errorf("the hint comes before the outcome:\n%s", out)
 	}
 }
@@ -296,7 +296,7 @@ func TestRemovingADeviceSaysWhatThePolicyLoses(t *testing.T) {
 	file := writePolicy(t, "p.conf", "pass from phone to laptop\npass from laptop to laptop\ntest pass from phone to laptop proto tcp port 22\n")
 	admin.mustRun("policy", "set", "--yes", file)
 	mustContain(t, admin.mustRun("remove", "phone", "--yes"),
-		"removed phone; the access policy names it no more, and loses 1 rule and 1 test")
+		"removed phone; the access policy loses 1 rule and 1 test")
 	_, err := admin.run("policy", "diff", file)
 	if err == nil || !strings.Contains(err.Error(), "hint: juist log says whether it was renamed or removed") {
 		t.Errorf("diff of a file naming a removed device: %v", err)
@@ -322,7 +322,7 @@ func TestTheFirstPolicyIsAskedAbout(t *testing.T) {
 			t.Fatal(err)
 		}
 		return out
-	}(), "anything the policy does not pass is then refused; set it? [y/N]", "access policy set: 1 rule")
+	}(), "set the access policy? anything it does not pass is then refused [y/N]", "access policy set: 1 rule")
 	mustContain(t, admin.mustRun("policy", "set", writePolicy(t, "next.conf", "pass from laptop to laptop proto icmp\n")),
 		"access policy set: 1 rule")
 }
@@ -335,7 +335,7 @@ func TestAPolicyNamesANameForMembers(t *testing.T) {
 	enrollDevice(t, admin, "nas")
 	enrollDevice(t, admin, "phone")
 	admin.mustRun("network", "domain", "pub.example.org")
-	admin.mustRun("publish", "add", "nas", "photos", "--members")
+	admin.mustRun("publish", "photos", "--members", "--on", "nas")
 	admin.mustRun("policy", "set", "--yes", writePolicy(t, "p.conf", "pass from laptop to name photos\npass from phone to nas proto tcp port 443\n"))
 	mustContain(t, admin.mustRun("policy"), "pass from laptop to name photos")
 	mustContain(t, admin.mustRun("policy", "test", "from", "laptop", "to", "name", "photos"),
@@ -344,7 +344,7 @@ func TestAPolicyNamesANameForMembers(t *testing.T) {
 		t.Errorf("phone, whom no rule names photos for: %v\n%s", err, out)
 	}
 	if _, err := admin.run("policy", "test", "from", "phone", "to", "name", "gone"); err == nil ||
-		!strings.Contains(err.Error(), "gone.pub.example.org is published on no device") {
+		!strings.Contains(err.Error(), "no device publishes gone.pub.example.org") {
 		t.Errorf("a name published nowhere: %v", err)
 	}
 	// Publishing a name a rule names says what the rule then opens.
@@ -369,5 +369,5 @@ func TestAPolicyNamesANameForMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustContain(t, strings.Join(effect(&aum, auth.State(), 0), "\n"),
-		"so the access policy's rules to gone.pub.example.org open port 443 of phone (", ") to their sources")
+		"so access policy rules to gone.pub.example.org open port 443 of phone (", ") to their sources")
 }

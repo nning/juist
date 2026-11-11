@@ -50,9 +50,8 @@ Targets, added the milestone their input surface appears:
 | Pair-key messages and store (`FuzzTake`, `FuzzDecodeStore`) | signed messages; the pairs file | M15 |
 | A host's DNS queries and its resolvers' answers (`internal/names` `FuzzAnswer`, `internal/dnsfwd` `FuzzForwarded`) | every program on the host, the Android app's phone among them; the network's resolvers | M23 |
 | Multicast from members (`conn` `FuzzUnwrapGroup`, `FuzzUnwrapGroup6`) | members' wrapped group datagrams | M25 |
-
-Open (M32): waiting changes (`waiting.Decode`), leases (`types.DecodeLease`) and
-the root helper's protocol.
+| Waiting changes (`internal/waiting` `FuzzDecode`) and leases (`FuzzDecodeLease`), each signed again to reach past the signature | admins' copies and leases from gossip | M32 |
+| The root helper's protocol (`FuzzServe`), every call it makes checked against its rules | a compromised daemon's frames | M32 |
 
 The gate is 72 clean CPU-hours per input surface before a milestone closes, run
 by hand with `make fuzz-long` or `make fuzz-one` per target (`make fuzz-matrix`
@@ -143,9 +142,12 @@ convergence when an `exit` role is withdrawn across a mesh; chaos on gossip path
 
 ## 6. Continuous regression metrics
 
-`make tcb`, in `make check`, holds the core (`types`, `trust/`) to 11 k lines and
-reports the audit scope's size, which is measured, not budgeted: features grow it,
-and each milestone's "Done" line in [05-roadmap.md](05-roadmap.md) records both.
+`make tcb`, in `make check`, holds the core (`types`, `trust/`) to 8 100 lines of
+code and reports the audit scope's size, which is measured, not budgeted:
+features grow it, and each milestone's "Done" line in
+[05-roadmap.md](05-roadmap.md) records both. Comments and blank lines are not
+counted (since 2026-11-07; the "Done" lines before counted them, 11 047 lines
+then being 8 056 of code).
 
 Bounded by tests, pass or fail rather than tracked as a series: direct paths per
 NAT class (the matrix above), revocation convergence in the connected case (5 s,

@@ -67,6 +67,9 @@ func (s *Service) setSettings(req *ipc.Request) error {
 	if req.Multicast != nil {
 		next.MulticastOff = !*req.Multicast
 	}
+	if req.PortMapping != nil {
+		next.PortMapOff = !*req.PortMapping
+	}
 	if req.Groups != nil {
 		next.Groups = nil
 		next.GroupsOff = len(*req.Groups) == 0
@@ -106,7 +109,7 @@ func (s *Service) setSettings(req *ipc.Request) error {
 		return nil
 	}
 	if next.HTTPSOnly != prev.HTTPSOnly || next.Proxy != prev.Proxy || next.RelayName != prev.RelayName ||
-		s.carried(next) != s.carried(prev) {
+		next.PortMapOff != prev.PortMapOff || s.carried(next) != s.carried(prev) {
 		s.logf("daemon: restarting on this device's new settings")
 		s.restartMeshLocked(nil, "new settings")
 		return nil
@@ -145,6 +148,7 @@ func writeSettings(home string, req *ipc.Request, next, prev Prefs) error {
 		{set: req.DNS != nil, name: statedir.DNSOffFile, flag: true, on: func(p Prefs) bool { return p.DNSOff }},
 		{set: req.HTTPSOnly != nil, name: statedir.HTTPSOnlyFile, flag: true, on: func(p Prefs) bool { return p.HTTPSOnly }},
 		{set: req.Multicast != nil, name: statedir.MulticastOffFile, flag: true, on: func(p Prefs) bool { return p.MulticastOff }},
+		{set: req.PortMapping != nil, name: statedir.PortMapOffFile, flag: true, on: func(p Prefs) bool { return p.PortMapOff }},
 		{set: req.Proxy != nil, name: statedir.ProxyFile, text: func(p Prefs) string { return p.Proxy }},
 		{set: req.RelayName != nil, name: statedir.RelayNameFile, text: func(p Prefs) string { return p.RelayName }},
 		{set: req.Groups != nil, name: statedir.GroupsFile, text: groups},

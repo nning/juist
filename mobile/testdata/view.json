@@ -71,7 +71,14 @@
     "own": [
       "phone.home.juist"
     ],
-    "resolved": true
+    "resolved": true,
+    "public": [
+      {
+        "name": "rss.example.org",
+        "member": "anna",
+        "not": "anna is not reachable"
+      }
+    ]
   },
   "alarms": [
     {
@@ -86,23 +93,29 @@
         "dora"
       ],
       "count": 1
-    },
-    {
-      "kind": "seeking",
-      "severity": "info",
-      "names": [
-        "cleo"
-      ]
     }
   ],
   "settings": {
-    "names": true
+    "names": true,
+    "publicNames": true,
+    "portMapping": true
   },
   "details": {
     "schema": 22,
-    "appSchema": 22,
+    "appSchema": 25,
     "epoch": 3,
     "relays": 1,
+    "publicDerp": true,
+    "underlay": {
+      "udp": true,
+      "ipv4": true,
+      "ipv6": true,
+      "mapping": true,
+      "offered": [
+        "UPnP"
+      ],
+      "mapped": "203.0.113.7:41641"
+    },
     "subnets": [
       {
         "prefix": "192.168.7.0/24",
@@ -110,5 +123,6 @@
         "inUse": true
       }
     ]
-  }
+  },
+  "waiting": 2
 }

@@ -372,7 +372,7 @@ func alarms(st *ipc.Status) []string {
 		add("this device's view of the network is stale: tunnels to admin devices alone")
 	}
 	if st.Refused {
-		add("the network's devices refuse this one: most likely it was removed")
+		add("other devices refuse this one: it was likely removed")
 	}
 	if st.StaleKeys {
 		add("juistd runs on replaced keys")
@@ -427,7 +427,7 @@ func alarms(st *ipc.Status) []string {
 		case h.NotAnnounced != "":
 			add("members are not told of %s: %s", h.Name, h.NotAnnounced)
 		case h.ListenError != "":
-			add("the relay cannot take 443: %s", h.ListenError)
+			add("the relay cannot bind 443: %s", h.ListenError)
 		case h.NoCert != "":
 			add("no certificate for %s yet: %s", h.Name, h.NoCert)
 		}

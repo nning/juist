@@ -12,9 +12,10 @@ sit behind symmetric NAT, a strict kind that picks a new port for every
 destination. Then the two need a relay.
 
 A relay is a member with a public address, such as a VPS, that passes
-traffic between devices that cannot reach each other. No third party ever
-relays your traffic. Only members can use the relay, and it sees only
-encrypted WireGuard traffic.
+traffic between devices that cannot reach each other. Only members can use
+the relay, and it sees only encrypted WireGuard traffic. No third party
+relays your traffic, unless the network chooses Tailscale's public DERP
+servers ([Without a relay of your own](#public-derp)).
 
 A relay also helps with invites. When you run `juist invite` on a laptop
 behind NAT, the invite also waits at the relay, and the link names the relay,
@@ -140,6 +141,28 @@ old ports until `sudo ufw app update juist`, while firewalld narrows `juist`
 to 41643/udp right away. In both cases, a relay needs `juist-relay` added.
 {{< /note >}}
 
+## Without a relay of your own {#public-derp}
+
+A network may have its members meet through Tailscale's public DERP servers
+where no member relays a pair, as a network of phones has to:
+
+```sh
+juist network derp on    # and juist network derp off
+```
+
+The admins decide it, as any change, and every member follows it. A member
+relay comes first wherever a device measures it; Tailscale's servers stand
+in. A device may not measure it, and then homes at Tailscale: where the
+relay's UDP port is closed to it while UDP to public STUN servers gets
+through, or where the relay is so much farther than Tailscale's nearest
+servers that the device stops waiting for it before it answers. Unlike a
+member relay, Tailscale's servers serve anyone, not only
+members. They carry WireGuard's ciphertext alone, but see every device's
+public address and which devices exchange packets with which, when and how
+much. A network the
+Android app creates uses them from the start; one `juist create` makes does
+not. `juist status` says so on its `Relays` line.
+
 ## Running without public helpers
 
 By default, juistd asks public STUN servers (Google, Cloudflare) for its
@@ -163,7 +186,9 @@ ExecStart=/usr/bin/juistd --home /var/lib/juist --socket /run/juist/juistd.sock 
 
 Devices then find each other on the LAN and through members they already know.
 The relay tells each device its public address, and invite links meet through
-it. `man juistd` lists every option.
+it. Where the network has Tailscale's DERP servers on, they still see
+addresses, STUN included, until an admin runs `juist network derp off`.
+`man juistd` lists every option.
 
 ## Troubleshooting
 
@@ -173,7 +198,7 @@ it. `man juistd` lists every option.
 | `no device reaches this relay` | open 41645/tcp and udp on the relay, and in any firewall in front of it |
 | `no device may relay` | run `juist grant DEVICE relay` for a device with a public address |
 | `no certificate for relay.example.org yet` | point the name at the relay, and let 443/tcp reach it |
-| `the relay cannot take 443` | another program holds 443 there, or juistd lacks the capability `juist set` grants |
+| `the relay cannot bind 443` | another program holds 443 there, or juistd lacks the capability `juist set` grants |
 | `members are not told of …: this device does not relay` | grant the device `relay`: `juist grant DEVICE relay` |
 | `log sync … fails in the tunnel` | let `juist0` through the other device's firewall, as the hint says |
 | `no answer from …` | the device is offline, or its 41643/udp is closed |

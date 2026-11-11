@@ -30,6 +30,8 @@ in internal/pqtls
 in internal/quicinitial
 in internal/statuspage
 in internal/waiting
+in internal/backupline
+in internal/govern
 in mobile
 in cmd/juist addresses.go changes.go describe.go naming.go pin.go rotate.go waiting.go
 in cmd/juistd helpers_unix.go privsep_freebsd.go

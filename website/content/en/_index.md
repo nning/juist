@@ -13,7 +13,7 @@ links:
 
 {{< rules >}}
 No server in the middle
-: Devices find each other on the LAN, through each other, or through the public BitTorrent DHT. They punch through NAT, and fall back to a relay that one of your own devices runs.
+: Devices find each other on the LAN, through each other, or through the public BitTorrent DHT. They punch through NAT, and fall back to a relay that one of your own devices runs, or, where the network chooses, to Tailscale's public DERP servers.
 
 Changes need your admins
 : Admitting or removing a device takes a quorum of admins, each with a key on their own devices. The keys stay in the keystore; the daemon never holds them.
@@ -109,13 +109,13 @@ What you can do
 
 {{< trade title="Public helpers see addresses" knob="--no-dht --no-stun" >}}
 What happens
-: The public BitTorrent DHT and STUN servers see the addresses that use them.
+: The public BitTorrent DHT and STUN servers see the addresses that use them, and so do Tailscale's DERP servers where the network chooses them.
 
 Why accepted
 : Nothing they return is trusted. A compromised helper can delay connections, but cannot change who belongs to the network.
 
 What you can do
-: Run juistd without them, and give devices addresses at which they can reach each other.
+: Run juistd without them, turn Tailscale's DERP servers off with `juist network derp off`, and give devices addresses at which they can reach each other.
 {{< /trade >}}
 
 ### Cryptography

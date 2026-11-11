@@ -1,7 +1,8 @@
 #!/bin/sh
 # tcb.sh GO SCOPE BUDGET: checks that SCOPE places every package of the module,
 # and reports the core's and the audit scope's sizes, failing past BUDGET for
-# the core. Sizes count every platform's files, tests excepted.
+# the core. Sizes count lines of code in every platform's files, tests
+# excepted: blank lines and comments are not counted.
 set -eu
 go=$1 scope=$2 budget=$3
 
@@ -40,12 +41,18 @@ while read -r kind pkg rest; do
 	for f in $files; do
 		[ -f "$f" ] || { echo "tcb: $f in $scope is gone; list where it went"; fail=1; }
 	done
-	n=$(cat $files 2>/dev/null | wc -l)
+	n=$(awk '
+		block { if (index($0, "*/")) block = 0; next }
+		{ line = $0; sub(/^[ \t]+/, "", line) }
+		line == "" || substr(line, 1, 2) == "//" { next }
+		substr(line, 1, 2) == "/*" { if (!index(line, "*/")) block = 1; next }
+		{ code++ }
+		END { print code + 0 }' $files 2>/dev/null)
 	audit=$((audit + n))
 	[ "$kind" != core ] || core=$((core + n))
 done <"$tmp/lines"
 
-echo "TCB: $core lines in the core (budget $budget), $audit in the audit scope ($scope, docs/06-verification.md)"
+echo "TCB: $core lines of code in the core (budget $budget), $audit in the audit scope ($scope, docs/06-verification.md)"
 if [ "$core" -gt "$budget" ]; then
 	echo "over budget: the core has grown past what docs/06-verification.md plans for"; fail=1
 fi

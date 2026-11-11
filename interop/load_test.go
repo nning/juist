@@ -65,7 +65,7 @@ func TestLoad(t *testing.T) {
 	lx.run(t, `set -e
 juist network domain pub.example.org
 juist grant fb ingress
-juist publish add lx docs 443`)
+juist publish docs 443 --on lx`)
 	var sources []string
 	for i := 1; i <= 100; i++ {
 		sources = append(sources, fmt.Sprintf("10.78.%d.1", i))
@@ -84,7 +84,7 @@ printf '%s\n' '[Service]' 'Environment=SSL_CERT_FILE=/etc/juist-test-ca.pem' 'Ex
 systemctl daemon-reload
 rm -rf /tmp/site; tar -xzf /tmp/site.tgz -C /tmp`)
 	lx.run(t, "setsid -f /tmp/site-server -root /tmp/site -addr 127.0.0.1:8181 >/tmp/site.log 2>&1 < /dev/null")
-	lx.eventually(t, "ending TLS for the site", 3*time.Minute, "juist publish add docs 127.0.0.1:8181",
+	lx.eventually(t, "ending TLS for the site", 3*time.Minute, "juist publish docs 127.0.0.1:8181",
 		has("ending TLS for docs.pub.example.org to 127.0.0.1:8181"))
 	fb.eventually(t, "taking Pebble's root", time.Minute,
 		"fetch -q --ca-cert=/tmp/ca.pem -o /tmp/root.pem https://127.0.0.1:15000/roots/0 && grep -q CERTIFICATE /tmp/root.pem",
@@ -110,10 +110,10 @@ rm -rf /tmp/site; tar -xzf /tmp/site.tgz -C /tmp`)
 		return failed, open
 	}
 	failed1, open1 := load("HTTP/1.1")
-	lx.eventually(t, "offering HTTP/2", time.Minute, "juist publish add docs 127.0.0.1:8181 --http2",
+	lx.eventually(t, "offering HTTP/2", time.Minute, "juist publish docs 127.0.0.1:8181 --http2",
 		has("to 127.0.0.1:8181 over HTTP/2"))
 	failed2, open2 := load("HTTP/2")
-	lx.eventually(t, "offering HTTP/3", time.Minute, "juist publish add docs 127.0.0.1:8181 --http2 --http3",
+	lx.eventually(t, "offering HTTP/3", time.Minute, "juist publish docs 127.0.0.1:8181 --http2 --http3",
 		has("to 127.0.0.1:8181 over HTTP/2, with HTTP/3"))
 	visit += " -h3"
 	failed3, _ := load("HTTP/3")

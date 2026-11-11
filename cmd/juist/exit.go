@@ -168,7 +168,7 @@ func exitReach(st *ipc.Status, id types.Identity) string {
 func exitUse(a *app, args []string) error {
 	s := spec{name: "juist exit use", args: "DEVICE", min: 1, max: 1, about: exitUseAbout}
 	fs := newFlags(s.name)
-	force := fs.Bool("force", false, "choose it though it does not serve, or would end this ssh session")
+	force := fs.Bool("force", false, "use it even if it does not serve, or ends this ssh session")
 	isolate := fs.Bool("isolate", false, "send answers to connections from the internet through it too")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
@@ -179,10 +179,10 @@ func exitUse(a *app, args []string) error {
 		return err
 	}
 	if other, serves := a.otherEgress(d.st.Instance, true); serves {
-		return fmt.Errorf("%s serves as an exit node, and a host routes the internet through one network\n"+
+		return fmt.Errorf("%s serves as an exit node; a host routes the internet through one network only\n"+
 			"hint: juist exit serve --stop %s", other.label(), other.word())
 	} else if other != nil {
-		return fmt.Errorf("%s uses an exit node already, and a host routes the internet through one network\n"+
+		return fmt.Errorf("%s uses an exit node already; a host routes the internet through one network only\n"+
 			"hint: juist exit off %s", other.label(), other.word())
 	}
 	auth, err := a.networkLog()
@@ -202,11 +202,11 @@ func exitUse(a *app, args []string) error {
 	ex := cmp.Or(st.Exit, &ipc.Exit{})
 	switch {
 	case target.Identity == st.Self:
-		return errors.New("this device cannot be its own exit node")
+		return a.usageErr("this device cannot be its own exit node")
 	case !target.HasRole(types.RoleExit):
 		return fmt.Errorf("%s is not an exit node\nhint: an admin makes it one: juist grant %s exit", name, name)
 	case !servesHere:
-		return errors.New("exit nodes are used on Linux and FreeBSD alone")
+		return errors.New("exit nodes are used only on Linux and FreeBSD")
 	case ex.Node == target.Identity && ex.Refused == "" && ex.Failed == "" && ex.Isolated == *isolate:
 		a.ok("unchanged: internet via %s%s", name, isolation(*isolate))
 		a.warnPartly(ex)
@@ -225,7 +225,7 @@ func exitUse(a *app, args []string) error {
 	}
 	if client, cut := a.cutsSSH(overlay); cut && why != "" && !*force {
 		return fmt.Errorf("this ssh session, %s, would end: %s\n"+
-			"hint: ssh to this device in the network%s, and run it there; or --force", client, why, overlayAddr(st))
+			"hint: ssh in over the network%s and run it there, or --force", client, why, overlayAddr(st))
 	}
 	after, err := d.request(ipc.Request{Command: ipc.CmdExit, ExitNode: target.Identity, ExitIsolate: *isolate})
 	if err != nil {
@@ -233,7 +233,7 @@ func exitUse(a *app, args []string) error {
 	}
 	switch ex := after.Exit; {
 	case ex == nil || ex.Node != target.Identity || ex.Isolated != *isolate:
-		return errors.New("juistd did not take the choice; version mismatch?")
+		return errors.New("juistd did not take the exit node; versions differ?")
 	case ex.Failed != "":
 		return fmt.Errorf("chose %s, and internet traffic may leave directly: %s\nhint: juist exit off", name, ex.Failed)
 	case ex.Refused != "":
@@ -247,7 +247,7 @@ func exitUse(a *app, args []string) error {
 	a.ok("internet via %s%s", name, isolation(*isolate))
 	switch {
 	case *isolate:
-		a.warn("answers to connections from the internet go through %s too: this device's services are not reached at its own address", name)
+		a.warn("answers to connections from the internet go through %s too: this device's services are unreachable at its own address", name)
 	case ex.AnswersThrough != "":
 		a.warn("answers to connections from the internet go through %s: %s", name, ex.AnswersThrough)
 	}
@@ -434,7 +434,7 @@ func exitServe(a *app, args []string) error {
 	}
 	st := d.st
 	if !servesHere {
-		return errors.New("an exit node runs on Linux and FreeBSD alone")
+		return errors.New("an exit node runs only on Linux and FreeBSD")
 	}
 	if err := a.requireOperator(); err != nil {
 		return err
@@ -520,7 +520,7 @@ func (a *app) exitSetup(action, dev, again string) error {
 	line := fmt.Sprintf("sudo %s %s %s", script, action, dev)
 	if script == "" || !fileExists(script) {
 		if action == "on" {
-			a.warn("no exit-node.sh here; forwarding and the firewall are the host's to set up")
+			a.warn("no exit-node.sh here; set up forwarding and the firewall yourself")
 		}
 		return nil
 	}

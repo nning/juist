@@ -25,9 +25,10 @@ func TestStatusSaysMulticast(t *testing.T) {
 		want string
 	}{
 		{&ipc.Multicast{}, "on"},
-		{&ipc.Multicast{Auto: true}, "on, copied: auto"},
+		{&ipc.Multicast{Auto: true}, "on"},
+		{&ipc.Multicast{GroupsOff: true}, "on (groups off)"},
 		{&ipc.Multicast{Off: true, Groups: []string{"224.0.0.251"}}, "off"},
-		{&ipc.Multicast{Groups: []string{"224.0.0.251", "239.255.255.250"}}, "on, copied: 224.0.0.251, 239.255.255.250"},
+		{&ipc.Multicast{Groups: []string{"224.0.0.251", "239.255.255.250"}}, "on, copying 224.0.0.251, 239.255.255.250"},
 	} {
 		st.Multicast = c.m
 		head := statusOf(st, testNow(), noPaint).head
@@ -141,7 +142,7 @@ func TestGroupSettingsHintIncludesPolicyPermission(t *testing.T) {
 	a := &app{out: &out, errOut: &stderr}
 	groups := []string{"auto"}
 	a.saySettings(&ipc.Request{Groups: &groups}, &ipc.Status{InNetwork: true, Multicast: &ipc.Multicast{Off: true}})
-	if got := stderr.String(); !strings.Contains(got, "enabled locally and permitted by the access policy") || strings.Contains(got, "juist set --multicast") {
+	if got := stderr.String(); !strings.Contains(got, "multicast on here and allowed by the policy") || strings.Contains(got, "juist set --multicast") {
 		t.Fatalf("misleading discovery hint: %s", got)
 	}
 }

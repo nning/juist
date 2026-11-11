@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"errors"
 	"flag"
 	"fmt"
 	"net/netip"
@@ -9,25 +10,25 @@ import (
 	"strings"
 
 	"github.com/nning/juist/conn"
+	"github.com/nning/juist/internal/govern"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
 const rolesAbout = `Roles:
 
-  exit     carries other devices' internet traffic, once its operator
-           agrees: juist exit serve
-  ingress  takes connections from the internet for published names; on a
+  exit     carries others' internet traffic once its operator agrees:
+           juist exit serve
+  ingress  takes connections from the internet for published names; for a
            device with a public address and no other role
-  service  a service member: juistd --serve next to a service; no device
+  service  a service member (juistd --serve beside a service); no device
            may open a connection to it
-  publish  shares under its own name without a vote each time:
-           juist share FILE, juist publish PORT
-  relay    relays for devices that cannot reach each other; best on two or
-           more devices with public addresses
-  voucher  confirms hourly that the network state is current. If too few
-           vouch for 48 hours, devices reach only vouchers, so give it to
-           devices that are always on. Not an admin key.`
+  publish  shares and publishes under its own name without a vote each time
+  relay    relays between devices that cannot reach each other; best on
+           two or more devices with public addresses
+  voucher  confirms hourly that the network state is current; if too few do
+           for 48 hours, devices reach only vouchers. For devices that are
+           always on. Not an admin key.`
 
 func cmdGrant(a *app, args []string) error {
 	s := spec{name: "juist grant", args: "DEVICE ROLE...", min: 2, max: -1, about: `
@@ -57,12 +58,12 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 		roles[r] = true
 	}
 	for _, arg := range pos {
-		if err := notARole(arg, displayMember(target), grant); err != nil {
-			return err
+		if err := notARole(arg); err != nil {
+			return a.usageErr("%v", err)
 		}
 		r, err := parseRole(arg)
 		if err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 		roles[r] = grant
 	}
@@ -98,15 +99,15 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 	for _, r := range []types.Role{types.RoleIngress, types.RoleService} {
 		if target.HasRole(r) && !roles[r] {
 			// The role confined the device; a member like any other is not.
-			a.warn("%s is confined no more, now a member like any other", name)
-			a.hint("one that may be compromised goes by juist remove %s", name)
+			a.warn("%s is no longer confined: it is now an ordinary member", name)
+			a.hint("if it may be compromised: juist remove %s", name)
 		}
 	}
 	if target.HasRole(types.RoleIngress) && !roles[types.RoleIngress] {
-		a.hint("on %s, juist ingress serve --stop", name)
+		a.hint("on %s: juist ingress serve --stop", name)
 	}
 	if roles[types.RolePublish] && !target.HasRole(types.RolePublish) {
-		a.hint("on %s, juist share FILE or juist publish PORT", name)
+		a.hint("on %s: juist share FILE or juist publish PORT", name)
 	}
 	if !roles[types.RoleIngress] || target.HasRole(types.RoleIngress) {
 		return nil
@@ -135,22 +136,20 @@ func roleConflict(target types.NodeRecord, next []types.Role) error {
 				continue
 			}
 			had, wants := describeRoles([]types.Role{other}), describeRoles([]types.Role{r})
-			return fmt.Errorf("%s holds the role %s, which the role %s excludes\nhint: juist revoke %s %s",
+			return fmt.Errorf("%s cannot be %s and %s at once\nhint: juist revoke %s %s",
 				name, had, wants, name, had)
 		}
 	}
 	return nil
 }
 
-// notARole names the command that takes arg, where it is a subnet or a
-// public name for device.
-func notARole(arg, device string, grant bool) error {
-	verb := map[bool]string{true: "add", false: "remove"}[grant]
+// notARole says what arg is where it is a subnet or a public name.
+func notARole(arg string) error {
 	switch {
 	case strings.Contains(arg, "/"):
-		return fmt.Errorf("%s is a subnet, not a role\nhint: juist subnet %s %s %s", arg, verb, device, arg)
+		return fmt.Errorf("%s is a subnet, not a role", arg)
 	case strings.Contains(arg, "."):
-		return fmt.Errorf("%s is a public name, not a role\nhint: juist names %s %s %s", arg, verb, device, arg)
+		return fmt.Errorf("%s is a public name, not a role", arg)
 	}
 	return nil
 }
@@ -200,16 +199,16 @@ func (a *app) submitRoutes(auth *log.Authority, target types.NodeRecord, next []
 	return a.submit(auth, &change{aum: aum, file: "roles-" + fileSafe(name) + ".rec", done: done})
 }
 
-// parseSubnet reads arg as a subnet for device name to route.
-func parseSubnet(arg, name string) (netip.Prefix, error) {
+// parseSubnet reads arg as a subnet to route.
+func parseSubnet(arg string) (netip.Prefix, error) {
 	pfx, err := netip.ParsePrefix(arg)
 	switch {
 	case err != nil:
-		return pfx, fmt.Errorf("%q is no prefix, such as 192.168.1.0/24", arg)
+		return pfx, fmt.Errorf("%q is not a subnet", arg)
 	case pfx.Bits() == 0:
-		return pfx, fmt.Errorf("%v is the internet\nhint: juist grant %s exit", pfx, name)
+		return pfx, fmt.Errorf("%v is the internet, not a subnet", pfx)
 	case pfx.Masked() != pfx:
-		return pfx, fmt.Errorf("%v has host bits set\nhint: %v", pfx, pfx.Masked())
+		return pfx, fmt.Errorf("%v has host bits set; did you mean %v?", pfx, pfx.Masked())
 	}
 	return pfx, nil
 }
@@ -244,17 +243,30 @@ func (a *app) changeSubnet(state *log.State, target types.NodeRecord, subnets []
 		p    netip.Prefix
 		what string
 	}{
-		{netip.MustParsePrefix("127.0.0.0/8"), "is every host's own"}, {netip.MustParsePrefix("::1/128"), "is every host's own"},
-		{netip.MustParsePrefix("169.254.0.0/16"), "never leaves a link"}, {netip.MustParsePrefix("fe80::/10"), "never leaves a link"},
-		{netip.MustParsePrefix("224.0.0.0/4"), "is multicast"}, {netip.MustParsePrefix("ff00::/8"), "is multicast"},
-		{netip.MustParsePrefix("240.0.0.0/4"), "is reserved"},
+		{netip.MustParsePrefix("127.0.0.0/8"), "loopback"}, {netip.MustParsePrefix("::1/128"), "loopback"},
+		{netip.MustParsePrefix("169.254.0.0/16"), "link-local"}, {netip.MustParsePrefix("fe80::/10"), "link-local"},
+		{netip.MustParsePrefix("224.0.0.0/4"), "multicast"}, {netip.MustParsePrefix("ff00::/8"), "multicast"},
+		{netip.MustParsePrefix("240.0.0.0/4"), "reserved"},
 	} {
 		if r.p.Overlaps(pfx) {
-			return nil, fmt.Errorf("%v %s, which no device routes: %v", pfx, r.what, r.p)
+			return nil, a.usageErr("%v is %s (%v)", pfx, r.what, r.p)
+		}
+	}
+	old, _ := state.V4Retiring()
+	for _, p := range old.Prefixes {
+		switch {
+		case !p.Overlaps(pfx):
+		case old.Live(a.now().Unix()):
+			return nil, fmt.Errorf("%v overlaps the old range %v, in use until %s\nhint: to free it now: juist network renumber --finish",
+				pfx, p, deadline(old.Until))
+		case state.Schema() < types.SchemaTakeRetired:
+			return nil, fmt.Errorf("%v overlaps the old range %v\nhint: juist network renumber --finish frees it", pfx, p)
+		default:
+			a.warn("%v was the network's range; devices not yet told still send its traffic into the network", p)
 		}
 	}
 	for _, own := range append(slices.Clone(state.V4Ranges()), state.ULA()) {
-		if own.Overlaps(pfx) {
+		if own.Overlaps(pfx) && !slices.Contains(old.Prefixes, own) {
 			return nil, fmt.Errorf("%v overlaps the network's own addresses, %v", pfx, own)
 		}
 	}
@@ -284,19 +296,12 @@ func listPrefixes(ps []netip.Prefix) string {
 // every device stale until a lower threshold lands, and before the last one
 // goes, which ends freshness checks, it warns and, unless yes, asks.
 func (a *app) checkAdminDeviceLoss(state *log.State, target types.NodeRecord, yes bool) error {
-	if !slices.Contains(target.Roles, types.RoleAdmin) {
-		return nil
-	}
-	name := displayMember(target)
-	switch left := len(state.NodesWithRole(types.RoleAdmin)) - 1; {
-	case left == 0:
-		a.warn("%s is the last voucher; without one, freshness goes unchecked", name)
+	err := govern.VoucherLoss(state, target)
+	if errors.Is(err, govern.ErrLastVoucher) {
+		a.warn("%s is %v", displayMember(target), err)
 		return a.proceed(yes, "continue?")
-	case uint32(left) < state.Vouchers():
-		return fmt.Errorf("%s is one of the %d vouchers needed; without it every device goes stale\n"+
-			"hint: juist admins vouchers %d", name, state.Vouchers(), left)
 	}
-	return nil
+	return err
 }
 
 // exitRoutes is routes with the default routes an exit node holds, or without.
@@ -336,8 +341,8 @@ var roleNames = []struct {
 }
 
 // describeGrant is roles, the subnets routed beside them, and whether the
-// device answers names or publishes any.
-func describeGrant(roles []types.Role, subnets []netip.Prefix, names, publishes bool) string {
+// device answers names, and how many it publishes.
+func describeGrant(roles []types.Role, subnets []netip.Prefix, names bool, published int) string {
 	var parts []string
 	if len(roles) > 0 {
 		parts = append(parts, describeRoles(roles))
@@ -351,8 +356,8 @@ func describeGrant(roles []types.Role, subnets []netip.Prefix, names, publishes 
 	if names {
 		parts = append(parts, "names")
 	}
-	if publishes {
-		parts = append(parts, "publishes")
+	if published > 0 {
+		parts = append(parts, "publishes "+count(published, "name"))
 	}
 	if len(parts) == 0 {
 		return describeRoles(nil)
@@ -387,8 +392,10 @@ func parseRole(s string) (types.Role, error) {
 	for i, rn := range roleNames {
 		names[i] = rn.user
 	}
-	return "", fmt.Errorf("%q is not a role%s; the roles are %s and %s", s, didYouMean(strings.ToLower(s), names...),
-		strings.Join(names[:len(names)-1], ", "), names[len(names)-1])
+	if dym := didYouMean(strings.ToLower(s), names...); dym != "" {
+		return "", fmt.Errorf("%q is not a role%s", s, dym)
+	}
+	return "", fmt.Errorf("%q is not a role: %s or %s", s, strings.Join(names[:len(names)-1], ", "), names[len(names)-1])
 }
 
 // warnRelayNameTaken warns where roles make target the first ingress that
@@ -402,6 +409,6 @@ func (a *app) warnRelayNameTaken(state *log.State, target types.NodeRecord, role
 	}
 	if err := labelClaimed(state, "relay", target.Identity); err != nil {
 		first, _, _ := strings.Cut(err.Error(), "\n")
-		a.warn("%s, which %s's relay takes unless juist set --relay-name names another", first, displayMember(target))
+		a.warn("%s; %s takes it for its relay unless juist set --relay-name names another", first, displayMember(target))
 	}
 }

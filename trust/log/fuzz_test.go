@@ -219,6 +219,7 @@ func buildFuzzNetwork() (*fuzzNetwork, error) {
 		func() (types.AUM, error) { return b.RenameNode(first, "renamed") },
 		func() (types.AUM, error) { return b.SetNodeNames(first, []string{"mx.example.org"}) },
 		func() (types.AUM, error) { return b.SetDomain("pub.example.net") },
+		func() (types.AUM, error) { return b.SetPublicDERP(types.PublicDERP{Tailscale: true}) },
 		func() (types.AUM, error) {
 			return b.SetPublished(first, []types.PublishedName{{Label: "immich", Port: 443}})
 		},

@@ -649,7 +649,7 @@ func (d *Daemon) httpsNow(relays []conn.Relay) *ipc.HTTPS {
 	if d.httpsOnly {
 		h.Proxy = shownProxy(d.proxy, d.envProxy)
 	}
-	owners := d.relayOwners()
+	owners, _ := d.relayOwners()
 	for _, r := range relays {
 		if r.Name == "" {
 			continue

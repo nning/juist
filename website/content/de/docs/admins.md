@@ -215,11 +215,11 @@ braucht, jeden mit eigenen Geräten
 | Was du siehst | Was du tun kannst |
 |---|---|
 | `hint: for changes waiting for your vote to reach you: juist admins receive` | Führe einmal `juist admins receive` aus. |
-| `juist health`: `hint: every device implements schema 21: juist log upgrade` | Führe `juist log upgrade` aus. |
-| `juist: not every device implements schema 21: phone (20)` | Aktualisiere juist auf den genannten Geräten, dann führe den Befehl erneut aus ([Aktualisieren]({{< relref "docs/updating" >}})). |
+| `juist health`: `hint: every device supports schema 21: juist log upgrade` | Führe `juist log upgrade` aus. |
+| `juist: not every device supports schema 21: phone (20)` | Aktualisiere juist auf den genannten Geräten, dann führe den Befehl erneut aus ([Aktualisieren]({{< relref "docs/updating" >}})). |
 | `juist: the network predates rotating an identity key` | Aktualisiere juist auf allen Geräten, dann führe `juist log upgrade` aus. |
 | `--admin "bob": a key with no signing key, from an older juist` | bob ruft `juist admins new bob` mit dieser Version noch einmal auf und schickt die neue Zeile. |
-| `juist: the key names no signing key, which the network needs; it is from an older juist` | bob ruft `juist admins new bob` mit dieser Version auf und schickt den Befehl, den es ausgibt, vollständig. |
+| `juist: key has no signing key; it is from an older juist` | bob ruft `juist admins new bob` mit dieser Version auf und schickt den Befehl, den es ausgibt, vollständig. |
 | `hint: bob cannot read it on an admin device yet; send them the file` | Schick bob die `.rec`-Datei, er ruft damit `juist approve FILE` auf. |
 | `juist: no admin key of this network in …` | Führe den Befehl dort aus, wo der Schlüssel eines Admins liegt. |
 | `juist: run as alice, without sudo: …` | Führe den Befehl noch einmal ohne sudo aus. |

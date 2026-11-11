@@ -212,9 +212,10 @@ func TestUpstreamANamedNodeIsDialledByNameThroughTheProxy(t *testing.T) {
 	}
 }
 
-// Nothing in juistd maps ports or probes for captive portals, which would
-// send outside TLS on 443 whatever magicsock is told.
-func TestUpstreamNoPortMapperOrCaptivePortalIsLinked(t *testing.T) {
+// Nothing in juistd probes for captive portals, which would send outside TLS
+// on 443 whatever magicsock is told, and the port mapper is conn's own hook,
+// which HTTPS alone turns off (TestPortMapperSendsNothingOnHTTPSAlone).
+func TestUpstreamNoCaptivePortalOrOtherPortMapperIsLinked(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("lists the build's packages, which a host without Go cannot")
 	}
@@ -223,7 +224,7 @@ func TestUpstreamNoPortMapperOrCaptivePortalIsLinked(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range strings.Fields(string(out)) {
-		if p == "tailscale.com/feature/portmapper" || p == "tailscale.com/net/portmapper" ||
+		if p == "tailscale.com/feature/portmapper" ||
 			strings.HasPrefix(p, "tailscale.com/feature/captiveportal") || p == "tailscale.com/net/captivedetection" {
 			t.Errorf("juistd links %s", p)
 		}

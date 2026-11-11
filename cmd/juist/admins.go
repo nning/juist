@@ -20,21 +20,21 @@ func adminsFamily() family {
 		subs: []subcommand{
 			{name: "list", aliases: []string{"ls"}, run: adminsList, forms: [][2]string{{"", "list admin keys and thresholds"}}},
 			{name: "new", run: adminsNew, forms: [][2]string{{"new NAME", "create an admin key on this machine"}}},
-			{name: "add", run: adminsAdd, forms: [][2]string{{"add NAME KEY", "give another admin's key a vote"}}},
+			{name: "add", run: adminsAdd, forms: [][2]string{{"add NAME KEY", "add KEY as an admin key of NAME"}}},
 			{name: "remove", aliases: []string{"rm"}, run: adminsRemove,
-				forms: [][2]string{{"remove NAME|KEY", "take an admin key's vote away"}}},
+				forms: [][2]string{{"remove NAME|KEY", "remove an admin key"}}},
 			{name: "quorum", run: adminsQuorum, forms: [][2]string{{"quorum K", "require K votes for every change"}}},
 			{name: "require", run: adminsRequire,
 				forms: [][2]string{{"require NAME N", "count NAME's votes only when N of their keys sign"}}},
 			{name: "vouchers", run: adminsVouchers,
-				forms: [][2]string{{"vouchers M", "require M vouchers to confirm a device's view"}}},
+				forms: [][2]string{{"vouchers M", "require M vouchers to confirm the network state"}}},
 			{name: "receive", run: adminsReceive,
 				forms: [][2]string{{"receive", "let changes waiting for your vote reach your keys here"}}},
 			{name: "export", run: adminsExport,
-				forms: [][2]string{{"export NAME", "print an admin key here as one line, for a password manager"}}},
-			{name: "import", run: adminsImport, forms: [][2]string{{"import NAME", "read that line from stdin into the key NAME"}}},
+				forms: [][2]string{{"export NAME", "print an admin key as one line, for a password manager"}}},
+			{name: "import", run: adminsImport, forms: [][2]string{{"import NAME", "read that line from stdin as key NAME"}}},
 		},
-		footer: "Admin keys leave their machine only as the line export prints, which needs no network."}
+		footer: "An admin key leaves its machine only as the line export prints."}
 }
 
 func cmdAdmins(a *app, args []string) error { return adminsFamily().run(a, args) }
@@ -124,11 +124,10 @@ func (a *app) listAdmins(governs map[types.Identity][]string) error {
 func adminsNew(a *app, args []string) error {
 	s := spec{name: "juist admins new", args: "NAME", min: 1, max: 1, anyNetwork: true, about: `
 Create an admin key on this machine and print the command that adds it.
---network names the network it is for. Without it, the key goes to the first
-network whose log names it, once juist admins or a change signed with it
-reads that log.`}
+--network names its network; without it, the key belongs to the first
+network that adds it.`}
 	fs := newFlags(s.name)
-	on := fs.String("on", "", "`MACHINE` the key is kept on (default: this device's name, or the hostname)")
+	on := fs.String("on", "", "`MACHINE` holding the key (default: this device)")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
@@ -137,10 +136,10 @@ reads that log.`}
 		*on = a.machineName()
 	}
 	if err := checkName("--on", *on); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
-	if err := checkName("admin key name", pos[0]); err != nil {
-		return err
+	if err := checkName("NAME", pos[0]); err != nil {
+		return a.usageErr("%v", err)
 	}
 	if u := a.sudoUser(); u != "" {
 		return fmt.Errorf("run as %s, without sudo: the key belongs in your keystore", u)
@@ -148,7 +147,7 @@ reads that log.`}
 	network := ""
 	if a.network != "" && !a.networkFromEnv {
 		if err := checkName("--network", a.network); err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 		network = a.network
 	}
@@ -157,42 +156,41 @@ reads that log.`}
 	if err != nil {
 		return err
 	}
-	a.ok("created admin key %q; an admin of the network runs:", name)
+	a.ok("created admin key %q; to add it, an admin runs:", name)
 	text, err := types.AdminKeyText(priv)
 	if err != nil {
 		return err
 	}
 	a.command("juist admins add %s %s --on %s", pos[0], text, *on)
-	a.hint("an admin already? add it under your admin name, or it gets a vote of its own")
+	a.hint("already an admin? add it under your name, or it gets its own vote")
 	return nil
 }
 
 func adminsAdd(a *app, args []string) error {
 	s := spec{name: "juist admins add", args: "NAME KEY", min: 2, max: 2, about: `
-Give KEY, as juist admins new printed it, a vote held by the person NAME.
-Several keys under one name together cast that person's votes once. --on is
-an unverified label.`}
+Give KEY, as juist admins new printed it, a vote held by NAME. Keys under
+one name cast that person's votes once. --on is not checked.`}
 	fs := newFlags(s.name)
 	votes := fs.Uint("votes", 1, "votes the key carries")
-	on := fs.String("on", "", "`MACHINE` the key is kept on (default: this one, if it holds the key)")
+	on := fs.String("on", "", "`MACHINE` holding the key (default: this one, if it does)")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
 	}
 	key, signing, endorsement, err := types.ParseAdminKey(pos[1])
 	if err != nil {
-		return fmt.Errorf("bad key %q; want the nid:… \"juist admins new\" printed", pos[1])
+		return a.usageErr("%q is not an admin key", pos[1])
 	}
 	if err := checkName("NAME", pos[0]); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	if *votes == 0 || *votes > types.MaxVotes {
-		return fmt.Errorf("--votes must be between 1 and %d", types.MaxVotes)
+		return a.usageErr("--votes must be from 1 to %d", types.MaxVotes)
 	}
 	onGiven := *on != ""
 	if onGiven {
 		if err := checkName("--on", *on); err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 	} else if a.holdsAdminKey(key) {
 		*on = a.machineName()
@@ -211,12 +209,11 @@ an unverified label.`}
 		// A key without a holder is shown and removed by its name; two alike
 		// would make both ambiguous.
 		case k.Holder == "" && foldName(k.Name) == foldName(pos[0]):
-			return fmt.Errorf("admin key %q exists; pick another name", k.Name)
+			return fmt.Errorf("admin key %q exists already", k.Name)
 		}
 	}
 	if signing == nil {
-		return errors.New("the key names no signing key, which the network needs; it is from an older juist\n" +
-			"hint: juist admins new prints it whole")
+		return a.usageErr("key is from an older juist, without a signing key; make a new one with juist admins new")
 	}
 	add := types.AdminKey{Public: key, Votes: uint32(*votes), Name: pos[0], Signing: signing, Endorsement: endorsement}
 	done := fmt.Sprintf("added %s's key, %s", pos[0], count(*votes, "vote"))
@@ -225,7 +222,7 @@ an unverified label.`}
 	if same := holderKeys(state, pos[0]); len(same) > 0 {
 		p := same[0]
 		if votesSet && uint32(*votes) != p.Votes {
-			return fmt.Errorf("--votes: %s's keys all cast %s", p.Holder, count(p.Votes, "vote"))
+			return fmt.Errorf("--votes: the other keys of %s cast %d", p.Holder, p.Votes)
 		}
 		add.Holder, add.Votes, add.Needed = p.Holder, p.Votes, p.Needed
 		done = fmt.Sprintf("added a key of %s's; %s, %d signing", p.Holder, count(len(same)+1, "key"),
@@ -239,7 +236,7 @@ an unverified label.`}
 			others = append(others, p.name)
 		}
 		a.printf("%s is a new admin besides %s\n", pos[0], strings.Join(others, ", "))
-		a.hint("a key of an existing admin goes under their name")
+		a.hint("add the key of an existing admin under their name")
 	}
 	aum, err := auth.Builder().AddAdminKey(add)
 	if err != nil {
@@ -251,9 +248,8 @@ an unverified label.`}
 
 func adminsReceive(a *app, args []string) error {
 	s := spec{name: "juist admins receive", about: `
-Give this keystore's admin keys the encryption keys that pending changes are
-sealed to, so that the changes reach you on your admin devices. This is a
-change like any other; each key signs it itself.`}
+Have changes waiting for your vote reach the admin keys here. This is a
+change like any other, signed by each key.`}
 	if _, err := a.parse(s, newFlags(s.name), args); err != nil {
 		return err
 	}
@@ -291,7 +287,7 @@ change like any other; each key signs it itself.`}
 		}
 	}
 	if !governs {
-		return errors.New("no admin key of this network here\nhint: run it where an admin's key is")
+		return errors.New("no admin key of this network here\nhint: run it where your admin key is")
 	}
 	if len(steps) == 0 {
 		a.ok("unchanged: changes waiting for your vote reach your keys here")
@@ -327,9 +323,9 @@ exactly N, losing one device can lock the network.`}
 	if err != nil {
 		return err
 	}
-	n, err := strconv.ParseUint(pos[1], 10, 32)
-	if err != nil || n == 0 {
-		return fmt.Errorf("bad N %q: want a number >= 1", pos[1])
+	n, err := a.countArg("N", pos[1])
+	if err != nil {
+		return err
 	}
 	auth, err := a.networkLog()
 	if err != nil {
@@ -431,9 +427,9 @@ Require K admin votes for every later change.`}
 	if err != nil {
 		return err
 	}
-	k, err := strconv.ParseUint(pos[0], 10, 32)
-	if err != nil || k == 0 {
-		return fmt.Errorf("bad K %q: want a number >= 1", pos[0])
+	k, err := a.countArg("K", pos[0])
+	if err != nil {
+		return err
 	}
 	auth, err := a.networkLog()
 	if err != nil {
@@ -467,23 +463,27 @@ Require K admin votes for every later change.`}
 
 func adminsVouchers(a *app, args []string) error {
 	s := spec{name: "juist admins vouchers", args: "M", min: 1, max: 1, about: `
-Require M vouchers to have vouched within the freshness TTL before a device
-trusts its view. A lying voucher then needs M-1 accomplices, and M vouchers
-must be online.`}
+Require M vouchers to have confirmed the network state recently before a
+device trusts it. A lying voucher then needs M-1 others, and M vouchers must
+be online.`}
 	pos, err := a.parse(s, newFlags(s.name), args)
 	if err != nil {
 		return err
 	}
-	m, err := strconv.ParseUint(pos[0], 10, 32)
-	if err != nil || m == 0 {
-		return fmt.Errorf("bad M %q: want a number >= 1", pos[0])
+	m, err := a.countArg("M", pos[0])
+	if err != nil {
+		return err
 	}
 	auth, err := a.networkLog()
 	if err != nil {
 		return err
 	}
 	if devices := len(auth.State().NodesWithRole(types.RoleAdmin)); m > uint64(devices) {
-		return fmt.Errorf("only %s\nhint: juist grant DEVICE voucher", count(devices, "voucher"))
+		have := "only " + count(devices, "voucher")
+		if devices == 0 {
+			have = "no vouchers"
+		}
+		return fmt.Errorf("the network has %s\nhint: juist grant DEVICE voucher", have)
 	}
 	aum, err := auth.Builder().SetVouchers(uint32(m))
 	if err != nil {
@@ -495,6 +495,18 @@ must be online.`}
 		a.warnVouchers(auth.State().NodesWithRole(types.RoleAdmin), int(m))
 	}
 	return err
+}
+
+// countArg reads arg, the count what names, as a number of 1 or more.
+func (a *app) countArg(what, arg string) (uint64, error) {
+	n, err := strconv.ParseUint(arg, 10, 32)
+	switch {
+	case err != nil:
+		return 0, a.usageErr("%q is not a number", arg)
+	case n == 0:
+		return 0, a.usageErr("%s must be 1 or more", what)
+	}
+	return n, nil
 }
 
 // listKeysHere lists the keystore's admin keys by the names --admin-key and

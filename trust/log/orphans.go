@@ -18,9 +18,9 @@ type Orphan struct {
 	// current head, or is empty if it can.
 	Conflict string
 
-	// Unrevoked are the branch's revocations that are not in effect: they
-	// lost fork choice, and could be reissued on the current head. They do
-	// not stop the network, as a conflict does, and are to be reissued.
+	// Unrevoked are the branch's revocations that lost fork choice but can be
+	// reissued on the current head. Unlike a conflict they do not stop the
+	// network.
 	Unrevoked []types.Hash
 }
 
@@ -41,12 +41,10 @@ func floorBranch(st reader, orphans []Orphan, floor uint64) (types.Hash, error) 
 	return types.Hash{}, nil
 }
 
-// walkOrphan decides whether a record on a branch that lost fork choice,
-// verified against branch, merely needs reissuing or genuinely conflicts, and
-// walks on to what hangs from it. Two states are carried down the branch:
-// branch, which every record must verify against, since a branch of
-// unauthorized records is a corrupt store rather than a fork; and probe, the
-// result of replaying the branch's substance onto the chain that won.
+// walkOrphan decides whether a record on a losing branch needs reissuing or
+// conflicts, then walks its children. Every record must verify against branch
+// (unauthorized records mean a corrupt store, not a fork); probe replays the
+// branch onto the winning chain.
 func walkOrphan(r reader, c candidate, branch, probe *State, o *Orphan, budget *int, res *resolution) error {
 	if *budget <= 0 {
 		if o.Conflict == "" {
@@ -73,11 +71,8 @@ func walkOrphan(r reader, c candidate, branch, probe *State, o *Orphan, budget *
 		// two admins removing one device at once.
 		nextProbe = probe
 	case branch.Revokes(&aum) && probe != nil:
-		// A revocation on a losing branch is what the bias exists to prevent;
-		// it gets here below a sibling that won on it too, as two concurrent
-		// removals do. One that the chosen chain can take is not in effect
-		// until reissued, which is said rather than stopping the network;
-		// one it cannot take is a conflict.
+		// Lost to a sibling that also revokes. If the chosen chain can take
+		// it, it is reported for reissue; otherwise it is a conflict.
 		nextProbe, err = probe.apply(&aum, h, applyProbe)
 		switch {
 		case err != nil && o.Conflict == "":

@@ -258,7 +258,7 @@ func TestAnEncryptionKeysChangeReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := effect(&aum, auth.State(), 0)
-	want := fmt.Sprintf("gives alice's admin key %v on laptop the encryption key %s", k.Public.ShortString(),
+	want := fmt.Sprintf("gives the admin key %v on laptop (alice) the encryption key %s", k.Public.ShortString(),
 		recipientDigest(*aum.Recipient))
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("reads %q, want %q", got, want)

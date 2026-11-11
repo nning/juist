@@ -330,14 +330,14 @@ func parse(args []string, out io.Writer) (options, error) {
 	noDiscovery := fs.Bool("no-discovery", false, "do not announce or look for members on the LAN")
 	noDHT := fs.Bool("no-dht", false, "do not use the public DHT, for members or invites")
 	stunList := fs.String("stun", strings.Join(rendezvous.DefaultSTUN, ","), "public STUN servers, comma-separated")
-	noSTUN := fs.Bool("no-stun", false, "ask no STUN server outside the network")
+	noSTUN := fs.Bool("no-stun", false, "ask no STUN server outside the network, but Tailscale's DERP servers where the network names them")
 	ttl := fs.Duration("freshness-ttl", daemon.DefaultFreshnessTTL, "how long to trust the network's state unvouched")
 	verbose := fs.Bool("verbose", false, "log what the daemon is doing")
 	helper := fs.String("helper", "", `run as a helper of the juistd on --socket: ingress, or tls for what is published here`)
 	var serve serveFlag
 	fs.Var(&serve, "serve", "be a service member, on no device, ending TLS for NAME, @ for the domain itself, and sending it to ADDR, or passing it by TCP where published so, or serving status-page[:WHAT]; repeatable")
 	http3 := fs.Bool("http3", false, "with --serve, offer clients HTTP/3 too, proxying each service's HTTP")
-	members := fs.Bool("members", false, "with --serve, each service is for members alone: never served under a name the log has public")
+	members := fs.Bool("members", false, "with --serve, each service is for members only: never served under a public name")
 	acmeDir := fs.String("acme", autocert.DefaultACMEDirectory, "the ACME directory TLS certificates are taken from")
 	join := fs.String("join", "", "join the network LINK invites to once started, unless in one (default $JUIST_JOIN)")
 	maxConns := fs.Uint("max-conns", 0, fmt.Sprintf("connections served at once: %d by an ingress, %d ending TLS, unless given",

@@ -8,6 +8,7 @@ import (
 	"github.com/nning/juist/daemon"
 	juistnames "github.com/nning/juist/internal/names"
 	"github.com/nning/juist/ipc"
+	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
 
@@ -35,13 +36,23 @@ type view struct {
 
 	Settings settings `json:"settings"`
 	Details  details  `json:"details"`
+
+	// Admins are the network's admin keys, as [AdminKeyOf] names them, by
+	// which the app tells the networks it holds a key of; Waiting is how many
+	// changes wait for votes on this phone.
+	Admins  []string `json:"admins,omitempty"`
+	Waiting int      `json:"waiting,omitempty"`
 }
 
 // settings are the phone's own: Names whether its lookups go to juist's
-// resolver, HTTPSOnly whether it reaches relays by TLS on 443 alone.
+// resolver, PublicNames whether it resolves the public names the network
+// points at members to them, HTTPSOnly whether it reaches relays by TLS on
+// 443 alone, PortMapping whether it has the router open a port for it.
 type settings struct {
-	Names     bool `json:"names"`
-	HTTPSOnly bool `json:"httpsOnly,omitempty"`
+	Names       bool `json:"names"`
+	PublicNames bool `json:"publicNames,omitempty"`
+	HTTPSOnly   bool `json:"httpsOnly,omitempty"`
+	PortMapping bool `json:"portMapping"`
 }
 
 // details are what `juist status` says beyond the state: the network's
@@ -54,11 +65,16 @@ type details struct {
 	// Relays is how many members may relay, Installed how many this phone
 	// holds, Home the one it is homed at; HTTPSRelays those on 443 it
 	// reaches while on HTTPS alone.
-	Relays      int           `json:"relays,omitempty"`
-	Installed   int           `json:"installed,omitempty"`
-	Home        string        `json:"home,omitempty"`
-	HTTPSRelays []string      `json:"httpsRelays,omitempty"`
-	Subnets     []subnetRoute `json:"subnets,omitempty"`
+	Relays      int      `json:"relays,omitempty"`
+	Installed   int      `json:"installed,omitempty"`
+	Home        string   `json:"home,omitempty"`
+	HTTPSRelays []string `json:"httpsRelays,omitempty"`
+	// PublicDERP says members meet through Tailscale's public DERP servers
+	// where no member relays.
+	PublicDERP bool `json:"publicDerp,omitempty"`
+	// Underlay is what the data plane measured of the network beneath.
+	Underlay *measured     `json:"underlay,omitempty"`
+	Subnets  []subnetRoute `json:"subnets,omitempty"`
 }
 
 // A subnetRoute is a subnet the network routes through Router, in use or
@@ -90,6 +106,8 @@ type member struct {
 	// Relay names the member whose relay carries the traffic to it, where
 	// Reach is relay.
 	Relay string `json:"relay,omitempty"`
+	// RelayPublic says Relay is one of Tailscale's public DERP servers.
+	RelayPublic bool `json:"relayPublic,omitempty"`
 	// Heard is when it last signed its announcement, and Since when its
 	// tunnel was first found down, Unix seconds.
 	Heard int64 `json:"heard,omitempty"`
@@ -134,12 +152,22 @@ type exit struct {
 }
 
 // names is what the phone resolves of the network's names: Domain the
-// network's, Own the phone's own names, and Resolved whether its lookups
-// reach juist's resolver, which the alarms say why not.
+// network's, Own the phone's own names, Resolved whether its lookups
+// reach juist's resolver, which the alarms say why not, and Public the
+// public names the network points at other members.
 type names struct {
-	Domain   string   `json:"domain,omitempty"`
-	Own      []string `json:"own,omitempty"`
-	Resolved bool     `json:"resolved,omitempty"`
+	Domain   string       `json:"domain,omitempty"`
+	Own      []string     `json:"own,omitempty"`
+	Resolved bool         `json:"resolved,omitempty"`
+	Public   []publicName `json:"public,omitempty"`
+}
+
+// A publicName is a public name pointed at Member, and Not why the phone
+// resolves it publicly now, where it agreed to resolve it to Member.
+type publicName struct {
+	Name   string `json:"name"`
+	Member string `json:"member,omitempty"`
+	Not    string `json:"not,omitempty"`
 }
 
 // tunnels is the last check of the installed peers' tunnels, at Checked.
@@ -164,9 +192,10 @@ type alarm struct {
 // privateDNS where set.
 func viewOf(s *ipc.Status, privateDNS string) view {
 	v := view{Network: s.NetworkName, Updated: s.LastReconcile,
-		Self:     member{Identity: s.Self.String(), Name: cmp.Or(s.SelfName, s.Self.ShortString()), Reach: "self"},
-		Settings: settings{Names: s.Names == nil || !s.Names.Off, HTTPSOnly: s.HTTPS != nil && s.HTTPS.Only},
-		Details:  details{AppSchema: int(types.CurrentSchema)}}
+		Self: member{Identity: s.Self.String(), Name: cmp.Or(s.SelfName, s.Self.ShortString()), Reach: "self"},
+		Settings: settings{Names: s.Names == nil || !s.Names.Off, PublicNames: s.Names != nil && s.Names.Accepted,
+			HTTPSOnly: s.HTTPS != nil && s.HTTPS.Only, PortMapping: !s.PortMapOff},
+		Details: details{AppSchema: int(types.CurrentSchema)}, Waiting: s.Waiting}
 	for _, p := range s.Addrs {
 		if p.Addr().Is4() {
 			v.Self.V4 = cmp.Or(v.Self.V4, p.Addr().String())
@@ -233,7 +262,7 @@ func viewOf(s *ipc.Status, privateDNS string) view {
 		r, installed := reach[d.Identity]
 		m.Reach, m.Heard, m.Since = reachOf(r, installed, slices.Contains(s.Silent, d.Name), s.ReachChecked != 0), r.Heard, r.Since
 		if m.Reach == "relay" {
-			m.Relay = r.Relay
+			m.Relay, m.RelayPublic = r.Relay, r.PublicRelay
 		}
 		v.Members = append(v.Members, m)
 	}
@@ -271,7 +300,8 @@ func viewOf(s *ipc.Status, privateDNS string) view {
 // detailsOf is what s says beyond the state.
 func detailsOf(s *ipc.Status) details {
 	d := details{Schema: int(s.Schema), AppSchema: int(types.CurrentSchema), Epoch: s.Epoch,
-		Relays: s.RelayCapable, Installed: s.Relays, Home: s.HomeRelay}
+		Relays: s.RelayCapable, Installed: s.Relays, Home: s.HomeRelay, Underlay: underlayOf(s.Underlay),
+		PublicDERP: s.PublicDERP}
 	if s.Head != (types.Hash{}) {
 		d.Head = s.Head.String()[:12]
 	}
@@ -306,7 +336,7 @@ func dnsNames(v *view, domain string) {
 
 // namesOf is n as the app shows it, nil where there are none.
 func namesOf(n *ipc.Names, self member) *names {
-	if n == nil || n.Domain == "" && n.Public == "" {
+	if n == nil || n.Domain == "" && n.Public == "" && len(n.Overrides) == 0 {
 		return nil
 	}
 	out := &names{Domain: n.Domain, Resolved: n.Resolved}
@@ -316,7 +346,9 @@ func namesOf(n *ipc.Names, self member) *names {
 	for _, o := range n.Overrides {
 		if o.Device == self.Name && self.Name != "" {
 			out.Own = append(out.Own, o.Name)
+			continue
 		}
+		out.Public = append(out.Public, publicName{Name: o.Name, Member: o.Device, Not: o.Not})
 	}
 	return out
 }
@@ -391,7 +423,12 @@ func alarmsOf(s *ipc.Status, privateDNS string) []alarm {
 		add(alarm{Kind: "dataPlane", Severity: "warn", Text: s.DataPlaneError})
 	}
 	if down := s.Blocked(); len(down) > 0 {
-		add(alarm{Kind: "noTraffic", Severity: "warn", Names: down})
+		// As juist health: with a relay to meet at, NAT is not to blame.
+		kind := "noTraffic"
+		if s.Relays > 0 || s.PublicDERP {
+			kind = "noTrafficRelayed"
+		}
+		add(alarm{Kind: kind, Severity: "warn", Names: down})
 	}
 	if len(s.SyncNewer) > 0 {
 		add(alarm{Kind: "newer", Severity: "warn", Names: s.SyncNewer})
@@ -408,7 +445,7 @@ func alarmsOf(s *ipc.Status, privateDNS string) []alarm {
 	if left, ending := s.FreshnessEnding(time.Now().Unix()); ending {
 		add(alarm{Kind: "freshnessEnding", Severity: "warn", Count: int((left + time.Hour - 1) / time.Hour)})
 	}
-	if s.RelayCapable == 0 && s.Members > 2 && s.Alarm == "" {
+	if s.RelayCapable == 0 && !s.PublicDERP && s.Members > 2 && s.Alarm == "" {
 		add(alarm{Kind: "noRelay", Severity: "warn"})
 	}
 	for _, l := range s.Lost {
@@ -420,9 +457,6 @@ func alarmsOf(s *ipc.Status, privateDNS string) []alarm {
 	out = append(out, namesAlarms(s.Names, privateDNS)...)
 	if s.Unreachable > 0 && s.Peers > 0 {
 		add(alarm{Kind: "silent", Severity: "info", Names: s.Silent, Count: s.Unreachable})
-	}
-	if len(s.Seeking) > 0 {
-		add(alarm{Kind: "seeking", Severity: "info", Names: s.Seeking})
 	}
 	return out
 }
@@ -445,6 +479,35 @@ func namesAlarms(n *ipc.Names, privateDNS string) []alarm {
 	}
 	if len(n.ForMembers) > 0 {
 		out = append(out, alarm{Kind: "forMembers", Severity: "warn", Names: slices.Clone(n.ForMembers)})
+	}
+	return out
+}
+
+// measured is what the data plane measured of the network beneath, as
+// [ipc.Underlay] says it.
+type measured struct {
+	UDP         bool     `json:"udp,omitempty"`
+	IPv4        bool     `json:"ipv4,omitempty"`
+	IPv6        bool     `json:"ipv6,omitempty"`
+	Mapping     bool     `json:"mapping,omitempty"`
+	PortPerPeer bool     `json:"portPerPeer,omitempty"`
+	Offered     []string `json:"offered,omitempty"`
+	Mapped      string   `json:"mapped,omitempty"`
+}
+
+func underlayOf(u *ipc.Underlay) *measured {
+	if u == nil {
+		return nil
+	}
+	return &measured{UDP: u.UDP, IPv4: u.IPv4, IPv6: u.IPv6, Mapping: u.Mapping, PortPerPeer: u.PortPerPeer,
+		Offered: u.Offered, Mapped: u.Mapped}
+}
+
+// adminsOf are state's admin keys, as [AdminKeyOf] names them.
+func adminsOf(state *log.State) []string {
+	var out []string
+	for _, a := range state.Admins() {
+		out = append(out, a.Public.String())
 	}
 	return out
 }

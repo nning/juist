@@ -1,7 +1,7 @@
 ---
 title: Installation
 linkTitle: Installation
-description: juist aus der Paketquelle oder einem Release auf Debian, Ubuntu, Fedora oder FreeBSD installieren, den Download prüfen oder das Paket aus dem Quellcode bauen.
+description: juist aus der Paketquelle oder einem Release auf Debian, Ubuntu, Fedora, FreeBSD oder dem Steam Deck installieren, den Download prüfen oder das Paket aus dem Quellcode bauen.
 lead: juist installierst du als Paket deines Systems, und zwar auf jedem Gerät, das in ein Netz soll. Jedes Release bringt fertige Pakete mit, dazu eine signierte Liste ihrer Prüfsummen.
 ---
 
@@ -12,9 +12,10 @@ juist läuft unter Linux und FreeBSD. Für Debian und Ubuntu gibt es ein
 [Release](https://github.com/nning/juist/releases/latest) enthält die Pakete
 für amd64 und arm64, das RPM allerdings nur für x86_64. Auf einem anderen
 Linux mit systemd, etwa Arch oder Gentoo, installiert es `make install` aus
-dem Quellcode ([Aus dem Quellcode bauen](#building-from-source)). Ein
-Telefon tritt stattdessen mit der App bei, siehe
-[Android]({{< relref "docs/android" >}}).
+dem Quellcode ([Aus dem Quellcode bauen](#building-from-source)). Auf dem
+Steam Deck kommt juist als System-Erweiterung von SteamOS
+([Auf dem Steam Deck](#steam-deck)). Ein Telefon tritt stattdessen mit der
+App bei, siehe [Android]({{< relref "docs/android" >}}).
 
 ## Das Paket installieren
 
@@ -40,7 +41,8 @@ fetch -o - https://juist.nning.io/install | sh
 
 Das Skript trägt die Paketquelle und ihren Schlüssel bei apt, dnf oder pkg
 ein, installiert juist und startet unter FreeBSD den Daemon; wo es nicht root
-ist, nimmt es sudo. Um es vorher zu lesen, lade es als `install.sh` herunter
+ist, nimmt es sudo. Unter SteamOS installiert es juist stattdessen als
+System-Erweiterung ([Auf dem Steam Deck](#steam-deck)). Um es vorher zu lesen, lade es als `install.sh` herunter
 und starte es mit `sh install.sh`. Von Hand sind es diese Schritte:
 
 {{< step on="einem Gerät mit Debian oder Ubuntu" >}}
@@ -199,6 +201,38 @@ Die Pakete landen in `build/deb`, `build/rpm/RPMS` und `build/freebsd`.
 `make deb DEB_ARCH=arm64` baut das `.deb` für eine andere
 Prozessorarchitektur, mit `armhf` und `i386` funktioniert es genauso.
 
+## Auf dem Steam Deck {#steam-deck}
+
+SteamOS hält `/usr` schreibgeschützt und ersetzt es mit jedem seiner
+Updates, deshalb kommt juist dort als System-Erweiterung: Das
+Installationsskript legt die Dateien des `.deb` in
+`/var/lib/extensions/juist.raw` ab, das systemd bei jedem Start über `/usr`
+legt. juist, die Schlüssel des Geräts und seine Netze bleiben über
+SteamOS-Updates hinweg erhalten.
+
+{{< step on="dem Steam Deck, im Desktop-Modus, in Konsole" >}}
+Gib dem Benutzer `deck` ein Passwort für sudo, falls er keines hat, und
+installiere dann juist:
+
+```sh
+passwd
+curl -fsSL https://juist.nning.io/install | sh
+```
+{{< /step >}}
+
+Das Skript prüft den signierten Index der Paketquelle und die Prüfsumme des
+Pakets und startet juistd. Ein neueres Release installierst du, indem du es
+erneut aufrufst: SteamOS aktualisiert juist nicht selbst. Weiter geht es wie
+unter jedem anderen Linux mit dem
+[ersten Netz]({{< relref "docs/first-network" >}}).
+
+- Was juist in `/etc` ändert, die vertrauenswürdige Zone der Firewall, die
+  Weiterleitung eines Exit-Nodes und die avahi-Einstellung, nach der
+  `juist health` fragen kann, behält SteamOS über seine Updates hinweg, weil
+  `/etc/atomic-update.conf.d/juist.conf` es auflistet.
+- `sudo /usr/lib/juist/sysext.sh uninstall` entfernt juist wieder; was
+  bleibt, steht unter [Was nach dem Deinstallieren bleibt](#what-stays-after-uninstalling).
+
 ## Im Container
 
 Eine App im Container kann ein eigenes Gerät sein, mit eigenen Adressen und
@@ -327,6 +361,7 @@ nicht weiter führt. Dazu ruft ein Admin auf seinem eigenen Gerät
 sudo apt remove juist      # Debian, Ubuntu
 sudo dnf remove juist      # Fedora
 pkg delete juist           # FreeBSD, als root
+sudo /usr/lib/juist/sysext.sh uninstall   # SteamOS
 ```
 
 Dabei wird juistd für jedes Netz auf dem Gerät beendet, und alles, was juist
@@ -334,7 +369,7 @@ auf dem Rechner eingerichtet hat, wird rückgängig gemacht. Unter Linux sind da
 Firewall-Regel für `juist0`, ein Ingress, ein Relay auf Port 443 und die
 Änderungen von `juist exit serve`.
 
-## Was nach dem Deinstallieren bleibt
+## Was nach dem Deinstallieren bleibt {#what-stays-after-uninstalling}
 
 - Unter Linux bleiben die Schlüssel und das Log des Geräts in
   `/var/lib/juist`, die eines weiteren Netzes in `/var/lib/juist1` usw.,

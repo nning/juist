@@ -34,7 +34,7 @@ created network "home"
   Break-glass   juist-break-glass-1.qL0x…dW8.u3Rk6g
   Operator      alice
 warning: the break-glass secret is shown only now and kept nowhere: keep it safe, apart from the admin keys
-hint: with it, juist network disable ends the network once too few admin keys are left to change it
+hint: with it, juist network disable ends the network when too few admin keys are left
 ```
 
 juist asks for sudo once, to make you the device's **operator**: the local
@@ -156,7 +156,7 @@ public address, such as a VPS, needs port 41643/udp open.
 | `juist0 · not running` in `juist status` | `sudo systemctl enable --now juistd` |
 | `read-only; to manage this device …` | `sudo juist set --operator=$USER`, once |
 | `warning: code voided: wrong guess from …` | Join with the link, which still works. If that was not your device, someone else knows the invite. |
-| `juist: words not confirmed; nothing signed` | If the words differed, the device asking is not the one you invited. Start a new invite. |
+| `juist: words not confirmed; not admitted` | If the words differed, the device asking is not the one you invited. Start a new invite. |
 | `no answer from a device` in `juist health` | It is offline, or its port 41643/udp is closed. |
 | `no tunnel traffic from a device` | Open 41643/udp on a device with a public address, or grant one `relay`. |
 

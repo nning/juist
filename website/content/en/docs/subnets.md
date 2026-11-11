@@ -106,4 +106,4 @@ On a device that cannot reach a subnet, `juist subnet` gives the reason after
 On the router itself, `not routed: not agreed to on this device` means
 `juist subnet serve` has not run there yet. As long as no subnet has been
 assigned to the router, `juist subnet serve` prints
-`will route once an admin grants this device a subnet`.
+`will route once an admin adds a subnet to this device`.

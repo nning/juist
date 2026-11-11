@@ -61,7 +61,7 @@ docs.juist.nning.io.
   (`website/Containerfile`, `make -C website image`) or under systemd, serves
   plain HTTP on a member's `127.0.0.1` as an unprivileged user, every answer
   with the CSP and no listing, a line for each on stderr. It is published with
-  `juist publish add NAME 127.0.0.1:PORT --http2` through an ingress on a VPS of
+  `juist publish NAME 127.0.0.1:PORT --http2` through an ingress on a VPS of
   its own; TLS ends at `juist-serve`. A service member in front of it is the
   stricter form, once it has a recipe for a container.
 - **Following main:** `website/deploy` builds the site on a member whenever

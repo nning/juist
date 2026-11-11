@@ -113,6 +113,8 @@ fun StatusScreen(
     onJoinAnother: (() -> Unit)? = null,
     onLeave: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
+    onInvite: (() -> Unit)? = null,
+    onBackup: (() -> Unit)? = null,
 ) {
     val view = if (slot != null) connection.view(slot) else connection.lastView
     val on = connection is Connection.On
@@ -148,6 +150,9 @@ fun StatusScreen(
                     IconButton({ menu = true }) { Icon(Icons.Filled.MoreVert, stringResource(R.string.action_more)) }
                     DropdownMenu(menu, { menu = false }) {
                         DropdownMenuItem({ Text(stringResource(R.string.details_title)) }, { menu = false; onDetails() })
+                        if (onBackup != null) {
+                            DropdownMenuItem({ Text(stringResource(R.string.backup_title)) }, { menu = false; onBackup() })
+                        }
                         if (onJoinAnother != null) {
                             DropdownMenuItem({ Text(stringResource(R.string.action_join_another)) }, { menu = false; onJoinAnother() })
                         }
@@ -177,6 +182,11 @@ fun StatusScreen(
                     ThisDevice(view, on, copied)
                     view.exit?.let { ExitSection(it, on, onExit, onVpnSettings) }
                     Members(view, on, onMember)
+                    if (onInvite != null) {
+                        OutlinedButton(onInvite, Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s), enabled = on) {
+                            Text(stringResource(R.string.action_invite))
+                        }
+                    }
                     TextButton(onDetails, Modifier.padding(horizontal = Space.s, vertical = Space.s)) {
                         Text(stringResource(R.string.action_details))
                     }

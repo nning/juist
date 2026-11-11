@@ -56,7 +56,7 @@ in firewalld oder ufw.
 Veröffentliche den Namen, mit HTTP/3 für Browser, die es können:
 
 ```sh
-juist publish add docs 127.0.0.1:8080 --http3
+juist publish docs 8080 --http3
 ```
 
 Die Ausgabe lautet `ending TLS for docs.example.org to 127.0.0.1:8080, with HTTP/3`.

@@ -110,7 +110,7 @@ func TestQRCodeOnlyOnATerminal(t *testing.T) {
 	if strings.ContainsAny(narrow.String(), "█▀▄") {
 		t.Fatalf("a qr code wider than the terminal:\n%s", narrow.String())
 	}
-	mustContain(t, narrow.String(), "no qr code: the terminal is narrower than")
+	mustContain(t, narrow.String(), "no QR code: the terminal is narrower than")
 }
 
 // The code comes last, below the QR code and the link, so that a window

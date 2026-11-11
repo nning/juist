@@ -196,7 +196,7 @@ func TestASecondNetworkRunsBesideTheFirst(t *testing.T) {
 		t.Fatalf("reset work: %v\n%s", err, out)
 	}
 	mustContain(t, out, `forget "work", with this device's keys for it and its juistd (juist1)?`,
-		`"home" and "lab" stay as they are, with their keys`, `left "work"`, "removed "+unitOf(1))
+		`"home" and "lab" stay, with their keys`, `left "work"`, "removed "+unitOf(1))
 	if strings.Contains(out, "reset this device") {
 		t.Errorf("leaving one network reads as resetting the device:\n%s", out)
 	}
@@ -338,7 +338,7 @@ func TestAHostConflictReads(t *testing.T) {
 	v = statusOfOn(st, testNow(), noPaint, instance.Name, false)
 	mustContain(t, render(v.head), "not connected")
 	notes = render(v.notes)
-	mustContain(t, notes, "runs on this host already, as juist0", "juist reset juist1 --force")
+	mustContain(t, notes, "already runs on this host, as juist0", "juist reset juist1 --force")
 	if strings.Contains(notes, "CAP_NET_ADMIN") {
 		t.Errorf("a same-network refusal reads as a missing capability:\n%s", notes)
 	}
@@ -446,13 +446,13 @@ func TestAnOverlapIsWarnedOfAfterTheFact(t *testing.T) {
 	h := newHost(t)
 	h.mustRun("create", "home")
 	out := h.mustRun("create", "lab", "--ipv4", "198.18.4.0/24", "--yes")
-	mustContain(t, out, `"lab"'s IPv4 range overlaps "home"'s (juist0) here; "lab" runs here without IPv4`,
+	mustContain(t, out, `the IPv4 ranges of "lab" and "home" (juist0) overlap; "lab" runs here without IPv4`,
 		"juist network renumber juist1 PREFIX")
 
 	// The default freed, a newcomer there takes IPv4 from lab.
 	h.mustRun("--network", "home", "reset", "--force", "--yes")
 	out = h.mustRun("create", "office", "--ipv4", "198.18.4.0/23", "--yes")
-	mustContain(t, out, `"office"'s IPv4 range overlaps "lab"'s (juist1) here; "lab" runs here without IPv4`)
+	mustContain(t, out, `the IPv4 ranges of "office" and "lab" (juist1) overlap; "lab" runs here without IPv4`)
 }
 
 // Where the device is in several networks, a command about one takes it

@@ -60,9 +60,9 @@ func TestRenumberOneDevice(t *testing.T) {
 	enrollDevice(t, c, "tablet")
 	for _, tc := range []struct{ addr, want string }{
 		{"198.18.4.1", "taken by laptop"},
-		{"10.0.0.5", "outside the network's range"},
-		{"198.18.7.255", "first or last"},
-		{"fd00::1", "bad IPv4 address"},
+		{"10.0.0.5", "10.0.0.5 is outside the network (198.18.4.0/22)"},
+		{"198.18.7.255", "cannot be the first or last"},
+		{"fd00::1", "\"fd00::1\" is not an IPv4 address\nusage: juist network renumber"},
 	} {
 		if out, err := c.run("network", "renumber", "phone", tc.addr, "--yes"); err == nil ||
 			!strings.Contains(err.Error(), tc.want) {
@@ -78,7 +78,7 @@ func TestRenumberOneDevice(t *testing.T) {
 		t.Fatal("the phone was moved to the removed tablet's address unconfirmed")
 	}
 	mustContain(t, c.mustRun("network", "renumber", "phone", "198.18.4.3", "--yes"),
-		"was tablet's", "phone moving to 198.18.4.3", "198.18.4.2 until")
+		"198.18.4.3 was used by tablet", "phone moving to 198.18.4.3", "198.18.4.2 until")
 	n, _ := openLog(t, c).State().Node(nodeKeysOf(t, phone).Identity.Public())
 	if *n.V4 != netip.MustParseAddr("198.18.4.3") || n.Retiring.Addr != netip.MustParseAddr("198.18.4.2") {
 		t.Fatalf("the phone is at %v retiring %v", *n.V4, n.Retiring.Addr)
@@ -86,7 +86,7 @@ func TestRenumberOneDevice(t *testing.T) {
 
 	// Moved again, it gives up the address it was retiring, and is warned.
 	mustContain(t, c.mustRun("network", "renumber", "phone", "198.18.4.7", "--yes"),
-		"retire now, not at their deadline", "phone's 198.18.4.2")
+		"retire now, not at their deadline", "198.18.4.2 (phone)")
 }
 
 // The network renumbering keeps each device at its place in the range where
@@ -220,10 +220,9 @@ func TestRenameTheNetwork(t *testing.T) {
 	mustContain(t, first.mustRun("__complete", "network", ""), "rename")
 }
 
-// A device moves at once with --finish: its old address is retired, and held
-// until the renumbering is finished, which juist network says, while another
-// device's transition runs on. --finish takes DEVICE ADDR or nothing, and no
-// --for.
+// A device moves at once with --finish: its old address is retired and free
+// for another device, while another device's transition runs on, whose old
+// address is not. --finish takes DEVICE ADDR or nothing, and no --for.
 func TestMovingADeviceAtOnce(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
@@ -235,9 +234,9 @@ func TestMovingADeviceAtOnce(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"phone", "198.18.4.9", "--finish", "--for", "1h"}, "--finish takes no --for"},
-		{[]string{"phone", "--finish"}, "--finish takes DEVICE ADDR, or nothing"},
-		{[]string{"10.7.0.0/22", "--finish"}, "--finish takes DEVICE ADDR, or nothing"},
+		{[]string{"phone", "198.18.4.9", "--finish", "--for", "1h"}, "--finish cannot be used with --for"},
+		{[]string{"phone", "--finish"}, "--finish takes DEVICE ADDR or no argument"},
+		{[]string{"10.7.0.0/22", "--finish"}, "--finish takes DEVICE ADDR or no argument"},
 	} {
 		if _, err := c.run(append([]string{"network", "renumber"}, bad.args...)...); err == nil ||
 			!strings.Contains(err.Error(), bad.want) || !strings.Contains(err.Error(), "usage: juist network renumber") {
@@ -248,7 +247,7 @@ func TestMovingADeviceAtOnce(t *testing.T) {
 	if err == nil {
 		t.Fatal("moved without a yes")
 	}
-	mustContain(t, out, "warning: connections to phone's 198.18.4.2 end; devices not told yet reach phone over "+
+	mustContain(t, out, "warning: connections to 198.18.4.2 (phone) end; devices not told yet reach phone over "+
 		"IPv6 only until they are", "move phone from 198.18.4.2 to 198.18.4.9, retiring 198.18.4.2 now?")
 	mustContain(t, c.mustRun("network", "renumber", "phone", "198.18.4.9", "--finish", "--yes"),
 		"phone moved to 198.18.4.9; 198.18.4.2 retired")
@@ -265,33 +264,41 @@ func TestMovingADeviceAtOnce(t *testing.T) {
 		t.Fatalf("the tablet's transition ended with the phone's move: %v", got)
 	}
 	out = c.mustRun("network")
-	mustContain(t, out, "Held", "198.18.4.2 (phone's old address)",
-		"hint: juist network renumber --finish frees them, and ends the moves below", "tablet  198.18.4.3")
-	if _, err := c.run("network", "renumber", "laptop", "198.18.4.2", "--yes"); err == nil ||
-		!strings.Contains(err.Error(), "198.18.4.2 is held as phone's old address") {
-		t.Fatalf("taking the address the phone left at once: %v", err)
+	mustContain(t, out, "tablet  198.18.4.3")
+	if strings.Contains(out, "Held") {
+		t.Fatalf("an address retired at once is held:\n%s", out)
+	}
+	if _, err := c.run("network", "renumber", "laptop", "198.18.4.3", "--yes"); err == nil ||
+		!strings.Contains(err.Error(), "198.18.4.3 is the old address of tablet until") ||
+		!strings.Contains(err.Error(), "hint: to free it now: juist network renumber --finish") {
+		t.Fatalf("taking the tablet's old address before its deadline: %v", err)
+	}
+	mustContain(t, c.mustRun("network", "renumber", "laptop", "198.18.4.2", "--finish", "--yes"),
+		"warning: 198.18.4.2 was used by phone; devices not told yet still send its traffic there",
+		"laptop moved to 198.18.4.2")
+	if n, _ := openLog(t, c).State().Node(id); n.Retiring != nil {
+		t.Fatalf("the phone still retires %v, which the laptop took", n.Retiring.Addr)
 	}
 
 	// The tablet's own transition is not ended by a move to where it is.
 	mustContain(t, c.mustRun("network", "renumber", "tablet", "198.18.4.8", "--finish", "--yes"),
 		"unchanged: tablet at 198.18.4.8; its old 198.18.4.3 works until",
-		"hint: juist network renumber --finish retires every old address now")
+		"hint: to retire every old address now: juist network renumber --finish")
 
-	// Finishing names what it retires and what it frees.
+	// Finishing names what it retires, not what is retired already.
 	out, _ = c.answer("n", "network", "renumber", "--finish")
-	mustContain(t, out, "warning: devices not told yet lose tablet's 198.18.4.3",
-		"retire tablet's 198.18.4.3 and free phone's 198.18.4.2 now?")
-	mustContain(t, c.mustRun("network", "renumber", "--finish", "--yes"), "old addresses retired; held ones freed")
-	if out := c.mustRun("network"); strings.Contains(out, "Held") {
-		t.Fatalf("finished, the renumbering still holds an address:\n%s", out)
-	}
+	mustContain(t, out, "warning: devices not told yet lose 198.18.4.3 (tablet)",
+		"retire 198.18.4.3 (tablet) now?")
+	mustContain(t, c.mustRun("network", "renumber", "--finish", "--yes"), "old addresses retired")
+	mustContain(t, c.mustRun("network", "renumber", "--finish"), "no old addresses to retire")
 }
 
-// What is held is listed in address order, an old range once for all it
-// holds, and freeing it alone says so.
+// Below schema 25, what is held is listed in address order, an old range once
+// for all it holds, and freeing it alone says so.
 func TestHeldAddressesRead(t *testing.T) {
 	t.Parallel()
 	c := newCLI(t)
+	c.genesisSchema = types.SchemaTakeRetired - 1
 	c.mustRun("create", "home", "--device", "laptop")
 	for _, name := range []string{"phone", "tv"} {
 		enrollDevice(t, c, name)
@@ -302,10 +309,10 @@ func TestHeldAddressesRead(t *testing.T) {
 		c.mustRun("network", "renumber", move[0], move[1], "--finish", "--yes")
 	}
 	out := c.mustRun("network")
-	mustContain(t, out, "198.18.4.9 (tv's old address), 198.18.4.10 (phone's old address)",
-		"hint: juist network renumber --finish frees them\n")
+	mustContain(t, out, "198.18.4.9 (old address of tv), 198.18.4.10 (old address of phone)",
+		"hint: to free them: juist network renumber --finish\n")
 	out, _ = c.answer("n", "network", "renumber", "--finish")
-	mustContain(t, out, "free tv's 198.18.4.9, phone's 198.18.4.10 now?")
+	mustContain(t, out, "free 198.18.4.9 (tv), 198.18.4.10 (phone) now?")
 	if strings.Contains(out, "warning") {
 		t.Fatalf("freeing held addresses warns of a loss:\n%s", out)
 	}
@@ -317,5 +324,112 @@ func TestHeldAddressesRead(t *testing.T) {
 	mustContain(t, out, "198.18.4.0/22 (the old range)")
 	if strings.Contains(out, "old address)") {
 		t.Fatalf("an old range lists every address it holds:\n%s", out)
+	}
+}
+
+// From schema 25 an old address is free once its deadline passed: another
+// device moves onto it, warned that devices not yet told still send there,
+// and nothing is held for --finish to free.
+func TestAnOldAddressIsFreeAfterItsDeadline(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home", "--device", "laptop")
+	enrollDevice(t, c, "phone")
+	c.mustRun("network", "renumber", "phone", "198.18.4.9", "--for", "1h", "--yes")
+	if _, err := c.run("network", "renumber", "laptop", "198.18.4.2", "--yes"); err == nil ||
+		!strings.Contains(err.Error(), "198.18.4.2 is the old address of phone until") {
+		t.Fatalf("taking the phone's old address before its deadline: %v", err)
+	}
+	advance(t, 2*time.Hour)
+	if out := c.mustRun("network"); strings.Contains(out, "Held") {
+		t.Fatalf("an old address past its deadline is held:\n%s", out)
+	}
+	mustContain(t, c.mustRun("network", "renumber", "laptop", "198.18.4.2", "--finish", "--yes"),
+		"warning: 198.18.4.2 was used by phone; devices not told yet still send its traffic there",
+		"laptop moved to 198.18.4.2")
+	mustContain(t, c.mustRun("network", "renumber", "--finish"), "no old addresses to retire")
+}
+
+// A subnet over the range the network was renumbered from waits for its
+// deadline, and then takes it, warned that devices not yet told still send
+// there; below schema 25 it waits for --finish.
+func TestASubnetTakesTheOldRange(t *testing.T) {
+	t.Parallel()
+	for _, schema := range []types.SchemaVersion{types.SchemaTakeRetired - 1, types.SchemaTakeRetired} {
+		c := newCLI(t)
+		c.genesisSchema = schema
+		c.mustRun("create", "home", "--device", "laptop")
+		enrollDevice(t, c, "phone")
+		c.mustRun("network", "renumber", "10.7.0.0/24", "--yes")
+		c.mustRun("network", "renumber", "--finish", "--yes")
+		c.mustRun("network", "renumber", "10.9.0.0/24", "--for", "1h", "--yes")
+		if _, err := c.run("subnet", "add", "phone", "10.7.0.0/24"); err == nil ||
+			!strings.Contains(err.Error(), "10.7.0.0/24 overlaps the old range 10.7.0.0/24, in use until") ||
+			!strings.Contains(err.Error(), "hint: to free it now: juist network renumber --finish") {
+			t.Fatalf("%v: a subnet over the old range before its deadline: %v", schema, err)
+		}
+		advance(t, 2*time.Hour)
+		if schema < types.SchemaTakeRetired {
+			if _, err := c.run("subnet", "add", "phone", "10.7.0.0/24"); err == nil ||
+				!strings.Contains(err.Error(), "hint: juist network renumber --finish frees it") {
+				t.Fatalf("%v: a subnet over the held old range: %v", schema, err)
+			}
+			continue
+		}
+		if out := c.mustRun("network"); strings.Contains(out, "Held") {
+			t.Fatalf("an old range past its deadline is held:\n%s", out)
+		}
+		// Past its deadline the range is free already; a plain --finish
+		// retires nothing more.
+		mustContain(t, c.mustRun("network", "renumber", "--finish", "--yes"), "no old addresses to retire")
+		mustContain(t, c.mustRun("subnet", "add", "phone", "10.7.0.0/24"),
+			"warning: 10.7.0.0/24 was the network's range; devices not yet told still send its traffic into the network")
+		if r, ok := openLog(t, c).State().V4Retiring(); ok {
+			t.Fatalf("the subnet left the old range %v retiring", r.Prefixes)
+		}
+	}
+}
+
+// An approver reads that a move or a subnet takes an old address or range,
+// and, before its deadline, that devices not yet told lose it.
+func TestTakingAnOldAddressReadsAsSuch(t *testing.T) {
+	t.Parallel()
+	c := newCLI(t)
+	c.mustRun("create", "home", "--device", "laptop")
+	enrollDevice(t, c, "phone")
+	tablet := nodeKeysOf(t, enrollDevice(t, c, "tablet")).Identity.Public()
+	c.mustRun("network", "renumber", "phone", "198.18.4.9", "--for", "1h", "--yes")
+	auth := openLog(t, c)
+	move, err := auth.Builder().RenumberNode(tablet, netip.MustParseAddr("198.18.4.2"), types.RetireAtOnce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	mustContain(t, strings.Join(effect(&move, auth.State(), now), "\n"),
+		"takes 198.18.4.2, phone", "old address, in use until", "devices not told yet lose it now")
+	if got := strings.Join(effect(&move, auth.State(), now+2*3600), "\n"); strings.Contains(got, "in use until") ||
+		!strings.Contains(got, "takes 198.18.4.2, phone") {
+		t.Fatalf("a move onto an old address past its deadline reads:\n%s", got)
+	}
+
+	c.mustRun("network", "renumber", "--finish", "--yes")
+	c.mustRun("network", "renumber", "10.7.0.0/24", "--yes")
+	c.mustRun("network", "renumber", "--finish", "--yes")
+	c.mustRun("network", "renumber", "10.9.0.0/24", "--for", "1h", "--yes")
+	auth = openLog(t, c)
+	route, err := auth.Builder().SetNodeRoutes(tablet, nil, []netip.Prefix{netip.MustParsePrefix("10.7.0.0/25")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, strings.Join(effect(&route, auth.State(), now), "\n"),
+		"takes 10.7.0.0/24, the old range, in use until", "devices not told yet lose it now")
+	// An exit node's default route takes no old range.
+	exit, err := auth.Builder().SetNodeRoutes(tablet, []types.Role{types.RoleExit},
+		[]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(effect(&exit, auth.State(), now), "\n"); strings.Contains(got, "takes") {
+		t.Fatalf("an exit grant reads as taking the old range:\n%s", got)
 	}
 }

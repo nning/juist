@@ -27,10 +27,10 @@ func cmdStatus(a *app, args []string) error {
 	s := spec{name: "juist status", about: `
 Show this device's network and how many devices it reaches, for every
 network if the device is in several. Any local user may run it. juist health
-says what needs attention; juist devices lists the devices.`}
+says what needs attention.`}
 	fs := newFlags(s.name)
-	devices := fs.Bool("devices", false, "list the devices too, as juist devices does")
-	verbose := fs.Bool("verbose", false, "name the relay that carries the traffic to each relayed device")
+	devices := fs.Bool("devices", false, "list the devices too")
+	verbose := fs.Bool("verbose", false, "name the relay of each relayed device")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
@@ -185,7 +185,12 @@ type line struct {
 	kind  lineKind
 	label string // a field's
 	text  string
+	apart bool // a hint that is an issue of its own
+	along bool // not a hint, yet part of the issue before it
 }
+
+// startsIssue is whether juist health sets l off from the line before it.
+func (l line) startsIssue() bool { return l.apart || l.kind != lineHint && !l.along }
 
 type lineKind int
 
@@ -231,9 +236,9 @@ const dnsRefusedRecent = 10 * time.Minute
 func refusedHint(why string) string {
 	switch {
 	case strings.Contains(why, "tailscaled alone"):
-		return asRoot("tailscale set --accept-dns=false") + " leaves the tailnet's names to this host's other resolvers"
+		return "to let them through: " + asRoot("tailscale set --accept-dns=false")
 	case strings.Contains(why, "DNS over TLS"):
-		return "juist exit use DEVICE sends them through the tunnel"
+		return "to send them through the tunnel: juist exit use DEVICE"
 	case strings.Contains(why, "knows no DNS server"):
 		return "resolvectl status shows the servers systemd-resolved knows"
 	}
@@ -261,6 +266,7 @@ func statusOfOn(s *ipc.Status, now time.Time, paint func(code, s string) string,
 	r.thisDevice()
 	r.devices()
 	r.relays()
+	r.underlay()
 	r.exit()
 	r.served()
 	r.renumbering()
@@ -329,9 +335,8 @@ func (r *statusRender) connected() bool {
 	}
 	if c := s.HostConflict; c != nil && c.SameNetwork {
 		r.head(paint("1;31", "not connected"))
-		r.note(lineWarn, fmt.Sprintf("this network runs on this host already, "+
-			"as %s; this juistd would be a second device in it", r.other(c.Instance)))
-		r.note(lineHint, fmt.Sprintf("juist reset %s --force, which removes it", instance.Name(s.Instance)))
+		r.note(lineWarn, fmt.Sprintf("this network already runs on this host, as %s", r.other(c.Instance)))
+		r.note(lineHint, fmt.Sprintf("to remove this second device: juist reset %s --force", instance.Name(s.Instance)))
 		return false
 	}
 	if s.StartError != "" {
@@ -427,12 +432,23 @@ func (r *statusRender) relays() {
 				relays += " for " + count(s.RelayedFor, "device")
 			}
 		}
+		if s.PublicDERP {
+			relays += " (and Tailscale's public DERP)"
+		}
+		r.field("Relays", "%s", relays)
+	} else if s.PublicDERP {
+		relays := "Tailscale's public DERP"
+		if s.HomeRelay != "" {
+			relays += ", via " + s.HomeRelay
+		}
 		r.field("Relays", "%s", relays)
 	}
 	if h := s.HTTPS; h != nil && h.Only {
-		switch len(h.Relays) {
-		case 0:
-			r.field("HTTPS", "%s", paint("33", "only, and no relay on 443")+proxied(h))
+		switch {
+		case len(h.Relays) == 0 && s.PublicDERP:
+			r.field("HTTPS", "only, by Tailscale's public DERP%s", proxied(h))
+		case len(h.Relays) == 0:
+			r.field("HTTPS", "%s", paint("33", "only, no relay on 443")+proxied(h))
 		default:
 			r.field("HTTPS", "only, by %s%s", strings.Join(h.Relays, ", "), proxied(h))
 		}
@@ -442,6 +458,36 @@ func (r *statusRender) relays() {
 	} else if h != nil && h.Name != "" {
 		r.field("Relay name", "%s, %s", h.Name, paint("2", "not relaying"))
 	}
+}
+
+// underlay says what the data plane measured of the networks beneath, and
+// the port the router maps for this device.
+func (r *statusRender) underlay() {
+	u, paint := r.s.Underlay, r.paint
+	if u == nil {
+		return
+	}
+	var parts []string
+	switch {
+	case !u.UDP:
+		parts = append(parts, paint("33", "no UDP"))
+	case u.IPv4:
+		parts = append(parts, "IPv4")
+	}
+	if u.IPv6 {
+		parts = append(parts, "IPv6")
+	}
+	// Mapping off, the router is not asked what it offers.
+	offered := strings.Join(u.Offered, ", ")
+	switch {
+	case r.s.PortMapOff:
+		parts = append(parts, "port mapping off")
+	case u.Mapped != "":
+		parts = append(parts, fmt.Sprintf("%s maps %s", cmp.Or(offered, "the router"), u.Mapped))
+	case offered != "":
+		parts = append(parts, offered+", nothing mapped")
+	}
+	r.field("Underlay", "%s", strings.Join(parts, ", "))
 }
 
 func (r *statusRender) exit() {
@@ -493,10 +539,14 @@ func (r *statusRender) served() {
 	if t := publishSummary(s.Publish, published, paint); t != "" {
 		r.field("Published", "%s", t)
 	}
-	r.v.notes = append(r.v.notes, publishNotes(s.Publish, published, cmp.Or(s.SelfName, s.Self.ShortString()))...)
+	var domain string
+	if s.Names != nil {
+		domain = s.Names.Public
+	}
+	r.v.notes = append(r.v.notes, publishNotes(s.Publish, published, cmp.Or(s.SelfName, s.Self.ShortString()), domain)...)
 	if s.Publish != nil {
-		for _, sh := range s.Publish.Shared {
-			r.note(lineWarn, sharedWarning(sh))
+		for k, sh := range s.Publish.Shared {
+			r.v.notes = append(r.v.notes, line{kind: lineWarn, along: k > 0, text: sharedWarning(sh)})
 		}
 		if len(s.Publish.Shared) > 0 {
 			r.note(lineHint, sharedHint)
@@ -521,10 +571,10 @@ func (r *statusRender) served() {
 		switch {
 		case m.Off:
 			r.field("Multicast", "off")
-		case m.Auto:
-			r.field("Multicast", "on, copied: auto")
 		case len(m.Groups) > 0:
-			r.field("Multicast", "on, copied: %s", strings.Join(m.Groups, ", "))
+			r.field("Multicast", "on, copying %s", strings.Join(m.Groups, ", "))
+		case m.GroupsOff:
+			r.field("Multicast", "on (groups off)")
 		default:
 			r.field("Multicast", "on")
 		}
@@ -610,17 +660,16 @@ func (r *statusRender) hostConflict() {
 		return
 	}
 	if c.Unanswered {
-		r.note(lineInfo, fmt.Sprintf("no IPv4 yet: %s holds a network "+
-			"here and has not answered; IPv4 follows once it has, if the two do not overlap", r.other(c.Instance)))
+		r.note(lineInfo, fmt.Sprintf("no IPv4 yet: waiting for %s, which holds another network here", r.other(c.Instance)))
 		return
 	}
 	r.note(lineWarn, fmt.Sprintf("no IPv4 on this host: %s holds %s, which %q claims too (%v)",
 		r.other(c.Instance), heldText(c.Held), s.NetworkName, c.Claim))
 	if !slices.ContainsFunc(s.Addrs, func(p netip.Prefix) bool { return p.Addr().Is6() }) {
-		r.note(lineWarn, "and IPv6 is off here, so this network has no address on this host at all")
+		r.v.notes = append(r.v.notes, line{kind: lineWarn, along: true,
+			text: "and IPv6 is off, so this network has no address here"})
 	}
-	r.note(lineHint, fmt.Sprintf("renumber one of the two networks: "+
-		"juist network renumber %s PREFIX, or the other", instance.Name(s.Instance)))
+	r.note(lineHint, fmt.Sprintf("renumber either network: juist network renumber %s PREFIX", instance.Name(s.Instance)))
 }
 
 // httpsNotes are what keeps this device's use of 443 from working.
@@ -633,21 +682,21 @@ func httpsNotes(s *ipc.Status) []line {
 	note := func(kind lineKind, format string, args ...any) {
 		notes = append(notes, line{kind: kind, text: fmt.Sprintf(format, args...)})
 	}
-	if h.Only && len(h.Relays) == 0 {
+	if h.Only && len(h.Relays) == 0 && !s.PublicDERP {
 		note(lineWarn, "no relay on 443/tcp")
-		note(lineHint, "a relay's operator names it there: juist set --relay-name NAME")
+		note(lineHint, "on a relay: juist set --relay-name NAME")
 	}
 	switch {
 	case h.Name == "" || !s.Relaying:
 	case h.NotAnnounced != "":
 		note(lineWarn, "members are not told of %s: %s", h.Name, h.NotAnnounced)
 	case h.ListenError != "":
-		note(lineWarn, "the relay cannot take 443: %s", h.ListenError)
+		note(lineWarn, "the relay cannot bind 443: %s", h.ListenError)
 		switch {
 		case !strings.Contains(h.ListenError, "permission denied") && !strings.Contains(h.ListenError, "not granted"):
 			note(lineHint, "another program holds 443 here")
 		case types.ValidateHostName(h.Name) == nil:
-			note(lineHint, "sudo juist set --relay-name %s, which lets the packaged juistd bind 443", h.Name)
+			note(lineHint, "to let juistd bind 443: sudo juist set --relay-name %s", h.Name)
 		}
 	case h.NoCert != "":
 		note(lineWarn, "no certificate for %s yet: %s", h.Name, h.NoCert)
@@ -711,10 +760,10 @@ func deviceNotes(n *notes, s *ipc.Status, several bool) {
 		n.note(lineWarn, "juistd runs on replaced keys; restart it")
 	}
 	if s.Refused {
-		n.note(lineWarn, "the network's devices refuse this one: most likely it was removed")
+		n.note(lineWarn, "other devices refuse this one: it was likely removed")
 		n.note(lineHint, "rejoin with a new invite, or start over: %s", resetCommand(s, several))
 	} else if s.Overtaken {
-		n.note(lineWarn, "this device's log is older than what the network's devices keep")
+		n.note(lineWarn, "this device fell too far behind to catch up")
 		n.note(lineHint, "rejoin with a new invite link")
 	}
 	if s.EpochError != "" {
@@ -733,13 +782,13 @@ func deviceNotes(n *notes, s *ipc.Status, several bool) {
 		}
 	}
 	if s.Unguarded != "" {
-		n.note(lineWarn, "other devices than the tunnel reach this device's overlay addresses: %s", s.Unguarded)
+		n.note(lineWarn, "overlay addresses reachable from outside the tunnel: %s", s.Unguarded)
 	}
 	if s.DataPlaneError != "" {
 		n.note(lineWarn, "data plane refused the device set: %s", s.DataPlaneError)
 	}
 	if s.DNSRoutingUnread != "" {
-		n.note(lineWarn, "names the host's DNS routing sends elsewhere are refused, as it cannot be read: %s", s.DNSRoutingUnread)
+		n.note(lineWarn, "cannot read the host's DNS routing, so names routed elsewhere are refused: %s", s.DNSRoutingUnread)
 	}
 }
 
@@ -750,9 +799,8 @@ func terminatorNotes(n *notes, s *ipc.Status) {
 			n.note(lineWarn, "no certificate for %s: %s", c.Name, c.Why)
 		}
 		if on := t.HTTPHeldOn(); len(on) > 0 {
-			n.note(lineWarn, "another program holds port 80 on %s, so http:// to a name served here reaches it, "+
-				"not a redirect to https", strings.Join(on, ", "))
-			n.note(lineHint, "have it listen on the addresses it serves alone, not on every one")
+			n.note(lineWarn, "another program holds port 80 on %s, so http:// to names served here does not redirect to https", strings.Join(on, ", "))
+			n.note(lineHint, "have it listen only on its own addresses")
 		}
 		held := map[uint16][]string{}
 		for _, u := range t.Unbound {
@@ -760,12 +808,13 @@ func terminatorNotes(n *notes, s *ipc.Status) {
 				held[ap.Port()] = append(held[ap.Port()], ap.Addr().String())
 			}
 		}
-		for _, port := range slices.Sorted(maps.Keys(held)) {
-			n.note(lineWarn, "another program holds port %d on %s, where juist would serve what is published here",
-				port, strings.Join(held[port], ", "))
+		for k, port := range slices.Sorted(maps.Keys(held)) {
+			*n = append(*n, line{kind: lineWarn, along: k > 0, text: fmt.Sprintf(
+				"another program holds port %d on %s, needed for what is published here",
+				port, strings.Join(held[port], ", "))})
 		}
 		if len(held) > 0 {
-			n.note(lineHint, "where the service listens on every address, publish its port: juist publish add DEVICE NAME PORT")
+			n.note(lineHint, "where the service listens on every address, publish its port: juist publish NAME PORT --on DEVICE")
 		}
 	}
 }
@@ -801,7 +850,7 @@ func syncNotes(n *notes, s *ipc.Status) {
 		n.note(lineWarn, "%s an older juist, unreachable until updated", runs(s.Outdated))
 	}
 	if len(s.OlderBuild) > 0 {
-		n.note(lineWarn, "%s an older juist, which applies no changes until updated", runs(s.OlderBuild))
+		n.note(lineWarn, "%s an older juist and applies no changes until updated", runs(s.OlderBuild))
 	}
 }
 
@@ -816,7 +865,6 @@ func reachNotes(n *notes, s *ipc.Status) {
 	gone := slices.DeleteFunc(slices.Clone(s.Seeking), func(name string) bool { return !notAt(name) })
 	down := slices.DeleteFunc(s.Blocked(), notAt)
 	away := slices.DeleteFunc(s.Blocked(), func(name string) bool { return !notAt(name) })
-	itThem := func(names []string) string { return map[bool]string{true: "it", false: "them"}[len(names) == 1] }
 	var owners []string
 	if httpsOnly {
 		// A relay this device reaches runs in its owner's juistd: offline
@@ -828,18 +876,20 @@ func reachNotes(n *notes, s *ipc.Status) {
 		n.note(lineInfo, "no answer yet from %s through %s on 443", strings.Join(owners, ", "),
 			map[bool]string{true: "its own relay", false: "their own relays"}[len(owners) == 1])
 	}
-	if len(seeking) > 0 && httpsOnly {
+	if len(seeking) > 0 && s.PublicDERP && s.Relays == 0 {
+		n.note(lineInfo, "no answer from %s: offline, or not at Tailscale's DERP", strings.Join(seeking, ", "))
+	} else if len(seeking) > 0 && httpsOnly {
 		n.note(lineInfo, "no answer from %s: offline, or at no relay on 443", strings.Join(seeking, ", "))
 	} else if len(seeking) > 0 {
 		n.note(lineInfo, "no answer from %s: offline, or udp/%d blocked", strings.Join(seeking, ", "), s.ListenPort)
 	}
 	if len(gone) > 0 {
-		n.note(lineInfo, "no answer from %s: not at the relay on %s, the one this device reaches %s at",
-			strings.Join(gone, ", "), s.HomeRelay, itThem(gone))
+		n.note(lineInfo, "no answer from %s: not at %s, the relay this device uses",
+			strings.Join(gone, ", "), s.HomeRelay)
 	}
 	if len(down) > 0 && httpsOnly {
 		n.note(lineWarn, "no tunnel traffic from %s through the relays on 443", strings.Join(down, ", "))
-	} else if len(down) > 0 && s.Relays > 0 {
+	} else if len(down) > 0 && (s.Relays > 0 || s.PublicDERP) {
 		n.note(lineWarn, "no tunnel traffic from %s, though it announces itself", strings.Join(down, ", "))
 	} else if len(down) > 0 {
 		n.note(lineWarn, "no tunnel traffic from %s: udp/%d blocked, or both behind NAT with no relay",
@@ -848,15 +898,14 @@ func reachNotes(n *notes, s *ipc.Status) {
 			"udp"))
 	}
 	if len(away) > 0 {
-		n.note(lineWarn, "%s not at the relay on %s, the one this device reaches %s at", strings.Join(away, ", "),
-			s.HomeRelay, itThem(away))
+		n.note(lineWarn, "%s not at %s, the relay this device uses", isAre(away), s.HomeRelay)
 	}
 	if s.Conflicted > 0 {
 		n.note(lineWarn, "%s announce a key another device uses; ignored", count(s.Conflicted, "device"))
 	}
 	if behind := s.Behind(); len(behind) > 0 {
 		n.note(lineWarn, "%s fell too far behind to reach this device", strings.Join(behind, ", "))
-		n.note(lineHint, "it catches up from a device that has been away as long, or joins again with a new invite")
+		n.note(lineHint, "it catches up from a device away as long, or rejoins with a new invite")
 	}
 }
 
@@ -872,8 +921,9 @@ func voucherNotes(n *notes, s *ipc.Status) {
 			}
 		}
 		if len(relays) >= 2 {
-			n.note(lineHint, "vouchers that are always on bound how long a removal takes to reach a device cut off: "+
-				"juist grant %s voucher, juist grant %s voucher, juist admins vouchers 2", relays[0], relays[1])
+			*n = append(*n, line{kind: lineHint, apart: true, text: fmt.Sprintf(
+				"to bound how long a removal takes to reach a device cut off: "+
+					"juist grant %s voucher, juist grant %s voucher, juist admins vouchers 2", relays[0], relays[1])})
 		}
 	}
 	if left, ending := s.FreshnessEnding(time.Now().Unix()); ending {
@@ -886,11 +936,11 @@ func voucherNotes(n *notes, s *ipc.Status) {
 func relayNotes(n *notes, s *ipc.Status) {
 	if s.RelayUnreached && s.Alarm == "" {
 		n.note(lineWarn, "no device reaches this relay: tcp/%d or udp/%d is likely closed", s.RelayPort, s.RelayPort)
-		n.note(lineHint, "%s; and any firewall in front of this host",
+		n.note(lineHint, "%s, and open any firewall in front of this host",
 			openPorts("juist-relay", s.RelayPort, serviceRelayPort, "tcp", "udp"))
 	}
 	// Two devices behind strict NATs need a third, reachable, to relay.
-	if s.RelayCapable == 0 && s.Members > 2 && s.Alarm == "" {
+	if s.RelayCapable == 0 && !s.PublicDERP && s.Members > 2 && s.Alarm == "" {
 		n.note(lineWarn, "no device may relay; devices behind strict NATs need one")
 		n.note(lineHint, "juist grant DEVICE relay, on a device with a public address")
 	}
@@ -904,7 +954,7 @@ func logNotes(n *notes, s *ipc.Status) {
 	}
 	for _, u := range s.Unrevoked {
 		n.note(lineWarn, "%s lost to a concurrent change and is not in effect", u)
-		n.note(lineHint, "an admin redoes it")
+		n.note(lineHint, "an admin must redo it")
 	}
 	if s.SchemaAlarm != "" {
 		n.note(lineAlarm, "%s; no changes, removals included, apply until juist is updated", s.SchemaAlarm)
@@ -1052,6 +1102,14 @@ func noDaemon(err error) bool {
 func (a *app) relayGranted() bool {
 	return a.host.relayGrant != "" && fileExists(a.host.relayGrant) &&
 		(!a.socketExplicit || a.socket == a.host.socket(0))
+}
+
+// isAre is "a is", or "a, b are".
+func isAre(names []string) string {
+	if len(names) == 1 {
+		return names[0] + " is"
+	}
+	return strings.Join(names, ", ") + " are"
 }
 
 // runs is "a runs", or "a, b run".

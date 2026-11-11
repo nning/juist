@@ -12,7 +12,8 @@ for itself.
 
 - **Nothing to run or trust in the middle.** Devices find each other on the
   LAN, through each other, or through the public BitTorrent DHT. They punch
-  through NAT and fall back to a relay that one of your own devices runs.
+  through NAT and fall back to a relay that one of your own devices runs, or,
+  where the network chooses, to Tailscale's public DERP servers.
 - **Changes need your admins.** Admitting or removing a device takes a k-of-n
   quorum of admins, each with a key on their own devices. The keys stay in your
   keystore; the daemon never holds them.
@@ -42,6 +43,9 @@ curl -fsSL https://juist.nning.io/install | sh
 
 Each step by hand is in
 [Install](https://docs.juist.nning.io/en/docs/install/#from-the-package-repository).
+On the Steam Deck, the same line installs juist as a system extension of
+SteamOS, which its updates keep
+([On the Steam Deck](https://docs.juist.nning.io/en/docs/install/#steam-deck)).
 On Android, F-Droid installs the app from juist's repository
 ([Android](https://docs.juist.nning.io/en/docs/android/#with-f-droid)).
 Or, on every device, the package of the [latest release](https://github.com/nning/juist/releases/latest):
@@ -115,12 +119,13 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | limit automatic group copying to SSDP; or carry no multicast or UDP broadcast | `sudo juist set --groups 239.255.255.250`, `sudo juist set --multicast=false` | [multicast](https://docs.juist.nning.io/en/docs/multicast/) |
 | find Minecraft Java LAN worlds on the LAN and across the network | automatic on Linux where policy permits; `sudo juist set --groups auto` restores the default | [Minecraft](https://docs.juist.nning.io/en/docs/multicast/#minecraft-java-edition) |
 | carry UDP broadcasts, including NetBIOS, on Linux with no port configuration | on without a policy; with one, only where `pass multicast` permits; `--multicast=false` disables it | [discovery](https://docs.juist.nning.io/en/docs/multicast/) |
+| have the router open no port for this device by UPnP, NAT-PMP or PCP | `sudo juist set --port-mapping=false` | [how it works](https://docs.juist.nning.io/en/docs/how-it-works/#connections) |
 | let a device with a public address relay for the others | `juist grant vps relay` | [relays](https://docs.juist.nning.io/en/docs/relays/) |
 | reach the network from a hotel or office that only lets HTTPS out | one relay on 443: the ingress's serves `relay.DOMAIN` by itself, another `sudo juist set --relay-name relay.example.org`; `sudo juist set --https-only` here where traffic is inspected | [HTTPS only](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |
 | let every device reach the LAN behind one | `juist subnet add nas 192.168.1.0/24`, then `juist subnet serve` on it | [subnets](https://docs.juist.nning.io/en/docs/subnets/) |
 | say which device may open what on which, and use which exit node or subnet | `juist policy edit`, or `juist policy set policy.conf` | [access policy](https://docs.juist.nning.io/en/docs/access/) |
-| publish a service on the internet, or share a file | `juist publish add immich 127.0.0.1:2283`, `juist share ~/photos` | [publishing](https://docs.juist.nning.io/en/docs/publishing/) |
+| publish a service on the internet, or share a file | `juist publish immich 2283`, `juist share ~/photos` | [publishing](https://docs.juist.nning.io/en/docs/publishing/) |
 | rename or renumber the network, or rename a device | `juist network rename office`, `juist network renumber 10.7.0.0/22`, `juist rename phone tablet` | [changes](https://docs.juist.nning.io/en/docs/network-changes/) |
 | see every change, who approved it, and what it did | `juist log`, `juist log show 3` | [admins](https://docs.juist.nning.io/en/docs/admins/) |
 | manage this device without sudo from now on | `sudo juist set --operator=$USER` | [operator](https://docs.juist.nning.io/en/docs/operator/) |
@@ -144,11 +149,11 @@ ingress.
 ```sh
 juist network domain pub.example.org    # DNS: *.pub.example.org points at the vps
 juist grant vps ingress                 # then juist ingress serve, on the vps
-juist publish add immich 127.0.0.1:2283 # on the nas: https://immich.pub.example.org
-juist publish add nas mc 25565 --tcp    # a service without TLS on a port of its own: mc.pub.example.org:25565
-juist publish add nas photos --members  # members only; the access policy says which: pass from <family> to name photos
+juist publish immich 2283               # on the nas: https://immich.pub.example.org
+juist publish photos 2342 --members     # members only; the access policy says which: pass from <family> to name photos
+juist publish mc 25565 --tcp --on nas   # a service without TLS on a port of its own: mc.pub.example.org:25565
+juist publish                           # every published name, its device and its state
 juist share ~/photos/2026               # with the publish role: a directory under this device's name
-juist share                             # what this device shares, and where
 ```
 
 Each step names the next and the device it is run on.
@@ -169,10 +174,15 @@ traffic is left alone.
 make android    # needs a JDK 21, the Android SDK and NDK; the APKs land in android/app/build/outputs/apk
 ```
 
-It resolves the networks' names, sends its internet through an exit node
-where one is chosen, reaches relays by HTTPS alone where asked, turns no
-public names on, and takes no roles. A Quick Settings tile turns it on and
-off, and its details show what `juist status` and `juist log` would.
+It resolves the networks' names, and public names pointed at members where
+turned on, sends its internet through an exit node where one is chosen,
+reaches relays by HTTPS alone where asked, and relays for nobody. It can
+also found a network of its own and govern it: its admin key, sealed in
+Android Keystore behind the phone's fingerprint or screen lock, invites by
+QR code, grants roles and removes devices, and is backed up as a line or a
+password-sealed file that `juist admins import` reads. A Quick Settings tile
+turns it on and off, and its details show what `juist status` and `juist
+log` would.
 Release and development updates share the app's identity and signing key,
 so switching repositories keeps the phone's keys and network.
 Building, signing and what the app shows: [Android](https://docs.juist.nning.io/en/docs/android/).
@@ -201,7 +211,8 @@ of the admins a change needs locks the network for good.
 ## Relays, ports and firewalls
 
 Two devices that cannot reach each other directly relay through a member that
-has a public address, never through a third party.
+has a public address, or through Tailscale's public DERP servers where the
+network chose them (`juist network derp on`).
 
 | Port | For | Open it where |
 |---|---|---|
@@ -257,7 +268,7 @@ What works:
 - a network whose members are a log your admins sign, a quorum of them for
   each change
 - WireGuard tunnels through NAT, and a relay on one of your own devices where
-  that fails
+  that fails, or Tailscale's public DERP servers where the network chooses
 - invites by a code on the LAN or a link from anywhere
 - several networks on one device
 - exit nodes and subnet routers

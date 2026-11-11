@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"strings"
@@ -40,7 +41,9 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 	m.relays = relays
 	// Names dropped are kept, up to a bound: a dial begun under the old
 	// map still asks the proxy hook, which must not send it direct.
-	named := slices.Clone(*m.named.Load())
+	// Tailscale's names, kept apart once named, take none of the bound.
+	had := *m.named.Load()
+	named := slices.DeleteFunc(slices.Clone(had), isPublicName)
 	for _, r := range relays {
 		if r.Name != "" && !slices.Contains(named, r.Name) {
 			named = append(named, r.Name)
@@ -49,12 +52,15 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 	if len(named) > maxProxiedNames {
 		named = named[len(named)-maxProxiedNames:]
 	}
+	if m.publicDERP.Load() || slices.ContainsFunc(had, isPublicName) {
+		named = withPublicNames(named)
+	}
 	m.named.Store(&named)
 	// Relays of their own are tried for a home again, whatever the last
 	// report reached.
 	m.relayMissing.Store(false)
 	m.installDERPMap(relays)
-	if len(relays) == 0 {
+	if len(relays) == 0 && !m.publicDERP.Load() {
 		// Nothing will report a home region again, and a stale one would be
 		// announced to peers as a path that no longer exists.
 		if m.homeRelay.Swap(0) != 0 {
@@ -66,6 +72,56 @@ func (m *tsManager) SetRelays(relays []Relay) error {
 }
 
 func (m *tsManager) HomeRelay() int { return int(m.homeRelay.Load()) }
+
+// withPublicNames is named with the names of Tailscale's public DERP nodes,
+// dialled through the proxy, as a relay's name is, on HTTPS alone, and kept
+// whatever the bound on relays' names.
+func withPublicNames(named []string) []string {
+	for _, r := range tailscaleRegions() {
+		for _, n := range r.Nodes {
+			if !slices.Contains(named, n.HostName) {
+				named = append(named, n.HostName)
+			}
+		}
+	}
+	return named
+}
+
+// isPublicName is whether name is one of Tailscale's public DERP nodes'.
+func isPublicName(name string) bool {
+	for _, r := range tailscaleRegions() {
+		for _, n := range r.Nodes {
+			if n.HostName == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// SetPublicDERP adds Tailscale's public DERP regions to the relay set, or
+// takes them out.
+func (m *tsManager) SetPublicDERP(on bool) error {
+	m.apply.Lock()
+	defer m.apply.Unlock()
+	if m.closed {
+		return errors.New("conn: manager is closed")
+	}
+	if m.publicDERP.Swap(on) == on {
+		return nil
+	}
+	if on {
+		named := withPublicNames(slices.Clone(*m.named.Load()))
+		m.named.Store(&named)
+	}
+	m.relayMissing.Store(false)
+	m.installDERPMap(m.relays)
+	if !on && len(m.relays) == 0 && m.homeRelay.Swap(0) != 0 {
+		m.notifyChange()
+	}
+	m.rerouteLocked()
+	return nil
+}
 
 // SetSaving stops, or resumes, magicsock pinging every peer it sent to in
 // the last 45 s every 3 s: while saving battery a path is trusted while the
@@ -246,9 +302,14 @@ func (m *tsManager) installDERPMapAsking(relays []Relay, ask bool) {
 	if m.walls.stunAside.Load() {
 		stun = nil
 	}
-	dm, stunRegions := derpMap(relays, stun, m.httpsOnly, m.walls.nameFirst, *m.local.Load())
+	dm, stunRegions := derpMap(relays, stun, m.httpsOnly, m.walls.nameFirst, *m.local.Load(), m.publicDERP.Load())
 	m.dm = dm
 	m.stunRegions.Store(&stunRegions)
+	scores := map[tailcfg.DERPRegionID]float64{}
+	if dm != nil && dm.HomeParams != nil {
+		maps.Copy(scores, dm.HomeParams.RegionScore)
+	}
+	m.regionScores.Store(&scores)
 	relayRegions := map[tailcfg.DERPRegionID]bool{}
 	if dm != nil {
 		for id := range dm.Regions {
@@ -416,6 +477,8 @@ func (m *tsManager) onStatus(st *wgengine.Status, err error) {
 		return int(a.Port()) - int(b.Port())
 	})
 	eps = slices.Compact(eps)
+	mapped := portMapped(st.LocalAddrs)
+	m.mapped.Store(&mapped)
 
 	m.epsMu.Lock()
 	changed := !slices.Equal(m.localEps, eps)

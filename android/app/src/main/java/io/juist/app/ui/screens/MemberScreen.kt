@@ -74,6 +74,7 @@ fun MemberScreen(
     onPing: () -> Unit,
     onOpen: (String) -> Unit,
     onBack: () -> Unit,
+    admin: (@Composable () -> Unit)? = null,
 ) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -210,6 +211,7 @@ fun MemberScreen(
                 Panel {
                     CopyRow(stringResource(R.string.label_identity), member.identity, copied)
                 }
+                admin?.invoke()
                 Spacer(Modifier.height(Space.l))
             }
         }

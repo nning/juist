@@ -20,8 +20,7 @@ const (
 	// KindJoin is the guest asking to be admitted, with its public keys.
 	KindJoin MessageKind = 1
 
-	// KindWaiting is the host reporting that admission is waiting for more
-	// admins to approve it.
+	// KindWaiting is the host reporting admission awaits more approvals.
 	KindWaiting MessageKind = 2
 
 	// KindRecord carries one log record, anchor first.
@@ -36,12 +35,10 @@ const (
 	// KindRefused is either side giving up, with a reason for its operator.
 	KindRefused MessageKind = 6
 
-	// KindCompare is the host handing the guest the salt the words a person
-	// compares on both screens are made from; see [Fingerprint].
+	// KindCompare carries the host's salt for the words; see [Fingerprint].
 	KindCompare MessageKind = 7
 
-	// KindReveal is the guest's answer to it: the nonce its join request
-	// committed to, which goes into the words too.
+	// KindReveal carries the nonce the guest's join request committed to.
 	KindReveal MessageKind = 8
 )
 
@@ -97,10 +94,9 @@ type Message struct {
 	Compare *Salt    `cbor:"7,keyasint,omitempty"`
 	Reveal  *Nonce   `cbor:"8,keyasint,omitempty"`
 
-	// Announcement, optional on a KindJoined, is the guest's signed endpoint
-	// record as it starts in the network, which the host checks as it would
-	// any announcement. It is how the host learns where the guest is when the
-	// guest can open no connection to it.
+	// Announcement, optional on KindJoined, is the guest's signed endpoint
+	// record, checked like any announcement; it lets the host reach a guest
+	// that cannot connect to it.
 	Announcement []byte `cbor:"9,keyasint,omitempty"`
 }
 
@@ -111,10 +107,9 @@ const MaxAnnouncementLen = 4096
 // for the words both screens show.
 type Salt [16]byte
 
-// A Nonce is what the guest draws before it asks to join, commits to in the
-// request ([CommitNonce]), and reveals once it holds the admin's salt. Each
-// side fixes its value before it learns the other's, so neither can search
-// for a pair that makes two devices' words agree.
+// A Nonce is drawn by the guest, committed to in its request ([CommitNonce])
+// and revealed once it holds the salt, so neither side can search for a pair
+// making two devices' words agree.
 type Nonce [16]byte
 
 // CommitNonce is what a join request carries for n.
@@ -171,12 +166,10 @@ type Welcome struct {
 }
 
 // An Admission is an admin key's signed statement that a guest is a member
-// of a network as of a head. It is what binds a guest to the admin who
-// invited it rather than to whatever answered: the device that runs the
-// invite holds the invite's secret and sends the log, so a compromised
-// daemon there could otherwise enroll the guest into a network of its own.
-// The admin signs only after checking the log against its own keystore's
-// anchor, and the link the guest was handed names the admin's key.
+// of a network as of a head. It binds the guest to the inviting admin, whose
+// key the link names, not to the inviting device, which could otherwise
+// enroll it into a network of its own. The admin signs only after checking
+// the log against its keystore's anchor.
 type Admission struct {
 	Admin   types.Identity `cbor:"1,keyasint"`
 	Network types.Hash     `cbor:"2,keyasint"`
@@ -201,9 +194,8 @@ func SignAdmission(admin types.PrivateIdentity, network, head types.Hash, guest 
 	return a, nil
 }
 
-// Verify checks the admission's signatures by the key it names, whose
-// signing key fingerprint names, as a link does, and that it is key, the one
-// the log names for the admin key.
+// Verify checks both signatures, that the signing key matches the link's
+// fingerprint and, if key is non-nil, that it is the log's key for the admin.
 func (a *Admission) Verify(fingerprint [fingerprintLen]byte, key *types.SigningKey) error {
 	switch {
 	case SigningFingerprint(&a.Signing) != fingerprint:
@@ -302,8 +294,7 @@ func (m *Message) validate() error {
 	return nil
 }
 
-// DecodeMessage decodes and shape-checks one message. Exported for the fuzz
-// target.
+// DecodeMessage decodes and shape-checks one message; exported for fuzzing.
 func DecodeMessage(b []byte) (_ Message, err error) {
 	defer malformed.Recover(&err)
 	m, err := types.DecodeCanonical[Message](decMode, b, maxChannelFrame)

@@ -191,7 +191,7 @@ func TestApproveRefusesAuthorityChangesWithoutALog(t *testing.T) {
 		t.Fatalf("pending records: %v", pending)
 	}
 	out, err := second.run("approve", "--yes", pending[0])
-	if err == nil || !strings.Contains(err.Error(), "approve it where the log is") {
+	if err == nil || !strings.Contains(err.Error(), "approve it on a device in the network") {
 		t.Fatalf("an air-gapped approval of a threshold change: %v\n%s", err, out)
 	}
 }
@@ -211,7 +211,7 @@ func TestApproveRefusesARemovalWithoutALog(t *testing.T) {
 		t.Fatalf("pending records: %v", pending)
 	}
 	out, err := second.run("approve", "--yes", pending[0])
-	if err == nil || !strings.Contains(err.Error(), "approve it where the log is") {
+	if err == nil || !strings.Contains(err.Error(), "approve it on a device in the network") {
 		t.Fatalf("an air-gapped approval of a removal: %v\n%s", err, out)
 	}
 }
@@ -296,7 +296,7 @@ func TestRefusalsSayWhatToDoNext(t *testing.T) {
 	}{
 		{[]string{"admins", "quorum", "2"}, "juist admins add NAME KEY"},
 		{[]string{"admins", "vouchers", "2"}, "juist grant DEVICE voucher"},
-		{[]string{"admins", "add", "bob", "nid:short"}, "bad key"},
+		{[]string{"admins", "add", "bob", "nid:short"}, "\"nid:short\" is not an admin key\nusage: juist admins add"},
 	} {
 		if _, err := c.run(tc.args...); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("juist %q: %v, want %q", tc.args, err, tc.want)

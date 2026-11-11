@@ -12,20 +12,9 @@ import (
 	"github.com/nning/juist/ipc"
 )
 
-func publishServe(a *app, args []string) error {
-	s := spec{name: "juist publish serve", about: `
-Serve the names the network publishes on this device. The ingresses then
-pass their connections to this device's ports. The service ends TLS there,
-or juist does if told to by juist publish add NAME HOST:PORT. --stop undoes
-it and keeps where the names go.`}
-	fs := newFlags(s.name)
-	stop := fs.Bool("stop", false, "stop serving")
-	if _, err := a.parse(s, fs, args); err != nil {
-		if name, addr, ok := cutServeTo(args); ok {
-			return fmt.Errorf("unexpected argument %q\nhint: juist publish add %s %s", name+"="+addr, name, addr)
-		}
-		return err
-	}
+// stopServing is "juist publish --stop": nothing published here served, and
+// where the names go kept.
+func (a *app) stopServing() error {
 	d, err := a.daemon()
 	if err != nil {
 		return err
@@ -35,42 +24,29 @@ it and keeps where the names go.`}
 		return err
 	}
 	pub := cmp.Or(st.Publish, &ipc.Publish{})
-	if *stop {
-		// A terminator a share left running stops here too.
-		running := st.Terminator != nil && st.Terminator.Running && len(st.Shares) == 0
-		if !pub.Consent && !running {
-			a.ok("unchanged: not serving")
-			return nil
-		}
-		if pub.Consent {
-			if _, err := d.request(ipc.Request{Command: ipc.CmdPublish, ServePublished: new(bool)}); err != nil {
-				return err
-			}
-		}
-		if len(pub.To) > 0 || running {
-			if err := a.stopTerminator(); err != nil {
-				return err
-			}
-		}
-		a.ok("stopped serving")
+	// A terminator a share left running stops here too.
+	running := st.Terminator != nil && st.Terminator.Running && len(st.Shares) == 0
+	if !pub.Consent && !running {
+		a.ok("unchanged: not serving")
 		return nil
 	}
-	return a.serveHere(d, cmp.Or(st.SelfName, st.Self.ShortString()))
-}
-
-// cutServeTo finds an argument of the form NAME=ADDR among args.
-func cutServeTo(args []string) (name, addr string, ok bool) {
-	for _, arg := range args {
-		if name, addr, ok := strings.Cut(arg, "="); ok && !strings.HasPrefix(arg, "-") {
-			return name, addr, true
+	if pub.Consent {
+		if _, err := d.request(ipc.Request{Command: ipc.CmdPublish, ServePublished: new(bool)}); err != nil {
+			return err
 		}
 	}
-	return "", "", false
+	if len(pub.To) > 0 || running {
+		if err := a.stopTerminator(); err != nil {
+			return err
+		}
+	}
+	a.ok("stopped serving")
+	return nil
 }
 
 // serveHere gives the operator's word to serve what is published on this
-// device, named self, to its juistd d.
-func (a *app) serveHere(d *daemonNode, self string) error {
+// device, named self, to its juistd d; agreed says it was given before.
+func (a *app) serveHere(d *daemonNode, self string, agreed bool) error {
 	on := true
 	after, err := d.request(ipc.Request{Command: ipc.CmdPublish, ServePublished: &on})
 	if err != nil {
@@ -89,7 +65,7 @@ func (a *app) serveHere(d *daemonNode, self string) error {
 		a.ok("serving %s", strings.Join(pub.Serving, ", "))
 	case pub.NotServing == notPublishedHere:
 		a.ok("will serve once an admin publishes a name on this device")
-		a.hint("juist publish add %s NAME", self)
+		a.hint("an admin publishes one: juist publish NAME --on %s", self)
 		return nil
 	default:
 		return fmt.Errorf("not serving: %s", pub.NotServing)
@@ -107,24 +83,26 @@ func (a *app) serveHere(d *daemonNode, self string) error {
 	a.showCAA(names...)
 	a.showHTTPS(pub.Ending, names...)
 	a.warnServedFirewalled()
-	a.warnServing()
+	if !agreed {
+		a.warnServing()
+	}
 	return nil
 }
 
 // warnServing is said once an operator agrees to serve on a full member.
 func (a *app) warnServing() {
-	a.warn("a server published from this device reaches the network and its LAN once compromised")
-	a.hint("a service member keeps it from them: juistd --serve NAME=ADDR beside it, granted service")
+	a.warn("a compromised server published from this device can reach the network and its LAN")
+	a.hint("to keep it out, publish it from a device granted service: juistd --serve NAME=ADDR")
 }
 
 // startTerminator has the package's script start the terminator, and waits
 // for it to answer where name, or the first name it serves, is listened for.
 func (a *app) startTerminator(name string) error {
 	if a.host.serveScript == "" {
-		return errors.New("juist ends TLS on Linux and FreeBSD alone")
+		return errors.New("juist ends TLS only on Linux and FreeBSD")
 	}
 	if !a.terminatorStarts() && (a.host.terminatorOn == nil || !a.host.terminatorOn(a.ctx)) {
-		if err := a.packageScript(a.host.serveScript, "on", "the terminator's service"); err != nil {
+		if err := a.packageScript(a.host.serveScript, "on", "the terminator service"); err != nil {
 			return err
 		}
 	}
@@ -137,7 +115,7 @@ func (a *app) startTerminator(name string) error {
 		return errNoDaemon
 	}
 	if d.st.Instance != 0 {
-		return errors.New("juist ends TLS for the default network's instance alone, for now")
+		return errors.New("juist ends TLS only in the default instance, for now")
 	}
 	self := cmp.Or(d.st.SelfName, d.st.Self.ShortString())
 	serving, err := d.serving()
@@ -159,8 +137,8 @@ func (a *app) startTerminator(name string) error {
 		listening, err := terminatorAt(said, at, t)
 		if err != nil && t.Public != 0 {
 			// A service on every address of the device is reached there.
-			return fmt.Errorf("%v\nhint: where the service listens on every address, publish the device's port: "+
-				"juist publish add %s %s %d --tcp", err, self, t.Name, t.Port)
+			return fmt.Errorf("%v\nhint: if the service listens on every address, publish its port: "+
+				"juist publish %s %d --tcp --on %s", err, t.Name, t.Port, self)
 		}
 		if err != nil {
 			return fmt.Errorf("%v\nhint: %s", err, helperLog("juist-serve"))
@@ -169,7 +147,7 @@ func (a *app) startTerminator(name string) error {
 			break
 		}
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf("the terminator does not say it listens on %s\nhint: %s", at, helperLog("juist-serve"))
+			return fmt.Errorf("the terminator is not listening on %s\nhint: %s", at, helperLog("juist-serve"))
 		}
 		select {
 		case <-a.ctx.Done():
@@ -208,11 +186,11 @@ func terminatorAt(t *ipc.Terminator, at string, n ipc.PublishedTarget) (bool, er
 		return false, nil
 	case slices.Contains(t.Unbound, at) && n.Public != 0:
 		ap := netip.MustParseAddrPort(at)
-		return false, fmt.Errorf("another program holds port %d on %s, where juist would pass %s by TCP",
+		return false, fmt.Errorf("another program holds port %d on %s, needed for %s",
 			ap.Port(), ap.Addr(), n.Name)
 	case slices.Contains(t.Unbound, at):
 		ap := netip.MustParseAddrPort(at)
-		return false, fmt.Errorf("another program holds port %d on %s, where juist would end TLS", ap.Port(), ap.Addr())
+		return false, fmt.Errorf("another program holds port %d on %s", ap.Port(), ap.Addr())
 	}
 	return slices.Contains(t.Listening, at), nil
 }
@@ -234,7 +212,7 @@ func (a *app) stopTerminator() error {
 			return nil
 		}
 	}
-	return a.packageScript(a.host.serveScript, "off", "the terminator's service")
+	return a.packageScript(a.host.serveScript, "off", "the terminator service")
 }
 
 // showCAA prints the CAA records that bind names, whose TLS juist ends, to
@@ -257,7 +235,7 @@ func (a *app) showCAA(names ...string) {
 			for _, r := range records {
 				a.printf("%s\n", r)
 			}
-			a.hint("at the domain's DNS, these records keep the names' certificates to this device")
+			a.hint("add these records at the domain's DNS so that only this device gets certificates for the names")
 			a.hintOwnRecords()
 			return
 		}
@@ -265,7 +243,7 @@ func (a *app) showCAA(names ...string) {
 			return
 		}
 		if !time.Now().Before(deadline) {
-			a.hint("the terminator's log names the CAA records once the CA answers: %s", helperLog("juist-serve"))
+			a.hint("the terminator log shows the CAA records once the CA answers: %s", helperLog("juist-serve"))
 			return
 		}
 		select {

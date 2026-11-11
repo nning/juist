@@ -31,8 +31,9 @@ home · connected
   This device   laptop  198.18.36.1  fd4c:8a21:e3f:5b1a:9d02:c4e7:31f8:a6b0
   Devices       3 others
   Relays        1 available, via vps
+  Underlay      IPv4, IPv6
   Names         laptop.home.juist
-  Multicast     on, copied: auto
+  Multicast     on
   Freshness     vouched 12m ago, valid 48h
   Ports         udp/41643
   Schema        20
@@ -66,7 +67,7 @@ In der ersten Zeile steht einer dieser Zustände:
 | `disabled` | das Netz wurde mit einem Break-glass-Geheimnis beendet; mit `juist reset` beginnst du von vorn |
 | `removed` | dieses Gerät gehört nicht mehr zum Netz |
 | `refused` | die anderen Geräte weisen dieses ab; vermutlich wurde es entfernt |
-| `behind` | dieses Gerät war so lange weg, dass die anderen den Teil des Logs, den es braucht, nicht mehr aufbewahren; tritt mit einem neuen Einladungslink wieder bei ([Fehlersuche]({{< relref "docs/troubleshooting" >}}#warning-this-devices-log-is-older-than-what-the-networks-devices-keep)) |
+| `behind` | dieses Gerät war so lange weg, dass die anderen den Teil des Logs, den es braucht, nicht mehr aufbewahren; tritt mit einem neuen Einladungslink wieder bei ([Fehlersuche]({{< relref "docs/troubleshooting" >}}#warning-this-device-fell-too-far-behind-to-catch-up)) |
 | `disconnected` | das Log hat sich gespalten oder ist zurückgesprungen, und alle Tunnel bleiben unten, bis ein Admin das auflöst ([Fehlersuche]({{< relref "docs/troubleshooting" >}}#warning-log-rollback-alarm-the-chain-went-back-from-epoch-4-to-3-)) |
 | `joining a network` | dieses Gerät tritt gerade einem Netz bei |
 | `not running` | der Daemon läuft nicht, etwa `juist0 · not running`, oder `juistd not running`, wo kein juist-Paket installiert ist; `juist health` sagt, wie du ihn startest (siehe [Fehlersuche]({{< relref "docs/troubleshooting" >}}#not-running)) |
@@ -77,12 +78,23 @@ In der ersten Zeile steht einer dieser Zustände:
 - `Devices`: wie viele andere Geräte es gibt und zu wie vielen bei der
   letzten Prüfung kein Tunnel Verkehr trug; `juist devices` sagt, warum.
 - `Relays`: wie viele Geräte [weiterleiten]({{< relref "docs/relays" >}})
-  dürfen und welches davon dieses Gerät nutzt.
+  dürfen und welches davon dieses Gerät nutzt; `Tailscale's public DERP`, wo
+  das Netz diese gewählt hat ([Relays]({{< relref "docs/relays" >}}#public-derp)).
+- `Underlay`: was juistd zuletzt am Netz darunter gemessen hat: ob UDP über
+  IPv4 und IPv6 hinauskommt. Bietet der Router UPnP, NAT-PMP oder PCP, steht
+  das dort, mit der öffentlichen Adresse des Ports, den er für dieses Gerät
+  geöffnet hat, etwa `UPnP maps 203.0.113.7:41643`; `port mapping off` nach
+  `sudo juist set --port-mapping=false`, dann wird der Router nicht gefragt.
 - `HTTPS`: auf einem Gerät, das nur HTTPS sendet, die Relays auf Port 443, über die es läuft, und sein Proxy. Siehe [Nur HTTPS]({{< relref "docs/https-only" >}}).
 - `Relay name`: der öffentliche Name, den das Relay dieses Geräts auf Port 443 bedient. root und der Operator sehen außerdem, ob es ihn schon bedient.
 - `Exit node`: über welches Gerät der Internetverkehr dieses Geräts läuft, falls überhaupt. Siehe [Exit-Nodes]({{< relref "docs/exit-nodes" >}}).
 - `Names`: die eigenen Namen dieses Geräts, etwa `laptop.home.juist`; `juist names` listet die des Netzes, und warum sie nicht aufgelöst werden, sagt `juist health`. Siehe [Namen]({{< relref "docs/names" >}}).
-- `Multicast`: ob dieses Gerät Multicast und UDP-Broadcast zu den Mitgliedern überträgt, und die Gruppen, die es ins Netz kopiert. `copied: auto` ist der Linux-Standard: alle eigenen IPv4-UDP-Gruppen, soweit Discovery erlaubt ist. Mit Policy bleibt es `off`, bis eine passende Regel `pass multicast` Discovery erlaubt; `--multicast=false` hat Vorrang. Siehe [Multicast]({{< relref "docs/multicast" >}}).
+- `Multicast`: ob dieses Gerät Multicast und UDP-Broadcast zu den Mitgliedern
+  überträgt. `on` umfasst unter Linux standardmäßig das Kopieren eigener
+  IPv4-UDP-Gruppen, soweit Discovery erlaubt ist; eine ausdrücklich gewählte
+  Liste folgt auf `copying`, und nach `--groups ""` heißt es `on (groups off)`. Mit Policy bleibt es `off`, bis eine passende
+  Regel `pass multicast` Discovery erlaubt; `--multicast=false` hat Vorrang.
+  Siehe [Multicast]({{< relref "docs/multicast" >}}).
 - `Freshness`: wann ein [Voucher]({{< relref "docs/how-it-works" >}}#freshness-and-vouchers)
   den Stand dieses Geräts zuletzt bestätigt hat und wie lange das gilt. Nach
   48 Stunden ohne Bestätigung steht dort `expired; vouchers only`, und
@@ -115,6 +127,7 @@ erreicht:
 $ juist health
 warning: log sync to vps fails in the tunnel: tcp/41644 does not answer there
 hint: where it runs Linux: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
+
 no answer from phone: offline, or udp/41643 blocked
 ```
 
@@ -140,7 +153,7 @@ Namen aus.
 $ juist devices
 NAME                  IPV4         REACHED  SCHEMA  ROLES
 laptop (this device)  198.18.36.1  -        20      -
-nas                   198.18.36.2  direct   20      voucher, names, publishes
+nas                   198.18.36.2  direct   20      voucher, names, publishes 3 names
 vps                   198.18.36.3  direct   20      voucher, relay
 phone                 198.18.36.4  relayed  20      -
 ```
@@ -150,7 +163,7 @@ phone                 198.18.36.4  relayed  20      -
 - die Rollen, die das Netz ihm gegeben hat, etwa `voucher`, `relay` oder `exit`;
 - seine Subnetze;
 - `names`, wenn öffentliche Namen auf das Gerät zeigen ([`juist names`]({{< relref "docs/names" >}}) listet sie auf);
-- `publishes`, wenn es Namen veröffentlicht ([`juist publish`]({{< relref "docs/publishing" >}}) listet sie auf);
+- `publishes 3 names` mit der Zahl der Namen, die es veröffentlicht ([`juist publish`]({{< relref "docs/publishing" >}}) listet sie auf), getrennt von der Rolle `publish`, mit der es unter seinem eigenen Namen [teilt]({{< relref "docs/sharing" >}});
 - `-`, wenn nichts davon zutrifft.
 
 `REACHED` gibt an, wie juistd das Gerät bei der letzten Prüfung erreicht hat:
@@ -174,7 +187,7 @@ nicht oder hat es keine gehört, fehlt die Spalte.
 
 Gelten [Zugriffsregeln]({{< relref "docs/access" >}}), zeigt `juist devices`
 nur dieses Gerät und die Mitglieder, zu denen es einen Tunnel hat, und endet mit
-`hint: 2 more devices the access policy keeps apart from this one: juist devices --all`.
+`hint: 2 more devices the access policy keeps apart: juist devices --all`.
 
 `juist devices -6` zeigt zusätzlich die IPv6-Adresse jedes Geräts,
 `juist devices --keys` seinen Identitätsschlüssel. Auch

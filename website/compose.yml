@@ -1,4 +1,4 @@
-# The website on a member, for juist publish add NAME 127.0.0.1:8181:
+# The website on a member, for juist publish NAME 127.0.0.1:8181:
 #   docker compose up -d     builds the image from this checkout and (re)starts it
 services:
   site:

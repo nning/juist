@@ -63,7 +63,7 @@ Check it against the network, then set it:
 $ juist policy check policy.conf
 policy.conf: passes its 3 tests
 $ juist policy set policy.conf
-anything the policy does not pass is then refused; set it? [y/N] y
+set the access policy? anything it does not pass is then refused [y/N] y
 access policy set: 4 rules
 ```
 
@@ -76,7 +76,7 @@ others as `policy.rec` ([Several admins]({{< relref "docs/admins" >}})).
 `juist devices` now lists laptop2, nas and vps, and ends with:
 
 ```console
-hint: 2 more devices the access policy keeps apart from this one: juist devices --all
+hint: 2 more devices the access policy keeps apart: juist devices --all
 ```
 
 No rule connects laptop2 with laptop or the phone, so it keeps no tunnel to
@@ -230,7 +230,7 @@ anyone who can push to the repository could change the network.
   `juist policy off`. `pass from any to any` lets every device open anything
   on every other, but not use exit nodes, subnets or members-only names.
 - Under a policy, `juist invite` prints
-  `hint: the access policy passes phone nothing until it names it: juist policy edit`.
+  `hint: the policy passes no traffic for phone until it names it: juist policy edit`.
 - `juist policy check` and `set` warn about anything that cannot work as
   written or leaves something unused: an exit node without the exit role, a
   prefix no subnet router routes, a device's address where its name belongs,

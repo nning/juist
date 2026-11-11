@@ -65,7 +65,7 @@ Prüf die Datei gegen das Netz und leg sie dann fest:
 $ juist policy check policy.conf
 policy.conf: passes its 3 tests
 $ juist policy set policy.conf
-anything the policy does not pass is then refused; set it? [y/N] y
+set the access policy? anything it does not pass is then refused [y/N] y
 access policy set: 4 rules
 ```
 
@@ -78,7 +78,7 @@ als `policy.rec` auf die anderen ([Mehrere Admins]({{< relref "docs/admins" >}})
 `juist devices` zeigt jetzt laptop2, nas und vps und endet mit:
 
 ```console
-hint: 2 more devices the access policy keeps apart from this one: juist devices --all
+hint: 2 more devices the access policy keeps apart: juist devices --all
 ```
 
 Keine Regel verbindet laptop2 mit laptop oder dem Telefon, also hat es zu
@@ -241,7 +241,7 @@ Sonst könnte jeder, der ins Repository pushen darf, das Netz ändern.
   Gerät zu jedem anderen jede Verbindung aufbauen, aber keine Exit-Nodes,
   Subnetze oder Namen nur für Mitglieder nutzen.
 - Gibt es Zugriffsregeln, meldet `juist invite`:
-  `hint: the access policy passes phone nothing until it names it: juist policy edit`.
+  `hint: the policy passes no traffic for phone until it names it: juist policy edit`.
 - `juist policy check` und `set` warnen vor allem, was so nicht funktionieren
   kann oder etwas ungenutzt lässt: ein Exit-Node ohne die Exit-Rolle, ein
   Präfix, das kein Subnet-Router routet, die Adresse eines Geräts statt

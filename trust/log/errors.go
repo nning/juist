@@ -14,9 +14,8 @@ const (
 	// RuleMalformed: not a valid record of its kind, whatever the chain.
 	RuleMalformed Rule = iota + 1
 
-	// RuleParent: it does not chain to what it was offered against — its
-	// parent is not the head, or does not descend from this node's anchor.
-	// Its ancestors may yet arrive.
+	// RuleParent: its parent is not the head, or does not descend from this
+	// node's anchor. Its ancestors may yet arrive.
 	RuleParent
 
 	// RuleUnauthorized: its signatures do not authorize it.
@@ -41,9 +40,8 @@ func (r Rule) String() string {
 }
 
 // A RejectError is a record refused on its merits: offered again against the
-// same chain, it is refused again. What else the package returns — storage
-// errors, [RollbackError], [SchemaTooNewError], an [Alarm] — is about this
-// node rather than the record.
+// same chain, it is refused again. Other errors are about this node, not the
+// record.
 type RejectError struct {
 	Rule Rule
 	err  error
@@ -84,8 +82,7 @@ type RollbackError struct {
 	// Offered is the epoch the rejected chain resolves to.
 	Offered uint64
 
-	// Records are the rejected records, so a caller can preserve them as
-	// evidence even though they were not stored.
+	// Records are the rejected records, kept as evidence; they were not stored.
 	Records []types.AUM
 }
 
@@ -120,19 +117,11 @@ func (e *RollbackAlarm) Error() string {
 		e.Floor, e.Epoch, lost)
 }
 
-// A SchemaTooNewError reports that a quorum has moved the network to a record
-// schema this build does not implement. It is not a refusal of the record —
-// the record is authorized and the network really has moved — but a statement
-// that this node stops here. Nothing after it can be interpreted: a later
-// record may carry a kind or a field this build has never heard of, and acting
-// on the part it understands is the split view the closed record set exists to
-// prevent.
-//
-// Unlike a fork alarm this does not withdraw membership state. The state the
-// node holds was correct up to the upgrade, and tearing every tunnel down the
-// moment an admin raises the schema would turn a planned change into an
-// outage. What bounds how long that state may be acted on is the freshness
-// TTL, which is M4's.
+// A SchemaTooNewError reports that a quorum moved the network to a record
+// schema this build does not implement. The record is authorized; this node
+// applies nothing after it, since acting on the part it understands would
+// split the view. Unlike an [Alarm] it does not withdraw membership state; the
+// freshness TTL bounds how long that state is acted on.
 type SchemaTooNewError struct {
 	// Version is the schema the network moved to, Implemented the newest this
 	// build can act on, and At the record that made the change.

@@ -124,7 +124,9 @@ licence. juist includes parts of that client, pinned to version 1.104.0:
 - **DERP** passes traffic where no direct path forms; see
   [DERP servers](https://tailscale.com/kb/1232/derp-servers). Tailscale runs
   DERP servers for all its users. In juist, DERP runs on a member granted
-  `relay` and serves only members of the log.
+  `relay` and serves only members of the log; a network may also choose
+  Tailscale's public DERP servers where no member relays
+  ([Relays]({{< relref "docs/relays" >}}#public-derp)).
 - **wgengine** connects WireGuard to the operating system: the network
   device, the packet filter, routes and DNS.
 - **STUN** lets a device learn its public address.
@@ -132,7 +134,8 @@ licence. juist includes parts of that client, pinned to version 1.104.0:
 juist leaves out the part that talks to a coordination server. Tailscale's
 client gets its peers and their keys from that server; juist gives the same
 code peers built from the membership log instead. You need no
-Tailscale account, and no traffic goes to Tailscale.
+Tailscale account, and no traffic goes to Tailscale unless the network
+chooses its public DERP servers, as one the Android app creates does.
 
 A bug in the reused connectivity code can break connections or expose
 addresses, but it cannot admit a device: WireGuard, below it, checks every

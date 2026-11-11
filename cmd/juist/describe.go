@@ -12,6 +12,7 @@ import (
 
 	"github.com/nning/juist/internal/names"
 	"github.com/nning/juist/internal/policy"
+	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -78,6 +79,7 @@ var effects = map[types.Kind]func(d *describer, aum *types.AUM, state *log.State
 	types.KindSetPublished:      effectSetPublished,
 	types.KindRenameNetwork:     effectRenameNetwork,
 	types.KindSetPolicy:         effectSetPolicy,
+	types.KindSetPublicDERP:     effectSetPublicDERP,
 	types.KindRenameNode:        effectRenameNode,
 	types.KindDisable:           effectDisable,
 }
@@ -91,7 +93,7 @@ func effectSnapshot(d *describer, aum *types.AUM, state *log.State) {
 	}
 	d.add("a change needs %s", count(st.Quorum, "vote"))
 	if st.Vouchers > 1 {
-		d.add("%d vouchers must confirm a device's view", st.Vouchers)
+		d.add("requires %d vouchers", st.Vouchers)
 	}
 	for _, p := range adminPeople(st.Admins) {
 		ids := make([]string, len(p.keys))
@@ -101,19 +103,17 @@ func effectSnapshot(d *describer, aum *types.AUM, state *log.State) {
 				ids[i] += " on " + on
 			}
 		}
-		signs := "its key"
+		signs := "key " + ids[0]
 		if len(p.keys) > 1 {
-			signs = fmt.Sprintf("%d of its %d keys (%s)", p.keys[0].NeededKeys(), len(p.keys), strings.Join(ids, ", "))
-		} else {
-			signs += " " + ids[0]
+			signs = fmt.Sprintf("%d of %d keys (%s)", p.keys[0].NeededKeys(), len(p.keys), strings.Join(ids, ", "))
 		}
-		d.add("admin %s: %s, cast with %s", p.name, count(p.keys[0].Votes, "vote"), signs)
+		d.add("admin %s: %s, %s", p.name, count(p.keys[0].Votes, "vote"), signs)
 	}
 	for _, n := range st.Nodes {
 		d.add("device %s (%v)%s", displayMember(n), n.Identity.ShortString(), rolesSuffix(n.Roles))
 	}
 	if st.Policy != nil {
-		d.add("an access policy of %s", count(len(st.Policy.Rules), "rule"))
+		d.add("access policy with %s", count(len(st.Policy.Rules), "rule"))
 	}
 }
 
@@ -185,11 +185,31 @@ func effectSetNodeRoutes(d *describer, aum *types.AUM, state *log.State) {
 	// Routes are shown whenever they change, taking them away too.
 	switch {
 	case cur != nil && !slices.Equal(cur.Routes, aum.Grant.Routes):
-		d.add("changes the routes it carries from %s to %s", describeRoutes(cur.Routes),
+		d.add("changes its routes from %s to %s", describeRoutes(cur.Routes),
 			describeRoutes(aum.Grant.Routes))
 	case cur == nil && len(aum.Grant.Routes) > 0:
 		d.add("routing %v", aum.Grant.Routes)
 	}
+	if state == nil || state.Schema() < types.SchemaTakeRetired {
+		return
+	}
+	if old, ok := state.V4Retiring(); ok {
+		for _, p := range old.Prefixes {
+			if slices.ContainsFunc(aum.Grant.Routes, func(r netip.Prefix) bool { return r.Bits() > 0 && r.Overlaps(p) }) {
+				d.takes(p.String()+", the old range", old.Until)
+			}
+		}
+	}
+}
+
+// takes says that a change takes what, an old address or range, from its
+// retirement, and when that would have ended.
+func (d *describer) takes(what string, until uint64) {
+	if (&types.RetiringV4{Until: until}).Live(d.now) {
+		d.add("takes %s, in use until %s: devices not told yet lose it now", what, deadline(until))
+		return
+	}
+	d.add("takes %s", what)
 }
 
 func effectRotateNodeKey(d *describer, aum *types.AUM, state *log.State) {
@@ -217,7 +237,7 @@ func effectAddAdminKey(d *describer, aum *types.AUM, state *log.State) {
 		d.add("gives %s the admin key %s, casting %s", k.Holder, key, count(k.Votes, "vote"))
 		if state != nil {
 			if n := len(holderKeys(state, k.Holder)); n > 0 {
-				d.add("besides %s's %s; one vote between them", k.Holder, count(n, "key"))
+				d.add("%s holds %s already; together they vote once", k.Holder, count(n, "key"))
 			}
 		}
 	}
@@ -229,7 +249,7 @@ func effectAddAdminKey(d *describer, aum *types.AUM, state *log.State) {
 
 func effectSetHolder(d *describer, aum *types.AUM, state *log.State) {
 	h := aum.Holder
-	d.add("counts %s's %s only when %d of their keys sign", h.Name, count(h.Votes, "vote"), h.Needed)
+	d.add("counts the %s of %s only when %d of their keys sign", count(h.Votes, "vote"), h.Name, h.Needed)
 	if state != nil {
 		if keys := holderKeys(state, h.Name); len(keys) > 0 {
 			d.add("(holds %s, needs %d now)", count(len(keys), "key"), keys[0].NeededKeys())
@@ -245,7 +265,7 @@ func effectRemoveAdminKey(d *describer, aum *types.AUM, state *log.State) {
 			if m := keyMachine(k); m != "" {
 				on = " on " + m
 			}
-			name = fmt.Sprintf("%s (%s's, %s)", k.Public.ShortString()+on, orDash(keyPerson(k)), count(k.Votes, "vote"))
+			name = fmt.Sprintf("%s (%s, %s)", k.Public.ShortString()+on, orDash(keyPerson(k)), count(k.Votes, "vote"))
 		}
 	}
 	d.add("takes the vote away from the admin key %s", name)
@@ -255,9 +275,11 @@ func effectSetAdminRecipient(d *describer, aum *types.AUM, state *log.State) {
 	name := "the admin key " + aum.Subject.ShortString()
 	if state != nil {
 		if k, ok := state.Admin(*aum.Subject); ok {
-			name = orDash(keyPerson(k)) + "'s admin key " + aum.Subject.ShortString()
 			if m := keyMachine(k); m != "" {
 				name += " on " + m
+			}
+			if p := keyPerson(k); p != "" {
+				name += " (" + p + ")"
 			}
 		}
 	}
@@ -273,11 +295,11 @@ func effectSetQuorum(d *describer, aum *types.AUM, state *log.State) {
 }
 
 func effectEpochBump(d *describer, aum *types.AUM, state *log.State) {
-	d.add("rotates the network's group secret")
+	d.add("rotates the group secret")
 }
 
 func effectSchemaUpgrade(d *describer, aum *types.AUM, state *log.State) {
-	d.add("moves the network to record schema %d; devices on older builds stop there", *aum.Schema)
+	d.add("raises the record schema to %d; devices on older builds stop until updated", *aum.Schema)
 }
 
 func effectSetVouchers(d *describer, aum *types.AUM, state *log.State) {
@@ -331,6 +353,14 @@ func effectRenumberNode(d *describer, aum *types.AUM, state *log.State) {
 			d.add("%s", past)
 		}
 	}
+	if state == nil || state.Schema() < types.SchemaTakeRetired {
+		return
+	}
+	for _, n := range state.Nodes() {
+		if n.Identity != *aum.Subject && n.Retiring != nil && n.Retiring.Addr == *r.V4 {
+			d.takes(fmt.Sprintf("%v, %s's old address", *r.V4, d.member(n.Identity)), n.Retiring.Until)
+		}
+	}
 }
 
 func effectRetireAddresses(d *describer, aum *types.AUM, state *log.State) {
@@ -357,8 +387,16 @@ func effectSetNodeNames(d *describer, aum *types.AUM, state *log.State) {
 		}
 	}
 	if len(d.out) == 0 {
-		d.add("leaves %s's names as they are", d.member(*aum.Subject))
+		d.add("leaves the names of %s as they are", d.member(*aum.Subject))
 	}
+}
+
+func effectSetPublicDERP(d *describer, aum *types.AUM, _ *log.State) {
+	if aum.PublicDERP.Tailscale {
+		d.add("uses Tailscale's public DERP servers where no member relays")
+		return
+	}
+	d.add("uses no public DERP servers")
 }
 
 func effectSetDomain(d *describer, aum *types.AUM, state *log.State) {
@@ -373,7 +411,7 @@ func effectSetDomain(d *describer, aum *types.AUM, state *log.State) {
 		d.add("withdraws the public domain")
 	case was != "":
 		d.add("moves the public domain from %s to %s, and every published name with it", was, dom)
-		d.add(domainResolution, dom, dom)
+		d.add(domainResolution, dom)
 		for _, n := range state.Nodes() {
 			if slices.ContainsFunc(n.Published, func(p types.PublishedName) bool { return p.Label == "" }) {
 				d.add("publishes the domain %s itself on %s", dom, displayMember(n))
@@ -381,7 +419,7 @@ func effectSetDomain(d *describer, aum *types.AUM, state *log.State) {
 		}
 	default:
 		d.add("sets the public domain to %s", dom)
-		d.add(domainResolution, dom, dom)
+		d.add(domainResolution, dom)
 	}
 }
 
@@ -398,14 +436,17 @@ func effectSetPublished(d *describer, aum *types.AUM, state *log.State) {
 	for _, p := range aum.Publish.Names {
 		if !slices.Contains(had, p) {
 			d.add("%s", publishedLine("publishes", p, domain, d.member(*aum.Subject)))
+			if types.OwnName(p.Label) && ipc.ReachedDirectly(p) && !slices.ContainsFunc(had, func(q types.PublishedName) bool { return q.Label == p.Label }) {
+				d.add("so every member resolves %s to %s, outside the network domain", p.Label, d.member(*aum.Subject))
+			}
 			if state != nil && p.Public == 0 && namedByRules(state.Policy(), p.Label) {
-				d.add("so the access policy's rules to %s open port %d of %s to their sources",
+				d.add("so access policy rules to %s open port %d of %s to their sources",
 					publishedPhrase(p, domain), p.Port, d.member(*aum.Subject))
 			}
 		}
 		if i := slices.IndexFunc(had, func(q types.PublishedName) bool { return q.Label == p.Label }); i >= 0 &&
 			had[i].Members && !p.Members {
-			d.add("makes %s public, for the internet: it was for members alone", publishedPhrase(p, domain))
+			d.add("makes %s public on the internet: it was for members only", publishedPhrase(p, domain))
 		}
 	}
 	for _, p := range had {
@@ -486,10 +527,10 @@ func deadlineNote(until uint64, now int64) string {
 	left := time.Duration(int64(min(until, 1<<32))-now) * time.Second
 	switch {
 	case left <= 0:
-		return "BUT that deadline has passed: old addresses stop on applying; redo it with a longer --for"
+		return "BUT that deadline has passed: old addresses stop when it applies; redo it with a longer --for"
 	case left < shortTransition:
 		return fmt.Sprintf("BUT only %s of that is left: a device offline longer loses its old address "+
-			"before it hears of the move; redo it with a longer --for if that is too short", roughly(left))
+			"before it learns the new one; if too short, redo it with a longer --for", roughly(left))
 	}
 	return ""
 }
@@ -539,6 +580,7 @@ var kindChangesAuthority = map[types.Kind]bool{
 	types.KindRenameNode:        false,
 	types.KindDisable:           true,
 	types.KindSetPolicy:         false,
+	types.KindSetPublicDERP:     false,
 }
 
 // policyEffect is the policy p as a diff against the one in state, with the
@@ -647,7 +689,7 @@ func publishedLine(verb string, p types.PublishedName, domain, it string) string
 		line += ", with PROXY protocol"
 	}
 	if p.Members {
-		line += ", for members alone"
+		line += ", for members only"
 	}
 	return line
 }
@@ -669,5 +711,4 @@ func publishedPhrase(p types.PublishedName, domain string) string {
 // domainResolution is what a public domain makes of members' resolution,
 // which an approver weighs: every name of it goes to juistd, without each
 // device's consent, and DNSSEC with it.
-const domainResolution = "has every member resolve %s through juistd, which answers the names published " +
-	"there with their devices, and turns DNSSEC off for %s on members"
+const domainResolution = "has every member resolve %s through juistd, with DNSSEC off for it"

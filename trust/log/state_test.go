@@ -44,6 +44,7 @@ func TestStateCarriesEveryField(t *testing.T) {
 		V4Retiring: &types.RetiringRanges{Prefixes: []netip.Prefix{netip.MustParsePrefix("198.18.0.0/22")}, Until: 7},
 		Domain:     "pub.example.org",
 		Policy:     &types.Policy{Rules: []types.PolicyRule{{From: types.PolicyRefs{Any: true}, To: types.PolicyRefs{Any: true}}}},
+		PublicDERP: &types.PublicDERP{Tailscale: true},
 	}
 	// v1 has one suite, the zero value.
 	everyFieldSet(t, snap, "EpochSuite")

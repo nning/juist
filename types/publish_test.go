@@ -20,7 +20,8 @@ func TestPublishedNameSets(t *testing.T) {
 		{{Label: "immich", Port: 443}, {Port: 443}},
 		{{Port: 443}, {Port: 8443}},
 		{{Label: "Immich", Port: 443}},
-		{{Label: "a.b", Port: 443}},
+		{{Label: "a..b", Port: 443}},
+		{{Label: "a.juist", Port: 443}},
 		{{Label: "-a", Port: 443}},
 	} {
 		if err := validatePublished(bad); err == nil {
@@ -188,6 +189,69 @@ func TestNamesForMembersAlone(t *testing.T) {
 	} {
 		if err := validatePublished([]PublishedName{bad}); err == nil {
 			t.Errorf("%+v taken", bad)
+		}
+	}
+}
+
+// A name of its own is a whole host name, published as it is, public alone,
+// by TLS or by TCP.
+func TestANameOfItsOwn(t *testing.T) {
+	ok := []PublishedName{{Label: "img.example.org", Port: 443, Proxy: true}, {Label: "mc.example.org", Port: 25565, Public: 25565}, {Label: "wiki", Port: 443}}
+	if err := validatePublished(ok); err != nil {
+		t.Fatal(err)
+	}
+	if got := ok[0].Under("pub.example.net"); got != "img.example.org" {
+		t.Errorf("a name of its own under a domain is %q", got)
+	}
+	if got := ok[2].Under("pub.example.net"); got != "wiki.pub.example.net" {
+		t.Errorf("a label under a domain is %q", got)
+	}
+	for _, bad := range []PublishedName{
+		{Label: "img.example.org", Port: 443, Members: true},
+		{Label: "IMG.example.org", Port: 443},
+		{Label: "img.example.org.", Port: 443},
+		{Label: "img.local", Port: 443},
+		{Label: "10.0.0.1", Port: 443},
+	} {
+		if err := validatePublished([]PublishedName{bad}); err == nil {
+			t.Errorf("%+v taken", bad)
+		}
+	}
+}
+
+// A name of its own lies outside the network's domain, and is no name a
+// member points at another: refused whichever of the two came first.
+func TestANameOfItsOwnIsOneMembers(t *testing.T) {
+	space := NetworkSpace{Genesis: Hash{1}, Domain: "pub.example.net"}
+	node := func(b byte) *NodeRecord {
+		return &NodeRecord{Identity: Identity{b}, WireGuard: WGKey{b}, X25519: X25519Key{b}, MLKEM: MLKEMKey{b}}
+	}
+	publishing, pointing := node(1), node(2)
+	publishing.Published = []PublishedName{{Label: "img.example.org", Port: 443}}
+	pointing.Names = []string{"img.example.org"}
+	for _, order := range [][2]*NodeRecord{{publishing, pointing}, {pointing, publishing}} {
+		ix := NewMemberIndex(space, 2)
+		ix.Add(order[0])
+		if err := ix.Check(order[1]); err == nil || !strings.Contains(err.Error(), "img.example.org") {
+			t.Errorf("a name published and pointed at another member: %v", err)
+		}
+	}
+	twice := node(3)
+	twice.Published = publishing.Published
+	ix := NewMemberIndex(space, 2)
+	ix.Add(publishing)
+	if err := ix.Check(twice); err == nil {
+		t.Error("one name of its own published by two members")
+	}
+	pointing.Names = []string{"imap.example.org"}
+	if err := ix.Check(pointing); err != nil {
+		t.Error(err)
+	}
+	for _, under := range []string{"img.pub.example.net", "a.b.pub.example.net", "pub.example.net"} {
+		n := node(4)
+		n.Published = []PublishedName{{Label: under, Port: 443}}
+		if err := NewMemberIndex(space, 1).Check(n); err == nil {
+			t.Errorf("%s taken as a name of its own", under)
 		}
 	}
 }

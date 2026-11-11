@@ -109,4 +109,4 @@ hinter `not in use:`:
 Auf dem Router selbst bedeutet `not routed: not agreed to on this device`,
 dass dort `juist subnet serve` noch nicht ausgeführt wurde. Solange dem Gerät
 kein Subnetz zugewiesen ist, meldet `juist subnet serve`
-`will route once an admin grants this device a subnet`.
+`will route once an admin adds a subnet to this device`.

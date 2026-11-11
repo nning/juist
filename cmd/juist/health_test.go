@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/netip"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nning/juist/internal/firewalld"
 	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/types"
 )
@@ -52,7 +57,7 @@ func TestHealthSaysTheDNSRoutingIsUnread(t *testing.T) {
 	a = newApp(strings.NewReader(""), &health, &health)
 	a.health(st, "", false)
 	mustContain(t, health.String(),
-		"warning: names the host's DNS routing sends elsewhere are refused, as it cannot be read: dbus: call timed out\n")
+		"warning: cannot read the host's DNS routing, so names routed elsewhere are refused: dbus: call timed out\n")
 }
 
 // An overlay the host does not keep to the tunnel is juist health's to say.
@@ -64,7 +69,7 @@ func TestHealthSaysTheOverlayIsUnguarded(t *testing.T) {
 	a := newApp(strings.NewReader(""), &health, &health)
 	a.health(st, "", false)
 	mustContain(t, health.String(),
-		"warning: other devices than the tunnel reach this device's overlay addresses: pf's rules call no juist anchor first\n")
+		"warning: overlay addresses reachable from outside the tunnel: pf's rules call no juist anchor first\n")
 }
 
 // Names refused by how the host routes them are juist health's to say while
@@ -87,7 +92,7 @@ func TestHealthSaysRecentRefusals(t *testing.T) {
 		if said != tc.want || (n == 1) != tc.want {
 			t.Errorf("refused %v ago: %d warnings counted:\n%s", tc.ago, n, out.String())
 		}
-		if hinted := strings.Contains(out.String(), "hint: sudo tailscale set --accept-dns=false"); hinted != tc.want && runtime.GOOS != "freebsd" {
+		if hinted := strings.Contains(out.String(), "hint: to let them through: sudo tailscale set --accept-dns=false"); hinted != tc.want && runtime.GOOS != "freebsd" {
 			t.Errorf("refused %v ago, hinted %v:\n%s", tc.ago, hinted, out.String())
 		}
 	}
@@ -175,10 +180,10 @@ func TestHealthNamesAMemberNotAtTheRelay(t *testing.T) {
 		want, not       string
 		warnings        int
 	}{
-		{"runs", nil, nil, "warning: phone not at the relay on edge01, the one this device reaches it at\n",
+		{"runs", nil, nil, "warning: phone is not at edge01, the relay this device uses\n",
 			"though it announces itself", 1},
 		{"may be offline", []string{"phone"}, nil,
-			"no answer from phone: not at the relay on edge01, the one this device reaches it at\n", "udp/", 0},
+			"no answer from phone: not at edge01, the relay this device uses\n", "udp/", 0},
 		{"offline", nil, []string{"phone"}, "", "not at the relay", 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -215,4 +220,195 @@ func TestHealthSaysAnExitNodeAnswersNoDNS(t *testing.T) {
 	a = newApp(strings.NewReader(""), &health, &health)
 	a.health(st, "", false)
 	mustContain(t, health.String(), "warning: members' DNS is not answered here: dnsfwd: listen udp 198.18.0.1:41646: bind: address already in use\n")
+}
+
+// juist health sets each issue off by a blank line on stderr, a hint staying
+// with the warning it belongs to and a hint of its own apart.
+func TestHealthSetsIssuesApart(t *testing.T) {
+	t.Parallel()
+	st := &ipc.Status{InNetwork: true, Device: "juist0", GossipPort: 41644, ListenPort: 41643,
+		Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 2, Relays: 1, RelayCapable: 1},
+		Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, SyncFailing: []string{"bsdbox01"}, TunnelsDown: []string{"mac-devvm"}, Seeking: []string{"mac-devvm"}},
+		HostConflict: &ipc.HostConflict{Instance: 1, Held: netip.MustParsePrefix("10.11.11.0/24"),
+			Claim: netip.MustParsePrefix("10.11.11.0/24")}}
+	var out, errOut, both syncBuffer
+	a := newApp(strings.NewReader(""), io.MultiWriter(&out, &both), io.MultiWriter(&errOut, &both))
+	a.health(st, "", false)
+	want := `warning: no IPv4 on this host: juist1 holds 10.11.11.0/24, which "home" claims too (10.11.11.0/24)
+warning: and IPv6 is off, so this network has no address here
+hint: renumber either network: juist network renumber juist0 PREFIX
+
+warning: log sync to bsdbox01 fails in the tunnel: tcp/41644 does not answer there
+hint: where it runs Linux: sudo ufw allow in on juist0, or add juist0 to firewalld's trusted zone
+
+no answer from mac-devvm: offline, or udp/41643 blocked
+
+hint: read-only; to manage this device: ` + asRoot("juist set --operator="+currentUser()) + "\n"
+	if both.String() != want {
+		t.Errorf("health printed\n%s\nwant\n%s", both.String(), want)
+	}
+	if got := out.String(); got != "no answer from mac-devvm: offline, or udp/41643 blocked\n" {
+		t.Errorf("stdout is %q, want its one line alone", got)
+	}
+}
+
+// A port the router maps is said to be blocked where firewalld keeps UDP to
+// juistd out, and the router's mapping then reaches nothing; the hint names
+// the zone that does.
+func TestHealthSaysFirewalldBlocksTheMappedPort(t *testing.T) {
+	t.Parallel()
+	st := &ipc.Status{InNetwork: true, Device: "juist0", ListenPort: 41643,
+		Derived:  ipc.Derived{NetworkName: "home", Members: 2, Peers: 1},
+		Underlay: &ipc.Underlay{UDP: true, IPv4: true, Mapped: "203.0.113.7:41643"}}
+	for _, tc := range []struct {
+		zone, warning, hint string
+		service, unsure     bool
+	}{
+		{"public", "warning: firewalld blocks udp/41643, which the router maps to this device",
+			"hint: sudo firewall-cmd --permanent --zone=public --add-service=juist && sudo firewall-cmd --reload", true, false},
+		{"public", "warning: firewalld blocks udp/41643, which the router maps to this device",
+			"hint: sudo firewall-cmd --permanent --zone=public --add-port=41643/udp && sudo firewall-cmd --reload", false, false},
+		{"home-workstation", "warning: firewalld blocks udp/41643, which the router maps to this device",
+			"hint: sudo firewall-cmd --permanent --zone=home-workstation --add-port=41643/udp && sudo firewall-cmd --reload", false, false},
+		{"FedoraServer", "hint: firewalld may block udp/41643, which the router maps to this device: juist cannot read the ports of zone FedoraServer",
+			"; to check: " + asRoot("juist health"), false, true},
+		{"", "", "", false, false},
+	} {
+		var both syncBuffer
+		a := newApp(strings.NewReader(""), &both, &both)
+		var asked uint16
+		a.host.udpBlocked = func(_ context.Context, port uint16) (string, bool, bool) {
+			asked = port
+			return tc.zone, tc.service, tc.unsure
+		}
+		a.health(st, "", false)
+		said := strings.Contains(both.String(), "firewalld")
+		if said != (tc.zone != "") || asked != 41643 || !strings.Contains(both.String(), tc.warning) || !strings.Contains(both.String(), tc.hint) {
+			t.Errorf("zone %q: asked about %d, health printed\n%s", tc.zone, asked, both.String())
+		}
+	}
+	var odd syncBuffer
+	a := newApp(strings.NewReader(""), &odd, &odd)
+	a.host.udpBlocked = func(context.Context, uint16) (string, bool, bool) { return "my zone;id", false, false }
+	a.health(st, "", false)
+	if strings.Contains(odd.String(), "firewall-cmd") {
+		t.Errorf("a zone not to be pasted, health printed\n%s", odd.String())
+	}
+	// Beside another issue, the unread zone's hint stands apart from it.
+	other := *st
+	other.GossipPort = 41644
+	other.Tunnels = ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, SyncFailing: []string{"bsdbox01"}, Underlay: st.Underlay}
+	var apart syncBuffer
+	beside := newApp(strings.NewReader(""), &apart, &apart)
+	beside.host.udpBlocked = func(context.Context, uint16) (string, bool, bool) { return "FedoraServer", false, true }
+	beside.health(&other, "", false)
+	if !strings.Contains(apart.String(), "\n\nhint: firewalld may block") {
+		t.Errorf("the unread zone's hint joins the issue above it:\n%s", apart.String())
+	}
+	// Unread, as by a user under firewalld's server policy, it counts as no
+	// warning, which the user could never clear.
+	unread := newApp(strings.NewReader(""), io.Discard, io.Discard)
+	unread.host.udpBlocked = func(context.Context, uint16) (string, bool, bool) { return "FedoraServer", false, true }
+	if n, _ := unread.healthWarnings(st, "", false); n != 0 {
+		t.Errorf("a zone juist cannot read counts as %d warnings", n)
+	}
+	unmapped := *st
+	unmapped.Underlay = &ipc.Underlay{UDP: true, IPv4: true}
+	var both syncBuffer
+	a = newApp(strings.NewReader(""), &both, &both)
+	a.host.udpBlocked = func(context.Context, uint16) (string, bool, bool) {
+		t.Error("asked without a mapping")
+		return "public", true, false
+	}
+	a.health(&unmapped, "", false)
+}
+
+// fakeZones answers as firewalld would, by interface and zone; a service
+// it does not hold is undefined.
+type fakeZones struct {
+	ifaces   map[string]string
+	def      string
+	open     map[string]bool
+	services map[string]bool
+	refused  bool
+	// serviceErr is what asking for a service fails with, where set.
+	serviceErr error
+}
+
+func (f fakeZones) Zone(iface string) (string, error) {
+	if z, ok := f.ifaces[iface]; ok {
+		return z, nil
+	}
+	return f.def, nil
+}
+
+func (f fakeZones) Admits(zone string, _ uint16, _ string) (bool, error) {
+	if f.refused {
+		return false, firewalld.ErrNotAuthorized
+	}
+	return f.open[zone], nil
+}
+
+func (f fakeZones) HasService(zone, service string) (bool, error) {
+	if f.serviceErr != nil {
+		return false, f.serviceErr
+	}
+	open, ok := f.services[zone+" "+service]
+	if !ok {
+		return false, errors.New("INVALID_SERVICE: " + service)
+	}
+	return open, nil
+}
+
+// The zone asked is the uplink's, not the default zone, and a service
+// firewalld does not know lets nothing in.
+func TestFirewalldUDPAsksTheUplinksZone(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		f       fakeZones
+		zone    string
+		service bool
+		unsure  bool
+	}{
+		{"the uplink's zone closed, the default open",
+			fakeZones{ifaces: map[string]string{"wlan0": "public"}, def: "FedoraWorkstation",
+				open: map[string]bool{"FedoraWorkstation": true}, services: map[string]bool{"public juist": false}},
+			"public", true, false},
+		{"the uplink's zone open, the default closed",
+			fakeZones{ifaces: map[string]string{"wlan0": "home"}, def: "public",
+				open: map[string]bool{"home": true}, services: map[string]bool{"public juist": false}},
+			"", false, false},
+		{"no service juist defined",
+			fakeZones{ifaces: map[string]string{"wlan0": "public"}, def: "public"},
+			"public", false, false},
+		{"the service juist let in",
+			fakeZones{ifaces: map[string]string{"wlan0": "public"}, def: "public", services: map[string]bool{"public juist": true}},
+			"", false, false},
+		{"the service not to be asked",
+			fakeZones{ifaces: map[string]string{"wlan0": "public"}, def: "public", serviceErr: context.DeadlineExceeded},
+			"", false, false},
+		{"its ports not to be read",
+			fakeZones{ifaces: map[string]string{"wlan0": "FedoraServer"}, def: "FedoraServer", refused: true},
+			"FedoraServer", false, true},
+	} {
+		zone, service, unsure := firewalldUDP(tc.f, "wlan0", 41643)
+		if zone != tc.zone || service != tc.service || unsure != tc.unsure {
+			t.Errorf("%s: zone %q, service %v, unsure %v; want %q, %v, %v", tc.name, zone, service, unsure, tc.zone, tc.service, tc.unsure)
+		}
+	}
+}
+
+// The uplink is the IPv4 default route's interface with the lowest metric.
+func TestUplinkIsTheDefaultRoutesInterface(t *testing.T) {
+	route := "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n" +
+		"juist0\t0000400A\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n" +
+		"wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n" +
+		"eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n"
+	read := func(string) ([]byte, error) { return []byte(route), nil }
+	if got := uplink(read); got != "eth0" {
+		t.Errorf("uplink %q, want eth0", got)
+	}
+	if got := uplink(func(string) ([]byte, error) { return nil, errors.New("no /proc") }); got != "" {
+		t.Errorf("uplink without /proc: %q", got)
+	}
 }

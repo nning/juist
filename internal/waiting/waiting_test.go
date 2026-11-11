@@ -10,7 +10,7 @@ import (
 	"github.com/nning/juist/types"
 )
 
-func adminKey(t *testing.T) (types.PrivateIdentity, types.AdminKey) {
+func adminKey(t testing.TB) (types.PrivateIdentity, types.AdminKey) {
 	t.Helper()
 	priv, err := types.GenerateIdentity()
 	if err != nil {
@@ -37,7 +37,7 @@ var subject = func() types.Identity {
 	return id.Public()
 }()
 
-func removal(t *testing.T, signer types.PrivateIdentity) *types.AUM {
+func removal(t testing.TB, signer types.PrivateIdentity) *types.AUM {
 	t.Helper()
 	aum := &types.AUM{Kind: types.KindRemoveNode, Prev: &types.Hash{1}, Subject: &subject,
 		Epoch: &types.EpochRecord{Epoch: 2, Commit: types.Hash{2}}}

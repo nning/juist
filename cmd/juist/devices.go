@@ -15,16 +15,14 @@ import (
 
 func cmdDevices(a *app, args []string) error {
 	s := spec{name: "juist devices", about: `
-List the network's devices and how juistd last reached each: directly,
-through a relay, or not. outdated means the device runs an older juist and
-stays unreachable until updated. SCHEMA is the newest schema each device's
-juist implements, yellow if older than this one's. juistd checks every 30s.
+List the network's devices and how juistd last reached each. SCHEMA is the
+newest schema a device's juist implements, yellow if older than this one's.
 On a device in several networks, it lists each network unless NETWORK names
 one.`}
 	fs := newFlags(s.name)
 	long := fs.Bool("keys", false, "show identity keys")
 	v6 := fs.Bool("ipv6", false, "show IPv6 addresses")
-	all := fs.Bool("all", false, "list the devices the access policy keeps apart from this one too")
+	all := fs.Bool("all", false, "list the devices the access policy keeps apart too")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
@@ -77,7 +75,7 @@ func (a *app) listDevices(long, v6, all bool) error {
 		return err
 	}
 	if apart > 0 {
-		a.hint("%s the access policy keeps apart from this one: juist devices --all", count(apart, "more device"))
+		a.hint("%s the access policy keeps apart: juist devices --all", count(apart, "more device"))
 	}
 	if alarm := auth.Alarm(); alarm != nil {
 		a.printf("\n")
@@ -142,7 +140,7 @@ func (a *app) printDevices(devs []ipc.Device, self types.Identity, st *ipc.Statu
 		if showBuilds {
 			row = append(row, a.buildWord(builds[d.Identity]))
 		}
-		rows = append(rows, append(row, describeGrant(d.Roles, d.Subnets, len(d.Names) > 0, len(d.Published) > 0)))
+		rows = append(rows, append(row, describeGrant(d.Roles, d.Subnets, len(d.Names) > 0, len(d.Published))))
 	}
 	if !a.printTable(rows) {
 		a.printDeviceList(rows[1:])
@@ -199,7 +197,7 @@ func (a *app) printTable(rows [][]string) bool {
 		for i, cell := range row[:last] {
 			b.WriteString(cell + strings.Repeat(" ", widths[i]-visibleWidth(cell)+2))
 		}
-		for k, part := range wrap(row[last], room) {
+		for k, part := range wrapList(row[last], room) {
 			if k > 0 {
 				b.WriteString("\n" + strings.Repeat(" ", indent))
 			}
@@ -208,6 +206,43 @@ func (a *app) printTable(rows [][]string) bool {
 		a.printf("%s\n", b.String())
 	}
 	return true
+}
+
+// wrapList is [wrap] for a list joined by ", ": its lines break between
+// items, each but the last line ending in the comma, and within an item only
+// where it does not fit a line alone.
+func wrapList(s string, width int) []string {
+	if width <= 0 || visibleWidth(s) <= width {
+		return []string{s}
+	}
+	items := strings.Split(s, ", ")
+	var lines []string
+	cur := ""
+	for i, it := range items {
+		comma := 0
+		if i < len(items)-1 {
+			comma = 1
+		}
+		cand := it
+		if cur != "" {
+			cand = cur + ", " + it
+		}
+		if visibleWidth(cand)+comma <= width {
+			cur = cand
+			continue
+		}
+		if cur != "" {
+			lines = append(lines, cur+",")
+		}
+		if visibleWidth(it)+comma <= width {
+			cur = it
+			continue
+		}
+		ws := wrap(it, width-comma)
+		lines = append(lines, ws[:len(ws)-1]...)
+		cur = ws[len(ws)-1]
+	}
+	return append(lines, cur)
 }
 
 // printDeviceList prints the device table's rows a device to a paragraph:
@@ -224,7 +259,7 @@ func (a *app) printDeviceList(rows [][]string) {
 			if more == "-" {
 				continue
 			}
-			for k, l := range wrap(more, a.width-4) {
+			for k, l := range wrapList(more, a.width-4) {
 				a.printf("%s%s\n", map[bool]string{true: "  ", false: "    "}[k == 0], l)
 			}
 		}

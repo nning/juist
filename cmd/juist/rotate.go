@@ -31,7 +31,7 @@ Replace keys.
 		what = pos[0]
 	}
 	if what != "" && !slices.Contains(rotations, what) {
-		return fmt.Errorf("unknown rotation %q%s\n%s", what, didYouMean(what, rotations...), s.usage(nil))
+		return a.usageErr("unknown rotation %q%s", what, didYouMean(what, rotations...))
 	}
 	switch what {
 	case "abandon":
@@ -122,7 +122,7 @@ func rotateKeys(a *app, identity bool) error {
 		// The record may have reached the log regardless — a daemon that timed
 		// out answering may still apply it — and deleting keys the log comes
 		// to name would cut this device off.
-		err = fmt.Errorf("%w\nhint: the new keys stay staged until the log names them or: juist rotate abandon", err)
+		err = fmt.Errorf("%w\nhint: the new keys stay pending until applied; to drop them: juist rotate abandon", err)
 	}
 	return err
 }
@@ -132,8 +132,7 @@ func rotateKeys(a *app, identity bool) error {
 // new keys and sealed epoch alone, signed by the device and proven by its
 // current identity key; docs/11-enrollment-and-freshness-notes.md says why.
 func checkRotation(auth *log.Authority, self types.Identity, identity bool, aum *types.AUM, proof types.Sig) error {
-	refuse := errors.New("juistd answered with a record that is not this rotation; not signed. " +
-		"If this recurs, juistd here may be compromised")
+	refuse := errors.New("juistd returned a record that is not this rotation; not signed. If this recurs, juistd may be compromised")
 	if aum.Subject == nil || *aum.Subject != self || !self.Verify(ipc.RotationProof(aum), proof) {
 		return refuse
 	}

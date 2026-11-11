@@ -47,8 +47,8 @@ func TestTheStatusWarnsOfPort80HeldByAnother(t *testing.T) {
 	st := &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2}}
 	st.Terminator = &ipc.Terminator{Running: true, Listening: []string{"10.11.11.13:443"},
 		Unbound: []string{"10.11.11.13:80", "[fd90::1]:80", "10.11.11.13:8443"}}
-	want := line{kind: lineWarn, text: "another program holds port 80 on 10.11.11.13, fd90::1, so http:// to a name " +
-		"served here reaches it, not a redirect to https"}
+	want := line{kind: lineWarn, text: "another program holds port 80 on 10.11.11.13, fd90::1, so http:// to names " +
+		"served here does not redirect to https"}
 	if v := statusOf(st, testNow(), noPaint); !slices.Contains(v.notes, want) {
 		t.Errorf("notes %v lack %v", v.notes, want)
 	}
@@ -131,7 +131,7 @@ func TestLogShowsOneChange(t *testing.T) {
 		t.Errorf("by its hash:\n%s", got)
 	}
 	mustContain(t, c.mustRun("log", "show", "0"), "creates the network \"home\"", "device laptop")
-	if _, err := c.run("log", "show", "3"); err == nil || err.Error() != "no change 3: the log lists 0 to 2, or -3 to -1" {
+	if _, err := c.run("log", "show", "3"); err == nil || err.Error() != "no change 3: the log has 0 to 2, or -3 to -1" {
 		t.Errorf("past the end: %v", err)
 	}
 	if got := c.mustRun("log", "show", "-1"); got != out {
@@ -139,7 +139,7 @@ func TestLogShowsOneChange(t *testing.T) {
 	}
 	mustContain(t, c.mustRun("log", "show", "-3"), "creates the network \"home\"")
 	mustContain(t, c.mustRun("log", "-2"), "   1  change of the access policy")
-	if _, err := c.run("log", "show", "-4"); err == nil || err.Error() != "no change -4: the log lists 0 to 2, or -3 to -1" {
+	if _, err := c.run("log", "show", "-4"); err == nil || err.Error() != "no change -4: the log has 0 to 2, or -3 to -1" {
 		t.Errorf("before the start: %v", err)
 	}
 }
@@ -170,7 +170,7 @@ func TestStatusNamesTheStateAndHealthSaysWhy(t *testing.T) {
 		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: ipc.Derived{NetworkName: "home", Disabled: "x", Schema: types.CurrentSchema}},
 			"home · disabled", "ended with a break-glass secret"},
 		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: home, HostConflict: &ipc.HostConflict{SameNetwork: true, Instance: 1}},
-			"home · not connected", "runs on this host already"},
+			"home · not connected", "already runs on this host"},
 		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: home, StartError: "operation not permitted"},
 			"home · not connected", "tunnels not up, retrying: operation not permitted"},
 		{&ipc.Status{InNetwork: true, CanOperate: true, Derived: ipc.Derived{NetworkName: "home", NotMember: true}},
@@ -291,7 +291,7 @@ func TestStatusSaysWhoNeedsAnUpdate(t *testing.T) {
 		{func(s *ipc.Status) { s.Outdated = []string{"mac", "phone"} },
 			[]string{"warning: mac, phone run an older juist, unreachable until updated"}},
 		{func(s *ipc.Status) { s.OlderBuild = []string{"mac"} },
-			[]string{"warning: mac runs an older juist, which applies no changes until updated"}},
+			[]string{"warning: mac runs an older juist and applies no changes until updated"}},
 		{func(s *ipc.Status) { s.SyncNewer = []string{"edge01"} },
 			[]string{"warning: log sync fails: edge01 runs a newer juist", "hint: update juist on this device"}},
 		{func(s *ipc.Status) { s.SyncBroken = []string{"exit"} },
@@ -343,7 +343,7 @@ func TestStatusSaysTheNetworkRefusesThisDevice(t *testing.T) {
 	a := newApp(strings.NewReader(""), &out, &out)
 	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
 	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2, Refused: true}})
-	mustContain(t, out.String(), "home · refused", "warning: the network's devices refuse this one",
+	mustContain(t, out.String(), "home · refused", "warning: other devices refuse this one",
 		"hint: rejoin with a new invite")
 }
 
@@ -356,7 +356,7 @@ func TestStatusSaysThisDeviceIsBehindWhatItsPeersKeep(t *testing.T) {
 	a.node = &daemonNode{sock: "/nonexistent", st: &ipc.Status{InNetwork: true}}
 	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2, Overtaken: true}})
 	mustContain(t, out.String(), "home · behind",
-		"warning: this device's log is older than what the network's devices keep", "hint: rejoin with a new invite link")
+		"warning: this device fell too far behind to catch up", "hint: rejoin with a new invite link")
 }
 
 // juist devices says per device how the daemon's last check reached it, and
@@ -658,19 +658,19 @@ func TestDevicesTable(t *testing.T) {
 	got := print(0, false)
 	want := "NAME                  IPV4          REACHED                ROLES\n" +
 		"desktop               10.11.11.10   offline, heard 1h ago  voucher\n" +
-		"edge01 (this device)  10.11.11.254  -                      voucher, relay, names, publishes\n"
+		"edge01 (this device)  10.11.11.254  -                      voucher, relay, names, publishes 1 name\n"
 	if got != want {
 		t.Errorf("devices:\n%s\nwant:\n%s", got, want)
 	}
 	mustContain(t, print(0, true), "IPV6", "fd12:345:6789:27ef:8e2b:1889:2553:4ba2  offline")
 
 	mustContain(t, print(78, false), "edge01 (this device)  10.11.11.254  -                      voucher, relay,\n"+
-		strings.Repeat(" ", 59)+"names, publishes\n")
+		strings.Repeat(" ", 59)+"names,\n"+strings.Repeat(" ", 59)+"publishes 1 name\n")
 	mustContain(t, print(72, false), "-                      voucher,\n"+strings.Repeat(" ", 59)+"relay, names,\n"+
-		strings.Repeat(" ", 59)+"publishes\n")
+		strings.Repeat(" ", 59)+"publishes 1\n"+strings.Repeat(" ", 59)+"name\n")
 	got = print(60, false)
 	mustContain(t, got, "desktop  10.11.11.10\n  offline, heard 1h ago\n  voucher\n",
-		"edge01 (this device)  10.11.11.254\n  voucher, relay, names, publishes\n")
+		"edge01 (this device)  10.11.11.254\n  voucher, relay, names, publishes 1 name\n")
 	if strings.Contains(got, "NAME") {
 		t.Errorf("the table is printed though it does not fit:\n%s", got)
 	}
@@ -727,7 +727,7 @@ func TestDevicesFitEveryWidth(t *testing.T) {
 	want := "desktop\n  10.7.0.2 (was 198.18.4.2)\n  offline, heard 1h ago\n  voucher\n" +
 		"nas-im-keller  10.11.11.3\n  direct\n  routes 192.168.178.0/24,\n    10.20.0.0/16\n" +
 		"phone  10.11.11.4\n  relayed\n" +
-		"edge01 (this device)\n  10.11.11.254\n  voucher, relay, exit, names,\n    publishes\n"
+		"edge01 (this device)\n  10.11.11.254\n  voucher, relay, exit, names,\n    publishes 1 name\n"
 	if got := out.String(); got != want {
 		t.Errorf("32 columns:\n%s\nwant:\n%s", got, want)
 	}
@@ -842,8 +842,8 @@ func TestStatusSaysHTTPSAloneAndTheRelaysName(t *testing.T) {
 	out = syncBuffer{}
 	st.HTTPS.Relays = nil
 	printStatusAndHealth(a, st)
-	mustContain(t, out.String(), "only, and no relay on 443", "warning: no relay on 443/tcp",
-		"hint: a relay's operator names it there: juist set --relay-name NAME")
+	mustContain(t, out.String(), "only, no relay on 443", "warning: no relay on 443/tcp",
+		"hint: on a relay: juist set --relay-name NAME")
 
 	for _, c := range []struct {
 		h    ipc.HTTPS
@@ -855,7 +855,7 @@ func TestStatusSaysHTTPSAloneAndTheRelaysName(t *testing.T) {
 		{ipc.HTTPS{Name: "relay.example.org", NotAnnounced: "this device does not relay"}, "relay.example.org, not told to members",
 			[]string{"warning: members are not told of relay.example.org: this device does not relay"}},
 		{ipc.HTTPS{Name: "relay.example.org", ListenError: "listen tcp 192.0.2.7:443: bind: permission denied"}, "relay.example.org, not on 443",
-			[]string{"warning: the relay cannot take 443", "hint: sudo juist set --relay-name relay.example.org"}},
+			[]string{"warning: the relay cannot bind 443", "hint: to let juistd bind 443: sudo juist set --relay-name relay.example.org"}},
 		{ipc.HTTPS{Name: "relay.example.org", Listening: []string{"192.0.2.7:443"}, NoCert: "the CA refused"},
 			"relay.example.org, no certificate yet", []string{"warning: no certificate for relay.example.org yet: the CA refused",
 				"hint: relay.example.org must point at this device in DNS, and every firewall in front of it let 443/tcp in"}},
@@ -945,5 +945,91 @@ func TestStatusVerboseNamesEachDevicesRelay(t *testing.T) {
 		"                a device via member 1\n")
 	if strings.Contains(reader.String(), "nid:") || strings.Contains(reader.String(), "phone") {
 		t.Errorf("a reader's status names a member:\n%s", reader.String())
+	}
+}
+
+// The underlay line says which IP versions work, and a port the router
+// opened for this device.
+func TestStatusSaysTheUnderlayAndAPortMapped(t *testing.T) {
+	t.Parallel()
+	a := newApp(strings.NewReader(""), new(syncBuffer), new(syncBuffer))
+	for _, c := range []struct {
+		u    *ipc.Underlay
+		want string
+	}{
+		{&ipc.Underlay{UDP: true, IPv4: true, IPv6: true, Mapping: true}, "Underlay      IPv4, IPv6\n"},
+		{&ipc.Underlay{UDP: true, IPv4: true, Mapping: true, PortPerPeer: true}, "Underlay      IPv4\n"},
+		{&ipc.Underlay{}, "Underlay      no UDP\n"},
+		{&ipc.Underlay{UDP: true, IPv4: true, Offered: []string{"UPnP"}, Mapped: "203.0.113.7:41641"}, "Underlay      IPv4, UPnP maps 203.0.113.7:41641\n"},
+		{&ipc.Underlay{UDP: true, IPv4: true}, "Underlay      IPv4, port mapping off\n"},
+		{&ipc.Underlay{UDP: true, IPv4: true, Offered: []string{"UPnP"}}, "Underlay      IPv4, UPnP, nothing mapped\n"},
+	} {
+		var out syncBuffer
+		a.out = &out
+		printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1}, Tunnels: ipc.Tunnels{Underlay: c.u},
+			PortMapOff: strings.Contains(c.want, "port mapping off")})
+		mustContain(t, out.String(), c.want)
+	}
+	var out syncBuffer
+	a.out = &out
+	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1}})
+	if strings.Contains(out.String(), "Underlay") {
+		t.Errorf("an underlay not measured yet is named:\n%s", out.String())
+	}
+}
+
+// A network meeting through Tailscale's public DERP servers says so on the
+// relays line, and warns of no member relay no more.
+func TestStatusSaysThePublicDERP(t *testing.T) {
+	t.Parallel()
+	var out syncBuffer
+	a := newApp(strings.NewReader(""), &out, &out)
+	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 2,
+		PublicDERP: true}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 2, HomeRelay: "Tailscale Frankfurt"}})
+	mustContain(t, out.String(), "Relays        Tailscale's public DERP, via Tailscale Frankfurt\n")
+	if strings.Contains(out.String(), "no device may relay") {
+		t.Errorf("a network with public DERP is warned of no relay:\n%s", out.String())
+	}
+	out = syncBuffer{}
+	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 2,
+		RelayCapable: 1, Relays: 1, PublicDERP: true}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 2, HomeRelay: "vps"}})
+	mustContain(t, out.String(), "Relays        1 available, via vps (and Tailscale's public DERP)\n")
+	out = syncBuffer{}
+	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 2,
+		PublicDERP: true}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, TunnelsDown: []string{"phone"},
+		HomeRelay: "Tailscale Frankfurt"}})
+	if strings.Contains(out.String(), "with no relay") {
+		t.Errorf("a peer down is blamed on no relay where Tailscale's relay:\n%s", out.String())
+	}
+	out = syncBuffer{}
+	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Derived: ipc.Derived{NetworkName: "home", Members: 3, Peers: 2,
+		PublicDERP: true, HTTPS: &ipc.HTTPS{Only: true}}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1,
+		TunnelsDown: []string{"phone"}, Seeking: []string{"phone"}, HomeRelay: "Tailscale Frankfurt"}})
+	mustContain(t, out.String(), "HTTPS         only, by Tailscale's public DERP\n",
+		"no answer from phone: offline, or not at Tailscale's DERP")
+	if strings.Contains(out.String(), "no relay on 443") {
+		t.Errorf("on HTTPS alone, Tailscale's relays on 443 are not counted:\n%s", out.String())
+	}
+	// With UDP open the same; beside a member relay, the peer is sought there.
+	// A relay granted but not installed, as right after juist grant, is
+	// none to be sought at.
+	for _, c := range []struct {
+		relays, capable int
+		home            string
+		https           *ipc.HTTPS
+		want            string
+	}{
+		{0, 0, "Tailscale Frankfurt", nil, "no answer from phone: offline, or not at Tailscale's DERP"},
+		{0, 1, "Tailscale Frankfurt", nil, "no answer from phone: offline, or not at Tailscale's DERP"},
+		{1, 1, "vps", nil, "no answer from phone: offline, or udp/41641 blocked"},
+		{1, 1, "vps", &ipc.HTTPS{Only: true, Relays: []string{"relay.example.org"}},
+			"no answer from phone: offline, or at no relay on 443"},
+	} {
+		out = syncBuffer{}
+		printStatusAndHealth(a, &ipc.Status{InNetwork: true, ListenPort: 41641, Derived: ipc.Derived{NetworkName: "home",
+			Members: 3, Peers: 2, Relays: c.relays, RelayCapable: c.capable, PublicDERP: true, HTTPS: c.https},
+			Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, TunnelsDown: []string{"phone"},
+				Seeking: []string{"phone"}, HomeRelay: c.home}})
+		mustContain(t, out.String(), c.want)
 	}
 }

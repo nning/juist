@@ -16,11 +16,10 @@ import (
 
 func cmdReset(a *app, args []string) error {
 	s := spec{name: "juist reset", about: `
-Forget the network on this device: its keys, log, peers and operator, as on
-a fresh install. Admin keys are kept. If the network still lists the device,
-this needs --force; remove the device first if you can. On a device in
-several networks, only the named one is forgotten, with its juistd unless
-that is the default. The others keep their keys.`}
+Forget the network on this device: keys, log, peers and operator, as on a
+fresh install. Admin keys stay. If the network still lists the device,
+remove it first, or use --force. With several networks, only the named one
+is forgotten, with its juistd unless that is the default.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	force := fs.Bool("force", false, "reset even if the network still lists this device")
@@ -39,7 +38,7 @@ that is the default. The others keep their keys.`}
 	case st.member && !*force:
 		return fmt.Errorf("still a member of %q\nhint: juist remove NAME on an admin device, or --force", st.network)
 	case st.logOnly && !*force:
-		return fmt.Errorf("this keystore holds %q's log and no device; a reset deletes it\nhint: --force",
+		return fmt.Errorf("this keystore holds the log of %q but no device; a reset deletes it\nhint: --force",
 			st.network)
 	}
 	if st.member && st.members == 1 {
@@ -63,9 +62,9 @@ that is the default. The others keep their keys.`}
 	switch len(others) {
 	case 0:
 	case 1:
-		a.printf("%s\n", a.dim(others[0]+" stays as it is, with its keys"))
+		a.printf("%s\n", a.dim(others[0]+" stays, with its keys"))
 	default:
-		a.printf("%s\n", a.dim(strings.Join(others, " and ")+" stay as they are, with their keys"))
+		a.printf("%s\n", a.dim(strings.Join(others, " and ")+" stay, with their keys"))
 	}
 	if err := a.proceed(*yes, q); err != nil {
 		return err

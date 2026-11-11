@@ -27,31 +27,23 @@ NAS, solange der öffentliche Port der des NAS ist und der Name kein
 
 ## Einrichten
 
-{{< step on="dem Gerät eines Admins" >}}
-Veröffentliche Port 25565 von nas auf jedem Ingress:
-
-```sh
-juist publish add nas mc 25565 --tcp
-```
-
-Die Ausgabe lautet `nas: publishes mc.example.org:25565/tcp`. Mit
-`--tcp=PORT` nimmst du einen anderen öffentlichen Port.
-{{< /step >}}
-
 {{< step on="nas" as="dem Spieleserver" >}}
-Lauscht der Server auf allen Adressen, stimm zu, ihn zu bedienen:
+Veröffentliche den Port des Servers auf jedem Ingress:
 
 ```sh
-juist publish serve
+juist publish mc 25565 --tcp
 ```
 
-Lauscht er nur auf Loopback, reicht juist ihm die Bytes unverändert weiter:
+Die Ausgabe lautet `nas: publishes mc.example.org:25565/tcp` und
+`passing mc.example.org to 127.0.0.1:25565`: juist reicht dem Server die
+Bytes unverändert weiter. Mit `--tcp=PORT` nimmst du einen anderen
+öffentlichen Port. Hat das NAS keinen Admin-Schlüssel, nennt der Befehl, was
+ein Admin ausführt: `juist publish mc 25565 --tcp --on nas`.
 
-```sh
-juist publish add mc 127.0.0.1:25565 --tcp
-```
-
-Die Ausgabe lautet `passing mc.example.org to 127.0.0.1:25565`.
+Lauscht der Server auf allen Adressen, nimmt er die Verbindungen selbst an.
+Dann veröffentlicht ein Admin den Port des NAS mit
+`juist publish mc 25565 --tcp --on nas`, und du bedienst ihn hier mit
+`juist publish mc`.
 {{< /step >}}
 
 {{< step on="der Website deines DNS-Anbieters" >}}
@@ -78,7 +70,7 @@ _minecraft._tcp.mc.example.org. SRV 0 5 25565 mc.example.org.
   [Zugriffsregeln]({{< relref "docs/access" >}}) etwas anderes sagen, etwa
   `pass from <friends> to nas proto tcp port 25565`.
 - **Adressen der Clients.** Der Server sieht Verbindungen vom Ingress. Mit
-  `--proxy` an `juist publish add` kommt die Adresse des Clients in einem
+  `--proxy` an `juist publish` kommt die Adresse des Clients in einem
   Header nach PROXY-Protokoll v2 mit. Paper und Velocity nehmen ihn, wenn man
   es einstellt, Vanilla-Minecraft nicht.
 - Die Ports 80, 443 und juists eigene, 41640 bis 41739, lassen sich so nicht

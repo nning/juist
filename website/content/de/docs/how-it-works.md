@@ -51,6 +51,11 @@ Dabei vertraut es weder dem Gerät, von dem die Änderung kam, noch dem Weg,
 auf dem sie kam. Eine Änderung gilt erst, wenn genug Admins sie signiert
 haben.
 
+Mit der Aufnahme eines Geräts stehen seine öffentlichen Schlüssel im Log. Ein
+Gerät baut einen Tunnel nur mit Schlüsseln auf, die es in seiner eigenen,
+geprüften Kopie des Logs gefunden hat. Weder ein anderes Mitglied noch ein
+Relay kann ihm also einen eigenen Schlüssel unterschieben.
+
 `juist log` listet die Änderungen auf und zeigt zu jeder, wer sie bestätigt
 hat.
 
@@ -127,10 +132,20 @@ beiden Geräte direkt verbinden. Seine öffentliche Adresse erfragt juistd bei
 öffentlichen STUN-Servern.
 
 Erreichen sich zwei Geräte nicht direkt, geht ihr Verkehr über ein Mitglied
-mit der Rolle `relay`, nie über Fremde. Das Relay sieht nur verschlüsselten
-WireGuard-Verkehr.
+mit der Rolle `relay`, oder, wo das Netz sie gewählt hat und kein Mitglied
+weiterleitet, über Tailscales öffentliche DERP-Server
+([Relays]({{< relref "docs/relays" >}}#public-derp)). Beide sehen nur
+verschlüsselten WireGuard-Verkehr.
 
-Hinter NAT öffnest du keine Firewall-Ports. Ein Gerät mit öffentlicher
+Bietet der Router UPnP, NAT-PMP oder PCP, lässt juistd ihn einen Port für
+die Tunnel öffnen, damit die anderen dieses Gerät direkt erreichen, auch wenn
+beide Seiten hinter NAT sind; `juist status` zeigt den Port in der Zeile
+`Underlay`, und `sudo juist set --port-mapping=false` bittet den Router um
+keinen.
+
+Hinter NAT öffnest du im Router nichts. Eine Firewall auf dem Gerät selbst
+muss 41643/udp durchlassen, wo der Router den Port weiterleitet; `juist
+health` sagt, wo firewalld es nicht tut. Ein Gerät mit öffentlicher
 Adresse braucht 41643/udp offen. Die übrigen Ports stehen unter
 [Relays]({{< relref "docs/relays" >}}), wie die Tunnel aufgebaut sind, unter
 [Architektur]({{< relref "docs/architecture" >}}).

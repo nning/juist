@@ -15,26 +15,28 @@ import (
 
 func cmdApprove(a *app, args []string) error {
 	s := spec{name: "juist approve", args: "[FILE...]", max: -1, about: `
-Sign change files with this keystore's admin keys, in place, and apply each
-once it has enough votes. Without files, ask about each change waiting for
-your vote on this admin device. Alias: juist apply.
+Sign change files with your admin keys and apply each once it has enough
+votes. Without FILE, ask about each change waiting for your vote. Alias:
+juist apply.
 
-The effect of each change is shown from the record and the log, never from
-the file's name or comments. Changes to who may approve need the log on this
-device. Records that do not fit this device's log are refused, because a
-signature cannot be taken back.`}
+What a change does is shown from the record and the log, never from the file
+name or comments. Changes to who may approve need the log on this device.
+Changes that do not fit it are refused: a signature cannot be taken back.`}
 	fs := newFlags(s.name)
 	r := &approval{a: a}
-	fs.BoolVar(&r.noApply, "no-apply", false, "sign only")
-	fs.StringVar(&a.keyName, "key", "", "sign with the admin key `NAME` only, as \"juist admins\" lists it")
+	fs.BoolVar(&r.noApply, "no-apply", false, "sign, do not apply")
+	fs.StringVar(&a.keyName, "key", "", "sign only with the admin key `NAME` (see juist admins)")
 	fs.BoolVar(&r.yes, "yes", false, "do not ask")
 	files, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
 	}
 	if len(files) == 0 {
-		if r.yes || r.noApply {
-			return fmt.Errorf("--yes and --no-apply take files: a waiting change is asked about\n%s", s.usage(fs))
+		switch {
+		case r.yes:
+			return a.usageErr("--yes needs FILE")
+		case r.noApply:
+			return a.usageErr("--no-apply needs FILE")
 		}
 		return a.approveWaiting()
 	}
@@ -141,7 +143,7 @@ func (r *approval) file(path string) error {
 		a.printf("  %s\n", line)
 	}
 	if state == nil && aum.Kind == types.KindSetPolicy && !aum.Policy.Empty() {
-		a.hint("devices show by key here; juist log verify %s on a device of the network names them", path)
+		a.hint("devices are shown by key here; for names: juist log verify %s on a device in the network", path)
 	}
 	if state != nil {
 		if n, ok := voucherLost(state, &aum); ok {
@@ -174,12 +176,11 @@ func (r *approval) check(path string, aum *types.AUM) (done bool, err error) {
 	}
 	if !r.haveNetwork {
 		if changesAuthority(aum) {
-			return false, fmt.Errorf("%s may change who approves or vouches (%s); approve it where the log is",
+			return false, fmt.Errorf("%s (%s) may change who approves or vouches; approve it on a device in the network",
 				path, describeKind(aum.Kind))
 		}
 		if !r.warnedUnchecked {
-			a.warn("no network here; records unchecked, and your signature spoils one from a network " +
-				"your key does not govern")
+			a.warn("no network here, so records are not checked; signing a record of a network your key does not govern spoils it")
 			r.warnedUnchecked = true
 		}
 		return false, nil
@@ -199,7 +200,7 @@ func (r *approval) check(path string, aum *types.AUM) (done bool, err error) {
 func (r *approval) sign(path string, aum *types.AUM) (ok bool, err error) {
 	a := r.a
 	if r.auth != nil && r.auth.Disabled() != nil {
-		return false, fmt.Errorf("%q is disabled; nothing changes it any more", r.auth.State().Network())
+		return false, fmt.Errorf("%q is disabled and cannot be changed", r.auth.State().Network())
 	}
 	if !r.yes {
 		if ok, err := a.confirm("approve?"); err != nil || !ok {
@@ -254,7 +255,7 @@ func (r *approval) settle(path string, aum types.AUM, part, signed bool) error {
 				r.carryApproval(&aum)
 			}
 		case r.noApply:
-			a.printf("  approved; apply: juist approve %s\n", path)
+			a.printf("  approved; to apply: juist approve %s\n", path)
 		default:
 			r.batch, r.paths = append(r.batch, aum), append(r.paths, path)
 		}

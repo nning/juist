@@ -772,14 +772,15 @@ func New(opts Options) (*Daemon, error) {
 			DiscoKey: conn.DiscoKeyFromRaw32(d.discoPrivate),
 			Addrs:    selfAddrs,
 		},
-		TunName:   opts.TunName,
-		Plumber:   opts.Plumber,
-		Instance:  opts.Instance,
-		STUN:      opts.STUN,
-		HTTPSOnly: opts.HTTPSOnly,
-		Multicast: carriesMulticast(opts),
-		Proxy:     d.proxyFor,
-		Logf:      d.logf,
+		TunName:    opts.TunName,
+		Plumber:    opts.Plumber,
+		Instance:   opts.Instance,
+		STUN:       opts.STUN,
+		HTTPSOnly:  opts.HTTPSOnly,
+		PortMapOff: opts.PortMapOff,
+		Multicast:  carriesMulticast(opts),
+		Proxy:      d.proxyFor,
+		Logf:       d.logf,
 		// The home relay and the reflexive addresses both belong in this
 		// node's announcement, and both are learned asynchronously once
 		// there is a relay to learn them from.

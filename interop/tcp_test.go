@@ -28,10 +28,10 @@ func tcpPorts(t *testing.T, fb, lx *vm) {
 setsid -f /tmp/probe serve lx-tcp 7001 >/dev/null 2>&1 < /dev/null
 setsid -f /tmp/probe proxied lx-proxied 7002 >/dev/null 2>&1 < /dev/null`)
 	fb.run(t, `set -e
-juist publish add lx game 7001 --tcp=25565
-juist publish add lx pp 2222 --tcp --proxy`)
+juist publish game 7001 --tcp=25565 --on lx
+juist publish pp 2222 --tcp --proxy --on lx`)
 	lx.eventually(t, "passing what fb published on it to its own service", 3*time.Minute,
-		"juist publish add pp 127.0.0.1:7002 --tcp --proxy", has("passing pp.pub.example.org to 127.0.0.1:7002"))
+		"juist publish pp 127.0.0.1:7002 --tcp --proxy", has("passing pp.pub.example.org to 127.0.0.1:7002"))
 	fb.eventually(t, "listening on both public ports", 3*time.Minute, "juist status", has("by TCP on 2222, 25565"))
 	mustHave(t, fb.run(t, "juist ingress"), "game.pub.example.org", "25565/tcp", "pp.pub.example.org", "2222/tcp")
 	fb.run(t, "sockstat -46l -p 25565 | grep -q juistd && sockstat -46l -p 2222 | grep -q juistd")
@@ -42,12 +42,12 @@ juist publish add lx pp 2222 --tcp --proxy`)
 		"/tmp/probe get "+fb.lanAddr+":2222", has("lx-proxied from "+lx.lanAddr))
 	mustHave(t, fb.run(t, "cat /var/log/juist-ingress.log"), "access: tcp "+lx.lanAddr+":", ` 25565 "game.pub.example.org" spliced`)
 
-	fb.run(t, "juist publish rm lx game")
+	fb.run(t, "juist publish --stop game --on lx")
 	fb.eventually(t, "closing the withdrawn name's port", 2*time.Minute,
 		"! sockstat -46l -p 25565 | grep -q juistd", func(string) bool { return true })
 	lx.run(t, "! /tmp/probe get "+fb.lanAddr+":25565")
 	lx.run(t, "/tmp/probe get "+fb.lanAddr+":2222 | grep -q 'lx-proxied from '"+lx.lanAddr)
-	fb.run(t, "juist publish rm lx pp")
+	fb.run(t, "juist publish --stop pp --on lx")
 	fb.eventually(t, "closing the last public port", 2*time.Minute,
 		"! sockstat -46l -p 2222 | grep -q juistd", func(string) bool { return true })
 }

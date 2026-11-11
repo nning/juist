@@ -1,14 +1,22 @@
 package io.juist.app
 
+import io.juist.app.core.InviteState
+import io.juist.app.ui.screens.AdminSection
+import io.juist.app.ui.screens.BackupScreen
+import io.juist.app.ui.screens.CreateScreen
+import io.juist.app.ui.screens.InviteScreen
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performScrollTo
 import com.github.takahirom.roborazzi.captureRoboImage
 import io.juist.app.core.Connection
 import io.juist.app.core.JoinState
 import io.juist.app.core.JoinStep
 import io.juist.app.core.OffReason
+import io.juist.app.core.Reach
 import io.juist.app.ui.LocalInviteChecks
 import io.juist.app.ui.LocalNow
 import io.juist.app.ui.screens.AboutScreen
@@ -41,12 +49,13 @@ abstract class Screens(private val variant: String) {
     @get:Rule
     val compose = createComposeRule()
 
-    private fun shot(name: String, content: @Composable () -> Unit) {
+    private fun shot(name: String, scrollTo: String? = null, content: @Composable () -> Unit) {
         compose.setContent {
             CompositionLocalProvider(LocalNow provides NOW, LocalInviteChecks provides FakeInviteChecks) {
                 JuistTheme { content() }
             }
         }
+        if (scrollTo != null) compose.onNodeWithText(scrollTo, substring = true).performScrollTo()
         compose.onRoot().captureRoboImage("screenshots/${name}_$variant.png")
     }
 
@@ -146,7 +155,49 @@ abstract class Screens(private val variant: String) {
 
     @Test fun details() = shot("details") {
         DetailsScreen(detailsView, on = true, changes = sampleChanges, diagnosis = sampleDiagnosis, onNames = {},
-            onHttpsOnly = {}, onCopyReport = none, onBack = none)
+            onPublicNames = {}, onHttpsOnly = {}, onPortMapping = {}, onCopyReport = none, onBack = none)
+    }
+
+    @Test fun memberRelayedByTailscale() = shot("member_tailscale") {
+        val m = sampleView.members.first { it.reach == Reach.Relay }.copy(relay = "Tailscale Frankfurt", relayPublic = true)
+        MemberScreen(m, on = true, pings = emptyList(), pinging = false, onPing = none, onOpen = {}, onBack = none)
+    }
+
+    /** On HTTPS alone, Tailscale's servers serve on 443: no "none on 443". */
+    @Test fun detailsPublicDerp() {
+        shot("details_public_derp", scrollTo = "Tailscale Frankfurt") {
+            val v = detailsView.copy(
+                settings = detailsView.settings.copy(httpsOnly = true),
+                details = detailsView.details.copy(schema = 24, appSchema = 24, relays = 0, installed = 0,
+                    home = "Tailscale Frankfurt", publicDerp = true),
+            )
+            DetailsScreen(v, on = true, changes = sampleChanges, diagnosis = sampleDiagnosis, onNames = {},
+                onPublicNames = {}, onHttpsOnly = {}, onPortMapping = {}, onCopyReport = none, onBack = none)
+        }
+        val none443 = org.robolectric.RuntimeEnvironment.getApplication().getString(R.string.relays_https_none)
+        compose.onNodeWithText(none443, substring = true).assertDoesNotExist()
+    }
+
+    @Test fun create() = shot("create") { CreateScreen("pixel-8", busy = false, onCreate = { _, _ -> }, onBack = none) }
+
+    @Test fun backup() = shot("backup") {
+        BackupScreen("juist-break-glass-1.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.AAAAAA",
+            onCopyBreakGlass = none, onCopyLine = none, onSaveFile = {}, onDone = none)
+    }
+
+    @Test fun inviteOffered() = shot("invite") {
+        InviteScreen(InviteState.Offered("650-ample-ribbon", "juist:AAAA.198.51.100.7:41642"), onShare = {}, onSame = none,
+            onDifferent = none, onClose = none)
+    }
+
+    @Test fun inviteComparing() = shot("invite_compare") {
+        InviteScreen(InviteState.Comparing("ample ribbon tundra velvet", "laptop"), onShare = {}, onSame = none,
+            onDifferent = none, onClose = none)
+    }
+
+    @Test fun memberAsAdmin() = shot("member_admin") {
+        MemberScreen(sampleView.members[2], on = true, pings = emptyList(), pinging = false, onPing = none, onOpen = {}, onBack = none,
+            admin = { AdminSection(setOf("relay"), isSelf = false, enabled = true, onRole = { _, _ -> }, onRemove = none) })
     }
 
     @Test fun about() = shot("about") { AboutScreen("0+8f4f2b0", none, none, none, none) }

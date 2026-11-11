@@ -87,7 +87,7 @@ cannot search for matching words, because each side commits to its part
 before it learns the other's.
 
 If the words differ, answer `n`. The invite signs nothing:
-`juist: words not confirmed; nothing signed`. Start a new invite, and find out
+`juist: words not confirmed; not admitted`. Start a new invite, and find out
 which device tried to join.
 
 `juist invite --yes` skips the comparison. Use it only where you cannot
@@ -157,6 +157,6 @@ first.
 | `warning: code voided: …` | Join with the link. If that was not your device, someone else knows this invite. |
 | `juist: invite expired` | Start a new invite, with a longer `--expires` if the wait was for other admins. |
 | `juist: cannot reach the inviting device, …` | Check that the invite still runs. If both devices are behind NAT, join from an internet connection that can reach the inviting device, or add a relay first. |
-| `juist: comparing the device's words needs a terminal; pass --yes to skip` | Run `juist invite` in a terminal, or pass `--yes` where you cannot compare. |
+| `juist: comparing words needs a terminal; --yes skips it` | Run `juist invite` in a terminal, or pass `--yes` where you cannot compare. |
 | `juist: … the inviting device runs an incompatible version of juist` | Update juist on both devices, then invite again. |
 | `juist: the invite link is from an older juist; ask for a new one` | Update juist on the inviting device and start a new invite. |

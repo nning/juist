@@ -8,18 +8,15 @@ import (
 	"strings"
 )
 
-// CGNAT is Tailscale's IPv4 range (RFC 6598): tailscaled drops packets from it
-// that arrive on any interface but its own, so juist assigns no address there
-// unless a network chooses it as its own prefix.
+// CGNAT is Tailscale's IPv4 range (RFC 6598). tailscaled drops packets from it
+// arriving on other interfaces, so juist uses it only if a network chooses it.
 var CGNAT = netip.MustParsePrefix("100.64.0.0/10")
 
-// OverlayV4 is the overlay IPv4 range of a network without a prefix of its
-// own: RFC 2544's benchmarking block, which no public network routes and neither LANs nor
-// Tailscale use. Unlike the v6 address a v4 one is assigned explicitly in the
-// record, since 17 host bits are too few for hash-derived addresses.
+// OverlayV4 is the default overlay IPv4 range (RFC 2544 benchmarking, unused
+// by LANs and Tailscale). v4 addresses are assigned in the record, not
+// derived: 17 host bits are too few to hash into.
 var OverlayV4 = netip.MustParsePrefix("198.18.0.0/15")
 
-// v4Choosable are the ranges a network's own IPv4 prefix may lie in.
 var v4Choosable = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("172.16.0.0/12"),
@@ -54,8 +51,8 @@ func ValidateV4Prefix(p netip.Prefix) error {
 		"or %v", p, OverlayV4)
 }
 
-// V4Range returns the range new overlay IPv4 addresses are assigned from: the
-// network's own prefix where it has one, else [OverlayV4].
+// V4Range returns the range new overlay IPv4 addresses come from: own, or
+// [OverlayV4] if nil.
 func V4Range(own *netip.Prefix) netip.Prefix {
 	if own != nil {
 		return *own
@@ -74,10 +71,8 @@ func IsOverlayV4(a netip.Addr) bool {
 	return CGNAT.Contains(a) || OverlayV4.Contains(a)
 }
 
-// Prefixes an advertised route may never cover, on top of the network's own
-// overlay space: a grant covering loopback, link-local or multicast would
-// point a client's own local traffic at another member's host. The full-tunnel
-// case has its own form — the default route plus the exit role.
+// forbiddenRoutes may never be granted: they would send a client's own local
+// traffic to another member's host.
 var forbiddenRoutes = []netip.Prefix{
 	netip.MustParsePrefix("127.0.0.0/8"),
 	netip.MustParsePrefix("169.254.0.0/16"),
@@ -88,11 +83,8 @@ var forbiddenRoutes = []netip.Prefix{
 	netip.MustParsePrefix("ff00::/8"),
 }
 
-// ULA returns the network's overlay IPv6 prefix, a unique-local /48 derived
-// from the genesis record's hash, so no coordination is needed to pick a range
-// and two networks do not collide. The 40 bits are a labelled hash of the
-// genesis hash rather than a slice of it, keeping the address space and the
-// chain's hashes independent derivations.
+// ULA returns the network's overlay IPv6 prefix, a unique-local /48 from a
+// labelled hash of the genesis hash.
 func ULA(genesis Hash) netip.Prefix {
 	h := hashLabeled(LabelULA, genesis[:])
 	var b [16]byte
@@ -101,13 +93,10 @@ func ULA(genesis Hash) netip.Prefix {
 	return netip.PrefixFrom(netip.AddrFrom16(b), 48)
 }
 
-// Addr6 returns a node's overlay IPv6 address: the network's [ULA] prefix
-// followed by 80 bits derived from the node's identity key. Derived, never
-// carried in the record, so no record can claim an address that does not
-// follow from its key. It is not a security boundary — cryptokey routing binds
-// each address to a 256-bit key — but allocation without coordination, made
-// safe by the log's collision check. The genesis hash is mixed in so one key
-// in two networks gets two unrelated addresses.
+// Addr6 returns a node's overlay IPv6 address: [ULA] plus 80 bits hashed from
+// the genesis hash and identity. Never carried in a record, so none can claim
+// an address its key does not yield. Not a security boundary; the log checks
+// collisions.
 func Addr6(genesis Hash, id Identity) netip.Addr {
 	h := hashLabeled(LabelAddr6, genesis[:], id[:])
 	prefix := ULA(genesis).Addr().As16()
@@ -117,19 +106,17 @@ func Addr6(genesis Hash, id Identity) netip.Addr {
 	return netip.AddrFrom16(b)
 }
 
-// ResolverAddr is where a device that answers its own host's DNS in the
-// tunnel, as the Android app, takes its lookups: the network's [ULA] prefix
-// and ::53. No member's [Addr6] can take it but by finding an identity whose
-// 80 derived bits are those, about 2^80 keys.
+// ResolverAddr is ula::53, where a device answering its host's DNS in the
+// tunnel (the Android app) takes lookups. An [Addr6] hits it only after about
+// 2^80 keys.
 func ResolverAddr(ula netip.Prefix) netip.Addr {
 	b := ula.Masked().Addr().As16()
 	b[15] = 0x53
 	return netip.AddrFrom16(b)
 }
 
-// validateAddrForm rejects address encodings that are not the canonical form
-// for the address they denote: netip.Addr can carry a zone, and IPv4 in either
-// 4-byte or IPv4-mapped form, which would give one address two encodings.
+// validateAddrForm rejects zones and IPv4-mapped IPv6, which would give one
+// address two encodings.
 func validateAddrForm(a netip.Addr) error {
 	if !a.IsValid() {
 		return errors.New("address is invalid")
@@ -146,8 +133,7 @@ func validateAddrForm(a netip.Addr) error {
 	return nil
 }
 
-// ValidateV4 checks a node's optional explicit overlay IPv4 address against
-// the ranges it may lie in.
+// ValidateV4 checks an overlay IPv4 address lies in ranges.
 func ValidateV4(a netip.Addr, ranges []netip.Prefix) error {
 	if err := validateAddrForm(a); err != nil {
 		return err
@@ -167,17 +153,10 @@ func ValidateV4(a netip.Addr, ranges []netip.Prefix) error {
 	return fmt.Errorf("overlay v4 address %v is outside %s", a, strings.Join(names, " and "))
 }
 
-// ValidateRoute checks one advertised prefix from a route grant. ula is the
-// network's overlay prefix, v4 its [V4Ranges], and exitNode whether the
-// granted node holds the exit role.
-//
-//   - Canonical form: masked, no zone, no IPv4-mapped-IPv6.
-//   - No overlap with the overlay's own space, which is what stops a grant
-//     becoming a way to intercept member-to-member traffic.
-//   - Nothing in [forbiddenRoutes].
-//   - The default route only with the exit role, and exempt from the
-//     overlap rules it would otherwise fail by construction; the consumer
-//     subtracts the overlay space when rendering AllowedIPs.
+// ValidateRoute checks one granted prefix: canonical, and clear of the overlay
+// (ula, v4 [V4Ranges]) so no grant intercepts member traffic, and of reserved
+// and foreign-overlay space. The default route needs exitNode and skips the
+// overlap checks; consumers must subtract the overlay from AllowedIPs.
 func ValidateRoute(pfx netip.Prefix, ula netip.Prefix, v4 []netip.Prefix, exitNode bool) error {
 	if !pfx.IsValid() {
 		return errors.New("route prefix is invalid")
@@ -225,15 +204,14 @@ func ValidateRoute(pfx netip.Prefix, ula netip.Prefix, v4 []netip.Prefix, exitNo
 	return nil
 }
 
-// overlaySpaces are what overlays on a member's host may hold, another juist
-// network's or tailscaled's, which a route through a member would take from
-// them.
+// overlaySpaces are other overlays (juist, tailscaled) a member's host may
+// run; a route over them would hijack their traffic.
 var overlaySpaces = []netip.Prefix{CGNAT, OverlayV4, netip.MustParsePrefix("fd7a:115c:a1e0::/48")}
 
 var uniqueLocal = netip.MustParsePrefix("fc00::/7")
 
-// ComparePrefix orders prefixes by address, then length: the order every
-// prefix set in a record is sorted in, so that one set has one encoding.
+// ComparePrefix orders prefixes by address, then length: the canonical order
+// of every prefix set in a record.
 func ComparePrefix(a, b netip.Prefix) int {
 	return cmp.Or(a.Addr().Compare(b.Addr()), a.Bits()-b.Bits())
 }

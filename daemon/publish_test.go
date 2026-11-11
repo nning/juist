@@ -854,3 +854,37 @@ func TestAServiceMembersMarkIsItsCommandLines(t *testing.T) {
 		s.Close()
 	}
 }
+
+// A name of its own goes as it is to the ingress and the terminator, and
+// members resolve it to its device as a name under the domain, routed to
+// juistd, without the word names take; behind --proxy it is not resolved.
+func TestANameOfItsOwnIsServedAsItIs(t *testing.T) {
+	f := exitFixtureWith(t, func(nw *network) {
+		nw.domain = "pub.example.org"
+		nw.devices[0].record.Published = []types.PublishedName{{Label: "img.example.net", Port: 443},
+			{Label: "photos.example.net", Port: 443, Proxy: true}}
+		nw.devices[1].record.Roles = []types.Role{types.RoleIngress}
+	}, func(o *Options) {
+		o.ServePublished, o.ServeTo = true, map[string]string{"img.example.net": "127.0.0.1:2283"}
+	})
+	if err := f.d.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	got := f.d.Serving(nil)
+	if len(got.Names) != 1 || got.Names[0].Name != "img.example.net" || got.Names[0].To != "127.0.0.1:2283" {
+		t.Fatalf("the terminator is told %+v", got)
+	}
+	state := f.auth.State()
+	self := f.nw.devices[0].record.Identity
+	z, _, _ := f.d.namesZone(state, policy.View{}, log.Freshness{}, false, time.Now().Unix(),
+		func(id types.Identity) bool { return id == self })
+	if o, ok := z.Overrides["img.example.net"]; !ok || o.Target != self.String() {
+		t.Errorf("the name of its own resolves to %+v, %v", o, ok)
+	}
+	if _, ok := z.Overrides["photos.example.net"]; ok {
+		t.Error("a name of its own behind --proxy resolves to its device")
+	}
+	if !slices.Contains(routedDomains(z), "img.example.net") {
+		t.Errorf("routed are %q", routedDomains(z))
+	}
+}

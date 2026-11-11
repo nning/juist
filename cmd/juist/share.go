@@ -15,7 +15,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -30,32 +29,31 @@ const maxShare = 7 * 24 * time.Hour
 
 func cmdShare(a *app, args []string) error {
 	s := spec{name: "juist share", args: "[FILE|DIR] | --stop [FILE|DIR|PORT|URL]", max: 1, about: `
-Share FILE or DIR read-only on the internet, under this device's own name
-and a random path, until Ctrl-C or --for. With --background, until juist
-share --stop. A directory is listed and downloads as a ZIP. Without FILE or
-DIR, list this device's shares, including those of juist publish PORT. The
-device needs the publish role.`}
+Share FILE or DIR read-only on the internet, under this device's name and a
+random path, until Ctrl-C, --for or juist share --stop. A directory is listed
+and downloads as a ZIP. Without FILE or DIR, list the shares, juist publish
+PORT included. Needs the publish role.`}
 	fs := newFlags(s.name)
 	var dur longDuration
 	fs.Var(&dur, "for", "share for `DURATION`, like 2h or 7d")
 	bg := fs.Bool("background", false, "share in the background")
-	stop := fs.Bool("stop", false, "stop a share, the only one where none is named")
+	stop := fs.Bool("stop", false, "stop the named share, or the only one")
 	pos, err := a.parse(s, fs, args)
 	if err != nil {
 		return err
 	}
 	switch {
 	case *stop && (*bg || dur != 0):
-		return fmt.Errorf("--stop takes nothing else\n%s", s.usage(fs))
+		return a.usageErr("--stop cannot be used with --for or --background")
 	case *stop:
 		return a.stopShare(strings.Join(pos, ""))
 	case len(pos) == 0 && (*bg || dur != 0):
-		return fmt.Errorf("--for and --background take FILE or DIR\n%s", s.usage(fs))
+		return a.usageErr("--for and --background need FILE or DIR")
 	case len(pos) == 0:
 		return a.listShares()
 	}
 	if time.Duration(dur) < 0 || time.Duration(dur) > maxShare {
-		return errors.New("--for must be between 1s and 7d")
+		return a.usageErr("--for must be between 1s and 7d")
 	}
 	path, info, err := sharedPath(pos[0])
 	if err != nil {
@@ -82,65 +80,19 @@ device needs the publish role.`}
 	})
 }
 
-// publishPort publishes the HTTP server on this host's PORT under this
-// device's own name, as juist share does a file.
-func publishPort(a *app, args []string) error {
-	s := spec{name: "juist publish", args: "PORT", min: 1, max: 1, about: `
-Publish the HTTP server on this host's PORT under this device's own name,
-until Ctrl-C or --for. With --background, until juist share --stop or --for.
-The device needs the publish role.`}
-	fs := newFlags(s.name)
-	var dur longDuration
-	fs.Var(&dur, "for", "publish for `DURATION`, like 2h or 7d")
-	bg := fs.Bool("background", false, "publish in the background")
-	pos, err := a.parse(s, fs, args)
-	if err != nil {
-		return err
+// publishPort is "juist publish PORT": the HTTP server on this host's port
+// published under this device's own name, as juist share does a file.
+func (a *app) publishPort(port string, dur time.Duration, bg bool) error {
+	if dur < 0 || dur > maxShare {
+		return a.usageErr("--for must be between 1s and 7d")
 	}
-	if time.Duration(dur) < 0 || time.Duration(dur) > maxShare {
-		return errors.New("--for must be between 1s and 7d")
+	if !isPort(port) {
+		return a.usageErr("%q is not a port", port)
 	}
-	port, err := strconv.ParseUint(pos[0], 10, 16)
-	if err != nil || port == 0 {
-		return fmt.Errorf("%q is no port", pos[0])
-	}
-	// IPv4's loopback, or IPv6's where only it answers, as a server bound to
-	// localhost may be.
-	to := ""
-	for _, host := range []string{"127.0.0.1", "::1"} {
-		if c, err := net.DialTimeout("tcp", net.JoinHostPort(host, pos[0]), time.Second); err == nil {
-			c.Close()
-			to = net.JoinHostPort(host, pos[0])
-			break
-		}
-	}
-	if to == "" {
-		to = net.JoinHostPort("127.0.0.1", pos[0])
-		a.warn("nothing answers on %s yet", to)
-	}
-	return a.shareLocal(ipc.ShareRequest{To: to}, time.Duration(dur), *bg, func(name string) string {
+	to := localService(a, port)
+	return a.shareLocal(ipc.ShareRequest{To: to}, dur, bg, func(name string) string {
 		return fmt.Sprintf("publishing %s at https://%s", to, name)
 	})
-}
-
-// publishesPort reports whether args are juist publish's PORT form: a
-// number first, past --for and its value and a network's name, that names
-// no network.
-func publishesPort(a *app, args []string) bool {
-	var words []string
-	for i := 0; i < len(args); i++ {
-		switch w := args[i]; {
-		case w == "--for" || w == "-for" || w == "-t" || w == "--t":
-			i++
-		case strings.HasPrefix(w, "-"):
-		default:
-			words = append(words, w)
-		}
-	}
-	if len(words) > 1 && a.namesNetwork(words[0]) {
-		words = words[1:]
-	}
-	return len(words) > 0 && strings.Trim(words[0], "0123456789") == "" && !a.namesNetwork(words[0])
 }
 
 // shareLocal publishes this device under its own name, as req says, for dur,
@@ -156,10 +108,10 @@ func (a *app) shareLocal(req ipc.ShareRequest, dur time.Duration, background boo
 		return err
 	}
 	if st.Instance != 0 {
-		return errors.New("juist shares from the default network's instance alone, for now")
+		return errors.New("juist shares only from the default instance, for now")
 	}
 	if a.host.serveScript == "" {
-		return errors.New("juist ends TLS on Linux and FreeBSD alone")
+		return errors.New("juist ends TLS only on Linux and FreeBSD")
 	}
 	if background && a.ready == nil {
 		return a.shareInBackground(st)
@@ -217,7 +169,7 @@ func (a *app) shareLocal(req ipc.ShareRequest, dur time.Duration, background boo
 	case err != nil && a.ctx.Err() != nil && !said:
 		return nil // stopped before it started
 	case err != nil && a.ctx.Err() == nil && said:
-		return errors.New("the share ended with juistd")
+		return errors.New("the share ended: juistd stopped")
 	case err != nil && a.ctx.Err() == nil:
 		return err
 	case said:
@@ -286,7 +238,7 @@ func (a *app) listShares() error {
 		return err
 	}
 	if why := shs[0].NotShared; why != "" {
-		a.warn("reached by nobody: %s", why)
+		a.warn("unreachable: %s", why)
 	}
 	return nil
 }
@@ -309,10 +261,9 @@ func (a *app) stopShare(arg string) error {
 		a.ok("unchanged: not sharing")
 		return nil
 	case arg == "" && len(stop) > 1:
-		return fmt.Errorf("this device holds %d shares\nhint: name one as juist share lists it: juist share --stop FILE|DIR|PORT|URL",
-			len(stop))
+		return a.usageErr("%d shares; name the one to stop", len(stop))
 	case len(stop) == 0:
-		return fmt.Errorf("%s is not shared\nhint: juist share lists what is", arg)
+		return fmt.Errorf("%s is not shared\nhint: juist share lists the shares", arg)
 	}
 	for _, sh := range stop {
 		err := d.unshare(sh.Path)
@@ -377,7 +328,7 @@ func (a *app) sayShare(st *ipc.Status, what string, until time.Time, first bool)
 		a.warnFirewalled(st, sharePort)
 	}
 	if first && !slices.ContainsFunc(st.Devices, func(d ipc.Device) bool { return slices.Contains(d.Roles, types.RoleIngress) }) {
-		a.warn("the network has no ingress, so nothing reaches it from the internet")
+		a.warn("the network has no ingress: the internet cannot reach it")
 	}
 }
 
@@ -538,7 +489,7 @@ func shareSummary(shs []ipc.Share, paint func(code, s string) string) string {
 	}
 	line := count(len(shs), "share")
 	if why := shs[0].NotShared; why != "" {
-		return paint("33", line+", reached by nobody: "+why)
+		return paint("33", line+", unreachable: "+why)
 	}
 	return line
 }

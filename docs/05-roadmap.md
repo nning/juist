@@ -127,8 +127,9 @@ device or key gains is weakness 10 in [02-threat-model.md](02-threat-model.md).
 renumber NETWORK DEVICE ADDRESS --finish` moves a device and retires its old
 address at once, by the deadline `types.RetireAtOnce`, with no schema change.
 The old address stays held against collisions until the next plain
-`--finish` or the device's next move; `juist network` lists what is held, and
-`juist status` names the devices not told yet.
+`--finish` or the device's next move, from schema 25 until another device
+takes it (M28, step 8); `juist network` lists what is held, and `juist
+status` names the devices not told yet.
 
 ## M6 — Exit nodes and subnet routers
 
@@ -893,8 +894,9 @@ measured after it (2026-10-24). What it built:
   following them would establish the VPN again, which ends every connection
   through it. The reverse names of the network's addresses are answered
   too, a member's by its name, so that no resolver outside learns them.
-  Public names pointed at members stay off, as the app has no `juist names
-  on`.
+  Public names pointed at members followed on 2026-11-06: **Public
+  names** in Details is the app's `juist names on`, off by default, and
+  Details lists each name, its member and why it resolves publicly.
 - **At an address of the overlay** (`types.ResolverAddr`): the network's
   prefix and ::53, routed into the tunnel and taken by `conn` from the
   device's own packets before the engine, into a network stack of its own
@@ -1276,26 +1278,64 @@ interface, which `establish()` replaces.
   leaving one network keeps the other's tunnels; (4) both networks' names
   resolve.
 
+## Publishing in one command
+
+**Done** on 2026-11-07, released with M28. `juist publish` is one command
+without subcommands: `NAME PORT|HOST:PORT` publishes here and has juist end
+TLS, `NAME [PORT] --on DEVICE` is an admin's entry for another device,
+`NAME status-page` the status page, `NAME` alone serves a name published
+here, `PORT` shares under the device's own name, `--stop [NAME|PORT]` ends
+one or, alone, all serving. `add`, `remove` and `serve` are gone. The
+listing heads the domain's labels with the domain, spells out names of
+their own, and says each name's state in a word (`serving`, `unserved`, `unpublished`, `failing`, `offline`); `juist
+health` on a device names the admin's command for a name it sends somewhere
+that is not published.
+
+Who may publish stays as it was: the role `publish` shares under the
+device's own name, every other name is an admin's change. Self-chosen names
+for holders of the role were weighed and dropped: announced by gossip, a
+label frees when its device is offline for ten minutes and another holder
+gets a certificate for it; signed by the device into the log, it costs a
+schema and a change kind admins did not approve. A later plan that wants
+them has to answer both.
+
+No schema: the log, IPC and juistd are as they were. `make ci-vm
+STAGES=lab` passed at 4ebec19
+([12-validating.md](12-validating.md#the-last-privileged-run)); reviewed
+in M28's rounds 13 to 16 and its closing round.
+
 ## M28 — Governing from the phone, and networks of phones alone
+
+**Done** on 2026-11-11: a phone founds a network and governs it with an
+admin key sealed in Keystore behind the user's authentication, offers its
+backup, invites by QR code, code and link, grants roles and removes
+members; port mapping on Linux, FreeBSD and the app; Tailscale's public
+DERP as the network's setting (schema 24); names of their own (schema
+23); old addresses free once retired (schema 25); and publishing in one
+command. Reviewed in 22 rounds, the closing one (18) over the whole diff
+and four follow-ups on its fixes, the last confirming nothing above minor;
+validated by `make ci-vm` and `make android-smoke` at M28
+([12-validating.md](12-validating.md), "The last privileged run").
+Exit criterion (1) holds in `mobile`'s tests and (4) passed by hand in the
+emulator; (2) and (3), the hand tests on phones, had not run when the user
+published it. Core 8 098 lines, audit scope 29 000, measured after it
+(2026-11-11).
 
 A network whose every member is an Android phone, created, invited to,
 governed and kept fresh from the app, whose members reach each other without
 a VPS: a family's phones, and a peer-to-peer chat between them. A relay
 member stays the answer that always works; this plan makes it unnecessary
 where the networks the phones are on allow it. Before the audit, so that M33
-covers admin keys on a phone. A phone as exit node is not planned.
+covers admin keys on a phone. A phone as exit node or as relay is not
+planned.
 
 The case it has to serve: two phones, both behind NAT that punches nothing,
 such as two carriers' mobile data, and nothing else of their own. Two such
 NATs meet only through a third party both reach, so where IPv6 gives the pair
-no path, that is the public DERP of step 4.4, and being in one place is the
+no path, that is the public DERP of step 3.3, and being in one place is the
 only way to need none.
 
-1. **Measure.** Which pairs punch directly today: Wi-Fi to Wi-Fi, Wi-Fi to
-   mobile and mobile to mobile, across Telekom, Vodafone and O2, IPv4 and
-   IPv6, and each carrier's NAT mapping and filtering. Step 4 is judged by that
-   table, so it is taken first.
-2. **Governing from the app.** Genesis on the phone, its admin key sealed by
+1. **Governing from the app.** Genesis on the phone, its admin key sealed by
    Keystore as `node.keys` is (M10), under a key that requires the user's
    authentication: every change using it — genesis, invite, approve, remove,
    grant or revoke a role — asks for the phone's biometric first, the device
@@ -1304,34 +1344,33 @@ only way to need none.
    through the DHT's rendezvous), shows the words, votes, approves carried
    changes (M5b), removes a device and grants roles. Exporting the admin key,
    as M12's line or as the app's password-encrypted file to a cloud folder the
-   user picks, asks for that authentication too. Genesis asks for a second
-   admin phone or such a backup, since a lost phone holding the only admin key
-   ends every further change.
-3. **Freshness.** A network of phones alone takes no voucher: phones rest, so
+   user picks, asks for that authentication too. Genesis offers such a
+   backup and never forces one (decided 2026-11-07): a phone lost with the
+   only admin key ends every further change, but every copy is one more place
+   the key can be taken from. In place: genesis, the backup (the line or the
+   sealed file, which `juist admins import` reads), invites by QR code, code
+   and link, roles and removal; a change the key alone does not authorize is
+   carried. Votes on carried changes, a second admin phone and the joining
+   name in the words moved to
+   [Later — Phones without a relay](#later--phones-without-a-relay).
+2. **Freshness.** A network of phones alone takes no voucher: phones rest, so
    a voucher there would check nothing at M = 1 and cost availability, and
    freshness stays unchecked (`juist status` says so), removals still
    spreading by gossip, the epoch bump and the rotated group secret. In a
    mixed network a phone may hold the `voucher` role and vouch while its
-   service runs.
-4. **Reach without a VPS**, cheapest first:
+   service runs. In place: a network the app founds gives the phone no
+   role, and the app grants `voucher` to a member.
+3. **Reach without a VPS**, cheapest first:
    1. **IPv6.** Carriers give phones global addresses, so between two of
-      them only stateful filters stand, which a simultaneous open may pass;
-      step 1 says how often.
+      them only stateful filters stand, which a simultaneous open may pass.
    2. **Port mapping.** A phone on a home Wi-Fi maps a port on the router by
       UPnP, NAT-PMP or PCP, and one reachable side is enough for a pair. That
-      is magicsock's portmapper, which juist does not link today
-      (`tailscale.com/feature/portmapper`); Linux and FreeBSD members gain it
-      too. It opens a port on someone's router, so `juist status` and the app
-      say so, and it can be switched off.
-   3. **A phone relays,** if step 1's table asks for it; open. A member
-      reachable by either of the above relays for those that are not, granted `relay` by the quorum as any relay is, and
-      by default on unmetered Wi-Fi and mains power alone. Either M3b's DERP
-      relay in the app's process, which wants a TCP port mapped too, or
-      Tailscale's peer relays (UDP, `feature/relayserver`), whose candidates
-      magicsock takes from the packet filter's `peercap.RelayTarget`, which
-      juist would set from the role. Which, and whether a peer relay's
-      allocation needs a DERP path, is read in the pinned module first.
-   4. **A public DERP server**, last, where no member relay serves the pair.
+      is magicsock's portmapper, linked through conn's own hook, on Linux and
+      FreeBSD members too; it opens a port on someone's router, so `juist
+      status` and the app say so, and `juist set --port-mapping=false` and
+      the app's switch turn it off. In place; what is left is exit
+      criterion (3) by hand.
+   3. **A public DERP server**, last, where no member relay serves the pair.
       It is an untrusted public helper as the STUN servers and the DHT are
       ([01-requirements.md](01-requirements.md)): it carries WireGuard's
       ciphertext and can delay or drop it, nothing more, and it passes HTTPS
@@ -1345,44 +1384,64 @@ only way to need none.
       unless its admins choose one, and either can change it later. A laptop
       in a network that has one uses it too, as phones' last way to it. What its
       operator sees is weakness 5 in [02-threat-model.md](02-threat-model.md).
-      Open: which servers the default names. Tailscale's are run for its
-      customers, used by Headscale by default and tolerated, not promised; a
-      DERP the juist project runs is central infrastructure, though nobody
-      has to trust it.
-   5. **Otherwise** the pair stays sought, as today, and the app says so.
+      Decided (2026-11-07, revising 2026-11-06): the default is
+      Tailscale's public regions, as the build embeds them
+      (`net/dnsfallback`), run for its customers and tolerated, not
+      promised; no server of the project's own. In place: the setting is
+      `types.KindSetPublicDERP` (schema 24), `juist network derp
+      on|off`, on at genesis in the app; its regions are numbered
+      apart from member relays' and scored as homes below them. A member
+      relay netcheck does not measure still loses to them, which the
+      handbook says; its fix is [Later](#later--phones-without-a-relay)'s.
+   4. **Otherwise** the pair stays sought, as today, and the app says so.
 
    Rejected: public TURN servers, which magicsock does not speak.
-5. **Joining without a relay.**
-   1. **In one place.** By code on the same Wi-Fi, or on a hotspot the
-      inviting phone opens, which needs nothing else; that the invite and
-      mDNS listen on the hotspot's interface is tested.
-   2. **From afar.** A link names the network's public DERP as it names a
-      member's relay (M10). Forwarding at a member relay is juist's own HTTP
-      endpoint (`relay/forward`), which a public DERP server does not have,
-      so the host and the guest, under a key of its own, run the handshake as
-      DERP packets in the region the link names; the server sees only what
-      the link's secret seals. DERP drops packets when a queue fills, so the
-      handshake carries its own retransmission.
-6. **Reaching an app on a phone.** M10 tried a phone's connections out, not
+4. **Joining without a relay in one place:** by code or QR code on the same
+   Wi-Fi, which mDNS finds on every interface (M10). Joining on the inviting
+   phone's hotspot and from afar through the public DERP moved to
+   [Later](#later--phones-without-a-relay).
+5. **Reaching an app on a phone.** M10 tried a phone's connections out, not
    in. An app listening on the phone's overlay address takes a connection
    from another member through `VpnService`, tested. Without an access policy
    (M14) every member reaches every port a phone's apps open.
 
+6. **Names of their own** (schema 23, `types.SchemaOwnNames`, done
+   2026-11-06). A member publishes a host name outside the network's
+   domain, such as `photos.example.net`, whose DNS its owner points at the
+   ingresses: `juist publish photos.example.net --on nas`. Stored as the
+   published name's label, whole, which earlier builds refuse; the ingress,
+   the terminator and members' resolution take it as a name under the
+   domain. Never for members alone, as the policy
+   names labels. One member's alone, and no name an override points at
+   another; the domain cannot move over it. The trade: a quorum points any
+   name at a member for every member without each device's word, as it
+   does the domain; an approval says so.
+
+7. **Old addresses free once retired** (schema 25,
+   `types.SchemaTakeRetired`, done 2026-11-07). An old address retired at
+   its deadline or by `--finish` no longer waits for a plain `--finish`:
+   another device's move takes it, and a subnet route over an old range
+   takes the range, each ending the retirement of what it takes in the same
+   record. The log stays time-free, so the CLI refuses either before the
+   deadline; devices not yet told still send there, which the CLI warns of
+   and an approval says.
+
 The chat is M35's, whose store holds a message for a phone that is off on
 the members that are on.
 
-- **Exit criteria:** (1) in `make interop`, three emulators and no other
-  member: one creates the network, invites the others by QR code and by code,
-  removes one, and the rest keep freshness through a voucher phone; (2) by
-  hand, phones on two carriers' mobile data and one on a home Wi-Fi with UPnP
-  reach each other, directly or through the phone at home, and each status
-  says which; (3) an app on one emulator accepts a TCP connection from
-  another; (4) in `make interop`, two emulators, each behind a NAT that
-  picks a new port per destination, with nothing else but the harness's
-  DHT and a DERP server standing for a public one: one creates the network
-  and chooses that DERP, the other joins by link, both reach each other and
-  keep freshness, and they are sought once the quorum withdraws it; (5) by
-  hand, a phone joins by code on the inviting phone's hotspot.
+- **Exit criteria:** (1) in `mobile`'s tests, a phone's core founds a
+  network in which it holds no role, invites with its admin key and admits
+  only once the words are confirmed, grants and revokes `voucher`, and
+  removes a member; (2) by hand, a phone creates a network in the app, keeps
+  the backup, invites a second phone by QR code and a computer by code on one
+  Wi-Fi, and removes the computer, which the other phone learns, both
+  statuses saying freshness is unchecked; (3) by hand, two phones on mobile
+  data reach each other, through Tailscale's DERP where not directly, and
+  each status says which; one on a home Wi-Fi with UPnP maps a port, which
+  status says; (4) in the emulator, a listener on the phone's overlay
+  address takes a TCP connection from another member.
+  (4) passed by hand on 2026-11-08 ([12-validating.md](12-validating.md),
+  "Reach an app on a phone"); (1) holds in `mobile`'s tests.
 
 
 ## M29 — Family Link, and a phone on mobile data
@@ -1522,8 +1581,7 @@ audit scope as M17 to M31 leave it, so that M33's audit goes to what a
 reader cannot find, and M31's models beside the code they stand for. It
 starts from the fuzzing:
 
-- **Fuzzing.** `waiting.Decode`, `types.DecodeLease` and the helper's
-  protocol have no target, and no `fuzz-long` run is recorded in
+- **Fuzzing.** No `fuzz-long` run over every target is recorded in
   [12-validating.md](12-validating.md).
 - **A settled orphan that alarms later,** found in M19's review: a change
   that lost fork choice and was redone is probed against the head as it is
@@ -1832,6 +1890,37 @@ What it would have to keep: M14's policy, enforced in the confiner today,
 which kernel traffic passes by, so in nftables or pf; M15's preshared keys
 and their renewal, through `wgctrl`; and a port of its own beside
 magicsock's.
+
+## Later — Phones without a relay
+
+Not scheduled; moved out of M28 on 2026-11-08. M33's audit covers admin keys
+on a phone without what is here.
+
+1. **Governing from the app, the rest:** votes on changes carried to the
+   phone, a second admin phone, and binding the name a joining device asks
+   for into the words, which today cover its keys alone, on the command line
+   too.
+2. **Member relays measured apart from netcheck.** A member relay netcheck
+   does not measure loses the home to Tailscale's regions: one whose UDP port
+   is closed while STUN passes (Tailscale's STUN keeps netcheck off HTTPS),
+   or one far away (netcheck stops once three regions answered). Quieting
+   Tailscale's STUN (M28 review 8) and benching its regions in netcheck until
+   no member relay is reached (review 9) each left devices without any home
+   in other cases (reviews 9, 10), and were taken back.
+3. **Joining on a hotspot,** the inviting phone's, tested: that the invite
+   and mDNS listen on its interface.
+4. **Joining from afar through the public DERP.** A link names the network's
+   public DERP as it names a member's relay (M10). Forwarding at a member
+   relay is juist's own HTTP endpoint (`relay/forward`), which a public DERP
+   server does not have, so the host and the guest, under a key of its own,
+   run the handshake as DERP packets in the region the link names; the
+   server sees only what the link's secret seals. DERP drops packets when a
+   queue fills, so the handshake carries its own retransmission.
+5. **Phones in the lab:** in `make interop`, three emulators and no other
+   member, one governing the others; and two emulators, each behind a NAT
+   that picks a new port per destination, with nothing else but the
+   harness's DHT and a DERP server standing for a public one, joining by link
+   and keeping freshness until the quorum withdraws it. Not on a 4-core host.
 
 ## Deferred (post-v1, schema must not preclude)
 

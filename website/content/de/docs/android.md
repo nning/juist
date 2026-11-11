@@ -19,12 +19,12 @@ geht an juist vorbei.
 Das Telefon kann nicht:
 
 - in mehr als vier Netzen sein;
-- [öffentliche Namen]({{< relref "docs/names" >}}) einschalten, sie lösen
-  sich dort also öffentlich auf;
 - ein Subnetz routen oder [Exit-Node]({{< relref "docs/exit-nodes" >}}) sein,
   wohl aber beides nutzen;
-- Geräte einladen, einen Admin-Schlüssel halten oder weiterleiten.
-  Einladungen kommen vom Rechner eines Admins.
+- weiterleiten.
+
+Es kann ein eigenes Netz gründen und dessen Admin-Schlüssel halten
+([Ein Netz anlegen](#creating-a-network)).
 
 ## Die App installieren
 
@@ -116,6 +116,57 @@ Braucht das Netz die Stimmen mehrerer Admins, zeigt das Telefon
 [Geräte einladen]({{< relref "docs/invites" >}}) erklärt Code, Link und
 Wörter.
 
+## Ein Netz anlegen {#creating-a-network}
+
+{{< screens >}}
+create: Der Name des Netzes und der des Telefons
+backup: Das Break-Glass-Geheimnis, einmal gezeigt, und die Sicherung des Admin-Schlüssels
+invite: QR-Code und Code einer Einladung
+invite_compare: Die Wörter, die ein beitretendes Gerät zeigt, verglichen, bevor es aufgenommen wird
+member_admin: Die Rollen eines Mitglieds, und es entfernen
+{{< /screens >}}
+
+**Netz anlegen**, unter den Knöpfen der Begrüßung, gründet ein Netz mit dem
+Telefon als erstem Gerät, wie `juist create` auf einem Rechner. Das Telefon
+hält seinen Admin-Schlüssel, im Android Keystore hinter Fingerabdruck,
+Gesicht oder Displaysperre versiegelt: Jede Änderung, die ihn braucht, fragt
+zuerst danach, und keine geschieht, solange das Telefon gesperrt ist. Ohne
+Displaysperre bittet die App, eine einzurichten.
+
+Gleich danach zeigt die App einmal das Break-Glass-Geheimnis des Netzes:
+Bewahre es sicher auf, getrennt vom Telefon. Damit beendet `juist network
+disable` das Netz für immer, sobald zu wenige Admin-Schlüssel übrig sind, um
+es zu ändern ([Admin-Schlüssel]({{< relref "docs/keys" >}})). Derselbe
+Bildschirm bietet eine Sicherung des Admin-Schlüssels an, die du auslassen
+kannst: Geht ein Telefon mit dem einzigen Admin-Schlüssel verloren, ist keine
+Änderung mehr möglich, aber jede Kopie ist eine Stelle mehr, an der ihn
+jemand finden kann. Eine Kopie kommt als die Zeile, die `juist admins export`
+ausgibt, in einen Passwortmanager, oder als Datei, mit einem Passwort von
+mindestens zwölf Zeichen versiegelt, in einen Ordner deiner Wahl. `juist
+admins import` liest beides auf einem Rechner, und **Admin-Schlüssel
+sichern** im Menü des Statusbildschirms wiederholt es.
+
+Ein Netz aus Telefonen hat kein eigenes Relay, seine Mitglieder treffen
+sich deshalb über Tailscales öffentliche DERP-Server, wo sie sich nicht
+direkt erreichen ([Relays]({{< relref "docs/relays" >}}#public-derp)); die
+App sagt das beim Anlegen. Einen Schalter dafür hat sie nicht: `juist network
+derp off` schaltet die Server auf einem Rechner ab, der dem Netz beigetreten ist und
+den Admin-Schlüssel importiert hat (`juist admins import`), wie
+[Ein Netz nur aus Telefonen]({{< relref "docs/use/phones" >}}) zeigt. So ein
+Netz hat auch keinen Voucher, seine Freshness bleibt also ungeprüft: Ein
+entferntes Telefon erfährt davon, sobald es eines trifft, das es weiß.
+
+**Gerät einladen**, unter den Geräten, bietet eine Einladung an: ihren
+QR-Code, den das andere Gerät scannt, ihren Code fürs selbe WLAN und einen
+Link zum Teilen. Fragt das Gerät nach dem Beitritt, zeigen beide vier Wörter;
+stimmen sie überein, nehmen **Dieselben Wörter** und dein Fingerabdruck es
+auf. Der Bildschirm eines Geräts zeigt dem Admin seine Rollen, **Relay**,
+**Voucher** und **Exit-Node** (bei einem Telefon selbst nur **Voucher**),
+und **Aus dem Netz entfernen**. Eine Änderung, die Stimmen anderer Admins
+braucht, wird signiert und wartet auf sie, und die App sagt das. Den
+letzten Voucher des Netzes zu entziehen, wonach die Freshness ungeprüft
+bleibt, fragt vorher nach.
+
 ## Mehrere Netze {#several-networks}
 
 {{< screens >}}
@@ -144,7 +195,8 @@ Schalter schaltet das VPN für alle ein und aus.
 - Ein Alarm in einem Netz lässt die Tunnel der anderen stehen.
 - **Netz verlassen** im Menü eines Netzes löscht die Schlüssel des Telefons
   dafür und beendet seine Tunnel dorthin; die anderen Netze bleiben, wie sie
-  sind. Das Netz führt das Telefon weiter, bis ein Admin es entfernt.
+  sind, ebenso ein Admin-Schlüssel, den das Telefon hält. Das Netz führt das
+  Telefon weiter, bis ein Admin es entfernt.
 - Eine Einladung verrät nicht, für welches Netz sie ist. Ein Beitritt in ein
   Netz, in dem das Telefon schon ist, wird zurückgenommen, und die App nennt
   die Aufnahme, die ein Admin entfernen sollte.
@@ -202,17 +254,28 @@ details: Die Einstellungen des Telefons, Schema, Relays und Subnetze des Netzes 
 [Statusseite]({{< relref "docs/publishing" >}}#status-page) über den Zustand hinaus
 zeigen: das Schema des Netzes neben dem der App, den Kopf des Logs, wann das
 Telefon seine Sicht auf das Netz zuletzt aktualisiert hat, die Relays und das,
-über das das Telefon läuft, die Namen des Netzes, seine Subnetze und die
+über das das Telefon läuft, was es am Netz darunter gemessen hat (die Zeile
+`Underlay` von `juist status`), die Namen des Netzes, seine Subnetze und die
 letzten Änderungen im Log, wie `juist log` sie listet.
 
-Dort liegen auch die zwei Einstellungen des Telefons:
+Dort liegen auch die vier Einstellungen des Telefons:
 
 - **Namen im Netz**: Jede Abfrage geht an juist, das die Namen des Netzes
   beantwortet. Aus, behält das Telefon sein eigenes DNS und löst keinen davon
   auf, wie `juist set --dns=false` auf einem Rechner.
+- **Öffentliche Namen**: Die [öffentlichen Namen]({{< relref "docs/names" >}}),
+  die das Netz auf Mitglieder zeigen lässt, etwa die Website eines Servers,
+  führen durch den Tunnel zu diesem Mitglied, wie `juist names on` auf einem
+  Rechner. Aus, wie anfangs, lösen sie sich öffentlich auf. Darunter listet
+  **Öffentliche Namen** jeden mit seinem Mitglied und ob das Telefon ihn
+  durch den Tunnel erreicht oder, und warum, öffentlich.
 - **Nur HTTPS**: Das Telefon erreicht Relays nur über HTTPS auf Port 443, wie
   mit `juist set --https-only` ([Netze, die nur HTTPS
   durchlassen]({{< relref "docs/https-only" >}})).
+- **Port-Mapping**: In einem WLAN, dessen Router UPnP, NAT-PMP oder PCP
+  anbietet, lässt das Telefon ihn einen Port öffnen, damit Mitglieder es
+  direkt erreichen; aus, bittet es um keinen, wie `juist set
+  --port-mapping=false`.
 
 Unter **Diagnose** zählt die App, wie oft sie das VPN eingerichtet hat und wie
 ihre Abfragen liefen: wie viele fehlschlugen oder langsam waren, und welche.
@@ -237,7 +300,8 @@ Solange das VPN an ist, geht jede Namensabfrage auf dem Telefon an juist in
 der App. Es beantwortet die [Namen]({{< relref "docs/names" >}}) des Netzes,
 etwa `nas.home.juist` oder nur `nas`, und die unter der Domain des Netzes
 [veröffentlichten]({{< relref "docs/publishing" >}}) Namen, die dann direkt
-zu ihrem Gerät führen. Auch Rückwärtsabfragen der Adressen des Netzes
+zu ihrem Gerät führen, und mit **Öffentliche Namen** in **Details** die
+öffentlichen Namen, die auf Mitglieder zeigen. Auch Rückwärtsabfragen der Adressen des Netzes
 beantwortet es. Alle anderen Namen gehen wie ohne juist an das Netz, in dem
 das Telefon ist, über DNS over TLS, wenn Privates DNS auf automatisch steht
 und es nutzen würde. Schaltest du das VPN aus, bekommt das Telefon sein
@@ -312,6 +376,14 @@ Telefon führt das Netz weiter.
 - Die Schlüssel des Telefons sind mit einem AES-256-Schlüssel im Android
   Keystore versiegelt, im Sicherheitschip des Telefons, wenn es einen hat.
   Eine Kopie der App-Dateien lässt sich auf keinem anderen Telefon öffnen.
+- Ein Admin-Schlüssel ist mit einem zweiten Keystore-Schlüssel versiegelt,
+  der sich nur direkt nach deiner Anmeldung öffnet, für diese eine Änderung,
+  und nie, solange das Telefon gesperrt ist; die App löscht ihre Kopie nach
+  der Änderung, und juist behält keine. Entfernst du die Displaysperre,
+  vernichtet Android diesen Keystore-Schlüssel: Die damit versiegelten
+  Admin-Schlüssel sind dann verloren, nur ihre Sicherung bringt sie zurück.
+  Ein als Zeile kopierter Schlüssel bleibt in der Zwischenablage, bis etwas
+  anderes kopiert wird.
 - Nichts von juist landet in einem Backup oder auf einem neuen Telefon. Ein
   neues Telefon tritt mit einer eigenen Einladung bei.
 - Die Kamera liest nur den QR-Code. Nichts, was sie sieht, wird gespeichert

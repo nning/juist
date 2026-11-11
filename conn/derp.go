@@ -64,21 +64,28 @@ const stunRegionScore = 1e6
 // and returns the regions the STUN servers took. Nothing at all returns nil,
 // which is how the engine is told there are no relays. httpsOnly keeps the
 // relays' names on 443 alone, and no STUN server; nameFirst puts a relay's
-// name in DNS before its addresses; local orders each relay's addresses.
-func derpMap(relays []Relay, stun []string, httpsOnly, nameFirst bool, local Networks) (*tailcfg.DERPMap, map[tailcfg.DERPRegionID]bool) {
+// name in DNS before its addresses; local orders each relay's addresses;
+// public adds Tailscale's public regions, below every member relay.
+func derpMap(relays []Relay, stun []string, httpsOnly, nameFirst bool, local Networks, public bool) (*tailcfg.DERPMap, map[tailcfg.DERPRegionID]bool) {
 	stunRegions := map[tailcfg.DERPRegionID]bool{}
+	// A member relay's region is never Tailscale's, even where this device
+	// leaves the relay out: its peers send to the relay there.
+	members := map[tailcfg.DERPRegionID]bool{}
+	for _, r := range relays {
+		members[tailcfg.DERPRegionID(r.Region)] = true
+	}
 	if httpsOnly {
 		relays = slices.DeleteFunc(slices.Clone(relays), func(r Relay) bool { return r.Name == "" })
 		stun = nil
 	}
-	if len(relays) == 0 && len(stun) == 0 {
+	if len(relays) == 0 && len(stun) == 0 && !public {
 		return nil, stunRegions
 	}
 	dm := &tailcfg.DERPMap{
 		Regions: make(map[tailcfg.DERPRegionID]*tailcfg.DERPRegion, len(relays)),
 		// Nothing would add Tailscale's own regions here, since this map is
-		// built whole. Stated because a relay reached through a third party
-		// is the thing this design exists to avoid.
+		// built whole. Stated because those come only where the network
+		// names them, below.
 		OmitDefaultRegions: true,
 	}
 	for _, r := range relays {
@@ -107,6 +114,15 @@ func derpMap(relays []Relay, stun []string, httpsOnly, nameFirst bool, local Net
 		}
 		dm.Regions[id] = reg
 	}
+	scores := map[tailcfg.DERPRegionID]float64{}
+	if public {
+		for _, r := range tailscaleRegions() {
+			if dm.Regions[r.RegionID] == nil && !members[r.RegionID] {
+				dm.Regions[r.RegionID] = r.Clone()
+				scores[r.RegionID] = publicRegionScore
+			}
+		}
+	}
 	// The STUN servers share one region, the highest free one, below which
 	// member relays derive theirs; a collision gives the relay the region.
 	// One: netcheck measures the three nearest regions and the home, and
@@ -133,7 +149,10 @@ func derpMap(relays []Relay, stun []string, httpsOnly, nameFirst bool, local Net
 	if len(reg.Nodes) > 0 {
 		dm.Regions[next] = reg
 		stunRegions[next] = true
-		dm.HomeParams = &tailcfg.DERPHomeParams{RegionScore: map[tailcfg.DERPRegionID]float64{next: stunRegionScore}}
+		scores[next] = stunRegionScore
+	}
+	if len(scores) > 0 {
+		dm.HomeParams = &tailcfg.DERPHomeParams{RegionScore: scores}
 	}
 	return dm, stunRegions
 }

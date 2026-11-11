@@ -13,10 +13,13 @@ import io.juist.app.core.Freshness
 import io.juist.app.core.Member
 import io.juist.app.core.NamesView
 import io.juist.app.core.NetworkView
+import io.juist.app.core.PhoneSettings
+import io.juist.app.core.PublicName
 import io.juist.app.core.Reach
 import io.juist.app.core.Severity
 import io.juist.app.core.State
 import io.juist.app.core.Tunnels
+import io.juist.app.core.Underlay
 
 /** The moment every screenshot is taken at, in Unix seconds. */
 const val NOW = 1_790_000_000L
@@ -41,7 +44,6 @@ val sampleView = NetworkView(
     tunnels = Tunnels(live = 3, total = 5, checked = NOW - 20),
     names = NamesView(domain = "home.juist", own = listOf("pixel-8.home.juist"), resolved = true),
     alarms = listOf(
-        Alarm("seeking", Severity.Info, names = listOf("desktop")),
         Alarm("silent", Severity.Info, names = listOf("printer"), count = 1),
     ),
     updated = NOW - 120,
@@ -92,8 +94,11 @@ val servicesMember = sampleView.members[1].copy(
 
 /** What juist status says beyond the state, with a subnet in use and one the LAN covers. */
 val detailsView = sampleView.copy(
+    settings = PhoneSettings(publicNames = true),
+    names = sampleView.names!!.copy(public = listOf(PublicName("blog.example.org", "vps"))),
     details = Details(
         schema = 22, appSchema = 22, epoch = 7, head = "3O72DZHV3GMB", relays = 1, installed = 1, home = "vps",
+        underlay = Underlay(udp = true, ipv4 = true, ipv6 = true, mapping = true, offered = listOf("UPnP"), mapped = "203.0.113.7:41641"),
         subnets = listOf(
             SubnetRoute("192.168.178.0/24", "nas", inUse = true),
             SubnetRoute("10.20.0.0/16", "vps", why = "this device reaches it by a route of its own"),

@@ -22,12 +22,18 @@ keine und werden erreicht, sobald sie wieder senden. Ist der
 [Ingress]({{< relref "docs/publishing" >}}) des Netzes auch Relay, bedient er
 `relay.DOMAIN` auf 443 von selbst.
 
+Ein Netz, das
+[Tailscales öffentliche DERP-Server]({{< relref "docs/relays" >}}#public-derp)
+eingeschaltet hat, wie eines, das die Android-App anlegt, braucht dafür kein
+eigenes Relay: Tailscales Server bedienen auch 443.
+
 Ein Netz, das den Verkehr prüft und alles blockiert oder meldet, was kein
 HTTPS ist, verlangt mehr. Mit `juist set --https-only` schickt ein Gerät nur
 noch TLS an die Namen der Relays auf Port 443, dazu DNS-Anfragen nach diesen
 Namen. Es schickt kein WireGuard über UDP, sucht keine Pfade und nicht im LAN
 und nutzt weder den öffentlichen DHT noch STUN-Server. Jedes Paket läuft über
-ein Relay.
+ein Relay. Hat das Netz Tailscales Server eingeschaltet, schickt es TLS auch an
+deren Namen, und ein Netz, das den Verkehr prüft, sieht diese.
 
 ## Einrichten
 
@@ -115,13 +121,15 @@ Passwort.
 
 | Was du siehst | Was zu tun ist |
 |---|---|
-| `juist status`: `HTTPS  only, and no relay on 443` | gib einem Relay einen öffentlichen Namen: `sudo juist set --relay-name NAME` auf ihm |
+| `juist status`: `HTTPS  only, no relay on 443` | gib einem Relay einen öffentlichen Namen: `sudo juist set --relay-name NAME` auf ihm |
 | `juist health`: `warning: no relay on 443/tcp` | dasselbe |
+| `juist status`: `HTTPS  only, by Tailscale's public DERP` | nichts: das Gerät erreicht die anderen über Tailscales Server auf 443 |
 | `juist health`: `no answer from …: offline, or at no relay on 443` | das Gerät ist offline oder erreicht kein Relay mit Namen |
+| `juist health`: `no answer from …: offline, or not at Tailscale's DERP` | das Gerät ist offline, oder sein Netz sperrt Tailscales Server |
 | `juist health`: `no answer yet from … through its own relay on 443` | das Gerät läuft, denn sein Relay ist das, über das dieses Gerät geht, aber der Tunnel zu ihm steht noch nicht; kurz nach einem Beitritt verschwindet die Zeile binnen Minuten von selbst |
 | `juist health`: `no tunnel traffic from … through the relays on 443` | prüfe die Namen der Relays im DNS, und ob Port 443 sie erreicht |
-| `juist health`: `warning: … not at the relay on …, the one this device reaches it at` | das Gerät läuft, hält dort aber keine Verbindung: es spart Akku und wird erreicht, sobald es sendet, oder es läuft mit einem älteren juist |
-| `juist health`: `no answer from …: not at the relay on …` | das Gerät ist offline oder hält dort keine Verbindung; sobald feststeht, dass es offline ist, verschwindet die Zeile |
+| `juist health`: `warning: … not at …, the relay this device uses` | das Gerät läuft, hält dort aber keine Verbindung: es spart Akku und wird erreicht, sobald es sendet, oder es läuft mit einem älteren juist |
+| `juist health`: `no answer from …: not at …, the relay this device uses` | das Gerät ist offline oder hält dort keine Verbindung; sobald feststeht, dass es offline ist, verschwindet die Zeile |
 
 Meldet der Beitritt `the invite link names no relay on 443`, brauchst du einen
 neuen Einladungslink, erstellt, nachdem ein Relay einen Namen auf 443 bedient.

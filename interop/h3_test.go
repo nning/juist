@@ -39,9 +39,9 @@ func http3(t *testing.T, fb, lx *vm, work, chrome string) {
 		}
 	})
 	lx.run(t, "setsid -f sh -c '/tmp/probe web 8090 >/tmp/beacons.log 2>&1' </dev/null >/dev/null 2>&1")
-	fb.run(t, "juist publish add lx h3")
+	fb.run(t, "juist publish h3 --on lx")
 	lx.eventually(t, "ending TLS for the name and offering HTTP/3", 3*time.Minute,
-		"juist publish add h3 127.0.0.1:8090 --http3", has("ending TLS for h3.pub.example.org to 127.0.0.1:8090, with HTTP/3"))
+		"juist publish h3 127.0.0.1:8090 --http3", has("ending TLS for h3.pub.example.org to 127.0.0.1:8090, with HTTP/3"))
 	lx.eventually(t, "Alt-Svc on its answers over TCP, by Pebble's certificate", 3*time.Minute,
 		"curl -fsS -D - -o /dev/null --max-time 10 --cacert /tmp/pebble-root.pem --resolve h3.pub.example.org:443:"+fb.lanAddr+
 			" https://h3.pub.example.org/", has(`alt-svc: h3=":443"; ma=86400`))
@@ -81,5 +81,5 @@ func http3(t *testing.T, fb, lx *vm, work, chrome string) {
 	visit(fb.tcpOnly)
 	lx.eventually(t, "Chrome saying it came by HTTP/2 where no UDP reaches 443", time.Minute, "cat /tmp/beacons.log",
 		has("proto=h2"))
-	fb.run(t, "juist publish rm lx h3")
+	fb.run(t, "juist publish --stop h3 --on lx")
 }

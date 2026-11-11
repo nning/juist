@@ -66,8 +66,8 @@ them by number.
    except the one compaction leaves (weakness 14).
 4. **Cold-start availability.** First contact requires the public DHT or one reachable
    member. A network that is 100 % hard-NAT with zero relay-capable members cannot
-   form, unless it chooses a public DERP server (planned, see
-   [05-roadmap.md](05-roadmap.md), "Networks of phones alone"). DHT eclipse/Sybil
+   form, unless it chooses Tailscale's public DERP servers (`juist network
+   derp`). DHT eclipse/Sybil
    attacks can *delay* cold start; they can never corrupt membership. Mitigation:
    cache last-known endpoints, advertise "relay-capable" as a first-class role, warn
    when none exists.
@@ -106,10 +106,16 @@ them by number.
    link's secret, so a storage node learns that two addresses met through one
    opaque key within minutes of each other — who invited whom, to what, stays
    inside the seal. `juist invite --no-dht` and `juistd --no-dht` keep invites off
-   the DHT. A public DERP server a network chooses (planned) sees more than
-   either: every client's public address and node key, which keys exchange
-   packets with which, when and how much, for as long as the pair has no
-   other path. A relay on 443 is verified by WebPKI, not by the hash its
+   the DHT. Tailscale's public DERP servers, where a network chooses them,
+   see more than either: every device's public address, since each measures
+   their regions by STUN; the node key of every device homed there, as all
+   are in a network without a member relay, and of every one that meets a
+   peer there; which keys talk to which, since pairs that go direct still
+   meet at a home there to find and recheck their path; and how much they
+   exchange, for as long as a pair has no other path. They admit anyone, not the log's members alone: whoever knows a
+   member's key and home, a removed device among them, can send it frames
+   there, which the member drops unread, as from any unknown key. A relay on
+   443 is verified by WebPKI, not by the hash its
    announcement pins: a certificate any CA the device trusts issued for the
    name, forged or a company's that intercepts TLS, puts its holder in the
    relay's position, which is the one above, though a member cannot take
@@ -359,6 +365,24 @@ them by number.
    `--multicast=false` switch disables it even where policy permits it.
    Group lists and packet/rate bounds do not make permitted discovery
    messages private from the members that receive them.
+19. **An IPv4 address binds to a key only as freshly as the receiver's log
+    (schema 25).** A renumbering's old address, once retired, may be given to
+    another member, and an old range may be covered by a subnet route. A
+    device that has not applied that record still sends the address's
+    traffic to the former holder, which can read it and answer as the new
+    holder, over IPv4: until the old address's deadline by that device's
+    clock where it knew of the move; else until its freshness lease runs out
+    (48 h) where the network has vouchers. With none, as in a network of
+    phones, or where the former holder is itself a voucher, which a stale
+    device keeps its tunnel to, until that device next syncs; longer still
+    where an admin device keeps it stale (weakness 1).
+    Devices that applied the record drop the address from the former holder
+    at once; IPv6 addresses derive from the identity and are never given
+    again. The log is time-free, so a quorum whose clock runs ahead, or one
+    admin at quorum 1, can take an old address before its deadline; the CLI
+    refuses that by its own clock, and an approval says what a record takes.
+    Mitigation: take an old address once `juist status` names no device
+    "not told yet" of the move.
 
 ## Security design rules derived from the above
 

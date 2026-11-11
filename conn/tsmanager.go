@@ -104,6 +104,10 @@ type Options struct {
 	// a relay.
 	HTTPSOnly bool
 
+	// PortMapOff asks the router for no port mapping by UPnP, NAT-PMP or
+	// PCP, which would open a port on it for this node.
+	PortMapOff bool
+
 	// Proxy, with HTTPSOnly, is the HTTP proxy a connection to a relay's
 	// name goes through, by CONNECT, or nil for none.
 	Proxy func(host string) (*url.URL, error)
@@ -204,6 +208,8 @@ type tsManager struct {
 	stunRegions atomic.Pointer[map[tailcfg.DERPRegionID]bool]
 	// relayRegions are the member relays' regions in that map.
 	relayRegions atomic.Pointer[map[tailcfg.DERPRegionID]bool]
+	// regionScores are the map's home scores, as netcheck weighs them.
+	regionScores atomic.Pointer[map[tailcfg.DERPRegionID]float64]
 	// pinged are the relays netcheck reached by ICMP alone.
 	pinged pinged
 	// homes are the homes peers last said they had. Guarded by apply.
@@ -239,6 +245,14 @@ type tsManager struct {
 	httpsOnly bool
 	proxy     func(host string) (*url.URL, error)
 	named     atomic.Pointer[[]string]
+
+	// portMapOff is [Options.PortMapOff], and mapped the public address a
+	// port mapping on the router holds, as the last status said.
+	portMapOff atomic.Bool
+	mapped     atomic.Pointer[netip.AddrPort]
+
+	// publicDERP says Tailscale's public regions are in the relay set.
+	publicDERP atomic.Bool
 
 	// local are this host's networks, which a relay's addresses on come
 	// first in the map, and skip the device it leaves out of them.
@@ -378,7 +392,12 @@ func New(opts Options) (_ Manager, err error) {
 		}
 	}
 
+	m.portMapOff.Store(opts.PortMapOff)
+	engineMu.Lock()
+	buildingOff = &m.portMapOff
 	eng, err := wgengine.NewUserspaceEngine(logf, cfg)
+	buildingOff = nil
+	engineMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("conn: starting engine: %w", err)
 	}

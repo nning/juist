@@ -15,7 +15,7 @@ juist health
 
 Warnings start with `warning:`, and most are followed by a `hint:` line
 with the command to run. Plain lines name the devices this one does not
-reach. Where nothing is wrong, it says `nothing needs attention`.
+reach. A blank line sets each issue off from the next. Where nothing is wrong, it says `nothing needs attention`.
 `juist status` shows the network's state and details. Any local user may run
 both. [Status and devices]({{< relref "docs/status" >}}) explains what each
 line means.
@@ -80,6 +80,12 @@ firewall in front of it blocks port 41643/udp. Check that it is running. If it
 has a public address, open 41643/udp there. See
 [Relays]({{< relref "docs/relays" >}}).
 
+### `no answer from nas: offline, or not at Tailscale's DERP`
+
+The same in a network that has Tailscale's public DERP servers on, which
+carry a device whose UDP is blocked: `nas` is offline, or its network blocks
+Tailscale's servers.
+
 ### `no tunnel traffic from nas`
 
 `nas` is known, but no traffic arrives from it. Either port 41643/udp is
@@ -127,6 +133,22 @@ If firewalld on this device is the cause, `juist health` says
 `firewalld blocks juist0` and gives the command to fix it. See
 [Relays]({{< relref "docs/relays" >}}).
 
+### `firewalld blocks udp/41643, which the router maps to this device`
+
+The router opened a port for this device by UPnP, NAT-PMP or PCP, but
+firewalld here drops what arrives on it, so the others still cannot reach
+this device directly. Let the port in, as the hint says:
+
+```console
+hint: sudo firewall-cmd --permanent --zone=public --add-service=juist && sudo firewall-cmd --reload
+```
+
+Where juist cannot read the zone's ports, as without root under firewalld's
+server policy, a hint says `firewalld may block`; `juist status` does not
+count it, and `sudo juist health` says whether firewalld blocks the port. With
+ufw, `sudo ufw allow juist`; juist cannot read ufw's rules, so it does not
+warn there.
+
 ### `warning: log sync fails: nas runs a newer juist`
 
 nas runs a newer version of juist, whose changes this one cannot read. This
@@ -165,7 +187,7 @@ Or, if the network lets more than HTTPS out, run
 warning remains, the server reached under that name does not identify itself
 as that relay. Check the name's DNS.
 
-### `warning: juistd may bind any port below 1024, which no relay on 443 here needs`
+### `warning: juistd may bind ports below 1024, but no relay here uses 443`
 
 juistd was allowed to bind port 443 so that a relay could serve its public
 name. The name is gone, but the permission remains, for example because the
@@ -202,7 +224,7 @@ changes, so that nas can tell you the same. `juist devices` shows it as
 `outdated`. Where nas has no tunnel to this device at all, since its version
 knows no device that joined after the upgrade, it shows `no answer`.
 
-### `warning: nas runs an older juist, which applies no changes until updated`
+### `warning: nas runs an older juist and applies no changes until updated`
 
 The network was upgraded, and nas still runs a version of juist from before
 the upgrade. nas stays reachable, but it applies no change to the network
@@ -237,7 +259,7 @@ device keeps receiving changes, removals included. An admin redoes the lost
 changes, or runs `juist rotate group-secret`. Once that change reaches this
 device, it connects again.
 
-### `warning: this device's log is older than what the network's devices keep`
+### `warning: this device fell too far behind to catch up`
 
 The device was offline while the network changed and the other devices
 dropped the part of the log it still needed, which they do once they have seen

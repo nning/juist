@@ -104,7 +104,7 @@ func TestShareUntilStopped(t *testing.T) {
 	}
 	h.mustRun("network", "domain", "pub.example.org")
 	mustContain(t, h.mustRun("grant", "laptop", "publish"), "laptop: roles voucher, publish",
-		"hint: on laptop, juist share FILE or juist publish PORT")
+		"hint: on laptop: juist share FILE or juist publish PORT")
 	r := h.cli.start("share", dir, "--for", "1h")
 	link := regexp.MustCompile(`sharing \S+ at (https://laptop\.pub\.example\.org/[A-Za-z0-9_-]{22}/), until`)
 	r.waitFor(t, link)
@@ -246,7 +246,7 @@ func TestPublishAPort(t *testing.T) {
 	if _, err := h.run("publish", "--for", "2h", "8000"); err == nil || !strings.Contains(err.Error(), "holds no publish role") {
 		t.Errorf("publish --for 2h 8000: %v", err)
 	}
-	if _, err := h.run("publish", "99999"); err == nil || !strings.Contains(err.Error(), "is no port") {
+	if _, err := h.run("publish", "99999"); err == nil || !strings.Contains(err.Error(), "is not a port") {
 		t.Errorf("publish 99999: %v", err)
 	}
 	h.mustRun("network", "domain", "pub.example.org")
@@ -286,7 +286,7 @@ func TestAShareEndsWithJuistd(t *testing.T) {
 	r := h.cli.start("share", t.TempDir())
 	r.waitFor(t, regexp.MustCompile(`sharing .* until Ctrl-C`))
 	h.stops[0]()
-	if _, err := r.wait(t); err == nil || err.Error() != "the share ended with juistd" {
+	if _, err := r.wait(t); err == nil || err.Error() != "the share ended: juistd stopped" {
 		t.Errorf("juistd gone: %v", err)
 	}
 }
@@ -304,11 +304,11 @@ func TestAShareKeepsItsTerminator(t *testing.T) {
 	}
 	h.mustRun("network", "domain", "pub.example.org")
 	h.mustRun("grant", "laptop", "publish")
-	h.mustRun("publish", "add", "docs", "127.0.0.1:8181")
+	h.mustRun("publish", "docs", "127.0.0.1:8181")
 	r := h.cli.start("share", t.TempDir())
 	r.waitFor(t, regexp.MustCompile(`sharing .* until Ctrl-C`))
-	mustContain(t, h.mustRun("publish", "serve", "--stop"), "stopped serving")
-	h.mustRun("publish", "remove", "docs")
+	mustContain(t, h.mustRun("publish", "--stop"), "stopped serving")
+	h.mustRun("publish", "--stop", "docs")
 	if b, _ := os.ReadFile(calls); strings.Contains(string(b), "off") {
 		t.Errorf("the terminator was stopped under a share: %q", b)
 	}
@@ -352,12 +352,12 @@ func TestAFirewallKeepingOutWhatIsServedIsSaid(t *testing.T) {
 	if _, err := r.wait(t); err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, h.mustRun("publish", "add", "docs", "127.0.0.1:8181"), "ending TLS for docs.pub.example.org",
+	mustContain(t, h.mustRun("publish", "docs", "127.0.0.1:8181"), "ending TLS for docs.pub.example.org",
 		"warning: firewalld blocks tcp/443 on juist0", "--change-interface=juist0")
 	unsure.Store(true)
-	mustContain(t, h.mustRun("publish", "serve"), "warning: firewalld may block tcp/443 on juist0: its zone is not trusted")
+	mustContain(t, h.mustRun("publish", "docs"), "warning: firewalld may block tcp/443 on juist0: its zone is not trusted")
 	blocked.Store(false)
-	if out := h.mustRun("publish", "serve"); strings.Contains(out, "firewall") {
+	if out := h.mustRun("publish", "docs"); strings.Contains(out, "firewall") {
 		t.Errorf("a firewall letting the port in is said:\n%s", out)
 	}
 }
@@ -419,7 +419,7 @@ func TestAShareInTheBackground(t *testing.T) {
 	mustContain(t, h.mustRun("share"), first[1], otherShared+"  "+second[1])
 	mustContain(t, h.mustRun("status"), "Sharing       2 shares,")
 	if _, err := h.run("share", "--stop"); err == nil ||
-		!strings.Contains(err.Error(), "this device holds 2 shares\nhint: name one") {
+		!strings.Contains(err.Error(), "2 shares; name the one to stop\nusage: juist share") {
 		t.Errorf("stopping one of two: %v", err)
 	}
 	if _, err := h.run("share", "--stop", t.TempDir()); err == nil || !strings.Contains(err.Error(), "is not shared") {
@@ -434,7 +434,7 @@ func TestAShareInTheBackground(t *testing.T) {
 	}
 	mustContain(t, h.mustRun("share", "--stop", other), "stopped sharing "+otherShared)
 	mustContain(t, h.mustRun("share", "--stop"), "unchanged: not sharing")
-	if _, err := h.run("share", "--for", "1h"); err == nil || !strings.Contains(err.Error(), "take FILE or DIR") {
+	if _, err := h.run("share", "--for", "1h"); err == nil || !strings.Contains(err.Error(), "need FILE or DIR") {
 		t.Errorf("--for without a file: %v", err)
 	}
 
@@ -706,7 +706,7 @@ func TestStatusCountsTheShares(t *testing.T) {
 		{nil, ""},
 		{[]ipc.Share{one}, "1 share"},
 		{[]ipc.Share{one, one}, "2 shares"},
-		{[]ipc.Share{{What: "/srv/photos", NotShared: "the terminator does not run"}}, "1 share, reached by nobody: the terminator does not run"},
+		{[]ipc.Share{{What: "/srv/photos", NotShared: "the terminator does not run"}}, "1 share, unreachable: the terminator does not run"},
 	} {
 		if got := shareSummary(c.shs, noPaint); got != c.want {
 			t.Errorf("%d shares: %q, want %q", len(c.shs), got, c.want)

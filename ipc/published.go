@@ -10,6 +10,8 @@ import (
 	"strconv"
 
 	"github.com/fxamacker/cbor/v2"
+
+	"github.com/nning/juist/types"
 )
 
 // TerminatorWanted is the file juistd keeps on Linux while this device needs
@@ -213,4 +215,14 @@ func callRaw(ctx context.Context, path string, req Request) ([]byte, error) {
 		return nil, fmt.Errorf("ipc: a reply of %d bytes", len(b))
 	}
 	return b, nil
+}
+
+// ReachedDirectly reports whether members reach p at its member, on the port
+// the internet reaches it on: by TLS on 443, or by TCP on its own port. A
+// service behind a PROXY header may want the ingress's.
+func ReachedDirectly(p types.PublishedName) bool {
+	if p.Public != 0 {
+		return p.Public == p.Port && !p.Proxy
+	}
+	return p.Port == 443 && !p.Proxy
 }

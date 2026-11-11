@@ -19,7 +19,7 @@ name change with it. Keys, addresses, roles and public names stay.`}
 	}
 	name := pos[1]
 	if err := checkName("device name", name); err != nil {
-		return err
+		return a.usageErr("%v", err)
 	}
 	auth, err := a.networkLog()
 	if err != nil {
@@ -44,18 +44,18 @@ name change with it. Keys, addresses, roles and public names stay.`}
 		renamed.Name = name
 		l, ok := renamed.ShareLabel()
 		if !ok {
-			return fmt.Errorf("%q gives no DNS label for %s to share under\nhint: letters, digits and inner -",
+			return a.usageErr("%q cannot be the share name of %s: only letters, digits and inner hyphens",
 				name, displayMember(target))
 		}
 		if state.Domain() != "" {
 			shared := nameUnder(l, state.Domain())
 			if slices.ContainsFunc(target.Published, func(p types.PublishedName) bool { return p.Label == l }) {
-				return fmt.Errorf("%s publishes %s already, the name it would share under\nhint: juist publish remove %s %s",
-					displayMember(target), shared, displayMember(target), shared)
+				return fmt.Errorf("%s already publishes %s, the name it would share under\nhint: to stop it: juist publish --stop %s --on %s",
+					displayMember(target), shared, shared, displayMember(target))
 			}
 			if slices.Contains(target.Names, shared) {
-				return fmt.Errorf("%s points %s at itself already, the name it would share under\nhint: juist names remove %s %s",
-					displayMember(target), shared, displayMember(target), shared)
+				return fmt.Errorf("%s already answers for %s, the name it would share under\nhint: juist names remove %s %s",
+					displayMember(target), shared, shared, displayMember(target))
 			}
 			if err := labelFree(state, l, target.Identity, a.now().Unix()); err != nil {
 				return err
@@ -67,7 +67,7 @@ name change with it. Keys, addresses, roles and public names stay.`}
 		return fmt.Errorf("%s cannot be named %q: %s", displayMember(target), name, strings.TrimPrefix(err.Error(), "log: "))
 	}
 	if network := names.Label(state.Network()); network != "" && names.Label(name) == "" {
-		a.warn("%q is no DNS label: %s gets no name under %s.%s", name, displayMember(target), network, types.NamesTLD)
+		a.warn("%q is not a DNS name: %s gets no name under %s.%s", name, displayMember(target), network, types.NamesTLD)
 	}
 	_, err = a.submit(auth, &change{
 		aum:  aum,

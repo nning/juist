@@ -137,6 +137,10 @@ type Manager interface {
 	// is direct-only. Regions must be unique.
 	SetRelays(relays []Relay) error
 
+	// SetPublicDERP adds Tailscale's public DERP regions to the relay set,
+	// below every member relay, or takes them out ([PublicRegions]).
+	SetPublicDERP(on bool) error
+
 	// HomeRelay reports the relay region this node has chosen to be reached
 	// through, or zero if it has none yet. Peers must be told, so it belongs
 	// in this node's announcement.
@@ -165,6 +169,10 @@ type Manager interface {
 	// from a relay's STUN responder. It is empty until there is a relay to
 	// learn them from.
 	LocalEndpoints() []netip.AddrPort
+
+	// Underlay reports what the last measurement found of the networks
+	// beneath, and the port mapping the router holds for this node.
+	Underlay() Underlay
 
 	// LocalPort reports the UDP port the manager is bound to.
 	LocalPort() uint16

@@ -190,6 +190,7 @@ func (d *Daemon) Reconcile() error {
 		LeaseSigners: fresh.Signers, FreshSince: fresh.Since, FreshUntil: fresh.Until,
 		Vouchers: fresh.Needed, Vouching: fresh.Vouching, Stale: !fresh.Fresh(s.now),
 		Relays: len(relays), Relaying: d.isRelaying(), RelayCapable: relayCapableIn(s),
+		PublicDERP:    state.PublicDERP().Tailscale,
 		Conflicted:    b.conflicted,
 		NoKey:         b.noKey,
 		StaleKeys:     staleKeys,
@@ -404,6 +405,11 @@ func (d *Daemon) installRelays(s snapshot, held map[types.Identity]gossip.Endpoi
 	d.mu.Lock()
 	d.ownRelay.region = ownRegion
 	d.mu.Unlock()
+	// First, and whatever becomes of the relays: the log may have turned
+	// Tailscale's servers off.
+	if err := d.manager.SetPublicDERP(s.state.PublicDERP().Tailscale); err != nil {
+		return nil, fmt.Errorf("daemon: installing the public DERP servers: %w", err)
+	}
 	if err := d.manager.SetRelays(relays); err != nil {
 		err = fmt.Errorf("daemon: installing %d relays: %w", len(relays), err)
 		d.setStatus(func(s *ipc.Status) { s.DataPlaneError = err.Error() })
@@ -484,7 +490,7 @@ func (d *Daemon) buildPeers(s snapshot, held map[types.Identity]gossip.Endpoint,
 			DiscoKey:  conn.DiscoPublicFromRaw32(ep.Disco),
 			Addrs:     d.overlayAddrs(s.state, n.Identity, s.now),
 			Endpoints: d.underlay(ep),
-			HomeRelay: homeRelay(ep, relays),
+			HomeRelay: homeRelay(ep, relays, s.state.PublicDERP().Tailscale),
 			Walled:    walled(ep) && !d.rests,
 			Rests:     ep.Rests && !ep.HintAlone(),
 			Access:    ap.access(n, ep),
@@ -682,14 +688,17 @@ func (d *Daemon) refusedEverywhere(members []types.NodeRecord, live map[types.Id
 }
 
 // homeRelay is the region a peer says it can be reached through, kept only if
-// the relay set this node installed actually holds it. A region nothing serves
-// would make the data plane treat an unusable address as a path.
-func homeRelay(ep gossip.Endpoint, relays []conn.Relay) int {
+// the relay set this node installed actually holds it, or, with public, it
+// is a public DERP region. A region nothing serves would make the data plane
+// treat an unusable address as a path.
+func homeRelay(ep gossip.Endpoint, relays []conn.Relay, public bool) int {
 	if ep.HomeRelay == 0 {
 		return 0
 	}
 	if !slices.ContainsFunc(relays, func(r conn.Relay) bool { return r.Region == int(ep.HomeRelay) }) {
-		return 0
+		if _, ok := conn.PublicRegions()[int(ep.HomeRelay)]; !public || !ok {
+			return 0
+		}
 	}
 	return int(ep.HomeRelay)
 }

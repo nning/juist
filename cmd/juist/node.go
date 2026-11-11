@@ -281,13 +281,13 @@ func (n *daemonNode) informDisabled(auth *log.Authority) error {
 	}
 	i := slices.IndexFunc(off, func(a types.AUM) bool { return a.Hash() == at })
 	if i < 0 {
-		return errors.New("juistd says the network is disabled, and sends no record that disabled it")
+		return errors.New("juistd says the network is disabled but sends no record of it")
 	}
 	if err := auth.Inform(off[i]); err != nil {
 		return fmt.Errorf("juistd's record disabling the network does not verify: %w", err)
 	}
 	if auth.Disabled() == nil {
-		return errors.New("juistd says the network is disabled, and sends no record that disabled it")
+		return errors.New("juistd says the network is disabled but sends no record of it")
 	}
 	return nil
 }
@@ -702,10 +702,10 @@ func (n *localNode) unstage() error {
 	}
 	auth, err := n.log()
 	if err != nil {
-		return fmt.Errorf("staged keys kept; cannot tell whether the log names them: %w", err)
+		return fmt.Errorf("staged keys kept; cannot read the log: %w", err)
 	}
 	if rec, ok := auth.State().Node(staged.Identity.Public()); ok && staged.NamedBy(&rec) {
-		return errors.New("the log names the staged keys already; kept")
+		return errors.New("the log lists the staged keys already; kept")
 	}
 	// Archived, not deleted: the record carries this device's signature, and
 	// an admin may still approve it.

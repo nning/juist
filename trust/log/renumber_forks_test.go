@@ -142,15 +142,14 @@ func TestANodeMoveBesideANetworkRenumberingNeedsOnlyReissuing(t *testing.T) {
 	}
 }
 
-// A network renumbering gives no member an address another still retires,
-// as a single move may not.
+// A network renumbering gives no member an address another still retires.
 func TestANetworkRenumberingKeepsAnotherMembersRetiringAddress(t *testing.T) {
 	own := netip.MustParsePrefix("10.7.0.0/24")
 	h := newHarnessWith(t, 1, 1, func(s *types.Snapshot) { s.V4Prefix = &own })
 	x, y := h.admitAt("x", "10.7.0.1"), h.admitAt("y", "10.7.0.2")
 	h.apply(h.auth.Builder().RenumberNode(y.Identity, netip.MustParseAddr("10.7.0.7"), 1000))
-	if _, err := h.auth.Builder().RenumberNode(x.Identity, netip.MustParseAddr("10.7.0.2"), 1000); err == nil {
-		t.Fatal("control: a node move onto y's retiring address was accepted")
+	if n, _ := h.auth.State().Node(y.Identity); n.Retiring == nil || n.Retiring.Addr != netip.MustParseAddr("10.7.0.2") {
+		t.Fatalf("control: y retires %+v, not 10.7.0.2", n.Retiring)
 	}
 	wide := netip.MustParsePrefix("10.7.0.0/22")
 	_, err := h.auth.Builder().RenumberNetwork(wide, moves(x, "10.7.0.2", y, "10.7.0.7"), 1000)

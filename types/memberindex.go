@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 )
 
 // A NetworkSpace is what a member is admitted to besides the other members:
@@ -15,9 +16,8 @@ type NetworkSpace struct {
 	V4Retiring *RetiringRanges
 }
 
-// ValidateIn checks n against what [NodeRecord.StaticValidate] cannot know:
-// the network and the members but n, which others indexes. It is the one rule
-// for a member, whether a record or a whole state brings it.
+// ValidateIn checks n against the network and the other members, whether a
+// record or a whole state brings it.
 func (n *NodeRecord) ValidateIn(others *MemberIndex) error {
 	sp := &others.space
 	ranges := V4Ranges(sp.V4Prefix)
@@ -27,8 +27,7 @@ func (n *NodeRecord) ValidateIn(others *MemberIndex) error {
 	if err := n.ValidateInNetwork(ULA(sp.Genesis), ranges); err != nil {
 		return err
 	}
-	// Only an address a member is retiring may lie in a retiring range: one
-	// it holds there would be left outside the network once it retires.
+	// Only a retiring address may lie in a retiring range.
 	if n.V4 != nil && sp.V4Retiring != nil {
 		if err := ValidateV4(*n.V4, V4Ranges(sp.V4Prefix)); err != nil {
 			return fmt.Errorf("node %v: %w", n.Identity.ShortString(), err)
@@ -43,11 +42,8 @@ func (n *NodeRecord) ValidateIn(others *MemberIndex) error {
 	return others.Check(n)
 }
 
-// A MemberIndex holds what a set of members claims — derived and IPv4 overlay
-// addresses, and keys — so one more can be checked against all of them.
-// Rejecting derived-address collisions deterministically is what makes
-// coordination-free allocation safe; a shared key collides where it is used,
-// in the data plane for WireGuard and in the epoch fan-out for the others.
+// A MemberIndex holds what a set of members claims (addresses, keys, routes,
+// names, ports) so one more can be checked against all of them.
 type MemberIndex struct {
 	space  NetworkSpace
 	addr6  map[netip.Addr]Identity
@@ -65,8 +61,7 @@ type MemberIndex struct {
 	held   map[uint16]Identity
 }
 
-// A routeClaim is a subnet route a member is granted: one member routes each
-// address, or two peers would each be sent some of its traffic.
+// A routeClaim is a member's subnet route; each address has one router.
 type routeClaim struct {
 	prefix netip.Prefix
 	by     Identity
@@ -89,8 +84,8 @@ func NewMemberIndex(space NetworkSpace, n int) *MemberIndex {
 }
 
 // Check reports what n shares with a member added before. It must stay
-// symmetric, n refused beside m exactly where m is beside n, or a whole state
-// and the records reaching it part ([Snapshot.ValidateInNetwork]).
+// symmetric, or a whole state and the records reaching it diverge
+// ([Snapshot.ValidateInNetwork]).
 func (ix *MemberIndex) Check(n *NodeRecord) error {
 	id, domain := n.Identity.ShortString(), ix.space.Domain
 	if other, dup := ix.wg[n.WireGuard]; dup {
@@ -121,10 +116,12 @@ func (ix *MemberIndex) Check(n *NodeRecord) error {
 		if other, dup := ix.names[name]; dup {
 			return fmt.Errorf("nodes %v and %v both answer for %s", other.ShortString(), id, name)
 		}
-		if label, ok := publishedLabel(name, domain); ok {
-			if other, dup := ix.labels[label]; dup {
-				return fmt.Errorf("node %v publishes %s, which node %v answers for", other.ShortString(), name, id)
-			}
+		label, ok := publishedLabel(name, domain)
+		if !ok {
+			label = name // a name of its own
+		}
+		if other, dup := ix.labels[label]; dup {
+			return fmt.Errorf("node %v publishes %s, which node %v answers for", other.ShortString(), name, id)
 		}
 	}
 	if l, ok := n.ShareLabel(); ok && n.HasRole(RolePublish) {
@@ -165,6 +162,9 @@ func (ix *MemberIndex) Check(n *NodeRecord) error {
 		if domain == "" {
 			continue
 		}
+		if OwnName(p.Label) && (p.Label == domain || strings.HasSuffix(p.Label, "."+domain)) {
+			return fmt.Errorf("node %v publishes %s, a name under the network's domain, as a name of its own", id, p.Label)
+		}
 		name := p.Under(domain)
 		if len(name) > MaxHostNameLen {
 			return fmt.Errorf("node %v publishes a name of %d bytes, over the %d limit", id, len(name), MaxHostNameLen)
@@ -179,9 +179,8 @@ func (ix *MemberIndex) Check(n *NodeRecord) error {
 	return nil
 }
 
-// overlapping is a claim overlapping p. Claims are disjoint and kept sorted
-// by their first address, so only the one starting at or before p and the one
-// after it can overlap it.
+// overlapping is a claim overlapping p. Claims are disjoint and sorted, so
+// only the neighbours of p's position can overlap it.
 func (ix *MemberIndex) overlapping(p netip.Prefix) (routeClaim, bool) {
 	i, _ := slices.BinarySearchFunc(ix.routes, p.Addr(), func(c routeClaim, a netip.Addr) int {
 		return c.prefix.Addr().Compare(a)

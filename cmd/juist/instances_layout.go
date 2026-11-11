@@ -59,6 +59,11 @@ type hostLayout struct {
 	// firewalled says whether the host firewall keeps TCP to port from
 	// arriving on device; nil for none known.
 	firewalled func(ctx context.Context, device string, port uint16) (blocked, unsure bool)
+	// udpBlocked returns the firewalld zone that keeps UDP to port from
+	// arriving on the default route's interface, "" for none known, whether
+	// its service "juist" is defined, and unsure where its ports could not
+	// be read; nil for no firewall known.
+	udpBlocked func(ctx context.Context, port uint16) (zone string, service, unsure bool)
 }
 
 var dockerBridge = regexp.MustCompile(`^br-[0-9a-f]{12}$`)

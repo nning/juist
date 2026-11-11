@@ -263,3 +263,21 @@ func TestNamesForMembers(t *testing.T) {
 		t.Fatalf("reopened, nas publishes %+v", got)
 	}
 }
+
+// A name of its own needs schema 23, whose validation takes it; the upgrade
+// is what allows it. The domain cannot then move over it.
+func TestANameOfItsOwnNeedsSchema23(t *testing.T) {
+	h := newHarnessWith(t, 1, 1, func(s *types.Snapshot) { s.Schema = 22 })
+	nas := h.addNode("nas")
+	h.apply(h.auth.Builder().SetDomain("pub.example.org"))
+	img := types.PublishedName{Label: "img.example.net", Port: 443, Proxy: true}
+	publish := h.signed(types.AUM{Kind: types.KindSetPublished, Subject: &nas.Identity, Publish: &types.PublishGrant{Names: []types.PublishedName{img}}})
+	h.mustReject("a name of its own at schema 22", RuleState, publish)
+	h.apply(h.auth.Builder().SchemaUpgrade(23))
+	h.apply(h.auth.Builder().SetPublished(nas.Identity, []types.PublishedName{img}))
+	if got := publishedOf(t, h.auth.State(), nas.Identity); !slices.Equal(got, []types.PublishedName{img}) {
+		t.Fatalf("nas publishes %+v", got)
+	}
+	domain := "example.net"
+	h.mustReject("the domain moved over a name of its own", RuleState, h.signed(types.AUM{Kind: types.KindSetDomain, Domain: &domain}))
+}

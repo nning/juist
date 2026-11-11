@@ -102,20 +102,20 @@ func TestARenameKeepsNamesApart(t *testing.T) {
 	}
 	admin.mustRun("network", "domain", "pub.example.org")
 	admin.mustRun("grant", "laptop", "publish")
-	admin.mustRun("publish", "add", "nas", "web")
+	admin.mustRun("publish", "web", "--on", "nas")
 	for _, bad := range []struct{ name, want string }{
-		{"my.laptop", `"my.laptop" gives no DNS label for laptop to share under`},
+		{"my.laptop", `"my.laptop" cannot be the share name of laptop: only letters, digits and inner hyphens` + "\nusage: juist rename"},
 		{"web", "web.pub.example.org is published on nas already"},
 	} {
 		if _, err := admin.run("rename", "laptop", bad.name); err == nil || !strings.Contains(err.Error(), bad.want) {
 			t.Errorf("renamed to %q: %v", bad.name, err)
 		}
 	}
-	admin.mustRun("publish", "add", "laptop", "blog")
+	admin.mustRun("publish", "blog", "--on", "laptop")
 	admin.mustRun("names", "add", "laptop", "mx.pub.example.org")
 	for _, bad := range []struct{ name, want string }{
-		{"blog", "laptop publishes blog.pub.example.org already, the name it would share under"},
-		{"mx", "laptop points mx.pub.example.org at itself already"},
+		{"blog", "laptop already publishes blog.pub.example.org, the name it would share under"},
+		{"mx", "laptop already answers for mx.pub.example.org"},
 	} {
 		if _, err := admin.run("rename", "laptop", bad.name); err == nil || !strings.Contains(err.Error(), bad.want) {
 			t.Errorf("renamed to %q: %v", bad.name, err)
@@ -145,5 +145,5 @@ func TestARenameKeepsNamesApart(t *testing.T) {
 		t.Errorf("a change of case is said as %q", got)
 	}
 	out := admin.mustRun("rename", "nas", "nas_1")
-	mustContain(t, out, `warning: "nas_1" is no DNS label: nas gets no name under home.juist`, "renamed nas to nas_1")
+	mustContain(t, out, `warning: "nas_1" is not a DNS name: nas gets no name under home.juist`, "renamed nas to nas_1")
 }

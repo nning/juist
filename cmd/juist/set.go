@@ -19,32 +19,32 @@ import (
 
 func cmdSet(a *app, args []string) error {
 	s := spec{name: "juist set", about: `
-Change this device's settings. --operator sets the local user who may manage
-the device without sudo; run it as root. --operator="" clears it.
---https-only sends only TLS to relays on 443, through --proxy if given.
+Change this device's settings. --operator, run as root, sets the local user
+who may manage the device without sudo; --operator="" clears it.
+--https-only reaches relays only by TLS on 443, through --proxy if given.
 --relay-name serves this device's relay on 443 under a public name (default:
-relay.DOMAIN on the network's ingress). --dns=false leaves this host's DNS
-alone: no network names, and no DNS through an exit node. --multicast=false
-carries no multicast or UDP broadcast, even if policy allows it. Without a
-policy discovery is on by default; under a policy a pass multicast rule
-enables it. On Linux IPv4 groups are copied automatically; --groups limits
-or disables those copies. UDP broadcast includes NetBIOS; DHCP is excluded.
-Local UDP copies of those groups need ordinary unicast access to the port.`}
+relay.DOMAIN on the ingress). --dns=false leaves the host's DNS alone: no
+network names, no DNS through an exit node. --multicast=false carries no
+multicast or broadcast; under a policy, a pass multicast rule allows it. On
+Linux, --groups limits which IPv4 groups are copied. --port-mapping=false
+asks the router for no port.`}
 	fs := newFlags(s.name)
 	var op, proxy, relayName optionalString
 	fs.Var(&op, "operator", "local `USER` who manages this device")
-	httpsOnly := fs.Bool("https-only", false, "reach relays by TLS on 443 alone; =false undoes it")
-	fs.Var(&proxy, "proxy", "HTTP proxy `URL` to reach them by, - to read it from stdin; \"\" for HTTPS_PROXY")
+	httpsOnly := fs.Bool("https-only", false, "reach relays only by TLS on 443")
+	fs.Var(&proxy, "proxy", "HTTP proxy `URL` for relays; - reads it from stdin, \"\" uses HTTPS_PROXY")
 	fs.Var(&relayName, "relay-name", "public `NAME` of this device's relay on 443")
-	dns := fs.Bool("dns", true, "take this host's DNS for the network's names and the exit node; =false leaves it alone")
-	multicast := fs.Bool("multicast", true, "carry discovery where policy permits it; =false carries no multicast or broadcast")
+	dns := fs.Bool("dns", true, "manage this host's DNS for network names and exit nodes")
+	multicast := fs.Bool("multicast", true, "carry multicast and broadcast where the policy allows")
+	portMapping := fs.Bool("port-mapping", true, "ask the router for a port by UPnP, NAT-PMP or PCP")
 	groups := optionalString{value: "auto"}
-	fs.Var(&groups, "groups", "IPv4 `GROUPS`: auto, a comma-separated list, or \"\" for none")
+	fs.Var(&groups, "groups", "IPv4 multicast `GROUPS` to copy: auto, a list, or \"\" for none")
 	if _, err := a.parse(s, fs, args); err != nil {
 		return err
 	}
 	setHTTPS, setDNS, setMulticast := cliflag.IsSet(fs, "https-only"), cliflag.IsSet(fs, "dns"), cliflag.IsSet(fs, "multicast")
-	if !op.set && !setHTTPS && !proxy.set && !relayName.set && !setDNS && !setMulticast && !groups.set {
+	setPortMapping := cliflag.IsSet(fs, "port-mapping")
+	if !op.set && !setHTTPS && !proxy.set && !relayName.set && !setDNS && !setMulticast && !groups.set && !setPortMapping {
 		a.help(s, fs, a.errOut)
 		return errSilent
 	}
@@ -58,10 +58,13 @@ Local UDP copies of those groups need ordinary unicast access to the port.`}
 	if setMulticast {
 		req.Multicast = multicast
 	}
+	if setPortMapping {
+		req.PortMapping = portMapping
+	}
 	if groups.set {
 		list, err := parseGroups(groups.value)
 		if err != nil {
-			return fmt.Errorf("--groups: %w", err)
+			return a.usageErr("--groups: %v", err)
 		}
 		req.Groups = &list
 	}
@@ -75,7 +78,7 @@ Local UDP copies of those groups need ordinary unicast access to the port.`}
 	}
 	if proxy.set {
 		if err := ipc.ValidProxy(proxy.value); err != nil {
-			return fmt.Errorf("--proxy: %w", err)
+			return a.usageErr("--proxy: %v", err)
 		}
 		req.Proxy = &proxy.value
 	}
@@ -84,7 +87,7 @@ Local UDP copies of those groups need ordinary unicast access to the port.`}
 		if name != "" {
 			var err error
 			if name, err = parseHostName(name); err != nil {
-				return fmt.Errorf("--relay-name: %w", err)
+				return a.usageErr("--relay-name: %v", err)
 			}
 		}
 		req.RelayName = &name
@@ -119,7 +122,7 @@ Local UDP copies of those groups need ordinary unicast access to the port.`}
 	}
 	naming := req.RelayName != nil && *req.RelayName != "" && a.host.relayScript != ""
 	if naming && d.st.Instance != 0 {
-		return errors.New("a relay on 443 serves the default network's instance alone, for now")
+		return errors.New("a relay on 443 runs only in the default instance, for now")
 	}
 	if naming {
 		// Granted first, so the relay takes 443 as it starts under the
@@ -185,7 +188,7 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 	if req.RelayName != nil {
 		switch {
 		case *req.RelayName == "" && h.Name != "":
-			a.ok("relay name %s, the ingress's", h.Name)
+			a.ok("relay name %s (from the ingress)", h.Name)
 		case *req.RelayName == "":
 			a.ok("relay name cleared")
 		default:
@@ -198,6 +201,9 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 	if req.Multicast != nil {
 		a.ok("%s", map[bool]string{true: "multicast on", false: "multicast off"}[*req.Multicast])
 	}
+	if req.PortMapping != nil {
+		a.ok("%s", map[bool]string{true: "port mapping on", false: "port mapping off"}[*req.PortMapping])
+	}
 	if req.Groups != nil {
 		if len(*req.Groups) == 0 {
 			a.ok("groups off")
@@ -208,12 +214,12 @@ func (a *app) saySettings(req *ipc.Request, st *ipc.Status) {
 	switch {
 	case !st.InNetwork:
 	case req.Groups != nil && len(*req.Groups) > 0 && st.Multicast != nil && st.Multicast.Off:
-		a.hint("copying needs multicast enabled locally and permitted by the access policy")
+		a.hint("copying groups needs multicast on here and allowed by the policy")
 	case h.Only && len(h.Relays) == 0:
 		a.warn("no relay on 443/tcp")
-		a.hint("a relay's operator names it there: juist set --relay-name NAME")
+		a.hint("on a relay: juist set --relay-name NAME")
 	case req.Proxy != nil && *req.Proxy != "" && !h.Only:
-		a.hint("the proxy is used with --https-only alone")
+		a.hint("the proxy is used only with --https-only")
 	}
 	if req.RelayName == nil || *req.RelayName == "" || !st.InNetwork {
 		return
@@ -281,7 +287,7 @@ func operatorFor(name string) (operatorChoice, error) {
 		return operatorChoice{}, fmt.Errorf("user %q has uid %q", name, u.Uid)
 	}
 	if uid == 0 {
-		return operatorChoice{}, errors.New("root needs no appointment")
+		return operatorChoice{}, errors.New("root cannot be the operator; it needs none")
 	}
 	return operatorChoice{set: true, uid: uint32(uid)}, nil
 }

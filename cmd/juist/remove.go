@@ -4,10 +4,9 @@ import "fmt"
 
 func cmdRemove(a *app, args []string) error {
 	s := spec{name: "juist remove", args: "DEVICE", min: 1, max: 1, about: `
-Remove a device, by name, address or key (juist devices --keys). This
-rotates the group secret. Every device drops the removed one's tunnel once
-it hears of the removal; a device cut off from the rest does so when its
-freshness expires, at the latest.`}
+Remove a device, by name, address or key (juist devices --keys), and rotate
+the group secret. Devices drop its tunnel once they hear of it, at the latest
+when their freshness expires.`}
 	fs := newFlags(s.name)
 	yes := fs.Bool("yes", false, "do not ask")
 	pos, err := a.parse(s, fs, args)

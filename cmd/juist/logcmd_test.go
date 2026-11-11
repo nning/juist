@@ -41,7 +41,7 @@ func olderNetwork(t *testing.T) *daemonDevice {
 func TestLogUpgradeWhenEveryDeviceIsReady(t *testing.T) {
 	t.Parallel()
 	laptop := olderNetwork(t)
-	mustContain(t, laptop.mustRun("health"), "every device implements "+types.CurrentSchema.String()+": juist log upgrade")
+	mustContain(t, laptop.mustRun("health"), "every device supports "+types.CurrentSchema.String()+": juist log upgrade")
 	mustContain(t, laptop.mustRun("log", "upgrade", "--when-ready"), "upgraded to "+types.CurrentSchema.String())
 	if got := daemonLog(t, laptop).State().Schema(); got != types.CurrentSchema {
 		t.Fatalf("the network is at %v", got)
@@ -64,7 +64,7 @@ func TestLogUpgradeWaitsForEveryDevice(t *testing.T) {
 	older := types.CurrentSchema - 1
 
 	_, err := laptop.run("log", "upgrade", "--yes")
-	if err == nil || !strings.Contains(err.Error(), "not every device implements "+types.CurrentSchema.String()+": phone (-)") ||
+	if err == nil || !strings.Contains(err.Error(), "not every device supports "+types.CurrentSchema.String()+": phone (-)") ||
 		!strings.Contains(err.Error(), "juist log upgrade --force") {
 		t.Fatalf("upgrade with phone unheard: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestLogUpgradeWhenReadyProposesNothing(t *testing.T) {
 	laptop.mustRun("admins", "add", "bob", bob)
 	laptop.mustRun("admins", "quorum", "2", "--yes")
 	_, err := laptop.run("log", "upgrade", "--when-ready")
-	if err == nil || !strings.Contains(err.Error(), "needs other admins' votes") {
+	if err == nil || !strings.Contains(err.Error(), "needs votes of other admins") {
 		t.Fatalf("upgrade needing bob's vote: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workDir(t), "schema-upgrade.rec")); !errors.Is(err, fs.ErrNotExist) {

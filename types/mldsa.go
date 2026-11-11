@@ -23,7 +23,6 @@ type SigningKey [SigningKeySize]byte
 // A PQSig is an ML-DSA-44 signature.
 type PQSig [PQSigSize]byte
 
-// IsZero reports whether k is the zero value.
 func (k *SigningKey) IsZero() bool { return *k == SigningKey{} }
 
 // Validate reports whether k decodes as an ML-DSA-44 public key.
@@ -135,9 +134,8 @@ func (p PrivateIdentity) SignBoth(msg []byte) (Sig, *PQSig, error) {
 	return sig, &s, nil
 }
 
-// AdminKeyText is how an admin key is handed to the admins who add it: its
-// identity and, after dots, its signing key and the endorsement that binds
-// them.
+// AdminKeyText is an admin key's hand-over form: identity, signing key and
+// endorsement, dot-separated.
 func AdminKeyText(priv PrivateIdentity) (string, error) {
 	e, err := priv.Endorse()
 	if err != nil {

@@ -54,7 +54,7 @@ or ufw.
 Publish the name, with HTTP/3 for browsers that can use it:
 
 ```sh
-juist publish add docs 127.0.0.1:8080 --http3
+juist publish docs 8080 --http3
 ```
 
 It prints `ending TLS for docs.example.org to 127.0.0.1:8080, with HTTP/3`,

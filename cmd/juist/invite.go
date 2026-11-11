@@ -3,18 +3,17 @@ package main
 import (
 	"cmp"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/netip"
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nning/juist/ipc"
 
+	"github.com/nning/juist/internal/govern"
 	"github.com/nning/juist/internal/host"
 	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/trust/enroll"
@@ -50,14 +49,13 @@ type inviteOptions struct {
 
 func cmdInvite(a *app, args []string) error {
 	s := spec{name: "juist invite", args: "[NAME]", max: 1, about: `
-Invite one device and wait for it to join. Prints a code for the same LAN
-and a link for anywhere. Behind NAT, the two devices meet through the public
-BitTorrent DHT. Both end when a device joins or the invite expires. A wrong
-guess voids the code; the link still works. A terminal also shows the link
-as a QR code.
+Invite one device and wait until it joins. Prints a code for the same LAN,
+and a link and QR code for anywhere; behind NAT the devices meet through the
+public BitTorrent DHT. Both end when a device joins or the invite expires. A
+wrong guess voids the code; the link still works.
 
-NAME is the device's name in the network (default: its own). If more than
-one admin must approve, the invite waits for them.`}
+NAME is the device's name in the network (default: its own). Where more
+admins must approve, the invite waits for them.`}
 	fs := newFlags(s.name)
 	var o inviteOptions
 	fs.BoolVar(&o.relay, "relay", false, "make the device a relay")
@@ -78,20 +76,20 @@ one admin must approve, the invite waits for them.`}
 	if len(pos) == 1 {
 		o.name = pos[0]
 		if err := checkName("device name", o.name); err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 	}
 	if o.port > 0xffff {
-		return errors.New("--port must be below 65536")
+		return a.usageErr("\"%d\" is not a port", o.port)
 	}
 	if o.ingress && o.admin {
-		return fmt.Errorf("an ingress is no voucher\n%s", s.usage(fs))
+		return a.usageErr("--ingress cannot be used with --voucher")
 	}
 	if o.service != "" && (o.ingress || o.admin || o.relay) {
-		return fmt.Errorf("a service member holds no other role\n%s", s.usage(fs))
+		return a.usageErr("--service cannot be used with --relay, --voucher or --ingress")
 	}
 	if o.expires <= 0 || o.expires > 7*24*time.Hour {
-		return errors.New("--expires must be between 1s and 7d")
+		return a.usageErr("--expires must be between 1s and 7d")
 	}
 
 	auth, err := a.networkLog()
@@ -103,7 +101,7 @@ one admin must approve, the invite waits for them.`}
 			return fmt.Errorf("the network has no domain to publish under\nhint: juist network domain pub.example.org")
 		}
 		if o.service, err = parseLabel(o.service, auth.State().Domain()); err != nil {
-			return err
+			return a.usageErr("--service: %v", err)
 		}
 		if err := labelFree(auth.State(), o.service, types.Identity{}, a.now().Unix()); err != nil {
 			return err
@@ -120,7 +118,7 @@ one admin must approve, the invite waits for them.`}
 	var serveErr error
 	if d := daemonOf(a.node); d != nil {
 		if !o.yes && !a.interactive {
-			return errors.New("comparing the device's words needs a terminal; pass --yes to skip")
+			return errors.New("comparing words needs a terminal; --yes skips it")
 		}
 		// juistd runs the session, and so could put a device of its own in
 		// the guest's place: the words the guest shows are what say it did
@@ -163,11 +161,19 @@ func (a *app) inviteThroughDaemon(ctx context.Context, d *daemonNode, auth *log.
 	expires := uint32((o.expires + time.Second - 1) / time.Second)
 	req := ipc.Request{Command: ipc.CmdInvite, Offer: &ipc.InviteOffer{
 		Port: uint16(o.port), LAN: o.lan, DHT: o.dht, Expires: expires}}
-	conv := &daemonInvite{a: a, auth: auth, adm: adm, o: o}
-	err := d.converse(ctx, req, conv.handle)
+	network := auth.State().Network()
+	conv := &govern.Invite{
+		Key: adm.key.Public(), Signing: adm.key.SigningKey(),
+		Announce: func(code enroll.Code, link enroll.Link, port uint16) {
+			a.announceInvite(network, code.String(), link, port, o)
+		},
+		Admit: adm.Admit,
+		Event: a.reportHostEvent,
+	}
+	err := d.converse(ctx, req, conv.Handle)
 	// The admission ends with the conversation's context; nothing of it is
 	// left running, or asking, once the invite has ended.
-	conv.admitting.Wait()
+	conv.Wait()
 	if err != nil && ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return host.ErrExpired
@@ -175,115 +181,6 @@ func (a *app) inviteThroughDaemon(ctx context.Context, d *daemonNode, auth *log.
 		return host.ErrCancelled
 	}
 	return daemonHostError(err)
-}
-
-// A daemonInvite is this side of a CmdInvite conversation. It trusts the
-// daemon for nothing it signs: the invite it offers is checked and printed
-// here, with the admin's key added, and it answers one admission at most.
-type daemonInvite struct {
-	a     *app
-	auth  *log.Authority
-	adm   *admitter
-	o     inviteOptions
-	ready bool
-	asked bool
-
-	// reveal carries the guest's nonce from its event to the admission,
-	// which runs apart from the events so that it can wait for one, and
-	// admitting is that admission.
-	reveal    chan enroll.Nonce
-	admitting sync.WaitGroup
-}
-
-func (d *daemonInvite) handle(ctx context.Context, e *ipc.Event, reply func(ipc.Request) error) error {
-	a := d.a
-	switch e.Kind {
-	case ipc.EventInviteReady:
-		if d.ready {
-			return errors.New("juistd offered a second invite")
-		}
-		d.ready = true
-		code, err := enroll.ParseCode(e.Code)
-		if err != nil {
-			return fmt.Errorf("juistd offered an invalid code: %w", err)
-		}
-		link, err := enroll.ParseLink(e.Link)
-		if err != nil {
-			return fmt.Errorf("juistd offered an invalid link: %w", err)
-		}
-		// The admin's key goes into the link here, where the daemon cannot
-		// change what is printed.
-		a.announceInvite(d.auth.State().Network(), code.String(), link.WithAdmin(d.adm.key.Public(), new(d.adm.key.SigningKey())), e.Port, d.o)
-	case ipc.EventInviteAdmit:
-		// One invite admits one device. A daemon that asks again, or before
-		// it offered the invite, is not running the protocol.
-		if !d.ready || d.asked {
-			return errors.New("juistd asked to admit a device the invite did not bring; nothing more is " +
-				"signed. juistd on this device may be compromised")
-		}
-		d.asked = true
-		if e.Join == nil || e.Join.Identity.Validate() != nil || e.Join.Signing.Validate() != nil ||
-			(e.Join.Name != "" && types.ValidateName(e.Join.Name) != nil) {
-			return errors.New("juistd asked to admit a malformed request")
-		}
-		wait := func(votes, quorum uint32) error {
-			return reply(ipc.Request{Reply: &ipc.InviteReply{
-				Waiting: &enroll.Waiting{Votes: votes, Quorum: quorum}}})
-		}
-		d.reveal = make(chan enroll.Nonce, 1)
-		compare := func(s enroll.Salt) (enroll.Nonce, error) {
-			if err := reply(ipc.Request{Reply: &ipc.InviteReply{Salt: &s}}); err != nil {
-				return enroll.Nonce{}, err
-			}
-			select {
-			case n := <-d.reveal:
-				return n, nil
-			case <-ctx.Done():
-				return enroll.Nonce{}, errors.New("the invite ended before the new device answered")
-			}
-		}
-		join := e.Join
-		d.admitting.Add(1)
-		go func() {
-			defer d.admitting.Done()
-			name, admission, err := d.adm.Admit(ctx, join, wait, compare)
-			if err != nil {
-				// Said once, when the invite ends with it.
-				_ = reply(ipc.Request{Reply: &ipc.InviteReply{Refused: enroll.ReasonText(err)}})
-				return
-			}
-			_ = reply(ipc.Request{Reply: &ipc.InviteReply{Name: name, Admission: admission}})
-		}()
-	case ipc.EventInviteReveal:
-		if d.reveal == nil || e.Reveal == nil {
-			return errors.New("juistd answered words nobody asked it to compare; nothing more is signed")
-		}
-		select {
-		case d.reveal <- *e.Reveal:
-		default:
-			return errors.New("juistd answered the words twice; nothing more is signed")
-		}
-	default:
-		ev := host.Event{Name: e.Name, Addr: e.Addr, Err: e.Text}
-		switch e.Kind {
-		case ipc.EventInviteFailed:
-			ev.Kind = host.Failed
-		case ipc.EventInviteJoined:
-			ev.Kind = host.Joined
-		case ipc.EventInviteNoLAN:
-			ev.Kind = host.NoLAN
-		case ipc.EventInviteNoDHT:
-			ev.Kind = host.NoDHT
-		case ipc.EventCodeVoided:
-			ev.Kind = host.CodeVoided
-		case ipc.EventInviteNoRelay:
-			ev.Kind = host.NoRelay
-		default:
-			return nil
-		}
-		a.reportHostEvent(ev)
-	}
-	return nil
 }
 
 // daemonHostError recovers host's outcomes from the text they cross the
@@ -367,7 +264,7 @@ func (a *app) reportHostEvent(e host.Event) {
 	case host.NoLAN:
 		a.warn("code not announced on the LAN (%s); use the link", e.Err)
 	case host.NoDHT:
-		a.printf("%s\n", a.dim(fmt.Sprintf("link does not meet through the DHT: %s", e.Err)))
+		a.printf("%s\n", a.dim(fmt.Sprintf("no DHT for the link: %s", e.Err)))
 	case host.NoRelay:
 		a.warn("cannot wait at relay %s (%s); retrying", e.Addr, e.Err)
 	case host.CodeVoided:
@@ -376,7 +273,7 @@ func (a *app) reportHostEvent(e host.Event) {
 		} else {
 			a.warn("code voided: wrong guess from %s", e.Addr)
 		}
-		a.hint("if that was not your device, someone else knows this invite; the link still works")
+		a.hint("if that was not your device, someone else knows the code; the link still works")
 	}
 }
 
@@ -458,7 +355,7 @@ func (m *admitter) Admit(ctx context.Context, req *enroll.JoinRequest, wait func
 	}
 	cur, ok := auth.State().Node(id)
 	if !ok || !sameKeys(cur, req) {
-		return "", nil, errors.New("log does not admit the device under the keys it asked with")
+		return "", nil, errors.New("the log lists the device with other keys")
 	}
 	admission, err := enroll.SignAdmission(m.key, auth.State().GenesisHash(), auth.Head(), id)
 	if err != nil {
@@ -467,10 +364,7 @@ func (m *admitter) Admit(ctx context.Context, req *enroll.JoinRequest, wait func
 	return cur.Name, admission, nil
 }
 
-func sameKeys(n types.NodeRecord, req *enroll.JoinRequest) bool {
-	return n.WireGuard == req.Keys.WireGuard && n.X25519 == req.Keys.X25519 && n.MLKEM == req.Keys.MLKEM &&
-		n.Signing != nil && *n.Signing == req.Signing
-}
+func sameKeys(n types.NodeRecord, req *enroll.JoinRequest) bool { return govern.SameKeys(n, req) }
 
 // compareWords has the person compare the words the device shows with those
 // shown here. The salt is drawn now, after the request committed to its
@@ -479,30 +373,18 @@ func sameKeys(n types.NodeRecord, req *enroll.JoinRequest) bool {
 func (m *admitter) compareWords(ctx context.Context, req *enroll.JoinRequest,
 	compare func(enroll.Salt) (enroll.Nonce, error)) error {
 	a := m.a
-	if req.Commit == ([32]byte{}) {
-		return errors.New("joining device's juist is too old to compare words; update it")
-	}
-	var salt enroll.Salt
-	if _, err := rand.Read(salt[:]); err != nil {
-		return err
-	}
-	nonce, err := compare(salt)
+	words, err := govern.Words(req, compare)
 	if err != nil {
 		return err
 	}
-	if enroll.CommitNonce(nonce) != req.Commit {
-		return errors.New("nonce does not match the join request's commitment; nothing signed. " +
-			"juistd here may be compromised")
-	}
 	a.printf("%s wants to join; compare with the words it shows:\n", cmp.Or(m.o.name, memberName(req.Name)))
-	a.command("%s", enroll.Fingerprint(salt, nonce, req))
+	a.command("%s", words)
 	ok, err := a.askNow(ctx, "same?")
 	if err != nil {
 		return fmt.Errorf("not admitted: %w", err)
 	}
 	if !ok {
-		return errors.New("words not confirmed; nothing signed\nhint: if they differed, " +
-			"the device asking is not the one you invited")
+		return errors.New("words not confirmed; not admitted\nhint: other words mean another device is asking")
 	}
 	return nil
 }
@@ -533,7 +415,7 @@ func (m *admitter) addNode(ctx context.Context, auth *log.Authority, req *enroll
 	if p := state.Policy(); p != nil && !slices.ContainsFunc(p.Rules, func(r types.PolicyRule) bool { return r.From.Any || r.To.Any }) {
 		defer func() {
 			if err == nil {
-				a.hint("the access policy passes %s nothing until it names it: juist policy edit", name)
+				a.hint("the policy passes no traffic for %s until it names it: juist policy edit", name)
 			}
 		}()
 	}

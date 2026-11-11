@@ -19,25 +19,17 @@ const (
 	// applyChain is a real application: every rule holds.
 	applyChain applyMode = iota
 
-	// applyProbe asks whether a record's substance would be acceptable against
-	// a state other than the one it was signed against, for deciding whether a
-	// losing branch merely needs reissuing. Reissuing against a new parent
-	// fixes the rules about position, so a probe differs from the chain in
-	// three ways only:
-	//
-	//   - it skips the positional rules: the parent, epoch sequencing and wrap
-	//     coverage, and that a network renumbering moves exactly the members;
-	//   - it allocates afresh the IPv4 addresses an admission or a renumbering
-	//     names, which the chosen chain may have given to someone else;
-	//   - a record whose effect is in place already changes nothing, rather
-	//     than being refused ([inEffect]): a concurrent record doing the same
-	//     won.
+	// applyProbe asks whether a losing record could be reissued on another
+	// state. It differs from applyChain only in that it:
+	//   - skips positional rules (parent, epoch sequencing and wrap coverage,
+	//     a renumbering moving exactly the members);
+	//   - allocates afresh the IPv4 addresses an admission or renumbering names;
+	//   - takes a record already in effect ([inEffect]) as no change.
 	applyProbe
 )
 
-// kindRules holds, for every kind but genesis, which starts a state rather
-// than changing one, what it does to next, a copy of the parent state with
-// the record's hash as its head.
+// kindRules applies each kind but genesis to next, a copy of the parent state
+// with the record's hash as its head.
 var kindRules = map[types.Kind]func(next *State, a *types.AUM, mode applyMode) error{
 	types.KindAddNode:           (*State).addNode,
 	types.KindRemoveNode:        (*State).removeNode,
@@ -62,6 +54,7 @@ var kindRules = map[types.Kind]func(next *State, a *types.AUM, mode applyMode) e
 	types.KindSetPublished:      (*State).setPublished,
 	types.KindRenameNode:        (*State).renameNode,
 	types.KindSetPolicy:         (*State).setPolicy,
+	types.KindSetPublicDERP:     (*State).setPublicDERP,
 }
 
 // inEffectError is a record refused because what it does is done already,
@@ -83,6 +76,7 @@ func (s *State) clone() *State {
 		v4Prefix:    s.v4Prefix,   // replaced, never mutated
 		v4Retiring:  s.v4Retiring, // replaced, never mutated
 		domain:      s.domain,
+		publicDERP:  s.publicDERP,
 		policy:      s.policy,
 		disablement: s.disablement, // never mutated after genesis
 		admins:      maps.Clone(s.admins),
@@ -91,10 +85,8 @@ func (s *State) clone() *State {
 	}
 }
 
-// apply returns the state resulting from applying a record, which must already
-// be verified (see verify.go). This is where the semantics live: whether the
-// subject exists, whether an address or key collides, whether the epoch bump
-// covers the right members — so the replay probe can reuse them alone.
+// apply returns the state after a record, which must already be verified.
+// It enforces the semantic rules; signatures are verify.go's.
 func (s *State) apply(a *types.AUM, hash types.Hash, mode applyMode) (*State, error) {
 	if mode != applyProbe && a.Kind != types.KindGenesis {
 		if a.Prev == nil || *a.Prev != s.head {
@@ -143,8 +135,7 @@ func (s *State) member(id types.Identity) (*types.NodeRecord, error) {
 
 func (next *State) addNode(a *types.AUM, mode applyMode) error {
 	n := a.Node
-	// A renumbering keeps the ranges it moved from until they retire; an
-	// address given out in one would be left behind when they do.
+	// No addresses from a range being retired.
 	retiring := n.V4 != nil && next.v4Retiring != nil &&
 		!slices.ContainsFunc(types.V4Ranges(next.v4Prefix), func(r netip.Prefix) bool { return r.Contains(*n.V4) })
 	if mode == applyProbe && n.V4 != nil &&
@@ -188,16 +179,24 @@ func (next *State) removeNode(a *types.AUM, _ applyMode) error {
 }
 
 func (next *State) setNodeRoutes(a *types.AUM, _ applyMode) error {
-	cur, err := next.member(*a.Subject)
-	if err != nil {
+	if _, err := next.member(*a.Subject); err != nil {
 		return err
 	}
-	updated := cur.Clone()
+	// From schema 25 a subnet route takes the retiring ranges it overlaps.
+	if r := next.v4Retiring; r != nil && next.schema >= types.SchemaTakeRetired {
+		keep := slices.DeleteFunc(slices.Clone(r.Prefixes), func(p netip.Prefix) bool {
+			return slices.ContainsFunc(a.Grant.Routes, func(q netip.Prefix) bool { return q.Bits() > 0 && q.Overlaps(p) })
+		})
+		next.v4Retiring = nil
+		if len(keep) > 0 {
+			next.v4Retiring = &types.RetiringRanges{Prefixes: keep, Until: r.Until}
+		}
+		next.retire(func(v4 netip.Addr) bool { return types.ValidateV4(v4, next.V4Ranges()) != nil })
+	}
+	updated := next.nodes[*a.Subject].Clone()
 	updated.Roles = slices.Clone(a.Grant.Roles)
 	updated.Routes = slices.Clone(a.Grant.Routes)
-	// The grant's routes were checked for form at decode; the overlap rules
-	// need the network's own prefix and the other members' routes, which
-	// only state knows.
+	// Overlap rules need state; form was checked at decode.
 	if err := next.checkNodeAdmissible(updated); err != nil {
 		return err
 	}
@@ -241,6 +240,17 @@ func (next *State) setDomain(a *types.AUM, _ applyMode) error {
 		ix.Add(&n)
 	}
 	next.domain = *a.Domain
+	return nil
+}
+
+func (next *State) setPublicDERP(a *types.AUM, _ applyMode) error {
+	if next.schema < types.SchemaPublicDERP {
+		return fmt.Errorf("log: a public DERP setting needs %v; the network is at %v", types.SchemaPublicDERP, next.schema)
+	}
+	if *a.PublicDERP == next.publicDERP {
+		return inEffect(errors.New("log: the network's public DERP servers are these already"))
+	}
+	next.publicDERP = *a.PublicDERP
 	return nil
 }
 
@@ -354,8 +364,7 @@ func (next *State) removeAdminKey(a *types.AUM, _ applyMode) error {
 		return fmt.Errorf("log: %v is not an admin key", a.Subject.ShortString())
 	}
 	delete(next.admins, *a.Subject)
-	// Removing a key that takes the remaining weight below k would leave a
-	// network nobody can ever change again — including to undo this.
+	// Remaining weight below quorum would leave the network unchangeable.
 	if total := next.TotalVotes(); total < next.quorum {
 		return fmt.Errorf(
 			"log: removing %v would leave %d vote weight against a quorum of %d, "+
@@ -395,8 +404,8 @@ func (next *State) setHolder(a *types.AUM, _ applyMode) error {
 	if keys == 0 {
 		return fmt.Errorf("log: no admin key belongs to %q", h.Name)
 	}
-	// A holder that needs more keys than it has casts nothing; where that
-	// leaves the rest short of the quorum, nobody could undo it.
+	// A holder needing more keys than it has casts nothing; the rest must
+	// still reach quorum.
 	if total := next.TotalVotes(); total < next.quorum {
 		return fmt.Errorf("log: that would leave %d vote weight against a quorum of %d, "+
 			"making the network permanently unmanageable", total, next.quorum)
@@ -414,8 +423,7 @@ func (next *State) setQuorum(a *types.AUM, _ applyMode) error {
 }
 
 func (next *State) setVouchers(a *types.AUM, _ applyMode) error {
-	// Fewer admin devices later is the operator's to notice, and fails
-	// closed.
+	// Losing admin devices later fails closed.
 	if err := types.ValidateVouchers(*a.Vouchers, next.Nodes()); err != nil {
 		return fmt.Errorf("log: %w", err)
 	}
@@ -430,10 +438,8 @@ func (next *State) checkpoint(a *types.AUM, mode applyMode) error {
 	if a.State.GenesisHash == nil || *a.State.GenesisHash != next.genesisHash {
 		return errors.New("log: checkpoint belongs to a different network")
 	}
-	// A checkpoint states the state; it must not change it. Where the ancestry
-	// is known, the claim is checked against what the chain produces —
-	// otherwise a quorum could rewrite membership by asserting a state rather
-	// than authoring the changes that reach it.
+	// A checkpoint must state exactly the chain's state, or a quorum could
+	// rewrite membership by assertion.
 	if !bytes.Equal(next.Snapshot().Encode(), a.State.Encode()) {
 		return errors.New("log: checkpoint state does not match the state its ancestry produces")
 	}
@@ -446,10 +452,7 @@ func (next *State) schemaUpgrade(a *types.AUM, _ applyMode) error {
 			*a.Schema, next.schema)
 	}
 	if *a.Schema > types.CurrentSchema {
-		// Not a rejection: the record is authorized and the network has moved.
-		// This build cannot read what comes after it, so the chain stops here
-		// and the caller raises an alarm. Refusing the record outright would
-		// leave a node that only observed sync stopping.
+		// Not a rejection: the chain stops here for this build.
 		return &SchemaTooNewError{Version: *a.Schema, Implemented: types.CurrentSchema, At: next.head}
 	}
 	next.schema = *a.Schema
@@ -494,8 +497,7 @@ func (next *State) renameNetwork(a *types.AUM, _ applyMode) error {
 	return nil
 }
 
-// renameNode refuses a name another member's folds like, as a holder's: a
-// person chose it, and devices are named on the command line by it.
+// renameNode refuses a name that folds like another member's.
 func (next *State) renameNode(a *types.AUM, _ applyMode) error {
 	cur, err := next.member(*a.Subject)
 	if err != nil {
@@ -521,25 +523,31 @@ func (next *State) renameNode(a *types.AUM, _ applyMode) error {
 }
 
 func (next *State) retireAddresses(_ *types.AUM, _ applyMode) error {
-	retired := next.v4Retiring != nil
+	ranges := next.v4Retiring != nil
 	next.v4Retiring = nil
+	if !next.retire(func(netip.Addr) bool { return true }) && !ranges {
+		return inEffect(errors.New("log: no renumbering has left an address to retire"))
+	}
+	return nil
+}
+
+// retire ends the retirement of each old address taken reports, and reports
+// whether there was one.
+func (next *State) retire(taken func(netip.Addr) bool) (retired bool) {
 	for id, n := range next.nodes {
-		if n.Retiring != nil {
+		if n.Retiring != nil && taken(n.Retiring.Addr) {
 			updated := n.Clone()
 			updated.Retiring = nil
 			next.nodes[id] = updated
 			retired = true
 		}
 	}
-	if !retired {
-		return inEffect(errors.New("log: no renumbering has left an address to retire"))
-	}
-	return nil
+	return retired
 }
 
 // renumberNetwork moves the network to r.Prefix and each member to its entry
-// in r.Addrs, the address it leaves retiring. The ranges left that hold one of
-// those stay reserved; what an earlier renumbering left is dropped.
+// in r.Addrs, the old address retiring. Old ranges holding a retiring address
+// stay reserved; an earlier renumbering's are dropped.
 func (next *State) renumberNetwork(a *types.AUM, mode applyMode) error {
 	r := a.Renumber
 	if next.v4Prefix != nil && *next.v4Prefix == *r.Prefix {
@@ -581,8 +589,7 @@ func (next *State) renumberNetwork(a *types.AUM, mode applyMode) error {
 		next.v4Retiring = &types.RetiringRanges{Prefixes: retiring, Until: r.Until}
 	}
 	if mode == applyProbe {
-		// Reissued, the renumbering allocates again; only the routes the new
-		// prefix would overlap are substance.
+		// Reissued it allocates again; only route overlaps are substance.
 		for _, n := range next.nodes {
 			for _, pfx := range n.Routes {
 				if err := types.ValidateRoute(pfx, next.ULA(), next.V4Ranges(), n.HasRole(types.RoleExit)); err != nil {
@@ -612,8 +619,8 @@ func (s *State) checkRenumbering(r *types.Renumbering) error {
 		}
 	}
 	for _, e := range r.Addrs {
-		// What another member holds, its retiring address included, stays its
-		// own: peers that have not seen this record still route it there.
+		// Another member's address, retiring included, stays its own: peers
+		// that have not seen this record still route it there.
 		if other, held := holders[e.V4]; held && other != e.Identity {
 			return fmt.Errorf("log: %v and %v both claim overlay v4 address %v",
 				other.ShortString(), e.Identity.ShortString(), e.V4)
@@ -636,9 +643,7 @@ func (next *State) renumberNode(a *types.AUM, mode applyMode) error {
 		return err
 	}
 	if mode == applyProbe {
-		// Where the member may move to is decided by the chain the move is
-		// replayed on: a range or an address the winner took is a move to
-		// start again, not a conflict.
+		// A move the winner blocks is to be redone, not a conflict.
 		return nil
 	}
 	v4 := *r.V4
@@ -649,11 +654,14 @@ func (next *State) renumberNode(a *types.AUM, mode applyMode) error {
 		return fmt.Errorf("log: %v holds %v already", id.ShortString(), v4)
 	}
 	for _, other := range next.nodes {
-		if other.Identity != id && slices.Contains(other.V4Addrs(), v4) {
+		taken := next.schema >= types.SchemaTakeRetired && (other.V4 == nil || *other.V4 != v4)
+		if other.Identity != id && slices.Contains(other.V4Addrs(), v4) && !taken {
 			return fmt.Errorf("log: %v and %v both claim overlay v4 address %v",
 				other.Identity.ShortString(), id.ShortString(), v4)
 		}
 	}
+	// From schema 25 it takes another's retiring address.
+	next.retire(func(old netip.Addr) bool { return old == v4 })
 	updated := cur.Clone()
 	updated.Retiring = nil
 	if cur.V4 != nil {
@@ -664,14 +672,12 @@ func (next *State) renumberNode(a *types.AUM, mode applyMode) error {
 	return nil
 }
 
-// applyEpoch installs a new group-secret epoch. prev is the state the record
-// was applied to, for the sequencing rule; the member set is read from next,
-// since a bump must cover the set as it will be, not as it was.
+// applyEpoch installs a new group-secret epoch. prev is the state before the
+// record; the wraps must cover the members of next, the set as it will be.
 func (next *State) applyEpoch(prev *State, rec *types.EpochRecord, mode applyMode) error {
 	if mode != applyProbe {
-		// Exactly one past the current epoch. Strict sequencing means a node's
-		// persisted epoch floor has an exact meaning, and no record can jump
-		// the counter — toward exhaustion, or past a floor a node is holding.
+		// Exactly one past the current epoch, so no record can jump the
+		// counter toward exhaustion or past a floor.
 		if rec.Epoch != prev.epoch+1 {
 			return fmt.Errorf("log: epoch record claims epoch %d, want %d", rec.Epoch, prev.epoch+1)
 		}
@@ -687,8 +693,7 @@ func (next *State) applyEpoch(prev *State, rec *types.EpochRecord, mode applyMod
 			}
 		}
 		// Wraps are sorted and duplicate-free, so equal counts plus every
-		// recipient being a member proves the sets are equal: no member left
-		// without the secret, no non-member handed it.
+		// recipient a member proves the sets equal.
 	}
 	next.epoch = rec.Epoch
 	next.epochCommit = rec.Commit
@@ -710,9 +715,13 @@ func (s *State) v4Holder(addr netip.Addr) bool {
 	return false
 }
 
-// checkNodeAdmissible checks n, a member's record as a record leaves it,
-// against the network and every other member ([types.NodeRecord.ValidateIn]).
+// checkNodeAdmissible checks a member's updated record n against the network
+// and every other member ([types.NodeRecord.ValidateIn]).
 func (s *State) checkNodeAdmissible(n *types.NodeRecord) error {
+	if i := slices.IndexFunc(n.Published, func(p types.PublishedName) bool { return types.OwnName(p.Label) }); i >= 0 && s.schema < types.SchemaOwnNames {
+		return fmt.Errorf("log: publishing %s, a name of its own, needs %v; the network is at %v",
+			n.Published[i].Label, types.SchemaOwnNames, s.schema)
+	}
 	others := types.NewMemberIndex(s.space(), len(s.nodes))
 	for _, other := range s.nodes {
 		if other.Identity != n.Identity {
@@ -735,15 +744,15 @@ func applyGenesis(a *types.AUM, hash types.Hash) (*State, error) {
 	if a.Kind != types.KindGenesis {
 		return nil, reject(RuleMalformed, fmt.Errorf("log: %v is not a genesis record", a.Kind))
 	}
-	// The genesis record cannot name its own hash, so the applied state takes
-	// the record's. The overlay prefix and every derived address follow.
+	// Genesis cannot name its own hash; the state, and every derived
+	// address, takes the record's.
 	snap := a.State.Clone()
 	snap.GenesisHash = &hash
 	return adoptSnapshot(snap, hash, "genesis")
 }
 
-// adoptSnapshot builds state from one that arrives whole, on a quorum's word
-// rather than record by record: what is a genesis or a checkpoint.
+// adoptSnapshot builds state from a whole snapshot taken on a quorum's word;
+// what names it, genesis or checkpoint.
 func adoptSnapshot(snap *types.Snapshot, head types.Hash, what string) (*State, error) {
 	if err := snap.StaticValidate(false); err != nil {
 		return nil, reject(RuleState, fmt.Errorf("log: %s state: %w", what, err))

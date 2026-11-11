@@ -27,10 +27,9 @@ func subnetFamily() family {
 			}},
 			{name: "off", run: subnetOff, forms: [][2]string{{"off", "reach none of them through the network"}}},
 			{name: "on", run: subnetOn, forms: [][2]string{{"on", "reach them again"}}},
-		}, footer: `An admin adds a subnet, such as 192.168.1.0/24, to a device, and its
-operator agrees to route it: juist subnet serve. Every member then reaches
-the subnet through that device, unless the member reaches those addresses by
-its own route, as on its LAN.`}
+		}, footer: `An admin adds a subnet, such as 192.168.1.0/24, to a device, and its operator
+agrees to route it: juist subnet serve. Members then reach the subnet through
+that device, unless they have their own route to it, as on its LAN.`}
 }
 
 func cmdSubnet(a *app, args []string) error { return subnetFamily().run(a, args) }
@@ -123,7 +122,7 @@ func subnetServe(a *app, args []string) error {
 	}
 	st := d.st
 	if !servesHere {
-		return errors.New("a subnet router runs on Linux and FreeBSD alone")
+		return errors.New("subnets are routed only on Linux and FreeBSD")
 	}
 	if err := a.requireOperator(); err != nil {
 		return err
@@ -165,7 +164,7 @@ func subnetServe(a *app, args []string) error {
 		a.ok("routing %s", listPrefixes(sub.Serving))
 		a.warnDocker(sub.Serving)
 	case !hasOwnSubnets(sub, st):
-		a.ok("will route once an admin grants this device a subnet")
+		a.ok("will route once an admin adds a subnet to this device")
 		a.hint("juist subnet add %s PREFIX", cmp.Or(st.SelfName, st.Self.ShortString()))
 	default:
 		return fmt.Errorf("not routing: %s", sub.NotServing)
@@ -183,7 +182,7 @@ func (a *app) warnDocker(routed []netip.Prefix) {
 	for _, bridge := range slices.Sorted(maps.Keys(nets)) {
 		for _, n := range nets[bridge] {
 			if slices.ContainsFunc(routed, n.Overlaps) {
-				a.warn("docker shields its containers on %s (%s) from routed traffic", bridge, n)
+				a.warn("docker drops routed traffic to its containers on %s (%s)", bridge, n)
 				a.hint("docker lets it through on a network with gateway_mode_ipv4=nat-unprotected")
 				return
 			}
@@ -222,9 +221,9 @@ func changeSubnets(a *app, args []string, add bool, s spec) error {
 	}
 	subnets := slices.Clone(target.SubnetRoutes())
 	for _, arg := range pos {
-		pfx, err := parseSubnet(arg, displayMember(target))
+		pfx, err := parseSubnet(arg)
 		if err != nil {
-			return err
+			return a.usageErr("%v", err)
 		}
 		if subnets, err = a.changeSubnet(auth.State(), target, subnets, pfx, add); err != nil {
 			return err
@@ -236,13 +235,13 @@ func changeSubnets(a *app, args []string, add bool, s spec) error {
 
 func subnetOff(a *app, args []string) error {
 	return setAccepting(a, args, false, spec{name: "juist subnet off", about: `
-Stop reaching the network's subnets through it; the host routes them itself,
-as before. juist subnet on undoes it.`})
+Stop reaching the subnets through the network; the host's own routes apply.
+juist subnet on undoes it.`})
 }
 
 func subnetOn(a *app, args []string) error {
 	return setAccepting(a, args, true, spec{name: "juist subnet on", about: `
-Reach the network's subnets through it again.`})
+Reach the subnets through the network again.`})
 }
 
 func setAccepting(a *app, args []string, on bool, s spec) error {

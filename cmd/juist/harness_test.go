@@ -479,7 +479,9 @@ func (stubManager) NotAtHome() map[uint64]time.Time { return nil }
 
 func (stubManager) LocalEndpoints() []netip.AddrPort { return nil }
 
-func (stubManager) LocalPort() uint16 { return 41641 }
+func (stubManager) LocalPort() uint16        { return 41641 }
+func (stubManager) Underlay() conn.Underlay  { return conn.Underlay{} }
+func (stubManager) SetPublicDERP(bool) error { return nil }
 
 func (stubManager) Ping(netip.Addr, func(conn.PingResult)) {}
 func (stubManager) Echo(netip.Addr, func(conn.PingResult)) {}

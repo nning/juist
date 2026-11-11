@@ -15,7 +15,7 @@ juist health
 
 Warnungen beginnen mit `warning:`, und auf die meisten folgt eine Zeile
 `hint:` mit dem Befehl, der weiterhilft. Schlichte Zeilen nennen die Geräte,
-die dieses nicht erreicht. Ist nichts zu tun, steht dort `nothing needs attention`.
+die dieses nicht erreicht. Eine Leerzeile trennt die einzelnen Punkte. Ist nichts zu tun, steht dort `nothing needs attention`.
 `juist status` zeigt den Zustand des Netzes und die Einzelheiten. Jeder lokale
 Benutzer darf beide ausführen. Was die einzelnen Zeilen bedeuten, steht unter
 [Status und Geräte]({{< relref "docs/status" >}}).
@@ -80,6 +80,12 @@ eine vorgeschaltete Firewall sperrt Port 41643/udp. Prüfe, ob es läuft. Hat
 es eine öffentliche Adresse, öffne dort 41643/udp. Siehe
 [Relays]({{< relref "docs/relays" >}}).
 
+### `no answer from nas: offline, or not at Tailscale's DERP`
+
+Dasselbe in einem Netz mit Tailscales öffentlichen DERP-Servern, die ein
+Gerät mit gesperrtem UDP tragen: `nas` ist offline, oder sein Netz sperrt
+Tailscales Server.
+
 ### `no tunnel traffic from nas`
 
 `nas` ist bekannt, aber von dort kommt kein Verkehr an. Entweder ist Port
@@ -129,6 +135,24 @@ Liegt es an firewalld auf diesem Gerät, meldet `juist health`
 `firewalld blocks juist0` und nennt den passenden Befehl. Siehe
 [Relays]({{< relref "docs/relays" >}}).
 
+### `firewalld blocks udp/41643, which the router maps to this device`
+
+Der Router hat für dieses Gerät per UPnP, NAT-PMP oder PCP einen Port
+geöffnet, aber firewalld hier verwirft, was darauf ankommt, sodass die anderen
+dieses Gerät trotzdem nicht direkt erreichen. Lass den Port durch, wie der
+Hinweis vorschlägt:
+
+```console
+hint: sudo firewall-cmd --permanent --zone=public --add-service=juist && sudo firewall-cmd --reload
+```
+
+Kann juist die Ports der Zone nicht lesen, etwa ohne root unter der
+Server-Policy von firewalld, sagt ein Hinweis `firewalld may block`; `juist
+status` zählt ihn nicht mit, und `sudo juist health` sagt, ob firewalld den
+Port sperrt.
+Mit ufw `sudo ufw allow juist`; die Regeln von ufw kann juist nicht lesen,
+deshalb warnt es dort nicht.
+
 ### `warning: log sync fails: nas runs a newer juist`
 
 Auf nas läuft eine neuere Version von juist, deren Änderungen diese nicht
@@ -169,7 +193,7 @@ Lässt das Netz mehr als HTTPS hinaus, genügt auch
 die Warnung bleibt, gibt sich der Server unter diesem Namen nicht als dieses
 Relay zu erkennen. Prüfe das DNS des Namens.
 
-### `warning: juistd may bind any port below 1024, which no relay on 443 here needs`
+### `warning: juistd may bind ports below 1024, but no relay here uses 443`
 
 juistd durfte Port 443 belegen, damit ein Relay seinen öffentlichen Namen
 bedienen kann. Der Name ist weg, das Recht aber geblieben, etwa weil der Name
@@ -208,7 +232,7 @@ es als `outdated`. Hat nas gar keinen Tunnel zu diesem Gerät, weil seine
 Version kein Gerät kennt, das nach dem Upgrade beigetreten ist, zeigt es
 `no answer`.
 
-### `warning: nas runs an older juist, which applies no changes until updated`
+### `warning: nas runs an older juist and applies no changes until updated`
 
 Das Netz wurde aktualisiert, und auf nas läuft noch eine Version von juist
 von vor dem Upgrade. nas bleibt erreichbar, übernimmt aber keine Änderung am
@@ -246,7 +270,7 @@ Admin wiederholt die verlorenen Änderungen oder führt
 `juist rotate group-secret` aus. Sobald diese Änderung
 das Gerät erreicht, verbindet es sich wieder.
 
-### `warning: this device's log is older than what the network's devices keep`
+### `warning: this device fell too far behind to catch up`
 
 Das Gerät war offline, während sich das Netz änderte, und die anderen Geräte
 haben den Teil des Logs verworfen, den es noch gebraucht hätte. Das tun sie,

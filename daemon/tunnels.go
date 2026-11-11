@@ -458,7 +458,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		}
 	}
 	settle := d.settles()
-	relays := d.relayOwners()
+	relays, public := d.relayOwners()
 	notAt := d.manager.NotAtHome()
 	// A walled device sends to a peer homed where it does not reach at its
 	// own home.
@@ -485,7 +485,9 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 		gone[c.id] = down && srv != nil && ep.HomeRelay == region && !srv.Connected(c.wg)
 	}
 	// A peer connected to this relay, or homed at it, reached it; a live one
-	// homed at no member relay would have, were its port open.
+	// homed at none would have, were its port open. One homed at
+	// Tailscale's may not measure this relay for another reason: far away,
+	// or its UDP closed while STUN passes; the status names its relay.
 	var relayedFor int
 	var relayPort uint16
 	stranded := false
@@ -512,7 +514,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 	}
 	d.reachable.Store(&reachable)
 	v := classifyReach(checks, reachFacts{
-		now: now, schema: d.status.Schema, settle: settle, relays: relays, via: via,
+		now: now, schema: d.status.Schema, settle: settle, relays: relays, public: public, via: via,
 		failed: failed, held: held, announced: announced, gone: gone,
 	}, reachPast{down: d.down, behind: d.behind, olderBuild: d.olderBuild, syncRetried: d.syncRetried})
 	d.down, d.behind, d.olderBuild = v.past.down, v.past.behind, v.past.olderBuild
@@ -588,6 +590,7 @@ func (d *Daemon) refreshReach(ctx context.Context) {
 			SyncBroken: syncBroken, Outdated: v.outdated, OlderBuild: v.olderBuild,
 			Firewalled: firewalled, FirewallUnsure: firewallUnsure, Unguarded: d.manager.Unguarded(),
 			RelayedFor: relayedFor, RelayUnreached: unreached, RelayPort: relayPort,
+			Underlay: underlayStatus(d.manager.Underlay()),
 		}
 	}
 }
@@ -605,7 +608,8 @@ type reachFacts struct {
 	schema    types.SchemaVersion
 	settle    time.Duration
 	relays    map[int]string
-	via       map[int]int // the region sent to for a peer's home, where not that
+	public    map[int]bool // those of relays that are Tailscale's
+	via       map[int]int  // the region sent to for a peer's home, where not that
 	failed    map[types.Identity]gossip.Failure
 	held      map[types.Identity]gossip.Endpoint // the down's announcements
 	announced map[types.Identity]types.SchemaVersion
@@ -636,7 +640,8 @@ func classifyReach(checks []tunnelCheck, f reachFacts, past reachPast) reachVerd
 		if c.reach.Live {
 			v.live++
 			if !c.reach.Direct {
-				v.reach[i].Relay = f.relays[cmp.Or(f.via[c.peer.HomeRelay], c.peer.HomeRelay)]
+				r := cmp.Or(f.via[c.peer.HomeRelay], c.peer.HomeRelay)
+				v.reach[i].Relay, v.reach[i].PublicRelay = f.relays[r], f.public[r]
 			}
 			// Back up, or up with a sync that failed: sync now, so the log
 			// and the announcements catch up, and so that a failure the
@@ -818,15 +823,16 @@ func (d *Daemon) checkSoon() {
 	}
 }
 
-// relayOwners names each relay region by the member whose relay it is.
-func (d *Daemon) relayOwners() map[int]string {
+// relayOwners names each relay region by the member whose relay it is, or
+// as Tailscale's where the network names those, which public holds.
+func (d *Daemon) relayOwners() (names map[int]string, public map[int]bool) {
 	state, err := d.TrustedState()
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	// Of two members deriving one region, the lower identity holds it; see
 	// [Daemon.relaySet].
-	names := map[int]string{}
+	names, public = map[int]string{}, map[int]bool{}
 	holders := map[int]types.Identity{}
 	for _, n := range state.NodesWithRole(types.RoleRelayCapable) {
 		region := relayRegion(state.GenesisHash(), n.Identity)
@@ -834,5 +840,27 @@ func (d *Daemon) relayOwners() map[int]string {
 			names[region], holders[region] = n.Name, n.Identity
 		}
 	}
-	return names
+	if state.PublicDERP().Tailscale {
+		for region, name := range conn.PublicRegions() {
+			if _, ok := names[region]; !ok {
+				names[region], public[region] = name, true
+			}
+		}
+	}
+	return names, public
+}
+
+// underlayStatus is u as the status says it, nil where nothing was measured.
+func underlayStatus(u conn.Underlay) *ipc.Underlay {
+	if !u.Measured {
+		return nil
+	}
+	s := &ipc.Underlay{
+		UDP: u.UDP, IPv4: u.IPv4, IPv6: u.IPv6, Mapping: u.Mapping, PortPerPeer: u.PortPerPeer,
+		Offered: u.Offered,
+	}
+	if u.Mapped.IsValid() {
+		s.Mapped = u.Mapped.String()
+	}
+	return s
 }

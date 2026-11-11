@@ -125,11 +125,15 @@ imported admin key "alice@home"
 it casts 1 vote in "home"
 ```
 
+A line the Android app saved to a file is sealed by a password; read it in
+with `juist admins import alice@home < juist-admin-home.txt`, which asks for
+the password at the terminal.
+
 The line always goes through a pipe, never onto the command line. Its
 checksum refuses a truncated line. It also covers the key's quantum-safe
 signing key, which derives from it. An import never replaces an existing key.
 If the key was removed from the network since the backup, the import warns
-`"home" gives it no vote`.
+`the key has no vote in "home": it was removed, or is from another network`.
 
 Keep the break-glass line that `juist create` showed the same way, but
 separately from the admin keys
@@ -166,6 +170,6 @@ Why juist accepts this is explained under
 |---|---|
 | `juist: still a member of "home"` | Run `juist remove phone` on an admin's device first, or add `--force`. |
 | `juist status`: `removed` | This device is no longer in the network. Join again with a new invite, or run `juist reset`. |
-| `hint: the new keys stay staged until the log names them or: juist rotate abandon` | Wait for the approval, or drop the rotation with `juist rotate abandon`. |
+| `hint: the new keys stay pending until applied; to drop them: juist rotate abandon` | Wait for the approval, or drop the rotation with `juist rotate abandon`. |
 | `juist: no admin key of this network in …` | Run the command where an admin's key is. |
 

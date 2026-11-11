@@ -108,8 +108,11 @@ func TestMulticastSettingsAreKeptAndTaken(t *testing.T) {
 		t.Errorf("after a restart, the status says %+v", m)
 	}
 	on, none := true, []string{}
-	if _, err := ipc.Call(g.sock, ipc.Request{Command: ipc.CmdSettings, Multicast: &on, Groups: &none}); err != nil {
+	if resp, err = ipc.Call(g.sock, ipc.Request{Command: ipc.CmdSettings, Multicast: &on, Groups: &none}); err != nil {
 		t.Fatal(err)
+	}
+	if m := resp.Status.Multicast; m == nil || m.Auto || m.GroupsOff != copiesGroups(g.s.opts.Mesh) {
+		t.Errorf("groups turned off, the status says %+v", m)
 	}
 	if _, err := os.Stat(filepath.Join(f.home, statedir.MulticastOffFile)); !os.IsNotExist(err) {
 		t.Errorf("multicast off stayed: %v", err)

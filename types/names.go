@@ -20,15 +20,12 @@ const (
 // DEVICE.NETWORK.juist, which no override may claim.
 const NamesTLD = "juist"
 
-// reservedTLDs are top-level domains no override may name: juist's own, and
-// those that mean something to the host itself or are never delegated.
+// reservedTLDs are juist's own and those local to a host or never delegated.
 var reservedTLDs = []string{NamesTLD, "arpa", "invalid", "local", "localhost", "onion"}
 
-// ValidateHostName checks a public DNS name an override points at a member:
-// lowercase ASCII, a Unicode name in its xn-- form, of two labels or more,
-// letters, digits and inner hyphens alone, and neither an address nor a name
-// of a reserved domain. A name of one form alone, so that two spellings
-// cannot be two overrides.
+// ValidateHostName checks a public DNS name: two or more lowercase ASCII
+// labels (Unicode as xn--), not an address, not in a reserved domain. One
+// spelling only, so two spellings cannot be two overrides.
 func ValidateHostName(name string) error {
 	switch {
 	case name == "":

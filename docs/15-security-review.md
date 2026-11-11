@@ -34,9 +34,7 @@ evidence for a property, never line by line.
 
 Compute first, reading after:
 
-- The fuzz targets M32 lists as missing (`waiting.Decode`,
-  `types.DecodeLease`, the helper's protocol) exist,
-  and `make fuzz-long` has run over every target and is recorded in
+- `make fuzz-long` has run over every target and is recorded in
   [12-validating.md](12-validating.md). A parser the fuzzer has not seen
   costs a reader's time on what a machine finds for free.
 - `make lint` and `make govulncheck` pass.

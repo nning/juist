@@ -332,11 +332,11 @@ The wrap set is inline in every epoch record and checkpoint.
 
 | | bytes | per member per change | network-wide per change |
 |---|---|---|---|
-| epoch bump | 618 682 | 604 KiB | 302 MiB |
-| checkpoint | 1 284 375 | 1254 KiB | — |
+| epoch bump | 621 039 | 606 KiB | 303 MiB |
+| checkpoint | 1 961 910 | 1916 KiB | — |
 
 Processing either costs milliseconds, so **the fan-out costs bandwidth, not
-CPU, and only above the target scale** (118 KiB per member at 100 devices).
+CPU, and only above the target scale** (120 KiB per member at 100 devices).
 What each decision binds:
 
 - **A Merkle root over the wrap set: declined.** It would need a second
@@ -404,13 +404,18 @@ v4 addresses move after admission. The rules a later change has to keep:
 - **The log stays time-free.** A renumbering's deadline is data, applied by
   whoever renders addresses (`State.Addrs(id, now)`), never by `apply`. A
   skewed clock only keeps an old address live longer, which is safe because it
-  stays bound to its member's key and held against collisions.
-- **A retiring address is held like a current one.** Nothing may give it to
-  another member while it is recorded, and a range a network renumbering leaves
-  with such addresses rejects admissions and overlapping route grants until it
-  retires. Only a retiring address may lie in such a range, and a genesis
-  retires nothing, so every state validates once the range is gone. The CLI's
-  allocator still skips every address the history gave out.
+  stays bound to its member's key until a record takes it.
+- **A retiring address is held until a record takes it.** No admission gets
+  it, and a range a network renumbering leaves with such addresses rejects
+  admissions. From schema 25 a move may take another member's retiring
+  address, and a subnet route a retiring range, ending the retirement of what
+  it takes in the same record; below, nothing may. A route over part of a
+  retiring range takes all of it, and every old address in it: only a
+  retiring address may lie in a retiring range. Whether the deadline has
+  passed is the CLI's to judge, which refuses before it, and an approval
+  says what a record takes. Only a retiring address may lie in such a range,
+  and a genesis retires nothing, so every state validates once the range is
+  gone. The CLI's allocator still skips every address the history gave out.
 - **A member keeps one old address.** A second renumbering replaces the first
   one's; the CLI asks first.
 - **A network renumbering covers the member set exactly.** The addresses a
@@ -526,7 +531,7 @@ subtract in `conn.Internet`, and subnet routes carry no default route.
 - `TestTCBDependencies` keeps the audit scope to the standard library plus two
   small modules, and the clock and filesystem out of the packages that decide
   validity.
-- `make tcb` holds the core to its 11k-line budget
+- `make tcb` holds the core to its budget of 8 100 lines of code
   ([06-verification.md](06-verification.md) §6).
 - A fork-choice test that needs one record to beat another on the hash
   redraws *both* sides each attempt; redrawing against a fixed target can fail

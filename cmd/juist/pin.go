@@ -97,8 +97,8 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 	dpath := h.daemonPinPath(sock)
 	if b, err := os.ReadFile(dpath); err == nil {
 		if held := strings.TrimSpace(string(b)); held != fmt.Sprintf("%x", genesis[:]) {
-			return fmt.Errorf("juistd at %s now holds network %q, not the %s… this keystore saw; juistd may be "+
-				"compromised\nhint: if this device switched networks, delete %s", sock, state.Network(), short(held), dpath)
+			return fmt.Errorf("juistd at %s now holds network %q instead of %s…; juistd may be compromised\n"+
+				"hint: if this device changed networks, delete %s", sock, state.Network(), short(held), dpath)
 		}
 	} else if !keys.Missing(err) {
 		return err
@@ -126,16 +126,16 @@ func (h *home) checkPin(sock string, auth *log.Authority, records []types.AUM,
 		if !holdsContent(chain, byHash, content) {
 			lost, err := lostForkChoice(p.Head, auth, records, offChain)
 			if err != nil {
-				return fmt.Errorf("juistd's log for %q lacks the head this keystore verified, and does not "+
-					"say where it went: %w", state.Network(), err)
+				return fmt.Errorf("juistd's log for %q lacks the head this keystore verified: %w",
+					state.Network(), err)
 			}
 			if !lost && len(records) > 0 {
 				lost = standsIn(p, &records[0], offChain)
 			}
 			if !lost {
 				return fmt.Errorf("juistd's log for %q does not continue the one this keystore verified "+
-					"(head %v); juistd is behind, or compromised\nhint: retry once it caught up; to accept "+
-					"the change, delete %s", state.Network(), short(p.Head.String()), h.pinPath(genesis))
+					"(head %v): juistd is behind or compromised\nhint: retry later; to accept it anyway, delete %s",
+					state.Network(), short(p.Head.String()), h.pinPath(genesis))
 			}
 		}
 	}

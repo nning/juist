@@ -87,7 +87,7 @@ func TestOnePersonCanRequireTwoDevices(t *testing.T) {
 	mustContain(t, laptop.mustRun("admins"), "2 of 3 keys")
 
 	change := filepath.Join(dir, "rotate-group-secret.rec")
-	mustContain(t, laptop.mustRun("rotate", "group-secret"), "needs 1 more vote, from 1 more of alice's keys (1 of 2 signed)")
+	mustContain(t, laptop.mustRun("rotate", "group-secret"), "needs 1 more vote, from 1 more key of alice (1 of 2 signed)")
 	desktop.mustRun("approve", "--yes", change)
 	mustContain(t, laptop.mustRun("approve", change), "applied")
 }
@@ -174,5 +174,5 @@ func TestAdminKeysNameTheirMachine(t *testing.T) {
 
 	// Where a change waits for a key, it says which machine holds it.
 	c.mustRun("admins", "require", "alice", "2", "--yes")
-	mustContain(t, c.mustRun("rotate", "group-secret"), "1 more of alice's keys on nas (1 of 2 signed)")
+	mustContain(t, c.mustRun("rotate", "group-secret"), "1 more key of alice on nas (1 of 2 signed)")
 }

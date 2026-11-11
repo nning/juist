@@ -23,8 +23,8 @@ jeder andere Dienst unter einem eigenen Namen funktioniert genauso.
   öffne dort 41643/udp, mit `sudo ufw allow juist` oder
   `sudo firewall-cmd --permanent --add-service=juist && sudo firewall-cmd --reload`,
   damit sich die Geräte direkt mit ihm verbinden ([Ports]({{< relref "docs/relays" >}})).
-- Laptops unter Linux oder FreeBSD. Die Android-App löst keine öffentlichen
-  Namen auf.
+- Laptops unter Linux oder FreeBSD, oder Telefone mit der
+  [Android-App]({{< relref "docs/android" >}}).
 
 ## Einrichten
 
@@ -61,7 +61,8 @@ juist names on
 ```
 
 Die Ausgabe lautet `public names on: mail.example.org at mail`.
-`juist names` zeigt, wie dieser Laptop jeden Namen auflöst.
+`juist names` zeigt, wie dieser Laptop jeden Namen auflöst. Auf einem
+Telefon schaltest du in den **Details** der App **Öffentliche Namen** ein.
 {{< /step >}}
 
 ## Darauf achten

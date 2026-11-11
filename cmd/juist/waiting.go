@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nning/juist/internal/govern"
 	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/trust/log"
-	"github.com/nning/juist/trust/secrets"
 	"github.com/nning/juist/types"
 )
 
@@ -20,13 +20,8 @@ import (
 // more votes than this keystore gives, and listed where one waits for a key
 // of it.
 
-// adminRecipient is an admin key's encryption key, which follows from it.
 func adminRecipient(priv types.PrivateIdentity) (types.RecipientKey, error) {
-	keys, err := secrets.AdminRecipient(priv.Seed())
-	if err != nil {
-		return types.RecipientKey{}, err
-	}
-	return keys.Recipient()
+	return govern.AdminRecipient(priv)
 }
 
 // A waitingChange is a change waiting for votes as the copies here show it.
@@ -69,17 +64,7 @@ func (a *app) carry(auth *log.Authority, aum *types.AUM, ttl time.Duration, prop
 	if err != nil {
 		return false, nil, fmt.Errorf("handing the change on: %w", err)
 	}
-	// A copy that replaces this key's last one says so by its time.
-	now := a.now()
-	for _, b := range held {
-		if c, err := waiting.Decode(b); err == nil && c.ID == aum.SigHash() && c.Signer == signer.Public() &&
-			c.Issued >= now.Unix() {
-			next := time.Unix(c.Issued+1, 0)
-			ttl -= next.Sub(now)
-			now = next
-		}
-	}
-	c, err := waiting.Seal(state.GenesisHash(), aum, state.Admins(), state.SigningKey, signer, proposer, now, ttl)
+	c, err := govern.Seal(state, aum, signer, proposer, held, a.now(), ttl)
 	if errors.Is(err, waiting.ErrNoReaders) {
 		return false, unreadable(state, aum, nil), nil
 	}
@@ -317,7 +302,7 @@ func (a *app) approveOne(auth *log.Authority, w *waitingChange) error {
 		}
 	}
 	if auth.Disabled() != nil {
-		return fmt.Errorf("%q is disabled; nothing changes it any more", auth.State().Network())
+		return fmt.Errorf("%q is disabled and cannot be changed", auth.State().Network())
 	}
 	ok, err := a.askNow(a.ctx, "approve?")
 	if err != nil {
@@ -329,7 +314,7 @@ func (a *app) approveOne(auth *log.Authority, w *waitingChange) error {
 	}
 	a.renewed(auth, w)
 	if a.now().Unix() >= w.expires {
-		a.printf("  expired while you were asked; not approved\n")
+		a.printf("  expired before you answered; not approved\n")
 		return nil
 	}
 	added, err := a.signLocally(&w.aum, auth)
@@ -356,7 +341,7 @@ func (a *app) approveOne(auth *log.Authority, w *waitingChange) error {
 	// The signature is given; where it cannot travel, a file keeps it, but
 	// for an admission, which must not outlive its invite.
 	if w.aum.Kind == types.KindAddNode {
-		return fmt.Errorf("your approval of the admission could not be handed on: %w", cmp.Or(err,
+		return fmt.Errorf("cannot hand on your approval of the admission: %w", cmp.Or(err,
 			errors.New("no admin device takes it")))
 	}
 	path, ferr := a.writePending("approved-"+w.aum.Kind.String()+".rec", &w.aum)

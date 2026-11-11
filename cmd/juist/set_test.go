@@ -20,7 +20,7 @@ func TestSetSaysWhatItSetOf443(t *testing.T) {
 	}
 	mustContain(t, vps.mustRun("set", "--relay-name", "Relay.Example.org"), "relay name relay.example.org",
 		"hint: this device serves the name once it relays: juist grant vps relay")
-	if out, err := vps.run("set", "--relay-name", "relay"); err == nil || !strings.Contains(err.Error(), "no public name") {
+	if out, err := vps.run("set", "--relay-name", "relay"); err == nil || !strings.Contains(err.Error(), "is not a name like") {
 		t.Errorf("a relay name of one label (%v):\n%s", err, out)
 	}
 	laptop.mustRun("grant", "vps", "relay")
@@ -38,9 +38,9 @@ func TestSetSaysWhatItSetOf443(t *testing.T) {
 	eventually(t, "the status names the ingress's relay on 443", func() bool {
 		return strings.Contains(vps.mustRun("status"), "relay.pub.example.org, ")
 	})
-	mustContain(t, vps.mustRun("set", "--relay-name", ""), "relay name relay.pub.example.org, the ingress's")
+	mustContain(t, vps.mustRun("set", "--relay-name", ""), "relay name relay.pub.example.org (from the ingress)")
 	mustContain(t, laptop.mustRun("set", "--proxy", "http://user:secret@proxy.example:3128"),
-		"proxy http://user:xxxxx@proxy.example:3128", "hint: the proxy is used with --https-only alone")
+		"proxy http://user:xxxxx@proxy.example:3128", "hint: the proxy is used only with --https-only")
 	if out, err := laptop.run("set", "--proxy", "socks5://proxy.example:1080"); err == nil {
 		t.Errorf("a SOCKS proxy was taken:\n%s", out)
 	}
@@ -71,7 +71,7 @@ func TestAGrantOf443WithoutANameIsTakenBack(t *testing.T) {
 	if err := os.WriteFile(h.layout.relayGrant, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, h.mustRun("health"), "warning: juistd may bind any port below 1024",
+	mustContain(t, h.mustRun("health"), "warning: juistd may bind ports below 1024",
 		h.layout.relayScript+" off")
 	// Another juistd, by its socket, is none of the grant's.
 	other := newDaemonDevice(t, nil)
@@ -102,7 +102,7 @@ func TestSetTurnsDNSOffAndOn(t *testing.T) {
 	if out := laptop.mustRun("status"); !strings.Contains(out, "home.juist (DNS off)") || strings.Contains(out, "not resolved") {
 		t.Errorf("the status says more than that DNS is off:\n%s", out)
 	}
-	if out := laptop.mustRun("health"); !strings.Contains(out, "DNS is off on this device: the network's names are not resolved here") ||
+	if out := laptop.mustRun("health"); !strings.Contains(out, "DNS is off on this device: the network's names are not resolved") ||
 		strings.Contains(out, "warning: home.juist") {
 		t.Errorf("health does not say what DNS off means, or warns of it:\n%s", out)
 	}

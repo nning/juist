@@ -59,14 +59,14 @@ func Check(fs *flag.FlagSet, args []string) ([]string, error) {
 		switch {
 		case long && len(name) == 1:
 			if known {
-				return nil, fmt.Errorf("%s: a one-letter option takes one dash, as -%s", arg, name)
+				return nil, fmt.Errorf("unknown option %s; did you mean -%s?", arg, name)
 			}
 		case !long && len(name) > 1:
 			if known {
-				return nil, fmt.Errorf("%s: an option's full name takes two dashes, as --%s", arg, name)
+				return nil, fmt.Errorf("unknown option %s; did you mean --%s?", arg, name)
 			}
 			if hasValue || !isBundle(fs, name) {
-				return nil, fmt.Errorf("%s is not an option; options are written --name or -n", arg)
+				return nil, fmt.Errorf("unknown option %s", arg)
 			}
 			for j := range len(name) - 1 {
 				out = append(out, "-"+name[j:j+1])

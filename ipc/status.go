@@ -35,6 +35,9 @@ type Status struct {
 	// holds, which [CmdWaiting] hands over.
 	Waiting int `cbor:"62,keyasint,omitempty"`
 
+	// PortMapOff says this device asks its router for no port mapping.
+	PortMapOff bool `cbor:"89,keyasint,omitempty"`
+
 	// Rendezvous names the public services invites may meet through when
 	// neither device can reach the other; nil when the daemon is told to
 	// use none (--no-dht or --no-stun).
@@ -231,6 +234,10 @@ type Derived struct {
 	Relaying     bool `cbor:"22,keyasint,omitempty"`
 	RelayCapable int  `cbor:"23,keyasint,omitempty"`
 
+	// PublicDERP says members meet through Tailscale's public DERP servers
+	// where no member relays.
+	PublicDERP bool `cbor:"90,keyasint,omitempty"`
+
 	// Conflicted is how many members were denied a peer entry for announcing a
 	// NAT-traversal key another member or this device already uses. Dropping
 	// only those keeps one announcement from costing everyone their data plane.
@@ -341,6 +348,29 @@ type Tunnels struct {
 	RelayedFor     int    `cbor:"55,keyasint,omitempty"`
 	RelayUnreached bool   `cbor:"56,keyasint,omitempty"`
 	RelayPort      uint16 `cbor:"57,keyasint,omitempty"`
+
+	// Underlay is what the data plane last measured of the networks
+	// beneath this device, nil before it measured.
+	Underlay *Underlay `cbor:"88,keyasint,omitempty"`
+}
+
+// Underlay is what a measurement found of the networks beneath a device.
+type Underlay struct {
+	// UDP says a STUN server answered; IPv4 and IPv6 that one did over each.
+	UDP  bool `cbor:"1,keyasint,omitempty"`
+	IPv4 bool `cbor:"2,keyasint,omitempty"`
+	IPv6 bool `cbor:"3,keyasint,omitempty"`
+
+	// PortPerPeer says IPv4's NAT gave the device another public port for
+	// each server it sent to, which no peer can punch; Mapping that the
+	// measurement could tell either way.
+	Mapping     bool `cbor:"4,keyasint,omitempty"`
+	PortPerPeer bool `cbor:"5,keyasint,omitempty"`
+
+	// Offered names the port mapping protocols the router answered, and
+	// Mapped the public address a mapping holds there for the device.
+	Offered []string `cbor:"6,keyasint,omitempty"`
+	Mapped  string   `cbor:"7,keyasint,omitempty"`
 }
 
 // Blocked names the members in TunnelsDown that run a build that could have a
@@ -394,7 +424,8 @@ func (s *Status) ForReader() Status {
 			Silent: p.all(s.Silent), Unrevoked: changes(s.Unrevoked), Lost: changes(s.Lost), Refused: s.Refused, Overtaken: s.Overtaken, SelfName: s.SelfName,
 			LeaseSigners: s.LeaseSigners, FreshSince: s.FreshSince, FreshUntil: s.FreshUntil,
 			Vouchers: s.Vouchers, Vouching: s.Vouching, Stale: s.Stale,
-			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, Conflicted: s.Conflicted, NoKey: p.all(s.NoKey),
+			Relays: s.Relays, Relaying: s.Relaying, RelayCapable: s.RelayCapable, PublicDERP: s.PublicDERP,
+			Conflicted: s.Conflicted, NoKey: p.all(s.NoKey),
 			Alarm: s.Alarm, Disabled: s.Disabled, NotMember: s.NotMember, StaleKeys: s.StaleKeys, Exit: s.Exit.forReader(p),
 			Subnets: s.Subnets.forReader(), Names: s.Names.forReader(), HTTPS: s.HTTPS.forReader(p),
 			Multicast:      s.Multicast,
@@ -407,9 +438,9 @@ func (s *Status) ForReader() Status {
 			SyncFailing: p.all(s.SyncFailing), SyncNewer: p.all(s.SyncNewer),
 			SyncBroken: p.all(s.SyncBroken), Outdated: p.all(s.Outdated), OlderBuild: p.all(s.OlderBuild), Firewalled: s.Firewalled,
 			FirewallUnsure: s.FirewallUnsure, Unguarded: s.Unguarded, RelayedFor: s.RelayedFor, RelayUnreached: s.RelayUnreached,
-			RelayPort: s.RelayPort,
+			RelayPort: s.RelayPort, Underlay: s.Underlay,
 		},
-		SyncInTunnel: s.SyncInTunnel, Rendezvous: s.Rendezvous,
+		SyncInTunnel: s.SyncInTunnel, Rendezvous: s.Rendezvous, PortMapOff: s.PortMapOff,
 		InNetwork: s.InNetwork, StartError: s.StartError, Joining: s.Joining,
 		CanOperate: s.CanOperate, Operator: s.Operator,
 		EpochError: s.EpochError, SchemaAlarm: s.SchemaAlarm,
@@ -497,6 +528,9 @@ type PeerReach struct {
 	// Relay names the member whose relay carries a relayed tunnel's packets
 	// to the peer: the peer's home, empty where it has none of the network's.
 	Relay string `cbor:"11,keyasint,omitempty"`
+	// PublicRelay says Relay is one of Tailscale's public DERP servers, no
+	// member's.
+	PublicRelay bool `cbor:"12,keyasint,omitempty"`
 
 	// Seeking says a tunnel that is down may be so because the peer
 	// restarted or moved, and its new announcement is being looked for;
@@ -821,4 +855,6 @@ type Multicast struct {
 	Off    bool     `cbor:"1,keyasint,omitempty"`
 	Groups []string `cbor:"2,keyasint,omitempty"`
 	Auto   bool     `cbor:"3,keyasint,omitempty"`
+	// GroupsOff says copying groups was turned off on purpose.
+	GroupsOff bool `cbor:"4,keyasint,omitempty"`
 }

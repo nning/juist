@@ -1,5 +1,5 @@
 # Ends TLS for the names published on this device whose operator said where
-# they go (juist publish add NAME HOST:PORT), on the device's overlay
+# they go (juist publish NAME HOST:PORT), on the device's overlay
 # addresses alone, and sends each connection on to its local service; plain
 # HTTP on port 80 of those addresses it redirects to https. Its
 # certificates come from an ACME CA by TLS-ALPN-01, answered through the

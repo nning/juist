@@ -149,10 +149,7 @@ func (p *closingPlatform) Open(b []byte) ([]byte, error) { p.called(); return p.
 // No process-wide hook calls a closed core's platform, and no key is written
 // unsealed once it is closed.
 func TestAClosedCoreLeavesNoHookOnItsPlatform(t *testing.T) {
-	t.Cleanup(func() {
-		keys.SealWith(nil)
-		netmon.RegisterInterfaceGetter(nil)
-	})
+	t.Cleanup(func() { keys.SealWith(nil) })
 	p := &closingPlatform{fakePlatform: &fakePlatform{t: t}}
 	c, err := Start(filepath.Join(t.TempDir(), "juist"), p)
 	if err != nil {
@@ -225,11 +222,11 @@ func identity(b byte) types.Identity {
 // directly, one through a relay, one being looked for, one not heard from.
 func sampleStatus() *ipc.Status {
 	self, a, b, c, d := identity(1), identity(2), identity(3), identity(4), identity(5)
-	s := &ipc.Status{Self: self, InNetwork: true,
+	s := &ipc.Status{Self: self, InNetwork: true, Waiting: 2,
 		Addrs: []netip.Prefix{netip.MustParsePrefix("10.0.0.5/32"), netip.MustParsePrefix("fd00::5/128")},
 		Derived: ipc.Derived{NetworkName: "home", SelfName: "phone", Members: 5, Peers: 3, Unreachable: 1,
 			Silent: []string{"dora"}, LeaseSigners: 1, Vouchers: 1, Vouching: 1, FreshSince: 100, FreshUntil: 200,
-			RelayCapable: 1, Schema: 22, Epoch: 3, Builds: []ipc.Build{{Identity: a, Schema: 22}},
+			RelayCapable: 1, PublicDERP: true, Schema: 22, Epoch: 3, Builds: []ipc.Build{{Identity: a, Schema: 22}},
 			Subnets: &ipc.Subnets{Routes: []ipc.SubnetRoute{{Prefix: netip.MustParsePrefix("192.168.7.0/24"), Router: a,
 				Name: "anna", InUse: true}}},
 			Devices: []ipc.Device{
@@ -242,20 +239,24 @@ func sampleStatus() *ipc.Status {
 		Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 2, TunnelsDown: []string{"cleo"}, ReachChecked: 150,
 			Seeking: []string{"cleo"},
 			Reach: []ipc.PeerReach{{Identity: a, Live: true, Direct: true}, {Identity: b, Live: true, Relay: "anna"},
-				{Identity: c, Seeking: true, Since: 140}}},
+				{Identity: c, Seeking: true, Since: 140}},
+			Underlay: &ipc.Underlay{UDP: true, IPv4: true, IPv6: true, Mapping: true, Offered: []string{"UPnP"},
+				Mapped: "203.0.113.7:41641"}},
 	}
 	s.Names = &ipc.Names{Domain: "home.juist", Resolved: true}
 	return s
 }
 
-// The view names the phone's own names, and says, as juist health does, why
+// The view names the phone's own names and the public names pointed at
+// other members, and says, as juist health does, why
 // the network's are not resolved, Private DNS by its host, and each name for
 // members alone out of reach then.
 func TestTheViewSaysWhyNamesAreNotResolved(t *testing.T) {
 	s := sampleStatus()
 	s.Names.Overrides = []ipc.NameOverride{{Name: "phone.example.org", Device: "phone"}, {Name: "www.example.org", Device: "anna"}}
 	v := viewOf(s, "dns.google")
-	if v.Names == nil || !v.Names.Resolved || !slices.Equal(v.Names.Own, []string{"phone.home.juist", "phone.example.org"}) {
+	if v.Names == nil || !v.Names.Resolved || !slices.Equal(v.Names.Own, []string{"phone.home.juist", "phone.example.org"}) ||
+		!slices.Equal(v.Names.Public, []publicName{{Name: "www.example.org", Member: "anna"}}) {
 		t.Errorf("names %+v", v.Names)
 	}
 	kinds := func(v view) []string {
@@ -320,7 +321,8 @@ func TestTheViewJudgesAsJuistStatusDoes(t *testing.T) {
 	for _, a := range v.Alarms {
 		kinds = append(kinds, a.Kind)
 	}
-	if want := []string{"silent", "seeking"}; !slices.Equal(kinds, want) {
+	// A member that does not answer is the normal case, not a note: cleo is sought.
+	if want := []string{"silent"}; !slices.Equal(kinds, want) {
 		t.Errorf("alarms %v, want %v", kinds, want)
 	}
 
@@ -367,6 +369,8 @@ func TestTheViewNamesWhoNeedsAnUpdate(t *testing.T) {
 func TestTheViewIsWhatTheAppReads(t *testing.T) {
 	s := sampleStatus()
 	s.EpochError = "no wrap for this device"
+	s.Names.Accepted = true
+	s.Names.Overrides = []ipc.NameOverride{{Name: "rss.example.org", Device: "anna", Not: "anna is not reachable"}}
 	got, err := json.MarshalIndent(viewOf(s, ""), "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -494,6 +498,23 @@ func TestTheUnderlaysRoutesLeaveOutItsDefaults(t *testing.T) {
 	}
 }
 
+// The port mapper asks the network beneath's IPv4 gateway, none where it
+// names none or another.
+func TestTheUnderlaysGatewayIsIPv4(t *testing.T) {
+	for in, want := range map[string]string{
+		`{"gateway":"192.168.1.1"}`:     "192.168.1.1",
+		`{"gateway":"::ffff:10.0.0.1"}`: "10.0.0.1",
+		`{"gateway":"fe80::1"}`:         "",
+		`{"gateway":"router"}`:          "",
+		`{}`:                            "",
+		``:                              "",
+	} {
+		if got := underlayGateway(in); got != want {
+			t.Errorf("underlayGateway(%s) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // A device established before the network's prefixes were known, as during a
 // join, is established again once they are, and not for the same prefixes.
 func TestTheCoreRoutesTheNetworksPrefixesOnceKnown(t *testing.T) {
@@ -565,5 +586,41 @@ func TestSlowLookupsKeepTheFailures(t *testing.T) {
 	}
 	if last := d.Recent[len(d.Recent)-1]; last.Name != fmt.Sprintf("slow%d.example.org", recentLookups+2) {
 		t.Errorf("the newest slow lookup kept is %s", last.Name)
+	}
+}
+
+// A member relayed by one of Tailscale's servers is said to be, and a
+// network that names those is not warned that no device may relay.
+func TestTheViewSaysTailscalesRelay(t *testing.T) {
+	s := sampleStatus()
+	s.RelayCapable = 0
+	bert := s.Devices[3].Identity
+	s.Reach[1] = ipc.PeerReach{Identity: bert, Live: true, Relay: "Tailscale Frankfurt", PublicRelay: true}
+	noRelay := func(v view) bool {
+		return slices.ContainsFunc(v.Alarms, func(a alarm) bool { return a.Kind == "noRelay" })
+	}
+	v := viewOf(s, "")
+	i := slices.IndexFunc(v.Members, func(m member) bool { return m.Name == "bert" })
+	if i < 0 || v.Members[i].Relay != "Tailscale Frankfurt" || !v.Members[i].RelayPublic {
+		t.Errorf("bert: %+v", v.Members)
+	}
+	if noRelay(v) {
+		t.Error("a network with Tailscale's DERP is warned that no device may relay")
+	}
+	s.Tunnels.TunnelsDown, s.Tunnels.Seeking = []string{"cleo"}, nil
+	if v := viewOf(s, ""); !slices.ContainsFunc(v.Alarms, func(a alarm) bool { return a.Kind == "noTrafficRelayed" }) {
+		t.Errorf("a peer down where Tailscale relays is blamed on NAT: %+v", v.Alarms)
+	}
+	s.PublicDERP, s.Relays = false, 1
+	if v := viewOf(s, ""); !slices.ContainsFunc(v.Alarms, func(a alarm) bool { return a.Kind == "noTrafficRelayed" }) {
+		t.Errorf("a peer down where a member relays is blamed on NAT: %+v", v.Alarms)
+	}
+	s.Relays = 0
+	v = viewOf(s, "")
+	if !noRelay(v) {
+		t.Error("a network with no relay at all is not warned")
+	}
+	if !slices.ContainsFunc(v.Alarms, func(a alarm) bool { return a.Kind == "noTraffic" }) {
+		t.Errorf("a peer down with no relay at all is not blamed on NAT: %+v", v.Alarms)
 	}
 }

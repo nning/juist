@@ -150,11 +150,16 @@ both can both govern the network and end it.
   later see how much time is left.
 - A device has at most one old address. Moving it again before the deadline
   drops the earlier old address immediately, and juist warns about this.
-- Retired addresses stay reserved, so that no other device gets them, until
-  you run `juist network renumber --finish` without further arguments.
-- Under `Renumbering`, `juist status` names the devices `not told yet` of a
-  move. It names only devices the access policy lets this one reach, as no
-  other can tell it.
+- Once retired, at the deadline or with `--finish`, an old address is free:
+  another device may move to it, and a subnet may cover the old range. A
+  subnet over part of it takes the whole range, and every old address in
+  it. Devices that have not yet heard of the move still send its traffic to
+  the old holder, which can read it, and juist warns about this: move a
+  device to an old address once `juist status` names no device under
+  `not told yet`. It names only devices the access policy lets this one
+  reach, as no other can tell it. Until `juist log upgrade` has
+  raised the network to the current record schema, retired addresses stay
+  reserved until `juist network renumber --finish` without further arguments.
 - The new range must have room for every device. juist warns when it
   overlaps a LAN of this host, or another network the device is in.
 - Configuration outside juist that names old addresses is not moved: update
@@ -181,9 +186,9 @@ both can both govern the network and end it.
 |---|---|
 | `juist health`: `no IPv4 on this host: …` | Two networks on this device overlap. Renumber one of them, as the hint says. |
 | `juist: 10.7.0.9 is taken by nas` | Pick a free address. |
-| `juist: 10.7.0.9 is outside the network's range …` | Pick one in the range that `juist network` shows. |
+| `juist: 10.7.0.9 is outside the network (…)` | Pick one in the range that `juist network` shows. |
 | `juist: another device is named "tablet" already` | Pick another name, or rename that device first. |
 | `juist: no line on stdin` | Pipe the break-glass line in, or give its file with `--secrets FILE`. |
-| `juist: no break-glass secret of "home" there` | The line belongs to another network. |
-| `juist: "home" is disabled; nothing changes it any more` | The network has ended. Run `juist reset`, then `juist create`. |
+| `juist: no break-glass secret of "home" given` | The line belongs to another network. |
+| `juist: "home" is disabled and cannot be changed` | The network has ended. Run `juist reset`, then `juist create`. |
 

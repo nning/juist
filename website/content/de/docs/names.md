@@ -19,9 +19,8 @@ für den Rest des Internets ändert sich nichts.
 
 Beides funktioniert unter Linux und FreeBSD, wo juist das DNS des Geräts
 selbst einrichtet ([wie](#resolver)). Die
-[Android-App]({{< relref "docs/android" >}}#names) löst die Namen der
-Mitglieder und die unter der Domain des Netzes veröffentlichten auf, keine
-öffentlichen Namen.
+[Android-App]({{< relref "docs/android" >}}#names) löst sie ebenfalls auf,
+öffentliche Namen, sobald in ihren **Details** **Öffentliche Namen** an ist.
 
 ## Ein Gerät über seinen Namen erreichen
 
@@ -56,11 +55,14 @@ Schalte öffentliche Namen auf diesem Gerät ein:
 juist names on
 ```
 
-Die Ausgabe lautet `public names on: mail.example.org at nas`.
+Die Ausgabe lautet `public names on: mail.example.org at nas`. Auf einem
+Telefon schaltest du in den **Details** der App **Öffentliche Namen** ein.
 {{< /step >}}
 
 `juist names` listet die Namen des Netzes auf und wie dieses Gerät jeden
-auflöst. Nach `juist names off` löst das Gerät sie wieder öffentlich auf.
+auflöst. Die unter der Domain des Netzes
+[veröffentlichten]({{< relref "docs/publishing" >}}) Namen stehen dort in
+einer Zeile, `see juist publish`, denn `juist publish` listet sie auf. Nach `juist names off` löst das Gerät sie wieder öffentlich auf.
 `juist names remove nas mail.example.org` nimmt dem Gerät den Namen.
 
 ## Warum jedes Gerät sie selbst einschaltet
@@ -91,8 +93,9 @@ sudo juist set --dns=false
 
 Die Ausgabe lautet `dns off`. juistd lässt das DNS dieses Geräts dann in
 Ruhe: keine Namen des Netzes und kein DNS über einen Exit-Node. Die Zeile
-`Names` in `juist status` endet auf `(DNS off)`. `sudo juist set --dns`
-schaltet es wieder ein, ohne Neustart.
+`Names` in `juist status` endet auf `(DNS off)`, und jede Zeile in
+`juist names` zeigt `juist DNS off`. `sudo juist set --dns` schaltet es
+wieder ein, ohne Neustart.
 
 ## Gut zu wissen
 
@@ -147,7 +150,7 @@ sagt [`juist health`]({{< relref "docs/status" >}}), warum:
 | `warning: names juistd forwards are refused: the host asks tailscaled alone, whose answers members cannot reach` | ein Exit-Node weist Mitgliedern die Namen ab, die der Host allein an Tailscale schickt; `sudo tailscale set --accept-dns=false` auf ihm überlässt die Namen des Tailnets seinen anderen Resolvern |
 | `warning: names juistd forwards are refused: systemd-resolved asks over DNS over TLS, which juistd does not speak` | juistd weist diesem Gerät Namen ab, die systemd-resolved über TLS fragen würde, statt sie unverschlüsselt zu schicken; `juist exit use DEVICE` schickt sie durch den Tunnel |
 | `warning: names juistd forwards are refused: systemd-resolved knows no DNS server` | systemd-resolved hat keinen Server zu fragen; `resolvectl status` zeigt die Server, die es kennt |
-| `warning: names the host's DNS routing sends elsewhere are refused, as it cannot be read: …` | juistd kann systemd-resolved nicht fragen, wohin ein Name geht, und weist solche Namen ab, bis es das kann; `systemctl status systemd-resolved` zeigt, wie es steht |
+| `warning: cannot read the host's DNS routing, so names routed elsewhere are refused: …` | juistd kann systemd-resolved nicht fragen, wohin ein Name geht, und weist solche Namen ab, bis es das kann; `systemctl status systemd-resolved` zeigt, wie es steht |
 
 Hat systemd-resolved juistd abgewiesen, ergänzt `juist health`:
 

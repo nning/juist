@@ -33,11 +33,11 @@ func (a *app) manpage(w io.Writer) error {
 	m.line(`.RI [ options ]`)
 	m.section("DESCRIPTION")
 	m.text(`juist creates and runs a juist network: a WireGuard mesh whose membership is a
-log signed by its admins, checked by every device, with nothing in the middle.
-juist holds the admin keys, in the keystore, and never hands them to the
-daemon; juistd(8), the daemon, holds the device and carries the traffic.
-Any local user may run juist status; everything else is for root and the
-device's operator, one local user named with juist set --operator.`)
+log signed by its admins and checked by every device, with no server in the
+middle. juist keeps the admin keys in the keystore; juistd(8), the daemon,
+holds the device and carries the traffic. Any local user may run juist
+status; everything else is for root and the device's operator, one local user
+set with juist set --operator.`)
 	m.section("COMMANDS")
 	group := ""
 	for i := range commands {
@@ -64,13 +64,12 @@ device's operator, one local user named with juist set --operator.`)
 		}
 	}
 	m.section("SEVERAL NETWORKS")
-	m.text(`A device may be in several networks, each run by a juistd of its own:
+	m.text(`A device may be in several networks, each run by its own juistd:
 juistd.service for the first, juistd@juist1.service and on for the others.
-A command about one network takes it first, by the network's name or its
-juistd's (juist1), and may leave it out where the device is in one network:
-juist devices home, juist network renumber juist1 10.7.0.0/24. Listings
-(status, devices, network, admins) show every network where none is named;
-any other command stops and names the networks. No command asks which.`)
+Name the network, or its juistd (juist1), right after the command: juist
+devices home, juist network renumber juist1 10.7.0.0/24. On a device in one
+network it may be left out. Listings (status, devices, network, admins) show
+every network; any other command stops and names them. No command asks.`)
 	m.section("OPTIONS")
 	m.text("These go before or after the command, and are taken by every one.")
 	for _, o := range [][2]string{
@@ -99,12 +98,12 @@ any other command stops and names the networks. No command asks which.`)
 		m.option(f[0], f[1])
 	}
 	m.section("EXIT STATUS")
-	m.text("0 where the command did what it was asked, 1 otherwise, with the reason on standard error and, where there is one, a hint of what to do.")
+	m.text("0 on success, 1 otherwise, with the reason on standard error, then a usage line for bad arguments or at most one hint.")
 	m.section("EXAMPLES")
 	m.pre(`juist create                 # a new network, with this device in it
 juist invite                 # prints a code and a link for the next device
 sudo juist join 'juist:…'    # on that device
-juist status                 # this device's networks, and what needs attention
+juist status                 # this device's networks and their state
 juist remove phone           # out of the network, on every device
 juist grant vps relay        # a device with a public address relays for others`)
 	m.section("TRADEMARKS")

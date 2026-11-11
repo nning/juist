@@ -133,12 +133,17 @@ imported admin key "alice@home"
 it casts 1 vote in "home"
 ```
 
+Eine Zeile, die die Android-App als Datei gespeichert hat, ist mit einem
+Passwort versiegelt; lies sie mit
+`juist admins import alice@home < juist-admin-home.txt` ein, das nach dem
+Passwort am Terminal fragt.
+
 Die Zeile läuft immer durch eine Pipe, nie über die Kommandozeile. Ihre
 Prüfsumme lehnt eine abgeschnittene Zeile ab. Sie deckt auch den
 quantensicheren Signaturschlüssel ab, der sich aus ihr ableitet. Ein Import
 ersetzt nie einen vorhandenen Schlüssel. Wurde der Schlüssel seit der
 Sicherung aus dem Netz entfernt, warnt der Import mit
-`"home" gives it no vote`.
+`the key has no vote in "home": it was removed, or is from another network`.
 
 Die Break-glass-Zeile, die `juist create` angezeigt hat, bewahrst du ebenso
 auf, aber getrennt von den Admin-Schlüsseln
@@ -178,5 +183,5 @@ Warum juist das in Kauf nimmt, steht unter
 |---|---|
 | `juist: still a member of "home"` | Entferne das Gerät zuerst mit `juist remove phone` auf dem Gerät eines Admins, oder häng `--force` an. |
 | `juist status`: `removed` | Dieses Gerät gehört nicht mehr zum Netz. Tritt mit einer neuen Einladung wieder bei, oder führe `juist reset` aus. |
-| `hint: the new keys stay staged until the log names them or: juist rotate abandon` | Warte auf die Bestätigung, oder verwirf die Erneuerung mit `juist rotate abandon`. |
+| `hint: the new keys stay pending until applied; to drop them: juist rotate abandon` | Warte auf die Bestätigung, oder verwirf die Erneuerung mit `juist rotate abandon`. |
 | `juist: no admin key of this network in …` | Führe den Befehl dort aus, wo der Schlüssel eines Admins liegt. |

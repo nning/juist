@@ -2,9 +2,24 @@
 title: Dienste veröffentlichen
 linkTitle: Dienste veröffentlichen
 description: Einen Dienst auf einem deiner Geräte, etwa auf dem NAS zu Hause, unter einem Namen aus dem Internet erreichbar machen.
-lead: Ein Dienst auf einem Mitglied, etwa auf dem NAS zu Hause, wird unter einem Namen aus dem Internet erreichbar. Ein Gerät mit öffentlicher Adresse leitet die Verbindungen weiter, und TLS endet erst beim Mitglied.
+lead: Ein Dienst auf einem Mitglied, etwa auf dem NAS zu Hause, wird mit einem Befehl unter einem Namen aus dem Internet erreichbar. Ein Gerät mit öffentlicher Adresse leitet die Verbindungen weiter, und TLS endet erst beim Mitglied.
 status: [Linux, FreeBSD]
 ---
+
+## Kurz gesagt
+
+Hat ein Netz eine Domain und einen Ingress, veröffentlicht ein einziger Befehl
+auf dem Gerät einen Dienst:
+
+```sh {device="nas"}
+juist publish docs 8080
+```
+
+`https://docs.example.org` erreicht dann den Webserver auf Port 8080 des NAS,
+mit einem Zertifikat von Let's Encrypt. `juist publish` zeigt, was
+veröffentlicht ist und ob es läuft, und `juist publish --stop docs` nimmt den
+Namen wieder vom Netz. Domain und Ingress richtest du einmal ein, wie unter
+[Einrichten](#setting-it-up) beschrieben.
 
 ## So funktioniert es
 
@@ -23,19 +38,27 @@ Der Ingress entschlüsselt kein TLS. TLS endet auf dem NAS, mit einem
 Zertifikat von Let's Encrypt, und das NAS reicht die Verbindung an den Dienst
 weiter. Ein Ingress bedient alle Namen des Netzes.
 
-Jede Art zu veröffentlichen braucht eine Domain und einen Ingress. Die
-Schritte 1 bis 3 unten richten beides einmal ein.
+Mitglieder brauchen den Ingress nicht. Sie lösen einen Namen auf 443 zu dem
+Gerät auf, das ihn veröffentlicht, und verbinden sich durch den Tunnel. Ihre
+Daten laufen also nie über den Ingress. Bei einem
+[Namen nur für Mitglieder]({{< relref "docs/members-only" >}}) lässt der
+Ingress nur die Prüfung der CA durch, wenn sie das Zertifikat ausstellt oder
+erneuert.
 
 | Was | Wo |
 |---|---|
-| einen Webdienst auf einem Mitglied | [Einrichten](#setting-it-up) |
-| einen Server, dem du in deinem Netz nicht traust | [Service-Mitglieder]({{< relref "docs/service-member" >}}) |
+| einen Webdienst auf einem Mitglied, dauerhaft | [Einrichten](#setting-it-up) |
 | einen Namen, den nur Mitglieder öffnen können | [Namen nur für Mitglieder]({{< relref "docs/members-only" >}}) |
 | einen Spieleserver oder einen anderen Dienst ohne TLS | [TCP-Dienste]({{< relref "docs/tcp-services" >}}) |
-| eine Datei, ein Verzeichnis oder einen lokalen Webserver, sofort | [Teilen]({{< relref "docs/sharing" >}}) |
+| eine Datei, ein Verzeichnis oder einen lokalen Webserver, sofort und für eine Weile | [Teilen]({{< relref "docs/sharing" >}}) |
+| einen Server, dem du in deinem Netz nicht traust | [Service-Mitglieder]({{< relref "docs/service-member" >}}) |
 | eine Übersicht über die Geräte des Netzes | [Statusseite](#status-page) |
 
 ## Einrichten {#setting-it-up}
+
+Jede Art zu veröffentlichen braucht eine Domain und einen Ingress. Die
+Schritte 1 bis 3 richten beides einmal ein. Schritt 4 führst du für jeden
+Dienst aus.
 
 {{< step on="dem Gerät eines Admins" >}}
 Leg die Domain des Netzes fest und gib dem VPS die Rolle:
@@ -64,31 +87,22 @@ FreeBSD entscheiden die pf-Regeln des Hosts. Port 80 leitet nur auf https um.
 {{< /step >}}
 
 {{< step on="nas" as="dem Ziel" >}}
-Der [Operator]({{< relref "docs/operator" >}}) des NAS veröffentlicht den
-Namen und sagt, wohin die Verbindung geht:
+Der [Operator]({{< relref "docs/operator" >}}) des NAS nennt den Dienst:
 
 ```sh
-juist publish add docs 127.0.0.1:8080
+juist publish docs 8080
 ```
 
-juist holt über den Ingress ein Zertifikat und beendet TLS auf dem NAS. Der
-Befehl gibt `nas: publishes docs.example.org:443`, `serving docs.example.org`
-und `ending TLS for docs.example.org to 127.0.0.1:8080` aus, danach den
+`8080` ist ein Port auf dem NAS selbst. Mit `HOST:PORT`, etwa
+`127.0.0.1:2283` oder `192.168.1.20:80`, gibst du eine andere Adresse an.
+juist holt über den Ingress ein Zertifikat, beendet TLS auf dem NAS und
+reicht die Verbindung weiter. Der Befehl gibt
+`nas: publishes docs.example.org:443`, `serving docs.example.org` und
+`ending TLS for docs.example.org to 127.0.0.1:8080` aus, danach den
 [CAA-Eintrag](#protecting-the-certificate) des Namens. Beim ersten Mal warnt
 er außerdem:
-`warning: a server published from this device reaches the network and its LAN once compromised`.
-
-Veröffentlichen ist eine Änderung, die nur Admins machen können. Hat das NAS
-keinen Admin-Schlüssel, gibt der Befehl
-`docs.example.org goes to 127.0.0.1:8080 once published on this device` aus,
-dazu den Befehl für einen Admin: `juist publish add nas docs.example.org`.
-Braucht eine Änderung mehr als einen Admin, wartet sie auf die anderen
-([wie Änderungen bestätigt werden]({{< relref "docs/network-changes" >}})).
+`warning: a compromised server published from this device can reach the network and its LAN`.
 {{< /step >}}
-
-`juist grant` und `juist publish add` nennen den nächsten Schritt und das
-Gerät, auf dem er läuft. Führst du sie dort als dessen Operator aus,
-erledigen sie diesen Schritt gleich mit.
 
 {{< note danger >}}
 Bricht jemand in einen Server ein, den ein vollwertiges Mitglied
@@ -97,6 +111,91 @@ von einem vollwertigen Mitglied nur, was du ohnehin ins Internet stellen
 würdest. Für alles andere gibt es
 [Service-Mitglieder]({{< relref "docs/service-member" >}}).
 {{< /note >}}
+
+## Wer veröffentlicht {#who-publishes}
+
+Einen Namen zu veröffentlichen ändert das Netz, und das dürfen nur Admins.
+Auf einem Gerät mit Admin-Schlüssel erledigt `juist publish docs 8080` beides
+in einem Schritt: die Änderung und die Einrichtung des Dienstes. Braucht eine
+Änderung mehr als einen Admin, wartet sie auf die anderen
+([wie Änderungen bestätigt werden]({{< relref "docs/network-changes" >}})).
+
+### Auf einem Gerät ohne Admin-Schlüssel
+
+Der Befehl merkt sich trotzdem, wohin der Name gehen soll, und sagt, wer noch
+etwas tun muss:
+
+```console {device="nas"}
+$ juist publish docs 8080
+docs.example.org goes to 127.0.0.1:8080 once published on this device
+hint: an admin publishes it: juist publish docs --on nas
+```
+
+Bis dahin führt `juist publish` den Namen als `unpublished`, und
+`juist health` auf dem NAS erinnert daran:
+
+```console {device="nas"}
+$ juist health
+warning: docs.example.org goes to 127.0.0.1:8080 but is not published
+hint: an admin publishes it: juist publish docs --on nas (add PORT and --tcp or --proxy if the service needs them)
+```
+
+Das NAS merkt sich, wohin der Name geht, aber nicht `--tcp` oder `--proxy`.
+Hast du sie benutzt, braucht der Admin sie auch: Der Hinweis, den
+`juist publish docs 8080` ausgegeben hat, enthält sie. Sobald ein Admin ihn
+ausgeführt hat, bedient das NAS den Namen von selbst.
+
+### Für ein anderes Gerät
+
+Ein Admin veröffentlicht einen Namen auf einem anderen Gerät mit `--on`:
+
+```sh {device="laptop"}
+juist publish docs --on nas
+```
+
+Die Ausgabe lautet `nas: publishes docs.example.org:443`, dazu der Schritt,
+der noch fehlt: `hint: on nas, juist publish docs`. Dort sagt der Operator
+entweder, wohin der Name geht, mit `juist publish docs 8080`, oder er bedient
+ihn, wenn der Dienst TLS selbst beendet, so wie er ist: `juist publish docs`.
+
+## Was veröffentlicht ist {#what-is-published}
+
+`juist publish` listet alle veröffentlichten Namen des Netzes auf, mit ihrem
+Zustand aus Sicht dieses Geräts:
+
+```console {device="nas"}
+$ juist publish
+NAME             DEVICE  PORT                  TO              STATE
+example.org      pi      443                                   serving
+  docs           nas     443                   127.0.0.1:8080  serving
+  jellyfin       nas     -                     127.0.0.1:8096  unpublished
+  mc             nas     25565/tcp             nas:25565       serving
+  photos         nas     443 (members)         127.0.0.1:2342  serving
+  status         pi      443                                   serving
+img.example.net  nas     443 (proxy protocol)  127.0.0.1:2284  failing
+```
+
+- `NAME`: Die Domain steht über den Namen darunter, die nur mit ihrem Label
+  folgen. Eigene Namen außerhalb der Domain stehen ausgeschrieben am Ende.
+- `PORT`: der öffentliche Port, mit `(members)` bei einem Namen nur für
+  Mitglieder, `/tcp` bei einem [TCP-Dienst]({{< relref "docs/tcp-services" >}})
+  und `(proxy protocol)`, wenn der Dienst die Adresse des Clients bekommt.
+- `TO`: wohin dieses Gerät seine eigenen Namen weiterreicht. Die Ziele anderer
+  Geräte kennen nur diese, deshalb bleibt die Spalte bei ihnen leer. Ein
+  TCP-Name zeigt Gerät und Port, an die der Ingress ihn weiterreicht.
+- `STATE`: ein Wort.
+  - `serving`: veröffentlicht, und das Gerät bedient ihn.
+  - `unserved`: veröffentlicht, aber nicht bedient: auf dem Gerät nicht
+    zugestimmt, sein Blick auf das Netz ist veraltet, oder der Terminator
+    läuft nicht.
+  - `unpublished`: Dieses Gerät weiß, wohin der Name geht, aber kein Admin hat
+    ihn veröffentlicht.
+  - `failing`: bedient, aber die CA hat kein Zertifikat ausgestellt, oder ein
+    anderes Programm belegt den Port.
+  - `offline`: Das Gerät, das ihn veröffentlicht, ist nicht erreichbar.
+
+Warum ein Name `unserved` oder `failing` ist, sagt `juist health` auf dem
+Gerät. Läuft kein juistd, fehlt die Spalte `STATE`.
 
 ## Das Zertifikat schützen {#protecting-the-certificate}
 
@@ -110,8 +209,8 @@ Ein **CAA-Eintrag** schließt diese Lücke. Dieser DNS-Eintrag erlaubt nur dem
 ACME-Konto des Ziels, Zertifikate für den Namen zu bekommen. Trag ihn bei
 deinem DNS-Anbieter ein:
 
-- `juist publish add NAME HOST:PORT` gibt ihn aus.
-- `juist publish serve`, vom Operator des Geräts ausgeführt, gibt ihn erneut
+- `juist publish NAME PORT` gibt ihn aus.
+- `juist publish NAME`, vom Operator des Geräts ausgeführt, gibt ihn erneut
   aus.
 - Das Log des Terminators enthält ihn auch: `journalctl -u juist-serve`, unter
   FreeBSD `/var/log/juist-serve.log`. Ein Service-Mitglied schreibt ihn in
@@ -122,12 +221,21 @@ Gib den Namen jedes Geräts deshalb einen eigenen Eintrag.
 
 ## Namen und DNS-Einträge
 
-- Ein Name ist ein Label unter der Domain, etwa `docs.example.org`, oder die
-  Domain selbst, ausgeschrieben: `juist publish add nas example.org`. Ein
-  Gerät veröffentlicht höchstens 16 Namen.
+- Ein Name ist ein Label unter der Domain, etwa `docs`, oder die Domain
+  selbst, ausgeschrieben: `juist publish example.org 8080`. Ein Gerät
+  veröffentlicht höchstens 16 Namen.
+- Ein Name darf nicht nur aus Ziffern bestehen: `juist publish 8080`
+  veröffentlicht einen Port. Ein früher so veröffentlichter Name funktioniert
+  weiter; schreib ihn voll aus, etwa `juist publish --stop 8080.example.org`.
 - Nur ein Gerät kann die Domain selbst veröffentlichen. Die Domain braucht
   eigene A- und AAAA-Einträge auf den Ingress, weil `*.example.org` sie nicht
   abdeckt.
+- Auch ein eigener Name außerhalb der Domain geht:
+  `juist publish photos.example.net 2342`. Seine A- und AAAA-Einträge
+  zeigen beim DNS-Anbieter seiner Domain auf den Ingress. Mitglieder lösen
+  ihn wie einen Namen unter der Domain über juistd auf. Er kann nicht nur
+  für Mitglieder sein, und das Netz braucht dafür Schema 23
+  (`juist log upgrade`).
 - Ein Name mit einem eigenen Eintrag, etwa dem CAA- oder HTTPS-Eintrag, den
   juist ausgibt, bekommt keine Adresse mehr von `*.example.org`. Gib ihm auch
   eigene A- und AAAA-Einträge.
@@ -146,7 +254,7 @@ Für einen Namen, dessen TLS juist beendet und dessen Dienst HTTP spricht,
 können Browser HTTP/3 nutzen, also QUIC auf 443/udp:
 
 ```sh
-juist publish add docs 127.0.0.1:8080 --http3
+juist publish docs 8080 --http3
 ```
 
 Der Befehl gibt einen DNS-Eintrag zum Eintragen aus:
@@ -168,14 +276,18 @@ HTTP/2 über TCP.
 ## Weitere Optionen
 
 - Ein Dienst kann TLS selbst beenden, mit eigenem Zertifikat. Ein Admin
-  veröffentlicht ihn mit `juist publish add nas docs`, auf Port 443, wenn du
-  keinen anderen angibst, und der Operator des NAS stimmt mit
-  `juist publish serve` zu.
+  veröffentlicht ihn mit `juist publish docs --on nas`, auf Port 443, wenn
+  dem Namen kein anderer Port folgt (`juist publish docs 8443 --on nas`), und
+  der Operator des NAS bedient ihn mit `juist publish docs`.
 - `--proxy` schickt dem Dienst die Adresse des Clients in einem
   PROXY-Protokoll-v2-Header, auch über HTTP/3. Mitglieder erreichen den Namen
   dann über den Ingress.
 - `--http2` bietet Clients HTTP/2 an, für einen Dienst, der es ohne TLS
   annimmt (h2c). Ein Dienst, der nur HTTP/1.1 spricht, scheitert damit.
+- Führst du den Befehl mit einem anderen Ziel oder anderen Optionen erneut
+  aus, ändert sich der Name entsprechend. Weggelassene Optionen fallen weg,
+  bis auf zwei: `--members` gilt bis `--members=false`, und ein per TCP
+  veröffentlichter Name bleibt das bis `juist publish --stop`.
 
 ## Statusseite {#status-page}
 
@@ -183,8 +295,8 @@ Ein Gerät kann die Statusseite des Netzes unter einem veröffentlichten Namen
 anbieten:
 
 ```sh
-juist publish status-page status                # unter https://status.example.org/
-juist publish status-page status --public all   # alle sehen alles
+juist publish status status-page                # unter https://status.example.org/
+juist publish status status-page --public all   # alle sehen alles
 ```
 
 Mitglieder sehen alles: die Geräte mit Adressen, Rollen und Schema, wie das
@@ -205,7 +317,7 @@ was `--public` erlaubt, und nie einen Namen nur für Mitglieder:
   deshalb auf einem Gerät an, das immer läuft. Ein Ingress kann sie nicht
   anbieten.
 - Führ den Befehl mit einem anderen `--public` erneut aus, um es zu ändern.
-  `juist publish remove status` nimmt die Seite vom Netz.
+  `juist publish --stop status` nimmt die Seite vom Netz.
 - Ein Service-Mitglied bietet sie mit `--serve status=status-page:all` an.
 
 {{< note caution >}}
@@ -214,16 +326,21 @@ Overlay-Adressen und Rollen deiner Geräte. Mit `all` sieht er auch, wer welche
 Änderung bestätigt hat.
 {{< /note >}}
 
-## Veröffentlichte Namen verwalten
+## Namen vom Netz nehmen {#taking-names-down}
 
-- `juist publish` listet die veröffentlichten Namen auf, und wohin dieses
-  Gerät seine eigenen weiterleitet.
-- `juist publish remove docs` beendet das Veröffentlichen eines Namens auf
-  diesem Gerät, `juist publish remove nas docs` auf einem anderen.
-- `juist publish serve --stop` beendet das Bedienen, behält aber, wohin die
-  Namen gehen. `juist ingress serve --stop` beendet den Ingress.
+- `juist publish --stop docs` beendet das Veröffentlichen eines Namens auf
+  diesem Gerät und vergisst sein Ziel. Ohne Admin-Schlüssel vergisst juist
+  nur das Ziel und nennt den Befehl für einen Admin:
+  `hint: an admin stops publishing it: juist publish --stop docs --on nas`.
+- `juist publish --stop docs --on nas` beendet das Veröffentlichen auf einem
+  anderen Gerät.
+- `juist publish --stop` allein beendet das Bedienen aller Namen auf diesem
+  Gerät, behält aber, wohin sie gehen. `juist publish NAME` bedient sie
+  wieder. `juist ingress serve --stop` beendet den Ingress.
+- `juist publish --stop 8000` beendet das [Teilen]({{< relref "docs/sharing" >}})
+  von Port 8000.
 - `juist network domain off` wird abgelehnt, solange Geräte Namen unter der
-  Domain veröffentlichen. Die Fehlermeldung nennt das `juist publish remove`,
+  Domain veröffentlichen. Die Fehlermeldung nennt das `juist publish --stop`,
   das zuerst nötig ist.
 - Ingress und das TLS von juist laufen unter Linux und FreeBSD, für das
   Standardnetz des Geräts.
@@ -266,18 +383,20 @@ Overlay-Adressen und Rollen deiner Geräte. Mit `all` sieht er auch, wer welche
 | Du siehst | Was zu tun ist |
 |---|---|
 | `the network has no domain to publish under` | Führ zuerst `juist network domain example.org` aus. |
-| `this device is no ingress` | Ein Admin führt `juist grant DEVICE ingress` aus. |
-| `warning: the network has no ingress, so nothing reaches it from the internet` | Gib einem Gerät mit öffentlicher Adresse die Rolle `ingress`. |
+| `name cannot be only digits: 8080` | Nimm einen Namen mit einem Buchstaben, etwa `web8080`. |
+| `this device is not an ingress` | Ein Admin führt `juist grant DEVICE ingress` aus. |
+| `warning: the network has no ingress: the internet cannot reach it` | Gib einem Gerät mit öffentlicher Adresse die Rolle `ingress`. |
 | auf vps, `juist status`: `Ingress` zeigt `not running on this device (juist ingress serve)` | Führ `juist ingress serve` auf vps aus. |
 | `juist ingress` auf vps: `nothing to serve` | Noch ist kein Name veröffentlicht und bedient. Ist der Blick veraltet, sagt das ein Hinweis. |
-| auf nas, `juist status`: `Published` zeigt `none (ready to serve)` | Auf nas ist noch kein Name veröffentlicht. Ein Admin führt `juist publish add nas immich` aus. |
-| auf nas, `juist status`: `Published` zeigt `immich.example.org (not served)` | Führ `juist publish serve` auf nas aus. |
-| `juist status`: `Published` zeigt `…, but ends TLS for none: the terminator does not run (juist publish serve)` | Führ `juist publish serve` aus. `journalctl -u juist-serve` zeigt, warum er stoppte. |
+| `juist publish` auf nas: `unpublished` | Noch hat kein Admin den Namen veröffentlicht. Ein Admin führt den Befehl aus dem Hinweis von `juist health` aus, etwa `juist publish immich --on nas`. |
+| auf nas, `juist status`: `Published` zeigt `none (ready to serve)` | Auf nas ist noch kein Name veröffentlicht. Ein Admin führt `juist publish immich --on nas` aus. |
+| auf nas, `juist status`: `Published` zeigt `immich.example.org (not served)` | Führ `juist publish immich` auf nas aus. |
+| `juist status`: `Published` zeigt `…, but the terminator does not run (juist publish NAME)` | Führ dieses `juist publish NAME` aus. `journalctl -u juist-serve` zeigt, warum er stoppte. |
 | `the ingress does not answer on 443: …` | `journalctl -u juist-ingress` zeigt warum, unter FreeBSD `/var/log/juist-ingress.log`. |
-| `the terminator does not answer on …` oder `does not say it listens on …` | `journalctl -u juist-serve` zeigt warum, unter FreeBSD `/var/log/juist-serve.log`. |
-| `another program holds port 443 on …, where juist would end TLS` | Beende das Programm, oder veröffentliche auf einem anderen Port. |
+| `the terminator does not answer on …` oder `is not listening on …` | `journalctl -u juist-serve` zeigt warum, unter FreeBSD `/var/log/juist-serve.log`. |
+| `another program holds port 443 on …` | Beende das Programm, oder veröffentliche auf einem anderen Port. |
 | `juist health`: `warning: another program holds port 80 on …` | Mitglieder, die `http://NAME` öffnen, landen bei diesem Programm statt bei der Umleitung. Lass es nur auf den Adressen lauschen, die es bedient. |
-| `juist health`: `warning: no certificate for NAME: …` | Die CA hat keines ausgestellt, aus dem genannten Grund. Meist erreicht sie NAME nicht: Sein öffentliches DNS muss auf einen laufenden Ingress zeigen. |
+| `juist health`: `warning: no certificate for NAME: …` | Die CA hat keines ausgestellt, aus dem genannten Grund. Meist erreicht sie NAME nicht: Sein öffentliches DNS muss auf einen laufenden Ingress zeigen. Nennt der Grund CAA, erlaubt ein CAA-Eintrag auf der Domain nur andere Konten: Gib NAME einen eigenen CAA-Eintrag. |
 | `warning: firewalld blocks tcp/443 on juist0, …` | `juist0` ist nicht in der firewalld-Zone `trusted`. Führ den `firewall-cmd`-Befehl aus dem Hinweis aus. |
 | auf vps, `juist status`: `Ingress` zeigt `…; another program holds port 443/udp` | Ein anderes Programm, oft das HTTP/3 eines Webservers, belegt 443/udp. Browser bleiben bei TCP, bis es den Port freigibt. |
 | `access: quic … refused: another name's flow from its address` | Ein Client hat einen UDP-Socket für Namen auf zwei Geräten genutzt. Der Ingress reicht so einen Socket nur an ein Gerät weiter. Browser nutzen einen Socket pro Name. |

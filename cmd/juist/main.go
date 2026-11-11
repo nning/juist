@@ -48,7 +48,7 @@ var commands = []command{
 	{name: "join", group: groupStart, summary: "join a network", run: cmdJoin},
 
 	{name: "status", group: groupDaily, summary: "show this device's connection", run: cmdStatus},
-	{name: "health", group: groupDaily, summary: "say what needs attention", run: cmdHealth},
+	{name: "health", group: groupDaily, summary: "show what needs attention", run: cmdHealth},
 	{name: "devices", aliases: []string{"ls"}, group: groupDaily, summary: "list devices", run: cmdDevices},
 	{name: "remove", aliases: []string{"rm"}, group: groupDaily, summary: "remove a device", run: cmdRemove},
 	{name: "rename", group: groupDaily, summary: "rename a device", run: cmdRename},
@@ -59,22 +59,21 @@ var commands = []command{
 		family: subnetFamily},
 	{name: "names", group: groupDaily, summary: "point public names at devices", run: cmdNames,
 		family: namesFamily},
-	{name: "publish", group: groupDaily, summary: "publish devices' services through an ingress", run: cmdPublish,
-		family: publishFamily},
-	{name: "share", group: groupDaily, summary: "share a file or directory from the internet", run: cmdShare},
-	{name: "ingress", group: groupDaily, summary: "take connections for published names", run: cmdIngress,
+	{name: "publish", group: groupDaily, summary: "publish services through an ingress", run: cmdPublish},
+	{name: "share", group: groupDaily, summary: "share a file or directory on the internet", run: cmdShare},
+	{name: "ingress", group: groupDaily, summary: "accept connections for published names", run: cmdIngress,
 		family: ingressFamily},
 	{name: "reset", group: groupDaily, summary: "forget the network and keys", run: cmdReset},
 
 	{name: "grant", group: groupAdmin, summary: "give a device a role", run: cmdGrant},
 	{name: "revoke", group: groupAdmin, summary: "take a role from a device", run: cmdRevoke},
-	{name: "policy", group: groupAdmin, summary: "say which device may open what on which", run: cmdPolicy,
+	{name: "policy", group: groupAdmin, summary: "set which devices may reach what", run: cmdPolicy,
 		family: policyFamily},
 	{name: "approve", aliases: []string{"apply"}, group: groupAdmin, summary: "sign and apply change files", run: cmdApprove},
 	{name: "admins", group: groupAdmin, summary: "manage admin keys and quorum", run: cmdAdmins, family: adminsFamily},
 	{name: "set", group: groupAdmin, summary: "change device settings", run: cmdSet},
-	{name: "network", group: groupAdmin, summary: "show, rename or renumber the network, set its domain, or end it", run: cmdNetwork, family: networkFamily},
-	{name: "log", group: groupAdmin, summary: "inspect the membership log", run: cmdLog, family: logFamily},
+	{name: "network", group: groupAdmin, summary: "show or change the network", run: cmdNetwork, family: networkFamily},
+	{name: "log", group: groupAdmin, summary: "show or upgrade the membership log", run: cmdLog, family: logFamily},
 }
 
 // A family is a command whose first argument names one of its subcommands.
@@ -107,7 +106,8 @@ func (f family) run(a *app, args []string) error {
 			return s.run(a, rest)
 		}
 	}
-	return fmt.Errorf("unknown subcommand %q%s\nhint: %s --help", sub, didYouMean(sub, f.names()...), f.name)
+	return fmt.Errorf("unknown subcommand %q%s\nusage: %s {%s} [arguments]", sub, didYouMean(sub, f.names()...), f.name,
+		strings.Join(f.names(), "|"))
 }
 
 func (f family) hasSub(name string) bool {
@@ -163,7 +163,7 @@ func lookup(name string) (*command, bool) {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprint(w, "juist: peer-to-peer mesh VPN, no coordination server\n\n")
+	fmt.Fprint(w, "juist: peer-to-peer mesh VPN without a coordination server\n\n")
 	fmt.Fprint(w, "Usage:\n  juist <command> [arguments]\n")
 	group := ""
 	for _, c := range commands {
@@ -175,17 +175,17 @@ func usage(w io.Writer) {
 	}
 	fmt.Fprint(w, `
 Other:
-  help      show help, or a command's
+  help      show help for juist or a command
   version   print the version
 
-On a device in several networks, a command about one takes it first, by its
-name or its juistd's (juist1): juist devices home. Listings show them all.
+On a device in several networks, name the network, or its juistd (juist1), after the command:
+juist devices home. Listings show every network.
 
 Options for every command:
-  -H, --home DIR       keystore (default $JUIST_HOME, or ~/.config/juist)
-  -s, --socket PATH    juistd's socket (default $JUIST_SOCKET, or the service's)
-      --network NAME   the network, as NETWORK first does ($JUIST_NETWORK)
-  -h, --help           show a command's help
+  -H, --home DIR       keystore (default $JUIST_HOME or ~/.config/juist)
+  -s, --socket PATH    juistd socket (default $JUIST_SOCKET or the service)
+      --network NAME   network (default $JUIST_NETWORK)
+  -h, --help           show help
 `)
 }
 
@@ -272,7 +272,7 @@ func (a *app) dispatch(args []string) error {
 		return a.runCommand(&command{name: name, run: cmdInstance}, g, rest)
 	}
 	if name == "--version" || name == "-v" || name == "-V" {
-		return fmt.Errorf("unknown option %s; use: juist version", name)
+		return fmt.Errorf("unknown option %s; did you mean \"juist version\"?\n%s", name, topUsage)
 	}
 	if strings.HasPrefix(name, "-") {
 		return unknownGlobal(name)
@@ -289,23 +289,30 @@ func (a *app) dispatch(args []string) error {
 func unknownGlobal(arg string) error {
 	name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
 	if c, ok := lookup(name); ok {
-		return fmt.Errorf("unknown option %s; did you mean: juist %s?", arg, c.name)
+		return fmt.Errorf("unknown option %s; did you mean \"juist %s\"?\n%s", arg, c.name, globalUsage)
 	}
 	for _, g := range []string{"home", "socket", "network"} {
 		if cliflag.EditDistance(name, g) <= 2 || strings.HasPrefix(g, name) && name != "" {
-			return fmt.Errorf("unknown option %s; did you mean --%s?", arg, g)
+			return fmt.Errorf("unknown option %s; did you mean --%s?\n%s", arg, g, globalUsage)
 		}
 	}
-	return fmt.Errorf("unknown option %s\nhint: only -H, -s and --network go before the command; its own "+
-		"options follow it", arg)
+	return fmt.Errorf("unknown option %s\n%s", arg, globalUsage)
 }
+
+// topUsage and globalUsage are juist's own usage, for errors before a
+// command has parsed its arguments; globalUsage names the options that go
+// before the command.
+const (
+	topUsage    = "usage: juist <command> [arguments]"
+	globalUsage = "usage: juist [-H DIR] [-s PATH] [--network NAME] <command> [arguments]"
+)
 
 func unknownCommand(name string) error {
 	msg := fmt.Sprintf("unknown command %q", name)
 	if s := suggest(name); s != "" {
 		msg += fmt.Sprintf("; did you mean %q?", s)
 	}
-	return fmt.Errorf("%s\nhint: juist help", msg)
+	return fmt.Errorf("%s\n%s", msg, topUsage)
 }
 
 func (a *app) runCommand(c *command, g globals, args []string) error {
@@ -350,7 +357,7 @@ func extractGlobals(args []string) (globals, []string, error) {
 		if short, ok := strings.CutPrefix(arg, "-"); ok && !isLong {
 			n, v, has := strings.Cut(short, "=")
 			if n == "home" || n == "socket" || n == "network" {
-				return g, nil, fmt.Errorf("%s: an option's full name takes two dashes, as --%s", arg, n)
+				return g, nil, fmt.Errorf("unknown option %s; did you mean --%s?\n%s", arg, n, globalUsage)
 			}
 			if long, ok := globalShorts[n]; ok {
 				isLong, name, value, hasValue = true, long, v, has
@@ -362,10 +369,11 @@ func extractGlobals(args []string) (globals, []string, error) {
 		}
 		if !hasValue {
 			if i+1 >= len(args) {
+				what := "a path"
 				if name == "network" {
-					return g, nil, fmt.Errorf("%s needs a network's name", arg)
+					what = "a name"
 				}
-				return g, nil, fmt.Errorf("%s needs a path", arg)
+				return g, nil, fmt.Errorf("%s needs %s\n%s", arg, what, globalUsage)
 			}
 			i++
 			value = args[i]

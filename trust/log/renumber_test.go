@@ -169,10 +169,11 @@ func TestRenumberNetworkRejects(t *testing.T) {
 }
 
 // One member moves on its own, to an address in the network's range that no
-// other member holds, old or new; it may move back to the one it retires.
+// other member holds; it may move back to the one it retires.
 func TestRenumberNode(t *testing.T) {
 	h := newHarness(t, 1, 1)
-	a, b := h.admitAt("a", "198.18.0.1"), h.admitAt("b", "198.18.0.2")
+	a := h.admitAt("a", "198.18.0.1")
+	h.admitAt("b", "198.18.0.2")
 	to := func(n types.NodeRecord, v4 string) types.AUM {
 		addr := netip.MustParseAddr(v4)
 		return h.signed(types.AUM{Kind: types.KindRenumberNode, Subject: &n.Identity,
@@ -192,7 +193,6 @@ func TestRenumberNode(t *testing.T) {
 	if got, want := st.Addrs(a.Identity, 50), []netip.Prefix{v6, host("198.18.0.9")}; !slices.Equal(got, want) {
 		t.Errorf("a holds %v after the deadline, want %v", got, want)
 	}
-	h.mustReject("b moving to a's old address", RuleState, to(b, "198.18.0.1"))
 	c := h.newNode("c")
 	c.V4 = new(netip.MustParseAddr("198.18.0.1"))
 	h.mustReject("an admission at a's old address", RuleState, h.handAssembledAddNode(c))
@@ -366,5 +366,106 @@ func TestRenumberNodeAtOnce(t *testing.T) {
 	h.apply(h.auth.Builder().RetireAddresses())
 	if n, _ := h.auth.State().Node(a.Identity); n.Retiring != nil {
 		t.Errorf("finishing left a retiring %v", n.Retiring.Addr)
+	}
+}
+
+// From schema 25 a move may take another member's retiring address, which
+// ends that member's retirement of it; below, the address stays held.
+func TestAMoveTakesARetiringAddressFromSchema25(t *testing.T) {
+	h := newHarnessWith(t, 1, 1, func(s *types.Snapshot) { s.Schema = 24 })
+	a, b := h.admitAt("a", "198.18.0.1"), h.admitAt("b", "198.18.0.2")
+	h.apply(h.auth.Builder().RenumberNode(a.Identity, netip.MustParseAddr("198.18.0.9"), types.RetireAtOnce))
+	if _, err := h.auth.Builder().RenumberNode(b.Identity, netip.MustParseAddr("198.18.0.1"), 50); err == nil {
+		t.Fatal("at schema 24, b was moved to a's retired address")
+	}
+	h.apply(h.auth.Builder().SchemaUpgrade(25))
+	h.apply(h.auth.Builder().RenumberNode(b.Identity, netip.MustParseAddr("198.18.0.1"), 50))
+	st := h.auth.State()
+	if n, _ := st.Node(a.Identity); n.Retiring != nil {
+		t.Errorf("a still retires %v, which b took", n.Retiring.Addr)
+	}
+	if n, _ := st.Node(b.Identity); *n.V4 != netip.MustParseAddr("198.18.0.1") ||
+		n.Retiring == nil || n.Retiring.Addr != netip.MustParseAddr("198.18.0.2") {
+		t.Errorf("b is at %v retiring %+v", n.V4, n.Retiring)
+	}
+	if got := st.Addrs(a.Identity, 0); slices.Contains(got, host("198.18.0.1")) {
+		t.Errorf("a holds %v, b's address among them", got)
+	}
+	h.mustReject("a moving to b's address", RuleState, h.signed(types.AUM{Kind: types.KindRenumberNode,
+		Subject: &a.Identity, Renumber: &types.Renumbering{Until: 50, V4: new(netip.MustParseAddr("198.18.0.1"))}}))
+}
+
+// From schema 25 a subnet route over a range the network is renumbering
+// away from ends that range's retirement and its addresses'; below, the
+// range stays held.
+func TestARouteTakesARetiringRangeFromSchema25(t *testing.T) {
+	old := netip.MustParsePrefix("10.7.0.0/24")
+	h := newHarnessWith(t, 1, 1, func(s *types.Snapshot) { s.V4Prefix = &old; s.Schema = 24 })
+	a, b := h.admitAt("a", "10.7.0.1"), h.admitAt("b", "10.7.0.2")
+	to := netip.MustParsePrefix("10.9.0.0/22")
+	h.apply(h.auth.Builder().RenumberNetwork(to, moves(a, "10.9.0.1", b, "10.9.0.2"), 9))
+	lan := netip.MustParsePrefix("10.7.0.0/25")
+	if _, err := h.auth.Builder().SetNodeRoutes(a.Identity, nil, []netip.Prefix{lan}); err == nil {
+		t.Fatal("at schema 24, a route over the old range was granted")
+	}
+	h.apply(h.auth.Builder().SchemaUpgrade(25))
+	h.apply(h.auth.Builder().SetNodeRoutes(b.Identity, nil, []netip.Prefix{netip.MustParsePrefix("192.168.5.0/24")}))
+	if _, ok := h.auth.State().V4Retiring(); !ok {
+		t.Fatal("a route elsewhere ended the old range's retirement")
+	}
+	h.apply(h.auth.Builder().SetNodeRoutes(a.Identity, nil, []netip.Prefix{lan}))
+	st := h.auth.State()
+	if r, ok := st.V4Retiring(); ok {
+		t.Errorf("the old range %v is still retiring under a route over it", r.Prefixes)
+	}
+	for _, n := range []types.NodeRecord{a, b} {
+		if got, _ := st.Node(n.Identity); got.Retiring != nil {
+			t.Errorf("%v still retires %v", n.Identity.ShortString(), got.Retiring.Addr)
+		}
+	}
+	if got := st.V4Ranges(); !slices.Equal(got, []netip.Prefix{to}) {
+		t.Errorf("ranges %v, want %v", got, to)
+	}
+}
+
+// A route over an old range ends the retirement of the addresses in it, and
+// of no other: a member's old address in the current prefix stays its until
+// its own deadline.
+func TestARouteTakesOnlyTheRangeItCovers(t *testing.T) {
+	old := netip.MustParsePrefix("10.7.0.0/24")
+	h := newHarnessWith(t, 1, 1, func(s *types.Snapshot) { s.V4Prefix = &old })
+	a, b := h.admitAt("a", "10.7.0.1"), h.admitAt("b", "10.7.0.2")
+	to := netip.MustParsePrefix("10.9.0.0/22")
+	h.apply(h.auth.Builder().RenumberNetwork(to, moves(a, "10.9.0.1", b, "10.9.0.2"), 9))
+	h.apply(h.auth.Builder().RenumberNode(b.Identity, netip.MustParseAddr("10.9.0.5"), 1000))
+	h.apply(h.auth.Builder().SetNodeRoutes(a.Identity, nil, []netip.Prefix{netip.MustParsePrefix("10.7.0.0/25")}))
+	st := h.auth.State()
+	if _, ok := st.V4Retiring(); ok {
+		t.Error("the old range is still retiring under a route over it")
+	}
+	if n, _ := st.Node(a.Identity); n.Retiring != nil {
+		t.Errorf("a still retires %v in the taken range", n.Retiring.Addr)
+	}
+	if n, _ := st.Node(b.Identity); n.Retiring == nil || n.Retiring.Addr != netip.MustParseAddr("10.9.0.2") {
+		t.Errorf("b retires %+v, want its old address 10.9.0.2 in the current prefix kept", n.Retiring)
+	}
+}
+
+// An exit node's default route covers every range, the old one too, and
+// takes none of it: a grant of `exit` during a renumbering leaves the old
+// range and its addresses retiring until their deadline.
+func TestAnExitRouteTakesNoOldRange(t *testing.T) {
+	old := netip.MustParsePrefix("10.7.0.0/24")
+	h := newHarnessWith(t, 1, 1, func(s *types.Snapshot) { s.V4Prefix = &old })
+	a, b := h.admitAt("a", "10.7.0.1"), h.admitAt("b", "10.7.0.2")
+	h.apply(h.auth.Builder().RenumberNetwork(netip.MustParsePrefix("10.9.0.0/24"), moves(a, "10.9.0.1", b, "10.9.0.2"), 1000))
+	h.apply(h.auth.Builder().SetNodeRoutes(a.Identity, []types.Role{types.RoleExit},
+		[]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}))
+	st := h.auth.State()
+	if _, ok := st.V4Retiring(); !ok {
+		t.Error("an exit node's default route took the old range")
+	}
+	if n, _ := st.Node(b.Identity); n.Retiring == nil {
+		t.Error("an exit node's default route ended b's old address")
 	}
 }

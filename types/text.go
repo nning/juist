@@ -7,10 +7,8 @@ import (
 	"unicode/utf8"
 )
 
-// FoldName maps a name to the one form of every name strings.EqualFold holds
-// equal to it: each rune to the smallest in its case-folding orbit. Two
-// holders whose names fold alike are refused, since a person reading them
-// could not tell them apart.
+// FoldName maps every name strings.EqualFold holds equal to one form, each
+// rune the least of its folding orbit, so look-alike names can be refused.
 func FoldName(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -23,16 +21,13 @@ func FoldName(s string) string {
 	return b.String()
 }
 
-// ValidateName checks a human label — on a node record or an admin key: valid
-// UTF-8, no control characters, no surrounding whitespace, within [MaxNameLen].
-// Names are attacker-supplied strings that reach operator-facing output, so
-// control characters are rejected here rather than escaped at every print site.
-// Exported so tooling can ask before it persists a name.
+// ValidateName checks a human label: valid UTF-8, no control or bidi
+// characters, no surrounding whitespace, within [MaxNameLen]. Names are
+// attacker-supplied and reach operators' screens unescaped.
 func ValidateName(s string) error { return ValidateText("name", s, MaxNameLen) }
 
-// ValidateText applies [ValidateName]'s rules to any attacker-supplied string
-// bound for operator-facing output, with its own length limit. what names the
-// string in the error.
+// ValidateText applies [ValidateName]'s rules with its own limit; what names
+// the string in the error.
 func ValidateText(what, s string, limit int) error {
 	if len(s) > limit {
 		return fmt.Errorf("%s is %d bytes, over the %d limit", what, len(s), limit)

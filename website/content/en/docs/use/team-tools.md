@@ -25,23 +25,17 @@ nobody but the CA, which checks it when it issues the certificate.
 
 ## Setting it up
 
-{{< step on="an admin's device" >}}
-Publish the name for members alone:
-
-```sh
-juist publish add tools wiki --members
-```
-
-It prints `tools: publishes wiki.example.org:443 (members)`.
-{{< /step >}}
-
 {{< step on="tools" as="the target" >}}
-Say where the decrypted connections go, and mark the service as for members
-alone, so that juist never sends it a public name:
+Publish the wiki on port 3000 for members alone:
 
 ```sh
-juist publish add wiki 127.0.0.1:3000 --members
+juist publish wiki 3000 --members
 ```
+
+It prints `tools: publishes wiki.example.org:443 (members)`. `--members` also
+marks the service itself as for members alone, so that juist never sends it
+a public name. If tools holds no admin key, the command names what an admin
+runs on their own device: `juist publish wiki --members --on tools`.
 {{< /step >}}
 
 {{< step on="an admin's device" >}}

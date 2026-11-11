@@ -13,9 +13,10 @@ die für jedes Ziel einen neuen Port wählt. Dann brauchen die beiden ein
 Relay.
 
 Ein Relay ist ein Mitglied mit öffentlicher Adresse, etwa ein VPS, das
-Verkehr zwischen Geräten weiterleitet, die sich nicht direkt erreichen. Fremde
-leiten deinen Verkehr nie weiter. Nur Mitglieder können das Relay nutzen, und
-es sieht nur verschlüsselten WireGuard-Verkehr.
+Verkehr zwischen Geräten weiterleitet, die sich nicht direkt erreichen. Nur
+Mitglieder können das Relay nutzen, und es sieht nur verschlüsselten
+WireGuard-Verkehr. Fremde leiten deinen Verkehr nicht weiter, außer das Netz
+wählt Tailscales öffentliche DERP-Server ([Ohne eigenes Relay](#public-derp)).
 
 Ein Relay hilft auch bei Einladungen. Rufst du `juist invite` auf einem
 Laptop hinter NAT auf, wartet die Einladung zusätzlich beim Relay, und der
@@ -147,6 +148,29 @@ firewalld beschränkt `juist` dagegen sofort auf 41643/udp. In beiden Fällen
 braucht ein Relay zusätzlich `juist-relay`.
 {{< /note >}}
 
+## Ohne eigenes Relay {#public-derp}
+
+Ein Netz kann seine Mitglieder über Tailscales öffentliche DERP-Server
+zusammenbringen, wo kein Mitglied ein Paar weiterleitet, wie es ein Netz aus
+Telefonen braucht:
+
+```sh
+juist network derp on    # und juist network derp off
+```
+
+Das entscheiden die Admins wie jede Änderung, und jedes Mitglied folgt. Ein
+Relay eines Mitglieds geht vor, wo ein Gerät es misst; Tailscales Server
+springen ein. Ein Gerät misst es mitunter nicht und landet dann bei
+Tailscale: wenn der UDP-Port des Relays für das Gerät zu ist, UDP zu
+öffentlichen STUN-Servern aber durchkommt, oder wenn das Relay so viel
+weiter weg ist als Tailscales nächste Server, dass das Gerät nicht mehr auf
+das Relay wartet. Anders als ein Relay eines
+Mitglieds bedienen Tailscales Server jeden, nicht nur Mitglieder. Sie tragen
+nur WireGuards Chiffrat, sehen aber die öffentliche Adresse jedes Geräts und
+welche Geräte wann wie viel miteinander austauschen. Ein Netz, das
+die Android-App anlegt, nutzt sie von Anfang an; eines aus `juist create`
+nicht. `juist status` sagt es in der Zeile `Relays`.
+
 ## Ohne öffentliche Helfer
 
 In der Voreinstellung fragt juistd öffentliche STUN-Server (Google,
@@ -172,7 +196,9 @@ ExecStart=/usr/bin/juistd --home /var/lib/juist --socket /run/juist/juistd.sock 
 
 Die Geräte finden sich dann im LAN und über Mitglieder, die sie schon
 kennen. Das Relay teilt jedem Gerät seine öffentliche Adresse mit, und
-Einladungen per Link laufen darüber. `man juistd` beschreibt alle Optionen.
+Einladungen per Link laufen darüber. Hat das Netz Tailscales DERP-Server
+eingeschaltet, sehen die weiter Adressen, auch per STUN, bis ein Admin
+`juist network derp off` ausführt. `man juistd` beschreibt alle Optionen.
 
 ## Fehlersuche
 
@@ -182,7 +208,7 @@ Einladungen per Link laufen darüber. `man juistd` beschreibt alle Optionen.
 | `no device reaches this relay` | Öffne 41645/tcp und udp auf dem Relay, auch in jeder vorgeschalteten Firewall. |
 | `no device may relay` | Gib einem Gerät mit öffentlicher Adresse die Rolle: `juist grant DEVICE relay`. |
 | `no certificate for relay.example.org yet` | Lass den Namen auf das Relay zeigen und 443/tcp zu ihm durch. |
-| `the relay cannot take 443` | Ein anderes Programm belegt dort 443, oder juistd fehlt das Recht, das `juist set` vergibt. |
+| `the relay cannot bind 443` | Ein anderes Programm belegt dort 443, oder juistd fehlt das Recht, das `juist set` vergibt. |
 | `members are not told of …: this device does not relay` | Gib dem Gerät die Rolle `relay`: `juist grant DEVICE relay`. |
 | `log sync … fails in the tunnel` | Lass `juist0` durch die Firewall des anderen Geräts, wie der Hinweis vorschlägt. |
 | `no answer from …` | Das Gerät ist offline, oder sein Port 41643/udp ist gesperrt. |

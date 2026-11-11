@@ -49,12 +49,12 @@ func TestAHomePingedAloneIsHeldAtOneHTTPSReached(t *testing.T) {
 		{"its choice pinged alone", &netcheck.Report{PreferredDERP: 9, RegionLatency: lat}, map[int]bool{9: true}, 8, true},
 		{"none reached", &netcheck.Report{PreferredDERP: 9, RegionLatency: lat}, map[int]bool{7: true, 8: true, 9: true}, 0, true},
 	} {
-		got, hold := homeToHold(c.r, c.alone, stun)
+		got, hold := homeToHold(c.r, c.alone, stun, nil)
 		if got != c.want || hold != c.hold {
 			t.Errorf("%s: held at %d, %v; want %d, %v", c.name, got, hold, c.want, c.hold)
 		}
 	}
-	if _, hold := homeToHold(nil, map[int]bool{9: true}, stun); hold {
+	if _, hold := homeToHold(nil, map[int]bool{9: true}, stun, nil); hold {
 		t.Error("held without a report")
 	}
 }

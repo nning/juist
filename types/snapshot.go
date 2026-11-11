@@ -9,73 +9,62 @@ import (
 )
 
 // A Snapshot is the complete authority state at one point in the chain: the
-// payload of a genesis or checkpoint record, and the value the log's runtime
-// state serializes to.
+// payload of genesis and checkpoint records.
 type Snapshot struct {
-	// GenesisHash identifies the network: the hash of its genesis record, nil
-	// in that record itself and set when it is applied. The overlay address
-	// space derives from it, and a checkpoint proves membership of a chain
-	// with it.
+	// GenesisHash identifies the network: nil inside the genesis record, set
+	// when it is applied.
 	GenesisHash *Hash `cbor:"1,keyasint,omitempty"`
 
-	// Network is the network's human-readable name, set at genesis and
-	// changed by [KindRenameNetwork]. Nothing identifies the network by it.
+	// Network is the human-readable name; nothing identifies the network by it.
 	Network string `cbor:"2,keyasint"`
 
-	// Quorum is k: the total vote weight required to authorize a change.
+	// Quorum is k, the vote weight a change requires.
 	Quorum uint32 `cbor:"3,keyasint"`
 
-	// Epoch is the current group-secret epoch, starting at 1 in the genesis
-	// record.
+	// Epoch is the current group-secret epoch, starting at 1.
 	Epoch uint64 `cbor:"4,keyasint"`
 
-	// EpochCommit commits to the current epoch's secret.
 	EpochCommit Hash `cbor:"5,keyasint"`
 
 	// Disablement holds commitments to break-glass secrets, fixed at genesis.
-	// Revealing a preimage in a [KindDisable] record ends the network.
 	Disablement []Hash `cbor:"6,keyasint,omitempty"`
 
-	// Admins are the admin keys, sorted by public key.
+	// Admins are sorted by public key.
 	Admins []AdminKey `cbor:"7,keyasint,omitempty"`
 
-	// Nodes are the member devices, sorted by identity key.
+	// Nodes are sorted by identity key.
 	Nodes []NodeRecord `cbor:"8,keyasint,omitempty"`
 
-	// EpochWraps is the current epoch secret sealed to each member, sorted
-	// by recipient.
+	// EpochWraps is the epoch secret sealed to each member, sorted by
+	// recipient.
 	EpochWraps []EpochWrap `cbor:"9,keyasint,omitempty"`
 
-	// EpochSuite names the ciphersuite EpochWraps are sealed under. Absent
-	// means [SuiteHybridX25519MLKEM768].
+	// EpochSuite seals EpochWraps; absent means [SuiteHybridX25519MLKEM768].
 	EpochSuite EpochSuite `cbor:"10,keyasint,omitempty"`
 
-	// Schema is the record schema this network is written under, raised by
-	// [KindSchemaUpgrade]; [Snapshot.StaticValidate] refuses one below [MinSchema].
-	// Whether the version is one this build can act on is decided in
-	// trust/log, not here: a snapshot at a newer schema must still decode, so
-	// that a node too old for it can store and relay the record carrying it.
+	// Schema is the network's record schema, at least [MinSchema]. A newer one
+	// than this build knows must still decode; trust/log decides on it.
 	Schema SchemaVersion `cbor:"11,keyasint,omitempty"`
 
 	// Vouchers is how many admin devices must vouch for a node's view within
 	// the freshness TTL; absent means one.
 	Vouchers uint32 `cbor:"12,keyasint,omitempty"`
 
-	// V4Prefix is the network's own overlay IPv4 prefix, fixed at genesis;
-	// absent means [OverlayV4].
+	// V4Prefix is the network's own overlay IPv4 prefix; absent means
+	// [OverlayV4].
 	V4Prefix *netip.Prefix `cbor:"13,keyasint,omitempty"`
 
-	// V4Retiring are the ranges a network renumbering moved away from, while
-	// members may still hold addresses in them.
+	// V4Retiring are ranges a renumbering left that members may still hold.
 	V4Retiring *RetiringRanges `cbor:"14,keyasint,omitempty"`
 
-	// Domain is the network's public domain, under which members publish
-	// names; empty for none.
+	// Domain is the public domain members publish under; empty for none.
 	Domain string `cbor:"15,keyasint,omitempty"`
 
-	// Policy is what each member may open on which; absent for every member
-	// anything.
+	// Policy is what each member may open on which; absent allows everything.
 	Policy *Policy `cbor:"16,keyasint,omitempty"`
+
+	// PublicDERP is the network's public DERP servers; absent names none.
+	PublicDERP *PublicDERP `cbor:"17,keyasint,omitempty"`
 }
 
 // V4Ranges returns the ranges the network's overlay IPv4 addresses may lie in.
@@ -94,13 +83,11 @@ func (s *Snapshot) ValidDisablement(secret []byte) bool {
 		return false
 	}
 	want := DisablementCommit(secret)
-	// The commitments are public — they are in the log — so there is nothing
-	// to leak by comparing them in variable time. The secret is compared only
-	// through its digest.
+	// Variable-time is fine: the commitments are public and the secret is
+	// compared only through its digest.
 	return slices.Contains(s.Disablement, want)
 }
 
-// Node returns the member record for an identity.
 func (s *Snapshot) Node(id Identity) (*NodeRecord, bool) {
 	i := slices.IndexFunc(s.Nodes, func(n NodeRecord) bool { return n.Identity == id })
 	if i < 0 {
@@ -109,7 +96,6 @@ func (s *Snapshot) Node(id Identity) (*NodeRecord, bool) {
 	return &s.Nodes[i], true
 }
 
-// Admin returns the admin key entry for an identity.
 func (s *Snapshot) Admin(id Identity) (*AdminKey, bool) {
 	i := slices.IndexFunc(s.Admins, func(a AdminKey) bool { return a.Public == id })
 	if i < 0 {
@@ -118,14 +104,12 @@ func (s *Snapshot) Admin(id Identity) (*AdminKey, bool) {
 	return &s.Admins[i], true
 }
 
-// TotalVotes returns the vote weight the admin keys can cast
-// ([AchievableVotes]). Bounded by [MaxAdmins] times [MaxVotes], so the sum
-// cannot overflow.
+// TotalVotes is [AchievableVotes] of the admins; [MaxAdmins] times [MaxVotes]
+// keeps it from overflowing.
 func (s *Snapshot) TotalVotes() uint32 { return AchievableVotes(s.Admins) }
 
-// ULA returns the network's overlay IPv6 prefix, or the zero prefix if the
-// snapshot has no genesis hash yet (which is only true inside an unapplied
-// genesis record).
+// ULA returns the network's overlay IPv6 prefix, or the zero prefix inside an
+// unapplied genesis.
 func (s *Snapshot) ULA() netip.Prefix {
 	if s.GenesisHash == nil {
 		return netip.Prefix{}
@@ -151,6 +135,10 @@ func (s *Snapshot) Clone() *Snapshot {
 	if s.Policy != nil {
 		out.Policy = s.Policy.Clone()
 	}
+	if s.PublicDERP != nil {
+		p := *s.PublicDERP
+		out.PublicDERP = &p
+	}
 	out.Disablement = slices.Clone(s.Disablement)
 	out.Admins = make([]AdminKey, len(s.Admins))
 	for i := range s.Admins {
@@ -168,18 +156,20 @@ func (s *Snapshot) Clone() *Snapshot {
 	return &out
 }
 
-// Encode returns the snapshot's canonical CBOR encoding. Used to compare a
-// checkpoint's claimed state against the state the chain actually produces.
+// Encode returns the snapshot's canonical CBOR encoding.
 func (s *Snapshot) Encode() []byte { return mustEncode(s) }
 
-// StaticValidate checks a snapshot's shape: every entry valid, every set
-// sorted and duplicate-free, quorum satisfiable, and the epoch invariants
-// tying the wrap set to the member set. genesis selects the one difference:
-// the genesis record cannot name its own hash, a checkpoint must.
+// StaticValidate checks entries, canonical sets, a reachable quorum and one
+// epoch wrap per member. A genesis must not carry its own hash; a checkpoint
+// must.
 func (s *Snapshot) StaticValidate(genesis bool) error {
 	switch {
 	case s.Schema < MinSchema:
 		return fmt.Errorf("the state is at %v; this juist reads %v and later", s.Schema, MinSchema)
+	case s.PublicDERP != nil && s.Schema < SchemaPublicDERP:
+		return fmt.Errorf("a public DERP setting needs %v; the state is at %v", SchemaPublicDERP, s.Schema)
+	case s.PublicDERP != nil && *s.PublicDERP == (PublicDERP{}):
+		return errors.New("a public DERP setting naming none is written as none")
 	case genesis && s.GenesisHash != nil:
 		return errors.New("genesis record must not carry a genesis hash")
 	case !genesis && s.GenesisHash == nil:
@@ -220,9 +210,8 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 			}
 		}
 	}
-	// A genesis is held to what a SetVouchers record is. A checkpoint is
-	// not: it states a chain's state, where admin devices removed after the
-	// threshold was set may have left fewer, which fails closed.
+	// Not for checkpoints: removals may have left fewer admin devices than
+	// the threshold, which fails closed.
 	if genesis && s.Vouchers > 0 {
 		if err := ValidateVouchers(s.Vouchers, s.Nodes); err != nil {
 			return err
@@ -325,9 +314,8 @@ func (s *Snapshot) StaticValidate(genesis bool) error {
 			return fmt.Errorf("epoch wrap for %v is %d bytes, want %d",
 				w.Recipient.ShortString(), len(w.Sealed), SealedSecretSize)
 		}
-		// Nodes are sorted by identity and wraps by recipient, and the two
-		// sets have equal size, so pairwise equality proves both that every
-		// member has a wrap and that no non-member does.
+		// Both sorted and equal in size, so pairwise equality means every
+		// member has a wrap and no non-member does.
 		if w.Recipient != s.Nodes[i].Identity {
 			return fmt.Errorf("epoch wrap %d addresses %v but member %d is %v",
 				i, w.Recipient.ShortString(), i, s.Nodes[i].Identity.ShortString())
@@ -353,15 +341,13 @@ func (s *Snapshot) validateSigning() error {
 }
 
 // ValidateInNetwork checks every member against the network and the others
-// ([NodeRecord.ValidateIn]), as the log checks a member record by record:
-// for a state that arrives whole, a genesis naming founding members or a
-// checkpoint adopted as an anchor.
+// ([NodeRecord.ValidateIn]), for a state that arrives whole.
 func (s *Snapshot) ValidateInNetwork() error {
 	if s.GenesisHash == nil {
 		return errors.New("snapshot has no genesis hash")
 	}
-	// Each member is checked against those before it alone, which is against
-	// all the others only as long as [MemberIndex.Check] is symmetric.
+	// Checking each against those before it suffices only while
+	// [MemberIndex.Check] is symmetric.
 	seated := NewMemberIndex(NetworkSpace{Genesis: *s.GenesisHash, Domain: s.Domain,
 		V4Prefix: s.V4Prefix, V4Retiring: s.V4Retiring}, len(s.Nodes))
 	for i := range s.Nodes {

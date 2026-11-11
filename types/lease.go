@@ -7,45 +7,37 @@ import (
 	"github.com/nning/juist/internal/malformed"
 )
 
-// A Lease is an admin device's signed statement that, at Issued, its log's
-// head was Head. A node holding one recent enough knows its view of the
-// network is not older than that; one holding none knows it may be missing a
-// removal, and fails closed. Leases are not log records: they are issued
-// hourly, and chaining them would grow every log without bound.
+// A Lease is an admin device's signed statement that its log's head was Head
+// at Issued. A node without a recent one may be missing a removal and fails
+// closed. Leases are not log records, which would grow without bound.
 type Lease struct {
-	// Network is the genesis hash of the network the lease speaks for.
+	// Network is the genesis hash.
 	Network Hash `cbor:"1,keyasint"`
 
-	// Head is the signer's log head when it signed.
 	Head Hash `cbor:"2,keyasint"`
 
-	// Issued is when the lease was signed, in Unix seconds by the signer's
-	// clock.
+	// Issued is in Unix seconds by the signer's clock.
 	Issued uint64 `cbor:"3,keyasint"`
 
-	// Signer is the identity key of the admin device that signed it.
 	Signer Identity `cbor:"4,keyasint"`
 
-	// Sig is Signer's signature over everything above, and MLDSA its ML-DSA
-	// one.
+	// Sig is Signer's Ed25519 signature over the fields above, MLDSA its
+	// ML-DSA one.
 	Sig   Sig    `cbor:"5,keyasint"`
 	MLDSA *PQSig `cbor:"6,keyasint,omitempty"`
 }
 
-// MaxLeaseSize bounds an encoded lease.
 const MaxLeaseSize = 4096
 
-// sigHash is what a lease's signature covers: its encoding without the
-// signature, under its own label, so a lease signature can be no other
-// signature by the same device key.
+// sigHash covers the lease without signatures, under its own label so it can
+// be no other signature by the same key.
 func (l *Lease) sigHash() Hash {
 	unsigned := *l
 	unsigned.Sig, unsigned.MLDSA = Sig{}, nil
 	return hashLabeled(LabelLease, mustEncode(&unsigned))
 }
 
-// Sign signs the lease with the signer's identity key, by Ed25519 and
-// ML-DSA, setting Signer.
+// Sign sets Signer and signs by Ed25519 and ML-DSA.
 func (l *Lease) Sign(priv PrivateIdentity) error {
 	l.Signer = priv.Public()
 	h := l.sigHash()
@@ -57,8 +49,8 @@ func (l *Lease) Sign(priv PrivateIdentity) error {
 	return nil
 }
 
-// VerifyPQ checks the lease's ML-DSA signature against key, the signing key
-// the log names for Signer.
+// VerifyPQ checks the ML-DSA signature against key, the one the log names for
+// Signer.
 func (l *Lease) VerifyPQ(key *SigningKey) error {
 	h := l.sigHash()
 	if key == nil || !key.Verify(h[:], l.MLDSA) {
@@ -67,8 +59,7 @@ func (l *Lease) VerifyPQ(key *SigningKey) error {
 	return nil
 }
 
-// Verify checks the signature against Signer. It says nothing about whether
-// Signer may issue leases, which is the log's to decide.
+// Verify checks the Ed25519 signature, not whether Signer may issue leases.
 func (l *Lease) Verify() error {
 	if err := l.Signer.Validate(); err != nil {
 		return fmt.Errorf("lease signer: %w", err)

@@ -30,6 +30,8 @@ import io.juist.app.R
 import io.juist.app.core.Change
 import io.juist.app.core.Diagnosis
 import io.juist.app.core.NetworkView
+import io.juist.app.core.PublicName
+import io.juist.app.core.Underlay
 import io.juist.app.ui.ago
 import io.juist.app.ui.components.BackBar
 import io.juist.app.ui.components.InfoRow
@@ -52,7 +54,9 @@ fun DetailsScreen(
     changes: List<Change>?,
     diagnosis: Diagnosis?,
     onNames: (Boolean) -> Unit,
+    onPublicNames: (Boolean) -> Unit,
     onHttpsOnly: (Boolean) -> Unit,
+    onPortMapping: (Boolean) -> Unit,
     onCopyReport: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -72,8 +76,14 @@ fun DetailsScreen(
                     SwitchRow(stringResource(R.string.setting_names), stringResource(R.string.setting_names_about),
                         view.settings.names, on, onNames)
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SwitchRow(stringResource(R.string.setting_public_names), stringResource(R.string.setting_public_names_about),
+                        view.settings.publicNames, on, onPublicNames)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     SwitchRow(stringResource(R.string.setting_https_only), stringResource(R.string.setting_https_only_about),
                         view.settings.httpsOnly, on, onHttpsOnly)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    SwitchRow(stringResource(R.string.setting_port_mapping), stringResource(R.string.setting_port_mapping_about),
+                        view.settings.portMapping, on, onPortMapping)
                 }
 
                 SectionTitle(stringResource(R.string.section_network))
@@ -91,9 +101,24 @@ fun DetailsScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
                     InfoRow(stringResource(R.string.label_relays), relaysText(view))
+                    d.underlay?.let { u ->
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        InfoRow(stringResource(R.string.label_underlay), underlayText(u, view.settings.portMapping))
+                    }
                     if (view.names != null) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         InfoRow(stringResource(R.string.label_names), namesText(view))
+                    }
+                }
+
+                val pointed = view.names?.public.orEmpty()
+                if (pointed.isNotEmpty()) {
+                    SectionTitle(stringResource(R.string.section_public_names))
+                    Panel {
+                        pointed.forEachIndexed { i, p ->
+                            if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            InfoRow(p.name, publicNameText(view, p))
+                        }
                     }
                 }
 
@@ -183,13 +208,41 @@ private fun SwitchRow(title: String, about: String, checked: Boolean, enabled: B
 @Composable
 private fun relaysText(view: NetworkView): String {
     val d = view.details
-    val parts = mutableListOf(pluralStringResource(R.plurals.relays_available, d.relays, d.relays))
+    val parts = mutableListOf<String>()
+    if (d.relays > 0 || !d.publicDerp) parts += pluralStringResource(R.plurals.relays_available, d.relays, d.relays)
+    if (d.publicDerp) parts += stringResource(R.string.relays_public)
     if (d.home.isNotEmpty()) parts += stringResource(R.string.relays_home, d.home)
-    if (view.settings.httpsOnly) {
-        parts += if (d.httpsRelays.isEmpty()) stringResource(R.string.relays_https_none)
-        else stringResource(R.string.relays_https, d.httpsRelays.joinToString(", "))
+    if (view.settings.httpsOnly && d.httpsRelays.isNotEmpty()) {
+        parts += stringResource(R.string.relays_https, d.httpsRelays.joinToString(", "))
+    } else if (view.settings.httpsOnly && !d.publicDerp) {
+        parts += stringResource(R.string.relays_https_none)
     }
     return parts.joinToString(", ")
+}
+
+/** What the data plane measured beneath, as `juist status` says it. */
+@Composable
+private fun underlayText(u: Underlay, portMapping: Boolean): String {
+    val parts = mutableListOf<String>()
+    when {
+        !u.udp -> parts += stringResource(R.string.underlay_no_udp)
+        u.ipv4 -> parts += "IPv4"
+    }
+    if (u.ipv6) parts += "IPv6"
+    val offered = u.offered.joinToString(", ")
+    when {
+        u.mapped.isNotEmpty() -> parts += stringResource(R.string.underlay_mapped, offered.ifEmpty { stringResource(R.string.underlay_router) }, u.mapped)
+        offered.isNotEmpty() && !portMapping -> parts += stringResource(R.string.underlay_mapping_off, offered)
+        offered.isNotEmpty() -> parts += stringResource(R.string.underlay_nothing_mapped, offered)
+    }
+    return parts.joinToString(", ")
+}
+
+@Composable
+private fun publicNameText(view: NetworkView, p: PublicName): String = when {
+    !view.settings.names || !view.settings.publicNames -> stringResource(R.string.public_name_off, p.member)
+    p.not.isNotEmpty() -> stringResource(R.string.public_name_public, p.member, p.not)
+    else -> stringResource(R.string.public_name_tunnel, p.member)
 }
 
 @Composable

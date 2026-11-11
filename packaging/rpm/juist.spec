@@ -59,6 +59,8 @@ install -D -m 0644 juist-serve.service %{buildroot}%{_unitdir}/juist-serve.servi
 install -D -m 0644 juist-serve.path %{buildroot}%{_unitdir}/juist-serve.path
 install -D -m 0644 juist-ingress-ports.path %{buildroot}%{_unitdir}/juist-ingress-ports.path
 install -D -m 0644 juist-ingress-ports.service %{buildroot}%{_unitdir}/juist-ingress-ports.service
+install -D -m 0644 juist-upgrade@.service %{buildroot}%{_userunitdir}/juist-upgrade@.service
+install -D -m 0644 juist-upgrade@.timer %{buildroot}%{_userunitdir}/juist-upgrade@.timer
 install -D -m 0644 %{SOURCE1} %{buildroot}%{_sysusersdir}/%{name}.conf
 install -D -m 0755 firewall.sh %{buildroot}%{_prefix}/lib/juist/firewall.sh
 install -D -m 0755 instances.sh %{buildroot}%{_prefix}/lib/juist/instances.sh
@@ -171,6 +173,8 @@ fi
 %{_unitdir}/juist-serve.path
 %{_unitdir}/juist-ingress-ports.path
 %{_unitdir}/juist-ingress-ports.service
+%{_userunitdir}/juist-upgrade@.service
+%{_userunitdir}/juist-upgrade@.timer
 %{_sysusersdir}/%{name}.conf
 %dir %{_prefix}/lib/juist
 %{_prefix}/lib/juist/firewall.sh

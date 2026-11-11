@@ -104,7 +104,7 @@ func keyPersonOf(name string) string {
 
 func checkKeyName(name string) error {
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") {
-		return fmt.Errorf("%q cannot name an admin key file", name)
+		return fmt.Errorf("%q cannot be a key name", name)
 	}
 	return nil
 }
@@ -297,7 +297,7 @@ func (h *home) createNodeKeys(name string) (*nodeKeys, error) {
 func (h *home) canStageNodeKeys() error {
 	staged := h.join(nodeKeysFile + stagedSuffix)
 	if _, err := os.Stat(staged); err == nil {
-		return fmt.Errorf("%s: an earlier rotation is staged\nhint: apply its record, or juist rotate abandon", staged)
+		return fmt.Errorf("%s: a rotation is pending\nhint: apply its record, or juist rotate abandon", staged)
 	}
 	return nil
 }
@@ -471,7 +471,7 @@ func writeNewRecordFile(path string, a *types.AUM) error {
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if errors.Is(err, fs.ErrExist) {
-		return fmt.Errorf("%s exists; a change still collecting approvals? %w", path, err)
+		return fmt.Errorf("%w; is a change still waiting for votes?", err)
 	}
 	if err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)

@@ -38,10 +38,10 @@ func TestCheckHoldsOptionsToOneSpelling(t *testing.T) {
 		{[]string{"--name", "-looks-like-an-option"}, ""},
 		{[]string{"--", "-name", "--whatever"}, ""},
 		{[]string{"-", "pos"}, ""},
-		{[]string{"-name", "x"}, "takes two dashes, as --name"},
-		{[]string{"-help"}, "as --help"},
-		{[]string{"--y"}, "takes one dash, as -y"},
-		{[]string{"-abc"}, "not an option"},
+		{[]string{"-name", "x"}, "did you mean --name?"},
+		{[]string{"-help"}, "did you mean --help?"},
+		{[]string{"--y"}, "did you mean -y?"},
+		{[]string{"-abc"}, "unknown option"},
 		{[]string{"--nmae", "x"}, "did you mean --name?"},
 		{[]string{"--frobnicate"}, "unknown option --frobnicate"},
 		{[]string{"-q"}, "unknown option -q"},
@@ -77,8 +77,8 @@ func TestCheckWritesOutBundles(t *testing.T) {
 
 func TestCheckRefusesWhatIsNoBundle(t *testing.T) {
 	for _, args := range [][]string{{"-yx"}, {"-py", "3"}, {"-fy=true"}, {"-fh"}} {
-		if _, err := Check(bundleSet(), args); err == nil || !strings.Contains(err.Error(), "not an option") {
-			t.Errorf("%q: %v, want not an option", args, err)
+		if _, err := Check(bundleSet(), args); err == nil || !strings.Contains(err.Error(), "unknown option") {
+			t.Errorf("%q: %v, want unknown option", args, err)
 		}
 	}
 }

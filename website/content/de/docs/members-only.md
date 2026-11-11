@@ -25,26 +25,26 @@ einrichtet.
 
 ## Einrichten
 
-{{< step on="dem Gerät eines Admins" >}}
-```sh
-juist publish add nas photos --members
+Auf dem NAS, als dessen [Operator]({{< relref "docs/operator" >}}):
+
+```sh {device="nas"}
+juist publish photos 2342 --members
 ```
 
 Der Befehl gibt `nas: publishes photos.example.org:443 (members)` aus, und
-`juist publish` listet den Namen mit `(members)` auf.
-{{< /step >}}
+`juist publish` listet den Namen mit `(members)` auf. juist holt das
+Zertifikat über den Ingress und beendet TLS auf dem NAS.
 
-{{< step on="nas" as="dem Ziel" >}}
-```sh
-juist publish add photos 127.0.0.1:2342 --members
-```
+Hat das NAS keinen Admin-Schlüssel, merkt sich der Befehl, wohin der Name
+geht, und nennt den Befehl für einen Admin,
+`juist publish photos --members --on nas`, den ein Admin auf seinem eigenen
+Gerät ausführt.
 
-juist holt das Zertifikat über den Ingress und beendet TLS hier. `--members`
-markiert auch den Dienst selbst als nur für Mitglieder: juist schickt ihm den
-Namen nie, solange das Log den Namen als öffentlich führt. Spätere Befehle
-behalten die Markierung bis `--members=false`. Ein Service-Mitglied markiert
-seine Dienste mit `juistd --serve NAME=ADDR --members`.
-{{< /step >}}
+`--members` markiert auch den Dienst selbst als nur für Mitglieder: juist
+schickt ihm den Namen nie, solange das Log den Namen als öffentlich führt.
+Spätere Befehle behalten die Markierung bis `--members=false`. Ein
+Service-Mitglied markiert seine Dienste mit
+`juistd --serve NAME=ADDR --members`.
 
 ## Wer ihn öffnen kann
 
@@ -69,7 +69,7 @@ Namen, die Android-App ebenso.
 - Das Gerät selbst erreicht den Namen nicht über juist. Sonst käme jedes
   Programm darauf hinein. Nutze dort die eigene Adresse des Dienstes.
 - Ein Name nur für Mitglieder liegt immer auf 443, per TLS, ohne `--proxy`.
-  Ein erneutes `juist publish add nas photos` ohne `--members` lässt ihn
+  Ein erneutes `juist publish photos --on nas` ohne `--members` lässt ihn
   geschützt; `--members=false` macht ihn öffentlich.
 - Der Name steht wie jedes Zertifikat in den öffentlichen Zertifikatslogs
   der CA. Der Name ist nicht geheim, nur was er anbietet.
@@ -78,6 +78,6 @@ Namen, die Android-App ebenso.
 
 | Du siehst | Was zu tun ist |
 |---|---|
-| `juist health`: `warning: not serving NAME, which is for members alone: OTHER reaches its service as it is, …` | OTHER erreicht denselben Dienst per TCP oder ohne Proxy. Gib NAME einen eigenen Dienst. |
-| `juist health`: `warning: not serving NAME, its service meant for members alone: the log has the name public` | Um ihn für Mitglieder zu veröffentlichen, führt ein Admin `juist publish add DEVICE NAME --members` aus. Um ihn öffentlich zu machen, führ `juist publish add NAME HOST:PORT --members=false` auf dem Gerät aus. |
-| `juist health`: `warning: NAME, for members alone, is not reached from here, …` | Dieses Gerät löst die Namen des Netzes über öffentliches DNS auf, also führt NAME zum Ingress, der ihn ablehnt. Der Rest von `juist health` sagt warum. |
+| `juist health`: `warning: not serving NAME, which is for members only: OTHER reaches the same service, …` | OTHER erreicht denselben Dienst per TCP oder ohne Proxy. Gib NAME einen eigenen Dienst. |
+| `juist health`: `warning: not serving NAME: its service is for members only, but the name is public` | Um ihn für Mitglieder zu veröffentlichen, führt ein Admin `juist publish NAME --members --on DEVICE` aus. Um ihn öffentlich zu machen, führ `juist publish NAME HOST:PORT --members=false` auf dem Gerät aus. |
+| `juist health`: `warning: NAME is for members only and not reachable here: …` | Dieses Gerät löst die Namen des Netzes über öffentliches DNS auf, also führt NAME zum Ingress, der ihn ablehnt. Der Rest von `juist health` sagt warum. |

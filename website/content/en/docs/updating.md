@@ -62,7 +62,7 @@ When this device's release implements a newer schema than the network uses:
 - the `Schema` line of `juist status` shows the network's schema and, in
   parentheses, this release's, as in `20 (21)`;
 - on a device with an admin key, once every device's juist implements it,
-  `juist health` adds `hint: every device implements schema 21: juist log upgrade`.
+  `juist health` adds `hint: every device supports schema 21: juist log upgrade`.
 
 ## Raising the schema
 
@@ -98,7 +98,7 @@ heard nothing of it, `juist log upgrade` changes nothing and names it:
 
 ```console
 $ juist log upgrade
-juist: not every device implements schema 21: phone (20)
+juist: not every device supports schema 21: phone (20)
 hint: update them, or raise it anyway: juist log upgrade --force
 ```
 
@@ -117,11 +117,22 @@ device implements it, and until then does nothing and prints nothing;
 `juist log upgrade` says which devices it waits for.
 
 {{< step on="an admin's device" >}}
-Run it from a timer as the user whose keystore holds the admin key, such as
-daily from that user's crontab (`crontab -e`):
+Run it from a timer as the user whose keystore holds the admin key, on a
+device that is usually on. The Linux packages bring one that runs hourly;
+name the network as `juist status` does:
+
+```console
+$ systemctl --user enable --now juist-upgrade@home.timer
+$ loginctl enable-linger      # where nobody stays logged in
+```
+
+`journalctl --user -u juist-upgrade@home` shows what it did. On FreeBSD, or
+without the packages, the user's crontab (`crontab -e`) does the same, with
+juist's path as `command -v juist` prints it, `/usr/local/bin/juist` on
+FreeBSD:
 
 ```
-0 3 * * * juist log upgrade --when-ready
+0 * * * * /usr/local/bin/juist log upgrade --when-ready home
 ```
 
 With a quorum above one, your vote alone does not raise the schema:
@@ -136,7 +147,7 @@ changes, a removal included, until it is updated. The other devices warn
 about it in `juist health`:
 
 ```console
-warning: nas runs an older juist, which applies no changes until updated
+warning: nas runs an older juist and applies no changes until updated
 ```
 
 A device on an older release can also be cut off from traffic altogether:

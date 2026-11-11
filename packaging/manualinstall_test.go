@@ -37,8 +37,8 @@ func TestTheSystemdStageHoldsTheRPMsFiles(t *testing.T) {
 }
 
 type manualHost struct {
-	t                *testing.T
-	root, bin, calls string
+	t                        *testing.T
+	script, root, bin, calls string
 }
 
 // newManualHost is a DESTDIR with stubs for what manual-install.sh calls.
@@ -46,9 +46,9 @@ type manualHost struct {
 func newManualHost(t *testing.T) *manualHost {
 	t.Helper()
 	dir := t.TempDir()
-	h := &manualHost{t: t, root: filepath.Join(dir, "root"), bin: filepath.Join(dir, "bin"), calls: filepath.Join(dir, "calls")}
+	h := &manualHost{t: t, script: "manual-install.sh", root: filepath.Join(dir, "root"), bin: filepath.Join(dir, "bin"), calls: filepath.Join(dir, "calls")}
 	h.write(filepath.Join(h.root, "usr/share/hosts-own"), "", 0o644)
-	for _, name := range []string{"systemctl", "systemd-sysusers", "chown", "firewall-cmd"} {
+	for _, name := range []string{"systemctl", "systemd-sysusers", "systemd-sysext", "chown", "firewall-cmd"} {
 		h.write(filepath.Join(h.bin, name), "#!/bin/sh\necho \""+name+" $*\" >> "+h.calls+"\n", 0o755)
 	}
 	return h
@@ -84,7 +84,7 @@ func (h *manualHost) stage(extra ...string) string {
 func (h *manualHost) run(args ...string) (string, error) {
 	h.t.Helper()
 	os.Remove(h.calls)
-	cmd := exec.Command("/bin/sh", append([]string{"manual-install.sh"}, args...)...)
+	cmd := exec.Command("/bin/sh", append([]string{h.script}, args...)...)
 	cmd.Env = []string{"PATH=" + h.bin + ":/usr/bin:/bin", "DESTDIR=" + h.root}
 	out, err := cmd.CombinedOutput()
 	calls, _ := os.ReadFile(h.calls)
@@ -95,7 +95,7 @@ func (h *manualHost) must(args ...string) string {
 	h.t.Helper()
 	out, err := h.run(args...)
 	if err != nil {
-		h.t.Fatalf("manual-install.sh %v: %v\n%s", args, err, out)
+		h.t.Fatalf("%s %v: %v\n%s", h.script, args, err, out)
 	}
 	return out
 }

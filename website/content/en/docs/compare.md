@@ -57,6 +57,26 @@ it. Removing a device and spreading the change still go through the server.
 Its tunnels are not post-quantum: it sets no preshared key and lets you set
 none.
 
+Tailscale's Funnel puts a local port on the internet with one command, and
+Serve shares it within the tailnet. juist's
+[`juist publish`]({{< relref "docs/publishing" >}}) covers the same ground:
+
+| Tailscale | juist |
+|---|---|
+| `tailscale funnel 3000` | `juist publish 3000`, under the device's own name, or `juist publish docs 3000` under a name of your choice, an admin's change |
+| `tailscale funnel --bg 3000` | `juist publish 3000 -b` |
+| `tailscale serve 3000` | `juist publish docs 3000 --members` |
+| `tailscale funnel status` | `juist publish` |
+| `tailscale funnel reset` | `juist publish --stop docs` |
+| the `funnel` attribute in the policy file | the role `publish`, which an admin grants |
+
+The difference is where the names come from. Funnel's live under `ts.net`,
+which Tailscale Inc. runs, and its relays carry the traffic. juist has no
+such service: you bring a domain of your own and an ingress, a member with a
+public address such as a small VPS. In return the names are yours, a CAA
+record keeps their certificates to your device, and `--tcp` gives a service
+without TLS a port of its own on the ingress.
+
 Choose Tailscale if you want clients for every platform and user accounts
 with access rules by user, and can accept a company's server at the centre.
 

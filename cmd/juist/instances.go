@@ -141,7 +141,7 @@ func (a *app) hostNode() (n node, found bool, err error) {
 		// One that does not answer may be some network's device; it is
 		// started, not stood in for.
 		if len(down) > 0 {
-			return nil, false, fmt.Errorf("%s is not running, so this device's networks are not all known\nhint: %s",
+			return nil, false, fmt.Errorf("%s is not running, so not all networks are known\nhint: %s",
 				unitOf(down[0].n), startCmd(down[0].n))
 		}
 		// On a device in one network, the one it was removed from: joining
@@ -201,9 +201,9 @@ func (a *app) namedInstance(insts []hostInstance) (hostInstance, error) {
 	switch len(matches) {
 	case 0:
 		if len(insts) == 0 {
-			return hostInstance{}, fmt.Errorf("no juistd runs here, so no network %q\nhint: %s", want, enableCmd())
+			return hostInstance{}, fmt.Errorf("no network %q: no juistd runs here\nhint: %s", want, enableCmd())
 		}
-		return hostInstance{}, fmt.Errorf("this device is in no network %q%s\nhint: %s", want,
+		return hostInstance{}, fmt.Errorf("no network %q here%s\nhint: %s", want,
 			didYouMean(want, networkNames(insts)...), a.networksHint(insts))
 	case 1:
 		if matches[0].st == nil {
@@ -215,7 +215,7 @@ func (a *app) namedInstance(insts []hostInstance) (hostInstance, error) {
 	for i, m := range matches {
 		names[i] = m.name()
 	}
-	return hostInstance{}, fmt.Errorf("two networks here are called %q\nhint: name the instance instead: %s",
+	return hostInstance{}, fmt.Errorf("two networks are called %q\nhint: name the juistd instead: %s",
 		want, strings.Join(names, ", or "))
 }
 

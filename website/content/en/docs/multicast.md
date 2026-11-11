@@ -60,7 +60,7 @@ the network alongside the LAN. Programs that use only the default interface,
 such as Minecraft Java, need no group configuration. `juist status` shows:
 
 ```console
-  Multicast     on, copied: auto
+  Multicast     on
 ```
 
 Copying follows those permissions on every participating Linux member. Existing
@@ -142,7 +142,7 @@ device like `juist0` unless its configuration allows it. `juist health`
 warns of this:
 
 ```console
-warning: avahi leaves juist0 out, a point-to-point device: members are not found by mDNS
+warning: avahi skips juist0, a point-to-point device, so mDNS finds no members
 hint: set allow-point-to-point=yes under [server] in /etc/avahi/avahi-daemon.conf, then restart avahi-daemon
 ```
 
@@ -175,7 +175,8 @@ The Android app carries no multicast.
 ## If something goes wrong
 
 - **A program finds no member.** Run `juist health` and look for the avahi
-  warning. On Linux, check that `juist status` says `copied: auto` or lists
-  the program's group. Elsewhere the program must listen on `juist0`.
+  warning. On Linux, check that `juist status` says `Multicast on`; where it
+  says `on (groups off)`, `sudo juist set --groups auto` restores
+  automatic copying. Elsewhere the program must listen on `juist0`.
 - **`juist status` shows no `Multicast` line.** The device has no `juist0`,
   as a [service member]({{< relref "docs/service-member" >}}) does not.
