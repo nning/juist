@@ -167,7 +167,7 @@ jede heruntergeladene Datei.
 ## Aus dem Quellcode bauen {#building-from-source}
 
 Zum Bauen brauchst du Go 1.21 oder neuer und `make`. `make` lässt Go selbst
-go1.27.3 herunterladen und baut damit, sodass ein Commit auf jedem Rechner
+go1.27.4 herunterladen und baut damit, sodass ein Commit auf jedem Rechner
 exakt dieselben Bytes ergibt.
 
 ```sh

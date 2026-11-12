@@ -162,7 +162,7 @@ for each file you downloaded.
 
 ## Building from source {#building-from-source}
 
-Building needs Go 1.21 or newer and `make`. `make` has Go download go1.27.3
+Building needs Go 1.21 or newer and `make`. `make` has Go download go1.27.4
 and builds with it, so that a given commit produces the same bytes on any
 machine.
 

@@ -15,7 +15,7 @@ MAKE_DRY     = $(strip $(foreach f,n t q,$(findstring $(f),$(MAKE_LETTERS))))
 
 # One toolchain for every target, so a commit builds to the same bytes anywhere
 # and local runs match CI's GO_VERSION.
-export GOTOOLCHAIN ?= go1.27.3
+export GOTOOLCHAIN ?= go1.27.4
 
 # Static binaries that need no C toolchain; only the race detector wants cgo.
 export CGO_ENABLED ?= 0

@@ -8,7 +8,7 @@ name=$1
 # Hugo again beside the first; the timer runs it later.
 exec 9> "$HOME/site.lock"
 flock -n 9 || exit 0
-export GOTOOLCHAIN=go1.27.3
+export GOTOOLCHAIN=go1.27.4
 # /tmp may be a small tmpfs; compiling Hugo needs more.
 export GOTMPDIR="$HOME/.cache/go-tmp"
 dir="$HOME/site/$name"

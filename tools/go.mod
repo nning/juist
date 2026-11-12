@@ -1,6 +1,6 @@
 module github.com/nning/juist/tools
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/rhysd/actionlint v1.7.7

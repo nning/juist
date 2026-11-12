@@ -290,7 +290,7 @@ Still open before v1, as [05-roadmap.md](docs/05-roadmap.md) plans it:
 
 ## Development
 
-Go 1.21 or newer; `make` has it fetch and use go1.27.3, so that a commit
+Go 1.21 or newer; `make` has it fetch and use go1.27.4, so that a commit
 builds to the same bytes anywhere, and lists the targets.
 
 ```sh
