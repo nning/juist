@@ -197,7 +197,7 @@ abstract class Screens(private val variant: String) {
 
     @Test fun memberAsAdmin() = shot("member_admin") {
         MemberScreen(sampleView.members[2], on = true, pings = emptyList(), pinging = false, onPing = none, onOpen = {}, onBack = none,
-            admin = { AdminSection(setOf("relay"), isSelf = false, enabled = true, onRole = { _, _ -> }, onRemove = none) })
+            admin = { AdminSection(setOf("relay"), isSelf = false, phone = false, mixed = true, enabled = true, onRole = { _, _ -> }, onRemove = none) })
     }
 
     @Test fun about() = shot("about") { AboutScreen("0+8f4f2b0", none, none, none, none) }

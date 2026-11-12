@@ -293,7 +293,7 @@ class AppRootTest {
         val calls = mutableListOf<Pair<String, Boolean>>()
         compose.setContent {
             JuistTheme {
-                io.juist.app.ui.screens.AdminSection(setOf("voucher"), isSelf = false, enabled = true,
+                io.juist.app.ui.screens.AdminSection(setOf("voucher"), isSelf = false, phone = false, mixed = true, enabled = true,
                     onRole = { r, on -> calls += r to on }, onRemove = {}, lastVoucher = true)
             }
         }

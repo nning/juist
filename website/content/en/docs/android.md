@@ -154,8 +154,12 @@ removed phone learns of its removal as soon as it meets one that knows.
 the other device scans, its code for the same Wi-Fi, and a link to share.
 When the device asks to join, both show four words; once they match, **Same
 words** and your fingerprint admit it. The device's screen lists its roles to
-the admin: **Relay**, **Voucher** and **Exit node** (a phone itself only
-**Voucher**), and **Remove from the network**. A change that needs other
+the admin: **Relay**, **Voucher** and **Exit node**, and **Remove from the
+network**. A phone, this one or another, is offered only **Voucher**, and
+only where a computer is in the network: phones alone rest too often to
+vouch for anything, and none relays or carries the internet for others.
+juist knows another phone by what it announces, once the network runs
+schema 20 or later; a device it has not heard from yet counts as a computer. A change that needs other
 admins' votes is signed and waits for them, and the app says so. Taking
 the network's last voucher, which leaves freshness unchecked, asks first.
 

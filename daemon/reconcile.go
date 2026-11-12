@@ -179,6 +179,7 @@ func (d *Daemon) Reconcile() error {
 		id := devices[i].Identity
 		devices[i].Serving = len(devices[i].Published) > 0 && d.servesPublished(id)
 		devices[i].Build = d.buildOf(id)
+		devices[i].Phone = id == d.self && d.rests || id != d.self && d.peerRests(id)
 	}
 	d.setDerived(ipc.Derived{
 		NetworkName: state.Network(), Head: state.Head(), Epoch: state.Epoch(), Schema: state.Schema(),

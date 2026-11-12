@@ -674,3 +674,30 @@ func TestAGenesisWithNoRangeLeftGivesNoHint(t *testing.T) {
 		t.Errorf("genesis without a range: %v", err)
 	}
 }
+
+// The status names a phone by its device's Phone; one it does not list is none.
+func TestIsPhoneReadsTheStatus(t *testing.T) {
+	phone, laptop := types.Identity{1}, types.Identity{2}
+	st := ipc.Status{Derived: ipc.Derived{Devices: []ipc.Device{{Identity: phone, Phone: true}, {Identity: laptop}}}}
+	if !isPhone(st, phone) || isPhone(st, laptop) || isPhone(st, types.Identity{3}) {
+		t.Error("isPhone misreads the status")
+	}
+}
+
+// The view marks a member the status names a phone, and this phone itself.
+func TestTheViewNamesPhones(t *testing.T) {
+	self, phone, laptop := types.Identity{1}, types.Identity{2}, types.Identity{3}
+	s := &ipc.Status{InNetwork: true, Self: self, Derived: ipc.Derived{Devices: []ipc.Device{
+		{Identity: self, Name: "pixel", Phone: true}, {Identity: phone, Name: "iophon", Phone: true}, {Identity: laptop, Name: "laptop"}}}}
+	v := viewOf(s, "")
+	if !v.Self.Phone {
+		t.Error("this phone is no phone in the view")
+	}
+	phones := map[string]bool{}
+	for _, m := range v.Members {
+		phones[m.Name] = m.Phone
+	}
+	if !phones["iophon"] || phones["laptop"] {
+		t.Errorf("phones in the view: %v", phones)
+	}
+}

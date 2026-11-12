@@ -391,6 +391,11 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                         Juist.cancelInvite()
                         pop()
                     },
+                    onJoined = { name ->
+                        toast(context, res.getString(R.string.invite_joined, name))
+                        Juist.cancelInvite()
+                        pop()
+                    },
                 )
             }
             Route.Networks -> NetworksScreen(
@@ -507,6 +512,8 @@ fun AppRoot(opened: MutableState<String?> = remember { mutableStateOf(null) }) {
                                 AdminSection(
                                     roles = member.roles.mapNotNull { logRoles[it] }.toSet(),
                                     isSelf = member.identity == view?.self?.identity,
+                                    phone = member.phone || member.identity == view?.self?.identity,
+                                    mixed = view?.members.orEmpty().any { !it.phone },
                                     lastVoucher = lastVoucher,
                                     enabled = connection is Connection.On && !governingBusy,
                                     onRole = { role, grant ->

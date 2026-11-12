@@ -240,6 +240,11 @@ func withoutHint(err error) error {
 	return errors.New(msg)
 }
 
+// isPhone says st names id a phone, which can only vouch.
+func isPhone(st ipc.Status, id types.Identity) bool {
+	return slices.ContainsFunc(st.Devices, func(d ipc.Device) bool { return d.Identity == id && d.Phone })
+}
+
 // Roles the app grants: relay, voucher and exit.
 var appRoles = map[string]types.Role{"relay": types.RoleRelayCapable, "voucher": types.RoleAdmin, "exit": types.RoleExit}
 
@@ -252,10 +257,17 @@ func (c *Core) Grant(slot int32, identity, role string, grant bool, seed []byte,
 	if !ok {
 		return false, fmt.Errorf("%q is no role the app grants", role)
 	}
+	n, err := c.on(slot)
+	if err != nil {
+		return false, err
+	}
 	return c.change(slot, seed, func(auth *log.Authority) (types.AUM, error) {
 		target, err := memberIn(auth, identity)
 		if err != nil {
 			return types.AUM{}, err
+		}
+		if grant && r != types.RoleAdmin && isPhone(n.s.Status(), target.Identity) {
+			return types.AUM{}, fmt.Errorf("%s is a phone and can only be a voucher", cmp.Or(target.Name, target.Identity.ShortString()))
 		}
 		roles := slices.DeleteFunc(slices.Clone(target.Roles), func(x types.Role) bool { return x == r })
 		if grant {

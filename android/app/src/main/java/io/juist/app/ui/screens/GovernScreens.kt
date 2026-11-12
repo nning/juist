@@ -4,6 +4,10 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -195,11 +199,14 @@ fun InviteScreen(
     onSame: () -> Unit,
     onDifferent: () -> Unit,
     onClose: () -> Unit,
+    onJoined: (String) -> Unit = {},
 ) {
+    // Nothing is left to do here once the device joined.
+    if (state is InviteState.Joined) LaunchedEffect(state) { onJoined(state.name) }
     Scaffold(topBar = { BackBar(stringResource(R.string.invite_title), onClose) }, containerColor = MaterialTheme.colorScheme.background) { padding ->
         Readable(Modifier.padding(padding).fillMaxSize()) {
             Column(
-                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = Space.xl),
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = Space.xl),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 when (state) {
@@ -226,7 +233,7 @@ fun InviteScreen(
                     }
                     is InviteState.Admitting -> {
                         CircularProgressIndicator(Modifier.padding(Space.xxl))
-                        Text(stringResource(R.string.invite_admitting, state.name))
+                        Text(stringResource(R.string.invite_admitting, state.name), textAlign = TextAlign.Center)
                     }
                     is InviteState.Joined -> Text(stringResource(R.string.invite_joined, state.name),
                         style = MaterialTheme.typography.headlineSmall)
@@ -240,10 +247,15 @@ fun InviteScreen(
                 }
             }
             if (state is InviteState.Comparing) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = Space.xl, vertical = Space.l),
+                // One height for both, however either label wraps.
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(horizontal = Space.xl, vertical = Space.l),
                     horizontalArrangement = Arrangement.spacedBy(Space.m)) {
-                    OutlinedButton(onDifferent, Modifier.weight(1f).heightIn(min = 56.dp)) { Text(stringResource(R.string.invite_different)) }
-                    Button(onSame, Modifier.weight(1f).heightIn(min = 56.dp)) { Text(stringResource(R.string.invite_same)) }
+                    OutlinedButton(onDifferent, Modifier.weight(1f).fillMaxHeight().heightIn(min = 56.dp)) {
+                        Text(stringResource(R.string.invite_different), textAlign = TextAlign.Center)
+                    }
+                    Button(onSame, Modifier.weight(1f).fillMaxHeight().heightIn(min = 56.dp)) {
+                        Text(stringResource(R.string.invite_same), textAlign = TextAlign.Center)
+                    }
                 }
             }
         }
@@ -274,6 +286,15 @@ private fun Qr(text: String) {
 val appRoles = listOf("relay", "voucher", "exit")
 
 /**
+ * The roles offered for a member: a phone neither relays nor carries the
+ * internet for others, and vouches only where a computer is in the network,
+ * as phones alone rest too often to check anything. A role it holds stays,
+ * so that it can be taken.
+ */
+fun offeredRoles(phone: Boolean, mixed: Boolean, held: Set<String>): List<String> =
+    appRoles.filter { !phone || it == "voucher" && mixed || it in held }
+
+/**
  * What the phone's admin key does to a member: its roles, and removing it.
  * Each change asks for the phone's biometric or screen lock first.
  */
@@ -281,6 +302,8 @@ val appRoles = listOf("relay", "voucher", "exit")
 fun AdminSection(
     roles: Set<String>,
     isSelf: Boolean,
+    phone: Boolean,
+    mixed: Boolean,
     enabled: Boolean,
     onRole: (String, Boolean) -> Unit,
     onRemove: () -> Unit,
@@ -288,10 +311,11 @@ fun AdminSection(
 ) {
     var confirm by remember { mutableStateOf(false) }
     var revokeVoucher by remember { mutableStateOf(false) }
+    val offered = offeredRoles(phone, mixed, roles)
+    if (offered.isEmpty() && isSelf) return
     SectionTitle(stringResource(R.string.section_admin))
     Panel {
-        // A phone neither relays nor carries the internet for others.
-        appRoles.filter { !isSelf || it == "voucher" }.forEachIndexed { i, role ->
+        offered.forEachIndexed { i, role ->
             if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             val on = role in roles
             Row(
@@ -310,7 +334,7 @@ fun AdminSection(
             }
         }
         if (!isSelf) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            if (offered.isNotEmpty()) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             TextButton({ confirm = true }, Modifier.padding(Space.s), enabled = enabled) {
                 Text(stringResource(R.string.action_remove_device), color = MaterialTheme.colorScheme.error)
             }

@@ -580,6 +580,10 @@ type Device struct {
 	// Build is the newest schema the member's juist implements, as its
 	// announcement says; zero where none says. [DevicesOf] leaves it unset.
 	Build types.SchemaVersion `cbor:"13,keyasint,omitempty"`
+
+	// Phone says the member rests as a phone does, by its announcement; such
+	// a member can only vouch. [DevicesOf] leaves it unset.
+	Phone bool `cbor:"14,keyasint,omitempty"`
 }
 
 // A Build is the newest schema a member's juist implements.

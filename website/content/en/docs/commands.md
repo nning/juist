@@ -282,6 +282,8 @@ Give a device roles. Roles:
            always on. Not an admin key.
 ```
 
+A phone can only be a voucher, once the network runs schema 20 or later and this device has heard from it.
+
 ### `juist revoke [NETWORK] DEVICE ROLE...`
 
 Take roles from a device: exit, ingress, service, publish, relay or voucher. juist grant \-\-help says what each does.

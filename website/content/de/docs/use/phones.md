@@ -38,7 +38,7 @@ Tippe unter den Geräten auf **Gerät einladen**. Die App zeigt einen QR-Code.
 
 {{< step on="jedem anderen Telefon" >}}
 Scanne den QR-Code mit der App. Beide Telefone zeigen vier Wörter; stimmen
-sie überein, tippe auf dem ersten Telefon auf **Dieselben Wörter** und
+sie überein, tippe auf dem ersten Telefon auf **Dieselben** und
 bestätige mit dem Fingerabdruck.
 {{< /step >}}
 

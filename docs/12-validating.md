@@ -1121,6 +1121,33 @@ at once. Stopping the VPN
 gives the phone its own DNS back: `example.org` resolves, `a.names.juist`
 does not.
 
+## Govern a network from a phone
+
+M28's exit criterion (2), on two phones and a computer on one Wi-Fi. A
+phone creates a network in the app and keeps the backup the app offers; it
+invites the second phone by QR code (`Same words` on the first, after its
+fingerprint) and the computer by code (`juist join CODE`); it removes the
+computer, which the second phone's device list loses soon after; both
+phones' status says freshness is unchecked.
+
+Passed on 2026-11-12 with the app from main. On the way, the words' two
+answers were of two heights, the line while a device is admitted stood off
+the middle, and the screen stayed open once the device had joined; all three
+were fixed after it.
+
+## Phones without a server of their own
+
+M28's exit criterion (3). Two phones on mobile data alone, Wi-Fi off, in a
+network whose public DERP is on: each lists the other as reached, and says
+whether directly or through Tailscale's servers. One phone on a home Wi-Fi
+whose router offers UPnP, NAT-PMP or PCP, with the app's port mapping on: its
+details' `Underlay` line names the mapping, as `UPnP maps ADDR`.
+
+On 2026-11-12 the two phones on mobile data reached each other directly, no
+relay between them. Port mapping is not tested: the home router, OpenWrt
+without miniupnpd, offers none, which homeserver's `Underlay` line on the
+same LAN shows as well.
+
 ## Reach an app on a phone
 
 M28's exit criterion (4). In a fresh AVD (`avdmanager create avd -k

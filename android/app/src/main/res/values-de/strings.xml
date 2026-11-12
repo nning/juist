@@ -393,7 +393,7 @@
     <string name="invite_code_label">Code</string>
     <string name="invite_share_link">Link teilen</string>
     <string name="invite_compare">%1$s möchte beitreten. Zeigt es dieselben Wörter?</string>
-    <string name="invite_same">Dieselben Wörter</string>
+    <string name="invite_same">Dieselben</string>
     <string name="invite_different">Andere</string>
     <string name="invite_admitting">%1$s wird aufgenommen</string>
     <string name="invite_joined">%1$s ist beigetreten</string>

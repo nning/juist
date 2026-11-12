@@ -77,6 +77,8 @@ data class Member(
     val subnets: List<String> = emptyList(),
     /** The newest schema its juist implements, 0 where it says none. */
     val build: Int = 0,
+    /** Whether it is a phone, which can only vouch. */
+    val phone: Boolean = false,
 )
 
 /**

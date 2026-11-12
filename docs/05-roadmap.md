@@ -1317,8 +1317,11 @@ and four follow-ups on its fixes, the last confirming nothing above minor;
 validated by `make ci-vm` and `make android-smoke` at M28
 ([12-validating.md](12-validating.md), "The last privileged run").
 Exit criterion (1) holds in `mobile`'s tests and (4) passed by hand in the
-emulator; (2) and (3), the hand tests on phones, had not run when the user
-published it. Core 8 098 lines, audit scope 29 000, measured after it
+emulator; (2) passed by hand on two phones and a computer on 2026-11-12
+([12-validating.md](12-validating.md), "Govern a network from a phone"),
+after the user published it; of (3), two phones on mobile data reached
+each other directly the same day, and port mapping is open: the home router
+offers no UPnP, NAT-PMP or PCP. Core 8 098 lines, audit scope 29 000, measured after it
 (2026-11-11).
 
 A network whose every member is an Android phone, created, invited to,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nning/juist/conn"
 	"github.com/nning/juist/internal/govern"
+	"github.com/nning/juist/ipc"
 	"github.com/nning/juist/trust/log"
 	"github.com/nning/juist/types"
 )
@@ -28,7 +29,10 @@ const rolesAbout = `Roles:
            two or more devices with public addresses
   voucher  confirms hourly that the network state is current; if too few do
            for 48 hours, devices reach only vouchers. For devices that are
-           always on. Not an admin key.`
+           always on. Not an admin key.
+
+A phone can only be a voucher, once the network runs schema 20 or later
+and this device has heard from it.`
 
 func cmdGrant(a *app, args []string) error {
 	s := spec{name: "juist grant", args: "DEVICE ROLE...", min: 2, max: -1, about: `
@@ -77,6 +81,9 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 		if err := roleConflict(target, sortRoles(next)); err != nil {
 			return err
 		}
+		if err := phoneRoles(liveStatus(a.node), target, sortRoles(next)); err != nil {
+			return err
+		}
 	}
 	before := auth.State()
 	applied, err := a.submitRoutes(auth, target, sortRoles(next), target.SubnetRoutes(), *yes)
@@ -113,6 +120,20 @@ func changeRoles(a *app, s spec, args []string, grant bool) error {
 		return nil
 	}
 	return a.serveIngressNext(target)
+}
+
+// phoneRoles refuses a role but voucher for a member st names a phone, which
+// neither relays nor serves others; roles it holds already stay.
+func phoneRoles(st *ipc.Status, target types.NodeRecord, next []types.Role) error {
+	if st == nil || !slices.ContainsFunc(st.Devices, func(d ipc.Device) bool { return d.Identity == target.Identity && d.Phone }) {
+		return nil
+	}
+	for _, r := range next {
+		if r != types.RoleAdmin && !target.HasRole(r) {
+			return fmt.Errorf("%s is a phone and can only be a voucher", displayMember(target))
+		}
+	}
+	return nil
 }
 
 // roleConflict says which of target's roles keeps it from next, as the log

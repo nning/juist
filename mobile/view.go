@@ -122,6 +122,8 @@ type member struct {
 	Names       []string `json:"names,omitempty"`
 	Subnets     []string `json:"subnets,omitempty"`
 	Build       int      `json:"build,omitempty"`
+	// Phone says it is a phone, which can only vouch.
+	Phone bool `json:"phone,omitempty"`
 }
 
 // freshness is whether admin devices vouch for this device's view: State is
@@ -192,7 +194,7 @@ type alarm struct {
 // privateDNS where set.
 func viewOf(s *ipc.Status, privateDNS string) view {
 	v := view{Network: s.NetworkName, Updated: s.LastReconcile,
-		Self: member{Identity: s.Self.String(), Name: cmp.Or(s.SelfName, s.Self.ShortString()), Reach: "self"},
+		Self: member{Identity: s.Self.String(), Name: cmp.Or(s.SelfName, s.Self.ShortString()), Reach: "self", Phone: true},
 		Settings: settings{Names: s.Names == nil || !s.Names.Off, PublicNames: s.Names != nil && s.Names.Accepted,
 			HTTPSOnly: s.HTTPS != nil && s.HTTPS.Only, PortMapping: !s.PortMapOff},
 		Details: details{AppSchema: int(types.CurrentSchema)}, Waiting: s.Waiting}
@@ -244,7 +246,7 @@ func viewOf(s *ipc.Status, privateDNS string) view {
 	for _, d := range s.Devices {
 		m := member{Identity: d.Identity.String(), Name: d.Name, V4: d.V4, V6: d.V6,
 			Retiring: d.Retiring, RetiringUntil: d.RetiringUntil, Published: d.Published, MembersOnly: d.Members,
-			Names: d.Names, Build: int(cmp.Or(d.Build, builds[d.Identity]))}
+			Names: d.Names, Build: int(cmp.Or(d.Build, builds[d.Identity])), Phone: d.Phone}
 		for _, p := range d.Subnets {
 			m.Subnets = append(m.Subnets, p.String())
 		}

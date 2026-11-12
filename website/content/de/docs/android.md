@@ -159,10 +159,14 @@ entferntes Telefon erfährt davon, sobald es eines trifft, das es weiß.
 **Gerät einladen**, unter den Geräten, bietet eine Einladung an: ihren
 QR-Code, den das andere Gerät scannt, ihren Code fürs selbe WLAN und einen
 Link zum Teilen. Fragt das Gerät nach dem Beitritt, zeigen beide vier Wörter;
-stimmen sie überein, nehmen **Dieselben Wörter** und dein Fingerabdruck es
+stimmen sie überein, nehmen **Dieselben** und dein Fingerabdruck es
 auf. Der Bildschirm eines Geräts zeigt dem Admin seine Rollen, **Relay**,
-**Voucher** und **Exit-Node** (bei einem Telefon selbst nur **Voucher**),
-und **Aus dem Netz entfernen**. Eine Änderung, die Stimmen anderer Admins
+**Voucher** und **Exit-Node**, und **Aus dem Netz entfernen**. Ein Telefon,
+dieses oder ein anderes, bekommt nur **Voucher** angeboten, und das nur,
+wenn ein Rechner im Netz ist: Telefone allein ruhen zu oft, um für etwas zu
+bürgen, und keines relayt oder trägt das Internet für andere. juist erkennt
+ein anderes Telefon an seinen Ankündigungen, sobald das Netz Schema 20 oder
+neuer nutzt; ein Gerät, von dem es noch nichts gehört hat, gilt als Rechner. Eine Änderung, die Stimmen anderer Admins
 braucht, wird signiert und wartet auf sie, und die App sagt das. Den
 letzten Voucher des Netzes zu entziehen, wonach die Freshness ungeprüft
 bleibt, fragt vorher nach.
