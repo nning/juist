@@ -183,7 +183,7 @@ Point public names at devices, for members to reach through the tunnel.
   juist names off                     resolve them publicly again
 ```
 
-On Linux and FreeBSD, every device is DEVICE.NETWORK.juist to the others. A public name such as mail.example.org resolves to its device where names are on, and publicly elsewhere or while its device is out of reach.
+On Linux, FreeBSD and macOS, every device is DEVICE.NETWORK.juist to the others. A public name such as mail.example.org resolves to its device where names are on, and publicly elsewhere or while its device is out of reach.
 
 ### `juist names add [NETWORK] DEVICE NAME...`
 
@@ -381,9 +381,9 @@ Manage the admin keys that approve changes, and how many votes a change needs.
 
 An admin key leaves its machine only as the line export prints.
 
-### `juist admins new NAME`
+### `juist admins new [NETWORK] NAME`
 
-Create an admin key on this machine and print the command that adds it. \-\-network names its network; without it, the key belongs to the first network that adds it.
+Create an admin key on this machine and print the command that adds it. NETWORK need not be one this machine is in; without it, the key belongs to the first network that adds it.
 
 - `-o, --on MACHINE`: MACHINE holding the key (default: this device)
 

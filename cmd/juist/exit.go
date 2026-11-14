@@ -205,8 +205,8 @@ func exitUse(a *app, args []string) error {
 		return a.usageErr("this device cannot be its own exit node")
 	case !target.HasRole(types.RoleExit):
 		return fmt.Errorf("%s is not an exit node\nhint: an admin makes it one: juist grant %s exit", name, name)
-	case !servesHere:
-		return errors.New("exit nodes are used only on Linux and FreeBSD")
+	case !usesExitHere:
+		return errors.New("exit nodes are used only on Linux, FreeBSD and macOS")
 	case ex.Node == target.Identity && ex.Refused == "" && ex.Failed == "" && ex.Isolated == *isolate:
 		a.ok("unchanged: internet via %s%s", name, isolation(*isolate))
 		a.warnPartly(ex)
@@ -440,7 +440,7 @@ func exitServe(a *app, args []string) error {
 		return err
 	}
 	ex := cmp.Or(st.Exit, &ipc.Exit{})
-	dev := instance.Name(st.Instance)
+	dev := instance.Device(st.Instance)
 	if *stop {
 		if ex.Consent {
 			if _, err := d.request(ipc.Request{Command: ipc.CmdExit, Serve: new(bool)}); err != nil {

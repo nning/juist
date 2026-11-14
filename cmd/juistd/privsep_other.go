@@ -1,11 +1,11 @@
-//go:build !freebsd
+//go:build !freebsd && !darwin
 
 package main
 
 import "github.com/nning/juist/conn"
 
-// split does nothing: only FreeBSD's juistd splits, where no capability
-// grants the network alone.
+// split does nothing: only FreeBSD's and macOS's juistd split, where no
+// capability grants the network alone.
 func split([]string) (int, bool) { return 0, false }
 
 // permHint is what gives a device's creation the right it lacked.

@@ -1,7 +1,6 @@
 package plumber
 
 import (
-	"net"
 	"net/netip"
 	"os"
 	"strings"
@@ -29,22 +28,6 @@ func (FreeBSD) SetDNS(dev string, servers []netip.Addr, search []string) error {
 	return runIn(b.String(), "/sbin/resolvconf", "-x", "-a", dev)
 }
 
-// ListenDNS binds 53 at a by proto, for the daemon's resolver, which the
-// host's resolver asks there.
 func (FreeBSD) ListenDNS(a netip.Addr, proto string) (*os.File, error) {
-	at := netip.AddrPortFrom(a, 53)
-	if proto == "udp" {
-		c, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(at))
-		if err != nil {
-			return nil, err
-		}
-		defer c.Close()
-		return c.File()
-	}
-	ln, err := net.ListenTCP("tcp", net.TCPAddrFromAddrPort(at))
-	if err != nil {
-		return nil, err
-	}
-	defer ln.Close()
-	return ln.File()
+	return listenDNS(a, proto)
 }

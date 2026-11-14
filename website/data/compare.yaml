@@ -108,8 +108,8 @@ groups:
         marks: ynnnnynynyn
         notes:
           juist:
-            en: Not in the Android app.
-            de: Nicht in der Android-App.
+            en: Not on macOS or in the Android app.
+            de: Nicht unter macOS oder in der Android-App.
       - en: Ethernet (layer 2) between devices
         de: Ethernet (Layer 2) zwischen den Geräten
         marks: nnnnnynynnn
@@ -137,8 +137,8 @@ groups:
         marks: yyyyypppyyp
         notes:
           juist:
-            en: Android can use one but cannot be one.
-            de: Android kann eine nutzen, aber selbst keine sein.
+            en: Android and a Mac can use one but cannot be one.
+            de: Android und ein Mac können eine nutzen, aber selbst keine sein.
           zerotier:
             en: Allow Default set by hand on every client, NAT set up by hand on the gateway.
             de: Allow Default von Hand auf jedem Client setzen, NAT von Hand auf dem Gateway einrichten.
@@ -159,8 +159,8 @@ groups:
         marks: yyyyypppnyp
         notes:
           juist:
-            en: Android can use one but cannot be one.
-            de: Android kann einen nutzen, aber selbst keiner sein.
+            en: Android can use one but cannot be one, and a Mac too.
+            de: Android kann einen nutzen, aber selbst keiner sein, ein Mac ebenso.
           zerotier:
             en: Forwarding and NAT by hand on the router.
             de: Weiterleitung und NAT von Hand auf dem Router.
@@ -188,8 +188,8 @@ groups:
         marks: ynyynnnnnnn
         notes:
           juist:
-            en: On Linux and FreeBSD, not in the Android app.
-            de: Unter Linux und FreeBSD, nicht in der Android-App.
+            en: On Linux, FreeBSD and macOS, not in the Android app.
+            de: Unter Linux, FreeBSD und macOS, nicht in der Android-App.
       - en: Services published to the internet
         de: Dienste im Internet veröffentlichen
         marks: ypnynnnnnnn
@@ -238,8 +238,8 @@ groups:
         marks: pyyyyyypppy
         notes:
           juist:
-            en: Only Android, as a member without public names or roles.
-            de: Nur Android, als Mitglied ohne öffentliche Namen und Rollen.
+            en: Only Android and macOS, as members without public names or roles of their own.
+            de: Nur Android und macOS, als Mitglieder ohne öffentliche Namen und eigene Rollen.
           tinc:
             en: No Android or iOS.
             de: Kein Android und iOS.

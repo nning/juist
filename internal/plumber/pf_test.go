@@ -134,7 +134,7 @@ func TestTheHostsRulesCallTheAnchorsFirst(t *testing.T) {
 // loopback, and its peers' sources to juist's devices and the loopback.
 func TestGuardRules(t *testing.T) {
 	a := netip.MustParseAddr
-	got := guardRules("juist0", GuardSpec{Own: []netip.Addr{a("198.18.4.1"), a("fd12::1")},
+	got := guardRules("juist0", DeviceGroup, GuardSpec{Own: []netip.Addr{a("198.18.4.1"), a("fd12::1")},
 		Overlay: []netip.Addr{a("198.18.4.2"), a("198.18.4.1")}})
 	want := `table <juist_own> const { 198.18.4.1, fd12::1 }
 table <juist_overlay> const { 198.18.4.1, 198.18.4.2, fd12::1 }
@@ -146,7 +146,7 @@ block drop in quick on ! juist from <juist_overlay>
 	if got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
-	if got := guardRules("juist0", GuardSpec{}); got != "" {
+	if got := guardRules("juist0", DeviceGroup, GuardSpec{}); got != "" {
 		t.Errorf("guarding nothing: %q", got)
 	}
 }

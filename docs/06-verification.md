@@ -50,15 +50,15 @@ Targets, added the milestone their input surface appears:
 | Pair-key messages and store (`FuzzTake`, `FuzzDecodeStore`) | signed messages; the pairs file | M15 |
 | A host's DNS queries and its resolvers' answers (`internal/names` `FuzzAnswer`, `internal/dnsfwd` `FuzzForwarded`) | every program on the host, the Android app's phone among them; the network's resolvers | M23 |
 | Multicast from members (`conn` `FuzzUnwrapGroup`, `FuzzUnwrapGroup6`) | members' wrapped group datagrams | M25 |
-| Waiting changes (`internal/waiting` `FuzzDecode`) and leases (`FuzzDecodeLease`), each signed again to reach past the signature | admins' copies and leases from gossip | M32 |
-| The root helper's protocol (`FuzzServe`), every call it makes checked against its rules | a compromised daemon's frames | M32 |
+| Waiting changes (`internal/waiting` `FuzzDecode`) and leases (`FuzzDecodeLease`), each signed again to reach past the signature | admins' copies and leases from gossip | M33 |
+| The root helper's protocol (`FuzzServe`), every call it makes checked against its rules | a compromised daemon's frames | M33 |
 
 The gate is 72 clean CPU-hours per input surface before a milestone closes, run
 by hand with `make fuzz-long` or `make fuzz-one` per target (`make fuzz-matrix`
 lists them; 6 h on 4 workers a run), against a corpus kept outside the repository.
 It does not run on CI: hours per input surface is far more hosted-runner time than
 the project wants to spend. So far it is recorded for `FuzzPayloads` alone (M11b,
-[12-validating.md](12-validating.md)); M32 runs it over every target. `make fuzz`
+[12-validating.md](12-validating.md)); M33 runs it over every target. `make fuzz`
 smoke-runs every target for 30 s each. OSS-Fuzz, once the project qualifies,
 would move the long runs onto someone else's hardware.
 
@@ -119,9 +119,9 @@ convergence when an `exit` role is withdrawn across a mesh; chaos on gossip path
 
 ## 5. Cryptographic review gates
 
-- Internal review of the audit scope before the audit (M32,
+- Internal review of the audit scope before the audit (M33,
   [15-security-review.md](15-security-review.md)).
-- Audit at M33 of the audit scope, by a model other than the one juist is
+- Audit at M34 of the audit scope, by a model other than the one juist is
   developed with: what [`audit-scope`](../audit-scope)
   places `core` or `in`, the code that decides who may do what, holds or derives a
   key, parses input from outside the membership, or runs as root. Every package
@@ -136,9 +136,9 @@ convergence when an `exit` role is withdrawn across a mesh; chaos on gossip path
     stay where they are put), not line by line.
 - After v1, each milestone that grows the audit scope gets an audit of what it
   added, scoped by the sizes its "Done" line records.
-- Machine-checked models (M31) of what juist designed itself: enrollment
+- Machine-checked models (M32) of what juist designed itself: enrollment
   and the pair key in ProVerif or Tamarin, the log's fork choice, epochs
-  and freshness in TLA+; M33's audit checks them with the code.
+  and freshness in TLA+; M34's audit checks them with the code.
 
 ## 6. Continuous regression metrics
 

@@ -1,3 +1,5 @@
+//go:build freebsd || darwin
+
 package conn
 
 import (
@@ -7,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 	"syscall"
@@ -62,6 +65,9 @@ func (d *plumbedTUN) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 		return 0, err
 	}
 	packets[0] = tun.ReadPacket{Offset: tun.ReadPacketSpacing, Size: n - 4}
+	if runtime.GOOS == "darwin" {
+		completeSelfChecksum(slab[tun.ReadPacketSpacing : tun.ReadPacketSpacing+n-4])
+	}
 	return 1, err
 }
 
@@ -280,12 +286,6 @@ func (r *plumbedRouter) hostRoutes() []netip.Prefix {
 	return out
 }
 
-// hostsOwn reports whether a route of flags is the host's own: none an ICMP
-// redirect made or changed, nor one that drops what it takes.
-func hostsOwn(flags int) bool {
-	return flags&(syscall.RTF_DYNAMIC|syscall.RTF_MODIFIED|syscall.RTF_REJECT|syscall.RTF_BLACKHOLE) == 0
-}
-
 // notTheHosts is the devices whose routes are not the host's own: this one,
 // a higher instance's, and the loopback, by index.
 func (r *plumbedRouter) notTheHosts() (map[int]bool, error) {
@@ -308,7 +308,13 @@ func (r *plumbedRouter) notTheHosts() (map[int]bool, error) {
 // monitor hears devd's interface events alone.
 func (r *plumbedRouter) watchHostRoutes(changed func()) {
 	// Non-blocking, so that closing it ends the read.
-	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, unix.AF_UNSPEC)
+	syscall.ForkLock.RLock()
+	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, unix.AF_UNSPEC)
+	if err == nil {
+		unix.CloseOnExec(fd)
+		err = unix.SetNonblock(fd, true)
+	}
+	syscall.ForkLock.RUnlock()
 	if err != nil {
 		r.logf("watching the host's routes: %v", err)
 		return

@@ -3,18 +3,20 @@ package main
 import (
 	"strings"
 
+	"github.com/nning/juist/cmd/internal/defaults"
 	"github.com/nning/juist/internal/instance"
 )
 
 // defaultUser is the user the default instance's daemon runs as.
-const defaultUser = "juist"
+const defaultUser = defaults.SystemUser
 
 // runAs is the user the daemon of args runs as, where juistd starts as root
 // and drops to one: juist for the default, juistN for instance N, so that one
 // network's daemon reads none of another's keys.
 func runAs(args []string) string {
 	if v, ok := flagValue(args, "instance"); ok && instance.IsName(v) {
-		return v
+		// macOS's system users begin with an underscore.
+		return strings.TrimSuffix(defaultUser, "juist") + v
 	}
 	return defaultUser
 }
@@ -27,9 +29,10 @@ func deviceOf(args []string) string {
 		return v
 	}
 	if v, ok := flagValue(args, "instance"); ok && instance.IsName(v) {
-		return v
+		n, _ := instance.Parse(v)
+		return instance.Device(n)
 	}
-	return instance.Name(0)
+	return instance.Device(0)
 }
 
 // flagValue is the value args give a flag of one of names, the first.

@@ -204,7 +204,11 @@ func TestWithoutALogKeysOfTwoNetworksSignByName(t *testing.T) {
 	// The genesis named the key, and filed it.
 	adminKeyNamed(t, signer, "alice@home")
 
-	out := signer.mustRun("--network", "work", "admins", "new", "alice")
+	if _, err := signer.run("--network", "work", "admins", "new", "work", "alice"); err == nil ||
+		!strings.Contains(err.Error(), `unexpected argument "alice"`) {
+		t.Fatalf("NETWORK given twice: %v", err)
+	}
+	out := signer.mustRun("admins", "new", "work", "alice")
 	mustContain(t, out, `created admin key "alice@work"`)
 	workKey := regexp.MustCompile(`juist admins add alice (nid:\S+)`).FindStringSubmatch(out)[1]
 	boss := newCLI(t)

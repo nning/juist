@@ -111,6 +111,11 @@ Neustarts geht der Verkehr also kurz direkt ins Internet.
   Mitglieder über die normalen DNS-Server des Rechners, nie über den
   Resolver von Tailscale.
 - Unter FreeBSD arbeiten Exit-Nodes mit pf, und DNS läuft über resolvconf.
+- Ein Mac nutzt einen Exit-Node mit pf, unter den eigenen `com.apple`-Ankern
+  von macOS, und sein DNS geht als Standard-Resolver des Macs an den
+  Exit-Node. Antworten auf Verbindungen aus dem Internet gehen auf dem Mac
+  immer durch den Exit-Node, wie mit `--isolate`. Selbst ein Exit-Node sein
+  kann ein Mac nicht.
 
 ## Fehlersuche
 

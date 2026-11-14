@@ -484,6 +484,7 @@ func (p pseudonyms) reach(rs []PeerReach) []PeerReach {
 	out := slices.Clone(rs)
 	for i := range out {
 		out[i].Identity, out[i].Relay = types.Identity{}, p.of(out[i].Relay)
+		out[i].RxBytes, out[i].TxBytes = 0, 0
 	}
 	return out
 }
@@ -547,6 +548,13 @@ type PeerReach struct {
 	// of [Tunnels.OlderBuild].
 	Outdated   bool `cbor:"9,keyasint,omitempty"`
 	OlderBuild bool `cbor:"10,keyasint,omitempty"`
+
+	// Handshake is when the tunnel's last handshake completed, in Unix
+	// seconds, and RxBytes and TxBytes what it carried since juistd started;
+	// read when the status is asked for, the bytes for operators alone.
+	Handshake int64  `cbor:"13,keyasint,omitempty"`
+	RxBytes   uint64 `cbor:"14,keyasint,omitempty"`
+	TxBytes   uint64 `cbor:"15,keyasint,omitempty"`
 }
 
 // A Device is a member as the log lists it.

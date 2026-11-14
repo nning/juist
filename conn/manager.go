@@ -230,6 +230,9 @@ type Tunnel struct {
 	// LastHandshake is when a handshake last completed, zero if none has.
 	LastHandshake time.Time
 
+	// RxBytes and TxBytes are what the tunnel received and sent.
+	RxBytes, TxBytes uint64
+
 	// Direct is the UDP path the tunnel uses, invalid where it has none and
 	// runs through a relay if at all.
 	Direct netip.AddrPort

@@ -1,4 +1,4 @@
-//go:build !freebsd
+//go:build !freebsd && !darwin
 
 package main
 
@@ -47,8 +47,14 @@ func systemLayout() *hostLayout {
 	}
 }
 
-// instanceNeed is what another network's instance needs installed.
-const instanceNeed = "juistd@.service beside juistd"
+// instanceNeed says what another network's instance needs installed.
+const instanceNeed = "another network needs juistd@.service beside juistd from the juist package"
+
+// instanceLeave begins the hint that leaving a network makes room.
+const instanceLeave = "or leave"
+
+// installHint says how juist and its daemon get installed.
+const installHint = "install the juist package"
 
 // unitOf is instance n's systemd unit.
 func unitOf(n int) string {
@@ -97,6 +103,10 @@ func systemctl(ctx context.Context, args ...string) error {
 	}
 	return nil
 }
+
+// usesExitHere is whether this host can send its traffic through an exit
+// node.
+const usesExitHere = runtime.GOOS == "linux"
 
 // servesHere is whether this host can serve as an exit node or subnet
 // router, and helperSetsUpHost whether juistd's helper forwards and lets the

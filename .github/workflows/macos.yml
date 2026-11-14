@@ -1,0 +1,43 @@
+name: macOS
+
+# M29's test on a Mac: install, join, reach a member by name through the
+# device, the guard, removal; then the helper's fuzz test on darwin's rules.
+# By hand alone: macOS minutes are dear.
+on:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'vet and fuzz too; off for a run that only diagnoses the install test'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  # The Makefile's GOTOOLCHAIN; the two move together.
+  GO_VERSION: '1.27.4'
+
+jobs:
+  install:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+      # Not go test: much of it names Linux's devices and pf's sloppy state.
+      - if: inputs.full
+        run: CGO_ENABLED=0 go vet ./...
+      - run: sh packaging/macos/runner-test.sh
+      # Criterion (2): the helper's rules as darwin has them, utun100 and all.
+      - if: inputs.full && (success() || failure())
+        run: CGO_ENABLED=0 go test -run '^$' -fuzz '^FuzzServe$' -fuzztime 5m ./internal/plumber
+      - if: inputs.full && failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failures
+          path: internal/plumber/testdata/fuzz
+          if-no-files-found: ignore

@@ -24,9 +24,9 @@ func namesFamily() family {
 				forms: [][2]string{{"remove DEVICE NAME...", "take NAME from DEVICE"}}},
 			{name: "on", run: namesOn, forms: [][2]string{{"on", "resolve public names to their devices here"}}},
 			{name: "off", run: namesOff, forms: [][2]string{{"off", "resolve them publicly again"}}},
-		}, footer: `On Linux and FreeBSD, every device is DEVICE.NETWORK.juist to the others. A
-public name such as mail.example.org resolves to its device where names are
-on, and publicly elsewhere or while its device is out of reach.`}
+		}, footer: `On Linux, FreeBSD and macOS, every device is DEVICE.NETWORK.juist to the
+others. A public name such as mail.example.org resolves to its device where
+names are on, and publicly elsewhere or while its device is out of reach.`}
 }
 
 func cmdNames(a *app, args []string) error { return namesFamily().run(a, args) }

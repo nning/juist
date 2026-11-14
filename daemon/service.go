@@ -1269,7 +1269,7 @@ func (s *Service) Status() ipc.Status {
 			st.HTTPS.Proxy = shownProxy(s.prefs.Proxy, envProxyFunc())
 		}
 	}
-	if o := s.opts.Mesh; o.TunName != "" && !o.Netstack && runtime.GOOS != "android" {
+	if o := s.opts.Mesh; o.TunName != "" && !o.Netstack && multicastOn(runtime.GOOS) {
 		st.Multicast = &ipc.Multicast{Off: s.prefs.MulticastOff || !multicastPermitted(state, st.Self, s.now().Unix()), Auto: copiesGroups(o) && s.prefs.automaticGroups(),
 			GroupsOff: copiesGroups(o) && s.prefs.GroupsOff && len(s.prefs.Groups) == 0}
 		for _, g := range s.prefs.Groups {

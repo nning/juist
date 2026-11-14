@@ -8,7 +8,8 @@ import (
 )
 
 // A Plumber creates this node's device and sets its addresses and routes, as
-// FreeBSD's helper running as root does for a daemon that does not.
+// FreeBSD's and macOS's helper running as root does for a daemon that does
+// not.
 type Plumber interface {
 	// OpenTUN creates the device, up and with mtu, and returns its
 	// descriptor.

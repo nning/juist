@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/nning/juist/internal/instance"
 	"golang.org/x/sys/unix"
 )
 
@@ -43,7 +44,7 @@ func FuzzServe(f *testing.F) {
 		helper, daemon := unixConn(t, fds[0]), unixConn(t, fds[1])
 		served := make(chan error, 1)
 		go func() {
-			destroy, err := Serve(helper, h, fuzzUID, "juist0", func(string, ...any) {})
+			destroy, err := Serve(helper, h, fuzzUID, dev0, func(string, ...any) {})
 			destroy()
 			helper.Close()
 			served <- err
@@ -106,29 +107,30 @@ func seedRequests() [][]request {
 	p := netip.MustParsePrefix
 	return [][]request{
 		{
-			{Op: opOpen, Device: "juist0", MTU: 1280},
-			{Op: opAddrs, Device: "juist0", Addrs: []netip.Prefix{p("10.7.0.1/32"), p("fd7a:1:2:3::1/128"), p("fe80::1/128")}},
-			{Op: opRoutes, Device: "juist0", Routes: []netip.Prefix{p("10.8.0.0/16"), p("fd7a:1:2:4::/64")}, Src4: a("10.7.0.1")},
-			{Op: opServe, Device: "juist0", Serve: &ServeSpec{Sources: []netip.Prefix{p("10.7.0.0/16")}, Addrs: []netip.Addr{a("10.7.0.1")}, DNSPort: 53}},
-			{Op: opGuard, Device: "juist0", Guard: &GuardSpec{Own: []netip.Addr{a("10.7.0.1")}, Overlay: []netip.Addr{a("10.7.0.2")}}},
-			{Op: opEgress, Device: "juist0", Egress: &EgressSpec{Mode: EgressTunnel, V4: true, Capture: []netip.Prefix{p("8.8.8.0/24")}}},
-			{Op: opDNS, Device: "juist0", DNS: []netip.Addr{a("10.7.0.1")}, Search: []string{"home.juist"}},
-			{Op: opDNS53, Device: "juist0", Listen: a("10.7.0.1"), Proto: "udp"},
-			{Op: opListen, Device: "juist0", Listen: a("203.0.113.7")},
+			{Op: opOpen, Device: dev0, MTU: 1280},
+			{Op: opAddrs, Device: dev0, Addrs: []netip.Prefix{p("10.7.0.1/32"), p("fd7a:1:2:3::1/128"), p("fe80::1/128")}},
+			{Op: opRoutes, Device: dev0, Routes: []netip.Prefix{p("10.8.0.0/16"), p("fd7a:1:2:4::/64")}, Src4: a("10.7.0.1")},
+			{Op: opServe, Device: dev0, Serve: &ServeSpec{Sources: []netip.Prefix{p("10.7.0.0/16")}, Addrs: []netip.Addr{a("10.7.0.1")}, DNSPort: 53}},
+			{Op: opGuard, Device: dev0, Guard: &GuardSpec{Own: []netip.Addr{a("10.7.0.1")}, Overlay: []netip.Addr{a("10.7.0.2")}}},
+			{Op: opEgress, Device: dev0, Egress: &EgressSpec{Mode: EgressTunnel, V4: true, Capture: []netip.Prefix{p("8.8.8.0/24")}}},
+			{Op: opDNS, Device: dev0, DNS: []netip.Addr{a("10.7.0.1")}, Search: []string{"home.juist"}},
+			{Op: opDomains, Device: dev0, DNS: []netip.Addr{a("10.7.0.1")}, Port: 41647, Domains: []string{"home.juist", "7.10.in-addr.arpa"}, Search: []string{"home.juist"}},
+			{Op: opDNS53, Device: dev0, Listen: a("10.7.0.1"), Proto: "udp"},
+			{Op: opListen, Device: dev0, Listen: a("203.0.113.7")},
 			{Op: opAnswers},
-			{Op: opDestroy, Device: "juist0"},
+			{Op: opDestroy, Device: dev0},
 		},
 		{
-			{Op: opOpen, Device: "juist1", MTU: 1280},
-			{Op: opRoutes, Device: "juist0", Routes: []netip.Prefix{p("10.8.0.0/16")}},
-			{Op: opOpen, Device: "juist0", MTU: 9000},
-			{Op: opAddrs, Device: "juist0", Addrs: []netip.Prefix{p("192.168.178.0/24"), p("8.8.8.8/32")}},
-			{Op: opRoutes, Device: "juist0", Routes: []netip.Prefix{p("0.0.0.0/0"), p("192.168.0.0/16"), p("fe80::/10")}},
-			{Op: opListen, Device: "juist0", Listen: a("127.0.0.1")},
+			{Op: opOpen, Device: dev1, MTU: 1280},
+			{Op: opRoutes, Device: dev0, Routes: []netip.Prefix{p("10.8.0.0/16")}},
+			{Op: opOpen, Device: dev0, MTU: 9000},
+			{Op: opAddrs, Device: dev0, Addrs: []netip.Prefix{p("192.168.178.0/24"), p("8.8.8.8/32")}},
+			{Op: opRoutes, Device: dev0, Routes: []netip.Prefix{p("0.0.0.0/0"), p("192.168.0.0/16"), p("fe80::/10")}},
+			{Op: opListen, Device: dev0, Listen: a("127.0.0.1")},
 		},
 		{
-			{Op: opEgress, Device: "juist0", Egress: &EgressSpec{Mode: EgressRefused}},
-			{Op: opDNS, Device: "juist0"},
+			{Op: opEgress, Device: dev0, Egress: &EgressSpec{Mode: EgressRefused}},
+			{Op: opDNS, Device: dev0},
 		},
 	}
 }
@@ -147,8 +149,11 @@ func (h *rulesHost) wrong(format string, a ...any) {
 }
 
 // device checks that dev is the daemon's, and open where it must be.
+// dev0 and dev1 are instance 0's and 1's devices on this platform.
+var dev0, dev1 = instance.Device(0), instance.Device(1)
+
 func (h *rulesHost) device(dev string, mustBeOpen bool) {
-	if dev != "juist0" {
+	if dev != dev0 {
 		h.wrong("a call for %q", dev)
 	}
 	if mustBeOpen && !h.open[dev] {
@@ -291,6 +296,26 @@ func (h *rulesHost) SetDNS(dev string, servers []netip.Addr, search []string) er
 	return nil
 }
 
+func (h *rulesHost) SetDomains(dev string, servers []netip.Addr, port uint16, domains, search []string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.device(dev, len(domains) > 0)
+	if len(domains) > maxDomains || len(search) > 6 || len(domains) > 0 && (len(servers) == 0 || port == 0) {
+		h.wrong("%d domains, %d to search, at %d resolvers on port %d", len(domains), len(search), len(servers), port)
+	}
+	for _, s := range servers {
+		if !h.addrs[s] {
+			h.wrong("a resolver %v, no address of the device's", s)
+		}
+	}
+	for _, d := range slices.Concat(domains, search) {
+		if !searchDomain.MatchString(d) || len(d) > 253 {
+			h.wrong("a domain %q", d)
+		}
+	}
+	return nil
+}
+
 func (h *rulesHost) SetGuard(dev string, g GuardSpec) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -312,7 +337,7 @@ func (h *rulesHost) Answers() string { return "" }
 func (h *rulesHost) ListenHTTPS(a netip.Addr) (*os.File, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.device("juist0", true)
+	h.device(dev0, true)
 	if !a.IsValid() || a.Zone() != "" || a.Is4In6() || h.addrs[a] ||
 		slices.ContainsFunc(linkSpace, func(s netip.Prefix) bool { return s.Contains(a) }) {
 		h.wrong("443 at %v", a)
@@ -323,7 +348,7 @@ func (h *rulesHost) ListenHTTPS(a netip.Addr) (*os.File, error) {
 func (h *rulesHost) ListenDNS(a netip.Addr, proto string) (*os.File, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.device("juist0", true)
+	h.device(dev0, true)
 	if !h.addrs[a] || (proto != "udp" && proto != "tcp") {
 		h.wrong("53/%s at %v", proto, a)
 	}

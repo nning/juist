@@ -321,7 +321,7 @@ withdrawn, and returning to direct traffic after `off`. Core 11 014 lines,
 audit scope 36 069, measured after it with `make tcb`.
 
 An Android app that joins a network as a member from anywhere, reaches the
-others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M33 covers the app's key
+others and sends its internet through an exit node, with none of the roles. It comes before the audit, so that M34 covers the app's key
 custody and its in-process API; the full app is M26.
 
 - **Joining.** The invite's link scanned as a QR code, which `juist invite`
@@ -660,7 +660,7 @@ member is heard past the newest; a device further behind than its peers keep
 is invited again by a link naming its admin
 ([08-trust-layer-notes.md](08-trust-layer-notes.md), "The two ratchets"). The
 CLI's pin survives compaction where a quorum of its keys signed the
-checkpoint the log starts from. Open for M32: a record released below a
+checkpoint the log starts from. Open for M33: a record released below a
 compaction is refused where devices compacted and taken where they did not,
 with no alarm (weakness 14 in [02-threat-model.md](02-threat-model.md)).
 
@@ -728,7 +728,7 @@ put juist at 65 % of the phone's battery use by the afternoon (2026-10-12):
 too much to leave it on, which is what a VPN is for. The core runs on a
 phone at a laptop's pace, and some of what it does costs more there. Before
 the names on Android (M23), which are of little use on an app that cannot
-stay on, and before the audit, so that M33 covers what changes.
+stay on, and before the audit, so that M34 covers what changes.
 
 **Done** on 2026-10-21, reviewed (M21 reviews 1 to 3, the second in
 thirteen rounds, each round's fixes attacked again), validated by a real
@@ -835,7 +835,7 @@ named by hand. Both ends meet at the device's own relay instead: it sends
 every peer whose home it cannot reach there, and members keep a connection
 to it, so that one relay named on 443, the ingress's by itself, is enough.
 Relays forwarding for one another is the alternative should that fall short.
-Before the audit, so that M33 covers it, and not started before M21 is
+Before the audit, so that M34 covers it, and not started before M21 is
 validated and the refactoring
 ([temp/20261019-refactoring.md](temp/20261019-refactoring.md)) is done.
 
@@ -866,7 +866,7 @@ The Android app resolved none of the network's names: with a DNS server set,
 for an exit node, which then answered them all. A name for members alone
 (M16) was out of the phone's reach, and a published name resolved to the
 ingress, not the tunnel. Taken from the full app (M26), and before the audit,
-so that M33 covers a resolver that sees every lookup the phone makes.
+so that M34 covers a resolver that sees every lookup the phone makes.
 
 **Done** on 2026-10-24, reviewed (M23 reviews 1 to 3, the third attacking
 the fixes of the first two again), validated in the Android 16 emulator by
@@ -948,7 +948,7 @@ tried by hand, as the emulator's resolver answers no TLS and every TTL as
 ## M24 — Boundaries on a host
 
 What one network's daemon, the LAN and a local user can reach on a host
-running juist, closed before the audit, so that M33 covers it.
+running juist, closed before the audit, so that M34 covers it.
 
 **Done** on 2026-10-31, reviewed (M24 reviews 1 and 2, the second
 attacking the first's fix and the boundary between instances again),
@@ -1047,7 +1047,7 @@ reached it both ways, and its package was removed cleanly:
 Discovery multicast across the overlay: mDNS, SSDP, WS-Discovery, LLMNR,
 LAN games. The overlay counts as one link for them. Multicast routing,
 streaming and broadcast are out of scope; broadcast has no address to go to
-while every overlay address is a host prefix. Before the audit, so that M33
+while every overlay address is a host prefix. Before the audit, so that M34
 covers the unwrapping, which parses what members send.
 
 **Done** on 2026-10-31, reviewed (M25 reviews 1 to 5, the second and the
@@ -1194,7 +1194,7 @@ details checked by hand in an Android 13 emulator with Google APIs, HTTPS
 alone on a phone against a relay on 443, and a phone's day on LTE
 (2026-11-03) put juist at 16 % in Android's list, against 5 % on Wi-Fi at
 M21. Family Link, and what the relay's keepalive costs on mobile data,
-moved to M29. Core 11 014 lines, audit scope 36 432, measured after it
+moved to M30. Core 11 014 lines, audit scope 36 432, measured after it
 (2026-11-05).
 
 Open from M26 review 1, all minor: the app's alarms on HTTPS alone lack
@@ -1207,7 +1207,7 @@ filter, and no phone meets a FreeBSD member.
 
 The full Android app, on M10's, once M10's exit criteria are met: M6b's
 subnet routes through `VpnService` routes and M13's HTTPS alone, released
-as the app is now. Before the audit, so that M33 covers the routes a phone
+as the app is now. Before the audit, so that M34 covers the routes a phone
 takes.
 
 A real phone's day on mobile data, where M21's and M23's ran on Wi-Fi,
@@ -1328,7 +1328,7 @@ A network whose every member is an Android phone, created, invited to,
 governed and kept fresh from the app, whose members reach each other without
 a VPS: a family's phones, and a peer-to-peer chat between them. A relay
 member stays the answer that always works; this plan makes it unnecessary
-where the networks the phones are on allow it. Before the audit, so that M33
+where the networks the phones are on allow it. Before the audit, so that M34
 covers admin keys on a phone. A phone as exit node or as relay is not
 planned.
 
@@ -1429,7 +1429,7 @@ only way to need none.
    deadline; devices not yet told still send there, which the CLI warns of
    and an approval says.
 
-The chat is M35's, whose store holds a message for a phone that is off on
+The chat is M36's, whose store holds a message for a phone that is off on
 the members that are on.
 
 - **Exit criteria:** (1) in `mobile`'s tests, a phone's core founds a
@@ -1447,7 +1447,82 @@ the members that are on.
   "Reach an app on a phone"); (1) holds in `mobile`'s tests.
 
 
-## M29 — Family Link, and a phone on mobile data
+## M29 — macOS
+
+**Done** on 2026-11-14: juistd and `juist` on a Mac, macOS 13 or later,
+Apple silicon and Intel: a root helper and the daemon as `_juist` on
+`utun100`, names through `/etc/resolver`, a LaunchDaemon and `setup.sh`
+behind `install.sh`, each peer's handshake and bytes in the status, the
+guard and exit nodes in pf under `com.apple`, DNS through an exit node by
+scutil, and another network as an instance of its own. Reviewed in 12
+rounds: 10 with commits of their own, the closing one (9) over the whole
+diff, and the follow-ups on review 10 and on the macOS checksum fix
+confirming nothing above minor; validated by `make ci-vm` at M29 and
+by `macos.yml` at M29 ([12-validating.md](12-validating.md), "The last
+privileged run"). Exit criterion (1) passed on a macOS runner from a kit
+built there, `install.sh`'s Darwin path waiting for a release with the
+macOS tarballs; (2) passed in five minutes of `FuzzServe` on darwin, twice;
+(3), the hand test on a Mac, had not run when the user published it. Core
+8 098 lines, audit scope 29 394, measured after it (2026-11-14).
+
+juistd and `juist` on a Mac (macOS 13 or later, Apple silicon and Intel), as
+on FreeBSD. No Mac is at hand: `make cross` builds and vets darwin, and the
+tests that need one run on GitHub's macOS runners, by hand and at low
+priority; they gate this milestone's end, not its work. A Mac user's run
+counts as the hand test.
+
+- **Device and privileges.** macOS has no capability for TUN devices and
+  routes, so juistd splits as in M7a: started as root, it keeps
+  `internal/plumber`'s helper as root and runs the daemon as `_juist`. The
+  device is a utun, whose name the kernel gives by unit: instance N's is
+  `utun10N`, which the helper alone accepts, holding a lock per name as on
+  FreeBSD; its descriptor carries each packet behind the same four-byte
+  address family as FreeBSD's. Addresses by ifconfig(8), routes by the route
+  socket, both shared with FreeBSD where the kernels agree.
+- **Names.** The network's names resolve through `/etc/resolver`, one file
+  per domain the daemon serves, naming its resolver on the device; the
+  helper writes only files it marks as its own and removes them with the
+  device.
+- **The service.** A LaunchDaemon, `io.nning.juist.juistd`, runs juistd at
+  boot; the binaries and the plist are root's, outside any directory a
+  user may write (Homebrew's `/usr/local` on Intel is one). The control
+  socket is `/var/run/juist/juistd.sock`, the state `/var/db/juist`.
+- **The install.** The release carries a tarball per architecture, and
+  `install.sh` on a Mac installs it, makes `_juist` with dscl(8) and loads
+  the daemon; `/Library/juist/setup.sh remove` removes all of it, the keys
+  in `/var/db/juist` and their user left unless asked. Go signs darwin/arm64 binaries ad hoc,
+  and a download by curl carries no quarantine, so neither needs an Apple
+  developer ID; a signed and notarized `.pkg` waits for one.
+- **The status per peer.** The status gives each peer's last handshake,
+  and to operators the bytes its tunnel carried, read when asked, as the
+  menu bar apps beside juist want them.
+- **Guard and exit nodes.** pf, which the helper turns on by a token and
+  gives back, keeps the overlay to the device and does the egress of an exit
+  node as on FreeBSD, in anchors under `com.apple/juist.*`, which macOS's own
+  `/etc/pf.conf` calls; macOS has no interface groups and no sloppy state.
+  juistd's own sockets are bound to the uplink by Tailscale's netns. DNS
+  through the exit node is the host's default resolver, a key of the
+  device's in SystemConfiguration's dynamic store, set by scutil(8).
+- **Several networks.** Instance N is a LaunchDaemon of its own,
+  `io.nning.juist.juistd.juistN`, its user `_juistN` and device `utun10N`,
+  which `setup.sh instance start|stop` makes and stops for juist.
+- **Not on a Mac yet:** serving an exit node or a subnet, a relay, and
+  multicast and broadcast (the device's link-local address waits for a run
+  on a Mac).
+
+- **Exit criteria:** (1) on a GitHub macOS runner, `install.sh` installs,
+  juistd comes up under launchd as `_juist` with the helper as root, joins
+  a network whose other member is a netstack juistd on the same runner, and
+  a ping and a lookup of its name go through the device; `setup.sh
+  remove --keys` leaves no file of juist's, user or device behind; (2) a compromised daemon
+  cannot ask the helper for another device than `utun100`–`utun109`, an
+  address or route the plumber's rules refuse, or a resolver file outside
+  its domains, by the plumber's fuzz test on darwin's rules, five minutes
+  of it on the runner; (3) by hand on
+  a Mac: the install from a release, a reboot, the tunnel to a Linux
+  member, an exit node of one, and removal.
+
+## M30 — Family Link, and a phone on mobile data
 
 What the app does on two phones as they are used, beside M26's features:
 one Google's Family Link supervises, and one on mobile data all day.
@@ -1498,11 +1573,11 @@ one Google's Family Link supervises, and one on mobile data all day.
   phone's day on LTE puts juist below 16 % and a member reaches the
   resting phone within a minute.
 
-## M30 — A desktop app on Linux
+## M31 — A desktop app on Linux
 
 An icon in the desktop's status bar, as Tailscale's on Linux (`tailscale
 systray`): the state at a glance, and what a laptop's user changes on the
-move without a terminal. Before the audit, so that M33 covers what it asks
+move without a terminal. Before the audit, so that M34 covers what it asks
 of the control socket.
 
 - **The icon** shows connected, an exit node in use, or a warning of `juist
@@ -1534,7 +1609,7 @@ of the control socket.
   app; (4) by hand on GNOME with the extension and on KDE, Debian and Fedora,
   the package installed and removed cleanly.
 
-## M31 — Formal models of what juist designed itself
+## M32 — Formal models of what juist designed itself
 
 Machine-checked models of the protocols and rules juist composed from
 standard primitives, before the review and the audit: a flaw in a design is
@@ -1558,11 +1633,11 @@ joins WireGuard's published models (Tamarin, CryptoVerif).
   the epoch floor, every membership change has its quorum, a removed key
   undoes no revocation, compaction included, and a member cut off from a
   removal refuses the removed one at the TTL under bounded clock skew. The
-  three fork-choice findings M32 lists are decided against it.
+  three fork-choice findings M33 lists are decided against it.
 - **Model and code:** traces the log's model generates are replayed against
   `trust/log`'s validator; each protocol model names the labels and
   transcript fields it stands for, and a test fails where the code's differ.
-- **Left out:** `aead` and `addrkey`, standard constructions M32 reads line
+- **Left out:** `aead` and `addrkey`, standard constructions M33 reads line
   by line; the computational strength of the SPAKE2 and ML-KEM combiner,
   which a symbolic model takes as given; code-level proof (Gobra).
 - **Open decisions:** ProVerif or Tamarin for the pair key; TLA+ checked by
@@ -1577,11 +1652,11 @@ joins WireGuard's published models (Tamarin, CryptoVerif).
   run, its tool versions and what did not run recorded in
   [12-validating.md](12-validating.md).
 
-## M32 — The internal security review
+## M33 — The internal security review
 
 The review [15-security-review.md](15-security-review.md) plans, over the
-audit scope as M17 to M31 leave it, so that M33's audit goes to what a
-reader cannot find, and M31's models beside the code they stand for. It
+audit scope as M17 to M32 leave it, so that M34's audit goes to what a
+reader cannot find, and M32's models beside the code they stand for. It
 starts from the fuzzing:
 
 - **Fuzzing.** No `fuzz-long` run over every target is recorded in
@@ -1616,29 +1691,30 @@ starts from the fuzzing:
   and medium finding fixed with a test that fails without the fix, or
   accepted as a numbered residual weakness.
 
-## M33 — An audit by a second model → v1
+## M34 — An audit by a second model → v1
 
 Security audit of the audit scope by a model other than the one juist is
-developed with, from the code and the threat model rather than M32's notes;
+developed with, from the code and the threat model rather than M33's notes;
 no human audit is planned. In the tiers of
-[06-verification.md](06-verification.md) §5, after M32's internal review:
-the trust layer and enrollment at its core, M31's models with them,
-plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22, M23, M24, M25, M26, M27, M28, M29 and M30 add to it — route consumption and its forwarding helper, the
+[06-verification.md](06-verification.md) §5, after M33's internal review:
+the trust layer and enrollment at its core, M32's models with them,
+plus what M6, M8, M9, M9e, M10, M11, M12, M13, M14, M15, M16, M17, M19, M21, M22, M23, M24, M25, M26, M27, M28, M29, M30 and M31 add to it — route consumption and its forwarding helper, the
 override record and the resolver, the published names, those for members alone, and the ingress, its QUIC Initial parser included, the
 disable record, the preshared-key exchange, the ML-DSA cut-over and
-enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, the meeting at a relay on 443, a user per instance and FreeBSD's pf, discovery's unwrapping and local delivery, the phone's subnet routes, several networks in one app, admin keys on a phone and the desktop app's use of the control socket — fix findings, mature fuzz corpus (consider
+enrollment's ML-KEM step, checkpoints and compaction, the Android app's key custody, in-process API, resolver and pacing, the ACL policy and its filter, the relay's DHT over HTTPS and its ACME certificate, the meeting at a relay on 443, a user per instance and FreeBSD's pf, macOS's root helper and resolver files, discovery's unwrapping and local delivery, the phone's subnet routes, several networks in one app, admin keys on a phone and the desktop app's use of the control socket — fix findings, mature fuzz corpus (consider
 OSS-Fuzz), implementation-vs-threat-model review, documentation of the
 residual-weakness acceptances for operators, which the handbook's
 trade-offs carry ([14-website.md](14-website.md)). Open decision: which
 model.
 
-v1 is Linux and FreeBSD with M14's ACLs and M25's multicast, Linux's
-desktop app (M30), and the Android app as M26 to M29 leave it; packaging follows in M34.
+v1 is Linux and FreeBSD with M14's ACLs and M25's multicast, macOS as
+M29 leaves it, Linux's desktop app (M31), and the Android app as M26 to
+M28 and M30 leave it; packaging follows in M35.
 
 - **Exit criteria:** (1) audit complete, all high/medium findings fixed and
   regression-tested; (2) the acceptances documented for operators; v1.0 tag.
 
-## M34 — Packaging *(post-v1)*
+## M35 — Packaging *(post-v1)*
 
 Distro repositories (apt, dnf, pkg) and a port in FreeBSD's ports tree, which
 fetches a release, for the packages every release already carries, and the readiness check that keeps an admin from stranding members
@@ -1685,7 +1761,7 @@ rpm and FreeBSD's pkg, in a stable and a dev channel:
   NixOS, juist installs from the repository, joins a network, upgrades from
   the previous release in place and removes cleanly, saying what it leaves.
 
-## M35 — A store, and a messenger on it *(post-v1)*
+## M36 — A store, and a messenger on it *(post-v1)*
 
 Members leave each other data while the other is offline, with no server: a
 key-value store replicated among the members' own devices, and a messenger on
@@ -1777,7 +1853,7 @@ code.
   exchange messages and a file both ways; (5) a member writing past its
   quota is cut at a holder, and the others' writes still land.
 
-## M36 — OpenBSD *(post-v1)*
+## M37 — OpenBSD *(post-v1)*
 
 juistd on OpenBSD as M7 has it on FreeBSD: a root helper, the daemon as
 `juist`, DNS, exit nodes and subnet routers, an rc.d script and a package.
@@ -1839,7 +1915,7 @@ Open decisions:
   does. pf is the lead, being one mechanism for both.
 - **Signing the package:** `pkg_add` checks signify(1) signatures against the
   keys in `/etc/signify`, so either a key of juist's that the user installs
-  once, or unsigned packages until a port in the ports tree, as M34 plans for
+  once, or unsigned packages until a port in the ports tree, as M35 plans for
   FreeBSD.
 - **Which releases:** the current one alone, or both that OpenBSD supports.
 
@@ -1896,7 +1972,7 @@ magicsock's.
 
 ## Later — Phones without a relay
 
-Not scheduled; moved out of M28 on 2026-11-08. M33's audit covers admin keys
+Not scheduled; moved out of M28 on 2026-11-08. M34's audit covers admin keys
 on a phone without what is here.
 
 1. **Governing from the app, the rest:** votes on changes carried to the
@@ -1931,7 +2007,7 @@ A default exit node
 an admin sets, quorum-signed per device, below the device's own choice ·
 hardware-backed admin keys (FIDO2/PIV signing, once tokens sign with ML-DSA) · sealing the node key, a 0600
 file in v1 (TPM, kernel keyring; FreeBSD: geli) · update transparency log ·
-macOS, which `make cross` keeps compiling, untested beyond that · Windows/iOS.
+Windows/iOS · desktop apps on macOS and Windows.
 
 ## Optional idea — Device owners and an identity provider
 

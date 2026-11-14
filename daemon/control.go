@@ -188,6 +188,9 @@ func (s *Service) handle(ctx context.Context, req *ipc.Request, who caller, even
 
 func (s *Service) callStatus(c *call) (*ipc.Response, error) {
 	st := s.Status()
+	if m := s.Mesh(); m != nil {
+		st.Reach = m.tunnelFigures(st.Reach)
+	}
 	st.CanOperate = s.mayOperate(c.who)
 	if !st.CanOperate {
 		st = st.ForReader()

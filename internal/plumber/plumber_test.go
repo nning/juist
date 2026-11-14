@@ -3,6 +3,7 @@
 package plumber
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -27,6 +28,8 @@ type fakeHost struct {
 	routes  map[netip.Prefix]int
 	// held are the host's addresses and gateways.
 	held []netip.Addr
+	// domainsFail fails SetDomains for domains, as a file in the way does.
+	domainsFail bool
 }
 
 func (h *fakeHost) record(format string, a ...any) {
@@ -121,6 +124,14 @@ func (h *fakeHost) SetGuard(dev string, g GuardSpec) error {
 	return nil
 }
 func (h *fakeHost) Answers() string { return "the host's rules" }
+
+func (h *fakeHost) SetDomains(dev string, servers []netip.Addr, port uint16, domains, search []string) error {
+	h.record("domains %s %v:%d %v search %v", dev, servers, port, domains, search)
+	if h.domainsFail && len(domains) > 0 {
+		return errors.New("a file in the way")
+	}
+	return nil
+}
 
 func (h *fakeHost) SetDNS(dev string, servers []netip.Addr, search []string) error {
 	if len(search) > 0 {

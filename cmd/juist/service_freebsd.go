@@ -46,8 +46,14 @@ func systemLayout() *hostLayout {
 	}
 }
 
-// instanceNeed is what another network's instance needs installed.
-const instanceNeed = "the juistd rc.d script"
+// instanceNeed says what another network's instance needs installed.
+const instanceNeed = "another network needs the juistd rc.d script from the juist package"
+
+// instanceLeave begins the hint that leaving a network makes room.
+const instanceLeave = "or leave"
+
+// installHint says how juist and its daemon get installed.
+const installHint = "install the juist package"
 
 // unitOf is instance n as rc.d names it.
 func unitOf(n int) string {
@@ -160,6 +166,10 @@ var rcOutput = func(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).Output()
 	return string(out), err
 }
+
+// usesExitHere is whether this host can send its traffic through an exit
+// node.
+const usesExitHere = true
 
 // servesHere is whether this host can serve as an exit node or subnet
 // router, and helperSetsUpHost whether juistd's helper forwards and lets the

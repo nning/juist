@@ -1,7 +1,6 @@
 package plumber
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,9 +10,13 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
-	"sync"
 	"syscall"
+
+	"github.com/nning/juist/internal/instance"
 )
+
+// anchorPath is the pf anchor juist's anchor name is loaded as.
+func anchorPath(name string) string { return "juist/" + name }
 
 // anchorRef is what the host's main pf ruleset calls juist's anchors by.
 const anchorRef = `nat-anchor "juist/*"
@@ -30,11 +33,6 @@ const (
 	// router advertisements taken while forwarding.
 	forwardingKeys = "net.inet.ip.forwarding net.inet6.ip6.forwarding net.inet6.ip6.rfc6204w3"
 )
-
-var loaded struct {
-	sync.Mutex
-	rules map[string]string // the anchor last loaded, by device
-}
 
 // SetServe has the host serve dev as s asks, or no longer where s serves
 // nothing.
@@ -57,50 +55,6 @@ func unserve(dev string) error {
 	return errors.Join(flushAnchor(dev), release(dev))
 }
 
-// loadAnchor loads juist/name with rules where they changed, or where pf no
-// longer holds them, as after its rules were reloaded: every reconcile gives
-// them again, which must put back what someone took.
-func loadAnchor(name, rules string) error {
-	loaded.Lock()
-	defer loaded.Unlock()
-	if loaded.rules[name] == rules {
-		if held, err := pfOutput("-a", "juist/"+name, "-s", "rules"); err == nil && strings.TrimSpace(held) != "" {
-			return nil
-		}
-	}
-	if err := pfctl(rules, "-a", "juist/"+name, "-f", "-"); err != nil {
-		return err
-	}
-	if loaded.rules == nil {
-		loaded.rules = map[string]string{}
-	}
-	loaded.rules[name] = rules
-	return nil
-}
-
-func flushAnchor(name string) error {
-	loaded.Lock()
-	defer loaded.Unlock()
-	delete(loaded.rules, name)
-	if err := pfctl("", "-s", "info"); err != nil {
-		return nil // no pf, so no anchor
-	}
-	anchor := "juist/" + name
-	errs := []error{pfctl("", "-a", anchor, "-F", "rules"), pfctl("", "-a", anchor, "-F", "nat")}
-	// -F all and -F Tables fail in an anchor on FreeBSD 15.1, so its tables go one by one.
-	tables, err := pfOutput("-a", anchor, "-s", "Tables")
-	if ee := (*exec.ExitError)(nil); errors.As(err, &ee) && bytes.Contains(ee.Stderr, []byte("Anchor does not exist")) {
-		err = nil
-	}
-	if err != nil {
-		errs = append(errs, fmt.Errorf("pfctl -a %s -s Tables: %w", anchor, err))
-	}
-	for _, t := range strings.Fields(tables) {
-		errs = append(errs, pfctl("", "-a", anchor, "-t", t, "-T", "kill"))
-	}
-	return errors.Join(errs...)
-}
-
 // uplinks are the host's devices but juist's and the loopback, with their
 // first global address in each family.
 func uplinks() ([]uplink, error) {
@@ -110,7 +64,7 @@ func uplinks() ([]uplink, error) {
 	}
 	var out []uplink
 	for _, ifc := range ifs {
-		if ifc.Flags&net.FlagLoopback != 0 || devicePattern.MatchString(ifc.Name) {
+		if ifc.Flags&net.FlagLoopback != 0 || instance.IsDevice(ifc.Name) {
 			continue
 		}
 		u := uplink{name: ifc.Name}
@@ -347,13 +301,6 @@ func withHostState(fn func(*hostChanges) error) error {
 	return errors.Join(err, os.Rename(hostState+".new", hostState))
 }
 
-func removeIfThere(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
 func sysctls(keys []string) (map[string]string, error) {
 	out := map[string]string{}
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
@@ -366,23 +313,4 @@ func sysctls(keys []string) (map[string]string, error) {
 		out[k] = strings.TrimSpace(string(v))
 	}
 	return out, nil
-}
-
-func pfctl(stdin string, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/sbin/pfctl", args...)
-	cmd.Stdin = strings.NewReader(stdin)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("pfctl %v: %v: %s", args, err, bytes.TrimSpace(out))
-	}
-	return nil
-}
-
-func pfOutput(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "/sbin/pfctl", args...).Output()
-	return string(out), err
 }

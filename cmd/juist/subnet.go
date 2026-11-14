@@ -128,7 +128,7 @@ func subnetServe(a *app, args []string) error {
 		return err
 	}
 	sub := cmp.Or(st.Subnets, &ipc.Subnets{})
-	dev := instance.Name(st.Instance)
+	dev := instance.Device(st.Instance)
 	if *stop {
 		if sub.Consent {
 			if _, err := d.request(ipc.Request{Command: ipc.CmdSubnet, ServeSubnets: new(bool)}); err != nil {

@@ -1,14 +1,15 @@
 ---
 title: Installation
 linkTitle: Installation
-description: juist aus der Paketquelle oder einem Release auf Debian, Ubuntu, Fedora, FreeBSD oder dem Steam Deck installieren, den Download prüfen oder das Paket aus dem Quellcode bauen.
+description: juist aus der Paketquelle oder einem Release auf Debian, Ubuntu, Fedora, FreeBSD, macOS oder dem Steam Deck installieren, den Download prüfen oder das Paket aus dem Quellcode bauen.
 lead: juist installierst du als Paket deines Systems, und zwar auf jedem Gerät, das in ein Netz soll. Jedes Release bringt fertige Pakete mit, dazu eine signierte Liste ihrer Prüfsummen.
 ---
 
 ## Unterstützte Systeme
 
-juist läuft unter Linux und FreeBSD. Für Debian und Ubuntu gibt es ein
-`.deb`, für Fedora ein RPM und für FreeBSD 15 ein pkg-Paket. Jedes
+juist läuft unter Linux, FreeBSD und macOS. Für Debian und Ubuntu gibt es
+ein `.deb`, für Fedora ein RPM, für FreeBSD 15 ein pkg-Paket und für macOS ab
+13 ein Tarball ([Auf dem Mac](#macos)). Jedes
 [Release](https://github.com/nning/juist/releases/latest) enthält die Pakete
 für amd64 und arm64, das RPM allerdings nur für x86_64. Auf einem anderen
 Linux mit systemd, etwa Arch oder Gentoo, installiert es `make install` aus
@@ -233,6 +234,59 @@ unter jedem anderen Linux mit dem
 - `sudo /usr/lib/juist/sysext.sh uninstall` entfernt juist wieder; was
   bleibt, steht unter [Was nach dem Deinstallieren bleibt](#what-stays-after-uninstalling).
 
+## Auf dem Mac {#macos}
+
+Unter macOS ab 13, mit Apple-Chip oder Intel, installiert dieselbe Zeile juist
+aus dem neuesten Release:
+
+```sh
+curl -fsSL https://juist.nning.io/install | sh
+```
+
+Das Skript lädt `juist-macos-arm64.tar.gz` (auf Intel
+`juist-macos-amd64.tar.gz`), prüft es gegen die signierte `SHA256SUMS` des
+Releases ([Den Download prüfen](#verifying-a-download)) und startet dessen
+`setup.sh` mit sudo. Das legt `juist` und `juistd` nach `/Library/juist`,
+verlinkt `/usr/local/bin/juist`, legt den versteckten Systembenutzer `_juist`
+an und lädt den LaunchDaemon `io.nning.juist.juistd`, der juistd sofort und bei
+jedem Start startet. juistd behält einen Helfer als root, der das Gerät
+`utun100` anlegt und dessen Adressen und Routen setzt, und führt den Rest als
+`_juist` aus. Die Namen des Netzes löst der Mac über Dateien in
+`/etc/resolver` auf, eine je Domain, die juistd beim Beenden wieder entfernt.
+Das Log steht in `/var/log/juistd.log`, das nur root lesen kann und nichts
+rotiert. Man-Pages und
+Shell-Vervollständigung enthält der Tarball nicht; `juist help COMMAND` sagt,
+was jeder Befehl tut.
+
+Ein Mac tritt wie andere Geräte mehreren Netzen bei. Er nutzt Exit-Nodes, über die er auch
+Verbindungen aus dem Internet beantwortet, und die Subnetze eines
+Subnet-Routers, kann aber selbst kein Exit-Node sein, kein Subnetz routen,
+kein Relay sein, nichts teilen oder veröffentlichen und kein Multicast
+weitergeben. juist schaltet pf unter den
+eigenen Regeln von macOS ein und hält damit die Overlay-Adressen des Macs dem
+Tunnel vor; rufen die pf-Regeln des Rechners keinen `com.apple`-Anker auf,
+meldet `juist health`, dass ein Gerät im LAN diese Adressen erreicht. Ein
+Programm, das pf ausschaltet (`pfctl -d`), schaltet diesen Schutz und die
+Sperre, die den Verkehr bei einem nicht nutzbaren Exit-Node zurückhält, mit
+aus, bis juist seine Regeln das nächste Mal ändert; schaltet ein anderes
+Programm pf inzwischen wieder ein und später aus, bleibt auch das bis dahin
+unbemerkt. Startest du das
+Skript erneut, aktualisiert es juist, und ein angehaltenes juistd bleibt
+angehalten. So hältst du juistd an, bis du es wieder startest:
+
+```sh
+# anhalten
+sudo launchctl disable system/io.nning.juist.juistd && sudo launchctl bootout system/io.nning.juist.juistd
+# starten
+sudo launchctl enable system/io.nning.juist.juistd && sudo launchctl bootstrap system /Library/LaunchDaemons/io.nning.juist.juistd.plist
+```
+
+Entfernen kannst du juist mit `sudo /Library/juist/setup.sh remove`. Die
+Schlüssel des Macs in `/var/db/juist`, die weiterer Netze in `/var/db/juist1`
+und so weiter, und die `_juist`-Benutzer, denen sie gehören, bleiben; `sudo /Library/juist/setup.sh remove --keys` entfernt auch
+sie. Ist juist schon entfernt, erledigt das das `setup.sh` aus dem Tarball
+eines Releases.
+
 ## Im Container
 
 Eine App im Container kann ein eigenes Gerät sein, mit eigenen Adressen und
@@ -362,6 +416,7 @@ sudo apt remove juist      # Debian, Ubuntu
 sudo dnf remove juist      # Fedora
 pkg delete juist           # FreeBSD, als root
 sudo /usr/lib/juist/sysext.sh uninstall   # SteamOS
+sudo /Library/juist/setup.sh remove       # macOS
 ```
 
 Dabei wird juistd für jedes Netz auf dem Gerät beendet, und alles, was juist
@@ -385,6 +440,8 @@ Firewall-Regel für `juist0`, ein Ingress, ein Relay auf Port 443 und die
   `juist: kept /var/lib/juist-serve, the terminator's ACME account, which CAA records may name`.
 - Unter FreeBSD gibt das Entfernen eine einzige Zeile aus, die mit
   `juist: kept` beginnt und alles aufzählt, was bleibt.
+- Unter macOS bleiben `/var/db/juist`, `/var/db/juist1` usw. und ihre `_juist`-Benutzer; das meldet
+  das Entfernen in einer Zeile, die mit `juist: kept` beginnt.
 - Deine Admin-Schlüssel in `~/.config/juist` gehören nicht zum Paket und
   bleiben beim Entfernen unberührt.
 

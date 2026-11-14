@@ -707,7 +707,7 @@ func (m *tsManager) Tunnels() map[uint64]Tunnel {
 	out := make(map[uint64]Tunnel, len(st.Peer))
 	for nk, ps := range st.Peer {
 		if p, ok := peers[nk]; ok {
-			t := Tunnel{LastHandshake: ps.LastHandshake}
+			t := Tunnel{LastHandshake: ps.LastHandshake, RxBytes: uint64(max(ps.RxBytes, 0)), TxBytes: uint64(max(ps.TxBytes, 0))}
 			if ap, err := netip.ParseAddrPort(ps.CurAddr); err == nil {
 				t.Direct = ap
 			}

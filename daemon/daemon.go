@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -814,6 +815,9 @@ func New(opts Options) (*Daemon, error) {
 	d.strictRP6 = opts.StrictRP6
 	if opts.Plumber != nil && d.hostDNS == nil {
 		d.hostDNS = resolvconfDNS{plumbedDNS{p: opts.Plumber, dev: opts.TunName}}
+		if dp, ok := opts.Plumber.(domainsPlumber); ok && runtime.GOOS == "darwin" {
+			d.hostDNS = domainsDNS{p: dp, dev: opts.TunName}
+		}
 	}
 	if opts.TunName != "" {
 		if d.strictRP6 == nil {

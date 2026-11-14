@@ -23,7 +23,7 @@ jeder andere Dienst unter einem eigenen Namen funktioniert genauso.
   öffne dort 41643/udp, mit `sudo ufw allow juist` oder
   `sudo firewall-cmd --permanent --add-service=juist && sudo firewall-cmd --reload`,
   damit sich die Geräte direkt mit ihm verbinden ([Ports]({{< relref "docs/relays" >}})).
-- Laptops unter Linux oder FreeBSD, oder Telefone mit der
+- Laptops unter Linux, FreeBSD oder macOS, oder Telefone mit der
   [Android-App]({{< relref "docs/android" >}}).
 
 ## Einrichten

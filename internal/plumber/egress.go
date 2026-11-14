@@ -66,14 +66,14 @@ func egressRules(dev string, e EgressSpec, uid int, gw4, gw6 gateway) string {
 		// gateway, not into the tunnel. Not quick: the host's rules decide.
 		// Any packet takes state, sloppily, so that a connection older than
 		// the anchor, as the ssh session choosing the exit node, is kept.
-		fmt.Fprintf(&b, "pass in on ! %s from ! <juist_local> flags any keep state (sloppy)\n", dev)
+		fmt.Fprintf(&b, "pass in on ! %s from ! <juist_local> flags any %s\n", dev, answerState)
 		for _, g := range []struct {
 			fam string
 			gw  gateway
 		}{{"inet", gw4}, {"inet6", gw6}} {
 			if g.gw.hop.IsValid() {
-				fmt.Fprintf(&b, "pass in on %s reply-to (%s %s) %s from ! <juist_local> to (%s) flags any keep state (sloppy)\n",
-					g.gw.dev, g.gw.dev, g.gw.hop, g.fam, g.gw.dev)
+				fmt.Fprintf(&b, "pass in on %s reply-to (%s %s) %s from ! <juist_local> to (%s) flags any %s\n",
+					g.gw.dev, g.gw.dev, g.gw.hop, g.fam, g.gw.dev, answerState)
 			}
 		}
 	}

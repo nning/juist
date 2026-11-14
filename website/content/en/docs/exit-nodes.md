@@ -103,6 +103,10 @@ moment while the service restarts.
 - If the exit node also runs Tailscale, it answers its members' DNS through
   the host's regular DNS servers, never through Tailscale's resolver.
 - On FreeBSD, exit nodes work with pf, and DNS goes through resolvconf.
+- A Mac uses an exit node with pf, under macOS's own `com.apple` anchors, and
+  its DNS goes to the exit node as the Mac's default resolver. On a Mac,
+  answers to connections from the internet always go through the exit node,
+  as with `--isolate`. A Mac cannot be an exit node.
 
 ## Troubleshooting
 

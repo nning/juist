@@ -122,10 +122,10 @@ func (a *app) listAdmins(governs map[types.Identity][]string) error {
 }
 
 func adminsNew(a *app, args []string) error {
-	s := spec{name: "juist admins new", args: "NAME", min: 1, max: 1, anyNetwork: true, about: `
+	s := spec{name: "juist admins new", args: "[NETWORK] NAME", min: 1, max: 2, anyNetwork: true, about: `
 Create an admin key on this machine and print the command that adds it.
---network names its network; without it, the key belongs to the first
-network that adds it.`}
+NETWORK need not be one this machine is in; without it, the key belongs to
+the first network that adds it.`}
 	fs := newFlags(s.name)
 	on := fs.String("on", "", "`MACHINE` holding the key (default: this device)")
 	pos, err := a.parse(s, fs, args)
@@ -138,18 +138,25 @@ network that adds it.`}
 	if err := checkName("--on", *on); err != nil {
 		return a.usageErr("%v", err)
 	}
+	network, label := "", "NETWORK"
+	switch flagged := a.network != "" && !a.networkFromEnv; {
+	case len(pos) == 2 && flagged:
+		return a.usageErr("unexpected argument %q", pos[1])
+	case len(pos) == 2:
+		network, pos = pos[0], pos[1:]
+	case flagged:
+		network, label = a.network, "--network"
+	}
+	if network != "" {
+		if err := checkName(label, network); err != nil {
+			return a.usageErr("%v", err)
+		}
+	}
 	if err := checkName("NAME", pos[0]); err != nil {
 		return a.usageErr("%v", err)
 	}
 	if u := a.sudoUser(); u != "" {
 		return fmt.Errorf("run as %s, without sudo: the key belongs in your keystore", u)
-	}
-	network := ""
-	if a.network != "" && !a.networkFromEnv {
-		if err := checkName("--network", a.network); err != nil {
-			return a.usageErr("%v", err)
-		}
-		network = a.network
 	}
 	name := adminKeyName(pos[0], network)
 	priv, err := a.home.createAdminKey(name, network == "")

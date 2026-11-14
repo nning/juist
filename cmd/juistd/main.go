@@ -325,7 +325,7 @@ func parse(args []string, out io.Writer) (options, error) {
 	port := fs.Uint("port", daemon.DefaultListenPort, "UDP port for the data plane")
 	gossipPort := fs.Uint("gossip-port", daemon.DefaultGossipPort, "TCP port for log sync")
 	relayPort := fs.Uint("relay-port", daemon.DefaultRelayPort, "TCP and UDP port for relaying, where the log grants it")
-	tun := fs.String("tun", "juist0", `TUN device to create, "" for none; needs `+defaults.TunPrivilege)
+	tun := fs.String("tun", instance.Device(0), `TUN device to create, "" for none; needs `+defaults.TunPrivilege)
 	noRelay := fs.Bool("no-relay", false, "do not relay for other members, whatever the log grants")
 	noDiscovery := fs.Bool("no-discovery", false, "do not announce or look for members on the LAN")
 	noDHT := fs.Bool("no-dht", false, "do not use the public DHT, for members or invites")
@@ -377,7 +377,7 @@ func parse(args []string, out io.Writer) (options, error) {
 		// Everything two instances must not share follows from the number,
 		// unless given.
 		if !cliflag.IsSet(fs, "tun") {
-			*tun = *inst
+			*tun = instance.Device(n)
 		}
 		for _, p := range []struct {
 			name string

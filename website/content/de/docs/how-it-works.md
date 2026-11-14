@@ -163,7 +163,7 @@ Jedes Mitglied hat zwei Adressen im Netz. `juist devices` zeigt sie an.
 
 ## Namen {#names}
 
-Unter Linux und FreeBSD erreichst du jedes Mitglied unter
+Unter Linux, FreeBSD und macOS erreichst du jedes Mitglied unter
 `DEVICE.NETWORK.juist`, etwa `laptop.home.juist`, oder einfach unter
 `laptop`:
 

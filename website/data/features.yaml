@@ -23,6 +23,9 @@
 - doc: docs/install
   en: {title: Steam Deck, text: "SteamOS installs juist with the same one line, as a system extension its updates keep."}
   de: {title: Steam Deck, text: "Unter SteamOS installiert dieselbe Zeile juist, als System-Erweiterung, die seine Updates behalten."}
+- doc: docs/install
+  en: {title: macOS, text: "A Mac with macOS 13 or newer installs juist with the same one line, from the signed release, and runs it under launchd, its names through macOS's own resolver."}
+  de: {title: macOS, text: "Ein Mac ab macOS 13 installiert juist mit derselben Zeile aus dem signierten Release und führt es unter launchd aus, seine Namen über den Resolver von macOS."}
 - doc: docs/admins
   en: {title: Admins and quorum, text: "Every change needs k of n admins. If it needs more approvals, it is passed on to the other admins' devices."}
   de: {title: Admins und Quorum, text: "Jede Änderung braucht k von n Admins. Fehlen Stimmen, landet sie auf den Geräten der übrigen Admins."}
@@ -33,7 +36,7 @@
 - doc: docs/networks
   en: {title: Several networks, text: "One device in several networks, each with its own admin key."}
   de: {title: Mehrere Netze, text: "Ein Gerät in mehreren Netzen, jedes mit eigenem Admin-Schlüssel."}
-  note: {en: "One juistd each on Linux and FreeBSD, up to ten; in the Android app up to four, behind its one VPN.", de: "Unter Linux und FreeBSD je ein juistd, bis zu zehn; in der Android-App bis zu vier, hinter ihrem einen VPN."}
+  note: {en: "One juistd each on Linux, FreeBSD and macOS, up to ten; in the Android app up to four, behind its one VPN.", de: "Unter Linux, FreeBSD und macOS je ein juistd, bis zu zehn; in der Android-App bis zu vier, hinter ihrem einen VPN."}
 - doc: docs/exit-nodes
   en: {title: Exit nodes, text: "A device's internet traffic and DNS, sent through another member."}
   de: {title: Exit-Nodes, text: "Internetverkehr und DNS eines Geräts über ein anderes Mitglied."}

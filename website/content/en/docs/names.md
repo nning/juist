@@ -16,7 +16,7 @@ server known as `mail.example.org`. On devices that turned public names on,
 that name then leads to the NAS through the tunnel. The certificate still
 matches, and the rest of the internet still gets the public record.
 
-Both work on Linux and FreeBSD, where juist sets up the device's DNS itself
+Both work on Linux, FreeBSD and macOS, where juist sets up the device's DNS itself
 ([how](#resolver)). The [Android app]({{< relref "docs/android" >}}#names)
 resolves them too, public names once **Public names** is on in its
 **Details**.
@@ -118,6 +118,10 @@ ends in `(DNS off)`, and every row in `juist names` says `juist DNS off`.
   The package points `/etc/resolv.conf` at juistd's file, and back when juistd
   stops.
 - On FreeBSD, juistd hands its resolver to resolvconf.
+- On macOS, juistd writes a file per domain into `/etc/resolver`, which
+  names its resolver, and removes it when it stops. A file of the same name
+  there that is not juist's stays, and that domain does not resolve
+  through juistd.
 - On Android, see [the app's names]({{< relref "docs/android" >}}#names).
 - If Tailscale wrote `/etc/resolv.conf`, juist leaves it alone, and the
   network's names do not resolve on that device.

@@ -1,4 +1,4 @@
-//go:build !freebsd
+//go:build !freebsd && !darwin
 
 package conn
 
@@ -14,5 +14,5 @@ import (
 const tunNeeds = "/dev/net/tun and CAP_NET_ADMIN"
 
 func newPlumbed(Plumber, string, int, int, logger.Logf) (tun.Device, router.Router, error) {
-	return nil, nil, errors.New("conn: a plumber is FreeBSD's alone")
+	return nil, nil, errors.New("conn: a plumber is FreeBSD's and macOS's alone")
 }

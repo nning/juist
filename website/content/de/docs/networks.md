@@ -16,7 +16,9 @@ nummerierten Instanz: `juistd@juist1`, `juistd@juist2` und so weiter. Jede
 Instanz hat ihr eigenes Netzwerkgerät (`juist0`, `juist1`, …), ihr eigenes
 Zustandsverzeichnis und eigene Ports und läuft als eigener Benutzer (`juist`,
 `juist1`, …), damit das juistd eines Netzes die Schlüssel eines anderen nicht
-lesen kann.
+lesen kann. Auf dem Mac sind die Instanzen LaunchDaemons
+(`io.nning.juist.juistd.juist1`, …), ihre Geräte `utun100` bis `utun109` und
+ihre Benutzer `_juist`, `_juist1`, ….
 
 ## Einem zweiten Netz beitreten oder eines anlegen
 
@@ -134,13 +136,18 @@ Möglichkeit vorher aus `work` ([Geräte entfernen]({{< relref "docs/remove" >}}
   `sudo systemctl enable --now juistd@juist1`. Sein Log zeigt
   `journalctl -u juistd@juist1`. Unter FreeBSD nennt die rc.conf-Variable
   `juistd_instances` die Instanzen, und `service juistd start juist1` startet
-  eine.
+  eine. Auf dem Mac startet `sudo /Library/juist/setup.sh instance start
+  juist1` eine, und `/var/log/juistd.juist1.log` ist ihr Log.
 - Ein Gerät kann einem Netz nur einmal angehören. Eine Einladung verrät
   nicht, für welches Netz sie gilt, also wird ein zweiter Beitritt zum selben
   Netz zunächst angenommen. Das neue juistd lehnt das Netz dann ab und nennt
   die Aufnahme, die ein Admin entfernen sollte.
 - Ein Gerät in mehreren Netzen leitet seinen Internetverkehr über den
   [Exit-Node]({{< relref "docs/exit-nodes" >}}) nur eines dieser Netze.
+- Auf dem Mac teilen sich zwei Netze, deren IPv4-Bereiche sich überschneiden,
+  wie zwei im Standardbereich, ihre Rückwärtsauflösung: Eine Adresse beider
+  wird im Netz nachgeschlagen, dessen juistd die Zone zuerst geschrieben hat,
+  und die Adressen des anderen Netzes bekommen keinen Namen zurück.
 - Die Mitglieder eines Netzes können die Adressen dieses Hosts in seinen
   anderen Netzen erfahren und damit, welche Adressbereiche diese nutzen.
 

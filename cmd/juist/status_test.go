@@ -544,6 +544,14 @@ func TestStatusNamesSyncBlockedInTheTunnel(t *testing.T) {
 	printStatusAndHealth(a, &ipc.Status{InNetwork: true, GossipPort: 41644, Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, SyncFailing: []string{"vps"}}})
 	mustContain(t, out.String(), "log sync to vps fails in the tunnel: tcp/41644 does not answer there",
 		"hint: where it runs Linux: sudo ufw allow in on juist0")
+
+	// A Mac's own device is utun100, the Linux end's juist0.
+	out = syncBuffer{}
+	printStatusAndHealth(a, &ipc.Status{InNetwork: true, Device: "utun100", GossipPort: 41644, Derived: ipc.Derived{NetworkName: "home", Members: 2, Peers: 1}, Tunnels: ipc.Tunnels{TunnelsChecked: true, TunnelsLive: 1, SyncFailing: []string{"vps"}}})
+	mustContain(t, out.String(), "hint: where it runs Linux: sudo ufw allow in on juist0")
+	if strings.Contains(out.String(), "utun100") {
+		t.Errorf("the Linux end is told to open the Mac's device:\n%s", out.String())
+	}
 }
 
 // Where relays are available, a device that announces itself and sends no
@@ -856,6 +864,8 @@ func TestStatusSaysHTTPSAloneAndTheRelaysName(t *testing.T) {
 			[]string{"warning: members are not told of relay.example.org: this device does not relay"}},
 		{ipc.HTTPS{Name: "relay.example.org", ListenError: "listen tcp 192.0.2.7:443: bind: permission denied"}, "relay.example.org, not on 443",
 			[]string{"warning: the relay cannot bind 443", "hint: to let juistd bind 443: sudo juist set --relay-name relay.example.org"}},
+		{ipc.HTTPS{Name: "relay.example.org", ListenError: "plumber: a relay: not on macOS"}, "relay.example.org, not on 443",
+			[]string{"warning: the relay cannot bind 443: plumber: a relay: not on macOS\n"}},
 		{ipc.HTTPS{Name: "relay.example.org", Listening: []string{"192.0.2.7:443"}, NoCert: "the CA refused"},
 			"relay.example.org, no certificate yet", []string{"warning: no certificate for relay.example.org yet: the CA refused",
 				"hint: relay.example.org must point at this device in DNS, and every firewall in front of it let 443/tcp in"}},
@@ -865,6 +875,9 @@ func TestStatusSaysHTTPSAloneAndTheRelaysName(t *testing.T) {
 		st.Relaying, st.HTTPS, st.CanOperate = true, &c.h, true
 		printStatusAndHealth(a, st)
 		mustContain(t, out.String(), append([]string{"Relay name    " + strings.TrimSuffix(c.line, "\n")}, c.want...)...)
+		if strings.Contains(c.h.ListenError, "macOS") && strings.Contains(out.String(), "another program") {
+			t.Errorf("macOS's own limit is blamed on another program:\n%s", out.String())
+		}
 	}
 
 	// A reader's status holds none of how the relay takes 443.

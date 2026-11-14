@@ -22,10 +22,4 @@ type Holding struct {
 }
 
 // deviceInstance reads the instance a device's name says it is.
-func deviceInstance(name string) (int, bool) {
-	if name == instance.Name(0) {
-		return 0, true
-	}
-	n, err := instance.Parse(name)
-	return n, err == nil
-}
+func deviceInstance(name string) (int, bool) { return instance.OfDevice(name) }

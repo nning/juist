@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/nning/juist/internal/instance"
 	"golang.org/x/sys/unix"
 )
 
@@ -39,9 +40,6 @@ const maxFrame = 4 << 20
 // variable for tests.
 var callTimeout = 2 * time.Minute
 
-// devicePattern is the devices the helper serves: juist's own.
-var devicePattern = regexp.MustCompile(`^juist[0-9]$`)
-
 const (
 	opOpen    = "open"
 	opAddrs   = "addrs"
@@ -54,6 +52,7 @@ const (
 	opListen  = "listen-https"
 	opDNS53   = "listen-dns"
 	opGuard   = "guard"
+	opDomains = "domains"
 )
 
 type request struct {
@@ -70,6 +69,9 @@ type request struct {
 	Search []string       `cbor:"11,keyasint,omitempty"`
 	Proto  string         `cbor:"12,keyasint,omitempty"`
 	Guard  *GuardSpec     `cbor:"13,keyasint,omitempty"`
+	// Domains and Port are what [Client.SetDomains] routes.
+	Domains []string `cbor:"14,keyasint,omitempty"`
+	Port    uint16   `cbor:"15,keyasint,omitempty"`
 }
 
 type response struct {
@@ -161,6 +163,14 @@ func (c *Client) SetEgress(dev string, e EgressSpec) error {
 // there are none.
 func (c *Client) SetDNS(dev string, servers []netip.Addr, search []string) error {
 	_, err := c.call(request{Op: opDNS, Device: dev, DNS: servers, Search: search})
+	return err
+}
+
+// SetDomains has the host ask servers, on port, for domains alone, and
+// search search, or no longer where there are no domains; servers must be
+// dev's own addresses.
+func (c *Client) SetDomains(dev string, servers []netip.Addr, port uint16, domains, search []string) error {
+	_, err := c.call(request{Op: opDomains, Device: dev, DNS: servers, Port: port, Domains: domains, Search: search})
 	return err
 }
 
@@ -392,6 +402,9 @@ type Host interface {
 	// SetDNS makes servers the host's resolvers by dev, with search its
 	// search domains, or no longer.
 	SetDNS(dev string, servers []netip.Addr, search []string) error
+	// SetDomains has the host ask servers on port for domains alone, and
+	// search search, or no longer where there are no domains.
+	SetDomains(dev string, servers []netip.Addr, port uint16, domains, search []string) error
 	// SetGuard keeps dev's overlay to it as g asks, or no longer where g
 	// holds no address; destroying the device ends it too.
 	SetGuard(dev string, g GuardSpec) error
@@ -417,15 +430,19 @@ type device struct {
 	addrs   []netip.Prefix
 	routes  map[netip.Prefix]netip.Addr
 	ownDNS  bool // the host's resolver is the daemon's own, at the device
+	domains bool // the host asks the device for some domains
 }
 
 // destroyed destroys d, and gives the host its resolvers back where they
-// were the daemon's, which no longer answers; an exit node's stay, so that
-// lookups go nowhere rather than to the LAN until juistd is back.
+// were the daemon's, which no longer answers; an exit node's stay, though
+// with the device gone the lookups may leave by the LAN (threat model, 7).
 func (d *device) destroyed(h Host, name string) error {
 	var err error
 	if d.ownDNS {
 		err = h.SetDNS(name, nil, nil)
+	}
+	if d.domains {
+		err = errors.Join(err, h.SetDomains(name, nil, 0, nil, nil))
 	}
 	return errors.Join(err, d.destroy())
 }
@@ -447,7 +464,7 @@ func Serve(c *net.UnixConn, h Host, uid int, dev string, logf func(string, ...an
 			delete(devs, name)
 		}
 	}
-	if dev != "" && !devicePattern.MatchString(dev) {
+	if dev != "" && !instance.IsDevice(dev) {
 		return destroy, fmt.Errorf("%q is no device of juist's", dev)
 	}
 	return destroy, serve(c, h, devs, uid, dev)
@@ -493,7 +510,7 @@ func serve(c *net.UnixConn, h Host, devs map[string]*device, uid int, dev string
 }
 
 func handle(devs map[string]*device, h Host, req request, uid int, dev string) (*os.File, error) {
-	if !devicePattern.MatchString(req.Device) {
+	if !instance.IsDevice(req.Device) {
 		return nil, fmt.Errorf("%q is no device of juist's", req.Device)
 	}
 	if req.Device != dev {
@@ -572,6 +589,11 @@ func handle(devs map[string]*device, h Host, req request, uid int, dev string) (
 			})
 		}
 		return nil, err
+	case opDomains:
+		err := setDomains(h, req.Device, d, req.DNS, req.Port, req.Domains, req.Search)
+		// Set even where some file failed: the others were written.
+		d.domains = len(req.Domains) > 0 || err != nil && d.domains
+		return nil, err
 	case opDNS53:
 		// One of the device's own addresses alone, which the host's
 		// resolver is pointed at.
@@ -627,7 +649,7 @@ var juistAddrs = func() []netip.Addr {
 	}
 	var out []netip.Addr
 	for _, ifc := range ifs {
-		if !devicePattern.MatchString(ifc.Name) {
+		if !instance.IsDevice(ifc.Name) {
 			continue
 		}
 		addrs, _ := ifc.Addrs()
@@ -728,6 +750,36 @@ func setDNS(h Host, dev string, servers []netip.Addr, search []string) error {
 		search = search[:6]
 	}
 	return h.SetDNS(dev, servers, search)
+}
+
+// maxDomains bounds the domains the host asks the device for: a network's
+// own, its reverse zones and every public name of its.
+const maxDomains = 4096
+
+// setDomains has the host ask d's own addresses alone, on a port, for
+// domains, and search search, each written as a file's name or into its
+// text.
+func setDomains(h Host, dev string, d *device, servers []netip.Addr, port uint16, domains, search []string) error {
+	if len(domains) == 0 {
+		return h.SetDomains(dev, nil, 0, nil, nil)
+	}
+	if len(servers) == 0 || port == 0 {
+		return errors.New("domains with no resolver")
+	}
+	for _, s := range servers {
+		if !s.IsValid() || s.Zone() != "" || !slices.ContainsFunc(d.addrs, func(p netip.Prefix) bool { return p.Addr() == s }) {
+			return fmt.Errorf("%v is no address of %s", s, dev)
+		}
+	}
+	if len(domains) > maxDomains || len(search) > 6 {
+		return fmt.Errorf("%d domains and %d to search, more than %d and 6", len(domains), len(search), maxDomains)
+	}
+	for _, dom := range slices.Concat(domains, search) {
+		if !searchDomain.MatchString(dom) || len(dom) > 253 {
+			return fmt.Errorf("a domain %q", dom)
+		}
+	}
+	return h.SetDomains(dev, servers, port, domains, search)
 }
 
 // searchDomain is a domain resolv.conf may search.

@@ -19,7 +19,7 @@
 | Compromised admin, below quorum | One admin key (or few, < k) | k-of-n quorum for membership changes; attributable multi-signatures make the malicious signer identifiable in the log |
 | Member holding an exit / route grant (M6) | Full plaintext view of everything routed through it, plus drop/redirect | Grant is a quorum-signed log record separate from membership and separately revocable; routes may never overlap the overlay space; route state read only from the log, never from peer advertisements, which can only withhold a grant (an operator's consent); a subnet reaches clients without asking them, but never over what a client reaches by routes of its own inside it (which a hostile LAN can claim by numbering itself so, or by DHCP routes a client does not mark as pushed), and a grant of public space says so; once the network has an access policy (M14), only members it passes use one, enforced at the exit node or router |
 | Log-transport attacker | Controls how AUMs reach some nodes | Hash chain prevents forgery/reorder; monotonic epochs prevent rollback; log-head cross-gossip detects split views |
-| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7; the app's APK in M34, after v1.0); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M34, after v1.0); update transparency (roadmap item, not v1) |
+| Supply chain (our updates) | Compromise of release pipeline | Reproducible builds (M7; the app's APK in M35, after v1.0); each release's SHA256SUMS signed by a key `packaging/release-signers` names, and its APKs by the certificate `packaging/android-release.sha256` names; distro repositories (M35, after v1.0); update transparency (roadmap item, not v1) |
 
 ## Out of scope / consciously accepted
 
@@ -434,4 +434,14 @@ them by number.
   resolvconf(8) for the device's resolvers; the pf rules are the helper's
   own text around the daemon's prefixes and addresses, never text the
   daemon wrote, and juistd's uid in them is the one the helper started it
-  as.
+  as. macOS splits the same way (M29): its helper's devices are
+  `utun100`–`utun109`, the daemon runs as `_juist` (`_juistN` for another
+  network's instance), and it does not serve;
+  its guard and an exit node's egress are FreeBSD's pf rules in anchors
+  under `com.apple/juist.*`, with pf enabled by a token it gives back, and
+  DNS through the exit node a SystemConfiguration key of the device's that
+  scutil(8) sets from the addresses the helper checked; for the network's names it writes `/etc/resolver` files, one
+  per domain, naming the device's own addresses alone, and replaces or
+  removes only files whose first line says they are its device's, so a
+  compromised daemon can route a domain's lookups to itself but rewrite no
+  other resolver file.

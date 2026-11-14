@@ -62,7 +62,7 @@ a key.
 
 - A key from `juist admins new` is filed under the first network whose log
   names it, once `juist admins` lists it or it signs a change there.
-  `juist admins new alice --network home` names the network right away.
+  `juist admins new home alice` names the network right away.
 - To govern a new network with a key you already have, say so:
   `juist create lab --admin-key alice@home`.
 - `juist admins` lists the keys on this machine and the networks each one

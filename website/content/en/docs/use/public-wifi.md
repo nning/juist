@@ -19,7 +19,7 @@ the same way.
 
 - A network with the laptop or phone in it ([your first network]({{< relref "docs/first-network" >}})).
 - A member that stays on, on Linux or on FreeBSD with pf, to be the exit node.
-- On the device you travel with: Linux, FreeBSD or the
+- On the device you travel with: Linux, FreeBSD, macOS or the
   [Android app]({{< relref "docs/android" >}}).
 
 ## Setting it up

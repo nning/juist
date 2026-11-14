@@ -23,7 +23,7 @@ any other service under its own name works the same way.
   41643/udp there, `sudo ufw allow juist` or
   `sudo firewall-cmd --permanent --add-service=juist && sudo firewall-cmd --reload`,
   so that devices connect to it directly ([ports]({{< relref "docs/relays" >}})).
-- Laptops on Linux or FreeBSD, or phones with the [Android app]({{< relref "docs/android" >}}).
+- Laptops on Linux, FreeBSD or macOS, or phones with the [Android app]({{< relref "docs/android" >}}).
 
 ## Setting it up
 

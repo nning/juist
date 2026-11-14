@@ -1,0 +1,24 @@
+#!/bin/sh
+# Starts juistd for launchd: the default instance, or juist1 to juist9 for
+# another network's. Its home and socket directory are its user's, _juist or
+# _juistN; juistd runs as root, keeps its helper as root and runs the daemon
+# as that user.
+set -eu
+umask 022
+case ${1:-} in
+"")
+	user=_juist home=/var/db/juist run=/var/run/juist
+	set --
+	;;
+juist[1-9])
+	user=_$1 home=/var/db/$1 run=/var/run/$1
+	set -- --instance "$1"
+	;;
+*)
+	echo "juistd-launch: no instance $1: juist1 to juist9" >&2
+	exit 1
+	;;
+esac
+install -d -o "$user" -g "$user" -m 0700 "$home"
+install -d -o "$user" -g "$user" -m 0755 "$run"
+exec /Library/juist/juistd --home "$home" --socket "$run/juistd.sock" "$@"

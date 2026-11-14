@@ -267,6 +267,59 @@ func (r plumbedDNS) Route(rt DNSRouting) error {
 
 func (r plumbedDNS) Revert() error { return r.p.SetDNS(r.dev, nil, nil) }
 
+// A domainsPlumber has the host ask a device's own addresses for some
+// domains alone, as macOS's /etc/resolver does.
+type domainsPlumber interface {
+	SetDomains(dev string, servers []netip.Addr, port uint16, domains, search []string) error
+	SetDNS(dev string, servers []netip.Addr, search []string) error
+}
+
+// domainsDNS is the host's DNS through the helper that plumbs dev, as on
+// macOS: juist's domains by /etc/resolver, and every name, as an exit node's
+// DNS wants, as the host's default resolver.
+type domainsDNS struct {
+	p   domainsPlumber
+	dev string
+}
+
+func (domainsDNS) routesDomains() bool { return true }
+
+// through reports that the host asks what its domains were routed to: macOS's
+// resolver reads /etc/resolver itself, whatever /etc/resolv.conf lists.
+func (domainsDNS) through(string, []netip.AddrPort) (bool, string) { return true, "" }
+
+// namesPort is 53: the host's default resolver takes no other port.
+func (domainsDNS) namesPort() uint16 { return 53 }
+
+func (r domainsDNS) Route(rt DNSRouting) error {
+	var addrs []netip.Addr
+	var port uint16
+	for _, s := range rt.Servers {
+		if port != 0 && s.Port() != port {
+			return errors.New("this host's resolver asks every server of a domain on one port")
+		}
+		port = s.Port()
+		addrs = append(addrs, s.Addr())
+	}
+	if !rt.Everything {
+		return errors.Join(r.p.SetDNS(r.dev, nil, nil), r.p.SetDomains(r.dev, addrs, port, rt.Domains, rt.Search))
+	}
+	if port != 53 {
+		return fmt.Errorf("the exit node answers DNS on port %d, which this host's resolver cannot ask", port)
+	}
+	var domains error
+	if len(rt.Domains) > 0 {
+		domains = r.p.SetDomains(r.dev, addrs, port, rt.Domains, rt.Search)
+	} else {
+		domains = r.p.SetDomains(r.dev, nil, 0, nil, nil)
+	}
+	return errors.Join(r.p.SetDNS(r.dev, addrs, rt.Search), domains)
+}
+
+func (r domainsDNS) Revert() error {
+	return errors.Join(r.p.SetDNS(r.dev, nil, nil), r.p.SetDomains(r.dev, nil, 0, nil, nil))
+}
+
 // VPNDNS is the host's DNS through a VPN device's own servers, as Android's
 // VpnService sets them, which every program's lookups then go to: juistd's
 // resolver alone, which asks those of the network beneath the VPN, as
@@ -613,6 +666,9 @@ var (
 	_ domainRouter    = resolvconfDNS{}
 	_ namesPorter     = resolvconfDNS{}
 	_ throughReporter = resolvconfDNS{}
+	_ domainRouter    = domainsDNS{}
+	_ namesPorter     = domainsDNS{}
+	_ throughReporter = domainsDNS{}
 )
 
 // A capability lost to a renamed method fails to build here, not silently.

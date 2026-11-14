@@ -153,4 +153,4 @@ not the lead.
 ## The threat model
 
 What changes is in [02-threat-model.md](02-threat-model.md), weaknesses 5
-and 15. The change is audit scope (M33).
+and 15. The change is audit scope (M34).

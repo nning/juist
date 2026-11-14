@@ -24,8 +24,8 @@ func (a *app) newInstance(in []hostInstance) (hostInstance, error) {
 	}
 	already := "this device is in " + strings.Join(labels, " and ")
 	if !a.host.canMakeInstances() {
-		return hostInstance{}, fmt.Errorf("%s; another network needs %s from the juist package"+
-			"\nhint: or leave %s first: juist reset %s --force", already, instanceNeed,
+		return hostInstance{}, fmt.Errorf("%s; %s"+
+			"\nhint: %s %s first: juist reset %s --force", already, instanceNeed, instanceLeave,
 			labels[0], in[0].word())
 	}
 	if a.asRoot() {

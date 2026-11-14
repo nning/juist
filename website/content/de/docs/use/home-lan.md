@@ -20,7 +20,7 @@ Im Beispiel ist das LAN `192.168.1.0/24`, und das NAS heißt `nas`.
 - Ein Netz, in dem der Laptop ist ([das erste Netz]({{< relref "docs/first-network" >}})).
 - Ein Mitglied zu Hause unter Linux oder unter FreeBSD mit pf, das
   eingeschaltet bleibt: ein NAS, ein kleiner Server oder ein Raspberry Pi.
-- Laptops unter Linux oder FreeBSD. Die Android-App kann keinen
+- Laptops unter Linux, FreeBSD oder macOS. Die Android-App kann keinen
   Subnet-Router nutzen.
 
 ## Einrichten

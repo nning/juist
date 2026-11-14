@@ -139,8 +139,8 @@ gebunden ist, empfängt Pakete auf `juist0` möglicherweise nicht. Adressen
 im Inhalt einer Suchnachricht werden nicht übersetzt.
 
 Das automatische Kopieren funktioniert nur unter Linux. Unter FreeBSD
-müssen Multicast-Programme selbst auf `juist0` senden und lauschen. Die
-Android-App überträgt weder Multicast noch Broadcast.
+müssen Multicast-Programme selbst auf `juist0` senden und lauschen. Weder
+die Android-App noch ein Mac überträgt Multicast oder Broadcast.
 
 ## Avahi
 
@@ -177,7 +177,7 @@ Das schaltet Multicast und Broadcast auch bei erlaubender Policy ab. Es gibt `mu
 `sudo juist set --multicast` erlaubt Discovery wieder dort, wo die Policy es zulässt. Beides startet die
 Tunnel des Geräts neu, was ein paar Sekunden dauert.
 
-Die Android-App überträgt kein Multicast.
+Weder die Android-App noch ein Mac überträgt Multicast.
 
 ## Wenn etwas nicht klappt
 

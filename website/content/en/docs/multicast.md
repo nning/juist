@@ -132,8 +132,8 @@ arriving on `juist0`. Addresses written inside a discovery message are
 not translated.
 
 Automatic copying works only on Linux. On FreeBSD, multicast programs
-must send and listen on `juist0` themselves. The Android app carries
-neither multicast nor broadcast.
+must send and listen on `juist0` themselves. Neither the Android app nor a
+Mac carries multicast or broadcast.
 
 ## Avahi
 
@@ -170,7 +170,7 @@ This turns off multicast and broadcast even where policy permits them. It prints
 `sudo juist set --multicast` allows discovery again where policy permits it. Both restart the device's
 tunnels, which takes a few seconds.
 
-The Android app carries no multicast.
+Neither the Android app nor a Mac carries multicast.
 
 ## If something goes wrong
 

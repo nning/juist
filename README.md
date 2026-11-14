@@ -26,7 +26,7 @@ for itself.
 
 [Watch the tour](https://docs.juist.nning.io/en/#tour): a network made, a device invited and a phone joining, in under a minute.
 
-juist runs on Linux and FreeBSD, and an app makes an Android phone a member.
+juist runs on Linux, FreeBSD and macOS, and an app makes an Android phone a member.
 
 The [handbook](https://docs.juist.nning.io/en/docs/) explains every feature step by step;
 `juist help COMMAND` and `man juist` say what each command does.
@@ -35,7 +35,8 @@ The [handbook](https://docs.juist.nning.io/en/docs/) explains every feature step
 
 On Debian, Ubuntu, Fedora and FreeBSD, from juist's package repository,
 which then updates juist with the system (on FreeBSD, as root, with
-`fetch -o -` for `curl -fsSL`):
+`fetch -o -` for `curl -fsSL`), and on macOS 13 or later from the latest
+release ([On a Mac](https://docs.juist.nning.io/en/docs/install/#macos)):
 
 ```sh
 curl -fsSL https://juist.nning.io/install | sh
@@ -260,8 +261,8 @@ Report a vulnerability privately, as [SECURITY.md](SECURITY.md) says.
 
 ## Status
 
-juist is usable on Linux and FreeBSD, but it is not v1 yet and has not had
-a security audit.
+juist is usable on Linux and FreeBSD, and new on macOS, but it is not v1
+yet and has not had a security audit.
 
 What works:
 

@@ -32,6 +32,7 @@ every push:
 | a milestone, or the review round closing it, is done; before a release | `make ci-vm`, recorded under "The last privileged run" | 18 min |
 | where a milestone's criteria ask for it | `make test-freebsd`, `make repro-freebsd`, `make test-acme`, `make fuzz-long`, the hand tests on Fedora | — |
 | a change to `packaging/sysext.sh` or the SteamOS path of `install.sh` | [Check a Steam Deck](#check-a-steam-deck) in a SteamOS VM, recorded under "The last privileged run" | 40 min |
+| a darwin build-tagged file, `packaging/macos` or the Darwin path of `install.sh`, before M29 is done or a release ships it | `macos.yml` on GitHub by hand (`packaging/macos/runner-test.sh` on a macOS runner, then five minutes of `FuzzServe` on darwin's rules), at low priority, as macOS minutes cost; recorded under "The last privileged run" | 20 min |
 | a change to `mobile` or `android/` | `make android-check`, with a JDK and the Android SDK; `make android-smoke` with the AVD `juist`; the app by hand in an emulator or on a phone | 3 min, 3 min |
 | a change to what a phone, or a peer of one, sends while idle: the pace, the checks, sync, the DHT | `make android-idle`, with the AVD `juist`, recorded under "The last privileged run" | 100 min |
 | a change to the website's CSS, scripts or layouts | `make -C website check test-browser`, with Chrome | 1 min |
@@ -537,6 +538,25 @@ The latest `make ci-vm` that closed a milestone, and the latest run of each
 gate it does not cover. Replace an entry when its gate runs again, so it is
 clear how old the evidence is.
 
+- **`macos.yml`, 2026-11-13, at M29** (after M29's closing review
+  rounds, before M29 done), run 43491160492 with `full=false`: on
+  macos-15 (arm64), `runner-test.sh` passed in 1m17s. It installed the
+  CGO_ENABLED=0 kit by `setup.sh`, juistd came up under launchd as root
+  with its daemon as `_juist`, created a network as the runner's user,
+  made `utun100`, wrote `/etc/resolver`, and a netstack service member on
+  the same Mac joined; its name resolved and it answered pings through
+  `utun100`. A second instance ran as `_juist1`, the guard and daemon
+  anchors were loaded with pf held by juist's token, both logs were 0600,
+  also one launchd made anew, and `setup.sh remove --keys` left no file,
+  user, device, process or pf rule of juist's; pf still lists the
+  emptied anchors until a reboot. `FuzzServe` ran five minutes on
+  darwin's rules without a finding in runs 43387779386 and 43389453148,
+  on the same `Serve`. Twelve runs before brought the test up and found
+  that what a Mac sends its own IPv6 overlay address loses its checksum
+  through the utun (fixed in M29), and that `setup.sh remove` could
+  not flush an anchor (M29). `install.sh`'s Darwin path waits for a
+  release with the macOS tarballs.
+
 - **Check a Steam Deck, 2026-11-08**, the commit of `sysext.sh`, in KVM
   from Valve's recovery image 20260707.10 (SteamOS 3.8.14, systemd 257):
   the stable repository's 0.26.2 was refused for want of `sysext.sh`, its
@@ -547,17 +567,14 @@ clear how old the evidence is.
   install, `steamos-update` to 20261023.100 (SteamOS 3.9.5, systemd 261)
   kept the extension merged, juistd started at boot, its node ID, network
   and addresses, the `juist` user and `juist0` in the trusted zone.
-- **`make ci-vm`, 2026-11-09, at M28** (M28's closing review rounds,
-  before M28 done): every stage passed, one after another rather than
-  beside each other, since homeserver had 13 GiB free: `vm,check` in
-  12m37s (`20261109-214600-M28`), the lab's normal and upgrade
-  runs in 28m54s (`20261109-215838-M28`), the builds in 4m16s
-  (`20261109-222732-M28`). `make android-smoke` ran apart, on
-  2026-11-10 at M28 (M28 and this record), once the AVD `juist`
-  was wiped of a screen lock nobody recorded: the phone joined, resolved,
-  reached and was reached. Earlier tries that day failed on a stream stalled 6.4 s after a
-  renumbering and on two timing tests under `-race` while the host's load
-  stood near 10; each passed on the next run with no change to its code.
+- **`make ci-vm`, 2026-11-13, at M29** (M29's closing review rounds
+  and its macOS runner test, before M29 done): every stage passed, one
+  after another, since homeserver had 13 GiB free: `vm,check` in 16m5s
+  (`20261113-221251-M29`), the lab's normal and upgrade runs in
+  34m58s (`20261113-222857-M29`), the builds, `make cross` with
+  darwin's, in 10m0s (`20261113-230356-M29`). `make
+  android-smoke` did not run, `ANDROID_HOME` being unset; it last ran
+  on 2026-11-10, at M28.
 - **Pair-key recovery (M25 review 9), 2026-11-01, at 66409ed**:
   `make ci-vm STAGES=check,lab` passed in 35m5s
   (`20261101-190014-66409ed59c3f`), the lab's normal and upgrade runs
@@ -1196,7 +1213,7 @@ gh run view <id> --log-failed | sed 's/.*make test-os-plumbing\t//'
   `JUIST_PUBLIC_TESTS=1 go test -run PublicDHT -v ./internal/rendezvous`.
 - **Upgrades across more than one release.** `make interop` runs the previous
   release beside this build; nothing older. The readiness check that would
-  stop an admin stranding members is M34's
+  stop an admin stranding members is M35's
   ([08-trust-layer-notes.md](08-trust-layer-notes.md)).
 - **The freshness TTL on a real clock.** The tests move a fake one. On real
   devices, stopping every admin device for longer than the TTL is what shows the

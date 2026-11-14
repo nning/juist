@@ -15,7 +15,8 @@ import (
 // between juist's first priority and Tailscale's.
 const Max = 9
 
-// prefix begins every instance's name, which is also its TUN device's.
+// prefix begins every instance's name, which is also its TUN device's but
+// on macOS.
 const prefix = "juist"
 
 // PortStride is how far apart two instances' ports are: instance n listens
@@ -49,7 +50,18 @@ func IsName(name string) bool {
 // IsDevice reports whether name is the TUN device of an instance, the
 // default's included.
 func IsDevice(name string) bool {
-	return name == Name(0) || IsName(name)
+	_, ok := OfDevice(name)
+	return ok
+}
+
+// OfDevice is the instance whose TUN device name is.
+func OfDevice(name string) (int, bool) {
+	for n := 0; n <= Max; n++ {
+		if Device(n) == name {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 // Port is port as instance n listens on it.

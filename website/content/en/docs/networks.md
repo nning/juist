@@ -15,7 +15,9 @@ The first network runs in `juistd.service`, each further one in a numbered
 instance: `juistd@juist1`, `juistd@juist2`, and so on. Each instance has its
 own network device (`juist0`, `juist1`, …), state directory and ports, and
 runs as its own user (`juist`, `juist1`, …), so that one network's juistd
-cannot read another's keys.
+cannot read another's keys. On a Mac the instances are LaunchDaemons
+(`io.nning.juist.juistd.juist1`, …), their devices `utun100` to `utun109`
+and their users `_juist`, `_juist1`, ….
 
 ## Joining or creating a second network
 
@@ -125,13 +127,19 @@ remove the device from `work` first ([Removing a device]({{< relref "docs/remove
 - If the second network's juistd is not running, start it with
   `sudo systemctl enable --now juistd@juist1`. `journalctl -u juistd@juist1`
   shows its log. On FreeBSD, the rc.conf variable `juistd_instances` lists the
-  instances, and `service juistd start juist1` starts one.
+  instances, and `service juistd start juist1` starts one. On a Mac,
+  `sudo /Library/juist/setup.sh instance start juist1` starts one and
+  `/var/log/juistd.juist1.log` is its log.
 - A device can be in a network only once. An invite does not say which
   network it is for, so a second join to the same network is admitted first.
   The new juistd then refuses the network and names the admission an admin
   should remove.
 - A device in several networks sends its internet traffic through the
   [exit node]({{< relref "docs/exit-nodes" >}}) of only one of them.
+- On a Mac, two networks whose IPv4 ranges overlap, as two on the default
+  range do, share their reverse lookups: an address of either is looked up in
+  the network whose juistd wrote the zone first, so the other network's
+  addresses get no name back.
 - Members of one network may learn this host's addresses in its other
   networks, and so which address ranges those use.
 

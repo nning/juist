@@ -1,11 +1,11 @@
 # 15 — The security review before the audit
 
 An internal review of the whole audit scope against
-[02-threat-model.md](02-threat-model.md), before M33's audit by a second model, so
+[02-threat-model.md](02-threat-model.md), before M34's audit by a second model, so
 that it goes to what a reader cannot find. It answers, for every
 defense the threat model claims, where the code enforces it and which test
 fails without it. It attests nothing: a review by a model, like one by a
-person, misses things, and M33's audit stays.
+person, misses things, and M34's audit stays.
 
 ## 1. Scope and tiers
 
@@ -38,8 +38,8 @@ Compute first, reading after:
   [12-validating.md](12-validating.md). A parser the fuzzer has not seen
   costs a reader's time on what a machine finds for free.
 - `make lint` and `make govulncheck` pass.
-- The review takes the tree after M17 to M31, whose changes it reads
-  whole, and M31's models. What lands after it is reviewed as a diff by
+- The review takes the tree after M17 to M32, whose changes it reads
+  whole, and M32's models. What lands after it is reviewed as a diff by
   the same protocol, scoped by its size, as
   [06-verification.md](06-verification.md) §5 says of every milestone
   after v1.
@@ -127,7 +127,7 @@ In this order, each step in a context of its own:
 2. **The test that fails.** Written before the fix, as
    [AGENTS.md](../AGENTS.md) requires of every fix; reverted fix, failing
    test, restored fix.
-3. **The fix**, one commit per round, `M32 review <k>: …`, through `make
+3. **The fix**, one commit per round, `M33 review <k>: …`, through `make
    check`, and through the privileged gate where it touches one.
 4. **The fix read again** by the tier's reviewer, for high findings: the
    diff alone.
@@ -146,7 +146,7 @@ Two sessions over the whole, with the inventory and every finding in view:
   defense the row claims that no code enforces; for each residual
   weakness, is it still bounded as described; and is there a weakness the
   list lacks.
-- **The operator's reading** of the residual weaknesses, which M33 owes:
+- **The operator's reading** of the residual weaknesses, which M34 owes:
   drafted from the threat model, checked against the findings.
 
 The closing commit records in [12-validating.md](12-validating.md), as the
@@ -157,5 +157,5 @@ and what did not run.
 ## 7. Open
 
 - Whether the inventory joins [06-verification.md](06-verification.md)
-  once the findings it points at are fixed, as the map M33's audit
+  once the findings it points at are fixed, as the map M34's audit
   starts from.

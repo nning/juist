@@ -15,6 +15,7 @@ import (
 
 	"github.com/nning/juist/internal/govern"
 	"github.com/nning/juist/internal/host"
+	"github.com/nning/juist/internal/instance"
 	"github.com/nning/juist/internal/waiting"
 	"github.com/nning/juist/trust/enroll"
 	"github.com/nning/juist/trust/log"
@@ -134,7 +135,7 @@ admins must approve, the invite waits for them.`}
 // inviteHere runs the invite in this process, on a state directory no daemon
 // owns.
 func (a *app) inviteHere(ctx context.Context, auth *log.Authority, adm *admitter, o inviteOptions) error {
-	opts := host.Options{Port: uint16(o.port), LAN: o.lan, SkipInterface: "juist0",
+	opts := host.Options{Port: uint16(o.port), LAN: o.lan, SkipInterface: instance.Device(0),
 		Addrs: func(port uint16) []netip.AddrPort { return a.inviteAddrs(port, auth.State()) }}
 	if o.dht {
 		opts.Helpers = a.helpers

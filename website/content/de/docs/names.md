@@ -17,7 +17,7 @@ lassen. Angenommen, auf deinem NAS läuft ein Mailserver, bekannt als
 führt der Name dann durch den Tunnel zum NAS. Das Zertifikat passt weiter, und
 für den Rest des Internets ändert sich nichts.
 
-Beides funktioniert unter Linux und FreeBSD, wo juist das DNS des Geräts
+Beides funktioniert unter Linux, FreeBSD und macOS, wo juist das DNS des Geräts
 selbst einrichtet ([wie](#resolver)). Die
 [Android-App]({{< relref "docs/android" >}}#names) löst sie ebenfalls auf,
 öffentliche Namen, sobald in ihren **Details** **Öffentliche Namen** an ist.
@@ -126,6 +126,10 @@ wieder ein, ohne Neustart.
   vorher nutzte. Das Paket lässt `/etc/resolv.conf` auf die Datei von juistd
   zeigen und stellt sie zurück, wenn juistd endet.
 - Unter FreeBSD übergibt juistd seinen Resolver an resolvconf.
+- Unter macOS schreibt juistd je Domain eine Datei nach `/etc/resolver`, die
+  seinen Resolver nennt, und entfernt sie, wenn es endet. Eine Datei
+  gleichen Namens dort, die nicht von juist ist, bleibt, und diese Domain
+  wird nicht über juistd aufgelöst.
 - Unter Android siehe [die Namen der App]({{< relref "docs/android" >}}#names).
 - Hat Tailscale `/etc/resolv.conf` geschrieben, lässt juist sie in Ruhe, und
   die Namen des Netzes werden auf diesem Gerät nicht aufgelöst.

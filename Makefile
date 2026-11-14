@@ -38,11 +38,11 @@ GO_PKG_DIRS = $(shell $(GO) list -f '{{.Dir}}' ./...)
 BUILDDIR ?= build
 CMDS     ?= juist juistd
 
-# Platforms v1 commits to (docs/05-roadmap.md M33). Building for each catches
+# Platforms v1 commits to (docs/05-roadmap.md M34). Building for each catches
 # build-tag rot in the embedded Tailscale stack.
 CROSS_PLATFORMS ?= linux/amd64 linux/arm64 freebsd/amd64 android/arm64
-# Platforms kept compiling though nothing ships for them: macOS, deferred past v1.
-CROSS_UNSHIPPED ?= darwin/arm64
+# Platforms that build but do not ship yet: macOS, until M29.
+CROSS_UNSHIPPED ?= darwin/arm64 darwin/amd64
 
 # -count=1 defeats the test cache: several tests here assert on external state
 # (open sockets, /proc) that the cache cannot see.
@@ -57,7 +57,8 @@ FUZZTIME ?= 30s
 # Wall-clock budget and worker count for one target's `fuzz-long` run. The gate
 # is 72 CPU-hours *per input surface*, and the two knobs multiply: 6h x 4
 # workers is 24 CPU-hours per target per run, so the corpus reaches the gate
-# over three preserved runs. Fuzzing does not run on CI at all — hours per input
+# over three preserved runs. Fuzzing does not run on CI, bar macos.yml's five
+# minutes of FuzzServe on darwin — hours per input
 # surface is far more hosted-runner time than this project is willing to spend
 # — so the gate is run by hand before a milestone closes. Do not run every
 # target in one sequential pass on a machine you cannot leave alone for days:
@@ -640,8 +641,26 @@ APKSIGNER     ?= $(lastword $(sort $(wildcard $(ANDROID_HOME)/build-tools/*/apks
 # An APK signed by another key than this certificate's, a test key say, is no release.
 ANDROID_CERT  := $(shell cat packaging/android-release.sha256)
 
+# make macos builds the tarball install.sh installs on a Mac: juist, juistd,
+# their LaunchDaemon and setup.sh, the same bytes on any builder.
+MACOS_ARCH ?= arm64
+
+.PHONY: macos
+macos: ## Build the macOS tarball for MACOS_ARCH (arm64, amd64) into build/macos
+	@set -e; kit=$(BUILDDIR)/macos/$(MACOS_ARCH)/juist; \
+	rm -rf $(BUILDDIR)/macos/$(MACOS_ARCH) && mkdir -p $$kit; \
+	for c in $(CMDS); do \
+		echo "==> $$c (darwin/$(MACOS_ARCH))"; \
+		GOOS=darwin GOARCH=$(MACOS_ARCH) $(GOBUILD) -o $$kit/$$c ./cmd/$$c; \
+	done; \
+	install -m 0755 packaging/macos/setup.sh packaging/macos/juistd-launch $$kit/; \
+	install -m 0644 packaging/macos/io.nning.juist.juistd.plist README.md LICENSE THIRD_PARTY_LICENSES $$kit/; \
+	t=$$(git log -1 --format=%ct); \
+	tar --sort=name --mtime=@$$t --owner=0 --group=0 --numeric-owner --mode=go-w \
+		-C $(BUILDDIR)/macos/$(MACOS_ARCH) -cf - juist | gzip -n9 > $(BUILDDIR)/macos/juist-macos-$(MACOS_ARCH).tar.gz
+
 .PHONY: release-files
-release-files: ## Build the release's packages under stable names into build/release, unsigned: the debs, FreeBSD's and, with RELEASE_RPM, the RPM
+release-files: ## Build the release's packages under stable names into build/release, unsigned: the debs, FreeBSD's, the macOS tarballs and, with RELEASE_RPM, the RPM
 	@test "$(RPM_RELEASE)" = 1 || { echo "release: HEAD is no release tag vX.Y.Z, or the tree has changes"; exit 1; }
 	@test -z "$(RELEASE_RPM)" || test "$(words $(RELEASE_RPM))" = 1 || { \
 		echo "release: want one RPM in $(RPMTOP)/RPMS/x86_64, found $(words $(RELEASE_RPM)); or RELEASE_RPM=FILE"; exit 1; }
@@ -655,6 +674,10 @@ release-files: ## Build the release's packages under stable names into build/rel
 	for a in amd64 aarch64; do \
 		$(MAKE) --no-print-directory pkg-freebsd FREEBSD_ABI=FreeBSD:15:$$a >/dev/null; \
 		cp $(BUILDDIR)/freebsd/juist-*.pkg $(RELEASE_DIR)/juist-freebsd15-$$a.pkg; \
+	done; \
+	for a in arm64 amd64; do \
+		$(MAKE) --no-print-directory macos MACOS_ARCH=$$a >/dev/null; \
+		cp $(BUILDDIR)/macos/juist-macos-$$a.tar.gz $(RELEASE_DIR)/; \
 	done; \
 	[ -z "$(RELEASE_RPM)" ] || cp $(RELEASE_RPM) $(RELEASE_DIR)/juist.x86_64.rpm
 
@@ -706,7 +729,8 @@ release-ci: ## Publish the release CI drafted for this tag: its packages checked
 		gh attestation verify $$f -R $(RELEASE_REPO) >/dev/null || { echo "release-ci: $${f##*/} has no provenance from $(RELEASE_REPO)"; exit 1; }; \
 	done; \
 	$(MAKE) --no-print-directory release-files RELEASE_RPM= >/dev/null; \
-	for f in juist_amd64.deb juist_arm64.deb juist-freebsd15-amd64.pkg juist-freebsd15-aarch64.pkg; do \
+	for f in juist_amd64.deb juist_arm64.deb juist-freebsd15-amd64.pkg juist-freebsd15-aarch64.pkg \
+		juist-macos-arm64.tar.gz juist-macos-amd64.tar.gz; do \
 		cmp -s $$ci/$$f $(RELEASE_DIR)/$$f || { echo "release-ci: CI's $$f differs from the one built here"; exit 1; }; \
 	done; \
 	if command -v $(RPMBUILD) >/dev/null 2>&1; then \

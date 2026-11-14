@@ -1,4 +1,4 @@
-//go:build freebsd || freebsdman
+//go:build freebsd || freebsdman || darwin
 
 package ipc
 

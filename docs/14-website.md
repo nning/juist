@@ -34,7 +34,7 @@ docs.juist.nning.io.
   them, and a features row names the use cases it serves (`uses:`).
 - **Trade-offs** take each residual weakness from
   [02-threat-model.md](02-threat-model.md) as what happens, why it is accepted
-  and what moves it; this is M33's documentation of the acceptances.
+  and what moves it; this is M34's documentation of the acceptances.
 - **Writing.** Every command, flag, default and output line is checked
   against the README, the commands' help or the code, and left out if it
   cannot be. Short sentences in the second person ("du" in German), no
@@ -103,7 +103,7 @@ The website and the app take their look from one place, `design/`:
 ## Still to come
 
 - **Every trade-off.** The home page carries five; the rest of
-  [02-threat-model.md](02-threat-model.md)'s list, for M33.
+  [02-threat-model.md](02-threat-model.md)'s list, for M34.
 - **A command reference** generated as `juist __manpage` is.
 - **Search and staleness.** Pagefind; a check that every page exists in both
   languages and that a translation is not older than its source.

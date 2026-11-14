@@ -228,7 +228,7 @@ own, so give each device's names their own record.
 - A name with a record of its own, such as the CAA or HTTPS record juist
   prints, no longer gets an address from `*.example.org`. Give it its own A
   and AAAA records too.
-- Members on Linux and FreeBSD resolve the domain through juistd. A name on
+- Members on Linux, FreeBSD and macOS resolve the domain through juistd. A name on
   443, or a shared one, resolves to its device while that device is
   reachable, so members reach it directly through the tunnel. DNSSEC is off
   for the domain on members ([Names]({{< relref "docs/names" >}})).

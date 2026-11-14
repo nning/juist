@@ -67,8 +67,8 @@ Schlüssel.
 
 - Ein Schlüssel aus `juist admins new` wird unter dem ersten Netz abgelegt,
   in dessen Log er auftaucht, sobald `juist admins` ihn auflistet oder er
-  dort eine Änderung unterschreibt. Mit `juist admins new alice --network
-  home` legst du das Netz gleich fest.
+  dort eine Änderung unterschreibt. Mit `juist admins new home alice` legst
+  du das Netz gleich fest.
 - Soll ein neues Netz mit einem Schlüssel verwaltet werden, den du schon
   hast, gibst du ihn an: `juist create lab --admin-key alice@home`.
 - `juist admins` listet die Schlüssel auf diesem Rechner auf und zu jedem die

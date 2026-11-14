@@ -239,7 +239,7 @@ Gib den Namen jedes Geräts deshalb einen eigenen Eintrag.
 - Ein Name mit einem eigenen Eintrag, etwa dem CAA- oder HTTPS-Eintrag, den
   juist ausgibt, bekommt keine Adresse mehr von `*.example.org`. Gib ihm auch
   eigene A- und AAAA-Einträge.
-- Mitglieder unter Linux und FreeBSD lösen die Domain über juistd auf. Ein
+- Mitglieder unter Linux, FreeBSD und macOS lösen die Domain über juistd auf. Ein
   Name auf 443 oder ein geteilter Name zeigt auf sein Gerät, solange es
   erreichbar ist. Mitglieder erreichen ihn dann direkt durch den Tunnel.
   DNSSEC ist für die Domain auf Mitgliedern aus

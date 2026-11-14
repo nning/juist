@@ -21,7 +21,7 @@ funktioniert genauso.
 - Ein Netz, in dem der Laptop oder das Telefon ist ([das erste Netz]({{< relref "docs/first-network" >}})).
 - Ein Mitglied, das eingeschaltet bleibt, unter Linux oder unter FreeBSD mit
   pf, als Exit-Node.
-- Auf dem Gerät, mit dem du unterwegs bist: Linux, FreeBSD oder die
+- Auf dem Gerät, mit dem du unterwegs bist: Linux, FreeBSD, macOS oder die
   [Android-App]({{< relref "docs/android" >}}).
 
 ## Einrichten

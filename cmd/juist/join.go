@@ -123,7 +123,7 @@ func (a *app) startHow() string {
 	case a.home.path == systemHome:
 		return enableCmd()
 	case len(keys) > 0:
-		return fmt.Sprintf("no juistd runs for a keystore (%s); install the juist package", a.home.path)
+		return fmt.Sprintf("no juistd runs for a keystore (%s); %s", a.home.path, installHint)
 	}
 	return "juistd --home " + a.home.path
 }

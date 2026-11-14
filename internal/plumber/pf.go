@@ -107,8 +107,9 @@ type GuardSpec struct {
 
 // guardRules is the pf anchor guarding dev as g asks, as Linux's in table
 // does: the loopback passes, as the host reaches its own addresses by it,
-// statelessly, as both ends of a connection come in by it.
-func guardRules(dev string, g GuardSpec) string {
+// statelessly, as both ends of a connection come in by it. The overlay's
+// addresses come in by juist's devices alone, as pf names them: overlayOn.
+func guardRules(dev, overlayOn string, g GuardSpec) string {
 	addrs := func(as []netip.Addr) string {
 		out := make([]string, 0, len(as))
 		for _, a := range as {
@@ -131,7 +132,7 @@ func guardRules(dev string, g GuardSpec) string {
 	}
 	if len(src) > 0 {
 		fmt.Fprintf(&b, "pass in quick on lo0 from <juist_overlay> no state\n")
-		fmt.Fprintf(&b, "block drop in quick on ! %s from <juist_overlay>\n", DeviceGroup)
+		fmt.Fprintf(&b, "block drop in quick on ! %s from <juist_overlay>\n", overlayOn)
 	}
 	return b.String()
 }
@@ -151,13 +152,17 @@ func prefixStrings(ps []netip.Prefix) []string {
 
 // callsAnchors reports whether a ruleset, as pfctl lists it, calls juist's
 // anchors, with no rule passing quick before the filter's.
-func callsAnchors(nat, rules string) bool {
-	if !strings.Contains(nat, `nat-anchor "juist/*"`) || !strings.Contains(nat, `rdr-anchor "juist/*"`) {
+func callsAnchors(nat, rules string) bool { return callsAnchorsUnder(nat, rules, `"juist/*"`) }
+
+// callsAnchorsUnder reports whether a ruleset calls the anchors under root,
+// quoted as pfctl lists it, with no rule passing quick before the filter's.
+func callsAnchorsUnder(nat, rules, root string) bool {
+	if !strings.Contains(nat, "nat-anchor "+root) || !strings.Contains(nat, "rdr-anchor "+root) {
 		return false
 	}
 	for _, l := range strings.Split(rules, "\n") {
 		l = strings.TrimSpace(l)
-		if strings.HasPrefix(l, `anchor "juist/*"`) {
+		if strings.HasPrefix(l, "anchor "+root) {
 			return true
 		}
 		if strings.HasPrefix(l, "pass") && strings.Contains(" "+l+" ", " quick ") {

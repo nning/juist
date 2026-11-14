@@ -176,7 +176,7 @@ func (a *app) warnFirewalled(st *ipc.Status, ports ...uint16) {
 	if a.host.firewalled == nil || st == nil || len(ports) == 0 {
 		return
 	}
-	dev := cmp.Or(st.Device, instance.Name(st.Instance))
+	dev := cmp.Or(st.Device, instance.Device(st.Instance))
 	if !pastableIfName(dev) {
 		return
 	}

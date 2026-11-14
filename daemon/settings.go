@@ -92,9 +92,10 @@ func (s *Service) setSettings(req *ipc.Request) error {
 	}
 	// Turning multicast off and copying no groups take no device, so that
 	// what one left kept elsewhere can be undone.
-	if (req.Multicast != nil && *req.Multicast || req.Groups != nil && (len(next.Groups) > 0 || next.automaticGroups())) &&
-		(o.TunName == "" || o.Netstack || runtime.GOOS == "android") {
-		return errors.New("multicast takes a device of juistd's own")
+	if req.Multicast != nil && *req.Multicast || req.Groups != nil && (len(next.Groups) > 0 || next.automaticGroups()) {
+		if err := multicastRefused(o, runtime.GOOS); err != nil {
+			return err
+		}
 	}
 	if req.Groups != nil && (len(next.Groups) > 0 || next.automaticGroups()) && !copiesGroups(o) {
 		return errors.New("groups are copied into the device on Linux alone")
@@ -246,5 +247,22 @@ func loadGroups(home string, logf func(string, ...any)) ([]netip.Addr, bool) {
 // carriesMulticast reports whether a device of opts's carries multicast: one
 // of its own, as the Android app's is not, and not turned off.
 func carriesMulticast(opts Options) bool {
-	return !opts.MulticastOff && opts.TunName != "" && !opts.Netstack && runtime.GOOS != "android"
+	return !opts.MulticastOff && opts.TunName != "" && !opts.Netstack && multicastOn(runtime.GOOS)
 }
+
+// multicastRefused says why a device of o's on goos takes no multicast, nil
+// where it does.
+func multicastRefused(o Options, goos string) error {
+	switch {
+	case o.TunName == "" || o.Netstack || goos == "android":
+		return errors.New("multicast takes a device of juistd's own")
+	case !multicastOn(goos):
+		return errors.New("a Mac carries no multicast")
+	}
+	return nil
+}
+
+// multicastOn reports whether juist carries multicast on goos: not in the
+// Android app, nor on macOS, whose helper gives the device no link-local
+// address.
+func multicastOn(goos string) bool { return goos != "android" && goos != "darwin" }

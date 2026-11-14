@@ -2,9 +2,11 @@
 # Installs juist from its package repository: adds the repository and its key
 # to apt (Debian, Ubuntu), dnf (Fedora) or pkg (FreeBSD), installs juist, and
 # on FreeBSD starts it; on SteamOS it installs the .deb as a system
-# extension. As root, or with sudo or doas at hand:
+# extension; on macOS it installs the latest release, checked against its
+# signed SHA256SUMS, and starts it. As root, or with sudo or doas at hand:
 #   curl -fsSL https://juist.nning.io/install | sh
-# JUIST_REPO names another repository than juist's.
+# JUIST_REPO names another repository than juist's, JUIST_RELEASE another
+# release's downloads.
 set -eu
 repo=${JUIST_REPO:-https://pkg.juist.nning.io/juist}
 name=${repo##*/}
@@ -85,6 +87,37 @@ steamos() {
 	$root sh "$tmp/root/usr/lib/juist/sysext.sh" install "$tmp/root" </dev/null
 }
 
+# signers is packaging/release-signers, whose key signs a release's SHA256SUMS.
+signers='juist namespaces="juist-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK6KY/c5advA2xMo/mQW11QFYAmiUDXPKTqvVruOoe7m'
+
+# macos installs the latest release's tarball for this Mac, checked against
+# SHA256SUMS and its signature, by the tarball's own setup.sh.
+macos() {
+	arch=$(uname -m)
+	# A shell under Rosetta says x86_64 on Apple silicon too.
+	[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" != 1 ] || arch=arm64
+	case $arch in
+	arm64) ;;
+	x86_64) arch=amd64 ;;
+	*) die "$arch has no juist release" ;;
+	esac
+	rel=${JUIST_RELEASE:-https://github.com/nning/juist/releases/latest/download}
+	kit=juist-macos-$arch.tar.gz
+	tmp=$(mktemp -d)
+	trap 'rm -rf "$tmp"' EXIT
+	for f in "$kit" SHA256SUMS SHA256SUMS.sig; do
+		curl -fsSL -o "$tmp/$f" "$rel/$f" || die "cannot download $rel/$f"
+	done
+	echo "$signers" >"$tmp/signers"
+	ssh-keygen -Y verify -f "$tmp/signers" -I juist -n juist-release -s "$tmp/SHA256SUMS.sig" <"$tmp/SHA256SUMS" >/dev/null 2>&1 ||
+		die "$rel/SHA256SUMS is not signed by juist's release key"
+	(cd "$tmp" && grep "  $kit\$" SHA256SUMS | shasum -a 256 -c -s -) || die "$rel/$kit is not the one SHA256SUMS names"
+	mkdir "$tmp/kit"
+	tar -xzf "$tmp/$kit" -C "$tmp/kit"
+	$root sh "$tmp/kit/juist/setup.sh" install "$tmp/kit/juist" </dev/null
+	repo=$rel
+}
+
 # Nothing may read the terminal's stdin: under curl | sh it is this script.
 case $(uname) in
 Linux)
@@ -103,6 +136,9 @@ Linux)
 	else
 		die "neither apt-get nor dnf here; https://docs.juist.nning.io/en/docs/install/ says how to build juist"
 	fi
+	;;
+Darwin)
+	macos
 	;;
 FreeBSD)
 	$root mkdir -p /usr/local/etc/pkg/repos /usr/local/etc/pkg/keys

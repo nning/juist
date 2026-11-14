@@ -1,14 +1,15 @@
 ---
 title: Install
 linkTitle: Install
-description: Install juist from its package repository or a release on Debian, Ubuntu, Fedora, FreeBSD or the Steam Deck, check the download, or build the package from source.
+description: Install juist from its package repository or a release on Debian, Ubuntu, Fedora, FreeBSD, macOS or the Steam Deck, check the download, or build the package from source.
 lead: Install juist as a system package on every device that should be in a network. Each release comes with ready-made packages and a signed list of their checksums.
 ---
 
 ## Supported systems
 
-juist runs on Linux and FreeBSD. It comes as a `.deb` for Debian and Ubuntu,
-an RPM for Fedora, and a pkg package for FreeBSD 15. Every
+juist runs on Linux, FreeBSD and macOS. It comes as a `.deb` for Debian and
+Ubuntu, an RPM for Fedora, a pkg package for FreeBSD 15, and a tarball for
+macOS 13 or later ([On a Mac](#macos)). Every
 [release](https://github.com/nning/juist/releases/latest) has packages for
 amd64 and arm64, except the RPM, which is only available for x86_64. On
 another Linux with systemd, Arch or Gentoo say, `make install` installs it
@@ -226,6 +227,53 @@ Linux.
 - `sudo /usr/lib/juist/sysext.sh uninstall` removes juist again; what stays
   is listed under [What stays after uninstalling](#what-stays-after-uninstalling).
 
+## On a Mac {#macos}
+
+On macOS 13 or later, Apple silicon or Intel, the same line installs juist
+from the latest release:
+
+```sh
+curl -fsSL https://juist.nning.io/install | sh
+```
+
+The script downloads `juist-macos-arm64.tar.gz` (on Intel
+`juist-macos-amd64.tar.gz`), checks it against the release's signed
+`SHA256SUMS` ([Verifying a download](#verifying-a-download)) and runs its
+`setup.sh` with sudo. That puts `juist` and `juistd` into `/Library/juist`,
+links `/usr/local/bin/juist`, makes the hidden system user `_juist`, and loads
+the LaunchDaemon `io.nning.juist.juistd`, which starts juistd now and at every
+boot. juistd keeps a helper as root, which creates the device `utun100` and
+sets its addresses and routes, and runs the rest as `_juist`. The network's
+names resolve through files in `/etc/resolver`, one per domain, which juistd
+removes as it stops. Its log is `/var/log/juistd.log`, which only root
+can read and nothing rotates. The tarball has no man pages or shell completion; `juist help
+COMMAND` says what each command does.
+
+A Mac joins several networks as other devices do. It uses exit nodes, through which it also
+answers connections from the internet, and a subnet router's subnets, but
+cannot be an exit node, route a subnet, relay, share or publish, or carry
+multicast. juist turns pf on under macOS's own rules and keeps the Mac's
+overlay addresses to the tunnel with it; where the host's pf rules call no
+`com.apple` anchor, `juist health` says that a device on the LAN can reach
+those addresses. A program that turns pf off (`pfctl -d`) turns this guard,
+and the block that keeps traffic in while an exit node cannot be used, off
+too, until juist next changes its rules; where another program turns pf on
+again meanwhile and later off, that goes unnoticed until then as well. Running the script again updates juist, and leaves a juistd you stopped
+stopped. To stop juistd until you start it again:
+
+```sh
+# stop
+sudo launchctl disable system/io.nning.juist.juistd && sudo launchctl bootout system/io.nning.juist.juistd
+# start
+sudo launchctl enable system/io.nning.juist.juistd && sudo launchctl bootstrap system /Library/LaunchDaemons/io.nning.juist.juistd.plist
+```
+
+To remove juist, run `sudo /Library/juist/setup.sh remove`. It keeps the
+Mac's keys in `/var/db/juist`, and another network's in `/var/db/juist1` and
+so on, and the `_juist` users who own them;
+`sudo /Library/juist/setup.sh remove --keys` removes those too. Once juist
+is removed, the `setup.sh` in a release's tarball does that.
+
 ## In a container
 
 An app in a container can be a device of its own, with its own addresses and
@@ -355,6 +403,7 @@ sudo apt remove juist      # Debian, Ubuntu
 sudo dnf remove juist      # Fedora
 pkg delete juist           # FreeBSD, as root
 sudo /usr/lib/juist/sysext.sh uninstall   # SteamOS
+sudo /Library/juist/setup.sh remove       # macOS
 ```
 
 This stops juistd for every network on the device and undoes what juist set
@@ -376,6 +425,8 @@ a relay on port 443, and the changes made by `juist exit serve`.
   `juist: kept /var/lib/juist-serve, the terminator's ACME account, which CAA records may name`.
 - On FreeBSD, the removal prints a single line starting with `juist: kept`
   that lists everything that stays.
+- On macOS, `/var/db/juist`, `/var/db/juist1` and so on and their `_juist` users stay; the removal says so
+  in a line starting with `juist: kept`.
 - Your admin keys in `~/.config/juist` are not part of the package, so
   removing it does not touch them.
 

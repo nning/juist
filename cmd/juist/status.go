@@ -693,6 +693,7 @@ func httpsNotes(s *ipc.Status) []line {
 	case h.ListenError != "":
 		note(lineWarn, "the relay cannot bind 443: %s", h.ListenError)
 		switch {
+		case strings.Contains(h.ListenError, "not on macOS"):
 		case !strings.Contains(h.ListenError, "permission denied") && !strings.Contains(h.ListenError, "not granted"):
 			note(lineHint, "another program holds 443 here")
 		case types.ValidateHostName(h.Name) == nil:
@@ -829,6 +830,10 @@ func syncNotes(n *notes, s *ipc.Status) {
 		n.note(lineInfo, "not heard from: %s", what)
 	}
 	dev := cmp.Or(s.Device, instance.Name(s.Instance))
+	// A Mac's utun is no Linux member's device, whose name is juistN.
+	if strings.HasPrefix(dev, "utun") {
+		dev = instance.Name(s.Instance)
+	}
 	if len(s.SyncFailing) > 0 {
 		// Which system the other end runs no announcement says: a phone has
 		// no firewall to open.

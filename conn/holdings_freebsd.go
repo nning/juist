@@ -74,33 +74,3 @@ func InstanceHoldings(self int, own string) ([]Holding, error) {
 	slices.SortFunc(out, func(a, b Holding) int { return a.Instance - b.Instance })
 	return out, nil
 }
-
-// routeDst is a route message's destination, a single host where it names
-// no netmask.
-func routeDst(rm *route.RouteMessage) (netip.Prefix, bool) {
-	if len(rm.Addrs) <= syscall.RTAX_DST {
-		return netip.Prefix{}, false
-	}
-	var dst netip.Addr
-	switch a := rm.Addrs[syscall.RTAX_DST].(type) {
-	case *route.Inet4Addr:
-		dst = netip.AddrFrom4(a.IP)
-	case *route.Inet6Addr:
-		dst = netip.AddrFrom16(a.IP)
-	default:
-		return netip.Prefix{}, false
-	}
-	if dst.IsLinkLocalUnicast() || dst.IsMulticast() {
-		return netip.Prefix{}, false
-	}
-	bits := dst.BitLen()
-	if rm.Flags&syscall.RTF_HOST == 0 && len(rm.Addrs) > syscall.RTAX_NETMASK {
-		switch m := rm.Addrs[syscall.RTAX_NETMASK].(type) {
-		case *route.Inet4Addr:
-			bits, _ = net.IPMask(m.IP[:]).Size()
-		case *route.Inet6Addr:
-			bits, _ = net.IPMask(m.IP[:]).Size()
-		}
-	}
-	return netip.PrefixFrom(dst, bits).Masked(), true
-}
