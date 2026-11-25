@@ -50,6 +50,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "tray" {
+		if err := tray(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "probe:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "visitors" {
 		if err := visitors(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "probe:", err)

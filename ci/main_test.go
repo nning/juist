@@ -294,17 +294,20 @@ func TestADryCheckStampsNothing(t *testing.T) {
 	}
 }
 
-// make check taken from the stamp still runs the host-network probes,
-// whichever stages run, and under the race detector.
+// make check taken from the stamp still runs the host-network probes and
+// juist tray's D-Bus tests, whichever stages run, required and under the
+// race detector.
 func TestAStampedCheckKeepsTheHostNetworkProbes(t *testing.T) {
 	r := &runner{o: options{stages: []string{stageCheck}, fast: true, lab: "host"}}
 	steps, err := r.steps(stageCheck)
-	if err != nil || !slices.Equal(steps, []string{"test-host-net"}) {
+	if err != nil || !slices.Equal(steps, []string{"test-host-net", "test-desktop"}) {
 		t.Errorf("make check from the stamp runs %v, %v", steps, err)
 	}
-	out, err := exec.Command("make", "-n", "-s", "--no-print-directory", "-C", "..", "test-host-net").Output()
-	if err != nil || !strings.Contains(string(out), "-race") || !strings.Contains(string(out), "JUIST_REQUIRE_HOST_NET=1") {
-		t.Errorf("make test-host-net runs %s, %v", out, err)
+	for target, gate := range map[string]string{"test-host-net": "JUIST_REQUIRE_HOST_NET=1", "test-desktop": "JUIST_REQUIRE_DBUS=1"} {
+		out, err := exec.Command("make", "-n", "-s", "--no-print-directory", "-C", "..", target).Output()
+		if err != nil || !strings.Contains(string(out), "-race") || !strings.Contains(string(out), gate) {
+			t.Errorf("make %s runs %s, %v", target, out, err)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ go 1.27.4
 
 require (
 	filippo.io/edwards25519 v1.2.0
+	fyne.io/systray v1.12.2
 	github.com/anacrolix/dht/v2 v2.24.0
 	github.com/anacrolix/log v0.17.1-0.20251118025802-918f1157b7bb
 	github.com/anacrolix/torrent v1.61.1-0.20260911233437-76452a2c8a2f

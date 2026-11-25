@@ -254,6 +254,12 @@ Serve as the network's ingress: run the juist-ingress service on 443, 443/udp (H
 
 - `-S, --stop`: stop serving
 
+### `juist tray`
+
+Show this device's state in the desktop's status bar: whether it is connected, the exit node in use, and what juist health warns of. Its menu copies the device's name and addresses, lists the devices and switches the exit node; for another user than the operator, it shows the state alone. \-\-autostart starts it with your desktop session from then on.
+
+- `-a, --autostart`: start it with your desktop session; =false: no longer
+
 ### `juist reset [NETWORK]`
 
 Forget the network on this device: keys, log, peers and operator, as on a fresh install. Admin keys stay. If the network still lists the device, remove it first, or use \-\-force. With several networks, only the named one is forgotten, with its juistd unless that is the default.

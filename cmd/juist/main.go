@@ -63,6 +63,7 @@ var commands = []command{
 	{name: "share", group: groupDaily, summary: "share a file or directory on the internet", run: cmdShare},
 	{name: "ingress", group: groupDaily, summary: "accept connections for published names", run: cmdIngress,
 		family: ingressFamily},
+	{name: "tray", group: groupDaily, summary: "show the state in the desktop's status bar", run: cmdTray},
 	{name: "reset", group: groupDaily, summary: "forget the network and keys", run: cmdReset},
 
 	{name: "grant", group: groupAdmin, summary: "give a device a role", run: cmdGrant},
@@ -321,7 +322,7 @@ func (a *app) runCommand(c *command, g globals, args []string) error {
 		return err
 	}
 	a.home, a.homeExplicit = h, g.homeExplicit
-	a.socket, a.socketExplicit = g.socket, g.socket != ""
+	a.socket, a.socketExplicit, a.socketFromEnv = g.socket, g.socket != "", g.socketFromEnv
 	a.network, a.networkFromEnv = g.network, g.networkFromEnv
 	return c.run(a, args)
 }
@@ -332,8 +333,9 @@ type globals struct {
 	homeExplicit bool
 	socket       string
 	network      string
-	// networkFromEnv says network is $JUIST_NETWORK's, not --network's.
-	networkFromEnv bool
+	// networkFromEnv says network is $JUIST_NETWORK's, not --network's, and
+	// socketFromEnv socket $JUIST_SOCKET's.
+	networkFromEnv, socketFromEnv bool
 }
 
 // globalShorts spell the global options with one letter.
@@ -343,7 +345,7 @@ var globalShorts = map[string]string{"H": "home", "s": "socket"}
 // they appear, so they can be given before or after the command.
 func extractGlobals(args []string) (globals, []string, error) {
 	g := globals{home: defaults.Home(), socket: os.Getenv("JUIST_SOCKET"), network: os.Getenv("JUIST_NETWORK")}
-	g.networkFromEnv = g.network != ""
+	g.networkFromEnv, g.socketFromEnv = g.network != "", g.socket != ""
 	_, g.homeExplicit = os.LookupEnv("JUIST_HOME")
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
@@ -382,7 +384,7 @@ func extractGlobals(args []string) (globals, []string, error) {
 		case "home":
 			g.home, g.homeExplicit = value, true
 		case "socket":
-			g.socket = value
+			g.socket, g.socketFromEnv = value, false
 		default:
 			g.network, g.networkFromEnv = value, false
 		}

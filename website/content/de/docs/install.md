@@ -443,7 +443,9 @@ Firewall-Regel für `juist0`, ein Ingress, ein Relay auf Port 443 und die
 - Unter macOS bleiben `/var/db/juist`, `/var/db/juist1` usw. und ihre `_juist`-Benutzer; das meldet
   das Entfernen in einer Zeile, die mit `juist: kept` beginnt.
 - Deine Admin-Schlüssel in `~/.config/juist` gehören nicht zum Paket und
-  bleiben beim Entfernen unberührt.
+  bleiben beim Entfernen unberührt, ebenso
+  `~/.config/autostart/juist-tray.desktop`, das `juist tray --autostart`
+  angelegt hat; ohne juist startet es nichts.
 
 ## Fehlersuche
 

@@ -124,6 +124,7 @@ and [Invites](https://docs.juist.nning.io/en/docs/invites/).
 | let a device with a public address relay for the others | `juist grant vps relay` | [relays](https://docs.juist.nning.io/en/docs/relays/) |
 | reach the network from a hotel or office that only lets HTTPS out | one relay on 443: the ingress's serves `relay.DOMAIN` by itself, another `sudo juist set --relay-name relay.example.org`; `sudo juist set --https-only` here where traffic is inspected | [HTTPS only](https://docs.juist.nning.io/en/docs/https-only/) |
 | send this device's internet traffic through another | `juist grant vps exit`, `juist exit serve` there, `juist exit use vps` here | [exit nodes](https://docs.juist.nning.io/en/docs/exit-nodes/) |
+| see the state and switch the exit node in a Linux desktop's status bar | `juist tray --autostart`, from your next login | [status bar](https://docs.juist.nning.io/en/docs/desktop/) |
 | let every device reach the LAN behind one | `juist subnet add nas 192.168.1.0/24`, then `juist subnet serve` on it | [subnets](https://docs.juist.nning.io/en/docs/subnets/) |
 | say which device may open what on which, and use which exit node or subnet | `juist policy edit`, or `juist policy set policy.conf` | [access policy](https://docs.juist.nning.io/en/docs/access/) |
 | publish a service on the internet, or share a file | `juist publish immich 2283`, `juist share ~/photos` | [publishing](https://docs.juist.nning.io/en/docs/publishing/) |

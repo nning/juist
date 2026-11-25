@@ -166,6 +166,10 @@ HOST_NET_PKGS = $(shell $(GO) list -test -f '{{if .ForTest}}{{.ForTest}} {{join 
 test-host-net: ## Run the tests gated on the host's network features, the gates required
 	JUIST_REQUIRE_HOST_NET=1 CGO_ENABLED=1 $(GO) test $(GOFLAGS) $(sort $(HOST_NET_PKGS)) $(TEST_FLAGS) -race
 
+.PHONY: test-desktop
+test-desktop: ## Run juist tray's tests on a D-Bus of their own, dbus-daemon required
+	JUIST_REQUIRE_DBUS=1 CGO_ENABLED=1 $(GO) test $(GOFLAGS) ./internal/tray $(TEST_FLAGS) -race
+
 # The privileged tests — M3a's real device and netns harness, and M3b's NAT
 # matrix on top of it (conn/osplumbing_test.go, conn/netns*_linux_test.go) —
 # need root, /dev/net/tun, iproute2 and iptables, and skip without them — which

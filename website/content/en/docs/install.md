@@ -428,7 +428,9 @@ a relay on port 443, and the changes made by `juist exit serve`.
 - On macOS, `/var/db/juist`, `/var/db/juist1` and so on and their `_juist` users stay; the removal says so
   in a line starting with `juist: kept`.
 - Your admin keys in `~/.config/juist` are not part of the package, so
-  removing it does not touch them.
+  removing it does not touch them. Nor does it touch
+  `~/.config/autostart/juist-tray.desktop`, which `juist tray --autostart`
+  wrote; without juist it starts nothing.
 
 ## Troubleshooting
 

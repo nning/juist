@@ -61,6 +61,8 @@ if [ -n "$DNS" ]; then
 fi
 apt-get update -q >/dev/null
 DEBIAN_FRONTEND=noninteractive apt-get install -y -q tcpdump libndpi-bin >/dev/null
+# A headless desktop for juist tray: sway, whose bar hosts the tray.
+DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends sway dbus-daemon dbus-bin >/dev/null
 apt-get clean
 echo 'MaxSessions 64' >> /etc/ssh/sshd_config`,
 	}

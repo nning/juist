@@ -41,6 +41,11 @@
   en: {title: Exit nodes, text: "A device's internet traffic and DNS, sent through another member."}
   de: {title: Exit-Nodes, text: "Internetverkehr und DNS eines Geräts über ein anderes Mitglied."}
   uses: [docs/use/public-wifi]
+- doc: docs/desktop
+  en: {title: Status bar, text: "An icon in the desktop's status bar shows whether the device is connected, the exit node in use and what needs attention; its menu switches the exit node."}
+  de: {title: Statusleiste, text: "Ein Symbol in der Statusleiste des Desktops zeigt, ob das Gerät verbunden ist, welcher Exit-Node genutzt wird und was Aufmerksamkeit braucht; sein Menü wechselt den Exit-Node."}
+  uses: [docs/use/public-wifi]
+  only: Linux
 - doc: docs/subnets
   en: {title: Subnet routers, text: "The LAN behind one member, reachable from the others."}
   de: {title: Subnet-Router, text: "Das LAN hinter einem Mitglied, erreichbar für die anderen."}

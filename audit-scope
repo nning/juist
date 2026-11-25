@@ -60,9 +60,11 @@ out internal/pipe                    copies bytes between two connections
 out internal/proxyproto              reads a header the ingress alone writes
 out internal/rendezvous              an untrusted meeting point; the link's secret seals what passes
 out internal/resolved                tells systemd-resolved where to ask
+out internal/sniprobe                tests
 out internal/statedir                the state directory's layout
 out internal/terminator              TLS by crypto/tls behind the ingress; holds no member's key
 out internal/testvm                  the CI harness and the test lab, not shipped
+out internal/tray                    a desktop user's view of the control socket; juist makes every change
 out internal/underlay                picks the addresses a device announces
 out internal/webstyle                the served pages' look
 out interop                          the test lab

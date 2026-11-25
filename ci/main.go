@@ -45,7 +45,7 @@ const (
 // A change to it sets the VM up again.
 const provision = `set -e
 sudo dnf install -y -q git make tar gzip xz gcc rpm-build systemd-rpm-macros dpkg \
-	iproute iputils iptables-nft nftables openssh-clients qemu-system-x86-core qemu-img chromium iperf3
+	iproute iputils iptables-nft nftables openssh-clients qemu-system-x86-core qemu-img chromium iperf3 dbus-daemon
 sudo usermod -aG kvm ci
 `
 
@@ -518,9 +518,9 @@ func (r *runner) steps(stage string) ([]string, error) {
 		return []string{"ci-deps", "test-os-plumbing-sudo"}, nil
 	case stageCheck:
 		// Of make check taken from the stamp, what this host may have
-		// skipped: the host-network probes, required.
+		// skipped: the host-network probes and the desktop's, required.
 		if !r.checkVM {
-			return []string{"test-host-net"}, nil
+			return []string{"test-host-net", "test-desktop"}, nil
 		}
 		out, err := exec.Command("make", "-s", "--no-print-directory", "-C", r.tree, "print-CHECK_STEPS").Output()
 		if err != nil {
@@ -528,7 +528,7 @@ func (r *runner) steps(stage string) ([]string, error) {
 		}
 		var steps []string
 		for _, s := range strings.Fields(string(out)) {
-			steps = append(steps, "JUIST_REQUIRE_HOST_NET=1 "+s)
+			steps = append(steps, "JUIST_REQUIRE_HOST_NET=1 JUIST_REQUIRE_DBUS=1 "+s)
 		}
 		return steps, nil
 	case stageLab:

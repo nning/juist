@@ -58,6 +58,9 @@ zcat /usr/local/share/man/man8/juistd.8.gz > /tmp/a; juistd __manpage > /tmp/b; 
 	t.Run("Linux serves FreeBSD", func(t *testing.T) {
 		serve(t, fb, lx, fb, lxSide, fbSide, lx4, lx6)
 	})
+	t.Run("tray", func(t *testing.T) {
+		tray(t, fb, lx)
+	})
 	t.Run("names", func(t *testing.T) {
 		names(t, fb, lx, fb4, fb6, lx6)
 	})

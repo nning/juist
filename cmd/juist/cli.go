@@ -54,6 +54,7 @@ type app struct {
 	homeExplicit   bool
 	socket         string
 	socketExplicit bool
+	socketFromEnv  bool // socket is $JUIST_SOCKET's, not --socket's
 	node           node
 
 	// host is where the host's juistd instances are, one per network;
@@ -340,6 +341,7 @@ var shorts = map[string]byte{
 	"admin-name":   'u',
 	"admin-votes":  'v',
 	"all":          'a',
+	"autostart":    'a',
 	"background":   'b',
 	"device":       'n',
 	"devices":      'd',

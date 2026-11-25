@@ -1558,6 +1558,20 @@ Google's FCM to `mtalk.google.com:5228`.
 
 ## M31 — A desktop app on Linux
 
+**Done** on 2026-11-20: `juist tray`, juist's state in a Linux desktop's
+status bar as a StatusNotifierItem, in juist's own binary and turned on per
+user (`juist tray --autostart`): the logo as its icon, off, connected, an
+exit node in use, a warning or an alarm; a menu that copies the device's
+addresses, lists the devices and switches the exit node, the operator's
+whole and another user's the state alone; notifications for new warnings
+and alarms. Reviewed in 8 rounds with commits of their own, the closing
+one (8) over the whole diff, and the follow-ups on reviews 3, 5, 7 and 8
+confirming nothing above minor; validated by `make ci-vm` at M30, the
+lab's `tray` part among it ([12-validating.md](12-validating.md), "The last
+privileged run"). Exit criteria (1) to (3) passed in the lab; (4), by the
+user's choice Fedora with GNOME alone, passed by hand on 2026-11-20. Core
+8 098 lines, audit scope 29 395, measured after it (2026-11-20).
+
 An icon in the desktop's status bar, as Tailscale's on Linux (`tailscale
 systray`): the state at a glance, and what a laptop's user changes on the
 move without a terminal. Before the audit, so that M34 covers what it asks
@@ -1575,22 +1589,34 @@ of the control socket.
   line's.
 - **How:** StatusNotifierItem over D-Bus, which KDE, Xfce, Cinnamon and
   sway's bars show, and GNOME only with the AppIndicator extension, which
-  `juist health` does not judge; the app says where no host is found.
-  `fyne.io/systray`, which Tailscale's pinned module uses
-  (`client/systray`), is the lead, so no cgo and no GTK. A binary of its
-  own, `juist-tray`, started by an XDG autostart entry the package installs,
-  so that a server's install can leave it out.
-- **Open decisions:** whether it is a package of its own; a window beyond
-  the menu (the status page, M9f, opens in the browser meanwhile); FreeBSD's
-  desktops, which take the same binary.
+  `juist health` does not judge; the app says where no host is found, on
+  stderr and in a notification. `fyne.io/systray`, which Tailscale's pinned
+  module uses (`client/systray`), so no cgo and no GTK. `juist tray`, in
+  juist's own binary as `tailscale systray` is in Tailscale's: the
+  package adds nothing that starts it, and `juist tray --autostart` puts
+  an XDG autostart entry in the person's own `~/.config/autostart`, so
+  that each user turns it on for themselves and a server is untouched.
+  It polls the status over the socket every 3 s, and runs `juist health`
+  and `juist status` in its own process where the menu would change, else
+  once a minute; a choice of exit node runs `juist exit use` or
+  `juist exit off`, so that the CLI's checks hold.
+- **Decided:** in juist's package, opt-in per user, after a first part
+  as a package of its own (`juist-tray`), which an update of juist and
+  the tray's had to keep in step; no window beyond the menu; on FreeBSD
+  it builds, with no desktop tested.
+- **Tests:** `internal/tray` on a D-Bus of its own in `make check`
+  (`make test-desktop` requires it), the bar's watcher and a notification
+  daemon faked; the lab's `tray`, headless sway on the Debian VM, for exit
+  criteria (1) to (3), as the lab has an exit node to route through.
 
-- **Exit criteria:** (1) on a desktop session in the CI VM (sway, headless),
+- **Exit criteria:** (1) on a desktop session in the lab (sway, headless),
   the item appears on D-Bus, its menu lists the granted exit nodes, choosing
   one routes through it and the icon says so; (2) a user who is not the
   operator gets the menu without the switches; (3) stopping juistd turns the
   icon to off and starting it brings the state back, without restarting the
-  app; (4) by hand on GNOME with the extension and on KDE, Debian and Fedora,
-  the package installed and removed cleanly.
+  app; (4) by hand on Fedora with GNOME and the extension (the user's
+  choice, 2026-11-20, in place of GNOME and KDE on Debian and Fedora):
+  `juist tray`, `juist tray --autostart` and `--autostart=false`.
 
 ## M32 — Formal models of what juist designed itself
 

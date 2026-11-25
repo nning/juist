@@ -5,6 +5,7 @@ Maintainer: juist developers <noreply@github.com>
 Installed-Size: @SIZE@
 Depends: systemd
 Recommends: polkitd
+Suggests: wl-clipboard | xclip | xsel, gnome-shell-extension-appindicator
 Section: net
 Priority: optional
 Homepage: https://github.com/nning/juist

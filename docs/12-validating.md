@@ -113,10 +113,12 @@ cheapest first, a step for each make target, the first step to fail ending the
 run:
 
 - **vm**, what only a VM shows: the privileged tests, in parallel;
-- **check**, every step of `make check`, with `JUIST_REQUIRE_HOST_NET=1`;
+- **check**, every step of `make check`, with `JUIST_REQUIRE_HOST_NET=1`
+  and `JUIST_REQUIRE_DBUS=1`, which fails juist tray's D-Bus test where
+  `dbus-daemon` is missing rather than skipping it;
 - **lab**, `make interop`, on this host beside the VM from the start, so the
   longest stage sets the run's length, ending at its first failed part;
-- **build**, the RPM in the VM, and the cross builds and `govulncheck` on this
+- **build**, the RPMs in the VM, and the cross builds and `govulncheck` on this
   host after the lab, on its CPUs.
 
 The VM's stages run in a Fedora 44 Cloud VM under KVM, set up on first use in
@@ -140,8 +142,9 @@ Android smoke test, says it is not a closing run.
 `make check` stamps `build/check.stamp` with the hash of the tree it passed on,
 where the tree did not change meanwhile. `make ci-vm FAST=1` takes `make check`
 from that stamp where it names the snapshot's tree, and runs in its place
-`make test-host-net`, the tests the host's network features gate, under the
-race detector, which this host's `make check` may have skipped: what a run
+`make test-host-net`, the tests the host's network features gate, and `make
+test-desktop`, juist tray's on a D-Bus of their own, under the race detector,
+which this host's `make check` may have skipped: what a run
 before the closing one can leave out. A stamp is written only where `make
 check` took none of the variables it reads from the command line or the
 environment and ran without `-n`, `-t`, `-q`, `-i` or `-e`, each run from a
@@ -521,6 +524,19 @@ interop`).
 | a network in an IPv4 range a lower slot holds runs on IPv6 alone and says so; a join takes a slot above every network the phone is in, the most four, and one into a network a slot holds already is undone; one exit node is chosen at a time, the new one before the other goes, the new one's network back to its own where the other cannot go | `mobile`: `TestASecondNetworkInTheFirstsIPv4RunsWithoutIt`, `TestAJoinLeavesTheNetworksThePhoneIsIn`, `TestAnExitNodeIsChosenBeforeTheOtherGoes`, `TestExitNodesAreChosenOneAtATime` | no |
 | an idle phone in the emulator stays within its budget, with and without a relay, and answers a member's ping with its screen off | `make android-idle` | the emulator |
 
+### The status bar
+
+| Claim | Where it is checked | Privileged |
+|---|---|---|
+| the item appears on a bar's D-Bus, its menu lists the exit nodes granted, choosing one runs `juist exit use`, and the icon says so | `internal/tray`: `TestTrayOnTheBus`; the lab's `tray` | `make interop` for the route |
+| another user than the operator gets the state, no devices and no switches | `internal/tray`: `TestReaderGetsNoMembersAndNoSwitches`, `TestTrayOnTheBus`; the lab's `tray` | no |
+| juistd stopping turns the icon off, starting it brings the state back | `internal/tray`: `TestWatcherFollowsJuistd`, `TestTrayOnTheBus`; the lab's `tray` | no |
+| the icon is grey where status has no tunnel, and each alarm and new warning is a notification | `internal/tray`: `TestNoTunnelIsNotConnected`, `TestNews`, `TestTrayOnTheBus` | no |
+| the tray names the network to its juist, and its juist reads health, status and exit beside an instance down | `internal/tray`: `TestClicksRunJuist`; `cmd/juist`: `TestTrayJuistBesideAnInstanceDown` | no |
+| it ends on a signal, at once though juist or a notification daemon hangs, and an update's juist takes its place | `internal/tray`: `TestTrayEndsOnASignal`, `TestTheTrayEndsWithoutWaitingForJuist`, `TestTrayEndsThoughNotificationsHang`, `TestTrayEndsWhenJuistIsReplaced`; `cmd/juist`: `TestTrayRestartsFromWhereItStarted` | no |
+| a bar that missed its registration gets it again, and one that shows none is said | `internal/tray`: `TestTrayRegistersAgainWhereTheBarMissedIt`, `TestTraySaysWhereNoStatusBarShowsIt` | no |
+| `--autostart` writes and removes the person's entry, which starts it in every desktop | `cmd/juist`: `TestTrayAutostart`, `TestTrayEntryStartsInEveryDesktop`; the lab's `tray`, by the entry's Exec | no |
+
 ### CI
 
 | Claim | Where it is checked | Privileged |
@@ -607,6 +623,22 @@ clear how old the evidence is.
   (`20261125-180738-7bc4157f7f06`), and `build` in 3m13s, `make cross`
   45s (`20261125-185700-7bc4157f7f06`), after one run lost the VM's ssh
   in `make rpm` at a load of 4.4.
+- **`make ci-vm`, 2026-11-20, at M30** (M31's closing review and its
+  follow-up, before M31 done): every stage passed in 41m9s
+  (`20261120-130920-M30`), `make test-race` 11m39s, the lab's
+  normal and upgrade runs 33m24s, the `tray` part among them (headless
+  sway on the Debian VM, the operator choosing fb from the menu and
+  reaching the internet through it, another user's menu without
+  switches, the icon off and back), `make cross` 6m18s. Two runs before
+  it failed: at M30 the second user's tray was never registered
+  (fixed in M30), and at M30, under a load of 6, a NAT matrix
+  cell learned no address in a minute and, in the next, `HTTPS alone`
+  homed at no relay in 3 minutes; neither part changed since. `make
+  android-smoke` did not run, `ANDROID_HOME` being unset; it last ran on
+  2026-11-17 (M30, above).
+- **`juist tray` by hand, 2026-11-20**: the user on Fedora with GNOME and
+  the AppIndicator extension ran `juist tray`, `juist tray -a` and
+  `juist tray --autostart=false` (M31's exit criterion 4).
 - **Pair-key recovery (M25 review 9), 2026-11-01, at 66409ed**:
   `make ci-vm STAGES=check,lab` passed in 35m5s
   (`20261101-190014-66409ed59c3f`), the lab's normal and upgrade runs

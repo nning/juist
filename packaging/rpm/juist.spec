@@ -36,6 +36,9 @@ BuildRequires:  systemd-rpm-macros
 
 # Runs the rule that lets juistd route the network's DNS through resolved.
 Recommends:     polkit
+# For juist tray: copying by a click, and its icon on GNOME.
+Suggests:       wl-clipboard
+Suggests:       gnome-shell-extension-appindicator
 
 %description
 juist is a peer-to-peer mesh VPN with no coordination server. WireGuard

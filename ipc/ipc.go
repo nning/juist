@@ -933,6 +933,10 @@ func DecodeResponse(b []byte) (Response, error) {
 // says reaches the operator's terminal, hints to paste included.
 func makePrintable(v any) { printableValue(reflect.ValueOf(v)) }
 
+// MakePrintable makes every string v points to safe to print, as a call
+// does with what the daemon answers.
+func MakePrintable(v any) { makePrintable(v) }
+
 var (
 	addrType     = reflect.TypeFor[netip.Addr]()
 	addrPortType = reflect.TypeFor[netip.AddrPort]()
