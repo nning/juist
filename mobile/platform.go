@@ -33,19 +33,21 @@ func (noPlatform) Log(string)                      {}
 // establish is what [Platform.Establish] brings the interface up with: its
 // addresses and the routes into it, as prefixes, the DNS servers that take
 // all of the phone's lookups, where any, the search domains they try a name
-// without a dot under, and its MTU.
+// without a dot under, its MTU, and whether the routes carry the internet
+// to an exit node.
 type establish struct {
-	Addrs  []string `json:"addrs"`
-	Routes []string `json:"routes"`
-	DNS    []string `json:"dns,omitempty"`
-	Search []string `json:"search,omitempty"`
-	MTU    int      `json:"mtu"`
+	Addrs    []string `json:"addrs"`
+	Routes   []string `json:"routes"`
+	DNS      []string `json:"dns,omitempty"`
+	Search   []string `json:"search,omitempty"`
+	MTU      int      `json:"mtu"`
+	Internet bool     `json:"internet,omitempty"`
 }
 
 type vpn struct{ p Platform }
 
 func (v vpn) Establish(c conn.VPNConfig) (*os.File, error) {
-	e := establish{Addrs: prefixStrings(c.Addrs), Routes: prefixStrings(c.Routes), Search: c.Search, MTU: c.MTU}
+	e := establish{Addrs: prefixStrings(c.Addrs), Routes: prefixStrings(c.Routes), Search: c.Search, MTU: c.MTU, Internet: c.Internet}
 	for _, a := range c.DNS {
 		e.DNS = append(e.DNS, a.String())
 	}

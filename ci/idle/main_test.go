@@ -65,3 +65,21 @@ func TestJuistsLookupsAreItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// A packet after a quiet wakes the radio; the relay's keepalive and its
+// acknowledgement are told apart from what else the relay carries.
+func TestWakesTellTheRelaysKeepAliveApart(t *testing.T) {
+	text := `1000.0 IP 172.21.0.2.41745 > 10.0.2.16.40000: tcp 27
+1000.1 IP 10.0.2.16.40000 > 172.21.0.2.41745: tcp 0
+1005.0 IP 172.21.0.2.41743 > 10.0.2.16.41643: UDP, length 124
+1030.0 IP 172.21.0.2.41745 > 10.0.2.16.40000: tcp 27
+1030.2 IP 10.0.2.16.40000 > 172.21.0.2.41745: tcp 0
+1060.0 IP 172.21.0.2.41745 > 10.0.2.16.40000: tcp 120
+1061.0 IP 10.0.2.16.33333 > 10.0.2.3.53: UDP, length 40
+1090.0 IP 10.0.2.16.33333 > 10.0.2.3.53: UDP, length 40
+`
+	all, spared := wakes(text, []int{41743, 41753})
+	if all != 3 || spared != 2 {
+		t.Errorf("wakes %d and %d without keepalives, want 3 and 2", all, spared)
+	}
+}

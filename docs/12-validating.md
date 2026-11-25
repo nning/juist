@@ -502,8 +502,8 @@ interop`).
 | the core follows the phone's network outside its own VPN, which Android reports as the app's default once up, and a network lost after another replaced it changes nothing | `android/app`: `UnderlayTest`; the app by hand in an emulator | no |
 | the core's dials into the overlay leave by the VPN device, from its own address, and fail before it is established rather than leave by the LAN | `conn`: `TestAVPNDialLeavesByTheDeviceAlone` | no |
 | the epoch secrets kept beside the node's keys are sealed as they are | `daemon`: `TestKeptSecretsAreSealedAsTheNodesKeys` | no |
-| the app brings the VPN up as the core says: its addresses, routes and, through an exit node, DNS servers, from the file the Go side's test writes; the VPN is as metered as the network beneath it, so that no app's work waiting for an unmetered network is held back | `mobile`: `TestTheVPNConfigIsWhatTheAppReads`; `android/app`: `VpnConfigTest`; [The last privileged run](#the-last-privileged-run), "A metered VPN" | no |
-| the app's connection follows the core: starting, on, off, failed, off when another VPN took over and not wanted again; its last view outlives the process; a join ends as the core says; an exit node chosen reaches the core; a reboot or update turns on what was on, with consent | `android/app`: `JuistTest` | no |
+| the app brings the VPN up as the core says: its addresses, routes and, through an exit node, DNS servers, from the file the Go side's test writes; the VPN is as metered as the network beneath it, so that no app's work waiting for an unmetered network is held back; it may be bypassed without an exit node, as Google's push channel must, and not through one | `mobile`: `TestTheVPNConfigIsWhatTheAppReads`; `android/app`: `VpnConfigTest`; [The last privileged run](#the-last-privileged-run), "A metered VPN" | no |
+| the app's connection follows the core: starting, on, off, failed, off when another VPN took over and not wanted again; its last view outlives the process; a join ends as the core says; an exit node chosen reaches the core; a reboot or update turns on what was on, with consent, and so does resuming, which the resume job does, kept while the VPN is wanted and dropped without consent, a core that failed tried again after a reboot or an update, or once turned on, and by no job or new process; the report says how the app's last processes ended and when Android last revoked the VPN | `android/app`: `JuistTest`, `ReportTest` | no |
 | an invite link opened from elsewhere asks to join and joins nothing untapped, changes nothing in a network, and no other link is taken; every screen survives a recreated activity; the exit nodes are chosen by a tap, not while off, and one chosen and no longer offered stays listed and refused | `android/app`: `AppRootTest`, `ExitSectionTest` | no |
 | every screen in both themes, both languages and at 200 % | `make android-check`: the Roborazzi tests against `android/app/screenshots` | no |
 | a quiet peer a relay can wake is probed every 5 minutes, its answer standing meanwhile, and every check without this device's relay or where this device does not reach the peer's; a peer installed within 10 minutes is probed in every check, past the backoff; LAN discovery slows from its first interval while nothing changes and starts over when the announcement or connectivity changes | `daemon`: `TestAQuietPeerARelayCanWakeIsProbedRarely`, `TestAnAnswerStandsOnlyWhereThePeersRelayIsReached`, `TestANewPeerIsProbedPastTheBackoff`, `TestAChangeWakesTheBeacon`; `discovery/mdns`: `TestABeaconSlowsDownUntilWoken` | no |
@@ -515,7 +515,7 @@ interop`).
 | a device that rests passes on nothing it hears while a member awake does, and pushes its own news to two members awake; a push reaches `PushFanout` members awake and every member that rests, and others' announcements, address keys and leases go on to the members awake alone, a pair exchange to its peer and the members awake, and a member found down on a hint's key is reinstalled without a push; from schema 21 a hello says what its sender holds of each node and the records frame answering it carries what is newer, all of it to a hello that says nothing, within `MaxFrameSize` at every cap | `daemon`: `TestAPushReachesTheFanoutAwakeAndEveryMemberThatRests`, `TestADeviceThatRestsPushesToFewAwake`, `TestADeviceThatRestsRelaysNothing`, `TestANewLeaseIsPushedToTheAwakeAlone`, `TestHellosSayWhatTheyHoldFromSchema21`, `TestADeviceThatRestsPushesItselfAfterRecords`, `TestARestingVoucherPushesItsOwnLease`, `TestAPairExchangeWakesNoMemberThatRests`, `TestARestartedMembersHintMovesItsDiscoKeyWithinSeconds`; `gossip`: `TestASeenHelloCarriesWhatThePeerLacks`, `TestARecordsFrameCarriesWhatIsNewerThanSeen`, `TestSeenAndFullHellosMeet`, `TestKeysInARecordsFrameLeaveRoomForARecord`, `TestFramesAtTheirCapsFit` | no |
 | the mesh reconciles at the next deadline the log, the leases, the announcements and the host's DNS name, a membership's expiry among them, and otherwise every 2 minutes; a resolver that starts again is routed again at once, and the routing renewed hourly while watched; an offer of a pair key put off is due after the pace | `daemon`: `TestAMembershipIsReconciledAwayAtItsExpiry`, `TestTheNextReconcileIsDueAtTheSoonestDeadline`, `TestADevicePastItsExpiryWaitsForTheBackstop`, `TestASoonerDeadlineRearmsTheLoop`, `TestARestartedResolverIsRoutedAgain`; `internal/resolved`: `TestARestartedResolvedIsSeen`, with `dbus-daemon`; `internal/pairkey`: `TestGenerationsArePaced` | no |
 | every lookup of the phone goes to juistd's resolver at the network's prefix and ::53, routed into the tunnel and taken before the engine from the phone's own packets alone, where no member's derived address lies; it answers the network's names and the reverse names of its addresses, over UDP and TCP, and searches the network's domain alone, asks the network beneath the VPN the rest by the resolvers the app last reported, protected, over TLS first, sessions resumed, where automatic Private DNS found them answering it, and in plain text for 10 minutes after TLS failed, and through the tunnel the exit node in use; a lookup it can ask no one of, or one for a refused exit node, fails at once, and a listener failing for good is not spun on; an answer longer than a datagram the stack carries goes out truncated and whole over TCP, and one from upstream keeps its TTL but for a name the network may answer itself; while Private DNS names a host the VPN takes no lookup, and the app says why and names each name for members alone then out of reach | `daemon`: `TestAPhoneAsksJuistdsResolverAlone`, `TestAPhoneWithoutResolversFailsAtOnce`, `TestPrivateDNSLeavesThePhonesNamesUnresolved`, `TestAPhonesOtherLookupsGoToTheExitNode`, `TestAPhoneAsksOverTLSWhereAndroidWould`, `TestARefusedExitNodesLookupsFailAtOnce`, `TestAPhoneKeepsUpstreamTTLs`, `TestAPhoneGetsALongAnswerOverTCP`; `internal/names`: `TestReverseNamesOfTheNetworkAreAnswered`; `conn`: `TestALocalAddressIsAnsweredInTheProcess`, `TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS`, `TestAVPNDialLeavesByTheDeviceAlone`; `internal/dnsfwd`: `TestAQueryNoneCanBeAskedFailsAtOnce`, `TestAForwarderListensAndDialsAsItIsGiven`, `TestAResolverOn853IsAskedOverTLS`, `TestAFailingListenerIsNotSpunOn`, `TestCappedSaysWhichAnswersAreCapped`, `TestAnAnswerTooLongForUDPIsTruncated`; `types`: `TestTheResolverAddressIsTheNetworksAndNoMembers`; `mobile`: `TestTheViewSaysWhyNamesAreNotResolved`, `TestTheUnderlaysResolversAreReadAsTheAppSaysThem`, `TestTheVPNConfigIsWhatTheAppReads`; `android/app`: `UnderlayTest`, `VpnConfigTest`; [Check names on Android](#check-names-on-android) | no |
-| the app joins by a link beside two members, resolves a member's name, pings it and is pinged; joins a second network of two, one reached through the other's relay alone, reaches both networks' members by address and name, and leaves the second without the first's tunnel going down; `make ci-vm`'s lab runs it where `ANDROID_HOME` and the AVD `juist` are, and a run without it says so and closes nothing | `make android-smoke`; `ci`: `TestOnlyAWholeRunCloses` | the emulator |
+| the app joins by a link beside two members, resolves a member's name, pings it and is pinged; its process killed in the background, which Android restarts no VPN after, the VPN is on again by the resume job and by opening the app; joins a second network of two, one reached through the other's relay alone, reaches both networks' members by address and name, and leaves the second without the first's tunnel going down; `make ci-vm`'s lab runs it where `ANDROID_HOME` and the AVD `juist` are, and a run without it says so and closes nothing | `make android-smoke`; `ci`: `TestOnlyAWholeRunCloses` | the emulator |
 | several networks run in one core behind one VPN device, each in a slot of its own, slot 0 in the app's earlier state directory: all routed, the phone's lookups at the lowest slot's resolver searching every domain, each network's names answered by the others' resolvers, a restart finding all of them, one left without the others' routes or keys; the app lists them, follows each by slot, reads the status an earlier app kept, and leaves a network's screen once it is gone | `mobile`: `TestACoreRunsTwoNetworksBehindOneVPN`, `TestACoreClearsWhatAnUnfinishedJoinLeft`; `android/app`: `JuistTest`, `AppRootTest` (`severalNetworksAreListed`, `aNetworkLeftLeavesItsScreen`, `aLinkInANetworkAsksToJoinAnother`, `aLinkAtTheMostNetworksIsIgnored`) | no |
 | the VPN hub hands each packet to the network its destination is in, a subnet two route to the lower slot, the internet to the exit node's network, whose resolver then takes the lookups; a packet the phone sent from another network's address leaves from this one's, and answers, echoes and ICMP errors about it come back to the first, a datagram's fragments with it, a translation dropped once the phone sends from the tuple itself, by a SYN for TCP, and with the network it was made for; no network writes to another's addresses, nor to any but its own and multicast groups, nor from where another network's routes lead; a mesh restarting establishes the device no more than once, and the last network gone takes it down | `conn`: `TestAHub…` | no |
 | a network in an IPv4 range a lower slot holds runs on IPv6 alone and says so; a join takes a slot above every network the phone is in, the most four, and one into a network a slot holds already is undone; one exit node is chosen at a time, the new one before the other goes, the new one's network back to its own where the other cannot go | `mobile`: `TestASecondNetworkInTheFirstsIPv4RunsWithoutIt`, `TestAJoinLeavesTheNetworksThePhoneIsIn`, `TestAnExitNodeIsChosenBeforeTheOtherGoes`, `TestExitNodesAreChosenOneAtATime` | no |
@@ -537,6 +537,36 @@ interop`).
 The latest `make ci-vm` that closed a milestone, and the latest run of each
 gate it does not cover. Replace an entry when its gate runs again, so it is
 clear how old the evidence is.
+
+- **Family Link by hand, 2026-11-25**, the supervised phone (Android
+  15) by adb over Wi-Fi: with juist on, Google Play services' every FCM
+  attempt over the VPN's network failed within milliseconds from 04:54
+  to 11:52, and `ip route get` with the VPN's mark found `mtalk`
+  unreachable; juist off, it connected at once. With the app made
+  bypassable without an exit node, installed over it, FCM stayed
+  connected on the Wi-Fi beside the VPN, and a sound and a new daily
+  limit arrived, juist's names on and off. The user then sent a sound
+  through Family Link that arrived through an exit node, on LTE, and
+  after the screen was off a long time (by hand, 2026-11-25). Not
+  tried: Family Link's lock (M39).
+
+- **M30 in the emulator, 2026-11-17**, the app with the resume job at
+  this commit: in the AVD `juistgms` (Android 13, Google APIs) the app's
+  process, killed with `kill -9` while the app was in the background,
+  left the VPN off 8 times of 8, and opening the app showed it off; the
+  log said `Exception when unbinding service` before the death and no
+  restart was scheduled. Killed while in front, it was restarted within
+  5 s. `pm suspend` left the VPN up. With `disable_ipv6` on the Wi-Fi,
+  FCM reconnected at once over IPv4 beside the VPN; `GcmService`'s dump
+  showed FCM dropped when the VPN's network went with the process, and
+  kept across an establish. `make android-smoke` passed in `juistgms` and
+  in `juist` (Android 16, which loses the restart as 13 does), the resume
+  job and opening the app bringing the VPN back, and failed at the resume
+  job with the app before the fix. `make android-idle IDLE=relay`: 8 838
+  datagrams and segments an hour, 59 radio wakes an hour, 41 without the
+  relay's keepalives, the phone answering a member's ping in 1 ms; with
+  `-churn 0`, at M30, 3 695 an hour, 59 wakes, 17 without the
+  keepalives, 49 of the 59 started by one.
 
 - **`macos.yml`, 2026-11-13, at M29** (after M29's closing review
   rounds, before M29 done), run 43491160492 with `full=false`: on
@@ -567,14 +597,16 @@ clear how old the evidence is.
   install, `steamos-update` to 20261023.100 (SteamOS 3.9.5, systemd 261)
   kept the extension merged, juistd started at boot, its node ID, network
   and addresses, the `juist` user and `juist0` in the trusted zone.
-- **`make ci-vm`, 2026-11-13, at M29** (M29's closing review rounds
-  and its macOS runner test, before M29 done): every stage passed, one
-  after another, since homeserver had 13 GiB free: `vm,check` in 16m5s
-  (`20261113-221251-M29`), the lab's normal and upgrade runs in
-  34m58s (`20261113-222857-M29`), the builds, `make cross` with
-  darwin's, in 10m0s (`20261113-230356-M29`). `make
-  android-smoke` did not run, `ANDROID_HOME` being unset; it last ran
-  on 2026-11-10, at M28.
+- **`make ci-vm`, 2026-11-25, at 7bc4157** (M30's closing review and its
+  follow-ups, before M30 done), stage by stage under the host's load: in
+  the first whole run `vm` passed and `make test-race` lost the VM's ssh
+  at a load of 12.7 (`20261125-174419-7bc4157f7f06`); then `check` passed
+  in 9m19s, `make test-race` 6m38s (`20261125-175719-7bc4157f7f06`), the
+  lab in 43m41s, its normal and upgrade runs 30m15s and `make
+  android-smoke` 7m28s, the app's process killed and resumed among it
+  (`20261125-180738-7bc4157f7f06`), and `build` in 3m13s, `make cross`
+  45s (`20261125-185700-7bc4157f7f06`), after one run lost the VM's ssh
+  in `make rpm` at a load of 4.4.
 - **Pair-key recovery (M25 review 9), 2026-11-01, at 66409ed**:
   `make ci-vm STAGES=check,lab` passed in 35m5s
   (`20261101-190014-66409ed59c3f`), the lab's normal and upgrade runs
@@ -1092,7 +1124,10 @@ off. It runs a network without a relay and one where `a` relays (`IDLE=relay`
 for one alone, `IDLE_MINUTES` for another length), logs to `build/idle`, and
 fails where a scenario passes the budget in `ci/idle`. `dumpsys
 batterystats` beside each capture gives the wakeups and wake locks, and the
-phone's log, `logcat.txt`, what the core did. The emulator brings its Wi-Fi
+phone's log, `logcat.txt`, what the core did. The report counts too the
+radio's wakes an hour, juist's packets after 10 s without one, about an
+LTE carrier's inactivity timer, and how many are left without the relay's
+keepalives. The emulator brings its Wi-Fi
 back from airplane mode only with the screen on, so the members' restarts
 stand in for a phone changing networks.
 
@@ -1102,7 +1137,11 @@ of the day `adb bugreport idle.zip`, read with Battery Historian
 (`gcr.io/android-battery-historian/stable:3.1`, by docker-vm here) or `adb
 shell dumpsys batterystats io.juist`: the app's share of the battery, its
 mobile radio and Wi-Fi time, wakeups and wake locks, and Settings' battery
-use for the app beside it.
+use for the app beside it. How long the carrier keeps an idle TCP
+connection, Google Play services learns for its own: `adb shell dumpsys
+activity service com.google.android.gms/.gcm.GcmService`, "Adaptive
+Heartbeat type 0" (mobile data; 17 while a VPN is on), its
+`heartbeat_interval` and good and bad counts.
 
 ## Check names on Android
 

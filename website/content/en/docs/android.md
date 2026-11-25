@@ -272,7 +272,8 @@ It also holds the phone's four settings:
 
 Under **Diagnosis**, the app counts how often it set up the VPN and how its
 lookups went: how many failed or were slow, and which. **Copy log** adds how
-Android sees the phone's networks.
+Android sees the phone's networks, when it last took the VPN away, and how
+the app's last runs ended.
 
 ## Subnets {#subnets}
 
@@ -323,14 +324,25 @@ If juist stops, Android sends traffic directly. To block it instead, turn on
 **Always-on VPN** and **Block connections without VPN** for juist in
 Android's VPN settings. The app links to them.
 
+Without an exit node, apps may go around the VPN to the network beneath,
+as Google's push messages must; an app that does so on purpose looks for
+the network's devices there, not through juist, where any device on that
+network may answer. Through an exit node, none can. With **Block connections without VPN**, Android lets none go around,
+and without an exit node push messages then do not arrive.
+
 ## Turning the VPN off and on
 
 The switch next to the state turns the VPN off and on, as does juist's tile
 in Android's Quick Settings: add it by editing the tiles, and press it long, or
 in no network at all, to open the app. While it is on, a
 notification shows the state, with a **Turn off** action. If the VPN was on,
-juist turns it on again after a restart or an update. Android runs one VPN at
-a time: another VPN app turns juist off, and the app says so.
+juist turns it on again after a restart or an update, and after Android ended
+the app: when you open it, or by itself, after about 15 minutes while the
+phone is in use. After a force stop, only opening the app does, and after
+juist failed to start, only turning it on. Android runs one VPN at a time:
+another VPN app turns juist off, and the app says so. While a VPN runs in
+a work profile or a private space, juist cannot tell it from another app's
+and does not turn on by itself either.
 
 ## Battery
 
@@ -374,7 +386,8 @@ uninstalled.
   sent.
 - **About**, in the menu, shows the version and licenses. **Copy log** copies
   the app's log, which lives in memory only, with how Android sees the
-  phone's networks and the lookups that failed. It names your devices and
+  phone's networks, the lookups that failed and how the app's last runs
+  ended. It names your devices and
   addresses, so share it only with someone you trust.
 
 ## Troubleshooting

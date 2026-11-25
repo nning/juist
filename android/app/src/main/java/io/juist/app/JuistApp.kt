@@ -7,5 +7,6 @@ class JuistApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Juist.init(this)
+        Juist.resume(this)
     }
 }

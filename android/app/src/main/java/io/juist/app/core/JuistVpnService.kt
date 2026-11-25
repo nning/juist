@@ -91,6 +91,7 @@ class JuistVpnService : VpnService() {
             holdMulticast()
             followNetworks()
             Juist.attached(GoCore(c))
+            Juist.running(this)
             notifier = scope.launch {
                 Juist.connection.mapNotNull { (it as? Connection.On)?.views }
                     .map { NotificationLines.of(this@JuistVpnService, it) }
@@ -99,7 +100,7 @@ class JuistVpnService : VpnService() {
             }
         } catch (e: Exception) {
             Log.w(TAG, "starting the core", e)
-            Juist.failed(e.message.orEmpty())
+            Juist.failed(this, e.message.orEmpty())
             stopSelf()
         }
     }
@@ -225,7 +226,6 @@ class JuistVpnService : VpnService() {
             val b = Builder()
                 .setSession(networkNames(Juist.last).ifEmpty { getString(R.string.app_name) })
                 .setConfigureIntent(openApp())
-            // No allowBypass: no app leaves the tunnel by binding to the network beside it.
             configureVpn(config, object : VpnTarget {
                 override fun addAddress(address: InetAddress, prefixLength: Int) { b.addAddress(address, prefixLength) }
                 override fun addRoute(address: InetAddress, prefixLength: Int) { b.addRoute(address, prefixLength) }
@@ -233,6 +233,7 @@ class JuistVpnService : VpnService() {
                 override fun addSearchDomain(domain: String) { b.addSearchDomain(domain) }
                 override fun setMtu(mtu: Int) { b.setMtu(mtu) }
                 override fun setMetered(metered: Boolean) { b.setMetered(metered) }
+                override fun allowBypass() { b.allowBypass() }
             })
             val pfd = b.establish() ?: throw IllegalStateException(getString(R.string.vpn_not_established))
             return pfd.detachFd()

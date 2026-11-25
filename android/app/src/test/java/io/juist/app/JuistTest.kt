@@ -1,6 +1,7 @@
 package io.juist.app
 
 import android.app.Application
+import android.app.job.JobScheduler
 import android.content.Intent
 import io.juist.app.core.Connection
 import io.juist.app.core.CoreCalls
@@ -9,6 +10,7 @@ import io.juist.app.core.InviteState
 import io.juist.app.core.Juist
 import io.juist.app.core.JuistVpnService
 import io.juist.app.core.OffReason
+import io.juist.app.core.ResumeJob
 import io.juist.app.core.StartReceiver
 import io.juist.app.core.State
 import io.juist.app.core.networks
@@ -26,6 +28,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
@@ -152,7 +155,7 @@ class JuistTest {
         Juist.connect(app)
         Juist.attached(core)
         Juist.refresh()
-        Juist.failed("keystore lost its key")
+        Juist.failed(app, "keystore lost its key")
         val failed = Juist.connection.value as Connection.Failed
         assertEquals("keystore lost its key", failed.message)
         assertEquals(State.Connected, failed.last.first().state)
@@ -285,6 +288,181 @@ class JuistTest {
         ShadowVpnService.setPrepareResult(Intent("android.net.vpn.SETUP_VPN"))
         StartReceiver().onReceive(app, boot)
         assertNull(startedService())
+    }
+
+    /**
+     * A process that starts while the VPN is wanted, its last one having died,
+     * turns it on, and the resume job is kept until the person turns it off.
+     */
+    @Test
+    fun aNewProcessTurnsOnWhatWasOn() {
+        ShadowVpnService.setPrepareResult(null)
+        val jobs = app.getSystemService(JobScheduler::class.java)
+        Juist.connect(app)
+        startedService()
+        assertEquals(listOf(ResumeJob.ID), jobs.allPendingJobs.map { it.id })
+
+        Juist.init(app) // a new process, the last one dead with its core
+        Juist.resume(app)
+        assertEquals(JuistVpnService::class.java.name, startedService()?.component?.className)
+        assertTrue(Juist.connection.value is Connection.Starting)
+        Robolectric.buildService(ResumeJob::class.java).create().get().onStartJob(null)
+        assertEquals(JuistVpnService::class.java.name, startedService()?.component?.className)
+
+        Juist.attached(core)
+        Juist.resume(app)
+        assertNull("a running core started again", startedService())
+
+        jobs.cancelAll() // a reboot or a force stop drops the job
+        Juist.init(app)
+        Juist.detached(app)
+        Juist.resume(app)
+        startedService()
+        assertEquals(listOf(ResumeJob.ID), jobs.allPendingJobs.map { it.id })
+
+        Juist.disconnect(app)
+        startedService()
+        assertEquals(emptyList<Int>(), jobs.allPendingJobs.map { it.id })
+        Juist.resume(app)
+        assertNull(startedService())
+
+        Juist.connect(app)
+        startedService()
+        Juist.detached(app, OffReason.Revoked)
+        assertEquals(emptyList<Int>(), jobs.allPendingJobs.map { it.id })
+        Juist.resume(app)
+        assertNull(startedService())
+    }
+
+    /** A core that failed is not started again by the job, whose start would fail again in the background. */
+    @Test
+    fun aFailedCoreIsNotStartedAgainByTheJob() {
+        ShadowVpnService.setPrepareResult(null)
+        Juist.connect(app)
+        startedService()
+        Juist.failed(app, "this device's keystore holds no key for juist")
+        Robolectric.buildService(ResumeJob::class.java).create().get().onStartJob(null)
+        assertTrue(Juist.connection.value is Connection.Failed)
+        assertNull("a failed core started again in the background", startedService())
+
+        Juist.init(app) // the process killed, a new one started
+        Juist.resume(app)
+        assertNull("a failed core started again by a new process", startedService())
+        assertNull(app.getSystemService(JobScheduler::class.java).getPendingJob(ResumeJob.ID))
+
+        StartReceiver().onReceive(app, Intent(Intent.ACTION_BOOT_COMPLETED))
+        assertEquals(JuistVpnService::class.java.name, startedService()?.component?.className)
+        Juist.failed(app, "this device's keystore holds no key for juist")
+        Juist.connect(app)
+        assertEquals(JuistVpnService::class.java.name, startedService()?.component?.className)
+        Juist.init(app)
+        Juist.resume(app)
+        assertEquals("the person turned it on again", JuistVpnService::class.java.name, startedService()?.component?.className)
+    }
+
+    /** A VPN network with owner, the phone's default where active, else one beside it, as in a work profile. */
+    private fun vpnNetwork(owner: Int, active: Boolean) {
+        val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
+        // Robolectric finds the active network by the type of its info.
+        val vpn = org.robolectric.shadows.ShadowNetwork.newInstance(if (active) android.net.ConnectivityManager.TYPE_VPN else 78)
+        val info = org.robolectric.shadows.ShadowNetworkInfo.newInstance(android.net.NetworkInfo.DetailedState.CONNECTED,
+            android.net.ConnectivityManager.TYPE_VPN, 0, true, android.net.NetworkInfo.State.CONNECTED)
+        val caps = org.robolectric.shadows.ShadowNetworkCapabilities.newInstance()
+        shadowOf(caps).addTransportType(android.net.NetworkCapabilities.TRANSPORT_VPN)
+        android.net.NetworkCapabilities::class.java.getMethod("setOwnerUid", Int::class.java).invoke(caps, owner)
+        shadowOf(cm).addNetwork(vpn, info)
+        shadowOf(cm).setNetworkCapabilities(vpn, caps)
+        if (active) shadowOf(cm).setActiveNetworkInfo(info)
+    }
+
+    /**
+     * Another app's VPN, turned on while juist's process was dead, is not
+     * taken over by a resume, which preparing juist's would do: juist is off
+     * as after a revoke, and says so.
+     */
+    @Test
+    fun aResumeLeavesAnotherAppsVpnAlone() {
+        ShadowVpnService.setPrepareResult(null)
+        Juist.connect(app)
+        startedService()
+        vpnNetwork(owner = android.os.Process.myUid() + 1, active = true)
+        Juist.init(app)
+        Robolectric.buildService(ResumeJob::class.java).create().get().onStartJob(null)
+        assertNull("another app's VPN taken over", startedService())
+        assertFalse(Juist.wanted(app))
+        assertNull(app.getSystemService(JobScheduler::class.java).getPendingJob(ResumeJob.ID))
+        assertEquals(OffReason.Revoked, (Juist.connection.value as Connection.Off).reason)
+    }
+
+    /**
+     * A VPN that leaves juist out stops a resume too, which would take it
+     * over; one in a work profile looks the same, and stops it as well.
+     */
+    @Test
+    fun aResumeLeavesAVpnLeavingJuistOutAlone() {
+        ShadowVpnService.setPrepareResult(null)
+        Juist.connect(app)
+        startedService()
+        vpnNetwork(owner = -1, active = false)
+        Juist.init(app)
+        Juist.resume(app)
+        assertNull("a VPN leaving juist out taken over", startedService())
+    }
+
+    /** juist's own VPN, up in this process, is no other. */
+    @Test
+    fun aResumePassesItsOwnVpn() {
+        ShadowVpnService.setPrepareResult(null)
+        Juist.connect(app)
+        startedService()
+        vpnNetwork(owner = android.os.Process.myUid(), active = true)
+        Juist.init(app)
+        Juist.resume(app)
+        assertEquals("juist's own VPN", JuistVpnService::class.java.name, startedService()?.component?.className)
+    }
+
+    /** A core that runs again ends a failure kept from before, so a later death is resumed, by the job too. */
+    @Test
+    fun aRunningCoreEndsAKeptFailure() {
+        ShadowVpnService.setPrepareResult(null)
+        Juist.connect(app)
+        startedService()
+        Juist.failed(app, "this device's keystore holds no key for juist")
+        Juist.running(app) // as Android's always-on VPN started it, past the switch
+        assertEquals(listOf(ResumeJob.ID), app.getSystemService(JobScheduler::class.java).allPendingJobs.map { it.id })
+        Juist.init(app)
+        Juist.resume(app)
+        assertEquals(JuistVpnService::class.java.name, startedService()?.component?.className)
+    }
+
+    /** A start Android refuses leaves the VPN off, not starting for good. */
+    @Test
+    fun aRefusedResumeLeavesTheVPNOff() {
+        ShadowVpnService.setPrepareResult(null)
+        Juist.connect(app)
+        startedService()
+        Juist.init(app)
+        Juist.detached(app)
+        val refusing = object : android.content.ContextWrapper(app) {
+            override fun startForegroundService(service: Intent) = throw IllegalStateException("not allowed")
+        }
+        Juist.resume(refusing)
+        assertTrue(Juist.connection.value is Connection.Off)
+    }
+
+    /** Consent withdrawn while the process was dead ends the resume job, which could start nothing. */
+    @Test
+    fun consentWithdrawnEndsTheResumeJob() {
+        ShadowVpnService.setPrepareResult(null)
+        val jobs = app.getSystemService(JobScheduler::class.java)
+        Juist.connect(app)
+        startedService()
+        Juist.init(app)
+        Juist.detached(app)
+        ShadowVpnService.setPrepareResult(Intent("android.net.vpn.SETUP_VPN"))
+        Juist.resume(app)
+        assertNull(startedService())
+        assertEquals(emptyList<Int>(), jobs.allPendingJobs.map { it.id })
     }
 
     /** Words refused end the invite as refused, not as admitting; cancelled, it is gone. */

@@ -1,5 +1,7 @@
 package io.juist.app.core
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -20,6 +22,7 @@ object Report {
         appendLine("networks:")
         append(networks(context))
         appendLine(power(context))
+        append(ends(context))
         Juist.diagnosis()?.let { appendLine(); append(diagnosis(it)) }
         appendLine()
         appendLine("log:")
@@ -74,6 +77,37 @@ object Report {
         val pm = context.getSystemService(PowerManager::class.java) ?: return ""
         return "power: interactive=${pm.isInteractive} idle=${pm.isDeviceIdleMode} saver=${pm.isPowerSaveMode} " +
             "unrestricted=${pm.isIgnoringBatteryOptimizations(context.packageName)}"
+    }
+
+    private val day = SimpleDateFormat("MM-dd HH:mm:ss", Locale.ROOT)
+
+    /** When Android last revoked the VPN, and how the app's last processes ended, which outlives them. */
+    fun ends(context: Context): String = buildString {
+        appendLine("vpn revoked: ${Juist.revokedAt(context).let { if (it == 0L) "never" else day.format(Date(it)) }}")
+        if (Juist.failedToStart(context)) appendLine("core failed to start: not resumed until a reboot, an update or the switch")
+        val am = context.getSystemService(ActivityManager::class.java) ?: return@buildString
+        val exits = runCatching { am.getHistoricalProcessExitReasons(context.packageName, 0, 5) }.getOrDefault(emptyList())
+        appendLine("processes ended:")
+        for (e in exits) {
+            appendLine("  ${day.format(Date(e.timestamp))} ${exitReason(e.reason)} status=${e.status} importance=${e.importance} ${e.description.orEmpty()}".trimEnd())
+        }
+    }
+
+    private fun exitReason(reason: Int) = when (reason) {
+        ApplicationExitInfo.REASON_EXIT_SELF -> "exited"
+        ApplicationExitInfo.REASON_SIGNALED -> "signaled"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "low-memory"
+        ApplicationExitInfo.REASON_CRASH -> "crash"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "native-crash"
+        ApplicationExitInfo.REASON_ANR -> "anr"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "init-failure"
+        ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permission-change"
+        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive-use"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "user-requested"
+        ApplicationExitInfo.REASON_USER_STOPPED -> "user-stopped"
+        ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency-died"
+        ApplicationExitInfo.REASON_OTHER -> "other"
+        else -> "reason-$reason"
     }
 
     fun diagnosis(d: Diagnosis): String = buildString {

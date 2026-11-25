@@ -373,6 +373,8 @@ type report struct {
 	length   time.Duration
 	counts   map[string]int
 	bytes    map[string]int
+	wakes    int           // juist's packets after radioTail of quiet from juist
+	spared   int           // the wakes left without the relay's keepalives
 	answered time.Duration // a member's ping of the phone at the end, zero unanswered
 	waited   time.Duration // how long the member pinged before one was answered
 	stats    string
@@ -407,6 +409,11 @@ func (r *report) String() string {
 	for _, k := range keys {
 		fmt.Fprintf(&b, "\n  %-20s %6d an hour, %6d KB", k, int(float64(r.counts[k])*float64(time.Hour)/float64(r.length)),
 			int(float64(r.bytes[k])*float64(time.Hour)/float64(r.length))/1000)
+	}
+	if r.wakes > 0 {
+		perHour := func(n int) int { return int(float64(n) * float64(time.Hour) / float64(r.length)) }
+		fmt.Fprintf(&b, "\n  radio wakes an hour, after %v quiet: %d, %d without the relay's keepalives",
+			radioTail, perHour(r.wakes), perHour(r.spared))
 	}
 	if r.answered > 0 {
 		fmt.Fprintf(&b, "\n  woken by a member's ping, the phone answered in %v", r.answered.Round(time.Millisecond))
@@ -534,6 +541,7 @@ func scenario(ctx context.Context, name, apk, bin, dir string, length time.Durat
 		ports[i] = m.port
 	}
 	r.counts, r.bytes = classify(text, ports)
+	r.wakes, r.spared = wakes(text, ports)
 	for _, f := range []struct {
 		port string
 		kind string
@@ -563,7 +571,8 @@ func scenario(ctx context.Context, name, apk, bin, dir string, length time.Durat
 const smokeScenario = "smoke"
 
 // smoke joins the phone beside two members by a link, and checks that it
-// resolves a member's name, reaches it by ping, and is reached by its ping.
+// resolves a member's name, reaches it by ping, is reached by its ping, and
+// turns the VPN on again after its process died.
 func smoke(apk, bin, dir string) (err error) {
 	os.RemoveAll(dir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -643,7 +652,48 @@ func smoke(apk, bin, dir string) (err error) {
 	if err := pingsPhone(a, phone); err != nil {
 		return err
 	}
+	if err := resumesAfterDeath(a, phone, v4); err != nil {
+		return err
+	}
 	return secondNetwork(bin, dir, &ms, a, phone, v4, st.Names.Domain)
+}
+
+// resumesAfterDeath kills the app's process in the background, which
+// Android does not restart a VPN after, and checks that the VPN comes back
+// when the resume job runs, and again when the app is opened.
+func resumesAfterDeath(a *member, phone types.Identity, aV4 string) error {
+	for _, wake := range []struct{ by, script string }{
+		{"the resume job", "cmd jobscheduler run -f " + app + " 1"},
+		{"opening the app", "am start -n " + app + "/io.juist.app.MainActivity"},
+	} {
+		shell("input keyevent HOME")
+		time.Sleep(3 * time.Second)
+		pid, err := shell("pidof " + app)
+		if err != nil {
+			return fmt.Errorf("the app runs no process: %w", err)
+		}
+		if _, err := shell("kill -9 " + strings.TrimSpace(pid)); err != nil {
+			return err
+		}
+		// Gone with its VPN and not started again, so that only the wake brings it back.
+		if err := waitFor(time.Minute, "the app's process and its VPN to go", func() bool {
+			now, _ := shell("pidof " + app + " || true")
+			vpns, _ := shell("dumpsys connectivity | grep -c 'ni{VPN CONNECTED' || true")
+			return strings.TrimSpace(now) == "" && strings.TrimSpace(vpns) == "0"
+		}); err != nil {
+			return err
+		}
+		if _, err := shell(wake.script); err != nil {
+			return err
+		}
+		if err := phonePings(aV4); err != nil {
+			return fmt.Errorf("after the app's process died, %s: %w", wake.by, err)
+		}
+		if err := pingsPhone(a, phone); err != nil {
+			return fmt.Errorf("after the app's process died, %s: %w", wake.by, err)
+		}
+	}
+	return nil
 }
 
 // phonePings waits for the phone's ping of each of to to be answered.
@@ -983,6 +1033,58 @@ func classify(text string, ports []int) (map[string]int, map[string]int) {
 		}
 	}
 	return counts, sizes
+}
+
+// radioTail is how long a mobile radio stays up after a packet, about an
+// LTE carrier's inactivity timer: a packet after as long a quiet wakes it.
+const radioTail = 10 * time.Second
+
+// keepAliveLen is a relay's keepalive as TCP carries it: a 5-byte DERP frame
+// in a TLS 1.3 record.
+const keepAliveLen = 5 + 5 + 1 + 16
+
+// wakes counts juist's packets in tcpdump's -tt reading that come after
+// radioTail without one, and how many are left once the relay's keepalives,
+// and the phone's bare acknowledgements of them, are taken out.
+func wakes(text string, ports []int) (all, spared int) {
+	relay := func(p int) bool {
+		return slices.ContainsFunc(ports, func(m int) bool { return p == m+2 })
+	}
+	ours := func(p int) bool {
+		return slices.ContainsFunc(ports, func(m int) bool { return p >= m && p <= m+2 })
+	}
+	var last, lastSpared float64
+	for _, line := range strings.Split(text, "\n") {
+		m := lineRE.FindStringSubmatch(line)
+		f := strings.Fields(line)
+		if m == nil || len(f) == 0 {
+			continue
+		}
+		at, err := strconv.ParseFloat(f[0], 64)
+		if err != nil {
+			continue
+		}
+		src, dst := portOf(m[1]), portOf(m[2])
+		if !ours(src) && !ours(dst) {
+			continue
+		}
+		quiet := radioTail.Seconds()
+		if at-last > quiet {
+			all++
+		}
+		last = at
+		size := f[len(f)-1]
+		keepAlive := strings.EqualFold(m[3], "tcp") &&
+			(relay(src) && size == strconv.Itoa(keepAliveLen) || relay(dst) && size == "0")
+		if keepAlive {
+			continue
+		}
+		if at-lastSpared > quiet {
+			spared++
+		}
+		lastSpared = at
+	}
+	return all, spared
 }
 
 // notOurs counts the datagrams in tcpdump's verbose reading that ours does

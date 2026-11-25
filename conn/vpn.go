@@ -27,18 +27,20 @@ type VPN interface {
 }
 
 // A VPNConfig is a device as [VPN.Establish] brings it up: DNS, where set,
-// takes all of the host's lookups, trying Search for a name without a dot.
+// takes all of the host's lookups, trying Search for a name without a dot;
+// Internet says that Routes carry the internet to an exit node.
 type VPNConfig struct {
-	Addrs  []netip.Prefix
-	Routes []netip.Prefix
-	DNS    []netip.Addr
-	Search []string
-	MTU    int
+	Addrs    []netip.Prefix
+	Routes   []netip.Prefix
+	DNS      []netip.Addr
+	Search   []string
+	MTU      int
+	Internet bool
 }
 
 func (c VPNConfig) equal(o VPNConfig) bool {
 	return slices.Equal(c.Addrs, o.Addrs) && slices.Equal(c.Routes, o.Routes) && slices.Equal(c.DNS, o.DNS) &&
-		slices.Equal(c.Search, o.Search) && c.MTU == o.MTU
+		slices.Equal(c.Search, o.Search) && c.MTU == o.MTU && c.Internet == o.Internet
 }
 
 // errOnVPN refuses what a VPN app may not do to its host.

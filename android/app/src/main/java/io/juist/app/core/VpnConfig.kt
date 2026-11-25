@@ -11,6 +11,7 @@ internal interface VpnTarget {
     fun addSearchDomain(domain: String)
     fun setMtu(mtu: Int)
     fun setMetered(metered: Boolean)
+    fun allowBypass()
 }
 
 /** What the core hands `Platform.establish`: mobile/testdata/establish.json is one. */
@@ -21,6 +22,7 @@ internal data class EstablishConfig(
     val dns: List<String> = emptyList(),
     val search: List<String> = emptyList(),
     val mtu: Int,
+    val internet: Boolean = false,
 )
 
 /**
@@ -28,7 +30,9 @@ internal data class EstablishConfig(
  * its DNS servers, juist's resolver in the tunnel, which then answers all of
  * the phone's lookups, with the domains a name without a dot is tried under.
  * It is as metered as the network beneath it: a VPN Android counts as metered
- * holds back every app's work that waits for an unmetered network.
+ * holds back every app's work that waits for an unmetered network. Without
+ * an exit node apps may go around it, as Google's push channel must: one
+ * bound to a VPN that cannot be bypassed reaches only the VPN's routes.
  */
 internal fun configureVpn(config: String, t: VpnTarget) {
     val c = coreJson.decodeFromString(EstablishConfig.serializer(), config)
@@ -36,6 +40,7 @@ internal fun configureVpn(config: String, t: VpnTarget) {
     t.setMtu(c.mtu)
     for (a in c.addrs) prefix(a).let { (addr, bits) -> t.addAddress(addr, bits) }
     for (r in c.routes) prefix(r).let { (addr, bits) -> t.addRoute(addr, bits) }
+    if (!c.internet) t.allowBypass()
     for (d in c.dns) t.addDnsServer(InetAddress.getByName(d))
     for (s in c.search) t.addSearchDomain(s)
 }

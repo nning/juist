@@ -205,6 +205,9 @@ func TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := func() VPNConfig { return v.given[len(v.given)-1] }
+	if !last().Internet {
+		t.Error("the device does not say it carries the internet")
+	}
 	for _, a := range []string{"8.8.8.8", "2606:4700::1111"} {
 		if !routes(last().Routes, a) {
 			t.Errorf("%s is not routed into the tunnel while the exit node is refused", a)
@@ -233,7 +236,7 @@ func TestAVPNRoutesTheInternetToAnExitNodeAndItsDNS(t *testing.T) {
 	if err := exits.setEgress(EgressDirect, tunnelled{}); err != nil {
 		t.Fatal(err)
 	}
-	if routes(last().Routes, "8.8.8.8") {
+	if routes(last().Routes, "8.8.8.8") || last().Internet {
 		t.Error("the internet is still routed into the tunnel with no exit node")
 	}
 	p.SetDNS("juist0", dns, nil)

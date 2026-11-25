@@ -350,6 +350,7 @@ func (h *VPNHub) configLocked() (VPNConfig, bool) {
 	}
 	if exit != nil {
 		routes = append(routes, Internet(true, true, avoid)...)
+		c.Internet = true
 		// Lookups leave by the exit node as the rest does.
 		if len(exit.dns) > 0 {
 			named = exit

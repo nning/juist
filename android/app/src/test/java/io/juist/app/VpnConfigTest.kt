@@ -16,6 +16,7 @@ class VpnConfigTest {
         val search = mutableListOf<String>()
         var mtuSet = 0
         var metered: Boolean? = null
+        var bypassable = false
 
         override fun addAddress(address: InetAddress, prefixLength: Int) { addrs += "${address.hostAddress}/$prefixLength" }
         override fun addRoute(address: InetAddress, prefixLength: Int) { routes += "${address.hostAddress}/$prefixLength" }
@@ -23,6 +24,7 @@ class VpnConfigTest {
         override fun addSearchDomain(domain: String) { search += domain }
         override fun setMtu(mtu: Int) { mtuSet = mtu }
         override fun setMetered(metered: Boolean) { this.metered = metered }
+        override fun allowBypass() { bypassable = true }
     }
 
     /**
@@ -60,5 +62,20 @@ class VpnConfigTest {
         configureVpn("""{"addrs":["100.64.0.7/32"],"routes":["100.64.0.0/10"],"mtu":1280}""", r)
         assertEquals(emptyList<String>(), r.dns)
         assertEquals(listOf("100.64.0.0/10"), r.routes)
+    }
+
+    /**
+     * Without an exit node apps may go around the VPN: Google's push channel
+     * binds to it, and one that cannot be bypassed reaches only its routes.
+     * A subnet of public space is no exit node. Through one, none may.
+     */
+    @Test
+    fun isBypassableWithoutAnExitNodeAlone() {
+        val split = Recorder()
+        configureVpn("""{"addrs":["100.64.0.7/32"],"routes":["100.64.0.0/10","fd00:1:2::/48","8.8.8.0/24"],"mtu":1280}""", split)
+        assertEquals(true, split.bypassable)
+        val exit = Recorder()
+        configureVpn(File("../../mobile/testdata/establish.json").readText(), exit)
+        assertEquals(false, exit.bypassable)
     }
 }

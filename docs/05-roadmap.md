@@ -1524,54 +1524,37 @@ counts as the hand test.
 
 ## M30 — Family Link, and a phone on mobile data
 
-What the app does on two phones as they are used, beside M26's features:
-one Google's Family Link supervises, and one on mobile data all day.
+**Done** on 2026-11-25: on a phone Google's Family Link supervises, a
+sound and a new daily limit a parent sends arrive while juist runs.
+Without an exit node the VPN may be bypassed, which Google Play services'
+push channel needs on Android 15, since bound to a VPN that cannot be it
+reaches only the VPN's routes; the core tells the app whether an exit node
+is in use, and through one nothing bypasses it. The app turns the VPN on
+again when its process starts while the VPN is wanted, opened or by a job
+every 15 minutes, since Android does not restart a VPN app whose process
+died in the background; it leaves any other VPN alone, one in a work
+profile too, which it cannot tell apart, keeps a core's failure until a
+reboot, an update, the switch or a running core ends it, and its report
+says how its last processes ended. `make android-idle` counts the radio's
+wakes. Reviewed in eight rounds: each part as it landed (three and two),
+the closing one (review 3) over M30's commits alone, replayed onto
+M30, and two follow-ups, the second faulting the first's fix, which
+was reverted and its limit said (review 5); validated by `make ci-vm` at
+7bc4157, stage by stage ([12-validating.md](12-validating.md), "The last
+privileged run"), `make android-smoke` in the emulator, and by hand on the
+supervised phone (Android 15) on 2026-11-25: a sound through an exit node,
+on LTE, and after the screen was off a long time, and a sound and a daily
+limit on Wi-Fi with juist's names on and off. Family Link's lock and the
+relay's keepalive moved to M38. Core 8 098 lines, audit scope 29 395,
+measured after it (2026-11-25).
 
-- **Family Link.** On a phone Google's Family Link supervises, what a
-  parent sends while juist runs does not arrive (more screen time, playing
-  a sound to find it), without an exit node too; it comes as a push
-  through Google's FCM, whose connection to `mtalk.google.com:5228` leaves
-  beside the VPN without an exit node, while its lookup goes through
-  juist's resolver. The first
-  fix (M25.3, the VPN no more metered than the network beneath it, since
-  Android held back Google's jobs for an unmetered network) is in 0.25.6
-  and the dev builds from 2026-11-01. With a dev build of 2026-11-04 a
-  sound arrived on the supervised phone, juist and its names on, shortly
-  after the VPN came on; the rest of step 1 is not tried. Each step is
-  judged by the one before it:
-  1. **Confirm** on the supervised phone with an app at or after M25.3:
-     a sound sent and more screen time granted arrive within a minute,
-     on Wi-Fi and mobile data, the screen on and off.
-  2. **If not, look at FCM** with the VPN on and off (`adb shell dumpsys
-     activity service com.google.android.gms/.gcm.GcmService`): whether
-     the connection stands, how often it reconnects, and whether a new
-     device from `establish()` drops it; with Private DNS off, automatic
-     and named; and against another VPN that routes only its own
-     prefixes (Tailscale), which would point at Android rather than juist.
-  3. **Suspects then:** the resolver every lookup goes to since M23,
-     failing or slow for `mtalk.google.com`; an IPv6 address on the VPN
-     where the network beneath has none, so that AAAA answers are tried
-     first; Family Link's lock at a time limit or bedtime, reported to stop
-     VPNs that then stay off, where the service has to come back as after a
-     reboot.
-- **The relay's keepalive.** A phone's day on LTE (2026-11-03) put juist
-  at 16 % in Android's list, against 5 % on Wi-Fi at M21. Its floor is the
-  relay's keepalive: the pinned derpserver sends every client one every 60
-  to 65 s, a resting phone too, which on LTE wakes the radio about 60 times
-  an hour whatever the phone's pace. Sparing a resting phone it is safe
-  only where the carrier's NAT keeps an idle connection open longer than
-  the phone's own traffic leaves it idle; else the relay no longer reaches
-  the phone.
+What the app does on a phone Google's Family Link supervises, beside M26's
+features: what a parent sends while juist runs arrives, as a push through
+Google's FCM to `mtalk.google.com:5228`.
 
-- **Exit criteria:** (1) on a phone Family Link supervises, with juist on,
+- **Exit criterion:** on a phone Family Link supervises, with juist on,
   directly and through an exit node, on Wi-Fi and mobile data, the screen
-  on and off after the phone slept, a sound and more screen time a parent
-  sends arrive within a minute, as with juist off; after Family Link locks
-  and unlocks the phone, juist is on again; (2) how long the carrier of the
-  phone's day keeps an idle connection is measured, and from it decided
-  whether a relay spares a resting phone its keepalive; where it does, a
-  phone's day on LTE puts juist below 16 % and a member reaches the
-  resting phone within a minute.
+  off a long time, a sound a parent sends arrives, as with juist off.
 
 ## M31 — A desktop app on Linux
 
@@ -1926,6 +1909,44 @@ Open decisions:
   juistd's resolver stopped, no DNS query leaves the host outside the tunnel;
   (5) the package installs and removes cleanly, and builds to the same bytes
   on two builders.
+
+## M38 — Family Link's lock, and a resting phone's keepalive *(post-v1)*
+
+What M30 left of a phone as it is used: Family Link's lock, and what the
+relay's keepalive costs on mobile data.
+
+- **Family Link's lock.** A lock at a time limit or bedtime is reported
+  to leave a VPN off until its app is opened again (a Blokada user, 2022).
+  The app turns the VPN on again when its process starts while wanted,
+  opened or by the resume job, and its report says how its last processes
+  ended and when Android last revoked the VPN: copied after a lock, it
+  says what the lock did. A lock that force-stops the app is woken by no
+  job; one that revokes the VPN leaves juist off, as another VPN does.
+- **The relay's keepalive.** A phone's day on LTE (2026-11-03) put juist
+  at 16 % in Android's list, against 5 % on Wi-Fi at M21. Its floor is the
+  relay's keepalive: the pinned derpserver sends every client one every 60
+  to 65 s, a resting phone too, which on LTE wakes the radio about 60 times
+  an hour whatever the phone's pace. Sparing a resting phone it is safe
+  only where the carrier's NAT keeps an idle connection open longer than
+  the phone's own traffic leaves it idle; else the relay no longer reaches
+  the phone. In the emulator (`make android-idle`, 2026-11-17), a phone
+  beside ten members, one restarting every 3 minutes, woke its radio 59
+  times an hour, a packet of juist's after 10 s without one; the keepalive
+  started 29 of them, and without it 41 were left. With no member
+  restarting it woke 59 times an hour too, 49 of them started by the
+  keepalive, and 17 were left without it. Google Play services measures
+  the carrier already: it learns per network type how long its idle
+  connection to `mtalk` lives, between 110 and 1730 s (`GcmService`'s
+  dump, "Adaptive Heartbeat", type 0 mobile, 1 Wi-Fi, 17 a VPN,
+  `heartbeat_interval` and its good and bad counts), read on the phone by
+  adb over Wi-Fi after a day on LTE; with juist on, its connection counts
+  as the VPN's.
+
+- **Exit criteria:** (1) after Family Link locks and unlocks the phone,
+  juist is on again; (2) how long the carrier of the phone's day keeps an
+  idle connection is measured, and from it decided whether a relay spares
+  a resting phone its keepalive; where it does, a phone's day on LTE puts
+  juist below 16 % and a member reaches the resting phone within a minute.
 
 ## Later — The whole network's reach
 

@@ -413,9 +413,10 @@ func TestTheVPNConfigIsWhatTheAppReads(t *testing.T) {
 		Addrs: []netip.Prefix{netip.MustParsePrefix("100.64.0.7/32"), netip.MustParsePrefix("fd00:1:2::7/128")},
 		Routes: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("fd00:1:2::/48"),
 			netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("128.0.0.0/2"), netip.MustParsePrefix("2000::/3")},
-		DNS:    []netip.Addr{netip.MustParseAddr("fd00:1:2::53")},
-		Search: []string{"home.juist", "lan"},
-		MTU:    1280,
+		DNS:      []netip.Addr{netip.MustParseAddr("fd00:1:2::53")},
+		Search:   []string{"home.juist", "lan"},
+		MTU:      1280,
+		Internet: true,
 	})
 	if err == nil || len(p.established) != 1 {
 		t.Fatalf("established %q, %v", p.established, err)

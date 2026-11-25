@@ -2,7 +2,11 @@ package io.juist.app.core
 
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
+import android.os.Process
+import android.util.Log
 import androidx.core.content.edit
 import io.juist.mobile.Core
 import io.juist.mobile.InviteListener
@@ -234,12 +238,49 @@ object Juist {
     /** Whether the person last left the VPN on, so that a reboot or an update turns it on again. */
     fun wanted(context: Context) = prefs(context).getBoolean("wanted", false)
 
-    internal fun want(context: Context, on: Boolean) = prefs(context).edit { putBoolean("wanted", on) }
+    internal fun want(context: Context, on: Boolean) {
+        prefs(context).edit { putBoolean("wanted", on).remove("failed") }
+        ResumeJob.follow(context, on)
+    }
+
+    /** Whether the core failed to start, kept until a reboot, an update, the person turns the VPN on, or a core runs. */
+    fun failedToStart(context: Context) = prefs(context).getBoolean("failed", false)
+
+    /** When Android last revoked the VPN, in Unix milliseconds, zero never. */
+    fun revokedAt(context: Context) = prefs(context).getLong("revoked", 0)
 
     fun connect(context: Context) {
         want(context, true)
         _connection.update { if (it is Connection.On) it else Connection.Starting(last) }
         JuistVpnService.start(context)
+    }
+
+    /**
+     * Turns the VPN on again where it was left on and Android still lets
+     * juist route: after a reboot, an update, or the death of the process,
+     * which Android does not restart a VPN after. A core that failed is
+     * tried again only where afresh, after a reboot or an update, or once
+     * the person turns the VPN on. Another app's VPN, turned on while the
+     * process was dead, took over as it would have from a live one.
+     */
+    fun resume(context: Context, afresh: Boolean = false) {
+        if (afresh) prefs(context).edit { remove("failed") }
+        if (core != null || !wanted(context) || failedToStart(context)) return
+        if (anotherVpn(context)) {
+            revoked(context)
+            _connection.update { if (it is Connection.Off) Connection.Off(it.last, OffReason.Revoked) else it }
+            return
+        }
+        if (VpnService.prepare(context) != null) {
+            ResumeJob.follow(context, false)
+            return
+        }
+        ResumeJob.follow(context, true)
+        _connection.update { if (it is Connection.Off) Connection.Starting(it.last) else it }
+        runCatching { JuistVpnService.start(context) }.onFailure {
+            Log.w("juist", "resuming the VPN", it)
+            _connection.update { c -> if (c is Connection.Starting) Connection.Off(c.last) else c }
+        }
     }
 
     fun disconnect(context: Context) {
@@ -268,8 +309,32 @@ object Juist {
         }
     }
 
+    /**
+     * Whether a VPN not juist's runs: preparing juist's would take over one of
+     * this profile. One of another profile looks the same and stops a resume too.
+     */
+    @Suppress("DEPRECATION")
+    private fun anotherVpn(context: Context): Boolean {
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        return cm.allNetworks.any { n ->
+            val caps = cm.getNetworkCapabilities(n)
+            caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) && caps.ownerUid != Process.myUid()
+        }
+    }
+
+    private fun revoked(context: Context) {
+        want(context, false)
+        prefs(context).edit { putLong("revoked", System.currentTimeMillis()) }
+    }
+
+    /** The core runs: a failure kept from before is over, and a VPN wanted is resumed again. */
+    internal fun running(context: Context) {
+        prefs(context).edit { remove("failed") }
+        if (wanted(context)) ResumeJob.follow(context, true)
+    }
+
     internal fun detached(context: Context, reason: OffReason = OffReason.None) {
-        if (reason == OffReason.Revoked) want(context, false)
+        if (reason == OffReason.Revoked) revoked(context)
         poller?.cancel()
         synchronized(publishing) {
             core = null
@@ -280,7 +345,9 @@ object Juist {
         }
     }
 
-    internal fun failed(message: String) {
+    internal fun failed(context: Context, message: String) {
+        prefs(context).edit { putBoolean("failed", true) }
+        ResumeJob.follow(context, false)
         synchronized(publishing) {
             core = null
             _connection.value = Connection.Failed(message, last)

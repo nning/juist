@@ -283,7 +283,9 @@ Dort liegen auch die vier Einstellungen des Telefons:
 
 Unter **Diagnose** zählt die App, wie oft sie das VPN eingerichtet hat und wie
 ihre Abfragen liefen: wie viele fehlschlugen oder langsam waren, und welche.
-**Protokoll kopieren** fügt hinzu, wie Android die Netze des Telefons sieht.
+**Protokoll kopieren** fügt hinzu, wie Android die Netze des Telefons sieht,
+wann es das VPN zuletzt entzogen hat und wie die letzten Läufe der App
+endeten.
 
 ## Subnetze {#subnets}
 
@@ -339,15 +341,28 @@ gesperrt werden, schalte für juist **Durchgehend aktives VPN** und
 **Verbindungen ohne VPN blockieren** in den VPN-Einstellungen von Android
 ein. Die App verlinkt dorthin.
 
+Ohne Exit-Node dürfen Apps am VPN vorbei ins Netz darunter, wie es Googles
+Push-Nachrichten müssen; eine App, die das absichtlich tut, sucht die Geräte
+des Netzes dort, nicht über juist, und jedes Gerät in jenem Netz kann ihr
+antworten. Über einen Exit-Node darf das keine. Mit
+**Verbindungen ohne VPN blockieren** lässt Android keine vorbei, und ohne
+Exit-Node kommen Push-Nachrichten dann nicht an.
+
 ## Das VPN aus- und einschalten
 
 Der Schalter neben dem Zustand schaltet das VPN aus und ein, ebenso die
 Kachel von juist in den Schnelleinstellungen von Android: Füge sie beim
 Bearbeiten der Kacheln hinzu; lang gedrückt, oder ohne Netz, öffnet sie die App. Solange es an
 ist, zeigt eine Benachrichtigung den Zustand, mit der Aktion **Ausschalten**.
-War das VPN an, schaltet juist es nach einem Neustart oder Update wieder ein.
+War das VPN an, schaltet juist es nach einem Neustart oder Update wieder ein,
+und nachdem Android die App beendet hat: wenn du sie öffnest, oder von selbst
+nach etwa 15 Minuten, während das Telefon benutzt wird. Nach einem
+erzwungenen Beenden schaltet es erst das Öffnen der App wieder ein, und
+nachdem juist nicht starten konnte, erst das Einschalten.
 Android betreibt immer nur ein VPN: Eine andere VPN-App schaltet juist ab, und
-die App sagt das.
+die App sagt das. Läuft ein VPN im Arbeitsprofil oder im privaten Bereich,
+kann juist es nicht von dem einer anderen App unterscheiden und schaltet
+sich ebenfalls nicht von selbst ein.
 
 ## Akku
 
@@ -394,7 +409,8 @@ Telefon führt das Netz weiter.
   oder verschickt.
 - **Über juist** im Menü zeigt Version und Lizenzen. **Protokoll kopieren**
   kopiert das Log der App, das nur im Speicher liegt, mit dem, wie Android die
-  Netze des Telefons sieht, und den fehlgeschlagenen Abfragen. Es nennt deine
+  Netze des Telefons sieht, den fehlgeschlagenen Abfragen und wie die letzten
+  Läufe der App endeten. Es nennt deine
   Geräte und Adressen; gib es nur jemandem, dem du vertraust.
 
 ## Fehlersuche

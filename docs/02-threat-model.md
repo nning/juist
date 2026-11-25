@@ -403,6 +403,10 @@ them by number.
   Android's automatic Private DNS found the resolvers answering it and in plain
   text otherwise, and leaves the phone's DNS alone where Private DNS names a
   host, which then sees every lookup as it did before juist.
+- On a phone without an exit node the VPN may be bypassed, as Google's push
+  channel needs: an app that binds to the network beneath on purpose reaches
+  the network's addresses and names there, not through juist, and a hostile
+  LAN may answer for them. Through an exit node nothing bypasses it.
 - Prefer attributable signatures (audit trail) over threshold/aggregated ones.
 - The data plane never depends on the group secret alone: WireGuard's handshake
   holds without it, and a pair key replaces it as the preshared key; discovery
