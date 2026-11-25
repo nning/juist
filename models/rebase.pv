@@ -1,0 +1,90 @@
+(* Replacing a log by an invite's chain (internal/guest Extend,
+   trust/log Authority.Rebase): a device further behind than its peers keep
+   takes a new chain only from an invite link naming an admin, only with that
+   admin's admission of it at the chain's head, and only where the chain's
+   anchor carries a quorum of the admins its own log trusts, at a later
+   epoch.
+
+   Attacker (docs/02-threat-model.md): the inviting daemon, which hands over
+   any chain it likes, and the network; and an evicted admin, whose key the
+   device behind still trusts, since it never heard of the removal. The
+   admin the link names, at its CLI, is honest and admits only a chain it
+   checked against its own log.
+
+   Abstractions: a chain is its anchor and the rest, its head their hash;
+   Ed25519 and ML-DSA are one signature; "later" is a relation between
+   epochs the attacker cannot extend. A typed code never rebases, which the code's structure, not this
+   model, decides.
+
+   Comments opening with an @ name the labels the code must use and the
+   fields each value is made of, in order; trust/enroll's model_test.go
+   holds the code to them. A label is followed by a zero byte where it heads
+   a field list. *)
+
+free c: channel.
+free oob: channel [private].
+
+fun hash(bitstring): bitstring.
+fun pk(bitstring): bitstring.
+fun sign(bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, m: bitstring; verify(pk(sk), m, sign(sk, m)) = true.
+
+(*@ label LabelEnrollAdmission "juist enroll admission v2" *)
+const LabelEnrollAdmission: bitstring [data].
+
+(*@ fields admission: LabelEnrollAdmission admin network head guest signing *)
+
+const checkpoint: bitstring [data].
+
+free network: bitstring.
+free e0: bitstring.
+free e1: bitstring.
+free e2: bitstring.
+table later(bitstring, bitstring).
+
+free skAdmin: bitstring [private].
+
+event Genuine(bitstring, bitstring).          (* anchor, head of a chain the admin checked *)
+event Admits(bitstring, bitstring, bitstring). (* admin, guest, head *)
+event Rebases(bitstring, bitstring, bitstring). (* guest, anchor, head *)
+
+(* The admin the link names: it signs a checkpoint at a later epoch as one
+   of the quorum, and admits a guest at the head of the chain it holds. *)
+let Admin(skA: bitstring) =
+  new body: bitstring;
+  let anchor = (checkpoint, network, e2, body) in
+  new rest: bitstring;
+  let head = hash((anchor, rest)) in
+  event Genuine(anchor, head);
+  out(c, (anchor, sign(skA, anchor), rest));
+  ! in(c, guest: bitstring);
+    event Admits(pk(skA), guest, head);
+    out(c, sign(skA, hash((LabelEnrollAdmission, pk(skA), network, head, guest, pk(skA))))).
+
+(* The device behind: its log is at e0 and trusts pkA and pkEvicted, one
+   vote each, quorum one. The link names pkA. *)
+let Guest(skG: bitstring, pkA: bitstring, pkEvicted: bitstring) =
+  in(oob, =pkA);
+  in(c, ((=checkpoint, =network, epoch: bitstring, body: bitstring), anchorSig: bitstring, rest: bitstring,
+         admission: bitstring));
+  let anchor = (checkpoint, network, epoch, body) in
+  let head = hash((anchor, rest)) in
+  if verify(pkA, anchor, anchorSig) || verify(pkEvicted, anchor, anchorSig) then
+  get later(=epoch, =e0) in
+  if verify(pkA, hash((LabelEnrollAdmission, pkA, network, head, pk(skG), pkA)), admission) then
+  event Rebases(pk(skG), anchor, head).
+
+(* The device rebases only onto a chain the link's admin checked and
+   admitted it to. *)
+query g: bitstring, a: bitstring, h: bitstring;
+  event(Rebases(g, a, h)) ==> event(Admits(pk(skAdmin), g, h)) && event(Genuine(a, h)).
+(* It does, given one: ProVerif finds the trace. *)
+query g: bitstring, a: bitstring, h: bitstring; event(Rebases(g, a, h)).
+
+
+process
+  new skG: bitstring; new skEvicted: bitstring;
+  insert later(e1, e0);
+  insert later(e2, e0);
+  out(c, (pk(skG), skEvicted, pk(skAdmin)));
+  (!Admin(skAdmin)) | (!Guest(skG, pk(skAdmin), pk(skEvicted))) | (!out(oob, pk(skAdmin)))

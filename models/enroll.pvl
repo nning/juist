@@ -1,0 +1,247 @@
+(* Enrollment (trust/enroll): SPAKE2 over a typed code or a link, then
+   ML-KEM-768 inside the channel, a join request bound to the session and the
+   words a person compares. The library the enroll*.pv files share.
+
+   Attacker (docs/02-threat-model.md): the network observer, on the LAN or on
+   the path, who reads, injects and drops every frame, dials the inviting
+   host as often as it likes and answers a guest in the host's place; later a
+   quantum computer over what it recorded (enroll-pq-*.pv). It knows neither
+   the code nor the link. The inviting device and the admin at it are honest:
+   a dishonest one is residual weakness 6.
+
+   Abstractions: a group element blinded by the password, x·P + w·M, is
+   blind(x·P, w, M), which anyone undoes with any w and which hides whether w
+   was right, as EKE's encryption does in ProVerif's examples; K is the
+   identity only for an element built from the password alone. Hashes, HKDF
+   and HMAC are free functions; AEAD frames carry their counter. The words'
+   32 bits and the commitment that keeps them unsearchable are computational
+   and not modelled: the words here are a hash, which nobody matches.
+
+   Comments opening with an @ name the labels the code must use and the
+   fields each value is made of, in order; trust/enroll's model_test.go
+   holds the code to them. A label is followed by a zero byte where it
+   heads a field list; a channel key's info is its label and direction
+   alone. *)
+
+free c: channel.
+
+(* The person comparing the guest's screen with the admin's. *)
+free screen: channel [private].
+
+type G.
+type exponent.
+
+const P: G [data].
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(P, x), y) = exp(exp(P, y), x).
+const identity: G [data].
+
+const M: bitstring [data].
+const N: bitstring [data].
+fun blind(G, bitstring, bitstring): G.
+fun unblind(G, bitstring, bitstring): G.
+equation forall X: G, w: bitstring, r: bitstring; unblind(blind(X, w, r), w, r) = X.
+equation forall X: G, w: bitstring, r: bitstring; blind(unblind(X, w, r), w, r) = X.
+
+fun hash(bitstring): bitstring.
+fun hkdf(bitstring, bitstring, bitstring): bitstring.
+fun hmac(bitstring, bitstring): bitstring.
+fun keOf(bitstring): bitstring.
+fun kaOf(bitstring): bitstring.
+fun firstHalf(bitstring): bitstring.
+fun secondHalf(bitstring): bitstring.
+
+fun seal(bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, n: bitstring, m: bitstring; open(k, n, seal(k, n, m)) = m.
+
+(* ML-KEM-768 *)
+fun ek(bitstring): bitstring.
+fun kemCT(bitstring, bitstring): bitstring.
+fun kemSS(bitstring, bitstring): bitstring.
+reduc forall dk: bitstring, r: bitstring; decaps(dk, kemCT(ek(dk), r)) = kemSS(ek(dk), r).
+
+(* Ed25519 and ML-DSA alike *)
+fun pk(bitstring): bitstring.
+fun sign(bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, m: bitstring; verify(pk(sk), m, sign(sk, m)) = true.
+
+(*@ label LabelEnrollSPAKE2W "juist enroll spake2 w v1" *)
+const LabelEnrollSPAKE2W: bitstring [data].
+(*@ label LabelEnrollV1 "juist enroll v1 " *)
+const LabelEnrollV1: bitstring [data].
+(*@ label LabelEnrollV3 "juist enroll v3 " *)
+const LabelEnrollV3: bitstring [data].
+(*@ label LabelEnrollBinding "juist enroll binding v3" *)
+const LabelEnrollBinding: bitstring [data].
+(*@ label LabelEnrollProof "juist enroll proof v1" *)
+const LabelEnrollProof: bitstring [data].
+(*@ label LabelWordsCommit "juist words commit v1" *)
+const LabelWordsCommit: bitstring [data].
+(*@ label LabelDeviceWords "juist device words v3" *)
+const LabelDeviceWords: bitstring [data].
+(*@ label guestIdentity "juist enroll guest" *)
+const guestIdentity: bitstring [data].
+(*@ label hostIdentity "juist enroll host" *)
+const hostIdentity: bitstring [data].
+(*@ label confirmationKeys "ConfirmationKeys" *)
+const confirmationKeys: bitstring [data].
+(*@ label guestToHost "guest to host" *)
+const guestToHost: bitstring [data].
+(*@ label hostToGuest "host to guest" *)
+const hostToGuest: bitstring [data].
+
+(*@ fields w: LabelEnrollSPAKE2W password *)
+(*@ fields keySchedule: guestIdentity hostIdentity pA pB K w *)
+(*@ fields transcript: keySchedule ek ct *)
+(*@ fields binding: LabelEnrollBinding transcript *)
+(*@ fields channel.secret: Ke ss *)
+(*@ fields channel.salt: transcript *)
+(*@ fields proof: LabelEnrollProof binding *)
+(*@ fields commit: LabelWordsCommit nonce *)
+(*@ fields deviceWords: LabelDeviceWords salt nonce identity wireguard x25519 mlkem signing *)
+
+const modeCode: bitstring [data].
+const modeLink: bitstring [data].
+const version: bitstring [data].
+const empty: bitstring [data].
+const n0: bitstring [data].
+const n1: bitstring [data].
+
+const hsHello: bitstring [data].
+const hsReply: bitstring [data].
+const hsConfirm: bitstring [data].
+const refusedWrongCode: bitstring [data].
+const refusedClosed: bitstring [data].
+const kindJoin: bitstring [data].
+const kindCompare: bitstring [data].
+const kindReveal: bitstring [data].
+const kindWelcome: bitstring [data].
+const toAdmin: bitstring [data].
+const fromAdmin: bitstring [data].
+
+letfun wOf(pw: bitstring) = hash((LabelEnrollSPAKE2W, pw)).
+letfun aadOf(mode: bitstring) = (version, mode).
+
+(* The guest confirms first; the host answers. *)
+event GuestConfirms(bitstring).
+event HostAccepts(bitstring).
+event GuestAccepts(bitstring).
+event GuestBound(bitstring).
+event HostBound(bitstring).
+event GuestSends(bitstring, bitstring).
+event HostReceives(bitstring, bitstring).
+event GuestRequests(bitstring, bitstring).
+event Admitted(bitstring, bitstring).
+event GuestWelcomed(bitstring).
+(* The host's answer told a guest whether its element matched the secret. *)
+event Spent(bitstring).
+
+(* A device joining with pw. Its keys are pkG and keysG, the rest of the
+   request (WireGuard, X25519, ML-KEM and ML-DSA keys). *)
+let Guest(pw: bitstring, mode: bitstring, skG: bitstring, keysG: bitstring) =
+  new x: exponent;
+  let w = wOf(pw) in
+  let pA = blind(exp(P, x), w, M) in
+  out(c, (hsHello, version, mode, pA));
+  in(c, (=hsReply, pB: G));
+  let Y = unblind(pB, w, N) in
+  if Y <> identity then
+  let K = exp(Y, x) in
+  let t = (guestIdentity, hostIdentity, pA, pB, K, w) in
+  let h = hash(t) in
+  let ke = keOf(h) in
+  let kc = hkdf(kaOf(h), empty, (confirmationKeys, aadOf(mode))) in
+  event GuestConfirms(t);
+  out(c, (hsConfirm, hmac(firstHalf(kc), t)));
+  in(c, (=hsConfirm, macB: bitstring));
+  if macB = hmac(secondHalf(kc), t) then
+  event GuestAccepts(t);
+  let g2h1 = hkdf(ke, empty, (LabelEnrollV1, guestToHost)) in
+  let h2g1 = hkdf(ke, empty, (LabelEnrollV1, hostToGuest)) in
+  new dk: bitstring;
+  out(c, seal(g2h1, n0, ek(dk)));
+  in(c, ctFrame: bitstring);
+  let ct = open(h2g1, n0, ctFrame) in
+  let ss = decaps(dk, ct) in
+  let tr = hash((t, ek(dk), ct)) in
+  let g2h = hkdf((ke, ss), tr, (LabelEnrollV3, guestToHost)) in
+  let h2g = hkdf((ke, ss), tr, (LabelEnrollV3, hostToGuest)) in
+  let binding = hash((LabelEnrollBinding, tr)) in
+  event GuestBound(binding);
+  new nonce: bitstring;
+  let req = (pk(skG), keysG, sign(skG, hash((LabelEnrollProof, binding))),
+             hash((LabelWordsCommit, nonce))) in
+  event GuestRequests(pk(skG), keysG);
+  event GuestSends(binding, req);
+  out(c, seal(g2h, n0, (kindJoin, req)));
+  in(c, compareFrame: bitstring);
+  let (=kindCompare, salt: bitstring) = open(h2g, n0, compareFrame) in
+  out(c, seal(g2h, n1, (kindReveal, nonce)));
+  out(screen, hash((LabelDeviceWords, salt, nonce, pk(skG), keysG)));
+  in(c, welcomeFrame: bitstring);
+  let (=kindWelcome, groupSecret: bitstring) = open(h2g, n1, welcomeFrame) in
+  event GuestWelcomed(pk(skG)).
+
+(* The inviting device. It passes the request to the admin and the admin's
+   salt to the guest, and welcomes the guest once the admin signed. *)
+let Host(pw: bitstring, mode: bitstring, groupSecret: bitstring, pkAdmin: bitstring) =
+  in(c, (=hsHello, =version, =mode, pA: G));
+  let w = wOf(pw) in
+  let X = unblind(pA, w, M) in
+  new y: exponent;
+  let pB = blind(exp(P, y), w, N) in
+  let K = exp(X, y) in
+  let t = (guestIdentity, hostIdentity, pA, pB, K, w) in
+  let h = hash(t) in
+  let ke = keOf(h) in
+  let kc = hkdf(kaOf(h), empty, (confirmationKeys, aadOf(mode))) in
+  out(c, (hsReply, pB));
+  in(c, (=hsConfirm, macA: bitstring));
+  (* An element built from the password alone (errPasswordElement) is
+     refused here, not before the reply: enroll-online.pv. *)
+  if X = identity || macA <> hmac(firstHalf(kc), t) then (event Spent(t); out(c, refusedWrongCode)) else
+  event Spent(t);
+  event HostAccepts(t);
+  out(c, (hsConfirm, hmac(secondHalf(kc), t)));
+  let g2h1 = hkdf(ke, empty, (LabelEnrollV1, guestToHost)) in
+  let h2g1 = hkdf(ke, empty, (LabelEnrollV1, hostToGuest)) in
+  in(c, ekFrame: bitstring);
+  let ekG = open(g2h1, n0, ekFrame) in
+  new r: bitstring;
+  let ct = kemCT(ekG, r) in
+  let ss = kemSS(ekG, r) in
+  let tr = hash((t, ekG, ct)) in
+  let g2h = hkdf((ke, ss), tr, (LabelEnrollV3, guestToHost)) in
+  let h2g = hkdf((ke, ss), tr, (LabelEnrollV3, hostToGuest)) in
+  let binding = hash((LabelEnrollBinding, tr)) in
+  event HostBound(binding);
+  out(c, seal(h2g1, n0, ct));
+  in(c, joinFrame: bitstring);
+  let (=kindJoin, req: bitstring) = open(g2h, n0, joinFrame) in
+  let (pkG: bitstring, keysG: bitstring, possession: bitstring, commit: bitstring) = req in
+  if verify(pkG, hash((LabelEnrollProof, binding)), possession) then
+  event HostReceives(binding, req);
+  out(c, (toAdmin, req));
+  in(c, (=fromAdmin, salt: bitstring));
+  out(c, seal(h2g, n0, (kindCompare, salt)));
+  in(c, revealFrame: bitstring);
+  let (=kindReveal, nonce: bitstring) = open(g2h, n1, revealFrame) in
+  out(c, (toAdmin, nonce));
+  in(c, (=fromAdmin, admission: bitstring));
+  if verify(pkAdmin, (pkG, keysG), admission) then
+  out(c, seal(h2g, n1, (kindWelcome, groupSecret))).
+
+(* The admin, at a CLI holding the admin key (internal/govern): the salt is
+   drawn here, and the person compares the words here with the guest's
+   screen. What reaches it passes through the daemon, which the attacker may
+   be. *)
+let Admin(skAdmin: bitstring) =
+  in(c, (=toAdmin, (pkG: bitstring, keysG: bitstring, possession: bitstring, commit: bitstring)));
+  new salt: bitstring;
+  out(c, (fromAdmin, salt));
+  in(c, (=toAdmin, nonce: bitstring));
+  if hash((LabelWordsCommit, nonce)) = commit then
+  in(screen, shown: bitstring);
+  if shown = hash((LabelDeviceWords, salt, nonce, pkG, keysG)) then
+  event Admitted(pkG, keysG);
+  out(c, (fromAdmin, sign(skAdmin, (pkG, keysG)))).

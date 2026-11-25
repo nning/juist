@@ -1,0 +1,127 @@
+(* The pair key (internal/pairkey): a pair of members moves from the group
+   key to a key the two alone hold, each encapsulating to the other's ML-KEM
+   key in four signed messages. The library the pairkey*.pv files share.
+
+   Attacker (docs/02-threat-model.md): a third member, holding the group
+   secret of every epoch and keys of its own, which pairs with both members
+   as they pair with each other, and controls the network between them
+   (the network observer). Later, in pairkey-fs*.pv, it steals both members'
+   devices: their ML-KEM keys and the group secret.
+
+   Abstractions: HKDF, HMAC and SHA-256 are free functions; ML-KEM-768 is a
+   KEM nobody opens without the decapsulation key; Ed25519 and ML-DSA are one
+   signature. A generation's number is fresh per generation, which the
+   leader's counter is; the pacing and the probing of the previous key are
+   availability alone and left out.
+
+   Comments opening with an @ name the labels the code must use and the
+   fields each value is made of, in order; internal/pairkey's model_test.go
+   holds the code to them. A label is followed by a zero byte where it
+   heads a field list; HKDF's secret, salt and info are listed apart. *)
+
+free c: channel.
+
+fun hash(bitstring): bitstring.
+fun hkdf(bitstring, bitstring, bitstring): bitstring.
+fun hmac(bitstring, bitstring): bitstring.
+
+fun ek(bitstring): bitstring.
+fun kemCT(bitstring, bitstring): bitstring.
+fun kemSS(bitstring, bitstring): bitstring.
+reduc forall dk: bitstring, r: bitstring; decaps(dk, kemCT(ek(dk), r)) = kemSS(ek(dk), r).
+
+fun pk(bitstring): bitstring.
+fun sign(bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, m: bitstring; verify(pk(sk), m, sign(sk, m)) = true.
+
+(*@ label LabelPSKGroup "juist/wg-psk-group/v1" *)
+const LabelPSKGroup: bitstring [data].
+(*@ label LabelPSKPair "juist/wg-psk-pair/v1" *)
+const LabelPSKPair: bitstring [data].
+(*@ label LabelPSKCheck "juist/wg-psk-check/v1" *)
+const LabelPSKCheck: bitstring [data].
+(*@ label LabelPairMsg "juist/pair-msg/v1" *)
+const LabelPairMsg: bitstring [data].
+(*@ label roleLeader "leader" *)
+const roleLeader: bitstring [data].
+(*@ label roleFollower "follower" *)
+const roleFollower: bitstring [data].
+
+(*@ fields groupKey.secret: seed *)
+(*@ fields groupKey.salt: epoch *)
+(*@ fields groupKey.info: LabelPSKGroup lower higher *)
+(*@ fields pairKey.secret: sharedL sharedF *)
+(*@ fields pairKey.salt: groupKey *)
+(*@ fields pairKey.info: LabelPSKPair network leader follower gen epoch transcript *)
+(*@ fields transcript: ctL ctF *)
+(*@ fields check.key: key *)
+(*@ fields check.message: LabelPSKCheck role *)
+(*@ fields pairMsg: LabelPairMsg network body *)
+
+const offer: bitstring [data].
+const answer: bitstring [data].
+const commit: bitstring [data].
+const takenUp: bitstring [data].
+
+(* groupKey's fields: HKDF's secret, salt, then its info. The leader's
+   WireGuard key is the lower. *)
+letfun groupKey(seed: bitstring, epoch: bitstring, lower: bitstring, higher: bitstring) =
+  hkdf(seed, epoch, (LabelPSKGroup, lower, higher)).
+
+letfun pairKey(sharedL: bitstring, sharedF: bitstring, group: bitstring, network: bitstring,
+               leader: bitstring, follower: bitstring, gen: bitstring, epoch: bitstring,
+               ctL: bitstring, ctF: bitstring) =
+  hkdf((sharedL, sharedF), group, (LabelPSKPair, network, leader, follower, gen, epoch, hash((ctL, ctF)))).
+
+letfun check(k: bitstring, role: bitstring) = hmac(k, (LabelPSKCheck, role)).
+
+letfun signed(sk: bitstring, network: bitstring, m: bitstring) = (m, sign(sk, (LabelPairMsg, network, m))).
+
+(* Leader and follower name a pair by their WireGuard keys. *)
+event LeaderUses(bitstring, bitstring, bitstring, bitstring, bitstring).
+event FollowerAnswers(bitstring, bitstring, bitstring, bitstring, bitstring).
+event FollowerUses(bitstring, bitstring, bitstring, bitstring, bitstring).
+event LeaderTakesUp(bitstring, bitstring, bitstring, bitstring, bitstring).
+
+(* The member with the lower WireGuard key: wgL, its ML-KEM key dkL. The
+   peer, as the log names it: pkF, wgF, ekF. *)
+let Leader(network: bitstring, seed: bitstring, skL: bitstring, wgL: bitstring, dkL: bitstring,
+           pkF: bitstring, wgF: bitstring, ekF: bitstring) =
+  new gen: bitstring;
+  new epoch: bitstring;
+  new r: bitstring;
+  let ctL = kemCT(ekF, r) in
+  let sharedL = kemSS(ekF, r) in
+  out(c, (gen, epoch));
+  out(c, signed(skL, network, (offer, wgL, wgF, gen, epoch, ctL)));
+  in(c, (m2: bitstring, s2: bitstring));
+  if verify(pkF, (LabelPairMsg, network, m2), s2) then
+  let (=answer, =wgF, =wgL, =gen, =epoch, ctF: bitstring, chk: bitstring) = m2 in
+  let sharedF = decaps(dkL, ctF) in
+  let k = pairKey(sharedL, sharedF, groupKey(seed, epoch, wgL, wgF), network, wgL, wgF, gen, epoch, ctL, ctF) in
+  if chk = check(k, roleFollower) then
+  event LeaderUses(wgL, wgF, gen, epoch, k);
+  out(c, signed(skL, network, (commit, wgL, wgF, gen, check(k, roleLeader))));
+  in(c, (m4: bitstring, s4: bitstring));
+  if verify(pkF, (LabelPairMsg, network, m4), s4) then
+  let (=takenUp, =wgF, =wgL, =gen) = m4 in
+  event LeaderTakesUp(wgL, wgF, gen, epoch, k).
+
+let Follower(network: bitstring, seed: bitstring, skF: bitstring, wgF: bitstring, dkF: bitstring,
+             pkL: bitstring, wgL: bitstring, ekL: bitstring) =
+  in(c, (m1: bitstring, s1: bitstring));
+  if verify(pkL, (LabelPairMsg, network, m1), s1) then
+  let (=offer, =wgL, =wgF, gen: bitstring, epoch: bitstring, ctL: bitstring) = m1 in
+  let sharedL = decaps(dkF, ctL) in
+  new r: bitstring;
+  let ctF = kemCT(ekL, r) in
+  let sharedF = kemSS(ekL, r) in
+  let k = pairKey(sharedL, sharedF, groupKey(seed, epoch, wgL, wgF), network, wgL, wgF, gen, epoch, ctL, ctF) in
+  event FollowerAnswers(wgL, wgF, gen, epoch, k);
+  out(c, signed(skF, network, (answer, wgF, wgL, gen, epoch, ctF, check(k, roleFollower))));
+  in(c, (m3: bitstring, s3: bitstring));
+  if verify(pkL, (LabelPairMsg, network, m3), s3) then
+  let (=commit, =wgL, =wgF, =gen, chk: bitstring) = m3 in
+  if chk = check(k, roleLeader) then
+  event FollowerUses(wgL, wgF, gen, epoch, k);
+  out(c, signed(skF, network, (takenUp, wgF, wgL, gen))).

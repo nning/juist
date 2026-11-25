@@ -121,7 +121,7 @@ why it is accepted, and what you can change. In short:
   one network, but not to which, nor whose they are. With a relay of your
   own, juistd can run without them.
 
-## Quantum-safe
+## Post-quantum
 
 A future quantum computer could break today's common encryption and forge
 today's common signatures, and traffic recorded now could be decrypted then.
@@ -147,7 +147,7 @@ juist protects against both:
   through the ingress agree their key that way wherever the other end offers
   it, as current browsers do.
 
-Every tunnel between devices on the current version is quantum-safe. A device
+Every tunnel between devices on the current version is post-quantum. A device
 on an older version gets none of your traffic until it is updated:
 `juist health` warns that it runs an older juist, and `juist devices` shows
 it as `outdated`.

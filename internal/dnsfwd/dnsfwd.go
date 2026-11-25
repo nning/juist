@@ -446,14 +446,14 @@ func (r *Refusal) Error() string { return r.Err.Error() }
 func (r *Refusal) Unwrap() error { return r.Err }
 
 // fitUDP is resp, truncated to its question with TC set where it is longer
-// than MaxUDP.
+// than MaxUDP, and to its header where the question alone is.
 func (f *Forwarder) fitUDP(resp []byte) []byte {
 	if f.opts.MaxUDP == 0 || len(resp) <= f.opts.MaxUDP || len(resp) < headerLen {
 		return resp
 	}
 	end := headerLen
 	if binary.BigEndian.Uint16(resp[4:]) == 1 {
-		if off := skipName(resp, headerLen); off >= 0 && off+4 <= len(resp) {
+		if off := skipName(resp, headerLen); off >= 0 && off+4 <= len(resp) && off+4 <= f.opts.MaxUDP {
 			end = off + 4
 		}
 	}

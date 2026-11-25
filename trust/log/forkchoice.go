@@ -86,18 +86,23 @@ func copyGroups(r reader, hashes []types.Hash) ([][]types.Hash, error) {
 }
 
 // pickPrimary applies fork choice to valid siblings of parent, in order:
-//  1. a branch loses to a sibling whose branch removes an admin key that
-//     signed anything on it, so a removed key cannot undo its own removal;
+//  1. a branch loses to a sibling whose branch removes the admin keys a
+//     record on it stands by, so a removed key cannot undo its own removal;
+//     this is weighed against every sibling before the other rules, which
+//     rank only the branches it leaves;
 //  2. a revocation beats anything else;
 //  3. the lower hash wins, from [types.SchemaContentForkChoice] on the lower
 //     [types.AUM.SigHash].
 //
 // Signature weight is deliberately not a rule: it would let one quorum outbid
-// another by collecting extras.
-func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, error) {
+// another by collecting extras. mutual are the siblings the log cannot settle
+// against the winner, which the caller alarms on rather than choosing: two
+// branches each removing a key that signed the other, or every branch undone
+// by another.
+func pickPrimary(r reader, candidates []candidate, parent *State) (_ candidate, mutual map[types.Hash]bool, _ error) {
 	// Walking each branch on a chain without forks makes resolution quadratic.
 	if len(candidates) == 1 {
-		return candidates[0], nil
+		return candidates[0], nil, nil
 	}
 	keys := make([]branchKeys, len(candidates))
 	removes := false
@@ -105,7 +110,7 @@ func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, er
 	for i := range candidates {
 		k, err := keysOfBranch(r, candidates[i], parent, false, &budget)
 		if err != nil {
-			return candidate{}, err
+			return candidate{}, nil, err
 		}
 		keys[i] = k
 		removes = removes || len(k.removed) > 0
@@ -117,59 +122,81 @@ func pickPrimary(r reader, candidates []candidate, parent *State) (candidate, er
 		for i := range candidates {
 			k, err := keysOfBranch(r, candidates[i], parent, true, &budget)
 			if err != nil {
-				return candidate{}, err
+				return candidate{}, nil, err
 			}
 			keys[i] = k
 		}
 	}
-	// undone reports whether the branch at i signs with a key the branch at
-	// j removes.
+	// undone reports whether a record of the branch at i stands by keys the
+	// branch at j removes.
 	undone := func(i, j int) bool {
-		for id := range keys[i].signers {
-			if keys[j].removed[id] {
-				return true
-			}
-		}
-		return false
+		return len(keys[j].removed) > 0 && slices.ContainsFunc(keys[i].signed, func(s signedRecord) bool {
+			return s.undoneBy(keys[j].removed)
+		})
 	}
 	lower := func(c, b *candidate) bool { return c.hash.Compare(b.hash) < 0 }
 	if byContent(parent) {
 		lower = func(c, b *candidate) bool { return c.sigHash.Compare(b.sigHash) < 0 }
 	}
-	best := 0
-	for i := 1; i < len(candidates); i++ {
-		c, b := &candidates[i], &candidates[best]
-		cUndone, bUndone := undone(i, best), undone(best, i)
-		rev, bestRev := parent.Revokes(&c.aum), parent.Revokes(&b.aum)
-		switch {
-		case cUndone != bUndone:
-			if bUndone {
-				best = i
-			}
-		case rev != bestRev:
-			if rev {
-				best = i
-			}
-		case lower(c, b):
+	ranks := func(c, b *candidate) bool {
+		rev, bRev := parent.Revokes(&c.aum), parent.Revokes(&b.aum)
+		return rev && !bRev || rev == bRev && lower(c, b)
+	}
+	// Rule 1 rules a branch out wherever it loses so; where it rules out
+	// every branch, the rest choose and the caller alarms.
+	out, cycle := make([]bool, len(candidates)), true
+	for i := range candidates {
+		for j := range candidates {
+			out[i] = out[i] || j != i && undone(i, j) && !undone(j, i)
+		}
+		cycle = cycle && out[i]
+	}
+	best := -1
+	for i := range candidates {
+		if (!out[i] || cycle) && (best < 0 || ranks(&candidates[i], &candidates[best])) {
 			best = i
 		}
 	}
-	return candidates[best], nil
+	mutual = map[types.Hash]bool{}
+	for i := range candidates {
+		mutual[candidates[i].hash] = i != best && (cycle || undone(i, best) && undone(best, i))
+	}
+	return candidates[best], mutual, nil
 }
 
-// branchKeys are the admin keys that signed a branch's records, and those
-// its records remove.
+// branchKeys are the admin keys a branch's records remove, and what each of
+// them was signed with.
 type branchKeys struct {
-	signers, removed map[types.Identity]bool
+	removed map[types.Identity]bool
+	signed  []signedRecord
 }
 
-// keysOfBranch collects branchKeys (signers only withSigners) over every
-// stored record from root on, within budget. A record's signers are the keys
-// any copy carries; from [types.SchemaContentForkChoice] on only those it
-// needs ([neededSigners]), so adding a signature to a record others
-// authorized does not make it the signer's.
+// A signedRecord is a record's signatures, any copy's, and the state it
+// applies to: nil where any signature counts, as below
+// [types.SchemaContentForkChoice].
+type signedRecord struct {
+	aum    *types.AUM
+	signed map[types.Identity]bool
+	at     *State
+}
+
+// undoneBy reports whether the record stands only by keys in removed: one it
+// requires, or a vote without which the rest fall short of quorum, those keys
+// taken together.
+func (s signedRecord) undoneBy(removed map[types.Identity]bool) bool {
+	if s.at == nil {
+		return slices.ContainsFunc(slices.Collect(maps.Keys(s.signed)), func(id types.Identity) bool { return removed[id] })
+	}
+	if slices.ContainsFunc(SelfSigners(s.aum), func(id types.Identity) bool { return s.signed[id] && removed[id] }) {
+		return true
+	}
+	return types.CountVotes(s.at.Admins(), func(x types.Identity) bool { return s.signed[x] && !removed[x] }) < s.at.quorum
+}
+
+// keysOfBranch collects branchKeys (signatures only withSigners) over every
+// stored record from root on, within budget.
 func keysOfBranch(r reader, root candidate, parent *State, withSigners bool, budget *int) (branchKeys, error) {
-	k := branchKeys{signers: map[types.Identity]bool{}, removed: map[types.Identity]bool{}}
+	k := branchKeys{removed: map[types.Identity]bool{}}
 	needed := withSigners && byContent(parent)
 	type group struct {
 		copies []types.Hash
@@ -214,12 +241,10 @@ func keysOfBranch(r reader, root candidate, parent *State, withSigners bool, bud
 		switch {
 		case !withSigners:
 		case !needed || g.parent == nil:
-			maps.Copy(k.signers, signed)
+			k.signed = append(k.signed, signedRecord{&aum, signed, nil})
 		default:
 			at := g.parent.at(*aum.Prev)
-			for _, id := range neededSigners(&aum, at, signed) {
-				k.signers[id] = true
-			}
+			k.signed = append(k.signed, signedRecord{&aum, signed, at})
 			if n, err := at.apply(&aum, g.copies[0], applyChain); err == nil {
 				next = n
 			}
@@ -233,27 +258,4 @@ func keysOfBranch(r reader, root candidate, parent *State, withSigners bool, bud
 		}
 	}
 	return k, nil
-}
-
-// neededSigners returns the keys of signed, the signers of a, whose
-// signature a needs under parent: one its kind requires, or an admin key
-// without whose vote the others fall short of quorum.
-func neededSigners(a *types.AUM, parent *State, signed map[types.Identity]bool) []types.Identity {
-	self := SelfSigners(a)
-	admins := parent.Admins()
-	var out []types.Identity
-	for id := range signed {
-		if slices.Contains(self, id) {
-			out = append(out, id)
-			continue
-		}
-		if _, ok := parent.admins[id]; !ok {
-			continue
-		}
-		without := types.CountVotes(admins, func(x types.Identity) bool { return x != id && signed[x] })
-		if without < parent.quorum {
-			out = append(out, id)
-		}
-	}
-	return out
 }

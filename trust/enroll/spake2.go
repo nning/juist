@@ -45,7 +45,8 @@ var errBadElement = errors.New("enroll: the peer's key exchange message is not a
 // errPasswordElement reports a peer element that makes K the identity: only
 // w·M without a secret scalar does, so it is a right guess. RFC 9382 aborts,
 // but a host aborting on right guesses and answering wrong ones is an oracle,
-// so the host counts it as the invite's one guess ([Invite.AcceptHello]).
+// so the host answers it as any other and refuses it at the confirmation, as
+// the invite's one guess ([Invite.AcceptHello]).
 var errPasswordElement = errors.New("enroll: the peer's element was built from the password")
 
 // A spake is one party's half of a SPAKE2 run. Single use: x must never be
@@ -111,14 +112,17 @@ func (s *spake) finish(peer []byte) (spakeKeys, error) {
 	k.Subtract(p, k)
 	k.ScalarMult(s.x, k)
 	k.MultByCofactor(k)
-	if k.Equal(edwards25519.NewIdentityPoint()) == 1 {
-		return spakeKeys{}, errPasswordElement
-	}
 	pA, pB := s.own, peer
 	if !s.guest {
 		pA, pB = peer, s.own
 	}
-	return keySchedule(guestIdentity, hostIdentity, pA, pB, k.Bytes(), scalarBigEndian(s.w), s.aad)
+	// The schedule runs for the identity too: a host answering it sooner
+	// would tell a right guess by the time.
+	keys, err := keySchedule(guestIdentity, hostIdentity, pA, pB, k.Bytes(), scalarBigEndian(s.w), s.aad)
+	if err == nil && k.Equal(edwards25519.NewIdentityPoint()) == 1 {
+		err = errPasswordElement
+	}
+	return keys, err
 }
 
 // keySchedule is RFC 9382 sections 3.3 and 4, independent of the group, so it

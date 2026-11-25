@@ -40,7 +40,7 @@ juist admins new alice
 ```
 
 Die Ausgabe enthält den Befehl, der den Schlüssel hinzufügt, mitsamt dem
-Schlüssel. Der ist lang, weil er seinen quantensicheren Signaturschlüssel
+Schlüssel. Der ist lang, weil er seinen Post-Quantum-Signaturschlüssel
 mitträgt: Kopiere den Befehl ganz.
 {{< /step >}}
 

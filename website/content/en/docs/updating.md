@@ -42,7 +42,10 @@ keep running.
 {{< /step >}}
 
 Devices on different releases keep working together while the network stays
-on its schema, so you can update them one at a time. On a phone, install the
+on its schema, so you can update them one at a time. Where admin keys are
+removed while other changes are made at the same time, two releases can
+settle the changes differently, so do not leave devices on an older release
+for long. On a phone, install the
 new APK over the old one, or let F-Droid update it
 ([Android]({{< relref "docs/android" >}}#installing-the-app)).
 
@@ -162,7 +165,7 @@ until it is updated.
 ## Good to know
 
 - juist reads networks whose log is at schema 18 or later, where every change
-  is signed quantum-safe ([Security]({{< relref "docs/security" >}}#quantum-safe)).
+  is signed post-quantum ([Security]({{< relref "docs/security" >}}#post-quantum)).
   A network created with an older juist cannot be read any more: its admins
   create it again, and its devices join the new one.
 - `juist log` lists the upgrade as `schema upgrade`, with the admins who

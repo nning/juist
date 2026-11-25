@@ -1,0 +1,35 @@
+(* A third member holding the group secret learns no pair's key, and both
+   ends agree on key and epoch before either mixes it in. Run with -lib
+   pairkey; the attacker is in pairkey.pvl. *)
+
+(* Without it, two follower sessions answering one offer are merged, and the
+   last query is not proved. *)
+set preciseActions = true.
+
+free network: bitstring.
+free seed: bitstring.
+free wgL: bitstring.
+free wgF: bitstring.
+
+query g: bitstring, e: bitstring, k: bitstring; event(LeaderUses(wgL, wgF, g, e, k)) && attacker(k).
+query g: bitstring, e: bitstring, k: bitstring; event(FollowerUses(wgL, wgF, g, e, k)) && attacker(k).
+query g: bitstring, e: bitstring, k: bitstring;
+  inj-event(LeaderUses(wgL, wgF, g, e, k)) ==> inj-event(FollowerAnswers(wgL, wgF, g, e, k)).
+query g: bitstring, e: bitstring, k: bitstring;
+  inj-event(FollowerUses(wgL, wgF, g, e, k)) ==> inj-event(LeaderUses(wgL, wgF, g, e, k)).
+query g: bitstring, e: bitstring, k: bitstring;
+  event(LeaderTakesUp(wgL, wgF, g, e, k)) ==> event(FollowerUses(wgL, wgF, g, e, k)).
+
+(* Both pair with the third member too, whose keys are the attacker's. *)
+free wgA: bitstring.
+
+process
+  new skL: bitstring; new dkL: bitstring; new skF: bitstring; new dkF: bitstring;
+  new skA: bitstring; new dkA: bitstring;
+  out(c, (pk(skL), ek(dkL), pk(skF), ek(dkF), skA, dkA));
+  (!Leader(network, seed, skL, wgL, dkL, pk(skF), wgF, ek(dkF)))
+  | (!Follower(network, seed, skF, wgF, dkF, pk(skL), wgL, ek(dkL)))
+  | (!Leader(network, seed, skL, wgL, dkL, pk(skA), wgA, ek(dkA)))
+  | (!Follower(network, seed, skL, wgL, dkL, pk(skA), wgA, ek(dkA)))
+  | (!Leader(network, seed, skF, wgF, dkF, pk(skA), wgA, ek(dkA)))
+  | (!Follower(network, seed, skF, wgF, dkF, pk(skA), wgA, ek(dkA)))

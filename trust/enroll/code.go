@@ -375,8 +375,11 @@ func (l Link) RendezvousKeys() (host, guest, seal [32]byte) {
 		copy(out[:], k)
 		return out
 	}
-	return derive("host"), derive("guest"), derive("seal")
+	return derive(rendezvousHost), derive(rendezvousGuest), derive(rendezvousSeal)
 }
+
+// The rendezvous keys' roles, appended to their label.
+const rendezvousHost, rendezvousGuest, rendezvousSeal = "host", "guest", "seal"
 
 func (Link) mode() mode         { return modeLink }
 func (Link) nameplate() uint16  { return 0 }

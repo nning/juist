@@ -1620,6 +1620,25 @@ of the control socket.
 
 ## M32 — Formal models of what juist designed itself
 
+**Done** on 2026-11-23: machine-checked models in `models/`, each with its
+attacker: enrollment and the pair key in ProVerif 2.05, the log's fork
+choice, orphans, epoch floor, compaction and freshness in TLA+ checked by
+TLC 1.8.0; `make models` holds every outcome to `models/expected`, and
+`make check` holds the code to the protocol models' labels and fields and
+replays the log model's traces against `trust/log`. The models and their
+review found an element built from the code tested for free, by the reply
+and then by its time, a removed key undoing its removal past a third
+branch and by signing beside another removed key, and two keys removing
+each other unalarmed or alarmed for good, all fixed with tests; they find the pair
+key without forward secrecy (residual weakness 12) and two of M33's
+fork-choice findings, which M33 decides. Reviewed in 2 rounds, the
+closing one over the whole diff and its follow-up confirming nothing
+above minor; validated by `make models` at review 1 and `make ci-vm` at
+M30
+([12-validating.md](12-validating.md), "The last privileged run"). Exit
+criteria (1) to (4) passed, (1) with M33's findings excepted as it says.
+Core 8 094 lines, audit scope 29 395, measured after it (2026-11-23).
+
 Machine-checked models of the protocols and rules juist composed from
 standard primitives, before the review and the audit: a flaw in a design is
 found before a reader judges its code, and the audit checks the models
@@ -1649,13 +1668,18 @@ joins WireGuard's published models (Tamarin, CryptoVerif).
 - **Left out:** `aead` and `addrkey`, standard constructions M33 reads line
   by line; the computational strength of the SPAKE2 and ML-KEM combiner,
   which a symbolic model takes as given; code-level proof (Gobra).
-- **Open decisions:** ProVerif or Tamarin for the pair key; TLA+ checked by
-  TLC or Apalache, or Quint; whether the models run in `make ci-vm` or by
-  hand, as `make fuzz-long` does.
+- **Decided:** ProVerif for the pair key too, one tool for both protocols;
+  TLA+ checked by TLC; the models run by hand, `make models`, as `make
+  fuzz-long` does, and their tests in `make check`: the labels and fields
+  each protocol model names, and the log's traces (`make model-traces`)
+  replayed against `trust/log`. In `models/`, each file's attacker in its
+  head; `models/expected` holds every outcome, the lemmas that fail as
+  they are meant to among them (forward secrecy, M33's findings).
 
 - **Exit criteria:** (1) every model's lemmas proved, or a failed one fixed
   in the code with a test that fails without the fix, or accepted as a
-  numbered residual weakness; (2) each model's attacker written beside it
+  numbered residual weakness, M33's fork-choice findings excepted, which M33
+  decides against the model; (2) each model's attacker written beside it
   against [02-threat-model.md](02-threat-model.md)'s adversaries; (3) the
   log's traces replay against the validator without a divergence; (4) the
   run, its tool versions and what did not run recorded in
@@ -1666,15 +1690,25 @@ joins WireGuard's published models (Tamarin, CryptoVerif).
 The review [15-security-review.md](15-security-review.md) plans, over the
 audit scope as M17 to M32 leave it, so that M34's audit goes to what a
 reader cannot find, and M32's models beside the code they stand for. It
-starts from the fuzzing:
+starts from the models and the fuzzing:
 
+- **The models, extended** before the review, as a part landing on its
+  own: the log's with holders of several keys, copies of one record and
+  juistd's own rule for compacting; the pair key's exchange as a state
+  machine in TLA+, across loss, repeats, epoch bumps, store resets and a
+  store restored; catch-up, waiting changes, a relay's and the DHT's part
+  in meeting an invite's host, and replacing a log by an invite's chain,
+  in ProVerif. Each names its labels and fields for a test to hold the
+  code to, and the pair key's traces are replayed against
+  `internal/pairkey` as the log's are against `trust/log`.
 - **Fuzzing.** No `fuzz-long` run over every target is recorded in
   [12-validating.md](12-validating.md).
 - **A settled orphan that alarms later,** found in M19's review: a change
   that lost fork choice and was redone is probed against the head as it is
   now, so once a later change removes its subject it reads as a conflict,
   and every device that holds it alarms for good, a compaction included,
-  which an alarm refuses. To decide: what an orphan is probed against, so
+  which an alarm refuses. A lost admission alarms the moment it is redone,
+  its device being a member by then (M32's model). To decide: what an orphan is probed against, so
   that a later change settles nothing it already settled, while two changes
   made at once that disagree still alarm
   (`TestConflictingConcurrentRecordsAlarm`).
@@ -1683,7 +1717,13 @@ starts from the fuzzing:
   alarm on either side. To decide: how the split is made known on both
   sides without giving a key that lost its quorum a way to raise it at will;
   no rule of fork choice may rank a count of checkpoints above a revocation
-  (`TestMintedCheckpointsDoNotUndoARevocation`).
+  (`TestMintedCheckpointsDoNotUndoARevocation`). TLC finds it
+  (`models/log/LogCompactAgreement.cfg`), under juistd's own rule for
+  compacting too where a record is released after it was signed, as one
+  gathering votes is (`LogCompactHeardLate.cfg`); under that rule, with
+  every record taken in by its author's device as it is signed, it finds
+  none (`LogCompactHeard.cfg`), reading each device's head as it is, where
+  juistd reads it as last heard.
 - **A raise undone by a ground revocation,** found in M19's review: of two
   revocations at one parent the lower `SigHash` wins, so the keys a raised
   quorum or a holder's fewer votes stripped can sign a removal beside the
@@ -1691,7 +1731,8 @@ starts from the fuzzing:
   and what followed it; only a removed key's own signatures are ruled out
   ("A removed key cannot undo its removal"). A removed key can also sign a
   revocation beside its removal, which loses yet is named to be redone and
-  holds compaction back until an admin does.
+  holds compaction back until an admin does. TLC finds the first
+  (`models/log/LogForgeRaise.cfg`).
 
 - **Exit criteria:** (1) every parser of input from outside the membership
   has a fuzz target, and a `make fuzz-long` over each is recorded; (2) the

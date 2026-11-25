@@ -30,10 +30,10 @@ Vier Dinge hat von den Meshes hier nur juist:
   veröffentlicht nur juist Dienste im Internet und lässt öffentliche Namen
   auf Mitglieder zeigen. Bei den anderen werden Routen und Namen von Hand in
   der Konfiguration jedes Geräts eingetragen, oder es gibt sie nicht.
-- **Durchgehend quantensicher.** Jeder Tunnel mischt einen Schlüssel ein,
+- **Durchgehend Post-Quantum.** Jeder Tunnel mischt einen Schlüssel ein,
   den ein Quantencomputer nicht herausfinden kann, und jede Änderung am Netz
   ist mit ML-DSA signiert. Keines der anderen signiert seine Mitglieder so.
-  Von den anderen Meshes bietet nur NetBird quantensichere Tunnel an, als
+  Von den anderen Meshes bietet nur NetBird Post-Quantum-Tunnel an, als
   experimentelle Option; reines WireGuard bekommt sie durch einen Preshared
   Key, den du von Hand setzt.
 
@@ -58,7 +58,7 @@ kontrolliert, könnte also ein eigenes Gerät einschleusen.
 Lücke: Geräte nehmen einen neuen Schlüssel nur an, wenn ein Schlüssel in
 deiner Hand ihn signiert hat. Das Entfernen eines Geräts und das Verteilen der
 Änderung laufen aber weiterhin über den Server. Seine Tunnel sind nicht
-quantensicher: Es setzt keinen Preshared Key und lässt dich keinen setzen.
+Post-Quantum: Es setzt keinen Preshared Key und lässt dich keinen setzen.
 
 Mit Funnel stellt Tailscale einen lokalen Port mit einem Befehl ins
 Internet, mit Serve teilt es ihn im Tailnet. juist deckt mit
@@ -107,7 +107,7 @@ selbst betreiben. Der Client steht unter BSD-3-Clause, die Server unter
 AGPL-3.0. Mit
 [Rosenpass](https://docs.netbird.io/client/post-quantum-cryptography), einer
 experimentellen Option, die es auf Handys nicht gibt, werden seine Tunnel
-quantensicher.
+Post-Quantum.
 
 NetBird passt, wenn du einen selbst betriebenen Server mit Dashboard,
 Anmeldung über deinen Identitätsanbieter und Zugriffsregeln nach Benutzern
@@ -133,7 +133,7 @@ nach. Wer dazugehört, bestimmt ein
 ZeroTier oder dein eigener. Der Kern steht unter MPL-2.0. Der Quellcode des
 Controllers ist zwar einsehbar, steht aber unter einer eigenen Lizenz von
 ZeroTier, die die kommerzielle Nutzung einschränkt. ZeroTier One, der
-quelloffene Client, ist nicht quantensicher; ZeroTier Quantum, eine eigene
+quelloffene Client, ist nicht Post-Quantum; ZeroTier Quantum, eine eigene
 kommerzielle Plattform von 2026, verspricht es zu sein.
 
 ZeroTier passt, wenn du ein Layer-2-Netz brauchst, etwa
@@ -218,7 +218,7 @@ und im Kernel ist es schneller als juist, das WireGuard im Userspace
 betreibt. Dafür musst du für jedes neue Gerät alle anderen anpassen, stehen
 beide Seiten hinter NAT, kommt keine Verbindung zustande, und ein Relay gibt
 es nicht. Ein Preshared Key, von Hand gesetzt oder von Rosenpass erneuert,
-macht seine Tunnel quantensicher.
+macht seine Tunnel Post-Quantum.
 
 Reines WireGuard passt für wenige Geräte mit festen öffentlichen Adressen.
 

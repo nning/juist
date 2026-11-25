@@ -1,0 +1,144 @@
+(* Catch-up (gossip/catchup.go): a member behind on the epoch keys asks a
+   peer, proves who it is over the peer's nonce, and gets a session key
+   sealed to its recipient key, under which the keys it missed follow.
+
+   Attacker (docs/02-threat-model.md): the network observer, and an evicted
+   member, holding every key its device ever had (identity, signing and
+   recipient keys); it is listed no more, but was once. The responder's log
+   lists the honest initiator and not the evicted one; the initiator knows
+   the responder's key from its log.
+
+   Abstractions: Ed25519 and ML-DSA are one signature; HPKE (ML-KEM-768 and
+   X25519) is one public-key encryption with its info bound in; the session
+   frames are one AEAD. A refusal is a signed statement, sent only to a
+   device once listed. The initiator here asks a responder its log names;
+   the code also takes an answer from one it does not, on Ed25519 alone,
+   and verifies record by record what that hands over (residual weakness
+   13), which this model does not cover.
+
+   Comments opening with an @ name the labels the code must use and the
+   fields each value is made of, in order; gossip's and trust/secrets'
+   model_test.go hold the code to them. A label is followed by a zero byte
+   where it heads a field list. *)
+
+free c: channel.
+
+fun hash(bitstring): bitstring.
+fun pk(bitstring): bitstring.
+fun sign(bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, m: bitstring; verify(pk(sk), m, sign(sk, m)) = true.
+
+(* HPKE to a recipient key, its info bound in. *)
+fun rpk(bitstring): bitstring.
+fun hpke(bitstring, bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, info: bitstring, m: bitstring; hpkeOpen(sk, info, hpke(rpk(sk), info, m)) = m.
+
+fun seal(bitstring, bitstring): bitstring.
+reduc forall k: bitstring, m: bitstring; open(k, seal(k, m)) = m.
+
+(*@ label LabelCatchUpProof "juist/catch-up-proof/v1" *)
+const LabelCatchUpProof: bitstring [data].
+(*@ label LabelCatchUpGrant "juist/catch-up-grant/v1" *)
+const LabelCatchUpGrant: bitstring [data].
+(*@ label LabelCatchUpRefusal "juist/catch-up-refusal/v1" *)
+const LabelCatchUpRefusal: bitstring [data].
+(*@ label LabelCatchUp "juist/catch-up/v1" *)
+const LabelCatchUp: bitstring [data].
+
+(*@ fields proof: LabelCatchUpProof network nonce initiator *)
+(*@ fields grant: LabelCatchUpGrant network nonce initiator sealed *)
+(*@ fields refusal: LabelCatchUpRefusal network nonce initiator epoch *)
+(*@ fields grantInfo: LabelCatchUp network recipient nonce *)
+
+const ask: bitstring [data].
+const challenge: bitstring [data].
+const proofMsg: bitstring [data].
+const grantMsg: bitstring [data].
+const refusalMsg: bitstring [data].
+
+free netA: bitstring.
+free netB: bitstring.
+free epochNow: bitstring.
+
+(* What the session carries to a member: the epoch keys of its network it
+   missed. *)
+fun missedKeys(bitstring): bitstring [private].
+
+table listed(bitstring, bitstring, bitstring).    (* network, identity key, recipient key *)
+table onceListed(bitstring, bitstring).
+
+event Proves(bitstring, bitstring, bitstring).       (* initiator, network, nonce *)
+event Grants(bitstring, bitstring, bitstring, bitstring, bitstring). (* responder, initiator, network, nonce, session key *)
+event Accepts(bitstring, bitstring, bitstring, bitstring, bitstring).
+event Refuses(bitstring, bitstring, bitstring).      (* responder, initiator, nonce *)
+event TakesRefusal(bitstring, bitstring, bitstring).
+event Gets(bitstring, bitstring).                    (* initiator, what the session carried *)
+
+(* A member asking; skR names the responder it knows from its log. *)
+let Initiator(skI: bitstring, rskI: bitstring, pkR: bitstring, network: bitstring) =
+  out(c, ask);
+  in(c, (=challenge, nonce: bitstring));
+  event Proves(pk(skI), network, nonce);
+  out(c, (proofMsg, pk(skI), sign(skI, hash((LabelCatchUpProof, network, nonce, pk(skI))))));
+  in(c, answer: bitstring);
+  (
+    let (=grantMsg, sealed: bitstring, sigR: bitstring) = answer in
+    if verify(pkR, hash((LabelCatchUpGrant, network, nonce, pk(skI), sealed)), sigR) then
+    let key = hpkeOpen(rskI, (LabelCatchUp, network, pk(skI), nonce), sealed) in
+    event Accepts(pkR, pk(skI), network, nonce, key);
+    in(c, frame: bitstring);
+    let carried = open(key, frame) in
+    event Gets(pk(skI), carried)
+  ) | (
+    let (=refusalMsg, epoch: bitstring, sigR: bitstring) = answer in
+    if verify(pkR, hash((LabelCatchUpRefusal, network, nonce, pk(skI), epoch)), sigR) then
+    event TakesRefusal(pkR, pk(skI), nonce)
+  ).
+
+(* A member answering, in network. *)
+let Responder(skR: bitstring, network: bitstring) =
+  in(c, =ask);
+  new nonce: bitstring;
+  out(c, (challenge, nonce));
+  in(c, (=proofMsg, pkI: bitstring, sigI: bitstring));
+  if verify(pkI, hash((LabelCatchUpProof, network, nonce, pkI)), sigI) then
+  if pkI <> pk(skR) then
+  get listed(=network, =pkI, rpkI) in (
+    new key: bitstring;
+    let sealed = hpke(rpkI, (LabelCatchUp, network, pkI, nonce), key) in
+    event Grants(pk(skR), pkI, network, nonce, key);
+    out(c, (grantMsg, sealed, sign(skR, hash((LabelCatchUpGrant, network, nonce, pkI, sealed)))));
+    out(c, seal(key, missedKeys(network)))
+  ) else (
+    get onceListed(=network, =pkI) in
+    event Refuses(pk(skR), pkI, nonce);
+    out(c, (refusalMsg, epochNow, sign(skR, hash((LabelCatchUpRefusal, network, nonce, pkI, epochNow)))))
+  ).
+
+query attacker(missedKeys(netA)).
+query r: bitstring, i: bitstring, n: bitstring, k: bitstring;
+  inj-event(Grants(r, i, netA, n, k)) ==> inj-event(Proves(i, netA, n)).
+query r: bitstring, i: bitstring, n: bitstring, k: bitstring;
+  event(Accepts(r, i, netA, n, k)) ==> event(Grants(r, i, netA, n, k)).
+query r: bitstring, i: bitstring, n: bitstring; event(TakesRefusal(r, i, n)) ==> event(Refuses(r, i, n)).
+
+(* A member does catch up: ProVerif finds the trace. *)
+query i: bitstring, x: bitstring; event(Gets(i, x)).
+
+(* The evicted device, whose keys the attacker holds and which is still a
+   member of netB, is granted nothing in netA, whatever it carries over from
+   netB: ProVerif proves it unreachable. *)
+free skE: bitstring [private].
+query r: bitstring, n: bitstring, k: bitstring; event(Grants(r, pk(skE), netA, n, k)).
+
+process
+  new skI: bitstring; new rskI: bitstring; new skR: bitstring; new rskE: bitstring;
+  out(c, (pk(skI), rpk(rskI), pk(skR), skE, rskE));
+  insert listed(netA, pk(skI), rpk(rskI));
+  insert listed(netB, pk(skI), rpk(rskI));
+  insert onceListed(netA, pk(skE));
+  insert listed(netB, pk(skE), rpk(rskE));
+  (
+    (!Responder(skR, netA)) | (!Responder(skR, netB))
+    | (!Initiator(skI, rskI, pk(skR), netA)) | (!Initiator(skI, rskI, pk(skR), netB))
+  )

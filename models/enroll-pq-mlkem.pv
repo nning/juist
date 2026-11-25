@@ -1,0 +1,22 @@
+(* The channel holds while SPAKE2 holds, ML-KEM-768 broken from the start:
+   the attacker opens every ciphertext and is active throughout. Run with
+   -lib enroll; the attacker is in enroll.pvl. *)
+
+free code: bitstring [private].
+free link: bitstring [private].
+free groupSecret: bitstring [private].
+
+reduc forall dk: bitstring, r: bitstring; brokenDecaps(kemCT(ek(dk), r)) = kemSS(ek(dk), r).
+
+weaksecret code.
+query attacker(groupSecret).
+query t: bitstring; inj-event(HostAccepts(t)) ==> inj-event(GuestConfirms(t)).
+query b: bitstring, r: bitstring; event(HostReceives(b, r)) ==> event(GuestSends(b, r)).
+query p: bitstring, k: bitstring; event(Admitted(p, k)) ==> event(GuestRequests(p, k)).
+
+process
+  (!new skG: bitstring; new keysG: bitstring; out(c, (pk(skG), keysG));
+    ((!Guest(code, modeCode, skG, keysG)) | (!Guest(link, modeLink, skG, keysG))))
+  | (new skAdmin: bitstring; out(c, pk(skAdmin));
+    (!Admin(skAdmin)) | (!Host(code, modeCode, groupSecret, pk(skAdmin)))
+    | (!Host(link, modeLink, groupSecret, pk(skAdmin))))

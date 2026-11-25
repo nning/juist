@@ -43,7 +43,9 @@ alten Daemons weiter.
 
 Geräte mit unterschiedlichen Versionen arbeiten weiter zusammen, solange das
 Netz auf seinem Schema bleibt. Du kannst sie also eins nach dem anderen
-aktualisieren. Auf einem
+aktualisieren. Werden Admin-Schlüssel entfernt, während gleichzeitig andere
+Änderungen entstehen, können zwei Versionen diese Änderungen unterschiedlich
+auflösen. Lass Geräte deshalb nicht lange auf einer älteren Version. Auf einem
 Telefon installierst du die neue APK über die alte, oder F-Droid aktualisiert
 sie ([Android]({{< relref "docs/android" >}}#die-app-installieren)).
 
@@ -167,8 +169,8 @@ wenn sie aktualisiert ist.
 ## Gut zu wissen
 
 - juist liest Netze, deren Log mindestens auf Schema 18 steht, in denen
-  jede Änderung quantensicher signiert ist
-  ([Sicherheit]({{< relref "docs/security" >}}#quantensicher)). Ein Netz, das
+  jede Änderung Post-Quantum signiert ist
+  ([Sicherheit]({{< relref "docs/security" >}}#post-quantum)). Ein Netz, das
   mit einem älteren juist angelegt wurde, lässt sich nicht mehr lesen: Seine
   Admins legen es neu an, und seine Geräte treten dem neuen bei.
 - `juist log` führt die Anhebung als `schema upgrade`, mit den Admins, die

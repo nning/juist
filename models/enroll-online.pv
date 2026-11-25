@@ -1,0 +1,28 @@
+(* Online, a session costs the code its one guess: the host's answers do not
+   depend on whether a guest's element matched the code, until the guest's
+   confirmation, which spends the guess whatever it says.
+
+   On the left the code is the attacker's guess, on the right a code it does
+   not know. Every answer that spends the invite says only "spent", so what
+   remains to tell the two apart is a guess tested for free: an element built
+   from the password included (TestAnElementBuiltFromTheCodeIsItsOneGuess).
+   The attacker is enroll.pvl's; run with -lib enroll. *)
+
+(* Past an attack, simplifying the processes does not terminate. *)
+set simplifyProcess = false.
+
+free guess: bitstring.
+free code: bitstring [private].
+const spent: bitstring [data].
+
+let HostProbed(pw: bitstring) =
+  in(c, (=hsHello, =version, =modeCode, pA: G));
+  let w = wOf(pw) in
+  let X = unblind(pA, w, M) in
+  new y: exponent;
+  out(c, (hsReply, blind(exp(P, y), w, N)));
+  in(c, (=hsConfirm, macA: bitstring));
+  out(c, spent).
+
+process
+  !HostProbed(choice[guess, code])

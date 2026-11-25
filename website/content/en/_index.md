@@ -125,7 +125,7 @@ What happens
 : Two devices get their own key one log sync after their tunnel comes up. Until then, their traffic is protected by a key any member could derive.
 
 Why accepted
-: Against everyone outside the network it is quantum-safe from the start. Only a member, or a device removed since, with a quantum computer could read those first seconds.
+: Against everyone outside the network it is post-quantum from the start. Only a member, or a device removed since, with a quantum computer could read those first seconds.
 
 What you can do
 : Nothing; it lasts until the next log sync between the two.

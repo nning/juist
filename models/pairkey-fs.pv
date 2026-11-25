@@ -1,0 +1,18 @@
+(* Forward secrecy, which the pair key does not have (residual weakness 12):
+   both members' devices, stolen after a pair took a key up (phase 1), give
+   that key away from what the attacker recorded. ProVerif finds the trace
+   and says false. Run with -lib pairkey; the attacker is in pairkey.pvl. *)
+
+free network: bitstring.
+free seed: bitstring.
+free wgL: bitstring.
+free wgF: bitstring.
+
+query g: bitstring, e: bitstring, k: bitstring; event(LeaderTakesUp(wgL, wgF, g, e, k)) && attacker(k).
+
+process
+  new skL: bitstring; new dkL: bitstring; new skF: bitstring; new dkF: bitstring;
+  out(c, (pk(skL), ek(dkL), pk(skF), ek(dkF)));
+  (!Leader(network, seed, skL, wgL, dkL, pk(skF), wgF, ek(dkF)))
+  | (!Follower(network, seed, skF, wgF, dkF, pk(skL), wgL, ek(dkL)))
+  | (phase 1; out(c, (skL, dkL, skF, dkF)))

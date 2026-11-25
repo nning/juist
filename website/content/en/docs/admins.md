@@ -37,7 +37,7 @@ juist admins new alice
 ```
 
 It prints the command that adds the key, with the key itself in it. The key
-is long, since it carries its quantum-safe signing key too: copy the command
+is long, since it carries its post-quantum signing key too: copy the command
 whole.
 {{< /step >}}
 

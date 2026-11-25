@@ -178,12 +178,12 @@ func (p *Pair) outgoing(env *Env, store uint64) Msg {
 		ToWG: env.Peer.WG, Gen: p.Cur.N, Use: p.Cur.N}
 	switch {
 	case env.leads() && p.Next != nil:
-		m.Gen, m.Epoch, m.Use, m.Check = p.Next.N, p.Next.Epoch, p.Next.N, check(p.Next.Key, "leader")
+		m.Gen, m.Epoch, m.Use, m.Check = p.Next.N, p.Next.Epoch, p.Next.N, check(p.Next.Key, roleLeader)
 	case env.leads() && p.Pend != nil:
 		m.Gen, m.Epoch, m.CT = p.Pend.N, p.Pend.Epoch, slices.Clone(p.Pend.CT)
 	case !env.leads() && p.Offered != nil:
 		m.Gen, m.Epoch, m.CT, m.Check = p.Offered.N, p.Offered.Epoch, slices.Clone(p.Offered.CT),
-			check(p.Offered.Key, "follower")
+			check(p.Offered.Key, roleFollower)
 	}
 	return m
 }
@@ -220,7 +220,7 @@ func (p *Pair) takeAsLeader(env *Env, m *Msg, seed func(uint64) ([32]byte, bool)
 		}
 		k := derive(env.Network, env.Self.WG, env.Peer.WG, o.N, o.Epoch, Group(s, o.Epoch, env.Self.WG, env.Peer.WG),
 			o.Shared, o.CT, shared, m.CT)
-		if !hmac.Equal(m.Check, check(k, "follower")) {
+		if !hmac.Equal(m.Check, check(k, roleFollower)) {
 			return true, fmt.Errorf("pairkey: the peer derived another key for generation %d", o.N)
 		}
 		p.Next, p.Flip = &Gen{N: o.N, Epoch: o.Epoch, Key: k}, false
@@ -258,7 +258,7 @@ func (p *Pair) takeAsFollower(env *Env, m *Msg, seed func(uint64) ([32]byte, boo
 			sharedL, m.CT, sharedF, ct)
 		p.Offered, p.paced, p.putOff, changed = &Gen{N: m.Gen, Epoch: m.Epoch, Key: k, CT: ct}, env.Now, false, true
 	}
-	if o := p.Offered; o != nil && m.Use == o.N && hmac.Equal(m.Check, check(o.Key, "leader")) {
+	if o := p.Offered; o != nil && m.Use == o.N && hmac.Equal(m.Check, check(o.Key, roleLeader)) {
 		p.use(*o)
 		p.Offered, changed = nil, true
 	}

@@ -88,6 +88,7 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 	type pendingOrphan struct {
 		root   candidate
 		branch *State
+		mutual bool
 	}
 	var orphanRoots []pendingOrphan
 
@@ -100,7 +101,7 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 		if len(valid) == 0 {
 			break
 		}
-		primary, err := pickPrimary(r, valid, state)
+		primary, mutual, err := pickPrimary(r, valid, state)
 		if err != nil {
 			return nil, err
 		}
@@ -112,7 +113,7 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 				return nil, fmt.Errorf("log: more than %d forks off the chain; refusing to resolve",
 					maxOrphanBranches)
 			}
-			orphanRoots = append(orphanRoots, pendingOrphan{root: c, branch: state.at(*c.aum.Prev)})
+			orphanRoots = append(orphanRoots, pendingOrphan{root: c, branch: state.at(*c.aum.Prev), mutual: mutual[c.hash]})
 		}
 		// The chain names the copy the record that won hangs from.
 		res.chain[len(res.chain)-1] = *primary.aum.Prev
@@ -155,6 +156,10 @@ func resolve(st reader, anchor types.Hash) (*resolution, error) {
 		o := Orphan{Root: po.root.hash}
 		if err := walkOrphan(r, po.root, po.branch, state, &o, &budget, res); err != nil {
 			return nil, err
+		}
+		// Fork choice does not weigh it, so its removals stand until redone.
+		if po.mutual && len(o.Unrevoked) > 0 && o.Conflict == "" {
+			o.Conflict = fmt.Sprintf("fork choice cannot weigh record %v against the chosen chain: admin keys removed on these branches signed them", po.root.hash)
 		}
 		res.orphans = append(res.orphans, o)
 	}

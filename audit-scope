@@ -47,6 +47,7 @@ out discovery/dht                    an untrusted transport; what it carries int
 out internal/admit                   bounds connections before they speak: availability alone
 out internal/lograte                 bounds how often a log line is said: availability alone
 out internal/malformed               turns a decoder's panic into an error: availability alone
+out internal/modelspec               reads the formal models' annotations, for tests
 out internal/changelog               says the log's changes for juist log
 out internal/cliflag                 parses the CLI's own arguments
 out internal/firewalld               asks firewalld to open juist's ports

@@ -1,0 +1,136 @@
+(* Waiting changes (internal/waiting): a change still collecting votes is
+   sealed to the admin keys that read it and handed on by daemons until an
+   admin opens it, signs and passes it on.
+
+   Attacker (docs/02-threat-model.md): the network observer and every
+   daemon, an admin device's among them (residual weakness 10): they carry
+   and keep the sealed change. The admin keys, at the CLI, are honest; one
+   admin key the network does not name as a reader is the attacker's.
+
+   Abstractions: HPKE (ML-KEM-768 and X25519) is one public-key encryption
+   with its info bound in, the body's AEAD one symmetric seal with its
+   associated data bound in; Ed25519 and ML-DSA are one signature; a
+   change's record is named by its SigHash, which its content fixes. A
+   record with an epoch record holds a fresh secret, so its content is a
+   fresh name; one without, as removing an admin key, is a guess away,
+   which the weak secret below shows (residual weakness 10).
+
+   Comments opening with an @ name the labels the code must use and the
+   fields each value is made of, in order; internal/waiting's and
+   trust/secrets' model_test.go hold the code to them. A label is followed
+   by a zero byte where it heads a field list. *)
+
+free c: channel.
+
+fun hash(bitstring): bitstring.
+fun hkdf(bitstring, bitstring): bitstring.
+fun pk(bitstring): bitstring.
+fun sign(bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, m: bitstring; verify(pk(sk), m, sign(sk, m)) = true.
+
+fun rpk(bitstring): bitstring.
+fun hpke(bitstring, bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, info: bitstring, m: bitstring; hpkeOpen(sk, info, hpke(rpk(sk), info, m)) = m.
+
+fun sealAD(bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, ad: bitstring, m: bitstring; openAD(k, ad, sealAD(k, ad, m)) = m.
+
+(*@ label LabelWaitingChange "juist/waiting-change/v1" *)
+const LabelWaitingChange: bitstring [data].
+(*@ label LabelWaitingKey "juist/waiting-key/v1" *)
+const LabelWaitingKey: bitstring [data].
+(*@ label LabelWaitingBody "juist/waiting-body/v1" *)
+const LabelWaitingBody: bitstring [data].
+(*@ label LabelAdminX25519 "juist/admin-recipient-x25519/v1" *)
+const LabelAdminX25519: bitstring [data].
+
+(*@ fields context: LabelWaitingBody network id *)
+(*@ fields keyInfo: LabelWaitingKey context reader *)
+(*@ fields signed: LabelWaitingChange change *)
+
+free network: bitstring.
+
+(* The content of a record without an epoch record. *)
+free guessable: bitstring [private].
+
+(* An admin key's recipient key comes from its seed (AdminRecipient). *)
+letfun recipient(seed: bitstring) = rpk(hkdf(seed, LabelAdminX25519)).
+letfun recipientSecret(seed: bitstring) = hkdf(seed, LabelAdminX25519).
+
+(* A record's SigHash, from its content. *)
+fun sigHash(bitstring): bitstring.
+
+event Proposes(bitstring, bitstring, bitstring).   (* proposer, id, content *)
+event Opens(bitstring, bitstring, bitstring, bitstring).      (* reader, signer, id, content *)
+
+(* An admin proposing content, readable by the admin keys seedA and seedB
+   (both honest). The proposer signs the record; the change carries it
+   sealed. *)
+let Propose(seedP: bitstring, seedA: bitstring, seedB: bitstring) =
+  new content: bitstring;
+  let id = sigHash(content) in
+  let record = (content, sign(seedP, id)) in
+  let context = (LabelWaitingBody, network, id) in
+  new key: bitstring;
+  let body = sealAD(key, context, record) in
+  let readers = ((pk(seedA), hpke(recipient(seedA), (LabelWaitingKey, context, pk(seedA)), key)),
+                 (pk(seedB), hpke(recipient(seedB), (LabelWaitingKey, context, pk(seedB)), key))) in
+  let change = (network, id, body, readers, pk(seedP)) in
+  event Proposes(pk(seedP), id, content);
+  out(c, (change, sign(seedP, hash((LabelWaitingChange, change))))).
+
+(* The same, for a record without an epoch record: its content guessable. *)
+let ProposeGuessable(seedP: bitstring, seedA: bitstring, seedB: bitstring) =
+  let id = sigHash(guessable) in
+  let context = (LabelWaitingBody, network, id) in
+  new key: bitstring;
+  let body = sealAD(key, context, (guessable, sign(seedP, id))) in
+  let readers = ((pk(seedA), hpke(recipient(seedA), (LabelWaitingKey, context, pk(seedA)), key)),
+                 (pk(seedB), hpke(recipient(seedB), (LabelWaitingKey, context, pk(seedB)), key))) in
+  let change = (network, id, body, readers, pk(seedP)) in
+  event Proposes(pk(seedP), id, guessable);
+  out(c, (change, sign(seedP, hash((LabelWaitingChange, change))))).
+
+(* The admin with seedR opening a change it is a reader of (Open): the
+   record must be the one the change names, signed by its signer, a current
+   admin key. *)
+let OpenKey(seedR: bitstring, id: bitstring, body: bitstring, signer: bitstring, sealedKey: bitstring) =
+  let context = (LabelWaitingBody, network, id) in
+  let key = hpkeOpen(recipientSecret(seedR), (LabelWaitingKey, context, pk(seedR)), sealedKey) in
+  let (content: bitstring, sigP: bitstring) = openAD(key, context, body) in
+  if sigHash(content) = id then
+  if verify(signer, id, sigP) then
+  event Opens(pk(seedR), signer, id, content).
+
+let Open(seedR: bitstring, admins: bitstring) =
+  in(c, ((=network, id: bitstring, body: bitstring, readers: bitstring, signer: bitstring), sig: bitstring));
+  let (a1: bitstring, a2: bitstring, a3: bitstring, a4: bitstring) = admins in
+  if signer = a1 || signer = a2 || signer = a3 || signer = a4 then
+  if verify(signer, hash((LabelWaitingChange, (network, id, body, readers, signer))), sig) then
+  (let ((=pk(seedR), sk1: bitstring), other: bitstring) = readers in OpenKey(seedR, id, body, signer, sk1))
+  | (let (other: bitstring, (=pk(seedR), sk2: bitstring)) = readers in OpenKey(seedR, id, body, signer, sk2)).
+
+free seedP: bitstring [private].
+free seedA: bitstring [private].
+free seedB: bitstring [private].
+free seedX: bitstring.
+
+(* What an honest admin proposes stays between the readers, where its
+   record holds an epoch record's fresh secret. *)
+query p: bitstring, id: bitstring, x: bitstring; event(Proposes(p, id, x)) && attacker(x).
+
+(* One without, a guess away, does not: a daemon tries it against the
+   change's ID. ProVerif finds the guess and says false. *)
+weaksecret guessable.
+(* A reader opens only what the change's signer proposed, as proposed. *)
+query r: bitstring, id: bitstring, x: bitstring;
+  event(Opens(r, pk(seedP), id, x)) ==> event(Proposes(pk(seedP), id, x)).
+
+(* A reader does open an honest proposal: ProVerif finds the trace. *)
+query r: bitstring, id: bitstring, x: bitstring; event(Opens(r, pk(seedP), id, x)).
+
+process
+  out(c, (pk(seedP), pk(seedA), pk(seedB), recipient(seedA), recipient(seedB)));
+  let admins = (pk(seedP), pk(seedA), pk(seedB), pk(seedX)) in
+  (!Propose(seedP, seedA, seedB)) | (!Open(seedA, admins)) | (!Open(seedB, admins))
+  | ProposeGuessable(seedP, seedA, seedB)

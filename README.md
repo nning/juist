@@ -250,14 +250,16 @@ message means and what to do.
   guess, from the LAN only, and a link is a 128-bit secret.
 - **Revocation** is eventually consistent; the freshness TTL (48 h) bounds how
   long a partitioned device can keep a removed peer.
-- **Quantum-safe:** every WireGuard handshake mixes in a preshared key, one
+- **Post-quantum:** every WireGuard handshake mixes in a preshared key, one
   each two devices exchange by ML-KEM-768; group secrets are hybrid
   X25519 + ML-KEM-768; every change and message is signed with ML-DSA-44;
   joining agrees a key by ML-KEM-768; TLS between juist's
   own ends is 1.3 with X25519MLKEM768 alone.
 
-[Security](https://docs.juist.nning.io/en/docs/security/) explains it, and
-[02-threat-model.md](docs/02-threat-model.md) lists every residual weakness.
+[Security](https://docs.juist.nning.io/en/docs/security/) explains it,
+[02-threat-model.md](docs/02-threat-model.md) lists every residual weakness,
+and [Formal verification](https://docs.juist.nning.io/en/docs/formal-verification/)
+says what the models in [models/](models) prove and find.
 Report a vulnerability privately, as [SECURITY.md](SECURITY.md) says.
 
 ## Status
@@ -279,8 +281,8 @@ What works:
 - a way in from networks that let nothing but HTTPS out
 - an access policy: which device may reach what on which
 - ending a network with a break-glass secret, and a backup of admin keys
-- quantum-safe tunnels: a preshared key in every WireGuard handshake, so that
-  traffic recorded now cannot be decrypted later; and quantum-safe signatures,
+- post-quantum tunnels: a preshared key in every WireGuard handshake, so that
+  traffic recorded now cannot be decrypted later; and post-quantum signatures,
   so that a quantum computer cannot forge a change to the network
 - connections that stay up while a device's keys, addresses or routes change
 - packages for Debian, Ubuntu, Fedora and FreeBSD
@@ -323,7 +325,7 @@ export JUIST_HOME=/tmp/K     # a keystore for the demo, not your own
 | [03-control-plane-options.md](docs/03-control-plane-options.md) | Why a signed log, not a coordinator |
 | [04-architecture.md](docs/04-architecture.md) | Components, protocols, local security |
 | [05-roadmap.md](docs/05-roadmap.md) | Milestones and their security exit criteria |
-| [06-verification.md](docs/06-verification.md) | Test and fuzzing strategy |
+| [06-verification.md](docs/06-verification.md) | Test, fuzzing and formal model strategy |
 | [07](docs/07-embedding-notes.md)–[11](docs/11-enrollment-and-freshness-notes.md), [13](docs/13-multi-network-notes.md) | The rules each layer keeps, and why: embedding, trust log, mesh, connectivity, enrollment and freshness, several networks |
 | [12-validating.md](docs/12-validating.md) | Running the gates, and what each claim is checked by |
 

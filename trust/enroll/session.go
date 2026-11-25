@@ -223,18 +223,10 @@ func (inv *Invite) AcceptHello(h *Hello, rw io.ReadWriter) (*Channel, error) {
 		return nil, err
 	}
 	keys, err := s.finish(hello.Element)
-	if errors.Is(err, errPasswordElement) {
-		if hello.Mode == modeLink {
-			// Whoever sent it holds the link, and has spent it.
-			inv.closed = true
-			refuse(rw, RefusedClosed)
-			return nil, ErrLinkSpent
-		}
-		inv.codeVoid = true
-		refuse(rw, RefusedWrongCode)
-		return nil, ErrWrongCode
-	}
-	if err != nil {
+	// Refusing such an element at once, and answering any other, would test
+	// a guess for free: it is refused at the confirmation, as any guess is.
+	passwordElement := errors.Is(err, errPasswordElement)
+	if err != nil && !passwordElement {
 		return nil, err
 	}
 	if err := writeHandshake(rw, &hsFrame{Kind: hsReply, Element: s.message()}); err != nil {
@@ -247,8 +239,14 @@ func (inv *Invite) AcceptHello(h *Hello, rw io.ReadWriter) (*Channel, error) {
 	if confirm.Kind != hsConfirm {
 		return nil, fmt.Errorf("enroll: expected a confirmation, got %v", confirm.Kind)
 	}
-	if subtle.ConstantTimeCompare(confirm.MAC, keys.confirmGuest) != 1 {
-		if hello.Mode == modeLink {
+	if passwordElement || subtle.ConstantTimeCompare(confirm.MAC, keys.confirmGuest) != 1 {
+		switch {
+		case hello.Mode == modeLink && passwordElement:
+			// Whoever sent it holds the link, and has spent it.
+			inv.closed = true
+			refuse(rw, RefusedClosed)
+			return nil, ErrLinkSpent
+		case hello.Mode == modeLink:
 			refuse(rw, RefusedWrongLink)
 			return nil, ErrWrongLink
 		}
@@ -450,11 +448,11 @@ func newChannel(rw io.ReadWriter, keys spakeKeys, guest bool) (*Channel, error) 
 // rekey sets the channel's keys from secret and salt under label, and
 // restarts its counters, which the new keys make safe.
 func (c *Channel) rekey(secret, salt []byte, label string) error {
-	g2h, err := directionKey(secret, salt, label+"guest to host")
+	g2h, err := directionKey(secret, salt, label+guestToHost)
 	if err != nil {
 		return err
 	}
-	h2g, err := directionKey(secret, salt, label+"host to guest")
+	h2g, err := directionKey(secret, salt, label+hostToGuest)
 	if err != nil {
 		return err
 	}
@@ -466,6 +464,9 @@ func (c *Channel) rekey(secret, salt []byte, label string) error {
 	c.sent, c.rcvd = 0, 0
 	return nil
 }
+
+// The channel's directions, appended to its label.
+const guestToHost, hostToGuest = "guest to host", "host to guest"
 
 func directionKey(secret, salt []byte, label string) (cipher.AEAD, error) {
 	k, err := hkdf.Key(sha256.New, secret, salt, label, 32)

@@ -29,7 +29,7 @@ Four things set juist apart from every other mesh here:
   only juist publishes services to the internet and points public names at
   members. In the others, routes and names are set by hand in each device's
   configuration, or are not available at all.
-- **Quantum-safe throughout.** Every tunnel mixes in a key a quantum
+- **Post-quantum throughout.** Every tunnel mixes in a key a quantum
   computer cannot recover, and every change to the network is signed with
   ML-DSA. None of the others signs its members that way. Of the other meshes,
   only NetBird offers post-quantum tunnels, as an experimental option; plain

@@ -1,0 +1,55 @@
+catchup.pv: not attacker(missedKeys(netA[])) is true.
+catchup.pv: inj-event(Grants(r,i,netA[],n,k)) ==> inj-event(Proves(i,netA[],n)) is true.
+catchup.pv: event(Accepts(r,i,netA[],n,k)) ==> event(Grants(r,i,netA[],n,k)) is true.
+catchup.pv: event(TakesRefusal(r,i,n)) ==> event(Refuses(r,i,n)) is true.
+catchup.pv: not event(Gets(i,x)) is false.
+catchup.pv: not event(Grants(r,pk(skE[]),netA[],n,k)) is true.
+enroll-online.pv: Observational equivalence is true.
+enroll-pq-mlkem.pv: Weak secret code is true.
+enroll-pq-mlkem.pv: not attacker(groupSecret[]) is true.
+enroll-pq-mlkem.pv: inj-event(HostAccepts(t_4)) ==> inj-event(GuestConfirms(t_4)) is true.
+enroll-pq-mlkem.pv: event(HostReceives(b,r_2)) ==> event(GuestSends(b,r_2)) is true.
+enroll-pq-mlkem.pv: event(Admitted(p,k)) ==> event(GuestRequests(p,k)) is true.
+enroll-pq-spake2.pv: not attacker_p1(groupSecret[]) is true.
+enroll-runs.pv: not event(GuestWelcomed(p)) is false.
+enroll.pv: Weak secret code is true.
+enroll.pv: not attacker(groupSecret[]) is true.
+enroll.pv: inj-event(HostAccepts(t_4)) ==> inj-event(GuestConfirms(t_4)) is true.
+enroll.pv: inj-event(GuestAccepts(t_4)) ==> inj-event(HostAccepts(t_4)) is true.
+enroll.pv: event(GuestBound(b)) ==> event(HostBound(b)) is true.
+enroll.pv: event(HostReceives(b,r_2)) ==> event(GuestSends(b,r_2)) is true.
+enroll.pv: event(Admitted(p,k)) ==> event(GuestRequests(p,k)) is true.
+pairkey-fs-ephemeral.pv: not (event(LeaderTakesUp(wgL[],wgF[],g,e,k_2)) && attacker_p1(k_2)) is true.
+pairkey-fs-ephemeral.pv: inj-event(FollowerUses(wgL[],wgF[],g,e,k_2)) ==> inj-event(LeaderUses(wgL[],wgF[],g,e,k_2)) is true.
+pairkey-fs.pv: not (event(LeaderTakesUp(wgL[],wgF[],g,e,k_2)) && attacker_p1(k_2)) is false.
+pairkey-runs.pv: not event(LeaderTakesUp(wgL[],wgF[],g,e,k_2)) is false.
+pairkey.pv: not (event(LeaderUses(wgL[],wgF[],g,e,k_6)) && attacker(k_6)) is true.
+pairkey.pv: not (event(FollowerUses(wgL[],wgF[],g,e,k_6)) && attacker(k_6)) is true.
+pairkey.pv: inj-event(LeaderUses(wgL[],wgF[],g,e,k_6)) ==> inj-event(FollowerAnswers(wgL[],wgF[],g,e,k_6)) is true.
+pairkey.pv: inj-event(FollowerUses(wgL[],wgF[],g,e,k_6)) ==> inj-event(LeaderUses(wgL[],wgF[],g,e,k_6)) is true.
+pairkey.pv: event(LeaderTakesUp(wgL[],wgF[],g,e,k_6)) ==> event(FollowerUses(wgL[],wgF[],g,e,k_6)) is true.
+rebase.pv: event(Rebases(g,a,h)) ==> event(Admits(pk(skAdmin[]),g,h)) && event(Genuine(a,h)) is true.
+rebase.pv: not event(Rebases(g,a,h)) is false.
+relay.pv: not (event(Links(s_6)) && attacker(s_6)) is true.
+relay.pv: inj-event(Accepts(cert_2,h,id_3,n)) ==> inj-event(Registers(h,cert_2,id_3,n)) is true.
+relay.pv: event(Dials(roleHost,a)) ==> event(Publishes(roleHost,a)) is true.
+relay.pv: not (event(Publishes(roleHost,a)) && attacker(a)) is true.
+relay.pv: not event(Dials(roleHost,a)) is false.
+waiting.pv: not (event(Proposes(p,id_4,x)) && attacker(x)) is true.
+waiting.pv: Weak secret guessable is false.
+waiting.pv: event(Opens(r,pk(seedP[]),id_4,x)) ==> event(Proposes(pk(seedP[]),id_4,x)) is true.
+waiting.pv: not event(Opens(r,pk(seedP[]),id_4,x)) is false.
+log/Freshness.cfg: No error has been found
+log/Log.cfg: No error has been found
+log/LogCompact.cfg: No error has been found
+log/LogCompactAgreement.cfg: Invariant Agreement is violated
+log/LogCompactHeard.cfg: No error has been found
+log/LogCompactHeardLate.cfg: Invariant Agreement is violated
+log/LogForge.cfg: No error has been found
+log/LogForgeCosign.cfg: No error has been found
+log/LogForgeRaise.cfg: Invariant RaiseHoldsAgainstStrippedKeys is violated
+log/LogHolders.cfg: No error has been found
+log/LogHoldersBoth.cfg: No error has been found
+log/LogHoldersForge.cfg: No error has been found
+log/PairKey.cfg: No error has been found
+log/PairKeyRestore.cfg: Invariant FollowerKeyIsOneTheLeaderTries is violated

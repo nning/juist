@@ -140,7 +140,7 @@ Passwort am Terminal fragt.
 
 Die Zeile läuft immer durch eine Pipe, nie über die Kommandozeile. Ihre
 Prüfsumme lehnt eine abgeschnittene Zeile ab. Sie deckt auch den
-quantensicheren Signaturschlüssel ab, der sich aus ihr ableitet. Ein Import
+Post-Quantum-Signaturschlüssel ab, der sich aus ihr ableitet. Ein Import
 ersetzt nie einen vorhandenen Schlüssel. Wurde der Schlüssel seit der
 Sicherung aus dem Netz entfernt, warnt der Import mit
 `the key has no vote in "home": it was removed, or is from another network`.

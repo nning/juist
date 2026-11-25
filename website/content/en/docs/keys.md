@@ -130,7 +130,7 @@ with `juist admins import alice@home < juist-admin-home.txt`, which asks for
 the password at the terminal.
 
 The line always goes through a pipe, never onto the command line. Its
-checksum refuses a truncated line. It also covers the key's quantum-safe
+checksum refuses a truncated line. It also covers the key's post-quantum
 signing key, which derives from it. An import never replaces an existing key.
 If the key was removed from the network since the backup, the import warns
 `the key has no vote in "home": it was removed, or is from another network`.

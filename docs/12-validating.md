@@ -16,7 +16,14 @@ make interop                   # Linux and FreeBSD nodes in qemu, with the packa
 make repro-freebsd             # the same bytes from this host and a FreeBSD host
 make fuzz-long                 # the parser gate: hours per target, never on CI
 make test-acme                 # the TLS terminator against Pebble, a CA of its own
+make models                    # the formal models, never on CI
 ```
+
+`make models` runs ProVerif 2.05 (`opam install proverif`, or its source
+built with OCaml) over `models/*.pv` and TLC from `tla2tools.jar` 1.8.0
+(`TLA2TOOLS`, with a JDK) over `models/log/*.cfg`, and fails where an
+outcome is not the one `models/expected` holds. `make model-traces` writes
+the log's traces anew, which `make check` replays against `trust/log`.
 
 ### When each gate runs
 
@@ -31,6 +38,7 @@ every push:
 | a review round, after `make check` passed on the tree | `make ci-vm FAST=1` | 15 min |
 | a milestone, or the review round closing it, is done; before a release | `make ci-vm`, recorded under "The last privileged run" | 18 min |
 | where a milestone's criteria ask for it | `make test-freebsd`, `make repro-freebsd`, `make test-acme`, `make fuzz-long`, the hand tests on Fedora | — |
+| a change to enrollment's handshake, the pair-key exchange, catch-up, waiting changes, meeting an invite's host at a relay or the DHT, rebasing a log, or the log's fork choice, resolution, compaction or freshness; a change to a model | `make models`, and `make model-traces` where `models/log/Log.tla` or `PairKey.tla` changed, recorded under "The last privileged run" | 3 h 15 min |
 | a change to `packaging/sysext.sh` or the SteamOS path of `install.sh` | [Check a Steam Deck](#check-a-steam-deck) in a SteamOS VM, recorded under "The last privileged run" | 40 min |
 | a darwin build-tagged file, `packaging/macos` or the Darwin path of `install.sh`, before M29 is done or a release ships it | `macos.yml` on GitHub by hand (`packaging/macos/runner-test.sh` on a macOS runner, then five minutes of `FuzzServe` on darwin's rules), at low priority, as macOS minutes cost; recorded under "The last privileged run" | 20 min |
 | a change to `mobile` or `android/` | `make android-check`, with a JDK and the Android SDK; `make android-smoke` with the AVD `juist`; the app by hand in an emulator or on a phone | 3 min, 3 min |
@@ -214,6 +222,8 @@ interop`).
 | between hosts: a device that passes TCP to 443 and DNS alone, and one behind a CONNECT proxy alone, join by a link, reach fb and lx through their relays' names by Pebble's certificates, keep reaching fb once its home relay moves and again after a restart; the first's capture holds TLS to the relays' names and DNS alone, as nDPI classifies it, the second's its proxy alone, asked for those names on 443; fb, the ingress, serves its relay on 443 beside its names | `make interop`: `TestLinuxAndFreeBSD/HTTPS_alone` | qemu |
 | handshakes mix in the preshared key, by both paths into the engine; a peer newly keyed loses the session it had, passes nothing until no session without its key is left, and holding another key completes no handshake | `conn`: `TestHandshakesCarryThePresharedKey`, `TestAKeyWhereThereWasNoneEndsTheSession`, `TestAPeerCreatedWithTheKeyItHadPassesNothing`, `TestAPeerPassingNothingPassesNothing` | no |
 | the group key is the pair's in its epoch; an exchange gives both the pair key, which a third member cannot derive; messages are bound to sender, receiver, stores and network, replays and stale or runaway follower messages move nothing, lost ones never leave the two apart; generations are paced and follow every epoch, seeds reach a peer far behind, the store survives a restart and decodes what it encodes | `internal/pairkey`: `TestTheGroupKeyIsThePairsInItsEpoch`, `TestAnExchangeGivesBothThePairKey`, `TestAThirdMemberCannotDeriveThePairKey`, `TestAMessageIsBoundToItsSenderAndNetwork`, `TestAReplayedMessageMovesNothingBack`, `TestAStaleFollowerMessageStartsNothing`, `TestAFollowerCannotRunTheCountOut`, `TestLostMessagesNeverLeaveTheTwoApart`, `TestAnOfferForAPairStartedOverIsIgnored`, `TestAPairStartedOverOnOneSideMeetsAgain`, `TestAPairKeyFollowsItsBinding`, `TestAnIdentityRotationKeepsThePairKey`, `TestGenerationsArePaced`, `TestSeedsReachAPeerFarBehind`, `TestTheStoreSurvivesARestart`, `FuzzTake`, `FuzzDecodeStore` | no |
+| by model: a third member holding every group secret learns no pair's key, both ends agree on key and epoch before either uses it, and devices stolen later give the keys up (residual weakness 12); the model's labels and fields are the code's | `make models`: `models/pairkey*.pv`; `internal/pairkey`: `TestTheModelNamesTheCodesLabels`, `TestTheModelNamesTheCodesFields` | no |
+| by model, across lost, repeated and reordered messages, epoch bumps, probes and store resets: the follower's key is one the leader tries, two sides on one generation derived it alike, a stale message moves the follower's key nothing back, and no generation is used twice in a store; a store restored from an older copy can leave a side on a key its peer moved past (residual weakness 12); the code follows the model's traces | `make models`: `models/log/PairKey.cfg`, `PairKeyRestore.cfg`; `internal/pairkey`: `TestTheCodeFollowsThePairKeyModel` | no |
 | tunnels move to pair keys and to new ones at an epoch bump; a sleeper reaches the peer it paired with; blocked handshakes never leave a pair without a key; a change not kept is undone; a removed device gives its pairs up; the first announcement names the epoch; a peer without post-quantum keys is refused announcements, routes nothing else | `daemon`: `TestTunnelsMoveToPairKeys`, `TestAnEpochBumpMovesThePairKeys`, `TestASleeperReachesThePeerItPairedWith`, `TestBlockedHandshakesNeverLeaveAPairWithoutAKey`, `TestAPairChangeNotKeptIsUndone`, `TestARemovedDeviceGivesItsPairsUp`, `TestTheFirstAnnouncementNamesTheEpoch`, `TestARouterThatIsNotPostQuantumCarriesNothingElse` | no |
 | a TCP stream, over IPv4 and IPv6, survives a new preshared key with a handshake under it, egress refused and back, serving as an exit node and not, a new key and a renumbering, its longest stall under six seconds, a handshake retried once crossed; the IPv4 one ends with its old address | `conn`: `TestNetnsAStreamSurvivesChanges` | **yes** |
 | the running data plane takes a new key and new addresses, refuses another ID, disco key or a peer's key or address, and guards new addresses before they go on the device; a peer that took a new key with no relay is reached as disco proves the path, held at most a bound and forgotten once removed; a failed router is retried on the router, without an empty config | `conn`: `TestANewKeyInPlace`, `TestNewAddressesInPlace`, `TestSetSelfRefuses`, `TestNewAddressesAreGuardedAhead`, `TestANewKeyIsReachedAtOnce`, `TestWhatWaitsForAProvenPath`, `TestAnUnprovenPeerIsHeldForAWhileAlone`, `TestReconfigRetriesAfterAFailedRouter`, `TestReconfigReprogramsAFailedRouterOnTheRealEngine` | no |
@@ -251,6 +261,8 @@ interop`).
 | Claim | Where it is checked | Privileged |
 |---|---|---|
 | the adversarial suite is rejected 100 % | `trust/log`: `adversarial_test.go`, one test per attack | no |
+| by model, in every order of delivery: each record on a chain has its quorum, no trusted state is below the floor, a removed key undoes no revocation, compaction, copies of one record, a holder's several keys and signing beside another removed key included, and two keys removing each other alarm until the lost removal is redone; validators that trust their state hold one head where none compacts; freshness ends a lease's TTL, plus twice the clock skew, after fewer than the threshold of honest admin devices vouch; the code follows the model's traces | `make models`: `models/log`; `trust/log`: `TestTheCodeFollowsTheModelsTraces`, `TestARemovedKeyCannotUndoItsRemovalPastAThirdBranch`, `TestRemovedKeysCannotUndoTheirRemovalByCoSigning`, `TestKeysRemovingEachOtherAlarmBesideAThird`, `TestKeysRemovingEachOtherSettleOnceRedone`, `TestBranchesThatEachLoseToAnotherAlarm` | no |
+| by model, against the network and an evicted device: a catch-up grant goes only to a listed member that proved itself over this nonce in this network, the evicted device is granted nothing, what the session carries stays secret, and a refusal is the responder's; the model's labels and fields are the code's | `make models`: `models/catchup.pv`; `gossip`: `TestCatchUpFollowsItsModel`; `trust/secrets`: `TestSealingFollowsTheModels` | no |
 | parsers survive fuzzing | `make fuzz-long` over `FuzzDecodeAUM`, `FuzzValidateAUM`, `FuzzChainValidate`, `FuzzParseInvite`, `FuzzDecodeEnrollFrames` | no |
 | default-deny: no log entry, no handshake | `daemon`: `TestNonMemberIsNeverAPeer`; `conn`: `TestNonMemberIsDenied`, `TestFilterRejectsNonMembers` | no |
 | revocation converges inside the budget | `daemon`: `TestRevocationConvergesWithinTheBudget`, `TestRevokedDeviceLosesTheDataPlane` | no |
@@ -291,6 +303,9 @@ interop`).
 | Claim | Where it is checked | Privileged |
 |---|---|---|
 | a code admits exactly one guess, from the LAN | `trust/enroll`: `TestOneGuessPerInvite`; `cmd/juist`: `TestAWrongCodeVoidsTheInvite`; `internal/host`: `TestTheCodeIsTakenFromTheLinkAlone` | no |
+| by model, against the network observer: the code stays a weak secret offline, and online the host's answers do not depend on a guess before its confirmation spends it, an element built from the code included; the welcome stays secret while SPAKE2 or ML-KEM-768 holds; both sides agree on the transcript and the binding, a request is the guest's own, nothing reflects, and the admitted keys are those whose words the person compared; the model's labels and fields are the code's | `make models`: `models/enroll*.pv`; `trust/enroll`: `TestAnElementBuiltFromTheCodeIsItsOneGuess`, `TestAnElementBuiltFromTheLinkSpendsTheInviteAtTheConfirmation`, `TestAPasswordElementCostsTheHostTheSameWork`, `TestTheModelNamesTheCodesLabels`, `TestTheModelNamesTheCodesFields` | no |
+| by model, against the network, a relay and the DHT of the attacker's: the link stays with host and guest, a relay takes a registration only for itself and its nonce from the member that made it, and the guest dials only the addresses the host left, which stay sealed; a device behind replaces its log only by a chain the link's admin checked and admitted it to, an anchor signed by an evicted admin it still trusts notwithstanding; the models' labels and fields are the code's | `make models`: `models/relay.pv`, `models/rebase.pv`; `relay/forward`: `TestARegistrationFollowsItsModel`; `trust/enroll`: `TestTheRelayAndRebaseModelsNameTheCodes` | no |
+| by model, against every daemon, an admin device's included: a waiting change opens for its readers alone, and only as its signer proposed it; one whose record carries no epoch record a daemon can tell by guessing against its ID (residual weakness 10), which ProVerif finds; the model's labels and fields are the code's | `make models`: `models/waiting.pv`; `internal/waiting`: `TestAChangeFollowsItsModel`; `trust/secrets`: `TestSealingFollowsTheModels` | no |
 | a partitioned member drops a revoked peer at exactly the TTL | `daemon`: `TestPartitionedVictimRefusesARevokedPeerAtTheTTL`, `TestStartupGate` | no |
 | admins on separate machines approve a change | `cmd/juist`: `TestInviteWaitsForTheOtherAdmins` | no |
 | only root and the operator manage a device; anyone sees its status | `daemon`: `TestSocketIsOpenAndCallsAreChecked`; `cmd/juist`: `TestTheDaemonHoldsTheDeviceAndThePersonHoldsTheKeys` | no |
@@ -623,6 +638,15 @@ clear how old the evidence is.
   (`20261125-180738-7bc4157f7f06`), and `build` in 3m13s, `make cross`
   45s (`20261125-185700-7bc4157f7f06`), after one run lost the VM's ssh
   in `make rpm` at a load of 4.4.
+- **`make ci-vm`, 2026-11-23, at M30** (M32's closing review and its
+  follow-up, before M32 done), stage by stage, as the host's load would
+  not leave the VM and the lab room together: the first whole run lost
+  the VM's ssh in `make test-race` at a load of 12, after `vm` had
+  passed (`20261123-114515-M30`); then `check` passed in 10
+  min, `make test-race` 7m17s, the lab's normal and upgrade runs in
+  30m26s, and `build` in 10 min, `make cross` 6m36s. `make
+  android-smoke` did not run, `ANDROID_HOME` being unset; it last ran on
+  2026-11-17 (M30, above).
 - **`make ci-vm`, 2026-11-20, at M30** (M31's closing review and its
   follow-up, before M31 done): every stage passed in 41m9s
   (`20261120-130920-M30`), `make test-race` 11m39s, the lab's
@@ -743,6 +767,30 @@ clear how old the evidence is.
   passed at the commit closing M23.
 - **`make test-acme`, 2026-10-02, at M9 review 1**: passed, the CAA record's
   account among it.
+- **The models, 2026-11-24, at M33 review 1 (a2b644aa)**: what the
+  review changed ran again and holds `models/expected`: ProVerif over
+  `catchup.pv` and `waiting.pv` (its guessable record found, as residual
+  weakness 10 says), TLC over `PairKey` (0.1 million distinct states),
+  `LogCompactHeard` (0.7 million) and `LogCompactHeardLate` (`Agreement`
+  broken, 22 min). The other configurations use no part the review
+  changed and stand from the run below.
+- **The models, 2026-11-24, at the commit extending them (M33)**: every
+  outcome `models/expected` holds, run configuration by configuration as
+  `make models` runs them, about 3 h 15 min on four cores in all. ProVerif
+  2.05 proved every lemma of enrollment, the pair key, catch-up, waiting
+  changes, the relay and the DHT, and rebasing, and found the traces meant
+  to be found. TLC 1.8.0 checked whole `Freshness` (3.3 million distinct
+  states), `PairKey` (0.1 million), `Log` (2.8 million, 33 min), `LogCompact`
+  (2.8 million, 27 min), `LogCompactHeard` (0.7 million), `LogHolders` (1.7
+  million), `LogHoldersBoth` (2.6 million), `LogForge` (2.4 million, the
+  revoking kinds alone), `LogForgeCosign` (2.4 million) and
+  `LogHoldersForge` (1.8 million), and found `Agreement` broken in
+  `LogCompactAgreement` (20 min) and `LogCompactHeardLate` (24 min),
+  `RaiseHoldsAgainstStrippedKeys` in `LogForgeRaise` and
+  `FollowerKeyIsOneTheLeaderTries` in `PairKeyRestore`, as M33 and
+  residual weakness 12 say. Not checked: more than three records, a third
+  validator, a holder's policy changed by a record, schema stops, the
+  pair key past three generations and two epochs.
 - **`make fuzz-long`**: no run over every target is recorded. `FuzzPayloads`
   (`internal/quicinitial`) ran clean for 72 CPU-hours at M11, 3.43
   billion inputs, and `FuzzParse` for 5 CPU-hours, on 2026-10-06.

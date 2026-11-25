@@ -103,6 +103,12 @@ func derive(network types.Hash, leader, follower types.WGKey, gen, epoch uint64,
 	return Key(expand(ikm, group[:], info))
 }
 
+// Who confirms a key, in its confirmation.
+const (
+	roleLeader   = "leader"
+	roleFollower = "follower"
+)
+
 // checkSize is the length of a key confirmation.
 const checkSize = 16
 

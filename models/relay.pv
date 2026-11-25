@@ -1,0 +1,128 @@
+(* Meeting an invite's host through a member's relay (relay/forward,
+   internal/host, internal/guest) or the public DHT (internal/rendezvous):
+   the link's secret derives a forward id, two DHT seeds and a sealing key;
+   the host registers the forward id at each relay, proving it is a member.
+
+   Attacker (docs/02-threat-model.md): the network observer, a relay of the
+   attacker's own (a member's relay is trusted for liveness alone), and the
+   DHT's nodes, malicious rendezvous infrastructure: they see forward ids,
+   the DHT seeds' public keys and every sealed item. It does not hold the
+   link, which reaches the guest apart from the network (out of band).
+   Once host and guest meet, enroll*.pv takes over, keyed by the link.
+
+   Abstractions: HKDF is a free function; Ed25519 one signature; the DHT
+   item's AEAD one symmetric seal with the role as its associated data.
+
+   Comments opening with an @ name the labels the code must use and the
+   fields each value is made of, in order; relay/forward's and
+   trust/enroll's model_test.go hold the code to them. A label is followed
+   by a zero byte where it heads a field list; a rendezvous key's info is
+   its label and role alone. *)
+
+free c: channel.
+free oob: channel [private].
+
+fun hkdf(bitstring, bitstring): bitstring.
+fun pk(bitstring): bitstring.
+fun sign(bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, m: bitstring; verify(pk(sk), m, sign(sk, m)) = true.
+
+fun sealAD(bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, ad: bitstring, m: bitstring; openAD(k, ad, sealAD(k, ad, m)) = m.
+
+(*@ label LabelInviteForward "juist invite forward v1" *)
+const LabelInviteForward: bitstring [data].
+(*@ label LabelInviteRendezvous "juist invite rendezvous v1 " *)
+const LabelInviteRendezvous: bitstring [data].
+(*@ label LabelRelayForward "juist relay forward v1" *)
+const LabelRelayForward: bitstring [data].
+(*@ label roleHost "host" *)
+const roleHost: bitstring [data].
+(*@ label roleGuest "guest" *)
+const roleGuest: bitstring [data].
+(*@ label roleSeal "seal" *)
+const roleSeal: bitstring [data].
+
+(*@ fields registration: LabelRelayForward certHash id nonce *)
+
+const adHost: bitstring [data].
+const adGuest: bitstring [data].
+const waiting: bitstring [data].
+
+letfun forwardID(s: bitstring) = hkdf(s, LabelInviteForward).
+letfun rendezvous(s: bitstring, role: bitstring) = hkdf(s, (LabelInviteRendezvous, role)).
+
+table members(bitstring).
+
+event Links(bitstring).
+event Registers(bitstring, bitstring, bitstring, bitstring).  (* host, cert, id, nonce *)
+event Accepts(bitstring, bitstring, bitstring, bitstring).    (* relay cert, host, id, nonce *)
+event Publishes(bitstring, bitstring).                        (* role, addresses *)
+event Dials(bitstring, bitstring).                            (* role it dials, addresses *)
+
+(* An invite: the host draws the link, hands it over out of band, waits at
+   the relays, the attacker's among them, and leaves its addresses at the
+   DHT. *)
+let Host(skH: bitstring, cert1: bitstring, cert2: bitstring, certX: bitstring) =
+  new s: bitstring;
+  event Links(s);
+  out(oob, s);
+  let id = forwardID(s) in
+  new addrs: bitstring;
+  (
+    (! in(c, (=cert1, nonce: bitstring));
+       event Registers(pk(skH), cert1, id, nonce);
+       out(c, (id, pk(skH), sign(skH, (LabelRelayForward, cert1, id, nonce)))))
+  | (! in(c, (=cert2, nonce: bitstring));
+       event Registers(pk(skH), cert2, id, nonce);
+       out(c, (id, pk(skH), sign(skH, (LabelRelayForward, cert2, id, nonce)))))
+  | (! in(c, (=certX, nonce: bitstring));
+       event Registers(pk(skH), certX, id, nonce);
+       out(c, (id, pk(skH), sign(skH, (LabelRelayForward, certX, id, nonce)))))
+  | (let seedH = rendezvous(s, roleHost) in
+     event Publishes(roleHost, addrs);
+     out(c, (pk(seedH), sealAD(rendezvous(s, roleSeal), adHost, addrs),
+             sign(seedH, sealAD(rendezvous(s, roleSeal), adHost, addrs)))))
+  ).
+
+(* A relay with its certificate's hash: it hands the host a nonce and takes
+   a registration signed over its own certificate, by a member. *)
+let Relay(cert: bitstring) =
+  new nonce: bitstring;
+  out(c, (cert, nonce));
+  in(c, (id: bitstring, owner: bitstring, sig: bitstring));
+  if verify(owner, (LabelRelayForward, cert, id, nonce), sig) then
+  get members(=owner) in
+  event Accepts(cert, owner, id, nonce);
+  out(c, waiting).
+
+(* The guest with the link reads the host's item at the host's DHT seed. *)
+let Guest =
+  in(oob, s: bitstring);
+  let seedH = rendezvous(s, roleHost) in
+  in(c, (=pk(seedH), item: bitstring, sig: bitstring));
+  if verify(pk(seedH), item, sig) then
+  let addrs = openAD(rendezvous(s, roleSeal), adHost, item) in
+  event Dials(roleHost, addrs).
+
+(* The link stays with the two: no relay, DHT node or observer learns it. *)
+query s: bitstring; event(Links(s)) && attacker(s).
+(* A relay takes a registration only from the member that made it, for that
+   relay and that nonce: no registration is replayed to another. *)
+query cert: bitstring, h: bitstring, id: bitstring, n: bitstring;
+  inj-event(Accepts(cert, h, id, n)) ==> inj-event(Registers(h, cert, id, n)).
+(* The guest dials only the addresses the host left, and they stay sealed. *)
+query a: bitstring; event(Dials(roleHost, a)) ==> event(Publishes(roleHost, a)).
+query a: bitstring; event(Publishes(roleHost, a)) && attacker(a).
+(* The guest does reach the host: ProVerif finds the trace. *)
+query a: bitstring; event(Dials(roleHost, a)).
+
+free cert1: bitstring.
+free cert2: bitstring.
+free certAttacker: bitstring.
+
+process
+  new skH: bitstring; new skOther: bitstring;
+  insert members(pk(skH));
+  out(c, (pk(skH), skOther));
+  (!Host(skH, cert1, cert2, certAttacker)) | (!Relay(cert1)) | (!Relay(cert2)) | (!Guest)

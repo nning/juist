@@ -1,0 +1,16 @@
+(* A pair takes a key up, so the other pairkey*.pv files prove something of
+   runs that happen: ProVerif finds the trace and says false. Run with -lib
+   pairkey. *)
+
+free network: bitstring.
+free seed: bitstring.
+free wgL: bitstring.
+free wgF: bitstring.
+
+query g: bitstring, e: bitstring, k: bitstring; event(LeaderTakesUp(wgL, wgF, g, e, k)).
+
+process
+  new skL: bitstring; new dkL: bitstring; new skF: bitstring; new dkF: bitstring;
+  out(c, (pk(skL), ek(dkL), pk(skF), ek(dkF)));
+  Leader(network, seed, skL, wgL, dkL, pk(skF), wgF, ek(dkF))
+  | Follower(network, seed, skF, wgF, dkF, pk(skL), wgL, ek(dkL))

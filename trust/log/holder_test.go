@@ -235,6 +235,122 @@ func TestARemovedKeyCannotUndoItsRemoval(t *testing.T) {
 	}
 }
 
+// Nor by a third branch fork choice weighs first: a bystander's revocation
+// sorting below the removal beats it on the hash, and the removed key's
+// branch beats the bystander's by removing its signer, but loses to the
+// removal all the same (models/log/Log.tla, RemovedKeyUndoesNoRevocation).
+func TestARemovedKeyCannotUndoItsRemovalPastAThirdBranch(t *testing.T) {
+	h := newHarness(t, 3, 1)
+	bystander, mallory, honest := h.admins[0], h.admins[1], h.admins[2]
+	victim := h.addNode("victim")
+	sign := func(a *types.AUM, k types.PrivateIdentity) {
+		t.Helper()
+		if err := h.sign(a, k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var removal, counter types.AUM
+	for {
+		b := h.auth.Builder()
+		var err error
+		if removal, err = b.RemoveAdminKey(mallory.Public()); err != nil {
+			t.Fatal(err)
+		}
+		sign(&removal, honest)
+		if counter, err = b.RemoveAdminKey(bystander.Public()); err != nil {
+			t.Fatal(err)
+		}
+		sign(&counter, mallory)
+		if removal.SigHash().Compare(counter.SigHash()) < 0 {
+			break
+		}
+		bump, err := b.EpochBump(h.sealer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.signQuorum(&bump)
+		if err := h.auth.Inform(bump); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var third types.AUM
+	for {
+		var err error
+		if third, err = h.auth.Builder().RemoveNode(victim.Identity, h.sealer()); err != nil {
+			t.Fatal(err)
+		}
+		sign(&third, bystander)
+		if third.SigHash().Compare(removal.SigHash()) < 0 {
+			break
+		}
+	}
+	auth := h.fork()
+	if err := auth.Inform(third, removal, counter); err != nil {
+		t.Fatal(err)
+	}
+	if _, malloryStays := auth.State().Admin(mallory.Public()); malloryStays && auth.Alarm() == nil {
+		t.Error("the removed key is an admin after the fork, and nothing alarms")
+	}
+}
+
+// Nor by two removed keys signing together where either alone would do: the
+// record stands only by keys the other branch removes.
+func TestRemovedKeysCannotUndoTheirRemovalByCoSigning(t *testing.T) {
+	h := newHarness(t, 3, 1)
+	m1, m2, honest := h.admins[0], h.admins[1], h.admins[2]
+	victim := h.addNode("victim")
+	var r1, counter types.AUM
+	for {
+		b := h.auth.Builder()
+		var err error
+		if r1, err = b.RemoveAdminKey(m1.Public()); err != nil {
+			t.Fatal(err)
+		}
+		if counter, err = b.RemoveNode(victim.Identity, h.sealer()); err != nil {
+			t.Fatal(err)
+		}
+		for _, sig := range []struct {
+			a *types.AUM
+			k types.PrivateIdentity
+		}{{&r1, honest}, {&counter, m1}, {&counter, m2}} {
+			if err := h.sign(sig.a, sig.k); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if counter.SigHash().Compare(r1.SigHash()) < 0 {
+			break
+		}
+		bump, err := b.EpochBump(h.sealer())
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.signQuorum(&bump)
+		if err := h.auth.Inform(bump); err != nil {
+			t.Fatal(err)
+		}
+	}
+	honestView := h.fork()
+	if err := honestView.Inform(r1); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := honestView.Builder().RemoveAdminKey(m2.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.sign(&r2, honest); err != nil {
+		t.Fatal(err)
+	}
+	auth := h.fork()
+	if err := auth.Inform(r1, r2, counter); err != nil {
+		t.Fatal(err)
+	}
+	_, s1 := auth.State().Admin(m1.Public())
+	_, s2 := auth.State().Admin(m2.Public())
+	if (s1 || s2) && auth.Alarm() == nil {
+		t.Error("removed keys are admins after the fork, and nothing alarms")
+	}
+}
+
 // Two keys removing each other at once is no removal the log can settle: at
 // quorum one either could do anything, so it alarms rather than choosing.
 func TestKeysRemovingEachOtherAlarm(t *testing.T) {
@@ -260,6 +376,105 @@ func TestKeysRemovingEachOtherAlarm(t *testing.T) {
 	}
 	if h.auth.Alarm() == nil {
 		t.Fatal("two admins removing each other raised no alarm")
+	}
+}
+
+// So with a third key, which leaves either removal one the chain could take:
+// the hash order does not choose between them (models/log/Log.tla,
+// RemovedKeyUndoesNoRevocation).
+func TestKeysRemovingEachOtherAlarmBesideAThird(t *testing.T) {
+	h := newHarness(t, 3, 1)
+	a, b := h.admins[0], h.admins[1]
+	builder := h.auth.Builder()
+	one, err := builder.RemoveAdminKey(b.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.sign(&one, a); err != nil {
+		t.Fatal(err)
+	}
+	other, err := builder.RemoveAdminKey(a.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.sign(&other, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.auth.Inform(one, other); err != nil {
+		t.Fatal(err)
+	}
+	if h.auth.Alarm() == nil {
+		t.Fatal("two admins removing each other beside a third raised no alarm")
+	}
+}
+
+// The alarm is the lost removal's to redo: once it is in effect on the
+// chain, nothing is left to settle.
+func TestKeysRemovingEachOtherSettleOnceRedone(t *testing.T) {
+	h := newHarness(t, 3, 1)
+	a, b, c := h.admins[0], h.admins[1], h.admins[2]
+	builder := h.auth.Builder()
+	one, err := builder.RemoveAdminKey(b.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.sign(&one, a); err != nil {
+		t.Fatal(err)
+	}
+	other, err := builder.RemoveAdminKey(a.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.sign(&other, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.auth.Inform(one, other); err != nil {
+		t.Fatal(err)
+	}
+	if h.auth.Alarm() == nil {
+		t.Fatal("two admins removing each other raised no alarm")
+	}
+	stays := a
+	if _, ok := h.auth.State().Admin(b.Public()); ok {
+		stays = b
+	}
+	redo, err := h.auth.Builder().RemoveAdminKey(stays.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.sign(&redo, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.auth.Inform(redo); err != nil {
+		t.Fatal(err)
+	}
+	if alarm := h.auth.Alarm(); alarm != nil {
+		t.Errorf("both removals are in effect, and the alarm stays: %v", alarm)
+	}
+}
+
+// Three keys each removing the next's remover leave every branch beaten by
+// another: nothing to choose, so the log alarms.
+func TestBranchesThatEachLoseToAnotherAlarm(t *testing.T) {
+	h := newHarness(t, 3, 1)
+	k1, k2, k3 := h.admins[0], h.admins[1], h.admins[2]
+	builder := h.auth.Builder()
+	var records []types.AUM
+	for _, r := range []struct{ subject, signer types.PrivateIdentity }{{k2, k1}, {k1, k3}, {k3, k2}} {
+		a, err := builder.RemoveAdminKey(r.subject.Public())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.sign(&a, r.signer); err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, a)
+	}
+	if err := h.auth.Inform(records...); err != nil {
+		t.Fatal(err)
+	}
+	if h.auth.Alarm() == nil {
+		t.Fatal("three branches each beaten by another raised no alarm")
 	}
 }
 

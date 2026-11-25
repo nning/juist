@@ -387,9 +387,9 @@ func TestRendezvousKeysAreTheLinks(t *testing.T) {
 }
 
 // probeElement sends a hello whose element is w'·M for guess — no secret
-// scalar, so it tests the guess against the host's K — and walks away before
-// confirming. It reports whether the host answered.
-func probeElement(t *testing.T, inv *Invite, guess Code) (replied bool, hostErr error) {
+// scalar, so K is the identity exactly when the guess is right — and, if the
+// host replies and confirm is set, a confirmation.
+func probeElement(t *testing.T, inv *Invite, guess Secret, confirm bool) (replied bool, hostErr error) {
 	t.Helper()
 	h, g, closeAll := pipePair()
 	done := make(chan error, 1)
@@ -403,33 +403,73 @@ func probeElement(t *testing.T, inv *Invite, guess Code) (replied bool, hostErr 
 		t.Fatal(err)
 	}
 	element := new(edwards25519.Point).ScalarMult(w, spakeM).Bytes()
-	if err := writeHandshake(g, &hsFrame{Kind: hsHello, Version: ProtocolVersion, Mode: modeCode,
-		Nameplate: guess.Nameplate, Element: element}); err != nil {
+	if err := writeHandshake(g, &hsFrame{Kind: hsHello, Version: ProtocolVersion, Mode: guess.mode(),
+		Nameplate: guess.nameplate(), Element: element}); err != nil {
 		t.Fatal(err)
 	}
 	f, err := readHandshake(g)
 	replied = err == nil && f.Kind == hsReply
+	if replied && confirm {
+		if err := writeHandshake(g, &hsFrame{Kind: hsConfirm, MAC: make([]byte, 32)}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = readHandshake(g)
+	}
 	closeAll()
 	return replied, <-done
 }
 
-// A guest that sends the password's own element learns from the host whether
-// its guess was right unless that, too, spends the invite: otherwise it could
-// walk away after every wrong one and try the next, all 2^24 codes.
+// A guest that sends the password's own element must not learn from the
+// host whether its guess was right before its confirmation spends the
+// guess: otherwise it could walk away after every wrong one and try the
+// next, all 2^24 codes (models/enroll-online.pv).
 func TestAnElementBuiltFromTheCodeIsItsOneGuess(t *testing.T) {
 	inv := newTestInvite(t)
-	if replied, _ := probeElement(t, inv, wrongCode(inv.Code())); !replied || !inv.Open() {
-		t.Fatalf("a wrong probe: replied=%v open=%v", replied, inv.Open())
+	for _, guess := range []Secret{wrongCode(inv.Code()), inv.Code()} {
+		if replied, _ := probeElement(t, inv, guess, false); !replied || !inv.CodeOpen() {
+			t.Fatalf("a probe walking away: replied=%v open=%v; want a reply and the code open", replied, inv.CodeOpen())
+		}
 	}
-	replied, err := probeElement(t, inv, inv.Code())
-	if replied || !errors.Is(err, ErrWrongCode) {
-		t.Fatalf("the right probe: replied=%v, host %v; want the invite spent as a wrong code", replied, err)
+	replied, err := probeElement(t, inv, inv.Code(), true)
+	if !replied || !errors.Is(err, ErrWrongCode) {
+		t.Fatalf("the right probe confirming: replied=%v, host %v; want the code spent as a wrong guess", replied, err)
 	}
 	if inv.CodeOpen() {
-		t.Fatal("the code still works after a guest tested it for free")
+		t.Fatal("the code still works after a guest tested it")
 	}
 	if host, _ := session(t, inv, inv.Code()); host.err == nil {
 		t.Fatal("the right code joined after the probe")
+	}
+}
+
+// So with the link's own element, which only a holder of the link builds:
+// the confirmation spends the invite, whatever it says.
+func TestAnElementBuiltFromTheLinkSpendsTheInviteAtTheConfirmation(t *testing.T) {
+	inv := newTestInvite(t)
+	if replied, _ := probeElement(t, inv, inv.Link(), false); !replied || !inv.Open() {
+		t.Fatalf("a probe walking away: replied=%v open=%v; want a reply and the invite open", replied, inv.Open())
+	}
+	replied, err := probeElement(t, inv, inv.Link(), true)
+	if !replied || !errors.Is(err, ErrLinkSpent) || inv.Open() {
+		t.Fatalf("the link's element confirming: replied=%v, host %v, open=%v; want the invite spent", replied, err, inv.Open())
+	}
+}
+
+// The host does for a password-built element what it does for any other
+// before it replies, so the time of its reply tells no guess either.
+func TestAPasswordElementCostsTheHostTheSameWork(t *testing.T) {
+	inv := newTestInvite(t)
+	w, err := passwordScalar(inv.Code().password())
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := newSpake(false, inv.Code().password(), aadFor(modeCode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := host.finish(new(edwards25519.Point).ScalarMult(w, spakeM).Bytes())
+	if !errors.Is(err, errPasswordElement) || keys.transcript == nil {
+		t.Fatalf("finish skipped the key schedule for a password-built element: %v", err)
 	}
 }
 

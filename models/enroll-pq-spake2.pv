@@ -1,0 +1,25 @@
+(* A recorded enrollment opens to nobody while ML-KEM-768 holds: an active
+   attacker during the session, who afterwards (phase 1) breaks SPAKE2 with
+   a quantum computer, by a search over the recorded transcript for the code
+   and the link and by the discrete logarithm of any element, does not learn
+   what the welcome carried.
+   Breaking SPAKE2 during a session puts the attacker in the middle of the
+   ML-KEM exchange; that is not claimed. Run with -lib enroll; the attacker
+   is in enroll.pvl. *)
+
+free code: bitstring [private].
+free link: bitstring [private].
+free groupSecret: bitstring [private].
+
+reduc forall x: exponent; dlog(exp(P, x)) = x [private].
+
+query attacker(groupSecret).
+
+process
+  (!new skG: bitstring; new keysG: bitstring; out(c, (pk(skG), keysG));
+    ((!Guest(code, modeCode, skG, keysG)) | (!Guest(link, modeLink, skG, keysG))))
+  | (new skAdmin: bitstring; out(c, pk(skAdmin));
+    (!Admin(skAdmin)) | (!Host(code, modeCode, groupSecret, pk(skAdmin)))
+    | (!Host(link, modeLink, groupSecret, pk(skAdmin))))
+  | (phase 1; out(c, (code, link)))
+  | (!phase 1; in(c, e: G); out(c, dlog(e)))

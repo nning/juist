@@ -1,0 +1,62 @@
+(* Would an ephemeral ML-KEM share give the pair key forward secrecy? Here
+   the leader's offer also carries a fresh encapsulation key, the follower
+   encapsulates to it rather than to the leader's own, and the leader
+   forgets it once the key is taken up. Both devices stolen later (phase 1)
+   then give no key taken up before. Not what internal/pairkey does: an
+   answer for residual weakness 12. Run with -lib pairkey. *)
+
+free network: bitstring.
+free seed: bitstring.
+free wgL: bitstring.
+free wgF: bitstring.
+
+query g: bitstring, e: bitstring, k: bitstring; event(LeaderTakesUp(wgL, wgF, g, e, k)) && attacker(k).
+query g: bitstring, e: bitstring, k: bitstring;
+  inj-event(FollowerUses(wgL, wgF, g, e, k)) ==> inj-event(LeaderUses(wgL, wgF, g, e, k)).
+
+let EphemeralLeader(skL: bitstring, dkL: bitstring, pkF: bitstring, ekF: bitstring) =
+  new gen: bitstring;
+  new epoch: bitstring;
+  new r: bitstring;
+  new dkE: bitstring;
+  let ctL = kemCT(ekF, r) in
+  let sharedL = kemSS(ekF, r) in
+  out(c, (gen, epoch));
+  out(c, signed(skL, network, (offer, wgL, wgF, gen, epoch, ctL, ek(dkE))));
+  in(c, (m2: bitstring, s2: bitstring));
+  if verify(pkF, (LabelPairMsg, network, m2), s2) then
+  let (=answer, =wgF, =wgL, =gen, =epoch, ctF: bitstring, chk: bitstring) = m2 in
+  let sharedF = decaps(dkE, ctF) in
+  let k = pairKey(sharedL, sharedF, groupKey(seed, epoch, wgL, wgF), network, wgL, wgF, gen, epoch, ctL, ctF) in
+  if chk = check(k, roleFollower) then
+  event LeaderUses(wgL, wgF, gen, epoch, k);
+  out(c, signed(skL, network, (commit, wgL, wgF, gen, check(k, roleLeader))));
+  in(c, (m4: bitstring, s4: bitstring));
+  if verify(pkF, (LabelPairMsg, network, m4), s4) then
+  let (=takenUp, =wgF, =wgL, =gen) = m4 in
+  event LeaderTakesUp(wgL, wgF, gen, epoch, k).
+
+let EphemeralFollower(skF: bitstring, dkF: bitstring, pkL: bitstring) =
+  in(c, (m1: bitstring, s1: bitstring));
+  if verify(pkL, (LabelPairMsg, network, m1), s1) then
+  let (=offer, =wgL, =wgF, gen: bitstring, epoch: bitstring, ctL: bitstring, ekE: bitstring) = m1 in
+  let sharedL = decaps(dkF, ctL) in
+  new r: bitstring;
+  let ctF = kemCT(ekE, r) in
+  let sharedF = kemSS(ekE, r) in
+  let k = pairKey(sharedL, sharedF, groupKey(seed, epoch, wgL, wgF), network, wgL, wgF, gen, epoch, ctL, ctF) in
+  event FollowerAnswers(wgL, wgF, gen, epoch, k);
+  out(c, signed(skF, network, (answer, wgF, wgL, gen, epoch, ctF, check(k, roleFollower))));
+  in(c, (m3: bitstring, s3: bitstring));
+  if verify(pkL, (LabelPairMsg, network, m3), s3) then
+  let (=commit, =wgL, =wgF, =gen, chk: bitstring) = m3 in
+  if chk = check(k, roleLeader) then
+  event FollowerUses(wgL, wgF, gen, epoch, k);
+  out(c, signed(skF, network, (takenUp, wgF, wgL, gen))).
+
+process
+  new skL: bitstring; new dkL: bitstring; new skF: bitstring; new dkF: bitstring;
+  out(c, (pk(skL), ek(dkL), pk(skF), ek(dkF)));
+  (!EphemeralLeader(skL, dkL, pk(skF), ek(dkF)))
+  | (!EphemeralFollower(skF, dkF, pk(skL)))
+  | (phase 1; out(c, (skL, dkL, skF, dkF)))

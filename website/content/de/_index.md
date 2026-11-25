@@ -127,7 +127,7 @@ Was passiert
 : Zwei Geräte bekommen ihren eigenen Schlüssel einen Log-Abgleich nach dem Aufbau ihres Tunnels. Bis dahin schützt ihren Verkehr ein Schlüssel, den jedes Mitglied ableiten könnte.
 
 Warum juist das hinnimmt
-: Gegen alle außerhalb des Netzes ist er von Anfang an quantensicher. Nur ein Mitglied oder ein seither entferntes Gerät mit einem Quantencomputer könnte diese ersten Sekunden lesen.
+: Gegen alle außerhalb des Netzes ist er von Anfang an Post-Quantum. Nur ein Mitglied oder ein seither entferntes Gerät mit einem Quantencomputer könnte diese ersten Sekunden lesen.
 
 Was du tun kannst
 : Nichts; es dauert bis zum nächsten Log-Abgleich der beiden.

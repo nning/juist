@@ -134,7 +134,7 @@ kann, warum juist das hinnimmt und was du dagegen tun kannst. Kurz gefasst:
   einem Netz gehören, aber nicht zu welchem und nicht, wem sie gehören. Mit
   einem eigenen Relay kommt juistd ohne sie aus.
 
-## Quantensicher
+## Post-Quantum
 
 Ein künftiger Quantencomputer könnte heute übliche Verschlüsselung brechen
 und heute übliche Signaturen fälschen, und heute mitgeschnittener Verkehr
@@ -161,7 +161,7 @@ ließe sich dann entschlüsseln. juist schützt vor beidem:
   Verbindungen durch den Ingress vereinbaren ihren Schlüssel so, wo immer die
   Gegenseite es anbietet, wie aktuelle Browser es tun.
 
-Jeder Tunnel zwischen Geräten mit der aktuellen Version ist quantensicher.
+Jeder Tunnel zwischen Geräten mit der aktuellen Version ist Post-Quantum.
 Ein Gerät mit einer älteren Version bekommt nichts von deinem Verkehr, bis es
 aktualisiert ist: `juist health` warnt, dass es ein älteres juist hat, und
 `juist devices` zeigt es als `outdated`.

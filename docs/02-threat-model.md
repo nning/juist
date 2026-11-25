@@ -207,7 +207,10 @@ them by number.
 10. **Admin devices see what waits for the admins (M5b).** A change waiting
    for votes is sealed to the admin keys, but the juistd of every admin device
    that carries it sees its outside: which admin key handed it on, when it
-   expires, how large it is, and which devices it is about. A compromised
+   expires, how large it is, and which devices it is about. A change whose
+   record carries no epoch record, as removing an admin key or setting the
+   quorum, the vouchers or a holder's votes, it can tell by trying each
+   candidate against the change's ID, which hashes the record. A compromised
    admin device can tell a device that its removal waits. A compromised admin
    key can put changes in front of the other admins, within the bounds of 16
    changes and 8 MiB per signing key. Neither makes a change
@@ -247,7 +250,9 @@ them by number.
    derived from both sides' static ML-KEM-768 keys with no ephemeral part,
    and a device stolen later gives its pair keys and, recorded, what was
    sealed under them: no forward secrecy beyond WireGuard's own, which a
-   quantum computer breaks. A pair moving from one preshared key to another
+   quantum computer breaks. ProVerif finds that trace, and finds none where
+   the follower encapsulates to a key the leader draws per generation and
+   then forgets (`models/pairkey-fs*.pv`). A pair moving from one preshared key to another
    keeps its running WireGuard session until the next handshake, at most
    two minutes. A
    member's announcement says whether it sets preshared keys; one that says

@@ -384,6 +384,20 @@ fuzz-matrix: ## Emit the fuzz targets as a JSON matrix (one object per target)
 	done; \
 	printf ']\n'
 
+# The formal models (models/, docs/12-validating.md): ProVerif for the
+# protocols, TLA+ checked by TLC for the log. By hand, as fuzz-long is.
+PROVERIF  ?= proverif
+JAVA      ?= java
+TLA2TOOLS ?= $(HOME)/.local/share/tla/tla2tools.jar
+
+.PHONY: models
+models: ## Run the formal models and fail on an outcome models/expected does not hold (needs ProVerif, a JDK, TLA2TOOLS)
+	@PROVERIF="$(PROVERIF)" JAVA="$(JAVA)" TLA2TOOLS="$(TLA2TOOLS)" sh models/run.sh
+
+.PHONY: model-traces
+model-traces: ## Write the log model's traces anew, which trust/log's tests replay (needs a JDK, TLA2TOOLS)
+	@JAVA="$(JAVA)" TLA2TOOLS="$(TLA2TOOLS)" sh models/traces.sh
+
 .PHONY: repro-packages
 repro-packages: ## Fail unless HEAD builds to the same .deb, FreeBSD package and, with rpmbuild, RPM twice
 	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \

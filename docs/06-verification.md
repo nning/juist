@@ -136,9 +136,12 @@ convergence when an `exit` role is withdrawn across a mesh; chaos on gossip path
     stay where they are put), not line by line.
 - After v1, each milestone that grows the audit scope gets an audit of what it
   added, scoped by the sizes its "Done" line records.
-- Machine-checked models (M32) of what juist designed itself: enrollment
-  and the pair key in ProVerif or Tamarin, the log's fork choice, epochs
-  and freshness in TLA+; M34's audit checks them with the code.
+- Machine-checked models (M32, extended in M33) of what juist designed
+  itself, in `models/`: enrollment, the pair key, catch-up, waiting
+  changes, meeting an invite's host and replacing a log in ProVerif; the
+  log's fork choice, epochs, holders, copies, compaction and freshness and
+  the pair key's exchange in TLA+ checked by TLC (`make models`); M34's
+  audit checks them with the code.
 
 ## 6. Continuous regression metrics
 

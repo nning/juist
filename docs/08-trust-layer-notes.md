@@ -162,17 +162,22 @@ counted per holder (`types.AchievableVotes`), and a change leaving the quorum
 out of reach is refused.
 
 **A removed key cannot undo its removal.** A sibling is verified against its
-parent's state, where the key still votes, so before both rules above: a branch
-loses to a sibling whose branch removes an admin key that signed anything on
-it. Two keys removing each other at once alarm.
+parent's state, where the key still votes, so before both rules above, and
+against every sibling before they rank the rest: a branch loses to a sibling
+whose branch removes an admin key that signed anything on it. Two keys
+removing each other at once alarm, and so do siblings that each lose so,
+until the lost removal is in effect. This weighing is not tied to a schema:
+builds from before M32 weigh rule 1 against the best branch so far alone, so
+until every device runs a later one they can follow another head here.
 
 **Copies of one record are that record.** Siblings with one `SigHash` and other
 signature sets are copies, not a fork, and fork choice must not depend on which
 copies a node holds. From schema 19 it reads what they say and the union of
-their signatures: copies tie on the lower `SigHash`, and a key is a signer for
-the rule above only where the record needed it (a required self-signature, or a
-vote without which the union falls short of quorum). At schema 18 any signature
-counts and the lower hash wins. The lowest hash stands for the copies, and what
+their signatures: copies tie on the lower `SigHash`, and the rule above asks
+whether a record keeps the signatures it requires and its quorum without the
+keys the other branch removes, taken together, so that a signature added to
+what others authorized does not make the record its signer's. At schema 18 any
+signature counts and the lower hash wins. The lowest hash stands for the copies, and what
 hangs from any of them hangs from it. A store keeps a copy while it is one of
 the two lowest, carries a signature no other does, or something hangs from it;
 of a checkpoint it keeps up to eight, so a peer anchored at any is served. The
@@ -522,6 +527,10 @@ subtract in `conn.Internet`, and subnet routes carry no default route.
 - `TestResolutionIsOrderIndependent`, `TestIncrementalDeliveryNeverRegresses`:
   the property tests of [06-verification.md](06-verification.md) §1, seeded so
   a failure replays.
+- `models/log/Log.tla`, checked by TLC (`make models`): fork choice,
+  orphans, the epoch floor and compaction in every order of delivery;
+  `TestTheCodeFollowsTheModelsTraces` replays its traces against this
+  package.
 - Fuzz targets `FuzzDecodeAUM` (injectivity), `FuzzValidateAUM`,
   `FuzzChainValidate` (signs what it mutates; a rejected record changes nothing
   and no state it trusts falls below the epoch floor), `FuzzAdmissibleAlike`

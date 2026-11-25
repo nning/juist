@@ -1,0 +1,14 @@
+(* An honest enrollment completes, so the other enroll*.pv files prove
+   something of runs that happen: ProVerif finds the trace and says false.
+   Run with -lib enroll. *)
+
+free code: bitstring [private].
+free groupSecret: bitstring [private].
+
+query p: bitstring; event(GuestWelcomed(p)).
+
+process
+  new skG: bitstring; new keysG: bitstring; out(c, (pk(skG), keysG));
+  Guest(code, modeCode, skG, keysG)
+  | (new skAdmin: bitstring; out(c, pk(skAdmin));
+    Admin(skAdmin) | Host(code, modeCode, groupSecret, pk(skAdmin)))
